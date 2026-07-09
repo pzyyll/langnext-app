@@ -1,9 +1,10 @@
 // ABOUTME: Frontend entry point that mounts the TanStack Router app tree.
-// ABOUTME: Applies theme tokens, then registers the type-safe route tree.
+// ABOUTME: Applies theme tokens and directional view transitions between routes.
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { RouterProvider, createRouter } from "@tanstack/react-router";
 import { routeTree } from "./routeTree.gen";
+import { getScrollTransitionType } from "./shell/nav";
 import { initTheme } from "./theme/theme";
 import "./styles.css";
 
@@ -13,8 +14,13 @@ const router = createRouter({
 	routeTree,
 	defaultPreload: "intent",
 	scrollRestoration: true,
-	// Sidebar / programmatic navigations use View Transitions when supported.
-	defaultViewTransition: true,
+	// Directional scroll transitions based on sidebar item order.
+	defaultViewTransition: {
+		types: ({ fromLocation, toLocation }) => {
+			const type = getScrollTransitionType(fromLocation?.pathname, toLocation.pathname);
+			return type ? [type] : false;
+		},
+	},
 });
 
 declare module "@tanstack/react-router" {

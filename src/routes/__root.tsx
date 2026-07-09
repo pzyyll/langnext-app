@@ -5,17 +5,11 @@ import { Link, Outlet, createRootRoute, useRouterState } from "@tanstack/react-r
 import { TanStackRouterDevtools } from "@tanstack/react-router-devtools";
 import { TitleBar } from "../components/Win/TitleBar";
 import { ThemeToggle } from "../components/ThemeToggle";
+import { isNavItemActive, navItems } from "../shell/nav";
 
 export const Route = createRootRoute({
 	component: RootLayout,
 });
-
-const navItems = [
-	{ to: "/", label: "Home", exact: true },
-	{ to: "/about", label: "About", exact: false },
-] as const;
-
-type NavItem = (typeof navItems)[number];
 
 const SIDEBAR_WIDTH_CLASS = "w-44";
 
@@ -24,13 +18,6 @@ const navLinkClassName =
 
 const navLinkActiveClassName =
 	"flex h-10 w-full items-center rounded-none border border-line bg-surface-2 px-3 text-sm leading-none font-normal text-ink transition-colors duration-150 select-none focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-ink";
-
-function isNavItemActive(item: NavItem, pathname: string): boolean {
-	if (item.exact) {
-		return pathname === item.to;
-	}
-	return pathname === item.to || pathname.startsWith(`${item.to}/`);
-}
 
 function RootLayout() {
 	const pathname = useRouterState({ select: (state) => state.location.pathname });
@@ -60,7 +47,8 @@ function RootLayout() {
 							<Link
 								key={item.to}
 								to={item.to}
-								viewTransition
+								// Do not set viewTransition={true} here — it overrides
+								// defaultViewTransition.types (scroll-up / scroll-down).
 								tabIndex={sidebarOpen ? undefined : -1}
 								className={navLinkClassName}
 								activeProps={{ className: navLinkActiveClassName }}
@@ -83,7 +71,7 @@ function RootLayout() {
 				</aside>
 
 				<main className="min-h-0 min-w-0 flex-1 overflow-auto bg-surface p-4">
-					{/* Named VT snapshot: only this region fades between routes */}
+					{/* Named VT snapshot: only this region scrolls between routes */}
 					<div className="page-transition">
 						<Outlet />
 					</div>

@@ -99,53 +99,118 @@ body {
 }
 
 /* ── Route page transitions (View Transitions API) ──
-   Only the main content participates; titlebar/sidebar stay still. */
+   Full-page vertical scroll (no opacity crossfade). Direction from sidebar order:
+   - scroll-down: Home → About (both pages translate up)
+   - scroll-up:   About → Home (both pages translate down) */
 .page-transition {
 	view-transition-name: app-page;
+	/* Stable snapshot box for full-height scroll */
+	min-height: 100%;
 }
 
-/* Don't cross-fade the whole document snapshot */
+/* Kill default root crossfade so chrome does not flash */
 ::view-transition-old(root),
 ::view-transition-new(root) {
-	animation: none;
+	animation: none !important;
 	mix-blend-mode: normal;
 }
 
 ::view-transition-group(root) {
-	animation-duration: 0s;
+	animation: none !important;
 }
 
-::view-transition-old(app-page) {
-	animation: page-fade-out 180ms ease-out both;
+/* Keep the page slot fixed; clip the incoming/outgoing full-page layers */
+::view-transition-group(app-page) {
+	animation: none !important;
+	overflow: clip;
 }
 
+::view-transition-image-pair(app-page) {
+	isolation: none;
+	/* Stack old + new so translateY(±100%) looks like one continuous scroll */
+	overflow: clip;
+}
+
+/* Disable UA default fade; typed rules set transform-only animations */
+::view-transition-old(app-page),
 ::view-transition-new(app-page) {
-	animation: page-fade-in 200ms ease-out both;
+	animation: none;
+	mix-blend-mode: normal;
+	opacity: 1;
+	height: 100%;
+	width: 100%;
+	object-fit: fill;
+	object-position: top left;
 }
 
-@keyframes page-fade-out {
-	from {
-		opacity: 1;
-	}
-	to {
-		opacity: 0;
-	}
+/* Home → About: whole page rolls upward */
+html:active-view-transition-type(scroll-down)::view-transition-old(app-page) {
+	animation: page-scroll-out-up 320ms cubic-bezier(0.32, 0.72, 0, 1) both;
 }
 
-@keyframes page-fade-in {
+html:active-view-transition-type(scroll-down)::view-transition-new(app-page) {
+	animation: page-scroll-in-up 320ms cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+
+/* About → Home: whole page rolls downward */
+html:active-view-transition-type(scroll-up)::view-transition-old(app-page) {
+	animation: page-scroll-out-down 320ms cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+
+html:active-view-transition-type(scroll-up)::view-transition-new(app-page) {
+	animation: page-scroll-in-down 320ms cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+
+/* Transform only — keep opacity at 1 for a solid roll, not a fade */
+@keyframes page-scroll-out-up {
 	from {
-		opacity: 0;
-		transform: translateY(0.25rem);
-	}
-	to {
-		opacity: 1;
 		transform: translateY(0);
+		opacity: 1;
+	}
+	to {
+		transform: translateY(-100%);
+		opacity: 1;
+	}
+}
+
+@keyframes page-scroll-in-up {
+	from {
+		transform: translateY(100%);
+		opacity: 1;
+	}
+	to {
+		transform: translateY(0);
+		opacity: 1;
+	}
+}
+
+@keyframes page-scroll-out-down {
+	from {
+		transform: translateY(0);
+		opacity: 1;
+	}
+	to {
+		transform: translateY(100%);
+		opacity: 1;
+	}
+}
+
+@keyframes page-scroll-in-down {
+	from {
+		transform: translateY(-100%);
+		opacity: 1;
+	}
+	to {
+		transform: translateY(0);
+		opacity: 1;
 	}
 }
 
 @media (prefers-reduced-motion: reduce) {
-	::view-transition-old(app-page),
-	::view-transition-new(app-page) {
-		animation: none;
+	html:active-view-transition-type(scroll-down)::view-transition-old(app-page),
+	html:active-view-transition-type(scroll-down)::view-transition-new(app-page),
+	html:active-view-transition-type(scroll-up)::view-transition-old(app-page),
+	html:active-view-transition-type(scroll-up)::view-transition-new(app-page) {
+		animation: none !important;
 	}
 }
