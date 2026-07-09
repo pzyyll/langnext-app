@@ -19,6 +19,7 @@
 	"devDependencies": {
 		"@eslint/js": "^10.0.1",
 		"@iconify-json/clarity": "^1.2.4",
+		"@iconify-json/material-symbols-light": "^1.2.83",
 		"@svgr/core": "^8.1.0",
 		"@svgr/plugin-jsx": "^8.1.0",
 		"@tailwindcss/vite": "^4.3.2",

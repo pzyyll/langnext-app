@@ -1,9 +1,11 @@
-// ABOUTME: Custom frameless window titlebar with app icon and window controls.
+// ABOUTME: Custom frameless window titlebar with optional sidebar toggle and controls.
 // ABOUTME: Drag only on the title strip; maximize hover opens Windows Snap Layout.
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { Button } from "@base-ui/react/button";
 import IconSvgsLnb from "~icons/svgs/lnb";
+import IconMaterialSymbolsLightClarifyOutlineSharp from "~icons/material-symbols-light/clarify-outline-sharp";
 import IconClarityMinusLine from "~icons/clarity/minus-line";
 import IconClarityWindowMaxLine from "~icons/clarity/window-max-line";
 import IconClarityWindowRestoreLine from "~icons/clarity/window-restore-line";
@@ -14,7 +16,11 @@ export type TitleBarProps = {
 	minimize?: boolean;
 	maximized?: boolean;
 	close?: boolean;
+	/** When set, shows a leading control to collapse/expand the app sidebar. */
+	sidebarOpen?: boolean;
+	onSidebarToggle?: () => void;
 	className?: string;
+	leading?: ReactNode;
 };
 
 /** Match decorum: show snap flyout after hovering maximize ~620ms. */
@@ -26,7 +32,19 @@ const controlButtonClassName =
 const closeButtonClassName =
 	"group inline-flex h-full min-h-0 min-w-10 cursor-default items-center justify-center border-0 bg-transparent px-3 text-ink select-none hover:bg-danger hover:text-danger-ink active:bg-danger active:text-danger-ink";
 
-export function TitleBar({ title, minimize = true, maximized = true, close = true, className = "" }: TitleBarProps) {
+const sidebarToggleClassName =
+	"inline-flex size-6 shrink-0 cursor-default items-center justify-center rounded-none border-0 bg-transparent text-ink select-none hover:bg-surface-2 active:bg-surface-3 focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-ink";
+
+export function TitleBar({
+	title,
+	minimize = true,
+	maximized = true,
+	close = true,
+	sidebarOpen,
+	onSidebarToggle,
+	className = "",
+	leading,
+}: TitleBarProps) {
 	const [isMaximized, setIsMaximized] = useState(false);
 	const appWindow = useMemo(() => getCurrentWindow(), []);
 	const snapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -90,9 +108,28 @@ export function TitleBar({ title, minimize = true, maximized = true, close = tru
 		};
 	}, [appWindow, clearSnapTimer]);
 
+	const showSidebarToggle = typeof onSidebarToggle === "function";
+
 	return (
-		// Drag is only on the flex title strip — never wrap the control buttons.
+		// Drag is only on the title strip — never wrap the control buttons.
 		<div className={`relative z-50 flex h-8 shrink-0 border-b border-line bg-surface ${className}`}>
+			<div className="flex h-full shrink-0 items-center gap-1 pl-2">
+				{showSidebarToggle ? (
+					<Button
+						type="button"
+						className={sidebarToggleClassName}
+						aria-label={sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
+						aria-pressed={sidebarOpen}
+						onClick={onSidebarToggle}
+					>
+						<IconMaterialSymbolsLightClarifyOutlineSharp
+							className={`pointer-events-none size-4 ${sidebarOpen ? "" : "-scale-x-100"}`}
+						/>
+					</Button>
+				) : null}
+				{leading}
+			</div>
+
 			<div id="titlebar-title" data-tauri-drag-region className="flex min-w-0 flex-1 items-center gap-2 px-2">
 				{title ? (
 					<>
