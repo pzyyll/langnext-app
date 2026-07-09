@@ -1,11 +1,17 @@
 // ABOUTME: Vite config for the Tauri frontend (React + Tailwind + TanStack Router).
-// ABOUTME: Keeps Tauri-friendly fixed port, HMR, and ignores src-tauri watches.
+// ABOUTME: Keeps Tauri-friendly fixed port, HMR, ignores src-tauri, and wires unplugin-icons.
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
+import Icons from "unplugin-icons/vite";
+import { FileSystemIconLoader } from "unplugin-icons/loaders";
+import * as cheerio from "cheerio";
 
 const host = process.env.TAURI_DEV_HOST;
+const rootDir = path.dirname(fileURLToPath(import.meta.url));
 
 // https://vite.dev/config/
 export default defineConfig(async () => ({
@@ -17,6 +23,28 @@ export default defineConfig(async () => ({
 		}),
 		react(),
 		tailwindcss(),
+		Icons({
+			autoInstall: true,
+			compiler: "jsx",
+			jsx: "react",
+			customCollections: {
+				svgs: FileSystemIconLoader(path.resolve(rootDir, "src/assets/icons"), (svg) => {
+					// Normalize local SVGs so they inherit text color and scale with em.
+					const $ = cheerio.load(svg, { xmlMode: true });
+					const $svg = $("svg");
+					$svg.attr("fill", "currentColor");
+					$svg.removeAttr("width");
+					$svg.removeAttr("height");
+					return $.xml($svg);
+				}),
+			},
+			iconCustomizer(collection, _icon, props) {
+				if (collection === "svgs") {
+					props.width = "1.5em";
+					props.height = "1.5em";
+				}
+			},
+		}),
 	],
 
 	// Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`

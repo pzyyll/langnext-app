@@ -1,7 +1,27 @@
 {
 	"$schema": "../gen/schemas/desktop-schema.json",
 	"identifier": "default",
-	"description": "Capability for the main window",
+	"description": "Capability for the main window and tray",
 	"windows": ["main"],
-	"permissions": ["core:default", "opener:default"]
+	"permissions": [
+		"core:default",
+		"opener:default",
+		"core:window:default",
+		"core:window:allow-create",
+		"core:window:allow-show",
+		"core:window:allow-hide",
+		"core:window:allow-close",
+		"core:window:allow-minimize",
+		"core:window:allow-unminimize",
+		"core:window:allow-maximize",
+		"core:window:allow-unmaximize",
+		"core:window:allow-toggle-maximize",
+		"core:window:allow-is-maximized",
+		"core:window:allow-is-minimized",
+		"core:window:allow-set-focus",
+		"core:window:allow-start-dragging",
+		"core:window:allow-start-resize-dragging",
+		"core:window:allow-set-title",
+		"core:tray:default"
+	]
 }

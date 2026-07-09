@@ -1,11 +1,12 @@
 /* ABOUTME: Global styles and Tailwind v4 entry for the Tauri frontend. */
-/* ABOUTME: Base UI portal stacking and body helpers; UI chrome uses Tailwind. */
+/* ABOUTME: Base UI portal stacking, body helpers, and titlebar drag regions. */
 @import "tailwindcss";
 
 html,
 body,
 #root {
 	height: 100%;
+	overflow: hidden;
 }
 
 body {
@@ -25,6 +26,7 @@ body {
 	-moz-osx-font-smoothing: grayscale;
 	background-color: white;
 	color: oklch(14.5% 0 0deg);
+	user-select: none;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -38,4 +40,11 @@ body {
 .root {
 	isolation: isolate;
 	min-height: 100%;
+	height: 100%;
+}
+
+/* Interactive controls must not start a window drag (Electron-style; harmless on Tauri) */
+.no-app-drag {
+	-webkit-app-region: no-drag;
+	app-region: no-drag;
 }
