@@ -12,7 +12,7 @@ function RootLayout() {
     <div className="root flex min-h-full flex-col">
       <header className="border-b border-slate-200 bg-white/80 backdrop-blur dark:border-slate-800 dark:bg-slate-950/80">
         <div className="mx-auto flex max-w-3xl items-center justify-between gap-4 px-4 py-3">
-          <div className="text-sm font-semibold tracking-tight">tauri-app</div>
+          <div className="text-sm font-semibold tracking-tight">langnext-app</div>
           <nav className="flex items-center gap-1 text-sm">
             <Link
               to="/"

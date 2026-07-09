@@ -1,4 +1,4 @@
-# tauri-app
+# langnext-app
 
 Desktop app starter built with **Tauri 2** and a modern React frontend.
 
@@ -23,7 +23,7 @@ Desktop app starter built with **Tauri 2** and a modern React frontend.
 ## Setup
 
 ```bash
-cd tauri-app
+cd langnext-app
 npm install
 ```
 
@@ -73,3 +73,7 @@ src-tauri/
 - Routes live in `src/routes`. TanStack Router generates `src/routeTree.gen.ts` during Vite startup.
 - Rust IPC demo: home page calls the `greet` command from `src-tauri/src/lib.rs`.
 - Base UI portals need the `.root { isolation: isolate; }` stacking context (already set in layout styles).
+
+## License
+
+Licensed under the [Apache License, Version 2.0](LICENSE).

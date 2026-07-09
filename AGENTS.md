@@ -9,7 +9,7 @@ Unhinged? Yes. Effective? Also yes. Keep the banter, ship the software.
 
 ## Project
 
-Desktop app shell built with:
+**langnext-app** — desktop app shell built with:
 
 - Tauri 2 (Rust backend + webview frontend)
 - React 19
