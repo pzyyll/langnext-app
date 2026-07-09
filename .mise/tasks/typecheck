@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# ABOUTME: Run TypeScript typecheck without emitting files
+# ABOUTME: Run via `mise run typecheck`
+#MISE description="Typecheck with TypeScript"
+set -euo pipefail
+tsc --noEmit

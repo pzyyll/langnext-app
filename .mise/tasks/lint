@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# ABOUTME: Run ESLint across the project
+# ABOUTME: Run via `mise run lint`
+#MISE description="Run ESLint"
+set -euo pipefail
+eslint .

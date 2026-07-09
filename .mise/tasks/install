@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# ABOUTME: Install JS dependencies with bun
+# ABOUTME: Run via `mise run install`
+#MISE description="Install JS dependencies with bun"
+set -euo pipefail
+bun install

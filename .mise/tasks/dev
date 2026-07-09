@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# ABOUTME: Start the Vite frontend dev server
+# ABOUTME: Run via `mise run dev`
+#MISE description="Start Vite frontend dev server"
+set -euo pipefail
+vite

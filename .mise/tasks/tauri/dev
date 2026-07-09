@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# ABOUTME: Run the full Tauri desktop app in development mode
+# ABOUTME: Run via `mise run tauri:dev`
+#MISE description="Run the full Tauri desktop app"
+set -euo pipefail
+tauri dev

@@ -21,7 +21,7 @@ Desktop app starter built with **Tauri 2** and a modern React frontend.
 - [mise](https://mise.jdx.dev/) (toolchain manager + task runner)
 - Platform deps for Tauri: https://v2.tauri.app/start/prerequisites/
 
-Tool versions and project tasks are defined in `mise.toml`.
+Tool versions are defined in `mise.toml`. Project tasks live under `.mise/tasks/`.
 
 ## Setup
 
@@ -75,7 +75,8 @@ src/
 src-tauri/
   src/lib.rs            Tauri commands
   tauri.conf.json       App config
-mise.toml               Toolchain + task definitions
+mise.toml               Toolchain versions
+.mise/tasks/            File-based project tasks
 ```
 
 ## Notes
@@ -84,7 +85,7 @@ mise.toml               Toolchain + task definitions
 - Rust IPC demo: home page calls the `greet` command from `src-tauri/src/lib.rs`.
 - Base UI portals need the `.root { isolation: isolate; }` stacking context (already set in layout styles).
 - Use **bun** only for packages (do not commit `package-lock.json` / `yarn.lock` / `pnpm-lock.yaml`).
-- Use **mise** only for project commands (do not add `package.json` scripts).
+- Use **mise file tasks** only for project commands (`.mise/tasks/`, not `package.json` scripts or TOML tasks).
 
 ## License
 

@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# ABOUTME: Check Prettier formatting without writing files
+# ABOUTME: Run via `mise run format:check`
+#MISE description="Check Prettier formatting"
+set -euo pipefail
+prettier --check .

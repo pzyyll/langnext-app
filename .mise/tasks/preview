@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# ABOUTME: Preview the production frontend build with Vite
+# ABOUTME: Run via `mise run preview`
+#MISE description="Preview production frontend build"
+set -euo pipefail
+vite preview

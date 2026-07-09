@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# ABOUTME: Typecheck and build the frontend for production
+# ABOUTME: Run via `mise run build`
+#MISE description="Typecheck and build the frontend"
+set -euo pipefail
+tsc --noEmit
+vite build

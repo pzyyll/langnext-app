@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# ABOUTME: Package the Tauri desktop app for distribution
+# ABOUTME: Run via `mise run tauri:build`
+#MISE description="Package the desktop app"
+set -euo pipefail
+tauri build

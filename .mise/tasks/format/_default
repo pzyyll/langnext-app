@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# ABOUTME: Format sources with Prettier
+# ABOUTME: Run via `mise run format`
+#MISE description="Format sources with Prettier"
+set -euo pipefail
+prettier --write .

@@ -29,12 +29,13 @@ src/                 Frontend (React + Vite)
   styles.css         Tailwind entry + global styles
 src-tauri/           Tauri / Rust shell
   src/lib.rs         Commands and app setup
-mise.toml            Toolchain versions + all project tasks
+mise.toml            Toolchain versions
+.mise/tasks/         File-based project tasks
 ```
 
 ## Toolchain
 
-Versions and tasks are defined in `mise.toml`. After clone:
+Tool versions live in `mise.toml`. Tasks live as scripts under `.mise/tasks/`. After clone:
 
 ```bash
 mise install
@@ -42,7 +43,7 @@ mise run install
 ```
 
 Do not use npm/yarn/pnpm for this repo. Lockfile is `bun.lock` only.
-Do not add `package.json` scripts — use mise tasks only.
+Do not add `package.json` scripts — use `.mise/tasks/` file tasks only.
 
 ## Commands
 

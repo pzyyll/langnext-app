@@ -1,5 +1,5 @@
-# ABOUTME: Project toolchain versions and task runner managed by mise
-# ABOUTME: Run `mise install` after clone, then use `mise run <task>` for all project commands
+# ABOUTME: Project toolchain versions managed by mise
+# ABOUTME: Project tasks live in `.mise/tasks/` as file tasks
 
 [tools]
 node = "22"
@@ -8,43 +8,3 @@ rust = "stable"
 
 [env]
 _.path = ["{{config_root}}/node_modules/.bin"]
-
-[tasks.install]
-description = "Install JS dependencies with bun"
-run = "bun install"
-
-[tasks.dev]
-description = "Start Vite frontend dev server"
-run = "vite"
-
-[tasks.build]
-description = "Typecheck and build the frontend"
-run = "tsc --noEmit && vite build"
-
-[tasks.typecheck]
-description = "Typecheck with TypeScript"
-run = "tsc --noEmit"
-
-[tasks.preview]
-description = "Preview production frontend build"
-run = "vite preview"
-
-[tasks.lint]
-description = "Run ESLint"
-run = "eslint ."
-
-[tasks.format]
-description = "Format sources with Prettier"
-run = "prettier --write ."
-
-[tasks."format:check"]
-description = "Check Prettier formatting"
-run = "prettier --check ."
-
-[tasks."tauri:dev"]
-description = "Run the full Tauri desktop app"
-run = "tauri dev"
-
-[tasks."tauri:build"]
-description = "Package the desktop app"
-run = "tauri build"
