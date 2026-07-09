@@ -15,7 +15,7 @@ Unhinged? Yes. Effective? Also yes. Keep the banter, ship the software.
 - React 19
 - TanStack Router (file-based routes in `src/routes`)
 - Base UI (`@base-ui/react`)
-- Tailwind CSS v4 (`@tailwindcss/vite`)
+- Tailwind CSS v4 (`@tailwindcss/vite`) — Base UI outline / frame style
 - ESLint + Prettier
 - **mise** for toolchains (`node`, `bun`, `rust`) and all project tasks
 - **bun** as the JS package manager (no `package.json` scripts)

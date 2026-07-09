@@ -10,11 +10,9 @@ export const Route = createFileRoute("/")({
 	component: HomePage,
 });
 
+/** Base UI official demo outline button style */
 const buttonClassName =
-	"inline-flex h-9 items-center justify-center rounded-md bg-slate-900 px-3 text-sm font-medium text-white transition hover:bg-slate-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white dark:focus-visible:outline-slate-100";
-
-const secondaryButtonClassName =
-	"inline-flex h-9 items-center justify-center rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-900 transition hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:hover:bg-slate-800 dark:focus-visible:outline-slate-100";
+	"inline-flex h-8 items-center justify-center gap-2 rounded-none border border-neutral-950 bg-white px-3 text-sm leading-none whitespace-nowrap font-normal text-neutral-950 select-none hover:not-data-disabled:bg-neutral-100 active:not-data-disabled:bg-neutral-200 focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-neutral-950 data-disabled:border-neutral-500 data-disabled:text-neutral-500 disabled:border-neutral-500 disabled:text-neutral-500 dark:border-white dark:bg-neutral-950 dark:text-white dark:hover:not-data-disabled:bg-neutral-800 dark:active:not-data-disabled:bg-neutral-700 dark:data-disabled:border-neutral-400 dark:data-disabled:text-neutral-400 dark:focus-visible:outline-white";
 
 function HomePage() {
 	const [name, setName] = useState("");
@@ -38,22 +36,25 @@ function HomePage() {
 	}
 
 	return (
-		<div className="space-y-8">
-			<section className="space-y-3">
-				<p className="text-xs font-semibold tracking-[0.2em] text-slate-500 uppercase dark:text-slate-400">
+		<div className="flex flex-col gap-8">
+			<section className="flex flex-col gap-3">
+				<p className="text-xs leading-4 font-normal tracking-[0.12em] text-neutral-600 uppercase dark:text-neutral-400">
 					Tauri 2 + React 19
 				</p>
-				<h1 className="text-3xl font-semibold tracking-tight text-slate-900 dark:text-white">
+				<h1 className="text-2xl leading-8 font-bold text-neutral-950 dark:text-white">
 					Desktop shell, modern web stack
 				</h1>
-				<p className="max-w-2xl text-sm leading-6 text-slate-600 dark:text-slate-300">
-					This starter wires Tauri 2, TanStack Router, Base UI, and Tailwind CSS v4. Call into Rust with{" "}
-					<code className="rounded bg-slate-200 px-1.5 py-0.5 text-xs dark:bg-slate-800">invoke</code>, then show the
-					result in a Base UI dialog.
+				<p className="max-w-2xl text-sm leading-6 text-neutral-600 dark:text-neutral-400">
+					This starter wires Tauri 2, TanStack Router, Base UI, and Tailwind CSS in the official Base UI outline
+					style. Call into Rust with{" "}
+					<code className="border border-neutral-950 bg-neutral-100 px-1.5 py-0.5 font-mono text-xs dark:border-white dark:bg-neutral-800">
+						invoke
+					</code>
+					, then show the result in a Base UI dialog.
 				</p>
 			</section>
 
-			<section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-950">
+			<section className="border border-neutral-950 bg-white p-4 shadow-[0.25rem_0.25rem_0] shadow-black/12 dark:border-white dark:bg-neutral-950 dark:shadow-none">
 				<form
 					className="flex flex-col gap-3 sm:flex-row"
 					onSubmit={(event) => {
@@ -69,7 +70,7 @@ function HomePage() {
 						value={name}
 						onChange={(event) => setName(event.currentTarget.value)}
 						placeholder="Enter a name..."
-						className="h-9 flex-1 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+						className="h-8 flex-1 rounded-none border border-neutral-950 bg-white px-3 text-sm font-normal text-neutral-950 placeholder:text-neutral-500 focus:outline-2 focus:-outline-offset-1 focus:outline-neutral-950 dark:border-white dark:bg-neutral-950 dark:text-white dark:placeholder:text-neutral-400 dark:focus:outline-white"
 					/>
 					<Button type="submit" className={buttonClassName} disabled={loading || !name.trim()} focusableWhenDisabled>
 						{loading ? "Greeting..." : "Greet from Rust"}
@@ -77,24 +78,24 @@ function HomePage() {
 				</form>
 
 				{greetMsg ? (
-					<p className="mt-4 text-sm text-slate-600 dark:text-slate-300">
-						Last message: <span className="font-medium">{greetMsg}</span>
+					<p className="mt-4 text-sm leading-5 text-neutral-600 dark:text-neutral-400">
+						Last message: <span className="font-bold text-neutral-950 dark:text-white">{greetMsg}</span>
 					</p>
 				) : null}
 			</section>
 
 			<Dialog.Root open={dialogOpen} onOpenChange={setDialogOpen}>
 				<Dialog.Portal>
-					<Dialog.Backdrop className="fixed inset-0 min-h-dvh bg-black/40 transition-opacity duration-150 data-ending-style:opacity-0 data-starting-style:opacity-0 supports-[-webkit-touch-callout:none]:absolute" />
-					<Dialog.Popup className="fixed top-1/2 left-1/2 w-96 max-w-[calc(100vw-3rem)] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-slate-200 bg-white p-5 text-slate-900 shadow-xl transition-[scale,opacity] duration-100 ease-out data-ending-style:scale-[0.98] data-ending-style:opacity-0 data-starting-style:scale-[0.98] data-starting-style:opacity-0 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100">
-						<div className="space-y-1">
-							<Dialog.Title className="text-base font-semibold">Message from Rust</Dialog.Title>
-							<Dialog.Description className="text-sm text-slate-600 dark:text-slate-300">
+					<Dialog.Backdrop className="fixed inset-0 min-h-dvh bg-black opacity-20 transition-opacity duration-150 data-ending-style:opacity-0 data-starting-style:opacity-0 supports-[-webkit-touch-callout:none]:absolute dark:opacity-50" />
+					<Dialog.Popup className="fixed top-1/2 left-1/2 -mt-8 flex w-96 max-w-[calc(100vw-3rem)] -translate-x-1/2 -translate-y-1/2 flex-col gap-4 border border-neutral-950 bg-white p-4 text-neutral-950 shadow-[0.25rem_0.25rem_0] shadow-black/12 transition-[scale,opacity] duration-100 ease-out data-ending-style:scale-[0.98] data-ending-style:opacity-0 data-starting-style:scale-[0.98] data-starting-style:opacity-0 dark:border-white dark:bg-neutral-950 dark:text-white dark:shadow-none">
+						<div className="flex flex-col gap-1">
+							<Dialog.Title className="text-base leading-6 font-bold">Message from Rust</Dialog.Title>
+							<Dialog.Description className="text-sm leading-5 text-neutral-600 dark:text-neutral-400">
 								{greetMsg || "No message yet."}
 							</Dialog.Description>
 						</div>
-						<div className="mt-5 flex justify-end">
-							<Dialog.Close className={secondaryButtonClassName}>Close</Dialog.Close>
+						<div className="flex justify-end gap-3">
+							<Dialog.Close className={buttonClassName}>Close</Dialog.Close>
 						</div>
 					</Dialog.Popup>
 				</Dialog.Portal>

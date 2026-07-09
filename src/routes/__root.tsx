@@ -7,30 +7,28 @@ export const Route = createRootRoute({
 	component: RootLayout,
 });
 
+const navLinkClassName =
+	"inline-flex h-8 items-center justify-center border border-transparent px-3 text-sm leading-none font-normal text-neutral-600 select-none hover:bg-neutral-100 hover:text-neutral-950 focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-neutral-950 dark:text-neutral-400 dark:hover:bg-neutral-800 dark:hover:text-white dark:focus-visible:outline-white";
+
+const navLinkActiveClassName =
+	"inline-flex h-8 items-center justify-center border border-neutral-950 bg-white px-3 text-sm leading-none font-normal text-neutral-950 shadow-[0.25rem_0.25rem_0] shadow-black/12 select-none focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-neutral-950 dark:border-white dark:bg-neutral-950 dark:text-white dark:shadow-none dark:focus-visible:outline-white";
+
 function RootLayout() {
 	return (
 		<div className="root flex min-h-full flex-col">
-			<header className="border-b border-slate-200 bg-white/80 backdrop-blur dark:border-slate-800 dark:bg-slate-950/80">
+			<header className="border-b border-neutral-950 bg-white dark:border-white dark:bg-neutral-950">
 				<div className="mx-auto flex max-w-3xl items-center justify-between gap-4 px-4 py-3">
-					<div className="text-sm font-semibold tracking-tight">langnext-app</div>
-					<nav className="flex items-center gap-1 text-sm">
+					<div className="text-sm leading-5 font-bold text-neutral-950 dark:text-white">langnext-app</div>
+					<nav className="flex items-center gap-1">
 						<Link
 							to="/"
-							className="rounded-md px-3 py-1.5 text-slate-600 transition hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
-							activeProps={{
-								className: "rounded-md px-3 py-1.5 bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900",
-							}}
+							className={navLinkClassName}
+							activeProps={{ className: navLinkActiveClassName }}
 							activeOptions={{ exact: true }}
 						>
 							Home
 						</Link>
-						<Link
-							to="/about"
-							className="rounded-md px-3 py-1.5 text-slate-600 transition hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
-							activeProps={{
-								className: "rounded-md px-3 py-1.5 bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900",
-							}}
-						>
+						<Link to="/about" className={navLinkClassName} activeProps={{ className: navLinkActiveClassName }}>
 							About
 						</Link>
 					</nav>
