@@ -13,18 +13,29 @@ Desktop app starter built with **Tauri 2** and a modern React frontend.
 | Styling    | Tailwind CSS v4              |
 | Tooling    | ESLint + Prettier            |
 | Build      | Vite 7 + TypeScript          |
+| Runtime    | mise (node, bun, rust)       |
+| Packages   | bun                          |
 
 ## Prerequisites
 
-- Node.js 20+
-- Rust toolchain (`rustc`, `cargo`)
+- [mise](https://mise.jdx.dev/) (toolchain manager)
 - Platform deps for Tauri: https://v2.tauri.app/start/prerequisites/
+
+Tool versions are pinned in `mise.toml` (`node`, `bun`, `rust`).
 
 ## Setup
 
 ```bash
 cd langnext-app
-npm install
+mise install
+bun install
+```
+
+Or with mise tasks:
+
+```bash
+mise install
+mise run install
 ```
 
 ## Develop
@@ -32,26 +43,30 @@ npm install
 Frontend only:
 
 ```bash
-npm run dev
+bun run dev
+# or: mise run dev
 ```
 
 Full desktop app:
 
 ```bash
-npm run tauri dev
+bun run tauri dev
+# or: mise run tauri:dev
 ```
 
 ## Scripts
 
 | Command                | Description                           |
 | ---------------------- | ------------------------------------- |
-| `npm run dev`          | Start Vite dev server                 |
-| `npm run build`        | Typecheck + production frontend build |
-| `npm run lint`         | Run ESLint                            |
-| `npm run format`       | Format with Prettier                  |
-| `npm run format:check` | Check Prettier formatting             |
-| `npm run tauri dev`    | Run the Tauri desktop app             |
-| `npm run tauri build`  | Package the desktop app               |
+| `bun run dev`          | Start Vite dev server                 |
+| `bun run build`        | Typecheck + production frontend build |
+| `bun run lint`         | Run ESLint                            |
+| `bun run format`       | Format with Prettier                  |
+| `bun run format:check` | Check Prettier formatting             |
+| `bun run tauri dev`    | Run the Tauri desktop app             |
+| `bun run tauri build`  | Package the desktop app               |
+
+Mise task aliases: `mise run install|dev|build|lint|format|tauri:dev|tauri:build`.
 
 ## Project structure
 
@@ -66,6 +81,7 @@ src/
 src-tauri/
   src/lib.rs            Tauri commands
   tauri.conf.json       App config
+mise.toml               Toolchain + task definitions
 ```
 
 ## Notes
@@ -73,6 +89,7 @@ src-tauri/
 - Routes live in `src/routes`. TanStack Router generates `src/routeTree.gen.ts` during Vite startup.
 - Rust IPC demo: home page calls the `greet` command from `src-tauri/src/lib.rs`.
 - Base UI portals need the `.root { isolation: isolate; }` stacking context (already set in layout styles).
+- Use **bun** only (do not commit `package-lock.json` / `yarn.lock` / `pnpm-lock.yaml`).
 
 ## License
 

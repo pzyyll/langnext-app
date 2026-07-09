@@ -17,6 +17,8 @@ Unhinged? Yes. Effective? Also yes. Keep the banter, ship the software.
 - Base UI (`@base-ui/react`)
 - Tailwind CSS v4 (`@tailwindcss/vite`)
 - ESLint + Prettier
+- **mise** for toolchains (`node`, `bun`, `rust`)
+- **bun** as the JS package manager
 
 ## Layout
 
@@ -27,18 +29,42 @@ src/                 Frontend (React + Vite)
   styles.css         Tailwind entry + global styles
 src-tauri/           Tauri / Rust shell
   src/lib.rs         Commands and app setup
+mise.toml            Toolchain versions + mise tasks
 ```
+
+## Toolchain
+
+Versions are pinned in `mise.toml`. After clone:
+
+```bash
+mise install
+bun install
+```
+
+Do not use npm/yarn/pnpm for this repo. Lockfile is `bun.lock` only.
 
 ## Commands
 
 ```bash
-npm run dev          # Vite only (frontend)
-npm run tauri dev    # Full desktop app
-npm run build        # Typecheck + Vite production build
-npm run lint         # ESLint
-npm run format       # Prettier write
-npm run format:check # Prettier check
-npm run tauri build  # Package desktop app
+bun run dev          # Vite only (frontend)
+bun run tauri dev    # Full desktop app
+bun run build        # Typecheck + Vite production build
+bun run lint         # ESLint
+bun run format       # Prettier write
+bun run format:check # Prettier check
+bun run tauri build  # Package desktop app
+```
+
+Mise task aliases (same behavior):
+
+```bash
+mise run install
+mise run dev
+mise run build
+mise run lint
+mise run format
+mise run tauri:dev
+mise run tauri:build
 ```
 
 ## Conventions
