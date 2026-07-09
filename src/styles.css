@@ -1,6 +1,57 @@
-/* ABOUTME: Global styles and Tailwind v4 entry for the Tauri frontend. */
-/* ABOUTME: Base UI portal stacking, body helpers, and titlebar drag regions. */
+/* ABOUTME: Global styles, Tailwind v4 entry, and semantic theme tokens. */
+/* ABOUTME: Light/dark via data-theme; utilities map through @theme inline. */
 @import "tailwindcss";
+
+/* ── Runtime theme tokens (switch by [data-theme]) ── */
+:root,
+[data-theme="light"] {
+	--app-surface: oklch(100% 0 0deg);
+	--app-surface-2: oklch(96.5% 0 0deg);
+	--app-surface-3: oklch(92% 0 0deg);
+	--app-ink: oklch(20% 0 0deg);
+	--app-muted: oklch(45% 0 0deg);
+	--app-line: oklch(20% 0 0deg);
+	--app-accent: oklch(55% 0.16 250deg);
+	--app-danger: oklch(55% 0.2 25deg);
+	--app-danger-ink: oklch(100% 0 0deg);
+	--app-overlay: oklch(0% 0 0deg / 0.2);
+	--app-code: oklch(96% 0 0deg);
+	--app-disabled: oklch(55% 0 0deg);
+	--app-shadow: oklch(0% 0 0deg / 0.12);
+}
+
+[data-theme="dark"] {
+	--app-surface: oklch(18% 0 0deg);
+	--app-surface-2: oklch(25% 0 0deg);
+	--app-surface-3: oklch(32% 0 0deg);
+	--app-ink: oklch(98% 0 0deg);
+	--app-muted: oklch(70% 0 0deg);
+	--app-line: oklch(92% 0 0deg);
+	--app-accent: oklch(72% 0.14 250deg);
+	--app-danger: oklch(58% 0.2 25deg);
+	--app-danger-ink: oklch(100% 0 0deg);
+	--app-overlay: oklch(0% 0 0deg / 0.5);
+	--app-code: oklch(28% 0 0deg);
+	--app-disabled: oklch(60% 0 0deg);
+	--app-shadow: oklch(0% 0 0deg / 0);
+}
+
+/* Map tokens into Tailwind color utilities: bg-surface, text-ink, border-line, … */
+@theme inline {
+	--color-surface: var(--app-surface);
+	--color-surface-2: var(--app-surface-2);
+	--color-surface-3: var(--app-surface-3);
+	--color-ink: var(--app-ink);
+	--color-muted: var(--app-muted);
+	--color-line: var(--app-line);
+	--color-accent: var(--app-accent);
+	--color-danger: var(--app-danger);
+	--color-danger-ink: var(--app-danger-ink);
+	--color-overlay: var(--app-overlay);
+	--color-code: var(--app-code);
+	--color-disabled: var(--app-disabled);
+	--color-shadow: var(--app-shadow);
+}
 
 html,
 body,
@@ -24,16 +75,9 @@ body {
 		sans-serif;
 	-webkit-font-smoothing: antialiased;
 	-moz-osx-font-smoothing: grayscale;
-	background-color: white;
-	color: oklch(14.5% 0 0deg);
+	background-color: var(--app-surface);
+	color: var(--app-ink);
 	user-select: none;
-}
-
-@media (prefers-color-scheme: dark) {
-	body {
-		background-color: oklch(14.5% 0 0deg);
-		color: white;
-	}
 }
 
 /* Base UI: keep portaled popups above app content */
@@ -47,4 +91,61 @@ body {
 .no-app-drag {
 	-webkit-app-region: no-drag;
 	app-region: no-drag;
+}
+
+/* Shared outline card / control shadow (tokenized) */
+.shadow-frame {
+	box-shadow: 0.25rem 0.25rem 0 var(--app-shadow);
+}
+
+/* ── Route page transitions (View Transitions API) ──
+   Only the main content participates; titlebar/sidebar stay still. */
+.page-transition {
+	view-transition-name: app-page;
+}
+
+/* Don't cross-fade the whole document snapshot */
+::view-transition-old(root),
+::view-transition-new(root) {
+	animation: none;
+	mix-blend-mode: normal;
+}
+
+::view-transition-group(root) {
+	animation-duration: 0s;
+}
+
+::view-transition-old(app-page) {
+	animation: page-fade-out 180ms ease-out both;
+}
+
+::view-transition-new(app-page) {
+	animation: page-fade-in 200ms ease-out both;
+}
+
+@keyframes page-fade-out {
+	from {
+		opacity: 1;
+	}
+	to {
+		opacity: 0;
+	}
+}
+
+@keyframes page-fade-in {
+	from {
+		opacity: 0;
+		transform: translateY(0.25rem);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	::view-transition-old(app-page),
+	::view-transition-new(app-page) {
+		animation: none;
+	}
 }

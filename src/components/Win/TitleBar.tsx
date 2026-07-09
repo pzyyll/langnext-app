@@ -21,10 +21,10 @@ export type TitleBarProps = {
 const SNAP_HOVER_MS = 620;
 
 const controlButtonClassName =
-	"inline-flex h-full min-h-0 min-w-10 cursor-default items-center justify-center border-0 bg-transparent px-3 text-neutral-950 select-none hover:bg-neutral-100 active:bg-neutral-200 dark:text-white dark:hover:bg-neutral-800 dark:active:bg-neutral-700";
+	"inline-flex h-full min-h-0 min-w-10 cursor-default items-center justify-center border-0 bg-transparent px-3 text-ink select-none hover:bg-surface-2 active:bg-surface-3";
 
 const closeButtonClassName =
-	"group inline-flex h-full min-h-0 min-w-10 cursor-default items-center justify-center border-0 bg-transparent px-3 text-neutral-950 select-none hover:bg-red-600 hover:text-white active:bg-red-800 active:text-white dark:text-white";
+	"group inline-flex h-full min-h-0 min-w-10 cursor-default items-center justify-center border-0 bg-transparent px-3 text-ink select-none hover:bg-danger hover:text-danger-ink active:bg-danger active:text-danger-ink";
 
 export function TitleBar({ title, minimize = true, maximized = true, close = true, className = "" }: TitleBarProps) {
 	const [isMaximized, setIsMaximized] = useState(false);
@@ -92,18 +92,18 @@ export function TitleBar({ title, minimize = true, maximized = true, close = tru
 
 	return (
 		// Drag is only on the flex title strip — never wrap the control buttons.
-		<div
-			className={`relative z-50 flex h-8 shrink-0 border-b border-neutral-950 bg-white dark:border-white dark:bg-neutral-950 ${className}`}
-		>
+		<div className={`relative z-50 flex h-8 shrink-0 border-b border-line bg-surface ${className}`}>
 			<div id="titlebar-title" data-tauri-drag-region className="flex min-w-0 flex-1 items-center gap-2 px-2">
-				<IconSvgsLnb className="pointer-events-none size-5 shrink-0" />
 				{title ? (
-					<span
-						data-tauri-drag-region
-						className="pointer-events-none truncate select-none text-sm leading-none font-normal text-neutral-950 dark:text-white"
-					>
-						{title}
-					</span>
+					<>
+						<IconSvgsLnb className="pointer-events-none size-5 shrink-0" />
+						<span
+							data-tauri-drag-region
+							className="pointer-events-none truncate select-none text-sm leading-none font-normal text-ink"
+						>
+							{title}
+						</span>
+					</>
 				) : null}
 			</div>
 
@@ -146,7 +146,7 @@ export function TitleBar({ title, minimize = true, maximized = true, close = tru
 						aria-label="Close"
 						onClick={() => void appWindow.close()}
 					>
-						<IconClarityCloseLine className="pointer-events-none size-4 group-hover:text-white group-active:text-white" />
+						<IconClarityCloseLine className="pointer-events-none size-4 group-hover:text-danger-ink group-active:text-danger-ink" />
 					</button>
 				) : null}
 			</div>
