@@ -4,17 +4,17 @@ Desktop app starter built with **Tauri 2** and a modern React frontend.
 
 ## Stack
 
-| Layer      | Choice                        |
-| ---------- | ----------------------------- |
-| Shell      | Tauri 2                       |
-| UI         | React 19                      |
-| Routing    | TanStack Router (file-based)  |
-| Components | Base UI                       |
+| Layer      | Choice                            |
+| ---------- | --------------------------------- |
+| Shell      | Tauri 2                           |
+| UI         | React 19                          |
+| Routing    | TanStack Router (file-based)      |
+| Components | Base UI                           |
 | Styling    | Tailwind CSS v4 (Base UI outline) |
-| Tooling    | ESLint + Prettier             |
-| Build      | Vite 8 + TypeScript           |
-| Runtime    | mise (node, bun, rust, tasks) |
-| Packages   | bun                           |
+| Tooling    | ESLint + Prettier                 |
+| Build      | Vite 8 + TypeScript               |
+| Runtime    | mise (node, bun, rust, tasks)     |
+| Packages   | bun                               |
 
 ## Prerequisites
 
@@ -57,8 +57,8 @@ All commands go through mise (no `package.json` scripts):
 | `mise run typecheck`    | TypeScript check only                 |
 | `mise run preview`      | Preview production frontend build     |
 | `mise run lint`         | Run ESLint                            |
-| `mise run format`       | Format with Prettier                  |
-| `mise run format:check` | Check Prettier formatting             |
+| `mise run format`       | Format with Prettier + rustfmt        |
+| `mise run format:check` | Check Prettier + rustfmt formatting   |
 | `mise run tauri:dev`    | Run the Tauri desktop app             |
 | `mise run tauri:build`  | Package the desktop app               |
 

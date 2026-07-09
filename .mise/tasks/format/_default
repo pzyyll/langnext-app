@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# ABOUTME: Format sources with Prettier
+# ABOUTME: Format frontend (Prettier) and Rust (cargo fmt)
 # ABOUTME: Run via `mise run format`
-#MISE description="Format sources with Prettier"
+#MISE description="Format sources (Prettier + rustfmt)"
 set -euo pipefail
 prettier --write .
+cargo fmt --manifest-path src-tauri/Cargo.toml

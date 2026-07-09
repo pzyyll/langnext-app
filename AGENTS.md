@@ -54,8 +54,8 @@ mise run build         # Typecheck + Vite production build
 mise run typecheck     # tsc --noEmit
 mise run preview       # vite preview
 mise run lint          # ESLint
-mise run format        # Prettier write
-mise run format:check  # Prettier check
+mise run format        # Prettier + cargo fmt write
+mise run format:check  # Prettier + cargo fmt check
 mise run tauri:dev     # Full desktop app
 mise run tauri:build   # Package desktop app
 ```

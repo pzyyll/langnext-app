@@ -1,1 +1,5 @@
+# ABOUTME: rustfmt settings for the Tauri / Rust backend
+# ABOUTME: Tabs with visual width 2; line length capped at 120
 max_width = 120
+hard_tabs = true
+tab_spaces = 2

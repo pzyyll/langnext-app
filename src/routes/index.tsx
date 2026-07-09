@@ -45,8 +45,8 @@ function HomePage() {
 					Desktop shell, modern web stack
 				</h1>
 				<p className="max-w-2xl text-sm leading-6 text-neutral-600 dark:text-neutral-400">
-					This starter wires Tauri 2, TanStack Router, Base UI, and Tailwind CSS in the official Base UI outline
-					style. Call into Rust with{" "}
+					This starter wires Tauri 2, TanStack Router, Base UI, and Tailwind CSS in the official Base UI outline style.
+					Call into Rust with{" "}
 					<code className="border border-neutral-950 bg-neutral-100 px-1.5 py-0.5 font-mono text-xs dark:border-white dark:bg-neutral-800">
 						invoke
 					</code>
