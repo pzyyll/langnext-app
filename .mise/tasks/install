@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# ABOUTME: Install JS dependencies with bun
+# ABOUTME: Install JS dependencies with bun and ensure Rust components
 # ABOUTME: Run via `mise run install`
-#MISE description="Install JS dependencies with bun"
+#MISE description="Install JS dependencies with bun and ensure Rust components"
 set -euo pipefail
 bun install
+rustup component add rust-analyzer clippy rustfmt

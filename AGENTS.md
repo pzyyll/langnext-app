@@ -76,3 +76,7 @@ mise run tauri:build   # Package desktop app
 - `src/routeTree.gen.ts` is produced by `@tanstack/router-plugin`.
   Do not hand-edit it. Keep it out of ESLint/Prettier edits; commit it so
   `tsc --noEmit` works on clean checkouts.
+
+## References
+
+- base-ui guide: https://base-ui.com/llms.txt

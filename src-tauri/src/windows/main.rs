@@ -1,7 +1,18 @@
 // ABOUTME: Main application window builder for the desktop shell.
-// ABOUTME: Creates a frameless window; React owns the custom titlebar controls.
+// ABOUTME: Creates a frameless window; close-to-hide keeps the tray app alive.
 use crate::consts;
 use tauri::{Manager, Runtime, WebviewWindowBuilder};
+
+/// Intercept close so X / Alt+F4 hide to tray instead of destroying the window.
+fn wire_close_to_hide<R: Runtime>(window: &tauri::WebviewWindow<R>) {
+	let window_ref = window.clone();
+	window.on_window_event(move |event| {
+		if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+			api.prevent_close();
+			let _ = window_ref.hide();
+		}
+	});
+}
 
 #[allow(unused)]
 pub fn show<R: Runtime>(app: &tauri::AppHandle<R>) {
@@ -28,7 +39,7 @@ pub fn show<R: Runtime>(app: &tauri::AppHandle<R>) {
 				web_build = web_build.decorations(false);
 			}
 
-			let _win = web_build
+			let win = web_build
 				.resizable(true)
 				.fullscreen(false)
 				.title(consts::APP_NAME)
@@ -39,6 +50,8 @@ pub fn show<R: Runtime>(app: &tauri::AppHandle<R>) {
 				.center()
 				.build()
 				.expect("failed to create main window");
+
+			wire_close_to_hide(&win);
 		}
 	}
 }

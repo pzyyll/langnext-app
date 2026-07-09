@@ -17,7 +17,7 @@ const navLinkActiveClassName =
 function RootLayout() {
 	return (
 		<div className="root flex h-full min-h-0 flex-col">
-			<TitleBar title="langnext-app" minimize maximized close />
+			<TitleBar minimize maximized close />
 
 			<header className="border-b border-neutral-950 bg-white dark:border-white dark:bg-neutral-950">
 				<div className="mx-auto flex max-w-3xl items-center justify-between gap-4 px-4 py-3">

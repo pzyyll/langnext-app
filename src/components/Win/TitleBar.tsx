@@ -26,13 +26,7 @@ const controlButtonClassName =
 const closeButtonClassName =
 	"group inline-flex h-full min-h-0 min-w-10 cursor-default items-center justify-center border-0 bg-transparent px-3 text-neutral-950 select-none hover:bg-red-600 hover:text-white active:bg-red-800 active:text-white dark:text-white";
 
-export function TitleBar({
-	title = "langnext-app",
-	minimize = true,
-	maximized = true,
-	close = true,
-	className = "",
-}: TitleBarProps) {
+export function TitleBar({ title, minimize = true, maximized = true, close = true, className = "" }: TitleBarProps) {
 	const [isMaximized, setIsMaximized] = useState(false);
 	const appWindow = useMemo(() => getCurrentWindow(), []);
 	const snapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -101,11 +95,7 @@ export function TitleBar({
 		<div
 			className={`relative z-50 flex h-8 shrink-0 border-b border-neutral-950 bg-white dark:border-white dark:bg-neutral-950 ${className}`}
 		>
-			<div
-				id="titlebar-title"
-				data-tauri-drag-region
-				className="flex min-w-0 flex-1 items-center gap-2 px-2"
-			>
+			<div id="titlebar-title" data-tauri-drag-region className="flex min-w-0 flex-1 items-center gap-2 px-2">
 				<IconSvgsLnb className="pointer-events-none size-5 shrink-0" />
 				{title ? (
 					<span
