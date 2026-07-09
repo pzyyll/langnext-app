@@ -12,7 +12,7 @@ Desktop app starter built with **Tauri 2** and a modern React frontend.
 | Components | Base UI                      |
 | Styling    | Tailwind CSS v4              |
 | Tooling    | ESLint + Prettier            |
-| Build      | Vite 7 + TypeScript          |
+| Build      | Vite 8 + TypeScript          |
 | Runtime    | mise (node, bun, rust)       |
 | Packages   | bun                          |
 
