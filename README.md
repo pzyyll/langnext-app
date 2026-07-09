@@ -4,17 +4,17 @@ Desktop app starter built with **Tauri 2** and a modern React frontend.
 
 ## Stack
 
-| Layer      | Choice                       |
-| ---------- | ---------------------------- |
-| Shell      | Tauri 2                      |
-| UI         | React 19                     |
-| Routing    | TanStack Router (file-based) |
-| Components | Base UI                      |
-| Styling    | Tailwind CSS v4              |
-| Tooling    | ESLint + Prettier            |
-| Build      | Vite 8 + TypeScript          |
-| Runtime    | mise (node, bun, rust, tasks)|
-| Packages   | bun                          |
+| Layer      | Choice                        |
+| ---------- | ----------------------------- |
+| Shell      | Tauri 2                       |
+| UI         | React 19                      |
+| Routing    | TanStack Router (file-based)  |
+| Components | Base UI                       |
+| Styling    | Tailwind CSS v4               |
+| Tooling    | ESLint + Prettier             |
+| Build      | Vite 8 + TypeScript           |
+| Runtime    | mise (node, bun, rust, tasks) |
+| Packages   | bun                           |
 
 ## Prerequisites
 
