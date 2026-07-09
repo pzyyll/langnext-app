@@ -2,7 +2,7 @@
 name = "langnext-app"
 version = "0.1.0"
 description = "LangNext desktop application"
-authors = ["you"]
+authors = ["pzyyll"]
 edition = "2021"
 license = "Apache-2.0"
 
