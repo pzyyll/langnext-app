@@ -27,3 +27,5 @@ dist-ssr
 
 # Tauri
 src-tauri/target
+.agents
+.pi
