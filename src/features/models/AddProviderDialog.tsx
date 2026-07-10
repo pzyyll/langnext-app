@@ -12,6 +12,7 @@ import {
 	primaryButtonClassName,
 	selectClassName,
 } from "../../components/ui";
+import { useToast } from "../../components/toast/useToast";
 import { saveProviderInstance } from "../../storage/client";
 import { getIpcErrorMessage } from "../../storage/errors";
 import type { CredentialKind, CredentialUpdate, ProviderInstanceDto } from "../../storage/types";
@@ -54,6 +55,7 @@ type AddProviderFormProps = {
 };
 
 function AddProviderForm({ onCreated }: AddProviderFormProps) {
+	const toast = useToast();
 	const [displayName, setDisplayName] = useState("");
 	const [adapterId, setAdapterId] = useState(ADAPTER_OPTIONS[0]?.id ?? "openai-compatible");
 	const [baseUrlOverride, setBaseUrlOverride] = useState("");
@@ -97,9 +99,12 @@ function AddProviderForm({ onCreated }: AddProviderFormProps) {
 				proxyMode: "inherit",
 				insecureHttpConfirmedAt: null,
 			});
+			toast.success({ title: "Channel created", description: created.displayName });
 			onCreated(created);
 		} catch (err: unknown) {
-			setError(getIpcErrorMessage(err, "Failed to create channel."));
+			const message = getIpcErrorMessage(err, "Failed to create channel.");
+			setError(message);
+			toast.error({ title: "Create failed", description: message });
 		} finally {
 			setPending(false);
 		}

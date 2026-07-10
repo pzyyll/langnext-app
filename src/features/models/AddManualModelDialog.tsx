@@ -11,6 +11,7 @@ import {
 	outlineButtonClassName,
 	primaryButtonClassName,
 } from "../../components/ui";
+import { useToast } from "../../components/toast/useToast";
 import { saveManualModel } from "../../storage/client";
 import { getIpcErrorMessage } from "../../storage/errors";
 import type { ProviderModelDto } from "../../storage/types";
@@ -55,6 +56,7 @@ type AddManualModelFormProps = {
 };
 
 function AddManualModelForm({ providerId, onCreated }: AddManualModelFormProps) {
+	const toast = useToast();
 	const [modelKey, setModelKey] = useState("");
 	const [displayNameOverride, setDisplayNameOverride] = useState("");
 	const [enabled, setEnabled] = useState(true);
@@ -80,9 +82,15 @@ function AddManualModelForm({ providerId, onCreated }: AddManualModelFormProps) 
 				enabled,
 				capabilityOverridesJson: null,
 			});
+			toast.success({
+				title: "Model added",
+				description: created.displayNameOverride ?? created.modelKey,
+			});
 			onCreated(created);
 		} catch (err: unknown) {
-			setError(getIpcErrorMessage(err, "Failed to add model."));
+			const message = getIpcErrorMessage(err, "Failed to add model.");
+			setError(message);
+			toast.error({ title: "Add model failed", description: message });
 		} finally {
 			setPending(false);
 		}

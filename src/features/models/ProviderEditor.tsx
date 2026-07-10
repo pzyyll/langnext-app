@@ -9,6 +9,7 @@ import IconMaterialSymbolsLightCheck from "~icons/material-symbols-light/check";
 import IconMaterialSymbolsLightClose from "~icons/material-symbols-light/close";
 import IconMaterialSymbolsLightDeleteOutlineSharp from "~icons/material-symbols-light/delete-outline-sharp";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
+import { useToast } from "../../components/toast/useToast";
 import {
 	checkboxClassName,
 	dangerButtonClassName,
@@ -171,6 +172,7 @@ type ProviderEditorLoadedProps = {
 
 function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: ProviderEditorLoadedProps) {
 	const navigate = useNavigate();
+	const toast = useToast();
 	const [baseUrlOverride, setBaseUrlOverride] = useState(provider.baseUrlOverride ?? "");
 	const [enabled, setEnabled] = useState(provider.enabled);
 	const [token, setToken] = useState("");
@@ -222,9 +224,6 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 	}, [renaming]);
 
 	const [syncPending, setSyncPending] = useState(false);
-	const [syncMessage, setSyncMessage] = useState<string | null>(null);
-	const [syncOk, setSyncOk] = useState<boolean | null>(null);
-	const [syncIpcError, setSyncIpcError] = useState<string | null>(null);
 
 	const providerId = provider.id;
 
@@ -428,8 +427,11 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 			setSaveSuccess(true);
 			// Clear stale connection-test result after a successful save.
 			clearConnectionTestResult();
+			toast.success({ title: "Channel saved", description: "Connection settings were updated." });
 		} catch (error: unknown) {
-			setSaveError(getIpcErrorMessage(error, "Failed to save channel."));
+			const message = getIpcErrorMessage(error, "Failed to save channel.");
+			setSaveError(message);
+			toast.error({ title: "Save failed", description: message });
 		} finally {
 			setSavePending(false);
 		}
@@ -457,6 +459,11 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 				return;
 			}
 			setConnectionTestResult(result);
+			if (result.ok) {
+				toast.success({ title: "Connection OK", description: result.message });
+			} else {
+				toast.error({ title: "Connection failed", description: result.message });
+			}
 		} catch (error: unknown) {
 			if (
 				connectionTestGeneration.current !== generation ||
@@ -465,7 +472,9 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 			) {
 				return;
 			}
-			setConnectionTestIpcError(getIpcErrorMessage(error, "Failed to test connection."));
+			const message = getIpcErrorMessage(error, "Failed to test connection.");
+			setConnectionTestIpcError(message);
+			toast.error({ title: "Connection test failed", description: message });
 		} finally {
 			if (connectionTestGeneration.current === generation) {
 				setConnectionTestPending(false);
@@ -478,24 +487,27 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 			return;
 		}
 		setSyncPending(true);
-		setSyncMessage(null);
-		setSyncOk(null);
-		setSyncIpcError(null);
 		try {
 			const result = await syncProviderModels(provider.id);
 			// Always apply returned snapshot on successful IPC, regardless of result.ok.
 			setModels(result.models);
 			upsertProvider(result.provider);
-			setSyncMessage(result.message);
-			setSyncOk(result.ok);
 			// Clear a prior list-load error so the models table can reappear with the
 			// sync snapshot (including empty lists after a successful remote fetch).
 			setModelsError(null);
 			setModelsLoading(false);
+			if (result.ok) {
+				toast.success({ title: "Synced models", description: result.message });
+			} else {
+				toast.error({
+					title: "Sync failed",
+					description: result.errorCode ? `${result.message} (${result.errorCode})` : result.message,
+				});
+			}
 		} catch (error: unknown) {
 			// Preserve displayed models only when IPC itself fails.
-			setSyncIpcError(getIpcErrorMessage(error, "Failed to sync models."));
-			setSyncOk(false);
+			const message = getIpcErrorMessage(error, "Failed to sync models.");
+			toast.error({ title: "Sync failed", description: message });
 		} finally {
 			setSyncPending(false);
 		}
@@ -520,7 +532,9 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 			setModels((current) => current.map((model) => (model.id === modelId ? updated : model)));
 		} catch (error: unknown) {
 			setModels((current) => current.map((model) => (model.id === modelId ? previous : model)));
-			setModelMutationError(getIpcErrorMessage(error, "Failed to update model."));
+			const message = getIpcErrorMessage(error, "Failed to update model.");
+			setModelMutationError(message);
+			toast.error({ title: "Update failed", description: message });
 		} finally {
 			setPendingModelIds((current) => {
 				const next = new Set(current);
@@ -590,9 +604,9 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 		});
 	}
 
-	function handleToggleSelectAll(checked: boolean) {
+	function handleToggleSelectAll(checked: boolean, visibleModelIds: readonly string[]) {
 		if (checked) {
-			setSelectedModelIds(new Set(models.map((model) => model.id)));
+			setSelectedModelIds(new Set(visibleModelIds));
 		} else {
 			setSelectedModelIds(new Set());
 		}
@@ -623,10 +637,17 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 				await reloadModels(providerId);
 				const firstRejection = results.find((result) => result.status === "rejected");
 				const reason = firstRejection && firstRejection.status === "rejected" ? firstRejection.reason : undefined;
-				setModelMutationError(getIpcErrorMessage(reason, "Failed to delete some models."));
+				const message = getIpcErrorMessage(reason, "Failed to delete some models.");
+				setModelMutationError(message);
+				toast.error({ title: "Delete failed", description: message });
 			} else {
 				setSelectedModelIds(new Set());
 				setSelectionMode(false);
+				const count = ids.length;
+				toast.success({
+					title: count === 1 ? "Model deleted" : "Models deleted",
+					description: count === 1 ? "Removed 1 model." : `Removed ${count} models.`,
+				});
 			}
 		} finally {
 			setPendingModelIds((current) => {
@@ -669,9 +690,6 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 		: visibleConnectionTestResult
 			? "text-sm text-danger"
 			: "text-sm text-muted";
-
-	const syncResultClass =
-		syncOk === true ? "text-sm text-accent" : syncOk === false ? "text-sm text-danger" : "text-sm text-muted";
 
 	return (
 		<div className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -1004,15 +1022,6 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 						</div>
 					</div>
 
-					<div aria-live="polite" className="mb-4 min-h-5">
-						{syncIpcError ? (
-							<p className="text-sm text-danger" role="alert">
-								{syncIpcError}
-							</p>
-						) : null}
-						{syncMessage && !syncIpcError ? <p className={syncResultClass}>{syncMessage}</p> : null}
-					</div>
-
 					{modelsLoading ? (
 						<p className="text-sm text-muted" aria-live="polite">
 							Loading models…
@@ -1070,16 +1079,7 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 				>
 					<IconMaterialSymbolsLightDeleteOutlineSharp className="pointer-events-none size-5 shrink-0" />
 				</Button>
-				{saveError ? (
-					<p className="text-sm text-danger" role="alert">
-						{saveError}
-					</p>
-				) : null}
-				{saveSuccess && !saveError ? (
-					<p className="text-sm text-muted" aria-live="polite">
-						Saved.
-					</p>
-				) : null}
+
 				<Button
 					type="button"
 					className={outlineButtonClassName}

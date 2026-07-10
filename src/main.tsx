@@ -7,6 +7,7 @@ import { routeTree } from "./routeTree.gen";
 import { getScrollTransitionType } from "./shell/nav";
 import { initTheme } from "./theme/theme";
 import { bootstrapStorage } from "./storage/bootstrap";
+import { ToastProvider } from "./components/toast/ToastProvider";
 import "./styles.css";
 
 // Immediate pre-paint cache application (index.html may already have set this).
@@ -41,7 +42,9 @@ async function mount() {
 		const root = ReactDOM.createRoot(rootElement);
 		root.render(
 			<React.StrictMode>
-				<RouterProvider router={router} />
+				<ToastProvider>
+					<RouterProvider router={router} />
+				</ToastProvider>
 			</React.StrictMode>,
 		);
 	}
