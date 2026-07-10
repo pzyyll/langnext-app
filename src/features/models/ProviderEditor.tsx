@@ -1,9 +1,12 @@
 // ABOUTME: Selected provider editor for connection settings and model management.
 // ABOUTME: Coordinates local form state with real provider and model storage IPC.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "@tanstack/react-router";
 import { Button } from "@base-ui/react/button";
+import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { checkboxClassName, inputClassName, outlineButtonClassName, primaryButtonClassName } from "../../components/ui";
 import {
+	deleteProviderInstance,
 	listProviderModels,
 	saveProviderInstance,
 	setModelEnabled,
@@ -85,7 +88,8 @@ function syncStatusLabel(provider: ProviderInstanceDto, syncPending: boolean): s
 }
 
 export function ProviderEditor({ providerId }: ProviderEditorProps) {
-	const { providers, providersLoading, providersError, upsertProvider, refreshProviders } = useModelsContext();
+	const { providers, providersLoading, providersError, upsertProvider, removeProvider, refreshProviders } =
+		useModelsContext();
 	const provider = providers.find((item) => item.id === providerId) ?? null;
 
 	if (providersLoading) {
@@ -129,15 +133,24 @@ export function ProviderEditor({ providerId }: ProviderEditorProps) {
 	}
 
 	// Remount connection form when the selected channel changes so local state re-inits cleanly.
-	return <ProviderEditorLoaded key={provider.id} provider={provider} upsertProvider={upsertProvider} />;
+	return (
+		<ProviderEditorLoaded
+			key={provider.id}
+			provider={provider}
+			upsertProvider={upsertProvider}
+			removeProvider={removeProvider}
+		/>
+	);
 }
 
 type ProviderEditorLoadedProps = {
 	provider: ProviderInstanceDto;
 	upsertProvider: (provider: ProviderInstanceDto) => void;
+	removeProvider: (id: string) => void;
 };
 
-function ProviderEditorLoaded({ provider, upsertProvider }: ProviderEditorLoadedProps) {
+function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: ProviderEditorLoadedProps) {
+	const navigate = useNavigate();
 	const [baseUrlOverride, setBaseUrlOverride] = useState(provider.baseUrlOverride ?? "");
 	const [enabled, setEnabled] = useState(provider.enabled);
 	const [token, setToken] = useState("");
@@ -154,6 +167,7 @@ function ProviderEditorLoaded({ provider, upsertProvider }: ProviderEditorLoaded
 	const [pendingModelIds, setPendingModelIds] = useState<Set<string>>(() => new Set());
 	const [modelMutationError, setModelMutationError] = useState<string | null>(null);
 	const [addModelOpen, setAddModelOpen] = useState(false);
+	const [deleteOpen, setDeleteOpen] = useState(false);
 
 	const [connectionTestPending, setConnectionTestPending] = useState(false);
 	const [connectionTestResult, setConnectionTestResult] = useState<ConnectionTestResult | null>(null);
@@ -427,6 +441,17 @@ function ProviderEditorLoaded({ provider, upsertProvider }: ProviderEditorLoaded
 		}
 	}
 
+	async function handleDelete() {
+		try {
+			await deleteProviderInstance(provider.id);
+		} catch (err: unknown) {
+			const error = new Error(getIpcErrorMessage(err, "Failed to delete channel."));
+			throw Object.assign(error, { cause: err });
+		}
+		removeProvider(provider.id);
+		void navigate({ to: "/models" });
+	}
+
 	const defaultBaseUrl = getDefaultBaseUrl(provider.adapterId);
 	const tokenDisabled = provider.credentialKind === "none" || credentialAction === "clear";
 	const tokenPlaceholder =
@@ -607,7 +632,7 @@ function ProviderEditorLoaded({ provider, upsertProvider }: ProviderEditorLoaded
 									Save connection changes before testing or syncing models.
 								</p>
 							) : null}
-							<div aria-live="polite" className="min-h-[1.25rem]">
+							<div aria-live="polite" className="min-h-5">
 								{connectionTestIpcError ? (
 									<p className="text-sm text-danger" role="alert">
 										{connectionTestIpcError}
@@ -691,7 +716,7 @@ function ProviderEditorLoaded({ provider, upsertProvider }: ProviderEditorLoaded
 						</div>
 					</div>
 
-					<div aria-live="polite" className="mb-4 min-h-[1.25rem]">
+					<div aria-live="polite" className="mb-4 min-h-5">
 						{syncIpcError ? (
 							<p className="text-sm text-danger" role="alert">
 								{syncIpcError}
@@ -740,13 +765,23 @@ function ProviderEditorLoaded({ provider, upsertProvider }: ProviderEditorLoaded
 			</div>
 
 			<footer className="flex shrink-0 items-center justify-end gap-3 border-t border-line bg-surface px-8 py-4">
+				<Button
+					type="button"
+					className={`${outlineButtonClassName} mr-auto`}
+					disabled={connectionFormDisabled}
+					onClick={() => {
+						setDeleteOpen(true);
+					}}
+				>
+					Delete channel
+				</Button>
 				{saveError ? (
-					<p className="mr-auto text-sm text-danger" role="alert">
+					<p className="text-sm text-danger" role="alert">
 						{saveError}
 					</p>
 				) : null}
 				{saveSuccess && !saveError ? (
-					<p className="mr-auto text-sm text-muted" aria-live="polite">
+					<p className="text-sm text-muted" aria-live="polite">
 						Saved.
 					</p>
 				) : null}
@@ -778,6 +813,22 @@ function ProviderEditorLoaded({ provider, upsertProvider }: ProviderEditorLoaded
 				onCreated={() => {
 					void reloadModels(providerId);
 				}}
+			/>
+
+			<ConfirmDialog
+				open={deleteOpen}
+				onOpenChange={setDeleteOpen}
+				title="Delete channel"
+				description={
+					<>
+						Delete <span className="font-bold text-ink">{provider.displayName}</span> and all its models? This cannot be
+						undone.
+					</>
+				}
+				confirmText="Delete"
+				pendingText="Deleting…"
+				danger
+				onConfirm={handleDelete}
 			/>
 		</div>
 	);

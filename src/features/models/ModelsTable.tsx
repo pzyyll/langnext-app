@@ -20,7 +20,7 @@ export function ModelsTable({ models, pendingModelIds, onEnabledChange }: Models
 
 	return (
 		<div className="overflow-x-auto">
-			<table className="w-full min-w-[28rem] text-left">
+			<table className="w-full min-w-md text-left">
 				<thead>
 					<tr className="border-b border-line text-[10px] tracking-wider text-muted uppercase">
 						<th className="pb-2 font-semibold">Model</th>

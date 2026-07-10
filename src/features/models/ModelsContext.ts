@@ -9,6 +9,7 @@ export type ModelsContextValue = {
 	providersError: string | null;
 	refreshProviders: () => Promise<void>;
 	upsertProvider: (provider: ProviderInstanceDto) => void;
+	removeProvider: (id: string) => void;
 };
 
 export const ModelsContext = createContext<ModelsContextValue | null>(null);

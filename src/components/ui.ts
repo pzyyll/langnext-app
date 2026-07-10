@@ -9,6 +9,10 @@ export const outlineButtonClassName =
 export const primaryButtonClassName =
 	"inline-flex h-8 items-center justify-center gap-2 rounded-none border border-line bg-ink px-4 text-sm leading-none whitespace-nowrap font-bold text-surface select-none hover:not-data-disabled:opacity-90 active:not-data-disabled:opacity-80 focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-ink data-disabled:border-disabled data-disabled:bg-surface-3 data-disabled:text-disabled disabled:border-disabled disabled:bg-surface-3 disabled:text-disabled";
 
+/** Danger solid button (destructive confirm) */
+export const dangerButtonClassName =
+	"inline-flex h-8 items-center justify-center gap-2 rounded-none border border-danger bg-danger px-4 text-sm leading-none whitespace-nowrap font-bold text-danger-ink select-none hover:not-data-disabled:opacity-90 active:not-data-disabled:opacity-80 focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-ink data-disabled:border-disabled data-disabled:bg-surface-3 data-disabled:text-disabled disabled:border-disabled disabled:bg-surface-3 disabled:text-disabled";
+
 /** Text / password inputs */
 export const inputClassName =
 	"h-8 w-full rounded-none border border-line bg-surface px-3 text-sm font-normal text-ink placeholder:text-muted focus:outline-2 focus:-outline-offset-1 focus:outline-ink disabled:border-disabled disabled:text-disabled";

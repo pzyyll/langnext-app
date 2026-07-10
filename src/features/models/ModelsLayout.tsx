@@ -76,6 +76,10 @@ export function ModelsLayout() {
 		});
 	}, []);
 
+	const removeProvider = useCallback((id: string) => {
+		setProviders((current) => current.filter((item) => item.id !== id));
+	}, []);
+
 	const contextValue = useMemo(
 		() => ({
 			providers,
@@ -83,8 +87,9 @@ export function ModelsLayout() {
 			providersError,
 			refreshProviders,
 			upsertProvider,
+			removeProvider,
 		}),
-		[providers, providersLoading, providersError, refreshProviders, upsertProvider],
+		[providers, providersLoading, providersError, refreshProviders, upsertProvider, removeProvider],
 	);
 
 	return (
