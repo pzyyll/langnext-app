@@ -64,6 +64,20 @@ export function ModelsLayout() {
 		};
 	}, []);
 
+	// When the Models tab opens with channels already configured but none selected,
+	// default to the first channel so the editor is immediately visible.
+	useEffect(() => {
+		if (providersLoading || providersError) return;
+		if (selectedId) return;
+		if (providers.length === 0) return;
+		const first = providers[0];
+		if (!first) return;
+		void navigate({
+			to: "/models/$providerId",
+			params: { providerId: first.id },
+		});
+	}, [providers, providersLoading, providersError, selectedId, navigate]);
+
 	const upsertProvider = useCallback((provider: ProviderInstanceDto) => {
 		setProviders((current) => {
 			const index = current.findIndex((item) => item.id === provider.id);
@@ -97,9 +111,8 @@ export function ModelsLayout() {
 			<div className={`shadow-frame flex min-h-0 ${LAYOUT_HEIGHT_CLASS} overflow-hidden border border-line bg-surface`}>
 				<aside className="flex w-48 shrink-0 flex-col border-r border-line bg-surface">
 					<div className="flex min-h-0 flex-1 flex-col p-4">
-						<div className="shrink-0">
+						<div className="shrink-0 mb-4">
 							<h2 className="text-xl font-bold text-ink">Channels</h2>
-							<p className="mb-4 text-xs text-muted">API providers</p>
 						</div>
 
 						{providersLoading ? (

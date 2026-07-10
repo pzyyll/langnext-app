@@ -28,7 +28,7 @@ export function AddProviderDialog({ open, onOpenChange, onCreated }: AddProvider
 		<Dialog.Root open={open} onOpenChange={onOpenChange}>
 			<Dialog.Portal>
 				<Dialog.Backdrop className={dialogBackdropClassName} />
-				<Dialog.Popup className={`${dialogPopupClassName} max-h-[min(90dvh,40rem)] w-[28rem] overflow-y-auto`}>
+				<Dialog.Popup className={`${dialogPopupClassName} max-h-[min(90dvh,40rem)] w-md overflow-y-auto`}>
 					<div className="flex flex-col gap-1">
 						<Dialog.Title className="text-base leading-6 font-bold text-ink">Add channel</Dialog.Title>
 						<Dialog.Description className="text-sm leading-5 text-muted">
@@ -66,7 +66,7 @@ function AddProviderForm({ onCreated }: AddProviderFormProps) {
 	const defaultBaseUrl = getDefaultBaseUrl(adapterId);
 	const canSubmit = displayName.trim().length > 0 && !pending;
 
-	async function handleSubmit(event: React.FormEvent) {
+	async function handleSubmit(event: React.SyntheticEvent<HTMLFormElement>) {
 		event.preventDefault();
 		if (!canSubmit) {
 			return;

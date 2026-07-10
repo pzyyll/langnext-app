@@ -10,7 +10,7 @@ use crate::domain::provider::{
 use crate::domain::time::{new_id, now_rfc3339};
 use crate::error::StorageError;
 use crate::repositories::credential_operations::{self, CredentialOperation, OwnerKind};
-use crate::repositories::provider_instances;
+use crate::repositories::{provider_instances, provider_models, translation_profiles};
 use crate::storage::Database;
 use std::sync::Arc;
 use url::Url;
@@ -374,6 +374,8 @@ impl ProviderService {
 		let op_id = new_id();
 
 		let cleanup_op: Option<CredentialOperation> = self.db.transaction(|uow| {
+			translation_profiles::delete_targets_by_provider(uow.conn(), id)?;
+			provider_models::delete_by_provider(uow.conn(), id)?;
 			provider_instances::delete(uow.conn(), id)?;
 			if old_ref.is_some() {
 				let op = credential_operations::insert_db_committed(

@@ -172,6 +172,17 @@ pub fn replace_targets(
 	Ok(())
 }
 
+/// Delete translation_profile_models rows referencing any model of a provider.
+/// Call ahead of `provider_models::delete_by_provider` to satisfy the ON DELETE RESTRICT FK.
+pub fn delete_targets_by_provider(conn: &Connection, provider_id: Uuid) -> Result<(), StorageError> {
+	conn.execute(
+		"DELETE FROM translation_profile_models
+         WHERE provider_model_id IN (SELECT id FROM provider_models WHERE provider_instance_id = ?1)",
+		params![provider_id.to_string()],
+	)?;
+	Ok(())
+}
+
 /// Insert or update profile and replace targets atomically on the given connection/transaction.
 pub fn save_with_targets(
 	conn: &Connection,

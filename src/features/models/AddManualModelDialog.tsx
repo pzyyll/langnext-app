@@ -63,7 +63,7 @@ function AddManualModelForm({ providerId, onCreated }: AddManualModelFormProps) 
 
 	const canSubmit = modelKey.trim().length > 0 && !pending;
 
-	async function handleSubmit(event: React.FormEvent) {
+	async function handleSubmit(event: React.SyntheticEvent<HTMLFormElement>) {
 		event.preventDefault();
 		if (!canSubmit) {
 			return;

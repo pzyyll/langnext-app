@@ -65,6 +65,7 @@ mise run tauri:build   # Package desktop app
 - Reply in the same language Harp-Dogzilla uses.
 - Generated docs default to English unless asked otherwise.
 - Prefer small, readable changes over clever rewrites.
+- Prefer named Tailwind tokens over arbitrary values when an equivalent exists (e.g. `w-md` instead of `w-[28rem]`, `max-w-lg` instead of `max-w-[32rem]`). The container scale (`3xs`…`7xl`) backs `w-*` / `max-w-*` / `min-w-*`.
 - Every code file starts with two `ABOUTME:` comment lines.
 - Do not implement mock modes; use real data and real APIs.
 - Never use `--no-verify` when committing.

@@ -296,6 +296,46 @@ fn profile_save_and_fallback_order() {
 }
 
 #[test]
+fn delete_provider_cascades_to_models_and_targets() {
+	let (_dir, _db, _vault, providers, models, profiles, ..) = setup();
+	let provider = providers
+		.save(provider_write(CredentialKind::None, CredentialUpdate::Keep))
+		.unwrap();
+	let model = models
+		.save_manual(ManualModelWrite {
+			id: None,
+			provider_instance_id: provider.id,
+			model_key: "cascade-model".into(),
+			display_name_override: None,
+			enabled: true,
+			capability_overrides_json: None,
+		})
+		.unwrap();
+	let profile = profiles
+		.save(TranslationProfileWrite {
+			id: None,
+			name: "Cascade Profile".into(),
+			enabled: true,
+			template_version: 1,
+			system_template: "s".into(),
+			user_template: "{{text}}".into(),
+			temperature: None,
+			max_output_tokens: None,
+			provider_options_json: None,
+			target_model_ids: vec![model.id],
+		})
+		.unwrap();
+	assert!(!profile.targets.is_empty());
+
+	providers.delete(provider.id).unwrap();
+
+	assert!(matches!(providers.get(provider.id), Err(StorageError::NotFound(_))));
+	let list = models.list_by_provider(provider.id).unwrap();
+	assert!(list.is_empty());
+	assert!(profiles.get(profile.profile.id).unwrap().targets.is_empty());
+}
+
+#[test]
 fn settings_default_profile_must_exist() {
 	let (_d, _db, _v, _p, _m, _pr, settings, ..) = setup();
 	let mut s = AppSettingsV1::default_document();

@@ -6,8 +6,9 @@ import reactHooks from "eslint-plugin-react-hooks";
 import reactRefresh from "eslint-plugin-react-refresh";
 import tseslint from "typescript-eslint";
 import eslintConfigPrettier from "eslint-config-prettier";
+import { defineConfig } from "eslint/config";
 
-export default tseslint.config(
+export default defineConfig([
 	{
 		ignores: ["dist", "src-tauri", "node_modules", "src/routeTree.gen.ts"],
 	},
@@ -34,5 +35,20 @@ export default tseslint.config(
 			"react-refresh/only-export-components": "off",
 		},
 	},
+	// Type-aware: surface @deprecated usages (TS hint 6385) as lint warnings.
+	// Test files are excluded (not in any tsconfig) to keep project-service happy.
+	{
+		files: ["src/**/*.{ts,tsx}", "vite.config.ts"],
+		ignores: ["**/*.test.{ts,tsx}"],
+		languageOptions: {
+			parserOptions: {
+				projectService: true,
+				tsconfigRootDir: import.meta.dirname,
+			},
+		},
+		rules: {
+			"@typescript-eslint/no-deprecated": "warn",
+		},
+	},
 	eslintConfigPrettier,
-);
+]);

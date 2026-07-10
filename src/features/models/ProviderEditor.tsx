@@ -3,6 +3,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { Button } from "@base-ui/react/button";
+import IconMaterialSymbolsLightEditSquareOutlineSharp from "~icons/material-symbols-light/edit-square-outline-sharp";
+import IconMaterialSymbolsLightCheck from "~icons/material-symbols-light/check";
+import IconMaterialSymbolsLightClose from "~icons/material-symbols-light/close";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { checkboxClassName, inputClassName, outlineButtonClassName, primaryButtonClassName } from "../../components/ui";
 import {
@@ -28,6 +31,10 @@ import { ModelsTable } from "./ModelsTable";
 export type ProviderEditorProps = {
 	providerId: string;
 };
+
+/** Ghost icon button for inline header actions such as renaming the channel. */
+const iconButtonClassName =
+	"inline-flex size-7 shrink-0 cursor-default items-center justify-center rounded-none border-0 bg-transparent text-muted hover:bg-surface-2 hover:text-ink active:bg-surface-3 focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-ink data-disabled:text-disabled disabled:text-disabled";
 
 type CredentialAction = "keep" | "replace" | "clear";
 
@@ -161,6 +168,12 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 	const [saveError, setSaveError] = useState<string | null>(null);
 	const [saveSuccess, setSaveSuccess] = useState(false);
 
+	const [renaming, setRenaming] = useState(false);
+	const [renameValue, setRenameValue] = useState("");
+	const [renamePending, setRenamePending] = useState(false);
+	const [renameError, setRenameError] = useState<string | null>(null);
+	const renameInputRef = useRef<HTMLInputElement>(null);
+
 	const [models, setModels] = useState<ProviderModelDto[]>([]);
 	const [modelsLoading, setModelsLoading] = useState(true);
 	const [modelsError, setModelsError] = useState<string | null>(null);
@@ -180,6 +193,16 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 	useEffect(() => {
 		providerUpdatedAtRef.current = provider.updatedAt;
 	}, [provider.updatedAt]);
+
+	// Focus and select the rename input when inline editing starts.
+	useEffect(() => {
+		if (!renaming) return;
+		const node = renameInputRef.current;
+		if (node) {
+			node.focus();
+			node.select();
+		}
+	}, [renaming]);
 
 	const [syncPending, setSyncPending] = useState(false);
 	const [syncMessage, setSyncMessage] = useState<string | null>(null);
@@ -297,6 +320,55 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 		setInsecureHttpAcknowledged(false);
 		setSaveError(null);
 		setSaveSuccess(false);
+	}
+
+	// Block rename while a connection save / sync / test is in flight to avoid
+	// racing provider.updatedAt and stale-result discard logic.
+	const renameDisabled = savePending || syncPending || connectionTestPending;
+
+	function startRename() {
+		setRenameValue(provider.displayName);
+		setRenameError(null);
+		setRenaming(true);
+	}
+
+	function cancelRename() {
+		setRenaming(false);
+		setRenameValue("");
+		setRenameError(null);
+	}
+
+	async function commitRename() {
+		const trimmed = renameValue.trim();
+		if (!trimmed || renamePending) {
+			return;
+		}
+		if (trimmed === provider.displayName) {
+			cancelRename();
+			return;
+		}
+		setRenamePending(true);
+		setRenameError(null);
+		try {
+			const saved = await saveProviderInstance({
+				id: provider.id,
+				adapterId: provider.adapterId,
+				displayName: trimmed,
+				baseUrlOverride: provider.baseUrlOverride,
+				credentialKind: provider.credentialKind,
+				credential: { action: "keep" },
+				enabled: provider.enabled,
+				proxyMode: provider.proxyMode,
+				insecureHttpConfirmedAt: provider.insecureHttpConfirmedAt,
+			});
+			upsertProvider(saved);
+			setRenaming(false);
+			setRenameValue("");
+		} catch (error: unknown) {
+			setRenameError(getIpcErrorMessage(error, "Failed to rename channel."));
+		} finally {
+			setRenamePending(false);
+		}
 	}
 
 	async function handleSave() {
@@ -485,10 +557,73 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 		<div className="flex min-h-0 min-w-0 flex-1 flex-col">
 			<div className="min-h-0 flex-1 overflow-y-auto p-8">
 				<header className="mb-8">
-					<h1 className="mb-2 text-3xl font-bold text-ink">{provider.displayName}</h1>
+					{renaming ? (
+						<form
+							className="mb-2 flex items-center gap-2"
+							onSubmit={(event) => {
+								event.preventDefault();
+								void commitRename();
+							}}
+						>
+							<input
+								ref={renameInputRef}
+								className="h-10 w-full max-w-md rounded-none border border-line bg-surface px-2 text-3xl font-bold text-ink focus:outline-2 focus:-outline-offset-1 focus:outline-ink disabled:border-disabled disabled:text-disabled"
+								value={renameValue}
+								onChange={(event) => {
+									setRenameValue(event.currentTarget.value);
+									setRenameError(null);
+								}}
+								onKeyDown={(event) => {
+									if (event.key === "Escape" && !renamePending) {
+										event.preventDefault();
+										cancelRename();
+									}
+								}}
+								maxLength={200}
+								spellCheck={false}
+								autoComplete="off"
+								disabled={renamePending}
+							/>
+							<Button
+								type="submit"
+								className={iconButtonClassName}
+								aria-label="Save channel name"
+								disabled={renamePending || !renameValue.trim()}
+							>
+								<IconMaterialSymbolsLightCheck className="pointer-events-none size-5 shrink-0" />
+							</Button>
+							<Button
+								type="button"
+								className={iconButtonClassName}
+								aria-label="Cancel rename"
+								disabled={renamePending}
+								onClick={cancelRename}
+							>
+								<IconMaterialSymbolsLightClose className="pointer-events-none size-5 shrink-0" />
+							</Button>
+						</form>
+					) : (
+						<div className="mb-2 flex items-center gap-1">
+							<h1 className="text-3xl font-bold text-ink">{provider.displayName}</h1>
+							<Button
+								type="button"
+								className={iconButtonClassName}
+								aria-label="Rename channel"
+								title="Rename channel"
+								disabled={renameDisabled}
+								onClick={startRename}
+							>
+								<IconMaterialSymbolsLightEditSquareOutlineSharp className="pointer-events-none size-5 shrink-0" />
+							</Button>
+						</div>
+					)}
+					{renameError ? (
+						<p className="mb-2 text-sm text-danger" role="alert">
+							{renameError}
+						</p>
+					) : null}
 					<hr className="mb-4 border-line" />
 					<p className="text-sm text-muted">
-						Configure this channel and choose the models available to the app.
 						<span className="mt-1 block text-xs">API Type: {getAdapterLabel(provider.adapterId)}</span>
 					</p>
 				</header>

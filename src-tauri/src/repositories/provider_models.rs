@@ -177,6 +177,16 @@ pub fn delete(conn: &Connection, id: Uuid) -> Result<(), StorageError> {
 	Ok(())
 }
 
+/// Delete all models belonging to a provider instance.
+/// Call ahead of `provider_instances::delete` to satisfy the ON DELETE RESTRICT FK.
+pub fn delete_by_provider(conn: &Connection, provider_id: Uuid) -> Result<(), StorageError> {
+	conn.execute(
+		"DELETE FROM provider_models WHERE provider_instance_id = ?1",
+		params![provider_id.to_string()],
+	)?;
+	Ok(())
+}
+
 /// Apply remote synchronization rows for one Provider inside the caller's transaction.
 pub fn apply_remote_sync(
 	conn: &Connection,
