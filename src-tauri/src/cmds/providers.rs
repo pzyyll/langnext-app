@@ -37,3 +37,9 @@ pub async fn delete_provider_instance(state: State<'_, AppState>, id: Uuid) -> R
 	let providers = state.providers.clone();
 	run_blocking("delete_provider_instance", move || providers.delete(id)).await
 }
+
+#[tauri::command]
+pub async fn reorder_provider_instances(state: State<'_, AppState>, ids: Vec<Uuid>) -> Result<(), IpcError> {
+	let providers = state.providers.clone();
+	run_blocking("reorder_provider_instances", move || providers.reorder(ids)).await
+}

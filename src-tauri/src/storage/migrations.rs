@@ -4,7 +4,10 @@ use crate::error::StorageError;
 use rusqlite::Connection;
 
 /// Embedded migrations in application order. Index 0 is version 1.
-pub const MIGRATIONS: &[&str] = &[include_str!("../../migrations/0001_initial.sql")];
+pub const MIGRATIONS: &[&str] = &[
+	include_str!("../../migrations/0001_initial.sql"),
+	include_str!("../../migrations/0002_provider_sort_order.sql"),
+];
 
 pub fn latest_version() -> i32 {
 	MIGRATIONS.len() as i32
@@ -85,11 +88,11 @@ mod tests {
 	use rusqlite::Connection;
 
 	#[test]
-	fn migrate_empty_database_to_v1() {
+	fn migrate_empty_database_to_v2() {
 		let mut conn = Connection::open_in_memory().unwrap();
 		let version = migrate(&mut conn).unwrap();
-		assert_eq!(version, 1);
-		assert_eq!(read_user_version(&conn).unwrap(), 1);
+		assert_eq!(version, 2);
+		assert_eq!(read_user_version(&conn).unwrap(), 2);
 		let count: i64 = conn
 			.query_row("SELECT COUNT(*) FROM app_settings", [], |r| r.get(0))
 			.unwrap();
@@ -101,6 +104,6 @@ mod tests {
 		let mut conn = Connection::open_in_memory().unwrap();
 		migrate(&mut conn).unwrap();
 		migrate(&mut conn).unwrap();
-		assert_eq!(read_user_version(&conn).unwrap(), 1);
+		assert_eq!(read_user_version(&conn).unwrap(), 2);
 	}
 }

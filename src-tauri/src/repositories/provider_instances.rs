@@ -34,7 +34,7 @@ fn map_row(row: &Row<'_>) -> Result<ProviderInstance, rusqlite::Error> {
 }
 
 pub fn list(conn: &Connection) -> Result<Vec<ProviderInstance>, StorageError> {
-	let mut stmt = conn.prepare("SELECT * FROM provider_instances ORDER BY created_at ASC, id ASC")?;
+	let mut stmt = conn.prepare("SELECT * FROM provider_instances ORDER BY sort_order ASC, created_at ASC, id ASC")?;
 	let rows = stmt.query_map([], map_row)?.collect::<Result<Vec<_>, _>>()?;
 	Ok(rows)
 }
@@ -56,8 +56,9 @@ pub fn insert(conn: &Connection, provider: &ProviderInstance) -> Result<(), Stor
 			"INSERT INTO provider_instances (
             id, adapter_id, display_name, base_url_override, credential_kind, credential_ref,
             enabled, proxy_mode, insecure_http_confirmed_at, models_synced_at,
-            models_sync_status, models_sync_error_code, created_at, updated_at
-        ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
+            models_sync_status, models_sync_error_code, created_at, updated_at, sort_order
+        ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,
+            (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM provider_instances))",
 			params![
 				provider.id.to_string(),
 				provider.adapter_id,
@@ -231,6 +232,21 @@ pub fn delete(conn: &Connection, id: Uuid) -> Result<(), StorageError> {
 		.map_err(|e| StorageError::from_sqlite_constraint(e, "provider"))?;
 	if changed == 0 {
 		return Err(StorageError::NotFound(format!("provider {id}")));
+	}
+	Ok(())
+}
+
+/// Persist a full channel order. Caller must run inside a transaction.
+/// `ordered_ids` is the complete desired order (index = sort_order).
+pub fn reorder(conn: &Connection, ordered_ids: &[Uuid]) -> Result<(), StorageError> {
+	for (sort_order, id) in ordered_ids.iter().enumerate() {
+		let changed = conn.execute(
+			"UPDATE provider_instances SET sort_order = ?2 WHERE id = ?1",
+			params![id.to_string(), sort_order as i64],
+		)?;
+		if changed == 0 {
+			return Err(StorageError::NotFound(format!("provider {id}")));
+		}
 	}
 	Ok(())
 }

@@ -10,6 +10,7 @@ export type ModelsContextValue = {
 	refreshProviders: () => Promise<void>;
 	upsertProvider: (provider: ProviderInstanceDto) => void;
 	removeProvider: (id: string) => void;
+	reorderProviders: (orderedIds: string[]) => Promise<void>;
 };
 
 export const ModelsContext = createContext<ModelsContextValue | null>(null);

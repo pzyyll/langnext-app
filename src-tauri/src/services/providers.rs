@@ -366,6 +366,14 @@ impl ProviderService {
 		})
 	}
 
+	/// Persist sidebar channel order. `ordered_ids` is the full desired sequence.
+	pub fn reorder(&self, ordered_ids: Vec<Uuid>) -> Result<(), StorageError> {
+		self.db.transaction(|uow| {
+			provider_instances::reorder(uow.conn(), &ordered_ids)?;
+			Ok(())
+		})
+	}
+
 	pub fn delete(&self, id: Uuid) -> Result<(), StorageError> {
 		coordinator::preflight_owner(&self.db, self.vault.as_ref(), OwnerKind::Provider, &id.to_string())?;
 

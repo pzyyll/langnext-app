@@ -35,6 +35,10 @@ export async function deleteProviderInstance(id: string): Promise<void> {
 	return invoke("delete_provider_instance", { id });
 }
 
+export async function reorderProviderInstances(ids: string[]): Promise<void> {
+	return invoke("reorder_provider_instances", { ids });
+}
+
 export async function listProviderModels(providerInstanceId: string): Promise<ProviderModelDto[]> {
 	return invoke("list_provider_models", { providerInstanceId });
 }

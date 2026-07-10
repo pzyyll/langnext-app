@@ -45,6 +45,7 @@ function RootLayout() {
 					<nav className="flex min-w-44 flex-1 flex-col gap-1 p-3" aria-label="Main">
 						{navItems.map((item) => (
 							<Link
+								draggable={false}
 								key={item.to}
 								to={item.to}
 								// Do not set viewTransition={true} here — it overrides

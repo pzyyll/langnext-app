@@ -3,11 +3,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { Button } from "@base-ui/react/button";
+import { Switch } from "@base-ui/react/switch";
 import IconMaterialSymbolsLightEditSquareOutlineSharp from "~icons/material-symbols-light/edit-square-outline-sharp";
 import IconMaterialSymbolsLightCheck from "~icons/material-symbols-light/check";
 import IconMaterialSymbolsLightClose from "~icons/material-symbols-light/close";
+import IconMaterialSymbolsLightDeleteOutlineSharp from "~icons/material-symbols-light/delete-outline-sharp";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
-import { checkboxClassName, inputClassName, outlineButtonClassName, primaryButtonClassName } from "../../components/ui";
+import {
+	checkboxClassName,
+	inputClassName,
+	outlineButtonClassName,
+	primaryButtonClassName,
+	switchRootClassName,
+	switchThumbClassName,
+} from "../../components/ui";
 import {
 	deleteProviderInstance,
 	listProviderModels,
@@ -35,6 +44,10 @@ export type ProviderEditorProps = {
 /** Ghost icon button for inline header actions such as renaming the channel. */
 const iconButtonClassName =
 	"inline-flex size-7 shrink-0 cursor-default items-center justify-center rounded-none border-0 bg-transparent text-muted hover:bg-surface-2 hover:text-ink active:bg-surface-3 focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-ink data-disabled:text-disabled disabled:text-disabled";
+
+/** Danger-toned ghost icon button for destructive actions such as deleting the channel. */
+const dangerIconButtonClassName =
+	"inline-flex size-7 shrink-0 cursor-default items-center justify-center rounded-none border-0 bg-transparent text-danger hover:bg-surface-2 hover:text-danger active:bg-surface-3 focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-ink data-disabled:text-disabled disabled:text-disabled";
 
 type CredentialAction = "keep" | "replace" | "clear";
 
@@ -533,13 +546,6 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 				? "•••••••••••• (stored)"
 				: "Enter API token";
 
-	const credentialStatusText =
-		provider.credentialKind === "none"
-			? "No credential required"
-			: provider.hasCredential
-				? "Token stored securely"
-				: "No token stored";
-
 	// Only show results that still match the current provider connection version.
 	const visibleConnectionTestResult =
 		connectionTestResult && connectionTestResult.providerUpdatedAt === provider.updatedAt ? connectionTestResult : null;
@@ -557,66 +563,82 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 		<div className="flex min-h-0 min-w-0 flex-1 flex-col">
 			<div className="min-h-0 flex-1 overflow-y-auto p-8">
 				<header className="mb-8">
-					{renaming ? (
-						<form
-							className="mb-2 flex items-center gap-2"
-							onSubmit={(event) => {
-								event.preventDefault();
-								void commitRename();
-							}}
-						>
-							<input
-								ref={renameInputRef}
-								className="h-10 w-full max-w-md rounded-none border border-line bg-surface px-2 text-3xl font-bold text-ink focus:outline-2 focus:-outline-offset-1 focus:outline-ink disabled:border-disabled disabled:text-disabled"
-								value={renameValue}
-								onChange={(event) => {
-									setRenameValue(event.currentTarget.value);
-									setRenameError(null);
+					<div className="mb-2 flex items-center justify-between gap-4">
+						{renaming ? (
+							<form
+								className="flex min-w-0 flex-1 items-center gap-2"
+								onSubmit={(event) => {
+									event.preventDefault();
+									void commitRename();
 								}}
-								onKeyDown={(event) => {
-									if (event.key === "Escape" && !renamePending) {
-										event.preventDefault();
-										cancelRename();
-									}
+							>
+								<input
+									ref={renameInputRef}
+									className="h-10 w-full max-w-md rounded-none border border-line bg-surface px-2 text-3xl font-bold text-ink focus:outline-2 focus:-outline-offset-1 focus:outline-ink disabled:border-disabled disabled:text-disabled"
+									value={renameValue}
+									onChange={(event) => {
+										setRenameValue(event.currentTarget.value);
+										setRenameError(null);
+									}}
+									onKeyDown={(event) => {
+										if (event.key === "Escape" && !renamePending) {
+											event.preventDefault();
+											cancelRename();
+										}
+									}}
+									maxLength={200}
+									spellCheck={false}
+									autoComplete="off"
+									disabled={renamePending}
+								/>
+								<Button
+									type="submit"
+									className={iconButtonClassName}
+									aria-label="Save channel name"
+									disabled={renamePending || !renameValue.trim()}
+								>
+									<IconMaterialSymbolsLightCheck className="pointer-events-none size-5 shrink-0" />
+								</Button>
+								<Button
+									type="button"
+									className={iconButtonClassName}
+									aria-label="Cancel rename"
+									disabled={renamePending}
+									onClick={cancelRename}
+								>
+									<IconMaterialSymbolsLightClose className="pointer-events-none size-5 shrink-0" />
+								</Button>
+							</form>
+						) : (
+							<div className="flex items-center gap-1">
+								<h1 className="text-3xl font-bold text-ink">{provider.displayName}</h1>
+								<Button
+									type="button"
+									className={iconButtonClassName}
+									aria-label="Rename channel"
+									title="Rename channel"
+									disabled={renameDisabled}
+									onClick={startRename}
+								>
+									<IconMaterialSymbolsLightEditSquareOutlineSharp className="pointer-events-none size-5 shrink-0" />
+								</Button>
+							</div>
+						)}
+						<label className="flex shrink-0 items-center gap-2 text-sm text-ink">
+							<Switch.Root
+								checked={enabled}
+								onCheckedChange={(checked) => {
+									setEnabled(checked);
+									setSaveSuccess(false);
+									clearConnectionTestResult();
 								}}
-								maxLength={200}
-								spellCheck={false}
-								autoComplete="off"
-								disabled={renamePending}
-							/>
-							<Button
-								type="submit"
-								className={iconButtonClassName}
-								aria-label="Save channel name"
-								disabled={renamePending || !renameValue.trim()}
+								disabled={connectionFormDisabled}
+								className={switchRootClassName}
 							>
-								<IconMaterialSymbolsLightCheck className="pointer-events-none size-5 shrink-0" />
-							</Button>
-							<Button
-								type="button"
-								className={iconButtonClassName}
-								aria-label="Cancel rename"
-								disabled={renamePending}
-								onClick={cancelRename}
-							>
-								<IconMaterialSymbolsLightClose className="pointer-events-none size-5 shrink-0" />
-							</Button>
-						</form>
-					) : (
-						<div className="mb-2 flex items-center gap-1">
-							<h1 className="text-3xl font-bold text-ink">{provider.displayName}</h1>
-							<Button
-								type="button"
-								className={iconButtonClassName}
-								aria-label="Rename channel"
-								title="Rename channel"
-								disabled={renameDisabled}
-								onClick={startRename}
-							>
-								<IconMaterialSymbolsLightEditSquareOutlineSharp className="pointer-events-none size-5 shrink-0" />
-							</Button>
-						</div>
-					)}
+								<Switch.Thumb className={switchThumbClassName} />
+							</Switch.Root>
+						</label>
+					</div>
 					{renameError ? (
 						<p className="mb-2 text-sm text-danger" role="alert">
 							{renameError}
@@ -651,7 +673,7 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 									spellCheck={false}
 									disabled={connectionFormDisabled}
 								/>
-								{defaultBaseUrl ? <p className="mt-1 text-xs text-muted">API Type default: {defaultBaseUrl}</p> : null}
+								{defaultBaseUrl ? <p className="mt-1 text-xs text-muted">Default: {defaultBaseUrl}</p> : null}
 							</div>
 
 							<div>
@@ -783,26 +805,11 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 								) : null}
 							</div>
 							<div className="text-xs text-muted">
-								<p className="font-medium text-ink">{credentialStatusText}</p>
 								{credentialAction === "clear" ? <p className="mt-1">Token will be removed on save.</p> : null}
 								{credentialAction === "replace" && token.trim() ? (
 									<p className="mt-1">New token will replace the stored value on save.</p>
 								) : null}
 							</div>
-							<label className="flex items-center gap-2 text-sm text-ink">
-								<input
-									type="checkbox"
-									className={checkboxClassName}
-									checked={enabled}
-									onChange={(event) => {
-										setEnabled(event.currentTarget.checked);
-										setSaveSuccess(false);
-										clearConnectionTestResult();
-									}}
-									disabled={connectionFormDisabled}
-								/>
-								Channel enabled
-							</label>
 						</div>
 					</div>
 				</section>
@@ -811,7 +818,6 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 					<div className="mb-6 flex flex-col justify-between gap-4 sm:flex-row sm:items-start">
 						<div>
 							<h3 className="text-xl font-bold text-ink">Models</h3>
-							<p className="text-sm text-muted">Models enabled for this channel.</p>
 							<p className="mt-1 text-xs text-muted" aria-live="polite">
 								{syncStatusLabel(provider, syncPending)}
 							</p>
@@ -902,13 +908,15 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 			<footer className="flex shrink-0 items-center justify-end gap-3 border-t border-line bg-surface px-8 py-4">
 				<Button
 					type="button"
-					className={`${outlineButtonClassName} mr-auto`}
+					className={`${dangerIconButtonClassName} mr-auto`}
+					aria-label="Delete channel"
+					title="Delete channel"
 					disabled={connectionFormDisabled}
 					onClick={() => {
 						setDeleteOpen(true);
 					}}
 				>
-					Delete channel
+					<IconMaterialSymbolsLightDeleteOutlineSharp className="pointer-events-none size-5 shrink-0" />
 				</Button>
 				{saveError ? (
 					<p className="text-sm text-danger" role="alert">

@@ -47,6 +47,7 @@ pub fn run() {
 			cmds::providers::save_provider_instance,
 			cmds::providers::set_provider_enabled,
 			cmds::providers::delete_provider_instance,
+			cmds::providers::reorder_provider_instances,
 			cmds::models::list_provider_models,
 			cmds::models::save_manual_model,
 			cmds::models::set_model_enabled,

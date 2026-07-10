@@ -25,6 +25,14 @@ export const selectClassName =
 export const checkboxClassName =
 	"size-4 shrink-0 rounded-none border border-line bg-surface text-ink accent-ink focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ink disabled:border-disabled disabled:opacity-50";
 
+/** Base UI Switch track (outline/frame style, square) */
+export const switchRootClassName =
+	"relative block h-5 w-9 shrink-0 cursor-default rounded-none border border-line bg-surface transition-[background-color,border-color] duration-150 data-checked:border-accent data-checked:bg-accent data-disabled:opacity-50 focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-ink";
+
+/** Base UI Switch thumb (sliding knob) */
+export const switchThumbClassName =
+	"absolute top-1/2 left-0.5 size-3.5 -translate-y-1/2 rounded-none bg-ink transition-[left,background-color] duration-150 data-checked:left-5 data-checked:bg-surface";
+
 /** Dialog backdrop overlay */
 export const dialogBackdropClassName =
 	"fixed inset-0 min-h-dvh bg-overlay transition-opacity duration-150 data-ending-style:opacity-0 data-starting-style:opacity-0 supports-[-webkit-touch-callout:none]:absolute";
