@@ -92,7 +92,7 @@ function AddManualModelForm({ providerId, onCreated }: AddManualModelFormProps) 
 		<form className="flex flex-col gap-3" onSubmit={(event) => void handleSubmit(event)}>
 			<div className="flex flex-col gap-1">
 				<label className="text-sm font-medium text-ink" htmlFor="add-model-key">
-					Model key
+					Model ID
 				</label>
 				<input
 					id="add-model-key"

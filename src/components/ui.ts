@@ -13,6 +13,10 @@ export const primaryButtonClassName =
 export const dangerButtonClassName =
 	"inline-flex h-8 items-center justify-center gap-2 rounded-none border border-danger bg-danger px-4 text-sm leading-none whitespace-nowrap font-bold text-danger-ink select-none hover:not-data-disabled:opacity-90 active:not-data-disabled:opacity-80 focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-ink data-disabled:border-disabled data-disabled:bg-surface-3 data-disabled:text-disabled disabled:border-disabled disabled:bg-surface-3 disabled:text-disabled";
 
+/** Ghost icon button for inline actions such as renaming */
+export const iconButtonClassName =
+	"inline-flex size-7 shrink-0 cursor-default items-center justify-center rounded-none border-0 bg-transparent text-muted hover:bg-surface-2 hover:text-ink active:bg-surface-3 focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-ink data-disabled:text-disabled disabled:text-disabled";
+
 /** Text / password inputs */
 export const inputClassName =
 	"h-8 w-full rounded-none border border-line bg-surface px-3 text-sm font-normal text-ink placeholder:text-muted focus:outline-2 focus:-outline-offset-1 focus:outline-ink disabled:border-disabled disabled:text-disabled";

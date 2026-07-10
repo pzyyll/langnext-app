@@ -11,6 +11,8 @@ import IconMaterialSymbolsLightDeleteOutlineSharp from "~icons/material-symbols-
 import { ConfirmDialog } from "../../components/ConfirmDialog";
 import {
 	checkboxClassName,
+	dangerButtonClassName,
+	iconButtonClassName,
 	inputClassName,
 	outlineButtonClassName,
 	primaryButtonClassName,
@@ -19,7 +21,9 @@ import {
 } from "../../components/ui";
 import {
 	deleteProviderInstance,
+	deleteProviderModel,
 	listProviderModels,
+	saveManualModel,
 	saveProviderInstance,
 	setModelEnabled,
 	syncProviderModels,
@@ -40,10 +44,6 @@ import { ModelsTable } from "./ModelsTable";
 export type ProviderEditorProps = {
 	providerId: string;
 };
-
-/** Ghost icon button for inline header actions such as renaming the channel. */
-const iconButtonClassName =
-	"inline-flex size-7 shrink-0 cursor-default items-center justify-center rounded-none border-0 bg-transparent text-muted hover:bg-surface-2 hover:text-ink active:bg-surface-3 focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-ink data-disabled:text-disabled disabled:text-disabled";
 
 /** Danger-toned ghost icon button for destructive actions such as deleting the channel. */
 const dangerIconButtonClassName =
@@ -194,6 +194,10 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 	const [modelMutationError, setModelMutationError] = useState<string | null>(null);
 	const [addModelOpen, setAddModelOpen] = useState(false);
 	const [deleteOpen, setDeleteOpen] = useState(false);
+	const [selectionMode, setSelectionMode] = useState(false);
+	const [selectedModelIds, setSelectedModelIds] = useState<Set<string>>(() => new Set());
+	const [deleteModelsOpen, setDeleteModelsOpen] = useState(false);
+	const [deleteModelsPending, setDeleteModelsPending] = useState(false);
 
 	const [connectionTestPending, setConnectionTestPending] = useState(false);
 	const [connectionTestResult, setConnectionTestResult] = useState<ConnectionTestResult | null>(null);
@@ -526,6 +530,116 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 		}
 	}
 
+	async function handleRenameModel(model: ProviderModelDto, displayNameOverride: string | null): Promise<boolean> {
+		if (pendingModelIds.has(model.id)) {
+			return false;
+		}
+
+		const previous = models.find((m) => m.id === model.id);
+		if (!previous) {
+			return false;
+		}
+
+		setModelMutationError(null);
+		setPendingModelIds((current) => new Set(current).add(model.id));
+		setModels((current) => current.map((m) => (m.id === model.id ? { ...m, displayNameOverride } : m)));
+
+		try {
+			const updated = await saveManualModel({
+				id: model.id,
+				providerInstanceId: provider.id,
+				modelKey: model.modelKey,
+				displayNameOverride,
+				enabled: model.enabled,
+				capabilityOverridesJson: model.capabilityOverridesJson,
+			});
+			setModels((current) => current.map((m) => (m.id === model.id ? updated : m)));
+			return true;
+		} catch (error: unknown) {
+			setModels((current) => current.map((m) => (m.id === model.id ? previous : m)));
+			setModelMutationError(getIpcErrorMessage(error, "Failed to update model."));
+			return false;
+		} finally {
+			setPendingModelIds((current) => {
+				const next = new Set(current);
+				next.delete(model.id);
+				return next;
+			});
+		}
+	}
+
+	function enterSelectionMode() {
+		setSelectedModelIds(new Set());
+		setSelectionMode(true);
+	}
+
+	function exitSelectionMode() {
+		setSelectedModelIds(new Set());
+		setSelectionMode(false);
+	}
+
+	function handleToggleSelect(modelId: string) {
+		setSelectedModelIds((current) => {
+			const next = new Set(current);
+			if (next.has(modelId)) {
+				next.delete(modelId);
+			} else {
+				next.add(modelId);
+			}
+			return next;
+		});
+	}
+
+	function handleToggleSelectAll(checked: boolean) {
+		if (checked) {
+			setSelectedModelIds(new Set(models.map((model) => model.id)));
+		} else {
+			setSelectedModelIds(new Set());
+		}
+	}
+
+	async function handleDeleteModels() {
+		const ids = Array.from(selectedModelIds);
+		if (ids.length === 0 || deleteModelsPending) {
+			return;
+		}
+
+		const idSet = new Set(ids);
+		setModelMutationError(null);
+		setDeleteModelsPending(true);
+		setPendingModelIds((current) => {
+			const next = new Set(current);
+			for (const id of ids) {
+				next.add(id);
+			}
+			return next;
+		});
+		setModels((current) => current.filter((model) => !idSet.has(model.id)));
+
+		try {
+			const results = await Promise.allSettled(ids.map((id) => deleteProviderModel(id)));
+			const anyFailed = results.some((result) => result.status === "rejected");
+			if (anyFailed) {
+				await reloadModels(providerId);
+				const firstRejection = results.find((result) => result.status === "rejected");
+				const reason = firstRejection && firstRejection.status === "rejected" ? firstRejection.reason : undefined;
+				setModelMutationError(getIpcErrorMessage(reason, "Failed to delete some models."));
+			} else {
+				setSelectedModelIds(new Set());
+				setSelectionMode(false);
+			}
+		} finally {
+			setPendingModelIds((current) => {
+				const next = new Set(current);
+				for (const id of ids) {
+					next.delete(id);
+				}
+				return next;
+			});
+			setDeleteModelsPending(false);
+		}
+	}
+
 	async function handleDelete() {
 		try {
 			await deleteProviderInstance(provider.id);
@@ -823,37 +937,70 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 							</p>
 						</div>
 						<div className="flex flex-wrap items-center gap-3">
-							<span
-								className="inline-flex"
-								title={
-									connectionDirty
-										? "Save connection changes before testing or syncing models."
-										: syncPending
-											? "Syncing models…"
-											: "Fetch remote models using the saved connection"
-								}
-							>
-								<Button
-									type="button"
-									className={outlineButtonClassName}
-									disabled={remoteActionsDisabled}
-									focusableWhenDisabled
-									onClick={() => {
-										void handleSyncModels();
-									}}
-								>
-									{syncPending ? "Syncing…" : "Get models"}
-								</Button>
-							</span>
-							<Button
-								type="button"
-								className={outlineButtonClassName}
-								onClick={() => {
-									setAddModelOpen(true);
-								}}
-							>
-								+ Add model
-							</Button>
+							{selectionMode ? (
+								<>
+									<Button
+										type="button"
+										className={dangerButtonClassName}
+										disabled={selectedModelIds.size === 0 || syncPending || deleteModelsPending}
+										onClick={() => {
+											setDeleteModelsOpen(true);
+										}}
+									>
+										Delete ({selectedModelIds.size})
+									</Button>
+									<Button
+										type="button"
+										className={outlineButtonClassName}
+										disabled={deleteModelsPending}
+										onClick={exitSelectionMode}
+									>
+										Done
+									</Button>
+								</>
+							) : (
+								<>
+									<span
+										className="inline-flex"
+										title={
+											connectionDirty
+												? "Save connection changes before testing or syncing models."
+												: syncPending
+													? "Syncing models…"
+													: "Fetch remote models using the saved connection"
+										}
+									>
+										<Button
+											type="button"
+											className={outlineButtonClassName}
+											disabled={remoteActionsDisabled}
+											focusableWhenDisabled
+											onClick={() => {
+												void handleSyncModels();
+											}}
+										>
+											{syncPending ? "Syncing…" : "Get models"}
+										</Button>
+									</span>
+									<Button
+										type="button"
+										className={outlineButtonClassName}
+										onClick={() => {
+											setAddModelOpen(true);
+										}}
+									>
+										+ Add model
+									</Button>
+									<Button
+										type="button"
+										className={outlineButtonClassName}
+										disabled={models.length === 0 || modelsLoading || Boolean(modelsError) || syncPending}
+										onClick={enterSelectionMode}
+									>
+										Select
+									</Button>
+								</>
+							)}
 						</div>
 					</div>
 
@@ -900,6 +1047,11 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 							onEnabledChange={(modelId, nextEnabled) => {
 								void handleModelEnabledChange(modelId, nextEnabled);
 							}}
+							onRenameModel={handleRenameModel}
+							selectionMode={selectionMode}
+							selectedModelIds={selectedModelIds}
+							onToggleSelect={handleToggleSelect}
+							onToggleSelectAll={handleToggleSelectAll}
 						/>
 					) : null}
 				</section>
@@ -972,6 +1124,22 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 				pendingText="Deleting…"
 				danger
 				onConfirm={handleDelete}
+			/>
+
+			<ConfirmDialog
+				open={deleteModelsOpen}
+				onOpenChange={setDeleteModelsOpen}
+				title="Delete models"
+				description={
+					<>
+						Delete <span className="font-bold text-ink">{selectedModelIds.size}</span> selected model
+						{selectedModelIds.size === 1 ? "" : "s"}? This cannot be undone.
+					</>
+				}
+				confirmText="Delete"
+				pendingText="Deleting…"
+				danger
+				onConfirm={handleDeleteModels}
 			/>
 		</div>
 	);
