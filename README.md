@@ -49,18 +49,32 @@ mise run tauri:dev
 
 All commands go through mise (no `package.json` scripts):
 
-| Command                 | Description                           |
-| ----------------------- | ------------------------------------- |
-| `mise run install`      | Install JS deps with bun              |
-| `mise run dev`          | Start Vite dev server                 |
-| `mise run build`        | Typecheck + production frontend build |
-| `mise run typecheck`    | TypeScript check only                 |
-| `mise run preview`      | Preview production frontend build     |
-| `mise run lint`         | Run ESLint                            |
-| `mise run format`       | Format with Prettier + rustfmt        |
-| `mise run format:check` | Check Prettier + rustfmt formatting   |
-| `mise run tauri:dev`    | Run the Tauri desktop app             |
-| `mise run tauri:build`  | Package the desktop app               |
+| Command                  | Description                           |
+| ------------------------ | ------------------------------------- |
+| `mise run install`       | Install JS deps with bun              |
+| `mise run dev`           | Start Vite dev server                 |
+| `mise run build`         | Typecheck + production frontend build |
+| `mise run typecheck`     | TypeScript check only                 |
+| `mise run preview`       | Preview production frontend build     |
+| `mise run lint`          | Run ESLint                            |
+| `mise run format`        | Format with Prettier + rustfmt        |
+| `mise run format:check`  | Check Prettier + rustfmt formatting   |
+| `mise run test`          | Run Rust unit/integration tests       |
+| `mise run test-frontend` | Run frontend behavioral tests (Bun)   |
+| `mise run tauri:dev`     | Run the Tauri desktop app             |
+| `mise run tauri:build`   | Package the desktop app               |
+
+Optional test filter: `mise run test storage` (args are forwarded to `cargo test`).
+
+### Native credential vault lifecycle (manual / release platforms)
+
+The ignored integration test requires an interactive OS credential store session:
+
+```bash
+mise exec -- cargo test --manifest-path src-tauri/Cargo.toml native_vault_smoke -- --ignored
+```
+
+This writes a disposable vault entry, reads it back, and deletes it. Run on each release platform (Windows Credential Manager, macOS Keychain, Linux Secret Service) before shipping credential-related changes.
 
 ## Project structure
 
@@ -83,6 +97,7 @@ mise.toml               Toolchain versions
 
 - Routes live in `src/routes`. TanStack Router generates `src/routeTree.gen.ts` during Vite startup.
 - Rust IPC demo: home page calls the `greet` command from `src-tauri/src/lib.rs`.
+- Storage (Providers, models, profiles, settings, credentials, device state) is Rust-owned; React uses typed invoke wrappers under `src/storage/`. See `docs/analysis/storage-architecture.md`.
 - Base UI portals need the `.root { isolation: isolate; }` stacking context (already set in layout styles).
 - Use **bun** only for packages (do not commit `package-lock.json` / `yarn.lock` / `pnpm-lock.yaml`).
 - Use **mise file tasks** only for project commands (`.mise/tasks/`, not `package.json` scripts or TOML tasks).

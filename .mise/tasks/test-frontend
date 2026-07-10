@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# ABOUTME: Run frontend behavioral tests with Bun.
+# ABOUTME: Covers ordered theme mutation queue and rollback ordering.
+set -euo pipefail
+cd "${MISE_PROJECT_ROOT:-.}"
+bun test src/theme/themeMutationQueue.test.ts

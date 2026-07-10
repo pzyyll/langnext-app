@@ -42,9 +42,8 @@ function HomePage() {
 				<h1 className="text-2xl leading-8 font-bold text-ink">Desktop shell, modern web stack</h1>
 				<p className="max-w-2xl text-sm leading-6 text-muted">
 					This starter wires Tauri 2, TanStack Router, Base UI, and Tailwind CSS with semantic theme tokens. Call into
-					Rust with{" "}
-					<code className="border border-line bg-code px-1.5 py-0.5 font-mono text-xs text-ink">invoke</code>, then show
-					the result in a Base UI dialog.
+					Rust with <code className="border border-line bg-code px-1.5 py-0.5 font-mono text-xs text-ink">invoke</code>,
+					then show the result in a Base UI dialog.
 				</p>
 			</section>
 

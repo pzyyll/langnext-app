@@ -22,8 +22,8 @@ function AboutPage() {
 				<h1 className="text-2xl leading-8 font-bold text-ink">About</h1>
 				<p className="max-w-2xl text-sm leading-6 text-muted">
 					Starter desktop app scaffolded for local product work. Frontend lives in{" "}
-					<code className="border border-line bg-code px-1.5 py-0.5 font-mono text-xs text-ink">src/</code>, native shell
-					and Rust commands live in{" "}
+					<code className="border border-line bg-code px-1.5 py-0.5 font-mono text-xs text-ink">src/</code>, native
+					shell and Rust commands live in{" "}
 					<code className="border border-line bg-code px-1.5 py-0.5 font-mono text-xs text-ink">src-tauri/</code>.
 				</p>
 			</section>

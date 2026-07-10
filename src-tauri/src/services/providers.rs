@@ -1,0 +1,454 @@
+// ABOUTME: Provider validation, CRUD, and credential orchestration with crash recovery.
+// ABOUTME: Vault writes never share a transaction with SQLite; journal coordinates both.
+use crate::adapters::catalog;
+use crate::credentials::coordinator;
+use crate::credentials::{provider_ref, CredentialVault};
+use crate::domain::provider::{
+	CredentialKind, CredentialUpdate, ModelsSyncStatus, ProviderInstance, ProviderInstanceDto, ProviderInstanceWrite,
+	ProxyMode,
+};
+use crate::domain::time::{new_id, now_rfc3339};
+use crate::error::StorageError;
+use crate::repositories::credential_operations::{self, CredentialOperation, OwnerKind};
+use crate::repositories::provider_instances;
+use crate::storage::Database;
+use std::sync::Arc;
+use url::Url;
+use uuid::Uuid;
+
+#[derive(Clone)]
+pub struct ProviderService {
+	db: Database,
+	vault: Arc<dyn CredentialVault>,
+}
+
+impl ProviderService {
+	pub fn new(db: Database, vault: Arc<dyn CredentialVault>) -> Self {
+		Self { db, vault }
+	}
+
+	pub fn list(&self) -> Result<Vec<ProviderInstanceDto>, StorageError> {
+		self.db.read(|conn| {
+			Ok(
+				provider_instances::list(conn)?
+					.iter()
+					.map(ProviderInstanceDto::from)
+					.collect(),
+			)
+		})
+	}
+
+	pub fn get(&self, id: Uuid) -> Result<ProviderInstanceDto, StorageError> {
+		self
+			.db
+			.read(|conn| Ok(ProviderInstanceDto::from(&provider_instances::get(conn, id)?)))
+	}
+
+	pub fn save(&self, input: ProviderInstanceWrite) -> Result<ProviderInstanceDto, StorageError> {
+		validate_provider_write(&input)?;
+		catalog::get(&input.adapter_id)?;
+
+		match input.id {
+			None => self.create(input),
+			Some(id) => self.update(id, input),
+		}
+	}
+
+	fn create(&self, input: ProviderInstanceWrite) -> Result<ProviderInstanceDto, StorageError> {
+		let id = new_id();
+		let now = now_rfc3339();
+		let (credential_ref, secret_to_store, op_id) = self.plan_create_credential(id, &input)?;
+
+		if let (Some(ref_name), Some(secret)) = (&credential_ref, &secret_to_store) {
+			// Journal prepared → vault write → SQLite commit → mark committed → finalize.
+			let operation_id = op_id.expect("op id when storing secret");
+			let prepared = self.db.transaction(|uow| {
+				credential_operations::insert_prepared(
+					uow.conn(),
+					operation_id,
+					OwnerKind::Provider,
+					&id.to_string(),
+					None,
+					Some(ref_name.as_str()),
+				)
+			})?;
+
+			if let Err(e) = self.vault.set(ref_name, secret) {
+				// Vault never received the secret; drop the uncommitted journal.
+				let _ = self.db.transaction(|uow| {
+					credential_operations::delete(uow.conn(), operation_id)?;
+					Ok(())
+				});
+				return Err(e);
+			}
+
+			let provider = build_provider(id, &input, credential_ref.clone(), &now, &now);
+			let commit = self.db.transaction(|uow| {
+				provider_instances::insert(uow.conn(), &provider)?;
+				let op = credential_operations::mark_db_committed(uow.conn(), operation_id)?;
+				Ok((provider, op))
+			});
+
+			match commit {
+				Ok((provider, op)) => {
+					// Create has no old secret; finalize removes the journal only.
+					let _ = coordinator::finalize_operation(&self.db, self.vault.as_ref(), &op);
+					Ok(ProviderInstanceDto::from(&provider))
+				}
+				Err(e) => {
+					// Compensate: delete unused new secret if possible; retain prepared on failure.
+					let _ = coordinator::finalize_operation(&self.db, self.vault.as_ref(), &prepared);
+					Err(e)
+				}
+			}
+		} else {
+			// no vault write
+			let provider = build_provider(id, &input, None, &now, &now);
+			self.db.transaction(|uow| {
+				provider_instances::insert(uow.conn(), &provider)?;
+				Ok(ProviderInstanceDto::from(&provider))
+			})
+		}
+	}
+
+	fn plan_create_credential(
+		&self,
+		id: Uuid,
+		input: &ProviderInstanceWrite,
+	) -> Result<(Option<String>, Option<String>, Option<Uuid>), StorageError> {
+		match (&input.credential_kind, &input.credential) {
+			(CredentialKind::None, CredentialUpdate::Keep) => Ok((None, None, None)),
+			(CredentialKind::None, CredentialUpdate::Clear) => Ok((None, None, None)),
+			(CredentialKind::None, CredentialUpdate::Replace(_)) => {
+				Err(StorageError::Validation("credential_kind none rejects Replace".into()))
+			}
+			(CredentialKind::ApiKey | CredentialKind::Bearer, CredentialUpdate::Keep) => {
+				// needs authentication
+				Ok((None, None, None))
+			}
+			(CredentialKind::ApiKey | CredentialKind::Bearer, CredentialUpdate::Clear) => Ok((None, None, None)),
+			(CredentialKind::ApiKey | CredentialKind::Bearer, CredentialUpdate::Replace(secret)) => {
+				if secret.is_empty() {
+					return Err(StorageError::Validation("credential secret must not be empty".into()));
+				}
+				let op = new_id();
+				Ok((Some(provider_ref(id, op)), Some(secret.clone()), Some(op)))
+			}
+		}
+	}
+
+	fn update(&self, id: Uuid, input: ProviderInstanceWrite) -> Result<ProviderInstanceDto, StorageError> {
+		coordinator::preflight_owner(&self.db, self.vault.as_ref(), OwnerKind::Provider, &id.to_string())?;
+
+		let credential = input.credential.clone();
+		match credential {
+			CredentialUpdate::Keep => self.update_keep(id, input),
+			CredentialUpdate::Replace(secret) => {
+				if secret.is_empty() {
+					return Err(StorageError::Validation("credential secret must not be empty".into()));
+				}
+				let existing = self.db.read(|conn| provider_instances::get(conn, id))?;
+				validate_credential_transition(&existing, &input)?;
+				self.replace_credential(existing, input, &secret)
+			}
+			CredentialUpdate::Clear => {
+				let existing = self.db.read(|conn| provider_instances::get(conn, id))?;
+				validate_credential_transition(&existing, &input)?;
+				self.clear_credential(existing, input)
+			}
+		}
+	}
+
+	/// Keep path: re-read, validate unfinished ops, and write config without rewriting credential_ref.
+	fn update_keep(&self, id: Uuid, input: ProviderInstanceWrite) -> Result<ProviderInstanceDto, StorageError> {
+		self.db.transaction(|uow| {
+			let conn = uow.conn();
+			if credential_operations::get_for_owner(conn, OwnerKind::Provider, &id.to_string())?.is_some() {
+				return Err(StorageError::CredentialBusy);
+			}
+			let existing = provider_instances::get(conn, id)?;
+			validate_credential_transition(&existing, &input)?;
+
+			let endpoint_changed =
+				existing.adapter_id != input.adapter_id || existing.base_url_override != input.base_url_override;
+			if endpoint_changed && existing.credential_ref.is_some() {
+				return Err(StorageError::Validation(
+					"changing adapter_id or base URL requires Replace or Clear when a credential exists".into(),
+				));
+			}
+
+			let now = now_rfc3339();
+			provider_instances::update_configuration_keep_credential(
+				conn,
+				id,
+				&input.adapter_id,
+				&input.display_name,
+				input.base_url_override.as_deref(),
+				input.credential_kind,
+				input.enabled,
+				input.proxy_mode,
+				input.insecure_http_confirmed_at.as_deref(),
+				&now,
+			)?;
+			Ok(ProviderInstanceDto::from(&provider_instances::get(conn, id)?))
+		})
+	}
+
+	fn replace_credential(
+		&self,
+		existing: ProviderInstance,
+		input: ProviderInstanceWrite,
+		secret: &str,
+	) -> Result<ProviderInstanceDto, StorageError> {
+		let op_id = new_id();
+		let new_ref = provider_ref(existing.id, op_id);
+		let old_ref = existing.credential_ref.clone();
+
+		let prepared = self.db.transaction(|uow| {
+			credential_operations::insert_prepared(
+				uow.conn(),
+				op_id,
+				OwnerKind::Provider,
+				&existing.id.to_string(),
+				old_ref.as_deref(),
+				Some(&new_ref),
+			)
+		})?;
+
+		if let Err(e) = self.vault.set(&new_ref, secret) {
+			let _ = self.db.transaction(|uow| {
+				credential_operations::delete(uow.conn(), op_id)?;
+				Ok(())
+			});
+			return Err(e);
+		}
+
+		let now = now_rfc3339();
+		let mut provider = build_provider(existing.id, &input, Some(new_ref.clone()), &existing.created_at, &now);
+		provider.models_synced_at = existing.models_synced_at;
+		provider.models_sync_status = existing.models_sync_status;
+		provider.models_sync_error_code = existing.models_sync_error_code;
+
+		let commit = self.db.transaction(|uow| {
+			provider_instances::compare_and_set_credential_ref(
+				uow.conn(),
+				existing.id,
+				old_ref.as_deref(),
+				Some(&new_ref),
+				&now,
+			)?;
+			provider_instances::update_configuration(uow.conn(), &provider)?;
+			let op = credential_operations::mark_db_committed(uow.conn(), op_id)?;
+			Ok((provider, op))
+		});
+
+		match commit {
+			Ok((provider, op)) => {
+				// Business write committed; deferred cleanup retains db_committed journal.
+				let _ = coordinator::finalize_operation(&self.db, self.vault.as_ref(), &op);
+				Ok(ProviderInstanceDto::from(&provider))
+			}
+			Err(e) => {
+				// Compensation: delete unused new secret; retain prepared on vault failure.
+				let _ = coordinator::finalize_operation(&self.db, self.vault.as_ref(), &prepared);
+				Err(e)
+			}
+		}
+	}
+
+	fn clear_credential(
+		&self,
+		existing: ProviderInstance,
+		input: ProviderInstanceWrite,
+	) -> Result<ProviderInstanceDto, StorageError> {
+		let op_id = new_id();
+		let old_ref = existing.credential_ref.clone();
+
+		self.db.transaction(|uow| {
+			credential_operations::insert_prepared(
+				uow.conn(),
+				op_id,
+				OwnerKind::Provider,
+				&existing.id.to_string(),
+				old_ref.as_deref(),
+				None,
+			)?;
+			Ok(())
+		})?;
+
+		let now = now_rfc3339();
+		let mut provider = build_provider(existing.id, &input, None, &existing.created_at, &now);
+		provider.models_synced_at = existing.models_synced_at;
+		provider.models_sync_status = existing.models_sync_status;
+		provider.models_sync_error_code = existing.models_sync_error_code;
+
+		let commit = self.db.transaction(|uow| {
+			provider_instances::compare_and_set_credential_ref(uow.conn(), existing.id, old_ref.as_deref(), None, &now)?;
+			provider_instances::update_configuration(uow.conn(), &provider)?;
+			let op = credential_operations::mark_db_committed(uow.conn(), op_id)?;
+			Ok((provider, op))
+		});
+
+		match commit {
+			Ok((provider, op)) => {
+				let _ = coordinator::finalize_operation(&self.db, self.vault.as_ref(), &op);
+				Ok(ProviderInstanceDto::from(&provider))
+			}
+			Err(e) => {
+				// Clear never applied; drop prepared journal only (no vault delete).
+				if let Ok(Some(op)) = self.db.read(|conn| credential_operations::get_by_id(conn, op_id)) {
+					let _ = coordinator::finalize_operation(&self.db, self.vault.as_ref(), &op);
+				}
+				Err(e)
+			}
+		}
+	}
+
+	pub fn set_enabled(&self, id: Uuid, enabled: bool) -> Result<ProviderInstanceDto, StorageError> {
+		let now = now_rfc3339();
+		self.db.transaction(|uow| {
+			provider_instances::set_enabled(uow.conn(), id, enabled, &now)?;
+			Ok(ProviderInstanceDto::from(&provider_instances::get(uow.conn(), id)?))
+		})
+	}
+
+	pub fn delete(&self, id: Uuid) -> Result<(), StorageError> {
+		coordinator::preflight_owner(&self.db, self.vault.as_ref(), OwnerKind::Provider, &id.to_string())?;
+
+		let existing = self.db.read(|conn| provider_instances::get(conn, id))?;
+		let old_ref = existing.credential_ref.clone();
+		let op_id = new_id();
+
+		let cleanup_op: Option<CredentialOperation> = self.db.transaction(|uow| {
+			provider_instances::delete(uow.conn(), id)?;
+			if old_ref.is_some() {
+				let op = credential_operations::insert_db_committed(
+					uow.conn(),
+					op_id,
+					OwnerKind::Provider,
+					&id.to_string(),
+					old_ref.as_deref(),
+					None,
+				)?;
+				Ok(Some(op))
+			} else {
+				Ok(None)
+			}
+		})?;
+
+		if let Some(op) = cleanup_op {
+			let _ = coordinator::finalize_operation(&self.db, self.vault.as_ref(), &op);
+		}
+		Ok(())
+	}
+
+	/// Startup recovery for unfinished credential operations.
+	pub fn recover_credential_operations(db: &Database, vault: &dyn CredentialVault) -> coordinator::RecoveryReport {
+		coordinator::recover_all(db, vault)
+	}
+}
+
+fn build_provider(
+	id: Uuid,
+	input: &ProviderInstanceWrite,
+	credential_ref: Option<String>,
+	created_at: &str,
+	updated_at: &str,
+) -> ProviderInstance {
+	ProviderInstance {
+		id,
+		adapter_id: input.adapter_id.clone(),
+		display_name: input.display_name.clone(),
+		base_url_override: input.base_url_override.clone(),
+		credential_kind: input.credential_kind,
+		credential_ref,
+		enabled: input.enabled,
+		proxy_mode: input.proxy_mode,
+		insecure_http_confirmed_at: input.insecure_http_confirmed_at.clone(),
+		models_synced_at: None,
+		models_sync_status: ModelsSyncStatus::Never,
+		models_sync_error_code: None,
+		created_at: created_at.to_string(),
+		updated_at: updated_at.to_string(),
+	}
+}
+
+fn validate_provider_write(input: &ProviderInstanceWrite) -> Result<(), StorageError> {
+	if input.display_name.trim().is_empty() {
+		return Err(StorageError::Validation("display_name must not be empty".into()));
+	}
+	if input.display_name.len() > 200 {
+		return Err(StorageError::Validation(
+			"display_name must be at most 200 characters".into(),
+		));
+	}
+	if let Some(url) = &input.base_url_override {
+		validate_provider_url(url, input.insecure_http_confirmed_at.as_deref())?;
+	}
+	match input.proxy_mode {
+		ProxyMode::Inherit | ProxyMode::Direct => {}
+	}
+	Ok(())
+}
+
+pub fn validate_provider_url(raw: &str, insecure_confirmed_at: Option<&str>) -> Result<(), StorageError> {
+	let url = Url::parse(raw).map_err(|e| StorageError::Validation(format!("invalid URL: {e}")))?;
+	if !url.username().is_empty() || url.password().is_some() {
+		return Err(StorageError::Validation("URL must not contain userinfo".into()));
+	}
+	if url.query().is_some() {
+		return Err(StorageError::Validation("URL must not contain a query string".into()));
+	}
+	if url.fragment().is_some() {
+		return Err(StorageError::Validation("URL must not contain a fragment".into()));
+	}
+	match url.scheme() {
+		"https" => Ok(()),
+		"http" => {
+			let host = url.host_str().unwrap_or("");
+			if is_loopback_host(host) {
+				return Ok(());
+			}
+			if insecure_confirmed_at.is_none() {
+				return Err(StorageError::Validation(
+					"non-loopback HTTP requires insecure_http_confirmed_at".into(),
+				));
+			}
+			// Ensure confirmation timestamp is parseable RFC 3339 when present.
+			if let Some(ts) = insecure_confirmed_at {
+				if time::OffsetDateTime::parse(ts, &time::format_description::well_known::Rfc3339).is_err() {
+					return Err(StorageError::Validation(
+						"insecure_http_confirmed_at must be RFC 3339".into(),
+					));
+				}
+			}
+			Ok(())
+		}
+		other => Err(StorageError::Validation(format!("unsupported URL scheme: {other}"))),
+	}
+}
+
+fn is_loopback_host(host: &str) -> bool {
+	host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1" || host == "::1" || host == "[::1]"
+}
+
+fn validate_credential_transition(
+	existing: &ProviderInstance,
+	input: &ProviderInstanceWrite,
+) -> Result<(), StorageError> {
+	match input.credential_kind {
+		CredentialKind::None => match &input.credential {
+			CredentialUpdate::Replace(_) => Err(StorageError::Validation("credential_kind none rejects Replace".into())),
+			CredentialUpdate::Keep => {
+				if existing.credential_kind != CredentialKind::None || existing.credential_ref.is_some() {
+					return Err(StorageError::Validation(
+						"changing to none requires Clear when authenticated".into(),
+					));
+				}
+				Ok(())
+			}
+			CredentialUpdate::Clear => Ok(()),
+		},
+		CredentialKind::ApiKey | CredentialKind::Bearer => Ok(()),
+	}
+}

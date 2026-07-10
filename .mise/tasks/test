@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# ABOUTME: Run Rust unit and integration tests for the Tauri backend
+# ABOUTME: Forwards optional cargo test filters via mise run test [filter]
+#MISE description="Run Rust tests (optional filter args forwarded to cargo test)"
+set -euo pipefail
+cargo test --manifest-path src-tauri/Cargo.toml "$@"

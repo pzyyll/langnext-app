@@ -5,7 +5,10 @@
 		<link rel="icon" type="image/png" sizes="128x128" href="/icon-128x128.png" />
 		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
 		<title>langnext-app</title>
-		<!-- Apply theme before paint to avoid a light/dark flash -->
+		<!--
+			Pre-paint theme cache only (localStorage / OS preference).
+			Authoritative theme reconciliation runs during storage bootstrap in Tauri.
+		-->
 		<script>
 			(function () {
 				try {

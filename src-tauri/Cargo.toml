@@ -23,6 +23,13 @@ tauri = { version = "2", features = ["tray-icon", "image-ico", "image-png"] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+rusqlite = { version = "0.40.1", features = ["bundled", "backup"] }
+keyring = "4.1.4"
+uuid = { version = "1.23.4", features = ["v7", "serde"] }
+time = { version = "0.3.53", features = ["formatting", "parsing", "serde", "serde-well-known"] }
+thiserror = "2.0.18"
+url = "2"
+tempfile = "3.27.0"
 
 # Win+Z snap overlay for custom maximize hover (Windows only).
 [target.'cfg(windows)'.dependencies]
