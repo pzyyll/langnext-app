@@ -33,15 +33,15 @@ pub fn setup<R: Runtime>(app: &tauri::AppHandle<R>) {
 		}
 	});
 
-	tray_icon.on_tray_icon_event(|tray_icon, event: tauri::tray::TrayIconEvent| match event {
-		tauri::tray::TrayIconEvent::Click {
+	tray_icon.on_tray_icon_event(|tray_icon, event: tauri::tray::TrayIconEvent| {
+		if let tauri::tray::TrayIconEvent::Click {
 			button, button_state, ..
-		} => {
+		} = event
+		{
 			if button == tauri::tray::MouseButton::Left && button_state == tauri::tray::MouseButtonState::Up {
 				println!("Tray left click");
 				crate::windows::main::show(tray_icon.app_handle());
 			}
 		}
-		_ => {}
 	});
 }

@@ -1,3 +1,4 @@
-// ABOUTME: Metadata-only adapter catalog and profile-option validation contract.
-// ABOUTME: No HTTP transport; real adapters will live here later.
+// ABOUTME: Adapter catalog metadata and HTTP model-list transport.
+// ABOUTME: Transport owns auth, proxy selection, pagination, and secret-free errors.
 pub mod catalog;
+pub mod transport;

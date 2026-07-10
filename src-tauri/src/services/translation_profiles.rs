@@ -23,7 +23,7 @@ impl TranslationProfileService {
 	}
 
 	pub fn list(&self) -> Result<Vec<TranslationProfile>, StorageError> {
-		self.db.read(|conn| translation_profiles::list(conn))
+		self.db.read(translation_profiles::list)
 	}
 
 	pub fn get(&self, id: Uuid) -> Result<TranslationProfileDto, StorageError> {

@@ -144,6 +144,34 @@ pub struct RemoteModelSyncItem {
 	pub remote_metadata_json: Option<serde_json::Value>,
 }
 
+/// Result of testing a saved provider connection without mutating model rows.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionTestResult {
+	pub ok: bool,
+	/// Bounded transport/credential code; never `connection_changed`.
+	pub error_code: Option<String>,
+	pub message: String,
+	pub model_count: Option<usize>,
+	/// Non-sensitive connection version (`provider.updated_at` at resolve time).
+	/// Frontend discards results that no longer match the current provider version.
+	pub provider_updated_at: String,
+}
+
+/// Result of a full remote model sync, including refreshed provider/models on expected failure.
+///
+/// `error_code` may be a persisted models-sync error code or the non-persisted
+/// `connection_changed` race outcome. Only bounded persisted codes are written to SQLite.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncModelsResult {
+	pub ok: bool,
+	pub error_code: Option<String>,
+	pub message: String,
+	pub models: Vec<ProviderModelDto>,
+	pub provider: crate::domain::provider::ProviderInstanceDto,
+}
+
 /// Export shape for models (same fields; no secrets).
 pub type ModelExport = ProviderModel;
 

@@ -99,7 +99,7 @@ impl SettingsService {
 	}
 
 	fn replace_proxy_credential(&self, settings: &AppSettingsV1, secret: &str) -> Result<(), StorageError> {
-		let old_ref = self.db.read(|conn| app_credentials::get_global_proxy_ref(conn))?;
+		let old_ref = self.db.read(app_credentials::get_global_proxy_ref)?;
 		let op_id = new_id();
 		let new_ref = global_proxy_ref(op_id);
 
@@ -143,7 +143,7 @@ impl SettingsService {
 	}
 
 	fn clear_proxy_credential(&self, settings: &AppSettingsV1) -> Result<(), StorageError> {
-		let old_ref = self.db.read(|conn| app_credentials::get_global_proxy_ref(conn))?;
+		let old_ref = self.db.read(app_credentials::get_global_proxy_ref)?;
 		let op_id = new_id();
 
 		self.db.transaction(|uow| {

@@ -1,5 +1,8 @@
 // ABOUTME: Tauri application library: registers plugins, windows, tray, and IPC commands.
 // ABOUTME: Initializes storage AppState before creating windows.
+// Public service/repository helpers are part of the storage surface; lib-only builds
+// do not always see IPC/test call sites as live uses, so dead_code is allowed here.
+#![allow(dead_code)]
 use tauri::{Manager, Runtime};
 
 mod adapters;
@@ -48,6 +51,8 @@ pub fn run() {
 			cmds::models::save_manual_model,
 			cmds::models::set_model_enabled,
 			cmds::models::delete_provider_model,
+			cmds::models::test_provider_connection,
+			cmds::models::sync_provider_models,
 			cmds::translation_profiles::list_translation_profiles,
 			cmds::translation_profiles::get_translation_profile,
 			cmds::translation_profiles::save_translation_profile,

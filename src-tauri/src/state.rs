@@ -1,5 +1,6 @@
 // ABOUTME: Managed Tauri AppState holding database path, services, and device state.
 // ABOUTME: Built during setup after SQLite migration and credential recovery.
+use crate::adapters::transport::{HttpModelTransport, ModelTransport};
 use crate::credentials::{CredentialVault, NativeCredentialVault};
 use crate::device_state::{DeviceStateManager, SharedDeviceState};
 use crate::error::StorageError;
@@ -31,7 +32,8 @@ impl AppState {
 		let _recovery = ProviderService::recover_credential_operations(&db, vault.as_ref());
 
 		let providers = ProviderService::new(db.clone(), vault.clone());
-		let models = ModelService::new(db.clone());
+		let transport: Arc<dyn ModelTransport> = Arc::new(HttpModelTransport);
+		let models = ModelService::new(db.clone(), vault.clone(), transport);
 		let profiles = TranslationProfileService::new(db.clone());
 		let settings = SettingsService::new(db.clone(), vault.clone());
 		let import_export = ImportExportService::new(db.clone(), vault.clone());

@@ -30,6 +30,8 @@ time = { version = "0.3.53", features = ["formatting", "parsing", "serde", "serd
 thiserror = "2.0.18"
 url = "2"
 tempfile = "3.27.0"
+reqwest = { version = "0.13", features = ["json"] }
+tokio = { version = "1", default-features = false, features = ["sync"] }
 
 # Win+Z snap overlay for custom maximize hover (Windows only).
 [target.'cfg(windows)'.dependencies]

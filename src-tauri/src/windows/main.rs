@@ -62,10 +62,10 @@ fn is_geometry_usable<R: Runtime>(app: &tauri::AppHandle<R>, geometry: &WindowGe
 		let scale = monitor.scale_factor();
 		let pos = monitor.position();
 		let size = monitor.size();
-		let mx = pos.x as f64 / scale as f64;
-		let my = pos.y as f64 / scale as f64;
-		let mw = size.width as f64 / scale as f64;
-		let mh = size.height as f64 / scale as f64;
+		let mx = pos.x as f64 / scale;
+		let my = pos.y as f64 / scale;
+		let mw = size.width as f64 / scale;
+		let mh = size.height as f64 / scale;
 		let intersects = geometry.x < mx + mw
 			&& geometry.x + geometry.width > mx
 			&& geometry.y < my + mh

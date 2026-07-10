@@ -5,6 +5,7 @@ import type {
 	AppSettingsDto,
 	AppSettingsUpdate,
 	ConfigurationExport,
+	ConnectionTestResult,
 	ImportConflictMode,
 	ImportPreview,
 	ImportResult,
@@ -12,6 +13,7 @@ import type {
 	ProviderInstanceDto,
 	ProviderInstanceWrite,
 	ProviderModelDto,
+	SyncModelsResult,
 	TranslationProfile,
 	TranslationProfileDto,
 	TranslationProfileWrite,
@@ -47,6 +49,14 @@ export async function setModelEnabled(id: string, enabled: boolean): Promise<Pro
 
 export async function deleteProviderModel(id: string): Promise<void> {
 	return invoke("delete_provider_model", { id });
+}
+
+export async function testProviderConnection(providerInstanceId: string): Promise<ConnectionTestResult> {
+	return invoke("test_provider_connection", { providerInstanceId });
+}
+
+export async function syncProviderModels(providerInstanceId: string): Promise<SyncModelsResult> {
+	return invoke("sync_provider_models", { providerInstanceId });
 }
 
 export async function listTranslationProfiles(): Promise<TranslationProfile[]> {

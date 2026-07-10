@@ -1,6 +1,7 @@
 dist
 node_modules
 src-tauri/target
+src-tauri/gen
 src/routeTree.gen.ts
 package-lock.json
 *.gen.ts

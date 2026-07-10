@@ -120,6 +120,7 @@ pub fn update_configuration(conn: &Connection, provider: &ProviderInstance) -> R
 }
 
 /// Update Provider configuration fields without touching `credential_ref` or sync metadata.
+#[allow(clippy::too_many_arguments)]
 pub fn update_configuration_keep_credential(
 	conn: &Connection,
 	id: Uuid,

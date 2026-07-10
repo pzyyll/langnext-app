@@ -7,6 +7,15 @@ export type ModelSource = "remote" | "manual" | "builtin";
 export type Availability = "available" | "missing" | "unknown";
 export type GlobalProxyMode = "system" | "custom";
 export type ImportConflictMode = "merge" | "copy";
+/** Bounded codes persisted on ProviderInstanceDto.modelsSyncErrorCode. */
+export type ModelsSyncErrorCode =
+	"auth" | "rate_limited" | "network" | "timeout" | "server" | "invalid_response" | "credential_unavailable";
+
+/**
+ * Codes returned by sync_provider_models IPC.
+ * Includes non-persisted race outcomes such as connection_changed (never stored on the provider row).
+ */
+export type SyncModelsResultCode = ModelsSyncErrorCode | "connection_changed";
 
 export type CredentialUpdate = { action: "keep" } | { action: "replace"; value: string } | { action: "clear" };
 
@@ -24,9 +33,35 @@ export interface ProviderInstanceDto {
 	insecureHttpConfirmedAt: string | null;
 	modelsSyncedAt: string | null;
 	modelsSyncStatus: ModelsSyncStatus;
-	modelsSyncErrorCode: string | null;
+	modelsSyncErrorCode: ModelsSyncErrorCode | null;
 	createdAt: string;
 	updatedAt: string;
+}
+
+export interface ConnectionTestResult {
+	ok: boolean;
+	/** Transport / credential failure only; never connection_changed. */
+	errorCode: ModelsSyncErrorCode | null;
+	message: string;
+	modelCount: number | null;
+	/**
+	 * Non-sensitive connection version from the provider row at resolve time
+	 * (`provider.updatedAt`). UI should only display results that still match
+	 * the currently selected provider's `updatedAt`.
+	 */
+	providerUpdatedAt: string;
+}
+
+export interface SyncModelsResult {
+	ok: boolean;
+	/**
+	 * Failure or race outcome for this request.
+	 * connection_changed is not a ModelsSyncErrorCode and is never persisted on the provider.
+	 */
+	errorCode: SyncModelsResultCode | null;
+	message: string;
+	models: ProviderModelDto[];
+	provider: ProviderInstanceDto;
 }
 
 export interface ProviderInstanceWrite {
@@ -292,6 +327,30 @@ const _ipcErrorFixture = {
 	message: "display_name must not be empty",
 } as const satisfies IpcError;
 
+const _connectionTestFixture = {
+	ok: true,
+	errorCode: null,
+	message: "Connection succeeded; 2 models available",
+	modelCount: 2,
+	providerUpdatedAt: "2026-07-10T00:00:00Z",
+} as const satisfies ConnectionTestResult;
+
+const _syncModelsFixture = {
+	ok: false,
+	errorCode: "network",
+	message: "Network request failed",
+	models: [_modelDtoFixture],
+	provider: _providerDtoFixture,
+} as const satisfies SyncModelsResult;
+
+const _syncModelsConnectionChangedFixture = {
+	ok: false,
+	errorCode: "connection_changed",
+	message: "Connection settings changed during sync; models were not updated. Sync again.",
+	models: [_modelDtoFixture],
+	provider: _providerDtoFixture,
+} as const satisfies SyncModelsResult;
+
 void _providerDtoFixture;
 void _settingsUpdateFixture;
 void _capabilityFixture;
@@ -300,3 +359,6 @@ void _profileWriteFixture;
 void _importPreviewFixture;
 void _importResultFixture;
 void _ipcErrorFixture;
+void _connectionTestFixture;
+void _syncModelsFixture;
+void _syncModelsConnectionChangedFixture;

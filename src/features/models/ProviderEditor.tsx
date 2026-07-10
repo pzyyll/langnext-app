@@ -1,11 +1,22 @@
 // ABOUTME: Selected provider editor for connection settings and model management.
 // ABOUTME: Coordinates local form state with real provider and model storage IPC.
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@base-ui/react/button";
 import { checkboxClassName, inputClassName, outlineButtonClassName, primaryButtonClassName } from "../../components/ui";
-import { listProviderModels, saveProviderInstance, setModelEnabled } from "../../storage/client";
+import {
+	listProviderModels,
+	saveProviderInstance,
+	setModelEnabled,
+	syncProviderModels,
+	testProviderConnection,
+} from "../../storage/client";
 import { getIpcErrorMessage } from "../../storage/errors";
-import type { CredentialUpdate, ProviderInstanceDto, ProviderModelDto } from "../../storage/types";
+import type {
+	ConnectionTestResult,
+	CredentialUpdate,
+	ProviderInstanceDto,
+	ProviderModelDto,
+} from "../../storage/types";
 import { getAdapterLabel, getDefaultBaseUrl } from "./adapterOptions";
 import { AddManualModelDialog } from "./AddManualModelDialog";
 import { useModelsContext } from "./ModelsContext";
@@ -38,6 +49,39 @@ function needsInsecureHttpAck(raw: string): boolean {
 function normalizeBaseUrl(value: string): string | null {
 	const trimmed = value.trim();
 	return trimmed ? trimmed : null;
+}
+
+function formatSyncTimestamp(iso: string | null): string | null {
+	if (!iso) {
+		return null;
+	}
+	const date = new Date(iso);
+	if (Number.isNaN(date.getTime())) {
+		return iso;
+	}
+	return date.toLocaleString();
+}
+
+function syncStatusLabel(provider: ProviderInstanceDto, syncPending: boolean): string {
+	if (syncPending) {
+		return "Syncing models…";
+	}
+	switch (provider.modelsSyncStatus) {
+		case "never":
+			return "Never synced";
+		case "ok": {
+			const at = formatSyncTimestamp(provider.modelsSyncedAt);
+			return at ? `Last successful sync: ${at}` : "Last sync succeeded";
+		}
+		case "error": {
+			const code = provider.modelsSyncErrorCode ? ` (${provider.modelsSyncErrorCode})` : "";
+			const at = formatSyncTimestamp(provider.modelsSyncedAt);
+			const lastOk = at ? ` Last successful sync: ${at}.` : "";
+			return `Sync error${code}.${lastOk}`;
+		}
+		default:
+			return "Sync status unknown";
+	}
 }
 
 export function ProviderEditor({ providerId }: ProviderEditorProps) {
@@ -111,7 +155,30 @@ function ProviderEditorLoaded({ provider, upsertProvider }: ProviderEditorLoaded
 	const [modelMutationError, setModelMutationError] = useState<string | null>(null);
 	const [addModelOpen, setAddModelOpen] = useState(false);
 
+	const [connectionTestPending, setConnectionTestPending] = useState(false);
+	const [connectionTestResult, setConnectionTestResult] = useState<ConnectionTestResult | null>(null);
+	const [connectionTestIpcError, setConnectionTestIpcError] = useState<string | null>(null);
+	/** Bumped on form edits / new tests so stale in-flight results are discarded. */
+	const connectionTestGeneration = useRef(0);
+	/** Latest provider.updatedAt for post-await version checks (avoid stale render closures). */
+	const providerUpdatedAtRef = useRef(provider.updatedAt);
+
+	useEffect(() => {
+		providerUpdatedAtRef.current = provider.updatedAt;
+	}, [provider.updatedAt]);
+
+	const [syncPending, setSyncPending] = useState(false);
+	const [syncMessage, setSyncMessage] = useState<string | null>(null);
+	const [syncOk, setSyncOk] = useState<boolean | null>(null);
+	const [syncIpcError, setSyncIpcError] = useState<string | null>(null);
+
 	const providerId = provider.id;
+
+	const clearConnectionTestResult = useCallback(() => {
+		connectionTestGeneration.current += 1;
+		setConnectionTestResult(null);
+		setConnectionTestIpcError(null);
+	}, []);
 
 	const reloadModels = useCallback(async (id: string) => {
 		setModelsError(null);
@@ -165,6 +232,16 @@ function ProviderEditorLoaded({ provider, upsertProvider }: ProviderEditorLoaded
 
 	const credentialRequiresReplace = provider.hasCredential && endpointChanged && credentialAction === "keep";
 
+	// Connection-relevant dirty state: unsaved Base URL or credential replace/clear.
+	const connectionDirty =
+		normalizedBaseUrl !== savedBaseUrl || credentialAction === "replace" || credentialAction === "clear";
+
+	// Disable connection form + Save while test/sync is in flight so mid-flight
+	// edits cannot race results (backend still re-checks connection identity on sync).
+	const connectionFormDisabled = savePending || syncPending || connectionTestPending;
+
+	const remoteActionsDisabled = connectionDirty || connectionTestPending || syncPending || savePending || modelsLoading;
+
 	const buildCredential = useCallback((): CredentialUpdate => {
 		if (provider.credentialKind === "none") {
 			return { action: "clear" };
@@ -209,7 +286,7 @@ function ProviderEditorLoaded({ provider, upsertProvider }: ProviderEditorLoaded
 	}
 
 	async function handleSave() {
-		if (!formValid || savePending) {
+		if (!formValid || savePending || syncPending) {
 			return;
 		}
 
@@ -246,10 +323,78 @@ function ProviderEditorLoaded({ provider, upsertProvider }: ProviderEditorLoaded
 			setBaseUrlOverride(saved.baseUrlOverride ?? "");
 			setEnabled(saved.enabled);
 			setSaveSuccess(true);
+			// Clear stale connection-test result after a successful save.
+			clearConnectionTestResult();
 		} catch (error: unknown) {
 			setSaveError(getIpcErrorMessage(error, "Failed to save channel."));
 		} finally {
 			setSavePending(false);
+		}
+	}
+
+	async function handleTestConnection() {
+		if (remoteActionsDisabled || connectionTestPending) {
+			return;
+		}
+		const generation = connectionTestGeneration.current + 1;
+		connectionTestGeneration.current = generation;
+		const testedProviderId = provider.id;
+		// Capture version at click time; backend also returns providerUpdatedAt for compare.
+		const testedUpdatedAt = provider.updatedAt;
+		setConnectionTestPending(true);
+		setConnectionTestResult(null);
+		setConnectionTestIpcError(null);
+		try {
+			const result = await testProviderConnection(testedProviderId);
+			// Discard if a newer test started, form was edited, selection changed, or
+			// the provider connection version no longer matches (save / remote refresh).
+			const versionStillCurrent =
+				result.providerUpdatedAt === testedUpdatedAt && providerUpdatedAtRef.current === testedUpdatedAt;
+			if (connectionTestGeneration.current !== generation || testedProviderId !== providerId || !versionStillCurrent) {
+				return;
+			}
+			setConnectionTestResult(result);
+		} catch (error: unknown) {
+			if (
+				connectionTestGeneration.current !== generation ||
+				testedProviderId !== providerId ||
+				providerUpdatedAtRef.current !== testedUpdatedAt
+			) {
+				return;
+			}
+			setConnectionTestIpcError(getIpcErrorMessage(error, "Failed to test connection."));
+		} finally {
+			if (connectionTestGeneration.current === generation) {
+				setConnectionTestPending(false);
+			}
+		}
+	}
+
+	async function handleSyncModels() {
+		if (remoteActionsDisabled || syncPending || modelsLoading) {
+			return;
+		}
+		setSyncPending(true);
+		setSyncMessage(null);
+		setSyncOk(null);
+		setSyncIpcError(null);
+		try {
+			const result = await syncProviderModels(provider.id);
+			// Always apply returned snapshot on successful IPC, regardless of result.ok.
+			setModels(result.models);
+			upsertProvider(result.provider);
+			setSyncMessage(result.message);
+			setSyncOk(result.ok);
+			// Clear a prior list-load error so the models table can reappear with the
+			// sync snapshot (including empty lists after a successful remote fetch).
+			setModelsError(null);
+			setModelsLoading(false);
+		} catch (error: unknown) {
+			// Preserve displayed models only when IPC itself fails.
+			setSyncIpcError(getIpcErrorMessage(error, "Failed to sync models."));
+			setSyncOk(false);
+		} finally {
+			setSyncPending(false);
 		}
 	}
 
@@ -298,6 +443,19 @@ function ProviderEditorLoaded({ provider, upsertProvider }: ProviderEditorLoaded
 				? "Token stored securely"
 				: "No token stored";
 
+	// Only show results that still match the current provider connection version.
+	const visibleConnectionTestResult =
+		connectionTestResult && connectionTestResult.providerUpdatedAt === provider.updatedAt ? connectionTestResult : null;
+
+	const connectionResultClass = visibleConnectionTestResult?.ok
+		? "text-sm text-accent"
+		: visibleConnectionTestResult
+			? "text-sm text-danger"
+			: "text-sm text-muted";
+
+	const syncResultClass =
+		syncOk === true ? "text-sm text-accent" : syncOk === false ? "text-sm text-danger" : "text-sm text-muted";
+
 	return (
 		<div className="flex min-h-0 min-w-0 flex-1 flex-col">
 			<div className="min-h-0 flex-1 overflow-y-auto p-8">
@@ -327,10 +485,11 @@ function ProviderEditorLoaded({ provider, upsertProvider }: ProviderEditorLoaded
 										setBaseUrlOverride(event.currentTarget.value);
 										setSaveSuccess(false);
 										setInsecureHttpAcknowledged(false);
+										clearConnectionTestResult();
 									}}
 									placeholder={defaultBaseUrl ?? "https://…"}
 									spellCheck={false}
-									disabled={savePending}
+									disabled={connectionFormDisabled}
 								/>
 								{defaultBaseUrl ? <p className="mt-1 text-xs text-muted">API Type default: {defaultBaseUrl}</p> : null}
 							</div>
@@ -348,6 +507,7 @@ function ProviderEditorLoaded({ provider, upsertProvider }: ProviderEditorLoaded
 										const value = event.currentTarget.value;
 										setToken(value);
 										setSaveSuccess(false);
+										clearConnectionTestResult();
 										if (credentialAction === "clear") {
 											return;
 										}
@@ -360,7 +520,7 @@ function ProviderEditorLoaded({ provider, upsertProvider }: ProviderEditorLoaded
 									placeholder={tokenPlaceholder}
 									spellCheck={false}
 									autoComplete="off"
-									disabled={savePending || tokenDisabled}
+									disabled={connectionFormDisabled || tokenDisabled}
 								/>
 								{provider.credentialKind !== "none" && provider.hasCredential ? (
 									<div className="mt-2 flex flex-wrap gap-2">
@@ -368,11 +528,12 @@ function ProviderEditorLoaded({ provider, upsertProvider }: ProviderEditorLoaded
 											<Button
 												type="button"
 												className={outlineButtonClassName}
-												disabled={savePending}
+												disabled={connectionFormDisabled}
 												onClick={() => {
 													setCredentialAction("clear");
 													setToken("");
 													setSaveSuccess(false);
+													clearConnectionTestResult();
 												}}
 											>
 												Remove stored token
@@ -381,11 +542,12 @@ function ProviderEditorLoaded({ provider, upsertProvider }: ProviderEditorLoaded
 											<Button
 												type="button"
 												className={outlineButtonClassName}
-												disabled={savePending}
+												disabled={connectionFormDisabled}
 												onClick={() => {
 													setCredentialAction("keep");
 													setToken("");
 													setSaveSuccess(false);
+													clearConnectionTestResult();
 												}}
 											>
 												Keep stored token
@@ -410,7 +572,7 @@ function ProviderEditorLoaded({ provider, upsertProvider }: ProviderEditorLoaded
 											setInsecureHttpAcknowledged(event.currentTarget.checked);
 											setSaveSuccess(false);
 										}}
-										disabled={savePending}
+										disabled={connectionFormDisabled}
 									/>
 									<span>I understand this non-loopback HTTP endpoint is insecure and confirm using it anyway.</span>
 								</label>
@@ -420,16 +582,46 @@ function ProviderEditorLoaded({ provider, upsertProvider }: ProviderEditorLoaded
 						<div className="flex w-full shrink-0 flex-col justify-start gap-4 lg:w-48 lg:pt-6">
 							<span
 								className="inline-flex"
-								title="Backend command not yet available"
-								aria-describedby="test-connection-help"
+								title={
+									connectionDirty
+										? "Save connection changes before testing or syncing models."
+										: connectionTestPending
+											? "Testing connection…"
+											: "Test the saved connection"
+								}
 							>
-								<Button type="button" className={outlineButtonClassName} disabled focusableWhenDisabled>
-									Test connection
+								<Button
+									type="button"
+									className={outlineButtonClassName}
+									disabled={remoteActionsDisabled}
+									focusableWhenDisabled
+									onClick={() => {
+										void handleTestConnection();
+									}}
+								>
+									{connectionTestPending ? "Testing…" : "Test connection"}
 								</Button>
 							</span>
-							<p id="test-connection-help" className="sr-only">
-								Backend command not yet available
-							</p>
+							{connectionDirty ? (
+								<p className="text-xs text-muted" id="connection-dirty-help">
+									Save connection changes before testing or syncing models.
+								</p>
+							) : null}
+							<div aria-live="polite" className="min-h-[1.25rem]">
+								{connectionTestIpcError ? (
+									<p className="text-sm text-danger" role="alert">
+										{connectionTestIpcError}
+									</p>
+								) : null}
+								{visibleConnectionTestResult && !connectionTestIpcError ? (
+									<p className={connectionResultClass}>
+										{visibleConnectionTestResult.message}
+										{!visibleConnectionTestResult.ok && visibleConnectionTestResult.errorCode
+											? ` [${visibleConnectionTestResult.errorCode}]`
+											: null}
+									</p>
+								) : null}
+							</div>
 							<div className="text-xs text-muted">
 								<p className="font-medium text-ink">{credentialStatusText}</p>
 								{credentialAction === "clear" ? <p className="mt-1">Token will be removed on save.</p> : null}
@@ -445,8 +637,9 @@ function ProviderEditorLoaded({ provider, upsertProvider }: ProviderEditorLoaded
 									onChange={(event) => {
 										setEnabled(event.currentTarget.checked);
 										setSaveSuccess(false);
+										clearConnectionTestResult();
 									}}
-									disabled={savePending}
+									disabled={connectionFormDisabled}
 								/>
 								Channel enabled
 							</label>
@@ -459,16 +652,33 @@ function ProviderEditorLoaded({ provider, upsertProvider }: ProviderEditorLoaded
 						<div>
 							<h3 className="text-xl font-bold text-ink">Models</h3>
 							<p className="text-sm text-muted">Models enabled for this channel.</p>
+							<p className="mt-1 text-xs text-muted" aria-live="polite">
+								{syncStatusLabel(provider, syncPending)}
+							</p>
 						</div>
 						<div className="flex flex-wrap items-center gap-3">
-							<span className="inline-flex" title="Backend command not yet available" aria-describedby="get-model-help">
-								<Button type="button" className={outlineButtonClassName} disabled focusableWhenDisabled>
-									Get model
+							<span
+								className="inline-flex"
+								title={
+									connectionDirty
+										? "Save connection changes before testing or syncing models."
+										: syncPending
+											? "Syncing models…"
+											: "Fetch remote models using the saved connection"
+								}
+							>
+								<Button
+									type="button"
+									className={outlineButtonClassName}
+									disabled={remoteActionsDisabled}
+									focusableWhenDisabled
+									onClick={() => {
+										void handleSyncModels();
+									}}
+								>
+									{syncPending ? "Syncing…" : "Get models"}
 								</Button>
 							</span>
-							<p id="get-model-help" className="sr-only">
-								Backend command not yet available
-							</p>
 							<Button
 								type="button"
 								className={outlineButtonClassName}
@@ -479,6 +689,15 @@ function ProviderEditorLoaded({ provider, upsertProvider }: ProviderEditorLoaded
 								+ Add model
 							</Button>
 						</div>
+					</div>
+
+					<div aria-live="polite" className="mb-4 min-h-[1.25rem]">
+						{syncIpcError ? (
+							<p className="text-sm text-danger" role="alert">
+								{syncIpcError}
+							</p>
+						) : null}
+						{syncMessage && !syncIpcError ? <p className={syncResultClass}>{syncMessage}</p> : null}
 					</div>
 
 					{modelsLoading ? (
@@ -531,19 +750,24 @@ function ProviderEditorLoaded({ provider, upsertProvider }: ProviderEditorLoaded
 						Saved.
 					</p>
 				) : null}
-				<Button type="button" className={outlineButtonClassName} disabled={savePending} onClick={resetConnectionForm}>
+				<Button
+					type="button"
+					className={outlineButtonClassName}
+					disabled={connectionFormDisabled}
+					onClick={resetConnectionForm}
+				>
 					Cancel
 				</Button>
 				<Button
 					type="button"
 					className={primaryButtonClassName}
-					disabled={savePending || !formValid}
+					disabled={connectionFormDisabled || !formValid}
 					focusableWhenDisabled
 					onClick={() => {
 						void handleSave();
 					}}
 				>
-					{savePending ? "Saving…" : "Save"}
+					{savePending ? "Saving…" : syncPending ? "Syncing…" : connectionTestPending ? "Testing…" : "Save"}
 				</Button>
 			</footer>
 

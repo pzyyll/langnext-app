@@ -1,34 +1,172 @@
-# Models Backend Closure Plan
+# Models Backend Closure Implementation Plan
 
-> Goal: close the loop on model features - Get models (remote sync), Test connection, Add model.
-> Branch: `feat/models-page`
-> Date: 2026-07-10
+**Goal:** Complete the model-management loop for testing saved provider connections and synchronizing remote model lists without exposing credentials or corrupting the local model cache.
 
-## 1. Goal and Scope
+**Inputs:** Existing models page implementation, provider/model storage services, credential vault, adapter catalog, and the review completed on 2026-07-10.
+
+**Assumptions:**
+
+- “Test connection” tests the provider configuration already saved in SQLite and the credential already stored in the native vault.
+- Connection-relevant form changes must be saved before Test connection or Get models can run.
+- OpenAI-compatible endpoints may legitimately use `credential_kind: none`, especially local endpoints.
+- Anthropic and Gemini default endpoints require a credential, although custom provider instances may still be created before a credential is configured.
+- A remote list is a complete snapshot only after every response page has been fetched successfully.
+
+**Architecture:** Add an async adapter transport behind a small injected interface, while keeping synchronous SQLite and native-vault work inside `tauri::async_runtime::spawn_blocking`. The transport owns adapter-specific authentication, endpoint construction, proxy selection, response parsing, and pagination. Expected remote failures return typed result DTOs so the frontend can refresh persisted sync status; storage and internal failures continue through `IpcError`.
+
+**Tech Stack:** Tauri 2, Rust, async reqwest 0.13, rusqlite, native keyring vault, React 19, TypeScript, Base UI.
+
+**Branch:** `feat/models-page`
+
+---
+
+## 1. Scope
 
 ### Already working
 
-- **Add model (manual)**: `AddManualModelDialog` -> `saveManualModel` IPC -> `ModelService::save_manual`. Closed loop.
+- **Add model (manual):** `AddManualModelDialog` -> `saveManualModel` IPC -> `ModelService::save_manual`.
+- Remote-cache merge and bounded sync-status persistence already exist in `ModelService::apply_remote_merge` and `ModelService::record_sync_error`.
 
-### In scope (this plan)
+### In scope
 
-- **Test connection**: backend HTTP call to the provider's models endpoint; returns ok/error without mutating model rows.
-- **Get models (sync)**: backend HTTP fetch of remote model list -> `ModelService::apply_remote_merge` (or `record_sync_error` on failure) -> return refreshed models + provider DTO.
-- Enable the two disabled frontend buttons and surface connection/sync status.
+- **Test connection:** call the saved provider’s model-list endpoint and return a typed success/failure result without mutating model rows or sync status.
+- **Get models:** fetch every remote model-list page, merge the complete snapshot, persist success/failure status, and return refreshed models plus provider state for both success and expected remote failure.
+- Honor provider `ProxyMode::Inherit` and `ProxyMode::Direct`.
+- Support unauthenticated OpenAI-compatible endpoints.
+- Enable the two frontend actions and render pending, success, failure, and last-sync state.
 
-### Out of scope (later)
+### Out of scope
 
-- Custom proxy URL support (`network.proxyUrl`). reqwest reads system env proxies by default; `proxy_mode: direct` should disable proxies. Full custom-proxy wiring is a follow-up.
-- Streaming / chat completions / actual translation. Only the models-list endpoint is used for both test and sync.
-- Editing `adapter_id` from the provider editor (creation-only remains).
+- Custom application proxy URL and proxy credentials from `network.proxyUrl`.
+- Streaming, chat completions, Responses calls, and translation execution.
+- Editing `adapter_id` or `credential_kind` from the existing provider editor.
+- Background or scheduled model synchronization.
 
-## 2. HTTP Client: async `reqwest`
+## 2. Prerequisite Tasks
 
-Rationale:
+These tasks must be completed before implementing the HTTP command flow.
 
-- Tauri `#[tauri::command] async fn` already runs on the tokio runtime. async reqwest is awaited directly - no `spawn_blocking` needed for HTTP. This is exactly the pattern used by the sibling project `F:\workspace\my\langnext-translate\src-tauri\src\module\translate.rs` (a lazy `reqwest::Client`, async commands, direct `.await`).
-- Existing storage commands use `run_blocking`/`spawn_blocking` only because rusqlite is synchronous. That constraint applies to DB access, **not** to HTTP.
-- Do **not** use `reqwest::blocking` - it panics inside a tokio-thread-pool thread ("cannot start a runtime from within a runtime"). The async client has no such issue.
+### Task P1: Lock Authentication Semantics
+
+**Outcome:** Credential absence is handled according to adapter behavior instead of being rejected globally.
+
+**Decisions:**
+
+- `openai-compatible` and `openai-responses`:
+  - `none`: send no authentication header.
+  - `api_key` or `bearer`: send `Authorization: Bearer <secret>`.
+- `anthropic`:
+  - Require a stored secret for the built-in endpoint.
+  - Send `x-api-key: <secret>` and `anthropic-version: 2023-06-01`.
+- `gemini`:
+  - Require a stored secret for the built-in endpoint.
+  - Send the secret through the `key` query parameter.
+- Missing required credentials map to `auth` without making a network request.
+- Native credential-store failures map to `credential_unavailable`, not `auth`.
+- The transport request carries `secret: Option<String>`.
+- Secrets and URLs containing query parameters are never logged.
+
+**Validation:**
+
+- An unauthenticated loopback OpenAI-compatible endpoint reaches the transport without an `Authorization` header.
+- Missing Anthropic/Gemini credentials return `auth`.
+- A failing vault returns `credential_unavailable` and never embeds the vault error or secret in IPC output.
+
+### Task P2: Lock Proxy Semantics
+
+**Outcome:** `ProxyMode::Direct` cannot silently use environment/system proxies.
+
+**Decisions:**
+
+- Use `std::sync::OnceLock`; do not add `lazy_static` or `once_cell`.
+- Build and reuse two reqwest clients:
+  - inherit client: default reqwest system-proxy behavior.
+  - direct client: `reqwest::Client::builder().no_proxy()`.
+- Configure a 20-second total request timeout on both clients.
+- Select the client from the saved provider’s `ProxyMode`.
+- Custom application proxy configuration remains out of scope.
+
+**Validation:**
+
+- Unit-test client selection as a pure mapping from `ProxyMode` to a client kind.
+- Review the direct-client builder and confirm `.no_proxy()` is present.
+
+### Task P3: Lock Failure Result Semantics
+
+**Outcome:** Expected remote failures update the visible provider status without being mislabeled as validation errors.
+
+**Decisions:**
+
+- Add `credential_unavailable` to the bounded model-sync error codes.
+- Expected connection/sync failures use result DTOs with `ok: false`.
+- Do not convert authentication, timeout, rate-limit, network, server, invalid-response, missing-credential, or vault-unavailable outcomes into `StorageError::Validation`.
+- Storage, serialization, task-join, and internal invariant failures continue to return `Err(StorageError)` and map through `IpcError`.
+- On sync failure, persist the bounded error code, re-read the provider and current models, and return them in `SyncModelsResult`.
+- Test connection never writes model rows or provider sync status.
+
+**Validation:**
+
+- A failed sync returns `ok: false` with `provider.modelsSyncStatus == "error"` in the same IPC response.
+- A failed sync preserves the existing model list and last successful `modelsSyncedAt`.
+- A transport failure never reaches the frontend as `validation_failed`.
+
+### Task P4: Lock Pagination and Snapshot Safety
+
+**Outcome:** `apply_remote_merge` is called only with a complete remote snapshot.
+
+**Decisions:**
+
+- OpenAI responses are treated as a single page.
+- Anthropic pagination follows `has_more` and continues with the returned last ID cursor.
+- Gemini pagination follows `nextPageToken`.
+- Accumulate and deduplicate models by `model_key` before merging.
+- Set a defensive maximum of 100 pages per sync.
+- A repeated cursor/token, missing continuation cursor while more pages are declared, or page-limit overflow returns `invalid_response`.
+- If any page fails, do not call `apply_remote_merge`; record the failure and keep all existing model rows unchanged.
+
+**Validation:**
+
+- Parser tests cover single-page and multi-page Anthropic/Gemini fixtures.
+- A second-page failure leaves existing model availability unchanged.
+- Duplicate model keys across pages produce one merged remote item.
+
+### Task P5: Lock Saved-Configuration UX
+
+**Outcome:** Users cannot accidentally test stale saved values while looking at unsaved Base URL or credential edits.
+
+**Decisions:**
+
+- Both actions operate on `providerId` and therefore use saved backend state.
+- Define connection-relevant dirty state as either:
+  - normalized Base URL differs from the saved value; or
+  - credential action is `replace` or `clear`.
+- Disable Test connection and Get models while connection-relevant changes are unsaved.
+- Show visible helper text: “Save connection changes before testing or syncing models.”
+- Saving successfully clears the dirty state and re-enables both actions.
+
+**Validation:**
+
+- Editing Base URL disables both actions.
+- Entering or clearing a token disables both actions.
+- Saving successfully re-enables both actions and subsequent calls use the saved provider ID.
+
+## 3. File Map
+
+- Modify: `src-tauri/Cargo.toml` — add async reqwest JSON support.
+- Modify: `src-tauri/src/adapters/mod.rs` — register the transport module.
+- Create: `src-tauri/src/adapters/transport.rs` — clients, request types, adapter authentication, endpoint construction, page parsing, pagination, and transport tests.
+- Modify: `src-tauri/src/domain/model.rs` — connection/sync result DTOs and any internal transport page/item types that belong to the model domain.
+- Modify: `src-tauri/src/services/models.rs` — vault/transport injection and async test/sync orchestration.
+- Modify: `src-tauri/src/services/tests.rs` — service success/failure, vault, unauthenticated endpoint, pagination-failure, and status tests.
+- Modify: `src-tauri/src/state.rs` — construct the real HTTP transport and inject vault plus transport into `ModelService`.
+- Modify: `src-tauri/src/cmds/models.rs` — add async IPC commands.
+- Modify: `src-tauri/src/lib.rs` — register both commands.
+- Modify: `src-tauri/src/error.rs` only if task-join/internal mapping needs a new stable error; remote failures must not add a generic HTTP variant to `StorageError`.
+- Modify: `src/storage/types.ts` — frontend DTO types and bounded sync-error type.
+- Modify: `src/storage/client.ts` — typed Tauri invoke wrappers.
+- Modify: `src/features/models/ProviderEditor.tsx` — action handlers, dirty-state guards, pending/result UI, and sync-status display.
+
+## 4. HTTP Dependency and Clients
 
 Add to `src-tauri/Cargo.toml`:
 
@@ -36,304 +174,651 @@ Add to `src-tauri/Cargo.toml`:
 reqwest = { version = "0.13", features = ["json"] }
 ```
 
-(Align version with the sibling project, currently `0.13.4`. Worker: verify the latest stable 0.13.x via `cargo add` or context7. TLS uses reqwest defaults, matching the sibling project; if a rustls build is preferred for portability, use `default-features = false, features = ["json", "rustls-tls"]`.)
+Use async reqwest directly from async Tauri commands. Do not enable or use `reqwest::blocking`.
 
-Share one `reqwest::Client` via a `lazy_static`/`once_cell` singleton (like the sibling project) to reuse connection pooling. Set a per-request timeout (e.g. 20s) via `.timeout(Duration::from_secs(20))` on the request builder so slow providers map to `Timeout` rather than hanging.
+In `src-tauri/src/adapters/transport.rs`, define two `OnceLock<reqwest::Client>` values or one `OnceLock<ClientSet>` containing both clients. Client construction must:
 
-## 3. Adapter Transport Layer
+- set a 20-second timeout;
+- retain default system-proxy behavior for inherit mode;
+- call `.no_proxy()` for direct mode;
+- return a sanitized internal error if a client cannot be built.
 
-New module: `src-tauri/src/adapters/transport.rs`
+## 5. Adapter Transport Layer
+
+`src-tauri/src/adapters/transport.rs` must start with:
 
 ```rust
-// ABOUTME: Async HTTP transport for provider model-list fetching.
-// ABOUTME: Maps network/HTTP failures to bounded sync error codes; never logs secrets.
-use crate::domain::model::RemoteModelSyncItem;
-use crate::domain::provider::CredentialKind;
-
-/// Bounded error code matching ModelsSyncStatus error codes.
-pub enum TransportError {
-    Auth,            // 401 / 403
-    RateLimited,     // 429
-    Network,         // connection / DNS / TLS failure
-    Timeout,         // request timeout
-    Server,          // 5xx
-    InvalidResponse, // JSON parse / schema mismatch
-}
-
-impl TransportError {
-    pub fn code(&self) -> &'static str {
-        match self {
-            Self::Auth => "auth",
-            Self::RateLimited => "rate_limited",
-            Self::Network => "network",
-            Self::Timeout => "timeout",
-            Self::Server => "server",
-            Self::InvalidResponse => "invalid_response",
-        }
-    }
-    pub fn message(&self) -> &'static str { /* human text */ }
-}
-
-/// Fetch the remote model list for a provider configuration.
-/// `base_url` is the resolved endpoint (override or adapter default).
-/// `secret` is the credential read from the vault (backend use only).
-pub async fn list_models(
-    adapter_id: &str,
-    base_url: &str,
-    credential_kind: CredentialKind,
-    secret: &str,
-) -> Result<Vec<RemoteModelSyncItem>, TransportError> { ... }
+// ABOUTME: Async HTTP transport for complete provider model-list synchronization.
+// ABOUTME: Applies authentication, proxy, pagination, and bounded secret-free errors.
 ```
 
-Register in `src-tauri/src/adapters/mod.rs`: `pub mod transport;`.
+### Public transport contract
 
-### Adapter API details (worker: verify current API via context7/web before finalizing)
+Define owned request data so the async future does not borrow form or vault state:
 
-Resolve base URL: `provider.baseUrlOverride.unwrap_or(catalog::get(adapter_id).default_base_url)`.
+```rust
+pub struct ModelListRequest {
+    pub adapter_id: String,
+    pub base_url: String,
+    pub credential_kind: CredentialKind,
+    pub secret: Option<String>,
+    pub proxy_mode: ProxyMode,
+}
 
-| adapter_id          | Endpoint                                                                | Auth                                                   | Response shape                                                                  | model_key                       | remote_display_name                     |
-| ------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------- | ------------------------------- | --------------------------------------- |
-| `openai-compatible` | `GET {base}/models`                                                     | `Authorization: Bearer {secret}`                       | `{ data: [{ id, ... }] }`                                                       | `id`                            | `None` (OpenAI returns no display name) |
-| `openai-responses`  | same as openai-compatible (Responses API shares the `/models` endpoint) | same                                                   | same                                                                            | `id`                            | `None`                                  |
-| `anthropic`         | `GET {base}/v1/models`                                                  | `x-api-key: {secret}`, `anthropic-version: 2023-06-01` | `{ data: [{ id, display_name, type }] }`                                        | `id`                            | `display_name`                          |
-| `gemini`            | `GET {base}/v1beta/models?key={secret}`                                 | query param (no header)                                | `{ models: [{ name: "models/xxx", displayName, supportedGenerationMethods }] }` | `name` (strip `models/` prefix) | `displayName`                           |
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransportError {
+    Auth,
+    RateLimited,
+    Network,
+    Timeout,
+    Server,
+    InvalidResponse,
+}
+```
 
-Notes:
+`TransportError::code()` returns exactly:
 
-- For `credential_kind: none`, callers must reject before reaching transport (service layer guard).
-- `bearer` and `api_key` both map to `Authorization: Bearer` for OpenAI adapters; Anthropic always uses `x-api-key`; Gemini always uses the `key` query param regardless of credential_kind.
-- Status-code mapping: 401/403 -> Auth; 429 -> RateLimited; 5xx -> Server; reqwest `is_timeout` -> Timeout; other send/decode errors -> Network or InvalidResponse.
-- Do not log the secret or the full URL with query. On error, log only `adapter_id` + `TransportError::code()`.
-- Split parsing from HTTP: expose a pure `fn parse_models(adapter_id, body: &serde_json::Value) -> Result<Vec<RemoteModelSyncItem>, TransportError>` so tests cover parsing without network.
+- `auth`
+- `rate_limited`
+- `network`
+- `timeout`
+- `server`
+- `invalid_response`
 
-## 4. Error -> Status Mapping
+`credential_unavailable` is a service-level sync code produced only when the native vault cannot supply a credential; it is not a transport error.
 
-`TransportError::code()` returns one of the six codes already validated by `services::models::validate_sync_error_code` (`auth`/`rate_limited`/`network`/`timeout`/`server`/`invalid_response`). No new error codes needed.
+Implement `Display` with bounded human-readable text and implement `std::error::Error`. Messages must not contain response bodies, secrets, query strings, SQL, or raw vault errors.
 
-`StorageError` gains no HTTP variant; transport errors are handled in the service layer and converted to either a `ConnectionTestResult` (test) or a `record_sync_error` call (sync).
+### Injectable transport interface
 
-## 5. ModelService Changes
+Define a small interface without adding `async-trait`:
 
-Inject the vault into `ModelService` so it can read credentials for backend HTTP use. The two new methods are **async** (they await HTTP); DB access inside them is wrapped with `tauri::async_runtime::spawn_blocking` to keep the existing "DB never blocks the tokio worker" discipline.
+```rust
+pub trait ModelTransport: Send + Sync {
+    fn list_models(
+        &self,
+        request: ModelListRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<RemoteModelSyncItem>, TransportError>> + Send + '_>>;
+}
 
-`src-tauri/src/services/models.rs`:
+#[derive(Default)]
+pub struct HttpModelTransport;
+```
+
+`HttpModelTransport` always uses real reqwest clients. Tests inject a test-only implementation from `services::tests`; there is no production mock mode or runtime mock switch.
+
+### Endpoint construction
+
+Parse the configured base URL with `url::Url`. Construct endpoints without string concatenation and without dropping an existing base path:
+
+- OpenAI adapters: append `models` to bases such as `https://api.openai.com/v1` or `http://localhost:11434/v1`.
+- Anthropic: append `v1/models` to `https://api.anthropic.com`.
+- Gemini: append `v1beta/models` to `https://generativelanguage.googleapis.com`.
+
+Normalize the base URL to a trailing slash before using `Url::join`. Reject URLs that cannot produce the expected endpoint as `invalid_response`. Do not log Gemini URLs after adding the `key` query parameter.
+
+### Response parsing
+
+Use adapter-specific page structs or pure `serde_json::Value` parsers:
+
+- OpenAI: `{ data: [{ id }] }`.
+- Anthropic: `{ data: [{ id, display_name }], has_more, first_id, last_id }`.
+- Gemini: `{ models: [{ name, displayName, supportedGenerationMethods }], nextPageToken }`.
+
+Strip the `models/` prefix from Gemini names. Reject blank IDs and IDs over the existing model-key limit before merge. Preserve bounded useful metadata only; never preserve credentials, headers, or complete raw responses.
+
+Expose pure page-parsing helpers so fixtures can verify item extraction and continuation values without network access.
+
+### HTTP error mapping
+
+- 401/403 -> `Auth`
+- 429 -> `RateLimited`
+- 5xx -> `Server`
+- reqwest timeout -> `Timeout`
+- connection/DNS/TLS/send failure -> `Network`
+- URL, JSON, schema, cursor, page-limit, and invalid-item failures -> `InvalidResponse`
+
+On error, logs may include only `adapter_id` and the bounded error code.
+
+## 6. ModelService Changes
+
+Update `ModelService`:
 
 ```rust
 #[derive(Clone)]
 pub struct ModelService {
     db: Database,
     vault: Arc<dyn CredentialVault>,
-}
-
-impl ModelService {
-    pub fn new(db: Database, vault: Arc<dyn CredentialVault>) -> Self { Self { db, vault } }
-    // existing sync methods (list_by_provider, save_manual, set_enabled, delete,
-    // apply_remote_merge, record_sync_error) unchanged...
+    transport: Arc<dyn ModelTransport>,
 }
 ```
 
-New async methods:
+Constructor:
 
 ```rust
-/// Test reachability + credential validity without mutating model rows or sync status.
-pub async fn test_connection(&self, provider_id: Uuid) -> Result<ConnectionTestResult, StorageError>;
-
-/// Fetch remote models, merge into cache, update sync status, return refreshed models + provider.
-pub async fn sync_models(&self, provider_id: Uuid) -> Result<SyncModelsResult, StorageError>;
+pub fn new(
+    db: Database,
+    vault: Arc<dyn CredentialVault>,
+    transport: Arc<dyn ModelTransport>,
+) -> Self
 ```
 
-### Shared credential resolution (sync helper, runs inside spawn_blocking)
+Existing synchronous CRUD and merge methods remain synchronous.
+
+### Saved provider resolution
+
+Create an internal resolved request builder that runs inside `spawn_blocking` and distinguishes:
+
+- provider/storage failure;
+- missing required credential;
+- credential-store unavailable/access failure;
+- ready transport request, including `ProxyMode` and optional secret.
+
+Resolve base URL from `provider.base_url_override` or `adapters::catalog::get(adapter_id).default_base_url`. A missing default and missing override is a validation/configuration failure before transport.
+
+### `test_connection`
+
+Signature:
 
 ```rust
-struct ResolvedProvider {
-    provider: ProviderInstance,
-    base_url: String,
-    secret: Option<String>, // None when kind=none or no ref
-}
-fn resolve_for_http(&self, provider_id: Uuid) -> Result<ResolvedProvider, StorageError>;
+pub async fn test_connection(
+    &self,
+    provider_id: Uuid,
+) -> Result<ConnectionTestResult, StorageError>
 ```
 
-- Read provider via `self.db.read`; NotFound -> `StorageError::NotFound`.
-- Resolve base URL (override or catalog default).
-- If `credential_kind == None` or `credential_ref == None` -> `secret: None`.
-- Else `vault.get_for_backend_use(ref)`; on vault error surface as a failed-test/sync outcome (see below), not a hard `CredentialUnavailable` IPC error.
+Flow:
 
-### `test_connection` flow (async)
+1. Resolve the saved provider and vault secret inside `spawn_blocking`.
+2. Missing required secret -> `ok: false`, code `auth`.
+3. Vault unavailable/access failure -> `ok: false`, code `credential_unavailable`.
+4. Ready request -> await `transport.list_models`.
+5. Complete list fetched -> `ok: true`, message includes the model count.
+6. Transport failure -> `ok: false` with bounded code/message.
+7. Never mutate model rows or provider sync status.
 
-1. `spawn_blocking` -> `resolve_for_http(provider_id)`.
-2. If `secret` is None -> return `ConnectionTestResult { ok: false, error_code: None, message: "No credential configured" }`.
-3. If vault read failed -> `ConnectionTestResult { ok: false, error_code: Some("auth"), message: "Credential store unavailable" }`.
-4. `transport::list_models(adapter_id, base_url, kind, secret).await`.
-5. Ok -> `ConnectionTestResult { ok: true, error_code: None, message: "Connected" }` (optionally include model count).
-6. Err -> `{ ok: false, error_code: Some(code), message }`.
-7. Do not write to DB.
+### `sync_models`
 
-### `sync_models` flow (async)
-
-1. `spawn_blocking` -> `resolve_for_http(provider_id)`.
-2. If `secret` is None -> `spawn_blocking` -> `record_sync_error(provider_id, "auth")`; return `Err(StorageError::Validation("no credential configured"))`.
-3. `transport::list_models(...).await`.
-4. On Ok -> `spawn_blocking` -> `apply_remote_merge(provider_id, &models)`; re-read provider + models; return `SyncModelsResult { models, provider }`.
-5. On Err -> `spawn_blocking` -> `record_sync_error(provider_id, code)`; return `Err(StorageError::Validation(message))` so the frontend shows the failure inline, while sync_status is persisted as Error.
-
-### Test seam for HTTP
-
-The transport call is the only thing that hits the network. To keep production free of mock modes (AGENTS.md), inject the transport through a `#[cfg(test)]`-only override on `ModelService`:
+Signature:
 
 ```rust
-#[cfg(test)]
-type TransportFn = fn(&str, &str, CredentialKind, &str)
-    -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<RemoteModelSyncItem>, TransportError>> + Send>>;
-
-#[cfg(test)]
-pub fn set_transport_override(&self, f: Option<TransportFn>);
+pub async fn sync_models(
+    &self,
+    provider_id: Uuid,
+) -> Result<SyncModelsResult, StorageError>
 ```
 
-Production path always calls the real `transport::list_models`; tests set an override that returns canned futures. Keep the override field behind `#[cfg(test)]`.
+Flow:
 
-## 6. Domain Types
+1. Resolve the saved provider and vault secret inside `spawn_blocking`.
+2. Missing required secret -> record `auth` and return a refreshed failure result.
+3. Vault unavailable/access failure -> record `credential_unavailable` and return a refreshed failure result.
+4. Ready request -> await the complete paginated transport result.
+5. Success -> call `apply_remote_merge` inside `spawn_blocking`, then re-read models and provider.
+6. Expected transport failure -> call `record_sync_error` inside `spawn_blocking`, then re-read unchanged models and updated provider.
+7. Return `Ok(SyncModelsResult)` for both remote success and expected remote failure.
+8. Return `Err(StorageError)` only when provider/storage/serialization/task execution prevents producing a trustworthy result.
 
-`src-tauri/src/domain/model.rs` (or a new `domain/runtime.rs`):
+Add a private helper that reads the current model DTOs and provider DTO after success/failure so both paths return a consistent snapshot.
+
+## 7. Domain and Frontend Types
+
+### Rust DTOs
+
+Add to `src-tauri/src/domain/model.rs`:
 
 ```rust
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConnectionTestResult {
     pub ok: bool,
+    /// Bounded transport/credential code; never `connection_changed`.
     pub error_code: Option<String>,
     pub message: String,
+    pub model_count: Option<usize>,
+    /// Non-sensitive connection version (`provider.updated_at` at resolve).
+    /// Frontend discards results that no longer match the current provider version.
+    pub provider_updated_at: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncModelsResult {
+    pub ok: bool,
+    /// Persisted models-sync error code, or the non-persisted race outcome
+    /// `connection_changed`. Only bounded persisted codes are written to SQLite;
+    /// `connection_changed` is never stored on the provider row.
+    pub error_code: Option<String>,
+    pub message: String,
     pub models: Vec<ProviderModelDto>,
     pub provider: ProviderInstanceDto,
 }
 ```
 
-## 7. AppState Change
+Extend `validate_sync_error_code` to accept `credential_unavailable`. Do **not** accept `connection_changed` for persistence.
 
-`src-tauri/src/state.rs`:
+### TypeScript types
 
-```rust
-let models = ModelService::new(db.clone(), vault.clone());
+Add to `src/storage/types.ts`:
+
+```ts
+export type ModelsSyncErrorCode =
+	"auth" | "rate_limited" | "network" | "timeout" | "server" | "invalid_response" | "credential_unavailable";
+
+/** IPC sync result codes; includes non-persisted `connection_changed`. */
+export type SyncModelsResultCode = ModelsSyncErrorCode | "connection_changed";
+
+export interface ConnectionTestResult {
+	ok: boolean;
+	/** Transport / credential failure only; never connection_changed. */
+	errorCode: ModelsSyncErrorCode | null;
+	message: string;
+	modelCount: number | null;
+	/**
+	 * Non-sensitive connection version from the provider row at resolve time
+	 * (`provider.updatedAt`). UI should only display results that still match
+	 * the currently selected provider's `updatedAt`.
+	 */
+	providerUpdatedAt: string;
+}
+
+export interface SyncModelsResult {
+	ok: boolean;
+	/**
+	 * Failure or race outcome for this request.
+	 * connection_changed is not a ModelsSyncErrorCode and is never persisted on the provider.
+	 */
+	errorCode: SyncModelsResultCode | null;
+	message: string;
+	models: ProviderModelDto[];
+	provider: ProviderInstanceDto;
+}
 ```
 
-(was `ModelService::new(db.clone())`.)
+Use the project formatter for final indentation.
 
-Update any test fixtures that construct `ModelService::new(db)` to pass a vault (`MemoryCredentialVault`).
+## 8. AppState and Test Construction
 
-## 8. IPC Commands
+In `src-tauri/src/state.rs`:
 
-`src-tauri/src/cmds/models.rs` - the two new commands are async and await the service directly (no `run_blocking`, because the service method is async and already keeps DB work off the tokio thread):
+```rust
+let transport: Arc<dyn ModelTransport> = Arc::new(HttpModelTransport);
+let models = ModelService::new(db.clone(), vault.clone(), transport);
+```
+
+Update every `ModelService::new` call in service tests. Test setup receives an `Arc<TestModelTransport>` whose queued results are protected by a mutex so each test controls its own responses without global state or cross-test interference.
+
+## 9. IPC Commands
+
+Add to `src-tauri/src/cmds/models.rs`:
 
 ```rust
 #[tauri::command]
 pub async fn test_provider_connection(
     state: State<'_, AppState>,
     provider_instance_id: Uuid,
-) -> Result<ConnectionTestResult, IpcError> {
-    let models = state.models.clone();
-    models.test_connection(provider_instance_id).await.map_err(IpcError::from)
-}
+) -> Result<ConnectionTestResult, IpcError>
 
 #[tauri::command]
 pub async fn sync_provider_models(
     state: State<'_, AppState>,
     provider_instance_id: Uuid,
-) -> Result<SyncModelsResult, IpcError> {
-    let models = state.models.clone();
-    models.sync_models(provider_instance_id).await.map_err(IpcError::from)
-}
+) -> Result<SyncModelsResult, IpcError>
 ```
 
-Register both in `src-tauri/src/lib.rs` `invoke_handler!`.
+Clone `state.models` before awaiting. The service already moves SQLite and vault work off the async worker, so commands must not wrap the complete service future in `run_blocking`.
 
-## 9. Frontend Changes
+Register both commands in `src-tauri/src/lib.rs`.
 
-### `src/storage/types.ts`
+## 10. Frontend Client and ProviderEditor
 
-Add:
+### Client wrappers
+
+Add to `src/storage/client.ts`:
 
 ```ts
-export interface ConnectionTestResult {
-	ok: boolean;
-	errorCode: string | null;
-	message: string;
-}
-export interface SyncModelsResult {
-	models: ProviderModelDto[];
-	provider: ProviderInstanceDto;
-}
+export async function testProviderConnection(providerInstanceId: string): Promise<ConnectionTestResult>;
+
+export async function syncProviderModels(providerInstanceId: string): Promise<SyncModelsResult>;
 ```
 
-### `src/storage/client.ts`
+Invoke names:
 
-```ts
-export async function testProviderConnection(providerInstanceId: string): Promise<ConnectionTestResult> {
-	return invoke("test_provider_connection", { providerInstanceId });
-}
-export async function syncProviderModels(providerInstanceId: string): Promise<SyncModelsResult> {
-	return invoke("sync_provider_models", { providerInstanceId });
-}
-```
+- `test_provider_connection`
+- `sync_provider_models`
 
-(Confirm the exact camelCase invoke arg name Tauri expects - `providerInstanceId` maps to the `provider_instance_id` param.)
+Use `{ providerInstanceId }`; Tauri maps this to `provider_instance_id`.
 
-### `src/features/models/ProviderEditor.tsx`
+### ProviderEditor state
 
-- **Test connection**: remove `disabled`; on click call `testProviderConnection(providerId)`; show pending state; render result - green "Connected" when `ok`, red message + code when not. Keep the result in local state; clear on provider change.
-- **Get model**: remove `disabled`; on click call `syncProviderModels(providerId)`; on success `setModels(result.models)` + `upsertProvider(result.provider)`; on failure show the error inline and keep existing models.
-- Show `provider.modelsSyncStatus` / `modelsSyncedAt` / `modelsSyncErrorCode` somewhere in the Models section header (e.g. a small status line: "Last synced …" / "Sync error: auth").
-- Remove the `title="Backend command not yet available"` and the sr-only help spans for these two buttons.
+Add separate state for:
 
-## 10. Tests
+- connection-test pending and result;
+- model-sync pending and result message;
+- existing model-loading and model-mutation state.
 
-### Rust
+Prevent duplicate calls while the corresponding action is pending. Disable both remote actions while connection-relevant changes are unsaved. Clear the connection-test result after a successful save or provider remount.
 
-- `adapters::transport::tests`: unit-test `parse_models` with fixture JSON for each adapter (OpenAI, Anthropic, Gemini shapes). Pure function, no network.
-- `services::models::tests` (or `services::tests`): test `test_connection` and `sync_models` using `MemoryCredentialVault` + the `#[cfg(test)]` transport override returning canned futures.
-  - test_connection: missing credential -> ok:false; transport Ok -> ok:true; transport Auth -> ok:false code:auth.
-  - sync_models: transport Ok -> models merged + provider.syncStatus=Ok; transport Err -> record_sync_error called + provider.syncStatus=Error.
-- `cmds` mapping: covered by the existing `map_blocking_result` pattern; the new async commands are thin wrappers.
+### Test connection behavior
 
-### Frontend
+- Call `testProviderConnection(provider.id)`.
+- Render the returned message in an `aria-live` region.
+- Success uses the project success color and includes model count when present.
+- Expected failure uses danger styling and includes the bounded code.
+- Unexpected IPC failure uses `getIpcErrorMessage`.
 
-- No new tests required, but ensure `typecheck`/`lint`/`build` pass.
+### Get models behavior
 
-## 11. Ordered Implementation Steps
+- Call `syncProviderModels(provider.id)`.
+- For every successful IPC response, regardless of `result.ok`:
+  - `setModels(result.models)`;
+  - `upsertProvider(result.provider)`;
+  - render `result.message` as success or failure.
+- Preserve the displayed model list only when the IPC call itself fails before a trustworthy result is returned.
+- Disable Get models while initial models are loading or another sync is pending.
 
-1. Add `reqwest` dependency to `src-tauri/Cargo.toml`; verify it compiles.
-2. Create `adapters/transport.rs` with `TransportError`, `parse_models` (pure), and `async fn list_models`. Register in `adapters/mod.rs`.
-3. Add `ConnectionTestResult` / `SyncModelsResult` domain types.
-4. Inject vault into `ModelService`; update `AppState` and test fixtures.
-5. Implement async `ModelService::test_connection` and `sync_models` (with the `#[cfg(test)]` transport seam).
-6. Add `test_provider_connection` / `sync_provider_models` async commands; register in `lib.rs`.
-7. Add Rust tests (transport parsers + service flows with stubbed transport); run `cargo test`.
-8. Add frontend types + client wrappers.
-9. Update `ProviderEditor` to enable both buttons, call the new IPC, and render connection/sync status.
-10. Regenerate `routeTree.gen.ts` only if routes changed (likely none) - otherwise skip.
-11. Run full validation.
+### Sync status display
 
-## 12. Validation
+Show near the Models heading:
 
-Backend:
+- never synced;
+- last successful sync timestamp;
+- latest persisted error code when status is error;
+- current sync pending state.
 
-1. `cargo test` (in `src-tauri`) - all tests pass, including new transport + service tests.
-2. `cargo fmt` (via `mise run format`) and `cargo clippy` if configured.
-3. `cargo build` (or `mise run tauri:build`) to confirm the Tauri binary compiles.
+Remove the “Backend command not yet available” wrappers and sr-only placeholders. Keep accessible names and live regions for the real result messages.
 
-Frontend: 4. `mise run typecheck` 5. `mise run lint` 6. `mise run format` + `mise run format:check` 7. `mise run build`
+## 11. Tests
 
-Manual (Tauri, if GUI available): 8. `mise run tauri:dev` -> create a provider with a real OpenAI/Anthropic/Gemini token -> Test connection shows Connected -> Get model pulls the remote list -> toggling models persists -> restart shows synced models.
+### Transport unit tests
 
-## 13. Risks / Follow-ups
+In `src-tauri/src/adapters/transport.rs`:
 
-- **reqwest version**: align with sibling project (`0.13.x`); worker verifies latest stable. Do not use `reqwest::blocking`.
-- **DB access in async service**: wrapped in `spawn_blocking` so rusqlite never blocks the tokio worker. HTTP is awaited directly.
-- **Transport seam for tests**: `#[cfg(test)]`-only override; production always calls the real `transport::list_models` (AGENTS.md: "Do not implement mock modes").
-- **Adapter API drift**: OpenAI/Anthropic/Gemini list-models endpoints may change; worker verifies current API via context7/web before finalizing parsers.
-- **Proxy**: not wired to `network.proxyUrl`; reqwest honors system env proxies by default. Follow-up task.
-- **Rate limiting / large model lists**: no pagination handling; if a provider returns paginated models, only the first page is synced. Follow-up.
-- **Credential-unavailable during test/sync**: surfaced as a failed result rather than a hard `CredentialUnavailable` IPC error, so the UI shows a helpful message.
+- OpenAI item parsing.
+- OpenAI blank/missing ID rejection.
+- Anthropic item/display-name parsing.
+- Anthropic continuation using `last_id` when `has_more` is true.
+- Anthropic field semantics: missing/null/wrong-type `has_more` → `invalid_response`; empty `data` with `has_more=false` OK; `has_more=true` requires non-empty string `last_id` (missing/null/`""`/wrong type invalid); wrong-type `first_id`/`last_id` invalid even when unused.
+- Anthropic missing/repeated cursor rejection.
+- Gemini `models/` prefix stripping and display-name parsing.
+- Gemini `nextPageToken` continuation and repeated-token rejection.
+- Deduplication across pages.
+- 100-page defensive limit.
+- **Streaming body cap:** Content-Length oversize early reject; **chunked / no Content-Length** oversize production path aborts mid-stream at 2 MiB (server observes early disconnect / partial send, not full-buffer-then-check); small chunked body succeeds.
+- Proxy client selection for inherit/direct.
+- Authentication header/query construction without including secrets in formatted errors.
+- Base URLs with and without trailing slash, including a custom `/v1` path.
+
+### Service tests
+
+In `src-tauri/src/services/tests.rs`:
+
+- Test connection with unauthenticated OpenAI-compatible provider -> success, includes `providerUpdatedAt`.
+- Test connection with missing required credential -> `ok: false`, `auth`, includes `providerUpdatedAt`.
+- Test connection with failing vault -> `ok: false`, `credential_unavailable`.
+- Test connection with transport auth/timeout failure -> matching bounded code and no DB mutation.
+- Sync success -> models merged and returned provider status is `Ok`.
+- Sync transport failure -> model rows unchanged, status `Error`, previous success timestamp preserved.
+- Sync second-page failure -> no partial merge.
+- Sync missing credential -> returned provider status is `Error` with `auth`.
+- Sync failing vault -> returned provider status is `Error` with `credential_unavailable`.
+- Test transport receives the saved `ProxyMode` and optional secret state.
+- **connection_changed:** mid-flight identity change aborts merge/error write; race code not persisted.
+- **Connection identity reset on Save:** base URL / proxy / credential replace reset `models_sync_status` to `Never` and clear `synced_at`/`error_code` in the save transaction; display-name-only preserves status; vault set failure before SQLite leaves prior status intact.
+- **Per-provider serialization:** start two syncs; confirm the second is queued (still concurrency 1) before saving a connection change; release the first; assert the second re-resolves the new identity under the lock (not single-flight / shared Future).
+- **clear_credential / none Save vs sync:** final clear transaction re-reads latest provider (preserve sync fields when identity unchanged; reset Never/None when changed). credentialKind none ordinary Keep Save after a committed sync preserves status when identity is unchanged and resets when it changes.
+
+### Frontend validation
+
+No React component-test framework is currently established for this feature. Record these manual checks in the implementation result instead of claiming typecheck covers behavior:
+
+- dirty Base URL/token disables both actions and shows helper text;
+- pending actions cannot be submitted twice;
+- connection success/failure is announced;
+- sync failure updates provider status without page reload;
+- sync success refreshes model rows;
+- changing provider clears transient results through keyed remount.
+
+Run the existing frontend behavioral test task as part of regression validation.
+
+## 12. Ordered Implementation Tasks
+
+### Task 1: Add HTTP dependency and client policy
+
+**Outcome:** Async reqwest compiles and inherit/direct clients have explicit behavior.
+
+**Files:**
+
+- Modify: `src-tauri/Cargo.toml`
+- Create: `src-tauri/src/adapters/transport.rs`
+- Modify: `src-tauri/src/adapters/mod.rs`
+
+**Steps:**
+
+- Add reqwest 0.13 with JSON support.
+- Add `OnceLock` client construction and explicit direct `.no_proxy()` behavior.
+- Add proxy-selection tests.
+
+**Validation:**
+
+- Run: `cargo test adapters::transport` from `src-tauri`.
+- Expected: client-policy tests pass and the crate compiles without blocking reqwest.
+
+### Task 2: Implement complete adapter transport
+
+**Outcome:** Every supported adapter returns a complete, deduplicated model snapshot or a bounded error.
+
+**Files:**
+
+- Modify: `src-tauri/src/adapters/transport.rs`
+
+**Steps:**
+
+- Implement URL construction and adapter authentication.
+- Implement pure page parsers.
+- Implement Anthropic and Gemini pagination guards.
+- Implement HTTP/status/error mapping and secret-safe diagnostics.
+- Add all parser, URL, pagination, and authentication tests from Section 11.
+
+**Validation:**
+
+- Run: `cargo test adapters::transport` from `src-tauri`.
+- Expected: all adapter fixtures, pagination cases, URL cases, and error mappings pass.
+
+### Task 3: Add result DTOs and bounded status code
+
+**Outcome:** Backend and frontend can represent expected failure without IPC rejection.
+
+**Files:**
+
+- Modify: `src-tauri/src/domain/model.rs`
+- Modify: `src-tauri/src/services/models.rs`
+- Modify: `src/storage/types.ts`
+
+**Steps:**
+
+- Add Rust result DTOs.
+- Extend sync-error validation with `credential_unavailable`.
+- Add matching TypeScript types and narrow `ProviderInstanceDto.modelsSyncErrorCode` from `string | null` to `ModelsSyncErrorCode | null`.
+
+**Validation:**
+
+- Run: `mise run typecheck`.
+- Run: `cargo test validate_sync_error_code` from `src-tauri` if a focused test is added; otherwise run the service test module.
+- Expected: Rust and TypeScript agree on serialized camelCase fields and bounded codes.
+
+### Task 4: Inject vault and transport into ModelService
+
+**Outcome:** ModelService can resolve saved credentials and use a per-test transport without global overrides.
+
+**Files:**
+
+- Modify: `src-tauri/src/services/models.rs`
+- Modify: `src-tauri/src/state.rs`
+- Modify: `src-tauri/src/services/tests.rs`
+
+**Steps:**
+
+- Add vault and transport fields/constructor arguments.
+- Build `HttpModelTransport` in AppState.
+- Add per-test queued transport implementation.
+- Update every ModelService test fixture.
+
+**Validation:**
+
+- Run: `cargo test services` from `src-tauri`.
+- Expected: existing CRUD/merge tests still pass with the new constructor.
+
+### Task 5: Implement service orchestration
+
+**Outcome:** Test and sync flows follow the failure, credential, proxy, and snapshot rules in this plan.
+
+**Files:**
+
+- Modify: `src-tauri/src/services/models.rs`
+- Modify: `src-tauri/src/services/tests.rs`
+
+**Steps:**
+
+- Implement saved-provider resolution inside `spawn_blocking`.
+- Implement `test_connection` without DB mutation.
+- Implement `sync_models` with full-snapshot merge and refreshed results on expected failure.
+- Add every service scenario from Section 11.
+
+**Validation:**
+
+- Run: `cargo test services` from `src-tauri`.
+- Expected: success, missing credential, vault failure, transport failure, and no-partial-merge tests pass.
+
+### Task 6: Add and register IPC commands
+
+**Outcome:** The frontend can call both async service methods through typed Tauri commands.
+
+**Files:**
+
+- Modify: `src-tauri/src/cmds/models.rs`
+- Modify: `src-tauri/src/lib.rs`
+
+**Steps:**
+
+- Add both async commands.
+- Clone ModelService before await.
+- Register both command names.
+
+**Validation:**
+
+- Run: `cargo test` from `src-tauri`.
+- Expected: all Rust tests pass and command signatures compile.
+
+### Task 7: Add frontend client contracts
+
+**Outcome:** TypeScript exposes typed wrappers for both commands.
+
+**Files:**
+
+- Modify: `src/storage/client.ts`
+- Modify: `src/storage/types.ts`
+
+**Steps:**
+
+- Add imports and invoke wrappers.
+- Confirm camelCase argument and response fields through typecheck and a desktop smoke test.
+
+**Validation:**
+
+- Run: `mise run typecheck`.
+- Expected: no TypeScript errors.
+
+### Task 8: Complete ProviderEditor behavior
+
+**Outcome:** Both actions work against saved configuration and display current persisted state.
+
+**Files:**
+
+- Modify: `src/features/models/ProviderEditor.tsx`
+
+**Steps:**
+
+- Add dirty-state guards and helper text.
+- Add connection-test pending/result behavior.
+- Add model-sync pending/result behavior.
+- Upsert returned provider on both expected success and expected failure.
+- Render sync status and timestamp.
+- Remove disabled-placeholder markup.
+
+**Validation:**
+
+- Run: `mise run typecheck`.
+- Run: `mise run lint`.
+- Run: `mise run build`.
+- Expected: all commands pass.
+
+### Task 9: Run full regression and desktop smoke test
+
+**Outcome:** The complete backend/frontend loop works with real providers and existing behavior remains intact.
+
+**Files:** No additional files unless validation exposes an in-scope defect.
+
+**Steps:**
+
+- Run all repository validation commands below.
+- Exercise a real authenticated provider.
+- Exercise a real unauthenticated local OpenAI-compatible provider if one is available.
+- Verify dirty-form guards and failure-state refresh behavior.
+
+**Validation:** See Section 13.
+
+## 13. Final Validation
+
+Run from the repository root unless noted:
+
+1. `cargo test` in `src-tauri` — all Rust tests pass.
+2. `cargo fmt --check` in `src-tauri` — Rust formatting is clean.
+3. `cargo clippy --all-targets --all-features -- -D warnings` in `src-tauri` — no Clippy warnings.
+4. `mise run test-frontend` — existing frontend behavioral tests pass.
+5. `mise run typecheck` — TypeScript passes.
+6. `mise run lint` — ESLint passes.
+7. `mise run format:check` — Prettier and cargo fmt checks pass.
+8. `mise run build` — frontend production build passes.
+9. `cargo build` in `src-tauri` — Tauri Rust target compiles without requiring package/signing setup.
+
+Do not regenerate `src/routeTree.gen.ts` because no route files are changed. If the router plugin regenerates it incidentally, inspect the diff rather than editing it manually.
+
+### Manual desktop checks
+
+Run `mise run tauri:dev` when a GUI and real endpoints are available:
+
+1. Save a valid OpenAI, Anthropic, or Gemini provider and credential.
+2. Test connection; confirm success and model count.
+3. Sync models; confirm rows and last-sync status update.
+4. Force an authentication failure; confirm the same response updates the visible provider error status without reload.
+5. Edit Base URL or token without saving; confirm both remote actions are disabled.
+6. Save changes; confirm actions re-enable and use the saved configuration.
+7. Use an unauthenticated local OpenAI-compatible endpoint; confirm no Authorization header is required.
+8. Restart the app; confirm synchronized models and status persist.
+
+If real endpoints or GUI access are unavailable, report those skipped checks explicitly and retain the automated parser/service coverage as the verification evidence.
+
+## 14. Rollout Notes
+
+- No database migration is required; existing model and provider sync columns are reused.
+- Adding `credential_unavailable` changes the bounded allowed values but does not require rewriting existing rows.
+- No route generation is expected.
+- Do not log request headers, response bodies, secrets, or Gemini query URLs during rollout diagnostics.
+- Custom application proxy support must be designed separately because it requires proxy URL/credential resolution and more than the two client policies in this plan.
+
+## 15. Risks and Mitigations
+
+- **Provider API drift:** Keep page parsing isolated and fixture-tested; verify official model-list documentation immediately before implementation.
+- **Partial pagination:** Never merge until all pages succeed; guard repeated cursors and page-count overflow.
+- **False missing models:** Complete-snapshot rule prevents first-page-only responses from marking valid rows missing.
+- **Proxy leakage:** Direct mode always selects the `.no_proxy()` client.
+- **Credential leakage:** Use owned secret values only in backend request construction; never include headers/query URLs/raw errors in logs or DTOs.
+- **Vault outage mislabeled as auth:** Persist and return `credential_unavailable` separately.
+- **Stale frontend sync status:** Expected failure returns refreshed provider/models in `SyncModelsResult` and the frontend always upserts them.
+- **Testing stale form values:** Disable remote actions while connection-relevant edits are unsaved.
+- **Concurrent sync clicks:** Per-provider async mutex serializes syncs (transport max concurrency 1). This is **serialization**, not single-flight: each caller runs its own Future after the previous finishes and **re-reads the latest connection identity** under the lock. Frontend also disables the action while pending.
+- **Large provider responses:** Stream response bodies with a hard **2 MiB** cap (`response.chunk()`, never full-buffer `response.bytes()` first). Reject oversized `Content-Length` early; for chunked / missing-length bodies abort as soon as cumulative size exceeds the cap. Also deduplicate incrementally and enforce the 100-page defensive limit and total-model cap.
+- **connection_changed races:** Merge and sync-error writes compare connection identity (adapter / base URL / credential kind / ref / proxy) in the same SQLite transaction. When identity no longer matches the resolved request, skip the write and return non-persisted `connection_changed` with a refreshed snapshot.
+- **New connection inheriting old sync status:** When a Save changes connection identity, the same save transaction resets `models_sync_status` to `Never` and clears `models_synced_at` / `models_sync_error_code`. Covers the reverse order where a guarded sync write commits first and Save commits second, and vault set failures that never reach SQLite (status stays put).
+- **Stale test-connection UI:** `ConnectionTestResult` carries non-sensitive `providerUpdatedAt` (provider row `updated_at` at resolve). The editor only displays results that still match the current provider version on the save/refresh path.

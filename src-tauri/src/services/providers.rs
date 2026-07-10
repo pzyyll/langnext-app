@@ -22,6 +22,9 @@ pub struct ProviderService {
 	vault: Arc<dyn CredentialVault>,
 }
 
+/// Credential plan for create: optional ref name, secret material, and journal op id.
+type PlannedCreateCredential = (Option<String>, Option<String>, Option<Uuid>);
+
 impl ProviderService {
 	pub fn new(db: Database, vault: Arc<dyn CredentialVault>) -> Self {
 		Self { db, vault }
@@ -115,7 +118,7 @@ impl ProviderService {
 		&self,
 		id: Uuid,
 		input: &ProviderInstanceWrite,
-	) -> Result<(Option<String>, Option<String>, Option<Uuid>), StorageError> {
+	) -> Result<PlannedCreateCredential, StorageError> {
 		match (&input.credential_kind, &input.credential) {
 			(CredentialKind::None, CredentialUpdate::Keep) => Ok((None, None, None)),
 			(CredentialKind::None, CredentialUpdate::Clear) => Ok((None, None, None)),
@@ -177,6 +180,16 @@ impl ProviderService {
 				));
 			}
 
+			// Keep path never rewrites credential_ref; identity still includes adapter/URL/kind/proxy.
+			let connection_changed = connection_identity_changed(
+				&existing,
+				&input.adapter_id,
+				input.base_url_override.as_deref(),
+				input.credential_kind,
+				existing.credential_ref.as_deref(),
+				input.proxy_mode,
+			);
+
 			let now = now_rfc3339();
 			provider_instances::update_configuration_keep_credential(
 				conn,
@@ -190,6 +203,10 @@ impl ProviderService {
 				input.insecure_http_confirmed_at.as_deref(),
 				&now,
 			)?;
+			// Same transaction as config write: new connection must not inherit prior sync status.
+			if connection_changed {
+				provider_instances::update_sync_status(conn, id, None, ModelsSyncStatus::Never, None, &now)?;
+			}
 			Ok(ProviderInstanceDto::from(&provider_instances::get(conn, id)?))
 		})
 	}
@@ -224,10 +241,21 @@ impl ProviderService {
 		}
 
 		let now = now_rfc3339();
+		// build_provider defaults sync metadata to Never; only preserve when identity is unchanged.
+		// Replace always allocates a new credential_ref, so identity changes and status resets.
 		let mut provider = build_provider(existing.id, &input, Some(new_ref.clone()), &existing.created_at, &now);
-		provider.models_synced_at = existing.models_synced_at;
-		provider.models_sync_status = existing.models_sync_status;
-		provider.models_sync_error_code = existing.models_sync_error_code;
+		if !connection_identity_changed(
+			&existing,
+			&input.adapter_id,
+			input.base_url_override.as_deref(),
+			input.credential_kind,
+			Some(new_ref.as_str()),
+			input.proxy_mode,
+		) {
+			provider.models_synced_at = existing.models_synced_at;
+			provider.models_sync_status = existing.models_sync_status;
+			provider.models_sync_error_code = existing.models_sync_error_code;
+		}
 
 		let commit = self.db.transaction(|uow| {
 			provider_instances::compare_and_set_credential_ref(
@@ -237,6 +265,7 @@ impl ProviderService {
 				Some(&new_ref),
 				&now,
 			)?;
+			// Single SQLite transaction after vault write: config + credential_ref + sync reset.
 			provider_instances::update_configuration(uow.conn(), &provider)?;
 			let op = credential_operations::mark_db_committed(uow.conn(), op_id)?;
 			Ok((provider, op))
@@ -250,6 +279,7 @@ impl ProviderService {
 			}
 			Err(e) => {
 				// Compensation: delete unused new secret; retain prepared on vault failure.
+				// Sync status is unchanged when this path fails (SQLite never committed).
 				let _ = coordinator::finalize_operation(&self.db, self.vault.as_ref(), &prepared);
 				Err(e)
 			}
@@ -276,16 +306,40 @@ impl ProviderService {
 			Ok(())
 		})?;
 
-		let now = now_rfc3339();
-		let mut provider = build_provider(existing.id, &input, None, &existing.created_at, &now);
-		provider.models_synced_at = existing.models_synced_at;
-		provider.models_sync_status = existing.models_sync_status;
-		provider.models_sync_error_code = existing.models_sync_error_code;
+		// Optional test hook between journal and final SQLite write (cfg(test) only).
+		#[cfg(test)]
+		if let Some(hook) = clear_credential_between_txns_take() {
+			hook();
+		}
 
+		let now = now_rfc3339();
+		// Final transaction re-reads the latest provider row. Concurrent sync may have committed
+		// between the pre-journal snapshot and this write; never rebuild sync fields from the
+		// stale `existing` snapshot alone.
 		let commit = self.db.transaction(|uow| {
-			provider_instances::compare_and_set_credential_ref(uow.conn(), existing.id, old_ref.as_deref(), None, &now)?;
-			provider_instances::update_configuration(uow.conn(), &provider)?;
-			let op = credential_operations::mark_db_committed(uow.conn(), op_id)?;
+			let conn = uow.conn();
+			let latest = provider_instances::get(conn, existing.id)?;
+			provider_instances::compare_and_set_credential_ref(conn, existing.id, old_ref.as_deref(), None, &now)?;
+
+			// build_provider defaults sync metadata to Never/None.
+			let mut provider = build_provider(existing.id, &input, None, &latest.created_at, &now);
+			if !connection_identity_changed(
+				&latest,
+				&input.adapter_id,
+				input.base_url_override.as_deref(),
+				input.credential_kind,
+				None,
+				input.proxy_mode,
+			) {
+				// Identity unchanged: keep whatever concurrent work wrote on the latest row.
+				provider.models_synced_at = latest.models_synced_at;
+				provider.models_sync_status = latest.models_sync_status;
+				provider.models_sync_error_code = latest.models_sync_error_code;
+			}
+			// Identity changed: leave Never/None so the new connection does not inherit prior status.
+
+			provider_instances::update_configuration(conn, &provider)?;
+			let op = credential_operations::mark_db_committed(conn, op_id)?;
 			Ok((provider, op))
 		});
 
@@ -373,6 +427,24 @@ fn build_provider(
 	}
 }
 
+/// Connection fields that determine which remote endpoint/auth a provider uses.
+/// When any of these change on save, models sync status must reset so the new
+/// connection does not inherit the previous endpoint's Ok/Error state.
+fn connection_identity_changed(
+	existing: &ProviderInstance,
+	adapter_id: &str,
+	base_url_override: Option<&str>,
+	credential_kind: CredentialKind,
+	credential_ref: Option<&str>,
+	proxy_mode: ProxyMode,
+) -> bool {
+	existing.adapter_id != adapter_id
+		|| existing.base_url_override.as_deref() != base_url_override
+		|| existing.credential_kind != credential_kind
+		|| existing.credential_ref.as_deref() != credential_ref
+		|| existing.proxy_mode != proxy_mode
+}
+
 fn validate_provider_write(input: &ProviderInstanceWrite) -> Result<(), StorageError> {
 	if input.display_name.trim().is_empty() {
 		return Err(StorageError::Validation("display_name must not be empty".into()));
@@ -451,4 +523,19 @@ fn validate_credential_transition(
 		},
 		CredentialKind::ApiKey | CredentialKind::Bearer => Ok(()),
 	}
+}
+
+/// Test-only hook run after clear_credential's prepared journal and before its final write.
+/// Lets tests commit a concurrent sync in the real multi-transaction gap.
+#[cfg(test)]
+static CLEAR_CREDENTIAL_BETWEEN_TXNS: std::sync::Mutex<Option<Box<dyn FnOnce() + Send>>> = std::sync::Mutex::new(None);
+
+#[cfg(test)]
+pub(crate) fn set_clear_credential_between_txns_hook(hook: impl FnOnce() + Send + 'static) {
+	*CLEAR_CREDENTIAL_BETWEEN_TXNS.lock().expect("clear gap hook") = Some(Box::new(hook));
+}
+
+#[cfg(test)]
+fn clear_credential_between_txns_take() -> Option<Box<dyn FnOnce() + Send>> {
+	CLEAR_CREDENTIAL_BETWEEN_TXNS.lock().expect("clear gap hook").take()
 }

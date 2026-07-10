@@ -25,7 +25,7 @@ impl NativeCredentialVault {
 	}
 
 	fn entry(&self, account: &str) -> Result<keyring::Entry, StorageError> {
-		keyring::Entry::new(&self.service, account).map_err(|e| map_keyring_error(e))
+		keyring::Entry::new(&self.service, account).map_err(map_keyring_error)
 	}
 }
 

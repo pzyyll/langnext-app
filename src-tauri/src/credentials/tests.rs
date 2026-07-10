@@ -128,7 +128,7 @@ fn recover_prepared_unused_new_entry() {
 	let report = ProviderService::recover_credential_operations(&db, vault.as_ref());
 	assert_eq!(report.completed, 1);
 	assert!(!vault.exists(&new_ref).unwrap());
-	let unfinished = db.read(|conn| credential_operations::list_unfinished(conn)).unwrap();
+	let unfinished = db.read(credential_operations::list_unfinished).unwrap();
 	assert!(unfinished.is_empty());
 }
 
@@ -180,10 +180,7 @@ fn recover_db_committed_deletes_old() {
 	assert_eq!(report.completed, 1);
 	assert!(!vault.exists(&old_ref).unwrap());
 	assert!(vault.exists(&new_ref).unwrap());
-	assert!(db
-		.read(|conn| credential_operations::list_unfinished(conn))
-		.unwrap()
-		.is_empty());
+	assert!(db.read(credential_operations::list_unfinished).unwrap().is_empty());
 }
 
 #[test]
@@ -210,7 +207,7 @@ fn replace_cleanup_failure_retains_db_committed_journal() {
 	let dto = providers.save(input).unwrap();
 	assert!(dto.has_credential);
 
-	let unfinished = db.read(|conn| credential_operations::list_unfinished(conn)).unwrap();
+	let unfinished = db.read(credential_operations::list_unfinished).unwrap();
 	assert_eq!(unfinished.len(), 1);
 	assert_eq!(unfinished[0].state, OperationState::DbCommitted);
 	assert!(unfinished[0].expected_old_ref.is_some());
@@ -219,10 +216,7 @@ fn replace_cleanup_failure_retains_db_committed_journal() {
 	vault.set_fail_delete(false);
 	let report = coordinator::recover_owner(&db, vault.as_ref(), OwnerKind::Provider, &dto.id.to_string()).unwrap();
 	assert_eq!(report.completed, 1);
-	assert!(db
-		.read(|conn| credential_operations::list_unfinished(conn))
-		.unwrap()
-		.is_empty());
+	assert!(db.read(credential_operations::list_unfinished).unwrap().is_empty());
 }
 
 #[test]
@@ -269,7 +263,7 @@ fn clear_cleanup_failure_retains_journal() {
 	let cleared = providers.save(clear).unwrap();
 	assert!(!cleared.has_credential);
 
-	let unfinished = db.read(|conn| credential_operations::list_unfinished(conn)).unwrap();
+	let unfinished = db.read(credential_operations::list_unfinished).unwrap();
 	assert_eq!(unfinished.len(), 1);
 	assert_eq!(unfinished[0].state, OperationState::DbCommitted);
 

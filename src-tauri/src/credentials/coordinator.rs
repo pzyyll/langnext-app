@@ -51,7 +51,7 @@ pub fn current_binding(db: &Database, owner_kind: OwnerKind, owner_id: &str) -> 
 				Err(e) => Err(e),
 			}
 		}
-		OwnerKind::GlobalProxy => db.read(|conn| app_credentials::get_global_proxy_ref(conn)),
+		OwnerKind::GlobalProxy => db.read(app_credentials::get_global_proxy_ref),
 	}
 }
 
@@ -145,7 +145,7 @@ pub fn recover_owner(
 
 /// Recover all unfinished credential operations (startup path).
 pub fn recover_all(db: &Database, vault: &dyn CredentialVault) -> RecoveryReport {
-	let ops = match db.read(|conn| credential_operations::list_unfinished(conn)) {
+	let ops = match db.read(credential_operations::list_unfinished) {
 		Ok(ops) => ops,
 		Err(e) => {
 			eprintln!("recovery_list_failed error_code={}", error_code(&e));
@@ -290,10 +290,7 @@ mod tests {
 			FinalizeResult::Completed
 		);
 		assert!(!vault.exists(&new_ref).unwrap());
-		assert!(db
-			.read(|conn| credential_operations::list_unfinished(conn))
-			.unwrap()
-			.is_empty());
+		assert!(db.read(credential_operations::list_unfinished).unwrap().is_empty());
 	}
 
 	#[test]
@@ -383,9 +380,6 @@ mod tests {
 		);
 		// Secret retained because clear never applied.
 		assert!(vault.exists(&old_ref).unwrap());
-		assert!(db
-			.read(|conn| credential_operations::list_unfinished(conn))
-			.unwrap()
-			.is_empty());
+		assert!(db.read(credential_operations::list_unfinished).unwrap().is_empty());
 	}
 }
