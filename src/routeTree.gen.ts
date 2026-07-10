@@ -9,9 +9,17 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from "./routes/__root"
+import { Route as ModelsRouteImport } from "./routes/models"
 import { Route as AboutRouteImport } from "./routes/about"
 import { Route as IndexRouteImport } from "./routes/index"
+import { Route as ModelsIndexRouteImport } from "./routes/models/index"
+import { Route as ModelsProviderIdRouteImport } from "./routes/models/$providerId"
 
+const ModelsRoute = ModelsRouteImport.update({
+  id: "/models",
+  path: "/models",
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AboutRoute = AboutRouteImport.update({
   id: "/about",
   path: "/about",
@@ -22,35 +30,62 @@ const IndexRoute = IndexRouteImport.update({
   path: "/",
   getParentRoute: () => rootRouteImport,
 } as any)
+const ModelsIndexRoute = ModelsIndexRouteImport.update({
+  id: "/",
+  path: "/",
+  getParentRoute: () => ModelsRoute,
+} as any)
+const ModelsProviderIdRoute = ModelsProviderIdRouteImport.update({
+  id: "/$providerId",
+  path: "/$providerId",
+  getParentRoute: () => ModelsRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   "/": typeof IndexRoute
   "/about": typeof AboutRoute
+  "/models": typeof ModelsRouteWithChildren
+  "/models/$providerId": typeof ModelsProviderIdRoute
+  "/models/": typeof ModelsIndexRoute
 }
 export interface FileRoutesByTo {
   "/": typeof IndexRoute
   "/about": typeof AboutRoute
+  "/models/$providerId": typeof ModelsProviderIdRoute
+  "/models": typeof ModelsIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   "/": typeof IndexRoute
   "/about": typeof AboutRoute
+  "/models": typeof ModelsRouteWithChildren
+  "/models/$providerId": typeof ModelsProviderIdRoute
+  "/models/": typeof ModelsIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: "/" | "/about"
+  fullPaths: "/" | "/about" | "/models" | "/models/$providerId" | "/models/"
   fileRoutesByTo: FileRoutesByTo
-  to: "/" | "/about"
-  id: "__root__" | "/" | "/about"
+  to: "/" | "/about" | "/models/$providerId" | "/models"
+  id:
+    "__root__" | "/" | "/about" | "/models" | "/models/$providerId" | "/models/"
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AboutRoute: typeof AboutRoute
+  ModelsRoute: typeof ModelsRouteWithChildren
 }
 
 declare module "@tanstack/react-router" {
   interface FileRoutesByPath {
+    "/models": {
+      id: "/models"
+      path: "/models"
+      fullPath: "/models"
+      preLoaderRoute: typeof ModelsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     "/about": {
       id: "/about"
       path: "/about"
@@ -65,12 +100,40 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    "/models/": {
+      id: "/models/"
+      path: "/"
+      fullPath: "/models/"
+      preLoaderRoute: typeof ModelsIndexRouteImport
+      parentRoute: typeof ModelsRoute
+    }
+    "/models/$providerId": {
+      id: "/models/$providerId"
+      path: "/$providerId"
+      fullPath: "/models/$providerId"
+      preLoaderRoute: typeof ModelsProviderIdRouteImport
+      parentRoute: typeof ModelsRoute
+    }
   }
 }
+
+interface ModelsRouteChildren {
+  ModelsProviderIdRoute: typeof ModelsProviderIdRoute
+  ModelsIndexRoute: typeof ModelsIndexRoute
+}
+
+const ModelsRouteChildren: ModelsRouteChildren = {
+  ModelsProviderIdRoute: ModelsProviderIdRoute,
+  ModelsIndexRoute: ModelsIndexRoute,
+}
+
+const ModelsRouteWithChildren =
+  ModelsRoute._addFileChildren(ModelsRouteChildren)
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AboutRoute: AboutRoute,
+  ModelsRoute: ModelsRouteWithChildren,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

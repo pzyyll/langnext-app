@@ -24,6 +24,13 @@ pub fn catalog() -> HashMap<&'static str, AdapterMeta> {
 		},
 	);
 	map.insert(
+		"openai-responses",
+		AdapterMeta {
+			id: "openai-responses",
+			default_base_url: Some("https://api.openai.com/v1"),
+		},
+	);
+	map.insert(
 		"anthropic",
 		AdapterMeta {
 			id: "anthropic",
@@ -71,6 +78,7 @@ mod tests {
 	#[test]
 	fn known_adapters() {
 		assert!(get("openai-compatible").is_ok());
+		assert!(get("openai-responses").is_ok());
 		assert!(get("anthropic").is_ok());
 		assert!(get("gemini").is_ok());
 		assert!(get("nope").is_err());

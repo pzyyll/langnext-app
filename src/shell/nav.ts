@@ -3,6 +3,7 @@
 
 export const navItems = [
 	{ to: "/", label: "Home", exact: true },
+	{ to: "/models", label: "Models", exact: false },
 	{ to: "/about", label: "About", exact: false },
 ] as const;
 
