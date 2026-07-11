@@ -5,6 +5,26 @@ use crate::device_state::WindowGeometry;
 use crate::state::AppState;
 use tauri::{Manager, Runtime, WebviewWindowBuilder};
 
+/// Disable the webview's default right-click context menu (Back/Forward/Reload/Save As/etc.).
+///
+/// Tauri 2.11 has no `WebviewWindowBuilder::disable_context_menu()`. On Windows we set the
+/// native WebView2 `AreDefaultContextMenusEnabled` flag after the window is created.
+#[cfg(windows)]
+fn disable_default_context_menu<R: Runtime>(window: &tauri::WebviewWindow<R>) {
+	let _ = window.with_webview(|platform_webview| {
+		// with_webview runs this closure on the webview UI thread.
+		unsafe {
+			let Ok(core) = platform_webview.controller().CoreWebView2() else {
+				return;
+			};
+			let Ok(settings) = core.Settings() else {
+				return;
+			};
+			let _ = settings.SetAreDefaultContextMenusEnabled(false);
+		}
+	});
+}
+
 /// Intercept close so X / Alt+F4 hide to tray instead of destroying the window.
 fn wire_close_to_hide<R: Runtime>(window: &tauri::WebviewWindow<R>) {
 	let window_ref = window.clone();
@@ -120,6 +140,13 @@ pub fn show<R: Runtime>(app: &tauri::AppHandle<R>) {
 				.disable_drag_drop_handler()
 				.visible(true);
 
+			// Non-Windows: no WebView2 settings API; suppress default context menu at init.
+			#[cfg(not(windows))]
+			{
+				web_build =
+					web_build.initialization_script("document.addEventListener('contextmenu', event => event.preventDefault());");
+			}
+
 			if usable {
 				web_build = web_build.position(geometry.x, geometry.y);
 			} else {
@@ -127,6 +154,10 @@ pub fn show<R: Runtime>(app: &tauri::AppHandle<R>) {
 			}
 
 			let win = web_build.build().expect("failed to create main window");
+
+			// Windows: native WebView2 AreDefaultContextMenusEnabled = false.
+			#[cfg(windows)]
+			disable_default_context_menu(&win);
 
 			if usable && geometry.maximized {
 				let _ = win.maximize();

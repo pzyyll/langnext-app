@@ -11,7 +11,7 @@ import { iconButtonClassName } from "../ui";
 import type { ToastVariant } from "./useToast";
 
 /**
- * Fixed top-right stack, below the titlebar (h-8).
+ * Fixed top-right stack, below the titlebar (titlebar-height).
  * Absolute children stack inside; Base UI sets data-expanded on hover/focus.
  */
 const toastViewportClassName = "fixed top-10 right-4 z-50 w-sm max-w-[calc(100vw-2rem)] outline-none";
@@ -55,8 +55,8 @@ const toastRootClassName = [
 const toastContentClassName =
 	"flex h-full min-w-0 items-start gap-3 overflow-hidden p-3 transition-opacity duration-[250ms] ease-[cubic-bezier(0.22,1,0.36,1)] data-behind:opacity-0 data-expanded:opacity-100 motion-reduce:transition-none";
 
-const toastTitleClassName = "text-sm font-bold leading-5 text-ink";
-const toastDescriptionClassName = "text-sm leading-5 text-muted";
+const toastTitleClassName = "text-body-bold font-bold text-ink";
+const toastDescriptionClassName = "text-body-tight text-muted";
 
 type StatusIcon = ComponentType<SVGProps<SVGSVGElement>>;
 

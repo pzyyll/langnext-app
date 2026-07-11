@@ -11,13 +11,13 @@ export const Route = createRootRoute({
 	component: RootLayout,
 });
 
-const SIDEBAR_WIDTH_CLASS = "w-44";
+const SIDEBAR_WIDTH_CLASS = "w-sidebar-width";
 
 const navLinkClassName =
-	"flex h-10 w-full items-center rounded-none bg-transparent px-3 text-sm leading-none font-normal text-muted transition-colors duration-150 select-none hover:bg-surface-2 hover:text-ink focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-ink";
+	"flex h-10 w-full items-center rounded-none bg-transparent px-3 text-body-tight leading-none font-normal text-muted transition-colors duration-150 select-none hover:bg-surface-2 hover:text-ink focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-ink";
 
 const navLinkActiveClassName =
-	"flex h-10 w-full items-center rounded-none border border-line bg-surface-2 px-3 text-sm leading-none font-normal text-ink transition-colors duration-150 select-none focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-ink";
+	"flex h-10 w-full items-center rounded-none border border-line bg-surface-2 px-3 text-body-tight leading-none font-normal text-ink transition-colors duration-150 select-none focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-ink";
 
 function RootLayout() {
 	const pathname = useRouterState({ select: (state) => state.location.pathname });
@@ -43,7 +43,7 @@ function RootLayout() {
 						sidebarOpen ? `${SIDEBAR_WIDTH_CLASS} border-r` : "w-0 border-r-0"
 					}`}
 				>
-					<nav className="flex min-w-44 flex-1 flex-col gap-1 p-3" aria-label={t("nav.mainAria")}>
+					<nav className="flex min-w-sidebar-width flex-1 flex-col gap-1 p-3" aria-label={t("nav.mainAria")}>
 						{primaryNavItems.map((item) => (
 							<Link
 								draggable={false}
@@ -67,7 +67,7 @@ function RootLayout() {
 						))}
 					</nav>
 
-					<div className="min-w-44 border-t border-line p-2">
+					<div className="min-w-sidebar-width border-t border-line p-2">
 						<Link
 							draggable={false}
 							to={settingsNavItem.to}
@@ -86,7 +86,7 @@ function RootLayout() {
 					</div>
 				</aside>
 
-				<main className="min-h-0 min-w-0 flex-1 overflow-auto bg-surface p-4">
+				<main className="min-h-0 min-w-0 flex-1 overflow-auto bg-surface p-gutter">
 					{/* Named VT snapshot: only this region scrolls between routes */}
 					<div className="page-transition">
 						<Outlet />

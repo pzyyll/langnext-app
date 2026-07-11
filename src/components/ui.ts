@@ -3,15 +3,15 @@
 
 /** Outline button using semantic theme colors */
 export const outlineButtonClassName =
-	"inline-flex h-8 items-center justify-center gap-2 rounded-none border border-line bg-surface px-3 text-sm leading-none whitespace-nowrap font-normal text-ink select-none hover:not-data-disabled:bg-surface-2 active:not-data-disabled:bg-surface-3 focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-ink data-disabled:border-disabled data-disabled:text-disabled disabled:border-disabled disabled:text-disabled";
+	"inline-flex h-control-height items-center justify-center gap-2 rounded-none border border-line bg-surface px-3 text-body-tight leading-none whitespace-nowrap font-normal text-ink select-none hover:not-data-disabled:bg-surface-2 active:not-data-disabled:bg-surface-3 focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-ink data-disabled:border-disabled data-disabled:text-disabled disabled:border-disabled disabled:text-disabled";
 
 /** Primary solid button (Save) */
 export const primaryButtonClassName =
-	"inline-flex h-8 items-center justify-center gap-2 rounded-none border border-line bg-ink px-4 text-sm leading-none whitespace-nowrap font-bold text-surface select-none hover:not-data-disabled:opacity-90 active:not-data-disabled:opacity-80 focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-ink data-disabled:border-disabled data-disabled:bg-surface-3 data-disabled:text-disabled disabled:border-disabled disabled:bg-surface-3 disabled:text-disabled";
+	"inline-flex h-control-height items-center justify-center gap-2 rounded-none border border-line bg-ink px-4 text-body-tight leading-none whitespace-nowrap font-bold text-surface select-none hover:not-data-disabled:opacity-90 active:not-data-disabled:opacity-80 focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-ink data-disabled:border-disabled data-disabled:bg-surface-3 data-disabled:text-disabled disabled:border-disabled disabled:bg-surface-3 disabled:text-disabled";
 
 /** Danger solid button (destructive confirm) */
 export const dangerButtonClassName =
-	"inline-flex h-8 items-center justify-center gap-2 rounded-none border border-danger bg-danger px-4 text-sm leading-none whitespace-nowrap font-bold text-danger-ink select-none hover:not-data-disabled:opacity-90 active:not-data-disabled:opacity-80 focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-ink data-disabled:border-disabled data-disabled:bg-surface-3 data-disabled:text-disabled disabled:border-disabled disabled:bg-surface-3 disabled:text-disabled";
+	"inline-flex h-control-height items-center justify-center gap-2 rounded-none border border-danger bg-danger px-4 text-body-tight leading-none whitespace-nowrap font-bold text-danger-ink select-none hover:not-data-disabled:opacity-90 active:not-data-disabled:opacity-80 focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-ink data-disabled:border-disabled data-disabled:bg-surface-3 data-disabled:text-disabled disabled:border-disabled disabled:bg-surface-3 disabled:text-disabled";
 
 /** Ghost icon button for inline actions such as renaming */
 export const iconButtonClassName =
@@ -19,11 +19,11 @@ export const iconButtonClassName =
 
 /** Text / password inputs */
 export const inputClassName =
-	"h-8 w-full rounded-none border border-line bg-surface px-3 text-sm font-normal text-ink placeholder:text-muted focus:outline-2 focus:-outline-offset-1 focus:outline-ink disabled:border-disabled disabled:text-disabled";
+	"h-control-height w-full rounded-none border border-line bg-surface px-3 text-body-tight font-normal text-ink placeholder:text-muted focus:outline-2 focus:-outline-offset-1 focus:outline-ink disabled:border-disabled disabled:text-disabled";
 
 /** Native select controls */
 export const selectClassName =
-	"h-8 w-full rounded-none border border-line bg-surface px-3 text-sm font-normal text-ink focus:outline-2 focus:-outline-offset-1 focus:outline-ink disabled:border-disabled disabled:text-disabled";
+	"h-control-height w-full rounded-none border border-line bg-surface px-3 text-body-tight font-normal text-ink focus:outline-2 focus:-outline-offset-1 focus:outline-ink disabled:border-disabled disabled:text-disabled";
 
 /** Native checkboxes */
 export const checkboxClassName =
@@ -43,4 +43,4 @@ export const dialogBackdropClassName =
 
 /** Dialog popup panel */
 export const dialogPopupClassName =
-	"shadow-frame fixed top-1/2 left-1/2 -mt-8 flex w-96 max-w-[calc(100vw-3rem)] -translate-x-1/2 -translate-y-1/2 flex-col gap-4 border border-line bg-surface p-4 text-ink transition-[scale,opacity] duration-100 ease-out data-ending-style:scale-[0.98] data-ending-style:opacity-0 data-starting-style:scale-[0.98] data-starting-style:opacity-0";
+	"shadow-frame fixed top-1/2 left-1/2 -mt-8 flex w-96 max-w-[calc(100vw-3rem)] -translate-x-1/2 -translate-y-1/2 flex-col gap-4 border border-line bg-surface p-gutter text-ink transition-[scale,opacity] duration-100 ease-out data-ending-style:scale-[0.98] data-ending-style:opacity-0 data-starting-style:scale-[0.98] data-starting-style:opacity-0";

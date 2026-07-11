@@ -53,8 +53,55 @@
 	--color-shadow: var(--app-shadow);
 }
 
-/* Channel list item enter/exit — apply to inner Link only (not dnd-kit li) */
+/*
+ * Design-system tokens from .stitch/DESIGN.md (typography + layout spacing).
+ * Color role names already live above; scale spacing (xs–2xl) matches Tailwind defaults.
+ */
 @theme {
+	/* Typography roles → text-display-lg, text-headline-md, … */
+	--text-display-lg: 1.875rem;
+	--text-display-lg--line-height: 2.25rem;
+
+	--text-headline-md: 1.5rem;
+	--text-headline-md--line-height: 2rem;
+
+	--text-headline-sm: 1.25rem;
+	--text-headline-sm--line-height: 1.75rem;
+
+	--text-title-dialog: 1rem;
+	--text-title-dialog--line-height: 1.5rem;
+
+	--text-body-base: 0.875rem;
+	--text-body-base--line-height: 1.5rem;
+
+	--text-body-tight: 0.875rem;
+	--text-body-tight--line-height: 1.25rem;
+
+	--text-body-bold: 0.875rem;
+	--text-body-bold--line-height: 1.25rem;
+
+	--text-label-caps: 0.75rem;
+	--text-label-caps--line-height: 1rem;
+	--text-label-caps--letter-spacing: 0.12em;
+
+	--text-table-header: 0.625rem;
+	--text-table-header--line-height: 0.875rem;
+	--text-table-header--letter-spacing: 0.05em;
+
+	--text-mono-key: 0.875rem;
+	--text-mono-key--line-height: 1.25rem;
+
+	--text-code-inline: 0.75rem;
+	--text-code-inline--line-height: 1rem;
+
+	/* Named layout spacing → w-sidebar-width, h-titlebar-height, … */
+	--spacing-gutter: 1rem;
+	--spacing-sidebar-width: 11rem;
+	--spacing-models-rail: 12rem;
+	--spacing-titlebar-height: 2rem;
+	--spacing-control-height: 2rem;
+
+	/* Channel list item enter/exit — apply to inner Link only (not dnd-kit li) */
 	--animate-channel-enter: channel-enter 150ms ease-out;
 	--animate-channel-exit: channel-exit 120ms ease-in forwards;
 

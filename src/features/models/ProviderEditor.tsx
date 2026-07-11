@@ -115,7 +115,7 @@ export function ProviderEditor({ providerId }: ProviderEditorProps) {
 	if (providersLoading) {
 		return (
 			<div className="flex flex-1 items-center justify-center p-8">
-				<p className="text-sm text-muted" aria-live="polite">
+				<p className="text-body-tight text-muted" aria-live="polite">
 					{t("models.loadingChannel")}
 				</p>
 			</div>
@@ -125,7 +125,7 @@ export function ProviderEditor({ providerId }: ProviderEditorProps) {
 	if (providersError) {
 		return (
 			<div className="flex flex-1 flex-col items-start gap-3 p-8">
-				<p className="text-sm text-danger" role="alert">
+				<p className="text-body-tight text-danger" role="alert">
 					{providersError}
 				</p>
 				<Button
@@ -144,8 +144,8 @@ export function ProviderEditor({ providerId }: ProviderEditorProps) {
 	if (!provider) {
 		return (
 			<div className="flex flex-1 flex-col items-start gap-2 p-8">
-				<h1 className="text-2xl font-bold text-ink">{t("models.channelNotFound")}</h1>
-				<p className="text-sm text-muted">{t("models.channelNotFoundHint")}</p>
+				<h1 className="text-headline-md font-bold text-ink">{t("models.channelNotFound")}</h1>
+				<p className="text-body-tight text-muted">{t("models.channelNotFoundHint")}</p>
 			</div>
 		);
 	}
@@ -690,7 +690,7 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 							>
 								<input
 									ref={renameInputRef}
-									className="h-10 w-full max-w-md rounded-none border border-line bg-surface px-2 text-3xl font-bold text-ink focus:outline-2 focus:-outline-offset-1 focus:outline-ink disabled:border-disabled disabled:text-disabled"
+									className="h-10 w-full max-w-md rounded-none border border-line bg-surface px-2 text-display-lg font-bold text-ink focus:outline-2 focus:-outline-offset-1 focus:outline-ink disabled:border-disabled disabled:text-disabled"
 									value={renameValue}
 									onChange={(event) => {
 										setRenameValue(event.currentTarget.value);
@@ -727,7 +727,7 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 							</form>
 						) : (
 							<div className="flex items-center gap-1">
-								<h1 className="text-3xl font-bold text-ink">{provider.displayName}</h1>
+								<h1 className="text-display-lg font-bold text-ink">{provider.displayName}</h1>
 								<Button
 									type="button"
 									className={iconButtonClassName}
@@ -740,7 +740,7 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 								</Button>
 							</div>
 						)}
-						<label className="flex shrink-0 items-center gap-2 text-sm text-ink">
+						<label className="flex shrink-0 items-center gap-2 text-body-tight text-ink">
 							<Switch.Root
 								checked={enabled}
 								onCheckedChange={(checked) => {
@@ -756,7 +756,7 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 						</label>
 					</div>
 					{renameError ? (
-						<p className="mb-2 text-sm text-danger" role="alert">
+						<p className="mb-2 text-body-tight text-danger" role="alert">
 							{renameError}
 						</p>
 					) : null}
@@ -764,10 +764,10 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 				</header>
 
 				<section className="shadow-frame relative mb-10 border border-line p-6">
-					<h3 className="mb-6 text-xl font-bold text-ink">{t("models.connection")}</h3>
+					<h3 className="mb-6 text-headline-sm font-bold text-ink">{t("models.connection")}</h3>
 					<div className="space-y-6">
 						<div>
-							<label className="mb-1 block text-sm font-medium text-ink" htmlFor="provider-api-type">
+							<label className="mb-1 block text-body-tight font-medium text-ink" htmlFor="provider-api-type">
 								{t("models.apiTypeLabel")}
 							</label>
 							<select
@@ -790,7 +790,7 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 						</div>
 
 						<div>
-							<label className="mb-1 block text-sm font-medium text-ink" htmlFor="provider-base-url">
+							<label className="mb-1 block text-body-tight font-medium text-ink" htmlFor="provider-base-url">
 								{t("models.baseUrl")}
 							</label>
 							<input
@@ -814,7 +814,7 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 						</div>
 
 						<div>
-							<label className="mb-1 block text-sm font-medium text-ink" htmlFor="provider-api-token">
+							<label className="mb-1 block text-body-tight font-medium text-ink" htmlFor="provider-api-token">
 								{t("models.apiToken")}
 							</label>
 							<input
@@ -844,7 +844,7 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 						</div>
 
 						{requiresInsecureAck && !endpointUnchangedInsecure ? (
-							<label className="flex items-start gap-2 text-sm text-ink">
+							<label className="flex items-start gap-2 text-body-tight text-ink">
 								<input
 									type="checkbox"
 									className={`${checkboxClassName} mt-0.5`}
@@ -933,7 +933,7 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 				<section className="shadow-frame border border-line p-6">
 					<div className="mb-6 flex flex-col justify-between gap-4 sm:flex-row sm:items-start">
 						<div>
-							<h3 className="text-xl font-bold text-ink">{t("models.title")}</h3>
+							<h3 className="text-headline-sm font-bold text-ink">{t("models.title")}</h3>
 							<p className="mt-1 text-xs text-muted" aria-live="polite">
 								{syncStatusLabel(provider, syncPending)}
 							</p>
@@ -1007,14 +1007,14 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 					</div>
 
 					{modelsLoading ? (
-						<p className="text-sm text-muted" aria-live="polite">
+						<p className="text-body-tight text-muted" aria-live="polite">
 							{t("models.loadingModels")}
 						</p>
 					) : null}
 
 					{modelsError ? (
 						<div className="mb-4 flex flex-col gap-2" role="alert">
-							<p className="text-sm text-danger">{modelsError}</p>
+							<p className="text-body-tight text-danger">{modelsError}</p>
 							<Button
 								type="button"
 								className={outlineButtonClassName}
@@ -1028,7 +1028,7 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 					) : null}
 
 					{modelMutationError ? (
-						<p className="mb-4 text-sm text-danger" role="alert">
+						<p className="mb-4 text-body-tight text-danger" role="alert">
 							{modelMutationError}
 						</p>
 					) : null}

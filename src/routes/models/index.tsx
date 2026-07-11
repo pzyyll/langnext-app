@@ -12,8 +12,8 @@ function ModelsEmptyPage() {
 
 	return (
 		<div className="flex min-h-0 flex-1 flex-col items-start justify-center gap-2 p-8">
-			<h1 className="text-2xl font-bold text-ink">{t("models.title")}</h1>
-			<p className="max-w-md text-sm leading-6 text-muted">{t("models.emptyPage")}</p>
+			<h1 className="text-headline-md font-bold text-ink">{t("models.title")}</h1>
+			<p className="max-w-md text-body-base text-muted">{t("models.emptyPage")}</p>
 		</div>
 	);
 }

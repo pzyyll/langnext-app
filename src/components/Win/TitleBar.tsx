@@ -114,7 +114,7 @@ export function TitleBar({
 
 	return (
 		// Drag is only on the title strip — never wrap the control buttons.
-		<div className={`relative z-50 flex h-8 shrink-0 border-b border-line bg-surface ${className}`}>
+		<div className={`relative z-50 flex h-titlebar-height shrink-0 border-b border-line bg-surface ${className}`}>
 			<div className="flex h-full shrink-0 items-center gap-1 pl-2">
 				{showSidebarToggle ? (
 					<Button
@@ -138,7 +138,7 @@ export function TitleBar({
 						<IconSvgsLnb className="pointer-events-none size-5 shrink-0" />
 						<span
 							data-tauri-drag-region
-							className="pointer-events-none truncate select-none text-sm leading-none font-normal text-ink"
+							className="pointer-events-none truncate select-none text-body-tight leading-none font-normal text-ink"
 						>
 							{title}
 						</span>

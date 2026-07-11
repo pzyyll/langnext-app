@@ -78,12 +78,12 @@ export function ConfirmDialog({
 				<Dialog.Backdrop className={dialogBackdropClassName} />
 				<Dialog.Popup className={dialogPopupClassName}>
 					<div className="flex flex-col gap-1">
-						<Dialog.Title className="text-base leading-6 font-bold text-ink">{title}</Dialog.Title>
-						<Dialog.Description className="text-sm leading-5 text-muted">{description ?? ""}</Dialog.Description>
+						<Dialog.Title className="text-title-dialog font-bold text-ink">{title}</Dialog.Title>
+						<Dialog.Description className="text-body-tight text-muted">{description ?? ""}</Dialog.Description>
 					</div>
 
 					{error ? (
-						<p className="text-sm text-danger" role="alert">
+						<p className="text-body-tight text-danger" role="alert">
 							{error}
 						</p>
 					) : null}

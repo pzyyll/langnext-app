@@ -33,10 +33,10 @@ export function AddManualModelDialog({ open, providerId, onOpenChange, onCreated
 				<Dialog.Backdrop className={dialogBackdropClassName} />
 				<Dialog.Popup className={dialogPopupClassName}>
 					<div className="flex flex-col gap-1">
-						<Dialog.Title className="text-base leading-6 font-bold text-ink">
+						<Dialog.Title className="text-title-dialog font-bold text-ink">
 							{t("models.addModelDialog.title")}
 						</Dialog.Title>
-						<Dialog.Description className="text-sm leading-5 text-muted">
+						<Dialog.Description className="text-body-tight text-muted">
 							{t("models.addModelDialog.description")}
 						</Dialog.Description>
 					</div>
@@ -105,7 +105,7 @@ function AddManualModelForm({ providerId, onCreated }: AddManualModelFormProps) 
 	return (
 		<form className="flex flex-col gap-3" onSubmit={(event) => void handleSubmit(event)}>
 			<div className="flex flex-col gap-1">
-				<label className="text-sm font-medium text-ink" htmlFor="add-model-key">
+				<label className="text-body-tight font-medium text-ink" htmlFor="add-model-key">
 					{t("models.addModelDialog.modelId")}
 				</label>
 				<input
@@ -124,7 +124,7 @@ function AddManualModelForm({ providerId, onCreated }: AddManualModelFormProps) 
 			</div>
 
 			<div className="flex flex-col gap-1">
-				<label className="text-sm font-medium text-ink" htmlFor="add-model-display-name">
+				<label className="text-body-tight font-medium text-ink" htmlFor="add-model-display-name">
 					{t("models.addModelDialog.displayNameOverride")}
 				</label>
 				<input
@@ -139,7 +139,7 @@ function AddManualModelForm({ providerId, onCreated }: AddManualModelFormProps) 
 				/>
 			</div>
 
-			<label className="flex items-center gap-2 text-sm text-ink">
+			<label className="flex items-center gap-2 text-body-tight text-ink">
 				<input
 					type="checkbox"
 					className={checkboxClassName}
@@ -153,7 +153,7 @@ function AddManualModelForm({ providerId, onCreated }: AddManualModelFormProps) 
 			</label>
 
 			{error ? (
-				<p className="text-sm text-danger" role="alert">
+				<p className="text-body-tight text-danger" role="alert">
 					{error}
 				</p>
 			) : null}

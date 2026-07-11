@@ -13,8 +13,8 @@ import { outlineButtonClassName } from "../../components/ui";
 import { ModelsContext } from "./ModelsContext";
 import { AddProviderDialog } from "./AddProviderDialog";
 
-/** Viewport minus titlebar (2rem) and main vertical padding (2rem). */
-const LAYOUT_HEIGHT_CLASS = "h-[calc(100dvh-4rem)]";
+/** Viewport minus titlebar-height and main vertical padding (2 × gutter). */
+const LAYOUT_HEIGHT_CLASS = "h-[calc(100dvh-var(--spacing-titlebar-height)-2*var(--spacing-gutter))]";
 
 /** Slightly longer than CSS channel-exit (120ms) so missing animationend never sticks. */
 const CHANNEL_EXIT_FALLBACK_MS = 200;
@@ -102,8 +102,8 @@ function SortableChannelItem({
 			: "";
 
 	const linkClass = active
-		? `block min-w-0 flex-1 rounded-none bg-surface-2 px-3 py-2 text-sm font-bold text-ink ${animationClass}`
-		: `block min-w-0 flex-1 rounded-none px-3 py-2 text-sm text-muted hover:bg-surface-2 hover:text-ink ${animationClass}`;
+		? `block min-w-0 flex-1 rounded-none bg-surface-2 px-3 py-2 text-body-tight font-bold text-ink ${animationClass}`
+		: `block min-w-0 flex-1 rounded-none px-3 py-2 text-body-tight text-muted hover:bg-surface-2 hover:text-ink ${animationClass}`;
 
 	return (
 		<li ref={ref} className={exiting ? "pointer-events-none flex" : "flex"}>
@@ -328,21 +328,21 @@ export function ModelsLayout() {
 	return (
 		<ModelsContext.Provider value={contextValue}>
 			<div className={`shadow-frame flex min-h-0 ${LAYOUT_HEIGHT_CLASS} overflow-hidden border border-line bg-surface`}>
-				<aside className="flex w-48 shrink-0 flex-col border-r border-line bg-surface">
-					<div className="flex min-h-0 flex-1 flex-col p-4">
-						<div className="shrink-0 mb-4">
-							<h2 className="text-xl font-bold text-ink">{t("models.channels")}</h2>
+				<aside className="flex w-models-rail shrink-0 flex-col border-r border-line bg-surface">
+					<div className="flex min-h-0 flex-1 flex-col p-gutter">
+						<div className="mb-4 shrink-0">
+							<h2 className="text-headline-sm font-bold text-ink">{t("models.channels")}</h2>
 						</div>
 
 						{providersLoading ? (
-							<p className="text-sm text-muted" aria-live="polite">
+							<p className="text-body-tight text-muted" aria-live="polite">
 								{t("models.loadingChannels")}
 							</p>
 						) : null}
 
 						{providersError ? (
 							<div className="flex flex-col gap-2" role="alert">
-								<p className="text-sm text-danger">{providersError}</p>
+								<p className="text-body-tight text-danger">{providersError}</p>
 								<Button
 									type="button"
 									className={outlineButtonClassName}
@@ -356,7 +356,7 @@ export function ModelsLayout() {
 						) : null}
 
 						{!providersLoading && !providersError && providers.length === 0 ? (
-							<p className="text-sm text-muted">{t("models.emptyChannels")}</p>
+							<p className="text-body-tight text-muted">{t("models.emptyChannels")}</p>
 						) : null}
 
 						{!providersLoading && !providersError && providers.length > 0 ? (
@@ -395,7 +395,7 @@ export function ModelsLayout() {
 						) : null}
 					</div>
 
-					<div className="shrink-0 border-t border-line p-4">
+					<div className="shrink-0 border-t border-line p-gutter">
 						<Button
 							type="button"
 							className={`${outlineButtonClassName} w-full bg-surface-2 hover:not-data-disabled:bg-surface-3`}
@@ -404,7 +404,7 @@ export function ModelsLayout() {
 								setAddOpen(true);
 							}}
 						>
-							<span className="text-xl leading-none">+</span>
+							<span className="text-headline-sm leading-none">+</span>
 						</Button>
 					</div>
 				</aside>
