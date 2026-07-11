@@ -128,7 +128,6 @@ const en = {
 		tokenStored: "•••••••••••• (stored)",
 		tokenEnter: "Enter API token",
 		tokenReplaceHint: "New token will replace the stored value on save.",
-		tokenReplaceRequired: "Changing the Base URL requires replacing or removing the stored token.",
 		insecureHttpAck: "I understand this non-loopback HTTP endpoint is insecure and confirm using it anyway.",
 		saveBeforeRemote: "Save connection changes before testing or syncing models.",
 		testConnection: "Test connection",

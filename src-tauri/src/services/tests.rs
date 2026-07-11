@@ -146,6 +146,66 @@ fn provider_api_key_replace_and_has_credential() {
 }
 
 #[test]
+fn provider_keep_allows_base_url_change_with_stored_credential() {
+	// Multiple Base URLs may point at the same gateway; Keep retains the token.
+	let (_d, _db, _v, providers, models, ..) = setup();
+	let dto = providers
+		.save(provider_write(
+			CredentialKind::ApiKey,
+			CredentialUpdate::Replace("sk-shared-gateway".into()),
+		))
+		.unwrap();
+	assert!(dto.has_credential);
+	models
+		.apply_remote_merge(
+			dto.id,
+			&[RemoteModelSyncItem {
+				model_key: "m1".into(),
+				remote_display_name: None,
+				remote_metadata_json: None,
+			}],
+		)
+		.unwrap();
+	assert_eq!(
+		providers.get(dto.id).unwrap().models_sync_status,
+		crate::domain::provider::ModelsSyncStatus::Ok
+	);
+
+	let mut keep = provider_write(CredentialKind::ApiKey, CredentialUpdate::Keep);
+	keep.id = Some(dto.id);
+	keep.base_url_override = Some("https://api.llmtech.de/v1".into());
+	let after = providers.save(keep).unwrap();
+	assert!(after.has_credential);
+	assert_eq!(after.base_url_override.as_deref(), Some("https://api.llmtech.de/v1"));
+	// Connection identity changed → sync status resets; credential stays.
+	assert_eq!(
+		after.models_sync_status,
+		crate::domain::provider::ModelsSyncStatus::Never
+	);
+	assert!(after.models_synced_at.is_none());
+}
+
+#[test]
+fn provider_keep_allows_adapter_change_with_stored_credential() {
+	let (_d, _db, _v, providers, ..) = setup();
+	let dto = providers
+		.save(provider_write(
+			CredentialKind::ApiKey,
+			CredentialUpdate::Replace("sk-shared-adapter".into()),
+		))
+		.unwrap();
+
+	let mut keep = provider_write(CredentialKind::ApiKey, CredentialUpdate::Keep);
+	keep.id = Some(dto.id);
+	keep.adapter_id = "anthropic".into();
+	let after = providers.save(keep).unwrap();
+
+	assert_eq!(after.adapter_id, "anthropic");
+	assert_eq!(after.base_url_override, dto.base_url_override);
+	assert!(after.has_credential);
+}
+
+#[test]
 fn provider_needs_auth_without_credential() {
 	let (_d, _db, _v, providers, ..) = setup();
 	let dto = providers

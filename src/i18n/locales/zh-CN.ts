@@ -125,7 +125,6 @@ const zhCN = {
 		tokenStored: "••••••••••••（已保存）",
 		tokenEnter: "输入 API 令牌",
 		tokenReplaceHint: "保存后将用新令牌替换已保存的值。",
-		tokenReplaceRequired: "更改 Base URL 需要替换或移除已保存的令牌。",
 		insecureHttpAck: "我了解此非回环 HTTP 端点不安全，并确认仍要使用。",
 		saveBeforeRemote: "请先保存连接更改，再测试或同步模型。",
 		testConnection: "测试连接",

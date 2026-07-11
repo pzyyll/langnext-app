@@ -279,8 +279,6 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 	const endpointUnchangedInsecure =
 		!endpointChanged && requiresInsecureAck && Boolean(provider.insecureHttpConfirmedAt);
 
-	const credentialRequiresReplace = provider.hasCredential && endpointChanged && credentialAction === "keep";
-
 	// Connection-relevant dirty state: unsaved Base URL or credential replace/clear.
 	const connectionDirty =
 		normalizedBaseUrl !== savedBaseUrl || credentialAction === "replace" || credentialAction === "clear";
@@ -305,9 +303,6 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 	}, [credentialAction, provider.credentialKind, token]);
 
 	const formValid = useMemo(() => {
-		if (credentialRequiresReplace) {
-			return false;
-		}
 		if (credentialAction === "replace" && !token.trim()) {
 			return false;
 		}
@@ -315,14 +310,7 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 			return false;
 		}
 		return true;
-	}, [
-		credentialAction,
-		credentialRequiresReplace,
-		endpointUnchangedInsecure,
-		insecureHttpAcknowledged,
-		requiresInsecureAck,
-		token,
-	]);
+	}, [credentialAction, endpointUnchangedInsecure, insecureHttpAcknowledged, requiresInsecureAck, token]);
 
 	function resetConnectionForm() {
 		setBaseUrlOverride(provider.baseUrlOverride ?? "");
@@ -821,11 +809,6 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 								autoComplete="off"
 								disabled={connectionFormDisabled || tokenDisabled}
 							/>
-							{credentialRequiresReplace ? (
-								<p className="mt-2 text-sm text-danger" role="alert">
-									{t("models.tokenReplaceRequired")}
-								</p>
-							) : null}
 						</div>
 
 						{requiresInsecureAck && !endpointUnchangedInsecure ? (

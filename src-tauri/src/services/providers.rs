@@ -172,15 +172,7 @@ impl ProviderService {
 			let existing = provider_instances::get(conn, id)?;
 			validate_credential_transition(&existing, &input)?;
 
-			let endpoint_changed =
-				existing.adapter_id != input.adapter_id || existing.base_url_override != input.base_url_override;
-			if endpoint_changed && existing.credential_ref.is_some() {
-				return Err(StorageError::Validation(
-					"changing adapter_id or base URL requires Replace or Clear when a credential exists".into(),
-				));
-			}
-
-			// Keep path never rewrites credential_ref; identity still includes adapter/URL/kind/proxy.
+			// Keep path never rewrites credential_ref. Adapter and Base URL changes may retain the stored token.
 			let connection_changed = connection_identity_changed(
 				&existing,
 				&input.adapter_id,
