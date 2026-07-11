@@ -1074,20 +1074,24 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 				</Button>
 				<Button
 					type="button"
-					className={primaryButtonClassName}
+					className={`${primaryButtonClassName} relative`}
 					disabled={connectionFormDisabled || !formValid}
 					focusableWhenDisabled
+					aria-busy={connectionFormDisabled}
+					aria-label={connectionFormDisabled ? t("common.saving") : t("common.save")}
 					onClick={() => {
 						void handleSave();
 					}}
 				>
-					{savePending
-						? t("common.saving")
-						: syncPending
-							? t("common.syncing")
-							: connectionTestPending
-								? t("common.testing")
-								: t("common.save")}
+					<span className={connectionFormDisabled ? "invisible" : undefined} aria-hidden="true">
+						{t("common.save")}
+					</span>
+					{connectionFormDisabled ? (
+						<span
+							className="absolute size-4 animate-spin rounded-full border-2 border-current border-r-transparent"
+							aria-hidden="true"
+						/>
+					) : null}
 				</Button>
 			</footer>
 
