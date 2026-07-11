@@ -84,7 +84,7 @@ src/
   styles.css            Tailwind entry
   routes/
     __root.tsx          Layout + nav
-    index.tsx           Home (Rust greet + Base UI dialog)
+    index.tsx           Root redirect → /translate
     about.tsx           Stack overview
 src-tauri/
   src/lib.rs            Tauri commands
@@ -96,7 +96,7 @@ mise.toml               Toolchain versions
 ## Notes
 
 - Routes live in `src/routes`. TanStack Router generates `src/routeTree.gen.ts` during Vite startup.
-- Rust IPC demo: home page calls the `greet` command from `src-tauri/src/lib.rs`.
+- `/` redirects to `/translate` (primary workspace); there is no dedicated Home page.
 - Storage (Providers, models, profiles, settings, credentials, device state) is Rust-owned; React uses typed invoke wrappers under `src/storage/`. See `docs/analysis/storage-architecture.md`.
 - Base UI portals need the `.root { isolation: isolate; }` stacking context (already set in layout styles).
 - Use **bun** only for packages (do not commit `package-lock.json` / `yarn.lock` / `pnpm-lock.yaml`).

@@ -7,7 +7,6 @@ import type { TranslationLeaves } from "./en";
 const zhCN = {
 	nav: {
 		mainAria: "主导航",
-		home: "首页",
 		translate: "翻译",
 		translateProfiles: "翻译预设",
 		models: "模型",
@@ -56,19 +55,6 @@ const zhCN = {
 		maximize: "最大化",
 		restore: "还原",
 		close: "关闭",
-	},
-	home: {
-		kicker: "Tauri 2 + React 19",
-		title: "桌面壳层，现代 Web 技术栈",
-		description:
-			"本起步项目将 Tauri 2、TanStack Router、Base UI 与带语义主题令牌的 Tailwind CSS 串在一起。通过 <code>invoke</code> 调用 Rust，并在 Base UI 对话框中展示结果。",
-		nameLabel: "名称",
-		namePlaceholder: "输入名称…",
-		greet: "从 Rust 问好",
-		greeting: "问好中…",
-		lastMessage: "最近一条消息：",
-		dialogTitle: "来自 Rust 的消息",
-		noMessage: "暂无消息。",
 	},
 	about: {
 		title: "关于",

@@ -9,7 +9,6 @@ export type TranslationLeaves<T> = {
 const en = {
 	nav: {
 		mainAria: "Main",
-		home: "Home",
 		translate: "Translate",
 		translateProfiles: "Translate Profiles",
 		models: "Models",
@@ -58,19 +57,6 @@ const en = {
 		maximize: "Maximize",
 		restore: "Restore",
 		close: "Close",
-	},
-	home: {
-		kicker: "Tauri 2 + React 19",
-		title: "Desktop shell, modern web stack",
-		description:
-			"This starter wires Tauri 2, TanStack Router, Base UI, and Tailwind CSS with semantic theme tokens. Call into Rust with <code>invoke</code>, then show the result in a Base UI dialog.",
-		nameLabel: "Name",
-		namePlaceholder: "Enter a name...",
-		greet: "Greet from Rust",
-		greeting: "Greeting...",
-		lastMessage: "Last message:",
-		dialogTitle: "Message from Rust",
-		noMessage: "No message yet.",
 	},
 	about: {
 		title: "About",

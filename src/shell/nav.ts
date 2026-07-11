@@ -2,7 +2,6 @@
 // ABOUTME: Order in this array defines up/down page transition direction.
 
 export const navItems = [
-	{ to: "/", labelKey: "nav.home", exact: true },
 	{ to: "/translate", labelKey: "nav.translate", exact: true },
 	{ to: "/translate/profiles", labelKey: "nav.translateProfiles", exact: true },
 	{ to: "/models", labelKey: "nav.models", exact: false },
@@ -12,11 +11,11 @@ export const navItems = [
 
 export type NavItem = (typeof navItems)[number];
 
-/** Primary sidebar links (Home / Translate / Translate Profiles / Models / About). Settings is rendered at the footer. */
-export const primaryNavItems = [navItems[0], navItems[1], navItems[2], navItems[3], navItems[4]] as const;
+/** Primary sidebar links (Translate / Translate Profiles / Models / About). Settings is rendered at the footer. */
+export const primaryNavItems = [navItems[0], navItems[1], navItems[2], navItems[3]] as const;
 
 /** Settings entry shown in the sidebar footer. */
-export const settingsNavItem = navItems[5];
+export const settingsNavItem = navItems[4];
 
 export type ScrollTransitionType = "scroll-down" | "scroll-up";
 
