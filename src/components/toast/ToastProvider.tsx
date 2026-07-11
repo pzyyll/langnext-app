@@ -30,7 +30,7 @@ const toastRootClassName = [
 	"[--offset-y:calc(var(--toast-offset-y)+(var(--toast-index)*var(--gap))+var(--toast-swipe-movement-y))]",
 	"absolute top-0 right-0 left-auto z-[calc(1000-var(--toast-index))] w-full origin-top",
 	"[transform:translateX(var(--toast-swipe-movement-x))_translateY(calc(var(--toast-swipe-movement-y)+(var(--toast-index)*var(--peek))+(var(--shrink)*var(--height))))_scale(var(--scale))]",
-	"h-[var(--height)] border border-line bg-surface text-ink shadow-frame select-none",
+	"h-[var(--height)] border border-line bg-surface text-on-surface shadow-frame select-none",
 	"after:absolute after:bottom-full after:left-0 after:h-[calc(var(--gap)+1px)] after:w-full after:content-['']",
 	"data-expanded:h-[var(--toast-height)]",
 	"data-expanded:[transform:translateX(var(--toast-swipe-movement-x))_translateY(var(--offset-y))]",
@@ -48,15 +48,15 @@ const toastRootClassName = [
 	"data-expanded:data-ending-style:data-[swipe-direction=right]:[transform:translateX(calc(var(--toast-swipe-movement-x)+150%))_translateY(var(--offset-y))]",
 	"[transition:transform_0.5s_cubic-bezier(0.22,1,0.36,1),opacity_0.5s,height_0.15s]",
 	"motion-reduce:transition-none",
-	"focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-ink",
+	"focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface",
 ].join(" ");
 
 /** Hides overflow while collapsed; reveals behind toasts when the stack expands. */
 const toastContentClassName =
 	"flex h-full min-w-0 items-start gap-3 overflow-hidden p-3 transition-opacity duration-[250ms] ease-[cubic-bezier(0.22,1,0.36,1)] data-behind:opacity-0 data-expanded:opacity-100 motion-reduce:transition-none";
 
-const toastTitleClassName = "text-body-bold font-bold text-ink";
-const toastDescriptionClassName = "text-body-tight text-muted";
+const toastTitleClassName = "text-body-bold font-bold text-on-surface";
+const toastDescriptionClassName = "text-body-tight text-neutral";
 
 type StatusIcon = ComponentType<SVGProps<SVGSVGElement>>;
 
@@ -68,10 +68,10 @@ const VARIANT_ICON: Record<ToastVariant, StatusIcon> = {
 };
 
 const VARIANT_ICON_CLASS: Record<ToastVariant, string> = {
-	success: "size-5 shrink-0 text-accent",
-	error: "size-5 shrink-0 text-danger",
-	warning: "size-5 shrink-0 text-ink",
-	info: "size-5 shrink-0 text-accent",
+	success: "size-5 shrink-0 text-tertiary",
+	error: "size-5 shrink-0 text-error",
+	warning: "size-5 shrink-0 text-on-surface",
+	info: "size-5 shrink-0 text-tertiary",
 };
 
 const VARIANT_ACCENT_BAR: Record<ToastVariant, string> = {

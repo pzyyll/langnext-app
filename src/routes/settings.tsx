@@ -14,13 +14,13 @@ export const Route = createFileRoute("/settings")({
 });
 
 const optionBaseClassName =
-	"flex min-h-10 flex-1 items-center gap-2 rounded-none border border-line bg-surface px-3 text-body-tight leading-none font-normal text-muted transition-colors duration-150 select-none hover:bg-surface-2 hover:text-ink focus-within:outline-2 focus-within:-outline-offset-1 focus-within:outline-ink";
+	"flex min-h-10 flex-1 items-center gap-2 rounded-none border border-line bg-surface px-3 text-body-tight leading-none font-normal text-neutral transition-colors duration-150 select-none hover:bg-surface-2 hover:text-on-surface focus-within:outline-2 focus-within:-outline-offset-1 focus-within:outline-on-surface";
 
 const optionActiveClassName =
-	"flex min-h-10 flex-1 items-center gap-2 rounded-none border border-line bg-surface-2 px-3 text-body-tight leading-none font-normal text-ink transition-colors duration-150 select-none focus-within:outline-2 focus-within:-outline-offset-1 focus-within:outline-ink";
+	"flex min-h-10 flex-1 items-center gap-2 rounded-none border border-line bg-surface-2 px-3 text-body-tight leading-none font-normal text-on-surface transition-colors duration-150 select-none focus-within:outline-2 focus-within:-outline-offset-1 focus-within:outline-on-surface";
 
 const radioClassName =
-	"size-4 shrink-0 rounded-none border border-line bg-surface text-ink accent-ink focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ink";
+	"size-4 shrink-0 rounded-none border border-line bg-surface text-on-surface accent-on-surface focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-on-surface";
 
 function SettingsPage() {
 	const { t } = useTranslation();
@@ -40,14 +40,14 @@ function SettingsPage() {
 	return (
 		<div className="flex flex-col gap-6">
 			<section className="flex flex-col gap-2">
-				<h1 className="text-headline-md font-bold text-ink">{t("settings.title")}</h1>
-				<p className="max-w-2xl text-body-base text-muted">{t("settings.description")}</p>
+				<h1 className="text-headline-md font-bold text-on-surface">{t("settings.title")}</h1>
+				<p className="max-w-2xl text-body-md text-neutral">{t("settings.description")}</p>
 			</section>
 
 			<section className="shadow-frame max-w-lg border border-line bg-surface p-gutter">
 				<fieldset className="flex flex-col gap-3 border-0 p-0">
-					<legend className="float-left w-full text-body-bold font-bold text-ink">{t("settings.theme.title")}</legend>
-					<p id="settings-theme-desc" className="clear-both text-body-tight text-muted">
+					<legend className="float-left w-full text-body-bold font-bold text-on-surface">{t("settings.theme.title")}</legend>
+					<p id="settings-theme-desc" className="clear-both text-body-tight text-neutral">
 						{t("settings.theme.description")}
 					</p>
 					<div className="flex flex-col gap-2 sm:flex-row" role="presentation">
@@ -77,7 +77,7 @@ function SettingsPage() {
 						})}
 					</div>
 					{themeError ? (
-						<p className="text-xs text-danger" role="alert" aria-live="polite">
+						<p className="text-xs text-error" role="alert" aria-live="polite">
 							{themeError}
 						</p>
 					) : null}
@@ -86,10 +86,10 @@ function SettingsPage() {
 
 			<section className="shadow-frame max-w-lg border border-line bg-surface p-gutter">
 				<fieldset className="flex flex-col gap-3 border-0 p-0">
-					<legend className="float-left w-full text-body-bold font-bold text-ink">
+					<legend className="float-left w-full text-body-bold font-bold text-on-surface">
 						{t("settings.language.title")}
 					</legend>
-					<p id="settings-language-desc" className="clear-both text-body-tight text-muted">
+					<p id="settings-language-desc" className="clear-both text-body-tight text-neutral">
 						{t("settings.language.description")}
 					</p>
 					<div className="flex flex-col gap-2 sm:flex-row" role="presentation">
@@ -117,7 +117,7 @@ function SettingsPage() {
 						})}
 					</div>
 					{languageError ? (
-						<p className="text-xs text-danger" role="alert" aria-live="polite">
+						<p className="text-xs text-error" role="alert" aria-live="polite">
 							{languageError}
 						</p>
 					) : null}

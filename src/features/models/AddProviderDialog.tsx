@@ -34,8 +34,8 @@ export function AddProviderDialog({ open, onOpenChange, onCreated }: AddProvider
 				<Dialog.Backdrop className={dialogBackdropClassName} />
 				<Dialog.Popup className={`${dialogPopupClassName} max-h-[min(90dvh,40rem)] w-md overflow-y-auto`}>
 					<div className="flex flex-col gap-1">
-						<Dialog.Title className="text-title-dialog font-bold text-ink">{t("models.addChannel.title")}</Dialog.Title>
-						<Dialog.Description className="text-body-tight text-muted">
+						<Dialog.Title className="text-title-dialog font-bold text-on-surface">{t("models.addChannel.title")}</Dialog.Title>
+						<Dialog.Description className="text-body-tight text-neutral">
 							{t("models.addChannel.description")}
 						</Dialog.Description>
 					</div>
@@ -117,7 +117,7 @@ function AddProviderForm({ onCreated }: AddProviderFormProps) {
 	return (
 		<form className="flex flex-col gap-3" onSubmit={(event) => void handleSubmit(event)}>
 			<div className="flex flex-col gap-1">
-				<label className="text-body-tight font-medium text-ink" htmlFor="add-provider-name">
+				<label className="text-body-tight font-medium text-on-surface" htmlFor="add-provider-name">
 					{t("models.displayName")}
 				</label>
 				<input
@@ -135,7 +135,7 @@ function AddProviderForm({ onCreated }: AddProviderFormProps) {
 			</div>
 
 			<div className="flex flex-col gap-1">
-				<label className="text-body-tight font-medium text-ink" htmlFor="add-provider-adapter">
+				<label className="text-body-tight font-medium text-on-surface" htmlFor="add-provider-adapter">
 					{t("models.apiTypeLabel")}
 				</label>
 				<select
@@ -156,7 +156,7 @@ function AddProviderForm({ onCreated }: AddProviderFormProps) {
 			</div>
 
 			<div className="flex flex-col gap-1">
-				<label className="text-body-tight font-medium text-ink" htmlFor="add-provider-base-url">
+				<label className="text-body-tight font-medium text-on-surface" htmlFor="add-provider-base-url">
 					{t("models.baseUrlOverride")}
 				</label>
 				<input
@@ -170,11 +170,11 @@ function AddProviderForm({ onCreated }: AddProviderFormProps) {
 					spellCheck={false}
 					disabled={pending}
 				/>
-				{defaultBaseUrl ? <p className="text-xs text-muted">{t("common.default", { value: defaultBaseUrl })}</p> : null}
+				{defaultBaseUrl ? <p className="text-xs text-neutral">{t("common.default", { value: defaultBaseUrl })}</p> : null}
 			</div>
 
 			<div className="flex flex-col gap-1">
-				<label className="text-body-tight font-medium text-ink" htmlFor="add-provider-credential-kind">
+				<label className="text-body-tight font-medium text-on-surface" htmlFor="add-provider-credential-kind">
 					{t("models.credentialKind")}
 				</label>
 				<select
@@ -193,7 +193,7 @@ function AddProviderForm({ onCreated }: AddProviderFormProps) {
 			</div>
 
 			<div className="flex flex-col gap-1">
-				<label className="text-body-tight font-medium text-ink" htmlFor="add-provider-token">
+				<label className="text-body-tight font-medium text-on-surface" htmlFor="add-provider-token">
 					{t("models.apiToken")}
 				</label>
 				<input
@@ -211,7 +211,7 @@ function AddProviderForm({ onCreated }: AddProviderFormProps) {
 				/>
 			</div>
 
-			<label className="flex items-center gap-2 text-body-tight text-ink">
+			<label className="flex items-center gap-2 text-body-tight text-on-surface">
 				<input
 					type="checkbox"
 					className={checkboxClassName}
@@ -225,7 +225,7 @@ function AddProviderForm({ onCreated }: AddProviderFormProps) {
 			</label>
 
 			{error ? (
-				<p className="text-body-tight text-danger" role="alert">
+				<p className="text-body-tight text-error" role="alert">
 					{error}
 				</p>
 			) : null}

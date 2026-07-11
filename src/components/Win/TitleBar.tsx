@@ -28,13 +28,13 @@ export type TitleBarProps = {
 const SNAP_HOVER_MS = 620;
 
 const controlButtonClassName =
-	"inline-flex h-full min-h-0 min-w-10 cursor-default items-center justify-center border-0 bg-transparent px-3 text-ink select-none hover:bg-surface-2 active:bg-surface-3";
+	"inline-flex h-full min-h-0 min-w-10 cursor-default items-center justify-center border-0 bg-transparent px-3 text-on-surface select-none hover:bg-surface-2 active:bg-surface-3";
 
 const closeButtonClassName =
-	"group inline-flex h-full min-h-0 min-w-10 cursor-default items-center justify-center border-0 bg-transparent px-3 text-ink select-none hover:bg-danger hover:text-danger-ink active:bg-danger active:text-danger-ink";
+	"group inline-flex h-full min-h-0 min-w-10 cursor-default items-center justify-center border-0 bg-transparent px-3 text-on-surface select-none hover:bg-error hover:text-on-error active:bg-error active:text-on-error";
 
 const sidebarToggleClassName =
-	"inline-flex size-6 shrink-0 cursor-default items-center justify-center rounded-none border-0 bg-transparent text-ink select-none hover:bg-surface-2 active:bg-surface-3 focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-ink";
+	"inline-flex size-6 shrink-0 cursor-default items-center justify-center rounded-none border-0 bg-transparent text-on-surface select-none hover:bg-surface-2 active:bg-surface-3 focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface";
 
 export function TitleBar({
 	title,
@@ -138,7 +138,7 @@ export function TitleBar({
 						<IconSvgsLnb className="pointer-events-none size-5 shrink-0" />
 						<span
 							data-tauri-drag-region
-							className="pointer-events-none truncate select-none text-body-tight leading-none font-normal text-ink"
+							className="pointer-events-none truncate select-none text-body-tight leading-none font-normal text-on-surface"
 						>
 							{title}
 						</span>
@@ -185,7 +185,7 @@ export function TitleBar({
 						aria-label={t("titlebar.close")}
 						onClick={() => void appWindow.close()}
 					>
-						<IconClarityCloseLine className="pointer-events-none size-4 group-hover:text-danger-ink group-active:text-danger-ink" />
+						<IconClarityCloseLine className="pointer-events-none size-4 group-hover:text-on-error group-active:text-on-error" />
 					</button>
 				) : null}
 			</div>

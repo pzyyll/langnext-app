@@ -5,48 +5,195 @@
 /* ── Runtime theme tokens (switch by [data-theme]) ── */
 :root,
 [data-theme="light"] {
-	--app-surface: oklch(100% 0 0deg);
-	--app-surface-2: oklch(96.5% 0 0deg);
-	--app-surface-3: oklch(92% 0 0deg);
-	--app-ink: oklch(20% 0 0deg);
-	--app-muted: oklch(45% 0 0deg);
-	--app-line: oklch(20% 0 0deg);
-	--app-accent: oklch(55% 0.16 250deg);
-	--app-danger: oklch(55% 0.2 25deg);
-	--app-danger-ink: oklch(100% 0 0deg);
-	--app-overlay: oklch(0% 0 0deg / 0.2);
-	--app-code: oklch(96% 0 0deg);
-	--app-disabled: oklch(55% 0 0deg);
-	--app-shadow: oklch(0% 0 0deg / 0.12);
+	/* M3 color roles — light */
+	--app-surface: #ffffff;
+	--app-surface-dim: #e4e4e4;
+	--app-surface-bright: #ffffff;
+	--app-surface-container-lowest: #ffffff;
+	--app-surface-container-low: #f3f3f3;
+	--app-surface-container: #f3f3f3;
+	--app-surface-container-high: #e4e4e4;
+	--app-surface-container-highest: #e4e4e4;
+	--app-on-surface: #161616;
+	--app-on-surface-variant: #555555;
+	--app-inverse-surface: #121212;
+	--app-inverse-on-surface: #f8f8f8;
+	--app-outline: #161616;
+	--app-outline-variant: #e4e4e4;
+	--app-surface-tint: #0074ca;
+	--app-primary: #161616;
+	--app-on-primary: #ffffff;
+	--app-primary-container: #161616;
+	--app-on-primary-container: #ffffff;
+	--app-inverse-primary: #59aaf8;
+	--app-secondary: #555555;
+	--app-on-secondary: #ffffff;
+	--app-secondary-container: #f3f3f3;
+	--app-on-secondary-container: #161616;
+	--app-tertiary: #0074ca;
+	--app-on-tertiary: #ffffff;
+	--app-tertiary-container: #0074ca;
+	--app-on-tertiary-container: #ffffff;
+	--app-error: #cc272e;
+	--app-on-error: #ffffff;
+	--app-error-container: #cc272e;
+	--app-on-error-container: #ffffff;
+	--app-primary-fixed: #e4e4e4;
+	--app-primary-fixed-dim: #555555;
+	--app-on-primary-fixed: #161616;
+	--app-on-primary-fixed-variant: #555555;
+	--app-secondary-fixed: #f3f3f3;
+	--app-secondary-fixed-dim: #e4e4e4;
+	--app-on-secondary-fixed: #161616;
+	--app-on-secondary-fixed-variant: #555555;
+	--app-tertiary-fixed: #59aaf8;
+	--app-tertiary-fixed-dim: #0074ca;
+	--app-on-tertiary-fixed: #ffffff;
+	--app-on-tertiary-fixed-variant: #ffffff;
+	--app-background: #ffffff;
+	--app-on-background: #161616;
+	--app-surface-variant: #f3f3f3;
+
+	/* Project-specific tokens */
+	--app-code: #f2f2f2;
+	--app-disabled: #717171;
+	--app-overlay: #00000033;
+	--app-shadow: #0000001f;
+
+	/* Aliases to M3 roles (keep component class names working) */
+	--app-surface-2: var(--app-surface-container-low);
+	--app-surface-3: var(--app-surface-container-high);
+	--app-neutral: var(--app-on-surface-variant);
+	--app-line: var(--app-outline);
 }
 
 [data-theme="dark"] {
-	--app-surface: oklch(18% 0 0deg);
-	--app-surface-2: oklch(25% 0 0deg);
-	--app-surface-3: oklch(32% 0 0deg);
-	--app-ink: oklch(98% 0 0deg);
-	--app-muted: oklch(70% 0 0deg);
-	--app-line: oklch(92% 0 0deg);
-	--app-accent: oklch(72% 0.14 250deg);
-	--app-danger: oklch(58% 0.2 25deg);
-	--app-danger-ink: oklch(100% 0 0deg);
-	--app-overlay: oklch(0% 0 0deg / 0.5);
-	--app-code: oklch(28% 0 0deg);
-	--app-disabled: oklch(60% 0 0deg);
-	--app-shadow: oklch(0% 0 0deg / 0);
+	/* M3 color roles — dark */
+	--app-surface: #141313;
+	--app-surface-dim: #141313;
+	--app-surface-bright: #3a3939;
+	--app-surface-container-lowest: #0e0e0e;
+	--app-surface-container-low: #1c1b1b;
+	--app-surface-container: #201f1f;
+	--app-surface-container-high: #2b2a2a;
+	--app-surface-container-highest: #353434;
+	--app-on-surface: #e5e2e1;
+	--app-on-surface-variant: #c4c7c7;
+	--app-inverse-surface: #e5e2e1;
+	--app-inverse-on-surface: #313030;
+	--app-outline: #8e9192;
+	--app-outline-variant: #444748;
+	--app-surface-tint: #c8c6c5;
+	--app-primary: #c8c6c5;
+	--app-on-primary: #313030;
+	--app-primary-container: #161616;
+	--app-on-primary-container: #817f7f;
+	--app-inverse-primary: #5f5e5e;
+	--app-secondary: #c8c6c6;
+	--app-on-secondary: #303030;
+	--app-secondary-container: #464747;
+	--app-on-secondary-container: #b6b5b4;
+	--app-tertiary: #a2c9ff;
+	--app-on-tertiary: #00315b;
+	--app-tertiary-container: #00172f;
+	--app-on-tertiary-container: #2783d9;
+	--app-error: #ffb4ab;
+	--app-on-error: #690005;
+	--app-error-container: #93000a;
+	--app-on-error-container: #ffdad6;
+	--app-primary-fixed: #e5e2e1;
+	--app-primary-fixed-dim: #c8c6c5;
+	--app-on-primary-fixed: #1c1b1b;
+	--app-on-primary-fixed-variant: #474746;
+	--app-secondary-fixed: #e4e2e2;
+	--app-secondary-fixed-dim: #c8c6c6;
+	--app-on-secondary-fixed: #1b1c1c;
+	--app-on-secondary-fixed-variant: #464747;
+	--app-tertiary-fixed: #d3e4ff;
+	--app-tertiary-fixed-dim: #a2c9ff;
+	--app-on-tertiary-fixed: #001c38;
+	--app-on-tertiary-fixed-variant: #004881;
+	--app-background: #141313;
+	--app-on-background: #e5e2e1;
+	--app-surface-variant: #353434;
+
+	/* Project-specific tokens (disabled/shadow not in spec — derived) */
+	--app-code: #292929;
+	--app-disabled: #8a8a8a;
+	--app-overlay: #00000080;
+	--app-shadow: transparent;
 }
 
-/* Map tokens into Tailwind color utilities: bg-surface, text-ink, border-line, … */
+/* Map tokens into Tailwind color utilities: bg-surface, text-on-surface, border-line, … */
 @theme inline {
+	/* M3 surface roles */
 	--color-surface: var(--app-surface);
+	--color-surface-dim: var(--app-surface-dim);
+	--color-surface-bright: var(--app-surface-bright);
+	--color-surface-container-lowest: var(--app-surface-container-lowest);
+	--color-surface-container-low: var(--app-surface-container-low);
+	--color-surface-container: var(--app-surface-container);
+	--color-surface-container-high: var(--app-surface-container-high);
+	--color-surface-container-highest: var(--app-surface-container-highest);
+	--color-surface-variant: var(--app-surface-variant);
+	--color-surface-tint: var(--app-surface-tint);
+	--color-background: var(--app-background);
+
+	/* M3 content roles */
+	--color-on-surface: var(--app-on-surface);
+	--color-on-surface-variant: var(--app-on-surface-variant);
+	--color-on-background: var(--app-on-background);
+	--color-inverse-surface: var(--app-inverse-surface);
+	--color-inverse-on-surface: var(--app-inverse-on-surface);
+
+	/* M3 outline roles */
+	--color-outline: var(--app-outline);
+	--color-outline-variant: var(--app-outline-variant);
+
+	/* M3 primary roles */
+	--color-primary: var(--app-primary);
+	--color-on-primary: var(--app-on-primary);
+	--color-primary-container: var(--app-primary-container);
+	--color-on-primary-container: var(--app-on-primary-container);
+	--color-inverse-primary: var(--app-inverse-primary);
+
+	/* M3 secondary roles */
+	--color-secondary: var(--app-secondary);
+	--color-on-secondary: var(--app-on-secondary);
+	--color-secondary-container: var(--app-secondary-container);
+	--color-on-secondary-container: var(--app-on-secondary-container);
+
+	/* M3 tertiary roles */
+	--color-tertiary: var(--app-tertiary);
+	--color-on-tertiary: var(--app-on-tertiary);
+	--color-tertiary-container: var(--app-tertiary-container);
+	--color-on-tertiary-container: var(--app-on-tertiary-container);
+
+	/* M3 error roles */
+	--color-error: var(--app-error);
+	--color-on-error: var(--app-on-error);
+	--color-error-container: var(--app-error-container);
+	--color-on-error-container: var(--app-on-error-container);
+
+	/* M3 fixed roles */
+	--color-primary-fixed: var(--app-primary-fixed);
+	--color-primary-fixed-dim: var(--app-primary-fixed-dim);
+	--color-on-primary-fixed: var(--app-on-primary-fixed);
+	--color-on-primary-fixed-variant: var(--app-on-primary-fixed-variant);
+	--color-secondary-fixed: var(--app-secondary-fixed);
+	--color-secondary-fixed-dim: var(--app-secondary-fixed-dim);
+	--color-on-secondary-fixed: var(--app-on-secondary-fixed);
+	--color-on-secondary-fixed-variant: var(--app-on-secondary-fixed-variant);
+	--color-tertiary-fixed: var(--app-tertiary-fixed);
+	--color-tertiary-fixed-dim: var(--app-tertiary-fixed-dim);
+	--color-on-tertiary-fixed: var(--app-on-tertiary-fixed);
+	--color-on-tertiary-fixed-variant: var(--app-on-tertiary-fixed-variant);
+
+	/* Project-specific aliases & tokens */
 	--color-surface-2: var(--app-surface-2);
 	--color-surface-3: var(--app-surface-3);
-	--color-ink: var(--app-ink);
-	--color-muted: var(--app-muted);
+	--color-neutral: var(--app-neutral);
 	--color-line: var(--app-line);
-	--color-accent: var(--app-accent);
-	--color-danger: var(--app-danger);
-	--color-danger-ink: var(--app-danger-ink);
 	--color-overlay: var(--app-overlay);
 	--color-code: var(--app-code);
 	--color-disabled: var(--app-disabled);
@@ -58,9 +205,9 @@
  * Color role names already live above; scale spacing (xs–2xl) matches Tailwind defaults.
  */
 @theme {
-	/* Typography roles → text-display-lg, text-headline-md, … */
-	--text-display-lg: 1.875rem;
-	--text-display-lg--line-height: 2.25rem;
+	/* Typography roles → text-headline-display, text-headline-md, … */
+	--text-headline-display: 1.875rem;
+	--text-headline-display--line-height: 2.25rem;
 
 	--text-headline-md: 1.5rem;
 	--text-headline-md--line-height: 2rem;
@@ -71,8 +218,8 @@
 	--text-title-dialog: 1rem;
 	--text-title-dialog--line-height: 1.5rem;
 
-	--text-body-base: 0.875rem;
-	--text-body-base--line-height: 1.5rem;
+	--text-body-md: 0.875rem;
+	--text-body-md--line-height: 1.5rem;
 
 	--text-body-tight: 0.875rem;
 	--text-body-tight--line-height: 1.25rem;
@@ -80,9 +227,9 @@
 	--text-body-bold: 0.875rem;
 	--text-body-bold--line-height: 1.25rem;
 
-	--text-label-caps: 0.75rem;
-	--text-label-caps--line-height: 1rem;
-	--text-label-caps--letter-spacing: 0.12em;
+	--text-label-sm: 0.75rem;
+	--text-label-sm--line-height: 1rem;
+	--text-label-sm--letter-spacing: 0.12em;
 
 	--text-table-header: 0.625rem;
 	--text-table-header--line-height: 0.875rem;
@@ -151,7 +298,7 @@ body {
 	-webkit-font-smoothing: antialiased;
 	-moz-osx-font-smoothing: grayscale;
 	background-color: var(--app-surface);
-	color: var(--app-ink);
+	color: var(--app-on-surface);
 	user-select: none;
 }
 

@@ -102,8 +102,8 @@ function SortableChannelItem({
 			: "";
 
 	const linkClass = active
-		? `block min-w-0 flex-1 rounded-none bg-surface-2 px-3 py-2 text-body-tight font-bold text-ink ${animationClass}`
-		: `block min-w-0 flex-1 rounded-none px-3 py-2 text-body-tight text-muted hover:bg-surface-2 hover:text-ink ${animationClass}`;
+		? `block min-w-0 flex-1 rounded-none bg-surface-2 px-3 py-2 text-body-tight font-bold text-on-surface ${animationClass}`
+		: `block min-w-0 flex-1 rounded-none px-3 py-2 text-body-tight text-neutral hover:bg-surface-2 hover:text-on-surface ${animationClass}`;
 
 	return (
 		<li ref={ref} className={exiting ? "pointer-events-none flex" : "flex"}>
@@ -111,7 +111,7 @@ function SortableChannelItem({
 				ref={handleRef}
 				type="button"
 				aria-label={t("models.reorderAria", { name: provider.displayName })}
-				className="w-6 shrink-0 cursor-grab text-muted hover:bg-surface-2 hover:text-ink active:cursor-grabbing"
+				className="w-6 shrink-0 cursor-grab text-neutral hover:bg-surface-2 hover:text-on-surface active:cursor-grabbing"
 			>
 				<span aria-hidden="true">⋮⋮</span>
 			</button>
@@ -331,18 +331,18 @@ export function ModelsLayout() {
 				<aside className="flex w-models-rail shrink-0 flex-col border-r border-line bg-surface">
 					<div className="flex min-h-0 flex-1 flex-col p-gutter">
 						<div className="mb-4 shrink-0">
-							<h2 className="text-headline-sm font-bold text-ink">{t("models.channels")}</h2>
+							<h2 className="text-headline-sm font-bold text-on-surface">{t("models.channels")}</h2>
 						</div>
 
 						{providersLoading ? (
-							<p className="text-body-tight text-muted" aria-live="polite">
+							<p className="text-body-tight text-neutral" aria-live="polite">
 								{t("models.loadingChannels")}
 							</p>
 						) : null}
 
 						{providersError ? (
 							<div className="flex flex-col gap-2" role="alert">
-								<p className="text-body-tight text-danger">{providersError}</p>
+								<p className="text-body-tight text-error">{providersError}</p>
 								<Button
 									type="button"
 									className={outlineButtonClassName}
@@ -356,7 +356,7 @@ export function ModelsLayout() {
 						) : null}
 
 						{!providersLoading && !providersError && providers.length === 0 ? (
-							<p className="text-body-tight text-muted">{t("models.emptyChannels")}</p>
+							<p className="text-body-tight text-neutral">{t("models.emptyChannels")}</p>
 						) : null}
 
 						{!providersLoading && !providersError && providers.length > 0 ? (

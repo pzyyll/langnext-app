@@ -96,7 +96,7 @@ export function ModelsTable({
 	}
 
 	if (models.length === 0) {
-		return <p className="text-body-tight text-muted">{t("models.noModels")}</p>;
+		return <p className="text-body-tight text-neutral">{t("models.noModels")}</p>;
 	}
 
 	const allSelected = filteredModels.length > 0 && filteredModels.every((model) => selectedModelIds.has(model.id));
@@ -163,12 +163,12 @@ export function ModelsTable({
 			</div>
 
 			{filteredModels.length === 0 ? (
-				<p className="text-body-tight text-muted">{t("models.noModelsMatch")}</p>
+				<p className="text-body-tight text-neutral">{t("models.noModelsMatch")}</p>
 			) : (
 				<div className="overflow-x-auto">
 					<table className="w-full min-w-md text-left">
 						<thead>
-							<tr className="border-b border-line text-table-header font-semibold text-muted uppercase">
+							<tr className="border-b border-line text-table-header font-semibold text-neutral uppercase">
 								{selectionMode ? (
 									<th className="w-10 pb-2 font-semibold">
 										<input
@@ -212,9 +212,9 @@ export function ModelsTable({
 											</td>
 										) : null}
 										<td className="py-4">
-											<span className="font-mono text-mono-key font-bold text-ink">{model.modelKey}</span>
+											<span className="font-mono text-mono-key font-bold text-on-surface">{model.modelKey}</span>
 										</td>
-										<td className="py-4 text-center text-body-tight text-muted">
+										<td className="py-4 text-center text-body-tight text-neutral">
 											{editing ? (
 												<form
 													className="flex items-center justify-center gap-1"
@@ -225,7 +225,7 @@ export function ModelsTable({
 												>
 													<input
 														ref={inputRef}
-														className="h-7 w-40 rounded-none border border-line bg-surface px-2 text-body-tight font-normal text-ink placeholder:text-muted focus:outline-2 focus:-outline-offset-1 focus:outline-ink disabled:border-disabled disabled:text-disabled"
+														className="h-7 w-40 rounded-none border border-line bg-surface px-2 text-body-tight font-normal text-on-surface placeholder:text-neutral focus:outline-2 focus:-outline-offset-1 focus:outline-on-surface disabled:border-disabled disabled:text-disabled"
 														value={editingValue}
 														onChange={(event) => {
 															setEditingValue(event.currentTarget.value);
