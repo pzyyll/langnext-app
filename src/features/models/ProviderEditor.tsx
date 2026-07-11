@@ -19,6 +19,7 @@ import {
 	inputClassName,
 	outlineButtonClassName,
 	primaryButtonClassName,
+	selectClassName,
 	switchRootClassName,
 	switchThumbClassName,
 } from "../../components/ui";
@@ -34,7 +35,7 @@ import {
 } from "../../storage/client";
 import { getIpcErrorMessage } from "../../storage/errors";
 import type { CredentialUpdate, ProviderInstanceDto, ProviderModelDto } from "../../storage/types";
-import { getAdapterLabel, getDefaultBaseUrl } from "./adapterOptions";
+import { ADAPTER_OPTIONS, getDefaultBaseUrl } from "./adapterOptions";
 import { AddManualModelDialog } from "./AddManualModelDialog";
 import { useModelsContext } from "./ModelsContext";
 import { ModelsTable } from "./ModelsTable";
@@ -170,6 +171,7 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 	const { t } = useTranslation();
 	const navigate = useNavigate();
 	const toast = useToast();
+	const [adapterId, setAdapterId] = useState(provider.adapterId);
 	const [baseUrlOverride, setBaseUrlOverride] = useState(provider.baseUrlOverride ?? "");
 	const [enabled, setEnabled] = useState(provider.enabled);
 	const [token, setToken] = useState("");
@@ -279,9 +281,12 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 	const endpointUnchangedInsecure =
 		!endpointChanged && requiresInsecureAck && Boolean(provider.insecureHttpConfirmedAt);
 
-	// Connection-relevant dirty state: unsaved Base URL or credential replace/clear.
+	// Connection-relevant dirty state: unsaved API type, Base URL, or credential replace/clear.
 	const connectionDirty =
-		normalizedBaseUrl !== savedBaseUrl || credentialAction === "replace" || credentialAction === "clear";
+		adapterId !== provider.adapterId ||
+		normalizedBaseUrl !== savedBaseUrl ||
+		credentialAction === "replace" ||
+		credentialAction === "clear";
 
 	// Disable connection form + Save while test/sync is in flight so mid-flight
 	// edits cannot race results (backend still re-checks connection identity on sync).
@@ -313,6 +318,7 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 	}, [credentialAction, endpointUnchangedInsecure, insecureHttpAcknowledged, requiresInsecureAck, token]);
 
 	function resetConnectionForm() {
+		setAdapterId(provider.adapterId);
 		setBaseUrlOverride(provider.baseUrlOverride ?? "");
 		setEnabled(provider.enabled);
 		setToken("");
@@ -352,7 +358,7 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 		try {
 			const saved = await saveProviderInstance({
 				id: provider.id,
-				adapterId: provider.adapterId,
+				adapterId,
 				displayName: trimmed,
 				baseUrlOverride: provider.baseUrlOverride,
 				credentialKind: provider.credentialKind,
@@ -393,7 +399,7 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 		try {
 			const saved = await saveProviderInstance({
 				id: provider.id,
-				adapterId: provider.adapterId,
+				adapterId,
 				displayName: provider.displayName,
 				baseUrlOverride: normalizedBaseUrl,
 				credentialKind: provider.credentialKind,
@@ -406,6 +412,7 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 			setToken("");
 			setCredentialAction("keep");
 			setInsecureHttpAcknowledged(false);
+			setAdapterId(saved.adapterId);
 			setBaseUrlOverride(saved.baseUrlOverride ?? "");
 			setEnabled(saved.enabled);
 			setSaveSuccess(true);
@@ -652,7 +659,14 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 		void navigate({ to: "/models" });
 	}
 
-	const defaultBaseUrl = getDefaultBaseUrl(provider.adapterId);
+	const defaultBaseUrl = getDefaultBaseUrl(adapterId);
+	// Keep the current selection visible if the saved adapter is not in the catalog.
+	const adapterSelectOptions = useMemo(() => {
+		if (ADAPTER_OPTIONS.some((option) => option.id === adapterId)) {
+			return ADAPTER_OPTIONS;
+		}
+		return [...ADAPTER_OPTIONS, { id: adapterId, label: adapterId, defaultBaseUrl: null }];
+	}, [adapterId]);
 	const tokenDisabled = provider.credentialKind === "none" || credentialAction === "clear";
 	const tokenPlaceholder =
 		credentialAction === "clear"
@@ -746,17 +760,35 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 							{renameError}
 						</p>
 					) : null}
-					<hr className="mb-4 border-line" />
-					<p className="text-sm text-muted">
-						<span className="mt-1 block text-xs">
-							{t("models.apiType", { type: getAdapterLabel(provider.adapterId) })}
-						</span>
-					</p>
+					<hr className="border-line" />
 				</header>
 
 				<section className="shadow-frame relative mb-10 border border-line p-6">
 					<h3 className="mb-6 text-xl font-bold text-ink">{t("models.connection")}</h3>
 					<div className="space-y-6">
+						<div>
+							<label className="mb-1 block text-sm font-medium text-ink" htmlFor="provider-api-type">
+								{t("models.apiTypeLabel")}
+							</label>
+							<select
+								id="provider-api-type"
+								className={selectClassName}
+								value={adapterId}
+								onChange={(event) => {
+									setAdapterId(event.currentTarget.value);
+									setSaveSuccess(false);
+									clearConnectionTestResult();
+								}}
+								disabled={connectionFormDisabled}
+							>
+								{adapterSelectOptions.map((option) => (
+									<option key={option.id} value={option.id}>
+										{option.label}
+									</option>
+								))}
+							</select>
+						</div>
+
 						<div>
 							<label className="mb-1 block text-sm font-medium text-ink" htmlFor="provider-base-url">
 								{t("models.baseUrl")}
