@@ -33,12 +33,7 @@ import {
 	testProviderConnection,
 } from "../../storage/client";
 import { getIpcErrorMessage } from "../../storage/errors";
-import type {
-	ConnectionTestResult,
-	CredentialUpdate,
-	ProviderInstanceDto,
-	ProviderModelDto,
-} from "../../storage/types";
+import type { CredentialUpdate, ProviderInstanceDto, ProviderModelDto } from "../../storage/types";
 import { getAdapterLabel, getDefaultBaseUrl } from "./adapterOptions";
 import { AddManualModelDialog } from "./AddManualModelDialog";
 import { useModelsContext } from "./ModelsContext";
@@ -204,8 +199,6 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 	const [deleteModelsPending, setDeleteModelsPending] = useState(false);
 
 	const [connectionTestPending, setConnectionTestPending] = useState(false);
-	const [connectionTestResult, setConnectionTestResult] = useState<ConnectionTestResult | null>(null);
-	const [connectionTestIpcError, setConnectionTestIpcError] = useState<string | null>(null);
 	/** Bumped on form edits / new tests so stale in-flight results are discarded. */
 	const connectionTestGeneration = useRef(0);
 	/** Latest provider.updatedAt for post-await version checks (avoid stale render closures). */
@@ -231,8 +224,6 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 
 	const clearConnectionTestResult = useCallback(() => {
 		connectionTestGeneration.current += 1;
-		setConnectionTestResult(null);
-		setConnectionTestIpcError(null);
 	}, []);
 
 	const reloadModels = useCallback(
@@ -452,8 +443,6 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 		// Capture version at click time; backend also returns providerUpdatedAt for compare.
 		const testedUpdatedAt = provider.updatedAt;
 		setConnectionTestPending(true);
-		setConnectionTestResult(null);
-		setConnectionTestIpcError(null);
 		try {
 			const result = await testProviderConnection(testedProviderId);
 			// Discard if a newer test started, form was edited, selection changed, or
@@ -463,7 +452,6 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 			if (connectionTestGeneration.current !== generation || testedProviderId !== providerId || !versionStillCurrent) {
 				return;
 			}
-			setConnectionTestResult(result);
 			if (result.ok) {
 				toast.success({ title: t("models.toast.connectionOk"), description: result.message });
 			} else {
@@ -478,7 +466,6 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 				return;
 			}
 			const message = getIpcErrorMessage(error, t("models.toast.connectionTestFailedDesc"));
-			setConnectionTestIpcError(message);
 			toast.error({ title: t("models.toast.connectionTestFailed"), description: message });
 		} finally {
 			if (connectionTestGeneration.current === generation) {
@@ -686,16 +673,6 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 				? t("models.tokenStored")
 				: t("models.tokenEnter");
 
-	// Only show results that still match the current provider connection version.
-	const visibleConnectionTestResult =
-		connectionTestResult && connectionTestResult.providerUpdatedAt === provider.updatedAt ? connectionTestResult : null;
-
-	const connectionResultClass = visibleConnectionTestResult?.ok
-		? "text-sm text-accent"
-		: visibleConnectionTestResult
-			? "text-sm text-danger"
-			: "text-sm text-muted";
-
 	return (
 		<div className="flex min-h-0 min-w-0 flex-1 flex-col">
 			<div className="min-h-0 flex-1 overflow-y-auto p-8">
@@ -791,166 +768,149 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 
 				<section className="shadow-frame relative mb-10 border border-line p-6">
 					<h3 className="mb-6 text-xl font-bold text-ink">{t("models.connection")}</h3>
-					<div className="flex flex-col items-start gap-6 lg:flex-row">
-						<div className="w-full min-w-0 flex-1 space-y-6">
-							<div>
-								<label className="mb-1 block text-sm font-medium text-ink" htmlFor="provider-base-url">
-									{t("models.baseUrl")}
-								</label>
-								<input
-									id="provider-base-url"
-									className={inputClassName}
-									type="text"
-									value={baseUrlOverride}
-									onChange={(event) => {
-										setBaseUrlOverride(event.currentTarget.value);
-										setSaveSuccess(false);
-										setInsecureHttpAcknowledged(false);
-										clearConnectionTestResult();
-									}}
-									placeholder={defaultBaseUrl ?? "https://…"}
-									spellCheck={false}
-									disabled={connectionFormDisabled}
-								/>
-								{defaultBaseUrl ? (
-									<p className="mt-1 text-xs text-muted">{t("common.default", { value: defaultBaseUrl })}</p>
-								) : null}
-							</div>
-
-							<div>
-								<label className="mb-1 block text-sm font-medium text-ink" htmlFor="provider-api-token">
-									{t("models.apiToken")}
-								</label>
-								<input
-									id="provider-api-token"
-									className={`${inputClassName} tracking-widest`}
-									type="password"
-									value={token}
-									onChange={(event) => {
-										const value = event.currentTarget.value;
-										setToken(value);
-										setSaveSuccess(false);
-										clearConnectionTestResult();
-										if (credentialAction === "clear") {
-											return;
-										}
-										if (value.trim()) {
-											setCredentialAction("replace");
-										} else {
-											setCredentialAction("keep");
-										}
-									}}
-									placeholder={tokenPlaceholder}
-									spellCheck={false}
-									autoComplete="off"
-									disabled={connectionFormDisabled || tokenDisabled}
-								/>
-								{provider.credentialKind !== "none" && provider.hasCredential ? (
-									<div className="mt-2 flex flex-wrap gap-2">
-										{credentialAction !== "clear" ? (
-											<Button
-												type="button"
-												className={outlineButtonClassName}
-												disabled={connectionFormDisabled}
-												onClick={() => {
-													setCredentialAction("clear");
-													setToken("");
-													setSaveSuccess(false);
-													clearConnectionTestResult();
-												}}
-											>
-												{t("models.resetToken")}
-											</Button>
-										) : (
-											<Button
-												type="button"
-												className={outlineButtonClassName}
-												disabled={connectionFormDisabled}
-												onClick={() => {
-													setCredentialAction("keep");
-													setToken("");
-													setSaveSuccess(false);
-													clearConnectionTestResult();
-												}}
-											>
-												{t("models.keepStoredToken")}
-											</Button>
-										)}
-									</div>
-								) : null}
-								{credentialRequiresReplace ? (
-									<p className="mt-2 text-sm text-danger" role="alert">
-										{t("models.tokenReplaceRequired")}
-									</p>
-								) : null}
-							</div>
-
-							{requiresInsecureAck && !endpointUnchangedInsecure ? (
-								<label className="flex items-start gap-2 text-sm text-ink">
-									<input
-										type="checkbox"
-										className={`${checkboxClassName} mt-0.5`}
-										checked={insecureHttpAcknowledged}
-										onChange={(event) => {
-											setInsecureHttpAcknowledged(event.currentTarget.checked);
-											setSaveSuccess(false);
-										}}
-										disabled={connectionFormDisabled}
-									/>
-									<span>{t("models.insecureHttpAck")}</span>
-								</label>
+					<div className="space-y-6">
+						<div>
+							<label className="mb-1 block text-sm font-medium text-ink" htmlFor="provider-base-url">
+								{t("models.baseUrl")}
+							</label>
+							<input
+								id="provider-base-url"
+								className={inputClassName}
+								type="text"
+								value={baseUrlOverride}
+								onChange={(event) => {
+									setBaseUrlOverride(event.currentTarget.value);
+									setSaveSuccess(false);
+									setInsecureHttpAcknowledged(false);
+									clearConnectionTestResult();
+								}}
+								placeholder={defaultBaseUrl ?? "https://…"}
+								spellCheck={false}
+								disabled={connectionFormDisabled}
+							/>
+							{defaultBaseUrl ? (
+								<p className="mt-1 text-xs text-muted">{t("common.default", { value: defaultBaseUrl })}</p>
 							) : null}
 						</div>
 
-						<div className="flex w-full shrink-0 flex-col justify-start gap-4 lg:w-48 lg:pt-6">
-							<span
-								className="inline-flex"
-								title={
-									connectionDirty
-										? t("models.saveBeforeRemote")
-										: connectionTestPending
-											? t("models.testingConnection")
-											: t("models.testConnectionTitle")
-								}
-							>
-								<Button
-									type="button"
-									className={outlineButtonClassName}
-									disabled={remoteActionsDisabled}
-									focusableWhenDisabled
-									onClick={() => {
-										void handleTestConnection();
+						<div>
+							<label className="mb-1 block text-sm font-medium text-ink" htmlFor="provider-api-token">
+								{t("models.apiToken")}
+							</label>
+							<input
+								id="provider-api-token"
+								className={`${inputClassName} tracking-widest`}
+								type="password"
+								value={token}
+								onChange={(event) => {
+									const value = event.currentTarget.value;
+									setToken(value);
+									setSaveSuccess(false);
+									clearConnectionTestResult();
+									if (credentialAction === "clear") {
+										return;
+									}
+									if (value.trim()) {
+										setCredentialAction("replace");
+									} else {
+										setCredentialAction("keep");
+									}
+								}}
+								placeholder={tokenPlaceholder}
+								spellCheck={false}
+								autoComplete="off"
+								disabled={connectionFormDisabled || tokenDisabled}
+							/>
+							{credentialRequiresReplace ? (
+								<p className="mt-2 text-sm text-danger" role="alert">
+									{t("models.tokenReplaceRequired")}
+								</p>
+							) : null}
+						</div>
+
+						{requiresInsecureAck && !endpointUnchangedInsecure ? (
+							<label className="flex items-start gap-2 text-sm text-ink">
+								<input
+									type="checkbox"
+									className={`${checkboxClassName} mt-0.5`}
+									checked={insecureHttpAcknowledged}
+									onChange={(event) => {
+										setInsecureHttpAcknowledged(event.currentTarget.checked);
+										setSaveSuccess(false);
 									}}
+									disabled={connectionFormDisabled}
+								/>
+								<span>{t("models.insecureHttpAck")}</span>
+							</label>
+						) : null}
+
+						<div className="space-y-2">
+							<div className="flex flex-wrap items-center gap-2">
+								<span
+									className="inline-flex"
+									title={
+										connectionDirty
+											? t("models.saveBeforeRemote")
+											: connectionTestPending
+												? t("models.testingConnection")
+												: t("models.testConnectionTitle")
+									}
 								>
-									{connectionTestPending ? t("common.testing") : t("models.testConnection")}
-								</Button>
-							</span>
+									<Button
+										type="button"
+										className={outlineButtonClassName}
+										disabled={remoteActionsDisabled}
+										focusableWhenDisabled
+										onClick={() => {
+											void handleTestConnection();
+										}}
+									>
+										{connectionTestPending ? t("common.testing") : t("models.testConnection")}
+									</Button>
+								</span>
+								{provider.credentialKind !== "none" && provider.hasCredential ? (
+									credentialAction !== "clear" ? (
+										<Button
+											type="button"
+											className={outlineButtonClassName}
+											disabled={connectionFormDisabled}
+											onClick={() => {
+												setCredentialAction("clear");
+												setToken("");
+												setSaveSuccess(false);
+												clearConnectionTestResult();
+											}}
+										>
+											{t("models.resetToken")}
+										</Button>
+									) : (
+										<Button
+											type="button"
+											className={outlineButtonClassName}
+											disabled={connectionFormDisabled}
+											onClick={() => {
+												setCredentialAction("keep");
+												setToken("");
+												setSaveSuccess(false);
+												clearConnectionTestResult();
+											}}
+										>
+											{t("models.keepStoredToken")}
+										</Button>
+									)
+								) : null}
+							</div>
 							{connectionDirty ? (
 								<p className="text-xs text-muted" id="connection-dirty-help">
 									{t("models.saveBeforeRemote")}
 								</p>
 							) : null}
-							<div aria-live="polite" className="min-h-5">
-								{connectionTestIpcError ? (
-									<p className="text-sm text-danger" role="alert">
-										{connectionTestIpcError}
-									</p>
-								) : null}
-								{visibleConnectionTestResult && !connectionTestIpcError ? (
-									<p className={connectionResultClass}>
-										{visibleConnectionTestResult.message}
-										{!visibleConnectionTestResult.ok && visibleConnectionTestResult.errorCode
-											? ` [${visibleConnectionTestResult.errorCode}]`
-											: null}
-									</p>
-								) : null}
-							</div>
-							<div className="text-xs text-muted">
-								{credentialAction === "clear" ? <p className="mt-1">{t("models.tokenRemovedOnSavePeriod")}</p> : null}
-								{credentialAction === "replace" && token.trim() ? (
-									<p className="mt-1">{t("models.tokenReplaceHint")}</p>
-								) : null}
-							</div>
+							{credentialAction === "clear" ? (
+								<p className="text-xs text-muted">{t("models.tokenRemovedOnSavePeriod")}</p>
+							) : null}
+							{credentialAction === "replace" && token.trim() ? (
+								<p className="text-xs text-muted">{t("models.tokenReplaceHint")}</p>
+							) : null}
 						</div>
 					</div>
 				</section>
