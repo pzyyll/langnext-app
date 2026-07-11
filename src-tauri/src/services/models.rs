@@ -2,8 +2,8 @@
 // ABOUTME: Vault and transport work run via spawn_blocking / async reqwest without exposing secrets.
 use crate::adapters::catalog;
 use crate::adapters::transport::{
-	chat_completion_http_cancellable, chat_completion_stream_http_cancellable, ChatCompletionRequest,
-	ModelListRequest, ModelTransport, TransportError,
+	chat_completion_http_cancellable, chat_completion_stream_http_cancellable, ChatCompletionRequest, ModelListRequest,
+	ModelTransport, TransportError,
 };
 use crate::credentials::CredentialVault;
 use crate::domain::cancel::CancelToken;
@@ -185,6 +185,28 @@ impl ModelService {
 		self.db.transaction(|uow| provider_models::delete(uow.conn(), id))
 	}
 
+	/// Delete many models in one transaction (all-or-nothing).
+	///
+	/// Input contract:
+	/// - Empty list → success with `0` (no-op).
+	/// - Duplicate ids are collapsed so the same id is deleted once.
+	/// - Any missing or FK-restricted id aborts the whole transaction (nothing deleted).
+	///
+	/// Returns the number of unique ids deleted on success.
+	pub fn delete_many(&self, ids: Vec<Uuid>) -> Result<usize, StorageError> {
+		let mut seen = std::collections::HashSet::new();
+		let unique: Vec<Uuid> = ids.into_iter().filter(|id| seen.insert(*id)).collect();
+		if unique.is_empty() {
+			return Ok(0);
+		}
+		self.db.transaction(|uow| {
+			for id in &unique {
+				provider_models::delete(uow.conn(), *id)?;
+			}
+			Ok(unique.len())
+		})
+	}
+
 	/// Pure cache-merge used after a remote model list is received.
 	/// Available in tests as a direct merge helper without connection identity guards.
 	#[cfg(test)]
@@ -295,11 +317,7 @@ impl ModelService {
 		let prepared = self.prepare_translate(input).await?;
 		match prepared {
 			TranslatePrepare::Early(result) => Ok(result),
-			TranslatePrepare::Ready { attempts } => {
-				self
-					.run_translate_attempts(attempts, false, None, None, cancel)
-					.await
-			}
+			TranslatePrepare::Ready { attempts } => self.run_translate_attempts(attempts, false, None, None, cancel).await,
 		}
 	}
 
@@ -351,13 +369,7 @@ impl ModelService {
 					);
 				};
 				let result = self
-					.run_translate_attempts(
-						attempts,
-						true,
-						Some(&mut on_delta),
-						Some(&mut on_reset),
-						cancel,
-					)
+					.run_translate_attempts(attempts, true, Some(&mut on_delta), Some(&mut on_reset), cancel)
 					.await?;
 				// Soft failures after all attempts still use done with ok=false so the UI
 				// can treat them like non-stream TranslateResult failures.
@@ -448,9 +460,10 @@ impl ModelService {
 			}
 		}
 
-		Ok(last_failure.unwrap_or_else(|| {
-			TranslateResult::failure("invalid_response", "No translation attempts were prepared", 0)
-		}))
+		Ok(
+			last_failure
+				.unwrap_or_else(|| TranslateResult::failure("invalid_response", "No translation attempts were prepared", 0)),
+		)
 	}
 
 	/// Test the saved provider connection without mutating models or sync status.
@@ -795,15 +808,9 @@ fn prepare_translate_sync(
 	}
 
 	if attempts.is_empty() {
-		return Ok(TranslatePrepare::Early(last_credential_failure.unwrap_or_else(
-			|| {
-				TranslateResult::failure(
-					"validation_failed",
-					"No enabled models available for translation",
-					0,
-				)
-			},
-		)));
+		return Ok(TranslatePrepare::Early(last_credential_failure.unwrap_or_else(|| {
+			TranslateResult::failure("validation_failed", "No enabled models available for translation", 0)
+		})));
 	}
 
 	Ok(TranslatePrepare::Ready { attempts })
@@ -845,12 +852,16 @@ fn prepare_single_model_attempt(
 	}
 
 	match resolve_saved_provider(db, vault, provider.id)? {
-		ResolveOutcome::MissingCredential { .. } => Ok(SingleModelPrepare::Credential(
-			TranslateResult::failure("auth", "Authentication failed", 0),
-		)),
-		ResolveOutcome::CredentialStoreFailure { .. } => Ok(SingleModelPrepare::Credential(
-			TranslateResult::failure("credential_unavailable", "Credential store unavailable", 0),
-		)),
+		ResolveOutcome::MissingCredential { .. } => Ok(SingleModelPrepare::Credential(TranslateResult::failure(
+			"auth",
+			"Authentication failed",
+			0,
+		))),
+		ResolveOutcome::CredentialStoreFailure { .. } => Ok(SingleModelPrepare::Credential(TranslateResult::failure(
+			"credential_unavailable",
+			"Credential store unavailable",
+			0,
+		))),
 		ResolveOutcome::Ready { request, .. } => Ok(SingleModelPrepare::Ready(TranslateAttempt {
 			model_id,
 			request: ChatCompletionRequest {

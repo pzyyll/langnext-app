@@ -24,3 +24,22 @@ export function getIpcErrorMessage(error: unknown, fallback: string): string {
 
 	return fallback;
 }
+
+/**
+ * Extract a stable IPC error code when present (`conflict`, `validation_failed`, …).
+ * Returns null when the rejection does not carry a code field.
+ */
+export function getIpcErrorCode(error: unknown): string | null {
+	if (error !== null && typeof error === "object") {
+		const record = error as Record<string, unknown>;
+		if (typeof record.code === "string" && record.code.trim()) {
+			return record.code;
+		}
+	}
+	return null;
+}
+
+/** True when the rejection is an optimistic-concurrency conflict. */
+export function isConflictError(error: unknown): boolean {
+	return getIpcErrorCode(error) === "conflict";
+}

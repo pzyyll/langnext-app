@@ -143,33 +143,42 @@ impl ProviderService {
 	fn update(&self, id: Uuid, input: ProviderInstanceWrite) -> Result<ProviderInstanceDto, StorageError> {
 		coordinator::preflight_owner(&self.db, self.vault.as_ref(), OwnerKind::Provider, &id.to_string())?;
 
+		let expected_updated_at = require_expected_updated_at(&input)?;
 		let credential = input.credential.clone();
 		match credential {
-			CredentialUpdate::Keep => self.update_keep(id, input),
+			CredentialUpdate::Keep => self.update_keep(id, input, &expected_updated_at),
 			CredentialUpdate::Replace(secret) => {
 				if secret.is_empty() {
 					return Err(StorageError::Validation("credential secret must not be empty".into()));
 				}
 				let existing = self.db.read(|conn| provider_instances::get(conn, id))?;
+				ensure_expected_version(&existing, &expected_updated_at)?;
 				validate_credential_transition(&existing, &input)?;
-				self.replace_credential(existing, input, &secret)
+				self.replace_credential(existing, input, &secret, &expected_updated_at)
 			}
 			CredentialUpdate::Clear => {
 				let existing = self.db.read(|conn| provider_instances::get(conn, id))?;
+				ensure_expected_version(&existing, &expected_updated_at)?;
 				validate_credential_transition(&existing, &input)?;
-				self.clear_credential(existing, input)
+				self.clear_credential(existing, input, &expected_updated_at)
 			}
 		}
 	}
 
 	/// Keep path: re-read, validate unfinished ops, and write config without rewriting credential_ref.
-	fn update_keep(&self, id: Uuid, input: ProviderInstanceWrite) -> Result<ProviderInstanceDto, StorageError> {
+	fn update_keep(
+		&self,
+		id: Uuid,
+		input: ProviderInstanceWrite,
+		expected_updated_at: &str,
+	) -> Result<ProviderInstanceDto, StorageError> {
 		self.db.transaction(|uow| {
 			let conn = uow.conn();
 			if credential_operations::get_for_owner(conn, OwnerKind::Provider, &id.to_string())?.is_some() {
 				return Err(StorageError::CredentialBusy);
 			}
 			let existing = provider_instances::get(conn, id)?;
+			ensure_expected_version(&existing, expected_updated_at)?;
 			validate_credential_transition(&existing, &input)?;
 
 			// Keep path never rewrites credential_ref. Adapter and Base URL changes may retain the stored token.
@@ -208,10 +217,12 @@ impl ProviderService {
 		existing: ProviderInstance,
 		input: ProviderInstanceWrite,
 		secret: &str,
+		expected_updated_at: &str,
 	) -> Result<ProviderInstanceDto, StorageError> {
 		let op_id = new_id();
 		let new_ref = provider_ref(existing.id, op_id);
 		let old_ref = existing.credential_ref.clone();
+		let expected_updated_at = expected_updated_at.to_string();
 
 		let prepared = self.db.transaction(|uow| {
 			credential_operations::insert_prepared(
@@ -250,16 +261,14 @@ impl ProviderService {
 		}
 
 		let commit = self.db.transaction(|uow| {
-			provider_instances::compare_and_set_credential_ref(
-				uow.conn(),
-				existing.id,
-				old_ref.as_deref(),
-				Some(&new_ref),
-				&now,
-			)?;
+			let conn = uow.conn();
+			// Re-check version in the write transaction so concurrent saves cannot race past the pre-read.
+			let latest = provider_instances::get(conn, existing.id)?;
+			ensure_expected_version(&latest, &expected_updated_at)?;
+			provider_instances::compare_and_set_credential_ref(conn, existing.id, old_ref.as_deref(), Some(&new_ref), &now)?;
 			// Single SQLite transaction after vault write: config + credential_ref + sync reset.
-			provider_instances::update_configuration(uow.conn(), &provider)?;
-			let op = credential_operations::mark_db_committed(uow.conn(), op_id)?;
+			provider_instances::update_configuration(conn, &provider)?;
+			let op = credential_operations::mark_db_committed(conn, op_id)?;
 			Ok((provider, op))
 		});
 
@@ -282,9 +291,11 @@ impl ProviderService {
 		&self,
 		existing: ProviderInstance,
 		input: ProviderInstanceWrite,
+		expected_updated_at: &str,
 	) -> Result<ProviderInstanceDto, StorageError> {
 		let op_id = new_id();
 		let old_ref = existing.credential_ref.clone();
+		let expected_updated_at = expected_updated_at.to_string();
 
 		self.db.transaction(|uow| {
 			credential_operations::insert_prepared(
@@ -311,6 +322,7 @@ impl ProviderService {
 		let commit = self.db.transaction(|uow| {
 			let conn = uow.conn();
 			let latest = provider_instances::get(conn, existing.id)?;
+			ensure_expected_version(&latest, &expected_updated_at)?;
 			provider_instances::compare_and_set_credential_ref(conn, existing.id, old_ref.as_deref(), None, &now)?;
 
 			// build_provider defaults sync metadata to Never/None.
@@ -461,6 +473,31 @@ fn validate_provider_write(input: &ProviderInstanceWrite) -> Result<(), StorageE
 	}
 	match input.proxy_mode {
 		ProxyMode::Inherit | ProxyMode::Direct => {}
+	}
+	Ok(())
+}
+
+/// Updates must carry the form's baseline `updated_at` for optimistic concurrency.
+fn require_expected_updated_at(input: &ProviderInstanceWrite) -> Result<String, StorageError> {
+	let Some(expected) = input
+		.expected_updated_at
+		.as_ref()
+		.map(|s| s.trim())
+		.filter(|s| !s.is_empty())
+	else {
+		return Err(StorageError::Validation(
+			"expected_updated_at is required when updating a provider".into(),
+		));
+	};
+	Ok(expected.to_string())
+}
+
+/// Fail closed when the stored row no longer matches the editor baseline.
+fn ensure_expected_version(existing: &ProviderInstance, expected_updated_at: &str) -> Result<(), StorageError> {
+	if existing.updated_at != expected_updated_at {
+		return Err(StorageError::Conflict(
+			"provider was modified; reload before saving".into(),
+		));
 	}
 	Ok(())
 }

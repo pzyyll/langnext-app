@@ -1,6 +1,7 @@
 // ABOUTME: General translation index page with source/target panes and streaming.
 // ABOUTME: Nested under /translate; selects profiles and calls provider models via IPC.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, createFileRoute } from "@tanstack/react-router";
 import { Button } from "@base-ui/react/button";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
@@ -14,17 +15,16 @@ import IconMaterialSymbolsLightSwapHoriz from "~icons/material-symbols-light/swa
 import IconMaterialSymbolsLightVerifiedUser from "~icons/material-symbols-light/verified-user";
 import IconMaterialSymbolsLightVolumeUp from "~icons/material-symbols-light/volume-up";
 import { useToast } from "../../components/toast/useToast";
+import { iconButtonClassName, outlineButtonClassName, primaryButtonClassName } from "../../components/ui";
+import { shouldApplyProfileResult } from "../../query/profileApplyGuard";
 import {
-	iconButtonClassName,
-	outlineButtonClassName,
-	primaryButtonClassName,
-} from "../../components/ui";
+	allProviderModelsOptions,
+	profileDetailOptions,
+	profileListOptions,
+	providerListOptions,
+} from "../../query/options";
 import {
 	cancelTranslate,
-	getTranslationProfile,
-	listAllProviderModels,
-	listProviderInstances,
-	listTranslationProfiles,
 	TRANSLATE_CHUNK_EVENT,
 	TRANSLATE_DONE_EVENT,
 	TRANSLATE_ERROR_EVENT,
@@ -40,7 +40,6 @@ import type {
 	TranslateStreamDone,
 	TranslateStreamError,
 	TranslateStreamReset,
-	TranslationProfile,
 } from "../../storage/types";
 
 export const Route = createFileRoute("/translate/")({
@@ -116,6 +115,7 @@ function newRequestId(): string {
 function TranslatePage() {
 	const { t } = useTranslation();
 	const toast = useToast();
+	const queryClient = useQueryClient();
 	const [sourceLang, setSourceLang] = useState<LanguageId>("zh");
 	const [targetLang, setTargetLang] = useState<LanguageId>("en");
 	const [sourceText, setSourceText] = useState("");
@@ -129,18 +129,46 @@ function TranslatePage() {
 	const [useStreaming, setUseStreaming] = useState(true);
 	const [activeModelLabel, setActiveModelLabel] = useState<string | null>(null);
 
-	const [modelOptions, setModelOptions] = useState<ModelOption[]>([]);
 	const [selectedModelId, setSelectedModelId] = useState("");
-	const [modelsLoading, setModelsLoading] = useState(true);
-	const [modelsError, setModelsError] = useState<string | null>(null);
-
-	const [profiles, setProfiles] = useState<TranslationProfile[]>([]);
 	const [selectedProfileId, setSelectedProfileId] = useState("");
-	const [profilesLoading, setProfilesLoading] = useState(true);
-	const [profilesError, setProfilesError] = useState<string | null>(null);
+	const [profileApplyError, setProfileApplyError] = useState<string | null>(null);
+
+	const providersQuery = useQuery(providerListOptions());
+	const modelsQuery = useQuery(allProviderModelsOptions());
+	const profilesQuery = useQuery(profileListOptions());
+
+	const modelOptions = useMemo(
+		() =>
+			buildModelOptions(providersQuery.data ?? [], modelsQuery.data ?? [], (provider, model) =>
+				t("translate.modelOption", { provider, model }),
+			),
+		[providersQuery.data, modelsQuery.data, t],
+	);
+
+	const modelsLoading = providersQuery.isLoading || modelsQuery.isLoading;
+	const modelsError =
+		providersQuery.error != null || modelsQuery.error != null
+			? getIpcErrorMessage(providersQuery.error ?? modelsQuery.error, t("translate.modelLoadFailed"))
+			: null;
+
+	const profiles = useMemo(() => (profilesQuery.data ?? []).filter((profile) => profile.enabled), [profilesQuery.data]);
+	const profilesLoading = profilesQuery.isLoading;
+	const profilesError =
+		profilesQuery.error != null
+			? getIpcErrorMessage(profilesQuery.error, t("translate.profileLoadFailed"))
+			: profileApplyError;
+
+	// Keep selection valid when options change after invalidation (derived, no effect).
+	const resolvedModelId =
+		selectedModelId && modelOptions.some((option) => option.id === selectedModelId)
+			? selectedModelId
+			: (modelOptions[0]?.id ?? "");
+	const resolvedProfileId = profiles.some((profile) => profile.id === selectedProfileId) ? selectedProfileId : "";
 
 	/** Monotonic local counter + backend stream request id for cancellation. */
 	const translateGeneration = useRef(0);
+	/** Guards out-of-order profile apply responses when the user switches quickly. */
+	const profileApplyGeneration = useRef(0);
 	const activeRequestId = useRef<string | null>(null);
 	const streamUnlisteners = useRef<UnlistenFn[]>([]);
 
@@ -189,72 +217,26 @@ function TranslatePage() {
 		};
 	}, [abortActiveRequest]);
 
-	useEffect(() => {
-		let cancelled = false;
-
-		async function loadInitial() {
-			setModelsError(null);
-			setModelsLoading(true);
-			setProfilesError(null);
-			setProfilesLoading(true);
-			try {
-				const [providers, models, profileList] = await Promise.all([
-					listProviderInstances(),
-					listAllProviderModels(),
-					listTranslationProfiles(),
-				]);
-				if (cancelled) {
-					return;
-				}
-				const options = buildModelOptions(providers, models, (provider, model) =>
-					t("translate.modelOption", { provider, model }),
-				);
-				setModelOptions(options);
-				setSelectedModelId((current) => {
-					if (current && options.some((option) => option.id === current)) {
-						return current;
-					}
-					return options[0]?.id ?? "";
-				});
-				setProfiles(profileList.filter((profile) => profile.enabled));
-			} catch (err) {
-				if (cancelled) {
-					return;
-				}
-				setModelOptions([]);
-				setSelectedModelId("");
-				setModelsError(getIpcErrorMessage(err, t("translate.modelLoadFailed")));
-				setProfiles([]);
-				setProfilesError(getIpcErrorMessage(err, t("translate.profileLoadFailed")));
-			} finally {
-				if (!cancelled) {
-					setModelsLoading(false);
-					setProfilesLoading(false);
-				}
-			}
-		}
-
-		void loadInitial();
-		return () => {
-			cancelled = true;
-		};
-	}, [t]);
-
 	const charCount = sourceText.length;
-	const canTranslate =
-		sourceText.trim().length > 0 && selectedModelId.length > 0 && !isTranslating && !modelsLoading;
+	const canTranslate = sourceText.trim().length > 0 && resolvedModelId.length > 0 && !isTranslating && !modelsLoading;
 
 	async function applyProfile(profileId: string) {
+		const generation = ++profileApplyGeneration.current;
 		if (!profileId) {
 			setSelectedProfileId("");
+			setProfileApplyError(null);
 			return;
 		}
+		// Optimistic selection so the control tracks the latest user choice immediately.
+		setSelectedProfileId(profileId);
+		setProfileApplyError(null);
 		try {
-			const dto = await getTranslationProfile(profileId);
-			setSelectedProfileId(profileId);
-			setProfilesError(null);
+			const dto = await queryClient.fetchQuery(profileDetailOptions(profileId));
+			if (!shouldApplyProfileResult(generation, profileApplyGeneration.current)) {
+				return;
+			}
 
-			const primaryTarget = dto.targets[0];
+			const primaryTarget = [...dto.targets].sort((a, b) => a.priority - b.priority)[0];
 			if (primaryTarget && modelOptions.some((option) => option.id === primaryTarget.providerModelId)) {
 				setSelectedModelId(primaryTarget.providerModelId);
 			}
@@ -265,7 +247,10 @@ function TranslatePage() {
 				setTargetLang(dto.targetLang);
 			}
 		} catch (err) {
-			setProfilesError(getIpcErrorMessage(err, t("translate.profileLoadFailed")));
+			if (!shouldApplyProfileResult(generation, profileApplyGeneration.current)) {
+				return;
+			}
+			setProfileApplyError(getIpcErrorMessage(err, t("translate.profileLoadFailed")));
 		}
 	}
 
@@ -283,10 +268,7 @@ function TranslatePage() {
 	}
 
 	/** Map known backend error codes to localized copy; fall back to server message. */
-	function resolveTranslateFailureMessage(
-		errorCode: string | null | undefined,
-		message: string | undefined,
-	): string {
+	function resolveTranslateFailureMessage(errorCode: string | null | undefined, message: string | undefined): string {
 		if (errorCode === "timeout") {
 			return t("translate.errors.timeout");
 		}
@@ -432,11 +414,7 @@ function TranslatePage() {
 				// Prefer full text from the server so we do not drift on partial assembly.
 				finishSuccessUi(generation, done.translatedText, done.latencyMs, done.modelId);
 			} else {
-				finishErrorUi(
-					generation,
-					resolveTranslateFailureMessage(done.errorCode, done.message),
-					done.latencyMs,
-				);
+				finishErrorUi(generation, resolveTranslateFailureMessage(done.errorCode, done.message), done.latencyMs);
 			}
 		};
 
@@ -454,11 +432,7 @@ function TranslatePage() {
 				finishCancelledUi(generation);
 				return;
 			}
-			finishErrorUi(
-				generation,
-				resolveTranslateFailureMessage(err.errorCode, err.message),
-				err.latencyMs,
-			);
+			finishErrorUi(generation, resolveTranslateFailureMessage(err.errorCode, err.message), err.latencyMs);
 		};
 
 		activeRequestId.current = requestId;
@@ -498,7 +472,7 @@ function TranslatePage() {
 		if (!trimmed) {
 			return;
 		}
-		if (!selectedModelId) {
+		if (!resolvedModelId) {
 			setErrorMessage(t("translate.selectModelFirst"));
 			setOutputText("");
 			setHasTranslated(true);
@@ -519,11 +493,11 @@ function TranslatePage() {
 		const sourceLabel = t(`translate.languages.${sourceLang}`);
 		const targetLabel = t(`translate.languages.${targetLang}`);
 		const payload = {
-			modelId: selectedModelId,
+			modelId: resolvedModelId,
 			sourceLang: sourceLabel,
 			targetLang: targetLabel,
 			text: trimmed,
-			profileId: selectedProfileId || null,
+			profileId: resolvedProfileId || null,
 		};
 		const requestId = newRequestId();
 		activeRequestId.current = requestId;
@@ -546,11 +520,7 @@ function TranslatePage() {
 			if (result.ok) {
 				finishSuccessUi(generation, result.translatedText, result.latencyMs, result.modelId);
 			} else {
-				finishErrorUi(
-					generation,
-					resolveTranslateFailureMessage(result.errorCode, result.message),
-					result.latencyMs,
-				);
+				finishErrorUi(generation, resolveTranslateFailureMessage(result.errorCode, result.message), result.latencyMs);
 			}
 		} catch (err) {
 			if (generation !== translateGeneration.current) {
@@ -591,7 +561,7 @@ function TranslatePage() {
 						<select
 							id="translate-profile"
 							className={`${compactSelectClassName} max-w-xs`}
-							value={selectedProfileId}
+							value={resolvedProfileId}
 							disabled={profileSelectDisabled || isTranslating}
 							aria-label={t("translate.profileAria")}
 							onChange={(event) => {
@@ -623,7 +593,7 @@ function TranslatePage() {
 						<select
 							id="translate-model"
 							className={`${compactSelectClassName} max-w-xs`}
-							value={selectedModelId}
+							value={resolvedModelId}
 							disabled={modelSelectDisabled || isTranslating}
 							aria-label={t("translate.modelAria")}
 							onChange={(event) => {
@@ -837,12 +807,7 @@ function TranslatePage() {
 							>
 								<IconMaterialSymbolsLightContentCopy className="size-4" aria-hidden />
 							</Button>
-							<Button
-								type="button"
-								className={iconButtonClassName}
-								aria-label={t("translate.speak")}
-								disabled
-							>
+							<Button type="button" className={iconButtonClassName} aria-label={t("translate.speak")} disabled>
 								<IconMaterialSymbolsLightVolumeUp className="size-4" aria-hidden />
 							</Button>
 						</div>
@@ -884,9 +849,7 @@ function TranslatePage() {
 								<div className="border border-outline-variant bg-surface p-2">
 									<p className="mb-1 text-table-header text-neutral uppercase">{t("translate.latency")}</p>
 									<p className="text-body-tight font-bold text-on-surface">
-										{latencyMs === null
-											? t("translate.latencyEmpty")
-											: t("translate.latencyValue", { ms: latencyMs })}
+										{latencyMs === null ? t("translate.latencyEmpty") : t("translate.latencyValue", { ms: latencyMs })}
 									</p>
 								</div>
 							</div>

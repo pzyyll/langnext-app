@@ -2,10 +2,9 @@
 // ABOUTME: Returns sanitized DTOs; secrets never cross the IPC boundary.
 use crate::cmds::runtime::run_blocking;
 use crate::domain::model::{ConnectionTestResult, ManualModelWrite, ProviderModelDto, SyncModelsResult};
-use crate::domain::translation::{
-	TranslateInput, TranslateResult, TranslateStreamError, TRANSLATE_ERROR_EVENT,
-};
+use crate::domain::translation::{TranslateInput, TranslateResult, TranslateStreamError, TRANSLATE_ERROR_EVENT};
 use crate::error::IpcError;
+use crate::events::{emit_data_changed, MODELS_CHANGED, PROVIDERS_CHANGED};
 use crate::state::AppState;
 use tauri::{AppHandle, Emitter, State};
 use uuid::Uuid;
@@ -38,9 +37,7 @@ pub async fn translate_text(
 	let models = state.models.clone();
 	let sessions = state.translate_sessions.clone();
 
-	let request_id = request_id
-		.map(|id| id.trim().to_string())
-		.filter(|id| !id.is_empty());
+	let request_id = request_id.map(|id| id.trim().to_string()).filter(|id| !id.is_empty());
 	if let Some(ref id) = request_id {
 		if id.len() > 128 {
 			return Err(IpcError::new(
@@ -126,27 +123,51 @@ pub async fn cancel_translate(state: State<'_, AppState>, request_id: String) ->
 
 #[tauri::command]
 pub async fn save_manual_model(
+	app: AppHandle,
 	state: State<'_, AppState>,
 	input: ManualModelWrite,
 ) -> Result<ProviderModelDto, IpcError> {
 	let models = state.models.clone();
-	run_blocking("save_manual_model", move || models.save_manual(input)).await
+	let result = run_blocking("save_manual_model", move || models.save_manual(input)).await?;
+	emit_data_changed(&app, MODELS_CHANGED);
+	Ok(result)
 }
 
 #[tauri::command]
 pub async fn set_model_enabled(
+	app: AppHandle,
 	state: State<'_, AppState>,
 	id: Uuid,
 	enabled: bool,
 ) -> Result<ProviderModelDto, IpcError> {
 	let models = state.models.clone();
-	run_blocking("set_model_enabled", move || models.set_enabled(id, enabled)).await
+	let result = run_blocking("set_model_enabled", move || models.set_enabled(id, enabled)).await?;
+	emit_data_changed(&app, MODELS_CHANGED);
+	Ok(result)
 }
 
 #[tauri::command]
-pub async fn delete_provider_model(state: State<'_, AppState>, id: Uuid) -> Result<(), IpcError> {
+pub async fn delete_provider_model(app: AppHandle, state: State<'_, AppState>, id: Uuid) -> Result<(), IpcError> {
 	let models = state.models.clone();
-	run_blocking("delete_provider_model", move || models.delete(id)).await
+	run_blocking("delete_provider_model", move || models.delete(id)).await?;
+	emit_data_changed(&app, MODELS_CHANGED);
+	Ok(())
+}
+
+/// Bulk-delete models in a single SQLite transaction. Emits MODELS_CHANGED once on success.
+/// Empty lists are a no-op success and do not emit.
+#[tauri::command]
+pub async fn delete_provider_models(
+	app: AppHandle,
+	state: State<'_, AppState>,
+	ids: Vec<Uuid>,
+) -> Result<(), IpcError> {
+	let models = state.models.clone();
+	let deleted = run_blocking("delete_provider_models", move || models.delete_many(ids)).await?;
+	if deleted > 0 {
+		emit_data_changed(&app, MODELS_CHANGED);
+	}
+	Ok(())
 }
 
 #[tauri::command]
@@ -164,9 +185,17 @@ pub async fn test_provider_connection(
 
 #[tauri::command]
 pub async fn sync_provider_models(
+	app: AppHandle,
 	state: State<'_, AppState>,
 	provider_instance_id: Uuid,
 ) -> Result<SyncModelsResult, IpcError> {
 	let models = state.models.clone();
-	models.sync_models(provider_instance_id).await.map_err(IpcError::from)
+	let result = models.sync_models(provider_instance_id).await.map_err(IpcError::from)?;
+	// Only broadcast after a successful remote merge; soft failures leave models unchanged.
+	// Provider sync status fields also change, so notify provider consumers as well.
+	if result.ok {
+		emit_data_changed(&app, MODELS_CHANGED);
+		emit_data_changed(&app, PROVIDERS_CHANGED);
+	}
+	Ok(result)
 }

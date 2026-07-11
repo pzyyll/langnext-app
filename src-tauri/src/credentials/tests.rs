@@ -33,7 +33,15 @@ fn write(secret: Option<&str>) -> ProviderInstanceWrite {
 		enabled: true,
 		proxy_mode: ProxyMode::Inherit,
 		insecure_http_confirmed_at: None,
+		expected_updated_at: None,
 	}
+}
+
+fn write_update(id: uuid::Uuid, expected_updated_at: &str, secret: Option<&str>) -> ProviderInstanceWrite {
+	let mut input = write(secret);
+	input.id = Some(id);
+	input.expected_updated_at = Some(expected_updated_at.to_string());
+	input
 }
 
 #[test]
@@ -41,12 +49,11 @@ fn replace_then_clear() {
 	let (_d, _db, _v, providers) = setup();
 	let dto = providers.save(write(Some("a"))).unwrap();
 	assert!(dto.has_credential);
-	let mut input = write(Some("b"));
-	input.id = Some(dto.id);
-	let dto = providers.save(input).unwrap();
+	let dto = providers
+		.save(write_update(dto.id, &dto.updated_at, Some("b")))
+		.unwrap();
 	assert!(dto.has_credential);
-	let mut clear = write(None);
-	clear.id = Some(dto.id);
+	let mut clear = write_update(dto.id, &dto.updated_at, None);
 	clear.credential = CredentialUpdate::Clear;
 	let dto = providers.save(clear).unwrap();
 	assert!(!dto.has_credential);
@@ -202,9 +209,9 @@ fn replace_cleanup_failure_retains_db_committed_journal() {
 
 	// Next replace succeeds in DB/vault set, but old-secret delete fails.
 	vault.set_fail_delete(true);
-	let mut input = write(Some("second"));
-	input.id = Some(dto.id);
-	let dto = providers.save(input).unwrap();
+	let dto = providers
+		.save(write_update(dto.id, &dto.updated_at, Some("second")))
+		.unwrap();
 	assert!(dto.has_credential);
 
 	let unfinished = db.read(credential_operations::list_unfinished).unwrap();
@@ -231,14 +238,13 @@ fn preflight_returns_unavailable_when_vault_unreachable() {
 
 	// Leave a db_committed journal with delete failing.
 	vault.set_fail_delete(true);
-	let mut input = write(Some("second"));
-	input.id = Some(dto.id);
-	let _ = providers.save(input).unwrap();
+	let dto = providers
+		.save(write_update(dto.id, &dto.updated_at, Some("second")))
+		.unwrap();
 
 	// exists probe also fails → credential_unavailable rather than permanent busy.
 	vault.set_fail_exists(true);
-	let mut keep = write(None);
-	keep.id = Some(dto.id);
+	let mut keep = write_update(dto.id, &dto.updated_at, None);
 	keep.credential = CredentialUpdate::Keep;
 	let err = providers.save(keep).unwrap_err();
 	assert!(matches!(
@@ -257,8 +263,7 @@ fn clear_cleanup_failure_retains_journal() {
 
 	let dto = providers.save(write(Some("secret"))).unwrap();
 	vault.set_fail_delete(true);
-	let mut clear = write(None);
-	clear.id = Some(dto.id);
+	let mut clear = write_update(dto.id, &dto.updated_at, None);
 	clear.credential = CredentialUpdate::Clear;
 	let cleared = providers.save(clear).unwrap();
 	assert!(!cleared.has_credential);

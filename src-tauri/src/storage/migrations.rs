@@ -100,11 +100,7 @@ mod tests {
 		assert_eq!(count, 1);
 		// v3 columns exist for profile language prefs.
 		let _: Option<String> = conn
-			.query_row(
-				"SELECT source_lang FROM translation_profiles LIMIT 1",
-				[],
-				|r| r.get(0),
-			)
+			.query_row("SELECT source_lang FROM translation_profiles LIMIT 1", [], |r| r.get(0))
 			.optional()
 			.unwrap();
 	}

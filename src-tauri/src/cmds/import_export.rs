@@ -3,8 +3,9 @@
 use crate::cmds::runtime::run_blocking;
 use crate::domain::import_export::{ConfigurationExport, ImportConflictMode, ImportPreview, ImportResult};
 use crate::error::IpcError;
+use crate::events::{emit_data_changed, MODELS_CHANGED, PROVIDERS_CHANGED, TRANSLATION_PROFILES_CHANGED};
 use crate::state::AppState;
-use tauri::State;
+use tauri::{AppHandle, State};
 
 #[tauri::command]
 pub async fn export_configuration(state: State<'_, AppState>) -> Result<ConfigurationExport, IpcError> {
@@ -24,10 +25,18 @@ pub async fn preview_configuration_import(
 
 #[tauri::command]
 pub async fn import_configuration(
+	app: AppHandle,
 	state: State<'_, AppState>,
 	document: ConfigurationExport,
 	mode: ImportConflictMode,
 ) -> Result<ImportResult, IpcError> {
 	let service = state.import_export.clone();
-	run_blocking("import_configuration", move || service.import(document, mode)).await
+	let result = run_blocking("import_configuration", move || service.import(document, mode)).await?;
+	// Import may replace or merge providers, models, and profiles; notify all domains.
+	if result.applied {
+		emit_data_changed(&app, PROVIDERS_CHANGED);
+		emit_data_changed(&app, MODELS_CHANGED);
+		emit_data_changed(&app, TRANSLATION_PROFILES_CHANGED);
+	}
+	Ok(result)
 }

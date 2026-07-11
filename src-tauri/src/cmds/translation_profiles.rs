@@ -1,14 +1,16 @@
 // ABOUTME: Translation profile and fallback-chain Tauri commands.
 // ABOUTME: Profiles are validated in Rust before any repository write.
 use crate::cmds::runtime::run_blocking;
-use crate::domain::translation_profile::{TranslationProfile, TranslationProfileDto, TranslationProfileWrite};
+use crate::domain::translation_profile::TranslationProfileDto;
+use crate::domain::translation_profile::TranslationProfileWrite;
 use crate::error::IpcError;
+use crate::events::{emit_data_changed, TRANSLATION_PROFILES_CHANGED};
 use crate::state::AppState;
-use tauri::State;
+use tauri::{AppHandle, State};
 use uuid::Uuid;
 
 #[tauri::command]
-pub async fn list_translation_profiles(state: State<'_, AppState>) -> Result<Vec<TranslationProfile>, IpcError> {
+pub async fn list_translation_profiles(state: State<'_, AppState>) -> Result<Vec<TranslationProfileDto>, IpcError> {
 	let profiles = state.profiles.clone();
 	run_blocking("list_translation_profiles", move || profiles.list()).await
 }
@@ -21,28 +23,36 @@ pub async fn get_translation_profile(state: State<'_, AppState>, id: Uuid) -> Re
 
 #[tauri::command]
 pub async fn save_translation_profile(
+	app: AppHandle,
 	state: State<'_, AppState>,
 	input: TranslationProfileWrite,
 ) -> Result<TranslationProfileDto, IpcError> {
 	let profiles = state.profiles.clone();
-	run_blocking("save_translation_profile", move || profiles.save(input)).await
+	let result = run_blocking("save_translation_profile", move || profiles.save(input)).await?;
+	emit_data_changed(&app, TRANSLATION_PROFILES_CHANGED);
+	Ok(result)
 }
 
 #[tauri::command]
 pub async fn set_translation_profile_enabled(
+	app: AppHandle,
 	state: State<'_, AppState>,
 	id: Uuid,
 	enabled: bool,
 ) -> Result<TranslationProfileDto, IpcError> {
 	let profiles = state.profiles.clone();
-	run_blocking("set_translation_profile_enabled", move || {
+	let result = run_blocking("set_translation_profile_enabled", move || {
 		profiles.set_enabled(id, enabled)
 	})
-	.await
+	.await?;
+	emit_data_changed(&app, TRANSLATION_PROFILES_CHANGED);
+	Ok(result)
 }
 
 #[tauri::command]
-pub async fn delete_translation_profile(state: State<'_, AppState>, id: Uuid) -> Result<(), IpcError> {
+pub async fn delete_translation_profile(app: AppHandle, state: State<'_, AppState>, id: Uuid) -> Result<(), IpcError> {
 	let profiles = state.profiles.clone();
-	run_blocking("delete_translation_profile", move || profiles.delete(id)).await
+	run_blocking("delete_translation_profile", move || profiles.delete(id)).await?;
+	emit_data_changed(&app, TRANSLATION_PROFILES_CHANGED);
+	Ok(())
 }

@@ -1,6 +1,7 @@
 // ABOUTME: Dialog for creating a real provider instance through Tauri IPC.
 // ABOUTME: Collects adapter, endpoint, credential policy, and initial enabled state.
 import { useState } from "react";
+import { useMutation } from "@tanstack/react-query";
 import { Button } from "@base-ui/react/button";
 import { Dialog } from "@base-ui/react/dialog";
 import { useTranslation } from "react-i18next";
@@ -34,7 +35,9 @@ export function AddProviderDialog({ open, onOpenChange, onCreated }: AddProvider
 				<Dialog.Backdrop className={dialogBackdropClassName} />
 				<Dialog.Popup className={`${dialogPopupClassName} max-h-[min(90dvh,40rem)] w-md overflow-y-auto`}>
 					<div className="flex flex-col gap-1">
-						<Dialog.Title className="text-title-dialog font-bold text-on-surface">{t("models.addChannel.title")}</Dialog.Title>
+						<Dialog.Title className="text-title-dialog font-bold text-on-surface">
+							{t("models.addChannel.title")}
+						</Dialog.Title>
 						<Dialog.Description className="text-body-tight text-neutral">
 							{t("models.addChannel.description")}
 						</Dialog.Description>
@@ -66,13 +69,26 @@ function AddProviderForm({ onCreated }: AddProviderFormProps) {
 	const [credentialKind, setCredentialKind] = useState<CredentialKind>("api_key");
 	const [token, setToken] = useState("");
 	const [enabled, setEnabled] = useState(true);
-	const [pending, setPending] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 
+	const createMutation = useMutation({
+		mutationFn: saveProviderInstance,
+		onSuccess: (created) => {
+			toast.success({ title: t("models.toast.channelCreated"), description: created.displayName });
+			onCreated(created);
+		},
+		onError: (err: unknown) => {
+			const message = getIpcErrorMessage(err, t("models.toast.createChannelFailed"));
+			setError(message);
+			toast.error({ title: t("models.toast.createFailed"), description: message });
+		},
+	});
+
+	const pending = createMutation.isPending;
 	const defaultBaseUrl = getDefaultBaseUrl(adapterId);
 	const canSubmit = displayName.trim().length > 0 && !pending;
 
-	async function handleSubmit(event: React.SyntheticEvent<HTMLFormElement>) {
+	function handleSubmit(event: React.SyntheticEvent<HTMLFormElement>) {
 		event.preventDefault();
 		if (!canSubmit) {
 			return;
@@ -89,29 +105,18 @@ function AddProviderForm({ onCreated }: AddProviderFormProps) {
 			credential = { action: "keep" };
 		}
 
-		setPending(true);
 		setError(null);
-		try {
-			const created = await saveProviderInstance({
-				id: null,
-				adapterId,
-				displayName: displayName.trim(),
-				baseUrlOverride: normalizedBaseUrl,
-				credentialKind: kind,
-				credential,
-				enabled,
-				proxyMode: "inherit",
-				insecureHttpConfirmedAt: null,
-			});
-			toast.success({ title: t("models.toast.channelCreated"), description: created.displayName });
-			onCreated(created);
-		} catch (err: unknown) {
-			const message = getIpcErrorMessage(err, t("models.toast.createChannelFailed"));
-			setError(message);
-			toast.error({ title: t("models.toast.createFailed"), description: message });
-		} finally {
-			setPending(false);
-		}
+		createMutation.mutate({
+			id: null,
+			adapterId,
+			displayName: displayName.trim(),
+			baseUrlOverride: normalizedBaseUrl,
+			credentialKind: kind,
+			credential,
+			enabled,
+			proxyMode: "inherit",
+			insecureHttpConfirmedAt: null,
+		});
 	}
 
 	return (
@@ -170,7 +175,9 @@ function AddProviderForm({ onCreated }: AddProviderFormProps) {
 					spellCheck={false}
 					disabled={pending}
 				/>
-				{defaultBaseUrl ? <p className="text-xs text-neutral">{t("common.default", { value: defaultBaseUrl })}</p> : null}
+				{defaultBaseUrl ? (
+					<p className="text-xs text-neutral">{t("common.default", { value: defaultBaseUrl })}</p>
+				) : null}
 			</div>
 
 			<div className="flex flex-col gap-1">

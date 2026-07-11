@@ -174,6 +174,10 @@ pub struct ProviderInstanceWrite {
 	pub enabled: bool,
 	pub proxy_mode: ProxyMode,
 	pub insecure_http_confirmed_at: Option<String>,
+	/// Optimistic concurrency baseline (`ProviderInstance.updated_at` when the form was loaded).
+	/// Required when `id` is Some; ignored on create.
+	#[serde(default)]
+	pub expected_updated_at: Option<String>,
 }
 
 /// Export-only Provider shape (no credentials, sync errors, or device fields).

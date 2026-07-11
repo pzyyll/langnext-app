@@ -1,6 +1,7 @@
 // ABOUTME: Nested translation profile management page at /translate/profiles.
 // ABOUTME: Full CRUD for profiles, model chains, languages, and prompt templates.
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, createFileRoute } from "@tanstack/react-router";
 import { Button } from "@base-ui/react/button";
 import { Switch } from "@base-ui/react/switch";
@@ -16,22 +17,16 @@ import {
 	switchRootClassName,
 	switchThumbClassName,
 } from "../../components/ui";
+import { profileKeys } from "../../query/keys";
 import {
-	deleteTranslationProfile,
-	getTranslationProfile,
-	listAllProviderModels,
-	listProviderInstances,
-	listTranslationProfiles,
-	saveTranslationProfile,
-	setTranslationProfileEnabled,
-} from "../../storage/client";
+	allProviderModelsOptions,
+	profileDetailOptions,
+	profileListOptions,
+	providerListOptions,
+} from "../../query/options";
+import { deleteTranslationProfile, saveTranslationProfile, setTranslationProfileEnabled } from "../../storage/client";
 import { getIpcErrorMessage } from "../../storage/errors";
-import type {
-	ProviderInstanceDto,
-	ProviderModelDto,
-	TranslationProfile,
-	TranslationProfileDto,
-} from "../../storage/types";
+import type { ProviderInstanceDto, ProviderModelDto, TranslationProfileDto } from "../../storage/types";
 
 export const Route = createFileRoute("/translate/profiles")({
 	component: TranslateProfilesPage,
@@ -63,8 +58,8 @@ type ModelOption = {
 	label: string;
 };
 
-/** List row with target-chain summary loaded via get_translation_profile. */
-type ProfileListItem = TranslationProfile & {
+/** List row derived from list DTO targets (no per-row detail IPC). */
+type ProfileListItem = TranslationProfileDto & {
 	primaryModelId: string | null;
 	fallbackCount: number;
 };
@@ -86,28 +81,13 @@ type ProfileDraft = {
 	providerOptionsJson: unknown | null;
 };
 
-function toListItem(profile: TranslationProfile, dto?: TranslationProfileDto | null): ProfileListItem {
-	const sorted = dto ? [...dto.targets].sort((a, b) => a.priority - b.priority) : [];
+function toListItem(dto: TranslationProfileDto): ProfileListItem {
+	const sorted = [...dto.targets].sort((a, b) => a.priority - b.priority);
 	return {
-		...profile,
+		...dto,
 		primaryModelId: sorted[0]?.providerModelId ?? null,
 		fallbackCount: Math.max(0, sorted.length - 1),
 	};
-}
-
-async function loadProfileListItems(): Promise<ProfileListItem[]> {
-	const list = await listTranslationProfiles();
-	const details = await Promise.all(
-		list.map(async (profile) => {
-			try {
-				const dto = await getTranslationProfile(profile.id);
-				return toListItem(profile, dto);
-			} catch {
-				return toListItem(profile, null);
-			}
-		}),
-	);
-	return details;
 }
 
 function resolveModelDisplayName(model: ProviderModelDto): string {
@@ -167,10 +147,7 @@ function draftFromDto(dto: TranslationProfileDto, modelOptions: ModelOption[]): 
 	const sortedTargets = [...dto.targets].sort((a, b) => a.priority - b.priority);
 	const modelIds = sortedTargets.map((target) => target.providerModelId);
 	const primaryModelId =
-		modelIds.find((id) => modelOptions.some((option) => option.id === id)) ??
-		modelOptions[0]?.id ??
-		modelIds[0] ??
-		"";
+		modelIds.find((id) => modelOptions.some((option) => option.id === id)) ?? modelOptions[0]?.id ?? modelIds[0] ?? "";
 	const fallbackModelIds = modelIds.filter((id) => id !== primaryModelId);
 
 	return {
@@ -182,8 +159,7 @@ function draftFromDto(dto: TranslationProfileDto, modelOptions: ModelOption[]): 
 		primaryModelId,
 		fallbackModelIds,
 		temperature: dto.temperature != null ? String(dto.temperature) : String(DEFAULT_TEMPERATURE),
-		maxOutputTokens:
-			dto.maxOutputTokens != null ? String(dto.maxOutputTokens) : String(DEFAULT_MAX_OUTPUT_TOKENS),
+		maxOutputTokens: dto.maxOutputTokens != null ? String(dto.maxOutputTokens) : String(DEFAULT_MAX_OUTPUT_TOKENS),
 		systemTemplate: dto.systemTemplate,
 		userTemplate: dto.userTemplate,
 		templateVersion: dto.templateVersion,
@@ -206,24 +182,50 @@ function parseOptionalNumber(raw: string): number | null {
 function TranslateProfilesPage() {
 	const { t } = useTranslation();
 	const toast = useToast();
+	const queryClient = useQueryClient();
 
-	const [profiles, setProfiles] = useState<ProfileListItem[]>([]);
-	const [profilesLoading, setProfilesLoading] = useState(true);
-	const [profilesError, setProfilesError] = useState<string | null>(null);
+	const profilesQuery = useQuery(profileListOptions());
+	const providersQuery = useQuery(providerListOptions());
+	const modelsQuery = useQuery(allProviderModelsOptions());
 
-	const [modelOptions, setModelOptions] = useState<ModelOption[]>([]);
-	const [modelsLoading, setModelsLoading] = useState(true);
-	const [modelsError, setModelsError] = useState<string | null>(null);
-
+	/** Explicit selection; null means "use first list item when not creating". */
 	const [selectedId, setSelectedId] = useState<string | null>(null);
 	const [isCreating, setIsCreating] = useState(false);
-	const [draft, setDraft] = useState<ProfileDraft | null>(null);
-	const [editorLoading, setEditorLoading] = useState(false);
-	const [editorError, setEditorError] = useState<string | null>(null);
-	const [savePending, setSavePending] = useState(false);
+	/** Local edits only; null means derive draft from detail query. */
+	const [draftOverride, setDraftOverride] = useState<ProfileDraft | null>(null);
 	const [saveError, setSaveError] = useState<string | null>(null);
-	const [enabledPending, setEnabledPending] = useState(false);
 	const [deleteOpen, setDeleteOpen] = useState(false);
+
+	const modelOptions = useMemo(
+		() =>
+			buildModelOptions(providersQuery.data ?? [], modelsQuery.data ?? [], (provider, model) =>
+				t("translate.modelOption", { provider, model }),
+			),
+		[providersQuery.data, modelsQuery.data, t],
+	);
+
+	const modelsLoading = providersQuery.isLoading || modelsQuery.isLoading;
+	const modelsError =
+		providersQuery.error != null || modelsQuery.error != null
+			? getIpcErrorMessage(providersQuery.error ?? modelsQuery.error, t("translate.modelLoadFailed"))
+			: null;
+
+	const profiles = useMemo(() => (profilesQuery.data ?? []).map((dto) => toListItem(dto)), [profilesQuery.data]);
+	const profilesLoading = profilesQuery.isLoading;
+	const profilesError =
+		profilesQuery.error != null ? getIpcErrorMessage(profilesQuery.error, t("translate.profiles.loadFailed")) : null;
+
+	// Default to the first profile when nothing is explicitly selected (no effect).
+	const resolvedSelectedId = isCreating
+		? null
+		: selectedId && profiles.some((profile) => profile.id === selectedId)
+			? selectedId
+			: (profiles[0]?.id ?? null);
+
+	const detailQuery = useQuery({
+		...profileDetailOptions(resolvedSelectedId ?? ""),
+		enabled: !!resolvedSelectedId && !isCreating,
+	});
 
 	const languageOptions = useMemo(
 		() =>
@@ -242,148 +244,132 @@ function TranslateProfilesPage() {
 		return map;
 	}, [modelOptions]);
 
-	const refreshProfiles = useCallback(async (): Promise<ProfileListItem[]> => {
-		const list = await loadProfileListItems();
-		setProfiles(list);
-		setProfilesError(null);
-		return list;
-	}, []);
+	// Derive draft from detail when not creating and no local override; never mutate cache objects.
+	const derivedDraft =
+		!isCreating && detailQuery.isSuccess && detailQuery.data ? draftFromDto(detailQuery.data, modelOptions) : null;
+	const draft = isCreating || draftOverride != null ? draftOverride : derivedDraft;
 
-	const selectProfile = useCallback(
-		async (profileId: string, options?: ModelOption[]) => {
-			const resolvedOptions = options ?? modelOptions;
+	const saveMutation = useMutation({
+		mutationFn: saveTranslationProfile,
+		onSuccess: (dto, variables) => {
+			// Seed cache then drop local override so remote/refetch remains authoritative.
+			queryClient.setQueryData(profileKeys.detail(dto.id), dto);
+			void queryClient.invalidateQueries({ queryKey: profileKeys.all });
 			setIsCreating(false);
-			setSelectedId(profileId);
+			setSelectedId(dto.id);
+			setDraftOverride(null);
 			setSaveError(null);
-			setEditorError(null);
-			setEditorLoading(true);
-			try {
-				const dto = await getTranslationProfile(profileId);
-				setDraft(draftFromDto(dto, resolvedOptions));
-			} catch (err) {
-				setDraft(null);
-				setEditorError(getIpcErrorMessage(err, t("translate.profiles.loadFailed")));
-			} finally {
-				setEditorLoading(false);
-			}
+			toast.success({
+				title: variables.id ? t("translate.profileUpdated") : t("translate.profileSaved"),
+			});
 		},
-		[modelOptions, t],
-	);
+		onError: (err) => {
+			const message = getIpcErrorMessage(err, t("translate.profiles.saveFailed"));
+			setSaveError(message);
+			toast.error({ title: t("translate.profiles.saveFailed"), description: message });
+		},
+	});
 
-	useEffect(() => {
-		let cancelled = false;
-
-		async function loadInitial() {
-			setProfilesLoading(true);
-			setModelsLoading(true);
-			setProfilesError(null);
-			setModelsError(null);
-			try {
-				const [providers, models, profileList] = await Promise.all([
-					listProviderInstances(),
-					listAllProviderModels(),
-					loadProfileListItems(),
-				]);
-				if (cancelled) {
-					return;
-				}
-				const options = buildModelOptions(providers, models, (provider, model) =>
-					t("translate.modelOption", { provider, model }),
-				);
-				setModelOptions(options);
-				setProfiles(profileList);
-				// Open the first profile in the editor after initial hydration.
-				const first = profileList[0];
-				if (first) {
-					setIsCreating(false);
-					setSelectedId(first.id);
-					setEditorLoading(true);
-					try {
-						const dto = await getTranslationProfile(first.id);
-						if (!cancelled) {
-							setDraft(draftFromDto(dto, options));
-							setEditorError(null);
-						}
-					} catch (err) {
-						if (!cancelled) {
-							setDraft(null);
-							setEditorError(getIpcErrorMessage(err, t("translate.profiles.loadFailed")));
-						}
-					} finally {
-						if (!cancelled) {
-							setEditorLoading(false);
-						}
-					}
-				}
-			} catch (err) {
-				if (cancelled) {
-					return;
-				}
-				setModelOptions([]);
-				setProfiles([]);
-				setModelsError(getIpcErrorMessage(err, t("translate.modelLoadFailed")));
-				setProfilesError(getIpcErrorMessage(err, t("translate.profiles.loadFailed")));
-			} finally {
-				if (!cancelled) {
-					setProfilesLoading(false);
-					setModelsLoading(false);
-				}
+	const enabledMutation = useMutation({
+		mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) => setTranslationProfileEnabled(id, enabled),
+		onSuccess: (dto) => {
+			queryClient.setQueryData(profileKeys.detail(dto.id), dto);
+			queryClient.setQueryData<TranslationProfileDto[]>(profileKeys.list(), (current) =>
+				current ? current.map((item) => (item.id === dto.id ? { ...item, enabled: dto.enabled } : item)) : current,
+			);
+			void queryClient.invalidateQueries({ queryKey: profileKeys.all });
+			// Patch only an existing local draft; do not create an override from remote data.
+			setDraftOverride((current) =>
+				current && current.id === dto.id ? { ...current, enabled: dto.enabled } : current,
+			);
+		},
+		onError: (err, variables) => {
+			// Revert optimistic cache when there was no local draft override.
+			const detail = queryClient.getQueryData<TranslationProfileDto>(profileKeys.detail(variables.id));
+			if (detail) {
+				queryClient.setQueryData(profileKeys.detail(variables.id), {
+					...detail,
+					enabled: !variables.enabled,
+				});
 			}
-		}
+			queryClient.setQueryData<TranslationProfileDto[]>(profileKeys.list(), (current) =>
+				current
+					? current.map((item) => (item.id === variables.id ? { ...item, enabled: !variables.enabled } : item))
+					: current,
+			);
+			setDraftOverride((current) =>
+				current && current.id === variables.id ? { ...current, enabled: !variables.enabled } : current,
+			);
+			const message = getIpcErrorMessage(err, t("translate.profiles.saveFailed"));
+			setSaveError(message);
+			toast.error({ title: t("translate.profiles.saveFailed"), description: message });
+		},
+	});
 
-		void loadInitial();
-		return () => {
-			cancelled = true;
-		};
-	}, [t]);
+	const deleteMutation = useMutation({
+		mutationFn: (id: string) => deleteTranslationProfile(id),
+		onSuccess: async (_void, deletedId) => {
+			queryClient.removeQueries({ queryKey: profileKeys.detail(deletedId) });
+			await queryClient.invalidateQueries({ queryKey: profileKeys.all });
+			setDeleteOpen(false);
+			setDraftOverride(null);
+			setIsCreating(false);
+			toast.success({ title: t("translate.profileDeleted") });
+
+			const list = queryClient.getQueryData<TranslationProfileDto[]>(profileKeys.list()) ?? [];
+			const next = list.find((profile) => profile.id !== deletedId) ?? list[0];
+			setSelectedId(next?.id ?? null);
+		},
+	});
+
+	function selectProfile(profileId: string) {
+		setIsCreating(false);
+		setSelectedId(profileId);
+		setDraftOverride(null);
+		setSaveError(null);
+	}
 
 	function startCreate() {
 		setIsCreating(true);
 		setSelectedId(null);
 		setSaveError(null);
-		setEditorError(null);
-		setDraft(emptyDraft(modelOptions[0]?.id ?? ""));
+		setDraftOverride(emptyDraft(modelOptions[0]?.id ?? ""));
 	}
 
 	function updateDraft(patch: Partial<ProfileDraft>) {
-		setDraft((current) => (current ? { ...current, ...patch } : current));
+		setDraftOverride((current) => {
+			const base =
+				current ??
+				(detailQuery.data ? draftFromDto(detailQuery.data, modelOptions) : null) ??
+				(isCreating ? emptyDraft(modelOptions[0]?.id ?? "") : null);
+			return base ? { ...base, ...patch } : current;
+		});
 		setSaveError(null);
 	}
 
-	async function handleEnabledChange(checked: boolean) {
+	function handleEnabledChange(checked: boolean) {
 		if (!draft) {
 			return;
 		}
-		updateDraft({ enabled: checked });
+		// Create mode: local draft only.
 		if (!draft.id) {
+			updateDraft({ enabled: checked });
 			return;
 		}
-		setEnabledPending(true);
-		try {
-			const dto = await setTranslationProfileEnabled(draft.id, checked);
-			setProfiles((current) =>
-				current.map((profile) =>
-					profile.id === dto.id
-						? {
-								...profile,
-								enabled: dto.enabled,
-								updatedAt: dto.updatedAt,
-								// Preserve chain summary already loaded for the list row.
-								primaryModelId: profile.primaryModelId,
-								fallbackCount: profile.fallbackCount,
-							}
-						: profile,
-				),
+		// Editing other fields: keep draftOverride in sync with the toggle.
+		if (draftOverride != null) {
+			updateDraft({ enabled: checked });
+		} else {
+			// Clean form: optimistic cache write so derived draft tracks server state.
+			const detail = detailQuery.data;
+			if (detail && detail.id === draft.id) {
+				queryClient.setQueryData(profileKeys.detail(detail.id), { ...detail, enabled: checked });
+			}
+			queryClient.setQueryData<TranslationProfileDto[]>(profileKeys.list(), (current) =>
+				current ? current.map((item) => (item.id === draft.id ? { ...item, enabled: checked } : item)) : current,
 			);
-			setDraft((current) => (current && current.id === dto.id ? { ...current, enabled: dto.enabled } : current));
-		} catch (err) {
-			updateDraft({ enabled: !checked });
-			const message = getIpcErrorMessage(err, t("translate.profiles.saveFailed"));
-			setSaveError(message);
-			toast.error({ title: t("translate.profiles.saveFailed"), description: message });
-		} finally {
-			setEnabledPending(false);
 		}
+		enabledMutation.mutate({ id: draft.id, enabled: checked });
 	}
 
 	function moveFallback(index: number, direction: -1 | 1) {
@@ -431,7 +417,7 @@ function TranslateProfilesPage() {
 		updateDraft({ fallbackModelIds: next });
 	}
 
-	async function handleSave() {
+	function handleSave() {
 		if (!draft) {
 			return;
 		}
@@ -459,56 +445,29 @@ function TranslateProfilesPage() {
 			}
 		}
 
-		setSavePending(true);
 		setSaveError(null);
-		try {
-			const dto = await saveTranslationProfile({
-				id: draft.id,
-				name,
-				enabled: draft.enabled,
-				templateVersion: draft.templateVersion,
-				systemTemplate: draft.systemTemplate,
-				userTemplate: draft.userTemplate,
-				temperature,
-				maxOutputTokens,
-				providerOptionsJson: draft.providerOptionsJson,
-				sourceLang: draft.sourceLang,
-				targetLang: draft.targetLang,
-				targetModelIds: uniqueTargetIds,
-			});
-			await refreshProfiles();
-			setIsCreating(false);
-			setSelectedId(dto.id);
-			setDraft(draftFromDto(dto, modelOptions));
-			toast.success({
-				title: draft.id ? t("translate.profileUpdated") : t("translate.profileSaved"),
-			});
-		} catch (err) {
-			const message = getIpcErrorMessage(err, t("translate.profiles.saveFailed"));
-			setSaveError(message);
-			toast.error({ title: t("translate.profiles.saveFailed"), description: message });
-		} finally {
-			setSavePending(false);
-		}
+		saveMutation.mutate({
+			id: draft.id,
+			name,
+			enabled: draft.enabled,
+			templateVersion: draft.templateVersion,
+			systemTemplate: draft.systemTemplate,
+			userTemplate: draft.userTemplate,
+			temperature,
+			maxOutputTokens,
+			providerOptionsJson: draft.providerOptionsJson,
+			sourceLang: draft.sourceLang,
+			targetLang: draft.targetLang,
+			targetModelIds: uniqueTargetIds,
+		});
 	}
 
 	async function handleDelete() {
 		if (!draft?.id) {
 			return;
 		}
-		const deletedId = draft.id;
 		try {
-			await deleteTranslationProfile(deletedId);
-			const list = await refreshProfiles();
-			setDeleteOpen(false);
-			setDraft(null);
-			setSelectedId(null);
-			setIsCreating(false);
-			toast.success({ title: t("translate.profileDeleted") });
-			const next = list.find((profile) => profile.id !== deletedId) ?? list[0];
-			if (next) {
-				void selectProfile(next.id);
-			}
+			await deleteMutation.mutateAsync(draft.id);
 		} catch (err) {
 			const error = new Error(getIpcErrorMessage(err, t("translate.profiles.deleteFailed")));
 			throw Object.assign(error, { cause: err });
@@ -521,9 +480,16 @@ function TranslateProfilesPage() {
 		text: "{{text}}",
 	});
 
-	const usedFallbackIds = draft
-		? new Set([draft.primaryModelId, ...draft.fallbackModelIds])
-		: new Set<string>();
+	const editorLoading = !!resolvedSelectedId && !isCreating && detailQuery.isLoading;
+	const editorError =
+		!!resolvedSelectedId && !isCreating && detailQuery.isError
+			? getIpcErrorMessage(detailQuery.error, t("translate.profiles.loadFailed"))
+			: null;
+
+	const savePending = saveMutation.isPending;
+	const enabledPending = enabledMutation.isPending;
+
+	const usedFallbackIds = draft ? new Set([draft.primaryModelId, ...draft.fallbackModelIds]) : new Set<string>();
 	const canAddFallback = modelOptions.some((option) => !usedFallbackIds.has(option.id));
 	const showEditor = draft != null || editorLoading || editorError;
 	const listEmpty = !profilesLoading && !profilesError && profiles.length === 0 && !isCreating;
@@ -535,10 +501,7 @@ function TranslateProfilesPage() {
 					<h1 className="text-headline-sm font-bold text-on-surface">{t("translate.profiles.title")}</h1>
 					<p className="text-body-tight text-neutral">{t("translate.profiles.subtitle")}</p>
 				</div>
-				<Link
-					to="/translate"
-					className={`${outlineButtonClassName} no-underline`}
-				>
+				<Link to="/translate" className={`${outlineButtonClassName} no-underline`}>
 					{t("translate.profiles.backToTranslate")}
 				</Link>
 			</header>
@@ -566,18 +529,7 @@ function TranslateProfilesPage() {
 									type="button"
 									className={outlineButtonClassName}
 									onClick={() => {
-										void (async () => {
-											setProfilesLoading(true);
-											try {
-												await refreshProfiles();
-											} catch (err) {
-												setProfilesError(
-													getIpcErrorMessage(err, t("translate.profiles.loadFailed")),
-												);
-											} finally {
-												setProfilesLoading(false);
-											}
-										})();
+										void profilesQuery.refetch();
 									}}
 								>
 									{t("common.retry")}
@@ -585,14 +537,12 @@ function TranslateProfilesPage() {
 							</div>
 						) : null}
 
-						{listEmpty ? (
-							<p className="text-body-tight text-neutral">{t("translate.profiles.empty")}</p>
-						) : null}
+						{listEmpty ? <p className="text-body-tight text-neutral">{t("translate.profiles.empty")}</p> : null}
 
 						{!profilesLoading && !profilesError && profiles.length > 0 ? (
 							<ul className="min-h-0 flex-1 space-y-1 overflow-y-auto">
 								{profiles.map((profile) => {
-									const active = !isCreating && selectedId === profile.id;
+									const active = !isCreating && resolvedSelectedId === profile.id;
 									const sourceLabel = isLanguageId(profile.sourceLang)
 										? t(`translate.languages.${profile.sourceLang}`)
 										: "—";
@@ -609,7 +559,7 @@ function TranslateProfilesPage() {
 														: "w-full rounded-none px-3 py-2 text-left hover:bg-surface-2"
 												}
 												onClick={() => {
-													void selectProfile(profile.id);
+													selectProfile(profile.id);
 												}}
 											>
 												<div className="flex items-center justify-between gap-2">
@@ -629,9 +579,7 @@ function TranslateProfilesPage() {
 																: "shrink-0 text-label-sm text-disabled"
 														}
 													>
-														{profile.enabled
-															? t("common.enabled")
-															: t("common.disabled")}
+														{profile.enabled ? t("common.enabled") : t("common.disabled")}
 													</span>
 												</div>
 												<p className="mt-0.5 truncate text-label-sm text-neutral">
@@ -642,8 +590,7 @@ function TranslateProfilesPage() {
 												</p>
 												<p className="mt-0.5 truncate text-label-sm text-neutral">
 													{profile.primaryModelId
-														? (modelLabelById.get(profile.primaryModelId) ??
-															profile.primaryModelId)
+														? (modelLabelById.get(profile.primaryModelId) ?? profile.primaryModelId)
 														: t("translate.profiles.noPrimaryModel")}
 													{" · "}
 													{t("translate.profiles.fallbackCount", {
@@ -707,24 +654,20 @@ function TranslateProfilesPage() {
 							className="flex max-w-3xl flex-col gap-6"
 							onSubmit={(event) => {
 								event.preventDefault();
-								void handleSave();
+								handleSave();
 							}}
 						>
 							<div className="flex flex-wrap items-center justify-between gap-3">
 								<h2 className="text-headline-sm font-bold text-on-surface">
-									{draft.id
-										? t("translate.profiles.editTitle")
-										: t("translate.profiles.createTitle")}
+									{draft.id ? t("translate.profiles.editTitle") : t("translate.profiles.createTitle")}
 								</h2>
 								<label className="flex items-center gap-2 text-body-tight text-on-surface">
-									<span className="text-label-sm text-neutral uppercase">
-										{t("translate.profiles.enabledLabel")}
-									</span>
+									<span className="text-label-sm text-neutral uppercase">{t("translate.profiles.enabledLabel")}</span>
 									<Switch.Root
 										checked={draft.enabled}
 										disabled={enabledPending || savePending}
 										onCheckedChange={(checked) => {
-											void handleEnabledChange(checked);
+											handleEnabledChange(checked);
 										}}
 										className={switchRootClassName}
 									>
@@ -734,10 +677,7 @@ function TranslateProfilesPage() {
 							</div>
 
 							<div>
-								<label
-									className="mb-1 block text-body-tight font-medium text-on-surface"
-									htmlFor="profile-name"
-								>
+								<label className="mb-1 block text-body-tight font-medium text-on-surface" htmlFor="profile-name">
 									{t("translate.profileNameLabel")}
 								</label>
 								<input
@@ -856,9 +796,7 @@ function TranslateProfilesPage() {
 									</Button>
 								</div>
 								{draft.fallbackModelIds.length === 0 ? (
-									<p className="text-body-tight text-neutral">
-										{t("translate.profiles.fallbackEmpty")}
-									</p>
+									<p className="text-body-tight text-neutral">{t("translate.profiles.fallbackEmpty")}</p>
 								) : (
 									<ul className="space-y-2">
 										{draft.fallbackModelIds.map((modelId, index) => (
@@ -866,9 +804,7 @@ function TranslateProfilesPage() {
 												key={`fallback-${index}-${modelId}`}
 												className="flex flex-wrap items-center gap-2 border border-line bg-surface-2 p-2"
 											>
-												<span className="w-6 shrink-0 text-center text-label-sm text-neutral">
-													{index + 1}
-												</span>
+												<span className="w-6 shrink-0 text-center text-label-sm text-neutral">{index + 1}</span>
 												<select
 													className={`${selectClassName} min-w-0 flex-1`}
 													value={modelId}
@@ -887,9 +823,7 @@ function TranslateProfilesPage() {
 													))}
 													{/* Keep orphaned ids selectable until user changes them. */}
 													{!modelOptions.some((option) => option.id === modelId) && modelId ? (
-														<option value={modelId}>
-															{modelLabelById.get(modelId) ?? modelId}
-														</option>
+														<option value={modelId}>{modelLabelById.get(modelId) ?? modelId}</option>
 													) : null}
 												</select>
 												<div className="flex shrink-0 gap-1">
@@ -907,9 +841,7 @@ function TranslateProfilesPage() {
 													<Button
 														type="button"
 														className={outlineButtonClassName}
-														disabled={
-															savePending || index === draft.fallbackModelIds.length - 1
-														}
+														disabled={savePending || index === draft.fallbackModelIds.length - 1}
 														aria-label={t("translate.profiles.moveDown")}
 														onClick={() => {
 															moveFallback(index, 1);
@@ -1034,12 +966,7 @@ function TranslateProfilesPage() {
 							) : null}
 
 							<div className="flex flex-wrap items-center gap-3 border-t border-line pt-4">
-								<Button
-									type="submit"
-									className={primaryButtonClassName}
-									disabled={savePending}
-									focusableWhenDisabled
-								>
+								<Button type="submit" className={primaryButtonClassName} disabled={savePending} focusableWhenDisabled>
 									{savePending ? t("common.saving") : t("common.save")}
 								</Button>
 								{draft.id ? (
@@ -1065,9 +992,7 @@ function TranslateProfilesPage() {
 				onOpenChange={setDeleteOpen}
 				title={t("translate.profiles.deleteTitle")}
 				description={
-					draft?.name
-						? t("translate.profileDeleteConfirm", { name: draft.name })
-						: t("translate.profiles.deleteTitle")
+					draft?.name ? t("translate.profileDeleteConfirm", { name: draft.name }) : t("translate.profiles.deleteTitle")
 				}
 				confirmText={t("common.delete")}
 				pendingText={t("common.deleting")}

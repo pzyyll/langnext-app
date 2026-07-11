@@ -109,7 +109,21 @@ fn provider_write(kind: CredentialKind, cred: CredentialUpdate) -> ProviderInsta
 		enabled: true,
 		proxy_mode: ProxyMode::Inherit,
 		insecure_http_confirmed_at: None,
+		expected_updated_at: None,
 	}
+}
+
+/// Attach optimistic-concurrency baseline for an existing provider update.
+fn for_provider_update(
+	id: uuid::Uuid,
+	expected_updated_at: &str,
+	kind: CredentialKind,
+	cred: CredentialUpdate,
+) -> ProviderInstanceWrite {
+	let mut write = provider_write(kind, cred);
+	write.id = Some(id);
+	write.expected_updated_at = Some(expected_updated_at.to_string());
+	write
 }
 
 #[test]
@@ -166,13 +180,18 @@ fn provider_keep_allows_base_url_change_with_stored_credential() {
 			}],
 		)
 		.unwrap();
+	let after_merge = providers.get(dto.id).unwrap();
 	assert_eq!(
-		providers.get(dto.id).unwrap().models_sync_status,
+		after_merge.models_sync_status,
 		crate::domain::provider::ModelsSyncStatus::Ok
 	);
 
-	let mut keep = provider_write(CredentialKind::ApiKey, CredentialUpdate::Keep);
-	keep.id = Some(dto.id);
+	let mut keep = for_provider_update(
+		after_merge.id,
+		&after_merge.updated_at,
+		CredentialKind::ApiKey,
+		CredentialUpdate::Keep,
+	);
 	keep.base_url_override = Some("https://api.llmtech.de/v1".into());
 	let after = providers.save(keep).unwrap();
 	assert!(after.has_credential);
@@ -195,8 +214,7 @@ fn provider_keep_allows_adapter_change_with_stored_credential() {
 		))
 		.unwrap();
 
-	let mut keep = provider_write(CredentialKind::ApiKey, CredentialUpdate::Keep);
-	keep.id = Some(dto.id);
+	let mut keep = for_provider_update(dto.id, &dto.updated_at, CredentialKind::ApiKey, CredentialUpdate::Keep);
 	keep.adapter_id = "anthropic".into();
 	let after = providers.save(keep).unwrap();
 
@@ -323,17 +341,120 @@ fn template_validation() {
 fn render_template_preserves_unknown_and_partial_braces() {
 	use crate::services::translation_profiles::render_template;
 	// Unknown vars stay literal (validation rejects them on save; render is defensive).
-	assert_eq!(
-		render_template("x {{unknown}} y", "a", "b", "c"),
-		"x {{unknown}} y"
-	);
+	assert_eq!(render_template("x {{unknown}} y", "a", "b", "c"), "x {{unknown}} y");
 	// Unclosed braces pass through the remainder.
 	assert_eq!(render_template("start {{text", "a", "b", "hello"), "start {{text");
 	// Whitespace inside braces is tolerated.
 	assert_eq!(
-		render_template("{{ source_language }}->{{ target_language }}:{{ text }}", "zh", "en", "hi"),
+		render_template(
+			"{{ source_language }}->{{ target_language }}:{{ text }}",
+			"zh",
+			"en",
+			"hi"
+		),
 		"zh->en:hi"
 	);
+}
+
+#[test]
+fn profile_list_includes_ordered_targets_bulk() {
+	let (_d, _db, _v, providers, models, profiles, ..) = setup();
+	let p = providers
+		.save(provider_write(CredentialKind::None, CredentialUpdate::Keep))
+		.unwrap();
+	let m1 = models
+		.save_manual(ManualModelWrite {
+			id: None,
+			provider_instance_id: p.id,
+			model_key: "primary".into(),
+			display_name_override: None,
+			enabled: true,
+			capability_overrides_json: None,
+		})
+		.unwrap();
+	let m2 = models
+		.save_manual(ManualModelWrite {
+			id: None,
+			provider_instance_id: p.id,
+			model_key: "fallback".into(),
+			display_name_override: None,
+			enabled: true,
+			capability_overrides_json: None,
+		})
+		.unwrap();
+
+	// Zero targets cannot be saved through validation; empty profile list is the empty case.
+	assert!(profiles.list().unwrap().is_empty());
+	let zero_target_err = profiles
+		.save(TranslationProfileWrite {
+			id: None,
+			name: "Zero".into(),
+			enabled: true,
+			template_version: 1,
+			system_template: "s".into(),
+			user_template: "{{text}}".into(),
+			temperature: None,
+			max_output_tokens: None,
+			provider_options_json: None,
+			source_lang: None,
+			target_lang: None,
+			target_model_ids: vec![],
+		})
+		.unwrap_err();
+	assert!(
+		matches!(zero_target_err, crate::error::StorageError::Validation(_)),
+		"zero-target profile writes must fail validation: {zero_target_err:?}"
+	);
+
+	let with_one = profiles
+		.save(TranslationProfileWrite {
+			id: None,
+			name: "One".into(),
+			enabled: true,
+			template_version: 1,
+			system_template: "s".into(),
+			user_template: "{{text}}".into(),
+			temperature: None,
+			max_output_tokens: None,
+			provider_options_json: None,
+			source_lang: None,
+			target_lang: None,
+			target_model_ids: vec![m1.id],
+		})
+		.unwrap();
+	let with_many = profiles
+		.save(TranslationProfileWrite {
+			id: None,
+			name: "Many".into(),
+			enabled: true,
+			template_version: 1,
+			system_template: "s".into(),
+			user_template: "{{text}}".into(),
+			temperature: None,
+			max_output_tokens: None,
+			provider_options_json: None,
+			source_lang: None,
+			target_lang: None,
+			// Intentional reverse insert order vs name sort of profiles.
+			target_model_ids: vec![m2.id, m1.id],
+		})
+		.unwrap();
+
+	let list = profiles.list().unwrap();
+	// Stable profile ordering: name ASC (Many before One).
+	assert_eq!(list.len(), 2);
+	assert_eq!(list[0].profile.id, with_many.profile.id);
+	assert_eq!(list[1].profile.id, with_one.profile.id);
+
+	assert_eq!(list[0].targets.len(), 2);
+	assert_eq!(list[0].targets[0].provider_model_id, m2.id);
+	assert_eq!(list[0].targets[0].priority, 0);
+	assert_eq!(list[0].targets[1].provider_model_id, m1.id);
+	assert_eq!(list[0].targets[1].priority, 1);
+
+	assert_eq!(list[1].targets.len(), 1);
+	assert_eq!(list[1].targets[0].provider_model_id, m1.id);
+	assert_eq!(list[1].targets[0].priority, 0);
 }
 
 #[test]
@@ -1112,8 +1233,13 @@ impl ModelTransport for MutatingConnectionTransport {
 		_request: ModelListRequest,
 	) -> Pin<Box<dyn Future<Output = Result<Vec<RemoteModelSyncItem>, TransportError>> + Send + '_>> {
 		// Simulate a concurrent Save that changes base URL while HTTP is in flight.
-		let mut write = provider_write(CredentialKind::None, CredentialUpdate::Keep);
-		write.id = Some(self.provider_id);
+		let current = self.providers.get(self.provider_id).expect("provider");
+		let mut write = for_provider_update(
+			current.id,
+			&current.updated_at,
+			CredentialKind::None,
+			CredentialUpdate::Keep,
+		);
 		write.base_url_override = Some("http://127.0.0.1:9999/v1".into());
 		write.display_name = "OpenAI".into();
 		self.providers.save(write).expect("mid-flight save");
@@ -1205,8 +1331,13 @@ impl ModelTransport for MutatingConnectionErrorTransport {
 		&self,
 		_request: ModelListRequest,
 	) -> Pin<Box<dyn Future<Output = Result<Vec<RemoteModelSyncItem>, TransportError>> + Send + '_>> {
-		let mut write = provider_write(CredentialKind::None, CredentialUpdate::Keep);
-		write.id = Some(self.provider_id);
+		let current = self.providers.get(self.provider_id).expect("provider");
+		let mut write = for_provider_update(
+			current.id,
+			&current.updated_at,
+			CredentialKind::None,
+			CredentialUpdate::Keep,
+		);
 		write.base_url_override = Some("http://127.0.0.1:9999/v1".into());
 		write.display_name = "OpenAI".into();
 		self.providers.save(write).expect("mid-flight save");
@@ -1313,11 +1444,13 @@ impl MutatingGetVault {
 		let providers = self.providers.lock().expect("providers").clone();
 		let provider_id = *self.provider_id.lock().expect("provider_id");
 		if let (Some(providers), Some(provider_id)) = (providers, provider_id) {
-			let mut write = provider_write(
+			let current = providers.get(provider_id).expect("provider");
+			let mut write = for_provider_update(
+				current.id,
+				&current.updated_at,
 				CredentialKind::ApiKey,
 				CredentialUpdate::Replace("sk-after-mutate".into()),
 			);
-			write.id = Some(provider_id);
 			write.base_url_override = Some("http://127.0.0.1:9999/v1".into());
 			write.display_name = "OpenAI".into();
 			// Keep credential so the new identity differs by base URL (and new secret).
@@ -1597,8 +1730,13 @@ fn sync_models_serializes_same_provider_max_transport_concurrency_one() {
 	);
 
 	// Only after the second call is confirmed queued: change connection identity.
-	let mut write = provider_write(CredentialKind::None, CredentialUpdate::Keep);
-	write.id = Some(p.id);
+	let current = providers.get(p.id).unwrap();
+	let mut write = for_provider_update(
+		current.id,
+		&current.updated_at,
+		CredentialKind::None,
+		CredentialUpdate::Keep,
+	);
 	write.base_url_override = Some("http://127.0.0.1:7777/v1".into());
 	write.display_name = "OpenAI".into();
 	providers.save(write).expect("mid-serialization save");
@@ -1652,8 +1790,12 @@ fn save_connection_identity_change_resets_models_sync_status() {
 	assert_eq!(before.models_sync_status, crate::domain::provider::ModelsSyncStatus::Ok);
 	assert!(before.models_synced_at.is_some());
 
-	let mut write = provider_write(CredentialKind::None, CredentialUpdate::Keep);
-	write.id = Some(p.id);
+	let mut write = for_provider_update(
+		before.id,
+		&before.updated_at,
+		CredentialKind::None,
+		CredentialUpdate::Keep,
+	);
 	write.base_url_override = Some("http://127.0.0.1:8888/v1".into());
 	write.display_name = "OpenAI".into();
 	let after = providers.save(write).unwrap();
@@ -1692,10 +1834,35 @@ fn clear_credential_final_txn_preserves_latest_sync_when_identity_unchanged() {
 		crate::domain::provider::ModelsSyncStatus::Never
 	);
 
+	// Without concurrent writers: clear applies and preserves Never when identity is unchanged.
+	let mut write = for_provider_update(p.id, &p.updated_at, CredentialKind::None, CredentialUpdate::Clear);
+	write.display_name = "Renamed during clear".into();
+	write.base_url_override = Some("https://api.openai.com/v1".into());
+	let after = providers.save(write).expect("clear save");
+	assert_eq!(
+		after.models_sync_status,
+		crate::domain::provider::ModelsSyncStatus::Never
+	);
+	assert!(after.models_synced_at.is_none());
+	assert_eq!(after.display_name, "Renamed during clear");
+
+	// Concurrent sync in the multi-transaction gap bumps updated_at → OCC rejects clear.
+	let p = providers.get(p.id).unwrap();
+	models
+		.apply_remote_merge(
+			p.id,
+			&[RemoteModelSyncItem {
+				model_key: "seed-for-gap".into(),
+				remote_display_name: None,
+				remote_metadata_json: None,
+			}],
+		)
+		.unwrap();
+	// Re-read baseline after seed, then inject a second concurrent merge in the clear gap.
+	let baseline = providers.get(p.id).unwrap();
 	let models_for_hook = models.clone();
-	let provider_id = p.id;
+	let provider_id = baseline.id;
 	crate::services::providers::set_clear_credential_between_txns_hook(move || {
-		// Sync commits first (during the multi-transaction gap), before clear's final write.
 		models_for_hook
 			.apply_remote_merge(
 				provider_id,
@@ -1707,23 +1874,23 @@ fn clear_credential_final_txn_preserves_latest_sync_when_identity_unchanged() {
 			)
 			.expect("concurrent sync in clear gap");
 	});
-
-	let mut write = provider_write(CredentialKind::None, CredentialUpdate::Clear);
-	write.id = Some(p.id);
-	write.display_name = "Renamed during clear".into();
-	// Same connection identity (adapter/url/kind/ref/proxy).
-	write.base_url_override = Some("https://api.openai.com/v1".into());
-	let after = providers.save(write).expect("clear save");
-
-	assert_eq!(
-		after.models_sync_status,
-		crate::domain::provider::ModelsSyncStatus::Ok,
-		"final clear txn must keep concurrent sync Ok, not pre-journal Never"
+	let mut write = for_provider_update(
+		baseline.id,
+		&baseline.updated_at,
+		CredentialKind::None,
+		CredentialUpdate::Clear,
 	);
-	assert!(after.models_synced_at.is_some());
-	assert!(after.models_sync_error_code.is_none());
-	assert_eq!(after.display_name, "Renamed during clear");
-	assert_eq!(models.list_by_provider(p.id).unwrap().len(), 1);
+	write.display_name = "Should not apply".into();
+	write.base_url_override = Some("https://api.openai.com/v1".into());
+	let err = providers.save(write).unwrap_err();
+	assert!(
+		matches!(err, StorageError::Conflict(_)),
+		"concurrent row version change must reject clear: {err:?}"
+	);
+	let latest = providers.get(p.id).unwrap();
+	assert_eq!(latest.display_name, "Renamed during clear");
+	assert_eq!(latest.models_sync_status, crate::domain::provider::ModelsSyncStatus::Ok);
+	assert!(models.list_by_provider(p.id).unwrap().len() >= 1);
 }
 
 #[test]
@@ -1761,24 +1928,14 @@ fn clear_credential_final_txn_resets_sync_when_identity_changed() {
 		crate::domain::provider::ModelsSyncStatus::Ok
 	);
 
-	let models_for_hook = models.clone();
-	let provider_id = p.id;
-	crate::services::providers::set_clear_credential_between_txns_hook(move || {
-		// Concurrent merge on the still-old identity (clear not committed yet).
-		models_for_hook
-			.apply_remote_merge(
-				provider_id,
-				&[RemoteModelSyncItem {
-					model_key: "gap-sync".into(),
-					remote_display_name: None,
-					remote_metadata_json: None,
-				}],
-			)
-			.expect("gap sync");
-	});
-
-	let mut write = provider_write(CredentialKind::None, CredentialUpdate::Clear);
-	write.id = Some(p.id);
+	// Successful clear with identity change (no concurrent writers) resets sync metadata.
+	let baseline = providers.get(p.id).unwrap();
+	let mut write = for_provider_update(
+		baseline.id,
+		&baseline.updated_at,
+		CredentialKind::None,
+		CredentialUpdate::Clear,
+	);
 	write.display_name = "OpenAI".into();
 	write.base_url_override = Some("https://api.openai.com/v1".into());
 	let after = providers.save(write).expect("clear to none");
@@ -1816,8 +1973,12 @@ fn save_none_keep_after_sync_preserves_status_when_identity_unchanged() {
 	let synced_at = before.models_synced_at.clone().expect("synced_at");
 
 	// Save final transaction commits after sync.
-	let mut write = provider_write(CredentialKind::None, CredentialUpdate::Keep);
-	write.id = Some(p.id);
+	let mut write = for_provider_update(
+		before.id,
+		&before.updated_at,
+		CredentialKind::None,
+		CredentialUpdate::Keep,
+	);
 	write.display_name = "After sync rename".into();
 	write.base_url_override = before.base_url_override.clone();
 	let after = providers.save(write).unwrap();
@@ -1845,13 +2006,15 @@ fn save_none_keep_after_sync_resets_when_identity_changed() {
 			}],
 		)
 		.unwrap();
-	assert_eq!(
-		providers.get(p.id).unwrap().models_sync_status,
-		crate::domain::provider::ModelsSyncStatus::Ok
-	);
+	let before = providers.get(p.id).unwrap();
+	assert_eq!(before.models_sync_status, crate::domain::provider::ModelsSyncStatus::Ok);
 
-	let mut write = provider_write(CredentialKind::None, CredentialUpdate::Keep);
-	write.id = Some(p.id);
+	let mut write = for_provider_update(
+		before.id,
+		&before.updated_at,
+		CredentialKind::None,
+		CredentialUpdate::Keep,
+	);
 	write.base_url_override = Some("http://127.0.0.1:4242/v1".into());
 	write.display_name = "OpenAI".into();
 	let after = providers.save(write).unwrap();
@@ -1882,8 +2045,12 @@ fn save_display_name_only_preserves_models_sync_status() {
 	let before = providers.get(p.id).unwrap();
 	let synced_at = before.models_synced_at.clone().expect("synced_at");
 
-	let mut write = provider_write(CredentialKind::None, CredentialUpdate::Keep);
-	write.id = Some(p.id);
+	let mut write = for_provider_update(
+		before.id,
+		&before.updated_at,
+		CredentialKind::None,
+		CredentialUpdate::Keep,
+	);
 	write.display_name = "Renamed only".into();
 	// Same base URL / identity fields.
 	write.base_url_override = before.base_url_override.clone();
@@ -1912,13 +2079,15 @@ fn save_credential_replace_resets_models_sync_status() {
 			}],
 		)
 		.unwrap();
-	assert_eq!(
-		providers.get(p.id).unwrap().models_sync_status,
-		crate::domain::provider::ModelsSyncStatus::Ok
-	);
+	let before = providers.get(p.id).unwrap();
+	assert_eq!(before.models_sync_status, crate::domain::provider::ModelsSyncStatus::Ok);
 
-	let mut write = provider_write(CredentialKind::ApiKey, CredentialUpdate::Replace("sk-new".into()));
-	write.id = Some(p.id);
+	let mut write = for_provider_update(
+		before.id,
+		&before.updated_at,
+		CredentialKind::ApiKey,
+		CredentialUpdate::Replace("sk-new".into()),
+	);
 	write.display_name = "OpenAI".into();
 	write.base_url_override = Some("https://api.openai.com/v1".into());
 	let after = providers.save(write).unwrap();
@@ -1947,8 +2116,13 @@ fn save_proxy_mode_change_resets_models_sync_status() {
 		)
 		.unwrap();
 
-	let mut write = provider_write(CredentialKind::None, CredentialUpdate::Keep);
-	write.id = Some(p.id);
+	let before = providers.get(p.id).unwrap();
+	let mut write = for_provider_update(
+		before.id,
+		&before.updated_at,
+		CredentialKind::None,
+		CredentialUpdate::Keep,
+	);
 	write.proxy_mode = ProxyMode::Direct;
 	write.display_name = "OpenAI".into();
 	let after = providers.save(write).unwrap();
@@ -1995,8 +2169,12 @@ fn vault_set_failure_on_replace_does_not_reset_sync_status() {
 	let synced_at = before.models_synced_at.clone().expect("synced_at");
 
 	vault.set_fail_set(true);
-	let mut write = provider_write(CredentialKind::ApiKey, CredentialUpdate::Replace("sk-fail".into()));
-	write.id = Some(p.id);
+	let mut write = for_provider_update(
+		before.id,
+		&before.updated_at,
+		CredentialKind::ApiKey,
+		CredentialUpdate::Replace("sk-fail".into()),
+	);
 	write.display_name = "OpenAI".into();
 	let err = providers.save(write);
 	assert!(err.is_err());
@@ -2016,4 +2194,143 @@ fn test_connection_returns_provider_updated_at_on_failure() {
 	assert!(!result.ok);
 	assert_eq!(result.error_code.as_deref(), Some("auth"));
 	assert_eq!(result.provider_updated_at, p.updated_at);
+}
+
+#[test]
+fn delete_many_models_all_or_nothing() {
+	let (_d, _db, _v, providers, models, profiles, ..) = setup();
+	let p = providers
+		.save(provider_write(CredentialKind::None, CredentialUpdate::Keep))
+		.unwrap();
+	let m1 = models
+		.save_manual(ManualModelWrite {
+			id: None,
+			provider_instance_id: p.id,
+			model_key: "bulk-a".into(),
+			display_name_override: None,
+			enabled: true,
+			capability_overrides_json: None,
+		})
+		.unwrap();
+	let m2 = models
+		.save_manual(ManualModelWrite {
+			id: None,
+			provider_instance_id: p.id,
+			model_key: "bulk-b".into(),
+			display_name_override: None,
+			enabled: true,
+			capability_overrides_json: None,
+		})
+		.unwrap();
+	let m3 = models
+		.save_manual(ManualModelWrite {
+			id: None,
+			provider_instance_id: p.id,
+			model_key: "bulk-c".into(),
+			display_name_override: None,
+			enabled: true,
+			capability_overrides_json: None,
+		})
+		.unwrap();
+
+	// Empty list is a successful no-op.
+	assert_eq!(models.delete_many(vec![]).unwrap(), 0);
+	assert_eq!(models.list_by_provider(p.id).unwrap().len(), 3);
+
+	// Duplicate ids collapse to one delete.
+	assert_eq!(models.delete_many(vec![m1.id, m1.id]).unwrap(), 1);
+	assert_eq!(models.list_by_provider(p.id).unwrap().len(), 2);
+	assert!(models.list_by_provider(p.id).unwrap().iter().all(|m| m.id != m1.id));
+
+	// Protect m3 with a translation-profile target (FK RESTRICT → InUse).
+	profiles
+		.save(TranslationProfileWrite {
+			id: None,
+			name: "Holds bulk-c".into(),
+			enabled: true,
+			template_version: 1,
+			system_template: "s".into(),
+			user_template: "{{text}}".into(),
+			temperature: None,
+			max_output_tokens: None,
+			provider_options_json: None,
+			source_lang: None,
+			target_lang: None,
+			target_model_ids: vec![m3.id],
+		})
+		.unwrap();
+
+	// Any failure (in-use or missing) rolls back the whole batch.
+	let err = models.delete_many(vec![m2.id, m3.id]).unwrap_err();
+	assert!(matches!(err, StorageError::InUse(_)), "expected in_use, got {err:?}");
+	let remaining = models.list_by_provider(p.id).unwrap();
+	assert_eq!(remaining.len(), 2, "m2 must remain after rollback");
+	assert!(remaining.iter().any(|m| m.id == m2.id));
+	assert!(remaining.iter().any(|m| m.id == m3.id));
+
+	let missing = uuid::Uuid::nil();
+	let err = models.delete_many(vec![m2.id, missing]).unwrap_err();
+	assert!(
+		matches!(err, StorageError::NotFound(_)),
+		"expected not_found, got {err:?}"
+	);
+	assert_eq!(models.list_by_provider(p.id).unwrap().len(), 2);
+
+	// Successful multi-delete after removing the profile reference path via profile delete.
+	profiles.delete(profiles.list().unwrap()[0].profile.id).unwrap();
+	assert_eq!(models.delete_many(vec![m2.id, m3.id]).unwrap(), 2);
+	assert!(models.list_by_provider(p.id).unwrap().is_empty());
+}
+
+#[test]
+fn provider_save_rejects_stale_expected_updated_at() {
+	let (_d, _db, _v, providers, ..) = setup();
+	let created = providers
+		.save(provider_write(CredentialKind::None, CredentialUpdate::Keep))
+		.unwrap();
+
+	// First update with the correct baseline succeeds and advances updated_at.
+	let mut first = for_provider_update(
+		created.id,
+		&created.updated_at,
+		CredentialKind::None,
+		CredentialUpdate::Keep,
+	);
+	first.display_name = "First win".into();
+	let saved = providers.save(first).unwrap();
+	assert_eq!(saved.display_name, "First win");
+	assert_ne!(saved.updated_at, created.updated_at);
+
+	// Stale baseline must not write.
+	let mut stale = for_provider_update(
+		created.id,
+		&created.updated_at,
+		CredentialKind::None,
+		CredentialUpdate::Keep,
+	);
+	stale.display_name = "Should not land".into();
+	let err = providers.save(stale).unwrap_err();
+	assert!(matches!(err, StorageError::Conflict(_)), "got {err:?}");
+	let current = providers.get(created.id).unwrap();
+	assert_eq!(current.display_name, "First win");
+	assert_eq!(current.updated_at, saved.updated_at);
+
+	// Missing expected_updated_at is rejected before any write.
+	let mut missing = provider_write(CredentialKind::None, CredentialUpdate::Keep);
+	missing.id = Some(created.id);
+	missing.display_name = "No baseline".into();
+	let err = providers.save(missing).unwrap_err();
+	assert!(matches!(err, StorageError::Validation(_)), "got {err:?}");
+	assert_eq!(providers.get(created.id).unwrap().display_name, "First win");
+
+	// Current baseline still saves cleanly.
+	let mut ok = for_provider_update(
+		saved.id,
+		&saved.updated_at,
+		CredentialKind::None,
+		CredentialUpdate::Keep,
+	);
+	ok.display_name = "Second win".into();
+	let again = providers.save(ok).unwrap();
+	assert_eq!(again.display_name, "Second win");
 }

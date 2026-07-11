@@ -74,6 +74,11 @@ export interface ProviderInstanceWrite {
 	enabled: boolean;
 	proxyMode: ProxyMode;
 	insecureHttpConfirmedAt?: string | null;
+	/**
+	 * Optimistic concurrency baseline (`ProviderInstanceDto.updatedAt` when the form was loaded).
+	 * Required on update (`id` set); ignored on create.
+	 */
+	expectedUpdatedAt?: string | null;
 }
 
 /** Versioned sparse capability overrides accepted on manual writes and import. */

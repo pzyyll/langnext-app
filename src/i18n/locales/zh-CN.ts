@@ -268,6 +268,14 @@ const zhCN = {
 		syncError: "同步错误{{code}}。{{lastOk}}",
 		syncErrorLastOk: " 上次成功同步：{{at}}。",
 		syncUnknown: "同步状态未知",
+		conflict: {
+			title: "此渠道已在其他位置被修改",
+			description: "本地连接草稿与已保存版本不一致。可重新加载远端设置，或保留本地草稿并在保存时处理冲突。",
+			reloadRemote: "重新加载远端版本",
+			keepLocal: "保留本地草稿",
+			saveRejected: "保存被拒绝：渠道已在其他位置被修改。请重新加载远端版本，或保留草稿并解决冲突后重试。",
+			renameConflict: "重命名被拒绝：渠道已在其他位置被修改。请重新加载后重试。",
+		},
 		toast: {
 			channelCreated: "渠道已创建",
 			createFailed: "创建失败",

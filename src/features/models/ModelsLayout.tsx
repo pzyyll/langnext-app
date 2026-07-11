@@ -1,15 +1,20 @@
 // ABOUTME: Models feature layout with provider sidebar and nested route outlet.
-// ABOUTME: Loads real provider instances and coordinates add-channel navigation.
+// ABOUTME: Loads provider instances via Query and coordinates sidebar animations.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, Outlet, useNavigate, useParams } from "@tanstack/react-router";
 import { Button } from "@base-ui/react/button";
 import { DragDropProvider } from "@dnd-kit/react";
 import { isSortable, useSortable } from "@dnd-kit/react/sortable";
 import { useTranslation } from "react-i18next";
-import { listProviderInstances, reorderProviderInstances } from "../../storage/client";
+import { useToast } from "../../components/toast/useToast";
+import { outlineButtonClassName } from "../../components/ui";
+import { modelKeys, providerKeys } from "../../query/keys";
+import { providerListOptions } from "../../query/options";
+import { applyProviderReorderOrder, shouldRollbackReorder } from "../../query/reorderProvidersCache";
+import { reorderProviderInstances } from "../../storage/client";
 import { getIpcErrorMessage } from "../../storage/errors";
 import type { ProviderInstanceDto } from "../../storage/types";
-import { outlineButtonClassName } from "../../components/ui";
 import { ModelsContext } from "./ModelsContext";
 import { AddProviderDialog } from "./AddProviderDialog";
 
@@ -31,6 +36,7 @@ function SortableChannelItem({
 	active,
 	entering,
 	exiting,
+	reorderDisabled,
 	onEnterComplete,
 	onExitComplete,
 }: {
@@ -39,6 +45,8 @@ function SortableChannelItem({
 	active: boolean;
 	entering: boolean;
 	exiting: boolean;
+	/** True while a reorder mutation is in flight (serialize concurrent drags). */
+	reorderDisabled: boolean;
 	onEnterComplete: (id: string) => void;
 	onExitComplete: (id: string) => void;
 }) {
@@ -46,7 +54,7 @@ function SortableChannelItem({
 	const { ref, handleRef } = useSortable({
 		id: provider.id,
 		index,
-		disabled: exiting,
+		disabled: exiting || reorderDisabled,
 	});
 
 	const exitDoneRef = useRef(false);
@@ -144,65 +152,39 @@ function SortableChannelItem({
 
 export function ModelsLayout() {
 	const { t } = useTranslation();
+	const toast = useToast();
 	const navigate = useNavigate();
+	const queryClient = useQueryClient();
 	const params = useParams({ strict: false }) as { providerId?: string };
 	const selectedId = params.providerId;
 
-	const [providers, setProviders] = useState<ProviderInstanceDto[]>([]);
-	const knownProviderIdsRef = useRef<Set<string>>(new Set());
-	const [providersLoading, setProvidersLoading] = useState(true);
-	const [providersError, setProvidersError] = useState<string | null>(null);
+	const providersQuery = useQuery(providerListOptions());
+	const providersLoading = providersQuery.isLoading;
+	const providersError =
+		providersQuery.error != null ? getIpcErrorMessage(providersQuery.error, t("models.loadChannelsFailed")) : null;
+
 	const [addOpen, setAddOpen] = useState(false);
-	/** IDs playing exit animation; still present in `providers` until finalized. */
-	const [exitingProviderIds, setExitingProviderIds] = useState<ReadonlySet<string>>(() => new Set());
-	/** IDs inserted via upsert (not initial load / refresh); play enter animation. */
+	/** Snapshots of providers leaving the list so exit animation can finish. */
+	const [exitingProviders, setExitingProviders] = useState<Map<string, ProviderInstanceDto>>(() => new Map());
+	/** IDs inserted via create; play enter animation. */
 	const [enteringProviderIds, setEnteringProviderIds] = useState<ReadonlySet<string>>(() => new Set());
+	/** Monotonic epoch so a stale reorder error cannot roll back a newer order. */
+	const reorderEpochRef = useRef(0);
 
-	const refreshProviders = useCallback(async () => {
-		setProvidersError(null);
-		setProvidersLoading(true);
-		try {
-			const list = await listProviderInstances();
-			knownProviderIdsRef.current = new Set(list.map((provider) => provider.id));
-			setProviders(list);
-			setExitingProviderIds(new Set());
-			setEnteringProviderIds(new Set());
-		} catch (error: unknown) {
-			setProvidersError(getIpcErrorMessage(error, t("models.loadChannelsFailed")));
-		} finally {
-			setProvidersLoading(false);
-		}
-	}, [t]);
-
-	useEffect(() => {
-		let cancelled = false;
-
-		async function load() {
-			setProvidersError(null);
-			setProvidersLoading(true);
-			try {
-				const list = await listProviderInstances();
-				if (!cancelled) {
-					// Initial hydration uses setProviders only — no enter animation.
-					knownProviderIdsRef.current = new Set(list.map((provider) => provider.id));
-					setProviders(list);
-				}
-			} catch (error: unknown) {
-				if (!cancelled) {
-					setProvidersError(getIpcErrorMessage(error, t("models.loadChannelsFailed")));
-				}
-			} finally {
-				if (!cancelled) {
-					setProvidersLoading(false);
-				}
+	// Merge query data with exiting snapshots (records no longer in cache).
+	const providers = useMemo(() => {
+		const fromQuery = providersQuery.data ?? [];
+		const byId = new Map(fromQuery.map((item) => [item.id, item]));
+		const list = fromQuery.slice();
+		for (const [id, snapshot] of exitingProviders) {
+			if (!byId.has(id)) {
+				list.push(snapshot);
 			}
 		}
+		return list;
+	}, [providersQuery.data, exitingProviders]);
 
-		void load();
-		return () => {
-			cancelled = true;
-		};
-	}, [t]);
+	const exitingProviderIds = useMemo(() => new Set(exitingProviders.keys()), [exitingProviders]);
 
 	// When the Models tab opens with channels already configured but none selected,
 	// default to the first non-exiting channel so the editor is immediately visible.
@@ -218,51 +200,34 @@ export function ModelsLayout() {
 		});
 	}, [providers, providersLoading, providersError, selectedId, navigate, exitingProviderIds]);
 
-	const upsertProvider = useCallback((provider: ProviderInstanceDto) => {
-		const isInsert = !knownProviderIdsRef.current.has(provider.id);
-		knownProviderIdsRef.current.add(provider.id);
-		setProviders((current) => {
-			const index = current.findIndex((item) => item.id === provider.id);
-			if (index < 0) {
-				return [...current, provider];
-			}
-			const next = current.slice();
-			next[index] = provider;
-			return next;
-		});
-		// Only brand-new inserts (Add channel) get enter animation — not updates or initial load.
-		if (isInsert) {
-			setEnteringProviderIds((current) => {
-				if (current.has(provider.id)) return current;
-				const next = new Set(current);
-				next.add(provider.id);
-				return next;
-			});
-		}
-	}, []);
-
-	/** Marks a provider as exiting; list item stays until animation/fallback completes. */
-	const removeProvider = useCallback((id: string) => {
-		setExitingProviderIds((current) => {
+	const markProviderEnter = useCallback((id: string) => {
+		setEnteringProviderIds((current) => {
 			if (current.has(id)) return current;
 			const next = new Set(current);
 			next.add(id);
 			return next;
 		});
+	}, []);
+
+	const beginProviderExit = useCallback((provider: ProviderInstanceDto) => {
+		setExitingProviders((current) => {
+			if (current.has(provider.id)) return current;
+			const next = new Map(current);
+			next.set(provider.id, provider);
+			return next;
+		});
 		setEnteringProviderIds((current) => {
-			if (!current.has(id)) return current;
+			if (!current.has(provider.id)) return current;
 			const next = new Set(current);
-			next.delete(id);
+			next.delete(provider.id);
 			return next;
 		});
 	}, []);
 
 	const finalizeRemoveProvider = useCallback((id: string) => {
-		knownProviderIdsRef.current.delete(id);
-		setProviders((current) => current.filter((item) => item.id !== id));
-		setExitingProviderIds((current) => {
+		setExitingProviders((current) => {
 			if (!current.has(id)) return current;
-			const next = new Set(current);
+			const next = new Map(current);
 			next.delete(id);
 			return next;
 		});
@@ -283,46 +248,42 @@ export function ModelsLayout() {
 		});
 	}, []);
 
-	const reorderProviders = useCallback(
-		async (orderedIds: string[]) => {
-			// Keep exiting rows in local order so the leave animation can finish in place.
-			setProviders((current) => {
-				const byId = new Map(current.map((item) => [item.id, item]));
-				const next: ProviderInstanceDto[] = [];
-				for (const id of orderedIds) {
-					const item = byId.get(id);
-					if (item) {
-						next.push(item);
-					}
+	const reorderMutation = useMutation({
+		mutationFn: (orderedIds: string[]) => reorderProviderInstances(orderedIds),
+		onMutate: async (orderedIds) => {
+			const epoch = ++reorderEpochRef.current;
+			await queryClient.cancelQueries({ queryKey: providerKeys.list() });
+			const previous = queryClient.getQueryData<ProviderInstanceDto[]>(providerKeys.list());
+			if (previous) {
+				const next = applyProviderReorderOrder(previous, orderedIds);
+				if (next) {
+					queryClient.setQueryData(providerKeys.list(), next);
 				}
-				return next.length === current.length ? next : current;
-			});
-			// Exiting IDs are already deleted server-side; including them yields NotFound.
-			const persistIds = orderedIds.filter((id) => !exitingProviderIds.has(id));
-			if (persistIds.length === 0) {
-				return;
 			}
-			try {
-				await reorderProviderInstances(persistIds);
-			} catch (error: unknown) {
-				setProvidersError(getIpcErrorMessage(error, t("models.reorderChannelsFailed")));
-				await refreshProviders();
-			}
+			return { previous, epoch };
 		},
-		[exitingProviderIds, refreshProviders, t],
-	);
+		onError: (error, _ids, context) => {
+			// Only roll back if this failure is still the latest mutation epoch.
+			if (context?.previous && context.epoch != null && shouldRollbackReorder(context.epoch, reorderEpochRef.current)) {
+				queryClient.setQueryData(providerKeys.list(), context.previous);
+			}
+			const message = getIpcErrorMessage(error, t("models.reorderChannelsFailed"));
+			toast.error({ title: t("models.reorderChannelsFailed"), description: message });
+		},
+		onSettled: () => {
+			void queryClient.invalidateQueries({ queryKey: providerKeys.all });
+		},
+	});
+
+	const reorderPending = reorderMutation.isPending;
+	const displayError = providersError;
 
 	const contextValue = useMemo(
 		() => ({
-			providers,
-			providersLoading,
-			providersError,
-			refreshProviders,
-			upsertProvider,
-			removeProvider,
-			reorderProviders,
+			markProviderEnter,
+			beginProviderExit,
 		}),
-		[providers, providersLoading, providersError, refreshProviders, upsertProvider, removeProvider, reorderProviders],
+		[markProviderEnter, beginProviderExit],
 	);
 
 	return (
@@ -340,14 +301,14 @@ export function ModelsLayout() {
 							</p>
 						) : null}
 
-						{providersError ? (
+						{displayError ? (
 							<div className="flex flex-col gap-2" role="alert">
-								<p className="text-body-tight text-error">{providersError}</p>
+								<p className="text-body-tight text-error">{displayError}</p>
 								<Button
 									type="button"
 									className={outlineButtonClassName}
 									onClick={() => {
-										void refreshProviders();
+										void providersQuery.refetch();
 									}}
 								>
 									{t("common.retry")}
@@ -355,14 +316,16 @@ export function ModelsLayout() {
 							</div>
 						) : null}
 
-						{!providersLoading && !providersError && providers.length === 0 ? (
+						{!providersLoading && !displayError && providers.length === 0 ? (
 							<p className="text-body-tight text-neutral">{t("models.emptyChannels")}</p>
 						) : null}
 
-						{!providersLoading && !providersError && providers.length > 0 ? (
+						{!providersLoading && !displayError && providers.length > 0 ? (
 							<DragDropProvider
 								onDragEnd={(event) => {
 									if (event.canceled) return;
+									// Serialize reorders: concurrent mutates race optimistic cache + rollback.
+									if (reorderMutation.isPending) return;
 
 									const { source } = event.operation;
 									if (!isSortable(source)) return;
@@ -374,7 +337,12 @@ export function ModelsLayout() {
 									const [removed] = next.splice(initialIndex, 1);
 									if (!removed) return;
 									next.splice(index, 0, removed);
-									void reorderProviders(next.map((item) => item.id));
+									// Exiting IDs are already deleted server-side; including them yields NotFound.
+									const persistIds = next.map((item) => item.id).filter((id) => !exitingProviderIds.has(id));
+									if (persistIds.length === 0) {
+										return;
+									}
+									reorderMutation.mutate(persistIds);
 								}}
 							>
 								<ul className="min-h-0 flex-1 space-y-1 overflow-y-auto">
@@ -386,6 +354,7 @@ export function ModelsLayout() {
 											active={provider.id === selectedId}
 											entering={enteringProviderIds.has(provider.id)}
 											exiting={exitingProviderIds.has(provider.id)}
+											reorderDisabled={reorderPending}
 											onEnterComplete={clearEnteringProvider}
 											onExitComplete={finalizeRemoveProvider}
 										/>
@@ -418,7 +387,18 @@ export function ModelsLayout() {
 				open={addOpen}
 				onOpenChange={setAddOpen}
 				onCreated={(provider) => {
-					upsertProvider(provider);
+					markProviderEnter(provider.id);
+					queryClient.setQueryData<ProviderInstanceDto[]>(providerKeys.list(), (current) => {
+						if (!current) {
+							return [provider];
+						}
+						if (current.some((item) => item.id === provider.id)) {
+							return current.map((item) => (item.id === provider.id ? provider : item));
+						}
+						return [...current, provider];
+					});
+					void queryClient.invalidateQueries({ queryKey: providerKeys.all });
+					void queryClient.invalidateQueries({ queryKey: modelKeys.all });
 					void navigate({
 						to: "/models/$providerId",
 						params: { providerId: provider.id },

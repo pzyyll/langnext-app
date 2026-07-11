@@ -12,6 +12,7 @@ mod credentials;
 mod device_state;
 mod domain;
 mod error;
+mod events;
 mod panic;
 mod repositories;
 mod services;
@@ -41,7 +42,6 @@ pub fn run() {
 	tauri::Builder::default()
 		.plugin(tauri_plugin_opener::init())
 		.invoke_handler(tauri::generate_handler![
-			cmds::greet,
 			cmds::snap::show_snap_overlay,
 			cmds::providers::list_provider_instances,
 			cmds::providers::save_provider_instance,
@@ -53,6 +53,7 @@ pub fn run() {
 			cmds::models::save_manual_model,
 			cmds::models::set_model_enabled,
 			cmds::models::delete_provider_model,
+			cmds::models::delete_provider_models,
 			cmds::models::test_provider_connection,
 			cmds::models::sync_provider_models,
 			cmds::models::translate_text,

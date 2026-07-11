@@ -16,7 +16,6 @@ import type {
 	SyncModelsResult,
 	TranslateInput,
 	TranslateResult,
-	TranslationProfile,
 	TranslationProfileDto,
 	TranslationProfileWrite,
 } from "./types";
@@ -87,6 +86,11 @@ export async function deleteProviderModel(id: string): Promise<void> {
 	return invoke("delete_provider_model", { id });
 }
 
+/** Bulk-delete models in one backend transaction (all-or-nothing). */
+export async function deleteProviderModels(ids: string[]): Promise<void> {
+	return invoke("delete_provider_models", { ids });
+}
+
 export async function testProviderConnection(providerInstanceId: string): Promise<ConnectionTestResult> {
 	return invoke("test_provider_connection", { providerInstanceId });
 }
@@ -95,7 +99,8 @@ export async function syncProviderModels(providerInstanceId: string): Promise<Sy
 	return invoke("sync_provider_models", { providerInstanceId });
 }
 
-export async function listTranslationProfiles(): Promise<TranslationProfile[]> {
+/** Profile list rows include ordered target chains for list summaries (no N+1 detail fetch). */
+export async function listTranslationProfiles(): Promise<TranslationProfileDto[]> {
 	return invoke("list_translation_profiles");
 }
 

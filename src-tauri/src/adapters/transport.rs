@@ -1201,7 +1201,11 @@ fn build_stream_request_parts(
 ///
 /// Returns `Ok(Some(delta))` for content, `Ok(None)` for keep-alive / non-text events,
 /// and `Err` only for malformed JSON that claims to be a content payload we cannot skip.
-pub fn parse_sse_data_delta(adapter_id: &str, event_name: Option<&str>, data: &str) -> Result<Option<String>, TransportError> {
+pub fn parse_sse_data_delta(
+	adapter_id: &str,
+	event_name: Option<&str>,
+	data: &str,
+) -> Result<Option<String>, TransportError> {
 	let trimmed = data.trim();
 	if trimmed.is_empty() || trimmed == "[DONE]" {
 		return Ok(None);
@@ -1238,11 +1242,7 @@ pub fn parse_openai_stream_delta(value: &serde_json::Value) -> Option<String> {
 
 /// OpenAI Responses API stream: prefer `response.output_text.delta` payloads.
 fn parse_openai_responses_stream_delta(event_name: Option<&str>, value: &serde_json::Value) -> Option<String> {
-	let ty = value
-		.get("type")
-		.and_then(|t| t.as_str())
-		.or(event_name)
-		.unwrap_or("");
+	let ty = value.get("type").and_then(|t| t.as_str()).or(event_name).unwrap_or("");
 	if ty == "response.output_text.delta" || ty.ends_with("output_text.delta") {
 		if let Some(delta) = value.get("delta").and_then(|d| d.as_str()) {
 			if !delta.is_empty() {
@@ -1251,11 +1251,7 @@ fn parse_openai_responses_stream_delta(event_name: Option<&str>, value: &serde_j
 		}
 	}
 	// Some gateways nest text under delta.as object.
-	if let Some(text) = value
-		.get("delta")
-		.and_then(|d| d.get("text"))
-		.and_then(|t| t.as_str())
-	{
+	if let Some(text) = value.get("delta").and_then(|d| d.get("text")).and_then(|t| t.as_str()) {
 		if !text.is_empty() {
 			return Some(text.to_string());
 		}
@@ -1265,11 +1261,7 @@ fn parse_openai_responses_stream_delta(event_name: Option<&str>, value: &serde_j
 
 /// Anthropic Messages stream: `content_block_delta` with `delta.text`.
 fn parse_anthropic_stream_delta(event_name: Option<&str>, value: &serde_json::Value) -> Option<String> {
-	let ty = value
-		.get("type")
-		.and_then(|t| t.as_str())
-		.or(event_name)
-		.unwrap_or("");
+	let ty = value.get("type").and_then(|t| t.as_str()).or(event_name).unwrap_or("");
 	if ty != "content_block_delta" {
 		return None;
 	}
@@ -1750,9 +1742,7 @@ mod tests {
 	fn with_cancel_pre_cancelled_token() {
 		let token = CancelToken::new();
 		token.cancel();
-		let result = block_on(with_cancel(Some(&token), async {
-			Ok::<_, TransportError>(1)
-		}));
+		let result = block_on(with_cancel(Some(&token), async { Ok::<_, TransportError>(1) }));
 		assert_eq!(result.unwrap_err(), TransportError::Cancelled);
 	}
 

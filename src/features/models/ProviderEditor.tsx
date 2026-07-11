@@ -1,6 +1,7 @@
 // ABOUTME: Selected provider editor for connection settings and model management.
-// ABOUTME: Coordinates local form state with real provider and model storage IPC.
+// ABOUTME: Coordinates local form state with Query-backed provider and model data.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "@tanstack/react-router";
 import i18n from "../../i18n";
@@ -23,22 +24,24 @@ import {
 	switchRootClassName,
 	switchThumbClassName,
 } from "../../components/ui";
+import { modelKeys, providerKeys } from "../../query/keys";
+import { providerListOptions, providerModelsOptions } from "../../query/options";
 import {
 	deleteProviderInstance,
-	deleteProviderModel,
-	listProviderModels,
+	deleteProviderModels,
 	saveManualModel,
 	saveProviderInstance,
 	setModelEnabled,
 	syncProviderModels,
 	testProviderConnection,
 } from "../../storage/client";
-import { getIpcErrorMessage } from "../../storage/errors";
+import { getIpcErrorMessage, isConflictError } from "../../storage/errors";
 import type { CredentialUpdate, ProviderInstanceDto, ProviderModelDto } from "../../storage/types";
 import { ADAPTER_OPTIONS, getDefaultBaseUrl } from "./adapterOptions";
 import { AddManualModelDialog } from "./AddManualModelDialog";
 import { useModelsContext } from "./ModelsContext";
 import { ModelsTable } from "./ModelsTable";
+import { hasRemoteProviderConflict, shouldShowConflictBanner } from "./providerFormConflict";
 
 export type ProviderEditorProps = {
 	providerId: string;
@@ -108,9 +111,11 @@ function syncStatusLabel(provider: ProviderInstanceDto, syncPending: boolean): s
 
 export function ProviderEditor({ providerId }: ProviderEditorProps) {
 	const { t } = useTranslation();
-	const { providers, providersLoading, providersError, upsertProvider, removeProvider, refreshProviders } =
-		useModelsContext();
-	const provider = providers.find((item) => item.id === providerId) ?? null;
+	const providersQuery = useQuery(providerListOptions());
+	const provider = (providersQuery.data ?? []).find((item) => item.id === providerId) ?? null;
+	const providersLoading = providersQuery.isLoading;
+	const providersError =
+		providersQuery.error != null ? getIpcErrorMessage(providersQuery.error, t("models.loadChannelsFailed")) : null;
 
 	if (providersLoading) {
 		return (
@@ -132,7 +137,7 @@ export function ProviderEditor({ providerId }: ProviderEditorProps) {
 					type="button"
 					className={outlineButtonClassName}
 					onClick={() => {
-						void refreshProviders();
+						void providersQuery.refetch();
 					}}
 				>
 					{t("common.retry")}
@@ -151,32 +156,34 @@ export function ProviderEditor({ providerId }: ProviderEditorProps) {
 	}
 
 	// Remount connection form when the selected channel changes so local state re-inits cleanly.
-	return (
-		<ProviderEditorLoaded
-			key={provider.id}
-			provider={provider}
-			upsertProvider={upsertProvider}
-			removeProvider={removeProvider}
-		/>
-	);
+	return <ProviderEditorLoaded key={provider.id} provider={provider} />;
 }
 
 type ProviderEditorLoadedProps = {
 	provider: ProviderInstanceDto;
-	upsertProvider: (provider: ProviderInstanceDto) => void;
-	removeProvider: (id: string) => void;
 };
 
-function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: ProviderEditorLoadedProps) {
+function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
 	const { t } = useTranslation();
 	const navigate = useNavigate();
 	const toast = useToast();
+	const queryClient = useQueryClient();
+	const { beginProviderExit } = useModelsContext();
 	const [adapterId, setAdapterId] = useState(provider.adapterId);
 	const [baseUrlOverride, setBaseUrlOverride] = useState(provider.baseUrlOverride ?? "");
 	const [enabled, setEnabled] = useState(provider.enabled);
 	const [token, setToken] = useState("");
 	const [credentialAction, setCredentialAction] = useState<CredentialAction>("keep");
 	const [insecureHttpAcknowledged, setInsecureHttpAcknowledged] = useState(false);
+	/** True only after a local user edit; not derived from server field comparison. */
+	const [formDirty, setFormDirty] = useState(false);
+	/** Provider.updatedAt last applied into local form fields while clean (OCC baseline). */
+	const [syncedUpdatedAt, setSyncedUpdatedAt] = useState(provider.updatedAt);
+	/**
+	 * Remote updatedAt for which the user chose "keep local draft".
+	 * Banner reappears if remote advances again past this value.
+	 */
+	const [dismissedConflictUpdatedAt, setDismissedConflictUpdatedAt] = useState<string | null>(null);
 
 	const [savePending, setSavePending] = useState(false);
 	const [, setSaveError] = useState<string | null>(null);
@@ -188,9 +195,6 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 	const [renameError, setRenameError] = useState<string | null>(null);
 	const renameInputRef = useRef<HTMLInputElement>(null);
 
-	const [models, setModels] = useState<ProviderModelDto[]>([]);
-	const [modelsLoading, setModelsLoading] = useState(true);
-	const [modelsError, setModelsError] = useState<string | null>(null);
 	const [pendingModelIds, setPendingModelIds] = useState<Set<string>>(() => new Set());
 	const [modelMutationError, setModelMutationError] = useState<string | null>(null);
 	const [addModelOpen, setAddModelOpen] = useState(false);
@@ -224,55 +228,47 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 
 	const providerId = provider.id;
 
+	const modelsQuery = useQuery(providerModelsOptions(providerId));
+	const models = modelsQuery.data ?? [];
+	const modelsLoading = modelsQuery.isLoading;
+	const modelsError =
+		modelsQuery.error != null ? getIpcErrorMessage(modelsQuery.error, t("models.loadModelsFailed")) : null;
+
+	const seedProvider = useCallback(
+		(next: ProviderInstanceDto) => {
+			queryClient.setQueryData<ProviderInstanceDto[]>(providerKeys.list(), (current) => {
+				if (!current) {
+					return [next];
+				}
+				const index = current.findIndex((item) => item.id === next.id);
+				if (index < 0) {
+					return [...current, next];
+				}
+				const copy = current.slice();
+				copy[index] = next;
+				return copy;
+			});
+		},
+		[queryClient],
+	);
+
+	const invalidateProviderAndModels = useCallback(() => {
+		void queryClient.invalidateQueries({ queryKey: providerKeys.all });
+		void queryClient.invalidateQueries({ queryKey: modelKeys.all });
+	}, [queryClient]);
+
+	const setModelsCache = useCallback(
+		(updater: (current: ProviderModelDto[]) => ProviderModelDto[]) => {
+			queryClient.setQueryData<ProviderModelDto[]>(modelKeys.byProvider(providerId), (current) =>
+				updater(current ?? []),
+			);
+		},
+		[queryClient, providerId],
+	);
+
 	const clearConnectionTestResult = useCallback(() => {
 		connectionTestGeneration.current += 1;
 	}, []);
-
-	const reloadModels = useCallback(
-		async (id: string) => {
-			setModelsError(null);
-			setModelsLoading(true);
-			try {
-				const list = await listProviderModels(id);
-				setModels(list);
-			} catch (error: unknown) {
-				setModelsError(getIpcErrorMessage(error, t("models.loadModelsFailed")));
-			} finally {
-				setModelsLoading(false);
-			}
-		},
-		[t],
-	);
-
-	useEffect(() => {
-		let cancelled = false;
-
-		async function load(id: string) {
-			setModelsError(null);
-			setModelMutationError(null);
-			setPendingModelIds(new Set());
-			setModelsLoading(true);
-			try {
-				const list = await listProviderModels(id);
-				if (!cancelled) {
-					setModels(list);
-				}
-			} catch (error: unknown) {
-				if (!cancelled) {
-					setModelsError(getIpcErrorMessage(error, t("models.loadModelsFailed")));
-				}
-			} finally {
-				if (!cancelled) {
-					setModelsLoading(false);
-				}
-			}
-		}
-
-		void load(providerId);
-		return () => {
-			cancelled = true;
-		};
-	}, [providerId, t]);
 
 	const savedBaseUrl = provider.baseUrlOverride ?? null;
 	const normalizedBaseUrl = normalizeBaseUrl(baseUrlOverride);
@@ -282,11 +278,50 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 		!endpointChanged && requiresInsecureAck && Boolean(provider.insecureHttpConfirmedAt);
 
 	// Connection-relevant dirty state: unsaved API type, Base URL, or credential replace/clear.
+	// Used to gate remote actions (test/sync) that require a saved connection identity.
 	const connectionDirty =
 		adapterId !== provider.adapterId ||
 		normalizedBaseUrl !== savedBaseUrl ||
 		credentialAction === "replace" ||
 		credentialAction === "clear";
+
+	const remoteConflict = hasRemoteProviderConflict(formDirty, syncedUpdatedAt, provider.updatedAt);
+	const showConflictBanner = shouldShowConflictBanner(remoteConflict, provider.updatedAt, dismissedConflictUpdatedAt);
+
+	// When the server row changes and the user has no local edits, resync form fields
+	// during render (React-recommended prop→state adjustment; not an effect).
+	// While formDirty, keep local values so remote refresh cannot clobber in-progress edits.
+	// formDirty is an explicit user-edit flag — never derive it from provider field diffs,
+	// or a remote update would look "dirty" and block resync permanently.
+	if (!formDirty && !savePending && provider.updatedAt !== syncedUpdatedAt) {
+		setSyncedUpdatedAt(provider.updatedAt);
+		setDismissedConflictUpdatedAt(null);
+		setAdapterId(provider.adapterId);
+		setBaseUrlOverride(provider.baseUrlOverride ?? "");
+		setEnabled(provider.enabled);
+		setToken("");
+		setCredentialAction("keep");
+		setInsecureHttpAcknowledged(false);
+	}
+
+	function reloadRemoteProviderForm() {
+		setAdapterId(provider.adapterId);
+		setBaseUrlOverride(provider.baseUrlOverride ?? "");
+		setEnabled(provider.enabled);
+		setToken("");
+		setCredentialAction("keep");
+		setInsecureHttpAcknowledged(false);
+		setFormDirty(false);
+		setSyncedUpdatedAt(provider.updatedAt);
+		setDismissedConflictUpdatedAt(null);
+		setSaveError(null);
+		setSaveSuccess(false);
+		clearConnectionTestResult();
+	}
+
+	function keepLocalDraftDespiteConflict() {
+		setDismissedConflictUpdatedAt(provider.updatedAt);
+	}
 
 	// Disable connection form + Save while test/sync is in flight so mid-flight
 	// edits cannot race results (backend still re-checks connection identity on sync).
@@ -318,14 +353,7 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 	}, [credentialAction, endpointUnchangedInsecure, insecureHttpAcknowledged, requiresInsecureAck, token]);
 
 	function resetConnectionForm() {
-		setAdapterId(provider.adapterId);
-		setBaseUrlOverride(provider.baseUrlOverride ?? "");
-		setEnabled(provider.enabled);
-		setToken("");
-		setCredentialAction("keep");
-		setInsecureHttpAcknowledged(false);
-		setSaveError(null);
-		setSaveSuccess(false);
+		reloadRemoteProviderForm();
 	}
 
 	// Block rename while a connection save / sync / test is in flight to avoid
@@ -358,7 +386,7 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 		try {
 			const saved = await saveProviderInstance({
 				id: provider.id,
-				adapterId,
+				adapterId: provider.adapterId,
 				displayName: trimmed,
 				baseUrlOverride: provider.baseUrlOverride,
 				credentialKind: provider.credentialKind,
@@ -366,12 +394,25 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 				enabled: provider.enabled,
 				proxyMode: provider.proxyMode,
 				insecureHttpConfirmedAt: provider.insecureHttpConfirmedAt,
+				expectedUpdatedAt: provider.updatedAt,
 			});
-			upsertProvider(saved);
+			seedProvider(saved);
+			invalidateProviderAndModels();
+			// Advance OCC baseline only when the form already matched the pre-rename remote
+			// version (clean form, or dirty form without remote drift). If the form was
+			// already behind remote, keep the old baseline so the conflict UI remains.
+			if (!formDirty || syncedUpdatedAt === provider.updatedAt) {
+				setSyncedUpdatedAt(saved.updatedAt);
+			}
 			setRenaming(false);
 			setRenameValue("");
 		} catch (error: unknown) {
-			setRenameError(getIpcErrorMessage(error, t("models.toast.renameChannelFailed")));
+			if (isConflictError(error)) {
+				setRenameError(t("models.conflict.renameConflict"));
+				void queryClient.invalidateQueries({ queryKey: providerKeys.all });
+			} else {
+				setRenameError(getIpcErrorMessage(error, t("models.toast.renameChannelFailed")));
+			}
 		} finally {
 			setRenamePending(false);
 		}
@@ -397,6 +438,7 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 		setSaveError(null);
 		setSaveSuccess(false);
 		try {
+			// Always send the form baseline; even "keep local draft" must not silent-overwrite.
 			const saved = await saveProviderInstance({
 				id: provider.id,
 				adapterId,
@@ -407,22 +449,36 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 				enabled,
 				proxyMode: provider.proxyMode,
 				insecureHttpConfirmedAt,
+				expectedUpdatedAt: syncedUpdatedAt,
 			});
-			upsertProvider(saved);
+			seedProvider(saved);
+			invalidateProviderAndModels();
 			setToken("");
 			setCredentialAction("keep");
 			setInsecureHttpAcknowledged(false);
 			setAdapterId(saved.adapterId);
 			setBaseUrlOverride(saved.baseUrlOverride ?? "");
 			setEnabled(saved.enabled);
+			setFormDirty(false);
+			setSyncedUpdatedAt(saved.updatedAt);
+			setDismissedConflictUpdatedAt(null);
 			setSaveSuccess(true);
 			// Clear stale connection-test result after a successful save.
 			clearConnectionTestResult();
 			toast.success({ title: t("models.toast.channelSaved"), description: t("models.toast.channelSavedDesc") });
 		} catch (error: unknown) {
-			const message = getIpcErrorMessage(error, t("models.toast.saveChannelFailed"));
-			setSaveError(message);
-			toast.error({ title: t("models.toast.saveFailed"), description: message });
+			if (isConflictError(error)) {
+				// Refresh so the banner sees the latest remote version; keep local draft.
+				void queryClient.invalidateQueries({ queryKey: providerKeys.all });
+				setDismissedConflictUpdatedAt(null);
+				const message = t("models.conflict.saveRejected");
+				setSaveError(message);
+				toast.error({ title: t("models.toast.saveFailed"), description: message });
+			} else {
+				const message = getIpcErrorMessage(error, t("models.toast.saveChannelFailed"));
+				setSaveError(message);
+				toast.error({ title: t("models.toast.saveFailed"), description: message });
+			}
 		} finally {
 			setSavePending(false);
 		}
@@ -477,15 +533,14 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 		try {
 			const result = await syncProviderModels(provider.id);
 			// Always apply returned snapshot on successful IPC, regardless of result.ok.
-			setModels(result.models);
-			upsertProvider(result.provider);
-			// Clear a prior list-load error so the models table can reappear with the
-			// sync snapshot (including empty lists after a successful remote fetch).
-			setModelsError(null);
-			setModelsLoading(false);
+			queryClient.setQueryData(modelKeys.byProvider(providerId), result.models);
+			seedProvider(result.provider);
 			if (result.ok) {
+				invalidateProviderAndModels();
 				toast.success({ title: t("models.toast.syncedModels"), description: result.message });
 			} else {
+				// Soft failure may still update provider sync status fields.
+				void queryClient.invalidateQueries({ queryKey: providerKeys.all });
 				toast.error({
 					title: t("models.toast.syncFailed"),
 					description: result.errorCode ? `${result.message} (${result.errorCode})` : result.message,
@@ -512,13 +567,16 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 
 		setModelMutationError(null);
 		setPendingModelIds((current) => new Set(current).add(modelId));
-		setModels((current) => current.map((model) => (model.id === modelId ? { ...model, enabled: nextEnabled } : model)));
+		setModelsCache((current) =>
+			current.map((model) => (model.id === modelId ? { ...model, enabled: nextEnabled } : model)),
+		);
 
 		try {
 			const updated = await setModelEnabled(modelId, nextEnabled);
-			setModels((current) => current.map((model) => (model.id === modelId ? updated : model)));
+			setModelsCache((current) => current.map((model) => (model.id === modelId ? updated : model)));
+			void queryClient.invalidateQueries({ queryKey: modelKeys.all });
 		} catch (error: unknown) {
-			setModels((current) => current.map((model) => (model.id === modelId ? previous : model)));
+			setModelsCache((current) => current.map((model) => (model.id === modelId ? previous : model)));
 			const message = getIpcErrorMessage(error, t("models.toast.updateModelFailed"));
 			setModelMutationError(message);
 			toast.error({ title: t("models.toast.updateFailed"), description: message });
@@ -543,7 +601,7 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 
 		setModelMutationError(null);
 		setPendingModelIds((current) => new Set(current).add(model.id));
-		setModels((current) => current.map((m) => (m.id === model.id ? { ...m, displayNameOverride } : m)));
+		setModelsCache((current) => current.map((m) => (m.id === model.id ? { ...m, displayNameOverride } : m)));
 
 		try {
 			const updated = await saveManualModel({
@@ -554,10 +612,11 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 				enabled: model.enabled,
 				capabilityOverridesJson: model.capabilityOverridesJson,
 			});
-			setModels((current) => current.map((m) => (m.id === model.id ? updated : m)));
+			setModelsCache((current) => current.map((m) => (m.id === model.id ? updated : m)));
+			void queryClient.invalidateQueries({ queryKey: modelKeys.all });
 			return true;
 		} catch (error: unknown) {
-			setModels((current) => current.map((m) => (m.id === model.id ? previous : m)));
+			setModelsCache((current) => current.map((m) => (m.id === model.id ? previous : m)));
 			setModelMutationError(getIpcErrorMessage(error, t("models.toast.updateModelFailed")));
 			return false;
 		} finally {
@@ -606,6 +665,7 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 		}
 
 		const idSet = new Set(ids);
+		const previousModels = models;
 		setModelMutationError(null);
 		setDeleteModelsPending(true);
 		setPendingModelIds((current) => {
@@ -615,27 +675,26 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 			}
 			return next;
 		});
-		setModels((current) => current.filter((model) => !idSet.has(model.id)));
+		// Optimistic remove; single IPC is all-or-nothing so failure restores the prior cache.
+		setModelsCache((current) => current.filter((model) => !idSet.has(model.id)));
 
 		try {
-			const results = await Promise.allSettled(ids.map((id) => deleteProviderModel(id)));
-			const anyFailed = results.some((result) => result.status === "rejected");
-			if (anyFailed) {
-				await reloadModels(providerId);
-				const firstRejection = results.find((result) => result.status === "rejected");
-				const reason = firstRejection && firstRejection.status === "rejected" ? firstRejection.reason : undefined;
-				const message = getIpcErrorMessage(reason, t("models.toast.deleteSomeModelsFailed"));
-				setModelMutationError(message);
-				toast.error({ title: t("models.toast.deleteFailed"), description: message });
-			} else {
-				setSelectedModelIds(new Set());
-				setSelectionMode(false);
-				const count = ids.length;
-				toast.success({
-					title: count === 1 ? t("models.toast.modelDeleted") : t("models.toast.modelsDeleted"),
-					description: count === 1 ? t("models.toast.removedOne") : t("models.toast.removedMany", { count }),
-				});
-			}
+			await deleteProviderModels(ids);
+			void queryClient.invalidateQueries({ queryKey: modelKeys.all });
+			setSelectedModelIds(new Set());
+			setSelectionMode(false);
+			const count = ids.length;
+			toast.success({
+				title: count === 1 ? t("models.toast.modelDeleted") : t("models.toast.modelsDeleted"),
+				description: count === 1 ? t("models.toast.removedOne") : t("models.toast.removedMany", { count }),
+			});
+		} catch (error: unknown) {
+			setModelsCache(() => previousModels);
+			const message = getIpcErrorMessage(error, t("models.toast.deleteSomeModelsFailed"));
+			setModelMutationError(message);
+			toast.error({ title: t("models.toast.deleteFailed"), description: message });
+			// Authoritative resync in case partial event noise or cache drift.
+			void modelsQuery.refetch();
 		} finally {
 			setPendingModelIds((current) => {
 				const next = new Set(current);
@@ -655,7 +714,9 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 			const error = new Error(getIpcErrorMessage(err, t("models.toast.deleteChannelFailed")));
 			throw Object.assign(error, { cause: err });
 		}
-		removeProvider(provider.id);
+		beginProviderExit(provider);
+		void queryClient.invalidateQueries({ queryKey: providerKeys.all });
+		void queryClient.invalidateQueries({ queryKey: modelKeys.all });
 		void navigate({ to: "/models" });
 	}
 
@@ -745,6 +806,7 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 								checked={enabled}
 								onCheckedChange={(checked) => {
 									setEnabled(checked);
+									setFormDirty(true);
 									setSaveSuccess(false);
 									clearConnectionTestResult();
 								}}
@@ -765,6 +827,30 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 
 				<section className="shadow-frame relative mb-10 border border-line p-6">
 					<h3 className="mb-6 text-headline-sm font-bold text-on-surface">{t("models.connection")}</h3>
+					{showConflictBanner ? (
+						<div className="mb-6 border border-error bg-surface-2 p-4 text-body-tight text-on-surface" role="alert">
+							<p className="font-medium text-error">{t("models.conflict.title")}</p>
+							<p className="mt-1 text-neutral">{t("models.conflict.description")}</p>
+							<div className="mt-3 flex flex-wrap gap-2">
+								<Button
+									type="button"
+									className={outlineButtonClassName}
+									disabled={savePending}
+									onClick={reloadRemoteProviderForm}
+								>
+									{t("models.conflict.reloadRemote")}
+								</Button>
+								<Button
+									type="button"
+									className={primaryButtonClassName}
+									disabled={savePending}
+									onClick={keepLocalDraftDespiteConflict}
+								>
+									{t("models.conflict.keepLocal")}
+								</Button>
+							</div>
+						</div>
+					) : null}
 					<div className="space-y-6">
 						<div>
 							<label className="mb-1 block text-body-tight font-medium text-on-surface" htmlFor="provider-api-type">
@@ -776,6 +862,7 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 								value={adapterId}
 								onChange={(event) => {
 									setAdapterId(event.currentTarget.value);
+									setFormDirty(true);
 									setSaveSuccess(false);
 									clearConnectionTestResult();
 								}}
@@ -800,6 +887,7 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 								value={baseUrlOverride}
 								onChange={(event) => {
 									setBaseUrlOverride(event.currentTarget.value);
+									setFormDirty(true);
 									setSaveSuccess(false);
 									setInsecureHttpAcknowledged(false);
 									clearConnectionTestResult();
@@ -825,6 +913,7 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 								onChange={(event) => {
 									const value = event.currentTarget.value;
 									setToken(value);
+									setFormDirty(true);
 									setSaveSuccess(false);
 									clearConnectionTestResult();
 									if (credentialAction === "clear") {
@@ -851,6 +940,7 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 									checked={insecureHttpAcknowledged}
 									onChange={(event) => {
 										setInsecureHttpAcknowledged(event.currentTarget.checked);
+										setFormDirty(true);
 										setSaveSuccess(false);
 									}}
 									disabled={connectionFormDisabled}
@@ -892,6 +982,7 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 											onClick={() => {
 												setCredentialAction("clear");
 												setToken("");
+												setFormDirty(true);
 												setSaveSuccess(false);
 												clearConnectionTestResult();
 											}}
@@ -906,6 +997,7 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 											onClick={() => {
 												setCredentialAction("keep");
 												setToken("");
+												setFormDirty(true);
 												setSaveSuccess(false);
 												clearConnectionTestResult();
 											}}
@@ -1019,7 +1111,7 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 								type="button"
 								className={outlineButtonClassName}
 								onClick={() => {
-									void reloadModels(providerId);
+									void modelsQuery.refetch();
 								}}
 							>
 								{t("common.retry")}
@@ -1099,8 +1191,14 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 				open={addModelOpen}
 				providerId={providerId}
 				onOpenChange={setAddModelOpen}
-				onCreated={() => {
-					void reloadModels(providerId);
+				onCreated={(model) => {
+					setModelsCache((current) => {
+						if (current.some((item) => item.id === model.id)) {
+							return current.map((item) => (item.id === model.id ? model : item));
+						}
+						return [...current, model];
+					});
+					void queryClient.invalidateQueries({ queryKey: modelKeys.all });
 				}}
 			/>
 

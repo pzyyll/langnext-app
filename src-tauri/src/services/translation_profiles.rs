@@ -8,6 +8,7 @@ use crate::domain::translation_profile::{
 use crate::error::StorageError;
 use crate::repositories::{provider_models, translation_profiles};
 use crate::storage::Database;
+use std::collections::HashMap;
 use uuid::Uuid;
 
 const ALLOWED_VARS: &[&str] = &["source_language", "target_language", "text"];
@@ -22,8 +23,31 @@ impl TranslationProfileService {
 		Self { db }
 	}
 
-	pub fn list(&self) -> Result<Vec<TranslationProfile>, StorageError> {
-		self.db.read(translation_profiles::list)
+	/// List profiles with ordered target chains via two bulk SQL queries (no N+1).
+	///
+	/// Both SELECTs run inside one deferred read snapshot so a concurrent write
+	/// cannot produce a torn view of profiles vs targets.
+	pub fn list(&self) -> Result<Vec<TranslationProfileDto>, StorageError> {
+		self.db.read_snapshot(|conn| {
+			let profiles = translation_profiles::list(conn)?;
+			let all_targets = translation_profiles::list_all_targets(conn)?;
+			let mut by_profile: HashMap<Uuid, Vec<TranslationProfileTarget>> = HashMap::new();
+			for target in all_targets {
+				by_profile
+					.entry(target.translation_profile_id)
+					.or_default()
+					.push(target);
+			}
+			Ok(
+				profiles
+					.into_iter()
+					.map(|profile| {
+						let targets = by_profile.remove(&profile.id).unwrap_or_default();
+						TranslationProfileDto { profile, targets }
+					})
+					.collect(),
+			)
+		})
 	}
 
 	pub fn get(&self, id: Uuid) -> Result<TranslationProfileDto, StorageError> {
@@ -203,8 +227,5 @@ pub fn default_user_template() -> String {
 }
 
 fn normalize_optional_lang(value: Option<&str>) -> Option<String> {
-	value
-		.map(str::trim)
-		.filter(|s| !s.is_empty())
-		.map(|s| s.to_string())
+	value.map(str::trim).filter(|s| !s.is_empty()).map(|s| s.to_string())
 }

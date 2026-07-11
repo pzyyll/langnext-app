@@ -271,6 +271,16 @@ const en = {
 		syncError: "Sync error{{code}}.{{lastOk}}",
 		syncErrorLastOk: " Last successful sync: {{at}}.",
 		syncUnknown: "Sync status unknown",
+		conflict: {
+			title: "This channel was changed elsewhere",
+			description:
+				"Your local connection draft no longer matches the saved version. Reload the remote settings, or keep your draft and resolve the conflict when you save.",
+			reloadRemote: "Reload remote version",
+			keepLocal: "Keep local draft",
+			saveRejected:
+				"Save rejected: the channel was modified elsewhere. Reload the remote version or keep your draft and try again after resolving the conflict.",
+			renameConflict: "Rename rejected: the channel was modified elsewhere. Try again after reloading.",
+		},
 		toast: {
 			channelCreated: "Channel created",
 			createFailed: "Create failed",

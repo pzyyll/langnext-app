@@ -1,16 +1,13 @@
-// ABOUTME: Shared provider-list state for nested Models routes.
-// ABOUTME: Keeps route selection in the URL while sharing loaded provider DTOs.
+// ABOUTME: Layout-only coordination for Models sidebar enter/exit animations.
+// ABOUTME: Authoritative provider records live in TanStack Query, not this context.
 import { createContext, useContext } from "react";
 import type { ProviderInstanceDto } from "../../storage/types";
 
 export type ModelsContextValue = {
-	providers: ProviderInstanceDto[];
-	providersLoading: boolean;
-	providersError: string | null;
-	refreshProviders: () => Promise<void>;
-	upsertProvider: (provider: ProviderInstanceDto) => void;
-	removeProvider: (id: string) => void;
-	reorderProviders: (orderedIds: string[]) => Promise<void>;
+	/** Mark a newly created provider for enter animation. */
+	markProviderEnter: (id: string) => void;
+	/** Keep a deleted provider visible until the exit animation finishes. */
+	beginProviderExit: (provider: ProviderInstanceDto) => void;
 };
 
 export const ModelsContext = createContext<ModelsContextValue | null>(null);
