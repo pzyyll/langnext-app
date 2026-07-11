@@ -10,6 +10,7 @@ const zhCN = {
 		home: "首页",
 		models: "模型",
 		about: "关于",
+		settings: "设置",
 	},
 	common: {
 		retry: "重试",
@@ -78,6 +79,18 @@ const zhCN = {
 			baseUi: { name: "Base UI", detail: "无样式、可访问的基础组件" },
 			tailwind: { name: "Tailwind CSS v4", detail: "带语义主题令牌的实用类样式" },
 			tooling: { name: "ESLint + Prettier", detail: "代码检查与统一格式化" },
+		},
+	},
+	settings: {
+		title: "设置",
+		description: "管理外观与界面语言。更改会自动保存。",
+		theme: {
+			title: "主题",
+			description: "为应用外壳选择浅色或深色外观。",
+		},
+		language: {
+			title: "语言",
+			description: "选择界面所使用的语言。",
 		},
 	},
 	models: {

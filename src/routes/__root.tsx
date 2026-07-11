@@ -1,13 +1,11 @@
-// ABOUTME: Root layout: titlebar, collapsible left sidebar, theme toggle, outlet.
+// ABOUTME: Root layout: titlebar, collapsible left sidebar, and outlet.
 // ABOUTME: Main content uses View Transitions; same-route clicks are ignored.
 import { useState } from "react";
 import { Link, Outlet, createRootRoute, useRouterState } from "@tanstack/react-router";
 import { TanStackRouterDevtools } from "@tanstack/react-router-devtools";
 import { useTranslation } from "react-i18next";
 import { TitleBar } from "../components/Win/TitleBar";
-import { ThemeToggle } from "../components/ThemeToggle";
-import { LanguageToggle } from "../components/LanguageToggle";
-import { isNavItemActive, navItems } from "../shell/nav";
+import { isNavItemActive, primaryNavItems, settingsNavItem } from "../shell/nav";
 
 export const Route = createRootRoute({
 	component: RootLayout,
@@ -46,7 +44,7 @@ function RootLayout() {
 					}`}
 				>
 					<nav className="flex min-w-44 flex-1 flex-col gap-1 p-3" aria-label={t("nav.mainAria")}>
-						{navItems.map((item) => (
+						{primaryNavItems.map((item) => (
 							<Link
 								draggable={false}
 								key={item.to}
@@ -69,9 +67,22 @@ function RootLayout() {
 						))}
 					</nav>
 
-					<div className="min-w-44 space-y-1 border-t border-line p-2">
-						<LanguageToggle />
-						<ThemeToggle />
+					<div className="min-w-44 border-t border-line p-2">
+						<Link
+							draggable={false}
+							to={settingsNavItem.to}
+							tabIndex={sidebarOpen ? undefined : -1}
+							className={navLinkClassName}
+							activeProps={{ className: navLinkActiveClassName }}
+							activeOptions={{ exact: settingsNavItem.exact }}
+							onClick={(event) => {
+								if (isNavItemActive(settingsNavItem, pathname)) {
+									event.preventDefault();
+								}
+							}}
+						>
+							{t(settingsNavItem.labelKey)}
+						</Link>
 					</div>
 				</aside>
 

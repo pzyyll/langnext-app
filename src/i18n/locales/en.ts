@@ -12,6 +12,7 @@ const en = {
 		home: "Home",
 		models: "Models",
 		about: "About",
+		settings: "Settings",
 	},
 	common: {
 		retry: "Retry",
@@ -80,6 +81,18 @@ const en = {
 			baseUi: { name: "Base UI", detail: "Accessible unstyled primitives" },
 			tailwind: { name: "Tailwind CSS v4", detail: "Utility styling with semantic theme tokens" },
 			tooling: { name: "ESLint + Prettier", detail: "Linting and consistent formatting" },
+		},
+	},
+	settings: {
+		title: "Settings",
+		description: "Manage appearance and interface language. Changes are saved automatically.",
+		theme: {
+			title: "Theme",
+			description: "Choose light or dark appearance for the app shell.",
+		},
+		language: {
+			title: "Language",
+			description: "Choose the language used across the interface.",
 		},
 	},
 	models: {
