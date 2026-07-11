@@ -302,6 +302,33 @@ body {
 	user-select: none;
 }
 
+/* Thin, theme-aware native scrollbars (overflow-auto / overflow-scroll).
+   Uses --app-* tokens so light/dark via [data-theme] applies automatically.
+   Base UI ScrollArea overrides these on its viewport (display: none / none). */
+@layer base {
+	* {
+		scrollbar-width: thin;
+		scrollbar-color: color-mix(in oklab, var(--app-on-surface-variant) 40%, transparent) transparent;
+	}
+
+	::-webkit-scrollbar {
+		width: 0.5rem;
+		height: 0.5rem;
+	}
+
+	::-webkit-scrollbar-track {
+		background: transparent;
+	}
+
+	::-webkit-scrollbar-thumb {
+		background-color: color-mix(in oklab, var(--app-on-surface-variant) 40%, transparent);
+	}
+
+	::-webkit-scrollbar-thumb:hover {
+		background-color: color-mix(in oklab, var(--app-outline) 55%, transparent);
+	}
+}
+
 /* Base UI: keep portaled popups above app content */
 .root {
 	isolation: isolate;

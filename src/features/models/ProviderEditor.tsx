@@ -12,6 +12,7 @@ import IconMaterialSymbolsLightCheck from "~icons/material-symbols-light/check";
 import IconMaterialSymbolsLightClose from "~icons/material-symbols-light/close";
 import IconMaterialSymbolsLightDeleteOutlineSharp from "~icons/material-symbols-light/delete-outline-sharp";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
+import { ScrollArea } from "../../components/ScrollArea";
 import { useToast } from "../../components/toast/useToast";
 import {
 	checkboxClassName,
@@ -738,7 +739,7 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
 
 	return (
 		<div className="flex min-h-0 min-w-0 flex-1 flex-col">
-			<div className="min-h-0 flex-1 overflow-y-auto p-8">
+			<ScrollArea className="min-h-0 flex-1" contentClassName="p-8">
 				<header className="mb-8">
 					<div className="mb-2 flex items-center justify-between gap-4">
 						{renaming ? (
@@ -1140,7 +1141,7 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
 						/>
 					) : null}
 				</section>
-			</div>
+			</ScrollArea>
 
 			<footer className="flex shrink-0 items-center justify-end gap-3 border-t border-line bg-surface px-8 py-4">
 				<Button
