@@ -1,5 +1,5 @@
 // ABOUTME: App-wide Base UI Toast provider with top-right viewport and variants.
-// ABOUTME: Portals notifications above chrome; pairs with useToast for call-site API.
+// ABOUTME: Stacks toasts by default; expands the stack on viewport hover/focus.
 import type { ComponentType, ReactNode, SVGProps } from "react";
 import { Toast } from "@base-ui/react/toast";
 import IconMaterialSymbolsLightCheckCircle from "~icons/material-symbols-light/check-circle";
@@ -10,16 +10,50 @@ import IconMaterialSymbolsLightClose from "~icons/material-symbols-light/close";
 import { iconButtonClassName } from "../ui";
 import type { ToastVariant } from "./useToast";
 
-/** Fixed top-right stack, below the titlebar (h-8), above app chrome. */
-const toastViewportClassName =
-	"pointer-events-none fixed top-10 right-4 z-50 flex w-sm max-w-[calc(100vw-2rem)] flex-col gap-2 outline-none";
+/**
+ * Fixed top-right stack, below the titlebar (h-8).
+ * Absolute children stack inside; Base UI sets data-expanded on hover/focus.
+ */
+const toastViewportClassName = "fixed top-10 right-4 z-50 w-sm max-w-[calc(100vw-2rem)] outline-none";
 
 /**
- * Frame toast: outline + shadow-frame, enter/exit from the right.
- * Base UI sets data-starting-style / data-ending-style during open/close.
+ * Collapsed stack + expanded list (Base UI stacking CSS vars).
+ * Peeks behind toasts; expands with --toast-offset-y when data-expanded.
+ * Frame chrome: outline + shadow-frame; enter/exit from the right.
  */
-const toastRootClassName =
-	"pointer-events-auto relative w-full border border-line bg-surface p-3 text-ink shadow-frame transition-[transform,opacity] duration-150 ease-out select-none data-starting-style:translate-x-full data-starting-style:opacity-0 data-ending-style:translate-x-full data-ending-style:opacity-0 data-limited:pointer-events-none data-limited:opacity-0 motion-reduce:transition-none motion-reduce:data-starting-style:translate-x-0 motion-reduce:data-starting-style:opacity-100 motion-reduce:data-ending-style:translate-x-0 focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-ink";
+const toastRootClassName = [
+	"[--gap:0.5rem]",
+	"[--peek:0.75rem]",
+	"[--scale:calc(max(0,1-(var(--toast-index)*0.1)))]",
+	"[--shrink:calc(1-var(--scale))]",
+	"[--height:var(--toast-frontmost-height,var(--toast-height))]",
+	"[--offset-y:calc(var(--toast-offset-y)+(var(--toast-index)*var(--gap))+var(--toast-swipe-movement-y))]",
+	"absolute top-0 right-0 left-auto z-[calc(1000-var(--toast-index))] w-full origin-top",
+	"[transform:translateX(var(--toast-swipe-movement-x))_translateY(calc(var(--toast-swipe-movement-y)+(var(--toast-index)*var(--peek))+(var(--shrink)*var(--height))))_scale(var(--scale))]",
+	"h-[var(--height)] border border-line bg-surface text-ink shadow-frame select-none",
+	"after:absolute after:bottom-full after:left-0 after:h-[calc(var(--gap)+1px)] after:w-full after:content-['']",
+	"data-expanded:h-[var(--toast-height)]",
+	"data-expanded:[transform:translateX(var(--toast-swipe-movement-x))_translateY(var(--offset-y))]",
+	"data-limited:pointer-events-none data-limited:opacity-0",
+	"data-starting-style:[transform:translateX(150%)]",
+	"[&[data-ending-style]:not([data-limited]):not([data-swipe-direction])]:[transform:translateX(150%)]",
+	"data-ending-style:opacity-0",
+	"data-ending-style:data-[swipe-direction=up]:[transform:translateY(calc(var(--toast-swipe-movement-y)-150%))]",
+	"data-ending-style:data-[swipe-direction=down]:[transform:translateY(calc(var(--toast-swipe-movement-y)+150%))]",
+	"data-ending-style:data-[swipe-direction=left]:[transform:translateX(calc(var(--toast-swipe-movement-x)-150%))_translateY(var(--offset-y))]",
+	"data-ending-style:data-[swipe-direction=right]:[transform:translateX(calc(var(--toast-swipe-movement-x)+150%))_translateY(var(--offset-y))]",
+	"data-expanded:data-ending-style:data-[swipe-direction=up]:[transform:translateY(calc(var(--toast-swipe-movement-y)-150%))]",
+	"data-expanded:data-ending-style:data-[swipe-direction=down]:[transform:translateY(calc(var(--toast-swipe-movement-y)+150%))]",
+	"data-expanded:data-ending-style:data-[swipe-direction=left]:[transform:translateX(calc(var(--toast-swipe-movement-x)-150%))_translateY(var(--offset-y))]",
+	"data-expanded:data-ending-style:data-[swipe-direction=right]:[transform:translateX(calc(var(--toast-swipe-movement-x)+150%))_translateY(var(--offset-y))]",
+	"[transition:transform_0.5s_cubic-bezier(0.22,1,0.36,1),opacity_0.5s,height_0.15s]",
+	"motion-reduce:transition-none",
+	"focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-ink",
+].join(" ");
+
+/** Hides overflow while collapsed; reveals behind toasts when the stack expands. */
+const toastContentClassName =
+	"flex h-full min-w-0 items-start gap-3 overflow-hidden p-3 transition-opacity duration-[250ms] ease-[cubic-bezier(0.22,1,0.36,1)] data-behind:opacity-0 data-expanded:opacity-100 motion-reduce:transition-none";
 
 const toastTitleClassName = "text-sm font-bold leading-5 text-ink";
 const toastDescriptionClassName = "text-sm leading-5 text-muted";
@@ -65,7 +99,7 @@ function ToastList() {
 				swipeDirection="right"
 				className={`${toastRootClassName} ${VARIANT_ACCENT_BAR[variant]}`}
 			>
-				<Toast.Content className="flex min-w-0 flex-1 items-start gap-3">
+				<Toast.Content className={toastContentClassName}>
 					<Icon className={VARIANT_ICON_CLASS[variant]} aria-hidden />
 					<div className="flex min-w-0 flex-1 flex-col gap-0.5">
 						<Toast.Title className={toastTitleClassName} />
