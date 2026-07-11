@@ -1,21 +1,43 @@
-// ABOUTME: Manual model CRUD, remote-cache merge, and async connection/sync orchestration.
+// ABOUTME: Manual model CRUD, remote-cache merge, connection/sync, and translate orchestration.
 // ABOUTME: Vault and transport work run via spawn_blocking / async reqwest without exposing secrets.
 use crate::adapters::catalog;
-use crate::adapters::transport::{ModelListRequest, ModelTransport};
+use crate::adapters::transport::{
+	chat_completion_http_cancellable, chat_completion_stream_http_cancellable, ChatCompletionRequest,
+	ModelListRequest, ModelTransport, TransportError,
+};
 use crate::credentials::CredentialVault;
+use crate::domain::cancel::CancelToken;
 use crate::domain::model::{
 	Availability, CapabilityOverridesV1, ConnectionTestResult, ManualModelWrite, ModelSource, ProviderModel,
 	ProviderModelDto, RemoteModelSyncItem, SyncModelsResult,
 };
 use crate::domain::provider::{CredentialKind, ModelsSyncStatus, ProviderInstance, ProviderInstanceDto, ProxyMode};
 use crate::domain::time::{new_id, now_rfc3339};
+use crate::domain::translation::{
+	TranslateInput, TranslateResult, TranslateStreamChunk, TranslateStreamDone, TranslateStreamReset,
+	TRANSLATE_CHUNK_EVENT, TRANSLATE_DONE_EVENT, TRANSLATE_RESET_EVENT,
+};
+use crate::domain::translation_profile::TranslationProfile;
 use crate::error::StorageError;
-use crate::repositories::{provider_instances, provider_models};
+use crate::repositories::{provider_instances, provider_models, translation_profiles};
+use crate::services::translation_profiles::render_template;
 use crate::storage::Database;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex as StdMutex};
+use std::time::Instant;
+use tauri::{AppHandle, Emitter, Runtime};
 use tokio::sync::Mutex as AsyncMutex;
 use uuid::Uuid;
+
+type DeltaCallback<'a> = Option<&'a mut (dyn FnMut(&str) + Send)>;
+type ResetCallback<'a> = Option<&'a mut (dyn FnMut(Uuid) + Send)>;
+
+/// Soft cap on source text accepted by the translate command (matches UI max).
+const MAX_TRANSLATE_SOURCE_CHARS: usize = 5000;
+/// Default max output tokens for a single translation completion.
+const DEFAULT_TRANSLATE_MAX_TOKENS: u32 = 4096;
+/// Low temperature keeps translations more deterministic.
+const DEFAULT_TRANSLATE_TEMPERATURE: f64 = 0.2;
 
 const MAX_MODEL_KEY_LEN: usize = 256;
 
@@ -94,6 +116,11 @@ impl ModelService {
 		self
 			.db
 			.read(|conn| provider_models::list_by_provider(conn, provider_id))
+	}
+
+	/// List every stored provider model (all channels). Used by the translate model picker.
+	pub fn list_all(&self) -> Result<Vec<ProviderModelDto>, StorageError> {
+		self.db.read(|conn| provider_models::list_all(conn))
 	}
 
 	pub fn save_manual(&self, input: ManualModelWrite) -> Result<ProviderModelDto, StorageError> {
@@ -251,6 +278,179 @@ impl ModelService {
 		self
 			.record_sync_error_guarded(provider_id, error_code, None)
 			.map(|_| ())
+	}
+
+	/// Translate `input.text` with a configured model via non-streaming chat completion.
+	///
+	/// When `profile_id` is set, applies profile templates and walks the fallback model chain
+	/// after the primary `model_id`. Does not persist source, prompt, or response content.
+	pub async fn translate(
+		&self,
+		input: TranslateInput,
+		cancel: Option<&CancelToken>,
+	) -> Result<TranslateResult, StorageError> {
+		if cancel.is_some_and(|t| t.is_cancelled()) {
+			return Ok(TranslateResult::cancelled(0));
+		}
+		let prepared = self.prepare_translate(input).await?;
+		match prepared {
+			TranslatePrepare::Early(result) => Ok(result),
+			TranslatePrepare::Ready { attempts } => {
+				self
+					.run_translate_attempts(attempts, false, None, None, cancel)
+					.await
+			}
+		}
+	}
+
+	/// Stream a translation: emits chunk/done/reset events on `app` for `request_id`.
+	pub async fn translate_stream<R: Runtime>(
+		&self,
+		app: AppHandle<R>,
+		request_id: String,
+		input: TranslateInput,
+		cancel: Option<&CancelToken>,
+	) -> Result<(), StorageError> {
+		if cancel.is_some_and(|t| t.is_cancelled()) {
+			let _ = app.emit(
+				TRANSLATE_DONE_EVENT,
+				TranslateStreamDone::from_result(request_id, TranslateResult::cancelled(0)),
+			);
+			return Ok(());
+		}
+		let prepared = self.prepare_translate(input).await?;
+		match prepared {
+			TranslatePrepare::Early(result) => {
+				let _ = app.emit(
+					TRANSLATE_DONE_EVENT,
+					TranslateStreamDone::from_result(request_id, result),
+				);
+				Ok(())
+			}
+			TranslatePrepare::Ready { attempts } => {
+				let app_chunk = app.clone();
+				let rid = request_id.clone();
+				let mut on_delta = move |delta: &str| {
+					let _ = app_chunk.emit(
+						TRANSLATE_CHUNK_EVENT,
+						TranslateStreamChunk {
+							id: rid.clone(),
+							delta: delta.to_string(),
+						},
+					);
+				};
+				let app_reset = app.clone();
+				let rid_reset = request_id.clone();
+				let mut on_reset = move |model_id: Uuid| {
+					let _ = app_reset.emit(
+						TRANSLATE_RESET_EVENT,
+						TranslateStreamReset {
+							id: rid_reset.clone(),
+							model_id,
+						},
+					);
+				};
+				let result = self
+					.run_translate_attempts(
+						attempts,
+						true,
+						Some(&mut on_delta),
+						Some(&mut on_reset),
+						cancel,
+					)
+					.await?;
+				// Soft failures after all attempts still use done with ok=false so the UI
+				// can treat them like non-stream TranslateResult failures.
+				let _ = app.emit(
+					TRANSLATE_DONE_EVENT,
+					TranslateStreamDone::from_result(request_id, result),
+				);
+				Ok(())
+			}
+		}
+	}
+
+	async fn prepare_translate(&self, input: TranslateInput) -> Result<TranslatePrepare, StorageError> {
+		let db = self.db.clone();
+		let vault = self.vault.clone();
+		spawn_blocking_storage(move || prepare_translate_sync(&db, vault.as_ref(), input)).await
+	}
+
+	/// Run chat completion for each prepared attempt until one succeeds.
+	///
+	/// On stream + fallback: emits `on_reset(next_model_id)` before the next attempt so the
+	/// UI clears partial text from the failed model. Cancellation never walks the chain.
+	async fn run_translate_attempts(
+		&self,
+		attempts: Vec<TranslateAttempt>,
+		stream: bool,
+		mut on_delta: DeltaCallback<'_>,
+		mut on_reset: ResetCallback<'_>,
+		cancel: Option<&CancelToken>,
+	) -> Result<TranslateResult, StorageError> {
+		let started = Instant::now();
+		let mut last_failure: Option<TranslateResult> = None;
+		let total = attempts.len();
+		// Snapshot model ids so fallback reset can name the next model after into_iter.
+		let model_ids: Vec<Uuid> = attempts.iter().map(|a| a.model_id).collect();
+
+		for (index, attempt) in attempts.into_iter().enumerate() {
+			if cancel.is_some_and(|t| t.is_cancelled()) {
+				let latency_ms = started.elapsed().as_millis() as u64;
+				return Ok(TranslateResult::cancelled(latency_ms));
+			}
+
+			let model_id = attempt.model_id;
+			let request = attempt.request;
+			let outcome = if stream {
+				// Emit progressive deltas when a callback is provided.
+				chat_completion_stream_http_cancellable(
+					request,
+					|delta| {
+						if let Some(cb) = on_delta.as_mut() {
+							cb(delta);
+						}
+					},
+					cancel,
+				)
+				.await
+			} else {
+				chat_completion_http_cancellable(request, cancel).await
+			};
+
+			match outcome {
+				Ok(completion) => {
+					let latency_ms = started.elapsed().as_millis() as u64;
+					return Ok(TranslateResult::success_with_model(
+						completion.content,
+						latency_ms,
+						model_id,
+					));
+				}
+				Err(TransportError::Cancelled) => {
+					let latency_ms = started.elapsed().as_millis() as u64;
+					return Ok(TranslateResult::cancelled(latency_ms));
+				}
+				Err(err) => {
+					let latency_ms = started.elapsed().as_millis() as u64;
+					last_failure = Some(TranslateResult::failure(err.code(), err.to_string(), latency_ms));
+					// Prefer next fallback model when available.
+					if index + 1 < total {
+						// Reset progressive UI before the next model emits chunks.
+						if stream {
+							if let Some(cb) = on_reset.as_mut() {
+								cb(model_ids[index + 1]);
+							}
+						}
+						continue;
+					}
+				}
+			}
+		}
+
+		Ok(last_failure.unwrap_or_else(|| {
+			TranslateResult::failure("invalid_response", "No translation attempts were prepared", 0)
+		}))
 	}
 
 	/// Test the saved provider connection without mutating models or sync status.
@@ -470,6 +670,215 @@ where
 		Ok(result) => result,
 		Err(_) => Err(StorageError::Internal("task join failed".into())),
 	}
+}
+
+enum TranslatePrepare {
+	/// Soft validation / credential failure returned as a typed result (not IpcError).
+	Early(TranslateResult),
+	Ready {
+		attempts: Vec<TranslateAttempt>,
+	},
+}
+
+struct TranslateAttempt {
+	model_id: Uuid,
+	request: ChatCompletionRequest,
+}
+
+fn prepare_translate_sync(
+	db: &Database,
+	vault: &dyn CredentialVault,
+	input: TranslateInput,
+) -> Result<TranslatePrepare, StorageError> {
+	let text = input.text.trim();
+	if text.is_empty() {
+		return Ok(TranslatePrepare::Early(TranslateResult::failure(
+			"validation_failed",
+			"Source text must not be empty",
+			0,
+		)));
+	}
+	if text.chars().count() > MAX_TRANSLATE_SOURCE_CHARS {
+		return Ok(TranslatePrepare::Early(TranslateResult::failure(
+			"validation_failed",
+			format!("Source text must be at most {MAX_TRANSLATE_SOURCE_CHARS} characters"),
+			0,
+		)));
+	}
+	let source_lang = input.source_lang.trim();
+	let target_lang = input.target_lang.trim();
+	if source_lang.is_empty() || target_lang.is_empty() {
+		return Ok(TranslatePrepare::Early(TranslateResult::failure(
+			"validation_failed",
+			"Source and target languages are required",
+			0,
+		)));
+	}
+
+	// Optional profile: templates + ordered fallback targets after the primary model.
+	let profile: Option<TranslationProfile> = if let Some(profile_id) = input.profile_id {
+		match db.read(|conn| translation_profiles::get(conn, profile_id)) {
+			Ok(dto) => {
+				if !dto.profile.enabled {
+					return Ok(TranslatePrepare::Early(TranslateResult::failure(
+						"validation_failed",
+						"Selected translation profile is disabled",
+						0,
+					)));
+				}
+				Some(dto.profile)
+			}
+			Err(StorageError::NotFound(_)) => {
+				return Ok(TranslatePrepare::Early(TranslateResult::failure(
+					"validation_failed",
+					"Selected translation profile was not found",
+					0,
+				)));
+			}
+			Err(e) => return Err(e),
+		}
+	} else {
+		None
+	};
+
+	let (system_prompt, user_prompt, temperature, max_tokens) = if let Some(ref profile) = profile {
+		let system_prompt = render_template(&profile.system_template, source_lang, target_lang, text);
+		let user_prompt = render_template(&profile.user_template, source_lang, target_lang, text);
+		let temperature = profile.temperature.or(Some(DEFAULT_TRANSLATE_TEMPERATURE));
+		let max_tokens = profile
+			.max_output_tokens
+			.map(|n| n as u32)
+			.or(Some(DEFAULT_TRANSLATE_MAX_TOKENS));
+		(system_prompt, user_prompt, temperature, max_tokens)
+	} else {
+		(
+			build_translate_system_prompt(source_lang, target_lang),
+			text.to_string(),
+			Some(DEFAULT_TRANSLATE_TEMPERATURE),
+			Some(DEFAULT_TRANSLATE_MAX_TOKENS),
+		)
+	};
+
+	// Model chain: primary selection first, then remaining profile targets (unique).
+	let mut model_ids: Vec<Uuid> = vec![input.model_id];
+	if let Some(profile_id) = input.profile_id {
+		let targets = db.read(|conn| translation_profiles::list_targets(conn, profile_id))?;
+		for target in targets {
+			if !model_ids.contains(&target.provider_model_id) {
+				model_ids.push(target.provider_model_id);
+			}
+		}
+	}
+
+	let mut attempts = Vec::new();
+	let mut last_credential_failure: Option<TranslateResult> = None;
+
+	for model_id in model_ids {
+		let prepared = prepare_single_model_attempt(
+			db,
+			vault,
+			model_id,
+			system_prompt.clone(),
+			user_prompt.clone(),
+			temperature,
+			max_tokens,
+		)?;
+		match prepared {
+			SingleModelPrepare::Skipped => continue,
+			SingleModelPrepare::Credential(result) => {
+				last_credential_failure = Some(result);
+			}
+			SingleModelPrepare::Ready(attempt) => {
+				attempts.push(attempt);
+			}
+		}
+	}
+
+	if attempts.is_empty() {
+		return Ok(TranslatePrepare::Early(last_credential_failure.unwrap_or_else(
+			|| {
+				TranslateResult::failure(
+					"validation_failed",
+					"No enabled models available for translation",
+					0,
+				)
+			},
+		)));
+	}
+
+	Ok(TranslatePrepare::Ready { attempts })
+}
+
+enum SingleModelPrepare {
+	/// Model disabled / missing / provider disabled — try next.
+	Skipped,
+	Credential(TranslateResult),
+	Ready(TranslateAttempt),
+}
+
+fn prepare_single_model_attempt(
+	db: &Database,
+	vault: &dyn CredentialVault,
+	model_id: Uuid,
+	system_prompt: String,
+	user_prompt: String,
+	temperature: Option<f64>,
+	max_tokens: Option<u32>,
+) -> Result<SingleModelPrepare, StorageError> {
+	let (model, provider) = match db.read_snapshot(|conn| {
+		let model = match provider_models::get(conn, model_id) {
+			Ok(m) => m,
+			Err(StorageError::NotFound(_)) => {
+				return Ok(None);
+			}
+			Err(e) => return Err(e),
+		};
+		let provider = provider_instances::get(conn, model.provider_instance_id)?;
+		Ok(Some((model, provider)))
+	})? {
+		Some(pair) => pair,
+		None => return Ok(SingleModelPrepare::Skipped),
+	};
+
+	if !model.enabled || !provider.enabled || model.availability == Availability::Missing {
+		return Ok(SingleModelPrepare::Skipped);
+	}
+
+	match resolve_saved_provider(db, vault, provider.id)? {
+		ResolveOutcome::MissingCredential { .. } => Ok(SingleModelPrepare::Credential(
+			TranslateResult::failure("auth", "Authentication failed", 0),
+		)),
+		ResolveOutcome::CredentialStoreFailure { .. } => Ok(SingleModelPrepare::Credential(
+			TranslateResult::failure("credential_unavailable", "Credential store unavailable", 0),
+		)),
+		ResolveOutcome::Ready { request, .. } => Ok(SingleModelPrepare::Ready(TranslateAttempt {
+			model_id,
+			request: ChatCompletionRequest {
+				adapter_id: request.adapter_id,
+				base_url: request.base_url,
+				credential_kind: request.credential_kind,
+				secret: request.secret,
+				proxy_mode: request.proxy_mode,
+				model_key: model.model_key,
+				system_prompt,
+				user_prompt,
+				temperature,
+				max_tokens,
+			},
+		})),
+	}
+}
+
+/// System prompt for translation. Instructs the model to output only the translation.
+fn build_translate_system_prompt(source_lang: &str, target_lang: &str) -> String {
+	format!(
+		"You are a professional translation engine. Translate the user's text from {source_lang} to {target_lang}.\n\
+		Rules:\n\
+		- Output only the translated text, with no preface, labels, quotes, or explanations.\n\
+		- Preserve meaning, tone, and formatting (line breaks, lists, punctuation) when possible.\n\
+		- If the source is already in the target language, return it unchanged.\n\
+		- Do not invent content that is not present in the source."
+	)
 }
 
 fn resolve_saved_provider(

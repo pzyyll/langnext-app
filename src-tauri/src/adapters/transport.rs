@@ -1,5 +1,6 @@
-// ABOUTME: Async HTTP transport for complete provider model-list synchronization.
-// ABOUTME: Applies authentication, proxy, pagination, and bounded secret-free errors.
+// ABOUTME: Async HTTP transport for model-list sync and chat completion (stream + non-stream).
+// ABOUTME: Applies authentication, proxy, pagination, SSE parsing, and bounded secret-free errors.
+use crate::domain::cancel::CancelToken;
 use crate::domain::model::RemoteModelSyncItem;
 use crate::domain::provider::{CredentialKind, ProxyMode};
 use std::collections::HashSet;
@@ -8,7 +9,12 @@ use std::pin::Pin;
 use std::sync::OnceLock;
 use std::time::Duration;
 
+/// Total request timeout for model-list and non-streaming chat completions.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
+/// Connect-only timeout for streaming chat (no overall read deadline — chunks arrive over time).
+const STREAM_CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
+/// Max silence between stream body chunks before treating the connection as stalled.
+const STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_PAGES: usize = 100;
 const MAX_MODEL_KEY_LEN: usize = 256;
 const ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -22,9 +28,16 @@ const MAX_RESPONSE_BODY_BYTES: usize = 2 * 1024 * 1024;
 const MAX_MODELS_PER_PAGE: usize = 500;
 /// Hard cap on unique models collected across all pages of one sync.
 const MAX_TOTAL_MODELS: usize = 2_000;
+/// Hard cap on accumulated streamed assistant text (chars).
+const MAX_STREAM_CONTENT_CHARS: usize = 200_000;
+/// Cap on in-flight SSE line buffer while reading a stream.
+const MAX_SSE_BUFFER_BYTES: usize = 512 * 1024;
 
 static INHERIT_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 static DIRECT_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+/// Streaming clients omit the overall request timeout so long translations keep receiving chunks.
+static STREAM_INHERIT_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+static STREAM_DIRECT_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 
 /// Owned request data so the async future does not borrow form or vault state.
 /// Secrets are never printed via Debug.
@@ -58,6 +71,8 @@ pub enum TransportError {
 	Timeout,
 	Server,
 	InvalidResponse,
+	/// User or UI aborted the in-flight request.
+	Cancelled,
 }
 
 impl TransportError {
@@ -69,6 +84,7 @@ impl TransportError {
 			Self::Timeout => "timeout",
 			Self::Server => "server",
 			Self::InvalidResponse => "invalid_response",
+			Self::Cancelled => "cancelled",
 		}
 	}
 
@@ -80,6 +96,7 @@ impl TransportError {
 			Self::Timeout => "Request timed out",
 			Self::Server => "Provider server error",
 			Self::InvalidResponse => "Invalid provider response",
+			Self::Cancelled => "Request cancelled",
 		}
 	}
 }
@@ -158,6 +175,95 @@ fn client_for(mode: ProxyMode) -> Result<&'static reqwest::Client, TransportErro
 			}
 			DIRECT_CLIENT.get().ok_or(TransportError::Network)
 		}
+	}
+}
+
+fn build_stream_inherit_client() -> Result<reqwest::Client, TransportError> {
+	// No overall `.timeout()`: streaming bodies can exceed 20s while chunks keep arriving.
+	reqwest::Client::builder()
+		.connect_timeout(STREAM_CONNECT_TIMEOUT)
+		.build()
+		.map_err(|_| TransportError::Network)
+}
+
+fn build_stream_direct_client() -> Result<reqwest::Client, TransportError> {
+	reqwest::Client::builder()
+		.connect_timeout(STREAM_CONNECT_TIMEOUT)
+		.no_proxy()
+		.build()
+		.map_err(|_| TransportError::Network)
+}
+
+/// Client for streaming chat completions only (connect timeout, no total read deadline).
+fn stream_client_for(mode: ProxyMode) -> Result<&'static reqwest::Client, TransportError> {
+	match client_kind_for_proxy(mode) {
+		ClientKind::Inherit => {
+			if STREAM_INHERIT_CLIENT.get().is_none() {
+				let client = build_stream_inherit_client()?;
+				let _ = STREAM_INHERIT_CLIENT.set(client);
+			}
+			STREAM_INHERIT_CLIENT.get().ok_or(TransportError::Network)
+		}
+		ClientKind::Direct => {
+			if STREAM_DIRECT_CLIENT.get().is_none() {
+				let client = build_stream_direct_client()?;
+				let _ = STREAM_DIRECT_CLIENT.set(client);
+			}
+			STREAM_DIRECT_CLIENT.get().ok_or(TransportError::Network)
+		}
+	}
+}
+
+/// Race an async HTTP operation against cooperative cancellation.
+async fn with_cancel<T, F>(cancel: Option<&CancelToken>, work: F) -> Result<T, TransportError>
+where
+	F: Future<Output = Result<T, TransportError>>,
+{
+	let Some(token) = cancel else {
+		return work.await;
+	};
+	if token.is_cancelled() {
+		return Err(TransportError::Cancelled);
+	}
+	tokio::select! {
+		biased;
+		_ = token.cancelled() => Err(TransportError::Cancelled),
+		result = work => result,
+	}
+}
+
+/// Wait for the next stream body read, aborting on cancel or idle silence between chunks.
+///
+/// Cancel is preferred over idle timeout (`biased` select). Elapsed idle maps to
+/// [`TransportError::Timeout`] so fallback chains treat it like other model failures.
+async fn await_with_idle_timeout<T, F>(
+	work: F,
+	idle_timeout: Duration,
+	cancel: Option<&CancelToken>,
+) -> Result<T, TransportError>
+where
+	F: Future<Output = Result<T, reqwest::Error>>,
+{
+	if cancel.is_some_and(|t| t.is_cancelled()) {
+		return Err(TransportError::Cancelled);
+	}
+
+	let timed = tokio::time::timeout(idle_timeout, work);
+
+	let result = if let Some(token) = cancel {
+		tokio::select! {
+			biased;
+			_ = token.cancelled() => return Err(TransportError::Cancelled),
+			result = timed => result,
+		}
+	} else {
+		timed.await
+	};
+
+	match result {
+		Ok(Ok(value)) => Ok(value),
+		Ok(Err(err)) => Err(map_reqwest_error(err)),
+		Err(_elapsed) => Err(TransportError::Timeout),
 	}
 }
 
@@ -653,6 +759,767 @@ async fn list_models_http(request: ModelListRequest) -> Result<Vec<RemoteModelSy
 	Ok(all)
 }
 
+// ---------------------------------------------------------------------------
+// Chat completion (non-streaming) — reuses auth, proxy clients, and error mapping
+// ---------------------------------------------------------------------------
+
+/// Owned chat-completion request. Secrets are never printed via Debug.
+#[derive(Clone)]
+pub struct ChatCompletionRequest {
+	pub adapter_id: String,
+	pub base_url: String,
+	pub credential_kind: CredentialKind,
+	pub secret: Option<String>,
+	pub proxy_mode: ProxyMode,
+	pub model_key: String,
+	pub system_prompt: String,
+	pub user_prompt: String,
+	pub temperature: Option<f64>,
+	pub max_tokens: Option<u32>,
+}
+
+impl std::fmt::Debug for ChatCompletionRequest {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("ChatCompletionRequest")
+			.field("adapter_id", &self.adapter_id)
+			.field("base_url", &self.base_url)
+			.field("credential_kind", &self.credential_kind)
+			.field("secret", &self.secret.as_ref().map(|_| "[redacted]"))
+			.field("proxy_mode", &self.proxy_mode)
+			.field("model_key", &self.model_key)
+			.field("temperature", &self.temperature)
+			.field("max_tokens", &self.max_tokens)
+			.finish_non_exhaustive()
+	}
+}
+
+/// Non-streaming chat completion result (content only; no full provider payload).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatCompletionResult {
+	pub content: String,
+}
+
+/// Call a provider chat/completions-style endpoint using the same auth and proxy path as model list.
+pub async fn chat_completion_http(request: ChatCompletionRequest) -> Result<ChatCompletionResult, TransportError> {
+	chat_completion_http_cancellable(request, None).await
+}
+
+/// Non-streaming chat completion with optional cooperative cancellation.
+pub async fn chat_completion_http_cancellable(
+	request: ChatCompletionRequest,
+	cancel: Option<&CancelToken>,
+) -> Result<ChatCompletionResult, TransportError> {
+	with_cancel(cancel, chat_completion_http_inner(request)).await
+}
+
+async fn chat_completion_http_inner(request: ChatCompletionRequest) -> Result<ChatCompletionResult, TransportError> {
+	let client = client_for(request.proxy_mode)?;
+	let (url, body) = match request.adapter_id.as_str() {
+		"openai-compatible" => {
+			let url = build_endpoint(&request.base_url, "chat/completions")?;
+			let mut payload = serde_json::json!({
+				"model": request.model_key,
+				"messages": [
+					{ "role": "system", "content": request.system_prompt },
+					{ "role": "user", "content": request.user_prompt }
+				],
+				"stream": false
+			});
+			if let Some(temp) = request.temperature {
+				payload["temperature"] = serde_json::json!(temp);
+			}
+			if let Some(max) = request.max_tokens {
+				payload["max_tokens"] = serde_json::json!(max);
+			}
+			(url, payload)
+		}
+		"openai-responses" => {
+			let url = build_endpoint(&request.base_url, "responses")?;
+			let mut payload = serde_json::json!({
+				"model": request.model_key,
+				"instructions": request.system_prompt,
+				"input": request.user_prompt,
+				"stream": false
+			});
+			if let Some(temp) = request.temperature {
+				payload["temperature"] = serde_json::json!(temp);
+			}
+			if let Some(max) = request.max_tokens {
+				payload["max_output_tokens"] = serde_json::json!(max);
+			}
+			(url, payload)
+		}
+		"anthropic" => {
+			let url = build_endpoint(&request.base_url, "v1/messages")?;
+			let mut payload = serde_json::json!({
+				"model": request.model_key,
+				"system": request.system_prompt,
+				"messages": [
+					{ "role": "user", "content": request.user_prompt }
+				],
+				"max_tokens": request.max_tokens.unwrap_or(4096)
+			});
+			if let Some(temp) = request.temperature {
+				payload["temperature"] = serde_json::json!(temp);
+			}
+			(url, payload)
+		}
+		"gemini" => {
+			let model_path = gemini_generate_path(&request.model_key)?;
+			let url = build_endpoint(&request.base_url, &model_path)?;
+			let mut generation_config = serde_json::Map::new();
+			if let Some(temp) = request.temperature {
+				generation_config.insert("temperature".into(), serde_json::json!(temp));
+			}
+			if let Some(max) = request.max_tokens {
+				generation_config.insert("maxOutputTokens".into(), serde_json::json!(max));
+			}
+			let mut payload = serde_json::json!({
+				"systemInstruction": {
+					"parts": [{ "text": request.system_prompt }]
+				},
+				"contents": [{
+					"role": "user",
+					"parts": [{ "text": request.user_prompt }]
+				}]
+			});
+			if !generation_config.is_empty() {
+				payload["generationConfig"] = serde_json::Value::Object(generation_config);
+			}
+			(url, payload)
+		}
+		_ => return Err(TransportError::InvalidResponse),
+	};
+
+	let request_url = match prepare_request_url(
+		&url,
+		&request.adapter_id,
+		request.credential_kind,
+		request.secret.as_deref(),
+		None,
+	) {
+		Ok(u) => u,
+		Err(err) => {
+			log_transport_error(&request.adapter_id, err);
+			return Err(err);
+		}
+	};
+
+	// Never log request_url: Gemini embeds the API key in the query string.
+	let builder = client.post(request_url).json(&body);
+	let builder = match apply_headers(
+		builder,
+		&request.adapter_id,
+		request.credential_kind,
+		request.secret.as_deref(),
+	) {
+		Ok(b) => b,
+		Err(err) => {
+			log_transport_error(&request.adapter_id, err);
+			return Err(err);
+		}
+	};
+
+	let response = match builder.send().await {
+		Ok(resp) => resp,
+		Err(e) => {
+			let err = map_reqwest_error(e);
+			log_transport_error(&request.adapter_id, err);
+			return Err(err);
+		}
+	};
+
+	if let Err(err) = map_status(response.status()) {
+		log_transport_error(&request.adapter_id, err);
+		return Err(err);
+	}
+
+	let body_bytes = match read_response_body_bounded(response).await {
+		Ok(b) => b,
+		Err(err) => {
+			log_transport_error(&request.adapter_id, err);
+			return Err(err);
+		}
+	};
+	let value: serde_json::Value = match serde_json::from_slice(&body_bytes) {
+		Ok(v) => v,
+		Err(_) => {
+			let err = TransportError::InvalidResponse;
+			log_transport_error(&request.adapter_id, err);
+			return Err(err);
+		}
+	};
+
+	let content = match parse_chat_content(&request.adapter_id, &value) {
+		Ok(c) => c,
+		Err(err) => {
+			log_transport_error(&request.adapter_id, err);
+			return Err(err);
+		}
+	};
+
+	Ok(ChatCompletionResult { content })
+}
+
+/// Build Gemini generateContent relative path from a stored model key.
+///
+/// Remote list returns keys like `models/gemini-2.0-flash` or bare `gemini-2.0-flash`.
+fn gemini_generate_path(model_key: &str) -> Result<String, TransportError> {
+	let key = model_key.trim();
+	if key.is_empty() || key.len() > MAX_MODEL_KEY_LEN {
+		return Err(TransportError::InvalidResponse);
+	}
+	if key.contains("://") || key.contains('?') || key.contains('#') {
+		return Err(TransportError::InvalidResponse);
+	}
+	let resource = if key.starts_with("models/") {
+		key.to_string()
+	} else {
+		format!("models/{key}")
+	};
+	Ok(format!("v1beta/{resource}:generateContent"))
+}
+
+/// Extract assistant text from a provider chat response (no full body retained).
+pub fn parse_chat_content(adapter_id: &str, value: &serde_json::Value) -> Result<String, TransportError> {
+	match adapter_id {
+		"openai-compatible" => parse_openai_chat_content(value),
+		"openai-responses" => parse_openai_responses_content(value),
+		"anthropic" => parse_anthropic_message_content(value),
+		"gemini" => parse_gemini_generate_content(value),
+		_ => Err(TransportError::InvalidResponse),
+	}
+}
+
+fn parse_openai_chat_content(value: &serde_json::Value) -> Result<String, TransportError> {
+	let content = value
+		.get("choices")
+		.and_then(|c| c.as_array())
+		.and_then(|arr| arr.first())
+		.and_then(|choice| choice.get("message"))
+		.and_then(|msg| msg.get("content"))
+		.and_then(|c| c.as_str())
+		.ok_or(TransportError::InvalidResponse)?;
+	let trimmed = content.trim();
+	if trimmed.is_empty() {
+		return Err(TransportError::InvalidResponse);
+	}
+	Ok(trimmed.to_string())
+}
+
+fn parse_openai_responses_content(value: &serde_json::Value) -> Result<String, TransportError> {
+	// Prefer convenience field when present.
+	if let Some(text) = value.get("output_text").and_then(|v| v.as_str()) {
+		let trimmed = text.trim();
+		if !trimmed.is_empty() {
+			return Ok(trimmed.to_string());
+		}
+	}
+	let output = value
+		.get("output")
+		.and_then(|v| v.as_array())
+		.ok_or(TransportError::InvalidResponse)?;
+	let mut parts = Vec::new();
+	for item in output {
+		let content = item.get("content").and_then(|c| c.as_array());
+		let Some(content) = content else {
+			continue;
+		};
+		for block in content {
+			let block_type = block.get("type").and_then(|t| t.as_str()).unwrap_or("");
+			if block_type == "output_text" || block_type == "text" {
+				if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
+					if !text.is_empty() {
+						parts.push(text);
+					}
+				}
+			}
+		}
+	}
+	let joined = parts.join("");
+	let trimmed = joined.trim();
+	if trimmed.is_empty() {
+		return Err(TransportError::InvalidResponse);
+	}
+	Ok(trimmed.to_string())
+}
+
+fn parse_anthropic_message_content(value: &serde_json::Value) -> Result<String, TransportError> {
+	let content = value
+		.get("content")
+		.and_then(|c| c.as_array())
+		.ok_or(TransportError::InvalidResponse)?;
+	let mut parts = Vec::new();
+	for block in content {
+		let block_type = block.get("type").and_then(|t| t.as_str()).unwrap_or("text");
+		if block_type == "text" {
+			if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
+				if !text.is_empty() {
+					parts.push(text);
+				}
+			}
+		}
+	}
+	let joined = parts.join("");
+	let trimmed = joined.trim();
+	if trimmed.is_empty() {
+		return Err(TransportError::InvalidResponse);
+	}
+	Ok(trimmed.to_string())
+}
+
+fn parse_gemini_generate_content(value: &serde_json::Value) -> Result<String, TransportError> {
+	let parts = value
+		.get("candidates")
+		.and_then(|c| c.as_array())
+		.and_then(|arr| arr.first())
+		.and_then(|cand| cand.get("content"))
+		.and_then(|c| c.get("parts"))
+		.and_then(|p| p.as_array())
+		.ok_or(TransportError::InvalidResponse)?;
+	let mut texts = Vec::new();
+	for part in parts {
+		if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
+			if !text.is_empty() {
+				texts.push(text);
+			}
+		}
+	}
+	let joined = texts.join("");
+	let trimmed = joined.trim();
+	if trimmed.is_empty() {
+		return Err(TransportError::InvalidResponse);
+	}
+	Ok(trimmed.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// Chat completion (streaming) — SSE / streamGenerateContent
+// ---------------------------------------------------------------------------
+
+/// Build Gemini streamGenerateContent relative path from a stored model key.
+fn gemini_stream_generate_path(model_key: &str) -> Result<String, TransportError> {
+	let key = model_key.trim();
+	if key.is_empty() || key.len() > MAX_MODEL_KEY_LEN {
+		return Err(TransportError::InvalidResponse);
+	}
+	if key.contains("://") || key.contains('?') || key.contains('#') {
+		return Err(TransportError::InvalidResponse);
+	}
+	let resource = if key.starts_with("models/") {
+		key.to_string()
+	} else {
+		format!("models/{key}")
+	};
+	Ok(format!("v1beta/{resource}:streamGenerateContent"))
+}
+
+/// Build request URL + JSON body for a streaming chat completion (all adapters).
+fn build_stream_request_parts(
+	request: &ChatCompletionRequest,
+) -> Result<(url::Url, serde_json::Value), TransportError> {
+	match request.adapter_id.as_str() {
+		"openai-compatible" => {
+			let url = build_endpoint(&request.base_url, "chat/completions")?;
+			let mut payload = serde_json::json!({
+				"model": request.model_key,
+				"messages": [
+					{ "role": "system", "content": request.system_prompt },
+					{ "role": "user", "content": request.user_prompt }
+				],
+				"stream": true
+			});
+			if let Some(temp) = request.temperature {
+				payload["temperature"] = serde_json::json!(temp);
+			}
+			if let Some(max) = request.max_tokens {
+				payload["max_tokens"] = serde_json::json!(max);
+			}
+			Ok((url, payload))
+		}
+		"openai-responses" => {
+			let url = build_endpoint(&request.base_url, "responses")?;
+			let mut payload = serde_json::json!({
+				"model": request.model_key,
+				"instructions": request.system_prompt,
+				"input": request.user_prompt,
+				"stream": true
+			});
+			if let Some(temp) = request.temperature {
+				payload["temperature"] = serde_json::json!(temp);
+			}
+			if let Some(max) = request.max_tokens {
+				payload["max_output_tokens"] = serde_json::json!(max);
+			}
+			Ok((url, payload))
+		}
+		"anthropic" => {
+			let url = build_endpoint(&request.base_url, "v1/messages")?;
+			let mut payload = serde_json::json!({
+				"model": request.model_key,
+				"system": request.system_prompt,
+				"messages": [
+					{ "role": "user", "content": request.user_prompt }
+				],
+				"max_tokens": request.max_tokens.unwrap_or(4096),
+				"stream": true
+			});
+			if let Some(temp) = request.temperature {
+				payload["temperature"] = serde_json::json!(temp);
+			}
+			Ok((url, payload))
+		}
+		"gemini" => {
+			let model_path = gemini_stream_generate_path(&request.model_key)?;
+			let url = build_endpoint(&request.base_url, &model_path)?;
+			let mut generation_config = serde_json::Map::new();
+			if let Some(temp) = request.temperature {
+				generation_config.insert("temperature".into(), serde_json::json!(temp));
+			}
+			if let Some(max) = request.max_tokens {
+				generation_config.insert("maxOutputTokens".into(), serde_json::json!(max));
+			}
+			let mut payload = serde_json::json!({
+				"systemInstruction": {
+					"parts": [{ "text": request.system_prompt }]
+				},
+				"contents": [{
+					"role": "user",
+					"parts": [{ "text": request.user_prompt }]
+				}]
+			});
+			if !generation_config.is_empty() {
+				payload["generationConfig"] = serde_json::Value::Object(generation_config);
+			}
+			Ok((url, payload))
+		}
+		_ => Err(TransportError::InvalidResponse),
+	}
+}
+
+/// Extract a text delta from one SSE `data:` payload for the given adapter.
+///
+/// Returns `Ok(Some(delta))` for content, `Ok(None)` for keep-alive / non-text events,
+/// and `Err` only for malformed JSON that claims to be a content payload we cannot skip.
+pub fn parse_sse_data_delta(adapter_id: &str, event_name: Option<&str>, data: &str) -> Result<Option<String>, TransportError> {
+	let trimmed = data.trim();
+	if trimmed.is_empty() || trimmed == "[DONE]" {
+		return Ok(None);
+	}
+	let value: serde_json::Value = match serde_json::from_str(trimmed) {
+		Ok(v) => v,
+		// Non-JSON data frames are ignored (comments / keep-alives).
+		Err(_) => return Ok(None),
+	};
+	match adapter_id {
+		"openai-compatible" => Ok(parse_openai_stream_delta(&value)),
+		"openai-responses" => Ok(parse_openai_responses_stream_delta(event_name, &value)),
+		"anthropic" => Ok(parse_anthropic_stream_delta(event_name, &value)),
+		"gemini" => Ok(parse_gemini_stream_delta(&value)),
+		_ => Err(TransportError::InvalidResponse),
+	}
+}
+
+/// OpenAI chat.completions stream chunk: `choices[0].delta.content`.
+pub fn parse_openai_stream_delta(value: &serde_json::Value) -> Option<String> {
+	let content = value
+		.get("choices")
+		.and_then(|c| c.as_array())
+		.and_then(|arr| arr.first())
+		.and_then(|choice| choice.get("delta"))
+		.and_then(|delta| delta.get("content"))
+		.and_then(|c| c.as_str())?;
+	if content.is_empty() {
+		None
+	} else {
+		Some(content.to_string())
+	}
+}
+
+/// OpenAI Responses API stream: prefer `response.output_text.delta` payloads.
+fn parse_openai_responses_stream_delta(event_name: Option<&str>, value: &serde_json::Value) -> Option<String> {
+	let ty = value
+		.get("type")
+		.and_then(|t| t.as_str())
+		.or(event_name)
+		.unwrap_or("");
+	if ty == "response.output_text.delta" || ty.ends_with("output_text.delta") {
+		if let Some(delta) = value.get("delta").and_then(|d| d.as_str()) {
+			if !delta.is_empty() {
+				return Some(delta.to_string());
+			}
+		}
+	}
+	// Some gateways nest text under delta.as object.
+	if let Some(text) = value
+		.get("delta")
+		.and_then(|d| d.get("text"))
+		.and_then(|t| t.as_str())
+	{
+		if !text.is_empty() {
+			return Some(text.to_string());
+		}
+	}
+	None
+}
+
+/// Anthropic Messages stream: `content_block_delta` with `delta.text`.
+fn parse_anthropic_stream_delta(event_name: Option<&str>, value: &serde_json::Value) -> Option<String> {
+	let ty = value
+		.get("type")
+		.and_then(|t| t.as_str())
+		.or(event_name)
+		.unwrap_or("");
+	if ty != "content_block_delta" {
+		return None;
+	}
+	let delta = value.get("delta")?;
+	let delta_type = delta.get("type").and_then(|t| t.as_str()).unwrap_or("text_delta");
+	if delta_type != "text_delta" && delta_type != "text" {
+		return None;
+	}
+	let text = delta.get("text").and_then(|t| t.as_str())?;
+	if text.is_empty() {
+		None
+	} else {
+		Some(text.to_string())
+	}
+}
+
+/// Gemini streamGenerateContent (SSE) chunk — same shape as non-stream generateContent.
+fn parse_gemini_stream_delta(value: &serde_json::Value) -> Option<String> {
+	let parts = value
+		.get("candidates")
+		.and_then(|c| c.as_array())
+		.and_then(|arr| arr.first())
+		.and_then(|cand| cand.get("content"))
+		.and_then(|c| c.get("parts"))
+		.and_then(|p| p.as_array())?;
+	let mut texts = Vec::new();
+	for part in parts {
+		if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
+			if !text.is_empty() {
+				texts.push(text);
+			}
+		}
+	}
+	if texts.is_empty() {
+		None
+	} else {
+		Some(texts.join(""))
+	}
+}
+
+/// Feed one complete SSE event (joined data lines) through the adapter delta parser.
+fn dispatch_sse_event(
+	adapter_id: &str,
+	event_name: Option<&str>,
+	data: &str,
+	full: &mut String,
+	on_delta: &mut dyn FnMut(&str),
+) -> Result<(), TransportError> {
+	if let Some(delta) = parse_sse_data_delta(adapter_id, event_name, data)? {
+		if full.chars().count().saturating_add(delta.chars().count()) > MAX_STREAM_CONTENT_CHARS {
+			return Err(TransportError::InvalidResponse);
+		}
+		full.push_str(&delta);
+		on_delta(&delta);
+	}
+	Ok(())
+}
+
+/// Parse an SSE byte stream, invoking `on_delta` for each text fragment.
+///
+/// Each body read is bounded by [`STREAM_IDLE_TIMEOUT`]; prolonged silence is a timeout
+/// (fallback-eligible). Cooperative cancel still wins over idle timeout.
+async fn consume_sse_stream(
+	mut response: reqwest::Response,
+	adapter_id: &str,
+	mut on_delta: impl FnMut(&str),
+	cancel: Option<&CancelToken>,
+) -> Result<String, TransportError> {
+	let mut raw_buf: Vec<u8> = Vec::new();
+	let mut carry = String::new();
+	let mut event_name: Option<String> = None;
+	let mut data_lines: Vec<String> = Vec::new();
+	let mut full = String::new();
+
+	loop {
+		// Idle timeout between chunks; cancel preferred inside await_with_idle_timeout.
+		let chunk = match await_with_idle_timeout(response.chunk(), STREAM_IDLE_TIMEOUT, cancel).await {
+			Ok(Some(c)) => c,
+			Ok(None) => break,
+			Err(e) => return Err(e),
+		};
+		if raw_buf.len().saturating_add(chunk.len()) > MAX_SSE_BUFFER_BYTES.saturating_mul(4) {
+			// Absolute safety: drop if the entire unread stream is absurdly large.
+			return Err(TransportError::InvalidResponse);
+		}
+		raw_buf.extend_from_slice(&chunk);
+		// Decode incrementally; invalid UTF-8 mid-chunk waits for more bytes.
+		let Ok(text) = std::str::from_utf8(&raw_buf) else {
+			if raw_buf.len() > MAX_SSE_BUFFER_BYTES {
+				return Err(TransportError::InvalidResponse);
+			}
+			continue;
+		};
+		carry.push_str(text);
+		raw_buf.clear();
+
+		while let Some(nl) = carry.find('\n') {
+			let mut line = carry[..nl].to_string();
+			carry = carry[nl + 1..].to_string();
+			if line.ends_with('\r') {
+				line.pop();
+			}
+			if line.is_empty() {
+				if !data_lines.is_empty() {
+					let data = data_lines.join("\n");
+					data_lines.clear();
+					let name = event_name.take();
+					dispatch_sse_event(adapter_id, name.as_deref(), &data, &mut full, &mut on_delta)?;
+				} else {
+					event_name = None;
+				}
+				continue;
+			}
+			if line.starts_with(':') {
+				// SSE comment / keep-alive
+				continue;
+			}
+			if let Some(rest) = line.strip_prefix("event:") {
+				event_name = Some(rest.trim().to_string());
+				continue;
+			}
+			if let Some(rest) = line.strip_prefix("data:") {
+				// Spec allows optional single leading space after the colon.
+				let payload = if let Some(stripped) = rest.strip_prefix(' ') {
+					stripped
+				} else {
+					rest
+				};
+				data_lines.push(payload.to_string());
+				continue;
+			}
+			// Ignore id:/retry: and unknown fields.
+		}
+
+		if carry.len() > MAX_SSE_BUFFER_BYTES {
+			return Err(TransportError::InvalidResponse);
+		}
+	}
+
+	// Flush trailing event without final blank line.
+	if !data_lines.is_empty() {
+		let data = data_lines.join("\n");
+		let name = event_name.take();
+		dispatch_sse_event(adapter_id, name.as_deref(), &data, &mut full, &mut on_delta)?;
+	} else if !carry.trim().is_empty() {
+		// Lone data line without trailing newline.
+		if let Some(rest) = carry.strip_prefix("data:") {
+			let payload = rest.strip_prefix(' ').unwrap_or(rest);
+			dispatch_sse_event(adapter_id, event_name.as_deref(), payload, &mut full, &mut on_delta)?;
+		}
+	}
+
+	let trimmed = full.trim();
+	if trimmed.is_empty() {
+		return Err(TransportError::InvalidResponse);
+	}
+	Ok(trimmed.to_string())
+}
+
+/// Streaming chat completion: calls `on_delta` for each text fragment and returns full content.
+pub async fn chat_completion_stream_http(
+	request: ChatCompletionRequest,
+	on_delta: impl FnMut(&str) + Send,
+) -> Result<ChatCompletionResult, TransportError> {
+	chat_completion_stream_http_cancellable(request, on_delta, None).await
+}
+
+/// Streaming chat completion with optional cooperative cancellation.
+pub async fn chat_completion_stream_http_cancellable(
+	request: ChatCompletionRequest,
+	mut on_delta: impl FnMut(&str) + Send,
+	cancel: Option<&CancelToken>,
+) -> Result<ChatCompletionResult, TransportError> {
+	if cancel.is_some_and(|t| t.is_cancelled()) {
+		return Err(TransportError::Cancelled);
+	}
+	// Outer select drops the in-flight request when the UI cancels.
+	with_cancel(cancel, async {
+		let client = stream_client_for(request.proxy_mode)?;
+		let (url, body) = match build_stream_request_parts(&request) {
+			Ok(parts) => parts,
+			Err(err) => {
+				log_transport_error(&request.adapter_id, err);
+				return Err(err);
+			}
+		};
+
+		let mut request_url = match prepare_request_url(
+			&url,
+			&request.adapter_id,
+			request.credential_kind,
+			request.secret.as_deref(),
+			None,
+		) {
+			Ok(u) => u,
+			Err(err) => {
+				log_transport_error(&request.adapter_id, err);
+				return Err(err);
+			}
+		};
+
+		// Gemini official streaming uses alt=sse for Server-Sent Events framing.
+		if request.adapter_id == "gemini" {
+			request_url.query_pairs_mut().append_pair("alt", "sse");
+		}
+
+		let builder = client
+			.post(request_url)
+			.header(reqwest::header::ACCEPT, "text/event-stream")
+			.json(&body);
+		let builder = match apply_headers(
+			builder,
+			&request.adapter_id,
+			request.credential_kind,
+			request.secret.as_deref(),
+		) {
+			Ok(b) => b,
+			Err(err) => {
+				log_transport_error(&request.adapter_id, err);
+				return Err(err);
+			}
+		};
+
+		let response = match builder.send().await {
+			Ok(resp) => resp,
+			Err(e) => {
+				let err = map_reqwest_error(e);
+				log_transport_error(&request.adapter_id, err);
+				return Err(err);
+			}
+		};
+
+		if let Err(err) = map_status(response.status()) {
+			log_transport_error(&request.adapter_id, err);
+			return Err(err);
+		}
+
+		match consume_sse_stream(response, &request.adapter_id, &mut on_delta, cancel).await {
+			Ok(content) => Ok(ChatCompletionResult { content }),
+			Err(err) => {
+				if err != TransportError::Cancelled {
+					log_transport_error(&request.adapter_id, err);
+				}
+				Err(err)
+			}
+		}
+	})
+	.await
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -851,6 +1718,181 @@ mod tests {
 		let inherit = build_inherit_client().expect("inherit client");
 		// Clients are distinct instances with shared timeout policy.
 		let _ = (client, inherit);
+	}
+
+	#[test]
+	fn stream_clients_build_without_total_timeout() {
+		// Streaming clients use connect_timeout only so long responses are not cut at 20s.
+		let inherit = build_stream_inherit_client().expect("stream inherit");
+		let direct = build_stream_direct_client().expect("stream direct");
+		let _ = (inherit, direct);
+	}
+
+	#[test]
+	fn cancelled_error_code_is_stable() {
+		assert_eq!(TransportError::Cancelled.code(), "cancelled");
+		assert_eq!(TransportError::Cancelled.to_string(), "Request cancelled");
+	}
+
+	#[test]
+	fn timeout_error_code_is_stable() {
+		assert_eq!(TransportError::Timeout.code(), "timeout");
+		assert_eq!(TransportError::Timeout.to_string(), "Request timed out");
+	}
+
+	#[test]
+	fn with_cancel_none_runs_work() {
+		let result = block_on(with_cancel(None, async { Ok::<_, TransportError>(42) }));
+		assert_eq!(result.unwrap(), 42);
+	}
+
+	#[test]
+	fn with_cancel_pre_cancelled_token() {
+		let token = CancelToken::new();
+		token.cancel();
+		let result = block_on(with_cancel(Some(&token), async {
+			Ok::<_, TransportError>(1)
+		}));
+		assert_eq!(result.unwrap_err(), TransportError::Cancelled);
+	}
+
+	#[test]
+	fn await_with_idle_timeout_completes_before_deadline() {
+		let result = block_on(await_with_idle_timeout(
+			async { Ok::<_, reqwest::Error>(7_u32) },
+			Duration::from_secs(5),
+			None,
+		));
+		assert_eq!(result, Ok(7));
+	}
+
+	#[test]
+	fn await_with_idle_timeout_errors_on_silence() {
+		// Pending future never yields; short idle window must surface Timeout.
+		let result = block_on(await_with_idle_timeout(
+			std::future::pending::<Result<(), reqwest::Error>>(),
+			Duration::from_millis(40),
+			None,
+		));
+		assert_eq!(result, Err(TransportError::Timeout));
+	}
+
+	#[test]
+	fn await_with_idle_timeout_pre_cancelled() {
+		let token = CancelToken::new();
+		token.cancel();
+		let result = block_on(await_with_idle_timeout(
+			std::future::pending::<Result<(), reqwest::Error>>(),
+			Duration::from_secs(30),
+			Some(&token),
+		));
+		assert_eq!(result, Err(TransportError::Cancelled));
+	}
+
+	#[test]
+	fn await_with_idle_timeout_cancel_beats_long_idle() {
+		// Cancel mid-wait must win over a long idle deadline (not wait for 30s).
+		let token = CancelToken::new();
+		let token_for_task = token.clone();
+		let result = block_on(async {
+			let join = tauri::async_runtime::spawn(async move {
+				tokio::time::sleep(Duration::from_millis(15)).await;
+				token_for_task.cancel();
+			});
+			let outcome = await_with_idle_timeout(
+				std::future::pending::<Result<(), reqwest::Error>>(),
+				Duration::from_secs(30),
+				Some(&token),
+			)
+			.await;
+			let _ = join.await;
+			outcome
+		});
+		assert_eq!(result, Err(TransportError::Cancelled));
+	}
+
+	#[test]
+	fn parse_openai_chat_content_ok() {
+		let value = serde_json::json!({
+			"choices": [{ "message": { "role": "assistant", "content": "  Hello  " } }]
+		});
+		assert_eq!(parse_chat_content("openai-compatible", &value).unwrap(), "Hello");
+	}
+
+	#[test]
+	fn parse_anthropic_and_gemini_chat_content() {
+		let anthropic = serde_json::json!({
+			"content": [{ "type": "text", "text": "Bonjour" }]
+		});
+		assert_eq!(parse_chat_content("anthropic", &anthropic).unwrap(), "Bonjour");
+
+		let gemini = serde_json::json!({
+			"candidates": [{ "content": { "parts": [{ "text": "Hola" }] } }]
+		});
+		assert_eq!(parse_chat_content("gemini", &gemini).unwrap(), "Hola");
+	}
+
+	#[test]
+	fn parse_openai_sse_stream_delta() {
+		let data = r#"{"choices":[{"delta":{"content":"Hel"},"index":0}]}"#;
+		assert_eq!(
+			parse_sse_data_delta("openai-compatible", None, data)
+				.unwrap()
+				.as_deref(),
+			Some("Hel")
+		);
+		assert_eq!(
+			parse_sse_data_delta("openai-compatible", None, "[DONE]")
+				.unwrap()
+				.as_deref(),
+			None
+		);
+		// Empty delta content (role-only first chunk) is skipped.
+		let role_only = r#"{"choices":[{"delta":{"role":"assistant"},"index":0}]}"#;
+		assert_eq!(
+			parse_sse_data_delta("openai-compatible", None, role_only)
+				.unwrap()
+				.as_deref(),
+			None
+		);
+	}
+
+	#[test]
+	fn parse_anthropic_sse_content_block_delta() {
+		let data = r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Bon"}}"#;
+		assert_eq!(
+			parse_sse_data_delta("anthropic", Some("content_block_delta"), data)
+				.unwrap()
+				.as_deref(),
+			Some("Bon")
+		);
+		let message_start = r#"{"type":"message_start","message":{"id":"msg_1"}}"#;
+		assert_eq!(
+			parse_sse_data_delta("anthropic", Some("message_start"), message_start)
+				.unwrap()
+				.as_deref(),
+			None
+		);
+	}
+
+	#[test]
+	fn parse_openai_responses_and_gemini_stream_deltas() {
+		let responses = r#"{"type":"response.output_text.delta","delta":"Hi"}"#;
+		assert_eq!(
+			parse_sse_data_delta("openai-responses", Some("response.output_text.delta"), responses)
+				.unwrap()
+				.as_deref(),
+			Some("Hi")
+		);
+		let gemini = serde_json::json!({
+			"candidates": [{ "content": { "parts": [{ "text": "Hola" }] } }]
+		});
+		assert_eq!(
+			parse_sse_data_delta("gemini", None, &gemini.to_string())
+				.unwrap()
+				.as_deref(),
+			Some("Hola")
+		);
 	}
 
 	#[test]

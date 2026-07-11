@@ -36,7 +36,7 @@ fn user_version_is_latest() {
 	let (_dir, db) = temp_db();
 	db.read(|conn| {
 		assert_eq!(read_user_version(conn).unwrap(), latest_version());
-		assert_eq!(latest_version(), 2);
+		assert_eq!(latest_version(), 3);
 		Ok(())
 	})
 	.unwrap();
@@ -301,7 +301,7 @@ fn reject_corrupt_database_on_probe() {
 
 #[test]
 fn migrations_module_latest_version() {
-	assert_eq!(migrations::latest_version(), 2);
+	assert_eq!(migrations::latest_version(), 3);
 }
 
 #[test]

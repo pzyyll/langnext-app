@@ -156,6 +156,8 @@ fn profile_fallback_ordering_and_rollback() {
 			temperature: Some(0.2),
 			max_output_tokens: Some(1024),
 			provider_options_json: None,
+			source_lang: Some("zh".into()),
+			target_lang: Some("en".into()),
 			created_at: now.clone(),
 			updated_at: now,
 		};
@@ -218,6 +220,8 @@ fn delete_model_in_use_by_profile() {
 			temperature: None,
 			max_output_tokens: None,
 			provider_options_json: None,
+			source_lang: None,
+			target_lang: None,
 			created_at: now.clone(),
 			updated_at: now,
 		};
@@ -322,6 +326,8 @@ fn provider_reference_lifecycle() {
 			temperature: None,
 			max_output_tokens: None,
 			provider_options_json: None,
+			source_lang: None,
+			target_lang: None,
 			created_at: now.clone(),
 			updated_at: now,
 		};

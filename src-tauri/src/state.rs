@@ -3,6 +3,7 @@
 use crate::adapters::transport::{HttpModelTransport, ModelTransport};
 use crate::credentials::{CredentialVault, NativeCredentialVault};
 use crate::device_state::{DeviceStateManager, SharedDeviceState};
+use crate::domain::cancel::TranslateSessionRegistry;
 use crate::error::StorageError;
 use crate::services::{ImportExportService, ModelService, ProviderService, SettingsService, TranslationProfileService};
 use crate::storage::Database;
@@ -19,6 +20,8 @@ pub struct AppState {
 	pub settings: SettingsService,
 	pub import_export: ImportExportService,
 	pub device_state: SharedDeviceState,
+	/// In-flight translate request ids → cancel tokens.
+	pub translate_sessions: Arc<TranslateSessionRegistry>,
 }
 
 impl AppState {
@@ -38,6 +41,7 @@ impl AppState {
 		let settings = SettingsService::new(db.clone(), vault.clone());
 		let import_export = ImportExportService::new(db.clone(), vault.clone());
 		let device_state = Arc::new(DeviceStateManager::load(&app_data_dir)?);
+		let translate_sessions = Arc::new(TranslateSessionRegistry::new());
 
 		Ok(Self {
 			db,
@@ -48,6 +52,7 @@ impl AppState {
 			settings,
 			import_export,
 			device_state,
+			translate_sessions,
 		})
 	}
 }

@@ -308,6 +308,32 @@ fn template_validation() {
 	assert!(validate_template("no text var", true).is_err());
 	assert!(validate_template("{{unknown}}", false).is_err());
 	assert!(validate_template("sys {{source_language}}", false).is_ok());
+	assert_eq!(
+		crate::services::translation_profiles::render_template(
+			"From {{source_language}} to {{target_language}}: {{text}}",
+			"Chinese",
+			"English",
+			"你好",
+		),
+		"From Chinese to English: 你好"
+	);
+}
+
+#[test]
+fn render_template_preserves_unknown_and_partial_braces() {
+	use crate::services::translation_profiles::render_template;
+	// Unknown vars stay literal (validation rejects them on save; render is defensive).
+	assert_eq!(
+		render_template("x {{unknown}} y", "a", "b", "c"),
+		"x {{unknown}} y"
+	);
+	// Unclosed braces pass through the remainder.
+	assert_eq!(render_template("start {{text", "a", "b", "hello"), "start {{text");
+	// Whitespace inside braces is tolerated.
+	assert_eq!(
+		render_template("{{ source_language }}->{{ target_language }}:{{ text }}", "zh", "en", "hi"),
+		"zh->en:hi"
+	);
 }
 
 #[test]
@@ -347,6 +373,8 @@ fn profile_save_and_fallback_order() {
 			temperature: Some(0.1),
 			max_output_tokens: Some(2048),
 			provider_options_json: None,
+			source_lang: Some("zh".into()),
+			target_lang: Some("en".into()),
 			target_model_ids: vec![m1.id, m2.id],
 		})
 		.unwrap();
@@ -382,6 +410,8 @@ fn delete_provider_cascades_to_models_and_targets() {
 			temperature: None,
 			max_output_tokens: None,
 			provider_options_json: None,
+			source_lang: None,
+			target_lang: None,
 			target_model_ids: vec![model.id],
 		})
 		.unwrap();
@@ -472,6 +502,8 @@ fn import_export_round_trip_and_secret_exclusion() {
 			temperature: None,
 			max_output_tokens: None,
 			provider_options_json: None,
+			source_lang: None,
+			target_lang: None,
 			target_model_ids: vec![m.id],
 		})
 		.unwrap();
@@ -597,6 +629,8 @@ fn import_credential_cleanup_isolates_unrelated_journals() {
 			temperature: None,
 			max_output_tokens: None,
 			provider_options_json: None,
+			source_lang: None,
+			target_lang: None,
 			target_model_ids: vec![m.id],
 		})
 		.unwrap();
@@ -649,6 +683,8 @@ fn import_rejects_malformed_graphs() {
 			temperature: None,
 			max_output_tokens: None,
 			provider_options_json: None,
+			source_lang: None,
+			target_lang: None,
 			target_model_ids: vec![m.id],
 		})
 		.unwrap();

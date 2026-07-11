@@ -9,13 +9,21 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from "./routes/__root"
+import { Route as TranslateRouteImport } from "./routes/translate"
 import { Route as SettingsRouteImport } from "./routes/settings"
 import { Route as ModelsRouteImport } from "./routes/models"
 import { Route as AboutRouteImport } from "./routes/about"
 import { Route as IndexRouteImport } from "./routes/index"
+import { Route as TranslateIndexRouteImport } from "./routes/translate/index"
 import { Route as ModelsIndexRouteImport } from "./routes/models/index"
+import { Route as TranslateProfilesRouteImport } from "./routes/translate/profiles"
 import { Route as ModelsProviderIdRouteImport } from "./routes/models/$providerId"
 
+const TranslateRoute = TranslateRouteImport.update({
+  id: "/translate",
+  path: "/translate",
+  getParentRoute: () => rootRouteImport,
+} as any)
 const SettingsRoute = SettingsRouteImport.update({
   id: "/settings",
   path: "/settings",
@@ -36,10 +44,20 @@ const IndexRoute = IndexRouteImport.update({
   path: "/",
   getParentRoute: () => rootRouteImport,
 } as any)
+const TranslateIndexRoute = TranslateIndexRouteImport.update({
+  id: "/",
+  path: "/",
+  getParentRoute: () => TranslateRoute,
+} as any)
 const ModelsIndexRoute = ModelsIndexRouteImport.update({
   id: "/",
   path: "/",
   getParentRoute: () => ModelsRoute,
+} as any)
+const TranslateProfilesRoute = TranslateProfilesRouteImport.update({
+  id: "/profiles",
+  path: "/profiles",
+  getParentRoute: () => TranslateRoute,
 } as any)
 const ModelsProviderIdRoute = ModelsProviderIdRouteImport.update({
   id: "/$providerId",
@@ -52,15 +70,20 @@ export interface FileRoutesByFullPath {
   "/about": typeof AboutRoute
   "/models": typeof ModelsRouteWithChildren
   "/settings": typeof SettingsRoute
+  "/translate": typeof TranslateRouteWithChildren
   "/models/$providerId": typeof ModelsProviderIdRoute
+  "/translate/profiles": typeof TranslateProfilesRoute
   "/models/": typeof ModelsIndexRoute
+  "/translate/": typeof TranslateIndexRoute
 }
 export interface FileRoutesByTo {
   "/": typeof IndexRoute
   "/about": typeof AboutRoute
   "/settings": typeof SettingsRoute
   "/models/$providerId": typeof ModelsProviderIdRoute
+  "/translate/profiles": typeof TranslateProfilesRoute
   "/models": typeof ModelsIndexRoute
+  "/translate": typeof TranslateIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -68,8 +91,11 @@ export interface FileRoutesById {
   "/about": typeof AboutRoute
   "/models": typeof ModelsRouteWithChildren
   "/settings": typeof SettingsRoute
+  "/translate": typeof TranslateRouteWithChildren
   "/models/$providerId": typeof ModelsProviderIdRoute
+  "/translate/profiles": typeof TranslateProfilesRoute
   "/models/": typeof ModelsIndexRoute
+  "/translate/": typeof TranslateIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -78,18 +104,31 @@ export interface FileRouteTypes {
     | "/about"
     | "/models"
     | "/settings"
+    | "/translate"
     | "/models/$providerId"
+    | "/translate/profiles"
     | "/models/"
+    | "/translate/"
   fileRoutesByTo: FileRoutesByTo
-  to: "/" | "/about" | "/settings" | "/models/$providerId" | "/models"
+  to:
+    | "/"
+    | "/about"
+    | "/settings"
+    | "/models/$providerId"
+    | "/translate/profiles"
+    | "/models"
+    | "/translate"
   id:
     | "__root__"
     | "/"
     | "/about"
     | "/models"
     | "/settings"
+    | "/translate"
     | "/models/$providerId"
+    | "/translate/profiles"
     | "/models/"
+    | "/translate/"
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -97,10 +136,18 @@ export interface RootRouteChildren {
   AboutRoute: typeof AboutRoute
   ModelsRoute: typeof ModelsRouteWithChildren
   SettingsRoute: typeof SettingsRoute
+  TranslateRoute: typeof TranslateRouteWithChildren
 }
 
 declare module "@tanstack/react-router" {
   interface FileRoutesByPath {
+    "/translate": {
+      id: "/translate"
+      path: "/translate"
+      fullPath: "/translate"
+      preLoaderRoute: typeof TranslateRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     "/settings": {
       id: "/settings"
       path: "/settings"
@@ -129,12 +176,26 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    "/translate/": {
+      id: "/translate/"
+      path: "/"
+      fullPath: "/translate/"
+      preLoaderRoute: typeof TranslateIndexRouteImport
+      parentRoute: typeof TranslateRoute
+    }
     "/models/": {
       id: "/models/"
       path: "/"
       fullPath: "/models/"
       preLoaderRoute: typeof ModelsIndexRouteImport
       parentRoute: typeof ModelsRoute
+    }
+    "/translate/profiles": {
+      id: "/translate/profiles"
+      path: "/profiles"
+      fullPath: "/translate/profiles"
+      preLoaderRoute: typeof TranslateProfilesRouteImport
+      parentRoute: typeof TranslateRoute
     }
     "/models/$providerId": {
       id: "/models/$providerId"
@@ -159,11 +220,26 @@ const ModelsRouteChildren: ModelsRouteChildren = {
 const ModelsRouteWithChildren =
   ModelsRoute._addFileChildren(ModelsRouteChildren)
 
+interface TranslateRouteChildren {
+  TranslateProfilesRoute: typeof TranslateProfilesRoute
+  TranslateIndexRoute: typeof TranslateIndexRoute
+}
+
+const TranslateRouteChildren: TranslateRouteChildren = {
+  TranslateProfilesRoute: TranslateProfilesRoute,
+  TranslateIndexRoute: TranslateIndexRoute,
+}
+
+const TranslateRouteWithChildren = TranslateRoute._addFileChildren(
+  TranslateRouteChildren,
+)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AboutRoute: AboutRoute,
   ModelsRoute: ModelsRouteWithChildren,
   SettingsRoute: SettingsRoute,
+  TranslateRoute: TranslateRouteWithChildren,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

@@ -66,6 +66,8 @@ impl TranslationProfileService {
 				temperature: input.temperature,
 				max_output_tokens: input.max_output_tokens,
 				provider_options_json: input.provider_options_json.clone(),
+				source_lang: normalize_optional_lang(input.source_lang.as_deref()),
+				target_lang: normalize_optional_lang(input.target_lang.as_deref()),
 				created_at,
 				updated_at: now,
 			};
@@ -153,4 +155,56 @@ pub fn validate_template(template: &str, require_text_once: bool) -> Result<(), 
 		));
 	}
 	Ok(())
+}
+
+/// Render a profile template by substituting the three allowed variables.
+pub fn render_template(template: &str, source_language: &str, target_language: &str, text: &str) -> String {
+	let mut out = String::with_capacity(template.len() + text.len());
+	let mut rest = template;
+	while let Some(start) = rest.find("{{") {
+		out.push_str(&rest[..start]);
+		let after = &rest[start + 2..];
+		let Some(end) = after.find("}}") else {
+			out.push_str("{{");
+			out.push_str(after);
+			return out;
+		};
+		let var = after[..end].trim();
+		match var {
+			"source_language" => out.push_str(source_language),
+			"target_language" => out.push_str(target_language),
+			"text" => out.push_str(text),
+			other => {
+				out.push_str("{{");
+				out.push_str(other);
+				out.push_str("}}");
+			}
+		}
+		rest = &after[end + 2..];
+	}
+	out.push_str(rest);
+	out
+}
+
+/// Default system template used when saving a profile from the translate page.
+pub fn default_system_template() -> String {
+	"You are a professional translation engine. Translate the user's text from {{source_language}} to {{target_language}}.\n\
+		Rules:\n\
+		- Output only the translated text, with no preface, labels, quotes, or explanations.\n\
+		- Preserve meaning, tone, and formatting (line breaks, lists, punctuation) when possible.\n\
+		- If the source is already in the target language, return it unchanged.\n\
+		- Do not invent content that is not present in the source."
+		.into()
+}
+
+/// Default user template: source text only.
+pub fn default_user_template() -> String {
+	"{{text}}".into()
+}
+
+fn normalize_optional_lang(value: Option<&str>) -> Option<String> {
+	value
+		.map(str::trim)
+		.filter(|s| !s.is_empty())
+		.map(|s| s.to_string())
 }

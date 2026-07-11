@@ -3,6 +3,8 @@
 
 export const navItems = [
 	{ to: "/", labelKey: "nav.home", exact: true },
+	{ to: "/translate", labelKey: "nav.translate", exact: true },
+	{ to: "/translate/profiles", labelKey: "nav.translateProfiles", exact: true },
 	{ to: "/models", labelKey: "nav.models", exact: false },
 	{ to: "/about", labelKey: "nav.about", exact: false },
 	{ to: "/settings", labelKey: "nav.settings", exact: false },
@@ -10,11 +12,11 @@ export const navItems = [
 
 export type NavItem = (typeof navItems)[number];
 
-/** Primary sidebar links (Home / Models / About). Settings is rendered at the footer. */
-export const primaryNavItems = [navItems[0], navItems[1], navItems[2]] as const;
+/** Primary sidebar links (Home / Translate / Translate Profiles / Models / About). Settings is rendered at the footer. */
+export const primaryNavItems = [navItems[0], navItems[1], navItems[2], navItems[3], navItems[4]] as const;
 
 /** Settings entry shown in the sidebar footer. */
-export const settingsNavItem = navItems[3];
+export const settingsNavItem = navItems[5];
 
 export type ScrollTransitionType = "scroll-down" | "scroll-up";
 

@@ -7,6 +7,7 @@ use rusqlite::Connection;
 pub const MIGRATIONS: &[&str] = &[
 	include_str!("../../migrations/0001_initial.sql"),
 	include_str!("../../migrations/0002_provider_sort_order.sql"),
+	include_str!("../../migrations/0003_profile_languages.sql"),
 ];
 
 pub fn latest_version() -> i32 {
@@ -85,18 +86,27 @@ pub fn migrate_with(conn: &mut Connection, migrations: &[&str]) -> Result<i32, S
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use rusqlite::Connection;
+	use rusqlite::{Connection, OptionalExtension};
 
 	#[test]
-	fn migrate_empty_database_to_v2() {
+	fn migrate_empty_database_to_latest() {
 		let mut conn = Connection::open_in_memory().unwrap();
 		let version = migrate(&mut conn).unwrap();
-		assert_eq!(version, 2);
-		assert_eq!(read_user_version(&conn).unwrap(), 2);
+		assert_eq!(version, latest_version());
+		assert_eq!(read_user_version(&conn).unwrap(), latest_version());
 		let count: i64 = conn
 			.query_row("SELECT COUNT(*) FROM app_settings", [], |r| r.get(0))
 			.unwrap();
 		assert_eq!(count, 1);
+		// v3 columns exist for profile language prefs.
+		let _: Option<String> = conn
+			.query_row(
+				"SELECT source_lang FROM translation_profiles LIMIT 1",
+				[],
+				|r| r.get(0),
+			)
+			.optional()
+			.unwrap();
 	}
 
 	#[test]
@@ -104,6 +114,6 @@ mod tests {
 		let mut conn = Connection::open_in_memory().unwrap();
 		migrate(&mut conn).unwrap();
 		migrate(&mut conn).unwrap();
-		assert_eq!(read_user_version(&conn).unwrap(), 2);
+		assert_eq!(read_user_version(&conn).unwrap(), latest_version());
 	}
 }

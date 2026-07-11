@@ -10,7 +10,7 @@ import { defineConfig } from "eslint/config";
 
 export default defineConfig([
 	{
-		ignores: ["dist", "src-tauri", "node_modules", "src/routeTree.gen.ts"],
+		ignores: ["dist", "src-tauri", "node_modules", "src/routeTree.gen.ts", ".agents"],
 	},
 	{
 		extends: [js.configs.recommended, ...tseslint.configs.recommended],

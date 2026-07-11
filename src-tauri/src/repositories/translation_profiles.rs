@@ -23,6 +23,8 @@ fn map_profile(row: &Row<'_>) -> Result<TranslationProfile, rusqlite::Error> {
 			.map(|s| serde_json::from_str(&s))
 			.transpose()
 			.map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?,
+		source_lang: row.get("source_lang")?,
+		target_lang: row.get("target_lang")?,
 		created_at: row.get("created_at")?,
 		updated_at: row.get("updated_at")?,
 	})
@@ -89,8 +91,9 @@ pub fn insert_profile(conn: &Connection, profile: &TranslationProfile) -> Result
 		.execute(
 			"INSERT INTO translation_profiles (
             id, name, enabled, template_version, system_template, user_template,
-            temperature, max_output_tokens, provider_options_json, created_at, updated_at
-        ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+            temperature, max_output_tokens, provider_options_json, source_lang, target_lang,
+            created_at, updated_at
+        ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
 			params![
 				profile.id.to_string(),
 				profile.name,
@@ -101,6 +104,8 @@ pub fn insert_profile(conn: &Connection, profile: &TranslationProfile) -> Result
 				profile.temperature,
 				profile.max_output_tokens,
 				options,
+				profile.source_lang,
+				profile.target_lang,
 				profile.created_at,
 				profile.updated_at,
 			],
@@ -125,7 +130,9 @@ pub fn update_profile(conn: &Connection, profile: &TranslationProfile) -> Result
             temperature = ?7,
             max_output_tokens = ?8,
             provider_options_json = ?9,
-            updated_at = ?10
+            source_lang = ?10,
+            target_lang = ?11,
+            updated_at = ?12
          WHERE id = ?1",
 			params![
 				profile.id.to_string(),
@@ -137,6 +144,8 @@ pub fn update_profile(conn: &Connection, profile: &TranslationProfile) -> Result
 				profile.temperature,
 				profile.max_output_tokens,
 				options,
+				profile.source_lang,
+				profile.target_lang,
 				profile.updated_at,
 			],
 		)

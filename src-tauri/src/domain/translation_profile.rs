@@ -1,5 +1,5 @@
 // ABOUTME: Translation profile entities, ordered model targets, and DTOs.
-// ABOUTME: Profiles own prompt templates and fallback chains.
+// ABOUTME: Profiles own prompt templates, preferred languages, and fallback chains.
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -15,6 +15,12 @@ pub struct TranslationProfile {
 	pub temperature: Option<f64>,
 	pub max_output_tokens: Option<i64>,
 	pub provider_options_json: Option<serde_json::Value>,
+	/// Preferred source language id for the translate UI (e.g. `zh`). Optional.
+	#[serde(default)]
+	pub source_lang: Option<String>,
+	/// Preferred target language id for the translate UI (e.g. `en`). Optional.
+	#[serde(default)]
+	pub target_lang: Option<String>,
 	pub created_at: String,
 	pub updated_at: String,
 }
@@ -48,6 +54,10 @@ pub struct TranslationProfileWrite {
 	pub temperature: Option<f64>,
 	pub max_output_tokens: Option<i64>,
 	pub provider_options_json: Option<serde_json::Value>,
+	#[serde(default)]
+	pub source_lang: Option<String>,
+	#[serde(default)]
+	pub target_lang: Option<String>,
 	/// Ordered provider_model_ids; priority is assigned as 0..n-1.
 	pub target_model_ids: Vec<Uuid>,
 }

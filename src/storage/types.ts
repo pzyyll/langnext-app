@@ -108,6 +108,59 @@ export interface ManualModelWrite {
 	capabilityOverridesJson?: CapabilityOverridesV1 | null;
 }
 
+/** Input for one-shot or streaming translate via a configured provider model. */
+export interface TranslateInput {
+	modelId: string;
+	sourceLang: string;
+	targetLang: string;
+	text: string;
+	/** Optional profile for templates + fallback model chain. */
+	profileId?: string | null;
+}
+
+/** Result of translate_text IPC (success or soft provider/validation failure). */
+export interface TranslateResult {
+	translatedText: string;
+	latencyMs: number;
+	errorCode?: string | null;
+	message: string;
+	ok: boolean;
+	/** Model that produced the result when a fallback chain was used. */
+	modelId?: string | null;
+}
+
+/** Progressive chunk from translate_text_stream (`translate://chunk`). */
+export interface TranslateStreamChunk {
+	id: string;
+	delta: string;
+}
+
+/** Fallback chain switched models — clear progressive output (`translate://reset`). */
+export interface TranslateStreamReset {
+	id: string;
+	/** Model that will produce subsequent chunks. */
+	modelId: string;
+}
+
+/** Terminal success/soft-failure from translate_text_stream (`translate://done`). */
+export interface TranslateStreamDone {
+	id: string;
+	translatedText: string;
+	latencyMs: number;
+	ok: boolean;
+	message: string;
+	errorCode?: string | null;
+	modelId?: string | null;
+}
+
+/** Hard failure from translate_text_stream (`translate://error`). */
+export interface TranslateStreamError {
+	id: string;
+	errorCode: string;
+	message: string;
+	latencyMs: number;
+}
+
 export interface TranslationProfile {
 	id: string;
 	name: string;
@@ -118,6 +171,8 @@ export interface TranslationProfile {
 	temperature: number | null;
 	maxOutputTokens: number | null;
 	providerOptionsJson: unknown | null;
+	sourceLang?: string | null;
+	targetLang?: string | null;
 	createdAt: string;
 	updatedAt: string;
 }
@@ -142,6 +197,8 @@ export interface TranslationProfileWrite {
 	temperature?: number | null;
 	maxOutputTokens?: number | null;
 	providerOptionsJson?: unknown | null;
+	sourceLang?: string | null;
+	targetLang?: string | null;
 	targetModelIds: string[];
 }
 

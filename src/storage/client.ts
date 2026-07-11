@@ -14,10 +14,18 @@ import type {
 	ProviderInstanceWrite,
 	ProviderModelDto,
 	SyncModelsResult,
+	TranslateInput,
+	TranslateResult,
 	TranslationProfile,
 	TranslationProfileDto,
 	TranslationProfileWrite,
 } from "./types";
+
+/** Event names emitted by translate_text_stream. */
+export const TRANSLATE_CHUNK_EVENT = "translate://chunk";
+export const TRANSLATE_RESET_EVENT = "translate://reset";
+export const TRANSLATE_DONE_EVENT = "translate://done";
+export const TRANSLATE_ERROR_EVENT = "translate://error";
 
 export async function listProviderInstances(): Promise<ProviderInstanceDto[]> {
 	return invoke("list_provider_instances");
@@ -41,6 +49,30 @@ export async function reorderProviderInstances(ids: string[]): Promise<void> {
 
 export async function listProviderModels(providerInstanceId: string): Promise<ProviderModelDto[]> {
 	return invoke("list_provider_models", { providerInstanceId });
+}
+
+export async function listAllProviderModels(): Promise<ProviderModelDto[]> {
+	return invoke("list_all_provider_models");
+}
+
+/**
+ * Non-streaming translate. Pass `requestId` so `cancelTranslate` can abort mid-flight.
+ */
+export async function translateText(input: TranslateInput, requestId?: string): Promise<TranslateResult> {
+	return invoke("translate_text", { input, requestId: requestId ?? null });
+}
+
+/**
+ * Start a streaming translation. `requestId` must be registered with event listeners
+ * before this invoke so early validation failures cannot race past the active-id assignment.
+ */
+export async function translateTextStream(input: TranslateInput, requestId: string): Promise<void> {
+	return invoke("translate_text_stream", { input, requestId });
+}
+
+/** Abort an in-flight translate (stream or non-stream) by client `requestId`. */
+export async function cancelTranslate(requestId: string): Promise<boolean> {
+	return invoke("cancel_translate", { requestId });
 }
 
 export async function saveManualModel(input: ManualModelWrite): Promise<ProviderModelDto> {
