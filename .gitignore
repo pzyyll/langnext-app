@@ -31,6 +31,4 @@ src-tauri/target
 # Agent
 .agents
 .pi
-.skills-lock.json
-
-.stich/metadata.json
+skills-lock.json

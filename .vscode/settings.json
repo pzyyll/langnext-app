@@ -17,5 +17,6 @@
 		"editor.defaultFormatter": "rust-lang.rust-analyzer",
 		"editor.insertSpaces": false,
 		"editor.tabSize": 2
-	}
+	},
+	"js/ts.experimental.useTsgo": false
 }
