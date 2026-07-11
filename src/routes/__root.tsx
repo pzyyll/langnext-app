@@ -3,8 +3,10 @@
 import { useState } from "react";
 import { Link, Outlet, createRootRoute, useRouterState } from "@tanstack/react-router";
 import { TanStackRouterDevtools } from "@tanstack/react-router-devtools";
+import { useTranslation } from "react-i18next";
 import { TitleBar } from "../components/Win/TitleBar";
 import { ThemeToggle } from "../components/ThemeToggle";
+import { LanguageToggle } from "../components/LanguageToggle";
 import { isNavItemActive, navItems } from "../shell/nav";
 
 export const Route = createRootRoute({
@@ -22,6 +24,7 @@ const navLinkActiveClassName =
 function RootLayout() {
 	const pathname = useRouterState({ select: (state) => state.location.pathname });
 	const [sidebarOpen, setSidebarOpen] = useState(true);
+	const { t } = useTranslation();
 
 	return (
 		<div className="root flex h-full min-h-0 flex-col bg-surface text-ink">
@@ -42,7 +45,7 @@ function RootLayout() {
 						sidebarOpen ? `${SIDEBAR_WIDTH_CLASS} border-r` : "w-0 border-r-0"
 					}`}
 				>
-					<nav className="flex min-w-44 flex-1 flex-col gap-1 p-3" aria-label="Main">
+					<nav className="flex min-w-44 flex-1 flex-col gap-1 p-3" aria-label={t("nav.mainAria")}>
 						{navItems.map((item) => (
 							<Link
 								draggable={false}
@@ -61,12 +64,13 @@ function RootLayout() {
 									}
 								}}
 							>
-								{item.label}
+								{t(item.labelKey)}
 							</Link>
 						))}
 					</nav>
 
-					<div className="min-w-44 border-t border-line p-2">
+					<div className="min-w-44 space-y-1 border-t border-line p-2">
+						<LanguageToggle />
 						<ThemeToggle />
 					</div>
 				</aside>

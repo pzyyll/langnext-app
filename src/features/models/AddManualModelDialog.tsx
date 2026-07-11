@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Button } from "@base-ui/react/button";
 import { Dialog } from "@base-ui/react/dialog";
+import { useTranslation } from "react-i18next";
 import {
 	checkboxClassName,
 	dialogBackdropClassName,
@@ -24,15 +25,19 @@ export type AddManualModelDialogProps = {
 };
 
 export function AddManualModelDialog({ open, providerId, onOpenChange, onCreated }: AddManualModelDialogProps) {
+	const { t } = useTranslation();
+
 	return (
 		<Dialog.Root open={open} onOpenChange={onOpenChange}>
 			<Dialog.Portal>
 				<Dialog.Backdrop className={dialogBackdropClassName} />
 				<Dialog.Popup className={dialogPopupClassName}>
 					<div className="flex flex-col gap-1">
-						<Dialog.Title className="text-base leading-6 font-bold text-ink">Add model</Dialog.Title>
+						<Dialog.Title className="text-base leading-6 font-bold text-ink">
+							{t("models.addModelDialog.title")}
+						</Dialog.Title>
 						<Dialog.Description className="text-sm leading-5 text-muted">
-							Register a manual model key for this channel.
+							{t("models.addModelDialog.description")}
 						</Dialog.Description>
 					</div>
 					{open ? (
@@ -56,6 +61,7 @@ type AddManualModelFormProps = {
 };
 
 function AddManualModelForm({ providerId, onCreated }: AddManualModelFormProps) {
+	const { t } = useTranslation();
 	const toast = useToast();
 	const [modelKey, setModelKey] = useState("");
 	const [displayNameOverride, setDisplayNameOverride] = useState("");
@@ -83,14 +89,14 @@ function AddManualModelForm({ providerId, onCreated }: AddManualModelFormProps) 
 				capabilityOverridesJson: null,
 			});
 			toast.success({
-				title: "Model added",
+				title: t("models.toast.modelAdded"),
 				description: created.displayNameOverride ?? created.modelKey,
 			});
 			onCreated(created);
 		} catch (err: unknown) {
-			const message = getIpcErrorMessage(err, "Failed to add model.");
+			const message = getIpcErrorMessage(err, t("models.toast.addModelFailedDesc"));
 			setError(message);
-			toast.error({ title: "Add model failed", description: message });
+			toast.error({ title: t("models.toast.addModelFailed"), description: message });
 		} finally {
 			setPending(false);
 		}
@@ -100,7 +106,7 @@ function AddManualModelForm({ providerId, onCreated }: AddManualModelFormProps) 
 		<form className="flex flex-col gap-3" onSubmit={(event) => void handleSubmit(event)}>
 			<div className="flex flex-col gap-1">
 				<label className="text-sm font-medium text-ink" htmlFor="add-model-key">
-					Model ID
+					{t("models.addModelDialog.modelId")}
 				</label>
 				<input
 					id="add-model-key"
@@ -119,7 +125,7 @@ function AddManualModelForm({ providerId, onCreated }: AddManualModelFormProps) 
 
 			<div className="flex flex-col gap-1">
 				<label className="text-sm font-medium text-ink" htmlFor="add-model-display-name">
-					Display name override
+					{t("models.addModelDialog.displayNameOverride")}
 				</label>
 				<input
 					id="add-model-display-name"
@@ -128,7 +134,7 @@ function AddManualModelForm({ providerId, onCreated }: AddManualModelFormProps) 
 					onChange={(event) => {
 						setDisplayNameOverride(event.currentTarget.value);
 					}}
-					placeholder="Optional"
+					placeholder={t("common.optional")}
 					disabled={pending}
 				/>
 			</div>
@@ -143,7 +149,7 @@ function AddManualModelForm({ providerId, onCreated }: AddManualModelFormProps) 
 					}}
 					disabled={pending}
 				/>
-				Enabled
+				{t("common.enabled")}
 			</label>
 
 			{error ? (
@@ -154,10 +160,10 @@ function AddManualModelForm({ providerId, onCreated }: AddManualModelFormProps) 
 
 			<div className="flex justify-end gap-3 pt-1">
 				<Dialog.Close className={outlineButtonClassName} disabled={pending}>
-					Cancel
+					{t("common.cancel")}
 				</Dialog.Close>
 				<Button type="submit" className={primaryButtonClassName} disabled={!canSubmit} focusableWhenDisabled>
-					{pending ? "Adding…" : "Add model"}
+					{pending ? t("common.adding") : t("models.addModelDialog.submit")}
 				</Button>
 			</div>
 		</form>

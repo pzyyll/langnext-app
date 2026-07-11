@@ -1,8 +1,10 @@
-// ABOUTME: Load authoritative AppSettings in Tauri and sync the pre-paint theme cache.
+// ABOUTME: Load authoritative AppSettings in Tauri and sync theme/language caches.
 // ABOUTME: Browser-only dev keeps localStorage as a non-authoritative cache.
 import { getAppSettings, updateAppSettings } from "./client";
 import type { AppSettingsDto, AppSettingsV1 } from "./types";
 import { THEME_STORAGE_KEY, applyThemeToDom, getOsTheme, isThemeMode, type ThemeMode } from "../theme/theme";
+import { applyAppLanguage, initI18n } from "../i18n";
+import { normalizeLanguage, readLanguageCache, type AppLanguage } from "../i18n/languages";
 
 function isTauriRuntime(): boolean {
 	return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -21,17 +23,19 @@ export function readThemeCache(): ThemeMode {
 }
 
 /**
- * In Tauri: load SQLite settings, migrate null theme once, apply and refresh cache.
+ * In Tauri: load SQLite settings, migrate null theme once, apply theme/language caches.
  * In browser-only dev: apply cache only (not persisted desktop configuration).
  */
 export async function bootstrapStorage(): Promise<AppSettingsDto | null> {
 	if (!isTauriRuntime()) {
 		applyThemeToDom(readThemeCache());
+		await initI18n(readLanguageCache());
 		return null;
 	}
 
 	const settings = await getAppSettings();
 	let theme = settings.theme;
+	let result: AppSettingsDto = settings;
 
 	if (theme === null) {
 		const legacy = readThemeCache();
@@ -55,16 +59,22 @@ export async function bootstrapStorage(): Promise<AppSettingsDto | null> {
 			proxyCredential: { action: "keep" },
 		});
 		theme = updated.theme;
-		applyAuthoritativeTheme(theme);
-		return updated;
+		result = updated;
 	}
 
 	applyAuthoritativeTheme(theme);
-	return settings;
+	await applyAuthoritativeLanguage(result.uiLanguage);
+	return result;
 }
 
 function applyAuthoritativeTheme(theme: string | null): void {
 	const mode: ThemeMode = isThemeMode(theme) ? theme : readThemeCache();
 	applyThemeToDom(mode);
 	localStorage.setItem(THEME_STORAGE_KEY, mode);
+}
+
+async function applyAuthoritativeLanguage(uiLanguage: string): Promise<void> {
+	const language: AppLanguage = normalizeLanguage(uiLanguage);
+	await initI18n(language);
+	await applyAppLanguage(language);
 }

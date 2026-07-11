@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Button } from "@base-ui/react/button";
 import { Dialog } from "@base-ui/react/dialog";
+import { useTranslation } from "react-i18next";
 import {
 	dangerButtonClassName,
 	dialogBackdropClassName,
@@ -28,16 +29,19 @@ export function ConfirmDialog({
 	onOpenChange,
 	title,
 	description,
-	confirmText = "Confirm",
-	cancelText = "Cancel",
+	confirmText,
+	cancelText,
 	pendingText,
 	onConfirm,
 	danger = false,
 }: ConfirmDialogProps) {
+	const { t } = useTranslation();
 	const [pending, setPending] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 
-	const resolvedPendingText = pendingText ?? `${confirmText}…`;
+	const resolvedConfirmText = confirmText ?? t("common.confirm");
+	const resolvedCancelText = cancelText ?? t("common.cancel");
+	const resolvedPendingText = pendingText ?? `${resolvedConfirmText}…`;
 
 	async function handleConfirm() {
 		if (pending) {
@@ -86,7 +90,7 @@ export function ConfirmDialog({
 
 					<div className="flex justify-end gap-3 pt-1">
 						<Dialog.Close className={outlineButtonClassName} disabled={pending}>
-							{cancelText}
+							{resolvedCancelText}
 						</Dialog.Close>
 						<Button
 							type="button"
@@ -97,7 +101,7 @@ export function ConfirmDialog({
 								void handleConfirm();
 							}}
 						>
-							{pending ? resolvedPendingText : confirmText}
+							{pending ? resolvedPendingText : resolvedConfirmText}
 						</Button>
 					</div>
 				</Dialog.Popup>

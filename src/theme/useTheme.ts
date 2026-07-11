@@ -1,6 +1,7 @@
 // ABOUTME: React hook that tracks the active light/dark theme mode.
 // ABOUTME: Persists theme through settings IPC in Tauri and rolls back on failure.
 import { useCallback, useEffect, useState } from "react";
+import i18n from "../i18n";
 import { THEME_CHANGE_EVENT, THEME_STORAGE_KEY, applyThemeToDom, getAppliedTheme, type ThemeMode } from "./theme";
 import { setAppTheme } from "../storage/client";
 import { ThemeMutationQueue } from "./themeMutationQueue";
@@ -36,7 +37,7 @@ export function useTheme() {
 					const rollback = baselineBox.value;
 					applyThemeToDom(rollback);
 					setThemeState(rollback);
-					setError(err instanceof Error ? err.message : "Failed to persist theme");
+					setError(err instanceof Error ? err.message : i18n.t("theme.persistFailed"));
 				}
 			},
 		});

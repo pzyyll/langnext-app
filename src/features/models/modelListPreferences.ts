@@ -32,10 +32,7 @@ export function setModelEnabledFilter(filter: ModelEnabledFilter): void {
  * Case-insensitive partial match against the user-visible model key and internal id.
  * Empty / whitespace-only queries match everything.
  */
-export function modelMatchesSearch(
-	model: { id: string; modelKey: string },
-	query: string,
-): boolean {
+export function modelMatchesSearch(model: { id: string; modelKey: string }, query: string): boolean {
 	const needle = query.trim().toLowerCase();
 	if (!needle) {
 		return true;

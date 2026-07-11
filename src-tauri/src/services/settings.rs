@@ -78,6 +78,23 @@ impl SettingsService {
 		})
 	}
 
+	/// Atomic UI language-only update inside one transaction.
+	pub fn set_ui_language(&self, ui_language: String) -> Result<AppSettingsDto, StorageError> {
+		if ui_language != "en" && ui_language != "zh-CN" {
+			return Err(StorageError::Validation("ui_language must be en or zh-CN".into()));
+		}
+		self.db.transaction(|uow| {
+			let mut settings = app_settings::get(uow.conn())?;
+			settings.ui_language = ui_language;
+			app_settings::update(uow.conn(), &settings)?;
+			let proxy_has_credential = app_credentials::get_global_proxy_ref(uow.conn())?.is_some();
+			Ok(AppSettingsDto {
+				settings,
+				proxy_has_credential,
+			})
+		})
+	}
+
 	fn update_keep(&self, settings: AppSettingsV1) -> Result<(), StorageError> {
 		self.db.transaction(|uow| {
 			let conn = uow.conn();

@@ -62,6 +62,7 @@ pub fn run() {
 			cmds::settings::get_app_settings,
 			cmds::settings::update_app_settings,
 			cmds::settings::set_app_theme,
+			cmds::settings::set_app_ui_language,
 			cmds::import_export::export_configuration,
 			cmds::import_export::preview_configuration_import,
 			cmds::import_export::import_configuration,

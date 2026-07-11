@@ -2,6 +2,7 @@
 // ABOUTME: Uses unplugin-icons for sun/moon glyphs; no-drag safe for titlebar use.
 import IconClaritySunLine from "~icons/clarity/sun-line";
 import IconClarityMoonLine from "~icons/clarity/moon-line";
+import { useTranslation } from "react-i18next";
 import { useTheme } from "../theme/useTheme";
 
 const buttonClassName =
@@ -9,13 +10,14 @@ const buttonClassName =
 
 export function ThemeToggle() {
 	const { isDark, toggle, error } = useTheme();
+	const { t } = useTranslation();
 
 	return (
 		<div className="flex w-full flex-col gap-1">
 			<button
 				type="button"
 				className={buttonClassName}
-				aria-label={isDark ? "Switch to light theme" : "Switch to dark theme"}
+				aria-label={isDark ? t("theme.switchToLight") : t("theme.switchToDark")}
 				onClick={() => {
 					void toggle();
 				}}
@@ -25,7 +27,7 @@ export function ThemeToggle() {
 				) : (
 					<IconClarityMoonLine className="pointer-events-none size-4 shrink-0" />
 				)}
-				<span>{isDark ? "Light" : "Dark"}</span>
+				<span>{isDark ? t("theme.light") : t("theme.dark")}</span>
 			</button>
 			{error ? (
 				<p className="px-3 text-xs text-danger" role="alert" aria-live="polite">

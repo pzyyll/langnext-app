@@ -1,7 +1,9 @@
 // ABOUTME: Selected provider editor for connection settings and model management.
 // ABOUTME: Coordinates local form state with real provider and model storage IPC.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useNavigate } from "@tanstack/react-router";
+import i18n from "../../i18n";
 import { Button } from "@base-ui/react/button";
 import { Switch } from "@base-ui/react/switch";
 import IconMaterialSymbolsLightEditSquareOutlineSharp from "~icons/material-symbols-light/edit-square-outline-sharp";
@@ -88,27 +90,28 @@ function formatSyncTimestamp(iso: string | null): string | null {
 
 function syncStatusLabel(provider: ProviderInstanceDto, syncPending: boolean): string {
 	if (syncPending) {
-		return "Syncing models…";
+		return i18n.t("models.syncingModels");
 	}
 	switch (provider.modelsSyncStatus) {
 		case "never":
-			return "Never synced";
+			return i18n.t("models.syncNever");
 		case "ok": {
 			const at = formatSyncTimestamp(provider.modelsSyncedAt);
-			return at ? `Last successful sync: ${at}` : "Last sync succeeded";
+			return at ? i18n.t("models.syncOkAt", { at }) : i18n.t("models.syncOk");
 		}
 		case "error": {
 			const code = provider.modelsSyncErrorCode ? ` (${provider.modelsSyncErrorCode})` : "";
 			const at = formatSyncTimestamp(provider.modelsSyncedAt);
-			const lastOk = at ? ` Last successful sync: ${at}.` : "";
-			return `Sync error${code}.${lastOk}`;
+			const lastOk = at ? i18n.t("models.syncErrorLastOk", { at }) : "";
+			return i18n.t("models.syncError", { code, lastOk });
 		}
 		default:
-			return "Sync status unknown";
+			return i18n.t("models.syncUnknown");
 	}
 }
 
 export function ProviderEditor({ providerId }: ProviderEditorProps) {
+	const { t } = useTranslation();
 	const { providers, providersLoading, providersError, upsertProvider, removeProvider, refreshProviders } =
 		useModelsContext();
 	const provider = providers.find((item) => item.id === providerId) ?? null;
@@ -117,7 +120,7 @@ export function ProviderEditor({ providerId }: ProviderEditorProps) {
 		return (
 			<div className="flex flex-1 items-center justify-center p-8">
 				<p className="text-sm text-muted" aria-live="polite">
-					Loading channel…
+					{t("models.loadingChannel")}
 				</p>
 			</div>
 		);
@@ -136,7 +139,7 @@ export function ProviderEditor({ providerId }: ProviderEditorProps) {
 						void refreshProviders();
 					}}
 				>
-					Retry
+					{t("common.retry")}
 				</Button>
 			</div>
 		);
@@ -145,10 +148,8 @@ export function ProviderEditor({ providerId }: ProviderEditorProps) {
 	if (!provider) {
 		return (
 			<div className="flex flex-1 flex-col items-start gap-2 p-8">
-				<h1 className="text-2xl font-bold text-ink">Channel not found</h1>
-				<p className="text-sm text-muted">
-					This channel may have been removed. Select another channel or create a new one.
-				</p>
+				<h1 className="text-2xl font-bold text-ink">{t("models.channelNotFound")}</h1>
+				<p className="text-sm text-muted">{t("models.channelNotFoundHint")}</p>
 			</div>
 		);
 	}
@@ -171,6 +172,7 @@ type ProviderEditorLoadedProps = {
 };
 
 function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: ProviderEditorLoadedProps) {
+	const { t } = useTranslation();
 	const navigate = useNavigate();
 	const toast = useToast();
 	const [baseUrlOverride, setBaseUrlOverride] = useState(provider.baseUrlOverride ?? "");
@@ -180,8 +182,8 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 	const [insecureHttpAcknowledged, setInsecureHttpAcknowledged] = useState(false);
 
 	const [savePending, setSavePending] = useState(false);
-	const [saveError, setSaveError] = useState<string | null>(null);
-	const [saveSuccess, setSaveSuccess] = useState(false);
+	const [, setSaveError] = useState<string | null>(null);
+	const [, setSaveSuccess] = useState(false);
 
 	const [renaming, setRenaming] = useState(false);
 	const [renameValue, setRenameValue] = useState("");
@@ -233,18 +235,21 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 		setConnectionTestIpcError(null);
 	}, []);
 
-	const reloadModels = useCallback(async (id: string) => {
-		setModelsError(null);
-		setModelsLoading(true);
-		try {
-			const list = await listProviderModels(id);
-			setModels(list);
-		} catch (error: unknown) {
-			setModelsError(getIpcErrorMessage(error, "Failed to load models."));
-		} finally {
-			setModelsLoading(false);
-		}
-	}, []);
+	const reloadModels = useCallback(
+		async (id: string) => {
+			setModelsError(null);
+			setModelsLoading(true);
+			try {
+				const list = await listProviderModels(id);
+				setModels(list);
+			} catch (error: unknown) {
+				setModelsError(getIpcErrorMessage(error, t("models.loadModelsFailed")));
+			} finally {
+				setModelsLoading(false);
+			}
+		},
+		[t],
+	);
 
 	useEffect(() => {
 		let cancelled = false;
@@ -261,7 +266,7 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 				}
 			} catch (error: unknown) {
 				if (!cancelled) {
-					setModelsError(getIpcErrorMessage(error, "Failed to load models."));
+					setModelsError(getIpcErrorMessage(error, t("models.loadModelsFailed")));
 				}
 			} finally {
 				if (!cancelled) {
@@ -274,7 +279,7 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 		return () => {
 			cancelled = true;
 		};
-	}, [providerId]);
+	}, [providerId, t]);
 
 	const savedBaseUrl = provider.baseUrlOverride ?? null;
 	const normalizedBaseUrl = normalizeBaseUrl(baseUrlOverride);
@@ -381,7 +386,7 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 			setRenaming(false);
 			setRenameValue("");
 		} catch (error: unknown) {
-			setRenameError(getIpcErrorMessage(error, "Failed to rename channel."));
+			setRenameError(getIpcErrorMessage(error, t("models.toast.renameChannelFailed")));
 		} finally {
 			setRenamePending(false);
 		}
@@ -427,11 +432,11 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 			setSaveSuccess(true);
 			// Clear stale connection-test result after a successful save.
 			clearConnectionTestResult();
-			toast.success({ title: "Channel saved", description: "Connection settings were updated." });
+			toast.success({ title: t("models.toast.channelSaved"), description: t("models.toast.channelSavedDesc") });
 		} catch (error: unknown) {
-			const message = getIpcErrorMessage(error, "Failed to save channel.");
+			const message = getIpcErrorMessage(error, t("models.toast.saveChannelFailed"));
 			setSaveError(message);
-			toast.error({ title: "Save failed", description: message });
+			toast.error({ title: t("models.toast.saveFailed"), description: message });
 		} finally {
 			setSavePending(false);
 		}
@@ -460,9 +465,9 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 			}
 			setConnectionTestResult(result);
 			if (result.ok) {
-				toast.success({ title: "Connection OK", description: result.message });
+				toast.success({ title: t("models.toast.connectionOk"), description: result.message });
 			} else {
-				toast.error({ title: "Connection failed", description: result.message });
+				toast.error({ title: t("models.toast.connectionFailed"), description: result.message });
 			}
 		} catch (error: unknown) {
 			if (
@@ -472,9 +477,9 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 			) {
 				return;
 			}
-			const message = getIpcErrorMessage(error, "Failed to test connection.");
+			const message = getIpcErrorMessage(error, t("models.toast.connectionTestFailedDesc"));
 			setConnectionTestIpcError(message);
-			toast.error({ title: "Connection test failed", description: message });
+			toast.error({ title: t("models.toast.connectionTestFailed"), description: message });
 		} finally {
 			if (connectionTestGeneration.current === generation) {
 				setConnectionTestPending(false);
@@ -497,17 +502,17 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 			setModelsError(null);
 			setModelsLoading(false);
 			if (result.ok) {
-				toast.success({ title: "Synced models", description: result.message });
+				toast.success({ title: t("models.toast.syncedModels"), description: result.message });
 			} else {
 				toast.error({
-					title: "Sync failed",
+					title: t("models.toast.syncFailed"),
 					description: result.errorCode ? `${result.message} (${result.errorCode})` : result.message,
 				});
 			}
 		} catch (error: unknown) {
 			// Preserve displayed models only when IPC itself fails.
-			const message = getIpcErrorMessage(error, "Failed to sync models.");
-			toast.error({ title: "Sync failed", description: message });
+			const message = getIpcErrorMessage(error, t("models.toast.syncFailedDesc"));
+			toast.error({ title: t("models.toast.syncFailed"), description: message });
 		} finally {
 			setSyncPending(false);
 		}
@@ -532,9 +537,9 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 			setModels((current) => current.map((model) => (model.id === modelId ? updated : model)));
 		} catch (error: unknown) {
 			setModels((current) => current.map((model) => (model.id === modelId ? previous : model)));
-			const message = getIpcErrorMessage(error, "Failed to update model.");
+			const message = getIpcErrorMessage(error, t("models.toast.updateModelFailed"));
 			setModelMutationError(message);
-			toast.error({ title: "Update failed", description: message });
+			toast.error({ title: t("models.toast.updateFailed"), description: message });
 		} finally {
 			setPendingModelIds((current) => {
 				const next = new Set(current);
@@ -571,7 +576,7 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 			return true;
 		} catch (error: unknown) {
 			setModels((current) => current.map((m) => (m.id === model.id ? previous : m)));
-			setModelMutationError(getIpcErrorMessage(error, "Failed to update model."));
+			setModelMutationError(getIpcErrorMessage(error, t("models.toast.updateModelFailed")));
 			return false;
 		} finally {
 			setPendingModelIds((current) => {
@@ -637,16 +642,16 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 				await reloadModels(providerId);
 				const firstRejection = results.find((result) => result.status === "rejected");
 				const reason = firstRejection && firstRejection.status === "rejected" ? firstRejection.reason : undefined;
-				const message = getIpcErrorMessage(reason, "Failed to delete some models.");
+				const message = getIpcErrorMessage(reason, t("models.toast.deleteSomeModelsFailed"));
 				setModelMutationError(message);
-				toast.error({ title: "Delete failed", description: message });
+				toast.error({ title: t("models.toast.deleteFailed"), description: message });
 			} else {
 				setSelectedModelIds(new Set());
 				setSelectionMode(false);
 				const count = ids.length;
 				toast.success({
-					title: count === 1 ? "Model deleted" : "Models deleted",
-					description: count === 1 ? "Removed 1 model." : `Removed ${count} models.`,
+					title: count === 1 ? t("models.toast.modelDeleted") : t("models.toast.modelsDeleted"),
+					description: count === 1 ? t("models.toast.removedOne") : t("models.toast.removedMany", { count }),
 				});
 			}
 		} finally {
@@ -665,7 +670,7 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 		try {
 			await deleteProviderInstance(provider.id);
 		} catch (err: unknown) {
-			const error = new Error(getIpcErrorMessage(err, "Failed to delete channel."));
+			const error = new Error(getIpcErrorMessage(err, t("models.toast.deleteChannelFailed")));
 			throw Object.assign(error, { cause: err });
 		}
 		removeProvider(provider.id);
@@ -676,10 +681,10 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 	const tokenDisabled = provider.credentialKind === "none" || credentialAction === "clear";
 	const tokenPlaceholder =
 		credentialAction === "clear"
-			? "Token will be removed on save"
+			? t("models.tokenRemovedOnSave")
 			: provider.hasCredential
-				? "•••••••••••• (stored)"
-				: "Enter API token";
+				? t("models.tokenStored")
+				: t("models.tokenEnter");
 
 	// Only show results that still match the current provider connection version.
 	const visibleConnectionTestResult =
@@ -726,7 +731,7 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 								<Button
 									type="submit"
 									className={iconButtonClassName}
-									aria-label="Save channel name"
+									aria-label={t("models.saveChannelName")}
 									disabled={renamePending || !renameValue.trim()}
 								>
 									<IconMaterialSymbolsLightCheck className="pointer-events-none size-5 shrink-0" />
@@ -734,7 +739,7 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 								<Button
 									type="button"
 									className={iconButtonClassName}
-									aria-label="Cancel rename"
+									aria-label={t("models.cancelRename")}
 									disabled={renamePending}
 									onClick={cancelRename}
 								>
@@ -747,8 +752,8 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 								<Button
 									type="button"
 									className={iconButtonClassName}
-									aria-label="Rename channel"
-									title="Rename channel"
+									aria-label={t("models.renameChannel")}
+									title={t("models.renameChannel")}
 									disabled={renameDisabled}
 									onClick={startRename}
 								>
@@ -778,17 +783,19 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 					) : null}
 					<hr className="mb-4 border-line" />
 					<p className="text-sm text-muted">
-						<span className="mt-1 block text-xs">API Type: {getAdapterLabel(provider.adapterId)}</span>
+						<span className="mt-1 block text-xs">
+							{t("models.apiType", { type: getAdapterLabel(provider.adapterId) })}
+						</span>
 					</p>
 				</header>
 
 				<section className="shadow-frame relative mb-10 border border-line p-6">
-					<h3 className="mb-6 text-xl font-bold text-ink">Connection</h3>
+					<h3 className="mb-6 text-xl font-bold text-ink">{t("models.connection")}</h3>
 					<div className="flex flex-col items-start gap-6 lg:flex-row">
 						<div className="w-full min-w-0 flex-1 space-y-6">
 							<div>
 								<label className="mb-1 block text-sm font-medium text-ink" htmlFor="provider-base-url">
-									Base URL
+									{t("models.baseUrl")}
 								</label>
 								<input
 									id="provider-base-url"
@@ -805,12 +812,14 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 									spellCheck={false}
 									disabled={connectionFormDisabled}
 								/>
-								{defaultBaseUrl ? <p className="mt-1 text-xs text-muted">Default: {defaultBaseUrl}</p> : null}
+								{defaultBaseUrl ? (
+									<p className="mt-1 text-xs text-muted">{t("common.default", { value: defaultBaseUrl })}</p>
+								) : null}
 							</div>
 
 							<div>
 								<label className="mb-1 block text-sm font-medium text-ink" htmlFor="provider-api-token">
-									API Token
+									{t("models.apiToken")}
 								</label>
 								<input
 									id="provider-api-token"
@@ -850,7 +859,7 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 													clearConnectionTestResult();
 												}}
 											>
-												Remove stored token
+												{t("models.resetToken")}
 											</Button>
 										) : (
 											<Button
@@ -864,14 +873,14 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 													clearConnectionTestResult();
 												}}
 											>
-												Keep stored token
+												{t("models.keepStoredToken")}
 											</Button>
 										)}
 									</div>
 								) : null}
 								{credentialRequiresReplace ? (
 									<p className="mt-2 text-sm text-danger" role="alert">
-										Changing the Base URL requires replacing or removing the stored token.
+										{t("models.tokenReplaceRequired")}
 									</p>
 								) : null}
 							</div>
@@ -888,7 +897,7 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 										}}
 										disabled={connectionFormDisabled}
 									/>
-									<span>I understand this non-loopback HTTP endpoint is insecure and confirm using it anyway.</span>
+									<span>{t("models.insecureHttpAck")}</span>
 								</label>
 							) : null}
 						</div>
@@ -898,10 +907,10 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 								className="inline-flex"
 								title={
 									connectionDirty
-										? "Save connection changes before testing or syncing models."
+										? t("models.saveBeforeRemote")
 										: connectionTestPending
-											? "Testing connection…"
-											: "Test the saved connection"
+											? t("models.testingConnection")
+											: t("models.testConnectionTitle")
 								}
 							>
 								<Button
@@ -913,12 +922,12 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 										void handleTestConnection();
 									}}
 								>
-									{connectionTestPending ? "Testing…" : "Test connection"}
+									{connectionTestPending ? t("common.testing") : t("models.testConnection")}
 								</Button>
 							</span>
 							{connectionDirty ? (
 								<p className="text-xs text-muted" id="connection-dirty-help">
-									Save connection changes before testing or syncing models.
+									{t("models.saveBeforeRemote")}
 								</p>
 							) : null}
 							<div aria-live="polite" className="min-h-5">
@@ -937,9 +946,9 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 								) : null}
 							</div>
 							<div className="text-xs text-muted">
-								{credentialAction === "clear" ? <p className="mt-1">Token will be removed on save.</p> : null}
+								{credentialAction === "clear" ? <p className="mt-1">{t("models.tokenRemovedOnSavePeriod")}</p> : null}
 								{credentialAction === "replace" && token.trim() ? (
-									<p className="mt-1">New token will replace the stored value on save.</p>
+									<p className="mt-1">{t("models.tokenReplaceHint")}</p>
 								) : null}
 							</div>
 						</div>
@@ -949,7 +958,7 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 				<section className="shadow-frame border border-line p-6">
 					<div className="mb-6 flex flex-col justify-between gap-4 sm:flex-row sm:items-start">
 						<div>
-							<h3 className="text-xl font-bold text-ink">Models</h3>
+							<h3 className="text-xl font-bold text-ink">{t("models.title")}</h3>
 							<p className="mt-1 text-xs text-muted" aria-live="polite">
 								{syncStatusLabel(provider, syncPending)}
 							</p>
@@ -965,7 +974,7 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 											setDeleteModelsOpen(true);
 										}}
 									>
-										Delete ({selectedModelIds.size})
+										{t("models.deleteSelected", { count: selectedModelIds.size })}
 									</Button>
 									<Button
 										type="button"
@@ -973,7 +982,7 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 										disabled={deleteModelsPending}
 										onClick={exitSelectionMode}
 									>
-										Done
+										{t("common.done")}
 									</Button>
 								</>
 							) : (
@@ -982,10 +991,10 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 										className="inline-flex"
 										title={
 											connectionDirty
-												? "Save connection changes before testing or syncing models."
+												? t("models.saveBeforeRemote")
 												: syncPending
-													? "Syncing models…"
-													: "Fetch remote models using the saved connection"
+													? t("models.syncingModels")
+													: t("models.getModelsTitle")
 										}
 									>
 										<Button
@@ -997,7 +1006,7 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 												void handleSyncModels();
 											}}
 										>
-											{syncPending ? "Syncing…" : "Get models"}
+											{syncPending ? t("common.syncing") : t("models.getModels")}
 										</Button>
 									</span>
 									<Button
@@ -1007,7 +1016,7 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 											setAddModelOpen(true);
 										}}
 									>
-										+ Add model
+										{t("models.addModel")}
 									</Button>
 									<Button
 										type="button"
@@ -1015,7 +1024,7 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 										disabled={models.length === 0 || modelsLoading || Boolean(modelsError) || syncPending}
 										onClick={enterSelectionMode}
 									>
-										Select
+										{t("common.select")}
 									</Button>
 								</>
 							)}
@@ -1024,7 +1033,7 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 
 					{modelsLoading ? (
 						<p className="text-sm text-muted" aria-live="polite">
-							Loading models…
+							{t("models.loadingModels")}
 						</p>
 					) : null}
 
@@ -1038,7 +1047,7 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 									void reloadModels(providerId);
 								}}
 							>
-								Retry
+								{t("common.retry")}
 							</Button>
 						</div>
 					) : null}
@@ -1070,8 +1079,8 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 				<Button
 					type="button"
 					className={`${dangerIconButtonClassName} mr-auto`}
-					aria-label="Delete channel"
-					title="Delete channel"
+					aria-label={t("models.deleteChannel")}
+					title={t("models.deleteChannel")}
 					disabled={connectionFormDisabled}
 					onClick={() => {
 						setDeleteOpen(true);
@@ -1086,7 +1095,7 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 					disabled={connectionFormDisabled}
 					onClick={resetConnectionForm}
 				>
-					Cancel
+					{t("common.cancel")}
 				</Button>
 				<Button
 					type="button"
@@ -1097,7 +1106,13 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 						void handleSave();
 					}}
 				>
-					{savePending ? "Saving…" : syncPending ? "Syncing…" : connectionTestPending ? "Testing…" : "Save"}
+					{savePending
+						? t("common.saving")
+						: syncPending
+							? t("common.syncing")
+							: connectionTestPending
+								? t("common.testing")
+								: t("common.save")}
 				</Button>
 			</footer>
 
@@ -1113,15 +1128,10 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 			<ConfirmDialog
 				open={deleteOpen}
 				onOpenChange={setDeleteOpen}
-				title="Delete channel"
-				description={
-					<>
-						Delete <span className="font-bold text-ink">{provider.displayName}</span> and all its models? This cannot be
-						undone.
-					</>
-				}
-				confirmText="Delete"
-				pendingText="Deleting…"
+				title={t("models.deleteChannel")}
+				description={t("models.deleteChannelConfirm", { name: provider.displayName })}
+				confirmText={t("common.delete")}
+				pendingText={t("common.deleting")}
 				danger
 				onConfirm={handleDelete}
 			/>
@@ -1129,15 +1139,10 @@ function ProviderEditorLoaded({ provider, upsertProvider, removeProvider }: Prov
 			<ConfirmDialog
 				open={deleteModelsOpen}
 				onOpenChange={setDeleteModelsOpen}
-				title="Delete models"
-				description={
-					<>
-						Delete <span className="font-bold text-ink">{selectedModelIds.size}</span> selected model
-						{selectedModelIds.size === 1 ? "" : "s"}? This cannot be undone.
-					</>
-				}
-				confirmText="Delete"
-				pendingText="Deleting…"
+				title={t("models.deleteModels")}
+				description={t("models.deleteModelsConfirm", { count: selectedModelIds.size })}
+				confirmText={t("common.delete")}
+				pendingText={t("common.deleting")}
 				danger
 				onConfirm={handleDeleteModels}
 			/>

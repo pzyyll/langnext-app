@@ -5,6 +5,7 @@ import { Link, Outlet, useNavigate, useParams } from "@tanstack/react-router";
 import { Button } from "@base-ui/react/button";
 import { DragDropProvider } from "@dnd-kit/react";
 import { isSortable, useSortable } from "@dnd-kit/react/sortable";
+import { useTranslation } from "react-i18next";
 import { listProviderInstances, reorderProviderInstances } from "../../storage/client";
 import { getIpcErrorMessage } from "../../storage/errors";
 import type { ProviderInstanceDto } from "../../storage/types";
@@ -41,6 +42,7 @@ function SortableChannelItem({
 	onEnterComplete: (id: string) => void;
 	onExitComplete: (id: string) => void;
 }) {
+	const { t } = useTranslation();
 	const { ref, handleRef } = useSortable({
 		id: provider.id,
 		index,
@@ -108,7 +110,7 @@ function SortableChannelItem({
 			<button
 				ref={handleRef}
 				type="button"
-				aria-label={`Reorder ${provider.displayName}`}
+				aria-label={t("models.reorderAria", { name: provider.displayName })}
 				className="w-6 shrink-0 cursor-grab text-muted hover:bg-surface-2 hover:text-ink active:cursor-grabbing"
 			>
 				<span aria-hidden="true">⋮⋮</span>
@@ -141,6 +143,7 @@ function SortableChannelItem({
 }
 
 export function ModelsLayout() {
+	const { t } = useTranslation();
 	const navigate = useNavigate();
 	const params = useParams({ strict: false }) as { providerId?: string };
 	const selectedId = params.providerId;
@@ -165,11 +168,11 @@ export function ModelsLayout() {
 			setExitingProviderIds(new Set());
 			setEnteringProviderIds(new Set());
 		} catch (error: unknown) {
-			setProvidersError(getIpcErrorMessage(error, "Failed to load channels."));
+			setProvidersError(getIpcErrorMessage(error, t("models.loadChannelsFailed")));
 		} finally {
 			setProvidersLoading(false);
 		}
-	}, []);
+	}, [t]);
 
 	useEffect(() => {
 		let cancelled = false;
@@ -186,7 +189,7 @@ export function ModelsLayout() {
 				}
 			} catch (error: unknown) {
 				if (!cancelled) {
-					setProvidersError(getIpcErrorMessage(error, "Failed to load channels."));
+					setProvidersError(getIpcErrorMessage(error, t("models.loadChannelsFailed")));
 				}
 			} finally {
 				if (!cancelled) {
@@ -199,7 +202,7 @@ export function ModelsLayout() {
 		return () => {
 			cancelled = true;
 		};
-	}, []);
+	}, [t]);
 
 	// When the Models tab opens with channels already configured but none selected,
 	// default to the first non-exiting channel so the editor is immediately visible.
@@ -302,11 +305,11 @@ export function ModelsLayout() {
 			try {
 				await reorderProviderInstances(persistIds);
 			} catch (error: unknown) {
-				setProvidersError(getIpcErrorMessage(error, "Failed to reorder channels."));
+				setProvidersError(getIpcErrorMessage(error, t("models.reorderChannelsFailed")));
 				await refreshProviders();
 			}
 		},
-		[exitingProviderIds, refreshProviders],
+		[exitingProviderIds, refreshProviders, t],
 	);
 
 	const contextValue = useMemo(
@@ -328,12 +331,12 @@ export function ModelsLayout() {
 				<aside className="flex w-48 shrink-0 flex-col border-r border-line bg-surface">
 					<div className="flex min-h-0 flex-1 flex-col p-4">
 						<div className="shrink-0 mb-4">
-							<h2 className="text-xl font-bold text-ink">Channels</h2>
+							<h2 className="text-xl font-bold text-ink">{t("models.channels")}</h2>
 						</div>
 
 						{providersLoading ? (
 							<p className="text-sm text-muted" aria-live="polite">
-								Loading channels…
+								{t("models.loadingChannels")}
 							</p>
 						) : null}
 
@@ -347,13 +350,13 @@ export function ModelsLayout() {
 										void refreshProviders();
 									}}
 								>
-									Retry
+									{t("common.retry")}
 								</Button>
 							</div>
 						) : null}
 
 						{!providersLoading && !providersError && providers.length === 0 ? (
-							<p className="text-sm text-muted">No channels yet. Use + to add one.</p>
+							<p className="text-sm text-muted">{t("models.emptyChannels")}</p>
 						) : null}
 
 						{!providersLoading && !providersError && providers.length > 0 ? (
@@ -396,7 +399,7 @@ export function ModelsLayout() {
 						<Button
 							type="button"
 							className={`${outlineButtonClassName} w-full bg-surface-2 hover:not-data-disabled:bg-surface-3`}
-							aria-label="Add channel"
+							aria-label={t("models.addChannelAria")}
 							onClick={() => {
 								setAddOpen(true);
 							}}

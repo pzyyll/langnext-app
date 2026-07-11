@@ -26,3 +26,9 @@ pub async fn set_app_theme(state: State<'_, AppState>, theme: Option<String>) ->
 	let settings = state.settings.clone();
 	run_blocking("set_app_theme", move || settings.set_theme(theme)).await
 }
+
+#[tauri::command]
+pub async fn set_app_ui_language(state: State<'_, AppState>, ui_language: String) -> Result<AppSettingsDto, IpcError> {
+	let settings = state.settings.clone();
+	run_blocking("set_app_ui_language", move || settings.set_ui_language(ui_language)).await
+}

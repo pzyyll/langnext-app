@@ -95,6 +95,10 @@ export async function setAppTheme(theme: "light" | "dark" | null): Promise<AppSe
 	return invoke("set_app_theme", { theme });
 }
 
+export async function setAppUiLanguage(uiLanguage: string): Promise<AppSettingsDto> {
+	return invoke("set_app_ui_language", { uiLanguage });
+}
+
 export async function exportConfiguration(): Promise<ConfigurationExport> {
 	return invoke("export_configuration");
 }

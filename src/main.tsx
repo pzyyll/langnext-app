@@ -1,5 +1,5 @@
 // ABOUTME: Frontend entry point that mounts the TanStack Router app tree.
-// ABOUTME: Completes storage bootstrap before mounting React in Tauri.
+// ABOUTME: Completes storage bootstrap and i18n init before mounting React.
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { RouterProvider, createRouter } from "@tanstack/react-router";
@@ -34,6 +34,7 @@ declare module "@tanstack/react-router" {
 
 async function mount() {
 	// Authoritative SQLite reconciliation in Tauri; cache-only in browser dev.
+	// Also initializes i18n from AppSettings.uiLanguage / local cache.
 	await bootstrapStorage();
 
 	const rootElement = document.getElementById("root")!;

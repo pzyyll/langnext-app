@@ -3,6 +3,7 @@
 import { useMemo, useEffect, useRef, useState } from "react";
 import { Button } from "@base-ui/react/button";
 import { Switch } from "@base-ui/react/switch";
+import { useTranslation } from "react-i18next";
 import IconMaterialSymbolsLightEditSquareOutlineSharp from "~icons/material-symbols-light/edit-square-outline-sharp";
 import IconMaterialSymbolsLightCheck from "~icons/material-symbols-light/check";
 import IconMaterialSymbolsLightClose from "~icons/material-symbols-light/close";
@@ -66,6 +67,7 @@ export function ModelsTable({
 	onToggleSelect,
 	onToggleSelectAll,
 }: ModelsTableProps) {
+	const { t } = useTranslation();
 	const [editingId, setEditingId] = useState<string | null>(null);
 	const [editingValue, setEditingValue] = useState("");
 	const inputRef = useRef<HTMLInputElement>(null);
@@ -94,11 +96,10 @@ export function ModelsTable({
 	}
 
 	if (models.length === 0) {
-		return <p className="text-sm text-muted">No models for this channel yet.</p>;
+		return <p className="text-sm text-muted">{t("models.noModels")}</p>;
 	}
 
-	const allSelected =
-		filteredModels.length > 0 && filteredModels.every((model) => selectedModelIds.has(model.id));
+	const allSelected = filteredModels.length > 0 && filteredModels.every((model) => selectedModelIds.has(model.id));
 
 	function startRename(model: ProviderModelDto) {
 		setEditingId(model.id);
@@ -127,13 +128,13 @@ export function ModelsTable({
 			<div className="flex flex-col gap-3 sm:flex-row sm:items-center">
 				<div className="min-w-0 flex-1">
 					<label className="sr-only" htmlFor="models-search">
-						Search models
+						{t("models.searchModels")}
 					</label>
 					<input
 						id="models-search"
 						type="search"
 						className={inputClassName}
-						placeholder="Search model ID…"
+						placeholder={t("models.searchPlaceholder")}
 						value={searchQuery}
 						spellCheck={false}
 						autoComplete="off"
@@ -144,7 +145,7 @@ export function ModelsTable({
 				</div>
 				<div className="w-full sm:w-40">
 					<label className="sr-only" htmlFor="models-enabled-filter">
-						Filter by enabled status
+						{t("models.filterEnabled")}
 					</label>
 					<select
 						id="models-enabled-filter"
@@ -154,15 +155,15 @@ export function ModelsTable({
 							handleEnabledFilterChange(event.currentTarget.value);
 						}}
 					>
-						<option value="all">All</option>
-						<option value="enabled">Enabled</option>
-						<option value="disabled">Disabled</option>
+						<option value="all">{t("common.all")}</option>
+						<option value="enabled">{t("common.enabled")}</option>
+						<option value="disabled">{t("common.disabled")}</option>
 					</select>
 				</div>
 			</div>
 
 			{filteredModels.length === 0 ? (
-				<p className="text-sm text-muted">No models match the current search and filters.</p>
+				<p className="text-sm text-muted">{t("models.noModelsMatch")}</p>
 			) : (
 				<div className="overflow-x-auto">
 					<table className="w-full min-w-md text-left">
@@ -174,7 +175,7 @@ export function ModelsTable({
 											type="checkbox"
 											className={checkboxClassName}
 											checked={allSelected}
-											aria-label="Select all models"
+											aria-label={t("models.selectAllModels")}
 											onChange={(event) => {
 												onToggleSelectAll?.(
 													event.currentTarget.checked,
@@ -184,9 +185,9 @@ export function ModelsTable({
 										/>
 									</th>
 								) : null}
-								<th className="pb-2 font-semibold">Model ({filteredModels.length})</th>
-								<th className="pb-2 text-center font-semibold">Display Name</th>
-								<th className="pb-2 text-right font-semibold">Enabled</th>
+								<th className="pb-2 font-semibold">{t("models.modelCount", { count: filteredModels.length })}</th>
+								<th className="pb-2 text-center font-semibold">{t("models.displayNameCol")}</th>
+								<th className="pb-2 text-right font-semibold">{t("models.enabledCol")}</th>
 							</tr>
 						</thead>
 						<tbody className="divide-y divide-line/30">
@@ -203,7 +204,7 @@ export function ModelsTable({
 													className={checkboxClassName}
 													checked={selectedModelIds.has(model.id)}
 													disabled={pending}
-													aria-label={`Select ${model.modelKey}`}
+													aria-label={t("models.selectModel", { name: model.modelKey })}
 													onChange={() => {
 														onToggleSelect?.(model.id);
 													}}
@@ -237,13 +238,13 @@ export function ModelsTable({
 														}}
 														maxLength={200}
 														spellCheck={false}
-														placeholder="Display name"
+														placeholder={t("models.displayNamePlaceholder")}
 														disabled={pending}
 													/>
 													<Button
 														type="submit"
 														className={iconButtonClassName}
-														aria-label="Save display name"
+														aria-label={t("models.saveDisplayName")}
 														disabled={pending}
 													>
 														<IconMaterialSymbolsLightCheck className="pointer-events-none size-5 shrink-0" />
@@ -251,7 +252,7 @@ export function ModelsTable({
 													<Button
 														type="button"
 														className={iconButtonClassName}
-														aria-label="Cancel rename"
+														aria-label={t("models.cancelRename")}
 														disabled={pending}
 														onClick={cancelRename}
 													>
@@ -265,8 +266,8 @@ export function ModelsTable({
 														<Button
 															type="button"
 															className={iconButtonClassName}
-															aria-label="Edit display name"
-															title="Edit display name"
+															aria-label={t("models.editDisplayName")}
+															title={t("models.editDisplayName")}
 															disabled={pending}
 															onClick={() => {
 																startRename(model);

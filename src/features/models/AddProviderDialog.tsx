@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Button } from "@base-ui/react/button";
 import { Dialog } from "@base-ui/react/dialog";
+import { useTranslation } from "react-i18next";
 import {
 	checkboxClassName,
 	dialogBackdropClassName,
@@ -25,15 +26,19 @@ export type AddProviderDialogProps = {
 };
 
 export function AddProviderDialog({ open, onOpenChange, onCreated }: AddProviderDialogProps) {
+	const { t } = useTranslation();
+
 	return (
 		<Dialog.Root open={open} onOpenChange={onOpenChange}>
 			<Dialog.Portal>
 				<Dialog.Backdrop className={dialogBackdropClassName} />
 				<Dialog.Popup className={`${dialogPopupClassName} max-h-[min(90dvh,40rem)] w-md overflow-y-auto`}>
 					<div className="flex flex-col gap-1">
-						<Dialog.Title className="text-base leading-6 font-bold text-ink">Add channel</Dialog.Title>
+						<Dialog.Title className="text-base leading-6 font-bold text-ink">
+							{t("models.addChannel.title")}
+						</Dialog.Title>
 						<Dialog.Description className="text-sm leading-5 text-muted">
-							Create a provider instance. Credentials are stored only in the secure vault.
+							{t("models.addChannel.description")}
 						</Dialog.Description>
 					</div>
 					{open ? (
@@ -55,6 +60,7 @@ type AddProviderFormProps = {
 };
 
 function AddProviderForm({ onCreated }: AddProviderFormProps) {
+	const { t } = useTranslation();
 	const toast = useToast();
 	const [displayName, setDisplayName] = useState("");
 	const [adapterId, setAdapterId] = useState(ADAPTER_OPTIONS[0]?.id ?? "openai-compatible");
@@ -99,12 +105,12 @@ function AddProviderForm({ onCreated }: AddProviderFormProps) {
 				proxyMode: "inherit",
 				insecureHttpConfirmedAt: null,
 			});
-			toast.success({ title: "Channel created", description: created.displayName });
+			toast.success({ title: t("models.toast.channelCreated"), description: created.displayName });
 			onCreated(created);
 		} catch (err: unknown) {
-			const message = getIpcErrorMessage(err, "Failed to create channel.");
+			const message = getIpcErrorMessage(err, t("models.toast.createChannelFailed"));
 			setError(message);
-			toast.error({ title: "Create failed", description: message });
+			toast.error({ title: t("models.toast.createFailed"), description: message });
 		} finally {
 			setPending(false);
 		}
@@ -114,7 +120,7 @@ function AddProviderForm({ onCreated }: AddProviderFormProps) {
 		<form className="flex flex-col gap-3" onSubmit={(event) => void handleSubmit(event)}>
 			<div className="flex flex-col gap-1">
 				<label className="text-sm font-medium text-ink" htmlFor="add-provider-name">
-					Display name
+					{t("models.displayName")}
 				</label>
 				<input
 					id="add-provider-name"
@@ -132,7 +138,7 @@ function AddProviderForm({ onCreated }: AddProviderFormProps) {
 
 			<div className="flex flex-col gap-1">
 				<label className="text-sm font-medium text-ink" htmlFor="add-provider-adapter">
-					API Type
+					{t("models.apiTypeLabel")}
 				</label>
 				<select
 					id="add-provider-adapter"
@@ -153,7 +159,7 @@ function AddProviderForm({ onCreated }: AddProviderFormProps) {
 
 			<div className="flex flex-col gap-1">
 				<label className="text-sm font-medium text-ink" htmlFor="add-provider-base-url">
-					Base URL override
+					{t("models.baseUrlOverride")}
 				</label>
 				<input
 					id="add-provider-base-url"
@@ -162,16 +168,16 @@ function AddProviderForm({ onCreated }: AddProviderFormProps) {
 					onChange={(event) => {
 						setBaseUrlOverride(event.currentTarget.value);
 					}}
-					placeholder={defaultBaseUrl ?? "Optional"}
+					placeholder={defaultBaseUrl ?? t("common.optional")}
 					spellCheck={false}
 					disabled={pending}
 				/>
-				{defaultBaseUrl ? <p className="text-xs text-muted">Default: {defaultBaseUrl}</p> : null}
+				{defaultBaseUrl ? <p className="text-xs text-muted">{t("common.default", { value: defaultBaseUrl })}</p> : null}
 			</div>
 
 			<div className="flex flex-col gap-1">
 				<label className="text-sm font-medium text-ink" htmlFor="add-provider-credential-kind">
-					Credential kind
+					{t("models.credentialKind")}
 				</label>
 				<select
 					id="add-provider-credential-kind"
@@ -182,15 +188,15 @@ function AddProviderForm({ onCreated }: AddProviderFormProps) {
 					}}
 					disabled={pending}
 				>
-					<option value="api_key">API key</option>
-					<option value="bearer">Bearer</option>
-					<option value="none">None</option>
+					<option value="api_key">{t("models.credentialApiKey")}</option>
+					<option value="bearer">{t("models.credentialBearer")}</option>
+					<option value="none">{t("models.credentialNone")}</option>
 				</select>
 			</div>
 
 			<div className="flex flex-col gap-1">
 				<label className="text-sm font-medium text-ink" htmlFor="add-provider-token">
-					API token
+					{t("models.apiToken")}
 				</label>
 				<input
 					id="add-provider-token"
@@ -200,7 +206,7 @@ function AddProviderForm({ onCreated }: AddProviderFormProps) {
 					onChange={(event) => {
 						setToken(event.currentTarget.value);
 					}}
-					placeholder={credentialKind === "none" ? "Not used" : "Optional"}
+					placeholder={credentialKind === "none" ? t("models.addChannel.tokenNotUsed") : t("common.optional")}
 					spellCheck={false}
 					autoComplete="off"
 					disabled={pending || credentialKind === "none"}
@@ -217,7 +223,7 @@ function AddProviderForm({ onCreated }: AddProviderFormProps) {
 					}}
 					disabled={pending}
 				/>
-				Channel enabled
+				{t("models.channelEnabled")}
 			</label>
 
 			{error ? (
@@ -228,10 +234,10 @@ function AddProviderForm({ onCreated }: AddProviderFormProps) {
 
 			<div className="flex justify-end gap-3 pt-1">
 				<Dialog.Close className={outlineButtonClassName} disabled={pending}>
-					Cancel
+					{t("common.cancel")}
 				</Dialog.Close>
 				<Button type="submit" className={primaryButtonClassName} disabled={!canSubmit} focusableWhenDisabled>
-					{pending ? "Creating…" : "Create"}
+					{pending ? t("common.creating") : t("models.addChannel.create")}
 				</Button>
 			</div>
 		</form>

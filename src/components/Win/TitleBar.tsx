@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Button } from "@base-ui/react/button";
+import { useTranslation } from "react-i18next";
 import IconSvgsLnb from "~icons/svgs/lnb";
 import IconMaterialSymbolsLightClarifyOutlineSharp from "~icons/material-symbols-light/clarify-outline-sharp";
 import IconClarityMinusLine from "~icons/clarity/minus-line";
@@ -45,6 +46,7 @@ export function TitleBar({
 	className = "",
 	leading,
 }: TitleBarProps) {
+	const { t } = useTranslation();
 	const [isMaximized, setIsMaximized] = useState(false);
 	const appWindow = useMemo(() => getCurrentWindow(), []);
 	const snapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -118,7 +120,7 @@ export function TitleBar({
 					<Button
 						type="button"
 						className={sidebarToggleClassName}
-						aria-label={sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
+						aria-label={sidebarOpen ? t("titlebar.collapseSidebar") : t("titlebar.expandSidebar")}
 						aria-pressed={sidebarOpen}
 						onClick={onSidebarToggle}
 					>
@@ -150,7 +152,7 @@ export function TitleBar({
 						type="button"
 						id="titlebar-minimize"
 						className={controlButtonClassName}
-						aria-label="Minimize"
+						aria-label={t("titlebar.minimize")}
 						onClick={() => void appWindow.minimize()}
 					>
 						<IconClarityMinusLine className="pointer-events-none size-4" />
@@ -162,7 +164,7 @@ export function TitleBar({
 						type="button"
 						id="titlebar-maximize"
 						className={controlButtonClassName}
-						aria-label={isMaximized ? "Restore" : "Maximize"}
+						aria-label={isMaximized ? t("titlebar.restore") : t("titlebar.maximize")}
 						onClick={onToggleMaximize}
 						onMouseEnter={onMaximizeEnter}
 						onMouseLeave={clearSnapTimer}
@@ -180,7 +182,7 @@ export function TitleBar({
 						type="button"
 						id="titlebar-close"
 						className={closeButtonClassName}
-						aria-label="Close"
+						aria-label={t("titlebar.close")}
 						onClick={() => void appWindow.close()}
 					>
 						<IconClarityCloseLine className="pointer-events-none size-4 group-hover:text-danger-ink group-active:text-danger-ink" />
