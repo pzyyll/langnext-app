@@ -53,6 +53,7 @@ pub fn run() {
 			cmds::models::save_manual_model,
 			cmds::models::set_model_enabled,
 			cmds::models::set_model_adapter_id,
+			cmds::models::update_model_config,
 			cmds::models::delete_provider_model,
 			cmds::models::delete_provider_models,
 			cmds::models::test_provider_connection,

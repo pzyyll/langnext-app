@@ -1,173 +1,173 @@
 ---
 name: LangNext App
 colors:
-  surface: '#ffffff'
-  surface-dim: '#e4e4e4'
-  surface-bright: '#ffffff'
-  surface-container-lowest: '#ffffff'
-  surface-container-low: '#f3f3f3'
-  surface-container: '#f3f3f3'
-  surface-container-high: '#e4e4e4'
-  surface-container-highest: '#e4e4e4'
-  on-surface: '#161616'
-  on-surface-variant: '#555555'
-  inverse-surface: '#121212'
-  inverse-on-surface: '#f8f8f8'
-  outline: '#161616'
-  outline-variant: '#e4e4e4'
-  surface-tint: '#0074ca'
-  primary: '#161616'
-  on-primary: '#ffffff'
-  primary-container: '#161616'
-  on-primary-container: '#ffffff'
-  inverse-primary: '#59aaf8'
-  secondary: '#555555'
-  on-secondary: '#ffffff'
-  secondary-container: '#f3f3f3'
-  on-secondary-container: '#161616'
-  tertiary: '#0074ca'
-  on-tertiary: '#ffffff'
-  tertiary-container: '#0074ca'
-  on-tertiary-container: '#ffffff'
-  error: '#cc272e'
-  on-error: '#ffffff'
-  error-container: '#cc272e'
-  on-error-container: '#ffffff'
-  primary-fixed: '#e4e4e4'
-  primary-fixed-dim: '#555555'
-  on-primary-fixed: '#161616'
-  on-primary-fixed-variant: '#555555'
-  secondary-fixed: '#f3f3f3'
-  secondary-fixed-dim: '#e4e4e4'
-  on-secondary-fixed: '#161616'
-  on-secondary-fixed-variant: '#555555'
-  tertiary-fixed: '#59aaf8'
-  tertiary-fixed-dim: '#0074ca'
-  on-tertiary-fixed: '#ffffff'
-  on-tertiary-fixed-variant: '#ffffff'
-  background: '#ffffff'
-  on-background: '#161616'
-  surface-variant: '#f3f3f3'
+  surface: "#ffffff"
+  surface-dim: "#e4e4e4"
+  surface-bright: "#ffffff"
+  surface-container-lowest: "#ffffff"
+  surface-container-low: "#f3f3f3"
+  surface-container: "#f3f3f3"
+  surface-container-high: "#e4e4e4"
+  surface-container-highest: "#e4e4e4"
+  on-surface: "#161616"
+  on-surface-variant: "#555555"
+  inverse-surface: "#121212"
+  inverse-on-surface: "#f8f8f8"
+  outline: "#161616"
+  outline-variant: "#e4e4e4"
+  surface-tint: "#0074ca"
+  primary: "#161616"
+  on-primary: "#ffffff"
+  primary-container: "#161616"
+  on-primary-container: "#ffffff"
+  inverse-primary: "#59aaf8"
+  secondary: "#555555"
+  on-secondary: "#ffffff"
+  secondary-container: "#f3f3f3"
+  on-secondary-container: "#161616"
+  tertiary: "#0074ca"
+  on-tertiary: "#ffffff"
+  tertiary-container: "#0074ca"
+  on-tertiary-container: "#ffffff"
+  error: "#cc272e"
+  on-error: "#ffffff"
+  error-container: "#cc272e"
+  on-error-container: "#ffffff"
+  primary-fixed: "#e4e4e4"
+  primary-fixed-dim: "#555555"
+  on-primary-fixed: "#161616"
+  on-primary-fixed-variant: "#555555"
+  secondary-fixed: "#f3f3f3"
+  secondary-fixed-dim: "#e4e4e4"
+  on-secondary-fixed: "#161616"
+  on-secondary-fixed-variant: "#555555"
+  tertiary-fixed: "#59aaf8"
+  tertiary-fixed-dim: "#0074ca"
+  on-tertiary-fixed: "#ffffff"
+  on-tertiary-fixed-variant: "#ffffff"
+  background: "#ffffff"
+  on-background: "#161616"
+  surface-variant: "#f3f3f3"
   # Project aliases (map to M3 roles at runtime)
-  surface-2: '#f3f3f3'
-  surface-3: '#e4e4e4'
-  neutral: '#555555'
-  line: '#161616'
-  code: '#f2f2f2'
-  disabled: '#717171'
-  overlay: '#00000033'
-  shadow: '#0000001f'
+  surface-2: "#f3f3f3"
+  surface-3: "#e4e4e4"
+  neutral: "#555555"
+  line: "#161616"
+  code: "#f2f2f2"
+  disabled: "#717171"
+  overlay: "#00000033"
+  shadow: "#0000001f"
   # Dark theme counterparts ([data-theme="dark"])
-  surface-dark: '#141313'
-  surface-dim-dark: '#141313'
-  surface-bright-dark: '#3a3939'
-  surface-container-lowest-dark: '#0e0e0e'
-  surface-container-low-dark: '#1c1b1b'
-  surface-container-dark: '#201f1f'
-  surface-container-high-dark: '#2b2a2a'
-  surface-container-highest-dark: '#353434'
-  on-surface-dark: '#e5e2e1'
-  on-surface-variant-dark: '#c4c7c7'
-  inverse-surface-dark: '#e5e2e1'
-  inverse-on-surface-dark: '#313030'
-  outline-dark: '#8e9192'
-  outline-variant-dark: '#444748'
-  surface-tint-dark: '#c8c6c5'
-  primary-dark: '#c8c6c5'
-  on-primary-dark: '#313030'
-  primary-container-dark: '#161616'
-  on-primary-container-dark: '#817f7f'
-  inverse-primary-dark: '#5f5e5e'
-  secondary-dark: '#c8c6c6'
-  on-secondary-dark: '#303030'
-  secondary-container-dark: '#464747'
-  on-secondary-container-dark: '#b6b5b4'
-  tertiary-dark: '#a2c9ff'
-  on-tertiary-dark: '#00315b'
-  tertiary-container-dark: '#00172f'
-  on-tertiary-container-dark: '#2783d9'
-  error-dark: '#ffb4ab'
-  on-error-dark: '#690005'
-  error-container-dark: '#93000a'
-  on-error-container-dark: '#ffdad6'
-  background-dark: '#141313'
-  on-background-dark: '#e5e2e1'
-  surface-variant-dark: '#353434'
-  surface-2-dark: '#1c1b1b'
-  surface-3-dark: '#2b2a2a'
-  neutral-dark: '#c4c7c7'
-  line-dark: '#8e9192'
-  code-dark: '#292929'
-  disabled-dark: '#8a8a8a'
-  overlay-dark: '#00000080'
-  shadow-dark: 'transparent'
+  surface-dark: "#141313"
+  surface-dim-dark: "#141313"
+  surface-bright-dark: "#3a3939"
+  surface-container-lowest-dark: "#0e0e0e"
+  surface-container-low-dark: "#1c1b1b"
+  surface-container-dark: "#201f1f"
+  surface-container-high-dark: "#2b2a2a"
+  surface-container-highest-dark: "#353434"
+  on-surface-dark: "#e5e2e1"
+  on-surface-variant-dark: "#c4c7c7"
+  inverse-surface-dark: "#e5e2e1"
+  inverse-on-surface-dark: "#313030"
+  outline-dark: "#8e9192"
+  outline-variant-dark: "#444748"
+  surface-tint-dark: "#c8c6c5"
+  primary-dark: "#c8c6c5"
+  on-primary-dark: "#313030"
+  primary-container-dark: "#161616"
+  on-primary-container-dark: "#817f7f"
+  inverse-primary-dark: "#5f5e5e"
+  secondary-dark: "#c8c6c6"
+  on-secondary-dark: "#303030"
+  secondary-container-dark: "#464747"
+  on-secondary-container-dark: "#b6b5b4"
+  tertiary-dark: "#a2c9ff"
+  on-tertiary-dark: "#00315b"
+  tertiary-container-dark: "#00172f"
+  on-tertiary-container-dark: "#2783d9"
+  error-dark: "#ffb4ab"
+  on-error-dark: "#690005"
+  error-container-dark: "#93000a"
+  on-error-container-dark: "#ffdad6"
+  background-dark: "#141313"
+  on-background-dark: "#e5e2e1"
+  surface-variant-dark: "#353434"
+  surface-2-dark: "#1c1b1b"
+  surface-3-dark: "#2b2a2a"
+  neutral-dark: "#c4c7c7"
+  line-dark: "#8e9192"
+  code-dark: "#292929"
+  disabled-dark: "#8a8a8a"
+  overlay-dark: "#00000080"
+  shadow-dark: "transparent"
 typography:
   headline-display:
     fontFamily: system-ui
     fontSize: 30px
-    fontWeight: '700'
+    fontWeight: "700"
     lineHeight: 36px
-    letterSpacing: '0'
+    letterSpacing: "0"
   headline-md:
     fontFamily: system-ui
     fontSize: 24px
-    fontWeight: '700'
+    fontWeight: "700"
     lineHeight: 32px
-    letterSpacing: '0'
+    letterSpacing: "0"
   headline-sm:
     fontFamily: system-ui
     fontSize: 20px
-    fontWeight: '700'
+    fontWeight: "700"
     lineHeight: 28px
-    letterSpacing: '0'
+    letterSpacing: "0"
   title-dialog:
     fontFamily: system-ui
     fontSize: 16px
-    fontWeight: '700'
+    fontWeight: "700"
     lineHeight: 24px
-    letterSpacing: '0'
+    letterSpacing: "0"
   body-md:
     fontFamily: system-ui
     fontSize: 14px
-    fontWeight: '400'
+    fontWeight: "400"
     lineHeight: 24px
-    letterSpacing: '0'
+    letterSpacing: "0"
   body-tight:
     fontFamily: system-ui
     fontSize: 14px
-    fontWeight: '400'
+    fontWeight: "400"
     lineHeight: 20px
-    letterSpacing: '0'
+    letterSpacing: "0"
   body-bold:
     fontFamily: system-ui
     fontSize: 14px
-    fontWeight: '700'
+    fontWeight: "700"
     lineHeight: 20px
-    letterSpacing: '0'
+    letterSpacing: "0"
   label-sm:
     fontFamily: system-ui
     fontSize: 12px
-    fontWeight: '400'
+    fontWeight: "400"
     lineHeight: 16px
     letterSpacing: 0.12em
   table-header:
     fontFamily: system-ui
     fontSize: 10px
-    fontWeight: '600'
+    fontWeight: "600"
     lineHeight: 14px
     letterSpacing: 0.05em
   mono-key:
     fontFamily: ui-monospace
     fontSize: 14px
-    fontWeight: '700'
+    fontWeight: "700"
     lineHeight: 20px
-    letterSpacing: '0'
+    letterSpacing: "0"
   code-inline:
     fontFamily: ui-monospace
     fontSize: 12px
-    fontWeight: '400'
+    fontWeight: "400"
     lineHeight: 16px
-    letterSpacing: '0'
+    letterSpacing: "0"
 rounded:
   sm: 0
   DEFAULT: 0
@@ -197,66 +197,75 @@ LangNext App is a **desktop utility shell** (Tauri + React) with a sharp, outlin
 
 The mood is **calm, dense, and precise**: generous page gutters but compact 32px control heights, and a hard offset “frame shadow” (`0.25rem 0.25rem 0`) that makes cards, dialogs, and toasts feel like cut-paper panels on the canvas. Color is used sparingly — a cool **tertiary blue** for checked switches and status accents, and **error red** for destructive actions — so hierarchy stays typographic and structural rather than chromatic.
 
+### Taste Profile
+
+- **Density: 7/10 — Daily App Dense.** Compact enough for repetitive translation and model-management work, with 16px page gutters and 32px controls; never compress labels, helper text, or error feedback.
+- **Variance: 4/10 — Structured Offset.** Strong left alignment, nested rails, and selective asymmetry; no decorative chaos, centered marketing heroes, or overlapping content.
+- **Motion: 4/10 — Restrained Utility.** Motion explains route direction, panel state, and list changes. It never runs perpetually, competes with text, or turns the workstation into a showcase.
+- **Creativity: 6/10 — Character Through Construction.** Zero-radius frames, hard offset shadows, dense type, and deliberate borders provide identity without ornamental gradients or novelty controls.
+
+This is application software, not a landing page. Do not invent hero sections, promotional CTAs, feature-card marketing rows, dashboards, or decorative data visualizations.
+
 ## 2. Color Palette & Roles
 
 Tokens live as CSS custom properties in `src/styles.css`, switched by `data-theme="light|dark"` on `<html>`. Material Design 3 role names are first-class; project aliases (`surface-2`, `surface-3`, `neutral`, `line`) keep component class names short. Tailwind utilities map through `@theme inline` (`bg-surface`, `text-on-surface`, `border-line`, `text-error`, …).
 
 ### Primary Foundation
 
-| Token | Hex (light) | Hex (dark) | Role |
-|:---|:---|:---|:---|
-| **Paper White / Warm Charcoal** (`surface` / `background`) | `#ffffff` | `#141313` | App canvas, cards, inputs, shell chrome |
-| **Mist Gray** (`surface-2` / `surface-container-low`) | `#f3f3f3` | `#1c1b1b` | Hover fills, active nav, secondary surfaces |
-| **Stone Gray** (`surface-3` / `surface-container-high`) | `#e4e4e4` | `#2b2a2a` | Pressed fills, disabled solid buttons |
-| **Deepest Plate** (`surface-container-lowest`) | `#ffffff` | `#0e0e0e` | Lowest nested surface (dark) |
-| **Raised Plate** (`surface-container-highest` / `surface-variant`) | `#e4e4e4` | `#353434` | Highest container step |
+| Token                                                              | Hex (light) | Hex (dark) | Role                                        |
+| :----------------------------------------------------------------- | :---------- | :--------- | :------------------------------------------ |
+| **Paper White / Warm Charcoal** (`surface` / `background`)         | `#ffffff`   | `#141313`  | App canvas, cards, inputs, shell chrome     |
+| **Mist Gray** (`surface-2` / `surface-container-low`)              | `#f3f3f3`   | `#1c1b1b`  | Hover fills, active nav, secondary surfaces |
+| **Stone Gray** (`surface-3` / `surface-container-high`)            | `#e4e4e4`   | `#2b2a2a`  | Pressed fills, disabled solid buttons       |
+| **Deepest Plate** (`surface-container-lowest`)                     | `#ffffff`   | `#0e0e0e`  | Lowest nested surface (dark)                |
+| **Raised Plate** (`surface-container-highest` / `surface-variant`) | `#e4e4e4`   | `#353434`  | Highest container step                      |
 
 ### Accent & Interactive
 
-| Token | Hex (light) | Hex (dark) | Role |
-|:---|:---|:---|:---|
-| **Signal Blue** (`tertiary`) | `#0074ca` | `#a2c9ff` | Checked switches, success/info accents |
-| **On Tertiary** | `#ffffff` | `#00315b` | Content on tertiary fills |
-| **Ink Solid** (primary button fill) | `on-surface` `#161616` on `surface` text | inverted via same roles | Save / commit actions (`bg-on-surface text-surface`) |
-| **Outline Line** (`line` / `outline`) | `#161616` | `#8e9192` | Control borders, card frames, hairline chrome |
+| Token                                 | Hex (light)                              | Hex (dark)              | Role                                                 |
+| :------------------------------------ | :--------------------------------------- | :---------------------- | :--------------------------------------------------- |
+| **Signal Blue** (`tertiary`)          | `#0074ca`                                | `#a2c9ff`               | Checked switches, success/info accents               |
+| **On Tertiary**                       | `#ffffff`                                | `#00315b`               | Content on tertiary fills                            |
+| **Ink Solid** (primary button fill)   | `on-surface` `#161616` on `surface` text | inverted via same roles | Save / commit actions (`bg-on-surface text-surface`) |
+| **Outline Line** (`line` / `outline`) | `#161616`                                | `#8e9192`               | Control borders, card frames, hairline chrome        |
 
 ### Typography & Text Hierarchy
 
-| Token | Hex (light) | Hex (dark) | Role |
-|:---|:---|:---|:---|
-| **Near Black / Warm Paper** (`on-surface`) | `#161616` | `#e5e2e1` | Headings, labels, body emphasis |
-| **Ash / Soft Mist** (`neutral` / `on-surface-variant`) | `#555555` | `#c4c7c7` | Secondary copy, inactive nav, placeholders |
-| **Disabled** (`disabled`) | `#717171` | `#8a8a8a` | Disabled borders and labels |
+| Token                                                  | Hex (light) | Hex (dark) | Role                                       |
+| :----------------------------------------------------- | :---------- | :--------- | :----------------------------------------- |
+| **Near Black / Warm Paper** (`on-surface`)             | `#161616`   | `#e5e2e1`  | Headings, labels, body emphasis            |
+| **Ash / Soft Mist** (`neutral` / `on-surface-variant`) | `#555555`   | `#c4c7c7`  | Secondary copy, inactive nav, placeholders |
+| **Disabled** (`disabled`)                              | `#717171`   | `#8a8a8a`  | Disabled borders and labels                |
 
 ### Functional States
 
-| Token | Hex (light) | Hex (dark) | Role |
-|:---|:---|:---|:---|
-| **Alert Red** (`error`) | `#cc272e` | `#ffb4ab` | Destructive buttons, error text, close-button hover |
-| **On Error** | `#ffffff` | `#690005` | Text on error fills |
-| **Code Wash** (`code`) | `#f2f2f2` | `#292929` | Inline code backgrounds |
-| **Scrim** (`overlay`) | `#000000` @ 20% | `#000000` @ 50% | Dialog backdrops |
-| **Frame Shadow** (`shadow`) | `#000000` @ ~12% | `transparent` | Offset box-shadow for cards/dialogs/toasts |
+| Token                       | Hex (light)      | Hex (dark)      | Role                                                |
+| :-------------------------- | :--------------- | :-------------- | :-------------------------------------------------- |
+| **Alert Red** (`error`)     | `#cc272e`        | `#ffb4ab`       | Destructive buttons, error text, close-button hover |
+| **On Error**                | `#ffffff`        | `#690005`       | Text on error fills                                 |
+| **Code Wash** (`code`)      | `#f2f2f2`        | `#292929`       | Inline code backgrounds                             |
+| **Scrim** (`overlay`)       | `#000000` @ 20%  | `#000000` @ 50% | Dialog backdrops                                    |
+| **Frame Shadow** (`shadow`) | `#000000` @ ~12% | `transparent`   | Offset box-shadow for cards/dialogs/toasts          |
 
 ## 3. Typography Rules
 
 ### Hierarchy & Weights
 
-The stack is **system UI sans** (`ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica Neue, Arial`) with antialiased rendering. No custom webfonts — the product should feel native to the host OS. Scale tokens are registered in `@theme` as `text-headline-display`, `text-body-md`, `text-label-sm`, etc.
+The stack is **system UI sans** (`ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica Neue, Arial`) with antialiased rendering. This native desktop choice is intentional: do not replace it with Inter, Google Fonts, or another downloaded display face. Scale tokens are registered in `@theme` as `text-headline-display`, `text-body-md`, `text-label-sm`, etc. Code, model keys, timestamps, and dense numeric values use the platform monospace stack (`ui-monospace`).
 
-| Role (utility) | Size / Line | Weight | Usage |
-|:---|:---|:---|:---|
-| **Headline Display** (`text-headline-display`) | 30px / 36px | 700 | Channel/provider display names (Models editor) |
-| **Headline MD** (`text-headline-md`) | 24px / 32px | 700 | Page titles (Home, Models, Settings, About) |
-| **Headline SM** (`text-headline-sm`) | 20px / 28px | 700 | Section headers (Channels, Connection, Models) |
-| **Title Dialog** (`text-title-dialog`) | 16px / 24px | 700 | Modal titles |
-| **Body MD** (`text-body-md`) | 14px / 24px | 400 | Supporting paragraphs under page titles |
-| **Body Tight** (`text-body-tight`) | 14px / 20px | 400 | Controls, nav links, dense UI, descriptions |
-| **Body Bold** (`text-body-bold`) | 14px / 20px | 700 | Card titles, fieldset legends, toast titles |
-| **Label SM** (`text-label-sm`) | 12px / 16px | 400, tracking `0.12em`, uppercase | Kickers / eyebrow labels |
-| **Table Header** (`text-table-header`) | 10px / 14px | 600, tracking `0.05em`, uppercase | Column headers |
-| **Mono Key** (`text-mono-key`) | 14px mono | 700 | Model keys in tables |
-| **Code Inline** (`text-code-inline`) | 12px mono | 400 | Inline code chips |
+| Role (utility)                                 | Size / Line | Weight                            | Usage                                          |
+| :--------------------------------------------- | :---------- | :-------------------------------- | :--------------------------------------------- |
+| **Headline Display** (`text-headline-display`) | 30px / 36px | 700                               | Channel/provider display names (Models editor) |
+| **Headline MD** (`text-headline-md`)           | 24px / 32px | 700                               | Page titles (Home, Models, Settings, About)    |
+| **Headline SM** (`text-headline-sm`)           | 20px / 28px | 700                               | Section headers (Channels, Connection, Models) |
+| **Title Dialog** (`text-title-dialog`)         | 16px / 24px | 700                               | Modal titles                                   |
+| **Body MD** (`text-body-md`)                   | 14px / 24px | 400                               | Supporting paragraphs under page titles        |
+| **Body Tight** (`text-body-tight`)             | 14px / 20px | 400                               | Controls, nav links, dense UI, descriptions    |
+| **Body Bold** (`text-body-bold`)               | 14px / 20px | 700                               | Card titles, fieldset legends, toast titles    |
+| **Label SM** (`text-label-sm`)                 | 12px / 16px | 400, tracking `0.12em`, uppercase | Kickers / eyebrow labels                       |
+| **Table Header** (`text-table-header`)         | 10px / 14px | 600, tracking `0.05em`, uppercase | Column headers                                 |
+| **Mono Key** (`text-mono-key`)                 | 14px mono   | 700                               | Model keys in tables                           |
+| **Code Inline** (`text-code-inline`)           | 12px mono   | 400                               | Inline code chips                              |
 
 ### Spacing Principles
 
@@ -359,7 +368,10 @@ Shared constants live in `src/components/ui.ts`.
 ### Responsive Behavior & Touch
 
 - Desktop-first Tauri shell; routes still use responsive flex/grid collapses (`sm:`).
-- Minimum practical targets ~32px height; icon buttons ~28px square; titlebar controls min 40px wide.
+- Below 768px, multi-column content collapses to one column, secondary rails stack or become navigable panels, and horizontal page overflow is forbidden.
+- Preserve a 14px minimum body size. Keep labels visible above fields; never rely on placeholder text as the only label.
+- Existing desktop controls remain 32px high, icon buttons 28px square, and titlebar controls at least 40px wide. If a touch-first surface is introduced, increase its interactive targets to at least 44px without changing desktop density globally.
+- Use `100dvh` for viewport-height layouts; never use `h-screen`.
 - Reduced-motion: disable channel enter/exit, toast transitions, and page view-transition scrolls.
 
 ### Motion
@@ -395,3 +407,42 @@ Shared constants live in `src/components/ui.ts`.
 - Match control height 32px and sidebar/rail proportions before inventing new density scales.
 - Prefer M3 role names (`on-surface`, `surface-container-low`, `tertiary`, `error`) or project aliases (`surface-2`, `neutral`, `line`) — not ad-hoc hex in components.
 - Source of truth for tokens: `src/styles.css`; shared control classes: `src/components/ui.ts`.
+
+## 7. Anti-Patterns (Never Generate)
+
+### Visual Language
+
+- No rounded cards, pills, soft SaaS surfaces, glassmorphism, backdrop blur, neon glow, gradient text, or custom cursors.
+- No pure-black or pure-white component utilities (`bg-black`, `text-black`, `bg-white`, `text-white`, `border-black`). Use semantic roles such as `bg-on-surface`, `text-surface`, `bg-surface`, and `border-line`. Alpha-only scrims must use `bg-overlay`.
+- No ad-hoc colors, Tailwind default palette colors, or a second decorative accent. Signal Blue is the sole accent; Alert Red is reserved for errors and destructive actions.
+- No overlapping elements, absolute-positioned content stacking, ornamental dot grids, or unbounded full-width content.
+- No three-column equal-card feature rows. Use the product's rails, framed workspaces, two-column utility grids, dividers, or vertical sections only when they match the task.
+- No generic dashboards, KPI cards, system-performance panels, or fabricated statistics. Never invent CPU usage, uptime, token counts, response times, percentages, user counts, or model capabilities. When a value is unknown, use a descriptive empty state or `[value]` placeholder.
+
+### Typography & Content
+
+- No Inter, external font CDNs, Material Symbols, icon fonts, generic serif faces, or decorative display type. Use the native sans and mono stacks.
+- No emojis, fake brands, generic people names, `LABEL // YEAR` labels, or AI copy clichés such as “Elevate,” “Seamless,” “Unleash,” and “Next-Gen.”
+- No uppercase button labels. Buttons use 14px body-tight text; uppercase is reserved for small labels and table headers.
+- No filler instructions such as “Scroll to explore,” “Swipe down,” or bouncing direction indicators.
+- No hardcoded user-facing English in implementation output. Use `react-i18next` and existing translation keys or add properly scoped keys.
+
+### Components & Implementation
+
+- No Tailwind CDN, inline Tailwind configuration, or redefinition of the default spacing scale. This project uses Tailwind CSS v4 through `@tailwindcss/vite` and `src/styles.css`.
+- No class-based dark mode. Theme switching uses `data-theme="light|dark"` on `<html>` and semantic CSS variables.
+- No invented utility names such as `hard-shadow`, `font-label-caps`, or `font-display-lg`. Use `shadow-frame` and registered `text-*` typography utilities.
+- No raw HTML icon glyphs. Use the existing SVG icon component approach from `~icons/*`.
+- No custom rebuilds of shared buttons, inputs, selects, switches, checkboxes, dialogs, or toasts. Reuse `src/components/ui.ts` and existing Base UI components.
+- No focus treatment based only on color. Use the existing 2px inset `outline-on-surface` style.
+- No circular loading spinners. Use skeletons shaped like the pending content and preserve layout dimensions.
+- No generic “No data” dead ends. Empty states explain what is missing and provide the relevant existing action when one exists.
+- No animation of `top`, `left`, `width`, or `height` for content transitions. Prefer `transform` and `opacity`; keep reduced-motion behavior intact. The sidebar's existing width transition is a deliberate shell exception.
+- No routes or navigation items outside the real product map: Translate, Translate Profiles, Models, About, and Settings.
+
+### Stitch Generation Guardrails
+
+- Treat `src/styles.css` and `src/components/ui.ts` as authoritative when generated markup conflicts with this document.
+- Preserve both light and dark semantic roles; never generate a light-only screen.
+- Preserve square geometry (`0px` radius), 32px desktop controls, 1px line borders, and selective 4px offset frame shadows.
+- Generated model configuration UI belongs inside the Models provider editor/dialog patterns. Do not place it over a fictional dashboard or surround it with unrelated navigation.

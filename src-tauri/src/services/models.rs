@@ -8,8 +8,8 @@ use crate::adapters::transport::{
 use crate::credentials::CredentialVault;
 use crate::domain::cancel::CancelToken;
 use crate::domain::model::{
-	Availability, CapabilityOverridesV1, ConnectionTestResult, ManualModelWrite, ModelSource, ProviderModel,
-	ProviderModelDto, RemoteModelSyncItem, SyncModelsResult,
+	Availability, CapabilityOverridesV1, ConnectionTestResult, ManualModelWrite, ModelConfigWrite, ModelSource,
+	ProviderModel, ProviderModelDto, RemoteModelSyncItem, SyncModelsResult,
 };
 use crate::domain::provider::{CredentialKind, ModelsSyncStatus, ProviderInstance, ProviderInstanceDto, ProxyMode};
 use crate::domain::time::{new_id, now_rfc3339};
@@ -192,6 +192,22 @@ impl ModelService {
 		self.db.transaction(|uow| {
 			provider_models::set_adapter_id(uow.conn(), id, adapter_id.as_deref(), &now)?;
 			provider_models::get(uow.conn(), id)
+		})
+	}
+
+	/// Update API Type and capability overrides for any model source (manual/remote/builtin).
+	pub fn update_config(&self, input: ModelConfigWrite) -> Result<ProviderModelDto, StorageError> {
+		let capability_overrides_json = CapabilityOverridesV1::from_json(&input.capability_overrides_json)?
+			.map(|v| serde_json::to_value(v).expect("capability overrides serialize"));
+		let adapter_id = normalize_model_adapter_id(&input.adapter_id)?;
+		let now = now_rfc3339();
+		self.db.transaction(|uow| {
+			let mut existing = provider_models::get(uow.conn(), input.id)?;
+			existing.adapter_id = adapter_id;
+			existing.capability_overrides_json = capability_overrides_json;
+			existing.updated_at = now;
+			provider_models::update(uow.conn(), &existing)?;
+			Ok(existing)
 		})
 	}
 
@@ -768,21 +784,18 @@ fn prepare_translate_sync(
 		None
 	};
 
-	let (system_prompt, user_prompt, temperature, max_tokens) = if let Some(ref profile) = profile {
+	let (system_prompt, user_prompt, temperature, profile_max_tokens) = if let Some(ref profile) = profile {
 		let system_prompt = render_template(&profile.system_template, source_lang, target_lang, text);
 		let user_prompt = render_template(&profile.user_template, source_lang, target_lang, text);
 		let temperature = profile.temperature.or(Some(DEFAULT_TRANSLATE_TEMPERATURE));
-		let max_tokens = profile
-			.max_output_tokens
-			.map(|n| n as u32)
-			.or(Some(DEFAULT_TRANSLATE_MAX_TOKENS));
-		(system_prompt, user_prompt, temperature, max_tokens)
+		let profile_max_tokens = profile.max_output_tokens.map(|n| n as u32);
+		(system_prompt, user_prompt, temperature, profile_max_tokens)
 	} else {
 		(
 			build_translate_system_prompt(source_lang, target_lang),
 			text.to_string(),
 			Some(DEFAULT_TRANSLATE_TEMPERATURE),
-			Some(DEFAULT_TRANSLATE_MAX_TOKENS),
+			None,
 		)
 	};
 
@@ -808,7 +821,7 @@ fn prepare_translate_sync(
 			system_prompt.clone(),
 			user_prompt.clone(),
 			temperature,
-			max_tokens,
+			profile_max_tokens,
 		)?;
 		match prepared {
 			SingleModelPrepare::Skipped => continue,
@@ -844,7 +857,7 @@ fn prepare_single_model_attempt(
 	system_prompt: String,
 	user_prompt: String,
 	temperature: Option<f64>,
-	max_tokens: Option<u32>,
+	profile_max_tokens: Option<u32>,
 ) -> Result<SingleModelPrepare, StorageError> {
 	// Final adapter first: model override wins, then channel. Endpoint defaults and
 	// secret_required follow that adapter so transport fields stay consistent.
@@ -860,7 +873,11 @@ fn prepare_single_model_attempt(
 			"Credential store unavailable",
 			0,
 		))),
-		ModelChatResolve::Ready { config, model_key } => Ok(SingleModelPrepare::Ready(TranslateAttempt {
+		ModelChatResolve::Ready {
+			config,
+			model_key,
+			model_default_output_tokens,
+		} => Ok(SingleModelPrepare::Ready(TranslateAttempt {
 			model_id,
 			request: ChatCompletionRequest {
 				adapter_id: config.adapter_id,
@@ -872,7 +889,10 @@ fn prepare_single_model_attempt(
 				system_prompt,
 				user_prompt,
 				temperature,
-				max_tokens,
+				max_tokens: Some(resolve_translate_max_tokens(
+					profile_max_tokens,
+					model_default_output_tokens,
+				)),
 			},
 		})),
 	}
@@ -898,6 +918,7 @@ pub(crate) enum ModelChatResolve {
 	Ready {
 		config: ModelChatTransportConfig,
 		model_key: String,
+		model_default_output_tokens: Option<u32>,
 	},
 }
 
@@ -934,6 +955,8 @@ pub(crate) fn resolve_model_chat_transport(
 	}
 
 	let adapter_id = resolve_model_adapter_id(model.adapter_id.as_deref(), &provider.adapter_id);
+	let model_default_output_tokens = CapabilityOverridesV1::from_json(&model.capability_overrides_json)?
+		.and_then(|capabilities| capabilities.default_output_tokens);
 	match resolve_endpoint_and_secret(vault, &provider, &adapter_id)? {
 		EndpointSecret::Missing => Ok(ModelChatResolve::MissingCredential),
 		EndpointSecret::StoreFailure => Ok(ModelChatResolve::CredentialStoreFailure),
@@ -946,8 +969,14 @@ pub(crate) fn resolve_model_chat_transport(
 				proxy_mode: provider.proxy_mode,
 			},
 			model_key: model.model_key,
+			model_default_output_tokens,
 		}),
 	}
+}
+
+/// Resolve request output tokens with profile > model > application-default precedence.
+pub(crate) fn resolve_translate_max_tokens(profile_value: Option<u32>, model_value: Option<u32>) -> u32 {
+	profile_value.or(model_value).unwrap_or(DEFAULT_TRANSLATE_MAX_TOKENS)
 }
 
 /// Prefer a non-empty model adapter override; otherwise use the channel default.
@@ -1025,10 +1054,7 @@ fn resolve_saved_provider(
 /// Uses channel `base_url_override` / credential kind+ref / proxy when present;
 /// default base URL and secret requirement come from `adapter_id`.
 enum EndpointSecret {
-	Ready {
-		base_url: String,
-		secret: Option<String>,
-	},
+	Ready { base_url: String, secret: Option<String> },
 	Missing,
 	StoreFailure,
 }

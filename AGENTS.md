@@ -1,83 +1,103 @@
 # AGENTS.md
 
-## Crew callsigns
+## Identity
 
 - Agent: **BlazeWaffle**
 - Human lead: **Harp-Dogzilla** (Mr. Julian)
-
-Unhinged? Yes. Effective? Also yes. Keep the banter, ship the software.
+- Match Harp-Dogzilla's language. Keep the banter secondary to shipping the software.
 
 ## Project
 
-**langnext-app** — desktop app shell built with:
+**langnext-app** is a desktop application shell built with:
 
-- Tauri 2 (Rust backend + webview frontend)
+- Tauri 2 (Rust backend and webview frontend)
 - React 19
-- TanStack Router (file-based routes in `src/routes`)
+- TanStack Router with file-based routes in `src/routes`
 - Base UI (`@base-ui/react`)
-- Tailwind CSS v4 (`@tailwindcss/vite`) — Base UI outline / frame style
-- ESLint + Prettier
-- **mise** for toolchains (`node`, `bun`, `rust`) and all project tasks
-- **bun** as the JS package manager (no `package.json` scripts)
+- Tailwind CSS v4 (`@tailwindcss/vite`) using a Base UI outline/frame style
+- ESLint and Prettier
+- `mise` for toolchains and project tasks
+- Bun as the only JavaScript package manager
 
-## Layout
+## Repository Map
 
-```
+```text
 src/                 Frontend (React + Vite)
   routes/            TanStack file-based routes
   main.tsx           Router bootstrap
-  styles.css         Tailwind entry + global styles
+  styles.css         Tailwind entry and global styles
 src-tauri/           Tauri / Rust shell
   src/lib.rs         Commands and app setup
 mise.toml            Toolchain versions
 .mise/tasks/         File-based project tasks
 ```
 
-## Toolchain
+## Toolchain and Commands
 
-Tool versions live in `mise.toml`. Tasks live as scripts under `.mise/tasks/`. After clone:
+Tool versions are defined in `mise.toml`. Project tasks are file-based scripts under `.mise/tasks/`.
+
+After cloning:
 
 ```bash
 mise install
 mise run install
 ```
 
-Do not use npm/yarn/pnpm for this repo. Lockfile is `bun.lock` only.
-Do not add `package.json` scripts — use `.mise/tasks/` file tasks only.
-
-## Commands
+Common tasks:
 
 ```bash
-mise run install       # bun install
-mise run dev           # Vite only (frontend)
-mise run build         # Typecheck + Vite production build
-mise run typecheck     # tsc --noEmit
-mise run preview       # vite preview
-mise run lint          # ESLint
-mise run format        # Prettier + cargo fmt write
-mise run format:check  # Prettier + cargo fmt check
-mise run tauri:dev     # Full desktop app
-mise run tauri:build   # Package desktop app
+mise run install       # Install dependencies with Bun
+mise run dev           # Run the Vite frontend
+mise run build         # Typecheck and build the frontend
+mise run typecheck     # Run tsc --noEmit
+mise run preview       # Preview the Vite production build
+mise run lint          # Run ESLint
+mise run format        # Write Prettier and cargo fmt changes
+mise run format:check  # Check Prettier and cargo fmt formatting
+mise run tauri:dev     # Run the desktop application
+mise run tauri:build   # Package the desktop application
 ```
 
-## Conventions
+### Toolchain Invariants
 
-- Reply in the same language Harp-Dogzilla uses.
-- Generated docs default to English unless asked otherwise.
-- Prefer small, readable changes over clever rewrites.
-- Prefer named Tailwind tokens over arbitrary values when an equivalent exists (e.g. `w-md` instead of `w-[28rem]`, `max-w-lg` instead of `max-w-[32rem]`). The container scale (`3xs`…`7xl`) backs `w-*` / `max-w-*` / `min-w-*`.
-- Every code file starts with two `ABOUTME:` comment lines.
-- Do not implement mock modes; use real data and real APIs.
-- Never use `--no-verify` when committing.
-- Do not rename things `new` / `improved` / `enhanced`.
-- Ask before reimplementing systems from scratch.
+- Use Bun only. Do not use npm, Yarn, or pnpm.
+- Keep `bun.lock` as the only JavaScript lockfile.
+- Do not add `package.json` scripts; add or update tasks under `.mise/tasks/`.
+- Never bypass commit hooks with `--no-verify`.
 
-## Generated files
+## Engineering Rules
 
-- `src/routeTree.gen.ts` is produced by `@tanstack/router-plugin`.
-  Do not hand-edit it. Keep it out of ESLint/Prettier edits; commit it so
-  `tsc --noEmit` works on clean checkouts.
+- Prefer small, readable changes over clever or broad rewrites.
+- Every code file must begin with two `ABOUTME:` comment lines describing its purpose.
+- Use real data and integrations; do not add mock modes unless explicitly requested.
+- Ask before reimplementing an existing system from scratch.
+- Do not use `new`, `improved`, or `enhanced` in names.
+- Generated documentation is in English unless requested otherwise.
+
+### Tailwind CSS
+
+Prefer named Tailwind tokens when an equivalent exists. For example:
+
+- Use `w-md` instead of `w-[28rem]`.
+- Use `max-w-lg` instead of `max-w-[32rem]`.
+- Use the container scale (`3xs` through `7xl`) for `w-*`, `min-w-*`, and `max-w-*` utilities.
+
+## UI Copy
+
+- Keep labels, headings, and supporting copy concise and plain.
+- Prefer a self-explanatory icon over redundant text; give icon-only controls an accessible name or tooltip.
+- Do not explain what the surrounding context and visual design already make clear.
+- Use short, direct action labels and simple names, such as `Reset Token` instead of `Remove stored token`.
+- Remove redundant qualifiers, such as `API TYPE: default` instead of `API TYPE: Channel default`.
+
+## Generated Files
+
+`src/routeTree.gen.ts` is generated by `@tanstack/router-plugin`.
+
+- Do not edit it manually.
+- Exclude it from ESLint and Prettier edits.
+- Commit it so `tsc --noEmit` works on clean checkouts.
 
 ## References
 
-- base-ui guide and components: https://base-ui.com/llms.txt
+- Base UI guide and components: https://base-ui.com/llms.txt

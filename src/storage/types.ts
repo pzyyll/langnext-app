@@ -85,7 +85,15 @@ export interface ProviderInstanceWrite {
 export interface CapabilityOverridesV1 {
 	schemaVersion: 1;
 	streaming?: boolean | null;
+	/** Model context-window capability limit. Defaults to 128 Ki tokens in the editor. */
 	maxContextTokens?: number | null;
+	/** Model output capability limit. Defaults to 32 Ki tokens in the editor. */
+	maxOutputTokens?: number | null;
+	/** Model-level request value used when a profile does not override it. */
+	defaultOutputTokens?: number | null;
+	textGeneration?: boolean | null;
+	imageAnalysis?: boolean | null;
+	videoProcessing?: boolean | null;
 }
 
 export interface ProviderModelDto {
@@ -115,6 +123,15 @@ export interface ManualModelWrite {
 	capabilityOverridesJson?: CapabilityOverridesV1 | null;
 	/** Optional API Type override; null/empty inherits the channel adapter. */
 	adapterId?: string | null;
+}
+
+/** Input for updating per-model API Type and capability overrides (any source). */
+export interface ModelConfigWrite {
+	id: string;
+	/** Optional API Type override; null/empty inherits the channel adapter. */
+	adapterId?: string | null;
+	/** Versioned sparse capability overrides; null clears overrides. */
+	capabilityOverridesJson?: CapabilityOverridesV1 | null;
 }
 
 /** Input for one-shot or streaming translate via a configured provider model. */
@@ -334,7 +351,18 @@ const _capabilityFixture = {
 	schemaVersion: 1,
 	streaming: true,
 	maxContextTokens: 8192,
+	maxOutputTokens: 2048,
+	defaultOutputTokens: 1024,
+	textGeneration: true,
+	imageAnalysis: false,
+	videoProcessing: false,
 } as const satisfies CapabilityOverridesV1;
+
+const _modelConfigWriteFixture = {
+	id: "00000000-0000-7000-8000-000000000002",
+	adapterId: "openai-compatible",
+	capabilityOverridesJson: _capabilityFixture,
+} as const satisfies ModelConfigWrite;
 
 const _modelDtoFixture = {
 	id: "00000000-0000-7000-8000-000000000002",
@@ -421,6 +449,7 @@ const _syncModelsConnectionChangedFixture = {
 void _providerDtoFixture;
 void _settingsUpdateFixture;
 void _capabilityFixture;
+void _modelConfigWriteFixture;
 void _modelDtoFixture;
 void _profileWriteFixture;
 void _importPreviewFixture;

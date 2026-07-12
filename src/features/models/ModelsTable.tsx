@@ -1,4 +1,4 @@
-// ABOUTME: Provider model table with enabled switches, API Type overrides, and selection mode.
+// ABOUTME: Provider model table with enabled switches, config edit entry, and selection mode.
 // ABOUTME: Displays manual, remote, and built-in model DTOs without fabricating data.
 import { useMemo, useEffect, useRef, useState } from "react";
 import { Button } from "@base-ui/react/button";
@@ -16,7 +16,7 @@ import {
 	switchThumbClassName,
 } from "../../components/ui";
 import type { ProviderModelDto } from "../../storage/types";
-import { ADAPTER_OPTIONS, getAdapterLabel } from "./adapterOptions";
+import { getAdapterLabel } from "./adapterOptions";
 import {
 	getModelEnabledFilter,
 	isModelEnabledFilter,
@@ -31,8 +31,8 @@ export type ModelsTableProps = {
 	onEnabledChange: (modelId: string, enabled: boolean) => void;
 	/** Persist a new display-name override. Resolves true on success, false on failure. */
 	onRenameModel?: (model: ProviderModelDto, displayNameOverride: string | null) => Promise<boolean>;
-	/** Persist optional per-model API Type; null inherits the channel adapter. */
-	onAdapterIdChange?: (model: ProviderModelDto, adapterId: string | null) => void;
+	/** Open the per-model configuration dialog. */
+	onEditModel?: (model: ProviderModelDto) => void;
 	selectionMode?: boolean;
 	selectedModelIds?: ReadonlySet<string>;
 	onToggleSelect?: (modelId: string) => void;
@@ -60,20 +60,12 @@ function filterModels(
 	});
 }
 
-/** Adapter select options; includes a stray saved id so the control never blanks. */
-function modelAdapterSelectOptions(currentAdapterId: string | null): readonly { id: string; label: string }[] {
-	if (currentAdapterId && !ADAPTER_OPTIONS.some((option) => option.id === currentAdapterId)) {
-		return [...ADAPTER_OPTIONS, { id: currentAdapterId, label: getAdapterLabel(currentAdapterId) }];
-	}
-	return ADAPTER_OPTIONS;
-}
-
 export function ModelsTable({
 	models,
 	pendingModelIds,
 	onEnabledChange,
 	onRenameModel,
-	onAdapterIdChange,
+	onEditModel,
 	selectionMode = false,
 	selectedModelIds = new Set(),
 	onToggleSelect,
@@ -200,6 +192,9 @@ export function ModelsTable({
 								<th className="pb-2 font-semibold">{t("models.modelCount", { count: filteredModels.length })}</th>
 								<th className="pb-2 text-center font-semibold">{t("models.displayNameCol")}</th>
 								<th className="pb-2 text-center font-semibold">{t("models.apiTypeCol")}</th>
+								<th className="w-12 pb-2 text-center font-semibold">
+									<span className="sr-only">{t("models.editModelConfig.column")}</span>
+								</th>
 								<th className="pb-2 text-right font-semibold">{t("models.enabledCol")}</th>
 							</tr>
 						</thead>
@@ -208,8 +203,7 @@ export function ModelsTable({
 								const pending = pendingModelIds.has(model.id);
 								const editing = editingId === model.id;
 								const canRename = model.source === "manual" && onRenameModel !== undefined;
-								const canEditAdapter = onAdapterIdChange !== undefined;
-								const adapterOptions = modelAdapterSelectOptions(model.adapterId);
+								const canEditConfig = onEditModel !== undefined;
 								return (
 									<tr key={model.id}>
 										{selectionMode ? (
@@ -294,34 +288,24 @@ export function ModelsTable({
 												</div>
 											)}
 										</td>
+										<td className="py-4 text-center text-body-tight text-neutral">
+											{model.adapterId ? getAdapterLabel(model.adapterId) : t("models.apiTypeInherit")}
+										</td>
 										<td className="py-4 text-center">
-											{canEditAdapter ? (
-												<select
-													className={`${selectClassName} min-w-40`}
-													value={model.adapterId ?? ""}
+											{canEditConfig ? (
+												<Button
+													type="button"
+													className={iconButtonClassName}
+													aria-label={t("models.editModelConfig.editAria", { name: model.modelKey })}
+													title={t("models.editModelConfig.editAria", { name: model.modelKey })}
 													disabled={pending}
-													aria-label={t("models.apiTypeForModel", { name: model.modelKey })}
-													onChange={(event) => {
-														const next = event.currentTarget.value;
-														const nextAdapterId = next.trim() ? next.trim() : null;
-														if (nextAdapterId === model.adapterId) {
-															return;
-														}
-														onAdapterIdChange(model, nextAdapterId);
+													onClick={() => {
+														onEditModel(model);
 													}}
 												>
-													<option value="">{t("models.apiTypeInherit")}</option>
-													{adapterOptions.map((option) => (
-														<option key={option.id} value={option.id}>
-															{option.label}
-														</option>
-													))}
-												</select>
-											) : (
-												<span className="text-body-tight text-neutral">
-													{model.adapterId ? getAdapterLabel(model.adapterId) : t("models.apiTypeInherit")}
-												</span>
-											)}
+													<IconMaterialSymbolsLightEditSquareOutlineSharp className="pointer-events-none size-5 shrink-0" />
+												</Button>
+											) : null}
 										</td>
 										<td className="py-4 text-right">
 											<div className="flex justify-end">

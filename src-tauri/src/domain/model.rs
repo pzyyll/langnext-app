@@ -13,10 +13,25 @@ pub struct CapabilityOverridesV1 {
 	pub streaming: Option<bool>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub max_context_tokens: Option<u32>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub max_output_tokens: Option<u32>,
+	/// Model-level request value used when a translation profile does not override it.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub default_output_tokens: Option<u32>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub text_generation: Option<bool>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub image_analysis: Option<bool>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub video_processing: Option<bool>,
 }
 
 impl CapabilityOverridesV1 {
 	pub const SCHEMA_VERSION: u32 = 1;
+	/// Default model context-window capability limit (128 Ki tokens).
+	pub const DEFAULT_MAX_CONTEXT_TOKENS: u32 = 128 * 1024;
+	/// Default model output capability limit (32 Ki tokens).
+	pub const DEFAULT_MAX_OUTPUT_TOKENS: u32 = 32 * 1024;
 
 	pub fn validate(&self) -> Result<(), StorageError> {
 		if self.schema_version != Self::SCHEMA_VERSION {
@@ -25,7 +40,37 @@ impl CapabilityOverridesV1 {
 				self.schema_version
 			)));
 		}
+		if self.max_context_tokens == Some(0) {
+			return Err(StorageError::Validation(
+				"maxContextTokens must be greater than zero".into(),
+			));
+		}
+		if self.max_output_tokens == Some(0) {
+			return Err(StorageError::Validation(
+				"maxOutputTokens must be greater than zero".into(),
+			));
+		}
+		if self.default_output_tokens == Some(0) {
+			return Err(StorageError::Validation(
+				"defaultOutputTokens must be greater than zero".into(),
+			));
+		}
+		if let Some(default_tokens) = self.default_output_tokens {
+			if default_tokens > self.output_token_limit() {
+				return Err(StorageError::Validation(
+					"defaultOutputTokens must not exceed maxOutputTokens".into(),
+				));
+			}
+		}
 		Ok(())
+	}
+
+	pub fn context_token_limit(&self) -> u32 {
+		self.max_context_tokens.unwrap_or(Self::DEFAULT_MAX_CONTEXT_TOKENS)
+	}
+
+	pub fn output_token_limit(&self) -> u32 {
+		self.max_output_tokens.unwrap_or(Self::DEFAULT_MAX_OUTPUT_TOKENS)
 	}
 
 	/// Parse optional JSON into a validated override document.
@@ -141,6 +186,19 @@ pub struct ManualModelWrite {
 	pub adapter_id: Option<String>,
 }
 
+/// Input for updating per-model config (API Type + capability overrides) for any source.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelConfigWrite {
+	pub id: Uuid,
+	/// Optional API Type override; null/empty inherits the channel adapter at runtime.
+	#[serde(default)]
+	pub adapter_id: Option<String>,
+	/// Versioned sparse capability overrides; omitted/null clears overrides.
+	#[serde(default)]
+	pub capability_overrides_json: Option<serde_json::Value>,
+}
+
 /// One remote model row returned by a Provider adapter for cache merge.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -198,6 +256,11 @@ mod tests {
 			schema_version: 1,
 			streaming: Some(true),
 			max_context_tokens: Some(8192),
+			max_output_tokens: Some(2048),
+			default_output_tokens: Some(1024),
+			text_generation: Some(true),
+			image_analysis: Some(false),
+			video_processing: None,
 		};
 		let json = serde_json::to_value(&overrides).unwrap();
 		let back = CapabilityOverridesV1::from_json(&Some(json)).unwrap().unwrap();
@@ -207,6 +270,54 @@ mod tests {
 	#[test]
 	fn capability_overrides_reject_unknown_version() {
 		let json = serde_json::json!({"schemaVersion": 99, "streaming": true});
+		assert!(CapabilityOverridesV1::from_json(&Some(json)).is_err());
+	}
+
+	#[test]
+	fn capability_overrides_reject_zero_context_tokens() {
+		let json = serde_json::json!({"schemaVersion": 1, "maxContextTokens": 0});
+		assert!(CapabilityOverridesV1::from_json(&Some(json)).is_err());
+	}
+
+	#[test]
+	fn capability_overrides_accept_legacy_partial_document() {
+		// Documents written before newer optional fields existed still parse.
+		let json = serde_json::json!({"schemaVersion": 1, "streaming": true, "maxContextTokens": 8192});
+		let parsed = CapabilityOverridesV1::from_json(&Some(json)).unwrap().unwrap();
+		assert_eq!(parsed.streaming, Some(true));
+		assert_eq!(parsed.max_context_tokens, Some(8192));
+		assert!(parsed.max_output_tokens.is_none());
+		assert!(parsed.default_output_tokens.is_none());
+		assert!(parsed.text_generation.is_none());
+		assert_eq!(parsed.context_token_limit(), 8192);
+		assert_eq!(
+			parsed.output_token_limit(),
+			CapabilityOverridesV1::DEFAULT_MAX_OUTPUT_TOKENS
+		);
+	}
+
+	#[test]
+	fn capability_overrides_use_default_model_limits() {
+		let parsed = CapabilityOverridesV1::from_json(&Some(serde_json::json!({"schemaVersion": 1})))
+			.unwrap()
+			.unwrap();
+		assert_eq!(
+			parsed.context_token_limit(),
+			CapabilityOverridesV1::DEFAULT_MAX_CONTEXT_TOKENS
+		);
+		assert_eq!(
+			parsed.output_token_limit(),
+			CapabilityOverridesV1::DEFAULT_MAX_OUTPUT_TOKENS
+		);
+	}
+
+	#[test]
+	fn capability_overrides_reject_default_output_above_model_limit() {
+		let json = serde_json::json!({
+			"schemaVersion": 1,
+			"maxOutputTokens": 4096,
+			"defaultOutputTokens": 8192
+		});
 		assert!(CapabilityOverridesV1::from_json(&Some(json)).is_err());
 	}
 

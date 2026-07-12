@@ -3,7 +3,7 @@
 use crate::adapters::transport::{ModelListRequest, ModelTransport, TransportError};
 use crate::credentials::{CredentialVault, FailingCredentialVault, MemoryCredentialVault};
 use crate::domain::import_export::ImportConflictMode;
-use crate::domain::model::{Availability, ManualModelWrite, ModelSource, RemoteModelSyncItem};
+use crate::domain::model::{Availability, ManualModelWrite, ModelConfigWrite, ModelSource, RemoteModelSyncItem};
 use crate::domain::provider::{CredentialKind, CredentialUpdate, ProviderInstanceWrite, ProxyMode};
 use crate::domain::settings::{
 	AppSettingsUpdate, AppSettingsV1, GlobalProxyMode, NetworkSettings, ProxyCredentialUpdate, TranslationPreferences,
@@ -928,6 +928,47 @@ fn capability_overrides_reject_invalid() {
 }
 
 #[test]
+fn update_model_config_persists_limits_and_request_default() {
+	let (_d, _db, _v, providers, models, ..) = setup();
+	let provider = providers
+		.save(provider_write(CredentialKind::None, CredentialUpdate::Keep))
+		.unwrap();
+	let model = models
+		.save_manual(ManualModelWrite {
+			id: None,
+			provider_instance_id: provider.id,
+			model_key: "configured-model".into(),
+			display_name_override: None,
+			enabled: true,
+			capability_overrides_json: None,
+			adapter_id: None,
+		})
+		.unwrap();
+
+	let updated = models
+		.update_config(ModelConfigWrite {
+			id: model.id,
+			adapter_id: Some("anthropic".into()),
+			capability_overrides_json: Some(serde_json::json!({
+				"schemaVersion": 1,
+				"maxContextTokens": 131072,
+				"maxOutputTokens": 32768,
+				"defaultOutputTokens": 6144,
+				"textGeneration": true,
+				"imageAnalysis": true
+			})),
+		})
+		.unwrap();
+
+	assert_eq!(updated.adapter_id.as_deref(), Some("anthropic"));
+	let capabilities = updated.capability_overrides_json.expect("capabilities");
+	assert_eq!(capabilities["maxContextTokens"], 131072);
+	assert_eq!(capabilities["maxOutputTokens"], 32768);
+	assert_eq!(capabilities["defaultOutputTokens"], 6144);
+	assert_eq!(capabilities["imageAnalysis"], true);
+}
+
+#[test]
 fn model_adapter_id_override_round_trip_and_validation() {
 	let (_d, _db, _v, providers, models, ..) = setup();
 	let p = providers
@@ -949,9 +990,7 @@ fn model_adapter_id_override_round_trip_and_validation() {
 	let cleared = models.set_adapter_id(created.id, None).unwrap();
 	assert!(cleared.adapter_id.is_none());
 
-	let set = models
-		.set_adapter_id(created.id, Some("anthropic".into()))
-		.unwrap();
+	let set = models.set_adapter_id(created.id, Some("anthropic".into())).unwrap();
 	assert_eq!(set.adapter_id.as_deref(), Some("anthropic"));
 
 	let err = models.set_adapter_id(created.id, Some("not-a-real-adapter".into()));
@@ -982,6 +1021,19 @@ fn resolve_model_adapter_id_prefers_model_then_channel() {
 	);
 }
 
+#[test]
+fn translate_max_tokens_use_profile_then_model_then_default() {
+	assert_eq!(
+		crate::services::models::resolve_translate_max_tokens(Some(1024), Some(2048)),
+		1024
+	);
+	assert_eq!(
+		crate::services::models::resolve_translate_max_tokens(None, Some(2048)),
+		2048
+	);
+	assert_eq!(crate::services::models::resolve_translate_max_tokens(None, None), 4096);
+}
+
 /// OpenAI channel + Gemini model override, no base_url_override → gemini default URL.
 /// Captures resolved chat transport config (chat path has no injectable ModelTransport).
 #[test]
@@ -997,24 +1049,32 @@ fn model_chat_transport_gemini_override_uses_gemini_default_url() {
 			model_key: "gemini-pro".into(),
 			display_name_override: None,
 			enabled: true,
-			capability_overrides_json: None,
+			capability_overrides_json: Some(serde_json::json!({
+				"schemaVersion": 1,
+				"maxOutputTokens": 32768,
+				"defaultOutputTokens": 6144
+			})),
 			adapter_id: Some("gemini".into()),
 		})
 		.unwrap();
 
 	let resolved = crate::services::models::resolve_model_chat_transport(&db, vault.as_ref(), m.id).unwrap();
 	match resolved {
-		crate::services::models::ModelChatResolve::Ready { config, model_key } => {
+		crate::services::models::ModelChatResolve::Ready {
+			config,
+			model_key,
+			model_default_output_tokens,
+		} => {
 			assert_eq!(config.adapter_id, "gemini");
 			assert_eq!(
-				config.base_url,
-				"https://generativelanguage.googleapis.com",
+				config.base_url, "https://generativelanguage.googleapis.com",
 				"default base URL must follow final (model) adapter, not channel"
 			);
 			assert_eq!(config.credential_kind, CredentialKind::ApiKey);
 			assert_eq!(config.secret.as_deref(), Some("sk-test"));
 			assert_eq!(config.proxy_mode, ProxyMode::Inherit);
 			assert_eq!(model_key, "gemini-pro");
+			assert_eq!(model_default_output_tokens, Some(6144));
 		}
 		other => panic!("expected Ready, got {other:?}"),
 	}
@@ -1113,7 +1173,7 @@ fn model_chat_transport_inherits_channel_when_model_has_no_override() {
 
 	let resolved = crate::services::models::resolve_model_chat_transport(&db, vault.as_ref(), m.id).unwrap();
 	match resolved {
-		crate::services::models::ModelChatResolve::Ready { config, model_key } => {
+		crate::services::models::ModelChatResolve::Ready { config, model_key, .. } => {
 			assert_eq!(config.adapter_id, "openai-compatible");
 			assert_eq!(config.base_url, "https://api.openai.com/v1");
 			assert!(config.secret.is_none(), "openai + None credential needs no secret");

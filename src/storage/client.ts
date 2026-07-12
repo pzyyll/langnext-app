@@ -10,6 +10,7 @@ import type {
 	ImportPreview,
 	ImportResult,
 	ManualModelWrite,
+	ModelConfigWrite,
 	ProviderInstanceDto,
 	ProviderInstanceWrite,
 	ProviderModelDto,
@@ -85,6 +86,11 @@ export async function setModelEnabled(id: string, enabled: boolean): Promise<Pro
 /** Set optional per-model API Type; pass null to inherit the channel adapter. */
 export async function setModelAdapterId(id: string, adapterId: string | null): Promise<ProviderModelDto> {
 	return invoke("set_model_adapter_id", { id, adapterId });
+}
+
+/** Update per-model API Type and capability overrides for any model source. */
+export async function updateModelConfig(input: ModelConfigWrite): Promise<ProviderModelDto> {
+	return invoke("update_model_config", { input });
 }
 
 export async function deleteProviderModel(id: string): Promise<void> {

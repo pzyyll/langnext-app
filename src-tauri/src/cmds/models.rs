@@ -1,7 +1,9 @@
 // ABOUTME: Provider model CRUD, connection/sync, and translate Tauri commands.
 // ABOUTME: Returns sanitized DTOs; secrets never cross the IPC boundary.
 use crate::cmds::runtime::run_blocking;
-use crate::domain::model::{ConnectionTestResult, ManualModelWrite, ProviderModelDto, SyncModelsResult};
+use crate::domain::model::{
+	ConnectionTestResult, ManualModelWrite, ModelConfigWrite, ProviderModelDto, SyncModelsResult,
+};
 use crate::domain::translation::{TranslateInput, TranslateResult, TranslateStreamError, TRANSLATE_ERROR_EVENT};
 use crate::error::IpcError;
 use crate::events::{emit_data_changed, MODELS_CHANGED, PROVIDERS_CHANGED};
@@ -156,6 +158,19 @@ pub async fn set_model_adapter_id(
 ) -> Result<ProviderModelDto, IpcError> {
 	let models = state.models.clone();
 	let result = run_blocking("set_model_adapter_id", move || models.set_adapter_id(id, adapter_id)).await?;
+	emit_data_changed(&app, MODELS_CHANGED);
+	Ok(result)
+}
+
+/// Update per-model API Type and capability overrides for any model source.
+#[tauri::command]
+pub async fn update_model_config(
+	app: AppHandle,
+	state: State<'_, AppState>,
+	input: ModelConfigWrite,
+) -> Result<ProviderModelDto, IpcError> {
+	let models = state.models.clone();
+	let result = run_blocking("update_model_config", move || models.update_config(input)).await?;
 	emit_data_changed(&app, MODELS_CHANGED);
 	Ok(result)
 }

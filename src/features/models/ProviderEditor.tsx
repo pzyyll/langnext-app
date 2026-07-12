@@ -32,7 +32,6 @@ import {
 	deleteProviderModels,
 	saveManualModel,
 	saveProviderInstance,
-	setModelAdapterId,
 	setModelEnabled,
 	syncProviderModels,
 	testProviderConnection,
@@ -41,6 +40,7 @@ import { getIpcErrorMessage, isConflictError } from "../../storage/errors";
 import type { CredentialUpdate, ProviderInstanceDto, ProviderModelDto } from "../../storage/types";
 import { ADAPTER_OPTIONS, getDefaultBaseUrl } from "./adapterOptions";
 import { AddManualModelDialog } from "./AddManualModelDialog";
+import { EditModelConfigDialog } from "./EditModelConfigDialog";
 import { useModelsContext } from "./ModelsContext";
 import { ModelsTable } from "./ModelsTable";
 import { hasRemoteProviderConflict, shouldShowConflictBanner } from "./providerFormConflict";
@@ -200,6 +200,7 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
 	const [pendingModelIds, setPendingModelIds] = useState<Set<string>>(() => new Set());
 	const [modelMutationError, setModelMutationError] = useState<string | null>(null);
 	const [addModelOpen, setAddModelOpen] = useState(false);
+	const [editingConfigModel, setEditingConfigModel] = useState<ProviderModelDto | null>(null);
 	const [deleteOpen, setDeleteOpen] = useState(false);
 	const [selectionMode, setSelectionMode] = useState(false);
 	const [selectedModelIds, setSelectedModelIds] = useState<Set<string>>(() => new Set());
@@ -622,41 +623,6 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
 			setModelsCache((current) => current.map((m) => (m.id === model.id ? previous : m)));
 			setModelMutationError(getIpcErrorMessage(error, t("models.toast.updateModelFailed")));
 			return false;
-		} finally {
-			setPendingModelIds((current) => {
-				const next = new Set(current);
-				next.delete(model.id);
-				return next;
-			});
-		}
-	}
-
-	async function handleModelAdapterIdChange(model: ProviderModelDto, adapterId: string | null) {
-		if (pendingModelIds.has(model.id)) {
-			return;
-		}
-
-		const previous = models.find((m) => m.id === model.id);
-		if (!previous) {
-			return;
-		}
-		if (previous.adapterId === adapterId) {
-			return;
-		}
-
-		setModelMutationError(null);
-		setPendingModelIds((current) => new Set(current).add(model.id));
-		setModelsCache((current) => current.map((m) => (m.id === model.id ? { ...m, adapterId } : m)));
-
-		try {
-			const updated = await setModelAdapterId(model.id, adapterId);
-			setModelsCache((current) => current.map((m) => (m.id === model.id ? updated : m)));
-			void queryClient.invalidateQueries({ queryKey: modelKeys.all });
-		} catch (error: unknown) {
-			setModelsCache((current) => current.map((m) => (m.id === model.id ? previous : m)));
-			const message = getIpcErrorMessage(error, t("models.toast.updateModelFailed"));
-			setModelMutationError(message);
-			toast.error({ title: t("models.toast.updateFailed"), description: message });
 		} finally {
 			setPendingModelIds((current) => {
 				const next = new Set(current);
@@ -1171,8 +1137,8 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
 								void handleModelEnabledChange(modelId, nextEnabled);
 							}}
 							onRenameModel={handleRenameModel}
-							onAdapterIdChange={(model, adapterId) => {
-								void handleModelAdapterIdChange(model, adapterId);
+							onEditModel={(model) => {
+								setEditingConfigModel(model);
 							}}
 							selectionMode={selectionMode}
 							selectedModelIds={selectedModelIds}
@@ -1240,6 +1206,21 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
 						return [...current, model];
 					});
 					void queryClient.invalidateQueries({ queryKey: modelKeys.all });
+				}}
+			/>
+
+			<EditModelConfigDialog
+				open={editingConfigModel !== null}
+				model={editingConfigModel}
+				onOpenChange={(open) => {
+					if (!open) {
+						setEditingConfigModel(null);
+					}
+				}}
+				onSaved={(updated) => {
+					setModelsCache((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+					void queryClient.invalidateQueries({ queryKey: modelKeys.all });
+					setEditingConfigModel(null);
 				}}
 			/>
 
