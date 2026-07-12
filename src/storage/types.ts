@@ -85,11 +85,11 @@ export interface ProviderInstanceWrite {
 export interface CapabilityOverridesV1 {
 	schemaVersion: 1;
 	streaming?: boolean | null;
-	/** Model context-window capability limit. Defaults to 128 Ki tokens in the editor. */
+	/** Model context-window limit. Defaults to 128 Ki tokens in the editor. */
 	maxContextTokens?: number | null;
-	/** Model output capability limit. Defaults to 32 Ki tokens in the editor. */
+	/** Max tokens for the model; used for requests when a profile does not override. */
 	maxOutputTokens?: number | null;
-	/** Model-level request value used when a profile does not override it. */
+	/** Request max tokens when a profile does not override; kept equal to maxOutputTokens by the editor. */
 	defaultOutputTokens?: number | null;
 	textGeneration?: boolean | null;
 	imageAnalysis?: boolean | null;

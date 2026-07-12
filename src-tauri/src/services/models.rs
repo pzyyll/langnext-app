@@ -955,8 +955,13 @@ pub(crate) fn resolve_model_chat_transport(
 	}
 
 	let adapter_id = resolve_model_adapter_id(model.adapter_id.as_deref(), &provider.adapter_id);
+	// Prefer explicit request default, then Max Tokens (max_output_tokens). Profile still wins at resolve time.
 	let model_default_output_tokens = CapabilityOverridesV1::from_json(&model.capability_overrides_json)?
-		.and_then(|capabilities| capabilities.default_output_tokens);
+		.and_then(|capabilities| {
+			capabilities
+				.default_output_tokens
+				.or(capabilities.max_output_tokens)
+		});
 	match resolve_endpoint_and_secret(vault, &provider, &adapter_id)? {
 		EndpointSecret::Missing => Ok(ModelChatResolve::MissingCredential),
 		EndpointSecret::StoreFailure => Ok(ModelChatResolve::CredentialStoreFailure),

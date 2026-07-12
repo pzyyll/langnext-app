@@ -1,5 +1,5 @@
-// ABOUTME: Modal dialog for editing model API type, capability limits, and request defaults.
-// ABOUTME: Separates model limits from profile-overridable runtime values and persists them through IPC.
+// ABOUTME: Modal dialog for editing model API type, capability flags, and token limits.
+// ABOUTME: Persists capability overrides through IPC; profile max tokens still override at request time.
 import { useMemo, useState } from "react";
 import { Button } from "@base-ui/react/button";
 import { Dialog } from "@base-ui/react/dialog";
@@ -24,8 +24,7 @@ import { ADAPTER_OPTIONS, getAdapterLabel } from "./adapterOptions";
 const TOKEN_MIN = 1;
 const TOKEN_MAX = 0xffff_ffff;
 const DEFAULT_CONTEXT_LIMIT = 128 * 1024;
-const DEFAULT_OUTPUT_LIMIT = 32 * 1024;
-const DEFAULT_REQUEST_TOKENS = 4096;
+const DEFAULT_MAX_TOKENS = 32 * 1024;
 
 export type EditModelConfigDialogProps = {
 	open: boolean;
@@ -86,8 +85,7 @@ function EditModelConfigForm({ model, onSaved }: EditModelConfigFormProps) {
 	const [imageAnalysis, setImageAnalysis] = useState(initial.imageAnalysis);
 	const [videoProcessing, setVideoProcessing] = useState(initial.videoProcessing);
 	const [contextLimit, setContextLimit] = useState(initial.contextLimit);
-	const [outputLimit, setOutputLimit] = useState(initial.outputLimit);
-	const [requestMaxTokens, setRequestMaxTokens] = useState(initial.requestMaxTokens);
+	const [maxTokens, setMaxTokens] = useState(initial.maxTokens);
 	const [pending, setPending] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 
@@ -114,8 +112,7 @@ function EditModelConfigForm({ model, onSaved }: EditModelConfigFormProps) {
 				imageAnalysis,
 				videoProcessing,
 				contextLimit,
-				outputLimit,
-				requestMaxTokens,
+				maxTokens,
 			});
 			const updated = await updateModelConfig({
 				id: model.id,
@@ -162,7 +159,6 @@ function EditModelConfigForm({ model, onSaved }: EditModelConfigFormProps) {
 							</option>
 						))}
 					</select>
-					<p className="text-xs text-neutral">{t("models.apiTypeModelHint")}</p>
 				</div>
 
 				<div className="space-y-2">
@@ -237,71 +233,31 @@ function EditModelConfigForm({ model, onSaved }: EditModelConfigFormProps) {
 							disabled={pending}
 							required
 						/>
-						<p className="text-xs text-neutral">{t("models.editModelConfig.contextLimitHint")}</p>
 					</div>
 
 					<div className="space-y-2">
 						<label
 							className="block text-label-sm font-bold uppercase tracking-widest text-neutral"
-							htmlFor="edit-model-output-limit"
+							htmlFor="edit-model-max-tokens"
 						>
-							{t("models.editModelConfig.outputLimit")}
+							{t("models.editModelConfig.maxTokens")}
 						</label>
 						<input
-							id="edit-model-output-limit"
+							id="edit-model-max-tokens"
 							type="number"
 							className={`${inputClassName} font-mono`}
 							min={TOKEN_MIN}
 							max={TOKEN_MAX}
 							step={1}
-							value={outputLimit}
+							value={maxTokens}
 							onChange={(event) => {
-								const nextLimit = toPositiveInteger(event.currentTarget.value, DEFAULT_OUTPUT_LIMIT);
-								setOutputLimit(nextLimit);
-								setRequestMaxTokens((current) => Math.min(current, nextLimit));
+								setMaxTokens(toPositiveInteger(event.currentTarget.value, DEFAULT_MAX_TOKENS));
 							}}
 							disabled={pending}
 							required
 						/>
-						<p className="text-xs text-neutral">{t("models.editModelConfig.outputLimitHint")}</p>
 					</div>
 				</div>
-
-				<div className="space-y-2">
-					<div className="flex items-center justify-between">
-						<label
-							className="block text-label-sm font-bold uppercase tracking-widest text-neutral"
-							htmlFor="edit-model-request-max-tokens"
-						>
-							{t("models.editModelConfig.requestMaxTokens")}
-						</label>
-						<span className="bg-on-surface px-1 font-mono text-body-tight font-bold text-surface">
-							{requestMaxTokens}
-						</span>
-					</div>
-					<input
-						id="edit-model-request-max-tokens"
-						type="range"
-						className="h-2 w-full cursor-pointer accent-on-surface disabled:opacity-50"
-						min={TOKEN_MIN}
-						max={outputLimit}
-						step={1}
-						value={requestMaxTokens}
-						aria-valuetext={t("models.editModelConfig.tokens", { count: requestMaxTokens })}
-						onChange={(event) => {
-							setRequestMaxTokens(Number(event.currentTarget.value));
-						}}
-						disabled={pending}
-					/>
-					<div className="mt-1 flex justify-between font-mono text-[10px] text-neutral">
-						{tokenRangeMarks(outputLimit).map((mark) => (
-							<span key={mark}>{mark}</span>
-						))}
-					</div>
-					<p className="text-xs text-neutral">{t("models.editModelConfig.requestMaxTokensHint")}</p>
-				</div>
-
-				<div className="border-t border-dashed border-line pt-2" />
 
 				{error ? (
 					<p className="text-body-tight text-error" role="alert">
@@ -328,8 +284,7 @@ type FormState = {
 	imageAnalysis: boolean;
 	videoProcessing: boolean;
 	contextLimit: number;
-	outputLimit: number;
-	requestMaxTokens: number;
+	maxTokens: number;
 };
 
 function formStateFromModel(model: ProviderModelDto): FormState {
@@ -340,8 +295,8 @@ function formStateFromModel(model: ProviderModelDto): FormState {
 		imageAnalysis: caps?.imageAnalysis ?? false,
 		videoProcessing: caps?.videoProcessing ?? false,
 		contextLimit: positiveIntegerOr(caps?.maxContextTokens, DEFAULT_CONTEXT_LIMIT),
-		outputLimit: positiveIntegerOr(caps?.maxOutputTokens, DEFAULT_OUTPUT_LIMIT),
-		requestMaxTokens: resolveInitialRequestTokens(caps),
+		// Prefer the request value when present so existing configs keep their effective max.
+		maxTokens: positiveIntegerOr(caps?.defaultOutputTokens ?? caps?.maxOutputTokens, DEFAULT_MAX_TOKENS),
 	};
 }
 
@@ -356,25 +311,13 @@ function toPositiveInteger(raw: string, fallback: number): number {
 	return positiveIntegerOr(Number(raw), fallback);
 }
 
-function resolveInitialRequestTokens(caps: CapabilityOverridesV1 | null): number {
-	const outputLimit = positiveIntegerOr(caps?.maxOutputTokens, DEFAULT_OUTPUT_LIMIT);
-	return Math.min(positiveIntegerOr(caps?.defaultOutputTokens, DEFAULT_REQUEST_TOKENS), outputLimit);
-}
-
-function tokenRangeMarks(limit: number): number[] {
-	return Array.from(
-		new Set([TOKEN_MIN, 0.25, 0.5, 0.75, 1].map((ratio) => Math.max(TOKEN_MIN, Math.round(limit * ratio)))),
-	);
-}
-
 function buildCapabilityOverrides(input: {
 	previous: CapabilityOverridesV1 | null;
 	textGeneration: boolean;
 	imageAnalysis: boolean;
 	videoProcessing: boolean;
 	contextLimit: number;
-	outputLimit: number;
-	requestMaxTokens: number;
+	maxTokens: number;
 }): CapabilityOverridesV1 {
 	const overrides: CapabilityOverridesV1 = {
 		schemaVersion: 1,
@@ -382,8 +325,9 @@ function buildCapabilityOverrides(input: {
 		imageAnalysis: input.imageAnalysis,
 		videoProcessing: input.videoProcessing,
 		maxContextTokens: input.contextLimit,
-		maxOutputTokens: input.outputLimit,
-		defaultOutputTokens: input.requestMaxTokens,
+		// Write the same value for both fields so the request path uses Max Tokens as-is.
+		maxOutputTokens: input.maxTokens,
+		defaultOutputTokens: input.maxTokens,
 	};
 	// Preserve streaming when present so unrelated sparse fields are not dropped.
 	if (input.previous?.streaming != null) {

@@ -13,9 +13,10 @@ pub struct CapabilityOverridesV1 {
 	pub streaming: Option<bool>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub max_context_tokens: Option<u32>,
+	/// Max tokens for the model; also used for requests when no request default is set.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub max_output_tokens: Option<u32>,
-	/// Model-level request value used when a translation profile does not override it.
+	/// Request max tokens when a translation profile does not override it.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub default_output_tokens: Option<u32>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
