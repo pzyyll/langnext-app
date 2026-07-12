@@ -158,7 +158,7 @@ const zhCN = {
 			createTitle: "新建预设",
 			editTitle: "编辑预设",
 			selectHint: "选择一个预设进行编辑，或新建一个。",
-			enabledLabel: "启用",
+			enabledLabel: "状态",
 			primaryModel: "主模型",
 			primaryModelRequired: "请选择主模型。",
 			fallbackModels: "回退模型",

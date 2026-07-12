@@ -46,7 +46,9 @@ function SettingsPage() {
 
 			<section className="shadow-frame max-w-lg border border-line bg-surface p-gutter">
 				<fieldset className="flex flex-col gap-3 border-0 p-0">
-					<legend className="float-left w-full text-body-bold font-bold text-on-surface">{t("settings.theme.title")}</legend>
+					<legend className="float-left w-full text-body-bold font-bold text-on-surface">
+						{t("settings.theme.title")}
+					</legend>
 					<p id="settings-theme-desc" className="clear-both text-body-tight text-neutral">
 						{t("settings.theme.description")}
 					</p>

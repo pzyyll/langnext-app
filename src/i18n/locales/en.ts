@@ -160,7 +160,7 @@ const en = {
 			createTitle: "New profile",
 			editTitle: "Edit profile",
 			selectHint: "Select a profile to edit, or create a new one.",
-			enabledLabel: "Enabled",
+			enabledLabel: "Status",
 			primaryModel: "Primary model",
 			primaryModelRequired: "Select a primary model.",
 			fallbackModels: "Fallback models",

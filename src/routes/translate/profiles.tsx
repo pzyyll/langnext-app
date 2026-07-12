@@ -6,10 +6,10 @@ import { Link, createFileRoute } from "@tanstack/react-router";
 import { Button } from "@base-ui/react/button";
 import { Switch } from "@base-ui/react/switch";
 import { useTranslation } from "react-i18next";
+import { Badge } from "../../components/Badge";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { useToast } from "../../components/toast/useToast";
 import {
-	dangerButtonClassName,
 	inputClassName,
 	outlineButtonClassName,
 	primaryButtonClassName,
@@ -27,6 +27,7 @@ import {
 import { deleteTranslationProfile, saveTranslationProfile, setTranslationProfileEnabled } from "../../storage/client";
 import { getIpcErrorMessage } from "../../storage/errors";
 import type { ProviderInstanceDto, ProviderModelDto, TranslationProfileDto } from "../../storage/types";
+import IconMaterialSymbolsLightDeleteOutlineSharp from "~icons/material-symbols-light/delete-outline-sharp";
 
 export const Route = createFileRoute("/translate/profiles")({
 	component: TranslateProfilesPage,
@@ -50,8 +51,27 @@ const DEFAULT_USER_TEMPLATE = "{{text}}";
 const DEFAULT_TEMPERATURE = 0.2;
 const DEFAULT_MAX_OUTPUT_TOKENS = 4096;
 
+const fieldLabelClassName = "text-label-sm font-bold uppercase text-on-surface";
+
 const templateTextareaClassName =
-	"min-h-28 w-full resize-y rounded-none border border-line bg-surface px-3 py-2 font-mono text-body-tight font-normal text-on-surface placeholder:text-neutral focus:outline-2 focus:-outline-offset-1 focus:outline-on-surface disabled:border-disabled disabled:text-disabled";
+	"min-h-28 w-full resize-y rounded-none border border-line bg-surface p-3 font-mono text-body-tight font-normal text-on-surface placeholder:text-neutral focus:outline-2 focus:-outline-offset-1 focus:outline-on-surface disabled:border-disabled disabled:text-disabled";
+
+const sectionDividerClassName = "space-y-4 border-t border-outline-variant pt-4";
+
+const squareIconButtonClassName = `${outlineButtonClassName} size-control-height shrink-0 px-0`;
+
+const dangerIconButtonClassName =
+	"inline-flex size-7 shrink-0 cursor-default items-center justify-center rounded-none border-0 bg-transparent text-error hover:bg-surface-2 hover:text-error active:bg-surface-3 focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface data-disabled:text-disabled disabled:text-disabled";
+
+const newProfileButtonClassName = `${outlineButtonClassName} w-full font-bold hover:not-data-disabled:bg-on-surface hover:not-data-disabled:text-surface`;
+
+/**
+ * Shared rail/editor footer: fixed border-box block size so both columns match.
+ * Size = py-4×2 (2rem) + h-control-height action row (2rem) + border-t (1px).
+ * Explicit h/min-h/max-h + grow-0/shrink-0; both columns use h-control-height actions.
+ */
+const panelFooterClassName =
+	"box-border flex h-[calc(2rem+2rem+1px)] max-h-[calc(2rem+2rem+1px)] min-h-[calc(2rem+2rem+1px)] shrink-0 grow-0 items-center border-t border-line px-8 py-4";
 
 type ModelOption = {
 	id: string;
@@ -495,27 +515,30 @@ function TranslateProfilesPage() {
 	const listEmpty = !profilesLoading && !profilesError && profiles.length === 0 && !isCreating;
 
 	return (
-		<div className={`flex min-h-0 flex-col gap-gutter ${LAYOUT_HEIGHT_CLASS}`}>
-			<header className="flex shrink-0 flex-wrap items-center justify-between gap-3 border border-line bg-surface-2 px-gutter py-2">
-				<div className="flex min-w-0 flex-col gap-1">
-					<h1 className="text-headline-sm font-bold text-on-surface">{t("translate.profiles.title")}</h1>
-					<p className="text-body-tight text-neutral">{t("translate.profiles.subtitle")}</p>
+		<div className={`flex min-h-0 flex-col overflow-hidden border border-line bg-surface ${LAYOUT_HEIGHT_CLASS}`}>
+			{/* Page header */}
+			<header className="flex h-16 shrink-0 items-center justify-between gap-3 border-b border-line bg-surface px-8">
+				<div className="min-w-0">
+					<h1 className="text-headline-sm font-bold tracking-tight text-on-surface uppercase">
+						{t("translate.profiles.title")}
+					</h1>
+					<p className="text-label-sm text-neutral uppercase">{t("translate.profiles.subtitle")}</p>
 				</div>
-				<Link to="/translate" className={`${outlineButtonClassName} no-underline`}>
+				<Link to="/translate" className={`${outlineButtonClassName} font-bold no-underline uppercase`}>
 					{t("translate.profiles.backToTranslate")}
 				</Link>
 			</header>
 
-			<div className="shadow-frame flex min-h-0 flex-1 flex-col overflow-hidden border border-line bg-surface lg:flex-row">
-				{/* Profile list */}
-				<aside className="flex max-h-64 w-full shrink-0 flex-col border-b border-line bg-surface lg:max-h-none lg:w-models-rail lg:border-r lg:border-b-0">
-					<div className="flex min-h-0 flex-1 flex-col p-gutter">
-						<div className="mb-3 flex shrink-0 items-center justify-between gap-2">
-							<h2 className="text-label-sm font-bold tracking-wide text-on-surface uppercase">
-								{t("translate.profiles.listTitle")}
-							</h2>
-						</div>
+			<div className="flex min-h-0 flex-1 flex-col overflow-hidden lg:flex-row">
+				{/* Profiles rail */}
+				<aside className="flex max-h-64 w-full shrink-0 flex-col border-b border-line bg-surface-2 lg:max-h-none lg:w-64 lg:border-r lg:border-b-0">
+					<div className="shrink-0 border-b border-line p-3">
+						<span className="text-table-header font-bold text-neutral uppercase">
+							{t("translate.profiles.listTitle")}
+						</span>
+					</div>
 
+					<div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
 						{profilesLoading ? (
 							<p className="text-body-tight text-neutral" aria-live="polite">
 								{t("translate.profiles.loading")}
@@ -540,7 +563,7 @@ function TranslateProfilesPage() {
 						{listEmpty ? <p className="text-body-tight text-neutral">{t("translate.profiles.empty")}</p> : null}
 
 						{!profilesLoading && !profilesError && profiles.length > 0 ? (
-							<ul className="min-h-0 flex-1 space-y-1 overflow-y-auto">
+							<ul className="space-y-4">
 								{profiles.map((profile) => {
 									const active = !isCreating && resolvedSelectedId === profile.id;
 									const sourceLabel = isLanguageId(profile.sourceLang)
@@ -555,48 +578,28 @@ function TranslateProfilesPage() {
 												type="button"
 												className={
 													active
-														? "w-full rounded-none bg-surface-2 px-3 py-2 text-left"
-														: "w-full rounded-none px-3 py-2 text-left hover:bg-surface-2"
+														? "shadow-frame w-full cursor-default rounded-none border border-line bg-surface p-3 text-left"
+														: "w-full cursor-pointer rounded-none border border-line bg-surface p-3 text-left transition-colors hover:bg-surface-container"
 												}
 												onClick={() => {
 													selectProfile(profile.id);
 												}}
 											>
-												<div className="flex items-center justify-between gap-2">
-													<span
-														className={
-															active
-																? "truncate text-body-tight font-bold text-on-surface"
-																: "truncate text-body-tight text-on-surface"
-														}
-													>
-														{profile.name}
-													</span>
-													<span
-														className={
-															profile.enabled
-																? "shrink-0 text-label-sm text-neutral"
-																: "shrink-0 text-label-sm text-disabled"
-														}
-													>
-														{profile.enabled ? t("common.enabled") : t("common.disabled")}
-													</span>
+												<div className="mb-1 flex items-start justify-between gap-2">
+													<span className="truncate text-body-tight font-bold text-on-surface">{profile.name}</span>
+													{profile.enabled ? <Badge tone="accent">{t("common.enabled")}</Badge> : null}
 												</div>
-												<p className="mt-0.5 truncate text-label-sm text-neutral">
+												<div className="truncate text-code-inline text-neutral">
 													{t("translate.profiles.langArrow", {
 														source: sourceLabel,
 														target: targetLabel,
 													})}
-												</p>
-												<p className="mt-0.5 truncate text-label-sm text-neutral">
+												</div>
+												<div className="truncate text-code-inline text-disabled">
 													{profile.primaryModelId
 														? (modelLabelById.get(profile.primaryModelId) ?? profile.primaryModelId)
 														: t("translate.profiles.noPrimaryModel")}
-													{" · "}
-													{t("translate.profiles.fallbackCount", {
-														count: profile.fallbackCount,
-													})}
-												</p>
+												</div>
 											</button>
 										</li>
 									);
@@ -605,27 +608,23 @@ function TranslateProfilesPage() {
 						) : null}
 					</div>
 
-					<div className="shrink-0 border-t border-line p-gutter">
-						<Button
-							type="button"
-							className={`${outlineButtonClassName} w-full bg-surface-2 hover:not-data-disabled:bg-surface-3`}
-							onClick={startCreate}
-						>
-							{t("translate.profiles.createNew")}
+					<div className={panelFooterClassName}>
+						<Button type="button" className={newProfileButtonClassName} onClick={startCreate}>
+							+ {t("translate.profiles.createNew")}
 						</Button>
 					</div>
 				</aside>
 
-				{/* Editor panel */}
-				<div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto p-gutter">
+				{/* Profile editor */}
+				<section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-surface">
 					{modelsError ? (
-						<p className="mb-3 text-body-tight text-error" role="alert">
+						<p className="shrink-0 px-8 pt-4 text-body-tight text-error" role="alert">
 							{modelsError}
 						</p>
 					) : null}
 
 					{!showEditor && listEmpty ? (
-						<div className="flex flex-1 flex-col items-start justify-center gap-3">
+						<div className="flex flex-1 flex-col items-start justify-center gap-3 p-8">
 							<p className="text-body-tight text-neutral">{t("translate.profiles.emptyHint")}</p>
 							<Button type="button" className={primaryButtonClassName} onClick={startCreate}>
 								{t("translate.profiles.emptyCreate")}
@@ -634,357 +633,363 @@ function TranslateProfilesPage() {
 					) : null}
 
 					{!showEditor && !listEmpty ? (
-						<p className="text-body-tight text-neutral">{t("translate.profiles.selectHint")}</p>
+						<p className="p-8 text-body-tight text-neutral">{t("translate.profiles.selectHint")}</p>
 					) : null}
 
 					{editorLoading ? (
-						<p className="text-body-tight text-neutral" aria-live="polite">
+						<p className="p-8 text-body-tight text-neutral" aria-live="polite">
 							{t("translate.profiles.loadingEditor")}
 						</p>
 					) : null}
 
 					{editorError ? (
-						<p className="text-body-tight text-error" role="alert">
+						<p className="p-8 text-body-tight text-error" role="alert">
 							{editorError}
 						</p>
 					) : null}
 
 					{draft && !editorLoading ? (
 						<form
-							className="flex max-w-3xl flex-col gap-6"
+							className="flex min-h-0 flex-1 flex-col overflow-hidden"
 							onSubmit={(event) => {
 								event.preventDefault();
 								handleSave();
 							}}
 						>
-							<div className="flex flex-wrap items-center justify-between gap-3">
-								<h2 className="text-headline-sm font-bold text-on-surface">
-									{draft.id ? t("translate.profiles.editTitle") : t("translate.profiles.createTitle")}
-								</h2>
-								<label className="flex items-center gap-2 text-body-tight text-on-surface">
-									<span className="text-label-sm text-neutral uppercase">{t("translate.profiles.enabledLabel")}</span>
-									<Switch.Root
-										checked={draft.enabled}
-										disabled={enabledPending || savePending}
-										onCheckedChange={(checked) => {
-											handleEnabledChange(checked);
-										}}
-										className={switchRootClassName}
-									>
-										<Switch.Thumb className={switchThumbClassName} />
-									</Switch.Root>
-								</label>
-							</div>
-
-							<div>
-								<label className="mb-1 block text-body-tight font-medium text-on-surface" htmlFor="profile-name">
-									{t("translate.profileNameLabel")}
-								</label>
-								<input
-									id="profile-name"
-									className={inputClassName}
-									type="text"
-									value={draft.name}
-									placeholder={t("translate.profileNamePlaceholder")}
-									spellCheck={false}
-									autoComplete="off"
-									disabled={savePending}
-									onChange={(event) => {
-										updateDraft({ name: event.currentTarget.value });
-									}}
-								/>
-							</div>
-
-							<div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-								<div>
-									<label
-										className="mb-1 block text-body-tight font-medium text-on-surface"
-										htmlFor="profile-source-lang"
-									>
-										{t("translate.sourceLanguage")}
-									</label>
-									<select
-										id="profile-source-lang"
-										className={selectClassName}
-										value={draft.sourceLang}
-										disabled={savePending}
-										onChange={(event) => {
-											updateDraft({ sourceLang: event.currentTarget.value as LanguageId });
-										}}
-									>
-										{languageOptions.map((option) => (
-											<option key={option.id} value={option.id}>
-												{option.label}
-											</option>
-										))}
-									</select>
-								</div>
-								<div>
-									<label
-										className="mb-1 block text-body-tight font-medium text-on-surface"
-										htmlFor="profile-target-lang"
-									>
-										{t("translate.targetLanguage")}
-									</label>
-									<select
-										id="profile-target-lang"
-										className={selectClassName}
-										value={draft.targetLang}
-										disabled={savePending}
-										onChange={(event) => {
-											updateDraft({ targetLang: event.currentTarget.value as LanguageId });
-										}}
-									>
-										{languageOptions.map((option) => (
-											<option key={option.id} value={option.id}>
-												{option.label}
-											</option>
-										))}
-									</select>
-								</div>
-							</div>
-
-							<div>
-								<label
-									className="mb-1 block text-body-tight font-medium text-on-surface"
-									htmlFor="profile-primary-model"
-								>
-									{t("translate.profiles.primaryModel")}
-								</label>
-								<select
-									id="profile-primary-model"
-									className={selectClassName}
-									value={draft.primaryModelId}
-									disabled={savePending || modelsLoading || modelOptions.length === 0}
-									onChange={(event) => {
-										const nextPrimary = event.currentTarget.value;
-										updateDraft({
-											primaryModelId: nextPrimary,
-											fallbackModelIds: draft.fallbackModelIds.filter((id) => id !== nextPrimary),
-										});
-									}}
-								>
-									{modelsLoading ? (
-										<option value="">{t("translate.modelLoading")}</option>
-									) : modelOptions.length === 0 ? (
-										<option value="">{t("translate.modelEmpty")}</option>
-									) : (
-										modelOptions.map((option) => (
-											<option key={option.id} value={option.id}>
-												{option.label}
-											</option>
-										))
-									)}
-								</select>
-								{!modelsLoading && modelOptions.length === 0 ? (
-									<p className="mt-1 text-body-tight text-neutral">{t("translate.noModelsHint")}</p>
-								) : null}
-							</div>
-
-							<div>
-								<div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-									<span className="text-body-tight font-medium text-on-surface">
-										{t("translate.profiles.fallbackModels")}
-									</span>
-									<Button
-										type="button"
-										className={outlineButtonClassName}
-										disabled={savePending || !canAddFallback}
-										onClick={addFallback}
-									>
-										{t("translate.profiles.addFallback")}
-									</Button>
-								</div>
-								{draft.fallbackModelIds.length === 0 ? (
-									<p className="text-body-tight text-neutral">{t("translate.profiles.fallbackEmpty")}</p>
-								) : (
-									<ul className="space-y-2">
-										{draft.fallbackModelIds.map((modelId, index) => (
-											<li
-												key={`fallback-${index}-${modelId}`}
-												className="flex flex-wrap items-center gap-2 border border-line bg-surface-2 p-2"
+							<div className="min-h-0 flex-1 overflow-y-auto p-8">
+								<div className="mx-auto max-w-3xl space-y-8 pb-8">
+									<div className="flex flex-wrap items-end justify-between gap-3 border-b border-line pb-4">
+										<h2 className="text-headline-md font-bold tracking-tighter text-on-surface uppercase">
+											{draft.id ? t("translate.profiles.editTitle") : t("translate.profiles.createTitle")}
+										</h2>
+										<label className="flex items-center gap-3">
+											<span className="text-table-header font-bold text-neutral uppercase">
+												{t("translate.profiles.enabledLabel")}
+											</span>
+											<Switch.Root
+												checked={draft.enabled}
+												disabled={enabledPending || savePending}
+												onCheckedChange={(checked) => {
+													handleEnabledChange(checked);
+												}}
+												className={switchRootClassName}
 											>
-												<span className="w-6 shrink-0 text-center text-label-sm text-neutral">{index + 1}</span>
+												<Switch.Thumb className={switchThumbClassName} />
+											</Switch.Root>
+										</label>
+									</div>
+
+									{/* Basic info */}
+									<div className="space-y-4">
+										<div className="flex flex-col gap-1">
+											<label className={fieldLabelClassName} htmlFor="profile-name">
+												{t("translate.profileNameLabel")}
+											</label>
+											<input
+												id="profile-name"
+												className={inputClassName}
+												type="text"
+												value={draft.name}
+												placeholder={t("translate.profileNamePlaceholder")}
+												spellCheck={false}
+												autoComplete="off"
+												disabled={savePending}
+												onChange={(event) => {
+													updateDraft({ name: event.currentTarget.value });
+												}}
+											/>
+										</div>
+										<div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+											<div className="flex flex-col gap-1">
+												<label className={fieldLabelClassName} htmlFor="profile-source-lang">
+													{t("translate.sourceLanguage")}
+												</label>
 												<select
-													className={`${selectClassName} min-w-0 flex-1`}
-													value={modelId}
+													id="profile-source-lang"
+													className={selectClassName}
+													value={draft.sourceLang}
 													disabled={savePending}
-													aria-label={t("translate.profiles.fallbackItemAria", {
-														index: index + 1,
-													})}
 													onChange={(event) => {
-														setFallbackAt(index, event.currentTarget.value);
+														updateDraft({ sourceLang: event.currentTarget.value as LanguageId });
 													}}
 												>
-													{modelOptions.map((option) => (
+													{languageOptions.map((option) => (
 														<option key={option.id} value={option.id}>
 															{option.label}
 														</option>
 													))}
-													{/* Keep orphaned ids selectable until user changes them. */}
-													{!modelOptions.some((option) => option.id === modelId) && modelId ? (
-														<option value={modelId}>{modelLabelById.get(modelId) ?? modelId}</option>
-													) : null}
 												</select>
-												<div className="flex shrink-0 gap-1">
-													<Button
-														type="button"
-														className={outlineButtonClassName}
-														disabled={savePending || index === 0}
-														aria-label={t("translate.profiles.moveUp")}
-														onClick={() => {
-															moveFallback(index, -1);
-														}}
-													>
-														↑
-													</Button>
-													<Button
-														type="button"
-														className={outlineButtonClassName}
-														disabled={savePending || index === draft.fallbackModelIds.length - 1}
-														aria-label={t("translate.profiles.moveDown")}
-														onClick={() => {
-															moveFallback(index, 1);
-														}}
-													>
-														↓
-													</Button>
-													<Button
-														type="button"
-														className={outlineButtonClassName}
-														disabled={savePending}
-														aria-label={t("translate.profiles.removeFallback")}
-														onClick={() => {
-															removeFallback(index);
-														}}
-													>
-														{t("translate.profiles.removeFallback")}
-													</Button>
-												</div>
-											</li>
-										))}
-									</ul>
-								)}
-							</div>
+											</div>
+											<div className="flex flex-col gap-1">
+												<label className={fieldLabelClassName} htmlFor="profile-target-lang">
+													{t("translate.targetLanguage")}
+												</label>
+												<select
+													id="profile-target-lang"
+													className={selectClassName}
+													value={draft.targetLang}
+													disabled={savePending}
+													onChange={(event) => {
+														updateDraft({ targetLang: event.currentTarget.value as LanguageId });
+													}}
+												>
+													{languageOptions.map((option) => (
+														<option key={option.id} value={option.id}>
+															{option.label}
+														</option>
+													))}
+												</select>
+											</div>
+										</div>
+									</div>
 
-							<div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-								<div>
-									<label
-										className="mb-1 block text-body-tight font-medium text-on-surface"
-										htmlFor="profile-temperature"
-									>
-										{t("translate.profiles.temperature")}
-									</label>
-									<input
-										id="profile-temperature"
-										className={inputClassName}
-										type="number"
-										step="0.1"
-										min="0"
-										max="2"
-										value={draft.temperature}
-										placeholder={String(DEFAULT_TEMPERATURE)}
-										disabled={savePending}
-										onChange={(event) => {
-											updateDraft({ temperature: event.currentTarget.value });
-										}}
-									/>
-									<p className="mt-1 text-label-sm text-neutral">
-										{t("common.default", { value: DEFAULT_TEMPERATURE })}
-									</p>
+									{/* Models */}
+									<div className={sectionDividerClassName}>
+										<div className="flex flex-col gap-1">
+											<label className={fieldLabelClassName} htmlFor="profile-primary-model">
+												{t("translate.profiles.primaryModel")}
+											</label>
+											<select
+												id="profile-primary-model"
+												className={selectClassName}
+												value={draft.primaryModelId}
+												disabled={savePending || modelsLoading || modelOptions.length === 0}
+												onChange={(event) => {
+													const nextPrimary = event.currentTarget.value;
+													updateDraft({
+														primaryModelId: nextPrimary,
+														fallbackModelIds: draft.fallbackModelIds.filter((id) => id !== nextPrimary),
+													});
+												}}
+											>
+												{modelsLoading ? (
+													<option value="">{t("translate.modelLoading")}</option>
+												) : modelOptions.length === 0 ? (
+													<option value="">{t("translate.modelEmpty")}</option>
+												) : (
+													modelOptions.map((option) => (
+														<option key={option.id} value={option.id}>
+															{option.label}
+														</option>
+													))
+												)}
+											</select>
+											{!modelsLoading && modelOptions.length === 0 ? (
+												<p className="text-body-tight text-neutral">{t("translate.noModelsHint")}</p>
+											) : null}
+										</div>
+
+										<div className="space-y-2">
+											<div className="flex flex-wrap items-center justify-between gap-2">
+												<span className={fieldLabelClassName}>{t("translate.profiles.fallbackModels")}</span>
+												<Button
+													type="button"
+													className={`${outlineButtonClassName} h-6 px-2 text-table-header font-bold uppercase`}
+													disabled={savePending || !canAddFallback}
+													onClick={addFallback}
+												>
+													{t("translate.profiles.addFallback")}
+												</Button>
+											</div>
+											{draft.fallbackModelIds.length === 0 ? (
+												<p className="text-body-tight text-neutral">{t("translate.profiles.fallbackEmpty")}</p>
+											) : (
+												<ul className="space-y-2">
+													{draft.fallbackModelIds.map((modelId, index) => (
+														<li key={`fallback-${index}-${modelId}`} className="flex flex-wrap items-center gap-2">
+															<div className="flex size-control-height shrink-0 items-center justify-center border border-line bg-surface-2 text-code-inline font-bold text-on-surface">
+																{index + 1}
+															</div>
+															<select
+																className={`${selectClassName} min-w-0 flex-1`}
+																value={modelId}
+																disabled={savePending}
+																aria-label={t("translate.profiles.fallbackItemAria", {
+																	index: index + 1,
+																})}
+																onChange={(event) => {
+																	setFallbackAt(index, event.currentTarget.value);
+																}}
+															>
+																{modelOptions.map((option) => (
+																	<option key={option.id} value={option.id}>
+																		{option.label}
+																	</option>
+																))}
+																{/* Keep orphaned ids selectable until user changes them. */}
+																{!modelOptions.some((option) => option.id === modelId) && modelId ? (
+																	<option value={modelId}>{modelLabelById.get(modelId) ?? modelId}</option>
+																) : null}
+															</select>
+															<Button
+																type="button"
+																className={squareIconButtonClassName}
+																disabled={savePending || index === 0}
+																aria-label={t("translate.profiles.moveUp")}
+																onClick={() => {
+																	moveFallback(index, -1);
+																}}
+															>
+																↑
+															</Button>
+															<Button
+																type="button"
+																className={squareIconButtonClassName}
+																disabled={savePending || index === draft.fallbackModelIds.length - 1}
+																aria-label={t("translate.profiles.moveDown")}
+																onClick={() => {
+																	moveFallback(index, 1);
+																}}
+															>
+																↓
+															</Button>
+															<Button
+																type="button"
+																className={`${outlineButtonClassName} h-control-height px-3 text-table-header font-bold uppercase hover:not-data-disabled:border-error hover:not-data-disabled:bg-error hover:not-data-disabled:text-on-error`}
+																disabled={savePending}
+																aria-label={t("translate.profiles.removeFallback")}
+																onClick={() => {
+																	removeFallback(index);
+																}}
+															>
+																{t("translate.profiles.removeFallback")}
+															</Button>
+														</li>
+													))}
+												</ul>
+											)}
+										</div>
+									</div>
+
+									{/* Parameters */}
+									<div className="grid grid-cols-1 gap-8 border-t border-outline-variant pt-4 sm:grid-cols-2">
+										<div className="flex flex-col gap-1">
+											<label className={fieldLabelClassName} htmlFor="profile-temperature">
+												{t("translate.profiles.temperature")}
+											</label>
+											<input
+												id="profile-temperature"
+												className={inputClassName}
+												type="number"
+												step="0.1"
+												min="0"
+												max="2"
+												value={draft.temperature}
+												placeholder={String(DEFAULT_TEMPERATURE)}
+												disabled={savePending}
+												onChange={(event) => {
+													updateDraft({ temperature: event.currentTarget.value });
+												}}
+											/>
+											<span className="text-table-header text-disabled">
+												{t("common.default", { value: DEFAULT_TEMPERATURE })}
+											</span>
+										</div>
+										<div className="flex flex-col gap-1">
+											<label className={fieldLabelClassName} htmlFor="profile-max-tokens">
+												{t("translate.profiles.maxTokens")}
+											</label>
+											<input
+												id="profile-max-tokens"
+												className={inputClassName}
+												type="number"
+												step="1"
+												min="1"
+												value={draft.maxOutputTokens}
+												placeholder={String(DEFAULT_MAX_OUTPUT_TOKENS)}
+												disabled={savePending}
+												onChange={(event) => {
+													updateDraft({ maxOutputTokens: event.currentTarget.value });
+												}}
+											/>
+											<span className="text-table-header text-disabled">
+												{t("common.default", { value: DEFAULT_MAX_OUTPUT_TOKENS })}
+											</span>
+										</div>
+									</div>
+
+									{/* Prompt templates */}
+									<div className="space-y-6 border-t border-outline-variant pt-4">
+										<div className="flex flex-col gap-1">
+											<label className={fieldLabelClassName} htmlFor="profile-system-template">
+												{t("translate.systemTemplateLabel")}
+											</label>
+											<textarea
+												id="profile-system-template"
+												className={templateTextareaClassName}
+												value={draft.systemTemplate}
+												spellCheck={false}
+												disabled={savePending}
+												onChange={(event) => {
+													updateDraft({ systemTemplate: event.currentTarget.value });
+												}}
+											/>
+											<span className="font-mono text-table-header text-disabled italic">{templateVarsHint}</span>
+										</div>
+										<div className="flex flex-col gap-1">
+											<label className={fieldLabelClassName} htmlFor="profile-user-template">
+												{t("translate.userTemplateLabel")}
+											</label>
+											<textarea
+												id="profile-user-template"
+												className={templateTextareaClassName}
+												value={draft.userTemplate}
+												spellCheck={false}
+												disabled={savePending}
+												onChange={(event) => {
+													updateDraft({ userTemplate: event.currentTarget.value });
+												}}
+											/>
+											<span className="font-mono text-table-header text-disabled italic">{templateVarsHint}</span>
+										</div>
+									</div>
+
+									{saveError ? (
+										<p className="text-body-tight text-error" role="alert">
+											{saveError}
+										</p>
+									) : null}
 								</div>
-								<div>
-									<label
-										className="mb-1 block text-body-tight font-medium text-on-surface"
-										htmlFor="profile-max-tokens"
-									>
-										{t("translate.profiles.maxTokens")}
-									</label>
-									<input
-										id="profile-max-tokens"
-										className={inputClassName}
-										type="number"
-										step="1"
-										min="1"
-										value={draft.maxOutputTokens}
-										placeholder={String(DEFAULT_MAX_OUTPUT_TOKENS)}
-										disabled={savePending}
-										onChange={(event) => {
-											updateDraft({ maxOutputTokens: event.currentTarget.value });
-										}}
-									/>
-									<p className="mt-1 text-label-sm text-neutral">
-										{t("common.default", { value: DEFAULT_MAX_OUTPUT_TOKENS })}
-									</p>
-								</div>
 							</div>
 
-							<div>
-								<label
-									className="mb-1 block text-body-tight font-medium text-on-surface"
-									htmlFor="profile-system-template"
-								>
-									{t("translate.systemTemplateLabel")}
-								</label>
-								<textarea
-									id="profile-system-template"
-									className={templateTextareaClassName}
-									value={draft.systemTemplate}
-									spellCheck={false}
-									disabled={savePending}
-									onChange={(event) => {
-										updateDraft({ systemTemplate: event.currentTarget.value });
-									}}
-								/>
-								<p className="mt-1 text-label-sm text-neutral">{templateVarsHint}</p>
-							</div>
-
-							<div>
-								<label
-									className="mb-1 block text-body-tight font-medium text-on-surface"
-									htmlFor="profile-user-template"
-								>
-									{t("translate.userTemplateLabel")}
-								</label>
-								<textarea
-									id="profile-user-template"
-									className={templateTextareaClassName}
-									value={draft.userTemplate}
-									spellCheck={false}
-									disabled={savePending}
-									onChange={(event) => {
-										updateDraft({ userTemplate: event.currentTarget.value });
-									}}
-								/>
-								<p className="mt-1 text-label-sm text-neutral">{templateVarsHint}</p>
-							</div>
-
-							{saveError ? (
-								<p className="text-body-tight text-error" role="alert">
-									{saveError}
-								</p>
-							) : null}
-
-							<div className="flex flex-wrap items-center gap-3 border-t border-line pt-4">
-								<Button type="submit" className={primaryButtonClassName} disabled={savePending} focusableWhenDisabled>
-									{savePending ? t("common.saving") : t("common.save")}
-								</Button>
+							{/* Sticky footer actions */}
+							<div className={`${panelFooterClassName} justify-end gap-3 bg-surface`}>
 								{draft.id ? (
 									<Button
 										type="button"
-										className={dangerButtonClassName}
+										className={`${dangerIconButtonClassName} mr-auto`}
+										aria-label={t("common.delete")}
+										title={t("common.delete")}
 										disabled={savePending}
 										onClick={() => {
 											setDeleteOpen(true);
 										}}
 									>
-										{t("common.delete")}
+										<IconMaterialSymbolsLightDeleteOutlineSharp className="pointer-events-none size-5 shrink-0" />
 									</Button>
 								) : null}
+								<Button
+									type="submit"
+									className={`${primaryButtonClassName} relative`}
+									disabled={savePending}
+									focusableWhenDisabled
+									aria-busy={savePending}
+									aria-label={savePending ? t("common.saving") : t("common.save")}
+								>
+									<span className={savePending ? "invisible" : undefined} aria-hidden="true">
+										{t("common.save")}
+									</span>
+									{savePending ? (
+										<span
+											className="absolute size-4 animate-spin rounded-full border-2 border-current border-r-transparent"
+											aria-hidden="true"
+										/>
+									) : null}
+								</Button>
 							</div>
 						</form>
 					) : null}
-				</div>
+				</section>
 			</div>
 
 			<ConfirmDialog

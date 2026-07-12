@@ -181,9 +181,7 @@ export function ModelsTable({
 										<td className="py-4">
 											<span className="font-mono text-mono-key font-bold text-on-surface">{model.modelKey}</span>
 										</td>
-										<td className="py-4 text-center text-body-tight text-neutral">
-											{resolveDisplayName(model)}
-										</td>
+										<td className="py-4 text-center text-body-tight text-neutral">{resolveDisplayName(model)}</td>
 										<td className="py-4 text-center text-body-tight text-neutral">
 											{model.adapterId ? getAdapterLabel(model.adapterId) : t("models.apiTypeInherit")}
 										</td>
