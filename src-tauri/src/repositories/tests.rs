@@ -52,6 +52,7 @@ fn sample_model(id: Uuid, provider_id: Uuid, key: &str) -> ProviderModel {
 		availability: Availability::Available,
 		remote_metadata_json: None,
 		capability_overrides_json: None,
+		adapter_id: None,
 		last_seen_at: None,
 		created_at: now.clone(),
 		updated_at: now,

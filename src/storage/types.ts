@@ -99,6 +99,8 @@ export interface ProviderModelDto {
 	availability: Availability;
 	remoteMetadataJson: unknown | null;
 	capabilityOverridesJson: CapabilityOverridesV1 | null;
+	/** Optional API Type override; null inherits the channel adapter at runtime. */
+	adapterId: string | null;
 	lastSeenAt: string | null;
 	createdAt: string;
 	updatedAt: string;
@@ -111,6 +113,8 @@ export interface ManualModelWrite {
 	displayNameOverride?: string | null;
 	enabled: boolean;
 	capabilityOverridesJson?: CapabilityOverridesV1 | null;
+	/** Optional API Type override; null/empty inherits the channel adapter. */
+	adapterId?: string | null;
 }
 
 /** Input for one-shot or streaming translate via a configured provider model. */
@@ -343,6 +347,7 @@ const _modelDtoFixture = {
 	availability: "available",
 	remoteMetadataJson: null,
 	capabilityOverridesJson: _capabilityFixture,
+	adapterId: null,
 	lastSeenAt: null,
 	createdAt: "2026-07-10T00:00:00Z",
 	updatedAt: "2026-07-10T00:00:00Z",

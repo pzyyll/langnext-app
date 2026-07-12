@@ -35,6 +35,7 @@ fn map_row(row: &Row<'_>) -> Result<ProviderModel, rusqlite::Error> {
 			.map(|s| serde_json::from_str(&s))
 			.transpose()
 			.map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?,
+		adapter_id: row.get("adapter_id")?,
 		last_seen_at: row.get("last_seen_at")?,
 		created_at: row.get("created_at")?,
 		updated_at: row.get("updated_at")?,
@@ -98,8 +99,8 @@ pub fn insert(conn: &Connection, model: &ProviderModel) -> Result<(), StorageErr
 			"INSERT INTO provider_models (
             id, provider_instance_id, model_key, source, remote_display_name,
             display_name_override, enabled, availability, remote_metadata_json,
-            capability_overrides_json, last_seen_at, created_at, updated_at
-        ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+            capability_overrides_json, adapter_id, last_seen_at, created_at, updated_at
+        ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
 			params![
 				model.id.to_string(),
 				model.provider_instance_id.to_string(),
@@ -111,6 +112,7 @@ pub fn insert(conn: &Connection, model: &ProviderModel) -> Result<(), StorageErr
 				model.availability.as_str(),
 				json_opt(&model.remote_metadata_json)?,
 				json_opt(&model.capability_overrides_json)?,
+				model.adapter_id,
 				model.last_seen_at,
 				model.created_at,
 				model.updated_at,
@@ -132,8 +134,9 @@ pub fn update(conn: &Connection, model: &ProviderModel) -> Result<(), StorageErr
             availability = ?7,
             remote_metadata_json = ?8,
             capability_overrides_json = ?9,
-            last_seen_at = ?10,
-            updated_at = ?11
+            adapter_id = ?10,
+            last_seen_at = ?11,
+            updated_at = ?12
          WHERE id = ?1",
 			params![
 				model.id.to_string(),
@@ -145,6 +148,7 @@ pub fn update(conn: &Connection, model: &ProviderModel) -> Result<(), StorageErr
 				model.availability.as_str(),
 				json_opt(&model.remote_metadata_json)?,
 				json_opt(&model.capability_overrides_json)?,
+				model.adapter_id,
 				model.last_seen_at,
 				model.updated_at,
 			],
@@ -152,6 +156,23 @@ pub fn update(conn: &Connection, model: &ProviderModel) -> Result<(), StorageErr
 		.map_err(|e| StorageError::from_sqlite_constraint(e, "model"))?;
 	if changed == 0 {
 		return Err(StorageError::NotFound(format!("model {}", model.id)));
+	}
+	Ok(())
+}
+
+/// Set optional API Type override for any model source. Pass `None` to inherit the channel.
+pub fn set_adapter_id(
+	conn: &Connection,
+	id: Uuid,
+	adapter_id: Option<&str>,
+	updated_at: &str,
+) -> Result<(), StorageError> {
+	let changed = conn.execute(
+		"UPDATE provider_models SET adapter_id = ?2, updated_at = ?3 WHERE id = ?1",
+		params![id.to_string(), adapter_id, updated_at],
+	)?;
+	if changed == 0 {
+		return Err(StorageError::NotFound(format!("model {id}")));
 	}
 	Ok(())
 }
@@ -225,6 +246,7 @@ pub fn apply_remote_sync(
 				availability: Availability::Available,
 				remote_metadata_json: item.remote_metadata_json.clone(),
 				capability_overrides_json: None,
+				adapter_id: None,
 				last_seen_at: Some(seen_at.to_string()),
 				created_at: now.clone(),
 				updated_at: now,

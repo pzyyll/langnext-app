@@ -8,6 +8,7 @@ pub const MIGRATIONS: &[&str] = &[
 	include_str!("../../migrations/0001_initial.sql"),
 	include_str!("../../migrations/0002_provider_sort_order.sql"),
 	include_str!("../../migrations/0003_profile_languages.sql"),
+	include_str!("../../migrations/0004_model_adapter_id.sql"),
 ];
 
 pub fn latest_version() -> i32 {
@@ -101,6 +102,11 @@ mod tests {
 		// v3 columns exist for profile language prefs.
 		let _: Option<String> = conn
 			.query_row("SELECT source_lang FROM translation_profiles LIMIT 1", [], |r| r.get(0))
+			.optional()
+			.unwrap();
+		// v4 optional per-model API Type override.
+		let _: Option<String> = conn
+			.query_row("SELECT adapter_id FROM provider_models LIMIT 1", [], |r| r.get(0))
 			.optional()
 			.unwrap();
 	}

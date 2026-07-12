@@ -32,6 +32,7 @@ import {
 	deleteProviderModels,
 	saveManualModel,
 	saveProviderInstance,
+	setModelAdapterId,
 	setModelEnabled,
 	syncProviderModels,
 	testProviderConnection,
@@ -612,6 +613,7 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
 				displayNameOverride,
 				enabled: model.enabled,
 				capabilityOverridesJson: model.capabilityOverridesJson,
+				adapterId: model.adapterId,
 			});
 			setModelsCache((current) => current.map((m) => (m.id === model.id ? updated : m)));
 			void queryClient.invalidateQueries({ queryKey: modelKeys.all });
@@ -620,6 +622,41 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
 			setModelsCache((current) => current.map((m) => (m.id === model.id ? previous : m)));
 			setModelMutationError(getIpcErrorMessage(error, t("models.toast.updateModelFailed")));
 			return false;
+		} finally {
+			setPendingModelIds((current) => {
+				const next = new Set(current);
+				next.delete(model.id);
+				return next;
+			});
+		}
+	}
+
+	async function handleModelAdapterIdChange(model: ProviderModelDto, adapterId: string | null) {
+		if (pendingModelIds.has(model.id)) {
+			return;
+		}
+
+		const previous = models.find((m) => m.id === model.id);
+		if (!previous) {
+			return;
+		}
+		if (previous.adapterId === adapterId) {
+			return;
+		}
+
+		setModelMutationError(null);
+		setPendingModelIds((current) => new Set(current).add(model.id));
+		setModelsCache((current) => current.map((m) => (m.id === model.id ? { ...m, adapterId } : m)));
+
+		try {
+			const updated = await setModelAdapterId(model.id, adapterId);
+			setModelsCache((current) => current.map((m) => (m.id === model.id ? updated : m)));
+			void queryClient.invalidateQueries({ queryKey: modelKeys.all });
+		} catch (error: unknown) {
+			setModelsCache((current) => current.map((m) => (m.id === model.id ? previous : m)));
+			const message = getIpcErrorMessage(error, t("models.toast.updateModelFailed"));
+			setModelMutationError(message);
+			toast.error({ title: t("models.toast.updateFailed"), description: message });
 		} finally {
 			setPendingModelIds((current) => {
 				const next = new Set(current);
@@ -1134,6 +1171,9 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
 								void handleModelEnabledChange(modelId, nextEnabled);
 							}}
 							onRenameModel={handleRenameModel}
+							onAdapterIdChange={(model, adapterId) => {
+								void handleModelAdapterIdChange(model, adapterId);
+							}}
 							selectionMode={selectionMode}
 							selectedModelIds={selectedModelIds}
 							onToggleSelect={handleToggleSelect}

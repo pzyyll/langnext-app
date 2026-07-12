@@ -1,5 +1,5 @@
 // ABOUTME: Dialog for adding a manual model to the selected provider.
-// ABOUTME: Persists model identity, display override, and enabled state through IPC.
+// ABOUTME: Persists model identity, display override, optional API Type, and enabled state through IPC.
 import { useState } from "react";
 import { Button } from "@base-ui/react/button";
 import { Dialog } from "@base-ui/react/dialog";
@@ -11,11 +11,13 @@ import {
 	inputClassName,
 	outlineButtonClassName,
 	primaryButtonClassName,
+	selectClassName,
 } from "../../components/ui";
 import { useToast } from "../../components/toast/useToast";
 import { saveManualModel } from "../../storage/client";
 import { getIpcErrorMessage } from "../../storage/errors";
 import type { ProviderModelDto } from "../../storage/types";
+import { ADAPTER_OPTIONS } from "./adapterOptions";
 
 export type AddManualModelDialogProps = {
 	open: boolean;
@@ -65,6 +67,8 @@ function AddManualModelForm({ providerId, onCreated }: AddManualModelFormProps) 
 	const toast = useToast();
 	const [modelKey, setModelKey] = useState("");
 	const [displayNameOverride, setDisplayNameOverride] = useState("");
+	/** Empty string means inherit the channel API Type. */
+	const [adapterId, setAdapterId] = useState("");
 	const [enabled, setEnabled] = useState(true);
 	const [pending, setPending] = useState(false);
 	const [error, setError] = useState<string | null>(null);
@@ -87,6 +91,7 @@ function AddManualModelForm({ providerId, onCreated }: AddManualModelFormProps) 
 				displayNameOverride: displayNameOverride.trim() ? displayNameOverride.trim() : null,
 				enabled,
 				capabilityOverridesJson: null,
+				adapterId: adapterId.trim() ? adapterId.trim() : null,
 			});
 			toast.success({
 				title: t("models.toast.modelAdded"),
@@ -137,6 +142,29 @@ function AddManualModelForm({ providerId, onCreated }: AddManualModelFormProps) 
 					placeholder={t("common.optional")}
 					disabled={pending}
 				/>
+			</div>
+
+			<div className="flex flex-col gap-1">
+				<label className="text-body-tight font-medium text-on-surface" htmlFor="add-model-api-type">
+					{t("models.apiTypeLabel")}
+				</label>
+				<select
+					id="add-model-api-type"
+					className={selectClassName}
+					value={adapterId}
+					onChange={(event) => {
+						setAdapterId(event.currentTarget.value);
+					}}
+					disabled={pending}
+				>
+					<option value="">{t("models.apiTypeInherit")}</option>
+					{ADAPTER_OPTIONS.map((option) => (
+						<option key={option.id} value={option.id}>
+							{option.label}
+						</option>
+					))}
+				</select>
+				<p className="text-xs text-neutral">{t("models.apiTypeModelHint")}</p>
 			</div>
 
 			<label className="flex items-center gap-2 text-body-tight text-on-surface">

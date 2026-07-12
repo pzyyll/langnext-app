@@ -272,6 +272,7 @@ fn model_merge_marks_missing_preserves_manual() {
 			display_name_override: Some("Manual".into()),
 			enabled: true,
 			capability_overrides_json: None,
+			adapter_id: None,
 		})
 		.unwrap();
 	// First remote sync
@@ -370,6 +371,7 @@ fn profile_list_includes_ordered_targets_bulk() {
 			display_name_override: None,
 			enabled: true,
 			capability_overrides_json: None,
+			adapter_id: None,
 		})
 		.unwrap();
 	let m2 = models
@@ -380,6 +382,7 @@ fn profile_list_includes_ordered_targets_bulk() {
 			display_name_override: None,
 			enabled: true,
 			capability_overrides_json: None,
+			adapter_id: None,
 		})
 		.unwrap();
 
@@ -471,6 +474,7 @@ fn profile_save_and_fallback_order() {
 			display_name_override: None,
 			enabled: true,
 			capability_overrides_json: None,
+			adapter_id: None,
 		})
 		.unwrap();
 	let m2 = models
@@ -481,6 +485,7 @@ fn profile_save_and_fallback_order() {
 			display_name_override: None,
 			enabled: true,
 			capability_overrides_json: None,
+			adapter_id: None,
 		})
 		.unwrap();
 	let dto = profiles
@@ -518,6 +523,7 @@ fn delete_provider_cascades_to_models_and_targets() {
 			display_name_override: None,
 			enabled: true,
 			capability_overrides_json: None,
+			adapter_id: None,
 		})
 		.unwrap();
 	let profile = profiles
@@ -610,6 +616,7 @@ fn import_export_round_trip_and_secret_exclusion() {
 			display_name_override: None,
 			enabled: true,
 			capability_overrides_json: None,
+			adapter_id: None,
 		})
 		.unwrap();
 	profiles
@@ -737,6 +744,7 @@ fn import_credential_cleanup_isolates_unrelated_journals() {
 			display_name_override: None,
 			enabled: true,
 			capability_overrides_json: None,
+			adapter_id: None,
 		})
 		.unwrap();
 	profiles
@@ -791,6 +799,7 @@ fn import_rejects_malformed_graphs() {
 			display_name_override: None,
 			enabled: true,
 			capability_overrides_json: None,
+			adapter_id: None,
 		})
 		.unwrap();
 	profiles
@@ -913,8 +922,270 @@ fn capability_overrides_reject_invalid() {
 		display_name_override: None,
 		enabled: true,
 		capability_overrides_json: Some(serde_json::json!({"schemaVersion": 99})),
+		adapter_id: None,
 	});
 	assert!(matches!(err, Err(StorageError::Validation(_))));
+}
+
+#[test]
+fn model_adapter_id_override_round_trip_and_validation() {
+	let (_d, _db, _v, providers, models, ..) = setup();
+	let p = providers
+		.save(provider_write(CredentialKind::None, CredentialUpdate::Keep))
+		.unwrap();
+	let created = models
+		.save_manual(ManualModelWrite {
+			id: None,
+			provider_instance_id: p.id,
+			model_key: "mixed-model".into(),
+			display_name_override: None,
+			enabled: true,
+			capability_overrides_json: None,
+			adapter_id: Some("gemini".into()),
+		})
+		.unwrap();
+	assert_eq!(created.adapter_id.as_deref(), Some("gemini"));
+
+	let cleared = models.set_adapter_id(created.id, None).unwrap();
+	assert!(cleared.adapter_id.is_none());
+
+	let set = models
+		.set_adapter_id(created.id, Some("anthropic".into()))
+		.unwrap();
+	assert_eq!(set.adapter_id.as_deref(), Some("anthropic"));
+
+	let err = models.set_adapter_id(created.id, Some("not-a-real-adapter".into()));
+	assert!(matches!(err, Err(StorageError::Validation(_))));
+
+	// Whitespace-only clears to inherit.
+	let blank = models.set_adapter_id(created.id, Some("   ".into())).unwrap();
+	assert!(blank.adapter_id.is_none());
+}
+
+#[test]
+fn resolve_model_adapter_id_prefers_model_then_channel() {
+	assert_eq!(
+		crate::services::models::resolve_model_adapter_id(Some("gemini"), "openai-compatible"),
+		"gemini"
+	);
+	assert_eq!(
+		crate::services::models::resolve_model_adapter_id(None, "openai-compatible"),
+		"openai-compatible"
+	);
+	assert_eq!(
+		crate::services::models::resolve_model_adapter_id(Some("  "), "anthropic"),
+		"anthropic"
+	);
+	assert_eq!(
+		crate::services::models::resolve_model_adapter_id(Some(""), "openai-responses"),
+		"openai-responses"
+	);
+}
+
+/// OpenAI channel + Gemini model override, no base_url_override → gemini default URL.
+/// Captures resolved chat transport config (chat path has no injectable ModelTransport).
+#[test]
+fn model_chat_transport_gemini_override_uses_gemini_default_url() {
+	let (_d, db, vault, providers, models, ..) = setup();
+	let mut write = provider_write(CredentialKind::ApiKey, CredentialUpdate::Replace("sk-test".into()));
+	write.base_url_override = None;
+	let p = providers.save(write).unwrap();
+	let m = models
+		.save_manual(ManualModelWrite {
+			id: None,
+			provider_instance_id: p.id,
+			model_key: "gemini-pro".into(),
+			display_name_override: None,
+			enabled: true,
+			capability_overrides_json: None,
+			adapter_id: Some("gemini".into()),
+		})
+		.unwrap();
+
+	let resolved = crate::services::models::resolve_model_chat_transport(&db, vault.as_ref(), m.id).unwrap();
+	match resolved {
+		crate::services::models::ModelChatResolve::Ready { config, model_key } => {
+			assert_eq!(config.adapter_id, "gemini");
+			assert_eq!(
+				config.base_url,
+				"https://generativelanguage.googleapis.com",
+				"default base URL must follow final (model) adapter, not channel"
+			);
+			assert_eq!(config.credential_kind, CredentialKind::ApiKey);
+			assert_eq!(config.secret.as_deref(), Some("sk-test"));
+			assert_eq!(config.proxy_mode, ProxyMode::Inherit);
+			assert_eq!(model_key, "gemini-pro");
+		}
+		other => panic!("expected Ready, got {other:?}"),
+	}
+}
+
+/// OpenAI channel + Anthropic model override, no base_url_override → anthropic default URL.
+#[test]
+fn model_chat_transport_anthropic_override_uses_anthropic_default_url() {
+	let (_d, db, vault, providers, models, ..) = setup();
+	let mut write = provider_write(CredentialKind::ApiKey, CredentialUpdate::Replace("sk-ant".into()));
+	write.base_url_override = None;
+	let p = providers.save(write).unwrap();
+	let m = models
+		.save_manual(ManualModelWrite {
+			id: None,
+			provider_instance_id: p.id,
+			model_key: "claude-3".into(),
+			display_name_override: None,
+			enabled: true,
+			capability_overrides_json: None,
+			adapter_id: Some("anthropic".into()),
+		})
+		.unwrap();
+
+	let resolved = crate::services::models::resolve_model_chat_transport(&db, vault.as_ref(), m.id).unwrap();
+	match resolved {
+		crate::services::models::ModelChatResolve::Ready { config, .. } => {
+			assert_eq!(config.adapter_id, "anthropic");
+			assert_eq!(config.base_url, "https://api.anthropic.com");
+			assert_eq!(config.secret.as_deref(), Some("sk-ant"));
+		}
+		other => panic!("expected Ready, got {other:?}"),
+	}
+}
+
+/// Final adapter drives secret_required: channel OpenAI + CredentialKind::None would not
+/// need a secret, but Gemini model override must fail auth early (not reach transport).
+#[test]
+fn model_chat_transport_gemini_override_requires_secret_despite_channel_none() {
+	let (_d, db, vault, providers, models, ..) = setup();
+	let mut write = provider_write(CredentialKind::None, CredentialUpdate::Keep);
+	write.base_url_override = None;
+	let p = providers.save(write).unwrap();
+	let m = models
+		.save_manual(ManualModelWrite {
+			id: None,
+			provider_instance_id: p.id,
+			model_key: "gemini-pro".into(),
+			display_name_override: None,
+			enabled: true,
+			capability_overrides_json: None,
+			adapter_id: Some("gemini".into()),
+		})
+		.unwrap();
+
+	let resolved = crate::services::models::resolve_model_chat_transport(&db, vault.as_ref(), m.id).unwrap();
+	assert!(
+		matches!(resolved, crate::services::models::ModelChatResolve::MissingCredential),
+		"gemini secret_required must use final adapter; got {resolved:?}"
+	);
+
+	// Same path feeds translate prepare (stream + non-stream share prepare_translate).
+	let result = block_on(models.translate(
+		crate::domain::translation::TranslateInput {
+			model_id: m.id,
+			source_lang: "en".into(),
+			target_lang: "zh".into(),
+			text: "hello".into(),
+			profile_id: None,
+		},
+		None,
+	))
+	.unwrap();
+	assert!(!result.ok);
+	assert_eq!(result.error_code.as_deref(), Some("auth"));
+}
+
+/// No model adapter override: inherit channel adapter, default URL, and secret rules.
+#[test]
+fn model_chat_transport_inherits_channel_when_model_has_no_override() {
+	let (_d, db, vault, providers, models, ..) = setup();
+	let mut write = provider_write(CredentialKind::None, CredentialUpdate::Keep);
+	write.base_url_override = None;
+	let p = providers.save(write).unwrap();
+	let m = models
+		.save_manual(ManualModelWrite {
+			id: None,
+			provider_instance_id: p.id,
+			model_key: "gpt-4o".into(),
+			display_name_override: None,
+			enabled: true,
+			capability_overrides_json: None,
+			adapter_id: None,
+		})
+		.unwrap();
+
+	let resolved = crate::services::models::resolve_model_chat_transport(&db, vault.as_ref(), m.id).unwrap();
+	match resolved {
+		crate::services::models::ModelChatResolve::Ready { config, model_key } => {
+			assert_eq!(config.adapter_id, "openai-compatible");
+			assert_eq!(config.base_url, "https://api.openai.com/v1");
+			assert!(config.secret.is_none(), "openai + None credential needs no secret");
+			assert_eq!(model_key, "gpt-4o");
+		}
+		other => panic!("expected Ready, got {other:?}"),
+	}
+}
+
+/// Explicit channel base_url_override is kept even when the model overrides adapter.
+#[test]
+fn model_chat_transport_keeps_base_url_override_with_model_adapter() {
+	let (_d, db, vault, providers, models, ..) = setup();
+	let mut write = provider_write(CredentialKind::ApiKey, CredentialUpdate::Replace("sk-proxy".into()));
+	write.base_url_override = Some("https://proxy.example.com/v1".into());
+	let p = providers.save(write).unwrap();
+	let m = models
+		.save_manual(ManualModelWrite {
+			id: None,
+			provider_instance_id: p.id,
+			model_key: "claude-proxy".into(),
+			display_name_override: None,
+			enabled: true,
+			capability_overrides_json: None,
+			adapter_id: Some("anthropic".into()),
+		})
+		.unwrap();
+
+	let resolved = crate::services::models::resolve_model_chat_transport(&db, vault.as_ref(), m.id).unwrap();
+	match resolved {
+		crate::services::models::ModelChatResolve::Ready { config, .. } => {
+			assert_eq!(config.adapter_id, "anthropic");
+			assert_eq!(
+				config.base_url, "https://proxy.example.com/v1",
+				"explicit channel override must win over adapter defaults"
+			);
+			assert_eq!(config.secret.as_deref(), Some("sk-proxy"));
+		}
+		other => panic!("expected Ready, got {other:?}"),
+	}
+}
+
+/// Channel-level test_connection still uses channel adapter (not model overrides).
+#[test]
+fn test_connection_uses_channel_adapter_not_model_override() {
+	let (_d, _db, _v, providers, models, _pr, _s, _ie, transport) = setup();
+	let mut write = provider_write(CredentialKind::ApiKey, CredentialUpdate::Replace("sk-ch".into()));
+	write.base_url_override = None;
+	let p = providers.save(write).unwrap();
+	// Model with a different adapter must not affect channel connection test.
+	let _m = models
+		.save_manual(ManualModelWrite {
+			id: None,
+			provider_instance_id: p.id,
+			model_key: "gemini-pro".into(),
+			display_name_override: None,
+			enabled: true,
+			capability_overrides_json: None,
+			adapter_id: Some("gemini".into()),
+		})
+		.unwrap();
+
+	transport.push_ok(vec![RemoteModelSyncItem {
+		model_key: "ignored".into(),
+		remote_display_name: None,
+		remote_metadata_json: None,
+	}]);
+	let result = block_on(models.test_connection(p.id)).unwrap();
+	assert!(result.ok);
+	let req = transport.last_request().expect("request recorded");
+	assert_eq!(req.adapter_id, "openai-compatible");
+	assert_eq!(req.base_url, "https://api.openai.com/v1");
 }
 
 #[test]
@@ -1198,6 +1469,7 @@ fn sync_models_success_message_uses_remote_snapshot_count() {
 			display_name_override: None,
 			enabled: true,
 			capability_overrides_json: None,
+			adapter_id: None,
 		})
 		.unwrap();
 	transport.push_ok(vec![
@@ -2210,6 +2482,7 @@ fn delete_many_models_all_or_nothing() {
 			display_name_override: None,
 			enabled: true,
 			capability_overrides_json: None,
+			adapter_id: None,
 		})
 		.unwrap();
 	let m2 = models
@@ -2220,6 +2493,7 @@ fn delete_many_models_all_or_nothing() {
 			display_name_override: None,
 			enabled: true,
 			capability_overrides_json: None,
+			adapter_id: None,
 		})
 		.unwrap();
 	let m3 = models
@@ -2230,6 +2504,7 @@ fn delete_many_models_all_or_nothing() {
 			display_name_override: None,
 			enabled: true,
 			capability_overrides_json: None,
+			adapter_id: None,
 		})
 		.unwrap();
 

@@ -127,6 +127,7 @@ impl ModelService {
 		validate_manual_model(&input)?;
 		let capability_overrides_json = CapabilityOverridesV1::from_json(&input.capability_overrides_json)?
 			.map(|v| serde_json::to_value(v).expect("capability overrides serialize"));
+		let adapter_id = normalize_model_adapter_id(&input.adapter_id)?;
 		self.db.transaction(|uow| {
 			// Ensure provider exists.
 			provider_instances::get(uow.conn(), input.provider_instance_id)?;
@@ -144,6 +145,7 @@ impl ModelService {
 						availability: Availability::Available,
 						remote_metadata_json: None,
 						capability_overrides_json,
+						adapter_id,
 						last_seen_at: None,
 						created_at: now.clone(),
 						updated_at: now,
@@ -165,6 +167,7 @@ impl ModelService {
 					existing.display_name_override = input.display_name_override.clone();
 					existing.enabled = input.enabled;
 					existing.capability_overrides_json = capability_overrides_json;
+					existing.adapter_id = adapter_id;
 					existing.updated_at = now;
 					provider_models::update(uow.conn(), &existing)?;
 					Ok(existing)
@@ -177,6 +180,17 @@ impl ModelService {
 		let now = now_rfc3339();
 		self.db.transaction(|uow| {
 			provider_models::set_enabled(uow.conn(), id, enabled, &now)?;
+			provider_models::get(uow.conn(), id)
+		})
+	}
+
+	/// Set optional per-model API Type override for any model source.
+	/// Pass `None` (or empty) so runtime inherits the channel adapter.
+	pub fn set_adapter_id(&self, id: Uuid, adapter_id: Option<String>) -> Result<ProviderModelDto, StorageError> {
+		let adapter_id = normalize_model_adapter_id(&adapter_id)?;
+		let now = now_rfc3339();
+		self.db.transaction(|uow| {
+			provider_models::set_adapter_id(uow.conn(), id, adapter_id.as_deref(), &now)?;
 			provider_models::get(uow.conn(), id)
 		})
 	}
@@ -832,6 +846,74 @@ fn prepare_single_model_attempt(
 	temperature: Option<f64>,
 	max_tokens: Option<u32>,
 ) -> Result<SingleModelPrepare, StorageError> {
+	// Final adapter first: model override wins, then channel. Endpoint defaults and
+	// secret_required follow that adapter so transport fields stay consistent.
+	match resolve_model_chat_transport(db, vault, model_id)? {
+		ModelChatResolve::Skipped => Ok(SingleModelPrepare::Skipped),
+		ModelChatResolve::MissingCredential => Ok(SingleModelPrepare::Credential(TranslateResult::failure(
+			"auth",
+			"Authentication failed",
+			0,
+		))),
+		ModelChatResolve::CredentialStoreFailure => Ok(SingleModelPrepare::Credential(TranslateResult::failure(
+			"credential_unavailable",
+			"Credential store unavailable",
+			0,
+		))),
+		ModelChatResolve::Ready { config, model_key } => Ok(SingleModelPrepare::Ready(TranslateAttempt {
+			model_id,
+			request: ChatCompletionRequest {
+				adapter_id: config.adapter_id,
+				base_url: config.base_url,
+				credential_kind: config.credential_kind,
+				secret: config.secret,
+				proxy_mode: config.proxy_mode,
+				model_key,
+				system_prompt,
+				user_prompt,
+				temperature,
+				max_tokens,
+			},
+		})),
+	}
+}
+
+/// Resolved chat/translate transport fields for one model (adapter + endpoint + auth).
+#[derive(Debug, Clone)]
+pub(crate) struct ModelChatTransportConfig {
+	pub adapter_id: String,
+	pub base_url: String,
+	pub credential_kind: CredentialKind,
+	pub secret: Option<String>,
+	pub proxy_mode: ProxyMode,
+}
+
+/// Outcome of resolving a single model's chat transport (no prompts).
+#[derive(Debug, Clone)]
+pub(crate) enum ModelChatResolve {
+	/// Model missing / disabled / provider disabled / availability missing.
+	Skipped,
+	MissingCredential,
+	CredentialStoreFailure,
+	Ready {
+		config: ModelChatTransportConfig,
+		model_key: String,
+	},
+}
+
+/// Resolve final adapter, base URL, and credentials for a single-model chat request.
+///
+/// Non-empty model `adapter_id` wins over the channel adapter for adapter identity,
+/// default base URL, and `secret_required`. Explicit channel `base_url_override`,
+/// credential kind/ref, and proxy stay on the channel row.
+///
+/// Shared by stream and non-stream translate prep. Channel sync/test-connection keep
+/// using [`resolve_saved_provider`] (channel adapter only).
+pub(crate) fn resolve_model_chat_transport(
+	db: &Database,
+	vault: &dyn CredentialVault,
+	model_id: Uuid,
+) -> Result<ModelChatResolve, StorageError> {
 	let (model, provider) = match db.read_snapshot(|conn| {
 		let model = match provider_models::get(conn, model_id) {
 			Ok(m) => m,
@@ -844,39 +926,51 @@ fn prepare_single_model_attempt(
 		Ok(Some((model, provider)))
 	})? {
 		Some(pair) => pair,
-		None => return Ok(SingleModelPrepare::Skipped),
+		None => return Ok(ModelChatResolve::Skipped),
 	};
 
 	if !model.enabled || !provider.enabled || model.availability == Availability::Missing {
-		return Ok(SingleModelPrepare::Skipped);
+		return Ok(ModelChatResolve::Skipped);
 	}
 
-	match resolve_saved_provider(db, vault, provider.id)? {
-		ResolveOutcome::MissingCredential { .. } => Ok(SingleModelPrepare::Credential(TranslateResult::failure(
-			"auth",
-			"Authentication failed",
-			0,
-		))),
-		ResolveOutcome::CredentialStoreFailure { .. } => Ok(SingleModelPrepare::Credential(TranslateResult::failure(
-			"credential_unavailable",
-			"Credential store unavailable",
-			0,
-		))),
-		ResolveOutcome::Ready { request, .. } => Ok(SingleModelPrepare::Ready(TranslateAttempt {
-			model_id,
-			request: ChatCompletionRequest {
-				adapter_id: request.adapter_id,
-				base_url: request.base_url,
-				credential_kind: request.credential_kind,
-				secret: request.secret,
-				proxy_mode: request.proxy_mode,
-				model_key: model.model_key,
-				system_prompt,
-				user_prompt,
-				temperature,
-				max_tokens,
+	let adapter_id = resolve_model_adapter_id(model.adapter_id.as_deref(), &provider.adapter_id);
+	match resolve_endpoint_and_secret(vault, &provider, &adapter_id)? {
+		EndpointSecret::Missing => Ok(ModelChatResolve::MissingCredential),
+		EndpointSecret::StoreFailure => Ok(ModelChatResolve::CredentialStoreFailure),
+		EndpointSecret::Ready { base_url, secret } => Ok(ModelChatResolve::Ready {
+			config: ModelChatTransportConfig {
+				adapter_id,
+				base_url,
+				credential_kind: provider.credential_kind,
+				secret,
+				proxy_mode: provider.proxy_mode,
 			},
-		})),
+			model_key: model.model_key,
+		}),
+	}
+}
+
+/// Prefer a non-empty model adapter override; otherwise use the channel default.
+pub(crate) fn resolve_model_adapter_id(model_adapter_id: Option<&str>, channel_adapter_id: &str) -> String {
+	model_adapter_id
+		.map(str::trim)
+		.filter(|s| !s.is_empty())
+		.map(|s| s.to_string())
+		.unwrap_or_else(|| channel_adapter_id.to_string())
+}
+
+/// Normalize and validate an optional model adapter_id against the built-in catalog.
+fn normalize_model_adapter_id(adapter_id: &Option<String>) -> Result<Option<String>, StorageError> {
+	match adapter_id {
+		None => Ok(None),
+		Some(value) => {
+			let trimmed = value.trim();
+			if trimmed.is_empty() {
+				return Ok(None);
+			}
+			catalog::get(trimmed)?;
+			Ok(Some(trimmed.to_string()))
+		}
 	}
 }
 
@@ -897,40 +991,62 @@ fn resolve_saved_provider(
 	vault: &dyn CredentialVault,
 	provider_id: Uuid,
 ) -> Result<ResolveOutcome, StorageError> {
+	// Channel-level paths (model sync, test connection): always use the channel adapter.
+	// There is no specific model context here.
 	let provider: ProviderInstance = db.read(|conn| provider_instances::get(conn, provider_id))?;
 	let connection = ConnectionIdentity::from_provider(&provider);
 	let provider_updated_at = provider.updated_at.clone();
-	let base_url = resolve_base_url(&provider)?;
-	let secret = match load_secret_if_needed(vault, &provider)? {
-		SecretLoad::Ready(secret) => secret,
-		SecretLoad::Missing => {
-			return Ok(ResolveOutcome::MissingCredential {
-				connection,
-				provider_updated_at,
-			});
-		}
-		SecretLoad::StoreFailure => {
-			return Ok(ResolveOutcome::CredentialStoreFailure {
-				connection,
-				provider_updated_at,
-			});
-		}
-	};
-
-	Ok(ResolveOutcome::Ready {
-		request: ModelListRequest {
-			adapter_id: provider.adapter_id,
-			base_url,
-			credential_kind: provider.credential_kind,
-			secret,
-			proxy_mode: provider.proxy_mode,
-		},
-		connection,
-		provider_updated_at,
-	})
+	let adapter_id = provider.adapter_id.clone();
+	match resolve_endpoint_and_secret(vault, &provider, &adapter_id)? {
+		EndpointSecret::Missing => Ok(ResolveOutcome::MissingCredential {
+			connection,
+			provider_updated_at,
+		}),
+		EndpointSecret::StoreFailure => Ok(ResolveOutcome::CredentialStoreFailure {
+			connection,
+			provider_updated_at,
+		}),
+		EndpointSecret::Ready { base_url, secret } => Ok(ResolveOutcome::Ready {
+			request: ModelListRequest {
+				adapter_id,
+				base_url,
+				credential_kind: provider.credential_kind,
+				secret,
+				proxy_mode: provider.proxy_mode,
+			},
+			connection,
+			provider_updated_at,
+		}),
+	}
 }
 
-fn resolve_base_url(provider: &ProviderInstance) -> Result<String, StorageError> {
+/// Endpoint + secret resolution for a concrete adapter id.
+///
+/// Uses channel `base_url_override` / credential kind+ref / proxy when present;
+/// default base URL and secret requirement come from `adapter_id`.
+enum EndpointSecret {
+	Ready {
+		base_url: String,
+		secret: Option<String>,
+	},
+	Missing,
+	StoreFailure,
+}
+
+fn resolve_endpoint_and_secret(
+	vault: &dyn CredentialVault,
+	provider: &ProviderInstance,
+	adapter_id: &str,
+) -> Result<EndpointSecret, StorageError> {
+	let base_url = resolve_base_url(provider, adapter_id)?;
+	match load_secret_if_needed(vault, provider, adapter_id)? {
+		SecretLoad::Ready(secret) => Ok(EndpointSecret::Ready { base_url, secret }),
+		SecretLoad::Missing => Ok(EndpointSecret::Missing),
+		SecretLoad::StoreFailure => Ok(EndpointSecret::StoreFailure),
+	}
+}
+
+fn resolve_base_url(provider: &ProviderInstance, adapter_id: &str) -> Result<String, StorageError> {
 	if let Some(override_url) = provider
 		.base_url_override
 		.as_ref()
@@ -939,7 +1055,7 @@ fn resolve_base_url(provider: &ProviderInstance) -> Result<String, StorageError>
 	{
 		return Ok(override_url.to_string());
 	}
-	let meta = catalog::get(&provider.adapter_id)?;
+	let meta = catalog::get(adapter_id)?;
 	meta
 		.default_base_url
 		.map(|s| s.to_string())
@@ -952,8 +1068,12 @@ enum SecretLoad {
 	StoreFailure,
 }
 
-fn load_secret_if_needed(vault: &dyn CredentialVault, provider: &ProviderInstance) -> Result<SecretLoad, StorageError> {
-	let required = secret_required(&provider.adapter_id, provider.credential_kind);
+fn load_secret_if_needed(
+	vault: &dyn CredentialVault,
+	provider: &ProviderInstance,
+	adapter_id: &str,
+) -> Result<SecretLoad, StorageError> {
+	let required = secret_required(adapter_id, provider.credential_kind);
 	if !required {
 		return Ok(SecretLoad::Ready(None));
 	}

@@ -82,6 +82,11 @@ export async function setModelEnabled(id: string, enabled: boolean): Promise<Pro
 	return invoke("set_model_enabled", { id, enabled });
 }
 
+/** Set optional per-model API Type; pass null to inherit the channel adapter. */
+export async function setModelAdapterId(id: string, adapterId: string | null): Promise<ProviderModelDto> {
+	return invoke("set_model_adapter_id", { id, adapterId });
+}
+
 export async function deleteProviderModel(id: string): Promise<void> {
 	return invoke("delete_provider_model", { id });
 }

@@ -146,6 +146,20 @@ pub async fn set_model_enabled(
 	Ok(result)
 }
 
+/// Set optional per-model API Type (`adapter_id`). Pass null to inherit the channel adapter.
+#[tauri::command]
+pub async fn set_model_adapter_id(
+	app: AppHandle,
+	state: State<'_, AppState>,
+	id: Uuid,
+	adapter_id: Option<String>,
+) -> Result<ProviderModelDto, IpcError> {
+	let models = state.models.clone();
+	let result = run_blocking("set_model_adapter_id", move || models.set_adapter_id(id, adapter_id)).await?;
+	emit_data_changed(&app, MODELS_CHANGED);
+	Ok(result)
+}
+
 #[tauri::command]
 pub async fn delete_provider_model(app: AppHandle, state: State<'_, AppState>, id: Uuid) -> Result<(), IpcError> {
 	let models = state.models.clone();

@@ -116,6 +116,9 @@ pub struct ProviderModel {
 	pub remote_metadata_json: Option<serde_json::Value>,
 	/// Versioned sparse capability overrides (`CapabilityOverridesV1` JSON).
 	pub capability_overrides_json: Option<serde_json::Value>,
+	/// Optional API Type override; when null/absent, runtime inherits the channel adapter.
+	#[serde(default)]
+	pub adapter_id: Option<String>,
 	pub last_seen_at: Option<String>,
 	pub created_at: String,
 	pub updated_at: String,
@@ -133,6 +136,9 @@ pub struct ManualModelWrite {
 	pub display_name_override: Option<String>,
 	pub enabled: bool,
 	pub capability_overrides_json: Option<serde_json::Value>,
+	/// Optional API Type override; null/empty inherits the channel adapter at runtime.
+	#[serde(default)]
+	pub adapter_id: Option<String>,
 }
 
 /// One remote model row returned by a Provider adapter for cache merge.
@@ -202,5 +208,27 @@ mod tests {
 	fn capability_overrides_reject_unknown_version() {
 		let json = serde_json::json!({"schemaVersion": 99, "streaming": true});
 		assert!(CapabilityOverridesV1::from_json(&Some(json)).is_err());
+	}
+
+	#[test]
+	fn provider_model_deserializes_without_adapter_id() {
+		// Older exports omit adapterId; serde default keeps null for channel inheritance.
+		let json = serde_json::json!({
+			"id": "00000000-0000-7000-8000-000000000002",
+			"providerInstanceId": "00000000-0000-7000-8000-000000000001",
+			"modelKey": "gpt-4o",
+			"source": "manual",
+			"remoteDisplayName": null,
+			"displayNameOverride": "GPT-4o",
+			"enabled": true,
+			"availability": "available",
+			"remoteMetadataJson": null,
+			"capabilityOverridesJson": null,
+			"lastSeenAt": null,
+			"createdAt": "2026-07-10T00:00:00Z",
+			"updatedAt": "2026-07-10T00:00:00Z"
+		});
+		let model: ProviderModel = serde_json::from_value(json).unwrap();
+		assert!(model.adapter_id.is_none());
 	}
 }

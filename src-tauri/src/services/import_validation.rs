@@ -310,6 +310,12 @@ pub fn build_validated_plan(
 		} else {
 			model.capability_overrides_json = None;
 		}
+		// Empty/whitespace adapter_id means inherit channel default.
+		model.adapter_id = model
+			.adapter_id
+			.as_ref()
+			.map(|s| s.trim().to_string())
+			.filter(|s| !s.is_empty());
 		models.push(model);
 	}
 
@@ -439,6 +445,9 @@ fn validate_import_model(m: &ProviderModel, doc_providers: &HashSet<Uuid>) -> Re
 			"references missing provider {}",
 			m.provider_instance_id
 		)));
+	}
+	if let Some(adapter_id) = m.adapter_id.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()) {
+		catalog::get(adapter_id)?;
 	}
 	CapabilityOverridesV1::from_json(&m.capability_overrides_json)?;
 	Ok(())
