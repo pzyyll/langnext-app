@@ -195,14 +195,16 @@ impl ModelService {
 		})
 	}
 
-	/// Update API Type and capability overrides for any model source (manual/remote/builtin).
+	/// Update display name, API Type, and capability overrides for any model source.
 	pub fn update_config(&self, input: ModelConfigWrite) -> Result<ProviderModelDto, StorageError> {
+		let display_name_override = normalize_display_name_override(input.display_name_override)?;
 		let capability_overrides_json = CapabilityOverridesV1::from_json(&input.capability_overrides_json)?
 			.map(|v| serde_json::to_value(v).expect("capability overrides serialize"));
 		let adapter_id = normalize_model_adapter_id(&input.adapter_id)?;
 		let now = now_rfc3339();
 		self.db.transaction(|uow| {
 			let mut existing = provider_models::get(uow.conn(), input.id)?;
+			existing.display_name_override = display_name_override;
 			existing.adapter_id = adapter_id;
 			existing.capability_overrides_json = capability_overrides_json;
 			existing.updated_at = now;
@@ -1141,6 +1143,25 @@ fn validate_manual_model(input: &ManualModelWrite) -> Result<(), StorageError> {
 		)));
 	}
 	Ok(())
+}
+
+const MAX_DISPLAY_NAME_OVERRIDE_LEN: usize = 200;
+
+/// Trim display-name override; empty/whitespace becomes None. Rejects overlong values.
+fn normalize_display_name_override(value: Option<String>) -> Result<Option<String>, StorageError> {
+	let Some(raw) = value else {
+		return Ok(None);
+	};
+	let trimmed = raw.trim();
+	if trimmed.is_empty() {
+		return Ok(None);
+	}
+	if trimmed.len() > MAX_DISPLAY_NAME_OVERRIDE_LEN {
+		return Err(StorageError::Validation(format!(
+			"display_name_override must be at most {MAX_DISPLAY_NAME_OVERRIDE_LEN} characters"
+		)));
+	}
+	Ok(Some(trimmed.to_string()))
 }
 
 /// Validate codes that may be persisted on `models_sync_error_code`.

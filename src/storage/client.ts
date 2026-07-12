@@ -88,7 +88,7 @@ export async function setModelAdapterId(id: string, adapterId: string | null): P
 	return invoke("set_model_adapter_id", { id, adapterId });
 }
 
-/** Update per-model API Type and capability overrides for any model source. */
+/** Update per-model display name, API Type, and capability overrides for any model source. */
 export async function updateModelConfig(input: ModelConfigWrite): Promise<ProviderModelDto> {
 	return invoke("update_model_config", { input });
 }

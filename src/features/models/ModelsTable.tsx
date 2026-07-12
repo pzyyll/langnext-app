@@ -1,12 +1,10 @@
 // ABOUTME: Provider model table with enabled switches, config edit entry, and selection mode.
 // ABOUTME: Displays manual, remote, and built-in model DTOs without fabricating data.
-import { useMemo, useEffect, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { Button } from "@base-ui/react/button";
 import { Switch } from "@base-ui/react/switch";
 import { useTranslation } from "react-i18next";
 import IconMaterialSymbolsLightEditSquareOutlineSharp from "~icons/material-symbols-light/edit-square-outline-sharp";
-import IconMaterialSymbolsLightCheck from "~icons/material-symbols-light/check";
-import IconMaterialSymbolsLightClose from "~icons/material-symbols-light/close";
 import {
 	checkboxClassName,
 	iconButtonClassName,
@@ -29,8 +27,6 @@ export type ModelsTableProps = {
 	models: ProviderModelDto[];
 	pendingModelIds: ReadonlySet<string>;
 	onEnabledChange: (modelId: string, enabled: boolean) => void;
-	/** Persist a new display-name override. Resolves true on success, false on failure. */
-	onRenameModel?: (model: ProviderModelDto, displayNameOverride: string | null) => Promise<boolean>;
 	/** Open the per-model configuration dialog. */
 	onEditModel?: (model: ProviderModelDto) => void;
 	selectionMode?: boolean;
@@ -64,7 +60,6 @@ export function ModelsTable({
 	models,
 	pendingModelIds,
 	onEnabledChange,
-	onRenameModel,
 	onEditModel,
 	selectionMode = false,
 	selectedModelIds = new Set(),
@@ -72,21 +67,8 @@ export function ModelsTable({
 	onToggleSelectAll,
 }: ModelsTableProps) {
 	const { t } = useTranslation();
-	const [editingId, setEditingId] = useState<string | null>(null);
-	const [editingValue, setEditingValue] = useState("");
-	const inputRef = useRef<HTMLInputElement>(null);
 	const [searchQuery, setSearchQuery] = useState("");
 	const [enabledFilter, setEnabledFilterState] = useState<ModelEnabledFilter>(() => getModelEnabledFilter());
-
-	// Focus and select the inline rename input when editing starts.
-	useEffect(() => {
-		if (editingId === null) return;
-		const node = inputRef.current;
-		if (node) {
-			node.focus();
-			node.select();
-		}
-	}, [editingId]);
 
 	const filteredModels = useMemo(
 		() => filterModels(models, searchQuery, enabledFilter),
@@ -104,28 +86,6 @@ export function ModelsTable({
 	}
 
 	const allSelected = filteredModels.length > 0 && filteredModels.every((model) => selectedModelIds.has(model.id));
-
-	function startRename(model: ProviderModelDto) {
-		setEditingId(model.id);
-		setEditingValue(model.displayNameOverride ?? "");
-	}
-
-	function cancelRename() {
-		setEditingId(null);
-	}
-
-	async function commitRename(model: ProviderModelDto) {
-		const trimmed = editingValue.trim();
-		const nextOverride = trimmed ? trimmed : null;
-		if (nextOverride === model.displayNameOverride) {
-			setEditingId(null);
-			return;
-		}
-		const ok = await onRenameModel?.(model, nextOverride);
-		if (ok) {
-			setEditingId(null);
-		}
-	}
 
 	return (
 		<div className="flex flex-col gap-4">
@@ -201,8 +161,6 @@ export function ModelsTable({
 						<tbody className="divide-y divide-line/30">
 							{filteredModels.map((model) => {
 								const pending = pendingModelIds.has(model.id);
-								const editing = editingId === model.id;
-								const canRename = model.source === "manual" && onRenameModel !== undefined;
 								const canEditConfig = onEditModel !== undefined;
 								return (
 									<tr key={model.id}>
@@ -224,69 +182,7 @@ export function ModelsTable({
 											<span className="font-mono text-mono-key font-bold text-on-surface">{model.modelKey}</span>
 										</td>
 										<td className="py-4 text-center text-body-tight text-neutral">
-											{editing ? (
-												<form
-													className="flex items-center justify-center gap-1"
-													onSubmit={(event) => {
-														event.preventDefault();
-														void commitRename(model);
-													}}
-												>
-													<input
-														ref={inputRef}
-														className="h-7 w-40 rounded-none border border-line bg-surface px-2 text-body-tight font-normal text-on-surface placeholder:text-neutral focus:outline-2 focus:-outline-offset-1 focus:outline-on-surface disabled:border-disabled disabled:text-disabled"
-														value={editingValue}
-														onChange={(event) => {
-															setEditingValue(event.currentTarget.value);
-														}}
-														onKeyDown={(event) => {
-															if (event.key === "Escape" && !pending) {
-																event.preventDefault();
-																cancelRename();
-															}
-														}}
-														maxLength={200}
-														spellCheck={false}
-														placeholder={t("models.displayNamePlaceholder")}
-														disabled={pending}
-													/>
-													<Button
-														type="submit"
-														className={iconButtonClassName}
-														aria-label={t("models.saveDisplayName")}
-														disabled={pending}
-													>
-														<IconMaterialSymbolsLightCheck className="pointer-events-none size-5 shrink-0" />
-													</Button>
-													<Button
-														type="button"
-														className={iconButtonClassName}
-														aria-label={t("models.cancelRename")}
-														disabled={pending}
-														onClick={cancelRename}
-													>
-														<IconMaterialSymbolsLightClose className="pointer-events-none size-5 shrink-0" />
-													</Button>
-												</form>
-											) : (
-												<div className="flex items-center justify-center gap-1">
-													<span>{resolveDisplayName(model)}</span>
-													{canRename ? (
-														<Button
-															type="button"
-															className={iconButtonClassName}
-															aria-label={t("models.editDisplayName")}
-															title={t("models.editDisplayName")}
-															disabled={pending}
-															onClick={() => {
-																startRename(model);
-															}}
-														>
-															<IconMaterialSymbolsLightEditSquareOutlineSharp className="pointer-events-none size-5 shrink-0" />
-														</Button>
-													) : null}
-												</div>
-											)}
+											{resolveDisplayName(model)}
 										</td>
 										<td className="py-4 text-center text-body-tight text-neutral">
 											{model.adapterId ? getAdapterLabel(model.adapterId) : t("models.apiTypeInherit")}

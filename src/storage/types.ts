@@ -125,9 +125,11 @@ export interface ManualModelWrite {
 	adapterId?: string | null;
 }
 
-/** Input for updating per-model API Type and capability overrides (any source). */
+/** Input for updating per-model display name, API Type, and capability overrides (any source). */
 export interface ModelConfigWrite {
 	id: string;
+	/** Optional display-name override; null/empty clears to remote name or model key. */
+	displayNameOverride?: string | null;
 	/** Optional API Type override; null/empty inherits the channel adapter. */
 	adapterId?: string | null;
 	/** Versioned sparse capability overrides; null clears overrides. */

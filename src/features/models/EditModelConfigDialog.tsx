@@ -1,5 +1,5 @@
-// ABOUTME: Modal dialog for editing model API type, capability flags, and token limits.
-// ABOUTME: Persists capability overrides through IPC; profile max tokens still override at request time.
+// ABOUTME: Modal dialog for editing model display name, API type, capabilities, and token limits.
+// ABOUTME: Persists overrides through IPC for any model source; profile max tokens still override at request time.
 import { useMemo, useState } from "react";
 import { Button } from "@base-ui/react/button";
 import { Dialog } from "@base-ui/react/dialog";
@@ -25,6 +25,18 @@ const TOKEN_MIN = 1;
 const TOKEN_MAX = 0xffff_ffff;
 const DEFAULT_CONTEXT_LIMIT = 128 * 1024;
 const DEFAULT_MAX_TOKENS = 32 * 1024;
+const DISPLAY_NAME_MAX_LEN = 200;
+
+// Header / body / footer own spacing. Replace conflicting utilities in the shared
+// popup chrome instead of appending overrides (Tailwind keeps one winner per property
+// by CSS generation order, not className string order).
+const editModelDialogPopupClassName = [
+	dialogPopupClassName
+		.replace(/\bw-96\b/, "w-md")
+		.replace(/\bgap-4\b/, "gap-0")
+		.replace(/\bp-gutter\b/, "p-0"),
+	"max-h-[min(90dvh,40rem)] overflow-y-auto",
+].join(" ");
 
 export type EditModelConfigDialogProps = {
 	open: boolean;
@@ -40,19 +52,19 @@ export function EditModelConfigDialog({ open, model, onOpenChange, onSaved }: Ed
 		<Dialog.Root open={open} onOpenChange={onOpenChange}>
 			<Dialog.Portal>
 				<Dialog.Backdrop className={dialogBackdropClassName} />
-				<Dialog.Popup className={`${dialogPopupClassName} w-md max-h-[min(90dvh,40rem)] gap-0 overflow-y-auto p-0`}>
-					<div className="flex items-center justify-between border-b border-line px-4 py-4">
-						<div className="flex min-w-0 flex-col gap-0.5">
-							<Dialog.Title className="text-headline-sm font-bold tracking-tight text-on-surface uppercase italic">
+				<Dialog.Popup className={editModelDialogPopupClassName}>
+					<div className="flex flex-col gap-0.5 border-b border-line px-4 py-4">
+						<div className="flex items-center justify-between gap-2">
+							<Dialog.Title className="min-w-0 text-headline-sm font-bold tracking-tight text-on-surface uppercase italic">
 								{t("models.editModelConfig.title")}
 							</Dialog.Title>
-							<Dialog.Description className="truncate font-mono text-xs text-neutral">
-								{model?.modelKey ?? t("models.editModelConfig.title")}
-							</Dialog.Description>
+							<Dialog.Close className={iconButtonClassName} aria-label={t("common.close")}>
+								<IconMaterialSymbolsLightClose className="pointer-events-none size-5 shrink-0" />
+							</Dialog.Close>
 						</div>
-						<Dialog.Close className={iconButtonClassName} aria-label={t("common.close")}>
-							<IconMaterialSymbolsLightClose className="pointer-events-none size-5 shrink-0" />
-						</Dialog.Close>
+						<Dialog.Description className="truncate font-mono text-xs text-neutral">
+							{model?.modelKey ?? t("models.editModelConfig.title")}
+						</Dialog.Description>
 					</div>
 					{open && model ? (
 						<EditModelConfigForm
@@ -80,6 +92,7 @@ function EditModelConfigForm({ model, onSaved }: EditModelConfigFormProps) {
 	const toast = useToast();
 	const initial = useMemo(() => formStateFromModel(model), [model]);
 
+	const [displayNameOverride, setDisplayNameOverride] = useState(initial.displayNameOverride);
 	const [adapterId, setAdapterId] = useState(initial.adapterId);
 	const [textGeneration, setTextGeneration] = useState(initial.textGeneration);
 	const [imageAnalysis, setImageAnalysis] = useState(initial.imageAnalysis);
@@ -96,6 +109,8 @@ function EditModelConfigForm({ model, onSaved }: EditModelConfigFormProps) {
 		return ADAPTER_OPTIONS;
 	}, [adapterId]);
 
+	const displayNamePlaceholder = model.remoteDisplayName?.trim() || t("common.optional");
+
 	async function handleSubmit(event: React.SyntheticEvent<HTMLFormElement>) {
 		event.preventDefault();
 		if (pending) {
@@ -106,6 +121,7 @@ function EditModelConfigForm({ model, onSaved }: EditModelConfigFormProps) {
 		setError(null);
 		try {
 			const nextAdapterId = adapterId.trim() ? adapterId.trim() : null;
+			const nextDisplayName = displayNameOverride.trim() ? displayNameOverride.trim() : null;
 			const capabilityOverridesJson = buildCapabilityOverrides({
 				previous: model.capabilityOverridesJson,
 				textGeneration,
@@ -116,6 +132,7 @@ function EditModelConfigForm({ model, onSaved }: EditModelConfigFormProps) {
 			});
 			const updated = await updateModelConfig({
 				id: model.id,
+				displayNameOverride: nextDisplayName,
 				adapterId: nextAdapterId,
 				capabilityOverridesJson,
 			});
@@ -136,6 +153,28 @@ function EditModelConfigForm({ model, onSaved }: EditModelConfigFormProps) {
 	return (
 		<form className="flex flex-col" onSubmit={(event) => void handleSubmit(event)}>
 			<div className="space-y-6 p-6">
+				<div className="space-y-2">
+					<label
+						className="block text-label-sm font-bold uppercase tracking-widest text-neutral"
+						htmlFor="edit-model-display-name"
+					>
+						{t("models.displayName")}
+					</label>
+					<input
+						id="edit-model-display-name"
+						type="text"
+						className={inputClassName}
+						value={displayNameOverride}
+						onChange={(event) => {
+							setDisplayNameOverride(event.currentTarget.value);
+						}}
+						maxLength={DISPLAY_NAME_MAX_LEN}
+						placeholder={displayNamePlaceholder}
+						spellCheck={false}
+						disabled={pending}
+					/>
+				</div>
+
 				<div className="space-y-2">
 					<label
 						className="block text-label-sm font-bold uppercase tracking-widest text-neutral"
@@ -279,6 +318,7 @@ function EditModelConfigForm({ model, onSaved }: EditModelConfigFormProps) {
 }
 
 type FormState = {
+	displayNameOverride: string;
 	adapterId: string;
 	textGeneration: boolean;
 	imageAnalysis: boolean;
@@ -290,6 +330,7 @@ type FormState = {
 function formStateFromModel(model: ProviderModelDto): FormState {
 	const caps = model.capabilityOverridesJson;
 	return {
+		displayNameOverride: model.displayNameOverride ?? "",
 		adapterId: model.adapterId ?? "",
 		textGeneration: caps?.textGeneration ?? true,
 		imageAnalysis: caps?.imageAnalysis ?? false,

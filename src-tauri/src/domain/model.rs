@@ -187,11 +187,14 @@ pub struct ManualModelWrite {
 	pub adapter_id: Option<String>,
 }
 
-/// Input for updating per-model config (API Type + capability overrides) for any source.
+/// Input for updating per-model config (display name, API Type, capabilities) for any source.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelConfigWrite {
 	pub id: Uuid,
+	/// Optional display-name override; null/empty clears to remote name or model key.
+	#[serde(default)]
+	pub display_name_override: Option<String>,
 	/// Optional API Type override; null/empty inherits the channel adapter at runtime.
 	#[serde(default)]
 	pub adapter_id: Option<String>,

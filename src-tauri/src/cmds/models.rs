@@ -162,7 +162,7 @@ pub async fn set_model_adapter_id(
 	Ok(result)
 }
 
-/// Update per-model API Type and capability overrides for any model source.
+/// Update per-model display name, API Type, and capability overrides for any model source.
 #[tauri::command]
 pub async fn update_model_config(
 	app: AppHandle,

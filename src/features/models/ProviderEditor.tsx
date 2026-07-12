@@ -30,7 +30,6 @@ import { providerListOptions, providerModelsOptions } from "../../query/options"
 import {
 	deleteProviderInstance,
 	deleteProviderModels,
-	saveManualModel,
 	saveProviderInstance,
 	setModelEnabled,
 	syncProviderModels,
@@ -592,46 +591,6 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
 		}
 	}
 
-	async function handleRenameModel(model: ProviderModelDto, displayNameOverride: string | null): Promise<boolean> {
-		if (pendingModelIds.has(model.id)) {
-			return false;
-		}
-
-		const previous = models.find((m) => m.id === model.id);
-		if (!previous) {
-			return false;
-		}
-
-		setModelMutationError(null);
-		setPendingModelIds((current) => new Set(current).add(model.id));
-		setModelsCache((current) => current.map((m) => (m.id === model.id ? { ...m, displayNameOverride } : m)));
-
-		try {
-			const updated = await saveManualModel({
-				id: model.id,
-				providerInstanceId: provider.id,
-				modelKey: model.modelKey,
-				displayNameOverride,
-				enabled: model.enabled,
-				capabilityOverridesJson: model.capabilityOverridesJson,
-				adapterId: model.adapterId,
-			});
-			setModelsCache((current) => current.map((m) => (m.id === model.id ? updated : m)));
-			void queryClient.invalidateQueries({ queryKey: modelKeys.all });
-			return true;
-		} catch (error: unknown) {
-			setModelsCache((current) => current.map((m) => (m.id === model.id ? previous : m)));
-			setModelMutationError(getIpcErrorMessage(error, t("models.toast.updateModelFailed")));
-			return false;
-		} finally {
-			setPendingModelIds((current) => {
-				const next = new Set(current);
-				next.delete(model.id);
-				return next;
-			});
-		}
-	}
-
 	function enterSelectionMode() {
 		setSelectedModelIds(new Set());
 		setSelectionMode(true);
@@ -1136,7 +1095,6 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
 							onEnabledChange={(modelId, nextEnabled) => {
 								void handleModelEnabledChange(modelId, nextEnabled);
 							}}
-							onRenameModel={handleRenameModel}
 							onEditModel={(model) => {
 								setEditingConfigModel(model);
 							}}

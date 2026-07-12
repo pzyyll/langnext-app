@@ -948,6 +948,7 @@ fn update_model_config_persists_limits_and_request_default() {
 	let updated = models
 		.update_config(ModelConfigWrite {
 			id: model.id,
+			display_name_override: Some("  Configured  ".into()),
 			adapter_id: Some("anthropic".into()),
 			capability_overrides_json: Some(serde_json::json!({
 				"schemaVersion": 1,
@@ -960,12 +961,23 @@ fn update_model_config_persists_limits_and_request_default() {
 		})
 		.unwrap();
 
+	assert_eq!(updated.display_name_override.as_deref(), Some("Configured"));
 	assert_eq!(updated.adapter_id.as_deref(), Some("anthropic"));
-	let capabilities = updated.capability_overrides_json.expect("capabilities");
+	let capabilities = updated.capability_overrides_json.as_ref().expect("capabilities");
 	assert_eq!(capabilities["maxContextTokens"], 131072);
 	assert_eq!(capabilities["maxOutputTokens"], 32768);
 	assert_eq!(capabilities["defaultOutputTokens"], 6144);
 	assert_eq!(capabilities["imageAnalysis"], true);
+
+	let cleared = models
+		.update_config(ModelConfigWrite {
+			id: model.id,
+			display_name_override: Some("   ".into()),
+			adapter_id: Some("anthropic".into()),
+			capability_overrides_json: updated.capability_overrides_json.clone(),
+		})
+		.unwrap();
+	assert_eq!(cleared.display_name_override, None);
 }
 
 #[test]
