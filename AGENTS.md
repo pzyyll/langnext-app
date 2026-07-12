@@ -80,4 +80,4 @@ mise run tauri:build   # Package desktop app
 
 ## References
 
-- base-ui guide: https://base-ui.com/llms.txt
+- base-ui guide and components: https://base-ui.com/llms.txt

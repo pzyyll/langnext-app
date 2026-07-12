@@ -25,6 +25,7 @@ const zhCN = {
 		optional: "可选",
 		enabled: "已启用",
 		disabled: "已禁用",
+		on: "ON",
 		all: "全部",
 		default: "默认：{{value}}",
 		saving: "保存中…",

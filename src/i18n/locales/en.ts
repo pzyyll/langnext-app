@@ -27,6 +27,7 @@ const en = {
 		optional: "Optional",
 		enabled: "Enabled",
 		disabled: "Disabled",
+		on: "ON",
 		all: "All",
 		default: "Default: {{value}}",
 		saving: "Saving…",

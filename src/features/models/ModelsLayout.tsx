@@ -7,6 +7,7 @@ import { Button } from "@base-ui/react/button";
 import { DragDropProvider } from "@dnd-kit/react";
 import { isSortable, useSortable } from "@dnd-kit/react/sortable";
 import { useTranslation } from "react-i18next";
+import { Badge } from "../../components/Badge";
 import { useToast } from "../../components/toast/useToast";
 import { outlineButtonClassName } from "../../components/ui";
 import { modelKeys, providerKeys } from "../../query/keys";
@@ -109,17 +110,26 @@ function SortableChannelItem({
 			? "animate-channel-enter motion-reduce:animate-none"
 			: "";
 
+	// Row-level surface so drag handle + link share hover / selected chrome.
+	const rowClass = active
+		? `group flex bg-surface-2${exiting ? " pointer-events-none" : ""}`
+		: `group flex hover:bg-surface-2${exiting ? " pointer-events-none" : ""}`;
+
+	const handleClass = active
+		? "w-6 shrink-0 cursor-grab text-on-surface active:cursor-grabbing"
+		: "w-6 shrink-0 cursor-grab text-neutral group-hover:text-on-surface active:cursor-grabbing";
+
 	const linkClass = active
-		? `block min-w-0 flex-1 rounded-none bg-surface-2 px-3 py-2 text-body-tight font-bold text-on-surface ${animationClass}`
-		: `block min-w-0 flex-1 rounded-none px-3 py-2 text-body-tight text-neutral hover:bg-surface-2 hover:text-on-surface ${animationClass}`;
+		? `flex min-w-0 flex-1 items-center gap-2 rounded-none px-3 py-2 text-body-tight font-bold text-on-surface ${animationClass}`
+		: `flex min-w-0 flex-1 items-center gap-2 rounded-none px-3 py-2 text-body-tight text-neutral group-hover:text-on-surface ${animationClass}`;
 
 	return (
-		<li ref={ref} className={exiting ? "pointer-events-none flex" : "flex"}>
+		<li ref={ref} className={rowClass}>
 			<button
 				ref={handleRef}
 				type="button"
 				aria-label={t("models.reorderAria", { name: provider.displayName })}
-				className="w-6 shrink-0 cursor-grab text-neutral hover:bg-surface-2 hover:text-on-surface active:cursor-grabbing"
+				className={handleClass}
 			>
 				<span aria-hidden="true">⋮⋮</span>
 			</button>
@@ -144,7 +154,8 @@ function SortableChannelItem({
 					}
 				}}
 			>
-				{provider.displayName}
+				<span className="min-w-0 flex-1 truncate">{provider.displayName}</span>
+				{provider.enabled ? <Badge tone="accent">{t("common.on")}</Badge> : null}
 			</Link>
 		</li>
 	);
