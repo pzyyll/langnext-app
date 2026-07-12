@@ -10,7 +10,7 @@ const en = {
 	nav: {
 		mainAria: "Main",
 		translate: "Translate",
-		translateProfiles: "Translate Profiles",
+		translateProfiles: "Profiles",
 		models: "Models",
 		about: "About",
 		settings: "Settings",

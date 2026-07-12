@@ -8,7 +8,7 @@ const zhCN = {
 	nav: {
 		mainAria: "主导航",
 		translate: "翻译",
-		translateProfiles: "翻译预设",
+		translateProfiles: "预设",
 		models: "模型",
 		about: "关于",
 		settings: "设置",

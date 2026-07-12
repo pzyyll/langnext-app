@@ -63,7 +63,7 @@ const squareIconButtonClassName = `${outlineButtonClassName} size-control-height
 const dangerIconButtonClassName =
 	"inline-flex size-7 shrink-0 cursor-default items-center justify-center rounded-none border-0 bg-transparent text-error hover:bg-surface-2 hover:text-error active:bg-surface-3 focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface data-disabled:text-disabled disabled:text-disabled";
 
-const newProfileButtonClassName = `${outlineButtonClassName} w-full font-bold hover:not-data-disabled:bg-on-surface hover:not-data-disabled:text-surface`;
+const newProfileButtonClassName = `${outlineButtonClassName} w-full font-bold hover:not-data-disabled:bg-on-surface`;
 
 /**
  * Shared rail/editor footer: fixed border-box block size so both columns match.
