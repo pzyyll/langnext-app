@@ -11,6 +11,7 @@ pub const MIGRATIONS: &[&str] = &[
 	include_str!("../../migrations/0004_model_adapter_id.sql"),
 	include_str!("../../migrations/0005_profile_language_detection.sql"),
 	include_str!("../../migrations/0006_profile_language_preferences.sql"),
+	include_str!("../../migrations/0007_profile_streaming.sql"),
 ];
 
 pub fn latest_version() -> i32 {
@@ -135,6 +136,15 @@ mod tests {
 			)
 			.optional()
 			.unwrap();
+		// v7 per-profile streaming toggle defaults to enabled (1) for legacy rows.
+		let stream_enabled: Option<i64> = conn
+			.query_row("SELECT stream_enabled FROM translation_profiles LIMIT 1", [], |r| {
+				r.get(0)
+			})
+			.optional()
+			.unwrap();
+		// No rows on a fresh database; the column exists and is nullable-default-backed.
+		assert_eq!(stream_enabled, None);
 	}
 
 	#[test]
@@ -191,6 +201,33 @@ mod tests {
 		assert_eq!(row.1, None);
 		assert_eq!(row.2, None);
 		assert_eq!(row.3, None);
+		assert_eq!(read_user_version(&conn).unwrap(), latest_version());
+	}
+
+	#[test]
+	fn migrate_v6_profile_to_v7_defaults_stream_enabled() {
+		let mut conn = Connection::open_in_memory().unwrap();
+		migrate_with(&mut conn, &MIGRATIONS[..6]).unwrap();
+		conn
+			.execute(
+				"INSERT INTO translation_profiles (
+				id, name, enabled, template_version, system_template, user_template,
+				source_lang, target_lang, primary_lang, preferred_target_lang, created_at, updated_at
+			) VALUES ('profile-v7', 'Legacy', 1, 1, 'system', '{{text}}', 'zh', 'en', 'zh', 'en', 't', 't')",
+				[],
+			)
+			.unwrap();
+
+		migrate(&mut conn).unwrap();
+		// Legacy rows inherit the column default (1 = stream enabled).
+		let stream_enabled: i64 = conn
+			.query_row(
+				"SELECT stream_enabled FROM translation_profiles WHERE id = 'profile-v7'",
+				[],
+				|r| r.get(0),
+			)
+			.unwrap();
+		assert_eq!(stream_enabled, 1);
 		assert_eq!(read_user_version(&conn).unwrap(), latest_version());
 	}
 

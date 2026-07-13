@@ -4,6 +4,11 @@ use crate::domain::language_detection::LanguageDetectorConfig;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+/// Serde default for boolean flags that should be `true` when absent in legacy data.
+pub fn default_true() -> bool {
+	true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct TranslationProfile {
@@ -23,6 +28,10 @@ pub struct TranslationProfile {
 	/// to defer to the Primary/Target preference rule.
 	#[serde(default)]
 	pub target_lang: Option<String>,
+	/// Whether translate requests using this profile stream output. Defaults to `true` for
+	/// legacy rows/exports that predate the field.
+	#[serde(default = "default_true")]
+	pub stream_enabled: bool,
 	/// Profile Primary preference: concrete supported id used as the Auto-target fallback when
 	/// the effective source matches the Target preference. Optional for legacy rows.
 	#[serde(default)]
@@ -72,6 +81,10 @@ pub struct TranslationProfileWrite {
 	pub source_lang: Option<String>,
 	#[serde(default)]
 	pub target_lang: Option<String>,
+	/// Whether translate requests using this profile stream output. Absent on legacy writes
+	/// defaults to `true`.
+	#[serde(default = "default_true")]
+	pub stream_enabled: bool,
 	/// Profile Primary preference (concrete supported id). Absent on legacy writes.
 	#[serde(default)]
 	pub primary_lang: Option<String>,

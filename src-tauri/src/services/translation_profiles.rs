@@ -93,6 +93,7 @@ impl TranslationProfileService {
 				id,
 				name: input.name.clone(),
 				enabled: input.enabled,
+				stream_enabled: input.stream_enabled,
 				template_version: input.template_version,
 				system_template: input.system_template.clone(),
 				user_template: input.user_template.clone(),

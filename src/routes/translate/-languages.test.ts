@@ -9,7 +9,7 @@ import {
 	isSelectableLanguageId,
 	resolveProfileLangPrefs,
 	resolveTargetLanguage,
-} from "./languages";
+} from "./-languages";
 
 test("getDefaultProfileLanguages maps UI locale to a valid distinct pair", () => {
 	expect(getDefaultProfileLanguages("zh-CN")).toEqual({ primary: "zh", target: "en" });

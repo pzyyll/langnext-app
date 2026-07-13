@@ -20,8 +20,8 @@
 
 ## File Map
 
-- Create: `src/routes/translate/languages.ts` — shared supported-language types, defaults, guards, and Auto target resolver.
-- Create: `src/routes/translate/languages.test.ts` — policy tests for defaults, exclusions, and target resolution.
+- Create: `src/routes/translate/-languages.ts` — shared supported-language types, defaults, guards, and Auto target resolver.
+- Create: `src/routes/translate/-languages.test.ts` — policy tests for defaults, exclusions, and target resolution.
 - Create: `src-tauri/migrations/0006_profile_language_preferences.sql` — nullable profile preference columns for backward compatibility.
 - Modify: `src/routes/translate/index.tsx` — target Auto option, effective target resolution, profile preference consumption, and swap behavior.
 - Modify: `src/routes/translate/profiles.tsx` — Primary/Target preference controls, valid defaults, and target Auto support.
@@ -55,8 +55,8 @@ The resolver must return a concrete language ID. `primary === preferredTarget` i
 
 **Files:**
 
-- Create: `src/routes/translate/languages.ts`
-- Create: `src/routes/translate/languages.test.ts`
+- Create: `src/routes/translate/-languages.ts`
+- Create: `src/routes/translate/-languages.test.ts`
 
 **Steps:**
 
@@ -68,7 +68,7 @@ The resolver must return a concrete language ID. `primary === preferredTarget` i
 
 **Validation:**
 
-- Run: `bun test src/routes/translate/languages.test.ts`
+- Run: `bun test src/routes/translate/-languages.test.ts`
 - Expected: All language policy tests pass.
 
 ### Task 2: Persist and validate profile language preferences
@@ -116,7 +116,7 @@ The resolver must return a concrete language ID. `primary === preferredTarget` i
 
 **Steps:**
 
-- [ ] Replace local duplicated language types with imports from `languages.ts`.
+- [ ] Replace local duplicated language types with imports from `-languages.ts`.
 - [ ] Allow `targetLang` to select `auto`, while Primary and Target preference selectors only offer concrete languages.
 - [ ] Initialize new and legacy profile drafts from the current UI locale using `getDefaultProfileLanguages`.
 - [ ] Add concise Primary and Target controls near the existing source/target language controls.
@@ -151,7 +151,7 @@ The resolver must return a concrete language ID. `primary === preferredTarget` i
 
 **Validation:**
 
-- Run: `bun test src/routes/translate/languages.test.ts`
+- Run: `bun test src/routes/translate/-languages.test.ts`
 - Expected: Resolver behavior remains green.
 - Run: `mise run typecheck`
 - Expected: Translation state and payload construction compile with concrete target guarantees.

@@ -10,6 +10,7 @@ use uuid::Uuid;
 fn map_profile(row: &Row<'_>) -> Result<TranslationProfile, rusqlite::Error> {
 	let id: String = row.get("id")?;
 	let enabled: i64 = row.get("enabled")?;
+	let stream_enabled: i64 = row.get("stream_enabled")?;
 	let provider_options: Option<String> = row.get("provider_options_json")?;
 	let language_detection: Option<String> = row.get("language_detection_json")?;
 	Ok(TranslationProfile {
@@ -17,6 +18,7 @@ fn map_profile(row: &Row<'_>) -> Result<TranslationProfile, rusqlite::Error> {
 			.map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?,
 		name: row.get("name")?,
 		enabled: enabled != 0,
+		stream_enabled: stream_enabled != 0,
 		template_version: row.get("template_version")?,
 		system_template: row.get("system_template")?,
 		user_template: row.get("user_template")?,
@@ -103,14 +105,15 @@ pub fn insert_profile(conn: &Connection, profile: &TranslationProfile) -> Result
 	conn
 		.execute(
 			"INSERT INTO translation_profiles (
-            id, name, enabled, template_version, system_template, user_template,
+            id, name, enabled, stream_enabled, template_version, system_template, user_template,
             temperature, max_output_tokens, provider_options_json, source_lang, target_lang,
             primary_lang, preferred_target_lang, language_detection_json, created_at, updated_at
-        ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
+        ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
 			params![
 				profile.id.to_string(),
 				profile.name,
 				profile.enabled as i64,
+				profile.stream_enabled as i64,
 				profile.template_version,
 				profile.system_template,
 				profile.user_template,
@@ -144,23 +147,25 @@ pub fn update_profile(conn: &Connection, profile: &TranslationProfile) -> Result
 			"UPDATE translation_profiles SET
             name = ?2,
             enabled = ?3,
-            template_version = ?4,
-            system_template = ?5,
-            user_template = ?6,
-            temperature = ?7,
-            max_output_tokens = ?8,
-            provider_options_json = ?9,
-            source_lang = ?10,
-            target_lang = ?11,
-            primary_lang = ?12,
-            preferred_target_lang = ?13,
-            language_detection_json = ?14,
-            updated_at = ?15
+            stream_enabled = ?4,
+            template_version = ?5,
+            system_template = ?6,
+            user_template = ?7,
+            temperature = ?8,
+            max_output_tokens = ?9,
+            provider_options_json = ?10,
+            source_lang = ?11,
+            target_lang = ?12,
+            primary_lang = ?13,
+            preferred_target_lang = ?14,
+            language_detection_json = ?15,
+            updated_at = ?16
          WHERE id = ?1",
 			params![
 				profile.id.to_string(),
 				profile.name,
 				profile.enabled as i64,
+				profile.stream_enabled as i64,
 				profile.template_version,
 				profile.system_template,
 				profile.user_template,

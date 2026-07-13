@@ -36,7 +36,7 @@ import {
 	type LanguageId,
 	type SelectableLanguageId,
 	type SourceLanguageId,
-} from "./languages";
+} from "./-languages";
 import IconMaterialSymbolsLightDeleteOutlineSharp from "~icons/material-symbols-light/delete-outline-sharp";
 
 export const Route = createFileRoute("/translate/profiles")({
@@ -100,6 +100,7 @@ type ProfileDraft = {
 	targetLang: SelectableLanguageId;
 	primaryLang: LanguageId;
 	preferredTargetLang: LanguageId;
+	streamEnabled: boolean;
 	primaryModelId: string;
 	languageDetectionModelId: string;
 	fallbackModelIds: string[];
@@ -161,6 +162,7 @@ function emptyDraft(defaultModelId: string, uiLanguage: string): ProfileDraft {
 		targetLang: AUTO_LANGUAGE,
 		primaryLang: primary,
 		preferredTargetLang: target,
+		streamEnabled: true,
 		primaryModelId: defaultModelId,
 		languageDetectionModelId: "",
 		fallbackModelIds: [],
@@ -192,6 +194,7 @@ function draftFromDto(dto: TranslationProfileDto, modelOptions: ModelOption[], u
 		targetLang: isSelectableLanguageId(dto.targetLang) ? dto.targetLang : AUTO_LANGUAGE,
 		primaryLang: isLanguageId(dto.primaryLang) ? dto.primaryLang : defaults.primary,
 		preferredTargetLang: isLanguageId(dto.preferredTargetLang) ? dto.preferredTargetLang : defaults.target,
+		streamEnabled: dto.streamEnabled,
 		primaryModelId,
 		languageDetectionModelId,
 		fallbackModelIds,
@@ -521,6 +524,7 @@ function TranslateProfilesPage() {
 			languageDetection: draft.languageDetectionModelId
 				? { type: "llm", modelId: draft.languageDetectionModelId }
 				: null,
+			streamEnabled: draft.streamEnabled,
 			targetModelIds: uniqueTargetIds,
 		});
 	}
@@ -983,49 +987,68 @@ function TranslateProfilesPage() {
 									</div>
 
 									{/* Parameters */}
-									<div className="grid grid-cols-1 gap-8 border-t border-outline-variant pt-4 sm:grid-cols-2">
-										<div className="flex flex-col gap-1">
-											<label className={fieldLabelClassName} htmlFor="profile-temperature">
-												{t("translate.profiles.temperature")}
-											</label>
-											<input
-												id="profile-temperature"
-												className={inputClassName}
-												type="number"
-												step="0.1"
-												min="0"
-												max="2"
-												value={draft.temperature}
-												placeholder={String(DEFAULT_TEMPERATURE)}
-												disabled={savePending}
-												onChange={(event) => {
-													updateDraft({ temperature: event.currentTarget.value });
-												}}
-											/>
-											<span className="text-table-header text-disabled">
-												{t("common.default", { value: DEFAULT_TEMPERATURE })}
+									<div className="space-y-4 border-t border-outline-variant pt-4">
+										<label className="flex items-center justify-between gap-3" htmlFor="profile-stream">
+											<span className="flex flex-col gap-0.5">
+												<span className={fieldLabelClassName}>{t("translate.profiles.streamLabel")}</span>
+												<span className="text-body-tight text-neutral">{t("translate.profiles.streamHint")}</span>
 											</span>
-										</div>
-										<div className="flex flex-col gap-1">
-											<label className={fieldLabelClassName} htmlFor="profile-max-tokens">
-												{t("translate.profiles.maxTokens")}
-											</label>
-											<input
-												id="profile-max-tokens"
-												className={inputClassName}
-												type="number"
-												step="1"
-												min="1"
-												value={draft.maxOutputTokens}
-												placeholder={String(DEFAULT_MAX_OUTPUT_TOKENS)}
+											<Switch.Root
+												id="profile-stream"
+												checked={draft.streamEnabled}
 												disabled={savePending}
-												onChange={(event) => {
-													updateDraft({ maxOutputTokens: event.currentTarget.value });
+												onCheckedChange={(checked) => {
+													updateDraft({ streamEnabled: checked });
 												}}
-											/>
-											<span className="text-table-header text-disabled">
-												{t("common.default", { value: DEFAULT_MAX_OUTPUT_TOKENS })}
-											</span>
+												className={switchRootClassName}
+											>
+												<Switch.Thumb className={switchThumbClassName} />
+											</Switch.Root>
+										</label>
+										<div className="grid grid-cols-1 gap-8 sm:grid-cols-2">
+											<div className="flex flex-col gap-1">
+												<label className={fieldLabelClassName} htmlFor="profile-temperature">
+													{t("translate.profiles.temperature")}
+												</label>
+												<input
+													id="profile-temperature"
+													className={inputClassName}
+													type="number"
+													step="0.1"
+													min="0"
+													max="2"
+													value={draft.temperature}
+													placeholder={String(DEFAULT_TEMPERATURE)}
+													disabled={savePending}
+													onChange={(event) => {
+														updateDraft({ temperature: event.currentTarget.value });
+													}}
+												/>
+												<span className="text-table-header text-disabled">
+													{t("common.default", { value: DEFAULT_TEMPERATURE })}
+												</span>
+											</div>
+											<div className="flex flex-col gap-1">
+												<label className={fieldLabelClassName} htmlFor="profile-max-tokens">
+													{t("translate.profiles.maxTokens")}
+												</label>
+												<input
+													id="profile-max-tokens"
+													className={inputClassName}
+													type="number"
+													step="1"
+													min="1"
+													value={draft.maxOutputTokens}
+													placeholder={String(DEFAULT_MAX_OUTPUT_TOKENS)}
+													disabled={savePending}
+													onChange={(event) => {
+														updateDraft({ maxOutputTokens: event.currentTarget.value });
+													}}
+												/>
+												<span className="text-table-header text-disabled">
+													{t("common.default", { value: DEFAULT_MAX_OUTPUT_TOKENS })}
+												</span>
+											</div>
 										</div>
 									</div>
 

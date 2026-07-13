@@ -43,7 +43,8 @@ import {
 	type LanguageId,
 	type SelectableLanguageId,
 	type SourceLanguageId,
-} from "./languages";
+} from "./-languages";
+import { getTranslateSessionPreferences, setTranslateSessionPreferences } from "./-sessionPreferences";
 import type {
 	ProviderInstanceDto,
 	ProviderModelDto,
@@ -120,8 +121,10 @@ function TranslatePage() {
 	const { t, i18n } = useTranslation();
 	const toast = useToast();
 	const queryClient = useQueryClient();
-	const [sourceLang, setSourceLang] = useState<SourceLanguageId>("auto");
-	const [targetLang, setTargetLang] = useState<SelectableLanguageId>("en");
+	// Restore toolbar selections across navigation and app restarts.
+	const [sessionSeed] = useState(() => getTranslateSessionPreferences());
+	const [sourceLang, setSourceLang] = useState<SourceLanguageId>(sessionSeed.sourceLang);
+	const [targetLang, setTargetLang] = useState<SelectableLanguageId>(sessionSeed.targetLang);
 	const [detectedSourceLang, setDetectedSourceLang] = useState<LanguageId | null>(null);
 	const [profilePrimaryLang, setProfilePrimaryLang] = useState<LanguageId | null>(null);
 	const [profilePreferredTargetLang, setProfilePreferredTargetLang] = useState<LanguageId | null>(null);
@@ -133,11 +136,11 @@ function TranslatePage() {
 	const [latencyMs, setLatencyMs] = useState<number | null>(null);
 	const [copyFeedback, setCopyFeedback] = useState(false);
 	const [isTranslating, setIsTranslating] = useState(false);
-	const [useStreaming, setUseStreaming] = useState(true);
+	const [profileStreamEnabled, setProfileStreamEnabled] = useState(true);
 	const [activeModelLabel, setActiveModelLabel] = useState<string | null>(null);
 
-	const [selectedModelId, setSelectedModelId] = useState("");
-	const [selectedProfileId, setSelectedProfileId] = useState("");
+	const [selectedModelId, setSelectedModelId] = useState(sessionSeed.modelId);
+	const [selectedProfileId, setSelectedProfileId] = useState(sessionSeed.profileId);
 	const [profileApplyError, setProfileApplyError] = useState<string | null>(null);
 	const [isApplyingProfile, setIsApplyingProfile] = useState(false);
 
@@ -172,13 +175,66 @@ function TranslatePage() {
 			? selectedModelId
 			: (modelOptions[0]?.id ?? "");
 	const resolvedProfileId = profiles.some((profile) => profile.id === selectedProfileId) ? selectedProfileId : "";
+	/** Streaming follows the active profile's config; defaults to on with no profile. */
+	const useStreaming = resolvedProfileId ? profileStreamEnabled : true;
 
 	/** Monotonic local counter + backend stream request id for cancellation. */
 	const translateGeneration = useRef(0);
 	/** Guards out-of-order profile apply responses when the user switches quickly. */
 	const profileApplyGeneration = useRef(0);
+	/** Guards out-of-order profile-preference hydration (restore path, not full apply). */
+	const profilePrefsGeneration = useRef(0);
 	const activeRequestId = useRef<string | null>(null);
 	const streamUnlisteners = useRef<UnlistenFn[]>([]);
+
+	// Persist toolbar selections so navigation and restarts restore the last choices.
+	useEffect(() => {
+		setTranslateSessionPreferences({
+			profileId: selectedProfileId,
+			modelId: selectedModelId,
+			sourceLang,
+			targetLang,
+		});
+	}, [selectedProfileId, selectedModelId, sourceLang, targetLang]);
+
+	// When a profile id is restored (or becomes valid again), load Primary/Target prefs for Auto-target
+	// without re-applying the profile over the user's saved model/language selections.
+	// Stale prefs are safe when resolvedProfileId is empty: resolveProfileLangPrefs ignores them.
+	useEffect(() => {
+		if (!resolvedProfileId || isApplyingProfile) {
+			return;
+		}
+
+		const generation = ++profilePrefsGeneration.current;
+		let cancelled = false;
+
+		void (async () => {
+			try {
+				const dto = await queryClient.fetchQuery(profileDetailOptions(resolvedProfileId));
+				if (cancelled || generation !== profilePrefsGeneration.current) {
+					return;
+				}
+				const defaults = getDefaultProfileLanguages(i18n.language);
+				setProfilePrimaryLang(isLanguageId(dto.primaryLang) ? dto.primaryLang : defaults.primary);
+				setProfilePreferredTargetLang(
+					isLanguageId(dto.preferredTargetLang) ? dto.preferredTargetLang : defaults.target,
+				);
+				setProfileStreamEnabled(dto.streamEnabled);
+			} catch {
+				if (cancelled || generation !== profilePrefsGeneration.current) {
+					return;
+				}
+				// Keep UI usable: clear prefs so Auto-target falls back to UI-locale defaults.
+				setProfilePrimaryLang(null);
+				setProfilePreferredTargetLang(null);
+				setProfileStreamEnabled(true);
+			}
+		})();
+
+		return () => {
+			cancelled = true;
+		};
+	}, [resolvedProfileId, isApplyingProfile, queryClient, i18n.language]);
 
 	const sourceLanguageOptions = useMemo(
 		() => [
@@ -295,6 +351,7 @@ function TranslatePage() {
 			const defaults = getDefaultProfileLanguages(i18n.language);
 			setProfilePrimaryLang(isLanguageId(dto.primaryLang) ? dto.primaryLang : defaults.primary);
 			setProfilePreferredTargetLang(isLanguageId(dto.preferredTargetLang) ? dto.preferredTargetLang : defaults.target);
+			setProfileStreamEnabled(dto.streamEnabled);
 		} catch (err) {
 			if (!shouldApplyProfileResult(generation, profileApplyGeneration.current)) {
 				return;
@@ -789,22 +846,6 @@ function TranslatePage() {
 							))}
 						</select>
 					</div>
-
-					<div className="hidden h-6 w-px bg-outline-variant sm:block" aria-hidden />
-
-					<label className="flex items-center gap-2 text-body-tight text-on-surface">
-						<input
-							type="checkbox"
-							className="size-4 shrink-0 rounded-none border border-line accent-on-surface"
-							checked={useStreaming}
-							disabled={isTranslating}
-							aria-label={t("translate.streamAria")}
-							onChange={(event) => {
-								setUseStreaming(event.currentTarget.checked);
-							}}
-						/>
-						<span className="text-label-sm text-neutral uppercase">{t("translate.streamLabel")}</span>
-					</label>
 				</div>
 			</div>
 

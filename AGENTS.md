@@ -74,6 +74,11 @@ mise run tauri:build   # Package the desktop application
 - Do not use `new`, `improved`, or `enhanced` in names.
 - Generated documentation is in English unless requested otherwise.
 
+### TanStack Router
+
+- Under `src/routes`, prefix every non-route implementation file and test file with `-` so `routeFileIgnorePrefix` excludes it from route generation.
+- Keep actual route files unprefixed and ensure they export `Route`.
+
 ### Tailwind CSS
 
 Prefer named Tailwind tokens when an equivalent exists. For example:
