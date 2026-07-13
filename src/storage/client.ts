@@ -6,6 +6,8 @@ import type {
 	AppSettingsUpdate,
 	ConfigurationExport,
 	ConnectionTestResult,
+	DetectLanguageInput,
+	DetectLanguageResult,
 	ImportConflictMode,
 	ImportPreview,
 	ImportResult,
@@ -73,6 +75,14 @@ export async function translateTextStream(input: TranslateInput, requestId: stri
 /** Abort an in-flight translate (stream or non-stream) by client `requestId`. */
 export async function cancelTranslate(requestId: string): Promise<boolean> {
 	return invoke("cancel_translate", { requestId });
+}
+
+/**
+ * Detect the language of `input.text` via a non-streaming chat completion.
+ * Pass `requestId` so `cancelTranslate` can abort mid-flight (same registry as translate).
+ */
+export async function detectLanguage(input: DetectLanguageInput, requestId?: string): Promise<DetectLanguageResult> {
+	return invoke("detect_language", { input, requestId: requestId ?? null });
 }
 
 export async function saveManualModel(input: ManualModelWrite): Promise<ProviderModelDto> {

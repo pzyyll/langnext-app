@@ -189,6 +189,36 @@ export interface TranslateStreamError {
 	latencyMs: number;
 }
 
+/** Detector backend that produced a DetectLanguageResult. Mirrors the Rust tagged enum. */
+export type DetectorType = "llm";
+
+/** Tagged language detector config. `type` selects the backend; only `llm` exists today. */
+export type LanguageDetectorConfig = { type: "llm"; modelId?: string | null };
+
+/** Input for detect_language IPC. */
+export interface DetectLanguageInput {
+	text: string;
+	/** Default LLM model used when no profile is selected / no explicit config. */
+	modelId?: string | null;
+	/** Profile supplying detector config and the primary model fallback. */
+	profileId?: string | null;
+}
+
+/** Result of detect_language IPC (success or soft provider/validation failure). */
+export interface DetectLanguageResult {
+	ok: boolean;
+	/** Detected supported language id (e.g. `zh`); null on soft failure. */
+	languageId?: string | null;
+	/** Detector backend that produced this result. */
+	detectorType: DetectorType;
+	/** Model used for detection (LLM variant); null when no model was reached. */
+	modelId?: string | null;
+	latencyMs: number;
+	/** Bounded failure code when `ok` is false. */
+	errorCode?: string | null;
+	message: string;
+}
+
 export interface TranslationProfile {
 	id: string;
 	name: string;
@@ -201,6 +231,12 @@ export interface TranslationProfile {
 	providerOptionsJson: unknown | null;
 	sourceLang?: string | null;
 	targetLang?: string | null;
+	/** Profile Primary preference (concrete supported id); null on legacy profiles. */
+	primaryLang?: string | null;
+	/** Profile Target preference (concrete supported id); null on legacy profiles. */
+	preferredTargetLang?: string | null;
+	/** Optional language detector config; null/absent uses the default LLM detector. */
+	languageDetection?: LanguageDetectorConfig | null;
 	createdAt: string;
 	updatedAt: string;
 }
@@ -227,6 +263,12 @@ export interface TranslationProfileWrite {
 	providerOptionsJson?: unknown | null;
 	sourceLang?: string | null;
 	targetLang?: string | null;
+	/** Profile Primary preference (concrete supported id); omitted on legacy writes. */
+	primaryLang?: string | null;
+	/** Profile Target preference (concrete supported id); omitted on legacy writes. */
+	preferredTargetLang?: string | null;
+	/** Optional language detector config; null/absent clears to the default LLM detector. */
+	languageDetection?: LanguageDetectorConfig | null;
 	targetModelIds: string[];
 }
 
@@ -392,6 +434,8 @@ const _profileWriteFixture = {
 	temperature: 0.2,
 	maxOutputTokens: 1024,
 	providerOptionsJson: {},
+	primaryLang: "zh",
+	preferredTargetLang: "en",
 	targetModelIds: ["00000000-0000-7000-8000-000000000002"],
 } as const satisfies TranslationProfileWrite;
 
@@ -423,6 +467,15 @@ const _ipcErrorFixture = {
 	code: "validation_failed",
 	message: "display_name must not be empty",
 } as const satisfies IpcError;
+
+const _detectLanguageResultFixture = {
+	ok: true,
+	languageId: "zh",
+	detectorType: "llm",
+	modelId: "00000000-0000-7000-8000-000000000002",
+	latencyMs: 42,
+	message: "ok",
+} as const satisfies DetectLanguageResult;
 
 const _connectionTestFixture = {
 	ok: true,
@@ -460,3 +513,4 @@ void _ipcErrorFixture;
 void _connectionTestFixture;
 void _syncModelsFixture;
 void _syncModelsConnectionChangedFixture;
+void _detectLanguageResultFixture;

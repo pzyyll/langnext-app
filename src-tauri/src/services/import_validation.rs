@@ -4,6 +4,7 @@ use crate::adapters::catalog;
 use crate::domain::import_export::{
 	ConfigurationExport, ImportConflictMode, ImportPreview, ImportPreviewCounts, EXPORT_FORMAT_VERSION,
 };
+use crate::domain::language_detection::LanguageDetectorConfig;
 use crate::domain::model::{CapabilityOverridesV1, ProviderModel};
 use crate::domain::provider::{CredentialKind, ModelsSyncStatus, ProviderExport, ProviderInstance};
 use crate::domain::settings::{AppSettingsV1, GlobalProxyMode};
@@ -13,7 +14,7 @@ use crate::error::StorageError;
 use crate::repositories::{provider_instances, provider_models, translation_profiles};
 use crate::services::providers::validate_provider_url;
 use crate::services::settings::{validate_default_profile, validate_settings_document};
-use crate::services::translation_profiles::validate_template;
+use crate::services::translation_profiles::{validate_profile_language_preferences, validate_template};
 use rusqlite::Connection;
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
@@ -128,6 +129,7 @@ pub fn build_validated_plan(
 		if let Err(e) = validate_import_profile(
 			profile,
 			targets_by_profile.get(&profile.id).map(|v| v.as_slice()).unwrap_or(&[]),
+			&doc_model_ids,
 		) {
 			errors.push(format!("profile {}: {e}", profile.id));
 		}
@@ -339,6 +341,18 @@ pub fn build_validated_plan(
 		p.id = id;
 		p.created_at = created_at;
 		p.updated_at = now.clone();
+		// Copy mode rewrites the detection LLM model id to the copied model's new id.
+		if matches!(mode, ImportConflictMode::Copy) {
+			if let Some(LanguageDetectorConfig::Llm {
+				model_id: Some(old_model),
+			}) = p.language_detection
+			{
+				let new_model = *model_id_map.get(&old_model).expect("detection model map");
+				p.language_detection = Some(LanguageDetectorConfig::Llm {
+					model_id: Some(new_model),
+				});
+			}
+		}
 		profiles.push(p);
 
 		let mut profile_targets: Vec<_> = document
@@ -456,6 +470,7 @@ fn validate_import_model(m: &ProviderModel, doc_providers: &HashSet<Uuid>) -> Re
 fn validate_import_profile(
 	profile: &TranslationProfile,
 	targets: &[&TranslationProfileTarget],
+	doc_model_ids: &HashSet<Uuid>,
 ) -> Result<(), StorageError> {
 	if profile.name.trim().is_empty() {
 		return Err(StorageError::Validation("profile name must not be empty".into()));
@@ -493,6 +508,18 @@ fn validate_import_profile(
 	validate_template(&profile.system_template, false)?;
 	validate_template(&profile.user_template, true)?;
 	catalog::validate_profile_options("openai-compatible", &profile.provider_options_json)?;
+	validate_profile_language_preferences(&profile.primary_lang, &profile.preferred_target_lang)?;
+	// A configured LLM detector must reference a model present in the import document.
+	if let Some(LanguageDetectorConfig::Llm {
+		model_id: Some(model_id),
+	}) = profile.language_detection
+	{
+		if !doc_model_ids.contains(&model_id) {
+			return Err(StorageError::Validation(format!(
+				"language detection references missing model {model_id}"
+			)));
+		}
+	}
 	Ok(())
 }
 

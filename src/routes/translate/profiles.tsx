@@ -2,7 +2,7 @@
 // ABOUTME: Full CRUD for profiles, model chains, languages, and prompt templates.
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, createFileRoute } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 import { Button } from "@base-ui/react/button";
 import { Switch } from "@base-ui/react/switch";
 import { useTranslation } from "react-i18next";
@@ -27,6 +27,16 @@ import {
 import { deleteTranslationProfile, saveTranslationProfile, setTranslationProfileEnabled } from "../../storage/client";
 import { getIpcErrorMessage } from "../../storage/errors";
 import type { ProviderInstanceDto, ProviderModelDto, TranslationProfileDto } from "../../storage/types";
+import {
+	AUTO_LANGUAGE,
+	LANGUAGE_IDS,
+	getDefaultProfileLanguages,
+	isLanguageId,
+	isSelectableLanguageId,
+	type LanguageId,
+	type SelectableLanguageId,
+	type SourceLanguageId,
+} from "./languages";
 import IconMaterialSymbolsLightDeleteOutlineSharp from "~icons/material-symbols-light/delete-outline-sharp";
 
 export const Route = createFileRoute("/translate/profiles")({
@@ -35,9 +45,6 @@ export const Route = createFileRoute("/translate/profiles")({
 
 /** Viewport minus titlebar-height and main vertical padding (2 × gutter). */
 const LAYOUT_HEIGHT_CLASS = "h-[calc(100dvh-var(--spacing-titlebar-height)-2*var(--spacing-gutter))]";
-
-const LANGUAGE_IDS = ["zh", "en", "ja", "ko", "fr", "de", "es"] as const;
-type LanguageId = (typeof LANGUAGE_IDS)[number];
 
 const DEFAULT_SYSTEM_TEMPLATE =
 	"You are a professional translation engine. Translate the user's text from {{source_language}} to {{target_language}}.\n" +
@@ -89,9 +96,12 @@ type ProfileDraft = {
 	id: string | null;
 	name: string;
 	enabled: boolean;
-	sourceLang: LanguageId;
-	targetLang: LanguageId;
+	sourceLang: SourceLanguageId;
+	targetLang: SelectableLanguageId;
+	primaryLang: LanguageId;
+	preferredTargetLang: LanguageId;
 	primaryModelId: string;
+	languageDetectionModelId: string;
 	fallbackModelIds: string[];
 	temperature: string;
 	maxOutputTokens: string;
@@ -141,18 +151,18 @@ function buildModelOptions(
 	return options;
 }
 
-function isLanguageId(value: string | null | undefined): value is LanguageId {
-	return !!value && (LANGUAGE_IDS as readonly string[]).includes(value);
-}
-
-function emptyDraft(defaultModelId: string): ProfileDraft {
+function emptyDraft(defaultModelId: string, uiLanguage: string): ProfileDraft {
+	const { primary, target } = getDefaultProfileLanguages(uiLanguage);
 	return {
 		id: null,
 		name: "",
 		enabled: true,
-		sourceLang: "zh",
-		targetLang: "en",
+		sourceLang: "auto",
+		targetLang: AUTO_LANGUAGE,
+		primaryLang: primary,
+		preferredTargetLang: target,
 		primaryModelId: defaultModelId,
+		languageDetectionModelId: "",
 		fallbackModelIds: [],
 		temperature: String(DEFAULT_TEMPERATURE),
 		maxOutputTokens: String(DEFAULT_MAX_OUTPUT_TOKENS),
@@ -163,20 +173,27 @@ function emptyDraft(defaultModelId: string): ProfileDraft {
 	};
 }
 
-function draftFromDto(dto: TranslationProfileDto, modelOptions: ModelOption[]): ProfileDraft {
+function draftFromDto(dto: TranslationProfileDto, modelOptions: ModelOption[], uiLanguage: string): ProfileDraft {
 	const sortedTargets = [...dto.targets].sort((a, b) => a.priority - b.priority);
 	const modelIds = sortedTargets.map((target) => target.providerModelId);
 	const primaryModelId =
 		modelIds.find((id) => modelOptions.some((option) => option.id === id)) ?? modelOptions[0]?.id ?? modelIds[0] ?? "";
 	const fallbackModelIds = modelIds.filter((id) => id !== primaryModelId);
+	// Inherit the profile primary model unless an explicit LLM detector model is configured.
+	const languageDetectionModelId =
+		dto.languageDetection?.type === "llm" && dto.languageDetection.modelId != null ? dto.languageDetection.modelId : "";
+	const defaults = getDefaultProfileLanguages(uiLanguage);
 
 	return {
 		id: dto.id,
 		name: dto.name,
 		enabled: dto.enabled,
-		sourceLang: isLanguageId(dto.sourceLang) ? dto.sourceLang : "zh",
-		targetLang: isLanguageId(dto.targetLang) ? dto.targetLang : "en",
+		sourceLang: isSelectableLanguageId(dto.sourceLang) ? dto.sourceLang : "auto",
+		targetLang: isSelectableLanguageId(dto.targetLang) ? dto.targetLang : AUTO_LANGUAGE,
+		primaryLang: isLanguageId(dto.primaryLang) ? dto.primaryLang : defaults.primary,
+		preferredTargetLang: isLanguageId(dto.preferredTargetLang) ? dto.preferredTargetLang : defaults.target,
 		primaryModelId,
+		languageDetectionModelId,
 		fallbackModelIds,
 		temperature: dto.temperature != null ? String(dto.temperature) : String(DEFAULT_TEMPERATURE),
 		maxOutputTokens: dto.maxOutputTokens != null ? String(dto.maxOutputTokens) : String(DEFAULT_MAX_OUTPUT_TOKENS),
@@ -200,7 +217,7 @@ function parseOptionalNumber(raw: string): number | null {
 }
 
 function TranslateProfilesPage() {
-	const { t } = useTranslation();
+	const { t, i18n } = useTranslation();
 	const toast = useToast();
 	const queryClient = useQueryClient();
 
@@ -247,12 +264,25 @@ function TranslateProfilesPage() {
 		enabled: !!resolvedSelectedId && !isCreating,
 	});
 
-	const languageOptions = useMemo(
-		() =>
-			LANGUAGE_IDS.map((id) => ({
+	const sourceLanguageOptions = useMemo(
+		() => [
+			{ id: "auto", label: t("translate.languages.auto") },
+			...LANGUAGE_IDS.map((id) => ({
 				id,
 				label: t(`translate.languages.${id}`),
 			})),
+		],
+		[t],
+	);
+
+	const targetLanguageOptions = useMemo(
+		() => [
+			{ id: AUTO_LANGUAGE, label: t("translate.languages.auto") },
+			...LANGUAGE_IDS.map((id) => ({
+				id,
+				label: t(`translate.languages.${id}`),
+			})),
+		],
 		[t],
 	);
 
@@ -264,9 +294,13 @@ function TranslateProfilesPage() {
 		return map;
 	}, [modelOptions]);
 
+	const uiLanguage = i18n.language;
+
 	// Derive draft from detail when not creating and no local override; never mutate cache objects.
 	const derivedDraft =
-		!isCreating && detailQuery.isSuccess && detailQuery.data ? draftFromDto(detailQuery.data, modelOptions) : null;
+		!isCreating && detailQuery.isSuccess && detailQuery.data
+			? draftFromDto(detailQuery.data, modelOptions, uiLanguage)
+			: null;
 	const draft = isCreating || draftOverride != null ? draftOverride : derivedDraft;
 
 	const saveMutation = useMutation({
@@ -353,15 +387,15 @@ function TranslateProfilesPage() {
 		setIsCreating(true);
 		setSelectedId(null);
 		setSaveError(null);
-		setDraftOverride(emptyDraft(modelOptions[0]?.id ?? ""));
+		setDraftOverride(emptyDraft(modelOptions[0]?.id ?? "", uiLanguage));
 	}
 
 	function updateDraft(patch: Partial<ProfileDraft>) {
 		setDraftOverride((current) => {
 			const base =
 				current ??
-				(detailQuery.data ? draftFromDto(detailQuery.data, modelOptions) : null) ??
-				(isCreating ? emptyDraft(modelOptions[0]?.id ?? "") : null);
+				(detailQuery.data ? draftFromDto(detailQuery.data, modelOptions, uiLanguage) : null) ??
+				(isCreating ? emptyDraft(modelOptions[0]?.id ?? "", uiLanguage) : null);
 			return base ? { ...base, ...patch } : current;
 		});
 		setSaveError(null);
@@ -450,6 +484,10 @@ function TranslateProfilesPage() {
 			setSaveError(t("translate.profiles.primaryModelRequired"));
 			return;
 		}
+		if (draft.primaryLang === draft.preferredTargetLang) {
+			setSaveError(t("translate.profiles.langPrefEqual"));
+			return;
+		}
 
 		const temperature = parseOptionalNumber(draft.temperature) ?? DEFAULT_TEMPERATURE;
 		const maxOutputTokens = parseOptionalNumber(draft.maxOutputTokens) ?? DEFAULT_MAX_OUTPUT_TOKENS;
@@ -478,6 +516,11 @@ function TranslateProfilesPage() {
 			providerOptionsJson: draft.providerOptionsJson,
 			sourceLang: draft.sourceLang,
 			targetLang: draft.targetLang,
+			primaryLang: draft.primaryLang,
+			preferredTargetLang: draft.preferredTargetLang,
+			languageDetection: draft.languageDetectionModelId
+				? { type: "llm", modelId: draft.languageDetectionModelId }
+				: null,
 			targetModelIds: uniqueTargetIds,
 		});
 	}
@@ -563,12 +606,18 @@ function TranslateProfilesPage() {
 							<ul className="space-y-4">
 								{profiles.map((profile) => {
 									const active = !isCreating && resolvedSelectedId === profile.id;
-									const sourceLabel = isLanguageId(profile.sourceLang)
-										? t(`translate.languages.${profile.sourceLang}`)
-										: "—";
-									const targetLabel = isLanguageId(profile.targetLang)
-										? t(`translate.languages.${profile.targetLang}`)
-										: "—";
+									const sourceLabel =
+										profile.sourceLang === "auto"
+											? t("translate.languages.auto")
+											: isLanguageId(profile.sourceLang)
+												? t(`translate.languages.${profile.sourceLang}`)
+												: "—";
+									const targetLabel =
+										profile.targetLang === AUTO_LANGUAGE
+											? t("translate.languages.auto")
+											: isLanguageId(profile.targetLang)
+												? t(`translate.languages.${profile.targetLang}`)
+												: "—";
 									return (
 										<li key={profile.id}>
 											<button
@@ -707,10 +756,10 @@ function TranslateProfilesPage() {
 													value={draft.sourceLang}
 													disabled={savePending}
 													onChange={(event) => {
-														updateDraft({ sourceLang: event.currentTarget.value as LanguageId });
+														updateDraft({ sourceLang: event.currentTarget.value as SourceLanguageId });
 													}}
 												>
-													{languageOptions.map((option) => (
+													{sourceLanguageOptions.map((option) => (
 														<option key={option.id} value={option.id}>
 															{option.label}
 														</option>
@@ -727,10 +776,10 @@ function TranslateProfilesPage() {
 													value={draft.targetLang}
 													disabled={savePending}
 													onChange={(event) => {
-														updateDraft({ targetLang: event.currentTarget.value as LanguageId });
+														updateDraft({ targetLang: event.currentTarget.value as SelectableLanguageId });
 													}}
 												>
-													{languageOptions.map((option) => (
+													{targetLanguageOptions.map((option) => (
 														<option key={option.id} value={option.id}>
 															{option.label}
 														</option>
@@ -738,6 +787,51 @@ function TranslateProfilesPage() {
 												</select>
 											</div>
 										</div>
+
+										{/* Primary / Target preference (used when target is Auto) */}
+										<div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+											<div className="flex flex-col gap-1">
+												<label className={fieldLabelClassName} htmlFor="profile-primary-lang">
+													{t("translate.profiles.primaryLang")}
+												</label>
+												<select
+													id="profile-primary-lang"
+													className={selectClassName}
+													value={draft.primaryLang}
+													disabled={savePending}
+													onChange={(event) => {
+														updateDraft({ primaryLang: event.currentTarget.value as LanguageId });
+													}}
+												>
+													{LANGUAGE_IDS.map((id) => (
+														<option key={id} value={id} disabled={id === draft.preferredTargetLang}>
+															{t(`translate.languages.${id}`)}
+														</option>
+													))}
+												</select>
+											</div>
+											<div className="flex flex-col gap-1">
+												<label className={fieldLabelClassName} htmlFor="profile-preferred-target-lang">
+													{t("translate.profiles.preferredTargetLang")}
+												</label>
+												<select
+													id="profile-preferred-target-lang"
+													className={selectClassName}
+													value={draft.preferredTargetLang}
+													disabled={savePending}
+													onChange={(event) => {
+														updateDraft({ preferredTargetLang: event.currentTarget.value as LanguageId });
+													}}
+												>
+													{LANGUAGE_IDS.map((id) => (
+														<option key={id} value={id} disabled={id === draft.primaryLang}>
+															{t(`translate.languages.${id}`)}
+														</option>
+													))}
+												</select>
+											</div>
+										</div>
+										<p className="text-table-header text-neutral">{t("translate.profiles.langPrefHint")}</p>
 									</div>
 
 									{/* Models */}
@@ -774,6 +868,36 @@ function TranslateProfilesPage() {
 											{!modelsLoading && modelOptions.length === 0 ? (
 												<p className="text-body-tight text-neutral">{t("translate.noModelsHint")}</p>
 											) : null}
+										</div>
+
+										<div className="flex flex-col gap-1">
+											<label className={fieldLabelClassName} htmlFor="profile-detection-model">
+												{t("translate.profiles.detectionModel")}
+											</label>
+											<select
+												id="profile-detection-model"
+												className={selectClassName}
+												value={draft.languageDetectionModelId}
+												disabled={savePending || modelsLoading || modelOptions.length === 0}
+												onChange={(event) => {
+													updateDraft({ languageDetectionModelId: event.currentTarget.value });
+												}}
+											>
+												<option value="">{t("translate.profiles.detectionModelUsePrimary")}</option>
+												{modelOptions.map((option) => (
+													<option key={option.id} value={option.id}>
+														{option.label}
+													</option>
+												))}
+												{/* Keep orphaned ids selectable until user changes them. */}
+												{!modelOptions.some((option) => option.id === draft.languageDetectionModelId) &&
+												draft.languageDetectionModelId ? (
+													<option value={draft.languageDetectionModelId}>
+														{modelLabelById.get(draft.languageDetectionModelId) ?? draft.languageDetectionModelId}
+													</option>
+												) : null}
+											</select>
+											<p className="text-body-tight text-neutral">{t("translate.profiles.detectionModelHint")}</p>
 										</div>
 
 										<div className="space-y-2">

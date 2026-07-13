@@ -1,6 +1,7 @@
 // ABOUTME: Provider model CRUD, connection/sync, and translate Tauri commands.
 // ABOUTME: Returns sanitized DTOs; secrets never cross the IPC boundary.
 use crate::cmds::runtime::run_blocking;
+use crate::domain::language_detection::{DetectLanguageInput, DetectLanguageResult};
 use crate::domain::model::{
 	ConnectionTestResult, ManualModelWrite, ModelConfigWrite, ProviderModelDto, SyncModelsResult,
 };
@@ -121,6 +122,38 @@ pub async fn cancel_translate(state: State<'_, AppState>, request_id: String) ->
 		));
 	}
 	Ok(state.translate_sessions.cancel(&request_id))
+}
+
+/// Detect the language of `input.text` via a non-streaming chat completion. Optional `request_id`
+/// enables mid-flight cancel via `cancel_translate` (same session registry as translate).
+#[tauri::command]
+pub async fn detect_language(
+	state: State<'_, AppState>,
+	input: DetectLanguageInput,
+	request_id: Option<String>,
+) -> Result<DetectLanguageResult, IpcError> {
+	let models = state.models.clone();
+	let sessions = state.translate_sessions.clone();
+
+	let request_id = request_id.map(|id| id.trim().to_string()).filter(|id| !id.is_empty());
+	if let Some(ref id) = request_id {
+		if id.len() > 128 {
+			return Err(IpcError::new(
+				"validation_failed",
+				"request_id must be at most 128 characters",
+			));
+		}
+	}
+
+	let token = request_id.as_ref().map(|id| sessions.begin(id));
+	let result = models
+		.detect_language(input, token.as_ref())
+		.await
+		.map_err(IpcError::from);
+	if let Some(id) = request_id.as_ref() {
+		sessions.end(id);
+	}
+	result
 }
 
 #[tauri::command]

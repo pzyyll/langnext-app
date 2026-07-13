@@ -3,7 +3,7 @@
 use crate::cmds::runtime::run_blocking;
 use crate::domain::provider::{ProviderInstanceDto, ProviderInstanceWrite};
 use crate::error::IpcError;
-use crate::events::{emit_data_changed, PROVIDERS_CHANGED};
+use crate::events::{emit_data_changed, PROVIDERS_CHANGED, TRANSLATION_PROFILES_CHANGED};
 use crate::state::AppState;
 use tauri::{AppHandle, State};
 use uuid::Uuid;
@@ -44,6 +44,7 @@ pub async fn delete_provider_instance(app: AppHandle, state: State<'_, AppState>
 	let providers = state.providers.clone();
 	run_blocking("delete_provider_instance", move || providers.delete(id)).await?;
 	emit_data_changed(&app, PROVIDERS_CHANGED);
+	emit_data_changed(&app, TRANSLATION_PROFILES_CHANGED);
 	Ok(())
 }
 

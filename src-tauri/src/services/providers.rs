@@ -386,6 +386,8 @@ impl ProviderService {
 		let op_id = new_id();
 
 		let cleanup_op: Option<CredentialOperation> = self.db.transaction(|uow| {
+			let now = now_rfc3339();
+			translation_profiles::clear_detection_models_by_provider(uow.conn(), id, &now)?;
 			translation_profiles::delete_targets_by_provider(uow.conn(), id)?;
 			provider_models::delete_by_provider(uow.conn(), id)?;
 			provider_instances::delete(uow.conn(), id)?;

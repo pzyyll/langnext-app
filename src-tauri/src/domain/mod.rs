@@ -2,6 +2,7 @@
 // ABOUTME: Entities live here; IPC commands only return sanitized DTOs.
 pub mod cancel;
 pub mod import_export;
+pub mod language_detection;
 pub mod model;
 pub mod provider;
 pub mod settings;

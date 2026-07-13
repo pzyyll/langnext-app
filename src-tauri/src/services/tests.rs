@@ -2,18 +2,21 @@
 // ABOUTME: Uses in-memory CredentialVault under cfg(test) only.
 use crate::adapters::transport::{ModelListRequest, ModelTransport, TransportError};
 use crate::credentials::{CredentialVault, FailingCredentialVault, MemoryCredentialVault};
-use crate::domain::import_export::ImportConflictMode;
+use crate::domain::import_export::{ConfigurationExport, ImportConflictMode};
+use crate::domain::language_detection::{DetectLanguageInput, DetectorType, LanguageDetectorConfig};
 use crate::domain::model::{Availability, ManualModelWrite, ModelConfigWrite, ModelSource, RemoteModelSyncItem};
 use crate::domain::provider::{CredentialKind, CredentialUpdate, ProviderInstanceWrite, ProxyMode};
 use crate::domain::settings::{
 	AppSettingsUpdate, AppSettingsV1, GlobalProxyMode, NetworkSettings, ProxyCredentialUpdate, TranslationPreferences,
 };
-use crate::domain::translation_profile::TranslationProfileWrite;
+use crate::domain::translation_profile::{TranslationProfile, TranslationProfileTarget, TranslationProfileWrite};
 use crate::error::StorageError;
 use crate::services::{ImportExportService, ModelService, ProviderService, SettingsService, TranslationProfileService};
 use crate::storage::Database;
 use std::collections::VecDeque;
 use std::future::Future;
+use std::io::{Read, Write};
+use std::net::TcpListener;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
@@ -96,6 +99,55 @@ fn setup() -> (
 		import_export,
 		transport,
 	)
+}
+
+fn spawn_detection_chat_server() -> (String, std::thread::JoinHandle<serde_json::Value>) {
+	let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+	let addr = listener.local_addr().unwrap();
+	let handle = std::thread::spawn(move || {
+		let (mut stream, _) = listener.accept().unwrap();
+		stream
+			.set_read_timeout(Some(std::time::Duration::from_secs(2)))
+			.unwrap();
+		let mut request = Vec::new();
+		let (header_end, content_length) = loop {
+			let mut chunk = [0u8; 4096];
+			let read = stream.read(&mut chunk).unwrap();
+			assert!(read > 0, "request closed before headers completed");
+			request.extend_from_slice(&chunk[..read]);
+			if let Some(index) = request.windows(4).position(|window| window == b"\r\n\r\n") {
+				let header_end = index + 4;
+				let headers = String::from_utf8_lossy(&request[..header_end]);
+				let content_length = headers
+					.lines()
+					.find_map(|line| {
+						line
+							.strip_prefix("content-length: ")
+							.or_else(|| line.strip_prefix("Content-Length: "))
+					})
+					.and_then(|value| value.trim().parse::<usize>().ok())
+					.expect("content-length header");
+				break (header_end, content_length);
+			}
+		};
+		while request.len() < header_end + content_length {
+			let mut chunk = [0u8; 4096];
+			let read = stream.read(&mut chunk).unwrap();
+			assert!(read > 0, "request closed before body completed");
+			request.extend_from_slice(&chunk[..read]);
+		}
+		let payload: serde_json::Value = serde_json::from_slice(&request[header_end..header_end + content_length]).unwrap();
+		let body = r#"{"choices":[{"message":{"content":"zh"}}]}"#;
+		write!(
+			stream,
+			"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+			body.len(),
+			body
+		)
+		.unwrap();
+		payload
+	});
+	(format!("http://{addr}/v1"), handle)
 }
 
 fn provider_write(kind: CredentialKind, cred: CredentialUpdate) -> ProviderInstanceWrite {
@@ -401,6 +453,9 @@ fn profile_list_includes_ordered_targets_bulk() {
 			provider_options_json: None,
 			source_lang: None,
 			target_lang: None,
+			primary_lang: Some("zh".into()),
+			preferred_target_lang: Some("en".into()),
+			language_detection: None,
 			target_model_ids: vec![],
 		})
 		.unwrap_err();
@@ -422,6 +477,9 @@ fn profile_list_includes_ordered_targets_bulk() {
 			provider_options_json: None,
 			source_lang: None,
 			target_lang: None,
+			primary_lang: Some("zh".into()),
+			preferred_target_lang: Some("en".into()),
+			language_detection: None,
 			target_model_ids: vec![m1.id],
 		})
 		.unwrap();
@@ -438,6 +496,9 @@ fn profile_list_includes_ordered_targets_bulk() {
 			provider_options_json: None,
 			source_lang: None,
 			target_lang: None,
+			primary_lang: Some("zh".into()),
+			preferred_target_lang: Some("en".into()),
+			language_detection: None,
 			// Intentional reverse insert order vs name sort of profiles.
 			target_model_ids: vec![m2.id, m1.id],
 		})
@@ -501,12 +562,162 @@ fn profile_save_and_fallback_order() {
 			provider_options_json: None,
 			source_lang: Some("zh".into()),
 			target_lang: Some("en".into()),
+			primary_lang: Some("zh".into()),
+			preferred_target_lang: Some("en".into()),
+			language_detection: None,
 			target_model_ids: vec![m1.id, m2.id],
 		})
 		.unwrap();
 	assert_eq!(dto.targets.len(), 2);
 	assert_eq!(dto.targets[0].priority, 0);
 	assert_eq!(dto.targets[1].provider_model_id, m2.id);
+}
+
+#[test]
+fn profile_language_preferences_round_trip() {
+	let (_d, _db, _v, providers, models, profiles, ..) = setup();
+	let p = providers
+		.save(provider_write(CredentialKind::None, CredentialUpdate::Keep))
+		.unwrap();
+	let m = models
+		.save_manual(ManualModelWrite {
+			id: None,
+			provider_instance_id: p.id,
+			model_key: "a".into(),
+			display_name_override: None,
+			enabled: true,
+			capability_overrides_json: None,
+			adapter_id: None,
+		})
+		.unwrap();
+	let dto = profiles
+		.save(TranslationProfileWrite {
+			id: None,
+			name: "Prefs".into(),
+			enabled: true,
+			template_version: 1,
+			system_template: "s".into(),
+			user_template: "{{text}}".into(),
+			temperature: None,
+			max_output_tokens: None,
+			provider_options_json: None,
+			source_lang: Some("auto".into()),
+			target_lang: Some("auto".into()),
+			primary_lang: Some("zh".into()),
+			preferred_target_lang: Some("en".into()),
+			language_detection: None,
+			target_model_ids: vec![m.id],
+		})
+		.unwrap();
+	assert_eq!(dto.profile.primary_lang.as_deref(), Some("zh"));
+	assert_eq!(dto.profile.preferred_target_lang.as_deref(), Some("en"));
+	assert_eq!(dto.profile.target_lang.as_deref(), Some("auto"));
+
+	let loaded = profiles.get(dto.profile.id).unwrap();
+	assert_eq!(loaded.profile.primary_lang.as_deref(), Some("zh"));
+	assert_eq!(loaded.profile.preferred_target_lang.as_deref(), Some("en"));
+
+	// A normal update may not clear the preference pair: both fields are required, so the
+	// legacy `(None, None)` shape is rejected even though such rows remain readable/importable.
+	let mut cleared = TranslationProfileWrite {
+		id: Some(dto.profile.id),
+		name: "Prefs".into(),
+		enabled: true,
+		template_version: 1,
+		system_template: "s".into(),
+		user_template: "{{text}}".into(),
+		temperature: None,
+		max_output_tokens: None,
+		provider_options_json: None,
+		source_lang: Some("auto".into()),
+		target_lang: Some("en".into()),
+		primary_lang: Some("zh".into()),
+		preferred_target_lang: Some("en".into()),
+		language_detection: None,
+		target_model_ids: vec![m.id],
+	};
+	cleared.primary_lang = None;
+	cleared.preferred_target_lang = None;
+	let cleared_err = profiles.save(cleared).unwrap_err();
+	assert!(
+		matches!(cleared_err, StorageError::Validation(_)),
+		"clearing preferences on update must be rejected: {cleared_err:?}"
+	);
+}
+
+#[test]
+fn profile_language_preferences_validation_rejects_invalid_pairs() {
+	let (_d, _db, _v, providers, models, profiles, ..) = setup();
+	let p = providers
+		.save(provider_write(CredentialKind::None, CredentialUpdate::Keep))
+		.unwrap();
+	let m = models
+		.save_manual(ManualModelWrite {
+			id: None,
+			provider_instance_id: p.id,
+			model_key: "a".into(),
+			display_name_override: None,
+			enabled: true,
+			capability_overrides_json: None,
+			adapter_id: None,
+		})
+		.unwrap();
+
+	fn base(m: uuid::Uuid) -> TranslationProfileWrite {
+		TranslationProfileWrite {
+			id: None,
+			name: "Prefs".into(),
+			enabled: true,
+			template_version: 1,
+			system_template: "s".into(),
+			user_template: "{{text}}".into(),
+			temperature: None,
+			max_output_tokens: None,
+			provider_options_json: None,
+			source_lang: Some("auto".into()),
+			target_lang: Some("auto".into()),
+			primary_lang: Some("zh".into()),
+			preferred_target_lang: Some("en".into()),
+			language_detection: None,
+			target_model_ids: vec![m],
+		}
+	}
+
+	// Equal pair rejected.
+	let mut equal = base(m.id);
+	equal.preferred_target_lang = Some("zh".into());
+	assert!(matches!(profiles.save(equal).unwrap_err(), StorageError::Validation(_)));
+
+	// auto rejected.
+	let mut auto_primary = base(m.id);
+	auto_primary.primary_lang = Some("auto".into());
+	assert!(matches!(
+		profiles.save(auto_primary).unwrap_err(),
+		StorageError::Validation(_)
+	));
+
+	// Unsupported id rejected.
+	let mut unsupported = base(m.id);
+	unsupported.preferred_target_lang = Some("ru".into());
+	assert!(matches!(
+		profiles.save(unsupported).unwrap_err(),
+		StorageError::Validation(_)
+	));
+
+	// Exactly one supplied rejected.
+	let mut one = base(m.id);
+	one.preferred_target_lang = None;
+	assert!(matches!(profiles.save(one).unwrap_err(), StorageError::Validation(_)));
+
+	// Both absent rejected on create: legacy rows are readable/importable, but a save must
+	// carry a concrete preference pair.
+	let mut missing = base(m.id);
+	missing.primary_lang = None;
+	missing.preferred_target_lang = None;
+	assert!(matches!(
+		profiles.save(missing).unwrap_err(),
+		StorageError::Validation(_)
+	));
 }
 
 #[test]
@@ -539,6 +750,9 @@ fn delete_provider_cascades_to_models_and_targets() {
 			provider_options_json: None,
 			source_lang: None,
 			target_lang: None,
+			primary_lang: Some("zh".into()),
+			preferred_target_lang: Some("en".into()),
+			language_detection: None,
 			target_model_ids: vec![model.id],
 		})
 		.unwrap();
@@ -632,6 +846,9 @@ fn import_export_round_trip_and_secret_exclusion() {
 			provider_options_json: None,
 			source_lang: None,
 			target_lang: None,
+			primary_lang: Some("zh".into()),
+			preferred_target_lang: Some("en".into()),
+			language_detection: None,
 			target_model_ids: vec![m.id],
 		})
 		.unwrap();
@@ -760,6 +977,9 @@ fn import_credential_cleanup_isolates_unrelated_journals() {
 			provider_options_json: None,
 			source_lang: None,
 			target_lang: None,
+			primary_lang: Some("zh".into()),
+			preferred_target_lang: Some("en".into()),
+			language_detection: None,
 			target_model_ids: vec![m.id],
 		})
 		.unwrap();
@@ -815,6 +1035,9 @@ fn import_rejects_malformed_graphs() {
 			provider_options_json: None,
 			source_lang: None,
 			target_lang: None,
+			primary_lang: Some("zh".into()),
+			preferred_target_lang: Some("en".into()),
+			language_detection: None,
 			target_model_ids: vec![m.id],
 		})
 		.unwrap();
@@ -852,6 +1075,142 @@ fn import_rejects_malformed_graphs() {
 	let preview = ie.preview(&doc, ImportConflictMode::Merge).unwrap();
 	assert!(!preview.valid);
 	assert!(preview.validation_errors.iter().any(|e| e.contains("duplicate")));
+}
+
+#[test]
+fn import_accepts_legacy_preferences_and_rejects_invalid_pairs() {
+	let (_d, _db, _v, providers, models, profiles, _settings, ie, ..) = setup();
+	let p = providers
+		.save(provider_write(CredentialKind::None, CredentialUpdate::Keep))
+		.unwrap();
+	let m = models
+		.save_manual(ManualModelWrite {
+			id: None,
+			provider_instance_id: p.id,
+			model_key: "a".into(),
+			display_name_override: None,
+			enabled: true,
+			capability_overrides_json: None,
+			adapter_id: None,
+		})
+		.unwrap();
+	profiles
+		.save(TranslationProfileWrite {
+			id: None,
+			name: "Prefs".into(),
+			enabled: true,
+			template_version: 1,
+			system_template: "s".into(),
+			user_template: "{{text}}".into(),
+			temperature: None,
+			max_output_tokens: None,
+			provider_options_json: None,
+			source_lang: Some("auto".into()),
+			target_lang: Some("auto".into()),
+			primary_lang: Some("zh".into()),
+			preferred_target_lang: Some("en".into()),
+			language_detection: None,
+			target_model_ids: vec![m.id],
+		})
+		.unwrap();
+
+	let doc = ie.export().unwrap();
+
+	// Legacy export with both preference fields absent remains importable.
+	let mut legacy = doc.clone();
+	legacy.translation_profiles[0].primary_lang = None;
+	legacy.translation_profiles[0].preferred_target_lang = None;
+	assert!(ie.preview(&legacy, ImportConflictMode::Merge).unwrap().valid);
+
+	// Equal preference pair rejected.
+	let mut equal = doc.clone();
+	equal.translation_profiles[0].primary_lang = Some("en".into());
+	equal.translation_profiles[0].preferred_target_lang = Some("en".into());
+	let preview = ie.preview(&equal, ImportConflictMode::Merge).unwrap();
+	assert!(!preview.valid);
+	assert!(preview.validation_errors.iter().any(|e| e.contains("differ")));
+
+	// auto preference rejected.
+	let mut auto_pref = doc.clone();
+	auto_pref.translation_profiles[0].primary_lang = Some("auto".into());
+	let preview = ie.preview(&auto_pref, ImportConflictMode::Merge).unwrap();
+	assert!(!preview.valid);
+
+	// Unsupported preference id rejected.
+	let mut unsupported = doc;
+	unsupported.translation_profiles[0].preferred_target_lang = Some("ru".into());
+	let preview = ie.preview(&unsupported, ImportConflictMode::Merge).unwrap();
+	assert!(!preview.valid);
+}
+
+#[test]
+fn import_accepts_legacy_profile_missing_preference_keys() {
+	let (_d, _db, _v, providers, models, profiles, _settings, ie, ..) = setup();
+	let p = providers
+		.save(provider_write(CredentialKind::None, CredentialUpdate::Keep))
+		.unwrap();
+	let m = models
+		.save_manual(ManualModelWrite {
+			id: None,
+			provider_instance_id: p.id,
+			model_key: "a".into(),
+			display_name_override: None,
+			enabled: true,
+			capability_overrides_json: None,
+			adapter_id: None,
+		})
+		.unwrap();
+	let dto = profiles
+		.save(TranslationProfileWrite {
+			id: None,
+			name: "Prefs".into(),
+			enabled: true,
+			template_version: 1,
+			system_template: "s".into(),
+			user_template: "{{text}}".into(),
+			temperature: None,
+			max_output_tokens: None,
+			provider_options_json: None,
+			source_lang: Some("auto".into()),
+			target_lang: Some("auto".into()),
+			primary_lang: Some("zh".into()),
+			preferred_target_lang: Some("en".into()),
+			language_detection: None,
+			target_model_ids: vec![m.id],
+		})
+		.unwrap();
+
+	let doc = ie.export().unwrap();
+
+	// Emulate a real legacy export produced before the preference fields existed: strip the
+	// keys entirely (not null) so serde's `#[serde(default)]` path is exercised on import.
+	let mut json = serde_json::to_value(&doc).unwrap();
+	for profile in json["translationProfiles"].as_array_mut().unwrap() {
+		let obj = profile.as_object_mut().unwrap();
+		assert!(
+			obj.remove("primaryLang").is_some(),
+			"exported profile carries primaryLang"
+		);
+		assert!(
+			obj.remove("preferredTargetLang").is_some(),
+			"exported profile carries preferredTargetLang"
+		);
+	}
+	let legacy: ConfigurationExport = serde_json::from_value(json).unwrap();
+	assert_eq!(legacy.translation_profiles[0].primary_lang, None);
+	assert_eq!(legacy.translation_profiles[0].preferred_target_lang, None);
+
+	let preview = ie.preview(&legacy, ImportConflictMode::Merge).unwrap();
+	assert!(
+		preview.valid,
+		"legacy profile missing preference keys must import: {preview:?}"
+	);
+
+	let result = ie.import(legacy, ImportConflictMode::Merge).unwrap();
+	assert!(result.applied);
+	let loaded = profiles.get(dto.profile.id).unwrap();
+	assert_eq!(loaded.profile.primary_lang, None);
+	assert_eq!(loaded.profile.preferred_target_lang, None);
 }
 
 #[test]
@@ -2603,6 +2962,9 @@ fn delete_many_models_all_or_nothing() {
 			provider_options_json: None,
 			source_lang: None,
 			target_lang: None,
+			primary_lang: Some("zh".into()),
+			preferred_target_lang: Some("en".into()),
+			language_detection: None,
 			target_model_ids: vec![m3.id],
 		})
 		.unwrap();
@@ -2680,4 +3042,573 @@ fn provider_save_rejects_stale_expected_updated_at() {
 	ok.display_name = "Second win".into();
 	let again = providers.save(ok).unwrap();
 	assert_eq!(again.display_name, "Second win");
+}
+
+fn sample_profile(
+	id: uuid::Uuid,
+	name: &str,
+	language_detection: Option<LanguageDetectorConfig>,
+) -> TranslationProfile {
+	let now = crate::domain::time::now_rfc3339();
+	TranslationProfile {
+		id,
+		name: name.into(),
+		enabled: true,
+		template_version: 1,
+		system_template: "s".into(),
+		user_template: "{{text}}".into(),
+		temperature: None,
+		max_output_tokens: None,
+		provider_options_json: None,
+		source_lang: None,
+		target_lang: None,
+		primary_lang: None,
+		preferred_target_lang: None,
+		language_detection,
+		created_at: now.clone(),
+		updated_at: now,
+	}
+}
+
+#[test]
+fn resolve_detect_model_source_precedence() {
+	use crate::services::models::resolve_detect_model_source;
+	// Distinct ids so precedence is observable, not just any-nonnil.
+	let p0 = uuid::Uuid::now_v7();
+	let p1 = uuid::Uuid::now_v7();
+	let explicit = uuid::Uuid::now_v7();
+	let input_model = uuid::Uuid::now_v7();
+	assert_ne!(p0, p1);
+	assert_ne!(p0, explicit);
+	assert_ne!(p0, input_model);
+	assert_ne!(explicit, input_model);
+	let targets = [
+		TranslationProfileTarget {
+			translation_profile_id: uuid::Uuid::nil(),
+			provider_model_id: p0,
+			priority: 0,
+		},
+		TranslationProfileTarget {
+			translation_profile_id: uuid::Uuid::nil(),
+			provider_model_id: p1,
+			priority: 1,
+		},
+	];
+	let _ = p1;
+
+	// No profile -> input.modelId required.
+	assert_eq!(
+		resolve_detect_model_source(None, None, Some(input_model)).unwrap(),
+		input_model
+	);
+	assert!(matches!(
+		resolve_detect_model_source(None, None, None).unwrap_err(),
+		StorageError::Validation(_)
+	));
+
+	// Profile explicit LLM modelId wins over profile primary and input.
+	let profile = sample_profile(
+		uuid::Uuid::nil(),
+		"P",
+		Some(LanguageDetectorConfig::Llm {
+			model_id: Some(explicit),
+		}),
+	);
+	assert_eq!(
+		resolve_detect_model_source(Some(&profile), Some(&targets[0]), Some(input_model)).unwrap(),
+		explicit
+	);
+
+	// Profile Llm with None modelId -> profile priority-0 primary.
+	let profile_no_model = sample_profile(
+		uuid::Uuid::nil(),
+		"P",
+		Some(LanguageDetectorConfig::Llm { model_id: None }),
+	);
+	assert_eq!(
+		resolve_detect_model_source(Some(&profile_no_model), Some(&targets[0]), Some(input_model)).unwrap(),
+		p0
+	);
+
+	// Profile with no languageDetection -> profile priority-0 primary.
+	let profile_no_cfg = sample_profile(uuid::Uuid::nil(), "P", None);
+	assert_eq!(
+		resolve_detect_model_source(Some(&profile_no_cfg), Some(&targets[0]), Some(input_model)).unwrap(),
+		p0
+	);
+
+	// Profile selected but no priority-0 target -> validation error.
+	assert!(matches!(
+		resolve_detect_model_source(Some(&profile_no_cfg), None, Some(input_model)).unwrap_err(),
+		StorageError::Validation(_)
+	));
+}
+
+#[test]
+fn profile_save_persists_dedicated_detection_model_and_empty_config() {
+	let (_d, _db, _v, providers, models, profiles, ..) = setup();
+	let p = providers
+		.save(provider_write(CredentialKind::None, CredentialUpdate::Keep))
+		.unwrap();
+	let m1 = models
+		.save_manual(ManualModelWrite {
+			id: None,
+			provider_instance_id: p.id,
+			model_key: "det".into(),
+			display_name_override: None,
+			enabled: true,
+			capability_overrides_json: None,
+			adapter_id: None,
+		})
+		.unwrap();
+	let m2 = models
+		.save_manual(ManualModelWrite {
+			id: None,
+			provider_instance_id: p.id,
+			model_key: "det2".into(),
+			display_name_override: None,
+			enabled: true,
+			capability_overrides_json: None,
+			adapter_id: None,
+		})
+		.unwrap();
+
+	// Save with a dedicated detection model id.
+	let saved = profiles
+		.save(TranslationProfileWrite {
+			id: None,
+			name: "Detect profile".into(),
+			enabled: true,
+			template_version: 1,
+			system_template: "s".into(),
+			user_template: "{{text}}".into(),
+			temperature: None,
+			max_output_tokens: None,
+			provider_options_json: None,
+			source_lang: None,
+			target_lang: None,
+			primary_lang: Some("zh".into()),
+			preferred_target_lang: Some("en".into()),
+			language_detection: Some(LanguageDetectorConfig::Llm { model_id: Some(m1.id) }),
+			target_model_ids: vec![m2.id],
+		})
+		.unwrap();
+	assert_eq!(
+		saved.profile.language_detection,
+		Some(LanguageDetectorConfig::Llm { model_id: Some(m1.id) })
+	);
+
+	// Re-read round-trips the config JSON from SQLite.
+	let reread = profiles.get(saved.profile.id).unwrap();
+	assert_eq!(
+		reread.profile.language_detection,
+		Some(LanguageDetectorConfig::Llm { model_id: Some(m1.id) })
+	);
+
+	// Clearing the config (None) persists and is read back as None.
+	let cleared = profiles
+		.save(TranslationProfileWrite {
+			id: Some(saved.profile.id),
+			name: "Detect profile".into(),
+			enabled: true,
+			template_version: 1,
+			system_template: "s".into(),
+			user_template: "{{text}}".into(),
+			temperature: None,
+			max_output_tokens: None,
+			provider_options_json: None,
+			source_lang: None,
+			target_lang: None,
+			primary_lang: Some("zh".into()),
+			preferred_target_lang: Some("en".into()),
+			language_detection: None,
+			target_model_ids: vec![m2.id],
+		})
+		.unwrap();
+	assert!(cleared.profile.language_detection.is_none());
+	assert!(profiles
+		.get(saved.profile.id)
+		.unwrap()
+		.profile
+		.language_detection
+		.is_none());
+}
+
+#[test]
+fn profile_save_rejects_detection_model_that_does_not_exist() {
+	let (_d, _db, _v, providers, models, profiles, ..) = setup();
+	let p = providers
+		.save(provider_write(CredentialKind::None, CredentialUpdate::Keep))
+		.unwrap();
+	let m = models
+		.save_manual(ManualModelWrite {
+			id: None,
+			provider_instance_id: p.id,
+			model_key: "only".into(),
+			display_name_override: None,
+			enabled: true,
+			capability_overrides_json: None,
+			adapter_id: None,
+		})
+		.unwrap();
+	let ghost = uuid::Uuid::now_v7();
+	let err = profiles
+		.save(TranslationProfileWrite {
+			id: None,
+			name: "Bad detect".into(),
+			enabled: true,
+			template_version: 1,
+			system_template: "s".into(),
+			user_template: "{{text}}".into(),
+			temperature: None,
+			max_output_tokens: None,
+			provider_options_json: None,
+			source_lang: None,
+			target_lang: None,
+			primary_lang: Some("zh".into()),
+			preferred_target_lang: Some("en".into()),
+			language_detection: Some(LanguageDetectorConfig::Llm { model_id: Some(ghost) }),
+			target_model_ids: vec![m.id],
+		})
+		.unwrap_err();
+	assert!(matches!(err, StorageError::NotFound(_)), "got {err:?}");
+}
+
+#[test]
+fn dedicated_detection_model_is_protected_and_provider_delete_clears_config() {
+	let (_d, _db, _v, providers, models, profiles, ..) = setup();
+	let primary_provider = providers
+		.save(provider_write(CredentialKind::None, CredentialUpdate::Keep))
+		.unwrap();
+	let mut detector_provider_write = provider_write(CredentialKind::None, CredentialUpdate::Keep);
+	detector_provider_write.display_name = "Detector".into();
+	let detector_provider = providers.save(detector_provider_write).unwrap();
+	let primary = models
+		.save_manual(ManualModelWrite {
+			id: None,
+			provider_instance_id: primary_provider.id,
+			model_key: "primary".into(),
+			display_name_override: None,
+			enabled: true,
+			capability_overrides_json: None,
+			adapter_id: None,
+		})
+		.unwrap();
+	let detector = models
+		.save_manual(ManualModelWrite {
+			id: None,
+			provider_instance_id: detector_provider.id,
+			model_key: "detector".into(),
+			display_name_override: None,
+			enabled: true,
+			capability_overrides_json: None,
+			adapter_id: None,
+		})
+		.unwrap();
+	let profile = profiles
+		.save(TranslationProfileWrite {
+			id: None,
+			name: "Dedicated detector".into(),
+			enabled: true,
+			template_version: 1,
+			system_template: "s".into(),
+			user_template: "{{text}}".into(),
+			temperature: None,
+			max_output_tokens: None,
+			provider_options_json: None,
+			source_lang: Some("auto".into()),
+			target_lang: Some("en".into()),
+			primary_lang: Some("zh".into()),
+			preferred_target_lang: Some("en".into()),
+			language_detection: Some(LanguageDetectorConfig::Llm {
+				model_id: Some(detector.id),
+			}),
+			target_model_ids: vec![primary.id],
+		})
+		.unwrap();
+
+	assert!(matches!(models.delete(detector.id), Err(StorageError::InUse(_))));
+	assert!(matches!(
+		models.delete_many(vec![detector.id]),
+		Err(StorageError::InUse(_))
+	));
+
+	providers.delete(detector_provider.id).unwrap();
+	let reread = profiles.get(profile.profile.id).unwrap();
+	assert!(reread.profile.language_detection.is_none());
+	assert_eq!(reread.targets[0].provider_model_id, primary.id);
+}
+
+#[test]
+fn detect_language_empty_and_oversize_text_returns_validation_soft_failure() {
+	let (_d, _db, _v, providers, models, _profiles, ..) = setup();
+	let p = providers
+		.save(provider_write(CredentialKind::None, CredentialUpdate::Keep))
+		.unwrap();
+	let m = models
+		.save_manual(ManualModelWrite {
+			id: None,
+			provider_instance_id: p.id,
+			model_key: "det".into(),
+			display_name_override: None,
+			enabled: true,
+			capability_overrides_json: None,
+			adapter_id: None,
+		})
+		.unwrap();
+
+	let empty = block_on(models.detect_language(
+		DetectLanguageInput {
+			text: "   ".into(),
+			model_id: Some(m.id),
+			profile_id: None,
+		},
+		None,
+	))
+	.unwrap();
+	assert!(!empty.ok);
+	assert_eq!(empty.error_code.as_deref(), Some("validation_failed"));
+	assert_eq!(empty.model_id, None);
+
+	let big = "x".repeat(5001);
+	let oversize = block_on(models.detect_language(
+		DetectLanguageInput {
+			text: big,
+			model_id: Some(m.id),
+			profile_id: None,
+		},
+		None,
+	))
+	.unwrap();
+	assert!(!oversize.ok);
+	assert_eq!(oversize.error_code.as_deref(), Some("validation_failed"));
+
+	// No profile and no input model -> validation failure.
+	let no_model = block_on(models.detect_language(
+		DetectLanguageInput {
+			text: "hi".into(),
+			model_id: None,
+			profile_id: None,
+		},
+		None,
+	))
+	.unwrap();
+	assert!(!no_model.ok);
+	assert_eq!(no_model.error_code.as_deref(), Some("validation_failed"));
+}
+
+#[test]
+fn detect_language_uses_low_generation_budget() {
+	let (_d, _db, _v, providers, models, ..) = setup();
+	let (base_url, request_handle) = spawn_detection_chat_server();
+	let mut write = provider_write(CredentialKind::None, CredentialUpdate::Keep);
+	write.base_url_override = Some(base_url);
+	let provider = providers.save(write).unwrap();
+	let model = models
+		.save_manual(ManualModelWrite {
+			id: None,
+			provider_instance_id: provider.id,
+			model_key: "reasoning-model".into(),
+			display_name_override: None,
+			enabled: true,
+			capability_overrides_json: None,
+			adapter_id: None,
+		})
+		.unwrap();
+
+	let result = block_on(models.detect_language(
+		DetectLanguageInput {
+			text: "你好".into(),
+			model_id: Some(model.id),
+			profile_id: None,
+		},
+		None,
+	))
+	.unwrap();
+	assert!(result.ok, "detection failed: {result:?}");
+	assert_eq!(result.language_id.as_deref(), Some("zh"));
+
+	let request = request_handle.join().unwrap();
+	assert_eq!(request["max_tokens"], 256);
+	assert_eq!(request["temperature"], 0.0);
+}
+
+#[test]
+fn detect_language_missing_required_credential_returns_auth_soft_failure() {
+	let (_d, _db, _v, providers, models, ..) = setup();
+	let mut write = provider_write(CredentialKind::ApiKey, CredentialUpdate::Keep);
+	write.base_url_override = None;
+	let p = providers.save(write).unwrap();
+	let m = models
+		.save_manual(ManualModelWrite {
+			id: None,
+			provider_instance_id: p.id,
+			model_key: "gpt-4o".into(),
+			display_name_override: None,
+			enabled: true,
+			capability_overrides_json: None,
+			adapter_id: Some("gemini".into()),
+		})
+		.unwrap();
+	// Gemini adapter requires a secret; none stored -> MissingCredential.
+	let result = block_on(models.detect_language(
+		DetectLanguageInput {
+			text: "hello".into(),
+			model_id: Some(m.id),
+			profile_id: None,
+		},
+		None,
+	))
+	.unwrap();
+	assert!(!result.ok);
+	assert_eq!(result.error_code.as_deref(), Some("auth"));
+	assert_eq!(result.model_id, None);
+	assert_eq!(result.detector_type, DetectorType::Llm);
+}
+
+#[test]
+fn import_copy_rewrites_detection_model_id() {
+	let (_d, _db, _v, providers, models, profiles, _settings, ie, ..) = setup();
+	let p = providers
+		.save(provider_write(CredentialKind::None, CredentialUpdate::Keep))
+		.unwrap();
+	let m = models
+		.save_manual(ManualModelWrite {
+			id: None,
+			provider_instance_id: p.id,
+			model_key: "det".into(),
+			display_name_override: None,
+			enabled: true,
+			capability_overrides_json: None,
+			adapter_id: None,
+		})
+		.unwrap();
+	let primary = models
+		.save_manual(ManualModelWrite {
+			id: None,
+			provider_instance_id: p.id,
+			model_key: "primary".into(),
+			display_name_override: None,
+			enabled: true,
+			capability_overrides_json: None,
+			adapter_id: None,
+		})
+		.unwrap();
+	let saved = profiles
+		.save(TranslationProfileWrite {
+			id: None,
+			name: "Detect profile".into(),
+			enabled: true,
+			template_version: 1,
+			system_template: "s".into(),
+			user_template: "{{text}}".into(),
+			temperature: None,
+			max_output_tokens: None,
+			provider_options_json: None,
+			source_lang: None,
+			target_lang: None,
+			primary_lang: Some("zh".into()),
+			preferred_target_lang: Some("en".into()),
+			language_detection: Some(LanguageDetectorConfig::Llm { model_id: Some(m.id) }),
+			target_model_ids: vec![primary.id],
+		})
+		.unwrap();
+
+	let doc = ie.export().unwrap();
+	let preview = ie.preview(&doc, ImportConflictMode::Copy).unwrap();
+	assert!(preview.valid, "preview errors: {:?}", preview.validation_errors);
+	let result = ie.import(doc, ImportConflictMode::Copy).unwrap();
+	assert!(result.applied);
+
+	// The copied profile keeps its id from the plan; its detection model id must be rewritten
+	// to the copied model's new id (different from the original m.id).
+	let all = profiles.list().unwrap();
+	let copied = all
+		.iter()
+		.find(|dto| dto.profile.id != saved.profile.id && dto.profile.name == "Detect profile")
+		.expect("copied profile exists");
+	let copied_primary_id = copied.targets[0].provider_model_id;
+	let copied_detector_id = models
+		.list_all()
+		.unwrap()
+		.into_iter()
+		.find(|model| model.id != m.id && model.model_key == "det")
+		.expect("copied dedicated detector exists")
+		.id;
+	assert_ne!(
+		copied_primary_id, primary.id,
+		"copy mode must assign a new primary model id"
+	);
+	assert_ne!(
+		copied_detector_id, m.id,
+		"copy mode must assign a new detector model id"
+	);
+	assert_ne!(
+		copied_detector_id, copied_primary_id,
+		"detector remains dedicated after copy"
+	);
+	match &copied.profile.language_detection {
+		Some(LanguageDetectorConfig::Llm { model_id: Some(id) }) => {
+			assert_eq!(
+				*id, copied_detector_id,
+				"detection model id must be rewritten to the copied dedicated model"
+			);
+		}
+		other => panic!("expected rewritten Llm detection model id, got {other:?}"),
+	}
+}
+
+#[test]
+fn import_rejects_profile_detection_referencing_missing_model() {
+	let (_d, _db, _v, providers, models, profiles, _settings, ie, ..) = setup();
+	let p = providers
+		.save(provider_write(CredentialKind::None, CredentialUpdate::Keep))
+		.unwrap();
+	let m = models
+		.save_manual(ManualModelWrite {
+			id: None,
+			provider_instance_id: p.id,
+			model_key: "det".into(),
+			display_name_override: None,
+			enabled: true,
+			capability_overrides_json: None,
+			adapter_id: None,
+		})
+		.unwrap();
+	profiles
+		.save(TranslationProfileWrite {
+			id: None,
+			name: "Detect profile".into(),
+			enabled: true,
+			template_version: 1,
+			system_template: "s".into(),
+			user_template: "{{text}}".into(),
+			temperature: None,
+			max_output_tokens: None,
+			provider_options_json: None,
+			source_lang: None,
+			target_lang: None,
+			primary_lang: Some("zh".into()),
+			preferred_target_lang: Some("en".into()),
+			language_detection: Some(LanguageDetectorConfig::Llm { model_id: Some(m.id) }),
+			target_model_ids: vec![m.id],
+		})
+		.unwrap();
+
+	let mut doc = ie.export().unwrap();
+	// Point the detection model id at a model that does not exist in the document.
+	let ghost = uuid::Uuid::now_v7();
+	if let Some(LanguageDetectorConfig::Llm { model_id }) = doc.translation_profiles[0].language_detection.as_mut() {
+		*model_id = Some(ghost);
+	}
+	let preview = ie.preview(&doc, ImportConflictMode::Merge).unwrap();
+	assert!(!preview.valid);
+	assert!(
+		preview
+			.validation_errors
+			.iter()
+			.any(|e| e.contains("language detection")),
+		"expected a language-detection reference error, got {:?}",
+		preview.validation_errors
+	);
 }

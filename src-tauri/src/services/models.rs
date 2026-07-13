@@ -7,6 +7,9 @@ use crate::adapters::transport::{
 };
 use crate::credentials::CredentialVault;
 use crate::domain::cancel::CancelToken;
+use crate::domain::language_detection::{
+	parse_language_code, DetectLanguageInput, DetectLanguageResult, DetectorType, LanguageDetectorConfig,
+};
 use crate::domain::model::{
 	Availability, CapabilityOverridesV1, ConnectionTestResult, ManualModelWrite, ModelConfigWrite, ModelSource,
 	ProviderModel, ProviderModelDto, RemoteModelSyncItem, SyncModelsResult,
@@ -17,7 +20,7 @@ use crate::domain::translation::{
 	TranslateInput, TranslateResult, TranslateStreamChunk, TranslateStreamDone, TranslateStreamReset,
 	TRANSLATE_CHUNK_EVENT, TRANSLATE_DONE_EVENT, TRANSLATE_RESET_EVENT,
 };
-use crate::domain::translation_profile::TranslationProfile;
+use crate::domain::translation_profile::{TranslationProfile, TranslationProfileTarget};
 use crate::error::StorageError;
 use crate::repositories::{provider_instances, provider_models, translation_profiles};
 use crate::services::translation_profiles::render_template;
@@ -214,7 +217,14 @@ impl ModelService {
 	}
 
 	pub fn delete(&self, id: Uuid) -> Result<(), StorageError> {
-		self.db.transaction(|uow| provider_models::delete(uow.conn(), id))
+		self.db.transaction(|uow| {
+			if translation_profiles::detection_model_is_referenced(uow.conn(), id)? {
+				return Err(StorageError::InUse(
+					"model is used by a translation profile detector".into(),
+				));
+			}
+			provider_models::delete(uow.conn(), id)
+		})
 	}
 
 	/// Delete many models in one transaction (all-or-nothing).
@@ -232,6 +242,13 @@ impl ModelService {
 			return Ok(0);
 		}
 		self.db.transaction(|uow| {
+			for id in &unique {
+				if translation_profiles::detection_model_is_referenced(uow.conn(), *id)? {
+					return Err(StorageError::InUse(
+						"model is used by a translation profile detector".into(),
+					));
+				}
+			}
 			for id in &unique {
 				provider_models::delete(uow.conn(), *id)?;
 			}
@@ -412,6 +429,65 @@ impl ModelService {
 				Ok(())
 			}
 		}
+	}
+
+	/// Detect the language of `input.text` via a single non-streaming chat completion.
+	///
+	/// Detector dispatch honors `profile.languageDetection`; an empty/absent config is
+	/// equivalent to the default LLM detector using the profile priority-0 primary model
+	/// (or `input.model_id` when no profile is selected). Only the LLM detector exists today;
+	/// the `match` on `LanguageDetectorConfig` leaves room for future non-LLM providers.
+	///
+	/// Returns a stable soft-failure result on validation/transport/parse errors; cancellation
+	/// returns the `cancelled` code. No confidence score is synthesized.
+	pub async fn detect_language(
+		&self,
+		input: DetectLanguageInput,
+		cancel: Option<&CancelToken>,
+	) -> Result<DetectLanguageResult, StorageError> {
+		if cancel.is_some_and(|t| t.is_cancelled()) {
+			return Ok(DetectLanguageResult::cancelled(0));
+		}
+		let prepared = self.prepare_detect_language(input).await?;
+		match prepared {
+			DetectPrepare::Early(result) => Ok(result),
+			DetectPrepare::Ready { model_id, request } => {
+				let started = Instant::now();
+				match chat_completion_http_cancellable(request, cancel).await {
+					Ok(completion) => {
+						let latency_ms = started.elapsed().as_millis() as u64;
+						match parse_language_code(&completion.content) {
+							Some(code) => Ok(DetectLanguageResult::success(code, Some(model_id), latency_ms)),
+							None => Ok(DetectLanguageResult::failure_with_model(
+								"invalid_response",
+								"Detector output did not resolve to a supported language code",
+								latency_ms,
+								Some(model_id),
+							)),
+						}
+					}
+					Err(TransportError::Cancelled) => {
+						let latency_ms = started.elapsed().as_millis() as u64;
+						Ok(DetectLanguageResult::cancelled(latency_ms))
+					}
+					Err(err) => {
+						let latency_ms = started.elapsed().as_millis() as u64;
+						Ok(DetectLanguageResult::failure_with_model(
+							err.code(),
+							err.to_string(),
+							latency_ms,
+							Some(model_id),
+						))
+					}
+				}
+			}
+		}
+	}
+
+	async fn prepare_detect_language(&self, input: DetectLanguageInput) -> Result<DetectPrepare, StorageError> {
+		let db = self.db.clone();
+		let vault = self.vault.clone();
+		spawn_blocking_storage(move || prepare_detect_language_sync(&db, vault.as_ref(), input)).await
 	}
 
 	async fn prepare_translate(&self, input: TranslateInput) -> Result<TranslatePrepare, StorageError> {
@@ -725,9 +801,197 @@ enum TranslatePrepare {
 	},
 }
 
+enum DetectPrepare {
+	/// Soft validation / credential failure returned as a typed result (not IpcError).
+	Early(DetectLanguageResult),
+	Ready {
+		model_id: Uuid,
+		request: ChatCompletionRequest,
+	},
+}
+
 struct TranslateAttempt {
 	model_id: Uuid,
 	request: ChatCompletionRequest,
+}
+
+/// Soft cap on source text accepted by the detect command (matches translate).
+const MAX_DETECT_SOURCE_CHARS: usize = 5000;
+/// Low deterministic budget for language classification requests.
+const DETECT_TEMPERATURE: f64 = 0.0;
+const DETECT_MAX_TOKENS: u32 = 256;
+
+/// Which model to use for detection, given the profile config and request inputs.
+///
+/// Precedence:
+/// - profile explicit LLM modelId → that model
+/// - profile config present but modelId None → profile priority-0 primary model
+/// - profile selected but no languageDetection → profile priority-0 primary model
+/// - no profile → input.modelId
+///
+/// Returns the resolved model id (or a validation error when none is available).
+pub(crate) fn resolve_detect_model_source(
+	profile: Option<&TranslationProfile>,
+	priority0_target: Option<&TranslationProfileTarget>,
+	input_model_id: Option<Uuid>,
+) -> Result<Uuid, StorageError> {
+	if let Some(profile) = profile {
+		if let Some(LanguageDetectorConfig::Llm { model_id: Some(id) }) = profile.language_detection.as_ref() {
+			return Ok(*id);
+		}
+		// Llm with None or no config at all: fall back to the profile primary model.
+		return priority0_target
+			.map(|t| t.provider_model_id)
+			.ok_or_else(|| StorageError::Validation("profile has no primary model for detection".into()));
+	}
+	input_model_id
+		.ok_or_else(|| StorageError::Validation("model_id is required for language detection without a profile".into()))
+}
+
+fn prepare_detect_language_sync(
+	db: &Database,
+	vault: &dyn CredentialVault,
+	input: DetectLanguageInput,
+) -> Result<DetectPrepare, StorageError> {
+	let text = input.text.trim();
+	if text.is_empty() {
+		return Ok(DetectPrepare::Early(DetectLanguageResult::failure(
+			"validation_failed",
+			"Source text must not be empty",
+			0,
+		)));
+	}
+	if text.chars().count() > MAX_DETECT_SOURCE_CHARS {
+		return Ok(DetectPrepare::Early(DetectLanguageResult::failure(
+			"validation_failed",
+			format!("Source text must be at most {MAX_DETECT_SOURCE_CHARS} characters"),
+			0,
+		)));
+	}
+
+	// Read the optional profile and its primary target from one snapshot so detector config
+	// cannot be combined with a concurrently updated model chain.
+	let (profile, priority0_target): (Option<TranslationProfile>, Option<TranslationProfileTarget>) =
+		if let Some(profile_id) = input.profile_id {
+			match db.read_snapshot(|conn| translation_profiles::get(conn, profile_id)) {
+				Ok(dto) => {
+					if !dto.profile.enabled {
+						return Ok(DetectPrepare::Early(DetectLanguageResult::failure(
+							"validation_failed",
+							"Selected translation profile is disabled",
+							0,
+						)));
+					}
+					let primary = dto.targets.into_iter().find(|target| target.priority == 0);
+					(Some(dto.profile), primary)
+				}
+				Err(StorageError::NotFound(_)) => {
+					return Ok(DetectPrepare::Early(DetectLanguageResult::failure(
+						"validation_failed",
+						"Selected translation profile was not found",
+						0,
+					)));
+				}
+				Err(e) => return Err(e),
+			}
+		} else {
+			(None, None)
+		};
+
+	let model_id = match resolve_detect_model_source(profile.as_ref(), priority0_target.as_ref(), input.model_id) {
+		Ok(id) => id,
+		Err(StorageError::Validation(msg)) => {
+			return Ok(DetectPrepare::Early(DetectLanguageResult::failure(
+				"validation_failed",
+				msg,
+				0,
+			)));
+		}
+		Err(e) => return Err(e),
+	};
+
+	// Detector dispatch: only the LLM detector exists today. Future non-LLM providers
+	// (Google, Microsoft, …) add a match arm here without touching the translate path.
+	let detector_type = profile
+		.as_ref()
+		.and_then(|p| p.language_detection.as_ref())
+		.map(|cfg| cfg.detector_type())
+		.unwrap_or(DetectorType::Llm);
+	prepare_detector_dispatch(detector_type, db, vault, model_id, text)
+}
+
+/// Per-detector dispatch for language detection. Only the LLM path is wired today;
+/// the `match` makes the future non-LLM provider extension point explicit.
+fn prepare_detector_dispatch(
+	detector_type: DetectorType,
+	db: &Database,
+	vault: &dyn CredentialVault,
+	model_id: Uuid,
+	text: &str,
+) -> Result<DetectPrepare, StorageError> {
+	match detector_type {
+		DetectorType::Llm => prepare_llm_detection(db, vault, model_id, text),
+	}
+}
+
+fn prepare_llm_detection(
+	db: &Database,
+	vault: &dyn CredentialVault,
+	model_id: Uuid,
+	text: &str,
+) -> Result<DetectPrepare, StorageError> {
+	let system_prompt = build_detect_system_prompt();
+	let user_prompt = text.to_string();
+
+	match resolve_model_chat_transport(db, vault, model_id)? {
+		ModelChatResolve::Skipped => Ok(DetectPrepare::Early(DetectLanguageResult::failure(
+			"validation_failed",
+			"Selected detection model is not available",
+			0,
+		))),
+		ModelChatResolve::MissingCredential => Ok(DetectPrepare::Early(DetectLanguageResult::failure(
+			"auth",
+			"Authentication failed",
+			0,
+		))),
+		ModelChatResolve::CredentialStoreFailure => Ok(DetectPrepare::Early(DetectLanguageResult::failure(
+			"credential_unavailable",
+			"Credential store unavailable",
+			0,
+		))),
+		ModelChatResolve::Ready {
+			config,
+			model_key,
+			model_default_output_tokens: _,
+		} => Ok(DetectPrepare::Ready {
+			model_id,
+			request: ChatCompletionRequest {
+				adapter_id: config.adapter_id,
+				base_url: config.base_url,
+				credential_kind: config.credential_kind,
+				secret: config.secret,
+				proxy_mode: config.proxy_mode,
+				model_key,
+				system_prompt,
+				user_prompt,
+				// Classification should be deterministic and use a small output budget.
+				temperature: Some(DETECT_TEMPERATURE),
+				max_tokens: Some(DETECT_MAX_TOKENS),
+			},
+		}),
+	}
+}
+
+/// System prompt for language detection. Asks for exactly one supported lowercase code.
+fn build_detect_system_prompt() -> String {
+	format!(
+		"You are a language detection engine. Read the user's text and output exactly one of these lowercase language codes and nothing else: {}.
+Rules:
+- Output only the code, with no preface, quotes, labels, punctuation, or explanation.
+- If you are unsure, pick the closest match from the supported codes.
+- Never output anything other than a single supported code.",
+		crate::domain::language_detection::SUPPORTED_LANGUAGES.join(", ")
+	)
 }
 
 fn prepare_translate_sync(

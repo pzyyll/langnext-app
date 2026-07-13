@@ -1,14 +1,17 @@
 // ABOUTME: Translation profile and fallback-chain transactional persistence.
 // ABOUTME: Profile saves replace the complete ordered target list in one unit of work.
+use crate::domain::language_detection::LanguageDetectorConfig;
 use crate::domain::translation_profile::{TranslationProfile, TranslationProfileDto, TranslationProfileTarget};
 use crate::error::StorageError;
 use rusqlite::{params, Connection, OptionalExtension, Row};
+use std::collections::HashSet;
 use uuid::Uuid;
 
 fn map_profile(row: &Row<'_>) -> Result<TranslationProfile, rusqlite::Error> {
 	let id: String = row.get("id")?;
 	let enabled: i64 = row.get("enabled")?;
 	let provider_options: Option<String> = row.get("provider_options_json")?;
+	let language_detection: Option<String> = row.get("language_detection_json")?;
 	Ok(TranslationProfile {
 		id: Uuid::parse_str(&id)
 			.map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?,
@@ -25,6 +28,12 @@ fn map_profile(row: &Row<'_>) -> Result<TranslationProfile, rusqlite::Error> {
 			.map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?,
 		source_lang: row.get("source_lang")?,
 		target_lang: row.get("target_lang")?,
+		primary_lang: row.get("primary_lang")?,
+		preferred_target_lang: row.get("preferred_target_lang")?,
+		language_detection: language_detection
+			.map(|s| serde_json::from_str::<LanguageDetectorConfig>(&s))
+			.transpose()
+			.map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?,
 		created_at: row.get("created_at")?,
 		updated_at: row.get("updated_at")?,
 	})
@@ -87,13 +96,17 @@ pub fn insert_profile(conn: &Connection, profile: &TranslationProfile) -> Result
 		Some(v) => Some(serde_json::to_string(v)?),
 		None => None,
 	};
+	let detection = match &profile.language_detection {
+		Some(v) => Some(serde_json::to_string(v)?),
+		None => None,
+	};
 	conn
 		.execute(
 			"INSERT INTO translation_profiles (
             id, name, enabled, template_version, system_template, user_template,
             temperature, max_output_tokens, provider_options_json, source_lang, target_lang,
-            created_at, updated_at
-        ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+            primary_lang, preferred_target_lang, language_detection_json, created_at, updated_at
+        ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
 			params![
 				profile.id.to_string(),
 				profile.name,
@@ -106,6 +119,9 @@ pub fn insert_profile(conn: &Connection, profile: &TranslationProfile) -> Result
 				options,
 				profile.source_lang,
 				profile.target_lang,
+				profile.primary_lang,
+				profile.preferred_target_lang,
+				detection,
 				profile.created_at,
 				profile.updated_at,
 			],
@@ -116,6 +132,10 @@ pub fn insert_profile(conn: &Connection, profile: &TranslationProfile) -> Result
 
 pub fn update_profile(conn: &Connection, profile: &TranslationProfile) -> Result<(), StorageError> {
 	let options = match &profile.provider_options_json {
+		Some(v) => Some(serde_json::to_string(v)?),
+		None => None,
+	};
+	let detection = match &profile.language_detection {
 		Some(v) => Some(serde_json::to_string(v)?),
 		None => None,
 	};
@@ -132,7 +152,10 @@ pub fn update_profile(conn: &Connection, profile: &TranslationProfile) -> Result
             provider_options_json = ?9,
             source_lang = ?10,
             target_lang = ?11,
-            updated_at = ?12
+            primary_lang = ?12,
+            preferred_target_lang = ?13,
+            language_detection_json = ?14,
+            updated_at = ?15
          WHERE id = ?1",
 			params![
 				profile.id.to_string(),
@@ -146,6 +169,9 @@ pub fn update_profile(conn: &Connection, profile: &TranslationProfile) -> Result
 				options,
 				profile.source_lang,
 				profile.target_lang,
+				profile.primary_lang,
+				profile.preferred_target_lang,
+				detection,
 				profile.updated_at,
 			],
 		)
@@ -177,6 +203,50 @@ pub fn replace_targets(
 				],
 			)
 			.map_err(|e| StorageError::from_sqlite_constraint(e, "profile target"))?;
+	}
+	Ok(())
+}
+
+/// Whether a model is explicitly configured as an LLM language detector.
+pub fn detection_model_is_referenced(conn: &Connection, model_id: Uuid) -> Result<bool, StorageError> {
+	Ok(list(conn)?.into_iter().any(|profile| {
+		profile
+			.language_detection
+			.as_ref()
+			.and_then(|config| config.llm_model_id())
+			.is_some_and(|configured_id| configured_id == model_id)
+	}))
+}
+
+/// Clear dedicated detector models owned by a provider before deleting that provider.
+/// Profiles then fall back to their primary model instead of retaining orphaned JSON ids.
+pub fn clear_detection_models_by_provider(
+	conn: &Connection,
+	provider_id: Uuid,
+	updated_at: &str,
+) -> Result<(), StorageError> {
+	let model_ids: HashSet<String> = {
+		let mut stmt = conn.prepare("SELECT id FROM provider_models WHERE provider_instance_id = ?1")?;
+		let ids = stmt
+			.query_map(params![provider_id.to_string()], |row| row.get(0))?
+			.collect::<Result<_, _>>()?;
+		ids
+	};
+	if model_ids.is_empty() {
+		return Ok(());
+	}
+
+	for mut profile in list(conn)? {
+		let references_provider = profile
+			.language_detection
+			.as_ref()
+			.and_then(|config| config.llm_model_id())
+			.is_some_and(|model_id| model_ids.contains(&model_id.to_string()));
+		if references_provider {
+			profile.language_detection = None;
+			profile.updated_at = updated_at.to_string();
+			update_profile(conn, &profile)?;
+		}
 	}
 	Ok(())
 }

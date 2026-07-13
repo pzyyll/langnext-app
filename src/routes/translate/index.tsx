@@ -23,6 +23,7 @@ import {
 } from "../../query/options";
 import {
 	cancelTranslate,
+	detectLanguage,
 	TRANSLATE_CHUNK_EVENT,
 	TRANSLATE_DONE_EVENT,
 	TRANSLATE_ERROR_EVENT,
@@ -31,6 +32,18 @@ import {
 	translateTextStream,
 } from "../../storage/client";
 import { getIpcErrorMessage } from "../../storage/errors";
+import {
+	AUTO_LANGUAGE,
+	LANGUAGE_IDS,
+	getDefaultProfileLanguages,
+	isLanguageId,
+	isSelectableLanguageId,
+	resolveProfileLangPrefs,
+	resolveTargetLanguage,
+	type LanguageId,
+	type SelectableLanguageId,
+	type SourceLanguageId,
+} from "./languages";
 import type {
 	ProviderInstanceDto,
 	ProviderModelDto,
@@ -50,9 +63,6 @@ const LAYOUT_HEIGHT_CLASS = "h-[calc(100dvh-var(--spacing-titlebar-height)-2*var
 const MAX_SOURCE_CHARS = 5000;
 /** Auto-dismiss for the user-cancel "Stopped" toast. */
 const STOPPED_TOAST_MS = 2000;
-
-const LANGUAGE_IDS = ["zh", "en", "ja", "ko", "fr", "de", "es"] as const;
-type LanguageId = (typeof LANGUAGE_IDS)[number];
 
 /** Toolbar-width select (shared select token is w-full). */
 const compactSelectClassName =
@@ -99,10 +109,6 @@ function buildModelOptions(
 	return options;
 }
 
-function isLanguageId(value: string | null | undefined): value is LanguageId {
-	return !!value && (LANGUAGE_IDS as readonly string[]).includes(value);
-}
-
 function newRequestId(): string {
 	if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
 		return crypto.randomUUID();
@@ -111,11 +117,14 @@ function newRequestId(): string {
 }
 
 function TranslatePage() {
-	const { t } = useTranslation();
+	const { t, i18n } = useTranslation();
 	const toast = useToast();
 	const queryClient = useQueryClient();
-	const [sourceLang, setSourceLang] = useState<LanguageId>("zh");
-	const [targetLang, setTargetLang] = useState<LanguageId>("en");
+	const [sourceLang, setSourceLang] = useState<SourceLanguageId>("auto");
+	const [targetLang, setTargetLang] = useState<SelectableLanguageId>("en");
+	const [detectedSourceLang, setDetectedSourceLang] = useState<LanguageId | null>(null);
+	const [profilePrimaryLang, setProfilePrimaryLang] = useState<LanguageId | null>(null);
+	const [profilePreferredTargetLang, setProfilePreferredTargetLang] = useState<LanguageId | null>(null);
 	const [sourceText, setSourceText] = useState("");
 	const [outputText, setOutputText] = useState("");
 	const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -130,6 +139,7 @@ function TranslatePage() {
 	const [selectedModelId, setSelectedModelId] = useState("");
 	const [selectedProfileId, setSelectedProfileId] = useState("");
 	const [profileApplyError, setProfileApplyError] = useState<string | null>(null);
+	const [isApplyingProfile, setIsApplyingProfile] = useState(false);
 
 	const providersQuery = useQuery(providerListOptions());
 	const modelsQuery = useQuery(allProviderModelsOptions());
@@ -170,13 +180,34 @@ function TranslatePage() {
 	const activeRequestId = useRef<string | null>(null);
 	const streamUnlisteners = useRef<UnlistenFn[]>([]);
 
-	const languageOptions = useMemo(
-		() =>
-			LANGUAGE_IDS.map((id) => ({
+	const sourceLanguageOptions = useMemo(
+		() => [
+			{ id: "auto", label: t("translate.languages.auto") },
+			...LANGUAGE_IDS.map((id) => ({
 				id,
 				label: t(`translate.languages.${id}`),
 			})),
+		],
 		[t],
+	);
+
+	const targetLanguageOptions = useMemo(
+		() => [
+			{ id: AUTO_LANGUAGE, label: t("translate.languages.auto") },
+			...LANGUAGE_IDS.map((id) => ({
+				id,
+				label: t(`translate.languages.${id}`),
+			})),
+		],
+		[t],
+	);
+
+	/** Effective Primary/Target preference for the Auto-target resolver. Falls back to the
+	 * current UI locale when no profile is selected, a legacy profile omits the fields, or the
+	 * selected profile is cleared/invalidated so stale profile preferences never leak through. */
+	const profileLangPrefs = useMemo(
+		() => resolveProfileLangPrefs(!!resolvedProfileId, profilePrimaryLang, profilePreferredTargetLang, i18n.language),
+		[resolvedProfileId, profilePrimaryLang, profilePreferredTargetLang, i18n.language],
 	);
 
 	const modelLabelById = useMemo(() => {
@@ -208,6 +239,12 @@ function TranslatePage() {
 		}
 	}, [clearStreamListeners]);
 
+	function releaseActiveRequest(requestId: string) {
+		if (activeRequestId.current === requestId) {
+			activeRequestId.current = null;
+		}
+	}
+
 	useEffect(() => {
 		return () => {
 			translateGeneration.current += 1;
@@ -216,18 +253,28 @@ function TranslatePage() {
 	}, [abortActiveRequest]);
 
 	const charCount = sourceText.length;
-	const canTranslate = sourceText.trim().length > 0 && resolvedModelId.length > 0 && !isTranslating && !modelsLoading;
+	const canTranslate =
+		sourceText.trim().length > 0 &&
+		resolvedModelId.length > 0 &&
+		!isTranslating &&
+		!isApplyingProfile &&
+		!modelsLoading;
 
 	async function applyProfile(profileId: string) {
 		const generation = ++profileApplyGeneration.current;
+		setDetectedSourceLang(null);
 		if (!profileId) {
 			setSelectedProfileId("");
 			setProfileApplyError(null);
+			setIsApplyingProfile(false);
+			setProfilePrimaryLang(null);
+			setProfilePreferredTargetLang(null);
 			return;
 		}
-		// Optimistic selection so the control tracks the latest user choice immediately.
+		// Track the optimistic selection, but prevent translation until its model/languages arrive.
 		setSelectedProfileId(profileId);
 		setProfileApplyError(null);
+		setIsApplyingProfile(true);
 		try {
 			const dto = await queryClient.fetchQuery(profileDetailOptions(profileId));
 			if (!shouldApplyProfileResult(generation, profileApplyGeneration.current)) {
@@ -238,23 +285,51 @@ function TranslatePage() {
 			if (primaryTarget && modelOptions.some((option) => option.id === primaryTarget.providerModelId)) {
 				setSelectedModelId(primaryTarget.providerModelId);
 			}
-			if (isLanguageId(dto.sourceLang)) {
+			if (isSelectableLanguageId(dto.sourceLang)) {
 				setSourceLang(dto.sourceLang);
 			}
-			if (isLanguageId(dto.targetLang)) {
+			if (isSelectableLanguageId(dto.targetLang)) {
 				setTargetLang(dto.targetLang);
 			}
+			// Load profile Primary/Target preferences, falling back to UI-locale defaults for legacy profiles.
+			const defaults = getDefaultProfileLanguages(i18n.language);
+			setProfilePrimaryLang(isLanguageId(dto.primaryLang) ? dto.primaryLang : defaults.primary);
+			setProfilePreferredTargetLang(isLanguageId(dto.preferredTargetLang) ? dto.preferredTargetLang : defaults.target);
 		} catch (err) {
 			if (!shouldApplyProfileResult(generation, profileApplyGeneration.current)) {
 				return;
 			}
+			setSelectedProfileId("");
 			setProfileApplyError(getIpcErrorMessage(err, t("translate.profileLoadFailed")));
+		} finally {
+			if (shouldApplyProfileResult(generation, profileApplyGeneration.current)) {
+				setIsApplyingProfile(false);
+			}
 		}
 	}
 
 	function swapLanguages() {
-		setSourceLang(targetLang);
-		setTargetLang(sourceLang);
+		// Effective concrete source: manual selection or the last detection result.
+		const effectiveSource: LanguageId | null = sourceLang === "auto" ? detectedSourceLang : sourceLang;
+		// No concrete source to swap with -> safe no-op.
+		if (!effectiveSource) {
+			return;
+		}
+		if (targetLang === "auto") {
+			// Auto target: resolve a concrete target from the profile preferences before swapping.
+			const effectiveTarget = resolveTargetLanguage({
+				source: effectiveSource,
+				configuredTarget: AUTO_LANGUAGE,
+				primary: profileLangPrefs.primary,
+				preferredTarget: profileLangPrefs.preferredTarget,
+			});
+			setSourceLang(effectiveTarget);
+			setTargetLang(effectiveSource);
+		} else {
+			setSourceLang(targetLang);
+			setTargetLang(effectiveSource);
+		}
+		setDetectedSourceLang(null);
 		if (outputText && !errorMessage) {
 			setSourceText(outputText);
 			setOutputText(sourceText);
@@ -298,6 +373,7 @@ function TranslatePage() {
 		setLatencyMs(null);
 		setIsTranslating(false);
 		setActiveModelLabel(null);
+		setDetectedSourceLang(null);
 		if (hadActive) {
 			showStoppedToast();
 		}
@@ -311,6 +387,7 @@ function TranslatePage() {
 		setConfidencePercent(0);
 		setLatencyMs(null);
 		setActiveModelLabel(null);
+		setDetectedSourceLang(null);
 	}
 
 	function finishSuccessUi(generation: number, text: string, latency: number, modelId?: string | null) {
@@ -488,8 +565,65 @@ function TranslatePage() {
 		const generation = ++translateGeneration.current;
 		beginTranslateUi();
 
-		const sourceLabel = t(`translate.languages.${sourceLang}`);
-		const targetLabel = t(`translate.languages.${targetLang}`);
+		const requestId = newRequestId();
+		activeRequestId.current = requestId;
+
+		// Resolve the effective source id. Auto-detect first when source is "auto".
+		let effectiveSourceId: LanguageId;
+		if (sourceLang === "auto") {
+			try {
+				const detected = await detectLanguage(
+					{ text: trimmed, modelId: resolvedModelId || null, profileId: resolvedProfileId || null },
+					requestId,
+				);
+				if (generation !== translateGeneration.current) {
+					return;
+				}
+				if (!detected.ok) {
+					releaseActiveRequest(requestId);
+					if (detected.errorCode === "cancelled") {
+						finishCancelledUi(generation);
+					} else {
+						const message =
+							detected.errorCode === "invalid_response"
+								? t("translate.errors.detectFailed")
+								: detected.message || t("translate.errors.detectFailed");
+						finishErrorUi(generation, message, detected.latencyMs);
+					}
+					return;
+				}
+				if (!isLanguageId(detected.languageId)) {
+					releaseActiveRequest(requestId);
+					finishErrorUi(generation, t("translate.errors.detectFailed"), detected.latencyMs);
+					return;
+				}
+				setDetectedSourceLang(detected.languageId);
+				effectiveSourceId = detected.languageId;
+			} catch (err) {
+				if (generation !== translateGeneration.current) {
+					return;
+				}
+				releaseActiveRequest(requestId);
+				finishErrorUi(generation, getIpcErrorMessage(err, t("translate.errors.detectFailed")), null);
+				return;
+			}
+			if (generation !== translateGeneration.current) {
+				return;
+			}
+		} else {
+			effectiveSourceId = sourceLang;
+		}
+
+		// Resolve the effective concrete target id from the profile Auto-target rule, then localize.
+		// The label sent to Rust is always a concrete language; Auto never reaches the backend.
+		const effectiveTargetId = resolveTargetLanguage({
+			source: effectiveSourceId,
+			configuredTarget: targetLang,
+			primary: profileLangPrefs.primary,
+			preferredTarget: profileLangPrefs.preferredTarget,
+		});
+		const sourceLabel = t(`translate.languages.${effectiveSourceId}`);
+		const targetLabel = t(`translate.languages.${effectiveTargetId}`);
 		const payload = {
 			modelId: resolvedModelId,
 			sourceLang: sourceLabel,
@@ -497,8 +631,6 @@ function TranslatePage() {
 			text: trimmed,
 			profileId: resolvedProfileId || null,
 		};
-		const requestId = newRequestId();
-		activeRequestId.current = requestId;
 
 		if (useStreaming) {
 			await handleTranslateStreaming(generation, payload, requestId);
@@ -617,10 +749,11 @@ function TranslatePage() {
 							value={sourceLang}
 							disabled={isTranslating}
 							onChange={(event) => {
-								setSourceLang(event.currentTarget.value as LanguageId);
+								setSourceLang(event.currentTarget.value as SourceLanguageId);
+								setDetectedSourceLang(null);
 							}}
 						>
-							{languageOptions.map((option) => (
+							{sourceLanguageOptions.map((option) => (
 								<option key={option.id} value={option.id}>
 									{option.label}
 								</option>
@@ -632,7 +765,7 @@ function TranslatePage() {
 							className={iconButtonClassName}
 							aria-label={t("translate.swapLanguages")}
 							onClick={swapLanguages}
-							disabled={isTranslating}
+							disabled={isTranslating || (sourceLang === "auto" && !detectedSourceLang)}
 						>
 							<IconMaterialSymbolsLightSwapHoriz className="size-5" aria-hidden />
 						</Button>
@@ -646,10 +779,10 @@ function TranslatePage() {
 							value={targetLang}
 							disabled={isTranslating}
 							onChange={(event) => {
-								setTargetLang(event.currentTarget.value as LanguageId);
+								setTargetLang(event.currentTarget.value as SelectableLanguageId);
 							}}
 						>
-							{languageOptions.map((option) => (
+							{targetLanguageOptions.map((option) => (
 								<option key={option.id} value={option.id}>
 									{option.label}
 								</option>
@@ -696,7 +829,14 @@ function TranslatePage() {
 				{/* Source pane */}
 				<section className="shadow-frame flex min-h-64 flex-col border border-line bg-surface lg:min-h-0">
 					<div className={paneHeaderClassName}>
-						<span className={paneLabelClassName}>{t("translate.source")}</span>
+						<div className="flex min-w-0 items-center gap-2">
+							<span className={paneLabelClassName}>{t("translate.source")}</span>
+							{detectedSourceLang ? (
+								<span className="truncate text-label-sm text-neutral uppercase">
+									{t("translate.detected", { language: t(`translate.languages.${detectedSourceLang}`) })}
+								</span>
+							) : null}
+						</div>
 						<Button
 							type="button"
 							className={iconButtonClassName}
@@ -724,6 +864,7 @@ function TranslatePage() {
 							disabled={isTranslating}
 							onChange={(event) => {
 								setSourceText(event.currentTarget.value);
+								setDetectedSourceLang(null);
 								setHasTranslated(false);
 								setErrorMessage(null);
 								setConfidencePercent(0);

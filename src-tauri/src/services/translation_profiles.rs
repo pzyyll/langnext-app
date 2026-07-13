@@ -1,6 +1,7 @@
 // ABOUTME: Translation profile template/parameter validation and profile writes.
 // ABOUTME: Fallback chains are stored as contiguous priorities starting at 0.
 use crate::adapters::catalog;
+use crate::domain::language_detection::{LanguageDetectorConfig, SUPPORTED_LANGUAGES};
 use crate::domain::time::{new_id, now_rfc3339};
 use crate::domain::translation_profile::{
 	TranslationProfile, TranslationProfileDto, TranslationProfileTarget, TranslationProfileWrite,
@@ -71,6 +72,14 @@ impl TranslationProfileService {
 			};
 			catalog::validate_profile_options(&adapter_id, &input.provider_options_json)?;
 
+			// When a detector explicitly targets an LLM model, the model must exist.
+			if let Some(LanguageDetectorConfig::Llm {
+				model_id: Some(model_id),
+			}) = input.language_detection
+			{
+				provider_models::get(uow.conn(), model_id)?;
+			}
+
 			let now = now_rfc3339();
 			let (id, created_at, is_new) = match input.id {
 				None => (new_id(), now.clone(), true),
@@ -92,6 +101,9 @@ impl TranslationProfileService {
 				provider_options_json: input.provider_options_json.clone(),
 				source_lang: normalize_optional_lang(input.source_lang.as_deref()),
 				target_lang: normalize_optional_lang(input.target_lang.as_deref()),
+				primary_lang: normalize_optional_lang(input.primary_lang.as_deref()),
+				preferred_target_lang: normalize_optional_lang(input.preferred_target_lang.as_deref()),
+				language_detection: input.language_detection.clone(),
 				created_at,
 				updated_at: now,
 			};
@@ -152,6 +164,7 @@ fn validate_profile_write(input: &TranslationProfileWrite) -> Result<(), Storage
 	}
 	validate_template(&input.system_template, false)?;
 	validate_template(&input.user_template, true)?;
+	validate_profile_language_preferences_for_save(&input.primary_lang, &input.preferred_target_lang)?;
 	Ok(())
 }
 
@@ -229,3 +242,76 @@ pub fn default_user_template() -> String {
 fn normalize_optional_lang(value: Option<&str>) -> Option<String> {
 	value.map(str::trim).filter(|s| !s.is_empty()).map(|s| s.to_string())
 }
+
+/// Validate the profile Primary/Target preference pair.
+///
+/// Both fields are optional for backward compatibility with legacy rows/exports (both absent).
+/// When supplied they must arrive together, be concrete supported ids (never `auto`), and differ.
+/// This is the authoritative guard reused by import validation.
+pub fn validate_profile_language_preferences(
+	primary: &Option<String>,
+	preferred_target: &Option<String>,
+) -> Result<(), StorageError> {
+	match (primary.as_deref(), preferred_target.as_deref()) {
+		(None, None) => Ok(()),
+		(Some(p), Some(t)) => {
+			let p = p.trim();
+			let t = t.trim();
+			if p.is_empty() || t.is_empty() {
+				return Err(StorageError::Validation(
+					"primary_lang and preferred_target_lang must not be empty".into(),
+				));
+			}
+			if p == AUTO_LANG || t == AUTO_LANG {
+				return Err(StorageError::Validation(
+					"primary_lang and preferred_target_lang must not be auto".into(),
+				));
+			}
+			if !SUPPORTED_LANGUAGES.contains(&p) {
+				return Err(StorageError::Validation(format!("unsupported primary_lang: {p}")));
+			}
+			if !SUPPORTED_LANGUAGES.contains(&t) {
+				return Err(StorageError::Validation(format!(
+					"unsupported preferred_target_lang: {t}"
+				)));
+			}
+			if p == t {
+				return Err(StorageError::Validation(
+					"primary_lang and preferred_target_lang must differ".into(),
+				));
+			}
+			Ok(())
+		}
+		_ => Err(StorageError::Validation(
+			"primary_lang and preferred_target_lang must be supplied together".into(),
+		)),
+	}
+}
+
+/// True when a profile preference field is absent or whitespace-only.
+///
+/// `normalize_optional_lang` stores such values as `None`, so legacy rows and exports with
+/// missing/blank fields read back as `None` regardless of the input shape.
+fn is_blank_lang(value: &Option<String>) -> bool {
+	value.as_deref().map(str::trim).filter(|s| !s.is_empty()).is_none()
+}
+
+/// Validate the profile Primary/Target preference pair for a normal save (create/update).
+///
+/// A save through this service must carry a concrete, distinct preference pair: both fields
+/// are required. This is stricter than [`validate_profile_language_preferences`], which still
+/// accepts a legacy `(None, None)` pair so old rows/exports remain readable and importable.
+pub fn validate_profile_language_preferences_for_save(
+	primary: &Option<String>,
+	preferred_target: &Option<String>,
+) -> Result<(), StorageError> {
+	validate_profile_language_preferences(primary, preferred_target)?;
+	if is_blank_lang(primary) || is_blank_lang(preferred_target) {
+		return Err(StorageError::Validation(
+			"primary_lang and preferred_target_lang are required for profile save".into(),
+		));
+	}
+	Ok(())
+}
+
+const AUTO_LANG: &str = "auto";

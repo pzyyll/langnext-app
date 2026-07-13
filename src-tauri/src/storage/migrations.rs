@@ -9,6 +9,8 @@ pub const MIGRATIONS: &[&str] = &[
 	include_str!("../../migrations/0002_provider_sort_order.sql"),
 	include_str!("../../migrations/0003_profile_languages.sql"),
 	include_str!("../../migrations/0004_model_adapter_id.sql"),
+	include_str!("../../migrations/0005_profile_language_detection.sql"),
+	include_str!("../../migrations/0006_profile_language_preferences.sql"),
 ];
 
 pub fn latest_version() -> i32 {
@@ -109,6 +111,87 @@ mod tests {
 			.query_row("SELECT adapter_id FROM provider_models LIMIT 1", [], |r| r.get(0))
 			.optional()
 			.unwrap();
+		// v5 optional profile language detector config JSON.
+		let _: Option<String> = conn
+			.query_row(
+				"SELECT language_detection_json FROM translation_profiles LIMIT 1",
+				[],
+				|r| r.get(0),
+			)
+			.optional()
+			.unwrap();
+		// v6 optional profile Primary/Target preference columns.
+		let _: Option<String> = conn
+			.query_row("SELECT primary_lang FROM translation_profiles LIMIT 1", [], |r| {
+				r.get(0)
+			})
+			.optional()
+			.unwrap();
+		let _: Option<String> = conn
+			.query_row(
+				"SELECT preferred_target_lang FROM translation_profiles LIMIT 1",
+				[],
+				|r| r.get(0),
+			)
+			.optional()
+			.unwrap();
+	}
+
+	#[test]
+	fn migrate_v4_profile_to_v5_preserves_data_and_defaults_detector() {
+		let mut conn = Connection::open_in_memory().unwrap();
+		migrate_with(&mut conn, &MIGRATIONS[..4]).unwrap();
+		conn
+			.execute(
+				"INSERT INTO translation_profiles (
+				id, name, enabled, template_version, system_template, user_template,
+				source_lang, target_lang, created_at, updated_at
+			) VALUES ('profile-1', 'Legacy', 1, 1, 'system', '{{text}}', 'zh', 'en', 't', 't')",
+				[],
+			)
+			.unwrap();
+
+		migrate(&mut conn).unwrap();
+		let row: (String, Option<String>) = conn
+			.query_row(
+				"SELECT name, language_detection_json FROM translation_profiles WHERE id = 'profile-1'",
+				[],
+				|row| Ok((row.get(0)?, row.get(1)?)),
+			)
+			.unwrap();
+		assert_eq!(row.0, "Legacy");
+		assert_eq!(row.1, None);
+		assert_eq!(read_user_version(&conn).unwrap(), latest_version());
+	}
+
+	#[test]
+	fn migrate_v5_profile_to_v6_preserves_data_and_defaults_prefs() {
+		let mut conn = Connection::open_in_memory().unwrap();
+		migrate_with(&mut conn, &MIGRATIONS[..5]).unwrap();
+		conn
+			.execute(
+				"INSERT INTO translation_profiles (
+				id, name, enabled, template_version, system_template, user_template,
+				source_lang, target_lang, created_at, updated_at
+			) VALUES ('profile-v6', 'Legacy', 1, 1, 'system', '{{text}}', 'zh', 'en', 't', 't')",
+				[],
+			)
+			.unwrap();
+
+		migrate(&mut conn).unwrap();
+		let row: (String, Option<String>, Option<String>, Option<String>) = conn
+			.query_row(
+				"SELECT name, language_detection_json, primary_lang, preferred_target_lang
+				 FROM translation_profiles WHERE id = 'profile-v6'",
+				[],
+				|row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+			)
+			.unwrap();
+		assert_eq!(row.0, "Legacy");
+		assert_eq!(row.1, None);
+		assert_eq!(row.2, None);
+		assert_eq!(row.3, None);
+		assert_eq!(read_user_version(&conn).unwrap(), latest_version());
 	}
 
 	#[test]

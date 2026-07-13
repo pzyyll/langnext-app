@@ -159,6 +159,9 @@ fn profile_fallback_ordering_and_rollback() {
 			provider_options_json: None,
 			source_lang: Some("zh".into()),
 			target_lang: Some("en".into()),
+			primary_lang: None,
+			preferred_target_lang: None,
+			language_detection: None,
 			created_at: now.clone(),
 			updated_at: now,
 		};
@@ -202,6 +205,81 @@ fn profile_fallback_ordering_and_rollback() {
 }
 
 #[test]
+fn profile_language_preferences_round_trip() {
+	let (_dir, db) = setup();
+	let pid = new_id();
+	let mid = new_id();
+	let profile_id = new_id();
+	db.transaction(|uow| {
+		provider_instances::insert(uow.conn(), &sample_provider(pid))?;
+		provider_models::insert(uow.conn(), &sample_model(mid, pid, "a"))?;
+		Ok(())
+	})
+	.unwrap();
+
+	let now = now_rfc3339();
+	let profile = TranslationProfile {
+		id: profile_id,
+		name: "Prefs".into(),
+		enabled: true,
+		template_version: 1,
+		system_template: "sys".into(),
+		user_template: "Translate: {{text}}".into(),
+		temperature: Some(0.2),
+		max_output_tokens: Some(1024),
+		provider_options_json: None,
+		source_lang: Some("auto".into()),
+		target_lang: Some("auto".into()),
+		primary_lang: Some("zh".into()),
+		preferred_target_lang: Some("en".into()),
+		language_detection: None,
+		created_at: now.clone(),
+		updated_at: now,
+	};
+	db.transaction(|uow| {
+		translation_profiles::save_with_targets(
+			uow.conn(),
+			&profile,
+			&[TranslationProfileTarget {
+				translation_profile_id: profile_id,
+				provider_model_id: mid,
+				priority: 0,
+			}],
+			true,
+		)?;
+		Ok(())
+	})
+	.unwrap();
+
+	db.read(|conn| {
+		let dto = translation_profiles::get(conn, profile_id)?;
+		assert_eq!(dto.profile.primary_lang.as_deref(), Some("zh"));
+		assert_eq!(dto.profile.preferred_target_lang.as_deref(), Some("en"));
+		assert_eq!(dto.profile.target_lang.as_deref(), Some("auto"));
+		Ok(())
+	})
+	.unwrap();
+
+	// Update clears the preferences back to legacy NULLs.
+	let mut cleared = profile;
+	cleared.primary_lang = None;
+	cleared.preferred_target_lang = None;
+	cleared.updated_at = now_rfc3339();
+	db.transaction(|uow| {
+		translation_profiles::update_profile(uow.conn(), &cleared)?;
+		Ok(())
+	})
+	.unwrap();
+	db.read(|conn| {
+		let dto = translation_profiles::get(conn, profile_id)?;
+		assert_eq!(dto.profile.primary_lang, None);
+		assert_eq!(dto.profile.preferred_target_lang, None);
+		Ok(())
+	})
+	.unwrap();
+}
+
+#[test]
 fn delete_model_in_use_by_profile() {
 	let (_dir, db) = setup();
 	let pid = new_id();
@@ -223,6 +301,9 @@ fn delete_model_in_use_by_profile() {
 			provider_options_json: None,
 			source_lang: None,
 			target_lang: None,
+			primary_lang: None,
+			preferred_target_lang: None,
+			language_detection: None,
 			created_at: now.clone(),
 			updated_at: now,
 		};
@@ -329,6 +410,9 @@ fn provider_reference_lifecycle() {
 			provider_options_json: None,
 			source_lang: None,
 			target_lang: None,
+			primary_lang: None,
+			preferred_target_lang: None,
+			language_detection: None,
 			created_at: now.clone(),
 			updated_at: now,
 		};

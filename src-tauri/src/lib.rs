@@ -61,6 +61,7 @@ pub fn run() {
 			cmds::models::translate_text,
 			cmds::models::translate_text_stream,
 			cmds::models::cancel_translate,
+			cmds::models::detect_language,
 			cmds::translation_profiles::list_translation_profiles,
 			cmds::translation_profiles::get_translation_profile,
 			cmds::translation_profiles::save_translation_profile,
