@@ -517,16 +517,13 @@ function TranslateProfilesPage() {
 	return (
 		<div className={`flex min-h-0 flex-col overflow-hidden border border-line bg-surface ${LAYOUT_HEIGHT_CLASS}`}>
 			{/* Page header */}
-			<header className="flex h-16 shrink-0 items-center justify-between gap-3 border-b border-line bg-surface px-8">
+			<header className="flex h-16 shrink-0 items-center justify-between gap-3 border-b border-line bg-surface px-3">
 				<div className="min-w-0">
 					<h1 className="text-headline-sm font-bold tracking-tight text-on-surface uppercase">
 						{t("translate.profiles.title")}
 					</h1>
 					<p className="text-label-sm text-neutral uppercase">{t("translate.profiles.subtitle")}</p>
 				</div>
-				<Link to="/translate" className={`${outlineButtonClassName} font-bold no-underline uppercase`}>
-					{t("translate.profiles.backToTranslate")}
-				</Link>
 			</header>
 
 			<div className="flex min-h-0 flex-1 flex-col overflow-hidden lg:flex-row">

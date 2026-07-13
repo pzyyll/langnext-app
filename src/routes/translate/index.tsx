@@ -2,15 +2,13 @@
 // ABOUTME: Nested under /translate; selects profiles and calls provider models via IPC.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, createFileRoute } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 import { Button } from "@base-ui/react/button";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useTranslation } from "react-i18next";
 import IconMaterialSymbolsLightArrowForward from "~icons/material-symbols-light/arrow-forward";
 import IconMaterialSymbolsLightClose from "~icons/material-symbols-light/close";
 import IconMaterialSymbolsLightContentCopy from "~icons/material-symbols-light/content-copy";
-import IconMaterialSymbolsLightShare from "~icons/material-symbols-light/share";
-import IconMaterialSymbolsLightStar from "~icons/material-symbols-light/star";
 import IconMaterialSymbolsLightSwapHoriz from "~icons/material-symbols-light/swap-horiz";
 import IconMaterialSymbolsLightVerifiedUser from "~icons/material-symbols-light/verified-user";
 import IconMaterialSymbolsLightVolumeUp from "~icons/material-symbols-light/volume-up";
@@ -575,13 +573,6 @@ function TranslatePage() {
 								</option>
 							))}
 						</select>
-						<Link
-							to="/translate/profiles"
-							className={`${outlineButtonClassName} no-underline`}
-							aria-label={t("translate.profileManage")}
-						>
-							{t("translate.profileManage")}
-						</Link>
 					</div>
 
 					<div className="hidden h-6 w-px bg-outline-variant sm:block" aria-hidden />
@@ -681,25 +672,6 @@ function TranslatePage() {
 						/>
 						<span className="text-label-sm text-neutral uppercase">{t("translate.streamLabel")}</span>
 					</label>
-				</div>
-
-				<div className="flex items-center gap-2">
-					<Button
-						type="button"
-						className={`${iconButtonClassName} size-control-height border border-line`}
-						aria-label={t("translate.share")}
-						disabled
-					>
-						<IconMaterialSymbolsLightShare className="size-4" aria-hidden />
-					</Button>
-					<Button
-						type="button"
-						className={`${iconButtonClassName} size-control-height border border-line`}
-						aria-label={t("translate.favorite")}
-						disabled
-					>
-						<IconMaterialSymbolsLightStar className="size-4" aria-hidden />
-					</Button>
 				</div>
 			</div>
 

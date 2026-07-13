@@ -130,7 +130,6 @@ const zhCN = {
 		profileNone: "默认",
 		profileLoading: "正在加载预设…",
 		profileLoadFailed: "加载预设失败",
-		profileManage: "管理",
 		profileNameLabel: "预设名称",
 		profileNamePlaceholder: "例如：技术文档 EN→ZH",
 		profileSaved: "预设已保存",
@@ -144,7 +143,6 @@ const zhCN = {
 		profiles: {
 			title: "翻译预设",
 			subtitle: "管理可复用的语言、模型链与提示词模板。",
-			backToTranslate: "返回翻译",
 			listTitle: "预设列表",
 			loading: "正在加载预设…",
 			loadingEditor: "正在加载预设…",

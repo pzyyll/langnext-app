@@ -132,7 +132,6 @@ const en = {
 		profileNone: "Default",
 		profileLoading: "Loading profiles…",
 		profileLoadFailed: "Failed to load profiles",
-		profileManage: "Manage",
 		profileNameLabel: "Profile name",
 		profileNamePlaceholder: "e.g. Technical EN→ZH",
 		profileSaved: "Profile saved",
@@ -146,7 +145,6 @@ const en = {
 		profiles: {
 			title: "Translation profiles",
 			subtitle: "Manage reusable languages, model chains, and prompt templates.",
-			backToTranslate: "Back to Translate",
 			listTitle: "Profiles",
 			loading: "Loading profiles…",
 			loadingEditor: "Loading profile…",
