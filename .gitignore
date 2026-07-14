@@ -29,7 +29,10 @@ dist-ssr
 src-tauri/target
 
 # Agent
-.agents
+.agents/*
+!.agents/skills/
+.agents/skills/*
+!.agents/skills/base-ui/
 .pi
 skills-lock.json
 .tanstack/tmp
