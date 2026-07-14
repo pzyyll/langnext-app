@@ -3,8 +3,7 @@
 ## Identity
 
 - Agent: **BlazeWaffle**
-- Human lead: **Harp-Dogzilla** (Mr. Julian)
-- Match Harp-Dogzilla's language. Keep the banter secondary to shipping the software.
+- Human lead: **Harp-Dogzilla**
 
 ## Project
 
@@ -17,7 +16,6 @@
 - Tailwind CSS v4 (`@tailwindcss/vite`) using a Base UI outline/frame style
 - ESLint and Prettier
 - `mise` for toolchains and project tasks
-- Bun as the only JavaScript package manager
 
 ## Repository Map
 
@@ -65,14 +63,9 @@ mise run tauri:build   # Package the desktop application
 - Do not add `package.json` scripts; add or update tasks under `.mise/tasks/`.
 - Never bypass commit hooks with `--no-verify`.
 
-## Engineering Rules
+## Project Conventions
 
-- Prefer small, readable changes over clever or broad rewrites.
-- Every code file must begin with two `ABOUTME:` comment lines describing its purpose.
-- Use real data and integrations; do not add mock modes unless explicitly requested.
-- Ask before reimplementing an existing system from scratch.
 - Do not use `new`, `improved`, or `enhanced` in names.
-- Generated documentation is in English unless requested otherwise.
 
 ### TanStack Router
 
@@ -81,37 +74,25 @@ mise run tauri:build   # Package the desktop application
 
 ### Tailwind CSS
 
-Prefer named Tailwind tokens when an equivalent exists. For example:
-
-- Use `w-md` instead of `w-[28rem]`.
-- Use `max-w-lg` instead of `max-w-[32rem]`.
-- Use the container scale (`3xs` through `7xl`) for `w-*`, `min-w-*`, and `max-w-*` utilities.
+Prefer named Tailwind tokens over arbitrary values when an equivalent exists (for example, `w-md` instead of `w-[28rem]`). Use the container scale (`3xs` through `7xl`) for `w-*`, `min-w-*`, and `max-w-*` utilities.
 
 ### Base UI
 
-Use Base UI components for every UI primitive that has a Base UI equivalent — Input, Select, Checkbox, Radio, Switch, Tabs, Accordion, Popover, Tooltip, and so on. When a primitive has no Base UI counterpart, build it with Tailwind CSS instead.
+Use Base UI for every UI primitive with an equivalent component (including inputs, selects, checkboxes, radios, switches, tabs, accordions, popovers, and tooltips). Only build a primitive with Tailwind CSS when Base UI has no equivalent.
 
-```tsx
-// Don't: native HTML element
-<input />
-// Do: Base UI component
-<Input />
+Reference `.agents/skills/base-ui/SKILL.md` for component APIs and styling.
 
-// Don't: native HTML element
-<select />
-// Do: Base UI component
-<Select.Root />
-```
+### Icons
 
-Base UI component catalog and styling reference: `.agents/skills/base-ui/SKILL.md`.
+- Use `unplugin-icons` imports for application icons (for example, `~icons/material-symbols-light/check`).
+- Do not write inline `<svg>` markup in application code. Reuse an installed Iconify collection or add an appropriate icon collection when necessary.
 
 ## UI Copy
 
-- Keep labels, headings, and supporting copy concise and plain.
+- Keep labels, headings, and supporting copy plain; do not explain what the surrounding context already makes clear.
 - Prefer a self-explanatory icon over redundant text; give icon-only controls an accessible name or tooltip.
-- Do not explain what the surrounding context and visual design already make clear.
-- Use short, direct action labels and simple names, such as `Reset Token` instead of `Remove stored token`.
-- Remove redundant qualifiers, such as `API TYPE: default` instead of `API TYPE: Channel default`.
+- Use short, direct action labels, such as `Reset Token` instead of `Remove stored token`.
+- Remove redundant qualifiers, such as `API TYPE: Default` instead of `API TYPE: Channel default`.
 
 ## Generated Files
 

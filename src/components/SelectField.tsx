@@ -3,6 +3,8 @@
 
 import { useMemo } from "react";
 import { Select } from "@base-ui/react/select";
+import IconMaterialSymbolsLightArrowDropDown from "~icons/material-symbols-light/arrow-drop-down";
+import IconMaterialSymbolsLightCheck from "~icons/material-symbols-light/check";
 
 export type SelectOption = {
 	value: string;
@@ -26,37 +28,6 @@ export type SelectFieldProps = {
 	"aria-label"?: string;
 	"aria-labelledby"?: string;
 };
-
-function CaretUpDownIcon() {
-	return (
-		<svg
-			width="16"
-			height="16"
-			viewBox="0 0 16 16"
-			fill="currentColor"
-			className="pointer-events-none shrink-0"
-			style={{ display: "block" }}
-		>
-			<path d="M11 10H5l3 3.5zm0-4H5l3-3.5z" />
-		</svg>
-	);
-}
-
-function CheckIcon() {
-	return (
-		<svg
-			width="16"
-			height="16"
-			viewBox="0 0 16 16"
-			fill="none"
-			stroke="currentColor"
-			className="pointer-events-none shrink-0"
-			style={{ display: "block" }}
-		>
-			<path d="m2.5 8.5 4 4 7-9" />
-		</svg>
-	);
-}
 
 const triggerBase =
 	"flex h-control-height items-center justify-between gap-2 select-none rounded-none border border-line bg-surface px-3 text-body-tight font-normal text-on-surface hover:not-data-disabled:bg-surface-2 data-popup-open:bg-surface-2 focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface data-disabled:border-disabled data-disabled:text-disabled";
@@ -102,10 +73,10 @@ export function SelectField({
 			>
 				<Select.Value
 					placeholder={placeholder}
-					className="min-w-0 flex-1 truncate data-placeholder:text-neutral"
+					className="min-w-0 flex-1 truncate text-left data-placeholder:text-neutral"
 				/>
-				<Select.Icon>
-					<CaretUpDownIcon />
+				<Select.Icon className="transition-transform duration-200 ease-out data-popup-open:rotate-180">
+					<IconMaterialSymbolsLightArrowDropDown className="pointer-events-none size-4 shrink-0" />
 				</Select.Icon>
 			</Select.Trigger>
 			<Select.Portal>
@@ -126,7 +97,7 @@ export function SelectField({
 									className={itemClassName}
 								>
 									<Select.ItemIndicator className="col-start-1">
-										<CheckIcon />
+										<IconMaterialSymbolsLightCheck className="pointer-events-none size-4 shrink-0" />
 									</Select.ItemIndicator>
 									<Select.ItemText className="col-start-2 truncate">{option.label}</Select.ItemText>
 								</Select.Item>
