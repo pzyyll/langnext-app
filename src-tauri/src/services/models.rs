@@ -35,10 +35,8 @@ use uuid::Uuid;
 type DeltaCallback<'a> = Option<&'a mut (dyn FnMut(&str) + Send)>;
 type ResetCallback<'a> = Option<&'a mut (dyn FnMut(Uuid) + Send)>;
 
-/// Soft cap on source text accepted by the translate command (matches UI max).
-const MAX_TRANSLATE_SOURCE_CHARS: usize = 5000;
 /// Default max output tokens for a single translation completion.
-const DEFAULT_TRANSLATE_MAX_TOKENS: u32 = 4096;
+const DEFAULT_TRANSLATE_MAX_TOKENS: u32 = 32768;
 /// Low temperature keeps translations more deterministic.
 const DEFAULT_TRANSLATE_TEMPERATURE: f64 = 0.2;
 
@@ -1004,13 +1002,6 @@ fn prepare_translate_sync(
 		return Ok(TranslatePrepare::Early(TranslateResult::failure(
 			"validation_failed",
 			"Source text must not be empty",
-			0,
-		)));
-	}
-	if text.chars().count() > MAX_TRANSLATE_SOURCE_CHARS {
-		return Ok(TranslatePrepare::Early(TranslateResult::failure(
-			"validation_failed",
-			format!("Source text must be at most {MAX_TRANSLATE_SOURCE_CHARS} characters"),
 			0,
 		)));
 	}

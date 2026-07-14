@@ -56,7 +56,7 @@ const DEFAULT_SYSTEM_TEMPLATE =
 
 const DEFAULT_USER_TEMPLATE = "{{text}}";
 const DEFAULT_TEMPERATURE = 0.2;
-const DEFAULT_MAX_OUTPUT_TOKENS = 4096;
+const DEFAULT_MAX_OUTPUT_TOKENS = 32768;
 
 const fieldLabelClassName = "text-label-sm font-bold uppercase text-on-surface";
 

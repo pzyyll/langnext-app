@@ -880,14 +880,14 @@ function TranslatePage() {
 						{sourceText ? (
 							<Button
 								type="button"
-								className={iconButtonClassName}
+								className={`${iconButtonClassName} group`}
 								aria-label={t("translate.clearSource")}
 								onClick={() => {
 									void clearSource();
 								}}
 							>
 								<IconMaterialSymbolsLightClose
-									className="size-4 transition-transform duration-150 hover:scale-110"
+									className="size-4 transition-transform duration-150 group-hover:scale-110"
 									aria-hidden
 								/>
 							</Button>
@@ -922,18 +922,21 @@ function TranslatePage() {
 						{isTranslating ? (
 							<Button
 								type="button"
-								className={iconButtonClassName}
+								className={`${iconButtonClassName} group`}
 								aria-label={t("translate.stopAria")}
 								onClick={() => {
 									void stopTranslation();
 								}}
 							>
-								<IconMaterialSymbolsLightStopCircleOutline className="size-4" aria-hidden />
+								<IconMaterialSymbolsLightStopCircleOutline
+									className="size-4 transition-transform duration-150 group-hover:scale-110"
+									aria-hidden
+								/>
 							</Button>
 						) : (
 							<Button
 								type="button"
-								className={iconButtonClassName}
+								className={`${iconButtonClassName} group`}
 								disabled={!canTranslate}
 								focusableWhenDisabled
 								aria-label={t("translate.translate")}
@@ -941,7 +944,10 @@ function TranslatePage() {
 									void handleTranslate();
 								}}
 							>
-								<IconPepiconsPrintEnter className="size-4" aria-hidden />
+								<IconPepiconsPrintEnter
+									className="size-4 transition-transform duration-150 group-hover:scale-110"
+									aria-hidden
+								/>
 							</Button>
 						)}
 					</div>

@@ -111,7 +111,7 @@ fn spawn_detection_chat_server() -> (String, std::thread::JoinHandle<serde_json:
 			.unwrap();
 		let mut request = Vec::new();
 		let (header_end, content_length) = loop {
-			let mut chunk = [0u8; 4096];
+			let mut chunk = [0u8; 32768];
 			let read = stream.read(&mut chunk).unwrap();
 			assert!(read > 0, "request closed before headers completed");
 			request.extend_from_slice(&chunk[..read]);
@@ -131,7 +131,7 @@ fn spawn_detection_chat_server() -> (String, std::thread::JoinHandle<serde_json:
 			}
 		};
 		while request.len() < header_end + content_length {
-			let mut chunk = [0u8; 4096];
+			let mut chunk = [0u8; 32768];
 			let read = stream.read(&mut chunk).unwrap();
 			assert!(read > 0, "request closed before body completed");
 			request.extend_from_slice(&chunk[..read]);
@@ -1531,7 +1531,7 @@ fn translate_max_tokens_use_profile_then_model_then_default() {
 		crate::services::models::resolve_translate_max_tokens(None, Some(2048)),
 		2048
 	);
-	assert_eq!(crate::services::models::resolve_translate_max_tokens(None, None), 4096);
+	assert_eq!(crate::services::models::resolve_translate_max_tokens(None, None), 32768);
 }
 
 /// OpenAI channel + Gemini model override, no base_url_override → gemini default URL.

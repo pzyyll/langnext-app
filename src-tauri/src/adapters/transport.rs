@@ -857,7 +857,7 @@ async fn chat_completion_http_inner(request: ChatCompletionRequest) -> Result<Ch
 				"messages": [
 					{ "role": "user", "content": request.user_prompt }
 				],
-				"max_tokens": request.max_tokens.unwrap_or(4096)
+				"max_tokens": request.max_tokens.unwrap_or(32768)
 			});
 			if let Some(temp) = request.temperature {
 				payload["temperature"] = serde_json::json!(temp);
@@ -1161,7 +1161,7 @@ fn build_stream_request_parts(
 				"messages": [
 					{ "role": "user", "content": request.user_prompt }
 				],
-				"max_tokens": request.max_tokens.unwrap_or(4096),
+				"max_tokens": request.max_tokens.unwrap_or(32768),
 				"stream": true
 			});
 			if let Some(temp) = request.temperature {
