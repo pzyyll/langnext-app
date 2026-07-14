@@ -12,6 +12,7 @@ export type SelectOption = {
 
 export type SelectFieldProps = {
 	id?: string;
+	/** Extra trigger classes merged onto the base outline styles (does not replace layout). */
 	className?: string;
 	value: string;
 	onValueChange: (value: string | null) => void;
@@ -86,17 +87,23 @@ export function SelectField({
 		return [...options, ...uniqueExtras];
 	}, [options, extraOptions]);
 
-	const triggerClassName = compact ? triggerBase : `${triggerBase} w-full`;
+	// Always keep triggerBase (flex + icon alignment); className only adds/overrides extras.
+	const triggerClassName = [compact ? triggerBase : `${triggerBase} w-full`, className]
+		.filter(Boolean)
+		.join(" ");
 
 	return (
 		<Select.Root value={value} onValueChange={onValueChange} items={allOptions} disabled={disabled}>
 			<Select.Trigger
 				id={id}
-				className={className ?? triggerClassName}
+				className={triggerClassName}
 				aria-label={ariaLabel}
 				aria-labelledby={ariaLabelledby}
 			>
-				<Select.Value placeholder={placeholder} className="truncate data-placeholder:text-neutral" />
+				<Select.Value
+					placeholder={placeholder}
+					className="min-w-0 flex-1 truncate data-placeholder:text-neutral"
+				/>
 				<Select.Icon>
 					<CaretUpDownIcon />
 				</Select.Icon>

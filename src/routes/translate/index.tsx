@@ -65,10 +65,6 @@ const LAYOUT_HEIGHT_CLASS = "h-[calc(100dvh-var(--spacing-titlebar-height)-2*var
 /** Auto-dismiss for the user-cancel "Stopped" toast. */
 const STOPPED_TOAST_MS = 2000;
 
-/** Toolbar-width select (shared select token is w-full). */
-const compactSelectClassName =
-	"h-control-height rounded-none border border-line bg-surface px-3 text-body-tight font-normal text-on-surface focus:outline-2 focus:-outline-offset-1 focus:outline-on-surface disabled:border-disabled disabled:text-disabled";
-
 const paneHeaderClassName =
 	"flex h-control-height shrink-0 items-center justify-between border-b border-line bg-surface-2 px-2";
 
@@ -746,7 +742,7 @@ function TranslatePage() {
 							{t("translate.profileLabel")}
 						</label>
 						<SelectField
-							className={`${compactSelectClassName} max-w-xs`}
+							className="max-w-xs"
 							value={resolvedProfileId}
 							onValueChange={(value) => {
 								void applyProfile(value ?? "");
@@ -770,7 +766,7 @@ function TranslatePage() {
 							{t("translate.modelLabel")}
 						</label>
 						<SelectField
-							className={`${compactSelectClassName} max-w-xs`}
+							className="max-w-xs"
 							value={resolvedModelId}
 							onValueChange={(value) => setSelectedModelId(value ?? "")}
 							options={
@@ -796,7 +792,6 @@ function TranslatePage() {
 
 					<div className="flex flex-wrap items-center gap-1">
 						<SelectField
-							className={compactSelectClassName}
 							value={sourceLang}
 							onValueChange={(value) => {
 								setSourceLang((value ?? "auto") as SourceLanguageId);
@@ -819,7 +814,6 @@ function TranslatePage() {
 						</Button>
 
 						<SelectField
-							className={compactSelectClassName}
 							value={targetLang}
 							onValueChange={(value) => setTargetLang((value ?? "en") as SelectableLanguageId)}
 							options={targetLanguageOptions.map((option) => ({ value: option.id, label: option.label }))}
