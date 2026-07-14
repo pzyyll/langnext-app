@@ -87,6 +87,24 @@ Prefer named Tailwind tokens when an equivalent exists. For example:
 - Use `max-w-lg` instead of `max-w-[32rem]`.
 - Use the container scale (`3xs` through `7xl`) for `w-*`, `min-w-*`, and `max-w-*` utilities.
 
+### Base UI
+
+Use Base UI components for every UI primitive that has a Base UI equivalent — Input, Select, Checkbox, Radio, Switch, Tabs, Accordion, Popover, Tooltip, and so on. When a primitive has no Base UI counterpart, build it with Tailwind CSS instead.
+
+```tsx
+// Don't: native HTML element
+<input />
+// Do: Base UI component
+<Input />
+
+// Don't: native HTML element
+<select />
+// Do: Base UI component
+<Select.Root />
+```
+
+Base UI component catalog and styling reference: https://base-ui.com/llms.txt
+
 ## UI Copy
 
 - Keep labels, headings, and supporting copy concise and plain.
@@ -102,7 +120,3 @@ Prefer named Tailwind tokens when an equivalent exists. For example:
 - Do not edit it manually.
 - Exclude it from ESLint and Prettier edits.
 - Commit it so `tsc --noEmit` works on clean checkouts.
-
-## References
-
-- Base UI guide and components: https://base-ui.com/llms.txt
