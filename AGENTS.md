@@ -103,7 +103,7 @@ Use Base UI components for every UI primitive that has a Base UI equivalent — 
 <Select.Root />
 ```
 
-Base UI component catalog and styling reference: `.agents/skills/base-ui/SKILL.md` (vendored for offline use).
+Base UI component catalog and styling reference: `.agents/skills/base-ui/SKILL.md`.
 
 ## UI Copy
 
