@@ -13,10 +13,10 @@ import {
 	inputClassName,
 	outlineButtonClassName,
 	primaryButtonClassName,
-	selectClassName,
 	switchRootClassName,
 	switchThumbClassName,
 } from "../../components/ui";
+import { SelectField } from "../../components/SelectField";
 import { profileKeys } from "../../query/keys";
 import {
 	allProviderModelsOptions,
@@ -751,88 +751,66 @@ function TranslateProfilesPage() {
 										</div>
 										<div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
 											<div className="flex flex-col gap-1">
-												<label className={fieldLabelClassName} htmlFor="profile-source-lang">
+												<label className={fieldLabelClassName} id="profile-source-lang-label">
 													{t("translate.sourceLanguage")}
 												</label>
-												<select
-													id="profile-source-lang"
-													className={selectClassName}
+												<SelectField
 													value={draft.sourceLang}
+													onValueChange={(value) => updateDraft({ sourceLang: (value ?? "auto") as SourceLanguageId })}
+													options={sourceLanguageOptions.map((option) => ({ value: option.id, label: option.label }))}
 													disabled={savePending}
-													onChange={(event) => {
-														updateDraft({ sourceLang: event.currentTarget.value as SourceLanguageId });
-													}}
-												>
-													{sourceLanguageOptions.map((option) => (
-														<option key={option.id} value={option.id}>
-															{option.label}
-														</option>
-													))}
-												</select>
+													aria-labelledby="profile-source-lang-label"
+												/>
 											</div>
 											<div className="flex flex-col gap-1">
-												<label className={fieldLabelClassName} htmlFor="profile-target-lang">
+												<label className={fieldLabelClassName} id="profile-target-lang-label">
 													{t("translate.targetLanguage")}
 												</label>
-												<select
-													id="profile-target-lang"
-													className={selectClassName}
+												<SelectField
 													value={draft.targetLang}
+													onValueChange={(value) =>
+														updateDraft({ targetLang: (value ?? "en") as SelectableLanguageId })
+													}
+													options={targetLanguageOptions.map((option) => ({ value: option.id, label: option.label }))}
 													disabled={savePending}
-													onChange={(event) => {
-														updateDraft({ targetLang: event.currentTarget.value as SelectableLanguageId });
-													}}
-												>
-													{targetLanguageOptions.map((option) => (
-														<option key={option.id} value={option.id}>
-															{option.label}
-														</option>
-													))}
-												</select>
+													aria-labelledby="profile-target-lang-label"
+												/>
 											</div>
 										</div>
 
 										{/* Primary / Target preference (used when target is Auto) */}
 										<div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
 											<div className="flex flex-col gap-1">
-												<label className={fieldLabelClassName} htmlFor="profile-primary-lang">
+												<label className={fieldLabelClassName} id="profile-primary-lang-label">
 													{t("translate.profiles.primaryLang")}
 												</label>
-												<select
-													id="profile-primary-lang"
-													className={selectClassName}
+												<SelectField
 													value={draft.primaryLang}
+													onValueChange={(value) => updateDraft({ primaryLang: (value ?? "en") as LanguageId })}
+													options={LANGUAGE_IDS.map((id) => ({
+														value: id,
+														label: t(`translate.languages.${id}`),
+														disabled: id === draft.preferredTargetLang,
+													}))}
 													disabled={savePending}
-													onChange={(event) => {
-														updateDraft({ primaryLang: event.currentTarget.value as LanguageId });
-													}}
-												>
-													{LANGUAGE_IDS.map((id) => (
-														<option key={id} value={id} disabled={id === draft.preferredTargetLang}>
-															{t(`translate.languages.${id}`)}
-														</option>
-													))}
-												</select>
+													aria-labelledby="profile-primary-lang-label"
+												/>
 											</div>
 											<div className="flex flex-col gap-1">
-												<label className={fieldLabelClassName} htmlFor="profile-preferred-target-lang">
+												<label className={fieldLabelClassName} id="profile-preferred-target-lang-label">
 													{t("translate.profiles.preferredTargetLang")}
 												</label>
-												<select
-													id="profile-preferred-target-lang"
-													className={selectClassName}
+												<SelectField
 													value={draft.preferredTargetLang}
+													onValueChange={(value) => updateDraft({ preferredTargetLang: (value ?? "en") as LanguageId })}
+													options={LANGUAGE_IDS.map((id) => ({
+														value: id,
+														label: t(`translate.languages.${id}`),
+														disabled: id === draft.primaryLang,
+													}))}
 													disabled={savePending}
-													onChange={(event) => {
-														updateDraft({ preferredTargetLang: event.currentTarget.value as LanguageId });
-													}}
-												>
-													{LANGUAGE_IDS.map((id) => (
-														<option key={id} value={id} disabled={id === draft.primaryLang}>
-															{t(`translate.languages.${id}`)}
-														</option>
-													))}
-												</select>
+													aria-labelledby="profile-preferred-target-lang-label"
+												/>
 											</div>
 										</div>
 										<p className="text-table-header text-neutral">{t("translate.profiles.langPrefHint")}</p>
@@ -841,66 +819,65 @@ function TranslateProfilesPage() {
 									{/* Models */}
 									<div className={sectionDividerClassName}>
 										<div className="flex flex-col gap-1">
-											<label className={fieldLabelClassName} htmlFor="profile-primary-model">
+											<label className={fieldLabelClassName} id="profile-primary-model-label">
 												{t("translate.profiles.primaryModel")}
 											</label>
-											<select
-												id="profile-primary-model"
-												className={selectClassName}
+											<SelectField
 												value={draft.primaryModelId}
-												disabled={savePending || modelsLoading || modelOptions.length === 0}
-												onChange={(event) => {
-													const nextPrimary = event.currentTarget.value;
+												onValueChange={(value) => {
+													const nextPrimary = value ?? "";
 													updateDraft({
 														primaryModelId: nextPrimary,
 														fallbackModelIds: draft.fallbackModelIds.filter((id) => id !== nextPrimary),
 													});
 												}}
-											>
-												{modelsLoading ? (
-													<option value="">{t("translate.modelLoading")}</option>
-												) : modelOptions.length === 0 ? (
-													<option value="">{t("translate.modelEmpty")}</option>
-												) : (
-													modelOptions.map((option) => (
-														<option key={option.id} value={option.id}>
-															{option.label}
-														</option>
-													))
-												)}
-											</select>
+												options={
+													modelsLoading || modelOptions.length === 0
+														? []
+														: modelOptions.map((option) => ({ value: option.id, label: option.label }))
+												}
+												disabled={savePending || modelsLoading || modelOptions.length === 0}
+												placeholder={
+													modelsLoading
+														? t("translate.modelLoading")
+														: modelOptions.length === 0
+															? t("translate.modelEmpty")
+															: undefined
+												}
+												aria-labelledby="profile-primary-model-label"
+											/>
 											{!modelsLoading && modelOptions.length === 0 ? (
 												<p className="text-body-tight text-neutral">{t("translate.noModelsHint")}</p>
 											) : null}
 										</div>
 
 										<div className="flex flex-col gap-1">
-											<label className={fieldLabelClassName} htmlFor="profile-detection-model">
+											<label className={fieldLabelClassName} id="profile-detection-model-label">
 												{t("translate.profiles.detectionModel")}
 											</label>
-											<select
-												id="profile-detection-model"
-												className={selectClassName}
+											<SelectField
 												value={draft.languageDetectionModelId}
+												onValueChange={(value) => updateDraft({ languageDetectionModelId: value ?? "" })}
+												options={[
+													{ value: "", label: t("translate.profiles.detectionModelUsePrimary") },
+													...modelOptions.map((option) => ({ value: option.id, label: option.label })),
+												]}
+												extraOptions={
+													draft.languageDetectionModelId &&
+													!modelOptions.some((o) => o.id === draft.languageDetectionModelId)
+														? [
+																{
+																	value: draft.languageDetectionModelId,
+																	label:
+																		modelLabelById.get(draft.languageDetectionModelId) ??
+																		draft.languageDetectionModelId,
+																},
+															]
+														: undefined
+												}
 												disabled={savePending || modelsLoading || modelOptions.length === 0}
-												onChange={(event) => {
-													updateDraft({ languageDetectionModelId: event.currentTarget.value });
-												}}
-											>
-												<option value="">{t("translate.profiles.detectionModelUsePrimary")}</option>
-												{modelOptions.map((option) => (
-													<option key={option.id} value={option.id}>
-														{option.label}
-													</option>
-												))}
-												{/* Keep orphaned ids selectable until user changes them. */}
-												{!modelOptions.some((option) => option.id === draft.languageDetectionModelId) &&
-												draft.languageDetectionModelId ? (
-													<option value={draft.languageDetectionModelId}>
-														{modelLabelById.get(draft.languageDetectionModelId) ?? draft.languageDetectionModelId}
-													</option>
-												) : null}
-											</select>
+												aria-labelledby="profile-detection-model-label"
+											/>
 											<p className="text-body-tight text-neutral">{t("translate.profiles.detectionModelHint")}</p>
 										</div>
 
@@ -925,27 +902,24 @@ function TranslateProfilesPage() {
 															<div className="flex size-control-height shrink-0 items-center justify-center border border-line bg-surface-2 text-code-inline font-bold text-on-surface">
 																{index + 1}
 															</div>
-															<select
-																className={`${selectClassName} min-w-0 flex-1`}
+															<SelectField
+																className="flex h-control-height min-w-0 flex-1 items-center justify-between gap-2 select-none rounded-none border border-line bg-surface px-3 text-body-tight font-normal text-on-surface hover:not-data-disabled:bg-surface-2 data-popup-open:bg-surface-2 focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface data-disabled:border-disabled data-disabled:text-disabled"
 																value={modelId}
+																onValueChange={(value) => setFallbackAt(index, value ?? "")}
+																options={modelOptions.map((option) => ({
+																	value: option.id,
+																	label: option.label,
+																}))}
+																extraOptions={
+																	modelId && !modelOptions.some((o) => o.id === modelId)
+																		? [{ value: modelId, label: modelLabelById.get(modelId) ?? modelId }]
+																		: undefined
+																}
 																disabled={savePending}
 																aria-label={t("translate.profiles.fallbackItemAria", {
 																	index: index + 1,
 																})}
-																onChange={(event) => {
-																	setFallbackAt(index, event.currentTarget.value);
-																}}
-															>
-																{modelOptions.map((option) => (
-																	<option key={option.id} value={option.id}>
-																		{option.label}
-																	</option>
-																))}
-																{/* Keep orphaned ids selectable until user changes them. */}
-																{!modelOptions.some((option) => option.id === modelId) && modelId ? (
-																	<option value={modelId}>{modelLabelById.get(modelId) ?? modelId}</option>
-																) : null}
-															</select>
+															/>
 															<Button
 																type="button"
 																className={squareIconButtonClassName}

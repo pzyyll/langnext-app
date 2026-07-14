@@ -21,10 +21,10 @@ import {
 	inputClassName,
 	outlineButtonClassName,
 	primaryButtonClassName,
-	selectClassName,
 	switchRootClassName,
 	switchThumbClassName,
 } from "../../components/ui";
+import { SelectField } from "../../components/SelectField";
 import { modelKeys, providerKeys } from "../../query/keys";
 import { providerListOptions, providerModelsOptions } from "../../query/options";
 import {
@@ -684,13 +684,6 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
 	}
 
 	const defaultBaseUrl = getDefaultBaseUrl(adapterId);
-	// Keep the current selection visible if the saved adapter is not in the catalog.
-	const adapterSelectOptions = useMemo(() => {
-		if (ADAPTER_OPTIONS.some((option) => option.id === adapterId)) {
-			return ADAPTER_OPTIONS;
-		}
-		return [...ADAPTER_OPTIONS, { id: adapterId, label: adapterId, defaultBaseUrl: null }];
-	}, [adapterId]);
 	const tokenDisabled = provider.credentialKind === "none" || credentialAction === "clear";
 	const tokenPlaceholder =
 		credentialAction === "clear"
@@ -816,27 +809,26 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
 					) : null}
 					<div className="space-y-6">
 						<div>
-							<label className="mb-1 block text-body-tight font-medium text-on-surface" htmlFor="provider-api-type">
+							<label className="mb-1 block text-body-tight font-medium text-on-surface" id="provider-api-type-label">
 								{t("models.apiTypeLabel")}
 							</label>
-							<select
-								id="provider-api-type"
-								className={selectClassName}
+							<SelectField
 								value={adapterId}
-								onChange={(event) => {
-									setAdapterId(event.currentTarget.value);
+								onValueChange={(value) => {
+									setAdapterId(value ?? ADAPTER_OPTIONS[0]?.id ?? "");
 									setFormDirty(true);
 									setSaveSuccess(false);
 									clearConnectionTestResult();
 								}}
+								options={ADAPTER_OPTIONS.map((option) => ({ value: option.id, label: option.label }))}
+								extraOptions={
+									adapterId && !ADAPTER_OPTIONS.some((o) => o.id === adapterId)
+										? [{ value: adapterId, label: adapterId }]
+										: undefined
+								}
 								disabled={connectionFormDisabled}
-							>
-								{adapterSelectOptions.map((option) => (
-									<option key={option.id} value={option.id}>
-										{option.label}
-									</option>
-								))}
-							</select>
+								aria-labelledby="provider-api-type-label"
+							/>
 						</div>
 
 						<div>

@@ -12,8 +12,8 @@ import {
 	inputClassName,
 	outlineButtonClassName,
 	primaryButtonClassName,
-	selectClassName,
 } from "../../components/ui";
+import { SelectField } from "../../components/SelectField";
 import { useToast } from "../../components/toast/useToast";
 import { saveProviderInstance } from "../../storage/client";
 import { getIpcErrorMessage } from "../../storage/errors";
@@ -140,24 +140,16 @@ function AddProviderForm({ onCreated }: AddProviderFormProps) {
 			</div>
 
 			<div className="flex flex-col gap-1">
-				<label className="text-body-tight font-medium text-on-surface" htmlFor="add-provider-adapter">
+				<label className="text-body-tight font-medium text-on-surface" id="add-provider-adapter-label">
 					{t("models.apiTypeLabel")}
 				</label>
-				<select
-					id="add-provider-adapter"
-					className={selectClassName}
+				<SelectField
 					value={adapterId}
-					onChange={(event) => {
-						setAdapterId(event.currentTarget.value);
-					}}
+					onValueChange={(value) => setAdapterId(value ?? ADAPTER_OPTIONS[0]?.id ?? "")}
+					options={ADAPTER_OPTIONS.map((option) => ({ value: option.id, label: option.label }))}
 					disabled={pending}
-				>
-					{ADAPTER_OPTIONS.map((option) => (
-						<option key={option.id} value={option.id}>
-							{option.label}
-						</option>
-					))}
-				</select>
+					aria-labelledby="add-provider-adapter-label"
+				/>
 			</div>
 
 			<div className="flex flex-col gap-1">
@@ -181,22 +173,20 @@ function AddProviderForm({ onCreated }: AddProviderFormProps) {
 			</div>
 
 			<div className="flex flex-col gap-1">
-				<label className="text-body-tight font-medium text-on-surface" htmlFor="add-provider-credential-kind">
+				<label className="text-body-tight font-medium text-on-surface" id="add-provider-credential-kind-label">
 					{t("models.credentialKind")}
 				</label>
-				<select
-					id="add-provider-credential-kind"
-					className={selectClassName}
+				<SelectField
 					value={credentialKind}
-					onChange={(event) => {
-						setCredentialKind(event.currentTarget.value as CredentialKind);
-					}}
+					onValueChange={(value) => setCredentialKind((value ?? "api_key") as CredentialKind)}
+					options={[
+						{ value: "api_key", label: t("models.credentialApiKey") },
+						{ value: "bearer", label: t("models.credentialBearer") },
+						{ value: "none", label: t("models.credentialNone") },
+					]}
 					disabled={pending}
-				>
-					<option value="api_key">{t("models.credentialApiKey")}</option>
-					<option value="bearer">{t("models.credentialBearer")}</option>
-					<option value="none">{t("models.credentialNone")}</option>
-				</select>
+					aria-labelledby="add-provider-credential-kind-label"
+				/>
 			</div>
 
 			<div className="flex flex-col gap-1">

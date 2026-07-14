@@ -11,8 +11,8 @@ import {
 	inputClassName,
 	outlineButtonClassName,
 	primaryButtonClassName,
-	selectClassName,
 } from "../../components/ui";
+import { SelectField } from "../../components/SelectField";
 import { useToast } from "../../components/toast/useToast";
 import { saveManualModel } from "../../storage/client";
 import { getIpcErrorMessage } from "../../storage/errors";
@@ -145,25 +145,19 @@ function AddManualModelForm({ providerId, onCreated }: AddManualModelFormProps) 
 			</div>
 
 			<div className="flex flex-col gap-1">
-				<label className="text-body-tight font-medium text-on-surface" htmlFor="add-model-api-type">
+				<label className="text-body-tight font-medium text-on-surface" id="add-model-api-type-label">
 					{t("models.apiTypeLabel")}
 				</label>
-				<select
-					id="add-model-api-type"
-					className={selectClassName}
+				<SelectField
 					value={adapterId}
-					onChange={(event) => {
-						setAdapterId(event.currentTarget.value);
-					}}
+					onValueChange={(value) => setAdapterId(value ?? "")}
+					options={[
+						{ value: "", label: t("models.apiTypeInherit") },
+						...ADAPTER_OPTIONS.map((option) => ({ value: option.id, label: option.label })),
+					]}
 					disabled={pending}
-				>
-					<option value="">{t("models.apiTypeInherit")}</option>
-					{ADAPTER_OPTIONS.map((option) => (
-						<option key={option.id} value={option.id}>
-							{option.label}
-						</option>
-					))}
-				</select>
+					aria-labelledby="add-model-api-type-label"
+				/>
 				<p className="text-xs text-neutral">{t("models.apiTypeModelHint")}</p>
 			</div>
 

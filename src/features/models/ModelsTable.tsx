@@ -9,10 +9,10 @@ import {
 	checkboxClassName,
 	iconButtonClassName,
 	inputClassName,
-	selectClassName,
 	switchRootClassName,
 	switchThumbClassName,
 } from "../../components/ui";
+import { SelectField } from "../../components/SelectField";
 import type { ProviderModelDto } from "../../storage/types";
 import { getAdapterLabel } from "./adapterOptions";
 import {
@@ -108,21 +108,16 @@ export function ModelsTable({
 					/>
 				</div>
 				<div className="w-full sm:w-40">
-					<label className="sr-only" htmlFor="models-enabled-filter">
-						{t("models.filterEnabled")}
-					</label>
-					<select
-						id="models-enabled-filter"
-						className={selectClassName}
+					<SelectField
 						value={enabledFilter}
-						onChange={(event) => {
-							handleEnabledFilterChange(event.currentTarget.value);
-						}}
-					>
-						<option value="all">{t("common.all")}</option>
-						<option value="enabled">{t("common.enabled")}</option>
-						<option value="disabled">{t("common.disabled")}</option>
-					</select>
+						onValueChange={(value) => handleEnabledFilterChange(value ?? "all")}
+						options={[
+							{ value: "all", label: t("common.all") },
+							{ value: "enabled", label: t("common.enabled") },
+							{ value: "disabled", label: t("common.disabled") },
+						]}
+						aria-label={t("models.filterEnabled")}
+					/>
 				</div>
 			</div>
 

@@ -13,8 +13,8 @@ import {
 	inputClassName,
 	outlineButtonClassName,
 	primaryButtonClassName,
-	selectClassName,
 } from "../../components/ui";
+import { SelectField } from "../../components/SelectField";
 import { useToast } from "../../components/toast/useToast";
 import { updateModelConfig } from "../../storage/client";
 import { getIpcErrorMessage } from "../../storage/errors";
@@ -102,13 +102,6 @@ function EditModelConfigForm({ model, onSaved }: EditModelConfigFormProps) {
 	const [pending, setPending] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 
-	const adapterOptions = useMemo(() => {
-		if (adapterId && !ADAPTER_OPTIONS.some((option) => option.id === adapterId)) {
-			return [...ADAPTER_OPTIONS, { id: adapterId, label: getAdapterLabel(adapterId) }];
-		}
-		return ADAPTER_OPTIONS;
-	}, [adapterId]);
-
 	const displayNamePlaceholder = model.remoteDisplayName?.trim() || t("common.optional");
 
 	async function handleSubmit(event: React.SyntheticEvent<HTMLFormElement>) {
@@ -178,26 +171,25 @@ function EditModelConfigForm({ model, onSaved }: EditModelConfigFormProps) {
 				<div className="space-y-2">
 					<label
 						className="block text-label-sm font-bold uppercase tracking-widest text-neutral"
-						htmlFor="edit-model-api-type"
+						id="edit-model-api-type-label"
 					>
 						{t("models.apiTypeLabel")}
 					</label>
-					<select
-						id="edit-model-api-type"
-						className={selectClassName}
+					<SelectField
 						value={adapterId}
-						onChange={(event) => {
-							setAdapterId(event.currentTarget.value);
-						}}
+						onValueChange={(value) => setAdapterId(value ?? "")}
+						options={[
+							{ value: "", label: t("models.apiTypeInherit") },
+							...ADAPTER_OPTIONS.map((option) => ({ value: option.id, label: option.label })),
+						]}
+						extraOptions={
+							adapterId && !ADAPTER_OPTIONS.some((o) => o.id === adapterId)
+								? [{ value: adapterId, label: getAdapterLabel(adapterId) }]
+								: undefined
+						}
 						disabled={pending}
-					>
-						<option value="">{t("models.apiTypeInherit")}</option>
-						{adapterOptions.map((option) => (
-							<option key={option.id} value={option.id}>
-								{option.label}
-							</option>
-						))}
-					</select>
+						aria-labelledby="edit-model-api-type-label"
+					/>
 				</div>
 
 				<div className="space-y-2">

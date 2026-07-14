@@ -14,6 +14,7 @@ import IconMaterialSymbolsLightVolumeUp from "~icons/material-symbols-light/volu
 import IconPepiconsPrintEnter from "~icons/pepicons-print/enter";
 import { useToast } from "../../components/toast/useToast";
 import { iconButtonClassName } from "../../components/ui";
+import { SelectField } from "../../components/SelectField";
 import { shouldApplyProfileResult } from "../../query/profileApplyGuard";
 import {
 	allProviderModelsOptions,
@@ -741,80 +742,71 @@ function TranslatePage() {
 			<div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border border-line bg-surface-2 px-gutter py-2">
 				<div className="flex min-w-0 flex-wrap items-center gap-gutter">
 					<div className="flex items-center gap-2">
-						<label className="text-label-sm text-neutral uppercase" htmlFor="translate-profile">
+						<label className="text-label-sm text-neutral uppercase" id="translate-profile-label">
 							{t("translate.profileLabel")}
 						</label>
-						<select
-							id="translate-profile"
+						<SelectField
 							className={`${compactSelectClassName} max-w-xs`}
 							value={resolvedProfileId}
-							disabled={profileSelectDisabled || isTranslating}
-							aria-label={t("translate.profileAria")}
-							onChange={(event) => {
-								void applyProfile(event.currentTarget.value);
+							onValueChange={(value) => {
+								void applyProfile(value ?? "");
 							}}
-						>
-							<option value="">{profilesLoading ? t("translate.profileLoading") : t("translate.profileNone")}</option>
-							{profiles.map((profile) => (
-								<option key={profile.id} value={profile.id}>
-									{profile.name}
-								</option>
-							))}
-						</select>
+							options={[
+								{ value: "", label: t("translate.profileNone") },
+								...profiles.map((profile) => ({ value: profile.id, label: profile.name })),
+							]}
+							disabled={profileSelectDisabled || isTranslating}
+							placeholder={profilesLoading ? t("translate.profileLoading") : undefined}
+							aria-label={t("translate.profileAria")}
+							aria-labelledby="translate-profile-label"
+							compact
+						/>
 					</div>
 
 					<div className="hidden h-6 w-px bg-outline-variant sm:block" aria-hidden />
 
 					<div className="flex items-center gap-2">
-						<label className="text-label-sm text-neutral uppercase" htmlFor="translate-model">
+						<label className="text-label-sm text-neutral uppercase" id="translate-model-label">
 							{t("translate.modelLabel")}
 						</label>
-						<select
-							id="translate-model"
+						<SelectField
 							className={`${compactSelectClassName} max-w-xs`}
 							value={resolvedModelId}
+							onValueChange={(value) => setSelectedModelId(value ?? "")}
+							options={
+								modelsLoading || modelOptions.length === 0
+									? []
+									: modelOptions.map((option) => ({ value: option.id, label: option.label }))
+							}
 							disabled={modelSelectDisabled || isTranslating}
+							placeholder={
+								modelsLoading
+									? t("translate.modelLoading")
+									: modelOptions.length === 0
+										? t("translate.modelEmpty")
+										: undefined
+							}
 							aria-label={t("translate.modelAria")}
-							onChange={(event) => {
-								setSelectedModelId(event.currentTarget.value);
-							}}
-						>
-							{modelsLoading ? (
-								<option value="">{t("translate.modelLoading")}</option>
-							) : modelOptions.length === 0 ? (
-								<option value="">{t("translate.modelEmpty")}</option>
-							) : (
-								modelOptions.map((option) => (
-									<option key={option.id} value={option.id}>
-										{option.label}
-									</option>
-								))
-							)}
-						</select>
+							aria-labelledby="translate-model-label"
+							compact
+						/>
 					</div>
 
 					<div className="hidden h-6 w-px bg-outline-variant sm:block" aria-hidden />
 
 					<div className="flex flex-wrap items-center gap-1">
-						<label className="sr-only" htmlFor="translate-source-lang">
-							{t("translate.sourceLanguage")}
-						</label>
-						<select
-							id="translate-source-lang"
+						<SelectField
 							className={compactSelectClassName}
 							value={sourceLang}
-							disabled={isTranslating}
-							onChange={(event) => {
-								setSourceLang(event.currentTarget.value as SourceLanguageId);
+							onValueChange={(value) => {
+								setSourceLang((value ?? "auto") as SourceLanguageId);
 								setDetectedSourceLang(null);
 							}}
-						>
-							{sourceLanguageOptions.map((option) => (
-								<option key={option.id} value={option.id}>
-									{option.label}
-								</option>
-							))}
-						</select>
+							options={sourceLanguageOptions.map((option) => ({ value: option.id, label: option.label }))}
+							disabled={isTranslating}
+							aria-label={t("translate.sourceLanguage")}
+							compact
+						/>
 
 						<Button
 							type="button"
@@ -826,24 +818,15 @@ function TranslatePage() {
 							<IconMaterialSymbolsLightSwapHoriz className="size-5" aria-hidden />
 						</Button>
 
-						<label className="sr-only" htmlFor="translate-target-lang">
-							{t("translate.targetLanguage")}
-						</label>
-						<select
-							id="translate-target-lang"
+						<SelectField
 							className={compactSelectClassName}
 							value={targetLang}
+							onValueChange={(value) => setTargetLang((value ?? "en") as SelectableLanguageId)}
+							options={targetLanguageOptions.map((option) => ({ value: option.id, label: option.label }))}
 							disabled={isTranslating}
-							onChange={(event) => {
-								setTargetLang(event.currentTarget.value as SelectableLanguageId);
-							}}
-						>
-							{targetLanguageOptions.map((option) => (
-								<option key={option.id} value={option.id}>
-									{option.label}
-								</option>
-							))}
-						</select>
+							aria-label={t("translate.targetLanguage")}
+							compact
+						/>
 					</div>
 				</div>
 			</div>

@@ -21,10 +21,6 @@ export const iconButtonClassName =
 export const inputClassName =
 	"h-control-height w-full rounded-none border border-line bg-surface px-3 text-body-tight font-normal text-on-surface placeholder:text-neutral focus:outline-2 focus:-outline-offset-1 focus:outline-on-surface disabled:border-disabled disabled:text-disabled";
 
-/** Native select controls */
-export const selectClassName =
-	"h-control-height w-full rounded-none border border-line bg-surface px-3 text-body-tight font-normal text-on-surface focus:outline-2 focus:-outline-offset-1 focus:outline-on-surface disabled:border-disabled disabled:text-disabled";
-
 /** Native checkboxes */
 export const checkboxClassName =
 	"size-4 shrink-0 rounded-none border border-line bg-surface text-on-surface accent-on-surface focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-on-surface disabled:border-disabled disabled:opacity-50";
