@@ -6,14 +6,14 @@ import { createFileRoute } from "@tanstack/react-router";
 import { Button } from "@base-ui/react/button";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useTranslation } from "react-i18next";
-import IconMaterialSymbolsLightArrowForward from "~icons/material-symbols-light/arrow-forward";
 import IconMaterialSymbolsLightClose from "~icons/material-symbols-light/close";
 import IconMaterialSymbolsLightContentCopy from "~icons/material-symbols-light/content-copy";
+import IconMaterialSymbolsLightStopCircleOutline from "~icons/material-symbols-light/stop-circle-outline";
 import IconMaterialSymbolsLightSwapHoriz from "~icons/material-symbols-light/swap-horiz";
-import IconMaterialSymbolsLightVerifiedUser from "~icons/material-symbols-light/verified-user";
 import IconMaterialSymbolsLightVolumeUp from "~icons/material-symbols-light/volume-up";
+import IconPepiconsPrintEnter from "~icons/pepicons-print/enter";
 import { useToast } from "../../components/toast/useToast";
-import { iconButtonClassName, outlineButtonClassName, primaryButtonClassName } from "../../components/ui";
+import { iconButtonClassName } from "../../components/ui";
 import { shouldApplyProfileResult } from "../../query/profileApplyGuard";
 import {
 	allProviderModelsOptions,
@@ -61,7 +61,6 @@ export const Route = createFileRoute("/translate/")({
 /** Viewport minus titlebar-height and main vertical padding (2 × gutter). */
 const LAYOUT_HEIGHT_CLASS = "h-[calc(100dvh-var(--spacing-titlebar-height)-2*var(--spacing-gutter))]";
 
-const MAX_SOURCE_CHARS = 5000;
 /** Auto-dismiss for the user-cancel "Stopped" toast. */
 const STOPPED_TOAST_MS = 2000;
 
@@ -878,17 +877,21 @@ function TranslatePage() {
 								</span>
 							) : null}
 						</div>
-						<Button
-							type="button"
-							className={iconButtonClassName}
-							aria-label={t("translate.clearSource")}
-							onClick={() => {
-								void clearSource();
-							}}
-							disabled={!sourceText && !outputText && !errorMessage && !isTranslating}
-						>
-							<IconMaterialSymbolsLightClose className="size-4" aria-hidden />
-						</Button>
+						{sourceText ? (
+							<Button
+								type="button"
+								className={iconButtonClassName}
+								aria-label={t("translate.clearSource")}
+								onClick={() => {
+									void clearSource();
+								}}
+							>
+								<IconMaterialSymbolsLightClose
+									className="size-4 transition-transform duration-150 hover:scale-110"
+									aria-hidden
+								/>
+							</Button>
+						) : null}
 					</div>
 
 					<div className="relative min-h-0 flex-1">
@@ -900,7 +903,6 @@ function TranslatePage() {
 							className="h-full min-h-40 w-full resize-none rounded-none border-0 bg-transparent p-gutter text-body-md text-on-surface placeholder:text-neutral focus:outline-none lg:min-h-0"
 							placeholder={t("translate.sourcePlaceholder")}
 							spellCheck={false}
-							maxLength={MAX_SOURCE_CHARS}
 							value={sourceText}
 							disabled={isTranslating}
 							onChange={(event) => {
@@ -912,36 +914,36 @@ function TranslatePage() {
 								setLatencyMs(null);
 							}}
 						/>
-						<div className="pointer-events-none absolute bottom-3 left-3 text-label-sm text-neutral">
-							{t("translate.charCount", { count: charCount, max: MAX_SOURCE_CHARS })}
-						</div>
 					</div>
 
-					<div className="flex shrink-0 justify-end gap-2 border-t border-line bg-surface p-gutter">
+					<div className="flex shrink-0 items-center bg-surface p-gutter">
+						{charCount > 0 ? <span className="text-label-sm text-neutral tabular-nums">{charCount}</span> : null}
+						<div className="flex-1" />
 						{isTranslating ? (
 							<Button
 								type="button"
-								className={outlineButtonClassName}
+								className={iconButtonClassName}
 								aria-label={t("translate.stopAria")}
 								onClick={() => {
 									void stopTranslation();
 								}}
 							>
-								{t("translate.stop")}
+								<IconMaterialSymbolsLightStopCircleOutline className="size-4" aria-hidden />
 							</Button>
-						) : null}
-						<Button
-							type="button"
-							className={primaryButtonClassName}
-							disabled={!canTranslate}
-							focusableWhenDisabled
-							onClick={() => {
-								void handleTranslate();
-							}}
-						>
-							<span>{isTranslating ? t("translate.translating") : t("translate.translate")}</span>
-							<IconMaterialSymbolsLightArrowForward className="size-4" aria-hidden />
-						</Button>
+						) : (
+							<Button
+								type="button"
+								className={iconButtonClassName}
+								disabled={!canTranslate}
+								focusableWhenDisabled
+								aria-label={t("translate.translate")}
+								onClick={() => {
+									void handleTranslate();
+								}}
+							>
+								<IconPepiconsPrintEnter className="size-4" aria-hidden />
+							</Button>
+						)}
 					</div>
 				</section>
 
@@ -983,42 +985,40 @@ function TranslatePage() {
 						) : (
 							<p className="text-body-md text-neutral italic select-none">{t("translate.outputPlaceholder")}</p>
 						)}
-
-						{activeModelLabel ? (
-							<p className="text-label-sm text-neutral">{t("translate.activeModel", { model: activeModelLabel })}</p>
-						) : null}
-
-						<div className="mt-auto space-y-4">
-							<div className="h-px w-full bg-outline-variant" />
-							<div className="grid grid-cols-2 gap-4">
-								<div className="border border-outline-variant bg-surface p-2">
-									<p className="mb-1 text-table-header text-neutral uppercase">{t("translate.confidence")}</p>
-									<div className="h-1 w-full overflow-hidden bg-surface-3">
-										<div
-											className="h-full bg-on-surface transition-all duration-1000"
-											style={{ width: `${confidencePercent}%` }}
-										/>
-									</div>
-								</div>
-								<div className="border border-outline-variant bg-surface p-2">
-									<p className="mb-1 text-table-header text-neutral uppercase">{t("translate.latency")}</p>
-									<p className="text-body-tight font-bold text-on-surface">
-										{latencyMs === null ? t("translate.latencyEmpty") : t("translate.latencyValue", { ms: latencyMs })}
-									</p>
-								</div>
-							</div>
-						</div>
 					</div>
 
-					<div className="flex shrink-0 flex-wrap items-center gap-4 border-t border-line bg-surface-2 p-gutter">
-						<Button type="button" className={outlineButtonClassName} disabled>
-							{t("translate.addToGlossary")}
-						</Button>
+					<div className="flex shrink-0 flex-wrap items-center gap-4 bg-surface-2 p-gutter">
 						<div className="flex-1" />
-						<div className="flex items-center gap-2 text-neutral">
-							<IconMaterialSymbolsLightVerifiedUser className="size-4" aria-hidden />
-							<span className="text-table-header uppercase">{t("translate.aiGenerated")}</span>
-						</div>
+						{activeModelLabel || confidencePercent > 0 || latencyMs !== null ? (
+							<div
+								className="flex min-w-0 flex-wrap items-center justify-end gap-x-2 gap-y-1 text-label-sm text-neutral"
+								role="status"
+							>
+								{activeModelLabel ? (
+									<span className="min-w-0 truncate" title={activeModelLabel}>
+										{t("translate.activeModel", { model: activeModelLabel })}
+									</span>
+								) : null}
+								{activeModelLabel && confidencePercent > 0 ? (
+									<span className="text-outline-variant select-none" aria-hidden>
+										·
+									</span>
+								) : null}
+								{confidencePercent > 0 ? (
+									<span className="shrink-0 tabular-nums">
+										{t("translate.confidenceValue", { percent: confidencePercent })}
+									</span>
+								) : null}
+								{(activeModelLabel || confidencePercent > 0) && latencyMs !== null ? (
+									<span className="text-outline-variant select-none" aria-hidden>
+										·
+									</span>
+								) : null}
+								{latencyMs !== null ? (
+									<span className="shrink-0 tabular-nums">{t("translate.latencyValue", { ms: latencyMs })}</span>
+								) : null}
+							</div>
+						) : null}
 					</div>
 				</section>
 			</div>
