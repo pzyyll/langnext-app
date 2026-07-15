@@ -14,6 +14,6 @@ pub const MODELS_CHANGED: &str = "data://models-changed";
 /// Broadcast a coarse data-change notification; log emit failures for observability.
 pub fn emit_data_changed(app: &AppHandle, event: &str) {
 	if let Err(error) = app.emit(event, serde_json::json!({})) {
-		eprintln!("data_change_emit_failed event={event} error={error}");
+		log::error!("data_change_emit_failed event={event} error={error}");
 	}
 }

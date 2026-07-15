@@ -603,7 +603,8 @@ fn map_reqwest_error(err: reqwest::Error) -> TransportError {
 
 fn log_transport_error(adapter_id: &str, err: TransportError) {
 	// Only adapter id and bounded code — never secrets, URLs with query, or bodies.
-	eprintln!("model_transport_error adapter_id={adapter_id} code={}", err.code());
+	// External request failures are expected operational conditions, not internal faults.
+	log::warn!("model_transport_error adapter_id={adapter_id} code={}", err.code());
 }
 
 /// Read a response body with a hard size cap, streaming chunks (no full `bytes()` first).

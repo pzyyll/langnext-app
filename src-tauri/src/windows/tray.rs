@@ -34,7 +34,7 @@ pub fn setup<R: Runtime>(app: &tauri::AppHandle<R>) {
 			if let Some(state) = app.try_state::<AppState>() {
 				if let Err(e) = state.device_state.flush() {
 					// Preserve previous durable state; do not silently discard the error.
-					eprintln!("device_state_final_flush_failed error={}", e);
+					log::error!("device_state_final_flush_failed error={}", e);
 				}
 			}
 			app.exit(0);
@@ -48,7 +48,7 @@ pub fn setup<R: Runtime>(app: &tauri::AppHandle<R>) {
 		} = event
 		{
 			if button == tauri::tray::MouseButton::Left && button_state == tauri::tray::MouseButtonState::Up {
-				println!("Tray left click");
+				log::debug!("tray_left_click");
 				crate::windows::main::show(tray_icon.app_handle());
 			}
 		}

@@ -11,6 +11,7 @@ import { bootstrapStorage } from "./storage/bootstrap";
 import { ToastProvider } from "./components/toast/ToastProvider";
 import { queryClient } from "./query/client";
 import { QueryEventSync } from "./query/QueryEventSync";
+import { initLogger } from "./logger";
 import "./styles.css";
 
 // Immediate pre-paint cache application (index.html may already have set this).
@@ -36,6 +37,8 @@ declare module "@tanstack/react-router" {
 }
 
 async function mount() {
+	// Attach Rust log streaming before UI work so early setup logs appear in webview console.
+	await initLogger();
 	// Authoritative SQLite reconciliation in Tauri; cache-only in browser dev.
 	// Also initializes i18n from AppSettings.uiLanguage / local cache.
 	await bootstrapStorage();

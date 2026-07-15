@@ -29,6 +29,7 @@ dist-ssr
 src-tauri/target
 
 # Agent
+.worktrees/
 .agents/*
 !.agents/skills/
 .agents/skills/*

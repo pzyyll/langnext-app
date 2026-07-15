@@ -104,7 +104,8 @@ pub fn finalize_operation(
 
 	if let Some(account) = target {
 		if let Err(e) = vault.delete(&account) {
-			eprintln!(
+			// owner_id is a stable UUID, not a secret; never log vault payloads or tokens.
+			log::warn!(
 				"cleanup_deferred op={} owner_kind={} owner_id={} error_code={}",
 				op.id,
 				op.owner_kind.as_str(),
@@ -148,7 +149,7 @@ pub fn recover_all(db: &Database, vault: &dyn CredentialVault) -> RecoveryReport
 	let ops = match db.read(credential_operations::list_unfinished) {
 		Ok(ops) => ops,
 		Err(e) => {
-			eprintln!("recovery_list_failed error_code={}", error_code(&e));
+			log::error!("recovery_list_failed error_code={}", error_code(&e));
 			return RecoveryReport::default();
 		}
 	};
@@ -162,7 +163,7 @@ pub fn recover_all(db: &Database, vault: &dyn CredentialVault) -> RecoveryReport
 				report.deferred_owners.push((op.owner_kind, op.owner_id.clone()));
 			}
 			Err(e) => {
-				eprintln!("recovery_finalize_failed op={} error_code={}", op.id, error_code(&e));
+				log::error!("recovery_finalize_failed op={} error_code={}", op.id, error_code(&e));
 				report.deferred += 1;
 				report.deferred_owners.push((op.owner_kind, op.owner_id.clone()));
 			}

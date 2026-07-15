@@ -13,6 +13,7 @@ mod device_state;
 mod domain;
 mod error;
 mod events;
+mod logging;
 mod panic;
 mod repositories;
 mod services;
@@ -23,6 +24,9 @@ mod windows;
 use state::AppState;
 
 fn app_setup<R: Runtime>(app: &mut tauri::App<R>) -> Result<(), Box<dyn std::error::Error>> {
+	// Plugin setup has already installed the global logger before this hook runs.
+	logging::log_startup();
+
 	let app_data_dir = app
 		.path()
 		.app_data_dir()
@@ -33,6 +37,7 @@ fn app_setup<R: Runtime>(app: &mut tauri::App<R>) -> Result<(), Box<dyn std::err
 	// Device state is needed by window setup for geometry restore.
 	app.manage(state);
 	windows::setup(app.handle());
+	log::info!("app_setup_complete windows_and_tray_ready");
 
 	// Global hotkey opens the always-on-top Quick Translate window.
 	// Registration failure (e.g. conflict with another app) must not block startup; tray still works.
@@ -53,11 +58,11 @@ fn app_setup<R: Runtime>(app: &mut tauri::App<R>) -> Result<(), Box<dyn std::err
 						})
 						.build(),
 				) {
-					eprintln!("global_shortcut_plugin_failed error={err}");
+					log::error!("global_shortcut_plugin_failed error={err}");
 				}
 			}
 			Err(err) => {
-				eprintln!("global_shortcut_register_failed error={err}");
+				log::error!("global_shortcut_register_failed error={err}");
 			}
 		}
 	}
@@ -82,11 +87,11 @@ fn app_setup<R: Runtime>(app: &mut tauri::App<R>) -> Result<(), Box<dyn std::err
 			Ok(_) => {
 				// startup returns Option<JoinHandle<()>>, not Result; dropping detaches the worker.
 				if kmhook_enginer::startup(Some(true)).is_none() {
-					eprintln!("kmhook_startup_no_worker_thread");
+					log::warn!("kmhook_startup_no_worker_thread");
 				}
 			}
 			Err(err) => {
-				eprintln!("kmhook_double_ctrl_c_register_failed error={err}");
+				log::error!("kmhook_double_ctrl_c_register_failed error={err}");
 			}
 		}
 	}
@@ -96,8 +101,12 @@ fn app_setup<R: Runtime>(app: &mut tauri::App<R>) -> Result<(), Box<dyn std::err
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+	// Panic hook uses eprintln! as a bootstrap fallback; release also logs a fixed panic_event.
 	panic::install_panic_hook();
+	// Install logging as early as possible so subsequent plugin/setup work is captured.
+	// Logger is not active until this plugin's setup runs; pre-plugin failures stay on stderr.
 	tauri::Builder::default()
+		.plugin(logging::plugin())
 		.plugin(tauri_plugin_opener::init())
 		.invoke_handler(tauri::generate_handler![
 			cmds::snap::show_snap_overlay,

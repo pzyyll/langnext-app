@@ -109,7 +109,7 @@ pub fn show<R: Runtime>(app: &tauri::AppHandle<R>) {
 		}
 		None => {
 			let url = tauri::WebviewUrl::App("/".into());
-			println!("Creating main window with URL: {:?}", url.to_string());
+			log::debug!("creating_main_window route=/");
 
 			let mut web_build = WebviewWindowBuilder::new(app, consts::WIN_LABEL_MAIN, url);
 

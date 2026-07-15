@@ -16,7 +16,7 @@ where
 		Ok(Err(err)) => Err(IpcError::from(err)),
 		Err(_join_err) => {
 			// Never interpolate join error or panic payload into IPC.
-			eprintln!("blocking_join_failed command={command}");
+			log::error!("blocking_join_failed command={command}");
 			Err(IpcError::new(INTERNAL_ERROR_CODE, INTERNAL_ERROR_MESSAGE))
 		}
 	}
@@ -37,7 +37,7 @@ pub fn map_blocking_result<T>(
 		Ok(Ok(value)) => Ok(value),
 		Ok(Err(err)) => Err(IpcError::from(err)),
 		Err(_join_err) => {
-			eprintln!("blocking_join_failed command={command}");
+			log::error!("blocking_join_failed command={command}");
 			Err(join_failure_ipc_error())
 		}
 	}

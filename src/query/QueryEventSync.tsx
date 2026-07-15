@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { listen } from "@tauri-apps/api/event";
+import { logger } from "../logger";
 import { createDebouncedInvalidator } from "./debouncedInvalidator";
 import { DATA_MODELS_CHANGED, DATA_PROVIDERS_CHANGED, DATA_TRANSLATION_PROFILES_CHANGED } from "./events";
 import { modelKeys, profileKeys, providerKeys } from "./keys";
@@ -39,7 +40,7 @@ export function QueryEventSync() {
 				listen: (event, handler) => listen(event, handler),
 				isCancelled: () => cancelled,
 				onError: (event, error) => {
-					console.error(`[QueryEventSync] failed to listen for ${event}`, error);
+					logger.error(`query_event_listen_failed event=${event}`, error);
 				},
 				events: [
 					{

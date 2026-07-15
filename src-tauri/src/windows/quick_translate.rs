@@ -7,16 +7,14 @@ use tauri::{Manager, Runtime, WebviewWindowBuilder};
 /// Disable the webview's default right-click context menu (Windows WebView2).
 #[cfg(windows)]
 fn disable_default_context_menu<R: Runtime>(window: &tauri::WebviewWindow<R>) {
-	let _ = window.with_webview(|platform_webview| {
-		unsafe {
-			let Ok(core) = platform_webview.controller().CoreWebView2() else {
-				return;
-			};
-			let Ok(settings) = core.Settings() else {
-				return;
-			};
-			let _ = settings.SetAreDefaultContextMenusEnabled(false);
-		}
+	let _ = window.with_webview(|platform_webview| unsafe {
+		let Ok(core) = platform_webview.controller().CoreWebView2() else {
+			return;
+		};
+		let Ok(settings) = core.Settings() else {
+			return;
+		};
+		let _ = settings.SetAreDefaultContextMenusEnabled(false);
 	});
 }
 
@@ -38,17 +36,15 @@ pub fn show<R: Runtime>(app: &tauri::AppHandle<R>) {
 			let _ = win.set_always_on_top(true);
 			win.show().expect("failed to show quick translate window");
 			if win.is_minimized().unwrap_or(false) {
-				win.unminimize()
-					.expect("failed to unminimize quick translate window");
+				win.unminimize().expect("failed to unminimize quick translate window");
 			}
 			let _ = win.set_focus();
 		}
 		None => {
 			let url = tauri::WebviewUrl::App("/quick-translate".into());
-			println!("Creating quick translate window with URL: {:?}", url.to_string());
+			log::debug!("creating_quick_translate_window route=/quick-translate");
 
-			let mut web_build =
-				WebviewWindowBuilder::new(app, consts::WIN_LABEL_QUICK_TRANSLATE, url);
+			let mut web_build = WebviewWindowBuilder::new(app, consts::WIN_LABEL_QUICK_TRANSLATE, url);
 
 			#[cfg(windows)]
 			{
@@ -68,14 +64,11 @@ pub fn show<R: Runtime>(app: &tauri::AppHandle<R>) {
 
 			#[cfg(not(windows))]
 			{
-				web_build = web_build.initialization_script(
-					"document.addEventListener('contextmenu', event => event.preventDefault());",
-				);
+				web_build =
+					web_build.initialization_script("document.addEventListener('contextmenu', event => event.preventDefault());");
 			}
 
-			let win = web_build
-				.build()
-				.expect("failed to create quick translate window");
+			let win = web_build.build().expect("failed to create quick translate window");
 
 			#[cfg(windows)]
 			disable_default_context_menu(&win);

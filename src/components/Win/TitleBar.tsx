@@ -11,6 +11,7 @@ import IconClarityMinusLine from "~icons/clarity/minus-line";
 import IconClarityWindowMaxLine from "~icons/clarity/window-max-line";
 import IconClarityWindowRestoreLine from "~icons/clarity/window-restore-line";
 import IconClarityCloseLine from "~icons/clarity/close-line";
+import { logger } from "../../logger";
 
 export type TitleBarProps = {
 	title?: string;
@@ -75,7 +76,7 @@ export function TitleBar({
 				.setFocus()
 				.then(() => invoke("show_snap_overlay"))
 				.catch((err: unknown) => {
-					console.error("show_snap_overlay failed", err);
+					logger.error("show_snap_overlay failed", err);
 				});
 		}, SNAP_HOVER_MS);
 	}, [appWindow, clearSnapTimer]);
