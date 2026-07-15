@@ -17,10 +17,10 @@ export const Route = createFileRoute("/settings")({
 });
 
 const optionBaseClassName =
-	"flex min-h-10 flex-1 items-center gap-2 rounded-none border border-line bg-surface px-3 text-body-tight leading-none font-normal text-neutral transition-colors duration-150 select-none hover:bg-surface-2 hover:text-on-surface focus-within:outline-2 focus-within:-outline-offset-1 focus-within:outline-on-surface";
+	"flex min-h-10 flex-1 items-center gap-2 rounded-none border border-line bg-surface px-2 text-body-tight leading-none font-normal text-neutral transition-colors duration-150 select-none hover:bg-surface-2 hover:text-on-surface focus-within:outline-2 focus-within:-outline-offset-1 focus-within:outline-on-surface";
 
 const optionActiveClassName =
-	"flex min-h-10 flex-1 items-center gap-2 rounded-none border border-line bg-surface-2 px-3 text-body-tight leading-none font-normal text-on-surface transition-colors duration-150 select-none focus-within:outline-2 focus-within:-outline-offset-1 focus-within:outline-on-surface";
+	"flex min-h-10 flex-1 items-center gap-2 rounded-none border border-line bg-surface-2 px-2 text-body-tight leading-none font-normal text-on-surface transition-colors duration-150 select-none focus-within:outline-2 focus-within:-outline-offset-1 focus-within:outline-on-surface";
 
 function SettingsPage() {
 	const { t } = useTranslation();

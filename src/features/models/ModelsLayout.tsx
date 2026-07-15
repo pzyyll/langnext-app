@@ -120,8 +120,8 @@ function SortableChannelItem({
 		: "w-6 shrink-0 cursor-grab text-neutral group-hover:text-on-surface active:cursor-grabbing";
 
 	const linkClass = active
-		? `flex min-w-0 flex-1 items-center gap-2 rounded-none px-3 py-2 text-body-tight font-bold text-on-surface ${animationClass}`
-		: `flex min-w-0 flex-1 items-center gap-2 rounded-none px-3 py-2 text-body-tight text-neutral group-hover:text-on-surface ${animationClass}`;
+		? `flex min-w-0 flex-1 items-center gap-2 rounded-none px-2 py-2 text-body-tight font-bold text-on-surface ${animationClass}`
+		: `flex min-w-0 flex-1 items-center gap-2 rounded-none px-2 py-2 text-body-tight text-neutral group-hover:text-on-surface ${animationClass}`;
 
 	return (
 		<li ref={ref} className={rowClass}>

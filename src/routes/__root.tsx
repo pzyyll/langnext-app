@@ -14,10 +14,10 @@ export const Route = createRootRoute({
 const SIDEBAR_WIDTH_CLASS = "w-sidebar-width";
 
 const navLinkClassName =
-	"flex h-10 w-full items-center rounded-none bg-transparent px-3 text-body-tight leading-none font-normal uppercase tracking-wide text-neutral transition-colors duration-150 select-none hover:bg-surface-2 hover:text-on-surface focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface";
+	"flex h-10 w-full items-center rounded-none bg-transparent px-2 text-body-tight leading-none font-normal uppercase tracking-wide text-neutral transition-colors duration-150 select-none hover:bg-surface-2 hover:text-on-surface focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface";
 
 const navLinkActiveClassName =
-	"flex h-10 w-full items-center rounded-none border border-line bg-surface-2 px-3 text-body-tight leading-none font-normal uppercase tracking-wide text-on-surface transition-colors duration-150 select-none focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface";
+	"flex h-10 w-full items-center rounded-none border border-line bg-surface-2 px-2 text-body-tight leading-none font-normal uppercase tracking-wide text-on-surface transition-colors duration-150 select-none focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface";
 
 function RootLayout() {
 	const pathname = useRouterState({ select: (state) => state.location.pathname });

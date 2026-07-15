@@ -30,7 +30,7 @@ export type SelectFieldProps = {
 };
 
 const triggerBase =
-	"flex h-control-height items-center justify-between gap-2 select-none rounded-none border border-line bg-surface px-3 text-body-tight font-normal text-on-surface hover:not-data-disabled:bg-surface-2 data-popup-open:bg-surface-2 focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface data-disabled:border-disabled data-disabled:text-disabled";
+	"flex h-control-height items-center justify-between gap-2 select-none rounded-none border border-line bg-surface pl-2 pr-1 text-body-tight font-normal text-on-surface hover:not-data-disabled:bg-surface-2 data-popup-open:bg-surface-2 focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface data-disabled:border-disabled data-disabled:text-disabled";
 
 const popupClassName =
 	"min-w-(--anchor-width) origin-(--transform-origin) border border-line bg-surface text-on-surface shadow-frame transition-[scale,opacity] duration-100 ease-out data-ending-style:scale-[0.98] data-ending-style:opacity-0 data-starting-style:scale-[0.98] data-starting-style:opacity-0";

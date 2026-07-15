@@ -38,7 +38,7 @@ const popupClassName =
 	"min-w-(--anchor-width) origin-(--transform-origin) border border-line bg-surface text-on-surface shadow-frame transition-[scale,opacity] duration-100 ease-out data-ending-style:scale-[0.98] data-ending-style:opacity-0 data-starting-style:scale-[0.98] data-starting-style:opacity-0";
 
 const searchInputClassName =
-	"h-control-height w-full border-0 border-b border-line bg-surface px-3 text-body-tight font-normal text-on-surface placeholder:text-neutral focus:outline-none disabled:text-disabled";
+	"h-control-height w-full border-0 border-b border-line bg-surface px-2 text-body-tight font-normal text-on-surface placeholder:text-neutral focus:outline-none disabled:text-disabled";
 
 const itemClassName =
 	"grid cursor-default grid-cols-[1rem_1fr] items-center gap-2 py-1.5 pr-3 pl-2.5 text-body-tight outline-hidden select-none data-highlighted:bg-on-surface data-highlighted:text-surface data-disabled:text-disabled";

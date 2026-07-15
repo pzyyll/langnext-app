@@ -566,7 +566,7 @@ function TranslateProfilesPage() {
 	return (
 		<div className={`flex min-h-0 flex-col overflow-hidden border border-line bg-surface ${LAYOUT_HEIGHT_CLASS}`}>
 			{/* Page header */}
-			<header className="flex h-16 shrink-0 items-center justify-between gap-3 border-b border-line bg-surface px-3">
+			<header className="flex h-16 shrink-0 items-center justify-between gap-3 border-b border-line bg-surface px-2">
 				<div className="min-w-0">
 					<h1 className="text-headline-sm font-bold tracking-tight text-on-surface uppercase">
 						{t("translate.profiles.title")}
@@ -913,7 +913,7 @@ function TranslateProfilesPage() {
 																{index + 1}
 															</div>
 															<SelectField
-																className="flex h-control-height min-w-0 flex-1 items-center justify-between gap-2 select-none rounded-none border border-line bg-surface px-3 text-body-tight font-normal text-on-surface hover:not-data-disabled:bg-surface-2 data-popup-open:bg-surface-2 focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface data-disabled:border-disabled data-disabled:text-disabled"
+																className="flex h-control-height min-w-0 flex-1 items-center justify-between gap-2 select-none rounded-none border border-line bg-surface px-2 text-body-tight font-normal text-on-surface hover:not-data-disabled:bg-surface-2 data-popup-open:bg-surface-2 focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface data-disabled:border-disabled data-disabled:text-disabled"
 																value={modelId}
 																onValueChange={(value) => setFallbackAt(index, value ?? "")}
 																options={modelOptions.map((option) => ({
@@ -954,7 +954,7 @@ function TranslateProfilesPage() {
 															</Button>
 															<Button
 																type="button"
-																className={`${outlineButtonClassName} h-control-height px-3 text-table-header font-bold uppercase hover:not-data-disabled:border-error hover:not-data-disabled:bg-error hover:not-data-disabled:text-on-error`}
+																className={`${outlineButtonClassName} h-control-height px-2 text-table-header font-bold uppercase hover:not-data-disabled:border-error hover:not-data-disabled:bg-error hover:not-data-disabled:text-on-error`}
 																disabled={savePending}
 																aria-label={t("translate.profiles.removeFallback")}
 																onClick={() => {

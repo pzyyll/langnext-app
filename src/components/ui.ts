@@ -3,7 +3,7 @@
 
 /** Outline button using semantic theme colors */
 export const outlineButtonClassName =
-	"inline-flex h-control-height items-center justify-center gap-2 rounded-none border border-line bg-surface px-3 text-body-tight leading-none whitespace-nowrap font-normal text-on-surface select-none hover:not-data-disabled:bg-surface-2 active:not-data-disabled:bg-surface-3 focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface data-disabled:border-disabled data-disabled:text-disabled disabled:border-disabled disabled:text-disabled";
+	"inline-flex h-control-height items-center justify-center gap-2 rounded-none border border-line bg-surface px-2 text-body-tight leading-none whitespace-nowrap font-normal text-on-surface select-none hover:not-data-disabled:bg-surface-2 active:not-data-disabled:bg-surface-3 focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface data-disabled:border-disabled data-disabled:text-disabled disabled:border-disabled disabled:text-disabled";
 
 /** Primary solid button (Save) */
 export const primaryButtonClassName =
