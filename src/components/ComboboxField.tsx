@@ -34,11 +34,16 @@ export type ComboboxFieldProps = {
 const triggerBase =
 	"group flex h-control-height items-center justify-between gap-2 select-none rounded-none border border-line bg-surface pl-2 pr-1 text-body-tight font-normal text-on-surface data-placeholder:text-neutral hover:not-data-disabled:bg-surface-2 data-popup-open:bg-surface-2 focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface data-disabled:border-disabled data-disabled:text-disabled";
 
+// Popup is search row + list; --available-height is for the whole popup, so list max-height
+// subtracts the fixed search row (control-height) and borders — same pattern as Base UI docs.
 const popupClassName =
-	"min-w-(--anchor-width) origin-(--transform-origin) border border-line bg-surface text-on-surface shadow-frame transition-[scale,opacity] duration-100 ease-out data-ending-style:scale-[0.98] data-ending-style:opacity-0 data-starting-style:scale-[0.98] data-starting-style:opacity-0";
+	"[--input-container-height:var(--spacing-control-height)] min-w-(--anchor-width) max-w-(--available-width) origin-(--transform-origin) border border-line bg-surface text-on-surface shadow-frame transition-[scale,opacity] duration-100 ease-out data-ending-style:scale-[0.98] data-ending-style:opacity-0 data-starting-style:scale-[0.98] data-starting-style:opacity-0";
 
 const searchInputClassName =
 	"h-control-height w-full border-0 border-b border-line bg-surface px-2 text-body-tight font-normal text-on-surface placeholder:text-neutral focus:outline-none disabled:text-disabled";
+
+const listClassName =
+	"max-h-[min(22.5rem,calc(var(--available-height)-var(--input-container-height)-2px))] overflow-y-auto overscroll-contain py-1 scroll-py-1 outline-0 data-empty:p-0";
 
 const itemClassName =
 	"grid cursor-default grid-cols-[1rem_1fr] items-center gap-2 py-1.5 pr-3 pl-2.5 text-body-tight outline-hidden select-none data-highlighted:bg-on-surface data-highlighted:text-surface data-disabled:text-disabled";
@@ -106,7 +111,14 @@ export function ComboboxField({
 				</Combobox.Icon>
 			</Combobox.Trigger>
 			<Combobox.Portal>
-				<Combobox.Positioner className="outline-hidden z-50 select-none" align="start" side="bottom" sideOffset={4}>
+				<Combobox.Positioner
+					className="outline-hidden z-50 select-none"
+					align="start"
+					side="bottom"
+					sideOffset={4}
+					collisionPadding={8}
+					positionMethod="fixed"
+				>
 					<Combobox.Popup className={popupClassName}>
 						<Combobox.Input
 							placeholder={placeholder}
@@ -117,7 +129,7 @@ export function ComboboxField({
 						<Combobox.Empty>
 							<div className="py-3 pr-3 pl-2.5 text-body-tight text-neutral">{emptyText}</div>
 						</Combobox.Empty>
-						<Combobox.List className="max-h-(--available-height) overflow-y-auto py-1 scroll-py-1 outline-0 data-empty:p-0">
+						<Combobox.List className={listClassName}>
 							{(item: ComboboxOption) => (
 								<Combobox.Item key={item.value} value={item} disabled={item.disabled} className={itemClassName}>
 									<Combobox.ItemIndicator className="col-start-1">

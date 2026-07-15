@@ -33,7 +33,7 @@ const triggerBase =
 	"flex h-control-height items-center justify-between gap-2 select-none rounded-none border border-line bg-surface pl-2 pr-1 text-body-tight font-normal text-on-surface hover:not-data-disabled:bg-surface-2 data-popup-open:bg-surface-2 focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface data-disabled:border-disabled data-disabled:text-disabled";
 
 const popupClassName =
-	"min-w-(--anchor-width) origin-(--transform-origin) border border-line bg-surface text-on-surface shadow-frame transition-[scale,opacity] duration-100 ease-out data-ending-style:scale-[0.98] data-ending-style:opacity-0 data-starting-style:scale-[0.98] data-starting-style:opacity-0";
+	"min-w-(--anchor-width) max-w-(--available-width) origin-(--transform-origin) border border-line bg-surface text-on-surface shadow-frame transition-[scale,opacity] duration-100 ease-out data-ending-style:scale-[0.98] data-ending-style:opacity-0 data-starting-style:scale-[0.98] data-starting-style:opacity-0";
 
 const itemClassName =
 	"grid cursor-default grid-cols-[1rem_1fr] items-center gap-2 py-1.5 pr-3 pl-2.5 text-body-tight outline-hidden select-none data-highlighted:bg-on-surface data-highlighted:text-surface data-disabled:text-disabled";
@@ -79,9 +79,11 @@ export function SelectField({
 					side="bottom"
 					align="start"
 					sideOffset={4}
+					collisionPadding={8}
+					positionMethod="fixed"
 				>
 					<Select.Popup className={popupClassName}>
-						<Select.List className="max-h-(--available-height) overflow-y-auto py-1 scroll-py-1">
+						<Select.List className="max-h-[min(22.5rem,var(--available-height))] overflow-y-auto overscroll-contain py-1 scroll-py-1">
 							{allOptions.map((option) => (
 								<Select.Item
 									key={option.value}
