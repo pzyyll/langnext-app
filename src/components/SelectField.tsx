@@ -59,18 +59,11 @@ export function SelectField({
 	}, [options, extraOptions]);
 
 	// Always keep triggerBase (flex + icon alignment); className only adds/overrides extras.
-	const triggerClassName = [compact ? triggerBase : `${triggerBase} w-full`, className]
-		.filter(Boolean)
-		.join(" ");
+	const triggerClassName = [compact ? triggerBase : `${triggerBase} w-full`, className].filter(Boolean).join(" ");
 
 	return (
 		<Select.Root value={value} onValueChange={onValueChange} items={allOptions} disabled={disabled}>
-			<Select.Trigger
-				id={id}
-				className={triggerClassName}
-				aria-label={ariaLabel}
-				aria-labelledby={ariaLabelledby}
-			>
+			<Select.Trigger id={id} className={triggerClassName} aria-label={ariaLabel} aria-labelledby={ariaLabelledby}>
 				<Select.Value
 					placeholder={placeholder}
 					className="min-w-0 flex-1 truncate text-left data-placeholder:text-neutral"
@@ -88,7 +81,7 @@ export function SelectField({
 					sideOffset={4}
 				>
 					<Select.Popup className={popupClassName}>
-						<Select.List className="max-h-[var(--available-height)] overflow-y-auto py-1 scroll-py-1">
+						<Select.List className="max-h-(--available-height) overflow-y-auto py-1 scroll-py-1">
 							{allOptions.map((option) => (
 								<Select.Item
 									key={option.value}

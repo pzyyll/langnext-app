@@ -76,6 +76,8 @@ mise run tauri:build   # Package the desktop application
 
 Prefer named Tailwind tokens over arbitrary values when an equivalent exists (for example, `w-md` instead of `w-[28rem]`). Use the container scale (`3xs` through `7xl`) for `w-*`, `min-w-*`, and `max-w-*` utilities.
 
+Use the Tailwind v4 canonical syntax for CSS custom properties: `-(--var-name)` instead of `[var(--var-name)]` (for example, `max-h-(--available-height)` instead of `max-h-[var(--available-height)]`).
+
 ### Base UI
 
 Use Base UI for every UI primitive with an equivalent component (including inputs, selects, checkboxes, radios, switches, tabs, accordions, popovers, and tooltips). Only build a primitive with Tailwind CSS when Base UI has no equivalent.
