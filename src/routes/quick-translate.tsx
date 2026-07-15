@@ -6,12 +6,14 @@ import { createFileRoute } from "@tanstack/react-router";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Button } from "@base-ui/react/button";
+import { Collapsible } from "@base-ui/react/collapsible";
 import { Menu } from "@base-ui/react/menu";
 import { useTranslation } from "react-i18next";
 import IconMaterialSymbolsLightAdd from "~icons/material-symbols-light/add";
 import IconMaterialSymbolsLightClose from "~icons/material-symbols-light/close";
 import IconMaterialSymbolsLightContentCopy from "~icons/material-symbols-light/content-copy";
 import IconMaterialSymbolsLightCheck from "~icons/material-symbols-light/check";
+import IconMaterialSymbolsLightExpandMore from "~icons/material-symbols-light/expand-more";
 import IconMaterialSymbolsLightSwapHoriz from "~icons/material-symbols-light/swap-horiz";
 import { TitleBar } from "../components/Win/TitleBar";
 import { ComboboxField } from "../components/ComboboxField";
@@ -153,6 +155,8 @@ function QuickTranslatePage() {
 	const [slots, setSlots] = useState<Slot[]>(sessionSeed.slots);
 	const [results, setResults] = useState<Record<string, SlotResult>>({});
 	const [copiedSlotId, setCopiedSlotId] = useState<string | null>(null);
+	/** Slot ids that are currently collapsed; absent ids default to expanded. */
+	const [collapsedSlotIds, setCollapsedSlotIds] = useState<Set<string>>(() => new Set());
 	const [detectedSourceLang, setDetectedSourceLang] = useState<LanguageId | null>(null);
 	const [isPinned, setIsPinned] = useState(false);
 
@@ -493,11 +497,36 @@ function QuickTranslatePage() {
 			delete next[slotId];
 			return next;
 		});
+		setCollapsedSlotIds((prev) => {
+			if (!prev.has(slotId)) {
+				return prev;
+			}
+			const next = new Set(prev);
+			next.delete(slotId);
+			return next;
+		});
 		const requestId = requestIdsRef.current.get(slotId);
 		if (requestId) {
 			requestIdsRef.current.delete(slotId);
 			void cancelTranslate(requestId).catch(() => {});
 		}
+	}
+
+	function setSlotOpen(slotId: string, open: boolean) {
+		setCollapsedSlotIds((prev) => {
+			const isCollapsed = prev.has(slotId);
+			if (open && isCollapsed) {
+				const next = new Set(prev);
+				next.delete(slotId);
+				return next;
+			}
+			if (!open && !isCollapsed) {
+				const next = new Set(prev);
+				next.add(slotId);
+				return next;
+			}
+			return prev;
+		});
 	}
 
 	function updateSlotProfile(slotId: string, profileId: string) {
@@ -689,15 +718,40 @@ function QuickTranslatePage() {
 							const profile = profileById.get(slot.profileId);
 							const result = results[slot.id] ?? emptyResult;
 							const isCopied = copiedSlotId === slot.id;
+							const isOpen = !collapsedSlotIds.has(slot.id);
 							const orphanOption =
 								!profile && slot.profileId
 									? [{ value: slot.profileId, label: t("quickTranslate.missingProfile") }]
 									: undefined;
 
 							return (
-								<div key={slot.id} className="flex flex-col border border-line bg-surface">
-									<div className="flex h-8 items-center justify-between gap-2 border-b border-line bg-surface-container px-2">
-										<div className="min-w-0 flex-1">
+								<Collapsible.Root
+									key={slot.id}
+									open={isOpen}
+									onOpenChange={(open) => {
+										setSlotOpen(slot.id, open);
+									}}
+									className="flex flex-col border border-line bg-surface"
+								>
+									{/* Header is a div trigger so nested controls stay valid HTML. */}
+									<Collapsible.Trigger
+										nativeButton={false}
+										render={<div />}
+										className="group flex h-8 cursor-default items-center justify-between gap-2 border-b border-line bg-surface-container px-2 select-none focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface"
+									>
+										<IconMaterialSymbolsLightExpandMore
+											className="size-4 shrink-0 text-on-surface transition-transform duration-100 ease-out group-data-panel-open:rotate-180"
+											aria-hidden
+										/>
+										<div
+											className="min-w-0 flex-1"
+											onClick={(event) => {
+												event.stopPropagation();
+											}}
+											onPointerDown={(event) => {
+												event.stopPropagation();
+											}}
+										>
 											<SelectField
 												className="h-7 border-0 bg-transparent text-table-header font-bold tracking-tight uppercase hover:not-data-disabled:bg-transparent data-popup-open:bg-transparent"
 												value={slot.profileId}
@@ -713,7 +767,15 @@ function QuickTranslatePage() {
 												compact
 											/>
 										</div>
-										<div className="flex shrink-0 items-center gap-0.5">
+										<div
+											className="flex shrink-0 items-center gap-0.5"
+											onClick={(event) => {
+												event.stopPropagation();
+											}}
+											onPointerDown={(event) => {
+												event.stopPropagation();
+											}}
+										>
 											<Button
 												type="button"
 												className={iconButtonClassName}
@@ -740,25 +802,29 @@ function QuickTranslatePage() {
 												<IconMaterialSymbolsLightClose className="size-4" aria-hidden />
 											</Button>
 										</div>
-									</div>
-									<div className="p-3 text-body-md leading-relaxed text-on-surface">
-										{result.error ? (
-											<p className="whitespace-pre-wrap text-error select-text" role="alert">
-												{result.error}
-											</p>
-										) : result.text ? (
-											<p className="whitespace-pre-wrap select-text">{result.text}</p>
-										) : result.isTranslating ? (
-											<p className="text-neutral italic select-none" role="status">
-												{t("translate.translating")}
-											</p>
-										) : (
-											<p className="text-neutral italic select-none">
-												{sourceText.trim() ? t("quickTranslate.waiting") : t("quickTranslate.resultPlaceholder")}
-											</p>
-										)}
-									</div>
-								</div>
+									</Collapsible.Trigger>
+									<Collapsible.Panel className="h-(--collapsible-panel-height) overflow-hidden transition-[height] duration-150 ease-out data-ending-style:h-0 data-starting-style:h-0 [&[hidden]:not([hidden='until-found'])]:hidden">
+										<div className="p-3 text-body-md leading-relaxed text-on-surface">
+											{result.error ? (
+												<p className="whitespace-pre-wrap text-error select-text" role="alert">
+													{result.error}
+												</p>
+											) : result.text ? (
+												<p className="whitespace-pre-wrap select-text">{result.text}</p>
+											) : result.isTranslating ? (
+												<p className="text-neutral italic select-none" role="status">
+													{t("translate.translating")}
+												</p>
+											) : (
+												<p className="text-neutral italic select-none">
+													{sourceText.trim()
+														? t("quickTranslate.waiting")
+														: t("quickTranslate.resultPlaceholder")}
+												</p>
+											)}
+										</div>
+									</Collapsible.Panel>
+								</Collapsible.Root>
 							);
 						})
 					)}
