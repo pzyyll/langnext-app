@@ -62,6 +62,35 @@ fn app_setup<R: Runtime>(app: &mut tauri::App<R>) -> Result<(), Box<dyn std::err
 		}
 	}
 
+	// Double Ctrl+C opens Quick Translate (Windows only via kmhook).
+	// Uses a non-consuming raw-input path so a single Ctrl+C still copies.
+	// Registration or startup failure must not block app startup.
+	#[cfg(windows)]
+	{
+		use kmhook::enginer as kmhook_enginer;
+
+		// trigger count = 2; interval in ms (kmhook default is 400).
+		let app_handle = app.handle().clone();
+		match kmhook_enginer::add_global_shortcut_trigger(
+			"Ctrl+C",
+			move || {
+				windows::quick_translate::show(&app_handle);
+			},
+			2,
+			Some(400),
+		) {
+			Ok(_) => {
+				// startup returns Option<JoinHandle<()>>, not Result; dropping detaches the worker.
+				if kmhook_enginer::startup(Some(true)).is_none() {
+					eprintln!("kmhook_startup_no_worker_thread");
+				}
+			}
+			Err(err) => {
+				eprintln!("kmhook_double_ctrl_c_register_failed error={err}");
+			}
+		}
+	}
+
 	Ok(())
 }
 

@@ -70,6 +70,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "arraydeque"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d902e3d592a523def97af8f317b08ce16b7ab854c1985a0c671e6f15cebc236"
+
+[[package]]
+name = "arrayvec"
+version = "0.7.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d3fb67a6e08acf24fdeccbac2cb6ac4305825bd1f117462e0e6f2f193345ad56"
+
+[[package]]
 name = "async-broadcast"
 version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -569,6 +581,16 @@ checksum = "ba5a308b75df32fe02788e748662718f03fde005016435c444eea572398219fd"
 dependencies = [
  "bytes",
  "memchr",
+]
+
+[[package]]
+name = "concat-idents"
+version = "1.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f76990911f2267d837d9d0ad060aa63aaad170af40904b29461734c339030d4d"
+dependencies = [
+ "quote",
+ "syn 2.0.118",
 ]
 
 [[package]]
@@ -2181,6 +2203,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "keycode"
+version = "0.4.0"
+source = "git+https://github.com/pzyyll/keycode.git?branch=master#a89299e856842bc3b3310f16e2a523d3f93b5d69"
+dependencies = [
+ "arraydeque",
+ "arrayvec",
+ "bitflags 2.13.0",
+ "keycode_macro",
+]
+
+[[package]]
+name = "keycode_macro"
+version = "0.4.0"
+source = "git+https://github.com/pzyyll/keycode.git?branch=master#a89299e856842bc3b3310f16e2a523d3f93b5d69"
+dependencies = [
+ "anyhow",
+ "concat-idents",
+ "heck 0.5.0",
+ "proc-macro2",
+ "quote",
+]
+
+[[package]]
 name = "keyring"
 version = "4.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2202,11 +2247,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "kmhook"
+version = "0.1.0"
+source = "git+https://github.com/pzyyll/kmhook-rs.git?branch=main#ea87eac35ecb17ca96e8da4fc0ccab6219309125"
+dependencies = [
+ "bitflags 2.13.0",
+ "keycode",
+ "lazy_static",
+ "windows 0.61.3",
+]
+
+[[package]]
 name = "langnext-app"
 version = "0.1.0"
 dependencies = [
  "enigo",
  "keyring",
+ "kmhook",
  "reqwest",
  "rusqlite",
  "serde",
@@ -2222,6 +2279,12 @@ dependencies = [
  "url",
  "uuid",
 ]
+
+[[package]]
+name = "lazy_static"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 
 [[package]]
 name = "libappindicator"
