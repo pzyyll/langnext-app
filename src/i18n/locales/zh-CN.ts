@@ -18,6 +18,7 @@ const zhCN = {
 		cancel: "取消",
 		confirm: "确认",
 		close: "关闭",
+		clear: "清空",
 		save: "保存",
 		delete: "删除",
 		done: "完成",
@@ -35,6 +36,7 @@ const zhCN = {
 		testing: "测试中…",
 		syncing: "同步中…",
 		noMatches: "无匹配项",
+		placeholderEnglish: "英语",
 	},
 	theme: {
 		light: "浅色",

@@ -69,7 +69,7 @@ export function SelectField({
 					className="min-w-0 flex-1 truncate text-left data-placeholder:text-neutral"
 				/>
 				<Select.Icon className="size-4 shrink-0 rotate-180 transition-transform duration-200 ease-out data-popup-open:rotate-0">
-					<IconClarityAngleLine className="pointer-events-none size-4" />
+					<IconClarityAngleLine className="pointer-events-none" />
 				</Select.Icon>
 			</Select.Trigger>
 			<Select.Portal>

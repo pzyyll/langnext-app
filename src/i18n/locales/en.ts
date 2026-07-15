@@ -20,6 +20,7 @@ const en = {
 		cancel: "Cancel",
 		confirm: "Confirm",
 		close: "Close",
+		clear: "Clear",
 		save: "Save",
 		delete: "Delete",
 		done: "Done",
@@ -37,6 +38,7 @@ const en = {
 		testing: "Testing…",
 		syncing: "Syncing…",
 		noMatches: "No matches",
+		placeholderEnglish: "English",
 	},
 	theme: {
 		light: "Light",

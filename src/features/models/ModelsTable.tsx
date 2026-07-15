@@ -7,6 +7,7 @@ import { Input } from "@base-ui/react/input";
 import { Switch } from "@base-ui/react/switch";
 import { useTranslation } from "react-i18next";
 import IconMaterialSymbolsLightCheck from "~icons/material-symbols-light/check";
+import IconMaterialSymbolsLightClose from "~icons/material-symbols-light/close";
 import IconMaterialSymbolsLightEditSquareOutlineSharp from "~icons/material-symbols-light/edit-square-outline-sharp";
 import {
 	checkboxClassName,
@@ -98,18 +99,35 @@ export function ModelsTable({
 					<label className="sr-only" htmlFor="models-search">
 						{t("models.searchModels")}
 					</label>
-					<Input
-						id="models-search"
-						type="search"
-						className={inputClassName}
-						placeholder={t("models.searchPlaceholder")}
-						value={searchQuery}
-						spellCheck={false}
-						autoComplete="off"
-						onChange={(event) => {
-							setSearchQuery(event.currentTarget.value);
-						}}
-					/>
+					<div className="relative">
+						<Input
+							id="models-search"
+							type="search"
+							className={`${inputClassName} ${searchQuery ? "pr-9" : ""}`}
+							placeholder={t("models.searchPlaceholder")}
+							value={searchQuery}
+							spellCheck={false}
+							autoComplete="off"
+							onChange={(event) => {
+								setSearchQuery(event.currentTarget.value);
+							}}
+						/>
+						{searchQuery ? (
+							<Button
+								type="button"
+								className={`inline-flex size-4 shrink-0 cursor-default items-center justify-center rounded-none border-0 bg-transparent text-error/80 hover:text-error focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface data-disabled:text-disabled disabled:text-disabled group absolute top-1/2 right-1 -translate-y-1/2`}
+								aria-label={t("common.clear")}
+								onClick={() => {
+									setSearchQuery("");
+								}}
+							>
+								<IconMaterialSymbolsLightClose
+									className="pointer-events-none shrink-0 transition-transform duration-150 group-hover:scale-110"
+									aria-hidden
+								/>
+							</Button>
+						) : null}
+					</div>
 				</div>
 				<div className="w-full sm:w-40">
 					<SelectField

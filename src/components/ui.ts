@@ -19,7 +19,7 @@ export const iconButtonClassName =
 
 /** Base UI Input (text / password / search / number) */
 export const inputClassName =
-	"h-control-height w-full rounded-none border border-line bg-surface px-3 text-body-tight font-normal text-on-surface placeholder:text-neutral focus:outline-2 focus:-outline-offset-1 focus:outline-on-surface disabled:border-disabled disabled:text-disabled";
+	"h-control-height w-full rounded-none border border-line bg-surface px-2 text-body-tight font-normal text-on-surface placeholder:text-neutral focus:outline-2 focus:-outline-offset-1 focus:outline-on-surface disabled:border-disabled disabled:text-disabled";
 
 /** Base UI Checkbox.Root (outline/frame style, square) */
 export const checkboxClassName =
