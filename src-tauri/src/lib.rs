@@ -36,6 +36,7 @@ fn app_setup<R: Runtime>(app: &mut tauri::App<R>) -> Result<(), Box<dyn std::err
 
 	// Device state is needed by window setup for geometry restore.
 	app.manage(state);
+	app.manage(windows::quick_translate::QuickTranslateState::default());
 	windows::setup(app.handle());
 	log::info!("app_setup_complete windows_and_tray_ready");
 
@@ -53,7 +54,9 @@ fn app_setup<R: Runtime>(app: &mut tauri::App<R>) -> Result<(), Box<dyn std::err
 							if event.state == ShortcutState::Pressed
 								&& shortcut.matches(Modifiers::CONTROL | Modifiers::SHIFT, Code::KeyT)
 							{
-								windows::quick_translate::show(app);
+								if let Err(e) = windows::quick_translate::show(app) {
+									log::error!("quick_translate_show_failed error={e}");
+								}
 							}
 						})
 						.build(),
@@ -79,7 +82,7 @@ fn app_setup<R: Runtime>(app: &mut tauri::App<R>) -> Result<(), Box<dyn std::err
 		match kmhook_enginer::add_global_shortcut_trigger(
 			"Ctrl+C",
 			move || {
-				windows::quick_translate::show(&app_handle);
+				windows::quick_translate::try_show_on_cpcp(&app_handle);
 			},
 			2,
 			Some(400),
@@ -108,8 +111,10 @@ pub fn run() {
 	tauri::Builder::default()
 		.plugin(logging::plugin())
 		.plugin(tauri_plugin_opener::init())
+		.plugin(tauri_plugin_clipboard_manager::init())
 		.invoke_handler(tauri::generate_handler![
 			cmds::snap::show_snap_overlay,
+			windows::quick_translate::set_pin,
 			cmds::providers::list_provider_instances,
 			cmds::providers::save_provider_instance,
 			cmds::providers::set_provider_enabled,

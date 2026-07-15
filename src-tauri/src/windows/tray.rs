@@ -28,7 +28,9 @@ pub fn setup<R: Runtime>(app: &tauri::AppHandle<R>) {
 	let _ = tray_icon.set_menu(Some(menu));
 	tray_icon.on_menu_event(|app, event| match event.id.as_ref() {
 		"quick_translate" => {
-			crate::windows::quick_translate::show(app);
+			if let Err(e) = crate::windows::quick_translate::show(app) {
+				log::error!("quick_translate_show_failed error={e}");
+			}
 		}
 		"exit" => {
 			if let Some(state) = app.try_state::<AppState>() {

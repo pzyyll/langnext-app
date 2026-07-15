@@ -25,6 +25,7 @@
 		"core:window:allow-start-resize-dragging",
 		"core:window:allow-set-title",
 		"core:tray:default",
-		"global-shortcut:default"
+		"global-shortcut:default",
+		"clipboard-manager:default"
 	]
 }

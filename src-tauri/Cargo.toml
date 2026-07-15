@@ -19,7 +19,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon", "image-ico", "image-png"] }
+tauri = { version = "2", features = ["tray-icon", "image-ico", "image-png", "unstable"] }
 tauri-plugin-opener = "2"
 tauri-plugin-log = "2"
 log = "0.4"
@@ -35,9 +35,10 @@ tempfile = "3.27.0"
 reqwest = { version = "0.13", features = ["json"] }
 tokio = { version = "1", default-features = false, features = ["macros", "sync"] }
 
-# Desktop-only: global hotkey for the Quick Translate window.
+# Desktop-only: global hotkey and clipboard for the Quick Translate window.
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-global-shortcut = "2"
+tauri-plugin-clipboard-manager = "2"
 
 # Win+Z snap overlay for custom maximize hover (Windows only).
 # kmhook: low-level keyboard hooks for double Ctrl+C (Windows only).

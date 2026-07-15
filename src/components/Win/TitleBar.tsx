@@ -7,6 +7,8 @@ import { Button } from "@base-ui/react/button";
 import { useTranslation } from "react-i18next";
 import IconSvgsLnb from "~icons/svgs/lnb";
 import IconMaterialSymbolsLightClarifyOutlineSharp from "~icons/material-symbols-light/clarify-outline-sharp";
+import IconClarityPinLine from "~icons/clarity/pin-line";
+import IconClarityPinSolid from "~icons/clarity/pin-solid";
 import IconClarityMinusLine from "~icons/clarity/minus-line";
 import IconClarityWindowMaxLine from "~icons/clarity/window-max-line";
 import IconClarityWindowRestoreLine from "~icons/clarity/window-restore-line";
@@ -18,6 +20,10 @@ export type TitleBarProps = {
 	minimize?: boolean;
 	maximized?: boolean;
 	close?: boolean;
+	/** When true, shows a pin control that disables click-outside auto-close. */
+	pin?: boolean;
+	pinned?: boolean;
+	onPinChange?: (pinned: boolean) => void;
 	/** When set, shows a leading control to collapse/expand the app sidebar. */
 	sidebarOpen?: boolean;
 	onSidebarToggle?: () => void;
@@ -42,6 +48,9 @@ export function TitleBar({
 	minimize = true,
 	maximized = true,
 	close = true,
+	pin = false,
+	pinned = false,
+	onPinChange,
 	sidebarOpen,
 	onSidebarToggle,
 	className = "",
@@ -148,6 +157,25 @@ export function TitleBar({
 			</div>
 
 			<div className="relative z-10 flex h-full shrink-0 items-center">
+				{pin ? (
+					<button
+						type="button"
+						id="titlebar-pin"
+						className={`${controlButtonClassName}${pinned ? " bg-surface-3" : ""}`}
+						aria-label={pinned ? t("quickTranslate.unpin") : t("quickTranslate.pin")}
+						aria-pressed={pinned}
+						onClick={() => {
+							onPinChange?.(!pinned);
+						}}
+					>
+						{pinned ? (
+							<IconClarityPinSolid className="pointer-events-none size-4" />
+						) : (
+							<IconClarityPinLine className="pointer-events-none size-4" />
+						)}
+					</button>
+				) : null}
+
 				{minimize ? (
 					<button
 						type="button"

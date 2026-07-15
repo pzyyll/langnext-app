@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { Button } from "@base-ui/react/button";
 import { Menu } from "@base-ui/react/menu";
 import { useTranslation } from "react-i18next";
@@ -15,6 +17,7 @@ import { TitleBar } from "../components/Win/TitleBar";
 import { ComboboxField } from "../components/ComboboxField";
 import { SelectField } from "../components/SelectField";
 import { iconButtonClassName } from "../components/ui";
+import { QUICK_TRANSLATE_CLIPBOARD_TEXT } from "../query/events";
 import {
 	allProviderModelsOptions,
 	profileDetailOptions,
@@ -126,6 +129,10 @@ function primaryModelId(profile: TranslationProfileDto | undefined): string {
 
 const emptyResult: SlotResult = { text: "", error: null, isTranslating: false };
 
+function isTauriRuntime(): boolean {
+	return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+}
+
 const menuPopupClassName =
 	"min-w-48 origin-(--transform-origin) border border-line bg-surface text-on-surface shadow-frame transition-[scale,opacity] duration-100 ease-out data-ending-style:scale-[0.98] data-ending-style:opacity-0 data-starting-style:scale-[0.98] data-starting-style:opacity-0";
 
@@ -147,6 +154,7 @@ function QuickTranslatePage() {
 	const [results, setResults] = useState<Record<string, SlotResult>>({});
 	const [copiedSlotId, setCopiedSlotId] = useState<string | null>(null);
 	const [detectedSourceLang, setDetectedSourceLang] = useState<LanguageId | null>(null);
+	const [isPinned, setIsPinned] = useState(false);
 
 	const profilesQuery = useQuery(profileListOptions());
 	const providersQuery = useQuery(providerListOptions());
@@ -197,6 +205,42 @@ function QuickTranslatePage() {
 	useEffect(() => {
 		saveSession({ sourceLang, targetLang, slots });
 	}, [sourceLang, targetLang, slots]);
+
+	// Double Ctrl+C: backend emits clipboard text; set source so debounced auto-translate runs.
+	useEffect(() => {
+		if (!isTauriRuntime()) {
+			return;
+		}
+
+		let unlisten: (() => void) | undefined;
+		let cancelled = false;
+
+		void listen<string>(QUICK_TRANSLATE_CLIPBOARD_TEXT, (event) => {
+			if (cancelled) {
+				return;
+			}
+			setSourceText(event.payload ?? "");
+			setDetectedSourceLang(null);
+		}).then((fn) => {
+			if (cancelled) {
+				fn();
+				return;
+			}
+			unlisten = fn;
+		});
+
+		return () => {
+			cancelled = true;
+			unlisten?.();
+		};
+	}, []);
+
+	const handlePinChange = useCallback((next: boolean) => {
+		setIsPinned(next);
+		if (isTauriRuntime()) {
+			void invoke("set_pin", { isPin: next });
+		}
+	}, []);
 
 	const generationRef = useRef(0);
 	const requestIdsRef = useRef<Map<string, string>>(new Map());
@@ -280,9 +324,7 @@ function QuickTranslatePage() {
 				requestIdsRef.current.delete("__detect__");
 				if (!detected.ok || !isLanguageId(detected.languageId)) {
 					const message =
-						detected.errorCode === "cancelled"
-							? null
-							: detected.message || t("translate.errors.detectFailed");
+						detected.errorCode === "cancelled" ? null : detected.message || t("translate.errors.detectFailed");
 					if (message) {
 						setResults((prev) => {
 							const next = { ...prev };
@@ -513,9 +555,7 @@ function QuickTranslatePage() {
 
 	const profilesLoading = profilesQuery.isLoading;
 	const profilesError =
-		profilesQuery.error != null
-			? getIpcErrorMessage(profilesQuery.error, t("translate.profileLoadFailed"))
-			: null;
+		profilesQuery.error != null ? getIpcErrorMessage(profilesQuery.error, t("translate.profileLoadFailed")) : null;
 	const isTranslating = Object.values(results).some((result) => result.isTranslating);
 
 	return (
@@ -525,6 +565,9 @@ function QuickTranslatePage() {
 				minimize={false}
 				maximized={false}
 				close
+				pin
+				pinned={isPinned}
+				onPinChange={handlePinChange}
 				leading={
 					<Menu.Root>
 						<Menu.Trigger
@@ -711,9 +754,7 @@ function QuickTranslatePage() {
 											</p>
 										) : (
 											<p className="text-neutral italic select-none">
-												{sourceText.trim()
-													? t("quickTranslate.waiting")
-													: t("quickTranslate.resultPlaceholder")}
+												{sourceText.trim() ? t("quickTranslate.waiting") : t("quickTranslate.resultPlaceholder")}
 											</p>
 										)}
 									</div>
