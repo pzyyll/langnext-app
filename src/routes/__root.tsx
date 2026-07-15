@@ -1,5 +1,5 @@
 // ABOUTME: Root layout: titlebar, collapsible left sidebar, and outlet.
-// ABOUTME: Main content uses View Transitions; same-route clicks are ignored.
+// ABOUTME: Quick Translate uses a minimal shell; main content uses View Transitions.
 import { useState } from "react";
 import { Link, Outlet, createRootRoute, useRouterState } from "@tanstack/react-router";
 import { TanStackRouterDevtools } from "@tanstack/react-router-devtools";
@@ -19,10 +19,24 @@ const navLinkClassName =
 const navLinkActiveClassName =
 	"flex h-10 w-full items-center rounded-none border border-line bg-surface-2 px-2 text-body-tight leading-none font-normal uppercase tracking-wide text-on-surface transition-colors duration-150 select-none focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface";
 
+function isQuickTranslatePath(pathname: string): boolean {
+	return pathname === "/quick-translate" || pathname.startsWith("/quick-translate/");
+}
+
 function RootLayout() {
 	const pathname = useRouterState({ select: (state) => state.location.pathname });
 	const [sidebarOpen, setSidebarOpen] = useState(true);
 	const { t } = useTranslation();
+
+	// Secondary always-on-top window: no main sidebar chrome.
+	if (isQuickTranslatePath(pathname)) {
+		return (
+			<div className="root flex h-full min-h-0 flex-col bg-surface text-on-surface">
+				<Outlet />
+				{import.meta.env.DEV ? <TanStackRouterDevtools position="bottom-right" /> : null}
+			</div>
+		);
+	}
 
 	return (
 		<div className="root flex h-full min-h-0 flex-col bg-surface text-on-surface">

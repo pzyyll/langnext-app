@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from "./routes/__root"
 import { Route as TranslateRouteImport } from "./routes/translate"
 import { Route as SettingsRouteImport } from "./routes/settings"
+import { Route as QuickTranslateRouteImport } from "./routes/quick-translate"
 import { Route as ModelsRouteImport } from "./routes/models"
 import { Route as AboutRouteImport } from "./routes/about"
 import { Route as IndexRouteImport } from "./routes/index"
@@ -27,6 +28,11 @@ const TranslateRoute = TranslateRouteImport.update({
 const SettingsRoute = SettingsRouteImport.update({
   id: "/settings",
   path: "/settings",
+  getParentRoute: () => rootRouteImport,
+} as any)
+const QuickTranslateRoute = QuickTranslateRouteImport.update({
+  id: "/quick-translate",
+  path: "/quick-translate",
   getParentRoute: () => rootRouteImport,
 } as any)
 const ModelsRoute = ModelsRouteImport.update({
@@ -69,6 +75,7 @@ export interface FileRoutesByFullPath {
   "/": typeof IndexRoute
   "/about": typeof AboutRoute
   "/models": typeof ModelsRouteWithChildren
+  "/quick-translate": typeof QuickTranslateRoute
   "/settings": typeof SettingsRoute
   "/translate": typeof TranslateRouteWithChildren
   "/models/$providerId": typeof ModelsProviderIdRoute
@@ -79,6 +86,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   "/": typeof IndexRoute
   "/about": typeof AboutRoute
+  "/quick-translate": typeof QuickTranslateRoute
   "/settings": typeof SettingsRoute
   "/models/$providerId": typeof ModelsProviderIdRoute
   "/translate/profiles": typeof TranslateProfilesRoute
@@ -90,6 +98,7 @@ export interface FileRoutesById {
   "/": typeof IndexRoute
   "/about": typeof AboutRoute
   "/models": typeof ModelsRouteWithChildren
+  "/quick-translate": typeof QuickTranslateRoute
   "/settings": typeof SettingsRoute
   "/translate": typeof TranslateRouteWithChildren
   "/models/$providerId": typeof ModelsProviderIdRoute
@@ -103,6 +112,7 @@ export interface FileRouteTypes {
     | "/"
     | "/about"
     | "/models"
+    | "/quick-translate"
     | "/settings"
     | "/translate"
     | "/models/$providerId"
@@ -113,6 +123,7 @@ export interface FileRouteTypes {
   to:
     | "/"
     | "/about"
+    | "/quick-translate"
     | "/settings"
     | "/models/$providerId"
     | "/translate/profiles"
@@ -123,6 +134,7 @@ export interface FileRouteTypes {
     | "/"
     | "/about"
     | "/models"
+    | "/quick-translate"
     | "/settings"
     | "/translate"
     | "/models/$providerId"
@@ -135,6 +147,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AboutRoute: typeof AboutRoute
   ModelsRoute: typeof ModelsRouteWithChildren
+  QuickTranslateRoute: typeof QuickTranslateRoute
   SettingsRoute: typeof SettingsRoute
   TranslateRoute: typeof TranslateRouteWithChildren
 }
@@ -153,6 +166,13 @@ declare module "@tanstack/react-router" {
       path: "/settings"
       fullPath: "/settings"
       preLoaderRoute: typeof SettingsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    "/quick-translate": {
+      id: "/quick-translate"
+      path: "/quick-translate"
+      fullPath: "/quick-translate"
+      preLoaderRoute: typeof QuickTranslateRouteImport
       parentRoute: typeof rootRouteImport
     }
     "/models": {
@@ -238,6 +258,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AboutRoute: AboutRoute,
   ModelsRoute: ModelsRouteWithChildren,
+  QuickTranslateRoute: QuickTranslateRoute,
   SettingsRoute: SettingsRoute,
   TranslateRoute: TranslateRouteWithChildren,
 }

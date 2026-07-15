@@ -33,6 +33,10 @@ tempfile = "3.27.0"
 reqwest = { version = "0.13", features = ["json"] }
 tokio = { version = "1", default-features = false, features = ["macros", "sync"] }
 
+# Desktop-only: global hotkey for the Quick Translate window.
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-global-shortcut = "2"
+
 # Win+Z snap overlay for custom maximize hover (Windows only).
 [target.'cfg(windows)'.dependencies]
 enigo = "0.1.3"

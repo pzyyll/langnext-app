@@ -33,6 +33,35 @@ fn app_setup<R: Runtime>(app: &mut tauri::App<R>) -> Result<(), Box<dyn std::err
 	// Device state is needed by window setup for geometry restore.
 	app.manage(state);
 	windows::setup(app.handle());
+
+	// Global hotkey opens the always-on-top Quick Translate window.
+	// Registration failure (e.g. conflict with another app) must not block startup; tray still works.
+	#[cfg(desktop)]
+	{
+		use tauri_plugin_global_shortcut::{Code, Modifiers, ShortcutState};
+
+		match tauri_plugin_global_shortcut::Builder::new().with_shortcuts(["ctrl+shift+t"]) {
+			Ok(builder) => {
+				if let Err(err) = app.handle().plugin(
+					builder
+						.with_handler(|app, shortcut, event| {
+							if event.state == ShortcutState::Pressed
+								&& shortcut.matches(Modifiers::CONTROL | Modifiers::SHIFT, Code::KeyT)
+							{
+								windows::quick_translate::show(app);
+							}
+						})
+						.build(),
+				) {
+					eprintln!("global_shortcut_plugin_failed error={err}");
+				}
+			}
+			Err(err) => {
+				eprintln!("global_shortcut_register_failed error={err}");
+			}
+		}
+	}
+
 	Ok(())
 }
 

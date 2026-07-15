@@ -3,6 +3,7 @@
 use tauri::Runtime;
 
 pub mod main;
+pub mod quick_translate;
 pub mod tray;
 
 pub fn setup<R: Runtime>(app: &tauri::AppHandle<R>) {

@@ -3,6 +3,7 @@
 #![allow(unused)]
 
 pub const WIN_LABEL_MAIN: &str = "main";
+pub const WIN_LABEL_QUICK_TRANSLATE: &str = "quick-translate";
 pub const APP_NAME: &str = "langnext-app";
 pub const TRAY_ID: &str = "main";
 

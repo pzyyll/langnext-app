@@ -60,6 +60,18 @@ const zhCN = {
 		restore: "还原",
 		close: "关闭",
 	},
+	quickTranslate: {
+		title: "快速翻译",
+		addPreset: "添加翻译预设",
+		removePreset: "移除预设",
+		sourcePlaceholder: "输入或粘贴要翻译的内容…",
+		emptySlots: "点击 + 添加翻译预设。",
+		noProfiles: "暂无已启用的预设",
+		missingProfile: "预设不存在",
+		noModel: "该预设没有可用模型。",
+		resultPlaceholder: "翻译结果将显示在这里。",
+		waiting: "等待中…",
+	},
 	about: {
 		title: "关于",
 		description:
@@ -266,7 +278,7 @@ const zhCN = {
 		testConnection: "测试连接",
 		testConnectionTitle: "测试已保存的连接",
 		testingConnection: "正在测试连接…",
-		resetToken: "移除已保存令牌",
+		resetToken: "重置令牌",
 		keepStoredToken: "保留已保存令牌",
 		getModels: "获取模型",
 		getModelsTitle: "使用已保存的连接拉取远程模型",

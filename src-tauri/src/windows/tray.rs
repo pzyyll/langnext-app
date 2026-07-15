@@ -1,5 +1,5 @@
 // ABOUTME: System tray icon setup for the desktop application.
-// ABOUTME: Left-click shows the main window; Exit flushes device state then quits.
+// ABOUTME: Left-click shows the main window; menu opens Quick Translate or exits.
 use crate::consts;
 use crate::state::AppState;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
@@ -13,6 +13,11 @@ pub fn setup<R: Runtime>(app: &tauri::AppHandle<R>) {
 
 	let menu = MenuBuilder::new(app)
 		.item(
+			&MenuItemBuilder::with_id("quick_translate", "Quick Translate")
+				.build(app)
+				.expect("failed to build quick translate menu item"),
+		)
+		.item(
 			&MenuItemBuilder::with_id("exit", "Exit")
 				.build(app)
 				.expect("failed to build exit menu item"),
@@ -21,8 +26,11 @@ pub fn setup<R: Runtime>(app: &tauri::AppHandle<R>) {
 		.expect("failed to build tray menu");
 
 	let _ = tray_icon.set_menu(Some(menu));
-	tray_icon.on_menu_event(|app, event| {
-		if event.id.as_ref() == "exit" {
+	tray_icon.on_menu_event(|app, event| match event.id.as_ref() {
+		"quick_translate" => {
+			crate::windows::quick_translate::show(app);
+		}
+		"exit" => {
 			if let Some(state) = app.try_state::<AppState>() {
 				if let Err(e) = state.device_state.flush() {
 					// Preserve previous durable state; do not silently discard the error.
@@ -31,6 +39,7 @@ pub fn setup<R: Runtime>(app: &tauri::AppHandle<R>) {
 			}
 			app.exit(0);
 		}
+		_ => {}
 	});
 
 	tray_icon.on_tray_icon_event(|tray_icon, event: tauri::tray::TrayIconEvent| {

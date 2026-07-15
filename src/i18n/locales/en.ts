@@ -62,6 +62,18 @@ const en = {
 		restore: "Restore",
 		close: "Close",
 	},
+	quickTranslate: {
+		title: "Quick Translate",
+		addPreset: "Add translation preset",
+		removePreset: "Remove preset",
+		sourcePlaceholder: "Type or paste content to translate…",
+		emptySlots: "Use + to add a translation preset.",
+		noProfiles: "No enabled profiles",
+		missingProfile: "Missing profile",
+		noModel: "This preset has no enabled model.",
+		resultPlaceholder: "Translation results appear here.",
+		waiting: "Waiting…",
+	},
 	about: {
 		title: "About",
 		description:
@@ -269,7 +281,7 @@ const en = {
 		testConnection: "Test connection",
 		testConnectionTitle: "Test the saved connection",
 		testingConnection: "Testing connection…",
-		resetToken: "Remove stored token",
+		resetToken: "Reset token",
 		keepStoredToken: "Keep stored token",
 		getModels: "Get models",
 		getModelsTitle: "Fetch remote models using the saved connection",
