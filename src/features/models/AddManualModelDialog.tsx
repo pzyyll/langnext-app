@@ -2,10 +2,14 @@
 // ABOUTME: Persists model identity, display override, optional API Type, and enabled state through IPC.
 import { useState } from "react";
 import { Button } from "@base-ui/react/button";
+import { Checkbox } from "@base-ui/react/checkbox";
 import { Dialog } from "@base-ui/react/dialog";
+import { Input } from "@base-ui/react/input";
 import { useTranslation } from "react-i18next";
+import IconMaterialSymbolsLightCheck from "~icons/material-symbols-light/check";
 import {
 	checkboxClassName,
+	checkboxIndicatorClassName,
 	dialogBackdropClassName,
 	dialogPopupClassName,
 	inputClassName,
@@ -113,7 +117,7 @@ function AddManualModelForm({ providerId, onCreated }: AddManualModelFormProps) 
 				<label className="text-body-tight font-medium text-on-surface" htmlFor="add-model-key">
 					{t("models.addModelDialog.modelId")}
 				</label>
-				<input
+				<Input
 					id="add-model-key"
 					className={`${inputClassName} font-mono`}
 					value={modelKey}
@@ -132,7 +136,7 @@ function AddManualModelForm({ providerId, onCreated }: AddManualModelFormProps) 
 				<label className="text-body-tight font-medium text-on-surface" htmlFor="add-model-display-name">
 					{t("models.addModelDialog.displayNameOverride")}
 				</label>
-				<input
+				<Input
 					id="add-model-display-name"
 					className={inputClassName}
 					value={displayNameOverride}
@@ -162,15 +166,18 @@ function AddManualModelForm({ providerId, onCreated }: AddManualModelFormProps) 
 			</div>
 
 			<label className="flex items-center gap-2 text-body-tight text-on-surface">
-				<input
-					type="checkbox"
+				<Checkbox.Root
 					className={checkboxClassName}
 					checked={enabled}
-					onChange={(event) => {
-						setEnabled(event.currentTarget.checked);
+					onCheckedChange={(checked) => {
+						setEnabled(checked);
 					}}
 					disabled={pending}
-				/>
+				>
+					<Checkbox.Indicator className={checkboxIndicatorClassName}>
+						<IconMaterialSymbolsLightCheck className="size-3" aria-hidden />
+					</Checkbox.Indicator>
+				</Checkbox.Root>
 				{t("common.enabled")}
 			</label>
 

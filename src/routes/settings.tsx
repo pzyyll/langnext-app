@@ -1,9 +1,12 @@
 // ABOUTME: Settings route for appearance and language preferences.
 // ABOUTME: Reuses useTheme/useLanguage hooks and their persistence paths.
 import { createFileRoute } from "@tanstack/react-router";
+import { Radio } from "@base-ui/react/radio";
+import { RadioGroup } from "@base-ui/react/radio-group";
 import { useTranslation } from "react-i18next";
 import IconClarityMoonLine from "~icons/clarity/moon-line";
 import IconClaritySunLine from "~icons/clarity/sun-line";
+import { radioClassName, radioIndicatorClassName } from "../components/ui";
 import { APP_LANGUAGES, type AppLanguage } from "../i18n/languages";
 import { useLanguage } from "../i18n/useLanguage";
 import { useTheme } from "../theme/useTheme";
@@ -18,9 +21,6 @@ const optionBaseClassName =
 
 const optionActiveClassName =
 	"flex min-h-10 flex-1 items-center gap-2 rounded-none border border-line bg-surface-2 px-3 text-body-tight leading-none font-normal text-on-surface transition-colors duration-150 select-none focus-within:outline-2 focus-within:-outline-offset-1 focus-within:outline-on-surface";
-
-const radioClassName =
-	"size-4 shrink-0 rounded-none border border-line bg-surface text-on-surface accent-on-surface focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-on-surface";
 
 function SettingsPage() {
 	const { t } = useTranslation();
@@ -52,22 +52,21 @@ function SettingsPage() {
 					<p id="settings-theme-desc" className="clear-both text-body-tight text-neutral">
 						{t("settings.theme.description")}
 					</p>
-					<div className="flex flex-col gap-2 sm:flex-row" role="presentation">
+					<RadioGroup
+						value={theme}
+						onValueChange={(value) => {
+							void setTheme(value as ThemeMode);
+						}}
+						className="flex flex-col gap-2 sm:flex-row"
+						aria-describedby="settings-theme-desc"
+					>
 						{themeOptions.map((option) => {
 							const selected = theme === option.value;
 							return (
 								<label key={option.value} className={selected ? optionActiveClassName : optionBaseClassName}>
-									<input
-										type="radio"
-										name="settings-theme"
-										value={option.value}
-										checked={selected}
-										className={radioClassName}
-										aria-describedby="settings-theme-desc"
-										onChange={() => {
-											void setTheme(option.value);
-										}}
-									/>
+									<Radio.Root value={option.value} className={radioClassName}>
+										<Radio.Indicator className={radioIndicatorClassName} />
+									</Radio.Root>
 									{option.icon === "sun" ? (
 										<IconClaritySunLine className="pointer-events-none size-4 shrink-0" aria-hidden />
 									) : (
@@ -77,7 +76,7 @@ function SettingsPage() {
 								</label>
 							);
 						})}
-					</div>
+					</RadioGroup>
 					{themeError ? (
 						<p className="text-xs text-error" role="alert" aria-live="polite">
 							{themeError}
@@ -94,22 +93,21 @@ function SettingsPage() {
 					<p id="settings-language-desc" className="clear-both text-body-tight text-neutral">
 						{t("settings.language.description")}
 					</p>
-					<div className="flex flex-col gap-2 sm:flex-row" role="presentation">
+					<RadioGroup
+						value={language}
+						onValueChange={(value) => {
+							void setLanguage(value as AppLanguage);
+						}}
+						className="flex flex-col gap-2 sm:flex-row"
+						aria-describedby="settings-language-desc"
+					>
 						{languageOptions.map((option) => {
 							const selected = language === option.value;
 							return (
 								<label key={option.value} className={selected ? optionActiveClassName : optionBaseClassName}>
-									<input
-										type="radio"
-										name="settings-language"
-										value={option.value}
-										checked={selected}
-										className={radioClassName}
-										aria-describedby="settings-language-desc"
-										onChange={() => {
-											void setLanguage(option.value);
-										}}
-									/>
+									<Radio.Root value={option.value} className={radioClassName}>
+										<Radio.Indicator className={radioIndicatorClassName} />
+									</Radio.Root>
 									<span className="pointer-events-none size-4 shrink-0 text-center text-[10px] leading-4 font-bold tracking-wide">
 										{option.value === "en" ? "EN" : "中"}
 									</span>
@@ -117,7 +115,7 @@ function SettingsPage() {
 								</label>
 							);
 						})}
-					</div>
+					</RadioGroup>
 					{languageError ? (
 						<p className="text-xs text-error" role="alert" aria-live="polite">
 							{languageError}

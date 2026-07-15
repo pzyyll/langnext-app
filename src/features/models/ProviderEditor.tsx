@@ -6,6 +6,8 @@ import { useTranslation } from "react-i18next";
 import { useNavigate } from "@tanstack/react-router";
 import i18n from "../../i18n";
 import { Button } from "@base-ui/react/button";
+import { Checkbox } from "@base-ui/react/checkbox";
+import { Input } from "@base-ui/react/input";
 import { Switch } from "@base-ui/react/switch";
 import IconMaterialSymbolsLightEditSquareOutlineSharp from "~icons/material-symbols-light/edit-square-outline-sharp";
 import IconMaterialSymbolsLightCheck from "~icons/material-symbols-light/check";
@@ -16,6 +18,7 @@ import { ScrollArea } from "../../components/ScrollArea";
 import { useToast } from "../../components/toast/useToast";
 import {
 	checkboxClassName,
+	checkboxIndicatorClassName,
 	dangerButtonClassName,
 	iconButtonClassName,
 	inputClassName,
@@ -194,7 +197,7 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
 	const [renameValue, setRenameValue] = useState("");
 	const [renamePending, setRenamePending] = useState(false);
 	const [renameError, setRenameError] = useState<string | null>(null);
-	const renameInputRef = useRef<HTMLInputElement>(null);
+	const renameInputRef = useRef<HTMLElement | null>(null);
 
 	const [pendingModelIds, setPendingModelIds] = useState<Set<string>>(() => new Set());
 	const [modelMutationError, setModelMutationError] = useState<string | null>(null);
@@ -220,7 +223,7 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
 	useEffect(() => {
 		if (!renaming) return;
 		const node = renameInputRef.current;
-		if (node) {
+		if (node instanceof HTMLInputElement) {
 			node.focus();
 			node.select();
 		}
@@ -705,7 +708,7 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
 									void commitRename();
 								}}
 							>
-								<input
+								<Input
 									ref={renameInputRef}
 									className="h-10 w-full max-w-md rounded-none border border-line bg-surface px-2 text-headline-display font-bold text-on-surface focus:outline-2 focus:-outline-offset-1 focus:outline-on-surface disabled:border-disabled disabled:text-disabled"
 									value={renameValue}
@@ -835,7 +838,7 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
 							<label className="mb-1 block text-body-tight font-medium text-on-surface" htmlFor="provider-base-url">
 								{t("models.baseUrl")}
 							</label>
-							<input
+							<Input
 								id="provider-base-url"
 								className={inputClassName}
 								type="text"
@@ -860,7 +863,7 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
 							<label className="mb-1 block text-body-tight font-medium text-on-surface" htmlFor="provider-api-token">
 								{t("models.apiToken")}
 							</label>
-							<input
+							<Input
 								id="provider-api-token"
 								className={`${inputClassName} tracking-widest`}
 								type="password"
@@ -889,17 +892,20 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
 
 						{requiresInsecureAck && !endpointUnchangedInsecure ? (
 							<label className="flex items-start gap-2 text-body-tight text-on-surface">
-								<input
-									type="checkbox"
+								<Checkbox.Root
 									className={`${checkboxClassName} mt-0.5`}
 									checked={insecureHttpAcknowledged}
-									onChange={(event) => {
-										setInsecureHttpAcknowledged(event.currentTarget.checked);
+									onCheckedChange={(checked) => {
+										setInsecureHttpAcknowledged(checked);
 										setFormDirty(true);
 										setSaveSuccess(false);
 									}}
 									disabled={connectionFormDisabled}
-								/>
+								>
+									<Checkbox.Indicator className={checkboxIndicatorClassName}>
+										<IconMaterialSymbolsLightCheck className="size-3" aria-hidden />
+									</Checkbox.Indicator>
+								</Checkbox.Root>
 								<span>{t("models.insecureHttpAck")}</span>
 							</label>
 						) : null}

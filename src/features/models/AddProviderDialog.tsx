@@ -3,10 +3,14 @@
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { Button } from "@base-ui/react/button";
+import { Checkbox } from "@base-ui/react/checkbox";
 import { Dialog } from "@base-ui/react/dialog";
+import { Input } from "@base-ui/react/input";
 import { useTranslation } from "react-i18next";
+import IconMaterialSymbolsLightCheck from "~icons/material-symbols-light/check";
 import {
 	checkboxClassName,
+	checkboxIndicatorClassName,
 	dialogBackdropClassName,
 	dialogPopupClassName,
 	inputClassName,
@@ -125,7 +129,7 @@ function AddProviderForm({ onCreated }: AddProviderFormProps) {
 				<label className="text-body-tight font-medium text-on-surface" htmlFor="add-provider-name">
 					{t("models.displayName")}
 				</label>
-				<input
+				<Input
 					id="add-provider-name"
 					className={inputClassName}
 					value={displayName}
@@ -156,7 +160,7 @@ function AddProviderForm({ onCreated }: AddProviderFormProps) {
 				<label className="text-body-tight font-medium text-on-surface" htmlFor="add-provider-base-url">
 					{t("models.baseUrlOverride")}
 				</label>
-				<input
+				<Input
 					id="add-provider-base-url"
 					className={inputClassName}
 					value={baseUrlOverride}
@@ -193,7 +197,7 @@ function AddProviderForm({ onCreated }: AddProviderFormProps) {
 				<label className="text-body-tight font-medium text-on-surface" htmlFor="add-provider-token">
 					{t("models.apiToken")}
 				</label>
-				<input
+				<Input
 					id="add-provider-token"
 					className={inputClassName}
 					type="password"
@@ -209,15 +213,18 @@ function AddProviderForm({ onCreated }: AddProviderFormProps) {
 			</div>
 
 			<label className="flex items-center gap-2 text-body-tight text-on-surface">
-				<input
-					type="checkbox"
+				<Checkbox.Root
 					className={checkboxClassName}
 					checked={enabled}
-					onChange={(event) => {
-						setEnabled(event.currentTarget.checked);
+					onCheckedChange={(checked) => {
+						setEnabled(checked);
 					}}
 					disabled={pending}
-				/>
+				>
+					<Checkbox.Indicator className={checkboxIndicatorClassName}>
+						<IconMaterialSymbolsLightCheck className="size-3" aria-hidden />
+					</Checkbox.Indicator>
+				</Checkbox.Root>
 				{t("models.channelEnabled")}
 			</label>
 

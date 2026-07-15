@@ -2,11 +2,15 @@
 // ABOUTME: Displays manual, remote, and built-in model DTOs without fabricating data.
 import { useMemo, useState } from "react";
 import { Button } from "@base-ui/react/button";
+import { Checkbox } from "@base-ui/react/checkbox";
+import { Input } from "@base-ui/react/input";
 import { Switch } from "@base-ui/react/switch";
 import { useTranslation } from "react-i18next";
+import IconMaterialSymbolsLightCheck from "~icons/material-symbols-light/check";
 import IconMaterialSymbolsLightEditSquareOutlineSharp from "~icons/material-symbols-light/edit-square-outline-sharp";
 import {
 	checkboxClassName,
+	checkboxIndicatorClassName,
 	iconButtonClassName,
 	inputClassName,
 	switchRootClassName,
@@ -94,7 +98,7 @@ export function ModelsTable({
 					<label className="sr-only" htmlFor="models-search">
 						{t("models.searchModels")}
 					</label>
-					<input
+					<Input
 						id="models-search"
 						type="search"
 						className={inputClassName}
@@ -130,18 +134,21 @@ export function ModelsTable({
 							<tr className="border-b border-line text-table-header font-semibold text-neutral uppercase">
 								{selectionMode ? (
 									<th className="w-10 pb-2 font-semibold">
-										<input
-											type="checkbox"
+										<Checkbox.Root
 											className={checkboxClassName}
 											checked={allSelected}
 											aria-label={t("models.selectAllModels")}
-											onChange={(event) => {
+											onCheckedChange={(checked) => {
 												onToggleSelectAll?.(
-													event.currentTarget.checked,
+													checked,
 													filteredModels.map((model) => model.id),
 												);
 											}}
-										/>
+										>
+											<Checkbox.Indicator className={checkboxIndicatorClassName}>
+												<IconMaterialSymbolsLightCheck className="size-3" aria-hidden />
+											</Checkbox.Indicator>
+										</Checkbox.Root>
 									</th>
 								) : null}
 								<th className="pb-2 font-semibold">{t("models.modelCount", { count: filteredModels.length })}</th>
@@ -161,16 +168,19 @@ export function ModelsTable({
 									<tr key={model.id}>
 										{selectionMode ? (
 											<td className="py-4">
-												<input
-													type="checkbox"
+												<Checkbox.Root
 													className={checkboxClassName}
 													checked={selectedModelIds.has(model.id)}
 													disabled={pending}
 													aria-label={t("models.selectModel", { name: model.modelKey })}
-													onChange={() => {
+													onCheckedChange={() => {
 														onToggleSelect?.(model.id);
 													}}
-												/>
+												>
+													<Checkbox.Indicator className={checkboxIndicatorClassName}>
+														<IconMaterialSymbolsLightCheck className="size-3" aria-hidden />
+													</Checkbox.Indicator>
+												</Checkbox.Root>
 											</td>
 										) : null}
 										<td className="py-4">

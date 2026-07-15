@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { Button } from "@base-ui/react/button";
+import { Input } from "@base-ui/react/input";
 import { Switch } from "@base-ui/react/switch";
 import { useTranslation } from "react-i18next";
 import { Badge } from "../../components/Badge";
@@ -736,7 +737,7 @@ function TranslateProfilesPage() {
 											<label className={fieldLabelClassName} htmlFor="profile-name">
 												{t("translate.profileNameLabel")}
 											</label>
-											<input
+											<Input
 												id="profile-name"
 												className={inputClassName}
 												type="text"
@@ -760,6 +761,7 @@ function TranslateProfilesPage() {
 													onValueChange={(value) => updateDraft({ sourceLang: (value ?? "auto") as SourceLanguageId })}
 													options={sourceLanguageOptions.map((option) => ({ value: option.id, label: option.label }))}
 													disabled={savePending}
+													placeholder={t("common.placeholderEnglish")}
 													emptyText={t("common.noMatches")}
 													aria-labelledby="profile-source-lang-label"
 												/>
@@ -775,6 +777,7 @@ function TranslateProfilesPage() {
 													}
 													options={targetLanguageOptions.map((option) => ({ value: option.id, label: option.label }))}
 													disabled={savePending}
+													placeholder={t("common.placeholderEnglish")}
 													emptyText={t("common.noMatches")}
 													aria-labelledby="profile-target-lang-label"
 												/>
@@ -796,6 +799,7 @@ function TranslateProfilesPage() {
 														disabled: id === draft.preferredTargetLang,
 													}))}
 													disabled={savePending}
+													placeholder={t("common.placeholderEnglish")}
 													emptyText={t("common.noMatches")}
 													aria-labelledby="profile-primary-lang-label"
 												/>
@@ -813,6 +817,7 @@ function TranslateProfilesPage() {
 														disabled: id === draft.primaryLang,
 													}))}
 													disabled={savePending}
+													placeholder={t("common.placeholderEnglish")}
 													emptyText={t("common.noMatches")}
 													aria-labelledby="profile-preferred-target-lang-label"
 												/>
@@ -989,7 +994,7 @@ function TranslateProfilesPage() {
 												<label className={fieldLabelClassName} htmlFor="profile-temperature">
 													{t("translate.profiles.temperature")}
 												</label>
-												<input
+												<Input
 													id="profile-temperature"
 													className={inputClassName}
 													type="number"
@@ -1011,7 +1016,7 @@ function TranslateProfilesPage() {
 												<label className={fieldLabelClassName} htmlFor="profile-max-tokens">
 													{t("translate.profiles.maxTokens")}
 												</label>
-												<input
+												<Input
 													id="profile-max-tokens"
 													className={inputClassName}
 													type="number"

@@ -2,11 +2,15 @@
 // ABOUTME: Persists overrides through IPC for any model source; profile max tokens still override at request time.
 import { useMemo, useState } from "react";
 import { Button } from "@base-ui/react/button";
+import { Checkbox } from "@base-ui/react/checkbox";
 import { Dialog } from "@base-ui/react/dialog";
+import { Input } from "@base-ui/react/input";
 import { useTranslation } from "react-i18next";
+import IconMaterialSymbolsLightCheck from "~icons/material-symbols-light/check";
 import IconMaterialSymbolsLightClose from "~icons/material-symbols-light/close";
 import {
 	checkboxClassName,
+	checkboxIndicatorClassName,
 	dialogBackdropClassName,
 	dialogPopupClassName,
 	iconButtonClassName,
@@ -153,7 +157,7 @@ function EditModelConfigForm({ model, onSaved }: EditModelConfigFormProps) {
 					>
 						{t("models.displayName")}
 					</label>
-					<input
+					<Input
 						id="edit-model-display-name"
 						type="text"
 						className={inputClassName}
@@ -198,43 +202,52 @@ function EditModelConfigForm({ model, onSaved }: EditModelConfigFormProps) {
 					</span>
 					<div className="flex flex-wrap gap-4 pt-1">
 						<label className="flex cursor-pointer items-center gap-2">
-							<input
-								type="checkbox"
+							<Checkbox.Root
 								className={checkboxClassName}
 								checked={textGeneration}
-								onChange={(event) => {
-									setTextGeneration(event.currentTarget.checked);
+								onCheckedChange={(checked) => {
+									setTextGeneration(checked);
 								}}
 								disabled={pending}
-							/>
+							>
+								<Checkbox.Indicator className={checkboxIndicatorClassName}>
+									<IconMaterialSymbolsLightCheck className="size-3" aria-hidden />
+								</Checkbox.Indicator>
+							</Checkbox.Root>
 							<span className="text-body-tight font-medium text-on-surface">
 								{t("models.editModelConfig.textGeneration")}
 							</span>
 						</label>
 						<label className="flex cursor-pointer items-center gap-2">
-							<input
-								type="checkbox"
+							<Checkbox.Root
 								className={checkboxClassName}
 								checked={imageAnalysis}
-								onChange={(event) => {
-									setImageAnalysis(event.currentTarget.checked);
+								onCheckedChange={(checked) => {
+									setImageAnalysis(checked);
 								}}
 								disabled={pending}
-							/>
+							>
+								<Checkbox.Indicator className={checkboxIndicatorClassName}>
+									<IconMaterialSymbolsLightCheck className="size-3" aria-hidden />
+								</Checkbox.Indicator>
+							</Checkbox.Root>
 							<span className="text-body-tight font-medium text-on-surface">
 								{t("models.editModelConfig.imageAnalysis")}
 							</span>
 						</label>
 						<label className="flex cursor-pointer items-center gap-2">
-							<input
-								type="checkbox"
+							<Checkbox.Root
 								className={checkboxClassName}
 								checked={videoProcessing}
-								onChange={(event) => {
-									setVideoProcessing(event.currentTarget.checked);
+								onCheckedChange={(checked) => {
+									setVideoProcessing(checked);
 								}}
 								disabled={pending}
-							/>
+							>
+								<Checkbox.Indicator className={checkboxIndicatorClassName}>
+									<IconMaterialSymbolsLightCheck className="size-3" aria-hidden />
+								</Checkbox.Indicator>
+							</Checkbox.Root>
 							<span className="text-body-tight font-medium text-on-surface">
 								{t("models.editModelConfig.videoProcessing")}
 							</span>
@@ -250,7 +263,7 @@ function EditModelConfigForm({ model, onSaved }: EditModelConfigFormProps) {
 						>
 							{t("models.editModelConfig.contextLimit")}
 						</label>
-						<input
+						<Input
 							id="edit-model-context-limit"
 							type="number"
 							className={`${inputClassName} font-mono`}
@@ -273,7 +286,7 @@ function EditModelConfigForm({ model, onSaved }: EditModelConfigFormProps) {
 						>
 							{t("models.editModelConfig.maxTokens")}
 						</label>
-						<input
+						<Input
 							id="edit-model-max-tokens"
 							type="number"
 							className={`${inputClassName} font-mono`}

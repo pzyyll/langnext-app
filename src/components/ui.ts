@@ -17,13 +17,24 @@ export const dangerButtonClassName =
 export const iconButtonClassName =
 	"inline-flex size-7 shrink-0 cursor-default items-center justify-center rounded-none border-0 bg-transparent text-neutral hover:bg-surface-2 hover:text-on-surface active:bg-surface-3 focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface data-disabled:text-disabled disabled:text-disabled";
 
-/** Text / password inputs */
+/** Base UI Input (text / password / search / number) */
 export const inputClassName =
 	"h-control-height w-full rounded-none border border-line bg-surface px-3 text-body-tight font-normal text-on-surface placeholder:text-neutral focus:outline-2 focus:-outline-offset-1 focus:outline-on-surface disabled:border-disabled disabled:text-disabled";
 
-/** Native checkboxes */
+/** Base UI Checkbox.Root (outline/frame style, square) */
 export const checkboxClassName =
-	"size-4 shrink-0 rounded-none border border-line bg-surface text-on-surface accent-on-surface focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-on-surface disabled:border-disabled disabled:opacity-50";
+	"flex size-4 shrink-0 items-center justify-center rounded-none border border-line bg-surface p-0 text-on-surface data-checked:border-on-surface data-checked:bg-on-surface data-checked:text-surface data-disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-on-surface";
+
+/** Base UI Checkbox.Indicator */
+export const checkboxIndicatorClassName = "flex items-center justify-center data-unchecked:hidden";
+
+/** Base UI Radio.Root (outline/frame style, square) */
+export const radioClassName =
+	"flex size-4 shrink-0 items-center justify-center rounded-none border border-line bg-surface p-0 text-on-surface data-checked:border-on-surface data-checked:bg-on-surface data-checked:text-surface data-disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-on-surface";
+
+/** Base UI Radio.Indicator (filled square when checked) */
+export const radioIndicatorClassName =
+	"flex items-center justify-center data-unchecked:hidden before:block before:size-2 before:bg-current";
 
 /** Base UI Switch track (outline/frame style, square) */
 export const switchRootClassName =
