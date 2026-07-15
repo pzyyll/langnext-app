@@ -4,7 +4,11 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// Language ids the detector may return. Keep in sync with the system prompt and the parser.
-pub const SUPPORTED_LANGUAGES: &[&str] = &["zh", "en", "ja", "ko", "fr", "de", "es"];
+pub const SUPPORTED_LANGUAGES: &[&str] = &[
+	"zh", "en", "ar", "bg", "bn", "cs", "da", "de", "el", "es", "fa", "fi", "fr", "he", "hi", "hr", "hu", "id", "it",
+	"ja", "ko", "lt", "lv", "ms", "nl", "no", "pl", "pt", "ro", "ru", "sk", "sl", "sr", "sv", "sw", "ta", "th", "tl",
+	"tr", "uk", "ur", "vi",
+];
 
 /// Return the supported language id slice (used by prompts and validation).
 pub fn supported_languages() -> &'static [&'static str] {
@@ -227,7 +231,7 @@ mod tests {
 
 	#[test]
 	fn rejects_unsupported_codes() {
-		assert_eq!(parse_language_code("ru"), None);
+		assert_eq!(parse_language_code("xx"), None);
 		assert_eq!(parse_language_code("english"), None);
 		assert_eq!(parse_language_code("zho"), None);
 		assert_eq!(parse_language_code(""), None);
@@ -257,7 +261,14 @@ mod tests {
 
 	#[test]
 	fn supported_languages_match_contract() {
-		assert_eq!(supported_languages(), &["zh", "en", "ja", "ko", "fr", "de", "es"]);
+		assert_eq!(
+			supported_languages(),
+			&[
+				"zh", "en", "ar", "bg", "bn", "cs", "da", "de", "el", "es", "fa", "fi", "fr", "he", "hi", "hr", "hu", "id",
+				"it", "ja", "ko", "lt", "lv", "ms", "nl", "no", "pl", "pt", "ro", "ru", "sk", "sl", "sr", "sv", "sw", "ta",
+				"th", "tl", "tr", "uk", "ur", "vi",
+			],
+		);
 	}
 
 	#[test]

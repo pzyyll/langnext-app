@@ -35,7 +35,7 @@ test("isLanguageId accepts concrete supported ids and rejects auto and garbage",
 		expect(isLanguageId(id)).toBe(true);
 	}
 	expect(isLanguageId(AUTO_LANGUAGE)).toBe(false);
-	expect(isLanguageId("ru")).toBe(false);
+	expect(isLanguageId("xx")).toBe(false);
 	expect(isLanguageId("")).toBe(false);
 	expect(isLanguageId(null)).toBe(false);
 	expect(isLanguageId(undefined)).toBe(false);
@@ -46,7 +46,7 @@ test("isSelectableLanguageId accepts auto plus concrete ids", () => {
 	for (const id of LANGUAGE_IDS) {
 		expect(isSelectableLanguageId(id)).toBe(true);
 	}
-	expect(isSelectableLanguageId("ru")).toBe(false);
+	expect(isSelectableLanguageId("xx")).toBe(false);
 	expect(isSelectableLanguageId(null)).toBe(false);
 });
 

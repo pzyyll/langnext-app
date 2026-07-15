@@ -16,6 +16,7 @@ import {
 	switchRootClassName,
 	switchThumbClassName,
 } from "../../components/ui";
+import { ComboboxField } from "../../components/ComboboxField";
 import { SelectField } from "../../components/SelectField";
 import { profileKeys } from "../../query/keys";
 import {
@@ -754,11 +755,12 @@ function TranslateProfilesPage() {
 												<label className={fieldLabelClassName} id="profile-source-lang-label">
 													{t("translate.sourceLanguage")}
 												</label>
-												<SelectField
+												<ComboboxField
 													value={draft.sourceLang}
 													onValueChange={(value) => updateDraft({ sourceLang: (value ?? "auto") as SourceLanguageId })}
 													options={sourceLanguageOptions.map((option) => ({ value: option.id, label: option.label }))}
 													disabled={savePending}
+													emptyText={t("common.noMatches")}
 													aria-labelledby="profile-source-lang-label"
 												/>
 											</div>
@@ -766,13 +768,14 @@ function TranslateProfilesPage() {
 												<label className={fieldLabelClassName} id="profile-target-lang-label">
 													{t("translate.targetLanguage")}
 												</label>
-												<SelectField
+												<ComboboxField
 													value={draft.targetLang}
 													onValueChange={(value) =>
 														updateDraft({ targetLang: (value ?? "en") as SelectableLanguageId })
 													}
 													options={targetLanguageOptions.map((option) => ({ value: option.id, label: option.label }))}
 													disabled={savePending}
+													emptyText={t("common.noMatches")}
 													aria-labelledby="profile-target-lang-label"
 												/>
 											</div>
@@ -784,7 +787,7 @@ function TranslateProfilesPage() {
 												<label className={fieldLabelClassName} id="profile-primary-lang-label">
 													{t("translate.profiles.primaryLang")}
 												</label>
-												<SelectField
+												<ComboboxField
 													value={draft.primaryLang}
 													onValueChange={(value) => updateDraft({ primaryLang: (value ?? "en") as LanguageId })}
 													options={LANGUAGE_IDS.map((id) => ({
@@ -793,6 +796,7 @@ function TranslateProfilesPage() {
 														disabled: id === draft.preferredTargetLang,
 													}))}
 													disabled={savePending}
+													emptyText={t("common.noMatches")}
 													aria-labelledby="profile-primary-lang-label"
 												/>
 											</div>
@@ -800,7 +804,7 @@ function TranslateProfilesPage() {
 												<label className={fieldLabelClassName} id="profile-preferred-target-lang-label">
 													{t("translate.profiles.preferredTargetLang")}
 												</label>
-												<SelectField
+												<ComboboxField
 													value={draft.preferredTargetLang}
 													onValueChange={(value) => updateDraft({ preferredTargetLang: (value ?? "en") as LanguageId })}
 													options={LANGUAGE_IDS.map((id) => ({
@@ -809,6 +813,7 @@ function TranslateProfilesPage() {
 														disabled: id === draft.primaryLang,
 													}))}
 													disabled={savePending}
+													emptyText={t("common.noMatches")}
 													aria-labelledby="profile-preferred-target-lang-label"
 												/>
 											</div>

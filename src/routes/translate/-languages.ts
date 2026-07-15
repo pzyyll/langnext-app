@@ -3,7 +3,50 @@
 import type { AppLanguage } from "../../i18n/languages";
 
 /** Supported concrete translation language ids (mirrors Rust `SUPPORTED_LANGUAGES`). */
-export const LANGUAGE_IDS = ["zh", "en", "ja", "ko", "fr", "de", "es"] as const;
+export const LANGUAGE_IDS = [
+	"zh",
+	"en",
+	"ar",
+	"bg",
+	"bn",
+	"cs",
+	"da",
+	"de",
+	"el",
+	"es",
+	"fa",
+	"fi",
+	"fr",
+	"he",
+	"hi",
+	"hr",
+	"hu",
+	"id",
+	"it",
+	"ja",
+	"ko",
+	"lt",
+	"lv",
+	"ms",
+	"nl",
+	"no",
+	"pl",
+	"pt",
+	"ro",
+	"ru",
+	"sk",
+	"sl",
+	"sr",
+	"sv",
+	"sw",
+	"ta",
+	"th",
+	"tl",
+	"tr",
+	"uk",
+	"ur",
+	"vi",
+] as const;
 export type LanguageId = (typeof LANGUAGE_IDS)[number];
 
 /** Sentinel id marking an unresolved (Auto) source/output selector. */

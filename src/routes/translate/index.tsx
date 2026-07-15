@@ -14,6 +14,7 @@ import IconMaterialSymbolsLightVolumeUp from "~icons/material-symbols-light/volu
 import IconPepiconsPrintEnter from "~icons/pepicons-print/enter";
 import { useToast } from "../../components/toast/useToast";
 import { iconButtonClassName } from "../../components/ui";
+import { ComboboxField } from "../../components/ComboboxField";
 import { SelectField } from "../../components/SelectField";
 import { shouldApplyProfileResult } from "../../query/profileApplyGuard";
 import {
@@ -791,7 +792,7 @@ function TranslatePage() {
 					<div className="hidden h-6 w-px bg-outline-variant sm:block" aria-hidden />
 
 					<div className="flex flex-wrap items-center gap-1">
-						<SelectField
+						<ComboboxField
 							value={sourceLang}
 							onValueChange={(value) => {
 								setSourceLang((value ?? "auto") as SourceLanguageId);
@@ -799,6 +800,7 @@ function TranslatePage() {
 							}}
 							options={sourceLanguageOptions.map((option) => ({ value: option.id, label: option.label }))}
 							disabled={isTranslating}
+							emptyText={t("common.noMatches")}
 							aria-label={t("translate.sourceLanguage")}
 							compact
 						/>
@@ -813,11 +815,12 @@ function TranslatePage() {
 							<IconMaterialSymbolsLightSwapHoriz className="size-5" aria-hidden />
 						</Button>
 
-						<SelectField
+						<ComboboxField
 							value={targetLang}
 							onValueChange={(value) => setTargetLang((value ?? "en") as SelectableLanguageId)}
 							options={targetLanguageOptions.map((option) => ({ value: option.id, label: option.label }))}
 							disabled={isTranslating}
+							emptyText={t("common.noMatches")}
 							aria-label={t("translate.targetLanguage")}
 							compact
 						/>

@@ -3,7 +3,7 @@
 
 import { useMemo } from "react";
 import { Select } from "@base-ui/react/select";
-import IconMaterialSymbolsLightArrowDropDown from "~icons/material-symbols-light/arrow-drop-down";
+import IconClarityAngleLine from "~icons/clarity/angle-line";
 import IconMaterialSymbolsLightCheck from "~icons/material-symbols-light/check";
 
 export type SelectOption = {
@@ -33,7 +33,7 @@ const triggerBase =
 	"flex h-control-height items-center justify-between gap-2 select-none rounded-none border border-line bg-surface px-3 text-body-tight font-normal text-on-surface hover:not-data-disabled:bg-surface-2 data-popup-open:bg-surface-2 focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface data-disabled:border-disabled data-disabled:text-disabled";
 
 const popupClassName =
-	"min-w-[var(--anchor-width)] origin-[var(--transform-origin)] border border-line bg-surface text-on-surface shadow-frame transition-[scale,opacity] duration-100 ease-out data-ending-style:scale-[0.98] data-ending-style:opacity-0 data-starting-style:scale-[0.98] data-starting-style:opacity-0";
+	"min-w-(--anchor-width) origin-(--transform-origin) border border-line bg-surface text-on-surface shadow-frame transition-[scale,opacity] duration-100 ease-out data-ending-style:scale-[0.98] data-ending-style:opacity-0 data-starting-style:scale-[0.98] data-starting-style:opacity-0";
 
 const itemClassName =
 	"grid cursor-default grid-cols-[1rem_1fr] items-center gap-2 py-1.5 pr-3 pl-2.5 text-body-tight outline-hidden select-none data-highlighted:bg-on-surface data-highlighted:text-surface data-disabled:text-disabled";
@@ -68,8 +68,8 @@ export function SelectField({
 					placeholder={placeholder}
 					className="min-w-0 flex-1 truncate text-left data-placeholder:text-neutral"
 				/>
-				<Select.Icon className="transition-transform duration-200 ease-out data-popup-open:rotate-180">
-					<IconMaterialSymbolsLightArrowDropDown className="pointer-events-none size-4 shrink-0" />
+				<Select.Icon className="size-4 shrink-0 rotate-180 transition-transform duration-200 ease-out data-popup-open:rotate-0">
+					<IconClarityAngleLine className="pointer-events-none size-4" />
 				</Select.Icon>
 			</Select.Trigger>
 			<Select.Portal>
