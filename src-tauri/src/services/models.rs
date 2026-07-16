@@ -813,8 +813,10 @@ struct TranslateAttempt {
 	request: ChatCompletionRequest,
 }
 
-/// Soft cap on source text accepted by the detect command (matches translate).
-const MAX_DETECT_SOURCE_CHARS: usize = 5000;
+/// Maximum number of characters sampled from the source text for language
+/// detection. Longer input is truncated on a character boundary rather than
+/// rejected, so translation of large text is not blocked by the detect step.
+const DETECT_SAMPLE_CHARS: usize = 5000;
 /// Low deterministic budget for language classification requests.
 const DETECT_TEMPERATURE: f64 = 0.0;
 const DETECT_MAX_TOKENS: u32 = 256;
@@ -859,13 +861,13 @@ fn prepare_detect_language_sync(
 			0,
 		)));
 	}
-	if text.chars().count() > MAX_DETECT_SOURCE_CHARS {
-		return Ok(DetectPrepare::Early(DetectLanguageResult::failure(
-			"validation_failed",
-			format!("Source text must be at most {MAX_DETECT_SOURCE_CHARS} characters"),
-			0,
-		)));
-	}
+	// Language detection only needs a representative sample. Truncate very long
+	// input on a character boundary instead of rejecting it.
+	let text: String = if text.chars().count() > DETECT_SAMPLE_CHARS {
+		text.chars().take(DETECT_SAMPLE_CHARS).collect()
+	} else {
+		text.to_string()
+	};
 
 	// Read the optional profile and its primary target from one snapshot so detector config
 	// cannot be combined with a concurrently updated model chain.
@@ -915,7 +917,7 @@ fn prepare_detect_language_sync(
 		.and_then(|p| p.language_detection.as_ref())
 		.map(|cfg| cfg.detector_type())
 		.unwrap_or(DetectorType::Llm);
-	prepare_detector_dispatch(detector_type, db, vault, model_id, text)
+	prepare_detector_dispatch(detector_type, db, vault, model_id, &text)
 }
 
 /// Per-detector dispatch for language detection. Only the LLM path is wired today;

@@ -3475,7 +3475,7 @@ fn dedicated_detection_model_is_protected_and_provider_delete_clears_config() {
 }
 
 #[test]
-fn detect_language_empty_and_oversize_text_returns_validation_soft_failure() {
+fn detect_language_empty_text_returns_validation_soft_failure() {
 	let (_d, _db, _v, providers, models, _profiles, ..) = setup();
 	let p = providers
 		.save(provider_write(CredentialKind::None, CredentialUpdate::Keep))
@@ -3505,19 +3505,6 @@ fn detect_language_empty_and_oversize_text_returns_validation_soft_failure() {
 	assert_eq!(empty.error_code.as_deref(), Some("validation_failed"));
 	assert_eq!(empty.model_id, None);
 
-	let big = "x".repeat(5001);
-	let oversize = block_on(models.detect_language(
-		DetectLanguageInput {
-			text: big,
-			model_id: Some(m.id),
-			profile_id: None,
-		},
-		None,
-	))
-	.unwrap();
-	assert!(!oversize.ok);
-	assert_eq!(oversize.error_code.as_deref(), Some("validation_failed"));
-
 	// No profile and no input model -> validation failure.
 	let no_model = block_on(models.detect_language(
 		DetectLanguageInput {
@@ -3530,6 +3517,44 @@ fn detect_language_empty_and_oversize_text_returns_validation_soft_failure() {
 	.unwrap();
 	assert!(!no_model.ok);
 	assert_eq!(no_model.error_code.as_deref(), Some("validation_failed"));
+}
+
+#[test]
+fn detect_language_truncates_oversize_text() {
+	let (_d, _db, _v, providers, models, ..) = setup();
+	let (base_url, request_handle) = spawn_detection_chat_server();
+	let mut write = provider_write(CredentialKind::None, CredentialUpdate::Keep);
+	write.base_url_override = Some(base_url);
+	let provider = providers.save(write).unwrap();
+	let model = models
+		.save_manual(ManualModelWrite {
+			id: None,
+			provider_instance_id: provider.id,
+			model_key: "det".into(),
+			display_name_override: None,
+			enabled: true,
+			capability_overrides_json: None,
+			adapter_id: None,
+		})
+		.unwrap();
+
+	// 5001 chars exceeds the detect sample cap; detection must still succeed by
+	// sending only the truncated sample to the model.
+	let big = "x".repeat(5001);
+	let result = block_on(models.detect_language(
+		DetectLanguageInput {
+			text: big,
+			model_id: Some(model.id),
+			profile_id: None,
+		},
+		None,
+	))
+	.unwrap();
+	assert!(result.ok, "detection failed: {result:?}");
+
+	let request = request_handle.join().unwrap();
+	let user_content = request["messages"][1]["content"].as_str().unwrap();
+	assert_eq!(user_content.chars().count(), 5000);
 }
 
 #[test]

@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
-# ABOUTME: Typecheck and build the frontend for production
-# ABOUTME: Run via `mise run build`
+# ABOUTME: Typecheck with TypeScript 7 and build the frontend for production
+# ABOUTME: Uses @typescript/native so typescript@6 remains available for ESLint
 #MISE description="Typecheck and build the frontend"
 set -euo pipefail
-tsc --noEmit
+root="$(cd "$(dirname "$0")/../.." && pwd)"
+tsc7="$root/node_modules/@typescript/native/bin/tsc"
+if [[ ! -x "$tsc7" && ! -f "$tsc7" ]]; then
+	echo "TypeScript 7 binary not found at $tsc7" >&2
+	echo "Run: bun install" >&2
+	exit 1
+fi
+node "$tsc7" --noEmit
 vite build

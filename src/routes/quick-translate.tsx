@@ -13,8 +13,8 @@ import IconMaterialSymbolsLightAdd from "~icons/material-symbols-light/add";
 import IconMaterialSymbolsLightClose from "~icons/material-symbols-light/close";
 import IconMaterialSymbolsLightContentCopy from "~icons/material-symbols-light/content-copy";
 import IconMaterialSymbolsLightCheck from "~icons/material-symbols-light/check";
-import IconMaterialSymbolsLightExpandMore from "~icons/material-symbols-light/expand-more";
 import IconMaterialSymbolsLightSwapHoriz from "~icons/material-symbols-light/swap-horiz";
+import ExpandCircleDownOutlineIcon from "~icons/material-symbols/expand-circle-down-outline";
 import { TitleBar } from "../components/Win/TitleBar";
 import { ComboboxField } from "../components/ComboboxField";
 import { SelectField } from "../components/SelectField";
@@ -737,14 +737,14 @@ function QuickTranslatePage() {
 									<Collapsible.Trigger
 										nativeButton={false}
 										render={<div />}
-										className="group flex h-8 cursor-default items-center justify-between gap-2 border-b border-line bg-surface-container px-2 select-none focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface"
+										className="group flex h-8 cursor-default items-center gap-2 border-b border-line bg-surface-container px-2 select-none focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface"
 									>
-										<IconMaterialSymbolsLightExpandMore
+										<ExpandCircleDownOutlineIcon
 											className="size-4 shrink-0 text-on-surface transition-transform duration-100 ease-out group-data-panel-open:rotate-180"
 											aria-hidden
 										/>
 										<div
-											className="min-w-0 flex-1"
+											className="max-w-sm shrink-0"
 											onClick={(event) => {
 												event.stopPropagation();
 											}}
@@ -767,6 +767,8 @@ function QuickTranslatePage() {
 												compact
 											/>
 										</div>
+										{/* flex-1 spacer: large blank hit target that toggles collapse */}
+										<div className="min-h-full min-w-0 flex-1" />
 										<div
 											className="flex shrink-0 items-center gap-0.5"
 											onClick={(event) => {
@@ -817,9 +819,7 @@ function QuickTranslatePage() {
 												</p>
 											) : (
 												<p className="text-neutral italic select-none">
-													{sourceText.trim()
-														? t("quickTranslate.waiting")
-														: t("quickTranslate.resultPlaceholder")}
+													{sourceText.trim() ? t("quickTranslate.waiting") : t("quickTranslate.resultPlaceholder")}
 												</p>
 											)}
 										</div>
