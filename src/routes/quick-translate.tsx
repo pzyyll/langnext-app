@@ -249,6 +249,9 @@ function QuickTranslatePage() {
 	const generationRef = useRef(0);
 	const requestIdsRef = useRef<Map<string, string>>(new Map());
 	const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	/** Content shell used to drive window height (cards collapse/expand/add/remove). */
+	const contentMeasureRef = useRef<HTMLDivElement>(null);
+	const lastContentHeightRef = useRef(0);
 
 	const abortAll = useCallback(async () => {
 		const ids = [...requestIdsRef.current.values()];
@@ -490,6 +493,51 @@ function QuickTranslatePage() {
 		};
 	}, [sourceText, sourceLang, targetLang, slots, runTranslations]);
 
+	// Content-driven window height: grow/shrink with result cards and collapse animation.
+	useEffect(() => {
+		if (!isTauriRuntime()) {
+			return;
+		}
+		const el = contentMeasureRef.current;
+		if (!el) {
+			return;
+		}
+
+		let raf = 0;
+		const applyHeight = () => {
+			raf = 0;
+			const height = Math.ceil(el.getBoundingClientRect().height);
+			if (height <= 0) {
+				return;
+			}
+			if (Math.abs(height - lastContentHeightRef.current) < 1) {
+				return;
+			}
+			lastContentHeightRef.current = height;
+			void invoke("resize_window_height", { height }).catch(() => {
+				// Window may have been closed between measure and invoke.
+			});
+		};
+
+		const schedule = () => {
+			if (raf !== 0) {
+				cancelAnimationFrame(raf);
+			}
+			raf = requestAnimationFrame(applyHeight);
+		};
+
+		const observer = new ResizeObserver(schedule);
+		observer.observe(el);
+		schedule();
+
+		return () => {
+			if (raf !== 0) {
+				cancelAnimationFrame(raf);
+			}
+			observer.disconnect();
+		};
+	}, []);
+
 	function addSlot(profileId: string) {
 		setSlots((prev) => [...prev, { id: newId(), profileId }]);
 	}
@@ -592,246 +640,249 @@ function QuickTranslatePage() {
 	const isTranslating = Object.values(results).some((result) => result.isTranslating);
 
 	return (
-		<div className="flex h-full min-h-0 flex-col bg-surface text-on-surface">
-			<TitleBar
-				title={t("quickTranslate.title")}
-				minimize={false}
-				maximized={false}
-				close
-				pin
-				pinned={isPinned}
-				onPinChange={handlePinChange}
-				leading={
-					<Menu.Root>
-						<Menu.Trigger
-							className={leadingButtonClassName}
-							aria-label={t("quickTranslate.addPreset")}
-							disabled={profilesLoading || profiles.length === 0}
-						>
-							<IconMaterialSymbolsLightAdd className="pointer-events-none size-4" />
-						</Menu.Trigger>
-						<Menu.Portal>
-							<Menu.Positioner className="outline-hidden z-50" sideOffset={4} align="start">
-								<Menu.Popup className={`${menuPopupClassName} max-h-64 overflow-y-auto py-1`}>
-									{profiles.length === 0 ? (
-										<Menu.Item className={menuItemClassName} disabled>
-											{t("quickTranslate.noProfiles")}
-										</Menu.Item>
-									) : (
-										profiles.map((profile) => (
-											<Menu.Item
-												key={profile.id}
-												className={menuItemClassName}
-												onClick={() => {
-													addSlot(profile.id);
-												}}
-											>
-												{profile.name}
+		// Outer scrolls only when content height exceeds the clamped window height.
+		<div className="flex h-full min-h-0 flex-col overflow-y-auto bg-surface text-on-surface">
+			<div ref={contentMeasureRef} className="flex flex-col">
+				<TitleBar
+					title={t("quickTranslate.title")}
+					minimize={false}
+					maximized={false}
+					close
+					pin
+					pinned={isPinned}
+					onPinChange={handlePinChange}
+					leading={
+						<Menu.Root>
+							<Menu.Trigger
+								className={leadingButtonClassName}
+								aria-label={t("quickTranslate.addPreset")}
+								disabled={profilesLoading || profiles.length === 0}
+							>
+								<IconMaterialSymbolsLightAdd className="pointer-events-none size-4" />
+							</Menu.Trigger>
+							<Menu.Portal>
+								<Menu.Positioner className="outline-hidden z-50" sideOffset={4} align="start">
+									<Menu.Popup className={`${menuPopupClassName} max-h-64 overflow-y-auto py-1`}>
+										{profiles.length === 0 ? (
+											<Menu.Item className={menuItemClassName} disabled>
+												{t("quickTranslate.noProfiles")}
 											</Menu.Item>
-										))
-									)}
-								</Menu.Popup>
-							</Menu.Positioner>
-						</Menu.Portal>
-					</Menu.Root>
-				}
-			/>
+										) : (
+											profiles.map((profile) => (
+												<Menu.Item
+													key={profile.id}
+													className={menuItemClassName}
+													onClick={() => {
+														addSlot(profile.id);
+													}}
+												>
+													{profile.name}
+												</Menu.Item>
+											))
+										)}
+									</Menu.Popup>
+								</Menu.Positioner>
+							</Menu.Portal>
+						</Menu.Root>
+					}
+				/>
 
-			<div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4">
-				{/* Source input */}
-				<div className="flex shrink-0 flex-col gap-2">
-					<label className="sr-only" htmlFor="quick-translate-source">
-						{t("translate.sourceTextAria")}
-					</label>
-					<textarea
-						id="quick-translate-source"
-						className="h-32 w-full resize-none rounded-none border border-line bg-surface-container-lowest p-3 text-body-md text-on-surface placeholder:text-neutral focus:outline-2 focus:-outline-offset-1 focus:outline-on-surface"
-						placeholder={t("quickTranslate.sourcePlaceholder")}
-						spellCheck={false}
-						value={sourceText}
-						onChange={(event) => {
-							setSourceText(event.currentTarget.value);
-							setDetectedSourceLang(null);
-						}}
-						onKeyDown={(event) => {
-							if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
-								event.preventDefault();
-								void runTranslations();
-							}
-						}}
-					/>
-					{detectedSourceLang ? (
-						<p className="text-label-sm text-neutral uppercase">
-							{t("translate.detected", { language: t(`translate.languages.${detectedSourceLang}`) })}
-						</p>
-					) : null}
-				</div>
-
-				{/* Language selectors: same control chrome as main translate; full content width like input/cards */}
-				<div className="flex w-full shrink-0 items-center gap-1">
-					<div className="min-w-0 flex-1">
-						<ComboboxField
-							value={sourceLang}
-							onValueChange={(value) => {
-								setSourceLang((value ?? "auto") as SourceLanguageId);
+				<div className="flex flex-col gap-4 p-4">
+					{/* Source input */}
+					<div className="flex shrink-0 flex-col gap-2">
+						<label className="sr-only" htmlFor="quick-translate-source">
+							{t("translate.sourceTextAria")}
+						</label>
+						<textarea
+							id="quick-translate-source"
+							className="h-32 w-full resize-none rounded-none border border-line bg-surface-container-lowest p-3 text-body-md text-on-surface placeholder:text-neutral focus:outline-2 focus:-outline-offset-1 focus:outline-on-surface"
+							placeholder={t("quickTranslate.sourcePlaceholder")}
+							spellCheck={false}
+							value={sourceText}
+							onChange={(event) => {
+								setSourceText(event.currentTarget.value);
 								setDetectedSourceLang(null);
 							}}
-							options={sourceLanguageOptions.map((option) => ({ value: option.id, label: option.label }))}
-							disabled={isTranslating}
-							emptyText={t("common.noMatches")}
-							aria-label={t("translate.sourceLanguage")}
+							onKeyDown={(event) => {
+								if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+									event.preventDefault();
+									void runTranslations();
+								}
+							}}
 						/>
+						{detectedSourceLang ? (
+							<p className="text-label-sm text-neutral uppercase">
+								{t("translate.detected", { language: t(`translate.languages.${detectedSourceLang}`) })}
+							</p>
+						) : null}
 					</div>
 
-					<Button
-						type="button"
-						className={iconButtonClassName}
-						aria-label={t("translate.swapLanguages")}
-						onClick={swapLanguages}
-						disabled={isTranslating || (sourceLang === "auto" && !detectedSourceLang)}
-					>
-						<IconMaterialSymbolsLightSwapHoriz className="size-5" aria-hidden />
-					</Button>
+					{/* Language selectors: same control chrome as main translate; full content width like input/cards */}
+					<div className="flex w-full shrink-0 items-center gap-1">
+						<div className="min-w-0 flex-1">
+							<ComboboxField
+								value={sourceLang}
+								onValueChange={(value) => {
+									setSourceLang((value ?? "auto") as SourceLanguageId);
+									setDetectedSourceLang(null);
+								}}
+								options={sourceLanguageOptions.map((option) => ({ value: option.id, label: option.label }))}
+								disabled={isTranslating}
+								emptyText={t("common.noMatches")}
+								aria-label={t("translate.sourceLanguage")}
+							/>
+						</div>
 
-					<div className="min-w-0 flex-1">
-						<ComboboxField
-							value={targetLang}
-							onValueChange={(value) => setTargetLang((value ?? "en") as SelectableLanguageId)}
-							options={targetLanguageOptions.map((option) => ({ value: option.id, label: option.label }))}
-							disabled={isTranslating}
-							emptyText={t("common.noMatches")}
-							aria-label={t("translate.targetLanguage")}
-						/>
+						<Button
+							type="button"
+							className={iconButtonClassName}
+							aria-label={t("translate.swapLanguages")}
+							onClick={swapLanguages}
+							disabled={isTranslating || (sourceLang === "auto" && !detectedSourceLang)}
+						>
+							<IconMaterialSymbolsLightSwapHoriz className="size-5" aria-hidden />
+						</Button>
+
+						<div className="min-w-0 flex-1">
+							<ComboboxField
+								value={targetLang}
+								onValueChange={(value) => setTargetLang((value ?? "en") as SelectableLanguageId)}
+								options={targetLanguageOptions.map((option) => ({ value: option.id, label: option.label }))}
+								disabled={isTranslating}
+								emptyText={t("common.noMatches")}
+								aria-label={t("translate.targetLanguage")}
+							/>
+						</div>
 					</div>
-				</div>
 
-				{profilesError ? (
-					<p className="shrink-0 text-body-tight text-error" role="alert">
-						{profilesError}
-					</p>
-				) : null}
-
-				{/* Result cards */}
-				<div className="flex flex-col gap-4">
-					{slots.length === 0 ? (
-						<p className="text-body-tight text-neutral" role="status">
-							{profilesLoading ? t("translate.profileLoading") : t("quickTranslate.emptySlots")}
+					{profilesError ? (
+						<p className="shrink-0 text-body-tight text-error" role="alert">
+							{profilesError}
 						</p>
-					) : (
-						slots.map((slot) => {
-							const profile = profileById.get(slot.profileId);
-							const result = results[slot.id] ?? emptyResult;
-							const isCopied = copiedSlotId === slot.id;
-							const isOpen = !collapsedSlotIds.has(slot.id);
-							const orphanOption =
-								!profile && slot.profileId
-									? [{ value: slot.profileId, label: t("quickTranslate.missingProfile") }]
-									: undefined;
+					) : null}
 
-							return (
-								<Collapsible.Root
-									key={slot.id}
-									open={isOpen}
-									onOpenChange={(open) => {
-										setSlotOpen(slot.id, open);
-									}}
-									className="flex flex-col border border-line bg-surface"
-								>
-									{/* Header is a div trigger so nested controls stay valid HTML. */}
-									<Collapsible.Trigger
-										nativeButton={false}
-										render={<div />}
-										className="group flex h-8 cursor-default items-center gap-2 border-b border-line bg-surface-container px-2 select-none focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface"
+					{/* Result cards */}
+					<div className="flex flex-col gap-4">
+						{slots.length === 0 ? (
+							<p className="text-body-tight text-neutral" role="status">
+								{profilesLoading ? t("translate.profileLoading") : t("quickTranslate.emptySlots")}
+							</p>
+						) : (
+							slots.map((slot) => {
+								const profile = profileById.get(slot.profileId);
+								const result = results[slot.id] ?? emptyResult;
+								const isCopied = copiedSlotId === slot.id;
+								const isOpen = !collapsedSlotIds.has(slot.id);
+								const orphanOption =
+									!profile && slot.profileId
+										? [{ value: slot.profileId, label: t("quickTranslate.missingProfile") }]
+										: undefined;
+
+								return (
+									<Collapsible.Root
+										key={slot.id}
+										open={isOpen}
+										onOpenChange={(open) => {
+											setSlotOpen(slot.id, open);
+										}}
+										className="flex flex-col border border-line bg-surface"
 									>
-										<ExpandCircleDownOutlineIcon
-											className="size-4 shrink-0 text-on-surface transition-transform duration-100 ease-out group-data-panel-open:rotate-180"
-											aria-hidden
-										/>
-										<div
-											className="max-w-sm shrink-0"
-											onClick={(event) => {
-												event.stopPropagation();
-											}}
-											onPointerDown={(event) => {
-												event.stopPropagation();
-											}}
+										{/* Header is a div trigger so nested controls stay valid HTML. */}
+										<Collapsible.Trigger
+											nativeButton={false}
+											render={<div />}
+											className="group flex h-8 cursor-default items-center gap-2 border-b border-line bg-surface-container px-2 select-none focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface"
 										>
-											<SelectField
-												className="h-7 border-0 bg-transparent text-table-header font-bold tracking-tight uppercase hover:not-data-disabled:bg-transparent data-popup-open:bg-transparent"
-												value={slot.profileId}
-												onValueChange={(value) => {
-													if (value) {
-														updateSlotProfile(slot.id, value);
-													}
-												}}
-												options={profileSelectOptions}
-												extraOptions={orphanOption}
-												disabled={profilesLoading || profileSelectOptions.length === 0}
-												aria-label={t("translate.profileAria")}
-												compact
+											<ExpandCircleDownOutlineIcon
+												className="size-4 shrink-0 text-on-surface transition-transform duration-100 ease-out group-data-panel-open:rotate-180"
+												aria-hidden
 											/>
-										</div>
-										{/* flex-1 spacer: large blank hit target that toggles collapse */}
-										<div className="min-h-full min-w-0 flex-1" />
-										<div
-											className="flex shrink-0 items-center gap-0.5"
-											onClick={(event) => {
-												event.stopPropagation();
-											}}
-											onPointerDown={(event) => {
-												event.stopPropagation();
-											}}
-										>
-											<Button
-												type="button"
-												className={iconButtonClassName}
-												aria-label={isCopied ? t("translate.copied") : t("translate.copy")}
-												disabled={!result.text || !!result.error}
-												onClick={() => {
-													void copySlot(slot.id);
+											<div
+												className="max-w-sm shrink-0"
+												onClick={(event) => {
+													event.stopPropagation();
+												}}
+												onPointerDown={(event) => {
+													event.stopPropagation();
 												}}
 											>
-												{isCopied ? (
-													<IconMaterialSymbolsLightCheck className="size-4 text-tertiary" aria-hidden />
+												<SelectField
+													className="h-7 border-0 bg-transparent text-table-header font-bold tracking-tight uppercase hover:not-data-disabled:bg-transparent data-popup-open:bg-transparent"
+													value={slot.profileId}
+													onValueChange={(value) => {
+														if (value) {
+															updateSlotProfile(slot.id, value);
+														}
+													}}
+													options={profileSelectOptions}
+													extraOptions={orphanOption}
+													disabled={profilesLoading || profileSelectOptions.length === 0}
+													aria-label={t("translate.profileAria")}
+													compact
+												/>
+											</div>
+											{/* flex-1 spacer: large blank hit target that toggles collapse */}
+											<div className="min-h-full min-w-0 flex-1" />
+											<div
+												className="flex shrink-0 items-center gap-0.5"
+												onClick={(event) => {
+													event.stopPropagation();
+												}}
+												onPointerDown={(event) => {
+													event.stopPropagation();
+												}}
+											>
+												<Button
+													type="button"
+													className={iconButtonClassName}
+													aria-label={isCopied ? t("translate.copied") : t("translate.copy")}
+													disabled={!result.text || !!result.error}
+													onClick={() => {
+														void copySlot(slot.id);
+													}}
+												>
+													{isCopied ? (
+														<IconMaterialSymbolsLightCheck className="size-4 text-tertiary" aria-hidden />
+													) : (
+														<IconMaterialSymbolsLightContentCopy className="size-4" aria-hidden />
+													)}
+												</Button>
+												<Button
+													type="button"
+													className={iconButtonClassName}
+													aria-label={t("quickTranslate.removePreset")}
+													onClick={() => {
+														removeSlot(slot.id);
+													}}
+												>
+													<IconMaterialSymbolsLightClose className="size-4" aria-hidden />
+												</Button>
+											</div>
+										</Collapsible.Trigger>
+										<Collapsible.Panel className="h-(--collapsible-panel-height) overflow-hidden transition-[height] duration-150 ease-out data-ending-style:h-0 data-starting-style:h-0 [&[hidden]:not([hidden='until-found'])]:hidden">
+											<div className="p-3 text-body-md leading-relaxed text-on-surface">
+												{result.error ? (
+													<p className="whitespace-pre-wrap text-error select-text" role="alert">
+														{result.error}
+													</p>
+												) : result.text ? (
+													<p className="whitespace-pre-wrap select-text">{result.text}</p>
+												) : result.isTranslating ? (
+													<p className="text-neutral italic select-none" role="status">
+														{t("translate.translating")}
+													</p>
 												) : (
-													<IconMaterialSymbolsLightContentCopy className="size-4" aria-hidden />
+													<p className="text-neutral italic select-none">
+														{sourceText.trim() ? t("quickTranslate.waiting") : t("quickTranslate.resultPlaceholder")}
+													</p>
 												)}
-											</Button>
-											<Button
-												type="button"
-												className={iconButtonClassName}
-												aria-label={t("quickTranslate.removePreset")}
-												onClick={() => {
-													removeSlot(slot.id);
-												}}
-											>
-												<IconMaterialSymbolsLightClose className="size-4" aria-hidden />
-											</Button>
-										</div>
-									</Collapsible.Trigger>
-									<Collapsible.Panel className="h-(--collapsible-panel-height) overflow-hidden transition-[height] duration-150 ease-out data-ending-style:h-0 data-starting-style:h-0 [&[hidden]:not([hidden='until-found'])]:hidden">
-										<div className="p-3 text-body-md leading-relaxed text-on-surface">
-											{result.error ? (
-												<p className="whitespace-pre-wrap text-error select-text" role="alert">
-													{result.error}
-												</p>
-											) : result.text ? (
-												<p className="whitespace-pre-wrap select-text">{result.text}</p>
-											) : result.isTranslating ? (
-												<p className="text-neutral italic select-none" role="status">
-													{t("translate.translating")}
-												</p>
-											) : (
-												<p className="text-neutral italic select-none">
-													{sourceText.trim() ? t("quickTranslate.waiting") : t("quickTranslate.resultPlaceholder")}
-												</p>
-											)}
-										</div>
-									</Collapsible.Panel>
-								</Collapsible.Root>
-							);
-						})
-					)}
+											</div>
+										</Collapsible.Panel>
+									</Collapsible.Root>
+								);
+							})
+						)}
+					</div>
 				</div>
 			</div>
 		</div>

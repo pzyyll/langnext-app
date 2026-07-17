@@ -117,6 +117,7 @@ pub fn run() {
 		.invoke_handler(tauri::generate_handler![
 			cmds::snap::show_snap_overlay,
 			windows::quick_translate::set_pin,
+			windows::quick_translate::resize_window_height,
 			cmds::providers::list_provider_instances,
 			cmds::providers::save_provider_instance,
 			cmds::providers::set_provider_enabled,
