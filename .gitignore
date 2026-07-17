@@ -37,3 +37,4 @@ src-tauri/target
 .pi
 skills-lock.json
 .tanstack/tmp
+next-prompt.md

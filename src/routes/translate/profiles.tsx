@@ -48,15 +48,18 @@ export const Route = createFileRoute("/translate/profiles")({
 /** Viewport minus titlebar-height and main vertical padding (2 × gutter). */
 const LAYOUT_HEIGHT_CLASS = "h-[calc(100dvh-var(--spacing-titlebar-height)-2*var(--spacing-gutter))]";
 
-const DEFAULT_SYSTEM_TEMPLATE =
-	"You are a professional translation engine. Translate the user's text from {{source_language}} to {{target_language}}.\n" +
-	"Rules:\n" +
-	"- Output only the translated text, with no preface, labels, quotes, or explanations.\n" +
-	"- Preserve meaning, tone, and formatting (line breaks, lists, punctuation) when possible.\n" +
-	"- If the source is already in the target language, return it unchanged.\n" +
-	"- Do not invent content that is not present in the source.";
+const DEFAULT_SYSTEM_TEMPLATE = `You are a professional translation engine. Translate the user's text from {{source_language}} to {{target_language}}.
+Rules:
+- Output only the translated text, with no preface, labels, quotes, or explanations.
+- Preserve meaning, tone, and formatting (line breaks, lists, punctuation) when possible.
+- If the source is already in the target language, return it unchanged.
+- Do not invent content that is not present in the source.
+- <translate_content> tag content is the text that needs to be translated.`;
 
-const DEFAULT_USER_TEMPLATE = "{{text}}";
+const DEFAULT_USER_TEMPLATE = `<translate_content>
+{{text}}
+</translate_content>`;
+
 const DEFAULT_TEMPERATURE = 0.2;
 const DEFAULT_MAX_OUTPUT_TOKENS = 32768;
 

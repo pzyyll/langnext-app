@@ -224,22 +224,6 @@ pub fn render_template(template: &str, source_language: &str, target_language: &
 	out
 }
 
-/// Default system template used when saving a profile from the translate page.
-pub fn default_system_template() -> String {
-	"You are a professional translation engine. Translate the user's text from {{source_language}} to {{target_language}}.\n\
-		Rules:\n\
-		- Output only the translated text, with no preface, labels, quotes, or explanations.\n\
-		- Preserve meaning, tone, and formatting (line breaks, lists, punctuation) when possible.\n\
-		- If the source is already in the target language, return it unchanged.\n\
-		- Do not invent content that is not present in the source."
-		.into()
-}
-
-/// Default user template: source text only.
-pub fn default_user_template() -> String {
-	"{{text}}".into()
-}
-
 fn normalize_optional_lang(value: Option<&str>) -> Option<String> {
 	value.map(str::trim).filter(|s| !s.is_empty()).map(|s| s.to_string())
 }

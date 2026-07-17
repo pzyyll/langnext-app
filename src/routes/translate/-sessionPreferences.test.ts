@@ -97,7 +97,7 @@ describe("normalizeTranslateSessionPreferences", () => {
 			normalizeTranslateSessionPreferences({
 				profileId: 123,
 				modelId: null,
-				sourceLang: "ru",
+				sourceLang: "zz",
 				targetLang: "xx",
 			}),
 		).toEqual({
