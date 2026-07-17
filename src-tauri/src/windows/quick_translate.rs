@@ -287,6 +287,7 @@ pub fn show<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<WebviewWindow<R>, S
 
 	web_build = web_build
 		.resizable(true)
+		.maximizable(false)
 		.fullscreen(false)
 		.always_on_top(true)
 		.title(consts::APP_NAME)

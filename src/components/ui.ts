@@ -1,6 +1,8 @@
 // ABOUTME: Shared semantic class-name constants for outline controls and dialogs.
 // ABOUTME: Keeps Base UI frame styling consistent without wrapping its primitives.
 
+import { cn } from "../lib/cn";
+
 /** Outline button using semantic theme colors */
 export const outlineButtonClassName =
 	"inline-flex h-control-height items-center justify-center gap-2 rounded-none border border-line bg-surface px-2 text-body-tight leading-none whitespace-nowrap font-normal text-on-surface select-none hover:not-data-disabled:bg-surface-2 active:not-data-disabled:bg-surface-3 focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface data-disabled:border-disabled data-disabled:text-disabled disabled:border-disabled disabled:text-disabled";
@@ -15,7 +17,12 @@ export const dangerButtonClassName =
 
 /** Ghost icon button for inline actions such as renaming */
 export const iconButtonClassName =
-	"inline-flex size-7 shrink-0 cursor-default items-center justify-center rounded-none border-0 bg-transparent text-neutral hover:bg-surface-2 hover:text-on-surface active:bg-surface-3 focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface data-disabled:text-disabled disabled:text-disabled";
+	"inline-flex size-7 shrink-0 cursor-default items-center justify-center rounded-md border-0 bg-transparent text-neutral hover:bg-surface-2 hover:text-on-surface active:bg-surface-3 focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface data-disabled:text-disabled disabled:text-disabled";
+
+export const dangerIconButtonClassName = cn(
+	iconButtonClassName,
+	"text-error hover:bg-error hover:text-on-error active:bg-error active:text-on-error",
+);
 
 /** Base UI Input (text / password / search / number) */
 export const inputClassName =

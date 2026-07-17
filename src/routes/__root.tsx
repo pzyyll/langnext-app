@@ -29,11 +29,13 @@ function RootLayout() {
 	const { t } = useTranslation();
 
 	// Secondary always-on-top window: no main sidebar chrome.
+	// Do not mount router devtools here — FloatingTanStackRouterDevtools injects
+	// padding-bottom (~500px) on its parent, which leaves a large empty band in this
+	// content-sized popup and fights the height-resize observer.
 	if (isQuickTranslatePath(pathname)) {
 		return (
 			<div className="root flex h-full min-h-0 flex-col bg-surface text-on-surface">
 				<Outlet />
-				{import.meta.env.DEV ? <TanStackRouterDevtools position="bottom-right" /> : null}
 			</div>
 		);
 	}

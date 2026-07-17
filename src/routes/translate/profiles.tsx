@@ -16,6 +16,7 @@ import {
 	primaryButtonClassName,
 	switchRootClassName,
 	switchThumbClassName,
+	dangerIconButtonClassName,
 } from "../../components/ui";
 import { ComboboxField } from "../../components/ComboboxField";
 import { SelectField } from "../../components/SelectField";
@@ -71,9 +72,6 @@ const templateTextareaClassName =
 const sectionDividerClassName = "space-y-4 border-t border-outline-variant pt-4";
 
 const squareIconButtonClassName = `${outlineButtonClassName} size-control-height shrink-0 px-0`;
-
-const dangerIconButtonClassName =
-	"inline-flex size-7 shrink-0 cursor-default items-center justify-center rounded-none border-0 bg-transparent text-error hover:bg-surface-2 hover:text-error active:bg-surface-3 focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface data-disabled:text-disabled disabled:text-disabled";
 
 const newProfileButtonClassName = `${outlineButtonClassName} w-full font-bold hover:not-data-disabled:bg-on-surface`;
 

@@ -3,13 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { setAppUiLanguage } from "../storage/client";
-import {
-	LANGUAGE_CHANGE_EVENT,
-	LANGUAGE_STORAGE_KEY,
-	nextLanguage,
-	normalizeLanguage,
-	type AppLanguage,
-} from "./languages";
+import { LANGUAGE_CHANGE_EVENT, nextLanguage, normalizeLanguage, type AppLanguage } from "./languages";
 import { applyAppLanguage, getAppLanguage } from "./index";
 
 function isTauriRuntime(): boolean {
@@ -28,22 +22,16 @@ export function useLanguage() {
 			setLanguageState(getAppLanguage());
 		};
 
-		const onStorage = (event: StorageEvent) => {
-			if (event.key === LANGUAGE_STORAGE_KEY || event.key === null) {
-				sync();
-			}
-		};
-
 		const onI18n = (lng: string) => {
 			setLanguageState(normalizeLanguage(lng));
 		};
 
+		// Cross-window localStorage changes are applied by installLanguageCrossWindowSync
+		// (initI18n); this hook only mirrors the resulting same-window i18n/DOM updates.
 		window.addEventListener(LANGUAGE_CHANGE_EVENT, sync);
-		window.addEventListener("storage", onStorage);
 		i18n.on("languageChanged", onI18n);
 		return () => {
 			window.removeEventListener(LANGUAGE_CHANGE_EVENT, sync);
-			window.removeEventListener("storage", onStorage);
 			i18n.off("languageChanged", onI18n);
 		};
 	}, [i18n]);

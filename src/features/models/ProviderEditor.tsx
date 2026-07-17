@@ -26,6 +26,7 @@ import {
 	primaryButtonClassName,
 	switchRootClassName,
 	switchThumbClassName,
+	dangerIconButtonClassName,
 } from "../../components/ui";
 import { SelectField } from "../../components/SelectField";
 import { modelKeys, providerKeys } from "../../query/keys";
@@ -50,10 +51,6 @@ import { hasRemoteProviderConflict, shouldShowConflictBanner } from "./providerF
 export type ProviderEditorProps = {
 	providerId: string;
 };
-
-/** Danger-toned ghost icon button for destructive actions such as deleting the channel. */
-const dangerIconButtonClassName =
-	"inline-flex size-7 shrink-0 cursor-default items-center justify-center rounded-none border-0 bg-transparent text-error hover:bg-surface-2 hover:text-error active:bg-surface-3 focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface data-disabled:text-disabled disabled:text-disabled";
 
 type CredentialAction = "keep" | "replace" | "clear";
 

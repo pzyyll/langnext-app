@@ -4,7 +4,7 @@ import type { ComponentProps } from "react";
 import { ScrollArea as BaseScrollArea } from "@base-ui/react/scroll-area";
 
 const viewportClassNameDefault =
-	"h-full focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface";
+	"h-full min-h-0 overscroll-contain focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface";
 
 const scrollbarClassName =
 	"pointer-events-none m-px flex w-2 justify-center bg-on-surface-variant/10 opacity-0 transition-opacity duration-150 data-hovering:pointer-events-auto data-hovering:opacity-100 data-scrolling:pointer-events-auto data-scrolling:opacity-100 data-scrolling:duration-0";

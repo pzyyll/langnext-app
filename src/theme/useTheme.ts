@@ -2,7 +2,7 @@
 // ABOUTME: Persists theme through settings IPC in Tauri and rolls back on failure.
 import { useCallback, useEffect, useState } from "react";
 import i18n from "../i18n";
-import { THEME_CHANGE_EVENT, THEME_STORAGE_KEY, applyThemeToDom, getAppliedTheme, type ThemeMode } from "./theme";
+import { THEME_CHANGE_EVENT, applyThemeToDom, getAppliedTheme, type ThemeMode } from "./theme";
 import { setAppTheme } from "../storage/client";
 import { ThemeMutationQueue } from "./themeMutationQueue";
 
@@ -49,17 +49,11 @@ export function useTheme() {
 			setThemeState(getAppliedTheme());
 		};
 
-		const onStorage = (event: StorageEvent) => {
-			if (event.key === THEME_STORAGE_KEY || event.key === null) {
-				sync();
-			}
-		};
-
+		// Cross-window localStorage changes are applied by installThemeCrossWindowSync
+		// (initTheme); this hook only mirrors the resulting same-window DOM updates.
 		window.addEventListener(THEME_CHANGE_EVENT, sync);
-		window.addEventListener("storage", onStorage);
 		return () => {
 			window.removeEventListener(THEME_CHANGE_EVENT, sync);
-			window.removeEventListener("storage", onStorage);
 		};
 	}, []);
 

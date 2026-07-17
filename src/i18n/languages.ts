@@ -64,8 +64,13 @@ export function applyLanguageToDom(language: AppLanguage): void {
 	if (typeof document === "undefined") {
 		return;
 	}
-	localStorage.setItem(LANGUAGE_STORAGE_KEY, language);
-	document.documentElement.lang = language;
+	// Skip setItem when unchanged so peer webviews do not re-broadcast storage events.
+	if (localStorage.getItem(LANGUAGE_STORAGE_KEY) !== language) {
+		localStorage.setItem(LANGUAGE_STORAGE_KEY, language);
+	}
+	if (document.documentElement.lang !== language) {
+		document.documentElement.lang = language;
+	}
 	window.dispatchEvent(new CustomEvent(LANGUAGE_CHANGE_EVENT, { detail: language }));
 }
 

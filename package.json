@@ -14,14 +14,16 @@
 		"@tanstack/react-query": "^5.101.2",
 		"@tanstack/react-router": "^1.170.17",
 		"@tauri-apps/api": "^2.11.1",
-		"@tauri-apps/plugin-log": "^2.9.0",
-		"@tauri-apps/plugin-opener": "^2.5.4",
 		"@tauri-apps/plugin-dialog": "^2.4.0",
 		"@tauri-apps/plugin-fs": "^2.4.2",
+		"@tauri-apps/plugin-log": "^2.9.0",
+		"@tauri-apps/plugin-opener": "^2.5.4",
+		"clsx": "^2.1.1",
 		"i18next": "^26.3.6",
 		"react": "^19.2.7",
 		"react-dom": "^19.2.7",
-		"react-i18next": "^17.0.9"
+		"react-i18next": "^17.0.9",
+		"tailwind-merge": "^3.6.0"
 	},
 	"devDependencies": {
 		"@eslint/js": "^10.0.1",
@@ -29,6 +31,7 @@
 		"@iconify-json/material-symbols-light": "^1.2.85",
 		"@iconify-json/material-symbols": "^1.2.85",
 		"@iconify-json/pepicons-print": "^1.2.1",
+		"@iconify-json/ic": "^1.2.4",
 		"@svgr/core": "^8.1.0",
 		"@svgr/plugin-jsx": "^8.1.0",
 		"@tailwindcss/vite": "^4.3.2",

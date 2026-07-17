@@ -7,12 +7,12 @@ import { Button } from "@base-ui/react/button";
 import { useTranslation } from "react-i18next";
 import IconSvgsLnb from "~icons/svgs/lnb";
 import IconMaterialSymbolsLightClarifyOutlineSharp from "~icons/material-symbols-light/clarify-outline-sharp";
-import IconClarityPinLine from "~icons/clarity/pin-line";
-import IconClarityPinSolid from "~icons/clarity/pin-solid";
 import IconClarityMinusLine from "~icons/clarity/minus-line";
+import IconPin from "~icons/clarity/pinned-solid";
+import IconPinOutline from "~icons/clarity/pinned-line";
 import IconClarityWindowMaxLine from "~icons/clarity/window-max-line";
 import IconClarityWindowRestoreLine from "~icons/clarity/window-restore-line";
-import IconClarityCloseLine from "~icons/clarity/close-line";
+import IconClose from "~icons/clarity/close-line";
 import { logger } from "../../logger";
 
 export type TitleBarProps = {
@@ -169,9 +169,9 @@ export function TitleBar({
 						}}
 					>
 						{pinned ? (
-							<IconClarityPinSolid className="pointer-events-none size-4" />
+							<IconPin className="pointer-events-none size-4" />
 						) : (
-							<IconClarityPinLine className="pointer-events-none size-4" />
+							<IconPinOutline className="pointer-events-none size-4" />
 						)}
 					</button>
 				) : null}
@@ -214,7 +214,7 @@ export function TitleBar({
 						aria-label={t("titlebar.close")}
 						onClick={() => void appWindow.close()}
 					>
-						<IconClarityCloseLine className="pointer-events-none size-4 group-hover:text-on-error group-active:text-on-error" />
+						<IconClose className="pointer-events-none size-4 group-hover:text-on-error group-active:text-on-error" />
 					</button>
 				) : null}
 			</div>

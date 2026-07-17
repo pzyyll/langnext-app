@@ -10,13 +10,14 @@ import { Collapsible } from "@base-ui/react/collapsible";
 import { Menu } from "@base-ui/react/menu";
 import { useTranslation } from "react-i18next";
 import IconMaterialSymbolsLightAdd from "~icons/material-symbols-light/add";
-import IconMaterialSymbolsLightClose from "~icons/material-symbols-light/close";
+import IconClose from "~icons/material-symbols/close";
 import IconMaterialSymbolsLightContentCopy from "~icons/material-symbols-light/content-copy";
 import IconMaterialSymbolsLightCheck from "~icons/material-symbols-light/check";
 import IconMaterialSymbolsLightSwapHoriz from "~icons/material-symbols-light/swap-horiz";
 import ExpandCircleDownOutlineIcon from "~icons/material-symbols/expand-circle-down-outline";
 import { TitleBar } from "../components/Win/TitleBar";
 import { ComboboxField } from "../components/ComboboxField";
+import { ScrollArea } from "../components/ScrollArea";
 import { SelectField } from "../components/SelectField";
 import { iconButtonClassName } from "../components/ui";
 import { QUICK_TRANSLATE_CLIPBOARD_TEXT } from "../query/events";
@@ -142,7 +143,7 @@ const menuItemClassName =
 	"flex cursor-default items-center px-3 py-1.5 text-body-tight outline-hidden select-none data-highlighted:bg-on-surface data-highlighted:text-surface data-disabled:text-disabled";
 
 const leadingButtonClassName =
-	"inline-flex size-6 shrink-0 cursor-default items-center justify-center rounded-none border-0 bg-transparent text-on-surface select-none hover:bg-surface-2 active:bg-surface-3 focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface data-popup-open:bg-surface-2 data-disabled:text-disabled";
+	"inline-flex size-6 shrink-0 cursor-default items-center justify-center rounded-md border-0 bg-surface-2 text-on-surface shadow-sm select-none hover:bg-surface-3 active:bg-surface-3 active:shadow-none focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface data-popup-open:bg-surface-3 data-disabled:text-disabled";
 
 function QuickTranslatePage() {
 	const { t, i18n } = useTranslation();
@@ -249,9 +250,15 @@ function QuickTranslatePage() {
 	const generationRef = useRef(0);
 	const requestIdsRef = useRef<Map<string, string>>(new Map());
 	const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-	/** Content shell used to drive window height (cards collapse/expand/add/remove). */
-	const contentMeasureRef = useRef<HTMLDivElement>(null);
+	/** Titlebar shell: fixed outside the scroll region; height is included in window resize. */
+	const titleBarMeasureRef = useRef<HTMLDivElement>(null);
+	/** Body content node (h-fit) used to drive window height; state so the observer rebinds on mount. */
+	const [contentMeasureEl, setContentMeasureEl] = useState<HTMLDivElement | null>(null);
 	const lastContentHeightRef = useRef(0);
+
+	const setContentMeasureNode = useCallback((node: HTMLDivElement | null) => {
+		setContentMeasureEl((prev) => (prev === node ? prev : node));
+	}, []);
 
 	const abortAll = useCallback(async () => {
 		const ids = [...requestIdsRef.current.values()];
@@ -493,20 +500,20 @@ function QuickTranslatePage() {
 		};
 	}, [sourceText, sourceLang, targetLang, slots, runTranslations]);
 
-	// Content-driven window height: grow/shrink with result cards and collapse animation.
+	// Content-driven window height: titlebar (fixed) + body (scrolls when clamped).
+	// Measure the h-fit content box (offsetHeight), not the ScrollArea viewport fill height.
 	useEffect(() => {
-		if (!isTauriRuntime()) {
-			return;
-		}
-		const el = contentMeasureRef.current;
-		if (!el) {
+		if (!isTauriRuntime() || !contentMeasureEl) {
 			return;
 		}
 
 		let raf = 0;
 		const applyHeight = () => {
 			raf = 0;
-			const height = Math.ceil(el.getBoundingClientRect().height);
+			const titlebarHeight = titleBarMeasureRef.current?.offsetHeight ?? 0;
+			// offsetHeight is the layout border-box; h-fit keeps it content-sized inside the viewport.
+			const bodyHeight = contentMeasureEl.offsetHeight;
+			const height = Math.ceil(titlebarHeight + bodyHeight);
 			if (height <= 0) {
 				return;
 			}
@@ -527,7 +534,11 @@ function QuickTranslatePage() {
 		};
 
 		const observer = new ResizeObserver(schedule);
-		observer.observe(el);
+		observer.observe(contentMeasureEl);
+		const titlebarEl = titleBarMeasureRef.current;
+		if (titlebarEl) {
+			observer.observe(titlebarEl);
+		}
 		schedule();
 
 		return () => {
@@ -536,7 +547,7 @@ function QuickTranslatePage() {
 			}
 			observer.disconnect();
 		};
-	}, []);
+	}, [contentMeasureEl]);
 
 	function addSlot(profileId: string) {
 		setSlots((prev) => [...prev, { id: newId(), profileId }]);
@@ -640,11 +651,11 @@ function QuickTranslatePage() {
 	const isTranslating = Object.values(results).some((result) => result.isTranslating);
 
 	return (
-		// Outer scrolls only when content height exceeds the clamped window height.
-		<div className="flex h-full min-h-0 flex-col overflow-y-auto bg-surface text-on-surface">
-			<div ref={contentMeasureRef} className="flex flex-col">
+		// Titlebar stays fixed; body scrolls only when content exceeds the clamped window height.
+		<div className="flex h-full min-h-0 flex-col bg-surface text-on-surface">
+			<div ref={titleBarMeasureRef} className="shrink-0">
 				<TitleBar
-					title={t("quickTranslate.title")}
+					className="border-none!"
 					minimize={false}
 					maximized={false}
 					close
@@ -686,16 +697,18 @@ function QuickTranslatePage() {
 						</Menu.Root>
 					}
 				/>
+			</div>
 
-				<div className="flex flex-col gap-4 p-4">
-					{/* Source input */}
-					<div className="flex shrink-0 flex-col gap-2">
+			<ScrollArea className="min-h-0 flex-1 overflow-hidden" contentClassName="h-fit w-full">
+				<div ref={setContentMeasureNode} className="flex h-fit w-full flex-col gap-4 px-3 pb-3 pt-2">
+					{/* Source input: outer chrome wraps textarea + sticky footer toolbar */}
+					<div className="flex h-32 shrink-0 flex-col border border-line bg-surface-container-lowest focus-within:outline-2 focus-within:-outline-offset-1 focus-within:outline-on-surface">
 						<label className="sr-only" htmlFor="quick-translate-source">
 							{t("translate.sourceTextAria")}
 						</label>
 						<textarea
 							id="quick-translate-source"
-							className="h-32 w-full resize-none rounded-none border border-line bg-surface-container-lowest p-3 text-body-md text-on-surface placeholder:text-neutral focus:outline-2 focus:-outline-offset-1 focus:outline-on-surface"
+							className="min-h-0 w-full flex-1 resize-none rounded-none border-0 bg-transparent px-3 pt-3 pb-2 text-body-md text-on-surface placeholder:text-neutral focus:outline-none"
 							placeholder={t("quickTranslate.sourcePlaceholder")}
 							spellCheck={false}
 							value={sourceText}
@@ -710,11 +723,31 @@ function QuickTranslatePage() {
 								}
 							}}
 						/>
-						{detectedSourceLang ? (
-							<p className="text-label-sm text-neutral uppercase">
-								{t("translate.detected", { language: t(`translate.languages.${detectedSourceLang}`) })}
-							</p>
-						) : null}
+						<div className="flex h-8 shrink-0 items-center gap-1 px-2">
+							{detectedSourceLang ? (
+								<p className="min-w-0 truncate text-label-sm text-neutral uppercase">
+									{t("translate.detected", {
+										language: t(`translate.languages.${detectedSourceLang}`),
+									})}
+								</p>
+							) : null}
+							<div className="min-w-0 flex-1" />
+							<div className="flex shrink-0 items-center gap-0.5">
+								{sourceText ? (
+									<Button
+										type="button"
+										className={iconButtonClassName}
+										aria-label={t("translate.clearSource")}
+										onClick={() => {
+											setSourceText("");
+											setDetectedSourceLang(null);
+										}}
+									>
+										<IconClose className="size-4" aria-hidden />
+									</Button>
+								) : null}
+							</div>
+						</div>
 					</div>
 
 					{/* Language selectors: same control chrome as main translate; full content width like input/cards */}
@@ -855,7 +888,7 @@ function QuickTranslatePage() {
 														removeSlot(slot.id);
 													}}
 												>
-													<IconMaterialSymbolsLightClose className="size-4" aria-hidden />
+													<IconClose className="size-4" aria-hidden />
 												</Button>
 											</div>
 										</Collapsible.Trigger>
@@ -884,7 +917,7 @@ function QuickTranslatePage() {
 						)}
 					</div>
 				</div>
-			</div>
+			</ScrollArea>
 		</div>
 	);
 }
