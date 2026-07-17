@@ -495,6 +495,10 @@ function TranslatePage() {
 			targetLang: string;
 			text: string;
 			profileId?: string | null;
+			sourceLangId?: string | null;
+			targetLangId?: string | null;
+			effectiveSourceLangId?: string | null;
+			effectiveTargetLangId?: string | null;
 		},
 		requestId: string,
 	) {
@@ -684,6 +688,10 @@ function TranslatePage() {
 			targetLang: targetLabel,
 			text: trimmed,
 			profileId: resolvedProfileId || null,
+			sourceLangId: sourceLang,
+			targetLangId: targetLang,
+			effectiveSourceLangId: effectiveSourceId,
+			effectiveTargetLangId: effectiveTargetId,
 		};
 
 		if (useStreaming) {

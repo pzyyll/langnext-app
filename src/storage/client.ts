@@ -19,6 +19,10 @@ import type {
 	SyncModelsResult,
 	TranslateInput,
 	TranslateResult,
+	TranslationHistoryDto,
+	TranslationHistoryListQuery,
+	TranslationHistoryListResult,
+	TranslationHistoryModelFacet,
 	TranslationProfileDto,
 	TranslationProfileWrite,
 } from "./types";
@@ -173,4 +177,30 @@ export async function importConfiguration(
 	mode: ImportConflictMode,
 ): Promise<ImportResult> {
 	return invoke("import_configuration", { document, mode });
+}
+
+export async function listTranslationHistory(
+	query: TranslationHistoryListQuery,
+): Promise<TranslationHistoryListResult> {
+	return invoke("list_translation_history", { query });
+}
+
+export async function getTranslationHistory(id: string): Promise<TranslationHistoryDto> {
+	return invoke("get_translation_history", { id });
+}
+
+export async function getTranslationHistoryMany(ids: string[]): Promise<TranslationHistoryDto[]> {
+	return invoke("get_translation_history_many", { ids });
+}
+
+export async function listTranslationHistoryModelFacets(): Promise<TranslationHistoryModelFacet[]> {
+	return invoke("list_translation_history_model_facets");
+}
+
+export async function deleteTranslationHistory(ids: string[]): Promise<void> {
+	return invoke("delete_translation_history", { ids });
+}
+
+export async function deleteAllTranslationHistory(): Promise<void> {
+	return invoke("delete_all_translation_history");
 }

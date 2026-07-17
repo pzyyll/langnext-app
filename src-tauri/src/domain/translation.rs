@@ -3,11 +3,13 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// Frontend request to translate text with a configured provider model.
+/**
+ * Frontend request to translate text with a configured provider model.
+ */
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TranslateInput {
-	/// Provider model row id (`provider_models.id`) — primary model to try first.
+	/// Provider model row id (`provider_models.id`) - primary model to try first.
 	pub model_id: Uuid,
 	/// Source language id or display label from the UI (e.g. `zh`, `en`).
 	pub source_lang: String,
@@ -18,6 +20,18 @@ pub struct TranslateInput {
 	/// Optional profile for templates + fallback model chain.
 	#[serde(default)]
 	pub profile_id: Option<Uuid>,
+	/// Configured source language id (`auto` allowed). History metadata only; prompts use `source_lang`.
+	#[serde(default)]
+	pub source_lang_id: Option<String>,
+	/// Configured target language id (`auto` allowed). History metadata only.
+	#[serde(default)]
+	pub target_lang_id: Option<String>,
+	/// Concrete source language id actually used (post-detection). History metadata only.
+	#[serde(default)]
+	pub effective_source_lang_id: Option<String>,
+	/// Concrete target language id actually used (post Auto resolution). History metadata only.
+	#[serde(default)]
+	pub effective_target_lang_id: Option<String>,
 }
 
 /// Successful translation payload returned to the WebView.

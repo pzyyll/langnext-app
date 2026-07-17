@@ -18,11 +18,14 @@ use crate::domain::provider::{CredentialKind, ModelsSyncStatus, ProviderInstance
 use crate::domain::time::{new_id, now_rfc3339};
 use crate::domain::translation::{
 	TranslateInput, TranslateResult, TranslateStreamChunk, TranslateStreamDone, TranslateStreamReset,
-	TRANSLATE_CHUNK_EVENT, TRANSLATE_DONE_EVENT, TRANSLATE_RESET_EVENT,
+	TRANSLATE_CANCELLED_CODE, TRANSLATE_CHUNK_EVENT, TRANSLATE_DONE_EVENT, TRANSLATE_RESET_EVENT,
 };
 use crate::domain::translation_profile::{TranslationProfile, TranslationProfileTarget};
 use crate::error::StorageError;
 use crate::repositories::{provider_instances, provider_models, translation_profiles};
+use crate::services::translation_history::{
+	TranslateHistorySnapshot, TranslateInputSnapshot, TranslationHistoryService,
+};
 use crate::services::translation_profiles::render_template;
 use crate::storage::Database;
 use std::collections::HashMap;
@@ -50,8 +53,9 @@ pub struct ModelService {
 	db: Database,
 	vault: Arc<dyn CredentialVault>,
 	transport: Arc<dyn ModelTransport>,
+	history: TranslationHistoryService,
 	/// Per-provider async locks: concurrent syncs for one provider serialize (max transport
-	/// concurrency 1). Not single-flight — each waiter re-resolves connection identity after
+	/// concurrency 1). Not single-flight - each waiter re-resolves connection identity after
 	/// acquiring the lock and runs its own Future.
 	sync_locks: Arc<StdMutex<HashMap<Uuid, Arc<AsyncMutex<()>>>>>,
 }
@@ -104,11 +108,17 @@ enum SyncWriteOutcome {
 }
 
 impl ModelService {
-	pub fn new(db: Database, vault: Arc<dyn CredentialVault>, transport: Arc<dyn ModelTransport>) -> Self {
+	pub fn new(
+		db: Database,
+		vault: Arc<dyn CredentialVault>,
+		transport: Arc<dyn ModelTransport>,
+		history: TranslationHistoryService,
+	) -> Self {
 		Self {
 			db,
 			vault,
 			transport,
+			history,
 			sync_locks: Arc::new(StdMutex::new(HashMap::new())),
 		}
 	}
@@ -352,7 +362,8 @@ impl ModelService {
 	/// Translate `input.text` with a configured model via non-streaming chat completion.
 	///
 	/// When `profile_id` is set, applies profile templates and walks the fallback model chain
-	/// after the primary `model_id`. Does not persist source, prompt, or response content.
+	/// after the primary `model_id`. Records history after a real provider attempt (success or
+	/// soft fail); cancelled and Early validation outcomes are not recorded.
 	pub async fn translate(
 		&self,
 		input: TranslateInput,
@@ -361,10 +372,20 @@ impl ModelService {
 		if cancel.is_some_and(|t| t.is_cancelled()) {
 			return Ok(TranslateResult::cancelled(0));
 		}
+		let input_snapshot = build_input_snapshot(&input);
 		let prepared = self.prepare_translate(input).await?;
 		match prepared {
 			TranslatePrepare::Early(result) => Ok(result),
-			TranslatePrepare::Ready { attempts } => self.run_translate_attempts(attempts, false, None, None, cancel).await,
+			TranslatePrepare::Ready {
+				attempts,
+				profile_id,
+				profile_name,
+			} => {
+				let snapshots = extract_model_snapshots(&attempts);
+				let result = self.run_translate_attempts(attempts, false, None, None, cancel).await?;
+				self.maybe_record_history(&result, input_snapshot, snapshots, profile_id, profile_name);
+				Ok(result)
+			}
 		}
 	}
 
@@ -383,6 +404,7 @@ impl ModelService {
 			);
 			return Ok(());
 		}
+		let input_snapshot = build_input_snapshot(&input);
 		let prepared = self.prepare_translate(input).await?;
 		match prepared {
 			TranslatePrepare::Early(result) => {
@@ -392,7 +414,12 @@ impl ModelService {
 				);
 				Ok(())
 			}
-			TranslatePrepare::Ready { attempts } => {
+			TranslatePrepare::Ready {
+				attempts,
+				profile_id,
+				profile_name,
+			} => {
+				let snapshots = extract_model_snapshots(&attempts);
 				let app_chunk = app.clone();
 				let rid = request_id.clone();
 				let mut on_delta = move |delta: &str| {
@@ -418,6 +445,7 @@ impl ModelService {
 				let result = self
 					.run_translate_attempts(attempts, true, Some(&mut on_delta), Some(&mut on_reset), cancel)
 					.await?;
+				self.maybe_record_history(&result, input_snapshot, snapshots, profile_id, profile_name);
 				// Soft failures after all attempts still use done with ok=false so the UI
 				// can treat them like non-stream TranslateResult failures.
 				let _ = app.emit(
@@ -427,6 +455,35 @@ impl ModelService {
 				Ok(())
 			}
 		}
+	}
+
+	/// Record a translation history row after a real provider attempt. Skips cancelled
+	/// results; insert failure is logged inside the history service and never propagates.
+	fn maybe_record_history(
+		&self,
+		result: &TranslateResult,
+		input: TranslateInputSnapshot,
+		snapshots: Vec<(Uuid, String, Option<String>)>,
+		profile_id: Option<Uuid>,
+		profile_name: Option<String>,
+	) {
+		if result.error_code.as_deref() == Some(TRANSLATE_CANCELLED_CODE) {
+			return;
+		}
+		let producing_id = result.model_id.or_else(|| snapshots.first().map(|(id, _, _)| *id));
+		let (model_display_name, provider_display_name) = snapshots
+			.iter()
+			.find(|(id, _, _)| Some(*id) == producing_id)
+			.map(|(_, name, provider)| (name.clone(), provider.clone()))
+			.unwrap_or_default();
+		let snapshot = TranslateHistorySnapshot {
+			model_id: producing_id,
+			model_display_name,
+			provider_display_name,
+			profile_id,
+			profile_name,
+		};
+		self.history.record_from_translate(result, &input, &snapshot);
 	}
 
 	/// Detect the language of `input.text` via a single non-streaming chat completion.
@@ -791,11 +848,39 @@ where
 	}
 }
 
+/// Snapshot language-id metadata + source text from a translate input for history recording.
+fn build_input_snapshot(input: &TranslateInput) -> TranslateInputSnapshot {
+	TranslateInputSnapshot {
+		source_text: input.text.clone(),
+		source_lang: input.source_lang.clone(),
+		target_lang: input.target_lang.clone(),
+		effective_source_lang: input.effective_source_lang_id.clone(),
+		effective_target_lang: input.effective_target_lang_id.clone(),
+	}
+}
+
+/// Extract (model_id, model display name, provider display name) per attempt so the
+/// producing model's snapshot can be looked up after `run_translate_attempts` returns.
+fn extract_model_snapshots(attempts: &[TranslateAttempt]) -> Vec<(Uuid, String, Option<String>)> {
+	attempts
+		.iter()
+		.map(|attempt| {
+			(
+				attempt.model_id,
+				attempt.model_display_name.clone(),
+				attempt.provider_display_name.clone(),
+			)
+		})
+		.collect()
+}
+
 enum TranslatePrepare {
 	/// Soft validation / credential failure returned as a typed result (not IpcError).
 	Early(TranslateResult),
 	Ready {
 		attempts: Vec<TranslateAttempt>,
+		profile_id: Option<Uuid>,
+		profile_name: Option<String>,
 	},
 }
 
@@ -810,6 +895,8 @@ enum DetectPrepare {
 
 struct TranslateAttempt {
 	model_id: Uuid,
+	model_display_name: String,
+	provider_display_name: Option<String>,
 	request: ChatCompletionRequest,
 }
 
@@ -963,6 +1050,8 @@ fn prepare_llm_detection(
 			config,
 			model_key,
 			model_default_output_tokens: _,
+			model_display_name: _,
+			provider_display_name: _,
 		} => Ok(DetectPrepare::Ready {
 			model_id,
 			request: ChatCompletionRequest {
@@ -1099,7 +1188,11 @@ fn prepare_translate_sync(
 		})));
 	}
 
-	Ok(TranslatePrepare::Ready { attempts })
+	Ok(TranslatePrepare::Ready {
+		attempts,
+		profile_id: profile.as_ref().map(|p| p.id),
+		profile_name: profile.as_ref().map(|p| p.name.clone()),
+	})
 }
 
 enum SingleModelPrepare {
@@ -1136,8 +1229,12 @@ fn prepare_single_model_attempt(
 			config,
 			model_key,
 			model_default_output_tokens,
+			model_display_name,
+			provider_display_name,
 		} => Ok(SingleModelPrepare::Ready(TranslateAttempt {
 			model_id,
+			model_display_name,
+			provider_display_name,
 			request: ChatCompletionRequest {
 				adapter_id: config.adapter_id,
 				base_url: config.base_url,
@@ -1178,6 +1275,8 @@ pub(crate) enum ModelChatResolve {
 		config: ModelChatTransportConfig,
 		model_key: String,
 		model_default_output_tokens: Option<u32>,
+		model_display_name: String,
+		provider_display_name: Option<String>,
 	},
 }
 
@@ -1220,17 +1319,27 @@ pub(crate) fn resolve_model_chat_transport(
 	match resolve_endpoint_and_secret(vault, &provider, &adapter_id)? {
 		EndpointSecret::Missing => Ok(ModelChatResolve::MissingCredential),
 		EndpointSecret::StoreFailure => Ok(ModelChatResolve::CredentialStoreFailure),
-		EndpointSecret::Ready { base_url, secret } => Ok(ModelChatResolve::Ready {
-			config: ModelChatTransportConfig {
-				adapter_id,
-				base_url,
-				credential_kind: provider.credential_kind,
-				secret,
-				proxy_mode: provider.proxy_mode,
-			},
-			model_key: model.model_key,
-			model_default_output_tokens,
-		}),
+		EndpointSecret::Ready { base_url, secret } => {
+			let model_key = model.model_key;
+			let model_display_name = model
+				.display_name_override
+				.clone()
+				.or_else(|| model.remote_display_name.clone())
+				.unwrap_or_else(|| model_key.clone());
+			Ok(ModelChatResolve::Ready {
+				config: ModelChatTransportConfig {
+					adapter_id,
+					base_url,
+					credential_kind: provider.credential_kind,
+					secret,
+					proxy_mode: provider.proxy_mode,
+				},
+				model_key,
+				model_default_output_tokens,
+				model_display_name,
+				provider_display_name: Some(provider.display_name.clone()),
+			})
+		}
 	}
 }
 

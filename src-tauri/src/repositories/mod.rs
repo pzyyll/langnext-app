@@ -5,6 +5,7 @@ pub mod app_settings;
 pub mod credential_operations;
 pub mod provider_instances;
 pub mod provider_models;
+pub mod translation_history;
 pub mod translation_profiles;
 
 #[cfg(test)]

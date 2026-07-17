@@ -2,13 +2,17 @@
 // ABOUTME: Keeps query keys and fetchers co-located for reuse across routes.
 import { queryOptions } from "@tanstack/react-query";
 import {
+	getTranslationHistory,
 	getTranslationProfile,
 	listAllProviderModels,
 	listProviderInstances,
 	listProviderModels,
+	listTranslationHistory,
+	listTranslationHistoryModelFacets,
 	listTranslationProfiles,
 } from "../storage/client";
-import { modelKeys, profileKeys, providerKeys } from "./keys";
+import type { TranslationHistoryListQuery } from "../storage/types";
+import { historyKeys, modelKeys, profileKeys, providerKeys } from "./keys";
 
 export function providerListOptions() {
 	return queryOptions({
@@ -44,5 +48,27 @@ export function profileDetailOptions(id: string) {
 		queryKey: profileKeys.detail(id),
 		queryFn: () => getTranslationProfile(id),
 		enabled: id.length > 0,
+	});
+}
+
+export function historyListOptions(query: TranslationHistoryListQuery) {
+	return queryOptions({
+		queryKey: historyKeys.list(query),
+		queryFn: () => listTranslationHistory(query),
+	});
+}
+
+export function historyDetailOptions(id: string) {
+	return queryOptions({
+		queryKey: historyKeys.detail(id),
+		queryFn: () => getTranslationHistory(id),
+		enabled: id.length > 0,
+	});
+}
+
+export function historyModelFacetsOptions() {
+	return queryOptions({
+		queryKey: historyKeys.modelFacets(),
+		queryFn: listTranslationHistoryModelFacets,
 	});
 }

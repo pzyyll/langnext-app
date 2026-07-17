@@ -5,8 +5,13 @@ import { useQueryClient } from "@tanstack/react-query";
 import { listen } from "@tauri-apps/api/event";
 import { logger } from "../logger";
 import { createDebouncedInvalidator } from "./debouncedInvalidator";
-import { DATA_MODELS_CHANGED, DATA_PROVIDERS_CHANGED, DATA_TRANSLATION_PROFILES_CHANGED } from "./events";
-import { modelKeys, profileKeys, providerKeys } from "./keys";
+import {
+	DATA_MODELS_CHANGED,
+	DATA_PROVIDERS_CHANGED,
+	DATA_TRANSLATION_HISTORY_CHANGED,
+	DATA_TRANSLATION_PROFILES_CHANGED,
+} from "./events";
+import { historyKeys, modelKeys, profileKeys, providerKeys } from "./keys";
 import { registerDataChangeListeners } from "./registerDataChangeListeners";
 
 /** Coalesce bulk model-delete event storms into one invalidate per prefix. */
@@ -63,6 +68,12 @@ export function QueryEventSync() {
 							invalidator.schedule(modelKeys.all);
 						},
 					},
+					{
+						name: DATA_TRANSLATION_HISTORY_CHANGED,
+						onEvent: () => {
+							invalidator.schedule(historyKeys.all);
+						},
+					},
 				],
 			});
 
@@ -78,6 +89,7 @@ export function QueryEventSync() {
 				void queryClient.invalidateQueries({ queryKey: profileKeys.all });
 				void queryClient.invalidateQueries({ queryKey: providerKeys.all });
 				void queryClient.invalidateQueries({ queryKey: modelKeys.all });
+				void queryClient.invalidateQueries({ queryKey: historyKeys.all });
 			}
 		}
 

@@ -11,6 +11,9 @@ pub const PROVIDERS_CHANGED: &str = "data://providers-changed";
 /// Emitted after model create, update, enable/disable, delete, or successful sync.
 pub const MODELS_CHANGED: &str = "data://models-changed";
 
+/// Emitted after translation history delete or clear-all (not after each write).
+pub const TRANSLATION_HISTORY_CHANGED: &str = "data://translation-history-changed";
+
 /// Broadcast a coarse data-change notification; log emit failures for observability.
 pub fn emit_data_changed(app: &AppHandle, event: &str) {
 	if let Err(error) = app.emit(event, serde_json::json!({})) {

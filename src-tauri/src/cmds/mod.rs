@@ -6,4 +6,5 @@ pub mod providers;
 pub mod runtime;
 pub mod settings;
 pub mod snap;
+pub mod translation_history;
 pub mod translation_profiles;

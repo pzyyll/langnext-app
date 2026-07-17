@@ -144,6 +144,14 @@ export interface TranslateInput {
 	text: string;
 	/** Optional profile for templates + fallback model chain. */
 	profileId?: string | null;
+	/** Configured source language id (`auto` allowed). History metadata only. */
+	sourceLangId?: string | null;
+	/** Configured target language id (`auto` allowed). History metadata only. */
+	targetLangId?: string | null;
+	/** Concrete source language id actually used (post-detection). History metadata only. */
+	effectiveSourceLangId?: string | null;
+	/** Concrete target language id actually used (post Auto resolution). History metadata only. */
+	effectiveTargetLangId?: string | null;
 }
 
 /** Result of translate_text IPC (success or soft provider/validation failure). */
@@ -362,6 +370,78 @@ export interface ImportResult {
 export interface IpcError {
 	code: string;
 	message: string;
+}
+
+/** Persisted outcome of a completed translate attempt. */
+export type HistoryStatus = "complete" | "failed";
+
+/** Full history row for get / get_many / CSV export. */
+export interface TranslationHistoryDto {
+	id: string;
+	createdAt: string;
+	sourceText: string;
+	translatedText: string;
+	sourceLang: string;
+	targetLang: string;
+	effectiveSourceLang: string | null;
+	effectiveTargetLang: string | null;
+	modelId: string | null;
+	modelDisplayName: string;
+	providerDisplayName: string | null;
+	profileId: string | null;
+	profileName: string | null;
+	status: HistoryStatus;
+	errorCode: string | null;
+	errorMessage: string | null;
+	latencyMs: number;
+}
+
+/** List row: previews instead of full text. */
+export interface TranslationHistoryListItemDto {
+	id: string;
+	createdAt: string;
+	sourceTextPreview: string;
+	translatedTextPreview: string;
+	sourceTextTruncated: boolean;
+	translatedTextTruncated: boolean;
+	sourceLang: string;
+	targetLang: string;
+	effectiveSourceLang: string | null;
+	effectiveTargetLang: string | null;
+	modelId: string | null;
+	modelDisplayName: string;
+	providerDisplayName: string | null;
+	profileId: string | null;
+	profileName: string | null;
+	status: HistoryStatus;
+	errorCode: string | null;
+	latencyMs: number;
+}
+
+export interface TranslationHistoryListQuery {
+	search?: string | null;
+	modelId?: string | null;
+	/** Effective source OR target language id filter. */
+	language?: string | null;
+	/** Local YYYY-MM-DD day; the service expands it to UTC bounds using offsetMinutes. */
+	date?: string | null;
+	/** Client UTC offset in minutes (positive east of UTC). */
+	offsetMinutes?: number | null;
+	page: number;
+	pageSize?: number | null;
+}
+
+export interface TranslationHistoryListResult {
+	items: TranslationHistoryListItemDto[];
+	total: number;
+	page: number;
+	pageSize: number;
+}
+
+export interface TranslationHistoryModelFacet {
+	modelId: string | null;
+	modelDisplayName: string;
+	lastSeenAt: string;
 }
 
 /** Compile-time fixtures ensuring DTO shapes stay aligned with Rust serde. */

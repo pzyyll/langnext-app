@@ -319,7 +319,7 @@ mod tests {
 	fn capability_overrides_reject_default_output_above_model_limit() {
 		let json = serde_json::json!({
 			"schemaVersion": 1,
-			"maxOutputTokens": 32768,
+			"maxOutputTokens": 4096,
 			"defaultOutputTokens": 8192
 		});
 		assert!(CapabilityOverridesV1::from_json(&Some(json)).is_err());

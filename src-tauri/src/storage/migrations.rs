@@ -12,6 +12,7 @@ pub const MIGRATIONS: &[&str] = &[
 	include_str!("../../migrations/0005_profile_language_detection.sql"),
 	include_str!("../../migrations/0006_profile_language_preferences.sql"),
 	include_str!("../../migrations/0007_profile_streaming.sql"),
+	include_str!("../../migrations/0008_translation_history.sql"),
 ];
 
 pub fn latest_version() -> i32 {
@@ -145,6 +146,11 @@ mod tests {
 			.unwrap();
 		// No rows on a fresh database; the column exists and is nullable-default-backed.
 		assert_eq!(stream_enabled, None);
+		// v8 translation_history table exists and is empty on a fresh database.
+		let history_count: i64 = conn
+			.query_row("SELECT COUNT(*) FROM translation_history", [], |r| r.get(0))
+			.unwrap();
+		assert_eq!(history_count, 0);
 	}
 
 	#[test]

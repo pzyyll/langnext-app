@@ -8,4 +8,5 @@ pub mod provider;
 pub mod settings;
 pub mod time;
 pub mod translation;
+pub mod translation_history;
 pub mod translation_profile;

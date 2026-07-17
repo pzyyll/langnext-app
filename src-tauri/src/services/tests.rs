@@ -11,7 +11,10 @@ use crate::domain::settings::{
 };
 use crate::domain::translation_profile::{TranslationProfile, TranslationProfileTarget, TranslationProfileWrite};
 use crate::error::StorageError;
-use crate::services::{ImportExportService, ModelService, ProviderService, SettingsService, TranslationProfileService};
+use crate::services::{
+	ImportExportService, ModelService, ProviderService, SettingsService, TranslationHistoryService,
+	TranslationProfileService,
+};
 use crate::storage::Database;
 use std::collections::VecDeque;
 use std::future::Future;
@@ -84,7 +87,13 @@ fn setup() -> (
 	let vault = Arc::new(MemoryCredentialVault::new());
 	let transport = Arc::new(TestModelTransport::new());
 	let providers = ProviderService::new(db.clone(), vault.clone());
-	let models = ModelService::new(db.clone(), vault.clone(), transport.clone() as Arc<dyn ModelTransport>);
+	let history = TranslationHistoryService::new(db.clone());
+	let models = ModelService::new(
+		db.clone(),
+		vault.clone(),
+		transport.clone() as Arc<dyn ModelTransport>,
+		history,
+	);
 	let profiles = TranslationProfileService::new(db.clone());
 	let settings = SettingsService::new(db.clone(), vault.clone());
 	let import_export = ImportExportService::new(db.clone(), vault.clone());
@@ -821,7 +830,7 @@ fn profile_language_preferences_validation_rejects_invalid_pairs() {
 
 	// Unsupported id rejected.
 	let mut unsupported = base(m.id);
-	unsupported.preferred_target_lang = Some("ru".into());
+	unsupported.preferred_target_lang = Some("xx".into());
 	assert!(matches!(
 		profiles.save(unsupported).unwrap_err(),
 		StorageError::Validation(_)
@@ -1047,10 +1056,12 @@ fn import_credential_cleanup_isolates_unrelated_journals() {
 	let vault = Arc::new(FailingCredentialVault::new());
 	let transport = Arc::new(TestModelTransport::new());
 	let providers = ProviderService::new(db.clone(), vault.clone());
+	let history = TranslationHistoryService::new(db.clone());
 	let models = ModelService::new(
 		db.clone(),
 		vault.clone() as Arc<dyn CredentialVault>,
 		transport as Arc<dyn ModelTransport>,
+		history,
 	);
 	let profiles = TranslationProfileService::new(db.clone());
 	let _settings = SettingsService::new(db.clone(), vault.clone());
@@ -1266,7 +1277,7 @@ fn import_accepts_legacy_preferences_and_rejects_invalid_pairs() {
 
 	// Unsupported preference id rejected.
 	let mut unsupported = doc;
-	unsupported.translation_profiles[0].preferred_target_lang = Some("ru".into());
+	unsupported.translation_profiles[0].preferred_target_lang = Some("xx".into());
 	let preview = ie.preview(&unsupported, ImportConflictMode::Merge).unwrap();
 	assert!(!preview.valid);
 }
@@ -1564,6 +1575,8 @@ fn model_chat_transport_gemini_override_uses_gemini_default_url() {
 			config,
 			model_key,
 			model_default_output_tokens,
+			model_display_name: _,
+			provider_display_name: _,
 		} => {
 			assert_eq!(config.adapter_id, "gemini");
 			assert_eq!(
@@ -1644,6 +1657,10 @@ fn model_chat_transport_gemini_override_requires_secret_despite_channel_none() {
 			target_lang: "zh".into(),
 			text: "hello".into(),
 			profile_id: None,
+			source_lang_id: None,
+			target_lang_id: None,
+			effective_source_lang_id: None,
+			effective_target_lang_id: None,
 		},
 		None,
 	))
@@ -1812,10 +1829,12 @@ fn test_connection_failing_vault_credential_unavailable() {
 		))
 		.unwrap();
 	vault.set_fail_get(true);
+	let history = TranslationHistoryService::new(db.clone());
 	let models = ModelService::new(
 		db,
 		vault as Arc<dyn CredentialVault>,
 		transport as Arc<dyn ModelTransport>,
+		history,
 	);
 	let result = block_on(models.test_connection(p.id)).unwrap();
 	assert!(!result.ok);
@@ -1965,10 +1984,12 @@ fn sync_models_failing_vault_records_credential_unavailable() {
 		))
 		.unwrap();
 	vault.set_fail_get(true);
+	let history = TranslationHistoryService::new(db.clone());
 	let models = ModelService::new(
 		db,
 		vault as Arc<dyn CredentialVault>,
 		transport as Arc<dyn ModelTransport>,
+		history,
 	);
 	let result = block_on(models.sync_models(p.id)).unwrap();
 	assert!(!result.ok);
@@ -2093,10 +2114,12 @@ fn sync_models_aborts_merge_when_connection_changes_mid_flight() {
 
 	// Seed an existing remote model under the original endpoint.
 	let seed_transport = Arc::new(TestModelTransport::new());
+	let history = TranslationHistoryService::new(db.clone());
 	let seed_models = ModelService::new(
 		db.clone(),
 		vault.clone() as Arc<dyn CredentialVault>,
 		seed_transport.clone() as Arc<dyn ModelTransport>,
+		history,
 	);
 	seed_models
 		.apply_remote_merge(
@@ -2118,10 +2141,12 @@ fn sync_models_aborts_merge_when_connection_changes_mid_flight() {
 			remote_metadata_json: None,
 		}],
 	});
+	let history = TranslationHistoryService::new(db.clone());
 	let models = ModelService::new(
 		db,
 		vault as Arc<dyn CredentialVault>,
 		transport as Arc<dyn ModelTransport>,
+		history,
 	);
 
 	let result = block_on(models.sync_models(p.id)).unwrap();
@@ -2191,10 +2216,12 @@ fn sync_models_transport_error_skips_write_when_connection_changed() {
 
 	// Establish a prior successful sync so we can detect erroneous failure writes.
 	let seed_transport = Arc::new(TestModelTransport::new());
+	let history = TranslationHistoryService::new(db.clone());
 	let seed_models = ModelService::new(
 		db.clone(),
 		vault.clone() as Arc<dyn CredentialVault>,
 		seed_transport.clone() as Arc<dyn ModelTransport>,
+		history,
 	);
 	seed_models
 		.apply_remote_merge(
@@ -2215,10 +2242,12 @@ fn sync_models_transport_error_skips_write_when_connection_changed() {
 		provider_id: p.id,
 		err: TransportError::Network,
 	});
+	let history = TranslationHistoryService::new(db.clone());
 	let models = ModelService::new(
 		db,
 		vault as Arc<dyn CredentialVault>,
 		transport as Arc<dyn ModelTransport>,
+		history,
 	);
 
 	let result = block_on(models.sync_models(p.id)).unwrap();
@@ -2332,10 +2361,12 @@ fn sync_models_missing_credential_skips_error_when_connection_changed() {
 			CredentialUpdate::Replace("sk-original".into()),
 		))
 		.unwrap();
+	let history = TranslationHistoryService::new(db.clone());
 	let seed_models = ModelService::new(
 		db.clone(),
 		vault.clone() as Arc<dyn CredentialVault>,
 		seed_transport as Arc<dyn ModelTransport>,
+		history,
 	);
 	// apply_remote_merge does not touch the vault.
 	seed_models
@@ -2354,10 +2385,12 @@ fn sync_models_missing_credential_skips_error_when_connection_changed() {
 
 	vault.configure(providers.clone(), p.id, false);
 	let transport = Arc::new(TestModelTransport::new());
+	let history = TranslationHistoryService::new(db.clone());
 	let models = ModelService::new(
 		db,
 		vault as Arc<dyn CredentialVault>,
 		transport as Arc<dyn ModelTransport>,
+		history,
 	);
 
 	let result = block_on(models.sync_models(p.id)).unwrap();
@@ -2393,10 +2426,12 @@ fn sync_models_vault_failure_skips_error_when_connection_changed() {
 		))
 		.unwrap();
 	let seed_transport = Arc::new(TestModelTransport::new());
+	let history = TranslationHistoryService::new(db.clone());
 	let seed_models = ModelService::new(
 		db.clone(),
 		vault.clone() as Arc<dyn CredentialVault>,
 		seed_transport as Arc<dyn ModelTransport>,
+		history,
 	);
 	seed_models
 		.apply_remote_merge(
@@ -2411,10 +2446,12 @@ fn sync_models_vault_failure_skips_error_when_connection_changed() {
 
 	vault.configure(providers.clone(), p.id, true);
 	let transport = Arc::new(TestModelTransport::new());
+	let history = TranslationHistoryService::new(db.clone());
 	let models = ModelService::new(
 		db,
 		vault as Arc<dyn CredentialVault>,
 		transport as Arc<dyn ModelTransport>,
+		history,
 	);
 
 	let result = block_on(models.sync_models(p.id)).unwrap();
@@ -2514,10 +2551,12 @@ fn sync_models_serializes_same_provider_max_transport_concurrency_one() {
 			remote_metadata_json: None,
 		}],
 	});
+	let history = TranslationHistoryService::new(db.clone());
 	let models = ModelService::new(
 		db,
 		vault as Arc<dyn CredentialVault>,
 		transport as Arc<dyn ModelTransport>,
+		history,
 	);
 
 	let models_a = models.clone();
@@ -2652,10 +2691,12 @@ fn clear_credential_final_txn_preserves_latest_sync_when_identity_unchanged() {
 	db.initialize().unwrap();
 	let vault = Arc::new(MemoryCredentialVault::new());
 	let providers = ProviderService::new(db.clone(), vault.clone());
+	let history = TranslationHistoryService::new(db.clone());
 	let models = ModelService::new(
 		db,
 		vault as Arc<dyn CredentialVault>,
 		Arc::new(TestModelTransport::new()) as Arc<dyn ModelTransport>,
+		history,
 	);
 	// Already credentialKind none / no ref: Clear is identity-preserving for connection fields.
 	let p = providers
@@ -2734,10 +2775,12 @@ fn clear_credential_final_txn_resets_sync_when_identity_changed() {
 	db.initialize().unwrap();
 	let vault = Arc::new(MemoryCredentialVault::new());
 	let providers = ProviderService::new(db.clone(), vault.clone());
+	let history = TranslationHistoryService::new(db.clone());
 	let models = ModelService::new(
 		db,
 		vault as Arc<dyn CredentialVault>,
 		Arc::new(TestModelTransport::new()) as Arc<dyn ModelTransport>,
+		history,
 	);
 	let p = providers
 		.save(provider_write(
@@ -2981,10 +3024,12 @@ fn vault_set_failure_on_replace_does_not_reset_sync_status() {
 			CredentialUpdate::Replace("sk-ok".into()),
 		))
 		.unwrap();
+	let history = TranslationHistoryService::new(db.clone());
 	let models = ModelService::new(
 		db,
 		vault.clone() as Arc<dyn CredentialVault>,
 		transport as Arc<dyn ModelTransport>,
+		history,
 	);
 	models
 		.apply_remote_merge(
@@ -3773,4 +3818,114 @@ fn import_rejects_profile_detection_referencing_missing_model() {
 		"expected a language-detection reference error, got {:?}",
 		preview.validation_errors
 	);
+}
+
+#[test]
+fn translate_records_history_on_success_not_on_cancel_or_early() {
+	use crate::domain::translation::TranslateInput;
+	use crate::domain::translation_history::{HistoryStatus, TranslationHistoryListQuery};
+
+	let (_d, db, _v, providers, models, _profiles, _settings, _import_export, _transport) = setup();
+	let history = TranslationHistoryService::new(db.clone());
+	let (base_url, _request_handle) = spawn_detection_chat_server();
+	let mut write = provider_write(CredentialKind::None, CredentialUpdate::Keep);
+	write.base_url_override = Some(base_url);
+	let provider = providers.save(write).unwrap();
+	let model = models
+		.save_manual(ManualModelWrite {
+			id: None,
+			provider_instance_id: provider.id,
+			model_key: "gpt-test".into(),
+			display_name_override: Some("GPT Test".into()),
+			enabled: true,
+			capability_overrides_json: None,
+			adapter_id: None,
+		})
+		.unwrap();
+
+	let input = TranslateInput {
+		model_id: model.id,
+		source_lang: "English".into(),
+		target_lang: "Chinese".into(),
+		text: "hello".into(),
+		profile_id: None,
+		source_lang_id: Some("auto".into()),
+		target_lang_id: Some("zh".into()),
+		effective_source_lang_id: Some("en".into()),
+		effective_target_lang_id: Some("zh".into()),
+	};
+	let result = block_on(models.translate(input, None)).unwrap();
+	assert!(result.ok, "translate failed: {result:?}");
+
+	let list = history
+		.list(TranslationHistoryListQuery {
+			page: 1,
+			page_size: Some(10),
+			..Default::default()
+		})
+		.unwrap();
+	assert_eq!(list.total, 1, "one history row expected after success");
+	let item = &list.items[0];
+	assert_eq!(item.source_text_preview, "hello");
+	assert_eq!(item.translated_text_preview, "zh");
+	assert_eq!(item.model_display_name, "GPT Test");
+	assert_eq!(item.effective_source_lang.as_deref(), Some("en"));
+	assert_eq!(item.effective_target_lang.as_deref(), Some("zh"));
+	assert_eq!(item.status, HistoryStatus::Complete);
+
+	// Early validation failure (empty text) must not record history.
+	let early = block_on(models.translate(
+		TranslateInput {
+			model_id: model.id,
+			source_lang: "English".into(),
+			target_lang: "Chinese".into(),
+			text: "   ".into(),
+			profile_id: None,
+			source_lang_id: None,
+			target_lang_id: None,
+			effective_source_lang_id: None,
+			effective_target_lang_id: None,
+		},
+		None,
+	))
+	.unwrap();
+	assert!(!early.ok);
+	assert_eq!(early.error_code.as_deref(), Some("validation_failed"));
+	let list = history
+		.list(TranslationHistoryListQuery {
+			page: 1,
+			page_size: Some(10),
+			..Default::default()
+		})
+		.unwrap();
+	assert_eq!(list.total, 1, "Early validation must not record history");
+
+	// Pre-cancelled token returns cancelled and must not record history.
+	let token = crate::domain::cancel::CancelToken::new();
+	token.cancel();
+	let cancelled = block_on(models.translate(
+		TranslateInput {
+			model_id: model.id,
+			source_lang: "English".into(),
+			target_lang: "Chinese".into(),
+			text: "hello".into(),
+			profile_id: None,
+			source_lang_id: None,
+			target_lang_id: None,
+			effective_source_lang_id: None,
+			effective_target_lang_id: None,
+		},
+		Some(&token),
+	))
+	.unwrap();
+	assert!(!cancelled.ok);
+	assert_eq!(cancelled.error_code.as_deref(), Some("cancelled"));
+	let list = history
+		.list(TranslationHistoryListQuery {
+			page: 1,
+			page_size: Some(10),
+			..Default::default()
+		})
+		.unwrap();
+	assert_eq!(list.total, 1, "cancelled translate must not record history");
 }

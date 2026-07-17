@@ -112,6 +112,8 @@ pub fn run() {
 		.plugin(logging::plugin())
 		.plugin(tauri_plugin_opener::init())
 		.plugin(tauri_plugin_clipboard_manager::init())
+		.plugin(tauri_plugin_dialog::init())
+		.plugin(tauri_plugin_fs::init())
 		.invoke_handler(tauri::generate_handler![
 			cmds::snap::show_snap_overlay,
 			windows::quick_translate::set_pin,
@@ -139,6 +141,12 @@ pub fn run() {
 			cmds::translation_profiles::save_translation_profile,
 			cmds::translation_profiles::set_translation_profile_enabled,
 			cmds::translation_profiles::delete_translation_profile,
+			cmds::translation_history::list_translation_history,
+			cmds::translation_history::get_translation_history,
+			cmds::translation_history::get_translation_history_many,
+			cmds::translation_history::list_translation_history_model_facets,
+			cmds::translation_history::delete_translation_history,
+			cmds::translation_history::delete_all_translation_history,
 			cmds::settings::get_app_settings,
 			cmds::settings::update_app_settings,
 			cmds::settings::set_app_theme,

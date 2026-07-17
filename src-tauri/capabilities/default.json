@@ -26,6 +26,8 @@
 		"core:window:allow-set-title",
 		"core:tray:default",
 		"global-shortcut:default",
-		"clipboard-manager:default"
+		"clipboard-manager:default",
+		"dialog:default",
+		"fs:allow-write-text-file"
 	]
 }

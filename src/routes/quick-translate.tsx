@@ -409,6 +409,10 @@ function QuickTranslatePage() {
 							targetLang: t(`translate.languages.${effectiveTargetId}`),
 							text: trimmed,
 							profileId: slot.profileId,
+							sourceLangId: sourceLang,
+							targetLangId: targetLang,
+							effectiveSourceLangId: sourceId,
+							effectiveTargetLangId: effectiveTargetId,
 						},
 						requestId,
 					);
