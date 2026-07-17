@@ -5,8 +5,7 @@ use crate::consts;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
 use std::sync::{Arc, Mutex};
 use tauri::{
-	Emitter, EventTarget, Listener, Manager, PhysicalPosition, PhysicalSize, Pixel, Runtime, WebviewWindow,
-	WebviewWindowBuilder,
+	Emitter, EventTarget, Listener, Manager, PhysicalPosition, Pixel, Runtime, WebviewWindow, WebviewWindowBuilder,
 };
 use tauri_plugin_clipboard_manager::ClipboardExt;
 
@@ -17,6 +16,10 @@ use kmhook::types::{ClickState, EventType, MouseButton, Pos};
 
 /// Default logical inner size used until outer_size is measured.
 const INIT_WIN_SIZE: (f64, f64) = (600.0, 640.0);
+
+/// Logical px: shift the window up so the cursor starts slightly inside the top edge.
+/// Keeps small pointer jitter from immediately dismissing the unpinned window.
+const CURSOR_TOP_OFFSET: f64 = 10.0;
 
 /// Custom ready event emitted from on_page_load(Finished) so clipboard can be sent safely.
 const QUICK_TRANSLATE_READY_EVENT: &str = "qt://ready";
@@ -60,38 +63,56 @@ fn record_win_outer_size<R: Runtime>(win: &WebviewWindow<R>) {
 	});
 }
 
-/// Clamp the window so it stays fully inside the monitor under the given (or current) point.
-fn adjust_win_position<R: Runtime, P: Pixel>(win: &WebviewWindow<R>, cursor: Option<PhysicalPosition<P>>) {
-	let cursor: PhysicalPosition<P> = cursor.unwrap_or_else(|| {
-		let cursor: PhysicalPosition<f64> = win.outer_position().unwrap_or_default().cast();
-		PhysicalPosition::new(P::from_f64(cursor.x), P::from_f64(cursor.y))
-	});
+/// Resolve physical outer size (live measurement, else last recorded).
+fn win_outer_size_px<R: Runtime>(win: &WebviewWindow<R>) -> (f64, f64) {
+	match win.outer_size() {
+		Ok(size) if size.width > 0 && size.height > 0 => (size.width as f64, size.height as f64),
+		_ => {
+			let size = WIN_SIZE.lock().unwrap();
+			(size.0, size.1)
+		}
+	}
+}
 
-	let (mut x, mut y) = (cursor.x.into(), cursor.y.into());
+/// Position relative to the cursor (center-top, offset 10) when provided; otherwise keep the
+/// current top-left and only clamp into the monitor under that point.
+fn adjust_win_position<R: Runtime, P: Pixel>(win: &WebviewWindow<R>, cursor: Option<PhysicalPosition<P>>) {
+	let (win_w, win_h) = win_outer_size_px(win);
+
+	// Anchor point used for monitor lookup; also the cursor when re-anchoring.
+	let (anchor_x, anchor_y, reanchor) = if let Some(cursor) = cursor {
+		(cursor.x.into(), cursor.y.into(), true)
+	} else {
+		let pos: PhysicalPosition<f64> = win.outer_position().unwrap_or_default().cast();
+		(pos.x, pos.y, false)
+	};
+
+	let (mut x, mut y) = if reanchor {
+		// Horizontal center on cursor; top edge slightly above cursor so the pointer starts inside.
+		(anchor_x - win_w / 2.0, anchor_y - CURSOR_TOP_OFFSET)
+	} else {
+		(anchor_x, anchor_y)
+	};
 
 	let _ = win
 		.app_handle()
-		.monitor_from_point(cursor.x.into(), cursor.y.into())
+		.monitor_from_point(anchor_x, anchor_y)
 		.inspect(|monitor| {
 			let Some(m) = monitor else {
 				return;
 			};
 
+			// Prefer logical offset scaled to this monitor when re-anchoring to the cursor.
+			if reanchor {
+				let top_offset = CURSOR_TOP_OFFSET * m.scale_factor();
+				x = anchor_x - win_w / 2.0;
+				y = anchor_y - top_offset;
+			}
+
 			let min_x = m.position().x as f64;
 			let min_y = m.position().y as f64;
 			let max_x = min_x + m.size().width as f64;
 			let max_y = min_y + m.size().height as f64;
-
-			let win_size = {
-				let size = WIN_SIZE.lock().unwrap();
-				PhysicalSize::new(size.0, size.1)
-			};
-
-			// Prefer live outer size when available.
-			let (win_w, win_h) = match win.outer_size() {
-				Ok(size) if size.width > 0 && size.height > 0 => (size.width as f64, size.height as f64),
-				_ => (win_size.width, win_size.height),
-			};
 
 			if x + win_w > max_x {
 				x = max_x - win_w;
@@ -188,13 +209,23 @@ pub fn show<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<WebviewWindow<R>, S
 
 	let cursor = app.cursor_position().map_err(|e| e.to_string())?;
 
+	// Logical top-left: horizontally centered on cursor, top edge offset above cursor.
 	let (x, y) = app
 		.monitor_from_point(cursor.x, cursor.y)
 		.map(|monitor| {
-			monitor.map_or((cursor.x, cursor.y), |m| {
-				let logical = cursor.to_logical::<f64>(m.scale_factor());
-				(logical.x, logical.y)
-			})
+			monitor.map_or(
+				(
+					cursor.x - INIT_WIN_SIZE.0 / 2.0,
+					cursor.y - CURSOR_TOP_OFFSET,
+				),
+				|m| {
+					let logical = cursor.to_logical::<f64>(m.scale_factor());
+					(
+						logical.x - INIT_WIN_SIZE.0 / 2.0,
+						logical.y - CURSOR_TOP_OFFSET,
+					)
+				},
+			)
 		})
 		.map_err(|e| e.to_string())?;
 
@@ -218,11 +249,12 @@ pub fn show<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<WebviewWindow<R>, S
 		.disable_drag_drop_handler()
 		.position(x, y)
 		.visible(true)
-		.on_page_load(|window, payload| {
+		.on_page_load(move |window, payload| {
 			use tauri::webview::PageLoadEvent;
 			if payload.event() == PageLoadEvent::Finished {
 				record_win_outer_size(&window);
-				adjust_win_position::<_, f64>(&window, None);
+				// Re-anchor with measured outer size so centering matches the real frame.
+				adjust_win_position(&window, Some(cursor));
 				let _ = window.emit(QUICK_TRANSLATE_READY_EVENT, ());
 			}
 		});
