@@ -607,6 +607,20 @@ fn log_transport_error(adapter_id: &str, err: TransportError) {
 	log::warn!("model_transport_error adapter_id={adapter_id} code={}", err.code());
 }
 
+/// Debug-only: log the outbound chat JSON body (no URL / credentials).
+fn log_chat_request_body(adapter_id: &str, stream: bool, body: &serde_json::Value) {
+	log::debug!(
+		"chat_request adapter_id={adapter_id} stream={stream} body={body}"
+	);
+}
+
+/// Debug-only: log the inbound chat response payload (no URL / credentials).
+fn log_chat_response_body(adapter_id: &str, stream: bool, body: &str) {
+	log::debug!(
+		"chat_response adapter_id={adapter_id} stream={stream} body={body}"
+	);
+}
+
 /// Read a response body with a hard size cap, streaming chunks (no full `bytes()` first).
 ///
 /// Rejects immediately when `Content-Length` declares more than `MAX_RESPONSE_BODY_BYTES`.
@@ -907,6 +921,7 @@ async fn chat_completion_http_inner(request: ChatCompletionRequest) -> Result<Ch
 	};
 
 	// Never log request_url: Gemini embeds the API key in the query string.
+	log_chat_request_body(&request.adapter_id, false, &body);
 	let builder = client.post(request_url).json(&body);
 	let builder = match apply_headers(
 		builder,
@@ -930,11 +945,7 @@ async fn chat_completion_http_inner(request: ChatCompletionRequest) -> Result<Ch
 		}
 	};
 
-	if let Err(err) = map_status(response.status()) {
-		log_transport_error(&request.adapter_id, err);
-		return Err(err);
-	}
-
+	let status = response.status();
 	let body_bytes = match read_response_body_bounded(response).await {
 		Ok(b) => b,
 		Err(err) => {
@@ -942,6 +953,14 @@ async fn chat_completion_http_inner(request: ChatCompletionRequest) -> Result<Ch
 			return Err(err);
 		}
 	};
+	let body_text = String::from_utf8_lossy(&body_bytes);
+	log_chat_response_body(&request.adapter_id, false, &body_text);
+
+	if let Err(err) = map_status(status) {
+		log_transport_error(&request.adapter_id, err);
+		return Err(err);
+	}
+
 	let value: serde_json::Value = match serde_json::from_slice(&body_bytes) {
 		Ok(v) => v,
 		Err(_) => {
@@ -1469,6 +1488,8 @@ pub async fn chat_completion_stream_http_cancellable(
 			request_url.query_pairs_mut().append_pair("alt", "sse");
 		}
 
+		// Never log request_url: Gemini embeds the API key in the query string.
+		log_chat_request_body(&request.adapter_id, true, &body);
 		let builder = client
 			.post(request_url)
 			.header(reqwest::header::ACCEPT, "text/event-stream")
@@ -1495,13 +1516,34 @@ pub async fn chat_completion_stream_http_cancellable(
 			}
 		};
 
-		if let Err(err) = map_status(response.status()) {
+		let status = response.status();
+		if let Err(err) = map_status(status) {
+			// Error responses are typically JSON, not SSE — read as a bounded body for debug.
+			match read_response_body_bounded(response).await {
+				Ok(bytes) => {
+					log_chat_response_body(
+						&request.adapter_id,
+						true,
+						&String::from_utf8_lossy(&bytes),
+					);
+				}
+				Err(_) => {
+					log::debug!(
+						"chat_response adapter_id={} stream=true body=<unreadable status={}>",
+						request.adapter_id,
+						status.as_u16()
+					);
+				}
+			}
 			log_transport_error(&request.adapter_id, err);
 			return Err(err);
 		}
 
 		match consume_sse_stream(response, &request.adapter_id, &mut on_delta, cancel).await {
-			Ok(content) => Ok(ChatCompletionResult { content }),
+			Ok(content) => {
+				log_chat_response_body(&request.adapter_id, true, &content);
+				Ok(ChatCompletionResult { content })
+			}
 			Err(err) => {
 				if err != TransportError::Cancelled {
 					log_transport_error(&request.adapter_id, err);

@@ -15,7 +15,7 @@ use kmhook::enginer as mouse_enginer;
 use kmhook::types::{ClickState, EventType, MouseButton, Pos};
 
 /// Default logical inner size used until content-driven resize runs.
-const INIT_WIN_SIZE: (f64, f64) = (600.0, 360.0);
+const INIT_WIN_SIZE: (f64, f64) = (420.0, 360.0);
 
 /// Minimum logical inner size (width fixed floor; height content-adaptive).
 const MIN_WIN_SIZE: (f64, f64) = (420.0, 280.0);
