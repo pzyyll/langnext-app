@@ -6,9 +6,9 @@ set -euo pipefail
 root="$(cd "$(dirname "$0")/../.." && pwd)"
 tsc7="$root/node_modules/@typescript/native/bin/tsc"
 if [[ ! -x "$tsc7" && ! -f "$tsc7" ]]; then
-	echo "TypeScript 7 binary not found at $tsc7" >&2
-	echo "Run: bun install" >&2
-	exit 1
+  echo "TypeScript 7 binary not found at $tsc7" >&2
+  echo "Run: bun install" >&2
+  exit 1
 fi
 node "$tsc7" --noEmit
 vite build
