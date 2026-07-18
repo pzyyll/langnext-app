@@ -7,6 +7,6 @@ pub mod quick_translate;
 pub mod tray;
 
 pub fn setup<R: Runtime>(app: &tauri::AppHandle<R>) {
-	main::show(app);
-	tray::setup(app);
+  main::show(app);
+  tray::setup(app);
 }

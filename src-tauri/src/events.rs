@@ -16,7 +16,7 @@ pub const TRANSLATION_HISTORY_CHANGED: &str = "data://translation-history-change
 
 /// Broadcast a coarse data-change notification; log emit failures for observability.
 pub fn emit_data_changed(app: &AppHandle, event: &str) {
-	if let Err(error) = app.emit(event, serde_json::json!({})) {
-		log::error!("data_change_emit_failed event={event} error={error}");
-	}
+  if let Err(error) = app.emit(event, serde_json::json!({})) {
+    log::error!("data_change_emit_failed event={event} error={error}");
+  }
 }

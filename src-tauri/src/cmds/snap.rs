@@ -7,25 +7,25 @@
 /// (same approach as tauri-plugin-decorum).
 #[tauri::command]
 pub async fn show_snap_overlay() {
-	#[cfg(target_os = "windows")]
-	{
-		use enigo::{Enigo, Key, KeyboardControllable};
-		use std::thread;
-		use std::time::Duration;
+  #[cfg(target_os = "windows")]
+  {
+    use enigo::{Enigo, Key, KeyboardControllable};
+    use std::thread;
+    use std::time::Duration;
 
-		// Run on a blocking thread so we don't hold the async runtime during sleep.
-		tauri::async_runtime::spawn_blocking(|| {
-			let mut enigo = Enigo::new();
-			enigo.key_down(Key::Meta);
-			enigo.key_click(Key::Layout('z'));
-			enigo.key_up(Key::Meta);
+    // Run on a blocking thread so we don't hold the async runtime during sleep.
+    tauri::async_runtime::spawn_blocking(|| {
+      let mut enigo = Enigo::new();
+      enigo.key_down(Key::Meta);
+      enigo.key_click(Key::Layout('z'));
+      enigo.key_up(Key::Meta);
 
-			thread::sleep(Duration::from_millis(50));
+      thread::sleep(Duration::from_millis(50));
 
-			// Hide the ugly number hotkeys overlay labels.
-			enigo.key_click(Key::Alt);
-		})
-		.await
-		.ok();
-	}
+      // Hide the ugly number hotkeys overlay labels.
+      enigo.key_click(Key::Alt);
+    })
+    .await
+    .ok();
+  }
 }
