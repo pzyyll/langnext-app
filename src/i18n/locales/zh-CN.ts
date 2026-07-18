@@ -75,6 +75,8 @@ const zhCN = {
 		retranslate: "重新翻译",
 		pin: "固定",
 		unpin: "取消固定",
+		enableAutoTranslate: "开启自动翻译",
+		disableAutoTranslate: "关闭自动翻译",
 	},
 	about: {
 		title: "关于",

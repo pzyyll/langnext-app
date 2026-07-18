@@ -118,6 +118,7 @@ pub fn run() {
 			cmds::snap::show_snap_overlay,
 			windows::quick_translate::set_pin,
 			windows::quick_translate::resize_window_height,
+			windows::quick_translate::notify_ready,
 			cmds::providers::list_provider_instances,
 			cmds::providers::save_provider_instance,
 			cmds::providers::set_provider_enabled,

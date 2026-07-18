@@ -3636,6 +3636,48 @@ fn detect_language_uses_low_generation_budget() {
 	let request = request_handle.join().unwrap();
 	assert_eq!(request["max_tokens"], 256);
 	assert_eq!(request["temperature"], 0.0);
+	// Non-DeepSeek models must not receive the thinking toggle.
+	assert!(request.get("thinking").is_none());
+}
+
+#[test]
+fn detect_language_disables_thinking_for_deepseek_models() {
+	let (_d, _db, _v, providers, models, ..) = setup();
+	let (base_url, request_handle) = spawn_detection_chat_server();
+	let mut write = provider_write(CredentialKind::None, CredentialUpdate::Keep);
+	write.base_url_override = Some(base_url);
+	let provider = providers.save(write).unwrap();
+	let model = models
+		.save_manual(ManualModelWrite {
+			id: None,
+			provider_instance_id: provider.id,
+			// DeepSeek V4 defaults thinking=enabled; detection must turn it off so the
+			// small max_tokens budget is not spent entirely on reasoning_content.
+			model_key: "deepseek-v4-flash".into(),
+			display_name_override: None,
+			enabled: true,
+			capability_overrides_json: None,
+			adapter_id: None,
+		})
+		.unwrap();
+
+	let result = block_on(models.detect_language(
+		DetectLanguageInput {
+			text: "DeT".into(),
+			model_id: Some(model.id),
+			profile_id: None,
+		},
+		None,
+	))
+	.unwrap();
+	assert!(result.ok, "detection failed: {result:?}");
+	assert_eq!(result.language_id.as_deref(), Some("zh"));
+
+	let request = request_handle.join().unwrap();
+	// thinking:disabled is best-effort; some relays ignore it and still stream CoT.
+	// Keep a larger budget so the final language code can still fit after reasoning.
+	assert_eq!(request["max_tokens"], 2048);
+	assert_eq!(request["thinking"]["type"], "disabled");
 }
 
 #[test]

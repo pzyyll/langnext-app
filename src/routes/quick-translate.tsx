@@ -5,7 +5,7 @@ import { useAutoAnimate } from "@formkit/auto-animate/react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { Button } from "@base-ui/react/button";
 import { Collapsible } from "@base-ui/react/collapsible";
 import { Menu } from "@base-ui/react/menu";
@@ -17,10 +17,13 @@ import IconMaterialSymbolsLightCheck from "~icons/material-symbols-light/check";
 import IconMaterialSymbolsLightRefresh from "~icons/material-symbols-light/refresh";
 import IconMaterialSymbolsLightSwapHoriz from "~icons/material-symbols-light/swap-horiz";
 import ExpandCircleDownOutlineIcon from "~icons/material-symbols/expand-circle-down-outline";
+import FlashAutoIcon from "~icons/material-symbols/flash-auto";
+import FlashAutoOutlineIcon from "~icons/material-symbols/flash-auto-outline";
 import { TitleBar } from "../components/Win/TitleBar";
 import { ComboboxField } from "../components/ComboboxField";
 import { ScrollArea } from "../components/ScrollArea";
 import { SelectField } from "../components/SelectField";
+import { TextLoading } from "../components/TextLoading";
 import { iconButtonClassName } from "../components/ui";
 import { QUICK_TRANSLATE_CLIPBOARD_TEXT } from "../query/events";
 import {
@@ -29,9 +32,24 @@ import {
 	profileListOptions,
 	providerListOptions,
 } from "../query/options";
-import { cancelTranslate, detectLanguage, translateText } from "../storage/client";
+import {
+	cancelTranslate,
+	detectLanguage,
+	TRANSLATE_CHUNK_EVENT,
+	TRANSLATE_DONE_EVENT,
+	TRANSLATE_ERROR_EVENT,
+	TRANSLATE_RESET_EVENT,
+	translateText,
+	translateTextStream,
+} from "../storage/client";
 import { getIpcErrorMessage } from "../storage/errors";
-import type { TranslationProfileDto } from "../storage/types";
+import type {
+	TranslateStreamChunk,
+	TranslateStreamDone,
+	TranslateStreamError,
+	TranslateStreamReset,
+	TranslationProfileDto,
+} from "../storage/types";
 import { slotListAutoAnimate } from "./-quick-translate-list-animate";
 import {
 	AUTO_LANGUAGE,
@@ -84,6 +102,8 @@ type SessionState = {
 	slots: Slot[];
 	/** Slot ids that are collapsed; expanded cards are omitted. */
 	collapsedSlotIds: string[];
+	/** When false, source edits never auto-run; Enter translates, Shift+Enter inserts a newline. */
+	autoTranslate: boolean;
 };
 
 /** Stable key for whether a card already has a completed translation for the current inputs. */
@@ -94,6 +114,59 @@ function buildTranslationInputKey(
 	profileId: string,
 ): string {
 	return `${sourceLang}\0${targetLang}\0${profileId}\0${sourceText.trim()}`;
+}
+
+/**
+ * Max code-unit length change still treated as one continuous keystroke / IME commit.
+ * Larger one-shot jumps (select-all + retype/paste) restart the output instead of "旧文…".
+ */
+const CONTINUOUS_SOURCE_EDIT_MAX_DELTA = 4;
+
+/**
+ * Whether `next` looks like progressive editing of `prev` (type/backspace/IME),
+ * not a wholesale replace such as select-all then retype or paste.
+ * Continuous edits keep prior translation + trailing dots; full replaces restart empty.
+ */
+function isContinuousSourceEdit(prev: string, next: string): boolean {
+	if (prev === next) {
+		return true;
+	}
+	if (!prev || !next) {
+		return false;
+	}
+
+	const lengthDelta = Math.abs(prev.length - next.length);
+
+	// Pure append of any size (including paste at end) stays continuous.
+	if (next.startsWith(prev)) {
+		return true;
+	}
+
+	// Small shrink from the end (backspace / delete selection of a few chars).
+	if (prev.startsWith(next) && lengthDelta <= CONTINUOUS_SOURCE_EDIT_MAX_DELTA) {
+		return true;
+	}
+
+	// Small grow/shrink from the start.
+	if (next.endsWith(prev)) {
+		return true;
+	}
+	if (prev.endsWith(next) && lengthDelta <= CONTINUOUS_SOURCE_EDIT_MAX_DELTA) {
+		return true;
+	}
+
+	// Small mid-string edit: limited length delta and mostly-shared prefix.
+	if (lengthDelta <= CONTINUOUS_SOURCE_EDIT_MAX_DELTA) {
+		const limit = Math.min(prev.length, next.length);
+		let shared = 0;
+		while (shared < limit && prev[shared] === next[shared]) {
+			shared += 1;
+		}
+		return shared >= limit - CONTINUOUS_SOURCE_EDIT_MAX_DELTA;
+	}
+
+	// One-shot replace of most/all content (select-all + retype/paste).
+	return false;
 }
 
 function newId(): string {
@@ -109,6 +182,7 @@ function loadSession(): SessionState {
 		targetLang: "zh",
 		slots: [],
 		collapsedSlotIds: [],
+		autoTranslate: true,
 	};
 	if (typeof window === "undefined") {
 		return fallback;
@@ -136,7 +210,8 @@ function loadSession(): SessionState {
 		const collapsedSlotIds = Array.isArray(parsed.collapsedSlotIds)
 			? parsed.collapsedSlotIds.filter((id): id is string => typeof id === "string" && slotIds.has(id))
 			: [];
-		return { sourceLang, targetLang, slots, collapsedSlotIds };
+		const autoTranslate = typeof parsed.autoTranslate === "boolean" ? parsed.autoTranslate : fallback.autoTranslate;
+		return { sourceLang, targetLang, slots, collapsedSlotIds, autoTranslate };
 	} catch {
 		return fallback;
 	}
@@ -190,6 +265,7 @@ function QuickTranslatePage() {
 	const [copiedSlotId, setCopiedSlotId] = useState<string | null>(null);
 	/** Slot ids that are currently collapsed; absent ids default to expanded. */
 	const [collapsedSlotIds, setCollapsedSlotIds] = useState<Set<string>>(() => new Set(sessionSeed.collapsedSlotIds));
+	const [autoTranslate, setAutoTranslate] = useState(sessionSeed.autoTranslate);
 	const [detectedSourceLang, setDetectedSourceLang] = useState<LanguageId | null>(null);
 	const [isPinned, setIsPinned] = useState(false);
 
@@ -245,8 +321,9 @@ function QuickTranslatePage() {
 			targetLang,
 			slots,
 			collapsedSlotIds: [...collapsedSlotIds],
+			autoTranslate,
 		});
-	}, [sourceLang, targetLang, slots, collapsedSlotIds]);
+	}, [sourceLang, targetLang, slots, collapsedSlotIds, autoTranslate]);
 
 	const handlePinChange = useCallback((next: boolean) => {
 		setIsPinned(next);
@@ -260,10 +337,16 @@ function QuickTranslatePage() {
 	/** Bumped when a language-detect request should supersede the previous one. */
 	const detectEpochRef = useRef(0);
 	const requestIdsRef = useRef<Map<string, string>>(new Map());
+	/** Per-slot stream event unlisteners; cleared on abort/done/error. */
+	const streamUnlistenersRef = useRef<Map<string, UnlistenFn[]>>(new Map());
+	/** Resolves the in-flight stream Promise for a slot when aborted mid-stream. */
+	const streamSettleRef = useRef<Map<string, () => void>>(new Map());
 	const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const slotsRef = useRef(slots);
 	const collapsedSlotIdsRef = useRef(collapsedSlotIds);
 	const detectedSourceLangRef = useRef(detectedSourceLang);
+	const resultsRef = useRef(results);
+	const sourceTextRef = useRef(sourceText);
 
 	useEffect(() => {
 		slotsRef.current = slots;
@@ -276,6 +359,14 @@ function QuickTranslatePage() {
 	useEffect(() => {
 		detectedSourceLangRef.current = detectedSourceLang;
 	}, [detectedSourceLang]);
+
+	useEffect(() => {
+		resultsRef.current = results;
+	}, [results]);
+
+	useEffect(() => {
+		sourceTextRef.current = sourceText;
+	}, [sourceText]);
 	/** Titlebar shell: fixed outside the scroll region; height is included in window resize. */
 	const titleBarMeasureRef = useRef<HTMLDivElement>(null);
 	/** Body content node (h-fit) used to drive window height; state so the observer rebinds on mount. */
@@ -299,18 +390,40 @@ function QuickTranslatePage() {
 		return slotEpochRef.current.get(slotId) === epoch;
 	}, []);
 
-	const abortRequest = useCallback(async (key: string) => {
-		const requestId = requestIdsRef.current.get(key);
-		if (!requestId) {
+	const clearSlotStreamListeners = useCallback((slotId: string) => {
+		const unlisteners = streamUnlistenersRef.current.get(slotId);
+		if (!unlisteners) {
 			return;
 		}
-		requestIdsRef.current.delete(key);
-		try {
-			await cancelTranslate(requestId);
-		} catch {
-			// Request may already have finished.
+		for (const unlisten of unlisteners) {
+			unlisten();
 		}
+		streamUnlistenersRef.current.delete(slotId);
 	}, []);
+
+	const abortRequest = useCallback(
+		async (key: string) => {
+			// Capture before settle/listeners clear removes the map entry.
+			const requestId = requestIdsRef.current.get(key);
+			// Resolve any in-flight stream Promise and drop its listeners.
+			const settleStream = streamSettleRef.current.get(key);
+			if (settleStream) {
+				settleStream();
+			} else {
+				clearSlotStreamListeners(key);
+				requestIdsRef.current.delete(key);
+			}
+			if (!requestId) {
+				return;
+			}
+			try {
+				await cancelTranslate(requestId);
+			} catch {
+				// Request may already have finished.
+			}
+		},
+		[clearSlotStreamListeners],
+	);
 
 	const abortSlots = useCallback(
 		async (slotIds: string[]) => {
@@ -323,6 +436,20 @@ function QuickTranslatePage() {
 		const keys = [...requestIdsRef.current.keys()];
 		await Promise.all(keys.map((key) => abortRequest(key)));
 	}, [abortRequest]);
+
+	/** Bump every slot epoch and cancel in-flight detect/translate work. */
+	const invalidateInFlight = useCallback(() => {
+		detectEpochRef.current += 1;
+		for (const slot of slotsRef.current) {
+			nextSlotEpoch(slot.id);
+		}
+		void abortAll();
+	}, [abortAll, nextSlotEpoch]);
+
+	/** Drop card outputs so the UI restarts from waiting/translating instead of "旧文…". */
+	const clearAllResults = useCallback(() => {
+		setResults({});
+	}, []);
 
 	useEffect(() => {
 		const slotEpochs = slotEpochRef.current;
@@ -372,17 +499,27 @@ function QuickTranslatePage() {
 	 * Translate the given cards only. Omit `targetSlots` to run every *expanded* card.
 	 * Collapsed cards are skipped unless explicitly listed (manual retranslate / expand).
 	 * Cards are independent: adding or refreshing one never clears or re-runs the others.
+	 * By default, cards whose completed result already matches the current input are skipped;
+	 * pass `{ force: true }` to re-run anyway (manual retranslate).
 	 */
 	const runTranslations = useCallback(
-		async (targetSlots?: Slot[]) => {
+		async (targetSlots?: Slot[], options?: { force?: boolean }) => {
 			const trimmed = sourceText.trim();
-			const slotsToRun = targetSlots ?? slotsRef.current.filter((slot) => !collapsedSlotIdsRef.current.has(slot.id));
-			if (!trimmed || slotsToRun.length === 0) {
+			const candidates = targetSlots ?? slotsRef.current.filter((slot) => !collapsedSlotIdsRef.current.has(slot.id));
+			if (!trimmed || candidates.length === 0) {
 				return;
 			}
 
 			const inputKeyFor = (profileId: string) =>
 				buildTranslationInputKey(sourceText, sourceLang, targetLang, profileId);
+
+			// Skip cards that already finished for this exact source/lang/profile fingerprint.
+			const slotsToRun = options?.force
+				? candidates
+				: candidates.filter((slot) => resultsRef.current[slot.id]?.inputKey !== inputKeyFor(slot.profileId));
+			if (slotsToRun.length === 0) {
+				return;
+			}
 
 			const epochs = new Map<string, number>();
 			for (const slot of slotsToRun) {
@@ -390,11 +527,18 @@ function QuickTranslatePage() {
 			}
 			await abortSlots(slotsToRun.map((slot) => slot.id));
 
-			// Mark only the targeted cards as translating.
+			// Keep prior text so continuous re-runs show "旧文…" with trailing dots until the first
+			// new chunk/result arrives (langnext-translate style). Full source replaces clear earlier
+			// in applySourceText so this path starts empty for select-all + retype.
 			setResults((prev) => {
 				const next = { ...prev };
 				for (const slot of slotsToRun) {
-					next[slot.id] = { text: "", error: null, isTranslating: true };
+					const current = prev[slot.id] ?? emptyResult;
+					next[slot.id] = {
+						text: current.text,
+						error: null,
+						isTranslating: true,
+					};
 				}
 				return next;
 			});
@@ -479,6 +623,179 @@ function QuickTranslatePage() {
 				return;
 			}
 
+			const resolveFailureMessage = (errorCode: string | null | undefined, message: string | undefined) => {
+				if (errorCode === "timeout") {
+					return t("translate.errors.timeout");
+				}
+				return message || t("translate.errorPrefix");
+			};
+
+			/**
+			 * Stream one card to completion (or cancel/stale). Resolves when terminal event arrives
+			 * or invoke setup fails — so parallel cards do not leave dangling work untracked.
+			 */
+			const runSlotStream = (
+				slotId: string,
+				epoch: number,
+				requestId: string,
+				payload: {
+					modelId: string;
+					sourceLang: string;
+					targetLang: string;
+					text: string;
+					profileId: string;
+					sourceLangId: SourceLanguageId;
+					targetLangId: SelectableLanguageId;
+					effectiveSourceLangId: LanguageId;
+					effectiveTargetLangId: LanguageId;
+				},
+				slotInputKey: string,
+			): Promise<void> => {
+				return new Promise((resolve) => {
+					let settled = false;
+					const settle = () => {
+						if (settled) {
+							return;
+						}
+						settled = true;
+						streamSettleRef.current.delete(slotId);
+						clearSlotStreamListeners(slotId);
+						if (requestIdsRef.current.get(slotId) === requestId) {
+							requestIdsRef.current.delete(slotId);
+						}
+						resolve();
+					};
+					// So abortRequest can unblock Promise.all when cancel supersedes this stream.
+					streamSettleRef.current.set(slotId, settle);
+
+					const isCurrentRequest = () =>
+						isSlotEpochCurrent(slotId, epoch) && requestIdsRef.current.get(slotId) === requestId;
+
+					// First chunk replaces any retained previous result; later chunks append.
+					let receivedChunk = false;
+					const onChunk = (event: { payload: TranslateStreamChunk }) => {
+						const chunk = event.payload;
+						if (chunk.id !== requestId || !isCurrentRequest()) {
+							return;
+						}
+						const isFirstChunk = !receivedChunk;
+						receivedChunk = true;
+						setResults((prev) => {
+							const current = prev[slotId] ?? emptyResult;
+							return {
+								...prev,
+								[slotId]: {
+									...current,
+									text: isFirstChunk ? chunk.delta : current.text + chunk.delta,
+									error: null,
+									isTranslating: true,
+								},
+							};
+						});
+					};
+
+					const onReset = (event: { payload: TranslateStreamReset }) => {
+						const reset = event.payload;
+						if (reset.id !== requestId || !isCurrentRequest()) {
+							return;
+						}
+						// Drop partial text from the failed model before fallback chunks arrive.
+						patchResult(slotId, { text: "", error: null, isTranslating: true });
+					};
+
+					const onDone = (event: { payload: TranslateStreamDone }) => {
+						const done = event.payload;
+						if (done.id !== requestId) {
+							return;
+						}
+						if (!isSlotEpochCurrent(slotId, epoch) || requestIdsRef.current.get(slotId) !== requestId) {
+							settle();
+							return;
+						}
+						if (done.errorCode === "cancelled") {
+							patchResult(slotId, { isTranslating: false });
+							settle();
+							return;
+						}
+						if (done.ok) {
+							// Prefer full text from the server so we do not drift on partial assembly.
+							patchResult(slotId, {
+								text: done.translatedText,
+								error: null,
+								isTranslating: false,
+								inputKey: slotInputKey,
+							});
+						} else {
+							patchResult(slotId, {
+								text: "",
+								error: resolveFailureMessage(done.errorCode, done.message),
+								isTranslating: false,
+								inputKey: slotInputKey,
+							});
+						}
+						settle();
+					};
+
+					const onError = (event: { payload: TranslateStreamError }) => {
+						const err = event.payload;
+						if (err.id !== requestId) {
+							return;
+						}
+						if (!isSlotEpochCurrent(slotId, epoch) || requestIdsRef.current.get(slotId) !== requestId) {
+							settle();
+							return;
+						}
+						if (err.errorCode === "cancelled") {
+							patchResult(slotId, { isTranslating: false });
+							settle();
+							return;
+						}
+						patchResult(slotId, {
+							text: "",
+							error: resolveFailureMessage(err.errorCode, err.message),
+							isTranslating: false,
+							inputKey: slotInputKey,
+						});
+						settle();
+					};
+
+					void (async () => {
+						try {
+							const [unChunk, unReset, unDone, unError] = await Promise.all([
+								listen<TranslateStreamChunk>(TRANSLATE_CHUNK_EVENT, onChunk),
+								listen<TranslateStreamReset>(TRANSLATE_RESET_EVENT, onReset),
+								listen<TranslateStreamDone>(TRANSLATE_DONE_EVENT, onDone),
+								listen<TranslateStreamError>(TRANSLATE_ERROR_EVENT, onError),
+							]);
+							if (!isCurrentRequest()) {
+								unChunk();
+								unReset();
+								unDone();
+								unError();
+								settle();
+								return;
+							}
+							streamUnlistenersRef.current.set(slotId, [unChunk, unReset, unDone, unError]);
+							await translateTextStream(payload, requestId);
+							// Invoke returns after the backend spawns; terminal UI comes from done/error.
+							if (!isCurrentRequest()) {
+								settle();
+							}
+						} catch (err) {
+							if (isCurrentRequest()) {
+								patchResult(slotId, {
+									text: "",
+									error: getIpcErrorMessage(err, t("translate.errorPrefix")),
+									isTranslating: false,
+									inputKey: slotInputKey,
+								});
+							}
+							settle();
+						}
+					})();
+				});
+			};
+
 			await Promise.all(
 				activeSlots.map(async (slot) => {
 					const epoch = epochs.get(slot.id) ?? -1;
@@ -521,20 +838,25 @@ function QuickTranslatePage() {
 							preferredTarget: prefs.preferredTarget,
 						});
 
-						const result = await translateText(
-							{
-								modelId,
-								sourceLang: t(`translate.languages.${sourceId}`),
-								targetLang: t(`translate.languages.${effectiveTargetId}`),
-								text: trimmed,
-								profileId: slot.profileId,
-								sourceLangId: sourceLang,
-								targetLangId: targetLang,
-								effectiveSourceLangId: sourceId,
-								effectiveTargetLangId: effectiveTargetId,
-							},
-							requestId,
-						);
+						const payload = {
+							modelId,
+							sourceLang: t(`translate.languages.${sourceId}`),
+							targetLang: t(`translate.languages.${effectiveTargetId}`),
+							text: trimmed,
+							profileId: slot.profileId,
+							sourceLangId: sourceLang,
+							targetLangId: targetLang,
+							effectiveSourceLangId: sourceId,
+							effectiveTargetLangId: effectiveTargetId,
+						};
+
+						// Honor each card's profile stream toggle independently.
+						if (profile.streamEnabled) {
+							await runSlotStream(slot.id, epoch, requestId, payload, slotInputKey);
+							return;
+						}
+
+						const result = await translateText(payload, requestId);
 
 						if (!isSlotEpochCurrent(slot.id, epoch)) {
 							return;
@@ -555,7 +877,7 @@ function QuickTranslatePage() {
 						} else {
 							patchResult(slot.id, {
 								text: "",
-								error: result.message || t("translate.errorPrefix"),
+								error: resolveFailureMessage(result.errorCode, result.message),
 								isTranslating: false,
 								inputKey: slotInputKey,
 							});
@@ -565,6 +887,7 @@ function QuickTranslatePage() {
 							return;
 						}
 						requestIdsRef.current.delete(slot.id);
+						clearSlotStreamListeners(slot.id);
 						patchResult(slot.id, {
 							text: "",
 							error: getIpcErrorMessage(err, t("translate.errorPrefix")),
@@ -578,6 +901,7 @@ function QuickTranslatePage() {
 		[
 			abortRequest,
 			abortSlots,
+			clearSlotStreamListeners,
 			enabledModelIds,
 			failSlots,
 			i18n.language,
@@ -592,25 +916,46 @@ function QuickTranslatePage() {
 		],
 	);
 
-	/** Update source text; clearing it aborts in-flight work and wipes every card result. */
+	/**
+	 * Update source text.
+	 * - Empty: abort and wipe every card (nothing to translate).
+	 * - Continuous edit: keep prior translations so debounced re-runs can show "旧文…".
+	 * - Full replace (select-all + retype/paste): clear outputs so loading restarts from empty.
+	 * Identical text is a no-op (e.g. clipboard re-emit of the same payload).
+	 */
 	const applySourceText = useCallback(
 		(next: string) => {
-			setSourceText(next);
-			setDetectedSourceLang(null);
-			if (next.trim()) {
+			const prev = sourceTextRef.current;
+			if (next === prev) {
 				return;
 			}
-			detectEpochRef.current += 1;
-			for (const slot of slotsRef.current) {
-				nextSlotEpoch(slot.id);
+			sourceTextRef.current = next;
+			setSourceText(next);
+			setDetectedSourceLang(null);
+
+			if (!next.trim()) {
+				invalidateInFlight();
+				clearAllResults();
+				return;
 			}
-			void abortAll();
-			setResults({});
+
+			// Wholesale replace: drop stale "旧文…" and restart waiting/translating from empty.
+			if (!isContinuousSourceEdit(prev, next)) {
+				invalidateInFlight();
+				clearAllResults();
+			}
+			// Continuous edit: leave results alone; runTranslations will keep text + set dots.
 		},
-		[abortAll, nextSlotEpoch],
+		[clearAllResults, invalidateInFlight],
 	);
+	const applySourceTextRef = useRef(applySourceText);
+	useEffect(() => {
+		applySourceTextRef.current = applySourceText;
+	}, [applySourceText]);
 
 	// Double Ctrl+C: backend emits clipboard text; set source so debounced auto-translate runs.
+	// Notify ready only after the listener is registered so first-wake queued text is not lost.
+	// Empty deps + ref keep the listener mounted for the page lifetime (no rebind gap).
 	useEffect(() => {
 		if (!isTauriRuntime()) {
 			return;
@@ -623,26 +968,40 @@ function QuickTranslatePage() {
 			if (cancelled) {
 				return;
 			}
-			applySourceText(event.payload ?? "");
-		}).then((fn) => {
-			if (cancelled) {
-				fn();
-				return;
-			}
-			unlisten = fn;
-		});
+			applySourceTextRef.current(event.payload ?? "");
+		})
+			.then(async (fn) => {
+				if (cancelled) {
+					fn();
+					return;
+				}
+				unlisten = fn;
+				try {
+					await invoke("notify_ready");
+				} catch {
+					// Window may be tearing down; next mount re-notifies.
+				}
+			})
+			.catch(() => {
+				// Listener registration failed; leave frontend_ready false so text stays queued.
+			});
 
 		return () => {
 			cancelled = true;
 			unlisten?.();
 		};
-	}, [applySourceText]);
+	}, []);
 
 	// Debounced auto-translate when source text or languages change — not when cards are added/removed.
+	// Skipped entirely while auto-translate is off; Enter is the only input-driven trigger then.
 	useEffect(() => {
 		if (debounceTimerRef.current != null) {
 			clearTimeout(debounceTimerRef.current);
 			debounceTimerRef.current = null;
+		}
+
+		if (!autoTranslate) {
+			return;
 		}
 
 		const trimmed = sourceText.trim();
@@ -661,7 +1020,7 @@ function QuickTranslatePage() {
 				debounceTimerRef.current = null;
 			}
 		};
-	}, [sourceText, sourceLang, targetLang, runTranslations]);
+	}, [autoTranslate, sourceText, sourceLang, targetLang, runTranslations]);
 
 	// Content-driven window height: titlebar (fixed) + body (scrolls when clamped).
 	// Measure the h-fit content box (offsetHeight), not the ScrollArea viewport fill height.
@@ -828,7 +1187,7 @@ function QuickTranslatePage() {
 		if (!sourceText.trim()) {
 			return;
 		}
-		void runTranslations([slot]);
+		void runTranslations([slot], { force: true });
 	}
 
 	function swapLanguages() {
@@ -862,6 +1221,9 @@ function QuickTranslatePage() {
 			setTargetLang(effectiveSource);
 		}
 		setDetectedSourceLang(null);
+		// Swap changes the effective fingerprint; restart outputs like a language change.
+		invalidateInFlight();
+		clearAllResults();
 	}
 
 	async function copySlot(slotId: string) {
@@ -898,38 +1260,57 @@ function QuickTranslatePage() {
 					pinned={isPinned}
 					onPinChange={handlePinChange}
 					leading={
-						<Menu.Root>
-							<Menu.Trigger
-								className={leadingButtonClassName}
-								aria-label={t("quickTranslate.addPreset")}
-								disabled={profilesLoading || profiles.length === 0}
-							>
-								<IconMaterialSymbolsLightAdd className="pointer-events-none size-4" />
-							</Menu.Trigger>
-							<Menu.Portal>
-								<Menu.Positioner className="outline-hidden z-50" sideOffset={4} align="start">
-									<Menu.Popup className={`${menuPopupClassName} max-h-64 overflow-y-auto py-1`}>
-										{profiles.length === 0 ? (
-											<Menu.Item className={menuItemClassName} disabled>
-												{t("quickTranslate.noProfiles")}
-											</Menu.Item>
-										) : (
-											profiles.map((profile) => (
-												<Menu.Item
-													key={profile.id}
-													className={menuItemClassName}
-													onClick={() => {
-														addSlot(profile.id);
-													}}
-												>
-													{profile.name}
+						<>
+							<Menu.Root>
+								<Menu.Trigger
+									className={leadingButtonClassName}
+									aria-label={t("quickTranslate.addPreset")}
+									disabled={profilesLoading || profiles.length === 0}
+								>
+									<IconMaterialSymbolsLightAdd className="pointer-events-none size-4" />
+								</Menu.Trigger>
+								<Menu.Portal>
+									<Menu.Positioner className="outline-hidden z-50" sideOffset={4} align="start">
+										<Menu.Popup className={`${menuPopupClassName} max-h-64 overflow-y-auto py-1`}>
+											{profiles.length === 0 ? (
+												<Menu.Item className={menuItemClassName} disabled>
+													{t("quickTranslate.noProfiles")}
 												</Menu.Item>
-											))
-										)}
-									</Menu.Popup>
-								</Menu.Positioner>
-							</Menu.Portal>
-						</Menu.Root>
+											) : (
+												profiles.map((profile) => (
+													<Menu.Item
+														key={profile.id}
+														className={menuItemClassName}
+														onClick={() => {
+															addSlot(profile.id);
+														}}
+													>
+														{profile.name}
+													</Menu.Item>
+												))
+											)}
+										</Menu.Popup>
+									</Menu.Positioner>
+								</Menu.Portal>
+							</Menu.Root>
+							<Button
+								type="button"
+								className={leadingButtonClassName}
+								aria-label={
+									autoTranslate ? t("quickTranslate.disableAutoTranslate") : t("quickTranslate.enableAutoTranslate")
+								}
+								aria-pressed={autoTranslate}
+								onClick={() => {
+									setAutoTranslate((prev) => !prev);
+								}}
+							>
+								{autoTranslate ? (
+									<FlashAutoIcon className="pointer-events-none size-4" aria-hidden />
+								) : (
+									<FlashAutoOutlineIcon className="pointer-events-none size-4" aria-hidden />
+								)}
+							</Button>
+						</>
 					}
 				/>
 			</div>
@@ -956,7 +1337,17 @@ function QuickTranslatePage() {
 								applySourceText(event.currentTarget.value);
 							}}
 							onKeyDown={(event) => {
-								if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+								if (event.key !== "Enter") {
+									return;
+								}
+								// Always allow Ctrl/Cmd+Enter as an explicit run shortcut.
+								if (event.ctrlKey || event.metaKey) {
+									event.preventDefault();
+									void runTranslations();
+									return;
+								}
+								// Manual mode: Enter runs translation; Shift+Enter inserts a newline.
+								if (!autoTranslate && !event.shiftKey) {
 									event.preventDefault();
 									void runTranslations();
 								}
@@ -994,8 +1385,15 @@ function QuickTranslatePage() {
 							<ComboboxField
 								value={sourceLang}
 								onValueChange={(value) => {
-									setSourceLang((value ?? "auto") as SourceLanguageId);
+									const next = (value ?? "auto") as SourceLanguageId;
+									if (next === sourceLang) {
+										return;
+									}
+									setSourceLang(next);
 									setDetectedSourceLang(null);
+									// Language change invalidates completed outputs (langnext-translate clears showText).
+									invalidateInFlight();
+									clearAllResults();
 								}}
 								options={sourceLanguageOptions.map((option) => ({ value: option.id, label: option.label }))}
 								disabled={isTranslating}
@@ -1017,7 +1415,15 @@ function QuickTranslatePage() {
 						<div className="min-w-0 flex-1">
 							<ComboboxField
 								value={targetLang}
-								onValueChange={(value) => setTargetLang((value ?? "en") as SelectableLanguageId)}
+								onValueChange={(value) => {
+									const next = (value ?? "en") as SelectableLanguageId;
+									if (next === targetLang) {
+										return;
+									}
+									setTargetLang(next);
+									invalidateInFlight();
+									clearAllResults();
+								}}
 								options={targetLanguageOptions.map((option) => ({ value: option.id, label: option.label }))}
 								disabled={isTranslating}
 								emptyText={t("common.noMatches")}
@@ -1149,16 +1555,17 @@ function QuickTranslatePage() {
 												<p className="whitespace-pre-wrap text-error select-text" role="alert">
 													{result.error}
 												</p>
-											) : result.text ? (
-												<p className="whitespace-pre-wrap select-text">{result.text}</p>
-											) : result.isTranslating ? (
-												<p className="text-neutral italic select-none" role="status">
-													{t("translate.translating")}
-												</p>
+											) : result.text || result.isTranslating ? (
+												<TextLoading
+													text={result.text}
+													isLoading={result.isTranslating}
+													loadingLabel={t("translate.translating")}
+												/>
+											) : sourceText.trim() ? (
+												// Debounce / manual-mode gap: source ready but this card has not started yet.
+												<TextLoading text="" isLoading loadingLabel={t("quickTranslate.waiting")} />
 											) : (
-												<p className="text-neutral italic select-none">
-													{sourceText.trim() ? t("quickTranslate.waiting") : t("quickTranslate.resultPlaceholder")}
-												</p>
+												<p className="text-neutral italic select-none">{t("quickTranslate.resultPlaceholder")}</p>
 											)}
 										</div>
 									</Collapsible.Panel>

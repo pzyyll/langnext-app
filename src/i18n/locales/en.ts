@@ -77,6 +77,8 @@ const en = {
 		retranslate: "Retranslate",
 		pin: "Pin",
 		unpin: "Unpin",
+		enableAutoTranslate: "Enable auto translate",
+		disableAutoTranslate: "Disable auto translate",
 	},
 	about: {
 		title: "About",

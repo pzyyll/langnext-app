@@ -907,6 +907,24 @@ const DETECT_SAMPLE_CHARS: usize = 5000;
 /// Low deterministic budget for language classification requests.
 const DETECT_TEMPERATURE: f64 = 0.0;
 const DETECT_MAX_TOKENS: u32 = 256;
+/// Extra headroom when a thinking model still emits CoT despite `thinking: disabled`
+/// (common on relays). CoT + a single language code must both fit under this cap.
+const DETECT_MAX_TOKENS_THINKING_MODEL: u32 = 2048;
+
+/// Whether an OpenAI-compatible model/endpoint is DeepSeek-style thinking capable
+/// (`thinking` toggle + `reasoning_content`).
+///
+/// DeepSeek V4 defaults thinking to **enabled**. Detection uses a small answer;
+/// if thinking stays on (or the gateway ignores the toggle), a 256-token cap is
+/// often spent entirely on CoT and `content` arrives empty (`finish_reason=length`).
+fn is_deepseek_thinking_model(adapter_id: &str, model_key: &str, base_url: &str) -> bool {
+	if adapter_id != "openai-compatible" {
+		return false;
+	}
+	let model = model_key.to_ascii_lowercase();
+	let base = base_url.to_ascii_lowercase();
+	model.contains("deepseek") || base.contains("deepseek")
+}
 
 /// Which model to use for detection, given the profile config and request inputs.
 ///
@@ -1052,22 +1070,34 @@ fn prepare_llm_detection(
 			model_default_output_tokens: _,
 			model_display_name: _,
 			provider_display_name: _,
-		} => Ok(DetectPrepare::Ready {
-			model_id,
-			request: ChatCompletionRequest {
-				adapter_id: config.adapter_id,
-				base_url: config.base_url,
-				credential_kind: config.credential_kind,
-				secret: config.secret,
-				proxy_mode: config.proxy_mode,
-				model_key,
-				system_prompt,
-				user_prompt,
-				// Classification should be deterministic and use a small output budget.
-				temperature: Some(DETECT_TEMPERATURE),
-				max_tokens: Some(DETECT_MAX_TOKENS),
-			},
-		}),
+		} => {
+			// DeepSeek: best-effort disable thinking, and raise max_tokens so a single
+			// language code can still be emitted if the gateway keeps CoT on anyway.
+			let deepseek_thinking = is_deepseek_thinking_model(&config.adapter_id, &model_key, &config.base_url);
+			let thinking = if deepseek_thinking { Some(false) } else { None };
+			let max_tokens = if deepseek_thinking {
+				DETECT_MAX_TOKENS_THINKING_MODEL
+			} else {
+				DETECT_MAX_TOKENS
+			};
+			Ok(DetectPrepare::Ready {
+				model_id,
+				request: ChatCompletionRequest {
+					adapter_id: config.adapter_id,
+					base_url: config.base_url,
+					credential_kind: config.credential_kind,
+					secret: config.secret,
+					proxy_mode: config.proxy_mode,
+					model_key,
+					system_prompt,
+					user_prompt,
+					// Classification should be deterministic and use a small output budget.
+					temperature: Some(DETECT_TEMPERATURE),
+					max_tokens: Some(max_tokens),
+					thinking,
+				},
+			})
+		}
 	}
 }
 
@@ -1249,6 +1279,9 @@ fn prepare_single_model_attempt(
 					profile_max_tokens,
 					model_default_output_tokens,
 				)),
+				// Leave provider default (DeepSeek: thinking enabled). Stream parser
+				// skips reasoning-only empty content chunks until final answer arrives.
+				thinking: None,
 			},
 		})),
 	}

@@ -2,11 +2,9 @@
 // ABOUTME: Cursor-follow show, click-outside hide, content-height resize, clipboard paste on double Ctrl+C.
 
 use crate::consts;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use tauri::{
-	Emitter, EventTarget, Listener, Manager, PhysicalPosition, Pixel, Runtime, WebviewWindow, WebviewWindowBuilder,
-};
+use tauri::{Emitter, EventTarget, Manager, PhysicalPosition, Pixel, Runtime, WebviewWindow, WebviewWindowBuilder};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 
 #[cfg(windows)]
@@ -24,21 +22,27 @@ const MIN_WIN_SIZE: (f64, f64) = (420.0, 280.0);
 /// Keeps small pointer jitter from immediately dismissing the unpinned window.
 const CURSOR_TOP_OFFSET: f64 = 10.0;
 
-/// Custom ready event emitted from on_page_load(Finished) so clipboard can be sent safely.
-const QUICK_TRANSLATE_READY_EVENT: &str = "qt://ready";
-
 static MOUSE_EVENT_ID: AtomicUsize = AtomicUsize::new(0);
 static WIN_SIZE: Mutex<(f64, f64)> = Mutex::new(INIT_WIN_SIZE);
 
-/// App-level pin state for the single Quick Translate window.
+/// App-level pin / clipboard-delivery state for the single Quick Translate window.
+///
+/// `frontend_ready` is set only after the webview has registered its clipboard listener.
+/// Until then, double Ctrl+C clipboard text is held in `pending_clipboard` (latest wins).
 #[derive(Debug, Default)]
 pub struct QuickTranslateState {
 	pub is_pin: Mutex<bool>,
+	frontend_ready: AtomicBool,
+	pending_clipboard: Mutex<Option<String>>,
 }
 
 impl QuickTranslateState {
 	pub fn reset(&self) {
 		*self.is_pin.lock().unwrap() = false;
+		// Hold the pending lock while clearing ready so deliver/notify cannot interleave.
+		let mut pending = self.pending_clipboard.lock().unwrap();
+		self.frontend_ready.store(false, Ordering::SeqCst);
+		*pending = None;
 	}
 }
 
@@ -134,14 +138,60 @@ fn adjust_win_position<R: Runtime, P: Pixel>(win: &WebviewWindow<R>, cursor: Opt
 	let _ = win.set_position(PhysicalPosition::new(P::from_f64(x), P::from_f64(y)));
 }
 
-fn emit_on_cpcp<R: Runtime>(win: &WebviewWindow<R>) {
-	if let Ok(text) = win.app_handle().clipboard().read_text() {
+fn read_clipboard_text<R: Runtime>(app: &tauri::AppHandle<R>) -> Option<String> {
+	app.clipboard().read_text().ok().filter(|text| !text.is_empty())
+}
+
+fn emit_clipboard_text<R: Runtime>(app: &tauri::AppHandle<R>, text: String) {
+	if let Some(win) = app.get_webview_window(consts::WIN_LABEL_QUICK_TRANSLATE) {
 		let _ = win.emit_to(
 			EventTarget::webview_window(consts::WIN_LABEL_QUICK_TRANSLATE),
 			consts::QUICK_TRANSLATE_CLIPBOARD_EVENT,
 			text,
 		);
+	} else {
+		log::error!("quick_translate_window_missing_on_clipboard_emit");
 	}
+}
+
+/// Deliver clipboard text now if the frontend is listening; otherwise queue the latest payload.
+fn deliver_or_queue_clipboard<R: Runtime>(app: &tauri::AppHandle<R>, text: String) {
+	let Some(state) = app.try_state::<QuickTranslateState>() else {
+		emit_clipboard_text(app, text);
+		return;
+	};
+
+	// Decision under the pending lock so notify_ready cannot set ready between check and queue.
+	{
+		let mut pending = state.pending_clipboard.lock().unwrap();
+		if !state.frontend_ready.load(Ordering::SeqCst) {
+			*pending = Some(text);
+			log::debug!("quick_translate_clipboard_queued awaiting_frontend_ready");
+			return;
+		}
+	}
+
+	emit_clipboard_text(app, text);
+}
+
+/// Called by the frontend after its clipboard event listener is registered.
+#[tauri::command]
+pub async fn notify_ready<R: Runtime>(app: tauri::AppHandle<R>) -> Result<(), String> {
+	let Some(state) = app.try_state::<QuickTranslateState>() else {
+		return Ok(());
+	};
+
+	// Mark ready and take pending under one lock so concurrent deliver cannot lose text.
+	let pending = {
+		let mut pending = state.pending_clipboard.lock().unwrap();
+		state.frontend_ready.store(true, Ordering::SeqCst);
+		pending.take()
+	};
+	if let Some(text) = pending {
+		log::debug!("quick_translate_clipboard_flush_on_ready");
+		emit_clipboard_text(&app, text);
+	}
+	Ok(())
 }
 
 /// Pin toggle: when true, click-outside / move-out auto-close is disabled.
@@ -228,6 +278,9 @@ fn set_win_visible<R: Runtime>(app: &tauri::AppHandle<R>, win: &WebviewWindow<R>
 
 /// Double Ctrl+C entry: show at cursor and paste clipboard into the source input.
 pub fn try_show_on_cpcp<R: Runtime>(app: &tauri::AppHandle<R>) {
+	// Capture clipboard at trigger time so a later flush still uses the intended text.
+	let clipboard_text = read_clipboard_text(app);
+
 	match app.get_webview_window(consts::WIN_LABEL_QUICK_TRANSLATE) {
 		Some(win) => {
 			if let Ok(visible) = win.is_visible() {
@@ -235,23 +288,17 @@ pub fn try_show_on_cpcp<R: Runtime>(app: &tauri::AppHandle<R>) {
 					set_win_visible(app, &win);
 				}
 			}
-			emit_on_cpcp(&win);
 		}
-		None => match show(app) {
-			Ok(win) => {
-				let app = app.clone();
-				win.once(QUICK_TRANSLATE_READY_EVENT, move |_| {
-					if let Some(win) = app.get_webview_window(consts::WIN_LABEL_QUICK_TRANSLATE) {
-						emit_on_cpcp(&win);
-					} else {
-						log::error!("quick_translate_window_missing_on_ready");
-					}
-				});
-			}
-			Err(e) => {
+		None => {
+			if let Err(e) = show(app) {
 				log::error!("quick_translate_show_failed error={e}");
+				return;
 			}
-		},
+		}
+	}
+
+	if let Some(text) = clipboard_text {
+		deliver_or_queue_clipboard(app, text);
 	}
 }
 
@@ -301,8 +348,8 @@ pub fn show<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<WebviewWindow<R>, S
 			if payload.event() == PageLoadEvent::Finished {
 				record_win_outer_size(&window);
 				// Re-anchor with measured outer size so centering matches the real frame.
+				// Clipboard delivery waits for frontend notify_ready (listener registered).
 				adjust_win_position(&window, Some(cursor));
-				let _ = window.emit(QUICK_TRANSLATE_READY_EVENT, ());
 			}
 		});
 
@@ -340,6 +387,10 @@ fn wire_window_events<R: Runtime>(window: &WebviewWindow<R>) {
 		}
 		tauri::WindowEvent::Destroyed => {
 			del_mouse_event();
+			// Next recreation must wait for the frontend listener again.
+			if let Some(state) = win.app_handle().try_state::<QuickTranslateState>() {
+				state.reset();
+			}
 		}
 		tauri::WindowEvent::Resized(_) => {
 			record_win_outer_size(&win);
@@ -373,7 +424,7 @@ fn check_pos_in_window<R: Runtime>(window: &WebviewWindow<R>, pos: &Pos) -> bool
 
 #[cfg(windows)]
 fn reg_mouse_event<R: Runtime>(window: Arc<WebviewWindow<R>>) {
-	if MOUSE_EVENT_ID.load(Relaxed) != 0 {
+	if MOUSE_EVENT_ID.load(Ordering::Relaxed) != 0 {
 		return;
 	}
 	let once_focus = Arc::new(AtomicBool::new(false));
@@ -391,7 +442,7 @@ fn reg_mouse_event<R: Runtime>(window: Arc<WebviewWindow<R>>) {
 					}
 					if check_pos_in_window(&window, &event.pos) {
 						if state == ClickState::Pressed {
-							once_focus.store(true, Relaxed);
+							once_focus.store(true, Ordering::Relaxed);
 						}
 						return;
 					}
@@ -399,7 +450,7 @@ fn reg_mouse_event<R: Runtime>(window: Arc<WebviewWindow<R>>) {
 					let _ = window.close();
 				} else if event.button.is_none() {
 					// Mouse move: close only until the user has clicked inside once (or pin).
-					if check_pos_in_window(&window, &event.pos) || once_focus.load(Relaxed) {
+					if check_pos_in_window(&window, &event.pos) || once_focus.load(Ordering::Relaxed) {
 						return;
 					}
 					if let Some(pin_state) = window.app_handle().try_state::<QuickTranslateState>() {
@@ -415,17 +466,17 @@ fn reg_mouse_event<R: Runtime>(window: Arc<WebviewWindow<R>>) {
 		Some(EventType::MouseEvent(None)),
 	);
 	if let Ok(id) = reg_id {
-		MOUSE_EVENT_ID.store(id, Relaxed);
+		MOUSE_EVENT_ID.store(id, Ordering::Relaxed);
 	}
 }
 
 fn del_mouse_event() {
-	if MOUSE_EVENT_ID.load(Relaxed) == 0 {
+	if MOUSE_EVENT_ID.load(Ordering::Relaxed) == 0 {
 		return;
 	}
 	#[cfg(windows)]
 	{
-		mouse_enginer::del_event_by_id(MOUSE_EVENT_ID.load(Relaxed));
+		mouse_enginer::del_event_by_id(MOUSE_EVENT_ID.load(Ordering::Relaxed));
 	}
-	MOUSE_EVENT_ID.store(0, Relaxed);
+	MOUSE_EVENT_ID.store(0, Ordering::Relaxed);
 }

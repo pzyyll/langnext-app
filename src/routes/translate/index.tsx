@@ -16,6 +16,7 @@ import { useToast } from "../../components/toast/useToast";
 import { iconButtonClassName } from "../../components/ui";
 import { ComboboxField } from "../../components/ComboboxField";
 import { SelectField } from "../../components/SelectField";
+import { TextLoading } from "../../components/TextLoading";
 import { shouldApplyProfileResult } from "../../query/profileApplyGuard";
 import {
 	allProviderModelsOptions,
@@ -128,7 +129,8 @@ function TranslatePage() {
 	const [sourceText, setSourceText] = useState("");
 	const [outputText, setOutputText] = useState("");
 	const [errorMessage, setErrorMessage] = useState<string | null>(null);
-	const [hasTranslated, setHasTranslated] = useState(false);
+	/** Tracks whether a translate attempt has finished; kept for session UX side-effects (clear on edit). */
+	const [, setHasTranslated] = useState(false);
 	const [confidencePercent, setConfidencePercent] = useState(0);
 	const [latencyMs, setLatencyMs] = useState<number | null>(null);
 	const [copyFeedback, setCopyFeedback] = useState(false);
@@ -436,7 +438,8 @@ function TranslatePage() {
 	function beginTranslateUi() {
 		setIsTranslating(true);
 		setErrorMessage(null);
-		setOutputText("");
+		// Keep prior output while waiting so re-runs show previous text + trailing dots
+		// until the first stream chunk (or non-stream result) replaces it.
 		setHasTranslated(false);
 		setConfidencePercent(0);
 		setLatencyMs(null);
@@ -504,6 +507,8 @@ function TranslatePage() {
 	) {
 		clearStreamListeners();
 
+		// First chunk replaces any retained previous result; later chunks append.
+		let receivedChunk = false;
 		const onChunk = (event: { payload: TranslateStreamChunk }) => {
 			const chunk = event.payload;
 			if (generation !== translateGeneration.current) {
@@ -512,7 +517,9 @@ function TranslatePage() {
 			if (chunk.id !== activeRequestId.current) {
 				return;
 			}
-			setOutputText((prev) => prev + chunk.delta);
+			const isFirstChunk = !receivedChunk;
+			receivedChunk = true;
+			setOutputText((prev) => (isFirstChunk ? chunk.delta : prev + chunk.delta));
 			setHasTranslated(true);
 		};
 
@@ -968,14 +975,13 @@ function TranslatePage() {
 							<p className="whitespace-pre-wrap text-body-md text-error select-text" role="alert">
 								{t("translate.errorPrefix")}: {errorMessage}
 							</p>
-						) : outputText ? (
-							<p className="whitespace-pre-wrap text-body-md text-on-surface select-text">{outputText}</p>
-						) : isTranslating ? (
-							<p className="text-body-md text-neutral italic select-none" role="status">
-								{t("translate.translating")}
-							</p>
-						) : hasTranslated ? (
-							<p className="text-body-md text-neutral italic select-none">{t("translate.outputPlaceholder")}</p>
+						) : outputText || isTranslating ? (
+							<TextLoading
+								text={outputText}
+								isLoading={isTranslating}
+								loadingLabel={t("translate.translating")}
+								className="text-body-md text-on-surface"
+							/>
 						) : (
 							<p className="text-body-md text-neutral italic select-none">{t("translate.outputPlaceholder")}</p>
 						)}

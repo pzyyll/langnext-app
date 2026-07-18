@@ -609,16 +609,12 @@ fn log_transport_error(adapter_id: &str, err: TransportError) {
 
 /// Debug-only: log the outbound chat JSON body (no URL / credentials).
 fn log_chat_request_body(adapter_id: &str, stream: bool, body: &serde_json::Value) {
-	log::debug!(
-		"chat_request adapter_id={adapter_id} stream={stream} body={body}"
-	);
+	log::debug!("chat_request adapter_id={adapter_id} stream={stream} body={body}");
 }
 
 /// Debug-only: log the inbound chat response payload (no URL / credentials).
 fn log_chat_response_body(adapter_id: &str, stream: bool, body: &str) {
-	log::debug!(
-		"chat_response adapter_id={adapter_id} stream={stream} body={body}"
-	);
+	log::debug!("chat_response adapter_id={adapter_id} stream={stream} body={body}");
 }
 
 /// Read a response body with a hard size cap, streaming chunks (no full `bytes()` first).
@@ -791,6 +787,11 @@ pub struct ChatCompletionRequest {
 	pub user_prompt: String,
 	pub temperature: Option<f64>,
 	pub max_tokens: Option<u32>,
+	/// OpenAI-compatible thinking toggle (`thinking.type` = enabled/disabled).
+	///
+	/// Used by DeepSeek V4-style providers. `None` leaves the provider default
+	/// (DeepSeek defaults thinking to enabled). Never sent for other adapters.
+	pub thinking: Option<bool>,
 }
 
 impl std::fmt::Debug for ChatCompletionRequest {
@@ -804,7 +805,17 @@ impl std::fmt::Debug for ChatCompletionRequest {
 			.field("model_key", &self.model_key)
 			.field("temperature", &self.temperature)
 			.field("max_tokens", &self.max_tokens)
+			.field("thinking", &self.thinking)
 			.finish_non_exhaustive()
+	}
+}
+
+/// Apply DeepSeek-style `thinking` control to an OpenAI-compatible chat payload.
+fn apply_openai_thinking(payload: &mut serde_json::Value, thinking: Option<bool>) {
+	if let Some(enabled) = thinking {
+		payload["thinking"] = serde_json::json!({
+			"type": if enabled { "enabled" } else { "disabled" }
+		});
 	}
 }
 
@@ -846,6 +857,7 @@ async fn chat_completion_http_inner(request: ChatCompletionRequest) -> Result<Ch
 			if let Some(max) = request.max_tokens {
 				payload["max_tokens"] = serde_json::json!(max);
 			}
+			apply_openai_thinking(&mut payload, request.thinking);
 			(url, payload)
 		}
 		"openai-responses" => {
@@ -1012,16 +1024,24 @@ pub fn parse_chat_content(adapter_id: &str, value: &serde_json::Value) -> Result
 }
 
 fn parse_openai_chat_content(value: &serde_json::Value) -> Result<String, TransportError> {
-	let content = value
+	// Final answer is always `message.content`. Thinking providers (DeepSeek) may also
+	// populate sibling `reasoning_content` with chain-of-thought; that is never the answer.
+	let message = value
 		.get("choices")
 		.and_then(|c| c.as_array())
 		.and_then(|arr| arr.first())
 		.and_then(|choice| choice.get("message"))
-		.and_then(|msg| msg.get("content"))
-		.and_then(|c| c.as_str())
 		.ok_or(TransportError::InvalidResponse)?;
+	let content = match message.get("content") {
+		None => return Err(TransportError::InvalidResponse),
+		// Null content is treated like empty — common while only reasoning was produced.
+		Some(serde_json::Value::Null) => "",
+		Some(v) => v.as_str().ok_or(TransportError::InvalidResponse)?,
+	};
 	let trimmed = content.trim();
 	if trimmed.is_empty() {
+		// Complete non-stream response with no final answer (e.g. max_tokens spent on
+		// reasoning_content). Not a mid-stream wait state — nothing more will arrive.
 		return Err(TransportError::InvalidResponse);
 	}
 	Ok(trimmed.to_string())
@@ -1155,6 +1175,7 @@ fn build_stream_request_parts(
 			if let Some(max) = request.max_tokens {
 				payload["max_tokens"] = serde_json::json!(max);
 			}
+			apply_openai_thinking(&mut payload, request.thinking);
 			Ok((url, payload))
 		}
 		"openai-responses" => {
@@ -1245,14 +1266,22 @@ pub fn parse_sse_data_delta(
 }
 
 /// OpenAI chat.completions stream chunk: `choices[0].delta.content`.
+///
+/// Thinking-mode providers (DeepSeek and compatible relays) stream CoT first via
+/// `delta.reasoning_content` while `content` is null, absent, or empty. Those chunks
+/// are skipped so the consumer keeps waiting for later final-answer deltas.
+/// `reasoning_content` is never surfaced as user-visible text.
 pub fn parse_openai_stream_delta(value: &serde_json::Value) -> Option<String> {
-	let content = value
+	let delta = value
 		.get("choices")
 		.and_then(|c| c.as_array())
 		.and_then(|arr| arr.first())
-		.and_then(|choice| choice.get("delta"))
-		.and_then(|delta| delta.get("content"))
-		.and_then(|c| c.as_str())?;
+		.and_then(|choice| choice.get("delta"))?;
+	let content = match delta.get("content") {
+		Some(serde_json::Value::String(s)) => s.as_str(),
+		// null / missing / non-string → wait for subsequent chunks
+		_ => return None,
+	};
 	if content.is_empty() {
 		None
 	} else {
@@ -1521,11 +1550,7 @@ pub async fn chat_completion_stream_http_cancellable(
 			// Error responses are typically JSON, not SSE — read as a bounded body for debug.
 			match read_response_body_bounded(response).await {
 				Ok(bytes) => {
-					log_chat_response_body(
-						&request.adapter_id,
-						true,
-						&String::from_utf8_lossy(&bytes),
-					);
+					log_chat_response_body(&request.adapter_id, true, &String::from_utf8_lossy(&bytes));
 				}
 				Err(_) => {
 					log::debug!(
@@ -1853,6 +1878,51 @@ mod tests {
 	}
 
 	#[test]
+	fn parse_openai_chat_content_ignores_reasoning_and_rejects_empty_final() {
+		// DeepSeek thinking complete response: CoT present, final answer empty.
+		let only_reasoning = serde_json::json!({
+			"choices": [{
+				"finish_reason": "length",
+				"message": {
+					"role": "assistant",
+					"content": "",
+					"reasoning_content": "Thinking about the language of DeT..."
+				}
+			}]
+		});
+		assert_eq!(
+			parse_chat_content("openai-compatible", &only_reasoning).unwrap_err(),
+			TransportError::InvalidResponse
+		);
+
+		let null_content = serde_json::json!({
+			"choices": [{
+				"message": {
+					"role": "assistant",
+					"content": null,
+					"reasoning_content": "still thinking"
+				}
+			}]
+		});
+		assert_eq!(
+			parse_chat_content("openai-compatible", &null_content).unwrap_err(),
+			TransportError::InvalidResponse
+		);
+
+		// Final answer still wins when both fields are present.
+		let both = serde_json::json!({
+			"choices": [{
+				"message": {
+					"role": "assistant",
+					"content": "zh",
+					"reasoning_content": "Looks like Chinese."
+				}
+			}]
+		});
+		assert_eq!(parse_chat_content("openai-compatible", &both).unwrap(), "zh");
+	}
+
+	#[test]
 	fn parse_anthropic_and_gemini_chat_content() {
 		let anthropic = serde_json::json!({
 			"content": [{ "type": "text", "text": "Bonjour" }]
@@ -1887,6 +1957,45 @@ mod tests {
 				.unwrap()
 				.as_deref(),
 			None
+		);
+	}
+
+	#[test]
+	fn parse_openai_sse_skips_reasoning_and_empty_content_until_answer() {
+		// DeepSeek thinking stream: reasoning-only chunks must not emit text or error.
+		let reasoning_only = r#"{"choices":[{"delta":{"reasoning_content":"Let me think..."},"index":0}]}"#;
+		assert_eq!(
+			parse_sse_data_delta("openai-compatible", None, reasoning_only)
+				.unwrap()
+				.as_deref(),
+			None
+		);
+
+		// content:null alongside reasoning — still wait.
+		let null_content = r#"{"choices":[{"delta":{"content":null,"reasoning_content":"..."},"index":0}]}"#;
+		assert_eq!(
+			parse_sse_data_delta("openai-compatible", None, null_content)
+				.unwrap()
+				.as_deref(),
+			None
+		);
+
+		// Empty string content — still wait.
+		let empty_content = r#"{"choices":[{"delta":{"content":""},"index":0}]}"#;
+		assert_eq!(
+			parse_sse_data_delta("openai-compatible", None, empty_content)
+				.unwrap()
+				.as_deref(),
+			None
+		);
+
+		// Final answer deltas still surface.
+		let answer = r#"{"choices":[{"delta":{"content":"zh"},"index":0}]}"#;
+		assert_eq!(
+			parse_sse_data_delta("openai-compatible", None, answer)
+				.unwrap()
+				.as_deref(),
+			Some("zh")
 		);
 	}
 
