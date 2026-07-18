@@ -45,9 +45,7 @@ export function ScrollArea({
 }: ScrollAreaProps) {
 	return (
 		<BaseScrollArea.Root className={className} {...props}>
-			<BaseScrollArea.Viewport
-				className={viewportClassName ? `${viewportClassNameDefault} ${viewportClassName}` : viewportClassNameDefault}
-			>
+			<BaseScrollArea.Viewport className={cn(viewportClassNameDefault, viewportClassName)}>
 				<BaseScrollArea.Content className={contentClassName}>{children}</BaseScrollArea.Content>
 			</BaseScrollArea.Viewport>
 			<BaseScrollArea.Scrollbar

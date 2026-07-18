@@ -23,6 +23,7 @@ import { TitleBar } from "../components/Win/TitleBar";
 import { ComboboxField } from "../components/ComboboxField";
 import { ScrollArea } from "../components/ScrollArea";
 import { SelectField } from "../components/SelectField";
+import { TextAutosize } from "../components/TextAutosize";
 import { TextLoading } from "../components/TextLoading";
 import { iconButtonClassName } from "../components/ui";
 import { QUICK_TRANSLATE_CLIPBOARD_TEXT } from "../query/events";
@@ -1322,37 +1323,53 @@ function QuickTranslatePage() {
 				hideScrollbar={isHeightAdapting}
 			>
 				<div ref={setContentMeasureNode} className="flex h-fit w-full flex-col gap-4 px-3 pb-3 pt-2">
-					{/* Source input: outer chrome wraps textarea + sticky footer toolbar */}
-					<div className="flex h-32 shrink-0 flex-col border border-line bg-surface-container-lowest focus-within:outline-2 focus-within:-outline-offset-1 focus-within:outline-on-surface">
+					{/*
+					  Source input: TextAutosize grows inside ScrollArea until max-h-64, then scrolls.
+					  Viewport uses h-auto + max-h so the box tracks content height (not a fixed fill).
+					*/}
+					<div className="flex min-h-32 shrink-0 flex-col border border-line bg-surface-container-lowest focus-within:outline-2 focus-within:-outline-offset-1 focus-within:outline-on-surface">
 						<label className="sr-only" htmlFor="quick-translate-source">
 							{t("translate.sourceTextAria")}
 						</label>
-						<textarea
-							id="quick-translate-source"
-							className="min-h-0 w-full flex-1 resize-none rounded-none border-0 bg-transparent px-3 pt-3 pb-2 text-body-md text-on-surface placeholder:text-neutral focus:outline-none"
-							placeholder={t("quickTranslate.sourcePlaceholder")}
-							spellCheck={false}
-							value={sourceText}
-							onChange={(event) => {
-								applySourceText(event.currentTarget.value);
-							}}
-							onKeyDown={(event) => {
-								if (event.key !== "Enter") {
-									return;
-								}
-								// Always allow Ctrl/Cmd+Enter as an explicit run shortcut.
-								if (event.ctrlKey || event.metaKey) {
-									event.preventDefault();
-									void runTranslations();
-									return;
-								}
-								// Manual mode: Enter runs translation; Shift+Enter inserts a newline.
-								if (!autoTranslate && !event.shiftKey) {
-									event.preventDefault();
-									void runTranslations();
-								}
-							}}
-						/>
+						<ScrollArea
+							className="min-h-24 max-h-64 w-full"
+							// h-auto+max-h: grow with content then scroll. stable gutter: no width thrash when bar appears.
+							viewportClassName="h-auto max-h-64 min-h-24 [scrollbar-gutter:stable]"
+							contentClassName="min-h-24 w-full"
+							showScrollbarOnHover={false}
+						>
+							{/*
+							  min-h-24 ≈ former h-32 chrome minus h-8 toolbar.
+							  minRows={6} keeps a fixed font-scaling floor while height may grow to max-h-64.
+							*/}
+							<TextAutosize
+								id="quick-translate-source"
+								className="min-h-24 px-3 pt-3 pb-2"
+								minRows={6}
+								placeholder={t("quickTranslate.sourcePlaceholder")}
+								spellCheck={false}
+								value={sourceText}
+								onChange={(event) => {
+									applySourceText(event.currentTarget.value);
+								}}
+								onKeyDown={(event) => {
+									if (event.key !== "Enter") {
+										return;
+									}
+									// Always allow Ctrl/Cmd+Enter as an explicit run shortcut.
+									if (event.ctrlKey || event.metaKey) {
+										event.preventDefault();
+										void runTranslations();
+										return;
+									}
+									// Manual mode: Enter runs translation; Shift+Enter inserts a newline.
+									if (!autoTranslate && !event.shiftKey) {
+										event.preventDefault();
+										void runTranslations();
+									}
+								}}
+							/>
+						</ScrollArea>
 						<div className="flex h-8 shrink-0 items-center gap-1 px-2">
 							{detectedSourceLang ? (
 								<p className="min-w-0 truncate text-label-sm text-neutral uppercase">
