@@ -11,18 +11,18 @@ const pad = (n: number) => String(n).padStart(2, "0");
  * failure so the UI never shows an empty cell.
  */
 export function formatHistoryLocalDateTime(rfc3339: string): string {
-	const date = new Date(rfc3339);
-	if (Number.isNaN(date.getTime())) {
-		return rfc3339;
-	}
-	return (
-		`${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
-		` ${pad(date.getHours())}:${pad(date.getMinutes())}`
-	);
+  const date = new Date(rfc3339);
+  if (Number.isNaN(date.getTime())) {
+    return rfc3339;
+  }
+  return (
+    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
+    ` ${pad(date.getHours())}:${pad(date.getMinutes())}`
+  );
 }
 
 /** Today's local day as `YYYY-MM-DD`, used as the default for the date filter. */
 export function todayLocalDay(): string {
-	const date = new Date();
-	return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+  const date = new Date();
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }

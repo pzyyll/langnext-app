@@ -5,5 +5,5 @@
  * user selection generation.
  */
 export function shouldApplyProfileResult(requestGeneration: number, latestGeneration: number): boolean {
-	return requestGeneration === latestGeneration;
+  return requestGeneration === latestGeneration;
 }

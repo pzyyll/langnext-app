@@ -292,18 +292,18 @@ import { invoke } from "@tauri-apps/api/core";
 
 ```tsx
 useEffect(() => {
-	let unlisten: (() => void) | undefined;
-	let cancelled = false;
-	void listen<string>("quick-translate://clipboard-text", (event) => {
-		if (cancelled) return;
-		setSourceText(event.payload ?? "");
-	}).then((fn) => {
-		unlisten = fn;
-	});
-	return () => {
-		cancelled = true;
-		unlisten?.();
-	};
+  let unlisten: (() => void) | undefined;
+  let cancelled = false;
+  void listen<string>("quick-translate://clipboard-text", (event) => {
+    if (cancelled) return;
+    setSourceText(event.payload ?? "");
+  }).then((fn) => {
+    unlisten = fn;
+  });
+  return () => {
+    cancelled = true;
+    unlisten?.();
+  };
 }, []);
 ```
 
@@ -314,11 +314,11 @@ useEffect(() => {
 ```tsx
 const [isPinned, setIsPinned] = useState(false);
 const togglePin = useCallback(() => {
-	setIsPinned((prev) => {
-		const next = !prev;
-		void invoke("set_pin", { isPin: next });
-		return next;
-	});
+  setIsPinned((prev) => {
+    const next = !prev;
+    void invoke("set_pin", { isPin: next });
+    return next;
+  });
 }, []);
 ```
 
@@ -326,14 +326,14 @@ const togglePin = useCallback(() => {
 
 ```tsx
 <TitleBar
-	title={t("quickTranslate.title")}
-	minimize={false}
-	maximized={false}
-	close
-	pin
-	pinned={isPinned}
-	onPinChange={togglePin}
-	leading={<Menu.Root>...</Menu.Root>}
+  title={t("quickTranslate.title")}
+  minimize={false}
+  maximized={false}
+  close
+  pin
+  pinned={isPinned}
+  onPinChange={togglePin}
+  leading={<Menu.Root>...</Menu.Root>}
 />
 ```
 

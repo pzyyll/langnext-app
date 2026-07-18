@@ -7,64 +7,64 @@ import { LANGUAGE_CHANGE_EVENT, nextLanguage, normalizeLanguage, type AppLanguag
 import { applyAppLanguage, getAppLanguage } from "./index";
 
 function isTauriRuntime(): boolean {
-	return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
 export function useLanguage() {
-	const { t, i18n } = useTranslation();
-	const [language, setLanguageState] = useState<AppLanguage>(() => getAppLanguage());
-	const [error, setError] = useState<string | null>(null);
-	// Last successfully persisted language for rollback on IPC failure.
-	const baselineRef = useRef<AppLanguage>(getAppLanguage());
+  const { t, i18n } = useTranslation();
+  const [language, setLanguageState] = useState<AppLanguage>(() => getAppLanguage());
+  const [error, setError] = useState<string | null>(null);
+  // Last successfully persisted language for rollback on IPC failure.
+  const baselineRef = useRef<AppLanguage>(getAppLanguage());
 
-	useEffect(() => {
-		const sync = () => {
-			setLanguageState(getAppLanguage());
-		};
+  useEffect(() => {
+    const sync = () => {
+      setLanguageState(getAppLanguage());
+    };
 
-		const onI18n = (lng: string) => {
-			setLanguageState(normalizeLanguage(lng));
-		};
+    const onI18n = (lng: string) => {
+      setLanguageState(normalizeLanguage(lng));
+    };
 
-		// Cross-window localStorage changes are applied by installLanguageCrossWindowSync
-		// (initI18n); this hook only mirrors the resulting same-window i18n/DOM updates.
-		window.addEventListener(LANGUAGE_CHANGE_EVENT, sync);
-		i18n.on("languageChanged", onI18n);
-		return () => {
-			window.removeEventListener(LANGUAGE_CHANGE_EVENT, sync);
-			i18n.off("languageChanged", onI18n);
-		};
-	}, [i18n]);
+    // Cross-window localStorage changes are applied by installLanguageCrossWindowSync
+    // (initI18n); this hook only mirrors the resulting same-window i18n/DOM updates.
+    window.addEventListener(LANGUAGE_CHANGE_EVENT, sync);
+    i18n.on("languageChanged", onI18n);
+    return () => {
+      window.removeEventListener(LANGUAGE_CHANGE_EVENT, sync);
+      i18n.off("languageChanged", onI18n);
+    };
+  }, [i18n]);
 
-	const setLanguage = useCallback(
-		async (mode: AppLanguage) => {
-			const previous = baselineRef.current;
-			await applyAppLanguage(mode);
-			setLanguageState(mode);
-			setError(null);
+  const setLanguage = useCallback(
+    async (mode: AppLanguage) => {
+      const previous = baselineRef.current;
+      await applyAppLanguage(mode);
+      setLanguageState(mode);
+      setError(null);
 
-			if (!isTauriRuntime()) {
-				baselineRef.current = mode;
-				return;
-			}
+      if (!isTauriRuntime()) {
+        baselineRef.current = mode;
+        return;
+      }
 
-			try {
-				await setAppUiLanguage(mode);
-				baselineRef.current = mode;
-			} catch (err: unknown) {
-				await applyAppLanguage(previous);
-				setLanguageState(previous);
-				setError(err instanceof Error ? err.message : t("language.persistFailed"));
-			}
-		},
-		[t],
-	);
+      try {
+        await setAppUiLanguage(mode);
+        baselineRef.current = mode;
+      } catch (err: unknown) {
+        await applyAppLanguage(previous);
+        setLanguageState(previous);
+        setError(err instanceof Error ? err.message : t("language.persistFailed"));
+      }
+    },
+    [t],
+  );
 
-	const toggle = useCallback(async () => {
-		const next = nextLanguage(getAppLanguage());
-		await setLanguage(next);
-		return next;
-	}, [setLanguage]);
+  const toggle = useCallback(async () => {
+    const next = nextLanguage(getAppLanguage());
+    await setLanguage(next);
+    return next;
+  }, [setLanguage]);
 
-	return { language, setLanguage, toggle, error, t };
+  return { language, setLanguage, toggle, error, t };
 }

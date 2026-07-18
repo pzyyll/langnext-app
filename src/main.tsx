@@ -18,46 +18,46 @@ import "./styles.css";
 initTheme();
 
 const router = createRouter({
-	routeTree,
-	defaultPreload: "intent",
-	scrollRestoration: true,
-	// Directional scroll transitions based on sidebar item order.
-	defaultViewTransition: {
-		types: ({ fromLocation, toLocation }) => {
-			const type = getScrollTransitionType(fromLocation?.pathname, toLocation.pathname);
-			return type ? [type] : false;
-		},
-	},
+  routeTree,
+  defaultPreload: "intent",
+  scrollRestoration: true,
+  // Directional scroll transitions based on sidebar item order.
+  defaultViewTransition: {
+    types: ({ fromLocation, toLocation }) => {
+      const type = getScrollTransitionType(fromLocation?.pathname, toLocation.pathname);
+      return type ? [type] : false;
+    },
+  },
 });
 
 declare module "@tanstack/react-router" {
-	interface Register {
-		router: typeof router;
-	}
+  interface Register {
+    router: typeof router;
+  }
 }
 
 async function mount() {
-	// Attach Rust log streaming before UI work so early setup logs appear in webview console.
-	await initLogger();
-	// Authoritative SQLite reconciliation in Tauri; cache-only in browser dev.
-	// Also initializes i18n from AppSettings.uiLanguage / local cache.
-	await bootstrapStorage();
+  // Attach Rust log streaming before UI work so early setup logs appear in webview console.
+  await initLogger();
+  // Authoritative SQLite reconciliation in Tauri; cache-only in browser dev.
+  // Also initializes i18n from AppSettings.uiLanguage / local cache.
+  await bootstrapStorage();
 
-	const rootElement = document.getElementById("root")!;
+  const rootElement = document.getElementById("root")!;
 
-	if (!rootElement.innerHTML) {
-		const root = ReactDOM.createRoot(rootElement);
-		root.render(
-			<React.StrictMode>
-				<QueryClientProvider client={queryClient}>
-					<QueryEventSync />
-					<ToastProvider>
-						<RouterProvider router={router} />
-					</ToastProvider>
-				</QueryClientProvider>
-			</React.StrictMode>,
-		);
-	}
+  if (!rootElement.innerHTML) {
+    const root = ReactDOM.createRoot(rootElement);
+    root.render(
+      <React.StrictMode>
+        <QueryClientProvider client={queryClient}>
+          <QueryEventSync />
+          <ToastProvider>
+            <RouterProvider router={router} />
+          </ToastProvider>
+        </QueryClientProvider>
+      </React.StrictMode>,
+    );
+  }
 }
 
 void mount();

@@ -4,48 +4,48 @@ import type { AppLanguage } from "../../i18n/languages";
 
 /** Supported concrete translation language ids (mirrors Rust `SUPPORTED_LANGUAGES`). */
 export const LANGUAGE_IDS = [
-	"zh",
-	"en",
-	"ar",
-	"bg",
-	"bn",
-	"cs",
-	"da",
-	"de",
-	"el",
-	"es",
-	"fa",
-	"fi",
-	"fr",
-	"he",
-	"hi",
-	"hr",
-	"hu",
-	"id",
-	"it",
-	"ja",
-	"ko",
-	"lt",
-	"lv",
-	"ms",
-	"nl",
-	"no",
-	"pl",
-	"pt",
-	"ro",
-	"ru",
-	"sk",
-	"sl",
-	"sr",
-	"sv",
-	"sw",
-	"ta",
-	"th",
-	"tl",
-	"tr",
-	"uk",
-	"ur",
-	"vi",
+  "zh",
+  "en",
+  "ar",
+  "bg",
+  "bn",
+  "cs",
+  "da",
+  "de",
+  "el",
+  "es",
+  "fa",
+  "fi",
+  "fr",
+  "he",
+  "hi",
+  "hr",
+  "hu",
+  "id",
+  "it",
+  "ja",
+  "ko",
+  "lt",
+  "lv",
+  "ms",
+  "nl",
+  "no",
+  "pl",
+  "pt",
+  "ro",
+  "ru",
+  "sk",
+  "sl",
+  "sr",
+  "sv",
+  "sw",
+  "ta",
+  "th",
+  "tl",
+  "tr",
+  "uk",
+  "ur",
+  "vi",
 ] as const;
 export type LanguageId = (typeof LANGUAGE_IDS)[number];
 
@@ -62,18 +62,18 @@ export type TargetLanguageId = SelectableLanguageId;
 
 /** True for a concrete supported language id (never `auto`). */
 export function isLanguageId(value: string | null | undefined): value is LanguageId {
-	return !!value && value !== AUTO_LANGUAGE && (LANGUAGE_IDS as readonly string[]).includes(value);
+  return !!value && value !== AUTO_LANGUAGE && (LANGUAGE_IDS as readonly string[]).includes(value);
 }
 
 /** True for `auto` or a concrete supported language id. */
 export function isSelectableLanguageId(value: string | null | undefined): value is SelectableLanguageId {
-	return value === AUTO_LANGUAGE || isLanguageId(value);
+  return value === AUTO_LANGUAGE || isLanguageId(value);
 }
 
 /** Profile-level preferred language pair (Primary/Target preference), both concrete and distinct. */
 export interface ProfileLanguageDefaults {
-	primary: LanguageId;
-	target: LanguageId;
+  primary: LanguageId;
+  target: LanguageId;
 }
 
 /**
@@ -83,18 +83,18 @@ export interface ProfileLanguageDefaults {
  * so the exclusion rule (Primary !== Target preference) always holds out of the box.
  */
 export function getDefaultProfileLanguages(
-	uiLanguage: AppLanguage | string | null | undefined,
+  uiLanguage: AppLanguage | string | null | undefined,
 ): ProfileLanguageDefaults {
-	if (uiLanguage && uiLanguage.toLowerCase().startsWith("zh")) {
-		return { primary: "zh", target: "en" };
-	}
-	return { primary: "en", target: "zh" };
+  if (uiLanguage && uiLanguage.toLowerCase().startsWith("zh")) {
+    return { primary: "zh", target: "en" };
+  }
+  return { primary: "en", target: "zh" };
 }
 
 /** Resolved profile language preferences consumed by the Auto-target resolver. */
 export interface ProfileLangPrefs {
-	primary: LanguageId;
-	preferredTarget: LanguageId;
+  primary: LanguageId;
+  preferredTarget: LanguageId;
 }
 
 /**
@@ -107,28 +107,28 @@ export interface ProfileLangPrefs {
  * is the single rule that keeps stale profile preferences from leaking into Auto-target.
  */
 export function resolveProfileLangPrefs(
-	hasActiveProfile: boolean,
-	profilePrimary: LanguageId | null,
-	profilePreferredTarget: LanguageId | null,
-	uiLanguage: AppLanguage | string | null | undefined,
+  hasActiveProfile: boolean,
+  profilePrimary: LanguageId | null,
+  profilePreferredTarget: LanguageId | null,
+  uiLanguage: AppLanguage | string | null | undefined,
 ): ProfileLangPrefs {
-	if (hasActiveProfile && profilePrimary && profilePreferredTarget) {
-		return { primary: profilePrimary, preferredTarget: profilePreferredTarget };
-	}
-	const defaults = getDefaultProfileLanguages(uiLanguage);
-	return { primary: defaults.primary, preferredTarget: defaults.target };
+  if (hasActiveProfile && profilePrimary && profilePreferredTarget) {
+    return { primary: profilePrimary, preferredTarget: profilePreferredTarget };
+  }
+  const defaults = getDefaultProfileLanguages(uiLanguage);
+  return { primary: defaults.primary, preferredTarget: defaults.target };
 }
 
 /** Inputs to the Auto output resolver. */
 export interface ResolveTargetLanguageInput {
-	/** Effective source language id (manual selection or detection result). */
-	source: LanguageId;
-	/** Configured output selector: a concrete id or `auto`. */
-	configuredTarget: SelectableLanguageId;
-	/** Profile Primary preference (concrete; must differ from `preferredTarget`). */
-	primary: LanguageId;
-	/** Profile Target preference (concrete; must differ from `primary`). */
-	preferredTarget: LanguageId;
+  /** Effective source language id (manual selection or detection result). */
+  source: LanguageId;
+  /** Configured output selector: a concrete id or `auto`. */
+  configuredTarget: SelectableLanguageId;
+  /** Profile Primary preference (concrete; must differ from `preferredTarget`). */
+  primary: LanguageId;
+  /** Profile Target preference (concrete; must differ from `primary`). */
+  preferredTarget: LanguageId;
 }
 
 /**
@@ -144,12 +144,12 @@ export interface ResolveTargetLanguageInput {
  * that degenerate case rather than throwing, so a malformed state cannot abort a request.
  */
 export function resolveTargetLanguage(input: ResolveTargetLanguageInput): LanguageId {
-	const { source, configuredTarget, primary, preferredTarget } = input;
-	if (configuredTarget !== AUTO_LANGUAGE) {
-		return configuredTarget;
-	}
-	if (source === preferredTarget) {
-		return primary;
-	}
-	return preferredTarget;
+  const { source, configuredTarget, primary, preferredTarget } = input;
+  if (configuredTarget !== AUTO_LANGUAGE) {
+    return configuredTarget;
+  }
+  if (source === preferredTarget) {
+    return primary;
+  }
+  return preferredTarget;
 }

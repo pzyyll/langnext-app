@@ -1,27 +1,30 @@
-// ABOUTME: Autosizing textarea that steps font size down as content fills a min height.
-// ABOUTME: Port of langnext-translate TextAutosize for sparse-to-dense input typography.
+// ABOUTME: Stepped-font autosize field and read-only frame with built-in ScrollArea.
+// ABOUTME: Grow (quick translate) and fill (main translate source/output) layouts.
 import {
-	useCallback,
-	useEffect,
-	useLayoutEffect,
-	useRef,
-	useState,
-	type ChangeEvent,
-	type ComponentProps,
-	type CSSProperties,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type ComponentProps,
+  type CSSProperties,
+  type ReactNode,
+  type RefObject,
 } from "react";
 import { cn } from "../lib/cn";
+import { ScrollArea } from "./ScrollArea";
 
 /**
  * Font steps from dense (small) to sparse (large), matching TextAutosize.vue order.
  * Index grows with available space; starts at the largest when empty.
  */
 const FONT_SIZE_STEPS = [
-	"text-body-md",
-	"text-title-dialog",
-	"text-headline-sm",
-	"text-headline-md",
-	"text-headline-display",
+  "text-body-md",
+  "text-title-dialog",
+  "text-headline-sm",
+  "text-headline-md",
+  "text-headline-display",
 ] as const;
 
 type FontSizeStep = (typeof FONT_SIZE_STEPS)[number];
@@ -31,11 +34,11 @@ const LARGEST_FONT_INDEX = FONT_SIZE_STEPS.length - 1;
 
 /**
  * Per-row unit for `minRows`, matching Vue `$rootFontSize` (1rem) used by TextAutosize.
- * Font scaling tries to keep content within `minRows * MIN_ROW_UNIT_PX` before growing height.
+ * In grow layout, font scaling tries to keep content within `minRows * MIN_ROW_UNIT_PX` first.
  */
 const MIN_ROW_UNIT_PX = 16;
 
-/** Inset when filling parent height so an empty field does not overflow the root box. */
+/** Inset when filling the visible shell so an empty field does not overflow. */
 const EMPTY_HEIGHT_INSET_PX = 8;
 
 /**
@@ -44,251 +47,444 @@ const EMPTY_HEIGHT_INSET_PX = 8;
  */
 const FONT_FIT_SLACK_PX = 2;
 
-/** Hidden measure node: mirrors textarea box metrics without affecting layout. */
+/** Hidden measure node: mirrors content box metrics without affecting layout. */
 const DUMMY_BASE_CLASS_NAME = "absolute top-[-9999px] invisible h-auto overflow-hidden whitespace-pre-wrap break-words";
 
 const TEXTAREA_BASE_CLASS_NAME =
-	"w-full resize-none overflow-hidden border-0 bg-transparent text-on-surface placeholder:text-neutral focus:outline-none";
+  "w-full resize-none overflow-hidden border-0 bg-transparent text-on-surface placeholder:text-neutral focus:outline-none disabled:text-disabled";
+
+export type TextAutosizeLayout = "grow" | "fill";
 
 export type TextAutosizeProps = Omit<ComponentProps<"textarea">, "children" | "rows" | "style"> & {
-	/**
-	 * Fixed min height for font scaling, in root-font-size rows.
-	 * When omitted or 0, falls back to the root box height (fixed parents).
-	 * Prefer a positive value when the field itself is allowed to grow.
-	 */
-	minRows?: number;
-	/** Optional extra styles; height is managed imperatively on the textarea. */
-	style?: CSSProperties;
+  /**
+   * `grow` — height follows content up to the max height in `className`, then scrolls.
+   * `fill` — fills a fixed parent; font scales to the shell height; overflow scrolls.
+   */
+  layout?: TextAutosizeLayout;
+  /**
+   * Fixed font-scaling floor in root-font-size rows (grow layout).
+   * When omitted or 0, falls back to the visible shell height.
+   */
+  minRows?: number;
+  /**
+   * Classes for the outer shell (min/max height, flex fill).
+   * Grow: pass e.g. `min-h-24 max-h-64`. Fill: pass e.g. `h-full min-h-0`.
+   */
+  className?: string;
+  /** Classes for the textarea itself (padding, etc.). */
+  textareaClassName?: string;
+  /** Forwarded to the inner ScrollArea when scrolling is enabled. */
+  showScrollbarOnHover?: boolean;
+  /** Optional extra styles; height is managed imperatively on the textarea. */
+  style?: CSSProperties;
 };
 
-function resolveMinHeightPx(minRows: number | undefined, fallbackPx: number): number {
-	if (minRows != null && minRows > 0) {
-		return minRows * MIN_ROW_UNIT_PX;
-	}
-	return fallbackPx;
+export type TextAutosizeContentProps = {
+  /**
+   * Text used only for font measurement (output body, error copy, loading label, …).
+   * Empty string → largest font step.
+   */
+  text: string;
+  /**
+   * `fill` (default) — fixed parent pane. `grow` — content height; optional `max-h-*` then scrolls.
+   */
+  layout?: TextAutosizeLayout;
+  /** Fixed font-scaling floor in root-font-size rows (grow layout). */
+  minRows?: number;
+  /** Outer shell classes. Grow without `max-h-*` stays content-sized (no ScrollArea). */
+  className?: string;
+  /** Inner content box (padding, leading). Font step class is applied here. */
+  contentClassName?: string;
+  showScrollbarOnHover?: boolean;
+  children: ReactNode;
+};
+
+function resolveMinHeightPx(minRows: number | undefined, shellHeightPx: number): number {
+  if (minRows != null && minRows > 0) {
+    return minRows * MIN_ROW_UNIT_PX;
+  }
+  return shellHeightPx;
 }
 
 function clampFontIndex(index: number): number {
-	return Math.min(LARGEST_FONT_INDEX, Math.max(SMALLEST_FONT_INDEX, index));
+  return Math.min(LARGEST_FONT_INDEX, Math.max(SMALLEST_FONT_INDEX, index));
 }
 
 /**
  * Measure how tall `text` would be at `sizeClass`.
- * Only mirror box geometry from the live textarea — font metrics come from `sizeClass`
- * so we never bake the current step's line-height into a different step's measurement.
+ * Geometry comes from `box`; font metrics come only from `sizeClass`.
  */
-function measureTextHeight(
-	dummy: HTMLDivElement,
-	textarea: HTMLTextAreaElement,
-	text: string,
-	sizeClass: FontSizeStep,
-): number {
-	dummy.className = `${DUMMY_BASE_CLASS_NAME} ${sizeClass}`;
-	const style = getComputedStyle(textarea);
-	// Geometry only — do not copy font-size / line-height / font-family from the live node.
-	dummy.style.width = style.width;
-	dummy.style.padding = style.padding;
-	dummy.style.border = style.border;
-	dummy.style.boxSizing = style.boxSizing;
-	dummy.style.fontSize = "";
-	dummy.style.lineHeight = "";
-	dummy.style.fontFamily = "";
-	dummy.style.letterSpacing = "";
-	// Non-empty content so an empty string still reports one line box.
-	dummy.textContent = text.length > 0 ? text : " ";
-	return dummy.scrollHeight;
+function measureTextHeight(dummy: HTMLDivElement, box: HTMLElement, text: string, sizeClass: FontSizeStep): number {
+  dummy.className = `${DUMMY_BASE_CLASS_NAME} ${sizeClass}`;
+  const style = getComputedStyle(box);
+  dummy.style.width = style.width;
+  dummy.style.padding = style.padding;
+  dummy.style.border = style.border;
+  dummy.style.boxSizing = style.boxSizing;
+  dummy.style.fontSize = "";
+  dummy.style.lineHeight = "";
+  dummy.style.fontFamily = "";
+  dummy.style.letterSpacing = "";
+  dummy.textContent = text.length > 0 ? text : " ";
+  return dummy.scrollHeight;
 }
 
+function pickFontIndexForText(options: {
+  text: string;
+  dummy: HTMLDivElement | null;
+  box: HTMLElement | null;
+  shellHeight: number;
+  isFill: boolean;
+  minRows: number | undefined;
+}): number {
+  const { text, dummy, box, shellHeight, isFill, minRows } = options;
+  if (!dummy || !box || text.length === 0) {
+    return LARGEST_FONT_INDEX;
+  }
+
+  const minHeight = isFill ? Math.max(shellHeight, 1) : resolveMinHeightPx(minRows, shellHeight);
+  const fitLimit = minHeight + FONT_FIT_SLACK_PX;
+
+  let nextIndex = LARGEST_FONT_INDEX;
+  for (; nextIndex > SMALLEST_FONT_INDEX; nextIndex -= 1) {
+    const step = FONT_SIZE_STEPS[nextIndex];
+    if (!step) {
+      break;
+    }
+    if (measureTextHeight(dummy, box, text, step) <= fitLimit) {
+      break;
+    }
+  }
+  return nextIndex;
+}
+
+type FitSize = { width: number; height: number };
+
+/**
+ * Shared shell + font-step engine for the editable field and the read-only content frame.
+ * `observeHeight` is true for fill (pane resize changes the font floor).
+ */
+function useSteppedFontSize(options: {
+  text: string;
+  isFill: boolean;
+  minRows: number | undefined;
+  shellRef: RefObject<HTMLDivElement | null>;
+  boxRef: RefObject<HTMLElement | null>;
+  dummyRef: RefObject<HTMLDivElement | null>;
+  /** When false, only width changes re-fit (grow layout content height is self-driven). */
+  observeHeight: boolean;
+  /** Optional side effect after font commit (e.g. textarea height). */
+  onAfterFontFit?: (text: string) => void;
+}): { fontSizeClass: string; fitToText: (nextText: string) => void } {
+  const { text, isFill, minRows, shellRef, boxRef, dummyRef, observeHeight, onAfterFontFit } = options;
+
+  const fontIndexRef = useRef(LARGEST_FONT_INDEX);
+  const lastFitSizeRef = useRef<FitSize | null>(null);
+  const isFittingRef = useRef(false);
+  const prevTextRef = useRef<string | null>(null);
+  const onAfterFontFitRef = useRef(onAfterFontFit);
+  const [fontIndex, setFontIndex] = useState(LARGEST_FONT_INDEX);
+
+  useEffect(() => {
+    onAfterFontFitRef.current = onAfterFontFit;
+  }, [onAfterFontFit]);
+
+  const fontSizeClass = FONT_SIZE_STEPS[fontIndex] ?? FONT_SIZE_STEPS[LARGEST_FONT_INDEX];
+
+  const readShellHeight = useCallback((): number => {
+    return shellRef.current?.clientHeight ?? boxRef.current?.clientHeight ?? 0;
+  }, [boxRef, shellRef]);
+
+  const commitFontIndex = useCallback((nextIndex: number) => {
+    const clamped = clampFontIndex(nextIndex);
+    if (fontIndexRef.current === clamped) {
+      return clamped;
+    }
+    fontIndexRef.current = clamped;
+    setFontIndex(clamped);
+    return clamped;
+  }, []);
+
+  const recordFitSize = useCallback(() => {
+    const shell = shellRef.current;
+    if (!shell) {
+      return;
+    }
+    lastFitSizeRef.current = {
+      width: shell.clientWidth,
+      height: shell.clientHeight,
+    };
+  }, [shellRef]);
+
+  const fitToText = useCallback(
+    (nextText: string) => {
+      // Collapsed / display:none panels report width 0. Fitting then forces the smallest
+      // (or wrong) step; on expand Collapsible measures that size then content corrects → jitter.
+      const layoutWidth = shellRef.current?.clientWidth ?? boxRef.current?.clientWidth ?? 0;
+      if (layoutWidth < 1) {
+        return;
+      }
+
+      prevTextRef.current = nextText;
+      recordFitSize();
+      isFittingRef.current = true;
+      if (nextText.length === 0) {
+        commitFontIndex(LARGEST_FONT_INDEX);
+      } else {
+        commitFontIndex(
+          pickFontIndexForText({
+            text: nextText,
+            dummy: dummyRef.current,
+            box: boxRef.current,
+            shellHeight: readShellHeight(),
+            isFill,
+            minRows,
+          }),
+        );
+      }
+      onAfterFontFitRef.current?.(nextText);
+      requestAnimationFrame(() => {
+        isFittingRef.current = false;
+      });
+    },
+    [boxRef, commitFontIndex, dummyRef, isFill, minRows, readShellHeight, recordFitSize, shellRef],
+  );
+
+  // Text changes from props (stream, clear, clipboard, controlled re-render).
+  useLayoutEffect(() => {
+    if (prevTextRef.current === text) {
+      return;
+    }
+    fitToText(text);
+  }, [fitToText, text]);
+
+  // Re-run post-fit after the font class lands (textarea height, etc.).
+  useLayoutEffect(() => {
+    onAfterFontFitRef.current?.(text);
+  }, [fontIndex, text]);
+
+  // Shell resize: grow → width only; fill → width or height.
+  useEffect(() => {
+    const shell = shellRef.current;
+    if (!shell || typeof ResizeObserver === "undefined") {
+      return;
+    }
+
+    const observer = new ResizeObserver(() => {
+      if (isFittingRef.current) {
+        return;
+      }
+      const nextWidth = shell.clientWidth;
+      const nextHeight = shell.clientHeight;
+      // Ignore collapsed/hidden shells so we do not clobber a good font with a 0-width measure.
+      if (nextWidth < 1) {
+        return;
+      }
+      const prev = lastFitSizeRef.current;
+      const widthChanged = prev == null || Math.abs(nextWidth - prev.width) >= 1;
+      const heightChanged = prev == null || Math.abs(nextHeight - prev.height) >= 1;
+      // First valid layout after being hidden (prev null or was never recorded).
+      const becameVisible = prev == null || prev.width < 1;
+
+      if (!becameVisible && !widthChanged && !(observeHeight && heightChanged)) {
+        return;
+      }
+
+      lastFitSizeRef.current = { width: nextWidth, height: nextHeight };
+      fitToText(text);
+    });
+    observer.observe(shell);
+    return () => {
+      observer.disconnect();
+    };
+  }, [fitToText, observeHeight, shellRef, text]);
+
+  return { fontSizeClass, fitToText };
+}
+
+function scrollAreaClassNames(isFill: boolean, className: string | undefined) {
+  return {
+    root: cn(isFill ? "h-full min-h-0 w-full" : "w-full", className),
+    // Grow: h-auto + same min/max as shell so the box tracks content then scrolls.
+    // Fill: h-full so the fixed pane is the viewport; content may overflow and scroll.
+    viewport: isFill ? "h-full min-h-0 [scrollbar-gutter:stable]" : cn("h-auto [scrollbar-gutter:stable]", className),
+    content: cn("w-full", isFill && "min-h-full"),
+  };
+}
+
+/**
+ * Grow layout only needs ScrollArea when a max-height cap can create overflow.
+ * Without max-h, a nested ScrollArea breaks content-height propagation (window resize / collapsible).
+ */
+function growNeedsScrollArea(className: string | undefined): boolean {
+  return typeof className === "string" && /(?:^|\s)max-h-/.test(className);
+}
+
+/** Editable autosizing textarea (quick translate grow, main translate source fill). */
 export function TextAutosize({
-	value,
-	defaultValue,
-	className,
-	minRows,
-	onChange,
-	style,
-	...props
+  value,
+  defaultValue,
+  className,
+  textareaClassName,
+  layout = "grow",
+  minRows,
+  showScrollbarOnHover = true,
+  onChange,
+  style,
+  ...props
 }: TextAutosizeProps) {
-	const rootRef = useRef<HTMLDivElement>(null);
-	const textareaRef = useRef<HTMLTextAreaElement>(null);
-	const dummyRef = useRef<HTMLDivElement>(null);
-	/** Last value we sized for; null until the first sync so external mounts remeasure. */
-	const prevValueRef = useRef<string | null>(null);
-	const fontIndexRef = useRef(LARGEST_FONT_INDEX);
-	/** Last root width that triggered a font re-fit (height-only resizes are ignored). */
-	const lastFitWidthRef = useRef<number | null>(null);
-	/** True while we are applying height/font so ResizeObserver does not re-enter. */
-	const isFittingRef = useRef(false);
-	const [fontIndex, setFontIndex] = useState(LARGEST_FONT_INDEX);
+  const isFill = layout === "fill";
+  const useScroll = isFill || growNeedsScrollArea(className);
+  const shellRef = useRef<HTMLDivElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const dummyRef = useRef<HTMLDivElement>(null);
 
-	const fontSizeClass = FONT_SIZE_STEPS[fontIndex] ?? FONT_SIZE_STEPS[LARGEST_FONT_INDEX];
+  const readShellHeight = useCallback((): number => {
+    return shellRef.current?.clientHeight ?? rootRef.current?.clientHeight ?? 0;
+  }, []);
 
-	const readCurrentValue = useCallback((): string => {
-		if (value !== undefined) {
-			return String(value);
-		}
-		return textareaRef.current?.value ?? "";
-	}, [value]);
+  const applyHeight = useCallback(
+    (nextValue: string) => {
+      const textarea = textareaRef.current;
+      if (!textarea) {
+        return;
+      }
+      textarea.style.height = "auto";
+      if (nextValue.length === 0) {
+        const fillHeight = Math.max(0, readShellHeight() - EMPTY_HEIGHT_INSET_PX);
+        textarea.style.height = `${fillHeight}px`;
+        return;
+      }
+      textarea.style.height = `${textarea.scrollHeight}px`;
+    },
+    [readShellHeight],
+  );
 
-	const commitFontIndex = useCallback((nextIndex: number) => {
-		const clamped = clampFontIndex(nextIndex);
-		if (fontIndexRef.current === clamped) {
-			return clamped;
-		}
-		fontIndexRef.current = clamped;
-		setFontIndex(clamped);
-		return clamped;
-	}, []);
+  const text = value !== undefined ? String(value) : String(defaultValue ?? "");
 
-	/**
-	 * Set textarea height from content (or fill the root when empty).
-	 * Returns natural content height used for font spill checks (0 when empty).
-	 */
-	const applyHeight = useCallback((nextValue: string): number => {
-		const root = rootRef.current;
-		const textarea = textareaRef.current;
-		if (!root || !textarea) {
-			return 0;
-		}
+  const { fontSizeClass, fitToText } = useSteppedFontSize({
+    text,
+    isFill,
+    minRows,
+    shellRef,
+    boxRef: textareaRef,
+    dummyRef,
+    observeHeight: isFill,
+    onAfterFontFit: applyHeight,
+  });
 
-		isFittingRef.current = true;
-		textarea.style.height = "auto";
+  function handleChange(event: ChangeEvent<HTMLTextAreaElement>) {
+    // Fit immediately so controlled parents that setState async still feel live.
+    fitToText(event.currentTarget.value);
+    onChange?.(event);
+  }
 
-		if (nextValue.length === 0) {
-			const fillHeight = Math.max(0, root.clientHeight - EMPTY_HEIGHT_INSET_PX);
-			textarea.style.height = `${fillHeight}px`;
-			// Release on next frame so ResizeObserver from this write is ignored.
-			requestAnimationFrame(() => {
-				isFittingRef.current = false;
-			});
-			return 0;
-		}
+  const field = (
+    <div ref={rootRef} className={cn("relative w-full", isFill && "min-h-full")}>
+      <textarea
+        {...props}
+        ref={textareaRef}
+        // fontSizeClass last so twMerge does not drop it for text-on-surface / other text-* utilities.
+        className={cn(TEXTAREA_BASE_CLASS_NAME, "h-auto", textareaClassName, fontSizeClass)}
+        style={style}
+        value={value}
+        defaultValue={defaultValue}
+        onChange={handleChange}
+      />
+      <div ref={dummyRef} className={DUMMY_BASE_CLASS_NAME} aria-hidden />
+    </div>
+  );
 
-		const naturalHeight = textarea.scrollHeight;
-		textarea.style.height = `${naturalHeight}px`;
-		requestAnimationFrame(() => {
-			isFittingRef.current = false;
-		});
-		return naturalHeight;
-	}, []);
+  if (!useScroll) {
+    return (
+      <div ref={shellRef} className={cn("w-full", className)}>
+        {field}
+      </div>
+    );
+  }
 
-	/**
-	 * Largest font whose measured height still fits the min box (with slack).
-	 * Always force-fit — directional grow/shrink thrash on paste and border-line widths.
-	 */
-	const forceFontIndexForValue = useCallback(
-		(nextValue: string): number => {
-			const root = rootRef.current;
-			const textarea = textareaRef.current;
-			const dummy = dummyRef.current;
-			if (!root || !textarea || !dummy || nextValue.length === 0) {
-				return LARGEST_FONT_INDEX;
-			}
+  const scroll = scrollAreaClassNames(isFill, className);
 
-			const minHeight = resolveMinHeightPx(minRows, root.clientHeight);
-			const fitLimit = minHeight + FONT_FIT_SLACK_PX;
+  return (
+    <ScrollArea
+      ref={shellRef}
+      className={scroll.root}
+      viewportClassName={scroll.viewport}
+      contentClassName={scroll.content}
+      showScrollbarOnHover={showScrollbarOnHover}
+    >
+      {field}
+    </ScrollArea>
+  );
+}
 
-			let nextIndex = LARGEST_FONT_INDEX;
-			for (; nextIndex > SMALLEST_FONT_INDEX; nextIndex -= 1) {
-				const step = FONT_SIZE_STEPS[nextIndex];
-				if (!step) {
-					break;
-				}
-				if (measureTextHeight(dummy, textarea, nextValue, step) <= fitLimit) {
-					break;
-				}
-			}
-			return nextIndex;
-		},
-		[minRows],
-	);
+/**
+ * Read-only stepped-font frame for translation output (and similar panes).
+ * Pass the string to measure via `text`; render streaming/error/placeholder as `children`.
+ *
+ * Grow without `max-h-*`: plain block (height follows content → window can resize).
+ * Grow with `max-h-*` / fill: ScrollArea for overflow.
+ */
+export function TextAutosizeContent({
+  text,
+  layout = "fill",
+  minRows,
+  className,
+  contentClassName,
+  showScrollbarOnHover = true,
+  children,
+}: TextAutosizeContentProps) {
+  const isFill = layout === "fill";
+  const useScroll = isFill || growNeedsScrollArea(className);
+  const shellRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const dummyRef = useRef<HTMLDivElement>(null);
 
-	/** Fit font + height for a value; records the width used so height-only resizes skip. */
-	const fitToValue = useCallback(
-		(nextValue: string) => {
-			const root = rootRef.current;
-			if (root) {
-				lastFitWidthRef.current = root.clientWidth;
-			}
-			if (nextValue.length === 0) {
-				commitFontIndex(LARGEST_FONT_INDEX);
-				applyHeight(nextValue);
-				return;
-			}
-			commitFontIndex(forceFontIndexForValue(nextValue));
-			// Height is reapplied after the font class commits (layout effect on fontIndex).
-			// Also apply immediately with the current class so paste does not flash wrong height.
-			applyHeight(nextValue);
-		},
-		[applyHeight, commitFontIndex, forceFontIndexForValue],
-	);
+  const { fontSizeClass } = useSteppedFontSize({
+    text,
+    isFill,
+    minRows,
+    shellRef,
+    boxRef: contentRef,
+    dummyRef,
+    observeHeight: isFill,
+  });
 
-	// Re-apply height after font class changes land in the DOM (imperative only — no setState).
-	useLayoutEffect(() => {
-		applyHeight(readCurrentValue());
-	}, [applyHeight, fontIndex, readCurrentValue]);
+  /*
+	  fontSizeClass last: twMerge treats text-on-surface and text-headline-*
+	  as the same text-* group, so a trailing color utility would drop the font step.
+	*/
+  const content = (
+    <div
+      ref={contentRef}
+      className={cn("relative w-full text-on-surface", isFill && "min-h-full", contentClassName, fontSizeClass)}
+    >
+      {children}
+      <div ref={dummyRef} className={DUMMY_BASE_CLASS_NAME} aria-hidden />
+    </div>
+  );
 
-	// Controlled value changes (typing, paste, clipboard IPC, clear).
-	useLayoutEffect(() => {
-		if (value === undefined) {
-			return;
-		}
-		const nextValue = String(value);
-		const previousValue = prevValueRef.current;
-		if (previousValue === nextValue) {
-			return;
-		}
-		prevValueRef.current = nextValue;
-		fitToValue(nextValue);
-	}, [fitToValue, value]);
+  if (!useScroll) {
+    // Content-sized shell so collapsible / window height observers see real offsetHeight.
+    return (
+      <div ref={shellRef} className={cn("w-full", className)}>
+        {content}
+      </div>
+    );
+  }
 
-	// Width changes only: re-fit font. Height-only changes (our own applyHeight / window
-	// content-height chase) must not re-enter or they thrash font steps.
-	useEffect(() => {
-		const root = rootRef.current;
-		if (!root || typeof ResizeObserver === "undefined") {
-			return;
-		}
+  const scroll = scrollAreaClassNames(isFill, className);
 
-		const observer = new ResizeObserver((entries) => {
-			if (isFittingRef.current) {
-				return;
-			}
-			const entry = entries[0];
-			const nextWidth = entry?.contentRect.width ?? root.clientWidth;
-			const prevWidth = lastFitWidthRef.current;
-			// Sub-pixel / scrollbar-gutter noise: ignore tiny width deltas.
-			if (prevWidth != null && Math.abs(nextWidth - prevWidth) < 1) {
-				return;
-			}
-			lastFitWidthRef.current = nextWidth;
-			fitToValue(readCurrentValue());
-		});
-		observer.observe(root);
-		return () => {
-			observer.disconnect();
-		};
-	}, [fitToValue, readCurrentValue]);
-
-	function handleChange(event: ChangeEvent<HTMLTextAreaElement>) {
-		const nextValue = event.currentTarget.value;
-		prevValueRef.current = nextValue;
-		// Size immediately on keystroke so controlled parents that re-render async still feel live.
-		fitToValue(nextValue);
-		onChange?.(event);
-	}
-
-	return (
-		<div ref={rootRef} className={cn("relative h-full w-full", className)}>
-			<textarea
-				{...props}
-				ref={textareaRef}
-				className={cn(TEXTAREA_BASE_CLASS_NAME, fontSizeClass, "h-auto")}
-				style={style}
-				value={value}
-				defaultValue={defaultValue}
-				onChange={handleChange}
-			/>
-			<div ref={dummyRef} className={DUMMY_BASE_CLASS_NAME} aria-hidden />
-		</div>
-	);
+  return (
+    <ScrollArea
+      ref={shellRef}
+      className={scroll.root}
+      viewportClassName={scroll.viewport}
+      contentClassName={scroll.content}
+      showScrollbarOnHover={showScrollbarOnHover}
+    >
+      {content}
+    </ScrollArea>
+  );
 }

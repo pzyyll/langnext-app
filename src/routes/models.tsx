@@ -4,5 +4,5 @@ import { createFileRoute } from "@tanstack/react-router";
 import { ModelsLayout } from "../features/models/ModelsLayout";
 
 export const Route = createFileRoute("/models")({
-	component: ModelsLayout,
+  component: ModelsLayout,
 });

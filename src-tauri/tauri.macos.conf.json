@@ -1,11 +1,11 @@
 {
-	"$schema": "https://schema.tauri.app/config/2",
-	"app": {
-		"trayIcon": {
-			"id": "main",
-			"iconPath": "icons/black/icon.ico",
-			"iconAsTemplate": true,
-			"tooltip": "langnext-app"
-		}
-	}
+  "$schema": "https://schema.tauri.app/config/2",
+  "app": {
+    "trayIcon": {
+      "id": "main",
+      "iconPath": "icons/black/icon.ico",
+      "iconAsTemplate": true,
+      "tooltip": "langnext-app"
+    }
+  }
 }

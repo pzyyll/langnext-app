@@ -1,31 +1,31 @@
 <!doctype html>
 <html lang="en">
-	<head>
-		<meta charset="UTF-8" />
-		<link rel="icon" type="image/png" sizes="128x128" href="/icon-128x128.png" />
-		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-		<title>langnext-app</title>
-		<!--
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/png" sizes="128x128" href="/icon-128x128.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>langnext-app</title>
+    <!--
 			Pre-paint theme cache only (localStorage / OS preference).
 			Authoritative theme reconciliation runs during storage bootstrap in Tauri.
 		-->
-		<script>
-			(function () {
-				try {
-					var key = "langnext-theme";
-					var theme = localStorage.getItem(key);
-					if (theme !== "light" && theme !== "dark") {
-						theme = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-					}
-					document.documentElement.setAttribute("data-theme", theme);
-					document.documentElement.style.colorScheme = theme;
-				} catch (e) {}
-			})();
-		</script>
-	</head>
+    <script>
+      (function () {
+        try {
+          var key = "langnext-theme";
+          var theme = localStorage.getItem(key);
+          if (theme !== "light" && theme !== "dark") {
+            theme = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+          }
+          document.documentElement.setAttribute("data-theme", theme);
+          document.documentElement.style.colorScheme = theme;
+        } catch (e) {}
+      })();
+    </script>
+  </head>
 
-	<body>
-		<div id="root"></div>
-		<script type="module" src="/src/main.tsx"></script>
-	</body>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
 </html>

@@ -5,199 +5,199 @@
 /* ── Runtime theme tokens (switch by [data-theme]) ── */
 :root,
 [data-theme="light"] {
-	/* M3 color roles — light */
-	--app-surface: #ffffff;
-	--app-surface-dim: #e4e4e4;
-	--app-surface-bright: #ffffff;
-	--app-surface-container-lowest: #ffffff;
-	--app-surface-container-low: #f3f3f3;
-	--app-surface-container: #f3f3f3;
-	--app-surface-container-high: #e4e4e4;
-	--app-surface-container-highest: #e4e4e4;
-	--app-on-surface: #161616;
-	--app-on-surface-variant: #555555;
-	--app-inverse-surface: #121212;
-	--app-inverse-on-surface: #f8f8f8;
-	--app-outline: #161616;
-	--app-outline-variant: #e4e4e4;
-	--app-surface-tint: #0074ca;
-	--app-primary: #161616;
-	--app-on-primary: #ffffff;
-	--app-primary-container: #161616;
-	--app-on-primary-container: #ffffff;
-	--app-inverse-primary: #59aaf8;
-	--app-secondary: #555555;
-	--app-on-secondary: #ffffff;
-	--app-secondary-container: #f3f3f3;
-	--app-on-secondary-container: #161616;
-	--app-tertiary: #0074ca;
-	--app-on-tertiary: #ffffff;
-	--app-tertiary-container: #0074ca;
-	--app-on-tertiary-container: #ffffff;
-	--app-error: #cc272e;
-	--app-on-error: #ffffff;
-	--app-error-container: #cc272e;
-	--app-on-error-container: #ffffff;
-	--app-primary-fixed: #e4e4e4;
-	--app-primary-fixed-dim: #555555;
-	--app-on-primary-fixed: #161616;
-	--app-on-primary-fixed-variant: #555555;
-	--app-secondary-fixed: #f3f3f3;
-	--app-secondary-fixed-dim: #e4e4e4;
-	--app-on-secondary-fixed: #161616;
-	--app-on-secondary-fixed-variant: #555555;
-	--app-tertiary-fixed: #59aaf8;
-	--app-tertiary-fixed-dim: #0074ca;
-	--app-on-tertiary-fixed: #ffffff;
-	--app-on-tertiary-fixed-variant: #ffffff;
-	--app-background: #ffffff;
-	--app-on-background: #161616;
-	--app-surface-variant: #f3f3f3;
+  /* M3 color roles — light */
+  --app-surface: #ffffff;
+  --app-surface-dim: #e4e4e4;
+  --app-surface-bright: #ffffff;
+  --app-surface-container-lowest: #ffffff;
+  --app-surface-container-low: #f3f3f3;
+  --app-surface-container: #f3f3f3;
+  --app-surface-container-high: #e4e4e4;
+  --app-surface-container-highest: #e4e4e4;
+  --app-on-surface: #161616;
+  --app-on-surface-variant: #555555;
+  --app-inverse-surface: #121212;
+  --app-inverse-on-surface: #f8f8f8;
+  --app-outline: #161616;
+  --app-outline-variant: #e4e4e4;
+  --app-surface-tint: #0074ca;
+  --app-primary: #161616;
+  --app-on-primary: #ffffff;
+  --app-primary-container: #161616;
+  --app-on-primary-container: #ffffff;
+  --app-inverse-primary: #59aaf8;
+  --app-secondary: #555555;
+  --app-on-secondary: #ffffff;
+  --app-secondary-container: #f3f3f3;
+  --app-on-secondary-container: #161616;
+  --app-tertiary: #0074ca;
+  --app-on-tertiary: #ffffff;
+  --app-tertiary-container: #0074ca;
+  --app-on-tertiary-container: #ffffff;
+  --app-error: #cc272e;
+  --app-on-error: #ffffff;
+  --app-error-container: #cc272e;
+  --app-on-error-container: #ffffff;
+  --app-primary-fixed: #e4e4e4;
+  --app-primary-fixed-dim: #555555;
+  --app-on-primary-fixed: #161616;
+  --app-on-primary-fixed-variant: #555555;
+  --app-secondary-fixed: #f3f3f3;
+  --app-secondary-fixed-dim: #e4e4e4;
+  --app-on-secondary-fixed: #161616;
+  --app-on-secondary-fixed-variant: #555555;
+  --app-tertiary-fixed: #59aaf8;
+  --app-tertiary-fixed-dim: #0074ca;
+  --app-on-tertiary-fixed: #ffffff;
+  --app-on-tertiary-fixed-variant: #ffffff;
+  --app-background: #ffffff;
+  --app-on-background: #161616;
+  --app-surface-variant: #f3f3f3;
 
-	/* Project-specific tokens */
-	--app-code: #f2f2f2;
-	--app-disabled: #717171;
-	--app-overlay: #00000033;
-	--app-shadow: #0000001f;
+  /* Project-specific tokens */
+  --app-code: #f2f2f2;
+  --app-disabled: #717171;
+  --app-overlay: #00000033;
+  --app-shadow: #0000001f;
 
-	/* Aliases to M3 roles (keep component class names working) */
-	--app-surface-2: var(--app-surface-container-low);
-	--app-surface-3: var(--app-surface-container-high);
-	--app-neutral: var(--app-on-surface-variant);
-	--app-line: var(--app-outline);
+  /* Aliases to M3 roles (keep component class names working) */
+  --app-surface-2: var(--app-surface-container-low);
+  --app-surface-3: var(--app-surface-container-high);
+  --app-neutral: var(--app-on-surface-variant);
+  --app-line: var(--app-outline);
 }
 
 [data-theme="dark"] {
-	/* M3 color roles — dark */
-	--app-surface: #141313;
-	--app-surface-dim: #141313;
-	--app-surface-bright: #3a3939;
-	--app-surface-container-lowest: #0e0e0e;
-	--app-surface-container-low: #1c1b1b;
-	--app-surface-container: #201f1f;
-	--app-surface-container-high: #2b2a2a;
-	--app-surface-container-highest: #353434;
-	--app-on-surface: #e5e2e1;
-	--app-on-surface-variant: #c4c7c7;
-	--app-inverse-surface: #e5e2e1;
-	--app-inverse-on-surface: #313030;
-	--app-outline: #8e9192;
-	--app-outline-variant: #444748;
-	--app-surface-tint: #c8c6c5;
-	--app-primary: #c8c6c5;
-	--app-on-primary: #313030;
-	--app-primary-container: #161616;
-	--app-on-primary-container: #817f7f;
-	--app-inverse-primary: #5f5e5e;
-	--app-secondary: #c8c6c6;
-	--app-on-secondary: #303030;
-	--app-secondary-container: #464747;
-	--app-on-secondary-container: #b6b5b4;
-	--app-tertiary: #a2c9ff;
-	--app-on-tertiary: #00315b;
-	--app-tertiary-container: #00172f;
-	--app-on-tertiary-container: #2783d9;
-	--app-error: #ffb4ab;
-	--app-on-error: #690005;
-	--app-error-container: #93000a;
-	--app-on-error-container: #ffdad6;
-	--app-primary-fixed: #e5e2e1;
-	--app-primary-fixed-dim: #c8c6c5;
-	--app-on-primary-fixed: #1c1b1b;
-	--app-on-primary-fixed-variant: #474746;
-	--app-secondary-fixed: #e4e2e2;
-	--app-secondary-fixed-dim: #c8c6c6;
-	--app-on-secondary-fixed: #1b1c1c;
-	--app-on-secondary-fixed-variant: #464747;
-	--app-tertiary-fixed: #d3e4ff;
-	--app-tertiary-fixed-dim: #a2c9ff;
-	--app-on-tertiary-fixed: #001c38;
-	--app-on-tertiary-fixed-variant: #004881;
-	--app-background: #141313;
-	--app-on-background: #e5e2e1;
-	--app-surface-variant: #353434;
+  /* M3 color roles — dark */
+  --app-surface: #141313;
+  --app-surface-dim: #141313;
+  --app-surface-bright: #3a3939;
+  --app-surface-container-lowest: #0e0e0e;
+  --app-surface-container-low: #1c1b1b;
+  --app-surface-container: #201f1f;
+  --app-surface-container-high: #2b2a2a;
+  --app-surface-container-highest: #353434;
+  --app-on-surface: #e5e2e1;
+  --app-on-surface-variant: #c4c7c7;
+  --app-inverse-surface: #e5e2e1;
+  --app-inverse-on-surface: #313030;
+  --app-outline: #8e9192;
+  --app-outline-variant: #444748;
+  --app-surface-tint: #c8c6c5;
+  --app-primary: #c8c6c5;
+  --app-on-primary: #313030;
+  --app-primary-container: #161616;
+  --app-on-primary-container: #817f7f;
+  --app-inverse-primary: #5f5e5e;
+  --app-secondary: #c8c6c6;
+  --app-on-secondary: #303030;
+  --app-secondary-container: #464747;
+  --app-on-secondary-container: #b6b5b4;
+  --app-tertiary: #a2c9ff;
+  --app-on-tertiary: #00315b;
+  --app-tertiary-container: #00172f;
+  --app-on-tertiary-container: #2783d9;
+  --app-error: #ffb4ab;
+  --app-on-error: #690005;
+  --app-error-container: #93000a;
+  --app-on-error-container: #ffdad6;
+  --app-primary-fixed: #e5e2e1;
+  --app-primary-fixed-dim: #c8c6c5;
+  --app-on-primary-fixed: #1c1b1b;
+  --app-on-primary-fixed-variant: #474746;
+  --app-secondary-fixed: #e4e2e2;
+  --app-secondary-fixed-dim: #c8c6c6;
+  --app-on-secondary-fixed: #1b1c1c;
+  --app-on-secondary-fixed-variant: #464747;
+  --app-tertiary-fixed: #d3e4ff;
+  --app-tertiary-fixed-dim: #a2c9ff;
+  --app-on-tertiary-fixed: #001c38;
+  --app-on-tertiary-fixed-variant: #004881;
+  --app-background: #141313;
+  --app-on-background: #e5e2e1;
+  --app-surface-variant: #353434;
 
-	/* Project-specific tokens (disabled/shadow not in spec — derived) */
-	--app-code: #292929;
-	--app-disabled: #8a8a8a;
-	--app-overlay: #00000080;
-	--app-shadow: transparent;
+  /* Project-specific tokens (disabled/shadow not in spec — derived) */
+  --app-code: #292929;
+  --app-disabled: #8a8a8a;
+  --app-overlay: #00000080;
+  --app-shadow: transparent;
 }
 
 /* Map tokens into Tailwind color utilities: bg-surface, text-on-surface, border-line, … */
 @theme inline {
-	/* M3 surface roles */
-	--color-surface: var(--app-surface);
-	--color-surface-dim: var(--app-surface-dim);
-	--color-surface-bright: var(--app-surface-bright);
-	--color-surface-container-lowest: var(--app-surface-container-lowest);
-	--color-surface-container-low: var(--app-surface-container-low);
-	--color-surface-container: var(--app-surface-container);
-	--color-surface-container-high: var(--app-surface-container-high);
-	--color-surface-container-highest: var(--app-surface-container-highest);
-	--color-surface-variant: var(--app-surface-variant);
-	--color-surface-tint: var(--app-surface-tint);
-	--color-background: var(--app-background);
+  /* M3 surface roles */
+  --color-surface: var(--app-surface);
+  --color-surface-dim: var(--app-surface-dim);
+  --color-surface-bright: var(--app-surface-bright);
+  --color-surface-container-lowest: var(--app-surface-container-lowest);
+  --color-surface-container-low: var(--app-surface-container-low);
+  --color-surface-container: var(--app-surface-container);
+  --color-surface-container-high: var(--app-surface-container-high);
+  --color-surface-container-highest: var(--app-surface-container-highest);
+  --color-surface-variant: var(--app-surface-variant);
+  --color-surface-tint: var(--app-surface-tint);
+  --color-background: var(--app-background);
 
-	/* M3 content roles */
-	--color-on-surface: var(--app-on-surface);
-	--color-on-surface-variant: var(--app-on-surface-variant);
-	--color-on-background: var(--app-on-background);
-	--color-inverse-surface: var(--app-inverse-surface);
-	--color-inverse-on-surface: var(--app-inverse-on-surface);
+  /* M3 content roles */
+  --color-on-surface: var(--app-on-surface);
+  --color-on-surface-variant: var(--app-on-surface-variant);
+  --color-on-background: var(--app-on-background);
+  --color-inverse-surface: var(--app-inverse-surface);
+  --color-inverse-on-surface: var(--app-inverse-on-surface);
 
-	/* M3 outline roles */
-	--color-outline: var(--app-outline);
-	--color-outline-variant: var(--app-outline-variant);
+  /* M3 outline roles */
+  --color-outline: var(--app-outline);
+  --color-outline-variant: var(--app-outline-variant);
 
-	/* M3 primary roles */
-	--color-primary: var(--app-primary);
-	--color-on-primary: var(--app-on-primary);
-	--color-primary-container: var(--app-primary-container);
-	--color-on-primary-container: var(--app-on-primary-container);
-	--color-inverse-primary: var(--app-inverse-primary);
+  /* M3 primary roles */
+  --color-primary: var(--app-primary);
+  --color-on-primary: var(--app-on-primary);
+  --color-primary-container: var(--app-primary-container);
+  --color-on-primary-container: var(--app-on-primary-container);
+  --color-inverse-primary: var(--app-inverse-primary);
 
-	/* M3 secondary roles */
-	--color-secondary: var(--app-secondary);
-	--color-on-secondary: var(--app-on-secondary);
-	--color-secondary-container: var(--app-secondary-container);
-	--color-on-secondary-container: var(--app-on-secondary-container);
+  /* M3 secondary roles */
+  --color-secondary: var(--app-secondary);
+  --color-on-secondary: var(--app-on-secondary);
+  --color-secondary-container: var(--app-secondary-container);
+  --color-on-secondary-container: var(--app-on-secondary-container);
 
-	/* M3 tertiary roles */
-	--color-tertiary: var(--app-tertiary);
-	--color-on-tertiary: var(--app-on-tertiary);
-	--color-tertiary-container: var(--app-tertiary-container);
-	--color-on-tertiary-container: var(--app-on-tertiary-container);
+  /* M3 tertiary roles */
+  --color-tertiary: var(--app-tertiary);
+  --color-on-tertiary: var(--app-on-tertiary);
+  --color-tertiary-container: var(--app-tertiary-container);
+  --color-on-tertiary-container: var(--app-on-tertiary-container);
 
-	/* M3 error roles */
-	--color-error: var(--app-error);
-	--color-on-error: var(--app-on-error);
-	--color-error-container: var(--app-error-container);
-	--color-on-error-container: var(--app-on-error-container);
+  /* M3 error roles */
+  --color-error: var(--app-error);
+  --color-on-error: var(--app-on-error);
+  --color-error-container: var(--app-error-container);
+  --color-on-error-container: var(--app-on-error-container);
 
-	/* M3 fixed roles */
-	--color-primary-fixed: var(--app-primary-fixed);
-	--color-primary-fixed-dim: var(--app-primary-fixed-dim);
-	--color-on-primary-fixed: var(--app-on-primary-fixed);
-	--color-on-primary-fixed-variant: var(--app-on-primary-fixed-variant);
-	--color-secondary-fixed: var(--app-secondary-fixed);
-	--color-secondary-fixed-dim: var(--app-secondary-fixed-dim);
-	--color-on-secondary-fixed: var(--app-on-secondary-fixed);
-	--color-on-secondary-fixed-variant: var(--app-on-secondary-fixed-variant);
-	--color-tertiary-fixed: var(--app-tertiary-fixed);
-	--color-tertiary-fixed-dim: var(--app-tertiary-fixed-dim);
-	--color-on-tertiary-fixed: var(--app-on-tertiary-fixed);
-	--color-on-tertiary-fixed-variant: var(--app-on-tertiary-fixed-variant);
+  /* M3 fixed roles */
+  --color-primary-fixed: var(--app-primary-fixed);
+  --color-primary-fixed-dim: var(--app-primary-fixed-dim);
+  --color-on-primary-fixed: var(--app-on-primary-fixed);
+  --color-on-primary-fixed-variant: var(--app-on-primary-fixed-variant);
+  --color-secondary-fixed: var(--app-secondary-fixed);
+  --color-secondary-fixed-dim: var(--app-secondary-fixed-dim);
+  --color-on-secondary-fixed: var(--app-on-secondary-fixed);
+  --color-on-secondary-fixed-variant: var(--app-on-secondary-fixed-variant);
+  --color-tertiary-fixed: var(--app-tertiary-fixed);
+  --color-tertiary-fixed-dim: var(--app-tertiary-fixed-dim);
+  --color-on-tertiary-fixed: var(--app-on-tertiary-fixed);
+  --color-on-tertiary-fixed-variant: var(--app-on-tertiary-fixed-variant);
 
-	/* Project-specific aliases & tokens */
-	--color-surface-2: var(--app-surface-2);
-	--color-surface-3: var(--app-surface-3);
-	--color-neutral: var(--app-neutral);
-	--color-line: var(--app-line);
-	--color-overlay: var(--app-overlay);
-	--color-code: var(--app-code);
-	--color-disabled: var(--app-disabled);
-	--color-shadow: var(--app-shadow);
+  /* Project-specific aliases & tokens */
+  --color-surface-2: var(--app-surface-2);
+  --color-surface-3: var(--app-surface-3);
+  --color-neutral: var(--app-neutral);
+  --color-line: var(--app-line);
+  --color-overlay: var(--app-overlay);
+  --color-code: var(--app-code);
+  --color-disabled: var(--app-disabled);
+  --color-shadow: var(--app-shadow);
 }
 
 /*
@@ -205,194 +205,194 @@
  * Color role names already live above; scale spacing (xs–2xl) matches Tailwind defaults.
  */
 @theme {
-	/* Typography roles → text-headline-display, text-headline-md, … */
-	--text-headline-display: 1.875rem;
-	--text-headline-display--line-height: 2.25rem;
+  /* Typography roles → text-headline-display, text-headline-md, … */
+  --text-headline-display: 1.875rem;
+  --text-headline-display--line-height: 2.25rem;
 
-	--text-headline-md: 1.5rem;
-	--text-headline-md--line-height: 2rem;
+  --text-headline-md: 1.5rem;
+  --text-headline-md--line-height: 2rem;
 
-	--text-headline-sm: 1.25rem;
-	--text-headline-sm--line-height: 1.75rem;
+  --text-headline-sm: 1.25rem;
+  --text-headline-sm--line-height: 1.75rem;
 
-	--text-title-dialog: 1rem;
-	--text-title-dialog--line-height: 1.5rem;
+  --text-title-dialog: 1rem;
+  --text-title-dialog--line-height: 1.5rem;
 
-	--text-body-md: 0.875rem;
-	--text-body-md--line-height: 1.5rem;
+  --text-body-md: 0.875rem;
+  --text-body-md--line-height: 1.5rem;
 
-	--text-body-tight: 0.875rem;
-	--text-body-tight--line-height: 1.25rem;
+  --text-body-tight: 0.875rem;
+  --text-body-tight--line-height: 1.25rem;
 
-	--text-body-bold: 0.875rem;
-	--text-body-bold--line-height: 1.25rem;
+  --text-body-bold: 0.875rem;
+  --text-body-bold--line-height: 1.25rem;
 
-	--text-label-sm: 0.75rem;
-	--text-label-sm--line-height: 1rem;
-	--text-label-sm--letter-spacing: 0.12em;
+  --text-label-sm: 0.75rem;
+  --text-label-sm--line-height: 1rem;
+  --text-label-sm--letter-spacing: 0.12em;
 
-	--text-table-header: 0.625rem;
-	--text-table-header--line-height: 0.875rem;
-	--text-table-header--letter-spacing: 0.05em;
+  --text-table-header: 0.625rem;
+  --text-table-header--line-height: 0.875rem;
+  --text-table-header--letter-spacing: 0.05em;
 
-	--text-mono-key: 0.875rem;
-	--text-mono-key--line-height: 1.25rem;
+  --text-mono-key: 0.875rem;
+  --text-mono-key--line-height: 1.25rem;
 
-	--text-code-inline: 0.75rem;
-	--text-code-inline--line-height: 1rem;
+  --text-code-inline: 0.75rem;
+  --text-code-inline--line-height: 1rem;
 
-	/* Named layout spacing → w-sidebar-width, h-titlebar-height, … */
-	--spacing-gutter: 1rem;
-	--spacing-sidebar-width: 11rem;
-	--spacing-models-rail: 12rem;
-	--spacing-titlebar-height: 2rem;
-	--spacing-control-height: 2rem;
+  /* Named layout spacing → w-sidebar-width, h-titlebar-height, … */
+  --spacing-gutter: 1rem;
+  --spacing-sidebar-width: 11rem;
+  --spacing-models-rail: 12rem;
+  --spacing-titlebar-height: 2rem;
+  --spacing-control-height: 2rem;
 
-	/* Channel list item enter/exit — apply to inner Link only (not dnd-kit li) */
-	--animate-channel-enter: channel-enter 150ms ease-out;
-	--animate-channel-exit: channel-exit 120ms ease-in forwards;
+  /* Channel list item enter/exit — apply to inner Link only (not dnd-kit li) */
+  --animate-channel-enter: channel-enter 150ms ease-out;
+  --animate-channel-exit: channel-exit 120ms ease-in forwards;
 
-	@keyframes channel-enter {
-		from {
-			opacity: 0;
-			transform: translateY(-0.25rem);
-		}
-		to {
-			opacity: 1;
-			transform: translateY(0);
-		}
-	}
+  @keyframes channel-enter {
+    from {
+      opacity: 0;
+      transform: translateY(-0.25rem);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
 
-	@keyframes channel-exit {
-		from {
-			opacity: 1;
-			transform: translateY(0);
-		}
-		to {
-			opacity: 0;
-			transform: translateY(-0.25rem);
-		}
-	}
+  @keyframes channel-exit {
+    from {
+      opacity: 1;
+      transform: translateY(0);
+    }
+    to {
+      opacity: 0;
+      transform: translateY(-0.25rem);
+    }
+  }
 }
 
 html,
 body,
 #root {
-	height: 100%;
-	overflow: hidden;
+  height: 100%;
+  overflow: hidden;
 }
 
 body {
-	margin: 0;
-	position: relative;
-	font-family:
-		ui-sans-serif,
-		system-ui,
-		-apple-system,
-		BlinkMacSystemFont,
-		"Segoe UI",
-		Roboto,
-		"Helvetica Neue",
-		Arial,
-		sans-serif;
-	-webkit-font-smoothing: antialiased;
-	-moz-osx-font-smoothing: grayscale;
-	background-color: var(--app-surface);
-	color: var(--app-on-surface);
-	user-select: none;
+  margin: 0;
+  position: relative;
+  font-family:
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    Roboto,
+    "Helvetica Neue",
+    Arial,
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: var(--app-surface);
+  color: var(--app-on-surface);
+  user-select: none;
 }
 
 /*
  * Trailing loading-dots indicator (ported from language-translate / DaisyUI loading-dots).
  * Inline after the last character so "Translating" + dots reads as one line, and partial
  * stream text keeps the bounce glued to the end of the current output.
- * Sized under body text and nudged toward the baseline so the dots read like ellipsis.
+ * Size uses em so dots track TextAutosize / parent font steps (not a fixed rem).
  */
 .loading-dots {
-	/* Slightly under text-body-md (0.875rem) so the glyph does not dominate the line. */
-	--loading-dots-size: 0.75rem;
-	/* Push the centered SVG mask down toward the text baseline / bottom edge. */
-	--loading-dots-baseline-nudge: 0.42em;
-	/* Static three-dot mask (no bounce). */
-	--loading-dots-mask-static: url("data:image/svg+xml,%3Csvg width='24' height='24' viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'%3E%3Ccircle cx='4' cy='12' r='3'/%3E%3Ccircle cx='12' cy='12' r='3'/%3E%3Ccircle cx='20' cy='12' r='3'/%3E%3C/svg%3E");
-	/* Bouncing three-dot mask (DaisyUI loading-dots animation). */
-	--loading-dots-mask-animated: url("data:image/svg+xml,%3Csvg width='24' height='24' viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'%3E%3Ccircle cx='4' cy='12' r='3'%3E%3Canimate attributeName='cy' values='12;6;12;12' keyTimes='0;0.286;0.571;1' dur='1.05s' repeatCount='indefinite' keySplines='.33,0,.66,.33;.33,.66,.66,1'/%3E%3C/circle%3E%3Ccircle cx='12' cy='12' r='3'%3E%3Canimate attributeName='cy' values='12;6;12;12' keyTimes='0;0.286;0.571;1' dur='1.05s' repeatCount='indefinite' keySplines='.33,0,.66,.33;.33,.66,.66,1' begin='0.1s'/%3E%3C/circle%3E%3Ccircle cx='20' cy='12' r='3'%3E%3Canimate attributeName='cy' values='12;6;12;12' keyTimes='0;0.286;0.571;1' dur='1.05s' repeatCount='indefinite' keySplines='.33,0,.66,.33;.33,.66,.66,1' begin='0.2s'/%3E%3C/circle%3E%3C/svg%3E");
+  /* ~0.85 of 1em ≈ former 0.75rem under body-md (0.875rem); scales with stepped type. */
+  --loading-dots-size: 0.85em;
+  /* Push the centered SVG mask down toward the text baseline / bottom edge. */
+  --loading-dots-baseline-nudge: 0.42em;
+  /* Static three-dot mask (no bounce). */
+  --loading-dots-mask-static: url("data:image/svg+xml,%3Csvg width='24' height='24' viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'%3E%3Ccircle cx='4' cy='12' r='3'/%3E%3Ccircle cx='12' cy='12' r='3'/%3E%3Ccircle cx='20' cy='12' r='3'/%3E%3C/svg%3E");
+  /* Bouncing three-dot mask (DaisyUI loading-dots animation). */
+  --loading-dots-mask-animated: url("data:image/svg+xml,%3Csvg width='24' height='24' viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'%3E%3Ccircle cx='4' cy='12' r='3'%3E%3Canimate attributeName='cy' values='12;6;12;12' keyTimes='0;0.286;0.571;1' dur='1.05s' repeatCount='indefinite' keySplines='.33,0,.66,.33;.33,.66,.66,1'/%3E%3C/circle%3E%3Ccircle cx='12' cy='12' r='3'%3E%3Canimate attributeName='cy' values='12;6;12;12' keyTimes='0;0.286;0.571;1' dur='1.05s' repeatCount='indefinite' keySplines='.33,0,.66,.33;.33,.66,.66,1' begin='0.1s'/%3E%3C/circle%3E%3Ccircle cx='20' cy='12' r='3'%3E%3Canimate attributeName='cy' values='12;6;12;12' keyTimes='0;0.286;0.571;1' dur='1.05s' repeatCount='indefinite' keySplines='.33,0,.66,.33;.33,.66,.66,1' begin='0.2s'/%3E%3C/circle%3E%3C/svg%3E");
 
-	display: inline-block;
-	width: var(--loading-dots-size);
-	aspect-ratio: 1;
-	margin-inline-start: 0.1em;
-	vertical-align: calc(-1 * var(--loading-dots-baseline-nudge));
-	pointer-events: none;
-	background-color: currentColor;
-	mask-image: var(--loading-dots-mask-static);
-	mask-position: 50%;
-	mask-size: 100%;
-	mask-repeat: no-repeat;
-	-webkit-mask-image: var(--loading-dots-mask-static);
-	-webkit-mask-position: 50%;
-	-webkit-mask-size: 100%;
-	-webkit-mask-repeat: no-repeat;
+  display: inline-block;
+  width: var(--loading-dots-size);
+  aspect-ratio: 1;
+  margin-inline-start: 0.1em;
+  vertical-align: calc(-1 * var(--loading-dots-baseline-nudge));
+  pointer-events: none;
+  background-color: currentColor;
+  mask-image: var(--loading-dots-mask-static);
+  mask-position: 50%;
+  mask-size: 100%;
+  mask-repeat: no-repeat;
+  -webkit-mask-image: var(--loading-dots-mask-static);
+  -webkit-mask-position: 50%;
+  -webkit-mask-size: 100%;
+  -webkit-mask-repeat: no-repeat;
 }
 
 @media (prefers-reduced-motion: no-preference) {
-	.loading-dots {
-		mask-image: var(--loading-dots-mask-animated);
-		-webkit-mask-image: var(--loading-dots-mask-animated);
-	}
+  .loading-dots {
+    mask-image: var(--loading-dots-mask-animated);
+    -webkit-mask-image: var(--loading-dots-mask-animated);
+  }
 }
 
 /* Thin, theme-aware native scrollbars (overflow-auto / overflow-scroll).
    Uses --app-* tokens so light/dark via [data-theme] applies automatically.
    Base UI ScrollArea overrides these on its viewport (display: none / none). */
 @layer base {
-	* {
-		scrollbar-width: thin;
-		scrollbar-color: color-mix(in oklab, var(--app-on-surface-variant) 40%, transparent) transparent;
-	}
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in oklab, var(--app-on-surface-variant) 40%, transparent) transparent;
+  }
 
-	::-webkit-scrollbar {
-		width: 0.5rem;
-		height: 0.5rem;
-	}
+  ::-webkit-scrollbar {
+    width: 0.5rem;
+    height: 0.5rem;
+  }
 
-	::-webkit-scrollbar-track {
-		background: transparent;
-	}
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
 
-	::-webkit-scrollbar-thumb {
-		background-color: color-mix(in oklab, var(--app-on-surface-variant) 40%, transparent);
-	}
+  ::-webkit-scrollbar-thumb {
+    background-color: color-mix(in oklab, var(--app-on-surface-variant) 40%, transparent);
+  }
 
-	::-webkit-scrollbar-thumb:hover {
-		background-color: color-mix(in oklab, var(--app-outline) 55%, transparent);
-	}
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: color-mix(in oklab, var(--app-outline) 55%, transparent);
+  }
 }
 
 /* Hide native search-input clear/decoration affordances;
    a custom material-symbols-light:close clear button is rendered instead. */
 input[type="search"]::-webkit-search-cancel-button,
 input[type="search"]::-webkit-search-decoration {
-	-webkit-appearance: none;
-	appearance: none;
+  -webkit-appearance: none;
+  appearance: none;
 }
 
 /* Base UI: keep portaled popups above app content */
 .root {
-	isolation: isolate;
-	min-height: 100%;
-	height: 100%;
+  isolation: isolate;
+  min-height: 100%;
+  height: 100%;
 }
 
 /* Interactive controls must not start a window drag (Electron-style; harmless on Tauri) */
 .no-app-drag {
-	-webkit-app-region: no-drag;
-	app-region: no-drag;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
 }
 
 /* Shared outline card / control shadow (tokenized) */
 .shadow-frame {
-	box-shadow: 0.25rem 0.25rem 0 var(--app-shadow);
+  box-shadow: 0.25rem 0.25rem 0 var(--app-shadow);
 }
 
 /* ── Route page transitions (View Transitions API) ──
@@ -400,114 +400,114 @@ input[type="search"]::-webkit-search-decoration {
    - scroll-down: Home → About (both pages translate up)
    - scroll-up:   About → Home (both pages translate down) */
 .page-transition {
-	view-transition-name: app-page;
-	/* Stable snapshot box for full-height scroll */
-	min-height: 100%;
+  view-transition-name: app-page;
+  /* Stable snapshot box for full-height scroll */
+  min-height: 100%;
 }
 
 /* Kill default root crossfade so chrome does not flash */
 ::view-transition-old(root),
 ::view-transition-new(root) {
-	animation: none !important;
-	mix-blend-mode: normal;
+  animation: none !important;
+  mix-blend-mode: normal;
 }
 
 ::view-transition-group(root) {
-	animation: none !important;
+  animation: none !important;
 }
 
 /* Keep the page slot fixed; clip the incoming/outgoing full-page layers */
 ::view-transition-group(app-page) {
-	animation: none !important;
-	overflow: clip;
+  animation: none !important;
+  overflow: clip;
 }
 
 ::view-transition-image-pair(app-page) {
-	isolation: none;
-	/* Stack old + new so translateY(±100%) looks like one continuous scroll */
-	overflow: clip;
+  isolation: none;
+  /* Stack old + new so translateY(±100%) looks like one continuous scroll */
+  overflow: clip;
 }
 
 /* Disable UA default fade; typed rules set transform-only animations */
 ::view-transition-old(app-page),
 ::view-transition-new(app-page) {
-	animation: none;
-	mix-blend-mode: normal;
-	opacity: 1;
-	height: 100%;
-	width: 100%;
-	object-fit: fill;
-	object-position: top left;
+  animation: none;
+  mix-blend-mode: normal;
+  opacity: 1;
+  height: 100%;
+  width: 100%;
+  object-fit: fill;
+  object-position: top left;
 }
 
 /* Home → About: whole page rolls upward */
 html:active-view-transition-type(scroll-down)::view-transition-old(app-page) {
-	animation: page-scroll-out-up 320ms cubic-bezier(0.32, 0.72, 0, 1) both;
+  animation: page-scroll-out-up 320ms cubic-bezier(0.32, 0.72, 0, 1) both;
 }
 
 html:active-view-transition-type(scroll-down)::view-transition-new(app-page) {
-	animation: page-scroll-in-up 320ms cubic-bezier(0.32, 0.72, 0, 1) both;
+  animation: page-scroll-in-up 320ms cubic-bezier(0.32, 0.72, 0, 1) both;
 }
 
 /* About → Home: whole page rolls downward */
 html:active-view-transition-type(scroll-up)::view-transition-old(app-page) {
-	animation: page-scroll-out-down 320ms cubic-bezier(0.32, 0.72, 0, 1) both;
+  animation: page-scroll-out-down 320ms cubic-bezier(0.32, 0.72, 0, 1) both;
 }
 
 html:active-view-transition-type(scroll-up)::view-transition-new(app-page) {
-	animation: page-scroll-in-down 320ms cubic-bezier(0.32, 0.72, 0, 1) both;
+  animation: page-scroll-in-down 320ms cubic-bezier(0.32, 0.72, 0, 1) both;
 }
 
 /* Transform only — keep opacity at 1 for a solid roll, not a fade */
 @keyframes page-scroll-out-up {
-	from {
-		transform: translateY(0);
-		opacity: 1;
-	}
-	to {
-		transform: translateY(-100%);
-		opacity: 1;
-	}
+  from {
+    transform: translateY(0);
+    opacity: 1;
+  }
+  to {
+    transform: translateY(-100%);
+    opacity: 1;
+  }
 }
 
 @keyframes page-scroll-in-up {
-	from {
-		transform: translateY(100%);
-		opacity: 1;
-	}
-	to {
-		transform: translateY(0);
-		opacity: 1;
-	}
+  from {
+    transform: translateY(100%);
+    opacity: 1;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
 }
 
 @keyframes page-scroll-out-down {
-	from {
-		transform: translateY(0);
-		opacity: 1;
-	}
-	to {
-		transform: translateY(100%);
-		opacity: 1;
-	}
+  from {
+    transform: translateY(0);
+    opacity: 1;
+  }
+  to {
+    transform: translateY(100%);
+    opacity: 1;
+  }
 }
 
 @keyframes page-scroll-in-down {
-	from {
-		transform: translateY(-100%);
-		opacity: 1;
-	}
-	to {
-		transform: translateY(0);
-		opacity: 1;
-	}
+  from {
+    transform: translateY(-100%);
+    opacity: 1;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
-	html:active-view-transition-type(scroll-down)::view-transition-old(app-page),
-	html:active-view-transition-type(scroll-down)::view-transition-new(app-page),
-	html:active-view-transition-type(scroll-up)::view-transition-old(app-page),
-	html:active-view-transition-type(scroll-up)::view-transition-new(app-page) {
-		animation: none !important;
-	}
+  html:active-view-transition-type(scroll-down)::view-transition-old(app-page),
+  html:active-view-transition-type(scroll-down)::view-transition-new(app-page),
+  html:active-view-transition-type(scroll-up)::view-transition-old(app-page),
+  html:active-view-transition-type(scroll-up)::view-transition-new(app-page) {
+    animation: none !important;
+  }
 }

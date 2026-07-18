@@ -150,70 +150,70 @@ type HistoryStatus = "complete" | "failed";
 
 /** Full row for get / get_many / CSV. */
 interface TranslationHistoryDto {
-	id: string;
-	createdAt: string; // RFC 3339 UTC
-	sourceText: string;
-	translatedText: string;
-	sourceLang: string;
-	targetLang: string;
-	effectiveSourceLang: string | null;
-	effectiveTargetLang: string | null;
-	modelId: string | null;
-	modelDisplayName: string;
-	providerDisplayName: string | null;
-	profileId: string | null;
-	profileName: string | null;
-	status: HistoryStatus;
-	errorCode: string | null;
-	errorMessage: string | null;
-	latencyMs: number;
+  id: string;
+  createdAt: string; // RFC 3339 UTC
+  sourceText: string;
+  translatedText: string;
+  sourceLang: string;
+  targetLang: string;
+  effectiveSourceLang: string | null;
+  effectiveTargetLang: string | null;
+  modelId: string | null;
+  modelDisplayName: string;
+  providerDisplayName: string | null;
+  profileId: string | null;
+  profileName: string | null;
+  status: HistoryStatus;
+  errorCode: string | null;
+  errorMessage: string | null;
+  latencyMs: number;
 }
 
 /** List row: previews instead of full text. */
 interface TranslationHistoryListItemDto {
-	id: string;
-	createdAt: string;
-	sourceTextPreview: string; // up to 160 scalars
-	translatedTextPreview: string;
-	sourceTextTruncated: boolean;
-	translatedTextTruncated: boolean;
-	sourceLang: string;
-	targetLang: string;
-	effectiveSourceLang: string | null;
-	effectiveTargetLang: string | null;
-	modelId: string | null;
-	modelDisplayName: string;
-	providerDisplayName: string | null;
-	profileId: string | null;
-	profileName: string | null;
-	status: HistoryStatus;
-	errorCode: string | null;
-	latencyMs: number;
+  id: string;
+  createdAt: string;
+  sourceTextPreview: string; // up to 160 scalars
+  translatedTextPreview: string;
+  sourceTextTruncated: boolean;
+  translatedTextTruncated: boolean;
+  sourceLang: string;
+  targetLang: string;
+  effectiveSourceLang: string | null;
+  effectiveTargetLang: string | null;
+  modelId: string | null;
+  modelDisplayName: string;
+  providerDisplayName: string | null;
+  profileId: string | null;
+  profileName: string | null;
+  status: HistoryStatus;
+  errorCode: string | null;
+  latencyMs: number;
 }
 
 interface TranslationHistoryListQuery {
-	search?: string | null;
-	modelId?: string | null;
-	/** When modelId is null but snapshot-only rows exist, optional modelDisplayName filter may be needed — prefer modelId; for null model_id groups use displayName equality in facets payload. */
-	modelDisplayName?: string | null;
-	language?: string | null; // effective source OR target
-	/** UI sends YYYY-MM-DD local day; service expands to RFC3339 bounds. */
-	date?: string | null;
-	page: number; // 1-based
-	pageSize: number; // default 20, clamp 1..=100
+  search?: string | null;
+  modelId?: string | null;
+  /** When modelId is null but snapshot-only rows exist, optional modelDisplayName filter may be needed — prefer modelId; for null model_id groups use displayName equality in facets payload. */
+  modelDisplayName?: string | null;
+  language?: string | null; // effective source OR target
+  /** UI sends YYYY-MM-DD local day; service expands to RFC3339 bounds. */
+  date?: string | null;
+  page: number; // 1-based
+  pageSize: number; // default 20, clamp 1..=100
 }
 
 interface TranslationHistoryListResult {
-	items: TranslationHistoryListItemDto[];
-	total: number;
-	page: number;
-	pageSize: number;
+  items: TranslationHistoryListItemDto[];
+  total: number;
+  page: number;
+  pageSize: number;
 }
 
 interface TranslationHistoryModelFacet {
-	modelId: string | null;
-	modelDisplayName: string;
-	lastSeenAt: string;
+  modelId: string | null;
+  modelDisplayName: string;
+  lastSeenAt: string;
 }
 ```
 

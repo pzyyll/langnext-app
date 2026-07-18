@@ -6,11 +6,11 @@
  * no longer matches the baseline the form was loaded/synced against.
  */
 export function hasRemoteProviderConflict(
-	formDirty: boolean,
-	formBaselineUpdatedAt: string,
-	remoteUpdatedAt: string,
+  formDirty: boolean,
+  formBaselineUpdatedAt: string,
+  remoteUpdatedAt: string,
 ): boolean {
-	return formDirty && formBaselineUpdatedAt !== remoteUpdatedAt;
+  return formDirty && formBaselineUpdatedAt !== remoteUpdatedAt;
 }
 
 /**
@@ -19,9 +19,9 @@ export function hasRemoteProviderConflict(
  * advances again.
  */
 export function shouldShowConflictBanner(
-	hasConflict: boolean,
-	remoteUpdatedAt: string,
-	dismissedRemoteUpdatedAt: string | null,
+  hasConflict: boolean,
+  remoteUpdatedAt: string,
+  dismissedRemoteUpdatedAt: string | null,
 ): boolean {
-	return hasConflict && dismissedRemoteUpdatedAt !== remoteUpdatedAt;
+  return hasConflict && dismissedRemoteUpdatedAt !== remoteUpdatedAt;
 }

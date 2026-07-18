@@ -12,7 +12,7 @@ const SLOT_LIST_OFFSET_PX = 8;
 const SLOT_LIST_EXIT_SCALE = 0.97;
 
 function prefersReducedMotion(): boolean {
-	return typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  return typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
 
 /**
@@ -27,58 +27,58 @@ function prefersReducedMotion(): boolean {
  * durations ourselves when the user prefers reduced motion.
  */
 export const slotListAutoAnimate: AutoAnimationPlugin = (el, action, firstCoords, secondCoords) => {
-	const duration = prefersReducedMotion() ? 0 : SLOT_LIST_ANIMATION_MS;
+  const duration = prefersReducedMotion() ? 0 : SLOT_LIST_ANIMATION_MS;
 
-	if (action === "add") {
-		return new KeyframeEffect(
-			el,
-			[
-				{ transform: `translateY(${SLOT_LIST_OFFSET_PX}px)`, opacity: 0 },
-				{ transform: "translateY(0)", opacity: 1 },
-			],
-			{ duration, easing: "ease-out" },
-		);
-	}
+  if (action === "add") {
+    return new KeyframeEffect(
+      el,
+      [
+        { transform: `translateY(${SLOT_LIST_OFFSET_PX}px)`, opacity: 0 },
+        { transform: "translateY(0)", opacity: 1 },
+      ],
+      { duration, easing: "ease-out" },
+    );
+  }
 
-	if (action === "remove") {
-		return new KeyframeEffect(
-			el,
-			[
-				{ transform: "translateY(0) scale(1)", opacity: 1 },
-				{
-					transform: `translateY(-${SLOT_LIST_OFFSET_PX / 2}px) scale(${SLOT_LIST_EXIT_SCALE})`,
-					opacity: 0,
-				},
-			],
-			{ duration, easing: "ease-in" },
-		);
-	}
+  if (action === "remove") {
+    return new KeyframeEffect(
+      el,
+      [
+        { transform: "translateY(0) scale(1)", opacity: 1 },
+        {
+          transform: `translateY(-${SLOT_LIST_OFFSET_PX / 2}px) scale(${SLOT_LIST_EXIT_SCALE})`,
+          opacity: 0,
+        },
+      ],
+      { duration, easing: "ease-in" },
+    );
+  }
 
-	// remain — FLIP siblings when a neighbor is added/removed
-	const oldCoords = firstCoords;
-	const newCoords = secondCoords;
-	if (!oldCoords || !newCoords) {
-		return new KeyframeEffect(el, [], { duration: 0 });
-	}
+  // remain — FLIP siblings when a neighbor is added/removed
+  const oldCoords = firstCoords;
+  const newCoords = secondCoords;
+  if (!oldCoords || !newCoords) {
+    return new KeyframeEffect(el, [], { duration: 0 });
+  }
 
-	const deltaX = oldCoords.left - newCoords.left;
-	const deltaY = oldCoords.top - newCoords.top;
-	const [widthFrom, widthTo, heightFrom, heightTo] = getTransitionSizes(el, oldCoords, newCoords);
+  const deltaX = oldCoords.left - newCoords.left;
+  const deltaY = oldCoords.top - newCoords.top;
+  const [widthFrom, widthTo, heightFrom, heightTo] = getTransitionSizes(el, oldCoords, newCoords);
 
-	const start: Keyframe = { transform: `translate(${deltaX}px, ${deltaY}px)` };
-	const end: Keyframe = { transform: "translate(0, 0)" };
+  const start: Keyframe = { transform: `translate(${deltaX}px, ${deltaY}px)` };
+  const end: Keyframe = { transform: "translate(0, 0)" };
 
-	if (widthFrom !== widthTo) {
-		start.width = `${widthFrom}px`;
-		end.width = `${widthTo}px`;
-	}
-	if (heightFrom !== heightTo) {
-		start.height = `${heightFrom}px`;
-		end.height = `${heightTo}px`;
-	}
+  if (widthFrom !== widthTo) {
+    start.width = `${widthFrom}px`;
+    end.width = `${widthTo}px`;
+  }
+  if (heightFrom !== heightTo) {
+    start.height = `${heightFrom}px`;
+    end.height = `${heightTo}px`;
+  }
 
-	return new KeyframeEffect(el, [start, end], {
-		duration,
-		easing: "ease-in-out",
-	});
+  return new KeyframeEffect(el, [start, end], {
+    duration,
+    easing: "ease-in-out",
+  });
 };

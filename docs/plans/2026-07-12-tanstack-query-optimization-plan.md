@@ -81,20 +81,20 @@ Create stable key factories rather than scattering array literals across compone
 
 ```ts
 export const providerKeys = {
-	all: ["providers"] as const,
-	list: () => [...providerKeys.all, "list"] as const,
+  all: ["providers"] as const,
+  list: () => [...providerKeys.all, "list"] as const,
 };
 
 export const modelKeys = {
-	all: ["models"] as const,
-	allEnabled: () => [...modelKeys.all, "enabled"] as const,
-	byProvider: (providerInstanceId: string) => [...modelKeys.all, "provider", providerInstanceId] as const,
+  all: ["models"] as const,
+  allEnabled: () => [...modelKeys.all, "enabled"] as const,
+  byProvider: (providerInstanceId: string) => [...modelKeys.all, "provider", providerInstanceId] as const,
 };
 
 export const profileKeys = {
-	all: ["translation-profiles"] as const,
-	list: () => [...profileKeys.all, "list"] as const,
-	detail: (id: string) => [...profileKeys.all, "detail", id] as const,
+  all: ["translation-profiles"] as const,
+  list: () => [...profileKeys.all, "list"] as const,
+  detail: (id: string) => [...profileKeys.all, "detail", id] as const,
 };
 ```
 
@@ -111,18 +111,18 @@ Create one `QueryClient` per webview with conservative desktop defaults:
 
 ```ts
 new QueryClient({
-	defaultOptions: {
-		queries: {
-			staleTime: 30_000,
-			gcTime: 5 * 60_000,
-			retry: 1,
-			refetchOnWindowFocus: true,
-			networkMode: "always",
-		},
-		mutations: {
-			retry: false,
-		},
-	},
+  defaultOptions: {
+    queries: {
+      staleTime: 30_000,
+      gcTime: 5 * 60_000,
+      retry: 1,
+      refetchOnWindowFocus: true,
+      networkMode: "always",
+    },
+    mutations: {
+      retry: false,
+    },
+  },
 });
 ```
 

@@ -15,57 +15,57 @@ const rootDir = path.dirname(fileURLToPath(import.meta.url));
 
 // https://vite.dev/config/
 export default defineConfig(async () => ({
-	plugins: [
-		tanstackRouter({
-			target: "react",
-			autoCodeSplitting: true,
-			quoteStyle: "double",
-		}),
-		react(),
-		tailwindcss(),
-		Icons({
-			autoInstall: true,
-			compiler: "jsx",
-			jsx: "react",
-			customCollections: {
-				svgs: FileSystemIconLoader(path.resolve(rootDir, "src/assets/icons"), (svg) => {
-					// Normalize local SVGs so they inherit text color and scale with em.
-					const $ = cheerio.load(svg, { xmlMode: true });
-					const $svg = $("svg");
-					$svg.attr("fill", "currentColor");
-					$svg.removeAttr("width");
-					$svg.removeAttr("height");
-					return $.xml($svg);
-				}),
-			},
-			iconCustomizer(collection, _icon, props) {
-				if (collection === "svgs") {
-					props.width = "1.5em";
-					props.height = "1.5em";
-				}
-			},
-		}),
-	],
+  plugins: [
+    tanstackRouter({
+      target: "react",
+      autoCodeSplitting: true,
+      quoteStyle: "double",
+    }),
+    react(),
+    tailwindcss(),
+    Icons({
+      autoInstall: true,
+      compiler: "jsx",
+      jsx: "react",
+      customCollections: {
+        svgs: FileSystemIconLoader(path.resolve(rootDir, "src/assets/icons"), (svg) => {
+          // Normalize local SVGs so they inherit text color and scale with em.
+          const $ = cheerio.load(svg, { xmlMode: true });
+          const $svg = $("svg");
+          $svg.attr("fill", "currentColor");
+          $svg.removeAttr("width");
+          $svg.removeAttr("height");
+          return $.xml($svg);
+        }),
+      },
+      iconCustomizer(collection, _icon, props) {
+        if (collection === "svgs") {
+          props.width = "1.5em";
+          props.height = "1.5em";
+        }
+      },
+    }),
+  ],
 
-	// Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
-	//
-	// 1. prevent Vite from obscuring rust errors
-	clearScreen: false,
-	// 2. tauri expects a fixed port, fail if that port is not available
-	server: {
-		port: 1420,
-		strictPort: true,
-		host: host || false,
-		hmr: host
-			? {
-					protocol: "ws",
-					host,
-					port: 1421,
-				}
-			: undefined,
-		watch: {
-			// 3. tell Vite to ignore watching `src-tauri`
-			ignored: ["**/src-tauri/**"],
-		},
-	},
+  // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
+  //
+  // 1. prevent Vite from obscuring rust errors
+  clearScreen: false,
+  // 2. tauri expects a fixed port, fail if that port is not available
+  server: {
+    port: 1420,
+    strictPort: true,
+    host: host || false,
+    hmr: host
+      ? {
+          protocol: "ws",
+          host,
+          port: 1421,
+        }
+      : undefined,
+    watch: {
+      // 3. tell Vite to ignore watching `src-tauri`
+      ignored: ["**/src-tauri/**"],
+    },
+  },
 }));

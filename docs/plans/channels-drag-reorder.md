@@ -74,7 +74,7 @@ Register `cmds::providers::reorder_provider_instances` in the `generate_handler!
 
 ```ts
 export async function reorderProviderInstances(ids: string[]): Promise<void> {
-	return invoke("reorder_provider_instances", { ids });
+  return invoke("reorder_provider_instances", { ids });
 }
 ```
 

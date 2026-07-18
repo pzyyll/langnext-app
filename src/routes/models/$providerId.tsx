@@ -4,10 +4,10 @@ import { createFileRoute } from "@tanstack/react-router";
 import { ProviderEditor } from "../../features/models/ProviderEditor";
 
 export const Route = createFileRoute("/models/$providerId")({
-	component: ProviderPage,
+  component: ProviderPage,
 });
 
 function ProviderPage() {
-	const { providerId } = Route.useParams();
-	return <ProviderEditor providerId={providerId} />;
+  const { providerId } = Route.useParams();
+  return <ProviderEditor providerId={providerId} />;
 }

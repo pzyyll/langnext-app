@@ -6,10 +6,10 @@ import { listen } from "@tauri-apps/api/event";
 import { logger } from "../logger";
 import { createDebouncedInvalidator } from "./debouncedInvalidator";
 import {
-	DATA_MODELS_CHANGED,
-	DATA_PROVIDERS_CHANGED,
-	DATA_TRANSLATION_HISTORY_CHANGED,
-	DATA_TRANSLATION_PROFILES_CHANGED,
+  DATA_MODELS_CHANGED,
+  DATA_PROVIDERS_CHANGED,
+  DATA_TRANSLATION_HISTORY_CHANGED,
+  DATA_TRANSLATION_PROFILES_CHANGED,
 } from "./events";
 import { historyKeys, modelKeys, profileKeys, providerKeys } from "./keys";
 import { registerDataChangeListeners } from "./registerDataChangeListeners";
@@ -18,7 +18,7 @@ import { registerDataChangeListeners } from "./registerDataChangeListeners";
 const INVALIDATE_DEBOUNCE_MS = 50;
 
 function isTauriRuntime(): boolean {
-	return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
 /**
@@ -26,84 +26,84 @@ function isTauriRuntime(): boolean {
  * future quick-translation window shares the same invalidation listeners.
  */
 export function QueryEventSync() {
-	const queryClient = useQueryClient();
+  const queryClient = useQueryClient();
 
-	useEffect(() => {
-		if (!isTauriRuntime()) {
-			return;
-		}
+  useEffect(() => {
+    if (!isTauriRuntime()) {
+      return;
+    }
 
-		let cancelled = false;
-		const unlisteners: Array<() => void> = [];
+    let cancelled = false;
+    const unlisteners: Array<() => void> = [];
 
-		const invalidator = createDebouncedInvalidator((queryKey) => {
-			void queryClient.invalidateQueries({ queryKey });
-		}, INVALIDATE_DEBOUNCE_MS);
+    const invalidator = createDebouncedInvalidator((queryKey) => {
+      void queryClient.invalidateQueries({ queryKey });
+    }, INVALIDATE_DEBOUNCE_MS);
 
-		async function subscribe() {
-			const result = await registerDataChangeListeners({
-				listen: (event, handler) => listen(event, handler),
-				isCancelled: () => cancelled,
-				onError: (event, error) => {
-					logger.error(`query_event_listen_failed event=${event}`, error);
-				},
-				events: [
-					{
-						name: DATA_TRANSLATION_PROFILES_CHANGED,
-						onEvent: () => {
-							invalidator.schedule(profileKeys.all);
-						},
-					},
-					{
-						name: DATA_PROVIDERS_CHANGED,
-						onEvent: () => {
-							// Provider enablement affects model availability in selectors.
-							invalidator.schedule(providerKeys.all);
-							invalidator.schedule(modelKeys.all);
-						},
-					},
-					{
-						name: DATA_MODELS_CHANGED,
-						onEvent: () => {
-							invalidator.schedule(modelKeys.all);
-						},
-					},
-					{
-						name: DATA_TRANSLATION_HISTORY_CHANGED,
-						onEvent: () => {
-							invalidator.schedule(historyKeys.all);
-						},
-					},
-				],
-			});
+    async function subscribe() {
+      const result = await registerDataChangeListeners({
+        listen: (event, handler) => listen(event, handler),
+        isCancelled: () => cancelled,
+        onError: (event, error) => {
+          logger.error(`query_event_listen_failed event=${event}`, error);
+        },
+        events: [
+          {
+            name: DATA_TRANSLATION_PROFILES_CHANGED,
+            onEvent: () => {
+              invalidator.schedule(profileKeys.all);
+            },
+          },
+          {
+            name: DATA_PROVIDERS_CHANGED,
+            onEvent: () => {
+              // Provider enablement affects model availability in selectors.
+              invalidator.schedule(providerKeys.all);
+              invalidator.schedule(modelKeys.all);
+            },
+          },
+          {
+            name: DATA_MODELS_CHANGED,
+            onEvent: () => {
+              invalidator.schedule(modelKeys.all);
+            },
+          },
+          {
+            name: DATA_TRANSLATION_HISTORY_CHANGED,
+            onEvent: () => {
+              invalidator.schedule(historyKeys.all);
+            },
+          },
+        ],
+      });
 
-			if (cancelled) {
-				return;
-			}
+      if (cancelled) {
+        return;
+      }
 
-			unlisteners.push(...result.unlisteners);
+      unlisteners.push(...result.unlisteners);
 
-			// Close the gap between mount and listener readiness: any mutation that
-			// emitted during subscribe setup is recovered by a one-shot invalidate.
-			if (result.unlisteners.length > 0) {
-				void queryClient.invalidateQueries({ queryKey: profileKeys.all });
-				void queryClient.invalidateQueries({ queryKey: providerKeys.all });
-				void queryClient.invalidateQueries({ queryKey: modelKeys.all });
-				void queryClient.invalidateQueries({ queryKey: historyKeys.all });
-			}
-		}
+      // Close the gap between mount and listener readiness: any mutation that
+      // emitted during subscribe setup is recovered by a one-shot invalidate.
+      if (result.unlisteners.length > 0) {
+        void queryClient.invalidateQueries({ queryKey: profileKeys.all });
+        void queryClient.invalidateQueries({ queryKey: providerKeys.all });
+        void queryClient.invalidateQueries({ queryKey: modelKeys.all });
+        void queryClient.invalidateQueries({ queryKey: historyKeys.all });
+      }
+    }
 
-		void subscribe();
+    void subscribe();
 
-		return () => {
-			cancelled = true;
-			invalidator.cancel();
-			for (const unlisten of unlisteners) {
-				unlisten();
-			}
-			unlisteners.length = 0;
-		};
-	}, [queryClient]);
+    return () => {
+      cancelled = true;
+      invalidator.cancel();
+      for (const unlisten of unlisteners) {
+        unlisten();
+      }
+      unlisteners.length = 0;
+    };
+  }, [queryClient]);
 
-	return null;
+  return null;
 }

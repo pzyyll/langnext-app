@@ -2,73 +2,73 @@
 // ABOUTME: Keeps query keys and fetchers co-located for reuse across routes.
 import { queryOptions } from "@tanstack/react-query";
 import {
-	getTranslationHistory,
-	getTranslationProfile,
-	listAllProviderModels,
-	listProviderInstances,
-	listProviderModels,
-	listTranslationHistory,
-	listTranslationHistoryModelFacets,
-	listTranslationProfiles,
+  getTranslationHistory,
+  getTranslationProfile,
+  listAllProviderModels,
+  listProviderInstances,
+  listProviderModels,
+  listTranslationHistory,
+  listTranslationHistoryModelFacets,
+  listTranslationProfiles,
 } from "../storage/client";
 import type { TranslationHistoryListQuery } from "../storage/types";
 import { historyKeys, modelKeys, profileKeys, providerKeys } from "./keys";
 
 export function providerListOptions() {
-	return queryOptions({
-		queryKey: providerKeys.list(),
-		queryFn: listProviderInstances,
-	});
+  return queryOptions({
+    queryKey: providerKeys.list(),
+    queryFn: listProviderInstances,
+  });
 }
 
 export function allProviderModelsOptions() {
-	return queryOptions({
-		queryKey: modelKeys.allEnabled(),
-		queryFn: listAllProviderModels,
-	});
+  return queryOptions({
+    queryKey: modelKeys.allEnabled(),
+    queryFn: listAllProviderModels,
+  });
 }
 
 export function providerModelsOptions(providerInstanceId: string) {
-	return queryOptions({
-		queryKey: modelKeys.byProvider(providerInstanceId),
-		queryFn: () => listProviderModels(providerInstanceId),
-		enabled: providerInstanceId.length > 0,
-	});
+  return queryOptions({
+    queryKey: modelKeys.byProvider(providerInstanceId),
+    queryFn: () => listProviderModels(providerInstanceId),
+    enabled: providerInstanceId.length > 0,
+  });
 }
 
 export function profileListOptions() {
-	return queryOptions({
-		queryKey: profileKeys.list(),
-		queryFn: listTranslationProfiles,
-	});
+  return queryOptions({
+    queryKey: profileKeys.list(),
+    queryFn: listTranslationProfiles,
+  });
 }
 
 export function profileDetailOptions(id: string) {
-	return queryOptions({
-		queryKey: profileKeys.detail(id),
-		queryFn: () => getTranslationProfile(id),
-		enabled: id.length > 0,
-	});
+  return queryOptions({
+    queryKey: profileKeys.detail(id),
+    queryFn: () => getTranslationProfile(id),
+    enabled: id.length > 0,
+  });
 }
 
 export function historyListOptions(query: TranslationHistoryListQuery) {
-	return queryOptions({
-		queryKey: historyKeys.list(query),
-		queryFn: () => listTranslationHistory(query),
-	});
+  return queryOptions({
+    queryKey: historyKeys.list(query),
+    queryFn: () => listTranslationHistory(query),
+  });
 }
 
 export function historyDetailOptions(id: string) {
-	return queryOptions({
-		queryKey: historyKeys.detail(id),
-		queryFn: () => getTranslationHistory(id),
-		enabled: id.length > 0,
-	});
+  return queryOptions({
+    queryKey: historyKeys.detail(id),
+    queryFn: () => getTranslationHistory(id),
+    enabled: id.length > 0,
+  });
 }
 
 export function historyModelFacetsOptions() {
-	return queryOptions({
-		queryKey: historyKeys.modelFacets(),
-		queryFn: listTranslationHistoryModelFacets,
-	});
+  return queryOptions({
+    queryKey: historyKeys.modelFacets(),
+    queryFn: listTranslationHistoryModelFacets,
+  });
 }

@@ -16,208 +16,208 @@ import IconClose from "~icons/clarity/close-line";
 import { logger } from "../../logger";
 
 export type TitleBarProps = {
-	title?: string;
-	minimize?: boolean;
-	maximized?: boolean;
-	close?: boolean;
-	/** When true, shows a pin control that disables click-outside auto-close. */
-	pin?: boolean;
-	pinned?: boolean;
-	onPinChange?: (pinned: boolean) => void;
-	/** When set, shows a leading control to collapse/expand the app sidebar. */
-	sidebarOpen?: boolean;
-	onSidebarToggle?: () => void;
-	className?: string;
-	leading?: ReactNode;
+  title?: string;
+  minimize?: boolean;
+  maximized?: boolean;
+  close?: boolean;
+  /** When true, shows a pin control that disables click-outside auto-close. */
+  pin?: boolean;
+  pinned?: boolean;
+  onPinChange?: (pinned: boolean) => void;
+  /** When set, shows a leading control to collapse/expand the app sidebar. */
+  sidebarOpen?: boolean;
+  onSidebarToggle?: () => void;
+  className?: string;
+  leading?: ReactNode;
 };
 
 /** Match decorum: show snap flyout after hovering maximize ~620ms. */
 const SNAP_HOVER_MS = 620;
 
 const controlButtonClassName =
-	"inline-flex h-full min-h-0 min-w-10 cursor-default items-center justify-center border-0 bg-transparent px-2 text-on-surface select-none hover:bg-surface-2 active:bg-surface-3";
+  "inline-flex h-full min-h-0 min-w-10 cursor-default items-center justify-center border-0 bg-transparent px-2 text-on-surface select-none hover:bg-surface-2 active:bg-surface-3";
 
 const closeButtonClassName =
-	"group inline-flex h-full min-h-0 min-w-10 cursor-default items-center justify-center border-0 bg-transparent px-2 text-on-surface select-none hover:bg-error hover:text-on-error active:bg-error active:text-on-error";
+  "group inline-flex h-full min-h-0 min-w-10 cursor-default items-center justify-center border-0 bg-transparent px-2 text-on-surface select-none hover:bg-error hover:text-on-error active:bg-error active:text-on-error";
 
 const sidebarToggleClassName =
-	"inline-flex size-6 shrink-0 cursor-default items-center justify-center rounded-none border-0 bg-transparent text-on-surface select-none hover:bg-surface-2 active:bg-surface-3 focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface";
+  "inline-flex size-6 shrink-0 cursor-default items-center justify-center rounded-none border-0 bg-transparent text-on-surface select-none hover:bg-surface-2 active:bg-surface-3 focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface";
 
 export function TitleBar({
-	title,
-	minimize = true,
-	maximized = true,
-	close = true,
-	pin = false,
-	pinned = false,
-	onPinChange,
-	sidebarOpen,
-	onSidebarToggle,
-	className = "",
-	leading,
+  title,
+  minimize = true,
+  maximized = true,
+  close = true,
+  pin = false,
+  pinned = false,
+  onPinChange,
+  sidebarOpen,
+  onSidebarToggle,
+  className = "",
+  leading,
 }: TitleBarProps) {
-	const { t } = useTranslation();
-	const [isMaximized, setIsMaximized] = useState(false);
-	const appWindow = useMemo(() => getCurrentWindow(), []);
-	const snapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const { t } = useTranslation();
+  const [isMaximized, setIsMaximized] = useState(false);
+  const appWindow = useMemo(() => getCurrentWindow(), []);
+  const snapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-	const clearSnapTimer = useCallback(() => {
-		if (snapTimerRef.current !== null) {
-			clearTimeout(snapTimerRef.current);
-			snapTimerRef.current = null;
-		}
-	}, []);
+  const clearSnapTimer = useCallback(() => {
+    if (snapTimerRef.current !== null) {
+      clearTimeout(snapTimerRef.current);
+      snapTimerRef.current = null;
+    }
+  }, []);
 
-	const refreshMaximized = useCallback(() => {
-		void appWindow.isMaximized().then(setIsMaximized);
-	}, [appWindow]);
+  const refreshMaximized = useCallback(() => {
+    void appWindow.isMaximized().then(setIsMaximized);
+  }, [appWindow]);
 
-	const onToggleMaximize = useCallback(() => {
-		clearSnapTimer();
-		void appWindow.toggleMaximize().then(refreshMaximized);
-	}, [appWindow, clearSnapTimer, refreshMaximized]);
+  const onToggleMaximize = useCallback(() => {
+    clearSnapTimer();
+    void appWindow.toggleMaximize().then(refreshMaximized);
+  }, [appWindow, clearSnapTimer, refreshMaximized]);
 
-	const onMaximizeEnter = useCallback(() => {
-		clearSnapTimer();
-		snapTimerRef.current = setTimeout(() => {
-			snapTimerRef.current = null;
-			void appWindow
-				.setFocus()
-				.then(() => invoke("show_snap_overlay"))
-				.catch((err: unknown) => {
-					logger.error("show_snap_overlay failed", err);
-				});
-		}, SNAP_HOVER_MS);
-	}, [appWindow, clearSnapTimer]);
+  const onMaximizeEnter = useCallback(() => {
+    clearSnapTimer();
+    snapTimerRef.current = setTimeout(() => {
+      snapTimerRef.current = null;
+      void appWindow
+        .setFocus()
+        .then(() => invoke("show_snap_overlay"))
+        .catch((err: unknown) => {
+          logger.error("show_snap_overlay failed", err);
+        });
+    }, SNAP_HOVER_MS);
+  }, [appWindow, clearSnapTimer]);
 
-	useEffect(() => {
-		let unlisten: (() => void) | undefined;
-		let cancelled = false;
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
 
-		// Sync maximized state from the native window (async → not sync setState in effect).
-		void appWindow.isMaximized().then((value) => {
-			if (!cancelled) {
-				setIsMaximized(value);
-			}
-		});
+    // Sync maximized state from the native window (async → not sync setState in effect).
+    void appWindow.isMaximized().then((value) => {
+      if (!cancelled) {
+        setIsMaximized(value);
+      }
+    });
 
-		void appWindow
-			.onResized(() => {
-				void appWindow.isMaximized().then((value) => {
-					if (!cancelled) {
-						setIsMaximized(value);
-					}
-				});
-			})
-			.then((fn) => {
-				unlisten = fn;
-			});
+    void appWindow
+      .onResized(() => {
+        void appWindow.isMaximized().then((value) => {
+          if (!cancelled) {
+            setIsMaximized(value);
+          }
+        });
+      })
+      .then((fn) => {
+        unlisten = fn;
+      });
 
-		return () => {
-			cancelled = true;
-			clearSnapTimer();
-			unlisten?.();
-		};
-	}, [appWindow, clearSnapTimer]);
+    return () => {
+      cancelled = true;
+      clearSnapTimer();
+      unlisten?.();
+    };
+  }, [appWindow, clearSnapTimer]);
 
-	const showSidebarToggle = typeof onSidebarToggle === "function";
+  const showSidebarToggle = typeof onSidebarToggle === "function";
 
-	return (
-		// Drag is only on the title strip — never wrap the control buttons.
-		<div className={`relative z-50 flex h-titlebar-height shrink-0 border-b border-line bg-surface ${className}`}>
-			<div className="flex h-full shrink-0 items-center gap-1 pl-2">
-				{showSidebarToggle ? (
-					<Button
-						type="button"
-						className={sidebarToggleClassName}
-						aria-label={sidebarOpen ? t("titlebar.collapseSidebar") : t("titlebar.expandSidebar")}
-						aria-pressed={sidebarOpen}
-						onClick={onSidebarToggle}
-					>
-						<IconMaterialSymbolsLightClarifyOutlineSharp
-							className={`pointer-events-none size-4 ${sidebarOpen ? "" : "-scale-x-100"}`}
-						/>
-					</Button>
-				) : null}
-				{leading}
-			</div>
+  return (
+    // Drag is only on the title strip — never wrap the control buttons.
+    <div className={`relative z-50 flex h-titlebar-height shrink-0 border-b border-line bg-surface ${className}`}>
+      <div className="flex h-full shrink-0 items-center gap-1 pl-2">
+        {showSidebarToggle ? (
+          <Button
+            type="button"
+            className={sidebarToggleClassName}
+            aria-label={sidebarOpen ? t("titlebar.collapseSidebar") : t("titlebar.expandSidebar")}
+            aria-pressed={sidebarOpen}
+            onClick={onSidebarToggle}
+          >
+            <IconMaterialSymbolsLightClarifyOutlineSharp
+              className={`pointer-events-none size-4 ${sidebarOpen ? "" : "-scale-x-100"}`}
+            />
+          </Button>
+        ) : null}
+        {leading}
+      </div>
 
-			<div id="titlebar-title" data-tauri-drag-region className="flex min-w-0 flex-1 items-center gap-2 px-2">
-				{title ? (
-					<>
-						<IconSvgsLnb className="pointer-events-none size-5 shrink-0" />
-						<span
-							data-tauri-drag-region
-							className="pointer-events-none truncate select-none text-body-tight leading-none font-normal text-on-surface"
-						>
-							{title}
-						</span>
-					</>
-				) : null}
-			</div>
+      <div id="titlebar-title" data-tauri-drag-region className="flex min-w-0 flex-1 items-center gap-2 px-2">
+        {title ? (
+          <>
+            <IconSvgsLnb className="pointer-events-none size-5 shrink-0" />
+            <span
+              data-tauri-drag-region
+              className="pointer-events-none truncate select-none text-body-tight leading-none font-normal text-on-surface"
+            >
+              {title}
+            </span>
+          </>
+        ) : null}
+      </div>
 
-			<div className="relative z-10 flex h-full shrink-0 items-center">
-				{pin ? (
-					<button
-						type="button"
-						id="titlebar-pin"
-						className={`${controlButtonClassName}${pinned ? " bg-surface-3" : ""}`}
-						aria-label={pinned ? t("quickTranslate.unpin") : t("quickTranslate.pin")}
-						aria-pressed={pinned}
-						onClick={() => {
-							onPinChange?.(!pinned);
-						}}
-					>
-						{pinned ? (
-							<IconPin className="pointer-events-none size-4" />
-						) : (
-							<IconPinOutline className="pointer-events-none size-4" />
-						)}
-					</button>
-				) : null}
+      <div className="relative z-10 flex h-full shrink-0 items-center">
+        {pin ? (
+          <button
+            type="button"
+            id="titlebar-pin"
+            className={`${controlButtonClassName}${pinned ? " bg-surface-3" : ""}`}
+            aria-label={pinned ? t("quickTranslate.unpin") : t("quickTranslate.pin")}
+            aria-pressed={pinned}
+            onClick={() => {
+              onPinChange?.(!pinned);
+            }}
+          >
+            {pinned ? (
+              <IconPin className="pointer-events-none size-4" />
+            ) : (
+              <IconPinOutline className="pointer-events-none size-4" />
+            )}
+          </button>
+        ) : null}
 
-				{minimize ? (
-					<button
-						type="button"
-						id="titlebar-minimize"
-						className={controlButtonClassName}
-						aria-label={t("titlebar.minimize")}
-						onClick={() => void appWindow.minimize()}
-					>
-						<IconClarityMinusLine className="pointer-events-none size-4" />
-					</button>
-				) : null}
+        {minimize ? (
+          <button
+            type="button"
+            id="titlebar-minimize"
+            className={controlButtonClassName}
+            aria-label={t("titlebar.minimize")}
+            onClick={() => void appWindow.minimize()}
+          >
+            <IconClarityMinusLine className="pointer-events-none size-4" />
+          </button>
+        ) : null}
 
-				{maximized ? (
-					<button
-						type="button"
-						id="titlebar-maximize"
-						className={controlButtonClassName}
-						aria-label={isMaximized ? t("titlebar.restore") : t("titlebar.maximize")}
-						onClick={onToggleMaximize}
-						onMouseEnter={onMaximizeEnter}
-						onMouseLeave={clearSnapTimer}
-					>
-						{isMaximized ? (
-							<IconClarityWindowRestoreLine className="pointer-events-none size-4" />
-						) : (
-							<IconClarityWindowMaxLine className="pointer-events-none size-4" />
-						)}
-					</button>
-				) : null}
+        {maximized ? (
+          <button
+            type="button"
+            id="titlebar-maximize"
+            className={controlButtonClassName}
+            aria-label={isMaximized ? t("titlebar.restore") : t("titlebar.maximize")}
+            onClick={onToggleMaximize}
+            onMouseEnter={onMaximizeEnter}
+            onMouseLeave={clearSnapTimer}
+          >
+            {isMaximized ? (
+              <IconClarityWindowRestoreLine className="pointer-events-none size-4" />
+            ) : (
+              <IconClarityWindowMaxLine className="pointer-events-none size-4" />
+            )}
+          </button>
+        ) : null}
 
-				{close ? (
-					<button
-						type="button"
-						id="titlebar-close"
-						className={closeButtonClassName}
-						aria-label={t("titlebar.close")}
-						onClick={() => void appWindow.close()}
-					>
-						<IconClose className="pointer-events-none size-4 group-hover:text-on-error group-active:text-on-error" />
-					</button>
-				) : null}
-			</div>
-		</div>
-	);
+        {close ? (
+          <button
+            type="button"
+            id="titlebar-close"
+            className={closeButtonClassName}
+            aria-label={t("titlebar.close")}
+            onClick={() => void appWindow.close()}
+          >
+            <IconClose className="pointer-events-none size-4 group-hover:text-on-error group-active:text-on-error" />
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
 }

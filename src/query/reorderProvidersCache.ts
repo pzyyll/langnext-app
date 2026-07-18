@@ -5,26 +5,26 @@
  * match the previous list (incomplete or extra ids) so callers skip the write.
  */
 export function applyProviderReorderOrder<T extends { id: string }>(
-	previous: readonly T[],
-	orderedIds: readonly string[],
+  previous: readonly T[],
+  orderedIds: readonly string[],
 ): T[] | null {
-	if (orderedIds.length !== previous.length) {
-		return null;
-	}
-	const byId = new Map(previous.map((item) => [item.id, item]));
-	const next: T[] = [];
-	for (const id of orderedIds) {
-		const item = byId.get(id);
-		if (!item) {
-			return null;
-		}
-		next.push(item);
-		byId.delete(id);
-	}
-	if (byId.size !== 0) {
-		return null;
-	}
-	return next;
+  if (orderedIds.length !== previous.length) {
+    return null;
+  }
+  const byId = new Map(previous.map((item) => [item.id, item]));
+  const next: T[] = [];
+  for (const id of orderedIds) {
+    const item = byId.get(id);
+    if (!item) {
+      return null;
+    }
+    next.push(item);
+    byId.delete(id);
+  }
+  if (byId.size !== 0) {
+    return null;
+  }
+  return next;
 }
 
 /**
@@ -32,5 +32,5 @@ export function applyProviderReorderOrder<T extends { id: string }>(
  * in-flight epoch. A newer successful reorder must not be overwritten.
  */
 export function shouldRollbackReorder(mutationEpoch: number, latestEpoch: number): boolean {
-	return mutationEpoch === latestEpoch;
+  return mutationEpoch === latestEpoch;
 }

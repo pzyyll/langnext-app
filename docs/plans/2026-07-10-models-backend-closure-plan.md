@@ -403,35 +403,35 @@ Add to `src/storage/types.ts`:
 
 ```ts
 export type ModelsSyncErrorCode =
-	"auth" | "rate_limited" | "network" | "timeout" | "server" | "invalid_response" | "credential_unavailable";
+  "auth" | "rate_limited" | "network" | "timeout" | "server" | "invalid_response" | "credential_unavailable";
 
 /** IPC sync result codes; includes non-persisted `connection_changed`. */
 export type SyncModelsResultCode = ModelsSyncErrorCode | "connection_changed";
 
 export interface ConnectionTestResult {
-	ok: boolean;
-	/** Transport / credential failure only; never connection_changed. */
-	errorCode: ModelsSyncErrorCode | null;
-	message: string;
-	modelCount: number | null;
-	/**
-	 * Non-sensitive connection version from the provider row at resolve time
-	 * (`provider.updatedAt`). UI should only display results that still match
-	 * the currently selected provider's `updatedAt`.
-	 */
-	providerUpdatedAt: string;
+  ok: boolean;
+  /** Transport / credential failure only; never connection_changed. */
+  errorCode: ModelsSyncErrorCode | null;
+  message: string;
+  modelCount: number | null;
+  /**
+   * Non-sensitive connection version from the provider row at resolve time
+   * (`provider.updatedAt`). UI should only display results that still match
+   * the currently selected provider's `updatedAt`.
+   */
+  providerUpdatedAt: string;
 }
 
 export interface SyncModelsResult {
-	ok: boolean;
-	/**
-	 * Failure or race outcome for this request.
-	 * connection_changed is not a ModelsSyncErrorCode and is never persisted on the provider.
-	 */
-	errorCode: SyncModelsResultCode | null;
-	message: string;
-	models: ProviderModelDto[];
-	provider: ProviderInstanceDto;
+  ok: boolean;
+  /**
+   * Failure or race outcome for this request.
+   * connection_changed is not a ModelsSyncErrorCode and is never persisted on the provider.
+   */
+  errorCode: SyncModelsResultCode | null;
+  message: string;
+  models: ProviderModelDto[];
+  provider: ProviderInstanceDto;
 }
 ```
 

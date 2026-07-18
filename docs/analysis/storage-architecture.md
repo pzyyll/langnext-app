@@ -309,13 +309,13 @@ The export format is a versioned application document, not a copy of the SQLite 
 
 ```json
 {
-	"formatVersion": 1,
-	"exportedAt": "UTC timestamp",
-	"providers": [],
-	"models": [],
-	"translationProfiles": [],
-	"profileModels": [],
-	"appSettings": {}
+  "formatVersion": 1,
+  "exportedAt": "UTC timestamp",
+  "providers": [],
+  "models": [],
+  "translationProfiles": [],
+  "profileModels": [],
+  "appSettings": {}
 }
 ```
 
