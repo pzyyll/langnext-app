@@ -72,6 +72,7 @@ const zhCN = {
 		noModel: "该预设没有可用模型。",
 		resultPlaceholder: "翻译结果将显示在这里。",
 		waiting: "等待中…",
+		retranslate: "重新翻译",
 		pin: "固定",
 		unpin: "取消固定",
 	},

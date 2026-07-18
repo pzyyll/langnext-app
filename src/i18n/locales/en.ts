@@ -74,6 +74,7 @@ const en = {
 		noModel: "This preset has no enabled model.",
 		resultPlaceholder: "Translation results appear here.",
 		waiting: "Waiting…",
+		retranslate: "Retranslate",
 		pin: "Pin",
 		unpin: "Unpin",
 	},

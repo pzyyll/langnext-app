@@ -14,6 +14,7 @@ import IconMaterialSymbolsLightAdd from "~icons/material-symbols-light/add";
 import IconClose from "~icons/material-symbols/close";
 import IconMaterialSymbolsLightContentCopy from "~icons/material-symbols-light/content-copy";
 import IconMaterialSymbolsLightCheck from "~icons/material-symbols-light/check";
+import IconMaterialSymbolsLightRefresh from "~icons/material-symbols-light/refresh";
 import IconMaterialSymbolsLightSwapHoriz from "~icons/material-symbols-light/swap-horiz";
 import ExpandCircleDownOutlineIcon from "~icons/material-symbols/expand-circle-down-outline";
 import { TitleBar } from "../components/Win/TitleBar";
@@ -70,13 +71,30 @@ type SlotResult = {
 	text: string;
 	error: string | null;
 	isTranslating: boolean;
+	/**
+	 * Fingerprint of the input that produced this completed result.
+	 * Missing while in-flight or when the card has never finished a run for the current inputs.
+	 */
+	inputKey?: string;
 };
 
 type SessionState = {
 	sourceLang: SourceLanguageId;
 	targetLang: SelectableLanguageId;
 	slots: Slot[];
+	/** Slot ids that are collapsed; expanded cards are omitted. */
+	collapsedSlotIds: string[];
 };
+
+/** Stable key for whether a card already has a completed translation for the current inputs. */
+function buildTranslationInputKey(
+	sourceText: string,
+	sourceLang: SourceLanguageId,
+	targetLang: SelectableLanguageId,
+	profileId: string,
+): string {
+	return `${sourceLang}\0${targetLang}\0${profileId}\0${sourceText.trim()}`;
+}
 
 function newId(): string {
 	if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -90,6 +108,7 @@ function loadSession(): SessionState {
 		sourceLang: "auto",
 		targetLang: "zh",
 		slots: [],
+		collapsedSlotIds: [],
 	};
 	if (typeof window === "undefined") {
 		return fallback;
@@ -113,7 +132,11 @@ function loadSession(): SessionState {
 					)
 					.map((slot) => ({ id: slot.id, profileId: slot.profileId }))
 			: [];
-		return { sourceLang, targetLang, slots };
+		const slotIds = new Set(slots.map((slot) => slot.id));
+		const collapsedSlotIds = Array.isArray(parsed.collapsedSlotIds)
+			? parsed.collapsedSlotIds.filter((id): id is string => typeof id === "string" && slotIds.has(id))
+			: [];
+		return { sourceLang, targetLang, slots, collapsedSlotIds };
 	} catch {
 		return fallback;
 	}
@@ -166,7 +189,7 @@ function QuickTranslatePage() {
 	const [results, setResults] = useState<Record<string, SlotResult>>({});
 	const [copiedSlotId, setCopiedSlotId] = useState<string | null>(null);
 	/** Slot ids that are currently collapsed; absent ids default to expanded. */
-	const [collapsedSlotIds, setCollapsedSlotIds] = useState<Set<string>>(() => new Set());
+	const [collapsedSlotIds, setCollapsedSlotIds] = useState<Set<string>>(() => new Set(sessionSeed.collapsedSlotIds));
 	const [detectedSourceLang, setDetectedSourceLang] = useState<LanguageId | null>(null);
 	const [isPinned, setIsPinned] = useState(false);
 
@@ -215,39 +238,15 @@ function QuickTranslatePage() {
 		[profiles],
 	);
 
-	// Persist session selections across opens of this window.
+	// Persist session selections and per-card collapse state across opens of this window.
 	useEffect(() => {
-		saveSession({ sourceLang, targetLang, slots });
-	}, [sourceLang, targetLang, slots]);
-
-	// Double Ctrl+C: backend emits clipboard text; set source so debounced auto-translate runs.
-	useEffect(() => {
-		if (!isTauriRuntime()) {
-			return;
-		}
-
-		let unlisten: (() => void) | undefined;
-		let cancelled = false;
-
-		void listen<string>(QUICK_TRANSLATE_CLIPBOARD_TEXT, (event) => {
-			if (cancelled) {
-				return;
-			}
-			setSourceText(event.payload ?? "");
-			setDetectedSourceLang(null);
-		}).then((fn) => {
-			if (cancelled) {
-				fn();
-				return;
-			}
-			unlisten = fn;
+		saveSession({
+			sourceLang,
+			targetLang,
+			slots,
+			collapsedSlotIds: [...collapsedSlotIds],
 		});
-
-		return () => {
-			cancelled = true;
-			unlisten?.();
-		};
-	}, []);
+	}, [sourceLang, targetLang, slots, collapsedSlotIds]);
 
 	const handlePinChange = useCallback((next: boolean) => {
 		setIsPinned(next);
@@ -256,9 +255,27 @@ function QuickTranslatePage() {
 		}
 	}, []);
 
-	const generationRef = useRef(0);
+	/** Per-slot epoch: bumped to invalidate in-flight work for that card only. */
+	const slotEpochRef = useRef<Map<string, number>>(new Map());
+	/** Bumped when a language-detect request should supersede the previous one. */
+	const detectEpochRef = useRef(0);
 	const requestIdsRef = useRef<Map<string, string>>(new Map());
 	const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const slotsRef = useRef(slots);
+	const collapsedSlotIdsRef = useRef(collapsedSlotIds);
+	const detectedSourceLangRef = useRef(detectedSourceLang);
+
+	useEffect(() => {
+		slotsRef.current = slots;
+	}, [slots]);
+
+	useEffect(() => {
+		collapsedSlotIdsRef.current = collapsedSlotIds;
+	}, [collapsedSlotIds]);
+
+	useEffect(() => {
+		detectedSourceLangRef.current = detectedSourceLang;
+	}, [detectedSourceLang]);
 	/** Titlebar shell: fixed outside the scroll region; height is included in window resize. */
 	const titleBarMeasureRef = useRef<HTMLDivElement>(null);
 	/** Body content node (h-fit) used to drive window height; state so the observer rebinds on mount. */
@@ -272,23 +289,49 @@ function QuickTranslatePage() {
 		setContentMeasureEl((prev) => (prev === node ? prev : node));
 	}, []);
 
-	const abortAll = useCallback(async () => {
-		const ids = [...requestIdsRef.current.values()];
-		requestIdsRef.current.clear();
-		await Promise.all(
-			ids.map(async (requestId) => {
-				try {
-					await cancelTranslate(requestId);
-				} catch {
-					// Request may already have finished.
-				}
-			}),
-		);
+	const nextSlotEpoch = useCallback((slotId: string): number => {
+		const next = (slotEpochRef.current.get(slotId) ?? 0) + 1;
+		slotEpochRef.current.set(slotId, next);
+		return next;
 	}, []);
 
+	const isSlotEpochCurrent = useCallback((slotId: string, epoch: number): boolean => {
+		return slotEpochRef.current.get(slotId) === epoch;
+	}, []);
+
+	const abortRequest = useCallback(async (key: string) => {
+		const requestId = requestIdsRef.current.get(key);
+		if (!requestId) {
+			return;
+		}
+		requestIdsRef.current.delete(key);
+		try {
+			await cancelTranslate(requestId);
+		} catch {
+			// Request may already have finished.
+		}
+	}, []);
+
+	const abortSlots = useCallback(
+		async (slotIds: string[]) => {
+			await Promise.all(slotIds.map((slotId) => abortRequest(slotId)));
+		},
+		[abortRequest],
+	);
+
+	const abortAll = useCallback(async () => {
+		const keys = [...requestIdsRef.current.keys()];
+		await Promise.all(keys.map((key) => abortRequest(key)));
+	}, [abortRequest]);
+
 	useEffect(() => {
+		const slotEpochs = slotEpochRef.current;
 		return () => {
-			generationRef.current += 1;
+			detectEpochRef.current += 1;
+			for (const slotId of slotEpochs.keys()) {
+				const next = (slotEpochs.get(slotId) ?? 0) + 1;
+				slotEpochs.set(slotId, next);
+			}
 			if (debounceTimerRef.current != null) {
 				clearTimeout(debounceTimerRef.current);
 			}
@@ -303,191 +346,299 @@ function QuickTranslatePage() {
 		}));
 	}, []);
 
-	const runTranslations = useCallback(async () => {
-		const trimmed = sourceText.trim();
-		if (!trimmed || slots.length === 0) {
-			return;
-		}
-
-		const generation = ++generationRef.current;
-		await abortAll();
-
-		// Mark all slots as translating before concurrent work starts.
-		setResults((prev) => {
-			const next = { ...prev };
-			for (const slot of slots) {
-				next[slot.id] = { text: "", error: null, isTranslating: true };
-			}
-			return next;
-		});
-
-		// Prefer the first slot's profile for language detection when source is Auto.
-		const detectProfileId = slots.find((slot) => slot.profileId)?.profileId ?? null;
-		let detectModelId: string | null = null;
-		if (detectProfileId) {
-			try {
-				const detail = await queryClient.fetchQuery(profileDetailOptions(detectProfileId));
-				const modelId = primaryModelId(detail);
-				detectModelId = modelId && enabledModelIds.has(modelId) ? modelId : null;
-			} catch {
-				detectModelId = null;
-			}
-		}
-
-		let effectiveSourceId: LanguageId | null = sourceLang === "auto" ? null : sourceLang;
-
-		if (sourceLang === "auto") {
-			const detectRequestId = newId();
-			requestIdsRef.current.set("__detect__", detectRequestId);
-			try {
-				const detected = await detectLanguage(
-					{ text: trimmed, modelId: detectModelId, profileId: detectProfileId },
-					detectRequestId,
-				);
-				if (generation !== generationRef.current) {
-					return;
-				}
-				requestIdsRef.current.delete("__detect__");
-				if (!detected.ok || !isLanguageId(detected.languageId)) {
-					const message =
-						detected.errorCode === "cancelled" ? null : detected.message || t("translate.errors.detectFailed");
-					if (message) {
-						setResults((prev) => {
-							const next = { ...prev };
-							for (const slot of slots) {
-								next[slot.id] = { text: "", error: message, isTranslating: false };
-							}
-							return next;
-						});
+	const failSlots = useCallback(
+		(entries: Array<{ slotId: string; inputKey?: string }>, epochs: Map<string, number>, message: string) => {
+			setResults((prev) => {
+				const next = { ...prev };
+				for (const entry of entries) {
+					const epoch = epochs.get(entry.slotId);
+					if (epoch == null || slotEpochRef.current.get(entry.slotId) !== epoch) {
+						continue;
 					}
-					return;
+					next[entry.slotId] = {
+						text: "",
+						error: message,
+						isTranslating: false,
+						inputKey: entry.inputKey,
+					};
 				}
-				setDetectedSourceLang(detected.languageId);
-				effectiveSourceId = detected.languageId;
-			} catch (err) {
-				if (generation !== generationRef.current) {
-					return;
-				}
-				requestIdsRef.current.delete("__detect__");
-				const message = getIpcErrorMessage(err, t("translate.errors.detectFailed"));
-				setResults((prev) => {
-					const next = { ...prev };
-					for (const slot of slots) {
-						next[slot.id] = { text: "", error: message, isTranslating: false };
-					}
-					return next;
-				});
+				return next;
+			});
+		},
+		[],
+	);
+
+	/**
+	 * Translate the given cards only. Omit `targetSlots` to run every *expanded* card.
+	 * Collapsed cards are skipped unless explicitly listed (manual retranslate / expand).
+	 * Cards are independent: adding or refreshing one never clears or re-runs the others.
+	 */
+	const runTranslations = useCallback(
+		async (targetSlots?: Slot[]) => {
+			const trimmed = sourceText.trim();
+			const slotsToRun = targetSlots ?? slotsRef.current.filter((slot) => !collapsedSlotIdsRef.current.has(slot.id));
+			if (!trimmed || slotsToRun.length === 0) {
 				return;
 			}
-		} else {
-			setDetectedSourceLang(null);
-		}
 
-		if (!effectiveSourceId || generation !== generationRef.current) {
+			const inputKeyFor = (profileId: string) =>
+				buildTranslationInputKey(sourceText, sourceLang, targetLang, profileId);
+
+			const epochs = new Map<string, number>();
+			for (const slot of slotsToRun) {
+				epochs.set(slot.id, nextSlotEpoch(slot.id));
+			}
+			await abortSlots(slotsToRun.map((slot) => slot.id));
+
+			// Mark only the targeted cards as translating.
+			setResults((prev) => {
+				const next = { ...prev };
+				for (const slot of slotsToRun) {
+					next[slot.id] = { text: "", error: null, isTranslating: true };
+				}
+				return next;
+			});
+
+			const stillCurrentTargets = () =>
+				slotsToRun.filter((slot) => isSlotEpochCurrent(slot.id, epochs.get(slot.id) ?? -1));
+
+			let effectiveSourceId: LanguageId | null = sourceLang === "auto" ? detectedSourceLangRef.current : sourceLang;
+
+			if (sourceLang === "auto" && !effectiveSourceId) {
+				// Prefer the first targeted slot's profile for detection model selection.
+				const detectProfileId = slotsToRun.find((slot) => slot.profileId)?.profileId ?? null;
+				let detectModelId: string | null = null;
+				if (detectProfileId) {
+					try {
+						const detail = await queryClient.fetchQuery(profileDetailOptions(detectProfileId));
+						const modelId = primaryModelId(detail);
+						detectModelId = modelId && enabledModelIds.has(modelId) ? modelId : null;
+					} catch {
+						detectModelId = null;
+					}
+				}
+
+				const detectEpoch = ++detectEpochRef.current;
+				await abortRequest("__detect__");
+				const detectRequestId = newId();
+				requestIdsRef.current.set("__detect__", detectRequestId);
+				try {
+					const detected = await detectLanguage(
+						{ text: trimmed, modelId: detectModelId, profileId: detectProfileId },
+						detectRequestId,
+					);
+					if (detectEpoch !== detectEpochRef.current) {
+						return;
+					}
+					requestIdsRef.current.delete("__detect__");
+					if (!detected.ok || !isLanguageId(detected.languageId)) {
+						const message =
+							detected.errorCode === "cancelled" ? null : detected.message || t("translate.errors.detectFailed");
+						if (message) {
+							failSlots(
+								stillCurrentTargets().map((slot) => ({
+									slotId: slot.id,
+									inputKey: inputKeyFor(slot.profileId),
+								})),
+								epochs,
+								message,
+							);
+						}
+						return;
+					}
+					setDetectedSourceLang(detected.languageId);
+					detectedSourceLangRef.current = detected.languageId;
+					effectiveSourceId = detected.languageId;
+				} catch (err) {
+					if (detectEpoch !== detectEpochRef.current) {
+						return;
+					}
+					requestIdsRef.current.delete("__detect__");
+					failSlots(
+						stillCurrentTargets().map((slot) => ({
+							slotId: slot.id,
+							inputKey: inputKeyFor(slot.profileId),
+						})),
+						epochs,
+						getIpcErrorMessage(err, t("translate.errors.detectFailed")),
+					);
+					return;
+				}
+			} else if (sourceLang !== "auto") {
+				setDetectedSourceLang(null);
+				detectedSourceLangRef.current = null;
+			}
+
+			if (!effectiveSourceId) {
+				return;
+			}
+
+			const sourceId = effectiveSourceId;
+			const activeSlots = stillCurrentTargets();
+			if (activeSlots.length === 0) {
+				return;
+			}
+
+			await Promise.all(
+				activeSlots.map(async (slot) => {
+					const epoch = epochs.get(slot.id) ?? -1;
+					if (!isSlotEpochCurrent(slot.id, epoch)) {
+						return;
+					}
+
+					const requestId = newId();
+					requestIdsRef.current.set(slot.id, requestId);
+
+					try {
+						const profile = await queryClient.fetchQuery(profileDetailOptions(slot.profileId));
+						if (!isSlotEpochCurrent(slot.id, epoch)) {
+							return;
+						}
+
+						const slotInputKey = inputKeyFor(slot.profileId);
+						const modelId = primaryModelId(profile);
+						if (!modelId || !enabledModelIds.has(modelId)) {
+							patchResult(slot.id, {
+								text: "",
+								error: t("quickTranslate.noModel"),
+								isTranslating: false,
+								inputKey: slotInputKey,
+							});
+							requestIdsRef.current.delete(slot.id);
+							return;
+						}
+
+						const defaults = getDefaultProfileLanguages(i18n.language);
+						const primaryLang = isLanguageId(profile.primaryLang) ? profile.primaryLang : defaults.primary;
+						const preferredTarget = isLanguageId(profile.preferredTargetLang)
+							? profile.preferredTargetLang
+							: defaults.target;
+						const prefs = resolveProfileLangPrefs(true, primaryLang, preferredTarget, i18n.language);
+						const effectiveTargetId = resolveTargetLanguage({
+							source: sourceId,
+							configuredTarget: targetLang,
+							primary: prefs.primary,
+							preferredTarget: prefs.preferredTarget,
+						});
+
+						const result = await translateText(
+							{
+								modelId,
+								sourceLang: t(`translate.languages.${sourceId}`),
+								targetLang: t(`translate.languages.${effectiveTargetId}`),
+								text: trimmed,
+								profileId: slot.profileId,
+								sourceLangId: sourceLang,
+								targetLangId: targetLang,
+								effectiveSourceLangId: sourceId,
+								effectiveTargetLangId: effectiveTargetId,
+							},
+							requestId,
+						);
+
+						if (!isSlotEpochCurrent(slot.id, epoch)) {
+							return;
+						}
+						requestIdsRef.current.delete(slot.id);
+
+						if (result.errorCode === "cancelled") {
+							patchResult(slot.id, { isTranslating: false });
+							return;
+						}
+						if (result.ok) {
+							patchResult(slot.id, {
+								text: result.translatedText,
+								error: null,
+								isTranslating: false,
+								inputKey: slotInputKey,
+							});
+						} else {
+							patchResult(slot.id, {
+								text: "",
+								error: result.message || t("translate.errorPrefix"),
+								isTranslating: false,
+								inputKey: slotInputKey,
+							});
+						}
+					} catch (err) {
+						if (!isSlotEpochCurrent(slot.id, epoch)) {
+							return;
+						}
+						requestIdsRef.current.delete(slot.id);
+						patchResult(slot.id, {
+							text: "",
+							error: getIpcErrorMessage(err, t("translate.errorPrefix")),
+							isTranslating: false,
+							inputKey: inputKeyFor(slot.profileId),
+						});
+					}
+				}),
+			);
+		},
+		[
+			abortRequest,
+			abortSlots,
+			enabledModelIds,
+			failSlots,
+			i18n.language,
+			isSlotEpochCurrent,
+			nextSlotEpoch,
+			patchResult,
+			queryClient,
+			sourceLang,
+			sourceText,
+			t,
+			targetLang,
+		],
+	);
+
+	/** Update source text; clearing it aborts in-flight work and wipes every card result. */
+	const applySourceText = useCallback(
+		(next: string) => {
+			setSourceText(next);
+			setDetectedSourceLang(null);
+			if (next.trim()) {
+				return;
+			}
+			detectEpochRef.current += 1;
+			for (const slot of slotsRef.current) {
+				nextSlotEpoch(slot.id);
+			}
+			void abortAll();
+			setResults({});
+		},
+		[abortAll, nextSlotEpoch],
+	);
+
+	// Double Ctrl+C: backend emits clipboard text; set source so debounced auto-translate runs.
+	useEffect(() => {
+		if (!isTauriRuntime()) {
 			return;
 		}
 
-		const sourceId = effectiveSourceId;
+		let unlisten: (() => void) | undefined;
+		let cancelled = false;
 
-		await Promise.all(
-			slots.map(async (slot) => {
-				const requestId = newId();
-				requestIdsRef.current.set(slot.id, requestId);
+		void listen<string>(QUICK_TRANSLATE_CLIPBOARD_TEXT, (event) => {
+			if (cancelled) {
+				return;
+			}
+			applySourceText(event.payload ?? "");
+		}).then((fn) => {
+			if (cancelled) {
+				fn();
+				return;
+			}
+			unlisten = fn;
+		});
 
-				try {
-					const profile = await queryClient.fetchQuery(profileDetailOptions(slot.profileId));
-					if (generation !== generationRef.current) {
-						return;
-					}
+		return () => {
+			cancelled = true;
+			unlisten?.();
+		};
+	}, [applySourceText]);
 
-					const modelId = primaryModelId(profile);
-					if (!modelId || !enabledModelIds.has(modelId)) {
-						patchResult(slot.id, {
-							text: "",
-							error: t("quickTranslate.noModel"),
-							isTranslating: false,
-						});
-						requestIdsRef.current.delete(slot.id);
-						return;
-					}
-
-					const defaults = getDefaultProfileLanguages(i18n.language);
-					const primaryLang = isLanguageId(profile.primaryLang) ? profile.primaryLang : defaults.primary;
-					const preferredTarget = isLanguageId(profile.preferredTargetLang)
-						? profile.preferredTargetLang
-						: defaults.target;
-					const prefs = resolveProfileLangPrefs(true, primaryLang, preferredTarget, i18n.language);
-					const effectiveTargetId = resolveTargetLanguage({
-						source: sourceId,
-						configuredTarget: targetLang,
-						primary: prefs.primary,
-						preferredTarget: prefs.preferredTarget,
-					});
-
-					const result = await translateText(
-						{
-							modelId,
-							sourceLang: t(`translate.languages.${sourceId}`),
-							targetLang: t(`translate.languages.${effectiveTargetId}`),
-							text: trimmed,
-							profileId: slot.profileId,
-							sourceLangId: sourceLang,
-							targetLangId: targetLang,
-							effectiveSourceLangId: sourceId,
-							effectiveTargetLangId: effectiveTargetId,
-						},
-						requestId,
-					);
-
-					if (generation !== generationRef.current) {
-						return;
-					}
-					requestIdsRef.current.delete(slot.id);
-
-					if (result.errorCode === "cancelled") {
-						patchResult(slot.id, { isTranslating: false });
-						return;
-					}
-					if (result.ok) {
-						patchResult(slot.id, {
-							text: result.translatedText,
-							error: null,
-							isTranslating: false,
-						});
-					} else {
-						patchResult(slot.id, {
-							text: "",
-							error: result.message || t("translate.errorPrefix"),
-							isTranslating: false,
-						});
-					}
-				} catch (err) {
-					if (generation !== generationRef.current) {
-						return;
-					}
-					requestIdsRef.current.delete(slot.id);
-					patchResult(slot.id, {
-						text: "",
-						error: getIpcErrorMessage(err, t("translate.errorPrefix")),
-						isTranslating: false,
-					});
-				}
-			}),
-		);
-	}, [
-		abortAll,
-		enabledModelIds,
-		i18n.language,
-		patchResult,
-		queryClient,
-		slots,
-		sourceLang,
-		sourceText,
-		t,
-		targetLang,
-	]);
-
-	// Debounced auto-translate when source text, languages, or slots change.
+	// Debounced auto-translate when source text or languages change — not when cards are added/removed.
 	useEffect(() => {
 		if (debounceTimerRef.current != null) {
 			clearTimeout(debounceTimerRef.current);
@@ -495,7 +646,7 @@ function QuickTranslatePage() {
 		}
 
 		const trimmed = sourceText.trim();
-		if (!trimmed || slots.length === 0) {
+		if (!trimmed || slotsRef.current.length === 0) {
 			return;
 		}
 
@@ -510,7 +661,7 @@ function QuickTranslatePage() {
 				debounceTimerRef.current = null;
 			}
 		};
-	}, [sourceText, sourceLang, targetLang, slots, runTranslations]);
+	}, [sourceText, sourceLang, targetLang, runTranslations]);
 
 	// Content-driven window height: titlebar (fixed) + body (scrolls when clamped).
 	// Measure the h-fit content box (offsetHeight), not the ScrollArea viewport fill height.
@@ -589,10 +740,16 @@ function QuickTranslatePage() {
 	}, [contentMeasureEl]);
 
 	function addSlot(profileId: string) {
-		setSlots((prev) => [...prev, { id: newId(), profileId }]);
+		const slot: Slot = { id: newId(), profileId };
+		setSlots((prev) => [...prev, slot]);
+		// Only the new card translates; existing results stay put.
+		if (sourceText.trim()) {
+			void runTranslations([slot]);
+		}
 	}
 
 	function removeSlot(slotId: string) {
+		nextSlotEpoch(slotId);
 		setSlots((prev) => prev.filter((slot) => slot.id !== slotId));
 		setResults((prev) => {
 			const next = { ...prev };
@@ -607,32 +764,71 @@ function QuickTranslatePage() {
 			next.delete(slotId);
 			return next;
 		});
-		const requestId = requestIdsRef.current.get(slotId);
-		if (requestId) {
-			requestIdsRef.current.delete(slotId);
-			void cancelTranslate(requestId).catch(() => {});
-		}
+		void abortRequest(slotId);
+		slotEpochRef.current.delete(slotId);
 	}
 
 	function setSlotOpen(slotId: string, open: boolean) {
-		setCollapsedSlotIds((prev) => {
-			const isCollapsed = prev.has(slotId);
-			if (open && isCollapsed) {
-				const next = new Set(prev);
-				next.delete(slotId);
-				return next;
-			}
-			if (!open && !isCollapsed) {
+		const isCollapsed = collapsedSlotIds.has(slotId);
+		if (open === !isCollapsed) {
+			return;
+		}
+
+		if (!open) {
+			// Collapsing: leave the translation queue and abort any in-flight request.
+			nextSlotEpoch(slotId);
+			void abortRequest(slotId);
+			setResults((prev) => {
+				const current = prev[slotId];
+				if (!current?.isTranslating) {
+					return prev;
+				}
+				return {
+					...prev,
+					[slotId]: { ...current, isTranslating: false },
+				};
+			});
+			setCollapsedSlotIds((prev) => {
 				const next = new Set(prev);
 				next.add(slotId);
 				return next;
-			}
-			return prev;
+			});
+			return;
+		}
+
+		// Expanding: translate once if this card has no completed result for the current inputs.
+		setCollapsedSlotIds((prev) => {
+			const next = new Set(prev);
+			next.delete(slotId);
+			return next;
 		});
+
+		const slot = slots.find((item) => item.id === slotId);
+		if (!slot || !sourceText.trim()) {
+			return;
+		}
+		const inputKey = buildTranslationInputKey(sourceText, sourceLang, targetLang, slot.profileId);
+		const result = results[slotId];
+		if (result?.inputKey === inputKey) {
+			return;
+		}
+		void runTranslations([slot]);
 	}
 
 	function updateSlotProfile(slotId: string, profileId: string) {
-		setSlots((prev) => prev.map((slot) => (slot.id === slotId ? { ...slot, profileId } : slot)));
+		const slot: Slot = { id: slotId, profileId };
+		setSlots((prev) => prev.map((item) => (item.id === slotId ? slot : item)));
+		// Profile change only re-runs this card when it is expanded.
+		if (sourceText.trim() && !collapsedSlotIds.has(slotId)) {
+			void runTranslations([slot]);
+		}
+	}
+
+	function retranslateSlot(slot: Slot) {
+		if (!sourceText.trim()) {
+			return;
+		}
+		void runTranslations([slot]);
 	}
 
 	function swapLanguages() {
@@ -757,8 +953,7 @@ function QuickTranslatePage() {
 							spellCheck={false}
 							value={sourceText}
 							onChange={(event) => {
-								setSourceText(event.currentTarget.value);
-								setDetectedSourceLang(null);
+								applySourceText(event.currentTarget.value);
 							}}
 							onKeyDown={(event) => {
 								if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
@@ -783,8 +978,7 @@ function QuickTranslatePage() {
 										className={iconButtonClassName}
 										aria-label={t("translate.clearSource")}
 										onClick={() => {
-											setSourceText("");
-											setDetectedSourceLang(null);
+											applySourceText("");
 										}}
 									>
 										<IconClose className="size-4" aria-hidden />
@@ -911,6 +1105,17 @@ function QuickTranslatePage() {
 												event.stopPropagation();
 											}}
 										>
+											<Button
+												type="button"
+												className={iconButtonClassName}
+												aria-label={t("quickTranslate.retranslate")}
+												disabled={!sourceText.trim() || result.isTranslating}
+												onClick={() => {
+													retranslateSlot(slot);
+												}}
+											>
+												<IconMaterialSymbolsLightRefresh className="size-4" aria-hidden />
+											</Button>
 											<Button
 												type="button"
 												className={iconButtonClassName}
