@@ -42,6 +42,26 @@ const MIN_ROW_UNIT_PX = 16;
 const EMPTY_HEIGHT_INSET_PX = 8;
 
 /**
+ * Parse a computed length like `"6rem"` / `"96px"` to CSS pixels.
+ * Returns 0 for `auto`, `%`, or unparsable values (caller falls back to natural height).
+ */
+function parseComputedPx(value: string): number {
+  const trimmed = value.trim();
+  if (!trimmed || trimmed === "auto" || trimmed === "none") {
+    return 0;
+  }
+  const px = Number.parseFloat(trimmed);
+  if (!Number.isFinite(px) || px <= 0) {
+    return 0;
+  }
+  // getComputedStyle usually resolves rem/em to px; reject bare percentages.
+  if (trimmed.endsWith("%")) {
+    return 0;
+  }
+  return px;
+}
+
+/**
  * Hysteresis when deciding whether a larger font still "fits".
  * Avoids border-line oscillation (e.g. 95px ↔ 97px) that thrash layout + window height.
  */
@@ -451,6 +471,20 @@ export function TextAutosize({
     return shellRef.current?.clientHeight ?? rootRef.current?.clientHeight ?? 0;
   }, []);
 
+  const resetViewportScrollIfNeeded = useCallback((nextValue: string) => {
+    const viewport = shellRef.current?.querySelector<HTMLElement>("[data-scroll-viewport]");
+    if (!viewport) {
+      return;
+    }
+    // After clear / shrink past overflow, drop residual scrollTop so the shell can collapse
+    // cleanly (otherwise a max-clamped grow box can keep looking “stuck” tall).
+    if (nextValue.length === 0 || viewport.scrollHeight <= viewport.clientHeight + 1) {
+      if (viewport.scrollTop !== 0) {
+        viewport.scrollTop = 0;
+      }
+    }
+  }, []);
+
   const applyHeight = useCallback(
     (nextValue: string) => {
       const textarea = textareaRef.current;
@@ -459,13 +493,27 @@ export function TextAutosize({
       }
       textarea.style.height = "auto";
       if (nextValue.length === 0) {
-        const fillHeight = Math.max(0, readShellHeight() - EMPTY_HEIGHT_INSET_PX);
-        textarea.style.height = `${fillHeight}px`;
+        if (isFill) {
+          // Fill: shell height is fixed by the parent; pad the empty field to that pane.
+          const fillHeight = Math.max(0, readShellHeight() - EMPTY_HEIGHT_INSET_PX);
+          textarea.style.height = `${fillHeight}px`;
+        } else {
+          // Grow: never use clientHeight here — after max-h overflow it stays clamped at the
+          // cap, so clearing would leave a tall empty textarea + scrollbar.
+          // Prefer CSS min-height (e.g. min-h-24); otherwise natural one-line height.
+          const shell = shellRef.current;
+          const minHeightPx = shell ? parseComputedPx(getComputedStyle(shell).minHeight) : 0;
+          const naturalHeight = textarea.scrollHeight;
+          const fillMin = minHeightPx > 0 ? Math.max(0, minHeightPx - EMPTY_HEIGHT_INSET_PX) : naturalHeight;
+          textarea.style.height = `${Math.max(naturalHeight, fillMin)}px`;
+        }
+        resetViewportScrollIfNeeded(nextValue);
         return;
       }
       textarea.style.height = `${textarea.scrollHeight}px`;
+      resetViewportScrollIfNeeded(nextValue);
     },
-    [readShellHeight],
+    [isFill, readShellHeight, resetViewportScrollIfNeeded],
   );
 
   const text = value !== undefined ? String(value) : String(defaultValue ?? "");

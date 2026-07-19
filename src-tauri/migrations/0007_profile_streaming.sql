@@ -1,3 +1,3 @@
--- ABOUTME: Adds per-profile streaming toggle for translate requests.
--- ABOUTME: NOT NULL DEFAULT 1 so legacy rows read back as stream-enabled (true).
-ALTER TABLE translation_profiles ADD COLUMN stream_enabled INTEGER NOT NULL DEFAULT 1;
+-- ABOUTME: Historical migration slot formerly adding a profile stream toggle.
+-- ABOUTME: Feature removed; no-op keeps PRAGMA user_version sequence stable.
+SELECT 1;

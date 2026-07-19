@@ -52,7 +52,6 @@ import {
   TRANSLATE_DONE_EVENT,
   TRANSLATE_ERROR_EVENT,
   TRANSLATE_RESET_EVENT,
-  translateText,
   translateTextStream,
 } from "../storage/client";
 import { getIpcErrorMessage } from "../storage/errors";
@@ -394,7 +393,11 @@ function QuickTranslatePage() {
   }, [sourceText]);
   /** Titlebar shell: fixed outside the scroll region; height is included in window resize. */
   const titleBarMeasureRef = useRef<HTMLDivElement>(null);
-  /** Body content node (h-fit) used to drive window height; state so the observer rebinds on mount. */
+  /** Source + language chrome: fixed above the results scroller; included in window resize. */
+  const fixedChromeMeasureRef = useRef<HTMLDivElement>(null);
+  /** Body shell (padding + gap); used with fixed/results measures for natural window height. */
+  const bodyShellMeasureRef = useRef<HTMLDivElement>(null);
+  /** Results list node (h-fit) used to drive window height; state so the observer rebinds on mount. */
   const [contentMeasureEl, setContentMeasureEl] = useState<HTMLDivElement | null>(null);
   const lastContentHeightRef = useRef(0);
   /** True while content size is chasing window height — hide scrollbar to avoid flash. */
@@ -886,38 +889,8 @@ function QuickTranslatePage() {
               effectiveTargetLangId: effectiveTargetId,
             };
 
-            // Honor each card's profile stream toggle independently.
-            if (profile.streamEnabled) {
-              await runSlotStream(slot.id, epoch, requestId, payload, slotInputKey);
-              return;
-            }
-
-            const result = await translateText(payload, requestId);
-
-            if (!isSlotEpochCurrent(slot.id, epoch)) {
-              return;
-            }
-            requestIdsRef.current.delete(slot.id);
-
-            if (result.errorCode === "cancelled") {
-              patchResult(slot.id, { isTranslating: false });
-              return;
-            }
-            if (result.ok) {
-              patchResult(slot.id, {
-                text: result.translatedText,
-                error: null,
-                isTranslating: false,
-                inputKey: slotInputKey,
-              });
-            } else {
-              patchResult(slot.id, {
-                text: "",
-                error: resolveFailureMessage(result.errorCode, result.message),
-                isTranslating: false,
-                inputKey: slotInputKey,
-              });
-            }
+            // User-facing translation always streams; non-stream IPC is reserved for internal work.
+            await runSlotStream(slot.id, epoch, requestId, payload, slotInputKey);
           } catch (err) {
             if (!isSlotEpochCurrent(slot.id, epoch)) {
               return;
@@ -1079,8 +1052,8 @@ function QuickTranslatePage() {
     };
   }, [autoTranslate, sourceText, sourceLang, targetLang, runTranslations]);
 
-  // Content-driven window height: titlebar (fixed) + body (scrolls when clamped).
-  // Measure the h-fit content box (offsetHeight), not the ScrollArea viewport fill height.
+  // Content-driven window height: titlebar + fixed chrome + results (results scroll when clamped).
+  // Measure natural heights of fixed/results boxes — not the ScrollArea viewport fill height.
   // While height is adapting, hide the custom scrollbar so temporary overflow does not flash.
   useEffect(() => {
     if (!isTauriRuntime() || !contentMeasureEl) {
@@ -1101,9 +1074,19 @@ function QuickTranslatePage() {
     const applyHeight = () => {
       raf = 0;
       const titlebarHeight = titleBarMeasureRef.current?.offsetHeight ?? 0;
-      // offsetHeight is the layout border-box; h-fit keeps it content-sized inside the viewport.
-      const bodyHeight = contentMeasureEl.offsetHeight;
-      const height = Math.ceil(titlebarHeight + bodyHeight);
+      const fixedChromeHeight = fixedChromeMeasureRef.current?.offsetHeight ?? 0;
+      // offsetHeight is the layout border-box; h-fit keeps results content-sized inside the viewport.
+      const resultsHeight = contentMeasureEl.offsetHeight;
+      const bodyShell = bodyShellMeasureRef.current;
+      let bodyPaddingAndGap = 0;
+      if (bodyShell) {
+        const styles = getComputedStyle(bodyShell);
+        bodyPaddingAndGap =
+          (Number.parseFloat(styles.paddingTop) || 0) +
+          (Number.parseFloat(styles.paddingBottom) || 0) +
+          (Number.parseFloat(styles.rowGap || styles.gap) || 0);
+      }
+      const height = Math.ceil(titlebarHeight + bodyPaddingAndGap + fixedChromeHeight + resultsHeight);
       if (height <= 0) {
         clearHeightAdaptSoon();
         return;
@@ -1140,6 +1123,10 @@ function QuickTranslatePage() {
     const titlebarEl = titleBarMeasureRef.current;
     if (titlebarEl) {
       observer.observe(titlebarEl);
+    }
+    const fixedChromeEl = fixedChromeMeasureRef.current;
+    if (fixedChromeEl) {
+      observer.observe(fixedChromeEl);
     }
     schedule();
 
@@ -1305,7 +1292,7 @@ function QuickTranslatePage() {
   const isTranslating = Object.values(results).some((result) => result.isTranslating);
 
   return (
-    // Titlebar stays fixed; body scrolls only when content exceeds the clamped window height.
+    // Titlebar + source + language stay fixed; only result cards scroll when clamped.
     <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-surface text-on-surface">
       <div ref={titleBarMeasureRef} className="shrink-0">
         <TitleBar
@@ -1391,13 +1378,12 @@ function QuickTranslatePage() {
         />
       </div>
 
-      <ScrollArea
-        className="min-h-0 min-w-0 flex-1 overflow-hidden"
-        contentClassName="h-fit min-w-0 w-full"
-        showScrollbarOnHover={false}
-        hideScrollbar={isHeightAdapting}
+      <div
+        ref={bodyShellMeasureRef}
+        className="flex min-h-0 min-w-0 flex-1 flex-col gap-4 overflow-hidden px-3 pt-2 pb-3"
       >
-        <div ref={setContentMeasureNode} className="flex h-fit min-w-0 w-full flex-col gap-4 px-3 pb-3 pt-2">
+        {/* Source + language stay pinned; only the results list below may scroll. */}
+        <div ref={fixedChromeMeasureRef} className="flex min-w-0 shrink-0 flex-col gap-4">
           {/* Source input: editor, or single-line preview when collapsed; footer toolbar always shown. */}
           <div
             className={cn(
@@ -1561,184 +1547,193 @@ function QuickTranslatePage() {
               />
             </div>
           </div>
+        </div>
 
-          {profilesError ? (
-            <p className="shrink-0 text-body-tight text-error" role="alert">
-              {profilesError}
-            </p>
-          ) : null}
+        <ScrollArea
+          className="min-h-0 min-w-0 flex-1 overflow-hidden"
+          contentClassName="h-fit min-w-0 w-full"
+          showScrollbarOnHover={false}
+          hideScrollbar={isHeightAdapting}
+        >
+          <div ref={setContentMeasureNode} className="flex h-fit min-w-0 w-full flex-col gap-4">
+            {profilesError ? (
+              <p className="shrink-0 text-body-tight text-error" role="alert">
+                {profilesError}
+              </p>
+            ) : null}
 
-          {/* Empty copy stays outside the animated list so it does not fight card enter/exit. */}
-          {slots.length === 0 ? (
-            <p className="text-body-tight text-neutral" role="status">
-              {profilesLoading ? t("translate.profileLoading") : t("quickTranslate.emptySlots")}
-            </p>
-          ) : null}
+            {/* Empty copy stays outside the animated list so it does not fight card enter/exit. */}
+            {slots.length === 0 ? (
+              <p className="text-body-tight text-neutral" role="status">
+                {profilesLoading ? t("translate.profileLoading") : t("quickTranslate.emptySlots")}
+              </p>
+            ) : null}
 
-          {/* Result cards */}
-          <div ref={slotListRef} className="flex min-w-0 flex-col gap-4">
-            {slots.map((slot) => {
-              const profile = profileById.get(slot.profileId);
-              const result = results[slot.id] ?? emptyResult;
-              const isCopied = copiedSlotId === slot.id;
-              const isOpen = !collapsedSlotIds.has(slot.id);
-              const orphanOption =
-                !profile && slot.profileId
-                  ? [{ value: slot.profileId, label: t("quickTranslate.missingProfile") }]
-                  : undefined;
+            {/* Result cards */}
+            <div ref={slotListRef} className="flex min-w-0 flex-col gap-4">
+              {slots.map((slot) => {
+                const profile = profileById.get(slot.profileId);
+                const result = results[slot.id] ?? emptyResult;
+                const isCopied = copiedSlotId === slot.id;
+                const isOpen = !collapsedSlotIds.has(slot.id);
+                const orphanOption =
+                  !profile && slot.profileId
+                    ? [{ value: slot.profileId, label: t("quickTranslate.missingProfile") }]
+                    : undefined;
 
-              return (
-                <Collapsible.Root
-                  key={slot.id}
-                  open={isOpen}
-                  onOpenChange={(open) => {
-                    setSlotOpen(slot.id, open);
-                  }}
-                  className="flex min-w-0 flex-col overflow-hidden border border-line bg-surface"
-                >
-                  {/* Header is a div trigger so nested controls stay valid HTML. */}
-                  <Collapsible.Trigger
-                    nativeButton={false}
-                    render={<div />}
-                    className="group flex h-8 cursor-default items-center gap-2 border-b border-line bg-surface-container px-2 select-none focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface"
+                return (
+                  <Collapsible.Root
+                    key={slot.id}
+                    open={isOpen}
+                    onOpenChange={(open) => {
+                      setSlotOpen(slot.id, open);
+                    }}
+                    className="flex min-w-0 flex-col overflow-hidden border border-line bg-surface"
                   >
-                    <ExpandCircleDownOutlineIcon
-                      className="size-4 shrink-0 text-on-surface transition-transform duration-100 ease-out group-data-panel-open:rotate-180"
-                      aria-hidden
-                    />
-                    <div
-                      className="max-w-sm shrink-0"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                      }}
-                      onPointerDown={(event) => {
-                        event.stopPropagation();
-                      }}
+                    {/* Header is a div trigger so nested controls stay valid HTML. */}
+                    <Collapsible.Trigger
+                      nativeButton={false}
+                      render={<div />}
+                      className="group flex h-8 cursor-default items-center gap-2 border-b border-line bg-surface-container px-2 select-none focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface"
                     >
-                      <SelectField
-                        className="h-7 border-0 bg-transparent text-table-header font-bold tracking-tight uppercase hover:not-data-disabled:bg-transparent data-popup-open:bg-transparent"
-                        value={slot.profileId}
-                        onValueChange={(value) => {
-                          if (value) {
-                            updateSlotProfile(slot.id, value);
-                          }
-                        }}
-                        options={profileSelectOptions}
-                        extraOptions={orphanOption}
-                        disabled={profilesLoading || profileSelectOptions.length === 0}
-                        aria-label={t("translate.profileAria")}
-                        compact
+                      <ExpandCircleDownOutlineIcon
+                        className="size-4 shrink-0 text-on-surface transition-transform duration-100 ease-out group-data-panel-open:rotate-180"
+                        aria-hidden
                       />
-                    </div>
-                    {/* flex-1 spacer: large blank hit target that toggles collapse */}
-                    <div className="min-h-full min-w-0 flex-1" />
-                    <div
-                      className="flex shrink-0 items-center gap-0.5"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                      }}
-                      onPointerDown={(event) => {
-                        event.stopPropagation();
-                      }}
-                    >
-                      <Button
-                        type="button"
-                        className={iconButtonClassName}
-                        aria-label={t("quickTranslate.retranslate")}
-                        disabled={!sourceText.trim() || result.isTranslating}
-                        onClick={() => {
-                          retranslateSlot(slot);
+                      <div
+                        className="max-w-sm shrink-0"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                        }}
+                        onPointerDown={(event) => {
+                          event.stopPropagation();
                         }}
                       >
-                        <IconMaterialSymbolsLightRefresh className="size-4" aria-hidden />
-                      </Button>
-                      <Button
-                        type="button"
-                        className={iconButtonClassName}
-                        aria-label={isCopied ? t("translate.copied") : t("translate.copy")}
-                        disabled={!result.text || !!result.error}
-                        onClick={() => {
-                          void copySlot(slot.id);
+                        <SelectField
+                          className="h-7 border-0 bg-transparent text-table-header font-bold tracking-tight uppercase hover:not-data-disabled:bg-transparent data-popup-open:bg-transparent"
+                          value={slot.profileId}
+                          onValueChange={(value) => {
+                            if (value) {
+                              updateSlotProfile(slot.id, value);
+                            }
+                          }}
+                          options={profileSelectOptions}
+                          extraOptions={orphanOption}
+                          disabled={profilesLoading || profileSelectOptions.length === 0}
+                          aria-label={t("translate.profileAria")}
+                          compact
+                        />
+                      </div>
+                      {/* flex-1 spacer: large blank hit target that toggles collapse */}
+                      <div className="min-h-full min-w-0 flex-1" />
+                      <div
+                        className="flex shrink-0 items-center gap-0.5"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                        }}
+                        onPointerDown={(event) => {
+                          event.stopPropagation();
                         }}
                       >
-                        {isCopied ? (
-                          <IconMaterialSymbolsLightCheck className="size-4 text-tertiary" aria-hidden />
-                        ) : (
-                          <IconMaterialSymbolsLightContentCopy className="size-4" aria-hidden />
-                        )}
-                      </Button>
-                      <Button
-                        type="button"
-                        className={iconButtonClassName}
-                        aria-label={t("quickTranslate.removePreset")}
-                        onClick={() => {
-                          removeSlot(slot.id);
-                        }}
-                      >
-                        <IconClose className="size-4" aria-hidden />
-                      </Button>
-                    </div>
-                  </Collapsible.Trigger>
-                  {/*
+                        <Button
+                          type="button"
+                          className={iconButtonClassName}
+                          aria-label={t("quickTranslate.retranslate")}
+                          disabled={!sourceText.trim() || result.isTranslating}
+                          onClick={() => {
+                            retranslateSlot(slot);
+                          }}
+                        >
+                          <IconMaterialSymbolsLightRefresh className="size-4" aria-hidden />
+                        </Button>
+                        <Button
+                          type="button"
+                          className={iconButtonClassName}
+                          aria-label={isCopied ? t("translate.copied") : t("translate.copy")}
+                          disabled={!result.text || !!result.error}
+                          onClick={() => {
+                            void copySlot(slot.id);
+                          }}
+                        >
+                          {isCopied ? (
+                            <IconMaterialSymbolsLightCheck className="size-4 text-tertiary" aria-hidden />
+                          ) : (
+                            <IconMaterialSymbolsLightContentCopy className="size-4" aria-hidden />
+                          )}
+                        </Button>
+                        <Button
+                          type="button"
+                          className={iconButtonClassName}
+                          aria-label={t("quickTranslate.removePreset")}
+                          onClick={() => {
+                            removeSlot(slot.id);
+                          }}
+                        >
+                          <IconClose className="size-4" aria-hidden />
+                        </Button>
+                      </div>
+                    </Collapsible.Trigger>
+                    {/*
 									  keepMounted: preserve stepped font across collapse. Unmounting reset font to
 									  largest; open measured tall then shrank → stretch/shrink jitter on long results.
 									*/}
-                  <Collapsible.Panel
-                    keepMounted
-                    className="h-(--collapsible-panel-height) overflow-hidden transition-[height] duration-150 ease-out data-ending-style:h-0 data-starting-style:h-0 [&[hidden]:not([hidden='until-found'])]:hidden"
-                  >
-                    {/*
+                    <Collapsible.Panel
+                      keepMounted
+                      className="h-(--collapsible-panel-height) overflow-hidden transition-[height] duration-150 ease-out data-ending-style:h-0 data-starting-style:h-0 [&[hidden]:not([hidden='until-found'])]:hidden"
+                    >
+                      {/*
 										  Grow without max-h: plain block so card height drives window resize.
 										  Font steps only inside minRows; then height grows with content.
 										*/}
-                    <TextAutosizeContent
-                      layout="grow"
-                      fontScale={isMarkdownView && !!result.text && !result.error ? "fixed" : "stepped"}
-                      stickToEnd={result.isTranslating}
-                      contentClassName="p-3 leading-relaxed"
-                      minRows={6}
-                      text={
-                        result.error
-                          ? result.error
-                          : isMarkdownView
-                            ? ""
-                            : result.text ||
-                              (result.isTranslating
-                                ? t("translate.translating")
-                                : sourceText.trim()
-                                  ? t("quickTranslate.waiting")
-                                  : "")
-                      }
-                    >
-                      {result.error ? (
-                        <p className="min-w-0 break-words whitespace-pre-wrap text-error select-text" role="alert">
-                          {result.error}
-                        </p>
-                      ) : result.text || result.isTranslating ? (
-                        isMarkdownView && result.text ? (
-                          <MarkdownOutput text={result.text} isStreaming={Boolean(result.streamOutputActive)} />
+                      <TextAutosizeContent
+                        layout="grow"
+                        fontScale={isMarkdownView && !!result.text && !result.error ? "fixed" : "stepped"}
+                        stickToEnd={result.isTranslating}
+                        contentClassName="p-3 leading-relaxed"
+                        minRows={6}
+                        text={
+                          result.error
+                            ? result.error
+                            : isMarkdownView
+                              ? ""
+                              : result.text ||
+                                (result.isTranslating
+                                  ? t("translate.translating")
+                                  : sourceText.trim()
+                                    ? t("quickTranslate.waiting")
+                                    : "")
+                        }
+                      >
+                        {result.error ? (
+                          <p className="min-w-0 break-words whitespace-pre-wrap text-error select-text" role="alert">
+                            {result.error}
+                          </p>
+                        ) : result.text || result.isTranslating ? (
+                          isMarkdownView && result.text ? (
+                            <MarkdownOutput text={result.text} isStreaming={Boolean(result.streamOutputActive)} />
+                          ) : (
+                            <TextLoading
+                              text={result.text}
+                              isLoading={result.isTranslating}
+                              scramble={Boolean(result.streamOutputActive)}
+                              loadingLabel={t("translate.translating")}
+                            />
+                          )
+                        ) : sourceText.trim() ? (
+                          // Debounce / manual-mode gap: source ready but this card has not started yet.
+                          <TextLoading text="" isLoading loadingLabel={t("quickTranslate.waiting")} />
                         ) : (
-                          <TextLoading
-                            text={result.text}
-                            isLoading={result.isTranslating}
-                            scramble={Boolean(result.streamOutputActive)}
-                            loadingLabel={t("translate.translating")}
-                          />
-                        )
-                      ) : sourceText.trim() ? (
-                        // Debounce / manual-mode gap: source ready but this card has not started yet.
-                        <TextLoading text="" isLoading loadingLabel={t("quickTranslate.waiting")} />
-                      ) : (
-                        <p className="text-neutral italic select-none">{t("quickTranslate.resultPlaceholder")}</p>
-                      )}
-                    </TextAutosizeContent>
-                  </Collapsible.Panel>
-                </Collapsible.Root>
-              );
-            })}
+                          <p className="text-neutral italic select-none">{t("quickTranslate.resultPlaceholder")}</p>
+                        )}
+                      </TextAutosizeContent>
+                    </Collapsible.Panel>
+                  </Collapsible.Root>
+                );
+              })}
+            </div>
           </div>
-        </div>
-      </ScrollArea>
+        </ScrollArea>
+      </div>
     </div>
   );
 }

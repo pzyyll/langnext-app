@@ -471,7 +471,6 @@ fn profile_save_persists_multiple_prompt_templates_and_default() {
       id: None,
       name: "Multi".into(),
       enabled: true,
-      stream_enabled: true,
       template_version: 1,
       default_prompt_template_id: t2,
       prompt_templates: vec![
@@ -568,7 +567,6 @@ fn profile_list_includes_ordered_targets_bulk() {
         id: None,
         name: "Zero".into(),
         enabled: true,
-        stream_enabled: true,
         template_version: 1,
         default_prompt_template_id,
         prompt_templates,
@@ -596,7 +594,6 @@ fn profile_list_includes_ordered_targets_bulk() {
         id: None,
         name: "One".into(),
         enabled: true,
-        stream_enabled: true,
         template_version: 1,
         default_prompt_template_id,
         prompt_templates,
@@ -619,7 +616,6 @@ fn profile_list_includes_ordered_targets_bulk() {
         id: None,
         name: "Many".into(),
         enabled: true,
-        stream_enabled: true,
         template_version: 1,
         default_prompt_template_id,
         prompt_templates,
@@ -690,7 +686,6 @@ fn profile_save_and_fallback_order() {
         id: None,
         name: "Fast".into(),
         enabled: true,
-        stream_enabled: true,
         template_version: 1,
         default_prompt_template_id,
         prompt_templates,
@@ -735,7 +730,6 @@ fn profile_language_preferences_round_trip() {
         id: None,
         name: "Prefs".into(),
         enabled: true,
-        stream_enabled: true,
         template_version: 1,
         default_prompt_template_id,
         prompt_templates,
@@ -767,7 +761,6 @@ fn profile_language_preferences_round_trip() {
       id: Some(dto.profile.id),
       name: "Prefs".into(),
       enabled: true,
-      stream_enabled: true,
       template_version: 1,
       default_prompt_template_id,
       prompt_templates,
@@ -791,127 +784,7 @@ fn profile_language_preferences_round_trip() {
   );
 }
 
-#[test]
-fn profile_stream_enabled_round_trip_and_update() {
-  let (_d, _db, _v, providers, models, profiles, ..) = setup();
-  let p = providers
-    .save(provider_write(CredentialKind::None, CredentialUpdate::Keep))
-    .unwrap();
-  let m = models
-    .save_manual(ManualModelWrite {
-      id: None,
-      provider_instance_id: p.id,
-      model_key: "a".into(),
-      display_name_override: None,
-      enabled: true,
-      capability_overrides_json: None,
-      adapter_id: None,
-    })
-    .unwrap();
 
-  let mut write = {
-    let (default_prompt_template_id, prompt_templates) = attach_default_templates("s", "{{text}}");
-    TranslationProfileWrite {
-      id: None,
-      name: "Stream".into(),
-      enabled: true,
-      stream_enabled: false,
-      template_version: 1,
-      default_prompt_template_id,
-      prompt_templates,
-      temperature: None,
-      max_output_tokens: None,
-      provider_options_json: None,
-      source_lang: Some("auto".into()),
-      target_lang: Some("auto".into()),
-      primary_lang: Some("zh".into()),
-      preferred_target_lang: Some("en".into()),
-      language_detection: None,
-      target_model_ids: vec![m.id],
-    }
-  };
-  let dto = profiles.save(write.clone()).unwrap();
-  assert!(!dto.profile.stream_enabled, "stream_enabled=false must persist");
-
-  let loaded = profiles.get(dto.profile.id).unwrap();
-  assert!(!loaded.profile.stream_enabled);
-
-  // Flipping back to true survives an update.
-  write.id = Some(dto.profile.id);
-  write.stream_enabled = true;
-  let updated = profiles.save(write).unwrap();
-  assert!(updated.profile.stream_enabled);
-  let reread = profiles.get(dto.profile.id).unwrap();
-  assert!(reread.profile.stream_enabled);
-}
-
-#[test]
-fn import_defaults_stream_enabled_when_key_absent() {
-  let (_d, _db, _v, providers, models, profiles, _settings, ie, ..) = setup();
-  let p = providers
-    .save(provider_write(CredentialKind::None, CredentialUpdate::Keep))
-    .unwrap();
-  let m = models
-    .save_manual(ManualModelWrite {
-      id: None,
-      provider_instance_id: p.id,
-      model_key: "a".into(),
-      display_name_override: None,
-      enabled: true,
-      capability_overrides_json: None,
-      adapter_id: None,
-    })
-    .unwrap();
-  profiles
-    .save({
-      let (default_prompt_template_id, prompt_templates) = attach_default_templates("s", "{{text}}");
-      TranslationProfileWrite {
-        id: None,
-        name: "Stream".into(),
-        enabled: true,
-        stream_enabled: false,
-        template_version: 1,
-        default_prompt_template_id,
-        prompt_templates,
-        temperature: None,
-        max_output_tokens: None,
-        provider_options_json: None,
-        source_lang: Some("auto".into()),
-        target_lang: Some("auto".into()),
-        primary_lang: Some("zh".into()),
-        preferred_target_lang: Some("en".into()),
-        language_detection: None,
-        target_model_ids: vec![m.id],
-      }
-    })
-    .unwrap();
-
-  let doc = ie.export().unwrap();
-  // A legacy export produced before stream_enabled existed omits the key entirely.
-  let mut json = serde_json::to_value(&doc).unwrap();
-  for profile in json["translationProfiles"].as_array_mut().unwrap() {
-    let obj = profile.as_object_mut().unwrap();
-    obj.remove("streamEnabled");
-  }
-  let legacy: ConfigurationExport = serde_json::from_value(json).unwrap();
-
-  let preview = ie.preview(&legacy, ImportConflictMode::Merge).unwrap();
-  assert!(
-    preview.valid,
-    "legacy preview must be valid: {:?}",
-    preview.validation_errors
-  );
-  let result = ie.import(legacy, ImportConflictMode::Merge).unwrap();
-  assert!(result.applied);
-
-  let list = profiles.list().unwrap();
-  assert_eq!(list.len(), 1);
-  // Missing key deserializes to the default (true), overriding the saved false.
-  assert!(
-    list[0].profile.stream_enabled,
-    "legacy import must default stream_enabled to true"
-  );
-}
 
 #[test]
 fn profile_language_preferences_validation_rejects_invalid_pairs() {
@@ -937,7 +810,6 @@ fn profile_language_preferences_validation_rejects_invalid_pairs() {
       id: None,
       name: "Prefs".into(),
       enabled: true,
-      stream_enabled: true,
       template_version: 1,
       default_prompt_template_id,
       prompt_templates,
@@ -1014,7 +886,6 @@ fn delete_provider_cascades_to_models_and_targets() {
         id: None,
         name: "Cascade Profile".into(),
         enabled: true,
-        stream_enabled: true,
         template_version: 1,
         default_prompt_template_id,
         prompt_templates,
@@ -1114,7 +985,6 @@ fn import_export_round_trip_and_secret_exclusion() {
         id: None,
         name: "P".into(),
         enabled: true,
-        stream_enabled: true,
         template_version: 1,
         default_prompt_template_id,
         prompt_templates,
@@ -1251,7 +1121,6 @@ fn import_credential_cleanup_isolates_unrelated_journals() {
         id: None,
         name: "P".into(),
         enabled: true,
-        stream_enabled: true,
         template_version: 1,
         default_prompt_template_id,
         prompt_templates,
@@ -1313,7 +1182,6 @@ fn import_rejects_malformed_graphs() {
         id: None,
         name: "P".into(),
         enabled: true,
-        stream_enabled: true,
         template_version: 1,
         default_prompt_template_id,
         prompt_templates,
@@ -1389,7 +1257,6 @@ fn import_accepts_legacy_preferences_and_rejects_invalid_pairs() {
         id: None,
         name: "Prefs".into(),
         enabled: true,
-        stream_enabled: true,
         template_version: 1,
         default_prompt_template_id,
         prompt_templates,
@@ -1459,7 +1326,6 @@ fn import_accepts_legacy_profile_missing_preference_keys() {
         id: None,
         name: "Prefs".into(),
         enabled: true,
-        stream_enabled: true,
         template_version: 1,
         default_prompt_template_id,
         prompt_templates,
@@ -3287,7 +3153,6 @@ fn delete_many_models_all_or_nothing() {
         id: None,
         name: "Holds bulk-c".into(),
         enabled: true,
-        stream_enabled: true,
         template_version: 1,
         default_prompt_template_id,
         prompt_templates,
@@ -3404,7 +3269,6 @@ fn sample_profile(
     id,
     name: name.into(),
     enabled: true,
-    stream_enabled: true,
     template_version: 1,
     default_prompt_template_id: template_id,
     temperature: None,
@@ -3532,7 +3396,6 @@ fn profile_save_persists_dedicated_detection_model_and_empty_config() {
         id: None,
         name: "Detect profile".into(),
         enabled: true,
-        stream_enabled: true,
         template_version: 1,
         default_prompt_template_id,
         prompt_templates,
@@ -3568,7 +3431,6 @@ fn profile_save_persists_dedicated_detection_model_and_empty_config() {
         id: Some(saved.profile.id),
         name: "Detect profile".into(),
         enabled: true,
-        stream_enabled: true,
         template_version: 1,
         default_prompt_template_id,
         prompt_templates,
@@ -3618,7 +3480,6 @@ fn profile_save_rejects_detection_model_that_does_not_exist() {
         id: None,
         name: "Bad detect".into(),
         enabled: true,
-        stream_enabled: true,
         template_version: 1,
         default_prompt_template_id,
         prompt_templates,
@@ -3675,7 +3536,6 @@ fn dedicated_detection_model_is_protected_and_provider_delete_clears_config() {
         id: None,
         name: "Dedicated detector".into(),
         enabled: true,
-        stream_enabled: true,
         template_version: 1,
         default_prompt_template_id,
         prompt_templates,
@@ -3935,7 +3795,6 @@ fn import_copy_rewrites_detection_model_id() {
         id: None,
         name: "Detect profile".into(),
         enabled: true,
-        stream_enabled: true,
         template_version: 1,
         default_prompt_template_id,
         prompt_templates,
@@ -4020,7 +3879,6 @@ fn import_rejects_profile_detection_referencing_missing_model() {
         id: None,
         name: "Detect profile".into(),
         enabled: true,
-        stream_enabled: true,
         template_version: 1,
         default_prompt_template_id,
         prompt_templates,

@@ -41,7 +41,6 @@ import {
   TRANSLATE_DONE_EVENT,
   TRANSLATE_ERROR_EVENT,
   TRANSLATE_RESET_EVENT,
-  translateText,
   translateTextStream,
 } from "../../storage/client";
 import { getIpcErrorMessage } from "../../storage/errors";
@@ -150,7 +149,6 @@ function TranslatePage() {
   /** Shared with quick-translate; default plain. */
   const [outputViewMode, setOutputViewModeState] = useState<OutputViewMode>(() => getOutputViewMode());
   const isMarkdownView = outputViewMode === "markdown";
-  const [profileStreamEnabled, setProfileStreamEnabled] = useState(true);
   const [activeModelLabel, setActiveModelLabel] = useState<string | null>(null);
 
   const [selectedModelId, setSelectedModelId] = useState(sessionSeed.modelId);
@@ -209,8 +207,6 @@ function TranslatePage() {
     selectedPromptTemplateId && promptTemplateOptions.some((option) => option.value === selectedPromptTemplateId)
       ? selectedPromptTemplateId
       : "";
-  /** Streaming follows the active profile's config; defaults to on with no profile. */
-  const useStreaming = resolvedProfileId ? profileStreamEnabled : true;
 
   /** Monotonic local counter + backend stream request id for cancellation. */
   const translateGeneration = useRef(0);
@@ -253,7 +249,6 @@ function TranslatePage() {
         setProfilePreferredTargetLang(
           isLanguageId(dto.preferredTargetLang) ? dto.preferredTargetLang : defaults.target,
         );
-        setProfileStreamEnabled(dto.streamEnabled);
       } catch {
         if (cancelled || generation !== profilePrefsGeneration.current) {
           return;
@@ -261,7 +256,6 @@ function TranslatePage() {
         // Keep UI usable: clear prefs so Auto-target falls back to UI-locale defaults.
         setProfilePrimaryLang(null);
         setProfilePreferredTargetLang(null);
-        setProfileStreamEnabled(true);
       }
     })();
 
@@ -387,7 +381,6 @@ function TranslatePage() {
       const defaults = getDefaultProfileLanguages(i18n.language);
       setProfilePrimaryLang(isLanguageId(dto.primaryLang) ? dto.primaryLang : defaults.primary);
       setProfilePreferredTargetLang(isLanguageId(dto.preferredTargetLang) ? dto.preferredTargetLang : defaults.target);
-      setProfileStreamEnabled(dto.streamEnabled);
     } catch (err) {
       if (!shouldApplyProfileResult(generation, profileApplyGeneration.current)) {
         return;
@@ -750,33 +743,8 @@ function TranslatePage() {
       effectiveTargetLangId: effectiveTargetId,
     };
 
-    if (useStreaming) {
-      await handleTranslateStreaming(generation, payload, requestId);
-      return;
-    }
-
-    try {
-      const result = await translateText(payload, requestId);
-      if (generation !== translateGeneration.current) {
-        return;
-      }
-      activeRequestId.current = null;
-      if (result.errorCode === "cancelled") {
-        finishCancelledUi(generation);
-        return;
-      }
-      if (result.ok) {
-        finishSuccessUi(generation, result.translatedText, result.latencyMs, result.modelId);
-      } else {
-        finishErrorUi(generation, resolveTranslateFailureMessage(result.errorCode, result.message), result.latencyMs);
-      }
-    } catch (err) {
-      if (generation !== translateGeneration.current) {
-        return;
-      }
-      activeRequestId.current = null;
-      finishErrorUi(generation, getIpcErrorMessage(err, t("translate.errorPrefix")), null);
-    }
+    // User-facing translation always streams; non-stream IPC is reserved for internal work (e.g. detection).
+    await handleTranslateStreaming(generation, payload, requestId);
   }
 
   async function copyOutput() {

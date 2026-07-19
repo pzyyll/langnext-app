@@ -138,15 +138,7 @@ mod tests {
       )
       .optional()
       .unwrap();
-    // v7 per-profile streaming toggle defaults to enabled (1) for legacy rows.
-    let stream_enabled: Option<i64> = conn
-      .query_row("SELECT stream_enabled FROM translation_profiles LIMIT 1", [], |r| {
-        r.get(0)
-      })
-      .optional()
-      .unwrap();
-    // No rows on a fresh database; the column exists and is nullable-default-backed.
-    assert_eq!(stream_enabled, None);
+    // v7 is a no-op historical slot (stream toggle removed).
     // v8 translation_history table exists and is empty on a fresh database.
     let history_count: i64 = conn
       .query_row("SELECT COUNT(*) FROM translation_history", [], |r| r.get(0))
@@ -194,7 +186,7 @@ mod tests {
   }
 
   #[test]
-  fn migrate_v6_to_v7_defaults_stream_enabled_before_template_wipe() {
+  fn migrate_v6_to_v7_no_op_keeps_profile_rows() {
     let mut conn = Connection::open_in_memory().unwrap();
     migrate_with(&mut conn, &MIGRATIONS[..6]).unwrap();
     conn
@@ -207,16 +199,15 @@ mod tests {
       )
       .unwrap();
 
-    // Apply only through v7 so the stream default is observable before v9 wipes rows.
     migrate_with(&mut conn, &MIGRATIONS[..7]).unwrap();
-    let stream_enabled: i64 = conn
+    let count: i64 = conn
       .query_row(
-        "SELECT stream_enabled FROM translation_profiles WHERE id = 'profile-v7'",
+        "SELECT COUNT(*) FROM translation_profiles WHERE id = 'profile-v7'",
         [],
         |r| r.get(0),
       )
       .unwrap();
-    assert_eq!(stream_enabled, 1);
+    assert_eq!(count, 1);
     assert_eq!(read_user_version(&conn).unwrap(), 7);
   }
 

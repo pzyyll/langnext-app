@@ -259,8 +259,6 @@ export interface TranslationProfile {
   primaryLang?: string | null;
   /** Profile Target preference (concrete supported id); null on legacy profiles. */
   preferredTargetLang?: string | null;
-  /** Whether translate requests using this profile stream output. */
-  streamEnabled: boolean;
   /** Optional language detector config; null/absent uses the default LLM detector. */
   languageDetection?: LanguageDetectorConfig | null;
   createdAt: string;
@@ -297,8 +295,6 @@ export interface TranslationProfileWrite {
   primaryLang?: string | null;
   /** Profile Target preference (concrete supported id); omitted on legacy writes. */
   preferredTargetLang?: string | null;
-  /** Whether translate requests using this profile stream output. Defaults to true. */
-  streamEnabled?: boolean;
   /** Optional language detector config; null/absent clears to the default LLM detector. */
   languageDetection?: LanguageDetectorConfig | null;
   targetModelIds: string[];
@@ -549,7 +545,6 @@ const _profileWriteFixture = {
   providerOptionsJson: {},
   primaryLang: "zh",
   preferredTargetLang: "en",
-  streamEnabled: true,
   targetModelIds: ["00000000-0000-7000-8000-000000000002"],
 } as const satisfies TranslationProfileWrite;
 

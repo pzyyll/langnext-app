@@ -12,7 +12,6 @@ use uuid::Uuid;
 fn map_profile(row: &Row<'_>) -> Result<TranslationProfile, rusqlite::Error> {
   let id: String = row.get("id")?;
   let enabled: i64 = row.get("enabled")?;
-  let stream_enabled: i64 = row.get("stream_enabled")?;
   let default_prompt_template_id: String = row.get("default_prompt_template_id")?;
   let provider_options: Option<String> = row.get("provider_options_json")?;
   let language_detection: Option<String> = row.get("language_detection_json")?;
@@ -21,7 +20,6 @@ fn map_profile(row: &Row<'_>) -> Result<TranslationProfile, rusqlite::Error> {
       .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?,
     name: row.get("name")?,
     enabled: enabled != 0,
-    stream_enabled: stream_enabled != 0,
     template_version: row.get("template_version")?,
     default_prompt_template_id: Uuid::parse_str(&default_prompt_template_id)
       .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?,
@@ -178,15 +176,14 @@ pub fn insert_profile(conn: &Connection, profile: &TranslationProfile) -> Result
   conn
     .execute(
       "INSERT INTO translation_profiles (
-            id, name, enabled, stream_enabled, template_version, default_prompt_template_id,
+            id, name, enabled, template_version, default_prompt_template_id,
             temperature, max_output_tokens, provider_options_json, source_lang, target_lang,
             primary_lang, preferred_target_lang, language_detection_json, created_at, updated_at
-        ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
+        ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
       params![
         profile.id.to_string(),
         profile.name,
         profile.enabled as i64,
-        profile.stream_enabled as i64,
         profile.template_version,
         profile.default_prompt_template_id.to_string(),
         profile.temperature,
@@ -219,24 +216,22 @@ pub fn update_profile(conn: &Connection, profile: &TranslationProfile) -> Result
       "UPDATE translation_profiles SET
             name = ?2,
             enabled = ?3,
-            stream_enabled = ?4,
-            template_version = ?5,
-            default_prompt_template_id = ?6,
-            temperature = ?7,
-            max_output_tokens = ?8,
-            provider_options_json = ?9,
-            source_lang = ?10,
-            target_lang = ?11,
-            primary_lang = ?12,
-            preferred_target_lang = ?13,
-            language_detection_json = ?14,
-            updated_at = ?15
+            template_version = ?4,
+            default_prompt_template_id = ?5,
+            temperature = ?6,
+            max_output_tokens = ?7,
+            provider_options_json = ?8,
+            source_lang = ?9,
+            target_lang = ?10,
+            primary_lang = ?11,
+            preferred_target_lang = ?12,
+            language_detection_json = ?13,
+            updated_at = ?14
          WHERE id = ?1",
       params![
         profile.id.to_string(),
         profile.name,
         profile.enabled as i64,
-        profile.stream_enabled as i64,
         profile.template_version,
         profile.default_prompt_template_id.to_string(),
         profile.temperature,

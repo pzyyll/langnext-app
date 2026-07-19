@@ -135,7 +135,6 @@ type ProfileDraft = {
   targetLang: SelectableLanguageId;
   primaryLang: LanguageId;
   preferredTargetLang: LanguageId;
-  streamEnabled: boolean;
   primaryModelId: string;
   languageDetectionModelId: string;
   fallbackModelIds: string[];
@@ -211,7 +210,6 @@ function emptyDraft(defaultModelId: string, uiLanguage: string): ProfileDraft {
     targetLang: AUTO_LANGUAGE,
     primaryLang: primary,
     preferredTargetLang: target,
-    streamEnabled: true,
     primaryModelId: defaultModelId,
     languageDetectionModelId: "",
     fallbackModelIds: [],
@@ -250,7 +248,6 @@ function draftFromDto(dto: TranslationProfileDto, modelOptions: ModelOption[], u
     targetLang: isSelectableLanguageId(dto.targetLang) ? dto.targetLang : AUTO_LANGUAGE,
     primaryLang: isLanguageId(dto.primaryLang) ? dto.primaryLang : defaults.primary,
     preferredTargetLang: isLanguageId(dto.preferredTargetLang) ? dto.preferredTargetLang : defaults.target,
-    streamEnabled: dto.streamEnabled,
     primaryModelId,
     languageDetectionModelId,
     fallbackModelIds,
@@ -736,7 +733,6 @@ function TranslateProfilesPage() {
       languageDetection: draft.languageDetectionModelId
         ? { type: "llm", modelId: draft.languageDetectionModelId }
         : null,
-      streamEnabled: draft.streamEnabled,
       targetModelIds: uniqueTargetIds,
     });
   }
@@ -1202,23 +1198,6 @@ function TranslateProfilesPage() {
 
                   {/* Parameters */}
                   <div className="space-y-4 border-t border-outline-variant pt-4">
-                    <label className="flex items-center justify-between gap-3" htmlFor="profile-stream">
-                      <span className="flex flex-col gap-0.5">
-                        <span className={fieldLabelClassName}>{t("translate.profiles.streamLabel")}</span>
-                        <span className="text-body-tight text-neutral">{t("translate.profiles.streamHint")}</span>
-                      </span>
-                      <Switch.Root
-                        id="profile-stream"
-                        checked={draft.streamEnabled}
-                        disabled={savePending}
-                        onCheckedChange={(checked) => {
-                          updateDraft({ streamEnabled: checked });
-                        }}
-                        className={switchRootClassName}
-                      >
-                        <Switch.Thumb className={switchThumbClassName} />
-                      </Switch.Root>
-                    </label>
                     <div className="grid grid-cols-1 gap-8 sm:grid-cols-2">
                       <div className="flex flex-col gap-1">
                         <label className={fieldLabelClassName} htmlFor="profile-temperature">

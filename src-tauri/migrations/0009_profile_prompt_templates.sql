@@ -27,8 +27,6 @@ CREATE TABLE translation_profiles_new (
     primary_lang                TEXT,
     preferred_target_lang       TEXT,
     language_detection_json     TEXT,
-    stream_enabled              INTEGER NOT NULL DEFAULT 1
-                                CHECK (stream_enabled IN (0, 1)),
     created_at                  TEXT NOT NULL,
     updated_at                  TEXT NOT NULL,
     CHECK (temperature IS NULL OR temperature >= 0),

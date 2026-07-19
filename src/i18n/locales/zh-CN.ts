@@ -200,8 +200,6 @@ const zhCN = {
       temperature: "温度",
       maxTokens: "最大 token 数",
       maxTokensModelDefault: "模型默认",
-      streamLabel: "流式",
-      streamHint: "逐字流式输出翻译结果。",
       noPrimaryModel: "无主模型",
       langArrow: "{{source}} → {{target}}",
       deleteTitle: "删除预设",
