@@ -123,6 +123,8 @@ const en = {
     source: "Source",
     translation: "Translation",
     detected: "Detected: {{language}}",
+    /** Auto tab label after detection (Google-style). */
+    autoDetected: "{{language}} - Detected",
     clearSource: "Clear source text",
     sourceTextAria: "Text to translate",
     sourcePlaceholder: "Enter…",
@@ -144,7 +146,7 @@ const en = {
       detectFailed: "Could not detect the source language.",
     },
     confidenceValue: "Confidence: {{percent}}%",
-    latencyValue: "Latency: {{ms}} ms",
+    latencyValue: "{{ms}} ms",
     activeModel: "Used model: {{model}}",
     profileLabel: "Profile:",
     profileAria: "Translation profile",

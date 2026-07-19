@@ -74,9 +74,26 @@ mise run tauri:build   # Package the desktop application
 
 ### Tailwind CSS
 
-Prefer named Tailwind tokens over arbitrary values when an equivalent exists (for example, `w-md` instead of `w-[28rem]`). Use the container scale (`3xs` through `7xl`) for `w-*`, `min-w-*`, and `max-w-*` utilities.
+Use the Tailwind v4 canonical syntax:
 
-Use the Tailwind v4 canonical syntax for CSS custom properties: `-(--var-name)` instead of `[var(--var-name)]` (for example, `max-h-(--available-height)` instead of `max-h-[var(--available-height)]`).
+```css
+// Prefer named Tailwind tokens over arbitrary values when an equivalent exists
+// Bad
+w-[28rem] w-* min-w-* max-w-*
+// Good
+w-md 3xs 7xl
+
+// Use the Tailwind v4 canonical syntax for CSS custom properties: `-(--var-name)` instead of `[var(--var-name)]`
+// Bad
+max-h-[var(--available-height)]
+// Good
+max-h-(--available-height)
+
+// Bad
+break-words
+// Good
+wrap-break-word
+```
 
 ### Base UI
 

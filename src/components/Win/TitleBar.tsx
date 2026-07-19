@@ -124,7 +124,7 @@ export function TitleBar({
 
   return (
     // Drag is only on the title strip — never wrap the control buttons.
-    <div className={`relative z-50 flex h-titlebar-height shrink-0 border-b border-line bg-surface ${className}`}>
+    <div className={`relative z-50 flex h-titlebar-height shrink-0 border-b border-outline bg-surface ${className}`}>
       <div className="flex h-full shrink-0 items-center gap-1 pl-2">
         {showSidebarToggle ? (
           <Button

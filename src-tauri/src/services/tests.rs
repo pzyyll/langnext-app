@@ -784,8 +784,6 @@ fn profile_language_preferences_round_trip() {
   );
 }
 
-
-
 #[test]
 fn profile_language_preferences_validation_rejects_invalid_pairs() {
   let (_d, _db, _v, providers, models, profiles, ..) = setup();

@@ -58,8 +58,8 @@ export const Route = createFileRoute("/translate/profiles")({
   component: TranslateProfilesPage,
 });
 
-/** Viewport minus titlebar-height and main vertical padding (2 × gutter). */
-const LAYOUT_HEIGHT_CLASS = "h-[calc(100dvh-var(--spacing-titlebar-height)-2*var(--spacing-gutter))]";
+/** Viewport minus titlebar only — main shell is edge-to-edge (no outer gutter). */
+const LAYOUT_HEIGHT_CLASS = "h-[calc(100dvh-var(--spacing-titlebar-height))]";
 
 const DEFAULT_SYSTEM_TEMPLATE = `You are a professional translation engine. Translate the user's text from {{source_language}} to {{target_language}}.
 Rules:
@@ -770,7 +770,7 @@ function TranslateProfilesPage() {
   const listEmpty = !profilesLoading && !profilesError && profiles.length === 0 && !isCreating;
 
   return (
-    <div className={`flex min-h-0 flex-col overflow-hidden border border-line bg-surface ${LAYOUT_HEIGHT_CLASS}`}>
+    <div className={`flex min-h-0 flex-col overflow-hidden bg-background ${LAYOUT_HEIGHT_CLASS}`}>
       {/* Page header */}
       <header className="flex h-16 shrink-0 items-center justify-between gap-3 border-b border-line bg-surface px-2">
         <div className="min-w-0">

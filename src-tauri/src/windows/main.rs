@@ -128,15 +128,23 @@ pub fn show<R: Runtime>(app: &tauri::AppHandle<R>) {
         .unwrap_or_else(WindowGeometry::default_main);
 
       let usable = is_geometry_usable(app, &geometry);
-      let width = if usable { geometry.width.max(800.0) } else { 800.0 };
-      let height = if usable { geometry.height.max(600.0) } else { 600.0 };
+      let width = if usable {
+        geometry.width.max(consts::MAIN_WINDOW_DEFAULT_SIZE.0)
+      } else {
+        consts::MAIN_WINDOW_DEFAULT_SIZE.0
+      };
+      let height = if usable {
+        geometry.height.max(consts::MAIN_WINDOW_DEFAULT_SIZE.1)
+      } else {
+        consts::MAIN_WINDOW_DEFAULT_SIZE.1
+      };
 
       web_build = web_build
         .resizable(true)
         .fullscreen(false)
         .title(consts::APP_NAME)
         .inner_size(width, height)
-        .min_inner_size(800.0, 600.0)
+        .min_inner_size(consts::MAIN_WINDOW_DEFAULT_SIZE.0, consts::MAIN_WINDOW_DEFAULT_SIZE.1)
         .disable_drag_drop_handler()
         .visible(true);
 

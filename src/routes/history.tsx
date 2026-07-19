@@ -200,7 +200,7 @@ function HistoryPage() {
     deleteTarget?.kind === "single" ? 1 : deleteTarget?.kind === "selected" ? deleteTarget.ids.length : 0;
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4 p-gutter">
       <section className="flex flex-col gap-2">
         <div className="flex items-center justify-between gap-4">
           <div className="flex flex-col gap-1">

@@ -38,7 +38,7 @@ function SettingsPage() {
   }));
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-6 p-gutter">
       <section className="flex flex-col gap-2">
         <h1 className="text-headline-md font-bold text-on-surface">{t("settings.title")}</h1>
         <p className="max-w-2xl text-body-md text-neutral">{t("settings.description")}</p>

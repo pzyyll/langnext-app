@@ -1,18 +1,26 @@
 // ABOUTME: Sidebar nav item list and helpers for active route / scroll transitions.
 // ABOUTME: Order in this array defines up/down page transition direction.
 
+/** Icon keys consumed by the shell sidebar (material-symbols-light). */
+export type NavIconId = "translate" | "book" | "history" | "neurology" | "info" | "settings";
+
 export const navItems = [
-  { to: "/translate", labelKey: "nav.translate", exact: true },
-  { to: "/translate/profiles", labelKey: "nav.translateProfiles", exact: true },
-  { to: "/history", labelKey: "nav.history", exact: false },
-  { to: "/models", labelKey: "nav.models", exact: false },
-  { to: "/about", labelKey: "nav.about", exact: false },
-  { to: "/settings", labelKey: "nav.settings", exact: false },
-] as const;
+  { to: "/translate", labelKey: "nav.translate", exact: true, icon: "translate" },
+  { to: "/translate/profiles", labelKey: "nav.translateProfiles", exact: true, icon: "book" },
+  { to: "/history", labelKey: "nav.history", exact: false, icon: "history" },
+  { to: "/models", labelKey: "nav.models", exact: false, icon: "neurology" },
+  { to: "/about", labelKey: "nav.about", exact: false, icon: "info" },
+  { to: "/settings", labelKey: "nav.settings", exact: false, icon: "settings" },
+] as const satisfies ReadonlyArray<{
+  to: string;
+  labelKey: string;
+  exact: boolean;
+  icon: NavIconId;
+}>;
 
 export type NavItem = (typeof navItems)[number];
 
-/** Primary sidebar links (Translate / Translate Profiles / History / Models / About). Settings is rendered at the footer. */
+/** Primary sidebar links (Translate / Profiles / History / Models / About). Settings is rendered at the footer. */
 export const primaryNavItems = [navItems[0], navItems[1], navItems[2], navItems[3], navItems[4]] as const;
 
 /** Settings entry shown in the sidebar footer. */

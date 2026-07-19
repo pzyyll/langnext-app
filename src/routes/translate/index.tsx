@@ -11,13 +11,11 @@ import IconMaterialSymbolsLightContentCopy from "~icons/material-symbols-light/c
 import IconMaterialSymbolsLightMarkdown from "~icons/material-symbols-light/markdown";
 import IconMaterialSymbolsLightMarkdownOutline from "~icons/material-symbols-light/markdown-outline";
 import IconMaterialSymbolsLightStopCircleOutline from "~icons/material-symbols-light/stop-circle-outline";
-import IconMaterialSymbolsLightSwapHoriz from "~icons/material-symbols-light/swap-horiz";
 import IconMaterialSymbolsLightVolumeUp from "~icons/material-symbols-light/volume-up";
 import IconPepiconsPrintEnter from "~icons/pepicons-print/enter";
 import { MarkdownOutput } from "../../components/markdown/MarkdownOutput";
 import { useToast } from "../../components/toast/useToast";
 import { iconButtonClassName } from "../../components/ui";
-import { ComboboxField } from "../../components/ComboboxField";
 import { SelectField } from "../../components/SelectField";
 import { TextAutosize, TextAutosizeContent } from "../../components/TextAutosize";
 import { TextLoading } from "../../components/TextLoading";
@@ -56,6 +54,7 @@ import {
   type SelectableLanguageId,
   type SourceLanguageId,
 } from "./-languages";
+import { LanguageChipBar } from "./-LanguageChipBar";
 import { WorkspaceSidebar } from "./-WorkspaceSidebar";
 import {
   MAX_TRANSLATE_WORKSPACES,
@@ -84,16 +83,11 @@ export const Route = createFileRoute("/translate/")({
   component: TranslatePage,
 });
 
-/** Viewport minus titlebar-height and main vertical padding (2 × gutter). */
-const LAYOUT_HEIGHT_CLASS = "h-[calc(100dvh-var(--spacing-titlebar-height)-2*var(--spacing-gutter))]";
+/** Viewport minus titlebar only — main shell is edge-to-edge (no outer gutter). */
+const LAYOUT_HEIGHT_CLASS = "h-[calc(100dvh-var(--spacing-titlebar-height))]";
 
 /** Auto-dismiss for the user-cancel "Stopped" toast. */
 const STOPPED_TOAST_MS = 2000;
-
-const paneHeaderClassName =
-  "flex h-control-height shrink-0 items-center justify-between border-b border-line bg-surface-2 px-2";
-
-const paneLabelClassName = "text-label-sm font-bold tracking-wide text-on-surface uppercase";
 
 type ModelOption = {
   id: string;
@@ -441,7 +435,7 @@ function TranslatePage() {
 
   const sourceLanguageOptions = useMemo(
     () => [
-      { id: "auto", label: t("translate.languages.auto") },
+      { id: AUTO_LANGUAGE, label: t("translate.languages.auto") },
       ...LANGUAGE_IDS.map((id) => ({
         id,
         label: t(`translate.languages.${id}`),
@@ -941,7 +935,7 @@ function TranslatePage() {
   const profileSelectDisabled = profilesLoading;
 
   return (
-    <div className={`${LAYOUT_HEIGHT_CLASS} flex min-h-0 gap-gutter`}>
+    <div className={`${LAYOUT_HEIGHT_CLASS} flex min-h-0`}>
       <WorkspaceSidebar
         workspaces={workspaceStore.workspaces}
         activeWorkspaceId={workspaceStore.activeWorkspaceId}
@@ -961,118 +955,79 @@ function TranslatePage() {
         onCollapsedChange={setWorkspaceRailCollapsed}
       />
 
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-gutter">
-        {/* Top toolbar: profile + model + languages + utility actions */}
-        <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border border-line bg-surface-2 px-gutter py-2">
-          <div className="flex min-w-0 flex-wrap items-center gap-gutter">
-            <div className="flex items-center gap-2">
-              <label className="text-label-sm text-neutral uppercase" id="translate-profile-label">
-                {t("translate.profileLabel")}
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">
+        {/* Top toolbar: session config only (profile / prompt / model). Languages live in pane headers. */}
+        <div className="flex h-12 shrink-0 items-center gap-gutter overflow-hidden border-b border-outline bg-surface-container-low px-gutter">
+          <div className="flex min-w-0 items-center gap-2">
+            <label className="text-label-sm text-neutral uppercase" id="translate-profile-label">
+              {t("translate.profileLabel")}
+            </label>
+            <SelectField
+              className="max-w-xs"
+              value={resolvedProfileId}
+              onValueChange={(value) => {
+                void applyProfile(value ?? "");
+              }}
+              options={[
+                { value: "", label: t("translate.profileNone") },
+                ...profiles.map((profile) => ({ value: profile.id, label: profile.name })),
+              ]}
+              disabled={profileSelectDisabled || isTranslating}
+              placeholder={profilesLoading ? t("translate.profileLoading") : undefined}
+              aria-label={t("translate.profileAria")}
+              aria-labelledby="translate-profile-label"
+              compact
+            />
+          </div>
+
+          {resolvedProfileId ? (
+            <div className="flex min-w-0 items-center gap-2">
+              <label className="text-label-sm text-neutral uppercase" id="translate-prompt-template-label">
+                {t("translate.promptTemplateLabel")}
               </label>
               <SelectField
                 className="max-w-xs"
-                value={resolvedProfileId}
+                value={resolvedPromptTemplateId}
                 onValueChange={(value) => {
-                  void applyProfile(value ?? "");
+                  setSelectedPromptTemplateId(value ?? "");
                 }}
-                options={[
-                  { value: "", label: t("translate.profileNone") },
-                  ...profiles.map((profile) => ({ value: profile.id, label: profile.name })),
-                ]}
-                disabled={profileSelectDisabled || isTranslating}
-                placeholder={profilesLoading ? t("translate.profileLoading") : undefined}
-                aria-label={t("translate.profileAria")}
-                aria-labelledby="translate-profile-label"
+                options={promptTemplateOptions}
+                disabled={profileSelectDisabled || isTranslating || isApplyingProfile}
+                placeholder={profilesLoading ? t("translate.promptTemplateLoading") : undefined}
+                aria-label={t("translate.promptTemplateAria")}
+                aria-labelledby="translate-prompt-template-label"
                 compact
               />
             </div>
+          ) : null}
 
-            {resolvedProfileId ? (
-              <div className="flex items-center gap-2">
-                <label className="text-label-sm text-neutral uppercase" id="translate-prompt-template-label">
-                  {t("translate.promptTemplateLabel")}
-                </label>
-                <SelectField
-                  className="max-w-xs"
-                  value={resolvedPromptTemplateId}
-                  onValueChange={(value) => {
-                    setSelectedPromptTemplateId(value ?? "");
-                  }}
-                  options={promptTemplateOptions}
-                  disabled={profileSelectDisabled || isTranslating || isApplyingProfile}
-                  placeholder={profilesLoading ? t("translate.promptTemplateLoading") : undefined}
-                  aria-label={t("translate.promptTemplateAria")}
-                  aria-labelledby="translate-prompt-template-label"
-                  compact
-                />
-              </div>
-            ) : null}
+          <div className="hidden h-6 w-px shrink-0 bg-outline-variant sm:block" aria-hidden />
 
-            <div className="hidden h-6 w-px bg-outline-variant sm:block" aria-hidden />
-
-            <div className="flex items-center gap-2">
-              <label className="text-label-sm text-neutral uppercase" id="translate-model-label">
-                {t("translate.modelLabel")}
-              </label>
-              <SelectField
-                className="max-w-xs"
-                value={resolvedModelId}
-                onValueChange={(value) => setSelectedModelId(value ?? "")}
-                options={
-                  modelsLoading || modelOptions.length === 0
-                    ? []
-                    : modelOptions.map((option) => ({ value: option.id, label: option.label }))
-                }
-                disabled={modelSelectDisabled || isTranslating}
-                placeholder={
-                  modelsLoading
-                    ? t("translate.modelLoading")
-                    : modelOptions.length === 0
-                      ? t("translate.modelEmpty")
-                      : undefined
-                }
-                aria-label={t("translate.modelAria")}
-                aria-labelledby="translate-model-label"
-                compact
-              />
-            </div>
-
-            <div className="hidden h-6 w-px bg-outline-variant sm:block" aria-hidden />
-
-            <div className="flex flex-wrap items-center gap-1">
-              <ComboboxField
-                value={sourceLang}
-                onValueChange={(value) => {
-                  setSourceLang((value ?? "auto") as SourceLanguageId);
-                  setDetectedSourceLang(null);
-                }}
-                options={sourceLanguageOptions.map((option) => ({ value: option.id, label: option.label }))}
-                disabled={isTranslating}
-                emptyText={t("common.noMatches")}
-                aria-label={t("translate.sourceLanguage")}
-                compact
-              />
-
-              <Button
-                type="button"
-                className={iconButtonClassName}
-                aria-label={t("translate.swapLanguages")}
-                onClick={swapLanguages}
-                disabled={isTranslating || (sourceLang === "auto" && !detectedSourceLang)}
-              >
-                <IconMaterialSymbolsLightSwapHoriz className="size-5" aria-hidden />
-              </Button>
-
-              <ComboboxField
-                value={targetLang}
-                onValueChange={(value) => setTargetLang((value ?? "en") as SelectableLanguageId)}
-                options={targetLanguageOptions.map((option) => ({ value: option.id, label: option.label }))}
-                disabled={isTranslating}
-                emptyText={t("common.noMatches")}
-                aria-label={t("translate.targetLanguage")}
-                compact
-              />
-            </div>
+          <div className="flex min-w-0 items-center gap-2">
+            <label className="text-label-sm text-neutral uppercase" id="translate-model-label">
+              {t("translate.modelLabel")}
+            </label>
+            <SelectField
+              className="max-w-xs"
+              value={resolvedModelId}
+              onValueChange={(value) => setSelectedModelId(value ?? "")}
+              options={
+                modelsLoading || modelOptions.length === 0
+                  ? []
+                  : modelOptions.map((option) => ({ value: option.id, label: option.label }))
+              }
+              disabled={modelSelectDisabled || isTranslating}
+              placeholder={
+                modelsLoading
+                  ? t("translate.modelLoading")
+                  : modelOptions.length === 0
+                    ? t("translate.modelEmpty")
+                    : undefined
+              }
+              aria-label={t("translate.modelAria")}
+              aria-labelledby="translate-model-label"
+              compact
+            />
           </div>
         </div>
 
@@ -1093,102 +1048,154 @@ function TranslatePage() {
         ) : null}
 
         {/* Source / target workspace */}
-        <div className="grid min-h-0 flex-1 grid-cols-1 gap-gutter lg:grid-cols-2">
-          {/* Source pane */}
-          <section className="shadow-frame flex min-h-64 flex-col border border-line bg-surface lg:min-h-0">
-            <div className={paneHeaderClassName}>
-              <div className="flex min-w-0 items-center gap-2">
-                <span className={paneLabelClassName}>{t("translate.source")}</span>
-                {detectedSourceLang ? (
-                  <span className="truncate text-label-sm text-neutral uppercase">
-                    {t("translate.detected", { language: t(`translate.languages.${detectedSourceLang}`) })}
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-gutter">
+          <LanguageChipBar
+            sourceLang={sourceLang}
+            targetLang={targetLang}
+            sourceOptions={sourceLanguageOptions}
+            targetOptions={targetLanguageOptions}
+            disabled={isTranslating}
+            swapDisabled={sourceLang === "auto" && !detectedSourceLang}
+            detectedLanguageLabel={detectedSourceLang ? t(`translate.languages.${detectedSourceLang}`) : null}
+            onSourceChange={(value) => {
+              setSourceLang(value);
+              setDetectedSourceLang(null);
+            }}
+            onTargetChange={setTargetLang}
+            onSwap={swapLanguages}
+          />
+
+          <div className="grid min-h-0 flex-1 grid-cols-1 gap-gutter overflow-hidden lg:grid-cols-2">
+            {/* Source pane */}
+            <section
+              className="shadow-frame flex min-h-64 flex-col border border-outline bg-surface-container-lowest lg:min-h-0"
+              aria-label={t("translate.source")}
+            >
+              <div className="relative min-h-0 flex-1">
+                <label className="sr-only" htmlFor="translate-source-text">
+                  {t("translate.sourceTextAria")}
+                </label>
+                {/* Fixed pane: fill parent, scale font to shell height, scroll when content overflows. */}
+                <TextAutosize
+                  id="translate-source-text"
+                  layout="fill"
+                  className="h-full min-h-40 lg:min-h-0"
+                  textareaClassName="p-gutter"
+                  placeholder={t("translate.sourcePlaceholder")}
+                  spellCheck={false}
+                  value={sourceText}
+                  disabled={isTranslating}
+                  onChange={(event) => {
+                    setSourceText(event.currentTarget.value);
+                    setDetectedSourceLang(null);
+                    setHasTranslated(false);
+                    setErrorMessage(null);
+                    setConfidencePercent(0);
+                    setLatencyMs(null);
+                  }}
+                />
+              </div>
+
+              <div className="flex shrink-0 items-center gap-1 border-t border-outline bg-surface-container-lowest p-gutter">
+                {charCount > 0 ? <span className="text-label-sm text-neutral tabular-nums">{charCount}</span> : null}
+                <div className="flex-1" />
+                {sourceText ? (
+                  <Button
+                    type="button"
+                    className={`${iconButtonClassName} group`}
+                    aria-label={t("translate.clearSource")}
+                    onClick={() => {
+                      void clearSource();
+                    }}
+                  >
+                    <IconMaterialSymbolsLightClose
+                      className="size-4 transition-transform duration-150 group-hover:scale-110"
+                      aria-hidden
+                    />
+                  </Button>
+                ) : null}
+                {isTranslating ? (
+                  <Button
+                    type="button"
+                    className={`${iconButtonClassName} group`}
+                    aria-label={t("translate.stopAria")}
+                    onClick={() => {
+                      void stopTranslation();
+                    }}
+                  >
+                    <IconMaterialSymbolsLightStopCircleOutline
+                      className="size-4 transition-transform duration-150 group-hover:scale-110"
+                      aria-hidden
+                    />
+                  </Button>
+                ) : (
+                  <Button
+                    type="button"
+                    className={`${iconButtonClassName} group`}
+                    disabled={!canTranslate}
+                    focusableWhenDisabled
+                    aria-label={t("translate.translate")}
+                    onClick={() => {
+                      void handleTranslate();
+                    }}
+                  >
+                    <IconPepiconsPrintEnter
+                      className="size-4 transition-transform duration-150 group-hover:scale-110"
+                      aria-hidden
+                    />
+                  </Button>
+                )}
+              </div>
+            </section>
+
+            {/* Translation pane */}
+            <section
+              className="shadow-frame flex min-h-64 flex-col border border-outline bg-surface-container-low lg:min-h-0"
+              aria-label={t("translate.translation")}
+            >
+              {/* Same stepped font as source: measure error/output/loading label, fill fixed pane. */}
+              <TextAutosizeContent
+                layout="fill"
+                fontScale={isMarkdownView && !!outputText && !errorMessage ? "fixed" : "stepped"}
+                stickToEnd={isTranslating}
+                className="min-h-0 flex-1"
+                contentClassName="p-gutter"
+                text={
+                  errorMessage
+                    ? `${t("translate.errorPrefix")}: ${errorMessage}`
+                    : isMarkdownView
+                      ? ""
+                      : outputText || (isTranslating ? t("translate.translating") : "")
+                }
+              >
+                {errorMessage ? (
+                  <p className="min-w-0 wrap-break-word whitespace-pre-wrap text-error select-text" role="alert">
+                    {t("translate.errorPrefix")}: {errorMessage}
+                  </p>
+                ) : outputText || isTranslating ? (
+                  isMarkdownView && outputText ? (
+                    <MarkdownOutput text={outputText} isStreaming={streamOutputActive} />
+                  ) : (
+                    <TextLoading
+                      text={outputText}
+                      isLoading={isTranslating}
+                      scramble={streamOutputActive}
+                      loadingLabel={t("translate.translating")}
+                      className="text-on-surface"
+                    />
+                  )
+                ) : (
+                  <p className="text-neutral italic select-none">{t("translate.outputPlaceholder")}</p>
+                )}
+              </TextAutosizeContent>
+
+              <div className="flex shrink-0 items-center gap-1 border-t border-outline bg-surface-container-low p-gutter">
+                {latencyMs !== null ? (
+                  <span className="text-label-sm text-neutral tabular-nums" role="status">
+                    {t("translate.latencyValue", { ms: latencyMs })}
                   </span>
                 ) : null}
-              </div>
-              {sourceText ? (
-                <Button
-                  type="button"
-                  className={`${iconButtonClassName} group`}
-                  aria-label={t("translate.clearSource")}
-                  onClick={() => {
-                    void clearSource();
-                  }}
-                >
-                  <IconMaterialSymbolsLightClose
-                    className="size-4 transition-transform duration-150 group-hover:scale-110"
-                    aria-hidden
-                  />
-                </Button>
-              ) : null}
-            </div>
-
-            <div className="relative min-h-0 flex-1">
-              <label className="sr-only" htmlFor="translate-source-text">
-                {t("translate.sourceTextAria")}
-              </label>
-              {/* Fixed pane: fill parent, scale font to shell height, scroll when content overflows. */}
-              <TextAutosize
-                id="translate-source-text"
-                layout="fill"
-                className="h-full min-h-40 lg:min-h-0"
-                textareaClassName="p-gutter"
-                placeholder={t("translate.sourcePlaceholder")}
-                spellCheck={false}
-                value={sourceText}
-                disabled={isTranslating}
-                onChange={(event) => {
-                  setSourceText(event.currentTarget.value);
-                  setDetectedSourceLang(null);
-                  setHasTranslated(false);
-                  setErrorMessage(null);
-                  setConfidencePercent(0);
-                  setLatencyMs(null);
-                }}
-              />
-            </div>
-
-            <div className="flex shrink-0 items-center bg-surface p-gutter">
-              {charCount > 0 ? <span className="text-label-sm text-neutral tabular-nums">{charCount}</span> : null}
-              <div className="flex-1" />
-              {isTranslating ? (
-                <Button
-                  type="button"
-                  className={`${iconButtonClassName} group`}
-                  aria-label={t("translate.stopAria")}
-                  onClick={() => {
-                    void stopTranslation();
-                  }}
-                >
-                  <IconMaterialSymbolsLightStopCircleOutline
-                    className="size-4 transition-transform duration-150 group-hover:scale-110"
-                    aria-hidden
-                  />
-                </Button>
-              ) : (
-                <Button
-                  type="button"
-                  className={`${iconButtonClassName} group`}
-                  disabled={!canTranslate}
-                  focusableWhenDisabled
-                  aria-label={t("translate.translate")}
-                  onClick={() => {
-                    void handleTranslate();
-                  }}
-                >
-                  <IconPepiconsPrintEnter
-                    className="size-4 transition-transform duration-150 group-hover:scale-110"
-                    aria-hidden
-                  />
-                </Button>
-              )}
-            </div>
-          </section>
-
-          {/* Translation pane */}
-          <section className="shadow-frame flex min-h-64 flex-col border border-line bg-surface-2 lg:min-h-0">
-            <div className={paneHeaderClassName}>
-              <span className={paneLabelClassName}>{t("translate.translation")}</span>
-              <div className="flex items-center gap-1">
+                <div className="flex-1" />
                 <Button
                   type="button"
                   className={iconButtonClassName}
@@ -1223,78 +1230,8 @@ function TranslatePage() {
                   <IconMaterialSymbolsLightVolumeUp className="size-4" aria-hidden />
                 </Button>
               </div>
-            </div>
-
-            {/* Same stepped font as source: measure error/output/loading label, fill fixed pane. */}
-            <TextAutosizeContent
-              layout="fill"
-              fontScale={isMarkdownView && !!outputText && !errorMessage ? "fixed" : "stepped"}
-              stickToEnd={isTranslating}
-              className="min-h-0 flex-1"
-              contentClassName="p-gutter"
-              text={
-                errorMessage
-                  ? `${t("translate.errorPrefix")}: ${errorMessage}`
-                  : isMarkdownView
-                    ? ""
-                    : outputText || (isTranslating ? t("translate.translating") : "")
-              }
-            >
-              {errorMessage ? (
-                <p className="min-w-0 break-words whitespace-pre-wrap text-error select-text" role="alert">
-                  {t("translate.errorPrefix")}: {errorMessage}
-                </p>
-              ) : outputText || isTranslating ? (
-                isMarkdownView && outputText ? (
-                  <MarkdownOutput text={outputText} isStreaming={streamOutputActive} />
-                ) : (
-                  <TextLoading
-                    text={outputText}
-                    isLoading={isTranslating}
-                    scramble={streamOutputActive}
-                    loadingLabel={t("translate.translating")}
-                    className="text-on-surface"
-                  />
-                )
-              ) : (
-                <p className="text-neutral italic select-none">{t("translate.outputPlaceholder")}</p>
-              )}
-            </TextAutosizeContent>
-
-            <div className="flex shrink-0 flex-wrap items-center gap-4 bg-surface-2 p-gutter">
-              <div className="flex-1" />
-              {activeModelLabel || confidencePercent > 0 || latencyMs !== null ? (
-                <div
-                  className="flex min-w-0 flex-wrap items-center justify-end gap-x-2 gap-y-1 text-label-sm text-neutral"
-                  role="status"
-                >
-                  {activeModelLabel ? (
-                    <span className="min-w-0 truncate" title={activeModelLabel}>
-                      {t("translate.activeModel", { model: activeModelLabel })}
-                    </span>
-                  ) : null}
-                  {activeModelLabel && confidencePercent > 0 ? (
-                    <span className="text-outline-variant select-none" aria-hidden>
-                      ·
-                    </span>
-                  ) : null}
-                  {confidencePercent > 0 ? (
-                    <span className="shrink-0 tabular-nums">
-                      {t("translate.confidenceValue", { percent: confidencePercent })}
-                    </span>
-                  ) : null}
-                  {(activeModelLabel || confidencePercent > 0) && latencyMs !== null ? (
-                    <span className="text-outline-variant select-none" aria-hidden>
-                      ·
-                    </span>
-                  ) : null}
-                  {latencyMs !== null ? (
-                    <span className="shrink-0 tabular-nums">{t("translate.latencyValue", { ms: latencyMs })}</span>
-                  ) : null}
-                </div>
-              ) : null}
-            </div>
-          </section>
+            </section>
+          </div>
         </div>
       </div>
     </div>

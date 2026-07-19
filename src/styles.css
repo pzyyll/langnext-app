@@ -13,60 +13,60 @@
 /* ── Runtime theme tokens (switch by [data-theme]) ── */
 :root,
 [data-theme="light"] {
-  /* M3 color roles — light */
-  --app-surface: #ffffff;
-  --app-surface-dim: #e4e4e4;
-  --app-surface-bright: #ffffff;
+  /* M3 color roles — light (from .stitch/translate/translate.html) */
+  --app-surface: #fdf8f8;
+  --app-surface-dim: #ddd9d8;
+  --app-surface-bright: #fdf8f8;
   --app-surface-container-lowest: #ffffff;
-  --app-surface-container-low: #f3f3f3;
-  --app-surface-container: #f3f3f3;
-  --app-surface-container-high: #e4e4e4;
-  --app-surface-container-highest: #e4e4e4;
-  --app-on-surface: #161616;
-  --app-on-surface-variant: #555555;
-  --app-inverse-surface: #121212;
-  --app-inverse-on-surface: #f8f8f8;
-  --app-outline: #161616;
-  --app-outline-variant: #e4e4e4;
-  --app-surface-tint: #0074ca;
-  --app-primary: #161616;
+  --app-surface-container-low: #f7f3f2;
+  --app-surface-container: #f1edec;
+  --app-surface-container-high: #ebe7e6;
+  --app-surface-container-highest: #e5e2e1;
+  --app-on-surface: #1c1b1b;
+  --app-on-surface-variant: #444748;
+  --app-inverse-surface: #313030;
+  --app-inverse-on-surface: #f4f0ef;
+  --app-outline: #747878;
+  --app-outline-variant: #c4c7c7;
+  --app-surface-tint: #5f5e5e;
+  --app-primary: #000000;
   --app-on-primary: #ffffff;
-  --app-primary-container: #161616;
-  --app-on-primary-container: #ffffff;
-  --app-inverse-primary: #59aaf8;
-  --app-secondary: #555555;
+  --app-primary-container: #1c1b1b;
+  --app-on-primary-container: #858383;
+  --app-inverse-primary: #c8c6c5;
+  --app-secondary: #5e5e5e;
   --app-on-secondary: #ffffff;
-  --app-secondary-container: #f3f3f3;
-  --app-on-secondary-container: #161616;
-  --app-tertiary: #0074ca;
+  --app-secondary-container: #e4e2e2;
+  --app-on-secondary-container: #646464;
+  --app-tertiary: #000000;
   --app-on-tertiary: #ffffff;
-  --app-tertiary-container: #0074ca;
-  --app-on-tertiary-container: #ffffff;
-  --app-error: #cc272e;
+  --app-tertiary-container: #001c38;
+  --app-on-tertiary-container: #2d86dd;
+  --app-error: #ba1a1a;
   --app-on-error: #ffffff;
-  --app-error-container: #cc272e;
-  --app-on-error-container: #ffffff;
-  --app-primary-fixed: #e4e4e4;
-  --app-primary-fixed-dim: #555555;
-  --app-on-primary-fixed: #161616;
-  --app-on-primary-fixed-variant: #555555;
-  --app-secondary-fixed: #f3f3f3;
-  --app-secondary-fixed-dim: #e4e4e4;
-  --app-on-secondary-fixed: #161616;
-  --app-on-secondary-fixed-variant: #555555;
-  --app-tertiary-fixed: #59aaf8;
-  --app-tertiary-fixed-dim: #0074ca;
-  --app-on-tertiary-fixed: #ffffff;
-  --app-on-tertiary-fixed-variant: #ffffff;
-  --app-background: #ffffff;
-  --app-on-background: #161616;
-  --app-surface-variant: #f3f3f3;
+  --app-error-container: #ffdad6;
+  --app-on-error-container: #93000a;
+  --app-primary-fixed: #e5e2e1;
+  --app-primary-fixed-dim: #c8c6c5;
+  --app-on-primary-fixed: #1c1b1b;
+  --app-on-primary-fixed-variant: #474746;
+  --app-secondary-fixed: #e4e2e2;
+  --app-secondary-fixed-dim: #c8c6c6;
+  --app-on-secondary-fixed: #1b1c1c;
+  --app-on-secondary-fixed-variant: #464747;
+  --app-tertiary-fixed: #d3e4ff;
+  --app-tertiary-fixed-dim: #a2c9ff;
+  --app-on-tertiary-fixed: #001c38;
+  --app-on-tertiary-fixed-variant: #004881;
+  --app-background: #fdf8f8;
+  --app-on-background: #1c1b1b;
+  --app-surface-variant: #e5e2e1;
 
   /* Project-specific tokens */
-  --app-code: #f2f2f2;
-  --app-disabled: #717171;
+  --app-code: #f1edec;
+  --app-disabled: #747878;
   --app-overlay: #00000033;
-  --app-shadow: #0000001f;
+  --app-shadow: #000000;
 
   /* Aliases to M3 roles (keep component class names working) */
   --app-surface-2: var(--app-surface-container-low);
@@ -342,8 +342,8 @@ body {
     sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  background-color: var(--app-surface);
-  color: var(--app-on-surface);
+  background-color: var(--app-background);
+  color: var(--app-on-background);
   user-select: none;
 }
 

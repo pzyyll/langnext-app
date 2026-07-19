@@ -22,3 +22,5 @@ pub const CREDENTIAL_SERVICE_NAME: &str = "com.balaenis.langnext-app";
 pub const MAX_BACKUP_SNAPSHOTS: usize = 3;
 /// SQLite busy timeout in milliseconds.
 pub const SQLITE_BUSY_TIMEOUT_MS: u32 = 5_000;
+
+pub const MAIN_WINDOW_DEFAULT_SIZE: (f64, f64) = (1280.0, 800.0);

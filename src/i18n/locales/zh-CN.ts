@@ -121,6 +121,8 @@ const zhCN = {
     source: "原文",
     translation: "译文",
     detected: "已检测：{{language}}",
+    /** 自动检测 tab 在出结果后的标签（对齐 Google）。 */
+    autoDetected: "{{language}} - 已检测",
     clearSource: "清空原文",
     sourceTextAria: "待翻译文本",
     sourcePlaceholder: "输入…",
@@ -142,7 +144,7 @@ const zhCN = {
       detectFailed: "无法检测源语言。",
     },
     confidenceValue: "置信度：{{percent}}%",
-    latencyValue: "延迟：{{ms}} ms",
+    latencyValue: "{{ms}} ms",
     activeModel: "实际模型：{{model}}",
     profileLabel: "预设：",
     profileAria: "翻译预设",
