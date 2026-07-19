@@ -80,6 +80,11 @@ export type TextAutosizeProps = Omit<ComponentProps<"textarea">, "children" | "r
   style?: CSSProperties;
 };
 
+export type TextAutosizeFontScale = "stepped" | "fixed";
+
+/** Body reading size used when `fontScale="fixed"` (Markdown / non-plain output). */
+const FIXED_FONT_SIZE_CLASS: FontSizeStep = "text-body-md";
+
 export type TextAutosizeContentProps = {
   /**
    * Text used only for font measurement (output body, error copy, loading label, …).
@@ -90,6 +95,11 @@ export type TextAutosizeContentProps = {
    * `fill` (default) — fixed parent pane. `grow` — content height; optional `max-h-*` then scrolls.
    */
   layout?: TextAutosizeLayout;
+  /**
+   * `stepped` (default) — scale font to fit shell / minRows.
+   * `fixed` — always body-md; use for Markdown HTML whose height is not plain-text measurable.
+   */
+  fontScale?: TextAutosizeFontScale;
   /** Fixed font-scaling floor in root-font-size rows (grow layout). */
   minRows?: number;
   /** Outer shell classes. Grow without `max-h-*` stays content-sized (no ScrollArea). */
@@ -97,8 +107,102 @@ export type TextAutosizeContentProps = {
   /** Inner content box (padding, leading). Font step class is applied here. */
   contentClassName?: string;
   showScrollbarOnHover?: boolean;
+  /**
+   * While true, follow the growing tail during stream output.
+   * Auto-scroll pauses if the user scrolls away from the end, and resumes when they return near the bottom.
+   * Uses the local ScrollArea viewport when present; otherwise the nearest scroll parent.
+   */
+  stickToEnd?: boolean;
   children: ReactNode;
 };
+
+/** Pixels of slack when treating a programmatic jump as already at the bottom. */
+const STICK_TO_END_BOTTOM_SLACK_PX = 4;
+
+/**
+ * Distance from the end within which the user is considered "at the bottom".
+ * Scrolling farther up pauses follow; returning within this band resumes it.
+ */
+const STICK_TO_END_RESUME_THRESHOLD_PX = 64;
+
+/**
+ * Find the nearest ancestor that can scroll vertically (overflow auto/scroll).
+ * Prefers an already-overflowed scroller; falls back to the first scrollable ancestor
+ * so stream stick can bind before content exceeds the viewport.
+ */
+function findVerticalScrollParent(start: HTMLElement): HTMLElement | null {
+  let node: HTMLElement | null = start.parentElement;
+  let firstScrollable: HTMLElement | null = null;
+  while (node) {
+    const overflowY = getComputedStyle(node).overflowY;
+    const canScroll = overflowY === "auto" || overflowY === "scroll" || overflowY === "overlay";
+    if (canScroll) {
+      if (node.scrollHeight > node.clientHeight + STICK_TO_END_BOTTOM_SLACK_PX) {
+        return node;
+      }
+      firstScrollable ??= node;
+    }
+    node = node.parentElement;
+  }
+  return firstScrollable;
+}
+
+/** Resolve the element that should receive scrollTop updates for stick-to-end. */
+function resolveStickScrollViewport(shell: HTMLElement | null, content: HTMLElement): HTMLElement | null {
+  const local = shell?.querySelector<HTMLElement>("[data-scroll-viewport]");
+  if (local && local.contains(content)) {
+    return local;
+  }
+  return findVerticalScrollParent(content);
+}
+
+/** Distance from the scrollable end (0 = flush with the bottom). */
+function distanceFromScrollEnd(viewport: HTMLElement): number {
+  return Math.max(0, viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop);
+}
+
+/** Jump a vertical scroller so its bottom edge shows the latest content. */
+function scrollViewportToEnd(viewport: HTMLElement): void {
+  const maxTop = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
+  if (Math.abs(viewport.scrollTop - maxTop) > STICK_TO_END_BOTTOM_SLACK_PX) {
+    viewport.scrollTop = maxTop;
+  }
+}
+
+/**
+ * Whether the user is near the followed end of this content.
+ * Local fill panes use scroll metrics; multi-card pages use content bottom vs viewport bottom.
+ */
+function isNearFollowedEnd(
+  content: HTMLElement,
+  viewport: HTMLElement,
+  pinAbsoluteEnd: boolean,
+  thresholdPx: number,
+): boolean {
+  if (pinAbsoluteEnd) {
+    return distanceFromScrollEnd(viewport) <= thresholdPx;
+  }
+  const overflowBelow = content.getBoundingClientRect().bottom - viewport.getBoundingClientRect().bottom;
+  return overflowBelow <= thresholdPx;
+}
+
+/**
+ * Keep `content`'s bottom edge inside `viewport`'s visible box (multi-card page scroll).
+ * Prefer absolute end-pin when content is the sole scroll payload of a local viewport.
+ */
+function ensureElementBottomVisible(content: HTMLElement, viewport: HTMLElement, pinAbsoluteEnd: boolean): void {
+  if (pinAbsoluteEnd) {
+    scrollViewportToEnd(viewport);
+    return;
+  }
+
+  const contentRect = content.getBoundingClientRect();
+  const viewportRect = viewport.getBoundingClientRect();
+  const overflowBelow = contentRect.bottom - viewportRect.bottom;
+  if (overflowBelow > STICK_TO_END_BOTTOM_SLACK_PX) {
+    viewport.scrollTop += overflowBelow;
+  }
+}
 
 function resolveMinHeightPx(minRows: number | undefined, shellHeightPx: number): number {
   if (minRows != null && minRows > 0) {
@@ -432,10 +536,12 @@ export function TextAutosize({
 export function TextAutosizeContent({
   text,
   layout = "fill",
+  fontScale = "stepped",
   minRows,
   className,
   contentClassName,
   showScrollbarOnHover = true,
+  stickToEnd = false,
   children,
 }: TextAutosizeContentProps) {
   const isFill = layout === "fill";
@@ -443,16 +549,123 @@ export function TextAutosizeContent({
   const shellRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const dummyRef = useRef<HTMLDivElement>(null);
+  const useStepped = fontScale === "stepped";
 
-  const { fontSizeClass } = useSteppedFontSize({
-    text,
+  const { fontSizeClass: steppedFontSizeClass } = useSteppedFontSize({
+    // Fixed scale still mounts the hook with empty measure text so it stays idle at largest index.
+    text: useStepped ? text : "",
     isFill,
     minRows,
     shellRef,
     boxRef: contentRef,
     dummyRef,
-    observeHeight: isFill,
+    observeHeight: useStepped && isFill,
   });
+  const fontSizeClass = useStepped ? steppedFontSizeClass : FIXED_FONT_SIZE_CLASS;
+
+  // Stream output: follow the growing tail; pause on user scroll-away, resume near bottom.
+  useLayoutEffect(() => {
+    if (!stickToEnd) {
+      return;
+    }
+    const content = contentRef.current;
+    if (!content) {
+      return;
+    }
+
+    /** User is following the tail; cleared when they scroll up past the resume band. */
+    let followingEnd = true;
+    /** Suppress pin updates from our own programmatic scrollTop writes. */
+    let ignoreScrollEvents = false;
+    let attachedViewport: HTMLElement | null = null;
+    let releaseIgnoreFrame = 0;
+
+    const resolveViewport = (): { viewport: HTMLElement | null; pinAbsoluteEnd: boolean } => {
+      const localViewport = shellRef.current?.querySelector<HTMLElement>("[data-scroll-viewport]");
+      const pinAbsoluteEnd = Boolean(useScroll && localViewport && localViewport.contains(content));
+      const viewport = pinAbsoluteEnd
+        ? localViewport
+        : (resolveStickScrollViewport(shellRef.current, content) ?? localViewport);
+      return { viewport: viewport ?? null, pinAbsoluteEnd };
+    };
+
+    const stickIfFollowing = () => {
+      if (!followingEnd) {
+        return;
+      }
+      const { viewport, pinAbsoluteEnd } = resolveViewport();
+      if (!viewport) {
+        return;
+      }
+      ignoreScrollEvents = true;
+      ensureElementBottomVisible(content, viewport, pinAbsoluteEnd);
+      if (releaseIgnoreFrame !== 0) {
+        window.cancelAnimationFrame(releaseIgnoreFrame);
+      }
+      // Two frames: Base UI may emit scroll after layout settles.
+      releaseIgnoreFrame = window.requestAnimationFrame(() => {
+        releaseIgnoreFrame = window.requestAnimationFrame(() => {
+          ignoreScrollEvents = false;
+          releaseIgnoreFrame = 0;
+        });
+      });
+    };
+
+    const onScroll = () => {
+      if (ignoreScrollEvents) {
+        return;
+      }
+      const { viewport, pinAbsoluteEnd } = resolveViewport();
+      if (!viewport) {
+        return;
+      }
+      followingEnd = isNearFollowedEnd(content, viewport, pinAbsoluteEnd, STICK_TO_END_RESUME_THRESHOLD_PX);
+    };
+
+    const bindScrollTarget = () => {
+      const { viewport } = resolveViewport();
+      if (viewport === attachedViewport) {
+        return;
+      }
+      if (attachedViewport) {
+        attachedViewport.removeEventListener("scroll", onScroll);
+      }
+      attachedViewport = viewport;
+      attachedViewport?.addEventListener("scroll", onScroll, { passive: true });
+    };
+
+    bindScrollTarget();
+    stickIfFollowing();
+
+    const resizeObserver =
+      typeof ResizeObserver !== "undefined"
+        ? new ResizeObserver(() => {
+            bindScrollTarget();
+            stickIfFollowing();
+          })
+        : null;
+    resizeObserver?.observe(content);
+
+    // Markdown/stream tokens may restructure DOM before the box size settles.
+    const mutationObserver =
+      typeof MutationObserver !== "undefined"
+        ? new MutationObserver(() => {
+            stickIfFollowing();
+          })
+        : null;
+    mutationObserver?.observe(content, { childList: true, subtree: true, characterData: true });
+
+    return () => {
+      if (attachedViewport) {
+        attachedViewport.removeEventListener("scroll", onScroll);
+      }
+      if (releaseIgnoreFrame !== 0) {
+        window.cancelAnimationFrame(releaseIgnoreFrame);
+      }
+      resizeObserver?.disconnect();
+      mutationObserver?.disconnect();
+    };
+  }, [stickToEnd, useScroll]);
 
   /*
 	  fontSizeClass last: twMerge treats text-on-surface and text-headline-*
@@ -470,7 +683,7 @@ export function TextAutosizeContent({
       )}
     >
       {children}
-      <div ref={dummyRef} className={DUMMY_BASE_CLASS_NAME} aria-hidden />
+      {useStepped ? <div ref={dummyRef} className={DUMMY_BASE_CLASS_NAME} aria-hidden /> : null}
     </div>
   );
 

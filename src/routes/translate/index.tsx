@@ -8,16 +8,25 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useTranslation } from "react-i18next";
 import IconMaterialSymbolsLightClose from "~icons/material-symbols-light/close";
 import IconMaterialSymbolsLightContentCopy from "~icons/material-symbols-light/content-copy";
+import IconMaterialSymbolsLightMarkdown from "~icons/material-symbols-light/markdown";
+import IconMaterialSymbolsLightMarkdownOutline from "~icons/material-symbols-light/markdown-outline";
 import IconMaterialSymbolsLightStopCircleOutline from "~icons/material-symbols-light/stop-circle-outline";
 import IconMaterialSymbolsLightSwapHoriz from "~icons/material-symbols-light/swap-horiz";
 import IconMaterialSymbolsLightVolumeUp from "~icons/material-symbols-light/volume-up";
 import IconPepiconsPrintEnter from "~icons/pepicons-print/enter";
+import { MarkdownOutput } from "../../components/markdown/MarkdownOutput";
 import { useToast } from "../../components/toast/useToast";
 import { iconButtonClassName } from "../../components/ui";
 import { ComboboxField } from "../../components/ComboboxField";
 import { SelectField } from "../../components/SelectField";
 import { TextAutosize, TextAutosizeContent } from "../../components/TextAutosize";
 import { TextLoading } from "../../components/TextLoading";
+import {
+  getOutputViewMode,
+  setOutputViewMode,
+  toggleOutputViewMode,
+  type OutputViewMode,
+} from "../../lib/output-view-mode";
 import { shouldApplyProfileResult } from "../../query/profileApplyGuard";
 import {
   allProviderModelsOptions,
@@ -138,6 +147,9 @@ function TranslatePage() {
   const [isTranslating, setIsTranslating] = useState(false);
   /** True after the first stream chunk of the current run; swaps loading dots for scramble. */
   const [streamOutputActive, setStreamOutputActive] = useState(false);
+  /** Shared with quick-translate; default plain. */
+  const [outputViewMode, setOutputViewModeState] = useState<OutputViewMode>(() => getOutputViewMode());
+  const isMarkdownView = outputViewMode === "markdown";
   const [profileStreamEnabled, setProfileStreamEnabled] = useState(true);
   const [activeModelLabel, setActiveModelLabel] = useState<string | null>(null);
 
@@ -1017,6 +1029,25 @@ function TranslatePage() {
               <Button
                 type="button"
                 className={iconButtonClassName}
+                aria-label={isMarkdownView ? t("translate.plainText") : t("translate.markdownPreview")}
+                aria-pressed={isMarkdownView}
+                onClick={() => {
+                  setOutputViewModeState((current) => {
+                    const next = toggleOutputViewMode(current);
+                    setOutputViewMode(next);
+                    return next;
+                  });
+                }}
+              >
+                {isMarkdownView ? (
+                  <IconMaterialSymbolsLightMarkdown className="size-4" aria-hidden />
+                ) : (
+                  <IconMaterialSymbolsLightMarkdownOutline className="size-4" aria-hidden />
+                )}
+              </Button>
+              <Button
+                type="button"
+                className={iconButtonClassName}
                 aria-label={copyFeedback ? t("translate.copied") : t("translate.copy")}
                 onClick={() => {
                   void copyOutput();
@@ -1034,12 +1065,16 @@ function TranslatePage() {
           {/* Same stepped font as source: measure error/output/loading label, fill fixed pane. */}
           <TextAutosizeContent
             layout="fill"
+            fontScale={isMarkdownView && !!outputText && !errorMessage ? "fixed" : "stepped"}
+            stickToEnd={isTranslating}
             className="min-h-0 flex-1"
             contentClassName="p-gutter"
             text={
               errorMessage
                 ? `${t("translate.errorPrefix")}: ${errorMessage}`
-                : outputText || (isTranslating ? t("translate.translating") : "")
+                : isMarkdownView
+                  ? ""
+                  : outputText || (isTranslating ? t("translate.translating") : "")
             }
           >
             {errorMessage ? (
@@ -1047,13 +1082,17 @@ function TranslatePage() {
                 {t("translate.errorPrefix")}: {errorMessage}
               </p>
             ) : outputText || isTranslating ? (
-              <TextLoading
-                text={outputText}
-                isLoading={isTranslating}
-                scramble={streamOutputActive}
-                loadingLabel={t("translate.translating")}
-                className="text-on-surface"
-              />
+              isMarkdownView && outputText ? (
+                <MarkdownOutput text={outputText} isStreaming={streamOutputActive} />
+              ) : (
+                <TextLoading
+                  text={outputText}
+                  isLoading={isTranslating}
+                  scramble={streamOutputActive}
+                  loadingLabel={t("translate.translating")}
+                  className="text-on-surface"
+                />
+              )
             ) : (
               <p className="text-neutral italic select-none">{t("translate.outputPlaceholder")}</p>
             )}

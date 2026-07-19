@@ -131,6 +131,8 @@ const zhCN = {
     copy: "复制译文",
     copied: "已复制",
     speak: "朗读译文",
+    markdownPreview: "Markdown 预览",
+    plainText: "纯文本",
     outputPlaceholder: "翻译…",
     selectModelFirst: "请先选择一个已启用的模型。",
     noModelsHint: "请先在「模型」页添加并启用模型，再返回此页。",

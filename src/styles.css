@@ -1,6 +1,14 @@
 /* ABOUTME: Global styles, Tailwind v4 entry, and semantic theme tokens. */
 /* ABOUTME: Light/dark via data-theme; utilities map through @theme inline. */
 @import "tailwindcss";
+@import "streamdown/styles.css";
+
+/* Scan Streamdown utilities so translation Markdown preview classes generate. */
+@source "../node_modules/streamdown/dist/*.js";
+@source "../node_modules/@streamdown/code/dist/*.js";
+
+/* Map Tailwind `dark:` to app data-theme (Streamdown shiki + optional utilities). */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 
 /* ── Runtime theme tokens (switch by [data-theme]) ── */
 :root,
@@ -65,6 +73,19 @@
   --app-surface-3: var(--app-surface-container-high);
   --app-neutral: var(--app-on-surface-variant);
   --app-line: var(--app-outline);
+
+  /* Streamdown / shadcn-shaped aliases (translation Markdown preview) */
+  --background: var(--app-surface);
+  --foreground: var(--app-on-surface);
+  --card: var(--app-surface);
+  --card-foreground: var(--app-on-surface);
+  --muted: var(--app-surface-container);
+  --muted-foreground: var(--app-neutral);
+  --border: var(--app-outline-variant);
+  --input: var(--app-outline-variant);
+  --primary-foreground: var(--app-on-primary);
+  --sidebar: var(--app-surface-container-low);
+  --radius: 0.5rem;
 }
 
 [data-theme="dark"] {
@@ -122,6 +143,19 @@
   --app-disabled: #8a8a8a;
   --app-overlay: #00000080;
   --app-shadow: transparent;
+
+  /* Streamdown / shadcn-shaped aliases (translation Markdown preview) */
+  --background: var(--app-surface);
+  --foreground: var(--app-on-surface);
+  --card: var(--app-surface);
+  --card-foreground: var(--app-on-surface);
+  --muted: var(--app-surface-container);
+  --muted-foreground: var(--app-neutral);
+  --border: var(--app-outline-variant);
+  --input: var(--app-outline-variant);
+  --primary-foreground: var(--app-on-primary);
+  --sidebar: var(--app-surface-container-low);
+  --radius: 0.5rem;
 }
 
 /* Map tokens into Tailwind color utilities: bg-surface, text-on-surface, border-line, … */
@@ -198,6 +232,17 @@
   --color-code: var(--app-code);
   --color-disabled: var(--app-disabled);
   --color-shadow: var(--app-shadow);
+
+  /* Streamdown class names: bg-muted, text-muted-foreground, border-border, … */
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-sidebar: var(--sidebar);
 }
 
 /*
@@ -340,6 +385,132 @@ body {
     mask-image: var(--loading-dots-mask-animated);
     -webkit-mask-image: var(--loading-dots-mask-animated);
   }
+}
+
+/*
+ * Translation Markdown preview: keep Streamdown density card-friendly.
+ * Streamdown supplies structural utilities; this trims heading scale and code chrome.
+ */
+.markdown-output {
+  line-height: 1.5;
+}
+
+.markdown-output :where(h1, h2, h3, h4, h5, h6) {
+  margin-block: 0.6em 0.35em;
+  font-weight: 700;
+  line-height: 1.25;
+  color: var(--app-on-surface);
+}
+
+.markdown-output :where(h1) {
+  font-size: 1.25em;
+}
+
+.markdown-output :where(h2) {
+  font-size: 1.125em;
+}
+
+.markdown-output :where(h3, h4, h5, h6) {
+  font-size: 1em;
+}
+
+.markdown-output :where(p, ul, ol, pre, table, blockquote) {
+  margin-block: 0.5em;
+}
+
+.markdown-output :where(ul, ol) {
+  padding-inline-start: 1.25em;
+}
+
+.markdown-output :where(li) {
+  margin-block: 0.15em;
+}
+
+.markdown-output :where(a) {
+  color: var(--app-tertiary);
+  text-decoration: underline;
+  text-underline-offset: 0.12em;
+}
+
+.markdown-output :where(code) {
+  border-radius: 0.2em;
+  background-color: var(--app-code);
+  padding: 0.1em 0.3em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.9em;
+}
+
+.markdown-output :where(pre) {
+  overflow-x: auto;
+  border: 1px solid var(--app-outline-variant);
+  border-radius: 0.35rem;
+  /* Prefer Streamdown/Shiki surface; fall back to app code token. */
+  background-color: var(--sdm-bg, var(--app-code));
+  padding: 0.65em 0.75em;
+  /*
+   * Streamdown root uses `whitespace-normal` (inherited). Without an explicit pre
+   * value, browser default for <pre> is overridden and newlines collapse.
+   */
+  white-space: pre;
+}
+
+.markdown-output :where(pre code) {
+  display: block;
+  background: transparent;
+  padding: 0;
+  font-size: 0.85em;
+  color: inherit;
+  white-space: inherit;
+}
+
+/*
+ * Streamdown + Shiki: each tokens[] entry is a line rendered as a bare <span>.
+ * With lineNumbers=false those spans omit the library's `block` class, so lines
+ * sit inline and the whole fence becomes one row. Force block layout ourselves.
+ */
+.markdown-output [data-streamdown="code-block-body"] code > span {
+  display: block;
+  min-height: 1.25em;
+}
+
+/* Do not paint token spans with the inline-code chip background. */
+.markdown-output :where(pre code span) {
+  background: transparent;
+}
+
+.markdown-output :where(table) {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.95em;
+}
+
+.markdown-output :where(th, td) {
+  border: 1px solid var(--app-outline-variant);
+  padding: 0.35em 0.5em;
+  text-align: start;
+  vertical-align: top;
+}
+
+.markdown-output :where(th) {
+  background-color: var(--app-surface-container);
+  font-weight: 600;
+}
+
+.markdown-output :where(blockquote) {
+  border-inline-start: 3px solid var(--app-outline-variant);
+  padding-inline-start: 0.75em;
+  color: var(--app-neutral);
+}
+
+.markdown-output :where(hr) {
+  margin-block: 0.75em;
+  border: 0;
+  border-block-start: 1px solid var(--app-outline-variant);
+}
+
+.markdown-output :where(img) {
+  max-width: 100%;
+  height: auto;
 }
 
 /* Thin, theme-aware native scrollbars (overflow-auto / overflow-scroll).

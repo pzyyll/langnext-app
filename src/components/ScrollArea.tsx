@@ -49,7 +49,11 @@ export const ScrollArea = forwardRef<HTMLDivElement, ScrollAreaProps>(function S
 ) {
   return (
     <BaseScrollArea.Root ref={ref} className={className} {...props}>
-      <BaseScrollArea.Viewport className={cn(viewportClassNameDefault, viewportClassName)}>
+      <BaseScrollArea.Viewport
+        // Stable hook for stick-to-end / programmatic scroll (Root ref is not the scroller).
+        data-scroll-viewport
+        className={cn(viewportClassNameDefault, viewportClassName)}
+      >
         <BaseScrollArea.Content
           className={contentClassName}
           // Base UI defaults to inline `min-width: fit-content` for horizontal scrolling.

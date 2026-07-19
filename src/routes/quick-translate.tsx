@@ -16,11 +16,14 @@ import IconCollapseContent from "~icons/material-symbols/collapse-content";
 import IconEdit from "~icons/material-symbols/edit-outline";
 import IconMaterialSymbolsLightContentCopy from "~icons/material-symbols-light/content-copy";
 import IconMaterialSymbolsLightCheck from "~icons/material-symbols-light/check";
+import IconMaterialSymbolsLightMarkdown from "~icons/material-symbols-light/markdown";
+import IconMaterialSymbolsLightMarkdownOutline from "~icons/material-symbols-light/markdown-outline";
 import IconMaterialSymbolsLightRefresh from "~icons/material-symbols-light/refresh";
 import IconMaterialSymbolsLightSwapHoriz from "~icons/material-symbols-light/swap-horiz";
 import ExpandCircleDownOutlineIcon from "~icons/material-symbols/expand-circle-down-outline";
 import FlashAutoIcon from "~icons/material-symbols/flash-auto";
 import FlashAutoOutlineIcon from "~icons/material-symbols/flash-auto-outline";
+import { MarkdownOutput } from "../components/markdown/MarkdownOutput";
 import { TitleBar } from "../components/Win/TitleBar";
 import { ComboboxField } from "../components/ComboboxField";
 import { ScrollArea } from "../components/ScrollArea";
@@ -29,6 +32,12 @@ import { TextAutosize, TextAutosizeContent } from "../components/TextAutosize";
 import { TextLoading } from "../components/TextLoading";
 import { iconButtonClassName } from "../components/ui";
 import { cn } from "../lib/cn";
+import {
+  getOutputViewMode,
+  setOutputViewMode,
+  toggleOutputViewMode,
+  type OutputViewMode,
+} from "../lib/output-view-mode";
 import { QUICK_TRANSLATE_CLIPBOARD_TEXT } from "../query/events";
 import {
   allProviderModelsOptions,
@@ -275,6 +284,9 @@ function QuickTranslatePage() {
   /** Slot ids that are currently collapsed; absent ids default to expanded. */
   const [collapsedSlotIds, setCollapsedSlotIds] = useState<Set<string>>(() => new Set(sessionSeed.collapsedSlotIds));
   const [autoTranslate, setAutoTranslate] = useState(sessionSeed.autoTranslate);
+  /** Shared with main translate; default plain. */
+  const [outputViewMode, setOutputViewModeState] = useState<OutputViewMode>(() => getOutputViewMode());
+  const isMarkdownView = outputViewMode === "markdown";
   const [detectedSourceLang, setDetectedSourceLang] = useState<LanguageId | null>(null);
   const [isPinned, setIsPinned] = useState(false);
   /** When true and source has text, show a single-line preview instead of the editor. */
@@ -1341,6 +1353,25 @@ function QuickTranslatePage() {
               <Button
                 type="button"
                 className={leadingButtonClassName}
+                aria-label={isMarkdownView ? t("translate.plainText") : t("translate.markdownPreview")}
+                aria-pressed={isMarkdownView}
+                onClick={() => {
+                  setOutputViewModeState((current) => {
+                    const next = toggleOutputViewMode(current);
+                    setOutputViewMode(next);
+                    return next;
+                  });
+                }}
+              >
+                {isMarkdownView ? (
+                  <IconMaterialSymbolsLightMarkdown className="pointer-events-none size-4" aria-hidden />
+                ) : (
+                  <IconMaterialSymbolsLightMarkdownOutline className="pointer-events-none size-4" aria-hidden />
+                )}
+              </Button>
+              <Button
+                type="button"
+                className={leadingButtonClassName}
                 aria-label={
                   autoTranslate ? t("quickTranslate.disableAutoTranslate") : t("quickTranslate.enableAutoTranslate")
                 }
@@ -1392,9 +1423,7 @@ function QuickTranslatePage() {
 							  Inner span carries truncate: button text nodes do not ellipsize reliably
 							  across engines when the shell is a flex item.
 							*/}
-                <span className="block min-w-0 flex-1 truncate">
-                  {sourceText.split(/\r?\n/, 1)[0] ?? ""}
-                </span>
+                <span className="block min-w-0 flex-1 truncate">{sourceText.split(/\r?\n/, 1)[0] ?? ""}</span>
               </button>
             ) : (
               /*
@@ -1664,17 +1693,21 @@ function QuickTranslatePage() {
 										*/}
                     <TextAutosizeContent
                       layout="grow"
+                      fontScale={isMarkdownView && !!result.text && !result.error ? "fixed" : "stepped"}
+                      stickToEnd={result.isTranslating}
                       contentClassName="p-3 leading-relaxed"
                       minRows={6}
                       text={
                         result.error
                           ? result.error
-                          : result.text ||
-                            (result.isTranslating
-                              ? t("translate.translating")
-                              : sourceText.trim()
-                                ? t("quickTranslate.waiting")
-                                : "")
+                          : isMarkdownView
+                            ? ""
+                            : result.text ||
+                              (result.isTranslating
+                                ? t("translate.translating")
+                                : sourceText.trim()
+                                  ? t("quickTranslate.waiting")
+                                  : "")
                       }
                     >
                       {result.error ? (
@@ -1682,12 +1715,16 @@ function QuickTranslatePage() {
                           {result.error}
                         </p>
                       ) : result.text || result.isTranslating ? (
-                        <TextLoading
-                          text={result.text}
-                          isLoading={result.isTranslating}
-                          scramble={Boolean(result.streamOutputActive)}
-                          loadingLabel={t("translate.translating")}
-                        />
+                        isMarkdownView && result.text ? (
+                          <MarkdownOutput text={result.text} isStreaming={Boolean(result.streamOutputActive)} />
+                        ) : (
+                          <TextLoading
+                            text={result.text}
+                            isLoading={result.isTranslating}
+                            scramble={Boolean(result.streamOutputActive)}
+                            loadingLabel={t("translate.translating")}
+                          />
+                        )
                       ) : sourceText.trim() ? (
                         // Debounce / manual-mode gap: source ready but this card has not started yet.
                         <TextLoading text="" isLoading loadingLabel={t("quickTranslate.waiting")} />

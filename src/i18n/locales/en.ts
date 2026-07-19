@@ -133,6 +133,8 @@ const en = {
     copy: "Copy translation",
     copied: "Copied",
     speak: "Speak translation",
+    markdownPreview: "Markdown preview",
+    plainText: "Plain text",
     outputPlaceholder: "Translation…",
     selectModelFirst: "Select an enabled model before translating.",
     noModelsHint: "Add and enable a model under Models, then return here.",
