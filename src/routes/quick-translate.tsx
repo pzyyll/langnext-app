@@ -12,6 +12,8 @@ import { Menu } from "@base-ui/react/menu";
 import { useTranslation } from "react-i18next";
 import IconMaterialSymbolsLightAdd from "~icons/material-symbols-light/add";
 import IconClose from "~icons/material-symbols/close";
+import IconCollapseContent from "~icons/material-symbols/collapse-content";
+import IconEdit from "~icons/material-symbols/edit-outline";
 import IconMaterialSymbolsLightContentCopy from "~icons/material-symbols-light/content-copy";
 import IconMaterialSymbolsLightCheck from "~icons/material-symbols-light/check";
 import IconMaterialSymbolsLightRefresh from "~icons/material-symbols-light/refresh";
@@ -26,6 +28,7 @@ import { SelectField } from "../components/SelectField";
 import { TextAutosize, TextAutosizeContent } from "../components/TextAutosize";
 import { TextLoading } from "../components/TextLoading";
 import { iconButtonClassName } from "../components/ui";
+import { cn } from "../lib/cn";
 import { QUICK_TRANSLATE_CLIPBOARD_TEXT } from "../query/events";
 import {
   allProviderModelsOptions,
@@ -274,6 +277,10 @@ function QuickTranslatePage() {
   const [autoTranslate, setAutoTranslate] = useState(sessionSeed.autoTranslate);
   const [detectedSourceLang, setDetectedSourceLang] = useState<LanguageId | null>(null);
   const [isPinned, setIsPinned] = useState(false);
+  /** When true and source has text, show a single-line preview instead of the editor. */
+  const [isSourceCollapsed, setIsSourceCollapsed] = useState(false);
+  /** Request focus on the source textarea after expanding from preview mode. */
+  const focusSourceAfterExpandRef = useRef(false);
 
   const profilesQuery = useQuery(profileListOptions());
   const providersQuery = useQuery(providerListOptions());
@@ -950,6 +957,11 @@ function QuickTranslatePage() {
       setSourceText(next);
       setDetectedSourceLang(null);
 
+      if (!next) {
+        // Empty field always leaves preview mode so the editor is ready for the next input.
+        setIsSourceCollapsed(false);
+      }
+
       if (!next.trim()) {
         invalidateInFlight();
         clearAllResults();
@@ -969,6 +981,22 @@ function QuickTranslatePage() {
   useEffect(() => {
     applySourceTextRef.current = applySourceText;
   }, [applySourceText]);
+
+  // Focus after preview → editor so the textarea exists in the DOM first.
+  // Place the caret at the end; default focus leaves it at index 0.
+  useEffect(() => {
+    if (isSourceCollapsed || !focusSourceAfterExpandRef.current) {
+      return;
+    }
+    focusSourceAfterExpandRef.current = false;
+    const field = document.getElementById("quick-translate-source");
+    if (!(field instanceof HTMLTextAreaElement)) {
+      return;
+    }
+    field.focus();
+    const end = field.value.length;
+    field.setSelectionRange(end, end);
+  }, [isSourceCollapsed]);
 
   // Double Ctrl+C: backend emits clipboard text; set source so debounced auto-translate runs.
   // Notify ready only after the listener is registered so first-wake queued text is not lost.
@@ -1266,7 +1294,7 @@ function QuickTranslatePage() {
 
   return (
     // Titlebar stays fixed; body scrolls only when content exceeds the clamped window height.
-    <div className="flex h-full min-h-0 flex-col bg-surface text-on-surface">
+    <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-surface text-on-surface">
       <div ref={titleBarMeasureRef} className="shrink-0">
         <TitleBar
           className="border-none!"
@@ -1333,50 +1361,76 @@ function QuickTranslatePage() {
       </div>
 
       <ScrollArea
-        className="min-h-0 flex-1 overflow-hidden"
-        contentClassName="h-fit w-full"
+        className="min-h-0 min-w-0 flex-1 overflow-hidden"
+        contentClassName="h-fit min-w-0 w-full"
         showScrollbarOnHover={false}
         hideScrollbar={isHeightAdapting}
       >
-        <div ref={setContentMeasureNode} className="flex h-fit w-full flex-col gap-4 px-3 pb-3 pt-2">
-          {/* Source input: grow layout TextAutosize (min-h-24 → max-h-64 then scroll) + footer toolbar */}
-          <div className="flex min-h-32 shrink-0 flex-col border border-line bg-surface-container-lowest focus-within:outline-2 focus-within:-outline-offset-1 focus-within:outline-on-surface">
+        <div ref={setContentMeasureNode} className="flex h-fit min-w-0 w-full flex-col gap-4 px-3 pb-3 pt-2">
+          {/* Source input: editor, or single-line preview when collapsed; footer toolbar always shown. */}
+          <div
+            className={cn(
+              // min-w-0 + overflow-hidden: long unbroken preview text must not expand the pane.
+              "flex min-w-0 shrink-0 flex-col overflow-hidden border border-line bg-surface-container-lowest focus-within:outline-2 focus-within:-outline-offset-1 focus-within:outline-on-surface",
+              isSourceCollapsed && sourceText ? "min-h-0" : "min-h-32",
+            )}
+          >
             <label className="sr-only" htmlFor="quick-translate-source">
               {t("translate.sourceTextAria")}
             </label>
-            {/*
+            {isSourceCollapsed && sourceText ? (
+              <button
+                type="button"
+                className="flex min-w-0 w-full cursor-default border-0 bg-transparent px-3 pt-3 pb-2 text-left text-body-md text-on-surface focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface"
+                aria-label={t("quickTranslate.editSource")}
+                onClick={() => {
+                  focusSourceAfterExpandRef.current = true;
+                  setIsSourceCollapsed(false);
+                }}
+              >
+                {/*
+							  Inner span carries truncate: button text nodes do not ellipsize reliably
+							  across engines when the shell is a flex item.
+							*/}
+                <span className="block min-w-0 flex-1 truncate">
+                  {sourceText.split(/\r?\n/, 1)[0] ?? ""}
+                </span>
+              </button>
+            ) : (
+              /*
 						  min-h-24 ≈ former h-32 chrome minus h-8 toolbar.
 						  minRows={6} keeps a fixed font-scaling floor while height may grow to max-h-64.
-						*/}
-            <TextAutosize
-              id="quick-translate-source"
-              layout="grow"
-              className="min-h-24 max-h-64"
-              textareaClassName="px-3 pt-3 pb-2"
-              minRows={6}
-              placeholder={t("quickTranslate.sourcePlaceholder")}
-              spellCheck={false}
-              value={sourceText}
-              onChange={(event) => {
-                applySourceText(event.currentTarget.value);
-              }}
-              onKeyDown={(event) => {
-                if (event.key !== "Enter") {
-                  return;
-                }
-                // Always allow Ctrl/Cmd+Enter as an explicit run shortcut.
-                if (event.ctrlKey || event.metaKey) {
-                  event.preventDefault();
-                  void runTranslations();
-                  return;
-                }
-                // Manual mode: Enter runs translation; Shift+Enter inserts a newline.
-                if (!autoTranslate && !event.shiftKey) {
-                  event.preventDefault();
-                  void runTranslations();
-                }
-              }}
-            />
+						*/
+              <TextAutosize
+                id="quick-translate-source"
+                layout="grow"
+                className="min-h-24 max-h-64"
+                textareaClassName="px-3 pt-3 pb-2"
+                minRows={6}
+                placeholder={t("quickTranslate.sourcePlaceholder")}
+                spellCheck={false}
+                value={sourceText}
+                onChange={(event) => {
+                  applySourceText(event.currentTarget.value);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key !== "Enter") {
+                    return;
+                  }
+                  // Always allow Ctrl/Cmd+Enter as an explicit run shortcut.
+                  if (event.ctrlKey || event.metaKey) {
+                    event.preventDefault();
+                    void runTranslations();
+                    return;
+                  }
+                  // Manual mode: Enter runs translation; Shift+Enter inserts a newline.
+                  if (!autoTranslate && !event.shiftKey) {
+                    event.preventDefault();
+                    void runTranslations();
+                  }
+                }}
+              />
+            )}
             <div className="flex h-8 shrink-0 items-center gap-1 px-2">
               {detectedSourceLang ? (
                 <p className="min-w-0 truncate text-label-sm text-neutral uppercase">
@@ -1388,16 +1442,39 @@ function QuickTranslatePage() {
               <div className="min-w-0 flex-1" />
               <div className="flex shrink-0 items-center gap-0.5">
                 {sourceText ? (
-                  <Button
-                    type="button"
-                    className={iconButtonClassName}
-                    aria-label={t("translate.clearSource")}
-                    onClick={() => {
-                      applySourceText("");
-                    }}
-                  >
-                    <IconClose className="size-4" aria-hidden />
-                  </Button>
+                  <>
+                    <Button
+                      type="button"
+                      className={iconButtonClassName}
+                      aria-label={
+                        isSourceCollapsed ? t("quickTranslate.editSource") : t("quickTranslate.collapseSource")
+                      }
+                      onClick={() => {
+                        if (isSourceCollapsed) {
+                          focusSourceAfterExpandRef.current = true;
+                          setIsSourceCollapsed(false);
+                          return;
+                        }
+                        setIsSourceCollapsed(true);
+                      }}
+                    >
+                      {isSourceCollapsed ? (
+                        <IconEdit className="size-4" aria-hidden />
+                      ) : (
+                        <IconCollapseContent className="size-4" aria-hidden />
+                      )}
+                    </Button>
+                    <Button
+                      type="button"
+                      className={iconButtonClassName}
+                      aria-label={t("translate.clearSource")}
+                      onClick={() => {
+                        applySourceText("");
+                      }}
+                    >
+                      <IconClose className="size-4" aria-hidden />
+                    </Button>
+                  </>
                 ) : null}
               </div>
             </div>
@@ -1470,7 +1547,7 @@ function QuickTranslatePage() {
           ) : null}
 
           {/* Result cards */}
-          <div ref={slotListRef} className="flex flex-col gap-4">
+          <div ref={slotListRef} className="flex min-w-0 flex-col gap-4">
             {slots.map((slot) => {
               const profile = profileById.get(slot.profileId);
               const result = results[slot.id] ?? emptyResult;
@@ -1488,7 +1565,7 @@ function QuickTranslatePage() {
                   onOpenChange={(open) => {
                     setSlotOpen(slot.id, open);
                   }}
-                  className="flex flex-col border border-line bg-surface"
+                  className="flex min-w-0 flex-col overflow-hidden border border-line bg-surface"
                 >
                   {/* Header is a div trigger so nested controls stay valid HTML. */}
                   <Collapsible.Trigger
@@ -1601,7 +1678,7 @@ function QuickTranslatePage() {
                       }
                     >
                       {result.error ? (
-                        <p className="whitespace-pre-wrap text-error select-text" role="alert">
+                        <p className="min-w-0 break-words whitespace-pre-wrap text-error select-text" role="alert">
                           {result.error}
                         </p>
                       ) : result.text || result.isTranslating ? (

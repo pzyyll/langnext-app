@@ -51,7 +51,8 @@ const FONT_FIT_SLACK_PX = 2;
 const DUMMY_BASE_CLASS_NAME = "absolute top-[-9999px] invisible h-auto overflow-hidden whitespace-pre-wrap break-words";
 
 const TEXTAREA_BASE_CLASS_NAME =
-  "w-full resize-none overflow-hidden border-0 bg-transparent text-on-surface placeholder:text-neutral focus:outline-none disabled:text-disabled";
+  // break-words: long unbroken tokens must wrap instead of expanding the shell width.
+  "w-full min-w-0 resize-none overflow-hidden break-words border-0 bg-transparent text-on-surface placeholder:text-neutral focus:outline-none disabled:text-disabled";
 
 export type TextAutosizeLayout = "grow" | "fill";
 
@@ -304,11 +305,13 @@ function useSteppedFontSize(options: {
 
 function scrollAreaClassNames(isFill: boolean, className: string | undefined) {
   return {
-    root: cn(isFill ? "h-full min-h-0 w-full" : "w-full", className),
+    root: cn(isFill ? "h-full min-h-0 min-w-0 w-full" : "min-w-0 w-full", className),
     // Grow: h-auto + same min/max as shell so the box tracks content then scrolls.
     // Fill: h-full so the fixed pane is the viewport; content may overflow and scroll.
-    viewport: isFill ? "h-full min-h-0 [scrollbar-gutter:stable]" : cn("h-auto [scrollbar-gutter:stable]", className),
-    content: cn("w-full", isFill && "min-h-full"),
+    viewport: isFill
+      ? "h-full min-h-0 min-w-0 [scrollbar-gutter:stable]"
+      : cn("h-auto min-w-0 [scrollbar-gutter:stable]", className),
+    content: cn("min-w-0 w-full", isFill && "min-h-full"),
   };
 }
 
@@ -381,7 +384,7 @@ export function TextAutosize({
   }
 
   const field = (
-    <div ref={rootRef} className={cn("relative w-full", isFill && "min-h-full")}>
+    <div ref={rootRef} className={cn("relative min-w-0 w-full", isFill && "min-h-full")}>
       <textarea
         {...props}
         ref={textareaRef}
@@ -398,7 +401,7 @@ export function TextAutosize({
 
   if (!useScroll) {
     return (
-      <div ref={shellRef} className={cn("w-full", className)}>
+      <div ref={shellRef} className={cn("min-w-0 w-full", className)}>
         {field}
       </div>
     );
@@ -458,7 +461,13 @@ export function TextAutosizeContent({
   const content = (
     <div
       ref={contentRef}
-      className={cn("relative w-full text-on-surface", isFill && "min-h-full", contentClassName, fontSizeClass)}
+      // break-words matches the measure dummy so long tokens wrap the same way they are measured.
+      className={cn(
+        "relative min-w-0 w-full break-words text-on-surface",
+        isFill && "min-h-full",
+        contentClassName,
+        fontSizeClass,
+      )}
     >
       {children}
       <div ref={dummyRef} className={DUMMY_BASE_CLASS_NAME} aria-hidden />
@@ -468,7 +477,7 @@ export function TextAutosizeContent({
   if (!useScroll) {
     // Content-sized shell so collapsible / window height observers see real offsetHeight.
     return (
-      <div ref={shellRef} className={cn("w-full", className)}>
+      <div ref={shellRef} className={cn("min-w-0 w-full", className)}>
         {content}
       </div>
     );

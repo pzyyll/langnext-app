@@ -5,7 +5,8 @@ import { ScrollArea as BaseScrollArea } from "@base-ui/react/scroll-area";
 import { cn } from "../lib/cn";
 
 const viewportClassNameDefault =
-  "h-full min-h-0 overscroll-contain focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface";
+  // min-w-0: flex parents can otherwise let long unbroken content expand past the shell width.
+  "h-full min-h-0 min-w-0 overscroll-contain focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface";
 
 /** Shared track styles; visibility modifiers are composed via props. */
 const scrollbarBaseClassName =
@@ -49,7 +50,14 @@ export const ScrollArea = forwardRef<HTMLDivElement, ScrollAreaProps>(function S
   return (
     <BaseScrollArea.Root ref={ref} className={className} {...props}>
       <BaseScrollArea.Viewport className={cn(viewportClassNameDefault, viewportClassName)}>
-        <BaseScrollArea.Content className={contentClassName}>{children}</BaseScrollArea.Content>
+        <BaseScrollArea.Content
+          className={contentClassName}
+          // Base UI defaults to inline `min-width: fit-content` for horizontal scrolling.
+          // This wrapper is vertical-only, so constrain content to the viewport instead.
+          style={{ minWidth: 0 }}
+        >
+          {children}
+        </BaseScrollArea.Content>
       </BaseScrollArea.Viewport>
       <BaseScrollArea.Scrollbar
         className={cn(

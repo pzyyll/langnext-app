@@ -79,6 +79,8 @@ const en = {
     unpin: "Unpin",
     enableAutoTranslate: "Enable auto translate",
     disableAutoTranslate: "Disable auto translate",
+    collapseSource: "Collapse input",
+    editSource: "Edit source",
   },
   about: {
     title: "About",

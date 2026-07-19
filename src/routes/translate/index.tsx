@@ -999,7 +999,7 @@ function TranslatePage() {
             }
           >
             {errorMessage ? (
-              <p className="whitespace-pre-wrap text-error select-text" role="alert">
+              <p className="min-w-0 break-words whitespace-pre-wrap text-error select-text" role="alert">
                 {t("translate.errorPrefix")}: {errorMessage}
               </p>
             ) : outputText || isTranslating ? (

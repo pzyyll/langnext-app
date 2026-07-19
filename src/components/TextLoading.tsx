@@ -122,7 +122,12 @@ export function TextLoading({
 
   return (
     <p
-      className={cn("whitespace-pre-wrap", isEmptyLoading ? emptyLoadingClassName : "select-text", className)}
+      className={cn(
+        // break-words: keep long unbroken tokens inside the pane (matches TextAutosize measure dummy).
+        "min-w-0 break-words whitespace-pre-wrap",
+        isEmptyLoading ? emptyLoadingClassName : "select-text",
+        className,
+      )}
       role={role ?? (isLoading ? "status" : undefined)}
       aria-busy={isLoading || undefined}
       {...props}
