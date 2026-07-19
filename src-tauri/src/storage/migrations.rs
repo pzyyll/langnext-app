@@ -13,6 +13,7 @@ pub const MIGRATIONS: &[&str] = &[
   include_str!("../../migrations/0006_profile_language_preferences.sql"),
   include_str!("../../migrations/0007_profile_streaming.sql"),
   include_str!("../../migrations/0008_translation_history.sql"),
+  include_str!("../../migrations/0009_profile_prompt_templates.sql"),
 ];
 
 pub fn latest_version() -> i32 {
@@ -151,81 +152,63 @@ mod tests {
       .query_row("SELECT COUNT(*) FROM translation_history", [], |r| r.get(0))
       .unwrap();
     assert_eq!(history_count, 0);
+    // v9 multi prompt-template table exists on a fresh database.
+    let template_count: i64 = conn
+      .query_row("SELECT COUNT(*) FROM translation_profile_prompt_templates", [], |r| {
+        r.get(0)
+      })
+      .unwrap();
+    assert_eq!(template_count, 0);
+    // v9 profile rows use default_prompt_template_id (no system_template/user_template).
+    let has_default_col: i64 = conn
+      .query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('translation_profiles') WHERE name = 'default_prompt_template_id'",
+        [],
+        |r| r.get(0),
+      )
+      .unwrap();
+    assert_eq!(has_default_col, 1);
   }
 
   #[test]
-  fn migrate_v4_profile_to_v5_preserves_data_and_defaults_detector() {
+  fn migrate_v4_through_latest_wipes_legacy_profiles_for_template_schema() {
     let mut conn = Connection::open_in_memory().unwrap();
     migrate_with(&mut conn, &MIGRATIONS[..4]).unwrap();
     conn
       .execute(
         "INSERT INTO translation_profiles (
-				id, name, enabled, template_version, system_template, user_template,
-				source_lang, target_lang, created_at, updated_at
-			) VALUES ('profile-1', 'Legacy', 1, 1, 'system', '{{text}}', 'zh', 'en', 't', 't')",
+                                id, name, enabled, template_version, system_template, user_template,
+                                source_lang, target_lang, created_at, updated_at
+                        ) VALUES ('profile-1', 'Legacy', 1, 1, 'system', '{{text}}', 'zh', 'en', 't', 't')",
         [],
       )
       .unwrap();
 
     migrate(&mut conn).unwrap();
-    let row: (String, Option<String>) = conn
-      .query_row(
-        "SELECT name, language_detection_json FROM translation_profiles WHERE id = 'profile-1'",
-        [],
-        |row| Ok((row.get(0)?, row.get(1)?)),
-      )
+    // v9 discards pre-multi-template profile rows (no legacy template compatibility).
+    let count: i64 = conn
+      .query_row("SELECT COUNT(*) FROM translation_profiles", [], |r| r.get(0))
       .unwrap();
-    assert_eq!(row.0, "Legacy");
-    assert_eq!(row.1, None);
+    assert_eq!(count, 0);
     assert_eq!(read_user_version(&conn).unwrap(), latest_version());
   }
 
   #[test]
-  fn migrate_v5_profile_to_v6_preserves_data_and_defaults_prefs() {
-    let mut conn = Connection::open_in_memory().unwrap();
-    migrate_with(&mut conn, &MIGRATIONS[..5]).unwrap();
-    conn
-      .execute(
-        "INSERT INTO translation_profiles (
-				id, name, enabled, template_version, system_template, user_template,
-				source_lang, target_lang, created_at, updated_at
-			) VALUES ('profile-v6', 'Legacy', 1, 1, 'system', '{{text}}', 'zh', 'en', 't', 't')",
-        [],
-      )
-      .unwrap();
-
-    migrate(&mut conn).unwrap();
-    let row: (String, Option<String>, Option<String>, Option<String>) = conn
-      .query_row(
-        "SELECT name, language_detection_json, primary_lang, preferred_target_lang
-				 FROM translation_profiles WHERE id = 'profile-v6'",
-        [],
-        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-      )
-      .unwrap();
-    assert_eq!(row.0, "Legacy");
-    assert_eq!(row.1, None);
-    assert_eq!(row.2, None);
-    assert_eq!(row.3, None);
-    assert_eq!(read_user_version(&conn).unwrap(), latest_version());
-  }
-
-  #[test]
-  fn migrate_v6_profile_to_v7_defaults_stream_enabled() {
+  fn migrate_v6_to_v7_defaults_stream_enabled_before_template_wipe() {
     let mut conn = Connection::open_in_memory().unwrap();
     migrate_with(&mut conn, &MIGRATIONS[..6]).unwrap();
     conn
       .execute(
         "INSERT INTO translation_profiles (
-				id, name, enabled, template_version, system_template, user_template,
-				source_lang, target_lang, primary_lang, preferred_target_lang, created_at, updated_at
-			) VALUES ('profile-v7', 'Legacy', 1, 1, 'system', '{{text}}', 'zh', 'en', 'zh', 'en', 't', 't')",
+                                id, name, enabled, template_version, system_template, user_template,
+                                source_lang, target_lang, primary_lang, preferred_target_lang, created_at, updated_at
+                        ) VALUES ('profile-v7', 'Legacy', 1, 1, 'system', '{{text}}', 'zh', 'en', 'zh', 'en', 't', 't')",
         [],
       )
       .unwrap();
 
-    migrate(&mut conn).unwrap();
-    // Legacy rows inherit the column default (1 = stream enabled).
+    // Apply only through v7 so the stream default is observable before v9 wipes rows.
+    migrate_with(&mut conn, &MIGRATIONS[..7]).unwrap();
     let stream_enabled: i64 = conn
       .query_row(
         "SELECT stream_enabled FROM translation_profiles WHERE id = 'profile-v7'",
@@ -234,7 +217,7 @@ mod tests {
       )
       .unwrap();
     assert_eq!(stream_enabled, 1);
-    assert_eq!(read_user_version(&conn).unwrap(), latest_version());
+    assert_eq!(read_user_version(&conn).unwrap(), 7);
   }
 
   #[test]

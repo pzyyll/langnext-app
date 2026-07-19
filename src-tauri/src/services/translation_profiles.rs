@@ -1,15 +1,15 @@
 // ABOUTME: Translation profile template/parameter validation and profile writes.
-// ABOUTME: Fallback chains are stored as contiguous priorities starting at 0.
+// ABOUTME: Fallback chains and prompt templates are stored as complete ordered lists.
 use crate::adapters::catalog;
 use crate::domain::language_detection::{LanguageDetectorConfig, SUPPORTED_LANGUAGES};
 use crate::domain::time::{new_id, now_rfc3339};
 use crate::domain::translation_profile::{
-  TranslationProfile, TranslationProfileDto, TranslationProfileTarget, TranslationProfileWrite,
+  PromptTemplate, TranslationProfile, TranslationProfileDto, TranslationProfileTarget, TranslationProfileWrite,
 };
 use crate::error::StorageError;
 use crate::repositories::{provider_models, translation_profiles};
 use crate::storage::Database;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
 const ALLOWED_VARS: &[&str] = &["source_language", "target_language", "text"];
@@ -24,27 +24,45 @@ impl TranslationProfileService {
     Self { db }
   }
 
-  /// List profiles with ordered target chains via two bulk SQL queries (no N+1).
+  /// List profiles with ordered target chains and prompt templates via bulk SQL (no N+1).
   ///
-  /// Both SELECTs run inside one deferred read snapshot so a concurrent write
-  /// cannot produce a torn view of profiles vs targets.
+  /// SELECTs run inside one deferred read snapshot so a concurrent write
+  /// cannot produce a torn view of profiles vs related rows.
   pub fn list(&self) -> Result<Vec<TranslationProfileDto>, StorageError> {
     self.db.read_snapshot(|conn| {
       let profiles = translation_profiles::list(conn)?;
       let all_targets = translation_profiles::list_all_targets(conn)?;
-      let mut by_profile: HashMap<Uuid, Vec<TranslationProfileTarget>> = HashMap::new();
+      let all_templates = translation_profiles::list_all_prompt_templates(conn)?;
+      let mut targets_by_profile: HashMap<Uuid, Vec<TranslationProfileTarget>> = HashMap::new();
       for target in all_targets {
-        by_profile
+        targets_by_profile
           .entry(target.translation_profile_id)
           .or_default()
           .push(target);
+      }
+      let mut templates_by_profile: HashMap<Uuid, Vec<PromptTemplate>> = HashMap::new();
+      for row in all_templates {
+        templates_by_profile
+          .entry(row.translation_profile_id)
+          .or_default()
+          .push(PromptTemplate {
+            id: row.id,
+            name: row.name,
+            system_template: row.system_template,
+            user_template: row.user_template,
+          });
       }
       Ok(
         profiles
           .into_iter()
           .map(|profile| {
-            let targets = by_profile.remove(&profile.id).unwrap_or_default();
-            TranslationProfileDto { profile, targets }
+            let targets = targets_by_profile.remove(&profile.id).unwrap_or_default();
+            let prompt_templates = templates_by_profile.remove(&profile.id).unwrap_or_default();
+            TranslationProfileDto {
+              profile,
+              targets,
+              prompt_templates,
+            }
           })
           .collect(),
       )
@@ -95,8 +113,7 @@ impl TranslationProfileService {
         enabled: input.enabled,
         stream_enabled: input.stream_enabled,
         template_version: input.template_version,
-        system_template: input.system_template.clone(),
-        user_template: input.user_template.clone(),
+        default_prompt_template_id: input.default_prompt_template_id,
         temperature: input.temperature,
         max_output_tokens: input.max_output_tokens,
         provider_options_json: input.provider_options_json.clone(),
@@ -120,7 +137,7 @@ impl TranslationProfileService {
         })
         .collect();
 
-      translation_profiles::save_with_targets(uow.conn(), &profile, &targets, is_new)?;
+      translation_profiles::save_with_targets(uow.conn(), &profile, &targets, &input.prompt_templates, is_new)?;
       translation_profiles::get(uow.conn(), id)
     })
   }
@@ -147,7 +164,7 @@ fn validate_profile_write(input: &TranslationProfileWrite) -> Result<(), Storage
       "profile requires at least one target model".into(),
     ));
   }
-  let mut seen = std::collections::HashSet::new();
+  let mut seen = HashSet::new();
   for id in &input.target_model_ids {
     if !seen.insert(*id) {
       return Err(StorageError::Validation("profile targets must be unique models".into()));
@@ -163,9 +180,39 @@ fn validate_profile_write(input: &TranslationProfileWrite) -> Result<(), Storage
       return Err(StorageError::Validation("max_output_tokens must be > 0".into()));
     }
   }
-  validate_template(&input.system_template, false)?;
-  validate_template(&input.user_template, true)?;
+  validate_prompt_templates(&input.prompt_templates, input.default_prompt_template_id)?;
   validate_profile_language_preferences_for_save(&input.primary_lang, &input.preferred_target_lang)?;
+  Ok(())
+}
+
+/// Validate the ordered prompt-template list and default selection for a profile write.
+pub fn validate_prompt_templates(
+  templates: &[PromptTemplate],
+  default_prompt_template_id: Uuid,
+) -> Result<(), StorageError> {
+  if templates.is_empty() {
+    return Err(StorageError::Validation(
+      "profile requires at least one prompt template".into(),
+    ));
+  }
+  let mut seen_ids = HashSet::new();
+  for template in templates {
+    if template.name.trim().is_empty() {
+      return Err(StorageError::Validation(
+        "prompt template name must not be empty".into(),
+      ));
+    }
+    if !seen_ids.insert(template.id) {
+      return Err(StorageError::Validation("prompt template ids must be unique".into()));
+    }
+    validate_template(&template.system_template, false)?;
+    validate_template(&template.user_template, true)?;
+  }
+  if !seen_ids.contains(&default_prompt_template_id) {
+    return Err(StorageError::Validation(
+      "default_prompt_template_id must reference a template on this profile".into(),
+    ));
+  }
   Ok(())
 }
 
@@ -297,6 +344,11 @@ pub fn validate_profile_language_preferences_for_save(
     ));
   }
   Ok(())
+}
+
+/// Generate a new prompt-template id (used by callers that need a default template).
+pub fn new_prompt_template_id() -> Uuid {
+  new_id()
 }
 
 const AUTO_LANG: &str = "auto";

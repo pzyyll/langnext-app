@@ -1,5 +1,5 @@
 // ABOUTME: Translation profile entities, ordered model targets, and DTOs.
-// ABOUTME: Profiles own prompt templates, preferred languages, and fallback chains.
+// ABOUTME: Profiles own multiple prompt templates, preferred languages, and fallback chains.
 use crate::domain::language_detection::LanguageDetectorConfig;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -9,6 +9,16 @@ pub fn default_true() -> bool {
   true
 }
 
+/// One named prompt template belonging to a translation profile.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptTemplate {
+  pub id: Uuid,
+  pub name: String,
+  pub system_template: String,
+  pub user_template: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct TranslationProfile {
@@ -16,8 +26,8 @@ pub struct TranslationProfile {
   pub name: String,
   pub enabled: bool,
   pub template_version: i32,
-  pub system_template: String,
-  pub user_template: String,
+  /// Id of the template used when translate does not pass an override.
+  pub default_prompt_template_id: Uuid,
   pub temperature: Option<f64>,
   pub max_output_tokens: Option<i64>,
   pub provider_options_json: Option<serde_json::Value>,
@@ -56,15 +66,29 @@ pub struct TranslationProfileTarget {
   pub priority: i32,
 }
 
+/// Persistence row for a prompt template (includes profile ownership + list order).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TranslationProfilePromptTemplate {
+  pub id: Uuid,
+  pub translation_profile_id: Uuid,
+  pub name: String,
+  pub system_template: String,
+  pub user_template: String,
+  pub sort_order: i32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct TranslationProfileDto {
   #[serde(flatten)]
   pub profile: TranslationProfile,
   pub targets: Vec<TranslationProfileTarget>,
+  /// Ordered prompt templates for this profile (sort_order ascending).
+  pub prompt_templates: Vec<PromptTemplate>,
 }
 
-/// Write input for a profile and its complete ordered target list.
+/// Write input for a profile, its complete ordered target list, and prompt templates.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TranslationProfileWrite {
@@ -72,8 +96,10 @@ pub struct TranslationProfileWrite {
   pub name: String,
   pub enabled: bool,
   pub template_version: i32,
-  pub system_template: String,
-  pub user_template: String,
+  /// Must reference one entry in `prompt_templates`.
+  pub default_prompt_template_id: Uuid,
+  /// Complete ordered template list for this profile (at least one).
+  pub prompt_templates: Vec<PromptTemplate>,
   pub temperature: Option<f64>,
   pub max_output_tokens: Option<i64>,
   pub provider_options_json: Option<serde_json::Value>,

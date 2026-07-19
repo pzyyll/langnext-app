@@ -1137,7 +1137,8 @@ fn prepare_translate_sync(
   }
 
   // Optional profile: templates + ordered fallback targets after the primary model.
-  let profile: Option<TranslationProfile> = if let Some(profile_id) = input.profile_id {
+  // Keep the full DTO so we can resolve the default or override prompt template.
+  let profile_dto = if let Some(profile_id) = input.profile_id {
     match db.read(|conn| translation_profiles::get(conn, profile_id)) {
       Ok(dto) => {
         if !dto.profile.enabled {
@@ -1147,7 +1148,7 @@ fn prepare_translate_sync(
             0,
           )));
         }
-        Some(dto.profile)
+        Some(dto)
       }
       Err(StorageError::NotFound(_)) => {
         return Ok(TranslatePrepare::Early(TranslateResult::failure(
@@ -1162,9 +1163,27 @@ fn prepare_translate_sync(
     None
   };
 
-  let (system_prompt, user_prompt, temperature, profile_max_tokens) = if let Some(ref profile) = profile {
-    let system_prompt = render_template(&profile.system_template, source_lang, target_lang, text);
-    let user_prompt = render_template(&profile.user_template, source_lang, target_lang, text);
+  // Override template id without a profile is invalid; with a profile it must belong to that profile.
+  if input.prompt_template_id.is_some() && profile_dto.is_none() {
+    return Ok(TranslatePrepare::Early(TranslateResult::failure(
+      "validation_failed",
+      "Prompt template override requires a translation profile",
+      0,
+    )));
+  }
+
+  let (system_prompt, user_prompt, temperature, profile_max_tokens) = if let Some(ref dto) = profile_dto {
+    let profile = &dto.profile;
+    let template_id = input.prompt_template_id.unwrap_or(profile.default_prompt_template_id);
+    let Some(template) = dto.prompt_templates.iter().find(|t| t.id == template_id) else {
+      return Ok(TranslatePrepare::Early(TranslateResult::failure(
+        "validation_failed",
+        "Selected prompt template does not belong to this profile",
+        0,
+      )));
+    };
+    let system_prompt = render_template(&template.system_template, source_lang, target_lang, text);
+    let user_prompt = render_template(&template.user_template, source_lang, target_lang, text);
     let temperature = profile.temperature.or(Some(DEFAULT_TRANSLATE_TEMPERATURE));
     let profile_max_tokens = profile.max_output_tokens.map(|n| n as u32);
     (system_prompt, user_prompt, temperature, profile_max_tokens)
@@ -1220,8 +1239,8 @@ fn prepare_translate_sync(
 
   Ok(TranslatePrepare::Ready {
     attempts,
-    profile_id: profile.as_ref().map(|p| p.id),
-    profile_name: profile.as_ref().map(|p| p.name.clone()),
+    profile_id: profile_dto.as_ref().map(|d| d.profile.id),
+    profile_name: profile_dto.as_ref().map(|d| d.profile.name.clone()),
   })
 }
 

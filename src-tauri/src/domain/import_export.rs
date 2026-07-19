@@ -3,11 +3,14 @@
 use crate::domain::model::ProviderModel;
 use crate::domain::provider::ProviderExport;
 use crate::domain::settings::AppSettingsV1;
-use crate::domain::translation_profile::{TranslationProfile, TranslationProfileTarget};
+use crate::domain::translation_profile::{
+  TranslationProfile, TranslationProfilePromptTemplate, TranslationProfileTarget,
+};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-pub const EXPORT_FORMAT_VERSION: u32 = 1;
+/// Configuration export format version. Bumped when profile multi-template fields were introduced.
+pub const EXPORT_FORMAT_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -18,6 +21,8 @@ pub struct ConfigurationExport {
   pub models: Vec<ProviderModel>,
   pub translation_profiles: Vec<TranslationProfile>,
   pub profile_models: Vec<TranslationProfileTarget>,
+  /// Ordered prompt templates for all profiles (sort_order ascending within each profile).
+  pub profile_prompt_templates: Vec<TranslationProfilePromptTemplate>,
   pub app_settings: AppSettingsV1,
 }
 
@@ -75,10 +80,12 @@ mod tests {
       models: vec![],
       translation_profiles: vec![],
       profile_models: vec![],
+      profile_prompt_templates: vec![],
       app_settings: AppSettingsV1::default_document(),
     };
     let json = serde_json::to_string(&doc).unwrap();
     assert!(json.contains("formatVersion"));
+    assert!(json.contains("profilePromptTemplates"));
     assert!(!json.contains("credentialRef"));
     assert!(!json.contains("credential_ref"));
     let back: ConfigurationExport = serde_json::from_str(&json).unwrap();

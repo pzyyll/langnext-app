@@ -36,7 +36,7 @@ fn user_version_is_latest() {
   let (_dir, db) = temp_db();
   db.read(|conn| {
     assert_eq!(read_user_version(conn).unwrap(), latest_version());
-    assert_eq!(latest_version(), 8);
+    assert_eq!(latest_version(), 9);
     Ok(())
   })
   .unwrap();
@@ -163,8 +163,8 @@ fn profile_target_cascades_on_profile_delete() {
     conn
       .execute(
         "INSERT INTO translation_profiles (
-                id, name, enabled, template_version, system_template, user_template, created_at, updated_at
-            ) VALUES ('tp1', 'fast', 1, 1, 'sys', 'text {{text}}', 't', 't')",
+                id, name, enabled, template_version, default_prompt_template_id, created_at, updated_at
+            ) VALUES ('tp1', 'fast', 1, 1, 'tpl1', 't', 't')",
         [],
       )
       .unwrap();
@@ -223,8 +223,8 @@ fn profile_priority_uniqueness() {
     conn
       .execute(
         "INSERT INTO translation_profiles (
-                id, name, enabled, template_version, system_template, user_template, created_at, updated_at
-            ) VALUES ('tp1', 'fast', 1, 1, 'sys', 'text {{text}}', 't', 't')",
+                id, name, enabled, template_version, default_prompt_template_id, created_at, updated_at
+            ) VALUES ('tp1', 'fast', 1, 1, 'tpl1', 't', 't')",
         [],
       )
       .unwrap();
@@ -301,7 +301,7 @@ fn reject_corrupt_database_on_probe() {
 
 #[test]
 fn migrations_module_latest_version() {
-  assert_eq!(migrations::latest_version(), 8);
+  assert_eq!(migrations::latest_version(), 9);
 }
 
 #[test]

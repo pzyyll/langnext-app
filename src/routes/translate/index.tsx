@@ -143,6 +143,8 @@ function TranslatePage() {
 
   const [selectedModelId, setSelectedModelId] = useState(sessionSeed.modelId);
   const [selectedProfileId, setSelectedProfileId] = useState(sessionSeed.profileId);
+  /** Empty string = use the profile default template for this page session (not persisted). */
+  const [selectedPromptTemplateId, setSelectedPromptTemplateId] = useState("");
   const [profileApplyError, setProfileApplyError] = useState<string | null>(null);
   const [isApplyingProfile, setIsApplyingProfile] = useState(false);
 
@@ -177,6 +179,24 @@ function TranslatePage() {
       ? selectedModelId
       : (modelOptions[0]?.id ?? "");
   const resolvedProfileId = profiles.some((profile) => profile.id === selectedProfileId) ? selectedProfileId : "";
+  const activeProfile = profiles.find((profile) => profile.id === resolvedProfileId) ?? null;
+  const promptTemplateOptions = useMemo(() => {
+    if (!activeProfile) {
+      return [] as Array<{ value: string; label: string }>;
+    }
+    return [
+      { value: "", label: t("translate.promptTemplateDefault") },
+      ...activeProfile.promptTemplates.map((template) => ({
+        value: template.id,
+        label: template.name,
+      })),
+    ];
+  }, [activeProfile, t]);
+  // Explicit template is a page-level override; invalid ids fall back to Profile default.
+  const resolvedPromptTemplateId =
+    selectedPromptTemplateId && promptTemplateOptions.some((option) => option.value === selectedPromptTemplateId)
+      ? selectedPromptTemplateId
+      : "";
   /** Streaming follows the active profile's config; defaults to on with no profile. */
   const useStreaming = resolvedProfileId ? profileStreamEnabled : true;
 
@@ -321,6 +341,8 @@ function TranslatePage() {
   async function applyProfile(profileId: string) {
     const generation = ++profileApplyGeneration.current;
     setDetectedSourceLang(null);
+    // Switching profile always restores Profile default (page-level override is not sticky).
+    setSelectedPromptTemplateId("");
     if (!profileId) {
       setSelectedProfileId("");
       setProfileApplyError(null);
@@ -709,6 +731,7 @@ function TranslatePage() {
       targetLang: targetLabel,
       text: trimmed,
       profileId: resolvedProfileId || null,
+      promptTemplateId: resolvedPromptTemplateId || null,
       sourceLangId: sourceLang,
       targetLangId: targetLang,
       effectiveSourceLangId: effectiveSourceId,
@@ -788,6 +811,27 @@ function TranslatePage() {
               compact
             />
           </div>
+
+          {resolvedProfileId ? (
+            <div className="flex items-center gap-2">
+              <label className="text-label-sm text-neutral uppercase" id="translate-prompt-template-label">
+                {t("translate.promptTemplateLabel")}
+              </label>
+              <SelectField
+                className="max-w-xs"
+                value={resolvedPromptTemplateId}
+                onValueChange={(value) => {
+                  setSelectedPromptTemplateId(value ?? "");
+                }}
+                options={promptTemplateOptions}
+                disabled={profileSelectDisabled || isTranslating || isApplyingProfile}
+                placeholder={profilesLoading ? t("translate.promptTemplateLoading") : undefined}
+                aria-label={t("translate.promptTemplateAria")}
+                aria-labelledby="translate-prompt-template-label"
+                compact
+              />
+            </div>
+          ) : null}
 
           <div className="hidden h-6 w-px bg-outline-variant sm:block" aria-hidden />
 

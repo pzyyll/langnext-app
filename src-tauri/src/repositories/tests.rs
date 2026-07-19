@@ -4,13 +4,26 @@ use crate::domain::model::{Availability, ModelSource, ProviderModel};
 use crate::domain::provider::{CredentialKind, ModelsSyncStatus, ProviderInstance, ProxyMode};
 use crate::domain::settings::AppSettingsV1;
 use crate::domain::time::{new_id, now_rfc3339};
-use crate::domain::translation_profile::{TranslationProfile, TranslationProfileTarget};
+use crate::domain::translation_profile::{PromptTemplate, TranslationProfile, TranslationProfileTarget};
 use crate::error::StorageError;
 use crate::repositories::{
   app_credentials, app_settings, credential_operations, provider_instances, provider_models, translation_profiles,
 };
 use crate::storage::Database;
 use uuid::Uuid;
+
+fn default_templates(system: &str, user: &str) -> (Uuid, Vec<PromptTemplate>) {
+  let id = new_id();
+  (
+    id,
+    vec![PromptTemplate {
+      id,
+      name: "Default".into(),
+      system_template: system.into(),
+      user_template: user.into(),
+    }],
+  )
+}
 
 fn setup() -> (tempfile::TempDir, Database) {
   let dir = tempfile::tempdir().unwrap();
@@ -147,24 +160,27 @@ fn profile_fallback_ordering_and_rollback() {
   // Successful save
   db.transaction(|uow| {
     let now = now_rfc3339();
-    let profile = TranslationProfile {
-      id: profile_id,
-      name: "Fast".into(),
-      enabled: true,
-      stream_enabled: true,
-      template_version: 1,
-      system_template: "sys".into(),
-      user_template: "Translate: {{text}}".into(),
-      temperature: Some(0.2),
-      max_output_tokens: Some(1024),
-      provider_options_json: None,
-      source_lang: Some("zh".into()),
-      target_lang: Some("en".into()),
-      primary_lang: None,
-      preferred_target_lang: None,
-      language_detection: None,
-      created_at: now.clone(),
-      updated_at: now,
+    let (profile, prompt_templates) = {
+      let (template_id, prompt_templates) = default_templates("sys", "Translate: {{text}}");
+      let profile = TranslationProfile {
+        id: profile_id,
+        name: "Fast".into(),
+        enabled: true,
+        stream_enabled: true,
+        template_version: 1,
+        default_prompt_template_id: template_id,
+        temperature: Some(0.2),
+        max_output_tokens: Some(1024),
+        provider_options_json: None,
+        source_lang: Some("zh".into()),
+        target_lang: Some("en".into()),
+        primary_lang: None,
+        preferred_target_lang: None,
+        language_detection: None,
+        created_at: now.clone(),
+        updated_at: now,
+      };
+      (profile, prompt_templates)
     };
     let targets = vec![
       TranslationProfileTarget {
@@ -178,7 +194,7 @@ fn profile_fallback_ordering_and_rollback() {
         priority: 1,
       },
     ];
-    translation_profiles::save_with_targets(uow.conn(), &profile, &targets, true)?;
+    translation_profiles::save_with_targets(uow.conn(), &profile, &targets, &prompt_templates, true)?;
     Ok(())
   })
   .unwrap();
@@ -219,24 +235,27 @@ fn profile_language_preferences_round_trip() {
   .unwrap();
 
   let now = now_rfc3339();
-  let profile = TranslationProfile {
-    id: profile_id,
-    name: "Prefs".into(),
-    enabled: true,
-    stream_enabled: true,
-    template_version: 1,
-    system_template: "sys".into(),
-    user_template: "Translate: {{text}}".into(),
-    temperature: Some(0.2),
-    max_output_tokens: Some(1024),
-    provider_options_json: None,
-    source_lang: Some("auto".into()),
-    target_lang: Some("auto".into()),
-    primary_lang: Some("zh".into()),
-    preferred_target_lang: Some("en".into()),
-    language_detection: None,
-    created_at: now.clone(),
-    updated_at: now,
+  let (profile, prompt_templates) = {
+    let (template_id, prompt_templates) = default_templates("sys", "Translate: {{text}}");
+    let profile = TranslationProfile {
+      id: profile_id,
+      name: "Prefs".into(),
+      enabled: true,
+      stream_enabled: true,
+      template_version: 1,
+      default_prompt_template_id: template_id,
+      temperature: Some(0.2),
+      max_output_tokens: Some(1024),
+      provider_options_json: None,
+      source_lang: Some("auto".into()),
+      target_lang: Some("auto".into()),
+      primary_lang: Some("zh".into()),
+      preferred_target_lang: Some("en".into()),
+      language_detection: None,
+      created_at: now.clone(),
+      updated_at: now,
+    };
+    (profile, prompt_templates)
   };
   db.transaction(|uow| {
     translation_profiles::save_with_targets(
@@ -247,6 +266,7 @@ fn profile_language_preferences_round_trip() {
         provider_model_id: mid,
         priority: 0,
       }],
+      &prompt_templates,
       true,
     )?;
     Ok(())
@@ -291,24 +311,27 @@ fn delete_model_in_use_by_profile() {
     provider_instances::insert(uow.conn(), &sample_provider(pid))?;
     provider_models::insert(uow.conn(), &sample_model(mid, pid, "gpt"))?;
     let now = now_rfc3339();
-    let profile = TranslationProfile {
-      id: profile_id,
-      name: "P".into(),
-      enabled: true,
-      stream_enabled: true,
-      template_version: 1,
-      system_template: "s".into(),
-      user_template: "{{text}}".into(),
-      temperature: None,
-      max_output_tokens: None,
-      provider_options_json: None,
-      source_lang: None,
-      target_lang: None,
-      primary_lang: None,
-      preferred_target_lang: None,
-      language_detection: None,
-      created_at: now.clone(),
-      updated_at: now,
+    let (profile, prompt_templates) = {
+      let (template_id, prompt_templates) = default_templates("s", "{{text}}");
+      let profile = TranslationProfile {
+        id: profile_id,
+        name: "P".into(),
+        enabled: true,
+        stream_enabled: true,
+        template_version: 1,
+        default_prompt_template_id: template_id,
+        temperature: None,
+        max_output_tokens: None,
+        provider_options_json: None,
+        source_lang: None,
+        target_lang: None,
+        primary_lang: None,
+        preferred_target_lang: None,
+        language_detection: None,
+        created_at: now.clone(),
+        updated_at: now,
+      };
+      (profile, prompt_templates)
     };
     translation_profiles::save_with_targets(
       uow.conn(),
@@ -318,6 +341,7 @@ fn delete_model_in_use_by_profile() {
         provider_model_id: mid,
         priority: 0,
       }],
+      &prompt_templates,
       true,
     )?;
     let err = provider_models::delete(uow.conn(), mid);
@@ -401,24 +425,27 @@ fn provider_reference_lifecycle() {
     provider_instances::insert(uow.conn(), &sample_provider(pid))?;
     provider_models::insert(uow.conn(), &sample_model(mid, pid, "gpt"))?;
     let now = now_rfc3339();
-    let profile = TranslationProfile {
-      id: profile_id,
-      name: "Chain".into(),
-      enabled: true,
-      stream_enabled: true,
-      template_version: 1,
-      system_template: "s".into(),
-      user_template: "{{text}}".into(),
-      temperature: None,
-      max_output_tokens: None,
-      provider_options_json: None,
-      source_lang: None,
-      target_lang: None,
-      primary_lang: None,
-      preferred_target_lang: None,
-      language_detection: None,
-      created_at: now.clone(),
-      updated_at: now,
+    let (profile, prompt_templates) = {
+      let (template_id, prompt_templates) = default_templates("s", "{{text}}");
+      let profile = TranslationProfile {
+        id: profile_id,
+        name: "Chain".into(),
+        enabled: true,
+        stream_enabled: true,
+        template_version: 1,
+        default_prompt_template_id: template_id,
+        temperature: None,
+        max_output_tokens: None,
+        provider_options_json: None,
+        source_lang: None,
+        target_lang: None,
+        primary_lang: None,
+        preferred_target_lang: None,
+        language_detection: None,
+        created_at: now.clone(),
+        updated_at: now,
+      };
+      (profile, prompt_templates)
     };
     translation_profiles::save_with_targets(
       uow.conn(),
@@ -428,6 +455,7 @@ fn provider_reference_lifecycle() {
         provider_model_id: mid,
         priority: 0,
       }],
+      &prompt_templates,
       true,
     )?;
     assert!(matches!(

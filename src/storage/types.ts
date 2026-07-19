@@ -144,6 +144,8 @@ export interface TranslateInput {
   text: string;
   /** Optional profile for templates + fallback model chain. */
   profileId?: string | null;
+  /** Optional prompt-template override for this request; must belong to profileId when set. */
+  promptTemplateId?: string | null;
   /** Configured source language id (`auto` allowed). History metadata only. */
   sourceLangId?: string | null;
   /** Configured target language id (`auto` allowed). History metadata only. */
@@ -227,13 +229,27 @@ export interface DetectLanguageResult {
   message: string;
 }
 
+/** One named prompt template belonging to a translation profile. */
+export interface PromptTemplate {
+  id: string;
+  name: string;
+  systemTemplate: string;
+  userTemplate: string;
+}
+
+/** Persistence/export row for a prompt template (includes profile ownership + list order). */
+export interface TranslationProfilePromptTemplate extends PromptTemplate {
+  translationProfileId: string;
+  sortOrder: number;
+}
+
 export interface TranslationProfile {
   id: string;
   name: string;
   enabled: boolean;
   templateVersion: number;
-  systemTemplate: string;
-  userTemplate: string;
+  /** Id of the template used when translate does not pass an override. */
+  defaultPromptTemplateId: string;
   temperature: number | null;
   maxOutputTokens: number | null;
   providerOptionsJson: unknown | null;
@@ -259,6 +275,8 @@ export interface TranslationProfileTarget {
 
 export interface TranslationProfileDto extends TranslationProfile {
   targets: TranslationProfileTarget[];
+  /** Ordered prompt templates for this profile. */
+  promptTemplates: PromptTemplate[];
 }
 
 export interface TranslationProfileWrite {
@@ -266,8 +284,10 @@ export interface TranslationProfileWrite {
   name: string;
   enabled: boolean;
   templateVersion: number;
-  systemTemplate: string;
-  userTemplate: string;
+  /** Must reference one entry in promptTemplates. */
+  defaultPromptTemplateId: string;
+  /** Complete ordered template list for this profile (at least one). */
+  promptTemplates: PromptTemplate[];
   temperature?: number | null;
   maxOutputTokens?: number | null;
   providerOptionsJson?: unknown | null;
@@ -338,6 +358,8 @@ export interface ConfigurationExport {
   models: ProviderModelDto[];
   translationProfiles: TranslationProfile[];
   profileModels: TranslationProfileTarget[];
+  /** Ordered prompt templates for all profiles. */
+  profilePromptTemplates: TranslationProfilePromptTemplate[];
   appSettings: AppSettingsV1;
 }
 
@@ -513,8 +535,15 @@ const _profileWriteFixture = {
   name: "Default",
   enabled: true,
   templateVersion: 1,
-  systemTemplate: "Translate carefully.",
-  userTemplate: "{{text}}",
+  defaultPromptTemplateId: "00000000-0000-7000-8000-0000000000aa",
+  promptTemplates: [
+    {
+      id: "00000000-0000-7000-8000-0000000000aa",
+      name: "Default",
+      systemTemplate: "Translate carefully.",
+      userTemplate: "{{text}}",
+    },
+  ],
   temperature: 0.2,
   maxOutputTokens: 1024,
   providerOptionsJson: {},

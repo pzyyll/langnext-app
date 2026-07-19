@@ -20,6 +20,10 @@ pub struct TranslateInput {
   /// Optional profile for templates + fallback model chain.
   #[serde(default)]
   pub profile_id: Option<Uuid>,
+  /// Optional prompt-template override for this request. Must belong to `profile_id` when set.
+  /// When absent, the profile's default template is used.
+  #[serde(default)]
+  pub prompt_template_id: Option<Uuid>,
   /// Configured source language id (`auto` allowed). History metadata only; prompts use `source_lang`.
   #[serde(default)]
   pub source_lang_id: Option<String>,

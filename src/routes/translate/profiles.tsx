@@ -1,22 +1,29 @@
 // ABOUTME: Nested translation profile management page at /translate/profiles.
 // ABOUTME: Full CRUD for profiles, model chains, languages, and prompt templates.
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { Button } from "@base-ui/react/button";
+import { Collapsible } from "@base-ui/react/collapsible";
 import { Input } from "@base-ui/react/input";
+import { Radio } from "@base-ui/react/radio";
+import { RadioGroup } from "@base-ui/react/radio-group";
 import { Switch } from "@base-ui/react/switch";
 import { useTranslation } from "react-i18next";
 import { Badge } from "../../components/Badge";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { useToast } from "../../components/toast/useToast";
 import {
+  iconButtonClassName,
   inputClassName,
   outlineButtonClassName,
   primaryButtonClassName,
+  radioClassName,
+  radioIndicatorClassName,
   switchRootClassName,
   switchThumbClassName,
   dangerIconButtonClassName,
+  dangerButtonClassName,
 } from "../../components/ui";
 import { ComboboxField } from "../../components/ComboboxField";
 import { SelectField } from "../../components/SelectField";
@@ -29,7 +36,7 @@ import {
 } from "../../query/options";
 import { deleteTranslationProfile, saveTranslationProfile, setTranslationProfileEnabled } from "../../storage/client";
 import { getIpcErrorMessage } from "../../storage/errors";
-import type { ProviderInstanceDto, ProviderModelDto, TranslationProfileDto } from "../../storage/types";
+import type { PromptTemplate, ProviderInstanceDto, ProviderModelDto, TranslationProfileDto } from "../../storage/types";
 import {
   AUTO_LANGUAGE,
   LANGUAGE_IDS,
@@ -40,7 +47,12 @@ import {
   type SelectableLanguageId,
   type SourceLanguageId,
 } from "./-languages";
+import { getCollapsedPromptTemplateIds, setCollapsedPromptTemplateIds } from "./-promptTemplateCollapse";
+import IconMaterialSymbolsLightCheck from "~icons/material-symbols-light/check";
+import IconMaterialSymbolsLightClose from "~icons/material-symbols-light/close";
 import IconMaterialSymbolsLightDeleteOutlineSharp from "~icons/material-symbols-light/delete-outline-sharp";
+import IconMaterialSymbolsLightEditSquareOutlineSharp from "~icons/material-symbols-light/edit-square-outline-sharp";
+import ExpandCircleDownOutlineIcon from "~icons/material-symbols/expand-circle-down-outline";
 
 export const Route = createFileRoute("/translate/profiles")({
   component: TranslateProfilesPage,
@@ -63,10 +75,31 @@ const DEFAULT_USER_TEMPLATE = `<translate_content>
 
 const DEFAULT_TEMPERATURE = 0.2;
 
+/** Default display name for the first prompt template on a new profile. */
+const DEFAULT_PROMPT_TEMPLATE_NAME = "Default";
+
 const fieldLabelClassName = "text-label-sm font-bold uppercase text-on-surface";
 
 const templateTextareaClassName =
   "min-h-28 w-full resize-y rounded-none border border-line bg-surface p-3 font-mono text-body-tight font-normal text-on-surface placeholder:text-neutral focus:outline-2 focus:-outline-offset-1 focus:outline-on-surface disabled:border-disabled disabled:text-disabled";
+
+const promptTemplateCardClassName = "shadow-frame border border-line bg-surface";
+
+/** Header row doubles as Collapsible.Trigger (div); nested controls stopPropagation. */
+const promptTemplateCardHeaderClassName =
+  "group flex flex-wrap items-center justify-between gap-3 p-4 select-none focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface data-panel-open:border-b data-panel-open:border-outline-variant";
+
+const promptTemplateCardPanelClassName =
+  "h-(--collapsible-panel-height) overflow-hidden transition-[height] duration-150 ease-out data-ending-style:h-0 data-starting-style:h-0 [&[hidden]:not([hidden='until-found'])]:hidden";
+
+const promptTemplateCardBodyClassName = "space-y-4 p-4";
+
+/** Card title for a prompt template (display + inline rename). */
+const promptTemplateTitleClassName = "min-w-0 truncate text-title-dialog font-bold text-on-surface";
+
+/** Inline rename field for a prompt template card title. */
+const promptTemplateRenameInputClassName =
+  "h-control-height min-w-0 flex-1 max-w-md rounded-none border border-line bg-surface px-2 text-title-dialog font-bold text-on-surface placeholder:text-neutral focus:outline-2 focus:-outline-offset-1 focus:outline-on-surface disabled:border-disabled disabled:text-disabled";
 
 const sectionDividerClassName = "space-y-4 border-t border-outline-variant pt-4";
 
@@ -108,11 +141,24 @@ type ProfileDraft = {
   fallbackModelIds: string[];
   temperature: string;
   maxOutputTokens: string;
-  systemTemplate: string;
-  userTemplate: string;
+  defaultPromptTemplateId: string;
+  promptTemplates: PromptTemplate[];
   templateVersion: number;
   providerOptionsJson: unknown | null;
 };
+
+function newPromptTemplateId(): string {
+  return crypto.randomUUID();
+}
+
+function createDefaultPromptTemplate(name = DEFAULT_PROMPT_TEMPLATE_NAME): PromptTemplate {
+  return {
+    id: newPromptTemplateId(),
+    name,
+    systemTemplate: DEFAULT_SYSTEM_TEMPLATE,
+    userTemplate: DEFAULT_USER_TEMPLATE,
+  };
+}
 
 function toListItem(dto: TranslationProfileDto): ProfileListItem {
   const sorted = [...dto.targets].sort((a, b) => a.priority - b.priority);
@@ -156,6 +202,7 @@ function buildModelOptions(
 
 function emptyDraft(defaultModelId: string, uiLanguage: string): ProfileDraft {
   const { primary, target } = getDefaultProfileLanguages(uiLanguage);
+  const defaultTemplate = createDefaultPromptTemplate();
   return {
     id: null,
     name: "",
@@ -170,8 +217,8 @@ function emptyDraft(defaultModelId: string, uiLanguage: string): ProfileDraft {
     fallbackModelIds: [],
     temperature: "",
     maxOutputTokens: "",
-    systemTemplate: DEFAULT_SYSTEM_TEMPLATE,
-    userTemplate: DEFAULT_USER_TEMPLATE,
+    defaultPromptTemplateId: defaultTemplate.id,
+    promptTemplates: [defaultTemplate],
     templateVersion: 1,
     providerOptionsJson: null,
   };
@@ -187,6 +234,13 @@ function draftFromDto(dto: TranslationProfileDto, modelOptions: ModelOption[], u
   const languageDetectionModelId =
     dto.languageDetection?.type === "llm" && dto.languageDetection.modelId != null ? dto.languageDetection.modelId : "";
   const defaults = getDefaultProfileLanguages(uiLanguage);
+  const promptTemplates =
+    dto.promptTemplates.length > 0
+      ? dto.promptTemplates.map((template) => ({ ...template }))
+      : [createDefaultPromptTemplate()];
+  const defaultPromptTemplateId = promptTemplates.some((template) => template.id === dto.defaultPromptTemplateId)
+    ? dto.defaultPromptTemplateId
+    : promptTemplates[0]!.id;
 
   return {
     id: dto.id,
@@ -202,8 +256,8 @@ function draftFromDto(dto: TranslationProfileDto, modelOptions: ModelOption[], u
     fallbackModelIds,
     temperature: dto.temperature != null ? String(dto.temperature) : "",
     maxOutputTokens: dto.maxOutputTokens != null ? String(dto.maxOutputTokens) : "",
-    systemTemplate: dto.systemTemplate,
-    userTemplate: dto.userTemplate,
+    defaultPromptTemplateId,
+    promptTemplates,
     templateVersion: dto.templateVersion,
     providerOptionsJson: dto.providerOptionsJson,
   };
@@ -237,6 +291,16 @@ function TranslateProfilesPage() {
   const [draftOverride, setDraftOverride] = useState<ProfileDraft | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  /** Prompt template pending delete confirmation; null when closed. */
+  const [templateDeleteId, setTemplateDeleteId] = useState<string | null>(null);
+  /** Inline rename target for one prompt template card title at a time. */
+  const [renamingTemplateId, setRenamingTemplateId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const renameInputRef = useRef<HTMLInputElement | null>(null);
+  /** Collapsed prompt-template card ids; absent ids default to expanded. Persisted in localStorage. */
+  const [collapsedTemplateIds, setCollapsedTemplateIds] = useState<Set<string>>(
+    () => new Set(getCollapsedPromptTemplateIds()),
+  );
 
   const modelOptions = useMemo(
     () =>
@@ -263,6 +327,23 @@ function TranslateProfilesPage() {
     : selectedId && profiles.some((profile) => profile.id === selectedId)
       ? selectedId
       : (profiles[0]?.id ?? null);
+
+  // Focus and select the rename input when inline editing starts.
+  useEffect(() => {
+    if (!renamingTemplateId) {
+      return;
+    }
+    const node = renameInputRef.current;
+    if (node instanceof HTMLInputElement) {
+      node.focus();
+      node.select();
+    }
+  }, [renamingTemplateId]);
+
+  // Persist collapse state across reloads and profile switches (ids are template UUIDs).
+  useEffect(() => {
+    setCollapsedPromptTemplateIds(collapsedTemplateIds);
+  }, [collapsedTemplateIds]);
 
   const detailQuery = useQuery({
     ...profileDetailOptions(resolvedSelectedId ?? ""),
@@ -307,6 +388,10 @@ function TranslateProfilesPage() {
       ? draftFromDto(detailQuery.data, modelOptions, uiLanguage)
       : null;
   const draft = isCreating || draftOverride != null ? draftOverride : derivedDraft;
+  const templatePendingDelete =
+    templateDeleteId && draft
+      ? (draft.promptTemplates.find((template) => template.id === templateDeleteId) ?? null)
+      : null;
 
   const saveMutation = useMutation({
     mutationFn: saveTranslationProfile,
@@ -318,6 +403,7 @@ function TranslateProfilesPage() {
       setSelectedId(dto.id);
       setDraftOverride(null);
       setSaveError(null);
+      cancelRenameTemplate();
       toast.success({
         title: variables.id ? t("translate.profileUpdated") : t("translate.profileSaved"),
       });
@@ -373,6 +459,7 @@ function TranslateProfilesPage() {
       setDeleteOpen(false);
       setDraftOverride(null);
       setIsCreating(false);
+      cancelRenameTemplate();
       toast.success({ title: t("translate.profileDeleted") });
 
       const list = queryClient.getQueryData<TranslationProfileDto[]>(profileKeys.list()) ?? [];
@@ -381,11 +468,36 @@ function TranslateProfilesPage() {
     },
   });
 
+  function cancelRenameTemplate() {
+    setRenamingTemplateId(null);
+    setRenameValue("");
+  }
+
+  function setTemplateOpen(templateId: string, open: boolean) {
+    setCollapsedTemplateIds((current) => {
+      const isCollapsed = current.has(templateId);
+      if (open && !isCollapsed) {
+        return current;
+      }
+      if (!open && isCollapsed) {
+        return current;
+      }
+      const next = new Set(current);
+      if (open) {
+        next.delete(templateId);
+      } else {
+        next.add(templateId);
+      }
+      return next;
+    });
+  }
+
   function selectProfile(profileId: string) {
     setIsCreating(false);
     setSelectedId(profileId);
     setDraftOverride(null);
     setSaveError(null);
+    cancelRenameTemplate();
   }
 
   function startCreate() {
@@ -393,6 +505,7 @@ function TranslateProfilesPage() {
     setSelectedId(null);
     setSaveError(null);
     setDraftOverride(emptyDraft(modelOptions[0]?.id ?? "", uiLanguage));
+    cancelRenameTemplate();
   }
 
   function updateDraft(patch: Partial<ProfileDraft>) {
@@ -448,6 +561,75 @@ function TranslateProfilesPage() {
     updateDraft({ fallbackModelIds: next });
   }
 
+  function updatePromptTemplate(templateId: string, patch: Partial<Omit<PromptTemplate, "id">>) {
+    if (!draft) {
+      return;
+    }
+    updateDraft({
+      promptTemplates: draft.promptTemplates.map((template) =>
+        template.id === templateId ? { ...template, ...patch } : template,
+      ),
+    });
+  }
+
+  function startRenameTemplate(template: PromptTemplate) {
+    setRenameValue(template.name);
+    setRenamingTemplateId(template.id);
+  }
+
+  function commitRenameTemplate(templateId: string) {
+    if (!draft) {
+      return;
+    }
+    const trimmed = renameValue.trim();
+    if (!trimmed) {
+      return;
+    }
+    const current = draft.promptTemplates.find((template) => template.id === templateId);
+    if (!current || trimmed === current.name) {
+      cancelRenameTemplate();
+      return;
+    }
+    updatePromptTemplate(templateId, { name: trimmed });
+    cancelRenameTemplate();
+  }
+
+  function addPromptTemplate() {
+    if (!draft) {
+      return;
+    }
+    const nextIndex = draft.promptTemplates.length + 1;
+    const template = createDefaultPromptTemplate(t("translate.profiles.promptTemplateCardTitle", { index: nextIndex }));
+    updateDraft({
+      promptTemplates: [...draft.promptTemplates, template],
+    });
+  }
+
+  function removePromptTemplate(templateId: string) {
+    if (!draft || draft.promptTemplates.length <= 1) {
+      return;
+    }
+    if (renamingTemplateId === templateId) {
+      cancelRenameTemplate();
+    }
+    setCollapsedTemplateIds((current) => {
+      if (!current.has(templateId)) {
+        return current;
+      }
+      const next = new Set(current);
+      next.delete(templateId);
+      return next;
+    });
+    const remaining = draft.promptTemplates.filter((template) => template.id !== templateId);
+    // Deterministic default: first remaining template when the default is removed.
+    const defaultPromptTemplateId =
+      draft.defaultPromptTemplateId === templateId ? remaining[0]!.id : draft.defaultPromptTemplateId;
+    updateDraft({
+      promptTemplates: remaining,
+      defaultPromptTemplateId,
+    });
+  }
+
   function addFallback() {
     if (!draft) {
       return;
@@ -480,6 +662,16 @@ function TranslateProfilesPage() {
     if (!draft) {
       return;
     }
+
+    // Flush an in-progress rename into the payload only; main Save is the persist boundary.
+    const promptTemplates = draft.promptTemplates.map((template) => {
+      if (template.id !== renamingTemplateId) {
+        return template;
+      }
+      const trimmed = renameValue.trim();
+      return trimmed ? { ...template, name: trimmed } : template;
+    });
+
     const name = draft.name.trim();
     if (!name) {
       setSaveError(t("translate.profileNameRequired"));
@@ -491,6 +683,18 @@ function TranslateProfilesPage() {
     }
     if (draft.primaryLang === draft.preferredTargetLang) {
       setSaveError(t("translate.profiles.langPrefEqual"));
+      return;
+    }
+    if (promptTemplates.length === 0) {
+      setSaveError(t("translate.profiles.promptTemplateRequired"));
+      return;
+    }
+    if (promptTemplates.some((template) => template.name.trim() === "")) {
+      setSaveError(t("translate.profiles.promptTemplateNameRequired"));
+      return;
+    }
+    if (!promptTemplates.some((template) => template.id === draft.defaultPromptTemplateId)) {
+      setSaveError(t("translate.profiles.promptTemplateRequired"));
       return;
     }
 
@@ -515,8 +719,13 @@ function TranslateProfilesPage() {
       name,
       enabled: draft.enabled,
       templateVersion: draft.templateVersion,
-      systemTemplate: draft.systemTemplate,
-      userTemplate: draft.userTemplate,
+      defaultPromptTemplateId: draft.defaultPromptTemplateId,
+      promptTemplates: promptTemplates.map((template) => ({
+        id: template.id,
+        name: template.name.trim(),
+        systemTemplate: template.systemTemplate,
+        userTemplate: template.userTemplate,
+      })),
       temperature,
       maxOutputTokens,
       providerOptionsJson: draft.providerOptionsJson,
@@ -793,11 +1002,21 @@ function TranslateProfilesPage() {
                         </label>
                         <ComboboxField
                           value={draft.primaryLang}
-                          onValueChange={(value) => updateDraft({ primaryLang: (value ?? "en") as LanguageId })}
+                          onValueChange={(value) => {
+                            const next = (value ?? "en") as LanguageId;
+                            // Selecting the other preference language swaps the pair.
+                            if (next === draft.preferredTargetLang) {
+                              updateDraft({
+                                primaryLang: next,
+                                preferredTargetLang: draft.primaryLang,
+                              });
+                              return;
+                            }
+                            updateDraft({ primaryLang: next });
+                          }}
                           options={LANGUAGE_IDS.map((id) => ({
                             value: id,
                             label: t(`translate.languages.${id}`),
-                            disabled: id === draft.preferredTargetLang,
                           }))}
                           disabled={savePending}
                           placeholder={t("common.placeholderEnglish")}
@@ -811,11 +1030,21 @@ function TranslateProfilesPage() {
                         </label>
                         <ComboboxField
                           value={draft.preferredTargetLang}
-                          onValueChange={(value) => updateDraft({ preferredTargetLang: (value ?? "en") as LanguageId })}
+                          onValueChange={(value) => {
+                            const next = (value ?? "en") as LanguageId;
+                            // Selecting the other preference language swaps the pair.
+                            if (next === draft.primaryLang) {
+                              updateDraft({
+                                preferredTargetLang: next,
+                                primaryLang: draft.preferredTargetLang,
+                              });
+                              return;
+                            }
+                            updateDraft({ preferredTargetLang: next });
+                          }}
                           options={LANGUAGE_IDS.map((id) => ({
                             value: id,
                             label: t(`translate.languages.${id}`),
-                            disabled: id === draft.primaryLang,
                           }))}
                           disabled={savePending}
                           placeholder={t("common.placeholderEnglish")}
@@ -955,7 +1184,7 @@ function TranslateProfilesPage() {
                               </Button>
                               <Button
                                 type="button"
-                                className={`${outlineButtonClassName} h-control-height px-2 text-table-header font-bold uppercase hover:not-data-disabled:border-error hover:not-data-disabled:bg-error hover:not-data-disabled:text-on-error`}
+                                className={dangerButtonClassName}
                                 disabled={savePending}
                                 aria-label={t("translate.profiles.removeFallback")}
                                 onClick={() => {
@@ -1032,39 +1261,227 @@ function TranslateProfilesPage() {
                   </div>
 
                   {/* Prompt templates */}
-                  <div className="space-y-6 border-t border-outline-variant pt-4">
-                    <div className="flex flex-col gap-1">
-                      <label className={fieldLabelClassName} htmlFor="profile-system-template">
-                        {t("translate.systemTemplateLabel")}
-                      </label>
-                      <textarea
-                        id="profile-system-template"
-                        className={templateTextareaClassName}
-                        value={draft.systemTemplate}
-                        spellCheck={false}
-                        disabled={savePending}
-                        onChange={(event) => {
-                          updateDraft({ systemTemplate: event.currentTarget.value });
-                        }}
-                      />
-                      <span className="font-mono text-table-header text-disabled italic">{templateVarsHint}</span>
+                  <div className="space-y-4 border-t border-outline-variant pt-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className={fieldLabelClassName}>{t("translate.profiles.promptTemplates")}</span>
                     </div>
-                    <div className="flex flex-col gap-1">
-                      <label className={fieldLabelClassName} htmlFor="profile-user-template">
-                        {t("translate.userTemplateLabel")}
-                      </label>
-                      <textarea
-                        id="profile-user-template"
-                        className={templateTextareaClassName}
-                        value={draft.userTemplate}
-                        spellCheck={false}
-                        disabled={savePending}
-                        onChange={(event) => {
-                          updateDraft({ userTemplate: event.currentTarget.value });
-                        }}
-                      />
-                      <span className="font-mono text-table-header text-disabled italic">{templateVarsHint}</span>
-                    </div>
+
+                    <RadioGroup
+                      value={draft.defaultPromptTemplateId}
+                      onValueChange={(value) => {
+                        if (value) {
+                          updateDraft({ defaultPromptTemplateId: value });
+                        }
+                      }}
+                      className="space-y-4"
+                      disabled={savePending}
+                    >
+                      {draft.promptTemplates.map((template) => {
+                        const canRemove = draft.promptTemplates.length > 1;
+                        const isRenaming = renamingTemplateId === template.id;
+                        const isOpen = !collapsedTemplateIds.has(template.id);
+                        const nameFieldId = `profile-template-name-${template.id}`;
+                        const systemFieldId = `profile-template-system-${template.id}`;
+                        const userFieldId = `profile-template-user-${template.id}`;
+                        return (
+                          <Collapsible.Root
+                            key={template.id}
+                            open={isOpen}
+                            onOpenChange={(open) => {
+                              setTemplateOpen(template.id, open);
+                            }}
+                            className={promptTemplateCardClassName}
+                          >
+                            {/* Header is a div trigger so nested controls stay valid HTML. */}
+                            <Collapsible.Trigger
+                              nativeButton={false}
+                              render={<div />}
+                              className={promptTemplateCardHeaderClassName}
+                              aria-label={
+                                isOpen
+                                  ? t("translate.profiles.promptTemplateCollapse")
+                                  : t("translate.profiles.promptTemplateExpand")
+                              }
+                            >
+                              <div className="flex min-w-0 flex-1 items-center gap-2">
+                                <ExpandCircleDownOutlineIcon
+                                  className="size-5 shrink-0 text-on-surface transition-transform duration-100 ease-out group-data-panel-open:rotate-180"
+                                  aria-hidden
+                                />
+                                {isRenaming ? (
+                                  <div
+                                    className="flex min-w-0 flex-1 items-center gap-2"
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                    }}
+                                    onPointerDown={(event) => {
+                                      event.stopPropagation();
+                                    }}
+                                  >
+                                    <Input
+                                      ref={renameInputRef}
+                                      id={nameFieldId}
+                                      className={promptTemplateRenameInputClassName}
+                                      value={renameValue}
+                                      placeholder={t("translate.profiles.promptTemplateNamePlaceholder")}
+                                      aria-label={t("translate.profiles.promptTemplateName")}
+                                      spellCheck={false}
+                                      autoComplete="off"
+                                      disabled={savePending}
+                                      onChange={(event) => {
+                                        setRenameValue(event.currentTarget.value);
+                                      }}
+                                      onKeyDown={(event) => {
+                                        if (savePending) {
+                                          return;
+                                        }
+                                        // Stage rename into draft only; never submit the profile form.
+                                        if (event.key === "Enter") {
+                                          event.preventDefault();
+                                          commitRenameTemplate(template.id);
+                                          return;
+                                        }
+                                        if (event.key === "Escape") {
+                                          event.preventDefault();
+                                          cancelRenameTemplate();
+                                        }
+                                      }}
+                                    />
+                                    <Button
+                                      type="button"
+                                      className={iconButtonClassName}
+                                      aria-label={t("translate.profiles.promptTemplateSaveName")}
+                                      disabled={savePending || !renameValue.trim()}
+                                      onClick={() => {
+                                        commitRenameTemplate(template.id);
+                                      }}
+                                    >
+                                      <IconMaterialSymbolsLightCheck className="pointer-events-none size-5 shrink-0" />
+                                    </Button>
+                                    <Button
+                                      type="button"
+                                      className={iconButtonClassName}
+                                      aria-label={t("translate.profiles.promptTemplateCancelRename")}
+                                      disabled={savePending}
+                                      onClick={() => {
+                                        cancelRenameTemplate();
+                                      }}
+                                    >
+                                      <IconMaterialSymbolsLightClose className="pointer-events-none size-5 shrink-0" />
+                                    </Button>
+                                  </div>
+                                ) : (
+                                  <div className="flex min-w-0 flex-1 items-center gap-1">
+                                    <h3 className={promptTemplateTitleClassName}>{template.name}</h3>
+                                    <Button
+                                      type="button"
+                                      className={iconButtonClassName}
+                                      aria-label={t("translate.profiles.promptTemplateRename")}
+                                      title={t("translate.profiles.promptTemplateRename")}
+                                      disabled={savePending}
+                                      onClick={(event) => {
+                                        event.stopPropagation();
+                                        startRenameTemplate(template);
+                                      }}
+                                      onPointerDown={(event) => {
+                                        event.stopPropagation();
+                                      }}
+                                    >
+                                      <IconMaterialSymbolsLightEditSquareOutlineSharp className="pointer-events-none size-5 shrink-0" />
+                                    </Button>
+                                  </div>
+                                )}
+                              </div>
+
+                              <div
+                                className="flex shrink-0 flex-wrap items-center gap-3"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                }}
+                                onPointerDown={(event) => {
+                                  event.stopPropagation();
+                                }}
+                              >
+                                <label className="flex items-center gap-2 text-body-tight text-on-surface">
+                                  <Radio.Root value={template.id} className={radioClassName}>
+                                    <Radio.Indicator className={radioIndicatorClassName} />
+                                  </Radio.Root>
+                                  <span>{t("translate.profiles.promptTemplateSetDefault")}</span>
+                                </label>
+                                {canRemove ? (
+                                  <Button
+                                    type="button"
+                                    className={dangerIconButtonClassName}
+                                    aria-label={t("translate.profiles.promptTemplateRemove")}
+                                    title={t("translate.profiles.promptTemplateRemove")}
+                                    disabled={savePending}
+                                    onClick={() => {
+                                      setTemplateDeleteId(template.id);
+                                    }}
+                                  >
+                                    <IconMaterialSymbolsLightDeleteOutlineSharp className="pointer-events-none size-5 shrink-0" />
+                                  </Button>
+                                ) : null}
+                              </div>
+                            </Collapsible.Trigger>
+
+                            <Collapsible.Panel className={promptTemplateCardPanelClassName}>
+                              <div className={promptTemplateCardBodyClassName}>
+                                <div className="flex flex-col gap-1">
+                                  <label className={fieldLabelClassName} htmlFor={systemFieldId}>
+                                    {t("translate.systemTemplateLabel")}
+                                  </label>
+                                  <textarea
+                                    id={systemFieldId}
+                                    className={templateTextareaClassName}
+                                    value={template.systemTemplate}
+                                    spellCheck={false}
+                                    disabled={savePending}
+                                    onChange={(event) => {
+                                      updatePromptTemplate(template.id, {
+                                        systemTemplate: event.currentTarget.value,
+                                      });
+                                    }}
+                                  />
+                                </div>
+
+                                <div className="flex flex-col gap-1">
+                                  <label className={fieldLabelClassName} htmlFor={userFieldId}>
+                                    {t("translate.userTemplateLabel")}
+                                  </label>
+                                  <textarea
+                                    id={userFieldId}
+                                    className={templateTextareaClassName}
+                                    value={template.userTemplate}
+                                    spellCheck={false}
+                                    disabled={savePending}
+                                    onChange={(event) => {
+                                      updatePromptTemplate(template.id, {
+                                        userTemplate: event.currentTarget.value,
+                                      });
+                                    }}
+                                  />
+                                  <span className="font-mono text-table-header text-disabled italic">
+                                    {templateVarsHint}
+                                  </span>
+                                </div>
+                              </div>
+                            </Collapsible.Panel>
+                          </Collapsible.Root>
+                        );
+                      })}
+                    </RadioGroup>
+
+                    <Button
+                      type="button"
+                      className={`${outlineButtonClassName} w-full font-bold`}
+                      disabled={savePending}
+                      onClick={() => {
+                        addPromptTemplate();
+                      }}
+                    >
+                      {t("translate.profiles.promptTemplateAdd")}
+                    </Button>
                   </div>
 
                   {saveError ? (
@@ -1126,6 +1543,29 @@ function TranslateProfilesPage() {
         pendingText={t("common.deleting")}
         danger
         onConfirm={handleDelete}
+      />
+
+      <ConfirmDialog
+        open={templateDeleteId !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setTemplateDeleteId(null);
+          }
+        }}
+        title={t("translate.profiles.promptTemplateDeleteTitle")}
+        description={
+          templatePendingDelete
+            ? t("translate.profiles.promptTemplateDeleteConfirm", { name: templatePendingDelete.name })
+            : t("translate.profiles.promptTemplateDeleteTitle")
+        }
+        confirmText={t("common.delete")}
+        danger
+        onConfirm={() => {
+          if (templateDeleteId) {
+            removePromptTemplate(templateDeleteId);
+          }
+          setTemplateDeleteId(null);
+        }}
       />
     </div>
   );

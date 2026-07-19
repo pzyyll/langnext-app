@@ -9,7 +9,9 @@ use crate::domain::provider::{CredentialKind, CredentialUpdate, ProviderInstance
 use crate::domain::settings::{
   AppSettingsUpdate, AppSettingsV1, GlobalProxyMode, NetworkSettings, ProxyCredentialUpdate, TranslationPreferences,
 };
-use crate::domain::translation_profile::{TranslationProfile, TranslationProfileTarget, TranslationProfileWrite};
+use crate::domain::translation_profile::{
+  PromptTemplate, TranslationProfile, TranslationProfileTarget, TranslationProfileWrite,
+};
 use crate::error::StorageError;
 use crate::services::{
   ImportExportService, ModelService, ProviderService, SettingsService, TranslationHistoryService,
@@ -400,6 +402,116 @@ fn template_validation() {
 }
 
 #[test]
+fn prompt_templates_require_default_and_unique_ids() {
+  use crate::domain::translation_profile::PromptTemplate;
+  use crate::services::translation_profiles::validate_prompt_templates;
+
+  let a = uuid::Uuid::now_v7();
+  let b = uuid::Uuid::now_v7();
+  let templates = vec![
+    PromptTemplate {
+      id: a,
+      name: "A".into(),
+      system_template: "s".into(),
+      user_template: "{{text}}".into(),
+    },
+    PromptTemplate {
+      id: b,
+      name: "B".into(),
+      system_template: "s".into(),
+      user_template: "{{text}}".into(),
+    },
+  ];
+  assert!(validate_prompt_templates(&templates, a).is_ok());
+  assert!(matches!(
+    validate_prompt_templates(&templates, uuid::Uuid::now_v7()).unwrap_err(),
+    StorageError::Validation(_)
+  ));
+  assert!(matches!(
+    validate_prompt_templates(&[], a).unwrap_err(),
+    StorageError::Validation(_)
+  ));
+  let dup = vec![
+    templates[0].clone(),
+    PromptTemplate {
+      id: a,
+      name: "Dup".into(),
+      system_template: "s".into(),
+      user_template: "{{text}}".into(),
+    },
+  ];
+  assert!(matches!(
+    validate_prompt_templates(&dup, a).unwrap_err(),
+    StorageError::Validation(_)
+  ));
+}
+
+#[test]
+fn profile_save_persists_multiple_prompt_templates_and_default() {
+  let (_d, _db, _v, providers, models, profiles, ..) = setup();
+  let p = providers
+    .save(provider_write(CredentialKind::None, CredentialUpdate::Keep))
+    .unwrap();
+  let m = models
+    .save_manual(ManualModelWrite {
+      id: None,
+      provider_instance_id: p.id,
+      model_key: "a".into(),
+      display_name_override: None,
+      enabled: true,
+      capability_overrides_json: None,
+      adapter_id: None,
+    })
+    .unwrap();
+
+  let t1 = crate::domain::time::new_id();
+  let t2 = crate::domain::time::new_id();
+  let dto = profiles
+    .save(TranslationProfileWrite {
+      id: None,
+      name: "Multi".into(),
+      enabled: true,
+      stream_enabled: true,
+      template_version: 1,
+      default_prompt_template_id: t2,
+      prompt_templates: vec![
+        PromptTemplate {
+          id: t1,
+          name: "First".into(),
+          system_template: "sys-one".into(),
+          user_template: "one {{text}}".into(),
+        },
+        PromptTemplate {
+          id: t2,
+          name: "Second".into(),
+          system_template: "sys-two".into(),
+          user_template: "two {{text}}".into(),
+        },
+      ],
+      temperature: None,
+      max_output_tokens: None,
+      provider_options_json: None,
+      source_lang: Some("auto".into()),
+      target_lang: Some("auto".into()),
+      primary_lang: Some("zh".into()),
+      preferred_target_lang: Some("en".into()),
+      language_detection: None,
+      target_model_ids: vec![m.id],
+    })
+    .unwrap();
+
+  assert_eq!(dto.prompt_templates.len(), 2);
+  assert_eq!(dto.prompt_templates[0].id, t1);
+  assert_eq!(dto.prompt_templates[1].id, t2);
+  assert_eq!(dto.profile.default_prompt_template_id, t2);
+
+  let listed = profiles.list().unwrap();
+  let found = listed.iter().find(|row| row.profile.id == dto.profile.id).unwrap();
+  assert_eq!(found.prompt_templates.len(), 2);
+  assert_eq!(found.profile.default_prompt_template_id, t2);
+}
+
+#[test]
 fn render_template_preserves_unknown_and_partial_braces() {
   use crate::services::translation_profiles::render_template;
   // Unknown vars stay literal (validation rejects them on save; render is defensive).
@@ -450,23 +562,26 @@ fn profile_list_includes_ordered_targets_bulk() {
   // Zero targets cannot be saved through validation; empty profile list is the empty case.
   assert!(profiles.list().unwrap().is_empty());
   let zero_target_err = profiles
-    .save(TranslationProfileWrite {
-      id: None,
-      name: "Zero".into(),
-      enabled: true,
-      stream_enabled: true,
-      template_version: 1,
-      system_template: "s".into(),
-      user_template: "{{text}}".into(),
-      temperature: None,
-      max_output_tokens: None,
-      provider_options_json: None,
-      source_lang: None,
-      target_lang: None,
-      primary_lang: Some("zh".into()),
-      preferred_target_lang: Some("en".into()),
-      language_detection: None,
-      target_model_ids: vec![],
+    .save({
+      let (default_prompt_template_id, prompt_templates) = attach_default_templates("s", "{{text}}");
+      TranslationProfileWrite {
+        id: None,
+        name: "Zero".into(),
+        enabled: true,
+        stream_enabled: true,
+        template_version: 1,
+        default_prompt_template_id,
+        prompt_templates,
+        temperature: None,
+        max_output_tokens: None,
+        provider_options_json: None,
+        source_lang: None,
+        target_lang: None,
+        primary_lang: Some("zh".into()),
+        preferred_target_lang: Some("en".into()),
+        language_detection: None,
+        target_model_ids: vec![],
+      }
     })
     .unwrap_err();
   assert!(
@@ -475,44 +590,50 @@ fn profile_list_includes_ordered_targets_bulk() {
   );
 
   let with_one = profiles
-    .save(TranslationProfileWrite {
-      id: None,
-      name: "One".into(),
-      enabled: true,
-      stream_enabled: true,
-      template_version: 1,
-      system_template: "s".into(),
-      user_template: "{{text}}".into(),
-      temperature: None,
-      max_output_tokens: None,
-      provider_options_json: None,
-      source_lang: None,
-      target_lang: None,
-      primary_lang: Some("zh".into()),
-      preferred_target_lang: Some("en".into()),
-      language_detection: None,
-      target_model_ids: vec![m1.id],
+    .save({
+      let (default_prompt_template_id, prompt_templates) = attach_default_templates("s", "{{text}}");
+      TranslationProfileWrite {
+        id: None,
+        name: "One".into(),
+        enabled: true,
+        stream_enabled: true,
+        template_version: 1,
+        default_prompt_template_id,
+        prompt_templates,
+        temperature: None,
+        max_output_tokens: None,
+        provider_options_json: None,
+        source_lang: None,
+        target_lang: None,
+        primary_lang: Some("zh".into()),
+        preferred_target_lang: Some("en".into()),
+        language_detection: None,
+        target_model_ids: vec![m1.id],
+      }
     })
     .unwrap();
   let with_many = profiles
-    .save(TranslationProfileWrite {
-      id: None,
-      name: "Many".into(),
-      enabled: true,
-      stream_enabled: true,
-      template_version: 1,
-      system_template: "s".into(),
-      user_template: "{{text}}".into(),
-      temperature: None,
-      max_output_tokens: None,
-      provider_options_json: None,
-      source_lang: None,
-      target_lang: None,
-      primary_lang: Some("zh".into()),
-      preferred_target_lang: Some("en".into()),
-      language_detection: None,
-      // Intentional reverse insert order vs name sort of profiles.
-      target_model_ids: vec![m2.id, m1.id],
+    .save({
+      let (default_prompt_template_id, prompt_templates) = attach_default_templates("s", "{{text}}");
+      TranslationProfileWrite {
+        id: None,
+        name: "Many".into(),
+        enabled: true,
+        stream_enabled: true,
+        template_version: 1,
+        default_prompt_template_id,
+        prompt_templates,
+        temperature: None,
+        max_output_tokens: None,
+        provider_options_json: None,
+        source_lang: None,
+        target_lang: None,
+        primary_lang: Some("zh".into()),
+        preferred_target_lang: Some("en".into()),
+        language_detection: None,
+        // Intentional reverse insert order vs name sort of profiles.
+        target_model_ids: vec![m2.id, m1.id],
+      }
     })
     .unwrap();
 
@@ -562,23 +683,27 @@ fn profile_save_and_fallback_order() {
     })
     .unwrap();
   let dto = profiles
-    .save(TranslationProfileWrite {
-      id: None,
-      name: "Fast".into(),
-      enabled: true,
-      stream_enabled: true,
-      template_version: 1,
-      system_template: "You are a translator.".into(),
-      user_template: "Translate to {{target_language}}: {{text}}".into(),
-      temperature: Some(0.1),
-      max_output_tokens: Some(2048),
-      provider_options_json: None,
-      source_lang: Some("zh".into()),
-      target_lang: Some("en".into()),
-      primary_lang: Some("zh".into()),
-      preferred_target_lang: Some("en".into()),
-      language_detection: None,
-      target_model_ids: vec![m1.id, m2.id],
+    .save({
+      let (default_prompt_template_id, prompt_templates) =
+        attach_default_templates("You are a translator.", "Translate to {{target_language}}: {{text}}");
+      TranslationProfileWrite {
+        id: None,
+        name: "Fast".into(),
+        enabled: true,
+        stream_enabled: true,
+        template_version: 1,
+        default_prompt_template_id,
+        prompt_templates,
+        temperature: Some(0.1),
+        max_output_tokens: Some(2048),
+        provider_options_json: None,
+        source_lang: Some("zh".into()),
+        target_lang: Some("en".into()),
+        primary_lang: Some("zh".into()),
+        preferred_target_lang: Some("en".into()),
+        language_detection: None,
+        target_model_ids: vec![m1.id, m2.id],
+      }
     })
     .unwrap();
   assert_eq!(dto.targets.len(), 2);
@@ -604,23 +729,26 @@ fn profile_language_preferences_round_trip() {
     })
     .unwrap();
   let dto = profiles
-    .save(TranslationProfileWrite {
-      id: None,
-      name: "Prefs".into(),
-      enabled: true,
-      stream_enabled: true,
-      template_version: 1,
-      system_template: "s".into(),
-      user_template: "{{text}}".into(),
-      temperature: None,
-      max_output_tokens: None,
-      provider_options_json: None,
-      source_lang: Some("auto".into()),
-      target_lang: Some("auto".into()),
-      primary_lang: Some("zh".into()),
-      preferred_target_lang: Some("en".into()),
-      language_detection: None,
-      target_model_ids: vec![m.id],
+    .save({
+      let (default_prompt_template_id, prompt_templates) = attach_default_templates("s", "{{text}}");
+      TranslationProfileWrite {
+        id: None,
+        name: "Prefs".into(),
+        enabled: true,
+        stream_enabled: true,
+        template_version: 1,
+        default_prompt_template_id,
+        prompt_templates,
+        temperature: None,
+        max_output_tokens: None,
+        provider_options_json: None,
+        source_lang: Some("auto".into()),
+        target_lang: Some("auto".into()),
+        primary_lang: Some("zh".into()),
+        preferred_target_lang: Some("en".into()),
+        language_detection: None,
+        target_model_ids: vec![m.id],
+      }
     })
     .unwrap();
   assert_eq!(dto.profile.primary_lang.as_deref(), Some("zh"));
@@ -633,23 +761,26 @@ fn profile_language_preferences_round_trip() {
 
   // A normal update may not clear the preference pair: both fields are required, so the
   // legacy `(None, None)` shape is rejected even though such rows remain readable/importable.
-  let mut cleared = TranslationProfileWrite {
-    id: Some(dto.profile.id),
-    name: "Prefs".into(),
-    enabled: true,
-    stream_enabled: true,
-    template_version: 1,
-    system_template: "s".into(),
-    user_template: "{{text}}".into(),
-    temperature: None,
-    max_output_tokens: None,
-    provider_options_json: None,
-    source_lang: Some("auto".into()),
-    target_lang: Some("en".into()),
-    primary_lang: Some("zh".into()),
-    preferred_target_lang: Some("en".into()),
-    language_detection: None,
-    target_model_ids: vec![m.id],
+  let mut cleared = {
+    let (default_prompt_template_id, prompt_templates) = attach_default_templates("s", "{{text}}");
+    TranslationProfileWrite {
+      id: Some(dto.profile.id),
+      name: "Prefs".into(),
+      enabled: true,
+      stream_enabled: true,
+      template_version: 1,
+      default_prompt_template_id,
+      prompt_templates,
+      temperature: None,
+      max_output_tokens: None,
+      provider_options_json: None,
+      source_lang: Some("auto".into()),
+      target_lang: Some("en".into()),
+      primary_lang: Some("zh".into()),
+      preferred_target_lang: Some("en".into()),
+      language_detection: None,
+      target_model_ids: vec![m.id],
+    }
   };
   cleared.primary_lang = None;
   cleared.preferred_target_lang = None;
@@ -678,23 +809,26 @@ fn profile_stream_enabled_round_trip_and_update() {
     })
     .unwrap();
 
-  let mut write = TranslationProfileWrite {
-    id: None,
-    name: "Stream".into(),
-    enabled: true,
-    stream_enabled: false,
-    template_version: 1,
-    system_template: "s".into(),
-    user_template: "{{text}}".into(),
-    temperature: None,
-    max_output_tokens: None,
-    provider_options_json: None,
-    source_lang: Some("auto".into()),
-    target_lang: Some("auto".into()),
-    primary_lang: Some("zh".into()),
-    preferred_target_lang: Some("en".into()),
-    language_detection: None,
-    target_model_ids: vec![m.id],
+  let mut write = {
+    let (default_prompt_template_id, prompt_templates) = attach_default_templates("s", "{{text}}");
+    TranslationProfileWrite {
+      id: None,
+      name: "Stream".into(),
+      enabled: true,
+      stream_enabled: false,
+      template_version: 1,
+      default_prompt_template_id,
+      prompt_templates,
+      temperature: None,
+      max_output_tokens: None,
+      provider_options_json: None,
+      source_lang: Some("auto".into()),
+      target_lang: Some("auto".into()),
+      primary_lang: Some("zh".into()),
+      preferred_target_lang: Some("en".into()),
+      language_detection: None,
+      target_model_ids: vec![m.id],
+    }
   };
   let dto = profiles.save(write.clone()).unwrap();
   assert!(!dto.profile.stream_enabled, "stream_enabled=false must persist");
@@ -729,23 +863,26 @@ fn import_defaults_stream_enabled_when_key_absent() {
     })
     .unwrap();
   profiles
-    .save(TranslationProfileWrite {
-      id: None,
-      name: "Stream".into(),
-      enabled: true,
-      stream_enabled: false,
-      template_version: 1,
-      system_template: "s".into(),
-      user_template: "{{text}}".into(),
-      temperature: None,
-      max_output_tokens: None,
-      provider_options_json: None,
-      source_lang: Some("auto".into()),
-      target_lang: Some("auto".into()),
-      primary_lang: Some("zh".into()),
-      preferred_target_lang: Some("en".into()),
-      language_detection: None,
-      target_model_ids: vec![m.id],
+    .save({
+      let (default_prompt_template_id, prompt_templates) = attach_default_templates("s", "{{text}}");
+      TranslationProfileWrite {
+        id: None,
+        name: "Stream".into(),
+        enabled: true,
+        stream_enabled: false,
+        template_version: 1,
+        default_prompt_template_id,
+        prompt_templates,
+        temperature: None,
+        max_output_tokens: None,
+        provider_options_json: None,
+        source_lang: Some("auto".into()),
+        target_lang: Some("auto".into()),
+        primary_lang: Some("zh".into()),
+        preferred_target_lang: Some("en".into()),
+        language_detection: None,
+        target_model_ids: vec![m.id],
+      }
     })
     .unwrap();
 
@@ -795,14 +932,15 @@ fn profile_language_preferences_validation_rejects_invalid_pairs() {
     .unwrap();
 
   fn base(m: uuid::Uuid) -> TranslationProfileWrite {
+    let (default_prompt_template_id, prompt_templates) = attach_default_templates("s", "{{text}}");
     TranslationProfileWrite {
       id: None,
       name: "Prefs".into(),
       enabled: true,
       stream_enabled: true,
       template_version: 1,
-      system_template: "s".into(),
-      user_template: "{{text}}".into(),
+      default_prompt_template_id,
+      prompt_templates,
       temperature: None,
       max_output_tokens: None,
       provider_options_json: None,
@@ -870,23 +1008,26 @@ fn delete_provider_cascades_to_models_and_targets() {
     })
     .unwrap();
   let profile = profiles
-    .save(TranslationProfileWrite {
-      id: None,
-      name: "Cascade Profile".into(),
-      enabled: true,
-      stream_enabled: true,
-      template_version: 1,
-      system_template: "s".into(),
-      user_template: "{{text}}".into(),
-      temperature: None,
-      max_output_tokens: None,
-      provider_options_json: None,
-      source_lang: None,
-      target_lang: None,
-      primary_lang: Some("zh".into()),
-      preferred_target_lang: Some("en".into()),
-      language_detection: None,
-      target_model_ids: vec![model.id],
+    .save({
+      let (default_prompt_template_id, prompt_templates) = attach_default_templates("s", "{{text}}");
+      TranslationProfileWrite {
+        id: None,
+        name: "Cascade Profile".into(),
+        enabled: true,
+        stream_enabled: true,
+        template_version: 1,
+        default_prompt_template_id,
+        prompt_templates,
+        temperature: None,
+        max_output_tokens: None,
+        provider_options_json: None,
+        source_lang: None,
+        target_lang: None,
+        primary_lang: Some("zh".into()),
+        preferred_target_lang: Some("en".into()),
+        language_detection: None,
+        target_model_ids: vec![model.id],
+      }
     })
     .unwrap();
   assert!(!profile.targets.is_empty());
@@ -967,23 +1108,26 @@ fn import_export_round_trip_and_secret_exclusion() {
     })
     .unwrap();
   profiles
-    .save(TranslationProfileWrite {
-      id: None,
-      name: "P".into(),
-      enabled: true,
-      stream_enabled: true,
-      template_version: 1,
-      system_template: "s".into(),
-      user_template: "{{text}}".into(),
-      temperature: None,
-      max_output_tokens: None,
-      provider_options_json: None,
-      source_lang: None,
-      target_lang: None,
-      primary_lang: Some("zh".into()),
-      preferred_target_lang: Some("en".into()),
-      language_detection: None,
-      target_model_ids: vec![m.id],
+    .save({
+      let (default_prompt_template_id, prompt_templates) = attach_default_templates("s", "{{text}}");
+      TranslationProfileWrite {
+        id: None,
+        name: "P".into(),
+        enabled: true,
+        stream_enabled: true,
+        template_version: 1,
+        default_prompt_template_id,
+        prompt_templates,
+        temperature: None,
+        max_output_tokens: None,
+        provider_options_json: None,
+        source_lang: None,
+        target_lang: None,
+        primary_lang: Some("zh".into()),
+        preferred_target_lang: Some("en".into()),
+        language_detection: None,
+        target_model_ids: vec![m.id],
+      }
     })
     .unwrap();
   let mut s = AppSettingsV1::default_document();
@@ -1101,23 +1245,26 @@ fn import_credential_cleanup_isolates_unrelated_journals() {
     })
     .unwrap();
   profiles
-    .save(TranslationProfileWrite {
-      id: None,
-      name: "P".into(),
-      enabled: true,
-      stream_enabled: true,
-      template_version: 1,
-      system_template: "s".into(),
-      user_template: "{{text}}".into(),
-      temperature: None,
-      max_output_tokens: None,
-      provider_options_json: None,
-      source_lang: None,
-      target_lang: None,
-      primary_lang: Some("zh".into()),
-      preferred_target_lang: Some("en".into()),
-      language_detection: None,
-      target_model_ids: vec![m.id],
+    .save({
+      let (default_prompt_template_id, prompt_templates) = attach_default_templates("s", "{{text}}");
+      TranslationProfileWrite {
+        id: None,
+        name: "P".into(),
+        enabled: true,
+        stream_enabled: true,
+        template_version: 1,
+        default_prompt_template_id,
+        prompt_templates,
+        temperature: None,
+        max_output_tokens: None,
+        provider_options_json: None,
+        source_lang: None,
+        target_lang: None,
+        primary_lang: Some("zh".into()),
+        preferred_target_lang: Some("en".into()),
+        language_detection: None,
+        target_model_ids: vec![m.id],
+      }
     })
     .unwrap();
 
@@ -1160,23 +1307,26 @@ fn import_rejects_malformed_graphs() {
     })
     .unwrap();
   profiles
-    .save(TranslationProfileWrite {
-      id: None,
-      name: "P".into(),
-      enabled: true,
-      stream_enabled: true,
-      template_version: 1,
-      system_template: "s".into(),
-      user_template: "{{text}}".into(),
-      temperature: None,
-      max_output_tokens: None,
-      provider_options_json: None,
-      source_lang: None,
-      target_lang: None,
-      primary_lang: Some("zh".into()),
-      preferred_target_lang: Some("en".into()),
-      language_detection: None,
-      target_model_ids: vec![m.id],
+    .save({
+      let (default_prompt_template_id, prompt_templates) = attach_default_templates("s", "{{text}}");
+      TranslationProfileWrite {
+        id: None,
+        name: "P".into(),
+        enabled: true,
+        stream_enabled: true,
+        template_version: 1,
+        default_prompt_template_id,
+        prompt_templates,
+        temperature: None,
+        max_output_tokens: None,
+        provider_options_json: None,
+        source_lang: None,
+        target_lang: None,
+        primary_lang: Some("zh".into()),
+        preferred_target_lang: Some("en".into()),
+        language_detection: None,
+        target_model_ids: vec![m.id],
+      }
     })
     .unwrap();
   let mut doc = ie.export().unwrap();
@@ -1233,23 +1383,26 @@ fn import_accepts_legacy_preferences_and_rejects_invalid_pairs() {
     })
     .unwrap();
   profiles
-    .save(TranslationProfileWrite {
-      id: None,
-      name: "Prefs".into(),
-      enabled: true,
-      stream_enabled: true,
-      template_version: 1,
-      system_template: "s".into(),
-      user_template: "{{text}}".into(),
-      temperature: None,
-      max_output_tokens: None,
-      provider_options_json: None,
-      source_lang: Some("auto".into()),
-      target_lang: Some("auto".into()),
-      primary_lang: Some("zh".into()),
-      preferred_target_lang: Some("en".into()),
-      language_detection: None,
-      target_model_ids: vec![m.id],
+    .save({
+      let (default_prompt_template_id, prompt_templates) = attach_default_templates("s", "{{text}}");
+      TranslationProfileWrite {
+        id: None,
+        name: "Prefs".into(),
+        enabled: true,
+        stream_enabled: true,
+        template_version: 1,
+        default_prompt_template_id,
+        prompt_templates,
+        temperature: None,
+        max_output_tokens: None,
+        provider_options_json: None,
+        source_lang: Some("auto".into()),
+        target_lang: Some("auto".into()),
+        primary_lang: Some("zh".into()),
+        preferred_target_lang: Some("en".into()),
+        language_detection: None,
+        target_model_ids: vec![m.id],
+      }
     })
     .unwrap();
 
@@ -1300,23 +1453,26 @@ fn import_accepts_legacy_profile_missing_preference_keys() {
     })
     .unwrap();
   let dto = profiles
-    .save(TranslationProfileWrite {
-      id: None,
-      name: "Prefs".into(),
-      enabled: true,
-      stream_enabled: true,
-      template_version: 1,
-      system_template: "s".into(),
-      user_template: "{{text}}".into(),
-      temperature: None,
-      max_output_tokens: None,
-      provider_options_json: None,
-      source_lang: Some("auto".into()),
-      target_lang: Some("auto".into()),
-      primary_lang: Some("zh".into()),
-      preferred_target_lang: Some("en".into()),
-      language_detection: None,
-      target_model_ids: vec![m.id],
+    .save({
+      let (default_prompt_template_id, prompt_templates) = attach_default_templates("s", "{{text}}");
+      TranslationProfileWrite {
+        id: None,
+        name: "Prefs".into(),
+        enabled: true,
+        stream_enabled: true,
+        template_version: 1,
+        default_prompt_template_id,
+        prompt_templates,
+        temperature: None,
+        max_output_tokens: None,
+        provider_options_json: None,
+        source_lang: Some("auto".into()),
+        target_lang: Some("auto".into()),
+        primary_lang: Some("zh".into()),
+        preferred_target_lang: Some("en".into()),
+        language_detection: None,
+        target_model_ids: vec![m.id],
+      }
     })
     .unwrap();
 
@@ -1657,6 +1813,7 @@ fn model_chat_transport_gemini_override_requires_secret_despite_channel_none() {
       target_lang: "zh".into(),
       text: "hello".into(),
       profile_id: None,
+      prompt_template_id: None,
       source_lang_id: None,
       target_lang_id: None,
       effective_source_lang_id: None,
@@ -3124,23 +3281,26 @@ fn delete_many_models_all_or_nothing() {
 
   // Protect m3 with a translation-profile target (FK RESTRICT → InUse).
   profiles
-    .save(TranslationProfileWrite {
-      id: None,
-      name: "Holds bulk-c".into(),
-      enabled: true,
-      stream_enabled: true,
-      template_version: 1,
-      system_template: "s".into(),
-      user_template: "{{text}}".into(),
-      temperature: None,
-      max_output_tokens: None,
-      provider_options_json: None,
-      source_lang: None,
-      target_lang: None,
-      primary_lang: Some("zh".into()),
-      preferred_target_lang: Some("en".into()),
-      language_detection: None,
-      target_model_ids: vec![m3.id],
+    .save({
+      let (default_prompt_template_id, prompt_templates) = attach_default_templates("s", "{{text}}");
+      TranslationProfileWrite {
+        id: None,
+        name: "Holds bulk-c".into(),
+        enabled: true,
+        stream_enabled: true,
+        template_version: 1,
+        default_prompt_template_id,
+        prompt_templates,
+        temperature: None,
+        max_output_tokens: None,
+        provider_options_json: None,
+        source_lang: None,
+        target_lang: None,
+        primary_lang: Some("zh".into()),
+        preferred_target_lang: Some("en".into()),
+        language_detection: None,
+        target_model_ids: vec![m3.id],
+      }
     })
     .unwrap();
 
@@ -3219,20 +3379,34 @@ fn provider_save_rejects_stale_expected_updated_at() {
   assert_eq!(again.display_name, "Second win");
 }
 
+/// Test helper: one default prompt template with a fresh stable id.
+fn attach_default_templates(system: &str, user: &str) -> (uuid::Uuid, Vec<PromptTemplate>) {
+  let id = crate::domain::time::new_id();
+  (
+    id,
+    vec![PromptTemplate {
+      id,
+      name: "Default".into(),
+      system_template: system.into(),
+      user_template: user.into(),
+    }],
+  )
+}
+
 fn sample_profile(
   id: uuid::Uuid,
   name: &str,
   language_detection: Option<LanguageDetectorConfig>,
-) -> TranslationProfile {
+) -> (TranslationProfile, Vec<PromptTemplate>) {
   let now = crate::domain::time::now_rfc3339();
-  TranslationProfile {
+  let (template_id, prompt_templates) = attach_default_templates("s", "{{text}}");
+  let profile = TranslationProfile {
     id,
     name: name.into(),
     enabled: true,
     stream_enabled: true,
     template_version: 1,
-    system_template: "s".into(),
-    user_template: "{{text}}".into(),
+    default_prompt_template_id: template_id,
     temperature: None,
     max_output_tokens: None,
     provider_options_json: None,
@@ -3243,7 +3417,8 @@ fn sample_profile(
     language_detection,
     created_at: now.clone(),
     updated_at: now,
-  }
+  };
+  (profile, prompt_templates)
 }
 
 #[test]
@@ -3283,7 +3458,7 @@ fn resolve_detect_model_source_precedence() {
   ));
 
   // Profile explicit LLM modelId wins over profile primary and input.
-  let profile = sample_profile(
+  let (profile, _) = sample_profile(
     uuid::Uuid::nil(),
     "P",
     Some(LanguageDetectorConfig::Llm {
@@ -3296,7 +3471,7 @@ fn resolve_detect_model_source_precedence() {
   );
 
   // Profile Llm with None modelId -> profile priority-0 primary.
-  let profile_no_model = sample_profile(
+  let (profile_no_model, _) = sample_profile(
     uuid::Uuid::nil(),
     "P",
     Some(LanguageDetectorConfig::Llm { model_id: None }),
@@ -3307,7 +3482,7 @@ fn resolve_detect_model_source_precedence() {
   );
 
   // Profile with no languageDetection -> profile priority-0 primary.
-  let profile_no_cfg = sample_profile(uuid::Uuid::nil(), "P", None);
+  let (profile_no_cfg, _) = sample_profile(uuid::Uuid::nil(), "P", None);
   assert_eq!(
     resolve_detect_model_source(Some(&profile_no_cfg), Some(&targets[0]), Some(input_model)).unwrap(),
     p0
@@ -3351,23 +3526,26 @@ fn profile_save_persists_dedicated_detection_model_and_empty_config() {
 
   // Save with a dedicated detection model id.
   let saved = profiles
-    .save(TranslationProfileWrite {
-      id: None,
-      name: "Detect profile".into(),
-      enabled: true,
-      stream_enabled: true,
-      template_version: 1,
-      system_template: "s".into(),
-      user_template: "{{text}}".into(),
-      temperature: None,
-      max_output_tokens: None,
-      provider_options_json: None,
-      source_lang: None,
-      target_lang: None,
-      primary_lang: Some("zh".into()),
-      preferred_target_lang: Some("en".into()),
-      language_detection: Some(LanguageDetectorConfig::Llm { model_id: Some(m1.id) }),
-      target_model_ids: vec![m2.id],
+    .save({
+      let (default_prompt_template_id, prompt_templates) = attach_default_templates("s", "{{text}}");
+      TranslationProfileWrite {
+        id: None,
+        name: "Detect profile".into(),
+        enabled: true,
+        stream_enabled: true,
+        template_version: 1,
+        default_prompt_template_id,
+        prompt_templates,
+        temperature: None,
+        max_output_tokens: None,
+        provider_options_json: None,
+        source_lang: None,
+        target_lang: None,
+        primary_lang: Some("zh".into()),
+        preferred_target_lang: Some("en".into()),
+        language_detection: Some(LanguageDetectorConfig::Llm { model_id: Some(m1.id) }),
+        target_model_ids: vec![m2.id],
+      }
     })
     .unwrap();
   assert_eq!(
@@ -3384,23 +3562,26 @@ fn profile_save_persists_dedicated_detection_model_and_empty_config() {
 
   // Clearing the config (None) persists and is read back as None.
   let cleared = profiles
-    .save(TranslationProfileWrite {
-      id: Some(saved.profile.id),
-      name: "Detect profile".into(),
-      enabled: true,
-      stream_enabled: true,
-      template_version: 1,
-      system_template: "s".into(),
-      user_template: "{{text}}".into(),
-      temperature: None,
-      max_output_tokens: None,
-      provider_options_json: None,
-      source_lang: None,
-      target_lang: None,
-      primary_lang: Some("zh".into()),
-      preferred_target_lang: Some("en".into()),
-      language_detection: None,
-      target_model_ids: vec![m2.id],
+    .save({
+      let (default_prompt_template_id, prompt_templates) = attach_default_templates("s", "{{text}}");
+      TranslationProfileWrite {
+        id: Some(saved.profile.id),
+        name: "Detect profile".into(),
+        enabled: true,
+        stream_enabled: true,
+        template_version: 1,
+        default_prompt_template_id,
+        prompt_templates,
+        temperature: None,
+        max_output_tokens: None,
+        provider_options_json: None,
+        source_lang: None,
+        target_lang: None,
+        primary_lang: Some("zh".into()),
+        preferred_target_lang: Some("en".into()),
+        language_detection: None,
+        target_model_ids: vec![m2.id],
+      }
     })
     .unwrap();
   assert!(cleared.profile.language_detection.is_none());
@@ -3431,23 +3612,26 @@ fn profile_save_rejects_detection_model_that_does_not_exist() {
     .unwrap();
   let ghost = uuid::Uuid::now_v7();
   let err = profiles
-    .save(TranslationProfileWrite {
-      id: None,
-      name: "Bad detect".into(),
-      enabled: true,
-      stream_enabled: true,
-      template_version: 1,
-      system_template: "s".into(),
-      user_template: "{{text}}".into(),
-      temperature: None,
-      max_output_tokens: None,
-      provider_options_json: None,
-      source_lang: None,
-      target_lang: None,
-      primary_lang: Some("zh".into()),
-      preferred_target_lang: Some("en".into()),
-      language_detection: Some(LanguageDetectorConfig::Llm { model_id: Some(ghost) }),
-      target_model_ids: vec![m.id],
+    .save({
+      let (default_prompt_template_id, prompt_templates) = attach_default_templates("s", "{{text}}");
+      TranslationProfileWrite {
+        id: None,
+        name: "Bad detect".into(),
+        enabled: true,
+        stream_enabled: true,
+        template_version: 1,
+        default_prompt_template_id,
+        prompt_templates,
+        temperature: None,
+        max_output_tokens: None,
+        provider_options_json: None,
+        source_lang: None,
+        target_lang: None,
+        primary_lang: Some("zh".into()),
+        preferred_target_lang: Some("en".into()),
+        language_detection: Some(LanguageDetectorConfig::Llm { model_id: Some(ghost) }),
+        target_model_ids: vec![m.id],
+      }
     })
     .unwrap_err();
   assert!(matches!(err, StorageError::NotFound(_)), "got {err:?}");
@@ -3485,25 +3669,28 @@ fn dedicated_detection_model_is_protected_and_provider_delete_clears_config() {
     })
     .unwrap();
   let profile = profiles
-    .save(TranslationProfileWrite {
-      id: None,
-      name: "Dedicated detector".into(),
-      enabled: true,
-      stream_enabled: true,
-      template_version: 1,
-      system_template: "s".into(),
-      user_template: "{{text}}".into(),
-      temperature: None,
-      max_output_tokens: None,
-      provider_options_json: None,
-      source_lang: Some("auto".into()),
-      target_lang: Some("en".into()),
-      primary_lang: Some("zh".into()),
-      preferred_target_lang: Some("en".into()),
-      language_detection: Some(LanguageDetectorConfig::Llm {
-        model_id: Some(detector.id),
-      }),
-      target_model_ids: vec![primary.id],
+    .save({
+      let (default_prompt_template_id, prompt_templates) = attach_default_templates("s", "{{text}}");
+      TranslationProfileWrite {
+        id: None,
+        name: "Dedicated detector".into(),
+        enabled: true,
+        stream_enabled: true,
+        template_version: 1,
+        default_prompt_template_id,
+        prompt_templates,
+        temperature: None,
+        max_output_tokens: None,
+        provider_options_json: None,
+        source_lang: Some("auto".into()),
+        target_lang: Some("en".into()),
+        primary_lang: Some("zh".into()),
+        preferred_target_lang: Some("en".into()),
+        language_detection: Some(LanguageDetectorConfig::Llm {
+          model_id: Some(detector.id),
+        }),
+        target_model_ids: vec![primary.id],
+      }
     })
     .unwrap();
 
@@ -3742,23 +3929,26 @@ fn import_copy_rewrites_detection_model_id() {
     })
     .unwrap();
   let saved = profiles
-    .save(TranslationProfileWrite {
-      id: None,
-      name: "Detect profile".into(),
-      enabled: true,
-      stream_enabled: true,
-      template_version: 1,
-      system_template: "s".into(),
-      user_template: "{{text}}".into(),
-      temperature: None,
-      max_output_tokens: None,
-      provider_options_json: None,
-      source_lang: None,
-      target_lang: None,
-      primary_lang: Some("zh".into()),
-      preferred_target_lang: Some("en".into()),
-      language_detection: Some(LanguageDetectorConfig::Llm { model_id: Some(m.id) }),
-      target_model_ids: vec![primary.id],
+    .save({
+      let (default_prompt_template_id, prompt_templates) = attach_default_templates("s", "{{text}}");
+      TranslationProfileWrite {
+        id: None,
+        name: "Detect profile".into(),
+        enabled: true,
+        stream_enabled: true,
+        template_version: 1,
+        default_prompt_template_id,
+        prompt_templates,
+        temperature: None,
+        max_output_tokens: None,
+        provider_options_json: None,
+        source_lang: None,
+        target_lang: None,
+        primary_lang: Some("zh".into()),
+        preferred_target_lang: Some("en".into()),
+        language_detection: Some(LanguageDetectorConfig::Llm { model_id: Some(m.id) }),
+        target_model_ids: vec![primary.id],
+      }
     })
     .unwrap();
 
@@ -3824,23 +4014,26 @@ fn import_rejects_profile_detection_referencing_missing_model() {
     })
     .unwrap();
   profiles
-    .save(TranslationProfileWrite {
-      id: None,
-      name: "Detect profile".into(),
-      enabled: true,
-      stream_enabled: true,
-      template_version: 1,
-      system_template: "s".into(),
-      user_template: "{{text}}".into(),
-      temperature: None,
-      max_output_tokens: None,
-      provider_options_json: None,
-      source_lang: None,
-      target_lang: None,
-      primary_lang: Some("zh".into()),
-      preferred_target_lang: Some("en".into()),
-      language_detection: Some(LanguageDetectorConfig::Llm { model_id: Some(m.id) }),
-      target_model_ids: vec![m.id],
+    .save({
+      let (default_prompt_template_id, prompt_templates) = attach_default_templates("s", "{{text}}");
+      TranslationProfileWrite {
+        id: None,
+        name: "Detect profile".into(),
+        enabled: true,
+        stream_enabled: true,
+        template_version: 1,
+        default_prompt_template_id,
+        prompt_templates,
+        temperature: None,
+        max_output_tokens: None,
+        provider_options_json: None,
+        source_lang: None,
+        target_lang: None,
+        primary_lang: Some("zh".into()),
+        preferred_target_lang: Some("en".into()),
+        language_detection: Some(LanguageDetectorConfig::Llm { model_id: Some(m.id) }),
+        target_model_ids: vec![m.id],
+      }
     })
     .unwrap();
 
@@ -3891,6 +4084,7 @@ fn translate_records_history_on_success_not_on_cancel_or_early() {
     target_lang: "Chinese".into(),
     text: "hello".into(),
     profile_id: None,
+    prompt_template_id: None,
     source_lang_id: Some("auto".into()),
     target_lang_id: Some("zh".into()),
     effective_source_lang_id: Some("en".into()),
@@ -3923,6 +4117,7 @@ fn translate_records_history_on_success_not_on_cancel_or_early() {
       target_lang: "Chinese".into(),
       text: "   ".into(),
       profile_id: None,
+      prompt_template_id: None,
       source_lang_id: None,
       target_lang_id: None,
       effective_source_lang_id: None,
@@ -3952,6 +4147,7 @@ fn translate_records_history_on_success_not_on_cancel_or_early() {
       target_lang: "Chinese".into(),
       text: "hello".into(),
       profile_id: None,
+      prompt_template_id: None,
       source_lang_id: None,
       target_lang_id: None,
       effective_source_lang_id: None,

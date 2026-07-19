@@ -1,7 +1,9 @@
 // ABOUTME: Translation profile and fallback-chain transactional persistence.
-// ABOUTME: Profile saves replace the complete ordered target list in one unit of work.
+// ABOUTME: Profile saves replace the complete ordered target list and prompt templates in one unit of work.
 use crate::domain::language_detection::LanguageDetectorConfig;
-use crate::domain::translation_profile::{TranslationProfile, TranslationProfileDto, TranslationProfileTarget};
+use crate::domain::translation_profile::{
+  PromptTemplate, TranslationProfile, TranslationProfileDto, TranslationProfilePromptTemplate, TranslationProfileTarget,
+};
 use crate::error::StorageError;
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use std::collections::HashSet;
@@ -11,6 +13,7 @@ fn map_profile(row: &Row<'_>) -> Result<TranslationProfile, rusqlite::Error> {
   let id: String = row.get("id")?;
   let enabled: i64 = row.get("enabled")?;
   let stream_enabled: i64 = row.get("stream_enabled")?;
+  let default_prompt_template_id: String = row.get("default_prompt_template_id")?;
   let provider_options: Option<String> = row.get("provider_options_json")?;
   let language_detection: Option<String> = row.get("language_detection_json")?;
   Ok(TranslationProfile {
@@ -20,8 +23,8 @@ fn map_profile(row: &Row<'_>) -> Result<TranslationProfile, rusqlite::Error> {
     enabled: enabled != 0,
     stream_enabled: stream_enabled != 0,
     template_version: row.get("template_version")?,
-    system_template: row.get("system_template")?,
-    user_template: row.get("user_template")?,
+    default_prompt_template_id: Uuid::parse_str(&default_prompt_template_id)
+      .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?,
     temperature: row.get("temperature")?,
     max_output_tokens: row.get("max_output_tokens")?,
     provider_options_json: provider_options
@@ -53,6 +56,30 @@ fn map_target(row: &Row<'_>) -> Result<TranslationProfileTarget, rusqlite::Error
   })
 }
 
+fn map_prompt_template_row(row: &Row<'_>) -> Result<TranslationProfilePromptTemplate, rusqlite::Error> {
+  let id: String = row.get("id")?;
+  let profile_id: String = row.get("translation_profile_id")?;
+  Ok(TranslationProfilePromptTemplate {
+    id: Uuid::parse_str(&id)
+      .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?,
+    translation_profile_id: Uuid::parse_str(&profile_id)
+      .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?,
+    name: row.get("name")?,
+    system_template: row.get("system_template")?,
+    user_template: row.get("user_template")?,
+    sort_order: row.get("sort_order")?,
+  })
+}
+
+fn to_prompt_template(row: TranslationProfilePromptTemplate) -> PromptTemplate {
+  PromptTemplate {
+    id: row.id,
+    name: row.name,
+    system_template: row.system_template,
+    user_template: row.user_template,
+  }
+}
+
 pub fn list(conn: &Connection) -> Result<Vec<TranslationProfile>, StorageError> {
   let mut stmt = conn.prepare("SELECT * FROM translation_profiles ORDER BY name ASC, id ASC")?;
   let rows = stmt.query_map([], map_profile)?.collect::<Result<Vec<_>, _>>()?;
@@ -68,6 +95,17 @@ pub fn list_all_targets(conn: &Connection) -> Result<Vec<TranslationProfileTarge
   Ok(rows)
 }
 
+pub fn list_all_prompt_templates(conn: &Connection) -> Result<Vec<TranslationProfilePromptTemplate>, StorageError> {
+  let mut stmt = conn.prepare(
+    "SELECT * FROM translation_profile_prompt_templates
+         ORDER BY translation_profile_id ASC, sort_order ASC, id ASC",
+  )?;
+  let rows = stmt
+    .query_map([], map_prompt_template_row)?
+    .collect::<Result<Vec<_>, _>>()?;
+  Ok(rows)
+}
+
 pub fn get(conn: &Connection, id: Uuid) -> Result<TranslationProfileDto, StorageError> {
   let profile = conn
     .query_row(
@@ -78,7 +116,12 @@ pub fn get(conn: &Connection, id: Uuid) -> Result<TranslationProfileDto, Storage
     .optional()?
     .ok_or_else(|| StorageError::NotFound(format!("profile {id}")))?;
   let targets = list_targets(conn, id)?;
-  Ok(TranslationProfileDto { profile, targets })
+  let prompt_templates = list_prompt_templates(conn, id)?;
+  Ok(TranslationProfileDto {
+    profile,
+    targets,
+    prompt_templates,
+  })
 }
 
 pub fn list_targets(conn: &Connection, profile_id: Uuid) -> Result<Vec<TranslationProfileTarget>, StorageError> {
@@ -93,6 +136,36 @@ pub fn list_targets(conn: &Connection, profile_id: Uuid) -> Result<Vec<Translati
   Ok(rows)
 }
 
+pub fn list_prompt_templates(conn: &Connection, profile_id: Uuid) -> Result<Vec<PromptTemplate>, StorageError> {
+  let mut stmt = conn.prepare(
+    "SELECT * FROM translation_profile_prompt_templates
+         WHERE translation_profile_id = ?1
+         ORDER BY sort_order ASC, id ASC",
+  )?;
+  let rows = stmt
+    .query_map(params![profile_id.to_string()], map_prompt_template_row)?
+    .collect::<Result<Vec<_>, _>>()?;
+  Ok(rows.into_iter().map(to_prompt_template).collect())
+}
+
+/// Load one prompt template and ensure it belongs to the given profile.
+pub fn get_prompt_template_for_profile(
+  conn: &Connection,
+  profile_id: Uuid,
+  template_id: Uuid,
+) -> Result<PromptTemplate, StorageError> {
+  let row = conn
+    .query_row(
+      "SELECT * FROM translation_profile_prompt_templates
+             WHERE id = ?1 AND translation_profile_id = ?2",
+      params![template_id.to_string(), profile_id.to_string()],
+      map_prompt_template_row,
+    )
+    .optional()?
+    .ok_or_else(|| StorageError::NotFound(format!("prompt template {template_id} for profile {profile_id}")))?;
+  Ok(to_prompt_template(row))
+}
+
 pub fn insert_profile(conn: &Connection, profile: &TranslationProfile) -> Result<(), StorageError> {
   let options = match &profile.provider_options_json {
     Some(v) => Some(serde_json::to_string(v)?),
@@ -105,18 +178,17 @@ pub fn insert_profile(conn: &Connection, profile: &TranslationProfile) -> Result
   conn
     .execute(
       "INSERT INTO translation_profiles (
-            id, name, enabled, stream_enabled, template_version, system_template, user_template,
+            id, name, enabled, stream_enabled, template_version, default_prompt_template_id,
             temperature, max_output_tokens, provider_options_json, source_lang, target_lang,
             primary_lang, preferred_target_lang, language_detection_json, created_at, updated_at
-        ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
+        ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
       params![
         profile.id.to_string(),
         profile.name,
         profile.enabled as i64,
         profile.stream_enabled as i64,
         profile.template_version,
-        profile.system_template,
-        profile.user_template,
+        profile.default_prompt_template_id.to_string(),
         profile.temperature,
         profile.max_output_tokens,
         options,
@@ -149,17 +221,16 @@ pub fn update_profile(conn: &Connection, profile: &TranslationProfile) -> Result
             enabled = ?3,
             stream_enabled = ?4,
             template_version = ?5,
-            system_template = ?6,
-            user_template = ?7,
-            temperature = ?8,
-            max_output_tokens = ?9,
-            provider_options_json = ?10,
-            source_lang = ?11,
-            target_lang = ?12,
-            primary_lang = ?13,
-            preferred_target_lang = ?14,
-            language_detection_json = ?15,
-            updated_at = ?16
+            default_prompt_template_id = ?6,
+            temperature = ?7,
+            max_output_tokens = ?8,
+            provider_options_json = ?9,
+            source_lang = ?10,
+            target_lang = ?11,
+            primary_lang = ?12,
+            preferred_target_lang = ?13,
+            language_detection_json = ?14,
+            updated_at = ?15
          WHERE id = ?1",
       params![
         profile.id.to_string(),
@@ -167,8 +238,7 @@ pub fn update_profile(conn: &Connection, profile: &TranslationProfile) -> Result
         profile.enabled as i64,
         profile.stream_enabled as i64,
         profile.template_version,
-        profile.system_template,
-        profile.user_template,
+        profile.default_prompt_template_id.to_string(),
         profile.temperature,
         profile.max_output_tokens,
         options,
@@ -208,6 +278,35 @@ pub fn replace_targets(
         ],
       )
       .map_err(|e| StorageError::from_sqlite_constraint(e, "profile target"))?;
+  }
+  Ok(())
+}
+
+pub fn replace_prompt_templates(
+  conn: &Connection,
+  profile_id: Uuid,
+  templates: &[PromptTemplate],
+) -> Result<(), StorageError> {
+  conn.execute(
+    "DELETE FROM translation_profile_prompt_templates WHERE translation_profile_id = ?1",
+    params![profile_id.to_string()],
+  )?;
+  for (index, template) in templates.iter().enumerate() {
+    conn
+      .execute(
+        "INSERT INTO translation_profile_prompt_templates (
+                    id, translation_profile_id, name, system_template, user_template, sort_order
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+          template.id.to_string(),
+          profile_id.to_string(),
+          template.name,
+          template.system_template,
+          template.user_template,
+          index as i32,
+        ],
+      )
+      .map_err(|e| StorageError::from_sqlite_constraint(e, "profile prompt template"))?;
   }
   Ok(())
 }
@@ -267,11 +366,12 @@ pub fn delete_targets_by_provider(conn: &Connection, provider_id: Uuid) -> Resul
   Ok(())
 }
 
-/// Insert or update profile and replace targets atomically on the given connection/transaction.
+/// Insert or update profile and replace targets + templates atomically on the given connection/transaction.
 pub fn save_with_targets(
   conn: &Connection,
   profile: &TranslationProfile,
   targets: &[TranslationProfileTarget],
+  prompt_templates: &[PromptTemplate],
   is_new: bool,
 ) -> Result<(), StorageError> {
   if is_new {
@@ -280,6 +380,7 @@ pub fn save_with_targets(
     update_profile(conn, profile)?;
   }
   replace_targets(conn, profile.id, targets)?;
+  replace_prompt_templates(conn, profile.id, prompt_templates)?;
   Ok(())
 }
 

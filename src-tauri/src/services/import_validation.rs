@@ -9,12 +9,14 @@ use crate::domain::model::{CapabilityOverridesV1, ProviderModel};
 use crate::domain::provider::{CredentialKind, ModelsSyncStatus, ProviderExport, ProviderInstance};
 use crate::domain::settings::{AppSettingsV1, GlobalProxyMode};
 use crate::domain::time::{new_id, now_rfc3339};
-use crate::domain::translation_profile::{TranslationProfile, TranslationProfileTarget};
+use crate::domain::translation_profile::{
+  PromptTemplate, TranslationProfile, TranslationProfilePromptTemplate, TranslationProfileTarget,
+};
 use crate::error::StorageError;
 use crate::repositories::{provider_instances, provider_models, translation_profiles};
 use crate::services::providers::validate_provider_url;
 use crate::services::settings::{validate_default_profile, validate_settings_document};
-use crate::services::translation_profiles::{validate_profile_language_preferences, validate_template};
+use crate::services::translation_profiles::{validate_profile_language_preferences, validate_prompt_templates};
 use rusqlite::Connection;
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
@@ -28,6 +30,7 @@ pub struct ValidatedImportPlan {
   pub models: Vec<ProviderModel>,
   pub profiles: Vec<TranslationProfile>,
   pub targets: Vec<TranslationProfileTarget>,
+  pub prompt_templates: Vec<TranslationProfilePromptTemplate>,
   pub settings: AppSettingsV1,
   /// Providers that need credential cleanup when merging over existing rows.
   pub provider_cleanup_ids: Vec<Uuid>,
@@ -70,6 +73,13 @@ pub fn build_validated_plan(
     }
   }
 
+  let mut template_ids = HashSet::new();
+  for t in &document.profile_prompt_templates {
+    if !template_ids.insert(t.id) {
+      errors.push(format!("duplicate prompt template id {}", t.id));
+    }
+  }
+
   let local_providers: HashMap<Uuid, ProviderInstance> =
     provider_instances::list(conn)?.into_iter().map(|p| (p.id, p)).collect();
   let local_models: HashMap<Uuid, ProviderModel> = provider_models::list_all(conn)?
@@ -107,7 +117,7 @@ pub fn build_validated_plan(
     }
   }
 
-  // Profiles and targets
+  // Profiles, targets, and prompt templates
   let mut targets_by_profile: HashMap<Uuid, Vec<&TranslationProfileTarget>> = HashMap::new();
   for t in &document.profile_models {
     if !doc_profile_ids.contains(&t.translation_profile_id) {
@@ -125,10 +135,28 @@ pub fn build_validated_plan(
     targets_by_profile.entry(t.translation_profile_id).or_default().push(t);
   }
 
+  let mut templates_by_profile: HashMap<Uuid, Vec<&TranslationProfilePromptTemplate>> = HashMap::new();
+  for t in &document.profile_prompt_templates {
+    if !doc_profile_ids.contains(&t.translation_profile_id) {
+      errors.push(format!(
+        "prompt template references missing profile {}",
+        t.translation_profile_id
+      ));
+    }
+    templates_by_profile
+      .entry(t.translation_profile_id)
+      .or_default()
+      .push(t);
+  }
+
   for profile in &document.translation_profiles {
     if let Err(e) = validate_import_profile(
       profile,
       targets_by_profile.get(&profile.id).map(|v| v.as_slice()).unwrap_or(&[]),
+      templates_by_profile
+        .get(&profile.id)
+        .map(|v| v.as_slice())
+        .unwrap_or(&[]),
       &doc_model_ids,
     ) {
       errors.push(format!("profile {}: {e}", profile.id));
@@ -238,6 +266,7 @@ pub fn build_validated_plan(
       models: vec![],
       profiles: vec![],
       targets: vec![],
+      prompt_templates: vec![],
       settings,
       provider_cleanup_ids: vec![],
       clear_global_proxy: false,
@@ -323,6 +352,15 @@ pub fn build_validated_plan(
 
   let mut profiles = Vec::new();
   let mut targets = Vec::new();
+  let mut prompt_templates = Vec::new();
+  // Copy mode assigns new template ids while preserving default selection.
+  let mut template_id_map: HashMap<Uuid, Uuid> = HashMap::new();
+  if matches!(mode, ImportConflictMode::Copy) {
+    for t in &document.profile_prompt_templates {
+      template_id_map.insert(t.id, new_id());
+    }
+  }
+
   for profile in &document.translation_profiles {
     let (id, created_at) = match mode {
       ImportConflictMode::Merge => {
@@ -352,6 +390,9 @@ pub fn build_validated_plan(
           model_id: Some(new_model),
         });
       }
+      p.default_prompt_template_id = *template_id_map
+        .get(&profile.default_prompt_template_id)
+        .expect("default template map");
     }
     profiles.push(p);
 
@@ -371,6 +412,28 @@ pub fn build_validated_plan(
         translation_profile_id: id,
         provider_model_id: model_id,
         priority: t.priority,
+      });
+    }
+
+    let mut profile_templates: Vec<_> = document
+      .profile_prompt_templates
+      .iter()
+      .filter(|t| t.translation_profile_id == profile.id)
+      .cloned()
+      .collect();
+    profile_templates.sort_by_key(|t| t.sort_order);
+    for t in profile_templates {
+      let template_id = match mode {
+        ImportConflictMode::Merge => t.id,
+        ImportConflictMode::Copy => *template_id_map.get(&t.id).expect("template map"),
+      };
+      prompt_templates.push(TranslationProfilePromptTemplate {
+        id: template_id,
+        translation_profile_id: id,
+        name: t.name,
+        system_template: t.system_template,
+        user_template: t.user_template,
+        sort_order: t.sort_order,
       });
     }
   }
@@ -407,6 +470,7 @@ pub fn build_validated_plan(
     models,
     profiles,
     targets,
+    prompt_templates,
     settings,
     provider_cleanup_ids,
     clear_global_proxy,
@@ -470,6 +534,7 @@ fn validate_import_model(m: &ProviderModel, doc_providers: &HashSet<Uuid>) -> Re
 fn validate_import_profile(
   profile: &TranslationProfile,
   targets: &[&TranslationProfileTarget],
+  templates: &[&TranslationProfilePromptTemplate],
   doc_model_ids: &HashSet<Uuid>,
 ) -> Result<(), StorageError> {
   if profile.name.trim().is_empty() {
@@ -505,8 +570,27 @@ fn validate_import_profile(
       return Err(StorageError::Validation("max_output_tokens must be > 0".into()));
     }
   }
-  validate_template(&profile.system_template, false)?;
-  validate_template(&profile.user_template, true)?;
+
+  let mut sort_orders: Vec<i32> = templates.iter().map(|t| t.sort_order).collect();
+  sort_orders.sort_unstable();
+  for (i, order) in sort_orders.iter().enumerate() {
+    if *order != i as i32 {
+      return Err(StorageError::Validation(
+        "prompt template sort_order must be contiguous starting at 0".into(),
+      ));
+    }
+  }
+  let prompt_templates: Vec<PromptTemplate> = templates
+    .iter()
+    .map(|t| PromptTemplate {
+      id: t.id,
+      name: t.name.clone(),
+      system_template: t.system_template.clone(),
+      user_template: t.user_template.clone(),
+    })
+    .collect();
+  validate_prompt_templates(&prompt_templates, profile.default_prompt_template_id)?;
+
   catalog::validate_profile_options("openai-compatible", &profile.provider_options_json)?;
   validate_profile_language_preferences(&profile.primary_lang, &profile.preferred_target_lang)?;
   // A configured LLM detector must reference a model present in the import document.

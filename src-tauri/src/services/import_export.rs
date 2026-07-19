@@ -33,6 +33,7 @@ impl ImportExportService {
       let models = provider_models::list_all(conn)?;
       let translation_profiles = translation_profiles::list(conn)?;
       let profile_models = translation_profiles::list_all_targets(conn)?;
+      let profile_prompt_templates = translation_profiles::list_all_prompt_templates(conn)?;
       let app_settings = app_settings::get(conn)?;
 
       let mut provider_exports: Vec<ProviderExport> = providers.iter().map(ProviderExport::from).collect();
@@ -47,6 +48,9 @@ impl ImportExportService {
       let mut targets = profile_models;
       targets.sort_by_key(|t| (t.translation_profile_id, t.priority, t.provider_model_id));
 
+      let mut templates = profile_prompt_templates;
+      templates.sort_by_key(|t| (t.translation_profile_id, t.sort_order, t.id));
+
       Ok(ConfigurationExport {
         format_version: EXPORT_FORMAT_VERSION,
         exported_at: now_rfc3339(),
@@ -54,6 +58,7 @@ impl ImportExportService {
         models,
         translation_profiles: profiles,
         profile_models: targets,
+        profile_prompt_templates: templates,
         app_settings,
       })
     })
@@ -169,7 +174,7 @@ impl ImportExportService {
       }
     }
 
-    // Profiles with targets grouped
+    // Profiles with targets + prompt templates grouped
     let mut targets_by_profile: HashMap<Uuid, Vec<_>> = HashMap::new();
     for t in &plan.targets {
       targets_by_profile
@@ -177,10 +182,22 @@ impl ImportExportService {
         .or_default()
         .push(t.clone());
     }
+    let mut templates_by_profile: HashMap<Uuid, Vec<_>> = HashMap::new();
+    for t in &plan.prompt_templates {
+      templates_by_profile.entry(t.translation_profile_id).or_default().push(
+        crate::domain::translation_profile::PromptTemplate {
+          id: t.id,
+          name: t.name.clone(),
+          system_template: t.system_template.clone(),
+          user_template: t.user_template.clone(),
+        },
+      );
+    }
     for profile in &plan.profiles {
       let targets = targets_by_profile.remove(&profile.id).unwrap_or_default();
+      let prompt_templates = templates_by_profile.remove(&profile.id).unwrap_or_default();
       let is_new = translation_profiles::get(conn, profile.id).is_err();
-      translation_profiles::save_with_targets(conn, profile, &targets, is_new)?;
+      translation_profiles::save_with_targets(conn, profile, &targets, &prompt_templates, is_new)?;
     }
 
     // Settings + optional global proxy clear
