@@ -81,6 +81,9 @@ describe("normalizeTranslateWorkspace", () => {
       modelId: "m1",
       sourceLang: "zh",
       targetLang: "en",
+      usedSourceLangs: ["en", "zh"],
+      usedTargetLangs: ["ja"],
+      outputViewMode: "markdown",
       promptTemplateId: "t1",
       sourceText: "你好",
       outputText: "Hello",
@@ -98,6 +101,9 @@ describe("normalizeTranslateWorkspace", () => {
       modelId: "m1",
       sourceLang: "zh",
       targetLang: "en",
+      usedSourceLangs: ["en", "zh"],
+      usedTargetLangs: ["ja"],
+      outputViewMode: "markdown",
       promptTemplateId: "t1",
       sourceText: "你好",
       outputText: "Hello",
@@ -108,6 +114,18 @@ describe("normalizeTranslateWorkspace", () => {
       errorMessage: null,
       updatedAt: 1000,
     });
+  });
+
+  test("defaults missing used langs and outputViewMode for legacy rows", () => {
+    const ws = normalizeTranslateWorkspace({
+      id: "w1",
+      name: "Legacy",
+      sourceLang: "auto",
+      targetLang: "en",
+    });
+    expect(ws?.usedSourceLangs).toEqual([]);
+    expect(ws?.usedTargetLangs).toEqual([]);
+    expect(ws?.outputViewMode).toBe("plain");
   });
 
   test("clamps name and text length", () => {
@@ -134,7 +152,7 @@ describe("normalizeTranslateWorkspace", () => {
     });
     expect(ws?.name).toBe("Workspace 1");
     expect(ws?.sourceLang).toBe("auto");
-    expect(ws?.targetLang).toBe("en");
+    expect(ws?.targetLang).toBe("auto");
     expect(ws?.detectedSourceLang).toBeNull();
   });
 });

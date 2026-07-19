@@ -117,6 +117,7 @@ const en = {
     modelOption: "{{provider}} / {{model}}",
     sourceLanguage: "Source language",
     targetLanguage: "Target language",
+    searchLanguages: "Search languages",
     swapLanguages: "Swap source and target languages",
     share: "Share translation",
     favorite: "Favorite",

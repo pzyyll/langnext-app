@@ -1,12 +1,18 @@
 // ABOUTME: Translate page workspaces: per-tab presets, languages, and draft text.
 // ABOUTME: localStorage-backed store with safe normalize + migration from session prefs.
 import {
+  DEFAULT_OUTPUT_VIEW_MODE,
+  isOutputViewMode,
+  type OutputViewMode,
+} from "../../lib/output-view-mode";
+import {
   isLanguageId,
   isSelectableLanguageId,
   type LanguageId,
   type SelectableLanguageId,
   type SourceLanguageId,
 } from "./-languages";
+import { normalizeUsedLanguageIds } from "./-recentLanguages";
 import { getTranslateSessionPreferences, type TranslateSessionPreferences } from "./-sessionPreferences";
 
 /** Namespaced key for the multi-workspace translate store. */
@@ -34,6 +40,15 @@ export interface TranslateWorkspace {
   modelId: string;
   sourceLang: SourceLanguageId;
   targetLang: SelectableLanguageId;
+  /**
+   * Concrete languages the user has used on the source tab strip (excludes auto).
+   * Per-workspace so a new workspace starts with only Auto (+ current).
+   */
+  usedSourceLangs: LanguageId[];
+  /** Concrete languages used on the target tab strip (excludes auto). */
+  usedTargetLangs: LanguageId[];
+  /** Output pane plain vs markdown — per workspace, not a global preference. */
+  outputViewMode: OutputViewMode;
   /** Empty string = profile default template. */
   promptTemplateId: string;
   sourceText: string;
@@ -92,7 +107,8 @@ export function createTranslateWorkspace(
   now = Date.now(),
 ): TranslateWorkspace {
   const sourceLang = isSelectableLanguageId(prefs?.sourceLang) ? prefs.sourceLang : ("auto" as SourceLanguageId);
-  const targetLang = isSelectableLanguageId(prefs?.targetLang) ? prefs.targetLang : ("en" as SelectableLanguageId);
+  // Default both sides to Auto so a blank workspace matches an Auto/Auto profile seed.
+  const targetLang = isSelectableLanguageId(prefs?.targetLang) ? prefs.targetLang : ("auto" as SelectableLanguageId);
 
   return {
     id: newWorkspaceId(),
@@ -101,6 +117,9 @@ export function createTranslateWorkspace(
     modelId: typeof prefs?.modelId === "string" ? prefs.modelId : "",
     sourceLang,
     targetLang,
+    usedSourceLangs: [],
+    usedTargetLangs: [],
+    outputViewMode: DEFAULT_OUTPUT_VIEW_MODE,
     promptTemplateId: typeof prefs?.promptTemplateId === "string" ? prefs.promptTemplateId : "",
     sourceText: "",
     outputText: "",
@@ -128,7 +147,7 @@ export function normalizeTranslateWorkspace(raw: unknown, now = Date.now()): Tra
     : ("auto" as SourceLanguageId);
   const targetLang = isSelectableLanguageId(typeof record.targetLang === "string" ? record.targetLang : null)
     ? (record.targetLang as SelectableLanguageId)
-    : ("en" as SelectableLanguageId);
+    : ("auto" as SelectableLanguageId);
   const detected =
     typeof record.detectedSourceLang === "string" && isLanguageId(record.detectedSourceLang)
       ? record.detectedSourceLang
@@ -154,6 +173,9 @@ export function normalizeTranslateWorkspace(raw: unknown, now = Date.now()): Tra
     modelId: typeof record.modelId === "string" ? record.modelId : "",
     sourceLang,
     targetLang,
+    usedSourceLangs: normalizeUsedLanguageIds(record.usedSourceLangs),
+    usedTargetLangs: normalizeUsedLanguageIds(record.usedTargetLangs),
+    outputViewMode: isOutputViewMode(record.outputViewMode) ? record.outputViewMode : DEFAULT_OUTPUT_VIEW_MODE,
     promptTemplateId: typeof record.promptTemplateId === "string" ? record.promptTemplateId : "",
     sourceText: clampText(typeof record.sourceText === "string" ? record.sourceText : ""),
     outputText: clampText(typeof record.outputText === "string" ? record.outputText : ""),

@@ -106,8 +106,8 @@ export function ComboboxField({
     >
       <Combobox.Trigger id={id} className={triggerClassName} aria-label={ariaLabel} aria-labelledby={ariaLabelledby}>
         <Combobox.Value placeholder={placeholder} />
-        <Combobox.Icon className="size-4 shrink-0 rotate-180 transition-transform duration-200 ease-out group-data-popup-open:rotate-0">
-          <IconClarityAngleLine className="pointer-events-none" />
+        <Combobox.Icon className="inline-flex size-4 shrink-0 items-center justify-center rotate-180 transition-transform duration-200 ease-out group-data-popup-open:rotate-0">
+          <IconClarityAngleLine className="pointer-events-none size-4" />
         </Combobox.Icon>
       </Combobox.Trigger>
       <Combobox.Portal>

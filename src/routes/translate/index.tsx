@@ -19,12 +19,7 @@ import { iconButtonClassName } from "../../components/ui";
 import { SelectField } from "../../components/SelectField";
 import { TextAutosize, TextAutosizeContent } from "../../components/TextAutosize";
 import { TextLoading } from "../../components/TextLoading";
-import {
-  getOutputViewMode,
-  setOutputViewMode,
-  toggleOutputViewMode,
-  type OutputViewMode,
-} from "../../lib/output-view-mode";
+import { toggleOutputViewMode, type OutputViewMode } from "../../lib/output-view-mode";
 import { shouldApplyProfileResult } from "../../query/profileApplyGuard";
 import {
   allProviderModelsOptions,
@@ -144,6 +139,9 @@ function TranslatePage() {
   const [workspaceStore, setWorkspaceStore] = useState<TranslateWorkspacesStore>(() => boot.store);
   const [sourceLang, setSourceLang] = useState<SourceLanguageId>(boot.workspace.sourceLang);
   const [targetLang, setTargetLang] = useState<SelectableLanguageId>(boot.workspace.targetLang);
+  /** Per-workspace used-language tabs (grow-on-use; empty on new workspace). */
+  const [usedSourceLangs, setUsedSourceLangs] = useState<LanguageId[]>(() => [...boot.workspace.usedSourceLangs]);
+  const [usedTargetLangs, setUsedTargetLangs] = useState<LanguageId[]>(() => [...boot.workspace.usedTargetLangs]);
   const [detectedSourceLang, setDetectedSourceLang] = useState<LanguageId | null>(boot.workspace.detectedSourceLang);
   const [profilePrimaryLang, setProfilePrimaryLang] = useState<LanguageId | null>(null);
   const [profilePreferredTargetLang, setProfilePreferredTargetLang] = useState<LanguageId | null>(null);
@@ -158,8 +156,8 @@ function TranslatePage() {
   const [isTranslating, setIsTranslating] = useState(false);
   /** True after the first stream chunk of the current run; swaps loading dots for scramble. */
   const [streamOutputActive, setStreamOutputActive] = useState(false);
-  /** Shared with quick-translate; default plain. */
-  const [outputViewMode, setOutputViewModeState] = useState<OutputViewMode>(() => getOutputViewMode());
+  /** Per-workspace plain/markdown output preference (not the global quick-translate key). */
+  const [outputViewMode, setOutputViewMode] = useState<OutputViewMode>(boot.workspace.outputViewMode);
   const isMarkdownView = outputViewMode === "markdown";
   const [activeModelLabel, setActiveModelLabel] = useState<string | null>(boot.workspace.activeModelLabel);
 
@@ -230,6 +228,8 @@ function TranslatePage() {
   const profilePrefsGeneration = useRef(0);
   const activeRequestId = useRef<string | null>(null);
   const streamUnlisteners = useRef<UnlistenFn[]>([]);
+  /** Source/target panes grid — language more-picker sizes to this box. */
+  const languagePopupBoundsRef = useRef<HTMLDivElement>(null);
 
   /** Snapshot of UI fields that belong to the active workspace. */
   function buildWorkspacePatch(): Partial<Omit<TranslateWorkspace, "id">> {
@@ -238,6 +238,9 @@ function TranslatePage() {
       modelId: selectedModelId,
       sourceLang,
       targetLang,
+      usedSourceLangs,
+      usedTargetLangs,
+      outputViewMode,
       promptTemplateId: selectedPromptTemplateId,
       sourceText,
       outputText,
@@ -254,6 +257,9 @@ function TranslatePage() {
     setSelectedModelId(workspace.modelId);
     setSourceLang(workspace.sourceLang);
     setTargetLang(workspace.targetLang);
+    setUsedSourceLangs([...workspace.usedSourceLangs]);
+    setUsedTargetLangs([...workspace.usedTargetLangs]);
+    setOutputViewMode(workspace.outputViewMode);
     setSelectedPromptTemplateId(workspace.promptTemplateId);
     setSourceText(workspace.sourceText);
     setOutputText(workspace.outputText);
@@ -321,13 +327,19 @@ function TranslatePage() {
       n += 1;
       name = t("translate.workspace.defaultName", { n });
     }
-    // New task: keep current toolbar config, start with empty draft panes.
+    // New task: keep profile/model/prompt, but seed languages from the profile (not the
+    // previous workspace's tab selection). Empty used-lang history + empty drafts.
+    const profileSeed = profiles.find((profile) => profile.id === selectedProfileId) ?? null;
+    const seedSourceLang: SourceLanguageId =
+      profileSeed && isSelectableLanguageId(profileSeed.sourceLang) ? profileSeed.sourceLang : AUTO_LANGUAGE;
+    const seedTargetLang: SelectableLanguageId =
+      profileSeed && isSelectableLanguageId(profileSeed.targetLang) ? profileSeed.targetLang : AUTO_LANGUAGE;
     const workspace = createTranslateWorkspace({
       name,
       profileId: selectedProfileId,
       modelId: selectedModelId,
-      sourceLang,
-      targetLang,
+      sourceLang: seedSourceLang,
+      targetLang: seedTargetLang,
       promptTemplateId: selectedPromptTemplateId,
     });
     const next = addWorkspaceToStore(flushed, workspace);
@@ -386,6 +398,9 @@ function TranslatePage() {
     selectedModelId,
     sourceLang,
     targetLang,
+    usedSourceLangs,
+    usedTargetLangs,
+    outputViewMode,
     selectedPromptTemplateId,
     sourceText,
     outputText,
@@ -1052,20 +1067,30 @@ function TranslatePage() {
           <LanguageChipBar
             sourceLang={sourceLang}
             targetLang={targetLang}
+            usedSourceLangs={usedSourceLangs}
+            usedTargetLangs={usedTargetLangs}
             sourceOptions={sourceLanguageOptions}
             targetOptions={targetLanguageOptions}
             disabled={isTranslating}
             swapDisabled={sourceLang === "auto" && !detectedSourceLang}
             detectedLanguageLabel={detectedSourceLang ? t(`translate.languages.${detectedSourceLang}`) : null}
+            popupBoundsRef={languagePopupBoundsRef}
             onSourceChange={(value) => {
               setSourceLang(value);
               setDetectedSourceLang(null);
             }}
             onTargetChange={setTargetLang}
+            onUsedLangsChange={({ source, target }) => {
+              setUsedSourceLangs(source);
+              setUsedTargetLangs(target);
+            }}
             onSwap={swapLanguages}
           />
 
-          <div className="grid min-h-0 flex-1 grid-cols-1 gap-gutter overflow-hidden lg:grid-cols-2">
+          <div
+            ref={languagePopupBoundsRef}
+            className="grid min-h-0 flex-1 grid-cols-1 gap-gutter overflow-hidden lg:grid-cols-2"
+          >
             {/* Source pane */}
             <section
               className="shadow-frame flex min-h-64 flex-col border border-outline bg-surface-container-lowest lg:min-h-0"
@@ -1202,11 +1227,7 @@ function TranslatePage() {
                   aria-label={isMarkdownView ? t("translate.plainText") : t("translate.markdownPreview")}
                   aria-pressed={isMarkdownView}
                   onClick={() => {
-                    setOutputViewModeState((current) => {
-                      const next = toggleOutputViewMode(current);
-                      setOutputViewMode(next);
-                      return next;
-                    });
+                    setOutputViewMode((current) => toggleOutputViewMode(current));
                   }}
                 >
                   {isMarkdownView ? (

@@ -18,5 +18,37 @@
     "editor.insertSpaces": true,
     "editor.tabSize": 2
   },
-  "js/ts.experimental.useTsgo": false
+  "js/ts.experimental.useTsgo": false,
+
+  // Tailwind v4: CSS-first entry (no tailwind.config.*)
+  "tailwindCSS.experimental.configFile": "src/styles.css",
+
+  // Completions inside cn()/clsx()/twMerge() argument strings
+  "tailwindCSS.classFunctions": ["cn", "clsx", "twMerge"],
+
+  // JSX attrs beyond default class/className (e.g. textareaClassName=)
+  "tailwindCSS.classAttributes": [
+    "class",
+    "className",
+    "ngClass",
+    "class:list",
+    ".*[Cc]lass[Nn]ame"
+  ],
+
+  // Module-level constants: export const iconButtonClassName = "…"
+  "tailwindCSS.experimental.classRegex": [
+    [
+      "(?:const|let|var)\\s+[\\w$]*[Cc]lass[Nn]ame[\\w$]*\\s*=\\s*[\"'`]([^\"'`]*)[\"'`]",
+      "([^\"'`\\s]*)"
+    ]
+  ],
+
+  // Required so suggestions fire while typing inside string literals
+  "editor.quickSuggestions": {
+    "strings": "on"
+  },
+
+  "files.associations": {
+    "*.css": "tailwindcss"
+  }
 }

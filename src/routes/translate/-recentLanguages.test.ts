@@ -1,138 +1,70 @@
-// ABOUTME: Unit tests for fixed-order language tab helpers and store normalization.
-// ABOUTME: Covers stable select, admit-new, pin-first auto, and localStorage round-trip.
+// ABOUTME: Unit tests for grow-on-use language tabs and source/target conflict resolution.
+// ABOUTME: Covers empty defaults, Auto pin, first-use order, and opposite-side Auto switch.
 
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { describe, expect, it } from "bun:test";
 import {
-  DEFAULT_RECENT_SOURCE_LANGUAGES,
-  DEFAULT_RECENT_TARGET_LANGUAGES,
-  MAX_RECENT_LANGUAGES,
-  RECENT_LANGUAGES_KEY,
-  admitLanguageToTabs,
-  getRecentLanguagesStore,
-  normalizeRecentLanguagesStore,
-  setRecentLanguagesStore,
+  EMPTY_USED_LANGUAGES,
+  MAX_USED_LANGUAGES,
+  normalizeUsedLanguageIds,
+  recordLanguageUse,
+  resolveOppositeOnConflict,
   visibleLanguageTabs,
 } from "./-recentLanguages";
 
-/** Minimal in-memory localStorage for bun:test (no DOM globals). */
-function installMemoryLocalStorage(): void {
-  const store = new Map<string, string>();
-  const memoryStorage: Storage = {
-    get length() {
-      return store.size;
-    },
-    clear() {
-      store.clear();
-    },
-    getItem(key: string) {
-      return store.has(key) ? (store.get(key) ?? null) : null;
-    },
-    key(index: number) {
-      return [...store.keys()][index] ?? null;
-    },
-    removeItem(key: string) {
-      store.delete(key);
-    },
-    setItem(key: string, value: string) {
-      store.set(key, String(value));
-    },
-  };
-  Object.defineProperty(globalThis, "localStorage", {
-    configurable: true,
-    writable: true,
-    value: memoryStorage,
-  });
-  Object.defineProperty(globalThis, "window", {
-    configurable: true,
-    writable: true,
-    value: { localStorage: memoryStorage },
-  });
-}
-
-beforeEach(() => {
-  installMemoryLocalStorage();
-});
-
-afterEach(() => {
-  localStorage.removeItem(RECENT_LANGUAGES_KEY);
-});
-
 describe("visibleLanguageTabs", () => {
-  it("keeps stable order when current is already in the strip", () => {
-    expect(visibleLanguageTabs(["auto", "en", "zh"], "zh")).toEqual(["auto", "en", "zh"]);
-    expect(visibleLanguageTabs(["auto", "en", "zh"], "en")).toEqual(["auto", "en", "zh"]);
+  it("shows only Auto when history is empty and current is auto", () => {
+    expect(visibleLanguageTabs([], "auto", { pinFirst: "auto" })).toEqual(["auto"]);
   });
 
-  it("does not move the selected tab to the front", () => {
-    // Regression: old MRU display put current first.
-    expect(visibleLanguageTabs(["en", "zh", "ja"], "ja")).toEqual(["en", "zh", "ja"]);
+  it("shows Auto + current for an English <-> Chinese style preset", () => {
+    expect(visibleLanguageTabs([], "en", { pinFirst: "auto" })).toEqual(["auto", "en"]);
+    expect(visibleLanguageTabs([], "zh", { pinFirst: "auto" })).toEqual(["auto", "zh"]);
   });
 
-  it("injects current into the last slot when missing", () => {
-    expect(visibleLanguageTabs(["en", "zh", "ja"], "ko")).toEqual(["en", "zh", "ko"]);
+  it("keeps first-use order and does not move the selected tab", () => {
+    expect(visibleLanguageTabs(["en", "zh"], "zh", { pinFirst: "auto" })).toEqual(["auto", "en", "zh"]);
+    expect(visibleLanguageTabs(["en", "zh"], "en", { pinFirst: "auto" })).toEqual(["auto", "en", "zh"]);
   });
 
-  it("pins auto first on the source strip", () => {
-    expect(visibleLanguageTabs(["en", "zh", "auto"], "en", { pinFirst: "auto" })).toEqual(["auto", "en", "zh"]);
-  });
-
-  it("replaces a non-pinned slot when current is missing under pinFirst", () => {
-    expect(visibleLanguageTabs(["auto", "en", "zh"], "ja", { pinFirst: "auto" })).toEqual(["auto", "en", "ja"]);
+  it("does not invent unused languages beyond current", () => {
+    expect(visibleLanguageTabs([], "auto", { pinFirst: "auto" })).toEqual(["auto"]);
+    expect(visibleLanguageTabs(["en"], "auto", { pinFirst: "auto" })).toEqual(["auto", "en"]);
   });
 });
 
-describe("admitLanguageToTabs", () => {
-  it("keeps order when the language is already a tab", () => {
-    expect(admitLanguageToTabs(["auto", "en", "zh"], "zh", { pinFirst: "auto" })).toEqual(["auto", "en", "zh"]);
+describe("recordLanguageUse", () => {
+  it("keeps the previous concrete language when switching to a new one", () => {
+    expect(recordLanguageUse([], "zh", "en")).toEqual(["en", "zh"]);
   });
 
-  it("inserts a new language after the pin and drops the tail", () => {
-    expect(admitLanguageToTabs(["auto", "en", "zh"], "fr", { pinFirst: "auto" })).toEqual(["auto", "fr", "en"]);
+  it("does not store auto", () => {
+    expect(recordLanguageUse(["en"], "auto", "en")).toEqual(["en"]);
   });
 
-  it("inserts a new target language at the front", () => {
-    expect(admitLanguageToTabs(["en", "zh", "ja"], "ko")).toEqual(["ko", "en", "zh"]);
+  it("does not reorder when re-selecting an existing language", () => {
+    expect(recordLanguageUse(["en", "zh"], "en", "zh")).toEqual(["en", "zh"]);
   });
 
-  it("respects max", () => {
-    expect(admitLanguageToTabs(["en", "zh"], "fr", { max: MAX_RECENT_LANGUAGES })).toEqual(["fr", "en", "zh"]);
-  });
-});
-
-describe("normalizeRecentLanguagesStore", () => {
-  it("falls back to defaults for invalid input", () => {
-    expect(normalizeRecentLanguagesStore(null)).toEqual({
-      source: DEFAULT_RECENT_SOURCE_LANGUAGES,
-      target: DEFAULT_RECENT_TARGET_LANGUAGES,
-    });
-  });
-
-  it("filters invalid ids and caps length", () => {
-    expect(
-      normalizeRecentLanguagesStore({
-        source: ["auto", "nope", "en", "zh", "fr"],
-        target: ["ja", "en"],
-      }),
-    ).toEqual({
-      source: ["auto", "en", "zh"],
-      target: ["ja", "en"],
-    });
+  it("drops the oldest concrete language when over capacity", () => {
+    expect(recordLanguageUse(["en", "zh"], "ja", "zh", MAX_USED_LANGUAGES)).toEqual(["zh", "ja"]);
   });
 });
 
-describe("getRecentLanguagesStore / setRecentLanguagesStore", () => {
-  it("round-trips through localStorage", () => {
-    setRecentLanguagesStore({ source: ["auto", "fr"], target: ["de", "en", "zh"] });
-    expect(getRecentLanguagesStore()).toEqual({
-      source: ["auto", "fr"],
-      target: ["de", "en", "zh"],
-    });
+describe("resolveOppositeOnConflict", () => {
+  it("switches the opposite side to auto when both would be the same concrete language", () => {
+    expect(resolveOppositeOnConflict("zh", "zh")).toBe("auto");
+    expect(resolveOppositeOnConflict("en", "zh")).toBe("zh");
+    expect(resolveOppositeOnConflict("auto", "zh")).toBe("zh");
+  });
+});
+
+describe("normalizeUsedLanguageIds", () => {
+  it("returns empty for non-arrays", () => {
+    expect(normalizeUsedLanguageIds(null)).toEqual(EMPTY_USED_LANGUAGES);
+    expect(normalizeUsedLanguageIds("x")).toEqual([]);
   });
 
-  it("returns defaults when storage is empty", () => {
-    expect(getRecentLanguagesStore()).toEqual({
-      source: DEFAULT_RECENT_SOURCE_LANGUAGES,
-      target: DEFAULT_RECENT_TARGET_LANGUAGES,
-    });
+  it("strips auto and invalid ids and caps length", () => {
+    expect(normalizeUsedLanguageIds(["auto", "nope", "en", "zh", "fr"])).toEqual(["en", "zh"]);
   });
 });

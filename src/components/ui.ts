@@ -19,6 +19,10 @@ export const dangerButtonClassName =
 export const iconButtonClassName =
   "inline-flex size-7 shrink-0 cursor-default items-center justify-center rounded-md border-0 bg-transparent text-neutral hover:bg-surface-2 hover:text-on-surface active:bg-surface-3 focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface data-disabled:text-disabled disabled:text-disabled";
 
+export const iconButtonCircleClassName = cn(iconButtonClassName, "rounded-full");
+
+export const iconButtonCircleLargeClassName = cn(iconButtonCircleClassName, "size-9");
+
 export const dangerIconButtonClassName = cn(
   iconButtonClassName,
   "text-error hover:bg-error hover:text-on-error active:bg-error active:text-on-error",

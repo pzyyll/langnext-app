@@ -115,6 +115,7 @@ const zhCN = {
     modelOption: "{{provider}} / {{model}}",
     sourceLanguage: "源语言",
     targetLanguage: "目标语言",
+    searchLanguages: "搜索语言",
     swapLanguages: "交换源语言与目标语言",
     share: "分享翻译",
     favorite: "收藏",

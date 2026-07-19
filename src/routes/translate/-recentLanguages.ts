@@ -1,31 +1,43 @@
-// ABOUTME: Persist recent translate language tabs (source/target) in localStorage.
-// ABOUTME: Fixed tab order like Google Translate; only new picks reshuffle slots.
+// ABOUTME: Helpers for per-workspace used-language tabs on the translate page.
+// ABOUTME: Auto is pinned; concrete tabs grow only after the user actually uses them.
 
-import { AUTO_LANGUAGE, isSelectableLanguageId, type SelectableLanguageId } from "./-languages";
+import {
+  AUTO_LANGUAGE,
+  isLanguageId,
+  type LanguageId,
+  type SelectableLanguageId,
+} from "./-languages";
 
-/** Namespaced key for recent language chips on the translate page. */
-export const RECENT_LANGUAGES_KEY = "langnext-translate-recent-languages";
-
-/** Max language tabs shown per side (Google-style rail, excluding the more caret). */
+/** Max tabs per side including the pinned Auto tab. */
 export const MAX_RECENT_LANGUAGES = 3;
 
-export type RecentLanguagesStore = {
-  source: SelectableLanguageId[];
-  target: SelectableLanguageId[];
-};
+/** Max concrete (non-auto) languages stored/shown after Auto. */
+export const MAX_USED_LANGUAGES = MAX_RECENT_LANGUAGES - 1;
 
-/** Default tab seeds when storage is empty or invalid. */
-export const DEFAULT_RECENT_SOURCE_LANGUAGES: SelectableLanguageId[] = ["auto", "en", "zh"];
-export const DEFAULT_RECENT_TARGET_LANGUAGES: SelectableLanguageId[] = ["en", "zh", "ja"];
+/**
+ * Used concrete languages for one workspace side (never includes `auto`).
+ * Persisted on the workspace document — not a global localStorage key.
+ */
+export type UsedLanguagesSide = LanguageId[];
 
-function normalizeRecentList(raw: unknown, max = MAX_RECENT_LANGUAGES): SelectableLanguageId[] {
+/** Empty history: only Auto (+ current selection) until the user uses more languages. */
+export const EMPTY_USED_LANGUAGES: LanguageId[] = [];
+
+/** Source and target strips pin Auto as the first tab. */
+export const AUTO_PIN_FIRST: SelectableLanguageId = AUTO_LANGUAGE;
+/** @deprecated Use AUTO_PIN_FIRST. */
+export const SOURCE_PIN_FIRST: SelectableLanguageId = AUTO_PIN_FIRST;
+
+/** Normalize a stored used-language list (concrete ids only, capped). */
+export function normalizeUsedLanguageIds(raw: unknown, max = MAX_USED_LANGUAGES): LanguageId[] {
   if (!Array.isArray(raw)) {
     return [];
   }
-  const out: SelectableLanguageId[] = [];
+  const out: LanguageId[] = [];
   const seen = new Set<string>();
   for (const item of raw) {
-    if (typeof item !== "string" || !isSelectableLanguageId(item) || seen.has(item)) {
+    // Accept legacy rows that stored `auto`; only concrete ids are kept.
+    if (typeof item !== "string" || !isLanguageId(item) || seen.has(item)) {
       continue;
     }
     seen.add(item);
@@ -37,143 +49,130 @@ function normalizeRecentList(raw: unknown, max = MAX_RECENT_LANGUAGES): Selectab
   return out;
 }
 
-/** Normalize a raw document into capped source/target tab lists. */
-export function normalizeRecentLanguagesStore(raw: unknown): RecentLanguagesStore {
-  if (raw == null || typeof raw !== "object") {
-    return {
-      source: [...DEFAULT_RECENT_SOURCE_LANGUAGES],
-      target: [...DEFAULT_RECENT_TARGET_LANGUAGES],
-    };
-  }
-  const record = raw as Record<string, unknown>;
-  const source = normalizeRecentList(record.source);
-  const target = normalizeRecentList(record.target);
-  return {
-    source: source.length > 0 ? source : [...DEFAULT_RECENT_SOURCE_LANGUAGES],
-    target: target.length > 0 ? target : [...DEFAULT_RECENT_TARGET_LANGUAGES],
-  };
-}
-
-/** Read recent language tabs; invalid JSON falls back to defaults. */
-export function getRecentLanguagesStore(): RecentLanguagesStore {
-  if (typeof window === "undefined") {
-    return {
-      source: [...DEFAULT_RECENT_SOURCE_LANGUAGES],
-      target: [...DEFAULT_RECENT_TARGET_LANGUAGES],
-    };
-  }
-  try {
-    const stored = localStorage.getItem(RECENT_LANGUAGES_KEY);
-    if (stored == null || stored === "") {
-      return {
-        source: [...DEFAULT_RECENT_SOURCE_LANGUAGES],
-        target: [...DEFAULT_RECENT_TARGET_LANGUAGES],
-      };
-    }
-    return normalizeRecentLanguagesStore(JSON.parse(stored) as unknown);
-  } catch {
-    return {
-      source: [...DEFAULT_RECENT_SOURCE_LANGUAGES],
-      target: [...DEFAULT_RECENT_TARGET_LANGUAGES],
-    };
-  }
-}
-
-/** Persist recent language tabs. Swallows quota / private-mode errors. */
-export function setRecentLanguagesStore(store: RecentLanguagesStore): void {
-  if (typeof window === "undefined") {
-    return;
-  }
-  try {
-    const normalized = normalizeRecentLanguagesStore(store);
-    localStorage.setItem(RECENT_LANGUAGES_KEY, JSON.stringify(normalized));
-  } catch {
-    // Ignore storage failures.
-  }
-}
-
 export type VisibleTabsOptions = {
   max?: number;
-  /** When set (e.g. `auto` on source), this id stays in slot 0. */
+  /** Always `auto` for both strips. */
   pinFirst?: SelectableLanguageId;
 };
 
 /**
- * Visible tab ids in **stable order** (Google Translate tablist behavior).
- * Selecting an existing tab must not reorder; only inject `current` when missing.
+ * Visible tab ids: pinned Auto + used concretes + current (if concrete and not yet used).
+ * Does not reorder on selection; growth only happens via `recordLanguageUse`.
  */
 export function visibleLanguageTabs(
-  tabs: readonly SelectableLanguageId[],
+  used: readonly SelectableLanguageId[],
   current: SelectableLanguageId,
   options: VisibleTabsOptions = {},
 ): SelectableLanguageId[] {
   const max = options.max ?? MAX_RECENT_LANGUAGES;
-  const pinFirst = options.pinFirst;
-  let list = tabs.filter((id, index, all) => all.indexOf(id) === index);
+  const pinFirst = options.pinFirst ?? AUTO_PIN_FIRST;
 
-  if (pinFirst) {
-    list = [pinFirst, ...list.filter((id) => id !== pinFirst)];
+  const concrete: LanguageId[] = [];
+  const seen = new Set<string>();
+  for (const id of used) {
+    if (!isLanguageId(id) || seen.has(id)) {
+      continue;
+    }
+    seen.add(id);
+    concrete.push(id);
   }
 
-  if (!list.includes(current)) {
-    if (list.length < max) {
-      list = [...list, current];
+  // Show the active concrete selection even before it has been persisted as "used".
+  if (isLanguageId(current) && !seen.has(current)) {
+    concrete.push(current);
+  }
+
+  // Cap concrete slots; always keep `current` when it is concrete.
+  let capped = concrete.slice(0, Math.max(0, max - 1));
+  if (isLanguageId(current) && !capped.includes(current)) {
+    if (capped.length < max - 1) {
+      capped = [...capped, current];
+    } else if (capped.length > 0) {
+      capped = [...capped.slice(0, -1), current];
     } else {
-      // Replace the last non-pinned slot so pinFirst and other tabs keep position.
-      let replaceAt = list.length - 1;
-      if (pinFirst && list[replaceAt] === pinFirst) {
-        replaceAt = Math.max(0, list.length - 2);
-      }
-      if (replaceAt >= 0) {
-        list = list.slice();
-        list[replaceAt] = current;
-      }
+      capped = [current];
     }
   }
 
-  if (pinFirst) {
-    list = [pinFirst, ...list.filter((id) => id !== pinFirst)];
-  }
-
-  return list.slice(0, max);
+  return [pinFirst, ...capped].slice(0, max);
 }
 
 /**
- * Admit a language chosen from the full picker into the tab strip.
- * - Already present: keep order (tab select only).
- * - New: insert after pin (or at front), drop overflow from the end.
+ * Record a language the user actually selected.
+ * - Keeps first-use order (no move-to-front).
+ * - Persists the previous concrete selection so it stays on the strip after switching.
+ * - Ignores `auto` as a stored entry (Auto is always pinned in the UI).
  */
-export function admitLanguageToTabs(
-  tabs: readonly SelectableLanguageId[],
-  id: SelectableLanguageId,
-  options: VisibleTabsOptions = {},
-): SelectableLanguageId[] {
-  const max = options.max ?? MAX_RECENT_LANGUAGES;
-  const pinFirst = options.pinFirst;
+export function recordLanguageUse(
+  used: readonly SelectableLanguageId[],
+  selected: SelectableLanguageId,
+  previous: SelectableLanguageId,
+  maxConcrete = MAX_USED_LANGUAGES,
+): LanguageId[] {
+  const next: LanguageId[] = [];
+  const seen = new Set<string>();
 
-  if (tabs.includes(id)) {
-    return visibleLanguageTabs(tabs, id, options);
-  }
-
-  if (pinFirst) {
-    if (id === pinFirst) {
-      return visibleLanguageTabs(tabs, id, options);
+  function pushConcrete(id: SelectableLanguageId) {
+    if (!isLanguageId(id) || seen.has(id)) {
+      return;
     }
-    const rest = tabs.filter((item) => item !== pinFirst && item !== id);
-    return [pinFirst, id, ...rest].slice(0, max);
+    seen.add(id);
+    next.push(id);
   }
 
-  const rest = tabs.filter((item) => item !== id);
-  return [id, ...rest].slice(0, max);
+  for (const id of used) {
+    pushConcrete(id);
+  }
+  // Leaving a concrete tab should keep it visible (e.g. English stays when picking Chinese).
+  if (previous !== selected) {
+    pushConcrete(previous);
+  }
+  pushConcrete(selected);
+
+  if (next.length <= maxConcrete) {
+    return next;
+  }
+  // Drop oldest first-use entries when over capacity.
+  return next.slice(next.length - maxConcrete);
 }
 
-/** @deprecated Use admitLanguageToTabs / visibleLanguageTabs — kept name for older imports. */
+/**
+ * Admit a language from the more-picker / tab interaction (alias of record with same previous).
+ * Prefer `recordLanguageUse` when previous selection is known.
+ */
+export function admitLanguageToTabs(
+  used: readonly SelectableLanguageId[],
+  id: SelectableLanguageId,
+  options: VisibleTabsOptions & { previous?: SelectableLanguageId } = {},
+): SelectableLanguageId[] {
+  const previous = options.previous ?? id;
+  const recorded = recordLanguageUse(used, id, previous, MAX_USED_LANGUAGES);
+  // Return storage shape (concrete only); callers pass this back into visibleLanguageTabs.
+  return recorded;
+}
+
+/**
+ * When both sides would share the same concrete language, force the other side to Auto.
+ * Returns the other side's next selection (unchanged when no conflict).
+ */
+export function resolveOppositeOnConflict(
+  selected: SelectableLanguageId,
+  opposite: SelectableLanguageId,
+): SelectableLanguageId {
+  if (selected !== AUTO_LANGUAGE && selected === opposite) {
+    return AUTO_LANGUAGE;
+  }
+  return opposite;
+}
+
+/** @deprecated Use recordLanguageUse. */
 export function touchRecentLanguage(
   recents: readonly SelectableLanguageId[],
   id: SelectableLanguageId,
   max = MAX_RECENT_LANGUAGES,
 ): SelectableLanguageId[] {
-  return admitLanguageToTabs(recents, id, { max });
+  const maxConcrete = Math.max(0, max - 1);
+  return recordLanguageUse(recents, id, id, maxConcrete);
 }
 
 /** @deprecated Use visibleLanguageTabs. */
@@ -182,8 +181,5 @@ export function displayRecentLanguages(
   recents: readonly SelectableLanguageId[],
   max = MAX_RECENT_LANGUAGES,
 ): SelectableLanguageId[] {
-  return visibleLanguageTabs(recents, current, { max });
+  return visibleLanguageTabs(recents, current, { max, pinFirst: AUTO_PIN_FIRST });
 }
-
-/** Source strip always pins Auto-detect as the first tab (Google). */
-export const SOURCE_PIN_FIRST: SelectableLanguageId = AUTO_LANGUAGE;

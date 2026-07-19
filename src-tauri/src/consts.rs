@@ -23,4 +23,4 @@ pub const MAX_BACKUP_SNAPSHOTS: usize = 3;
 /// SQLite busy timeout in milliseconds.
 pub const SQLITE_BUSY_TIMEOUT_MS: u32 = 5_000;
 
-pub const MAIN_WINDOW_DEFAULT_SIZE: (f64, f64) = (1280.0, 800.0);
+pub const MAIN_WINDOW_DEFAULT_SIZE: (f64, f64) = (1440.0, 900.0);
