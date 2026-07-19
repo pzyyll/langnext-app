@@ -163,6 +163,17 @@ const zhCN = {
     promptTemplateAria: "提示词模板",
     promptTemplateDefault: "预设默认",
     promptTemplateLoading: "正在加载模板…",
+    workspace: {
+      title: "工作区",
+      listAria: "翻译工作区",
+      addAria: "新建工作区",
+      renameAria: "工作区名称",
+      deleteAria: "删除工作区 {{name}}",
+      deleteTitle: "删除工作区",
+      deleteConfirm: "确定删除工作区「{{name}}」？其中的草稿文本将丢失。",
+      defaultName: "工作区 {{n}}",
+      limitReached: "最多 {{max}} 个工作区",
+    },
     profiles: {
       title: "翻译预设",
       subtitle: "管理可复用的语言、模型链与提示词模板。",

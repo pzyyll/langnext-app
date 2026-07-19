@@ -56,7 +56,19 @@ import {
   type SelectableLanguageId,
   type SourceLanguageId,
 } from "./-languages";
-import { getTranslateSessionPreferences, setTranslateSessionPreferences } from "./-sessionPreferences";
+import { WorkspaceSidebar } from "./-WorkspaceSidebar";
+import {
+  MAX_TRANSLATE_WORKSPACES,
+  addWorkspaceToStore,
+  createTranslateWorkspace,
+  getActiveWorkspace,
+  getTranslateWorkspacesStore,
+  removeWorkspaceFromStore,
+  setTranslateWorkspacesStore,
+  updateWorkspaceInStore,
+  type TranslateWorkspace,
+  type TranslateWorkspacesStore,
+} from "./-workspaces";
 import type {
   ProviderInstanceDto,
   ProviderModelDto,
@@ -128,20 +140,24 @@ function TranslatePage() {
   const { t, i18n } = useTranslation();
   const toast = useToast();
   const queryClient = useQueryClient();
-  // Restore toolbar selections across navigation and app restarts.
-  const [sessionSeed] = useState(() => getTranslateSessionPreferences());
-  const [sourceLang, setSourceLang] = useState<SourceLanguageId>(sessionSeed.sourceLang);
-  const [targetLang, setTargetLang] = useState<SelectableLanguageId>(sessionSeed.targetLang);
-  const [detectedSourceLang, setDetectedSourceLang] = useState<LanguageId | null>(null);
+  // Restore workspaces (presets, languages, draft text) across navigation and restarts.
+  const [boot] = useState(() => {
+    const store = getTranslateWorkspacesStore();
+    return { store, workspace: getActiveWorkspace(store) };
+  });
+  const [workspaceStore, setWorkspaceStore] = useState<TranslateWorkspacesStore>(() => boot.store);
+  const [sourceLang, setSourceLang] = useState<SourceLanguageId>(boot.workspace.sourceLang);
+  const [targetLang, setTargetLang] = useState<SelectableLanguageId>(boot.workspace.targetLang);
+  const [detectedSourceLang, setDetectedSourceLang] = useState<LanguageId | null>(boot.workspace.detectedSourceLang);
   const [profilePrimaryLang, setProfilePrimaryLang] = useState<LanguageId | null>(null);
   const [profilePreferredTargetLang, setProfilePreferredTargetLang] = useState<LanguageId | null>(null);
-  const [sourceText, setSourceText] = useState("");
-  const [outputText, setOutputText] = useState("");
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [sourceText, setSourceText] = useState(boot.workspace.sourceText);
+  const [outputText, setOutputText] = useState(boot.workspace.outputText);
+  const [errorMessage, setErrorMessage] = useState<string | null>(boot.workspace.errorMessage);
   /** Tracks whether a translate attempt has finished; kept for session UX side-effects (clear on edit). */
   const [, setHasTranslated] = useState(false);
-  const [confidencePercent, setConfidencePercent] = useState(0);
-  const [latencyMs, setLatencyMs] = useState<number | null>(null);
+  const [confidencePercent, setConfidencePercent] = useState(boot.workspace.confidencePercent);
+  const [latencyMs, setLatencyMs] = useState<number | null>(boot.workspace.latencyMs);
   const [copyFeedback, setCopyFeedback] = useState(false);
   const [isTranslating, setIsTranslating] = useState(false);
   /** True after the first stream chunk of the current run; swaps loading dots for scramble. */
@@ -149,14 +165,16 @@ function TranslatePage() {
   /** Shared with quick-translate; default plain. */
   const [outputViewMode, setOutputViewModeState] = useState<OutputViewMode>(() => getOutputViewMode());
   const isMarkdownView = outputViewMode === "markdown";
-  const [activeModelLabel, setActiveModelLabel] = useState<string | null>(null);
+  const [activeModelLabel, setActiveModelLabel] = useState<string | null>(boot.workspace.activeModelLabel);
 
-  const [selectedModelId, setSelectedModelId] = useState(sessionSeed.modelId);
-  const [selectedProfileId, setSelectedProfileId] = useState(sessionSeed.profileId);
-  /** Empty string = use the profile default template for this page session (not persisted). */
-  const [selectedPromptTemplateId, setSelectedPromptTemplateId] = useState("");
+  const [selectedModelId, setSelectedModelId] = useState(boot.workspace.modelId);
+  const [selectedProfileId, setSelectedProfileId] = useState(boot.workspace.profileId);
+  /** Empty string = use the profile default template (persisted per workspace). */
+  const [selectedPromptTemplateId, setSelectedPromptTemplateId] = useState(boot.workspace.promptTemplateId);
   const [profileApplyError, setProfileApplyError] = useState<string | null>(null);
   const [isApplyingProfile, setIsApplyingProfile] = useState(false);
+  /** Skip one persist cycle after hydrating a switched workspace (avoids writing stale fields). */
+  const skipNextWorkspacePersist = useRef(false);
 
   const providersQuery = useQuery(providerListOptions());
   const modelsQuery = useQuery(allProviderModelsOptions());
@@ -217,15 +235,159 @@ function TranslatePage() {
   const activeRequestId = useRef<string | null>(null);
   const streamUnlisteners = useRef<UnlistenFn[]>([]);
 
-  // Persist toolbar selections so navigation and restarts restore the last choices.
-  useEffect(() => {
-    setTranslateSessionPreferences({
+  /** Snapshot of UI fields that belong to the active workspace. */
+  function buildWorkspacePatch(): Partial<Omit<TranslateWorkspace, "id">> {
+    return {
       profileId: selectedProfileId,
       modelId: selectedModelId,
       sourceLang,
       targetLang,
+      promptTemplateId: selectedPromptTemplateId,
+      sourceText,
+      outputText,
+      detectedSourceLang,
+      confidencePercent,
+      latencyMs,
+      activeModelLabel,
+      errorMessage,
+    };
+  }
+
+  function applyWorkspaceToUi(workspace: TranslateWorkspace) {
+    setSelectedProfileId(workspace.profileId);
+    setSelectedModelId(workspace.modelId);
+    setSourceLang(workspace.sourceLang);
+    setTargetLang(workspace.targetLang);
+    setSelectedPromptTemplateId(workspace.promptTemplateId);
+    setSourceText(workspace.sourceText);
+    setOutputText(workspace.outputText);
+    setDetectedSourceLang(workspace.detectedSourceLang);
+    setConfidencePercent(workspace.confidencePercent);
+    setLatencyMs(workspace.latencyMs);
+    setActiveModelLabel(workspace.activeModelLabel);
+    setErrorMessage(workspace.errorMessage);
+    setHasTranslated(false);
+    setProfileApplyError(null);
+    setIsApplyingProfile(false);
+    setStreamOutputActive(false);
+    setIsTranslating(false);
+  }
+
+  function commitWorkspaceStore(next: TranslateWorkspacesStore) {
+    setWorkspaceStore(next);
+    setTranslateWorkspacesStore(next);
+  }
+
+  function flushActiveWorkspace(store: TranslateWorkspacesStore): TranslateWorkspacesStore {
+    return updateWorkspaceInStore(store, store.activeWorkspaceId, buildWorkspacePatch());
+  }
+
+  async function selectWorkspace(workspaceId: string) {
+    if (workspaceId === workspaceStore.activeWorkspaceId) {
+      return;
+    }
+    const hadActive = activeRequestId.current != null;
+    translateGeneration.current += 1;
+    await abortActiveRequest();
+    if (hadActive) {
+      showStoppedToast();
+    }
+    const flushed = flushActiveWorkspace(workspaceStore);
+    const next: TranslateWorkspacesStore = {
+      ...flushed,
+      activeWorkspaceId: workspaceId,
+    };
+    // Ensure active id is valid after normalize path.
+    const active = next.workspaces.some((ws) => ws.id === workspaceId)
+      ? workspaceId
+      : (next.workspaces[0]?.id ?? workspaceId);
+    const committed = { ...next, activeWorkspaceId: active };
+    skipNextWorkspacePersist.current = true;
+    commitWorkspaceStore(committed);
+    applyWorkspaceToUi(getActiveWorkspace(committed));
+  }
+
+  async function createWorkspace() {
+    if (workspaceStore.workspaces.length >= MAX_TRANSLATE_WORKSPACES) {
+      return;
+    }
+    const hadActive = activeRequestId.current != null;
+    translateGeneration.current += 1;
+    await abortActiveRequest();
+    if (hadActive) {
+      showStoppedToast();
+    }
+    const flushed = flushActiveWorkspace(workspaceStore);
+    const used = new Set(flushed.workspaces.map((ws) => ws.name.trim().toLowerCase()));
+    let n = flushed.workspaces.length + 1;
+    let name = t("translate.workspace.defaultName", { n });
+    while (used.has(name.trim().toLowerCase())) {
+      n += 1;
+      name = t("translate.workspace.defaultName", { n });
+    }
+    // New task: keep current toolbar config, start with empty draft panes.
+    const workspace = createTranslateWorkspace({
+      name,
+      profileId: selectedProfileId,
+      modelId: selectedModelId,
+      sourceLang,
+      targetLang,
+      promptTemplateId: selectedPromptTemplateId,
     });
-  }, [selectedProfileId, selectedModelId, sourceLang, targetLang]);
+    const next = addWorkspaceToStore(flushed, workspace);
+    skipNextWorkspacePersist.current = true;
+    commitWorkspaceStore(next);
+    applyWorkspaceToUi(getActiveWorkspace(next));
+  }
+
+  async function deleteWorkspace(workspaceId: string) {
+    const hadActive = activeRequestId.current != null && workspaceId === workspaceStore.activeWorkspaceId;
+    if (hadActive) {
+      translateGeneration.current += 1;
+      await abortActiveRequest();
+      showStoppedToast();
+    }
+    // Flush only when deleting a non-active row; active is discarded.
+    const base =
+      workspaceId === workspaceStore.activeWorkspaceId ? workspaceStore : flushActiveWorkspace(workspaceStore);
+    const next = removeWorkspaceFromStore(base, workspaceId, undefined, t("translate.workspace.defaultName", { n: 1 }));
+    skipNextWorkspacePersist.current = true;
+    commitWorkspaceStore(next);
+    applyWorkspaceToUi(getActiveWorkspace(next));
+  }
+
+  function renameWorkspace(workspaceId: string, name: string) {
+    const next = updateWorkspaceInStore(workspaceStore, workspaceId, { name });
+    commitWorkspaceStore(next);
+  }
+
+  // Persist active workspace fields so navigation and restarts restore drafts + presets.
+  useEffect(() => {
+    if (skipNextWorkspacePersist.current) {
+      skipNextWorkspacePersist.current = false;
+      return;
+    }
+    setWorkspaceStore((prev) => {
+      const next = updateWorkspaceInStore(prev, prev.activeWorkspaceId, buildWorkspacePatch());
+      setTranslateWorkspacesStore(next);
+      return next;
+    });
+    // Field snapshot only: store is read/updated via the functional setter above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    selectedProfileId,
+    selectedModelId,
+    sourceLang,
+    targetLang,
+    selectedPromptTemplateId,
+    sourceText,
+    outputText,
+    detectedSourceLang,
+    confidencePercent,
+    latencyMs,
+    activeModelLabel,
+    errorMessage,
+  ]);
 
   // When a profile id is restored (or becomes valid again), load Primary/Target prefs for Auto-target
   // without re-applying the profile over the user's saved model/language selections.
@@ -766,340 +928,358 @@ function TranslatePage() {
   const profileSelectDisabled = profilesLoading;
 
   return (
-    <div className={`${LAYOUT_HEIGHT_CLASS} flex min-h-0 flex-col gap-gutter`}>
-      {/* Top toolbar: profile + model + languages + utility actions */}
-      <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border border-line bg-surface-2 px-gutter py-2">
-        <div className="flex min-w-0 flex-wrap items-center gap-gutter">
-          <div className="flex items-center gap-2">
-            <label className="text-label-sm text-neutral uppercase" id="translate-profile-label">
-              {t("translate.profileLabel")}
-            </label>
-            <SelectField
-              className="max-w-xs"
-              value={resolvedProfileId}
-              onValueChange={(value) => {
-                void applyProfile(value ?? "");
-              }}
-              options={[
-                { value: "", label: t("translate.profileNone") },
-                ...profiles.map((profile) => ({ value: profile.id, label: profile.name })),
-              ]}
-              disabled={profileSelectDisabled || isTranslating}
-              placeholder={profilesLoading ? t("translate.profileLoading") : undefined}
-              aria-label={t("translate.profileAria")}
-              aria-labelledby="translate-profile-label"
-              compact
-            />
-          </div>
+    <div className={`${LAYOUT_HEIGHT_CLASS} flex min-h-0 gap-gutter`}>
+      <WorkspaceSidebar
+        workspaces={workspaceStore.workspaces}
+        activeWorkspaceId={workspaceStore.activeWorkspaceId}
+        disabled={isApplyingProfile}
+        onSelect={(workspaceId) => {
+          void selectWorkspace(workspaceId);
+        }}
+        onCreate={() => {
+          void createWorkspace();
+        }}
+        onRename={renameWorkspace}
+        onDelete={(workspaceId) => {
+          void deleteWorkspace(workspaceId);
+        }}
+      />
 
-          {resolvedProfileId ? (
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-gutter">
+        {/* Top toolbar: profile + model + languages + utility actions */}
+        <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border border-line bg-surface-2 px-gutter py-2">
+          <div className="flex min-w-0 flex-wrap items-center gap-gutter">
             <div className="flex items-center gap-2">
-              <label className="text-label-sm text-neutral uppercase" id="translate-prompt-template-label">
-                {t("translate.promptTemplateLabel")}
+              <label className="text-label-sm text-neutral uppercase" id="translate-profile-label">
+                {t("translate.profileLabel")}
               </label>
               <SelectField
                 className="max-w-xs"
-                value={resolvedPromptTemplateId}
+                value={resolvedProfileId}
                 onValueChange={(value) => {
-                  setSelectedPromptTemplateId(value ?? "");
+                  void applyProfile(value ?? "");
                 }}
-                options={promptTemplateOptions}
-                disabled={profileSelectDisabled || isTranslating || isApplyingProfile}
-                placeholder={profilesLoading ? t("translate.promptTemplateLoading") : undefined}
-                aria-label={t("translate.promptTemplateAria")}
-                aria-labelledby="translate-prompt-template-label"
+                options={[
+                  { value: "", label: t("translate.profileNone") },
+                  ...profiles.map((profile) => ({ value: profile.id, label: profile.name })),
+                ]}
+                disabled={profileSelectDisabled || isTranslating}
+                placeholder={profilesLoading ? t("translate.profileLoading") : undefined}
+                aria-label={t("translate.profileAria")}
+                aria-labelledby="translate-profile-label"
                 compact
               />
             </div>
-          ) : null}
 
-          <div className="hidden h-6 w-px bg-outline-variant sm:block" aria-hidden />
-
-          <div className="flex items-center gap-2">
-            <label className="text-label-sm text-neutral uppercase" id="translate-model-label">
-              {t("translate.modelLabel")}
-            </label>
-            <SelectField
-              className="max-w-xs"
-              value={resolvedModelId}
-              onValueChange={(value) => setSelectedModelId(value ?? "")}
-              options={
-                modelsLoading || modelOptions.length === 0
-                  ? []
-                  : modelOptions.map((option) => ({ value: option.id, label: option.label }))
-              }
-              disabled={modelSelectDisabled || isTranslating}
-              placeholder={
-                modelsLoading
-                  ? t("translate.modelLoading")
-                  : modelOptions.length === 0
-                    ? t("translate.modelEmpty")
-                    : undefined
-              }
-              aria-label={t("translate.modelAria")}
-              aria-labelledby="translate-model-label"
-              compact
-            />
-          </div>
-
-          <div className="hidden h-6 w-px bg-outline-variant sm:block" aria-hidden />
-
-          <div className="flex flex-wrap items-center gap-1">
-            <ComboboxField
-              value={sourceLang}
-              onValueChange={(value) => {
-                setSourceLang((value ?? "auto") as SourceLanguageId);
-                setDetectedSourceLang(null);
-              }}
-              options={sourceLanguageOptions.map((option) => ({ value: option.id, label: option.label }))}
-              disabled={isTranslating}
-              emptyText={t("common.noMatches")}
-              aria-label={t("translate.sourceLanguage")}
-              compact
-            />
-
-            <Button
-              type="button"
-              className={iconButtonClassName}
-              aria-label={t("translate.swapLanguages")}
-              onClick={swapLanguages}
-              disabled={isTranslating || (sourceLang === "auto" && !detectedSourceLang)}
-            >
-              <IconMaterialSymbolsLightSwapHoriz className="size-5" aria-hidden />
-            </Button>
-
-            <ComboboxField
-              value={targetLang}
-              onValueChange={(value) => setTargetLang((value ?? "en") as SelectableLanguageId)}
-              options={targetLanguageOptions.map((option) => ({ value: option.id, label: option.label }))}
-              disabled={isTranslating}
-              emptyText={t("common.noMatches")}
-              aria-label={t("translate.targetLanguage")}
-              compact
-            />
-          </div>
-        </div>
-      </div>
-
-      {modelsError ? (
-        <p className="shrink-0 text-body-tight text-error" role="alert">
-          {modelsError}
-        </p>
-      ) : null}
-      {profilesError ? (
-        <p className="shrink-0 text-body-tight text-error" role="alert">
-          {profilesError}
-        </p>
-      ) : null}
-      {!modelsLoading && !modelsError && modelOptions.length === 0 ? (
-        <p className="shrink-0 text-body-tight text-neutral" role="status">
-          {t("translate.noModelsHint")}
-        </p>
-      ) : null}
-
-      {/* Source / target workspace */}
-      <div className="grid min-h-0 flex-1 grid-cols-1 gap-gutter lg:grid-cols-2">
-        {/* Source pane */}
-        <section className="shadow-frame flex min-h-64 flex-col border border-line bg-surface lg:min-h-0">
-          <div className={paneHeaderClassName}>
-            <div className="flex min-w-0 items-center gap-2">
-              <span className={paneLabelClassName}>{t("translate.source")}</span>
-              {detectedSourceLang ? (
-                <span className="truncate text-label-sm text-neutral uppercase">
-                  {t("translate.detected", { language: t(`translate.languages.${detectedSourceLang}`) })}
-                </span>
-              ) : null}
-            </div>
-            {sourceText ? (
-              <Button
-                type="button"
-                className={`${iconButtonClassName} group`}
-                aria-label={t("translate.clearSource")}
-                onClick={() => {
-                  void clearSource();
-                }}
-              >
-                <IconMaterialSymbolsLightClose
-                  className="size-4 transition-transform duration-150 group-hover:scale-110"
-                  aria-hidden
+            {resolvedProfileId ? (
+              <div className="flex items-center gap-2">
+                <label className="text-label-sm text-neutral uppercase" id="translate-prompt-template-label">
+                  {t("translate.promptTemplateLabel")}
+                </label>
+                <SelectField
+                  className="max-w-xs"
+                  value={resolvedPromptTemplateId}
+                  onValueChange={(value) => {
+                    setSelectedPromptTemplateId(value ?? "");
+                  }}
+                  options={promptTemplateOptions}
+                  disabled={profileSelectDisabled || isTranslating || isApplyingProfile}
+                  placeholder={profilesLoading ? t("translate.promptTemplateLoading") : undefined}
+                  aria-label={t("translate.promptTemplateAria")}
+                  aria-labelledby="translate-prompt-template-label"
+                  compact
                 />
-              </Button>
-            ) : null}
-          </div>
-
-          <div className="relative min-h-0 flex-1">
-            <label className="sr-only" htmlFor="translate-source-text">
-              {t("translate.sourceTextAria")}
-            </label>
-            {/* Fixed pane: fill parent, scale font to shell height, scroll when content overflows. */}
-            <TextAutosize
-              id="translate-source-text"
-              layout="fill"
-              className="h-full min-h-40 lg:min-h-0"
-              textareaClassName="p-gutter"
-              placeholder={t("translate.sourcePlaceholder")}
-              spellCheck={false}
-              value={sourceText}
-              disabled={isTranslating}
-              onChange={(event) => {
-                setSourceText(event.currentTarget.value);
-                setDetectedSourceLang(null);
-                setHasTranslated(false);
-                setErrorMessage(null);
-                setConfidencePercent(0);
-                setLatencyMs(null);
-              }}
-            />
-          </div>
-
-          <div className="flex shrink-0 items-center bg-surface p-gutter">
-            {charCount > 0 ? <span className="text-label-sm text-neutral tabular-nums">{charCount}</span> : null}
-            <div className="flex-1" />
-            {isTranslating ? (
-              <Button
-                type="button"
-                className={`${iconButtonClassName} group`}
-                aria-label={t("translate.stopAria")}
-                onClick={() => {
-                  void stopTranslation();
-                }}
-              >
-                <IconMaterialSymbolsLightStopCircleOutline
-                  className="size-4 transition-transform duration-150 group-hover:scale-110"
-                  aria-hidden
-                />
-              </Button>
-            ) : (
-              <Button
-                type="button"
-                className={`${iconButtonClassName} group`}
-                disabled={!canTranslate}
-                focusableWhenDisabled
-                aria-label={t("translate.translate")}
-                onClick={() => {
-                  void handleTranslate();
-                }}
-              >
-                <IconPepiconsPrintEnter
-                  className="size-4 transition-transform duration-150 group-hover:scale-110"
-                  aria-hidden
-                />
-              </Button>
-            )}
-          </div>
-        </section>
-
-        {/* Translation pane */}
-        <section className="shadow-frame flex min-h-64 flex-col border border-line bg-surface-2 lg:min-h-0">
-          <div className={paneHeaderClassName}>
-            <span className={paneLabelClassName}>{t("translate.translation")}</span>
-            <div className="flex items-center gap-1">
-              <Button
-                type="button"
-                className={iconButtonClassName}
-                aria-label={isMarkdownView ? t("translate.plainText") : t("translate.markdownPreview")}
-                aria-pressed={isMarkdownView}
-                onClick={() => {
-                  setOutputViewModeState((current) => {
-                    const next = toggleOutputViewMode(current);
-                    setOutputViewMode(next);
-                    return next;
-                  });
-                }}
-              >
-                {isMarkdownView ? (
-                  <IconMaterialSymbolsLightMarkdown className="size-4" aria-hidden />
-                ) : (
-                  <IconMaterialSymbolsLightMarkdownOutline className="size-4" aria-hidden />
-                )}
-              </Button>
-              <Button
-                type="button"
-                className={iconButtonClassName}
-                aria-label={copyFeedback ? t("translate.copied") : t("translate.copy")}
-                onClick={() => {
-                  void copyOutput();
-                }}
-                disabled={!outputText || !!errorMessage}
-              >
-                <IconMaterialSymbolsLightContentCopy className="size-4" aria-hidden />
-              </Button>
-              <Button type="button" className={iconButtonClassName} aria-label={t("translate.speak")} disabled>
-                <IconMaterialSymbolsLightVolumeUp className="size-4" aria-hidden />
-              </Button>
-            </div>
-          </div>
-
-          {/* Same stepped font as source: measure error/output/loading label, fill fixed pane. */}
-          <TextAutosizeContent
-            layout="fill"
-            fontScale={isMarkdownView && !!outputText && !errorMessage ? "fixed" : "stepped"}
-            stickToEnd={isTranslating}
-            className="min-h-0 flex-1"
-            contentClassName="p-gutter"
-            text={
-              errorMessage
-                ? `${t("translate.errorPrefix")}: ${errorMessage}`
-                : isMarkdownView
-                  ? ""
-                  : outputText || (isTranslating ? t("translate.translating") : "")
-            }
-          >
-            {errorMessage ? (
-              <p className="min-w-0 break-words whitespace-pre-wrap text-error select-text" role="alert">
-                {t("translate.errorPrefix")}: {errorMessage}
-              </p>
-            ) : outputText || isTranslating ? (
-              isMarkdownView && outputText ? (
-                <MarkdownOutput text={outputText} isStreaming={streamOutputActive} />
-              ) : (
-                <TextLoading
-                  text={outputText}
-                  isLoading={isTranslating}
-                  scramble={streamOutputActive}
-                  loadingLabel={t("translate.translating")}
-                  className="text-on-surface"
-                />
-              )
-            ) : (
-              <p className="text-neutral italic select-none">{t("translate.outputPlaceholder")}</p>
-            )}
-          </TextAutosizeContent>
-
-          <div className="flex shrink-0 flex-wrap items-center gap-4 bg-surface-2 p-gutter">
-            <div className="flex-1" />
-            {activeModelLabel || confidencePercent > 0 || latencyMs !== null ? (
-              <div
-                className="flex min-w-0 flex-wrap items-center justify-end gap-x-2 gap-y-1 text-label-sm text-neutral"
-                role="status"
-              >
-                {activeModelLabel ? (
-                  <span className="min-w-0 truncate" title={activeModelLabel}>
-                    {t("translate.activeModel", { model: activeModelLabel })}
-                  </span>
-                ) : null}
-                {activeModelLabel && confidencePercent > 0 ? (
-                  <span className="text-outline-variant select-none" aria-hidden>
-                    ·
-                  </span>
-                ) : null}
-                {confidencePercent > 0 ? (
-                  <span className="shrink-0 tabular-nums">
-                    {t("translate.confidenceValue", { percent: confidencePercent })}
-                  </span>
-                ) : null}
-                {(activeModelLabel || confidencePercent > 0) && latencyMs !== null ? (
-                  <span className="text-outline-variant select-none" aria-hidden>
-                    ·
-                  </span>
-                ) : null}
-                {latencyMs !== null ? (
-                  <span className="shrink-0 tabular-nums">{t("translate.latencyValue", { ms: latencyMs })}</span>
-                ) : null}
               </div>
             ) : null}
+
+            <div className="hidden h-6 w-px bg-outline-variant sm:block" aria-hidden />
+
+            <div className="flex items-center gap-2">
+              <label className="text-label-sm text-neutral uppercase" id="translate-model-label">
+                {t("translate.modelLabel")}
+              </label>
+              <SelectField
+                className="max-w-xs"
+                value={resolvedModelId}
+                onValueChange={(value) => setSelectedModelId(value ?? "")}
+                options={
+                  modelsLoading || modelOptions.length === 0
+                    ? []
+                    : modelOptions.map((option) => ({ value: option.id, label: option.label }))
+                }
+                disabled={modelSelectDisabled || isTranslating}
+                placeholder={
+                  modelsLoading
+                    ? t("translate.modelLoading")
+                    : modelOptions.length === 0
+                      ? t("translate.modelEmpty")
+                      : undefined
+                }
+                aria-label={t("translate.modelAria")}
+                aria-labelledby="translate-model-label"
+                compact
+              />
+            </div>
+
+            <div className="hidden h-6 w-px bg-outline-variant sm:block" aria-hidden />
+
+            <div className="flex flex-wrap items-center gap-1">
+              <ComboboxField
+                value={sourceLang}
+                onValueChange={(value) => {
+                  setSourceLang((value ?? "auto") as SourceLanguageId);
+                  setDetectedSourceLang(null);
+                }}
+                options={sourceLanguageOptions.map((option) => ({ value: option.id, label: option.label }))}
+                disabled={isTranslating}
+                emptyText={t("common.noMatches")}
+                aria-label={t("translate.sourceLanguage")}
+                compact
+              />
+
+              <Button
+                type="button"
+                className={iconButtonClassName}
+                aria-label={t("translate.swapLanguages")}
+                onClick={swapLanguages}
+                disabled={isTranslating || (sourceLang === "auto" && !detectedSourceLang)}
+              >
+                <IconMaterialSymbolsLightSwapHoriz className="size-5" aria-hidden />
+              </Button>
+
+              <ComboboxField
+                value={targetLang}
+                onValueChange={(value) => setTargetLang((value ?? "en") as SelectableLanguageId)}
+                options={targetLanguageOptions.map((option) => ({ value: option.id, label: option.label }))}
+                disabled={isTranslating}
+                emptyText={t("common.noMatches")}
+                aria-label={t("translate.targetLanguage")}
+                compact
+              />
+            </div>
           </div>
-        </section>
+        </div>
+
+        {modelsError ? (
+          <p className="shrink-0 text-body-tight text-error" role="alert">
+            {modelsError}
+          </p>
+        ) : null}
+        {profilesError ? (
+          <p className="shrink-0 text-body-tight text-error" role="alert">
+            {profilesError}
+          </p>
+        ) : null}
+        {!modelsLoading && !modelsError && modelOptions.length === 0 ? (
+          <p className="shrink-0 text-body-tight text-neutral" role="status">
+            {t("translate.noModelsHint")}
+          </p>
+        ) : null}
+
+        {/* Source / target workspace */}
+        <div className="grid min-h-0 flex-1 grid-cols-1 gap-gutter lg:grid-cols-2">
+          {/* Source pane */}
+          <section className="shadow-frame flex min-h-64 flex-col border border-line bg-surface lg:min-h-0">
+            <div className={paneHeaderClassName}>
+              <div className="flex min-w-0 items-center gap-2">
+                <span className={paneLabelClassName}>{t("translate.source")}</span>
+                {detectedSourceLang ? (
+                  <span className="truncate text-label-sm text-neutral uppercase">
+                    {t("translate.detected", { language: t(`translate.languages.${detectedSourceLang}`) })}
+                  </span>
+                ) : null}
+              </div>
+              {sourceText ? (
+                <Button
+                  type="button"
+                  className={`${iconButtonClassName} group`}
+                  aria-label={t("translate.clearSource")}
+                  onClick={() => {
+                    void clearSource();
+                  }}
+                >
+                  <IconMaterialSymbolsLightClose
+                    className="size-4 transition-transform duration-150 group-hover:scale-110"
+                    aria-hidden
+                  />
+                </Button>
+              ) : null}
+            </div>
+
+            <div className="relative min-h-0 flex-1">
+              <label className="sr-only" htmlFor="translate-source-text">
+                {t("translate.sourceTextAria")}
+              </label>
+              {/* Fixed pane: fill parent, scale font to shell height, scroll when content overflows. */}
+              <TextAutosize
+                id="translate-source-text"
+                layout="fill"
+                className="h-full min-h-40 lg:min-h-0"
+                textareaClassName="p-gutter"
+                placeholder={t("translate.sourcePlaceholder")}
+                spellCheck={false}
+                value={sourceText}
+                disabled={isTranslating}
+                onChange={(event) => {
+                  setSourceText(event.currentTarget.value);
+                  setDetectedSourceLang(null);
+                  setHasTranslated(false);
+                  setErrorMessage(null);
+                  setConfidencePercent(0);
+                  setLatencyMs(null);
+                }}
+              />
+            </div>
+
+            <div className="flex shrink-0 items-center bg-surface p-gutter">
+              {charCount > 0 ? <span className="text-label-sm text-neutral tabular-nums">{charCount}</span> : null}
+              <div className="flex-1" />
+              {isTranslating ? (
+                <Button
+                  type="button"
+                  className={`${iconButtonClassName} group`}
+                  aria-label={t("translate.stopAria")}
+                  onClick={() => {
+                    void stopTranslation();
+                  }}
+                >
+                  <IconMaterialSymbolsLightStopCircleOutline
+                    className="size-4 transition-transform duration-150 group-hover:scale-110"
+                    aria-hidden
+                  />
+                </Button>
+              ) : (
+                <Button
+                  type="button"
+                  className={`${iconButtonClassName} group`}
+                  disabled={!canTranslate}
+                  focusableWhenDisabled
+                  aria-label={t("translate.translate")}
+                  onClick={() => {
+                    void handleTranslate();
+                  }}
+                >
+                  <IconPepiconsPrintEnter
+                    className="size-4 transition-transform duration-150 group-hover:scale-110"
+                    aria-hidden
+                  />
+                </Button>
+              )}
+            </div>
+          </section>
+
+          {/* Translation pane */}
+          <section className="shadow-frame flex min-h-64 flex-col border border-line bg-surface-2 lg:min-h-0">
+            <div className={paneHeaderClassName}>
+              <span className={paneLabelClassName}>{t("translate.translation")}</span>
+              <div className="flex items-center gap-1">
+                <Button
+                  type="button"
+                  className={iconButtonClassName}
+                  aria-label={isMarkdownView ? t("translate.plainText") : t("translate.markdownPreview")}
+                  aria-pressed={isMarkdownView}
+                  onClick={() => {
+                    setOutputViewModeState((current) => {
+                      const next = toggleOutputViewMode(current);
+                      setOutputViewMode(next);
+                      return next;
+                    });
+                  }}
+                >
+                  {isMarkdownView ? (
+                    <IconMaterialSymbolsLightMarkdown className="size-4" aria-hidden />
+                  ) : (
+                    <IconMaterialSymbolsLightMarkdownOutline className="size-4" aria-hidden />
+                  )}
+                </Button>
+                <Button
+                  type="button"
+                  className={iconButtonClassName}
+                  aria-label={copyFeedback ? t("translate.copied") : t("translate.copy")}
+                  onClick={() => {
+                    void copyOutput();
+                  }}
+                  disabled={!outputText || !!errorMessage}
+                >
+                  <IconMaterialSymbolsLightContentCopy className="size-4" aria-hidden />
+                </Button>
+                <Button type="button" className={iconButtonClassName} aria-label={t("translate.speak")} disabled>
+                  <IconMaterialSymbolsLightVolumeUp className="size-4" aria-hidden />
+                </Button>
+              </div>
+            </div>
+
+            {/* Same stepped font as source: measure error/output/loading label, fill fixed pane. */}
+            <TextAutosizeContent
+              layout="fill"
+              fontScale={isMarkdownView && !!outputText && !errorMessage ? "fixed" : "stepped"}
+              stickToEnd={isTranslating}
+              className="min-h-0 flex-1"
+              contentClassName="p-gutter"
+              text={
+                errorMessage
+                  ? `${t("translate.errorPrefix")}: ${errorMessage}`
+                  : isMarkdownView
+                    ? ""
+                    : outputText || (isTranslating ? t("translate.translating") : "")
+              }
+            >
+              {errorMessage ? (
+                <p className="min-w-0 break-words whitespace-pre-wrap text-error select-text" role="alert">
+                  {t("translate.errorPrefix")}: {errorMessage}
+                </p>
+              ) : outputText || isTranslating ? (
+                isMarkdownView && outputText ? (
+                  <MarkdownOutput text={outputText} isStreaming={streamOutputActive} />
+                ) : (
+                  <TextLoading
+                    text={outputText}
+                    isLoading={isTranslating}
+                    scramble={streamOutputActive}
+                    loadingLabel={t("translate.translating")}
+                    className="text-on-surface"
+                  />
+                )
+              ) : (
+                <p className="text-neutral italic select-none">{t("translate.outputPlaceholder")}</p>
+              )}
+            </TextAutosizeContent>
+
+            <div className="flex shrink-0 flex-wrap items-center gap-4 bg-surface-2 p-gutter">
+              <div className="flex-1" />
+              {activeModelLabel || confidencePercent > 0 || latencyMs !== null ? (
+                <div
+                  className="flex min-w-0 flex-wrap items-center justify-end gap-x-2 gap-y-1 text-label-sm text-neutral"
+                  role="status"
+                >
+                  {activeModelLabel ? (
+                    <span className="min-w-0 truncate" title={activeModelLabel}>
+                      {t("translate.activeModel", { model: activeModelLabel })}
+                    </span>
+                  ) : null}
+                  {activeModelLabel && confidencePercent > 0 ? (
+                    <span className="text-outline-variant select-none" aria-hidden>
+                      ·
+                    </span>
+                  ) : null}
+                  {confidencePercent > 0 ? (
+                    <span className="shrink-0 tabular-nums">
+                      {t("translate.confidenceValue", { percent: confidencePercent })}
+                    </span>
+                  ) : null}
+                  {(activeModelLabel || confidencePercent > 0) && latencyMs !== null ? (
+                    <span className="text-outline-variant select-none" aria-hidden>
+                      ·
+                    </span>
+                  ) : null}
+                  {latencyMs !== null ? (
+                    <span className="shrink-0 tabular-nums">{t("translate.latencyValue", { ms: latencyMs })}</span>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          </section>
+        </div>
       </div>
     </div>
   );

@@ -165,6 +165,17 @@ const en = {
     promptTemplateAria: "Prompt template",
     promptTemplateDefault: "Profile default",
     promptTemplateLoading: "Loading templates…",
+    workspace: {
+      title: "Workspaces",
+      listAria: "Translation workspaces",
+      addAria: "New workspace",
+      renameAria: "Workspace name",
+      deleteAria: "Delete workspace {{name}}",
+      deleteTitle: "Delete workspace",
+      deleteConfirm: "Delete workspace “{{name}}”? Draft text in this workspace will be lost.",
+      defaultName: "Workspace {{n}}",
+      limitReached: "Maximum of {{max}} workspaces",
+    },
     profiles: {
       title: "Translation profiles",
       subtitle: "Manage reusable languages, model chains, and prompt templates.",
