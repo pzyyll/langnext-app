@@ -16,6 +16,8 @@ import {
   normalizeTranslateWorkspace,
   normalizeTranslateWorkspacesStore,
   removeWorkspaceFromStore,
+  reorderWorkspacesInStore,
+  setRailCollapsedInStore,
   setTranslateWorkspacesStore,
   updateWorkspaceInStore,
 } from "./-workspaces";
@@ -152,6 +154,7 @@ describe("normalizeTranslateWorkspacesStore", () => {
     expect(store.version).toBe(TRANSLATE_WORKSPACES_VERSION);
     expect(store.workspaces).toHaveLength(1);
     expect(store.activeWorkspaceId).toBe(store.workspaces[0]!.id);
+    expect(store.railCollapsed).toBe(false);
     expect(store.workspaces[0]).toMatchObject({
       profileId: "legacy-p",
       modelId: "legacy-m",
@@ -160,6 +163,16 @@ describe("normalizeTranslateWorkspacesStore", () => {
       sourceText: "",
       outputText: "",
     });
+  });
+
+  test("preserves railCollapsed true", () => {
+    const store = normalizeTranslateWorkspacesStore({
+      version: 1,
+      activeWorkspaceId: "a",
+      railCollapsed: true,
+      workspaces: [{ id: "a", name: "A" }],
+    });
+    expect(store.railCollapsed).toBe(true);
   });
 
   test("repairs stale activeWorkspaceId", () => {
@@ -201,6 +214,7 @@ describe("store CRUD helpers", () => {
       version: TRANSLATE_WORKSPACES_VERSION,
       activeWorkspaceId: base.id,
       workspaces: [base],
+      railCollapsed: false,
     };
     const next = updateWorkspaceInStore(store, base.id, { sourceText: "hi", outputText: "yo" }, 200);
     expect(getActiveWorkspace(next).sourceText).toBe("hi");
@@ -215,6 +229,7 @@ describe("store CRUD helpers", () => {
       version: TRANSLATE_WORKSPACES_VERSION,
       activeWorkspaceId: a.id,
       workspaces: [a],
+      railCollapsed: false,
     };
     store = addWorkspaceToStore(store, b);
     expect(store.workspaces).toHaveLength(2);
@@ -229,16 +244,59 @@ describe("store CRUD helpers", () => {
       version: TRANSLATE_WORKSPACES_VERSION,
       activeWorkspaceId: b.id,
       workspaces: [a, b, c],
+      railCollapsed: true,
     };
     store = removeWorkspaceFromStore(store, b.id);
     expect(store.workspaces.map((ws) => ws.id)).toEqual([a.id, c.id]);
     expect(store.activeWorkspaceId).toBe(a.id);
+    expect(store.railCollapsed).toBe(true);
 
     store = removeWorkspaceFromStore(store, a.id);
     store = removeWorkspaceFromStore(store, c.id);
     expect(store.workspaces).toHaveLength(1);
     expect(store.workspaces[0]!.name).toBe("Workspace 1");
     expect(store.workspaces[0]!.sourceText).toBe("");
+    expect(store.railCollapsed).toBe(true);
+  });
+
+  test("reorderWorkspacesInStore reorders by id list", () => {
+    const a = createTranslateWorkspace({ name: "A" });
+    const b = createTranslateWorkspace({ name: "B" });
+    const c = createTranslateWorkspace({ name: "C" });
+    const store = {
+      version: TRANSLATE_WORKSPACES_VERSION,
+      activeWorkspaceId: a.id,
+      workspaces: [a, b, c],
+      railCollapsed: false,
+    };
+    const next = reorderWorkspacesInStore(store, [c.id, a.id, b.id]);
+    expect(next.workspaces.map((ws) => ws.id)).toEqual([c.id, a.id, b.id]);
+    expect(next.activeWorkspaceId).toBe(a.id);
+  });
+
+  test("reorderWorkspacesInStore is a no-op for the same order", () => {
+    const a = createTranslateWorkspace({ name: "A" });
+    const b = createTranslateWorkspace({ name: "B" });
+    const store = {
+      version: TRANSLATE_WORKSPACES_VERSION,
+      activeWorkspaceId: a.id,
+      workspaces: [a, b],
+      railCollapsed: false,
+    };
+    const next = reorderWorkspacesInStore(store, [a.id, b.id]);
+    expect(next).toBe(store);
+  });
+
+  test("setRailCollapsedInStore toggles only when changed", () => {
+    const a = createTranslateWorkspace({ name: "A" });
+    const store = {
+      version: TRANSLATE_WORKSPACES_VERSION,
+      activeWorkspaceId: a.id,
+      workspaces: [a],
+      railCollapsed: false,
+    };
+    expect(setRailCollapsedInStore(store, false)).toBe(store);
+    expect(setRailCollapsedInStore(store, true).railCollapsed).toBe(true);
   });
 
   test("nextDefaultWorkspaceName skips used names", () => {
@@ -257,10 +315,12 @@ describe("getTranslateWorkspacesStore / setTranslateWorkspacesStore", () => {
       version: TRANSLATE_WORKSPACES_VERSION,
       activeWorkspaceId: ws.id,
       workspaces: [ws],
+      railCollapsed: true,
     };
     setTranslateWorkspacesStore(store);
     const loaded = getTranslateWorkspacesStore();
     expect(loaded.activeWorkspaceId).toBe(ws.id);
+    expect(loaded.railCollapsed).toBe(true);
     expect(loaded.workspaces[0]).toMatchObject({
       name: "Legal",
       profileId: "p1",

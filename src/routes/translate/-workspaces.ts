@@ -51,6 +51,8 @@ export interface TranslateWorkspacesStore {
   version: typeof TRANSLATE_WORKSPACES_VERSION;
   activeWorkspaceId: string;
   workspaces: TranslateWorkspace[];
+  /** When true, the translate page shows a collapsed workspace rail. */
+  railCollapsed: boolean;
 }
 
 export const DEFAULT_WORKSPACE_NAME = "Workspace 1";
@@ -189,10 +191,12 @@ export function normalizeTranslateWorkspacesStore(raw: unknown, now = Date.now()
       if (workspaces.length > 0) {
         const activeRaw = typeof record.activeWorkspaceId === "string" ? record.activeWorkspaceId : "";
         const activeWorkspaceId = workspaces.some((ws) => ws.id === activeRaw) ? activeRaw : workspaces[0]!.id;
+        const railCollapsed = record.railCollapsed === true;
         return {
           version: TRANSLATE_WORKSPACES_VERSION,
           activeWorkspaceId,
           workspaces,
+          railCollapsed,
         };
       }
     }
@@ -214,6 +218,7 @@ export function normalizeTranslateWorkspacesStore(raw: unknown, now = Date.now()
     version: TRANSLATE_WORKSPACES_VERSION,
     activeWorkspaceId: workspace.id,
     workspaces: [workspace],
+    railCollapsed: false,
   };
 }
 
@@ -315,6 +320,7 @@ export function removeWorkspaceFromStore(
       version: TRANSLATE_WORKSPACES_VERSION,
       activeWorkspaceId: blank.id,
       workspaces: [blank],
+      railCollapsed: store.railCollapsed,
     };
   }
 
@@ -328,6 +334,7 @@ export function removeWorkspaceFromStore(
     version: TRANSLATE_WORKSPACES_VERSION,
     activeWorkspaceId,
     workspaces: remaining,
+    railCollapsed: store.railCollapsed,
   };
 }
 
@@ -343,4 +350,53 @@ export function nextDefaultWorkspaceName(workspaces: readonly TranslateWorkspace
     n += 1;
   }
   return `Workspace ${Date.now()}`;
+}
+
+/**
+ * Reorder workspaces to match `orderedIds` (must be a complete permutation).
+ * Unknown ids are ignored; missing ids keep their relative position at the end.
+ */
+export function reorderWorkspacesInStore(
+  store: TranslateWorkspacesStore,
+  orderedIds: readonly string[],
+): TranslateWorkspacesStore {
+  if (orderedIds.length === 0) {
+    return store;
+  }
+  const byId = new Map(store.workspaces.map((ws) => [ws.id, ws]));
+  const next: TranslateWorkspace[] = [];
+  const seen = new Set<string>();
+  for (const id of orderedIds) {
+    const ws = byId.get(id);
+    if (!ws || seen.has(id)) {
+      continue;
+    }
+    seen.add(id);
+    next.push(ws);
+  }
+  // Preserve any rows missing from orderedIds (defensive; normal calls include all).
+  for (const ws of store.workspaces) {
+    if (!seen.has(ws.id)) {
+      next.push(ws);
+    }
+  }
+  if (next.length !== store.workspaces.length) {
+    return store;
+  }
+  // No-op when order unchanged.
+  if (next.every((ws, index) => ws.id === store.workspaces[index]?.id)) {
+    return store;
+  }
+  return { ...store, workspaces: next };
+}
+
+/** Toggle or set the workspace rail collapsed flag. */
+export function setRailCollapsedInStore(
+  store: TranslateWorkspacesStore,
+  railCollapsed: boolean,
+): TranslateWorkspacesStore {
+  if (store.railCollapsed === railCollapsed) {
+    return store;
+  }
+  return { ...store, railCollapsed };
 }

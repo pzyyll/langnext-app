@@ -64,6 +64,8 @@ import {
   getActiveWorkspace,
   getTranslateWorkspacesStore,
   removeWorkspaceFromStore,
+  reorderWorkspacesInStore,
+  setRailCollapsedInStore,
   setTranslateWorkspacesStore,
   updateWorkspaceInStore,
   type TranslateWorkspace,
@@ -358,6 +360,17 @@ function TranslatePage() {
 
   function renameWorkspace(workspaceId: string, name: string) {
     const next = updateWorkspaceInStore(workspaceStore, workspaceId, { name });
+    commitWorkspaceStore(next);
+  }
+
+  function reorderWorkspaces(orderedIds: string[]) {
+    const flushed = flushActiveWorkspace(workspaceStore);
+    const next = reorderWorkspacesInStore(flushed, orderedIds);
+    commitWorkspaceStore(next);
+  }
+
+  function setWorkspaceRailCollapsed(railCollapsed: boolean) {
+    const next = setRailCollapsedInStore(workspaceStore, railCollapsed);
     commitWorkspaceStore(next);
   }
 
@@ -932,6 +945,7 @@ function TranslatePage() {
       <WorkspaceSidebar
         workspaces={workspaceStore.workspaces}
         activeWorkspaceId={workspaceStore.activeWorkspaceId}
+        collapsed={workspaceStore.railCollapsed}
         disabled={isApplyingProfile}
         onSelect={(workspaceId) => {
           void selectWorkspace(workspaceId);
@@ -943,6 +957,8 @@ function TranslatePage() {
         onDelete={(workspaceId) => {
           void deleteWorkspace(workspaceId);
         }}
+        onReorder={reorderWorkspaces}
+        onCollapsedChange={setWorkspaceRailCollapsed}
       />
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-gutter">

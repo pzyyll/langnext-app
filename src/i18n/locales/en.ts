@@ -175,6 +175,9 @@ const en = {
       deleteConfirm: "Delete workspace “{{name}}”? Draft text in this workspace will be lost.",
       defaultName: "Workspace {{n}}",
       limitReached: "Maximum of {{max}} workspaces",
+      reorderAria: "Reorder {{name}}",
+      collapseAria: "Collapse workspaces",
+      expandAria: "Expand workspaces",
     },
     profiles: {
       title: "Translation profiles",

@@ -173,6 +173,9 @@ const zhCN = {
       deleteConfirm: "确定删除工作区「{{name}}」？其中的草稿文本将丢失。",
       defaultName: "工作区 {{n}}",
       limitReached: "最多 {{max}} 个工作区",
+      reorderAria: "调整 {{name}} 的顺序",
+      collapseAria: "折叠工作区",
+      expandAria: "展开工作区",
     },
     profiles: {
       title: "翻译预设",
