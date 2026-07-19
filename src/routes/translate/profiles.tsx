@@ -62,7 +62,6 @@ const DEFAULT_USER_TEMPLATE = `<translate_content>
 </translate_content>`;
 
 const DEFAULT_TEMPERATURE = 0.2;
-const DEFAULT_MAX_OUTPUT_TOKENS = 32768;
 
 const fieldLabelClassName = "text-label-sm font-bold uppercase text-on-surface";
 
@@ -169,8 +168,8 @@ function emptyDraft(defaultModelId: string, uiLanguage: string): ProfileDraft {
     primaryModelId: defaultModelId,
     languageDetectionModelId: "",
     fallbackModelIds: [],
-    temperature: String(DEFAULT_TEMPERATURE),
-    maxOutputTokens: String(DEFAULT_MAX_OUTPUT_TOKENS),
+    temperature: "",
+    maxOutputTokens: "",
     systemTemplate: DEFAULT_SYSTEM_TEMPLATE,
     userTemplate: DEFAULT_USER_TEMPLATE,
     templateVersion: 1,
@@ -201,8 +200,8 @@ function draftFromDto(dto: TranslationProfileDto, modelOptions: ModelOption[], u
     primaryModelId,
     languageDetectionModelId,
     fallbackModelIds,
-    temperature: dto.temperature != null ? String(dto.temperature) : String(DEFAULT_TEMPERATURE),
-    maxOutputTokens: dto.maxOutputTokens != null ? String(dto.maxOutputTokens) : String(DEFAULT_MAX_OUTPUT_TOKENS),
+    temperature: dto.temperature != null ? String(dto.temperature) : "",
+    maxOutputTokens: dto.maxOutputTokens != null ? String(dto.maxOutputTokens) : "",
     systemTemplate: dto.systemTemplate,
     userTemplate: dto.userTemplate,
     templateVersion: dto.templateVersion,
@@ -495,8 +494,9 @@ function TranslateProfilesPage() {
       return;
     }
 
-    const temperature = parseOptionalNumber(draft.temperature) ?? DEFAULT_TEMPERATURE;
-    const maxOutputTokens = parseOptionalNumber(draft.maxOutputTokens) ?? DEFAULT_MAX_OUTPUT_TOKENS;
+    // Empty temperature uses the app default (0.2); empty max tokens uses the model setting.
+    const temperature = parseOptionalNumber(draft.temperature);
+    const maxOutputTokens = parseOptionalNumber(draft.maxOutputTokens);
     const targetModelIds = [
       draft.primaryModelId,
       ...draft.fallbackModelIds.filter((id) => id && id !== draft.primaryModelId),
@@ -1003,15 +1003,12 @@ function TranslateProfilesPage() {
                           min="0"
                           max="2"
                           value={draft.temperature}
-                          placeholder={String(DEFAULT_TEMPERATURE)}
+                          placeholder={t("common.default", { value: DEFAULT_TEMPERATURE })}
                           disabled={savePending}
                           onChange={(event) => {
                             updateDraft({ temperature: event.currentTarget.value });
                           }}
                         />
-                        <span className="text-table-header text-disabled">
-                          {t("common.default", { value: DEFAULT_TEMPERATURE })}
-                        </span>
                       </div>
                       <div className="flex flex-col gap-1">
                         <label className={fieldLabelClassName} htmlFor="profile-max-tokens">
@@ -1024,15 +1021,12 @@ function TranslateProfilesPage() {
                           step="1"
                           min="1"
                           value={draft.maxOutputTokens}
-                          placeholder={String(DEFAULT_MAX_OUTPUT_TOKENS)}
+                          placeholder={t("translate.profiles.maxTokensModelDefault")}
                           disabled={savePending}
                           onChange={(event) => {
                             updateDraft({ maxOutputTokens: event.currentTarget.value });
                           }}
                         />
-                        <span className="text-table-header text-disabled">
-                          {t("common.default", { value: DEFAULT_MAX_OUTPUT_TOKENS })}
-                        </span>
                       </div>
                     </div>
                   </div>

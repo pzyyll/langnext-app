@@ -195,6 +195,7 @@ const en = {
       moveDown: "Move down",
       temperature: "Temperature",
       maxTokens: "Max tokens",
+      maxTokensModelDefault: "Model default",
       streamLabel: "Stream",
       streamHint: "Stream translation output token by token.",
       noPrimaryModel: "No primary model",
