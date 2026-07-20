@@ -707,7 +707,12 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
               >
                 <Input
                   ref={renameInputRef}
-                  className="h-10 w-full max-w-md rounded-none border border-line bg-surface px-2 text-headline-display font-bold text-on-surface focus:outline-2 focus:-outline-offset-1 focus:outline-on-surface disabled:border-disabled disabled:text-disabled"
+                  className="
+                    h-10 w-full max-w-md rounded-none border border-line bg-surface px-2 text-headline-display font-bold
+                    text-on-surface
+                    focus:outline-2 focus:-outline-offset-1 focus:outline-on-surface
+                    disabled:border-disabled disabled:text-disabled
+                  "
                   value={renameValue}
                   onChange={(event) => {
                     setRenameValue(event.currentTarget.value);
@@ -862,7 +867,10 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
               </label>
               <Input
                 id="provider-api-token"
-                className={`${inputClassName} tracking-widest`}
+                className={`
+                  ${inputClassName}
+                  tracking-widest
+                `}
                 type="password"
                 value={token}
                 onChange={(event) => {
@@ -890,7 +898,10 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
             {requiresInsecureAck && !endpointUnchangedInsecure ? (
               <label className="flex items-start gap-2 text-body-tight text-on-surface">
                 <Checkbox.Root
-                  className={`${checkboxClassName} mt-0.5`}
+                  className={`
+                    ${checkboxClassName}
+                    mt-0.5
+                  `}
                   checked={insecureHttpAcknowledged}
                   onCheckedChange={(checked) => {
                     setInsecureHttpAcknowledged(checked);
@@ -981,7 +992,12 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
         </section>
 
         <section className="shadow-frame border border-line p-6">
-          <div className="mb-6 flex flex-col justify-between gap-4 sm:flex-row sm:items-start">
+          <div
+            className="
+              mb-6 flex flex-col justify-between gap-4
+              sm:flex-row sm:items-start
+            "
+          >
             <div>
               <h3 className="text-headline-sm font-bold text-on-surface">{t("models.listTitle")}</h3>
               <p className="mt-1 text-xs text-neutral" aria-live="polite">
@@ -1105,7 +1121,10 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
       <footer className="flex shrink-0 items-center justify-end gap-3 border-t border-line bg-surface px-8 py-4">
         <Button
           type="button"
-          className={`${dangerIconButtonClassName} mr-auto`}
+          className={`
+            ${dangerIconButtonClassName}
+            mr-auto
+          `}
           aria-label={t("models.deleteChannel")}
           title={t("models.deleteChannel")}
           disabled={connectionFormDisabled}
@@ -1126,7 +1145,10 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
         </Button>
         <Button
           type="button"
-          className={`${primaryButtonClassName} relative`}
+          className={`
+            ${primaryButtonClassName}
+            relative
+          `}
           disabled={connectionFormDisabled || !formValid}
           focusableWhenDisabled
           aria-busy={connectionFormDisabled}

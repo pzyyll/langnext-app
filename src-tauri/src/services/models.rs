@@ -2,13 +2,13 @@
 // ABOUTME: Vault and transport work run via spawn_blocking / async reqwest without exposing secrets.
 use crate::adapters::catalog;
 use crate::adapters::transport::{
-  chat_completion_http_cancellable, chat_completion_stream_http_cancellable, ChatCompletionRequest, ModelListRequest,
-  ModelTransport, TransportError,
+  ChatCompletionRequest, ModelListRequest, ModelTransport, TransportError, chat_completion_http_cancellable,
+  chat_completion_stream_http_cancellable,
 };
 use crate::credentials::CredentialVault;
 use crate::domain::cancel::CancelToken;
 use crate::domain::language_detection::{
-  parse_language_code, DetectLanguageInput, DetectLanguageResult, DetectorType, LanguageDetectorConfig,
+  DetectLanguageInput, DetectLanguageResult, DetectorType, LanguageDetectorConfig, parse_language_code,
 };
 use crate::domain::model::{
   Availability, CapabilityOverridesV1, ConnectionTestResult, ManualModelWrite, ModelConfigWrite, ModelSource,
@@ -17,8 +17,8 @@ use crate::domain::model::{
 use crate::domain::provider::{CredentialKind, ModelsSyncStatus, ProviderInstance, ProviderInstanceDto, ProxyMode};
 use crate::domain::time::{new_id, now_rfc3339};
 use crate::domain::translation::{
-  TranslateInput, TranslateResult, TranslateStreamChunk, TranslateStreamDone, TranslateStreamReset,
-  TRANSLATE_CANCELLED_CODE, TRANSLATE_CHUNK_EVENT, TRANSLATE_DONE_EVENT, TRANSLATE_RESET_EVENT,
+  TRANSLATE_CANCELLED_CODE, TRANSLATE_CHUNK_EVENT, TRANSLATE_DONE_EVENT, TRANSLATE_RESET_EVENT, TranslateInput,
+  TranslateResult, TranslateStreamChunk, TranslateStreamDone, TranslateStreamReset,
 };
 use crate::domain::translation_profile::{TranslationProfile, TranslationProfileTarget};
 use crate::error::StorageError;

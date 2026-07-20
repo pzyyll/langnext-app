@@ -66,15 +66,24 @@ export function SelectField({
       <Select.Trigger id={id} className={triggerClassName} aria-label={ariaLabel} aria-labelledby={ariaLabelledby}>
         <Select.Value
           placeholder={placeholder}
-          className="min-w-0 flex-1 truncate text-left data-placeholder:text-neutral"
+          className="
+            min-w-0 flex-1 truncate text-left
+            data-placeholder:text-neutral
+          "
         />
-        <Select.Icon className="inline-flex size-4 shrink-0 items-center justify-center rotate-180 transition-transform duration-200 ease-out data-popup-open:rotate-0">
+        <Select.Icon
+          className="
+            inline-flex size-4 shrink-0 rotate-180 items-center justify-center transition-transform duration-200
+            ease-out
+            data-popup-open:rotate-0
+          "
+        >
           <IconClarityAngleLine className="pointer-events-none size-4" />
         </Select.Icon>
       </Select.Trigger>
       <Select.Portal>
         <Select.Positioner
-          className="outline-hidden z-50 select-none"
+          className="z-50 outline-hidden select-none"
           alignItemWithTrigger={false}
           side="bottom"
           align="start"
@@ -83,7 +92,11 @@ export function SelectField({
           positionMethod="fixed"
         >
           <Select.Popup className={popupClassName}>
-            <Select.List className="max-h-[min(22.5rem,var(--available-height))] overflow-y-auto overscroll-contain py-1 scroll-py-1">
+            <Select.List
+              className="
+                max-h-[min(22.5rem,var(--available-height))] scroll-py-1 overflow-y-auto overscroll-contain py-1
+              "
+            >
               {allOptions.map((option) => (
                 <Select.Item
                   key={option.value}

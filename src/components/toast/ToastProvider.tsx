@@ -97,7 +97,10 @@ function ToastList() {
         key={toast.id}
         toast={toast}
         swipeDirection="right"
-        className={`${toastRootClassName} ${VARIANT_ACCENT_BAR[variant]}`}
+        className={`
+          ${toastRootClassName}
+          ${VARIANT_ACCENT_BAR[variant]}
+        `}
       >
         <Toast.Content className={toastContentClassName}>
           <Icon className={VARIANT_ICON_CLASS[variant]} aria-hidden />

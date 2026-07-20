@@ -113,7 +113,10 @@ function SettingsPage() {
             onValueChange={(value) => {
               void setTheme(value as ThemeMode);
             }}
-            className="flex flex-col gap-2 sm:flex-row"
+            className="
+              flex flex-col gap-2
+              sm:flex-row
+            "
             aria-describedby="settings-theme-desc"
           >
             {themeOptions.map((option) => {
@@ -154,7 +157,10 @@ function SettingsPage() {
             onValueChange={(value) => {
               void setLanguage(value as AppLanguage);
             }}
-            className="flex flex-col gap-2 sm:flex-row"
+            className="
+              flex flex-col gap-2
+              sm:flex-row
+            "
             aria-describedby="settings-language-desc"
           >
             {languageOptions.map((option) => {
@@ -164,7 +170,7 @@ function SettingsPage() {
                   <Radio.Root value={option.value} className={radioClassName}>
                     <Radio.Indicator className={radioIndicatorClassName} />
                   </Radio.Root>
-                  <span className="pointer-events-none size-4 shrink-0 text-center text-[10px] leading-4 font-bold tracking-wide">
+                  <span className="pointer-events-none size-4 shrink-0 text-center text-[10px]/4 font-bold tracking-wide">
                     {option.value === "en" ? "EN" : "中"}
                   </span>
                   <span>{option.label}</span>
@@ -370,9 +376,11 @@ function ShortcutsSettingsSection() {
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              className={`${inputClassName} min-w-40 flex-1 cursor-default text-left ${
-                recordingId === SHORTCUT_OPEN_QUICK_TRANSLATE ? "outline-2 -outline-offset-1 outline-on-surface" : ""
-              }`}
+              className={`
+                ${inputClassName}
+                min-w-40 flex-1 cursor-default text-left
+                ${recordingId === SHORTCUT_OPEN_QUICK_TRANSLATE ? `outline-2 -outline-offset-1 outline-on-surface` : ""}
+              `}
               onClick={() => {
                 setRecordingId(SHORTCUT_OPEN_QUICK_TRANSLATE);
               }}
@@ -412,9 +420,11 @@ function ShortcutsSettingsSection() {
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              className={`${inputClassName} min-w-40 flex-1 cursor-default text-left ${
-                recordingId === SHORTCUT_REGION_SCREENSHOT ? "outline-2 -outline-offset-1 outline-on-surface" : ""
-              }`}
+              className={`
+                ${inputClassName}
+                min-w-40 flex-1 cursor-default text-left
+                ${recordingId === SHORTCUT_REGION_SCREENSHOT ? `outline-2 -outline-offset-1 outline-on-surface` : ""}
+              `}
               onClick={() => {
                 setRecordingId(SHORTCUT_REGION_SCREENSHOT);
               }}

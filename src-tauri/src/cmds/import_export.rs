@@ -3,7 +3,7 @@
 use crate::cmds::runtime::run_blocking;
 use crate::domain::import_export::{ConfigurationExport, ImportConflictMode, ImportPreview, ImportResult};
 use crate::error::IpcError;
-use crate::events::{emit_data_changed, MODELS_CHANGED, PROVIDERS_CHANGED, TRANSLATION_PROFILES_CHANGED};
+use crate::events::{MODELS_CHANGED, PROVIDERS_CHANGED, TRANSLATION_PROFILES_CHANGED, emit_data_changed};
 use crate::state::AppState;
 use tauri::{AppHandle, State};
 

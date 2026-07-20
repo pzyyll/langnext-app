@@ -2,7 +2,7 @@
 // ABOUTME: Compare-and-set updates prevent concurrent credential races.
 use crate::domain::time::now_rfc3339;
 use crate::error::StorageError;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 
 pub const GLOBAL_PROXY_SLOT: &str = "global_proxy";
 

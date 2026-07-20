@@ -82,11 +82,13 @@ export function HistoryTable({
                 </td>
                 <td className="py-3 text-body-tight text-neutral">{formatHistoryLocalDateTime(item.createdAt)}</td>
                 <td className="max-w-xs py-3 text-body-tight text-on-surface">
-                  <span className="line-clamp-2 whitespace-pre-wrap break-words">{item.sourceTextPreview}</span>
+                  <span className="line-clamp-2 wrap-break-word whitespace-pre-wrap">{item.sourceTextPreview}</span>
                 </td>
                 <td className="max-w-xs py-3 text-body-tight text-on-surface">
                   {item.status === "complete" ? (
-                    <span className="line-clamp-2 whitespace-pre-wrap break-words">{item.translatedTextPreview}</span>
+                    <span className="line-clamp-2 wrap-break-word whitespace-pre-wrap">
+                      {item.translatedTextPreview}
+                    </span>
                   ) : (
                     <span className="text-error">{t("history.status.failedCell")}</span>
                   )}

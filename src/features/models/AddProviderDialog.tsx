@@ -37,7 +37,12 @@ export function AddProviderDialog({ open, onOpenChange, onCreated }: AddProvider
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Backdrop className={dialogBackdropClassName} />
-        <Dialog.Popup className={`${dialogPopupClassName} max-h-[min(90dvh,40rem)] w-md overflow-y-auto`}>
+        <Dialog.Popup
+          className={`
+            ${dialogPopupClassName}
+            max-h-[min(90dvh,40rem)] w-md overflow-y-auto
+          `}
+        >
           <div className="flex flex-col gap-1">
             <Dialog.Title className="text-title-dialog font-bold text-on-surface">
               {t("models.addChannel.title")}

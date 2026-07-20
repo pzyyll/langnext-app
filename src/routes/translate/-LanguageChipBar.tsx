@@ -297,13 +297,19 @@ function LanguageMorePicker({
         <span className="sr-only">
           <Combobox.Value />
         </span>
-        <Combobox.Icon className="inline-flex size-4 shrink-0 items-center justify-center rotate-180 transition-transform duration-200 ease-out group-data-popup-open:rotate-0">
+        <Combobox.Icon
+          className="
+            inline-flex size-4 shrink-0 rotate-180 items-center justify-center transition-transform duration-200
+            ease-out
+            group-data-popup-open:rotate-0
+          "
+        >
           <IconClarityAngleLine className="pointer-events-none size-4" />
         </Combobox.Icon>
       </Combobox.Trigger>
       <Combobox.Portal>
         <Combobox.Positioner
-          className="outline-hidden z-50 select-none"
+          className="z-50 outline-hidden select-none"
           anchor={popupBoundsRef ? positionAnchor : undefined}
           align="center"
           side="bottom"
@@ -572,7 +578,7 @@ export function LanguageChipBar({
   // Equal flex-1 halves keep tabs aligned with the source/target panes below.
   return (
     <div className="flex w-full min-w-0 shrink-0 items-center">
-      <div className="flex min-w-0 flex-1 pl-1 items-center">
+      <div className="flex min-w-0 flex-1 items-center pl-1">
         <LanguageTabRow
           value={sourceLang}
           options={sourceOptions}

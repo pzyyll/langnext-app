@@ -22,7 +22,12 @@ type PageLayoutProps = {
  */
 export function PageLayout({ title, description, actions, contentClassName, children }: PageLayoutProps) {
   return (
-    <div className={`flex min-h-0 flex-col overflow-hidden bg-background ${LAYOUT_HEIGHT_CLASS}`}>
+    <div
+      className={`
+        flex min-h-0 flex-col overflow-hidden bg-background
+        ${LAYOUT_HEIGHT_CLASS}
+      `}
+    >
       <header className="flex h-16 shrink-0 items-center justify-between gap-3 border-b border-line bg-surface px-2">
         <div className="min-w-0">
           <h1 className="text-headline-sm font-bold tracking-tight text-on-surface uppercase">{title}</h1>

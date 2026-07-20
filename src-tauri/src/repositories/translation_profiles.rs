@@ -5,7 +5,7 @@ use crate::domain::translation_profile::{
   PromptTemplate, TranslationProfile, TranslationProfileDto, TranslationProfilePromptTemplate, TranslationProfileTarget,
 };
 use crate::error::StorageError;
-use rusqlite::{params, Connection, OptionalExtension, Row};
+use rusqlite::{Connection, OptionalExtension, Row, params};
 use std::collections::HashSet;
 use uuid::Uuid;
 

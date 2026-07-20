@@ -3,7 +3,7 @@
 use crate::domain::settings::AppSettingsV1;
 use crate::domain::time::now_rfc3339;
 use crate::error::StorageError;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 
 pub fn get(conn: &Connection) -> Result<AppSettingsV1, StorageError> {
   let (schema_version, value_json): (i64, String) = conn.query_row(

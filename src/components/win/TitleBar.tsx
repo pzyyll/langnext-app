@@ -121,7 +121,12 @@ export function TitleBar({
 
   return (
     // Drag is only on the title strip — never wrap the control buttons.
-    <div className={`relative z-50 flex h-titlebar-height shrink-0 border-b border-outline bg-surface ${className}`}>
+    <div
+      className={`
+        relative z-50 flex h-titlebar-height shrink-0 border-b border-outline bg-surface
+        ${className}
+      `}
+    >
       <div className="flex h-full shrink-0 items-center gap-1 pl-2">
         {showSidebarToggle ? (
           <IconButton
@@ -144,7 +149,9 @@ export function TitleBar({
             <IconSvgsLnb className="pointer-events-none size-5 shrink-0" />
             <span
               data-tauri-drag-region
-              className="pointer-events-none truncate select-none text-body-tight leading-none font-normal text-on-surface"
+              className="
+                pointer-events-none truncate text-body-tight leading-none font-normal text-on-surface select-none
+              "
             >
               {title}
             </span>
@@ -157,7 +164,10 @@ export function TitleBar({
           <button
             type="button"
             id="titlebar-pin"
-            className={`${controlButtonClassName}${pinned ? " bg-surface-3" : ""}`}
+            className={`
+              ${controlButtonClassName}
+              ${pinned ? "bg-surface-3" : ""}
+            `}
             aria-label={pinned ? t("quickTranslate.unpin") : t("quickTranslate.pin")}
             aria-pressed={pinned}
             onClick={() => {
@@ -210,7 +220,13 @@ export function TitleBar({
             aria-label={t("titlebar.close")}
             onClick={() => void appWindow.close()}
           >
-            <IconClose className="pointer-events-none size-4 group-hover:text-on-error group-active:text-on-error" />
+            <IconClose
+              className="
+                pointer-events-none size-4
+                group-hover:text-on-error
+                group-active:text-on-error
+              "
+            />
           </button>
         ) : null}
       </div>

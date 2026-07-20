@@ -5,9 +5,9 @@ use crate::domain::language_detection::{DetectLanguageInput, DetectLanguageResul
 use crate::domain::model::{
   ConnectionTestResult, ManualModelWrite, ModelConfigWrite, ProviderModelDto, SyncModelsResult,
 };
-use crate::domain::translation::{TranslateInput, TranslateResult, TranslateStreamError, TRANSLATE_ERROR_EVENT};
+use crate::domain::translation::{TRANSLATE_ERROR_EVENT, TranslateInput, TranslateResult, TranslateStreamError};
 use crate::error::IpcError;
-use crate::events::{emit_data_changed, MODELS_CHANGED, PROVIDERS_CHANGED};
+use crate::events::{MODELS_CHANGED, PROVIDERS_CHANGED, emit_data_changed};
 use crate::state::AppState;
 use tauri::{AppHandle, Emitter, State};
 use uuid::Uuid;

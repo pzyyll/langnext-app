@@ -1314,8 +1314,13 @@ function QuickTranslatePage() {
                   <IconMaterialSymbolsLightAdd className="pointer-events-none size-4" />
                 </Menu.Trigger>
                 <Menu.Portal>
-                  <Menu.Positioner className="outline-hidden z-50" sideOffset={4} align="start">
-                    <Menu.Popup className={`${menuPopupClassName} max-h-64 overflow-y-auto py-1`}>
+                  <Menu.Positioner className="z-50 outline-hidden" sideOffset={4} align="start">
+                    <Menu.Popup
+                      className={`
+                        ${menuPopupClassName}
+                        max-h-64 overflow-y-auto py-1
+                      `}
+                    >
                       {profiles.length === 0 ? (
                         <Menu.Item className={menuItemClassName} disabled>
                           {t("quickTranslate.noProfiles")}
@@ -1388,7 +1393,10 @@ function QuickTranslatePage() {
           <div
             className={cn(
               // min-w-0 + overflow-hidden: long unbroken preview text must not expand the pane.
-              "flex min-w-0 shrink-0 flex-col overflow-hidden border border-line bg-surface-container-lowest focus-within:outline-2 focus-within:-outline-offset-1 focus-within:outline-on-surface",
+              `
+                flex min-w-0 shrink-0 flex-col overflow-hidden border border-line bg-surface-container-lowest
+                focus-within:outline-2 focus-within:-outline-offset-1 focus-within:outline-on-surface
+              `,
               isSourceCollapsed && sourceText ? "min-h-0" : "min-h-32",
             )}
           >
@@ -1398,7 +1406,11 @@ function QuickTranslatePage() {
             {isSourceCollapsed && sourceText ? (
               <button
                 type="button"
-                className="flex min-w-0 w-full cursor-default border-0 bg-transparent px-3 pt-3 pb-2 text-left text-body-md text-on-surface focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface"
+                className="
+                  flex w-full min-w-0 cursor-default border-0 bg-transparent px-3 pt-3 pb-2 text-left text-body-md
+                  text-on-surface
+                  focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface
+                "
                 aria-label={t("quickTranslate.editSource")}
                 onClick={() => {
                   focusSourceAfterExpandRef.current = true;
@@ -1419,7 +1431,7 @@ function QuickTranslatePage() {
               <TextAutosize
                 id="quick-translate-source"
                 layout="grow"
-                className="min-h-24 max-h-64"
+                className="max-h-64 min-h-24"
                 textareaClassName="px-3 pt-3 pb-2"
                 minRows={6}
                 placeholder={t("quickTranslate.sourcePlaceholder")}
@@ -1555,7 +1567,7 @@ function QuickTranslatePage() {
           showScrollbarOnHover={false}
           hideScrollbar={isHeightAdapting}
         >
-          <div ref={setContentMeasureNode} className="flex h-fit min-w-0 w-full flex-col gap-4">
+          <div ref={setContentMeasureNode} className="flex h-fit w-full min-w-0 flex-col gap-4">
             {profilesError ? (
               <p className="shrink-0 text-body-tight text-error" role="alert">
                 {profilesError}
@@ -1594,10 +1606,17 @@ function QuickTranslatePage() {
                     <Collapsible.Trigger
                       nativeButton={false}
                       render={<div />}
-                      className="group flex h-8 cursor-default items-center gap-2 border-b border-line bg-surface-container px-2 select-none focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface"
+                      className="
+                        group flex h-8 cursor-default items-center gap-2 border-b border-line bg-surface-container px-2
+                        select-none
+                        focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface
+                      "
                     >
                       <ExpandCircleDownOutlineIcon
-                        className="size-4 shrink-0 text-on-surface transition-transform duration-100 ease-out group-data-panel-open:rotate-180"
+                        className="
+                          size-4 shrink-0 text-on-surface transition-transform duration-100 ease-out
+                          group-data-panel-open:rotate-180
+                        "
                         aria-hidden
                       />
                       <div
@@ -1610,7 +1629,11 @@ function QuickTranslatePage() {
                         }}
                       >
                         <SelectField
-                          className="h-7 border-0 bg-transparent text-table-header font-bold tracking-tight uppercase hover:not-data-disabled:bg-transparent data-popup-open:bg-transparent"
+                          className="
+                            h-7 border-0 bg-transparent text-table-header font-bold tracking-tight uppercase
+                            hover:not-data-disabled:bg-transparent
+                            data-popup-open:bg-transparent
+                          "
                           value={slot.profileId}
                           onValueChange={(value) => {
                             if (value) {
@@ -1679,7 +1702,12 @@ function QuickTranslatePage() {
 									*/}
                     <Collapsible.Panel
                       keepMounted
-                      className="h-(--collapsible-panel-height) overflow-hidden transition-[height] duration-150 ease-out data-ending-style:h-0 data-starting-style:h-0 [&[hidden]:not([hidden='until-found'])]:hidden"
+                      className="
+                        h-(--collapsible-panel-height) overflow-hidden transition-[height] duration-150 ease-out
+                        data-ending-style:h-0
+                        data-starting-style:h-0
+                        [&[hidden]:not([hidden='until-found'])]:hidden
+                      "
                     >
                       {/*
 										  Grow without max-h: plain block so card height drives window resize.
@@ -1705,7 +1733,10 @@ function QuickTranslatePage() {
                         }
                       >
                         {result.error ? (
-                          <p className="min-w-0 break-words whitespace-pre-wrap text-error select-text" role="alert">
+                          <p
+                            className="min-w-0 wrap-break-word whitespace-pre-wrap text-error select-text"
+                            role="alert"
+                          >
                             {result.error}
                           </p>
                         ) : result.text || result.isTranslating ? (

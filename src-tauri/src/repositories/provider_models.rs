@@ -3,7 +3,7 @@
 use crate::domain::model::{Availability, ModelSource, ProviderModel, RemoteModelSyncItem};
 use crate::domain::time::{new_id, now_rfc3339};
 use crate::error::StorageError;
-use rusqlite::{params, Connection, OptionalExtension, Row};
+use rusqlite::{Connection, OptionalExtension, Row, params};
 use uuid::Uuid;
 
 fn map_row(row: &Row<'_>) -> Result<ProviderModel, rusqlite::Error> {

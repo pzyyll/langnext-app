@@ -2,7 +2,7 @@
 // ABOUTME: Vault writes never share a transaction with SQLite; journal coordinates both.
 use crate::adapters::catalog;
 use crate::credentials::coordinator;
-use crate::credentials::{provider_ref, CredentialVault};
+use crate::credentials::{CredentialVault, provider_ref};
 use crate::domain::provider::{
   CredentialKind, CredentialUpdate, ModelsSyncStatus, ProviderInstance, ProviderInstanceDto, ProviderInstanceWrite,
   ProxyMode,

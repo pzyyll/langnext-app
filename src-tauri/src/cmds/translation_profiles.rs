@@ -4,7 +4,7 @@ use crate::cmds::runtime::run_blocking;
 use crate::domain::translation_profile::TranslationProfileDto;
 use crate::domain::translation_profile::TranslationProfileWrite;
 use crate::error::IpcError;
-use crate::events::{emit_data_changed, TRANSLATION_PROFILES_CHANGED};
+use crate::events::{TRANSLATION_PROFILES_CHANGED, emit_data_changed};
 use crate::state::AppState;
 use tauri::{AppHandle, State};
 use uuid::Uuid;

@@ -119,7 +119,10 @@ function AddManualModelForm({ providerId, onCreated }: AddManualModelFormProps) 
         </label>
         <Input
           id="add-model-key"
-          className={`${inputClassName} font-mono`}
+          className={`
+            ${inputClassName}
+            font-mono
+          `}
           value={modelKey}
           onChange={(event) => {
             setModelKey(event.currentTarget.value);

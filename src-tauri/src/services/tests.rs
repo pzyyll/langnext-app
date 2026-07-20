@@ -1057,8 +1057,8 @@ fn provider_delete_with_credential_cleans_vault() {
 
 #[test]
 fn import_credential_cleanup_isolates_unrelated_journals() {
-  use crate::credentials::coordinator;
   use crate::credentials::FailingCredentialVault;
+  use crate::credentials::coordinator;
   use crate::domain::time::new_id;
   use crate::repositories::credential_operations::{self, OperationState, OwnerKind};
 
@@ -1143,9 +1143,11 @@ fn import_credential_cleanup_isolates_unrelated_journals() {
 
   let unfinished = db.read(credential_operations::list_unfinished).unwrap();
   assert!(unfinished.iter().any(|op| op.id == unrelated_op.id));
-  assert!(unfinished
-    .iter()
-    .any(|op| op.owner_id == p.id.to_string() && op.state == OperationState::DbCommitted));
+  assert!(
+    unfinished
+      .iter()
+      .any(|op| op.owner_id == p.id.to_string() && op.state == OperationState::DbCommitted)
+  );
 
   // Restore vault and recover only the import owner; unrelated remains.
   vault.set_fail_delete(false);
@@ -1202,10 +1204,12 @@ fn import_rejects_malformed_graphs() {
   doc.app_settings.network.proxy_url = Some("http://user:secret@host".into());
   let preview = ie.preview(&doc, ImportConflictMode::Merge).unwrap();
   assert!(!preview.valid);
-  assert!(preview
-    .validation_errors
-    .iter()
-    .any(|e| e.contains("proxy") || e.contains("userinfo") || e.contains("system")));
+  assert!(
+    preview
+      .validation_errors
+      .iter()
+      .any(|e| e.contains("proxy") || e.contains("userinfo") || e.contains("system"))
+  );
   assert!(!serde_json::to_string(&preview).unwrap().contains("user:secret"));
 
   // Reset settings
@@ -3445,12 +3449,14 @@ fn profile_save_persists_dedicated_detection_model_and_empty_config() {
     })
     .unwrap();
   assert!(cleared.profile.language_detection.is_none());
-  assert!(profiles
-    .get(saved.profile.id)
-    .unwrap()
-    .profile
-    .language_detection
-    .is_none());
+  assert!(
+    profiles
+      .get(saved.profile.id)
+      .unwrap()
+      .profile
+      .language_detection
+      .is_none()
+  );
 }
 
 #[test]

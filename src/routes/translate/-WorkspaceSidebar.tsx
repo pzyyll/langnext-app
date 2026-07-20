@@ -142,11 +142,14 @@ function SortableWorkspaceRow({
     <li ref={ref} role="option" aria-selected={selected}>
       <div
         className={cn(
-          "group flex items-center gap-0.5 border-l-4 py-1.5 pr-1 pl-0.5 transition-colors",
+          `group flex items-center gap-0.5 border-l-4 py-1.5 pr-1 pl-0.5 transition-colors`,
           animationClass,
           selected
             ? "border-tertiary bg-surface-container-low"
-            : "border-transparent hover:bg-surface-container-highest",
+            : `
+              border-transparent
+              hover:bg-surface-container-highest
+            `,
           disabled && !exiting ? "opacity-70" : "",
           exiting ? "pointer-events-none" : "",
         )}
@@ -172,7 +175,10 @@ function SortableWorkspaceRow({
           aria-label={t("translate.workspace.reorderAria", { name: workspace.name })}
           disabled={disabled || isEditing || exiting}
           className={cn(
-            "w-5 shrink-0 cursor-grab text-center text-[10px] leading-none text-neutral active:cursor-grabbing",
+            `
+              w-5 shrink-0 cursor-grab text-center text-[10px] leading-none text-neutral
+              active:cursor-grabbing
+            `,
             selected ? "text-on-surface" : "group-hover:text-on-surface",
             (disabled || isEditing || exiting) && "cursor-default opacity-40",
           )}
@@ -183,7 +189,10 @@ function SortableWorkspaceRow({
         {isEditing ? (
           <input
             ref={inputRef}
-            className="h-7 min-w-0 flex-1 border border-line bg-surface px-1.5 text-body-tight text-on-surface outline-none focus:outline-2 focus:-outline-offset-1 focus:outline-on-surface"
+            className="
+              h-7 min-w-0 flex-1 border border-line bg-surface px-1.5 text-body-tight text-on-surface outline-none
+              focus:outline-2 focus:-outline-offset-1 focus:outline-on-surface
+            "
             value={draftName}
             maxLength={MAX_WORKSPACE_NAME_LENGTH}
             aria-label={t("translate.workspace.renameAria")}
@@ -227,7 +236,12 @@ function SortableWorkspaceRow({
 
         <IconButton
           className={cn(
-            "[&_svg]:size-3.5 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100",
+            `
+              opacity-0
+              group-focus-within:opacity-100
+              group-hover:opacity-100
+              [&_svg]:size-3.5
+            `,
             selected && "opacity-100",
           )}
           aria-label={t("translate.workspace.deleteAria", { name: workspace.name })}
@@ -415,7 +429,7 @@ export function WorkspaceSidebar({
     <>
       <aside
         className={cn(
-          "relative flex shrink-0 flex-col overflow-hidden border-r border-outline bg-surface-container-lowest",
+          `relative flex shrink-0 flex-col overflow-hidden border-r border-outline bg-surface-container-lowest`,
           railWidthTransitionClassName,
           collapsed ? railCollapsedWidthClassName : railExpandedWidthClassName,
           "min-h-0",
@@ -433,7 +447,12 @@ export function WorkspaceSidebar({
           aria-hidden={collapsed}
           inert={collapsed}
         >
-          <div className="flex h-12 shrink-0 items-center justify-between gap-1 border-b border-outline bg-surface-container-low px-1">
+          <div
+            className="
+              flex h-12 shrink-0 items-center justify-between gap-1 border-b border-outline bg-surface-container-low
+              px-1
+            "
+          >
             <span className="min-w-0 flex-1 truncate pl-1 text-label-sm font-bold tracking-wide text-on-surface uppercase">
               {t("translate.workspace.title")}
             </span>
@@ -553,7 +572,10 @@ export function WorkspaceSidebar({
           </IconButton>
           {activeWorkspace ? (
             <span
-              className="mt-2 max-h-40 w-full truncate px-1 text-center text-[10px] font-bold tracking-wide text-neutral uppercase [writing-mode:vertical-rl]"
+              className="
+                mt-2 max-h-40 w-full truncate px-1 text-center text-[10px] font-bold tracking-wide text-neutral
+                uppercase [writing-mode:vertical-rl]
+              "
               title={activeWorkspace.name}
             >
               {activeWorkspace.name}

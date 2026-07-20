@@ -32,11 +32,15 @@ export const iconButtonIconClassName =
 
 export const iconButtonCircleClassName = cn(iconButtonClassName, "rounded-full");
 
-export const iconButtonCircleLargeClassName = cn(iconButtonCircleClassName, "size-9");
+export const iconButtonCircleLargeClassName = cn(iconButtonCircleClassName, `size-9`);
 
 export const dangerIconButtonClassName = cn(
   iconButtonClassName,
-  "text-error hover:bg-error hover:text-on-error active:bg-error active:text-on-error",
+  `
+    text-error
+    hover:bg-error hover:text-on-error
+    active:bg-error active:text-on-error
+  `,
 );
 
 /** Base UI Input (text / password / search / number) */

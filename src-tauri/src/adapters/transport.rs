@@ -1320,11 +1320,7 @@ fn parse_anthropic_stream_delta(event_name: Option<&str>, value: &serde_json::Va
     return None;
   }
   let text = delta.get("text").and_then(|t| t.as_str())?;
-  if text.is_empty() {
-    None
-  } else {
-    Some(text.to_string())
-  }
+  if text.is_empty() { None } else { Some(text.to_string()) }
 }
 
 /// Gemini streamGenerateContent (SSE) chunk — same shape as non-stream generateContent.
@@ -1344,11 +1340,7 @@ fn parse_gemini_stream_delta(value: &serde_json::Value) -> Option<String> {
       }
     }
   }
-  if texts.is_empty() {
-    None
-  } else {
-    Some(texts.join(""))
-  }
+  if texts.is_empty() { None } else { Some(texts.join("")) }
 }
 
 /// Feed one complete SSE event (joined data lines) through the adapter delta parser.
@@ -1684,17 +1676,17 @@ mod tests {
           match encoding {
             BodyEncoding::ContentLength => {
               let response = format!(
-								"HTTP/1.1 {status} OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-								body.len()
-							);
+                "HTTP/1.1 {status} OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+              );
               let _ = stream.write_all(response.as_bytes());
               let _ = stream.flush();
             }
             BodyEncoding::Chunked => {
               // No Content-Length: force the client streaming/chunk path.
               let header = format!(
-								"HTTP/1.1 {status} OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
-							);
+                "HTTP/1.1 {status} OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
+              );
               if stream.write_all(header.as_bytes()).is_err() {
                 *client_write_failed_thread.lock().expect("write failed") = true;
                 continue;
@@ -2725,15 +2717,15 @@ mod tests {
     // Client must stop reading after the cap: either the server failed mid-write or it
     // accepted far less than the full body (socket buffer may absorb a little past 2 MiB).
     assert!(
-			server.client_write_failed() || written < full_len,
-			"client must disconnect or stop draining before the full {full_len}-byte body is sent; written={written}, write_failed={}",
-			server.client_write_failed()
-		);
+      server.client_write_failed() || written < full_len,
+      "client must disconnect or stop draining before the full {full_len}-byte body is sent; written={written}, write_failed={}",
+      server.client_write_failed()
+    );
     // If we recorded successful payload writes, they must not equal a full-buffer-then-check.
     assert!(
-			written < full_len,
-			"server delivered the entire {full_len}-byte body (written={written}); client appears to have buffered fully before rejecting"
-		);
+      written < full_len,
+      "server delivered the entire {full_len}-byte body (written={written}); client appears to have buffered fully before rejecting"
+    );
     // Sanity: client did read past the cap threshold (plus at most a couple of chunks).
     assert!(
       written > MAX_RESPONSE_BODY_BYTES.saturating_sub(64 * 1024),

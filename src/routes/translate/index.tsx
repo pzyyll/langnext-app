@@ -949,7 +949,12 @@ function TranslatePage() {
   const profileSelectDisabled = profilesLoading;
 
   return (
-    <div className={`${LAYOUT_HEIGHT_CLASS} flex min-h-0`}>
+    <div
+      className={`
+        ${LAYOUT_HEIGHT_CLASS}
+        flex min-h-0
+      `}
+    >
       <WorkspaceSidebar
         workspaces={workspaceStore.workspaces}
         activeWorkspaceId={workspaceStore.activeWorkspaceId}
@@ -971,7 +976,12 @@ function TranslatePage() {
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">
         {/* Top toolbar: session config only (profile / prompt / model). Languages live in pane headers. */}
-        <div className="flex h-12 shrink-0 items-center gap-gutter overflow-hidden border-b border-outline bg-surface-container-low px-gutter">
+        <div
+          className="
+            flex h-12 shrink-0 items-center gap-gutter overflow-hidden border-b border-outline bg-surface-container-low
+            px-gutter
+          "
+        >
           <div className="flex min-w-0 items-center gap-2">
             <label className="text-label-sm text-neutral uppercase" id="translate-profile-label">
               {t("translate.profileLabel")}
@@ -1015,7 +1025,13 @@ function TranslatePage() {
             </div>
           ) : null}
 
-          <div className="hidden h-6 w-px shrink-0 bg-outline-variant sm:block" aria-hidden />
+          <div
+            className="
+              hidden h-6 w-px shrink-0 bg-outline-variant
+              sm:block
+            "
+            aria-hidden
+          />
 
           <div className="flex min-w-0 items-center gap-2">
             <label className="text-label-sm text-neutral uppercase" id="translate-model-label">
@@ -1086,10 +1102,19 @@ function TranslatePage() {
             onSwap={swapLanguages}
           />
 
-          <div ref={languagePopupBoundsRef} className="grid min-h-0 flex-1 grid-cols-1 gap-gutter lg:grid-cols-2">
+          <div
+            ref={languagePopupBoundsRef}
+            className="
+              grid min-h-0 flex-1 grid-cols-1 gap-gutter
+              lg:grid-cols-2
+            "
+          >
             {/* Source pane */}
             <section
-              className="shadow-frame flex min-h-64 flex-col border border-outline bg-surface-container-lowest lg:min-h-0"
+              className="
+                shadow-frame flex min-h-64 flex-col border border-outline bg-surface-container-lowest
+                lg:min-h-0
+              "
               aria-label={t("translate.source")}
             >
               <div className="relative min-h-0 flex-1">
@@ -1100,7 +1125,10 @@ function TranslatePage() {
                 <TextAutosize
                   id="translate-source-text"
                   layout="fill"
-                  className="h-full min-h-40 lg:min-h-0"
+                  className="
+                    h-full min-h-40
+                    lg:min-h-0
+                  "
                   textareaClassName="p-gutter"
                   placeholder={t("translate.sourcePlaceholder")}
                   spellCheck={false}
@@ -1117,7 +1145,11 @@ function TranslatePage() {
                 />
               </div>
 
-              <div className="flex shrink-0 items-center gap-1 border-t border-outline bg-surface-container-lowest p-gutter">
+              <div
+                className="
+                  flex shrink-0 items-center gap-1 border-t border-outline bg-surface-container-lowest p-gutter
+                "
+              >
                 {charCount > 0 ? <span className="text-label-sm text-neutral tabular-nums">{charCount}</span> : null}
                 <div className="flex-1" />
                 {sourceText ? (
@@ -1156,7 +1188,10 @@ function TranslatePage() {
 
             {/* Translation pane */}
             <section
-              className="shadow-frame flex min-h-64 flex-col border border-outline bg-surface-container-low lg:min-h-0"
+              className="
+                shadow-frame flex min-h-64 flex-col border border-outline bg-surface-container-low
+                lg:min-h-0
+              "
               aria-label={t("translate.translation")}
             >
               {/* Same stepped font as source: measure error/output/loading label, fill fixed pane. */}

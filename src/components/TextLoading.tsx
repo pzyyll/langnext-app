@@ -124,7 +124,7 @@ export function TextLoading({
     <p
       className={cn(
         // break-words: keep long unbroken tokens inside the pane (matches TextAutosize measure dummy).
-        "min-w-0 break-words whitespace-pre-wrap",
+        "min-w-0 wrap-break-word whitespace-pre-wrap",
         isEmptyLoading ? emptyLoadingClassName : "select-text",
         className,
       )}

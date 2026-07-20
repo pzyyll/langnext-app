@@ -47,7 +47,10 @@ export function HistoryDetailDialog({ open, onOpenChange, id }: HistoryDetailDia
       <Dialog.Portal>
         <Dialog.Backdrop className={dialogBackdropClassName} />
         <Dialog.Popup
-          className={`${dialogPopupClassName} max-w-(--available-width) w-[42rem] max-w-[calc(100vw-3rem)]`}
+          className={`
+            ${dialogPopupClassName}
+            w-2xl
+          `}
         >
           <Dialog.Title className="text-title-dialog font-bold text-on-surface">
             {t("history.detail.title")}
@@ -65,13 +68,15 @@ export function HistoryDetailDialog({ open, onOpenChange, id }: HistoryDetailDia
             <div className="flex flex-col gap-3">
               <DetailGrid dto={dto} />
               <Field label={t("history.detail.source")}>
-                <p className="whitespace-pre-wrap break-words text-body-md text-on-surface">{dto.sourceText}</p>
+                <p className="text-body-md wrap-break-word whitespace-pre-wrap text-on-surface">{dto.sourceText}</p>
               </Field>
               <Field label={t("history.detail.translation")}>
                 {dto.status === "complete" ? (
-                  <p className="whitespace-pre-wrap break-words text-body-md text-on-surface">{dto.translatedText}</p>
+                  <p className="text-body-md wrap-break-word whitespace-pre-wrap text-on-surface">
+                    {dto.translatedText}
+                  </p>
                 ) : (
-                  <p className="whitespace-pre-wrap break-words text-body-md text-error">
+                  <p className="text-body-md wrap-break-word whitespace-pre-wrap text-error">
                     {dto.errorMessage || t("history.status.failedCell")}
                   </p>
                 )}
@@ -97,7 +102,12 @@ export function HistoryDetailDialog({ open, onOpenChange, id }: HistoryDetailDia
                 )}
               </Button>
             ) : null}
-            <Dialog.Close className={`${iconButtonClassName} h-control-height px-4 font-bold`}>
+            <Dialog.Close
+              className={`
+                ${iconButtonClassName}
+                h-control-height px-4 font-bold
+              `}
+            >
               {t("common.close")}
             </Dialog.Close>
           </div>

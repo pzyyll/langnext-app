@@ -94,7 +94,12 @@ export function ModelsTable({
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+      <div
+        className="
+          flex flex-col gap-3
+          sm:flex-row sm:items-center
+        "
+      >
         <div className="min-w-0 flex-1">
           <label className="sr-only" htmlFor="models-search">
             {t("models.searchModels")}
@@ -103,7 +108,10 @@ export function ModelsTable({
             <Input
               id="models-search"
               type="search"
-              className={`${inputClassName} ${searchQuery ? "pr-9" : ""}`}
+              className={`
+                ${inputClassName}
+                ${searchQuery ? "pr-9" : ""}
+              `}
               placeholder={t("models.searchPlaceholder")}
               value={searchQuery}
               spellCheck={false}
@@ -115,21 +123,36 @@ export function ModelsTable({
             {searchQuery ? (
               <Button
                 type="button"
-                className={`inline-flex size-4 shrink-0 cursor-default items-center justify-center rounded-none border-0 bg-transparent text-error/80 hover:text-error focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface data-disabled:text-disabled disabled:text-disabled group absolute top-1/2 right-1 -translate-y-1/2`}
+                className={`
+                  group absolute top-1/2 right-1 inline-flex size-4 shrink-0 -translate-y-1/2 cursor-default
+                  items-center justify-center rounded-none border-0 bg-transparent text-error/80
+                  hover:text-error
+                  focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface
+                  disabled:text-disabled
+                  data-disabled:text-disabled
+                `}
                 aria-label={t("common.clear")}
                 onClick={() => {
                   setSearchQuery("");
                 }}
               >
                 <IconMaterialSymbolsLightClose
-                  className="pointer-events-none shrink-0 transition-transform duration-150 group-hover:scale-110"
+                  className="
+                    pointer-events-none shrink-0 transition-transform duration-150
+                    group-hover:scale-110
+                  "
                   aria-hidden
                 />
               </Button>
             ) : null}
           </div>
         </div>
-        <div className="w-full sm:w-40">
+        <div
+          className="
+            w-full
+            sm:w-40
+          "
+        >
           <SelectField
             value={enabledFilter}
             onValueChange={(value) => handleEnabledFilterChange(value ?? "all")}

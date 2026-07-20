@@ -1,9 +1,9 @@
 // ABOUTME: Versioned secret-free JSON import/export with preview, merge, and copy modes.
 // ABOUTME: Imports run in one SQLite transaction; credentials are cleared and re-auth is required.
-use crate::credentials::coordinator;
 use crate::credentials::CredentialVault;
+use crate::credentials::coordinator;
 use crate::domain::import_export::{
-  ConfigurationExport, ImportConflictMode, ImportPreview, ImportResult, EXPORT_FORMAT_VERSION,
+  ConfigurationExport, EXPORT_FORMAT_VERSION, ImportConflictMode, ImportPreview, ImportResult,
 };
 use crate::domain::provider::ProviderExport;
 use crate::domain::time::{new_id, now_rfc3339};

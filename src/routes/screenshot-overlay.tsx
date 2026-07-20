@@ -271,7 +271,7 @@ function ScreenshotOverlayPage() {
     <div
       ref={rootRef}
       tabIndex={-1}
-      className="fixed inset-0 select-none overflow-hidden bg-black outline-none"
+      className="fixed inset-0 overflow-hidden bg-black outline-none select-none"
       style={{ cursor: busy || !ready ? "progress" : "crosshair" }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
@@ -294,11 +294,17 @@ function ScreenshotOverlayPage() {
       {selection ? (
         <>
           <div
-            className={`pointer-events-none absolute top-0 left-0 ${DIM_OVERLAY_CLASS}`}
+            className={`
+              pointer-events-none absolute top-0 left-0
+              ${DIM_OVERLAY_CLASS}
+            `}
             style={{ width: "100%", height: selection.y }}
           />
           <div
-            className={`pointer-events-none absolute left-0 ${DIM_OVERLAY_CLASS}`}
+            className={`
+              pointer-events-none absolute left-0
+              ${DIM_OVERLAY_CLASS}
+            `}
             style={{
               top: selection.y,
               width: selection.x,
@@ -306,7 +312,10 @@ function ScreenshotOverlayPage() {
             }}
           />
           <div
-            className={`pointer-events-none absolute ${DIM_OVERLAY_CLASS}`}
+            className={`
+              pointer-events-none absolute
+              ${DIM_OVERLAY_CLASS}
+            `}
             style={{
               top: selection.y,
               left: selection.x + selection.width,
@@ -315,7 +324,10 @@ function ScreenshotOverlayPage() {
             }}
           />
           <div
-            className={`pointer-events-none absolute bottom-0 left-0 ${DIM_OVERLAY_CLASS}`}
+            className={`
+              pointer-events-none absolute bottom-0 left-0
+              ${DIM_OVERLAY_CLASS}
+            `}
             style={{
               top: selection.y + selection.height,
               width: "100%",
@@ -342,7 +354,12 @@ function ScreenshotOverlayPage() {
           </div>
         </>
       ) : ready ? (
-        <div className={`pointer-events-none absolute inset-0 ${DIM_OVERLAY_CLASS}`} />
+        <div
+          className={`
+            pointer-events-none absolute inset-0
+            ${DIM_OVERLAY_CLASS}
+          `}
+        />
       ) : null}
 
       {ready ? (

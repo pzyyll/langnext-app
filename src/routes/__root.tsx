@@ -76,7 +76,10 @@ function RootLayout() {
   if (isSecondaryWindowPath(pathname)) {
     return (
       <div
-        className={`root flex h-full min-h-0 flex-col text-on-background ${isScreenshotOverlayPath(pathname) ? "bg-transparent" : "bg-background"}`}
+        className={`
+          root flex h-full min-h-0 flex-col text-on-background
+          ${isScreenshotOverlayPath(pathname) ? `bg-transparent` : `bg-background`}
+        `}
       >
         <Outlet />
       </div>
@@ -98,9 +101,18 @@ function RootLayout() {
       <div className="flex min-h-0 flex-1">
         <aside
           aria-hidden={!sidebarOpen}
-          className={`flex shrink-0 flex-col overflow-hidden border-outline bg-surface-container transition-[width,border-color] duration-200 ease-out ${
-            sidebarOpen ? `${SIDEBAR_WIDTH_CLASS} border-r` : "w-0 border-r-0"
-          }`}
+          className={`
+            flex shrink-0 flex-col overflow-hidden border-outline bg-surface-container transition-[width,border-color]
+            duration-200 ease-out
+            ${
+              sidebarOpen
+                ? `
+                  ${SIDEBAR_WIDTH_CLASS}
+                  border-r
+                `
+                : "w-0 border-r-0"
+            }
+          `}
         >
           <nav className="flex min-w-sidebar-width flex-1 flex-col gap-0.5" aria-label={t("nav.mainAria")}>
             {primaryNavItems.map((item) => {

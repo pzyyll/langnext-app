@@ -133,9 +133,14 @@ function SortableChannelItem({
     <li ref={ref} role="option" aria-selected={active}>
       <div
         className={cn(
-          "group flex items-center gap-0.5 border-l-4 py-1.5 pr-1 pl-0.5 transition-colors",
+          `group flex items-center gap-0.5 border-l-4 py-1.5 pr-1 pl-0.5 transition-colors`,
           animationClass,
-          active ? "border-tertiary bg-surface-container-low" : "border-transparent hover:bg-surface-container-highest",
+          active
+            ? "border-tertiary bg-surface-container-low"
+            : `
+              border-transparent
+              hover:bg-surface-container-highest
+            `,
           exiting && "pointer-events-none",
         )}
         onAnimationEnd={(event) => {
@@ -160,7 +165,10 @@ function SortableChannelItem({
           aria-label={t("models.reorderAria", { name: provider.displayName })}
           disabled={exiting || reorderDisabled}
           className={cn(
-            "w-5 shrink-0 cursor-grab text-center text-[10px] leading-none text-neutral active:cursor-grabbing",
+            `
+              w-5 shrink-0 cursor-grab text-center text-[10px] leading-none text-neutral
+              active:cursor-grabbing
+            `,
             active ? "text-on-surface" : "group-hover:text-on-surface",
             (exiting || reorderDisabled) && "cursor-default opacity-40",
           )}
@@ -174,7 +182,7 @@ function SortableChannelItem({
           className="flex min-w-0 flex-1 items-center gap-1 py-0.5 text-left text-body-tight text-on-surface"
           title={provider.displayName}
         >
-          <span className={cn("min-w-0 flex-1 truncate", active ? "font-bold" : "font-normal")}>
+          <span className={cn("min-w-0 flex-1 truncate", active ? "font-bold" : `font-normal`)}>
             {provider.displayName}
           </span>
           {provider.enabled ? <Badge tone="accent">{t("common.on")}</Badge> : null}
@@ -339,7 +347,9 @@ export function ModelsLayout() {
     <ModelsContext.Provider value={contextValue}>
       <PageLayout title={t("models.title")} contentClassName="overflow-hidden">
         <aside
-          className="flex w-models-rail shrink-0 flex-col overflow-hidden border-r border-outline bg-surface-container-lowest"
+          className="
+            flex w-models-rail shrink-0 flex-col overflow-hidden border-r border-outline bg-surface-container-lowest
+          "
           aria-label={t("models.channels")}
         >
           <div className="flex h-12 shrink-0 items-center border-b border-outline bg-surface-container-low px-1">
@@ -350,13 +360,13 @@ export function ModelsLayout() {
 
           <div className="flex min-h-0 flex-1 flex-col">
             {providersLoading ? (
-              <p className="px-2 py-2 text-body-tight text-neutral" aria-live="polite">
+              <p className="p-2 text-body-tight text-neutral" aria-live="polite">
                 {t("models.loadingChannels")}
               </p>
             ) : null}
 
             {displayError ? (
-              <div className="flex flex-col gap-2 px-2 py-2" role="alert">
+              <div className="flex flex-col gap-2 p-2" role="alert">
                 <p className="text-body-tight text-error">{displayError}</p>
                 <Button
                   type="button"
@@ -371,7 +381,7 @@ export function ModelsLayout() {
             ) : null}
 
             {!providersLoading && !displayError && providers.length === 0 ? (
-              <p className="px-2 py-2 text-body-tight text-neutral">{t("models.emptyChannels")}</p>
+              <p className="p-2 text-body-tight text-neutral">{t("models.emptyChannels")}</p>
             ) : null}
 
             {!providersLoading && !displayError && providers.length > 0 ? (
@@ -425,7 +435,11 @@ export function ModelsLayout() {
           <div className="shrink-0 border-t border-outline p-gutter">
             <Button
               type="button"
-              className={`${outlineButtonClassName} w-full bg-surface-2 hover:not-data-disabled:bg-surface-3`}
+              className={`
+                ${outlineButtonClassName}
+                w-full bg-surface-2
+                hover:not-data-disabled:bg-surface-3
+              `}
               aria-label={t("models.addChannelAria")}
               onClick={() => {
                 setAddOpen(true);

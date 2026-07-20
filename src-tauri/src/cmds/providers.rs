@@ -3,7 +3,7 @@
 use crate::cmds::runtime::run_blocking;
 use crate::domain::provider::{ProviderInstanceDto, ProviderInstanceWrite};
 use crate::error::IpcError;
-use crate::events::{emit_data_changed, PROVIDERS_CHANGED, TRANSLATION_PROFILES_CHANGED};
+use crate::events::{PROVIDERS_CHANGED, TRANSLATION_PROFILES_CHANGED, emit_data_changed};
 use crate::state::AppState;
 use tauri::{AppHandle, State};
 use uuid::Uuid;

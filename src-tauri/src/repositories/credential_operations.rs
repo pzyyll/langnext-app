@@ -2,7 +2,7 @@
 // ABOUTME: Unique (owner_kind, owner_id) serializes unfinished operations per owner.
 use crate::domain::time::now_rfc3339;
 use crate::error::StorageError;
-use rusqlite::{params, Connection, OptionalExtension, Row};
+use rusqlite::{Connection, OptionalExtension, Row, params};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

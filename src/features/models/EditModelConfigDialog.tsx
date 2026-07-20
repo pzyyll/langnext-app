@@ -57,7 +57,7 @@ export function EditModelConfigDialog({ open, model, onOpenChange, onSaved }: Ed
       <Dialog.Portal>
         <Dialog.Backdrop className={dialogBackdropClassName} />
         <Dialog.Popup className={editModelDialogPopupClassName}>
-          <div className="flex flex-col gap-0.5 border-b border-line px-4 py-4">
+          <div className="flex flex-col gap-0.5 border-b border-line p-4">
             <div className="flex items-center justify-between gap-2">
               <Dialog.Title className="min-w-0 text-headline-sm font-bold tracking-tight text-on-surface uppercase italic">
                 {t("models.editModelConfig.title")}
@@ -152,7 +152,7 @@ function EditModelConfigForm({ model, onSaved }: EditModelConfigFormProps) {
       <div className="space-y-6 p-6">
         <div className="space-y-2">
           <label
-            className="block text-label-sm font-bold uppercase tracking-widest text-neutral"
+            className="block text-label-sm font-bold tracking-widest text-neutral uppercase"
             htmlFor="edit-model-display-name"
           >
             {t("models.displayName")}
@@ -174,7 +174,7 @@ function EditModelConfigForm({ model, onSaved }: EditModelConfigFormProps) {
 
         <div className="space-y-2">
           <label
-            className="block text-label-sm font-bold uppercase tracking-widest text-neutral"
+            className="block text-label-sm font-bold tracking-widest text-neutral uppercase"
             id="edit-model-api-type-label"
           >
             {t("models.apiTypeLabel")}
@@ -197,7 +197,7 @@ function EditModelConfigForm({ model, onSaved }: EditModelConfigFormProps) {
         </div>
 
         <div className="space-y-2">
-          <span className="block text-label-sm font-bold uppercase tracking-widest text-neutral">
+          <span className="block text-label-sm font-bold tracking-widest text-neutral uppercase">
             {t("models.editModelConfig.capabilities")}
           </span>
           <div className="flex flex-wrap gap-4 pt-1">
@@ -255,10 +255,15 @@ function EditModelConfigForm({ model, onSaved }: EditModelConfigFormProps) {
           </div>
         </div>
 
-        <div className="grid gap-4 sm:grid-cols-2">
+        <div
+          className="
+            grid gap-4
+            sm:grid-cols-2
+          "
+        >
           <div className="space-y-2">
             <label
-              className="block text-label-sm font-bold uppercase tracking-widest text-neutral"
+              className="block text-label-sm font-bold tracking-widest text-neutral uppercase"
               htmlFor="edit-model-context-limit"
             >
               {t("models.editModelConfig.contextLimit")}
@@ -266,7 +271,10 @@ function EditModelConfigForm({ model, onSaved }: EditModelConfigFormProps) {
             <Input
               id="edit-model-context-limit"
               type="number"
-              className={`${inputClassName} font-mono`}
+              className={`
+                ${inputClassName}
+                font-mono
+              `}
               min={TOKEN_MIN}
               max={TOKEN_MAX}
               step={1}
@@ -281,7 +289,7 @@ function EditModelConfigForm({ model, onSaved }: EditModelConfigFormProps) {
 
           <div className="space-y-2">
             <label
-              className="block text-label-sm font-bold uppercase tracking-widest text-neutral"
+              className="block text-label-sm font-bold tracking-widest text-neutral uppercase"
               htmlFor="edit-model-max-tokens"
             >
               {t("models.editModelConfig.maxTokens")}
@@ -289,7 +297,10 @@ function EditModelConfigForm({ model, onSaved }: EditModelConfigFormProps) {
             <Input
               id="edit-model-max-tokens"
               type="number"
-              className={`${inputClassName} font-mono`}
+              className={`
+                ${inputClassName}
+                font-mono
+              `}
               min={TOKEN_MIN}
               max={TOKEN_MAX}
               step={1}

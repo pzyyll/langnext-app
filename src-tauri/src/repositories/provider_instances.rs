@@ -2,7 +2,7 @@
 // ABOUTME: SQL uses bound parameters; uniqueness and FK failures become domain errors.
 use crate::domain::provider::{CredentialKind, ModelsSyncStatus, ProviderInstance, ProxyMode};
 use crate::error::StorageError;
-use rusqlite::{params, Connection, OptionalExtension, Row};
+use rusqlite::{Connection, OptionalExtension, Row, params};
 use uuid::Uuid;
 
 fn map_row(row: &Row<'_>) -> Result<ProviderInstance, rusqlite::Error> {

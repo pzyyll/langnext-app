@@ -5,7 +5,7 @@ use crate::domain::translation_history::{
   TranslationHistoryDto, TranslationHistoryListQuery, TranslationHistoryListResult, TranslationHistoryModelFacet,
 };
 use crate::error::IpcError;
-use crate::events::{emit_data_changed, TRANSLATION_HISTORY_CHANGED};
+use crate::events::{TRANSLATION_HISTORY_CHANGED, emit_data_changed};
 use crate::state::AppState;
 use tauri::{AppHandle, State};
 use uuid::Uuid;

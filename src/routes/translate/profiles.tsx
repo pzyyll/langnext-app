@@ -775,7 +775,12 @@ function TranslateProfilesPage() {
         contentClassName="flex-col overflow-hidden lg:flex-row"
       >
         {/* Profiles rail */}
-        <aside className="flex max-h-64 w-full shrink-0 flex-col border-b border-line bg-surface-2 lg:max-h-none lg:w-64 lg:border-r lg:border-b-0">
+        <aside
+          className="
+            flex max-h-64 w-full shrink-0 flex-col border-b border-line bg-surface-2
+            lg:max-h-none lg:w-64 lg:border-r lg:border-b-0
+          "
+        >
           <div className="shrink-0 border-b border-line p-3">
             <span className="text-table-header font-bold text-neutral uppercase">
               {t("translate.profiles.listTitle")}
@@ -828,8 +833,15 @@ function TranslateProfilesPage() {
                         type="button"
                         className={
                           active
-                            ? "shadow-frame w-full cursor-default rounded-none border border-line bg-surface p-3 text-left"
-                            : "w-full cursor-pointer rounded-none border border-line bg-surface p-3 text-left transition-colors hover:bg-surface-container"
+                            ? `
+                              shadow-frame w-full cursor-default rounded-none border border-line bg-surface p-3
+                              text-left
+                            `
+                            : `
+                              w-full cursor-pointer rounded-none border border-line bg-surface p-3 text-left
+                              transition-colors
+                              hover:bg-surface-container
+                            `
                         }
                         onClick={() => {
                           selectProfile(profile.id);
@@ -949,7 +961,12 @@ function TranslateProfilesPage() {
                         }}
                       />
                     </div>
-                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <div
+                      className="
+                        grid grid-cols-1 gap-4
+                        sm:grid-cols-2
+                      "
+                    >
                       <div className="flex flex-col gap-1">
                         <label className={fieldLabelClassName} id="profile-source-lang-label">
                           {t("translate.sourceLanguage")}
@@ -983,7 +1000,12 @@ function TranslateProfilesPage() {
                     </div>
 
                     {/* Primary / Target preference (used when target is Auto) */}
-                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <div
+                      className="
+                        grid grid-cols-1 gap-4
+                        sm:grid-cols-2
+                      "
+                    >
                       <div className="flex flex-col gap-1">
                         <label className={fieldLabelClassName} id="profile-primary-lang-label">
                           {t("translate.profiles.primaryLang")}
@@ -1114,7 +1136,10 @@ function TranslateProfilesPage() {
                         <span className={fieldLabelClassName}>{t("translate.profiles.fallbackModels")}</span>
                         <Button
                           type="button"
-                          className={`${outlineButtonClassName} h-6 px-2 text-table-header font-bold uppercase`}
+                          className={`
+                            ${outlineButtonClassName}
+                            h-6 px-2 text-table-header font-bold uppercase
+                          `}
                           disabled={savePending || !canAddFallback}
                           onClick={addFallback}
                         >
@@ -1127,11 +1152,25 @@ function TranslateProfilesPage() {
                         <ul className="space-y-2">
                           {draft.fallbackModelIds.map((modelId, index) => (
                             <li key={`fallback-${index}-${modelId}`} className="flex flex-wrap items-center gap-2">
-                              <div className="flex size-control-height shrink-0 items-center justify-center border border-line bg-surface-2 text-code-inline font-bold text-on-surface">
+                              <div
+                                className="
+                                  flex size-control-height shrink-0 items-center justify-center border border-line
+                                  bg-surface-2 text-code-inline font-bold text-on-surface
+                                "
+                              >
                                 {index + 1}
                               </div>
                               <SelectField
-                                className="flex h-control-height min-w-0 flex-1 items-center justify-between gap-2 select-none rounded-none border border-line bg-surface px-2 text-body-tight font-normal text-on-surface hover:not-data-disabled:bg-surface-2 data-popup-open:bg-surface-2 focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface data-disabled:border-disabled data-disabled:text-disabled"
+                                className="
+                                  flex h-control-height min-w-0 flex-1 items-center justify-between gap-2 rounded-none
+                                  border border-line bg-surface px-2 text-body-tight font-normal text-on-surface
+                                  select-none
+                                  hover:not-data-disabled:bg-surface-2
+                                  focus-visible:outline-2 focus-visible:-outline-offset-1
+                                  focus-visible:outline-on-surface
+                                  data-disabled:border-disabled data-disabled:text-disabled
+                                  data-popup-open:bg-surface-2
+                                "
                                 value={modelId}
                                 onValueChange={(value) => setFallbackAt(index, value ?? "")}
                                 options={modelOptions.map((option) => ({
@@ -1190,7 +1229,12 @@ function TranslateProfilesPage() {
 
                   {/* Parameters */}
                   <div className="space-y-4 border-t border-outline-variant pt-4">
-                    <div className="grid grid-cols-1 gap-8 sm:grid-cols-2">
+                    <div
+                      className="
+                        grid grid-cols-1 gap-8
+                        sm:grid-cols-2
+                      "
+                    >
                       <div className="flex flex-col gap-1">
                         <label className={fieldLabelClassName} htmlFor="profile-temperature">
                           {t("translate.profiles.temperature")}
@@ -1276,7 +1320,10 @@ function TranslateProfilesPage() {
                             >
                               <div className="flex min-w-0 flex-1 items-center gap-2">
                                 <ExpandCircleDownOutlineIcon
-                                  className="size-5 shrink-0 text-on-surface transition-transform duration-100 ease-out group-data-panel-open:rotate-180"
+                                  className="
+                                    size-5 shrink-0 text-on-surface transition-transform duration-100 ease-out
+                                    group-data-panel-open:rotate-180
+                                  "
                                   aria-hidden
                                 />
                                 {isRenaming ? (
@@ -1445,7 +1492,10 @@ function TranslateProfilesPage() {
 
                     <Button
                       type="button"
-                      className={`${outlineButtonClassName} w-full font-bold`}
+                      className={`
+                        ${outlineButtonClassName}
+                        w-full font-bold
+                      `}
                       disabled={savePending}
                       onClick={() => {
                         addPromptTemplate();
@@ -1464,11 +1514,19 @@ function TranslateProfilesPage() {
               </div>
 
               {/* Sticky footer actions */}
-              <div className={`${panelFooterClassName} justify-end gap-3 bg-surface`}>
+              <div
+                className={`
+                  ${panelFooterClassName}
+                  justify-end gap-3 bg-surface
+                `}
+              >
                 {draft.id ? (
                   <Button
                     type="button"
-                    className={`${dangerIconButtonClassName} mr-auto`}
+                    className={`
+                      ${dangerIconButtonClassName}
+                      mr-auto
+                    `}
                     aria-label={t("common.delete")}
                     title={t("common.delete")}
                     disabled={savePending}
@@ -1481,7 +1539,10 @@ function TranslateProfilesPage() {
                 ) : null}
                 <Button
                   type="submit"
-                  className={`${primaryButtonClassName} relative`}
+                  className={`
+                    ${primaryButtonClassName}
+                    relative
+                  `}
                   disabled={savePending}
                   focusableWhenDisabled
                   aria-busy={savePending}

@@ -440,13 +440,13 @@ function useSteppedFontSize(options: {
 
 function scrollAreaClassNames(isFill: boolean, className: string | undefined) {
   return {
-    root: cn(isFill ? "h-full min-h-0 min-w-0 w-full" : "min-w-0 w-full", className),
+    root: cn(isFill ? "size-full min-h-0 min-w-0" : "w-full min-w-0", className),
     // Grow: h-auto + same min/max as shell so the box tracks content then scrolls.
     // Fill: h-full so the fixed pane is the viewport; content may overflow and scroll.
     // Base UI renders an overlay scrollbar. Reserving a stable native gutter leaves a visible
     // track after overflow ends, so let the viewport return to its full width when content fits.
     viewport: isFill ? "h-full min-h-0 min-w-0" : cn("h-auto min-w-0", className),
-    content: cn("min-w-0 w-full", isFill && "min-h-full"),
+    content: cn("w-full min-w-0", isFill && "min-h-full"),
   };
 }
 
@@ -559,7 +559,7 @@ export function TextAutosize({
   }
 
   const field = (
-    <div ref={rootRef} className={cn("relative min-w-0 w-full", isFill && "min-h-full")}>
+    <div ref={rootRef} className={cn("relative w-full min-w-0", isFill && `min-h-full`)}>
       <textarea
         {...props}
         ref={textareaRef}
@@ -576,7 +576,7 @@ export function TextAutosize({
 
   if (!useScroll) {
     return (
-      <div ref={shellRef} className={cn("min-w-0 w-full", className)}>
+      <div ref={shellRef} className={cn("w-full min-w-0", className)}>
         {field}
       </div>
     );
@@ -747,7 +747,7 @@ export function TextAutosizeContent({
       ref={contentRef}
       // wrap-break-word matches the measure dummy so long tokens wrap the same way they are measured.
       className={cn(
-        "relative min-w-0 w-full wrap-break-word text-on-surface",
+        "relative w-full min-w-0 wrap-break-word text-on-surface",
         isFill && "min-h-full",
         contentClassName,
         fontSizeClass,
@@ -761,7 +761,7 @@ export function TextAutosizeContent({
   if (!useScroll) {
     // Content-sized shell so collapsible / window height observers see real offsetHeight.
     return (
-      <div ref={shellRef} className={cn("min-w-0 w-full", className)}>
+      <div ref={shellRef} className={cn("w-full min-w-0", className)}>
         {content}
       </div>
     );

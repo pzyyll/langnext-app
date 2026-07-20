@@ -1,7 +1,7 @@
 // ABOUTME: Credential compensation and crash-recovery tests with in-memory vault.
 // ABOUTME: Does not access the real OS credential store.
 use crate::credentials::coordinator;
-use crate::credentials::{provider_ref, CredentialVault, FailingCredentialVault, MemoryCredentialVault};
+use crate::credentials::{CredentialVault, FailingCredentialVault, MemoryCredentialVault, provider_ref};
 use crate::domain::provider::{CredentialKind, CredentialUpdate, ProviderInstanceWrite, ProxyMode};
 use crate::domain::time::new_id;
 use crate::error::StorageError;

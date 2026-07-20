@@ -1,13 +1,13 @@
 // ABOUTME: Region-screenshot overlay window and capture session for desktop targets.
 // ABOUTME: Pre-warms a hidden overlay, serves backdrop via temp file, reveals after image load, copies crop to clipboard.
 use crate::consts;
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-use image::{imageops, ImageEncoder, RgbaImage};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use image::{ImageEncoder, RgbaImage, imageops};
 use serde::{Deserialize, Serialize};
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 use tauri::{
@@ -441,17 +441,19 @@ fn register_escape_cancel<R: Runtime>(app: &tauri::AppHandle<R>) {
       return;
     }
 
-    match app.global_shortcut().on_shortcut(ESCAPE_CANCEL_BINDING, |app, _shortcut, event| {
-      if event.state == ShortcutState::Pressed {
-        log::debug!("region_screenshot_escape_cancel");
-        // Defer cancellation: cancel_internal unregisters Escape, and unregistering
-        // synchronously inside this callback would re-enter the plugin mutex and deadlock.
-        let app = app.clone();
-        std::thread::spawn(move || {
-          let _ = cancel_internal(&app);
-        });
-      }
-    }) {
+    match app
+      .global_shortcut()
+      .on_shortcut(ESCAPE_CANCEL_BINDING, |app, _shortcut, event| {
+        if event.state == ShortcutState::Pressed {
+          log::debug!("region_screenshot_escape_cancel");
+          // Defer cancellation: cancel_internal unregisters Escape, and unregistering
+          // synchronously inside this callback would re-enter the plugin mutex and deadlock.
+          let app = app.clone();
+          std::thread::spawn(move || {
+            let _ = cancel_internal(&app);
+          });
+        }
+      }) {
       Ok(()) => {
         state.escape_registered.store(true, Ordering::SeqCst);
         log::debug!("region_screenshot_escape_registered");
@@ -547,9 +549,7 @@ pub async fn region_screenshot_get_backdrop<R: Runtime>(
 
 /// Fallback when asset-protocol loading fails: return the backdrop as base64 PNG.
 #[tauri::command]
-pub async fn region_screenshot_get_backdrop_data<R: Runtime>(
-  app: tauri::AppHandle<R>,
-) -> Result<String, String> {
+pub async fn region_screenshot_get_backdrop_data<R: Runtime>(app: tauri::AppHandle<R>) -> Result<String, String> {
   let Some(state) = app.try_state::<RegionScreenshotState>() else {
     return Err("region screenshot state is not managed".into());
   };

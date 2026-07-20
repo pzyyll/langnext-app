@@ -4,10 +4,10 @@ use crate::consts::{
   DEFAULT_OPEN_QUICK_TRANSLATE_BINDING, DEFAULT_REGION_SCREENSHOT_BINDING, SHORTCUT_DOUBLE_CTRL_C,
   SHORTCUT_OPEN_QUICK_TRANSLATE, SHORTCUT_REGION_SCREENSHOT,
 };
-use crate::domain::settings::{normalize_shortcuts, ShortcutDefinition};
+use crate::domain::settings::{ShortcutDefinition, normalize_shortcuts};
 use crate::windows;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{AppHandle, Manager, Runtime};
 
 /// App-managed shortcut runtime flags and last-registered bindings.

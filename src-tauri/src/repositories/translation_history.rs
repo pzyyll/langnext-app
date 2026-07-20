@@ -4,7 +4,7 @@ use crate::domain::translation_history::{
   HistoryStatus, TranslationHistory, TranslationHistoryModelFacet, TranslationHistoryRecord,
 };
 use crate::error::StorageError;
-use rusqlite::{params, Connection, OptionalExtension, Row};
+use rusqlite::{Connection, OptionalExtension, Row, params};
 use uuid::Uuid;
 
 fn map_row(row: &Row<'_>) -> Result<TranslationHistory, rusqlite::Error> {

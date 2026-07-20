@@ -1,10 +1,10 @@
 // ABOUTME: Typed application settings reads and updates with proxy credential orchestration.
 // ABOUTME: Proxy secrets stay in the vault; value_json never embeds credentials.
 use crate::credentials::coordinator;
-use crate::credentials::{global_proxy_ref, CredentialVault};
+use crate::credentials::{CredentialVault, global_proxy_ref};
 use crate::domain::settings::{
-  normalize_shortcuts, AppSettingsDto, AppSettingsUpdate, AppSettingsV1, GlobalProxyMode, ProxyCredentialUpdate,
-  ShortcutDefinition,
+  AppSettingsDto, AppSettingsUpdate, AppSettingsV1, GlobalProxyMode, ProxyCredentialUpdate, ShortcutDefinition,
+  normalize_shortcuts,
 };
 use crate::domain::time::new_id;
 use crate::error::StorageError;

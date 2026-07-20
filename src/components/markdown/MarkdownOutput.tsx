@@ -33,7 +33,7 @@ export function MarkdownOutput({ text, isStreaming = false, className }: Markdow
   return (
     <div
       className={cn(
-        "markdown-output min-w-0 max-w-none wrap-break-word text-body-md text-on-surface select-text",
+        `markdown-output max-w-none min-w-0 text-body-md wrap-break-word text-on-surface select-text`,
         className,
       )}
       role={isStreaming ? "status" : undefined}
