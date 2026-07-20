@@ -14,3 +14,12 @@ export const DATA_TRANSLATION_HISTORY_CHANGED = "data://translation-history-chan
 
 /** Clipboard text emitted to the Quick Translate window on double Ctrl+C. */
 export const QUICK_TRANSLATE_CLIPBOARD_TEXT = "quick-translate://clipboard-text";
+
+/** Region screenshot finished; payload is RegionScreenshotResult. */
+export const REGION_SCREENSHOT_CAPTURED = "screenshot://region-captured";
+
+/** Region screenshot cancelled by the user or overlay close. */
+export const REGION_SCREENSHOT_CANCELLED = "screenshot://region-cancelled";
+
+/** Active session ready; payload is RegionScreenshotBackdrop (load then reveal). */
+export const REGION_SCREENSHOT_SESSION_READY = "screenshot://session-ready";

@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main and quick-translate windows and tray",
-  "windows": ["main", "quick-translate"],
+  "description": "Capability for the main, quick-translate, and screenshot-overlay windows and tray",
+  "windows": ["main", "quick-translate", "screenshot-overlay"],
   "permissions": [
     "core:default",
     "opener:default",
@@ -27,6 +27,10 @@
     "core:tray:default",
     "global-shortcut:default",
     "clipboard-manager:default",
+    "clipboard-manager:allow-read-text",
+    "clipboard-manager:allow-write-text",
+    "clipboard-manager:allow-write-image",
+    "clipboard-manager:allow-read-image",
     "dialog:default",
     "fs:allow-write-text-file"
   ]

@@ -320,10 +320,50 @@ export interface ShortcutDefinition {
 export const SHORTCUT_OPEN_QUICK_TRANSLATE = "open-quick-translate" as const;
 /** Settings id for the fixed double Ctrl+C trigger (enable/disable only). */
 export const SHORTCUT_DOUBLE_CTRL_C = "double-ctrl-c" as const;
+/** Settings id for the rebindable global region-screenshot shortcut. */
+export const SHORTCUT_REGION_SCREENSHOT = "region-screenshot" as const;
 /** Default binding for open-Quick-Translate. */
 export const DEFAULT_OPEN_QUICK_TRANSLATE_BINDING = "Ctrl+Shift+T" as const;
 /** Fixed binding label for double Ctrl+C. */
 export const DOUBLE_CTRL_C_BINDING = "Ctrl+C" as const;
+/** Default binding for region screenshot. */
+export const DEFAULT_REGION_SCREENSHOT_BINDING = "Ctrl+Shift+A" as const;
+
+/** Physical-pixel rectangle on the virtual desktop. */
+export interface ScreenRegion {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** Cropped region screenshot from the overlay flow. */
+export interface RegionScreenshotResult {
+  pngBase64: string;
+  width: number;
+  height: number;
+  region: ScreenRegion;
+  /** Whether the image was written to the OS clipboard. */
+  copiedToClipboard: boolean;
+}
+
+/** Full-monitor backdrop shown in the selection overlay (temp-file path). */
+export interface RegionScreenshotBackdrop {
+  /** Absolute filesystem path to the PNG backdrop. */
+  path: string;
+  width: number;
+  height: number;
+}
+
+/** Selection rectangle in overlay CSS pixels plus viewport size for mapping. */
+export interface RegionScreenshotSelection {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  viewportWidth: number;
+  viewportHeight: number;
+}
 
 export interface AppSettingsV1 {
   schemaVersion: number;
@@ -500,6 +540,7 @@ const _settingsUpdateFixture = {
     shortcuts: [
       { id: SHORTCUT_OPEN_QUICK_TRANSLATE, binding: DEFAULT_OPEN_QUICK_TRANSLATE_BINDING, enabled: true },
       { id: SHORTCUT_DOUBLE_CTRL_C, binding: DOUBLE_CTRL_C_BINDING, enabled: true },
+      { id: SHORTCUT_REGION_SCREENSHOT, binding: DEFAULT_REGION_SCREENSHOT_BINDING, enabled: true },
     ],
     network: { proxyMode: "system", proxyUrl: null },
   },

@@ -19,7 +19,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon", "image-ico", "image-png", "unstable"] }
+tauri = { version = "2", features = ["protocol-asset", "tray-icon", "image-ico", "image-png", "unstable"] }
 tauri-plugin-opener = "2"
 tauri-plugin-log = "2"
 tauri-plugin-dialog = "2"
@@ -36,11 +36,16 @@ url = "2"
 tempfile = "3.27.0"
 reqwest = { version = "0.13", features = ["json"] }
 tokio = { version = "1", default-features = false, features = ["macros", "sync"] }
+base64 = "0.22"
+image = { version = "0.25", default-features = false, features = ["png"] }
 
-# Desktop-only: global hotkey and clipboard for the Quick Translate window.
+# Desktop-only: global hotkey, clipboard, and region screenshot capture.
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-clipboard-manager = "2"
+xcap = "0.9"
+# Fresh Clipboard per write is more reliable than the long-lived plugin handle on Windows.
+arboard = "3"
 
 # Win+Z snap overlay for custom maximize hover (Windows only).
 # kmhook: low-level keyboard hooks for double Ctrl+C (Windows only).

@@ -16,6 +16,9 @@ import type {
   ProviderInstanceDto,
   ProviderInstanceWrite,
   ProviderModelDto,
+  RegionScreenshotBackdrop,
+  RegionScreenshotResult,
+  RegionScreenshotSelection,
   ShortcutDefinition,
   SyncModelsResult,
   TranslateInput,
@@ -164,6 +167,26 @@ export async function setAppUiLanguage(uiLanguage: string): Promise<AppSettingsD
 
 export async function setAppShortcuts(shortcuts: ShortcutDefinition[]): Promise<AppSettingsDto> {
   return invoke("set_app_shortcuts", { shortcuts });
+}
+
+/** Full-monitor PNG backdrop path for the active region-screenshot overlay. */
+export async function regionScreenshotGetBackdrop(): Promise<RegionScreenshotBackdrop> {
+  return invoke("region_screenshot_get_backdrop");
+}
+
+/** Show the overlay after the backdrop image has painted (avoids blank flash). */
+export async function regionScreenshotReveal(): Promise<void> {
+  return invoke("region_screenshot_reveal");
+}
+
+/** Crop the pre-captured monitor image with the overlay selection. */
+export async function regionScreenshotConfirm(selection: RegionScreenshotSelection): Promise<RegionScreenshotResult> {
+  return invoke("region_screenshot_confirm", { selection });
+}
+
+/** Cancel the active region screenshot without producing an image. */
+export async function regionScreenshotCancel(): Promise<void> {
+  return invoke("region_screenshot_cancel");
 }
 
 export async function exportConfiguration(): Promise<ConfigurationExport> {

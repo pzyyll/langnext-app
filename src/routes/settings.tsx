@@ -22,9 +22,11 @@ import { useLanguage } from "../i18n/useLanguage";
 import { getAppSettings, setAppShortcuts } from "../storage/client";
 import {
   DEFAULT_OPEN_QUICK_TRANSLATE_BINDING,
+  DEFAULT_REGION_SCREENSHOT_BINDING,
   DOUBLE_CTRL_C_BINDING,
   SHORTCUT_DOUBLE_CTRL_C,
   SHORTCUT_OPEN_QUICK_TRANSLATE,
+  SHORTCUT_REGION_SCREENSHOT,
   type ShortcutDefinition,
 } from "../storage/types";
 import { useTheme } from "../theme/useTheme";
@@ -62,6 +64,11 @@ function defaultShortcuts(): ShortcutDefinition[] {
     {
       id: SHORTCUT_DOUBLE_CTRL_C,
       binding: DOUBLE_CTRL_C_BINDING,
+      enabled: true,
+    },
+    {
+      id: SHORTCUT_REGION_SCREENSHOT,
+      binding: DEFAULT_REGION_SCREENSHOT_BINDING,
       enabled: true,
     },
   ];
@@ -185,7 +192,7 @@ function ShortcutsSettingsSection() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [persistError, setPersistError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
-  const [recording, setRecording] = useState(false);
+  const [recordingId, setRecordingId] = useState<string | null>(null);
   const windowsOnly = !isWindowsPlatform();
 
   const replaceShortcuts = useCallback((next: ShortcutDefinition[]) => {
@@ -207,6 +214,15 @@ function ShortcutsSettingsSection() {
       readShortcut(shortcuts, SHORTCUT_DOUBLE_CTRL_C, {
         id: SHORTCUT_DOUBLE_CTRL_C,
         binding: DOUBLE_CTRL_C_BINDING,
+        enabled: true,
+      }),
+    [shortcuts],
+  );
+  const regionScreenshot = useMemo(
+    () =>
+      readShortcut(shortcuts, SHORTCUT_REGION_SCREENSHOT, {
+        id: SHORTCUT_REGION_SCREENSHOT,
+        binding: DEFAULT_REGION_SCREENSHOT_BINDING,
         enabled: true,
       }),
     [shortcuts],
@@ -278,7 +294,7 @@ function ShortcutsSettingsSection() {
   );
 
   useEffect(() => {
-    if (!recording) {
+    if (!recordingId) {
       return;
     }
 
@@ -287,7 +303,7 @@ function ShortcutsSettingsSection() {
       event.stopPropagation();
 
       if (event.key === "Escape") {
-        setRecording(false);
+        setRecordingId(null);
         return;
       }
 
@@ -296,15 +312,16 @@ function ShortcutsSettingsSection() {
         return;
       }
 
-      setRecording(false);
-      updateEntry(SHORTCUT_OPEN_QUICK_TRANSLATE, { binding, enabled: true });
+      const targetId = recordingId;
+      setRecordingId(null);
+      updateEntry(targetId, { binding, enabled: true });
     };
 
     window.addEventListener("keydown", onKeyDown, true);
     return () => {
       window.removeEventListener("keydown", onKeyDown, true);
     };
-  }, [recording, updateEntry]);
+  }, [recordingId, updateEntry]);
 
   return (
     <section className="shadow-frame max-w-lg border border-line bg-surface p-gutter">
@@ -354,16 +371,16 @@ function ShortcutsSettingsSection() {
             <button
               type="button"
               className={`${inputClassName} min-w-40 flex-1 cursor-default text-left ${
-                recording ? "outline-2 -outline-offset-1 outline-on-surface" : ""
+                recordingId === SHORTCUT_OPEN_QUICK_TRANSLATE ? "outline-2 -outline-offset-1 outline-on-surface" : ""
               }`}
               onClick={() => {
-                setRecording(true);
+                setRecordingId(SHORTCUT_OPEN_QUICK_TRANSLATE);
               }}
               disabled={pending}
               aria-label={t("settings.shortcuts.openQuickTranslate.recordAria")}
-              aria-pressed={recording}
+              aria-pressed={recordingId === SHORTCUT_OPEN_QUICK_TRANSLATE}
             >
-              {recording
+              {recordingId === SHORTCUT_OPEN_QUICK_TRANSLATE
                 ? t("settings.shortcuts.openQuickTranslate.recording")
                 : formatShortcutBinding(openShortcut.binding)}
             </button>
@@ -373,7 +390,7 @@ function ShortcutsSettingsSection() {
               disabled={pending || openShortcut.binding === DEFAULT_OPEN_QUICK_TRANSLATE_BINDING}
               aria-label={t("settings.shortcuts.openQuickTranslate.resetAria")}
               onClick={() => {
-                setRecording(false);
+                setRecordingId(null);
                 updateEntry(SHORTCUT_OPEN_QUICK_TRANSLATE, {
                   binding: DEFAULT_OPEN_QUICK_TRANSLATE_BINDING,
                   enabled: true,
@@ -381,6 +398,48 @@ function ShortcutsSettingsSection() {
               }}
             >
               {t("settings.shortcuts.openQuickTranslate.reset")}
+            </Button>
+          </div>
+        </div>
+
+        <div className="flex flex-col gap-2 border border-line p-3">
+          <div className="min-w-0">
+            <p className="text-body-tight font-bold text-on-surface">
+              {t("settings.shortcuts.regionScreenshot.title")}
+            </p>
+            <p className="mt-1 text-body-tight text-neutral">{t("settings.shortcuts.regionScreenshot.description")}</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              className={`${inputClassName} min-w-40 flex-1 cursor-default text-left ${
+                recordingId === SHORTCUT_REGION_SCREENSHOT ? "outline-2 -outline-offset-1 outline-on-surface" : ""
+              }`}
+              onClick={() => {
+                setRecordingId(SHORTCUT_REGION_SCREENSHOT);
+              }}
+              disabled={pending}
+              aria-label={t("settings.shortcuts.regionScreenshot.recordAria")}
+              aria-pressed={recordingId === SHORTCUT_REGION_SCREENSHOT}
+            >
+              {recordingId === SHORTCUT_REGION_SCREENSHOT
+                ? t("settings.shortcuts.regionScreenshot.recording")
+                : formatShortcutBinding(regionScreenshot.binding)}
+            </button>
+            <Button
+              type="button"
+              className={outlineButtonClassName}
+              disabled={pending || regionScreenshot.binding === DEFAULT_REGION_SCREENSHOT_BINDING}
+              aria-label={t("settings.shortcuts.regionScreenshot.resetAria")}
+              onClick={() => {
+                setRecordingId(null);
+                updateEntry(SHORTCUT_REGION_SCREENSHOT, {
+                  binding: DEFAULT_REGION_SCREENSHOT_BINDING,
+                  enabled: true,
+                });
+              }}
+            >
+              {t("settings.shortcuts.regionScreenshot.reset")}
             </Button>
           </div>
         </div>

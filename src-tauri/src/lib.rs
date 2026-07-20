@@ -43,6 +43,7 @@ fn app_setup<R: Runtime>(app: &mut tauri::App<R>) -> Result<(), Box<dyn std::err
   // Device state is needed by window setup for geometry restore.
   app.manage(state);
   app.manage(windows::quick_translate::QuickTranslateState::default());
+  app.manage(windows::screenshot::RegionScreenshotState::default());
   app.manage(shortcuts::ShortcutRuntime::new());
   windows::setup(app.handle());
   log::info!("app_setup_complete windows_and_tray_ready");
@@ -94,6 +95,10 @@ pub fn run() {
       windows::quick_translate::set_pin,
       windows::quick_translate::resize_window_height,
       windows::quick_translate::notify_ready,
+      windows::screenshot::region_screenshot_get_backdrop,
+      windows::screenshot::region_screenshot_reveal,
+      windows::screenshot::region_screenshot_confirm,
+      windows::screenshot::region_screenshot_cancel,
       cmds::providers::list_provider_instances,
       cmds::providers::save_provider_instance,
       cmds::providers::set_provider_enabled,

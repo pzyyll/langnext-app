@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from "./routes/__root"
 import { Route as TranslateRouteImport } from "./routes/translate"
 import { Route as SettingsRouteImport } from "./routes/settings"
+import { Route as ScreenshotOverlayRouteImport } from "./routes/screenshot-overlay"
 import { Route as QuickTranslateRouteImport } from "./routes/quick-translate"
 import { Route as ModelsRouteImport } from "./routes/models"
 import { Route as HistoryRouteImport } from "./routes/history"
@@ -28,6 +29,11 @@ const TranslateRoute = TranslateRouteImport.update({
 const SettingsRoute = SettingsRouteImport.update({
   id: "/settings",
   path: "/settings",
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ScreenshotOverlayRoute = ScreenshotOverlayRouteImport.update({
+  id: "/screenshot-overlay",
+  path: "/screenshot-overlay",
   getParentRoute: () => rootRouteImport,
 } as any)
 const QuickTranslateRoute = QuickTranslateRouteImport.update({
@@ -76,6 +82,7 @@ export interface FileRoutesByFullPath {
   "/history": typeof HistoryRoute
   "/models": typeof ModelsRouteWithChildren
   "/quick-translate": typeof QuickTranslateRoute
+  "/screenshot-overlay": typeof ScreenshotOverlayRoute
   "/settings": typeof SettingsRoute
   "/translate": typeof TranslateRouteWithChildren
   "/models/$providerId": typeof ModelsProviderIdRoute
@@ -87,6 +94,7 @@ export interface FileRoutesByTo {
   "/": typeof IndexRoute
   "/history": typeof HistoryRoute
   "/quick-translate": typeof QuickTranslateRoute
+  "/screenshot-overlay": typeof ScreenshotOverlayRoute
   "/settings": typeof SettingsRoute
   "/models/$providerId": typeof ModelsProviderIdRoute
   "/translate/profiles": typeof TranslateProfilesRoute
@@ -99,6 +107,7 @@ export interface FileRoutesById {
   "/history": typeof HistoryRoute
   "/models": typeof ModelsRouteWithChildren
   "/quick-translate": typeof QuickTranslateRoute
+  "/screenshot-overlay": typeof ScreenshotOverlayRoute
   "/settings": typeof SettingsRoute
   "/translate": typeof TranslateRouteWithChildren
   "/models/$providerId": typeof ModelsProviderIdRoute
@@ -113,6 +122,7 @@ export interface FileRouteTypes {
     | "/history"
     | "/models"
     | "/quick-translate"
+    | "/screenshot-overlay"
     | "/settings"
     | "/translate"
     | "/models/$providerId"
@@ -124,6 +134,7 @@ export interface FileRouteTypes {
     | "/"
     | "/history"
     | "/quick-translate"
+    | "/screenshot-overlay"
     | "/settings"
     | "/models/$providerId"
     | "/translate/profiles"
@@ -135,6 +146,7 @@ export interface FileRouteTypes {
     | "/history"
     | "/models"
     | "/quick-translate"
+    | "/screenshot-overlay"
     | "/settings"
     | "/translate"
     | "/models/$providerId"
@@ -148,6 +160,7 @@ export interface RootRouteChildren {
   HistoryRoute: typeof HistoryRoute
   ModelsRoute: typeof ModelsRouteWithChildren
   QuickTranslateRoute: typeof QuickTranslateRoute
+  ScreenshotOverlayRoute: typeof ScreenshotOverlayRoute
   SettingsRoute: typeof SettingsRoute
   TranslateRoute: typeof TranslateRouteWithChildren
 }
@@ -166,6 +179,13 @@ declare module "@tanstack/react-router" {
       path: "/settings"
       fullPath: "/settings"
       preLoaderRoute: typeof SettingsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    "/screenshot-overlay": {
+      id: "/screenshot-overlay"
+      path: "/screenshot-overlay"
+      fullPath: "/screenshot-overlay"
+      preLoaderRoute: typeof ScreenshotOverlayRouteImport
       parentRoute: typeof rootRouteImport
     }
     "/quick-translate": {
@@ -259,6 +279,7 @@ const rootRouteChildren: RootRouteChildren = {
   HistoryRoute: HistoryRoute,
   ModelsRoute: ModelsRouteWithChildren,
   QuickTranslateRoute: QuickTranslateRoute,
+  ScreenshotOverlayRoute: ScreenshotOverlayRoute,
   SettingsRoute: SettingsRoute,
   TranslateRoute: TranslateRouteWithChildren,
 }

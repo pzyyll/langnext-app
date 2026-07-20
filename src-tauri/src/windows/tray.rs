@@ -1,5 +1,5 @@
 // ABOUTME: System tray icon setup for the desktop application.
-// ABOUTME: Left-click shows the main window; menu opens Quick Translate or exits.
+// ABOUTME: Left-click shows the main window; menu opens tools or exits.
 use crate::consts;
 use crate::state::AppState;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
@@ -18,6 +18,11 @@ pub fn setup<R: Runtime>(app: &tauri::AppHandle<R>) {
         .expect("failed to build quick translate menu item"),
     )
     .item(
+      &MenuItemBuilder::with_id("region_screenshot", "Screenshot")
+        .build(app)
+        .expect("failed to build screenshot menu item"),
+    )
+    .item(
       &MenuItemBuilder::with_id("exit", "Exit")
         .build(app)
         .expect("failed to build exit menu item"),
@@ -30,6 +35,11 @@ pub fn setup<R: Runtime>(app: &tauri::AppHandle<R>) {
     "quick_translate" => {
       if let Err(e) = crate::windows::quick_translate::show(app) {
         log::error!("quick_translate_show_failed error={e}");
+      }
+    }
+    "region_screenshot" => {
+      if let Err(e) = crate::windows::screenshot::start(app) {
+        log::error!("region_screenshot_start_failed error={e}");
       }
     }
     "exit" => {

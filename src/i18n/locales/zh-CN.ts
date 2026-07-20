@@ -92,7 +92,7 @@ const zhCN = {
     },
     shortcuts: {
       title: "快捷键",
-      description: "配置快速翻译的全局快捷键。",
+      description: "配置快速翻译与截图的全局快捷键。",
       doubleCtrlC: {
         title: "双击 Ctrl+C",
         description: "打开快速翻译并粘贴剪贴板内容。",
@@ -106,10 +106,26 @@ const zhCN = {
         reset: "重置",
         resetAria: "重置为 Ctrl+Shift+T",
       },
+      regionScreenshot: {
+        title: "框选截图",
+        description: "截取屏幕区域，供后续 OCR 或翻译使用。",
+        recordAria: "录制框选截图快捷键",
+        recording: "请按下按键…",
+        reset: "重置",
+        resetAria: "重置为 Ctrl+Shift+A",
+      },
       loadFailed: "无法加载快捷键设置。",
       persistFailed: "无法保存快捷键设置。",
       windowsOnly: "仅 Windows 可用。",
     },
+  },
+  screenshot: {
+    ariaLabel: "框选截图",
+    hint: "拖拽选择区域 · Esc 取消 · 完成后复制到剪贴板",
+    loadFailed: "无法加载截图背景。",
+    confirmFailed: "无法截取所选区域。",
+    clipboardFailed: "已截取，但写入系统剪贴板失败。",
+    cancelFailed: "无法取消截图。",
   },
   translate: {
     modelLabel: "模型：",

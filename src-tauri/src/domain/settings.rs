@@ -1,7 +1,8 @@
 // ABOUTME: Versioned portable application settings and proxy credential updates.
 // ABOUTME: Proxy secrets stay out of the settings JSON document.
 use crate::consts::{
-  DEFAULT_OPEN_QUICK_TRANSLATE_BINDING, DOUBLE_CTRL_C_BINDING, SHORTCUT_DOUBLE_CTRL_C, SHORTCUT_OPEN_QUICK_TRANSLATE,
+  DEFAULT_OPEN_QUICK_TRANSLATE_BINDING, DEFAULT_REGION_SCREENSHOT_BINDING, DOUBLE_CTRL_C_BINDING,
+  SHORTCUT_DOUBLE_CTRL_C, SHORTCUT_OPEN_QUICK_TRANSLATE, SHORTCUT_REGION_SCREENSHOT,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -73,6 +74,11 @@ pub fn default_shortcuts() -> Vec<ShortcutDefinition> {
       binding: DOUBLE_CTRL_C_BINDING.into(),
       enabled: true,
     },
+    ShortcutDefinition {
+      id: SHORTCUT_REGION_SCREENSHOT.into(),
+      binding: DEFAULT_REGION_SCREENSHOT_BINDING.into(),
+      enabled: true,
+    },
   ]
 }
 
@@ -81,7 +87,7 @@ pub fn normalize_shortcuts(stored: Vec<ShortcutDefinition>) -> Vec<ShortcutDefin
   let mut by_id: std::collections::HashMap<String, ShortcutDefinition> =
     stored.into_iter().map(|s| (s.id.clone(), s)).collect();
 
-  let mut result = Vec::with_capacity(2);
+  let mut result = Vec::with_capacity(3);
   for default in default_shortcuts() {
     if let Some(mut found) = by_id.remove(&default.id) {
       if found.id == SHORTCUT_DOUBLE_CTRL_C {
@@ -191,7 +197,7 @@ mod tests {
       binding: "Alt+X".into(),
       enabled: false,
     }]);
-    assert_eq!(normalized.len(), 2);
+    assert_eq!(normalized.len(), 3);
     let open = normalized
       .iter()
       .find(|s| s.id == crate::consts::SHORTCUT_OPEN_QUICK_TRANSLATE)
@@ -204,6 +210,12 @@ mod tests {
       .unwrap();
     assert_eq!(double.binding, crate::consts::DOUBLE_CTRL_C_BINDING);
     assert!(!double.enabled);
+    let screenshot = normalized
+      .iter()
+      .find(|s| s.id == crate::consts::SHORTCUT_REGION_SCREENSHOT)
+      .unwrap();
+    assert_eq!(screenshot.binding, crate::consts::DEFAULT_REGION_SCREENSHOT_BINDING);
+    assert!(screenshot.enabled);
   }
 
   #[test]

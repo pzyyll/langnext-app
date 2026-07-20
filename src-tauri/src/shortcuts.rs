@@ -1,17 +1,22 @@
-// ABOUTME: Runtime registration for global open-Quick-Translate and double Ctrl+C.
+// ABOUTME: Runtime registration for global open-Quick-Translate, region screenshot, and double Ctrl+C.
 // ABOUTME: Applies settings bindings, gates kmhook, and validates rebindable shortcuts.
-use crate::consts::{DEFAULT_OPEN_QUICK_TRANSLATE_BINDING, SHORTCUT_DOUBLE_CTRL_C, SHORTCUT_OPEN_QUICK_TRANSLATE};
+use crate::consts::{
+  DEFAULT_OPEN_QUICK_TRANSLATE_BINDING, DEFAULT_REGION_SCREENSHOT_BINDING, SHORTCUT_DOUBLE_CTRL_C,
+  SHORTCUT_OPEN_QUICK_TRANSLATE, SHORTCUT_REGION_SCREENSHOT,
+};
 use crate::domain::settings::{normalize_shortcuts, ShortcutDefinition};
 use crate::windows;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager, Runtime};
 
-/// App-managed shortcut runtime flags and last-registered open binding.
+/// App-managed shortcut runtime flags and last-registered bindings.
 #[derive(Debug, Default)]
 pub struct ShortcutRuntime {
   /// Currently registered open-Quick-Translate binding, if any.
   registered_open: Mutex<Option<String>>,
+  /// Currently registered region-screenshot binding, if any.
+  registered_region_screenshot: Mutex<Option<String>>,
   /// When false, the double Ctrl+C kmhook callback is a no-op.
   double_ctrl_c_enabled: AtomicBool,
 }
@@ -20,6 +25,7 @@ impl ShortcutRuntime {
   pub fn new() -> Self {
     Self {
       registered_open: Mutex::new(None),
+      registered_region_screenshot: Mutex::new(None),
       // Default on until settings are applied at startup.
       double_ctrl_c_enabled: AtomicBool::new(true),
     }
@@ -32,7 +38,7 @@ impl ShortcutRuntime {
   /// Apply normalized shortcut settings to OS registration and runtime gates.
   ///
   /// Registration failures are logged and returned so callers can surface them;
-  /// partial apply is avoided by validating the open binding first.
+  /// partial apply is avoided by validating rebindable bindings first.
   pub fn apply<R: Runtime>(&self, app: &AppHandle<R>, shortcuts: &[ShortcutDefinition]) -> Result<(), String> {
     let normalized = normalize_shortcuts(shortcuts.to_vec());
     let open = normalized
@@ -44,6 +50,15 @@ impl ShortcutRuntime {
         binding: DEFAULT_OPEN_QUICK_TRANSLATE_BINDING.into(),
         enabled: true,
       });
+    let region_screenshot = normalized
+      .iter()
+      .find(|s| s.id == SHORTCUT_REGION_SCREENSHOT)
+      .cloned()
+      .unwrap_or_else(|| ShortcutDefinition {
+        id: SHORTCUT_REGION_SCREENSHOT.into(),
+        binding: DEFAULT_REGION_SCREENSHOT_BINDING.into(),
+        enabled: true,
+      });
     let double_enabled = normalized
       .iter()
       .find(|s| s.id == SHORTCUT_DOUBLE_CTRL_C)
@@ -51,83 +66,120 @@ impl ShortcutRuntime {
       .unwrap_or(true);
 
     if open.enabled {
-      validate_open_binding(&open.binding)?;
+      validate_rebindable_binding(&open.binding)?;
+    }
+    if region_screenshot.enabled {
+      validate_rebindable_binding(&region_screenshot.binding)?;
+    }
+    if open.enabled
+      && region_screenshot.enabled
+      && open
+        .binding
+        .trim()
+        .eq_ignore_ascii_case(region_screenshot.binding.trim())
+    {
+      return Err("Quick Translate and Screenshot shortcuts must use different bindings".into());
     }
 
     self.double_ctrl_c_enabled.store(double_enabled, Ordering::SeqCst);
 
     #[cfg(desktop)]
     {
-      self.apply_open_shortcut(app, open.enabled.then_some(open.binding.as_str()))?;
+      // Unregister both first so binding swaps cannot collide mid-apply.
+      self.unregister_tracked(app, &self.registered_open)?;
+      self.unregister_tracked(app, &self.registered_region_screenshot)?;
+      self.register_open_shortcut(app, open.enabled.then_some(open.binding.as_str()))?;
+      self.register_region_screenshot_shortcut(
+        app,
+        region_screenshot.enabled.then_some(region_screenshot.binding.as_str()),
+      )?;
     }
 
     #[cfg(not(desktop))]
     {
       let _ = app;
       let _ = open;
+      let _ = region_screenshot;
     }
 
     Ok(())
   }
 
   #[cfg(desktop)]
-  fn apply_open_shortcut<R: Runtime>(&self, app: &AppHandle<R>, next_binding: Option<&str>) -> Result<(), String> {
-    use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+  fn unregister_tracked<R: Runtime>(&self, app: &AppHandle<R>, slot: &Mutex<Option<String>>) -> Result<(), String> {
+    use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
     let gs = app.global_shortcut();
-    let mut registered = self
-      .registered_open
-      .lock()
-      .map_err(|_| "shortcut runtime lock poisoned".to_string())?;
-
-    if registered.as_deref() == next_binding {
-      return Ok(());
-    }
-
-    let previous = registered.take();
-    if let Some(ref prev) = previous {
+    let mut registered = slot.lock().map_err(|_| "shortcut runtime lock poisoned".to_string())?;
+    if let Some(prev) = registered.take() {
       if let Err(err) = gs.unregister(prev.as_str()) {
         log::warn!("global_shortcut_unregister_failed binding={prev} error={err}");
       }
     }
+    Ok(())
+  }
+
+  #[cfg(desktop)]
+  fn register_open_shortcut<R: Runtime>(&self, app: &AppHandle<R>, next_binding: Option<&str>) -> Result<(), String> {
+    use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
     let Some(binding) = next_binding else {
       return Ok(());
     };
 
-    if let Err(err) = gs.on_shortcut(binding, |app, _shortcut, event| {
+    let gs = app.global_shortcut();
+    gs.on_shortcut(binding, |app, _shortcut, event| {
       if event.state == ShortcutState::Pressed {
         if let Err(e) = windows::quick_translate::show(app) {
           log::error!("quick_translate_show_failed error={e}");
         }
       }
-    }) {
-      // Best-effort restore so a failed rebind does not leave the app without a shortcut.
-      if let Some(prev) = previous {
-        if gs
-          .on_shortcut(prev.as_str(), |app, _shortcut, event| {
-            if event.state == ShortcutState::Pressed {
-              if let Err(e) = windows::quick_translate::show(app) {
-                log::error!("quick_translate_show_failed error={e}");
-              }
-            }
-          })
-          .is_ok()
-        {
-          *registered = Some(prev);
+    })
+    .map_err(|err| format!("failed to register shortcut '{binding}': {err}"))?;
+
+    let mut registered = self
+      .registered_open
+      .lock()
+      .map_err(|_| "shortcut runtime lock poisoned".to_string())?;
+    *registered = Some(binding.to_string());
+    log::info!("global_shortcut_registered id={SHORTCUT_OPEN_QUICK_TRANSLATE} binding={binding}");
+    Ok(())
+  }
+
+  #[cfg(desktop)]
+  fn register_region_screenshot_shortcut<R: Runtime>(
+    &self,
+    app: &AppHandle<R>,
+    next_binding: Option<&str>,
+  ) -> Result<(), String> {
+    use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+
+    let Some(binding) = next_binding else {
+      return Ok(());
+    };
+
+    let gs = app.global_shortcut();
+    gs.on_shortcut(binding, |app, _shortcut, event| {
+      if event.state == ShortcutState::Pressed {
+        if let Err(e) = windows::screenshot::start(app) {
+          log::error!("region_screenshot_start_failed error={e}");
         }
       }
-      return Err(format!("failed to register shortcut '{binding}': {err}"));
-    }
+    })
+    .map_err(|err| format!("failed to register shortcut '{binding}': {err}"))?;
 
+    let mut registered = self
+      .registered_region_screenshot
+      .lock()
+      .map_err(|_| "shortcut runtime lock poisoned".to_string())?;
     *registered = Some(binding.to_string());
-    log::info!("global_shortcut_registered binding={binding}");
+    log::info!("global_shortcut_registered id={SHORTCUT_REGION_SCREENSHOT} binding={binding}");
     Ok(())
   }
 }
 
-/// Validate a rebindable open-Quick-Translate binding string.
-pub fn validate_open_binding(binding: &str) -> Result<(), String> {
+/// Validate a rebindable global binding string (Quick Translate / Screenshot).
+pub fn validate_rebindable_binding(binding: &str) -> Result<(), String> {
   let trimmed = binding.trim();
   if trimmed.is_empty() {
     return Err("shortcut binding must not be empty".into());
@@ -159,14 +211,34 @@ pub fn validate_open_binding(binding: &str) -> Result<(), String> {
   }
 }
 
+/// Backward-compatible alias used by older call sites / tests.
+pub fn validate_open_binding(binding: &str) -> Result<(), String> {
+  validate_rebindable_binding(binding)
+}
+
 /// Validate the full shortcuts list before persistence.
 pub fn validate_shortcuts(shortcuts: &[ShortcutDefinition]) -> Result<(), String> {
   let normalized = normalize_shortcuts(shortcuts.to_vec());
+  let mut open_binding: Option<String> = None;
+  let mut screenshot_binding: Option<String> = None;
+
   for entry in &normalized {
     if entry.id == SHORTCUT_OPEN_QUICK_TRANSLATE && entry.enabled {
-      validate_open_binding(&entry.binding)?;
+      validate_rebindable_binding(&entry.binding)?;
+      open_binding = Some(entry.binding.trim().to_string());
+    }
+    if entry.id == SHORTCUT_REGION_SCREENSHOT && entry.enabled {
+      validate_rebindable_binding(&entry.binding)?;
+      screenshot_binding = Some(entry.binding.trim().to_string());
     }
   }
+
+  if let (Some(open), Some(shot)) = (open_binding, screenshot_binding) {
+    if open.eq_ignore_ascii_case(&shot) {
+      return Err("Quick Translate and Screenshot shortcuts must use different bindings".into());
+    }
+  }
+
   Ok(())
 }
 

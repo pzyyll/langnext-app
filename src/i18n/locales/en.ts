@@ -94,7 +94,7 @@ const en = {
     },
     shortcuts: {
       title: "Shortcuts",
-      description: "Configure global shortcuts for Quick Translate.",
+      description: "Configure global shortcuts for Quick Translate and screenshot.",
       doubleCtrlC: {
         title: "Double Ctrl+C",
         description: "Open Quick Translate and paste the clipboard.",
@@ -108,10 +108,26 @@ const en = {
         reset: "Reset",
         resetAria: "Reset to Ctrl+Shift+T",
       },
+      regionScreenshot: {
+        title: "Region Screenshot",
+        description: "Capture a screen region for later OCR or translation.",
+        recordAria: "Record region screenshot shortcut",
+        recording: "Press keys…",
+        reset: "Reset",
+        resetAria: "Reset to Ctrl+Shift+A",
+      },
       loadFailed: "Could not load shortcut settings.",
       persistFailed: "Could not save shortcut settings.",
       windowsOnly: "Available on Windows only.",
     },
+  },
+  screenshot: {
+    ariaLabel: "Region screenshot selection",
+    hint: "Drag to select · Esc to cancel · copies to clipboard",
+    loadFailed: "Could not load the screenshot backdrop.",
+    confirmFailed: "Could not capture the selected region.",
+    clipboardFailed: "Captured, but could not copy to the clipboard.",
+    cancelFailed: "Could not cancel the screenshot.",
   },
   translate: {
     modelLabel: "Model:",

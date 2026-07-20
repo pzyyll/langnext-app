@@ -45,6 +45,14 @@ function isQuickTranslatePath(pathname: string): boolean {
   return pathname === "/quick-translate" || pathname.startsWith("/quick-translate/");
 }
 
+function isScreenshotOverlayPath(pathname: string): boolean {
+  return pathname === "/screenshot-overlay" || pathname.startsWith("/screenshot-overlay/");
+}
+
+function isSecondaryWindowPath(pathname: string): boolean {
+  return isQuickTranslatePath(pathname) || isScreenshotOverlayPath(pathname);
+}
+
 function NavLinkLabel({ item }: { item: NavItem }) {
   const { t } = useTranslation();
   const Icon = navIconById[item.icon];
@@ -61,13 +69,15 @@ function RootLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const { t } = useTranslation();
 
-  // Secondary always-on-top window: no main sidebar chrome.
+  // Secondary windows (Quick Translate, screenshot overlay): no main sidebar chrome.
   // Do not mount router devtools here — FloatingTanStackRouterDevtools injects
   // padding-bottom (~500px) on its parent, which leaves a large empty band in this
   // content-sized popup and fights the height-resize observer.
-  if (isQuickTranslatePath(pathname)) {
+  if (isSecondaryWindowPath(pathname)) {
     return (
-      <div className="root flex h-full min-h-0 flex-col bg-background text-on-background">
+      <div
+        className={`root flex h-full min-h-0 flex-col text-on-background ${isScreenshotOverlayPath(pathname) ? "bg-transparent" : "bg-background"}`}
+      >
         <Outlet />
       </div>
     );
