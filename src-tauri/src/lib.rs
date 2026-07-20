@@ -82,9 +82,22 @@ fn app_setup<R: Runtime>(app: &mut tauri::App<R>) -> Result<(), Box<dyn std::err
 pub fn run() {
   // Panic hook uses eprintln! as a bootstrap fallback; release also logs a fixed panic_event.
   panic::install_panic_hook();
+
+  let mut builder = tauri::Builder::default();
+
+  // Single-instance must register first so a second .exe exits before other plugins/setup run.
+  // Callback runs in the existing process: show/focus main (including when hidden to tray).
+  #[cfg(desktop)]
+  {
+    builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+      log::info!("single_instance_focus_existing");
+      windows::main::show(app);
+    }));
+  }
+
   // Install logging as early as possible so subsequent plugin/setup work is captured.
   // Logger is not active until this plugin's setup runs; pre-plugin failures stay on stderr.
-  tauri::Builder::default()
+  builder
     .plugin(logging::plugin())
     .plugin(tauri_plugin_opener::init())
     .plugin(tauri_plugin_clipboard_manager::init())
@@ -96,6 +109,7 @@ pub fn run() {
       windows::quick_translate::resize_window_height,
       windows::quick_translate::notify_ready,
       windows::screenshot::region_screenshot_get_backdrop,
+      windows::screenshot::region_screenshot_get_backdrop_data,
       windows::screenshot::region_screenshot_reveal,
       windows::screenshot::region_screenshot_confirm,
       windows::screenshot::region_screenshot_cancel,

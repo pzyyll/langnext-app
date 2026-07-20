@@ -174,7 +174,12 @@ export async function regionScreenshotGetBackdrop(): Promise<RegionScreenshotBac
   return invoke("region_screenshot_get_backdrop");
 }
 
-/** Show the overlay after the backdrop image has painted (avoids blank flash). */
+/** Fallback backdrop PNG as base64 when asset-protocol loading fails. */
+export async function regionScreenshotGetBackdropData(): Promise<string> {
+  return invoke("region_screenshot_get_backdrop_data");
+}
+
+/** Re-focus / re-show the overlay after the backdrop image has painted. */
 export async function regionScreenshotReveal(): Promise<void> {
   return invoke("region_screenshot_reveal");
 }

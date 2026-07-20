@@ -15,7 +15,7 @@
       "csp": null,
       "assetProtocol": {
         "enable": true,
-        "scope": ["$TEMP/langnext-screenshot/**"]
+        "scope": ["$TEMP/**"]
       }
     }
   },

@@ -161,9 +161,15 @@ impl ShortcutRuntime {
     let gs = app.global_shortcut();
     gs.on_shortcut(binding, |app, _shortcut, event| {
       if event.state == ShortcutState::Pressed {
-        if let Err(e) = windows::screenshot::start(app) {
-          log::error!("region_screenshot_start_failed error={e}");
-        }
+        // The plugin holds its shortcut-map mutex while invoking callbacks.
+        // screenshot::start registers temporary Escape, so defer until this callback returns
+        // or the nested registration deadlocks the entire Tauri event loop.
+        let app = app.clone();
+        std::thread::spawn(move || {
+          if let Err(e) = windows::screenshot::start(&app) {
+            log::error!("region_screenshot_start_failed error={e}");
+          }
+        });
       }
     })
     .map_err(|err| format!("failed to register shortcut '{binding}': {err}"))?;

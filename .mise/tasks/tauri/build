@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
-# ABOUTME: Package the Tauri desktop app for distribution
-# ABOUTME: Run via `mise run tauri:build`
-#MISE description="Package the desktop app"
+# ABOUTME: Package the Tauri desktop app installers and a portable zip
+# ABOUTME: Run via `mise run tauri:build`; forwards extra args to `tauri build`
+#MISE description="Package installers and portable zip"
 set -euo pipefail
-tauri build
+
+root="$(cd "$(dirname "$0")/../../.." && pwd)"
+cd "$root"
+
+tauri build "$@"
+node scripts/package-portable.js

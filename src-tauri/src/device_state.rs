@@ -124,21 +124,21 @@ impl DeviceStateManager {
       next.main_window = geometry;
     }
     *self.pending.lock().expect("pending lock") = Some(next);
-    let gen = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+    let generation_id = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
     let delay = self.debounce;
     let mgr = Arc::clone(self);
     std::thread::spawn(move || {
       std::thread::sleep(delay);
-      if mgr.generation.load(Ordering::SeqCst) != gen {
+      if mgr.generation.load(Ordering::SeqCst) != generation_id {
         return;
       }
-      let _ = mgr.flush_if_generation(gen);
+      let _ = mgr.flush_if_generation(generation_id);
     });
   }
 
   /// Persist pending state if the generation is still current.
-  fn flush_if_generation(&self, gen: u64) -> Result<(), StorageError> {
-    if self.generation.load(Ordering::SeqCst) != gen {
+  fn flush_if_generation(&self, generation_id: u64) -> Result<(), StorageError> {
+    if self.generation.load(Ordering::SeqCst) != generation_id {
       return Ok(());
     }
     self.flush()

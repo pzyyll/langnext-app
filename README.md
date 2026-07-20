@@ -62,7 +62,7 @@ All commands go through mise (no `package.json` scripts):
 | `mise run test`          | Run Rust unit/integration tests       |
 | `mise run test-frontend` | Run frontend behavioral tests (Bun)   |
 | `mise run tauri:dev`     | Run the Tauri desktop app             |
-| `mise run tauri:build`   | Package the desktop app               |
+| `mise run tauri:build`   | Package installers and portable zip   |
 
 Optional test filter: `mise run test storage` (args are forwarded to `cargo test`).
 

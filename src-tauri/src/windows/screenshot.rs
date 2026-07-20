@@ -28,6 +28,11 @@ const CLIPBOARD_RETRY_DELAY: Duration = Duration::from_millis(40);
 const SCREENSHOT_TEMP_DIRNAME: &str = "langnext-screenshot";
 const BACKDROP_FILENAME: &str = "backdrop.png";
 
+/// Temporary global Escape binding while a region-screenshot session is active.
+/// Overlay webviews often lack keyboard focus until the user clicks, so window-level
+/// Esc handlers alone are unreliable.
+const ESCAPE_CANCEL_BINDING: &str = "Escape";
+
 /// Physical-pixel rectangle on the virtual desktop.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -50,7 +55,7 @@ pub struct RegionScreenshotResult {
   pub copied_to_clipboard: bool,
 }
 
-/// Backdrop payload for the selection overlay (temp-file path, not base64).
+/// Backdrop payload for the selection overlay (temp-file path + optional PNG data URL fallback).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct RegionScreenshotBackdrop {
@@ -87,6 +92,8 @@ pub struct RegionScreenshotState {
   session: Mutex<Option<ActiveSession>>,
   /// Set once the warm overlay webview has finished its first page load.
   overlay_ready: AtomicBool,
+  /// Whether the temporary Escape global shortcut is currently registered.
+  escape_registered: AtomicBool,
 }
 
 /// Create the hidden overlay webview early so later triggers skip cold start.
@@ -141,7 +148,9 @@ pub fn start<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<(), String> {
     });
   }
 
-  // Place hidden overlay over the captured monitor; reveal only after the image paints.
+  // Place overlay over the captured monitor. Show immediately (black until image paints):
+  // waiting for webview onload while hidden is unreliable on WebView2 and can leave the
+  // session stuck with no visible UI.
   if let Err(err) = place_overlay(
     app,
     capture.monitor_x,
@@ -155,6 +164,10 @@ pub fn start<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<(), String> {
   }
 
   notify_session_ready(app, &backdrop);
+  if let Err(err) = show_overlay_now(app) {
+    log::warn!("region_screenshot_show_failed error={err}");
+  }
+  register_escape_cancel(app);
   Ok(())
 }
 
@@ -287,12 +300,28 @@ fn place_overlay<R: Runtime>(
     scale_factor
   );
 
-  // Keep hidden until the frontend paints the backdrop (avoids blank flash).
+  // Size/position first while still hidden, then caller shows once the session is ready.
   let _ = win.hide();
   let _ = win.set_size(PhysicalSize::new(monitor_width, monitor_height));
   let _ = win.set_position(PhysicalPosition::new(monitor_x, monitor_y));
   let _ = win.set_always_on_top(true);
   Ok(win)
+}
+
+fn show_overlay_now<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<(), String> {
+  let Some(win) = app.get_webview_window(consts::WIN_LABEL_SCREENSHOT_OVERLAY) else {
+    return Err("screenshot overlay window missing".into());
+  };
+  let _ = win.set_always_on_top(true);
+  let _ = win.show();
+  if win.is_minimized().unwrap_or(false) {
+    let _ = win.unminimize();
+  }
+  let _ = win.set_focus();
+  if let Some(state) = app.try_state::<RegionScreenshotState>() {
+    state.overlay_ready.store(true, Ordering::SeqCst);
+  }
+  Ok(())
 }
 
 fn notify_session_ready<R: Runtime>(app: &tauri::AppHandle<R>, backdrop: &RegionScreenshotBackdrop) {
@@ -399,8 +428,74 @@ fn take_session<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<Option<ActiveSe
   Ok(guard.take())
 }
 
+/// Register a temporary global Escape that cancels the active screenshot session.
+fn register_escape_cancel<R: Runtime>(app: &tauri::AppHandle<R>) {
+  #[cfg(desktop)]
+  {
+    use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+
+    let Some(state) = app.try_state::<RegionScreenshotState>() else {
+      return;
+    };
+    if state.escape_registered.load(Ordering::SeqCst) {
+      return;
+    }
+
+    match app.global_shortcut().on_shortcut(ESCAPE_CANCEL_BINDING, |app, _shortcut, event| {
+      if event.state == ShortcutState::Pressed {
+        log::debug!("region_screenshot_escape_cancel");
+        // Defer cancellation: cancel_internal unregisters Escape, and unregistering
+        // synchronously inside this callback would re-enter the plugin mutex and deadlock.
+        let app = app.clone();
+        std::thread::spawn(move || {
+          let _ = cancel_internal(&app);
+        });
+      }
+    }) {
+      Ok(()) => {
+        state.escape_registered.store(true, Ordering::SeqCst);
+        log::debug!("region_screenshot_escape_registered");
+      }
+      Err(err) => {
+        log::warn!("region_screenshot_escape_register_failed error={err}");
+      }
+    }
+  }
+
+  #[cfg(not(desktop))]
+  {
+    let _ = app;
+  }
+}
+
+/// Unregister the temporary Escape binding if it is active.
+fn unregister_escape_cancel<R: Runtime>(app: &tauri::AppHandle<R>) {
+  #[cfg(desktop)]
+  {
+    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+
+    let Some(state) = app.try_state::<RegionScreenshotState>() else {
+      return;
+    };
+    if !state.escape_registered.swap(false, Ordering::SeqCst) {
+      return;
+    }
+    if let Err(err) = app.global_shortcut().unregister(ESCAPE_CANCEL_BINDING) {
+      log::warn!("region_screenshot_escape_unregister_failed error={err}");
+    } else {
+      log::debug!("region_screenshot_escape_unregistered");
+    }
+  }
+
+  #[cfg(not(desktop))]
+  {
+    let _ = app;
+  }
+}
+
 /// Drop session + temp file + restore windows; keep the warm overlay webview.
 fn cancel_session_only<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<(), String> {
+  unregister_escape_cancel(app);
   if let Some(session) = take_session(app)? {
     remove_backdrop_file(&session.backdrop_path);
     restore_hidden_windows(app, session.restore_main, session.restore_quick_translate);
@@ -412,13 +507,17 @@ fn cancel_session_only<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<(), Stri
 fn cancel_internal<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<(), String> {
   let had_session = {
     let Some(state) = app.try_state::<RegionScreenshotState>() else {
+      unregister_escape_cancel(app);
       hide_overlay(app);
       return Ok(());
     };
     state.session.lock().map(|g| g.is_some()).unwrap_or(false)
   };
   hide_overlay(app);
+  // Always drop Escape even if the session was already taken (e.g. confirm path).
+  unregister_escape_cancel(app);
   if had_session {
+    // Session still present: full cancel cleanup (unregister is idempotent).
     cancel_session_only(app)?;
   }
   Ok(())
@@ -446,7 +545,32 @@ pub async fn region_screenshot_get_backdrop<R: Runtime>(
   })
 }
 
-/// Show the already-positioned overlay after the backdrop has painted in the webview.
+/// Fallback when asset-protocol loading fails: return the backdrop as base64 PNG.
+#[tauri::command]
+pub async fn region_screenshot_get_backdrop_data<R: Runtime>(
+  app: tauri::AppHandle<R>,
+) -> Result<String, String> {
+  let Some(state) = app.try_state::<RegionScreenshotState>() else {
+    return Err("region screenshot state is not managed".into());
+  };
+  let guard = state
+    .session
+    .lock()
+    .map_err(|_| "region screenshot lock poisoned".to_string())?;
+  let Some(session) = guard.as_ref() else {
+    return Err("no active region screenshot session".into());
+  };
+  // Prefer the temp file (already encoded); fall back to re-encoding the in-memory capture.
+  match std::fs::read(&session.backdrop_path) {
+    Ok(bytes) if !bytes.is_empty() => Ok(BASE64.encode(bytes)),
+    _ => {
+      let png = encode_png(&session.image)?;
+      Ok(BASE64.encode(png))
+    }
+  }
+}
+
+/// Re-focus / re-show the overlay after the frontend paints the backdrop.
 #[tauri::command]
 pub async fn region_screenshot_reveal<R: Runtime>(app: tauri::AppHandle<R>) -> Result<(), String> {
   let Some(state) = app.try_state::<RegionScreenshotState>() else {
@@ -456,17 +580,8 @@ pub async fn region_screenshot_reveal<R: Runtime>(app: tauri::AppHandle<R>) -> R
   if !has_session {
     return Err("no active region screenshot session".into());
   }
-
-  let Some(win) = app.get_webview_window(consts::WIN_LABEL_SCREENSHOT_OVERLAY) else {
-    return Err("screenshot overlay window missing".into());
-  };
-  let _ = win.set_always_on_top(true);
-  let _ = win.show();
-  if win.is_minimized().unwrap_or(false) {
-    let _ = win.unminimize();
-  }
-  let _ = win.set_focus();
-  state.overlay_ready.store(true, Ordering::SeqCst);
+  show_overlay_now(&app)?;
+  register_escape_cancel(&app);
   Ok(())
 }
 
@@ -555,6 +670,7 @@ pub async fn region_screenshot_confirm<R: Runtime>(
       }
       result.copied_to_clipboard = true;
 
+      unregister_escape_cancel(&app);
       remove_backdrop_file(&session.backdrop_path);
       hide_overlay(&app);
       restore_hidden_windows(&app, session.restore_main, session.restore_quick_translate);

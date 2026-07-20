@@ -53,7 +53,7 @@ mise run lint          # Run ESLint
 mise run format        # Write Prettier and cargo fmt changes
 mise run format:check  # Check Prettier and cargo fmt formatting
 mise run tauri:dev     # Run the desktop application
-mise run tauri:build   # Package the desktop application
+mise run tauri:build   # Package installers and portable zip
 ```
 
 ### Toolchain Invariants

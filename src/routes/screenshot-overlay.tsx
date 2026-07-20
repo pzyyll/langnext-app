@@ -1,5 +1,5 @@
 // ABOUTME: Fullscreen region-screenshot selection UI for the secondary overlay window.
-// ABOUTME: Loads backdrop from a temp file, reveals only after paint, drag-selects, copies via Rust.
+// ABOUTME: Loads backdrop via asset path (base64 fallback), drag-selects, copies via Rust.
 import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { convertFileSrc } from "@tauri-apps/api/core";
@@ -10,6 +10,7 @@ import {
   regionScreenshotCancel,
   regionScreenshotConfirm,
   regionScreenshotGetBackdrop,
+  regionScreenshotGetBackdropData,
   regionScreenshotReveal,
 } from "../storage/client";
 import type { RegionScreenshotBackdrop } from "../storage/types";
@@ -35,11 +36,39 @@ function normalizeRect(a: Point, b: Point): Rect {
   };
 }
 
-function backdropAssetUrl(path: string): string {
-  // Cache-bust so a reused warm window always reloads the latest capture.
-  const src = convertFileSrc(path);
+function assetUrlFromPath(path: string): string {
+  // WebView2 is happier with forward slashes; cache-bust for warm-window reuse.
+  const normalized = path.replace(/\\/g, "/");
+  const src = convertFileSrc(normalized);
   const sep = src.includes("?") ? "&" : "?";
   return `${src}${sep}t=${Date.now()}`;
+}
+
+function preloadImage(url: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      resolve();
+    };
+    img.onerror = () => {
+      reject(new Error("image load failed"));
+    };
+    img.src = url;
+  });
+}
+
+async function resolveBackdropUrl(backdrop: RegionScreenshotBackdrop): Promise<string> {
+  const assetUrl = assetUrlFromPath(backdrop.path);
+  try {
+    await preloadImage(assetUrl);
+    return assetUrl;
+  } catch {
+    // Asset protocol can fail depending on TEMP path/scope; fall back to IPC base64.
+    const pngBase64 = await regionScreenshotGetBackdropData();
+    const dataUrl = `data:image/png;base64,${pngBase64}`;
+    await preloadImage(dataUrl);
+    return dataUrl;
+  }
 }
 
 function ScreenshotOverlayPage() {
@@ -52,38 +81,48 @@ function ScreenshotOverlayPage() {
   const [ready, setReady] = useState(false);
   const finishingRef = useRef(false);
   const loadTokenRef = useRef(0);
+  const rootRef = useRef<HTMLDivElement>(null);
 
-  const applyBackdrop = useCallback(async (backdrop: RegionScreenshotBackdrop) => {
-    const token = loadTokenRef.current + 1;
-    loadTokenRef.current = token;
-    finishingRef.current = false;
-    setBusy(false);
-    setDragOrigin(null);
-    setDragCurrent(null);
-    setLoadError(null);
-    setReady(false);
-    setBackdropUrl(backdropAssetUrl(backdrop.path));
-  }, []);
+  const applyBackdrop = useCallback(
+    async (backdrop: RegionScreenshotBackdrop) => {
+      const token = loadTokenRef.current + 1;
+      loadTokenRef.current = token;
+      finishingRef.current = false;
+      setBusy(false);
+      setDragOrigin(null);
+      setDragCurrent(null);
+      setLoadError(null);
+      setReady(false);
 
-  // Cold start / reload: if a session is already active, pull the backdrop path.
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
       try {
-        const backdrop = await regionScreenshotGetBackdrop();
-        if (!cancelled) {
-          await applyBackdrop(backdrop);
+        const url = await resolveBackdropUrl(backdrop);
+        if (loadTokenRef.current !== token) {
+          return;
         }
-      } catch {
-        // No active session yet — wait for session-ready event.
+        setBackdropUrl(url);
+        setReady(true);
+        try {
+          await regionScreenshotReveal();
+        } catch {
+          // Rust already shows the window on session start; focus is best-effort.
+        }
+        rootRef.current?.focus({ preventScroll: true });
+      } catch (err) {
+        if (loadTokenRef.current !== token) {
+          return;
+        }
+        setLoadError(err instanceof Error ? err.message : t("screenshot.loadFailed"));
+        // Still try to surface the window so the user can Esc cancel.
+        try {
+          await regionScreenshotReveal();
+        } catch {
+          // ignore
+        }
       }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [applyBackdrop]);
+    },
+    [t],
+  );
 
-  // Warm window reuse: each new capture emits session-ready with a fresh path.
   // After the listener is attached, re-fetch once to cover the race where emit
   // fired before the webview finished registering handlers.
   useEffect(() => {
@@ -118,24 +157,6 @@ function ScreenshotOverlayPage() {
       unlisten?.();
     };
   }, [applyBackdrop, t]);
-
-  const onBackdropLoad = useCallback(() => {
-    if (finishingRef.current) {
-      return;
-    }
-    setReady(true);
-    void (async () => {
-      try {
-        await regionScreenshotReveal();
-      } catch (err) {
-        setLoadError(err instanceof Error ? err.message : t("screenshot.loadFailed"));
-      }
-    })();
-  }, [t]);
-
-  const onBackdropError = useCallback(() => {
-    setLoadError(t("screenshot.loadFailed"));
-  }, [t]);
 
   const cancel = useCallback(async () => {
     if (finishingRef.current) {
@@ -248,7 +269,9 @@ function ScreenshotOverlayPage() {
 
   return (
     <div
-      className="fixed inset-0 select-none overflow-hidden bg-black"
+      ref={rootRef}
+      tabIndex={-1}
+      className="fixed inset-0 select-none overflow-hidden bg-black outline-none"
       style={{ cursor: busy || !ready ? "progress" : "crosshair" }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
@@ -265,12 +288,9 @@ function ScreenshotOverlayPage() {
           alt=""
           draggable={false}
           className="pointer-events-none absolute inset-0 size-full max-w-none object-fill"
-          onLoad={onBackdropLoad}
-          onError={onBackdropError}
         />
       ) : null}
 
-      {/* Dim mask: four panels around the selection, or full dim when idle. */}
       {selection ? (
         <>
           <div
