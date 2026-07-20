@@ -17,6 +17,7 @@ mod logging;
 mod panic;
 mod repositories;
 mod services;
+mod shortcuts;
 mod state;
 mod storage;
 mod windows;
@@ -33,40 +34,28 @@ fn app_setup<R: Runtime>(app: &mut tauri::App<R>) -> Result<(), Box<dyn std::err
     .map_err(|e| format!("resolve app data dir: {e}"))?;
 
   let state = AppState::initialize(app_data_dir).map_err(|e| format!("storage initialization failed: {e}"))?;
+  let initial_shortcuts = state
+    .settings
+    .get()
+    .map(|dto| dto.settings.shortcuts)
+    .unwrap_or_default();
 
   // Device state is needed by window setup for geometry restore.
   app.manage(state);
   app.manage(windows::quick_translate::QuickTranslateState::default());
+  app.manage(shortcuts::ShortcutRuntime::new());
   windows::setup(app.handle());
   log::info!("app_setup_complete windows_and_tray_ready");
 
-  // Global hotkey opens the always-on-top Quick Translate window.
-  // Registration failure (e.g. conflict with another app) must not block startup; tray still works.
+  // Global shortcut plugin (bindings applied from settings below).
+  // Plugin install failure must not block startup; tray still works.
   #[cfg(desktop)]
   {
-    use tauri_plugin_global_shortcut::{Code, Modifiers, ShortcutState};
-
-    match tauri_plugin_global_shortcut::Builder::new().with_shortcuts(["ctrl+shift+t"]) {
-      Ok(builder) => {
-        if let Err(err) = app.handle().plugin(
-          builder
-            .with_handler(|app, shortcut, event| {
-              if event.state == ShortcutState::Pressed
-                && shortcut.matches(Modifiers::CONTROL | Modifiers::SHIFT, Code::KeyT)
-              {
-                if let Err(e) = windows::quick_translate::show(app) {
-                  log::error!("quick_translate_show_failed error={e}");
-                }
-              }
-            })
-            .build(),
-        ) {
-          log::error!("global_shortcut_plugin_failed error={err}");
-        }
-      }
-      Err(err) => {
-        log::error!("global_shortcut_register_failed error={err}");
-      }
+    if let Err(err) = app
+      .handle()
+      .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+    {
+      log::error!("global_shortcut_plugin_failed error={err}");
     }
   }
 
@@ -75,27 +64,13 @@ fn app_setup<R: Runtime>(app: &mut tauri::App<R>) -> Result<(), Box<dyn std::err
   // Registration or startup failure must not block app startup.
   #[cfg(windows)]
   {
-    use kmhook::enginer as kmhook_enginer;
+    shortcuts::register_double_ctrl_c(app.handle());
+  }
 
-    // trigger count = 2; interval in ms (kmhook default is 400).
-    let app_handle = app.handle().clone();
-    match kmhook_enginer::add_global_shortcut_trigger(
-      "Ctrl+C",
-      move || {
-        windows::quick_translate::try_show_on_cpcp(&app_handle);
-      },
-      2,
-      Some(400),
-    ) {
-      Ok(_) => {
-        // startup returns Option<JoinHandle<()>>, not Result; dropping detaches the worker.
-        if kmhook_enginer::startup(Some(true)).is_none() {
-          log::warn!("kmhook_startup_no_worker_thread");
-        }
-      }
-      Err(err) => {
-        log::error!("kmhook_double_ctrl_c_register_failed error={err}");
-      }
+  // Apply persisted (or default) shortcut settings after plugin + kmhook are ready.
+  if let Some(runtime) = app.try_state::<shortcuts::ShortcutRuntime>() {
+    if let Err(err) = runtime.apply(app.handle(), &initial_shortcuts) {
+      log::error!("shortcut_apply_at_startup_failed error={err}");
     }
   }
 
@@ -153,6 +128,7 @@ pub fn run() {
       cmds::settings::update_app_settings,
       cmds::settings::set_app_theme,
       cmds::settings::set_app_ui_language,
+      cmds::settings::set_app_shortcuts,
       cmds::import_export::export_configuration,
       cmds::import_export::preview_configuration_import,
       cmds::import_export::import_configuration,

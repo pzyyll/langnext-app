@@ -95,7 +95,7 @@ const zhCN = {
   },
   settings: {
     title: "设置",
-    description: "管理外观与界面语言。更改会自动保存。",
+    description: "管理外观、语言与快捷键。更改会自动保存。",
     theme: {
       title: "主题",
       description: "为应用外壳选择浅色或深色外观。",
@@ -103,6 +103,26 @@ const zhCN = {
     language: {
       title: "语言",
       description: "选择界面所使用的语言。",
+    },
+    shortcuts: {
+      title: "快捷键",
+      description: "配置快速翻译的全局快捷键。",
+      doubleCtrlC: {
+        title: "双击 Ctrl+C",
+        description: "打开快速翻译并粘贴剪贴板内容。",
+        enableAria: "启用双击 Ctrl+C",
+      },
+      openQuickTranslate: {
+        title: "打开快速翻译",
+        description: "显示快速翻译窗口的全局快捷键。",
+        recordAria: "录制打开快速翻译快捷键",
+        recording: "请按下按键…",
+        reset: "重置",
+        resetAria: "重置为 Ctrl+Shift+T",
+      },
+      loadFailed: "无法加载快捷键设置。",
+      persistFailed: "无法保存快捷键设置。",
+      windowsOnly: "仅 Windows 可用。",
     },
   },
   translate: {

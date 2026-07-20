@@ -1,10 +1,11 @@
 // ABOUTME: Portable application settings Tauri commands.
 // ABOUTME: Update accepts ProxyCredentialUpdate; response exposes only proxyHasCredential.
 use crate::cmds::runtime::run_blocking;
-use crate::domain::settings::{AppSettingsDto, AppSettingsUpdate};
+use crate::domain::settings::{AppSettingsDto, AppSettingsUpdate, ShortcutDefinition};
 use crate::error::IpcError;
+use crate::shortcuts::ShortcutRuntime;
 use crate::state::AppState;
-use tauri::State;
+use tauri::{AppHandle, Runtime, State};
 
 #[tauri::command]
 pub async fn get_app_settings(state: State<'_, AppState>) -> Result<AppSettingsDto, IpcError> {
@@ -31,4 +32,20 @@ pub async fn set_app_theme(state: State<'_, AppState>, theme: Option<String>) ->
 pub async fn set_app_ui_language(state: State<'_, AppState>, ui_language: String) -> Result<AppSettingsDto, IpcError> {
   let settings = state.settings.clone();
   run_blocking("set_app_ui_language", move || settings.set_ui_language(ui_language)).await
+}
+
+/// Persist shortcuts and re-apply OS registration / double Ctrl+C gate.
+#[tauri::command]
+pub async fn set_app_shortcuts<R: Runtime>(
+  app: AppHandle<R>,
+  state: State<'_, AppState>,
+  runtime: State<'_, ShortcutRuntime>,
+  shortcuts: Vec<ShortcutDefinition>,
+) -> Result<AppSettingsDto, IpcError> {
+  let settings = state.settings.clone();
+  let dto = run_blocking("set_app_shortcuts", move || settings.set_shortcuts(shortcuts)).await?;
+  runtime
+    .apply(&app, &dto.settings.shortcuts)
+    .map_err(|message| IpcError::new("shortcut_apply_failed", message))?;
+  Ok(dto)
 }

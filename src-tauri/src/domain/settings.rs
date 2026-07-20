@@ -1,5 +1,8 @@
 // ABOUTME: Versioned portable application settings and proxy credential updates.
 // ABOUTME: Proxy secrets stay out of the settings JSON document.
+use crate::consts::{
+  DEFAULT_OPEN_QUICK_TRANSLATE_BINDING, DOUBLE_CTRL_C_BINDING, SHORTCUT_DOUBLE_CTRL_C, SHORTCUT_OPEN_QUICK_TRANSLATE,
+};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -48,6 +51,51 @@ pub struct TranslationPreferences {
 pub struct ShortcutDefinition {
   pub id: String,
   pub binding: String,
+  /// When false the shortcut is not registered / ignored at runtime.
+  #[serde(default = "default_shortcut_enabled")]
+  pub enabled: bool,
+}
+
+fn default_shortcut_enabled() -> bool {
+  true
+}
+
+/// Canonical defaults for known application shortcuts.
+pub fn default_shortcuts() -> Vec<ShortcutDefinition> {
+  vec![
+    ShortcutDefinition {
+      id: SHORTCUT_OPEN_QUICK_TRANSLATE.into(),
+      binding: DEFAULT_OPEN_QUICK_TRANSLATE_BINDING.into(),
+      enabled: true,
+    },
+    ShortcutDefinition {
+      id: SHORTCUT_DOUBLE_CTRL_C.into(),
+      binding: DOUBLE_CTRL_C_BINDING.into(),
+      enabled: true,
+    },
+  ]
+}
+
+/// Merge stored entries with defaults so known ids always exist with valid values.
+pub fn normalize_shortcuts(stored: Vec<ShortcutDefinition>) -> Vec<ShortcutDefinition> {
+  let mut by_id: std::collections::HashMap<String, ShortcutDefinition> =
+    stored.into_iter().map(|s| (s.id.clone(), s)).collect();
+
+  let mut result = Vec::with_capacity(2);
+  for default in default_shortcuts() {
+    if let Some(mut found) = by_id.remove(&default.id) {
+      if found.id == SHORTCUT_DOUBLE_CTRL_C {
+        // Double Ctrl+C binding is fixed; only `enabled` is user-configurable.
+        found.binding = DOUBLE_CTRL_C_BINDING.into();
+      } else if found.binding.trim().is_empty() {
+        found.binding = default.binding;
+      }
+      result.push(found);
+    } else {
+      result.push(default);
+    }
+  }
+  result
 }
 
 /// Portable settings document stored in SQLite `app_settings.value_json`.
@@ -77,7 +125,7 @@ impl AppSettingsV1 {
         auto_detect_source: true,
         preserve_formatting: true,
       },
-      shortcuts: Vec::new(),
+      shortcuts: default_shortcuts(),
       network: NetworkSettings {
         proxy_mode: GlobalProxyMode::System,
         proxy_url: None,
@@ -134,6 +182,36 @@ mod tests {
     assert!(json.contains("proxyMode"));
     let back: AppSettingsV1 = serde_json::from_str(&json).unwrap();
     assert_eq!(back, settings);
+  }
+
+  #[test]
+  fn normalize_shortcuts_fills_defaults_and_fixes_double_ctrl_c_binding() {
+    let normalized = normalize_shortcuts(vec![ShortcutDefinition {
+      id: crate::consts::SHORTCUT_DOUBLE_CTRL_C.into(),
+      binding: "Alt+X".into(),
+      enabled: false,
+    }]);
+    assert_eq!(normalized.len(), 2);
+    let open = normalized
+      .iter()
+      .find(|s| s.id == crate::consts::SHORTCUT_OPEN_QUICK_TRANSLATE)
+      .unwrap();
+    assert_eq!(open.binding, crate::consts::DEFAULT_OPEN_QUICK_TRANSLATE_BINDING);
+    assert!(open.enabled);
+    let double = normalized
+      .iter()
+      .find(|s| s.id == crate::consts::SHORTCUT_DOUBLE_CTRL_C)
+      .unwrap();
+    assert_eq!(double.binding, crate::consts::DOUBLE_CTRL_C_BINDING);
+    assert!(!double.enabled);
+  }
+
+  #[test]
+  fn shortcut_enabled_defaults_when_missing_in_json() {
+    let json = r#"{"id":"open-quick-translate","binding":"Ctrl+Alt+T"}"#;
+    let parsed: ShortcutDefinition = serde_json::from_str(json).unwrap();
+    assert!(parsed.enabled);
+    assert_eq!(parsed.binding, "Ctrl+Alt+T");
   }
 
   #[test]

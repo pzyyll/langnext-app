@@ -3,7 +3,8 @@
 use crate::credentials::coordinator;
 use crate::credentials::{global_proxy_ref, CredentialVault};
 use crate::domain::settings::{
-  AppSettingsDto, AppSettingsUpdate, AppSettingsV1, GlobalProxyMode, ProxyCredentialUpdate,
+  normalize_shortcuts, AppSettingsDto, AppSettingsUpdate, AppSettingsV1, GlobalProxyMode, ProxyCredentialUpdate,
+  ShortcutDefinition,
 };
 use crate::domain::time::new_id;
 use crate::error::StorageError;
@@ -27,7 +28,8 @@ impl SettingsService {
 
   pub fn get(&self) -> Result<AppSettingsDto, StorageError> {
     self.db.read_snapshot(|conn| {
-      let settings = app_settings::get(conn)?;
+      let mut settings = app_settings::get(conn)?;
+      settings.shortcuts = normalize_shortcuts(settings.shortcuts);
       let proxy_has_credential = app_credentials::get_global_proxy_ref(conn)?.is_some();
       Ok(AppSettingsDto {
         settings,
@@ -37,22 +39,24 @@ impl SettingsService {
   }
 
   pub fn update(&self, input: AppSettingsUpdate) -> Result<AppSettingsDto, StorageError> {
-    validate_settings_document(&input.settings)?;
+    let mut settings = input.settings;
+    settings.shortcuts = normalize_shortcuts(settings.shortcuts);
+    validate_settings_document(&settings)?;
 
     coordinator::preflight_owner(&self.db, self.vault.as_ref(), OwnerKind::GlobalProxy, "global")?;
 
     match &input.proxy_credential {
       ProxyCredentialUpdate::Keep => {
-        self.update_keep(input.settings)?;
+        self.update_keep(settings)?;
       }
       ProxyCredentialUpdate::Replace(secret) => {
         if secret.is_empty() {
           return Err(StorageError::Validation("proxy credential must not be empty".into()));
         }
-        self.replace_proxy_credential(&input.settings, secret)?;
+        self.replace_proxy_credential(&settings, secret)?;
       }
       ProxyCredentialUpdate::Clear => {
-        self.clear_proxy_credential(&input.settings)?;
+        self.clear_proxy_credential(&settings)?;
       }
     }
 
@@ -87,6 +91,24 @@ impl SettingsService {
       let mut settings = app_settings::get(uow.conn())?;
       settings.ui_language = ui_language;
       app_settings::update(uow.conn(), &settings)?;
+      let proxy_has_credential = app_credentials::get_global_proxy_ref(uow.conn())?.is_some();
+      Ok(AppSettingsDto {
+        settings,
+        proxy_has_credential,
+      })
+    })
+  }
+
+  /// Atomic shortcuts-only update inside one transaction.
+  pub fn set_shortcuts(&self, shortcuts: Vec<ShortcutDefinition>) -> Result<AppSettingsDto, StorageError> {
+    let normalized = normalize_shortcuts(shortcuts);
+    crate::shortcuts::validate_shortcuts(&normalized).map_err(StorageError::Validation)?;
+
+    self.db.transaction(|uow| {
+      let mut settings = app_settings::get(uow.conn())?;
+      settings.shortcuts = normalized;
+      app_settings::update(uow.conn(), &settings)?;
+      settings.shortcuts = normalize_shortcuts(settings.shortcuts);
       let proxy_has_credential = app_credentials::get_global_proxy_ref(uow.conn())?.is_some();
       Ok(AppSettingsDto {
         settings,
@@ -211,6 +233,8 @@ pub fn validate_settings_document(settings: &AppSettingsV1) -> Result<(), Storag
       return Err(StorageError::Validation("theme must be light, dark, or null".into()));
     }
   }
+  let normalized_shortcuts = normalize_shortcuts(settings.shortcuts.clone());
+  crate::shortcuts::validate_shortcuts(&normalized_shortcuts).map_err(StorageError::Validation)?;
   match settings.network.proxy_mode {
     GlobalProxyMode::System => {
       if settings.network.proxy_url.is_some() {

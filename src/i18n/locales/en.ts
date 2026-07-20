@@ -97,7 +97,7 @@ const en = {
   },
   settings: {
     title: "Settings",
-    description: "Manage appearance and interface language. Changes are saved automatically.",
+    description: "Manage appearance, language, and shortcuts. Changes are saved automatically.",
     theme: {
       title: "Theme",
       description: "Choose light or dark appearance for the app shell.",
@@ -105,6 +105,26 @@ const en = {
     language: {
       title: "Language",
       description: "Choose the language used across the interface.",
+    },
+    shortcuts: {
+      title: "Shortcuts",
+      description: "Configure global shortcuts for Quick Translate.",
+      doubleCtrlC: {
+        title: "Double Ctrl+C",
+        description: "Open Quick Translate and paste the clipboard.",
+        enableAria: "Enable double Ctrl+C",
+      },
+      openQuickTranslate: {
+        title: "Open Quick Translate",
+        description: "Global shortcut to show the Quick Translate window.",
+        recordAria: "Record open Quick Translate shortcut",
+        recording: "Press keys…",
+        reset: "Reset",
+        resetAria: "Reset to Ctrl+Shift+T",
+      },
+      loadFailed: "Could not load shortcut settings.",
+      persistFailed: "Could not save shortcut settings.",
+      windowsOnly: "Available on Windows only.",
     },
   },
   translate: {

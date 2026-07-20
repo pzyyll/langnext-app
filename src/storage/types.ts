@@ -313,7 +313,17 @@ export interface TranslationPreferences {
 export interface ShortcutDefinition {
   id: string;
   binding: string;
+  enabled: boolean;
 }
+
+/** Settings id for the rebindable global open-Quick-Translate shortcut. */
+export const SHORTCUT_OPEN_QUICK_TRANSLATE = "open-quick-translate" as const;
+/** Settings id for the fixed double Ctrl+C trigger (enable/disable only). */
+export const SHORTCUT_DOUBLE_CTRL_C = "double-ctrl-c" as const;
+/** Default binding for open-Quick-Translate. */
+export const DEFAULT_OPEN_QUICK_TRANSLATE_BINDING = "Ctrl+Shift+T" as const;
+/** Fixed binding label for double Ctrl+C. */
+export const DOUBLE_CTRL_C_BINDING = "Ctrl+C" as const;
 
 export interface AppSettingsV1 {
   schemaVersion: number;
@@ -487,7 +497,10 @@ const _settingsUpdateFixture = {
     theme: "dark",
     defaultProfileId: null,
     translation: { autoDetectSource: true, preserveFormatting: true },
-    shortcuts: [],
+    shortcuts: [
+      { id: SHORTCUT_OPEN_QUICK_TRANSLATE, binding: DEFAULT_OPEN_QUICK_TRANSLATE_BINDING, enabled: true },
+      { id: SHORTCUT_DOUBLE_CTRL_C, binding: DOUBLE_CTRL_C_BINDING, enabled: true },
+    ],
     network: { proxyMode: "system", proxyUrl: null },
   },
   proxyCredential: { action: "keep" },

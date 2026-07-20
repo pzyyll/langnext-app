@@ -10,6 +10,15 @@ pub const TRAY_ID: &str = "main";
 /// Event carrying clipboard text to the Quick Translate window on double Ctrl+C.
 pub const QUICK_TRANSLATE_CLIPBOARD_EVENT: &str = "quick-translate://clipboard-text";
 
+/// Settings id for the rebindable global open-Quick-Translate shortcut.
+pub const SHORTCUT_OPEN_QUICK_TRANSLATE: &str = "open-quick-translate";
+/// Settings id for the fixed double Ctrl+C trigger (enable/disable only).
+pub const SHORTCUT_DOUBLE_CTRL_C: &str = "double-ctrl-c";
+/// Default binding for open-Quick-Translate (global-hotkey parse format).
+pub const DEFAULT_OPEN_QUICK_TRANSLATE_BINDING: &str = "Ctrl+Shift+T";
+/// Fixed binding label for double Ctrl+C (trigger is always two presses).
+pub const DOUBLE_CTRL_C_BINDING: &str = "Ctrl+C";
+
 /// SQLite database filename under app data.
 pub const DB_FILENAME: &str = "langnext.sqlite3";
 /// Rotating pre-migration snapshot directory under app data.

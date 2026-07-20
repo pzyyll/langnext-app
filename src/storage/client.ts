@@ -16,6 +16,7 @@ import type {
   ProviderInstanceDto,
   ProviderInstanceWrite,
   ProviderModelDto,
+  ShortcutDefinition,
   SyncModelsResult,
   TranslateInput,
   TranslateResult,
@@ -159,6 +160,10 @@ export async function setAppTheme(theme: "light" | "dark" | null): Promise<AppSe
 
 export async function setAppUiLanguage(uiLanguage: string): Promise<AppSettingsDto> {
   return invoke("set_app_ui_language", { uiLanguage });
+}
+
+export async function setAppShortcuts(shortcuts: ShortcutDefinition[]): Promise<AppSettingsDto> {
+  return invoke("set_app_shortcuts", { shortcuts });
 }
 
 export async function exportConfiguration(): Promise<ConfigurationExport> {
