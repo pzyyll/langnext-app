@@ -7,7 +7,7 @@ import { cn } from "../lib/cn";
 const SCRAMBLE_GLYPHS = "░▒▓█╱╲╳";
 
 /** How many rolling glyphs trail the streamed text. */
-const SCRAMBLE_TAIL_LENGTH = 4;
+const SCRAMBLE_TAIL_LENGTH = 1;
 
 /** Target animation frame interval for the rolling glyph tail. */
 const SCRAMBLE_FRAME_MS = 1000 / 24;
