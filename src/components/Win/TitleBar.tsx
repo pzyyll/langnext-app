@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Button } from "@base-ui/react/button";
 import { useTranslation } from "react-i18next";
 import IconSvgsLnb from "~icons/svgs/lnb";
 import IconMaterialSymbolsLightClarifyOutlineSharp from "~icons/material-symbols-light/clarify-outline-sharp";
@@ -14,6 +13,7 @@ import IconClarityWindowMaxLine from "~icons/clarity/window-max-line";
 import IconClarityWindowRestoreLine from "~icons/clarity/window-restore-line";
 import IconClose from "~icons/clarity/close-line";
 import { logger } from "../../logger";
+import { IconButton } from "../IconButton";
 
 export type TitleBarProps = {
   title?: string;
@@ -39,9 +39,6 @@ const controlButtonClassName =
 
 const closeButtonClassName =
   "group inline-flex h-full min-h-0 min-w-10 cursor-default items-center justify-center border-0 bg-transparent px-2 text-on-surface select-none hover:bg-error hover:text-on-error active:bg-error active:text-on-error";
-
-const sidebarToggleClassName =
-  "inline-flex size-6 shrink-0 cursor-default items-center justify-center rounded-none border-0 bg-transparent text-on-surface select-none hover:bg-surface-2 active:bg-surface-3 focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface";
 
 export function TitleBar({
   title,
@@ -127,17 +124,16 @@ export function TitleBar({
     <div className={`relative z-50 flex h-titlebar-height shrink-0 border-b border-outline bg-surface ${className}`}>
       <div className="flex h-full shrink-0 items-center gap-1 pl-2">
         {showSidebarToggle ? (
-          <Button
-            type="button"
-            className={sidebarToggleClassName}
+          <IconButton
+            // Flip the button, not the SVG: IconButton applies hover scale on [&_svg],
+            // and a second scale on the same node would replace the mirror transform.
+            className={sidebarOpen ? undefined : "-scale-x-100"}
             aria-label={sidebarOpen ? t("titlebar.collapseSidebar") : t("titlebar.expandSidebar")}
             aria-pressed={sidebarOpen}
             onClick={onSidebarToggle}
           >
-            <IconMaterialSymbolsLightClarifyOutlineSharp
-              className={`pointer-events-none size-4 ${sidebarOpen ? "" : "-scale-x-100"}`}
-            />
-          </Button>
+            <IconMaterialSymbolsLightClarifyOutlineSharp className="pointer-events-none" />
+          </IconButton>
         ) : null}
         {leading}
       </div>

@@ -1086,10 +1086,7 @@ function TranslatePage() {
             onSwap={swapLanguages}
           />
 
-          <div
-            ref={languagePopupBoundsRef}
-            className="grid min-h-0 flex-1 grid-cols-1 gap-gutter lg:grid-cols-2"
-          >
+          <div ref={languagePopupBoundsRef} className="grid min-h-0 flex-1 grid-cols-1 gap-gutter lg:grid-cols-2">
             {/* Source pane */}
             <section
               className="shadow-frame flex min-h-64 flex-col border border-outline bg-surface-container-lowest lg:min-h-0"

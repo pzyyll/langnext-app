@@ -1,7 +1,6 @@
 // ABOUTME: Left-rail workspace list for the main Translate page.
 // ABOUTME: Select, create, rename, delete, drag-reorder, and collapse the rail.
-import { useEffect, useRef, useState } from "react";
-import { Button } from "@base-ui/react/button";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { DragDropProvider } from "@dnd-kit/react";
 import { isSortable, useSortable } from "@dnd-kit/react/sortable";
 import { useTranslation } from "react-i18next";
@@ -10,7 +9,7 @@ import IconMaterialSymbolsLightClose from "~icons/material-symbols-light/close";
 import IconMaterialSymbolsLightLeftPanelClose from "~icons/material-symbols-light/left-panel-close";
 import IconMaterialSymbolsLightLeftPanelOpen from "~icons/material-symbols-light/left-panel-open";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
-import { iconButtonClassName } from "../../components/ui";
+import { IconButton } from "../../components/IconButton";
 import { cn } from "../../lib/cn";
 import { MAX_TRANSLATE_WORKSPACES, MAX_WORKSPACE_NAME_LENGTH, type TranslateWorkspace } from "./-workspaces";
 
@@ -34,11 +33,22 @@ const railExpandedMinWidthClassName = "min-w-48";
 const railWidthTransitionClassName = "transition-[width] duration-200 ease-out motion-reduce:transition-none";
 const railContentFadeClassName = "transition-opacity duration-150 ease-out motion-reduce:transition-none";
 
+/** Slightly longer than CSS channel-exit (120ms) so missing animationend never sticks. */
+const WORKSPACE_EXIT_FALLBACK_MS = 200;
+/** Slightly longer than CSS channel-enter (150ms) to clear enter class. */
+const WORKSPACE_ENTER_FALLBACK_MS = 250;
+
+function prefersReducedMotion(): boolean {
+  return typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
 function SortableWorkspaceRow({
   workspace,
   index,
   selected,
   disabled,
+  entering,
+  exiting,
   isEditing,
   draftName,
   inputRef,
@@ -48,11 +58,15 @@ function SortableWorkspaceRow({
   onCommitRename,
   onCancelRename,
   onRequestDelete,
+  onEnterComplete,
+  onExitComplete,
 }: {
   workspace: TranslateWorkspace;
   index: number;
   selected: boolean;
   disabled: boolean;
+  entering: boolean;
+  exiting: boolean;
   isEditing: boolean;
   draftName: string;
   inputRef: React.RefObject<HTMLInputElement | null>;
@@ -62,34 +76,105 @@ function SortableWorkspaceRow({
   onCommitRename: () => void;
   onCancelRename: () => void;
   onRequestDelete: () => void;
+  onEnterComplete: (id: string) => void;
+  onExitComplete: (id: string) => void;
 }) {
   const { t } = useTranslation();
   const { ref, handleRef } = useSortable({
     id: workspace.id,
     index,
-    disabled: disabled || isEditing,
+    disabled: disabled || isEditing || exiting,
   });
+
+  const exitDoneRef = useRef(false);
+  const enterDoneRef = useRef(false);
+
+  useEffect(() => {
+    exitDoneRef.current = false;
+    if (!exiting) return;
+
+    const finish = () => {
+      if (exitDoneRef.current) return;
+      exitDoneRef.current = true;
+      onExitComplete(workspace.id);
+    };
+
+    // No animation event when reduced motion disables CSS animation.
+    if (prefersReducedMotion()) {
+      finish();
+      return;
+    }
+
+    const timer = window.setTimeout(finish, WORKSPACE_EXIT_FALLBACK_MS);
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [exiting, onExitComplete, workspace.id]);
+
+  useEffect(() => {
+    enterDoneRef.current = false;
+    if (!entering || exiting) return;
+
+    const finish = () => {
+      if (enterDoneRef.current) return;
+      enterDoneRef.current = true;
+      onEnterComplete(workspace.id);
+    };
+
+    if (prefersReducedMotion()) {
+      finish();
+      return;
+    }
+
+    const timer = window.setTimeout(finish, WORKSPACE_ENTER_FALLBACK_MS);
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [entering, exiting, onEnterComplete, workspace.id]);
+
+  const animationClass = exiting
+    ? "animate-channel-exit motion-reduce:animate-none"
+    : entering
+      ? "animate-channel-enter motion-reduce:animate-none"
+      : "";
 
   return (
     <li ref={ref} role="option" aria-selected={selected}>
       <div
         className={cn(
           "group flex items-center gap-0.5 border-l-4 py-1.5 pr-1 pl-0.5 transition-colors",
+          animationClass,
           selected
             ? "border-tertiary bg-surface-container-low"
             : "border-transparent hover:bg-surface-container-highest",
-          disabled ? "opacity-70" : "",
+          disabled && !exiting ? "opacity-70" : "",
+          exiting ? "pointer-events-none" : "",
         )}
+        onAnimationEnd={(event) => {
+          if (event.target !== event.currentTarget) return;
+          const name = event.animationName;
+          if (exiting && name.includes("channel-exit")) {
+            if (exitDoneRef.current) return;
+            exitDoneRef.current = true;
+            onExitComplete(workspace.id);
+            return;
+          }
+          if (entering && !exiting && name.includes("channel-enter")) {
+            if (enterDoneRef.current) return;
+            enterDoneRef.current = true;
+            onEnterComplete(workspace.id);
+          }
+        }}
       >
         <button
           ref={handleRef}
           type="button"
           aria-label={t("translate.workspace.reorderAria", { name: workspace.name })}
-          disabled={disabled || isEditing}
+          disabled={disabled || isEditing || exiting}
           className={cn(
             "w-5 shrink-0 cursor-grab text-center text-[10px] leading-none text-neutral active:cursor-grabbing",
             selected ? "text-on-surface" : "group-hover:text-on-surface",
-            (disabled || isEditing) && "cursor-default opacity-40",
+            (disabled || isEditing || exiting) && "cursor-default opacity-40",
           )}
         >
           <span aria-hidden="true">⋮⋮</span>
@@ -125,7 +210,7 @@ function SortableWorkspaceRow({
           <button
             type="button"
             className="min-w-0 flex-1 truncate py-0.5 text-left text-body-tight text-on-surface"
-            disabled={disabled}
+            disabled={disabled || exiting}
             title={workspace.name}
             onClick={() => {
               if (!selected) {
@@ -140,22 +225,20 @@ function SortableWorkspaceRow({
           </button>
         )}
 
-        <Button
-          type="button"
+        <IconButton
           className={cn(
-            iconButtonClassName,
-            "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100",
+            "[&_svg]:size-3.5 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100",
             selected && "opacity-100",
           )}
           aria-label={t("translate.workspace.deleteAria", { name: workspace.name })}
-          disabled={disabled}
+          disabled={disabled || exiting}
           onClick={(event) => {
             event.stopPropagation();
             onRequestDelete();
           }}
         >
-          <IconMaterialSymbolsLightClose className="size-3.5" aria-hidden />
-        </Button>
+          <IconMaterialSymbolsLightClose aria-hidden />
+        </IconButton>
       </div>
     </li>
   );
@@ -177,6 +260,18 @@ export function WorkspaceSidebar({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftName, setDraftName] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<TranslateWorkspace | null>(null);
+  /** IDs playing exit animation; kept in the list until animation ends, then deleted. */
+  const [exitingWorkspaceIds, setExitingWorkspaceIds] = useState<ReadonlySet<string>>(() => new Set());
+  /** IDs inserted via create; play enter animation. */
+  const [enteringWorkspaceIds, setEnteringWorkspaceIds] = useState<ReadonlySet<string>>(() => new Set());
+  /** Sorted id fingerprint so first paint does not enter-animate existing rows. */
+  const [trackedWorkspaceIdsKey, setTrackedWorkspaceIdsKey] = useState(() =>
+    workspaces
+      .map((workspace) => workspace.id)
+      .slice()
+      .sort()
+      .join("\0"),
+  );
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -186,12 +281,113 @@ export function WorkspaceSidebar({
     }
   }, [editingId]);
 
+  // Adjust enter state during render when the workspace id set changes (React-supported).
+  const workspaceIdsKey = workspaces
+    .map((workspace) => workspace.id)
+    .slice()
+    .sort()
+    .join("\0");
+  if (workspaceIdsKey !== trackedWorkspaceIdsKey) {
+    const previousIds = new Set(trackedWorkspaceIdsKey.length > 0 ? trackedWorkspaceIdsKey.split("\0") : []);
+    const addedIds: string[] = [];
+    for (const workspace of workspaces) {
+      if (!previousIds.has(workspace.id)) {
+        addedIds.push(workspace.id);
+      }
+    }
+    setTrackedWorkspaceIdsKey(workspaceIdsKey);
+    if (addedIds.length > 0) {
+      setEnteringWorkspaceIds((current) => {
+        const next = new Set(current);
+        for (const id of addedIds) {
+          next.add(id);
+        }
+        return next;
+      });
+    }
+  }
+
+  const clearEnteringWorkspace = useCallback((id: string) => {
+    setEnteringWorkspaceIds((current) => {
+      if (!current.has(id)) return current;
+      const next = new Set(current);
+      next.delete(id);
+      return next;
+    });
+  }, []);
+
+  const finalizeRemoveWorkspace = useCallback(
+    (id: string) => {
+      setExitingWorkspaceIds((current) => {
+        if (!current.has(id)) return current;
+        const next = new Set(current);
+        next.delete(id);
+        return next;
+      });
+      setEnteringWorkspaceIds((current) => {
+        if (!current.has(id)) return current;
+        const next = new Set(current);
+        next.delete(id);
+        return next;
+      });
+      // Delete only after exit animation so the row stays in place.
+      onDelete(id);
+    },
+    [onDelete],
+  );
+
+  const beginWorkspaceExit = useCallback(
+    (workspace: TranslateWorkspace) => {
+      setExitingWorkspaceIds((current) => {
+        if (current.has(workspace.id)) return current;
+        const next = new Set(current);
+        next.add(workspace.id);
+        return next;
+      });
+      setEnteringWorkspaceIds((current) => {
+        if (!current.has(workspace.id)) return current;
+        const next = new Set(current);
+        next.delete(workspace.id);
+        return next;
+      });
+      if (editingId === workspace.id) {
+        setEditingId(null);
+        setDraftName("");
+      }
+      // Switch content immediately; the row itself stays until exit animation ends.
+      if (workspace.id === activeWorkspaceId) {
+        const index = workspaces.findIndex((item) => item.id === workspace.id);
+        let target: TranslateWorkspace | null = null;
+        for (let i = index - 1; i >= 0; i -= 1) {
+          const item = workspaces[i];
+          if (item && !exitingWorkspaceIds.has(item.id)) {
+            target = item;
+            break;
+          }
+        }
+        if (!target) {
+          for (let i = index + 1; i < workspaces.length; i += 1) {
+            const item = workspaces[i];
+            if (item && item.id !== workspace.id && !exitingWorkspaceIds.has(item.id)) {
+              target = item;
+              break;
+            }
+          }
+        }
+        if (target) {
+          onSelect(target.id);
+        }
+      }
+    },
+    [activeWorkspaceId, editingId, exitingWorkspaceIds, onSelect, workspaces],
+  );
+
   const atLimit = workspaces.length >= MAX_TRANSLATE_WORKSPACES;
   const canCreate = !disabled && !atLimit;
   const activeWorkspace = workspaces.find((ws) => ws.id === activeWorkspaceId) ?? workspaces[0] ?? null;
 
   function beginRename(workspace: TranslateWorkspace) {
-    if (disabled) {
+    if (disabled || exitingWorkspaceIds.has(workspace.id)) {
       return;
     }
     setEditingId(workspace.id);
@@ -241,9 +437,7 @@ export function WorkspaceSidebar({
             <span className="min-w-0 flex-1 truncate pl-1 text-label-sm font-bold tracking-wide text-on-surface uppercase">
               {t("translate.workspace.title")}
             </span>
-            <Button
-              type="button"
-              className={iconButtonClassName}
+            <IconButton
               aria-label={t("translate.workspace.collapseAria")}
               aria-expanded={true}
               tabIndex={collapsed ? -1 : undefined}
@@ -253,11 +447,9 @@ export function WorkspaceSidebar({
                 onCollapsedChange(true);
               }}
             >
-              <IconMaterialSymbolsLightLeftPanelClose className="size-4" aria-hidden />
-            </Button>
-            <Button
-              type="button"
-              className={iconButtonClassName}
+              <IconMaterialSymbolsLightLeftPanelClose aria-hidden />
+            </IconButton>
+            <IconButton
               aria-label={t("translate.workspace.addAria")}
               disabled={!canCreate}
               tabIndex={collapsed ? -1 : undefined}
@@ -266,8 +458,8 @@ export function WorkspaceSidebar({
                 onCreate();
               }}
             >
-              <IconMaterialSymbolsLightAdd className="size-4" aria-hidden />
-            </Button>
+              <IconMaterialSymbolsLightAdd aria-hidden />
+            </IconButton>
           </div>
 
           <DragDropProvider
@@ -289,7 +481,12 @@ export function WorkspaceSidebar({
                 return;
               }
               next.splice(index, 0, removed);
-              onReorder(next.map((ws) => ws.id));
+              // Skip rows mid-exit so a pending delete does not get reordered into the store.
+              const persistIds = next.map((ws) => ws.id).filter((id) => !exitingWorkspaceIds.has(id));
+              if (persistIds.length === 0) {
+                return;
+              }
+              onReorder(persistIds);
             }}
           >
             <ul
@@ -307,6 +504,8 @@ export function WorkspaceSidebar({
                     index={index}
                     selected={selected}
                     disabled={disabled || collapsed}
+                    entering={enteringWorkspaceIds.has(workspace.id)}
+                    exiting={exitingWorkspaceIds.has(workspace.id)}
                     isEditing={isEditing}
                     draftName={draftName}
                     inputRef={inputRef}
@@ -322,6 +521,8 @@ export function WorkspaceSidebar({
                     onRequestDelete={() => {
                       setDeleteTarget(workspace);
                     }}
+                    onEnterComplete={clearEnteringWorkspace}
+                    onExitComplete={finalizeRemoveWorkspace}
                   />
                 );
               })}
@@ -339,9 +540,7 @@ export function WorkspaceSidebar({
           aria-hidden={!collapsed}
           inert={!collapsed}
         >
-          <Button
-            type="button"
-            className={iconButtonClassName}
+          <IconButton
             aria-label={t("translate.workspace.expandAria")}
             aria-expanded={false}
             tabIndex={collapsed ? undefined : -1}
@@ -350,8 +549,8 @@ export function WorkspaceSidebar({
               onCollapsedChange(false);
             }}
           >
-            <IconMaterialSymbolsLightLeftPanelOpen className="size-4" aria-hidden />
-          </Button>
+            <IconMaterialSymbolsLightLeftPanelOpen aria-hidden />
+          </IconButton>
           {activeWorkspace ? (
             <span
               className="mt-2 max-h-40 w-full truncate px-1 text-center text-[10px] font-bold tracking-wide text-neutral uppercase [writing-mode:vertical-rl]"
@@ -375,9 +574,11 @@ export function WorkspaceSidebar({
         confirmText={t("common.delete")}
         danger
         onConfirm={() => {
-          if (deleteTarget) {
-            onDelete(deleteTarget.id);
+          if (!deleteTarget) {
+            return;
           }
+          // onDelete runs in onExitComplete after the in-place exit animation.
+          beginWorkspaceExit(deleteTarget);
         }}
       />
     </>

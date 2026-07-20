@@ -10,6 +10,7 @@ import { useTranslation } from "react-i18next";
 import { Badge } from "../../components/Badge";
 import { useToast } from "../../components/toast/useToast";
 import { outlineButtonClassName } from "../../components/ui";
+import { cn } from "../../lib/cn";
 import { modelKeys, providerKeys } from "../../query/keys";
 import { providerListOptions } from "../../query/options";
 import { applyProviderReorderOrder, shouldRollbackReorder } from "../../query/reorderProvidersCache";
@@ -27,8 +28,28 @@ const CHANNEL_EXIT_FALLBACK_MS = 200;
 /** Slightly longer than CSS channel-enter (150ms) to clear enter class. */
 const CHANNEL_ENTER_FALLBACK_MS = 250;
 
+type ExitingProviderEntry = {
+  provider: ProviderInstanceDto;
+  /** Visual index at exit start (includes other mid-exit rows). */
+  index: number;
+};
+
 function prefersReducedMotion(): boolean {
   return typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
+/** Merge live query rows with exiting snapshots at their captured visual indices. */
+function mergeProvidersWithExiting(
+  fromQuery: readonly ProviderInstanceDto[],
+  exiting: ReadonlyMap<string, ExitingProviderEntry>,
+): ProviderInstanceDto[] {
+  const byId = new Map(fromQuery.map((item) => [item.id, item]));
+  const list = fromQuery.slice();
+  const orphans = [...exiting.entries()].filter(([id]) => !byId.has(id)).sort((a, b) => a[1].index - b[1].index);
+  for (const [, { provider, index }] of orphans) {
+    list.splice(Math.min(index, list.length), 0, provider);
+  }
+  return list;
 }
 
 function SortableChannelItem({
@@ -110,34 +131,17 @@ function SortableChannelItem({
       ? "animate-channel-enter motion-reduce:animate-none"
       : "";
 
-  // Row-level surface so drag handle + link share hover / selected chrome.
-  const rowClass = active
-    ? `group flex bg-surface-2${exiting ? " pointer-events-none" : ""}`
-    : `group flex hover:bg-surface-2${exiting ? " pointer-events-none" : ""}`;
-
-  const handleClass = active
-    ? "w-6 shrink-0 cursor-grab text-on-surface active:cursor-grabbing"
-    : "w-6 shrink-0 cursor-grab text-neutral group-hover:text-on-surface active:cursor-grabbing";
-
-  const linkClass = active
-    ? `flex min-w-0 flex-1 items-center gap-2 rounded-none px-2 py-2 text-body-tight font-bold text-on-surface ${animationClass}`
-    : `flex min-w-0 flex-1 items-center gap-2 rounded-none px-2 py-2 text-body-tight text-neutral group-hover:text-on-surface ${animationClass}`;
-
   return (
-    <li ref={ref} className={rowClass}>
-      <button
-        ref={handleRef}
-        type="button"
-        aria-label={t("models.reorderAria", { name: provider.displayName })}
-        className={handleClass}
-      >
-        <span aria-hidden="true">⋮⋮</span>
-      </button>
-      <Link
-        draggable={false}
-        to="/models/$providerId"
-        params={{ providerId: provider.id }}
-        className={linkClass}
+    <li ref={ref} role="option" aria-selected={active}>
+      <div
+        className={cn(
+          "group flex items-center gap-0.5 border-l-4 py-1.5 pr-1 pl-0.5 transition-colors",
+          animationClass,
+          active
+            ? "border-tertiary bg-surface-container-low"
+            : "border-transparent hover:bg-surface-container-highest",
+          exiting && "pointer-events-none",
+        )}
         onAnimationEnd={(event) => {
           if (event.target !== event.currentTarget) return;
           const name = event.animationName;
@@ -154,9 +158,32 @@ function SortableChannelItem({
           }
         }}
       >
-        <span className="min-w-0 flex-1 truncate">{provider.displayName}</span>
-        {provider.enabled ? <Badge tone="accent">{t("common.on")}</Badge> : null}
-      </Link>
+        <button
+          ref={handleRef}
+          type="button"
+          aria-label={t("models.reorderAria", { name: provider.displayName })}
+          disabled={exiting || reorderDisabled}
+          className={cn(
+            "w-5 shrink-0 cursor-grab text-center text-[10px] leading-none text-neutral active:cursor-grabbing",
+            active ? "text-on-surface" : "group-hover:text-on-surface",
+            (exiting || reorderDisabled) && "cursor-default opacity-40",
+          )}
+        >
+          <span aria-hidden="true">⋮⋮</span>
+        </button>
+        <Link
+          draggable={false}
+          to="/models/$providerId"
+          params={{ providerId: provider.id }}
+          className="flex min-w-0 flex-1 items-center gap-1 py-0.5 text-left text-body-tight text-on-surface"
+          title={provider.displayName}
+        >
+          <span className={cn("min-w-0 flex-1 truncate", active ? "font-bold" : "font-normal")}>
+            {provider.displayName}
+          </span>
+          {provider.enabled ? <Badge tone="accent">{t("common.on")}</Badge> : null}
+        </Link>
+      </div>
     </li>
   );
 }
@@ -175,25 +202,20 @@ export function ModelsLayout() {
     providersQuery.error != null ? getIpcErrorMessage(providersQuery.error, t("models.loadChannelsFailed")) : null;
 
   const [addOpen, setAddOpen] = useState(false);
-  /** Snapshots of providers leaving the list so exit animation can finish. */
-  const [exitingProviders, setExitingProviders] = useState<Map<string, ProviderInstanceDto>>(() => new Map());
+  /** Snapshots + visual index so exit animation plays in-place (not at list end). */
+  const [exitingProviders, setExitingProviders] = useState<Map<string, ExitingProviderEntry>>(() => new Map());
+  /** Mirror updated only in exit callbacks (not during render) for sync index capture. */
+  const exitingProvidersRef = useRef(exitingProviders);
   /** IDs inserted via create; play enter animation. */
   const [enteringProviderIds, setEnteringProviderIds] = useState<ReadonlySet<string>>(() => new Set());
   /** Monotonic epoch so a stale reorder error cannot roll back a newer order. */
   const reorderEpochRef = useRef(0);
 
-  // Merge query data with exiting snapshots (records no longer in cache).
-  const providers = useMemo(() => {
-    const fromQuery = providersQuery.data ?? [];
-    const byId = new Map(fromQuery.map((item) => [item.id, item]));
-    const list = fromQuery.slice();
-    for (const [id, snapshot] of exitingProviders) {
-      if (!byId.has(id)) {
-        list.push(snapshot);
-      }
-    }
-    return list;
-  }, [providersQuery.data, exitingProviders]);
+  // Merge query data with exiting snapshots at their captured visual indices.
+  const providers = useMemo(
+    () => mergeProvidersWithExiting(providersQuery.data ?? [], exitingProviders),
+    [providersQuery.data, exitingProviders],
+  );
 
   const exitingProviderIds = useMemo(() => new Set(exitingProviders.keys()), [exitingProviders]);
 
@@ -220,28 +242,48 @@ export function ModelsLayout() {
     });
   }, []);
 
-  const beginProviderExit = useCallback((provider: ProviderInstanceDto) => {
-    setExitingProviders((current) => {
-      if (current.has(provider.id)) return current;
-      const next = new Map(current);
-      next.set(provider.id, provider);
-      return next;
-    });
-    setEnteringProviderIds((current) => {
-      if (!current.has(provider.id)) return current;
-      const next = new Set(current);
-      next.delete(provider.id);
-      return next;
-    });
-  }, []);
+  const beginProviderExit = useCallback(
+    (provider: ProviderInstanceDto) => {
+      const currentExiting = exitingProvidersRef.current;
+      if (currentExiting.has(provider.id)) {
+        return;
+      }
+      // Capture visual index synchronously before optimistic cache removal.
+      const fromQuery = queryClient.getQueryData<ProviderInstanceDto[]>(providerKeys.list()) ?? [];
+      const display = mergeProvidersWithExiting(fromQuery, currentExiting);
+      const index = display.findIndex((item) => item.id === provider.id);
+      const nextExiting = new Map(currentExiting);
+      nextExiting.set(provider.id, {
+        provider,
+        index: index >= 0 ? index : display.length,
+      });
+      exitingProvidersRef.current = nextExiting;
+      setExitingProviders(nextExiting);
+
+      // Drop from cache immediately so the row is driven only by the exiting snapshot.
+      queryClient.setQueryData<ProviderInstanceDto[]>(providerKeys.list(), (previous) => {
+        if (!previous) return previous;
+        const next = previous.filter((item) => item.id !== provider.id);
+        return next.length === previous.length ? previous : next;
+      });
+      setEnteringProviderIds((current) => {
+        if (!current.has(provider.id)) return current;
+        const next = new Set(current);
+        next.delete(provider.id);
+        return next;
+      });
+    },
+    [queryClient],
+  );
 
   const finalizeRemoveProvider = useCallback((id: string) => {
-    setExitingProviders((current) => {
-      if (!current.has(id)) return current;
-      const next = new Map(current);
-      next.delete(id);
-      return next;
-    });
+    const currentExiting = exitingProvidersRef.current;
+    if (currentExiting.has(id)) {
+      const nextExiting = new Map(currentExiting);
+      nextExiting.delete(id);
+      exitingProvidersRef.current = nextExiting;
+      setExitingProviders(nextExiting);
+    }
     setEnteringProviderIds((current) => {
       if (!current.has(id)) return current;
       const next = new Set(current);
@@ -300,20 +342,25 @@ export function ModelsLayout() {
   return (
     <ModelsContext.Provider value={contextValue}>
       <div className={`flex min-h-0 ${LAYOUT_HEIGHT_CLASS} overflow-hidden bg-background`}>
-        <aside className="flex w-models-rail shrink-0 flex-col border-r border-line bg-surface">
-          <div className="flex min-h-0 flex-1 flex-col p-gutter">
-            <div className="mb-4 shrink-0">
-              <h2 className="text-headline-sm font-bold text-on-surface">{t("models.channels")}</h2>
-            </div>
+        <aside
+          className="flex w-models-rail shrink-0 flex-col overflow-hidden border-r border-outline bg-surface-container-lowest"
+          aria-label={t("models.channels")}
+        >
+          <div className="flex h-12 shrink-0 items-center border-b border-outline bg-surface-container-low px-1">
+            <span className="min-w-0 flex-1 truncate pl-1 text-label-sm font-bold tracking-wide text-on-surface uppercase">
+              {t("models.channels")}
+            </span>
+          </div>
 
+          <div className="flex min-h-0 flex-1 flex-col">
             {providersLoading ? (
-              <p className="text-body-tight text-neutral" aria-live="polite">
+              <p className="px-2 py-2 text-body-tight text-neutral" aria-live="polite">
                 {t("models.loadingChannels")}
               </p>
             ) : null}
 
             {displayError ? (
-              <div className="flex flex-col gap-2" role="alert">
+              <div className="flex flex-col gap-2 px-2 py-2" role="alert">
                 <p className="text-body-tight text-error">{displayError}</p>
                 <Button
                   type="button"
@@ -328,7 +375,7 @@ export function ModelsLayout() {
             ) : null}
 
             {!providersLoading && !displayError && providers.length === 0 ? (
-              <p className="text-body-tight text-neutral">{t("models.emptyChannels")}</p>
+              <p className="px-2 py-2 text-body-tight text-neutral">{t("models.emptyChannels")}</p>
             ) : null}
 
             {!providersLoading && !displayError && providers.length > 0 ? (
@@ -356,7 +403,11 @@ export function ModelsLayout() {
                   reorderMutation.mutate(persistIds);
                 }}
               >
-                <ul className="min-h-0 flex-1 space-y-1 overflow-y-auto">
+                <ul
+                  className="min-h-0 flex-1 list-none overflow-y-auto p-0"
+                  role="listbox"
+                  aria-label={t("models.channels")}
+                >
                   {providers.map((provider, index) => (
                     <SortableChannelItem
                       key={provider.id}
@@ -375,7 +426,7 @@ export function ModelsLayout() {
             ) : null}
           </div>
 
-          <div className="shrink-0 border-t border-line p-gutter">
+          <div className="shrink-0 border-t border-outline p-gutter">
             <Button
               type="button"
               className={`${outlineButtonClassName} w-full bg-surface-2 hover:not-data-disabled:bg-surface-3`}
