@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
-import { Button } from "@base-ui/react/button";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useTranslation } from "react-i18next";
 import IconMaterialSymbolsLightClose from "~icons/material-symbols-light/close";
@@ -13,9 +12,9 @@ import IconMaterialSymbolsLightMarkdownOutline from "~icons/material-symbols-lig
 import IconMaterialSymbolsLightStopCircleOutline from "~icons/material-symbols-light/stop-circle-outline";
 import IconMaterialSymbolsLightVolumeUp from "~icons/material-symbols-light/volume-up";
 import IconPepiconsPrintEnter from "~icons/pepicons-print/enter";
+import { IconButton } from "../../components/IconButton";
 import { MarkdownOutput } from "../../components/markdown/MarkdownOutput";
 import { useToast } from "../../components/toast/useToast";
-import { iconButtonClassName } from "../../components/ui";
 import { SelectField } from "../../components/SelectField";
 import { TextAutosize, TextAutosizeContent } from "../../components/TextAutosize";
 import { TextLoading } from "../../components/TextLoading";
@@ -1089,7 +1088,7 @@ function TranslatePage() {
 
           <div
             ref={languagePopupBoundsRef}
-            className="grid min-h-0 flex-1 grid-cols-1 gap-gutter overflow-hidden lg:grid-cols-2"
+            className="grid min-h-0 flex-1 grid-cols-1 gap-gutter lg:grid-cols-2"
           >
             {/* Source pane */}
             <section
@@ -1125,38 +1124,26 @@ function TranslatePage() {
                 {charCount > 0 ? <span className="text-label-sm text-neutral tabular-nums">{charCount}</span> : null}
                 <div className="flex-1" />
                 {sourceText ? (
-                  <Button
-                    type="button"
-                    className={`${iconButtonClassName} group`}
+                  <IconButton
                     aria-label={t("translate.clearSource")}
                     onClick={() => {
                       void clearSource();
                     }}
                   >
-                    <IconMaterialSymbolsLightClose
-                      className="size-4 transition-transform duration-150 group-hover:scale-110"
-                      aria-hidden
-                    />
-                  </Button>
+                    <IconMaterialSymbolsLightClose aria-hidden />
+                  </IconButton>
                 ) : null}
                 {isTranslating ? (
-                  <Button
-                    type="button"
-                    className={`${iconButtonClassName} group`}
+                  <IconButton
                     aria-label={t("translate.stopAria")}
                     onClick={() => {
                       void stopTranslation();
                     }}
                   >
-                    <IconMaterialSymbolsLightStopCircleOutline
-                      className="size-4 transition-transform duration-150 group-hover:scale-110"
-                      aria-hidden
-                    />
-                  </Button>
+                    <IconMaterialSymbolsLightStopCircleOutline aria-hidden />
+                  </IconButton>
                 ) : (
-                  <Button
-                    type="button"
-                    className={`${iconButtonClassName} group`}
+                  <IconButton
                     disabled={!canTranslate}
                     focusableWhenDisabled
                     aria-label={t("translate.translate")}
@@ -1164,11 +1151,8 @@ function TranslatePage() {
                       void handleTranslate();
                     }}
                   >
-                    <IconPepiconsPrintEnter
-                      className="size-4 transition-transform duration-150 group-hover:scale-110"
-                      aria-hidden
-                    />
-                  </Button>
+                    <IconPepiconsPrintEnter aria-hidden />
+                  </IconButton>
                 )}
               </div>
             </section>
@@ -1221,9 +1205,7 @@ function TranslatePage() {
                   </span>
                 ) : null}
                 <div className="flex-1" />
-                <Button
-                  type="button"
-                  className={iconButtonClassName}
+                <IconButton
                   aria-label={isMarkdownView ? t("translate.plainText") : t("translate.markdownPreview")}
                   aria-pressed={isMarkdownView}
                   onClick={() => {
@@ -1231,25 +1213,23 @@ function TranslatePage() {
                   }}
                 >
                   {isMarkdownView ? (
-                    <IconMaterialSymbolsLightMarkdown className="size-4" aria-hidden />
+                    <IconMaterialSymbolsLightMarkdown aria-hidden />
                   ) : (
-                    <IconMaterialSymbolsLightMarkdownOutline className="size-4" aria-hidden />
+                    <IconMaterialSymbolsLightMarkdownOutline aria-hidden />
                   )}
-                </Button>
-                <Button
-                  type="button"
-                  className={iconButtonClassName}
+                </IconButton>
+                <IconButton
                   aria-label={copyFeedback ? t("translate.copied") : t("translate.copy")}
                   onClick={() => {
                     void copyOutput();
                   }}
                   disabled={!outputText || !!errorMessage}
                 >
-                  <IconMaterialSymbolsLightContentCopy className="size-4" aria-hidden />
-                </Button>
-                <Button type="button" className={iconButtonClassName} aria-label={t("translate.speak")} disabled>
-                  <IconMaterialSymbolsLightVolumeUp className="size-4" aria-hidden />
-                </Button>
+                  <IconMaterialSymbolsLightContentCopy aria-hidden />
+                </IconButton>
+                <IconButton aria-label={t("translate.speak")} disabled>
+                  <IconMaterialSymbolsLightVolumeUp aria-hidden />
+                </IconButton>
               </div>
             </section>
           </div>

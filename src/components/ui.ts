@@ -15,9 +15,20 @@ export const primaryButtonClassName =
 export const dangerButtonClassName =
   "inline-flex h-control-height items-center justify-center gap-2 rounded-none border border-error bg-error px-4 text-body-tight leading-none whitespace-nowrap font-bold text-on-error select-none hover:not-data-disabled:opacity-90 active:not-data-disabled:opacity-80 focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface data-disabled:border-disabled data-disabled:bg-surface-3 data-disabled:text-disabled disabled:border-disabled disabled:bg-surface-3 disabled:text-disabled";
 
-/** Ghost icon button for inline actions such as renaming */
+/**
+ * Ghost icon button for inline actions such as renaming.
+ * Hover uses surface-container (not surface-2) so the fill stays visible on both
+ * surface-container-lowest and surface-container-low toolbars — surface-2 aliases the latter.
+ */
 export const iconButtonClassName =
-  "inline-flex size-7 shrink-0 cursor-default items-center justify-center rounded-md border-0 bg-transparent text-neutral hover:bg-surface-2 hover:text-on-surface active:bg-surface-3 focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface data-disabled:text-disabled disabled:text-disabled";
+  "group/icon-btn inline-flex size-7 shrink-0 cursor-default items-center justify-center rounded-md border-0 bg-transparent text-neutral hover:bg-surface-container hover:text-on-surface active:bg-surface-container-high focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface data-disabled:text-disabled disabled:text-disabled";
+
+/**
+ * Manual icon styles for raw `Button` + `iconButtonClassName` call sites.
+ * Prefer `IconButton` — it applies the same styles to SVG children automatically.
+ */
+export const iconButtonIconClassName =
+  "size-4 shrink-0 transition-transform duration-150 group-hover/icon-btn:scale-110";
 
 export const iconButtonCircleClassName = cn(iconButtonClassName, "rounded-full");
 

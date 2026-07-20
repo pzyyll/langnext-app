@@ -42,6 +42,16 @@ const MIN_ROW_UNIT_PX = 16;
 const EMPTY_HEIGHT_INSET_PX = 8;
 
 /**
+ * Temporary height used before reading `scrollHeight`.
+ * `auto` keeps the previous explicit height as a floor inside overflow shells, so shrink
+ * (clear / delete) would leave a tall field and a stuck scrollbar. `0px` forces a real measure.
+ */
+const TEXTAREA_MEASURE_HEIGHT = "0px";
+
+/** Treat sub-pixel residual overflow as "fits" when deciding whether to pin scrollTop. */
+const VIEWPORT_OVERFLOW_SLACK_PX = 1;
+
+/**
  * Parse a computed length like `"6rem"` / `"96px"` to CSS pixels.
  * Returns 0 for `auto`, `%`, or unparsable values (caller falls back to natural height).
  */
@@ -68,11 +78,12 @@ function parseComputedPx(value: string): number {
 const FONT_FIT_SLACK_PX = 2;
 
 /** Hidden measure node: mirrors content box metrics without affecting layout. */
-const DUMMY_BASE_CLASS_NAME = "absolute top-[-9999px] invisible h-auto overflow-hidden whitespace-pre-wrap break-words";
+const DUMMY_BASE_CLASS_NAME =
+  "absolute top-[-9999px] invisible h-auto overflow-hidden whitespace-pre-wrap wrap-break-word";
 
 const TEXTAREA_BASE_CLASS_NAME =
-  // break-words: long unbroken tokens must wrap instead of expanding the shell width.
-  "w-full min-w-0 resize-none overflow-hidden break-words border-0 bg-transparent text-on-surface placeholder:text-neutral focus:outline-none disabled:text-disabled";
+  // wrap-break-word: long unbroken tokens must wrap instead of expanding the shell width.
+  "w-full min-w-0 resize-none overflow-hidden wrap-break-word border-0 bg-transparent text-on-surface placeholder:text-neutral focus:outline-none disabled:text-disabled";
 
 export type TextAutosizeLayout = "grow" | "fill";
 
@@ -432,9 +443,9 @@ function scrollAreaClassNames(isFill: boolean, className: string | undefined) {
     root: cn(isFill ? "h-full min-h-0 min-w-0 w-full" : "min-w-0 w-full", className),
     // Grow: h-auto + same min/max as shell so the box tracks content then scrolls.
     // Fill: h-full so the fixed pane is the viewport; content may overflow and scroll.
-    viewport: isFill
-      ? "h-full min-h-0 min-w-0 [scrollbar-gutter:stable]"
-      : cn("h-auto min-w-0 [scrollbar-gutter:stable]", className),
+    // Base UI renders an overlay scrollbar. Reserving a stable native gutter leaves a visible
+    // track after overflow ends, so let the viewport return to its full width when content fits.
+    viewport: isFill ? "h-full min-h-0 min-w-0" : cn("h-auto min-w-0", className),
     content: cn("min-w-0 w-full", isFill && "min-h-full"),
   };
 }
@@ -471,17 +482,28 @@ export function TextAutosize({
     return shellRef.current?.clientHeight ?? rootRef.current?.clientHeight ?? 0;
   }, []);
 
-  const resetViewportScrollIfNeeded = useCallback((nextValue: string) => {
+  const syncViewportAfterHeightChange = useCallback((nextValue: string) => {
     const viewport = shellRef.current?.querySelector<HTMLElement>("[data-scroll-viewport]");
     if (!viewport) {
       return;
     }
-    // After clear / shrink past overflow, drop residual scrollTop so the shell can collapse
-    // cleanly (otherwise a max-clamped grow box can keep looking “stuck” tall).
-    if (nextValue.length === 0 || viewport.scrollHeight <= viewport.clientHeight + 1) {
+    // Residual scrollTop after shrink can keep Base UI's overflow metrics (and the thumb)
+    // alive even when content now fits. Empty always pins top; otherwise clamp to range.
+    if (nextValue.length === 0) {
       if (viewport.scrollTop !== 0) {
         viewport.scrollTop = 0;
       }
+      return;
+    }
+    const maxScrollTop = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
+    if (maxScrollTop <= VIEWPORT_OVERFLOW_SLACK_PX) {
+      if (viewport.scrollTop !== 0) {
+        viewport.scrollTop = 0;
+      }
+      return;
+    }
+    if (viewport.scrollTop > maxScrollTop) {
+      viewport.scrollTop = maxScrollTop;
     }
   }, []);
 
@@ -491,7 +513,8 @@ export function TextAutosize({
       if (!textarea) {
         return;
       }
-      textarea.style.height = "auto";
+      // Collapse before measure so scrollHeight tracks content, not the previous explicit size.
+      textarea.style.height = TEXTAREA_MEASURE_HEIGHT;
       if (nextValue.length === 0) {
         if (isFill) {
           // Fill: shell height is fixed by the parent; pad the empty field to that pane.
@@ -507,13 +530,13 @@ export function TextAutosize({
           const fillMin = minHeightPx > 0 ? Math.max(0, minHeightPx - EMPTY_HEIGHT_INSET_PX) : naturalHeight;
           textarea.style.height = `${Math.max(naturalHeight, fillMin)}px`;
         }
-        resetViewportScrollIfNeeded(nextValue);
+        syncViewportAfterHeightChange(nextValue);
         return;
       }
       textarea.style.height = `${textarea.scrollHeight}px`;
-      resetViewportScrollIfNeeded(nextValue);
+      syncViewportAfterHeightChange(nextValue);
     },
-    [isFill, readShellHeight, resetViewportScrollIfNeeded],
+    [isFill, readShellHeight, syncViewportAfterHeightChange],
   );
 
   const text = value !== undefined ? String(value) : String(defaultValue ?? "");
@@ -722,9 +745,9 @@ export function TextAutosizeContent({
   const content = (
     <div
       ref={contentRef}
-      // break-words matches the measure dummy so long tokens wrap the same way they are measured.
+      // wrap-break-word matches the measure dummy so long tokens wrap the same way they are measured.
       className={cn(
-        "relative min-w-0 w-full break-words text-on-surface",
+        "relative min-w-0 w-full wrap-break-word text-on-surface",
         isFill && "min-h-full",
         contentClassName,
         fontSizeClass,
