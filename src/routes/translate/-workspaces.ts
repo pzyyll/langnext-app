@@ -1,10 +1,6 @@
 // ABOUTME: Translate page workspaces: per-tab presets, languages, and draft text.
 // ABOUTME: localStorage-backed store with safe normalize + migration from session prefs.
-import {
-  DEFAULT_OUTPUT_VIEW_MODE,
-  isOutputViewMode,
-  type OutputViewMode,
-} from "../../lib/output-view-mode";
+import { DEFAULT_OUTPUT_VIEW_MODE, isOutputViewMode, type OutputViewMode } from "../../lib/output-view-mode";
 import {
   isLanguageId,
   isSelectableLanguageId,

@@ -12,6 +12,7 @@ import { Switch } from "@base-ui/react/switch";
 import { useTranslation } from "react-i18next";
 import { Badge } from "../../components/Badge";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
+import { PageLayout } from "../../components/layouts/PageLayout";
 import { useToast } from "../../components/toast/useToast";
 import {
   iconButtonClassName,
@@ -57,9 +58,6 @@ import ExpandCircleDownOutlineIcon from "~icons/material-symbols/expand-circle-d
 export const Route = createFileRoute("/translate/profiles")({
   component: TranslateProfilesPage,
 });
-
-/** Viewport minus titlebar only — main shell is edge-to-edge (no outer gutter). */
-const LAYOUT_HEIGHT_CLASS = "h-[calc(100dvh-var(--spacing-titlebar-height))]";
 
 const DEFAULT_SYSTEM_TEMPLATE = `You are a professional translation engine. Translate the user's text from {{source_language}} to {{target_language}}.
 Rules:
@@ -770,18 +768,12 @@ function TranslateProfilesPage() {
   const listEmpty = !profilesLoading && !profilesError && profiles.length === 0 && !isCreating;
 
   return (
-    <div className={`flex min-h-0 flex-col overflow-hidden bg-background ${LAYOUT_HEIGHT_CLASS}`}>
-      {/* Page header */}
-      <header className="flex h-16 shrink-0 items-center justify-between gap-3 border-b border-line bg-surface px-2">
-        <div className="min-w-0">
-          <h1 className="text-headline-sm font-bold tracking-tight text-on-surface uppercase">
-            {t("translate.profiles.title")}
-          </h1>
-          <p className="text-label-sm text-neutral uppercase">{t("translate.profiles.subtitle")}</p>
-        </div>
-      </header>
-
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden lg:flex-row">
+    <>
+      <PageLayout
+        title={t("translate.profiles.title")}
+        description={t("translate.profiles.subtitle")}
+        contentClassName="flex-col overflow-hidden lg:flex-row"
+      >
         {/* Profiles rail */}
         <aside className="flex max-h-64 w-full shrink-0 flex-col border-b border-line bg-surface-2 lg:max-h-none lg:w-64 lg:border-r lg:border-b-0">
           <div className="shrink-0 border-b border-line p-3">
@@ -1509,7 +1501,7 @@ function TranslateProfilesPage() {
             </form>
           ) : null}
         </section>
-      </div>
+      </PageLayout>
 
       <ConfirmDialog
         open={deleteOpen}
@@ -1546,6 +1538,6 @@ function TranslateProfilesPage() {
           setTemplateDeleteId(null);
         }}
       />
-    </div>
+    </>
   );
 }

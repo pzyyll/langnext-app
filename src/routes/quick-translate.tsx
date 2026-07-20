@@ -24,7 +24,7 @@ import ExpandCircleDownOutlineIcon from "~icons/material-symbols/expand-circle-d
 import FlashAutoIcon from "~icons/material-symbols/flash-auto";
 import FlashAutoOutlineIcon from "~icons/material-symbols/flash-auto-outline";
 import { MarkdownOutput } from "../components/markdown/MarkdownOutput";
-import { TitleBar } from "../components/Win/TitleBar";
+import { TitleBar } from "../components/win/TitleBar";
 import { ComboboxField } from "../components/ComboboxField";
 import { ScrollArea } from "../components/ScrollArea";
 import { SelectField } from "../components/SelectField";

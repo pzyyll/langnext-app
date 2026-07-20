@@ -1,12 +1,7 @@
 // ABOUTME: Helpers for per-workspace used-language tabs on the translate page.
 // ABOUTME: Auto is pinned; concrete tabs grow only after the user actually uses them.
 
-import {
-  AUTO_LANGUAGE,
-  isLanguageId,
-  type LanguageId,
-  type SelectableLanguageId,
-} from "./-languages";
+import { AUTO_LANGUAGE, isLanguageId, type LanguageId, type SelectableLanguageId } from "./-languages";
 
 /** Max tabs per side including the pinned Auto tab. */
 export const MAX_RECENT_LANGUAGES = 3;

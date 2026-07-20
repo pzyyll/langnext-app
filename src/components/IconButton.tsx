@@ -38,13 +38,7 @@ export type IconButtonProps = Omit<ComponentProps<typeof Button>, "type"> & {
  *   <IconCopy />
  * </IconButton>
  */
-export function IconButton({
-  className,
-  variant = "default",
-  type = "button",
-  children,
-  ...props
-}: IconButtonProps) {
+export function IconButton({ className, variant = "default", type = "button", children, ...props }: IconButtonProps) {
   return (
     <Button type={type} className={cn(variantClassName[variant], iconSlotClassName, className)} {...props}>
       {children}

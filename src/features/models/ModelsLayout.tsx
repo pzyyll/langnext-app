@@ -8,6 +8,7 @@ import { DragDropProvider } from "@dnd-kit/react";
 import { isSortable, useSortable } from "@dnd-kit/react/sortable";
 import { useTranslation } from "react-i18next";
 import { Badge } from "../../components/Badge";
+import { PageLayout } from "../../components/layouts/PageLayout";
 import { useToast } from "../../components/toast/useToast";
 import { outlineButtonClassName } from "../../components/ui";
 import { cn } from "../../lib/cn";
@@ -19,9 +20,6 @@ import { getIpcErrorMessage } from "../../storage/errors";
 import type { ProviderInstanceDto } from "../../storage/types";
 import { ModelsContext } from "./ModelsContext";
 import { AddProviderDialog } from "./AddProviderDialog";
-
-/** Viewport minus titlebar only — main shell is edge-to-edge (no outer gutter). */
-const LAYOUT_HEIGHT_CLASS = "h-[calc(100dvh-var(--spacing-titlebar-height))]";
 
 /** Slightly longer than CSS channel-exit (120ms) so missing animationend never sticks. */
 const CHANNEL_EXIT_FALLBACK_MS = 200;
@@ -137,9 +135,7 @@ function SortableChannelItem({
         className={cn(
           "group flex items-center gap-0.5 border-l-4 py-1.5 pr-1 pl-0.5 transition-colors",
           animationClass,
-          active
-            ? "border-tertiary bg-surface-container-low"
-            : "border-transparent hover:bg-surface-container-highest",
+          active ? "border-tertiary bg-surface-container-low" : "border-transparent hover:bg-surface-container-highest",
           exiting && "pointer-events-none",
         )}
         onAnimationEnd={(event) => {
@@ -341,7 +337,7 @@ export function ModelsLayout() {
 
   return (
     <ModelsContext.Provider value={contextValue}>
-      <div className={`flex min-h-0 ${LAYOUT_HEIGHT_CLASS} overflow-hidden bg-background`}>
+      <PageLayout title={t("models.title")} contentClassName="overflow-hidden">
         <aside
           className="flex w-models-rail shrink-0 flex-col overflow-hidden border-r border-outline bg-surface-container-lowest"
           aria-label={t("models.channels")}
@@ -443,7 +439,7 @@ export function ModelsLayout() {
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           <Outlet />
         </div>
-      </div>
+      </PageLayout>
 
       <AddProviderDialog
         open={addOpen}

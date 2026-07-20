@@ -6,11 +6,10 @@ import { TanStackRouterDevtools } from "@tanstack/react-router-devtools";
 import { useTranslation } from "react-i18next";
 import IconMaterialSymbolsLightBook from "~icons/material-symbols-light/book";
 import IconMaterialSymbolsLightHistory from "~icons/material-symbols-light/history";
-import IconMaterialSymbolsLightInfo from "~icons/material-symbols-light/info";
 import IconMaterialSymbolsLightNeurology from "~icons/material-symbols-light/neurology";
 import IconMaterialSymbolsLightSettings from "~icons/material-symbols-light/settings";
 import IconMaterialSymbolsLightTranslate from "~icons/material-symbols-light/translate";
-import { TitleBar } from "../components/Win/TitleBar";
+import { TitleBar } from "../components/win/TitleBar";
 import { isNavItemActive, primaryNavItems, settingsNavItem, type NavIconId, type NavItem } from "../shell/nav";
 
 export const Route = createRootRoute({
@@ -39,7 +38,6 @@ const navIconById: Record<NavIconId, ComponentType<SVGProps<SVGSVGElement>>> = {
   book: IconMaterialSymbolsLightBook,
   history: IconMaterialSymbolsLightHistory,
   neurology: IconMaterialSymbolsLightNeurology,
-  info: IconMaterialSymbolsLightInfo,
   settings: IconMaterialSymbolsLightSettings,
 };
 

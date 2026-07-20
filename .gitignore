@@ -38,3 +38,5 @@ src-tauri/target
 skills-lock.json
 .tanstack/tmp
 next-prompt.md
+
+.vscode

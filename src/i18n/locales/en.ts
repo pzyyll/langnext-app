@@ -13,7 +13,6 @@ const en = {
     translateProfiles: "Profiles",
     history: "History",
     models: "Models",
-    about: "About",
     settings: "Settings",
   },
   common: {
@@ -81,19 +80,6 @@ const en = {
     disableAutoTranslate: "Disable auto translate",
     collapseSource: "Collapse input",
     editSource: "Edit source",
-  },
-  about: {
-    title: "About",
-    description:
-      "Starter desktop app scaffolded for local product work. Frontend lives in <src>src/</src>, native shell and Rust commands live in <tauri>src-tauri/</tauri>.",
-    stack: {
-      tauri: { name: "Tauri 2", detail: "Native shell, Rust backend, secure IPC" },
-      react: { name: "React 19", detail: "UI runtime with modern concurrent features" },
-      router: { name: "TanStack Router", detail: "Type-safe file-based client routing" },
-      baseUi: { name: "Base UI", detail: "Accessible unstyled primitives" },
-      tailwind: { name: "Tailwind CSS v4", detail: "Utility styling with semantic theme tokens" },
-      tooling: { name: "ESLint + Prettier", detail: "Linting and consistent formatting" },
-    },
   },
   settings: {
     title: "Settings",
@@ -391,7 +377,8 @@ const en = {
     },
   },
   models: {
-    title: "Models",
+    title: "Model Management",
+    listTitle: "Models",
     channels: "Channels",
     loadingChannels: "Loading channels…",
     loadingChannel: "Loading channel…",

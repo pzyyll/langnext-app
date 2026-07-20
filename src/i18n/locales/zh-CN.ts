@@ -11,7 +11,6 @@ const zhCN = {
     translateProfiles: "预设",
     history: "历史",
     models: "模型",
-    about: "关于",
     settings: "设置",
   },
   common: {
@@ -79,19 +78,6 @@ const zhCN = {
     disableAutoTranslate: "关闭自动翻译",
     collapseSource: "收起输入框",
     editSource: "编辑原文",
-  },
-  about: {
-    title: "关于",
-    description:
-      "用于本地产品开发的桌面应用脚手架。前端在 <src>src/</src>，原生壳与 Rust 命令在 <tauri>src-tauri/</tauri>。",
-    stack: {
-      tauri: { name: "Tauri 2", detail: "原生壳层、Rust 后端、安全 IPC" },
-      react: { name: "React 19", detail: "具备现代并发能力的 UI 运行时" },
-      router: { name: "TanStack Router", detail: "类型安全的文件式客户端路由" },
-      baseUi: { name: "Base UI", detail: "无样式、可访问的基础组件" },
-      tailwind: { name: "Tailwind CSS v4", detail: "带语义主题令牌的实用类样式" },
-      tooling: { name: "ESLint + Prettier", detail: "代码检查与统一格式化" },
-    },
   },
   settings: {
     title: "设置",
@@ -389,7 +375,8 @@ const zhCN = {
     },
   },
   models: {
-    title: "模型",
+    title: "模型管理",
+    listTitle: "模型",
     channels: "渠道",
     loadingChannels: "正在加载渠道…",
     loadingChannel: "正在加载渠道…",

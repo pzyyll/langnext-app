@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { PageLayout } from "../components/layouts/PageLayout";
 import { useToast } from "../components/toast/useToast";
 import { dangerButtonClassName, outlineButtonClassName } from "../components/ui";
 import { HistoryDetailDialog } from "../features/history/HistoryDetailDialog";
@@ -200,13 +201,12 @@ function HistoryPage() {
     deleteTarget?.kind === "single" ? 1 : deleteTarget?.kind === "selected" ? deleteTarget.ids.length : 0;
 
   return (
-    <div className="flex flex-col gap-4 p-gutter">
-      <section className="flex flex-col gap-2">
-        <div className="flex items-center justify-between gap-4">
-          <div className="flex flex-col gap-1">
-            <h1 className="text-headline-md font-bold text-on-surface">{t("history.title")}</h1>
-            <p className="max-w-2xl text-body-tight text-neutral">{t("history.description")}</p>
-          </div>
+    <>
+      <PageLayout
+        title={t("history.title")}
+        description={t("history.description")}
+        contentClassName="flex-col gap-4 overflow-y-auto p-gutter"
+        actions={
           <button
             type="button"
             className={dangerButtonClassName}
@@ -215,109 +215,109 @@ function HistoryPage() {
           >
             {t("history.clearAll")}
           </button>
-        </div>
-      </section>
-
-      <HistoryFilters
-        draft={draft}
-        onDraftChange={patchDraft}
-        modelFacets={facetsQuery.data ?? []}
-        onApply={handleApply}
-        onClear={handleClear}
-        disabled={listResult.isFetching}
-      />
-
-      {selectedIds.size > 0 ? (
-        <div className="flex items-center gap-3 border border-line bg-surface-2 px-3 py-2">
-          <span className="text-body-tight text-on-surface">
-            {t("history.bulk.selected", { count: selectedIds.size })}
-          </span>
-          <div className="ml-auto flex gap-2">
-            <button type="button" className={outlineButtonClassName} onClick={() => void handleExportSelected()}>
-              {t("history.bulk.exportSelected")}
-            </button>
-            <button
-              type="button"
-              className={dangerButtonClassName}
-              onClick={() => setDeleteTarget({ kind: "selected", ids: [...selectedIds] })}
-            >
-              {t("history.bulk.deleteSelected", { count: selectedIds.size })}
-            </button>
-          </div>
-        </div>
-      ) : null}
-
-      {listResult.isLoading ? (
-        <p className="text-body-tight text-neutral" role="status">
-          {t("history.loading")}
-        </p>
-      ) : listResult.error ? (
-        <p className="text-body-tight text-error" role="alert">
-          {t("history.loadFailed")}
-        </p>
-      ) : listResult.data && listResult.data.items.length > 0 ? (
-        <HistoryTable
-          items={listResult.data.items}
-          selectedIds={selectedIds}
-          onToggleSelect={toggleSelect}
-          onToggleSelectAll={toggleSelectAll}
-          onView={(id) => setDetailId(id)}
-          onCopy={(item) => void handleCopy(item.id)}
-          onDelete={(id) => setDeleteTarget({ kind: "single", id })}
+        }
+      >
+        <HistoryFilters
+          draft={draft}
+          onDraftChange={patchDraft}
+          modelFacets={facetsQuery.data ?? []}
+          onApply={handleApply}
+          onClear={handleClear}
+          disabled={listResult.isFetching}
         />
-      ) : (
-        <div className="flex flex-col gap-1 border border-line bg-surface p-gutter text-neutral">
-          <p className="text-body-md font-bold text-on-surface">{t("history.empty")}</p>
-          <p className="text-body-tight">{t("history.emptyHint")}</p>
-        </div>
-      )}
 
-      {listResult.data && listResult.data.total > 0 ? (
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-body-tight text-neutral">{t("history.pagination.showing", { from, to, total })}</span>
-          <div className="flex gap-1">
-            <button
-              type="button"
-              className={outlineButtonClassName}
-              aria-label={t("history.pagination.first")}
-              onClick={() => handlePageChange(1)}
-              disabled={page <= 1}
-            >
-              «
-            </button>
-            <button
-              type="button"
-              className={outlineButtonClassName}
-              aria-label={t("history.pagination.prev")}
-              onClick={() => handlePageChange(page - 1)}
-              disabled={page <= 1}
-            >
-              ‹
-            </button>
-            <span className="px-2 text-body-tight text-neutral">
-              {page} / {totalPages}
+        {selectedIds.size > 0 ? (
+          <div className="flex items-center gap-3 border border-line bg-surface-2 px-3 py-2">
+            <span className="text-body-tight text-on-surface">
+              {t("history.bulk.selected", { count: selectedIds.size })}
             </span>
-            <button
-              type="button"
-              className={outlineButtonClassName}
-              aria-label={t("history.pagination.next")}
-              onClick={() => handlePageChange(page + 1)}
-              disabled={page >= totalPages}
-            >
-              ›
-            </button>
-            <button
-              type="button"
-              className={outlineButtonClassName}
-              aria-label={t("history.pagination.last")}
-              onClick={() => handlePageChange(totalPages)}
-              disabled={page >= totalPages}
-            >
-              »
-            </button>
+            <div className="ml-auto flex gap-2">
+              <button type="button" className={outlineButtonClassName} onClick={() => void handleExportSelected()}>
+                {t("history.bulk.exportSelected")}
+              </button>
+              <button
+                type="button"
+                className={dangerButtonClassName}
+                onClick={() => setDeleteTarget({ kind: "selected", ids: [...selectedIds] })}
+              >
+                {t("history.bulk.deleteSelected", { count: selectedIds.size })}
+              </button>
+            </div>
           </div>
-        </div>
-      ) : null}
+        ) : null}
+
+        {listResult.isLoading ? (
+          <p className="text-body-tight text-neutral" role="status">
+            {t("history.loading")}
+          </p>
+        ) : listResult.error ? (
+          <p className="text-body-tight text-error" role="alert">
+            {t("history.loadFailed")}
+          </p>
+        ) : listResult.data && listResult.data.items.length > 0 ? (
+          <HistoryTable
+            items={listResult.data.items}
+            selectedIds={selectedIds}
+            onToggleSelect={toggleSelect}
+            onToggleSelectAll={toggleSelectAll}
+            onView={(id) => setDetailId(id)}
+            onCopy={(item) => void handleCopy(item.id)}
+            onDelete={(id) => setDeleteTarget({ kind: "single", id })}
+          />
+        ) : (
+          <div className="flex flex-col gap-1 border border-line bg-surface p-gutter text-neutral">
+            <p className="text-body-md font-bold text-on-surface">{t("history.empty")}</p>
+            <p className="text-body-tight">{t("history.emptyHint")}</p>
+          </div>
+        )}
+
+        {listResult.data && listResult.data.total > 0 ? (
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-body-tight text-neutral">{t("history.pagination.showing", { from, to, total })}</span>
+            <div className="flex gap-1">
+              <button
+                type="button"
+                className={outlineButtonClassName}
+                aria-label={t("history.pagination.first")}
+                onClick={() => handlePageChange(1)}
+                disabled={page <= 1}
+              >
+                «
+              </button>
+              <button
+                type="button"
+                className={outlineButtonClassName}
+                aria-label={t("history.pagination.prev")}
+                onClick={() => handlePageChange(page - 1)}
+                disabled={page <= 1}
+              >
+                ‹
+              </button>
+              <span className="px-2 text-body-tight text-neutral">
+                {page} / {totalPages}
+              </span>
+              <button
+                type="button"
+                className={outlineButtonClassName}
+                aria-label={t("history.pagination.next")}
+                onClick={() => handlePageChange(page + 1)}
+                disabled={page >= totalPages}
+              >
+                ›
+              </button>
+              <button
+                type="button"
+                className={outlineButtonClassName}
+                aria-label={t("history.pagination.last")}
+                onClick={() => handlePageChange(totalPages)}
+                disabled={page >= totalPages}
+              >
+                »
+              </button>
+            </div>
+          </div>
+        ) : null}
+      </PageLayout>
 
       <HistoryDetailDialog open={detailId !== null} onOpenChange={(open) => !open && setDetailId(null)} id={detailId} />
 
@@ -340,6 +340,6 @@ function HistoryPage() {
         danger
         onConfirm={() => deleteAllMutation.mutate()}
       />
-    </div>
+    </>
   );
 }

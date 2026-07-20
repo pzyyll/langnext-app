@@ -983,7 +983,7 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
         <section className="shadow-frame border border-line p-6">
           <div className="mb-6 flex flex-col justify-between gap-4 sm:flex-row sm:items-start">
             <div>
-              <h3 className="text-headline-sm font-bold text-on-surface">{t("models.title")}</h3>
+              <h3 className="text-headline-sm font-bold text-on-surface">{t("models.listTitle")}</h3>
               <p className="mt-1 text-xs text-neutral" aria-live="polite">
                 {syncStatusLabel(provider, syncPending)}
               </p>

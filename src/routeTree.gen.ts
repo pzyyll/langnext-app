@@ -14,7 +14,6 @@ import { Route as SettingsRouteImport } from "./routes/settings"
 import { Route as QuickTranslateRouteImport } from "./routes/quick-translate"
 import { Route as ModelsRouteImport } from "./routes/models"
 import { Route as HistoryRouteImport } from "./routes/history"
-import { Route as AboutRouteImport } from "./routes/about"
 import { Route as IndexRouteImport } from "./routes/index"
 import { Route as TranslateIndexRouteImport } from "./routes/translate/index"
 import { Route as ModelsIndexRouteImport } from "./routes/models/index"
@@ -46,11 +45,6 @@ const HistoryRoute = HistoryRouteImport.update({
   path: "/history",
   getParentRoute: () => rootRouteImport,
 } as any)
-const AboutRoute = AboutRouteImport.update({
-  id: "/about",
-  path: "/about",
-  getParentRoute: () => rootRouteImport,
-} as any)
 const IndexRoute = IndexRouteImport.update({
   id: "/",
   path: "/",
@@ -79,7 +73,6 @@ const ModelsProviderIdRoute = ModelsProviderIdRouteImport.update({
 
 export interface FileRoutesByFullPath {
   "/": typeof IndexRoute
-  "/about": typeof AboutRoute
   "/history": typeof HistoryRoute
   "/models": typeof ModelsRouteWithChildren
   "/quick-translate": typeof QuickTranslateRoute
@@ -92,7 +85,6 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   "/": typeof IndexRoute
-  "/about": typeof AboutRoute
   "/history": typeof HistoryRoute
   "/quick-translate": typeof QuickTranslateRoute
   "/settings": typeof SettingsRoute
@@ -104,7 +96,6 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   "/": typeof IndexRoute
-  "/about": typeof AboutRoute
   "/history": typeof HistoryRoute
   "/models": typeof ModelsRouteWithChildren
   "/quick-translate": typeof QuickTranslateRoute
@@ -119,7 +110,6 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | "/"
-    | "/about"
     | "/history"
     | "/models"
     | "/quick-translate"
@@ -132,7 +122,6 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | "/"
-    | "/about"
     | "/history"
     | "/quick-translate"
     | "/settings"
@@ -143,7 +132,6 @@ export interface FileRouteTypes {
   id:
     | "__root__"
     | "/"
-    | "/about"
     | "/history"
     | "/models"
     | "/quick-translate"
@@ -157,7 +145,6 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
-  AboutRoute: typeof AboutRoute
   HistoryRoute: typeof HistoryRoute
   ModelsRoute: typeof ModelsRouteWithChildren
   QuickTranslateRoute: typeof QuickTranslateRoute
@@ -200,13 +187,6 @@ declare module "@tanstack/react-router" {
       path: "/history"
       fullPath: "/history"
       preLoaderRoute: typeof HistoryRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    "/about": {
-      id: "/about"
-      path: "/about"
-      fullPath: "/about"
-      preLoaderRoute: typeof AboutRouteImport
       parentRoute: typeof rootRouteImport
     }
     "/": {
@@ -276,7 +256,6 @@ const TranslateRouteWithChildren = TranslateRoute._addFileChildren(
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
-  AboutRoute: AboutRoute,
   HistoryRoute: HistoryRoute,
   ModelsRoute: ModelsRouteWithChildren,
   QuickTranslateRoute: QuickTranslateRoute,
