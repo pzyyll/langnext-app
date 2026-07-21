@@ -12,6 +12,8 @@
 - Tauri 2 (Rust backend and webview frontend)
 - React 19
 - TanStack Router with file-based routes in `src/routes`
+- TanStack Query for persistent DTO cache
+- Effect 3.x for typed Tauri IPC and multi-step frontend workflows (not a Query replacement)
 - Base UI (`@base-ui/react`)
 - Tailwind CSS v4 (`@tailwindcss/vite`) using a Base UI outline/frame style
 - ESLint and Prettier
@@ -71,6 +73,12 @@ mise run tauri:build   # Package installers and portable zip
 
 - Under `src/routes`, prefix every non-route implementation file and test file with `-` so `routeFileIgnorePrefix` excludes it from route generation.
 - Keep actual route files unprefixed and ensure they export `Route`.
+
+### Effect
+
+- Use Effect for typed IPC (`src/storage/invokeEffect`, `IpcError`) and multi-step workflows under `src/features/*` / bootstrap; keep TanStack Query as the DTO cache.
+- Do not import Effect from `src/components/*` or `src/query/*`. Routes call Promise runners/helpers, not deep Effect pipelines in JSX.
+- Details: `docs/architecture/frontend-state-management.md` and `docs/plans/effect-integration-plan/README.md`.
 
 ### Tailwind CSS
 

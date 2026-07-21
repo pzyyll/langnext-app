@@ -4,17 +4,19 @@ Desktop app starter built with **Tauri 2** and a modern React frontend.
 
 ## Stack
 
-| Layer      | Choice                            |
-| ---------- | --------------------------------- |
-| Shell      | Tauri 2                           |
-| UI         | React 19                          |
-| Routing    | TanStack Router (file-based)      |
-| Components | Base UI                           |
-| Styling    | Tailwind CSS v4 (Base UI outline) |
-| Tooling    | ESLint + Prettier                 |
-| Build      | Vite 8 + TypeScript               |
-| Runtime    | mise (node, bun, rust, tasks)     |
-| Packages   | bun                               |
+| Layer           | Choice                                 |
+| --------------- | -------------------------------------- |
+| Shell           | Tauri 2                                |
+| UI              | React 19                               |
+| Routing         | TanStack Router (file-based)           |
+| Data cache      | TanStack Query                         |
+| IPC / workflows | Effect 3.x (typed invoke + multi-step) |
+| Components      | Base UI                                |
+| Styling         | Tailwind CSS v4 (Base UI outline)      |
+| Tooling         | ESLint + Prettier                      |
+| Build           | Vite 8 + TypeScript                    |
+| Runtime         | mise (node, bun, rust, tasks)          |
+| Packages        | bun                                    |
 
 ## Prerequisites
 
@@ -97,7 +99,7 @@ mise.toml               Toolchain versions
 
 - Routes live in `src/routes`. TanStack Router generates `src/routeTree.gen.ts` during Vite startup.
 - `/` redirects to `/translate` (primary workspace); there is no dedicated Home page.
-- Storage (Providers, models, profiles, settings, credentials, device state) is Rust-owned; React uses typed invoke wrappers under `src/storage/`. See `docs/analysis/storage-architecture.md`.
+- Storage (Providers, models, profiles, settings, credentials, device state) is Rust-owned; React uses typed invoke wrappers under `src/storage/` (Effect `IpcError` / `invokeEffect` under a Promise bridge). See `docs/analysis/storage-architecture.md` and `docs/architecture/frontend-state-management.md` (Effect vs Query).
 - Base UI portals need the `.root { isolation: isolate; }` stacking context (already set in layout styles).
 - Use **bun** only for packages (do not commit `package-lock.json` / `yarn.lock` / `pnpm-lock.yaml`).
 - Use **mise file tasks** only for project commands (`.mise/tasks/`, not `package.json` scripts or TOML tasks).
