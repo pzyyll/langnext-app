@@ -83,7 +83,7 @@ const en = {
   },
   settings: {
     title: "Settings",
-    description: "Manage appearance, language, and shortcuts. Changes are saved automatically.",
+    description: "Manage appearance, language, shortcuts, and configuration backup. Changes are saved automatically.",
     theme: {
       title: "Theme",
       description: "Choose light or dark appearance for the app shell.",
@@ -119,6 +119,21 @@ const en = {
       loadFailed: "Could not load shortcut settings.",
       persistFailed: "Could not save shortcut settings.",
       windowsOnly: "Available on Windows only.",
+    },
+    backup: {
+      title: "Backup",
+      description: "Export or import providers, models, profiles, and app settings as JSON.",
+      export: "Export configuration",
+      import: "Import configuration",
+      exportSuccess: "Configuration exported.",
+      importSuccess: "Configuration imported.",
+      importNotApplied: "Import did not apply.",
+      importInvalid: "Import file failed validation.",
+      importNeedsAuth: "Re-enter API credentials for imported channels.",
+      exportFailed: "Could not export configuration.",
+      importFailed: "Could not import configuration.",
+      busyExport: "Exporting…",
+      busyImport: "Importing…",
     },
   },
   screenshot: {

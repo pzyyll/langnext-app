@@ -81,7 +81,7 @@ const zhCN = {
   },
   settings: {
     title: "设置",
-    description: "管理外观、语言与快捷键。更改会自动保存。",
+    description: "管理外观、语言、快捷键与配置备份。更改会自动保存。",
     theme: {
       title: "主题",
       description: "为应用外壳选择浅色或深色外观。",
@@ -117,6 +117,21 @@ const zhCN = {
       loadFailed: "无法加载快捷键设置。",
       persistFailed: "无法保存快捷键设置。",
       windowsOnly: "仅 Windows 可用。",
+    },
+    backup: {
+      title: "备份",
+      description: "将通道、模型、配置档与应用设置导出或导入为 JSON。",
+      export: "导出配置",
+      import: "导入配置",
+      exportSuccess: "配置已导出。",
+      importSuccess: "配置已导入。",
+      importNotApplied: "导入未生效。",
+      importInvalid: "导入文件未通过校验。",
+      importNeedsAuth: "请为导入的通道重新填写 API 凭据。",
+      exportFailed: "无法导出配置。",
+      importFailed: "无法导入配置。",
+      busyExport: "正在导出…",
+      busyImport: "正在导入…",
     },
   },
   screenshot: {

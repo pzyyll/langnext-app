@@ -1,10 +1,11 @@
-// ABOUTME: Settings route for appearance, language, and global shortcut preferences.
-// ABOUTME: Reuses theme/language hooks; shortcuts load and persist via settings IPC.
+// ABOUTME: Settings route for appearance, language, shortcuts, and config backup.
+// ABOUTME: Reuses theme/language hooks; backup handlers call configurationTransfer runners.
 import { createFileRoute } from "@tanstack/react-router";
 import { Button } from "@base-ui/react/button";
 import { Radio } from "@base-ui/react/radio";
 import { RadioGroup } from "@base-ui/react/radio-group";
 import { Switch } from "@base-ui/react/switch";
+import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import IconClarityMoonLine from "~icons/clarity/moon-line";
@@ -17,9 +18,18 @@ import {
   switchRootClassName,
   switchThumbClassName,
 } from "../components/ui";
-import { APP_LANGUAGES, type AppLanguage } from "../i18n/languages";
+import { useToast } from "../components/toast/useToast";
+import { isFsError } from "../features/fsError";
+import {
+  runExportConfigurationToFile,
+  runImportConfigurationFromFile,
+} from "../features/settings/configurationTransfer";
+import { applyAppLanguage } from "../i18n";
+import { APP_LANGUAGES, normalizeLanguage, type AppLanguage } from "../i18n/languages";
 import { useLanguage } from "../i18n/useLanguage";
+import { modelKeys, profileKeys, providerKeys } from "../query/keys";
 import { getAppSettings, setAppShortcuts } from "../storage/client";
+import { getIpcErrorMessage } from "../storage/errors";
 import {
   DEFAULT_OPEN_QUICK_TRANSLATE_BINDING,
   DEFAULT_REGION_SCREENSHOT_BINDING,
@@ -30,7 +40,7 @@ import {
   type ShortcutDefinition,
 } from "../storage/types";
 import { useTheme } from "../theme/useTheme";
-import type { ThemeMode } from "../theme/theme";
+import { applyThemeToDom, isThemeMode, type ThemeMode } from "../theme/theme";
 import { formatShortcutBinding, keyboardEventToBinding } from "./-shortcutBinding";
 
 export const Route = createFileRoute("/settings")({
@@ -187,7 +197,131 @@ function SettingsPage() {
       </section>
 
       <ShortcutsSettingsSection />
+      {isTauriRuntime() ? <BackupSettingsSection /> : null}
     </div>
+  );
+}
+
+/** Configuration JSON export/import; dialogs live in configurationTransfer helpers. */
+function BackupSettingsSection() {
+  const { t } = useTranslation();
+  const toast = useToast();
+  const queryClient = useQueryClient();
+  const [busy, setBusy] = useState<"export" | "import" | null>(null);
+
+  async function handleExport() {
+    if (busy) {
+      return;
+    }
+    setBusy("export");
+    try {
+      const result = await runExportConfigurationToFile();
+      if (result.status === "written") {
+        toast.success({ title: t("settings.backup.exportSuccess") });
+      }
+      // cancel: silent per Phase 3 failure table
+    } catch (err) {
+      const description = isFsError(err)
+        ? err.message.trim() || t("settings.backup.exportFailed")
+        : getIpcErrorMessage(err, t("settings.backup.exportFailed"));
+      toast.error({
+        title: t("settings.backup.exportFailed"),
+        description,
+      });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function handleImport() {
+    if (busy) {
+      return;
+    }
+    setBusy("import");
+    try {
+      const result = await runImportConfigurationFromFile("merge");
+      if (result.status === "cancelled") {
+        return;
+      }
+      if (result.status === "invalid") {
+        const detail = result.preview.validationErrors[0] ?? t("settings.backup.importInvalid");
+        toast.error({
+          title: t("settings.backup.importInvalid"),
+          description: detail,
+        });
+        return;
+      }
+      if (result.status === "not_applied") {
+        toast.error({ title: t("settings.backup.importNotApplied") });
+        return;
+      }
+
+      // Activate imported app_settings in this process (DB write alone does not rebind UI/OS).
+      const settings = await getAppSettings();
+      if (isThemeMode(settings.theme)) {
+        applyThemeToDom(settings.theme);
+      }
+      await applyAppLanguage(normalizeLanguage(settings.uiLanguage));
+      // set_app_shortcuts re-registers OS hotkeys; plain app_settings import does not.
+      await setAppShortcuts(settings.shortcuts);
+
+      void queryClient.invalidateQueries({ queryKey: providerKeys.all });
+      void queryClient.invalidateQueries({ queryKey: modelKeys.all });
+      void queryClient.invalidateQueries({ queryKey: profileKeys.all });
+
+      const needsAuth =
+        result.result.preview.requiresAuthentication.length > 0 ||
+        result.result.preview.proxyRequiresAuthentication;
+      if (needsAuth) {
+        toast.success({
+          title: t("settings.backup.importSuccess"),
+          description: t("settings.backup.importNeedsAuth"),
+        });
+      } else {
+        toast.success({ title: t("settings.backup.importSuccess") });
+      }
+    } catch (err) {
+      const description = isFsError(err)
+        ? err.message.trim() || t("settings.backup.importFailed")
+        : getIpcErrorMessage(err, t("settings.backup.importFailed"));
+      toast.error({
+        title: t("settings.backup.importFailed"),
+        description,
+      });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <section className="shadow-frame max-w-lg border border-line bg-surface p-gutter">
+      <div className="flex flex-col gap-3">
+        <h2 className="text-body-bold font-bold text-on-surface">{t("settings.backup.title")}</h2>
+        <p className="text-body-tight text-neutral">{t("settings.backup.description")}</p>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            type="button"
+            className={outlineButtonClassName}
+            disabled={busy != null}
+            onClick={() => {
+              void handleExport();
+            }}
+          >
+            {busy === "export" ? t("settings.backup.busyExport") : t("settings.backup.export")}
+          </Button>
+          <Button
+            type="button"
+            className={outlineButtonClassName}
+            disabled={busy != null}
+            onClick={() => {
+              void handleImport();
+            }}
+          >
+            {busy === "import" ? t("settings.backup.busyImport") : t("settings.backup.import")}
+          </Button>
+        </div>
+      </div>
+    </section>
   );
 }
 
