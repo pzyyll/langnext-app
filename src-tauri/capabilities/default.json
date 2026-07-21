@@ -32,6 +32,7 @@
     "clipboard-manager:allow-write-image",
     "clipboard-manager:allow-read-image",
     "dialog:default",
+    "fs:allow-read-text-file",
     "fs:allow-write-text-file"
   ]
 }

@@ -361,6 +361,10 @@ fn model_merge_marks_missing_preserves_manual() {
   let manual = list.iter().find(|m| m.model_key == "manual-1").unwrap();
   assert_eq!(manual.source, ModelSource::Manual);
   assert_eq!(manual.availability, Availability::Available);
+  assert!(manual.enabled);
+  let remote_a = list.iter().find(|m| m.model_key == "remote-a").unwrap();
+  // Newly discovered remote models stay off until the user enables them.
+  assert!(!remote_a.enabled);
 
   // Second sync drops remote-a
   models

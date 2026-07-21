@@ -235,6 +235,7 @@ pub fn apply_remote_sync(
       update(conn, &row)?;
     } else {
       let now = now_rfc3339();
+      // Remote discovery only caches availability; the user opts models in explicitly.
       let model = ProviderModel {
         id: new_id(),
         provider_instance_id: provider_id,
@@ -242,7 +243,7 @@ pub fn apply_remote_sync(
         source: ModelSource::Remote,
         remote_display_name: item.remote_display_name.clone(),
         display_name_override: None,
-        enabled: true,
+        enabled: false,
         availability: Availability::Available,
         remote_metadata_json: item.remote_metadata_json.clone(),
         capability_overrides_json: None,

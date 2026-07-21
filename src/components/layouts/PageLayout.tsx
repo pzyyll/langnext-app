@@ -1,5 +1,5 @@
 // ABOUTME: Shared full-height page shell with titlebar-offset height and header bar.
-// ABOUTME: Used by History, Models, OCR, and Profiles for consistent page chrome.
+// ABOUTME: Used by History, Models, OCR, Profiles, and Settings for consistent page chrome.
 import type { ReactNode } from "react";
 import { cn } from "../../lib/cn";
 

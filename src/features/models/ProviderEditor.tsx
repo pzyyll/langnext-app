@@ -445,7 +445,7 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
   }
 
   async function handleSave() {
-    if (!formValid || savePending || syncPending) {
+    if (!formDirty || !formValid || savePending || syncPending) {
       return;
     }
 
@@ -841,7 +841,7 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
               ${primaryButtonClassName}
               relative
             `}
-              disabled={connectionFormDisabled || !formValid}
+              disabled={connectionFormDisabled || !formDirty || !formValid}
               focusableWhenDisabled
               aria-busy={connectionFormDisabled}
               aria-label={connectionFormDisabled ? t("common.saving") : t("common.save")}

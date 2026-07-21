@@ -108,9 +108,18 @@ function EditModelConfigForm({ model, onSaved }: EditModelConfigFormProps) {
 
   const displayNamePlaceholder = model.remoteDisplayName?.trim() || t("common.optional");
 
+  const isDirty =
+    displayNameOverride !== initial.displayNameOverride ||
+    adapterId !== initial.adapterId ||
+    textGeneration !== initial.textGeneration ||
+    imageAnalysis !== initial.imageAnalysis ||
+    videoProcessing !== initial.videoProcessing ||
+    contextLimit !== initial.contextLimit ||
+    maxTokens !== initial.maxTokens;
+
   async function handleSubmit(event: React.SyntheticEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (pending) {
+    if (pending || !isDirty) {
       return;
     }
 
@@ -325,7 +334,7 @@ function EditModelConfigForm({ model, onSaved }: EditModelConfigFormProps) {
         <Dialog.Close className={outlineButtonClassName} disabled={pending}>
           {t("common.cancel")}
         </Dialog.Close>
-        <Button type="submit" className={primaryButtonClassName} disabled={pending} focusableWhenDisabled>
+        <Button type="submit" className={primaryButtonClassName} disabled={pending || !isDirty} focusableWhenDisabled>
           {pending ? t("common.saving") : t("models.editModelConfig.save")}
         </Button>
       </div>
