@@ -162,6 +162,7 @@ impl ShortcutRuntime {
     let gs = app.global_shortcut();
     gs.on_shortcut(binding, |app, _shortcut, event| {
       if event.state == ShortcutState::Pressed {
+        log::info!("global_shortcut_triggered id={SHORTCUT_REGION_SCREENSHOT}");
         // The plugin holds its shortcut-map mutex while invoking callbacks.
         // screenshot::start registers temporary Escape, so defer until this callback returns
         // or the nested registration deadlocks the entire Tauri event loop.
@@ -199,6 +200,7 @@ impl ShortcutRuntime {
     let gs = app.global_shortcut();
     gs.on_shortcut(binding, |app, _shortcut, event| {
       if event.state == ShortcutState::Pressed {
+        log::info!("global_shortcut_triggered id={SHORTCUT_SCREENSHOT_OCR}");
         // Defer: screenshot start registers Escape and must not nest under the shortcut mutex.
         let app = app.clone();
         std::thread::spawn(move || {

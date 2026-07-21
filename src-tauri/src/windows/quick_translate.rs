@@ -2,8 +2,9 @@
 // ABOUTME: Cursor-follow show, click-outside hide, clipboard paste, and source-text delivery.
 
 use crate::consts;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tauri::{Emitter, EventTarget, Manager, PhysicalPosition, Pixel, Runtime, WebviewWindow, WebviewWindowBuilder};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 
@@ -18,12 +19,40 @@ const INIT_WIN_SIZE: (f64, f64) = (420.0, 360.0);
 /// Minimum logical inner size (width fixed floor; height content-adaptive).
 const MIN_WIN_SIZE: (f64, f64) = (420.0, 280.0);
 
-/// Logical px: shift the window up so the cursor starts slightly inside the top edge.
-/// Keeps small pointer jitter from immediately dismissing the unpinned window.
-const CURSOR_TOP_OFFSET: f64 = 10.0;
+/// Logical px: shift the window up so the cursor starts inside the top edge.
+/// Larger than a few px so post-show pointer jitter does not read as "outside".
+const CURSOR_TOP_OFFSET: f64 = 24.0;
+
+/// After show/re-show, ignore move-out dismiss for this long (OCR / screenshot handoff).
+const MOVE_OUT_GRACE: Duration = Duration::from_millis(1_500);
+
+/// Process start; grace deadline is stored as millis since this instant.
+static PROCESS_START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
 
 static MOUSE_EVENT_ID: AtomicUsize = AtomicUsize::new(0);
+/// Pointer has entered the window at least once since the current mouse hook was armed.
+static POINTER_ENTERED: AtomicBool = AtomicBool::new(false);
+/// Move-out dismiss is ignored until this process-relative deadline (millis).
+static MOVE_OUT_GRACE_UNTIL_MS: AtomicU64 = AtomicU64::new(0);
 static WIN_SIZE: Mutex<(f64, f64)> = Mutex::new(INIT_WIN_SIZE);
+
+fn process_start() -> Instant {
+  *PROCESS_START.get_or_init(Instant::now)
+}
+
+fn arm_move_out_grace() {
+  let until = process_start().elapsed().as_millis() as u64 + MOVE_OUT_GRACE.as_millis() as u64;
+  MOVE_OUT_GRACE_UNTIL_MS.store(until, Ordering::SeqCst);
+  POINTER_ENTERED.store(false, Ordering::SeqCst);
+}
+
+fn in_move_out_grace() -> bool {
+  let until = MOVE_OUT_GRACE_UNTIL_MS.load(Ordering::SeqCst);
+  if until == 0 {
+    return false;
+  }
+  (process_start().elapsed().as_millis() as u64) < until
+}
 
 /// App-level pin / clipboard-delivery state for the single Quick Translate window.
 ///
@@ -272,8 +301,13 @@ fn set_win_visible<R: Runtime>(app: &tauri::AppHandle<R>, win: &WebviewWindow<R>
     let _ = win.unminimize();
   }
   let _ = win.set_focus();
+  // Fresh hook + grace so screenshot/OCR handoff cannot dismiss on residual mouse motion.
+  arm_move_out_grace();
   #[cfg(windows)]
-  reg_mouse_event(Arc::new(win.clone()));
+  {
+    del_mouse_event();
+    reg_mouse_event(Arc::new(win.clone()));
+  }
 }
 
 /// Ensure the Quick Translate window exists and is visible (cursor-follow on first show).
@@ -313,14 +347,25 @@ pub fn try_show_on_cpcp<R: Runtime>(app: &tauri::AppHandle<R>) {
 
 /// Show Quick Translate (if needed) and deliver source text into the input field.
 /// Used after screenshot OCR recognizes non-empty text.
+///
+/// Always re-anchors via `show` so a previously restored/hidden frame is not left
+/// off-cursor, and move-out grace is armed for the post-selection handoff.
 pub fn deliver_source_text<R: Runtime>(app: &tauri::AppHandle<R>, text: String) {
   if text.trim().is_empty() {
     return;
   }
-  if !ensure_quick_translate_visible(app) {
+  if let Err(e) = show(app) {
+    log::error!("quick_translate_show_failed error={e}");
     return;
   }
   deliver_or_queue_clipboard(app, text);
+}
+
+/// Drop auto-close mouse hooks when another host flow hides this window (screenshot).
+pub fn on_hidden_by_host() {
+  del_mouse_event();
+  MOVE_OUT_GRACE_UNTIL_MS.store(0, Ordering::SeqCst);
+  POINTER_ENTERED.store(false, Ordering::SeqCst);
 }
 
 /// Show the Quick Translate window, creating it on first use at the cursor position.
@@ -391,6 +436,7 @@ pub fn show<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<WebviewWindow<R>, S
   }
 
   wire_window_events(&win);
+  arm_move_out_grace();
   #[cfg(windows)]
   reg_mouse_event(Arc::new(win.clone()));
   let _ = win.set_focus();
@@ -448,6 +494,7 @@ fn reg_mouse_event<R: Runtime>(window: Arc<WebviewWindow<R>>) {
   if MOUSE_EVENT_ID.load(Ordering::Relaxed) != 0 {
     return;
   }
+  // Clicked inside once → only click-outside closes (move-out ignored).
   let once_focus = Arc::new(AtomicBool::new(false));
   let reg_id = mouse_enginer::add_event_listener(
     move |event_type| {
@@ -462,22 +509,39 @@ fn reg_mouse_event<R: Runtime>(window: Arc<WebviewWindow<R>>) {
             }
           }
           if check_pos_in_window(&window, &event.pos) {
+            POINTER_ENTERED.store(true, Ordering::SeqCst);
             if state == ClickState::Pressed {
               once_focus.store(true, Ordering::Relaxed);
             }
             return;
           }
+          // Click-outside still closes during grace (explicit dismiss).
           log::debug!("quick_translate_close_mouse_left_out");
           let _ = window.close();
         } else if event.button.is_none() {
-          // Mouse move: close only until the user has clicked inside once (or pin).
-          if check_pos_in_window(&window, &event.pos) || once_focus.load(Ordering::Relaxed) {
+          if check_pos_in_window(&window, &event.pos) {
+            POINTER_ENTERED.store(true, Ordering::SeqCst);
+            return;
+          }
+          // After click-in, only click-outside dismisses.
+          if once_focus.load(Ordering::Relaxed) {
             return;
           }
           if let Some(pin_state) = window.app_handle().try_state::<QuickTranslateState>() {
             if *pin_state.is_pin.lock().unwrap() {
               return;
             }
+          }
+          // Post-show grace: screenshot OCR often delivers while the cursor is still
+          // settling from the selection drag — do not dismiss on residual motion.
+          if in_move_out_grace() {
+            return;
+          }
+          // Never been inside this show cycle: keep the window until the user enters
+          // then leaves, or clicks outside. Prevents instant dismiss when the window
+          // opens under a cursor that is already outside the new frame.
+          if !POINTER_ENTERED.load(Ordering::SeqCst) {
+            return;
           }
           log::debug!("quick_translate_close_mouse_move_out");
           let _ = window.close();

@@ -21,7 +21,11 @@ use tauri::{
 const MIN_SELECTION_EDGE_PX: u32 = 4;
 
 /// Brief pause after hiding app windows so the compositor drops them before capture.
-const PRE_CAPTURE_HIDE_DELAY: Duration = Duration::from_millis(30);
+const PRE_CAPTURE_HIDE_DELAY: Duration = Duration::from_millis(50);
+
+/// Max time to wait for hide() to take effect before capturing.
+const HIDE_SETTLE_TIMEOUT: Duration = Duration::from_millis(200);
+const HIDE_SETTLE_POLL: Duration = Duration::from_millis(10);
 
 /// Clipboard can be briefly locked by Explorer / other apps; retry a few times.
 const CLIPBOARD_WRITE_ATTEMPTS: u32 = 5;
@@ -80,25 +84,62 @@ pub struct RegionScreenshotSelection {
   pub viewport_height: f64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CaptureMode {
+  Plain,
+  Ocr,
+}
+
+impl CaptureMode {
+  fn as_str(self) -> &'static str {
+    match self {
+      Self::Plain => "plain",
+      Self::Ocr => "ocr",
+    }
+  }
+}
+
+/// How to put a window back after a capture session that hid it.
+#[derive(Debug, Clone, Copy, Default)]
+struct WindowRestore {
+  /// Window was visible and we hid it for capture.
+  restore: bool,
+  /// Was the foreground window when hidden; restore may re-focus only then.
+  was_foreground: bool,
+}
+
+impl WindowRestore {
+  fn merge(self, other: Self) -> Self {
+    Self {
+      restore: self.restore || other.restore,
+      was_foreground: self.was_foreground || other.was_foreground,
+    }
+  }
+}
+
 struct ActiveSession {
   image: RgbaImage,
   monitor_x: i32,
   monitor_y: i32,
   backdrop_path: PathBuf,
-  restore_main: bool,
-  restore_quick_translate: bool,
+  main: WindowRestore,
+  quick_translate: WindowRestore,
+  /// Foreground HWND before we hid anything / focused the overlay (Windows).
+  #[cfg(windows)]
+  previous_foreground: Option<isize>,
+  mode: CaptureMode,
 }
 
 /// App-managed region-screenshot session (at most one active overlay).
 #[derive(Default)]
 pub struct RegionScreenshotState {
   session: Mutex<Option<ActiveSession>>,
+  /// Serializes start so concurrent hotkeys cannot interleave hide/restore.
+  start_gate: Mutex<()>,
   /// Set once the warm overlay webview has finished its first page load.
   overlay_ready: AtomicBool,
   /// Whether the temporary Escape global shortcut is currently registered.
   escape_registered: AtomicBool,
-  /// When true, a successful crop runs default OCR and delivers text to Quick Translate.
-  ocr_after_capture: AtomicBool,
 }
 
 /// Create the hidden overlay webview early so later triggers skip cold start.
@@ -108,16 +149,46 @@ pub fn prewarm<R: Runtime>(app: &tauri::AppHandle<R>) {
   }
 }
 
-/// Start a region screenshot: hide app windows, capture, prepare backdrop, place hidden overlay, notify UI.
+/// Start a plain region screenshot without post-capture OCR.
 pub fn start<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<(), String> {
-  // Cancel any previous session but keep the warm overlay webview.
-  let _ = cancel_session_only(app);
-  clear_ocr_after_capture(app);
+  start_with_mode(app, CaptureMode::Plain)
+}
 
-  let restore_main = hide_window_if_visible(app, consts::WIN_LABEL_MAIN);
-  let restore_quick_translate = hide_window_if_visible(app, consts::WIN_LABEL_QUICK_TRANSLATE);
-  if restore_main || restore_quick_translate {
-    thread::sleep(PRE_CAPTURE_HIDE_DELAY);
+/// Start a screenshot session with immutable per-session capture behavior.
+fn start_with_mode<R: Runtime>(app: &tauri::AppHandle<R>, mode: CaptureMode) -> Result<(), String> {
+  let Some(state) = app.try_state::<RegionScreenshotState>() else {
+    return Err("region screenshot state is not managed".into());
+  };
+  let _start_guard = state
+    .start_gate
+    .lock()
+    .map_err(|_| "region screenshot start gate poisoned".to_string())?;
+
+  // Drop any previous session without restoring windows (avoids hide→show flash on re-entry).
+  let previous = discard_session_keep_hidden(app)?;
+  let (prev_main, prev_quick_translate, prev_foreground) = match previous {
+    Some((main, qt, fg)) => (main, qt, fg),
+    None => (WindowRestore::default(), WindowRestore::default(), None),
+  };
+
+  // Snapshot the user's foreground window before we touch any of ours. Prefer the value from a
+  // superseded session so re-entry does not treat the overlay as the original foreground app.
+  // Global hotkeys do not change the foreground; GetForegroundWindow is more reliable than
+  // Tauri is_focused() around hide/show races.
+  #[cfg(windows)]
+  let previous_foreground = prev_foreground.or_else(foreground_hwnd_raw);
+  #[cfg(not(windows))]
+  let _ = prev_foreground;
+
+  let main = hide_app_window_for_capture(app, consts::WIN_LABEL_MAIN).merge(prev_main);
+  let quick_translate =
+    hide_app_window_for_capture(app, consts::WIN_LABEL_QUICK_TRANSLATE).merge(prev_quick_translate);
+  if main.restore || quick_translate.restore {
+    wait_for_windows_hidden(
+      app,
+      main.restore.then_some(consts::WIN_LABEL_MAIN),
+      quick_translate.restore.then_some(consts::WIN_LABEL_QUICK_TRANSLATE),
+    );
   }
 
   let cursor = app.cursor_position().map_err(|e| e.to_string())?;
@@ -126,12 +197,6 @@ pub fn start<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<(), String> {
 
   let capture = capture_monitor_at(cursor_x, cursor_y)?;
   let backdrop_path = write_backdrop_file(app, &capture.image)?;
-
-  let Some(state) = app.try_state::<RegionScreenshotState>() else {
-    restore_hidden_windows(app, restore_main, restore_quick_translate);
-    let _ = std::fs::remove_file(&backdrop_path);
-    return Err("region screenshot state is not managed".into());
-  };
 
   let backdrop = RegionScreenshotBackdrop {
     path: backdrop_path.to_string_lossy().into_owned(),
@@ -149,10 +214,14 @@ pub fn start<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<(), String> {
       monitor_x: capture.monitor_x,
       monitor_y: capture.monitor_y,
       backdrop_path,
-      restore_main,
-      restore_quick_translate,
+      main,
+      quick_translate,
+      #[cfg(windows)]
+      previous_foreground,
+      mode,
     });
   }
+  log::info!("region_screenshot_session_started mode={}", mode.as_str());
 
   // Place overlay over the captured monitor. Show immediately (black until image paints):
   // waiting for webview onload while hidden is unreliable on WebView2 and can leave the
@@ -373,30 +442,206 @@ fn wire_window_events<R: Runtime>(window: &WebviewWindow<R>) {
   });
 }
 
-fn hide_window_if_visible<R: Runtime>(app: &tauri::AppHandle<R>, label: &str) -> bool {
+/// Hide an app window only when it would pollute the capture.
+///
+/// - Main: hide only when it is the foreground window. An unfocused main sitting behind
+///   the user's work is left alone so we never raise it via hide→show (SW_SHOW / NOACTIVATE
+///   both promote Z-order).
+/// - Quick Translate: always hide when visible (always-on-top, would appear in the capture).
+fn hide_app_window_for_capture<R: Runtime>(app: &tauri::AppHandle<R>, label: &str) -> WindowRestore {
   let Some(win) = app.get_webview_window(label) else {
-    return false;
+    return WindowRestore::default();
   };
-  match win.is_visible() {
-    Ok(true) => {
-      let _ = win.hide();
-      true
-    }
-    _ => false,
+  if !win.is_visible().unwrap_or(false) {
+    return WindowRestore::default();
+  }
+
+  let was_foreground = is_window_foreground(&win);
+
+  if label == consts::WIN_LABEL_MAIN && !was_foreground {
+    log::debug!("screenshot_skip_hide_unfocused_main");
+    return WindowRestore::default();
+  }
+
+  let _ = win.hide();
+  if label == consts::WIN_LABEL_QUICK_TRANSLATE {
+    // Drop QT auto-close hooks while the overlay owns the pointer; otherwise residual
+    // move events close the hidden window mid-selection and leave stale hook state.
+    windows::quick_translate::on_hidden_by_host();
+  }
+  WindowRestore {
+    restore: true,
+    was_foreground,
   }
 }
 
-fn restore_hidden_windows<R: Runtime>(app: &tauri::AppHandle<R>, restore_main: bool, restore_quick_translate: bool) {
-  if restore_main {
+fn wait_for_windows_hidden<R: Runtime>(
+  app: &tauri::AppHandle<R>,
+  main_label: Option<&str>,
+  quick_label: Option<&str>,
+) {
+  thread::sleep(PRE_CAPTURE_HIDE_DELAY);
+  let deadline = std::time::Instant::now() + HIDE_SETTLE_TIMEOUT;
+  while std::time::Instant::now() < deadline {
+    let main_hidden = main_label.is_none_or(|label| {
+      app
+        .get_webview_window(label)
+        .and_then(|w| w.is_visible().ok())
+        != Some(true)
+    });
+    let quick_hidden = quick_label.is_none_or(|label| {
+      app
+        .get_webview_window(label)
+        .and_then(|w| w.is_visible().ok())
+        != Some(true)
+    });
+    if main_hidden && quick_hidden {
+      return;
+    }
+    thread::sleep(HIDE_SETTLE_POLL);
+  }
+  log::warn!("screenshot_hide_settle_timeout");
+}
+
+fn restore_hidden_windows<R: Runtime>(
+  app: &tauri::AppHandle<R>,
+  main: WindowRestore,
+  quick_translate: WindowRestore,
+  #[cfg(windows)] previous_foreground: Option<isize>,
+) {
+  let mut want_our_focus = false;
+
+  if main.restore {
     if let Some(win) = app.get_webview_window(consts::WIN_LABEL_MAIN) {
       let _ = win.show();
+      if main.was_foreground {
+        let _ = win.set_focus();
+        want_our_focus = true;
+      }
     }
   }
-  if restore_quick_translate {
+
+  if quick_translate.restore {
     if let Some(win) = app.get_webview_window(consts::WIN_LABEL_QUICK_TRANSLATE) {
       let _ = win.show();
       let _ = win.set_always_on_top(true);
+      if quick_translate.was_foreground {
+        let _ = win.set_focus();
+        want_our_focus = true;
+      }
     }
+  }
+
+  // Closing the always-on-top overlay often activates another window in this process (main).
+  // Hand focus back to the pre-capture foreground app unless we intentionally re-focused ours.
+  #[cfg(windows)]
+  if !want_our_focus {
+    restore_previous_foreground(previous_foreground);
+  }
+}
+
+/// True when this window (or a child HWND such as WebView2) is the OS foreground window.
+fn is_window_foreground<R: Runtime>(win: &WebviewWindow<R>) -> bool {
+  #[cfg(windows)]
+  {
+    let Ok(hwnd) = win.hwnd() else {
+      return win.is_focused().unwrap_or(false);
+    };
+    let root = hwnd.0;
+    if root.is_null() {
+      return false;
+    }
+    let fg = unsafe { win32::GetForegroundWindow() };
+    if fg.is_null() {
+      return false;
+    }
+    if fg == root {
+      return true;
+    }
+    // WebView2 focuses a child HWND; treat the root owner as foreground.
+    let fg_root = unsafe { win32::GetAncestor(fg, win32::GA_ROOT) };
+    return !fg_root.is_null() && fg_root == root;
+  }
+
+  #[cfg(not(windows))]
+  {
+    win.is_focused().unwrap_or(false)
+  }
+}
+
+#[cfg(windows)]
+fn foreground_hwnd_raw() -> Option<isize> {
+  let fg = unsafe { win32::GetForegroundWindow() };
+  if fg.is_null() || unsafe { win32::IsWindow(fg) } == 0 {
+    None
+  } else {
+    Some(fg as isize)
+  }
+}
+
+#[cfg(windows)]
+fn restore_previous_foreground(previous: Option<isize>) {
+  let Some(raw) = previous else {
+    return;
+  };
+  let target = raw as *mut std::ffi::c_void;
+  if target.is_null() || unsafe { win32::IsWindow(target) } == 0 {
+    return;
+  }
+
+  unsafe {
+    let current = win32::GetForegroundWindow();
+    if current == target {
+      return;
+    }
+
+    // AttachThreadInput lets us bypass the foreground lock after our overlay held focus.
+    let current_thread = win32::GetCurrentThreadId();
+    let fg_thread = if current.is_null() {
+      0
+    } else {
+      win32::GetWindowThreadProcessId(current, std::ptr::null_mut())
+    };
+    let target_thread = win32::GetWindowThreadProcessId(target, std::ptr::null_mut());
+
+    let attached_fg =
+      fg_thread != 0 && fg_thread != current_thread && win32::AttachThreadInput(fg_thread, current_thread, 1) != 0;
+    let attached_target = target_thread != 0
+      && target_thread != current_thread
+      && target_thread != fg_thread
+      && win32::AttachThreadInput(target_thread, current_thread, 1) != 0;
+
+    let _ = win32::SetForegroundWindow(target);
+
+    if attached_fg {
+      let _ = win32::AttachThreadInput(fg_thread, current_thread, 0);
+    }
+    if attached_target {
+      let _ = win32::AttachThreadInput(target_thread, current_thread, 0);
+    }
+  }
+}
+
+/// Win32 helpers for foreground detection and focus restore (user32/kernel32).
+#[cfg(windows)]
+mod win32 {
+  use std::ffi::c_void;
+
+  pub const GA_ROOT: u32 = 2;
+
+  #[link(name = "user32")]
+  unsafe extern "system" {
+    pub fn GetForegroundWindow() -> *mut c_void;
+    pub fn SetForegroundWindow(hwnd: *mut c_void) -> i32;
+    pub fn GetAncestor(hwnd: *mut c_void, flags: u32) -> *mut c_void;
+    pub fn IsWindow(hwnd: *mut c_void) -> i32;
+    pub fn GetWindowThreadProcessId(hwnd: *mut c_void, process_id: *mut u32) -> u32;
+    pub fn AttachThreadInput(attach_id: u32, attach_to_id: u32, attach: i32) -> i32;
+  }
+
+  #[link(name = "kernel32")]
+  unsafe extern "system" {
+    pub fn GetCurrentThreadId() -> u32;
   }
 }
 
@@ -503,24 +748,7 @@ fn unregister_escape_cancel<R: Runtime>(app: &tauri::AppHandle<R>) {
 
 /// Start region screenshot that will OCR the crop and open Quick Translate only when text is ready.
 pub fn start_for_ocr<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<(), String> {
-  start(app)?;
-  if let Some(state) = app.try_state::<RegionScreenshotState>() {
-    state.ocr_after_capture.store(true, Ordering::SeqCst);
-  }
-  Ok(())
-}
-
-fn clear_ocr_after_capture<R: Runtime>(app: &tauri::AppHandle<R>) {
-  if let Some(state) = app.try_state::<RegionScreenshotState>() {
-    state.ocr_after_capture.store(false, Ordering::SeqCst);
-  }
-}
-
-fn take_ocr_after_capture<R: Runtime>(app: &tauri::AppHandle<R>) -> bool {
-  app
-    .try_state::<RegionScreenshotState>()
-    .map(|state| state.ocr_after_capture.swap(false, Ordering::SeqCst))
-    .unwrap_or(false)
+  start_with_mode(app, CaptureMode::Ocr)
 }
 
 /// Run default OCR and deliver recognized text into Quick Translate (show only when text exists).
@@ -553,13 +781,41 @@ fn spawn_ocr_to_quick_translate<R: Runtime>(app: tauri::AppHandle<R>, png_base64
   });
 }
 
+/// Drop session + temp file without restoring windows (used when starting a new session).
+/// Returns pending restore flags and the original pre-capture foreground HWND (Windows).
+fn discard_session_keep_hidden<R: Runtime>(
+  app: &tauri::AppHandle<R>,
+) -> Result<Option<(WindowRestore, WindowRestore, Option<isize>)>, String> {
+  unregister_escape_cancel(app);
+  hide_overlay(app);
+  if let Some(session) = take_session(app)? {
+    remove_backdrop_file(&session.backdrop_path);
+    #[cfg(windows)]
+    let previous_foreground = session.previous_foreground;
+    #[cfg(not(windows))]
+    let previous_foreground = None;
+    Ok(Some((
+      session.main,
+      session.quick_translate,
+      previous_foreground,
+    )))
+  } else {
+    Ok(None)
+  }
+}
+
 /// Drop session + temp file + restore windows; keep the warm overlay webview.
 fn cancel_session_only<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<(), String> {
   unregister_escape_cancel(app);
-  clear_ocr_after_capture(app);
   if let Some(session) = take_session(app)? {
     remove_backdrop_file(&session.backdrop_path);
-    restore_hidden_windows(app, session.restore_main, session.restore_quick_translate);
+    restore_hidden_windows(
+      app,
+      session.main,
+      session.quick_translate,
+      #[cfg(windows)]
+      session.previous_foreground,
+    );
     let _ = app.emit(consts::REGION_SCREENSHOT_CANCELLED_EVENT, ());
   }
   Ok(())
@@ -732,12 +988,19 @@ pub async fn region_screenshot_confirm<R: Runtime>(
       unregister_escape_cancel(&app);
       remove_backdrop_file(&session.backdrop_path);
       hide_overlay(&app);
-      restore_hidden_windows(&app, session.restore_main, session.restore_quick_translate);
+      restore_hidden_windows(
+        &app,
+        session.main,
+        session.quick_translate,
+        #[cfg(windows)]
+        session.previous_foreground,
+      );
       if let Err(err) = app.emit(consts::REGION_SCREENSHOT_CAPTURED_EVENT, &result) {
         log::warn!("region_screenshot_emit_failed error={err}");
       }
       log::info!(
-        "region_screenshot_captured size={}x{} region=({}, {}, {}x{}) clipboard=true",
+        "region_screenshot_captured mode={} size={}x{} region=({}, {}, {}x{}) clipboard=true",
+        session.mode.as_str(),
         result.width,
         result.height,
         result.region.x,
@@ -745,7 +1008,8 @@ pub async fn region_screenshot_confirm<R: Runtime>(
         result.region.width,
         result.region.height
       );
-      if take_ocr_after_capture(&app) {
+      if session.mode == CaptureMode::Ocr {
+        log::info!("screenshot_ocr_dispatch");
         spawn_ocr_to_quick_translate(app.clone(), result.png_base64.clone());
       }
       Ok(result)
