@@ -36,7 +36,8 @@ Frontend Effect (npm `effect` 3.x) is a **typed IPC and multi-step workflow** la
 | Typed Tauri invoke failures            | `src/storage/*` (`IpcError`, `invokeEffect`, `runEffectAsPromise` / `runStorage`) | Wire codes decode to a stable error channel; generic Promise bridge rejects raw tagged failures; `runStorage` is the IPC-only alias |
 | Multi-step non-Query workflows         | Feature modules + storage bootstrap                        | Bootstrap, configuration transfer (export/import), history CSV export dialog       |
 | Translate stream/detect/slot IPC start | `src/features/translate/*`                                 | Stream **events** stay Tauri listeners; chunks are not stored in Query             |
-| Filesystem / native dialog failures    | Local `FsError` (not IPC codes)                            | Cancel remains non-throwing success where UX already treats it as cancel           |
+| Filesystem / native dialog failures    | Local `FsError` (not IPC codes)                            | Cancel is a success status (`DialogSaveResult`), not a throw                       |
+| Dialog/fs user-facing errors           | `src/features/userErrorMessage.ts`                         | Routes use `getUserErrorMessage` for Fs + IPC display                              |
 
 ### Layer rules
 
@@ -49,6 +50,6 @@ Frontend Effect (npm `effect` 3.x) is a **typed IPC and multi-step workflow** la
 | `src/routes/*`             | Thin: call runners/helpers; no deep Effect pipelines in JSX    |
 | Secrets / logs             | Never put credentials in Effect errors; use `logger` redaction |
 
-`src/storage/client.ts` keeps Promise signatures for callers. Routes and Query must not import Effect solely for cache orchestration. Theme ordered writes (`ThemeMutationQueue`) stay a single-consumer queue outside Effect unless a second ordered-write use-case appears.
+`src/storage/client.ts` is the Promise façade for Query/DTO CRUD only; translate orchestration and file workflows export `run*` façades under `src/features/*`. Routes and Query must not import Effect solely for cache orchestration. Theme ordered writes (`ThemeMutationQueue`) stay a single-consumer queue outside Effect unless a second ordered-write use-case appears.
 
-**Roadmap / phase plans (Phases 1–3 landed in `src/`; Phase 4 theme-queue rewrite skipped — single consumer; Phase 5 unification planned):** [docs/plans/effect-integration-plan/README.md](../plans/effect-integration-plan/README.md).
+**Roadmap / phase plans (Phases 1–3 landed in `src/`; Phase 4 theme-queue rewrite skipped — single consumer; Phase 5A–5C unification landed, 5D skipped):** [docs/plans/effect-integration-plan/README.md](../plans/effect-integration-plan/README.md).

@@ -20,6 +20,8 @@
 
 **Depends on:** Phases 1–3 complete (Phase 4 optional docs already done).
 
+**Status:** 5A–5C implemented in `src/`; 5D skipped (import rebind left in route). Open-question defaults applied: delete dual client exports; history cancel → `DialogSaveResult`; `getUserErrorMessage` in `src/features/userErrorMessage.ts` (not storage).
+
 **Roadmap:** [README.md](./README.md)
 
 **Sequencing (sub-phases, each mergeable alone):**

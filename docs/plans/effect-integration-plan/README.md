@@ -4,7 +4,7 @@
 
 **Inputs:** Storage/query/translate boundary analysis; `src/storage/*`, `src/query/*`, translate routes; Rust `IpcError` in `src-tauri/src/error.rs`.
 
-**Status:** Phases 1–3 implemented in `src/`; Phase 4 architecture note landed (theme queue rewrite skipped — single consumer). Phase 5 unification is planned (not implemented). This directory remains the roadmap and phase-plan reference.
+**Status:** Phases 1–3 implemented in `src/`; Phase 4 architecture note landed (theme queue rewrite skipped — single consumer). Phase 5 unification landed for 5A–5C (`runEffectAsPromise`, dual-API removal, dialog results + helpers); 5D import rebind extraction skipped. This directory remains the roadmap and phase-plan reference.
 
 ---
 
@@ -90,7 +90,7 @@ Phase 1  IPC foundation          [required first]
 | 2     | Translate stream/detect/slot batch as feature modules; thinner routes                                       | Phase 1      |
 | 3     | Bootstrap + configuration transfer + history export typed cancel/fail                                       | Phase 1      |
 | 4     | Theme queue only if second ordered-write appears; architecture doc note                                     | Phase 1      |
-| 5     | Generic Promise bridge; drop dual client exports; align dialog results + shared helpers                     | Phases 1–3 |
+| 5     | Generic Promise bridge; drop dual client exports; align dialog results + shared helpers (5D skipped)        | Phases 1–3 |
 
 ---
 
