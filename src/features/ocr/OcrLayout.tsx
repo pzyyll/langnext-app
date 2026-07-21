@@ -1,6 +1,6 @@
 // ABOUTME: OCR feature layout with service list rail and nested editor outlet.
-// ABOUTME: Loads OCR services via Query; selection is URL-driven only.
-import { useMemo, useState } from "react";
+// ABOUTME: Loads OCR services via Query; URL-driven selection defaults to the first service.
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, Outlet, useNavigate, useParams } from "@tanstack/react-router";
 import { Button } from "@base-ui/react/button";
@@ -34,6 +34,18 @@ export function OcrLayout() {
     servicesQuery.error != null ? getIpcErrorMessage(servicesQuery.error, t("ocr.loadFailed")) : null;
 
   const [addOpen, setAddOpen] = useState(false);
+
+  // When the OCR tab opens with services already configured but none selected,
+  // default to the first service so the editor is immediately visible.
+  useEffect(() => {
+    if (loading || error) return;
+    if (selectedId) return;
+    if (services.length === 0) return;
+    void navigate({
+      to: "/ocr/$ocrServiceId",
+      params: { ocrServiceId: services[0].id },
+    });
+  }, [services, loading, error, selectedId, navigate]);
 
   const contextValue = useMemo(() => ({ ready: true as const }), []);
 
