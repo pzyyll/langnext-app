@@ -21,7 +21,7 @@
 
 **Roadmap:** [README.md](./README.md)
 
-**Status:** Planned (not implemented). Phase 5 unification marked 5D skipped until this plan is executed.
+**Status:** Implemented. Helper owns theme/language/shortcuts rebind; Query invalidation stays route-owned.
 
 ---
 
@@ -63,18 +63,18 @@ Cancel / invalid / not_applied paths unchanged. Errors use `getUserErrorMessage`
 
 **Steps:**
 
-- [ ] Export async function, e.g.:
+- [x] Export async function, e.g.:
 
   ```ts
   /** Rebind this process after configuration import. Does not invalidate Query caches. */
   export async function applyImportedAppSettings(): Promise<AppSettingsDto>
   ```
 
-- [ ] Implementation order must match current route: get settings → theme (conditional) → language → shortcuts
-- [ ] Return the loaded `AppSettingsDto` so callers can read preview-adjacent fields if needed later (route may ignore return today)
-- [ ] Do **not** log settings blobs or secrets
-- [ ] ABOUTME two-line header
-- [ ] Tests with mocks:
+- [x] Implementation order must match current route: get settings → theme (conditional) → language → shortcuts
+- [x] Return the loaded `AppSettingsDto` so callers can read preview-adjacent fields if needed later (route may ignore return today)
+- [x] Do **not** log settings blobs or secrets
+- [x] ABOUTME two-line header
+- [x] Tests with mocks:
   - Happy path: `getAppSettings` returns light theme + language + shortcuts; asserts `applyThemeToDom`, `applyAppLanguage`, `setAppShortcuts` called once each with expected args
   - `theme: null` or non-mode string: **no** `applyThemeToDom` call; language + shortcuts still run
   - `getAppSettings` rejects → helper rejects; no language/shortcuts calls
@@ -99,11 +99,11 @@ Cancel / invalid / not_applied paths unchanged. Errors use `getUserErrorMessage`
 
 **Steps:**
 
-- [ ] After `status === "applied"`, call `await applyImportedAppSettings()` instead of inlined get/theme/lang/shortcuts
-- [ ] Keep the three `queryClient.invalidateQueries` lines in the route immediately after successful rebind (or after rebind attempt — **preserve today’s order**: rebind first, then invalidate, then toast)
-- [ ] If rebind throws, catch still uses `getUserErrorMessage` and import-failed toast (same as any throw in the try block today)
-- [ ] Remove now-unused imports from the route only if nothing else in the file uses them (`getAppSettings` / `setAppShortcuts` may still be used by shortcut editor section — do not remove blindly)
-- [ ] No Effect imports in the route
+- [x] After `status === "applied"`, call `await applyImportedAppSettings()` instead of inlined get/theme/lang/shortcuts
+- [x] Keep the three `queryClient.invalidateQueries` lines in the route immediately after successful rebind (or after rebind attempt — **preserve today’s order**: rebind first, then invalidate, then toast)
+- [x] If rebind throws, catch still uses `getUserErrorMessage` and import-failed toast (same as any throw in the try block today)
+- [x] Remove now-unused imports from the route only if nothing else in the file uses them (`getAppSettings` / `setAppShortcuts` may still be used by shortcut editor section — do not remove blindly)
+- [x] No Effect imports in the route
 
 **Validation:**
 
@@ -127,8 +127,8 @@ Cancel / invalid / not_applied paths unchanged. Errors use `getUserErrorMessage`
 
 **Steps:**
 
-- [ ] Status: 5D implemented (or keep “skipped” if this plan is abandoned)
-- [ ] Note: helper does not own Query cache
+- [x] Status: 5D implemented (or keep “skipped” if this plan is abandoned)
+- [x] Note: helper does not own Query cache
 
 **Validation:**
 

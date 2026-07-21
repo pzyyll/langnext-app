@@ -20,7 +20,7 @@
 
 **Depends on:** Phases 1–3 complete (Phase 4 optional docs already done).
 
-**Status:** 5A–5C implemented in `src/`. 5D has a dedicated plan ([phase-5d-import-rebind.md](./phase-5d-import-rebind.md)) — not yet implemented (import rebind still in route). Open-question defaults applied for 5A–5C: delete dual client exports; history cancel → `DialogSaveResult`; `getUserErrorMessage` in `src/features/userErrorMessage.ts` (not storage).
+**Status:** 5A–5C implemented in `src/`. 5D implemented via [phase-5d-import-rebind.md](./phase-5d-import-rebind.md) (`applyImportedAppSettings`; Query invalidation remains route-owned). Open-question defaults applied for 5A–5C: delete dual client exports; history cancel → `DialogSaveResult`; `getUserErrorMessage` in `src/features/userErrorMessage.ts` (not storage).
 
 **Related (non-Effect):** Translate route thinning is a separate plan — [docs/plans/2026-07-21-translate-route-thinning-plan.md](../2026-07-21-translate-route-thinning-plan.md).
 
@@ -345,7 +345,7 @@ rg -n "translateTextStream|cancelTranslate" src --glob "!**/*.test.*"
 | Delete vs one-cycle deprecate dual `client` exports | **Delete** when inventory empty | 5B |
 | Shared `DialogSaveResult` home (`features/dialogResult.ts` vs export from history and re-export) | **`src/features/dialogResult.ts`** | 5C |
 | Keep `runStorageExit` | **Keep + comment** (test/Cause utility) | 5A |
-| Ship 5D import rebind extraction | **Skip unless touching settings import anyway** | 5D |
+| Ship 5D import rebind extraction | **Implemented** (`applyImportedAppSettings`) | 5D |
 
 ---
 

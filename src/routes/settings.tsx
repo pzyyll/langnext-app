@@ -19,13 +19,13 @@ import {
   switchThumbClassName,
 } from "../components/ui";
 import { useToast } from "../components/toast/useToast";
+import { applyImportedAppSettings } from "../features/settings/applyImportedAppSettings";
 import {
   runExportConfigurationToFile,
   runImportConfigurationFromFile,
 } from "../features/settings/configurationTransfer";
 import { getUserErrorMessage } from "../features/userErrorMessage";
-import { applyAppLanguage } from "../i18n";
-import { APP_LANGUAGES, normalizeLanguage, type AppLanguage } from "../i18n/languages";
+import { APP_LANGUAGES, type AppLanguage } from "../i18n/languages";
 import { useLanguage } from "../i18n/useLanguage";
 import { modelKeys, profileKeys, providerKeys } from "../query/keys";
 import { getAppSettings, setAppShortcuts } from "../storage/client";
@@ -39,7 +39,7 @@ import {
   type ShortcutDefinition,
 } from "../storage/types";
 import { useTheme } from "../theme/useTheme";
-import { applyThemeToDom, isThemeMode, type ThemeMode } from "../theme/theme";
+import { type ThemeMode } from "../theme/theme";
 import { formatShortcutBinding, keyboardEventToBinding } from "./-shortcutBinding";
 
 export const Route = createFileRoute("/settings")({
@@ -253,13 +253,7 @@ function BackupSettingsSection() {
       }
 
       // Activate imported app_settings in this process (DB write alone does not rebind UI/OS).
-      const settings = await getAppSettings();
-      if (isThemeMode(settings.theme)) {
-        applyThemeToDom(settings.theme);
-      }
-      await applyAppLanguage(normalizeLanguage(settings.uiLanguage));
-      // set_app_shortcuts re-registers OS hotkeys; plain app_settings import does not.
-      await setAppShortcuts(settings.shortcuts);
+      await applyImportedAppSettings();
 
       void queryClient.invalidateQueries({ queryKey: providerKeys.all });
       void queryClient.invalidateQueries({ queryKey: modelKeys.all });

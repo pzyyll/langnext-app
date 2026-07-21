@@ -4,7 +4,7 @@
 
 **Inputs:** Storage/query/translate boundary analysis; `src/storage/*`, `src/query/*`, translate routes; Rust `IpcError` in `src-tauri/src/error.rs`.
 
-**Status:** Phases 1–3 implemented in `src/`; Phase 4 architecture note landed (theme queue rewrite skipped — single consumer). Phase 5 unification landed for 5A–5C (`runEffectAsPromise`, dual-API removal, dialog results + helpers). Phase 5D import rebind has a dedicated plan (not implemented). Translate route thinning is a related non-Effect plan outside this directory. This directory remains the Effect roadmap and phase-plan reference.
+**Status:** Phases 1–3 implemented in `src/`; Phase 4 architecture note landed (theme queue rewrite skipped — single consumer). Phase 5 unification landed for 5A–5C (`runEffectAsPromise`, dual-API removal, dialog results + helpers). Phase 5D import rebind landed (`applyImportedAppSettings`; Query invalidation stays route-owned). Translate route thinning is a related non-Effect plan outside this directory. This directory remains the Effect roadmap and phase-plan reference.
 
 ---
 
@@ -159,7 +159,7 @@ mise run lint
 | Architecture note timing                                              | Phase 4 (or append early in Phase 1 PR if useful) | Phase 4 |
 | Delete vs deprecate dual `client` stream/config exports               | Delete when inventory empty                       | Phase 5 |
 | History export cancel shape                                           | `{ status: "cancelled" \| "written" }`            | Phase 5 |
-| Import settings rebind extraction (5D)                                | Skip unless already touching import UX            | Phase 5 |
+| Import settings rebind extraction (5D)                                | Implemented — feature helper; no Query in helper  | Phase 5 |
 
 ---
 
