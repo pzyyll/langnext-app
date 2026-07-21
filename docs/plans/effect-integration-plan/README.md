@@ -4,7 +4,7 @@
 
 **Inputs:** Storage/query/translate boundary analysis; `src/storage/*`, `src/query/*`, translate routes; Rust `IpcError` in `src-tauri/src/error.rs`.
 
-**Status:** Phases 1–3 implemented in `src/`; Phase 4 architecture note landed (theme queue rewrite skipped — single consumer). Phase 5 unification landed for 5A–5C (`runEffectAsPromise`, dual-API removal, dialog results + helpers); 5D import rebind extraction skipped. This directory remains the roadmap and phase-plan reference.
+**Status:** Phases 1–3 implemented in `src/`; Phase 4 architecture note landed (theme queue rewrite skipped — single consumer). Phase 5 unification landed for 5A–5C (`runEffectAsPromise`, dual-API removal, dialog results + helpers). Phase 5D import rebind has a dedicated plan (not implemented). Translate route thinning is a related non-Effect plan outside this directory. This directory remains the Effect roadmap and phase-plan reference.
 
 ---
 
@@ -17,6 +17,8 @@
 | [phase-3-workflows.md](./phase-3-workflows.md)                   | Bootstrap, config transfer, history export                       | Yes — after Phase 1 (Phase 2 not required) |
 | [phase-4-optional.md](./phase-4-optional.md)                     | Ordered writes, architecture note polish                         | Optional                                   |
 | [phase-5-unification.md](./phase-5-unification.md)               | Promise bridge, dual-API convergence, result shapes, helpers     | Yes — after Phases 1–3 (5A first)          |
+| [phase-5d-import-rebind.md](./phase-5d-import-rebind.md)         | Post-import theme/language/shortcuts rebind helper               | Optional — after 5A–5C                     |
+| [../2026-07-21-translate-route-thinning-plan.md](../2026-07-21-translate-route-thinning-plan.md) | Thin translate routes via hooks/pure helpers (not Effect) | Independent of Effect phases               |
 
 Phase plans are full implementation plans (file map, tasks, validation). This file is the roadmap only: sequencing, shared decisions, and cross-phase constraints.
 
@@ -90,7 +92,9 @@ Phase 1  IPC foundation          [required first]
 | 2     | Translate stream/detect/slot batch as feature modules; thinner routes                                       | Phase 1      |
 | 3     | Bootstrap + configuration transfer + history export typed cancel/fail                                       | Phase 1      |
 | 4     | Theme queue only if second ordered-write appears; architecture doc note                                     | Phase 1      |
-| 5     | Generic Promise bridge; drop dual client exports; align dialog results + shared helpers (5D skipped)        | Phases 1–3 |
+| 5     | Generic Promise bridge; drop dual client exports; align dialog results + shared helpers                     | Phases 1–3   |
+| 5D    | Import app-settings rebind helper (Query invalidation stays in route)                                       | 5A–5C      |
+| —     | Translate route thinning (hooks / pure helpers; see related plan)                                           | Independent |
 
 ---
 
@@ -170,6 +174,8 @@ mise run lint
 | Bootstrap / import-export / history export | Phase 3                |
 | Optional ordered-write unification         | Phase 4                |
 | Unify bridges, dual APIs, dialog results   | Phase 5                |
+| Import settings rebind extraction          | Phase 5D               |
+| Translate route thinning (non-Effect)      | Related plan (not a phase number) |
 | No component-level Effect                  | All phases             |
 
 ---

@@ -20,7 +20,9 @@
 
 **Depends on:** Phases 1–3 complete (Phase 4 optional docs already done).
 
-**Status:** 5A–5C implemented in `src/`; 5D skipped (import rebind left in route). Open-question defaults applied: delete dual client exports; history cancel → `DialogSaveResult`; `getUserErrorMessage` in `src/features/userErrorMessage.ts` (not storage).
+**Status:** 5A–5C implemented in `src/`. 5D has a dedicated plan ([phase-5d-import-rebind.md](./phase-5d-import-rebind.md)) — not yet implemented (import rebind still in route). Open-question defaults applied for 5A–5C: delete dual client exports; history cancel → `DialogSaveResult`; `getUserErrorMessage` in `src/features/userErrorMessage.ts` (not storage).
+
+**Related (non-Effect):** Translate route thinning is a separate plan — [docs/plans/2026-07-21-translate-route-thinning-plan.md](../2026-07-21-translate-route-thinning-plan.md).
 
 **Roadmap:** [README.md](./README.md)
 
@@ -71,12 +73,13 @@
 - Modify: `src/routes/settings.tsx`, `src/routes/history.tsx` — replace duplicated `isFsError ? … : getIpcErrorMessage` branches
 - Document: single-id `cancelTranslate` vs `runCancelRequestIds` failure policy (swallow vs surface)
 
-### 5D — Optional polish (not required for unification success)
+### 5D — Import app-settings rebind (optional; full plan separate)
 
-- Modify: `src/features/settings/configurationTransfer.ts` and/or new helper — optional `applyImportedAppSettings` for theme/language/shortcuts rebind only
-- Modify: `src/routes/settings.tsx` — call rebind helper; **keep** Query invalidation in the route
-- Docs only: note window-chrome `invoke` stays raw; translate route listener extraction is hook work, not Effect work
-- Explicit non-goals remain: ThemeMutationQueue Effect rewrite; Effect inside components/query
+See **[phase-5d-import-rebind.md](./phase-5d-import-rebind.md)** for file map, tasks, and validation.
+
+- Create: `applyImportedAppSettings` (theme + language + shortcuts only)
+- Modify: `src/routes/settings.tsx` — call helper; **keep** Query invalidation in the route
+- Translate route thinning is **not** part of 5D — use the related plan above
 
 ---
 
@@ -223,30 +226,9 @@
 
 ### Task 5 (5D, optional): Import settings rebind helper
 
-**Outcome:** Post-import theme/language/shortcuts rebind is testable outside the route; Query invalidation stays in the route.
+**Superseded by full plan:** [phase-5d-import-rebind.md](./phase-5d-import-rebind.md).
 
-**Files:**
-
-- Modify: `src/features/settings/configurationTransfer.ts` (or create `src/features/settings/applyImportedAppSettings.ts`)
-- Modify: `src/routes/settings.tsx`
-- Test: unit test with mocked settings client + theme/i18n applies
-
-**Steps:**
-
-- [ ] Extract only:
-  - `getAppSettings`
-  - apply theme when mode valid
-  - `applyAppLanguage(normalizeLanguage(...))`
-  - `setAppShortcuts(settings.shortcuts)`
-- [ ] Leave provider/model/profile `queryClient.invalidateQueries` in `settings.tsx`
-- [ ] Error channel: IPC failures as `IpcError` via existing bridge; route still uses `getUserErrorMessage`
-- [ ] Never log full settings blobs or credentials
-- [ ] Skip this task if import UX is stable and extraction would be drive-by scope
-
-**Validation:**
-
-- Run: targeted test for the new helper + `mise run typecheck`
-- Expected: Pass / Exit 0
+Do not implement from this stub — use the dedicated file map, tasks, and validation there.
 
 ---
 
