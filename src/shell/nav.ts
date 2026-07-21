@@ -2,13 +2,14 @@
 // ABOUTME: Order in this array defines up/down page transition direction.
 
 /** Icon keys consumed by the shell sidebar (material-symbols-light). */
-export type NavIconId = "translate" | "book" | "history" | "neurology" | "settings";
+export type NavIconId = "translate" | "book" | "history" | "neurology" | "document_scanner" | "settings";
 
 export const navItems = [
   { to: "/translate", labelKey: "nav.translate", exact: true, icon: "translate" },
   { to: "/translate/profiles", labelKey: "nav.translateProfiles", exact: true, icon: "book" },
   { to: "/history", labelKey: "nav.history", exact: false, icon: "history" },
   { to: "/models", labelKey: "nav.models", exact: false, icon: "neurology" },
+  { to: "/ocr", labelKey: "nav.ocr", exact: false, icon: "document_scanner" },
   { to: "/settings", labelKey: "nav.settings", exact: false, icon: "settings" },
 ] as const satisfies ReadonlyArray<{
   to: string;
@@ -19,11 +20,11 @@ export const navItems = [
 
 export type NavItem = (typeof navItems)[number];
 
-/** Primary sidebar links (Translate / Profiles / History / Models). Settings is rendered at the footer. */
-export const primaryNavItems = [navItems[0], navItems[1], navItems[2], navItems[3]] as const;
+/** Primary sidebar links (Translate / Profiles / History / Models / OCR). Settings is rendered at the footer. */
+export const primaryNavItems = [navItems[0], navItems[1], navItems[2], navItems[3], navItems[4]] as const;
 
 /** Settings entry shown in the sidebar footer. */
-export const settingsNavItem = navItems[4];
+export const settingsNavItem = navItems[5];
 
 export type ScrollTransitionType = "scroll-down" | "scroll-up";
 

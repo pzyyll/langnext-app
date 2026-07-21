@@ -6,8 +6,8 @@ use crate::device_state::{DeviceStateManager, SharedDeviceState};
 use crate::domain::cancel::TranslateSessionRegistry;
 use crate::error::StorageError;
 use crate::services::{
-  ImportExportService, ModelService, ProviderService, SettingsService, TranslationHistoryService,
-  TranslationProfileService,
+  ImportExportService, ModelService, OcrServiceService, ProviderService, SettingsService,
+  TranslationHistoryService, TranslationProfileService,
 };
 use crate::storage::Database;
 use std::path::PathBuf;
@@ -20,6 +20,7 @@ pub struct AppState {
   pub providers: ProviderService,
   pub models: ModelService,
   pub profiles: TranslationProfileService,
+  pub ocr_services: OcrServiceService,
   pub settings: SettingsService,
   pub import_export: ImportExportService,
   pub history: TranslationHistoryService,
@@ -43,6 +44,7 @@ impl AppState {
     let history = TranslationHistoryService::new(db.clone());
     let models = ModelService::new(db.clone(), vault.clone(), transport, history);
     let profiles = TranslationProfileService::new(db.clone());
+    let ocr_services = OcrServiceService::new(db.clone(), vault.clone());
     let settings = SettingsService::new(db.clone(), vault.clone());
     let import_export = ImportExportService::new(db.clone(), vault.clone());
     let history = TranslationHistoryService::new(db.clone());
@@ -55,6 +57,7 @@ impl AppState {
       providers,
       models,
       profiles,
+      ocr_services,
       settings,
       import_export,
       history,

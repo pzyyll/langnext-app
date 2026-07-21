@@ -12,6 +12,9 @@ export const DATA_MODELS_CHANGED = "data://models-changed";
 /** Coarse notification after translation history delete or clear-all (not after each write). */
 export const DATA_TRANSLATION_HISTORY_CHANGED = "data://translation-history-changed";
 
+/** Coarse notification after OCR service create/update/delete. */
+export const DATA_OCR_SERVICES_CHANGED = "data://ocr-services-changed";
+
 /** Clipboard text emitted to the Quick Translate window on double Ctrl+C. */
 export const QUICK_TRANSLATE_CLIPBOARD_TEXT = "quick-translate://clipboard-text";
 

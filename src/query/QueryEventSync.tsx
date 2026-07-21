@@ -7,11 +7,12 @@ import { logger } from "../logger";
 import { createDebouncedInvalidator } from "./debouncedInvalidator";
 import {
   DATA_MODELS_CHANGED,
+  DATA_OCR_SERVICES_CHANGED,
   DATA_PROVIDERS_CHANGED,
   DATA_TRANSLATION_HISTORY_CHANGED,
   DATA_TRANSLATION_PROFILES_CHANGED,
 } from "./events";
-import { historyKeys, modelKeys, profileKeys, providerKeys } from "./keys";
+import { historyKeys, modelKeys, ocrKeys, profileKeys, providerKeys } from "./keys";
 import { registerDataChangeListeners } from "./registerDataChangeListeners";
 
 /** Coalesce bulk model-delete event storms into one invalidate per prefix. */
@@ -74,6 +75,12 @@ export function QueryEventSync() {
               invalidator.schedule(historyKeys.all);
             },
           },
+          {
+            name: DATA_OCR_SERVICES_CHANGED,
+            onEvent: () => {
+              invalidator.schedule(ocrKeys.all);
+            },
+          },
         ],
       });
 
@@ -90,6 +97,7 @@ export function QueryEventSync() {
         void queryClient.invalidateQueries({ queryKey: providerKeys.all });
         void queryClient.invalidateQueries({ queryKey: modelKeys.all });
         void queryClient.invalidateQueries({ queryKey: historyKeys.all });
+        void queryClient.invalidateQueries({ queryKey: ocrKeys.all });
       }
     }
 

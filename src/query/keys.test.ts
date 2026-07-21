@@ -1,7 +1,7 @@
 // ABOUTME: Contract tests for Query key hierarchy and prefix invalidation shape.
 // ABOUTME: Pure key factories only — no DOM or IPC required.
 import { describe, expect, test } from "bun:test";
-import { modelKeys, profileKeys, providerKeys } from "./keys";
+import { modelKeys, ocrKeys, profileKeys, providerKeys } from "./keys";
 
 describe("providerKeys", () => {
   test("list key starts with providerKeys.all", () => {
@@ -43,5 +43,22 @@ describe("profileKeys", () => {
     expect(detailB).toEqual(["translation-profiles", "detail", "id-b"]);
     expect(detailA).not.toEqual(detailB);
     expect(list).toEqual(["translation-profiles", "list"]);
+  });
+});
+
+describe("ocrKeys", () => {
+  test("list and detail keys share ocrKeys.all prefix", () => {
+    const list = ocrKeys.list();
+    const detailA = ocrKeys.detail("id-a");
+    const detailB = ocrKeys.detail("id-b");
+
+    expect(list[0]).toBe(ocrKeys.all[0]);
+    expect(detailA[0]).toBe(ocrKeys.all[0]);
+    expect(detailB[0]).toBe(ocrKeys.all[0]);
+
+    expect(list).toEqual(["ocr-services", "list"]);
+    expect(detailA).toEqual(["ocr-services", "detail", "id-a"]);
+    expect(detailB).toEqual(["ocr-services", "detail", "id-b"]);
+    expect(detailA).not.toEqual(detailB);
   });
 });

@@ -25,3 +25,9 @@ export const historyKeys = {
   many: (ids: string[]) => [...historyKeys.all, "many", ids] as const,
   modelFacets: () => [...historyKeys.all, "model-facets"] as const,
 };
+
+export const ocrKeys = {
+  all: ["ocr-services"] as const,
+  list: () => [...ocrKeys.all, "list"] as const,
+  detail: (id: string) => [...ocrKeys.all, "detail", id] as const,
+};

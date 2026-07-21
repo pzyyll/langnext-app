@@ -14,6 +14,7 @@ pub const MIGRATIONS: &[&str] = &[
   include_str!("../../migrations/0007_profile_streaming.sql"),
   include_str!("../../migrations/0008_translation_history.sql"),
   include_str!("../../migrations/0009_profile_prompt_templates.sql"),
+  include_str!("../../migrations/0010_ocr_services.sql"),
 ];
 
 pub fn latest_version() -> i32 {
@@ -160,6 +161,15 @@ mod tests {
       )
       .unwrap();
     assert_eq!(has_default_col, 1);
+    // v10 OCR services tables exist and are empty on a fresh database.
+    let ocr_count: i64 = conn
+      .query_row("SELECT COUNT(*) FROM ocr_services", [], |r| r.get(0))
+      .unwrap();
+    assert_eq!(ocr_count, 0);
+    let ocr_template_count: i64 = conn
+      .query_row("SELECT COUNT(*) FROM ocr_prompt_templates", [], |r| r.get(0))
+      .unwrap();
+    assert_eq!(ocr_template_count, 0);
   }
 
   #[test]

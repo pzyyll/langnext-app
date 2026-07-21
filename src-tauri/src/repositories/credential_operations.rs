@@ -9,6 +9,8 @@ use uuid::Uuid;
 pub enum OwnerKind {
   Provider,
   GlobalProxy,
+  OcrApiKey,
+  OcrSecretKey,
 }
 
 impl OwnerKind {
@@ -16,6 +18,8 @@ impl OwnerKind {
     match self {
       Self::Provider => "provider",
       Self::GlobalProxy => "global_proxy",
+      Self::OcrApiKey => "ocr_api_key",
+      Self::OcrSecretKey => "ocr_secret_key",
     }
   }
 
@@ -23,6 +27,8 @@ impl OwnerKind {
     match value {
       "provider" => Ok(Self::Provider),
       "global_proxy" => Ok(Self::GlobalProxy),
+      "ocr_api_key" => Ok(Self::OcrApiKey),
+      "ocr_secret_key" => Ok(Self::OcrSecretKey),
       other => Err(StorageError::Internal(format!("unknown owner_kind: {other}"))),
     }
   }

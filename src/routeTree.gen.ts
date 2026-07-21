@@ -13,12 +13,15 @@ import { Route as TranslateRouteImport } from "./routes/translate"
 import { Route as SettingsRouteImport } from "./routes/settings"
 import { Route as ScreenshotOverlayRouteImport } from "./routes/screenshot-overlay"
 import { Route as QuickTranslateRouteImport } from "./routes/quick-translate"
+import { Route as OcrRouteImport } from "./routes/ocr"
 import { Route as ModelsRouteImport } from "./routes/models"
 import { Route as HistoryRouteImport } from "./routes/history"
 import { Route as IndexRouteImport } from "./routes/index"
 import { Route as TranslateIndexRouteImport } from "./routes/translate/index"
+import { Route as OcrIndexRouteImport } from "./routes/ocr/index"
 import { Route as ModelsIndexRouteImport } from "./routes/models/index"
 import { Route as TranslateProfilesRouteImport } from "./routes/translate/profiles"
+import { Route as OcrOcrServiceIdRouteImport } from "./routes/ocr/$ocrServiceId"
 import { Route as ModelsProviderIdRouteImport } from "./routes/models/$providerId"
 
 const TranslateRoute = TranslateRouteImport.update({
@@ -41,6 +44,11 @@ const QuickTranslateRoute = QuickTranslateRouteImport.update({
   path: "/quick-translate",
   getParentRoute: () => rootRouteImport,
 } as any)
+const OcrRoute = OcrRouteImport.update({
+  id: "/ocr",
+  path: "/ocr",
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ModelsRoute = ModelsRouteImport.update({
   id: "/models",
   path: "/models",
@@ -61,6 +69,11 @@ const TranslateIndexRoute = TranslateIndexRouteImport.update({
   path: "/",
   getParentRoute: () => TranslateRoute,
 } as any)
+const OcrIndexRoute = OcrIndexRouteImport.update({
+  id: "/",
+  path: "/",
+  getParentRoute: () => OcrRoute,
+} as any)
 const ModelsIndexRoute = ModelsIndexRouteImport.update({
   id: "/",
   path: "/",
@@ -70,6 +83,11 @@ const TranslateProfilesRoute = TranslateProfilesRouteImport.update({
   id: "/profiles",
   path: "/profiles",
   getParentRoute: () => TranslateRoute,
+} as any)
+const OcrOcrServiceIdRoute = OcrOcrServiceIdRouteImport.update({
+  id: "/$ocrServiceId",
+  path: "/$ocrServiceId",
+  getParentRoute: () => OcrRoute,
 } as any)
 const ModelsProviderIdRoute = ModelsProviderIdRouteImport.update({
   id: "/$providerId",
@@ -81,13 +99,16 @@ export interface FileRoutesByFullPath {
   "/": typeof IndexRoute
   "/history": typeof HistoryRoute
   "/models": typeof ModelsRouteWithChildren
+  "/ocr": typeof OcrRouteWithChildren
   "/quick-translate": typeof QuickTranslateRoute
   "/screenshot-overlay": typeof ScreenshotOverlayRoute
   "/settings": typeof SettingsRoute
   "/translate": typeof TranslateRouteWithChildren
   "/models/$providerId": typeof ModelsProviderIdRoute
+  "/ocr/$ocrServiceId": typeof OcrOcrServiceIdRoute
   "/translate/profiles": typeof TranslateProfilesRoute
   "/models/": typeof ModelsIndexRoute
+  "/ocr/": typeof OcrIndexRoute
   "/translate/": typeof TranslateIndexRoute
 }
 export interface FileRoutesByTo {
@@ -97,8 +118,10 @@ export interface FileRoutesByTo {
   "/screenshot-overlay": typeof ScreenshotOverlayRoute
   "/settings": typeof SettingsRoute
   "/models/$providerId": typeof ModelsProviderIdRoute
+  "/ocr/$ocrServiceId": typeof OcrOcrServiceIdRoute
   "/translate/profiles": typeof TranslateProfilesRoute
   "/models": typeof ModelsIndexRoute
+  "/ocr": typeof OcrIndexRoute
   "/translate": typeof TranslateIndexRoute
 }
 export interface FileRoutesById {
@@ -106,13 +129,16 @@ export interface FileRoutesById {
   "/": typeof IndexRoute
   "/history": typeof HistoryRoute
   "/models": typeof ModelsRouteWithChildren
+  "/ocr": typeof OcrRouteWithChildren
   "/quick-translate": typeof QuickTranslateRoute
   "/screenshot-overlay": typeof ScreenshotOverlayRoute
   "/settings": typeof SettingsRoute
   "/translate": typeof TranslateRouteWithChildren
   "/models/$providerId": typeof ModelsProviderIdRoute
+  "/ocr/$ocrServiceId": typeof OcrOcrServiceIdRoute
   "/translate/profiles": typeof TranslateProfilesRoute
   "/models/": typeof ModelsIndexRoute
+  "/ocr/": typeof OcrIndexRoute
   "/translate/": typeof TranslateIndexRoute
 }
 export interface FileRouteTypes {
@@ -121,13 +147,16 @@ export interface FileRouteTypes {
     | "/"
     | "/history"
     | "/models"
+    | "/ocr"
     | "/quick-translate"
     | "/screenshot-overlay"
     | "/settings"
     | "/translate"
     | "/models/$providerId"
+    | "/ocr/$ocrServiceId"
     | "/translate/profiles"
     | "/models/"
+    | "/ocr/"
     | "/translate/"
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -137,21 +166,26 @@ export interface FileRouteTypes {
     | "/screenshot-overlay"
     | "/settings"
     | "/models/$providerId"
+    | "/ocr/$ocrServiceId"
     | "/translate/profiles"
     | "/models"
+    | "/ocr"
     | "/translate"
   id:
     | "__root__"
     | "/"
     | "/history"
     | "/models"
+    | "/ocr"
     | "/quick-translate"
     | "/screenshot-overlay"
     | "/settings"
     | "/translate"
     | "/models/$providerId"
+    | "/ocr/$ocrServiceId"
     | "/translate/profiles"
     | "/models/"
+    | "/ocr/"
     | "/translate/"
   fileRoutesById: FileRoutesById
 }
@@ -159,6 +193,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   HistoryRoute: typeof HistoryRoute
   ModelsRoute: typeof ModelsRouteWithChildren
+  OcrRoute: typeof OcrRouteWithChildren
   QuickTranslateRoute: typeof QuickTranslateRoute
   ScreenshotOverlayRoute: typeof ScreenshotOverlayRoute
   SettingsRoute: typeof SettingsRoute
@@ -195,6 +230,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof QuickTranslateRouteImport
       parentRoute: typeof rootRouteImport
     }
+    "/ocr": {
+      id: "/ocr"
+      path: "/ocr"
+      fullPath: "/ocr"
+      preLoaderRoute: typeof OcrRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     "/models": {
       id: "/models"
       path: "/models"
@@ -223,6 +265,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof TranslateIndexRouteImport
       parentRoute: typeof TranslateRoute
     }
+    "/ocr/": {
+      id: "/ocr/"
+      path: "/"
+      fullPath: "/ocr/"
+      preLoaderRoute: typeof OcrIndexRouteImport
+      parentRoute: typeof OcrRoute
+    }
     "/models/": {
       id: "/models/"
       path: "/"
@@ -236,6 +285,13 @@ declare module "@tanstack/react-router" {
       fullPath: "/translate/profiles"
       preLoaderRoute: typeof TranslateProfilesRouteImport
       parentRoute: typeof TranslateRoute
+    }
+    "/ocr/$ocrServiceId": {
+      id: "/ocr/$ocrServiceId"
+      path: "/$ocrServiceId"
+      fullPath: "/ocr/$ocrServiceId"
+      preLoaderRoute: typeof OcrOcrServiceIdRouteImport
+      parentRoute: typeof OcrRoute
     }
     "/models/$providerId": {
       id: "/models/$providerId"
@@ -260,6 +316,18 @@ const ModelsRouteChildren: ModelsRouteChildren = {
 const ModelsRouteWithChildren =
   ModelsRoute._addFileChildren(ModelsRouteChildren)
 
+interface OcrRouteChildren {
+  OcrOcrServiceIdRoute: typeof OcrOcrServiceIdRoute
+  OcrIndexRoute: typeof OcrIndexRoute
+}
+
+const OcrRouteChildren: OcrRouteChildren = {
+  OcrOcrServiceIdRoute: OcrOcrServiceIdRoute,
+  OcrIndexRoute: OcrIndexRoute,
+}
+
+const OcrRouteWithChildren = OcrRoute._addFileChildren(OcrRouteChildren)
+
 interface TranslateRouteChildren {
   TranslateProfilesRoute: typeof TranslateProfilesRoute
   TranslateIndexRoute: typeof TranslateIndexRoute
@@ -278,6 +346,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   HistoryRoute: HistoryRoute,
   ModelsRoute: ModelsRouteWithChildren,
+  OcrRoute: OcrRouteWithChildren,
   QuickTranslateRoute: QuickTranslateRoute,
   ScreenshotOverlayRoute: ScreenshotOverlayRoute,
   SettingsRoute: SettingsRoute,

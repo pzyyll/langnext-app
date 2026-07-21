@@ -143,9 +143,10 @@ impl From<&ProviderInstance> for ProviderInstanceDto {
 }
 
 /// Credential mutation for Provider writes. Secrets are never printed via Debug.
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, Default)]
 #[serde(rename_all = "camelCase", tag = "action", content = "value")]
 pub enum CredentialUpdate {
+  #[default]
   Keep,
   Replace(String),
   Clear,

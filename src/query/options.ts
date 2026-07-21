@@ -2,9 +2,11 @@
 // ABOUTME: Keeps query keys and fetchers co-located for reuse across routes.
 import { queryOptions } from "@tanstack/react-query";
 import {
+  getOcrService,
   getTranslationHistory,
   getTranslationProfile,
   listAllProviderModels,
+  listOcrServices,
   listProviderInstances,
   listProviderModels,
   listTranslationHistory,
@@ -12,7 +14,7 @@ import {
   listTranslationProfiles,
 } from "../storage/client";
 import type { TranslationHistoryListQuery } from "../storage/types";
-import { historyKeys, modelKeys, profileKeys, providerKeys } from "./keys";
+import { historyKeys, modelKeys, ocrKeys, profileKeys, providerKeys } from "./keys";
 
 export function providerListOptions() {
   return queryOptions({
@@ -70,5 +72,20 @@ export function historyModelFacetsOptions() {
   return queryOptions({
     queryKey: historyKeys.modelFacets(),
     queryFn: listTranslationHistoryModelFacets,
+  });
+}
+
+export function ocrListOptions() {
+  return queryOptions({
+    queryKey: ocrKeys.list(),
+    queryFn: listOcrServices,
+  });
+}
+
+export function ocrDetailOptions(id: string) {
+  return queryOptions({
+    queryKey: ocrKeys.detail(id),
+    queryFn: () => getOcrService(id),
+    enabled: id.length > 0,
   });
 }

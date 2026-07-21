@@ -6,8 +6,10 @@ use crate::domain::settings::AppSettingsV1;
 use crate::domain::time::{new_id, now_rfc3339};
 use crate::domain::translation_profile::{PromptTemplate, TranslationProfile, TranslationProfileTarget};
 use crate::error::StorageError;
+use crate::domain::ocr_service::{BaiduOcrAction, OcrPromptTemplate, OcrProviderType, OcrService};
 use crate::repositories::{
-  app_credentials, app_settings, credential_operations, provider_instances, provider_models, translation_profiles,
+  app_credentials, app_settings, credential_operations, ocr_prompt_templates, ocr_services, provider_instances,
+  provider_models, translation_profiles,
 };
 use crate::storage::Database;
 use uuid::Uuid;
@@ -406,6 +408,209 @@ fn credential_journal_one_active_per_owner() {
       Some("provider/x/z"),
     );
     assert!(matches!(err, Err(StorageError::CredentialBusy)));
+    Ok(())
+  })
+  .unwrap();
+}
+
+fn sample_baidu_ocr(id: Uuid, name: &str) -> OcrService {
+  let now = now_rfc3339();
+  OcrService {
+    id,
+    provider_type: OcrProviderType::Baidu,
+    display_name: name.into(),
+    enabled: true,
+    sort_order: 0,
+    baidu_action: Some(BaiduOcrAction::Accurate),
+    api_key_ref: None,
+    secret_key_ref: None,
+    provider_model_id: None,
+    temperature: None,
+    default_prompt_template_id: None,
+    created_at: now.clone(),
+    updated_at: now,
+  }
+}
+
+fn sample_ai_ocr(id: Uuid, model_id: Uuid, default_template_id: Uuid, name: &str) -> OcrService {
+  let now = now_rfc3339();
+  OcrService {
+    id,
+    provider_type: OcrProviderType::Ai,
+    display_name: name.into(),
+    enabled: true,
+    sort_order: 0,
+    baidu_action: None,
+    api_key_ref: None,
+    secret_key_ref: None,
+    provider_model_id: Some(model_id),
+    temperature: Some(0.2),
+    default_prompt_template_id: Some(default_template_id),
+    created_at: now.clone(),
+    updated_at: now,
+  }
+}
+
+#[test]
+fn ocr_service_crud_list_order_and_template_cascade() {
+  let (_dir, db) = setup();
+  let baidu_a = new_id();
+  let baidu_b = new_id();
+  let ai_id = new_id();
+  let provider_id = new_id();
+  let model_id = new_id();
+  let template_a = new_id();
+  let template_b = new_id();
+
+  db.transaction(|uow| {
+    provider_instances::insert(uow.conn(), &sample_provider(provider_id))?;
+    provider_models::insert(uow.conn(), &sample_model(model_id, provider_id, "vision"))?;
+
+    // Insert order determines auto sort_order: 0, 1, 2.
+    ocr_services::insert(uow.conn(), &sample_baidu_ocr(baidu_a, "Baidu A"))?;
+    ocr_services::insert(uow.conn(), &sample_baidu_ocr(baidu_b, "Baidu B"))?;
+    ocr_services::insert(
+      uow.conn(),
+      &sample_ai_ocr(ai_id, model_id, template_a, "AI OCR"),
+    )?;
+
+    ocr_prompt_templates::replace_for_service(
+      uow.conn(),
+      ai_id,
+      &[
+        OcrPromptTemplate {
+          id: template_a,
+          name: "Default".into(),
+          system_template: "sys-a".into(),
+          user_template: "user-a".into(),
+        },
+        OcrPromptTemplate {
+          id: template_b,
+          name: "Alt".into(),
+          system_template: "sys-b".into(),
+          user_template: "user-b".into(),
+        },
+      ],
+    )?;
+    Ok(())
+  })
+  .unwrap();
+
+  db.read(|conn| {
+    let list = ocr_services::list(conn)?;
+    assert_eq!(list.len(), 3);
+    assert_eq!(list[0].id, baidu_a);
+    assert_eq!(list[0].sort_order, 0);
+    assert_eq!(list[1].id, baidu_b);
+    assert_eq!(list[1].sort_order, 1);
+    assert_eq!(list[2].id, ai_id);
+    assert_eq!(list[2].sort_order, 2);
+
+    let templates = ocr_prompt_templates::list_for_service(conn, ai_id)?;
+    assert_eq!(templates.len(), 2);
+    assert_eq!(templates[0].id, template_a);
+    assert_eq!(templates[0].name, "Default");
+    assert_eq!(templates[1].id, template_b);
+    assert_eq!(templates[1].name, "Alt");
+
+    let all_templates = ocr_prompt_templates::list_all(conn)?;
+    assert_eq!(all_templates.len(), 2);
+    assert_eq!(all_templates[0].sort_order, 0);
+    assert_eq!(all_templates[1].sort_order, 1);
+    Ok(())
+  })
+  .unwrap();
+
+  // Update configuration (keep credentials) + replace templates.
+  let now = now_rfc3339();
+  let template_c = new_id();
+  db.transaction(|uow| {
+    ocr_services::update_configuration_keep_credentials(
+      uow.conn(),
+      baidu_a,
+      "Baidu A Renamed",
+      false,
+      Some(BaiduOcrAction::GeneralBasic),
+      None,
+      None,
+      None,
+      &now,
+    )?;
+    ocr_services::update_configuration_keep_credentials(
+      uow.conn(),
+      ai_id,
+      "AI OCR Renamed",
+      true,
+      None,
+      Some(model_id),
+      Some(0.5),
+      Some(template_c),
+      &now,
+    )?;
+    ocr_prompt_templates::replace_for_service(
+      uow.conn(),
+      ai_id,
+      &[OcrPromptTemplate {
+        id: template_c,
+        name: "Only".into(),
+        system_template: "sys-c".into(),
+        user_template: "user-c".into(),
+      }],
+    )?;
+    Ok(())
+  })
+  .unwrap();
+
+  db.read(|conn| {
+    let baidu = ocr_services::get(conn, baidu_a)?;
+    assert_eq!(baidu.display_name, "Baidu A Renamed");
+    assert!(!baidu.enabled);
+    assert_eq!(baidu.baidu_action, Some(BaiduOcrAction::GeneralBasic));
+
+    let ai = ocr_services::get(conn, ai_id)?;
+    assert_eq!(ai.display_name, "AI OCR Renamed");
+    assert_eq!(ai.temperature, Some(0.5));
+    assert_eq!(ai.default_prompt_template_id, Some(template_c));
+
+    let templates = ocr_prompt_templates::list_for_service(conn, ai_id)?;
+    assert_eq!(templates.len(), 1);
+    assert_eq!(templates[0].id, template_c);
+    assert_eq!(templates[0].name, "Only");
+    Ok(())
+  })
+  .unwrap();
+
+  // Delete AI service cascades prompt templates.
+  db.transaction(|uow| {
+    ocr_services::delete(uow.conn(), ai_id)?;
+    Ok(())
+  })
+  .unwrap();
+
+  db.read(|conn| {
+    assert!(matches!(ocr_services::get(conn, ai_id), Err(StorageError::NotFound(_))));
+    let templates = ocr_prompt_templates::list_for_service(conn, ai_id)?;
+    assert!(templates.is_empty());
+    let all_templates = ocr_prompt_templates::list_all(conn)?;
+    assert!(all_templates.is_empty());
+
+    let remaining = ocr_services::list(conn)?;
+    assert_eq!(remaining.len(), 2);
+    assert_eq!(remaining[0].id, baidu_a);
+    assert_eq!(remaining[1].id, baidu_b);
+    Ok(())
+  })
+  .unwrap();
+
+  // Delete remaining Baidu rows.
+  db.transaction(|uow| {
+    ocr_services::delete(uow.conn(), baidu_a)?;
+    ocr_services::delete(uow.conn(), baidu_b)?;
+    Ok(())
+  })
+  .unwrap();
+  db.read(|conn| {
+    assert!(ocr_services::list(conn)?.is_empty());
     Ok(())
   })
   .unwrap();

@@ -3,6 +3,8 @@
 pub mod app_credentials;
 pub mod app_settings;
 pub mod credential_operations;
+pub mod ocr_prompt_templates;
+pub mod ocr_services;
 pub mod provider_instances;
 pub mod provider_models;
 pub mod translation_history;

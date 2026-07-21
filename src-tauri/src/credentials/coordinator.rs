@@ -3,7 +3,7 @@
 use crate::credentials::vault::CredentialVault;
 use crate::error::StorageError;
 use crate::repositories::credential_operations::{self, CredentialOperation, OperationState, OwnerKind};
-use crate::repositories::{app_credentials, provider_instances};
+use crate::repositories::{app_credentials, ocr_services, provider_instances};
 use crate::storage::Database;
 use uuid::Uuid;
 
@@ -52,6 +52,24 @@ pub fn current_binding(db: &Database, owner_kind: OwnerKind, owner_id: &str) -> 
       }
     }
     OwnerKind::GlobalProxy => db.read(app_credentials::get_global_proxy_ref),
+    OwnerKind::OcrApiKey => {
+      let id = Uuid::parse_str(owner_id)
+        .map_err(|_| StorageError::Internal(format!("invalid ocr owner_id: {owner_id}")))?;
+      match db.read(|conn| ocr_services::get(conn, id)) {
+        Ok(service) => Ok(service.api_key_ref),
+        Err(StorageError::NotFound(_)) => Ok(None),
+        Err(e) => Err(e),
+      }
+    }
+    OwnerKind::OcrSecretKey => {
+      let id = Uuid::parse_str(owner_id)
+        .map_err(|_| StorageError::Internal(format!("invalid ocr owner_id: {owner_id}")))?;
+      match db.read(|conn| ocr_services::get(conn, id)) {
+        Ok(service) => Ok(service.secret_key_ref),
+        Err(StorageError::NotFound(_)) => Ok(None),
+        Err(e) => Err(e),
+      }
+    }
   }
 }
 

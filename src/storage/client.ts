@@ -6,6 +6,8 @@ import type {
   ConnectionTestResult,
   ManualModelWrite,
   ModelConfigWrite,
+  OcrServiceDto,
+  OcrServiceWrite,
   ProviderInstanceDto,
   ProviderInstanceWrite,
   ProviderModelDto,
@@ -129,6 +131,22 @@ export async function setTranslationProfileEnabled(id: string, enabled: boolean)
 
 export async function deleteTranslationProfile(id: string): Promise<void> {
   return runStorage(invokeEffect<void>("delete_translation_profile", { id }));
+}
+
+export async function listOcrServices(): Promise<OcrServiceDto[]> {
+  return runStorage(invokeEffect<OcrServiceDto[]>("list_ocr_services"));
+}
+
+export async function getOcrService(id: string): Promise<OcrServiceDto> {
+  return runStorage(invokeEffect<OcrServiceDto>("get_ocr_service", { id }));
+}
+
+export async function saveOcrService(input: OcrServiceWrite): Promise<OcrServiceDto> {
+  return runStorage(invokeEffect<OcrServiceDto>("save_ocr_service", { input }));
+}
+
+export async function deleteOcrService(id: string): Promise<void> {
+  return runStorage(invokeEffect<void>("delete_ocr_service", { id }));
 }
 
 export async function getAppSettings(): Promise<AppSettingsDto> {

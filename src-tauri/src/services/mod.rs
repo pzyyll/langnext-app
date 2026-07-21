@@ -3,6 +3,7 @@
 pub mod import_export;
 pub mod import_validation;
 pub mod models;
+pub mod ocr_services;
 pub mod providers;
 pub mod settings;
 pub mod translation_history;
@@ -10,6 +11,7 @@ pub mod translation_profiles;
 
 pub use import_export::ImportExportService;
 pub use models::ModelService;
+pub use ocr_services::OcrServiceService;
 pub use providers::ProviderService;
 pub use settings::SettingsService;
 pub use translation_history::TranslationHistoryService;

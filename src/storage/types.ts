@@ -237,6 +237,58 @@ export interface PromptTemplate {
   userTemplate: string;
 }
 
+export type OcrProviderType = "baidu" | "ai";
+
+export type BaiduOcrAction = "accurate" | "accurate_basic" | "general" | "general_basic";
+
+/** One named prompt template belonging to an AI OCR service. */
+export interface OcrPromptTemplate {
+  id: string;
+  name: string;
+  systemTemplate: string;
+  userTemplate: string;
+}
+
+/** Sanitized OCR service DTO — no vault refs, no secrets. */
+export interface OcrServiceDto {
+  id: string;
+  providerType: OcrProviderType;
+  displayName: string;
+  enabled: boolean;
+  sortOrder: number;
+  /** Baidu only; null for ai. */
+  baiduAction: BaiduOcrAction | null;
+  hasApiKey: boolean;
+  hasSecretKey: boolean;
+  /** AI only; null for baidu. */
+  providerModelId: string | null;
+  temperature: number | null;
+  defaultPromptTemplateId: string | null;
+  /** Empty for baidu. */
+  promptTemplates: OcrPromptTemplate[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface OcrServiceWrite {
+  id?: string | null;
+  providerType: OcrProviderType;
+  displayName: string;
+  enabled: boolean;
+  /** Baidu required on baidu writes. */
+  baiduAction?: BaiduOcrAction | null;
+  apiKey?: CredentialUpdate;
+  secretKey?: CredentialUpdate;
+  /** AI required on ai writes. */
+  providerModelId?: string | null;
+  temperature?: number | null;
+  defaultPromptTemplateId?: string | null;
+  /** Full ordered list; required for ai (≥1). Empty for baidu. */
+  promptTemplates?: OcrPromptTemplate[];
+  /** Required on update. */
+  expectedUpdatedAt?: string | null;
+}
+
 /** Persistence/export row for a prompt template (includes profile ownership + list order). */
 export interface TranslationProfilePromptTemplate extends PromptTemplate {
   translationProfileId: string;

@@ -4,6 +4,7 @@ pub mod cancel;
 pub mod import_export;
 pub mod language_detection;
 pub mod model;
+pub mod ocr_service;
 pub mod provider;
 pub mod settings;
 pub mod time;

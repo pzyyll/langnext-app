@@ -5,6 +5,7 @@ import { Link, Outlet, createRootRoute, useRouterState } from "@tanstack/react-r
 import { TanStackRouterDevtools } from "@tanstack/react-router-devtools";
 import { useTranslation } from "react-i18next";
 import IconMaterialSymbolsLightBook from "~icons/material-symbols-light/book";
+import IconMaterialSymbolsLightDocumentScannerOutline from "~icons/material-symbols-light/document-scanner-outline";
 import IconMaterialSymbolsLightHistory from "~icons/material-symbols-light/history";
 import IconMaterialSymbolsLightNeurology from "~icons/material-symbols-light/neurology";
 import IconMaterialSymbolsLightSettings from "~icons/material-symbols-light/settings";
@@ -38,6 +39,7 @@ const navIconById: Record<NavIconId, ComponentType<SVGProps<SVGSVGElement>>> = {
   book: IconMaterialSymbolsLightBook,
   history: IconMaterialSymbolsLightHistory,
   neurology: IconMaterialSymbolsLightNeurology,
+  document_scanner: IconMaterialSymbolsLightDocumentScannerOutline,
   settings: IconMaterialSymbolsLightSettings,
 };
 
