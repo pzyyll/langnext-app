@@ -28,7 +28,7 @@ export function OcrLayout() {
   const selectedId = params.ocrServiceId;
 
   const servicesQuery = useQuery(ocrListOptions());
-  const services = servicesQuery.data ?? [];
+  const services = useMemo(() => servicesQuery.data ?? [], [servicesQuery.data]);
   const loading = servicesQuery.isLoading;
   const error =
     servicesQuery.error != null ? getIpcErrorMessage(servicesQuery.error, t("ocr.loadFailed")) : null;
