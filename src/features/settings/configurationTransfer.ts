@@ -2,9 +2,10 @@
 // ABOUTME: Dialogs live here (not in the route); never logs documents or secrets.
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
-import { Effect, Either } from "effect";
+import { Effect } from "effect";
 import { invokeEffect } from "../../storage/invokeEffect";
 import type { IpcError } from "../../storage/ipcError";
+import { runEffectAsPromise } from "../../storage/runStorage";
 import type { ConfigurationExport, ImportConflictMode, ImportPreview, ImportResult } from "../../storage/types";
 import { FsError, toFsError } from "../fsError";
 
@@ -177,21 +178,12 @@ export function importConfigurationFromFile(
   });
 }
 
-/** Run an Effect that may fail with IpcError or FsError; reject with the raw tagged error. */
-async function runTransfer<A>(effect: Effect.Effect<A, IpcError | FsError>): Promise<A> {
-  const result = await Effect.runPromise(Effect.either(effect));
-  if (Either.isLeft(result)) {
-    throw result.left;
-  }
-  return result.right;
-}
-
 /** Promise façade: export configuration to a user-chosen JSON file. */
 export function runExportConfigurationToFile(): Promise<ExportConfigurationToFileResult> {
-  return runTransfer(exportConfigurationToFile());
+  return runEffectAsPromise(exportConfigurationToFile());
 }
 
 /** Promise façade: import configuration from a user-chosen JSON file. */
 export function runImportConfigurationFromFile(mode: ImportConflictMode): Promise<ImportConfigurationFromFileResult> {
-  return runTransfer(importConfigurationFromFile(mode));
+  return runEffectAsPromise(importConfigurationFromFile(mode));
 }

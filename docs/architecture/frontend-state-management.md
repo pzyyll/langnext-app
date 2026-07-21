@@ -33,7 +33,7 @@ Frontend Effect (npm `effect` 3.x) is a **typed IPC and multi-step workflow** la
 | Concern                                | Owner                                                      | Notes                                                                              |
 | -------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------------------------------- |
 | Persistent DTO cache                   | TanStack Query                                             | `queryFn` / `mutationFn` stay Promise-based                                        |
-| Typed Tauri invoke failures            | `src/storage/*` (`IpcError`, `invokeEffect`, `runStorage`) | Wire codes decode to a stable error channel; Promise bridge rejects raw `IpcError` |
+| Typed Tauri invoke failures            | `src/storage/*` (`IpcError`, `invokeEffect`, `runEffectAsPromise` / `runStorage`) | Wire codes decode to a stable error channel; generic Promise bridge rejects raw tagged failures; `runStorage` is the IPC-only alias |
 | Multi-step non-Query workflows         | Feature modules + storage bootstrap                        | Bootstrap, configuration transfer (export/import), history CSV export dialog       |
 | Translate stream/detect/slot IPC start | `src/features/translate/*`                                 | Stream **events** stay Tauri listeners; chunks are not stored in Query             |
 | Filesystem / native dialog failures    | Local `FsError` (not IPC codes)                            | Cancel remains non-throwing success where UX already treats it as cancel           |

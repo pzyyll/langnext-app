@@ -1,17 +1,10 @@
 // ABOUTME: Promise runners for translate feature Effects consumed by routes.
 // ABOUTME: Keeps JSX modules off deep Effect pipelines while preserving IpcError rejects.
-import { Effect } from "effect";
-import type { IpcError } from "../../storage/ipcError";
-import { runStorage } from "../../storage/runStorage";
+import { runEffectAsPromise, runStorage } from "../../storage/runStorage";
 import type { DetectLanguageInput, DetectLanguageResult, TranslateInput } from "../../storage/types";
 import { detectLanguageFlow } from "./detectLanguageFlow";
 import { cancelRequestIds, startSlotStreamBatch, type SlotStreamJob, type SlotStreamStartOutcome } from "./slotBatch";
 import { startTranslateStream } from "./translateStream";
-
-/** Widen `never` error channel so the shared Promise bridge accepts infallible Effects. */
-function asStorageEffect<A>(effect: Effect.Effect<A, never>): Effect.Effect<A, IpcError> {
-  return effect;
-}
 
 /**
  * Start a streaming translation. Rejects with raw `IpcError` on invoke failure.
@@ -33,7 +26,7 @@ export function runDetectLanguage(input: DetectLanguageInput, requestId?: string
  * Resolves to one outcome per job (never rejects for a single slot's IpcError).
  */
 export function runStartSlotStreamBatch(jobs: readonly SlotStreamJob[]): Promise<SlotStreamStartOutcome[]> {
-  return runStorage(asStorageEffect(startSlotStreamBatch(jobs)));
+  return runEffectAsPromise(startSlotStreamBatch(jobs));
 }
 
 /**
@@ -41,5 +34,5 @@ export function runStartSlotStreamBatch(jobs: readonly SlotStreamJob[]): Promise
  * Does not reject — matches route abort helpers that ignore finished requests.
  */
 export function runCancelRequestIds(requestIds: readonly string[]): Promise<void> {
-  return runStorage(asStorageEffect(cancelRequestIds(requestIds)));
+  return runEffectAsPromise(cancelRequestIds(requestIds));
 }

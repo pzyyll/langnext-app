@@ -1,9 +1,36 @@
-// ABOUTME: Tests for runStorage / runStorageExit Promise bridges.
-// ABOUTME: Ensures rejections are raw IpcError values for UI helpers.
+// ABOUTME: Tests for runEffectAsPromise / runStorage / runStorageExit Promise bridges.
+// ABOUTME: Ensures rejections are raw tagged failures for UI helpers.
 import { describe, expect, test } from "bun:test";
 import { Cause, Effect, Exit, Option } from "effect";
+import { FsError, isFsError } from "../features/fsError";
 import { IpcError, isIpcError } from "./ipcError";
-import { runStorage, runStorageExit } from "./runStorage";
+import { runEffectAsPromise, runStorage, runStorageExit } from "./runStorage";
+
+describe("runEffectAsPromise", () => {
+  test("resolves successful effects", async () => {
+    await expect(runEffectAsPromise(Effect.succeed(42))).resolves.toBe(42);
+  });
+
+  test("rejects with raw FsError on failure", async () => {
+    const failure = new FsError({ operation: "write", message: "disk full" });
+    try {
+      await runEffectAsPromise(Effect.fail(failure));
+      expect.unreachable("expected rejection");
+    } catch (error) {
+      expect(isFsError(error)).toBe(true);
+      expect(error).toBe(failure);
+      if (isFsError(error)) {
+        expect(error.operation).toBe("write");
+        expect(error.message).toBe("disk full");
+      }
+    }
+  });
+
+  test("resolves infallible never-error-channel effects", async () => {
+    const effect: Effect.Effect<string, never> = Effect.succeed("ok");
+    await expect(runEffectAsPromise(effect)).resolves.toBe("ok");
+  });
+});
 
 describe("runStorage", () => {
   test("resolves successful effects", async () => {

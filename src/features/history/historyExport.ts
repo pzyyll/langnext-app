@@ -2,7 +2,8 @@
 // ABOUTME: Dialog cancel is non-throwing false; write failures surface as FsError.
 import { save } from "@tauri-apps/plugin-dialog";
 import { writeTextFile } from "@tauri-apps/plugin-fs";
-import { Effect, Either } from "effect";
+import { Effect } from "effect";
+import { runEffectAsPromise } from "../../storage/runStorage";
 import type { TranslationHistoryDto } from "../../storage/types";
 import { type FsError, toFsError } from "../fsError";
 import { buildHistoryCsv } from "./historyCsv";
@@ -55,11 +56,7 @@ export function exportHistoryCsvEffect(rows: readonly TranslationHistoryDto[]): 
  * @returns `true` when a file was written; `false` when the user cancelled the
  *   save dialog (no error). Throws `FsError` only on filesystem/dialog failures.
  */
-export async function exportHistoryCsv(rows: readonly TranslationHistoryDto[]): Promise<boolean> {
+export function exportHistoryCsv(rows: readonly TranslationHistoryDto[]): Promise<boolean> {
   // Reject with raw FsError (not FiberFailure) so UI helpers can read `.message`.
-  const result = await Effect.runPromise(Effect.either(exportHistoryCsvEffect(rows)));
-  if (Either.isLeft(result)) {
-    throw result.left;
-  }
-  return result.right;
+  return runEffectAsPromise(exportHistoryCsvEffect(rows));
 }
