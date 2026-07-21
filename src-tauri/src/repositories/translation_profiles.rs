@@ -354,12 +354,38 @@ pub fn clear_detection_models_by_provider(
 
 /// Delete translation_profile_models rows for any of the given model ids.
 /// Call ahead of `provider_models::delete` to satisfy the ON DELETE RESTRICT FK.
+/// Remaining targets on affected profiles are recompacted to priorities `0..n-1` so the
+/// first survivor becomes the primary again after a mid-chain delete.
 pub fn delete_targets_by_models(conn: &Connection, model_ids: &[Uuid]) -> Result<(), StorageError> {
+  if model_ids.is_empty() {
+    return Ok(());
+  }
+
+  let mut affected_profiles: HashSet<Uuid> = HashSet::new();
+  {
+    let mut stmt = conn
+      .prepare("SELECT DISTINCT translation_profile_id FROM translation_profile_models WHERE provider_model_id = ?1")?;
+    for model_id in model_ids {
+      let profile_ids = stmt
+        .query_map(params![model_id.to_string()], |row| {
+          let id: String = row.get(0)?;
+          Uuid::parse_str(&id)
+            .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+      affected_profiles.extend(profile_ids);
+    }
+  }
+
   for model_id in model_ids {
     conn.execute(
       "DELETE FROM translation_profile_models WHERE provider_model_id = ?1",
       params![model_id.to_string()],
     )?;
+  }
+
+  for profile_id in affected_profiles {
+    recompact_target_priorities(conn, profile_id)?;
   }
   Ok(())
 }
@@ -367,12 +393,56 @@ pub fn delete_targets_by_models(conn: &Connection, model_ids: &[Uuid]) -> Result
 /// Delete translation_profile_models rows referencing any model of a provider.
 /// Call ahead of `provider_models::delete_by_provider` to satisfy the ON DELETE RESTRICT FK.
 pub fn delete_targets_by_provider(conn: &Connection, provider_id: Uuid) -> Result<(), StorageError> {
+  // Collect affected profiles before the delete so survivors can be recompacted.
+  let affected_profiles: HashSet<Uuid> = {
+    let mut stmt = conn.prepare(
+      "SELECT DISTINCT translation_profile_id FROM translation_profile_models
+           WHERE provider_model_id IN (SELECT id FROM provider_models WHERE provider_instance_id = ?1)",
+    )?;
+    let ids = stmt
+      .query_map(params![provider_id.to_string()], |row| {
+        let id: String = row.get(0)?;
+        Uuid::parse_str(&id)
+          .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))
+      })?
+      .collect::<Result<Vec<_>, _>>()?;
+    ids.into_iter().collect()
+  };
+
   conn.execute(
     "DELETE FROM translation_profile_models
          WHERE provider_model_id IN (SELECT id FROM provider_models WHERE provider_instance_id = ?1)",
     params![provider_id.to_string()],
   )?;
+
+  for profile_id in affected_profiles {
+    recompact_target_priorities(conn, profile_id)?;
+  }
   Ok(())
+}
+
+/// Rewrite remaining targets as a contiguous `0..n-1` priority chain.
+fn recompact_target_priorities(conn: &Connection, profile_id: Uuid) -> Result<(), StorageError> {
+  let targets = list_targets(conn, profile_id)?;
+  if targets.is_empty() {
+    return Ok(());
+  }
+  let needs_recompact = targets
+    .iter()
+    .enumerate()
+    .any(|(index, target)| target.priority != index as i32);
+  if !needs_recompact {
+    return Ok(());
+  }
+  let recompacted: Vec<TranslationProfileTarget> = targets
+    .into_iter()
+    .enumerate()
+    .map(|(index, mut target)| {
+      target.priority = index as i32;
+      target
+    })
+    .collect();
+  replace_targets(conn, profile_id, &recompacted)
 }
 
 /// Insert or update profile and replace targets + templates atomically on the given connection/transaction.

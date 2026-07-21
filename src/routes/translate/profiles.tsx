@@ -225,9 +225,12 @@ function emptyDraft(defaultModelId: string, uiLanguage: string): ProfileDraft {
 function draftFromDto(dto: TranslationProfileDto, modelOptions: ModelOption[], uiLanguage: string): ProfileDraft {
   const sortedTargets = [...dto.targets].sort((a, b) => a.priority - b.priority);
   const modelIds = sortedTargets.map((target) => target.providerModelId);
-  const primaryModelId =
-    modelIds.find((id) => modelOptions.some((option) => option.id === id)) ?? modelOptions[0]?.id ?? modelIds[0] ?? "";
-  const fallbackModelIds = modelIds.filter((id) => id !== primaryModelId);
+  // Only keep ids that still exist. Do not invent modelOptions[0] — that made empty-target
+  // profiles look configured after a model delete/re-add without persisting a new binding.
+  const primaryModelId = modelIds.find((id) => modelOptions.some((option) => option.id === id)) ?? "";
+  const fallbackModelIds = modelIds.filter(
+    (id) => id !== primaryModelId && modelOptions.some((option) => option.id === id),
+  );
   // Inherit the profile primary model unless an explicit LLM detector model is configured.
   const languageDetectionModelId =
     dto.languageDetection?.type === "llm" && dto.languageDetection.modelId != null ? dto.languageDetection.modelId : "";

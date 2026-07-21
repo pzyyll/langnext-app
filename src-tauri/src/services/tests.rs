@@ -3305,6 +3305,74 @@ fn delete_many_models_all_or_nothing() {
 }
 
 #[test]
+fn delete_primary_model_recompacts_remaining_targets() {
+  let (_d, _db, _v, providers, models, profiles, ..) = setup();
+  let p = providers
+    .save(provider_write(CredentialKind::None, CredentialUpdate::Keep))
+    .unwrap();
+  let primary = models
+    .save_manual(ManualModelWrite {
+      id: None,
+      provider_instance_id: p.id,
+      model_key: "primary".into(),
+      display_name_override: None,
+      enabled: true,
+      capability_overrides_json: None,
+      adapter_id: None,
+    })
+    .unwrap();
+  let fallback = models
+    .save_manual(ManualModelWrite {
+      id: None,
+      provider_instance_id: p.id,
+      model_key: "fallback".into(),
+      display_name_override: None,
+      enabled: true,
+      capability_overrides_json: None,
+      adapter_id: None,
+    })
+    .unwrap();
+  let profile = profiles
+    .save({
+      let (default_prompt_template_id, prompt_templates) = attach_default_templates("s", "{{text}}");
+      TranslationProfileWrite {
+        id: None,
+        name: "Chain".into(),
+        enabled: true,
+        template_version: 1,
+        default_prompt_template_id,
+        prompt_templates,
+        temperature: None,
+        max_output_tokens: None,
+        provider_options_json: None,
+        source_lang: Some("auto".into()),
+        target_lang: Some("en".into()),
+        primary_lang: Some("zh".into()),
+        preferred_target_lang: Some("en".into()),
+        language_detection: None,
+        target_model_ids: vec![primary.id, fallback.id],
+      }
+    })
+    .unwrap();
+
+  models.delete(primary.id).unwrap();
+  let after = profiles.get(profile.profile.id).unwrap();
+  assert_eq!(after.targets.len(), 1);
+  assert_eq!(after.targets[0].provider_model_id, fallback.id);
+  assert_eq!(
+    after.targets[0].priority, 0,
+    "remaining fallback must become priority-0 primary after primary delete"
+  );
+
+  // Detection resolves to the promoted primary without a page model id.
+  use crate::services::models::resolve_detect_model_source;
+  assert_eq!(
+    resolve_detect_model_source(Some(&after.profile), Some(&after.targets[0]), None).unwrap(),
+    fallback.id
+  );
+}
+
+#[test]
 fn provider_save_rejects_stale_expected_updated_at() {
   let (_d, _db, _v, providers, ..) = setup();
   let created = providers
@@ -3447,7 +3515,7 @@ fn resolve_detect_model_source_precedence() {
     explicit
   );
 
-  // Profile Llm with None modelId -> profile priority-0 primary.
+  // Profile Llm with None modelId -> profile primary target.
   let (profile_no_model, _) = sample_profile(
     uuid::Uuid::nil(),
     "P",
@@ -3458,16 +3526,22 @@ fn resolve_detect_model_source_precedence() {
     p0
   );
 
-  // Profile with no languageDetection -> profile priority-0 primary.
+  // Profile with no languageDetection -> profile primary target.
   let (profile_no_cfg, _) = sample_profile(uuid::Uuid::nil(), "P", None);
   assert_eq!(
     resolve_detect_model_source(Some(&profile_no_cfg), Some(&targets[0]), Some(input_model)).unwrap(),
     p0
   );
 
-  // Profile selected but no priority-0 target -> validation error.
+  // Profile selected but no primary target -> page model selection (covers delete/re-add).
+  assert_eq!(
+    resolve_detect_model_source(Some(&profile_no_cfg), None, Some(input_model)).unwrap(),
+    input_model
+  );
+
+  // Profile selected, no primary target, no page model -> validation error.
   assert!(matches!(
-    resolve_detect_model_source(Some(&profile_no_cfg), None, Some(input_model)).unwrap_err(),
+    resolve_detect_model_source(Some(&profile_no_cfg), None, None).unwrap_err(),
     StorageError::Validation(_)
   ));
 }

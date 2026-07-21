@@ -904,24 +904,26 @@ const DETECT_TEMPERATURE: f64 = 0.0;
 ///
 /// Precedence:
 /// - profile explicit LLM modelId → that model
-/// - profile config present but modelId None → profile priority-0 primary model
-/// - profile selected but no languageDetection → profile priority-0 primary model
+/// - profile primary target (lowest priority / first in chain) → that model
+/// - input.modelId (page selection) when the profile has no usable primary target
 /// - no profile → input.modelId
 ///
 /// Returns the resolved model id (or a validation error when none is available).
 pub(crate) fn resolve_detect_model_source(
   profile: Option<&TranslationProfile>,
-  priority0_target: Option<&TranslationProfileTarget>,
+  primary_target: Option<&TranslationProfileTarget>,
   input_model_id: Option<Uuid>,
 ) -> Result<Uuid, StorageError> {
   if let Some(profile) = profile {
     if let Some(LanguageDetectorConfig::Llm { model_id: Some(id) }) = profile.language_detection.as_ref() {
       return Ok(*id);
     }
-    // Llm with None or no config at all: fall back to the profile primary model.
-    return priority0_target
-      .map(|t| t.provider_model_id)
-      .ok_or_else(|| StorageError::Validation("profile has no primary model for detection".into()));
+    // Llm with None or no config: prefer the profile primary, then the page model selection.
+    // Page fallback covers profiles whose targets were detached when a model was deleted.
+    if let Some(target) = primary_target {
+      return Ok(target.provider_model_id);
+    }
+    return input_model_id.ok_or_else(|| StorageError::Validation("profile has no primary model for detection".into()));
   }
   input_model_id
     .ok_or_else(|| StorageError::Validation("model_id is required for language detection without a profile".into()))
@@ -950,7 +952,8 @@ fn prepare_detect_language_sync(
 
   // Read the optional profile and its primary target from one snapshot so detector config
   // cannot be combined with a concurrently updated model chain.
-  let (profile, priority0_target): (Option<TranslationProfile>, Option<TranslationProfileTarget>) =
+  // Targets are already ordered by priority ASC; the first remaining row is the primary.
+  let (profile, primary_target): (Option<TranslationProfile>, Option<TranslationProfileTarget>) =
     if let Some(profile_id) = input.profile_id {
       match db.read_snapshot(|conn| translation_profiles::get(conn, profile_id)) {
         Ok(dto) => {
@@ -961,7 +964,7 @@ fn prepare_detect_language_sync(
               0,
             )));
           }
-          let primary = dto.targets.into_iter().find(|target| target.priority == 0);
+          let primary = dto.targets.into_iter().next();
           (Some(dto.profile), primary)
         }
         Err(StorageError::NotFound(_)) => {
@@ -977,7 +980,7 @@ fn prepare_detect_language_sync(
       (None, None)
     };
 
-  let model_id = match resolve_detect_model_source(profile.as_ref(), priority0_target.as_ref(), input.model_id) {
+  let model_id = match resolve_detect_model_source(profile.as_ref(), primary_target.as_ref(), input.model_id) {
     Ok(id) => id,
     Err(StorageError::Validation(msg)) => {
       return Ok(DetectPrepare::Early(DetectLanguageResult::failure(
