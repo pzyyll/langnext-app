@@ -51,4 +51,4 @@ Frontend Effect (npm `effect` 3.x) is a **typed IPC and multi-step workflow** la
 
 `src/storage/client.ts` keeps Promise signatures for callers. Routes and Query must not import Effect solely for cache orchestration. Theme ordered writes (`ThemeMutationQueue`) stay a single-consumer queue outside Effect unless a second ordered-write use-case appears.
 
-**Roadmap / phase plans (implementation landed in `src/`; Task 2 theme-queue rewrite skipped — single consumer):** [docs/plans/effect-integration-plan/README.md](../plans/effect-integration-plan/README.md).
+**Roadmap / phase plans (Phases 1–3 landed in `src/`; Phase 4 theme-queue rewrite skipped — single consumer; Phase 5 unification planned):** [docs/plans/effect-integration-plan/README.md](../plans/effect-integration-plan/README.md).
