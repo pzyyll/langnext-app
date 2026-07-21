@@ -50,18 +50,18 @@ describe("exportHistoryCsv", () => {
     writeTextFileMock.mockReset();
   });
 
-  test("dialog cancel returns false without writing", async () => {
+  test("dialog cancel returns cancelled without writing", async () => {
     saveMock.mockResolvedValueOnce(null);
-    const written = await exportHistoryCsv([sampleRow]);
-    expect(written).toBe(false);
+    const result = await exportHistoryCsv([sampleRow]);
+    expect(result).toEqual({ status: "cancelled" });
     expect(writeTextFileMock).not.toHaveBeenCalled();
   });
 
-  test("write success returns true", async () => {
+  test("write success returns written", async () => {
     saveMock.mockResolvedValueOnce("/tmp/out.csv");
     writeTextFileMock.mockResolvedValueOnce(undefined);
-    const written = await exportHistoryCsv([sampleRow]);
-    expect(written).toBe(true);
+    const result = await exportHistoryCsv([sampleRow]);
+    expect(result).toEqual({ status: "written" });
     expect(writeTextFileMock).toHaveBeenCalledTimes(1);
     const [path, body] = writeTextFileMock.mock.calls[0] ?? [];
     expect(path).toBe("/tmp/out.csv");

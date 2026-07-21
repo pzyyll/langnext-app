@@ -11,8 +11,8 @@ import { dangerButtonClassName, outlineButtonClassName } from "../components/ui"
 import { HistoryDetailDialog } from "../features/history/HistoryDetailDialog";
 import { HistoryFilters, type HistoryFilterDraft } from "../features/history/HistoryFilters";
 import { HistoryTable } from "../features/history/HistoryTable";
-import { isFsError } from "../features/fsError";
 import { exportHistoryCsv } from "../features/history/historyExport";
+import { getUserErrorMessage } from "../features/userErrorMessage";
 import { historyListOptions, historyModelFacetsOptions } from "../query/options";
 import { historyKeys } from "../query/keys";
 import {
@@ -176,17 +176,15 @@ function HistoryPage() {
     }
     try {
       const rows = await getTranslationHistoryMany(ids);
-      const written = await exportHistoryCsv(rows);
-      if (written) {
+      const result = await exportHistoryCsv(rows);
+      if (result.status === "written") {
         toast.success({ title: t("history.toast.exportSuccess", { count: rows.length }) });
       }
+      // cancel: silent success variant
     } catch (err) {
-      const description = isFsError(err)
-        ? err.message.trim() || t("history.toast.exportFailed")
-        : getIpcErrorMessage(err, t("history.toast.exportFailed"));
       toast.error({
         title: t("history.toast.exportFailed"),
-        description,
+        description: getUserErrorMessage(err, t("history.toast.exportFailed")),
       });
     }
   }

@@ -30,8 +30,9 @@ export function runStartSlotStreamBatch(jobs: readonly SlotStreamJob[]): Promise
 }
 
 /**
- * Cancel every listed request id. Swallows individual cancel failures.
- * Does not reject — matches route abort helpers that ignore finished requests.
+ * Cancel every listed request id.
+ * Policy: swallow per-id failures (request may already be finished); Promise always
+ * resolves. Distinct from any single-id cancel that would surface IpcError.
  */
 export function runCancelRequestIds(requestIds: readonly string[]): Promise<void> {
   return runEffectAsPromise(cancelRequestIds(requestIds));

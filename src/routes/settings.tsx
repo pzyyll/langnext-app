@@ -19,17 +19,16 @@ import {
   switchThumbClassName,
 } from "../components/ui";
 import { useToast } from "../components/toast/useToast";
-import { isFsError } from "../features/fsError";
 import {
   runExportConfigurationToFile,
   runImportConfigurationFromFile,
 } from "../features/settings/configurationTransfer";
+import { getUserErrorMessage } from "../features/userErrorMessage";
 import { applyAppLanguage } from "../i18n";
 import { APP_LANGUAGES, normalizeLanguage, type AppLanguage } from "../i18n/languages";
 import { useLanguage } from "../i18n/useLanguage";
 import { modelKeys, profileKeys, providerKeys } from "../query/keys";
 import { getAppSettings, setAppShortcuts } from "../storage/client";
-import { getIpcErrorMessage } from "../storage/errors";
 import {
   DEFAULT_OPEN_QUICK_TRANSLATE_BINDING,
   DEFAULT_REGION_SCREENSHOT_BINDING,
@@ -221,12 +220,9 @@ function BackupSettingsSection() {
       }
       // cancel: silent per Phase 3 failure table
     } catch (err) {
-      const description = isFsError(err)
-        ? err.message.trim() || t("settings.backup.exportFailed")
-        : getIpcErrorMessage(err, t("settings.backup.exportFailed"));
       toast.error({
         title: t("settings.backup.exportFailed"),
-        description,
+        description: getUserErrorMessage(err, t("settings.backup.exportFailed")),
       });
     } finally {
       setBusy(null);
@@ -280,12 +276,9 @@ function BackupSettingsSection() {
         toast.success({ title: t("settings.backup.importSuccess") });
       }
     } catch (err) {
-      const description = isFsError(err)
-        ? err.message.trim() || t("settings.backup.importFailed")
-        : getIpcErrorMessage(err, t("settings.backup.importFailed"));
       toast.error({
         title: t("settings.backup.importFailed"),
-        description,
+        description: getUserErrorMessage(err, t("settings.backup.importFailed")),
       });
     } finally {
       setBusy(null);

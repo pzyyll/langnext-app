@@ -54,8 +54,9 @@ export function startSlotStreamBatch(jobs: readonly SlotStreamJob[]): Effect.Eff
 }
 
 /**
- * Cancel every active request id. Individual cancel IPC failures are ignored
- * (request may already have finished). Never fails the Effect.
+ * Cancel every active request id.
+ * Policy: swallow per-id IPC failures (request may already have finished) so the
+ * batch never fails. Do not mix with single-id cancel APIs that surface IpcError.
  */
 export function cancelRequestIds(requestIds: readonly string[]): Effect.Effect<void, never> {
   if (requestIds.length === 0) {

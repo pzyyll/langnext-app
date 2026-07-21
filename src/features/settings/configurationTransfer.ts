@@ -7,16 +7,9 @@ import { invokeEffect } from "../../storage/invokeEffect";
 import type { IpcError } from "../../storage/ipcError";
 import { runEffectAsPromise } from "../../storage/runStorage";
 import type { ConfigurationExport, ImportConflictMode, ImportPreview, ImportResult } from "../../storage/types";
+import type { DialogSaveResult } from "../dialogResult";
 import { FsError, toFsError } from "../fsError";
-
-/** Local timestamp for the default export filename: YYYYMMDDTHHMMSS. */
-function localFilenameStamp(date = new Date()): string {
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return (
-    `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}` +
-    `T${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`
-  );
-}
+import { localFilenameStamp } from "../localFilenameStamp";
 
 /** IPC: load full portable configuration document from the backend. */
 export function exportConfigurationDocument(): Effect.Effect<ConfigurationExport, IpcError> {
@@ -39,8 +32,6 @@ export function importConfigurationDocument(
   return invokeEffect<ImportResult>("import_configuration", { document, mode });
 }
 
-export type SaveConfigurationResult = { readonly status: "written" } | { readonly status: "cancelled" };
-
 /**
  * Save a configuration document via native save dialog + writeTextFile.
  * Cancel → `{ status: "cancelled" }`; write/dialog failure → `FsError`.
@@ -48,7 +39,7 @@ export type SaveConfigurationResult = { readonly status: "written" } | { readonl
  */
 export function saveConfigurationDocumentToFile(
   document: ConfigurationExport,
-): Effect.Effect<SaveConfigurationResult, FsError> {
+): Effect.Effect<DialogSaveResult, FsError> {
   return Effect.gen(function* () {
     const defaultPath = `langnext-config-${localFilenameStamp()}.json`;
     const filePath = yield* Effect.tryPromise({
@@ -132,13 +123,11 @@ export function loadConfigurationDocumentFromFile(): Effect.Effect<LoadConfigura
   });
 }
 
-export type ExportConfigurationToFileResult = { readonly status: "written" } | { readonly status: "cancelled" };
-
 /**
  * Full export pipeline: IPC export → save dialog → write file.
  * Error channel is `IpcError | FsError`. Cancel is a success variant.
  */
-export function exportConfigurationToFile(): Effect.Effect<ExportConfigurationToFileResult, IpcError | FsError> {
+export function exportConfigurationToFile(): Effect.Effect<DialogSaveResult, IpcError | FsError> {
   return Effect.gen(function* () {
     const document = yield* exportConfigurationDocument();
     return yield* saveConfigurationDocumentToFile(document);
@@ -179,7 +168,7 @@ export function importConfigurationFromFile(
 }
 
 /** Promise façade: export configuration to a user-chosen JSON file. */
-export function runExportConfigurationToFile(): Promise<ExportConfigurationToFileResult> {
+export function runExportConfigurationToFile(): Promise<DialogSaveResult> {
   return runEffectAsPromise(exportConfigurationToFile());
 }
 
