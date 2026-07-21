@@ -20,8 +20,14 @@ use tauri::{
 /// Smallest accepted selection edge in captured image pixels.
 const MIN_SELECTION_EDGE_PX: u32 = 4;
 
-/// Brief pause after hiding app windows so the compositor drops them before capture.
+/// Brief pause after hiding app windows before checking their visibility state.
 const PRE_CAPTURE_HIDE_DELAY: Duration = Duration::from_millis(50);
+
+/// Extra time for DWM and its GDI redirection surface to drop hidden windows.
+const POST_HIDE_COMPOSITOR_DELAY: Duration = Duration::from_millis(150);
+
+/// One low-refresh-rate display frame between the throwaway and final GDI captures.
+const CAPTURE_REFRESH_DELAY: Duration = Duration::from_millis(34);
 
 /// Max time to wait for hide() to take effect before capturing.
 const HIDE_SETTLE_TIMEOUT: Duration = Duration::from_millis(200);
@@ -266,6 +272,18 @@ fn capture_monitor_at(x: i32, y: i32) -> Result<MonitorCapture, String> {
     let monitor_width = monitor.width().map_err(|e| format!("monitor width: {e}"))?;
     let monitor_height = monitor.height().map_err(|e| format!("monitor height: {e}"))?;
     let scale_factor = f64::from(monitor.scale_factor().map_err(|e| format!("monitor scale: {e}"))?);
+
+    #[cfg(windows)]
+    {
+      // xcap uses GDI BitBlt by default. Prime its desktop redirection surface, then wait for a
+      // newer composed frame so a recently hidden app window cannot leak into the final image.
+      if let Err(err) = monitor.capture_image() {
+        log::debug!("screenshot_capture_prime_failed error={err}");
+      }
+      thread::sleep(CAPTURE_REFRESH_DELAY);
+      flush_desktop_composition();
+    }
+
     let image = monitor.capture_image().map_err(|e| format!("capture monitor: {e}"))?;
 
     Ok(MonitorCapture {
@@ -475,32 +493,41 @@ fn hide_app_window_for_capture<R: Runtime>(app: &tauri::AppHandle<R>, label: &st
   }
 }
 
-fn wait_for_windows_hidden<R: Runtime>(
-  app: &tauri::AppHandle<R>,
-  main_label: Option<&str>,
-  quick_label: Option<&str>,
-) {
+fn wait_for_windows_hidden<R: Runtime>(app: &tauri::AppHandle<R>, main_label: Option<&str>, quick_label: Option<&str>) {
   thread::sleep(PRE_CAPTURE_HIDE_DELAY);
   let deadline = std::time::Instant::now() + HIDE_SETTLE_TIMEOUT;
-  while std::time::Instant::now() < deadline {
-    let main_hidden = main_label.is_none_or(|label| {
-      app
-        .get_webview_window(label)
-        .and_then(|w| w.is_visible().ok())
-        != Some(true)
-    });
-    let quick_hidden = quick_label.is_none_or(|label| {
-      app
-        .get_webview_window(label)
-        .and_then(|w| w.is_visible().ok())
-        != Some(true)
-    });
+  let hidden_before_timeout = loop {
+    let main_hidden =
+      main_label.is_none_or(|label| app.get_webview_window(label).and_then(|w| w.is_visible().ok()) != Some(true));
+    let quick_hidden =
+      quick_label.is_none_or(|label| app.get_webview_window(label).and_then(|w| w.is_visible().ok()) != Some(true));
     if main_hidden && quick_hidden {
-      return;
+      break true;
+    }
+    if std::time::Instant::now() >= deadline {
+      break false;
     }
     thread::sleep(HIDE_SETTLE_POLL);
+  };
+
+  if !hidden_before_timeout {
+    log::warn!("screenshot_hide_settle_timeout");
   }
-  log::warn!("screenshot_hide_settle_timeout");
+
+  flush_desktop_composition();
+  thread::sleep(POST_HIDE_COMPOSITOR_DELAY);
+  flush_desktop_composition();
+}
+
+/// Wait until DWM has presented the hide operation before capturing the desktop.
+fn flush_desktop_composition() {
+  #[cfg(windows)]
+  {
+    let result = unsafe { win32::DwmFlush() };
+    if result < 0 {
+      log::debug!("screenshot_dwm_flush_failed hresult=0x{:08X}", result as u32);
+    }
+  }
 }
 
 fn restore_hidden_windows<R: Runtime>(
@@ -622,7 +649,7 @@ fn restore_previous_foreground(previous: Option<isize>) {
   }
 }
 
-/// Win32 helpers for foreground detection and focus restore (user32/kernel32).
+/// Win32 helpers for desktop composition, foreground detection, and focus restore.
 #[cfg(windows)]
 mod win32 {
   use std::ffi::c_void;
@@ -642,6 +669,11 @@ mod win32 {
   #[link(name = "kernel32")]
   unsafe extern "system" {
     pub fn GetCurrentThreadId() -> u32;
+  }
+
+  #[link(name = "dwmapi")]
+  unsafe extern "system" {
+    pub fn DwmFlush() -> i32;
   }
 }
 
