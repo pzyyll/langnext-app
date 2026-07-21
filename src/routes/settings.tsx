@@ -32,10 +32,12 @@ import { getAppSettings, setAppShortcuts } from "../storage/client";
 import {
   DEFAULT_OPEN_QUICK_TRANSLATE_BINDING,
   DEFAULT_REGION_SCREENSHOT_BINDING,
+  DEFAULT_SCREENSHOT_OCR_BINDING,
   DOUBLE_CTRL_C_BINDING,
   SHORTCUT_DOUBLE_CTRL_C,
   SHORTCUT_OPEN_QUICK_TRANSLATE,
   SHORTCUT_REGION_SCREENSHOT,
+  SHORTCUT_SCREENSHOT_OCR,
   type ShortcutDefinition,
 } from "../storage/types";
 import { useTheme } from "../theme/useTheme";
@@ -78,6 +80,11 @@ function defaultShortcuts(): ShortcutDefinition[] {
     {
       id: SHORTCUT_REGION_SCREENSHOT,
       binding: DEFAULT_REGION_SCREENSHOT_BINDING,
+      enabled: true,
+    },
+    {
+      id: SHORTCUT_SCREENSHOT_OCR,
+      binding: DEFAULT_SCREENSHOT_OCR_BINDING,
       enabled: true,
     },
   ];
@@ -353,6 +360,15 @@ function ShortcutsSettingsSection() {
       }),
     [shortcuts],
   );
+  const screenshotOcr = useMemo(
+    () =>
+      readShortcut(shortcuts, SHORTCUT_SCREENSHOT_OCR, {
+        id: SHORTCUT_SCREENSHOT_OCR,
+        binding: DEFAULT_SCREENSHOT_OCR_BINDING,
+        enabled: true,
+      }),
+    [shortcuts],
+  );
 
   useEffect(() => {
     if (!isTauriRuntime()) {
@@ -570,6 +586,48 @@ function ShortcutsSettingsSection() {
               }}
             >
               {t("settings.shortcuts.regionScreenshot.reset")}
+            </Button>
+          </div>
+        </div>
+
+        <div className="flex flex-col gap-2 border border-line p-3">
+          <div className="min-w-0">
+            <p className="text-body-tight font-bold text-on-surface">{t("settings.shortcuts.screenshotOcr.title")}</p>
+            <p className="mt-1 text-body-tight text-neutral">{t("settings.shortcuts.screenshotOcr.description")}</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              className={`
+                ${inputClassName}
+                min-w-40 flex-1 cursor-default text-left
+                ${recordingId === SHORTCUT_SCREENSHOT_OCR ? `outline-2 -outline-offset-1 outline-on-surface` : ""}
+              `}
+              onClick={() => {
+                setRecordingId(SHORTCUT_SCREENSHOT_OCR);
+              }}
+              disabled={pending}
+              aria-label={t("settings.shortcuts.screenshotOcr.recordAria")}
+              aria-pressed={recordingId === SHORTCUT_SCREENSHOT_OCR}
+            >
+              {recordingId === SHORTCUT_SCREENSHOT_OCR
+                ? t("settings.shortcuts.screenshotOcr.recording")
+                : formatShortcutBinding(screenshotOcr.binding)}
+            </button>
+            <Button
+              type="button"
+              className={outlineButtonClassName}
+              disabled={pending || screenshotOcr.binding === DEFAULT_SCREENSHOT_OCR_BINDING}
+              aria-label={t("settings.shortcuts.screenshotOcr.resetAria")}
+              onClick={() => {
+                setRecordingId(null);
+                updateEntry(SHORTCUT_SCREENSHOT_OCR, {
+                  binding: DEFAULT_SCREENSHOT_OCR_BINDING,
+                  enabled: true,
+                });
+              }}
+            >
+              {t("settings.shortcuts.screenshotOcr.reset")}
             </Button>
           </div>
         </div>

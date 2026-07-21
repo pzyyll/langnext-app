@@ -1,7 +1,7 @@
-// ABOUTME: Sanitized OCR service CRUD Tauri commands.
+// ABOUTME: Sanitized OCR service CRUD and image recognition Tauri commands.
 // ABOUTME: Dispatches blocking storage work and maps failures to IpcError.
 use crate::cmds::runtime::run_blocking;
-use crate::domain::ocr_service::{OcrServiceDto, OcrServiceWrite};
+use crate::domain::ocr_service::{OcrRecognizeInput, OcrRecognizeResult, OcrServiceDto, OcrServiceWrite};
 use crate::error::IpcError;
 use crate::events::{OCR_SERVICES_CHANGED, emit_data_changed};
 use crate::state::AppState;
@@ -38,4 +38,14 @@ pub async fn delete_ocr_service(app: AppHandle, state: State<'_, AppState>, id: 
   run_blocking("delete_ocr_service", move || services.delete(id)).await?;
   emit_data_changed(&app, OCR_SERVICES_CHANGED);
   Ok(())
+}
+
+/// Recognize text from a PNG image using the configured (or default) OCR service.
+#[tauri::command]
+pub async fn recognize_ocr(
+  state: State<'_, AppState>,
+  input: OcrRecognizeInput,
+) -> Result<OcrRecognizeResult, IpcError> {
+  let services = state.ocr_services.clone();
+  services.recognize(input).await.map_err(IpcError::from)
 }

@@ -81,6 +81,12 @@ const en = {
     disableAutoTranslate: "Disable auto translate",
     collapseSource: "Collapse input",
     editSource: "Edit source",
+    ocrAria: "Screenshot OCR",
+    ocrRecognizing: "Recognizing…",
+    ocrNoDefault: "Set a default screenshot OCR service in OCR settings first.",
+    ocrEmpty: "No text recognized.",
+    ocrFailed: "OCR recognition failed",
+    ocrStartFailed: "Could not start screenshot OCR",
   },
   settings: {
     title: "Settings",
@@ -95,7 +101,7 @@ const en = {
     },
     shortcuts: {
       title: "Shortcuts",
-      description: "Configure global shortcuts for Quick Translate and screenshot.",
+      description: "Configure global shortcuts for Quick Translate, screenshot, and OCR.",
       doubleCtrlC: {
         title: "Double Ctrl+C",
         description: "Open Quick Translate and paste the clipboard.",
@@ -116,6 +122,14 @@ const en = {
         recording: "Press keys…",
         reset: "Reset",
         resetAria: "Reset to Ctrl+Shift+A",
+      },
+      screenshotOcr: {
+        title: "Screenshot OCR",
+        description: "Open Quick Translate, capture a region, and run OCR.",
+        recordAria: "Record screenshot OCR shortcut",
+        recording: "Press keys…",
+        reset: "Reset",
+        resetAria: "Reset to Alt+S",
       },
       loadFailed: "Could not load shortcut settings.",
       persistFailed: "Could not save shortcut settings.",
@@ -636,6 +650,15 @@ const en = {
       renameFailed: "Failed to rename OCR service",
       deleted: "OCR service deleted",
       deleteFailed: "Failed to delete OCR service",
+      screenshotDefaultSaved: "Screenshot OCR updated",
+      screenshotDefaultFailed: "Failed to update screenshot OCR",
+    },
+    screenshotDefault: {
+      label: "Screenshot OCR",
+      none: "None",
+      missing: "Missing service",
+      aria: "Default OCR service for screenshot recognition",
+      empty: "Add an OCR service first",
     },
   },
 } as const;

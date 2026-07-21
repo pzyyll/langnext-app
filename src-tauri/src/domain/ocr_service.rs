@@ -146,6 +146,25 @@ impl OcrServiceDto {
   }
 }
 
+/// Input for one-shot image OCR recognition.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OcrRecognizeInput {
+  /// Cropped PNG image encoded as standard base64 (no data-URL prefix).
+  pub png_base64: String,
+  /// Explicit service; when null/absent the app settings default is used.
+  #[serde(default)]
+  pub ocr_service_id: Option<Uuid>,
+}
+
+/// Recognized plain text from an OCR service.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct OcrRecognizeResult {
+  pub text: String,
+  pub ocr_service_id: Uuid,
+}
+
 /// Input for creating or updating an OCR service.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]

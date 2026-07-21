@@ -31,3 +31,8 @@ export const ocrKeys = {
   list: () => [...ocrKeys.all, "list"] as const,
   detail: (id: string) => [...ocrKeys.all, "detail", id] as const,
 };
+
+export const settingsKeys = {
+  all: ["app-settings"] as const,
+  detail: () => [...settingsKeys.all, "detail"] as const,
+};

@@ -792,6 +792,8 @@ pub struct ChatCompletionRequest {
   /// Used by DeepSeek V4-style providers. `None` leaves the provider default
   /// (DeepSeek defaults thinking to enabled). Never sent for other adapters.
   pub thinking: Option<bool>,
+  /// Optional PNG image (standard base64, no data-URL prefix) for vision/OCR calls.
+  pub image_png_base64: Option<String>,
 }
 
 impl std::fmt::Debug for ChatCompletionRequest {
@@ -806,7 +808,61 @@ impl std::fmt::Debug for ChatCompletionRequest {
       .field("temperature", &self.temperature)
       .field("max_tokens", &self.max_tokens)
       .field("thinking", &self.thinking)
+      .field(
+        "image_png_base64",
+        &self.image_png_base64.as_ref().map(|_| "[image-omitted]"),
+      )
       .finish_non_exhaustive()
+  }
+}
+
+/// Build multimodal user content for OpenAI chat.completions when an image is present.
+fn openai_user_content(user_prompt: &str, image_png_base64: Option<&str>) -> serde_json::Value {
+  match image_png_base64 {
+    Some(image) => serde_json::json!([
+      { "type": "text", "text": user_prompt },
+      {
+        "type": "image_url",
+        "image_url": {
+          "url": format!("data:image/png;base64,{image}")
+        }
+      }
+    ]),
+    None => serde_json::json!(user_prompt),
+  }
+}
+
+/// Build multimodal user content for Anthropic Messages when an image is present.
+fn anthropic_user_content(user_prompt: &str, image_png_base64: Option<&str>) -> serde_json::Value {
+  match image_png_base64 {
+    Some(image) => serde_json::json!([
+      {
+        "type": "image",
+        "source": {
+          "type": "base64",
+          "media_type": "image/png",
+          "data": image
+        }
+      },
+      { "type": "text", "text": user_prompt }
+    ]),
+    None => serde_json::json!(user_prompt),
+  }
+}
+
+/// Build Gemini user parts, optionally including inline PNG data.
+fn gemini_user_parts(user_prompt: &str, image_png_base64: Option<&str>) -> serde_json::Value {
+  match image_png_base64 {
+    Some(image) => serde_json::json!([
+      { "text": user_prompt },
+      {
+        "inline_data": {
+          "mime_type": "image/png",
+          "data": image
+        }
+      }
+    ]),
+    None => serde_json::json!([{ "text": user_prompt }]),
   }
 }
 
@@ -840,6 +896,7 @@ pub async fn chat_completion_http_cancellable(
 
 async fn chat_completion_http_inner(request: ChatCompletionRequest) -> Result<ChatCompletionResult, TransportError> {
   let client = client_for(request.proxy_mode)?;
+  let image = request.image_png_base64.as_deref();
   let (url, body) = match request.adapter_id.as_str() {
     "openai-compatible" => {
       let url = build_endpoint(&request.base_url, "chat/completions")?;
@@ -847,7 +904,7 @@ async fn chat_completion_http_inner(request: ChatCompletionRequest) -> Result<Ch
         "model": request.model_key,
         "messages": [
           { "role": "system", "content": request.system_prompt },
-          { "role": "user", "content": request.user_prompt }
+          { "role": "user", "content": openai_user_content(&request.user_prompt, image) }
         ],
         "stream": false
       });
@@ -861,6 +918,10 @@ async fn chat_completion_http_inner(request: ChatCompletionRequest) -> Result<Ch
       (url, payload)
     }
     "openai-responses" => {
+      // Responses API image input is not wired for OCR yet; reject multimodal calls.
+      if image.is_some() {
+        return Err(TransportError::InvalidResponse);
+      }
       let url = build_endpoint(&request.base_url, "responses")?;
       let mut payload = serde_json::json!({
         "model": request.model_key,
@@ -882,7 +943,7 @@ async fn chat_completion_http_inner(request: ChatCompletionRequest) -> Result<Ch
         "model": request.model_key,
         "system": request.system_prompt,
         "messages": [
-          { "role": "user", "content": request.user_prompt }
+          { "role": "user", "content": anthropic_user_content(&request.user_prompt, image) }
         ],
         "max_tokens": request.max_tokens.unwrap_or(32768)
       });
@@ -907,7 +968,7 @@ async fn chat_completion_http_inner(request: ChatCompletionRequest) -> Result<Ch
         },
         "contents": [{
           "role": "user",
-          "parts": [{ "text": request.user_prompt }]
+          "parts": gemini_user_parts(&request.user_prompt, image)
         }]
       });
       if !generation_config.is_empty() {
@@ -1158,6 +1219,7 @@ fn gemini_stream_generate_path(model_key: &str) -> Result<String, TransportError
 fn build_stream_request_parts(
   request: &ChatCompletionRequest,
 ) -> Result<(url::Url, serde_json::Value), TransportError> {
+  let image = request.image_png_base64.as_deref();
   match request.adapter_id.as_str() {
     "openai-compatible" => {
       let url = build_endpoint(&request.base_url, "chat/completions")?;
@@ -1165,7 +1227,7 @@ fn build_stream_request_parts(
         "model": request.model_key,
         "messages": [
           { "role": "system", "content": request.system_prompt },
-          { "role": "user", "content": request.user_prompt }
+          { "role": "user", "content": openai_user_content(&request.user_prompt, image) }
         ],
         "stream": true
       });
@@ -1179,6 +1241,9 @@ fn build_stream_request_parts(
       Ok((url, payload))
     }
     "openai-responses" => {
+      if image.is_some() {
+        return Err(TransportError::InvalidResponse);
+      }
       let url = build_endpoint(&request.base_url, "responses")?;
       let mut payload = serde_json::json!({
         "model": request.model_key,
@@ -1200,7 +1265,7 @@ fn build_stream_request_parts(
         "model": request.model_key,
         "system": request.system_prompt,
         "messages": [
-          { "role": "user", "content": request.user_prompt }
+          { "role": "user", "content": anthropic_user_content(&request.user_prompt, image) }
         ],
         "max_tokens": request.max_tokens.unwrap_or(32768),
         "stream": true
@@ -1226,7 +1291,7 @@ fn build_stream_request_parts(
         },
         "contents": [{
           "role": "user",
-          "parts": [{ "text": request.user_prompt }]
+          "parts": gemini_user_parts(&request.user_prompt, image)
         }]
       });
       if !generation_config.is_empty() {

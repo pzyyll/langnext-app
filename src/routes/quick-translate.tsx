@@ -15,6 +15,7 @@ import IconCollapseContent from "~icons/material-symbols/collapse-content";
 import IconEdit from "~icons/material-symbols/edit-outline";
 import IconMaterialSymbolsLightContentCopy from "~icons/material-symbols-light/content-copy";
 import IconMaterialSymbolsLightCheck from "~icons/material-symbols-light/check";
+import IconMaterialSymbolsLightDocumentScannerOutline from "~icons/material-symbols-light/document-scanner-outline";
 import IconMaterialSymbolsLightMarkdown from "~icons/material-symbols-light/markdown";
 import IconMaterialSymbolsLightMarkdownOutline from "~icons/material-symbols-light/markdown-outline";
 import IconMaterialSymbolsLightRefresh from "~icons/material-symbols-light/refresh";
@@ -29,8 +30,10 @@ import { ScrollArea } from "../components/ScrollArea";
 import { SelectField } from "../components/SelectField";
 import { TextAutosize, TextAutosizeContent } from "../components/TextAutosize";
 import { TextLoading } from "../components/TextLoading";
+import { useToast } from "../components/toast/useToast";
 import { iconButtonClassName } from "../components/ui";
 import { cn } from "../lib/cn";
+import { runScreenshotOcr } from "../features/ocr/runScreenshotOcr";
 import {
   getOutputViewMode,
   setOutputViewMode,
@@ -51,18 +54,10 @@ import {
   saveQuickTranslateSession,
   type QuickTranslateSlot,
 } from "../features/translate/quickTranslateSession";
-import {
-  isTauriRuntime,
-  notifyReady,
-  resizeWindowHeight,
-  setPin,
-} from "../features/translate/quickTranslateWindow";
+import { isTauriRuntime, notifyReady, resizeWindowHeight, setPin } from "../features/translate/quickTranslateWindow";
 import { resolveTranslateFailureMessage } from "../features/translate/resolveTranslateFailureMessage";
 import { runDetectLanguage, runStartSlotStreamBatch } from "../features/translate/runTranslate";
-import {
-  DETECT_REQUEST_KEY,
-  useSlotStreamSessions,
-} from "../features/translate/useSlotStreamSessions";
+import { DETECT_REQUEST_KEY, useSlotStreamSessions } from "../features/translate/useSlotStreamSessions";
 import { getIpcErrorMessage } from "../storage/errors";
 import type { TranslateInput, TranslationProfileDto } from "../storage/types";
 import { slotListAutoAnimate } from "./-quick-translate-list-animate";
@@ -140,6 +135,7 @@ const leadingButtonClassName =
 
 function QuickTranslatePage() {
   const { t, i18n } = useTranslation();
+  const toast = useToast();
   const queryClient = useQueryClient();
   const [sessionSeed] = useState(() => loadQuickTranslateSession());
   const [slotListRef] = useAutoAnimate(slotListAutoAnimate);
@@ -148,6 +144,7 @@ function QuickTranslatePage() {
   const [sourceLang, setSourceLang] = useState<SourceLanguageId>(sessionSeed.sourceLang);
   const [targetLang, setTargetLang] = useState<SelectableLanguageId>(sessionSeed.targetLang);
   const [slots, setSlots] = useState<Slot[]>(sessionSeed.slots);
+  const [ocrBusy, setOcrBusy] = useState(false);
   const [results, setResults] = useState<Record<string, SlotResult>>({});
   const [copiedSlotId, setCopiedSlotId] = useState<string | null>(null);
   /** Slot ids that are currently collapsed; absent ids default to expanded. */
@@ -684,6 +681,33 @@ function QuickTranslatePage() {
     applySourceTextRef.current = applySourceText;
   }, [applySourceText]);
 
+  const handleScreenshotOcr = useCallback(async () => {
+    if (!isTauriRuntime() || ocrBusy) {
+      return;
+    }
+    setOcrBusy(true);
+    try {
+      const outcome = await runScreenshotOcr();
+      if (outcome.status === "cancelled") {
+        return;
+      }
+      if (outcome.status === "no_default") {
+        toast.error({ title: t("quickTranslate.ocrNoDefault") });
+        return;
+      }
+      if (outcome.status === "empty") {
+        toast.warning({ title: t("quickTranslate.ocrEmpty") });
+        return;
+      }
+      // Fill the source field only; auto-translate debounce (or manual Enter) owns the next run.
+      applySourceText(outcome.result.text);
+    } catch (error) {
+      const message = getIpcErrorMessage(error, t("quickTranslate.ocrFailed"));
+      toast.error({ title: t("quickTranslate.ocrFailed"), description: message });
+    } finally {
+      setOcrBusy(false);
+    }
+  }, [applySourceText, ocrBusy, t, toast]);
   // Focus after preview → editor so the textarea exists in the DOM first.
   // Place the caret at the end; default focus leaves it at index 0.
   useEffect(() => {
@@ -700,7 +724,7 @@ function QuickTranslatePage() {
     field.setSelectionRange(end, end);
   }, [isSourceCollapsed]);
 
-  // Double Ctrl+C: backend emits clipboard text; set source so debounced auto-translate runs.
+  // Double Ctrl+C / post-OCR: backend emits source text; set source so debounced auto-translate runs.
   // Notify ready only after the listener is registered so first-wake queued text is not lost.
   // Empty deps + ref keep the listener mounted for the page lifetime (no rebind gap).
   useEffect(() => {
@@ -1094,6 +1118,20 @@ function QuickTranslatePage() {
                 ) : (
                   <FlashAutoOutlineIcon className="pointer-events-none size-4" aria-hidden />
                 )}
+              </Button>
+              <Button
+                type="button"
+                className={leadingButtonClassName}
+                aria-label={ocrBusy ? t("quickTranslate.ocrRecognizing") : t("quickTranslate.ocrAria")}
+                disabled={!isTauriRuntime() || ocrBusy}
+                onClick={() => {
+                  void handleScreenshotOcr();
+                }}
+              >
+                <IconMaterialSymbolsLightDocumentScannerOutline
+                  className={cn("pointer-events-none size-4", ocrBusy && "animate-pulse")}
+                  aria-hidden
+                />
               </Button>
             </>
           }

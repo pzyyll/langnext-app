@@ -922,6 +922,25 @@ fn settings_default_profile_must_exist() {
 }
 
 #[test]
+fn settings_default_ocr_service_must_exist() {
+  let (_d, _db, _v, _p, _m, _pr, settings, ..) = setup();
+  let mut s = AppSettingsV1::default_document();
+  s.default_ocr_service_id = Some(uuid::Uuid::now_v7());
+  let err = settings.update(AppSettingsUpdate {
+    settings: s,
+    proxy_credential: ProxyCredentialUpdate::Keep,
+  });
+  assert!(matches!(err, Err(StorageError::Validation(_))));
+}
+
+#[test]
+fn set_default_ocr_service_id_none_clears() {
+  let (_d, _db, _v, _p, _m, _pr, settings, ..) = setup();
+  let dto = settings.set_default_ocr_service_id(None).unwrap();
+  assert_eq!(dto.settings.default_ocr_service_id, None);
+}
+
+#[test]
 fn proxy_replace_and_clear() {
   let (_d, _db, _v, _p, _m, _pr, settings, ..) = setup();
   let mut s = AppSettingsV1::default_document();

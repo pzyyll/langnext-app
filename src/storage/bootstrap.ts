@@ -54,6 +54,7 @@ function nullThemeMigrationUpdate(settings: AppSettingsDto, legacyTheme: ThemeMo
       uiLanguage: portable.uiLanguage,
       theme: legacyTheme,
       defaultProfileId: portable.defaultProfileId,
+      defaultOcrServiceId: portable.defaultOcrServiceId,
       translation: portable.translation,
       shortcuts: portable.shortcuts,
       network: portable.network,

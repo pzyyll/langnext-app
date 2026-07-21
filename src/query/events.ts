@@ -15,7 +15,7 @@ export const DATA_TRANSLATION_HISTORY_CHANGED = "data://translation-history-chan
 /** Coarse notification after OCR service create/update/delete. */
 export const DATA_OCR_SERVICES_CHANGED = "data://ocr-services-changed";
 
-/** Clipboard text emitted to the Quick Translate window on double Ctrl+C. */
+/** Clipboard text emitted to the Quick Translate window on double Ctrl+C / OCR delivery. */
 export const QUICK_TRANSLATE_CLIPBOARD_TEXT = "quick-translate://clipboard-text";
 
 /** Region screenshot finished; payload is RegionScreenshotResult. */

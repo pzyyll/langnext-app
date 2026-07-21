@@ -1,8 +1,9 @@
 // ABOUTME: Versioned portable application settings and proxy credential updates.
 // ABOUTME: Proxy secrets stay out of the settings JSON document.
 use crate::consts::{
-  DEFAULT_OPEN_QUICK_TRANSLATE_BINDING, DEFAULT_REGION_SCREENSHOT_BINDING, DOUBLE_CTRL_C_BINDING,
-  SHORTCUT_DOUBLE_CTRL_C, SHORTCUT_OPEN_QUICK_TRANSLATE, SHORTCUT_REGION_SCREENSHOT,
+  DEFAULT_OPEN_QUICK_TRANSLATE_BINDING, DEFAULT_REGION_SCREENSHOT_BINDING, DEFAULT_SCREENSHOT_OCR_BINDING,
+  DOUBLE_CTRL_C_BINDING, SHORTCUT_DOUBLE_CTRL_C, SHORTCUT_OPEN_QUICK_TRANSLATE, SHORTCUT_REGION_SCREENSHOT,
+  SHORTCUT_SCREENSHOT_OCR,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -79,6 +80,11 @@ pub fn default_shortcuts() -> Vec<ShortcutDefinition> {
       binding: DEFAULT_REGION_SCREENSHOT_BINDING.into(),
       enabled: true,
     },
+    ShortcutDefinition {
+      id: SHORTCUT_SCREENSHOT_OCR.into(),
+      binding: DEFAULT_SCREENSHOT_OCR_BINDING.into(),
+      enabled: true,
+    },
   ]
 }
 
@@ -87,7 +93,7 @@ pub fn normalize_shortcuts(stored: Vec<ShortcutDefinition>) -> Vec<ShortcutDefin
   let mut by_id: std::collections::HashMap<String, ShortcutDefinition> =
     stored.into_iter().map(|s| (s.id.clone(), s)).collect();
 
-  let mut result = Vec::with_capacity(3);
+  let mut result = Vec::with_capacity(4);
   for default in default_shortcuts() {
     if let Some(mut found) = by_id.remove(&default.id) {
       if found.id == SHORTCUT_DOUBLE_CTRL_C {
@@ -113,6 +119,9 @@ pub struct AppSettingsV1 {
   /// Null only before first authoritative Tauri initialization.
   pub theme: Option<String>,
   pub default_profile_id: Option<Uuid>,
+  /// OCR service used for region-screenshot text recognition; null means unset.
+  #[serde(default)]
+  pub default_ocr_service_id: Option<Uuid>,
   pub translation: TranslationPreferences,
   pub shortcuts: Vec<ShortcutDefinition>,
   pub network: NetworkSettings,
@@ -127,6 +136,7 @@ impl AppSettingsV1 {
       ui_language: "en".into(),
       theme: None,
       default_profile_id: None,
+      default_ocr_service_id: None,
       translation: TranslationPreferences {
         auto_detect_source: true,
         preserve_formatting: true,
@@ -186,8 +196,24 @@ mod tests {
     let json = serde_json::to_string(&settings).unwrap();
     assert!(json.contains("schemaVersion"));
     assert!(json.contains("proxyMode"));
+    assert!(json.contains("defaultOcrServiceId"));
     let back: AppSettingsV1 = serde_json::from_str(&json).unwrap();
     assert_eq!(back, settings);
+  }
+
+  #[test]
+  fn settings_deserialize_defaults_missing_ocr_service_id() {
+    let json = r#"{
+      "schemaVersion":1,
+      "uiLanguage":"en",
+      "theme":null,
+      "defaultProfileId":null,
+      "translation":{"autoDetectSource":true,"preserveFormatting":true},
+      "shortcuts":[],
+      "network":{"proxyMode":"system","proxyUrl":null}
+    }"#;
+    let parsed: AppSettingsV1 = serde_json::from_str(json).unwrap();
+    assert_eq!(parsed.default_ocr_service_id, None);
   }
 
   #[test]
@@ -197,7 +223,7 @@ mod tests {
       binding: "Alt+X".into(),
       enabled: false,
     }]);
-    assert_eq!(normalized.len(), 3);
+    assert_eq!(normalized.len(), 4);
     let open = normalized
       .iter()
       .find(|s| s.id == crate::consts::SHORTCUT_OPEN_QUICK_TRANSLATE)
@@ -216,6 +242,12 @@ mod tests {
       .unwrap();
     assert_eq!(screenshot.binding, crate::consts::DEFAULT_REGION_SCREENSHOT_BINDING);
     assert!(screenshot.enabled);
+    let screenshot_ocr = normalized
+      .iter()
+      .find(|s| s.id == crate::consts::SHORTCUT_SCREENSHOT_OCR)
+      .unwrap();
+    assert_eq!(screenshot_ocr.binding, crate::consts::DEFAULT_SCREENSHOT_OCR_BINDING);
+    assert!(screenshot_ocr.enabled);
   }
 
   #[test]

@@ -13,9 +13,9 @@ use crate::domain::translation_profile::{
   PromptTemplate, TranslationProfile, TranslationProfilePromptTemplate, TranslationProfileTarget,
 };
 use crate::error::StorageError;
-use crate::repositories::{provider_instances, provider_models, translation_profiles};
+use crate::repositories::{ocr_services, provider_instances, provider_models, translation_profiles};
 use crate::services::providers::validate_provider_url;
-use crate::services::settings::{validate_default_profile, validate_settings_document};
+use crate::services::settings::{validate_default_ocr_service, validate_default_profile, validate_settings_document};
 use crate::services::translation_profiles::{validate_profile_language_preferences, validate_prompt_templates};
 use rusqlite::Connection;
 use std::collections::{HashMap, HashSet};
@@ -463,6 +463,13 @@ pub fn build_validated_plan(
     }
   }
 
+  // OCR services are not part of configuration export; keep only if still local.
+  if let Some(oid) = settings.default_ocr_service_id {
+    if ocr_services::get(conn, oid).is_err() {
+      settings.default_ocr_service_id = None;
+    }
+  }
+
   Ok(ValidatedImportPlan {
     mode,
     preview,
@@ -609,5 +616,6 @@ fn validate_import_profile(
 
 /// Ensure default profile exists after entities are written (connection-scoped).
 pub fn validate_plan_default_profile(conn: &Connection, settings: &AppSettingsV1) -> Result<(), StorageError> {
-  validate_default_profile(conn, settings.default_profile_id)
+  validate_default_profile(conn, settings.default_profile_id)?;
+  validate_default_ocr_service(conn, settings.default_ocr_service_id)
 }

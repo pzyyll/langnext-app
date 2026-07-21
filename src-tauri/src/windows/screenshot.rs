@@ -1,6 +1,9 @@
 // ABOUTME: Region-screenshot overlay window and capture session for desktop targets.
-// ABOUTME: Pre-warms a hidden overlay, serves backdrop via temp file, reveals after image load, copies crop to clipboard.
+// ABOUTME: Pre-warms overlay, serves backdrop via temp file, optional post-capture OCR into Quick Translate.
 use crate::consts;
+use crate::domain::ocr_service::OcrRecognizeInput;
+use crate::state::AppState;
+use crate::windows;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use image::{ImageEncoder, RgbaImage, imageops};
 use serde::{Deserialize, Serialize};
@@ -94,6 +97,8 @@ pub struct RegionScreenshotState {
   overlay_ready: AtomicBool,
   /// Whether the temporary Escape global shortcut is currently registered.
   escape_registered: AtomicBool,
+  /// When true, a successful crop runs default OCR and delivers text to Quick Translate.
+  ocr_after_capture: AtomicBool,
 }
 
 /// Create the hidden overlay webview early so later triggers skip cold start.
@@ -107,6 +112,7 @@ pub fn prewarm<R: Runtime>(app: &tauri::AppHandle<R>) {
 pub fn start<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<(), String> {
   // Cancel any previous session but keep the warm overlay webview.
   let _ = cancel_session_only(app);
+  clear_ocr_after_capture(app);
 
   let restore_main = hide_window_if_visible(app, consts::WIN_LABEL_MAIN);
   let restore_quick_translate = hide_window_if_visible(app, consts::WIN_LABEL_QUICK_TRANSLATE);
@@ -495,9 +501,62 @@ fn unregister_escape_cancel<R: Runtime>(app: &tauri::AppHandle<R>) {
   }
 }
 
+/// Start region screenshot that will OCR the crop and open Quick Translate only when text is ready.
+pub fn start_for_ocr<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<(), String> {
+  start(app)?;
+  if let Some(state) = app.try_state::<RegionScreenshotState>() {
+    state.ocr_after_capture.store(true, Ordering::SeqCst);
+  }
+  Ok(())
+}
+
+fn clear_ocr_after_capture<R: Runtime>(app: &tauri::AppHandle<R>) {
+  if let Some(state) = app.try_state::<RegionScreenshotState>() {
+    state.ocr_after_capture.store(false, Ordering::SeqCst);
+  }
+}
+
+fn take_ocr_after_capture<R: Runtime>(app: &tauri::AppHandle<R>) -> bool {
+  app
+    .try_state::<RegionScreenshotState>()
+    .map(|state| state.ocr_after_capture.swap(false, Ordering::SeqCst))
+    .unwrap_or(false)
+}
+
+/// Run default OCR and deliver recognized text into Quick Translate (show only when text exists).
+fn spawn_ocr_to_quick_translate<R: Runtime>(app: tauri::AppHandle<R>, png_base64: String) {
+  tauri::async_runtime::spawn(async move {
+    let Some(app_state) = app.try_state::<AppState>() else {
+      log::error!("screenshot_ocr_missing_app_state");
+      return;
+    };
+    let ocr = app_state.ocr_services.clone();
+    match ocr
+      .recognize(OcrRecognizeInput {
+        png_base64,
+        ocr_service_id: None,
+      })
+      .await
+    {
+      Ok(result) => {
+        let text = result.text.trim().to_string();
+        if text.is_empty() {
+          log::info!("screenshot_ocr_empty_result");
+          return;
+        }
+        windows::quick_translate::deliver_source_text(&app, text);
+      }
+      Err(err) => {
+        log::error!("screenshot_ocr_failed error={err}");
+      }
+    }
+  });
+}
+
 /// Drop session + temp file + restore windows; keep the warm overlay webview.
 fn cancel_session_only<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<(), String> {
   unregister_escape_cancel(app);
+  clear_ocr_after_capture(app);
   if let Some(session) = take_session(app)? {
     remove_backdrop_file(&session.backdrop_path);
     restore_hidden_windows(app, session.restore_main, session.restore_quick_translate);
@@ -686,6 +745,9 @@ pub async fn region_screenshot_confirm<R: Runtime>(
         result.region.width,
         result.region.height
       );
+      if take_ocr_after_capture(&app) {
+        spawn_ocr_to_quick_translate(app.clone(), result.png_base64.clone());
+      }
       Ok(result)
     }
     Err(err) => {
@@ -767,4 +829,15 @@ fn copy_image_to_clipboard(image: &RgbaImage) -> Result<(), String> {
 #[tauri::command]
 pub async fn region_screenshot_cancel<R: Runtime>(app: tauri::AppHandle<R>) -> Result<(), String> {
   cancel_internal(&app)
+}
+
+/// Start the region-screenshot overlay from the frontend (Quick Translate OCR, etc.).
+///
+/// Runs on a blocking pool so Escape shortcut registration does not hold the async runtime.
+#[tauri::command]
+pub async fn start_region_screenshot<R: Runtime>(app: tauri::AppHandle<R>) -> Result<(), String> {
+  let app = app.clone();
+  tauri::async_runtime::spawn_blocking(move || start(&app))
+    .await
+    .map_err(|err| format!("failed to start region screenshot: {err}"))?
 }

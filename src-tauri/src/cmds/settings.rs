@@ -6,6 +6,7 @@ use crate::error::IpcError;
 use crate::shortcuts::ShortcutRuntime;
 use crate::state::AppState;
 use tauri::{AppHandle, Runtime, State};
+use uuid::Uuid;
 
 #[tauri::command]
 pub async fn get_app_settings(state: State<'_, AppState>) -> Result<AppSettingsDto, IpcError> {
@@ -48,4 +49,17 @@ pub async fn set_app_shortcuts<R: Runtime>(
     .apply(&app, &dto.settings.shortcuts)
     .map_err(|message| IpcError::new("shortcut_apply_failed", message))?;
   Ok(dto)
+}
+
+/// Persist the OCR service used for region-screenshot text recognition.
+#[tauri::command]
+pub async fn set_app_default_ocr_service(
+  state: State<'_, AppState>,
+  default_ocr_service_id: Option<Uuid>,
+) -> Result<AppSettingsDto, IpcError> {
+  let settings = state.settings.clone();
+  run_blocking("set_app_default_ocr_service", move || {
+    settings.set_default_ocr_service_id(default_ocr_service_id)
+  })
+  .await
 }

@@ -23,6 +23,7 @@ function baseSettings(overrides: Partial<AppSettingsDto> = {}): AppSettingsDto {
     uiLanguage: "en",
     theme: "dark",
     defaultProfileId: null,
+    defaultOcrServiceId: null,
     translation: { autoDetectSource: true, preserveFormatting: true },
     shortcuts: [],
     network: { proxyMode: "system", proxyUrl: null },

@@ -57,6 +57,7 @@ function sampleDocument(): ConfigurationExport {
       uiLanguage: "en",
       theme: "light",
       defaultProfileId: null,
+      defaultOcrServiceId: null,
       translation: { autoDetectSource: true, preserveFormatting: true },
       shortcuts: [],
       network: { proxyMode: "system", proxyUrl: null },

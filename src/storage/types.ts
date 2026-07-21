@@ -289,6 +289,20 @@ export interface OcrServiceWrite {
   expectedUpdatedAt?: string | null;
 }
 
+/** One-shot image OCR recognition input. */
+export interface OcrRecognizeInput {
+  /** Cropped PNG as standard base64 (no data-URL prefix). */
+  pngBase64: string;
+  /** Explicit service; omit/null to use app settings default. */
+  ocrServiceId?: string | null;
+}
+
+/** Recognized plain text from an OCR service. */
+export interface OcrRecognizeResult {
+  text: string;
+  ocrServiceId: string;
+}
+
 /** Persistence/export row for a prompt template (includes profile ownership + list order). */
 export interface TranslationProfilePromptTemplate extends PromptTemplate {
   translationProfileId: string;
@@ -374,12 +388,16 @@ export const SHORTCUT_OPEN_QUICK_TRANSLATE = "open-quick-translate" as const;
 export const SHORTCUT_DOUBLE_CTRL_C = "double-ctrl-c" as const;
 /** Settings id for the rebindable global region-screenshot shortcut. */
 export const SHORTCUT_REGION_SCREENSHOT = "region-screenshot" as const;
+/** Settings id for the rebindable global screenshot-OCR (Quick Translate) shortcut. */
+export const SHORTCUT_SCREENSHOT_OCR = "screenshot-ocr" as const;
 /** Default binding for open-Quick-Translate. */
 export const DEFAULT_OPEN_QUICK_TRANSLATE_BINDING = "Ctrl+Shift+T" as const;
 /** Fixed binding label for double Ctrl+C. */
 export const DOUBLE_CTRL_C_BINDING = "Ctrl+C" as const;
 /** Default binding for region screenshot. */
 export const DEFAULT_REGION_SCREENSHOT_BINDING = "Ctrl+Shift+A" as const;
+/** Default binding for screenshot OCR into Quick Translate. */
+export const DEFAULT_SCREENSHOT_OCR_BINDING = "Alt+S" as const;
 
 /** Physical-pixel rectangle on the virtual desktop. */
 export interface ScreenRegion {
@@ -422,6 +440,8 @@ export interface AppSettingsV1 {
   uiLanguage: string;
   theme: "light" | "dark" | null;
   defaultProfileId: string | null;
+  /** OCR service used for region-screenshot text recognition; null means unset. */
+  defaultOcrServiceId: string | null;
   translation: TranslationPreferences;
   shortcuts: ShortcutDefinition[];
   network: NetworkSettings;
@@ -588,11 +608,13 @@ const _settingsUpdateFixture = {
     uiLanguage: "en",
     theme: "dark",
     defaultProfileId: null,
+    defaultOcrServiceId: null,
     translation: { autoDetectSource: true, preserveFormatting: true },
     shortcuts: [
       { id: SHORTCUT_OPEN_QUICK_TRANSLATE, binding: DEFAULT_OPEN_QUICK_TRANSLATE_BINDING, enabled: true },
       { id: SHORTCUT_DOUBLE_CTRL_C, binding: DOUBLE_CTRL_C_BINDING, enabled: true },
       { id: SHORTCUT_REGION_SCREENSHOT, binding: DEFAULT_REGION_SCREENSHOT_BINDING, enabled: true },
+      { id: SHORTCUT_SCREENSHOT_OCR, binding: DEFAULT_SCREENSHOT_OCR_BINDING, enabled: true },
     ],
     network: { proxyMode: "system", proxyUrl: null },
   },

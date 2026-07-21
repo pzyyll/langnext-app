@@ -8,7 +8,7 @@ pub const WIN_LABEL_SCREENSHOT_OVERLAY: &str = "screenshot-overlay";
 pub const APP_NAME: &str = "langnext-app";
 pub const TRAY_ID: &str = "main";
 
-/// Event carrying clipboard text to the Quick Translate window on double Ctrl+C.
+/// Event carrying clipboard text to the Quick Translate window on double Ctrl+C / OCR delivery.
 pub const QUICK_TRANSLATE_CLIPBOARD_EVENT: &str = "quick-translate://clipboard-text";
 /// Region screenshot finished; payload is `RegionScreenshotResult`.
 pub const REGION_SCREENSHOT_CAPTURED_EVENT: &str = "screenshot://region-captured";
@@ -23,12 +23,16 @@ pub const SHORTCUT_OPEN_QUICK_TRANSLATE: &str = "open-quick-translate";
 pub const SHORTCUT_DOUBLE_CTRL_C: &str = "double-ctrl-c";
 /// Settings id for the rebindable global region-screenshot shortcut.
 pub const SHORTCUT_REGION_SCREENSHOT: &str = "region-screenshot";
+/// Settings id for the rebindable global screenshot-OCR (Quick Translate) shortcut.
+pub const SHORTCUT_SCREENSHOT_OCR: &str = "screenshot-ocr";
 /// Default binding for open-Quick-Translate (global-hotkey parse format).
 pub const DEFAULT_OPEN_QUICK_TRANSLATE_BINDING: &str = "Ctrl+Shift+T";
 /// Fixed binding label for double Ctrl+C (trigger is always two presses).
 pub const DOUBLE_CTRL_C_BINDING: &str = "Ctrl+C";
 /// Default binding for region screenshot (global-hotkey parse format).
 pub const DEFAULT_REGION_SCREENSHOT_BINDING: &str = "Ctrl+Shift+A";
+/// Default binding for screenshot OCR into Quick Translate (global-hotkey parse format).
+pub const DEFAULT_SCREENSHOT_OCR_BINDING: &str = "Alt+S";
 
 /// SQLite database filename under app data.
 pub const DB_FILENAME: &str = "langnext.sqlite3";

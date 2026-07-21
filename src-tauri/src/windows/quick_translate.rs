@@ -1,5 +1,5 @@
 // ABOUTME: Always-on-top Quick Translate secondary window builder.
-// ABOUTME: Cursor-follow show, click-outside hide, content-height resize, clipboard paste on double Ctrl+C.
+// ABOUTME: Cursor-follow show, click-outside hide, clipboard paste, and source-text delivery.
 
 use crate::consts;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -27,8 +27,8 @@ static WIN_SIZE: Mutex<(f64, f64)> = Mutex::new(INIT_WIN_SIZE);
 
 /// App-level pin / clipboard-delivery state for the single Quick Translate window.
 ///
-/// `frontend_ready` is set only after the webview has registered its clipboard listener.
-/// Until then, double Ctrl+C clipboard text is held in `pending_clipboard` (latest wins).
+/// `frontend_ready` is set only after the webview has registered its event listeners.
+/// Until then, source text (clipboard / OCR) is held in `pending_clipboard` (latest wins).
 #[derive(Debug, Default)]
 pub struct QuickTranslateState {
   pub is_pin: Mutex<bool>,
@@ -174,7 +174,7 @@ fn deliver_or_queue_clipboard<R: Runtime>(app: &tauri::AppHandle<R>, text: Strin
   emit_clipboard_text(app, text);
 }
 
-/// Called by the frontend after its clipboard event listener is registered.
+/// Called by the frontend after its event listeners are registered.
 #[tauri::command]
 pub async fn notify_ready<R: Runtime>(app: tauri::AppHandle<R>) -> Result<(), String> {
   let Some(state) = app.try_state::<QuickTranslateState>() else {
@@ -276,11 +276,8 @@ fn set_win_visible<R: Runtime>(app: &tauri::AppHandle<R>, win: &WebviewWindow<R>
   reg_mouse_event(Arc::new(win.clone()));
 }
 
-/// Double Ctrl+C entry: show at cursor and paste clipboard into the source input.
-pub fn try_show_on_cpcp<R: Runtime>(app: &tauri::AppHandle<R>) {
-  // Capture clipboard at trigger time so a later flush still uses the intended text.
-  let clipboard_text = read_clipboard_text(app);
-
+/// Ensure the Quick Translate window exists and is visible (cursor-follow on first show).
+fn ensure_quick_translate_visible<R: Runtime>(app: &tauri::AppHandle<R>) -> bool {
   match app.get_webview_window(consts::WIN_LABEL_QUICK_TRANSLATE) {
     Some(win) => {
       if let Ok(visible) = win.is_visible() {
@@ -288,18 +285,42 @@ pub fn try_show_on_cpcp<R: Runtime>(app: &tauri::AppHandle<R>) {
           set_win_visible(app, &win);
         }
       }
+      true
     }
     None => {
       if let Err(e) = show(app) {
         log::error!("quick_translate_show_failed error={e}");
-        return;
+        return false;
       }
+      true
     }
+  }
+}
+
+/// Double Ctrl+C entry: show at cursor and paste clipboard into the source input.
+pub fn try_show_on_cpcp<R: Runtime>(app: &tauri::AppHandle<R>) {
+  // Capture clipboard at trigger time so a later flush still uses the intended text.
+  let clipboard_text = read_clipboard_text(app);
+
+  if !ensure_quick_translate_visible(app) {
+    return;
   }
 
   if let Some(text) = clipboard_text {
     deliver_or_queue_clipboard(app, text);
   }
+}
+
+/// Show Quick Translate (if needed) and deliver source text into the input field.
+/// Used after screenshot OCR recognizes non-empty text.
+pub fn deliver_source_text<R: Runtime>(app: &tauri::AppHandle<R>, text: String) {
+  if text.trim().is_empty() {
+    return;
+  }
+  if !ensure_quick_translate_visible(app) {
+    return;
+  }
+  deliver_or_queue_clipboard(app, text);
 }
 
 /// Show the Quick Translate window, creating it on first use at the cursor position.

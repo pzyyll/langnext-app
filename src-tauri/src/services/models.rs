@@ -1095,6 +1095,7 @@ fn prepare_llm_detection(
           temperature: Some(DETECT_TEMPERATURE),
           max_tokens: Some(max_tokens),
           thinking,
+          image_png_base64: None,
         },
       })
     }
@@ -1301,6 +1302,7 @@ fn prepare_single_model_attempt(
         // Leave provider default (DeepSeek: thinking enabled). Stream parser
         // skips reasoning-only empty content chunks until final answer arrives.
         thinking: None,
+        image_png_base64: None,
       },
     })),
   }

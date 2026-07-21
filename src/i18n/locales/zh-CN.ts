@@ -79,6 +79,12 @@ const zhCN = {
     disableAutoTranslate: "关闭自动翻译",
     collapseSource: "收起输入框",
     editSource: "编辑原文",
+    ocrAria: "截图识别 OCR",
+    ocrRecognizing: "识别中…",
+    ocrNoDefault: "请先在 OCR 设置中选择截图识别默认配置。",
+    ocrEmpty: "未识别到文本。",
+    ocrFailed: "OCR 识别失败",
+    ocrStartFailed: "无法启动截图 OCR",
   },
   settings: {
     title: "设置",
@@ -93,7 +99,7 @@ const zhCN = {
     },
     shortcuts: {
       title: "快捷键",
-      description: "配置快速翻译与截图的全局快捷键。",
+      description: "配置快速翻译、截图与 OCR 的全局快捷键。",
       doubleCtrlC: {
         title: "双击 Ctrl+C",
         description: "打开快速翻译并粘贴剪贴板内容。",
@@ -114,6 +120,14 @@ const zhCN = {
         recording: "请按下按键…",
         reset: "重置",
         resetAria: "重置为 Ctrl+Shift+A",
+      },
+      screenshotOcr: {
+        title: "截图 OCR",
+        description: "打开快速翻译、框选截图并执行 OCR 识别。",
+        recordAria: "录制截图 OCR 快捷键",
+        recording: "请按下按键…",
+        reset: "重置",
+        resetAria: "重置为 Alt+S",
       },
       loadFailed: "无法加载快捷键设置。",
       persistFailed: "无法保存快捷键设置。",
@@ -631,6 +645,15 @@ const zhCN = {
       renameFailed: "重命名 OCR 服务失败",
       deleted: "已删除 OCR 服务",
       deleteFailed: "删除 OCR 服务失败",
+      screenshotDefaultSaved: "截图识别 OCR 已更新",
+      screenshotDefaultFailed: "更新截图识别 OCR 失败",
+    },
+    screenshotDefault: {
+      label: "截图识别 OCR",
+      none: "未设置",
+      missing: "服务已缺失",
+      aria: "截图文字识别默认 OCR 配置",
+      empty: "请先添加 OCR 服务",
     },
   },
 } as const satisfies TranslationLeaves<typeof en>;

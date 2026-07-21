@@ -6,6 +6,8 @@ import type {
   ConnectionTestResult,
   ManualModelWrite,
   ModelConfigWrite,
+  OcrRecognizeInput,
+  OcrRecognizeResult,
   OcrServiceDto,
   OcrServiceWrite,
   ProviderInstanceDto,
@@ -149,6 +151,11 @@ export async function deleteOcrService(id: string): Promise<void> {
   return runStorage(invokeEffect<void>("delete_ocr_service", { id }));
 }
 
+/** Recognize text from a PNG image using the configured (or default) OCR service. */
+export async function recognizeOcr(input: OcrRecognizeInput): Promise<OcrRecognizeResult> {
+  return runStorage(invokeEffect<OcrRecognizeResult>("recognize_ocr", { input }));
+}
+
 export async function getAppSettings(): Promise<AppSettingsDto> {
   return runStorage(invokeEffect<AppSettingsDto>("get_app_settings"));
 }
@@ -167,6 +174,11 @@ export async function setAppUiLanguage(uiLanguage: string): Promise<AppSettingsD
 
 export async function setAppShortcuts(shortcuts: ShortcutDefinition[]): Promise<AppSettingsDto> {
   return runStorage(invokeEffect<AppSettingsDto>("set_app_shortcuts", { shortcuts }));
+}
+
+/** Persist the OCR service used for region-screenshot text recognition. */
+export async function setAppDefaultOcrService(defaultOcrServiceId: string | null): Promise<AppSettingsDto> {
+  return runStorage(invokeEffect<AppSettingsDto>("set_app_default_ocr_service", { defaultOcrServiceId }));
 }
 
 /** Full-monitor PNG backdrop path for the active region-screenshot overlay. */
@@ -192,6 +204,11 @@ export async function regionScreenshotConfirm(selection: RegionScreenshotSelecti
 /** Cancel the active region screenshot without producing an image. */
 export async function regionScreenshotCancel(): Promise<void> {
   return runStorage(invokeEffect<void>("region_screenshot_cancel"));
+}
+
+/** Start the region-screenshot overlay (used by Quick Translate OCR). */
+export async function startRegionScreenshot(): Promise<void> {
+  return runStorage(invokeEffect<void>("start_region_screenshot"));
 }
 
 export async function listTranslationHistory(

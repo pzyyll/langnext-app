@@ -41,6 +41,7 @@ function baseSettings(overrides: Partial<AppSettingsDto> = {}): AppSettingsDto {
     uiLanguage: "en",
     theme: "light",
     defaultProfileId: null,
+    defaultOcrServiceId: null,
     translation: { autoDetectSource: true, preserveFormatting: true },
     shortcuts: sampleShortcuts,
     network: { proxyMode: "system", proxyUrl: null },

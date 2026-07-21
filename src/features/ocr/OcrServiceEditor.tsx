@@ -22,7 +22,7 @@ import {
   switchRootClassName,
   switchThumbClassName,
 } from "../../components/ui";
-import { ocrKeys } from "../../query/keys";
+import { ocrKeys, settingsKeys } from "../../query/keys";
 import { allProviderModelsOptions, ocrListOptions, providerListOptions } from "../../query/options";
 import { deleteOcrService, saveOcrService } from "../../storage/client";
 import { getIpcErrorMessage } from "../../storage/errors";
@@ -412,6 +412,8 @@ function OcrServiceEditorLoaded({ service }: OcrServiceEditorLoadedProps) {
     toast.success({ title: t("ocr.toast.deleted"), description: service.displayName });
     void navigate({ to: "/ocr" });
     void queryClient.invalidateQueries({ queryKey: ocrKeys.all });
+    // Backend clears defaultOcrServiceId when the selected service is deleted.
+    void queryClient.invalidateQueries({ queryKey: settingsKeys.all });
   }
 
   function resetForm() {

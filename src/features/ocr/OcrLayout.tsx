@@ -1,35 +1,75 @@
-// ABOUTME: OCR feature layout with service list rail and nested editor outlet.
-// ABOUTME: Loads OCR services via Query; URL-driven selection defaults to the first service.
+// ABOUTME: OCR feature layout with service list rail, nested editor outlet, and header tools.
+// ABOUTME: Loads OCR services via Query; URL selection + screenshot default OCR picker.
 import { useEffect, useMemo, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, Outlet, useNavigate, useParams } from "@tanstack/react-router";
 import { Button } from "@base-ui/react/button";
 import { useTranslation } from "react-i18next";
 import { ConfigRailHeader } from "../../components/layouts/ConfigRailHeader";
 import { PageLayout } from "../../components/layouts/PageLayout";
+import { SelectField } from "../../components/SelectField";
+import { useToast } from "../../components/toast/useToast";
 import { outlineButtonClassName } from "../../components/ui";
 import { cn } from "../../lib/cn";
-import { ocrKeys } from "../../query/keys";
-import { ocrListOptions } from "../../query/options";
+import { ocrKeys, settingsKeys } from "../../query/keys";
+import { appSettingsOptions, ocrListOptions } from "../../query/options";
+import { setAppDefaultOcrService } from "../../storage/client";
 import { getIpcErrorMessage } from "../../storage/errors";
-import type { OcrServiceDto } from "../../storage/types";
+import type { AppSettingsDto, OcrServiceDto } from "../../storage/types";
 import { AddOcrServiceDialog } from "./AddOcrServiceDialog";
 import { OcrContext } from "./OcrContext";
 import { getOcrProviderOption } from "./ocrProviderOptions";
 
+/** Select value representing no default screenshot OCR service. */
+const NO_DEFAULT_OCR_SERVICE_VALUE = "";
+/** Compact select width for the page-header toolbar control. */
+const SCREENSHOT_OCR_SELECT_WIDTH_CLASS = "w-48";
+
 export function OcrLayout() {
   const { t } = useTranslation();
+  const toast = useToast();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const params = useParams({ strict: false }) as { ocrServiceId?: string };
   const selectedId = params.ocrServiceId;
 
   const servicesQuery = useQuery(ocrListOptions());
+  const settingsQuery = useQuery(appSettingsOptions());
   const services = useMemo(() => servicesQuery.data ?? [], [servicesQuery.data]);
   const loading = servicesQuery.isLoading;
   const error = servicesQuery.error != null ? getIpcErrorMessage(servicesQuery.error, t("ocr.loadFailed")) : null;
 
   const [addOpen, setAddOpen] = useState(false);
+
+  const defaultOcrServiceId = settingsQuery.data?.defaultOcrServiceId ?? null;
+
+  const screenshotOcrOptions = useMemo(
+    () => [
+      { value: NO_DEFAULT_OCR_SERVICE_VALUE, label: t("ocr.screenshotDefault.none") },
+      ...services.map((service) => ({
+        value: service.id,
+        label: service.displayName,
+      })),
+    ],
+    [services, t],
+  );
+
+  const screenshotOcrExtraOptions = useMemo(() => {
+    if (!defaultOcrServiceId) return undefined;
+    if (services.some((service) => service.id === defaultOcrServiceId)) return undefined;
+    return [{ value: defaultOcrServiceId, label: t("ocr.screenshotDefault.missing") }];
+  }, [defaultOcrServiceId, services, t]);
+
+  const setDefaultOcrMutation = useMutation({
+    mutationFn: (nextId: string | null) => setAppDefaultOcrService(nextId),
+    onSuccess: (settings) => {
+      queryClient.setQueryData<AppSettingsDto>(settingsKeys.detail(), settings);
+    },
+    onError: (mutationError) => {
+      const message = getIpcErrorMessage(mutationError, t("ocr.toast.screenshotDefaultFailed"));
+      toast.error({ title: t("ocr.toast.screenshotDefaultFailed"), description: message });
+    },
+  });
 
   // When the OCR tab opens with services already configured but none selected,
   // default to the first service so the editor is immediately visible.
@@ -45,9 +85,38 @@ export function OcrLayout() {
 
   const contextValue = useMemo(() => ({ ready: true as const }), []);
 
+  const screenshotDefaultSelectId = "ocr-screenshot-default";
+  const screenshotSelectDisabled = setDefaultOcrMutation.isPending || settingsQuery.isLoading || services.length === 0;
+
   return (
     <OcrContext.Provider value={contextValue}>
-      <PageLayout title={t("ocr.title")} contentClassName="overflow-hidden">
+      <PageLayout
+        title={t("ocr.title")}
+        contentClassName="overflow-hidden"
+        actions={
+          <div className="flex min-w-0 items-center gap-2">
+            <label htmlFor={screenshotDefaultSelectId} className="shrink-0 text-label-sm text-neutral uppercase">
+              {t("ocr.screenshotDefault.label")}
+            </label>
+            <SelectField
+              id={screenshotDefaultSelectId}
+              compact
+              className={SCREENSHOT_OCR_SELECT_WIDTH_CLASS}
+              value={defaultOcrServiceId ?? NO_DEFAULT_OCR_SERVICE_VALUE}
+              onValueChange={(value) => {
+                const nextId = !value || value === NO_DEFAULT_OCR_SERVICE_VALUE ? null : value;
+                if (nextId === defaultOcrServiceId) return;
+                setDefaultOcrMutation.mutate(nextId);
+              }}
+              options={screenshotOcrOptions}
+              extraOptions={screenshotOcrExtraOptions}
+              disabled={screenshotSelectDisabled}
+              placeholder={services.length === 0 ? t("ocr.screenshotDefault.empty") : undefined}
+              aria-label={t("ocr.screenshotDefault.aria")}
+            />
+          </div>
+        }
+      >
         <aside
           className="
             flex w-models-rail shrink-0 flex-col overflow-hidden border-r border-outline bg-surface-container-lowest
