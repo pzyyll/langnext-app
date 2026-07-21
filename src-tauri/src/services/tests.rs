@@ -3177,7 +3177,9 @@ fn delete_all_models_keeps_provider_and_connection() {
   assert!(models.list_by_provider(provider.id).unwrap().is_empty());
 
   // Channel row and connection fields must survive clearing every model.
-  let kept = providers.get(provider.id).expect("provider must remain after model delete");
+  let kept = providers
+    .get(provider.id)
+    .expect("provider must remain after model delete");
   assert_eq!(kept.display_name, "Keep Me");
   assert_eq!(kept.base_url_override.as_deref(), Some("https://api.example.com/v1"));
   assert!(providers.list().unwrap().iter().any(|row| row.id == provider.id));
@@ -3847,8 +3849,8 @@ fn detect_language_disables_thinking_for_deepseek_models() {
     .save_manual(ManualModelWrite {
       id: None,
       provider_instance_id: provider.id,
-      // DeepSeek V4 defaults thinking=enabled; detection must turn it off so the
-      // small max_tokens budget is not spent entirely on reasoning_content.
+      // Relay path: openai-compatible channel hosting a DeepSeek model key.
+      // Adapter strategy still applies thinking policy via the relay heuristic.
       model_key: "deepseek-v4-flash".into(),
       display_name_override: None,
       enabled: true,
@@ -3872,6 +3874,43 @@ fn detect_language_disables_thinking_for_deepseek_models() {
   let request = request_handle.join().unwrap();
   // thinking:disabled is best-effort; some relays ignore it and still stream CoT.
   // Keep a larger budget so the final language code can still fit after reasoning.
+  assert_eq!(request["max_tokens"], 2048);
+  assert_eq!(request["thinking"]["type"], "disabled");
+}
+
+#[test]
+fn detect_language_disables_thinking_for_deepseek_adapter() {
+  let (_d, _db, _v, providers, models, ..) = setup();
+  let (base_url, request_handle) = spawn_detection_chat_server();
+  let mut write = provider_write(CredentialKind::None, CredentialUpdate::Keep);
+  write.adapter_id = "deepseek".into();
+  write.base_url_override = Some(base_url);
+  let provider = providers.save(write).unwrap();
+  let model = models
+    .save_manual(ManualModelWrite {
+      id: None,
+      provider_instance_id: provider.id,
+      // First-class deepseek adapter: policy is owned by the strategy, not model-key heuristics.
+      model_key: "deepseek-chat".into(),
+      display_name_override: None,
+      enabled: true,
+      capability_overrides_json: None,
+      adapter_id: None,
+    })
+    .unwrap();
+
+  let result = block_on(models.detect_language(
+    DetectLanguageInput {
+      text: "hello".into(),
+      model_id: Some(model.id),
+      profile_id: None,
+    },
+    None,
+  ))
+  .unwrap();
+  assert!(result.ok, "detection failed: {result:?}");
+
+  let request = request_handle.join().unwrap();
   assert_eq!(request["max_tokens"], 2048);
   assert_eq!(request["thinking"]["type"], "disabled");
 }

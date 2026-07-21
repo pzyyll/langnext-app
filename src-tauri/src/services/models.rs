@@ -899,25 +899,6 @@ struct TranslateAttempt {
 const DETECT_SAMPLE_CHARS: usize = 5000;
 /// Low deterministic budget for language classification requests.
 const DETECT_TEMPERATURE: f64 = 0.0;
-const DETECT_MAX_TOKENS: u32 = 256;
-/// Extra headroom when a thinking model still emits CoT despite `thinking: disabled`
-/// (common on relays). CoT + a single language code must both fit under this cap.
-const DETECT_MAX_TOKENS_THINKING_MODEL: u32 = 2048;
-
-/// Whether an OpenAI-compatible model/endpoint is DeepSeek-style thinking capable
-/// (`thinking` toggle + `reasoning_content`).
-///
-/// DeepSeek V4 defaults thinking to **enabled**. Detection uses a small answer;
-/// if thinking stays on (or the gateway ignores the toggle), a 256-token cap is
-/// often spent entirely on CoT and `content` arrives empty (`finish_reason=length`).
-fn is_deepseek_thinking_model(adapter_id: &str, model_key: &str, base_url: &str) -> bool {
-  if adapter_id != "openai-compatible" {
-    return false;
-  }
-  let model = model_key.to_ascii_lowercase();
-  let base = base_url.to_ascii_lowercase();
-  model.contains("deepseek") || base.contains("deepseek")
-}
 
 /// Which model to use for detection, given the profile config and request inputs.
 ///
@@ -1064,15 +1045,8 @@ fn prepare_llm_detection(
       model_display_name: _,
       provider_display_name: _,
     } => {
-      // DeepSeek: best-effort disable thinking, and raise max_tokens so a single
-      // language code can still be emitted if the gateway keeps CoT on anyway.
-      let deepseek_thinking = is_deepseek_thinking_model(&config.adapter_id, &model_key, &config.base_url);
-      let thinking = if deepseek_thinking { Some(false) } else { None };
-      let max_tokens = if deepseek_thinking {
-        DETECT_MAX_TOKENS_THINKING_MODEL
-      } else {
-        DETECT_MAX_TOKENS
-      };
+      // Adapter strategy owns thinking toggles / raised budgets (e.g. DeepSeek).
+      let detect_policy = catalog::detect_chat_policy(&config.adapter_id, &model_key, &config.base_url);
       Ok(DetectPrepare::Ready {
         model_id,
         request: ChatCompletionRequest {
@@ -1084,10 +1058,10 @@ fn prepare_llm_detection(
           model_key,
           system_prompt,
           user_prompt,
-          // Classification should be deterministic and use a small output budget.
+          // Classification should be deterministic; max_tokens comes from adapter policy.
           temperature: Some(DETECT_TEMPERATURE),
-          max_tokens: Some(max_tokens),
-          thinking,
+          max_tokens: Some(detect_policy.max_tokens),
+          thinking: detect_policy.thinking,
           image_png_base64: None,
         },
       })
@@ -1531,14 +1505,7 @@ fn load_secret_if_needed(
 }
 
 fn secret_required(adapter_id: &str, credential_kind: CredentialKind) -> bool {
-  match adapter_id {
-    "openai-compatible" | "openai-responses" => {
-      matches!(credential_kind, CredentialKind::ApiKey | CredentialKind::Bearer)
-    }
-    // Anthropic and Gemini require a stored secret for their model-list endpoints.
-    "anthropic" | "gemini" => true,
-    _ => true,
-  }
+  catalog::secret_required(adapter_id, credential_kind)
 }
 
 fn validate_manual_model(input: &ManualModelWrite) -> Result<(), StorageError> {

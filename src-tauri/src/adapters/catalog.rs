@@ -1,69 +1,28 @@
-// ABOUTME: Built-in adapter IDs and default metadata (no HTTP behavior).
-// ABOUTME: Profile option validation rejects non-empty options until real schemas land.
+// ABOUTME: Adapter catalog facade over the strategy registry (metadata + validation).
+// ABOUTME: Keeps existing service call sites stable while strategies own behavior.
+use crate::adapters::protocol::AdapterMeta;
+use crate::adapters::registry;
 use crate::error::StorageError;
 use std::collections::HashMap;
 
-#[derive(Debug, Clone)]
-pub struct AdapterMeta {
-  /// Stable adapter identifier used by Provider rows.
-  #[allow(dead_code)] // retained for catalog consumers and future HTTP adapters
-  pub id: &'static str,
-  /// Documented default base URL for the adapter.
-  #[allow(dead_code)] // retained for catalog consumers and future HTTP adapters
-  pub default_base_url: Option<&'static str>,
-}
-
-/// Metadata-only catalog of built-in Provider adapters.
+/// Metadata-only view of registered Provider adapters.
 pub fn catalog() -> HashMap<&'static str, AdapterMeta> {
-  let mut map = HashMap::new();
-  map.insert(
-    "openai-compatible",
-    AdapterMeta {
-      id: "openai-compatible",
-      default_base_url: Some("https://api.openai.com/v1"),
-    },
-  );
-  map.insert(
-    "openai-responses",
-    AdapterMeta {
-      id: "openai-responses",
-      default_base_url: Some("https://api.openai.com/v1"),
-    },
-  );
-  map.insert(
-    "anthropic",
-    AdapterMeta {
-      id: "anthropic",
-      default_base_url: Some("https://api.anthropic.com"),
-    },
-  );
-  map.insert(
-    "gemini",
-    AdapterMeta {
-      id: "gemini",
-      default_base_url: Some("https://generativelanguage.googleapis.com"),
-    },
-  );
-  map
+  registry::list()
+    .into_iter()
+    .map(|adapter| {
+      let meta = adapter.meta();
+      (meta.id, meta)
+    })
+    .collect()
 }
 
 pub fn get(adapter_id: &str) -> Result<AdapterMeta, StorageError> {
-  catalog()
-    .get(adapter_id)
-    .cloned()
-    .ok_or_else(|| StorageError::Validation(format!("unknown adapter_id: {adapter_id}")))
+  Ok(registry::get(adapter_id)?.meta())
 }
 
-/// Until real adapter schemas land, only null or empty objects are accepted.
-pub fn validate_profile_options(_adapter_id: &str, options: &Option<serde_json::Value>) -> Result<(), StorageError> {
-  match options {
-    None => Ok(()),
-    Some(serde_json::Value::Object(map)) if map.is_empty() => Ok(()),
-    Some(serde_json::Value::Null) => Ok(()),
-    _ => Err(StorageError::Validation(
-      "provider_options_json must be null or an empty object for built-in adapters".into(),
-    )),
-  }
+/// Delegate profile-option validation to the adapter strategy.
+pub fn validate_profile_options(adapter_id: &str, options: &Option<serde_json::Value>) -> Result<(), StorageError> {
+  registry::get(adapter_id)?.validate_profile_options(options)
 }
 
 /// Validate versioned capability override documents for models.
@@ -71,9 +30,31 @@ pub fn validate_capability_overrides(value: &Option<serde_json::Value>) -> Resul
   crate::domain::model::CapabilityOverridesV1::from_json(value).map(|_| ())
 }
 
+/// Whether a stored secret is required before calling remote endpoints for this adapter.
+pub fn secret_required(adapter_id: &str, credential_kind: crate::domain::provider::CredentialKind) -> bool {
+  match registry::get(adapter_id) {
+    Ok(adapter) => adapter.secret_required(credential_kind),
+    // Unknown adapters fail closed: require a secret so callers cannot skip auth by typo.
+    Err(_) => true,
+  }
+}
+
+/// Language-detection chat policy owned by the adapter strategy.
+pub fn detect_chat_policy(
+  adapter_id: &str,
+  model_key: &str,
+  base_url: &str,
+) -> crate::adapters::protocol::DetectChatPolicy {
+  match registry::get(adapter_id) {
+    Ok(adapter) => adapter.detect_chat_policy(model_key, base_url),
+    Err(_) => crate::adapters::protocol::DetectChatPolicy::default(),
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::domain::provider::CredentialKind;
 
   #[test]
   fn known_adapters() {
@@ -81,6 +62,7 @@ mod tests {
     assert!(get("openai-responses").is_ok());
     assert!(get("anthropic").is_ok());
     assert!(get("gemini").is_ok());
+    assert!(get("deepseek").is_ok());
     assert!(get("nope").is_err());
   }
 
@@ -89,5 +71,22 @@ mod tests {
     assert!(validate_profile_options("openai-compatible", &None).is_ok());
     assert!(validate_profile_options("openai-compatible", &Some(serde_json::json!({}))).is_ok());
     assert!(validate_profile_options("openai-compatible", &Some(serde_json::json!({"temp": 1}))).is_err());
+  }
+
+  #[test]
+  fn secret_required_by_adapter() {
+    assert!(!secret_required("openai-compatible", CredentialKind::None));
+    assert!(secret_required("openai-compatible", CredentialKind::ApiKey));
+    assert!(secret_required("anthropic", CredentialKind::None));
+    assert!(secret_required("gemini", CredentialKind::ApiKey));
+    assert!(!secret_required("deepseek", CredentialKind::None));
+    assert!(secret_required("deepseek", CredentialKind::ApiKey));
+  }
+
+  #[test]
+  fn deepseek_detect_policy_disables_thinking() {
+    let policy = detect_chat_policy("deepseek", "deepseek-chat", "https://api.deepseek.com");
+    assert_eq!(policy.thinking, Some(false));
+    assert!(policy.max_tokens > 256);
   }
 }

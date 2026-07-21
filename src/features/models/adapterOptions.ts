@@ -29,6 +29,11 @@ export const ADAPTER_OPTIONS: readonly AdapterOption[] = [
     label: "Gemini",
     defaultBaseUrl: "https://generativelanguage.googleapis.com",
   },
+  {
+    id: "deepseek",
+    label: "DeepSeek",
+    defaultBaseUrl: "https://api.deepseek.com",
+  },
 ] as const;
 
 /** Look up the documented default Base URL for an adapter ID. */

@@ -1,5 +1,6 @@
 // ABOUTME: Async HTTP transport for model-list sync and chat completion (stream + non-stream).
-// ABOUTME: Applies authentication, proxy, pagination, SSE parsing, and bounded secret-free errors.
+// ABOUTME: Orchestrates auth/proxy/SSE; adapter strategies own wire format and parsing.
+use crate::adapters::registry;
 use crate::domain::cancel::CancelToken;
 use crate::domain::model::RemoteModelSyncItem;
 use crate::domain::provider::{CredentialKind, ProxyMode};
@@ -9,6 +10,11 @@ use std::pin::Pin;
 use std::sync::OnceLock;
 use std::time::Duration;
 
+// Stable re-exports for unit tests and external pure-parser callers.
+#[cfg(test)]
+use crate::adapters::builtin::normalize_model_key;
+pub use crate::adapters::builtin::{parse_anthropic_page, parse_gemini_page, parse_openai_page};
+
 /// Total request timeout for model-list and non-streaming chat completions.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 /// Connect-only timeout for streaming chat (no overall read deadline — chunks arrive over time).
@@ -17,15 +23,17 @@ const STREAM_CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 const STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_PAGES: usize = 100;
 const MAX_MODEL_KEY_LEN: usize = 256;
+const MAX_MODELS_PER_PAGE: usize = 500;
 const ANTHROPIC_VERSION: &str = "2023-06-01";
-/// Max serialized Gemini remote metadata JSON stored per model.
+/// Test-visible Gemini bounds (mirrored from the gemini strategy module).
+#[cfg(test)]
 const MAX_REMOTE_METADATA_BYTES: usize = 2048;
+#[cfg(test)]
 const MAX_GEMINI_METHODS: usize = 32;
+#[cfg(test)]
 const MAX_GEMINI_METHOD_LEN: usize = 128;
 /// Hard cap on a single model-list response body (bytes, after decompression).
 const MAX_RESPONSE_BODY_BYTES: usize = 2 * 1024 * 1024;
-/// Hard cap on models accepted from a single page.
-const MAX_MODELS_PER_PAGE: usize = 500;
 /// Hard cap on unique models collected across all pages of one sync.
 const MAX_TOTAL_MODELS: usize = 2_000;
 /// Hard cap on accumulated streamed assistant text (chars).
@@ -287,12 +295,7 @@ pub fn build_endpoint(base_url: &str, relative: &str) -> Result<url::Url, Transp
 }
 
 fn models_path_for_adapter(adapter_id: &str) -> Result<&'static str, TransportError> {
-  match adapter_id {
-    "openai-compatible" | "openai-responses" => Ok("models"),
-    "anthropic" => Ok("v1/models"),
-    "gemini" => Ok("v1beta/models"),
-    _ => Err(TransportError::InvalidResponse),
-  }
+  Ok(registry::get_for_transport(adapter_id)?.models_path())
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -301,190 +304,8 @@ pub struct ParsedPage {
   pub continuation: Option<String>,
 }
 
-/// Pure OpenAI models page parser: `{ data: [{ id }] }`.
-pub fn parse_openai_page(value: &serde_json::Value) -> Result<ParsedPage, TransportError> {
-  let data = value
-    .get("data")
-    .and_then(|v| v.as_array())
-    .ok_or(TransportError::InvalidResponse)?;
-  if data.len() > MAX_MODELS_PER_PAGE {
-    return Err(TransportError::InvalidResponse);
-  }
-  let mut items = Vec::with_capacity(data.len());
-  for entry in data {
-    let id = entry
-      .get("id")
-      .and_then(|v| v.as_str())
-      .ok_or(TransportError::InvalidResponse)?;
-    let model_key = normalize_model_key(id)?;
-    items.push(RemoteModelSyncItem {
-      model_key,
-      remote_display_name: None,
-      remote_metadata_json: None,
-    });
-  }
-  Ok(ParsedPage {
-    items,
-    continuation: None,
-  })
-}
-
-/// Pure Anthropic models page parser.
-///
-/// Official list/pagination shape: `{ data: [...], has_more, first_id, last_id }`.
-/// Empty `data` is valid (including the empty-list case).
-///
-/// Field semantics (missing / null / string / wrong type):
-/// - `has_more`: must be a boolean. Missing, null, or wrong type → `invalid_response`
-///   (never treated as end-of-pagination).
-/// - `first_id`: missing or null allowed; string allowed (unused for continuation);
-///   wrong type → `invalid_response`.
-/// - `last_id`: missing or null allowed only when `has_more` is false; wrong type always
-///   → `invalid_response`. When `has_more` is true, `last_id` must be a non-empty string
-///   (null / missing / `""` → `invalid_response`).
-pub fn parse_anthropic_page(value: &serde_json::Value) -> Result<ParsedPage, TransportError> {
-  let data = value
-    .get("data")
-    .and_then(|v| v.as_array())
-    .ok_or(TransportError::InvalidResponse)?;
-  if data.len() > MAX_MODELS_PER_PAGE {
-    return Err(TransportError::InvalidResponse);
-  }
-  let mut items = Vec::with_capacity(data.len());
-  for entry in data {
-    let id = entry
-      .get("id")
-      .and_then(|v| v.as_str())
-      .ok_or(TransportError::InvalidResponse)?;
-    let model_key = normalize_model_key(id)?;
-    let remote_display_name = entry
-      .get("display_name")
-      .and_then(|v| v.as_str())
-      .map(|s| s.to_string());
-    items.push(RemoteModelSyncItem {
-      model_key,
-      remote_display_name,
-      remote_metadata_json: None,
-    });
-  }
-  let has_more = match value.get("has_more") {
-    Some(v) => v.as_bool().ok_or(TransportError::InvalidResponse)?,
-    None => return Err(TransportError::InvalidResponse),
-  };
-  // Type-check cursor fields even when unused for continuation.
-  let _first_id = parse_anthropic_id_field(value.get("first_id"))?;
-  let last_id = parse_anthropic_id_field(value.get("last_id"))?;
-  let continuation = if has_more {
-    let last_id = last_id
-      .filter(|s| !s.is_empty())
-      .ok_or(TransportError::InvalidResponse)?;
-    Some(last_id)
-  } else {
-    None
-  };
-  Ok(ParsedPage { items, continuation })
-}
-
-/// Parse Anthropic `first_id` / `last_id`: missing or null → None; string → Some; else invalid.
-fn parse_anthropic_id_field(value: Option<&serde_json::Value>) -> Result<Option<String>, TransportError> {
-  match value {
-    None | Some(serde_json::Value::Null) => Ok(None),
-    Some(serde_json::Value::String(s)) => Ok(Some(s.clone())),
-    // Present but wrong type (number, object, array, bool) must not be coerced.
-    Some(_) => Err(TransportError::InvalidResponse),
-  }
-}
-
-/// Pure Gemini models page parser.
-///
-/// When `nextPageToken` is present it must be a non-object string (or null to end).
-/// A present but wrong-type token is `invalid_response`, not end-of-pagination.
-pub fn parse_gemini_page(value: &serde_json::Value) -> Result<ParsedPage, TransportError> {
-  let models = value
-    .get("models")
-    .and_then(|v| v.as_array())
-    .ok_or(TransportError::InvalidResponse)?;
-  if models.len() > MAX_MODELS_PER_PAGE {
-    return Err(TransportError::InvalidResponse);
-  }
-  let mut items = Vec::with_capacity(models.len());
-  for entry in models {
-    let name = entry
-      .get("name")
-      .and_then(|v| v.as_str())
-      .ok_or(TransportError::InvalidResponse)?;
-    let stripped = name.strip_prefix("models/").unwrap_or(name);
-    let model_key = normalize_model_key(stripped)?;
-    let remote_display_name = entry.get("displayName").and_then(|v| v.as_str()).map(|s| s.to_string());
-    let remote_metadata_json = bound_gemini_metadata(entry)?;
-    items.push(RemoteModelSyncItem {
-      model_key,
-      remote_display_name,
-      remote_metadata_json,
-    });
-  }
-  let continuation = parse_gemini_next_page_token(value.get("nextPageToken"))?;
-  Ok(ParsedPage { items, continuation })
-}
-
-fn parse_gemini_next_page_token(token: Option<&serde_json::Value>) -> Result<Option<String>, TransportError> {
-  match token {
-    None | Some(serde_json::Value::Null) => Ok(None),
-    Some(serde_json::Value::String(s)) => {
-      if s.is_empty() {
-        Ok(None)
-      } else {
-        Ok(Some(s.clone()))
-      }
-    }
-    // Present but wrong type — never treat as end of pagination.
-    Some(_) => Err(TransportError::InvalidResponse),
-  }
-}
-
-/// Bound Gemini metadata to a small list of string method names.
-fn bound_gemini_metadata(entry: &serde_json::Value) -> Result<Option<serde_json::Value>, TransportError> {
-  let Some(methods_val) = entry.get("supportedGenerationMethods") else {
-    return Ok(None);
-  };
-  if methods_val.is_null() {
-    return Ok(None);
-  }
-  let methods = methods_val.as_array().ok_or(TransportError::InvalidResponse)?;
-  if methods.len() > MAX_GEMINI_METHODS {
-    return Err(TransportError::InvalidResponse);
-  }
-  let mut out: Vec<String> = Vec::with_capacity(methods.len());
-  for method in methods {
-    let s = method.as_str().ok_or(TransportError::InvalidResponse)?;
-    if s.is_empty() || s.len() > MAX_GEMINI_METHOD_LEN {
-      return Err(TransportError::InvalidResponse);
-    }
-    out.push(s.to_string());
-  }
-  let meta = serde_json::json!({ "supportedGenerationMethods": out });
-  let serialized = serde_json::to_vec(&meta).map_err(|_| TransportError::InvalidResponse)?;
-  if serialized.len() > MAX_REMOTE_METADATA_BYTES {
-    return Err(TransportError::InvalidResponse);
-  }
-  Ok(Some(meta))
-}
-
-fn normalize_model_key(raw: &str) -> Result<String, TransportError> {
-  let key = raw.trim();
-  if key.is_empty() || key.len() > MAX_MODEL_KEY_LEN {
-    return Err(TransportError::InvalidResponse);
-  }
-  Ok(key.to_string())
-}
-
 fn parse_page(adapter_id: &str, value: &serde_json::Value) -> Result<ParsedPage, TransportError> {
-  match adapter_id {
-    "openai-compatible" | "openai-responses" => parse_openai_page(value),
-    "anthropic" => parse_anthropic_page(value),
-    "gemini" => parse_gemini_page(value),
-    _ => Err(TransportError::InvalidResponse),
-  }
+  registry::get_for_transport(adapter_id)?.parse_models_page(value)
 }
 
 /// Deduplicate remote items by model_key, keeping the first occurrence.
@@ -511,15 +332,7 @@ pub enum AuthApplication {
 
 /// Pure auth strategy for adapter + credential kind (does not inspect secret values).
 pub fn auth_application(adapter_id: &str, credential_kind: CredentialKind) -> Result<AuthApplication, TransportError> {
-  match adapter_id {
-    "openai-compatible" | "openai-responses" => match credential_kind {
-      CredentialKind::None => Ok(AuthApplication::None),
-      CredentialKind::ApiKey | CredentialKind::Bearer => Ok(AuthApplication::BearerHeader),
-    },
-    "anthropic" => Ok(AuthApplication::AnthropicHeaders),
-    "gemini" => Ok(AuthApplication::GeminiQueryKey),
-    _ => Err(TransportError::InvalidResponse),
-  }
+  registry::get_for_transport(adapter_id)?.auth_application(credential_kind)
 }
 
 /// Build the final request URL (Gemini may append `key`; never log the result).
@@ -532,15 +345,7 @@ fn prepare_request_url(
 ) -> Result<url::Url, TransportError> {
   let mut url = endpoint.clone();
   if let Some(cursor) = continuation {
-    match adapter_id {
-      "anthropic" => {
-        url.query_pairs_mut().append_pair("after_id", cursor);
-      }
-      "gemini" => {
-        url.query_pairs_mut().append_pair("pageToken", cursor);
-      }
-      _ => return Err(TransportError::InvalidResponse),
-    }
+    registry::get_for_transport(adapter_id)?.apply_list_continuation(&mut url, cursor)?;
   }
   if matches!(
     auth_application(adapter_id, credential_kind)?,
@@ -787,10 +592,10 @@ pub struct ChatCompletionRequest {
   pub user_prompt: String,
   pub temperature: Option<f64>,
   pub max_tokens: Option<u32>,
-  /// OpenAI-compatible thinking toggle (`thinking.type` = enabled/disabled).
+  /// Adapter-specific thinking toggle (e.g. DeepSeek `thinking.type`).
   ///
-  /// Used by DeepSeek V4-style providers. `None` leaves the provider default
-  /// (DeepSeek defaults thinking to enabled). Never sent for other adapters.
+  /// `None` leaves the provider default. Adapters that do not support thinking
+  /// ignore this field when building the wire payload.
   pub thinking: Option<bool>,
   /// Optional PNG image (standard base64, no data-URL prefix) for vision/OCR calls.
   pub image_png_base64: Option<String>,
@@ -816,65 +621,6 @@ impl std::fmt::Debug for ChatCompletionRequest {
   }
 }
 
-/// Build multimodal user content for OpenAI chat.completions when an image is present.
-fn openai_user_content(user_prompt: &str, image_png_base64: Option<&str>) -> serde_json::Value {
-  match image_png_base64 {
-    Some(image) => serde_json::json!([
-      { "type": "text", "text": user_prompt },
-      {
-        "type": "image_url",
-        "image_url": {
-          "url": format!("data:image/png;base64,{image}")
-        }
-      }
-    ]),
-    None => serde_json::json!(user_prompt),
-  }
-}
-
-/// Build multimodal user content for Anthropic Messages when an image is present.
-fn anthropic_user_content(user_prompt: &str, image_png_base64: Option<&str>) -> serde_json::Value {
-  match image_png_base64 {
-    Some(image) => serde_json::json!([
-      {
-        "type": "image",
-        "source": {
-          "type": "base64",
-          "media_type": "image/png",
-          "data": image
-        }
-      },
-      { "type": "text", "text": user_prompt }
-    ]),
-    None => serde_json::json!(user_prompt),
-  }
-}
-
-/// Build Gemini user parts, optionally including inline PNG data.
-fn gemini_user_parts(user_prompt: &str, image_png_base64: Option<&str>) -> serde_json::Value {
-  match image_png_base64 {
-    Some(image) => serde_json::json!([
-      { "text": user_prompt },
-      {
-        "inline_data": {
-          "mime_type": "image/png",
-          "data": image
-        }
-      }
-    ]),
-    None => serde_json::json!([{ "text": user_prompt }]),
-  }
-}
-
-/// Apply DeepSeek-style `thinking` control to an OpenAI-compatible chat payload.
-fn apply_openai_thinking(payload: &mut serde_json::Value, thinking: Option<bool>) {
-  if let Some(enabled) = thinking {
-    payload["thinking"] = serde_json::json!({
-      "type": if enabled { "enabled" } else { "disabled" }
-    });
-  }
-}
-
 /// Non-streaming chat completion result (content only; no full provider payload).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChatCompletionResult {
@@ -896,87 +642,12 @@ pub async fn chat_completion_http_cancellable(
 
 async fn chat_completion_http_inner(request: ChatCompletionRequest) -> Result<ChatCompletionResult, TransportError> {
   let client = client_for(request.proxy_mode)?;
-  let image = request.image_png_base64.as_deref();
-  let (url, body) = match request.adapter_id.as_str() {
-    "openai-compatible" => {
-      let url = build_endpoint(&request.base_url, "chat/completions")?;
-      let mut payload = serde_json::json!({
-        "model": request.model_key,
-        "messages": [
-          { "role": "system", "content": request.system_prompt },
-          { "role": "user", "content": openai_user_content(&request.user_prompt, image) }
-        ],
-        "stream": false
-      });
-      if let Some(temp) = request.temperature {
-        payload["temperature"] = serde_json::json!(temp);
-      }
-      if let Some(max) = request.max_tokens {
-        payload["max_tokens"] = serde_json::json!(max);
-      }
-      apply_openai_thinking(&mut payload, request.thinking);
-      (url, payload)
+  let (url, body) = match registry::get_for_transport(&request.adapter_id)?.build_chat(&request, false) {
+    Ok(parts) => parts,
+    Err(err) => {
+      log_transport_error(&request.adapter_id, err);
+      return Err(err);
     }
-    "openai-responses" => {
-      // Responses API image input is not wired for OCR yet; reject multimodal calls.
-      if image.is_some() {
-        return Err(TransportError::InvalidResponse);
-      }
-      let url = build_endpoint(&request.base_url, "responses")?;
-      let mut payload = serde_json::json!({
-        "model": request.model_key,
-        "instructions": request.system_prompt,
-        "input": request.user_prompt,
-        "stream": false
-      });
-      if let Some(temp) = request.temperature {
-        payload["temperature"] = serde_json::json!(temp);
-      }
-      if let Some(max) = request.max_tokens {
-        payload["max_output_tokens"] = serde_json::json!(max);
-      }
-      (url, payload)
-    }
-    "anthropic" => {
-      let url = build_endpoint(&request.base_url, "v1/messages")?;
-      let mut payload = serde_json::json!({
-        "model": request.model_key,
-        "system": request.system_prompt,
-        "messages": [
-          { "role": "user", "content": anthropic_user_content(&request.user_prompt, image) }
-        ],
-        "max_tokens": request.max_tokens.unwrap_or(32768)
-      });
-      if let Some(temp) = request.temperature {
-        payload["temperature"] = serde_json::json!(temp);
-      }
-      (url, payload)
-    }
-    "gemini" => {
-      let model_path = gemini_generate_path(&request.model_key)?;
-      let url = build_endpoint(&request.base_url, &model_path)?;
-      let mut generation_config = serde_json::Map::new();
-      if let Some(temp) = request.temperature {
-        generation_config.insert("temperature".into(), serde_json::json!(temp));
-      }
-      if let Some(max) = request.max_tokens {
-        generation_config.insert("maxOutputTokens".into(), serde_json::json!(max));
-      }
-      let mut payload = serde_json::json!({
-        "systemInstruction": {
-          "parts": [{ "text": request.system_prompt }]
-        },
-        "contents": [{
-          "role": "user",
-          "parts": gemini_user_parts(&request.user_prompt, image)
-        }]
-      });
-      if !generation_config.is_empty() {
-        payload["generationConfig"] = serde_json::Value::Object(generation_config);
-      }
-      (url, payload)
-    }
-    _ => return Err(TransportError::InvalidResponse),
   };
 
   let request_url = match prepare_request_url(
@@ -1054,253 +725,20 @@ async fn chat_completion_http_inner(request: ChatCompletionRequest) -> Result<Ch
   Ok(ChatCompletionResult { content })
 }
 
-/// Build Gemini generateContent relative path from a stored model key.
-///
-/// Remote list returns keys like `models/gemini-2.0-flash` or bare `gemini-2.0-flash`.
-fn gemini_generate_path(model_key: &str) -> Result<String, TransportError> {
-  let key = model_key.trim();
-  if key.is_empty() || key.len() > MAX_MODEL_KEY_LEN {
-    return Err(TransportError::InvalidResponse);
-  }
-  if key.contains("://") || key.contains('?') || key.contains('#') {
-    return Err(TransportError::InvalidResponse);
-  }
-  let resource = if key.starts_with("models/") {
-    key.to_string()
-  } else {
-    format!("models/{key}")
-  };
-  Ok(format!("v1beta/{resource}:generateContent"))
-}
-
 /// Extract assistant text from a provider chat response (no full body retained).
 pub fn parse_chat_content(adapter_id: &str, value: &serde_json::Value) -> Result<String, TransportError> {
-  match adapter_id {
-    "openai-compatible" => parse_openai_chat_content(value),
-    "openai-responses" => parse_openai_responses_content(value),
-    "anthropic" => parse_anthropic_message_content(value),
-    "gemini" => parse_gemini_generate_content(value),
-    _ => Err(TransportError::InvalidResponse),
-  }
-}
-
-fn parse_openai_chat_content(value: &serde_json::Value) -> Result<String, TransportError> {
-  // Final answer is always `message.content`. Thinking providers (DeepSeek) may also
-  // populate sibling `reasoning_content` with chain-of-thought; that is never the answer.
-  let message = value
-    .get("choices")
-    .and_then(|c| c.as_array())
-    .and_then(|arr| arr.first())
-    .and_then(|choice| choice.get("message"))
-    .ok_or(TransportError::InvalidResponse)?;
-  let content = match message.get("content") {
-    None => return Err(TransportError::InvalidResponse),
-    // Null content is treated like empty — common while only reasoning was produced.
-    Some(serde_json::Value::Null) => "",
-    Some(v) => v.as_str().ok_or(TransportError::InvalidResponse)?,
-  };
-  let trimmed = content.trim();
-  if trimmed.is_empty() {
-    // Complete non-stream response with no final answer (e.g. max_tokens spent on
-    // reasoning_content). Not a mid-stream wait state — nothing more will arrive.
-    return Err(TransportError::InvalidResponse);
-  }
-  Ok(trimmed.to_string())
-}
-
-fn parse_openai_responses_content(value: &serde_json::Value) -> Result<String, TransportError> {
-  // Prefer convenience field when present.
-  if let Some(text) = value.get("output_text").and_then(|v| v.as_str()) {
-    let trimmed = text.trim();
-    if !trimmed.is_empty() {
-      return Ok(trimmed.to_string());
-    }
-  }
-  let output = value
-    .get("output")
-    .and_then(|v| v.as_array())
-    .ok_or(TransportError::InvalidResponse)?;
-  let mut parts = Vec::new();
-  for item in output {
-    let content = item.get("content").and_then(|c| c.as_array());
-    let Some(content) = content else {
-      continue;
-    };
-    for block in content {
-      let block_type = block.get("type").and_then(|t| t.as_str()).unwrap_or("");
-      if block_type == "output_text" || block_type == "text" {
-        if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
-          if !text.is_empty() {
-            parts.push(text);
-          }
-        }
-      }
-    }
-  }
-  let joined = parts.join("");
-  let trimmed = joined.trim();
-  if trimmed.is_empty() {
-    return Err(TransportError::InvalidResponse);
-  }
-  Ok(trimmed.to_string())
-}
-
-fn parse_anthropic_message_content(value: &serde_json::Value) -> Result<String, TransportError> {
-  let content = value
-    .get("content")
-    .and_then(|c| c.as_array())
-    .ok_or(TransportError::InvalidResponse)?;
-  let mut parts = Vec::new();
-  for block in content {
-    let block_type = block.get("type").and_then(|t| t.as_str()).unwrap_or("text");
-    if block_type == "text" {
-      if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
-        if !text.is_empty() {
-          parts.push(text);
-        }
-      }
-    }
-  }
-  let joined = parts.join("");
-  let trimmed = joined.trim();
-  if trimmed.is_empty() {
-    return Err(TransportError::InvalidResponse);
-  }
-  Ok(trimmed.to_string())
-}
-
-fn parse_gemini_generate_content(value: &serde_json::Value) -> Result<String, TransportError> {
-  let parts = value
-    .get("candidates")
-    .and_then(|c| c.as_array())
-    .and_then(|arr| arr.first())
-    .and_then(|cand| cand.get("content"))
-    .and_then(|c| c.get("parts"))
-    .and_then(|p| p.as_array())
-    .ok_or(TransportError::InvalidResponse)?;
-  let mut texts = Vec::new();
-  for part in parts {
-    if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
-      if !text.is_empty() {
-        texts.push(text);
-      }
-    }
-  }
-  let joined = texts.join("");
-  let trimmed = joined.trim();
-  if trimmed.is_empty() {
-    return Err(TransportError::InvalidResponse);
-  }
-  Ok(trimmed.to_string())
+  registry::get_for_transport(adapter_id)?.parse_chat_content(value)
 }
 
 // ---------------------------------------------------------------------------
 // Chat completion (streaming) — SSE / streamGenerateContent
 // ---------------------------------------------------------------------------
 
-/// Build Gemini streamGenerateContent relative path from a stored model key.
-fn gemini_stream_generate_path(model_key: &str) -> Result<String, TransportError> {
-  let key = model_key.trim();
-  if key.is_empty() || key.len() > MAX_MODEL_KEY_LEN {
-    return Err(TransportError::InvalidResponse);
-  }
-  if key.contains("://") || key.contains('?') || key.contains('#') {
-    return Err(TransportError::InvalidResponse);
-  }
-  let resource = if key.starts_with("models/") {
-    key.to_string()
-  } else {
-    format!("models/{key}")
-  };
-  Ok(format!("v1beta/{resource}:streamGenerateContent"))
-}
-
 /// Build request URL + JSON body for a streaming chat completion (all adapters).
 fn build_stream_request_parts(
   request: &ChatCompletionRequest,
 ) -> Result<(url::Url, serde_json::Value), TransportError> {
-  let image = request.image_png_base64.as_deref();
-  match request.adapter_id.as_str() {
-    "openai-compatible" => {
-      let url = build_endpoint(&request.base_url, "chat/completions")?;
-      let mut payload = serde_json::json!({
-        "model": request.model_key,
-        "messages": [
-          { "role": "system", "content": request.system_prompt },
-          { "role": "user", "content": openai_user_content(&request.user_prompt, image) }
-        ],
-        "stream": true
-      });
-      if let Some(temp) = request.temperature {
-        payload["temperature"] = serde_json::json!(temp);
-      }
-      if let Some(max) = request.max_tokens {
-        payload["max_tokens"] = serde_json::json!(max);
-      }
-      apply_openai_thinking(&mut payload, request.thinking);
-      Ok((url, payload))
-    }
-    "openai-responses" => {
-      if image.is_some() {
-        return Err(TransportError::InvalidResponse);
-      }
-      let url = build_endpoint(&request.base_url, "responses")?;
-      let mut payload = serde_json::json!({
-        "model": request.model_key,
-        "instructions": request.system_prompt,
-        "input": request.user_prompt,
-        "stream": true
-      });
-      if let Some(temp) = request.temperature {
-        payload["temperature"] = serde_json::json!(temp);
-      }
-      if let Some(max) = request.max_tokens {
-        payload["max_output_tokens"] = serde_json::json!(max);
-      }
-      Ok((url, payload))
-    }
-    "anthropic" => {
-      let url = build_endpoint(&request.base_url, "v1/messages")?;
-      let mut payload = serde_json::json!({
-        "model": request.model_key,
-        "system": request.system_prompt,
-        "messages": [
-          { "role": "user", "content": anthropic_user_content(&request.user_prompt, image) }
-        ],
-        "max_tokens": request.max_tokens.unwrap_or(32768),
-        "stream": true
-      });
-      if let Some(temp) = request.temperature {
-        payload["temperature"] = serde_json::json!(temp);
-      }
-      Ok((url, payload))
-    }
-    "gemini" => {
-      let model_path = gemini_stream_generate_path(&request.model_key)?;
-      let url = build_endpoint(&request.base_url, &model_path)?;
-      let mut generation_config = serde_json::Map::new();
-      if let Some(temp) = request.temperature {
-        generation_config.insert("temperature".into(), serde_json::json!(temp));
-      }
-      if let Some(max) = request.max_tokens {
-        generation_config.insert("maxOutputTokens".into(), serde_json::json!(max));
-      }
-      let mut payload = serde_json::json!({
-        "systemInstruction": {
-          "parts": [{ "text": request.system_prompt }]
-        },
-        "contents": [{
-          "role": "user",
-          "parts": gemini_user_parts(&request.user_prompt, image)
-        }]
-      });
-      if !generation_config.is_empty() {
-        payload["generationConfig"] = serde_json::Value::Object(generation_config);
-      }
-      Ok((url, payload))
-    }
-    _ => Err(TransportError::InvalidResponse),
-  }
+  registry::get_for_transport(&request.adapter_id)?.build_chat(request, true)
 }
 
 /// Extract a text delta from one SSE `data:` payload for the given adapter.
@@ -1321,91 +759,7 @@ pub fn parse_sse_data_delta(
     // Non-JSON data frames are ignored (comments / keep-alives).
     Err(_) => return Ok(None),
   };
-  match adapter_id {
-    "openai-compatible" => Ok(parse_openai_stream_delta(&value)),
-    "openai-responses" => Ok(parse_openai_responses_stream_delta(event_name, &value)),
-    "anthropic" => Ok(parse_anthropic_stream_delta(event_name, &value)),
-    "gemini" => Ok(parse_gemini_stream_delta(&value)),
-    _ => Err(TransportError::InvalidResponse),
-  }
-}
-
-/// OpenAI chat.completions stream chunk: `choices[0].delta.content`.
-///
-/// Thinking-mode providers (DeepSeek and compatible relays) stream CoT first via
-/// `delta.reasoning_content` while `content` is null, absent, or empty. Those chunks
-/// are skipped so the consumer keeps waiting for later final-answer deltas.
-/// `reasoning_content` is never surfaced as user-visible text.
-pub fn parse_openai_stream_delta(value: &serde_json::Value) -> Option<String> {
-  let delta = value
-    .get("choices")
-    .and_then(|c| c.as_array())
-    .and_then(|arr| arr.first())
-    .and_then(|choice| choice.get("delta"))?;
-  let content = match delta.get("content") {
-    Some(serde_json::Value::String(s)) => s.as_str(),
-    // null / missing / non-string → wait for subsequent chunks
-    _ => return None,
-  };
-  if content.is_empty() {
-    None
-  } else {
-    Some(content.to_string())
-  }
-}
-
-/// OpenAI Responses API stream: prefer `response.output_text.delta` payloads.
-fn parse_openai_responses_stream_delta(event_name: Option<&str>, value: &serde_json::Value) -> Option<String> {
-  let ty = value.get("type").and_then(|t| t.as_str()).or(event_name).unwrap_or("");
-  if ty == "response.output_text.delta" || ty.ends_with("output_text.delta") {
-    if let Some(delta) = value.get("delta").and_then(|d| d.as_str()) {
-      if !delta.is_empty() {
-        return Some(delta.to_string());
-      }
-    }
-  }
-  // Some gateways nest text under delta.as object.
-  if let Some(text) = value.get("delta").and_then(|d| d.get("text")).and_then(|t| t.as_str()) {
-    if !text.is_empty() {
-      return Some(text.to_string());
-    }
-  }
-  None
-}
-
-/// Anthropic Messages stream: `content_block_delta` with `delta.text`.
-fn parse_anthropic_stream_delta(event_name: Option<&str>, value: &serde_json::Value) -> Option<String> {
-  let ty = value.get("type").and_then(|t| t.as_str()).or(event_name).unwrap_or("");
-  if ty != "content_block_delta" {
-    return None;
-  }
-  let delta = value.get("delta")?;
-  let delta_type = delta.get("type").and_then(|t| t.as_str()).unwrap_or("text_delta");
-  if delta_type != "text_delta" && delta_type != "text" {
-    return None;
-  }
-  let text = delta.get("text").and_then(|t| t.as_str())?;
-  if text.is_empty() { None } else { Some(text.to_string()) }
-}
-
-/// Gemini streamGenerateContent (SSE) chunk — same shape as non-stream generateContent.
-fn parse_gemini_stream_delta(value: &serde_json::Value) -> Option<String> {
-  let parts = value
-    .get("candidates")
-    .and_then(|c| c.as_array())
-    .and_then(|arr| arr.first())
-    .and_then(|cand| cand.get("content"))
-    .and_then(|c| c.get("parts"))
-    .and_then(|p| p.as_array())?;
-  let mut texts = Vec::new();
-  for part in parts {
-    if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
-      if !text.is_empty() {
-        texts.push(text);
-      }
-    }
-  }
-  if texts.is_empty() { None } else { Some(texts.join("")) }
+  Ok(registry::get_for_transport(adapter_id)?.parse_stream_delta(event_name, &value))
 }
 
 /// Feed one complete SSE event (joined data lines) through the adapter delta parser.
@@ -1569,9 +923,9 @@ pub async fn chat_completion_stream_http_cancellable(
       }
     };
 
-    // Gemini official streaming uses alt=sse for Server-Sent Events framing.
-    if request.adapter_id == "gemini" {
-      request_url.query_pairs_mut().append_pair("alt", "sse");
+    // Adapter-specific stream URL tweaks (e.g. Gemini alt=sse).
+    if let Ok(adapter) = registry::get_for_transport(&request.adapter_id) {
+      adapter.finalize_stream_url(&mut request_url);
     }
 
     // Never log request_url: Gemini embeds the API key in the query string.
@@ -2459,6 +1813,14 @@ mod tests {
     assert_eq!(
       auth_application("gemini", CredentialKind::ApiKey).unwrap(),
       AuthApplication::GeminiQueryKey
+    );
+    assert_eq!(
+      auth_application("deepseek", CredentialKind::ApiKey).unwrap(),
+      AuthApplication::BearerHeader
+    );
+    assert_eq!(
+      auth_application("deepseek", CredentialKind::None).unwrap(),
+      AuthApplication::None
     );
   }
 
