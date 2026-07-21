@@ -46,13 +46,16 @@ import {
   providerListOptions,
 } from "../query/options";
 import {
-  cancelTranslate,
-  detectLanguage,
+  runCancelRequestIds,
+  runDetectLanguage,
+  runStartSlotStreamBatch,
+} from "../features/translate/runTranslate";
+import type { SlotStreamJob } from "../features/translate/slotBatch";
+import {
   TRANSLATE_CHUNK_EVENT,
   TRANSLATE_DONE_EVENT,
   TRANSLATE_ERROR_EVENT,
   TRANSLATE_RESET_EVENT,
-  translateTextStream,
 } from "../storage/client";
 import { getIpcErrorMessage } from "../storage/errors";
 import type {
@@ -444,11 +447,8 @@ function QuickTranslatePage() {
       if (!requestId) {
         return;
       }
-      try {
-        await cancelTranslate(requestId);
-      } catch {
-        // Request may already have finished.
-      }
+      // Swallow finished-request cancel failures inside the use-case runner.
+      await runCancelRequestIds([requestId]);
     },
     [clearSlotStreamListeners],
   );
@@ -596,7 +596,7 @@ function QuickTranslatePage() {
         const detectRequestId = newId();
         requestIdsRef.current.set("__detect__", detectRequestId);
         try {
-          const detected = await detectLanguage(
+          const detected = await runDetectLanguage(
             { text: trimmed, modelId: detectModelId, profileId: detectProfileId },
             detectRequestId,
           );
@@ -659,42 +659,56 @@ function QuickTranslatePage() {
         return message || t("translate.errorPrefix");
       };
 
+      type SlotStreamPayload = {
+        modelId: string;
+        sourceLang: string;
+        targetLang: string;
+        text: string;
+        profileId: string;
+        sourceLangId: SourceLanguageId;
+        targetLangId: SelectableLanguageId;
+        effectiveSourceLangId: LanguageId;
+        effectiveTargetLangId: LanguageId;
+      };
+
+      type PreparedSlotStream = {
+        job: SlotStreamJob;
+        slotInputKey: string;
+        waitUntilSettled: Promise<void>;
+        settle: () => void;
+        isCurrentRequest: () => boolean;
+      };
+
       /**
-       * Stream one card to completion (or cancel/stale). Resolves when terminal event arrives
-       * or invoke setup fails — so parallel cards do not leave dangling work untracked.
+       * Register stream listeners for one card and return a start job.
+       * Does not invoke translate — callers batch-start after every listener is live.
+       * Resolves waitUntilSettled on terminal event, start failure, or abort.
        */
-      const runSlotStream = (
+      const prepareSlotStream = (
         slotId: string,
         epoch: number,
         requestId: string,
-        payload: {
-          modelId: string;
-          sourceLang: string;
-          targetLang: string;
-          text: string;
-          profileId: string;
-          sourceLangId: SourceLanguageId;
-          targetLangId: SelectableLanguageId;
-          effectiveSourceLangId: LanguageId;
-          effectiveTargetLangId: LanguageId;
-        },
+        payload: SlotStreamPayload,
         slotInputKey: string,
-      ): Promise<void> => {
-        return new Promise((resolve) => {
+      ): Promise<PreparedSlotStream | null> => {
+        return new Promise((resolvePrepare) => {
           let settled = false;
-          const settle = () => {
-            if (settled) {
-              return;
-            }
-            settled = true;
-            streamSettleRef.current.delete(slotId);
-            clearSlotStreamListeners(slotId);
-            if (requestIdsRef.current.get(slotId) === requestId) {
-              requestIdsRef.current.delete(slotId);
-            }
-            resolve();
-          };
-          // So abortRequest can unblock Promise.all when cancel supersedes this stream.
+          let settle!: () => void;
+          const waitUntilSettled = new Promise<void>((resolve) => {
+            settle = () => {
+              if (settled) {
+                return;
+              }
+              settled = true;
+              streamSettleRef.current.delete(slotId);
+              clearSlotStreamListeners(slotId);
+              if (requestIdsRef.current.get(slotId) === requestId) {
+                requestIdsRef.current.delete(slotId);
+              }
+              resolve();
+            };
+          });
+          // So abortRequest can unblock waiters when cancel supersedes this stream.
           streamSettleRef.current.set(slotId, settle);
 
           const isCurrentRequest = () =>
@@ -812,15 +826,20 @@ function QuickTranslatePage() {
                 unDone();
                 unError();
                 settle();
+                resolvePrepare(null);
                 return;
               }
               streamUnlistenersRef.current.set(slotId, [unChunk, unReset, unDone, unError]);
-              await translateTextStream(payload, requestId);
-              // Invoke returns after the backend spawns; terminal UI comes from done/error.
-              if (!isCurrentRequest()) {
-                settle();
-              }
+              // Listeners live — hand job back so the batch starter can invoke next.
+              resolvePrepare({
+                job: { slotId, requestId, input: payload },
+                slotInputKey,
+                waitUntilSettled,
+                settle,
+                isCurrentRequest,
+              });
             } catch (err) {
+              // listen() failure: clear translating and surface error (same as pre-extract path).
               if (isCurrentRequest()) {
                 patchResult(slotId, {
                   text: "",
@@ -830,11 +849,14 @@ function QuickTranslatePage() {
                 });
               }
               settle();
+              resolvePrepare(null);
             }
           })();
         });
       };
 
+      // Per-slot: prepare listeners, then batch-start that job (N parallel single-job batches).
+      // Keeps start-as-ready timing; slotBatch still owns invoke isolation + cancel helpers.
       await Promise.all(
         activeSlots.map(async (slot) => {
           const epoch = epochs.get(slot.id) ?? -1;
@@ -848,6 +870,7 @@ function QuickTranslatePage() {
           try {
             const profile = await queryClient.fetchQuery(profileDetailOptions(slot.profileId));
             if (!isSlotEpochCurrent(slot.id, epoch)) {
+              requestIdsRef.current.delete(slot.id);
               return;
             }
 
@@ -877,7 +900,7 @@ function QuickTranslatePage() {
               preferredTarget: prefs.preferredTarget,
             });
 
-            const payload = {
+            const payload: SlotStreamPayload = {
               modelId,
               sourceLang: t(`translate.languages.${sourceId}`),
               targetLang: t(`translate.languages.${effectiveTargetId}`),
@@ -890,7 +913,31 @@ function QuickTranslatePage() {
             };
 
             // User-facing translation always streams; non-stream IPC is reserved for internal work.
-            await runSlotStream(slot.id, epoch, requestId, payload, slotInputKey);
+            const prepared = await prepareSlotStream(slot.id, epoch, requestId, payload, slotInputKey);
+            if (!prepared) {
+              return;
+            }
+
+            // Listener-before-invoke: subscriptions are live before this batch start.
+            const [outcome] = await runStartSlotStreamBatch([prepared.job]);
+            if (outcome == null || outcome.status === "failed") {
+              if (prepared.isCurrentRequest() && outcome?.status === "failed") {
+                patchResult(slot.id, {
+                  text: "",
+                  error: getIpcErrorMessage(outcome.error, t("translate.errorPrefix")),
+                  isTranslating: false,
+                  inputKey: prepared.slotInputKey,
+                });
+              }
+              prepared.settle();
+              return;
+            }
+            // Invoke returned after backend spawn; terminal UI comes from done/error events.
+            if (!prepared.isCurrentRequest()) {
+              prepared.settle();
+              return;
+            }
+            await prepared.waitUntilSettled;
           } catch (err) {
             if (!isSlotEpochCurrent(slot.id, epoch)) {
               return;

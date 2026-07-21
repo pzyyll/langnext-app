@@ -26,14 +26,12 @@ import {
   profileListOptions,
   providerListOptions,
 } from "../../query/options";
+import { runCancelRequestIds, runDetectLanguage, runStartTranslateStream } from "../../features/translate/runTranslate";
 import {
-  cancelTranslate,
-  detectLanguage,
   TRANSLATE_CHUNK_EVENT,
   TRANSLATE_DONE_EVENT,
   TRANSLATE_ERROR_EVENT,
   TRANSLATE_RESET_EVENT,
-  translateTextStream,
 } from "../../storage/client";
 import { getIpcErrorMessage } from "../../storage/errors";
 import {
@@ -499,11 +497,8 @@ function TranslatePage() {
     if (!requestId) {
       return;
     }
-    try {
-      await cancelTranslate(requestId);
-    } catch {
-      // Request may already have finished; ignore cancel IPC failures.
-    }
+    // Swallow finished-request cancel failures inside the use-case runner.
+    await runCancelRequestIds([requestId]);
   }, [clearStreamListeners]);
 
   function releaseActiveRequest(requestId: string) {
@@ -817,7 +812,8 @@ function TranslatePage() {
       }
       streamUnlisteners.current = [unChunk, unReset, unDone, unError];
 
-      await translateTextStream(payload, requestId);
+      // Listeners are registered above — start stream only after subscriptions are live.
+      await runStartTranslateStream(payload, requestId);
       if (generation !== translateGeneration.current) {
         clearStreamListeners();
       }
@@ -861,7 +857,7 @@ function TranslatePage() {
     let effectiveSourceId: LanguageId;
     if (sourceLang === "auto") {
       try {
-        const detected = await detectLanguage(
+        const detected = await runDetectLanguage(
           { text: trimmed, modelId: resolvedModelId || null, profileId: resolvedProfileId || null },
           requestId,
         );
