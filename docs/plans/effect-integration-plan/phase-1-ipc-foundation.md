@@ -65,12 +65,13 @@ interface IpcErrorShape {
 
 **Decode rules (`decodeIpcRejection`):**
 
-| Input | Result |
-|-------|--------|
-| Object with non-empty string `code` | Use `code`; `message` = string message or `""` |
-| `Error` with non-empty message | `code: "unknown"`, that message |
-| Non-empty string | `code: "unknown"`, that string |
-| Else | `code: "unknown"`, `message: ""` (UI uses `fallback`) |
+| Input                                                   | Result                                                |
+| ------------------------------------------------------- | ----------------------------------------------------- |
+| Object with non-empty string `code`                     | Use `code`; `message` = string message or `""`        |
+| Object with non-empty string `message` (no usable code) | `code: "unknown"`, that message                       |
+| `Error` with non-empty message                          | `code: "unknown"`, that message                       |
+| Non-empty string                                        | `code: "unknown"`, that string                        |
+| Else                                                    | `code: "unknown"`, `message: ""` (UI uses `fallback`) |
 
 - `isConflictError` / `ipcErrorIsConflict` ↔ `code === "conflict"`.
 - Do not invent new wire codes.
@@ -163,9 +164,9 @@ interface IpcErrorShape {
 
 - [ ] `invokeEffect<A>(cmd: string, args?: Record<string, unknown>): Effect.Effect<A, IpcError>` using `Effect.tryPromise` + `decodeIpcRejection` in `catch`
 - [ ] Never log `args` (may hold credentials)
-- [ ] `runStorage(effect)` → `Effect.runPromise(effect)` (reject value = `IpcError`)
+- [ ] `runStorage(effect)` → `Effect.runPromise(Effect.either(effect))`, then throw the left `IpcError` (raw reject value; not FiberFailure from bare `runPromise`)
 - [ ] `runStorageExit(effect)` → `Effect.runPromiseExit(effect)`
-- [ ] Tests: success; reject `{ code: "conflict", message: "stale" }` → failed Effect / rejected Promise with that code
+- [ ] Tests: success; reject `{ code: "conflict", message: "stale" }` → failed Effect / rejected Promise with that code; composed `runStorage(invokeEffect(...))` rejects raw `IpcError`
 
 **Validation:**
 
@@ -253,11 +254,11 @@ interface IpcErrorShape {
 
 ## Failure Behavior
 
-| Failure | Behavior |
-|---------|----------|
-| Tauri `{ code, message }` | `IpcError`; Promise rejects with it; UI uses helpers |
-| Non-conforming reject | `code: "unknown"`; display `fallback` when message empty |
-| Query `queryFn` failure | Query error state unchanged; error value is `IpcError` |
+| Failure                   | Behavior                                                 |
+| ------------------------- | -------------------------------------------------------- |
+| Tauri `{ code, message }` | `IpcError`; Promise rejects with it; UI uses helpers     |
+| Non-conforming reject     | `code: "unknown"`; display `fallback` when message empty |
+| Query `queryFn` failure   | Query error state unchanged; error value is `IpcError`   |
 
 ---
 
@@ -279,11 +280,11 @@ interface IpcErrorShape {
 
 ## Risks and Mitigations
 
-| Risk | Mitigation |
-|------|------------|
-| Review / learning cost | Limit to `storage/*` + optional ProviderEditor touch |
-| Query double abstraction | Promise bridge; no Effect in `query/options.ts` |
-| `instanceof` fragility | Use `isIpcError` / `isConflictError` |
+| Risk                     | Mitigation                                           |
+| ------------------------ | ---------------------------------------------------- |
+| Review / learning cost   | Limit to `storage/*` + optional ProviderEditor touch |
+| Query double abstraction | Promise bridge; no Effect in `query/options.ts`      |
+| `instanceof` fragility   | Use `isIpcError` / `isConflictError`                 |
 
 ---
 

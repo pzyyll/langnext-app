@@ -1,6 +1,5 @@
 // ABOUTME: Typed invoke wrappers for the Rust storage subsystem.
 // ABOUTME: No SQL, filesystem, or credential APIs are exposed to React.
-import { invoke } from "@tauri-apps/api/core";
 import type {
   AppSettingsDto,
   AppSettingsUpdate,
@@ -30,6 +29,8 @@ import type {
   TranslationProfileDto,
   TranslationProfileWrite,
 } from "./types";
+import { invokeEffect } from "./invokeEffect";
+import { runStorage } from "./runStorage";
 
 /** Event names emitted by translate_text_stream. */
 export const TRANSLATE_CHUNK_EVENT = "translate://chunk";
@@ -38,38 +39,38 @@ export const TRANSLATE_DONE_EVENT = "translate://done";
 export const TRANSLATE_ERROR_EVENT = "translate://error";
 
 export async function listProviderInstances(): Promise<ProviderInstanceDto[]> {
-  return invoke("list_provider_instances");
+  return runStorage(invokeEffect<ProviderInstanceDto[]>("list_provider_instances"));
 }
 
 export async function saveProviderInstance(input: ProviderInstanceWrite): Promise<ProviderInstanceDto> {
-  return invoke("save_provider_instance", { input });
+  return runStorage(invokeEffect<ProviderInstanceDto>("save_provider_instance", { input }));
 }
 
 export async function setProviderEnabled(id: string, enabled: boolean): Promise<ProviderInstanceDto> {
-  return invoke("set_provider_enabled", { id, enabled });
+  return runStorage(invokeEffect<ProviderInstanceDto>("set_provider_enabled", { id, enabled }));
 }
 
 export async function deleteProviderInstance(id: string): Promise<void> {
-  return invoke("delete_provider_instance", { id });
+  return runStorage(invokeEffect<void>("delete_provider_instance", { id }));
 }
 
 export async function reorderProviderInstances(ids: string[]): Promise<void> {
-  return invoke("reorder_provider_instances", { ids });
+  return runStorage(invokeEffect<void>("reorder_provider_instances", { ids }));
 }
 
 export async function listProviderModels(providerInstanceId: string): Promise<ProviderModelDto[]> {
-  return invoke("list_provider_models", { providerInstanceId });
+  return runStorage(invokeEffect<ProviderModelDto[]>("list_provider_models", { providerInstanceId }));
 }
 
 export async function listAllProviderModels(): Promise<ProviderModelDto[]> {
-  return invoke("list_all_provider_models");
+  return runStorage(invokeEffect<ProviderModelDto[]>("list_all_provider_models"));
 }
 
 /**
  * Non-streaming translate. Pass `requestId` so `cancelTranslate` can abort mid-flight.
  */
 export async function translateText(input: TranslateInput, requestId?: string): Promise<TranslateResult> {
-  return invoke("translate_text", { input, requestId: requestId ?? null });
+  return runStorage(invokeEffect<TranslateResult>("translate_text", { input, requestId: requestId ?? null }));
 }
 
 /**
@@ -77,12 +78,12 @@ export async function translateText(input: TranslateInput, requestId?: string): 
  * before this invoke so early validation failures cannot race past the active-id assignment.
  */
 export async function translateTextStream(input: TranslateInput, requestId: string): Promise<void> {
-  return invoke("translate_text_stream", { input, requestId });
+  return runStorage(invokeEffect<void>("translate_text_stream", { input, requestId }));
 }
 
 /** Abort an in-flight translate (stream or non-stream) by client `requestId`. */
 export async function cancelTranslate(requestId: string): Promise<boolean> {
-  return invoke("cancel_translate", { requestId });
+  return runStorage(invokeEffect<boolean>("cancel_translate", { requestId }));
 }
 
 /**
@@ -90,150 +91,150 @@ export async function cancelTranslate(requestId: string): Promise<boolean> {
  * Pass `requestId` so `cancelTranslate` can abort mid-flight (same registry as translate).
  */
 export async function detectLanguage(input: DetectLanguageInput, requestId?: string): Promise<DetectLanguageResult> {
-  return invoke("detect_language", { input, requestId: requestId ?? null });
+  return runStorage(invokeEffect<DetectLanguageResult>("detect_language", { input, requestId: requestId ?? null }));
 }
 
 export async function saveManualModel(input: ManualModelWrite): Promise<ProviderModelDto> {
-  return invoke("save_manual_model", { input });
+  return runStorage(invokeEffect<ProviderModelDto>("save_manual_model", { input }));
 }
 
 export async function setModelEnabled(id: string, enabled: boolean): Promise<ProviderModelDto> {
-  return invoke("set_model_enabled", { id, enabled });
+  return runStorage(invokeEffect<ProviderModelDto>("set_model_enabled", { id, enabled }));
 }
 
 /** Set optional per-model API Type; pass null to inherit the channel adapter. */
 export async function setModelAdapterId(id: string, adapterId: string | null): Promise<ProviderModelDto> {
-  return invoke("set_model_adapter_id", { id, adapterId });
+  return runStorage(invokeEffect<ProviderModelDto>("set_model_adapter_id", { id, adapterId }));
 }
 
 /** Update per-model display name, API Type, and capability overrides for any model source. */
 export async function updateModelConfig(input: ModelConfigWrite): Promise<ProviderModelDto> {
-  return invoke("update_model_config", { input });
+  return runStorage(invokeEffect<ProviderModelDto>("update_model_config", { input }));
 }
 
 export async function deleteProviderModel(id: string): Promise<void> {
-  return invoke("delete_provider_model", { id });
+  return runStorage(invokeEffect<void>("delete_provider_model", { id }));
 }
 
 /** Bulk-delete models in one backend transaction (all-or-nothing). */
 export async function deleteProviderModels(ids: string[]): Promise<void> {
-  return invoke("delete_provider_models", { ids });
+  return runStorage(invokeEffect<void>("delete_provider_models", { ids }));
 }
 
 export async function testProviderConnection(providerInstanceId: string): Promise<ConnectionTestResult> {
-  return invoke("test_provider_connection", { providerInstanceId });
+  return runStorage(invokeEffect<ConnectionTestResult>("test_provider_connection", { providerInstanceId }));
 }
 
 export async function syncProviderModels(providerInstanceId: string): Promise<SyncModelsResult> {
-  return invoke("sync_provider_models", { providerInstanceId });
+  return runStorage(invokeEffect<SyncModelsResult>("sync_provider_models", { providerInstanceId }));
 }
 
 /** Profile list rows include ordered target chains for list summaries (no N+1 detail fetch). */
 export async function listTranslationProfiles(): Promise<TranslationProfileDto[]> {
-  return invoke("list_translation_profiles");
+  return runStorage(invokeEffect<TranslationProfileDto[]>("list_translation_profiles"));
 }
 
 export async function getTranslationProfile(id: string): Promise<TranslationProfileDto> {
-  return invoke("get_translation_profile", { id });
+  return runStorage(invokeEffect<TranslationProfileDto>("get_translation_profile", { id }));
 }
 
 export async function saveTranslationProfile(input: TranslationProfileWrite): Promise<TranslationProfileDto> {
-  return invoke("save_translation_profile", { input });
+  return runStorage(invokeEffect<TranslationProfileDto>("save_translation_profile", { input }));
 }
 
 export async function setTranslationProfileEnabled(id: string, enabled: boolean): Promise<TranslationProfileDto> {
-  return invoke("set_translation_profile_enabled", { id, enabled });
+  return runStorage(invokeEffect<TranslationProfileDto>("set_translation_profile_enabled", { id, enabled }));
 }
 
 export async function deleteTranslationProfile(id: string): Promise<void> {
-  return invoke("delete_translation_profile", { id });
+  return runStorage(invokeEffect<void>("delete_translation_profile", { id }));
 }
 
 export async function getAppSettings(): Promise<AppSettingsDto> {
-  return invoke("get_app_settings");
+  return runStorage(invokeEffect<AppSettingsDto>("get_app_settings"));
 }
 
 export async function updateAppSettings(input: AppSettingsUpdate): Promise<AppSettingsDto> {
-  return invoke("update_app_settings", { input });
+  return runStorage(invokeEffect<AppSettingsDto>("update_app_settings", { input }));
 }
 
 export async function setAppTheme(theme: "light" | "dark" | null): Promise<AppSettingsDto> {
-  return invoke("set_app_theme", { theme });
+  return runStorage(invokeEffect<AppSettingsDto>("set_app_theme", { theme }));
 }
 
 export async function setAppUiLanguage(uiLanguage: string): Promise<AppSettingsDto> {
-  return invoke("set_app_ui_language", { uiLanguage });
+  return runStorage(invokeEffect<AppSettingsDto>("set_app_ui_language", { uiLanguage }));
 }
 
 export async function setAppShortcuts(shortcuts: ShortcutDefinition[]): Promise<AppSettingsDto> {
-  return invoke("set_app_shortcuts", { shortcuts });
+  return runStorage(invokeEffect<AppSettingsDto>("set_app_shortcuts", { shortcuts }));
 }
 
 /** Full-monitor PNG backdrop path for the active region-screenshot overlay. */
 export async function regionScreenshotGetBackdrop(): Promise<RegionScreenshotBackdrop> {
-  return invoke("region_screenshot_get_backdrop");
+  return runStorage(invokeEffect<RegionScreenshotBackdrop>("region_screenshot_get_backdrop"));
 }
 
 /** Fallback backdrop PNG as base64 when asset-protocol loading fails. */
 export async function regionScreenshotGetBackdropData(): Promise<string> {
-  return invoke("region_screenshot_get_backdrop_data");
+  return runStorage(invokeEffect<string>("region_screenshot_get_backdrop_data"));
 }
 
 /** Re-focus / re-show the overlay after the backdrop image has painted. */
 export async function regionScreenshotReveal(): Promise<void> {
-  return invoke("region_screenshot_reveal");
+  return runStorage(invokeEffect<void>("region_screenshot_reveal"));
 }
 
 /** Crop the pre-captured monitor image with the overlay selection. */
 export async function regionScreenshotConfirm(selection: RegionScreenshotSelection): Promise<RegionScreenshotResult> {
-  return invoke("region_screenshot_confirm", { selection });
+  return runStorage(invokeEffect<RegionScreenshotResult>("region_screenshot_confirm", { selection }));
 }
 
 /** Cancel the active region screenshot without producing an image. */
 export async function regionScreenshotCancel(): Promise<void> {
-  return invoke("region_screenshot_cancel");
+  return runStorage(invokeEffect<void>("region_screenshot_cancel"));
 }
 
 export async function exportConfiguration(): Promise<ConfigurationExport> {
-  return invoke("export_configuration");
+  return runStorage(invokeEffect<ConfigurationExport>("export_configuration"));
 }
 
 export async function previewConfigurationImport(
   document: ConfigurationExport,
   mode: ImportConflictMode,
 ): Promise<ImportPreview> {
-  return invoke("preview_configuration_import", { document, mode });
+  return runStorage(invokeEffect<ImportPreview>("preview_configuration_import", { document, mode }));
 }
 
 export async function importConfiguration(
   document: ConfigurationExport,
   mode: ImportConflictMode,
 ): Promise<ImportResult> {
-  return invoke("import_configuration", { document, mode });
+  return runStorage(invokeEffect<ImportResult>("import_configuration", { document, mode }));
 }
 
 export async function listTranslationHistory(
   query: TranslationHistoryListQuery,
 ): Promise<TranslationHistoryListResult> {
-  return invoke("list_translation_history", { query });
+  return runStorage(invokeEffect<TranslationHistoryListResult>("list_translation_history", { query }));
 }
 
 export async function getTranslationHistory(id: string): Promise<TranslationHistoryDto> {
-  return invoke("get_translation_history", { id });
+  return runStorage(invokeEffect<TranslationHistoryDto>("get_translation_history", { id }));
 }
 
 export async function getTranslationHistoryMany(ids: string[]): Promise<TranslationHistoryDto[]> {
-  return invoke("get_translation_history_many", { ids });
+  return runStorage(invokeEffect<TranslationHistoryDto[]>("get_translation_history_many", { ids }));
 }
 
 export async function listTranslationHistoryModelFacets(): Promise<TranslationHistoryModelFacet[]> {
-  return invoke("list_translation_history_model_facets");
+  return runStorage(invokeEffect<TranslationHistoryModelFacet[]>("list_translation_history_model_facets"));
 }
 
 export async function deleteTranslationHistory(ids: string[]): Promise<void> {
-  return invoke("delete_translation_history", { ids });
+  return runStorage(invokeEffect<void>("delete_translation_history", { ids }));
 }
 
 export async function deleteAllTranslationHistory(): Promise<void> {
-  return invoke("delete_all_translation_history");
+  return runStorage(invokeEffect<void>("delete_all_translation_history"));
 }
