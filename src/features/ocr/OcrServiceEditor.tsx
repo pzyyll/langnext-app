@@ -1,18 +1,22 @@
-// ABOUTME: Selected OCR service editor shell with shared name/enabled/footer actions.
-// ABOUTME: Hosts Baidu and AI type-specific forms and persists via saveOcrService.
-import { useMemo, useState } from "react";
+// ABOUTME: Selected OCR service editor shell matching Models provider editor layout.
+// ABOUTME: Hosts Baidu and AI forms with inline rename, scroll body, and footer actions.
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { Button } from "@base-ui/react/button";
 import { Input } from "@base-ui/react/input";
 import { Switch } from "@base-ui/react/switch";
 import { useTranslation } from "react-i18next";
+import IconMaterialSymbolsLightCheck from "~icons/material-symbols-light/check";
+import IconMaterialSymbolsLightClose from "~icons/material-symbols-light/close";
+import IconMaterialSymbolsLightDeleteOutlineSharp from "~icons/material-symbols-light/delete-outline-sharp";
+import IconMaterialSymbolsLightEditSquareOutlineSharp from "~icons/material-symbols-light/edit-square-outline-sharp";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
-import { ScrollArea } from "../../components/ScrollArea";
+import { ConfigEditorLayout, configEditorRenameInputClassName } from "../../components/layouts/ConfigEditorLayout";
 import { useToast } from "../../components/toast/useToast";
 import {
-  dangerButtonClassName,
-  inputClassName,
+  dangerIconButtonClassName,
+  iconButtonClassName,
   outlineButtonClassName,
   primaryButtonClassName,
   switchRootClassName,
@@ -32,17 +36,11 @@ import type {
 import { AiOcrForm } from "./AiOcrForm";
 import { BaiduOcrForm, type CredentialAction } from "./BaiduOcrForm";
 
-const fieldLabelClassName = "text-label-sm font-bold uppercase text-on-surface";
-
-const panelFooterClassName =
-  "box-border flex h-[calc(2rem+2rem+1px)] max-h-[calc(2rem+2rem+1px)] min-h-[calc(2rem+2rem+1px)] shrink-0 grow-0 items-center border-t border-line px-8 py-4";
-
 export type OcrServiceEditorProps = {
   ocrServiceId: string;
 };
 
 type EditorDraft = {
-  displayName: string;
   enabled: boolean;
   baiduAction: BaiduOcrAction;
   apiKey: string;
@@ -58,7 +56,6 @@ type EditorDraft = {
 
 function draftFromDto(service: OcrServiceDto): EditorDraft {
   return {
-    displayName: service.displayName,
     enabled: service.enabled,
     baiduAction: service.baiduAction ?? "accurate",
     apiKey: "",
@@ -71,6 +68,22 @@ function draftFromDto(service: OcrServiceDto): EditorDraft {
     promptTemplates: service.promptTemplates.map((template) => ({ ...template })),
     expectedUpdatedAt: service.updatedAt,
   };
+}
+
+function isDraftFieldsClean(draft: EditorDraft, service: OcrServiceDto): boolean {
+  const baseline = draftFromDto(service);
+  return (
+    draft.enabled === baseline.enabled &&
+    draft.baiduAction === baseline.baiduAction &&
+    draft.apiKeyAction === "keep" &&
+    draft.secretKeyAction === "keep" &&
+    !draft.apiKey.trim() &&
+    !draft.secretKey.trim() &&
+    draft.providerModelId === baseline.providerModelId &&
+    draft.temperature === baseline.temperature &&
+    draft.defaultPromptTemplateId === baseline.defaultPromptTemplateId &&
+    JSON.stringify(draft.promptTemplates) === JSON.stringify(baseline.promptTemplates)
+  );
 }
 
 function toCredentialUpdate(action: CredentialAction, value: string): CredentialUpdate {
@@ -95,13 +108,41 @@ function parseOptionalTemperature(raw: string): number | null | "invalid" {
   return value;
 }
 
+/** Persist a rename without applying unsaved form fields. */
+function renameWrite(service: OcrServiceDto, displayName: string): OcrServiceWrite {
+  if (service.providerType === "baidu") {
+    return {
+      id: service.id,
+      providerType: "baidu",
+      displayName,
+      enabled: service.enabled,
+      baiduAction: service.baiduAction ?? "accurate",
+      apiKey: { action: "keep" },
+      secretKey: { action: "keep" },
+      promptTemplates: [],
+      expectedUpdatedAt: service.updatedAt,
+    };
+  }
+
+  return {
+    id: service.id,
+    providerType: "ai",
+    displayName,
+    enabled: service.enabled,
+    providerModelId: service.providerModelId ?? "",
+    temperature: service.temperature,
+    defaultPromptTemplateId: service.defaultPromptTemplateId ?? service.promptTemplates[0]?.id ?? "",
+    promptTemplates: service.promptTemplates.map((template) => ({ ...template })),
+    expectedUpdatedAt: service.updatedAt,
+  };
+}
+
 export function OcrServiceEditor({ ocrServiceId }: OcrServiceEditorProps) {
   const { t } = useTranslation();
   const servicesQuery = useQuery(ocrListOptions());
   const service = (servicesQuery.data ?? []).find((item) => item.id === ocrServiceId) ?? null;
   const loading = servicesQuery.isLoading;
-  const error =
-    servicesQuery.error != null ? getIpcErrorMessage(servicesQuery.error, t("ocr.loadFailed")) : null;
+  const error = servicesQuery.error != null ? getIpcErrorMessage(servicesQuery.error, t("ocr.loadFailed")) : null;
 
   if (loading) {
     return (
@@ -144,7 +185,8 @@ export function OcrServiceEditor({ ocrServiceId }: OcrServiceEditorProps) {
     );
   }
 
-  return <OcrServiceEditorLoaded key={`${service.id}:${service.updatedAt}`} service={service} />;
+  // Remount only when the selected service changes so rename/save keep local draft state.
+  return <OcrServiceEditorLoaded key={service.id} service={service} />;
 }
 
 type OcrServiceEditorLoadedProps = {
@@ -160,32 +202,49 @@ function OcrServiceEditorLoaded({ service }: OcrServiceEditorLoadedProps) {
   const providersQuery = useQuery(providerListOptions());
 
   const [draft, setDraft] = useState<EditorDraft>(() => draftFromDto(service));
+  const [trackedService, setTrackedService] = useState(service);
   const [savePending, setSavePending] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deletePending, setDeletePending] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
 
-  // Parent remounts this component on id/updatedAt change via React key.
+  const [renaming, setRenaming] = useState(false);
+  const [renameValue, setRenameValue] = useState("");
+  const [renamePending, setRenamePending] = useState(false);
+  const [renameError, setRenameError] = useState<string | null>(null);
+  const renameInputRef = useRef<HTMLElement | null>(null);
 
-  const isDirty = useMemo(() => {
-    const baseline = draftFromDto(service);
-    if (draft.displayName !== baseline.displayName) return true;
-    if (draft.enabled !== baseline.enabled) return true;
-    if (service.providerType === "baidu") {
-      if (draft.baiduAction !== baseline.baiduAction) return true;
-      if (draft.apiKeyAction !== "keep" || draft.secretKeyAction !== "keep") return true;
-      if (draft.apiKey.trim() || draft.secretKey.trim()) return true;
-      return false;
+  // Accept remote service updates into the draft only while the form is clean.
+  if (service.updatedAt !== trackedService.updatedAt || service.id !== trackedService.id) {
+    const shouldResetDraft = service.id !== trackedService.id || isDraftFieldsClean(draft, trackedService);
+    setTrackedService(service);
+    if (shouldResetDraft) {
+      setDraft(draftFromDto(service));
     }
-    if (draft.providerModelId !== baseline.providerModelId) return true;
-    if (draft.temperature !== baseline.temperature) return true;
-    if (draft.defaultPromptTemplateId !== baseline.defaultPromptTemplateId) return true;
-    if (JSON.stringify(draft.promptTemplates) !== JSON.stringify(baseline.promptTemplates)) return true;
-    return false;
-  }, [draft, service]);
+  }
+
+  useEffect(() => {
+    if (!renaming) {
+      return;
+    }
+    const node = renameInputRef.current;
+    if (!node) {
+      return;
+    }
+    node.focus();
+    if (node instanceof HTMLInputElement) {
+      node.select();
+    }
+  }, [renaming]);
+
+  const isDirty = useMemo(() => !isDraftFieldsClean(draft, service), [draft, service]);
+
+  const formDisabled = savePending || deletePending || renamePending;
+  const renameDisabled = formDisabled;
 
   function updateDraft(patch: Partial<EditorDraft>) {
     setDraft((current) => ({ ...current, ...patch }));
+    setValidationError(null);
   }
 
   function seedService(next: OcrServiceDto) {
@@ -204,13 +263,46 @@ function OcrServiceEditorLoaded({ service }: OcrServiceEditorLoadedProps) {
     queryClient.setQueryData(ocrKeys.detail(next.id), next);
   }
 
-  async function handleSave() {
-    if (savePending) {
+  function startRename() {
+    setRenameValue(service.displayName);
+    setRenameError(null);
+    setRenaming(true);
+  }
+
+  function cancelRename() {
+    setRenaming(false);
+    setRenameValue("");
+    setRenameError(null);
+  }
+
+  async function commitRename() {
+    const trimmed = renameValue.trim();
+    if (!trimmed || renamePending) {
       return;
     }
-    const displayName = draft.displayName.trim();
-    if (!displayName) {
-      setValidationError(t("ocr.validation.nameRequired"));
+    if (trimmed === service.displayName) {
+      cancelRename();
+      return;
+    }
+
+    setRenamePending(true);
+    setRenameError(null);
+    try {
+      const saved = await saveOcrService(renameWrite(service, trimmed));
+      seedService(saved);
+      setDraft((current) => ({ ...current, expectedUpdatedAt: saved.updatedAt }));
+      setRenaming(false);
+      setRenameValue("");
+      void queryClient.invalidateQueries({ queryKey: ocrKeys.all });
+    } catch (error) {
+      setRenameError(getIpcErrorMessage(error, t("ocr.toast.renameFailed")));
+    } finally {
+      setRenamePending(false);
+    }
+  }
+
+  async function handleSave() {
+    if (savePending || !isDirty) {
       return;
     }
 
@@ -219,7 +311,7 @@ function OcrServiceEditorLoaded({ service }: OcrServiceEditorLoadedProps) {
       write = {
         id: service.id,
         providerType: "baidu",
-        displayName,
+        displayName: service.displayName,
         enabled: draft.enabled,
         baiduAction: draft.baiduAction,
         apiKey: toCredentialUpdate(draft.apiKeyAction, draft.apiKey),
@@ -264,7 +356,7 @@ function OcrServiceEditorLoaded({ service }: OcrServiceEditorLoadedProps) {
       write = {
         id: service.id,
         providerType: "ai",
-        displayName,
+        displayName: service.displayName,
         enabled: draft.enabled,
         providerModelId: draft.providerModelId,
         temperature,
@@ -322,136 +414,201 @@ function OcrServiceEditorLoaded({ service }: OcrServiceEditorLoadedProps) {
     void queryClient.invalidateQueries({ queryKey: ocrKeys.all });
   }
 
+  function resetForm() {
+    setDraft(draftFromDto(service));
+    setValidationError(null);
+  }
+
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex shrink-0 items-center gap-3 border-b border-outline px-8 py-4">
-        <div className="flex min-w-0 flex-1 flex-col gap-1">
-          <label className={fieldLabelClassName} htmlFor="ocr-service-name">
-            {t("ocr.displayName")}
-          </label>
-          <Input
-            id="ocr-service-name"
-            className={inputClassName}
-            value={draft.displayName}
-            maxLength={128}
-            disabled={savePending || deletePending}
-            onChange={(event) => {
-              updateDraft({ displayName: event.currentTarget.value });
-            }}
-          />
-        </div>
-        <label className="flex shrink-0 items-center gap-2 text-body-tight text-on-surface">
-          <Switch.Root
-            checked={draft.enabled}
-            disabled={savePending || deletePending}
-            className={switchRootClassName}
-            onCheckedChange={(checked) => {
-              updateDraft({ enabled: checked });
-            }}
-          >
-            <Switch.Thumb className={switchThumbClassName} />
-          </Switch.Root>
-          {t("common.enabled")}
-        </label>
-      </div>
-
-      <ScrollArea className="min-h-0 flex-1">
-        <div className="space-y-6 p-8">
-          {service.providerType === "baidu" ? (
-            <BaiduOcrForm
-              apiKey={draft.apiKey}
-              secretKey={draft.secretKey}
-              apiKeyAction={draft.apiKeyAction}
-              secretKeyAction={draft.secretKeyAction}
-              hasApiKey={service.hasApiKey}
-              hasSecretKey={service.hasSecretKey}
-              baiduAction={draft.baiduAction}
-              disabled={savePending || deletePending}
-              onApiKeyChange={(value) => {
-                updateDraft({ apiKey: value });
-              }}
-              onSecretKeyChange={(value) => {
-                updateDraft({ secretKey: value });
-              }}
-              onApiKeyActionChange={(action) => {
-                updateDraft({ apiKeyAction: action });
-              }}
-              onSecretKeyActionChange={(action) => {
-                updateDraft({ secretKeyAction: action });
-              }}
-              onBaiduActionChange={(action) => {
-                updateDraft({ baiduAction: action });
-              }}
-            />
-          ) : (
-            <AiOcrForm
-              providerModelId={draft.providerModelId}
-              temperature={draft.temperature}
-              defaultPromptTemplateId={draft.defaultPromptTemplateId}
-              promptTemplates={draft.promptTemplates}
-              models={modelsQuery.data ?? []}
-              providers={providersQuery.data ?? []}
-              disabled={savePending || deletePending}
-              onProviderModelIdChange={(value) => {
-                updateDraft({ providerModelId: value });
-              }}
-              onTemperatureChange={(value) => {
-                updateDraft({ temperature: value });
-              }}
-              onDefaultPromptTemplateIdChange={(value) => {
-                updateDraft({ defaultPromptTemplateId: value });
-              }}
-              onPromptTemplatesChange={(templates) => {
-                updateDraft({ promptTemplates: templates });
-              }}
-            />
-          )}
-
-          {validationError ? (
-            <p className="text-body-tight text-error" role="alert">
-              {validationError}
-            </p>
-          ) : null}
-        </div>
-      </ScrollArea>
-
-      <div className={panelFooterClassName}>
-        <div className="flex w-full items-center justify-between gap-3">
-          <Button
-            type="button"
-            className={dangerButtonClassName}
-            disabled={savePending || deletePending}
-            onClick={() => {
-              setDeleteOpen(true);
-            }}
-          >
-            {t("common.delete")}
-          </Button>
-          <div className="flex items-center gap-2">
-            <Button
-              type="button"
-              className={outlineButtonClassName}
-              disabled={!isDirty || savePending || deletePending}
-              onClick={() => {
-                setDraft(draftFromDto(service));
-                setValidationError(null);
+    <>
+      <ConfigEditorLayout
+        title={
+          renaming ? (
+            <form
+              className="flex min-w-0 items-center gap-2"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void commitRename();
               }}
             >
-              {t("ocr.discard")}
+              <Input
+                ref={renameInputRef}
+                className={configEditorRenameInputClassName}
+                value={renameValue}
+                onChange={(event) => {
+                  setRenameValue(event.currentTarget.value);
+                  setRenameError(null);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape" && !renamePending) {
+                    event.preventDefault();
+                    cancelRename();
+                  }
+                }}
+                maxLength={128}
+                spellCheck={false}
+                autoComplete="off"
+                disabled={renamePending}
+              />
+              <Button
+                type="submit"
+                className={iconButtonClassName}
+                aria-label={t("ocr.saveServiceName")}
+                disabled={renamePending || !renameValue.trim()}
+              >
+                <IconMaterialSymbolsLightCheck className="pointer-events-none size-5 shrink-0" />
+              </Button>
+              <Button
+                type="button"
+                className={iconButtonClassName}
+                aria-label={t("ocr.cancelRename")}
+                disabled={renamePending}
+                onClick={cancelRename}
+              >
+                <IconMaterialSymbolsLightClose className="pointer-events-none size-5 shrink-0" />
+              </Button>
+            </form>
+          ) : (
+            <div className="flex min-w-0 items-center gap-1">
+              <h1 className="truncate text-headline-display font-bold text-on-surface">{service.displayName}</h1>
+              <Button
+                type="button"
+                className={iconButtonClassName}
+                aria-label={t("ocr.renameService")}
+                title={t("ocr.renameService")}
+                disabled={renameDisabled}
+                onClick={startRename}
+              >
+                <IconMaterialSymbolsLightEditSquareOutlineSharp className="pointer-events-none size-5 shrink-0" />
+              </Button>
+            </div>
+          )
+        }
+        titleTrailing={
+          <label className="flex shrink-0 items-center gap-2 text-body-tight text-on-surface">
+            <Switch.Root
+              checked={draft.enabled}
+              disabled={formDisabled}
+              className={switchRootClassName}
+              onCheckedChange={(checked) => {
+                updateDraft({ enabled: checked });
+              }}
+            >
+              <Switch.Thumb className={switchThumbClassName} />
+            </Switch.Root>
+          </label>
+        }
+        titleMeta={
+          renameError ? (
+            <p className="mb-2 text-body-tight text-error" role="alert">
+              {renameError}
+            </p>
+          ) : null
+        }
+        footer={
+          <>
+            <Button
+              type="button"
+              className={`
+                ${dangerIconButtonClassName}
+                mr-auto
+              `}
+              aria-label={t("ocr.deleteConfirmTitle")}
+              title={t("ocr.deleteConfirmTitle")}
+              disabled={formDisabled}
+              onClick={() => {
+                setDeleteOpen(true);
+              }}
+            >
+              <IconMaterialSymbolsLightDeleteOutlineSharp className="pointer-events-none size-5 shrink-0" />
+            </Button>
+
+            <Button type="button" className={outlineButtonClassName} disabled={formDisabled} onClick={resetForm}>
+              {t("common.cancel")}
             </Button>
             <Button
               type="button"
-              className={primaryButtonClassName}
-              disabled={!isDirty || savePending || deletePending}
+              className={`
+                ${primaryButtonClassName}
+                relative
+              `}
+              disabled={formDisabled || !isDirty}
+              focusableWhenDisabled
+              aria-busy={savePending}
+              aria-label={savePending ? t("common.saving") : t("common.save")}
               onClick={() => {
                 void handleSave();
               }}
             >
-              {savePending ? t("common.saving") : t("common.save")}
+              <span className={savePending ? "invisible" : undefined} aria-hidden="true">
+                {t("common.save")}
+              </span>
+              {savePending ? (
+                <span
+                  className="absolute size-4 animate-spin rounded-full border-2 border-current border-r-transparent"
+                  aria-hidden="true"
+                />
+              ) : null}
             </Button>
-          </div>
-        </div>
-      </div>
+          </>
+        }
+      >
+        {service.providerType === "baidu" ? (
+          <BaiduOcrForm
+            apiKey={draft.apiKey}
+            secretKey={draft.secretKey}
+            apiKeyAction={draft.apiKeyAction}
+            secretKeyAction={draft.secretKeyAction}
+            hasApiKey={service.hasApiKey}
+            hasSecretKey={service.hasSecretKey}
+            baiduAction={draft.baiduAction}
+            disabled={formDisabled}
+            onApiKeyChange={(value) => {
+              updateDraft({ apiKey: value });
+            }}
+            onSecretKeyChange={(value) => {
+              updateDraft({ secretKey: value });
+            }}
+            onApiKeyActionChange={(action) => {
+              updateDraft({ apiKeyAction: action });
+            }}
+            onSecretKeyActionChange={(action) => {
+              updateDraft({ secretKeyAction: action });
+            }}
+            onBaiduActionChange={(action) => {
+              updateDraft({ baiduAction: action });
+            }}
+          />
+        ) : (
+          <AiOcrForm
+            providerModelId={draft.providerModelId}
+            temperature={draft.temperature}
+            defaultPromptTemplateId={draft.defaultPromptTemplateId}
+            promptTemplates={draft.promptTemplates}
+            models={modelsQuery.data ?? []}
+            providers={providersQuery.data ?? []}
+            disabled={formDisabled}
+            onProviderModelIdChange={(value) => {
+              updateDraft({ providerModelId: value });
+            }}
+            onTemperatureChange={(value) => {
+              updateDraft({ temperature: value });
+            }}
+            onDefaultPromptTemplateIdChange={(value) => {
+              updateDraft({ defaultPromptTemplateId: value });
+            }}
+            onPromptTemplatesChange={(templates) => {
+              updateDraft({ promptTemplates: templates });
+            }}
+          />
+        )}
+
+        {validationError ? (
+          <p className="mt-6 text-body-tight text-error" role="alert">
+            {validationError}
+          </p>
+        ) : null}
+      </ConfigEditorLayout>
 
       <ConfirmDialog
         open={deleteOpen}
@@ -463,6 +620,6 @@ function OcrServiceEditorLoaded({ service }: OcrServiceEditorLoadedProps) {
         danger
         onConfirm={handleDelete}
       />
-    </div>
+    </>
   );
 }

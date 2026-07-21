@@ -32,6 +32,7 @@
         "@iconify-json/material-symbols": "^1.2.85",
         "@iconify-json/material-symbols-light": "^1.2.85",
         "@iconify-json/pepicons-print": "^1.2.1",
+        "@iconify-json/ri": "^1.2.10",
         "@svgr/core": "^8.1.0",
         "@svgr/plugin-jsx": "^8.1.0",
         "@tailwindcss/vite": "^4.3.2",
@@ -222,6 +223,8 @@
     "@iconify-json/material-symbols-light": ["@iconify-json/material-symbols-light@1.2.85", "", { "dependencies": { "@iconify/types": "*" } }, "sha512-EZKdOTn6fVfAiQECEGhrVTtIPnIvATZhNbCUoW/kLS8YaWM9AVQP2E7yYTDff4FwruXqaRtK9ukMIvbho2Bskg=="],
 
     "@iconify-json/pepicons-print": ["@iconify-json/pepicons-print@1.2.1", "", { "dependencies": { "@iconify/types": "*" } }, "sha512-1/E+x5OKCh2jK7UmKMyvSTg/whCrriPW7qhyxy5hJDexWTVd1iVSVyqvLUlvY+g3XpV88fppIs42UU+flNKvaQ=="],
+
+    "@iconify-json/ri": ["@iconify-json/ri@1.2.10", "", { "dependencies": { "@iconify/types": "*" } }, "sha512-WWMhoncVVM+Xmu9T5fgu2lhYRrKTEWhKk3Com0KiM111EeEsRLiASjpsFKnC/SrB6covhUp95r2mH8tGxhgd5Q=="],
 
     "@iconify/types": ["@iconify/types@2.0.0", "", {}, "sha512-+wluvCrRhXrhyOmRDJ3q8mux9JkKy5SJ/v8ol2tu4FVjyYvtEzkc/3pK15ET6RKg4b4w4BmTk1+gsCUhf21Ykg=="],
 

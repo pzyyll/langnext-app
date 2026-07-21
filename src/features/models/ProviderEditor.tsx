@@ -14,7 +14,7 @@ import IconMaterialSymbolsLightCheck from "~icons/material-symbols-light/check";
 import IconMaterialSymbolsLightClose from "~icons/material-symbols-light/close";
 import IconMaterialSymbolsLightDeleteOutlineSharp from "~icons/material-symbols-light/delete-outline-sharp";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
-import { ScrollArea } from "../../components/ScrollArea";
+import { ConfigEditorLayout, configEditorRenameInputClassName } from "../../components/layouts/ConfigEditorLayout";
 import { useToast } from "../../components/toast/useToast";
 import {
   checkboxClassName,
@@ -693,99 +693,147 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
         : t("models.tokenEnter");
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <ScrollArea className="min-h-0 flex-1" contentClassName="p-8">
-        <header className="mb-8">
-          <div className="mb-2 flex items-center justify-between gap-4">
-            {renaming ? (
-              <form
-                className="flex min-w-0 flex-1 items-center gap-2"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  void commitRename();
+    <>
+      <ConfigEditorLayout
+        title={
+          renaming ? (
+            <form
+              className="flex min-w-0 items-center gap-2"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void commitRename();
+              }}
+            >
+              <Input
+                ref={renameInputRef}
+                className={configEditorRenameInputClassName}
+                value={renameValue}
+                onChange={(event) => {
+                  setRenameValue(event.currentTarget.value);
+                  setRenameError(null);
                 }}
-              >
-                <Input
-                  ref={renameInputRef}
-                  className="
-                    h-10 w-full max-w-md rounded-none border border-line bg-surface px-2 text-headline-display font-bold
-                    text-on-surface
-                    focus:outline-2 focus:-outline-offset-1 focus:outline-on-surface
-                    disabled:border-disabled disabled:text-disabled
-                  "
-                  value={renameValue}
-                  onChange={(event) => {
-                    setRenameValue(event.currentTarget.value);
-                    setRenameError(null);
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key === "Escape" && !renamePending) {
-                      event.preventDefault();
-                      cancelRename();
-                    }
-                  }}
-                  maxLength={200}
-                  spellCheck={false}
-                  autoComplete="off"
-                  disabled={renamePending}
-                />
-                <Button
-                  type="submit"
-                  className={iconButtonClassName}
-                  aria-label={t("models.saveChannelName")}
-                  disabled={renamePending || !renameValue.trim()}
-                >
-                  <IconMaterialSymbolsLightCheck className="pointer-events-none size-5 shrink-0" />
-                </Button>
-                <Button
-                  type="button"
-                  className={iconButtonClassName}
-                  aria-label={t("models.cancelRename")}
-                  disabled={renamePending}
-                  onClick={cancelRename}
-                >
-                  <IconMaterialSymbolsLightClose className="pointer-events-none size-5 shrink-0" />
-                </Button>
-              </form>
-            ) : (
-              <div className="flex items-center gap-1">
-                <h1 className="text-headline-display font-bold text-on-surface">{provider.displayName}</h1>
-                <Button
-                  type="button"
-                  className={iconButtonClassName}
-                  aria-label={t("models.renameChannel")}
-                  title={t("models.renameChannel")}
-                  disabled={renameDisabled}
-                  onClick={startRename}
-                >
-                  <IconMaterialSymbolsLightEditSquareOutlineSharp className="pointer-events-none size-5 shrink-0" />
-                </Button>
-              </div>
-            )}
-            <label className="flex shrink-0 items-center gap-2 text-body-tight text-on-surface">
-              <Switch.Root
-                checked={enabled}
-                onCheckedChange={(checked) => {
-                  setEnabled(checked);
-                  setFormDirty(true);
-                  setSaveSuccess(false);
-                  clearConnectionTestResult();
+                onKeyDown={(event) => {
+                  if (event.key === "Escape" && !renamePending) {
+                    event.preventDefault();
+                    cancelRename();
+                  }
                 }}
-                disabled={connectionFormDisabled}
-                className={switchRootClassName}
+                maxLength={200}
+                spellCheck={false}
+                autoComplete="off"
+                disabled={renamePending}
+              />
+              <Button
+                type="submit"
+                className={iconButtonClassName}
+                aria-label={t("models.saveChannelName")}
+                disabled={renamePending || !renameValue.trim()}
               >
-                <Switch.Thumb className={switchThumbClassName} />
-              </Switch.Root>
-            </label>
-          </div>
-          {renameError ? (
+                <IconMaterialSymbolsLightCheck className="pointer-events-none size-5 shrink-0" />
+              </Button>
+              <Button
+                type="button"
+                className={iconButtonClassName}
+                aria-label={t("models.cancelRename")}
+                disabled={renamePending}
+                onClick={cancelRename}
+              >
+                <IconMaterialSymbolsLightClose className="pointer-events-none size-5 shrink-0" />
+              </Button>
+            </form>
+          ) : (
+            <div className="flex min-w-0 items-center gap-1">
+              <h1 className="truncate text-headline-display font-bold text-on-surface">{provider.displayName}</h1>
+              <Button
+                type="button"
+                className={iconButtonClassName}
+                aria-label={t("models.renameChannel")}
+                title={t("models.renameChannel")}
+                disabled={renameDisabled}
+                onClick={startRename}
+              >
+                <IconMaterialSymbolsLightEditSquareOutlineSharp className="pointer-events-none size-5 shrink-0" />
+              </Button>
+            </div>
+          )
+        }
+        titleTrailing={
+          <label className="flex shrink-0 items-center gap-2 text-body-tight text-on-surface">
+            <Switch.Root
+              checked={enabled}
+              onCheckedChange={(checked) => {
+                setEnabled(checked);
+                setFormDirty(true);
+                setSaveSuccess(false);
+                clearConnectionTestResult();
+              }}
+              disabled={connectionFormDisabled}
+              className={switchRootClassName}
+            >
+              <Switch.Thumb className={switchThumbClassName} />
+            </Switch.Root>
+          </label>
+        }
+        titleMeta={
+          renameError ? (
             <p className="mb-2 text-body-tight text-error" role="alert">
               {renameError}
             </p>
-          ) : null}
-          <hr className="border-line" />
-        </header>
+          ) : null
+        }
+        footer={
+          <>
+            <Button
+              type="button"
+              className={`
+              ${dangerIconButtonClassName}
+              mr-auto
+            `}
+              aria-label={t("models.deleteChannel")}
+              title={t("models.deleteChannel")}
+              disabled={connectionFormDisabled}
+              onClick={() => {
+                setDeleteOpen(true);
+              }}
+            >
+              <IconMaterialSymbolsLightDeleteOutlineSharp className="pointer-events-none size-5 shrink-0" />
+            </Button>
 
+            <Button
+              type="button"
+              className={outlineButtonClassName}
+              disabled={connectionFormDisabled}
+              onClick={resetConnectionForm}
+            >
+              {t("common.cancel")}
+            </Button>
+            <Button
+              type="button"
+              className={`
+              ${primaryButtonClassName}
+              relative
+            `}
+              disabled={connectionFormDisabled || !formValid}
+              focusableWhenDisabled
+              aria-busy={connectionFormDisabled}
+              aria-label={connectionFormDisabled ? t("common.saving") : t("common.save")}
+              onClick={() => {
+                void handleSave();
+              }}
+            >
+              <span className={connectionFormDisabled ? "invisible" : undefined} aria-hidden="true">
+                {t("common.save")}
+              </span>
+              {connectionFormDisabled ? (
+                <span
+                  className="absolute size-4 animate-spin rounded-full border-2 border-current border-r-transparent"
+                  aria-hidden="true"
+                />
+              ) : null}
+            </Button>
+          </>
+        }
+      >
         <section className="shadow-frame relative mb-10 border border-line p-6">
           <h3 className="mb-6 text-headline-sm font-bold text-on-surface">{t("models.connection")}</h3>
           {showConflictBanner ? (
@@ -1116,58 +1164,7 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
             />
           ) : null}
         </section>
-      </ScrollArea>
-
-      <footer className="flex shrink-0 items-center justify-end gap-3 border-t border-line bg-surface px-8 py-4">
-        <Button
-          type="button"
-          className={`
-            ${dangerIconButtonClassName}
-            mr-auto
-          `}
-          aria-label={t("models.deleteChannel")}
-          title={t("models.deleteChannel")}
-          disabled={connectionFormDisabled}
-          onClick={() => {
-            setDeleteOpen(true);
-          }}
-        >
-          <IconMaterialSymbolsLightDeleteOutlineSharp className="pointer-events-none size-5 shrink-0" />
-        </Button>
-
-        <Button
-          type="button"
-          className={outlineButtonClassName}
-          disabled={connectionFormDisabled}
-          onClick={resetConnectionForm}
-        >
-          {t("common.cancel")}
-        </Button>
-        <Button
-          type="button"
-          className={`
-            ${primaryButtonClassName}
-            relative
-          `}
-          disabled={connectionFormDisabled || !formValid}
-          focusableWhenDisabled
-          aria-busy={connectionFormDisabled}
-          aria-label={connectionFormDisabled ? t("common.saving") : t("common.save")}
-          onClick={() => {
-            void handleSave();
-          }}
-        >
-          <span className={connectionFormDisabled ? "invisible" : undefined} aria-hidden="true">
-            {t("common.save")}
-          </span>
-          {connectionFormDisabled ? (
-            <span
-              className="absolute size-4 animate-spin rounded-full border-2 border-current border-r-transparent"
-              aria-hidden="true"
-            />
-          ) : null}
-        </Button>
-      </footer>
+      </ConfigEditorLayout>
 
       <AddManualModelDialog
         open={addModelOpen}
@@ -1220,6 +1217,6 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
         danger
         onConfirm={handleDeleteModels}
       />
-    </div>
+    </>
   );
 }

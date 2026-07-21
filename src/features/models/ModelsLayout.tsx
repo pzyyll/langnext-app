@@ -8,6 +8,7 @@ import { DragDropProvider } from "@dnd-kit/react";
 import { isSortable, useSortable } from "@dnd-kit/react/sortable";
 import { useTranslation } from "react-i18next";
 import { Badge } from "../../components/Badge";
+import { ConfigRailHeader } from "../../components/layouts/ConfigRailHeader";
 import { PageLayout } from "../../components/layouts/PageLayout";
 import { useToast } from "../../components/toast/useToast";
 import { outlineButtonClassName } from "../../components/ui";
@@ -352,11 +353,7 @@ export function ModelsLayout() {
           "
           aria-label={t("models.channels")}
         >
-          <div className="flex h-12 shrink-0 items-center border-b border-outline bg-surface-container-low px-1">
-            <span className="min-w-0 flex-1 truncate pl-1 text-label-sm font-bold tracking-wide text-on-surface uppercase">
-              {t("models.channels")}
-            </span>
-          </div>
+          <ConfigRailHeader>{t("models.channels")}</ConfigRailHeader>
 
           <div className="flex min-h-0 flex-1 flex-col">
             {providersLoading ? (

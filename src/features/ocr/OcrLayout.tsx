@@ -5,7 +5,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, Outlet, useNavigate, useParams } from "@tanstack/react-router";
 import { Button } from "@base-ui/react/button";
 import { useTranslation } from "react-i18next";
-import { Badge } from "../../components/Badge";
+import { ConfigRailHeader } from "../../components/layouts/ConfigRailHeader";
 import { PageLayout } from "../../components/layouts/PageLayout";
 import { outlineButtonClassName } from "../../components/ui";
 import { cn } from "../../lib/cn";
@@ -15,10 +15,7 @@ import { getIpcErrorMessage } from "../../storage/errors";
 import type { OcrServiceDto } from "../../storage/types";
 import { AddOcrServiceDialog } from "./AddOcrServiceDialog";
 import { OcrContext } from "./OcrContext";
-
-function providerBadgeKey(service: OcrServiceDto): "ocr.provider.baiduShort" | "ocr.provider.aiShort" {
-  return service.providerType === "baidu" ? "ocr.provider.baiduShort" : "ocr.provider.aiShort";
-}
+import { getOcrProviderOption } from "./ocrProviderOptions";
 
 export function OcrLayout() {
   const { t } = useTranslation();
@@ -30,8 +27,7 @@ export function OcrLayout() {
   const servicesQuery = useQuery(ocrListOptions());
   const services = useMemo(() => servicesQuery.data ?? [], [servicesQuery.data]);
   const loading = servicesQuery.isLoading;
-  const error =
-    servicesQuery.error != null ? getIpcErrorMessage(servicesQuery.error, t("ocr.loadFailed")) : null;
+  const error = servicesQuery.error != null ? getIpcErrorMessage(servicesQuery.error, t("ocr.loadFailed")) : null;
 
   const [addOpen, setAddOpen] = useState(false);
 
@@ -58,11 +54,7 @@ export function OcrLayout() {
           "
           aria-label={t("ocr.services")}
         >
-          <div className="flex h-12 shrink-0 items-center border-b border-outline bg-surface-container-low px-1">
-            <span className="min-w-0 flex-1 truncate pl-1 text-label-sm font-bold tracking-wide text-on-surface uppercase">
-              {t("ocr.services")}
-            </span>
-          </div>
+          <ConfigRailHeader>{t("ocr.services")}</ConfigRailHeader>
 
           <div className="flex min-h-0 flex-1 flex-col">
             {loading ? (
@@ -91,9 +83,16 @@ export function OcrLayout() {
             ) : null}
 
             {!loading && !error && services.length > 0 ? (
-              <ul className="min-h-0 flex-1 list-none overflow-y-auto p-0" role="listbox" aria-label={t("ocr.services")}>
+              <ul
+                className="min-h-0 flex-1 list-none overflow-y-auto p-0"
+                role="listbox"
+                aria-label={t("ocr.services")}
+              >
                 {services.map((service) => {
                   const active = service.id === selectedId;
+                  const provider = getOcrProviderOption(service.providerType);
+                  const ProviderIcon = provider.Icon;
+                  const providerLabel = t(provider.labelKey);
                   return (
                     <li key={service.id} role="option" aria-selected={active}>
                       <Link
@@ -101,7 +100,7 @@ export function OcrLayout() {
                         params={{ ocrServiceId: service.id }}
                         className={cn(
                           `
-                            group flex items-center gap-1 border-l-4 p-2 text-left text-body-tight text-on-surface
+                            group flex items-center gap-1 border-l-4 px-2 py-1.5 text-left text-body-tight text-on-surface
                             transition-colors
                           `,
                           active
@@ -117,7 +116,9 @@ export function OcrLayout() {
                         <span className={cn("min-w-0 flex-1 truncate", active ? "font-bold" : "font-normal")}>
                           {service.displayName}
                         </span>
-                        <Badge>{t(providerBadgeKey(service))}</Badge>
+                        <span className="inline-flex shrink-0" title={providerLabel}>
+                          <ProviderIcon className="size-4" aria-label={providerLabel} />
+                        </span>
                       </Link>
                     </li>
                   );

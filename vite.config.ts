@@ -29,12 +29,28 @@ export default defineConfig(async () => ({
       jsx: "react",
       customCollections: {
         svgs: FileSystemIconLoader(path.resolve(rootDir, "src/assets/icons"), (svg) => {
-          // Normalize local SVGs so they inherit text color and scale with em.
+          // Normalize size; keep multi-color brand fills, theme monochrome icons.
           const $ = cheerio.load(svg, { xmlMode: true });
           const $svg = $("svg");
-          $svg.attr("fill", "currentColor");
           $svg.removeAttr("width");
           $svg.removeAttr("height");
+          $svg.removeAttr("style");
+
+          const hasExplicitChildFills = $svg
+            .find("[fill]")
+            .toArray()
+            .some((el) => {
+              const fill = $(el).attr("fill");
+              return Boolean(fill && fill !== "none" && fill !== "currentColor");
+            });
+
+          if (hasExplicitChildFills) {
+            // Brand / multi-color icons keep path fills as authored.
+            $svg.removeAttr("fill");
+          } else {
+            $svg.attr("fill", "currentColor");
+          }
+
           return $.xml($svg);
         }),
       },
