@@ -3118,6 +3118,73 @@ fn test_connection_returns_provider_updated_at_on_failure() {
 }
 
 #[test]
+fn delete_all_models_keeps_provider_and_connection() {
+  let (_d, _db, _v, providers, models, profiles, ..) = setup();
+  let provider = providers
+    .save({
+      let mut write = provider_write(CredentialKind::None, CredentialUpdate::Keep);
+      write.display_name = "Keep Me".into();
+      write.base_url_override = Some("https://api.example.com/v1".into());
+      write
+    })
+    .unwrap();
+  let m1 = models
+    .save_manual(ManualModelWrite {
+      id: None,
+      provider_instance_id: provider.id,
+      model_key: "keep-a".into(),
+      display_name_override: None,
+      enabled: true,
+      capability_overrides_json: None,
+      adapter_id: None,
+    })
+    .unwrap();
+  let m2 = models
+    .save_manual(ManualModelWrite {
+      id: None,
+      provider_instance_id: provider.id,
+      model_key: "keep-b".into(),
+      display_name_override: None,
+      enabled: true,
+      capability_overrides_json: None,
+      adapter_id: None,
+    })
+    .unwrap();
+  let profile = profiles
+    .save({
+      let (default_prompt_template_id, prompt_templates) = attach_default_templates("s", "{{text}}");
+      TranslationProfileWrite {
+        id: None,
+        name: "Uses models".into(),
+        enabled: true,
+        template_version: 1,
+        default_prompt_template_id,
+        prompt_templates,
+        temperature: None,
+        max_output_tokens: None,
+        provider_options_json: None,
+        source_lang: None,
+        target_lang: None,
+        primary_lang: Some("zh".into()),
+        preferred_target_lang: Some("en".into()),
+        language_detection: None,
+        target_model_ids: vec![m1.id, m2.id],
+      }
+    })
+    .unwrap();
+
+  assert_eq!(models.delete_many(vec![m1.id, m2.id]).unwrap(), 2);
+  assert!(models.list_by_provider(provider.id).unwrap().is_empty());
+
+  // Channel row and connection fields must survive clearing every model.
+  let kept = providers.get(provider.id).expect("provider must remain after model delete");
+  assert_eq!(kept.display_name, "Keep Me");
+  assert_eq!(kept.base_url_override.as_deref(), Some("https://api.example.com/v1"));
+  assert!(providers.list().unwrap().iter().any(|row| row.id == provider.id));
+  assert!(profiles.get(profile.profile.id).unwrap().targets.is_empty());
+}
+
+#[test]
 fn delete_many_models_all_or_nothing() {
   let (_d, _db, _v, providers, models, profiles, ..) = setup();
   let p = providers
@@ -3166,8 +3233,8 @@ fn delete_many_models_all_or_nothing() {
   assert_eq!(models.list_by_provider(p.id).unwrap().len(), 2);
   assert!(models.list_by_provider(p.id).unwrap().iter().all(|m| m.id != m1.id));
 
-  // Protect m3 with a translation-profile target (FK RESTRICT → InUse).
-  profiles
+  // Profile target references no longer block delete; targets detach first.
+  let profile = profiles
     .save({
       let (default_prompt_template_id, prompt_templates) = attach_default_templates("s", "{{text}}");
       TranslationProfileWrite {
@@ -3190,25 +3257,44 @@ fn delete_many_models_all_or_nothing() {
     })
     .unwrap();
 
-  // Any failure (in-use or missing) rolls back the whole batch.
-  let err = models.delete_many(vec![m2.id, m3.id]).unwrap_err();
-  assert!(matches!(err, StorageError::InUse(_)), "expected in_use, got {err:?}");
-  let remaining = models.list_by_provider(p.id).unwrap();
-  assert_eq!(remaining.len(), 2, "m2 must remain after rollback");
-  assert!(remaining.iter().any(|m| m.id == m2.id));
-  assert!(remaining.iter().any(|m| m.id == m3.id));
+  assert_eq!(models.delete_many(vec![m2.id, m3.id]).unwrap(), 2);
+  assert!(models.list_by_provider(p.id).unwrap().is_empty());
+  assert!(profiles.get(profile.profile.id).unwrap().targets.is_empty());
 
+  // Missing id still rolls back the whole batch (re-seed two models).
+  let m4 = models
+    .save_manual(ManualModelWrite {
+      id: None,
+      provider_instance_id: p.id,
+      model_key: "bulk-d".into(),
+      display_name_override: None,
+      enabled: true,
+      capability_overrides_json: None,
+      adapter_id: None,
+    })
+    .unwrap();
+  let m5 = models
+    .save_manual(ManualModelWrite {
+      id: None,
+      provider_instance_id: p.id,
+      model_key: "bulk-e".into(),
+      display_name_override: None,
+      enabled: true,
+      capability_overrides_json: None,
+      adapter_id: None,
+    })
+    .unwrap();
   let missing = uuid::Uuid::nil();
-  let err = models.delete_many(vec![m2.id, missing]).unwrap_err();
+  let err = models.delete_many(vec![m4.id, missing]).unwrap_err();
   assert!(
     matches!(err, StorageError::NotFound(_)),
     "expected not_found, got {err:?}"
   );
   assert_eq!(models.list_by_provider(p.id).unwrap().len(), 2);
+  assert!(models.list_by_provider(p.id).unwrap().iter().any(|m| m.id == m4.id));
+  assert!(models.list_by_provider(p.id).unwrap().iter().any(|m| m.id == m5.id));
 
-  // Successful multi-delete after removing the profile reference path via profile delete.
-  profiles.delete(profiles.list().unwrap()[0].profile.id).unwrap();
-  assert_eq!(models.delete_many(vec![m2.id, m3.id]).unwrap(), 2);
+  assert_eq!(models.delete_many(vec![m4.id, m5.id]).unwrap(), 2);
   assert!(models.list_by_provider(p.id).unwrap().is_empty());
 }
 
@@ -3522,7 +3608,7 @@ fn profile_save_rejects_detection_model_that_does_not_exist() {
 }
 
 #[test]
-fn dedicated_detection_model_is_protected_and_provider_delete_clears_config() {
+fn delete_model_and_provider_clear_detection_config() {
   let (_d, _db, _v, providers, models, profiles, ..) = setup();
   let primary_provider = providers
     .save(provider_write(CredentialKind::None, CredentialUpdate::Keep))
@@ -3546,6 +3632,20 @@ fn dedicated_detection_model_is_protected_and_provider_delete_clears_config() {
       id: None,
       provider_instance_id: detector_provider.id,
       model_key: "detector".into(),
+      display_name_override: None,
+      enabled: true,
+      capability_overrides_json: None,
+      adapter_id: None,
+    })
+    .unwrap();
+  let mut detector_b_provider_write = provider_write(CredentialKind::None, CredentialUpdate::Keep);
+  detector_b_provider_write.display_name = "Detector B".into();
+  let detector_b_provider = providers.save(detector_b_provider_write).unwrap();
+  let detector_b = models
+    .save_manual(ManualModelWrite {
+      id: None,
+      provider_instance_id: detector_b_provider.id,
+      model_key: "detector-b".into(),
       display_name_override: None,
       enabled: true,
       capability_overrides_json: None,
@@ -3577,13 +3677,39 @@ fn dedicated_detection_model_is_protected_and_provider_delete_clears_config() {
     })
     .unwrap();
 
-  assert!(matches!(models.delete(detector.id), Err(StorageError::InUse(_))));
-  assert!(matches!(
-    models.delete_many(vec![detector.id]),
-    Err(StorageError::InUse(_))
-  ));
+  // Direct model delete detaches the dedicated detector config.
+  models.delete(detector.id).unwrap();
+  let after_model_delete = profiles.get(profile.profile.id).unwrap();
+  assert!(after_model_delete.profile.language_detection.is_none());
+  assert_eq!(after_model_delete.targets[0].provider_model_id, primary.id);
 
-  providers.delete(detector_provider.id).unwrap();
+  // Re-bind detector to another model, then provider delete still clears config.
+  profiles
+    .save({
+      let (default_prompt_template_id, prompt_templates) = attach_default_templates("s", "{{text}}");
+      TranslationProfileWrite {
+        id: Some(profile.profile.id),
+        name: "Dedicated detector".into(),
+        enabled: true,
+        template_version: 1,
+        default_prompt_template_id,
+        prompt_templates,
+        temperature: None,
+        max_output_tokens: None,
+        provider_options_json: None,
+        source_lang: Some("auto".into()),
+        target_lang: Some("en".into()),
+        primary_lang: Some("zh".into()),
+        preferred_target_lang: Some("en".into()),
+        language_detection: Some(LanguageDetectorConfig::Llm {
+          model_id: Some(detector_b.id),
+        }),
+        target_model_ids: vec![primary.id],
+      }
+    })
+    .unwrap();
+
+  providers.delete(detector_b_provider.id).unwrap();
   let reread = profiles.get(profile.profile.id).unwrap();
   assert!(reread.profile.language_detection.is_none());
   assert_eq!(reread.targets[0].provider_model_id, primary.id);

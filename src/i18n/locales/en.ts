@@ -192,7 +192,6 @@ const en = {
     plainText: "Plain text",
     outputPlaceholder: "Translation…",
     selectModelFirst: "Select an enabled model before translating.",
-    noModelsHint: "Add and enable a model under Models, then return here.",
     errorPrefix: "Translation failed",
     errors: {
       timeout: "Stream idle timeout — the model stopped sending data.",
@@ -476,9 +475,12 @@ const en = {
     saveChannelName: "Save channel name",
     cancelRename: "Cancel rename",
     deleteChannel: "Delete channel",
-    deleteChannelConfirm: "Delete {{name}} and all its models? This cannot be undone.",
+    deleteChannelConfirm:
+      "Permanently delete channel \"{{name}}\", including connection settings and all models. This cannot be undone.",
     deleteModels: "Delete models",
     deleteModelsConfirm: "Delete {{count}} selected model(s)? This cannot be undone.",
+    deleteModelsConfirmInUse:
+      "Selected model(s) are in use. Delete anyway? References will be cleared. This cannot be undone.",
     noModels: "No models for this channel yet.",
     noModelsMatch: "No models match the current search and filters.",
     searchModels: "Search models",

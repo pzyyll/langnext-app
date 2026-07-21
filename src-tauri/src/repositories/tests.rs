@@ -1,12 +1,12 @@
 // ABOUTME: Repository behavior and referential-integrity tests.
 // ABOUTME: Exercises CRUD, uniqueness, rollback, and credential journal rules.
 use crate::domain::model::{Availability, ModelSource, ProviderModel};
+use crate::domain::ocr_service::{BaiduOcrAction, OcrPromptTemplate, OcrProviderType, OcrService};
 use crate::domain::provider::{CredentialKind, ModelsSyncStatus, ProviderInstance, ProxyMode};
 use crate::domain::settings::AppSettingsV1;
 use crate::domain::time::{new_id, now_rfc3339};
 use crate::domain::translation_profile::{PromptTemplate, TranslationProfile, TranslationProfileTarget};
 use crate::error::StorageError;
-use crate::domain::ocr_service::{BaiduOcrAction, OcrPromptTemplate, OcrProviderType, OcrService};
 use crate::repositories::{
   app_credentials, app_settings, credential_operations, ocr_prompt_templates, ocr_services, provider_instances,
   provider_models, translation_profiles,
@@ -469,10 +469,7 @@ fn ocr_service_crud_list_order_and_template_cascade() {
     // Insert order determines auto sort_order: 0, 1, 2.
     ocr_services::insert(uow.conn(), &sample_baidu_ocr(baidu_a, "Baidu A"))?;
     ocr_services::insert(uow.conn(), &sample_baidu_ocr(baidu_b, "Baidu B"))?;
-    ocr_services::insert(
-      uow.conn(),
-      &sample_ai_ocr(ai_id, model_id, template_a, "AI OCR"),
-    )?;
+    ocr_services::insert(uow.conn(), &sample_ai_ocr(ai_id, model_id, template_a, "AI OCR"))?;
 
     ocr_prompt_templates::replace_for_service(
       uow.conn(),

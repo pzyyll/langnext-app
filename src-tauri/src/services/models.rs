@@ -224,15 +224,10 @@ impl ModelService {
     })
   }
 
+  /// Delete one model. Detaches profile targets and dedicated detector configs first so
+  /// referenced models can always be removed; callers may warn before invoking.
   pub fn delete(&self, id: Uuid) -> Result<(), StorageError> {
-    self.db.transaction(|uow| {
-      if translation_profiles::detection_model_is_referenced(uow.conn(), id)? {
-        return Err(StorageError::InUse(
-          "model is used by a translation profile detector".into(),
-        ));
-      }
-      provider_models::delete(uow.conn(), id)
-    })
+    self.delete_many(vec![id]).map(|_| ())
   }
 
   /// Delete many models in one transaction (all-or-nothing).
@@ -240,7 +235,8 @@ impl ModelService {
   /// Input contract:
   /// - Empty list → success with `0` (no-op).
   /// - Duplicate ids are collapsed so the same id is deleted once.
-  /// - Any missing or FK-restricted id aborts the whole transaction (nothing deleted).
+  /// - Profile targets and dedicated detector configs referencing these models are cleared first.
+  /// - Any missing id aborts the whole transaction (nothing deleted).
   ///
   /// Returns the number of unique ids deleted on success.
   pub fn delete_many(&self, ids: Vec<Uuid>) -> Result<usize, StorageError> {
@@ -250,13 +246,10 @@ impl ModelService {
       return Ok(0);
     }
     self.db.transaction(|uow| {
-      for id in &unique {
-        if translation_profiles::detection_model_is_referenced(uow.conn(), *id)? {
-          return Err(StorageError::InUse(
-            "model is used by a translation profile detector".into(),
-          ));
-        }
-      }
+      let now = now_rfc3339();
+      let id_set: std::collections::HashSet<Uuid> = unique.iter().copied().collect();
+      translation_profiles::clear_detection_models(uow.conn(), &id_set, &now)?;
+      translation_profiles::delete_targets_by_models(uow.conn(), &unique)?;
       for id in &unique {
         provider_models::delete(uow.conn(), *id)?;
       }

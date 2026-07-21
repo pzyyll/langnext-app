@@ -306,46 +306,60 @@ pub fn replace_prompt_templates(
   Ok(())
 }
 
-/// Whether a model is explicitly configured as an LLM language detector.
-pub fn detection_model_is_referenced(conn: &Connection, model_id: Uuid) -> Result<bool, StorageError> {
-  Ok(list(conn)?.into_iter().any(|profile| {
-    profile
-      .language_detection
-      .as_ref()
-      .and_then(|config| config.llm_model_id())
-      .is_some_and(|configured_id| configured_id == model_id)
-  }))
-}
-
-/// Clear dedicated detector models owned by a provider before deleting that provider.
+/// Clear dedicated detector configs that reference any of the given model ids.
 /// Profiles then fall back to their primary model instead of retaining orphaned JSON ids.
-pub fn clear_detection_models_by_provider(
+pub fn clear_detection_models(
   conn: &Connection,
-  provider_id: Uuid,
+  model_ids: &HashSet<Uuid>,
   updated_at: &str,
 ) -> Result<(), StorageError> {
-  let model_ids: HashSet<String> = {
-    let mut stmt = conn.prepare("SELECT id FROM provider_models WHERE provider_instance_id = ?1")?;
-    let ids = stmt
-      .query_map(params![provider_id.to_string()], |row| row.get(0))?
-      .collect::<Result<_, _>>()?;
-    ids
-  };
   if model_ids.is_empty() {
     return Ok(());
   }
 
   for mut profile in list(conn)? {
-    let references_provider = profile
+    let references_model = profile
       .language_detection
       .as_ref()
       .and_then(|config| config.llm_model_id())
-      .is_some_and(|model_id| model_ids.contains(&model_id.to_string()));
-    if references_provider {
+      .is_some_and(|model_id| model_ids.contains(&model_id));
+    if references_model {
       profile.language_detection = None;
       profile.updated_at = updated_at.to_string();
       update_profile(conn, &profile)?;
     }
+  }
+  Ok(())
+}
+
+/// Clear dedicated detector models owned by a provider before deleting that provider.
+pub fn clear_detection_models_by_provider(
+  conn: &Connection,
+  provider_id: Uuid,
+  updated_at: &str,
+) -> Result<(), StorageError> {
+  let model_ids: HashSet<Uuid> = {
+    let mut stmt = conn.prepare("SELECT id FROM provider_models WHERE provider_instance_id = ?1")?;
+    let ids = stmt
+      .query_map(params![provider_id.to_string()], |row| {
+        let id: String = row.get(0)?;
+        Uuid::parse_str(&id)
+          .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))
+      })?
+      .collect::<Result<_, _>>()?;
+    ids
+  };
+  clear_detection_models(conn, &model_ids, updated_at)
+}
+
+/// Delete translation_profile_models rows for any of the given model ids.
+/// Call ahead of `provider_models::delete` to satisfy the ON DELETE RESTRICT FK.
+pub fn delete_targets_by_models(conn: &Connection, model_ids: &[Uuid]) -> Result<(), StorageError> {
+  for model_id in model_ids {
+    conn.execute(
+      "DELETE FROM translation_profile_models WHERE provider_model_id = ?1",
+      params![model_id.to_string()],
+    )?;
   }
   Ok(())
 }

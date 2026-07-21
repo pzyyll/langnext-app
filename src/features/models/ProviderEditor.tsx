@@ -29,8 +29,8 @@ import {
   dangerIconButtonClassName,
 } from "../../components/ui";
 import { SelectField } from "../../components/SelectField";
-import { modelKeys, providerKeys } from "../../query/keys";
-import { providerListOptions, providerModelsOptions } from "../../query/options";
+import { modelKeys, profileKeys, providerKeys } from "../../query/keys";
+import { ocrListOptions, profileListOptions, providerListOptions, providerModelsOptions } from "../../query/options";
 import {
   deleteProviderInstance,
   deleteProviderModels,
@@ -200,10 +200,10 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
   const [modelMutationError, setModelMutationError] = useState<string | null>(null);
   const [addModelOpen, setAddModelOpen] = useState(false);
   const [editingConfigModel, setEditingConfigModel] = useState<ProviderModelDto | null>(null);
-  const [deleteOpen, setDeleteOpen] = useState(false);
+  /** Single confirm target so channel/model delete cannot share the wrong handler. */
+  const [deleteConfirm, setDeleteConfirm] = useState<"channel" | "models" | null>(null);
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedModelIds, setSelectedModelIds] = useState<Set<string>>(() => new Set());
-  const [deleteModelsOpen, setDeleteModelsOpen] = useState(false);
   const [deleteModelsPending, setDeleteModelsPending] = useState(false);
 
   const [connectionTestPending, setConnectionTestPending] = useState(false);
@@ -235,6 +235,30 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
   const modelsLoading = modelsQuery.isLoading;
   const modelsError =
     modelsQuery.error != null ? getIpcErrorMessage(modelsQuery.error, t("models.loadModelsFailed")) : null;
+
+  // Used only to warn before deleting models that profiles or OCR services still reference.
+  const profilesQuery = useQuery(profileListOptions());
+  const ocrServicesQuery = useQuery(ocrListOptions());
+  const selectedModelsInUse = useMemo(() => {
+    if (selectedModelIds.size === 0) {
+      return false;
+    }
+    for (const profile of profilesQuery.data ?? []) {
+      if (profile.targets.some((target) => selectedModelIds.has(target.providerModelId))) {
+        return true;
+      }
+      const detectorModelId = profile.languageDetection?.modelId;
+      if (detectorModelId && selectedModelIds.has(detectorModelId)) {
+        return true;
+      }
+    }
+    for (const service of ocrServicesQuery.data ?? []) {
+      if (service.providerModelId && selectedModelIds.has(service.providerModelId)) {
+        return true;
+      }
+    }
+    return false;
+  }, [ocrServicesQuery.data, profilesQuery.data, selectedModelIds]);
 
   const seedProvider = useCallback(
     (next: ProviderInstanceDto) => {
@@ -643,7 +667,11 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
 
     try {
       await deleteProviderModels(ids);
+      // Model delete must never remove the channel; re-seed so a concurrent providers
+      // cache race cannot drop the open channel from the sidebar.
+      seedProvider(provider);
       void queryClient.invalidateQueries({ queryKey: modelKeys.all });
+      void queryClient.invalidateQueries({ queryKey: profileKeys.all });
       setSelectedModelIds(new Set());
       setSelectionMode(false);
       const count = ids.length;
@@ -793,7 +821,7 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
               title={t("models.deleteChannel")}
               disabled={connectionFormDisabled}
               onClick={() => {
-                setDeleteOpen(true);
+                setDeleteConfirm("channel");
               }}
             >
               <IconMaterialSymbolsLightDeleteOutlineSharp className="pointer-events-none size-5 shrink-0" />
@@ -1060,7 +1088,7 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
                     className={dangerButtonClassName}
                     disabled={selectedModelIds.size === 0 || syncPending || deleteModelsPending}
                     onClick={() => {
-                      setDeleteModelsOpen(true);
+                      setDeleteConfirm("models");
                     }}
                   >
                     {t("models.deleteSelected", { count: selectedModelIds.size })}
@@ -1197,25 +1225,32 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
       />
 
       <ConfirmDialog
-        open={deleteOpen}
-        onOpenChange={setDeleteOpen}
-        title={t("models.deleteChannel")}
-        description={t("models.deleteChannelConfirm", { name: provider.displayName })}
+        open={deleteConfirm != null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setDeleteConfirm(null);
+          }
+        }}
+        title={deleteConfirm === "channel" ? t("models.deleteChannel") : t("models.deleteModels")}
+        description={
+          deleteConfirm === "channel"
+            ? t("models.deleteChannelConfirm", { name: provider.displayName })
+            : selectedModelsInUse
+              ? t("models.deleteModelsConfirmInUse")
+              : t("models.deleteModelsConfirm", { count: selectedModelIds.size })
+        }
         confirmText={t("common.delete")}
         pendingText={t("common.deleting")}
         danger
-        onConfirm={handleDelete}
-      />
-
-      <ConfirmDialog
-        open={deleteModelsOpen}
-        onOpenChange={setDeleteModelsOpen}
-        title={t("models.deleteModels")}
-        description={t("models.deleteModelsConfirm", { count: selectedModelIds.size })}
-        confirmText={t("common.delete")}
-        pendingText={t("common.deleting")}
-        danger
-        onConfirm={handleDeleteModels}
+        onConfirm={async () => {
+          if (deleteConfirm === "channel") {
+            await handleDelete();
+            return;
+          }
+          if (deleteConfirm === "models") {
+            await handleDeleteModels();
+          }
+        }}
       />
     </>
   );

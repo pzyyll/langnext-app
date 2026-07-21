@@ -7,7 +7,7 @@ use crate::domain::model::{
 };
 use crate::domain::translation::{TRANSLATE_ERROR_EVENT, TranslateInput, TranslateResult, TranslateStreamError};
 use crate::error::IpcError;
-use crate::events::{MODELS_CHANGED, PROVIDERS_CHANGED, emit_data_changed};
+use crate::events::{MODELS_CHANGED, PROVIDERS_CHANGED, TRANSLATION_PROFILES_CHANGED, emit_data_changed};
 use crate::state::AppState;
 use tauri::{AppHandle, Emitter, State};
 use uuid::Uuid;
@@ -213,10 +213,12 @@ pub async fn delete_provider_model(app: AppHandle, state: State<'_, AppState>, i
   let models = state.models.clone();
   run_blocking("delete_provider_model", move || models.delete(id)).await?;
   emit_data_changed(&app, MODELS_CHANGED);
+  // Detach may clear profile targets / detector configs.
+  emit_data_changed(&app, TRANSLATION_PROFILES_CHANGED);
   Ok(())
 }
 
-/// Bulk-delete models in a single SQLite transaction. Emits MODELS_CHANGED once on success.
+/// Bulk-delete models in a single SQLite transaction. Emits model + profile events once on success.
 /// Empty lists are a no-op success and do not emit.
 #[tauri::command]
 pub async fn delete_provider_models(
@@ -228,6 +230,8 @@ pub async fn delete_provider_models(
   let deleted = run_blocking("delete_provider_models", move || models.delete_many(ids)).await?;
   if deleted > 0 {
     emit_data_changed(&app, MODELS_CHANGED);
+    // Detach may clear profile targets / detector configs.
+    emit_data_changed(&app, TRANSLATION_PROFILES_CHANGED);
   }
   Ok(())
 }

@@ -994,12 +994,6 @@ function TranslatePage() {
             {profilesError}
           </p>
         ) : null}
-        {!modelsLoading && !modelsError && modelOptions.length === 0 ? (
-          <p className="shrink-0 text-body-tight text-neutral" role="status">
-            {t("translate.noModelsHint")}
-          </p>
-        ) : null}
-
         {/* Source / target workspace */}
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-gutter">
           <LanguageChipBar

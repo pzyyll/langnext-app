@@ -6,8 +6,8 @@ use crate::device_state::{DeviceStateManager, SharedDeviceState};
 use crate::domain::cancel::TranslateSessionRegistry;
 use crate::error::StorageError;
 use crate::services::{
-  ImportExportService, ModelService, OcrServiceService, ProviderService, SettingsService,
-  TranslationHistoryService, TranslationProfileService,
+  ImportExportService, ModelService, OcrServiceService, ProviderService, SettingsService, TranslationHistoryService,
+  TranslationProfileService,
 };
 use crate::storage::Database;
 use std::path::PathBuf;

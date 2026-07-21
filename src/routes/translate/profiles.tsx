@@ -1132,9 +1132,6 @@ function TranslateProfilesPage() {
                       }
                       aria-labelledby="profile-primary-model-label"
                     />
-                    {!modelsLoading && modelOptions.length === 0 ? (
-                      <p className="text-body-tight text-neutral">{t("translate.noModelsHint")}</p>
-                    ) : null}
                   </div>
 
                   <div className="flex flex-col gap-1">

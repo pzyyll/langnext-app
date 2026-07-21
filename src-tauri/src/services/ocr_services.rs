@@ -141,7 +141,8 @@ impl OcrServiceService {
   fn create_baidu(&self, id: Uuid, input: OcrServiceWrite, now: &str) -> Result<OcrServiceDto, StorageError> {
     let baidu_action = input.baidu_action.unwrap_or(BaiduOcrAction::Accurate);
     let (api_key_ref, api_secret, api_op) = plan_create_secret(id, &input.api_key, OwnerKind::OcrApiKey)?;
-    let (secret_key_ref, secret_secret, secret_op) = plan_create_secret(id, &input.secret_key, OwnerKind::OcrSecretKey)?;
+    let (secret_key_ref, secret_secret, secret_op) =
+      plan_create_secret(id, &input.secret_key, OwnerKind::OcrSecretKey)?;
 
     let mut prepared_ops = Vec::new();
     if let (Some(ref_name), Some(secret), Some(op_id)) = (&api_key_ref, &api_secret, api_op) {
@@ -269,13 +270,7 @@ impl OcrServiceService {
     // Callers must re-read has_* flags / updatedAt after any error (frontend invalidates).
     let mut api_key_committed = false;
     if !matches!(input.api_key, CredentialUpdate::Keep) {
-      current = self.apply_key_mutation(
-        current,
-        &input,
-        OwnerKind::OcrApiKey,
-        &input.api_key,
-        &expected,
-      )?;
+      current = self.apply_key_mutation(current, &input, OwnerKind::OcrApiKey, &input.api_key, &expected)?;
       expected = current.updated_at.clone();
       api_key_committed = true;
     }
@@ -309,8 +304,7 @@ impl OcrServiceService {
       let latest = ocr_services::get(uow.conn(), current.id)?;
       ensure_expected_version(&latest, &expected)?;
       if credential_operations::get_for_owner(uow.conn(), OwnerKind::OcrApiKey, &current.id.to_string())?.is_some()
-        || credential_operations::get_for_owner(uow.conn(), OwnerKind::OcrSecretKey, &current.id.to_string())?
-          .is_some()
+        || credential_operations::get_for_owner(uow.conn(), OwnerKind::OcrSecretKey, &current.id.to_string())?.is_some()
       {
         return Err(StorageError::CredentialBusy);
       }
@@ -542,14 +536,7 @@ impl OcrServiceService {
     secret: &str,
   ) -> Result<CredentialOperation, StorageError> {
     let prepared = self.db.transaction(|uow| {
-      credential_operations::insert_prepared(
-        uow.conn(),
-        op_id,
-        owner_kind,
-        owner_id,
-        expected_old_ref,
-        Some(new_ref),
-      )
+      credential_operations::insert_prepared(uow.conn(), op_id, owner_kind, owner_id, expected_old_ref, Some(new_ref))
     })?;
 
     if let Err(e) = self.vault.set(new_ref, secret) {
@@ -571,8 +558,9 @@ impl OcrServiceService {
 
     let db = self.db.clone();
     let vault = self.vault.clone();
-    let prepared = spawn_blocking_storage(move || prepare_ocr_recognition(&db, vault.as_ref(), input.ocr_service_id, png_base64))
-      .await?;
+    let prepared =
+      spawn_blocking_storage(move || prepare_ocr_recognition(&db, vault.as_ref(), input.ocr_service_id, png_base64))
+        .await?;
 
     match prepared {
       PreparedOcr::Baidu {
@@ -588,13 +576,8 @@ impl OcrServiceService {
           ocr_service_id: service_id,
         })
       }
-      PreparedOcr::Ai {
-        service_id,
-        request,
-      } => {
-        let completion = chat_completion_http(request)
-          .await
-          .map_err(map_transport_error)?;
+      PreparedOcr::Ai { service_id, request } => {
+        let completion = chat_completion_http(request).await.map_err(map_transport_error)?;
         Ok(OcrRecognizeResult {
           text: completion.content.trim().to_string(),
           ocr_service_id: service_id,
@@ -629,9 +612,9 @@ fn prepare_ocr_recognition(
     Some(id) => id,
     None => {
       let settings = db.read(app_settings::get)?;
-      settings.default_ocr_service_id.ok_or_else(|| {
-        StorageError::Validation("default OCR service is not configured".into())
-      })?
+      settings
+        .default_ocr_service_id
+        .ok_or_else(|| StorageError::Validation("default OCR service is not configured".into()))?
     }
   };
 
@@ -670,9 +653,9 @@ fn prepare_ocr_recognition(
       let model_id = service
         .provider_model_id
         .ok_or_else(|| StorageError::Validation("AI OCR model is not configured".into()))?;
-      let default_template_id = service.default_prompt_template_id.ok_or_else(|| {
-        StorageError::Validation("AI OCR default prompt template is not configured".into())
-      })?;
+      let default_template_id = service
+        .default_prompt_template_id
+        .ok_or_else(|| StorageError::Validation("AI OCR default prompt template is not configured".into()))?;
       let template = templates
         .into_iter()
         .find(|row| row.id == default_template_id)
@@ -687,9 +670,7 @@ fn prepare_ocr_recognition(
           ..
         } => (config, model_key, model_default_output_tokens),
         ModelChatResolve::Skipped => {
-          return Err(StorageError::Validation(
-            "AI OCR model is missing or disabled".into(),
-          ));
+          return Err(StorageError::Validation("AI OCR model is missing or disabled".into()));
         }
         ModelChatResolve::MissingCredential => {
           return Err(StorageError::Validation(
@@ -793,19 +774,15 @@ async fn fetch_baidu_access_token(
   api_key: &str,
   secret_key: &str,
 ) -> Result<String, StorageError> {
-  let mut url = url::Url::parse(BAIDU_OAUTH_TOKEN_URL)
-    .map_err(|_| StorageError::Internal("invalid Baidu OAuth URL".into()))?;
+  let mut url =
+    url::Url::parse(BAIDU_OAUTH_TOKEN_URL).map_err(|_| StorageError::Internal("invalid Baidu OAuth URL".into()))?;
   url
     .query_pairs_mut()
     .append_pair("grant_type", "client_credentials")
     .append_pair("client_id", api_key)
     .append_pair("client_secret", secret_key);
 
-  let response = client
-    .post(url)
-    .send()
-    .await
-    .map_err(map_reqwest_network_error)?;
+  let response = client.post(url).send().await.map_err(map_reqwest_network_error)?;
 
   let status = response.status();
   let body = response.text().await.map_err(map_reqwest_network_error)?;
@@ -975,7 +952,9 @@ fn validate_ocr_write(input: &OcrServiceWrite) -> Result<(), StorageError> {
   match input.provider_type {
     OcrProviderType::Baidu => {
       if input.baidu_action.is_none() {
-        return Err(StorageError::Validation("baidu_action is required for Baidu OCR".into()));
+        return Err(StorageError::Validation(
+          "baidu_action is required for Baidu OCR".into(),
+        ));
       }
       if input.provider_model_id.is_some()
         || input.temperature.is_some()
@@ -989,9 +968,7 @@ fn validate_ocr_write(input: &OcrServiceWrite) -> Result<(), StorageError> {
     }
     OcrProviderType::Ai => {
       if input.baidu_action.is_some() {
-        return Err(StorageError::Validation(
-          "baidu_action must be empty for AI OCR".into(),
-        ));
+        return Err(StorageError::Validation("baidu_action must be empty for AI OCR".into()));
       }
       if !matches!(input.api_key, CredentialUpdate::Keep) || !matches!(input.secret_key, CredentialUpdate::Keep) {
         return Err(StorageError::Validation(
@@ -1008,9 +985,9 @@ fn validate_ocr_write(input: &OcrServiceWrite) -> Result<(), StorageError> {
           return Err(StorageError::Validation("temperature must be >= 0".into()));
         }
       }
-      let default_id = input.default_prompt_template_id.ok_or_else(|| {
-        StorageError::Validation("default_prompt_template_id is required for AI OCR".into())
-      })?;
+      let default_id = input
+        .default_prompt_template_id
+        .ok_or_else(|| StorageError::Validation("default_prompt_template_id is required for AI OCR".into()))?;
       validate_ocr_prompt_templates(&input.prompt_templates, default_id)?;
     }
   }
@@ -1371,7 +1348,10 @@ mod tests {
       StorageError::Validation(msg) => {
         assert!(msg.contains("Partial credential update"), "msg={msg}");
         assert!(msg.contains("secret_key was not"), "msg={msg}");
-        assert!(msg.contains(&created.updated_at) || msg.contains("has_api_key=true"), "msg={msg}");
+        assert!(
+          msg.contains(&created.updated_at) || msg.contains("has_api_key=true"),
+          "msg={msg}"
+        );
       }
       other => panic!("expected Validation partial error, got {other:?}"),
     }
@@ -1379,6 +1359,9 @@ mod tests {
     let after = service.get(created.id).unwrap();
     assert!(after.has_api_key, "api_key must remain after partial apply");
     assert!(!after.has_secret_key, "secret_key must not be set after partial apply");
-    assert_ne!(after.updated_at, created.updated_at, "api_key commit advances updated_at");
+    assert_ne!(
+      after.updated_at, created.updated_at,
+      "api_key commit advances updated_at"
+    );
   }
 }

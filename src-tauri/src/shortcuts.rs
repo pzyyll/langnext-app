@@ -92,10 +92,7 @@ impl ShortcutRuntime {
         app,
         region_screenshot.enabled.then_some(region_screenshot.binding.as_str()),
       )?;
-      self.register_screenshot_ocr_shortcut(
-        app,
-        screenshot_ocr.enabled.then_some(screenshot_ocr.binding.as_str()),
-      )?;
+      self.register_screenshot_ocr_shortcut(app, screenshot_ocr.enabled.then_some(screenshot_ocr.binding.as_str()))?;
     }
 
     #[cfg(not(desktop))]
@@ -278,10 +275,7 @@ pub fn validate_shortcuts(shortcuts: &[ShortcutDefinition]) -> Result<(), String
 
   for i in 0..enabled_bindings.len() {
     for j in (i + 1)..enabled_bindings.len() {
-      if enabled_bindings[i]
-        .1
-        .eq_ignore_ascii_case(&enabled_bindings[j].1)
-      {
+      if enabled_bindings[i].1.eq_ignore_ascii_case(&enabled_bindings[j].1) {
         return Err(format!(
           "Shortcuts '{}' and '{}' must use different bindings",
           enabled_bindings[i].0, enabled_bindings[j].0
