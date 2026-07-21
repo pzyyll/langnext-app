@@ -1,9 +1,8 @@
 // ABOUTME: General translation index page with source/target panes and streaming.
 // ABOUTME: Nested under /translate; selects profiles and calls provider models via IPC.
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useTranslation } from "react-i18next";
 import IconMaterialSymbolsLightClose from "~icons/material-symbols-light/close";
 import IconMaterialSymbolsLightContentCopy from "~icons/material-symbols-light/content-copy";
@@ -26,13 +25,10 @@ import {
   profileListOptions,
   providerListOptions,
 } from "../../query/options";
-import { runCancelRequestIds, runDetectLanguage, runStartTranslateStream } from "../../features/translate/runTranslate";
-import {
-  TRANSLATE_CHUNK_EVENT,
-  TRANSLATE_DONE_EVENT,
-  TRANSLATE_ERROR_EVENT,
-  TRANSLATE_RESET_EVENT,
-} from "../../storage/client";
+import { newClientRequestId } from "../../features/translate/newClientRequestId";
+import { resolveTranslateFailureMessage } from "../../features/translate/resolveTranslateFailureMessage";
+import { runDetectLanguage, runStartTranslateStream } from "../../features/translate/runTranslate";
+import { useTranslateStreamSession } from "../../features/translate/useTranslateStreamSession";
 import { getIpcErrorMessage } from "../../storage/errors";
 import {
   AUTO_LANGUAGE,
@@ -62,14 +58,7 @@ import {
   type TranslateWorkspace,
   type TranslateWorkspacesStore,
 } from "./-workspaces";
-import type {
-  ProviderInstanceDto,
-  ProviderModelDto,
-  TranslateStreamChunk,
-  TranslateStreamDone,
-  TranslateStreamError,
-  TranslateStreamReset,
-} from "../../storage/types";
+import type { ProviderInstanceDto, ProviderModelDto } from "../../storage/types";
 
 export const Route = createFileRoute("/translate/")({
   component: TranslatePage,
@@ -115,13 +104,6 @@ function buildModelOptions(
 
   options.sort((a, b) => a.label.localeCompare(b.label));
   return options;
-}
-
-function newRequestId(): string {
-  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
-    return crypto.randomUUID();
-  }
-  return `translate-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
 function TranslatePage() {
@@ -223,8 +205,7 @@ function TranslatePage() {
   const profileApplyGeneration = useRef(0);
   /** Guards out-of-order profile-preference hydration (restore path, not full apply). */
   const profilePrefsGeneration = useRef(0);
-  const activeRequestId = useRef<string | null>(null);
-  const streamUnlisteners = useRef<UnlistenFn[]>([]);
+  const streamSession = useTranslateStreamSession();
   /** Source/target panes grid — language more-picker sizes to this box. */
   const languagePopupBoundsRef = useRef<HTMLDivElement>(null);
 
@@ -285,9 +266,9 @@ function TranslatePage() {
     if (workspaceId === workspaceStore.activeWorkspaceId) {
       return;
     }
-    const hadActive = activeRequestId.current != null;
+    const hadActive = streamSession.hasActiveRequest();
     translateGeneration.current += 1;
-    await abortActiveRequest();
+    await streamSession.abortActive();
     if (hadActive) {
       showStoppedToast();
     }
@@ -310,9 +291,9 @@ function TranslatePage() {
     if (workspaceStore.workspaces.length >= MAX_TRANSLATE_WORKSPACES) {
       return;
     }
-    const hadActive = activeRequestId.current != null;
+    const hadActive = streamSession.hasActiveRequest();
     translateGeneration.current += 1;
-    await abortActiveRequest();
+    await streamSession.abortActive();
     if (hadActive) {
       showStoppedToast();
     }
@@ -346,10 +327,10 @@ function TranslatePage() {
   }
 
   async function deleteWorkspace(workspaceId: string) {
-    const hadActive = activeRequestId.current != null && workspaceId === workspaceStore.activeWorkspaceId;
+    const hadActive = streamSession.hasActiveRequest() && workspaceId === workspaceStore.activeWorkspaceId;
     if (hadActive) {
       translateGeneration.current += 1;
-      await abortActiveRequest();
+      await streamSession.abortActive();
       showStoppedToast();
     }
     // Flush only when deleting a non-active row; active is discarded.
@@ -483,36 +464,12 @@ function TranslatePage() {
     return map;
   }, [modelOptions]);
 
-  const clearStreamListeners = useCallback(() => {
-    for (const unlisten of streamUnlisteners.current) {
-      unlisten();
-    }
-    streamUnlisteners.current = [];
-  }, []);
-
-  const abortActiveRequest = useCallback(async () => {
-    const requestId = activeRequestId.current;
-    activeRequestId.current = null;
-    clearStreamListeners();
-    if (!requestId) {
-      return;
-    }
-    // Swallow finished-request cancel failures inside the use-case runner.
-    await runCancelRequestIds([requestId]);
-  }, [clearStreamListeners]);
-
-  function releaseActiveRequest(requestId: string) {
-    if (activeRequestId.current === requestId) {
-      activeRequestId.current = null;
-    }
-  }
-
+  // Bump generation on unmount so late events ignore UI; session hook cancels in-flight.
   useEffect(() => {
     return () => {
       translateGeneration.current += 1;
-      void abortActiveRequest();
     };
-  }, [abortActiveRequest]);
+  }, []);
 
   const charCount = sourceText.length;
   const canTranslate =
@@ -605,31 +562,31 @@ function TranslatePage() {
   }
 
   /** Map known backend error codes to localized copy; fall back to server message. */
-  function resolveTranslateFailureMessage(errorCode: string | null | undefined, message: string | undefined): string {
-    if (errorCode === "timeout") {
-      return t("translate.errors.timeout");
-    }
-    return message || t("translate.errorPrefix");
+  function failureMessage(errorCode: string | null | undefined, message: string | undefined): string {
+    return resolveTranslateFailureMessage(errorCode, message, {
+      timeout: t("translate.errors.timeout"),
+      fallback: t("translate.errorPrefix"),
+    });
   }
 
   async function stopTranslation() {
     // Bump generation so late chunks/errors are ignored; toast here because listeners
     // are cleared in abort and the cancelled done event may never reach finishCancelledUi.
-    const hadActive = activeRequestId.current != null;
+    const hadActive = streamSession.hasActiveRequest();
     translateGeneration.current += 1;
     setIsTranslating(false);
     setStreamOutputActive(false);
     setErrorMessage(null);
-    await abortActiveRequest();
+    await streamSession.abortActive();
     if (hadActive) {
       showStoppedToast();
     }
   }
 
   async function clearSource() {
-    const hadActive = activeRequestId.current != null;
+    const hadActive = streamSession.hasActiveRequest();
     translateGeneration.current += 1;
-    await abortActiveRequest();
+    await streamSession.abortActive();
     setSourceText("");
     setOutputText("");
     setErrorMessage(null);
@@ -719,110 +676,80 @@ function TranslatePage() {
     },
     requestId: string,
   ) {
-    clearStreamListeners();
-
     // First chunk replaces any retained previous result; later chunks append.
     let receivedChunk = false;
-    const onChunk = (event: { payload: TranslateStreamChunk }) => {
-      const chunk = event.payload;
-      if (generation !== translateGeneration.current) {
-        return;
-      }
-      if (chunk.id !== activeRequestId.current) {
-        return;
-      }
-      const isFirstChunk = !receivedChunk;
-      receivedChunk = true;
-      if (isFirstChunk) {
-        setStreamOutputActive(true);
-      }
-      setOutputText((prev) => (isFirstChunk ? chunk.delta : prev + chunk.delta));
-      setHasTranslated(true);
-    };
-
-    const onReset = (event: { payload: TranslateStreamReset }) => {
-      const reset = event.payload;
-      if (generation !== translateGeneration.current) {
-        return;
-      }
-      if (reset.id !== activeRequestId.current) {
-        return;
-      }
-      // Drop partial text from the failed model before fallback chunks arrive.
-      receivedChunk = false;
-      setStreamOutputActive(false);
-      setOutputText("");
-      setActiveModelLabel(modelLabelById.get(reset.modelId) ?? reset.modelId);
-    };
-
-    const onDone = (event: { payload: TranslateStreamDone }) => {
-      const done = event.payload;
-      if (generation !== translateGeneration.current) {
-        return;
-      }
-      if (done.id !== activeRequestId.current) {
-        return;
-      }
-      clearStreamListeners();
-      activeRequestId.current = null;
-      if (done.errorCode === "cancelled") {
-        finishCancelledUi(generation);
-        return;
-      }
-      if (done.ok) {
-        // Prefer full text from the server so we do not drift on partial assembly.
-        finishSuccessUi(generation, done.translatedText, done.latencyMs, done.modelId);
-      } else {
-        finishErrorUi(generation, resolveTranslateFailureMessage(done.errorCode, done.message), done.latencyMs);
-      }
-    };
-
-    const onError = (event: { payload: TranslateStreamError }) => {
-      const err = event.payload;
-      if (generation !== translateGeneration.current) {
-        return;
-      }
-      if (err.id !== activeRequestId.current) {
-        return;
-      }
-      clearStreamListeners();
-      activeRequestId.current = null;
-      if (err.errorCode === "cancelled") {
-        finishCancelledUi(generation);
-        return;
-      }
-      finishErrorUi(generation, resolveTranslateFailureMessage(err.errorCode, err.message), err.latencyMs);
-    };
-
-    activeRequestId.current = requestId;
 
     try {
-      const [unChunk, unReset, unDone, unError] = await Promise.all([
-        listen<TranslateStreamChunk>(TRANSLATE_CHUNK_EVENT, onChunk),
-        listen<TranslateStreamReset>(TRANSLATE_RESET_EVENT, onReset),
-        listen<TranslateStreamDone>(TRANSLATE_DONE_EVENT, onDone),
-        listen<TranslateStreamError>(TRANSLATE_ERROR_EVENT, onError),
-      ]);
-      if (generation !== translateGeneration.current) {
-        unChunk();
-        unReset();
-        unDone();
-        unError();
+      // Listen-before-invoke: subscriptions must be live before stream start.
+      const prepared = await streamSession.prepareSession(
+        requestId,
+        {
+          onChunk: (chunk) => {
+            if (generation !== translateGeneration.current) {
+              return;
+            }
+            const isFirstChunk = !receivedChunk;
+            receivedChunk = true;
+            if (isFirstChunk) {
+              setStreamOutputActive(true);
+            }
+            setOutputText((prev) => (isFirstChunk ? chunk.delta : prev + chunk.delta));
+            setHasTranslated(true);
+          },
+          onReset: (reset) => {
+            if (generation !== translateGeneration.current) {
+              return;
+            }
+            // Drop partial text from the failed model before fallback chunks arrive.
+            receivedChunk = false;
+            setStreamOutputActive(false);
+            setOutputText("");
+            setActiveModelLabel(modelLabelById.get(reset.modelId) ?? reset.modelId);
+          },
+          onDone: (done) => {
+            if (generation !== translateGeneration.current) {
+              return;
+            }
+            streamSession.markTerminal(requestId);
+            if (done.errorCode === "cancelled") {
+              finishCancelledUi(generation);
+              return;
+            }
+            if (done.ok) {
+              // Prefer full text from the server so we do not drift on partial assembly.
+              finishSuccessUi(generation, done.translatedText, done.latencyMs, done.modelId);
+            } else {
+              finishErrorUi(generation, failureMessage(done.errorCode, done.message), done.latencyMs);
+            }
+          },
+          onError: (err) => {
+            if (generation !== translateGeneration.current) {
+              return;
+            }
+            streamSession.markTerminal(requestId);
+            if (err.errorCode === "cancelled") {
+              finishCancelledUi(generation);
+              return;
+            }
+            finishErrorUi(generation, failureMessage(err.errorCode, err.message), err.latencyMs);
+          },
+        },
+        () => generation === translateGeneration.current,
+      );
+      if (!prepared) {
         return;
       }
-      streamUnlisteners.current = [unChunk, unReset, unDone, unError];
 
-      // Listeners are registered above — start stream only after subscriptions are live.
       await runStartTranslateStream(payload, requestId);
       if (generation !== translateGeneration.current) {
-        clearStreamListeners();
+        streamSession.clearListeners();
       }
     } catch (err) {
       if (generation !== translateGeneration.current) {
         return;
       }
-      clearStreamListeners();
-      activeRequestId.current = null;
+      streamSession.clearListeners();
+      streamSession.releaseIfActive(requestId);
       finishErrorUi(generation, getIpcErrorMessage(err, t("translate.errorPrefix")), null);
     }
   }
@@ -842,16 +769,16 @@ function TranslatePage() {
     }
 
     // Cancel any prior in-flight request before starting a new one.
-    const hadActive = activeRequestId.current != null;
-    await abortActiveRequest();
+    const hadActive = streamSession.hasActiveRequest();
+    await streamSession.abortActive();
     if (hadActive) {
       showStoppedToast();
     }
     const generation = ++translateGeneration.current;
     beginTranslateUi();
 
-    const requestId = newRequestId();
-    activeRequestId.current = requestId;
+    const requestId = newClientRequestId("translate");
+    streamSession.setActiveRequestId(requestId);
 
     // Resolve the effective source id. Auto-detect first when source is "auto".
     let effectiveSourceId: LanguageId;
@@ -865,7 +792,7 @@ function TranslatePage() {
           return;
         }
         if (!detected.ok) {
-          releaseActiveRequest(requestId);
+          streamSession.releaseIfActive(requestId);
           if (detected.errorCode === "cancelled") {
             finishCancelledUi(generation);
           } else {
@@ -878,7 +805,7 @@ function TranslatePage() {
           return;
         }
         if (!isLanguageId(detected.languageId)) {
-          releaseActiveRequest(requestId);
+          streamSession.releaseIfActive(requestId);
           finishErrorUi(generation, t("translate.errors.detectFailed"), detected.latencyMs);
           return;
         }
@@ -888,7 +815,7 @@ function TranslatePage() {
         if (generation !== translateGeneration.current) {
           return;
         }
-        releaseActiveRequest(requestId);
+        streamSession.releaseIfActive(requestId);
         finishErrorUi(generation, getIpcErrorMessage(err, t("translate.errors.detectFailed")), null);
         return;
       }

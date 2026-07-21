@@ -4,8 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAutoAnimate } from "@formkit/auto-animate/react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
-import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { listen } from "@tauri-apps/api/event";
 import { Button } from "@base-ui/react/button";
 import { Collapsible } from "@base-ui/react/collapsible";
 import { Menu } from "@base-ui/react/menu";
@@ -45,29 +44,33 @@ import {
   profileListOptions,
   providerListOptions,
 } from "../query/options";
-import { runCancelRequestIds, runDetectLanguage, runStartSlotStreamBatch } from "../features/translate/runTranslate";
-import type { SlotStreamJob } from "../features/translate/slotBatch";
+import { isContinuousSourceEdit } from "../features/translate/isContinuousSourceEdit";
+import { newClientRequestId } from "../features/translate/newClientRequestId";
 import {
-  TRANSLATE_CHUNK_EVENT,
-  TRANSLATE_DONE_EVENT,
-  TRANSLATE_ERROR_EVENT,
-  TRANSLATE_RESET_EVENT,
-} from "../storage/client";
+  loadQuickTranslateSession,
+  saveQuickTranslateSession,
+  type QuickTranslateSlot,
+} from "../features/translate/quickTranslateSession";
+import {
+  isTauriRuntime,
+  notifyReady,
+  resizeWindowHeight,
+  setPin,
+} from "../features/translate/quickTranslateWindow";
+import { resolveTranslateFailureMessage } from "../features/translate/resolveTranslateFailureMessage";
+import { runDetectLanguage, runStartSlotStreamBatch } from "../features/translate/runTranslate";
+import {
+  DETECT_REQUEST_KEY,
+  useSlotStreamSessions,
+} from "../features/translate/useSlotStreamSessions";
 import { getIpcErrorMessage } from "../storage/errors";
-import type {
-  TranslateStreamChunk,
-  TranslateStreamDone,
-  TranslateStreamError,
-  TranslateStreamReset,
-  TranslationProfileDto,
-} from "../storage/types";
+import type { TranslateInput, TranslationProfileDto } from "../storage/types";
 import { slotListAutoAnimate } from "./-quick-translate-list-animate";
 import {
   AUTO_LANGUAGE,
   LANGUAGE_IDS,
   getDefaultProfileLanguages,
   isLanguageId,
-  isSelectableLanguageId,
   resolveProfileLangPrefs,
   resolveTargetLanguage,
   type LanguageId,
@@ -88,13 +91,7 @@ const TRANSLATE_DEBOUNCE_MS = 500;
  */
 const HEIGHT_ADAPT_SETTLE_MS = 160;
 
-const SESSION_KEY = "langnext-quick-translate-session";
-
-type Slot = {
-  /** Stable slot instance id (allows the same profile more than once). */
-  id: string;
-  profileId: string;
-};
+type Slot = QuickTranslateSlot;
 
 type SlotResult = {
   text: string;
@@ -112,16 +109,6 @@ type SlotResult = {
   inputKey?: string;
 };
 
-type SessionState = {
-  sourceLang: SourceLanguageId;
-  targetLang: SelectableLanguageId;
-  slots: Slot[];
-  /** Slot ids that are collapsed; expanded cards are omitted. */
-  collapsedSlotIds: string[];
-  /** When false, source edits never auto-run; Enter translates, Shift+Enter inserts a newline. */
-  autoTranslate: boolean;
-};
-
 /** Stable key for whether a card already has a completed translation for the current inputs. */
 function buildTranslationInputKey(
   sourceText: string,
@@ -130,118 +117,6 @@ function buildTranslationInputKey(
   profileId: string,
 ): string {
   return `${sourceLang}\0${targetLang}\0${profileId}\0${sourceText.trim()}`;
-}
-
-/**
- * Max code-unit length change still treated as one continuous keystroke / IME commit.
- * Larger one-shot jumps (select-all + retype/paste) restart the output instead of "旧文…".
- */
-const CONTINUOUS_SOURCE_EDIT_MAX_DELTA = 4;
-
-/**
- * Whether `next` looks like progressive editing of `prev` (type/backspace/IME),
- * not a wholesale replace such as select-all then retype or paste.
- * Continuous edits keep prior translation + trailing dots; full replaces restart empty.
- */
-function isContinuousSourceEdit(prev: string, next: string): boolean {
-  if (prev === next) {
-    return true;
-  }
-  if (!prev || !next) {
-    return false;
-  }
-
-  const lengthDelta = Math.abs(prev.length - next.length);
-
-  // Pure append of any size (including paste at end) stays continuous.
-  if (next.startsWith(prev)) {
-    return true;
-  }
-
-  // Small shrink from the end (backspace / delete selection of a few chars).
-  if (prev.startsWith(next) && lengthDelta <= CONTINUOUS_SOURCE_EDIT_MAX_DELTA) {
-    return true;
-  }
-
-  // Small grow/shrink from the start.
-  if (next.endsWith(prev)) {
-    return true;
-  }
-  if (prev.endsWith(next) && lengthDelta <= CONTINUOUS_SOURCE_EDIT_MAX_DELTA) {
-    return true;
-  }
-
-  // Small mid-string edit: limited length delta and mostly-shared prefix.
-  if (lengthDelta <= CONTINUOUS_SOURCE_EDIT_MAX_DELTA) {
-    const limit = Math.min(prev.length, next.length);
-    let shared = 0;
-    while (shared < limit && prev[shared] === next[shared]) {
-      shared += 1;
-    }
-    return shared >= limit - CONTINUOUS_SOURCE_EDIT_MAX_DELTA;
-  }
-
-  // One-shot replace of most/all content (select-all + retype/paste).
-  return false;
-}
-
-function newId(): string {
-  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
-    return crypto.randomUUID();
-  }
-  return `qt-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
-
-function loadSession(): SessionState {
-  const fallback: SessionState = {
-    sourceLang: "auto",
-    targetLang: "zh",
-    slots: [],
-    collapsedSlotIds: [],
-    autoTranslate: true,
-  };
-  if (typeof window === "undefined") {
-    return fallback;
-  }
-  try {
-    const raw = localStorage.getItem(SESSION_KEY);
-    if (!raw) {
-      return fallback;
-    }
-    const parsed = JSON.parse(raw) as Partial<SessionState>;
-    const sourceLang = isSelectableLanguageId(parsed.sourceLang) ? parsed.sourceLang : fallback.sourceLang;
-    const targetLang = isSelectableLanguageId(parsed.targetLang) ? parsed.targetLang : fallback.targetLang;
-    const slots = Array.isArray(parsed.slots)
-      ? parsed.slots
-          .filter(
-            (slot): slot is Slot =>
-              !!slot &&
-              typeof slot === "object" &&
-              typeof (slot as Slot).id === "string" &&
-              typeof (slot as Slot).profileId === "string",
-          )
-          .map((slot) => ({ id: slot.id, profileId: slot.profileId }))
-      : [];
-    const slotIds = new Set(slots.map((slot) => slot.id));
-    const collapsedSlotIds = Array.isArray(parsed.collapsedSlotIds)
-      ? parsed.collapsedSlotIds.filter((id): id is string => typeof id === "string" && slotIds.has(id))
-      : [];
-    const autoTranslate = typeof parsed.autoTranslate === "boolean" ? parsed.autoTranslate : fallback.autoTranslate;
-    return { sourceLang, targetLang, slots, collapsedSlotIds, autoTranslate };
-  } catch {
-    return fallback;
-  }
-}
-
-function saveSession(state: SessionState): void {
-  if (typeof window === "undefined") {
-    return;
-  }
-  try {
-    localStorage.setItem(SESSION_KEY, JSON.stringify(state));
-  } catch {
-    // Ignore quota / private-mode failures.
-  }
 }
 
 function primaryModelId(profile: TranslationProfileDto | undefined): string {
@@ -253,10 +128,6 @@ function primaryModelId(profile: TranslationProfileDto | undefined): string {
 }
 
 const emptyResult: SlotResult = { text: "", error: null, isTranslating: false };
-
-function isTauriRuntime(): boolean {
-  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-}
 
 const menuPopupClassName =
   "min-w-48 origin-(--transform-origin) border border-line bg-surface text-on-surface shadow-frame transition-[scale,opacity] duration-100 ease-out data-ending-style:scale-[0.98] data-ending-style:opacity-0 data-starting-style:scale-[0.98] data-starting-style:opacity-0";
@@ -270,7 +141,7 @@ const leadingButtonClassName =
 function QuickTranslatePage() {
   const { t, i18n } = useTranslation();
   const queryClient = useQueryClient();
-  const [sessionSeed] = useState(() => loadSession());
+  const [sessionSeed] = useState(() => loadQuickTranslateSession());
   const [slotListRef] = useAutoAnimate(slotListAutoAnimate);
 
   const [sourceText, setSourceText] = useState("");
@@ -339,7 +210,7 @@ function QuickTranslatePage() {
 
   // Persist session selections and per-card collapse state across opens of this window.
   useEffect(() => {
-    saveSession({
+    saveQuickTranslateSession({
       sourceLang,
       targetLang,
       slots,
@@ -351,19 +222,11 @@ function QuickTranslatePage() {
   const handlePinChange = useCallback((next: boolean) => {
     setIsPinned(next);
     if (isTauriRuntime()) {
-      void invoke("set_pin", { isPin: next });
+      void setPin(next);
     }
   }, []);
 
-  /** Per-slot epoch: bumped to invalidate in-flight work for that card only. */
-  const slotEpochRef = useRef<Map<string, number>>(new Map());
-  /** Bumped when a language-detect request should supersede the previous one. */
-  const detectEpochRef = useRef(0);
-  const requestIdsRef = useRef<Map<string, string>>(new Map());
-  /** Per-slot stream event unlisteners; cleared on abort/done/error. */
-  const streamUnlistenersRef = useRef<Map<string, UnlistenFn[]>>(new Map());
-  /** Resolves the in-flight stream Promise for a slot when aborted mid-stream. */
-  const streamSettleRef = useRef<Map<string, () => void>>(new Map());
+  const slotStreams = useSlotStreamSessions();
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const slotsRef = useRef(slots);
   const collapsedSlotIdsRef = useRef(collapsedSlotIds);
@@ -407,68 +270,14 @@ function QuickTranslatePage() {
     setContentMeasureEl((prev) => (prev === node ? prev : node));
   }, []);
 
-  const nextSlotEpoch = useCallback((slotId: string): number => {
-    const next = (slotEpochRef.current.get(slotId) ?? 0) + 1;
-    slotEpochRef.current.set(slotId, next);
-    return next;
-  }, []);
-
-  const isSlotEpochCurrent = useCallback((slotId: string, epoch: number): boolean => {
-    return slotEpochRef.current.get(slotId) === epoch;
-  }, []);
-
-  const clearSlotStreamListeners = useCallback((slotId: string) => {
-    const unlisteners = streamUnlistenersRef.current.get(slotId);
-    if (!unlisteners) {
-      return;
-    }
-    for (const unlisten of unlisteners) {
-      unlisten();
-    }
-    streamUnlistenersRef.current.delete(slotId);
-  }, []);
-
-  const abortRequest = useCallback(
-    async (key: string) => {
-      // Capture before settle/listeners clear removes the map entry.
-      const requestId = requestIdsRef.current.get(key);
-      // Resolve any in-flight stream Promise and drop its listeners.
-      const settleStream = streamSettleRef.current.get(key);
-      if (settleStream) {
-        settleStream();
-      } else {
-        clearSlotStreamListeners(key);
-        requestIdsRef.current.delete(key);
-      }
-      if (!requestId) {
-        return;
-      }
-      // Swallow finished-request cancel failures inside the use-case runner.
-      await runCancelRequestIds([requestId]);
-    },
-    [clearSlotStreamListeners],
-  );
-
-  const abortSlots = useCallback(
-    async (slotIds: string[]) => {
-      await Promise.all(slotIds.map((slotId) => abortRequest(slotId)));
-    },
-    [abortRequest],
-  );
-
-  const abortAll = useCallback(async () => {
-    const keys = [...requestIdsRef.current.keys()];
-    await Promise.all(keys.map((key) => abortRequest(key)));
-  }, [abortRequest]);
-
   /** Bump every slot epoch and cancel in-flight detect/translate work. */
   const invalidateInFlight = useCallback(() => {
-    detectEpochRef.current += 1;
+    slotStreams.bumpDetectEpoch();
     for (const slot of slotsRef.current) {
-      nextSlotEpoch(slot.id);
+      slotStreams.nextSlotEpoch(slot.id);
     }
-    void abortAll();
-  }, [abortAll, nextSlotEpoch]);
+    void slotStreams.abortAll();
+  }, [slotStreams]);
 
   /** Drop card outputs so the UI restarts from waiting/translating instead of "旧文…". */
   const clearAllResults = useCallback(() => {
@@ -476,19 +285,13 @@ function QuickTranslatePage() {
   }, []);
 
   useEffect(() => {
-    const slotEpochs = slotEpochRef.current;
     return () => {
-      detectEpochRef.current += 1;
-      for (const slotId of slotEpochs.keys()) {
-        const next = (slotEpochs.get(slotId) ?? 0) + 1;
-        slotEpochs.set(slotId, next);
-      }
       if (debounceTimerRef.current != null) {
         clearTimeout(debounceTimerRef.current);
       }
-      void abortAll();
+      // Slot stream epochs + in-flight cancel are handled by useSlotStreamSessions unmount.
     };
-  }, [abortAll]);
+  }, []);
 
   const patchResult = useCallback((slotId: string, patch: Partial<SlotResult>) => {
     setResults((prev) => ({
@@ -503,7 +306,7 @@ function QuickTranslatePage() {
         const next = { ...prev };
         for (const entry of entries) {
           const epoch = epochs.get(entry.slotId);
-          if (epoch == null || slotEpochRef.current.get(entry.slotId) !== epoch) {
+          if (epoch == null || !slotStreams.isSlotEpochCurrent(entry.slotId, epoch)) {
             continue;
           }
           next[entry.slotId] = {
@@ -516,7 +319,7 @@ function QuickTranslatePage() {
         return next;
       });
     },
-    [],
+    [slotStreams],
   );
 
   /**
@@ -547,9 +350,9 @@ function QuickTranslatePage() {
 
       const epochs = new Map<string, number>();
       for (const slot of slotsToRun) {
-        epochs.set(slot.id, nextSlotEpoch(slot.id));
+        epochs.set(slot.id, slotStreams.nextSlotEpoch(slot.id));
       }
-      await abortSlots(slotsToRun.map((slot) => slot.id));
+      await slotStreams.abortSlots(slotsToRun.map((slot) => slot.id));
 
       // Keep prior text so continuous re-runs show "旧文…" with trailing dots until the first
       // new chunk/result arrives (langnext-translate style). Full source replaces clear earlier
@@ -569,7 +372,7 @@ function QuickTranslatePage() {
       });
 
       const stillCurrentTargets = () =>
-        slotsToRun.filter((slot) => isSlotEpochCurrent(slot.id, epochs.get(slot.id) ?? -1));
+        slotsToRun.filter((slot) => slotStreams.isSlotEpochCurrent(slot.id, epochs.get(slot.id) ?? -1));
 
       let effectiveSourceId: LanguageId | null = sourceLang === "auto" ? detectedSourceLangRef.current : sourceLang;
 
@@ -587,19 +390,19 @@ function QuickTranslatePage() {
           }
         }
 
-        const detectEpoch = ++detectEpochRef.current;
-        await abortRequest("__detect__");
-        const detectRequestId = newId();
-        requestIdsRef.current.set("__detect__", detectRequestId);
+        const detectEpoch = slotStreams.bumpDetectEpoch();
+        await slotStreams.abortRequest(DETECT_REQUEST_KEY);
+        const detectRequestId = newClientRequestId("qt");
+        slotStreams.setRequestId(DETECT_REQUEST_KEY, detectRequestId);
         try {
           const detected = await runDetectLanguage(
             { text: trimmed, modelId: detectModelId, profileId: detectProfileId },
             detectRequestId,
           );
-          if (detectEpoch !== detectEpochRef.current) {
+          if (detectEpoch !== slotStreams.getDetectEpoch()) {
             return;
           }
-          requestIdsRef.current.delete("__detect__");
+          slotStreams.deleteRequestId(DETECT_REQUEST_KEY);
           if (!detected.ok || !isLanguageId(detected.languageId)) {
             const message =
               detected.errorCode === "cancelled" ? null : detected.message || t("translate.errors.detectFailed");
@@ -619,10 +422,10 @@ function QuickTranslatePage() {
           detectedSourceLangRef.current = detected.languageId;
           effectiveSourceId = detected.languageId;
         } catch (err) {
-          if (detectEpoch !== detectEpochRef.current) {
+          if (detectEpoch !== slotStreams.getDetectEpoch()) {
             return;
           }
-          requestIdsRef.current.delete("__detect__");
+          slotStreams.deleteRequestId(DETECT_REQUEST_KEY);
           failSlots(
             stillCurrentTargets().map((slot) => ({
               slotId: slot.id,
@@ -648,225 +451,28 @@ function QuickTranslatePage() {
         return;
       }
 
-      const resolveFailureMessage = (errorCode: string | null | undefined, message: string | undefined) => {
-        if (errorCode === "timeout") {
-          return t("translate.errors.timeout");
-        }
-        return message || t("translate.errorPrefix");
-      };
-
-      type SlotStreamPayload = {
-        modelId: string;
-        sourceLang: string;
-        targetLang: string;
-        text: string;
-        profileId: string;
-        sourceLangId: SourceLanguageId;
-        targetLangId: SelectableLanguageId;
-        effectiveSourceLangId: LanguageId;
-        effectiveTargetLangId: LanguageId;
-      };
-
-      type PreparedSlotStream = {
-        job: SlotStreamJob;
-        slotInputKey: string;
-        waitUntilSettled: Promise<void>;
-        settle: () => void;
-        isCurrentRequest: () => boolean;
-      };
-
-      /**
-       * Register stream listeners for one card and return a start job.
-       * Does not invoke translate — callers batch-start after every listener is live.
-       * Resolves waitUntilSettled on terminal event, start failure, or abort.
-       */
-      const prepareSlotStream = (
-        slotId: string,
-        epoch: number,
-        requestId: string,
-        payload: SlotStreamPayload,
-        slotInputKey: string,
-      ): Promise<PreparedSlotStream | null> => {
-        return new Promise((resolvePrepare) => {
-          let settled = false;
-          let settle!: () => void;
-          const waitUntilSettled = new Promise<void>((resolve) => {
-            settle = () => {
-              if (settled) {
-                return;
-              }
-              settled = true;
-              streamSettleRef.current.delete(slotId);
-              clearSlotStreamListeners(slotId);
-              if (requestIdsRef.current.get(slotId) === requestId) {
-                requestIdsRef.current.delete(slotId);
-              }
-              resolve();
-            };
-          });
-          // So abortRequest can unblock waiters when cancel supersedes this stream.
-          streamSettleRef.current.set(slotId, settle);
-
-          const isCurrentRequest = () =>
-            isSlotEpochCurrent(slotId, epoch) && requestIdsRef.current.get(slotId) === requestId;
-
-          // First chunk replaces any retained previous result; later chunks append.
-          let receivedChunk = false;
-          const onChunk = (event: { payload: TranslateStreamChunk }) => {
-            const chunk = event.payload;
-            if (chunk.id !== requestId || !isCurrentRequest()) {
-              return;
-            }
-            const isFirstChunk = !receivedChunk;
-            receivedChunk = true;
-            setResults((prev) => {
-              const current = prev[slotId] ?? emptyResult;
-              return {
-                ...prev,
-                [slotId]: {
-                  ...current,
-                  text: isFirstChunk ? chunk.delta : current.text + chunk.delta,
-                  error: null,
-                  isTranslating: true,
-                  streamOutputActive: true,
-                },
-              };
-            });
-          };
-
-          const onReset = (event: { payload: TranslateStreamReset }) => {
-            const reset = event.payload;
-            if (reset.id !== requestId || !isCurrentRequest()) {
-              return;
-            }
-            // Drop partial text from the failed model before fallback chunks arrive.
-            receivedChunk = false;
-            patchResult(slotId, {
-              text: "",
-              error: null,
-              isTranslating: true,
-              streamOutputActive: false,
-            });
-          };
-
-          const onDone = (event: { payload: TranslateStreamDone }) => {
-            const done = event.payload;
-            if (done.id !== requestId) {
-              return;
-            }
-            if (!isSlotEpochCurrent(slotId, epoch) || requestIdsRef.current.get(slotId) !== requestId) {
-              settle();
-              return;
-            }
-            if (done.errorCode === "cancelled") {
-              patchResult(slotId, { isTranslating: false, streamOutputActive: false });
-              settle();
-              return;
-            }
-            if (done.ok) {
-              // Prefer full text from the server so we do not drift on partial assembly.
-              patchResult(slotId, {
-                text: done.translatedText,
-                error: null,
-                isTranslating: false,
-                streamOutputActive: false,
-                inputKey: slotInputKey,
-              });
-            } else {
-              patchResult(slotId, {
-                text: "",
-                error: resolveFailureMessage(done.errorCode, done.message),
-                isTranslating: false,
-                streamOutputActive: false,
-                inputKey: slotInputKey,
-              });
-            }
-            settle();
-          };
-
-          const onError = (event: { payload: TranslateStreamError }) => {
-            const err = event.payload;
-            if (err.id !== requestId) {
-              return;
-            }
-            if (!isSlotEpochCurrent(slotId, epoch) || requestIdsRef.current.get(slotId) !== requestId) {
-              settle();
-              return;
-            }
-            if (err.errorCode === "cancelled") {
-              patchResult(slotId, { isTranslating: false, streamOutputActive: false });
-              settle();
-              return;
-            }
-            patchResult(slotId, {
-              text: "",
-              error: resolveFailureMessage(err.errorCode, err.message),
-              isTranslating: false,
-              streamOutputActive: false,
-              inputKey: slotInputKey,
-            });
-            settle();
-          };
-
-          void (async () => {
-            try {
-              const [unChunk, unReset, unDone, unError] = await Promise.all([
-                listen<TranslateStreamChunk>(TRANSLATE_CHUNK_EVENT, onChunk),
-                listen<TranslateStreamReset>(TRANSLATE_RESET_EVENT, onReset),
-                listen<TranslateStreamDone>(TRANSLATE_DONE_EVENT, onDone),
-                listen<TranslateStreamError>(TRANSLATE_ERROR_EVENT, onError),
-              ]);
-              if (!isCurrentRequest()) {
-                unChunk();
-                unReset();
-                unDone();
-                unError();
-                settle();
-                resolvePrepare(null);
-                return;
-              }
-              streamUnlistenersRef.current.set(slotId, [unChunk, unReset, unDone, unError]);
-              // Listeners live — hand job back so the batch starter can invoke next.
-              resolvePrepare({
-                job: { slotId, requestId, input: payload },
-                slotInputKey,
-                waitUntilSettled,
-                settle,
-                isCurrentRequest,
-              });
-            } catch (err) {
-              // listen() failure: clear translating and surface error (same as pre-extract path).
-              if (isCurrentRequest()) {
-                patchResult(slotId, {
-                  text: "",
-                  error: getIpcErrorMessage(err, t("translate.errorPrefix")),
-                  isTranslating: false,
-                  inputKey: slotInputKey,
-                });
-              }
-              settle();
-              resolvePrepare(null);
-            }
-          })();
+      const resolveFailureMessage = (errorCode: string | null | undefined, message: string | undefined) =>
+        resolveTranslateFailureMessage(errorCode, message, {
+          timeout: t("translate.errors.timeout"),
+          fallback: t("translate.errorPrefix"),
         });
-      };
 
       // Per-slot: prepare listeners, then batch-start that job (N parallel single-job batches).
       // Keeps start-as-ready timing; slotBatch still owns invoke isolation + cancel helpers.
       await Promise.all(
         activeSlots.map(async (slot) => {
           const epoch = epochs.get(slot.id) ?? -1;
-          if (!isSlotEpochCurrent(slot.id, epoch)) {
+          if (!slotStreams.isSlotEpochCurrent(slot.id, epoch)) {
             return;
           }
 
-          const requestId = newId();
-          requestIdsRef.current.set(slot.id, requestId);
+          const requestId = newClientRequestId("qt");
+          slotStreams.setRequestId(slot.id, requestId);
 
           try {
             const profile = await queryClient.fetchQuery(profileDetailOptions(slot.profileId));
-            if (!isSlotEpochCurrent(slot.id, epoch)) {
-              requestIdsRef.current.delete(slot.id);
+            if (!slotStreams.isSlotEpochCurrent(slot.id, epoch)) {
+              slotStreams.deleteRequestId(slot.id);
               return;
             }
 
@@ -879,7 +485,7 @@ function QuickTranslatePage() {
                 isTranslating: false,
                 inputKey: slotInputKey,
               });
-              requestIdsRef.current.delete(slot.id);
+              slotStreams.deleteRequestId(slot.id);
               return;
             }
 
@@ -896,7 +502,7 @@ function QuickTranslatePage() {
               preferredTarget: prefs.preferredTarget,
             });
 
-            const payload: SlotStreamPayload = {
+            const payload: TranslateInput = {
               modelId,
               sourceLang: t(`translate.languages.${sourceId}`),
               targetLang: t(`translate.languages.${effectiveTargetId}`),
@@ -908,8 +514,80 @@ function QuickTranslatePage() {
               effectiveTargetLangId: effectiveTargetId,
             };
 
+            // First chunk replaces any retained previous result; later chunks append.
+            let receivedChunk = false;
+
             // User-facing translation always streams; non-stream IPC is reserved for internal work.
-            const prepared = await prepareSlotStream(slot.id, epoch, requestId, payload, slotInputKey);
+            // Listen-before-invoke: prepareSlotStream registers listeners before batch start.
+            const prepared = await slotStreams.prepareSlotStream(slot.id, epoch, requestId, payload, {
+              onChunk: (chunk) => {
+                const isFirstChunk = !receivedChunk;
+                receivedChunk = true;
+                setResults((prev) => {
+                  const current = prev[slot.id] ?? emptyResult;
+                  return {
+                    ...prev,
+                    [slot.id]: {
+                      ...current,
+                      text: isFirstChunk ? chunk.delta : current.text + chunk.delta,
+                      error: null,
+                      isTranslating: true,
+                      streamOutputActive: true,
+                    },
+                  };
+                });
+              },
+              onReset: () => {
+                // Drop partial text from the failed model before fallback chunks arrive.
+                receivedChunk = false;
+                patchResult(slot.id, {
+                  text: "",
+                  error: null,
+                  isTranslating: true,
+                  streamOutputActive: false,
+                });
+              },
+              onDone: (done) => {
+                if (done.ok) {
+                  // Prefer full text from the server so we do not drift on partial assembly.
+                  patchResult(slot.id, {
+                    text: done.translatedText,
+                    error: null,
+                    isTranslating: false,
+                    streamOutputActive: false,
+                    inputKey: slotInputKey,
+                  });
+                } else {
+                  patchResult(slot.id, {
+                    text: "",
+                    error: resolveFailureMessage(done.errorCode, done.message),
+                    isTranslating: false,
+                    streamOutputActive: false,
+                    inputKey: slotInputKey,
+                  });
+                }
+              },
+              onError: (err) => {
+                patchResult(slot.id, {
+                  text: "",
+                  error: resolveFailureMessage(err.errorCode, err.message),
+                  isTranslating: false,
+                  streamOutputActive: false,
+                  inputKey: slotInputKey,
+                });
+              },
+              onCancelled: () => {
+                patchResult(slot.id, { isTranslating: false, streamOutputActive: false });
+              },
+              onListenFailure: (err) => {
+                patchResult(slot.id, {
+                  text: "",
+                  error: getIpcErrorMessage(err, t("translate.errorPrefix")),
+                  isTranslating: false,
+                  inputKey: slotInputKey,
+                });
+              },
+            });
             if (!prepared) {
               return;
             }
@@ -922,7 +600,7 @@ function QuickTranslatePage() {
                   text: "",
                   error: getIpcErrorMessage(outcome.error, t("translate.errorPrefix")),
                   isTranslating: false,
-                  inputKey: prepared.slotInputKey,
+                  inputKey: slotInputKey,
                 });
               }
               prepared.settle();
@@ -935,11 +613,11 @@ function QuickTranslatePage() {
             }
             await prepared.waitUntilSettled;
           } catch (err) {
-            if (!isSlotEpochCurrent(slot.id, epoch)) {
+            if (!slotStreams.isSlotEpochCurrent(slot.id, epoch)) {
               return;
             }
-            requestIdsRef.current.delete(slot.id);
-            clearSlotStreamListeners(slot.id);
+            slotStreams.deleteRequestId(slot.id);
+            slotStreams.clearSlotStreamListeners(slot.id);
             patchResult(slot.id, {
               text: "",
               error: getIpcErrorMessage(err, t("translate.errorPrefix")),
@@ -951,16 +629,12 @@ function QuickTranslatePage() {
       );
     },
     [
-      abortRequest,
-      abortSlots,
-      clearSlotStreamListeners,
       enabledModelIds,
       failSlots,
       i18n.language,
-      isSlotEpochCurrent,
-      nextSlotEpoch,
       patchResult,
       queryClient,
+      slotStreams,
       sourceLang,
       sourceText,
       t,
@@ -1050,7 +724,7 @@ function QuickTranslatePage() {
         }
         unlisten = fn;
         try {
-          await invoke("notify_ready");
+          await notifyReady();
         } catch {
           // Window may be tearing down; next mount re-notifies.
         }
@@ -1139,7 +813,7 @@ function QuickTranslatePage() {
         return;
       }
       lastContentHeightRef.current = height;
-      void invoke("resize_window_height", { height })
+      void resizeWindowHeight(height)
         .catch(() => {
           // Window may have been closed between measure and invoke.
         })
@@ -1186,7 +860,7 @@ function QuickTranslatePage() {
   }, [contentMeasureEl]);
 
   function addSlot(profileId: string) {
-    const slot: Slot = { id: newId(), profileId };
+    const slot: Slot = { id: newClientRequestId("qt"), profileId };
     setSlots((prev) => [...prev, slot]);
     // Only the new card translates; existing results stay put.
     if (sourceText.trim()) {
@@ -1195,7 +869,7 @@ function QuickTranslatePage() {
   }
 
   function removeSlot(slotId: string) {
-    nextSlotEpoch(slotId);
+    slotStreams.nextSlotEpoch(slotId);
     setSlots((prev) => prev.filter((slot) => slot.id !== slotId));
     setResults((prev) => {
       const next = { ...prev };
@@ -1210,8 +884,8 @@ function QuickTranslatePage() {
       next.delete(slotId);
       return next;
     });
-    void abortRequest(slotId);
-    slotEpochRef.current.delete(slotId);
+    void slotStreams.abortRequest(slotId);
+    slotStreams.deleteSlotEpoch(slotId);
   }
 
   function setSlotOpen(slotId: string, open: boolean) {
@@ -1222,8 +896,8 @@ function QuickTranslatePage() {
 
     if (!open) {
       // Collapsing: leave the translation queue and abort any in-flight request.
-      nextSlotEpoch(slotId);
-      void abortRequest(slotId);
+      slotStreams.nextSlotEpoch(slotId);
+      void slotStreams.abortRequest(slotId);
       setResults((prev) => {
         const current = prev[slotId];
         if (!current?.isTranslating) {
