@@ -5,12 +5,7 @@ import { readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
 import { Effect, Either } from "effect";
 import { invokeEffect } from "../../storage/invokeEffect";
 import type { IpcError } from "../../storage/ipcError";
-import type {
-  ConfigurationExport,
-  ImportConflictMode,
-  ImportPreview,
-  ImportResult,
-} from "../../storage/types";
+import type { ConfigurationExport, ImportConflictMode, ImportPreview, ImportResult } from "../../storage/types";
 import { FsError, toFsError } from "../fsError";
 
 /** Local timestamp for the default export filename: YYYYMMDDTHHMMSS. */
@@ -79,8 +74,7 @@ export function saveConfigurationDocumentToFile(
 }
 
 export type LoadConfigurationResult =
-  | { readonly status: "loaded"; readonly document: ConfigurationExport }
-  | { readonly status: "cancelled" };
+  { readonly status: "loaded"; readonly document: ConfigurationExport } | { readonly status: "cancelled" };
 
 /** Structural check for a configuration export document (not full schema validation). */
 export function parseConfigurationExportJson(raw: string): ConfigurationExport {
@@ -137,18 +131,13 @@ export function loadConfigurationDocumentFromFile(): Effect.Effect<LoadConfigura
   });
 }
 
-export type ExportConfigurationToFileResult =
-  | { readonly status: "written" }
-  | { readonly status: "cancelled" };
+export type ExportConfigurationToFileResult = { readonly status: "written" } | { readonly status: "cancelled" };
 
 /**
  * Full export pipeline: IPC export → save dialog → write file.
  * Error channel is `IpcError | FsError`. Cancel is a success variant.
  */
-export function exportConfigurationToFile(): Effect.Effect<
-  ExportConfigurationToFileResult,
-  IpcError | FsError
-> {
+export function exportConfigurationToFile(): Effect.Effect<ExportConfigurationToFileResult, IpcError | FsError> {
   return Effect.gen(function* () {
     const document = yield* exportConfigurationDocument();
     return yield* saveConfigurationDocumentToFile(document);
@@ -203,9 +192,6 @@ export function runExportConfigurationToFile(): Promise<ExportConfigurationToFil
 }
 
 /** Promise façade: import configuration from a user-chosen JSON file. */
-export function runImportConfigurationFromFile(
-  mode: ImportConflictMode,
-): Promise<ImportConfigurationFromFileResult> {
+export function runImportConfigurationFromFile(mode: ImportConflictMode): Promise<ImportConfigurationFromFileResult> {
   return runTransfer(importConfigurationFromFile(mode));
 }
-

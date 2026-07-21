@@ -21,9 +21,7 @@ function localFilenameStamp(date = new Date()): string {
  * Succeeds with `false` on dialog cancel; fails with `FsError` on write/dialog errors
  * (never maps to IPC codes such as `conflict`).
  */
-export function exportHistoryCsvEffect(
-  rows: readonly TranslationHistoryDto[],
-): Effect.Effect<boolean, FsError> {
+export function exportHistoryCsvEffect(rows: readonly TranslationHistoryDto[]): Effect.Effect<boolean, FsError> {
   return Effect.gen(function* () {
     const csv = buildHistoryCsv(rows);
     const defaultPath = `langnext-history-${localFilenameStamp()}.csv`;

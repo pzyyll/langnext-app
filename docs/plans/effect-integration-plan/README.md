@@ -10,12 +10,12 @@
 
 ## Documents
 
-| Doc | Role | Mergeable alone? |
-|-----|------|------------------|
-| [phase-1-ipc-foundation.md](./phase-1-ipc-foundation.md) | Typed `IpcError`, `invokeEffect`, Promise bridge, conflict pilot | Yes — first ship |
-| [phase-2-translate-usecases.md](./phase-2-translate-usecases.md) | Stream / detect / multi-slot use-cases out of routes | Yes — after Phase 1 |
-| [phase-3-workflows.md](./phase-3-workflows.md) | Bootstrap, config transfer, history export | Yes — after Phase 1 (Phase 2 not required) |
-| [phase-4-optional.md](./phase-4-optional.md) | Ordered writes, architecture note polish | Optional |
+| Doc                                                              | Role                                                             | Mergeable alone?                           |
+| ---------------------------------------------------------------- | ---------------------------------------------------------------- | ------------------------------------------ |
+| [phase-1-ipc-foundation.md](./phase-1-ipc-foundation.md)         | Typed `IpcError`, `invokeEffect`, Promise bridge, conflict pilot | Yes — first ship                           |
+| [phase-2-translate-usecases.md](./phase-2-translate-usecases.md) | Stream / detect / multi-slot use-cases out of routes             | Yes — after Phase 1                        |
+| [phase-3-workflows.md](./phase-3-workflows.md)                   | Bootstrap, config transfer, history export                       | Yes — after Phase 1 (Phase 2 not required) |
+| [phase-4-optional.md](./phase-4-optional.md)                     | Ordered writes, architecture note polish                         | Optional                                   |
 
 Phase plans are full implementation plans (file map, tasks, validation). This file is the roadmap only: sequencing, shared decisions, and cross-phase constraints.
 
@@ -56,14 +56,14 @@ Rust -> StorageError -> IpcError { code, message }
 
 ### Layer rules
 
-| Layer | Rule |
-|-------|------|
-| `src/components/*` | No Effect imports |
-| `src/query/*` | Promise storage APIs only |
-| `src/storage/*` | Owns IPC Effect adapter + typed errors |
-| `src/features/*` use-cases | May compose Effects; export runners for routes |
-| `src/routes/*` | Thin: call runners; no deep Effect pipelines in JSX |
-| Secrets / logs | Never put credentials in Effect errors; use `logger` redaction |
+| Layer                      | Rule                                                           |
+| -------------------------- | -------------------------------------------------------------- |
+| `src/components/*`         | No Effect imports                                              |
+| `src/query/*`              | Promise storage APIs only                                      |
+| `src/storage/*`            | Owns IPC Effect adapter + typed errors                         |
+| `src/features/*` use-cases | May compose Effects; export runners for routes                 |
+| `src/routes/*`             | Thin: call runners; no deep Effect pipelines in JSX            |
+| Secrets / logs             | Never put credentials in Effect errors; use `logger` redaction |
 
 ---
 
@@ -79,12 +79,12 @@ Phase 1  IPC foundation          [required first]
    '---> Phase 4  Optional polish          [after Phase 1; mostly docs / opportunistic]
 ```
 
-| Phase | Outcome | Depends on |
-|-------|---------|------------|
-| 1 | `effect` dep; `IpcError`; `invokeEffect` + `runStorage`; client bridge; ProviderEditor conflict still works | — |
-| 2 | Translate stream/detect/slot batch as feature modules; thinner routes | Phase 1 |
-| 3 | Bootstrap + configuration transfer + history export typed cancel/fail | Phase 1 |
-| 4 | Theme queue only if second ordered-write appears; architecture doc note | Phase 1 |
+| Phase | Outcome                                                                                                     | Depends on |
+| ----- | ----------------------------------------------------------------------------------------------------------- | ---------- |
+| 1     | `effect` dep; `IpcError`; `invokeEffect` + `runStorage`; client bridge; ProviderEditor conflict still works | —          |
+| 2     | Translate stream/detect/slot batch as feature modules; thinner routes                                       | Phase 1    |
+| 3     | Bootstrap + configuration transfer + history export typed cancel/fail                                       | Phase 1    |
+| 4     | Theme queue only if second ordered-write appears; architecture doc note                                     | Phase 1    |
 
 ---
 
@@ -111,12 +111,12 @@ Known codes (open union — unknown string codes from the wire are kept, not for
 
 ## Rollout
 
-| Item | Guidance |
-|------|----------|
-| First merge | Phase 1 only (`feat/effect-ipc`) |
+| Item           | Guidance                                                  |
+| -------------- | --------------------------------------------------------- |
+| First merge    | Phase 1 only (`feat/effect-ipc`)                          |
 | Later branches | `feat/effect-translate-usecases`, `feat/effect-workflows` |
-| Migrations | None (no DB / no IPC version bump) |
-| Bundle | Note main-chunk delta after Phase 1 (`mise run build`) |
+| Migrations     | None (no DB / no IPC version bump)                        |
+| Bundle         | Note main-chunk delta after Phase 1 (`mise run build`)    |
 
 ### Cross-phase validation (any phase PR)
 
@@ -139,25 +139,25 @@ mise run lint
 
 ## Open Questions
 
-| Question | Default | Affects |
-|----------|---------|---------|
-| Multi-slot cancel: fibers vs explicit `requestId` sets | Explicit `requestId` + `cancel_translate` | Phase 2 |
-| Config transfer path: `features/settings` vs `features/import-export` | `src/features/settings/configurationTransfer.ts` | Phase 3 |
-| Architecture note timing | Phase 4 (or append early in Phase 1 PR if useful) | Phase 4 |
+| Question                                                              | Default                                           | Affects |
+| --------------------------------------------------------------------- | ------------------------------------------------- | ------- |
+| Multi-slot cancel: fibers vs explicit `requestId` sets                | Explicit `requestId` + `cancel_translate`         | Phase 2 |
+| Config transfer path: `features/settings` vs `features/import-export` | `src/features/settings/configurationTransfer.ts`  | Phase 3 |
+| Architecture note timing                                              | Phase 4 (or append early in Phase 1 PR if useful) | Phase 4 |
 
 ---
 
 ## Requirement Traceability
 
-| Intent | Phase plan |
-|--------|------------|
-| Typed IPC errors + bridge | Phase 1 |
-| Keep Query; progressive adoption | Phase 1 (+ rules here) |
-| Conflict pilot | Phase 1 |
-| Translate orchestration extraction | Phase 2 |
-| Bootstrap / import-export / history export | Phase 3 |
-| Optional ordered-write unification | Phase 4 |
-| No component-level Effect | All phases |
+| Intent                                     | Phase plan             |
+| ------------------------------------------ | ---------------------- |
+| Typed IPC errors + bridge                  | Phase 1                |
+| Keep Query; progressive adoption           | Phase 1 (+ rules here) |
+| Conflict pilot                             | Phase 1                |
+| Translate orchestration extraction         | Phase 2                |
+| Bootstrap / import-export / history export | Phase 3                |
+| Optional ordered-write unification         | Phase 4                |
+| No component-level Effect                  | All phases             |
 
 ---
 

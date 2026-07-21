@@ -143,13 +143,13 @@
 
 ## Failure Behavior
 
-| Failure | Behavior |
-|---------|----------|
-| Bootstrap IPC failure | Promise rejects `IpcError`; startup error handling unchanged at caller |
-| History dialog cancel | Non-error; `false` / not written |
-| History write failure | Error distinct from cancel; UI toast via existing history route path |
-| Config IPC validation/conflict | `IpcError` codes; toast with sanitized message |
-| Config dialog cancel | Silent / soft; no throw |
+| Failure                        | Behavior                                                               |
+| ------------------------------ | ---------------------------------------------------------------------- |
+| Bootstrap IPC failure          | Promise rejects `IpcError`; startup error handling unchanged at caller |
+| History dialog cancel          | Non-error; `false` / not written                                       |
+| History write failure          | Error distinct from cancel; UI toast via existing history route path   |
+| Config IPC validation/conflict | `IpcError` codes; toast with sanitized message                         |
+| Config dialog cancel           | Silent / soft; no throw                                                |
 
 ---
 
@@ -171,11 +171,11 @@
 
 ## Risks and Mitigations
 
-| Risk | Mitigation |
-|------|------------|
-| Bootstrap regression on first paint | Mocked unit tests + manual cold start |
-| Mis-tagged FS errors as IPC | Local `FsError` (or equivalent); never reuse IPC code strings for dialog/fs |
-| Settings route churn | Touch only import/export handlers |
+| Risk                                | Mitigation                                                                  |
+| ----------------------------------- | --------------------------------------------------------------------------- |
+| Bootstrap regression on first paint | Mocked unit tests + manual cold start                                       |
+| Mis-tagged FS errors as IPC         | Local `FsError` (or equivalent); never reuse IPC code strings for dialog/fs |
+| Settings route churn                | Touch only import/export handlers                                           |
 
 ---
 

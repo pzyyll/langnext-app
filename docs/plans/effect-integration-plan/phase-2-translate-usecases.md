@@ -150,13 +150,13 @@
 
 ## Failure Behavior
 
-| Failure | Behavior |
-|---------|----------|
-| Stream invoke validation failure | `IpcError` before/without chunks; UI error prefix via i18n |
-| Detect failure | `IpcError`; UI detect-failed copy |
-| One slot fails in batch | That slot error only; others continue |
-| User abort all | `cancelTranslate` per active id; in-flight UI cleared per existing UX |
-| Event listener errors | Unchanged from current route handling (out of Effect path unless later extracted) |
+| Failure                          | Behavior                                                                          |
+| -------------------------------- | --------------------------------------------------------------------------------- |
+| Stream invoke validation failure | `IpcError` before/without chunks; UI error prefix via i18n                        |
+| Detect failure                   | `IpcError`; UI detect-failed copy                                                 |
+| One slot fails in batch          | That slot error only; others continue                                             |
+| User abort all                   | `cancelTranslate` per active id; in-flight UI cleared per existing UX             |
+| Event listener errors            | Unchanged from current route handling (out of Effect path unless later extracted) |
 
 ---
 
@@ -178,11 +178,11 @@
 
 ## Risks and Mitigations
 
-| Risk | Mitigation |
-|------|------------|
-| Fiber/HMR leaks | Default explicit requestId cancel; short-lived `runPromise` |
-| Regress stream race (listeners after invoke) | Document + test ordering; code review checklist |
-| Mega-diff in `quick-translate.tsx` | Task 2 then Task 3; avoid unrelated cleanup |
+| Risk                                         | Mitigation                                                  |
+| -------------------------------------------- | ----------------------------------------------------------- |
+| Fiber/HMR leaks                              | Default explicit requestId cancel; short-lived `runPromise` |
+| Regress stream race (listeners after invoke) | Document + test ordering; code review checklist             |
+| Mega-diff in `quick-translate.tsx`           | Task 2 then Task 3; avoid unrelated cleanup                 |
 
 ---
 

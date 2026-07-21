@@ -270,8 +270,7 @@ function BackupSettingsSection() {
       void queryClient.invalidateQueries({ queryKey: profileKeys.all });
 
       const needsAuth =
-        result.result.preview.requiresAuthentication.length > 0 ||
-        result.result.preview.proxyRequiresAuthentication;
+        result.result.preview.requiresAuthentication.length > 0 || result.result.preview.proxyRequiresAuthentication;
       if (needsAuth) {
         toast.success({
           title: t("settings.backup.importSuccess"),

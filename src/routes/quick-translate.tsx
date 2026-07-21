@@ -45,11 +45,7 @@ import {
   profileListOptions,
   providerListOptions,
 } from "../query/options";
-import {
-  runCancelRequestIds,
-  runDetectLanguage,
-  runStartSlotStreamBatch,
-} from "../features/translate/runTranslate";
+import { runCancelRequestIds, runDetectLanguage, runStartSlotStreamBatch } from "../features/translate/runTranslate";
 import type { SlotStreamJob } from "../features/translate/slotBatch";
 import {
   TRANSLATE_CHUNK_EVENT,

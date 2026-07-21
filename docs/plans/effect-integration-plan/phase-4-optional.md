@@ -119,10 +119,10 @@
 
 ## Risks and Mitigations
 
-| Risk | Mitigation |
-|------|------------|
-| Premature queue abstraction | Hard gate: second consumer required |
-| Doc drift | Link to phase plans; update when Phase 2/3 land |
+| Risk                        | Mitigation                                      |
+| --------------------------- | ----------------------------------------------- |
+| Premature queue abstraction | Hard gate: second consumer required             |
+| Doc drift                   | Link to phase plans; update when Phase 2/3 land |
 
 ---
 
