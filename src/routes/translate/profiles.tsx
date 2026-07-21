@@ -275,6 +275,53 @@ function parseOptionalNumber(raw: string): number | null {
   return value;
 }
 
+/** Apply an in-progress card rename so dirty checks match Save payload flush. */
+function withPendingTemplateRename(
+  draft: ProfileDraft,
+  renamingTemplateId: string | null,
+  renameValue: string,
+): ProfileDraft {
+  if (!renamingTemplateId) {
+    return draft;
+  }
+  const trimmed = renameValue.trim();
+  if (!trimmed) {
+    return draft;
+  }
+  const current = draft.promptTemplates.find((template) => template.id === renamingTemplateId);
+  if (!current || current.name === trimmed) {
+    return draft;
+  }
+  return {
+    ...draft,
+    promptTemplates: draft.promptTemplates.map((template) =>
+      template.id === renamingTemplateId ? { ...template, name: trimmed } : template,
+    ),
+  };
+}
+
+/** Field-level equality for profile drafts (order-sensitive for lists). */
+function isProfileDraftClean(draft: ProfileDraft, baseline: ProfileDraft): boolean {
+  return (
+    draft.id === baseline.id &&
+    draft.name === baseline.name &&
+    draft.enabled === baseline.enabled &&
+    draft.sourceLang === baseline.sourceLang &&
+    draft.targetLang === baseline.targetLang &&
+    draft.primaryLang === baseline.primaryLang &&
+    draft.preferredTargetLang === baseline.preferredTargetLang &&
+    draft.primaryModelId === baseline.primaryModelId &&
+    draft.languageDetectionModelId === baseline.languageDetectionModelId &&
+    draft.temperature === baseline.temperature &&
+    draft.maxOutputTokens === baseline.maxOutputTokens &&
+    draft.defaultPromptTemplateId === baseline.defaultPromptTemplateId &&
+    draft.templateVersion === baseline.templateVersion &&
+    JSON.stringify(draft.fallbackModelIds) === JSON.stringify(baseline.fallbackModelIds) &&
+    JSON.stringify(draft.promptTemplates) === JSON.stringify(baseline.promptTemplates) &&
+    JSON.stringify(draft.providerOptionsJson) === JSON.stringify(baseline.providerOptionsJson)
+  );
+}
+
 function TranslateProfilesPage() {
   const { t, i18n } = useTranslation();
   const toast = useToast();
@@ -392,6 +439,18 @@ function TranslateProfilesPage() {
     templateDeleteId && draft
       ? (draft.promptTemplates.find((template) => template.id === templateDeleteId) ?? null)
       : null;
+
+  // Create is always dirty; edit mode compares effective draft (incl. pending rename) to detail baseline.
+  const isDirty = useMemo(() => {
+    if (isCreating) {
+      return true;
+    }
+    if (!draft || !derivedDraft) {
+      return false;
+    }
+    const effectiveDraft = withPendingTemplateRename(draft, renamingTemplateId, renameValue);
+    return !isProfileDraftClean(effectiveDraft, derivedDraft);
+  }, [isCreating, draft, derivedDraft, renamingTemplateId, renameValue]);
 
   const saveMutation = useMutation({
     mutationFn: saveTranslationProfile,
@@ -659,7 +718,7 @@ function TranslateProfilesPage() {
   }
 
   function handleSave() {
-    if (!draft) {
+    if (!draft || saveMutation.isPending || !isDirty) {
       return;
     }
 
@@ -963,7 +1022,7 @@ function TranslateProfilesPage() {
                       ${primaryButtonClassName}
                       relative
                     `}
-                    disabled={savePending}
+                    disabled={savePending || !isDirty}
                     focusableWhenDisabled
                     aria-busy={savePending}
                     aria-label={savePending ? t("common.saving") : t("common.save")}
