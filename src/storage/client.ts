@@ -1,15 +1,9 @@
-// ABOUTME: Typed invoke wrappers for the Rust storage subsystem.
-// ABOUTME: No SQL, filesystem, or credential APIs are exposed to React.
+// ABOUTME: Promise façade for Query-backed DTO CRUD over the Rust storage subsystem.
+// ABOUTME: Translate orchestration and file workflows live under src/features/*; no SQL/fs/credential APIs exposed to React.
 import type {
   AppSettingsDto,
   AppSettingsUpdate,
-  ConfigurationExport,
   ConnectionTestResult,
-  DetectLanguageInput,
-  DetectLanguageResult,
-  ImportConflictMode,
-  ImportPreview,
-  ImportResult,
   ManualModelWrite,
   ModelConfigWrite,
   ProviderInstanceDto,
@@ -32,7 +26,14 @@ import type {
 import { invokeEffect } from "./invokeEffect";
 import { runStorage } from "./runStorage";
 
-/** Event names emitted by translate_text_stream. */
+/**
+ * Storage client ownership:
+ * - Query/DTO CRUD (list/save/history/settings/screenshot/etc.) lives here.
+ * - Stream/detect/cancel orchestration: `src/features/translate/*` (`runStartTranslateStream`, `runDetectLanguage`, `runCancelRequestIds`).
+ * - Configuration file transfer: `src/features/settings/configurationTransfer.ts`.
+ *
+ * Event names emitted by `translate_text_stream` (listeners still attach from routes).
+ */
 export const TRANSLATE_CHUNK_EVENT = "translate://chunk";
 export const TRANSLATE_RESET_EVENT = "translate://reset";
 export const TRANSLATE_DONE_EVENT = "translate://done";
@@ -67,31 +68,11 @@ export async function listAllProviderModels(): Promise<ProviderModelDto[]> {
 }
 
 /**
- * Non-streaming translate. Pass `requestId` so `cancelTranslate` can abort mid-flight.
+ * Non-streaming translate. Pass `requestId` so batch cancel (`runCancelRequestIds`)
+ * can abort mid-flight via the shared cancel registry.
  */
 export async function translateText(input: TranslateInput, requestId?: string): Promise<TranslateResult> {
   return runStorage(invokeEffect<TranslateResult>("translate_text", { input, requestId: requestId ?? null }));
-}
-
-/**
- * Start a streaming translation. `requestId` must be registered with event listeners
- * before this invoke so early validation failures cannot race past the active-id assignment.
- */
-export async function translateTextStream(input: TranslateInput, requestId: string): Promise<void> {
-  return runStorage(invokeEffect<void>("translate_text_stream", { input, requestId }));
-}
-
-/** Abort an in-flight translate (stream or non-stream) by client `requestId`. */
-export async function cancelTranslate(requestId: string): Promise<boolean> {
-  return runStorage(invokeEffect<boolean>("cancel_translate", { requestId }));
-}
-
-/**
- * Detect the language of `input.text` via a non-streaming chat completion.
- * Pass `requestId` so `cancelTranslate` can abort mid-flight (same registry as translate).
- */
-export async function detectLanguage(input: DetectLanguageInput, requestId?: string): Promise<DetectLanguageResult> {
-  return runStorage(invokeEffect<DetectLanguageResult>("detect_language", { input, requestId: requestId ?? null }));
 }
 
 export async function saveManualModel(input: ManualModelWrite): Promise<ProviderModelDto> {
@@ -193,24 +174,6 @@ export async function regionScreenshotConfirm(selection: RegionScreenshotSelecti
 /** Cancel the active region screenshot without producing an image. */
 export async function regionScreenshotCancel(): Promise<void> {
   return runStorage(invokeEffect<void>("region_screenshot_cancel"));
-}
-
-export async function exportConfiguration(): Promise<ConfigurationExport> {
-  return runStorage(invokeEffect<ConfigurationExport>("export_configuration"));
-}
-
-export async function previewConfigurationImport(
-  document: ConfigurationExport,
-  mode: ImportConflictMode,
-): Promise<ImportPreview> {
-  return runStorage(invokeEffect<ImportPreview>("preview_configuration_import", { document, mode }));
-}
-
-export async function importConfiguration(
-  document: ConfigurationExport,
-  mode: ImportConflictMode,
-): Promise<ImportResult> {
-  return runStorage(invokeEffect<ImportResult>("import_configuration", { document, mode }));
 }
 
 export async function listTranslationHistory(
