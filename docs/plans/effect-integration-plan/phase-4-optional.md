@@ -40,9 +40,9 @@
 
 **Steps:**
 
-- [ ] Append a short section (do not rewrite the whole doc)
-- [ ] State: Query = persistent DTO cache; Effect = IPC typing + multi-step workflows; routes stay thin; no Effect in components
-- [ ] Link: `docs/plans/effect-integration-plan/README.md`
+- [x] Append a short section (do not rewrite the whole doc)
+- [x] State: Query = persistent DTO cache; Effect = IPC typing + multi-step workflows; routes stay thin; no Effect in components
+- [x] Link: `docs/plans/effect-integration-plan/README.md`
 
 **Validation:**
 
@@ -61,7 +61,7 @@
 
 **Steps:**
 
-- [ ] **Gate:** only proceed if a second ordered-write use-case is being implemented in the same change
+- [x] **Gate:** skipped — only `useTheme` consumes `ThemeMutationQueue` (no second ordered-write use-case)
 - [ ] Preserve public behavior of `enqueue` / `drain` / mutation ids / onSuccess / onFailure
 - [ ] Prefer minimal Effect (serial `flatMap` / queue) over a framework-wide concurrency rewrite
 - [ ] Extend existing tests; do not drop stale-failure cases

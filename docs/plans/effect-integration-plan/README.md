@@ -4,7 +4,7 @@
 
 **Inputs:** Storage/query/translate boundary analysis; `src/storage/*`, `src/query/*`, translate routes; Rust `IpcError` in `src-tauri/src/error.rs`.
 
-**Status:** Planning only (no implementation in this directory).
+**Status:** Phases 1–3 implemented in `src/`; Phase 4 architecture note landed (theme queue rewrite skipped — single consumer). This directory remains the roadmap and phase-plan reference.
 
 ---
 
