@@ -167,9 +167,7 @@ See **[phase-5d-import-rebind.md](./phase-5d-import-rebind.md)** for file map, t
 - [ ] Introduce shared type:
 
   ```ts
-  export type DialogSaveResult =
-    | { readonly status: "written" }
-    | { readonly status: "cancelled" };
+  export type DialogSaveResult = { readonly status: "written" } | { readonly status: "cancelled" };
   ```
 
 - [ ] Change `exportHistoryCsvEffect` success type from `boolean` to `DialogSaveResult`
@@ -281,14 +279,14 @@ rg -n "translateTextStream|cancelTranslate" src --glob "!**/*.test.*"
 
 ## Failure Behavior
 
-| Failure | Expected |
-| ------- | -------- |
-| IPC invoke rejection | Bridge rejects raw `IpcError`; UI uses `getUserErrorMessage` / `getIpcErrorMessage` |
-| Dialog cancel | Success variant `{ status: "cancelled" }` (history + config); no toast |
-| Dialog/fs write/read/parse error | Bridge rejects raw `FsError`; UI uses `getUserErrorMessage` |
-| Slot stream start failure | Per-slot `status: "failed"` outcome; siblings still start |
-| Batch cancel per-id failure | Swallowed; overall Promise resolves |
-| Import invalid preview | Success variant `status: "invalid"`; no import IPC apply |
+| Failure                                       | Expected                                                                                           |
+| --------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| IPC invoke rejection                          | Bridge rejects raw `IpcError`; UI uses `getUserErrorMessage` / `getIpcErrorMessage`                |
+| Dialog cancel                                 | Success variant `{ status: "cancelled" }` (history + config); no toast                             |
+| Dialog/fs write/read/parse error              | Bridge rejects raw `FsError`; UI uses `getUserErrorMessage`                                        |
+| Slot stream start failure                     | Per-slot `status: "failed"` outcome; siblings still start                                          |
+| Batch cancel per-id failure                   | Swallowed; overall Promise resolves                                                                |
+| Import invalid preview                        | Success variant `status: "invalid"`; no import IPC apply                                           |
 | Import applied but settings rebind fails (5D) | Surface IPC error after DB import already applied — document as best-effort rebind (same as today) |
 
 ---
@@ -303,25 +301,25 @@ rg -n "translateTextStream|cancelTranslate" src --glob "!**/*.test.*"
 
 ## Rollout Notes
 
-| Item | Guidance |
-| ---- | -------- |
-| Branch | `refactor/effect-unification` (or `refactor/effect-bridge`, then follow-ups) |
-| Merge order | 5A → 5B → 5C; 5D optional last |
-| Migrations | None (frontend-only; no IPC/DB version bump) |
-| Compat | History export boolean → status union is a **breaking internal API**; only `history.tsx` + tests should need updates |
-| Bundle | No new packages; expect negligible delta |
+| Item        | Guidance                                                                                                             |
+| ----------- | -------------------------------------------------------------------------------------------------------------------- |
+| Branch      | `refactor/effect-unification` (or `refactor/effect-bridge`, then follow-ups)                                         |
+| Merge order | 5A → 5B → 5C; 5D optional last                                                                                       |
+| Migrations  | None (frontend-only; no IPC/DB version bump)                                                                         |
+| Compat      | History export boolean → status union is a **breaking internal API**; only `history.tsx` + tests should need updates |
+| Bundle      | No new packages; expect negligible delta                                                                             |
 
 ---
 
 ## Risks and Mitigations
 
-| Risk | Mitigation |
-| ---- | ---------- |
-| Removing `client` exports breaks a hidden caller | Inventory with search before delete; typecheck is the gate |
-| Generic bridge weakens IPC-only typing at call sites | Keep `runStorage` alias typed to `IpcError` |
-| Status-union migration misses a call site | Typecheck + history tests |
-| Scope creep into translate route rewrite | Explicit out-of-scope: listeners/hooks only if separate plan |
-| Over-abstracting dialog/fs | Share only stamp + `DialogSaveResult` + error message helper |
+| Risk                                                 | Mitigation                                                   |
+| ---------------------------------------------------- | ------------------------------------------------------------ |
+| Removing `client` exports breaks a hidden caller     | Inventory with search before delete; typecheck is the gate   |
+| Generic bridge weakens IPC-only typing at call sites | Keep `runStorage` alias typed to `IpcError`                  |
+| Status-union migration misses a call site            | Typecheck + history tests                                    |
+| Scope creep into translate route rewrite             | Explicit out-of-scope: listeners/hooks only if separate plan |
+| Over-abstracting dialog/fs                           | Share only stamp + `DialogSaveResult` + error message helper |
 
 ---
 
@@ -340,27 +338,27 @@ rg -n "translateTextStream|cancelTranslate" src --glob "!**/*.test.*"
 
 ## Open Questions
 
-| Question | Default | Affects |
-| -------- | ------- | ------- |
-| Delete vs one-cycle deprecate dual `client` exports | **Delete** when inventory empty | 5B |
-| Shared `DialogSaveResult` home (`features/dialogResult.ts` vs export from history and re-export) | **`src/features/dialogResult.ts`** | 5C |
-| Keep `runStorageExit` | **Keep + comment** (test/Cause utility) | 5A |
-| Ship 5D import rebind extraction | **Implemented** (`applyImportedAppSettings`) | 5D |
+| Question                                                                                         | Default                                      | Affects |
+| ------------------------------------------------------------------------------------------------ | -------------------------------------------- | ------- |
+| Delete vs one-cycle deprecate dual `client` exports                                              | **Delete** when inventory empty              | 5B      |
+| Shared `DialogSaveResult` home (`features/dialogResult.ts` vs export from history and re-export) | **`src/features/dialogResult.ts`**           | 5C      |
+| Keep `runStorageExit`                                                                            | **Keep + comment** (test/Cause utility)      | 5A      |
+| Ship 5D import rebind extraction                                                                 | **Implemented** (`applyImportedAppSettings`) | 5D      |
 
 ---
 
 ## Requirement Traceability
 
-| Review finding | Task / sub-phase |
-| -------------- | ---------------- |
-| Triple Promise bridge (`runStorage` / `runTransfer` / history either) | Task 1 / 5A |
-| `asStorageEffect` cast for `never` | Task 1 / 5A |
-| Dual APIs on `client` vs feature runners | Task 2 / 5B |
-| `false` vs `{ status: "cancelled" }` | Task 3 / 5C |
-| Duplicated `localFilenameStamp` | Task 4 / 5C |
-| Duplicated Fs/IPC toast branching | Task 4 / 5C |
-| Cancel policy clarity | Task 4 / 5C |
-| Import post-steps still in route | Task 5 / 5D (optional) |
-| Window chrome raw invoke | Out of scope (documented) |
-| Theme queue Effect rewrite | Out of scope |
-| Layer rules / docs accuracy | Task 6 |
+| Review finding                                                        | Task / sub-phase          |
+| --------------------------------------------------------------------- | ------------------------- |
+| Triple Promise bridge (`runStorage` / `runTransfer` / history either) | Task 1 / 5A               |
+| `asStorageEffect` cast for `never`                                    | Task 1 / 5A               |
+| Dual APIs on `client` vs feature runners                              | Task 2 / 5B               |
+| `false` vs `{ status: "cancelled" }`                                  | Task 3 / 5C               |
+| Duplicated `localFilenameStamp`                                       | Task 4 / 5C               |
+| Duplicated Fs/IPC toast branching                                     | Task 4 / 5C               |
+| Cancel policy clarity                                                 | Task 4 / 5C               |
+| Import post-steps still in route                                      | Task 5 / 5D (optional)    |
+| Window chrome raw invoke                                              | Out of scope (documented) |
+| Theme queue Effect rewrite                                            | Out of scope              |
+| Layer rules / docs accuracy                                           | Task 6                    |

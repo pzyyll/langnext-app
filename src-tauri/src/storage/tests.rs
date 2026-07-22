@@ -36,7 +36,7 @@ fn user_version_is_latest() {
   let (_dir, db) = temp_db();
   db.read(|conn| {
     assert_eq!(read_user_version(conn).unwrap(), latest_version());
-    assert_eq!(latest_version(), 9);
+    assert_eq!(latest_version(), 11);
     Ok(())
   })
   .unwrap();
@@ -49,9 +49,10 @@ fn credential_none_rejects_ref() {
     conn
       .execute(
         "INSERT INTO provider_instances (
-                id, adapter_id, display_name, credential_kind, credential_ref,
+                id, adapter_id, display_name, base_url, base_url_source, auth_scheme_json,
+                credential_kind, credential_ref,
                 enabled, proxy_mode, models_sync_status, created_at, updated_at
-            ) VALUES (?1, 'openai-compatible', 'x', 'none', 'ref', 1, 'inherit', 'never', 't', 't')",
+            ) VALUES (?1, 'openai-compatible', 'x', 'https://api.openai.com/v1', 'plugin_default', '{\"schemaVersion\":1,\"type\":\"none\"}', 'none', 'ref', 1, 'inherit', 'never', 't', 't')",
         rusqlite::params!["p1"],
       )
       .map_err(crate::error::StorageError::from)?;
@@ -67,9 +68,10 @@ fn credential_api_key_allows_null_ref() {
     conn
       .execute(
         "INSERT INTO provider_instances (
-                id, adapter_id, display_name, credential_kind, credential_ref,
+                id, adapter_id, display_name, base_url, base_url_source, auth_scheme_json,
+                credential_kind, credential_ref,
                 enabled, proxy_mode, models_sync_status, created_at, updated_at
-            ) VALUES (?1, 'openai-compatible', 'x', 'api_key', NULL, 1, 'inherit', 'never', 't', 't')",
+            ) VALUES (?1, 'openai-compatible', 'x', 'https://api.openai.com/v1', 'plugin_default', '{\"schemaVersion\":1,\"type\":\"bearer\"}', 'api_key', NULL, 1, 'inherit', 'never', 't', 't')",
         rusqlite::params!["p1"],
       )
       .map_err(crate::error::StorageError::from)?;
@@ -85,9 +87,10 @@ fn model_uniqueness_per_provider() {
     conn
       .execute(
         "INSERT INTO provider_instances (
-                id, adapter_id, display_name, credential_kind, credential_ref,
+                id, adapter_id, display_name, base_url, base_url_source, auth_scheme_json,
+                credential_kind, credential_ref,
                 enabled, proxy_mode, models_sync_status, created_at, updated_at
-            ) VALUES (?1, 'openai-compatible', 'x', 'none', NULL, 1, 'inherit', 'never', 't', 't')",
+            ) VALUES (?1, 'openai-compatible', 'x', 'https://api.openai.com/v1', 'plugin_default', '{\"schemaVersion\":1,\"type\":\"none\"}', 'none', NULL, 1, 'inherit', 'never', 't', 't')",
         rusqlite::params!["p1"],
       )
       .unwrap();
@@ -118,9 +121,10 @@ fn delete_provider_restricts_when_model_exists() {
     conn
       .execute(
         "INSERT INTO provider_instances (
-                id, adapter_id, display_name, credential_kind, credential_ref,
+                id, adapter_id, display_name, base_url, base_url_source, auth_scheme_json,
+                credential_kind, credential_ref,
                 enabled, proxy_mode, models_sync_status, created_at, updated_at
-            ) VALUES ('p1', 'openai-compatible', 'x', 'none', NULL, 1, 'inherit', 'never', 't', 't')",
+            ) VALUES ('p1', 'openai-compatible', 'x', 'https://api.openai.com/v1', 'plugin_default', '{\"schemaVersion\":1,\"type\":\"none\"}', 'none', NULL, 1, 'inherit', 'never', 't', 't')",
         [],
       )
       .unwrap();
@@ -146,9 +150,10 @@ fn profile_target_cascades_on_profile_delete() {
     conn
       .execute(
         "INSERT INTO provider_instances (
-                id, adapter_id, display_name, credential_kind, credential_ref,
+                id, adapter_id, display_name, base_url, base_url_source, auth_scheme_json,
+                credential_kind, credential_ref,
                 enabled, proxy_mode, models_sync_status, created_at, updated_at
-            ) VALUES ('p1', 'openai-compatible', 'x', 'none', NULL, 1, 'inherit', 'never', 't', 't')",
+            ) VALUES ('p1', 'openai-compatible', 'x', 'https://api.openai.com/v1', 'plugin_default', '{\"schemaVersion\":1,\"type\":\"none\"}', 'none', NULL, 1, 'inherit', 'never', 't', 't')",
         [],
       )
       .unwrap();
@@ -198,9 +203,10 @@ fn profile_priority_uniqueness() {
     conn
       .execute(
         "INSERT INTO provider_instances (
-                id, adapter_id, display_name, credential_kind, credential_ref,
+                id, adapter_id, display_name, base_url, base_url_source, auth_scheme_json,
+                credential_kind, credential_ref,
                 enabled, proxy_mode, models_sync_status, created_at, updated_at
-            ) VALUES ('p1', 'openai-compatible', 'x', 'none', NULL, 1, 'inherit', 'never', 't', 't')",
+            ) VALUES ('p1', 'openai-compatible', 'x', 'https://api.openai.com/v1', 'plugin_default', '{\"schemaVersion\":1,\"type\":\"none\"}', 'none', NULL, 1, 'inherit', 'never', 't', 't')",
         [],
       )
       .unwrap();
@@ -301,7 +307,7 @@ fn reject_corrupt_database_on_probe() {
 
 #[test]
 fn migrations_module_latest_version() {
-  assert_eq!(migrations::latest_version(), 9);
+  assert_eq!(migrations::latest_version(), 11);
 }
 
 #[test]
@@ -382,7 +388,9 @@ fn read_snapshot_exports_consistent_aggregate() {
   db.initialize().unwrap();
   // Seed one provider + model
   use crate::domain::model::{Availability, ModelSource, ProviderModel};
-  use crate::domain::provider::{CredentialKind, ModelsSyncStatus, ProviderInstance, ProxyMode};
+  use crate::domain::provider::{
+    AuthSchemeV1, BaseUrlSource, CredentialKind, ModelsSyncStatus, ProviderInstance, ProxyMode,
+  };
   use crate::domain::time::{new_id, now_rfc3339};
   use crate::repositories::{provider_instances, provider_models};
   let pid = new_id();
@@ -395,7 +403,9 @@ fn read_snapshot_exports_consistent_aggregate() {
         id: pid,
         adapter_id: "openai-compatible".into(),
         display_name: "P".into(),
-        base_url_override: None,
+        base_url: "https://api.openai.com/v1".into(),
+        base_url_source: BaseUrlSource::PluginDefault,
+        auth_scheme: AuthSchemeV1::none(),
         credential_kind: CredentialKind::None,
         credential_ref: None,
         enabled: true,

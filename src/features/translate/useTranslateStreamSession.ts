@@ -1,67 +1,49 @@
-// ABOUTME: Single active translate stream session: requestId + listener lifecycle.
-// ABOUTME: Routes own UI/generation guards; this hook only filters by active requestId.
+// ABOUTME: Single active translate stream session with workflow callback ownership.
+// ABOUTME: Routes own UI/generation guards; this hook filters by active requestId.
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import type { UnlistenFn } from "@tauri-apps/api/event";
-import {
-  attachTranslateStreamListeners,
-  detachTranslateStreamListeners,
-  type TranslateStreamHandlers,
-} from "./attachTranslateStreamListeners";
+import type { TranslateResult } from "../../storage/types";
 import { runCancelRequestIds } from "./runTranslate";
+import type { TranslationStreamHandlers } from "./translationWorkflow";
+
+export type StreamSessionHandlers = {
+  onChunk: (delta: string) => void;
+  onReset: (modelId: string) => void;
+  onDone: (result: TranslateResult) => void;
+  onError: (result: TranslateResult) => void;
+};
 
 export type UseTranslateStreamSessionResult = {
-  /** True when a request id is currently tracked (detect or stream). */
   hasActiveRequest: () => boolean;
-  /** Current active request id, or null. */
   getActiveRequestId: () => string | null;
-  /** Track a request id before detect/stream (e.g. cancel correlation). */
   setActiveRequestId: (requestId: string | null) => void;
-  /** Clear active id only when it still matches `requestId`. */
   releaseIfActive: (requestId: string) => void;
-  /** Detach listeners without cancelling IPC. */
   clearListeners: () => void;
-  /**
-   * Cancel the active request (if any), clear id, and detach listeners.
-   * Cancel failures are swallowed by `runCancelRequestIds`.
-   */
   abortActive: () => Promise<void>;
   /**
-   * Attach stream listeners filtered by the active request id, then return.
-   * Caller must invoke `runStartTranslateStream` after this resolves successfully.
-   * Returns false when `shouldContinue` is false after listen (listeners cleaned up).
+   * Assign active request id and return filtered workflow handlers.
+   * Call before `runStartTranslateStream`.
    */
   prepareSession: (
     requestId: string,
-    handlers: TranslateStreamHandlers,
+    handlers: StreamSessionHandlers,
     shouldContinue: () => boolean,
-  ) => Promise<boolean>;
-  /**
-   * Terminal stream event: detach listeners and release active id when it matches.
-   */
+  ) => Promise<TranslationStreamHandlers | null>;
   markTerminal: (requestId: string) => void;
 };
 
-/**
- * Owns one active stream requestId and its unlisten bundle for the main translate page.
- * Generation / workspace guards stay in the route via handler closures + shouldContinue.
- */
 export function useTranslateStreamSession(): UseTranslateStreamSessionResult {
   const activeRequestId = useRef<string | null>(null);
-  const streamUnlisteners = useRef<UnlistenFn[]>([]);
+  const activeHandlers = useRef<StreamSessionHandlers | null>(null);
 
   const clearListeners = useCallback(() => {
-    detachTranslateStreamListeners(streamUnlisteners.current);
-    streamUnlisteners.current = [];
+    activeHandlers.current = null;
   }, []);
 
   const hasActiveRequest = useCallback(() => activeRequestId.current != null, []);
-
   const getActiveRequestId = useCallback(() => activeRequestId.current, []);
-
   const setActiveRequestId = useCallback((requestId: string | null) => {
     activeRequestId.current = requestId;
   }, []);
-
   const releaseIfActive = useCallback((requestId: string) => {
     if (activeRequestId.current === requestId) {
       activeRequestId.current = null;
@@ -79,76 +61,53 @@ export function useTranslateStreamSession(): UseTranslateStreamSessionResult {
   );
 
   const abortActive = useCallback(async () => {
-    const requestId = activeRequestId.current;
+    const id = activeRequestId.current;
     activeRequestId.current = null;
     clearListeners();
-    if (!requestId) {
-      return;
+    if (id) {
+      await runCancelRequestIds([id]);
     }
-    await runCancelRequestIds([requestId]);
   }, [clearListeners]);
 
   const prepareSession = useCallback(
     async (
       requestId: string,
-      handlers: TranslateStreamHandlers,
+      handlers: StreamSessionHandlers,
       shouldContinue: () => boolean,
-    ): Promise<boolean> => {
-      clearListeners();
+    ): Promise<TranslationStreamHandlers | null> => {
       activeRequestId.current = requestId;
-
-      const filtered: TranslateStreamHandlers = {
-        onChunk: (chunk) => {
-          if (chunk.id !== activeRequestId.current) {
-            return;
-          }
-          handlers.onChunk(chunk);
+      activeHandlers.current = handlers;
+      if (!shouldContinue()) {
+        markTerminal(requestId);
+        return null;
+      }
+      const filtered: TranslationStreamHandlers = {
+        onChunk: (delta) => {
+          if (activeRequestId.current !== requestId) return;
+          activeHandlers.current?.onChunk(delta);
         },
-        onReset: (reset) => {
-          if (reset.id !== activeRequestId.current) {
-            return;
-          }
-          handlers.onReset(reset);
+        onReset: (modelId) => {
+          if (activeRequestId.current !== requestId) return;
+          activeHandlers.current?.onReset(modelId);
         },
-        onDone: (done) => {
-          if (done.id !== activeRequestId.current) {
-            return;
-          }
-          handlers.onDone(done);
+        onDone: (result) => {
+          if (activeRequestId.current !== requestId) return;
+          activeHandlers.current?.onDone(result);
         },
-        onError: (err) => {
-          if (err.id !== activeRequestId.current) {
-            return;
-          }
-          handlers.onError(err);
+        onError: (result) => {
+          if (activeRequestId.current !== requestId) return;
+          activeHandlers.current?.onError(result);
         },
       };
-
-      const unlisteners = await attachTranslateStreamListeners(filtered);
-      if (!shouldContinue()) {
-        detachTranslateStreamListeners(unlisteners);
-        // Drop stale active id so a later run does not false-positive "hadActive".
-        if (activeRequestId.current === requestId) {
-          activeRequestId.current = null;
-        }
-        return false;
-      }
-      streamUnlisteners.current = unlisteners;
-      return true;
+      return filtered;
     },
-    [clearListeners],
+    [markTerminal],
   );
 
   useEffect(() => {
     return () => {
-      // Match prior page behavior: cancel in-flight on unmount.
-      const requestId = activeRequestId.current;
       activeRequestId.current = null;
-      detachTranslateStreamListeners(streamUnlisteners.current);
-      streamUnlisteners.current = [];
-      if (requestId) {
-        void runCancelRequestIds([requestId]);
-      }
+      activeHandlers.current = null;
     };
   }, []);
 

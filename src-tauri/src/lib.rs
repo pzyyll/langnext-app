@@ -5,7 +5,6 @@
 #![allow(dead_code)]
 use tauri::{Manager, Runtime};
 
-mod adapters;
 mod cmds;
 mod consts;
 mod credentials;
@@ -127,12 +126,11 @@ pub fn run() {
       cmds::models::update_model_config,
       cmds::models::delete_provider_model,
       cmds::models::delete_provider_models,
-      cmds::models::test_provider_connection,
-      cmds::models::sync_provider_models,
-      cmds::models::translate_text,
-      cmds::models::translate_text_stream,
-      cmds::models::cancel_translate,
-      cmds::models::detect_language,
+      cmds::models::apply_provider_model_sync,
+      cmds::models::apply_provider_model_sync_failure,
+      cmds::provider_http::provider_http_request,
+      cmds::provider_http::provider_http_stream,
+      cmds::provider_http::cancel_provider_http,
       cmds::translation_profiles::list_translation_profiles,
       cmds::translation_profiles::get_translation_profile,
       cmds::translation_profiles::save_translation_profile,
@@ -143,6 +141,7 @@ pub fn run() {
       cmds::ocr_services::save_ocr_service,
       cmds::ocr_services::delete_ocr_service,
       cmds::ocr_services::recognize_ocr,
+      cmds::translation_history::record_translation_history_completion,
       cmds::translation_history::list_translation_history,
       cmds::translation_history::get_translation_history,
       cmds::translation_history::get_translation_history_many,

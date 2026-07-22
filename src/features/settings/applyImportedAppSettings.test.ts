@@ -20,8 +20,7 @@ mock.module("../../storage/client", () => ({
 }));
 
 mock.module("../../theme/theme", () => ({
-  isThemeMode: (value: string | null | undefined): value is "light" | "dark" =>
-    value === "light" || value === "dark",
+  isThemeMode: (value: string | null | undefined): value is "light" | "dark" => value === "light" || value === "dark",
   applyThemeToDom: (mode: "light" | "dark") => applyThemeToDomMock(mode),
 }));
 

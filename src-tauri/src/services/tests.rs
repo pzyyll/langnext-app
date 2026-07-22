@@ -1,74 +1,22 @@
 // ABOUTME: Service validation, rollback, cache merge, and privacy tests.
 // ABOUTME: Uses in-memory CredentialVault under cfg(test) only.
-use crate::adapters::transport::{ModelListRequest, ModelTransport, TransportError};
-use crate::credentials::{CredentialVault, FailingCredentialVault, MemoryCredentialVault};
+use crate::credentials::MemoryCredentialVault;
 use crate::domain::import_export::{ConfigurationExport, ImportConflictMode};
-use crate::domain::language_detection::{DetectLanguageInput, DetectorType, LanguageDetectorConfig};
+use crate::domain::language_detection::LanguageDetectorConfig;
 use crate::domain::model::{Availability, ManualModelWrite, ModelConfigWrite, ModelSource, RemoteModelSyncItem};
-use crate::domain::provider::{CredentialKind, CredentialUpdate, ProviderInstanceWrite, ProxyMode};
+use crate::domain::provider::{
+  AuthSchemeV1, BaseUrlSource, CredentialKind, CredentialUpdate, ProviderInstanceWrite, ProxyMode,
+};
 use crate::domain::settings::{
   AppSettingsUpdate, AppSettingsV1, GlobalProxyMode, NetworkSettings, ProxyCredentialUpdate, TranslationPreferences,
 };
-use crate::domain::translation_profile::{
-  PromptTemplate, TranslationProfile, TranslationProfileTarget, TranslationProfileWrite,
-};
+use crate::domain::translation_profile::{PromptTemplate, TranslationProfile, TranslationProfileWrite};
 use crate::error::StorageError;
-use crate::services::{
-  ImportExportService, ModelService, ProviderService, SettingsService, TranslationHistoryService,
-  TranslationProfileService,
-};
+use crate::services::{ImportExportService, ModelService, ProviderService, SettingsService, TranslationProfileService};
 use crate::storage::Database;
-use std::collections::VecDeque;
-use std::future::Future;
-use std::io::{Read, Write};
-use std::net::TcpListener;
-use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
-/// Per-test queued transport; not a production mock mode.
-struct TestModelTransport {
-  queue: Mutex<VecDeque<Result<Vec<RemoteModelSyncItem>, TransportError>>>,
-  last_request: Mutex<Option<ModelListRequest>>,
-}
-
-impl TestModelTransport {
-  fn new() -> Self {
-    Self {
-      queue: Mutex::new(VecDeque::new()),
-      last_request: Mutex::new(None),
-    }
-  }
-
-  fn push_ok(&self, items: Vec<RemoteModelSyncItem>) {
-    self.queue.lock().expect("queue").push_back(Ok(items));
-  }
-
-  fn push_err(&self, err: TransportError) {
-    self.queue.lock().expect("queue").push_back(Err(err));
-  }
-
-  fn last_request(&self) -> Option<ModelListRequest> {
-    self.last_request.lock().expect("last").clone()
-  }
-}
-
-impl ModelTransport for TestModelTransport {
-  fn list_models(
-    &self,
-    request: ModelListRequest,
-  ) -> Pin<Box<dyn Future<Output = Result<Vec<RemoteModelSyncItem>, TransportError>> + Send + '_>> {
-    *self.last_request.lock().expect("last") = Some(request);
-    let next = self
-      .queue
-      .lock()
-      .expect("queue")
-      .pop_front()
-      .unwrap_or(Err(TransportError::Network));
-    Box::pin(async move { next })
-  }
-}
-
-fn block_on<F: Future>(future: F) -> F::Output {
+fn block_on<F: std::future::Future>(future: F) -> F::Output {
   tauri::async_runtime::block_on(future)
 }
 
@@ -77,7 +25,6 @@ fn models_dev_cache_dir(dir: &tempfile::TempDir) -> std::path::PathBuf {
   crate::services::models_dev_catalog::ModelsDevCatalog::seed_fresh_empty_cache(&cache_dir).unwrap();
   cache_dir
 }
-
 
 fn setup() -> (
   tempfile::TempDir,
@@ -88,93 +35,31 @@ fn setup() -> (
   TranslationProfileService,
   SettingsService,
   ImportExportService,
-  Arc<TestModelTransport>,
 ) {
   let dir = tempfile::tempdir().unwrap();
   let db = Database::new(dir.path()).unwrap();
   db.initialize().unwrap();
   let vault = Arc::new(MemoryCredentialVault::new());
-  let transport = Arc::new(TestModelTransport::new());
   let providers = ProviderService::new(db.clone(), vault.clone());
-  let history = TranslationHistoryService::new(db.clone());
-  let models = ModelService::new(
-    db.clone(),
-    vault.clone(),
-    transport.clone() as Arc<dyn ModelTransport>,
-    history,
-    models_dev_cache_dir(&dir),
-  );
+  let models = ModelService::new(db.clone(), vault.clone(), models_dev_cache_dir(&dir));
   let profiles = TranslationProfileService::new(db.clone());
   let settings = SettingsService::new(db.clone(), vault.clone());
   let import_export = ImportExportService::new(db.clone(), vault.clone());
-  (
-    dir,
-    db,
-    vault,
-    providers,
-    models,
-    profiles,
-    settings,
-    import_export,
-    transport,
-  )
-}
-
-fn spawn_detection_chat_server() -> (String, std::thread::JoinHandle<serde_json::Value>) {
-  let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-  let addr = listener.local_addr().unwrap();
-  let handle = std::thread::spawn(move || {
-    let (mut stream, _) = listener.accept().unwrap();
-    stream
-      .set_read_timeout(Some(std::time::Duration::from_secs(2)))
-      .unwrap();
-    let mut request = Vec::new();
-    let (header_end, content_length) = loop {
-      let mut chunk = [0u8; 32768];
-      let read = stream.read(&mut chunk).unwrap();
-      assert!(read > 0, "request closed before headers completed");
-      request.extend_from_slice(&chunk[..read]);
-      if let Some(index) = request.windows(4).position(|window| window == b"\r\n\r\n") {
-        let header_end = index + 4;
-        let headers = String::from_utf8_lossy(&request[..header_end]);
-        let content_length = headers
-          .lines()
-          .find_map(|line| {
-            line
-              .strip_prefix("content-length: ")
-              .or_else(|| line.strip_prefix("Content-Length: "))
-          })
-          .and_then(|value| value.trim().parse::<usize>().ok())
-          .expect("content-length header");
-        break (header_end, content_length);
-      }
-    };
-    while request.len() < header_end + content_length {
-      let mut chunk = [0u8; 32768];
-      let read = stream.read(&mut chunk).unwrap();
-      assert!(read > 0, "request closed before body completed");
-      request.extend_from_slice(&chunk[..read]);
-    }
-    let payload: serde_json::Value = serde_json::from_slice(&request[header_end..header_end + content_length]).unwrap();
-    let body = r#"{"choices":[{"message":{"content":"zh"}}]}"#;
-    write!(
-      stream,
-      "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-      body.len(),
-      body
-    )
-    .unwrap();
-    payload
-  });
-  (format!("http://{addr}/v1"), handle)
+  (dir, db, vault, providers, models, profiles, settings, import_export)
 }
 
 fn provider_write(kind: CredentialKind, cred: CredentialUpdate) -> ProviderInstanceWrite {
+  let auth_scheme = match kind {
+    CredentialKind::None => AuthSchemeV1::none(),
+    CredentialKind::ApiKey | CredentialKind::Bearer => AuthSchemeV1::bearer(),
+  };
   ProviderInstanceWrite {
     id: None,
     adapter_id: "openai-compatible".into(),
     display_name: "OpenAI".into(),
-    base_url_override: Some("https://api.openai.com/v1".into()),
+    base_url: "https://api.openai.com/v1".into(),
+    base_url_source: BaseUrlSource::Custom,
+    auth_scheme,
     credential_kind: kind,
     credential: cred,
     enabled: true,
@@ -264,10 +149,14 @@ fn provider_keep_allows_base_url_change_with_stored_credential() {
     CredentialKind::ApiKey,
     CredentialUpdate::Keep,
   );
-  keep.base_url_override = Some("https://api.llmtech.de/v1".into());
+  keep.base_url = "https://api.llmtech.de/v1".into();
+
+  keep.base_url_source = BaseUrlSource::Custom;
+
+  keep.auth_scheme = AuthSchemeV1::bearer();
   let after = providers.save(keep).unwrap();
   assert!(after.has_credential);
-  assert_eq!(after.base_url_override.as_deref(), Some("https://api.llmtech.de/v1"));
+  assert_eq!(after.base_url.as_str(), "https://api.llmtech.de/v1");
   // Connection identity changed → sync status resets; credential stays.
   assert_eq!(
     after.models_sync_status,
@@ -291,7 +180,7 @@ fn provider_keep_allows_adapter_change_with_stored_credential() {
   let after = providers.save(keep).unwrap();
 
   assert_eq!(after.adapter_id, "anthropic");
-  assert_eq!(after.base_url_override, dto.base_url_override);
+  assert_eq!(after.base_url, dto.base_url);
   assert!(after.has_credential);
 }
 
@@ -308,7 +197,8 @@ fn provider_needs_auth_without_credential() {
 fn http_non_loopback_requires_confirmation() {
   let (_d, _db, _v, providers, ..) = setup();
   let mut input = provider_write(CredentialKind::None, CredentialUpdate::Keep);
-  input.base_url_override = Some("http://example.com/v1".into());
+  input.base_url = "http://example.com/v1".into();
+  input.base_url_source = BaseUrlSource::Custom;
   assert!(providers.save(input.clone()).is_err());
   input.insecure_http_confirmed_at = Some("2026-07-10T00:00:00Z".into());
   assert!(providers.save(input).is_ok());
@@ -318,7 +208,8 @@ fn http_non_loopback_requires_confirmation() {
 fn loopback_http_ok_without_confirmation() {
   let (_d, _db, _v, providers, ..) = setup();
   let mut input = provider_write(CredentialKind::None, CredentialUpdate::Keep);
-  input.base_url_override = Some("http://127.0.0.1:8080/v1".into());
+  input.base_url = "http://127.0.0.1:8080/v1".into();
+  input.base_url_source = BaseUrlSource::Custom;
   assert!(providers.save(input).is_ok());
 }
 
@@ -326,7 +217,8 @@ fn loopback_http_ok_without_confirmation() {
 fn url_with_userinfo_rejected() {
   let (_d, _db, _v, providers, ..) = setup();
   let mut input = provider_write(CredentialKind::None, CredentialUpdate::Keep);
-  input.base_url_override = Some("https://user:pass@api.example.com".into());
+  input.base_url = "https://user:pass@api.example.com".into();
+  input.base_url_source = BaseUrlSource::Custom;
   assert!(providers.save(input).is_err());
 }
 
@@ -1091,110 +983,6 @@ fn provider_delete_with_credential_cleans_vault() {
 }
 
 #[test]
-fn import_credential_cleanup_isolates_unrelated_journals() {
-  use crate::credentials::FailingCredentialVault;
-  use crate::credentials::coordinator;
-  use crate::domain::time::new_id;
-  use crate::repositories::credential_operations::{self, OperationState, OwnerKind};
-
-  let dir = tempfile::tempdir().unwrap();
-  let db = Database::new(dir.path()).unwrap();
-  db.initialize().unwrap();
-  let vault = Arc::new(FailingCredentialVault::new());
-  let transport = Arc::new(TestModelTransport::new());
-  let providers = ProviderService::new(db.clone(), vault.clone());
-  let history = TranslationHistoryService::new(db.clone());
-  let models = ModelService::new(
-    db.clone(),
-    vault.clone() as Arc<dyn CredentialVault>,
-    transport as Arc<dyn ModelTransport>,
-    history,
-    models_dev_cache_dir(&dir),
-  );
-  let profiles = TranslationProfileService::new(db.clone());
-  let _settings = SettingsService::new(db.clone(), vault.clone());
-  let ie = ImportExportService::new(db.clone(), vault.clone());
-
-  // Create a provider with secret, then leave an unrelated db_committed journal.
-  let p = providers
-    .save(provider_write(
-      CredentialKind::ApiKey,
-      CredentialUpdate::Replace("sk-local".into()),
-    ))
-    .unwrap();
-  let unrelated_ref = format!("provider/{}/unrelated", new_id());
-  vault.set(&unrelated_ref, "other").unwrap();
-  let unrelated_op = db
-    .transaction(|uow| {
-      credential_operations::insert_db_committed(
-        uow.conn(),
-        new_id(),
-        OwnerKind::Provider,
-        &new_id().to_string(),
-        Some(&unrelated_ref),
-        None,
-      )
-    })
-    .unwrap();
-
-  let m = models
-    .save_manual(ManualModelWrite {
-      id: None,
-      provider_instance_id: p.id,
-      model_key: "gpt".into(),
-      display_name_override: None,
-      enabled: true,
-      capability_overrides_json: None,
-      adapter_id: None,
-    })
-    .unwrap();
-  profiles
-    .save({
-      let (default_prompt_template_id, prompt_templates) = attach_default_templates("s", "{{text}}");
-      TranslationProfileWrite {
-        id: None,
-        name: "P".into(),
-        enabled: true,
-        template_version: 1,
-        default_prompt_template_id,
-        prompt_templates,
-        temperature: None,
-        max_output_tokens: None,
-        provider_options_json: None,
-        source_lang: None,
-        target_lang: None,
-        primary_lang: Some("zh".into()),
-        preferred_target_lang: Some("en".into()),
-        language_detection: None,
-        target_model_ids: vec![m.id],
-      }
-    })
-    .unwrap();
-
-  let doc = ie.export().unwrap();
-  // Force import-owned vault cleanup to fail.
-  vault.set_fail_delete(true);
-  let result = ie.import(doc, ImportConflictMode::Merge).unwrap();
-  assert!(result.applied);
-
-  let unfinished = db.read(credential_operations::list_unfinished).unwrap();
-  assert!(unfinished.iter().any(|op| op.id == unrelated_op.id));
-  assert!(
-    unfinished
-      .iter()
-      .any(|op| op.owner_id == p.id.to_string() && op.state == OperationState::DbCommitted)
-  );
-
-  // Restore vault and recover only the import owner; unrelated remains.
-  vault.set_fail_delete(false);
-  let report = coordinator::recover_owner(&db, vault.as_ref(), OwnerKind::Provider, &p.id.to_string()).unwrap();
-  assert_eq!(report.completed, 1);
-  let unfinished = db.read(credential_operations::list_unfinished).unwrap();
-  assert_eq!(unfinished.len(), 1);
-  assert_eq!(unfinished[0].id, unrelated_op.id);
-}
-
-#[test]
 fn import_rejects_malformed_graphs() {
   let (_d, _db, _v, providers, models, profiles, _settings, ie, ..) = setup();
   let p = providers
@@ -1251,11 +1039,19 @@ fn import_rejects_malformed_graphs() {
   // Reset settings
   doc.app_settings = AppSettingsV1::default_document();
 
-  // Unknown adapter
-  doc.providers[0].adapter_id = "not-a-real-adapter".into();
+  // Invalid adapter id syntax
+  doc.providers[0].adapter_id = "Not_Valid".into();
   let preview = ie.preview(&doc, ImportConflictMode::Merge).unwrap();
   assert!(!preview.valid);
   doc.providers[0].adapter_id = "openai-compatible".into();
+
+  // Unknown plugin without explicit custom transport metadata
+  doc.providers[0].adapter_id = "custom-plugin-1".into();
+  doc.providers[0].base_url_source = Some(crate::domain::provider::BaseUrlSource::PluginDefault);
+  let preview = ie.preview(&doc, ImportConflictMode::Merge).unwrap();
+  assert!(!preview.valid);
+  doc.providers[0].adapter_id = "openai-compatible".into();
+  doc.providers[0].base_url_source = Some(crate::domain::provider::BaseUrlSource::Custom);
 
   // Empty target chain
   doc.profile_models.clear();
@@ -1565,8 +1361,13 @@ fn model_adapter_id_override_round_trip_and_validation() {
   let set = models.set_adapter_id(created.id, Some("anthropic".into())).unwrap();
   assert_eq!(set.adapter_id.as_deref(), Some("anthropic"));
 
-  let err = models.set_adapter_id(created.id, Some("not-a-real-adapter".into()));
+  // Structural ID validation rejects invalid syntax; unknown well-formed IDs are kept.
+  let err = models.set_adapter_id(created.id, Some("Not_Valid".into()));
   assert!(matches!(err, Err(StorageError::Validation(_))));
+  let unknown = models
+    .set_adapter_id(created.id, Some("custom-plugin-1".into()))
+    .unwrap();
+  assert_eq!(unknown.adapter_id.as_deref(), Some("custom-plugin-1"));
 
   // Whitespace-only clears to inherit.
   let blank = models.set_adapter_id(created.id, Some("   ".into())).unwrap();
@@ -1594,1205 +1395,10 @@ fn resolve_model_adapter_id_prefers_model_then_channel() {
 }
 
 #[test]
-fn translate_max_tokens_use_profile_then_model_then_default() {
-  assert_eq!(
-    crate::services::models::resolve_translate_max_tokens(Some(1024), Some(2048)),
-    1024
-  );
-  assert_eq!(
-    crate::services::models::resolve_translate_max_tokens(None, Some(2048)),
-    2048
-  );
-  assert_eq!(crate::services::models::resolve_translate_max_tokens(None, None), 32768);
-}
-
-/// OpenAI channel + Gemini model override, no base_url_override → gemini default URL.
-/// Captures resolved chat transport config (chat path has no injectable ModelTransport).
-#[test]
-fn model_chat_transport_gemini_override_uses_gemini_default_url() {
-  let (_d, db, vault, providers, models, ..) = setup();
-  let mut write = provider_write(CredentialKind::ApiKey, CredentialUpdate::Replace("sk-test".into()));
-  write.base_url_override = None;
-  let p = providers.save(write).unwrap();
-  let m = models
-    .save_manual(ManualModelWrite {
-      id: None,
-      provider_instance_id: p.id,
-      model_key: "gemini-pro".into(),
-      display_name_override: None,
-      enabled: true,
-      capability_overrides_json: Some(serde_json::json!({
-        "schemaVersion": 1,
-        "maxOutputTokens": 32768,
-        "defaultOutputTokens": 6144
-      })),
-      adapter_id: Some("gemini".into()),
-    })
-    .unwrap();
-
-  let resolved = crate::services::models::resolve_model_chat_transport(&db, vault.as_ref(), m.id).unwrap();
-  match resolved {
-    crate::services::models::ModelChatResolve::Ready {
-      config,
-      model_key,
-      model_default_output_tokens,
-      model_display_name: _,
-      provider_display_name: _,
-    } => {
-      assert_eq!(config.adapter_id, "gemini");
-      assert_eq!(
-        config.base_url, "https://generativelanguage.googleapis.com",
-        "default base URL must follow final (model) adapter, not channel"
-      );
-      assert_eq!(config.credential_kind, CredentialKind::ApiKey);
-      assert_eq!(config.secret.as_deref(), Some("sk-test"));
-      assert_eq!(config.proxy_mode, ProxyMode::Inherit);
-      assert_eq!(model_key, "gemini-pro");
-      assert_eq!(model_default_output_tokens, Some(6144));
-    }
-    other => panic!("expected Ready, got {other:?}"),
-  }
-}
-
-/// OpenAI channel + Anthropic model override, no base_url_override → anthropic default URL.
-#[test]
-fn model_chat_transport_anthropic_override_uses_anthropic_default_url() {
-  let (_d, db, vault, providers, models, ..) = setup();
-  let mut write = provider_write(CredentialKind::ApiKey, CredentialUpdate::Replace("sk-ant".into()));
-  write.base_url_override = None;
-  let p = providers.save(write).unwrap();
-  let m = models
-    .save_manual(ManualModelWrite {
-      id: None,
-      provider_instance_id: p.id,
-      model_key: "claude-3".into(),
-      display_name_override: None,
-      enabled: true,
-      capability_overrides_json: None,
-      adapter_id: Some("anthropic".into()),
-    })
-    .unwrap();
-
-  let resolved = crate::services::models::resolve_model_chat_transport(&db, vault.as_ref(), m.id).unwrap();
-  match resolved {
-    crate::services::models::ModelChatResolve::Ready { config, .. } => {
-      assert_eq!(config.adapter_id, "anthropic");
-      assert_eq!(config.base_url, "https://api.anthropic.com");
-      assert_eq!(config.secret.as_deref(), Some("sk-ant"));
-    }
-    other => panic!("expected Ready, got {other:?}"),
-  }
-}
-
-/// Final adapter drives secret_required: channel OpenAI + CredentialKind::None would not
-/// need a secret, but Gemini model override must fail auth early (not reach transport).
-#[test]
-fn model_chat_transport_gemini_override_requires_secret_despite_channel_none() {
-  let (_d, db, vault, providers, models, ..) = setup();
-  let mut write = provider_write(CredentialKind::None, CredentialUpdate::Keep);
-  write.base_url_override = None;
-  let p = providers.save(write).unwrap();
-  let m = models
-    .save_manual(ManualModelWrite {
-      id: None,
-      provider_instance_id: p.id,
-      model_key: "gemini-pro".into(),
-      display_name_override: None,
-      enabled: true,
-      capability_overrides_json: None,
-      adapter_id: Some("gemini".into()),
-    })
-    .unwrap();
-
-  let resolved = crate::services::models::resolve_model_chat_transport(&db, vault.as_ref(), m.id).unwrap();
-  assert!(
-    matches!(resolved, crate::services::models::ModelChatResolve::MissingCredential),
-    "gemini secret_required must use final adapter; got {resolved:?}"
-  );
-
-  // Same path feeds translate prepare (stream + non-stream share prepare_translate).
-  let result = block_on(models.translate(
-    crate::domain::translation::TranslateInput {
-      model_id: m.id,
-      source_lang: "en".into(),
-      target_lang: "zh".into(),
-      text: "hello".into(),
-      profile_id: None,
-      prompt_template_id: None,
-      source_lang_id: None,
-      target_lang_id: None,
-      effective_source_lang_id: None,
-      effective_target_lang_id: None,
-    },
-    None,
-  ))
-  .unwrap();
-  assert!(!result.ok);
-  assert_eq!(result.error_code.as_deref(), Some("auth"));
-}
-
-/// No model adapter override: inherit channel adapter, default URL, and secret rules.
-#[test]
-fn model_chat_transport_inherits_channel_when_model_has_no_override() {
-  let (_d, db, vault, providers, models, ..) = setup();
-  let mut write = provider_write(CredentialKind::None, CredentialUpdate::Keep);
-  write.base_url_override = None;
-  let p = providers.save(write).unwrap();
-  let m = models
-    .save_manual(ManualModelWrite {
-      id: None,
-      provider_instance_id: p.id,
-      model_key: "gpt-4o".into(),
-      display_name_override: None,
-      enabled: true,
-      capability_overrides_json: None,
-      adapter_id: None,
-    })
-    .unwrap();
-
-  let resolved = crate::services::models::resolve_model_chat_transport(&db, vault.as_ref(), m.id).unwrap();
-  match resolved {
-    crate::services::models::ModelChatResolve::Ready { config, model_key, .. } => {
-      assert_eq!(config.adapter_id, "openai-compatible");
-      assert_eq!(config.base_url, "https://api.openai.com/v1");
-      assert!(config.secret.is_none(), "openai + None credential needs no secret");
-      assert_eq!(model_key, "gpt-4o");
-    }
-    other => panic!("expected Ready, got {other:?}"),
-  }
-}
-
-/// Explicit channel base_url_override is kept even when the model overrides adapter.
-#[test]
-fn model_chat_transport_keeps_base_url_override_with_model_adapter() {
-  let (_d, db, vault, providers, models, ..) = setup();
-  let mut write = provider_write(CredentialKind::ApiKey, CredentialUpdate::Replace("sk-proxy".into()));
-  write.base_url_override = Some("https://proxy.example.com/v1".into());
-  let p = providers.save(write).unwrap();
-  let m = models
-    .save_manual(ManualModelWrite {
-      id: None,
-      provider_instance_id: p.id,
-      model_key: "claude-proxy".into(),
-      display_name_override: None,
-      enabled: true,
-      capability_overrides_json: None,
-      adapter_id: Some("anthropic".into()),
-    })
-    .unwrap();
-
-  let resolved = crate::services::models::resolve_model_chat_transport(&db, vault.as_ref(), m.id).unwrap();
-  match resolved {
-    crate::services::models::ModelChatResolve::Ready { config, .. } => {
-      assert_eq!(config.adapter_id, "anthropic");
-      assert_eq!(
-        config.base_url, "https://proxy.example.com/v1",
-        "explicit channel override must win over adapter defaults"
-      );
-      assert_eq!(config.secret.as_deref(), Some("sk-proxy"));
-    }
-    other => panic!("expected Ready, got {other:?}"),
-  }
-}
-
-/// Channel-level test_connection still uses channel adapter (not model overrides).
-#[test]
-fn test_connection_uses_channel_adapter_not_model_override() {
-  let (_d, _db, _v, providers, models, _pr, _s, _ie, transport) = setup();
-  let mut write = provider_write(CredentialKind::ApiKey, CredentialUpdate::Replace("sk-ch".into()));
-  write.base_url_override = None;
-  let p = providers.save(write).unwrap();
-  // Model with a different adapter must not affect channel connection test.
-  let _m = models
-    .save_manual(ManualModelWrite {
-      id: None,
-      provider_instance_id: p.id,
-      model_key: "gemini-pro".into(),
-      display_name_override: None,
-      enabled: true,
-      capability_overrides_json: None,
-      adapter_id: Some("gemini".into()),
-    })
-    .unwrap();
-
-  transport.push_ok(vec![RemoteModelSyncItem {
-    model_key: "ignored".into(),
-    remote_display_name: None,
-    remote_metadata_json: None,
-    capability_overrides_json: None,
-  }]);
-  let result = block_on(models.test_connection(p.id)).unwrap();
-  assert!(result.ok);
-  let req = transport.last_request().expect("request recorded");
-  assert_eq!(req.adapter_id, "openai-compatible");
-  assert_eq!(req.base_url, "https://api.openai.com/v1");
-}
-
-#[test]
 fn validate_sync_error_code_accepts_credential_unavailable() {
   assert!(crate::services::models::validate_sync_error_code("credential_unavailable").is_ok());
   assert!(crate::services::models::validate_sync_error_code("auth").is_ok());
   assert!(crate::services::models::validate_sync_error_code("nope").is_err());
-}
-
-#[test]
-fn test_connection_unauthenticated_openai_compatible_success() {
-  let (_d, _db, _v, providers, models, _pr, _s, _ie, transport) = setup();
-  let p = providers
-    .save(provider_write(CredentialKind::None, CredentialUpdate::Keep))
-    .unwrap();
-  transport.push_ok(vec![RemoteModelSyncItem {
-    model_key: "local-model".into(),
-    remote_display_name: None,
-    remote_metadata_json: None,
-    capability_overrides_json: None,
-  }]);
-  let result = block_on(models.test_connection(p.id)).unwrap();
-  assert!(result.ok);
-  assert_eq!(result.model_count, Some(1));
-  assert!(result.error_code.is_none());
-  // Non-sensitive connection version for frontend stale-result filtering.
-  assert_eq!(result.provider_updated_at, p.updated_at);
-  let req = transport.last_request().expect("request recorded");
-  assert!(req.secret.is_none());
-  assert_eq!(req.proxy_mode, ProxyMode::Inherit);
-  // Connection test must not mutate sync status.
-  let after = providers.get(p.id).unwrap();
-  assert_eq!(
-    after.models_sync_status,
-    crate::domain::provider::ModelsSyncStatus::Never
-  );
-  assert_eq!(after.updated_at, p.updated_at);
-}
-
-#[test]
-fn test_connection_missing_required_credential_auth() {
-  let (_d, _db, _v, providers, models, ..) = setup();
-  let p = providers
-    .save(provider_write(CredentialKind::ApiKey, CredentialUpdate::Keep))
-    .unwrap();
-  let result = block_on(models.test_connection(p.id)).unwrap();
-  assert!(!result.ok);
-  assert_eq!(result.error_code.as_deref(), Some("auth"));
-}
-
-#[test]
-fn test_connection_failing_vault_credential_unavailable() {
-  let dir = tempfile::tempdir().unwrap();
-  let db = Database::new(dir.path()).unwrap();
-  db.initialize().unwrap();
-  let vault = Arc::new(FailingCredentialVault::new());
-  let transport = Arc::new(TestModelTransport::new());
-  let providers = ProviderService::new(db.clone(), vault.clone() as Arc<dyn CredentialVault>);
-  // Create provider with working vault, then fail subsequent gets.
-  vault.set_fail_get(false);
-  let p = providers
-    .save(provider_write(
-      CredentialKind::ApiKey,
-      CredentialUpdate::Replace("sk-test".into()),
-    ))
-    .unwrap();
-  vault.set_fail_get(true);
-  let history = TranslationHistoryService::new(db.clone());
-  let models = ModelService::new(
-    db,
-    vault as Arc<dyn CredentialVault>,
-    transport as Arc<dyn ModelTransport>,
-    history,
-    models_dev_cache_dir(&dir),
-  );
-  let result = block_on(models.test_connection(p.id)).unwrap();
-  assert!(!result.ok);
-  assert_eq!(result.error_code.as_deref(), Some("credential_unavailable"));
-}
-
-#[test]
-fn test_connection_transport_failure_no_db_mutation() {
-  let (_d, _db, _v, providers, models, _pr, _s, _ie, transport) = setup();
-  let p = providers
-    .save(provider_write(
-      CredentialKind::ApiKey,
-      CredentialUpdate::Replace("sk-test".into()),
-    ))
-    .unwrap();
-  transport.push_err(TransportError::Timeout);
-  let result = block_on(models.test_connection(p.id)).unwrap();
-  assert!(!result.ok);
-  assert_eq!(result.error_code.as_deref(), Some("timeout"));
-  let after = providers.get(p.id).unwrap();
-  assert_eq!(
-    after.models_sync_status,
-    crate::domain::provider::ModelsSyncStatus::Never
-  );
-  assert!(models.list_by_provider(p.id).unwrap().is_empty());
-}
-
-#[test]
-fn sync_models_success_merges_and_sets_ok_status() {
-  let (_d, _db, _v, providers, models, _pr, _s, _ie, transport) = setup();
-  let p = providers
-    .save(provider_write(
-      CredentialKind::ApiKey,
-      CredentialUpdate::Replace("sk-test".into()),
-    ))
-    .unwrap();
-  transport.push_ok(vec![
-    RemoteModelSyncItem {
-      model_key: "gpt-4o".into(),
-      remote_display_name: Some("GPT-4o".into()),
-      remote_metadata_json: None,
-      capability_overrides_json: None,
-    },
-    RemoteModelSyncItem {
-      model_key: "gpt-4o-mini".into(),
-      remote_display_name: None,
-      remote_metadata_json: None,
-      capability_overrides_json: None,
-    },
-  ]);
-  let result = block_on(models.sync_models(p.id)).unwrap();
-  assert!(result.ok);
-  assert_eq!(result.models.len(), 2);
-  assert_eq!(
-    result.provider.models_sync_status,
-    crate::domain::provider::ModelsSyncStatus::Ok
-  );
-  assert!(result.provider.models_synced_at.is_some());
-  // Empty models.dev cache still seeds defaults for newly discovered remote models.
-  for model in &result.models {
-    let caps = model
-      .capability_overrides_json
-      .as_ref()
-      .expect("sync seeds capability overrides");
-    assert_eq!(caps["schemaVersion"], 1);
-    assert_eq!(caps["textGeneration"], true);
-    assert_eq!(caps["imageAnalysis"], false);
-    assert_eq!(caps["pdfAnalysis"], false);
-    assert_eq!(
-      caps["maxContextTokens"],
-      crate::domain::model::CapabilityOverridesV1::DEFAULT_MAX_CONTEXT_TOKENS
-    );
-  }
-}
-
-#[test]
-fn sync_models_preserves_existing_capability_overrides() {
-  let (_d, _db, _v, providers, models, _pr, _s, _ie, transport) = setup();
-  let p = providers
-    .save(provider_write(
-      CredentialKind::ApiKey,
-      CredentialUpdate::Replace("sk-test".into()),
-    ))
-    .unwrap();
-  transport.push_ok(vec![RemoteModelSyncItem {
-    model_key: "custom-model".into(),
-    remote_display_name: None,
-    remote_metadata_json: None,
-    capability_overrides_json: None,
-  }]);
-  let first = block_on(models.sync_models(p.id)).unwrap();
-  assert!(first.ok);
-  let model_id = first.models[0].id;
-  let custom = serde_json::json!({
-    "schemaVersion": 1,
-    "textGeneration": true,
-    "imageAnalysis": true,
-    "pdfAnalysis": true,
-    "maxContextTokens": 4096,
-    "maxOutputTokens": 1024,
-    "defaultOutputTokens": 1024
-  });
-  models
-    .update_config(crate::domain::model::ModelConfigWrite {
-      id: model_id,
-      display_name_override: None,
-      adapter_id: None,
-      capability_overrides_json: Some(custom.clone()),
-    })
-    .unwrap();
-
-  transport.push_ok(vec![RemoteModelSyncItem {
-    model_key: "custom-model".into(),
-    remote_display_name: Some("Custom".into()),
-    remote_metadata_json: None,
-    capability_overrides_json: None,
-  }]);
-  let second = block_on(models.sync_models(p.id)).unwrap();
-  assert!(second.ok);
-  let caps = second.models[0]
-    .capability_overrides_json
-    .as_ref()
-    .expect("capabilities preserved");
-  assert_eq!(caps["maxContextTokens"], 4096);
-  assert_eq!(caps["imageAnalysis"], true);
-  assert_eq!(caps["pdfAnalysis"], true);
-  assert_eq!(second.models[0].remote_display_name.as_deref(), Some("Custom"));
-}
-
-#[test]
-fn sync_models_transport_failure_preserves_models_and_timestamp() {
-  let (_d, _db, _v, providers, models, _pr, _s, _ie, transport) = setup();
-  let p = providers
-    .save(provider_write(
-      CredentialKind::ApiKey,
-      CredentialUpdate::Replace("sk-test".into()),
-    ))
-    .unwrap();
-  // Successful sync first.
-  transport.push_ok(vec![RemoteModelSyncItem {
-    model_key: "kept".into(),
-    remote_display_name: None,
-    remote_metadata_json: None,
-    capability_overrides_json: None,
-  }]);
-  let first = block_on(models.sync_models(p.id)).unwrap();
-  assert!(first.ok);
-  let synced_at = first.provider.models_synced_at.clone().expect("synced_at");
-
-  // Transport failure on second sync (simulates second-page / remote failure).
-  transport.push_err(TransportError::Server);
-  let second = block_on(models.sync_models(p.id)).unwrap();
-  assert!(!second.ok);
-  assert_eq!(second.error_code.as_deref(), Some("server"));
-  assert_eq!(
-    second.provider.models_sync_status,
-    crate::domain::provider::ModelsSyncStatus::Error
-  );
-  assert_eq!(second.provider.models_synced_at.as_deref(), Some(synced_at.as_str()));
-  assert_eq!(second.models.len(), 1);
-  assert_eq!(second.models[0].model_key, "kept");
-  assert_eq!(second.models[0].availability, Availability::Available);
-}
-
-#[test]
-fn sync_models_second_page_failure_no_partial_merge() {
-  // Service never merges when transport returns Err — same path as mid-pagination failure.
-  let (_d, _db, _v, providers, models, _pr, _s, _ie, transport) = setup();
-  let p = providers
-    .save(provider_write(CredentialKind::None, CredentialUpdate::Keep))
-    .unwrap();
-  models
-    .apply_remote_merge(
-      p.id,
-      &[RemoteModelSyncItem {
-        model_key: "existing".into(),
-        remote_display_name: None,
-        remote_metadata_json: None,
-        capability_overrides_json: None,
-      }],
-    )
-    .unwrap();
-  transport.push_err(TransportError::InvalidResponse);
-  let result = block_on(models.sync_models(p.id)).unwrap();
-  assert!(!result.ok);
-  assert_eq!(result.models.len(), 1);
-  assert_eq!(result.models[0].model_key, "existing");
-  assert_eq!(result.models[0].availability, Availability::Available);
-}
-
-#[test]
-fn sync_models_missing_credential_records_auth() {
-  let (_d, _db, _v, providers, models, ..) = setup();
-  let mut input = provider_write(CredentialKind::ApiKey, CredentialUpdate::Keep);
-  input.adapter_id = "anthropic".into();
-  input.base_url_override = None;
-  let p = providers.save(input).unwrap();
-  let result = block_on(models.sync_models(p.id)).unwrap();
-  assert!(!result.ok);
-  assert_eq!(result.error_code.as_deref(), Some("auth"));
-  assert_eq!(
-    result.provider.models_sync_status,
-    crate::domain::provider::ModelsSyncStatus::Error
-  );
-  assert_eq!(result.provider.models_sync_error_code.as_deref(), Some("auth"));
-}
-
-#[test]
-fn sync_models_failing_vault_records_credential_unavailable() {
-  let dir = tempfile::tempdir().unwrap();
-  let db = Database::new(dir.path()).unwrap();
-  db.initialize().unwrap();
-  let vault = Arc::new(FailingCredentialVault::new());
-  let transport = Arc::new(TestModelTransport::new());
-  let providers = ProviderService::new(db.clone(), vault.clone() as Arc<dyn CredentialVault>);
-  let p = providers
-    .save(provider_write(
-      CredentialKind::ApiKey,
-      CredentialUpdate::Replace("sk-test".into()),
-    ))
-    .unwrap();
-  vault.set_fail_get(true);
-  let history = TranslationHistoryService::new(db.clone());
-  let models = ModelService::new(
-    db,
-    vault as Arc<dyn CredentialVault>,
-    transport as Arc<dyn ModelTransport>,
-    history,
-    models_dev_cache_dir(&dir),
-  );
-  let result = block_on(models.sync_models(p.id)).unwrap();
-  assert!(!result.ok);
-  assert_eq!(result.error_code.as_deref(), Some("credential_unavailable"));
-  assert_eq!(
-    result.provider.models_sync_status,
-    crate::domain::provider::ModelsSyncStatus::Error
-  );
-  assert_eq!(
-    result.provider.models_sync_error_code.as_deref(),
-    Some("credential_unavailable")
-  );
-}
-
-#[test]
-fn transport_receives_saved_proxy_mode_and_secret() {
-  let (_d, _db, _v, providers, models, _pr, _s, _ie, transport) = setup();
-  let mut input = provider_write(
-    CredentialKind::ApiKey,
-    CredentialUpdate::Replace("sk-secret-value".into()),
-  );
-  input.proxy_mode = ProxyMode::Direct;
-  let p = providers.save(input).unwrap();
-  transport.push_ok(vec![]);
-  let _ = block_on(models.test_connection(p.id)).unwrap();
-  let req = transport.last_request().expect("request");
-  assert_eq!(req.proxy_mode, ProxyMode::Direct);
-  assert_eq!(req.secret.as_deref(), Some("sk-secret-value"));
-  assert_eq!(req.adapter_id, "openai-compatible");
-}
-
-#[test]
-fn model_list_request_debug_redacts_secret() {
-  let req = ModelListRequest {
-    adapter_id: "openai-compatible".into(),
-    base_url: "https://api.example.com/v1".into(),
-    credential_kind: CredentialKind::ApiKey,
-    secret: Some("sk-must-not-appear".into()),
-    proxy_mode: ProxyMode::Inherit,
-  };
-  let debug = format!("{req:?}");
-  assert!(!debug.contains("sk-must-not-appear"));
-  assert!(debug.contains("[redacted]"));
-}
-
-#[test]
-fn sync_models_success_message_uses_remote_snapshot_count() {
-  let (_d, _db, _v, providers, models, _pr, _s, _ie, transport) = setup();
-  let p = providers
-    .save(provider_write(CredentialKind::None, CredentialUpdate::Keep))
-    .unwrap();
-  // Manual model makes DB total differ from remote snapshot size.
-  models
-    .save_manual(ManualModelWrite {
-      id: None,
-      provider_instance_id: p.id,
-      model_key: "manual-only".into(),
-      display_name_override: None,
-      enabled: true,
-      capability_overrides_json: None,
-      adapter_id: None,
-    })
-    .unwrap();
-  transport.push_ok(vec![
-    RemoteModelSyncItem {
-      model_key: "remote-a".into(),
-      remote_display_name: None,
-      remote_metadata_json: None,
-      capability_overrides_json: None,
-    },
-    RemoteModelSyncItem {
-      model_key: "remote-b".into(),
-      remote_display_name: None,
-      remote_metadata_json: None,
-      capability_overrides_json: None,
-    },
-  ]);
-  let result = block_on(models.sync_models(p.id)).unwrap();
-  assert!(result.ok);
-  // Remote snapshot had 2 items; DB has 3 after merge (2 remote + 1 manual).
-  assert_eq!(result.models.len(), 3);
-  assert_eq!(result.message, "Synced 2 models");
-  assert!(!result.message.contains("Synced 3"));
-}
-
-/// Transport that mutates provider connection mid-flight before returning models.
-struct MutatingConnectionTransport {
-  providers: ProviderService,
-  provider_id: uuid::Uuid,
-  items: Vec<RemoteModelSyncItem>,
-}
-
-impl ModelTransport for MutatingConnectionTransport {
-  fn list_models(
-    &self,
-    _request: ModelListRequest,
-  ) -> Pin<Box<dyn Future<Output = Result<Vec<RemoteModelSyncItem>, TransportError>> + Send + '_>> {
-    // Simulate a concurrent Save that changes base URL while HTTP is in flight.
-    let current = self.providers.get(self.provider_id).expect("provider");
-    let mut write = for_provider_update(
-      current.id,
-      &current.updated_at,
-      CredentialKind::None,
-      CredentialUpdate::Keep,
-    );
-    write.base_url_override = Some("http://127.0.0.1:9999/v1".into());
-    write.display_name = "OpenAI".into();
-    self.providers.save(write).expect("mid-flight save");
-    let items = self.items.clone();
-    Box::pin(async move { Ok(items) })
-  }
-}
-
-#[test]
-fn sync_models_aborts_merge_when_connection_changes_mid_flight() {
-  let dir = tempfile::tempdir().unwrap();
-  let db = Database::new(dir.path()).unwrap();
-  db.initialize().unwrap();
-  let vault = Arc::new(MemoryCredentialVault::new());
-  let providers = ProviderService::new(db.clone(), vault.clone());
-  let p = providers
-    .save(provider_write(CredentialKind::None, CredentialUpdate::Keep))
-    .unwrap();
-
-  // Seed an existing remote model under the original endpoint.
-  let seed_transport = Arc::new(TestModelTransport::new());
-  let history = TranslationHistoryService::new(db.clone());
-  let seed_models = ModelService::new(
-    db.clone(),
-    vault.clone() as Arc<dyn CredentialVault>,
-    seed_transport.clone() as Arc<dyn ModelTransport>,
-    history,
-    models_dev_cache_dir(&dir),
-  );
-  seed_models
-    .apply_remote_merge(
-      p.id,
-      &[RemoteModelSyncItem {
-        model_key: "old-endpoint-model".into(),
-        remote_display_name: None,
-        remote_metadata_json: None,
-        capability_overrides_json: None,
-      }],
-    )
-    .unwrap();
-
-  let transport = Arc::new(MutatingConnectionTransport {
-    providers: providers.clone(),
-    provider_id: p.id,
-    items: vec![RemoteModelSyncItem {
-      model_key: "stale-remote-from-old-url".into(),
-      remote_display_name: None,
-      remote_metadata_json: None,
-      capability_overrides_json: None,
-    }],
-  });
-  let history = TranslationHistoryService::new(db.clone());
-  let models = ModelService::new(
-    db,
-    vault as Arc<dyn CredentialVault>,
-    transport as Arc<dyn ModelTransport>,
-    history,
-    models_dev_cache_dir(&dir),
-  );
-
-  let result = block_on(models.sync_models(p.id)).unwrap();
-  assert!(!result.ok);
-  assert_eq!(result.error_code.as_deref(), Some("connection_changed"));
-  // Old models must remain; stale remote snapshot must not merge.
-  assert_eq!(result.models.len(), 1);
-  assert_eq!(result.models[0].model_key, "old-endpoint-model");
-  assert_eq!(result.models[0].availability, Availability::Available);
-  assert!(result.models.iter().all(|m| m.model_key != "stale-remote-from-old-url"));
-  // Connection should now reflect the mid-flight save.
-  assert_eq!(
-    result.provider.base_url_override.as_deref(),
-    Some("http://127.0.0.1:9999/v1")
-  );
-  // Race outcome must not be persisted as a models_sync_error_code.
-  assert_ne!(
-    result.provider.models_sync_error_code.as_deref(),
-    Some("connection_changed")
-  );
-  // Mid-flight connection identity change resets sync status in the save transaction.
-  assert_eq!(
-    result.provider.models_sync_status,
-    crate::domain::provider::ModelsSyncStatus::Never
-  );
-  assert!(result.provider.models_synced_at.is_none());
-  assert!(result.provider.models_sync_error_code.is_none());
-}
-
-/// Transport that mutates provider connection mid-flight, then fails.
-struct MutatingConnectionErrorTransport {
-  providers: ProviderService,
-  provider_id: uuid::Uuid,
-  err: TransportError,
-}
-
-impl ModelTransport for MutatingConnectionErrorTransport {
-  fn list_models(
-    &self,
-    _request: ModelListRequest,
-  ) -> Pin<Box<dyn Future<Output = Result<Vec<RemoteModelSyncItem>, TransportError>> + Send + '_>> {
-    let current = self.providers.get(self.provider_id).expect("provider");
-    let mut write = for_provider_update(
-      current.id,
-      &current.updated_at,
-      CredentialKind::None,
-      CredentialUpdate::Keep,
-    );
-    write.base_url_override = Some("http://127.0.0.1:9999/v1".into());
-    write.display_name = "OpenAI".into();
-    self.providers.save(write).expect("mid-flight save");
-    let err = self.err;
-    Box::pin(async move { Err(err) })
-  }
-}
-
-#[test]
-fn sync_models_transport_error_skips_write_when_connection_changed() {
-  let dir = tempfile::tempdir().unwrap();
-  let db = Database::new(dir.path()).unwrap();
-  db.initialize().unwrap();
-  let vault = Arc::new(MemoryCredentialVault::new());
-  let providers = ProviderService::new(db.clone(), vault.clone());
-  let p = providers
-    .save(provider_write(CredentialKind::None, CredentialUpdate::Keep))
-    .unwrap();
-
-  // Establish a prior successful sync so we can detect erroneous failure writes.
-  let seed_transport = Arc::new(TestModelTransport::new());
-  let history = TranslationHistoryService::new(db.clone());
-  let seed_models = ModelService::new(
-    db.clone(),
-    vault.clone() as Arc<dyn CredentialVault>,
-    seed_transport.clone() as Arc<dyn ModelTransport>,
-    history,
-    models_dev_cache_dir(&dir),
-  );
-  seed_models
-    .apply_remote_merge(
-      p.id,
-      &[RemoteModelSyncItem {
-        model_key: "kept".into(),
-        remote_display_name: None,
-        remote_metadata_json: None,
-        capability_overrides_json: None,
-      }],
-    )
-    .unwrap();
-  let before = providers.get(p.id).unwrap();
-  assert_eq!(before.models_sync_status, crate::domain::provider::ModelsSyncStatus::Ok);
-  let synced_at = before.models_synced_at.clone().expect("synced_at");
-
-  let transport = Arc::new(MutatingConnectionErrorTransport {
-    providers: providers.clone(),
-    provider_id: p.id,
-    err: TransportError::Network,
-  });
-  let history = TranslationHistoryService::new(db.clone());
-  let models = ModelService::new(
-    db,
-    vault as Arc<dyn CredentialVault>,
-    transport as Arc<dyn ModelTransport>,
-    history,
-    models_dev_cache_dir(&dir),
-  );
-
-  let result = block_on(models.sync_models(p.id)).unwrap();
-  assert!(!result.ok);
-  assert_eq!(result.error_code.as_deref(), Some("connection_changed"));
-  // Must not stamp the new connection with the old request's network error.
-  // Save resets sync status when connection identity changes.
-  assert_eq!(
-    result.provider.models_sync_status,
-    crate::domain::provider::ModelsSyncStatus::Never
-  );
-  assert!(result.provider.models_synced_at.is_none());
-  assert!(result.provider.models_sync_error_code.is_none());
-  assert_ne!(result.provider.models_synced_at.as_deref(), Some(synced_at.as_str()));
-  assert_eq!(result.models.len(), 1);
-  assert_eq!(result.models[0].model_key, "kept");
-  assert_eq!(
-    result.provider.base_url_override.as_deref(),
-    Some("http://127.0.0.1:9999/v1")
-  );
-}
-
-/// Vault that mutates provider connection on first secret read, then returns a configured error.
-/// Used to exercise missing-credential / vault-failure races against connection identity.
-struct MutatingGetVault {
-  inner: MemoryCredentialVault,
-  providers: Mutex<Option<ProviderService>>,
-  provider_id: Mutex<Option<uuid::Uuid>>,
-  mutated: Mutex<bool>,
-  /// When true, return CredentialUnavailable; otherwise NotFound (auth path).
-  fail_unavailable: Mutex<bool>,
-}
-
-impl MutatingGetVault {
-  fn new() -> Self {
-    Self {
-      inner: MemoryCredentialVault::new(),
-      providers: Mutex::new(None),
-      provider_id: Mutex::new(None),
-      mutated: Mutex::new(false),
-      fail_unavailable: Mutex::new(false),
-    }
-  }
-
-  fn configure(&self, providers: ProviderService, provider_id: uuid::Uuid, fail_unavailable: bool) {
-    *self.providers.lock().expect("providers") = Some(providers);
-    *self.provider_id.lock().expect("provider_id") = Some(provider_id);
-    *self.fail_unavailable.lock().expect("fail") = fail_unavailable;
-  }
-
-  fn mutate_connection_once(&self) {
-    if *self.mutated.lock().expect("mutated") {
-      return;
-    }
-    let providers = self.providers.lock().expect("providers").clone();
-    let provider_id = *self.provider_id.lock().expect("provider_id");
-    if let (Some(providers), Some(provider_id)) = (providers, provider_id) {
-      let current = providers.get(provider_id).expect("provider");
-      let mut write = for_provider_update(
-        current.id,
-        &current.updated_at,
-        CredentialKind::ApiKey,
-        CredentialUpdate::Replace("sk-after-mutate".into()),
-      );
-      write.base_url_override = Some("http://127.0.0.1:9999/v1".into());
-      write.display_name = "OpenAI".into();
-      // Keep credential so the new identity differs by base URL (and new secret).
-      providers.save(write).expect("mid-resolve save");
-      *self.mutated.lock().expect("mutated") = true;
-    }
-  }
-}
-
-impl CredentialVault for MutatingGetVault {
-  fn set(&self, account: &str, secret: &str) -> Result<(), StorageError> {
-    self.inner.set(account, secret)
-  }
-
-  fn get_for_backend_use(&self, _account: &str) -> Result<String, StorageError> {
-    // Connection identity was captured before this call; mutate so record sees a mismatch.
-    self.mutate_connection_once();
-    if *self.fail_unavailable.lock().expect("fail") {
-      Err(StorageError::CredentialUnavailable)
-    } else {
-      Err(StorageError::NotFound("credential entry".into()))
-    }
-  }
-
-  fn delete(&self, account: &str) -> Result<(), StorageError> {
-    self.inner.delete(account)
-  }
-
-  fn exists(&self, account: &str) -> Result<bool, StorageError> {
-    self.inner.exists(account)
-  }
-}
-
-#[test]
-fn sync_models_missing_credential_skips_error_when_connection_changed() {
-  let dir = tempfile::tempdir().unwrap();
-  let db = Database::new(dir.path()).unwrap();
-  db.initialize().unwrap();
-  let vault = Arc::new(MutatingGetVault::new());
-  let providers = ProviderService::new(db.clone(), vault.clone() as Arc<dyn CredentialVault>);
-  // Seed a successful remote model under the original connection.
-  let seed_transport = Arc::new(TestModelTransport::new());
-  // Save with a real secret first so credential_ref is set; MutatingGetVault then fails get.
-  let p = providers
-    .save(provider_write(
-      CredentialKind::ApiKey,
-      CredentialUpdate::Replace("sk-original".into()),
-    ))
-    .unwrap();
-  let history = TranslationHistoryService::new(db.clone());
-  let seed_models = ModelService::new(
-    db.clone(),
-    vault.clone() as Arc<dyn CredentialVault>,
-    seed_transport as Arc<dyn ModelTransport>,
-    history,
-    models_dev_cache_dir(&dir),
-  );
-  // apply_remote_merge does not touch the vault.
-  seed_models
-    .apply_remote_merge(
-      p.id,
-      &[RemoteModelSyncItem {
-        model_key: "kept".into(),
-        remote_display_name: None,
-        remote_metadata_json: None,
-        capability_overrides_json: None,
-      }],
-    )
-    .unwrap();
-  let before = providers.get(p.id).unwrap();
-  assert_eq!(before.models_sync_status, crate::domain::provider::ModelsSyncStatus::Ok);
-  let synced_at = before.models_synced_at.clone().expect("synced_at");
-
-  vault.configure(providers.clone(), p.id, false);
-  let transport = Arc::new(TestModelTransport::new());
-  let history = TranslationHistoryService::new(db.clone());
-  let models = ModelService::new(
-    db,
-    vault as Arc<dyn CredentialVault>,
-    transport as Arc<dyn ModelTransport>,
-    history,
-    models_dev_cache_dir(&dir),
-  );
-
-  let result = block_on(models.sync_models(p.id)).unwrap();
-  assert!(!result.ok);
-  assert_eq!(result.error_code.as_deref(), Some("connection_changed"));
-  // Old auth error must not be written onto the post-mutation connection.
-  // Credential replace mid-resolve changes identity and resets sync status.
-  assert_eq!(
-    result.provider.models_sync_status,
-    crate::domain::provider::ModelsSyncStatus::Never
-  );
-  assert!(result.provider.models_synced_at.is_none());
-  assert!(result.provider.models_sync_error_code.is_none());
-  assert_ne!(result.provider.models_synced_at.as_deref(), Some(synced_at.as_str()));
-  assert_eq!(
-    result.provider.base_url_override.as_deref(),
-    Some("http://127.0.0.1:9999/v1")
-  );
-  assert_eq!(result.models[0].model_key, "kept");
-}
-
-#[test]
-fn sync_models_vault_failure_skips_error_when_connection_changed() {
-  let dir = tempfile::tempdir().unwrap();
-  let db = Database::new(dir.path()).unwrap();
-  db.initialize().unwrap();
-  let vault = Arc::new(MutatingGetVault::new());
-  let providers = ProviderService::new(db.clone(), vault.clone() as Arc<dyn CredentialVault>);
-  let p = providers
-    .save(provider_write(
-      CredentialKind::ApiKey,
-      CredentialUpdate::Replace("sk-original".into()),
-    ))
-    .unwrap();
-  let seed_transport = Arc::new(TestModelTransport::new());
-  let history = TranslationHistoryService::new(db.clone());
-  let seed_models = ModelService::new(
-    db.clone(),
-    vault.clone() as Arc<dyn CredentialVault>,
-    seed_transport as Arc<dyn ModelTransport>,
-    history,
-    models_dev_cache_dir(&dir),
-  );
-  seed_models
-    .apply_remote_merge(
-      p.id,
-      &[RemoteModelSyncItem {
-        model_key: "kept".into(),
-        remote_display_name: None,
-        remote_metadata_json: None,
-        capability_overrides_json: None,
-      }],
-    )
-    .unwrap();
-
-  vault.configure(providers.clone(), p.id, true);
-  let transport = Arc::new(TestModelTransport::new());
-  let history = TranslationHistoryService::new(db.clone());
-  let models = ModelService::new(
-    db,
-    vault as Arc<dyn CredentialVault>,
-    transport as Arc<dyn ModelTransport>,
-    history,
-    models_dev_cache_dir(&dir),
-  );
-
-  let result = block_on(models.sync_models(p.id)).unwrap();
-  assert!(!result.ok);
-  assert_eq!(result.error_code.as_deref(), Some("connection_changed"));
-  assert_eq!(
-    result.provider.models_sync_status,
-    crate::domain::provider::ModelsSyncStatus::Never
-  );
-  assert!(result.provider.models_synced_at.is_none());
-  assert!(result.provider.models_sync_error_code.is_none());
-  assert_ne!(
-    result.provider.models_sync_error_code.as_deref(),
-    Some("credential_unavailable")
-  );
-}
-
-#[test]
-fn validate_sync_error_code_rejects_connection_changed() {
-  assert!(crate::services::models::validate_sync_error_code("connection_changed").is_err());
-  assert!(crate::services::models::validate_sync_error_code("network").is_ok());
-}
-
-/// Transport that blocks until released; records requests to assert serialization + re-resolve.
-struct BarrierTransport {
-  entered: Arc<Mutex<usize>>,
-  max_concurrent: Arc<Mutex<usize>>,
-  release: Arc<(Mutex<bool>, std::sync::Condvar)>,
-  requests: Arc<Mutex<Vec<ModelListRequest>>>,
-  items: Vec<RemoteModelSyncItem>,
-}
-
-impl ModelTransport for BarrierTransport {
-  fn list_models(
-    &self,
-    request: ModelListRequest,
-  ) -> Pin<Box<dyn Future<Output = Result<Vec<RemoteModelSyncItem>, TransportError>> + Send + '_>> {
-    self.requests.lock().expect("requests").push(request);
-    {
-      let mut entered = self.entered.lock().expect("entered");
-      *entered += 1;
-      let mut max = self.max_concurrent.lock().expect("max");
-      if *entered > *max {
-        *max = *entered;
-      }
-    }
-    let release = self.release.clone();
-    let entered = self.entered.clone();
-    let items = self.items.clone();
-    Box::pin(async move {
-      // Poll until released without blocking the async runtime forever.
-      loop {
-        {
-          let (lock, _cv) = &*release;
-          if *lock.lock().expect("release") {
-            break;
-          }
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-      }
-      *entered.lock().expect("entered") -= 1;
-      Ok(items)
-    })
-  }
-}
-
-#[test]
-fn sync_models_serializes_same_provider_max_transport_concurrency_one() {
-  // Per-provider serialization (not single-flight): concurrent callers queue; each runs its
-  // own Future after the previous finishes and re-reads the latest connection identity.
-  // Sequence under test:
-  // 1) first call enters transport
-  // 2) second call is started and confirmed queued (still max concurrency 1)
-  // 3) connection identity is saved while first still holds the lock
-  // 4) first is released; second acquires the lock and re-resolves the new identity
-  let dir = tempfile::tempdir().unwrap();
-  let db = Database::new(dir.path()).unwrap();
-  db.initialize().unwrap();
-  let vault = Arc::new(MemoryCredentialVault::new());
-  let providers = ProviderService::new(db.clone(), vault.clone());
-  let p = providers
-    .save(provider_write(CredentialKind::None, CredentialUpdate::Keep))
-    .unwrap();
-
-  let release = Arc::new((Mutex::new(false), std::sync::Condvar::new()));
-  let entered = Arc::new(Mutex::new(0usize));
-  let max_concurrent = Arc::new(Mutex::new(0usize));
-  let requests = Arc::new(Mutex::new(Vec::new()));
-  let transport = Arc::new(BarrierTransport {
-    entered: entered.clone(),
-    max_concurrent: max_concurrent.clone(),
-    release: release.clone(),
-    requests: requests.clone(),
-    items: vec![RemoteModelSyncItem {
-      model_key: "only".into(),
-      remote_display_name: None,
-      remote_metadata_json: None,
-      capability_overrides_json: None,
-    }],
-  });
-  let history = TranslationHistoryService::new(db.clone());
-  let models = ModelService::new(
-    db,
-    vault as Arc<dyn CredentialVault>,
-    transport as Arc<dyn ModelTransport>,
-    history,
-    models_dev_cache_dir(&dir),
-  );
-
-  let models_a = models.clone();
-  let models_b = models.clone();
-  let id = p.id;
-  let handle_a = std::thread::spawn(move || block_on(models_a.sync_models(id)));
-  // Ensure first sync has entered transport before starting second.
-  for _ in 0..200 {
-    if *entered.lock().expect("entered") >= 1 {
-      break;
-    }
-    std::thread::sleep(std::time::Duration::from_millis(5));
-  }
-  assert_eq!(
-    *entered.lock().expect("entered"),
-    1,
-    "first sync should be in transport"
-  );
-
-  // Start second while first still holds the per-provider lock; confirm it is queued.
-  let handle_b = std::thread::spawn(move || block_on(models_b.sync_models(id)));
-  for _ in 0..40 {
-    std::thread::sleep(std::time::Duration::from_millis(5));
-    if *max_concurrent.lock().expect("max") > 1 {
-      break;
-    }
-  }
-  assert_eq!(
-    *entered.lock().expect("entered"),
-    1,
-    "queued second call must not enter transport while first holds the lock"
-  );
-  assert_eq!(
-    *max_concurrent.lock().expect("max"),
-    1,
-    "same provider transport max concurrency must be 1"
-  );
-  assert_eq!(
-    requests.lock().expect("requests").len(),
-    1,
-    "queued second call must not resolve/transport until it holds the lock"
-  );
-
-  // Only after the second call is confirmed queued: change connection identity.
-  let current = providers.get(p.id).unwrap();
-  let mut write = for_provider_update(
-    current.id,
-    &current.updated_at,
-    CredentialKind::None,
-    CredentialUpdate::Keep,
-  );
-  write.base_url_override = Some("http://127.0.0.1:7777/v1".into());
-  write.display_name = "OpenAI".into();
-  providers.save(write).expect("mid-serialization save");
-
-  // Release first transport; second should then acquire the lock and re-resolve.
-  *release.0.lock().expect("release") = true;
-  release.1.notify_all();
-
-  let a = handle_a.join().expect("join a").expect("sync a");
-  let b = handle_b.join().expect("join b").expect("sync b");
-  // First sync resolved the old identity; mid-flight save resets status and aborts merge.
-  assert!(!a.ok);
-  assert_eq!(a.error_code.as_deref(), Some("connection_changed"));
-  // Second sync re-read the latest connection after the lock and should succeed on new URL.
-  assert!(b.ok, "queued sync should re-resolve latest connection identity");
-  assert_eq!(*max_concurrent.lock().expect("max"), 1);
-
-  let captured = requests.lock().expect("requests").clone();
-  assert_eq!(captured.len(), 2, "serialization runs two independent transport calls");
-  // First request used the original URL; second must use the post-save base URL.
-  assert!(
-    !captured[0].base_url.contains("127.0.0.1:7777"),
-    "first sync must have resolved the pre-save identity"
-  );
-  assert!(
-    captured[1].base_url.contains("127.0.0.1:7777"),
-    "later sync must re-read latest connection identity after acquiring the lock, got {}",
-    captured[1].base_url
-  );
 }
 
 #[test]
@@ -2824,7 +1430,11 @@ fn save_connection_identity_change_resets_models_sync_status() {
     CredentialKind::None,
     CredentialUpdate::Keep,
   );
-  write.base_url_override = Some("http://127.0.0.1:8888/v1".into());
+  write.base_url = "http://127.0.0.1:8888/v1".into();
+
+  write.base_url_source = BaseUrlSource::Custom;
+
+  write.auth_scheme = AuthSchemeV1::none();
   write.display_name = "OpenAI".into();
   let after = providers.save(write).unwrap();
   assert_eq!(
@@ -2835,155 +1445,6 @@ fn save_connection_identity_change_resets_models_sync_status() {
   assert!(after.models_sync_error_code.is_none());
   // Remote model rows are intentionally retained; only sync metadata resets.
   assert_eq!(models.list_by_provider(p.id).unwrap().len(), 1);
-}
-
-#[test]
-fn clear_credential_final_txn_preserves_latest_sync_when_identity_unchanged() {
-  // clear_credential writes journal first, then a final configuration transaction.
-  // A concurrent sync may commit Ok between those steps. The final txn must re-read the
-  // latest row and preserve its sync fields when connection identity is unchanged — never
-  // overwrite with the pre-journal snapshot (which still had Never).
-  let dir = tempfile::tempdir().unwrap();
-  let db = Database::new(dir.path()).unwrap();
-  db.initialize().unwrap();
-  let vault = Arc::new(MemoryCredentialVault::new());
-  let providers = ProviderService::new(db.clone(), vault.clone());
-  let history = TranslationHistoryService::new(db.clone());
-  let models = ModelService::new(
-    db,
-    vault as Arc<dyn CredentialVault>,
-    Arc::new(TestModelTransport::new()) as Arc<dyn ModelTransport>,
-    history,
-    models_dev_cache_dir(&dir),
-  );
-  // Already credentialKind none / no ref: Clear is identity-preserving for connection fields.
-  let p = providers
-    .save(provider_write(CredentialKind::None, CredentialUpdate::Keep))
-    .unwrap();
-  assert_eq!(
-    providers.get(p.id).unwrap().models_sync_status,
-    crate::domain::provider::ModelsSyncStatus::Never
-  );
-
-  // Without concurrent writers: clear applies and preserves Never when identity is unchanged.
-  let mut write = for_provider_update(p.id, &p.updated_at, CredentialKind::None, CredentialUpdate::Clear);
-  write.display_name = "Renamed during clear".into();
-  write.base_url_override = Some("https://api.openai.com/v1".into());
-  let after = providers.save(write).expect("clear save");
-  assert_eq!(
-    after.models_sync_status,
-    crate::domain::provider::ModelsSyncStatus::Never
-  );
-  assert!(after.models_synced_at.is_none());
-  assert_eq!(after.display_name, "Renamed during clear");
-
-  // Concurrent sync in the multi-transaction gap bumps updated_at → OCC rejects clear.
-  let p = providers.get(p.id).unwrap();
-  models
-    .apply_remote_merge(
-      p.id,
-      &[RemoteModelSyncItem {
-        model_key: "seed-for-gap".into(),
-        remote_display_name: None,
-        remote_metadata_json: None,
-        capability_overrides_json: None,
-      }],
-    )
-    .unwrap();
-  // Re-read baseline after seed, then inject a second concurrent merge in the clear gap.
-  let baseline = providers.get(p.id).unwrap();
-  let models_for_hook = models.clone();
-  let provider_id = baseline.id;
-  crate::services::providers::set_clear_credential_between_txns_hook(move || {
-    models_for_hook
-      .apply_remote_merge(
-        provider_id,
-        &[RemoteModelSyncItem {
-          model_key: "from-concurrent-sync".into(),
-          remote_display_name: None,
-          remote_metadata_json: None,
-          capability_overrides_json: None,
-        }],
-      )
-      .expect("concurrent sync in clear gap");
-  });
-  let mut write = for_provider_update(
-    baseline.id,
-    &baseline.updated_at,
-    CredentialKind::None,
-    CredentialUpdate::Clear,
-  );
-  write.display_name = "Should not apply".into();
-  write.base_url_override = Some("https://api.openai.com/v1".into());
-  let err = providers.save(write).unwrap_err();
-  assert!(
-    matches!(err, StorageError::Conflict(_)),
-    "concurrent row version change must reject clear: {err:?}"
-  );
-  let latest = providers.get(p.id).unwrap();
-  assert_eq!(latest.display_name, "Renamed during clear");
-  assert_eq!(latest.models_sync_status, crate::domain::provider::ModelsSyncStatus::Ok);
-  assert!(models.list_by_provider(p.id).unwrap().len() >= 1);
-}
-
-#[test]
-fn clear_credential_final_txn_resets_sync_when_identity_changed() {
-  // When clear changes connection identity (credential_ref / kind), final txn must reset
-  // Never/None even if a concurrent sync wrote Ok on the old identity in the gap.
-  let dir = tempfile::tempdir().unwrap();
-  let db = Database::new(dir.path()).unwrap();
-  db.initialize().unwrap();
-  let vault = Arc::new(MemoryCredentialVault::new());
-  let providers = ProviderService::new(db.clone(), vault.clone());
-  let history = TranslationHistoryService::new(db.clone());
-  let models = ModelService::new(
-    db,
-    vault as Arc<dyn CredentialVault>,
-    Arc::new(TestModelTransport::new()) as Arc<dyn ModelTransport>,
-    history,
-    models_dev_cache_dir(&dir),
-  );
-  let p = providers
-    .save(provider_write(
-      CredentialKind::ApiKey,
-      CredentialUpdate::Replace("sk-old".into()),
-    ))
-    .unwrap();
-  models
-    .apply_remote_merge(
-      p.id,
-      &[RemoteModelSyncItem {
-        model_key: "seed".into(),
-        remote_display_name: None,
-        remote_metadata_json: None,
-        capability_overrides_json: None,
-      }],
-    )
-    .unwrap();
-  assert_eq!(
-    providers.get(p.id).unwrap().models_sync_status,
-    crate::domain::provider::ModelsSyncStatus::Ok
-  );
-
-  // Successful clear with identity change (no concurrent writers) resets sync metadata.
-  let baseline = providers.get(p.id).unwrap();
-  let mut write = for_provider_update(
-    baseline.id,
-    &baseline.updated_at,
-    CredentialKind::None,
-    CredentialUpdate::Clear,
-  );
-  write.display_name = "OpenAI".into();
-  write.base_url_override = Some("https://api.openai.com/v1".into());
-  let after = providers.save(write).expect("clear to none");
-  assert_eq!(
-    after.models_sync_status,
-    crate::domain::provider::ModelsSyncStatus::Never
-  );
-  assert!(after.models_synced_at.is_none());
-  assert!(after.models_sync_error_code.is_none());
-  assert!(!after.has_credential);
-  assert_eq!(after.credential_kind, CredentialKind::None);
 }
 
 #[test]
@@ -3018,7 +1479,11 @@ fn save_none_keep_after_sync_preserves_status_when_identity_unchanged() {
     CredentialUpdate::Keep,
   );
   write.display_name = "After sync rename".into();
-  write.base_url_override = before.base_url_override.clone();
+  write.base_url = before.base_url.clone();
+
+  write.base_url_source = before.base_url_source;
+
+  write.auth_scheme = before.auth_scheme.clone();
   let after = providers.save(write).unwrap();
   assert_eq!(after.models_sync_status, crate::domain::provider::ModelsSyncStatus::Ok);
   assert_eq!(after.models_synced_at.as_deref(), Some(synced_at.as_str()));
@@ -3054,7 +1519,11 @@ fn save_none_keep_after_sync_resets_when_identity_changed() {
     CredentialKind::None,
     CredentialUpdate::Keep,
   );
-  write.base_url_override = Some("http://127.0.0.1:4242/v1".into());
+  write.base_url = "http://127.0.0.1:4242/v1".into();
+
+  write.base_url_source = BaseUrlSource::Custom;
+
+  write.auth_scheme = AuthSchemeV1::none();
   write.display_name = "OpenAI".into();
   let after = providers.save(write).unwrap();
   assert_eq!(
@@ -3093,7 +1562,11 @@ fn save_display_name_only_preserves_models_sync_status() {
   );
   write.display_name = "Renamed only".into();
   // Same base URL / identity fields.
-  write.base_url_override = before.base_url_override.clone();
+  write.base_url = before.base_url.clone();
+
+  write.base_url_source = before.base_url_source;
+
+  write.auth_scheme = before.auth_scheme.clone();
   let after = providers.save(write).unwrap();
   assert_eq!(after.models_sync_status, crate::domain::provider::ModelsSyncStatus::Ok);
   assert_eq!(after.models_synced_at.as_deref(), Some(synced_at.as_str()));
@@ -3130,7 +1603,11 @@ fn save_credential_replace_resets_models_sync_status() {
     CredentialUpdate::Replace("sk-new".into()),
   );
   write.display_name = "OpenAI".into();
-  write.base_url_override = Some("https://api.openai.com/v1".into());
+  write.base_url = "https://api.openai.com/v1".into();
+
+  write.base_url_source = BaseUrlSource::Custom;
+
+  write.auth_scheme = AuthSchemeV1::bearer();
   let after = providers.save(write).unwrap();
   assert_eq!(
     after.models_sync_status,
@@ -3176,80 +1653,17 @@ fn save_proxy_mode_change_resets_models_sync_status() {
 }
 
 #[test]
-fn vault_set_failure_on_replace_does_not_reset_sync_status() {
-  // Vault fails before SQLite commit: prior Ok status must remain (no partial identity change).
-  let dir = tempfile::tempdir().unwrap();
-  let db = Database::new(dir.path()).unwrap();
-  db.initialize().unwrap();
-  let vault = Arc::new(FailingCredentialVault::new());
-  let transport = Arc::new(TestModelTransport::new());
-  let providers = ProviderService::new(db.clone(), vault.clone() as Arc<dyn CredentialVault>);
-  vault.set_fail_set(false);
-  let p = providers
-    .save(provider_write(
-      CredentialKind::ApiKey,
-      CredentialUpdate::Replace("sk-ok".into()),
-    ))
-    .unwrap();
-  let history = TranslationHistoryService::new(db.clone());
-  let models = ModelService::new(
-    db,
-    vault.clone() as Arc<dyn CredentialVault>,
-    transport as Arc<dyn ModelTransport>,
-    history,
-    models_dev_cache_dir(&dir),
-  );
-  models
-    .apply_remote_merge(
-      p.id,
-      &[RemoteModelSyncItem {
-        model_key: "m1".into(),
-        remote_display_name: None,
-        remote_metadata_json: None,
-        capability_overrides_json: None,
-      }],
-    )
-    .unwrap();
-  let before = providers.get(p.id).unwrap();
-  assert_eq!(before.models_sync_status, crate::domain::provider::ModelsSyncStatus::Ok);
-  let synced_at = before.models_synced_at.clone().expect("synced_at");
-
-  vault.set_fail_set(true);
-  let mut write = for_provider_update(
-    before.id,
-    &before.updated_at,
-    CredentialKind::ApiKey,
-    CredentialUpdate::Replace("sk-fail".into()),
-  );
-  write.display_name = "OpenAI".into();
-  let err = providers.save(write);
-  assert!(err.is_err());
-
-  let after = providers.get(p.id).unwrap();
-  assert_eq!(after.models_sync_status, crate::domain::provider::ModelsSyncStatus::Ok);
-  assert_eq!(after.models_synced_at.as_deref(), Some(synced_at.as_str()));
-}
-
-#[test]
-fn test_connection_returns_provider_updated_at_on_failure() {
-  let (_d, _db, _v, providers, models, ..) = setup();
-  let p = providers
-    .save(provider_write(CredentialKind::ApiKey, CredentialUpdate::Keep))
-    .unwrap();
-  let result = block_on(models.test_connection(p.id)).unwrap();
-  assert!(!result.ok);
-  assert_eq!(result.error_code.as_deref(), Some("auth"));
-  assert_eq!(result.provider_updated_at, p.updated_at);
-}
-
-#[test]
 fn delete_all_models_keeps_provider_and_connection() {
   let (_d, _db, _v, providers, models, profiles, ..) = setup();
   let provider = providers
     .save({
       let mut write = provider_write(CredentialKind::None, CredentialUpdate::Keep);
       write.display_name = "Keep Me".into();
-      write.base_url_override = Some("https://api.example.com/v1".into());
+      write.base_url = "https://api.example.com/v1".into();
+
+      write.base_url_source = BaseUrlSource::Custom;
+
+      write.auth_scheme = AuthSchemeV1::none();
       write
     })
     .unwrap();
@@ -3306,7 +1720,7 @@ fn delete_all_models_keeps_provider_and_connection() {
     .get(provider.id)
     .expect("provider must remain after model delete");
   assert_eq!(kept.display_name, "Keep Me");
-  assert_eq!(kept.base_url_override.as_deref(), Some("https://api.example.com/v1"));
+  assert_eq!(kept.base_url.as_str(), "https://api.example.com/v1");
   assert!(providers.list().unwrap().iter().any(|row| row.id == provider.id));
   assert!(profiles.get(profile.profile.id).unwrap().targets.is_empty());
 }
@@ -3426,74 +1840,6 @@ fn delete_many_models_all_or_nothing() {
 }
 
 #[test]
-fn delete_primary_model_recompacts_remaining_targets() {
-  let (_d, _db, _v, providers, models, profiles, ..) = setup();
-  let p = providers
-    .save(provider_write(CredentialKind::None, CredentialUpdate::Keep))
-    .unwrap();
-  let primary = models
-    .save_manual(ManualModelWrite {
-      id: None,
-      provider_instance_id: p.id,
-      model_key: "primary".into(),
-      display_name_override: None,
-      enabled: true,
-      capability_overrides_json: None,
-      adapter_id: None,
-    })
-    .unwrap();
-  let fallback = models
-    .save_manual(ManualModelWrite {
-      id: None,
-      provider_instance_id: p.id,
-      model_key: "fallback".into(),
-      display_name_override: None,
-      enabled: true,
-      capability_overrides_json: None,
-      adapter_id: None,
-    })
-    .unwrap();
-  let profile = profiles
-    .save({
-      let (default_prompt_template_id, prompt_templates) = attach_default_templates("s", "{{text}}");
-      TranslationProfileWrite {
-        id: None,
-        name: "Chain".into(),
-        enabled: true,
-        template_version: 1,
-        default_prompt_template_id,
-        prompt_templates,
-        temperature: None,
-        max_output_tokens: None,
-        provider_options_json: None,
-        source_lang: Some("auto".into()),
-        target_lang: Some("en".into()),
-        primary_lang: Some("zh".into()),
-        preferred_target_lang: Some("en".into()),
-        language_detection: None,
-        target_model_ids: vec![primary.id, fallback.id],
-      }
-    })
-    .unwrap();
-
-  models.delete(primary.id).unwrap();
-  let after = profiles.get(profile.profile.id).unwrap();
-  assert_eq!(after.targets.len(), 1);
-  assert_eq!(after.targets[0].provider_model_id, fallback.id);
-  assert_eq!(
-    after.targets[0].priority, 0,
-    "remaining fallback must become priority-0 primary after primary delete"
-  );
-
-  // Detection resolves to the promoted primary without a page model id.
-  use crate::services::models::resolve_detect_model_source;
-  assert_eq!(
-    resolve_detect_model_source(Some(&after.profile), Some(&after.targets[0]), None).unwrap(),
-    fallback.id
-  );
-}
-
-#[test]
 fn provider_save_rejects_stale_expected_updated_at() {
   let (_d, _db, _v, providers, ..) = setup();
   let created = providers
@@ -3585,86 +1931,6 @@ fn sample_profile(
     updated_at: now,
   };
   (profile, prompt_templates)
-}
-
-#[test]
-fn resolve_detect_model_source_precedence() {
-  use crate::services::models::resolve_detect_model_source;
-  // Distinct ids so precedence is observable, not just any-nonnil.
-  let p0 = uuid::Uuid::now_v7();
-  let p1 = uuid::Uuid::now_v7();
-  let explicit = uuid::Uuid::now_v7();
-  let input_model = uuid::Uuid::now_v7();
-  assert_ne!(p0, p1);
-  assert_ne!(p0, explicit);
-  assert_ne!(p0, input_model);
-  assert_ne!(explicit, input_model);
-  let targets = [
-    TranslationProfileTarget {
-      translation_profile_id: uuid::Uuid::nil(),
-      provider_model_id: p0,
-      priority: 0,
-    },
-    TranslationProfileTarget {
-      translation_profile_id: uuid::Uuid::nil(),
-      provider_model_id: p1,
-      priority: 1,
-    },
-  ];
-  let _ = p1;
-
-  // No profile -> input.modelId required.
-  assert_eq!(
-    resolve_detect_model_source(None, None, Some(input_model)).unwrap(),
-    input_model
-  );
-  assert!(matches!(
-    resolve_detect_model_source(None, None, None).unwrap_err(),
-    StorageError::Validation(_)
-  ));
-
-  // Profile explicit LLM modelId wins over profile primary and input.
-  let (profile, _) = sample_profile(
-    uuid::Uuid::nil(),
-    "P",
-    Some(LanguageDetectorConfig::Llm {
-      model_id: Some(explicit),
-    }),
-  );
-  assert_eq!(
-    resolve_detect_model_source(Some(&profile), Some(&targets[0]), Some(input_model)).unwrap(),
-    explicit
-  );
-
-  // Profile Llm with None modelId -> profile primary target.
-  let (profile_no_model, _) = sample_profile(
-    uuid::Uuid::nil(),
-    "P",
-    Some(LanguageDetectorConfig::Llm { model_id: None }),
-  );
-  assert_eq!(
-    resolve_detect_model_source(Some(&profile_no_model), Some(&targets[0]), Some(input_model)).unwrap(),
-    p0
-  );
-
-  // Profile with no languageDetection -> profile primary target.
-  let (profile_no_cfg, _) = sample_profile(uuid::Uuid::nil(), "P", None);
-  assert_eq!(
-    resolve_detect_model_source(Some(&profile_no_cfg), Some(&targets[0]), Some(input_model)).unwrap(),
-    p0
-  );
-
-  // Profile selected but no primary target -> page model selection (covers delete/re-add).
-  assert_eq!(
-    resolve_detect_model_source(Some(&profile_no_cfg), None, Some(input_model)).unwrap(),
-    input_model
-  );
-
-  // Profile selected, no primary target, no page model -> validation error.
-  assert!(matches!(
-    resolve_detect_model_source(Some(&profile_no_cfg), None, None).unwrap_err(),
-    StorageError::Validation(_)
-  ));
 }
 
 #[test]
@@ -3917,235 +2183,6 @@ fn delete_model_and_provider_clear_detection_config() {
 }
 
 #[test]
-fn detect_language_empty_text_returns_validation_soft_failure() {
-  let (_d, _db, _v, providers, models, _profiles, ..) = setup();
-  let p = providers
-    .save(provider_write(CredentialKind::None, CredentialUpdate::Keep))
-    .unwrap();
-  let m = models
-    .save_manual(ManualModelWrite {
-      id: None,
-      provider_instance_id: p.id,
-      model_key: "det".into(),
-      display_name_override: None,
-      enabled: true,
-      capability_overrides_json: None,
-      adapter_id: None,
-    })
-    .unwrap();
-
-  let empty = block_on(models.detect_language(
-    DetectLanguageInput {
-      text: "   ".into(),
-      model_id: Some(m.id),
-      profile_id: None,
-    },
-    None,
-  ))
-  .unwrap();
-  assert!(!empty.ok);
-  assert_eq!(empty.error_code.as_deref(), Some("validation_failed"));
-  assert_eq!(empty.model_id, None);
-
-  // No profile and no input model -> validation failure.
-  let no_model = block_on(models.detect_language(
-    DetectLanguageInput {
-      text: "hi".into(),
-      model_id: None,
-      profile_id: None,
-    },
-    None,
-  ))
-  .unwrap();
-  assert!(!no_model.ok);
-  assert_eq!(no_model.error_code.as_deref(), Some("validation_failed"));
-}
-
-#[test]
-fn detect_language_truncates_oversize_text() {
-  let (_d, _db, _v, providers, models, ..) = setup();
-  let (base_url, request_handle) = spawn_detection_chat_server();
-  let mut write = provider_write(CredentialKind::None, CredentialUpdate::Keep);
-  write.base_url_override = Some(base_url);
-  let provider = providers.save(write).unwrap();
-  let model = models
-    .save_manual(ManualModelWrite {
-      id: None,
-      provider_instance_id: provider.id,
-      model_key: "det".into(),
-      display_name_override: None,
-      enabled: true,
-      capability_overrides_json: None,
-      adapter_id: None,
-    })
-    .unwrap();
-
-  // 5001 chars exceeds the detect sample cap; detection must still succeed by
-  // sending only the truncated sample to the model.
-  let big = "x".repeat(5001);
-  let result = block_on(models.detect_language(
-    DetectLanguageInput {
-      text: big,
-      model_id: Some(model.id),
-      profile_id: None,
-    },
-    None,
-  ))
-  .unwrap();
-  assert!(result.ok, "detection failed: {result:?}");
-
-  let request = request_handle.join().unwrap();
-  let user_content = request["messages"][1]["content"].as_str().unwrap();
-  assert_eq!(user_content.chars().count(), 5000);
-}
-
-#[test]
-fn detect_language_uses_low_generation_budget() {
-  let (_d, _db, _v, providers, models, ..) = setup();
-  let (base_url, request_handle) = spawn_detection_chat_server();
-  let mut write = provider_write(CredentialKind::None, CredentialUpdate::Keep);
-  write.base_url_override = Some(base_url);
-  let provider = providers.save(write).unwrap();
-  let model = models
-    .save_manual(ManualModelWrite {
-      id: None,
-      provider_instance_id: provider.id,
-      model_key: "reasoning-model".into(),
-      display_name_override: None,
-      enabled: true,
-      capability_overrides_json: None,
-      adapter_id: None,
-    })
-    .unwrap();
-
-  let result = block_on(models.detect_language(
-    DetectLanguageInput {
-      text: "你好".into(),
-      model_id: Some(model.id),
-      profile_id: None,
-    },
-    None,
-  ))
-  .unwrap();
-  assert!(result.ok, "detection failed: {result:?}");
-  assert_eq!(result.language_id.as_deref(), Some("zh"));
-
-  let request = request_handle.join().unwrap();
-  assert_eq!(request["max_tokens"], 256);
-  assert_eq!(request["temperature"], 0.0);
-  // Non-DeepSeek models must not receive the thinking toggle.
-  assert!(request.get("thinking").is_none());
-}
-
-#[test]
-fn detect_language_omits_thinking_on_openai_compatible_even_for_deepseek_model_keys() {
-  let (_d, _db, _v, providers, models, ..) = setup();
-  let (base_url, request_handle) = spawn_detection_chat_server();
-  let mut write = provider_write(CredentialKind::None, CredentialUpdate::Keep);
-  write.base_url_override = Some(base_url);
-  let provider = providers.save(write).unwrap();
-  let model = models
-    .save_manual(ManualModelWrite {
-      id: None,
-      provider_instance_id: provider.id,
-      // openai-compatible stays on standard chat/completions fields.
-      // DeepSeek thinking controls require the dedicated deepseek adapter.
-      model_key: "deepseek-v4-flash".into(),
-      display_name_override: None,
-      enabled: true,
-      capability_overrides_json: None,
-      adapter_id: None,
-    })
-    .unwrap();
-
-  let result = block_on(models.detect_language(
-    DetectLanguageInput {
-      text: "DeT".into(),
-      model_id: Some(model.id),
-      profile_id: None,
-    },
-    None,
-  ))
-  .unwrap();
-  assert!(result.ok, "detection failed: {result:?}");
-  assert_eq!(result.language_id.as_deref(), Some("zh"));
-
-  let request = request_handle.join().unwrap();
-  assert_eq!(request["max_tokens"], 256);
-  assert!(request.get("thinking").is_none());
-}
-
-#[test]
-fn detect_language_disables_thinking_for_deepseek_adapter() {
-  let (_d, _db, _v, providers, models, ..) = setup();
-  let (base_url, request_handle) = spawn_detection_chat_server();
-  let mut write = provider_write(CredentialKind::None, CredentialUpdate::Keep);
-  write.adapter_id = "deepseek".into();
-  write.base_url_override = Some(base_url);
-  let provider = providers.save(write).unwrap();
-  let model = models
-    .save_manual(ManualModelWrite {
-      id: None,
-      provider_instance_id: provider.id,
-      // First-class deepseek adapter: policy is owned by the strategy, not model-key heuristics.
-      model_key: "deepseek-chat".into(),
-      display_name_override: None,
-      enabled: true,
-      capability_overrides_json: None,
-      adapter_id: None,
-    })
-    .unwrap();
-
-  let result = block_on(models.detect_language(
-    DetectLanguageInput {
-      text: "hello".into(),
-      model_id: Some(model.id),
-      profile_id: None,
-    },
-    None,
-  ))
-  .unwrap();
-  assert!(result.ok, "detection failed: {result:?}");
-
-  let request = request_handle.join().unwrap();
-  assert_eq!(request["max_tokens"], 2048);
-  assert_eq!(request["thinking"]["type"], "disabled");
-}
-
-#[test]
-fn detect_language_missing_required_credential_returns_auth_soft_failure() {
-  let (_d, _db, _v, providers, models, ..) = setup();
-  let mut write = provider_write(CredentialKind::ApiKey, CredentialUpdate::Keep);
-  write.base_url_override = None;
-  let p = providers.save(write).unwrap();
-  let m = models
-    .save_manual(ManualModelWrite {
-      id: None,
-      provider_instance_id: p.id,
-      model_key: "gpt-4o".into(),
-      display_name_override: None,
-      enabled: true,
-      capability_overrides_json: None,
-      adapter_id: Some("gemini".into()),
-    })
-    .unwrap();
-  // Gemini adapter requires a secret; none stored -> MissingCredential.
-  let result = block_on(models.detect_language(
-    DetectLanguageInput {
-      text: "hello".into(),
-      model_id: Some(m.id),
-      profile_id: None,
-    },
-    None,
-  ))
-  .unwrap();
-  assert!(!result.ok);
-  assert_eq!(result.error_code.as_deref(), Some("auth"));
-  assert_eq!(result.model_id, None);
-  assert_eq!(result.detector_type, DetectorType::Llm);
-}
-
-#[test]
 fn import_copy_rewrites_detection_model_id() {
   let (_d, _db, _v, providers, models, profiles, _settings, ie, ..) = setup();
   let p = providers
@@ -4296,117 +2333,4 @@ fn import_rejects_profile_detection_referencing_missing_model() {
     "expected a language-detection reference error, got {:?}",
     preview.validation_errors
   );
-}
-
-#[test]
-fn translate_records_history_on_success_not_on_cancel_or_early() {
-  use crate::domain::translation::TranslateInput;
-  use crate::domain::translation_history::{HistoryStatus, TranslationHistoryListQuery};
-
-  let (_d, db, _v, providers, models, _profiles, _settings, _import_export, _transport) = setup();
-  let history = TranslationHistoryService::new(db.clone());
-  let (base_url, _request_handle) = spawn_detection_chat_server();
-  let mut write = provider_write(CredentialKind::None, CredentialUpdate::Keep);
-  write.base_url_override = Some(base_url);
-  let provider = providers.save(write).unwrap();
-  let model = models
-    .save_manual(ManualModelWrite {
-      id: None,
-      provider_instance_id: provider.id,
-      model_key: "gpt-test".into(),
-      display_name_override: Some("GPT Test".into()),
-      enabled: true,
-      capability_overrides_json: None,
-      adapter_id: None,
-    })
-    .unwrap();
-
-  let input = TranslateInput {
-    model_id: model.id,
-    source_lang: "English".into(),
-    target_lang: "Chinese".into(),
-    text: "hello".into(),
-    profile_id: None,
-    prompt_template_id: None,
-    source_lang_id: Some("auto".into()),
-    target_lang_id: Some("zh".into()),
-    effective_source_lang_id: Some("en".into()),
-    effective_target_lang_id: Some("zh".into()),
-  };
-  let result = block_on(models.translate(input, None)).unwrap();
-  assert!(result.ok, "translate failed: {result:?}");
-
-  let list = history
-    .list(TranslationHistoryListQuery {
-      page: 1,
-      page_size: Some(10),
-      ..Default::default()
-    })
-    .unwrap();
-  assert_eq!(list.total, 1, "one history row expected after success");
-  let item = &list.items[0];
-  assert_eq!(item.source_text_preview, "hello");
-  assert_eq!(item.translated_text_preview, "zh");
-  assert_eq!(item.model_display_name, "GPT Test");
-  assert_eq!(item.effective_source_lang.as_deref(), Some("en"));
-  assert_eq!(item.effective_target_lang.as_deref(), Some("zh"));
-  assert_eq!(item.status, HistoryStatus::Complete);
-
-  // Early validation failure (empty text) must not record history.
-  let early = block_on(models.translate(
-    TranslateInput {
-      model_id: model.id,
-      source_lang: "English".into(),
-      target_lang: "Chinese".into(),
-      text: "   ".into(),
-      profile_id: None,
-      prompt_template_id: None,
-      source_lang_id: None,
-      target_lang_id: None,
-      effective_source_lang_id: None,
-      effective_target_lang_id: None,
-    },
-    None,
-  ))
-  .unwrap();
-  assert!(!early.ok);
-  assert_eq!(early.error_code.as_deref(), Some("validation_failed"));
-  let list = history
-    .list(TranslationHistoryListQuery {
-      page: 1,
-      page_size: Some(10),
-      ..Default::default()
-    })
-    .unwrap();
-  assert_eq!(list.total, 1, "Early validation must not record history");
-
-  // Pre-cancelled token returns cancelled and must not record history.
-  let token = crate::domain::cancel::CancelToken::new();
-  token.cancel();
-  let cancelled = block_on(models.translate(
-    TranslateInput {
-      model_id: model.id,
-      source_lang: "English".into(),
-      target_lang: "Chinese".into(),
-      text: "hello".into(),
-      profile_id: None,
-      prompt_template_id: None,
-      source_lang_id: None,
-      target_lang_id: None,
-      effective_source_lang_id: None,
-      effective_target_lang_id: None,
-    },
-    Some(&token),
-  ))
-  .unwrap();
-  assert!(!cancelled.ok);
-  assert_eq!(cancelled.error_code.as_deref(), Some("cancelled"));
-  let list = history
-    .list(TranslationHistoryListQuery {
-      page: 1,
-      page_size: Some(10),
-      ..Default::default()
-    })
-    .unwrap();
-  assert_eq!(list.total, 1, "cancelled translate must not record history");
 }

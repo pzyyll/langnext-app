@@ -36,12 +36,12 @@ import {
   deleteProviderModels,
   saveProviderInstance,
   setModelEnabled,
-  syncProviderModels,
-  testProviderConnection,
 } from "../../storage/client";
+import { testProviderConnectionFrontend } from "./providerConnection";
+import { syncProviderModelsFrontend } from "./providerModelSync";
 import { getIpcErrorMessage, isConflictError } from "../../storage/errors";
 import type { CredentialUpdate, ProviderInstanceDto, ProviderModelDto } from "../../storage/types";
-import { ADAPTER_OPTIONS, getDefaultBaseUrl } from "./adapterOptions";
+import { ADAPTER_OPTIONS, getDefaultBaseUrl, resolveAuthScheme, resolveBaseUrlFields } from "./adapterOptions";
 import { AddManualModelDialog } from "./AddManualModelDialog";
 import { EditModelConfigDialog } from "./EditModelConfigDialog";
 import { useModelsContext } from "./ModelsContext";
@@ -70,11 +70,6 @@ function needsInsecureHttpAck(raw: string): boolean {
     // Invalid URLs are left to backend validation.
     return false;
   }
-}
-
-function normalizeBaseUrl(value: string): string | null {
-  const trimmed = value.trim();
-  return trimmed ? trimmed : null;
 }
 
 function formatSyncTimestamp(iso: string | null): string | null {
@@ -171,7 +166,7 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
   const queryClient = useQueryClient();
   const { beginProviderExit } = useModelsContext();
   const [adapterId, setAdapterId] = useState(provider.adapterId);
-  const [baseUrlOverride, setBaseUrlOverride] = useState(provider.baseUrlOverride ?? "");
+  const [baseUrl, setBaseUrl] = useState(provider.baseUrlSource === "plugin_default" ? "" : provider.baseUrl);
   const [enabled, setEnabled] = useState(provider.enabled);
   const [token, setToken] = useState("");
   const [credentialAction, setCredentialAction] = useState<CredentialAction>("keep");
@@ -296,10 +291,11 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
     connectionTestGeneration.current += 1;
   }, []);
 
-  const savedBaseUrl = provider.baseUrlOverride ?? null;
-  const normalizedBaseUrl = normalizeBaseUrl(baseUrlOverride);
-  const endpointChanged = normalizedBaseUrl !== savedBaseUrl;
-  const requiresInsecureAck = normalizedBaseUrl !== null && needsInsecureHttpAck(normalizedBaseUrl);
+  const baseUrlFields = resolveBaseUrlFields(adapterId, baseUrl);
+  const resolvedBaseUrl = "error" in baseUrlFields ? null : baseUrlFields.baseUrl;
+  const resolvedBaseUrlSource = "error" in baseUrlFields ? null : baseUrlFields.baseUrlSource;
+  const endpointChanged = resolvedBaseUrl !== provider.baseUrl || resolvedBaseUrlSource !== provider.baseUrlSource;
+  const requiresInsecureAck = resolvedBaseUrl !== null && needsInsecureHttpAck(resolvedBaseUrl);
   const endpointUnchangedInsecure =
     !endpointChanged && requiresInsecureAck && Boolean(provider.insecureHttpConfirmedAt);
 
@@ -307,7 +303,7 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
   // Used to gate remote actions (test/sync) that require a saved connection identity.
   const connectionDirty =
     adapterId !== provider.adapterId ||
-    normalizedBaseUrl !== savedBaseUrl ||
+    endpointChanged ||
     credentialAction === "replace" ||
     credentialAction === "clear";
 
@@ -323,7 +319,7 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
     setSyncedUpdatedAt(provider.updatedAt);
     setDismissedConflictUpdatedAt(null);
     setAdapterId(provider.adapterId);
-    setBaseUrlOverride(provider.baseUrlOverride ?? "");
+    setBaseUrl(provider.baseUrlSource === "plugin_default" ? "" : provider.baseUrl);
     setEnabled(provider.enabled);
     setToken("");
     setCredentialAction("keep");
@@ -332,7 +328,7 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
 
   function reloadRemoteProviderForm() {
     setAdapterId(provider.adapterId);
-    setBaseUrlOverride(provider.baseUrlOverride ?? "");
+    setBaseUrl(provider.baseUrlSource === "plugin_default" ? "" : provider.baseUrl);
     setEnabled(provider.enabled);
     setToken("");
     setCredentialAction("keep");
@@ -375,8 +371,18 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
     if (requiresInsecureAck && !endpointUnchangedInsecure && !insecureHttpAcknowledged) {
       return false;
     }
+    if ("error" in baseUrlFields) {
+      return false;
+    }
     return true;
-  }, [credentialAction, endpointUnchangedInsecure, insecureHttpAcknowledged, requiresInsecureAck, token]);
+  }, [
+    baseUrlFields,
+    credentialAction,
+    endpointUnchangedInsecure,
+    insecureHttpAcknowledged,
+    requiresInsecureAck,
+    token,
+  ]);
 
   function resetConnectionForm() {
     reloadRemoteProviderForm();
@@ -414,7 +420,9 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
         id: provider.id,
         adapterId: provider.adapterId,
         displayName: trimmed,
-        baseUrlOverride: provider.baseUrlOverride,
+        baseUrl: provider.baseUrl,
+        baseUrlSource: provider.baseUrlSource,
+        authScheme: provider.authScheme,
         credentialKind: provider.credentialKind,
         credential: { action: "keep" },
         enabled: provider.enabled,
@@ -449,8 +457,14 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
       return;
     }
 
+    if ("error" in baseUrlFields || resolvedBaseUrl === null || resolvedBaseUrlSource === null) {
+      setSaveError(t("models.errors.baseUrlRequired"));
+      toast.error({ title: t("models.toast.saveFailed"), description: t("models.errors.baseUrlRequired") });
+      return;
+    }
+
     let insecureHttpConfirmedAt: string | null = null;
-    if (normalizedBaseUrl !== null && needsInsecureHttpAck(normalizedBaseUrl)) {
+    if (needsInsecureHttpAck(resolvedBaseUrl)) {
       if (!endpointChanged && provider.insecureHttpConfirmedAt) {
         insecureHttpConfirmedAt = provider.insecureHttpConfirmedAt;
       } else if (insecureHttpAcknowledged) {
@@ -459,6 +473,9 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
     }
 
     const credential = buildCredential();
+    // When the plugin is missing, preserve the existing auth scheme until restored.
+    const knownPlugin = ADAPTER_OPTIONS.some((option) => option.id === adapterId);
+    const authScheme = knownPlugin ? resolveAuthScheme(adapterId, provider.credentialKind) : provider.authScheme;
 
     setSavePending(true);
     setSaveError(null);
@@ -469,7 +486,9 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
         id: provider.id,
         adapterId,
         displayName: provider.displayName,
-        baseUrlOverride: normalizedBaseUrl,
+        baseUrl: resolvedBaseUrl,
+        baseUrlSource: resolvedBaseUrlSource,
+        authScheme,
         credentialKind: provider.credentialKind,
         credential,
         enabled,
@@ -483,7 +502,7 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
       setCredentialAction("keep");
       setInsecureHttpAcknowledged(false);
       setAdapterId(saved.adapterId);
-      setBaseUrlOverride(saved.baseUrlOverride ?? "");
+      setBaseUrl(saved.baseUrlSource === "plugin_default" ? "" : saved.baseUrl);
       setEnabled(saved.enabled);
       setFormDirty(false);
       setSyncedUpdatedAt(saved.updatedAt);
@@ -521,7 +540,7 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
     const testedUpdatedAt = provider.updatedAt;
     setConnectionTestPending(true);
     try {
-      const result = await testProviderConnection(testedProviderId);
+      const result = await testProviderConnectionFrontend(provider);
       // Discard if a newer test started, form was edited, selection changed, or
       // the provider connection version no longer matches (save / remote refresh).
       const versionStillCurrent =
@@ -557,7 +576,7 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
     }
     setSyncPending(true);
     try {
-      const result = await syncProviderModels(provider.id);
+      const result = await syncProviderModelsFrontend(provider, models);
       // Always apply returned snapshot on successful IPC, regardless of result.ok.
       queryClient.setQueryData(modelKeys.byProvider(providerId), result.models);
       seedProvider(result.provider);
@@ -920,9 +939,9 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
                 id="provider-base-url"
                 className={inputClassName}
                 type="text"
-                value={baseUrlOverride}
+                value={baseUrl}
                 onChange={(event) => {
-                  setBaseUrlOverride(event.currentTarget.value);
+                  setBaseUrl(event.currentTarget.value);
                   setFormDirty(true);
                   setSaveSuccess(false);
                   setInsecureHttpAcknowledged(false);

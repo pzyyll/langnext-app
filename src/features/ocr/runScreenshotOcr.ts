@@ -1,9 +1,10 @@
 // ABOUTME: Screenshot → OCR orchestration helpers for Quick Translate and related UI.
-// ABOUTME: Listens for region capture events, then calls the backend recognize_ocr command.
+// ABOUTME: Listens for region capture events, then runs frontend OCR recognition flow.
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { REGION_SCREENSHOT_CANCELLED, REGION_SCREENSHOT_CAPTURED } from "../../query/events";
-import { getAppSettings, recognizeOcr, startRegionScreenshot } from "../../storage/client";
+import { getAppSettings, startRegionScreenshot } from "../../storage/client";
 import type { OcrRecognizeResult, RegionScreenshotResult } from "../../storage/types";
+import { recognizeOcrFlow } from "./recognizeOcrFlow";
 
 export type ScreenshotOcrOutcome =
   | { status: "recognized"; result: OcrRecognizeResult }
@@ -52,16 +53,47 @@ export async function captureRegionScreenshot(): Promise<RegionScreenshotResult 
   }
 }
 
+/** Resolve the OCR service id, falling back to the app default when omitted. */
+async function resolveOcrServiceId(ocrServiceId?: string | null): Promise<string | null> {
+  if (ocrServiceId) {
+    return ocrServiceId;
+  }
+  const settings = await getAppSettings();
+  return settings.defaultOcrServiceId;
+}
+
+/**
+ * Recognize text from an already-captured PNG (global screenshot-OCR shortcut handoff).
+ * Does not start a new capture session.
+ */
+export async function recognizeCapturedScreenshot(
+  pngBase64: string,
+  ocrServiceId?: string | null,
+): Promise<ScreenshotOcrOutcome> {
+  const resolvedServiceId = await resolveOcrServiceId(ocrServiceId);
+  if (!resolvedServiceId) {
+    return { status: "no_default" };
+  }
+  if (!pngBase64.trim()) {
+    return { status: "empty" };
+  }
+
+  const result = await recognizeOcrFlow({
+    pngBase64,
+    ocrServiceId: resolvedServiceId,
+  });
+  if (!result.text.trim()) {
+    return { status: "empty" };
+  }
+  return { status: "recognized", result };
+}
+
 /**
  * Full screenshot OCR flow using the app default OCR service when no id is provided.
  * Returns cancelled/empty outcomes without throwing so the caller can stay quiet on cancel.
  */
 export async function runScreenshotOcr(ocrServiceId?: string | null): Promise<ScreenshotOcrOutcome> {
-  let resolvedServiceId = ocrServiceId ?? null;
-  if (!resolvedServiceId) {
-    const settings = await getAppSettings();
-    resolvedServiceId = settings.defaultOcrServiceId;
-  }
+  const resolvedServiceId = await resolveOcrServiceId(ocrServiceId);
   if (!resolvedServiceId) {
     return { status: "no_default" };
   }
@@ -70,16 +102,6 @@ export async function runScreenshotOcr(ocrServiceId?: string | null): Promise<Sc
   if (!capture) {
     return { status: "cancelled" };
   }
-  if (!capture.pngBase64.trim()) {
-    return { status: "empty" };
-  }
 
-  const result = await recognizeOcr({
-    pngBase64: capture.pngBase64,
-    ocrServiceId: resolvedServiceId,
-  });
-  if (!result.text.trim()) {
-    return { status: "empty" };
-  }
-  return { status: "recognized", result };
+  return recognizeCapturedScreenshot(capture.pngBase64, resolvedServiceId);
 }

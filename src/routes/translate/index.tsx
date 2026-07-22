@@ -561,10 +561,21 @@ function TranslatePage() {
     toast.info({ title: t("translate.cancelled"), duration: STOPPED_TOAST_MS });
   }
 
+  /** Runtime translate failures go to the shared toast, not the output pane. */
+  function showTranslateErrorToast(message: string) {
+    const title = t("translate.errorPrefix");
+    if (!message || message === title) {
+      toast.error({ title });
+      return;
+    }
+    toast.error({ title, description: message });
+  }
+
   /** Map known backend error codes to localized copy; fall back to server message. */
   function failureMessage(errorCode: string | null | undefined, message: string | undefined): string {
     return resolveTranslateFailureMessage(errorCode, message, {
       timeout: t("translate.errors.timeout"),
+      invalidResponse: t("translate.errors.invalidResponse"),
       fallback: t("translate.errorPrefix"),
     });
   }
@@ -639,14 +650,13 @@ function TranslatePage() {
     if (generation !== translateGeneration.current) {
       return;
     }
-    setHasTranslated(true);
-    setOutputText("");
+    // Keep prior/partial output; surface the failure via toast only.
     setLatencyMs(latency);
     setConfidencePercent(0);
-    setErrorMessage(message);
-    setActiveModelLabel(null);
+    setErrorMessage(null);
     setIsTranslating(false);
     setStreamOutputActive(false);
+    showTranslateErrorToast(message);
   }
 
   function finishCancelledUi(generation: number) {
@@ -684,7 +694,7 @@ function TranslatePage() {
       const prepared = await streamSession.prepareSession(
         requestId,
         {
-          onChunk: (chunk) => {
+          onChunk: (delta) => {
             if (generation !== translateGeneration.current) {
               return;
             }
@@ -693,10 +703,10 @@ function TranslatePage() {
             if (isFirstChunk) {
               setStreamOutputActive(true);
             }
-            setOutputText((prev) => (isFirstChunk ? chunk.delta : prev + chunk.delta));
+            setOutputText((prev) => (isFirstChunk ? delta : prev + delta));
             setHasTranslated(true);
           },
-          onReset: (reset) => {
+          onReset: (modelId) => {
             if (generation !== translateGeneration.current) {
               return;
             }
@@ -704,7 +714,7 @@ function TranslatePage() {
             receivedChunk = false;
             setStreamOutputActive(false);
             setOutputText("");
-            setActiveModelLabel(modelLabelById.get(reset.modelId) ?? reset.modelId);
+            setActiveModelLabel(modelLabelById.get(modelId) ?? modelId);
           },
           onDone: (done) => {
             if (generation !== translateGeneration.current) {
@@ -716,8 +726,8 @@ function TranslatePage() {
               return;
             }
             if (done.ok) {
-              // Prefer full text from the server so we do not drift on partial assembly.
-              finishSuccessUi(generation, done.translatedText, done.latencyMs, done.modelId);
+              // Prefer full text so we do not drift on partial assembly.
+              finishSuccessUi(generation, done.translatedText, done.latencyMs, done.modelId ?? null);
             } else {
               finishErrorUi(generation, failureMessage(done.errorCode, done.message), done.latencyMs);
             }
@@ -740,7 +750,13 @@ function TranslatePage() {
         return;
       }
 
-      await runStartTranslateStream(payload, requestId);
+      const providersById = new Map((providersQuery.data ?? []).map((p) => [p.id, p]));
+      const modelsById = new Map((modelsQuery.data ?? []).map((m) => [m.id, m]));
+      const profile = (profilesQuery.data ?? []).find((p) => p.id === payload.profileId) ?? null;
+      await runStartTranslateStream(payload, requestId, {
+        snapshots: { providersById, modelsById, profile },
+        handlers: prepared,
+      });
       if (generation !== translateGeneration.current) {
         streamSession.clearListeners();
       }
@@ -760,11 +776,7 @@ function TranslatePage() {
       return;
     }
     if (!resolvedModelId) {
-      setErrorMessage(t("translate.selectModelFirst"));
-      setOutputText("");
-      setHasTranslated(true);
-      setConfidencePercent(0);
-      setLatencyMs(null);
+      toast.error({ title: t("translate.selectModelFirst") });
       return;
     }
 
@@ -787,6 +799,11 @@ function TranslatePage() {
         const detected = await runDetectLanguage(
           { text: trimmed, modelId: resolvedModelId || null, profileId: resolvedProfileId || null },
           requestId,
+          {
+            providersById: new Map((providersQuery.data ?? []).map((p) => [p.id, p])),
+            modelsById: new Map((modelsQuery.data ?? []).map((m) => [m.id, m])),
+            profile: (profilesQuery.data ?? []).find((p) => p.id === resolvedProfileId) ?? null,
+          },
         );
         if (generation !== translateGeneration.current) {
           return;

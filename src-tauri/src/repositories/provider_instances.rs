@@ -1,6 +1,8 @@
 // ABOUTME: Provider instance CRUD and credential-reference updates against SQLite.
 // ABOUTME: SQL uses bound parameters; uniqueness and FK failures become domain errors.
-use crate::domain::provider::{CredentialKind, ModelsSyncStatus, ProviderInstance, ProxyMode};
+use crate::domain::provider::{
+  AuthSchemeV1, BaseUrlSource, CredentialKind, ModelsSyncStatus, ProviderInstance, ProxyMode,
+};
 use crate::error::StorageError;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use uuid::Uuid;
@@ -10,13 +12,19 @@ fn map_row(row: &Row<'_>) -> Result<ProviderInstance, rusqlite::Error> {
   let credential_kind: String = row.get("credential_kind")?;
   let proxy_mode: String = row.get("proxy_mode")?;
   let models_sync_status: String = row.get("models_sync_status")?;
+  let base_url_source: String = row.get("base_url_source")?;
+  let auth_scheme_json: String = row.get("auth_scheme_json")?;
   let enabled: i64 = row.get("enabled")?;
   Ok(ProviderInstance {
     id: Uuid::parse_str(&id)
       .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?,
     adapter_id: row.get("adapter_id")?,
     display_name: row.get("display_name")?,
-    base_url_override: row.get("base_url_override")?,
+    base_url: row.get("base_url")?,
+    base_url_source: BaseUrlSource::parse(&base_url_source)
+      .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, e.into()))?,
+    auth_scheme: AuthSchemeV1::from_json_str(&auth_scheme_json)
+      .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, e.into()))?,
     credential_kind: CredentialKind::parse(&credential_kind)
       .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, e.into()))?,
     credential_ref: row.get("credential_ref")?,
@@ -51,19 +59,26 @@ pub fn get(conn: &Connection, id: Uuid) -> Result<ProviderInstance, StorageError
 }
 
 pub fn insert(conn: &Connection, provider: &ProviderInstance) -> Result<(), StorageError> {
+  let auth_scheme_json = provider
+    .auth_scheme
+    .to_json_string()
+    .map_err(StorageError::Validation)?;
   conn
     .execute(
       "INSERT INTO provider_instances (
-            id, adapter_id, display_name, base_url_override, credential_kind, credential_ref,
+            id, adapter_id, display_name, base_url, base_url_source, auth_scheme_json,
+            credential_kind, credential_ref,
             enabled, proxy_mode, insecure_http_confirmed_at, models_synced_at,
             models_sync_status, models_sync_error_code, created_at, updated_at, sort_order
-        ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,
+        ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,
             (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM provider_instances))",
       params![
         provider.id.to_string(),
         provider.adapter_id,
         provider.display_name,
-        provider.base_url_override,
+        provider.base_url,
+        provider.base_url_source.as_str(),
+        auth_scheme_json,
         provider.credential_kind.as_str(),
         provider.credential_ref,
         provider.enabled as i64,
@@ -81,27 +96,35 @@ pub fn insert(conn: &Connection, provider: &ProviderInstance) -> Result<(), Stor
 }
 
 pub fn update_configuration(conn: &Connection, provider: &ProviderInstance) -> Result<(), StorageError> {
+  let auth_scheme_json = provider
+    .auth_scheme
+    .to_json_string()
+    .map_err(StorageError::Validation)?;
   let changed = conn
     .execute(
       "UPDATE provider_instances SET
             adapter_id = ?2,
             display_name = ?3,
-            base_url_override = ?4,
-            credential_kind = ?5,
-            credential_ref = ?6,
-            enabled = ?7,
-            proxy_mode = ?8,
-            insecure_http_confirmed_at = ?9,
-            models_synced_at = ?10,
-            models_sync_status = ?11,
-            models_sync_error_code = ?12,
-            updated_at = ?13
+            base_url = ?4,
+            base_url_source = ?5,
+            auth_scheme_json = ?6,
+            credential_kind = ?7,
+            credential_ref = ?8,
+            enabled = ?9,
+            proxy_mode = ?10,
+            insecure_http_confirmed_at = ?11,
+            models_synced_at = ?12,
+            models_sync_status = ?13,
+            models_sync_error_code = ?14,
+            updated_at = ?15
          WHERE id = ?1",
       params![
         provider.id.to_string(),
         provider.adapter_id,
         provider.display_name,
-        provider.base_url_override,
+        provider.base_url,
+        provider.base_url_source.as_str(),
+        auth_scheme_json,
         provider.credential_kind.as_str(),
         provider.credential_ref,
         provider.enabled as i64,
@@ -127,30 +150,37 @@ pub fn update_configuration_keep_credential(
   id: Uuid,
   adapter_id: &str,
   display_name: &str,
-  base_url_override: Option<&str>,
+  base_url: &str,
+  base_url_source: BaseUrlSource,
+  auth_scheme: &AuthSchemeV1,
   credential_kind: CredentialKind,
   enabled: bool,
   proxy_mode: ProxyMode,
   insecure_http_confirmed_at: Option<&str>,
   updated_at: &str,
 ) -> Result<(), StorageError> {
+  let auth_scheme_json = auth_scheme.to_json_string().map_err(StorageError::Validation)?;
   let changed = conn
     .execute(
       "UPDATE provider_instances SET
             adapter_id = ?2,
             display_name = ?3,
-            base_url_override = ?4,
-            credential_kind = ?5,
-            enabled = ?6,
-            proxy_mode = ?7,
-            insecure_http_confirmed_at = ?8,
-            updated_at = ?9
+            base_url = ?4,
+            base_url_source = ?5,
+            auth_scheme_json = ?6,
+            credential_kind = ?7,
+            enabled = ?8,
+            proxy_mode = ?9,
+            insecure_http_confirmed_at = ?10,
+            updated_at = ?11
          WHERE id = ?1",
       params![
         id.to_string(),
         adapter_id,
         display_name,
-        base_url_override,
+        base_url,
+        base_url_source.as_str(),
+        auth_scheme_json,
         credential_kind.as_str(),
         enabled as i64,
         proxy_mode.as_str(),

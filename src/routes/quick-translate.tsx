@@ -33,14 +33,14 @@ import { TextLoading } from "../components/TextLoading";
 import { useToast } from "../components/toast/useToast";
 import { iconButtonClassName } from "../components/ui";
 import { cn } from "../lib/cn";
-import { runScreenshotOcr } from "../features/ocr/runScreenshotOcr";
+import { recognizeCapturedScreenshot, runScreenshotOcr } from "../features/ocr/runScreenshotOcr";
 import {
   getOutputViewMode,
   setOutputViewMode,
   toggleOutputViewMode,
   type OutputViewMode,
 } from "../lib/output-view-mode";
-import { QUICK_TRANSLATE_CLIPBOARD_TEXT } from "../query/events";
+import { QUICK_TRANSLATE_CLIPBOARD_TEXT, QUICK_TRANSLATE_OCR_REQUEST } from "../query/events";
 import {
   allProviderModelsOptions,
   profileDetailOptions,
@@ -59,7 +59,7 @@ import { resolveTranslateFailureMessage } from "../features/translate/resolveTra
 import { runDetectLanguage, runStartSlotStreamBatch } from "../features/translate/runTranslate";
 import { DETECT_REQUEST_KEY, useSlotStreamSessions } from "../features/translate/useSlotStreamSessions";
 import { getIpcErrorMessage } from "../storage/errors";
-import type { TranslateInput, TranslationProfileDto } from "../storage/types";
+import type { QuickTranslateOcrRequest, TranslateInput, TranslationProfileDto } from "../storage/types";
 import { slotListAutoAnimate } from "./-quick-translate-list-animate";
 import {
   AUTO_LANGUAGE,
@@ -145,6 +145,7 @@ function QuickTranslatePage() {
   const [targetLang, setTargetLang] = useState<SelectableLanguageId>(sessionSeed.targetLang);
   const [slots, setSlots] = useState<Slot[]>(sessionSeed.slots);
   const [ocrBusy, setOcrBusy] = useState(false);
+  const ocrBusyRef = useRef(false);
   const [results, setResults] = useState<Record<string, SlotResult>>({});
   const [copiedSlotId, setCopiedSlotId] = useState<string | null>(null);
   /** Slot ids that are currently collapsed; absent ids default to expanded. */
@@ -297,8 +298,22 @@ function QuickTranslatePage() {
     }));
   }, []);
 
+  const showTranslateErrorToast = useCallback(
+    (message: string) => {
+      const title = t("translate.errorPrefix");
+      if (!message || message === title) {
+        toast.error({ title });
+        return;
+      }
+      toast.error({ title, description: message });
+    },
+    [t, toast],
+  );
+
+  /** Stop slot spinners on shared failures; toast carries the message (not card body). */
   const failSlots = useCallback(
     (entries: Array<{ slotId: string; inputKey?: string }>, epochs: Map<string, number>, message: string) => {
+      showTranslateErrorToast(message);
       setResults((prev) => {
         const next = { ...prev };
         for (const entry of entries) {
@@ -306,17 +321,19 @@ function QuickTranslatePage() {
           if (epoch == null || !slotStreams.isSlotEpochCurrent(entry.slotId, epoch)) {
             continue;
           }
+          const current = prev[entry.slotId] ?? emptyResult;
           next[entry.slotId] = {
-            text: "",
-            error: message,
+            ...current,
+            error: null,
             isTranslating: false,
-            inputKey: entry.inputKey,
+            streamOutputActive: false,
+            inputKey: entry.inputKey ?? current.inputKey,
           };
         }
         return next;
       });
     },
-    [slotStreams],
+    [showTranslateErrorToast, slotStreams],
   );
 
   /**
@@ -395,6 +412,11 @@ function QuickTranslatePage() {
           const detected = await runDetectLanguage(
             { text: trimmed, modelId: detectModelId, profileId: detectProfileId },
             detectRequestId,
+            {
+              providersById: new Map((providersQuery.data ?? []).map((p) => [p.id, p])),
+              modelsById: new Map((modelsQuery.data ?? []).map((m) => [m.id, m])),
+              profile: (profilesQuery.data ?? []).find((p) => p.id === detectProfileId) ?? null,
+            },
           );
           if (detectEpoch !== slotStreams.getDetectEpoch()) {
             return;
@@ -451,6 +473,7 @@ function QuickTranslatePage() {
       const resolveFailureMessage = (errorCode: string | null | undefined, message: string | undefined) =>
         resolveTranslateFailureMessage(errorCode, message, {
           timeout: t("translate.errors.timeout"),
+          invalidResponse: t("translate.errors.invalidResponse"),
           fallback: t("translate.errorPrefix"),
         });
 
@@ -516,8 +539,13 @@ function QuickTranslatePage() {
 
             // User-facing translation always streams; non-stream IPC is reserved for internal work.
             // Listen-before-invoke: prepareSlotStream registers listeners before batch start.
-            const prepared = await slotStreams.prepareSlotStream(slot.id, epoch, requestId, payload, {
-              onChunk: (chunk) => {
+            const snapshots = {
+              providersById: new Map((providersQuery.data ?? []).map((p) => [p.id, p])),
+              modelsById: new Map((modelsQuery.data ?? []).map((m) => [m.id, m])),
+              profile: (profilesQuery.data ?? []).find((p) => p.id === payload.profileId) ?? null,
+            };
+            const prepared = await slotStreams.prepareSlotStream(slot.id, epoch, requestId, payload, snapshots, {
+              onChunk: (delta) => {
                 const isFirstChunk = !receivedChunk;
                 receivedChunk = true;
                 setResults((prev) => {
@@ -526,7 +554,7 @@ function QuickTranslatePage() {
                     ...prev,
                     [slot.id]: {
                       ...current,
-                      text: isFirstChunk ? chunk.delta : current.text + chunk.delta,
+                      text: isFirstChunk ? delta : current.text + delta,
                       error: null,
                       isTranslating: true,
                       streamOutputActive: true,
@@ -546,7 +574,7 @@ function QuickTranslatePage() {
               },
               onDone: (done) => {
                 if (done.ok) {
-                  // Prefer full text from the server so we do not drift on partial assembly.
+                  // Prefer full text so we do not drift on partial assembly.
                   patchResult(slot.id, {
                     text: done.translatedText,
                     error: null,
@@ -555,9 +583,9 @@ function QuickTranslatePage() {
                     inputKey: slotInputKey,
                   });
                 } else {
+                  showTranslateErrorToast(resolveFailureMessage(done.errorCode, done.message));
                   patchResult(slot.id, {
-                    text: "",
-                    error: resolveFailureMessage(done.errorCode, done.message),
+                    error: null,
                     isTranslating: false,
                     streamOutputActive: false,
                     inputKey: slotInputKey,
@@ -565,9 +593,9 @@ function QuickTranslatePage() {
                 }
               },
               onError: (err) => {
+                showTranslateErrorToast(resolveFailureMessage(err.errorCode, err.message));
                 patchResult(slot.id, {
-                  text: "",
-                  error: resolveFailureMessage(err.errorCode, err.message),
+                  error: null,
                   isTranslating: false,
                   streamOutputActive: false,
                   inputKey: slotInputKey,
@@ -577,10 +605,11 @@ function QuickTranslatePage() {
                 patchResult(slot.id, { isTranslating: false, streamOutputActive: false });
               },
               onListenFailure: (err) => {
+                showTranslateErrorToast(getIpcErrorMessage(err, t("translate.errorPrefix")));
                 patchResult(slot.id, {
-                  text: "",
-                  error: getIpcErrorMessage(err, t("translate.errorPrefix")),
+                  error: null,
                   isTranslating: false,
+                  streamOutputActive: false,
                   inputKey: slotInputKey,
                 });
               },
@@ -591,12 +620,13 @@ function QuickTranslatePage() {
 
             // Listener-before-invoke: subscriptions are live before this batch start.
             const [outcome] = await runStartSlotStreamBatch([prepared.job]);
-            if (outcome == null || outcome.status === "failed") {
-              if (prepared.isCurrentRequest() && outcome?.status === "failed") {
+            if (outcome == null || outcome.ok === false) {
+              if (prepared.isCurrentRequest() && outcome?.ok === false) {
+                showTranslateErrorToast(getIpcErrorMessage(outcome.error, t("translate.errorPrefix")));
                 patchResult(slot.id, {
-                  text: "",
-                  error: getIpcErrorMessage(outcome.error, t("translate.errorPrefix")),
+                  error: null,
                   isTranslating: false,
+                  streamOutputActive: false,
                   inputKey: slotInputKey,
                 });
               }
@@ -615,10 +645,11 @@ function QuickTranslatePage() {
             }
             slotStreams.deleteRequestId(slot.id);
             slotStreams.clearSlotStreamListeners(slot.id);
+            showTranslateErrorToast(getIpcErrorMessage(err, t("translate.errorPrefix")));
             patchResult(slot.id, {
-              text: "",
-              error: getIpcErrorMessage(err, t("translate.errorPrefix")),
+              error: null,
               isTranslating: false,
+              streamOutputActive: false,
               inputKey: inputKeyFor(slot.profileId),
             });
           }
@@ -631,6 +662,7 @@ function QuickTranslatePage() {
       i18n.language,
       patchResult,
       queryClient,
+      showTranslateErrorToast,
       slotStreams,
       sourceLang,
       sourceText,
@@ -681,33 +713,49 @@ function QuickTranslatePage() {
     applySourceTextRef.current = applySourceText;
   }, [applySourceText]);
 
+  const applyOcrOutcome = useCallback(
+    async (run: () => ReturnType<typeof runScreenshotOcr>) => {
+      if (ocrBusyRef.current) {
+        return;
+      }
+      ocrBusyRef.current = true;
+      setOcrBusy(true);
+      try {
+        const outcome = await run();
+        if (outcome.status === "cancelled") {
+          return;
+        }
+        if (outcome.status === "no_default") {
+          toast.error({ title: t("quickTranslate.ocrNoDefault") });
+          return;
+        }
+        if (outcome.status === "empty") {
+          toast.warning({ title: t("quickTranslate.ocrEmpty") });
+          return;
+        }
+        // Fill the source field only; auto-translate debounce (or manual Enter) owns the next run.
+        applySourceText(outcome.result.text);
+      } catch (error) {
+        const message = getIpcErrorMessage(error, t("quickTranslate.ocrFailed"));
+        toast.error({ title: t("quickTranslate.ocrFailed"), description: message });
+      } finally {
+        ocrBusyRef.current = false;
+        setOcrBusy(false);
+      }
+    },
+    [applySourceText, t, toast],
+  );
+  const applyOcrOutcomeRef = useRef(applyOcrOutcome);
+  useEffect(() => {
+    applyOcrOutcomeRef.current = applyOcrOutcome;
+  }, [applyOcrOutcome]);
+
   const handleScreenshotOcr = useCallback(async () => {
-    if (!isTauriRuntime() || ocrBusy) {
+    if (!isTauriRuntime()) {
       return;
     }
-    setOcrBusy(true);
-    try {
-      const outcome = await runScreenshotOcr();
-      if (outcome.status === "cancelled") {
-        return;
-      }
-      if (outcome.status === "no_default") {
-        toast.error({ title: t("quickTranslate.ocrNoDefault") });
-        return;
-      }
-      if (outcome.status === "empty") {
-        toast.warning({ title: t("quickTranslate.ocrEmpty") });
-        return;
-      }
-      // Fill the source field only; auto-translate debounce (or manual Enter) owns the next run.
-      applySourceText(outcome.result.text);
-    } catch (error) {
-      const message = getIpcErrorMessage(error, t("quickTranslate.ocrFailed"));
-      toast.error({ title: t("quickTranslate.ocrFailed"), description: message });
-    } finally {
-      setOcrBusy(false);
-    }
-  }, [applySourceText, ocrBusy, t, toast]);
+    await applyOcrOutcome(() => runScreenshotOcr());
+  }, [applyOcrOutcome]);
   // Focus after preview → editor so the textarea exists in the DOM first.
   // Place the caret at the end; default focus leaves it at index 0.
   useEffect(() => {
@@ -732,34 +780,44 @@ function QuickTranslatePage() {
       return;
     }
 
-    let unlisten: (() => void) | undefined;
+    let unlistenClipboard: (() => void) | undefined;
+    let unlistenOcr: (() => void) | undefined;
     let cancelled = false;
 
-    void listen<string>(QUICK_TRANSLATE_CLIPBOARD_TEXT, (event) => {
-      if (cancelled) {
-        return;
-      }
-      applySourceTextRef.current(event.payload ?? "");
-    })
-      .then(async (fn) => {
+    void (async () => {
+      try {
+        unlistenClipboard = await listen<string>(QUICK_TRANSLATE_CLIPBOARD_TEXT, (event) => {
+          if (cancelled) {
+            return;
+          }
+          applySourceTextRef.current(event.payload ?? "");
+        });
+        unlistenOcr = await listen<QuickTranslateOcrRequest>(QUICK_TRANSLATE_OCR_REQUEST, (event) => {
+          if (cancelled) {
+            return;
+          }
+          const pngBase64 = event.payload?.pngBase64 ?? "";
+          void applyOcrOutcomeRef.current(() => recognizeCapturedScreenshot(pngBase64));
+        });
         if (cancelled) {
-          fn();
+          unlistenClipboard();
+          unlistenOcr();
           return;
         }
-        unlisten = fn;
         try {
           await notifyReady();
         } catch {
           // Window may be tearing down; next mount re-notifies.
         }
-      })
-      .catch(() => {
-        // Listener registration failed; leave frontend_ready false so text stays queued.
-      });
+      } catch {
+        // Listener registration failed; leave frontend_ready false so payloads stay queued.
+      }
+    })();
 
     return () => {
       cancelled = true;
-      unlisten?.();
+      unlistenClipboard?.();
+      unlistenOcr?.();
     };
   }, []);
 

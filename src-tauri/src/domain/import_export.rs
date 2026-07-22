@@ -9,8 +9,10 @@ use crate::domain::translation_profile::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// Configuration export format version. Bumped when profile multi-template fields were introduced.
-pub const EXPORT_FORMAT_VERSION: u32 = 2;
+/// Configuration export format version. Bumped for provider transport identity fields.
+pub const EXPORT_FORMAT_VERSION: u32 = 3;
+/// Previous format accepted via explicit v2→v3 migration on import.
+pub const PREVIOUS_EXPORT_FORMAT_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]

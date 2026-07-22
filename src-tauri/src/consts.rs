@@ -10,6 +10,8 @@ pub const TRAY_ID: &str = "main";
 
 /// Event carrying clipboard text to the Quick Translate window on double Ctrl+C / OCR delivery.
 pub const QUICK_TRANSLATE_CLIPBOARD_EVENT: &str = "quick-translate://clipboard-text";
+/// Event carrying a captured PNG for frontend OCR recognition into Quick Translate.
+pub const QUICK_TRANSLATE_OCR_REQUEST_EVENT: &str = "quick-translate://ocr-request";
 /// Region screenshot finished; payload is `RegionScreenshotResult`.
 pub const REGION_SCREENSHOT_CAPTURED_EVENT: &str = "screenshot://region-captured";
 /// Region screenshot cancelled by the user or overlay close.

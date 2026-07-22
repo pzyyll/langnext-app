@@ -1,50 +1,45 @@
-// ABOUTME: Multi-slot stream start/cancel orchestration with per-slot isolation.
-// ABOUTME: Tracks explicit requestIds; does not own stream event listeners or UI state.
+// ABOUTME: Multi-slot stream batch start and generic HTTP cancellation helpers.
+// ABOUTME: Per-slot isolation: one slot failure does not reject the whole batch.
 import { Effect } from "effect";
+import { invokeEffect } from "../../storage/invokeEffect";
 import type { IpcError } from "../../storage/ipcError";
 import type { TranslateInput } from "../../storage/types";
-import { invokeEffect } from "../../storage/invokeEffect";
-import { startTranslateStream } from "./translateStream";
+import type { TranslationContextSnapshots } from "./translationContext";
+import { runTranslationStream, type TranslationStreamHandlers } from "./translationWorkflow";
 
-/** One prepared stream job: route owns payload construction and listener wiring. */
-export interface SlotStreamJob {
-  readonly slotId: string;
-  readonly requestId: string;
-  readonly input: TranslateInput;
-}
+export type SlotStreamJob = {
+  slotId: string;
+  requestId: string;
+  input: TranslateInput;
+  snapshots: TranslationContextSnapshots;
+  handlers: TranslationStreamHandlers;
+  signal?: AbortSignal;
+};
 
-/** Outcome of attempting to start one slot's stream invoke (not terminal translation). */
 export type SlotStreamStartOutcome =
-  | { readonly slotId: string; readonly requestId: string; readonly status: "started" }
-  | {
-      readonly slotId: string;
-      readonly requestId: string;
-      readonly status: "failed";
-      readonly error: IpcError;
-    };
+  { slotId: string; requestId: string; ok: true } | { slotId: string; requestId: string; ok: false; error: IpcError };
 
 /**
- * Start stream invokes for every job. Failures are isolated per slot — one
- * `validation_failed` (or any IpcError) does not cancel sibling starts.
- *
- * Does not wait for translation completion; that still arrives via stream events.
- * Routes must still register listeners before calling this for each job's requestId.
+ * Start every slot stream concurrently. Individual failures become outcomes.
  */
 export function startSlotStreamBatch(jobs: readonly SlotStreamJob[]): Effect.Effect<SlotStreamStartOutcome[], never> {
   return Effect.forEach(
     jobs,
     (job) =>
-      startTranslateStream(job.input, job.requestId).pipe(
+      Effect.tryPromise({
+        try: () => runTranslationStream(job.input, job.snapshots, job.requestId, job.handlers, job.signal),
+        catch: (error) => error as IpcError,
+      }).pipe(
         Effect.map((): SlotStreamStartOutcome => ({
           slotId: job.slotId,
           requestId: job.requestId,
-          status: "started",
+          ok: true as const,
         })),
         Effect.catchAll((error): Effect.Effect<SlotStreamStartOutcome, never> =>
           Effect.succeed({
             slotId: job.slotId,
             requestId: job.requestId,
-            status: "failed",
+            ok: false as const,
             error,
           }),
         ),
@@ -54,21 +49,15 @@ export function startSlotStreamBatch(jobs: readonly SlotStreamJob[]): Effect.Eff
 }
 
 /**
- * Cancel every active request id.
- * Policy: swallow per-id IPC failures (request may already have finished) so the
- * batch never fails. Do not mix with single-id cancel APIs that surface IpcError.
+ * Cancel every listed request id via cancel_provider_http. Swallows per-id failures.
  */
 export function cancelRequestIds(requestIds: readonly string[]): Effect.Effect<void, never> {
-  if (requestIds.length === 0) {
-    return Effect.void;
-  }
-
   return Effect.forEach(
     requestIds,
     (requestId) =>
-      invokeEffect<boolean>("cancel_translate", { requestId }).pipe(
-        Effect.asVoid,
+      invokeEffect<boolean>("cancel_provider_http", { requestId }).pipe(
         Effect.catchAll(() => Effect.void),
+        Effect.asVoid,
       ),
     { concurrency: "unbounded" },
   ).pipe(Effect.asVoid);

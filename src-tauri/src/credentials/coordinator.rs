@@ -244,7 +244,9 @@ mod tests {
   use super::*;
   use crate::credentials::provider_ref;
   use crate::credentials::vault::MemoryCredentialVault;
-  use crate::domain::provider::{CredentialKind, ModelsSyncStatus, ProviderInstance, ProxyMode};
+  use crate::domain::provider::{
+    AuthSchemeV1, BaseUrlSource, CredentialKind, ModelsSyncStatus, ProviderInstance, ProxyMode,
+  };
   use crate::domain::time::{new_id, now_rfc3339};
   use crate::repositories::provider_instances;
   use std::sync::Arc;
@@ -266,7 +268,9 @@ mod tests {
           id,
           adapter_id: "openai-compatible".into(),
           display_name: "P".into(),
-          base_url_override: None,
+          base_url: "https://api.openai.com/v1".into(),
+          base_url_source: BaseUrlSource::PluginDefault,
+          auth_scheme: AuthSchemeV1::bearer(),
           credential_kind: CredentialKind::ApiKey,
           credential_ref,
           enabled: true,

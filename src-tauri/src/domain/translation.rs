@@ -1,7 +1,10 @@
-// ABOUTME: Translate IPC input/result DTOs and streaming event payloads.
-// ABOUTME: Never includes secrets, rendered prompts beyond user text, or full provider payloads.
+// ABOUTME: Translate IPC input/result DTOs retained for history and type alignment.
+// ABOUTME: Streaming no longer uses global translate://* events; frontend owns Channels.
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+/// Soft failure code when the user (or UI) cancels an in-flight translate.
+pub const TRANSLATE_CANCELLED_CODE: &str = "cancelled";
 
 /**
  * Frontend request to translate text with a configured provider model.
@@ -21,19 +24,14 @@ pub struct TranslateInput {
   #[serde(default)]
   pub profile_id: Option<Uuid>,
   /// Optional prompt-template override for this request. Must belong to `profile_id` when set.
-  /// When absent, the profile's default template is used.
   #[serde(default)]
   pub prompt_template_id: Option<Uuid>,
-  /// Configured source language id (`auto` allowed). History metadata only; prompts use `source_lang`.
   #[serde(default)]
   pub source_lang_id: Option<String>,
-  /// Configured target language id (`auto` allowed). History metadata only.
   #[serde(default)]
   pub target_lang_id: Option<String>,
-  /// Concrete source language id actually used (post-detection). History metadata only.
   #[serde(default)]
   pub effective_source_lang_id: Option<String>,
-  /// Concrete target language id actually used (post Auto resolution). History metadata only.
   #[serde(default)]
   pub effective_target_lang_id: Option<String>,
 }
@@ -95,98 +93,14 @@ impl TranslateResult {
   }
 }
 
-/// Event name for progressive translation text chunks.
-pub const TRANSLATE_CHUNK_EVENT: &str = "translate://chunk";
-/// Event name for a finished stream (success path).
-pub const TRANSLATE_DONE_EVENT: &str = "translate://done";
-/// Event name for a hard stream failure after all retries.
-pub const TRANSLATE_ERROR_EVENT: &str = "translate://error";
-/// Event name when the fallback chain switches models mid-stream.
-pub const TRANSLATE_RESET_EVENT: &str = "translate://reset";
-
-/// Soft failure code when the user (or UI) cancels an in-flight translate.
-pub const TRANSLATE_CANCELLED_CODE: &str = "cancelled";
-
-/// One streamed text fragment for the active request id.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TranslateStreamChunk {
-  pub id: String,
-  pub delta: String,
-}
-
-/// Clears progressive output before chunks from the next fallback model arrive.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TranslateStreamReset {
-  pub id: String,
-  /// Model that will produce the next chunks (next fallback target).
-  pub model_id: Uuid,
-}
-
-/// Terminal success/soft-failure payload after streaming (or non-stream fallback path).
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TranslateStreamDone {
-  pub id: String,
-  pub translated_text: String,
-  pub latency_ms: u64,
-  pub ok: bool,
-  pub message: String,
-  #[serde(skip_serializing_if = "Option::is_none")]
-  pub error_code: Option<String>,
-  #[serde(skip_serializing_if = "Option::is_none")]
-  pub model_id: Option<Uuid>,
-}
-
-/// Terminal hard error when the stream cannot complete.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TranslateStreamError {
-  pub id: String,
-  pub error_code: String,
-  pub message: String,
-  pub latency_ms: u64,
-}
-
-impl TranslateStreamDone {
-  pub fn from_result(id: String, result: TranslateResult) -> Self {
-    Self {
-      id,
-      translated_text: result.translated_text,
-      latency_ms: result.latency_ms,
-      ok: result.ok,
-      message: result.message,
-      error_code: result.error_code,
-      model_id: result.model_id,
-    }
-  }
-}
-
 #[cfg(test)]
 mod tests {
   use super::*;
 
   #[test]
-  fn cancelled_result_uses_stable_code() {
-    let result = TranslateResult::cancelled(12);
+  fn cancelled_uses_stable_code() {
+    let result = TranslateResult::cancelled(3);
     assert!(!result.ok);
     assert_eq!(result.error_code.as_deref(), Some(TRANSLATE_CANCELLED_CODE));
-    assert!(result.translated_text.is_empty());
-    assert_eq!(result.latency_ms, 12);
-  }
-
-  #[test]
-  fn stream_done_from_cancelled_preserves_code() {
-    let done = TranslateStreamDone::from_result("req-1".into(), TranslateResult::cancelled(3));
-    assert_eq!(done.id, "req-1");
-    assert!(!done.ok);
-    assert_eq!(done.error_code.as_deref(), Some("cancelled"));
-  }
-
-  #[test]
-  fn reset_event_name_is_stable() {
-    assert_eq!(TRANSLATE_RESET_EVENT, "translate://reset");
-    assert_eq!(TRANSLATE_CHUNK_EVENT, "translate://chunk");
   }
 }

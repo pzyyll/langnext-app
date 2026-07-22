@@ -21,41 +21,41 @@
 
 ## Locked Decisions
 
-| # | Topic | Decision |
-| --- | --- | --- |
-| 1 | Navigation | New primary sidebar item **OCR** (not Settings subpage) |
-| 2 | Field authority | **STranslate** for Baidu fields; stitch is style/layout reference only |
-| 3 | Multi-instance | Same provider type may appear many times; **no** default OCR |
-| 4 | AI prompt shape | system + user templates, multi-template list like Profiles |
-| 5 | Phase 1 providers | `baidu`, `ai` only; others not offered in Add dialog |
-| 6 | Phase 1 scope | Config UI + CRUD persistence only; no recognize/test-connection |
-| 7 | Secrets | Baidu API Key + Secret Key in OS vault; never on DTOs/export |
-| 8 | AI model source | Select from existing configured models (`listAllProviderModels` / enabled models) |
-| 9 | Import/export | Out of Phase 1 |
-| 10 | Reorder | Out of Phase 1 (append-only `sort_order` on create is fine) |
-| 11 | Nav order | Translate → Profiles → History → Models → **OCR**; Settings remains footer |
+| #   | Topic             | Decision                                                                          |
+| --- | ----------------- | --------------------------------------------------------------------------------- |
+| 1   | Navigation        | New primary sidebar item **OCR** (not Settings subpage)                           |
+| 2   | Field authority   | **STranslate** for Baidu fields; stitch is style/layout reference only            |
+| 3   | Multi-instance    | Same provider type may appear many times; **no** default OCR                      |
+| 4   | AI prompt shape   | system + user templates, multi-template list like Profiles                        |
+| 5   | Phase 1 providers | `baidu`, `ai` only; others not offered in Add dialog                              |
+| 6   | Phase 1 scope     | Config UI + CRUD persistence only; no recognize/test-connection                   |
+| 7   | Secrets           | Baidu API Key + Secret Key in OS vault; never on DTOs/export                      |
+| 8   | AI model source   | Select from existing configured models (`listAllProviderModels` / enabled models) |
+| 9   | Import/export     | Out of Phase 1                                                                    |
+| 10  | Reorder           | Out of Phase 1 (append-only `sort_order` on create is fine)                       |
+| 11  | Nav order         | Translate → Profiles → History → Models → **OCR**; Settings remains footer        |
 
 ### Baidu fields (STranslate)
 
-| Field | Notes |
-| --- | --- |
-| `displayName` | Editable service name |
-| `enabled` | Local form → Save |
-| `apiKey` | Vault; password input; never re-read |
-| `secretKey` | Vault; password input; never re-read |
-| `action` | `accurate` \| `accurate_basic` \| `general` \| `general_basic` (default `accurate`) |
-| Official link | Static help link to `https://ai.baidu.com/tech/ocr` (not stored) |
+| Field         | Notes                                                                               |
+| ------------- | ----------------------------------------------------------------------------------- |
+| `displayName` | Editable service name                                                               |
+| `enabled`     | Local form → Save                                                                   |
+| `apiKey`      | Vault; password input; never re-read                                                |
+| `secretKey`   | Vault; password input; never re-read                                                |
+| `action`      | `accurate` \| `accurate_basic` \| `general` \| `general_basic` (default `accurate`) |
+| Official link | Static help link to `https://ai.baidu.com/tech/ocr` (not stored)                    |
 
 ### AI OCR fields
 
-| Field | Notes |
-| --- | --- |
-| `displayName` | Editable service name |
-| `enabled` | Local form → Save |
-| `providerModelId` | UUID of an existing `provider_models` row |
-| `temperature` | Optional `f64`, `>= 0`; empty → app default `0.2` at save/read convention matching Profiles |
-| `promptTemplates` | ≥1; each `{ id, name, systemTemplate, userTemplate }` |
-| `defaultPromptTemplateId` | Must reference a template on this service |
+| Field                     | Notes                                                                                       |
+| ------------------------- | ------------------------------------------------------------------------------------------- |
+| `displayName`             | Editable service name                                                                       |
+| `enabled`                 | Local form → Save                                                                           |
+| `providerModelId`         | UUID of an existing `provider_models` row                                                   |
+| `temperature`             | Optional `f64`, `>= 0`; empty → app default `0.2` at save/read convention matching Profiles |
+| `promptTemplates`         | ≥1; each `{ id, name, systemTemplate, userTemplate }`                                       |
+| `defaultPromptTemplateId` | Must reference a template on this service                                                   |
 
 Default AI OCR system/user templates (seed on create; user-editable):
 
@@ -216,11 +216,7 @@ CREATE INDEX idx_ocr_prompt_templates_service
 ```ts
 export type OcrProviderType = "baidu" | "ai";
 
-export type BaiduOcrAction =
-  | "accurate"
-  | "accurate_basic"
-  | "general"
-  | "general_basic";
+export type BaiduOcrAction = "accurate" | "accurate_basic" | "general" | "general_basic";
 
 export interface OcrPromptTemplate {
   id: string;
@@ -271,12 +267,12 @@ export interface OcrServiceWrite {
 
 ### IPC commands
 
-| Command | Behavior |
-| --- | --- |
-| `list_ocr_services` | Ordered list DTOs (include templates for AI rows) |
-| `get_ocr_service` | Single DTO by id |
-| `save_ocr_service` | Create (`id` null) or update; emit `data://ocr-services-changed` |
-| `delete_ocr_service` | Delete row (+ cascade templates), clear vault refs via coordinator; emit event |
+| Command                   | Behavior                                                                                                                                        |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `list_ocr_services`       | Ordered list DTOs (include templates for AI rows)                                                                                               |
+| `get_ocr_service`         | Single DTO by id                                                                                                                                |
+| `save_ocr_service`        | Create (`id` null) or update; emit `data://ocr-services-changed`                                                                                |
+| `delete_ocr_service`      | Delete row (+ cascade templates), clear vault refs via coordinator; emit event                                                                  |
 | `set_ocr_service_enabled` | Optional thin helper; **prefer single Save path** like Profiles — implement only if list toggle is added. Phase 1: enable only via editor Save. |
 
 Frontend façades in `src/storage/client.ts` match the command names above.
@@ -637,15 +633,15 @@ Mirror `ModelsLayout` density (not stitch pixel values):
 
 ## Failure Behavior
 
-| Case | Behavior |
-| --- | --- |
-| List IPC failure | Rail error + Retry; no fabricated rows |
-| Save validation | Inline/toast error; keep dialog/editor open |
-| Optimistic concurrency conflict | Error message; refetch detail/list; user re-applies |
-| Vault unavailable | Backend `CredentialUnavailable` → sanitized IPC message; row not half-committed |
-| AI create with zero models | Dialog error; no row created |
-| Delete while editor open | Confirm → delete → `/ocr` empty state |
-| Unknown route id | Not-found panel after list loaded |
+| Case                            | Behavior                                                                        |
+| ------------------------------- | ------------------------------------------------------------------------------- |
+| List IPC failure                | Rail error + Retry; no fabricated rows                                          |
+| Save validation                 | Inline/toast error; keep dialog/editor open                                     |
+| Optimistic concurrency conflict | Error message; refetch detail/list; user re-applies                             |
+| Vault unavailable               | Backend `CredentialUnavailable` → sanitized IPC message; row not half-committed |
+| AI create with zero models      | Dialog error; no row created                                                    |
+| Delete while editor open        | Confirm → delete → `/ocr` empty state                                           |
+| Unknown route id                | Not-found panel after list loaded                                               |
 
 ---
 
@@ -670,13 +666,13 @@ Mirror `ModelsLayout` density (not stitch pixel values):
 
 ## Risks and Mitigations
 
-| Risk | Mitigation |
-| --- | --- |
-| Dual-key vault complexity / partial failure | Reuse provider journal; sequential finalize; tests for replace/clear each key |
-| AI model deleted under OCR service | No hard FK; validate on save; editor warning when missing |
-| Scope creep into OCR invoke | Explicit out-of-scope; disable any test buttons if UI temptations appear |
+| Risk                                        | Mitigation                                                                                                    |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| Dual-key vault complexity / partial failure | Reuse provider journal; sequential finalize; tests for replace/clear each key                                 |
+| AI model deleted under OCR service          | No hard FK; validate on save; editor warning when missing                                                     |
+| Scope creep into OCR invoke                 | Explicit out-of-scope; disable any test buttons if UI temptations appear                                      |
 | Large Profiles-like template UI in one file | Keep `AiOcrForm` separate; reuse class names/patterns, not a full shared abstraction unless duplication hurts |
-| Import/export later needs shape | Typed columns + no secrets on DTO keep a clear export path |
+| Import/export later needs shape             | Typed columns + no secrets on DTO keep a clear export path                                                    |
 
 ---
 
@@ -694,16 +690,16 @@ Mirror `ModelsLayout` density (not stitch pixel values):
 
 ## Requirement Traceability
 
-| Requirement | Plan coverage |
-| --- | --- |
-| Multi-provider modular design | `provider_type` + type-specific columns/forms; Add catalog extensible |
-| Phase 1 Baidu + AI only | Locked decisions + Add dialog |
-| Nav entry | Primary OCR item |
-| Left list / right config | `/ocr` layout + `$ocrServiceId` |
-| Add → type dialog → card → form → save | Tasks 7–9 |
-| Baidu fields from STranslate | Locked Baidu table |
-| AI model + multi prompt + temperature | Locked AI table + Task 9 |
-| Config only, no invoke | Out of scope section |
-| Stitch style not binding | Assumptions + UI section |
-| Same type multi-instance, no default | Locked #3 |
-| system+user prompts | Locked #4 |
+| Requirement                            | Plan coverage                                                         |
+| -------------------------------------- | --------------------------------------------------------------------- |
+| Multi-provider modular design          | `provider_type` + type-specific columns/forms; Add catalog extensible |
+| Phase 1 Baidu + AI only                | Locked decisions + Add dialog                                         |
+| Nav entry                              | Primary OCR item                                                      |
+| Left list / right config               | `/ocr` layout + `$ocrServiceId`                                       |
+| Add → type dialog → card → form → save | Tasks 7–9                                                             |
+| Baidu fields from STranslate           | Locked Baidu table                                                    |
+| AI model + multi prompt + temperature  | Locked AI table + Task 9                                              |
+| Config only, no invoke                 | Out of scope section                                                  |
+| Stitch style not binding               | Assumptions + UI section                                              |
+| Same type multi-instance, no default   | Locked #3                                                             |
+| system+user prompts                    | Locked #4                                                             |

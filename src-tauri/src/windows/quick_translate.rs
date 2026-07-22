@@ -2,6 +2,7 @@
 // ABOUTME: Cursor-follow show, click-outside hide, clipboard paste, and source-text delivery.
 
 use crate::consts;
+use serde::Serialize;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -54,22 +55,38 @@ fn in_move_out_grace() -> bool {
   (process_start().elapsed().as_millis() as u64) < until
 }
 
-/// App-level pin / clipboard-delivery state for the single Quick Translate window.
+/// Pending frontend delivery while the Quick Translate webview is still mounting.
+#[derive(Debug, Clone)]
+enum PendingDelivery {
+  /// Source text from clipboard / completed OCR.
+  Clipboard(String),
+  /// Captured PNG that the frontend must OCR via provider plugins.
+  OcrRequest(String),
+}
+
+/// Payload for `QUICK_TRANSLATE_OCR_REQUEST_EVENT`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct QuickTranslateOcrRequest {
+  png_base64: String,
+}
+
+/// App-level pin / delivery state for the single Quick Translate window.
 ///
 /// `frontend_ready` is set only after the webview has registered its event listeners.
-/// Until then, source text (clipboard / OCR) is held in `pending_clipboard` (latest wins).
+/// Until then, clipboard text or OCR image payloads are held in `pending` (latest wins).
 #[derive(Debug, Default)]
 pub struct QuickTranslateState {
   pub is_pin: Mutex<bool>,
   frontend_ready: AtomicBool,
-  pending_clipboard: Mutex<Option<String>>,
+  pending: Mutex<Option<PendingDelivery>>,
 }
 
 impl QuickTranslateState {
   pub fn reset(&self) {
     *self.is_pin.lock().unwrap() = false;
     // Hold the pending lock while clearing ready so deliver/notify cannot interleave.
-    let mut pending = self.pending_clipboard.lock().unwrap();
+    let mut pending = self.pending.lock().unwrap();
     self.frontend_ready.store(false, Ordering::SeqCst);
     *pending = None;
   }
@@ -183,24 +200,55 @@ fn emit_clipboard_text<R: Runtime>(app: &tauri::AppHandle<R>, text: String) {
   }
 }
 
-/// Deliver clipboard text now if the frontend is listening; otherwise queue the latest payload.
-fn deliver_or_queue_clipboard<R: Runtime>(app: &tauri::AppHandle<R>, text: String) {
+fn emit_ocr_request<R: Runtime>(app: &tauri::AppHandle<R>, png_base64: String) {
+  if let Some(win) = app.get_webview_window(consts::WIN_LABEL_QUICK_TRANSLATE) {
+    let _ = win.emit_to(
+      EventTarget::webview_window(consts::WIN_LABEL_QUICK_TRANSLATE),
+      consts::QUICK_TRANSLATE_OCR_REQUEST_EVENT,
+      QuickTranslateOcrRequest { png_base64 },
+    );
+  } else {
+    log::error!("quick_translate_window_missing_on_ocr_emit");
+  }
+}
+
+fn deliver_or_queue<R: Runtime>(app: &tauri::AppHandle<R>, delivery: PendingDelivery) {
   let Some(state) = app.try_state::<QuickTranslateState>() else {
-    emit_clipboard_text(app, text);
+    match delivery {
+      PendingDelivery::Clipboard(text) => emit_clipboard_text(app, text),
+      PendingDelivery::OcrRequest(png) => emit_ocr_request(app, png),
+    }
     return;
   };
 
   // Decision under the pending lock so notify_ready cannot set ready between check and queue.
   {
-    let mut pending = state.pending_clipboard.lock().unwrap();
+    let mut pending = state.pending.lock().unwrap();
     if !state.frontend_ready.load(Ordering::SeqCst) {
-      *pending = Some(text);
-      log::debug!("quick_translate_clipboard_queued awaiting_frontend_ready");
+      *pending = Some(delivery);
+      log::debug!("quick_translate_delivery_queued awaiting_frontend_ready");
       return;
     }
   }
 
-  emit_clipboard_text(app, text);
+  match delivery {
+    PendingDelivery::Clipboard(text) => emit_clipboard_text(app, text),
+    PendingDelivery::OcrRequest(png) => emit_ocr_request(app, png),
+  }
+}
+
+/// Deliver clipboard text now if the frontend is listening; otherwise queue the latest payload.
+fn deliver_or_queue_clipboard<R: Runtime>(app: &tauri::AppHandle<R>, text: String) {
+  deliver_or_queue(app, PendingDelivery::Clipboard(text));
+}
+
+/// Deliver a captured PNG for frontend OCR recognition into Quick Translate.
+pub fn deliver_ocr_request<R: Runtime>(app: &tauri::AppHandle<R>, png_base64: String) {
+  if png_base64.trim().is_empty() {
+    log::warn!("quick_translate_ocr_request_empty_png");
+    return;
+  }
+  deliver_or_queue(app, PendingDelivery::OcrRequest(png_base64));
 }
 
 /// Called by the frontend after its event listeners are registered.
@@ -210,15 +258,18 @@ pub async fn notify_ready<R: Runtime>(app: tauri::AppHandle<R>) -> Result<(), St
     return Ok(());
   };
 
-  // Mark ready and take pending under one lock so concurrent deliver cannot lose text.
+  // Mark ready and take pending under one lock so concurrent deliver cannot lose payloads.
   let pending = {
-    let mut pending = state.pending_clipboard.lock().unwrap();
+    let mut pending = state.pending.lock().unwrap();
     state.frontend_ready.store(true, Ordering::SeqCst);
     pending.take()
   };
-  if let Some(text) = pending {
-    log::debug!("quick_translate_clipboard_flush_on_ready");
-    emit_clipboard_text(&app, text);
+  if let Some(delivery) = pending {
+    log::debug!("quick_translate_delivery_flush_on_ready");
+    match delivery {
+      PendingDelivery::Clipboard(text) => emit_clipboard_text(&app, text),
+      PendingDelivery::OcrRequest(png) => emit_ocr_request(&app, png),
+    }
   }
   Ok(())
 }

@@ -3,6 +3,14 @@
 export type CredentialKind = "none" | "api_key" | "bearer";
 export type ProxyMode = "inherit" | "direct";
 export type ModelsSyncStatus = "never" | "ok" | "error";
+export type BaseUrlSource = "plugin_default" | "custom";
+
+/** Versioned generic auth scheme persisted with each provider instance. */
+export type AuthSchemeV1 =
+  | { schemaVersion: 1; type: "none" }
+  | { schemaVersion: 1; type: "bearer" }
+  | { schemaVersion: 1; type: "header"; name: string }
+  | { schemaVersion: 1; type: "query"; name: string };
 export type ModelSource = "remote" | "manual" | "builtin";
 export type Availability = "available" | "missing" | "unknown";
 export type GlobalProxyMode = "system" | "custom";
@@ -12,7 +20,7 @@ export type ModelsSyncErrorCode =
   "auth" | "rate_limited" | "network" | "timeout" | "server" | "invalid_response" | "credential_unavailable";
 
 /**
- * Codes returned by sync_provider_models IPC.
+ * Codes returned by frontend model sync / apply_provider_model_sync IPC.
  * Includes non-persisted race outcomes such as connection_changed (never stored on the provider row).
  */
 export type SyncModelsResultCode = ModelsSyncErrorCode | "connection_changed";
@@ -25,7 +33,9 @@ export interface ProviderInstanceDto {
   id: string;
   adapterId: string;
   displayName: string;
-  baseUrlOverride: string | null;
+  baseUrl: string;
+  baseUrlSource: BaseUrlSource;
+  authScheme: AuthSchemeV1;
   credentialKind: CredentialKind;
   hasCredential: boolean;
   enabled: boolean;
@@ -68,7 +78,9 @@ export interface ProviderInstanceWrite {
   id?: string | null;
   adapterId: string;
   displayName: string;
-  baseUrlOverride?: string | null;
+  baseUrl: string;
+  baseUrlSource: BaseUrlSource;
+  authScheme: AuthSchemeV1;
   credentialKind: CredentialKind;
   credential: CredentialUpdate;
   enabled: boolean;
@@ -157,7 +169,7 @@ export interface TranslateInput {
   effectiveTargetLangId?: string | null;
 }
 
-/** Result of translate_text IPC (success or soft provider/validation failure). */
+/** Result of frontend translation workflows (success or soft provider/validation failure). */
 export interface TranslateResult {
   translatedText: string;
   latencyMs: number;
@@ -168,20 +180,20 @@ export interface TranslateResult {
   modelId?: string | null;
 }
 
-/** Progressive chunk from translate_text_stream (`translate://chunk`). */
+/** Progressive chunk shape used by stream session UI (workflow callbacks, not global events). */
 export interface TranslateStreamChunk {
   id: string;
   delta: string;
 }
 
-/** Fallback chain switched models — clear progressive output (`translate://reset`). */
+/** Fallback chain switched models — clear progressive output before replacement deltas. */
 export interface TranslateStreamReset {
   id: string;
   /** Model that will produce subsequent chunks. */
   modelId: string;
 }
 
-/** Terminal success/soft-failure from translate_text_stream (`translate://done`). */
+/** Terminal success/soft-failure from frontend stream workflows. */
 export interface TranslateStreamDone {
   id: string;
   translatedText: string;
@@ -192,7 +204,7 @@ export interface TranslateStreamDone {
   modelId?: string | null;
 }
 
-/** Hard failure from translate_text_stream (`translate://error`). */
+/** Hard failure shape for stream session UI. */
 export interface TranslateStreamError {
   id: string;
   errorCode: string;
@@ -206,7 +218,7 @@ export type DetectorType = "llm";
 /** Tagged language detector config. `type` selects the backend; only `llm` exists today. */
 export type LanguageDetectorConfig = { type: "llm"; modelId?: string | null };
 
-/** Input for detect_language IPC. */
+/** Input for frontend language detection workflow. */
 export interface DetectLanguageInput {
   text: string;
   /** Default LLM model used when no profile is selected / no explicit config. */
@@ -215,7 +227,7 @@ export interface DetectLanguageInput {
   profileId?: string | null;
 }
 
-/** Result of detect_language IPC (success or soft provider/validation failure). */
+/** Result of frontend language detection (success or soft provider/validation failure). */
 export interface DetectLanguageResult {
   ok: boolean;
   /** Detected supported language id (e.g. `zh`); null on soft failure. */
@@ -418,6 +430,11 @@ export interface RegionScreenshotResult {
   copiedToClipboard: boolean;
 }
 
+/** Shortcut/global OCR handoff into Quick Translate for frontend recognition. */
+export interface QuickTranslateOcrRequest {
+  pngBase64: string;
+}
+
 /** Full-monitor backdrop shown in the selection overlay (temp-file path). */
 export interface RegionScreenshotBackdrop {
   /** Absolute filesystem path to the PNG backdrop. */
@@ -461,7 +478,11 @@ export interface ProviderExport {
   id: string;
   adapterId: string;
   displayName: string;
-  baseUrlOverride: string | null;
+  baseUrl?: string | null;
+  baseUrlSource?: BaseUrlSource | null;
+  authScheme?: AuthSchemeV1 | null;
+  /** Legacy v2 field accepted on import only. */
+  baseUrlOverride?: string | null;
   credentialKind: CredentialKind;
   enabled: boolean;
   proxyMode: ProxyMode;
@@ -590,7 +611,9 @@ const _providerDtoFixture = {
   id: "00000000-0000-7000-8000-000000000001",
   adapterId: "openai-compatible",
   displayName: "Local",
-  baseUrlOverride: null,
+  baseUrl: "https://api.openai.com/v1",
+  baseUrlSource: "plugin_default",
+  authScheme: { schemaVersion: 1, type: "bearer" },
   credentialKind: "api_key",
   hasCredential: true,
   enabled: true,

@@ -118,6 +118,40 @@ impl TranslationHistoryService {
     self.db.read(|conn| repo::count(conn))
   }
 
+  /// Frontend completion write with idempotent `completion_id` primary key.
+  pub fn record_completion(&self, input: FrontendHistoryCompletion) -> Result<(), StorageError> {
+    validate_frontend_history_completion(&input)?;
+    let status = if input.ok {
+      HistoryStatus::Complete
+    } else {
+      HistoryStatus::Failed
+    };
+    let record = TranslationHistoryRecord {
+      id: input.completion_id,
+      created_at: now_rfc3339(),
+      source_text: input.source_text,
+      translated_text: input.translated_text,
+      source_lang: input.source_lang,
+      target_lang: input.target_lang,
+      effective_source_lang: input.effective_source_lang,
+      effective_target_lang: input.effective_target_lang,
+      model_id: input.model_id,
+      model_display_name: input.model_display_name,
+      provider_display_name: input.provider_display_name,
+      profile_id: input.profile_id,
+      profile_name: input.profile_name,
+      status,
+      error_code: input.error_code,
+      error_message: if input.ok { None } else { input.error_message },
+      latency_ms: input.latency_ms,
+    };
+    self.db.transaction(|uow| {
+      repo::insert_ignore(uow.conn(), &record)?;
+      repo::delete_oldest(uow.conn(), HISTORY_RETENTION_CAP)?;
+      Ok(())
+    })
+  }
+
   /// Record one completed translate attempt and prune to the retention cap.
   ///
   /// Called by `ModelService` only after `run_translate_attempts` returns a non-cancelled
@@ -165,6 +199,46 @@ impl TranslationHistoryService {
       Ok(())
     })
   }
+}
+
+/// Frontend-owned history completion payload (no secrets / raw request bodies).
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FrontendHistoryCompletion {
+  pub completion_id: Uuid,
+  pub ok: bool,
+  pub translated_text: String,
+  pub error_code: Option<String>,
+  pub error_message: Option<String>,
+  pub model_id: Option<Uuid>,
+  pub model_display_name: String,
+  pub provider_display_name: Option<String>,
+  pub profile_id: Option<Uuid>,
+  pub profile_name: Option<String>,
+  pub latency_ms: i64,
+  pub source_lang: String,
+  pub target_lang: String,
+  pub source_text: String,
+  pub effective_source_lang: Option<String>,
+  pub effective_target_lang: Option<String>,
+}
+
+fn validate_frontend_history_completion(input: &FrontendHistoryCompletion) -> Result<(), StorageError> {
+  if input.source_text.trim().is_empty() {
+    return Err(StorageError::Validation("source_text must not be empty".into()));
+  }
+  if input.source_lang.trim().is_empty() || input.target_lang.trim().is_empty() {
+    return Err(StorageError::Validation(
+      "source_lang and target_lang are required".into(),
+    ));
+  }
+  if input.model_display_name.trim().is_empty() {
+    return Err(StorageError::Validation("model_display_name is required".into()));
+  }
+  if input.latency_ms < 0 {
+    return Err(StorageError::Validation("latency_ms must be non-negative".into()));
+  }
+  Ok(())
 }
 
 /// Language-id metadata captured from a `TranslateInput` for history recording.

@@ -1,13 +1,12 @@
 // ABOUTME: Managed Tauri AppState holding database path, services, and device state.
 // ABOUTME: Built during setup after SQLite migration and credential recovery.
-use crate::adapters::transport::{HttpModelTransport, ModelTransport};
 use crate::credentials::{CredentialVault, NativeCredentialVault};
 use crate::device_state::{DeviceStateManager, SharedDeviceState};
-use crate::domain::cancel::TranslateSessionRegistry;
+use crate::domain::cancel::RequestSessionRegistry;
 use crate::error::StorageError;
 use crate::services::{
-  ImportExportService, ModelService, OcrServiceService, ProviderService, SettingsService, TranslationHistoryService,
-  TranslationProfileService,
+  ImportExportService, ModelService, OcrServiceService, ProviderHttpService, ProviderService, SettingsService,
+  TranslationHistoryService, TranslationProfileService,
 };
 use crate::storage::Database;
 use std::path::PathBuf;
@@ -25,8 +24,10 @@ pub struct AppState {
   pub import_export: ImportExportService,
   pub history: TranslationHistoryService,
   pub device_state: SharedDeviceState,
-  /// In-flight translate request ids → cancel tokens.
-  pub translate_sessions: Arc<TranslateSessionRegistry>,
+  /// Generic provider HTTP transport (vault auth injection + raw responses).
+  pub provider_http: ProviderHttpService,
+  /// In-flight request ids → cancel tokens (provider HTTP).
+  pub request_sessions: Arc<RequestSessionRegistry>,
 }
 
 impl AppState {
@@ -40,22 +41,15 @@ impl AppState {
     let _recovery = ProviderService::recover_credential_operations(&db, vault.as_ref());
 
     let providers = ProviderService::new(db.clone(), vault.clone());
-    let transport: Arc<dyn ModelTransport> = Arc::new(HttpModelTransport);
-    let history = TranslationHistoryService::new(db.clone());
-    let models = ModelService::new(
-      db.clone(),
-      vault.clone(),
-      transport,
-      history,
-      app_data_dir.join("cache"),
-    );
+    let models = ModelService::new(db.clone(), vault.clone(), app_data_dir.join("cache"));
     let profiles = TranslationProfileService::new(db.clone());
     let ocr_services = OcrServiceService::new(db.clone(), vault.clone());
     let settings = SettingsService::new(db.clone(), vault.clone());
     let import_export = ImportExportService::new(db.clone(), vault.clone());
     let history = TranslationHistoryService::new(db.clone());
+    let provider_http = ProviderHttpService::new(db.clone(), vault.clone());
     let device_state = Arc::new(DeviceStateManager::load(&app_data_dir)?);
-    let translate_sessions = Arc::new(TranslateSessionRegistry::new());
+    let request_sessions = Arc::new(RequestSessionRegistry::new());
 
     Ok(Self {
       db,
@@ -68,7 +62,8 @@ impl AppState {
       import_export,
       history,
       device_state,
-      translate_sessions,
+      provider_http,
+      request_sessions,
     })
   }
 }

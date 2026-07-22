@@ -45,13 +45,36 @@ fn map_row(row: &Row<'_>) -> Result<TranslationHistory, rusqlite::Error> {
 }
 
 pub fn insert(conn: &Connection, record: &TranslationHistoryRecord) -> Result<(), StorageError> {
-  conn.execute(
+  insert_with_conflict(conn, record, false)
+}
+
+/// Insert with conflict-ignore for frontend completion idempotency.
+pub fn insert_ignore(conn: &Connection, record: &TranslationHistoryRecord) -> Result<(), StorageError> {
+  insert_with_conflict(conn, record, true)
+}
+
+fn insert_with_conflict(
+  conn: &Connection,
+  record: &TranslationHistoryRecord,
+  ignore_conflict: bool,
+) -> Result<(), StorageError> {
+  let sql = if ignore_conflict {
+    "INSERT OR IGNORE INTO translation_history (
+            id, created_at, source_text, translated_text, source_lang, target_lang,
+            effective_source_lang, effective_target_lang, model_id, model_display_name,
+            provider_display_name, profile_id, profile_name, status, error_code,
+            error_message, latency_ms
+        ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)"
+  } else {
     "INSERT INTO translation_history (
             id, created_at, source_text, translated_text, source_lang, target_lang,
             effective_source_lang, effective_target_lang, model_id, model_display_name,
             provider_display_name, profile_id, profile_name, status, error_code,
             error_message, latency_ms
-        ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
+        ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)"
+  };
+  conn.execute(
+    sql,
     params![
       record.id.to_string(),
       record.created_at,

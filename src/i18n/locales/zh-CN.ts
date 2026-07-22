@@ -193,6 +193,7 @@ const zhCN = {
     errorPrefix: "翻译失败",
     errors: {
       timeout: "流式空闲超时 — 模型长时间未返回数据。",
+      invalidResponse: "模型返回了无效响应。",
       detectFailed: "无法检测源语言。",
     },
     confidenceValue: "置信度：{{percent}}%",
@@ -437,7 +438,11 @@ const zhCN = {
     loadModelsFailed: "加载模型失败。",
     connection: "连接",
     baseUrl: "Base URL",
-    baseUrlOverride: "Base URL 覆盖",
+    errors: {
+      baseUrlRequired: "此插件需要填写 Base URL。",
+      pluginUnavailable: "插件不可用",
+      providerReconfigurationRequired: "此模型 API 类型与当前通道端点不兼容。请设置共享 Base URL，或创建独立通道。",
+    },
     apiToken: "API 令牌",
     apiType: "API 类型：{{type}}",
     apiTypeLabel: "API 类型",

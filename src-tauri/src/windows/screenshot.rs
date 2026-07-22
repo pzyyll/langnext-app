@@ -1,8 +1,6 @@
 // ABOUTME: Region-screenshot overlay window and capture session for desktop targets.
 // ABOUTME: Pre-warms overlay, serves backdrop via temp file, optional post-capture OCR into Quick Translate.
 use crate::consts;
-use crate::domain::ocr_service::OcrRecognizeInput;
-use crate::state::AppState;
 use crate::windows;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use image::{ImageEncoder, RgbaImage, imageops};
@@ -187,8 +185,7 @@ fn start_with_mode<R: Runtime>(app: &tauri::AppHandle<R>, mode: CaptureMode) -> 
   let _ = prev_foreground;
 
   let main = hide_app_window_for_capture(app, consts::WIN_LABEL_MAIN).merge(prev_main);
-  let quick_translate =
-    hide_app_window_for_capture(app, consts::WIN_LABEL_QUICK_TRANSLATE).merge(prev_quick_translate);
+  let quick_translate = hide_app_window_for_capture(app, consts::WIN_LABEL_QUICK_TRANSLATE).merge(prev_quick_translate);
   if main.restore || quick_translate.restore {
     wait_for_windows_hidden(
       app,
@@ -783,34 +780,14 @@ pub fn start_for_ocr<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<(), String
   start_with_mode(app, CaptureMode::Ocr)
 }
 
-/// Run default OCR and deliver recognized text into Quick Translate (show only when text exists).
-fn spawn_ocr_to_quick_translate<R: Runtime>(app: tauri::AppHandle<R>, png_base64: String) {
-  tauri::async_runtime::spawn(async move {
-    let Some(app_state) = app.try_state::<AppState>() else {
-      log::error!("screenshot_ocr_missing_app_state");
-      return;
-    };
-    let ocr = app_state.ocr_services.clone();
-    match ocr
-      .recognize(OcrRecognizeInput {
-        png_base64,
-        ocr_service_id: None,
-      })
-      .await
-    {
-      Ok(result) => {
-        let text = result.text.trim().to_string();
-        if text.is_empty() {
-          log::info!("screenshot_ocr_empty_result");
-          return;
-        }
-        windows::quick_translate::deliver_source_text(&app, text);
-      }
-      Err(err) => {
-        log::error!("screenshot_ocr_failed error={err}");
-      }
-    }
-  });
+/// Hand a captured PNG to Quick Translate so the frontend can run Baidu/AI OCR.
+/// AI recognition lives in the provider-plugin workflow; Rust only transports the image.
+fn dispatch_ocr_to_quick_translate<R: Runtime>(app: &tauri::AppHandle<R>, png_base64: String) {
+  if let Err(err) = windows::quick_translate::show(app) {
+    log::error!("screenshot_ocr_show_failed error={err}");
+    return;
+  }
+  windows::quick_translate::deliver_ocr_request(app, png_base64);
 }
 
 /// Drop session + temp file without restoring windows (used when starting a new session).
@@ -826,11 +803,7 @@ fn discard_session_keep_hidden<R: Runtime>(
     let previous_foreground = session.previous_foreground;
     #[cfg(not(windows))]
     let previous_foreground = None;
-    Ok(Some((
-      session.main,
-      session.quick_translate,
-      previous_foreground,
-    )))
+    Ok(Some((session.main, session.quick_translate, previous_foreground)))
   } else {
     Ok(None)
   }
@@ -1042,7 +1015,7 @@ pub async fn region_screenshot_confirm<R: Runtime>(
       );
       if session.mode == CaptureMode::Ocr {
         log::info!("screenshot_ocr_dispatch");
-        spawn_ocr_to_quick_translate(app.clone(), result.png_base64.clone());
+        dispatch_ocr_to_quick_translate(&app, result.png_base64.clone());
       }
       Ok(result)
     }

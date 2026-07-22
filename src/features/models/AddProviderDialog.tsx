@@ -22,7 +22,7 @@ import { useToast } from "../../components/toast/useToast";
 import { saveProviderInstance } from "../../storage/client";
 import { getIpcErrorMessage } from "../../storage/errors";
 import type { CredentialKind, CredentialUpdate, ProviderInstanceDto } from "../../storage/types";
-import { ADAPTER_OPTIONS, getDefaultBaseUrl } from "./adapterOptions";
+import { ADAPTER_OPTIONS, getDefaultBaseUrl, resolveAuthScheme, resolveBaseUrlFields } from "./adapterOptions";
 
 export type AddProviderDialogProps = {
   open: boolean;
@@ -74,7 +74,7 @@ function AddProviderForm({ onCreated }: AddProviderFormProps) {
   const toast = useToast();
   const [displayName, setDisplayName] = useState("");
   const [adapterId, setAdapterId] = useState(ADAPTER_OPTIONS[0]?.id ?? "openai-compatible");
-  const [baseUrlOverride, setBaseUrlOverride] = useState("");
+  const [baseUrl, setBaseUrl] = useState("");
   const [credentialKind, setCredentialKind] = useState<CredentialKind>("api_key");
   const [token, setToken] = useState("");
   const [enabled, setEnabled] = useState(true);
@@ -103,8 +103,12 @@ function AddProviderForm({ onCreated }: AddProviderFormProps) {
       return;
     }
 
-    const normalizedBaseUrl = baseUrlOverride.trim() ? baseUrlOverride.trim() : null;
     const kind = credentialKind;
+    const baseUrlFields = resolveBaseUrlFields(adapterId, baseUrl);
+    if ("error" in baseUrlFields) {
+      setError(t("models.errors.baseUrlRequired"));
+      return;
+    }
     let credential: CredentialUpdate;
     if (kind === "none") {
       credential = { action: "clear" };
@@ -119,7 +123,9 @@ function AddProviderForm({ onCreated }: AddProviderFormProps) {
       id: null,
       adapterId,
       displayName: displayName.trim(),
-      baseUrlOverride: normalizedBaseUrl,
+      baseUrl: baseUrlFields.baseUrl,
+      baseUrlSource: baseUrlFields.baseUrlSource,
+      authScheme: resolveAuthScheme(adapterId, kind),
       credentialKind: kind,
       credential,
       enabled,
@@ -163,14 +169,14 @@ function AddProviderForm({ onCreated }: AddProviderFormProps) {
 
       <div className="flex flex-col gap-1">
         <label className="text-body-tight font-medium text-on-surface" htmlFor="add-provider-base-url">
-          {t("models.baseUrlOverride")}
+          {t("models.baseUrl")}
         </label>
         <Input
           id="add-provider-base-url"
           className={inputClassName}
-          value={baseUrlOverride}
+          value={baseUrl}
           onChange={(event) => {
-            setBaseUrlOverride(event.currentTarget.value);
+            setBaseUrl(event.currentTarget.value);
           }}
           placeholder={defaultBaseUrl ?? t("common.optional")}
           spellCheck={false}

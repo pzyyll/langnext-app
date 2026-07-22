@@ -2,7 +2,9 @@
 // ABOUTME: Does not access the real OS credential store.
 use crate::credentials::coordinator;
 use crate::credentials::{CredentialVault, FailingCredentialVault, MemoryCredentialVault, provider_ref};
-use crate::domain::provider::{CredentialKind, CredentialUpdate, ProviderInstanceWrite, ProxyMode};
+use crate::domain::provider::{
+  AuthSchemeV1, BaseUrlSource, CredentialKind, CredentialUpdate, ProviderInstanceWrite, ProxyMode,
+};
 use crate::domain::time::new_id;
 use crate::error::StorageError;
 use crate::repositories::credential_operations::{self, OperationState, OwnerKind};
@@ -24,7 +26,9 @@ fn write(secret: Option<&str>) -> ProviderInstanceWrite {
     id: None,
     adapter_id: "openai-compatible".into(),
     display_name: "P".into(),
-    base_url_override: None,
+    base_url: "https://api.openai.com/v1".into(),
+    base_url_source: BaseUrlSource::PluginDefault,
+    auth_scheme: AuthSchemeV1::bearer(),
     credential_kind: CredentialKind::ApiKey,
     credential: match secret {
       Some(s) => CredentialUpdate::Replace(s.into()),
@@ -107,7 +111,9 @@ fn recover_prepared_unused_new_entry() {
         id: provider_id,
         adapter_id: "openai-compatible".into(),
         display_name: "P".into(),
-        base_url_override: None,
+        base_url: "https://api.openai.com/v1".into(),
+        base_url_source: BaseUrlSource::PluginDefault,
+        auth_scheme: AuthSchemeV1::bearer(),
         credential_kind: CredentialKind::ApiKey,
         credential_ref: None,
         enabled: true,
@@ -157,7 +163,9 @@ fn recover_db_committed_deletes_old() {
         id: provider_id,
         adapter_id: "openai-compatible".into(),
         display_name: "P".into(),
-        base_url_override: None,
+        base_url: "https://api.openai.com/v1".into(),
+        base_url_source: BaseUrlSource::PluginDefault,
+        auth_scheme: AuthSchemeV1::bearer(),
         credential_kind: CredentialKind::ApiKey,
         credential_ref: Some(new_ref.clone()),
         enabled: true,

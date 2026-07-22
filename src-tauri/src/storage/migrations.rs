@@ -15,6 +15,7 @@ pub const MIGRATIONS: &[&str] = &[
   include_str!("../../migrations/0008_translation_history.sql"),
   include_str!("../../migrations/0009_profile_prompt_templates.sql"),
   include_str!("../../migrations/0010_ocr_services.sql"),
+  include_str!("../../migrations/0011_provider_transport_contract.sql"),
 ];
 
 pub fn latest_version() -> i32 {
@@ -81,13 +82,21 @@ pub fn migrate_with(conn: &mut Connection, migrations: &[&str]) -> Result<i32, S
     return Ok(from);
   }
 
-  let tx = conn
-    .transaction()
-    .map_err(|e| StorageError::Migration(format!("begin migration transaction: {e}")))?;
-  apply_pending_with(&tx, from, migrations)?;
-  tx.commit()
-    .map_err(|e| StorageError::Migration(format!("commit migration: {e}")))?;
-  Ok(target)
+  // Table rebuilds (rename/drop) require foreign_keys off; PRAGMA is a no-op inside a transaction.
+  conn
+    .execute_batch("PRAGMA foreign_keys = OFF")
+    .map_err(|e| StorageError::Migration(format!("disable foreign_keys for migration: {e}")))?;
+  let result = (|| {
+    let tx = conn
+      .transaction()
+      .map_err(|e| StorageError::Migration(format!("begin migration transaction: {e}")))?;
+    apply_pending_with(&tx, from, migrations)?;
+    tx.commit()
+      .map_err(|e| StorageError::Migration(format!("commit migration: {e}")))?;
+    Ok(target)
+  })();
+  let _ = conn.execute_batch("PRAGMA foreign_keys = ON");
+  result
 }
 
 #[cfg(test)]

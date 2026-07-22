@@ -2,7 +2,9 @@
 // ABOUTME: Exercises CRUD, uniqueness, rollback, and credential journal rules.
 use crate::domain::model::{Availability, ModelSource, ProviderModel};
 use crate::domain::ocr_service::{BaiduOcrAction, OcrPromptTemplate, OcrProviderType, OcrService};
-use crate::domain::provider::{CredentialKind, ModelsSyncStatus, ProviderInstance, ProxyMode};
+use crate::domain::provider::{
+  AuthSchemeV1, BaseUrlSource, CredentialKind, ModelsSyncStatus, ProviderInstance, ProxyMode,
+};
 use crate::domain::settings::AppSettingsV1;
 use crate::domain::time::{new_id, now_rfc3339};
 use crate::domain::translation_profile::{PromptTemplate, TranslationProfile, TranslationProfileTarget};
@@ -40,7 +42,9 @@ fn sample_provider(id: Uuid) -> ProviderInstance {
     id,
     adapter_id: "openai-compatible".into(),
     display_name: "Test".into(),
-    base_url_override: None,
+    base_url: "https://api.openai.com/v1".into(),
+    base_url_source: BaseUrlSource::PluginDefault,
+    auth_scheme: AuthSchemeV1::none(),
     credential_kind: CredentialKind::None,
     credential_ref: None,
     enabled: true,
@@ -672,4 +676,126 @@ fn provider_reference_lifecycle() {
     Ok(())
   })
   .unwrap();
+}
+
+#[test]
+fn provider_transport_contract_migration_backfills_auth_and_base_url() {
+  use crate::storage::migrations::{self, MIGRATIONS};
+  use rusqlite::Connection;
+
+  let mut conn = Connection::open_in_memory().unwrap();
+  // Apply through v10 (pre-transport-contract).
+  migrations::migrate_with(&mut conn, &MIGRATIONS[..10]).unwrap();
+  conn
+    .execute_batch(
+      r#"
+      INSERT INTO provider_instances (
+        id, adapter_id, display_name, base_url_override, credential_kind, credential_ref,
+        enabled, proxy_mode, models_sync_status, created_at, updated_at, sort_order
+      ) VALUES
+      ('p-openai-auth', 'openai-compatible', 'OAI Auth', NULL, 'api_key', 'provider/x/y', 1, 'inherit', 'never', 't', 't', 0),
+      ('p-openai-none', 'openai-compatible', 'OAI None', NULL, 'none', NULL, 1, 'inherit', 'never', 't', 't', 1),
+      ('p-custom', 'openai-compatible', 'Custom', 'https://relay.example.com/v1', 'api_key', NULL, 1, 'inherit', 'never', 't', 't', 2),
+      ('p-anthropic', 'anthropic', 'Anthropic', NULL, 'api_key', NULL, 1, 'inherit', 'never', 't', 't', 3),
+      ('p-gemini', 'gemini', 'Gemini', NULL, 'api_key', NULL, 1, 'inherit', 'never', 't', 't', 4),
+      ('p-deepseek-none', 'deepseek', 'DeepSeek', NULL, 'none', NULL, 1, 'inherit', 'never', 't', 't', 5);
+      "#,
+    )
+    .unwrap();
+
+  migrations::migrate(&mut conn).unwrap();
+  assert_eq!(
+    migrations::read_user_version(&conn).unwrap(),
+    migrations::latest_version()
+  );
+
+  let rows: Vec<(String, String, String, String, String)> = {
+    let mut stmt = conn
+      .prepare(
+        "SELECT id, base_url, base_url_source, auth_scheme_json, credential_kind
+         FROM provider_instances ORDER BY sort_order",
+      )
+      .unwrap();
+    stmt
+      .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))
+      .unwrap()
+      .map(|r| r.unwrap())
+      .collect()
+  };
+
+  let by_id: std::collections::HashMap<_, _> = rows.into_iter().map(|r| (r.0.clone(), r)).collect();
+
+  let openai_auth = &by_id["p-openai-auth"];
+  assert_eq!(openai_auth.1, "https://api.openai.com/v1");
+  assert_eq!(openai_auth.2, "plugin_default");
+  assert!(openai_auth.3.contains("\"type\":\"bearer\""));
+
+  let openai_none = &by_id["p-openai-none"];
+  assert_eq!(openai_none.2, "plugin_default");
+  assert!(openai_none.3.contains("\"type\":\"none\""));
+
+  let custom = &by_id["p-custom"];
+  assert_eq!(custom.1, "https://relay.example.com/v1");
+  assert_eq!(custom.2, "custom");
+  assert!(custom.3.contains("\"type\":\"bearer\""));
+
+  let anthropic = &by_id["p-anthropic"];
+  assert_eq!(anthropic.1, "https://api.anthropic.com");
+  assert!(anthropic.3.contains("x-api-key"));
+  assert!(anthropic.3.contains("\"type\":\"header\""));
+
+  let gemini = &by_id["p-gemini"];
+  assert_eq!(gemini.1, "https://generativelanguage.googleapis.com");
+  assert!(gemini.3.contains("\"type\":\"query\""));
+  assert!(gemini.3.contains("\"name\":\"key\""));
+
+  let deepseek = &by_id["p-deepseek-none"];
+  assert_eq!(deepseek.1, "https://api.deepseek.com");
+  assert!(deepseek.3.contains("\"type\":\"none\""));
+}
+
+#[test]
+fn provider_transport_contract_model_override_inventory_preserved() {
+  use crate::storage::migrations::{self, MIGRATIONS};
+  use rusqlite::Connection;
+
+  let mut conn = Connection::open_in_memory().unwrap();
+  migrations::migrate_with(&mut conn, &MIGRATIONS[..10]).unwrap();
+  conn
+    .execute_batch(
+      r#"
+      INSERT INTO provider_instances (
+        id, adapter_id, display_name, base_url_override, credential_kind, credential_ref,
+        enabled, proxy_mode, models_sync_status, created_at, updated_at, sort_order
+      ) VALUES
+      ('p1', 'openai-compatible', 'OAI', NULL, 'api_key', NULL, 1, 'inherit', 'never', 't', 't', 0);
+      "#,
+    )
+    .unwrap();
+  migrations::migrate(&mut conn).unwrap();
+  // Preserve cross-plugin model override inventory after transport migration.
+  conn
+    .execute_batch(
+      r#"
+      INSERT INTO provider_models (
+        id, provider_instance_id, model_key, source, enabled, availability, adapter_id, created_at, updated_at
+      ) VALUES
+      ('m1', 'p1', 'gemini-pro', 'manual', 1, 'available', 'gemini', 't', 't');
+      "#,
+    )
+    .unwrap();
+
+  let (provider_adapter, model_adapter, base_url_source): (String, String, String) = conn
+    .query_row(
+      "SELECT p.adapter_id, m.adapter_id, p.base_url_source
+       FROM provider_instances p
+       JOIN provider_models m ON m.provider_instance_id = p.id
+       WHERE m.id = 'm1'",
+      [],
+      |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    )
+    .unwrap();
+  assert_eq!(provider_adapter, "openai-compatible");
+  assert_eq!(model_adapter, "gemini");
+  assert_eq!(base_url_source, "plugin_default");
 }

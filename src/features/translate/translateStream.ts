@@ -1,20 +1,32 @@
-// ABOUTME: Effect use-case for starting a streaming translate IPC request.
-// ABOUTME: Callers must register stream listeners before invoking startTranslateStream.
+// ABOUTME: Starts frontend-owned streaming translation via provider plugins.
+// ABOUTME: Callers register workflow callbacks before invoking startTranslateStream.
 import { Effect } from "effect";
-import { invokeEffect } from "../../storage/invokeEffect";
 import type { IpcError } from "../../storage/ipcError";
-import type { TranslateInput } from "../../storage/types";
+import type { TranslateInput, TranslateResult } from "../../storage/types";
+import type { TranslationContextSnapshots } from "./translationContext";
+import { runTranslationStream, type TranslationStreamHandlers } from "./translationWorkflow";
+
+export type StartTranslateStreamOptions = {
+  snapshots: TranslationContextSnapshots;
+  handlers: TranslationStreamHandlers;
+  signal?: AbortSignal;
+};
 
 /**
- * Start `translate_text_stream` for a client-owned `requestId`.
+ * Start a frontend streaming translation for a client-owned `requestId`.
  *
- * **Listener-before-invoke:** routes must attach `translate://chunk|reset|done|error`
- * listeners (and record the active request id) before running this Effect so early
- * validation failures and first chunks cannot race past subscription setup.
- *
- * The invoke resolves after the backend spawns the stream worker; terminal UI still
- * comes from stream events (or from an `IpcError` if the start invoke itself fails).
+ * **Listener-before-invoke:** routes must assign active request ids and handlers
+ * before running this Effect so first deltas cannot race past subscription setup.
  */
-export function startTranslateStream(input: TranslateInput, requestId: string): Effect.Effect<void, IpcError> {
-  return invokeEffect<void>("translate_text_stream", { input, requestId });
+export function startTranslateStream(
+  input: TranslateInput,
+  requestId: string,
+  options: StartTranslateStreamOptions,
+): Effect.Effect<void, IpcError> {
+  return Effect.tryPromise({
+    try: () => runTranslationStream(input, options.snapshots, requestId, options.handlers, options.signal),
+    catch: (error) => error as IpcError,
+  });
 }
+
+export type { TranslationStreamHandlers, TranslateResult };

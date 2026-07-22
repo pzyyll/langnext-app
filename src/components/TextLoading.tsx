@@ -4,7 +4,7 @@ import { useEffect, useState, type ComponentProps } from "react";
 import { cn } from "../lib/cn";
 
 /** Glyphs cycled by the stream-tail scramble indicator (mask / block style). */
-const SCRAMBLE_GLYPHS = "░▒▓█╱╲╳";
+const SCRAMBLE_GLYPHS = "░▒▓█╱╲╳abcdefgh░▒▓█╱╲╳ijklmnop░▒▓█╱╲╳qrst*&!@#$%^()-+";
 
 /** How many rolling glyphs trail the streamed text. */
 const SCRAMBLE_TAIL_LENGTH = 1;

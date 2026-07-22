@@ -6,9 +6,25 @@ use crate::domain::translation_history::{
 };
 use crate::error::IpcError;
 use crate::events::{TRANSLATION_HISTORY_CHANGED, emit_data_changed};
+use crate::services::translation_history::FrontendHistoryCompletion;
 use crate::state::AppState;
 use tauri::{AppHandle, State};
 use uuid::Uuid;
+
+#[tauri::command]
+pub async fn record_translation_history_completion(
+  app: AppHandle,
+  state: State<'_, AppState>,
+  input: FrontendHistoryCompletion,
+) -> Result<(), IpcError> {
+  let history = state.history.clone();
+  run_blocking("record_translation_history_completion", move || {
+    history.record_completion(input)
+  })
+  .await?;
+  emit_data_changed(&app, TRANSLATION_HISTORY_CHANGED);
+  Ok(())
+}
 
 #[tauri::command]
 pub async fn list_translation_history(

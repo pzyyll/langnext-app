@@ -1,11 +1,11 @@
-// ABOUTME: Cooperative cancellation tokens for in-flight translate HTTP work.
+// ABOUTME: Cooperative cancellation tokens for in-flight provider HTTP work.
 // ABOUTME: AtomicBool + Notify so streaming and non-stream tasks abort promptly.
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::sync::Notify;
 
-/// Shared cancel flag used by translate IPC and transport loops.
+/// Shared cancel flag used by provider HTTP IPC and transport loops.
 #[derive(Clone, Debug, Default)]
 pub struct CancelToken {
   inner: Arc<CancelInner>,
@@ -49,11 +49,14 @@ impl CancelToken {
 
 /// Maps client `request_id` values to active cancel tokens.
 #[derive(Debug, Default)]
-pub struct TranslateSessionRegistry {
+pub struct RequestSessionRegistry {
   sessions: Mutex<HashMap<String, CancelToken>>,
 }
 
-impl TranslateSessionRegistry {
+/// Compatibility alias while legacy translate commands still share the registry.
+pub type TranslateSessionRegistry = RequestSessionRegistry;
+
+impl RequestSessionRegistry {
   pub fn new() -> Self {
     Self {
       sessions: Mutex::new(HashMap::new()),
@@ -63,7 +66,7 @@ impl TranslateSessionRegistry {
   /// Register (or replace) a session for `request_id` and return its token.
   pub fn begin(&self, request_id: &str) -> CancelToken {
     let token = CancelToken::new();
-    let mut map = self.sessions.lock().expect("translate sessions poisoned");
+    let mut map = self.sessions.lock().expect("request sessions poisoned");
     if let Some(previous) = map.insert(request_id.to_string(), token.clone()) {
       previous.cancel();
     }
@@ -72,7 +75,7 @@ impl TranslateSessionRegistry {
 
   /// Cancel an active session. Returns false when the id is unknown / already finished.
   pub fn cancel(&self, request_id: &str) -> bool {
-    let map = self.sessions.lock().expect("translate sessions poisoned");
+    let map = self.sessions.lock().expect("request sessions poisoned");
     if let Some(token) = map.get(request_id) {
       token.cancel();
       true
@@ -81,9 +84,9 @@ impl TranslateSessionRegistry {
     }
   }
 
-  /// Drop the session entry after the translate task finishes.
+  /// Drop the session entry after the request finishes.
   pub fn end(&self, request_id: &str) {
-    let mut map = self.sessions.lock().expect("translate sessions poisoned");
+    let mut map = self.sessions.lock().expect("request sessions poisoned");
     map.remove(request_id);
   }
 }
@@ -102,7 +105,7 @@ mod tests {
 
   #[test]
   fn registry_begin_cancel_end() {
-    let registry = TranslateSessionRegistry::new();
+    let registry = RequestSessionRegistry::new();
     let token = registry.begin("req-1");
     assert!(!token.is_cancelled());
     assert!(registry.cancel("req-1"));
@@ -114,7 +117,7 @@ mod tests {
 
   #[test]
   fn registry_replace_cancels_previous() {
-    let registry = TranslateSessionRegistry::new();
+    let registry = RequestSessionRegistry::new();
     let first = registry.begin("same");
     let second = registry.begin("same");
     assert!(first.is_cancelled());

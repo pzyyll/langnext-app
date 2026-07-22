@@ -67,7 +67,7 @@ Cancel / invalid / not_applied paths unchanged. Errors use `getUserErrorMessage`
 
   ```ts
   /** Rebind this process after configuration import. Does not invalidate Query caches. */
-  export async function applyImportedAppSettings(): Promise<AppSettingsDto>
+  export async function applyImportedAppSettings(): Promise<AppSettingsDto>;
   ```
 
 - [x] Implementation order must match current route: get settings → theme (conditional) → language → shortcuts
@@ -150,14 +150,14 @@ Expected: exit 0 / pass.
 
 ## Failure Behavior
 
-| Case | Expected |
-| ---- | -------- |
-| User cancels file dialog | `status: "cancelled"`; no rebind; no toast |
-| Invalid preview | `status: "invalid"`; no rebind |
-| Import not applied | `status: "not_applied"`; no rebind |
-| Import applied; `getAppSettings` fails | Throw → import-failed toast; DB may already have new config |
-| Import applied; `setAppShortcuts` fails | Throw after possible theme/lang apply; same toast path |
-| Rebind succeeds; invalidation fails | Unlikely (sync void); if invalidate throws, same catch — prefer keep `void invalidateQueries` as today |
+| Case                                    | Expected                                                                                               |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| User cancels file dialog                | `status: "cancelled"`; no rebind; no toast                                                             |
+| Invalid preview                         | `status: "invalid"`; no rebind                                                                         |
+| Import not applied                      | `status: "not_applied"`; no rebind                                                                     |
+| Import applied; `getAppSettings` fails  | Throw → import-failed toast; DB may already have new config                                            |
+| Import applied; `setAppShortcuts` fails | Throw after possible theme/lang apply; same toast path                                                 |
+| Rebind succeeds; invalidation fails     | Unlikely (sync void); if invalidate throws, same catch — prefer keep `void invalidateQueries` as today |
 
 ---
 
@@ -170,22 +170,22 @@ Expected: exit 0 / pass.
 
 ## Rollout Notes
 
-| Item | Guidance |
-| ---- | -------- |
-| Branch | `refactor/import-settings-rebind` or fold into a small settings PR |
-| Migrations | None |
-| Compat | Internal only; no IPC version change |
-| Relation to translate thinning | None — separate plan |
+| Item                           | Guidance                                                           |
+| ------------------------------ | ------------------------------------------------------------------ |
+| Branch                         | `refactor/import-settings-rebind` or fold into a small settings PR |
+| Migrations                     | None                                                               |
+| Compat                         | Internal only; no IPC version change                               |
+| Relation to translate thinning | None — separate plan                                               |
 
 ---
 
 ## Risks and Mitigations
 
-| Risk | Mitigation |
-| ---- | ---------- |
-| Changing apply order breaks hotkeys/theme | Copy current order; test it |
-| Helper grows Query invalidation | Hard rule: no `QueryClient` param |
-| Over-use of Effect for linear awaits | Prefer plain async + client Promises |
+| Risk                                      | Mitigation                           |
+| ----------------------------------------- | ------------------------------------ |
+| Changing apply order breaks hotkeys/theme | Copy current order; test it          |
+| Helper grows Query invalidation           | Hard rule: no `QueryClient` param    |
+| Over-use of Effect for linear awaits      | Prefer plain async + client Promises |
 
 ---
 
@@ -201,19 +201,19 @@ Expected: exit 0 / pass.
 
 ## Open Questions
 
-| Question | Default | Affects |
-| -------- | ------- | ------- |
-| Return `AppSettingsDto` vs `void` | **Return DTO** | Task 1 |
-| Effect vs plain async | **Plain async** calling client | Task 1 |
-| Invalidate even if rebind throws | **No** — stay in same try after await rebind (today’s structure) | Task 2 |
+| Question                          | Default                                                          | Affects |
+| --------------------------------- | ---------------------------------------------------------------- | ------- |
+| Return `AppSettingsDto` vs `void` | **Return DTO**                                                   | Task 1  |
+| Effect vs plain async             | **Plain async** calling client                                   | Task 1  |
+| Invalidate even if rebind throws  | **No** — stay in same try after await rebind (today’s structure) | Task 2  |
 
 ---
 
 ## Requirement Traceability
 
-| Intent | Task |
-| ------ | ---- |
+| Intent                              | Task   |
+| ----------------------------------- | ------ |
 | Extract theme/lang/shortcuts rebind | Task 1 |
-| Keep Query invalidation in route | Task 2 |
-| Preserve import UX statuses/toasts | Task 2 |
-| Document ownership | Task 3 |
+| Keep Query invalidation in route    | Task 2 |
+| Preserve import UX statuses/toasts  | Task 2 |
+| Document ownership                  | Task 3 |

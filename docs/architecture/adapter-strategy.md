@@ -1,77 +1,82 @@
-# Provider Adapter Strategy
+# Provider Plugin + Native Transport Boundary
 
 ## Goal
 
-Own each provider API family behind a single strategy interface so wire format,
-auth, pagination, stream parsing, and detect/translate policy live together.
-Transport only orchestrates HTTP, proxy, timeouts, and SSE framing.
+Frontend TypeScript Provider plugins own wire formats, response parsing, SSE
+interpretation, pagination, and detect/translate/OCR-AI policy. Rust retains
+credential storage, generic auth injection, bounded HTTP transport, proxy
+handling, cancellation, and persistence.
 
 ## Layout
 
 ```text
-src-tauri/src/adapters/
-  protocol.rs     ProviderAdapter trait + DetectChatPolicy
-  registry.rs     id → strategy map (plugin-style register/get/list)
-  catalog.rs      metadata + validation facade for services
-  transport.rs    shared HTTP / SSE orchestration
-  builtin/
-    openai_compatible.rs
-    openai_responses.rs
-    anthropic.rs
-    gemini.rs
-    deepseek.rs
-    openai_shared.rs   shared OpenAI chat.completions helpers
+src/features/providers/
+  types.ts              ProviderPlugin contract, wire/SSE types
+  registry.ts           registration + auth compatibility
+  providerFetch.ts      fetch-like facade over provider_http_* IPC
+  sse.ts                incremental UTF-8 + SSE decoder
+  errors.ts             generic HTTP/IPC error normalization
+  builtin/              OpenAI Compatible/Responses, Anthropic, Gemini, DeepSeek
+
+src/features/ocr/recognizeOcrFlow.ts   AI OCR via plugins; Baidu stays native
+
+src-tauri/src/
+  domain/provider_http.rs
+  services/provider_http.rs
+  cmds/provider_http.rs
 ```
 
-## Strategy contract
+There is **no** `src-tauri/src/adapters/` module. Provider wire formats are not
+implemented in Rust.
 
-`ProviderAdapter` methods:
+## Plugin contract
 
-| Method | Responsibility |
-| --- | --- |
-| `meta` | id, label, default base URL |
-| `secret_required` / `auth_application` | credential policy |
-| `models_path` / `parse_models_page` / `apply_list_continuation` | model list |
-| `build_chat` / `parse_chat_content` / `parse_stream_delta` | chat wire format |
-| `finalize_stream_url` | stream-only URL tweaks (e.g. Gemini `alt=sse`) |
-| `detect_chat_policy` | thinking toggle + max_tokens for language detection |
-| `validate_profile_options` | per-adapter option schema (empty for now) |
+| Method                                                        | Responsibility                                              |
+| ------------------------------------------------------------- | ----------------------------------------------------------- |
+| `manifest`                                                    | id, label, default Base URL, credential kinds, capabilities |
+| `resolveAuthScheme`                                           | map `CredentialKind` → versioned `AuthSchemeV1`             |
+| `buildModelListRequest` / `parseModelListPage`                | model list wire + pagination                                |
+| `buildChatRequest` / `parseChatResponse` / `parseStreamEvent` | chat wire format                                            |
+| `getDetectPolicy`                                             | thinking toggle + max_tokens for language detection         |
 
-## Registry
+## Native transport
 
-Built-ins load on first lookup via `registry::ensure_loaded()`.
+Authenticated Provider traffic uses `providerFetch` / `providerFetchStream`:
 
-```rust
-// future plugin / test registration
-registry::register(registry::wrap(MyAdapter));
-```
+1. Plugin builds an unsigned relative `ProviderWireRequest`.
+2. Rust resolves the provider Base URL, proxy mode, and vault secret.
+3. Rust injects auth (`none` / `bearer` / `header` / `query`) natively.
+4. Raw status/body or Channel byte chunks return to the frontend.
 
-Unknown adapter ids fail closed (`StorageError::Validation` for services,
-`TransportError::InvalidResponse` for transport).
+Rules:
 
-## DeepSeek
+- Only relative paths are accepted; redirects are disabled.
+- Sensitive caller headers/query keys are rejected before secret lookup.
+- Secrets and credential references never cross IPC DTOs.
+- Stock `@tauri-apps/plugin-http` is optional for public/no-secret traffic only.
 
-`deepseek` is a first-class adapter:
+## Auth scheme expansion
 
-- Wire format: OpenAI chat.completions (via `openai_shared`)
-- Default base URL: `https://api.deepseek.com`
-- Detect policy: `thinking: disabled`, raised `max_tokens` (2048)
+New auth mechanisms (SigV4, mTLS, OAuth refresh) require a native platform change
+to `AuthSchemeV1` and `ProviderHttpService`. Ordinary providers that use
+existing schemes need only a TypeScript plugin registration.
 
-`openai-compatible` keeps a small relay heuristic (`model_key` / `base_url`
-contains `deepseek`) so existing relay configs keep working. Prefer the
-dedicated `deepseek` adapter for new providers.
+## Model API Type overrides
 
-## Service boundary
+Executable only when auth schemes are compatible and either:
 
-`ModelService` no longer branches on DeepSeek:
+- provider `baseUrlSource=custom` (shared relay), or
+- override plugin id equals the provider plugin id.
 
-```rust
-let detect_policy = catalog::detect_chat_policy(&adapter_id, &model_key, &base_url);
-```
+Otherwise execution fails closed with `provider_reconfiguration_required`.
 
-`secret_required` is also delegated to the strategy via `catalog`.
+## Registration
 
-## Frontend
+Built-ins register through `registerProviderPlugin` (same API future external
+plugins will use). Duplicate IDs fail at registration. Missing plugins remain
+visible in persisted DTOs but return `plugin_unavailable` at execution.
 
-`src/features/models/adapterOptions.ts` mirrors the registry catalog until a
-catalog IPC endpoint exists.
+## Residual native paths
+
+- **Baidu OCR** remains a native REST integration (not a Provider plugin).
+- **AI OCR** uses the same frontend plugin + `providerFetch` path as chat.

@@ -1,12 +1,14 @@
 // ABOUTME: Normalizes and validates complete configuration import graphs.
 // ABOUTME: Preview and apply share one plan; apply revalidates inside the write transaction.
-use crate::adapters::catalog;
 use crate::domain::import_export::{
   ConfigurationExport, EXPORT_FORMAT_VERSION, ImportConflictMode, ImportPreview, ImportPreviewCounts,
+  PREVIOUS_EXPORT_FORMAT_VERSION,
 };
 use crate::domain::language_detection::LanguageDetectorConfig;
 use crate::domain::model::{CapabilityOverridesV1, ProviderModel};
-use crate::domain::provider::{CredentialKind, ModelsSyncStatus, ProviderExport, ProviderInstance};
+use crate::domain::provider::{
+  CredentialKind, ModelsSyncStatus, ProviderExport, ProviderInstance, validate_adapter_id,
+};
 use crate::domain::settings::{AppSettingsV1, GlobalProxyMode};
 use crate::domain::time::{new_id, now_rfc3339};
 use crate::domain::translation_profile::{
@@ -49,7 +51,7 @@ pub fn build_validated_plan(
 ) -> Result<ValidatedImportPlan, StorageError> {
   let mut errors = Vec::new();
 
-  if document.format_version != EXPORT_FORMAT_VERSION {
+  if document.format_version != EXPORT_FORMAT_VERSION && document.format_version != PREVIOUS_EXPORT_FORMAT_VERSION {
     errors.push(format!("unsupported formatVersion {}", document.format_version));
   }
 
@@ -300,11 +302,16 @@ pub fn build_validated_plan(
         (new_id, now.clone())
       }
     };
+    let transport = p
+      .normalize_transport()
+      .map_err(|e| StorageError::Validation(format!("provider {}: {e}", p.id)))?;
     providers.push(ProviderInstance {
       id,
       adapter_id: p.adapter_id.clone(),
       display_name: p.display_name.clone(),
-      base_url_override: p.base_url_override.clone(),
+      base_url: transport.base_url,
+      base_url_source: transport.base_url_source,
+      auth_scheme: transport.auth_scheme,
       credential_kind: p.credential_kind,
       credential_ref: None,
       enabled: p.enabled,
@@ -499,7 +506,7 @@ where
 }
 
 fn validate_import_provider(p: &ProviderExport) -> Result<(), StorageError> {
-  catalog::get(&p.adapter_id)?;
+  validate_adapter_id(&p.adapter_id).map_err(StorageError::Validation)?;
   if p.display_name.trim().is_empty() {
     return Err(StorageError::Validation("display_name must not be empty".into()));
   }
@@ -508,8 +515,23 @@ fn validate_import_provider(p: &ProviderExport) -> Result<(), StorageError> {
       "display_name must be at most 200 characters".into(),
     ));
   }
-  if let Some(url) = &p.base_url_override {
-    validate_provider_url(url, p.insecure_http_confirmed_at.as_deref())?;
+  let transport = p.normalize_transport().map_err(StorageError::Validation)?;
+  validate_provider_url(&transport.base_url, p.insecure_http_confirmed_at.as_deref())?;
+  if !transport.auth_scheme.compatible_with(p.credential_kind) {
+    return Err(StorageError::Validation(
+      "auth_scheme is incompatible with credential_kind".into(),
+    ));
+  }
+  // Unknown plugin IDs require explicit custom Base URL + auth scheme (current format).
+  if crate::domain::provider::builtin_default_base_url(&p.adapter_id).is_none() {
+    let has_explicit = p.base_url.is_some()
+      && p.base_url_source == Some(crate::domain::provider::BaseUrlSource::Custom)
+      && p.auth_scheme.is_some();
+    if !has_explicit {
+      return Err(StorageError::Validation(
+        "unknown plugin requires explicit baseUrl, baseUrlSource=custom, and authScheme".into(),
+      ));
+    }
   }
   // credential_kind / ref invariant: exports never carry refs; kind may require re-auth.
   Ok(())
@@ -532,7 +554,7 @@ fn validate_import_model(m: &ProviderModel, doc_providers: &HashSet<Uuid>) -> Re
     )));
   }
   if let Some(adapter_id) = m.adapter_id.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()) {
-    catalog::get(adapter_id)?;
+    validate_adapter_id(adapter_id).map_err(StorageError::Validation)?;
   }
   CapabilityOverridesV1::from_json(&m.capability_overrides_json)?;
   Ok(())
@@ -598,7 +620,12 @@ fn validate_import_profile(
     .collect();
   validate_prompt_templates(&prompt_templates, profile.default_prompt_template_id)?;
 
-  catalog::validate_profile_options("openai-compatible", &profile.provider_options_json)?;
+  // Provider-specific profile options are not used; only empty/null objects are accepted.
+  if let Some(options) = &profile.provider_options_json {
+    if !options.is_null() && options.as_object().map(|o| !o.is_empty()).unwrap_or(true) {
+      return Err(StorageError::Validation("provider_options_json must be empty".into()));
+    }
+  }
   validate_profile_language_preferences(&profile.primary_lang, &profile.preferred_target_lang)?;
   // A configured LLM detector must reference a model present in the import document.
   if let Some(LanguageDetectorConfig::Llm {

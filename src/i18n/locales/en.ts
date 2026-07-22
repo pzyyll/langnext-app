@@ -195,6 +195,7 @@ const en = {
     errorPrefix: "Translation failed",
     errors: {
       timeout: "Stream idle timeout — the model stopped sending data.",
+      invalidResponse: "The model returned an invalid response.",
       detectFailed: "Could not detect the source language.",
     },
     confidenceValue: "Confidence: {{percent}}%",
@@ -440,7 +441,12 @@ const en = {
     loadModelsFailed: "Failed to load models.",
     connection: "Connection",
     baseUrl: "Base URL",
-    baseUrlOverride: "Base URL override",
+    errors: {
+      baseUrlRequired: "Base URL is required for this plugin.",
+      pluginUnavailable: "Plugin unavailable",
+      providerReconfigurationRequired:
+        "This model API Type is incompatible with the provider endpoint. Set a shared Base URL or use a separate provider.",
+    },
     apiToken: "API Token",
     apiType: "API Type: {{type}}",
     apiTypeLabel: "API Type",
@@ -476,7 +482,7 @@ const en = {
     cancelRename: "Cancel rename",
     deleteChannel: "Delete channel",
     deleteChannelConfirm:
-      "Permanently delete channel \"{{name}}\", including connection settings and all models. This cannot be undone.",
+      'Permanently delete channel "{{name}}", including connection settings and all models. This cannot be undone.',
     deleteModels: "Delete models",
     deleteModelsConfirm: "Delete {{count}} selected model(s)? This cannot be undone.",
     deleteModelsConfirmInUse:

@@ -3,7 +3,6 @@
 import type {
   AppSettingsDto,
   AppSettingsUpdate,
-  ConnectionTestResult,
   ManualModelWrite,
   ModelConfigWrite,
   OcrRecognizeInput,
@@ -17,9 +16,6 @@ import type {
   RegionScreenshotResult,
   RegionScreenshotSelection,
   ShortcutDefinition,
-  SyncModelsResult,
-  TranslateInput,
-  TranslateResult,
   TranslationHistoryDto,
   TranslationHistoryListQuery,
   TranslationHistoryListResult,
@@ -29,19 +25,6 @@ import type {
 } from "./types";
 import { invokeEffect } from "./invokeEffect";
 import { runStorage } from "./runStorage";
-
-/**
- * Storage client ownership:
- * - Query/DTO CRUD (list/save/history/settings/screenshot/etc.) lives here.
- * - Stream/detect/cancel orchestration: `src/features/translate/*` (`runStartTranslateStream`, `runDetectLanguage`, `runCancelRequestIds`).
- * - Configuration file transfer: `src/features/settings/configurationTransfer.ts`.
- *
- * Event names emitted by `translate_text_stream` (listeners still attach from routes).
- */
-export const TRANSLATE_CHUNK_EVENT = "translate://chunk";
-export const TRANSLATE_RESET_EVENT = "translate://reset";
-export const TRANSLATE_DONE_EVENT = "translate://done";
-export const TRANSLATE_ERROR_EVENT = "translate://error";
 
 export async function listProviderInstances(): Promise<ProviderInstanceDto[]> {
   return runStorage(invokeEffect<ProviderInstanceDto[]>("list_provider_instances"));
@@ -71,14 +54,6 @@ export async function listAllProviderModels(): Promise<ProviderModelDto[]> {
   return runStorage(invokeEffect<ProviderModelDto[]>("list_all_provider_models"));
 }
 
-/**
- * Non-streaming translate. Pass `requestId` so batch cancel (`runCancelRequestIds`)
- * can abort mid-flight via the shared cancel registry.
- */
-export async function translateText(input: TranslateInput, requestId?: string): Promise<TranslateResult> {
-  return runStorage(invokeEffect<TranslateResult>("translate_text", { input, requestId: requestId ?? null }));
-}
-
 export async function saveManualModel(input: ManualModelWrite): Promise<ProviderModelDto> {
   return runStorage(invokeEffect<ProviderModelDto>("save_manual_model", { input }));
 }
@@ -104,14 +79,6 @@ export async function deleteProviderModel(id: string): Promise<void> {
 /** Bulk-delete models in one backend transaction (all-or-nothing). */
 export async function deleteProviderModels(ids: string[]): Promise<void> {
   return runStorage(invokeEffect<void>("delete_provider_models", { ids }));
-}
-
-export async function testProviderConnection(providerInstanceId: string): Promise<ConnectionTestResult> {
-  return runStorage(invokeEffect<ConnectionTestResult>("test_provider_connection", { providerInstanceId }));
-}
-
-export async function syncProviderModels(providerInstanceId: string): Promise<SyncModelsResult> {
-  return runStorage(invokeEffect<SyncModelsResult>("sync_provider_models", { providerInstanceId }));
 }
 
 /** Profile list rows include ordered target chains for list summaries (no N+1 detail fetch). */
@@ -151,8 +118,8 @@ export async function deleteOcrService(id: string): Promise<void> {
   return runStorage(invokeEffect<void>("delete_ocr_service", { id }));
 }
 
-/** Recognize text from a PNG image using the configured (or default) OCR service. */
-export async function recognizeOcr(input: OcrRecognizeInput): Promise<OcrRecognizeResult> {
+/** Native Baidu OCR only. AI OCR is handled by `src/features/ocr/recognizeOcrFlow.ts`. */
+export async function recognizeBaiduOcr(input: OcrRecognizeInput): Promise<OcrRecognizeResult> {
   return runStorage(invokeEffect<OcrRecognizeResult>("recognize_ocr", { input }));
 }
 

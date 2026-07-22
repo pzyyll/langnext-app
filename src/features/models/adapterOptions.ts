@@ -1,5 +1,16 @@
-// ABOUTME: Frontend adapter options used when creating provider instances.
-// ABOUTME: Mirrors the backend metadata catalog until catalog IPC is available.
+// ABOUTME: Compatibility facade over the provider plugin registry for model UI.
+// ABOUTME: Prefer registry selectors directly; this keeps existing call sites compiling.
+import type { AuthSchemeV1, BaseUrlSource, CredentialKind } from "../../storage/types";
+import { registerBuiltinProviderPlugins } from "../providers/builtin";
+import {
+  getPluginDefaultBaseUrl,
+  getPluginLabel,
+  isPluginRegistered,
+  listProviderManifests,
+  resolvePluginAuthScheme,
+} from "../providers/registry";
+
+registerBuiltinProviderPlugins();
 
 export type AdapterOption = {
   id: string;
@@ -7,43 +18,59 @@ export type AdapterOption = {
   defaultBaseUrl: string | null;
 };
 
-/** Confirmed adapter creation options matching the backend catalog. */
-export const ADAPTER_OPTIONS: readonly AdapterOption[] = [
-  {
-    id: "openai-compatible",
-    label: "OpenAI Compatible",
-    defaultBaseUrl: "https://api.openai.com/v1",
-  },
-  {
-    id: "openai-responses",
-    label: "OpenAI Responses",
-    defaultBaseUrl: "https://api.openai.com/v1",
-  },
-  {
-    id: "anthropic",
-    label: "Anthropic",
-    defaultBaseUrl: "https://api.anthropic.com",
-  },
-  {
-    id: "gemini",
-    label: "Gemini",
-    defaultBaseUrl: "https://generativelanguage.googleapis.com",
-  },
-  {
-    id: "deepseek",
-    label: "DeepSeek",
-    defaultBaseUrl: "https://api.deepseek.com",
-  },
-] as const;
-
-/** Look up the documented default Base URL for an adapter ID. */
-export function getDefaultBaseUrl(adapterId: string): string | null {
-  const match = ADAPTER_OPTIONS.find((option) => option.id === adapterId);
-  return match?.defaultBaseUrl ?? null;
+/** Registered plugin options for provider/model selectors. */
+export function listAdapterOptions(): readonly AdapterOption[] {
+  return listProviderManifests().map((manifest) => ({
+    id: manifest.id,
+    label: manifest.label,
+    defaultBaseUrl: manifest.defaultBaseUrl,
+  }));
 }
 
-/** Look up a human-readable adapter label; falls back to the raw ID. */
+/** @deprecated Prefer listAdapterOptions(); retained for gradual call-site migration. */
+export const ADAPTER_OPTIONS: readonly AdapterOption[] = listAdapterOptions();
+
+/** Look up the documented default Base URL for a plugin ID. */
+export function getDefaultBaseUrl(adapterId: string): string | null {
+  return getPluginDefaultBaseUrl(adapterId);
+}
+
+/** Look up a human-readable plugin label; falls back to the raw ID. */
 export function getAdapterLabel(adapterId: string): string {
-  const match = ADAPTER_OPTIONS.find((option) => option.id === adapterId);
-  return match?.label ?? adapterId;
+  if (!isPluginRegistered(adapterId)) {
+    return `${adapterId} (missing)`;
+  }
+  return getPluginLabel(adapterId);
+}
+
+/** Derive the versioned auth scheme from a plugin and credential kind. */
+export function resolveAuthScheme(adapterId: string, credentialKind: CredentialKind): AuthSchemeV1 {
+  const scheme = resolvePluginAuthScheme(adapterId, credentialKind);
+  if (scheme) {
+    return scheme;
+  }
+  // Missing plugin: preserve a conservative bearer/none matrix for form writes.
+  if (credentialKind === "none") {
+    return { schemaVersion: 1, type: "none" };
+  }
+  return { schemaVersion: 1, type: "bearer" };
+}
+
+/**
+ * Resolve effective Base URL and source for create/edit writes.
+ * Empty input uses the plugin default when available; otherwise requires a custom URL.
+ */
+export function resolveBaseUrlFields(
+  adapterId: string,
+  rawBaseUrl: string,
+): { baseUrl: string; baseUrlSource: BaseUrlSource } | { error: "base_url_required" } {
+  const trimmed = rawBaseUrl.trim();
+  if (trimmed) {
+    return { baseUrl: trimmed, baseUrlSource: "custom" };
+  }
+  const defaultBaseUrl = getDefaultBaseUrl(adapterId);
+  if (!defaultBaseUrl) {
+    return { error: "base_url_required" };
+  }
+  return { baseUrl: defaultBaseUrl, baseUrlSource: "plugin_default" };
 }

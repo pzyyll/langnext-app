@@ -2,13 +2,13 @@
 
 ## Placement rules
 
-| Kind of state                    | Home                    | Examples                                                                                   |
-| -------------------------------- | ----------------------- | ------------------------------------------------------------------------------------------ |
-| Local UI / ephemeral interaction | React `useState` / refs | Source text, dialog open, copy feedback, streaming progress                                |
-| URL-addressable selection        | TanStack Router         | Selected provider id, nested route params                                                  |
-| Persistent authoritative data    | TanStack Query          | Translation profiles, provider instances, provider models                                  |
-| Cross-window notification        | Tauri global events     | `data://translation-profiles-changed`, `data://providers-changed`, `data://models-changed` |
-| Streaming translation            | Tauri event listeners + feature session hooks | `translate://chunk|reset|done|error` via `useTranslateStreamSession` / `useSlotStreamSessions` (not Query) |
+| Kind of state                    | Home                                     | Examples                                                                                                                        |
+| -------------------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| Local UI / ephemeral interaction | React `useState` / refs                  | Source text, dialog open, copy feedback, streaming progress                                                                     |
+| URL-addressable selection        | TanStack Router                          | Selected provider id, nested route params                                                                                       |
+| Persistent authoritative data    | TanStack Query                           | Translation profiles, provider instances, provider models                                                                       |
+| Cross-window notification        | Tauri global events                      | `data://translation-profiles-changed`, `data://providers-changed`, `data://models-changed`                                      |
+| Streaming translation            | Per-call Channel + feature session hooks | `providerFetchStream` Channel chunks + workflow callbacks via `useTranslateStreamSession` / `useSlotStreamSessions` (not Query) |
 
 SQLite accessed through Rust commands remains the only source of truth. Query caches DTOs per webview; event payloads are invalidation signals only and must not be applied as records.
 
@@ -16,7 +16,7 @@ SQLite accessed through Rust commands remains the only source of truth. Query ca
 
 - **Startup bootstrap** (`src/storage/bootstrap.ts`) — ordered theme/language reconciliation before React mounts.
 - **Theme and UI language mutations** (`src/theme/useTheme.ts`, `src/i18n/useLanguage.ts`, `ThemeMutationQueue`) — ordered write + rollback semantics stay outside Query until a focused migration.
-- **Translate streaming** — progressive chunks stay event-driven via feature hooks under `src/features/translate/*` (`useTranslateStreamSession`, `useSlotStreamSessions`, `attachTranslateStreamListeners`); they are not stored in the Query cache and do not use Effect Stream.
+- **Translate streaming** — progressive chunks are owned by per-call Tauri Channels and frontend workflow callbacks under `src/features/translate/*` (`translationWorkflow`, `useTranslateStreamSession`, `useSlotStreamSessions`); they are not stored in the Query cache and do not use Effect Stream or global `translate://*` events.
 
 ## Query keys
 
@@ -30,15 +30,15 @@ Each webview owns an independent `QueryClient`. `QueryEventSync` subscribes once
 
 Frontend Effect (npm `effect` 3.x) is a **typed IPC and multi-step workflow** layer. It does **not** replace TanStack Query or own server-state caches.
 
-| Concern                                | Owner                                                      | Notes                                                                              |
-| -------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| Persistent DTO cache                   | TanStack Query                                             | `queryFn` / `mutationFn` stay Promise-based                                        |
+| Concern                                | Owner                                                                             | Notes                                                                                                                               |
+| -------------------------------------- | --------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| Persistent DTO cache                   | TanStack Query                                                                    | `queryFn` / `mutationFn` stay Promise-based                                                                                         |
 | Typed Tauri invoke failures            | `src/storage/*` (`IpcError`, `invokeEffect`, `runEffectAsPromise` / `runStorage`) | Wire codes decode to a stable error channel; generic Promise bridge rejects raw tagged failures; `runStorage` is the IPC-only alias |
-| Multi-step non-Query workflows         | Feature modules + storage bootstrap                        | Bootstrap, configuration transfer (export/import), history CSV export dialog       |
-| Post-import app-settings rebind        | `src/features/settings/applyImportedAppSettings.ts`        | Theme DOM + i18n + OS shortcuts only; **Query invalidation stays in the route**    |
-| Translate stream/detect/slot IPC start | `src/features/translate/*`                                 | Stream **events** stay Tauri listeners + session hooks; chunks are not stored in Query |
-| Filesystem / native dialog failures    | Local `FsError` (not IPC codes)                            | Cancel is a success status (`DialogSaveResult`), not a throw                       |
-| Dialog/fs user-facing errors           | `src/features/userErrorMessage.ts`                         | Routes use `getUserErrorMessage` for Fs + IPC display                              |
+| Multi-step non-Query workflows         | Feature modules + storage bootstrap                                               | Bootstrap, configuration transfer (export/import), history CSV export dialog                                                        |
+| Post-import app-settings rebind        | `src/features/settings/applyImportedAppSettings.ts`                               | Theme DOM + i18n + OS shortcuts only; **Query invalidation stays in the route**                                                     |
+| Translate stream/detect/slot workflows | `src/features/translate/*` + `src/features/providers/*`                           | Plugins build/parse wire; raw Channel bytes decode to deltas via session hooks; chunks are not stored in Query                      |
+| Filesystem / native dialog failures    | Local `FsError` (not IPC codes)                                                   | Cancel is a success status (`DialogSaveResult`), not a throw                                                                        |
+| Dialog/fs user-facing errors           | `src/features/userErrorMessage.ts`                                                | Routes use `getUserErrorMessage` for Fs + IPC display                                                                               |
 
 ### Layer rules
 

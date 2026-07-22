@@ -258,9 +258,7 @@ impl CatalogModel {
     let max_context_tokens = self
       .context
       .unwrap_or(CapabilityOverridesV1::DEFAULT_MAX_CONTEXT_TOKENS);
-    let max_output_tokens = self
-      .output
-      .unwrap_or(CapabilityOverridesV1::DEFAULT_MAX_OUTPUT_TOKENS);
+    let max_output_tokens = self.output.unwrap_or(CapabilityOverridesV1::DEFAULT_MAX_OUTPUT_TOKENS);
     CapabilityOverridesV1 {
       schema_version: CapabilityOverridesV1::SCHEMA_VERSION,
       streaming: None,
@@ -383,17 +381,13 @@ async fn fetch_remote_catalog() -> Result<HashMap<String, ModelsDevEntry>, Strin
     return Err(format!("http status {}", response.status()));
   }
 
-  let bytes = response
-    .bytes()
-    .await
-    .map_err(|e| format!("read body: {e}"))?;
+  let bytes = response.bytes().await.map_err(|e| format!("read body: {e}"))?;
   if bytes.len() > MAX_CATALOG_BYTES {
     return Err(format!("body too large: {} bytes", bytes.len()));
   }
 
   // models.dev returns a flat map of "provider/model" -> entry.
-  serde_json::from_slice::<HashMap<String, ModelsDevEntry>>(&bytes)
-    .map_err(|e| format!("parse body: {e}"))
+  serde_json::from_slice::<HashMap<String, ModelsDevEntry>>(&bytes).map_err(|e| format!("parse body: {e}"))
 }
 
 #[cfg(test)]

@@ -1,6 +1,5 @@
 // ABOUTME: OCR service validation, CRUD, dual-key vault orchestration, and image recognition.
 // ABOUTME: Baidu secrets use the crash-safe credential journal; AI rows store model + templates.
-use crate::adapters::transport::{ChatCompletionRequest, TransportError, chat_completion_http};
 use crate::credentials::coordinator;
 use crate::credentials::{CredentialVault, ocr_api_key_ref, ocr_secret_key_ref};
 use crate::domain::ocr_service::{
@@ -12,16 +11,11 @@ use crate::domain::time::{new_id, now_rfc3339};
 use crate::error::StorageError;
 use crate::repositories::credential_operations::{self, CredentialOperation, OwnerKind};
 use crate::repositories::{app_settings, ocr_prompt_templates, ocr_services, provider_models};
-use crate::services::models::{ModelChatResolve, resolve_model_chat_transport, resolve_translate_max_tokens};
 use crate::storage::Database;
 use std::collections::HashSet;
 use std::sync::Arc;
 use uuid::Uuid;
 
-/// Default temperature for AI OCR when the service leaves it unset.
-const DEFAULT_AI_OCR_TEMPERATURE: f64 = 0.2;
-/// Default output budget for AI OCR completions.
-const DEFAULT_AI_OCR_MAX_TOKENS: u32 = 4096;
 /// Baidu OAuth token endpoint.
 const BAIDU_OAUTH_TOKEN_URL: &str = "https://aip.baidubce.com/oauth/2.0/token";
 /// Baidu OCR REST base path template (`{action}` is the API version slug).
@@ -549,7 +543,9 @@ impl OcrServiceService {
     Ok(prepared)
   }
 
-  /// Recognize text in a PNG image using a configured OCR service.
+  /// Recognize text with a Baidu OCR service.
+  ///
+  /// AI OCR is executed on the frontend through provider plugins + `provider_http_*`.
   pub async fn recognize(&self, input: OcrRecognizeInput) -> Result<OcrRecognizeResult, StorageError> {
     let png_base64 = input.png_base64.trim().to_string();
     if png_base64.is_empty() {
@@ -558,56 +554,40 @@ impl OcrServiceService {
 
     let db = self.db.clone();
     let vault = self.vault.clone();
-    let prepared =
-      spawn_blocking_storage(move || prepare_ocr_recognition(&db, vault.as_ref(), input.ocr_service_id, png_base64))
-        .await?;
+    let prepared = spawn_blocking_storage(move || {
+      prepare_baidu_ocr_recognition(&db, vault.as_ref(), input.ocr_service_id, png_base64)
+    })
+    .await?;
 
-    match prepared {
-      PreparedOcr::Baidu {
-        service_id,
-        api_key,
-        secret_key,
-        action,
-        png_base64,
-      } => {
-        let text = recognize_baidu_ocr(api_key, secret_key, action, png_base64).await?;
-        Ok(OcrRecognizeResult {
-          text,
-          ocr_service_id: service_id,
-        })
-      }
-      PreparedOcr::Ai { service_id, request } => {
-        let completion = chat_completion_http(request).await.map_err(map_transport_error)?;
-        Ok(OcrRecognizeResult {
-          text: completion.content.trim().to_string(),
-          ocr_service_id: service_id,
-        })
-      }
-    }
+    let text = recognize_baidu_ocr(
+      prepared.api_key,
+      prepared.secret_key,
+      prepared.action,
+      prepared.png_base64,
+    )
+    .await?;
+    Ok(OcrRecognizeResult {
+      text,
+      ocr_service_id: prepared.service_id,
+    })
   }
 }
 
-/// Prepared provider call after DB/vault resolution (secrets never leave the service layer).
-enum PreparedOcr {
-  Baidu {
-    service_id: Uuid,
-    api_key: String,
-    secret_key: String,
-    action: BaiduOcrAction,
-    png_base64: String,
-  },
-  Ai {
-    service_id: Uuid,
-    request: ChatCompletionRequest,
-  },
+/// Prepared Baidu OCR call after DB/vault resolution (secrets never leave the service layer).
+struct PreparedBaiduOcr {
+  service_id: Uuid,
+  api_key: String,
+  secret_key: String,
+  action: BaiduOcrAction,
+  png_base64: String,
 }
 
-fn prepare_ocr_recognition(
+fn prepare_baidu_ocr_recognition(
   db: &Database,
   vault: &dyn CredentialVault,
   requested_service_id: Option<Uuid>,
   png_base64: String,
-) -> Result<PreparedOcr, StorageError> {
+) -> Result<PreparedBaiduOcr, StorageError> {
   let service_id = match requested_service_id {
     Some(id) => id,
     None => {
@@ -618,93 +598,36 @@ fn prepare_ocr_recognition(
     }
   };
 
-  let (service, templates) = db.read(|conn| {
-    let service = ocr_services::get(conn, service_id)?;
-    let templates = ocr_prompt_templates::list_for_service(conn, service_id)?;
-    Ok((service, templates))
-  })?;
+  let service = db.read(|conn| ocr_services::get(conn, service_id))?;
 
   if !service.enabled {
     return Err(StorageError::Validation("OCR service is disabled".into()));
   }
 
-  match service.provider_type {
-    OcrProviderType::Baidu => {
-      let action = service.baidu_action.unwrap_or(BaiduOcrAction::Accurate);
-      let api_key_ref = service
-        .api_key_ref
-        .as_deref()
-        .ok_or_else(|| StorageError::Validation("Baidu OCR API key is not configured".into()))?;
-      let secret_key_ref = service
-        .secret_key_ref
-        .as_deref()
-        .ok_or_else(|| StorageError::Validation("Baidu OCR secret key is not configured".into()))?;
-      let api_key = vault.get_for_backend_use(api_key_ref)?;
-      let secret_key = vault.get_for_backend_use(secret_key_ref)?;
-      Ok(PreparedOcr::Baidu {
-        service_id: service.id,
-        api_key,
-        secret_key,
-        action,
-        png_base64,
-      })
-    }
-    OcrProviderType::Ai => {
-      let model_id = service
-        .provider_model_id
-        .ok_or_else(|| StorageError::Validation("AI OCR model is not configured".into()))?;
-      let default_template_id = service
-        .default_prompt_template_id
-        .ok_or_else(|| StorageError::Validation("AI OCR default prompt template is not configured".into()))?;
-      let template = templates
-        .into_iter()
-        .find(|row| row.id == default_template_id)
-        .ok_or_else(|| StorageError::Validation("AI OCR default prompt template is missing".into()))?;
-
-      let resolved = resolve_model_chat_transport(db, vault, model_id)?;
-      let (config, model_key, model_default_output_tokens) = match resolved {
-        ModelChatResolve::Ready {
-          config,
-          model_key,
-          model_default_output_tokens,
-          ..
-        } => (config, model_key, model_default_output_tokens),
-        ModelChatResolve::Skipped => {
-          return Err(StorageError::Validation("AI OCR model is missing or disabled".into()));
-        }
-        ModelChatResolve::MissingCredential => {
-          return Err(StorageError::Validation(
-            "AI OCR model channel has no credential".into(),
-          ));
-        }
-        ModelChatResolve::CredentialStoreFailure => {
-          return Err(StorageError::CredentialUnavailable);
-        }
-      };
-
-      let temperature = service.temperature.unwrap_or(DEFAULT_AI_OCR_TEMPERATURE);
-      let max_tokens = resolve_translate_max_tokens(None, model_default_output_tokens).max(DEFAULT_AI_OCR_MAX_TOKENS);
-
-      Ok(PreparedOcr::Ai {
-        service_id: service.id,
-        request: ChatCompletionRequest {
-          adapter_id: config.adapter_id,
-          base_url: config.base_url,
-          credential_kind: config.credential_kind,
-          secret: config.secret,
-          proxy_mode: config.proxy_mode,
-          model_key,
-          system_prompt: template.system_template,
-          user_prompt: template.user_template,
-          temperature: Some(temperature),
-          max_tokens: Some(max_tokens),
-          // Prefer deterministic OCR answers without chain-of-thought.
-          thinking: Some(false),
-          image_png_base64: Some(png_base64),
-        },
-      })
-    }
+  if !matches!(service.provider_type, OcrProviderType::Baidu) {
+    return Err(StorageError::Validation(
+      "AI OCR is handled by the frontend provider plugin workflow".into(),
+    ));
   }
+
+  let action = service.baidu_action.unwrap_or(BaiduOcrAction::Accurate);
+  let api_key_ref = service
+    .api_key_ref
+    .as_deref()
+    .ok_or_else(|| StorageError::Validation("Baidu OCR API key is not configured".into()))?;
+  let secret_key_ref = service
+    .secret_key_ref
+    .as_deref()
+    .ok_or_else(|| StorageError::Validation("Baidu OCR secret key is not configured".into()))?;
+  let api_key = vault.get_for_backend_use(api_key_ref)?;
+  let secret_key = vault.get_for_backend_use(secret_key_ref)?;
+  Ok(PreparedBaiduOcr {
+    service_id: service.id,
+    api_key,
+    secret_key,
+    action,
+    png_base64,
+  })
 }
 
 async fn recognize_baidu_ocr(
@@ -813,18 +736,6 @@ fn ocr_http_client(proxy_mode: ProxyMode) -> Result<reqwest::Client, StorageErro
   builder
     .build()
     .map_err(|_| StorageError::Internal("failed to build OCR HTTP client".into()))
-}
-
-fn map_transport_error(err: TransportError) -> StorageError {
-  match err {
-    TransportError::Auth => StorageError::Validation("OCR provider authentication failed".into()),
-    TransportError::RateLimited => StorageError::Validation("OCR provider rate limit exceeded".into()),
-    TransportError::Network => StorageError::Validation("OCR provider network request failed".into()),
-    TransportError::Timeout => StorageError::Validation("OCR provider request timed out".into()),
-    TransportError::Server => StorageError::Validation("OCR provider server error".into()),
-    TransportError::InvalidResponse => StorageError::Validation("OCR provider returned an invalid response".into()),
-    TransportError::Cancelled => StorageError::Validation("OCR request cancelled".into()),
-  }
 }
 
 fn map_reqwest_network_error(err: reqwest::Error) -> StorageError {
@@ -1043,7 +954,9 @@ mod tests {
   use super::*;
   use crate::credentials::MemoryCredentialVault;
   use crate::domain::model::{Availability, ModelSource, ProviderModel};
-  use crate::domain::provider::{CredentialKind, ModelsSyncStatus, ProviderInstance, ProxyMode};
+  use crate::domain::provider::{
+    AuthSchemeV1, BaseUrlSource, CredentialKind, ModelsSyncStatus, ProviderInstance, ProxyMode,
+  };
   use crate::repositories::{provider_instances, provider_models};
   use crate::storage::Database;
   use std::sync::Arc;
@@ -1069,7 +982,9 @@ mod tests {
           id: provider_id,
           adapter_id: "openai-compatible".into(),
           display_name: "Local".into(),
-          base_url_override: None,
+          base_url: "https://api.openai.com/v1".into(),
+          base_url_source: BaseUrlSource::PluginDefault,
+          auth_scheme: AuthSchemeV1::none(),
           credential_kind: CredentialKind::None,
           credential_ref: None,
           enabled: true,

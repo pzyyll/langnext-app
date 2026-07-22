@@ -56,19 +56,19 @@ Each phase is independently reviewable. Prefer **behavior-preserving** moves: sa
 
 ## File Map (program-wide)
 
-| Path | Role |
-| ---- | ---- |
-| Create: `src/features/translate/streamEvents.ts` | Re-export or document event names + payload types used by hooks (optional if hooks import from `storage/client` constants) |
-| Create: `src/features/translate/resolveTranslateFailureMessage.ts` | Pure failure display mapping shared by pages |
-| Create: `src/features/translate/buildTranslateInput.ts` (name may match existing payload shape) | Pure `TranslateInput` assembly if both pages duplicate fields |
-| Create: `src/features/translate/useTranslateStreamListeners.ts` | Low-level: attach/detach four listeners; return unlisten bundle |
-| Create: `src/features/translate/useTranslateStreamSession.ts` | Single active `requestId` + generation-friendly callbacks for main page |
-| Create: `src/features/translate/useSlotStreamSessions.ts` | Multi-slot map of requestIds + epoch checks for quick-translate |
-| Create: `src/features/translate/quickTranslateWindow.ts` | `notify_ready`, `set_pin`, `resize_window_height` wrappers |
+| Path                                                                                                                                    | Role                                                                                                                       |
+| --------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Create: `src/features/translate/streamEvents.ts`                                                                                        | Re-export or document event names + payload types used by hooks (optional if hooks import from `storage/client` constants) |
+| Create: `src/features/translate/resolveTranslateFailureMessage.ts`                                                                      | Pure failure display mapping shared by pages                                                                               |
+| Create: `src/features/translate/buildTranslateInput.ts` (name may match existing payload shape)                                         | Pure `TranslateInput` assembly if both pages duplicate fields                                                              |
+| Create: `src/features/translate/useTranslateStreamListeners.ts`                                                                         | Low-level: attach/detach four listeners; return unlisten bundle                                                            |
+| Create: `src/features/translate/useTranslateStreamSession.ts`                                                                           | Single active `requestId` + generation-friendly callbacks for main page                                                    |
+| Create: `src/features/translate/useSlotStreamSessions.ts`                                                                               | Multi-slot map of requestIds + epoch checks for quick-translate                                                            |
+| Create: `src/features/translate/quickTranslateWindow.ts`                                                                                | `notify_ready`, `set_pin`, `resize_window_height` wrappers                                                                 |
 | Test: colocated `*.test.ts` for pure helpers; hook tests only if project already patterns support them (prefer pure + thin integration) |
-| Modify: `src/routes/translate/index.tsx` | Consume single-stream session + pure helpers |
-| Modify: `src/routes/quick-translate.tsx` | Consume multi-slot session + window helpers + pure helpers |
-| Modify: `docs/architecture/frontend-state-management.md` | One line: stream session hooks live under features/translate |
+| Modify: `src/routes/translate/index.tsx`                                                                                                | Consume single-stream session + pure helpers                                                                               |
+| Modify: `src/routes/quick-translate.tsx`                                                                                                | Consume multi-slot session + window helpers + pure helpers                                                                 |
+| Modify: `docs/architecture/frontend-state-management.md`                                                                                | One line: stream session hooks live under features/translate                                                               |
 
 Exact filenames may shift slightly if an existing module already owns a concern; do not create parallel helpers.
 
@@ -285,20 +285,20 @@ mise run lint
 
 Manual smoke (Tauri):
 
-1. Main translate: stream, stop, error, profile switch mid-flight  
-2. Quick translate: multi-slot, detect, debounce, pin, resize, clipboard inject  
+1. Main translate: stream, stop, error, profile switch mid-flight
+2. Quick translate: multi-slot, detect, debounce, pin, resize, clipboard inject
 
 ---
 
 ## Failure Behavior
 
-| Case | Expected (unchanged) |
-| ---- | -------------------- |
-| Listen setup fails before invoke | Surface error; clear translating; do not leave orphan request id |
-| Invoke start fails after listen | Unlisten/cleanup; show IPC message via existing helpers |
-| Stale chunk after cancel/epoch change | Ignored by requestId / epoch filters |
-| Batch one slot fails start | Other slots continue; failed slot shows error outcome |
-| Window invoke fails | Same as today (often void/log); do not map to storage `conflict` |
+| Case                                  | Expected (unchanged)                                             |
+| ------------------------------------- | ---------------------------------------------------------------- |
+| Listen setup fails before invoke      | Surface error; clear translating; do not leave orphan request id |
+| Invoke start fails after listen       | Unlisten/cleanup; show IPC message via existing helpers          |
+| Stale chunk after cancel/epoch change | Ignored by requestId / epoch filters                             |
+| Batch one slot fails start            | Other slots continue; failed slot shows error outcome            |
+| Window invoke fails                   | Same as today (often void/log); do not map to storage `conflict` |
 
 ---
 
@@ -311,24 +311,24 @@ Manual smoke (Tauri):
 
 ## Rollout Notes
 
-| Item | Guidance |
-| ---- | -------- |
-| Branch | `refactor/translate-route-thinning` with optional per-phase PRs (`…-t1-helpers`, `…-t2-stream-hook`, …) |
-| Merge order | T1 → T2 → T3 → T4 → T5 optional |
-| Migrations | None |
-| Risk | High surface area — prefer small PRs; no drive-by UI redesign |
-| Effect plan | Does not replace or depend on Phase 5D |
+| Item        | Guidance                                                                                                |
+| ----------- | ------------------------------------------------------------------------------------------------------- |
+| Branch      | `refactor/translate-route-thinning` with optional per-phase PRs (`…-t1-helpers`, `…-t2-stream-hook`, …) |
+| Merge order | T1 → T2 → T3 → T4 → T5 optional                                                                         |
+| Migrations  | None                                                                                                    |
+| Risk        | High surface area — prefer small PRs; no drive-by UI redesign                                           |
+| Effect plan | Does not replace or depend on Phase 5D                                                                  |
 
 ---
 
 ## Risks and Mitigations
 
-| Risk | Mitigation |
-| ---- | ---------- |
-| Hook API sucks in all UI state | Callbacks for chunk/done/error; page owns React state |
-| Subtle race regressions | Preserve listen-before-invoke; copy filter predicates exactly; manual race tests |
-| Over-sharing between single and multi-slot | Shared listener attach only; separate session hooks |
-| Accidental Effect/Query creep | Explicit out of scope; lint/search gate |
+| Risk                                       | Mitigation                                                                       |
+| ------------------------------------------ | -------------------------------------------------------------------------------- |
+| Hook API sucks in all UI state             | Callbacks for chunk/done/error; page owns React state                            |
+| Subtle race regressions                    | Preserve listen-before-invoke; copy filter predicates exactly; manual race tests |
+| Over-sharing between single and multi-slot | Shared listener attach only; separate session hooks                              |
+| Accidental Effect/Query creep              | Explicit out of scope; lint/search gate                                          |
 
 ---
 
@@ -346,23 +346,23 @@ Manual smoke (Tauri):
 
 ## Open Questions
 
-| Question | Default | Affects |
-| -------- | ------- | ------- |
-| Hook vs plain class/session object for multi-slot | **Hook + small pure helpers** | T3 |
-| Share listener primitive across T2/T3 in first PR | **Yes if &lt; ~80 lines shared** | T2–T3 |
-| Move quick-translate to `features/quick-translate/` folder | **No** — keep under `features/translate` unless folder grows large | T4 |
-| Add RTL/component tests for hooks | **Prefer pure unit tests + manual Tauri smoke** | All |
+| Question                                                   | Default                                                            | Affects |
+| ---------------------------------------------------------- | ------------------------------------------------------------------ | ------- |
+| Hook vs plain class/session object for multi-slot          | **Hook + small pure helpers**                                      | T3      |
+| Share listener primitive across T2/T3 in first PR          | **Yes if &lt; ~80 lines shared**                                   | T2–T3   |
+| Move quick-translate to `features/quick-translate/` folder | **No** — keep under `features/translate` unless folder grows large | T4      |
+| Add RTL/component tests for hooks                          | **Prefer pure unit tests + manual Tauri smoke**                    | All     |
 
 ---
 
 ## Requirement Traceability
 
-| Intent | Phase/Task |
-| ------ | ---------- |
-| Deduplicate failure message / pure builders | T1 |
-| Thin main translate stream lifecycle | T2 |
-| Thin quick-translate multi-slot stream lifecycle | T3 |
-| Isolate window chrome invokes | T4 |
-| Optional session/debounce pure modules | T5 |
-| Docs + no Effect leakage | T6 |
-| Keep feature `run*` IPC runners | All (consume only) |
+| Intent                                           | Phase/Task         |
+| ------------------------------------------------ | ------------------ |
+| Deduplicate failure message / pure builders      | T1                 |
+| Thin main translate stream lifecycle             | T2                 |
+| Thin quick-translate multi-slot stream lifecycle | T3                 |
+| Isolate window chrome invokes                    | T4                 |
+| Optional session/debounce pure modules           | T5                 |
+| Docs + no Effect leakage                         | T6                 |
+| Keep feature `run*` IPC runners                  | All (consume only) |

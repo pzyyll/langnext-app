@@ -18,6 +18,9 @@ export const DATA_OCR_SERVICES_CHANGED = "data://ocr-services-changed";
 /** Clipboard text emitted to the Quick Translate window on double Ctrl+C / OCR delivery. */
 export const QUICK_TRANSLATE_CLIPBOARD_TEXT = "quick-translate://clipboard-text";
 
+/** Captured PNG for frontend OCR; payload is QuickTranslateOcrRequest. */
+export const QUICK_TRANSLATE_OCR_REQUEST = "quick-translate://ocr-request";
+
 /** Region screenshot finished; payload is RegionScreenshotResult. */
 export const REGION_SCREENSHOT_CAPTURED = "screenshot://region-captured";
 

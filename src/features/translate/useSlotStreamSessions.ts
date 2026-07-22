@@ -1,28 +1,26 @@
-// ABOUTME: Multi-slot translate stream session: requestId map, epochs, listen-before-start.
-// ABOUTME: Page owns debounce/UI state; this hook owns request correlation and unlisten lifecycle.
+// ABOUTME: Multi-slot translate stream session: requestId map, epochs, workflow callbacks.
+// ABOUTME: Page owns debounce/UI state; this hook owns request correlation and settle lifecycle.
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import type { UnlistenFn } from "@tauri-apps/api/event";
-import type { TranslateInput, TranslateStreamChunk, TranslateStreamDone, TranslateStreamError, TranslateStreamReset } from "../../storage/types";
-import {
-  attachTranslateStreamListeners,
-  detachTranslateStreamListeners,
-} from "./attachTranslateStreamListeners";
+import type { TranslateInput, TranslateResult } from "../../storage/types";
 import { runCancelRequestIds } from "./runTranslate";
 import type { SlotStreamJob } from "./slotBatch";
-import { bumpAllSlotEpochs, isSlotEpochCurrent as isEpochCurrentPure, nextSlotEpoch as nextEpochPure } from "./slotEpoch";
+import type { TranslationContextSnapshots } from "./translationContext";
+import type { TranslationStreamHandlers } from "./translationWorkflow";
+import {
+  bumpAllSlotEpochs,
+  isSlotEpochCurrent as isEpochCurrentPure,
+  nextSlotEpoch as nextEpochPure,
+} from "./slotEpoch";
 
 /** Request-id map key for the in-flight language-detect call. */
 export const DETECT_REQUEST_KEY = "__detect__";
 
 export type SlotStreamUiHandlers = {
-  onChunk: (chunk: TranslateStreamChunk) => void;
-  onReset: (reset: TranslateStreamReset) => void;
-  /** Terminal success/failure (not cancelled). Hook settles after this returns. */
-  onDone: (done: TranslateStreamDone) => void;
-  onError: (err: TranslateStreamError) => void;
-  /** Matching request cancelled while still current. Hook settles after. */
+  onChunk: (delta: string) => void;
+  onReset: (modelId: string) => void;
+  onDone: (done: TranslateResult) => void;
+  onError: (err: TranslateResult) => void;
   onCancelled: () => void;
-  /** listen() failed while the request was still current. Hook settles after. */
   onListenFailure: (err: unknown) => void;
 };
 
@@ -36,9 +34,7 @@ export type PreparedSlotStream = {
 export type UseSlotStreamSessionsResult = {
   nextSlotEpoch: (slotId: string) => number;
   isSlotEpochCurrent: (slotId: string, epoch: number) => boolean;
-  /** Read current epoch for a slot (undefined if never bumped). */
   getSlotEpoch: (slotId: string) => number | undefined;
-  /** Drop epoch tracking for a removed card. */
   deleteSlotEpoch: (slotId: string) => void;
   bumpDetectEpoch: () => number;
   getDetectEpoch: () => number;
@@ -49,29 +45,22 @@ export type UseSlotStreamSessionsResult = {
   abortRequest: (key: string) => Promise<void>;
   abortSlots: (slotIds: string[]) => Promise<void>;
   abortAll: () => Promise<void>;
-  /**
-   * Register stream listeners for one card and return a start job.
-   * Does not invoke translate — callers batch-start after every listener is live.
-   */
   prepareSlotStream: (
     slotId: string,
     epoch: number,
     requestId: string,
     input: TranslateInput,
+    snapshots: TranslationContextSnapshots,
     handlers: SlotStreamUiHandlers,
   ) => Promise<PreparedSlotStream | null>;
 };
 
-/**
- * Owns multi-slot requestId/epoch/listener maps for quick-translate.
- * Epoch bumps are driven by the page via `nextSlotEpoch` / `bumpDetectEpoch`.
- */
 export function useSlotStreamSessions(): UseSlotStreamSessionsResult {
   const slotEpochRef = useRef<Map<string, number>>(new Map());
   const detectEpochRef = useRef(0);
   const requestIdsRef = useRef<Map<string, string>>(new Map());
-  const streamUnlistenersRef = useRef<Map<string, UnlistenFn[]>>(new Map());
   const streamSettleRef = useRef<Map<string, () => void>>(new Map());
+  const activeHandlersRef = useRef<Map<string, SlotStreamUiHandlers>>(new Map());
 
   const nextSlotEpoch = useCallback((slotId: string): number => {
     return nextEpochPure(slotEpochRef.current, slotId);
@@ -107,19 +96,12 @@ export function useSlotStreamSessions(): UseSlotStreamSessionsResult {
   }, []);
 
   const clearSlotStreamListeners = useCallback((slotId: string) => {
-    const unlisteners = streamUnlistenersRef.current.get(slotId);
-    if (!unlisteners) {
-      return;
-    }
-    detachTranslateStreamListeners(unlisteners);
-    streamUnlistenersRef.current.delete(slotId);
+    activeHandlersRef.current.delete(slotId);
   }, []);
 
   const abortRequest = useCallback(
     async (key: string) => {
-      // Capture before settle/listeners clear removes the map entry.
       const requestId = requestIdsRef.current.get(key);
-      // Resolve any in-flight stream Promise and drop its listeners.
       const settleStream = streamSettleRef.current.get(key);
       if (settleStream) {
         settleStream();
@@ -148,148 +130,103 @@ export function useSlotStreamSessions(): UseSlotStreamSessionsResult {
   }, [abortRequest]);
 
   const prepareSlotStream = useCallback(
-    (
+    async (
       slotId: string,
       epoch: number,
       requestId: string,
       input: TranslateInput,
+      snapshots: TranslationContextSnapshots,
       handlers: SlotStreamUiHandlers,
     ): Promise<PreparedSlotStream | null> => {
-      return new Promise((resolvePrepare) => {
-        let settled = false;
-        let settle!: () => void;
-        const waitUntilSettled = new Promise<void>((resolve) => {
-          settle = () => {
-            if (settled) {
-              return;
-            }
-            settled = true;
-            streamSettleRef.current.delete(slotId);
-            clearSlotStreamListeners(slotId);
-            if (requestIdsRef.current.get(slotId) === requestId) {
-              requestIdsRef.current.delete(slotId);
-            }
-            resolve();
-          };
-        });
-        // So abortRequest can unblock waiters when cancel supersedes this stream.
-        streamSettleRef.current.set(slotId, settle);
-
-        const isCurrentRequest = () =>
-          isEpochCurrentPure(slotEpochRef.current, slotId, epoch) &&
-          requestIdsRef.current.get(slotId) === requestId;
-
-        const onChunk = (chunk: TranslateStreamChunk) => {
-          if (chunk.id !== requestId || !isCurrentRequest()) {
+      let settled = false;
+      let settle!: () => void;
+      const waitUntilSettled = new Promise<void>((resolve) => {
+        settle = () => {
+          if (settled) {
             return;
           }
-          handlers.onChunk(chunk);
+          settled = true;
+          streamSettleRef.current.delete(slotId);
+          clearSlotStreamListeners(slotId);
+          if (requestIdsRef.current.get(slotId) === requestId) {
+            requestIdsRef.current.delete(slotId);
+          }
+          resolve();
         };
+      });
+      streamSettleRef.current.set(slotId, settle);
+      requestIdsRef.current.set(slotId, requestId);
+      activeHandlersRef.current.set(slotId, handlers);
 
-        const onReset = (reset: TranslateStreamReset) => {
-          if (reset.id !== requestId || !isCurrentRequest()) {
-            return;
-          }
-          handlers.onReset(reset);
-        };
+      const isCurrentRequest = () =>
+        isEpochCurrentPure(slotEpochRef.current, slotId, epoch) && requestIdsRef.current.get(slotId) === requestId;
 
-        const onDone = (done: TranslateStreamDone) => {
-          if (done.id !== requestId) {
-            return;
-          }
-          if (!isEpochCurrentPure(slotEpochRef.current, slotId, epoch) || requestIdsRef.current.get(slotId) !== requestId) {
+      const workflowHandlers: TranslationStreamHandlers = {
+        onChunk: (delta) => {
+          if (!isCurrentRequest()) return;
+          activeHandlersRef.current.get(slotId)?.onChunk(delta);
+        },
+        onReset: (modelId) => {
+          if (!isCurrentRequest()) return;
+          activeHandlersRef.current.get(slotId)?.onReset(modelId);
+        },
+        onDone: (done) => {
+          if (!isCurrentRequest()) {
             settle();
             return;
           }
           if (done.errorCode === "cancelled") {
-            handlers.onCancelled();
-            settle();
-            return;
+            activeHandlersRef.current.get(slotId)?.onCancelled();
+          } else {
+            activeHandlersRef.current.get(slotId)?.onDone(done);
           }
-          handlers.onDone(done);
           settle();
-        };
-
-        const onError = (err: TranslateStreamError) => {
-          if (err.id !== requestId) {
-            return;
-          }
-          if (!isEpochCurrentPure(slotEpochRef.current, slotId, epoch) || requestIdsRef.current.get(slotId) !== requestId) {
+        },
+        onError: (err) => {
+          if (!isCurrentRequest()) {
             settle();
             return;
           }
           if (err.errorCode === "cancelled") {
-            handlers.onCancelled();
-            settle();
-            return;
+            activeHandlersRef.current.get(slotId)?.onCancelled();
+          } else {
+            activeHandlersRef.current.get(slotId)?.onError(err);
           }
-          handlers.onError(err);
           settle();
-        };
+        },
+      };
 
-        void (async () => {
-          try {
-            const unlisteners = await attachTranslateStreamListeners({
-              onChunk,
-              onReset,
-              onDone,
-              onError,
-            });
-            if (!isCurrentRequest()) {
-              detachTranslateStreamListeners(unlisteners);
-              settle();
-              resolvePrepare(null);
-              return;
-            }
-            streamUnlistenersRef.current.set(slotId, unlisteners);
-            // Listeners live — hand job back so the batch starter can invoke next.
-            resolvePrepare({
-              job: { slotId, requestId, input },
-              waitUntilSettled,
-              settle,
-              isCurrentRequest,
-            });
-          } catch (err) {
-            // listen() failure: clear translating and surface error (same as pre-extract path).
-            if (isCurrentRequest()) {
-              handlers.onListenFailure(err);
-            }
-            settle();
-            resolvePrepare(null);
-          }
-        })();
-      });
+      const job: SlotStreamJob = {
+        slotId,
+        requestId,
+        input,
+        snapshots,
+        handlers: workflowHandlers,
+      };
+
+      return {
+        job,
+        waitUntilSettled,
+        settle,
+        isCurrentRequest,
+      };
     },
     [clearSlotStreamListeners],
   );
 
   useEffect(() => {
-    // Capture map identities once — maps are mutated in place for the page lifetime.
-    const slotEpochs = slotEpochRef.current;
+    const settleMap = streamSettleRef.current;
     const requestIds = requestIdsRef.current;
-    const streamSettle = streamSettleRef.current;
-    const streamUnlisteners = streamUnlistenersRef.current;
+    const handlers = activeHandlersRef.current;
+    const epochs = slotEpochRef.current;
     return () => {
-      detectEpochRef.current += 1;
-      bumpAllSlotEpochs(slotEpochs);
-      const keys = [...requestIds.keys()];
-      for (const key of keys) {
-        const requestId = requestIds.get(key);
-        const settleStream = streamSettle.get(key);
-        if (settleStream) {
-          settleStream();
-        } else {
-          const unlisteners = streamUnlisteners.get(key);
-          if (unlisteners) {
-            detachTranslateStreamListeners(unlisteners);
-            streamUnlisteners.delete(key);
-          }
-          requestIds.delete(key);
-        }
-        if (requestId) {
-          void runCancelRequestIds([requestId]);
-        }
+      // Drop all tracked sessions on unmount without awaiting cancel.
+      for (const settle of settleMap.values()) {
+        settle();
       }
+      requestIds.clear();
+      handlers.clear();
+      bumpAllSlotEpochs(epochs);
     };
   }, []);
 

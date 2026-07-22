@@ -12,7 +12,11 @@ import { ToastProvider } from "./components/toast/ToastProvider";
 import { queryClient } from "./query/client";
 import { QueryEventSync } from "./query/QueryEventSync";
 import { initLogger } from "./logger";
+import { registerBuiltinProviderPlugins } from "./features/providers/builtin";
 import "./styles.css";
+
+// Every webview (main + quick-translate) must register plugins before routes run.
+registerBuiltinProviderPlugins();
 
 // Immediate pre-paint cache application (index.html may already have set this).
 initTheme();

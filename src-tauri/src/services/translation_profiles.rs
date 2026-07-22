@@ -1,6 +1,6 @@
 // ABOUTME: Translation profile template/parameter validation and profile writes.
 // ABOUTME: Fallback chains and prompt templates are stored as complete ordered lists.
-use crate::adapters::catalog;
+
 use crate::domain::language_detection::{LanguageDetectorConfig, SUPPORTED_LANGUAGES};
 use crate::domain::time::{new_id, now_rfc3339};
 use crate::domain::translation_profile::{
@@ -80,15 +80,12 @@ impl TranslationProfileService {
       for model_id in &input.target_model_ids {
         provider_models::get(uow.conn(), *model_id)?;
       }
-      // Adapter options: use first target's provider adapter when present, else generic.
-      let adapter_id = if let Some(first) = input.target_model_ids.first() {
-        let model = provider_models::get(uow.conn(), *first)?;
-        let provider = crate::repositories::provider_instances::get(uow.conn(), model.provider_instance_id)?;
-        provider.adapter_id
-      } else {
-        "openai-compatible".into()
-      };
-      catalog::validate_profile_options(&adapter_id, &input.provider_options_json)?;
+      // Provider-specific profile options are unused; only empty/null objects are accepted.
+      if let Some(options) = &input.provider_options_json {
+        if !options.is_null() && options.as_object().map(|o| !o.is_empty()).unwrap_or(true) {
+          return Err(StorageError::Validation("provider_options_json must be empty".into()));
+        }
+      }
 
       // When a detector explicitly targets an LLM model, the model must exist.
       if let Some(LanguageDetectorConfig::Llm {

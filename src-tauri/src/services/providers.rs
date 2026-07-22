@@ -1,11 +1,10 @@
 // ABOUTME: Provider validation, CRUD, and credential orchestration with crash recovery.
 // ABOUTME: Vault writes never share a transaction with SQLite; journal coordinates both.
-use crate::adapters::catalog;
 use crate::credentials::coordinator;
 use crate::credentials::{CredentialVault, provider_ref};
 use crate::domain::provider::{
-  CredentialKind, CredentialUpdate, ModelsSyncStatus, ProviderInstance, ProviderInstanceDto, ProviderInstanceWrite,
-  ProxyMode,
+  AuthSchemeV1, BaseUrlSource, CredentialKind, CredentialUpdate, ModelsSyncStatus, ProviderInstance,
+  ProviderInstanceDto, ProviderInstanceWrite, ProxyMode, validate_adapter_id,
 };
 use crate::domain::time::{new_id, now_rfc3339};
 use crate::error::StorageError;
@@ -49,7 +48,6 @@ impl ProviderService {
 
   pub fn save(&self, input: ProviderInstanceWrite) -> Result<ProviderInstanceDto, StorageError> {
     validate_provider_write(&input)?;
-    catalog::get(&input.adapter_id)?;
 
     match input.id {
       None => self.create(input),
@@ -185,7 +183,9 @@ impl ProviderService {
       let connection_changed = connection_identity_changed(
         &existing,
         &input.adapter_id,
-        input.base_url_override.as_deref(),
+        &input.base_url,
+        input.base_url_source,
+        &input.auth_scheme,
         input.credential_kind,
         existing.credential_ref.as_deref(),
         input.proxy_mode,
@@ -197,7 +197,9 @@ impl ProviderService {
         id,
         &input.adapter_id,
         &input.display_name,
-        input.base_url_override.as_deref(),
+        &input.base_url,
+        input.base_url_source,
+        &input.auth_scheme,
         input.credential_kind,
         input.enabled,
         input.proxy_mode,
@@ -250,7 +252,9 @@ impl ProviderService {
     if !connection_identity_changed(
       &existing,
       &input.adapter_id,
-      input.base_url_override.as_deref(),
+      &input.base_url,
+      input.base_url_source,
+      &input.auth_scheme,
       input.credential_kind,
       Some(new_ref.as_str()),
       input.proxy_mode,
@@ -330,7 +334,9 @@ impl ProviderService {
       if !connection_identity_changed(
         &latest,
         &input.adapter_id,
-        input.base_url_override.as_deref(),
+        &input.base_url,
+        input.base_url_source,
+        &input.auth_scheme,
         input.credential_kind,
         None,
         input.proxy_mode,
@@ -429,7 +435,9 @@ fn build_provider(
     id,
     adapter_id: input.adapter_id.clone(),
     display_name: input.display_name.clone(),
-    base_url_override: input.base_url_override.clone(),
+    base_url: input.base_url.clone(),
+    base_url_source: input.base_url_source,
+    auth_scheme: input.auth_scheme.clone(),
     credential_kind: input.credential_kind,
     credential_ref,
     enabled: input.enabled,
@@ -449,19 +457,24 @@ fn build_provider(
 fn connection_identity_changed(
   existing: &ProviderInstance,
   adapter_id: &str,
-  base_url_override: Option<&str>,
+  base_url: &str,
+  base_url_source: BaseUrlSource,
+  auth_scheme: &AuthSchemeV1,
   credential_kind: CredentialKind,
   credential_ref: Option<&str>,
   proxy_mode: ProxyMode,
 ) -> bool {
   existing.adapter_id != adapter_id
-    || existing.base_url_override.as_deref() != base_url_override
+    || existing.base_url != base_url
+    || existing.base_url_source != base_url_source
+    || existing.auth_scheme != *auth_scheme
     || existing.credential_kind != credential_kind
     || existing.credential_ref.as_deref() != credential_ref
     || existing.proxy_mode != proxy_mode
 }
 
 fn validate_provider_write(input: &ProviderInstanceWrite) -> Result<(), StorageError> {
+  validate_adapter_id(&input.adapter_id).map_err(StorageError::Validation)?;
   if input.display_name.trim().is_empty() {
     return Err(StorageError::Validation("display_name must not be empty".into()));
   }
@@ -470,8 +483,15 @@ fn validate_provider_write(input: &ProviderInstanceWrite) -> Result<(), StorageE
       "display_name must be at most 200 characters".into(),
     ));
   }
-  if let Some(url) = &input.base_url_override {
-    validate_provider_url(url, input.insecure_http_confirmed_at.as_deref())?;
+  if input.base_url.trim().is_empty() {
+    return Err(StorageError::Validation("base_url must not be empty".into()));
+  }
+  validate_provider_url(&input.base_url, input.insecure_http_confirmed_at.as_deref())?;
+  input.auth_scheme.validate().map_err(StorageError::Validation)?;
+  if !input.auth_scheme.compatible_with(input.credential_kind) {
+    return Err(StorageError::Validation(
+      "auth_scheme is incompatible with credential_kind".into(),
+    ));
   }
   match input.proxy_mode {
     ProxyMode::Inherit | ProxyMode::Direct => {}
