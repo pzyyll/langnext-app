@@ -23,12 +23,14 @@ use crate::domain::translation::{
 use crate::domain::translation_profile::{TranslationProfile, TranslationProfileTarget};
 use crate::error::StorageError;
 use crate::repositories::{provider_instances, provider_models, translation_profiles};
+use crate::services::models_dev_catalog::ModelsDevCatalog;
 use crate::services::translation_history::{
   TranslateHistorySnapshot, TranslateInputSnapshot, TranslationHistoryService,
 };
 use crate::services::translation_profiles::render_template;
 use crate::storage::Database;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Instant;
 use tauri::{AppHandle, Emitter, Runtime};
@@ -54,6 +56,8 @@ pub struct ModelService {
   vault: Arc<dyn CredentialVault>,
   transport: Arc<dyn ModelTransport>,
   history: TranslationHistoryService,
+  /// models.dev catalog (24h disk+memory cache) used to seed capability overrides on sync.
+  models_dev: ModelsDevCatalog,
   /// Per-provider async locks: concurrent syncs for one provider serialize (max transport
   /// concurrency 1). Not single-flight - each waiter re-resolves connection identity after
   /// acquiring the lock and runs its own Future.
@@ -113,12 +117,14 @@ impl ModelService {
     vault: Arc<dyn CredentialVault>,
     transport: Arc<dyn ModelTransport>,
     history: TranslationHistoryService,
+    cache_dir: PathBuf,
   ) -> Self {
     Self {
       db,
       vault,
       transport,
       history,
+      models_dev: ModelsDevCatalog::new(cache_dir),
       sync_locks: Arc::new(StdMutex::new(HashMap::new())),
     }
   }
@@ -704,6 +710,7 @@ impl ModelService {
       } => match self.transport.list_models(request).await {
         Ok(remote_models) => {
           let remote_count = remote_models.len();
+          let remote_models = self.seed_remote_capabilities(remote_models).await;
           let outcome = self
             .apply_remote_merge_async(provider_id, connection, remote_models)
             .await?;
@@ -758,6 +765,18 @@ impl ModelService {
       service.apply_remote_merge_if_connection_matches(provider_id, &connection, &remote_models)
     })
     .await
+  }
+
+  /// Attach models.dev (or default) capability overrides to each remote sync item.
+  async fn seed_remote_capabilities(&self, mut remote_models: Vec<RemoteModelSyncItem>) -> Vec<RemoteModelSyncItem> {
+    for item in &mut remote_models {
+      if item.capability_overrides_json.is_some() {
+        continue;
+      }
+      let caps = self.models_dev.capabilities_for_model_key(&item.model_key).await;
+      item.capability_overrides_json = Some(serde_json::to_value(caps).expect("capability overrides serialize"));
+    }
+    remote_models
   }
 
   async fn record_sync_error_async(

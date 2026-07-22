@@ -493,6 +493,7 @@ const zhCN = {
       capabilities: "能力",
       textGeneration: "Text",
       imageAnalysis: "Image",
+      pdfAnalysis: "PDF",
       videoProcessing: "Video",
       contextWindow: "上下文窗口",
       contextTokens: "{{count}}k tokens",

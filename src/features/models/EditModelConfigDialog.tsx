@@ -100,6 +100,7 @@ function EditModelConfigForm({ model, onSaved }: EditModelConfigFormProps) {
   const [adapterId, setAdapterId] = useState(initial.adapterId);
   const [textGeneration, setTextGeneration] = useState(initial.textGeneration);
   const [imageAnalysis, setImageAnalysis] = useState(initial.imageAnalysis);
+  const [pdfAnalysis, setPdfAnalysis] = useState(initial.pdfAnalysis);
   const [videoProcessing, setVideoProcessing] = useState(initial.videoProcessing);
   const [contextLimit, setContextLimit] = useState(initial.contextLimit);
   const [maxTokens, setMaxTokens] = useState(initial.maxTokens);
@@ -113,6 +114,7 @@ function EditModelConfigForm({ model, onSaved }: EditModelConfigFormProps) {
     adapterId !== initial.adapterId ||
     textGeneration !== initial.textGeneration ||
     imageAnalysis !== initial.imageAnalysis ||
+    pdfAnalysis !== initial.pdfAnalysis ||
     videoProcessing !== initial.videoProcessing ||
     contextLimit !== initial.contextLimit ||
     maxTokens !== initial.maxTokens;
@@ -132,6 +134,7 @@ function EditModelConfigForm({ model, onSaved }: EditModelConfigFormProps) {
         previous: model.capabilityOverridesJson,
         textGeneration,
         imageAnalysis,
+        pdfAnalysis,
         videoProcessing,
         contextLimit,
         maxTokens,
@@ -247,6 +250,23 @@ function EditModelConfigForm({ model, onSaved }: EditModelConfigFormProps) {
             <label className="flex cursor-pointer items-center gap-2">
               <Checkbox.Root
                 className={checkboxClassName}
+                checked={pdfAnalysis}
+                onCheckedChange={(checked) => {
+                  setPdfAnalysis(checked);
+                }}
+                disabled={pending}
+              >
+                <Checkbox.Indicator className={checkboxIndicatorClassName}>
+                  <IconMaterialSymbolsLightCheck className="size-3" aria-hidden />
+                </Checkbox.Indicator>
+              </Checkbox.Root>
+              <span className="text-body-tight font-medium text-on-surface">
+                {t("models.editModelConfig.pdfAnalysis")}
+              </span>
+            </label>
+            <label className="flex cursor-pointer items-center gap-2">
+              <Checkbox.Root
+                className={checkboxClassName}
                 checked={videoProcessing}
                 onCheckedChange={(checked) => {
                   setVideoProcessing(checked);
@@ -347,6 +367,7 @@ type FormState = {
   adapterId: string;
   textGeneration: boolean;
   imageAnalysis: boolean;
+  pdfAnalysis: boolean;
   videoProcessing: boolean;
   contextLimit: number;
   maxTokens: number;
@@ -359,6 +380,7 @@ function formStateFromModel(model: ProviderModelDto): FormState {
     adapterId: model.adapterId ?? "",
     textGeneration: caps?.textGeneration ?? true,
     imageAnalysis: caps?.imageAnalysis ?? false,
+    pdfAnalysis: caps?.pdfAnalysis ?? false,
     videoProcessing: caps?.videoProcessing ?? false,
     contextLimit: positiveIntegerOr(caps?.maxContextTokens, DEFAULT_CONTEXT_LIMIT),
     // Prefer the request value when present so existing configs keep their effective max.
@@ -381,6 +403,7 @@ function buildCapabilityOverrides(input: {
   previous: CapabilityOverridesV1 | null;
   textGeneration: boolean;
   imageAnalysis: boolean;
+  pdfAnalysis: boolean;
   videoProcessing: boolean;
   contextLimit: number;
   maxTokens: number;
@@ -389,6 +412,7 @@ function buildCapabilityOverrides(input: {
     schemaVersion: 1,
     textGeneration: input.textGeneration,
     imageAnalysis: input.imageAnalysis,
+    pdfAnalysis: input.pdfAnalysis,
     videoProcessing: input.videoProcessing,
     maxContextTokens: input.contextLimit,
     // Write the same value for both fields so the request path uses Max Tokens as-is.

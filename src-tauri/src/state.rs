@@ -42,7 +42,13 @@ impl AppState {
     let providers = ProviderService::new(db.clone(), vault.clone());
     let transport: Arc<dyn ModelTransport> = Arc::new(HttpModelTransport);
     let history = TranslationHistoryService::new(db.clone());
-    let models = ModelService::new(db.clone(), vault.clone(), transport, history);
+    let models = ModelService::new(
+      db.clone(),
+      vault.clone(),
+      transport,
+      history,
+      app_data_dir.join("cache"),
+    );
     let profiles = TranslationProfileService::new(db.clone());
     let ocr_services = OcrServiceService::new(db.clone(), vault.clone());
     let settings = SettingsService::new(db.clone(), vault.clone());

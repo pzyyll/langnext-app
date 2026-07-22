@@ -93,6 +93,7 @@ export interface CapabilityOverridesV1 {
   defaultOutputTokens?: number | null;
   textGeneration?: boolean | null;
   imageAnalysis?: boolean | null;
+  pdfAnalysis?: boolean | null;
   videoProcessing?: boolean | null;
 }
 
@@ -629,6 +630,7 @@ const _capabilityFixture = {
   defaultOutputTokens: 1024,
   textGeneration: true,
   imageAnalysis: false,
+  pdfAnalysis: false,
   videoProcessing: false,
 } as const satisfies CapabilityOverridesV1;
 

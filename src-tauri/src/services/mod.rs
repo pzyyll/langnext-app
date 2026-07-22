@@ -3,6 +3,7 @@
 pub mod import_export;
 pub mod import_validation;
 pub mod models;
+pub mod models_dev_catalog;
 pub mod ocr_services;
 pub mod providers;
 pub mod settings;

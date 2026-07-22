@@ -72,6 +72,13 @@ fn block_on<F: Future>(future: F) -> F::Output {
   tauri::async_runtime::block_on(future)
 }
 
+fn models_dev_cache_dir(dir: &tempfile::TempDir) -> std::path::PathBuf {
+  let cache_dir = dir.path().join("cache");
+  crate::services::models_dev_catalog::ModelsDevCatalog::seed_fresh_empty_cache(&cache_dir).unwrap();
+  cache_dir
+}
+
+
 fn setup() -> (
   tempfile::TempDir,
   Database,
@@ -95,6 +102,7 @@ fn setup() -> (
     vault.clone(),
     transport.clone() as Arc<dyn ModelTransport>,
     history,
+    models_dev_cache_dir(&dir),
   );
   let profiles = TranslationProfileService::new(db.clone());
   let settings = SettingsService::new(db.clone(), vault.clone());
@@ -240,6 +248,7 @@ fn provider_keep_allows_base_url_change_with_stored_credential() {
         model_key: "m1".into(),
         remote_display_name: None,
         remote_metadata_json: None,
+        capability_overrides_json: None,
       }],
     )
     .unwrap();
@@ -347,11 +356,13 @@ fn model_merge_marks_missing_preserves_manual() {
           model_key: "remote-a".into(),
           remote_display_name: Some("A".into()),
           remote_metadata_json: None,
+          capability_overrides_json: None,
         },
         RemoteModelSyncItem {
           model_key: "manual-1".into(),
           remote_display_name: Some("Remote name".into()),
           remote_metadata_json: Some(serde_json::json!({"x": 1})),
+          capability_overrides_json: None,
         },
       ],
     )
@@ -374,6 +385,7 @@ fn model_merge_marks_missing_preserves_manual() {
         model_key: "remote-b".into(),
         remote_display_name: None,
         remote_metadata_json: None,
+        capability_overrides_json: None,
       }],
     )
     .unwrap();
@@ -1097,6 +1109,7 @@ fn import_credential_cleanup_isolates_unrelated_journals() {
     vault.clone() as Arc<dyn CredentialVault>,
     transport as Arc<dyn ModelTransport>,
     history,
+    models_dev_cache_dir(&dir),
   );
   let profiles = TranslationProfileService::new(db.clone());
   let _settings = SettingsService::new(db.clone(), vault.clone());
@@ -1413,6 +1426,7 @@ fn model_sync_error_preserves_last_success_timestamp() {
         model_key: "a".into(),
         remote_display_name: None,
         remote_metadata_json: None,
+        capability_overrides_json: None,
       }],
     )
     .unwrap();
@@ -1805,6 +1819,7 @@ fn test_connection_uses_channel_adapter_not_model_override() {
     model_key: "ignored".into(),
     remote_display_name: None,
     remote_metadata_json: None,
+    capability_overrides_json: None,
   }]);
   let result = block_on(models.test_connection(p.id)).unwrap();
   assert!(result.ok);
@@ -1830,6 +1845,7 @@ fn test_connection_unauthenticated_openai_compatible_success() {
     model_key: "local-model".into(),
     remote_display_name: None,
     remote_metadata_json: None,
+    capability_overrides_json: None,
   }]);
   let result = block_on(models.test_connection(p.id)).unwrap();
   assert!(result.ok);
@@ -1883,6 +1899,7 @@ fn test_connection_failing_vault_credential_unavailable() {
     vault as Arc<dyn CredentialVault>,
     transport as Arc<dyn ModelTransport>,
     history,
+    models_dev_cache_dir(&dir),
   );
   let result = block_on(models.test_connection(p.id)).unwrap();
   assert!(!result.ok);
@@ -1924,11 +1941,13 @@ fn sync_models_success_merges_and_sets_ok_status() {
       model_key: "gpt-4o".into(),
       remote_display_name: Some("GPT-4o".into()),
       remote_metadata_json: None,
+      capability_overrides_json: None,
     },
     RemoteModelSyncItem {
       model_key: "gpt-4o-mini".into(),
       remote_display_name: None,
       remote_metadata_json: None,
+      capability_overrides_json: None,
     },
   ]);
   let result = block_on(models.sync_models(p.id)).unwrap();
@@ -1939,6 +1958,75 @@ fn sync_models_success_merges_and_sets_ok_status() {
     crate::domain::provider::ModelsSyncStatus::Ok
   );
   assert!(result.provider.models_synced_at.is_some());
+  // Empty models.dev cache still seeds defaults for newly discovered remote models.
+  for model in &result.models {
+    let caps = model
+      .capability_overrides_json
+      .as_ref()
+      .expect("sync seeds capability overrides");
+    assert_eq!(caps["schemaVersion"], 1);
+    assert_eq!(caps["textGeneration"], true);
+    assert_eq!(caps["imageAnalysis"], false);
+    assert_eq!(caps["pdfAnalysis"], false);
+    assert_eq!(
+      caps["maxContextTokens"],
+      crate::domain::model::CapabilityOverridesV1::DEFAULT_MAX_CONTEXT_TOKENS
+    );
+  }
+}
+
+#[test]
+fn sync_models_preserves_existing_capability_overrides() {
+  let (_d, _db, _v, providers, models, _pr, _s, _ie, transport) = setup();
+  let p = providers
+    .save(provider_write(
+      CredentialKind::ApiKey,
+      CredentialUpdate::Replace("sk-test".into()),
+    ))
+    .unwrap();
+  transport.push_ok(vec![RemoteModelSyncItem {
+    model_key: "custom-model".into(),
+    remote_display_name: None,
+    remote_metadata_json: None,
+    capability_overrides_json: None,
+  }]);
+  let first = block_on(models.sync_models(p.id)).unwrap();
+  assert!(first.ok);
+  let model_id = first.models[0].id;
+  let custom = serde_json::json!({
+    "schemaVersion": 1,
+    "textGeneration": true,
+    "imageAnalysis": true,
+    "pdfAnalysis": true,
+    "maxContextTokens": 4096,
+    "maxOutputTokens": 1024,
+    "defaultOutputTokens": 1024
+  });
+  models
+    .update_config(crate::domain::model::ModelConfigWrite {
+      id: model_id,
+      display_name_override: None,
+      adapter_id: None,
+      capability_overrides_json: Some(custom.clone()),
+    })
+    .unwrap();
+
+  transport.push_ok(vec![RemoteModelSyncItem {
+    model_key: "custom-model".into(),
+    remote_display_name: Some("Custom".into()),
+    remote_metadata_json: None,
+    capability_overrides_json: None,
+  }]);
+  let second = block_on(models.sync_models(p.id)).unwrap();
+  assert!(second.ok);
+  let caps = second.models[0]
+    .capability_overrides_json
+    .as_ref()
+    .expect("capabilities preserved");
+  assert_eq!(caps["maxContextTokens"], 4096);
+  assert_eq!(caps["imageAnalysis"], true);
+  assert_eq!(caps["pdfAnalysis"], true);
+  assert_eq!(second.models[0].remote_display_name.as_deref(), Some("Custom"));
 }
 
 #[test]
@@ -1955,6 +2043,7 @@ fn sync_models_transport_failure_preserves_models_and_timestamp() {
     model_key: "kept".into(),
     remote_display_name: None,
     remote_metadata_json: None,
+    capability_overrides_json: None,
   }]);
   let first = block_on(models.sync_models(p.id)).unwrap();
   assert!(first.ok);
@@ -1989,6 +2078,7 @@ fn sync_models_second_page_failure_no_partial_merge() {
         model_key: "existing".into(),
         remote_display_name: None,
         remote_metadata_json: None,
+        capability_overrides_json: None,
       }],
     )
     .unwrap();
@@ -2038,6 +2128,7 @@ fn sync_models_failing_vault_records_credential_unavailable() {
     vault as Arc<dyn CredentialVault>,
     transport as Arc<dyn ModelTransport>,
     history,
+    models_dev_cache_dir(&dir),
   );
   let result = block_on(models.sync_models(p.id)).unwrap();
   assert!(!result.ok);
@@ -2106,11 +2197,13 @@ fn sync_models_success_message_uses_remote_snapshot_count() {
       model_key: "remote-a".into(),
       remote_display_name: None,
       remote_metadata_json: None,
+      capability_overrides_json: None,
     },
     RemoteModelSyncItem {
       model_key: "remote-b".into(),
       remote_display_name: None,
       remote_metadata_json: None,
+      capability_overrides_json: None,
     },
   ]);
   let result = block_on(models.sync_models(p.id)).unwrap();
@@ -2168,6 +2261,7 @@ fn sync_models_aborts_merge_when_connection_changes_mid_flight() {
     vault.clone() as Arc<dyn CredentialVault>,
     seed_transport.clone() as Arc<dyn ModelTransport>,
     history,
+    models_dev_cache_dir(&dir),
   );
   seed_models
     .apply_remote_merge(
@@ -2176,6 +2270,7 @@ fn sync_models_aborts_merge_when_connection_changes_mid_flight() {
         model_key: "old-endpoint-model".into(),
         remote_display_name: None,
         remote_metadata_json: None,
+        capability_overrides_json: None,
       }],
     )
     .unwrap();
@@ -2187,6 +2282,7 @@ fn sync_models_aborts_merge_when_connection_changes_mid_flight() {
       model_key: "stale-remote-from-old-url".into(),
       remote_display_name: None,
       remote_metadata_json: None,
+      capability_overrides_json: None,
     }],
   });
   let history = TranslationHistoryService::new(db.clone());
@@ -2195,6 +2291,7 @@ fn sync_models_aborts_merge_when_connection_changes_mid_flight() {
     vault as Arc<dyn CredentialVault>,
     transport as Arc<dyn ModelTransport>,
     history,
+    models_dev_cache_dir(&dir),
   );
 
   let result = block_on(models.sync_models(p.id)).unwrap();
@@ -2270,6 +2367,7 @@ fn sync_models_transport_error_skips_write_when_connection_changed() {
     vault.clone() as Arc<dyn CredentialVault>,
     seed_transport.clone() as Arc<dyn ModelTransport>,
     history,
+    models_dev_cache_dir(&dir),
   );
   seed_models
     .apply_remote_merge(
@@ -2278,6 +2376,7 @@ fn sync_models_transport_error_skips_write_when_connection_changed() {
         model_key: "kept".into(),
         remote_display_name: None,
         remote_metadata_json: None,
+        capability_overrides_json: None,
       }],
     )
     .unwrap();
@@ -2296,6 +2395,7 @@ fn sync_models_transport_error_skips_write_when_connection_changed() {
     vault as Arc<dyn CredentialVault>,
     transport as Arc<dyn ModelTransport>,
     history,
+    models_dev_cache_dir(&dir),
   );
 
   let result = block_on(models.sync_models(p.id)).unwrap();
@@ -2415,6 +2515,7 @@ fn sync_models_missing_credential_skips_error_when_connection_changed() {
     vault.clone() as Arc<dyn CredentialVault>,
     seed_transport as Arc<dyn ModelTransport>,
     history,
+    models_dev_cache_dir(&dir),
   );
   // apply_remote_merge does not touch the vault.
   seed_models
@@ -2424,6 +2525,7 @@ fn sync_models_missing_credential_skips_error_when_connection_changed() {
         model_key: "kept".into(),
         remote_display_name: None,
         remote_metadata_json: None,
+        capability_overrides_json: None,
       }],
     )
     .unwrap();
@@ -2439,6 +2541,7 @@ fn sync_models_missing_credential_skips_error_when_connection_changed() {
     vault as Arc<dyn CredentialVault>,
     transport as Arc<dyn ModelTransport>,
     history,
+    models_dev_cache_dir(&dir),
   );
 
   let result = block_on(models.sync_models(p.id)).unwrap();
@@ -2480,6 +2583,7 @@ fn sync_models_vault_failure_skips_error_when_connection_changed() {
     vault.clone() as Arc<dyn CredentialVault>,
     seed_transport as Arc<dyn ModelTransport>,
     history,
+    models_dev_cache_dir(&dir),
   );
   seed_models
     .apply_remote_merge(
@@ -2488,6 +2592,7 @@ fn sync_models_vault_failure_skips_error_when_connection_changed() {
         model_key: "kept".into(),
         remote_display_name: None,
         remote_metadata_json: None,
+        capability_overrides_json: None,
       }],
     )
     .unwrap();
@@ -2500,6 +2605,7 @@ fn sync_models_vault_failure_skips_error_when_connection_changed() {
     vault as Arc<dyn CredentialVault>,
     transport as Arc<dyn ModelTransport>,
     history,
+    models_dev_cache_dir(&dir),
   );
 
   let result = block_on(models.sync_models(p.id)).unwrap();
@@ -2597,6 +2703,7 @@ fn sync_models_serializes_same_provider_max_transport_concurrency_one() {
       model_key: "only".into(),
       remote_display_name: None,
       remote_metadata_json: None,
+      capability_overrides_json: None,
     }],
   });
   let history = TranslationHistoryService::new(db.clone());
@@ -2605,6 +2712,7 @@ fn sync_models_serializes_same_provider_max_transport_concurrency_one() {
     vault as Arc<dyn CredentialVault>,
     transport as Arc<dyn ModelTransport>,
     history,
+    models_dev_cache_dir(&dir),
   );
 
   let models_a = models.clone();
@@ -2702,6 +2810,7 @@ fn save_connection_identity_change_resets_models_sync_status() {
         model_key: "m1".into(),
         remote_display_name: None,
         remote_metadata_json: None,
+        capability_overrides_json: None,
       }],
     )
     .unwrap();
@@ -2745,6 +2854,7 @@ fn clear_credential_final_txn_preserves_latest_sync_when_identity_unchanged() {
     vault as Arc<dyn CredentialVault>,
     Arc::new(TestModelTransport::new()) as Arc<dyn ModelTransport>,
     history,
+    models_dev_cache_dir(&dir),
   );
   // Already credentialKind none / no ref: Clear is identity-preserving for connection fields.
   let p = providers
@@ -2776,6 +2886,7 @@ fn clear_credential_final_txn_preserves_latest_sync_when_identity_unchanged() {
         model_key: "seed-for-gap".into(),
         remote_display_name: None,
         remote_metadata_json: None,
+        capability_overrides_json: None,
       }],
     )
     .unwrap();
@@ -2791,6 +2902,7 @@ fn clear_credential_final_txn_preserves_latest_sync_when_identity_unchanged() {
           model_key: "from-concurrent-sync".into(),
           remote_display_name: None,
           remote_metadata_json: None,
+          capability_overrides_json: None,
         }],
       )
       .expect("concurrent sync in clear gap");
@@ -2829,6 +2941,7 @@ fn clear_credential_final_txn_resets_sync_when_identity_changed() {
     vault as Arc<dyn CredentialVault>,
     Arc::new(TestModelTransport::new()) as Arc<dyn ModelTransport>,
     history,
+    models_dev_cache_dir(&dir),
   );
   let p = providers
     .save(provider_write(
@@ -2843,6 +2956,7 @@ fn clear_credential_final_txn_resets_sync_when_identity_changed() {
         model_key: "seed".into(),
         remote_display_name: None,
         remote_metadata_json: None,
+        capability_overrides_json: None,
       }],
     )
     .unwrap();
@@ -2888,6 +3002,7 @@ fn save_none_keep_after_sync_preserves_status_when_identity_unchanged() {
         model_key: "m1".into(),
         remote_display_name: None,
         remote_metadata_json: None,
+        capability_overrides_json: None,
       }],
     )
     .unwrap();
@@ -2926,6 +3041,7 @@ fn save_none_keep_after_sync_resets_when_identity_changed() {
         model_key: "m1".into(),
         remote_display_name: None,
         remote_metadata_json: None,
+        capability_overrides_json: None,
       }],
     )
     .unwrap();
@@ -2962,6 +3078,7 @@ fn save_display_name_only_preserves_models_sync_status() {
         model_key: "m1".into(),
         remote_display_name: None,
         remote_metadata_json: None,
+        capability_overrides_json: None,
       }],
     )
     .unwrap();
@@ -2999,6 +3116,7 @@ fn save_credential_replace_resets_models_sync_status() {
         model_key: "m1".into(),
         remote_display_name: None,
         remote_metadata_json: None,
+        capability_overrides_json: None,
       }],
     )
     .unwrap();
@@ -3035,6 +3153,7 @@ fn save_proxy_mode_change_resets_models_sync_status() {
         model_key: "m1".into(),
         remote_display_name: None,
         remote_metadata_json: None,
+        capability_overrides_json: None,
       }],
     )
     .unwrap();
@@ -3078,6 +3197,7 @@ fn vault_set_failure_on_replace_does_not_reset_sync_status() {
     vault.clone() as Arc<dyn CredentialVault>,
     transport as Arc<dyn ModelTransport>,
     history,
+    models_dev_cache_dir(&dir),
   );
   models
     .apply_remote_merge(
@@ -3086,6 +3206,7 @@ fn vault_set_failure_on_replace_does_not_reset_sync_status() {
         model_key: "m1".into(),
         remote_display_name: None,
         remote_metadata_json: None,
+        capability_overrides_json: None,
       }],
     )
     .unwrap();

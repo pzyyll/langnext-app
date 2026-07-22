@@ -498,6 +498,7 @@ const en = {
       capabilities: "Capabilities",
       textGeneration: "Text",
       imageAnalysis: "Image",
+      pdfAnalysis: "PDF",
       videoProcessing: "Video",
       contextWindow: "Context Window",
       contextTokens: "{{count}}k tokens",

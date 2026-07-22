@@ -102,6 +102,7 @@ pub fn parse_anthropic_page(value: &serde_json::Value) -> Result<ParsedPage, Tra
       model_key,
       remote_display_name,
       remote_metadata_json: None,
+      capability_overrides_json: None,
     });
   }
   let has_more = match value.get("has_more") {

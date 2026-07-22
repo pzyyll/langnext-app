@@ -117,6 +117,7 @@ pub fn parse_gemini_page(value: &serde_json::Value) -> Result<ParsedPage, Transp
       model_key,
       remote_display_name,
       remote_metadata_json,
+      capability_overrides_json: None,
     });
   }
   let continuation = parse_gemini_next_page_token(value.get("nextPageToken"))?;

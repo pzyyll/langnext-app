@@ -24,6 +24,8 @@ pub struct CapabilityOverridesV1 {
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub image_analysis: Option<bool>,
   #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub pdf_analysis: Option<bool>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub video_processing: Option<bool>,
 }
 
@@ -210,6 +212,9 @@ pub struct RemoteModelSyncItem {
   pub model_key: String,
   pub remote_display_name: Option<String>,
   pub remote_metadata_json: Option<serde_json::Value>,
+  /// Seeded from models.dev (or defaults) during sync; applied only when the row has no overrides.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub capability_overrides_json: Option<serde_json::Value>,
 }
 
 /// Result of testing a saved provider connection without mutating model rows.
@@ -264,6 +269,7 @@ mod tests {
       default_output_tokens: Some(1024),
       text_generation: Some(true),
       image_analysis: Some(false),
+      pdf_analysis: None,
       video_processing: None,
     };
     let json = serde_json::to_value(&overrides).unwrap();

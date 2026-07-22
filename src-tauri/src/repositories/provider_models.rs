@@ -225,6 +225,10 @@ pub fn apply_remote_sync(
         row.availability = Availability::Available;
         row.remote_display_name = item.remote_display_name.clone();
         row.remote_metadata_json = item.remote_metadata_json.clone();
+        // Seed catalog capabilities only when the user has not configured overrides yet.
+        if row.capability_overrides_json.is_none() {
+          row.capability_overrides_json = item.capability_overrides_json.clone();
+        }
       } else {
         // Colliding manual/builtin: update non-user remote metadata only.
         row.remote_display_name = item.remote_display_name.clone();
@@ -246,7 +250,7 @@ pub fn apply_remote_sync(
         enabled: false,
         availability: Availability::Available,
         remote_metadata_json: item.remote_metadata_json.clone(),
-        capability_overrides_json: None,
+        capability_overrides_json: item.capability_overrides_json.clone(),
         adapter_id: None,
         last_seen_at: Some(seen_at.to_string()),
         created_at: now.clone(),

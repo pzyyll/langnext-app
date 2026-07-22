@@ -34,6 +34,7 @@ pub fn parse_openai_page(value: &serde_json::Value) -> Result<ParsedPage, Transp
       model_key,
       remote_display_name: None,
       remote_metadata_json: None,
+      capability_overrides_json: None,
     });
   }
   Ok(ParsedPage {

@@ -1754,16 +1754,19 @@ mod tests {
         model_key: "a".into(),
         remote_display_name: Some("A1".into()),
         remote_metadata_json: None,
+        capability_overrides_json: None,
       },
       RemoteModelSyncItem {
         model_key: "b".into(),
         remote_display_name: None,
         remote_metadata_json: None,
+        capability_overrides_json: None,
       },
       RemoteModelSyncItem {
         model_key: "a".into(),
         remote_display_name: Some("A2".into()),
         remote_metadata_json: None,
+        capability_overrides_json: None,
       },
     ];
     let out = dedupe_by_model_key(items);
