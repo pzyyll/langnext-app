@@ -59,16 +59,10 @@ pub(crate) fn openai_user_content(user_prompt: &str, image_png_base64: Option<&s
   }
 }
 
-/// Apply OpenAI-compatible `thinking` control (`thinking.type` = enabled/disabled).
-pub fn apply_openai_thinking(payload: &mut serde_json::Value, thinking: Option<bool>) {
-  if let Some(enabled) = thinking {
-    payload["thinking"] = serde_json::json!({
-      "type": if enabled { "enabled" } else { "disabled" }
-    });
-  }
-}
-
-/// Build OpenAI chat.completions URL + body (stream or non-stream).
+/// Build standard OpenAI chat.completions URL + body (stream or non-stream).
+///
+/// Only official Chat Completions fields are included. Provider-specific
+/// extensions (e.g. DeepSeek `thinking`) belong in the owning adapter.
 pub(crate) fn build_openai_chat_completions(
   base_url: &str,
   model_key: &str,
@@ -76,7 +70,6 @@ pub(crate) fn build_openai_chat_completions(
   user_prompt: &str,
   temperature: Option<f64>,
   max_tokens: Option<u32>,
-  thinking: Option<bool>,
   image_png_base64: Option<&str>,
   stream: bool,
 ) -> Result<(url::Url, serde_json::Value), TransportError> {
@@ -95,7 +88,6 @@ pub(crate) fn build_openai_chat_completions(
   if let Some(max) = max_tokens {
     payload["max_tokens"] = serde_json::json!(max);
   }
-  apply_openai_thinking(&mut payload, thinking);
   Ok((url, payload))
 }
 

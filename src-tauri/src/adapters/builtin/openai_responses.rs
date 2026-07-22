@@ -42,15 +42,11 @@ impl ProviderAdapter for OpenAiResponsesAdapter {
     request: &ChatCompletionRequest,
     stream: bool,
   ) -> Result<(url::Url, serde_json::Value), TransportError> {
-    // Responses API image input is not wired for OCR yet; reject multimodal calls.
-    if request.image_png_base64.is_some() {
-      return Err(TransportError::InvalidResponse);
-    }
     let url = build_endpoint(&request.base_url, "responses")?;
     let mut payload = serde_json::json!({
       "model": request.model_key,
       "instructions": request.system_prompt,
-      "input": request.user_prompt,
+      "input": responses_user_input(&request.user_prompt, request.image_png_base64.as_deref()),
       "stream": stream
     });
     if let Some(temp) = request.temperature {
@@ -68,6 +64,28 @@ impl ProviderAdapter for OpenAiResponsesAdapter {
 
   fn parse_stream_delta(&self, event_name: Option<&str>, value: &serde_json::Value) -> Option<String> {
     parse_openai_responses_stream_delta(event_name, value)
+  }
+}
+
+/// Build Responses API `input` for text-only or vision (OCR) calls.
+///
+/// Text-only keeps the simple string form. Multimodal uses a user message with
+/// `input_text` + `input_image` (data URL), per OpenAI Responses vision docs.
+fn responses_user_input(user_prompt: &str, image_png_base64: Option<&str>) -> serde_json::Value {
+  match image_png_base64 {
+    Some(image) => serde_json::json!([
+      {
+        "role": "user",
+        "content": [
+          { "type": "input_text", "text": user_prompt },
+          {
+            "type": "input_image",
+            "image_url": format!("data:image/png;base64,{image}")
+          }
+        ]
+      }
+    ]),
+    None => serde_json::json!(user_prompt),
   }
 }
 
@@ -125,4 +143,53 @@ fn parse_openai_responses_stream_delta(event_name: Option<&str>, value: &serde_j
     }
   }
   None
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::domain::provider::ProxyMode;
+
+  fn sample_request(image_png_base64: Option<String>) -> ChatCompletionRequest {
+    ChatCompletionRequest {
+      adapter_id: "openai-responses".into(),
+      base_url: "https://api.openai.com/v1".into(),
+      credential_kind: CredentialKind::ApiKey,
+      secret: Some("sk-test".into()),
+      proxy_mode: ProxyMode::Inherit,
+      model_key: "gpt-5.4-mini".into(),
+      system_prompt: "You are an OCR engine.".into(),
+      user_prompt: "Extract all text from the image.".into(),
+      temperature: Some(0.2),
+      max_tokens: Some(128000),
+      thinking: None,
+      image_png_base64,
+    }
+  }
+
+  #[test]
+  fn text_only_input_stays_string() {
+    let adapter = OpenAiResponsesAdapter;
+    let (_url, body) = adapter.build_chat(&sample_request(None), false).unwrap();
+    assert_eq!(body["input"], "Extract all text from the image.");
+    assert_eq!(body["instructions"], "You are an OCR engine.");
+    assert_eq!(body["max_output_tokens"], 128000);
+  }
+
+  #[test]
+  fn image_input_uses_input_image_data_url() {
+    let adapter = OpenAiResponsesAdapter;
+    let (_url, body) = adapter
+      .build_chat(&sample_request(Some("abc123".into())), false)
+      .unwrap();
+    let input = body["input"].as_array().expect("multimodal input array");
+    assert_eq!(input.len(), 1);
+    assert_eq!(input[0]["role"], "user");
+    let content = input[0]["content"].as_array().expect("content array");
+    assert_eq!(content.len(), 2);
+    assert_eq!(content[0]["type"], "input_text");
+    assert_eq!(content[0]["text"], "Extract all text from the image.");
+    assert_eq!(content[1]["type"], "input_image");
+    assert_eq!(content[1]["image_url"], "data:image/png;base64,abc123");
+  }
 }

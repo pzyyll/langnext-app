@@ -14,7 +14,7 @@ pub const DETECT_MAX_TOKENS_THINKING: u32 = 2048;
 /// Adapter-owned adjustments applied when preparing a language-detection chat call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DetectChatPolicy {
-  /// OpenAI-compatible `thinking.type` toggle. `None` omits the field.
+  /// DeepSeek `thinking.type` toggle. `None` omits the field.
   pub thinking: Option<bool>,
   pub max_tokens: u32,
 }

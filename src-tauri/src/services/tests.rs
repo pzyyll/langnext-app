@@ -4038,7 +4038,7 @@ fn detect_language_uses_low_generation_budget() {
 }
 
 #[test]
-fn detect_language_disables_thinking_for_deepseek_models() {
+fn detect_language_omits_thinking_on_openai_compatible_even_for_deepseek_model_keys() {
   let (_d, _db, _v, providers, models, ..) = setup();
   let (base_url, request_handle) = spawn_detection_chat_server();
   let mut write = provider_write(CredentialKind::None, CredentialUpdate::Keep);
@@ -4048,8 +4048,8 @@ fn detect_language_disables_thinking_for_deepseek_models() {
     .save_manual(ManualModelWrite {
       id: None,
       provider_instance_id: provider.id,
-      // Relay path: openai-compatible channel hosting a DeepSeek model key.
-      // Adapter strategy still applies thinking policy via the relay heuristic.
+      // openai-compatible stays on standard chat/completions fields.
+      // DeepSeek thinking controls require the dedicated deepseek adapter.
       model_key: "deepseek-v4-flash".into(),
       display_name_override: None,
       enabled: true,
@@ -4071,10 +4071,8 @@ fn detect_language_disables_thinking_for_deepseek_models() {
   assert_eq!(result.language_id.as_deref(), Some("zh"));
 
   let request = request_handle.join().unwrap();
-  // thinking:disabled is best-effort; some relays ignore it and still stream CoT.
-  // Keep a larger budget so the final language code can still fit after reasoning.
-  assert_eq!(request["max_tokens"], 2048);
-  assert_eq!(request["thinking"]["type"], "disabled");
+  assert_eq!(request["max_tokens"], 256);
+  assert!(request.get("thinking").is_none());
 }
 
 #[test]

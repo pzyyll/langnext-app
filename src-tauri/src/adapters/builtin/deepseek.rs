@@ -47,17 +47,18 @@ impl ProviderAdapter for DeepSeekAdapter {
     request: &ChatCompletionRequest,
     stream: bool,
   ) -> Result<(url::Url, serde_json::Value), TransportError> {
-    build_openai_chat_completions(
+    let (url, mut payload) = build_openai_chat_completions(
       &request.base_url,
       &request.model_key,
       &request.system_prompt,
       &request.user_prompt,
       request.temperature,
       request.max_tokens,
-      request.thinking,
       request.image_png_base64.as_deref(),
       stream,
-    )
+    )?;
+    apply_deepseek_thinking(&mut payload, request.thinking);
+    Ok((url, payload))
   }
 
   fn parse_chat_content(&self, value: &serde_json::Value) -> Result<String, TransportError> {
@@ -74,5 +75,14 @@ impl ProviderAdapter for DeepSeekAdapter {
       thinking: Some(false),
       max_tokens: DETECT_MAX_TOKENS_THINKING,
     }
+  }
+}
+
+/// DeepSeek-only `thinking.type` control (`enabled` / `disabled`).
+fn apply_deepseek_thinking(payload: &mut serde_json::Value, thinking: Option<bool>) {
+  if let Some(enabled) = thinking {
+    payload["thinking"] = serde_json::json!({
+      "type": if enabled { "enabled" } else { "disabled" }
+    });
   }
 }
