@@ -371,6 +371,8 @@ function QuickTranslatePage() {
       // Keep prior text so continuous re-runs show "旧文…" with trailing dots until the first
       // new chunk/result arrives (langnext-translate style). Full source replaces clear earlier
       // in applySourceText so this path starts empty for select-all + retype.
+      // Stamp inputKey immediately so a re-entrant auto-translate pass skips in-flight slots
+      // for the same source/lang/profile fingerprint instead of aborting them in a loop.
       setResults((prev) => {
         const next = { ...prev };
         for (const slot of slotsToRun) {
@@ -380,8 +382,11 @@ function QuickTranslatePage() {
             error: null,
             isTranslating: true,
             streamOutputActive: false,
+            inputKey: inputKeyFor(slot.profileId),
           };
         }
+        // Keep the ref current before paint so a concurrent run can skip these slots.
+        resultsRef.current = next;
         return next;
       });
 
@@ -821,6 +826,13 @@ function QuickTranslatePage() {
     };
   }, []);
 
+  // Always call the latest runTranslations without putting it in effect deps.
+  // useToast/i18n/query churn must not re-arm auto-translate and abort in-flight streams.
+  const runTranslationsRef = useRef(runTranslations);
+  useEffect(() => {
+    runTranslationsRef.current = runTranslations;
+  }, [runTranslations]);
+
   // Debounced auto-translate when source text or languages change — not when cards are added/removed.
   // Skipped entirely while auto-translate is off; Enter is the only input-driven trigger then.
   useEffect(() => {
@@ -840,7 +852,7 @@ function QuickTranslatePage() {
 
     debounceTimerRef.current = setTimeout(() => {
       debounceTimerRef.current = null;
-      void runTranslations();
+      void runTranslationsRef.current();
     }, TRANSLATE_DEBOUNCE_MS);
 
     return () => {
@@ -849,7 +861,7 @@ function QuickTranslatePage() {
         debounceTimerRef.current = null;
       }
     };
-  }, [autoTranslate, sourceText, sourceLang, targetLang, runTranslations]);
+  }, [autoTranslate, sourceText, sourceLang, targetLang]);
 
   // Content-driven window height: titlebar + fixed chrome + results (results scroll when clamped).
   // Measure natural heights of fixed/results boxes — not the ScrollArea viewport fill height.

@@ -198,7 +198,6 @@ const en = {
       invalidResponse: "The model returned an invalid response.",
       detectFailed: "Could not detect the source language.",
     },
-    confidenceValue: "Confidence: {{percent}}%",
     latencyValue: "{{ms}} ms",
     activeModel: "Used model: {{model}}",
     profileLabel: "Profile:",

@@ -129,7 +129,6 @@ function TranslatePage() {
   const [errorMessage, setErrorMessage] = useState<string | null>(boot.workspace.errorMessage);
   /** Tracks whether a translate attempt has finished; kept for session UX side-effects (clear on edit). */
   const [, setHasTranslated] = useState(false);
-  const [confidencePercent, setConfidencePercent] = useState(boot.workspace.confidencePercent);
   const [latencyMs, setLatencyMs] = useState<number | null>(boot.workspace.latencyMs);
   const [copyFeedback, setCopyFeedback] = useState(false);
   const [isTranslating, setIsTranslating] = useState(false);
@@ -223,7 +222,6 @@ function TranslatePage() {
       sourceText,
       outputText,
       detectedSourceLang,
-      confidencePercent,
       latencyMs,
       activeModelLabel,
       errorMessage,
@@ -242,7 +240,6 @@ function TranslatePage() {
     setSourceText(workspace.sourceText);
     setOutputText(workspace.outputText);
     setDetectedSourceLang(workspace.detectedSourceLang);
-    setConfidencePercent(workspace.confidencePercent);
     setLatencyMs(workspace.latencyMs);
     setActiveModelLabel(workspace.activeModelLabel);
     setErrorMessage(workspace.errorMessage);
@@ -383,7 +380,6 @@ function TranslatePage() {
     sourceText,
     outputText,
     detectedSourceLang,
-    confidencePercent,
     latencyMs,
     activeModelLabel,
     errorMessage,
@@ -602,7 +598,6 @@ function TranslatePage() {
     setOutputText("");
     setErrorMessage(null);
     setHasTranslated(false);
-    setConfidencePercent(0);
     setLatencyMs(null);
     setIsTranslating(false);
     setStreamOutputActive(false);
@@ -620,7 +615,6 @@ function TranslatePage() {
     // Keep prior output while waiting so re-runs show previous text + trailing dots
     // until the first stream chunk (or non-stream result) replaces it.
     setHasTranslated(false);
-    setConfidencePercent(0);
     setLatencyMs(null);
     setActiveModelLabel(null);
     setDetectedSourceLang(null);
@@ -637,11 +631,6 @@ function TranslatePage() {
     if (modelId) {
       setActiveModelLabel(modelLabelById.get(modelId) ?? modelId);
     }
-    window.requestAnimationFrame(() => {
-      if (generation === translateGeneration.current) {
-        setConfidencePercent(94);
-      }
-    });
     setIsTranslating(false);
     setStreamOutputActive(false);
   }
@@ -652,7 +641,6 @@ function TranslatePage() {
     }
     // Keep prior/partial output; surface the failure via toast only.
     setLatencyMs(latency);
-    setConfidencePercent(0);
     setErrorMessage(null);
     setIsTranslating(false);
     setStreamOutputActive(false);
@@ -1073,7 +1061,6 @@ function TranslatePage() {
                     setDetectedSourceLang(null);
                     setHasTranslated(false);
                     setErrorMessage(null);
-                    setConfidencePercent(0);
                     setLatencyMs(null);
                   }}
                 />

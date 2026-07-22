@@ -196,7 +196,6 @@ const zhCN = {
       invalidResponse: "模型返回了无效响应。",
       detectFailed: "无法检测源语言。",
     },
-    confidenceValue: "置信度：{{percent}}%",
     latencyValue: "{{ms}} ms",
     activeModel: "实际模型：{{model}}",
     profileLabel: "预设：",

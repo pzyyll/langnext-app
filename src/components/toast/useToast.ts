@@ -1,5 +1,6 @@
 // ABOUTME: Convenience hook over Base UI Toast.useToastManager for app feedback.
 // ABOUTME: Exposes success/error/warning/info helpers with project default durations.
+import { useMemo, useRef } from "react";
 import { Toast } from "@base-ui/react/toast";
 
 /** Visual / semantic toast variants used across the app. */
@@ -52,24 +53,30 @@ export type ToastApi = {
  */
 export function useToast(): ToastApi {
   const manager = Toast.useToastManager();
+  // Keep a stable ToastApi identity across renders so callbacks that depend on
+  // `toast` (e.g. auto-translate effects) do not thrash every state update.
+  const managerRef = useRef(manager);
+  managerRef.current = manager;
 
-  function show(options: ToastShowWithVariantOptions): string {
-    const { variant, title, description, duration } = options;
-    return manager.add({
-      type: variant,
-      title,
-      description,
-      timeout: duration ?? DEFAULT_DURATION_MS[variant],
-      priority: variant === "error" ? "high" : "low",
-    });
-  }
+  return useMemo(() => {
+    function show(options: ToastShowWithVariantOptions): string {
+      const { variant, title, description, duration } = options;
+      return managerRef.current.add({
+        type: variant,
+        title,
+        description,
+        timeout: duration ?? DEFAULT_DURATION_MS[variant],
+        priority: variant === "error" ? "high" : "low",
+      });
+    }
 
-  return {
-    show,
-    success: (options) => show({ ...options, variant: "success" }),
-    error: (options) => show({ ...options, variant: "error" }),
-    warning: (options) => show({ ...options, variant: "warning" }),
-    info: (options) => show({ ...options, variant: "info" }),
-    close: (toastId) => manager.close(toastId),
-  };
+    return {
+      show,
+      success: (options) => show({ ...options, variant: "success" }),
+      error: (options) => show({ ...options, variant: "error" }),
+      warning: (options) => show({ ...options, variant: "warning" }),
+      info: (options) => show({ ...options, variant: "info" }),
+      close: (toastId) => managerRef.current.close(toastId),
+    };
+  }, []);
 }

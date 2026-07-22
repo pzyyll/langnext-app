@@ -50,7 +50,6 @@ export interface TranslateWorkspace {
   sourceText: string;
   outputText: string;
   detectedSourceLang: LanguageId | null;
-  confidencePercent: number;
   latencyMs: number | null;
   activeModelLabel: string | null;
   errorMessage: string | null;
@@ -120,7 +119,6 @@ export function createTranslateWorkspace(
     sourceText: "",
     outputText: "",
     detectedSourceLang: null,
-    confidencePercent: 0,
     latencyMs: null,
     activeModelLabel: null,
     errorMessage: null,
@@ -149,12 +147,6 @@ export function normalizeTranslateWorkspace(raw: unknown, now = Date.now()): Tra
       ? record.detectedSourceLang
       : null;
 
-  const confidenceRaw = record.confidencePercent;
-  const confidencePercent =
-    typeof confidenceRaw === "number" && Number.isFinite(confidenceRaw)
-      ? Math.max(0, Math.min(100, Math.round(confidenceRaw)))
-      : 0;
-
   const latencyRaw = record.latencyMs;
   const latencyMs =
     typeof latencyRaw === "number" && Number.isFinite(latencyRaw) && latencyRaw >= 0 ? Math.round(latencyRaw) : null;
@@ -176,7 +168,6 @@ export function normalizeTranslateWorkspace(raw: unknown, now = Date.now()): Tra
     sourceText: clampText(typeof record.sourceText === "string" ? record.sourceText : ""),
     outputText: clampText(typeof record.outputText === "string" ? record.outputText : ""),
     detectedSourceLang: detected,
-    confidencePercent,
     latencyMs,
     activeModelLabel: typeof record.activeModelLabel === "string" ? record.activeModelLabel : null,
     errorMessage: typeof record.errorMessage === "string" ? record.errorMessage : null,
