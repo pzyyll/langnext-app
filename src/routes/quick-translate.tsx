@@ -1223,7 +1223,10 @@ function QuickTranslatePage() {
                 focus-within:outline-2 focus-within:-outline-offset-1 focus-within:outline-on-surface
               `,
               isSourceCollapsed && sourceText ? "min-h-0" : "min-h-32",
+              // OCR only: flowing border while recognizeCapturedScreenshot / runScreenshotOcr runs.
+              ocrBusy && "border-beam",
             )}
+            aria-busy={ocrBusy || undefined}
           >
             <label className="sr-only" htmlFor="quick-translate-source">
               {t("translate.sourceTextAria")}
@@ -1261,12 +1264,14 @@ function QuickTranslatePage() {
                 minRows={6}
                 placeholder={t("quickTranslate.sourcePlaceholder")}
                 spellCheck={false}
+                // OCR fills the field when done; block edits/Enter while recognize is in flight.
+                disabled={ocrBusy}
                 value={sourceText}
                 onChange={(event) => {
                   applySourceText(event.currentTarget.value);
                 }}
                 onKeyDown={(event) => {
-                  if (event.key !== "Enter") {
+                  if (ocrBusy || event.key !== "Enter") {
                     return;
                   }
                   // Always allow Ctrl/Cmd+Enter as an explicit run shortcut.
@@ -1320,6 +1325,7 @@ function QuickTranslatePage() {
                       type="button"
                       className={iconButtonClassName}
                       aria-label={t("translate.clearSource")}
+                      disabled={ocrBusy}
                       onClick={() => {
                         applySourceText("");
                       }}

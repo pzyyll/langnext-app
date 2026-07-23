@@ -33,7 +33,7 @@ const HIDE_SETTLE_POLL: Duration = Duration::from_millis(10);
 
 /// Clipboard can be briefly locked by Explorer / other apps; retry a few times.
 const CLIPBOARD_WRITE_ATTEMPTS: u32 = 5;
-const CLIPBOARD_RETRY_DELAY: Duration = Duration::from_millis(40);
+const CLIPBOARD_RETRY_BASE_DELAY: Duration = Duration::from_millis(20);
 
 /// Subdirectory under the OS temp dir for screenshot backdrop files.
 const SCREENSHOT_TEMP_DIRNAME: &str = "langnext-screenshot";
@@ -646,12 +646,17 @@ fn restore_previous_foreground(previous: Option<isize>) {
   }
 }
 
-/// Win32 helpers for desktop composition, foreground detection, and focus restore.
+/// Win32 helpers for desktop composition, foreground detection, focus restore, and clipboard.
 #[cfg(windows)]
 mod win32 {
   use std::ffi::c_void;
 
   pub const GA_ROOT: u32 = 2;
+  pub const CF_DIB: u32 = 8;
+  /// GMEM_MOVEABLE | GMEM_ZEROINIT
+  pub const GHND: u32 = 0x0042;
+  /// UTF-16 "PNG\0" for RegisterClipboardFormatW.
+  pub const PNG_FORMAT_NAME: [u16; 4] = [b'P' as u16, b'N' as u16, b'G' as u16, 0];
 
   #[link(name = "user32")]
   unsafe extern "system" {
@@ -661,11 +666,21 @@ mod win32 {
     pub fn IsWindow(hwnd: *mut c_void) -> i32;
     pub fn GetWindowThreadProcessId(hwnd: *mut c_void, process_id: *mut u32) -> u32;
     pub fn AttachThreadInput(attach_id: u32, attach_to_id: u32, attach: i32) -> i32;
+    pub fn OpenClipboard(owner: *mut c_void) -> i32;
+    pub fn CloseClipboard() -> i32;
+    pub fn EmptyClipboard() -> i32;
+    pub fn SetClipboardData(format: u32, mem: *mut c_void) -> *mut c_void;
+    pub fn RegisterClipboardFormatW(name: *const u16) -> u32;
   }
 
   #[link(name = "kernel32")]
   unsafe extern "system" {
     pub fn GetCurrentThreadId() -> u32;
+    pub fn GetLastError() -> u32;
+    pub fn GlobalAlloc(flags: u32, bytes: usize) -> *mut c_void;
+    pub fn GlobalLock(mem: *mut c_void) -> *mut c_void;
+    pub fn GlobalUnlock(mem: *mut c_void) -> i32;
+    pub fn GlobalFree(mem: *mut c_void) -> *mut c_void;
   }
 
   #[link(name = "dwmapi")]
@@ -960,10 +975,12 @@ pub async fn region_screenshot_confirm<R: Runtime>(
 
     let cropped = imageops::crop_imm(&session.image, x0 as u32, y0 as u32, crop_w, crop_h).to_image();
     let png = encode_png(&cropped)?;
+    let png_base64 = BASE64.encode(&png);
     Ok((
       cropped,
+      png,
       RegionScreenshotResult {
-        png_base64: BASE64.encode(&png),
+        png_base64,
         width: crop_w,
         height: crop_h,
         region: ScreenRegion {
@@ -978,8 +995,9 @@ pub async fn region_screenshot_confirm<R: Runtime>(
   })();
 
   match crop_result {
-    Ok((cropped, mut result)) => {
-      if let Err(err) = copy_image_to_clipboard(&cropped) {
+    Ok((cropped, png, mut result)) => {
+      // Keep the session if clipboard fails so the overlay can retry the same selection.
+      if let Err(err) = copy_image_to_clipboard(&app, &cropped, &png) {
         if let Some(state) = app.try_state::<RegionScreenshotState>() {
           if let Ok(mut guard) = state.session.lock() {
             *guard = Some(session);
@@ -1030,67 +1048,273 @@ pub async fn region_screenshot_confirm<R: Runtime>(
   }
 }
 
-/// Copy an RGBA image to the system clipboard with retries.
-fn copy_image_to_clipboard(image: &RgbaImage) -> Result<(), String> {
-  #[cfg(desktop)]
+/// Copy a region screenshot to the system clipboard.
+///
+/// On Windows, buffers are prepared before opening the clipboard and a real HWND is used as
+/// owner. Holding `OpenClipboard` across PNG encode (as arboard does) is slow for large
+/// regions and intermittently fails with ERROR_CLIPBOARD_NOT_OPEN (1418).
+fn copy_image_to_clipboard<R: Runtime>(
+  app: &tauri::AppHandle<R>,
+  image: &RgbaImage,
+  png: &[u8],
+) -> Result<(), String> {
+  if image.width() == 0 || image.height() == 0 {
+    return Err("clipboard image is empty".into());
+  }
+  let expected_len = (image.width() as usize)
+    .saturating_mul(image.height() as usize)
+    .saturating_mul(4);
+  if image.as_raw().len() < expected_len {
+    return Err(format!(
+      "clipboard image buffer too small: have {} need {expected_len}",
+      image.as_raw().len()
+    ));
+  }
+
+  #[cfg(windows)]
   {
-    use arboard::{Clipboard, ImageData};
-    use std::borrow::Cow;
+    return copy_image_to_clipboard_windows(app, image, png);
+  }
 
-    if image.width() == 0 || image.height() == 0 {
-      return Err("clipboard image is empty".into());
-    }
-    let expected_len = (image.width() as usize)
-      .saturating_mul(image.height() as usize)
-      .saturating_mul(4);
-    if image.as_raw().len() < expected_len {
-      return Err(format!(
-        "clipboard image buffer too small: have {} need {expected_len}",
-        image.as_raw().len()
-      ));
-    }
-
-    let rgba = image.as_raw().to_vec();
-    let width = image.width() as usize;
-    let height = image.height() as usize;
-
-    let mut last_error = String::from("clipboard write failed");
-    for attempt in 1..=CLIPBOARD_WRITE_ATTEMPTS {
-      match Clipboard::new() {
-        Ok(mut clipboard) => {
-          let data = ImageData {
-            width,
-            height,
-            bytes: Cow::Borrowed(rgba.as_slice()),
-          };
-          match clipboard.set_image(data) {
-            Ok(()) => {
-              log::info!("region_screenshot_copied_to_clipboard size={width}x{height} attempt={attempt}");
-              return Ok(());
-            }
-            Err(err) => {
-              last_error = format!("set_image failed: {err}");
-              log::warn!("region_screenshot_clipboard_retry attempt={attempt}/{CLIPBOARD_WRITE_ATTEMPTS} error={err}");
-            }
-          }
-        }
-        Err(err) => {
-          last_error = format!("open clipboard failed: {err}");
-          log::warn!("region_screenshot_clipboard_open_retry attempt={attempt}/{CLIPBOARD_WRITE_ATTEMPTS} error={err}");
-        }
-      }
-      if attempt < CLIPBOARD_WRITE_ATTEMPTS {
-        thread::sleep(CLIPBOARD_RETRY_DELAY.saturating_mul(attempt));
-      }
-    }
-
-    Err(last_error)
+  #[cfg(all(desktop, not(windows)))]
+  {
+    let _ = (app, png);
+    copy_image_to_clipboard_arboard(image)
   }
 
   #[cfg(not(desktop))]
   {
-    let _ = image;
+    let _ = (app, image, png);
     Err("clipboard is not supported on this platform".into())
+  }
+}
+
+#[cfg(all(desktop, not(windows)))]
+fn copy_image_to_clipboard_arboard(image: &RgbaImage) -> Result<(), String> {
+  use arboard::{Clipboard, ImageData};
+  use std::borrow::Cow;
+
+  let rgba = image.as_raw().to_vec();
+  let width = image.width() as usize;
+  let height = image.height() as usize;
+
+  let mut last_error = String::from("clipboard write failed");
+  for attempt in 1..=CLIPBOARD_WRITE_ATTEMPTS {
+    match Clipboard::new() {
+      Ok(mut clipboard) => {
+        let data = ImageData {
+          width,
+          height,
+          bytes: Cow::Borrowed(rgba.as_slice()),
+        };
+        match clipboard.set_image(data) {
+          Ok(()) => {
+            log::info!("region_screenshot_copied_to_clipboard size={width}x{height} attempt={attempt}");
+            return Ok(());
+          }
+          Err(err) => {
+            last_error = format!("set_image failed: {err}");
+            log::warn!(
+              "region_screenshot_clipboard_retry attempt={attempt}/{CLIPBOARD_WRITE_ATTEMPTS} error={err}"
+            );
+          }
+        }
+      }
+      Err(err) => {
+        last_error = format!("open clipboard failed: {err}");
+        log::warn!(
+          "region_screenshot_clipboard_open_retry attempt={attempt}/{CLIPBOARD_WRITE_ATTEMPTS} error={err}"
+        );
+      }
+    }
+    if attempt < CLIPBOARD_WRITE_ATTEMPTS {
+      thread::sleep(CLIPBOARD_RETRY_BASE_DELAY.saturating_mul(attempt));
+    }
+  }
+
+  Err(last_error)
+}
+
+/// Prefer a live app window HWND so EmptyClipboard assigns a real owner.
+/// `OpenClipboard(NULL)` + `EmptyClipboard` can make `SetClipboardData` fail with 1418.
+#[cfg(windows)]
+fn clipboard_owner_hwnd<R: Runtime>(app: &tauri::AppHandle<R>) -> *mut std::ffi::c_void {
+  for label in [
+    consts::WIN_LABEL_SCREENSHOT_OVERLAY,
+    consts::WIN_LABEL_MAIN,
+    consts::WIN_LABEL_QUICK_TRANSLATE,
+  ] {
+    if let Some(win) = app.get_webview_window(label) {
+      if let Ok(hwnd) = win.hwnd() {
+        let raw = hwnd.0;
+        if !raw.is_null() && unsafe { win32::IsWindow(raw) } != 0 {
+          return raw;
+        }
+      }
+    }
+  }
+  std::ptr::null_mut()
+}
+
+/// Build a CF_DIB payload (BITMAPINFOHEADER + bottom-up BGRA) outside the clipboard lock.
+#[cfg(windows)]
+fn build_cf_dib(image: &RgbaImage) -> Result<Vec<u8>, String> {
+  const BITMAPINFOHEADER_SIZE: usize = 40;
+  const BI_RGB: u32 = 0;
+
+  let width = image.width();
+  let height = image.height();
+  let pixel_bytes = (width as usize)
+    .checked_mul(height as usize)
+    .and_then(|n| n.checked_mul(4))
+    .ok_or_else(|| "clipboard image dimensions overflow".to_string())?;
+  let total = BITMAPINFOHEADER_SIZE
+    .checked_add(pixel_bytes)
+    .ok_or_else(|| "clipboard DIB size overflow".to_string())?;
+
+  let mut dib = vec![0u8; total];
+  dib[0..4].copy_from_slice(&(BITMAPINFOHEADER_SIZE as u32).to_le_bytes());
+  dib[4..8].copy_from_slice(&(width as i32).to_le_bytes());
+  // Positive height => bottom-up rows (Word / Paint expect this).
+  dib[8..12].copy_from_slice(&(height as i32).to_le_bytes());
+  dib[12..14].copy_from_slice(&1u16.to_le_bytes());
+  dib[14..16].copy_from_slice(&32u16.to_le_bytes());
+  dib[16..20].copy_from_slice(&BI_RGB.to_le_bytes());
+  dib[20..24].copy_from_slice(&(pixel_bytes as u32).to_le_bytes());
+
+  let src = image.as_raw();
+  let row_stride = (width as usize) * 4;
+  for y in 0..height as usize {
+    let src_row = y * row_stride;
+    let dst_row = (height as usize - 1 - y) * row_stride;
+    let dst_offset = BITMAPINFOHEADER_SIZE + dst_row;
+    for x in 0..width as usize {
+      let s = src_row + x * 4;
+      let d = dst_offset + x * 4;
+      // RGBA -> BGRA
+      dib[d] = src[s + 2];
+      dib[d + 1] = src[s + 1];
+      dib[d + 2] = src[s];
+      dib[d + 3] = src[s + 3];
+    }
+  }
+  Ok(dib)
+}
+
+#[cfg(windows)]
+fn copy_image_to_clipboard_windows<R: Runtime>(
+  app: &tauri::AppHandle<R>,
+  image: &RgbaImage,
+  png: &[u8],
+) -> Result<(), String> {
+  // Prepare every payload before touching the global clipboard.
+  let dib = build_cf_dib(image)?;
+  let owner = clipboard_owner_hwnd(app);
+  let width = image.width();
+  let height = image.height();
+
+  let mut last_error = String::from("clipboard write failed");
+  for attempt in 1..=CLIPBOARD_WRITE_ATTEMPTS {
+    match set_clipboard_image_payloads(owner, png, &dib) {
+      Ok(()) => {
+        log::info!(
+          "region_screenshot_copied_to_clipboard size={width}x{height} attempt={attempt} owner_hwnd={}",
+          !owner.is_null()
+        );
+        return Ok(());
+      }
+      Err(err) => {
+        last_error = err;
+        log::warn!(
+          "region_screenshot_clipboard_retry attempt={attempt}/{CLIPBOARD_WRITE_ATTEMPTS} error={last_error}"
+        );
+      }
+    }
+    if attempt < CLIPBOARD_WRITE_ATTEMPTS {
+      thread::sleep(CLIPBOARD_RETRY_BASE_DELAY.saturating_mul(attempt));
+    }
+  }
+
+  Err(last_error)
+}
+
+/// Open → empty → set PNG + CF_DIB → close. Must stay short; no encode work here.
+#[cfg(windows)]
+fn set_clipboard_image_payloads(
+  owner: *mut std::ffi::c_void,
+  png: &[u8],
+  dib: &[u8],
+) -> Result<(), String> {
+  unsafe {
+    if win32::OpenClipboard(owner) == 0 {
+      return Err(format!("OpenClipboard failed: {}", win32::GetLastError()));
+    }
+
+    let close = scopeguard_close_clipboard();
+
+    if win32::EmptyClipboard() == 0 {
+      return Err(format!("EmptyClipboard failed: {}", win32::GetLastError()));
+    }
+
+    // Prefer PNG first (better quality in modern apps), then CF_DIB for classic paste targets.
+    if !png.is_empty() {
+      let png_format = win32::RegisterClipboardFormatW(win32::PNG_FORMAT_NAME.as_ptr());
+      if png_format != 0 {
+        let h_png = alloc_hglobal(png)?;
+        if win32::SetClipboardData(png_format, h_png).is_null() {
+          let err = win32::GetLastError();
+          win32::GlobalFree(h_png);
+          return Err(format!("SetClipboardData(PNG) failed: {err}"));
+        }
+      }
+    }
+
+    let h_dib = alloc_hglobal(dib)?;
+    if win32::SetClipboardData(win32::CF_DIB, h_dib).is_null() {
+      let err = win32::GetLastError();
+      win32::GlobalFree(h_dib);
+      return Err(format!("SetClipboardData(CF_DIB) failed: {err}"));
+    }
+
+    drop(close);
+    Ok(())
+  }
+}
+
+#[cfg(windows)]
+fn alloc_hglobal(bytes: &[u8]) -> Result<*mut std::ffi::c_void, String> {
+  unsafe {
+    let handle = win32::GlobalAlloc(win32::GHND, bytes.len());
+    if handle.is_null() {
+      return Err(format!("GlobalAlloc failed: {}", win32::GetLastError()));
+    }
+    let ptr = win32::GlobalLock(handle);
+    if ptr.is_null() {
+      let err = win32::GetLastError();
+      win32::GlobalFree(handle);
+      return Err(format!("GlobalLock failed: {err}"));
+    }
+    std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr as *mut u8, bytes.len());
+    win32::GlobalUnlock(handle);
+    Ok(handle)
+  }
+}
+
+/// RAII CloseClipboard so early returns cannot leak the exclusive clipboard lock.
+#[cfg(windows)]
+fn scopeguard_close_clipboard() -> ClipboardCloseGuard {
+  ClipboardCloseGuard
+}
+
+#[cfg(windows)]
+struct ClipboardCloseGuard;
+
+#[cfg(windows)]
+impl Drop for ClipboardCloseGuard {
+  fn drop(&mut self) {
+    unsafe {
+      let _ = win32::CloseClipboard();
+    }
   }
 }
 

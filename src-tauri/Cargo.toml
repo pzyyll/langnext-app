@@ -44,9 +44,12 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-clipboard-manager = "2"
 xcap = "0.9"
-# Fresh Clipboard per write is more reliable than the long-lived plugin handle on Windows.
-arboard = "3"
 tauri-plugin-single-instance = "2.4.3"
+
+# macOS/Linux image clipboard via arboard. Windows uses a native Win32 path in screenshot.rs
+# (prepare buffers first, OpenClipboard with a real HWND) to avoid ERROR_CLIPBOARD_NOT_OPEN.
+[target.'cfg(all(not(any(target_os = "android", target_os = "ios")), not(windows)))'.dependencies]
+arboard = "3"
 
 # Win+Z snap overlay for custom maximize hover (Windows only).
 # kmhook: low-level keyboard hooks for double Ctrl+C (Windows only).

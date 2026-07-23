@@ -388,6 +388,59 @@ body {
 }
 
 /*
+ * Flowing 1px border for busy chrome (e.g. OCR on the quick-translate source shell).
+ * Dual-layer background: solid fill in padding-box, conic sweep in border-box.
+ * Keeps the existing 1px border width (color transparent while active) so layout does not shift.
+ */
+@property --border-beam-angle {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+
+/* Full rotation period for the border-beam sweep. */
+@keyframes border-beam-spin {
+  to {
+    --border-beam-angle: 360deg;
+  }
+}
+
+.border-beam {
+  /* One full circuit around the frame. */
+  --border-beam-duration: 1.2s;
+  /* Soft lead-in / trail of the bright head (share of the ring). */
+  --border-beam-glow: color-mix(in srgb, var(--app-on-surface) 30%, transparent);
+  --border-beam-angle: 0deg;
+  border-color: transparent;
+  /* Overrides bg-* utilities: fill must match the shell surface token. */
+  background:
+    linear-gradient(var(--app-surface-container-lowest), var(--app-surface-container-lowest)) padding-box,
+    conic-gradient(
+      from var(--border-beam-angle),
+      transparent 0deg,
+      transparent 220deg,
+      var(--border-beam-glow) 270deg,
+      var(--app-on-surface) 305deg,
+      var(--border-beam-glow) 335deg,
+      transparent 360deg
+    )
+    border-box;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .border-beam {
+    animation: border-beam-spin var(--border-beam-duration) linear infinite;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .border-beam {
+    border-color: var(--app-on-surface);
+    background: var(--app-surface-container-lowest);
+  }
+}
+
+/*
  * Translation Markdown preview: keep Streamdown density card-friendly.
  * Streamdown supplies structural utilities; this trims heading scale and code chrome.
  */
