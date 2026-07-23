@@ -12,6 +12,11 @@ export type QuickTranslateSlot = {
   /** Stable slot instance id (allows the same profile more than once). */
   id: string;
   profileId: string;
+  /**
+   * Prompt template override for this card.
+   * Empty string = use the profile default (same convention as main translate).
+   */
+  promptTemplateId: string;
 };
 
 export type QuickTranslateSessionState = {
@@ -32,6 +37,22 @@ const DEFAULT_SESSION: QuickTranslateSessionState = {
   autoTranslate: true,
 };
 
+/** Normalize a raw slot record; missing promptTemplateId becomes profile default (""). */
+function normalizeSlot(slot: unknown): QuickTranslateSlot | null {
+  if (!slot || typeof slot !== "object") {
+    return null;
+  }
+  const record = slot as Partial<QuickTranslateSlot>;
+  if (typeof record.id !== "string" || typeof record.profileId !== "string") {
+    return null;
+  }
+  return {
+    id: record.id,
+    profileId: record.profileId,
+    promptTemplateId: typeof record.promptTemplateId === "string" ? record.promptTemplateId : "",
+  };
+}
+
 export function loadQuickTranslateSession(): QuickTranslateSessionState {
   if (typeof window === "undefined") {
     return { ...DEFAULT_SESSION, slots: [], collapsedSlotIds: [] };
@@ -45,15 +66,7 @@ export function loadQuickTranslateSession(): QuickTranslateSessionState {
     const sourceLang = isSelectableLanguageId(parsed.sourceLang) ? parsed.sourceLang : DEFAULT_SESSION.sourceLang;
     const targetLang = isSelectableLanguageId(parsed.targetLang) ? parsed.targetLang : DEFAULT_SESSION.targetLang;
     const slots = Array.isArray(parsed.slots)
-      ? parsed.slots
-          .filter(
-            (slot): slot is QuickTranslateSlot =>
-              !!slot &&
-              typeof slot === "object" &&
-              typeof (slot as QuickTranslateSlot).id === "string" &&
-              typeof (slot as QuickTranslateSlot).profileId === "string",
-          )
-          .map((slot) => ({ id: slot.id, profileId: slot.profileId }))
+      ? parsed.slots.map(normalizeSlot).filter((slot): slot is QuickTranslateSlot => slot != null)
       : [];
     const slotIds = new Set(slots.map((slot) => slot.id));
     const collapsedSlotIds = Array.isArray(parsed.collapsedSlotIds)

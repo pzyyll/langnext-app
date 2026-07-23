@@ -12,7 +12,7 @@ import { Switch } from "@base-ui/react/switch";
 import { useTranslation } from "react-i18next";
 import { Badge } from "../../components/Badge";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
-import { ConfigEditorLayout } from "../../components/layouts/ConfigEditorLayout";
+import { ConfigEditorLayout, configEditorRenameInputClassName } from "../../components/layouts/ConfigEditorLayout";
 import { ConfigRailHeader } from "../../components/layouts/ConfigRailHeader";
 import { PageLayout } from "../../components/layouts/PageLayout";
 import { useToast } from "../../components/toast/useToast";
@@ -300,6 +300,22 @@ function withPendingTemplateRename(
   };
 }
 
+/** Apply an in-progress title rename so dirty checks match Save payload flush. */
+function withPendingProfileRename(
+  draft: ProfileDraft,
+  renamingProfile: boolean,
+  profileRenameValue: string,
+): ProfileDraft {
+  if (!renamingProfile) {
+    return draft;
+  }
+  const trimmed = profileRenameValue.trim();
+  if (!trimmed || trimmed === draft.name) {
+    return draft;
+  }
+  return { ...draft, name: trimmed };
+}
+
 /** Field-level equality for profile drafts (order-sensitive for lists). */
 function isProfileDraftClean(draft: ProfileDraft, baseline: ProfileDraft): boolean {
   return (
@@ -344,6 +360,10 @@ function TranslateProfilesPage() {
   const [renamingTemplateId, setRenamingTemplateId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const renameInputRef = useRef<HTMLInputElement | null>(null);
+  /** Inline rename for the profile title (Models/OCR pattern; commits into draft). */
+  const [renamingProfile, setRenamingProfile] = useState(false);
+  const [profileRenameValue, setProfileRenameValue] = useState("");
+  const profileRenameInputRef = useRef<HTMLInputElement | null>(null);
   /** Collapsed prompt-template card ids; absent ids default to expanded. Persisted in localStorage. */
   const [collapsedTemplateIds, setCollapsedTemplateIds] = useState<Set<string>>(
     () => new Set(getCollapsedPromptTemplateIds()),
@@ -386,6 +406,18 @@ function TranslateProfilesPage() {
       node.select();
     }
   }, [renamingTemplateId]);
+
+  // Focus and select the profile title rename input when inline editing starts.
+  useEffect(() => {
+    if (!renamingProfile) {
+      return;
+    }
+    const node = profileRenameInputRef.current;
+    if (node instanceof HTMLInputElement) {
+      node.focus();
+      node.select();
+    }
+  }, [renamingProfile]);
 
   // Persist collapse state across reloads and profile switches (ids are template UUIDs).
   useEffect(() => {
@@ -440,7 +472,7 @@ function TranslateProfilesPage() {
       ? (draft.promptTemplates.find((template) => template.id === templateDeleteId) ?? null)
       : null;
 
-  // Create is always dirty; edit mode compares effective draft (incl. pending rename) to detail baseline.
+  // Create is always dirty; edit mode compares effective draft (incl. pending renames) to detail baseline.
   const isDirty = useMemo(() => {
     if (isCreating) {
       return true;
@@ -448,9 +480,10 @@ function TranslateProfilesPage() {
     if (!draft || !derivedDraft) {
       return false;
     }
-    const effectiveDraft = withPendingTemplateRename(draft, renamingTemplateId, renameValue);
+    const withProfile = withPendingProfileRename(draft, renamingProfile, profileRenameValue);
+    const effectiveDraft = withPendingTemplateRename(withProfile, renamingTemplateId, renameValue);
     return !isProfileDraftClean(effectiveDraft, derivedDraft);
-  }, [isCreating, draft, derivedDraft, renamingTemplateId, renameValue]);
+  }, [isCreating, draft, derivedDraft, renamingProfile, profileRenameValue, renamingTemplateId, renameValue]);
 
   const saveMutation = useMutation({
     mutationFn: saveTranslationProfile,
@@ -463,6 +496,7 @@ function TranslateProfilesPage() {
       setDraftOverride(null);
       setSaveError(null);
       cancelRenameTemplate();
+      cancelRenameProfile();
       toast.success({
         title: variables.id ? t("translate.profileUpdated") : t("translate.profileSaved"),
       });
@@ -519,6 +553,7 @@ function TranslateProfilesPage() {
       setDraftOverride(null);
       setIsCreating(false);
       cancelRenameTemplate();
+      cancelRenameProfile();
       toast.success({ title: t("translate.profileDeleted") });
 
       const list = queryClient.getQueryData<TranslationProfileDto[]>(profileKeys.list()) ?? [];
@@ -530,6 +565,34 @@ function TranslateProfilesPage() {
   function cancelRenameTemplate() {
     setRenamingTemplateId(null);
     setRenameValue("");
+  }
+
+  function cancelRenameProfile() {
+    setRenamingProfile(false);
+    setProfileRenameValue("");
+  }
+
+  function startRenameProfile() {
+    if (!draft) {
+      return;
+    }
+    cancelRenameTemplate();
+    setProfileRenameValue(draft.name);
+    setRenamingProfile(true);
+  }
+
+  function commitRenameProfile() {
+    if (!draft) {
+      return;
+    }
+    const trimmed = profileRenameValue.trim();
+    if (!trimmed) {
+      return;
+    }
+    if (trimmed !== draft.name) {
+      updateDraft({ name: trimmed });
+    }
+    cancelRenameProfile();
   }
 
   function setTemplateOpen(templateId: string, open: boolean) {
@@ -557,6 +620,7 @@ function TranslateProfilesPage() {
     setDraftOverride(null);
     setSaveError(null);
     cancelRenameTemplate();
+    cancelRenameProfile();
   }
 
   function startCreate() {
@@ -565,6 +629,7 @@ function TranslateProfilesPage() {
     setSaveError(null);
     setDraftOverride(emptyDraft(modelOptions[0]?.id ?? "", uiLanguage));
     cancelRenameTemplate();
+    cancelRenameProfile();
   }
 
   function updateDraft(patch: Partial<ProfileDraft>) {
@@ -632,6 +697,7 @@ function TranslateProfilesPage() {
   }
 
   function startRenameTemplate(template: PromptTemplate) {
+    cancelRenameProfile();
     setRenameValue(template.name);
     setRenamingTemplateId(template.id);
   }
@@ -722,7 +788,7 @@ function TranslateProfilesPage() {
       return;
     }
 
-    // Flush an in-progress rename into the payload only; main Save is the persist boundary.
+    // Flush in-progress renames into the payload only; main Save is the persist boundary.
     const promptTemplates = draft.promptTemplates.map((template) => {
       if (template.id !== renamingTemplateId) {
         return template;
@@ -731,7 +797,8 @@ function TranslateProfilesPage() {
       return trimmed ? { ...template, name: trimmed } : template;
     });
 
-    const name = draft.name.trim();
+    const pendingProfileName = renamingProfile ? profileRenameValue.trim() : "";
+    const name = (pendingProfileName || draft.name).trim();
     if (!name) {
       setSaveError(t("translate.profileNameRequired"));
       return;
@@ -978,9 +1045,82 @@ function TranslateProfilesPage() {
                 handleSave();
               }}
               title={
-                <h1 className="truncate text-headline-display font-bold text-on-surface">
-                  {draft.id ? t("translate.profiles.editTitle") : t("translate.profiles.createTitle")}
-                </h1>
+                isCreating ? (
+                  <Input
+                    id="profile-name"
+                    className={configEditorRenameInputClassName}
+                    type="text"
+                    value={draft.name}
+                    placeholder={t("translate.profileNamePlaceholder")}
+                    spellCheck={false}
+                    autoComplete="off"
+                    disabled={savePending}
+                    aria-label={t("translate.profileNameLabel")}
+                    onChange={(event) => {
+                      updateDraft({ name: event.currentTarget.value });
+                    }}
+                  />
+                ) : renamingProfile ? (
+                  <div className="flex min-w-0 items-center gap-2">
+                    <Input
+                      ref={profileRenameInputRef}
+                      id="profile-name"
+                      className={configEditorRenameInputClassName}
+                      type="text"
+                      value={profileRenameValue}
+                      placeholder={t("translate.profileNamePlaceholder")}
+                      spellCheck={false}
+                      autoComplete="off"
+                      disabled={savePending}
+                      aria-label={t("translate.profileNameLabel")}
+                      onChange={(event) => {
+                        setProfileRenameValue(event.currentTarget.value);
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          commitRenameProfile();
+                        }
+                        if (event.key === "Escape" && !savePending) {
+                          event.preventDefault();
+                          cancelRenameProfile();
+                        }
+                      }}
+                    />
+                    <Button
+                      type="button"
+                      className={iconButtonClassName}
+                      aria-label={t("translate.profiles.saveProfileName")}
+                      disabled={savePending || !profileRenameValue.trim()}
+                      onClick={commitRenameProfile}
+                    >
+                      <IconMaterialSymbolsLightCheck className="pointer-events-none size-5 shrink-0" />
+                    </Button>
+                    <Button
+                      type="button"
+                      className={iconButtonClassName}
+                      aria-label={t("translate.profiles.cancelRename")}
+                      disabled={savePending}
+                      onClick={cancelRenameProfile}
+                    >
+                      <IconMaterialSymbolsLightClose className="pointer-events-none size-5 shrink-0" />
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="flex min-w-0 items-center gap-1">
+                    <h1 className="truncate text-headline-display font-bold text-on-surface">{draft.name}</h1>
+                    <Button
+                      type="button"
+                      className={iconButtonClassName}
+                      aria-label={t("translate.profiles.renameProfile")}
+                      title={t("translate.profiles.renameProfile")}
+                      disabled={savePending || enabledPending}
+                      onClick={startRenameProfile}
+                    >
+                      <IconMaterialSymbolsLightEditSquareOutlineSharp className="pointer-events-none size-5 shrink-0" />
+                    </Button>
+                  </div>
+                )
               }
               titleTrailing={
                 <label className="flex shrink-0 items-center gap-2 text-body-tight text-on-surface">
@@ -1043,24 +1183,6 @@ function TranslateProfilesPage() {
               <div className="space-y-8">
                 {/* Basic info */}
                 <div className="space-y-4">
-                  <div className="flex flex-col gap-1">
-                    <label className={fieldLabelClassName} htmlFor="profile-name">
-                      {t("translate.profileNameLabel")}
-                    </label>
-                    <Input
-                      id="profile-name"
-                      className={inputClassName}
-                      type="text"
-                      value={draft.name}
-                      placeholder={t("translate.profileNamePlaceholder")}
-                      spellCheck={false}
-                      autoComplete="off"
-                      disabled={savePending}
-                      onChange={(event) => {
-                        updateDraft({ name: event.currentTarget.value });
-                      }}
-                    />
-                  </div>
                   <div
                     className="
                         grid grid-cols-1 gap-4

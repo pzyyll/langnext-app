@@ -18,7 +18,7 @@ use kmhook::types::{ClickState, EventType, MouseButton, Pos};
 const INIT_WIN_SIZE: (f64, f64) = (420.0, 360.0);
 
 /// Minimum logical inner size (width fixed floor; height content-adaptive).
-const MIN_WIN_SIZE: (f64, f64) = (420.0, 280.0);
+const MIN_WIN_SIZE: (f64, f64) = (420.0, 220.0);
 
 /// Logical px: shift the window up so the cursor starts inside the top edge.
 /// Larger than a few px so post-show pointer jitter does not read as "outside".
@@ -290,45 +290,20 @@ pub async fn set_pin<R: Runtime>(
 }
 
 /// Resize the Quick Translate window's logical inner height to match content.
-/// Keeps the current width; clamps so the outer frame stays inside the monitor work area.
+/// Keeps the current width. No work-area max clamp — content (cards with their own max-h) owns height.
 #[tauri::command]
 pub async fn resize_window_height<R: Runtime>(window: tauri::Window<R>, height: f64) -> Result<(), String> {
   if !height.is_finite() || height <= 0.0 {
     return Ok(());
   }
 
-  let scale = window.scale_factor().map_err(|e| e.to_string())?;
-  let outer_pos = window
-    .outer_position()
+  let inner_size = window
+    .inner_size()
     .map_err(|e| e.to_string())?
-    .to_logical::<f64>(scale);
-  let outer_size = window.outer_size().map_err(|e| e.to_string())?.to_logical::<f64>(scale);
-  let inner_size = window.inner_size().map_err(|e| e.to_string())?.to_logical::<f64>(scale);
+    .to_logical::<f64>(window.scale_factor().map_err(|e| e.to_string())?);
 
-  let frame_height = (outer_size.height - inner_size.height).max(0.0);
-  let min_height = MIN_WIN_SIZE.1;
-  let requested = height.max(min_height);
-
-  // Max logical inner height that keeps the outer bottom inside the work area.
-  let max_height = {
-    let physical_pos = window.outer_position().map_err(|e| e.to_string())?;
-    let monitor = window
-      .monitor_from_point(physical_pos.x as f64, physical_pos.y as f64)
-      .ok()
-      .flatten()
-      .or_else(|| window.current_monitor().ok().flatten());
-
-    if let Some(m) = monitor {
-      let work = m.work_area();
-      let work_bottom = (work.position.y as f64 + work.size.height as f64) / scale;
-      let available_outer = (work_bottom - outer_pos.y).max(min_height + frame_height);
-      (available_outer - frame_height).max(min_height)
-    } else {
-      requested
-    }
-  };
-
-  let set_height = requested.min(max_height);
+  // Floor at the window minimum; ceil so fractional DPI cannot clip a 1px border.
+  let set_height = height.max(MIN_WIN_SIZE.1).ceil();
 
   // Skip no-op resizes to avoid event churn / flicker.
   if (set_height - inner_size.height).abs() < 0.5 {

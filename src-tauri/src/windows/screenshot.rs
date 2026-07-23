@@ -1053,11 +1053,7 @@ pub async fn region_screenshot_confirm<R: Runtime>(
 /// On Windows, buffers are prepared before opening the clipboard and a real HWND is used as
 /// owner. Holding `OpenClipboard` across PNG encode (as arboard does) is slow for large
 /// regions and intermittently fails with ERROR_CLIPBOARD_NOT_OPEN (1418).
-fn copy_image_to_clipboard<R: Runtime>(
-  app: &tauri::AppHandle<R>,
-  image: &RgbaImage,
-  png: &[u8],
-) -> Result<(), String> {
+fn copy_image_to_clipboard<R: Runtime>(app: &tauri::AppHandle<R>, image: &RgbaImage, png: &[u8]) -> Result<(), String> {
   if image.width() == 0 || image.height() == 0 {
     return Err("clipboard image is empty".into());
   }
@@ -1114,17 +1110,13 @@ fn copy_image_to_clipboard_arboard(image: &RgbaImage) -> Result<(), String> {
           }
           Err(err) => {
             last_error = format!("set_image failed: {err}");
-            log::warn!(
-              "region_screenshot_clipboard_retry attempt={attempt}/{CLIPBOARD_WRITE_ATTEMPTS} error={err}"
-            );
+            log::warn!("region_screenshot_clipboard_retry attempt={attempt}/{CLIPBOARD_WRITE_ATTEMPTS} error={err}");
           }
         }
       }
       Err(err) => {
         last_error = format!("open clipboard failed: {err}");
-        log::warn!(
-          "region_screenshot_clipboard_open_retry attempt={attempt}/{CLIPBOARD_WRITE_ATTEMPTS} error={err}"
-        );
+        log::warn!("region_screenshot_clipboard_open_retry attempt={attempt}/{CLIPBOARD_WRITE_ATTEMPTS} error={err}");
       }
     }
     if attempt < CLIPBOARD_WRITE_ATTEMPTS {
@@ -1225,9 +1217,7 @@ fn copy_image_to_clipboard_windows<R: Runtime>(
       }
       Err(err) => {
         last_error = err;
-        log::warn!(
-          "region_screenshot_clipboard_retry attempt={attempt}/{CLIPBOARD_WRITE_ATTEMPTS} error={last_error}"
-        );
+        log::warn!("region_screenshot_clipboard_retry attempt={attempt}/{CLIPBOARD_WRITE_ATTEMPTS} error={last_error}");
       }
     }
     if attempt < CLIPBOARD_WRITE_ATTEMPTS {
@@ -1240,11 +1230,7 @@ fn copy_image_to_clipboard_windows<R: Runtime>(
 
 /// Open → empty → set PNG + CF_DIB → close. Must stay short; no encode work here.
 #[cfg(windows)]
-fn set_clipboard_image_payloads(
-  owner: *mut std::ffi::c_void,
-  png: &[u8],
-  dib: &[u8],
-) -> Result<(), String> {
+fn set_clipboard_image_payloads(owner: *mut std::ffi::c_void, png: &[u8], dib: &[u8]) -> Result<(), String> {
   unsafe {
     if win32::OpenClipboard(owner) == 0 {
       return Err(format!("OpenClipboard failed: {}", win32::GetLastError()));

@@ -1,16 +1,8 @@
 // ABOUTME: Translation-style text block with trailing loading dots or stream scramble.
 // ABOUTME: Waiting states keep dots; active stream output swaps dots for a rolling glyph tail.
-import { useEffect, useState, type ComponentProps } from "react";
+import type { ComponentProps } from "react";
 import { cn } from "../lib/cn";
-
-/** Glyphs cycled by the stream-tail scramble indicator (mask / block style). */
-const SCRAMBLE_GLYPHS = "░▒▓█╱╲╳abcdefgh░▒▓█╱╲╳ijklmnop░▒▓█╱╲╳qrst*&!@#$%^()-+";
-
-/** How many rolling glyphs trail the streamed text. */
-const SCRAMBLE_TAIL_LENGTH = 1;
-
-/** Target animation frame interval for the rolling glyph tail. */
-const SCRAMBLE_FRAME_MS = 1000 / 24;
+import { StreamScrambleTail } from "./StreamScrambleTail";
 
 export type TextLoadingProps = Omit<ComponentProps<"p">, "children"> & {
   /** Current output text; may grow while streaming or be the previous result while re-running. */
@@ -37,62 +29,6 @@ export type TextLoadingProps = Omit<ComponentProps<"p">, "children"> & {
 /** Drop trailing "…" / "..." so dots are not doubled after the label. */
 function stripTrailingEllipsis(label: string): string {
   return label.replace(/(?:\u2026|\.{2,}|…)+$/u, "").trimEnd();
-}
-
-function randomScrambleGlyph(): string {
-  return SCRAMBLE_GLYPHS[Math.floor(Math.random() * SCRAMBLE_GLYPHS.length)]!;
-}
-
-function nextScrambleTail(): string {
-  return Array.from({ length: SCRAMBLE_TAIL_LENGTH }, randomScrambleGlyph).join("");
-}
-
-function prefersReducedMotion(): boolean {
-  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
-    return false;
-  }
-  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-}
-
-/**
- * Rolling glyph tail used in place of loading-dots while stream text is arriving.
- * Renders nothing when inactive; reduced-motion falls back to a static glyph run.
- */
-function StreamScrambleTail({ active }: { active: boolean }) {
-  const [tail, setTail] = useState(nextScrambleTail);
-  const reducedMotion = prefersReducedMotion();
-
-  useEffect(() => {
-    if (!active || reducedMotion) {
-      return;
-    }
-
-    let frameId = 0;
-    let lastFrameAt = performance.now();
-
-    const tick = (now: number) => {
-      if (now - lastFrameAt >= SCRAMBLE_FRAME_MS) {
-        lastFrameAt = now;
-        setTail(nextScrambleTail());
-      }
-      frameId = window.requestAnimationFrame(tick);
-    };
-
-    frameId = window.requestAnimationFrame(tick);
-    return () => {
-      window.cancelAnimationFrame(frameId);
-    };
-  }, [active, reducedMotion]);
-
-  if (!active) {
-    return null;
-  }
-
-  return (
-    <span className="ms-[0.1em] inline-block font-mono text-neutral select-none" aria-hidden>
-      {reducedMotion ? SCRAMBLE_GLYPHS.slice(0, SCRAMBLE_TAIL_LENGTH) : tail}
-    </span>
-  );
 }
 
 /**

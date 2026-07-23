@@ -23,10 +23,11 @@ import IconMaterialSymbolsLightSwapHoriz from "~icons/material-symbols-light/swa
 import ExpandCircleDownOutlineIcon from "~icons/material-symbols/expand-circle-down-outline";
 import FlashAutoIcon from "~icons/material-symbols/flash-auto";
 import FlashAutoOutlineIcon from "~icons/material-symbols/flash-auto-outline";
+import RoundKeyboardArrowDownIcon from "~icons/ic/round-keyboard-arrow-down";
+import ChevronUpDownIcon from "~icons/mdi/chevron-up-down";
 import { MarkdownOutput } from "../components/markdown/MarkdownOutput";
 import { TitleBar } from "../components/win/TitleBar";
 import { ComboboxField } from "../components/ComboboxField";
-import { ScrollArea } from "../components/ScrollArea";
 import { SelectField } from "../components/SelectField";
 import { TextAutosize, TextAutosizeContent } from "../components/TextAutosize";
 import { TextLoading } from "../components/TextLoading";
@@ -80,11 +81,8 @@ export const Route = createFileRoute("/quick-translate")({
 /** Debounce before auto-running all slot translations after source/lang changes. */
 const TRANSLATE_DEBOUNCE_MS = 500;
 
-/**
- * Keep the custom scrollbar hidden until content-driven window height stops changing.
- * Covers collapsible height animation (150ms) plus one IPC/layout settle frame.
- */
-const HEIGHT_ADAPT_SETTLE_MS = 160;
+/** Extra logical px so the last card border is not clipped after DPI / set_size rounding. */
+const HEIGHT_SAFETY_PAD_PX = 8;
 
 type Slot = QuickTranslateSlot;
 
@@ -110,8 +108,17 @@ function buildTranslationInputKey(
   sourceLang: SourceLanguageId,
   targetLang: SelectableLanguageId,
   profileId: string,
+  promptTemplateId: string,
 ): string {
-  return `${sourceLang}\0${targetLang}\0${profileId}\0${sourceText.trim()}`;
+  return `${sourceLang}\0${targetLang}\0${profileId}\0${promptTemplateId}\0${sourceText.trim()}`;
+}
+
+/** Empty / unknown template ids fall back to the profile default (same as main translate). */
+function resolveSlotPromptTemplateId(promptTemplateId: string, profile: TranslationProfileDto | undefined): string {
+  if (!promptTemplateId || !profile) {
+    return "";
+  }
+  return profile.promptTemplates.some((template) => template.id === promptTemplateId) ? promptTemplateId : "";
 }
 
 function primaryModelId(profile: TranslationProfileDto | undefined): string {
@@ -251,21 +258,21 @@ function QuickTranslatePage() {
   useEffect(() => {
     sourceTextRef.current = sourceText;
   }, [sourceText]);
-  /** Titlebar shell: fixed outside the scroll region; height is included in window resize. */
-  const titleBarMeasureRef = useRef<HTMLDivElement>(null);
-  /** Source + language chrome: fixed above the results scroller; included in window resize. */
-  const fixedChromeMeasureRef = useRef<HTMLDivElement>(null);
-  /** Body shell (padding + gap); used with fixed/results measures for natural window height. */
-  const bodyShellMeasureRef = useRef<HTMLDivElement>(null);
-  /** Results list node (h-fit) used to drive window height; state so the observer rebinds on mount. */
-  const [contentMeasureEl, setContentMeasureEl] = useState<HTMLDivElement | null>(null);
-  const lastContentHeightRef = useRef(0);
-  /** True while content size is chasing window height — hide scrollbar to avoid flash. */
-  const [isHeightAdapting, setIsHeightAdapting] = useState(false);
-  const heightAdaptSettleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /**
+   * Full page stack (titlebar + chrome + cards), content-sized.
+   * Window height follows this node's offsetHeight — cards own their max-h scroll.
+   */
+  const [pageMeasureEl, setPageMeasureEl] = useState<HTMLDivElement | null>(null);
+  /** Last height sent to the host (may lead window.innerHeight while IPC runs). */
+  const targetWindowHeightRef = useRef(0);
+  /** Coalesce overlapping resize IPC so out-of-order set_size cannot thrash. */
+  const heightResizeInFlightRef = useRef(false);
+  const heightResizeQueuedRef = useRef<number | null>(null);
+  /** Generation so a stale in-flight finally cannot apply after unmount/remount. */
+  const heightResizeGenerationRef = useRef(0);
 
-  const setContentMeasureNode = useCallback((node: HTMLDivElement | null) => {
-    setContentMeasureEl((prev) => (prev === node ? prev : node));
+  const setPageMeasureNode = useCallback((node: HTMLDivElement | null) => {
+    setPageMeasureEl((prev) => (prev === node ? prev : node));
   }, []);
 
   /** Bump every slot epoch and cancel in-flight detect/translate work. */
@@ -351,13 +358,16 @@ function QuickTranslatePage() {
         return;
       }
 
-      const inputKeyFor = (profileId: string) =>
-        buildTranslationInputKey(sourceText, sourceLang, targetLang, profileId);
+      const inputKeyFor = (slot: Slot) => {
+        const profile = profileById.get(slot.profileId);
+        const promptTemplateId = resolveSlotPromptTemplateId(slot.promptTemplateId, profile);
+        return buildTranslationInputKey(sourceText, sourceLang, targetLang, slot.profileId, promptTemplateId);
+      };
 
-      // Skip cards that already finished for this exact source/lang/profile fingerprint.
+      // Skip cards that already finished for this exact source/lang/profile/prompt fingerprint.
       const slotsToRun = options?.force
         ? candidates
-        : candidates.filter((slot) => resultsRef.current[slot.id]?.inputKey !== inputKeyFor(slot.profileId));
+        : candidates.filter((slot) => resultsRef.current[slot.id]?.inputKey !== inputKeyFor(slot));
       if (slotsToRun.length === 0) {
         return;
       }
@@ -372,7 +382,7 @@ function QuickTranslatePage() {
       // new chunk/result arrives (langnext-translate style). Full source replaces clear earlier
       // in applySourceText so this path starts empty for select-all + retype.
       // Stamp inputKey immediately so a re-entrant auto-translate pass skips in-flight slots
-      // for the same source/lang/profile fingerprint instead of aborting them in a loop.
+      // for the same source/lang/profile/prompt fingerprint instead of aborting them in a loop.
       setResults((prev) => {
         const next = { ...prev };
         for (const slot of slotsToRun) {
@@ -382,7 +392,7 @@ function QuickTranslatePage() {
             error: null,
             isTranslating: true,
             streamOutputActive: false,
-            inputKey: inputKeyFor(slot.profileId),
+            inputKey: inputKeyFor(slot),
           };
         }
         // Keep the ref current before paint so a concurrent run can skip these slots.
@@ -434,7 +444,7 @@ function QuickTranslatePage() {
               failSlots(
                 stillCurrentTargets().map((slot) => ({
                   slotId: slot.id,
-                  inputKey: inputKeyFor(slot.profileId),
+                  inputKey: inputKeyFor(slot),
                 })),
                 epochs,
                 message,
@@ -453,7 +463,7 @@ function QuickTranslatePage() {
           failSlots(
             stillCurrentTargets().map((slot) => ({
               slotId: slot.id,
-              inputKey: inputKeyFor(slot.profileId),
+              inputKey: inputKeyFor(slot),
             })),
             epochs,
             getIpcErrorMessage(err, t("translate.errors.detectFailed")),
@@ -501,7 +511,7 @@ function QuickTranslatePage() {
               return;
             }
 
-            const slotInputKey = inputKeyFor(slot.profileId);
+            const slotInputKey = inputKeyFor(slot);
             const modelId = primaryModelId(profile);
             if (!modelId || !enabledModelIds.has(modelId)) {
               patchResult(slot.id, {
@@ -526,6 +536,7 @@ function QuickTranslatePage() {
               primary: prefs.primary,
               preferredTarget: prefs.preferredTarget,
             });
+            const resolvedPromptTemplateId = resolveSlotPromptTemplateId(slot.promptTemplateId, profile);
 
             const payload: TranslateInput = {
               modelId,
@@ -533,6 +544,7 @@ function QuickTranslatePage() {
               targetLang: t(`translate.languages.${effectiveTargetId}`),
               text: trimmed,
               profileId: slot.profileId,
+              promptTemplateId: resolvedPromptTemplateId || null,
               sourceLangId: sourceLang,
               targetLangId: targetLang,
               effectiveSourceLangId: sourceId,
@@ -655,7 +667,7 @@ function QuickTranslatePage() {
               error: null,
               isTranslating: false,
               streamOutputActive: false,
-              inputKey: inputKeyFor(slot.profileId),
+              inputKey: inputKeyFor(slot),
             });
           }
         }),
@@ -666,6 +678,7 @@ function QuickTranslatePage() {
       failSlots,
       i18n.language,
       patchResult,
+      profileById,
       queryClient,
       showTranslateErrorToast,
       slotStreams,
@@ -879,98 +892,114 @@ function QuickTranslatePage() {
     };
   }, [autoTranslate, sourceText, sourceLang, targetLang]);
 
-  // Content-driven window height: titlebar + fixed chrome + results (results scroll when clamped).
-  // Measure natural heights of fixed/results boxes — not the ScrollArea viewport fill height.
-  // While height is adapting, hide the custom scrollbar so temporary overflow does not flash.
+  // Window height = natural page stack (titlebar + chrome + cards). Cards cap/scroll themselves.
+  // No work-area clamp: taller than the screen is fine. Host only enforces a minimum height.
   useEffect(() => {
-    if (!isTauriRuntime() || !contentMeasureEl) {
+    if (!isTauriRuntime() || !pageMeasureEl) {
       return;
     }
 
     let raf = 0;
-    const clearHeightAdaptSoon = () => {
-      if (heightAdaptSettleTimerRef.current != null) {
-        clearTimeout(heightAdaptSettleTimerRef.current);
-      }
-      heightAdaptSettleTimerRef.current = setTimeout(() => {
-        heightAdaptSettleTimerRef.current = null;
-        setIsHeightAdapting(false);
-      }, HEIGHT_ADAPT_SETTLE_MS);
-    };
+    let cancelled = false;
 
-    const applyHeight = () => {
-      raf = 0;
-      const titlebarHeight = titleBarMeasureRef.current?.offsetHeight ?? 0;
-      const fixedChromeHeight = fixedChromeMeasureRef.current?.offsetHeight ?? 0;
-      // offsetHeight is the layout border-box; h-fit keeps results content-sized inside the viewport.
-      const resultsHeight = contentMeasureEl.offsetHeight;
-      const bodyShell = bodyShellMeasureRef.current;
-      let bodyPaddingAndGap = 0;
-      if (bodyShell) {
-        const styles = getComputedStyle(bodyShell);
-        bodyPaddingAndGap =
-          (Number.parseFloat(styles.paddingTop) || 0) +
-          (Number.parseFloat(styles.paddingBottom) || 0) +
-          (Number.parseFloat(styles.rowGap || styles.gap) || 0);
-      }
-      const height = Math.ceil(titlebarHeight + bodyPaddingAndGap + fixedChromeHeight + resultsHeight);
-      if (height <= 0) {
-        clearHeightAdaptSoon();
+    const readActualWindowHeight = () => Math.round(window.innerHeight);
+
+    /** Content-sized page height + pad for DPI/border rounding. */
+    const measureNeededHeight = (): number =>
+      Math.ceil(Math.max(pageMeasureEl.offsetHeight, pageMeasureEl.scrollHeight) + HEIGHT_SAFETY_PAD_PX);
+
+    const flushResize = (target: number) => {
+      if (cancelled || target <= 0) {
         return;
       }
-      if (Math.abs(height - lastContentHeightRef.current) < 1) {
-        clearHeightAdaptSoon();
+
+      const actual = readActualWindowHeight();
+      if (Math.abs(target - actual) < 1) {
+        targetWindowHeightRef.current = actual;
         return;
       }
-      lastContentHeightRef.current = height;
-      void resizeWindowHeight(height)
+
+      if (heightResizeInFlightRef.current) {
+        heightResizeQueuedRef.current = target;
+        return;
+      }
+
+      heightResizeInFlightRef.current = true;
+      heightResizeQueuedRef.current = null;
+      targetWindowHeightRef.current = target;
+      const generation = ++heightResizeGenerationRef.current;
+
+      void resizeWindowHeight(target)
         .catch(() => {
           // Window may have been closed between measure and invoke.
         })
         .finally(() => {
-          clearHeightAdaptSoon();
+          if (cancelled || generation !== heightResizeGenerationRef.current) {
+            return;
+          }
+          heightResizeInFlightRef.current = false;
+          const queued = heightResizeQueuedRef.current;
+          heightResizeQueuedRef.current = null;
+          targetWindowHeightRef.current = readActualWindowHeight();
+
+          if (queued != null && Math.abs(queued - targetWindowHeightRef.current) >= 1) {
+            flushResize(queued);
+            return;
+          }
+
+          if (raf !== 0) {
+            cancelAnimationFrame(raf);
+          }
+          raf = requestAnimationFrame(() => {
+            raf = 0;
+            if (!cancelled) {
+              applyHeight();
+            }
+          });
         });
     };
 
-    const schedule = () => {
-      // Hide before the next paint so a brief overflow never reveals the track.
-      setIsHeightAdapting(true);
-      if (heightAdaptSettleTimerRef.current != null) {
-        clearTimeout(heightAdaptSettleTimerRef.current);
-        heightAdaptSettleTimerRef.current = null;
+    const applyHeight = () => {
+      raf = 0;
+      if (cancelled) {
+        return;
       }
+      const needed = measureNeededHeight();
+      if (needed <= 0) {
+        return;
+      }
+      flushResize(needed);
+    };
+
+    const schedule = () => {
       if (raf !== 0) {
         cancelAnimationFrame(raf);
       }
       raf = requestAnimationFrame(applyHeight);
     };
 
+    if (targetWindowHeightRef.current <= 0) {
+      targetWindowHeightRef.current = readActualWindowHeight();
+    }
+
     const observer = new ResizeObserver(schedule);
-    observer.observe(contentMeasureEl);
-    const titlebarEl = titleBarMeasureRef.current;
-    if (titlebarEl) {
-      observer.observe(titlebarEl);
-    }
-    const fixedChromeEl = fixedChromeMeasureRef.current;
-    if (fixedChromeEl) {
-      observer.observe(fixedChromeEl);
-    }
+    observer.observe(pageMeasureEl);
     schedule();
 
     return () => {
+      cancelled = true;
       if (raf !== 0) {
         cancelAnimationFrame(raf);
       }
-      if (heightAdaptSettleTimerRef.current != null) {
-        clearTimeout(heightAdaptSettleTimerRef.current);
-        heightAdaptSettleTimerRef.current = null;
-      }
+      heightResizeQueuedRef.current = null;
+      heightResizeInFlightRef.current = false;
+      heightResizeGenerationRef.current += 1;
       observer.disconnect();
     };
-  }, [contentMeasureEl]);
+  }, [pageMeasureEl]);
 
   function addSlot(profileId: string) {
-    const slot: Slot = { id: newClientRequestId("qt"), profileId };
+    const slot: Slot = { id: newClientRequestId("qt"), profileId, promptTemplateId: "" };
     setSlots((prev) => [...prev, slot]);
     // Only the new card translates; existing results stay put.
     if (sourceText.trim()) {
@@ -1037,7 +1066,8 @@ function QuickTranslatePage() {
     if (!slot || !sourceText.trim()) {
       return;
     }
-    const inputKey = buildTranslationInputKey(sourceText, sourceLang, targetLang, slot.profileId);
+    const promptTemplateId = resolveSlotPromptTemplateId(slot.promptTemplateId, profileById.get(slot.profileId));
+    const inputKey = buildTranslationInputKey(sourceText, sourceLang, targetLang, slot.profileId, promptTemplateId);
     const result = results[slotId];
     if (result?.inputKey === inputKey) {
       return;
@@ -1046,9 +1076,23 @@ function QuickTranslatePage() {
   }
 
   function updateSlotProfile(slotId: string, profileId: string) {
-    const slot: Slot = { id: slotId, profileId };
+    // Profile owns templates; reset to profile default on switch (main translate does the same).
+    const slot: Slot = { id: slotId, profileId, promptTemplateId: "" };
     setSlots((prev) => prev.map((item) => (item.id === slotId ? slot : item)));
     // Profile change only re-runs this card when it is expanded.
+    if (sourceText.trim() && !collapsedSlotIds.has(slotId)) {
+      void runTranslations([slot]);
+    }
+  }
+
+  function updateSlotPromptTemplate(slotId: string, promptTemplateId: string) {
+    const current = slots.find((item) => item.id === slotId);
+    if (!current || current.promptTemplateId === promptTemplateId) {
+      return;
+    }
+    const slot: Slot = { ...current, promptTemplateId };
+    setSlots((prev) => prev.map((item) => (item.id === slotId ? slot : item)));
+    // Prompt change only re-runs this card when it is expanded.
     if (sourceText.trim() && !collapsedSlotIds.has(slotId)) {
       void runTranslations([slot]);
     }
@@ -1117,307 +1161,312 @@ function QuickTranslatePage() {
   const profilesError =
     profilesQuery.error != null ? getIpcErrorMessage(profilesQuery.error, t("translate.profileLoadFailed")) : null;
   const isTranslating = Object.values(results).some((result) => result.isTranslating);
+  /** Collapsed preview only shows the first line; hint when more lines are hidden. */
+  const sourceHasMultipleLines = /\r?\n/.test(sourceText);
 
   return (
-    // Titlebar + source + language stay fixed; only result cards scroll when clamped.
-    <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-surface text-on-surface">
-      <div ref={titleBarMeasureRef} className="shrink-0">
-        <TitleBar
-          className="border-none!"
-          minimize={false}
-          maximized={false}
-          close
-          pin
-          pinned={isPinned}
-          onPinChange={handlePinChange}
-          leading={
-            <>
-              <Menu.Root>
-                <Menu.Trigger
-                  className={leadingButtonClassName}
-                  aria-label={t("quickTranslate.addPreset")}
-                  disabled={profilesLoading || profiles.length === 0}
-                >
-                  <IconMaterialSymbolsLightAdd className="pointer-events-none size-4" />
-                </Menu.Trigger>
-                <Menu.Portal>
-                  <Menu.Positioner className="z-50 outline-hidden" sideOffset={4} align="start">
-                    <Menu.Popup
-                      className={`
-                        ${menuPopupClassName}
-                        max-h-64 overflow-y-auto py-1
-                      `}
-                    >
-                      {profiles.length === 0 ? (
-                        <Menu.Item className={menuItemClassName} disabled>
-                          {t("quickTranslate.noProfiles")}
-                        </Menu.Item>
-                      ) : (
-                        profiles.map((profile) => (
-                          <Menu.Item
-                            key={profile.id}
-                            className={menuItemClassName}
-                            onClick={() => {
-                              addSlot(profile.id);
-                            }}
-                          >
-                            {profile.name}
+    // Content-sized page: window height follows the stack. Cards own max-h / local scroll.
+    <div className="min-h-0 min-w-0 overflow-hidden bg-surface text-on-surface">
+      <div ref={setPageMeasureNode} className="flex h-fit w-full min-w-0 flex-col">
+        <div className="shrink-0">
+          <TitleBar
+            className="border-none!"
+            minimize={false}
+            maximized={false}
+            close
+            pin
+            pinned={isPinned}
+            onPinChange={handlePinChange}
+            leading={
+              <>
+                <Menu.Root>
+                  <Menu.Trigger
+                    className={leadingButtonClassName}
+                    aria-label={t("quickTranslate.addPreset")}
+                    disabled={profilesLoading || profiles.length === 0}
+                  >
+                    <IconMaterialSymbolsLightAdd className="pointer-events-none size-4" />
+                  </Menu.Trigger>
+                  <Menu.Portal>
+                    <Menu.Positioner className="z-50 outline-hidden" sideOffset={4} align="start">
+                      <Menu.Popup
+                        className={`
+                          ${menuPopupClassName}
+                          max-h-64 overflow-y-auto py-1
+                        `}
+                      >
+                        {profiles.length === 0 ? (
+                          <Menu.Item className={menuItemClassName} disabled>
+                            {t("quickTranslate.noProfiles")}
                           </Menu.Item>
-                        ))
-                      )}
-                    </Menu.Popup>
-                  </Menu.Positioner>
-                </Menu.Portal>
-              </Menu.Root>
-              <Button
-                type="button"
-                className={leadingButtonClassName}
-                aria-label={isMarkdownView ? t("translate.plainText") : t("translate.markdownPreview")}
-                aria-pressed={isMarkdownView}
-                onClick={() => {
-                  setOutputViewModeState((current) => {
-                    const next = toggleOutputViewMode(current);
-                    setOutputViewMode(next);
-                    return next;
-                  });
-                }}
-              >
-                {isMarkdownView ? (
-                  <IconMaterialSymbolsLightMarkdown className="pointer-events-none size-4" aria-hidden />
-                ) : (
-                  <IconMaterialSymbolsLightMarkdownOutline className="pointer-events-none size-4" aria-hidden />
-                )}
-              </Button>
-              <Button
-                type="button"
-                className={leadingButtonClassName}
-                aria-label={
-                  autoTranslate ? t("quickTranslate.disableAutoTranslate") : t("quickTranslate.enableAutoTranslate")
-                }
-                aria-pressed={autoTranslate}
-                onClick={() => {
-                  setAutoTranslate((prev) => !prev);
-                }}
-              >
-                {autoTranslate ? (
-                  <FlashAutoIcon className="pointer-events-none size-4" aria-hidden />
-                ) : (
-                  <FlashAutoOutlineIcon className="pointer-events-none size-4" aria-hidden />
-                )}
-              </Button>
-              <Button
-                type="button"
-                className={leadingButtonClassName}
-                aria-label={ocrBusy ? t("quickTranslate.ocrRecognizing") : t("quickTranslate.ocrAria")}
-                disabled={!isTauriRuntime() || ocrBusy}
-                onClick={() => {
-                  void handleScreenshotOcr();
-                }}
-              >
-                <IconMaterialSymbolsLightDocumentScannerOutline
-                  className={cn("pointer-events-none size-4", ocrBusy && "animate-pulse")}
-                  aria-hidden
-                />
-              </Button>
-            </>
-          }
-        />
-      </div>
+                        ) : (
+                          profiles.map((profile) => (
+                            <Menu.Item
+                              key={profile.id}
+                              className={menuItemClassName}
+                              onClick={() => {
+                                addSlot(profile.id);
+                              }}
+                            >
+                              {profile.name}
+                            </Menu.Item>
+                          ))
+                        )}
+                      </Menu.Popup>
+                    </Menu.Positioner>
+                  </Menu.Portal>
+                </Menu.Root>
+                <Button
+                  type="button"
+                  className={leadingButtonClassName}
+                  aria-label={isMarkdownView ? t("translate.plainText") : t("translate.markdownPreview")}
+                  aria-pressed={isMarkdownView}
+                  onClick={() => {
+                    setOutputViewModeState((current) => {
+                      const next = toggleOutputViewMode(current);
+                      setOutputViewMode(next);
+                      return next;
+                    });
+                  }}
+                >
+                  {isMarkdownView ? (
+                    <IconMaterialSymbolsLightMarkdown className="pointer-events-none size-4" aria-hidden />
+                  ) : (
+                    <IconMaterialSymbolsLightMarkdownOutline className="pointer-events-none size-4" aria-hidden />
+                  )}
+                </Button>
+                <Button
+                  type="button"
+                  className={leadingButtonClassName}
+                  aria-label={
+                    autoTranslate ? t("quickTranslate.disableAutoTranslate") : t("quickTranslate.enableAutoTranslate")
+                  }
+                  aria-pressed={autoTranslate}
+                  onClick={() => {
+                    setAutoTranslate((prev) => !prev);
+                  }}
+                >
+                  {autoTranslate ? (
+                    <FlashAutoIcon className="pointer-events-none size-4" aria-hidden />
+                  ) : (
+                    <FlashAutoOutlineIcon className="pointer-events-none size-4" aria-hidden />
+                  )}
+                </Button>
+                <Button
+                  type="button"
+                  className={leadingButtonClassName}
+                  aria-label={ocrBusy ? t("quickTranslate.ocrRecognizing") : t("quickTranslate.ocrAria")}
+                  disabled={!isTauriRuntime() || ocrBusy}
+                  onClick={() => {
+                    void handleScreenshotOcr();
+                  }}
+                >
+                  <IconMaterialSymbolsLightDocumentScannerOutline
+                    className={cn("pointer-events-none size-4", ocrBusy && "animate-pulse")}
+                    aria-hidden
+                  />
+                </Button>
+              </>
+            }
+          />
+        </div>
 
-      <div
-        ref={bodyShellMeasureRef}
-        className="flex min-h-0 min-w-0 flex-1 flex-col gap-4 overflow-hidden px-3 pt-2 pb-3"
-      >
-        {/* Source + language stay pinned; only the results list below may scroll. */}
-        <div ref={fixedChromeMeasureRef} className="flex min-w-0 shrink-0 flex-col gap-4">
-          {/* Source input: editor, or single-line preview when collapsed; footer toolbar always shown. */}
-          <div
-            data-quick-translate-source-shell
-            className={cn(
-              // min-w-0 + overflow-hidden: long unbroken preview text must not expand the pane.
-              "flex min-w-0 shrink-0 flex-col overflow-hidden border border-line bg-surface-container-lowest",
-              isSourceCollapsed && sourceText ? "min-h-0" : "min-h-32",
-              // OCR only: flowing border while recognizeCapturedScreenshot / runScreenshotOcr runs.
-              ocrBusy && "border-beam",
-              // Busy beam is the status chrome; suppress focus ring so it is not covered.
-              !ocrBusy &&
-                "focus-within:outline-2 focus-within:-outline-offset-1 focus-within:outline-on-surface",
-            )}
-            aria-busy={ocrBusy || undefined}
-          >
-            <label className="sr-only" htmlFor="quick-translate-source">
-              {t("translate.sourceTextAria")}
-            </label>
-            {isSourceCollapsed && sourceText ? (
-              <button
-                type="button"
-                className="
-                  flex w-full min-w-0 cursor-default border-0 bg-transparent px-3 pt-3 pb-2 text-left text-body-md
-                  text-on-surface
-                  focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface
-                "
-                aria-label={t("quickTranslate.editSource")}
-                disabled={ocrBusy}
-                onClick={() => {
-                  focusSourceAfterExpandRef.current = true;
-                  setIsSourceCollapsed(false);
-                }}
-              >
-                {/*
+        <div className="flex w-full min-w-0 flex-col gap-4 px-3 pt-2 pb-0">
+          {/* Source + language above the result cards. */}
+          <div className="flex min-w-0 shrink-0 flex-col gap-4">
+            {/* Source input: editor, or single-line preview when collapsed; footer toolbar always shown. */}
+            <div
+              data-quick-translate-source-shell
+              className={cn(
+                // min-w-0 + overflow-hidden: long unbroken preview text must not expand the pane.
+                "flex min-w-0 shrink-0 flex-col overflow-hidden border border-line bg-surface-container-lowest",
+                isSourceCollapsed && sourceText ? "min-h-0" : "min-h-32",
+                // OCR only: flowing border while recognizeCapturedScreenshot / runScreenshotOcr runs.
+                ocrBusy && "border-beam",
+                // Busy beam is the status chrome; suppress focus ring so it is not covered.
+                !ocrBusy && "focus-within:outline-2 focus-within:-outline-offset-1 focus-within:outline-on-surface",
+              )}
+              aria-busy={ocrBusy || undefined}
+            >
+              <label className="sr-only" htmlFor="quick-translate-source">
+                {t("translate.sourceTextAria")}
+              </label>
+              {isSourceCollapsed && sourceText ? (
+                <button
+                  type="button"
+                  className={cn(
+                    `
+                      flex w-full min-w-0 cursor-default border-0 bg-transparent px-3 pt-3 text-left text-body-md
+                      text-on-surface
+                      focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface
+                    `,
+                    sourceHasMultipleLines ? "flex-col pb-0.5" : "pb-2",
+                  )}
+                  aria-label={t("quickTranslate.editSource")}
+                  disabled={ocrBusy}
+                  onClick={() => {
+                    focusSourceAfterExpandRef.current = true;
+                    setIsSourceCollapsed(false);
+                  }}
+                >
+                  {/*
 							  Inner span carries truncate: button text nodes do not ellipsize reliably
 							  across engines when the shell is a flex item.
 							*/}
-                <span className="block min-w-0 flex-1 truncate">{sourceText.split(/\r?\n/, 1)[0] ?? ""}</span>
-              </button>
-            ) : (
-              /*
+                  <span className="block min-w-0 w-full truncate">{sourceText.split(/\r?\n/, 1)[0] ?? ""}</span>
+                  {sourceHasMultipleLines ? (
+                    <span className="flex w-full items-center justify-center" aria-hidden>
+                      <RoundKeyboardArrowDownIcon className="size-4 text-neutral" />
+                    </span>
+                  ) : null}
+                </button>
+              ) : (
+                /*
 						  min-h-24 ≈ former h-32 chrome minus h-8 toolbar.
 						  minRows={6} keeps a fixed font-scaling floor while height may grow to max-h-64.
 						*/
-              <TextAutosize
-                id="quick-translate-source"
-                layout="grow"
-                className="max-h-64 min-h-24"
-                textareaClassName="px-3 pt-3 pb-2"
-                minRows={6}
-                placeholder={t("quickTranslate.sourcePlaceholder")}
-                spellCheck={false}
-                // OCR fills the field when done; block edits/Enter while recognize is in flight.
-                disabled={ocrBusy}
-                value={sourceText}
-                onChange={(event) => {
-                  applySourceText(event.currentTarget.value);
-                }}
-                onKeyDown={(event) => {
-                  if (ocrBusy || event.key !== "Enter") {
-                    return;
-                  }
-                  // Always allow Ctrl/Cmd+Enter as an explicit run shortcut.
-                  if (event.ctrlKey || event.metaKey) {
-                    event.preventDefault();
-                    void runTranslations();
-                    return;
-                  }
-                  // Manual mode: Enter runs translation; Shift+Enter inserts a newline.
-                  if (!autoTranslate && !event.shiftKey) {
-                    event.preventDefault();
-                    void runTranslations();
-                  }
-                }}
-              />
-            )}
-            <div className="flex h-8 shrink-0 items-center gap-1 px-2">
-              {detectedSourceLang ? (
-                <p className="min-w-0 truncate text-label-sm text-neutral uppercase">
-                  {t("translate.detected", {
-                    language: t(`translate.languages.${detectedSourceLang}`),
-                  })}
-                </p>
-              ) : null}
-              <div className="min-w-0 flex-1" />
-              <div className="flex shrink-0 items-center gap-0.5">
-                {sourceText ? (
-                  <>
-                    <Button
-                      type="button"
-                      className={iconButtonClassName}
-                      aria-label={
-                        isSourceCollapsed ? t("quickTranslate.editSource") : t("quickTranslate.collapseSource")
-                      }
-                      disabled={ocrBusy}
-                      onClick={() => {
-                        if (isSourceCollapsed) {
-                          focusSourceAfterExpandRef.current = true;
-                          setIsSourceCollapsed(false);
-                          return;
-                        }
-                        setIsSourceCollapsed(true);
-                      }}
-                    >
-                      {isSourceCollapsed ? (
-                        <IconEdit className="size-4" aria-hidden />
-                      ) : (
-                        <IconCollapseContent className="size-4" aria-hidden />
-                      )}
-                    </Button>
-                    <Button
-                      type="button"
-                      className={iconButtonClassName}
-                      aria-label={t("translate.clearSource")}
-                      disabled={ocrBusy}
-                      onClick={() => {
-                        applySourceText("");
-                      }}
-                    >
-                      <IconClose className="size-4" aria-hidden />
-                    </Button>
-                  </>
+                <TextAutosize
+                  id="quick-translate-source"
+                  layout="grow"
+                  className="max-h-64 min-h-24"
+                  textareaClassName="px-3 pt-3 pb-2"
+                  minRows={6}
+                  placeholder={t("quickTranslate.sourcePlaceholder")}
+                  spellCheck={false}
+                  // OCR fills the field when done; block edits/Enter while recognize is in flight.
+                  disabled={ocrBusy}
+                  value={sourceText}
+                  onChange={(event) => {
+                    applySourceText(event.currentTarget.value);
+                  }}
+                  onKeyDown={(event) => {
+                    if (ocrBusy || event.key !== "Enter") {
+                      return;
+                    }
+                    // Always allow Ctrl/Cmd+Enter as an explicit run shortcut.
+                    if (event.ctrlKey || event.metaKey) {
+                      event.preventDefault();
+                      void runTranslations();
+                      return;
+                    }
+                    // Manual mode: Enter runs translation; Shift+Enter inserts a newline.
+                    if (!autoTranslate && !event.shiftKey) {
+                      event.preventDefault();
+                      void runTranslations();
+                    }
+                  }}
+                />
+              )}
+              <div className="flex h-8 shrink-0 items-center gap-1 px-2">
+                {detectedSourceLang ? (
+                  <p className="min-w-0 truncate text-label-sm text-neutral uppercase">
+                    {t("translate.detected", {
+                      language: t(`translate.languages.${detectedSourceLang}`),
+                    })}
+                  </p>
                 ) : null}
+                <div className="min-w-0 flex-1" />
+                <div className="flex shrink-0 items-center gap-0.5">
+                  {sourceText ? (
+                    <>
+                      <Button
+                        type="button"
+                        className={iconButtonClassName}
+                        aria-label={
+                          isSourceCollapsed ? t("quickTranslate.editSource") : t("quickTranslate.collapseSource")
+                        }
+                        disabled={ocrBusy}
+                        onClick={() => {
+                          if (isSourceCollapsed) {
+                            focusSourceAfterExpandRef.current = true;
+                            setIsSourceCollapsed(false);
+                            return;
+                          }
+                          setIsSourceCollapsed(true);
+                        }}
+                      >
+                        {isSourceCollapsed ? (
+                          <IconEdit className="size-4" aria-hidden />
+                        ) : (
+                          <IconCollapseContent className="size-4" aria-hidden />
+                        )}
+                      </Button>
+                      <Button
+                        type="button"
+                        className={iconButtonClassName}
+                        aria-label={t("translate.clearSource")}
+                        disabled={ocrBusy}
+                        onClick={() => {
+                          applySourceText("");
+                        }}
+                      >
+                        <IconClose className="size-4" aria-hidden />
+                      </Button>
+                    </>
+                  ) : null}
+                </div>
+              </div>
+            </div>
+
+            {/* Language selectors: same control chrome as main translate; full content width like input/cards */}
+            <div className="flex w-full shrink-0 items-center gap-1">
+              <div className="min-w-0 flex-1">
+                <ComboboxField
+                  value={sourceLang}
+                  onValueChange={(value) => {
+                    const next = (value ?? "auto") as SourceLanguageId;
+                    if (next === sourceLang) {
+                      return;
+                    }
+                    setSourceLang(next);
+                    setDetectedSourceLang(null);
+                    // Language change invalidates completed outputs (langnext-translate clears showText).
+                    invalidateInFlight();
+                    clearAllResults();
+                  }}
+                  options={sourceLanguageOptions.map((option) => ({ value: option.id, label: option.label }))}
+                  disabled={isTranslating}
+                  emptyText={t("common.noMatches")}
+                  aria-label={t("translate.sourceLanguage")}
+                />
+              </div>
+
+              <Button
+                type="button"
+                className={iconButtonClassName}
+                aria-label={t("translate.swapLanguages")}
+                onClick={swapLanguages}
+                disabled={isTranslating || (sourceLang === "auto" && !detectedSourceLang)}
+              >
+                <IconMaterialSymbolsLightSwapHoriz className="size-5" aria-hidden />
+              </Button>
+
+              <div className="min-w-0 flex-1">
+                <ComboboxField
+                  value={targetLang}
+                  onValueChange={(value) => {
+                    const next = (value ?? "en") as SelectableLanguageId;
+                    if (next === targetLang) {
+                      return;
+                    }
+                    setTargetLang(next);
+                    invalidateInFlight();
+                    clearAllResults();
+                  }}
+                  options={targetLanguageOptions.map((option) => ({ value: option.id, label: option.label }))}
+                  disabled={isTranslating}
+                  emptyText={t("common.noMatches")}
+                  aria-label={t("translate.targetLanguage")}
+                />
               </div>
             </div>
           </div>
 
-          {/* Language selectors: same control chrome as main translate; full content width like input/cards */}
-          <div className="flex w-full shrink-0 items-center gap-1">
-            <div className="min-w-0 flex-1">
-              <ComboboxField
-                value={sourceLang}
-                onValueChange={(value) => {
-                  const next = (value ?? "auto") as SourceLanguageId;
-                  if (next === sourceLang) {
-                    return;
-                  }
-                  setSourceLang(next);
-                  setDetectedSourceLang(null);
-                  // Language change invalidates completed outputs (langnext-translate clears showText).
-                  invalidateInFlight();
-                  clearAllResults();
-                }}
-                options={sourceLanguageOptions.map((option) => ({ value: option.id, label: option.label }))}
-                disabled={isTranslating}
-                emptyText={t("common.noMatches")}
-                aria-label={t("translate.sourceLanguage")}
-              />
-            </div>
-
-            <Button
-              type="button"
-              className={iconButtonClassName}
-              aria-label={t("translate.swapLanguages")}
-              onClick={swapLanguages}
-              disabled={isTranslating || (sourceLang === "auto" && !detectedSourceLang)}
-            >
-              <IconMaterialSymbolsLightSwapHoriz className="size-5" aria-hidden />
-            </Button>
-
-            <div className="min-w-0 flex-1">
-              <ComboboxField
-                value={targetLang}
-                onValueChange={(value) => {
-                  const next = (value ?? "en") as SelectableLanguageId;
-                  if (next === targetLang) {
-                    return;
-                  }
-                  setTargetLang(next);
-                  invalidateInFlight();
-                  clearAllResults();
-                }}
-                options={targetLanguageOptions.map((option) => ({ value: option.id, label: option.label }))}
-                disabled={isTranslating}
-                emptyText={t("common.noMatches")}
-                aria-label={t("translate.targetLanguage")}
-              />
-            </div>
-          </div>
-        </div>
-
-        <ScrollArea
-          className="min-h-0 min-w-0 flex-1 overflow-hidden"
-          contentClassName="h-fit min-w-0 w-full"
-          showScrollbarOnHover={false}
-          hideScrollbar={isHeightAdapting}
-        >
-          <div ref={setContentMeasureNode} className="flex h-fit w-full min-w-0 flex-col gap-4">
+          {/*
+          Results list is content-sized (contributes to page height).
+          Each card header stays put; only that card's text pane scrolls once it hits max-h.
+        */}
+          <div className="flex h-fit w-full min-w-0 flex-col gap-4">
             {profilesError ? (
               <p className="shrink-0 text-body-tight text-error" role="alert">
                 {profilesError}
@@ -1442,6 +1491,16 @@ function QuickTranslatePage() {
                   !profile && slot.profileId
                     ? [{ value: slot.profileId, label: t("quickTranslate.missingProfile") }]
                     : undefined;
+                const promptTemplateOptions = profile
+                  ? [
+                      { value: "", label: t("translate.promptTemplateDefault") },
+                      ...profile.promptTemplates.map((template) => ({
+                        value: template.id,
+                        label: template.name,
+                      })),
+                    ]
+                  : [{ value: "", label: t("translate.promptTemplateDefault") }];
+                const resolvedPromptTemplateId = resolveSlotPromptTemplateId(slot.promptTemplateId, profile);
 
                 return (
                   <Collapsible.Root
@@ -1470,7 +1529,7 @@ function QuickTranslatePage() {
                         aria-hidden
                       />
                       <div
-                        className="max-w-sm shrink-0"
+                        className="flex min-w-0 shrink items-center gap-1"
                         onClick={(event) => {
                           event.stopPropagation();
                         }}
@@ -1478,29 +1537,54 @@ function QuickTranslatePage() {
                           event.stopPropagation();
                         }}
                       >
-                        <SelectField
-                          className="
-                            h-7 border-0 bg-transparent text-table-header font-bold tracking-tight uppercase
-                            hover:not-data-disabled:bg-transparent
-                            data-popup-open:bg-transparent
-                          "
-                          value={slot.profileId}
-                          onValueChange={(value) => {
-                            if (value) {
-                              updateSlotProfile(slot.id, value);
-                            }
-                          }}
-                          options={profileSelectOptions}
-                          extraOptions={orphanOption}
-                          disabled={profilesLoading || profileSelectOptions.length === 0}
-                          aria-label={t("translate.profileAria")}
-                          compact
-                        />
+                        <div className="max-w-48 min-w-0 shrink">
+                          <SelectField
+                            className="
+                              h-7 border-0 bg-transparent text-table-header font-bold tracking-tight uppercase
+                              hover:not-data-disabled:bg-transparent
+                              data-popup-open:bg-transparent
+                            "
+                            value={slot.profileId}
+                            onValueChange={(value) => {
+                              if (value) {
+                                updateSlotProfile(slot.id, value);
+                              }
+                            }}
+                            options={profileSelectOptions}
+                            extraOptions={orphanOption}
+                            disabled={profilesLoading || profileSelectOptions.length === 0}
+                            aria-label={t("translate.profileAria")}
+                            compact
+                            icon={<ChevronUpDownIcon className="pointer-events-none size-4" />}
+                          />
+                        </div>
+                        <div className="max-w-48 min-w-0 shrink">
+                          <SelectField
+                            className="
+                              h-7 border-0 bg-transparent text-body-tight
+                              hover:not-data-disabled:bg-transparent
+                              data-popup-open:bg-transparent
+                            "
+                            value={resolvedPromptTemplateId}
+                            onValueChange={(value) => {
+                              updateSlotPromptTemplate(slot.id, value ?? "");
+                            }}
+                            options={promptTemplateOptions}
+                            disabled={profilesLoading || !profile}
+                            placeholder={profilesLoading ? t("translate.promptTemplateLoading") : undefined}
+                            aria-label={t("translate.promptTemplateAria")}
+                            compact
+                            icon={<ChevronUpDownIcon className="pointer-events-none size-4" />}
+                          />
+                        </div>
                       </div>
                       {/* flex-1 spacer: large blank hit target that toggles collapse */}
                       <div className="min-h-full min-w-0 flex-1" />
                       <div
-                        className="flex shrink-0 items-center gap-0.5"
+                        className="
+                          flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity duration-100
+                          group-hover:opacity-100
+                        "
                         onClick={(event) => {
                           event.stopPropagation();
                         }}
@@ -1560,12 +1644,14 @@ function QuickTranslatePage() {
                       "
                     >
                       {/*
-										  Grow without max-h: plain block so card height drives window resize.
-										  Font steps only inside minRows; then height grows with content.
-										*/}
+                      Grow up to max-h (matches source input): under the cap, height drives
+                      window resize; past the cap, this card alone scrolls (header stays fixed).
+                    */}
                       <TextAutosizeContent
                         layout="grow"
+                        className="max-h-64"
                         fontScale={isMarkdownView && !!result.text && !result.error ? "fixed" : "stepped"}
+                        // Local max-h ScrollArea only: follow the stream tail within this card.
                         stickToEnd={result.isTranslating}
                         contentClassName="p-3 leading-relaxed"
                         minRows={6}
@@ -1613,7 +1699,7 @@ function QuickTranslatePage() {
               })}
             </div>
           </div>
-        </ScrollArea>
+        </div>
       </div>
     </div>
   );

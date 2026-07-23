@@ -1,7 +1,7 @@
 // ABOUTME: Styled Base UI Select wrapper matching the project's outline/frame design tokens.
 // ABOUTME: Supports compact variant, disabled options, orphaned items, and placeholder text.
 
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
 import { Select } from "@base-ui/react/select";
 import IconClarityAngleLine from "~icons/clarity/angle-line";
 import IconMaterialSymbolsLightCheck from "~icons/material-symbols-light/check";
@@ -25,6 +25,8 @@ export type SelectFieldProps = {
   extraOptions?: SelectOption[];
   /** Omit w-full for inline / toolbar selects. */
   compact?: boolean;
+  /** Trailing trigger icon; defaults to angle-line with open-state rotation. */
+  icon?: ReactNode;
   "aria-label"?: string;
   "aria-labelledby"?: string;
 };
@@ -48,6 +50,7 @@ export function SelectField({
   placeholder,
   extraOptions,
   compact = false,
+  icon,
   "aria-label": ariaLabel,
   "aria-labelledby": ariaLabelledby,
 }: SelectFieldProps) {
@@ -72,13 +75,17 @@ export function SelectField({
           "
         />
         <Select.Icon
-          className="
+          className={
+            icon
+              ? "inline-flex size-4 shrink-0 items-center justify-center"
+              : `
             inline-flex size-4 shrink-0 rotate-180 items-center justify-center transition-transform duration-200
             ease-out
             data-popup-open:rotate-0
-          "
+          `
+          }
         >
-          <IconClarityAngleLine className="pointer-events-none size-4" />
+          {icon ?? <IconClarityAngleLine className="pointer-events-none size-4" />}
         </Select.Icon>
       </Select.Trigger>
       <Select.Portal>
