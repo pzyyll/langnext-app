@@ -80,7 +80,7 @@ function AddOcrServiceForm({ onCreated }: AddOcrServiceFormProps) {
     const providers = providersQuery.data ?? [];
     const providerNameById = new Map(providers.map((provider) => [provider.id, provider.displayName]));
     const sorted = models
-      .filter((model) => model.enabled)
+      .filter((model) => model.enabled && model.capabilityOverridesJson?.imageAnalysis === true)
       .slice()
       .sort((a, b) => {
         const providerA = providerNameById.get(a.providerInstanceId) ?? "";

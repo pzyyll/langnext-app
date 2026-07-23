@@ -14,6 +14,10 @@ import { iconButtonClassName } from "../components/ui";
 import { TitleBar } from "../components/win/TitleBar";
 import { cn } from "../lib/cn";
 import { isNavItemActive, primaryNavItems, settingsNavItem, type NavIconId, type NavItem } from "../shell/nav";
+import {
+  getSidebarOpen as loadSidebarOpenPreference,
+  setSidebarOpen as saveSidebarOpenPreference,
+} from "../shell/sidebarPreference";
 
 export const Route = createRootRoute({
   component: RootLayout,
@@ -121,7 +125,7 @@ function NavLinkLabel({ item, collapsed }: { item: NavItem; collapsed: boolean }
 
 function RootLayout() {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(() => loadSidebarOpenPreference());
   const { t } = useTranslation();
   const sidebarCollapsed = !sidebarOpen;
 
@@ -150,7 +154,11 @@ function RootLayout() {
         close
         sidebarOpen={sidebarOpen}
         onSidebarToggle={() => {
-          setSidebarOpen((open) => !open);
+          setSidebarOpen((open) => {
+            const next = !open;
+            saveSidebarOpenPreference(next);
+            return next;
+          });
         }}
       />
 

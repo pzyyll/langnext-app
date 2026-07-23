@@ -77,3 +77,11 @@ export const dialogBackdropClassName =
 /** Dialog popup panel */
 export const dialogPopupClassName =
   "shadow-frame fixed top-1/2 left-1/2 -mt-8 flex w-96 max-w-[calc(100vw-3rem)] -translate-x-1/2 -translate-y-1/2 flex-col gap-4 border border-line bg-surface p-gutter text-on-surface transition-[scale,opacity] duration-100 ease-out data-ending-style:scale-[0.98] data-ending-style:opacity-0 data-starting-style:scale-[0.98] data-starting-style:opacity-0";
+
+/** Base UI Tooltip.Popup (outline/frame style; softer shadow than dialogs) */
+export const tooltipPopupClassName =
+  "relative z-50 flex origin-(--transform-origin) flex-col border border-line bg-surface px-2 py-1 text-body-tight text-on-surface shadow-[0.25rem_0.25rem_0] shadow-shadow/12 transition-[transform,opacity] duration-100 ease-out data-ending-style:scale-[0.98] data-ending-style:opacity-0 data-instant:transition-none data-starting-style:scale-[0.98] data-starting-style:opacity-0";
+
+/** Base UI Tooltip.Arrow — diamond clipped to a side pointer */
+export const tooltipArrowClassName =
+  "relative block h-1.5 w-3 overflow-clip data-[side=bottom]:top-[-6px] data-[side=left]:right-[-9px] data-[side=left]:rotate-90 data-[side=right]:left-[-9px] data-[side=right]:-rotate-90 data-[side=top]:bottom-[-6px] data-[side=top]:rotate-180 before:absolute before:bottom-0 before:left-1/2 before:h-[calc(6px*sqrt(2))] before:w-[calc(6px*sqrt(2))] before:border before:border-line before:bg-surface before:content-[''] before:[transform:translate(-50%,50%)_rotate(45deg)]";

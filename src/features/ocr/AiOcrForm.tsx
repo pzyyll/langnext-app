@@ -86,19 +86,24 @@ export function AiOcrForm({
   const [renamingTemplateId, setRenamingTemplateId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
 
+  const imageModels = useMemo(
+    () => models.filter((model) => model.capabilityOverridesJson?.imageAnalysis === true),
+    [models],
+  );
+
   const modelOptions = useMemo(
     () =>
-      models
+      imageModels
         .filter((model) => model.enabled || model.id === providerModelId)
         .map((model) => ({
           value: model.id,
           label: modelLabel(model, providers),
           disabled: !model.enabled && model.id !== providerModelId,
         })),
-    [models, providers, providerModelId],
+    [imageModels, providers, providerModelId],
   );
 
-  const modelExists = models.some((model) => model.id === providerModelId);
+  const modelExists = imageModels.some((model) => model.id === providerModelId);
 
   function setTemplateOpen(templateId: string, open: boolean) {
     setCollapsedTemplateIds((current) => {
