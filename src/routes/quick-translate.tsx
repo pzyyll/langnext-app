@@ -1,6 +1,6 @@
 // ABOUTME: Always-on-top Quick Translate window: multi-preset parallel translation UI.
 // ABOUTME: Independent webview route (not a main-window modal); slots may repeat profiles.
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import { useAutoAnimate } from "@formkit/auto-animate/react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
@@ -8,6 +8,7 @@ import { listen } from "@tauri-apps/api/event";
 import { Button } from "@base-ui/react/button";
 import { Collapsible } from "@base-ui/react/collapsible";
 import { Menu } from "@base-ui/react/menu";
+import { Tooltip } from "@base-ui/react/tooltip";
 import { useTranslation } from "react-i18next";
 import IconMaterialSymbolsLightAdd from "~icons/material-symbols-light/add";
 import IconClose from "~icons/material-symbols/close";
@@ -32,7 +33,7 @@ import { SelectField } from "../components/SelectField";
 import { TextAutosize, TextAutosizeContent } from "../components/TextAutosize";
 import { TextLoading } from "../components/TextLoading";
 import { useToast } from "../components/toast/useToast";
-import { iconButtonClassName } from "../components/ui";
+import { iconButtonClassName, tooltipArrowClassName, tooltipPopupClassName } from "../components/ui";
 import { cn } from "../lib/cn";
 import { recognizeCapturedScreenshot, runScreenshotOcr } from "../features/ocr/runScreenshotOcr";
 import {
@@ -139,6 +140,28 @@ const menuItemClassName =
 
 const leadingButtonClassName =
   "inline-flex size-6 shrink-0 cursor-default items-center justify-center rounded-md border-0 bg-surface-2 text-on-surface shadow-sm select-none hover:bg-surface-3 active:bg-surface-3 active:shadow-none focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface data-popup-open:bg-surface-3 data-disabled:text-disabled";
+
+/** Shared hover delay for titlebar leading icon tooltips. */
+const LEADING_TOOLTIP_DELAY_MS = 300;
+/** Leave room for the 6px arrow tip between popup and trigger. */
+const LEADING_TOOLTIP_SIDE_OFFSET_PX = 8;
+
+/** Tooltip over an existing icon control (Button / Menu.Trigger via render prop). */
+function LeadingIconTooltip({ label, children }: { label: string; children: ReactElement }) {
+  return (
+    <Tooltip.Root>
+      <Tooltip.Trigger render={children} />
+      <Tooltip.Portal>
+        <Tooltip.Positioner sideOffset={LEADING_TOOLTIP_SIDE_OFFSET_PX}>
+          <Tooltip.Popup className={tooltipPopupClassName}>
+            <Tooltip.Arrow className={tooltipArrowClassName} />
+            {label}
+          </Tooltip.Popup>
+        </Tooltip.Positioner>
+      </Tooltip.Portal>
+    </Tooltip.Root>
+  );
+}
 
 function QuickTranslatePage() {
   const { t, i18n } = useTranslation();
@@ -1181,15 +1204,17 @@ function QuickTranslatePage() {
             pinned={isPinned}
             onPinChange={handlePinChange}
             leading={
-              <>
+              <Tooltip.Provider delay={LEADING_TOOLTIP_DELAY_MS}>
                 <Menu.Root>
-                  <Menu.Trigger
-                    className={leadingButtonClassName}
-                    aria-label={t("quickTranslate.addPreset")}
-                    disabled={profilesLoading || profiles.length === 0}
-                  >
-                    <IconMaterialSymbolsLightAdd className="pointer-events-none size-4" />
-                  </Menu.Trigger>
+                  <LeadingIconTooltip label={t("quickTranslate.addPreset")}>
+                    <Menu.Trigger
+                      className={leadingButtonClassName}
+                      aria-label={t("quickTranslate.addPreset")}
+                      disabled={profilesLoading || profiles.length === 0}
+                    >
+                      <IconMaterialSymbolsLightAdd className="pointer-events-none size-4" />
+                    </Menu.Trigger>
+                  </LeadingIconTooltip>
                   <Menu.Portal>
                     <Menu.Positioner className="z-50 outline-hidden" sideOffset={4} align="start">
                       <Menu.Popup
@@ -1219,57 +1244,67 @@ function QuickTranslatePage() {
                     </Menu.Positioner>
                   </Menu.Portal>
                 </Menu.Root>
-                <Button
-                  type="button"
-                  className={leadingButtonClassName}
-                  aria-label={isMarkdownView ? t("translate.plainText") : t("translate.markdownPreview")}
-                  aria-pressed={isMarkdownView}
-                  onClick={() => {
-                    setOutputViewModeState((current) => {
-                      const next = toggleOutputViewMode(current);
-                      setOutputViewMode(next);
-                      return next;
-                    });
-                  }}
-                >
-                  {isMarkdownView ? (
-                    <IconMaterialSymbolsLightMarkdown className="pointer-events-none size-4" aria-hidden />
-                  ) : (
-                    <IconMaterialSymbolsLightMarkdownOutline className="pointer-events-none size-4" aria-hidden />
-                  )}
-                </Button>
-                <Button
-                  type="button"
-                  className={leadingButtonClassName}
-                  aria-label={
+                <LeadingIconTooltip label={isMarkdownView ? t("translate.plainText") : t("translate.markdownPreview")}>
+                  <Button
+                    type="button"
+                    className={leadingButtonClassName}
+                    aria-label={isMarkdownView ? t("translate.plainText") : t("translate.markdownPreview")}
+                    aria-pressed={isMarkdownView}
+                    onClick={() => {
+                      setOutputViewModeState((current) => {
+                        const next = toggleOutputViewMode(current);
+                        setOutputViewMode(next);
+                        return next;
+                      });
+                    }}
+                  >
+                    {isMarkdownView ? (
+                      <IconMaterialSymbolsLightMarkdown className="pointer-events-none size-4" aria-hidden />
+                    ) : (
+                      <IconMaterialSymbolsLightMarkdownOutline className="pointer-events-none size-4" aria-hidden />
+                    )}
+                  </Button>
+                </LeadingIconTooltip>
+                <LeadingIconTooltip
+                  label={
                     autoTranslate ? t("quickTranslate.disableAutoTranslate") : t("quickTranslate.enableAutoTranslate")
                   }
-                  aria-pressed={autoTranslate}
-                  onClick={() => {
-                    setAutoTranslate((prev) => !prev);
-                  }}
                 >
-                  {autoTranslate ? (
-                    <FlashAutoIcon className="pointer-events-none size-4" aria-hidden />
-                  ) : (
-                    <FlashAutoOutlineIcon className="pointer-events-none size-4" aria-hidden />
-                  )}
-                </Button>
-                <Button
-                  type="button"
-                  className={leadingButtonClassName}
-                  aria-label={ocrBusy ? t("quickTranslate.ocrRecognizing") : t("quickTranslate.ocrAria")}
-                  disabled={!isTauriRuntime() || ocrBusy}
-                  onClick={() => {
-                    void handleScreenshotOcr();
-                  }}
-                >
-                  <IconMaterialSymbolsLightDocumentScannerOutline
-                    className={cn("pointer-events-none size-4", ocrBusy && "animate-pulse")}
-                    aria-hidden
-                  />
-                </Button>
-              </>
+                  <Button
+                    type="button"
+                    className={leadingButtonClassName}
+                    aria-label={
+                      autoTranslate ? t("quickTranslate.disableAutoTranslate") : t("quickTranslate.enableAutoTranslate")
+                    }
+                    aria-pressed={autoTranslate}
+                    onClick={() => {
+                      setAutoTranslate((prev) => !prev);
+                    }}
+                  >
+                    {autoTranslate ? (
+                      <FlashAutoIcon className="pointer-events-none size-4" aria-hidden />
+                    ) : (
+                      <FlashAutoOutlineIcon className="pointer-events-none size-4" aria-hidden />
+                    )}
+                  </Button>
+                </LeadingIconTooltip>
+                <LeadingIconTooltip label={ocrBusy ? t("quickTranslate.ocrRecognizing") : t("quickTranslate.ocrAria")}>
+                  <Button
+                    type="button"
+                    className={leadingButtonClassName}
+                    aria-label={ocrBusy ? t("quickTranslate.ocrRecognizing") : t("quickTranslate.ocrAria")}
+                    disabled={!isTauriRuntime() || ocrBusy}
+                    onClick={() => {
+                      void handleScreenshotOcr();
+                    }}
+                  >
+                    <IconMaterialSymbolsLightDocumentScannerOutline
+                      className={cn("pointer-events-none size-4", ocrBusy && "animate-pulse")}
+                      aria-hidden
+                    />
+                  </Button>
+                </LeadingIconTooltip>
+              </Tooltip.Provider>
             }
           />
         </div>
