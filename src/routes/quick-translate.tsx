@@ -761,6 +761,22 @@ function QuickTranslatePage() {
     }
     await applyOcrOutcome(() => runScreenshotOcr());
   }, [applyOcrOutcome]);
+
+  // Drop focus inside the source shell so focus-within outline cannot cover the border-beam.
+  useEffect(() => {
+    if (!ocrBusy) {
+      return;
+    }
+    const active = document.activeElement;
+    if (!(active instanceof HTMLElement)) {
+      return;
+    }
+    const shell = active.closest("[data-quick-translate-source-shell]");
+    if (shell) {
+      active.blur();
+    }
+  }, [ocrBusy]);
+
   // Focus after preview → editor so the textarea exists in the DOM first.
   // Place the caret at the end; default focus leaves it at index 0.
   useEffect(() => {
@@ -1216,15 +1232,16 @@ function QuickTranslatePage() {
         <div ref={fixedChromeMeasureRef} className="flex min-w-0 shrink-0 flex-col gap-4">
           {/* Source input: editor, or single-line preview when collapsed; footer toolbar always shown. */}
           <div
+            data-quick-translate-source-shell
             className={cn(
               // min-w-0 + overflow-hidden: long unbroken preview text must not expand the pane.
-              `
-                flex min-w-0 shrink-0 flex-col overflow-hidden border border-line bg-surface-container-lowest
-                focus-within:outline-2 focus-within:-outline-offset-1 focus-within:outline-on-surface
-              `,
+              "flex min-w-0 shrink-0 flex-col overflow-hidden border border-line bg-surface-container-lowest",
               isSourceCollapsed && sourceText ? "min-h-0" : "min-h-32",
               // OCR only: flowing border while recognizeCapturedScreenshot / runScreenshotOcr runs.
               ocrBusy && "border-beam",
+              // Busy beam is the status chrome; suppress focus ring so it is not covered.
+              !ocrBusy &&
+                "focus-within:outline-2 focus-within:-outline-offset-1 focus-within:outline-on-surface",
             )}
             aria-busy={ocrBusy || undefined}
           >
@@ -1240,6 +1257,7 @@ function QuickTranslatePage() {
                   focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface
                 "
                 aria-label={t("quickTranslate.editSource")}
+                disabled={ocrBusy}
                 onClick={() => {
                   focusSourceAfterExpandRef.current = true;
                   setIsSourceCollapsed(false);
@@ -1306,6 +1324,7 @@ function QuickTranslatePage() {
                       aria-label={
                         isSourceCollapsed ? t("quickTranslate.editSource") : t("quickTranslate.collapseSource")
                       }
+                      disabled={ocrBusy}
                       onClick={() => {
                         if (isSourceCollapsed) {
                           focusSourceAfterExpandRef.current = true;
