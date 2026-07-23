@@ -59,6 +59,7 @@ export default defineConfig([
             "^no-app-drag$",
             "^shadow-frame$",
             "^page-transition$",
+            "^border-beam$",
           ],
         },
       ],

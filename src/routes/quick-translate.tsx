@@ -677,8 +677,11 @@ function QuickTranslatePage() {
       enabledModelIds,
       failSlots,
       i18n.language,
+      modelsQuery.data,
       patchResult,
       profileById,
+      profilesQuery.data,
+      providersQuery.data,
       queryClient,
       showTranslateErrorToast,
       slotStreams,
@@ -1313,7 +1316,7 @@ function QuickTranslatePage() {
 							  Inner span carries truncate: button text nodes do not ellipsize reliably
 							  across engines when the shell is a flex item.
 							*/}
-                  <span className="block min-w-0 w-full truncate">{sourceText.split(/\r?\n/, 1)[0] ?? ""}</span>
+                  <span className="block w-full min-w-0 truncate">{sourceText.split(/\r?\n/, 1)[0] ?? ""}</span>
                   {sourceHasMultipleLines ? (
                     <span className="flex w-full items-center justify-center" aria-hidden>
                       <RoundKeyboardArrowDownIcon className="size-4 text-neutral" />
