@@ -10,7 +10,9 @@ import IconMaterialSymbolsLightHistory from "~icons/material-symbols-light/histo
 import IconMaterialSymbolsLightNeurology from "~icons/material-symbols-light/neurology";
 import IconMaterialSymbolsLightSettings from "~icons/material-symbols-light/settings";
 import IconMaterialSymbolsLightTranslate from "~icons/material-symbols-light/translate";
+import { iconButtonClassName } from "../components/ui";
 import { TitleBar } from "../components/win/TitleBar";
+import { cn } from "../lib/cn";
 import { isNavItemActive, primaryNavItems, settingsNavItem, type NavIconId, type NavItem } from "../shell/nav";
 
 export const Route = createRootRoute({
@@ -18,21 +20,72 @@ export const Route = createRootRoute({
 });
 
 const SIDEBAR_WIDTH_CLASS = "w-sidebar-width";
+const SIDEBAR_COLLAPSED_WIDTH_CLASS = "w-sidebar-collapsed";
 
-/** Idle nav row — design: text-on-surface-variant, hover surface-container-highest. */
-const navLinkClassName =
-  "flex w-full items-center gap-2 rounded-none border-l-4 border-transparent bg-transparent px-gutter py-2 text-label-sm leading-none font-normal tracking-wide text-on-surface-variant uppercase transition-colors duration-100 select-none hover:bg-surface-container-highest hover:text-on-surface focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface active:scale-[0.98]";
+const navColorTransitionClassName = "transition-[background-color,color,transform] duration-100";
 
-/** Active nav row — design: solid primary (black) fill + on-primary label. */
-const navLinkActiveClassName =
-  "flex w-full items-center gap-2 rounded-none border-l-4 border-primary bg-primary px-gutter py-2 text-label-sm leading-none font-normal tracking-wide text-on-primary uppercase transition-colors duration-100 select-none focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-primary active:scale-[0.98]";
+/** Idle nav row — text-on-surface-variant, hover surface-container-highest. Selected uses primary fill only. */
+const navLinkClassName = cn(
+  `
+    flex w-full items-center gap-2 rounded-none bg-transparent px-gutter py-2 text-label-sm leading-none font-normal
+    tracking-wide text-on-surface-variant uppercase select-none
+    hover:bg-surface-container-highest hover:text-on-surface
+    focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface
+    active:scale-[0.98]
+  `,
+  navColorTransitionClassName,
+);
 
-/** Footer settings idle — denser label, no full-height bar until selected. */
-const footerNavLinkClassName =
-  "flex w-full items-center gap-2 rounded-none border-l-4 border-transparent bg-transparent px-gutter py-1.5 text-[11px] leading-none font-normal tracking-wide text-on-surface-variant uppercase transition-colors duration-100 select-none hover:text-primary focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface active:scale-[0.98]";
+/** Active nav row — solid primary fill + on-primary label (no left rail). */
+const navLinkActiveClassName = cn(
+  `
+    flex w-full items-center gap-2 rounded-none bg-primary px-gutter py-2 text-label-sm leading-none font-normal
+    tracking-wide text-on-primary uppercase select-none
+    focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-primary
+    active:scale-[0.98]
+  `,
+  navColorTransitionClassName,
+);
 
-const footerNavLinkActiveClassName =
-  "flex w-full items-center gap-2 rounded-none border-l-4 border-primary bg-primary px-gutter py-1.5 text-[11px] leading-none font-normal tracking-wide text-on-primary uppercase transition-colors duration-100 select-none focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-primary active:scale-[0.98]";
+/** Footer settings idle — denser label. */
+const footerNavLinkClassName = cn(
+  `
+    flex w-full items-center gap-2 rounded-none bg-transparent px-gutter py-1.5 text-[11px] leading-none font-normal
+    tracking-wide text-on-surface-variant uppercase select-none
+    hover:text-primary
+    focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface
+    active:scale-[0.98]
+  `,
+  navColorTransitionClassName,
+);
+
+const footerNavLinkActiveClassName = cn(
+  `
+    flex w-full items-center gap-2 rounded-none bg-primary px-gutter py-1.5 text-[11px] leading-none font-normal
+    tracking-wide text-on-primary uppercase select-none
+    focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-primary
+    active:scale-[0.98]
+  `,
+  navColorTransitionClassName,
+);
+
+/** Collapsed rail: reuse IconButton ghost styles on router Links. */
+const navIconLinkClassName = cn(
+  iconButtonClassName,
+  `
+    [&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:transition-transform [&_svg]:duration-150
+    [&_svg]:group-hover/icon-btn:scale-110
+  `,
+);
+
+const navIconLinkActiveClassName = cn(
+  navIconLinkClassName,
+  `
+    bg-primary text-on-primary
+    hover:bg-primary hover:text-on-primary
+    active:bg-primary active:text-on-primary
+  `,
+);
 
 const navIconById: Record<NavIconId, ComponentType<SVGProps<SVGSVGElement>>> = {
   translate: IconMaterialSymbolsLightTranslate,
@@ -55,13 +108,13 @@ function isSecondaryWindowPath(pathname: string): boolean {
   return isQuickTranslatePath(pathname) || isScreenshotOverlayPath(pathname);
 }
 
-function NavLinkLabel({ item }: { item: NavItem }) {
+function NavLinkLabel({ item, collapsed }: { item: NavItem; collapsed: boolean }) {
   const { t } = useTranslation();
   const Icon = navIconById[item.icon];
   return (
     <>
-      <Icon className="pointer-events-none size-5 shrink-0" aria-hidden />
-      <span className="min-w-0 truncate">{t(item.labelKey)}</span>
+      <Icon className={cn("pointer-events-none shrink-0", collapsed ? "size-4" : "size-5")} aria-hidden />
+      {collapsed ? null : <span className="min-w-0 truncate">{t(item.labelKey)}</span>}
     </>
   );
 }
@@ -70,6 +123,7 @@ function RootLayout() {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const { t } = useTranslation();
+  const sidebarCollapsed = !sidebarOpen;
 
   // Secondary windows (Quick Translate, screenshot overlay): no main sidebar chrome.
   // Do not mount router devtools here — FloatingTanStackRouterDevtools injects
@@ -102,23 +156,24 @@ function RootLayout() {
 
       <div className="flex min-h-0 flex-1">
         <aside
-          aria-hidden={!sidebarOpen}
-          className={`
-            flex shrink-0 flex-col overflow-hidden border-outline bg-surface-container transition-[width,border-color]
-            duration-200 ease-out
-            ${
-              sidebarOpen
-                ? `
-                  ${SIDEBAR_WIDTH_CLASS}
-                  border-r
-                `
-                : "w-0 border-r-0"
-            }
-          `}
+          className={cn(
+            `
+              flex shrink-0 flex-col overflow-hidden border-r border-outline bg-surface-container transition-[width]
+              duration-200 ease-out
+            `,
+            sidebarOpen ? SIDEBAR_WIDTH_CLASS : SIDEBAR_COLLAPSED_WIDTH_CLASS,
+          )}
         >
-          <nav className="flex min-w-sidebar-width flex-1 flex-col gap-0.5" aria-label={t("nav.mainAria")}>
+          <nav
+            className={cn(
+              "flex flex-1 flex-col",
+              sidebarCollapsed ? "items-center gap-1 p-1.5" : "min-w-sidebar-width gap-0.5",
+            )}
+            aria-label={t("nav.mainAria")}
+          >
             {primaryNavItems.map((item) => {
               const active = isNavItemActive(item, pathname);
+              const label = t(item.labelKey);
               return (
                 <Link
                   draggable={false}
@@ -126,8 +181,17 @@ function RootLayout() {
                   to={item.to}
                   // Do not set viewTransition={true} here — it overrides
                   // defaultViewTransition.types (scroll-up / scroll-down).
-                  tabIndex={sidebarOpen ? undefined : -1}
-                  className={active ? navLinkActiveClassName : navLinkClassName}
+                  title={sidebarCollapsed ? label : undefined}
+                  aria-label={sidebarCollapsed ? label : undefined}
+                  className={
+                    sidebarCollapsed
+                      ? active
+                        ? navIconLinkActiveClassName
+                        : navIconLinkClassName
+                      : active
+                        ? navLinkActiveClassName
+                        : navLinkClassName
+                  }
                   activeOptions={{ exact: item.exact }}
                   onClick={(event) => {
                     // Already on this page: skip navigation and view transition.
@@ -136,19 +200,31 @@ function RootLayout() {
                     }
                   }}
                 >
-                  <NavLinkLabel item={item} />
+                  <NavLinkLabel item={item} collapsed={sidebarCollapsed} />
                 </Link>
               );
             })}
           </nav>
 
-          <div className="min-w-sidebar-width border-t border-outline/20">
+          <div
+            className={cn(
+              "border-t border-outline/20",
+              sidebarCollapsed ? "flex justify-center p-1.5" : "min-w-sidebar-width",
+            )}
+          >
             <Link
               draggable={false}
               to={settingsNavItem.to}
-              tabIndex={sidebarOpen ? undefined : -1}
+              title={sidebarCollapsed ? t(settingsNavItem.labelKey) : undefined}
+              aria-label={sidebarCollapsed ? t(settingsNavItem.labelKey) : undefined}
               className={
-                isNavItemActive(settingsNavItem, pathname) ? footerNavLinkActiveClassName : footerNavLinkClassName
+                sidebarCollapsed
+                  ? isNavItemActive(settingsNavItem, pathname)
+                    ? navIconLinkActiveClassName
+                    : navIconLinkClassName
+                  : isNavItemActive(settingsNavItem, pathname)
+                    ? footerNavLinkActiveClassName
+                    : footerNavLinkClassName
               }
               activeOptions={{ exact: settingsNavItem.exact }}
               onClick={(event) => {
@@ -157,7 +233,7 @@ function RootLayout() {
                 }
               }}
             >
-              <NavLinkLabel item={settingsNavItem} />
+              <NavLinkLabel item={settingsNavItem} collapsed={sidebarCollapsed} />
             </Link>
           </div>
         </aside>
