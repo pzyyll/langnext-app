@@ -68,6 +68,7 @@ mise run tauri:build   # Package installers and portable zip
 ## Project Conventions
 
 - Do not use `new`, `improved`, or `enhanced` in names.
+- Spaces only (`tabWidth: 2`). Never mix tabs and spaces, including comments; Prettier/`format:check` does not catch comment-internal tabs.
 
 ### TanStack Router
 

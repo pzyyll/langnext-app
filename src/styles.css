@@ -297,6 +297,8 @@
   /* Channel list item enter/exit — apply to inner Link only (not dnd-kit li) */
   --animate-channel-enter: channel-enter 150ms ease-out;
   --animate-channel-exit: channel-exit 120ms ease-in forwards;
+  /* Collapsed multi-line source: expand affordance bounces down then back. */
+  --animate-expand-arrow-bounce: expand-arrow-bounce 1.2s ease-in-out infinite;
 
   @keyframes channel-enter {
     from {
@@ -317,6 +319,16 @@
     to {
       opacity: 0;
       transform: translateY(-0.25rem);
+    }
+  }
+
+  @keyframes expand-arrow-bounce {
+    0%,
+    100% {
+      transform: translateY(0);
+    }
+    50% {
+      transform: translateY(0.25rem);
     }
   }
 }

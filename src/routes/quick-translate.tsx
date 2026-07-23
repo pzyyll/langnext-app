@@ -24,7 +24,7 @@ import IconMaterialSymbolsLightSwapHoriz from "~icons/material-symbols-light/swa
 import ExpandCircleDownOutlineIcon from "~icons/material-symbols/expand-circle-down-outline";
 import FlashAutoIcon from "~icons/material-symbols/flash-auto";
 import FlashAutoOutlineIcon from "~icons/material-symbols/flash-auto-outline";
-import RoundKeyboardArrowDownIcon from "~icons/ic/round-keyboard-arrow-down";
+import RoundKeyboardArrowDownIcon from "~icons/ic/round-keyboard-double-arrow-down";
 import ChevronUpDownIcon from "~icons/mdi/chevron-up-down";
 import { MarkdownOutput } from "../components/markdown/MarkdownOutput";
 import { TitleBar } from "../components/win/TitleBar";
@@ -1334,11 +1334,12 @@ function QuickTranslatePage() {
                   type="button"
                   className={cn(
                     `
-                      flex w-full min-w-0 cursor-default border-0 bg-transparent px-3 pt-3 text-left text-body-md
+                      relative w-full min-w-0 cursor-default border-0 bg-transparent px-3 pt-3 text-left text-body-md
                       text-on-surface
                       focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface
                     `,
-                    sourceHasMultipleLines ? "flex-col pb-0.5" : "pb-2",
+                    // Multi-line: room for the expand arrow in bottom padding (not a second text row).
+                    sourceHasMultipleLines ? "pb-4" : "pb-2",
                   )}
                   aria-label={t("quickTranslate.editSource")}
                   disabled={ocrBusy}
@@ -1348,21 +1349,26 @@ function QuickTranslatePage() {
                   }}
                 >
                   {/*
-							  Inner span carries truncate: button text nodes do not ellipsize reliably
-							  across engines when the shell is a flex item.
-							*/}
+                    Inner span carries truncate: button text nodes do not ellipsize reliably
+                    across engines when the shell is a flex item.
+                  */}
                   <span className="block w-full min-w-0 truncate">{sourceText.split(/\r?\n/, 1)[0] ?? ""}</span>
                   {sourceHasMultipleLines ? (
-                    <span className="flex w-full items-center justify-center" aria-hidden>
-                      <RoundKeyboardArrowDownIcon className="size-4 text-neutral" />
+                    <span className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center" aria-hidden>
+                      <RoundKeyboardArrowDownIcon
+                        className="
+                          size-4 animate-expand-arrow-bounce text-neutral
+                          motion-reduce:animate-none
+                        "
+                      />
                     </span>
                   ) : null}
                 </button>
               ) : (
                 /*
-						  min-h-24 ≈ former h-32 chrome minus h-8 toolbar.
-						  minRows={6} keeps a fixed font-scaling floor while height may grow to max-h-64.
-						*/
+                  min-h-24 ≈ former h-32 chrome minus h-8 toolbar.
+                  minRows={6} keeps a fixed font-scaling floor while height may grow to max-h-64.
+                */
                 <TextAutosize
                   id="quick-translate-source"
                   layout="grow"
@@ -1669,9 +1675,9 @@ function QuickTranslatePage() {
                       </div>
                     </Collapsible.Trigger>
                     {/*
-									  keepMounted: preserve stepped font across collapse. Unmounting reset font to
-									  largest; open measured tall then shrank → stretch/shrink jitter on long results.
-									*/}
+                      keepMounted: preserve stepped font across collapse. Unmounting reset font to
+                      largest; open measured tall then shrank → stretch/shrink jitter on long results.
+                    */}
                     <Collapsible.Panel
                       keepMounted
                       className="
