@@ -7,6 +7,7 @@ pub mod model;
 pub mod ocr_service;
 pub mod provider;
 pub mod provider_http;
+pub mod service_integration;
 pub mod settings;
 pub mod time;
 pub mod translation;

@@ -5,14 +5,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { listen } from "@tauri-apps/api/event";
 import { logger } from "../logger";
 import { createDebouncedInvalidator } from "./debouncedInvalidator";
-import {
-  DATA_MODELS_CHANGED,
-  DATA_OCR_SERVICES_CHANGED,
-  DATA_PROVIDERS_CHANGED,
-  DATA_TRANSLATION_HISTORY_CHANGED,
-  DATA_TRANSLATION_PROFILES_CHANGED,
-} from "./events";
-import { historyKeys, modelKeys, ocrKeys, profileKeys, providerKeys } from "./keys";
+import { DATA_CHANGE_EVENT_BINDINGS } from "./dataChangeEventBindings";
 import { registerDataChangeListeners } from "./registerDataChangeListeners";
 
 /** Coalesce bulk model-delete event storms into one invalidate per prefix. */
@@ -48,40 +41,14 @@ export function QueryEventSync() {
         onError: (event, error) => {
           logger.error(`query_event_listen_failed event=${event}`, error);
         },
-        events: [
-          {
-            name: DATA_TRANSLATION_PROFILES_CHANGED,
-            onEvent: () => {
-              invalidator.schedule(profileKeys.all);
-            },
+        events: DATA_CHANGE_EVENT_BINDINGS.map((binding) => ({
+          name: binding.event,
+          onEvent: () => {
+            for (const queryKey of binding.invalidateKeys) {
+              invalidator.schedule(queryKey);
+            }
           },
-          {
-            name: DATA_PROVIDERS_CHANGED,
-            onEvent: () => {
-              // Provider enablement affects model availability in selectors.
-              invalidator.schedule(providerKeys.all);
-              invalidator.schedule(modelKeys.all);
-            },
-          },
-          {
-            name: DATA_MODELS_CHANGED,
-            onEvent: () => {
-              invalidator.schedule(modelKeys.all);
-            },
-          },
-          {
-            name: DATA_TRANSLATION_HISTORY_CHANGED,
-            onEvent: () => {
-              invalidator.schedule(historyKeys.all);
-            },
-          },
-          {
-            name: DATA_OCR_SERVICES_CHANGED,
-            onEvent: () => {
-              invalidator.schedule(ocrKeys.all);
-            },
-          },
-        ],
+        })),
       });
 
       if (cancelled) {
@@ -93,11 +60,11 @@ export function QueryEventSync() {
       // Close the gap between mount and listener readiness: any mutation that
       // emitted during subscribe setup is recovered by a one-shot invalidate.
       if (result.unlisteners.length > 0) {
-        void queryClient.invalidateQueries({ queryKey: profileKeys.all });
-        void queryClient.invalidateQueries({ queryKey: providerKeys.all });
-        void queryClient.invalidateQueries({ queryKey: modelKeys.all });
-        void queryClient.invalidateQueries({ queryKey: historyKeys.all });
-        void queryClient.invalidateQueries({ queryKey: ocrKeys.all });
+        for (const binding of DATA_CHANGE_EVENT_BINDINGS) {
+          for (const queryKey of binding.invalidateKeys) {
+            void queryClient.invalidateQueries({ queryKey });
+          }
+        }
       }
     }
 

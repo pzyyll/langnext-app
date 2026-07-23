@@ -6,6 +6,7 @@ pub mod ocr_services;
 pub mod provider_http;
 pub mod providers;
 pub mod runtime;
+pub mod service_integrations;
 pub mod settings;
 pub mod snap;
 pub mod translation_history;

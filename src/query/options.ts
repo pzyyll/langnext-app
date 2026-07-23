@@ -3,19 +3,23 @@
 import { queryOptions } from "@tanstack/react-query";
 import {
   getAppSettings,
+  getIntegrationInstance,
   getOcrService,
   getTranslationHistory,
   getTranslationProfile,
   listAllProviderModels,
+  listIntegrationInstanceDependencies,
+  listIntegrationInstances,
   listOcrServices,
   listProviderInstances,
   listProviderModels,
+  listServiceIntegrationDefinitions,
   listTranslationHistory,
   listTranslationHistoryModelFacets,
   listTranslationProfiles,
 } from "../storage/client";
 import type { TranslationHistoryListQuery } from "../storage/types";
-import { historyKeys, modelKeys, ocrKeys, profileKeys, providerKeys, settingsKeys } from "./keys";
+import { historyKeys, integrationKeys, modelKeys, ocrKeys, profileKeys, providerKeys, settingsKeys } from "./keys";
 
 export function providerListOptions() {
   return queryOptions({
@@ -87,6 +91,36 @@ export function ocrDetailOptions(id: string) {
   return queryOptions({
     queryKey: ocrKeys.detail(id),
     queryFn: () => getOcrService(id),
+    enabled: id.length > 0,
+  });
+}
+
+export function integrationListOptions() {
+  return queryOptions({
+    queryKey: integrationKeys.list(),
+    queryFn: listIntegrationInstances,
+  });
+}
+
+export function integrationDetailOptions(id: string) {
+  return queryOptions({
+    queryKey: integrationKeys.detail(id),
+    queryFn: () => getIntegrationInstance(id),
+    enabled: id.length > 0,
+  });
+}
+
+export function integrationDefinitionListOptions() {
+  return queryOptions({
+    queryKey: integrationKeys.definitions(),
+    queryFn: listServiceIntegrationDefinitions,
+  });
+}
+
+export function integrationDependencyListOptions(id: string) {
+  return queryOptions({
+    queryKey: integrationKeys.dependencies(id),
+    queryFn: () => listIntegrationInstanceDependencies(id),
     enabled: id.length > 0,
   });
 }

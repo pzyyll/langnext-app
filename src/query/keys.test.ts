@@ -1,7 +1,7 @@
 // ABOUTME: Contract tests for Query key hierarchy and prefix invalidation shape.
 // ABOUTME: Pure key factories only — no DOM or IPC required.
 import { describe, expect, test } from "bun:test";
-import { modelKeys, ocrKeys, profileKeys, providerKeys } from "./keys";
+import { integrationKeys, modelKeys, ocrKeys, profileKeys, providerKeys } from "./keys";
 
 describe("providerKeys", () => {
   test("list key starts with providerKeys.all", () => {
@@ -59,6 +59,29 @@ describe("ocrKeys", () => {
     expect(list).toEqual(["ocr-services", "list"]);
     expect(detailA).toEqual(["ocr-services", "detail", "id-a"]);
     expect(detailB).toEqual(["ocr-services", "detail", "id-b"]);
+    expect(detailA).not.toEqual(detailB);
+  });
+});
+
+describe("integrationKeys", () => {
+  test("list, detail, definitions, and dependencies share integrationKeys.all prefix", () => {
+    const list = integrationKeys.list();
+    const detailA = integrationKeys.detail("id-a");
+    const detailB = integrationKeys.detail("id-b");
+    const definitions = integrationKeys.definitions();
+    const dependencies = integrationKeys.dependencies("id-a");
+
+    expect(list[0]).toBe(integrationKeys.all[0]);
+    expect(detailA[0]).toBe(integrationKeys.all[0]);
+    expect(detailB[0]).toBe(integrationKeys.all[0]);
+    expect(definitions[0]).toBe(integrationKeys.all[0]);
+    expect(dependencies[0]).toBe(integrationKeys.all[0]);
+
+    expect(list).toEqual(["service-integrations", "list"]);
+    expect(detailA).toEqual(["service-integrations", "detail", "id-a"]);
+    expect(detailB).toEqual(["service-integrations", "detail", "id-b"]);
+    expect(definitions).toEqual(["service-integrations", "definitions"]);
+    expect(dependencies).toEqual(["service-integrations", "dependencies", "id-a"]);
     expect(detailA).not.toEqual(detailB);
   });
 });

@@ -3,6 +3,10 @@
 import type {
   AppSettingsDto,
   AppSettingsUpdate,
+  IntegrationDependencyDto,
+  IntegrationInstanceDto,
+  IntegrationInstanceWrite,
+  IntegrationValidationResult,
   ManualModelWrite,
   ModelConfigWrite,
   OcrRecognizeInput,
@@ -15,6 +19,7 @@ import type {
   RegionScreenshotBackdrop,
   RegionScreenshotResult,
   RegionScreenshotSelection,
+  ServiceIntegrationManifest,
   ShortcutDefinition,
   TranslationHistoryDto,
   TranslationHistoryListQuery,
@@ -116,6 +121,39 @@ export async function saveOcrService(input: OcrServiceWrite): Promise<OcrService
 
 export async function deleteOcrService(id: string): Promise<void> {
   return runStorage(invokeEffect<void>("delete_ocr_service", { id }));
+}
+
+export async function listServiceIntegrationDefinitions(): Promise<ServiceIntegrationManifest[]> {
+  return runStorage(invokeEffect<ServiceIntegrationManifest[]>("list_service_integration_definitions"));
+}
+
+export async function listIntegrationInstances(): Promise<IntegrationInstanceDto[]> {
+  return runStorage(invokeEffect<IntegrationInstanceDto[]>("list_integration_instances"));
+}
+
+export async function getIntegrationInstance(id: string): Promise<IntegrationInstanceDto> {
+  return runStorage(invokeEffect<IntegrationInstanceDto>("get_integration_instance", { id }));
+}
+
+export async function saveIntegrationInstance(input: IntegrationInstanceWrite): Promise<IntegrationInstanceDto> {
+  return runStorage(invokeEffect<IntegrationInstanceDto>("save_integration_instance", { input }));
+}
+
+export async function setIntegrationInstanceEnabled(id: string, enabled: boolean): Promise<IntegrationInstanceDto> {
+  return runStorage(invokeEffect<IntegrationInstanceDto>("set_integration_instance_enabled", { id, enabled }));
+}
+
+export async function listIntegrationInstanceDependencies(id: string): Promise<IntegrationDependencyDto[]> {
+  return runStorage(invokeEffect<IntegrationDependencyDto[]>("list_integration_instance_dependencies", { id }));
+}
+
+export async function deleteIntegrationInstance(id: string): Promise<void> {
+  return runStorage(invokeEffect<void>("delete_integration_instance", { id }));
+}
+
+/** Local-only validation (Phase 1A). Never claims remote/IAM health. */
+export async function validateIntegrationInstance(id: string): Promise<IntegrationValidationResult> {
+  return runStorage(invokeEffect<IntegrationValidationResult>("validate_integration_instance", { id }));
 }
 
 /** Native Baidu OCR only. AI OCR is handled by `src/features/ocr/recognizeOcrFlow.ts`. */

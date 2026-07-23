@@ -16,6 +16,7 @@ pub const MIGRATIONS: &[&str] = &[
   include_str!("../../migrations/0009_profile_prompt_templates.sql"),
   include_str!("../../migrations/0010_ocr_services.sql"),
   include_str!("../../migrations/0011_provider_transport_contract.sql"),
+  include_str!("../../migrations/0012_service_integrations.sql"),
 ];
 
 pub fn latest_version() -> i32 {
@@ -179,6 +180,64 @@ mod tests {
       .query_row("SELECT COUNT(*) FROM ocr_prompt_templates", [], |r| r.get(0))
       .unwrap();
     assert_eq!(ocr_template_count, 0);
+    // v12 service integration tables exist and are empty on a fresh database.
+    let integration_count: i64 = conn
+      .query_row("SELECT COUNT(*) FROM integration_instances", [], |r| r.get(0))
+      .unwrap();
+    assert_eq!(integration_count, 0);
+    let binding_count: i64 = conn
+      .query_row("SELECT COUNT(*) FROM integration_credential_bindings", [], |r| r.get(0))
+      .unwrap();
+    assert_eq!(binding_count, 0);
+    // v12 journal has non-null slot_id.
+    let has_slot_col: i64 = conn
+      .query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('credential_operations') WHERE name = 'slot_id'",
+        [],
+        |r| r.get(0),
+      )
+      .unwrap();
+    assert_eq!(has_slot_col, 1);
+  }
+
+  #[test]
+  fn migrate_v11_to_v12_preserves_credential_journal_rows() {
+    let mut conn = Connection::open_in_memory().unwrap();
+    migrate_with(&mut conn, &MIGRATIONS[..11]).unwrap();
+    assert_eq!(read_user_version(&conn).unwrap(), 11);
+
+    conn
+      .execute(
+        "INSERT INTO credential_operations (
+          id, owner_kind, owner_id, expected_old_ref, new_ref, state, created_at
+        ) VALUES (
+          'op-1', 'provider', 'prov-1', NULL, 'provider/prov-1/op-1', 'prepared', 't'
+        )",
+        [],
+      )
+      .unwrap();
+
+    migrate(&mut conn).unwrap();
+    assert_eq!(read_user_version(&conn).unwrap(), 12);
+
+    let (owner_kind, owner_id, slot_id, new_ref, state): (String, String, String, String, String) = conn
+      .query_row(
+        "SELECT owner_kind, owner_id, slot_id, new_ref, state FROM credential_operations WHERE id = 'op-1'",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+      )
+      .unwrap();
+    assert_eq!(owner_kind, "provider");
+    assert_eq!(owner_id, "prov-1");
+    assert_eq!(slot_id, "primary");
+    assert_eq!(new_ref, "provider/prov-1/op-1");
+    assert_eq!(state, "prepared");
+
+    // Fresh integration tables are empty after upgrade.
+    let integration_count: i64 = conn
+      .query_row("SELECT COUNT(*) FROM integration_instances", [], |r| r.get(0))
+      .unwrap();
+    assert_eq!(integration_count, 0);
   }
 
   #[test]

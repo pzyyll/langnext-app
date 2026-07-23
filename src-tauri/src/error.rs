@@ -18,6 +18,9 @@ pub enum StorageError {
   #[error("in use: {0}")]
   InUse(String),
 
+  #[error("plugin unavailable: {0}")]
+  PluginUnavailable(String),
+
   #[error("credential busy for owner")]
   CredentialBusy,
 
@@ -73,6 +76,7 @@ impl From<StorageError> for IpcError {
       StorageError::NotFound(msg) => IpcError::new("not_found", msg),
       StorageError::Conflict(msg) => IpcError::new("conflict", msg),
       StorageError::InUse(msg) => IpcError::new("in_use", msg),
+      StorageError::PluginUnavailable(msg) => IpcError::new("plugin_unavailable", msg),
       StorageError::CredentialBusy => IpcError::new("credential_busy", "A credential operation is already in progress"),
       StorageError::CredentialUnavailable => {
         IpcError::new("credential_unavailable", "The system credential store is unavailable")

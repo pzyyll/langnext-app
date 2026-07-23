@@ -5,8 +5,9 @@ use crate::device_state::{DeviceStateManager, SharedDeviceState};
 use crate::domain::cancel::RequestSessionRegistry;
 use crate::error::StorageError;
 use crate::services::{
-  ImportExportService, ModelService, OcrServiceService, ProviderHttpService, ProviderService, SettingsService,
-  TranslationHistoryService, TranslationProfileService,
+  ImportExportService, ModelService, OcrServiceService, ProviderHttpService, ProviderService,
+  ServiceIntegrationRegistry, ServiceIntegrationService, SettingsService, TranslationHistoryService,
+  TranslationProfileService,
 };
 use crate::storage::Database;
 use std::path::PathBuf;
@@ -20,6 +21,7 @@ pub struct AppState {
   pub models: ModelService,
   pub profiles: TranslationProfileService,
   pub ocr_services: OcrServiceService,
+  pub service_integrations: ServiceIntegrationService,
   pub settings: SettingsService,
   pub import_export: ImportExportService,
   pub history: TranslationHistoryService,
@@ -36,14 +38,20 @@ impl AppState {
     let db = Database::new(&app_data_dir)?;
     db.initialize()?;
 
-    let vault: Arc<dyn CredentialVault> = Arc::new(NativeCredentialVault::new());
+    // Overflow dir holds AES-GCM sealed large secrets (e.g. service-account JSON) when the OS
+    // keyring blob limit is too small (Windows Credential Manager is ~2560 bytes).
+    let vault: Arc<dyn CredentialVault> =
+      Arc::new(NativeCredentialVault::new(app_data_dir.join("credential-vault")));
     // Recovery is best-effort; vault unavailability is nonfatal at startup.
+    // Covers provider/proxy/OCR and integration slots via shared journal.
     let _recovery = ProviderService::recover_credential_operations(&db, vault.as_ref());
 
+    let registry = Arc::new(ServiceIntegrationRegistry::bundled()?);
     let providers = ProviderService::new(db.clone(), vault.clone());
     let models = ModelService::new(db.clone(), vault.clone(), app_data_dir.join("cache"));
     let profiles = TranslationProfileService::new(db.clone());
     let ocr_services = OcrServiceService::new(db.clone(), vault.clone());
+    let service_integrations = ServiceIntegrationService::new(db.clone(), vault.clone(), registry);
     let settings = SettingsService::new(db.clone(), vault.clone());
     let import_export = ImportExportService::new(db.clone(), vault.clone());
     let history = TranslationHistoryService::new(db.clone());
@@ -58,6 +66,7 @@ impl AppState {
       models,
       profiles,
       ocr_services,
+      service_integrations,
       settings,
       import_export,
       history,

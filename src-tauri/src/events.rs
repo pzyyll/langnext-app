@@ -17,6 +17,9 @@ pub const TRANSLATION_HISTORY_CHANGED: &str = "data://translation-history-change
 /// Emitted after OCR service create, update, or delete.
 pub const OCR_SERVICES_CHANGED: &str = "data://ocr-services-changed";
 
+/// Emitted after service-integration instance create, update, enable, validate, or delete.
+pub const SERVICE_INTEGRATIONS_CHANGED: &str = "data://service-integrations-changed";
+
 /// Broadcast a coarse data-change notification; log emit failures for observability.
 pub fn emit_data_changed(app: &AppHandle, event: &str) {
   if let Err(error) = app.emit(event, serde_json::json!({})) {

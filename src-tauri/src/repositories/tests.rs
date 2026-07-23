@@ -5,13 +5,14 @@ use crate::domain::ocr_service::{BaiduOcrAction, OcrPromptTemplate, OcrProviderT
 use crate::domain::provider::{
   AuthSchemeV1, BaseUrlSource, CredentialKind, ModelsSyncStatus, ProviderInstance, ProxyMode,
 };
+use crate::domain::service_integration::{IntegrationCredentialBinding, IntegrationHealthStatus, IntegrationInstance};
 use crate::domain::settings::AppSettingsV1;
 use crate::domain::time::{new_id, now_rfc3339};
 use crate::domain::translation_profile::{PromptTemplate, TranslationProfile, TranslationProfileTarget};
 use crate::error::StorageError;
 use crate::repositories::{
-  app_credentials, app_settings, credential_operations, ocr_prompt_templates, ocr_services, provider_instances,
-  provider_models, translation_profiles,
+  app_credentials, app_settings, credential_operations, integration_credential_bindings, integration_instances,
+  ocr_prompt_templates, ocr_services, provider_instances, provider_models, translation_profiles,
 };
 use crate::storage::Database;
 use uuid::Uuid;
@@ -798,4 +799,153 @@ fn provider_transport_contract_model_override_inventory_preserved() {
   assert_eq!(provider_adapter, "openai-compatible");
   assert_eq!(model_adapter, "gemini");
   assert_eq!(base_url_source, "plugin_default");
+}
+
+#[test]
+fn integration_instance_crud_cas_and_slot_isolation() {
+  let (_dir, db) = setup();
+  let id = new_id();
+  let now = now_rfc3339();
+  let instance = IntegrationInstance {
+    id,
+    plugin_id: "com.langnext.google-cloud".into(),
+    plugin_version: "1.0.0".into(),
+    display_name: "GCP".into(),
+    enabled: true,
+    config_json: r#"{"projectId":"p","location":"global","proxyMode":"inherit"}"#.into(),
+    config_schema_version: 1,
+    health_status: IntegrationHealthStatus::Unconfigured,
+    last_validated_at: None,
+    last_error_code: None,
+    created_at: now.clone(),
+    updated_at: now.clone(),
+  };
+
+  db.transaction(|uow| {
+    integration_instances::insert(uow.conn(), &instance)?;
+    let slot_a = IntegrationCredentialBinding {
+      id: new_id(),
+      integration_instance_id: id,
+      slot_id: "service-account-json".into(),
+      credential_ref: None,
+      credential_revision: 0,
+      created_at: now.clone(),
+      updated_at: now.clone(),
+    };
+    integration_credential_bindings::insert(uow.conn(), &slot_a)?;
+    // Slot uniqueness
+    let dup = IntegrationCredentialBinding {
+      id: new_id(),
+      integration_instance_id: id,
+      slot_id: "service-account-json".into(),
+      credential_ref: None,
+      credential_revision: 0,
+      created_at: now.clone(),
+      updated_at: now.clone(),
+    };
+    let err = integration_credential_bindings::insert(uow.conn(), &dup);
+    assert!(matches!(err, Err(StorageError::Conflict(_))));
+
+    let updated = integration_credential_bindings::compare_and_set_ref(
+      uow.conn(),
+      id,
+      "service-account-json",
+      None,
+      Some("integration/x/service-account-json/op"),
+      "t2",
+    )?;
+    assert_eq!(updated.credential_revision, 1);
+    assert!(updated.credential_ref.is_some());
+
+    let cleared = integration_credential_bindings::compare_and_set_ref(
+      uow.conn(),
+      id,
+      "service-account-json",
+      Some("integration/x/service-account-json/op"),
+      None,
+      "t3",
+    )?;
+    assert_eq!(cleared.credential_revision, 2);
+    assert!(cleared.credential_ref.is_none());
+
+    // CAS conflict on instance
+    let err = integration_instances::compare_and_set(
+      uow.conn(),
+      id,
+      "stale",
+      "GCP2",
+      true,
+      &instance.config_json,
+      1,
+      IntegrationHealthStatus::Unvalidated,
+      None,
+      None,
+      "t4",
+    );
+    assert!(matches!(err, Err(StorageError::Conflict(_))));
+
+    // Journal: primary slot uniqueness still holds for provider
+    let owner = new_id().to_string();
+    credential_operations::insert_prepared(
+      uow.conn(),
+      new_id(),
+      credential_operations::OwnerKind::Provider,
+      &owner,
+      None,
+      Some("provider/a/b"),
+    )?;
+    let err = credential_operations::insert_prepared(
+      uow.conn(),
+      new_id(),
+      credential_operations::OwnerKind::Provider,
+      &owner,
+      None,
+      Some("provider/a/c"),
+    );
+    assert!(matches!(err, Err(StorageError::CredentialBusy)));
+
+    // Integration slots are independent from each other
+    credential_operations::insert_prepared_slot(
+      uow.conn(),
+      new_id(),
+      credential_operations::OwnerKind::Integration,
+      &id.to_string(),
+      "service-account-json",
+      None,
+      Some("integration/x/service-account-json/op2"),
+    )?;
+    credential_operations::insert_prepared_slot(
+      uow.conn(),
+      new_id(),
+      credential_operations::OwnerKind::Integration,
+      &id.to_string(),
+      "other-slot",
+      None,
+      Some("integration/x/other-slot/op"),
+    )?;
+
+    // OCR two owners remain independent on primary slot
+    let ocr_id = new_id().to_string();
+    credential_operations::insert_prepared(
+      uow.conn(),
+      new_id(),
+      credential_operations::OwnerKind::OcrApiKey,
+      &ocr_id,
+      None,
+      Some("ocr/a/api_key/op"),
+    )?;
+    credential_operations::insert_prepared(
+      uow.conn(),
+      new_id(),
+      credential_operations::OwnerKind::OcrSecretKey,
+      &ocr_id,
+      None,
+      Some("ocr/a/secret_key/op"),
+    )?;
+
+    integration_credential_bindings::delete_for_instance(uow.conn(), id)?;
+    integration_instances::delete(uow.conn(), id)?;
+    Ok(())
+  })
+  .unwrap();
 }

@@ -316,6 +316,114 @@ export interface OcrRecognizeResult {
   ocrServiceId: string;
 }
 
+/** Persisted integration health (never disabled/plugin_missing). */
+export type IntegrationHealthStatus = "unconfigured" | "unvalidated" | "ready" | "degraded";
+
+/** DTO effective status including derived disabled/plugin_missing. */
+export type IntegrationEffectiveStatus = IntegrationHealthStatus | "disabled" | "plugin_missing";
+
+export type CredentialSlotKind = "secret_json";
+
+export interface CredentialSlotDescriptor {
+  id: string;
+  kind: CredentialSlotKind;
+  required: boolean;
+}
+
+export interface IntegrationCapabilityDescriptor {
+  id: string;
+  preferencesSchemaVersion: number;
+  endpointAliases?: string[];
+}
+
+export interface EndpointGrant {
+  alias: string;
+  baseUrl: string;
+}
+
+/** Bundled service-integration definition (sanitized). */
+export interface ServiceIntegrationManifest {
+  manifestVersion: number;
+  pluginApiVersion: string;
+  id: string;
+  version: string;
+  displayNameKey: string;
+  minHostVersion: string;
+  configSchemaVersion: number;
+  credentialSlots: CredentialSlotDescriptor[];
+  endpoints: EndpointGrant[];
+  capabilities: IntegrationCapabilityDescriptor[];
+}
+
+export interface CredentialSlotStatusDto {
+  slotId: string;
+  hasCredential: boolean;
+  credentialRevision: number;
+}
+
+/** Sanitized integration instance — never includes secrets or vault refs. */
+export interface IntegrationInstanceDto {
+  id: string;
+  pluginId: string;
+  pluginVersion: string;
+  displayName: string;
+  enabled: boolean;
+  /** Non-secret common config JSON string. */
+  configJson: string;
+  configSchemaVersion: number;
+  healthStatus: IntegrationHealthStatus;
+  effectiveStatus: IntegrationEffectiveStatus;
+  lastValidatedAt: string | null;
+  lastErrorCode: string | null;
+  credentialSlots: CredentialSlotStatusDto[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface IntegrationSlotCredentialWrite {
+  slotId: string;
+  credential?: CredentialUpdate;
+}
+
+export interface IntegrationInstanceWrite {
+  id?: string | null;
+  pluginId: string;
+  displayName: string;
+  enabled: boolean;
+  configJson: string;
+  credentials?: IntegrationSlotCredentialWrite[];
+  expectedUpdatedAt?: string | null;
+}
+
+export interface IntegrationDependencyDto {
+  kind: string;
+  id: string;
+  displayName: string;
+}
+
+/** Local-only validation result (Phase 1A never claims remote health). */
+export interface IntegrationValidationResult {
+  instanceId: string;
+  healthStatus: IntegrationHealthStatus;
+  effectiveStatus: IntegrationEffectiveStatus;
+  remoteChecked: boolean;
+  message: string | null;
+}
+
+/** Google Cloud non-secret config (schema v1). */
+export interface GoogleCloudConfigV1 {
+  projectId: string;
+  location: string;
+  proxyMode: ProxyMode;
+}
+
+/** Bundled Google Cloud plugin id. */
+export const GOOGLE_CLOUD_PLUGIN_ID = "com.langnext.google-cloud" as const;
+/** Google Cloud service-account credential slot. */
+export const GOOGLE_CLOUD_SERVICE_ACCOUNT_SLOT = "service-account-json" as const;
+/** Default Cloud Translation location. */
+export const GOOGLE_CLOUD_DEFAULT_LOCATION = "global" as const;
+
 /** Persistence/export row for a prompt template (includes profile ownership + list order). */
 export interface TranslationProfilePromptTemplate extends PromptTemplate {
   translationProfileId: string;

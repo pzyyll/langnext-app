@@ -32,6 +32,14 @@ export const ocrKeys = {
   detail: (id: string) => [...ocrKeys.all, "detail", id] as const,
 };
 
+export const integrationKeys = {
+  all: ["service-integrations"] as const,
+  list: () => [...integrationKeys.all, "list"] as const,
+  detail: (id: string) => [...integrationKeys.all, "detail", id] as const,
+  definitions: () => [...integrationKeys.all, "definitions"] as const,
+  dependencies: (id: string) => [...integrationKeys.all, "dependencies", id] as const,
+};
+
 export const settingsKeys = {
   all: ["app-settings"] as const,
   detail: () => [...settingsKeys.all, "detail"] as const,

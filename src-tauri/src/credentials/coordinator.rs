@@ -2,8 +2,10 @@
 // ABOUTME: Journals are deleted only after idempotent vault cleanup succeeds.
 use crate::credentials::vault::CredentialVault;
 use crate::error::StorageError;
-use crate::repositories::credential_operations::{self, CredentialOperation, OperationState, OwnerKind};
-use crate::repositories::{app_credentials, ocr_services, provider_instances};
+use crate::repositories::credential_operations::{
+  self, CredentialOperation, OperationState, OwnerKind, PRIMARY_SLOT_ID,
+};
+use crate::repositories::{app_credentials, integration_credential_bindings, ocr_services, provider_instances};
 use crate::storage::Database;
 use uuid::Uuid;
 
@@ -39,8 +41,13 @@ impl RecoveryReport {
   }
 }
 
-/// Resolve the current credential reference for an operation owner.
-pub fn current_binding(db: &Database, owner_kind: OwnerKind, owner_id: &str) -> Result<Option<String>, StorageError> {
+/// Resolve the current credential reference for an operation owner + slot.
+pub fn current_binding(
+  db: &Database,
+  owner_kind: OwnerKind,
+  owner_id: &str,
+  slot_id: &str,
+) -> Result<Option<String>, StorageError> {
   match owner_kind {
     OwnerKind::Provider => {
       let id = Uuid::parse_str(owner_id)
@@ -67,6 +74,15 @@ pub fn current_binding(db: &Database, owner_kind: OwnerKind, owner_id: &str) -> 
       match db.read(|conn| ocr_services::get(conn, id)) {
         Ok(service) => Ok(service.secret_key_ref),
         Err(StorageError::NotFound(_)) => Ok(None),
+        Err(e) => Err(e),
+      }
+    }
+    OwnerKind::Integration => {
+      let id = Uuid::parse_str(owner_id)
+        .map_err(|_| StorageError::Internal(format!("invalid integration owner_id: {owner_id}")))?;
+      match db.read(|conn| integration_credential_bindings::get_optional(conn, id, slot_id)) {
+        Ok(Some(binding)) => Ok(binding.credential_ref),
+        Ok(None) => Ok(None),
         Err(e) => Err(e),
       }
     }
@@ -117,7 +133,7 @@ pub fn finalize_operation(
   vault: &dyn CredentialVault,
   op: &CredentialOperation,
 ) -> Result<FinalizeResult, StorageError> {
-  let current = current_binding(db, op.owner_kind, &op.owner_id)?;
+  let current = current_binding(db, op.owner_kind, &op.owner_id, &op.slot_id)?;
   let target = cleanup_target(op, current.as_deref());
 
   if let Some(account) = target {
@@ -141,14 +157,15 @@ pub fn finalize_operation(
   Ok(FinalizeResult::Completed)
 }
 
-/// Recover every unfinished operation owned by one owner.
-pub fn recover_owner(
+/// Recover every unfinished operation for one owner + slot.
+pub fn recover_owner_slot(
   db: &Database,
   vault: &dyn CredentialVault,
   owner_kind: OwnerKind,
   owner_id: &str,
+  slot_id: &str,
 ) -> Result<RecoveryReport, StorageError> {
-  let op = db.read(|conn| credential_operations::get_for_owner(conn, owner_kind, owner_id))?;
+  let op = db.read(|conn| credential_operations::get_for_owner_slot(conn, owner_kind, owner_id, slot_id))?;
   let mut report = RecoveryReport::default();
   if let Some(op) = op {
     match finalize_operation(db, vault, &op)? {
@@ -160,6 +177,16 @@ pub fn recover_owner(
     }
   }
   Ok(report)
+}
+
+/// Recover unfinished primary-slot operation for legacy owners.
+pub fn recover_owner(
+  db: &Database,
+  vault: &dyn CredentialVault,
+  owner_kind: OwnerKind,
+  owner_id: &str,
+) -> Result<RecoveryReport, StorageError> {
+  recover_owner_slot(db, vault, owner_kind, owner_id, PRIMARY_SLOT_ID)
 }
 
 /// Recover all unfinished credential operations (startup path).
@@ -190,21 +217,22 @@ pub fn recover_all(db: &Database, vault: &dyn CredentialVault) -> RecoveryReport
   report
 }
 
-/// Preflight for a credential mutation: recover the owner first.
+/// Preflight for a credential mutation on an explicit slot: recover first.
 ///
 /// Returns `CredentialBusy` when an unfinished journal remains after recovery,
 /// or `CredentialUnavailable` when the vault could not complete cleanup.
-pub fn preflight_owner(
+pub fn preflight_owner_slot(
   db: &Database,
   vault: &dyn CredentialVault,
   owner_kind: OwnerKind,
   owner_id: &str,
+  slot_id: &str,
 ) -> Result<(), StorageError> {
-  let report = recover_owner(db, vault, owner_kind, owner_id)?;
+  let report = recover_owner_slot(db, vault, owner_kind, owner_id, slot_id)?;
   if report.deferred > 0 {
     // Distinguishing busy vs unavailable: if a journal remains, check whether
     // the last finalize deferred due to vault reachability by re-probing.
-    let remaining = db.read(|conn| credential_operations::get_for_owner(conn, owner_kind, owner_id))?;
+    let remaining = db.read(|conn| credential_operations::get_for_owner_slot(conn, owner_kind, owner_id, slot_id))?;
     if remaining.is_some() {
       // Attempt a no-op exists probe to distinguish vault outage.
       // Use a synthetic probe that never exists so we only test availability.
@@ -220,6 +248,16 @@ pub fn preflight_owner(
   Ok(())
 }
 
+/// Primary-slot preflight for legacy owners.
+pub fn preflight_owner(
+  db: &Database,
+  vault: &dyn CredentialVault,
+  owner_kind: OwnerKind,
+  owner_id: &str,
+) -> Result<(), StorageError> {
+  preflight_owner_slot(db, vault, owner_kind, owner_id, PRIMARY_SLOT_ID)
+}
+
 fn error_code(err: &StorageError) -> &'static str {
   match err {
     StorageError::CredentialUnavailable => "credential_unavailable",
@@ -229,6 +267,7 @@ fn error_code(err: &StorageError) -> &'static str {
     StorageError::Validation(_) => "validation_failed",
     StorageError::Conflict(_) => "conflict",
     StorageError::InUse(_) => "in_use",
+    StorageError::PluginUnavailable(_) => "plugin_unavailable",
     StorageError::StorageUnavailable(_) => "storage_unavailable",
     StorageError::StorageVersionUnsupported(_) => "storage_version_unsupported",
     StorageError::Io(_) => "io",

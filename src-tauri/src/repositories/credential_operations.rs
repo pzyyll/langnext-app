@@ -1,9 +1,12 @@
 // ABOUTME: Credential mutation journal for crash-safe vault/SQLite coordination.
-// ABOUTME: Unique (owner_kind, owner_id) serializes unfinished operations per owner.
+// ABOUTME: Unique (owner_kind, owner_id, slot_id) serializes unfinished operations per slot.
 use crate::domain::time::now_rfc3339;
 use crate::error::StorageError;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use uuid::Uuid;
+
+/// Default slot for legacy owners (provider, proxy, OCR keys).
+pub const PRIMARY_SLOT_ID: &str = "primary";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OwnerKind {
@@ -11,6 +14,7 @@ pub enum OwnerKind {
   GlobalProxy,
   OcrApiKey,
   OcrSecretKey,
+  Integration,
 }
 
 impl OwnerKind {
@@ -20,6 +24,7 @@ impl OwnerKind {
       Self::GlobalProxy => "global_proxy",
       Self::OcrApiKey => "ocr_api_key",
       Self::OcrSecretKey => "ocr_secret_key",
+      Self::Integration => "integration",
     }
   }
 
@@ -29,6 +34,7 @@ impl OwnerKind {
       "global_proxy" => Ok(Self::GlobalProxy),
       "ocr_api_key" => Ok(Self::OcrApiKey),
       "ocr_secret_key" => Ok(Self::OcrSecretKey),
+      "integration" => Ok(Self::Integration),
       other => Err(StorageError::Internal(format!("unknown owner_kind: {other}"))),
     }
   }
@@ -62,6 +68,7 @@ pub struct CredentialOperation {
   pub id: Uuid,
   pub owner_kind: OwnerKind,
   pub owner_id: String,
+  pub slot_id: String,
   pub expected_old_ref: Option<String>,
   pub new_ref: Option<String>,
   pub state: OperationState,
@@ -83,6 +90,7 @@ fn map_row(row: &Row<'_>) -> Result<CredentialOperation, rusqlite::Error> {
       )
     })?,
     owner_id: row.get("owner_id")?,
+    slot_id: row.get("slot_id")?,
     expected_old_ref: row.get("expected_old_ref")?,
     new_ref: row.get("new_ref")?,
     state: OperationState::parse(&state).map_err(|e| {
@@ -96,6 +104,57 @@ fn map_row(row: &Row<'_>) -> Result<CredentialOperation, rusqlite::Error> {
   })
 }
 
+fn map_unique_constraint(err: rusqlite::Error) -> StorageError {
+  if let rusqlite::Error::SqliteFailure(code, _) = &err {
+    if code.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE
+      || code.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_PRIMARYKEY
+    {
+      return StorageError::CredentialBusy;
+    }
+  }
+  StorageError::from(err)
+}
+
+/// Insert a prepared journal row for an explicit credential slot.
+pub fn insert_prepared_slot(
+  conn: &Connection,
+  id: Uuid,
+  owner_kind: OwnerKind,
+  owner_id: &str,
+  slot_id: &str,
+  expected_old_ref: Option<&str>,
+  new_ref: Option<&str>,
+) -> Result<CredentialOperation, StorageError> {
+  let created_at = now_rfc3339();
+  conn
+    .execute(
+      "INSERT INTO credential_operations (
+            id, owner_kind, owner_id, slot_id, expected_old_ref, new_ref, state, created_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'prepared', ?7)",
+      params![
+        id.to_string(),
+        owner_kind.as_str(),
+        owner_id,
+        slot_id,
+        expected_old_ref,
+        new_ref,
+        created_at,
+      ],
+    )
+    .map_err(map_unique_constraint)?;
+  Ok(CredentialOperation {
+    id,
+    owner_kind,
+    owner_id: owner_id.to_string(),
+    slot_id: slot_id.to_string(),
+    expected_old_ref: expected_old_ref.map(str::to_string),
+    new_ref: new_ref.map(str::to_string),
+    state: OperationState::Prepared,
+    created_at,
+  })
+}
+
+/// Primary-slot wrapper for legacy owners.
 pub fn insert_prepared(
   conn: &Connection,
   id: Uuid,
@@ -104,41 +163,15 @@ pub fn insert_prepared(
   expected_old_ref: Option<&str>,
   new_ref: Option<&str>,
 ) -> Result<CredentialOperation, StorageError> {
-  let created_at = now_rfc3339();
-  conn
-    .execute(
-      "INSERT INTO credential_operations (
-            id, owner_kind, owner_id, expected_old_ref, new_ref, state, created_at
-        ) VALUES (?1, ?2, ?3, ?4, ?5, 'prepared', ?6)",
-      params![
-        id.to_string(),
-        owner_kind.as_str(),
-        owner_id,
-        expected_old_ref,
-        new_ref,
-        created_at,
-      ],
-    )
-    .map_err(|e| {
-      // Unique owner index → credential busy.
-      if let rusqlite::Error::SqliteFailure(code, _) = &e {
-        if code.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE
-          || code.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_PRIMARYKEY
-        {
-          return StorageError::CredentialBusy;
-        }
-      }
-      StorageError::from(e)
-    })?;
-  Ok(CredentialOperation {
+  insert_prepared_slot(
+    conn,
     id,
     owner_kind,
-    owner_id: owner_id.to_string(),
-    expected_old_ref: expected_old_ref.map(str::to_string),
-    new_ref: new_ref.map(str::to_string),
-    state: OperationState::Prepared,
-    created_at,
-  })
+    owner_id,
+    PRIMARY_SLOT_ID,
+    expected_old_ref,
+    new_ref,
+  )
 }
 
 pub fn mark_db_committed(conn: &Connection, id: Uuid) -> Result<CredentialOperation, StorageError> {
@@ -170,20 +203,32 @@ pub fn get_by_id(conn: &Connection, id: Uuid) -> Result<Option<CredentialOperati
   )
 }
 
+/// Look up the unfinished operation for an owner + slot.
+pub fn get_for_owner_slot(
+  conn: &Connection,
+  owner_kind: OwnerKind,
+  owner_id: &str,
+  slot_id: &str,
+) -> Result<Option<CredentialOperation>, StorageError> {
+  Ok(
+    conn
+      .query_row(
+        "SELECT * FROM credential_operations
+         WHERE owner_kind = ?1 AND owner_id = ?2 AND slot_id = ?3",
+        params![owner_kind.as_str(), owner_id, slot_id],
+        map_row,
+      )
+      .optional()?,
+  )
+}
+
+/// Primary-slot wrapper for legacy owners.
 pub fn get_for_owner(
   conn: &Connection,
   owner_kind: OwnerKind,
   owner_id: &str,
 ) -> Result<Option<CredentialOperation>, StorageError> {
-  Ok(
-    conn
-      .query_row(
-        "SELECT * FROM credential_operations WHERE owner_kind = ?1 AND owner_id = ?2",
-        params![owner_kind.as_str(), owner_id],
-        map_row,
-      )
-      .optional()?,
-  )
+  get_for_owner_slot(conn, owner_kind, owner_id, PRIMARY_SLOT_ID)
 }
 
 pub fn delete(conn: &Connection, id: Uuid) -> Result<(), StorageError> {
@@ -194,7 +239,46 @@ pub fn delete(conn: &Connection, id: Uuid) -> Result<(), StorageError> {
   Ok(())
 }
 
-/// Insert a journal row already in db_committed state (e.g. post-delete cleanup).
+/// Insert a journal row already in db_committed state for an explicit slot.
+pub fn insert_db_committed_slot(
+  conn: &Connection,
+  id: Uuid,
+  owner_kind: OwnerKind,
+  owner_id: &str,
+  slot_id: &str,
+  expected_old_ref: Option<&str>,
+  new_ref: Option<&str>,
+) -> Result<CredentialOperation, StorageError> {
+  let created_at = now_rfc3339();
+  conn
+    .execute(
+      "INSERT INTO credential_operations (
+            id, owner_kind, owner_id, slot_id, expected_old_ref, new_ref, state, created_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'db_committed', ?7)",
+      params![
+        id.to_string(),
+        owner_kind.as_str(),
+        owner_id,
+        slot_id,
+        expected_old_ref,
+        new_ref,
+        created_at,
+      ],
+    )
+    .map_err(map_unique_constraint)?;
+  Ok(CredentialOperation {
+    id,
+    owner_kind,
+    owner_id: owner_id.to_string(),
+    slot_id: slot_id.to_string(),
+    expected_old_ref: expected_old_ref.map(str::to_string),
+    new_ref: new_ref.map(str::to_string),
+    state: OperationState::DbCommitted,
+    created_at,
+  })
+}
+
+/// Primary-slot wrapper for legacy owners.
 pub fn insert_db_committed(
   conn: &Connection,
   id: Uuid,
@@ -203,40 +287,15 @@ pub fn insert_db_committed(
   expected_old_ref: Option<&str>,
   new_ref: Option<&str>,
 ) -> Result<CredentialOperation, StorageError> {
-  let created_at = now_rfc3339();
-  conn
-    .execute(
-      "INSERT INTO credential_operations (
-            id, owner_kind, owner_id, expected_old_ref, new_ref, state, created_at
-        ) VALUES (?1, ?2, ?3, ?4, ?5, 'db_committed', ?6)",
-      params![
-        id.to_string(),
-        owner_kind.as_str(),
-        owner_id,
-        expected_old_ref,
-        new_ref,
-        created_at,
-      ],
-    )
-    .map_err(|e| {
-      if let rusqlite::Error::SqliteFailure(code, _) = &e {
-        if code.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE
-          || code.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_PRIMARYKEY
-        {
-          return StorageError::CredentialBusy;
-        }
-      }
-      StorageError::from(e)
-    })?;
-  Ok(CredentialOperation {
+  insert_db_committed_slot(
+    conn,
     id,
     owner_kind,
-    owner_id: owner_id.to_string(),
-    expected_old_ref: expected_old_ref.map(str::to_string),
-    new_ref: new_ref.map(str::to_string),
-    state: OperationState::DbCommitted,
-    created_at,
-  })
+    owner_id,
+    PRIMARY_SLOT_ID,
+    expected_old_ref,
+    new_ref,
+  )
 }
 
 /// Reload the operation after marking it db_committed so callers hold complete state.

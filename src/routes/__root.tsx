@@ -6,6 +6,7 @@ import { TanStackRouterDevtools } from "@tanstack/react-router-devtools";
 import { useTranslation } from "react-i18next";
 import IconMaterialSymbolsLightBook from "~icons/material-symbols-light/book";
 import IconMaterialSymbolsLightDocumentScannerOutline from "~icons/material-symbols-light/document-scanner-outline";
+import IconMaterialSymbolsLightExtensionOutline from "~icons/material-symbols-light/extension-outline";
 import IconMaterialSymbolsLightHistory from "~icons/material-symbols-light/history";
 import IconMaterialSymbolsLightNeurology from "~icons/material-symbols-light/neurology";
 import IconMaterialSymbolsLightSettings from "~icons/material-symbols-light/settings";
@@ -97,6 +98,7 @@ const navIconById: Record<NavIconId, ComponentType<SVGProps<SVGSVGElement>>> = {
   history: IconMaterialSymbolsLightHistory,
   neurology: IconMaterialSymbolsLightNeurology,
   document_scanner: IconMaterialSymbolsLightDocumentScannerOutline,
+  extension: IconMaterialSymbolsLightExtensionOutline,
   settings: IconMaterialSymbolsLightSettings,
 };
 

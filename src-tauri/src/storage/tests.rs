@@ -36,7 +36,7 @@ fn user_version_is_latest() {
   let (_dir, db) = temp_db();
   db.read(|conn| {
     assert_eq!(read_user_version(conn).unwrap(), latest_version());
-    assert_eq!(latest_version(), 11);
+    assert_eq!(latest_version(), 12);
     Ok(())
   })
   .unwrap();

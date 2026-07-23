@@ -38,6 +38,11 @@ reqwest = { version = "0.13", features = ["json"] }
 tokio = { version = "1", default-features = false, features = ["macros", "sync"] }
 base64 = "0.22"
 image = { version = "0.25", default-features = false, features = ["png"] }
+# Large secrets (e.g. Google service-account JSON) exceed Windows Credential Manager limits
+# when stored via UTF-16 passwords; overflow files are AES-GCM sealed with a keyring master key.
+aes-gcm = "0.10"
+sha2 = "0.10"
+rand = "0.8"
 
 # Desktop-only: global hotkey, clipboard, and region screenshot capture.
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
