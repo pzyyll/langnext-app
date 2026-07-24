@@ -1,15 +1,21 @@
 // ABOUTME: Application services enforcing business rules before repository writes.
 // ABOUTME: Commands call services; services own validation and credential orchestration.
+pub mod bounded_http;
+pub mod google_cloud;
+pub mod google_service_account;
 pub mod import_export;
 pub mod import_validation;
 pub mod models;
 pub mod models_dev_catalog;
+pub mod network_broker;
 pub mod ocr_services;
 pub mod provider_http;
 pub mod providers;
+pub mod service_capabilities;
 pub mod service_integration_registry;
 pub mod service_integrations;
 pub mod settings;
+pub mod token_grant;
 pub mod translation_history;
 pub mod translation_profiles;
 

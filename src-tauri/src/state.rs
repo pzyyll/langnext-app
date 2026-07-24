@@ -4,6 +4,11 @@ use crate::credentials::{CredentialVault, NativeCredentialVault};
 use crate::device_state::{DeviceStateManager, SharedDeviceState};
 use crate::domain::cancel::RequestSessionRegistry;
 use crate::error::StorageError;
+use crate::services::google_cloud::GoogleCloudCapabilities;
+use crate::services::google_service_account::GoogleServiceAccountExchanger;
+use crate::services::network_broker::NetworkBroker;
+use crate::services::service_capabilities::{ServiceCapabilityRegistry, ServiceCapabilityService};
+use crate::services::token_grant::TokenGrantService;
 use crate::services::{
   ImportExportService, ModelService, OcrServiceService, ProviderHttpService, ProviderService,
   ServiceIntegrationRegistry, ServiceIntegrationService, SettingsService, TranslationHistoryService,
@@ -22,6 +27,9 @@ pub struct AppState {
   pub profiles: TranslationProfileService,
   pub ocr_services: OcrServiceService,
   pub service_integrations: ServiceIntegrationService,
+  pub service_capabilities: ServiceCapabilityService,
+  pub token_grants: Arc<TokenGrantService>,
+  pub network_broker: Arc<NetworkBroker>,
   pub settings: SettingsService,
   pub import_export: ImportExportService,
   pub history: TranslationHistoryService,
@@ -40,18 +48,29 @@ impl AppState {
 
     // Overflow dir holds AES-GCM sealed large secrets (e.g. service-account JSON) when the OS
     // keyring blob limit is too small (Windows Credential Manager is ~2560 bytes).
-    let vault: Arc<dyn CredentialVault> =
-      Arc::new(NativeCredentialVault::new(app_data_dir.join("credential-vault")));
+    let vault: Arc<dyn CredentialVault> = Arc::new(NativeCredentialVault::new(app_data_dir.join("credential-vault")));
     // Recovery is best-effort; vault unavailability is nonfatal at startup.
     // Covers provider/proxy/OCR and integration slots via shared journal.
     let _recovery = ProviderService::recover_credential_operations(&db, vault.as_ref());
 
     let registry = Arc::new(ServiceIntegrationRegistry::bundled()?);
+    let exchanger = Arc::new(GoogleServiceAccountExchanger::new(db.clone(), vault.clone()));
+    let token_grants = Arc::new(TokenGrantService::new(exchanger));
+    let network_broker = Arc::new(NetworkBroker::new(db.clone(), registry.clone()));
+    let google_caps = Arc::new(GoogleCloudCapabilities::new(
+      db.clone(),
+      network_broker.clone(),
+      token_grants.clone(),
+    ));
+    let capability_handlers = Arc::new(ServiceCapabilityRegistry::with_google_cloud(google_caps));
+    let service_capabilities = ServiceCapabilityService::new(db.clone(), registry.clone(), capability_handlers);
+
     let providers = ProviderService::new(db.clone(), vault.clone());
     let models = ModelService::new(db.clone(), vault.clone(), app_data_dir.join("cache"));
     let profiles = TranslationProfileService::new(db.clone());
     let ocr_services = OcrServiceService::new(db.clone(), vault.clone());
-    let service_integrations = ServiceIntegrationService::new(db.clone(), vault.clone(), registry);
+    let service_integrations =
+      ServiceIntegrationService::new(db.clone(), vault.clone(), registry, token_grants.clone());
     let settings = SettingsService::new(db.clone(), vault.clone());
     let import_export = ImportExportService::new(db.clone(), vault.clone());
     let history = TranslationHistoryService::new(db.clone());
@@ -67,6 +86,9 @@ impl AppState {
       profiles,
       ocr_services,
       service_integrations,
+      service_capabilities,
+      token_grants,
+      network_broker,
       settings,
       import_export,
       history,

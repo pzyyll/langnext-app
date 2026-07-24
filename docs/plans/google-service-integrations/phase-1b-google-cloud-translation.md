@@ -48,12 +48,29 @@
 
 **Steps:**
 
-- [ ] Retrieve current Google Cloud Translation v3beta1 authentication/scope documentation.
-- [ ] Retrieve current documentation for the selected maintained Rust JWT crate.
-- [ ] Record the exact crate/version/API and exact scope string used by Translate/Detect.
-- [ ] Reject `cloud-platform` unless current official docs prove no narrower supported scope exists.
-- [ ] Confirm required JWT claims, token endpoint, maximum assertion lifetime, and key format.
-- [ ] Treat unresolved scope/crate/API as a hard blocker for Tasks 4–7.
+- [x] Retrieve current Google Cloud Translation v3beta1 authentication/scope documentation.
+- [x] Retrieve current documentation for the selected maintained Rust JWT crate.
+- [x] Record the exact crate/version/API and exact scope string used by Translate/Detect.
+- [x] Reject `cloud-platform` unless current official docs prove no narrower supported scope exists.
+- [x] Confirm required JWT claims, token endpoint, maximum assertion lifetime, and key format.
+- [x] Treat unresolved scope/crate/API as a hard blocker for Tasks 4–7.
+
+#### Resolved implementation dependencies
+
+| Item                   | Decision                                                                                                                            |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| OAuth scope            | `https://www.googleapis.com/auth/cloud-translation` (narrower than `cloud-platform`; accepted by official v3beta1 Translate/Detect) |
+| Token endpoint         | `https://oauth2.googleapis.com/token` (pinned; SA JSON `token_uri` must match)                                                      |
+| JWT crate              | `jsonwebtoken` **10.4.0** with feature `rust_crypto` (default includes `use_pem`)                                                   |
+| JWT API                | `encode(&Header::new(Algorithm::RS256), &claims, &EncodingKey::from_rsa_pem(pem)?)`                                                 |
+| JWT claims             | `iss` (client_email), `scope` (space-delimited), `aud` = token URI, `iat`, `exp`                                                    |
+| Max assertion lifetime | 1 hour (`exp - iat ≤ 3600`)                                                                                                         |
+| Key format             | PEM RSA private key (PKCS#8) from SA JSON `private_key`                                                                             |
+| Token grant form       | `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer` + `assertion=<jwt>`                                                        |
+| API version            | `v3beta1` only; default location `global`                                                                                           |
+| Endpoint origin        | Manifest-pinned `https://translation.googleapis.com` (alias `translate`)                                                            |
+
+Sources: Cloud Translation v3beta1 REST Translate/Detect docs; Google OAuth service-account guide; jsonwebtoken 10.4.0 crate docs.
 
 **Validation:**
 
@@ -72,14 +89,14 @@
 
 **Steps:**
 
-- [ ] Define bounded `TranslateTextRequest`/`TranslateTextResponse` with text, app source/target IDs, translated text, and optional detected source.
-- [ ] Define bounded `DetectLanguageRequest`/`DetectLanguageResponse`.
-- [ ] Define `ExecutionContext` carrying request ID, deadline/cancel token, integration/capability identity, and broker handles.
-- [ ] Define typed `TranslateTextCapability` and `DetectLanguageCapability` contracts; use project-consistent boxed futures or a maintained async-trait dependency.
-- [ ] Store handlers in a tagged `CapabilityHandler` enum rather than generic `execute(name, JSON)`.
-- [ ] Define `CapabilityError` with stable code, safe message, retryable flag, bounded provider code, capability ID, and request ID.
-- [ ] Reject request IDs, text, language IDs, or response fields above named limits.
-- [ ] Add registry lookup that verifies the instance plugin ID, capability major version, enabled/status state, and handler type.
+- [x] Define bounded `TranslateTextRequest`/`TranslateTextResponse` with text, app source/target IDs, translated text, and optional detected source.
+- [x] Define bounded `DetectLanguageRequest`/`DetectLanguageResponse`.
+- [x] Define `ExecutionContext` carrying request ID, deadline/cancel token, and integration/capability identity (broker handles remain on services).
+- [x] Define typed `TranslateTextCapability` and `DetectLanguageCapability` contracts; use project-consistent boxed futures or a maintained async-trait dependency.
+- [x] Store handlers in a tagged `CapabilityHandler` enum rather than generic `execute(name, JSON)`.
+- [x] Define `CapabilityError` with stable code, safe message, retryable flag, bounded provider code, capability ID, and request ID.
+- [x] Reject request IDs, text, language IDs, or response fields above named limits.
+- [x] Add registry lookup that verifies the instance plugin ID, capability major version, enabled/status state, and handler type.
 
 **Validation:**
 
@@ -98,15 +115,15 @@
 
 **Steps:**
 
-- [ ] Run and record the full existing `provider_http` suite before extraction.
-- [ ] Extract reqwest client construction, redirect disablement, proxy selection, request timeout, streaming connect/idle timeout, response size limits, and cancellation wrappers into a private host transport module.
-- [ ] Keep extraction mechanical: move existing behavior before adding broker-specific policy; do not retune Provider limits.
-- [ ] Preserve existing named Provider HTTP limits and behavior.
-- [ ] Keep `ProviderHttpService.prepare` responsible for provider-instance URL/auth validation.
-- [ ] Keep service integration endpoint/auth validation outside the raw executor.
-- [ ] Preserve existing `RawHttpTransport` injection or add an equivalent fake executor interface for both callers.
-- [ ] Do not change `ProviderHttpRequest`, `ProviderWireRequest`, frontend IPC command names, or TypeScript provider wire contracts.
-- [ ] Run the full Provider HTTP suite again after extraction and require identical passing behavior before starting Task 3.
+- [x] Run and record the full existing `provider_http` suite before extraction.
+- [x] Extract reqwest client construction, redirect disablement, proxy selection, request timeout, streaming connect/idle timeout, response size limits, and cancellation wrappers into a private host transport module.
+- [x] Keep extraction mechanical: move existing behavior before adding broker-specific policy; do not retune Provider limits.
+- [x] Preserve existing named Provider HTTP limits and behavior.
+- [x] Keep `ProviderHttpService.prepare` responsible for provider-instance URL/auth validation.
+- [x] Keep service integration endpoint/auth validation outside the raw executor.
+- [x] Preserve existing `RawHttpTransport` injection or add an equivalent fake executor interface for both callers.
+- [x] Do not change `ProviderHttpRequest`, `ProviderWireRequest`, frontend IPC command names, or TypeScript provider wire contracts.
+- [x] Run the full Provider HTTP suite again after extraction and require identical passing behavior before starting Task 3.
 
 **Validation:**
 
@@ -125,15 +142,15 @@
 
 **Steps:**
 
-- [ ] Define a broker request using integration instance ID, capability ID, endpoint alias, method, relative path, query, headers, body, auth grant handle, and request ID.
-- [ ] Resolve endpoint aliases from the registered manifest; never accept caller origins for Google Cloud.
-- [ ] Verify capability→endpoint permission before config/credential access.
-- [ ] Reuse relative-path, blocked-header/query, redirect, timeout, proxy, cancellation, and response-size safeguards.
-- [ ] Block caller-provided Authorization, cookies, proxy auth, host, content length, API-key-shaped query/header names, and manifest auth names.
-- [ ] Apply per-capability named request/response limits.
-- [ ] Attach auth only through an opaque host grant.
-- [ ] Produce sanitized debug spans containing origin, header names, sizes, IDs, and result code—not body/query values.
-- [ ] Add tests for unknown aliases, cross-capability alias use, absolute URLs, path traversal, sensitive headers, redirects, cancellation, timeout, and response overflow.
+- [x] Define a broker request using integration instance ID, capability ID, endpoint alias, method, relative path, query, headers, body, auth grant handle, and request ID.
+- [x] Resolve endpoint aliases from the registered manifest; never accept caller origins for Google Cloud.
+- [x] Verify capability→endpoint permission before config/credential access.
+- [x] Reuse relative-path, blocked-header/query, redirect, timeout, proxy, cancellation, and response-size safeguards.
+- [x] Block caller-provided Authorization, cookies, proxy auth, host, content length, API-key-shaped query/header names, and manifest auth names.
+- [x] Apply per-capability named request/response limits.
+- [x] Attach auth only through an opaque host grant.
+- [x] Produce sanitized debug spans containing origin, header names, sizes, IDs, and result code—not body/query values.
+- [x] Add tests for unknown aliases, cross-capability alias use, absolute URLs, path traversal, sensitive headers, cancellation, and response overflow (redirect disablement covered by shared transport; no dedicated broker timeout unit test).
 
 **Validation:**
 
@@ -153,18 +170,18 @@
 
 **Steps:**
 
-- [ ] Before adding dependencies, retrieve current documentation for the selected JWT crate and use a current non-deprecated API/version.
-- [ ] Define `TokenGrantRequest` with instance ID, capability ID, trusted auth-driver ID, normalized scope set, and audience policy ID.
-- [ ] Prevent capability handlers from supplying raw token URLs or arbitrary audiences.
-- [ ] Load `service-account-json` only inside the trusted Google auth driver.
-- [ ] Parse bounded JSON and require `client_email`, `private_key`, and pinned `token_uri`.
-- [ ] Create an RS256 JWT assertion with bounded lifetime and Google-required claims.
-- [ ] Exchange only at `https://oauth2.googleapis.com/token` through the network host; classify safe OAuth errors.
-- [ ] Cache tokens by instance ID + credential revision + normalized scope set with an expiry safety skew.
-- [ ] Evict all instance grants after credential replace/clear/instance disable/delete.
-- [ ] Derive allowed scope sets from the registered capability. Translation uses the narrowest documented scope supported by v3beta1; do not silently escalate to broad `cloud-platform`.
-- [ ] Ensure debug/error output cannot include JWTs, private keys, service-account JSON, or tokens.
-- [ ] Test cache hit, expiry, revision invalidation, scope separation, malformed key, pinned URI enforcement, OAuth 401/403/timeout, and cancellation.
+- [x] Before adding dependencies, retrieve current documentation for the selected JWT crate and use a current non-deprecated API/version.
+- [x] Define `TokenGrantRequest` with instance ID, capability ID, trusted auth-driver ID, normalized scope set, and audience policy ID.
+- [x] Prevent capability handlers from supplying raw token URLs or arbitrary audiences.
+- [x] Load `service-account-json` only inside the trusted Google auth driver.
+- [x] Parse bounded JSON and require `client_email`, `private_key`, and pinned `token_uri`.
+- [x] Create an RS256 JWT assertion with bounded lifetime and Google-required claims.
+- [x] Exchange only at `https://oauth2.googleapis.com/token` through the network host; classify safe OAuth errors.
+- [x] Cache tokens by instance ID + credential revision + normalized scope set with an expiry safety skew; generation guard blocks stale in-flight re-insert after eviction.
+- [x] Evict all instance grants after credential replace/clear/instance disable/delete.
+- [x] Derive allowed scope sets from the registered capability. Translation uses the narrowest documented scope supported by v3beta1; do not silently escalate to broad `cloud-platform`.
+- [x] Ensure debug/error output cannot include JWTs, private keys, service-account JSON, or tokens.
+- [x] Test cache hit, expiry, revision invalidation, concurrent replace, scope allow-list, malformed key, pinned URI enforcement, OAuth 401/403, and cancellation.
 
 **Validation:**
 
@@ -184,15 +201,15 @@
 
 **Steps:**
 
-- [ ] Define named constants for API version, endpoint alias, default location, MIME type, payload limits, and capability IDs.
-- [ ] Implement a single Rust app-language↔Google-code mapping shared by Translate and Detect.
-- [ ] Validate project/location as bounded path segments; reject separators, traversal, whitespace, and empty values.
-- [ ] Build `POST v3beta1/projects/{project}/locations/{location}:translateText` with `contents`, `mimeType = text/plain`, optional source code, and required target code.
-- [ ] Omit source code for auto detection.
-- [ ] Parse only bounded `translations[0].translatedText` and optional detected-language fields.
-- [ ] Map 401/403/429/quota/network/timeout/invalid payload to stable capability errors.
-- [ ] Do not return raw Google error bodies.
-- [ ] Test Unicode, multiline text, auto source, unsupported language, missing/empty translations, HTML-looking content treated as plain text, and bounded limits.
+- [x] Define named constants for API version, endpoint alias, default location, MIME type, payload limits, and capability IDs.
+- [x] Implement a single Rust app-language↔Google-code mapping shared by Translate and Detect.
+- [x] Validate project/location as bounded path segments; reject separators, traversal, whitespace, and empty values.
+- [x] Build `POST v3beta1/projects/{project}/locations/{location}:translateText` with `contents`, `mimeType = text/plain`, optional source code, and required target code.
+- [x] Omit source code for auto detection.
+- [x] Parse only bounded `translations[0].translatedText` and optional detected-language fields.
+- [x] Map 401/403/429/quota/network/timeout/invalid payload to stable capability errors (auth vs permission vs quota via Google status/reason).
+- [x] Do not return raw Google error bodies.
+- [x] Test Unicode, multiline text, auto source, unsupported language, missing/empty translations, HTML-looking content treated as plain text, bounded limits, and grant→broker path.
 
 **Validation:**
 
@@ -211,12 +228,12 @@
 
 **Steps:**
 
-- [ ] Build `POST v3beta1/projects/{project}/locations/{location}:detectLanguage` with `content` and `mimeType = text/plain`.
-- [ ] Select the highest-confidence supported language from the ordered response.
-- [ ] Normalize Google variants (including Chinese variants) through the shared mapping.
-- [ ] Return `unsupported_language` if Google detects only languages outside the app contract.
-- [ ] Bound content and response list sizes.
-- [ ] Test supported/unsupported variants, empty responses, malformed confidence, and errors.
+- [x] Build `POST v3beta1/projects/{project}/locations/{location}:detectLanguage` with `content` and `mimeType = text/plain`.
+- [x] Select the highest-confidence supported language from the ordered response.
+- [x] Normalize Google variants (including Chinese variants) through the shared mapping.
+- [x] Return `unsupported_language` if Google detects only languages outside the app contract.
+- [x] Bound content and response list sizes.
+- [x] Test supported/unsupported variants, empty responses, malformed confidence, errors, and grant→broker path.
 
 **Validation:**
 
@@ -235,13 +252,16 @@
 
 **Steps:**
 
-- [ ] Change validation from local-only to local config validation + token grant acquisition.
-- [ ] Keep authentication health separate from capability health; token success must not imply Translate/Vision IAM access.
-- [ ] Persist only safe status, timestamp, and normalized error code.
-- [ ] Set `ready` after successful token validation, `unconfigured` for missing required config/credential, and `degraded` for remote failure.
-- [ ] Add a bounded validation timeout and cancellation/request ID.
-- [ ] Ensure validation sends no user text and no capability API request.
-- [ ] Update frontend copy to distinguish “Credentials validated” from “Translation permission verified.”
+- [x] Change validation from local-only to local config validation + token grant acquisition.
+- [x] Keep authentication health separate from capability health; token success must not imply Translate/Vision IAM access.
+- [x] Persist only safe status, timestamp, and normalized error code.
+- [x] Set `ready` after successful token validation, `unconfigured` for missing required config/credential, and `degraded` for remote failure.
+- [x] Add a bounded validation timeout; timeout branch explicitly cancels the in-flight grant (no unused request-id wiring).
+- [x] Use `tokio::select! { biased; ... }` with the acquire branch first so simultaneous ready prefers the real grant result.
+- [x] Before health write, re-read current `updated_at` and retry CAS a few times so concurrent display_name/enable saves cannot false-fail validation or overwrite config.
+- [x] Snapshot required credential ref/revision before remote acquire; after the grant, re-read bindings and discard the remote health when credentials were replaced/cleared mid-flight (keep Unconfigured / write Unvalidated + re-run message — never stamp Ready from a stale secret).
+- [x] Ensure validation sends no user text and no capability API request.
+- [x] Update frontend copy to distinguish “Credentials validated” from “Translation permission verified.”; degraded shows an auth-failed/unconfirmed hint (not the local-only hint). Toast uses success/warning/error from `healthStatus`/`remoteChecked`.
 
 **Validation:**
 

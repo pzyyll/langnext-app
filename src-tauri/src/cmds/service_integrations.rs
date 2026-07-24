@@ -85,7 +85,7 @@ pub async fn delete_integration_instance(app: AppHandle, state: State<'_, AppSta
   Ok(())
 }
 
-/// Local-only validation (Phase 1A). Never claims remote/IAM health.
+/// Local config check + remote token grant (auth health only; not Translate IAM).
 #[tauri::command]
 pub async fn validate_integration_instance(
   app: AppHandle,
@@ -93,7 +93,7 @@ pub async fn validate_integration_instance(
   id: Uuid,
 ) -> Result<IntegrationValidationResult, IpcError> {
   let services = state.service_integrations.clone();
-  let result = run_blocking("validate_integration_instance", move || services.validate_instance(id)).await?;
+  let result = services.validate_instance(id).await.map_err(IpcError::from)?;
   emit_data_changed(&app, SERVICE_INTEGRATIONS_CHANGED);
   Ok(result)
 }

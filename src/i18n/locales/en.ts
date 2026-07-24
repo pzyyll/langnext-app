@@ -691,12 +691,15 @@ const en = {
       label: "Status",
       unconfigured: "Unconfigured",
       unvalidated: "Locally valid",
-      ready: "Ready",
+      ready: "Credentials validated",
       degraded: "Degraded",
       disabled: "Disabled",
       pluginMissing: "Plugin missing",
       lastError: "Last error: {{code}}",
-      localOnlyHint: "Phase 1A validates configuration shape only; remote auth is not checked.",
+      localOnlyHint:
+        "Validate checks configuration and OAuth token acquisition. Translation permission is not verified.",
+      authReadyHint: "Credentials validated. Translation permission is not verified by this check.",
+      authDegradedHint: "Credential authentication failed or is unconfirmed.",
     },
     dependencies: {
       title: "Dependencies",
@@ -739,7 +742,8 @@ const en = {
       saveFailed: "Failed to save configuration",
       credentialUnavailable:
         "Could not store the credential. Check that the OS credential store is available, then try again.",
-      validated: "Local validation complete",
+      validated: "Credentials validated",
+      validateDegraded: "Validation degraded",
       validateFailed: "Validation failed",
       deleted: "Configuration deleted",
       deleteFailed: "Failed to delete configuration",

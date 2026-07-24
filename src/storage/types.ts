@@ -401,7 +401,11 @@ export interface IntegrationDependencyDto {
   displayName: string;
 }
 
-/** Local-only validation result (Phase 1A never claims remote health). */
+/**
+ * Validation result for an integration instance.
+ * `remoteChecked` means host token exchange ran (auth health only).
+ * Ready does not prove Translate/Vision IAM permission.
+ */
 export interface IntegrationValidationResult {
   instanceId: string;
   healthStatus: IntegrationHealthStatus;

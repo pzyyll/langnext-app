@@ -145,9 +145,28 @@ export function IntegrationEditor({ integrationInstanceId }: IntegrationEditorPr
 
   const validateMutation = useMutation({
     mutationFn: () => validateIntegrationInstance(integrationInstanceId),
-    onSuccess: () => {
+    onSuccess: (result) => {
       void queryClient.invalidateQueries({ queryKey: integrationKeys.all });
-      toast.success({ title: t("plugins.toast.validated") });
+      const description = result.message ?? undefined;
+      if (result.healthStatus === "ready" && result.remoteChecked) {
+        toast.success({
+          title: t("plugins.toast.validated"),
+          description: description ?? t("plugins.status.authReadyHint"),
+        });
+        return;
+      }
+      if (result.healthStatus === "degraded") {
+        toast.warning({
+          title: t("plugins.toast.validateDegraded"),
+          description,
+        });
+        return;
+      }
+      // unconfigured / missing plugin / local-only incomplete checks
+      toast.error({
+        title: t("plugins.toast.validateFailed"),
+        description,
+      });
     },
     onError: (error) => {
       const message = getIpcErrorMessage(error, t("plugins.toast.validateFailed"));
@@ -201,10 +220,7 @@ export function IntegrationEditor({ integrationInstanceId }: IntegrationEditorPr
 
   const pluginMissing = instance.effectiveStatus === "plugin_missing";
   const pending =
-    saveMutation.isPending ||
-    deleteMutation.isPending ||
-    validateMutation.isPending ||
-    enabledMutation.isPending;
+    saveMutation.isPending || deleteMutation.isPending || validateMutation.isPending || enabledMutation.isPending;
   const dependencies = depsQuery.data ?? [];
 
   return (
@@ -348,7 +364,13 @@ export function IntegrationEditor({ integrationInstanceId }: IntegrationEditorPr
                 {t("plugins.status.lastError", { code: instance.lastErrorCode })}
               </p>
             ) : null}
-            <p className="text-body-tight text-neutral">{t("plugins.status.localOnlyHint")}</p>
+            <p className="text-body-tight text-neutral">
+              {instance.healthStatus === "ready"
+                ? t("plugins.status.authReadyHint")
+                : instance.healthStatus === "degraded"
+                  ? t("plugins.status.authDegradedHint")
+                  : t("plugins.status.localOnlyHint")}
+            </p>
           </section>
 
           <section className="space-y-2">

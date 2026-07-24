@@ -307,7 +307,7 @@ fn reject_corrupt_database_on_probe() {
 
 #[test]
 fn migrations_module_latest_version() {
-  assert_eq!(migrations::latest_version(), 11);
+  assert_eq!(migrations::latest_version(), 12);
 }
 
 #[test]

@@ -234,7 +234,7 @@ pub struct IntegrationDependencyDto {
   pub display_name: String,
 }
 
-/// Local-only validation result (Phase 1A never claims remote/IAM health).
+/// Validation result. `remote_checked` means token exchange ran; not Translate IAM proof.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IntegrationValidationResult {
