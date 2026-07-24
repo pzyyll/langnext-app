@@ -481,10 +481,9 @@ function TranslatePage() {
   const charCount = sourceText.length;
   const canTranslate =
     sourceText.trim().length > 0 &&
-    resolvedModelId.length > 0 &&
     !isTranslating &&
     !isApplyingProfile &&
-    !modelsLoading;
+    (activeIsPluginProfile || (resolvedModelId.length > 0 && !modelsLoading));
 
   async function applyProfile(profileId: string) {
     const generation = ++profileApplyGeneration.current;
@@ -988,40 +987,44 @@ function TranslatePage() {
             </div>
           ) : null}
 
-          <div
-            className="
-              hidden h-6 w-px shrink-0 bg-outline-variant
-              sm:block
-            "
-            aria-hidden
-          />
+          {activeIsPluginProfile ? null : (
+            <>
+              <div
+                className="
+                  hidden h-6 w-px shrink-0 bg-outline-variant
+                  sm:block
+                "
+                aria-hidden
+              />
 
-          <div className="flex min-w-0 items-center gap-2">
-            <label className="text-label-sm text-neutral uppercase" id="translate-model-label">
-              {t("translate.modelLabel")}
-            </label>
-            <SelectField
-              className="max-w-xs"
-              value={resolvedModelId}
-              onValueChange={(value) => setSelectedModelId(value ?? "")}
-              options={
-                modelsLoading || modelOptions.length === 0
-                  ? []
-                  : modelOptions.map((option) => ({ value: option.id, label: option.label }))
-              }
-              disabled={modelSelectDisabled || isTranslating}
-              placeholder={
-                modelsLoading
-                  ? t("translate.modelLoading")
-                  : modelOptions.length === 0
-                    ? t("translate.modelEmpty")
-                    : undefined
-              }
-              aria-label={t("translate.modelAria")}
-              aria-labelledby="translate-model-label"
-              compact
-            />
-          </div>
+              <div className="flex min-w-0 items-center gap-2">
+                <label className="text-label-sm text-neutral uppercase" id="translate-model-label">
+                  {t("translate.modelLabel")}
+                </label>
+                <SelectField
+                  className="max-w-xs"
+                  value={resolvedModelId}
+                  onValueChange={(value) => setSelectedModelId(value ?? "")}
+                  options={
+                    modelsLoading || modelOptions.length === 0
+                      ? []
+                      : modelOptions.map((option) => ({ value: option.id, label: option.label }))
+                  }
+                  disabled={modelSelectDisabled || isTranslating}
+                  placeholder={
+                    modelsLoading
+                      ? t("translate.modelLoading")
+                      : modelOptions.length === 0
+                        ? t("translate.modelEmpty")
+                        : undefined
+                  }
+                  aria-label={t("translate.modelAria")}
+                  aria-labelledby="translate-model-label"
+                  compact
+                />
+              </div>
+            </>
+          )}
         </div>
 
         {modelsError ? (
