@@ -198,11 +198,11 @@ export function OcrLayout() {
                         )}
                         title={service.displayName}
                       >
-                        <span className={cn("min-w-0 flex-1 truncate", active ? "font-bold" : "font-normal")}>
-                          {service.displayName}
-                        </span>
                         <span className="inline-flex shrink-0" title={providerLabel}>
                           <ProviderIcon className="size-4" aria-label={providerLabel} />
+                        </span>
+                        <span className={cn("min-w-0 flex-1 truncate", active ? "font-bold" : "font-normal")}>
+                          {service.displayName}
                         </span>
                       </Link>
                     </li>

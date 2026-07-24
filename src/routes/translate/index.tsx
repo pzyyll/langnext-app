@@ -216,8 +216,10 @@ function TranslatePage() {
   /** Guards out-of-order profile-preference hydration (restore path, not full apply). */
   const profilePrefsGeneration = useRef(0);
   const streamSession = useTranslateStreamSession();
-  /** Source/target panes grid — language more-picker sizes to this box. */
+  /** Source/target panes grid - language more-picker sizes to this box. */
   const languagePopupBoundsRef = useRef<HTMLDivElement>(null);
+  /** Previous isTranslating value; detects the true→false transition to restore source focus. */
+  const prevIsTranslatingRef = useRef(false);
 
   /** Snapshot of UI fields that belong to the active workspace. */
   function buildWorkspacePatch(): Partial<Omit<TranslateWorkspace, "id">> {
@@ -477,6 +479,20 @@ function TranslatePage() {
       translateGeneration.current += 1;
     };
   }, []);
+
+  // The source textarea is disabled while translating, which drops focus to <body>.
+  // Restore it once translation ends, but only if nothing else has taken focus
+  // (e.g. the user clicked the output pane to copy during a long stream).
+  useEffect(() => {
+    const wasTranslating = prevIsTranslatingRef.current;
+    prevIsTranslatingRef.current = isTranslating;
+    if (wasTranslating && !isTranslating && document.activeElement === document.body) {
+      const field = document.getElementById("translate-source-text");
+      if (field instanceof HTMLTextAreaElement) {
+        field.focus();
+      }
+    }
+  }, [isTranslating]);
 
   const charCount = sourceText.length;
   const canTranslate =
@@ -1094,6 +1110,20 @@ function TranslatePage() {
                   spellCheck={false}
                   value={sourceText}
                   disabled={isTranslating}
+                  onKeyDown={(event) => {
+                    // Enter submits; Shift+Enter inserts a newline.
+                    if (event.key !== "Enter" || event.shiftKey) {
+                      return;
+                    }
+                    // CJK IMEs use Enter to confirm a candidate; let it pass through.
+                    if (event.nativeEvent.isComposing) {
+                      return;
+                    }
+                    event.preventDefault();
+                    if (canTranslate) {
+                      void handleTranslate();
+                    }
+                  }}
                   onChange={(event) => {
                     setSourceText(event.currentTarget.value);
                     setDetectedSourceLang(null);
