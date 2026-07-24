@@ -98,11 +98,7 @@ function patchDraft(
   return current ? ({ ...current, ...patch } as EditorDraft) : current;
 }
 
-function buildWrite(
-  draft: EditorDraft,
-  instanceId: string,
-  expectedUpdatedAt: string,
-): IntegrationInstanceWrite {
+function buildWrite(draft: EditorDraft, instanceId: string, expectedUpdatedAt: string): IntegrationInstanceWrite {
   // Always stamp the server revision at save time so a stale/null draft field cannot
   // omit expectedUpdatedAt (backend requires it on update).
   if (draft.pluginId === GOOGLE_TRANSLATE_WEB_PLUGIN_ID) {
@@ -226,9 +222,7 @@ export function IntegrationEditor({ integrationInstanceId }: IntegrationEditorPr
       queryClient.setQueryData(integrationKeys.detail(saved.id), saved);
       void queryClient.invalidateQueries({ queryKey: integrationKeys.all });
       setDraft((current) =>
-        current
-          ? { ...current, enabled: saved.enabled, expectedUpdatedAt: saved.updatedAt }
-          : draftFromInstance(saved),
+        current ? { ...current, enabled: saved.enabled, expectedUpdatedAt: saved.updatedAt } : draftFromInstance(saved),
       );
       setTrackedInstance(saved);
     },

@@ -73,11 +73,12 @@ export function useToast(): ToastApi {
   return useMemo(() => {
     function show(options: ToastShowWithVariantOptions): string {
       const { variant, title, description, duration, action } = options;
-      return managerRef.current.add({
+      const autoTimeout = duration ?? DEFAULT_DURATION_MS[variant];
+      const id = managerRef.current.add({
         type: variant,
         title,
         description,
-        timeout: duration ?? DEFAULT_DURATION_MS[variant],
+        timeout: autoTimeout,
         priority: variant === "error" ? "high" : "low",
         actionProps: action
           ? {
@@ -86,6 +87,16 @@ export function useToast(): ToastApi {
             }
           : undefined,
       });
+      // Base UI pauses the internal close timer whenever the viewport is
+      // expanded (hover/focus) or the window is blurred. In a stacked viewport
+      // that pause path can keep stacked toasts from ever starting their timer,
+      // so they linger until manually closed. Schedule an independent close so
+      // the duration is honored regardless; `close(id)` is a no-op once the
+      // toast has already been removed. `duration: 0` stays an opt-out.
+      if (autoTimeout > 0) {
+        setTimeout(() => managerRef.current.close(id), autoTimeout);
+      }
+      return id;
     }
 
     return {
