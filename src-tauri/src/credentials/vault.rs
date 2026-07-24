@@ -63,9 +63,8 @@ impl NativeCredentialVault {
   }
 
   fn ensure_overflow_dir(&self) -> Result<(), StorageError> {
-    fs::create_dir_all(&self.overflow_dir).map_err(|e| {
-      StorageError::StorageUnavailable(format!("credential overflow directory unavailable: {e}"))
-    })
+    fs::create_dir_all(&self.overflow_dir)
+      .map_err(|e| StorageError::StorageUnavailable(format!("credential overflow directory unavailable: {e}")))
   }
 
   fn master_key(&self) -> Result<[u8; AES_GCM_KEY_LEN], StorageError> {
@@ -134,8 +133,8 @@ impl NativeCredentialVault {
     if !path.exists() {
       return Ok(None);
     }
-    let blob = fs::read(&path)
-      .map_err(|e| StorageError::StorageUnavailable(format!("credential overflow read: {e}")))?;
+    let blob =
+      fs::read(&path).map_err(|e| StorageError::StorageUnavailable(format!("credential overflow read: {e}")))?;
     if blob.len() < FILE_VAULT_MAGIC.len() + AES_GCM_NONCE_LEN + 1 {
       return Err(StorageError::CredentialAccess);
     }
@@ -151,7 +150,9 @@ impl NativeCredentialVault {
     let plain = cipher
       .decrypt(nonce, ciphertext)
       .map_err(|_| StorageError::CredentialAccess)?;
-    String::from_utf8(plain).map(Some).map_err(|_| StorageError::CredentialAccess)
+    String::from_utf8(plain)
+      .map(Some)
+      .map_err(|_| StorageError::CredentialAccess)
   }
 
   fn delete_overflow(&self, account: &str) -> Result<(), StorageError> {
@@ -174,7 +175,19 @@ impl NativeCredentialVault {
   fn get_os_keyring(&self, account: &str) -> Result<String, StorageError> {
     let entry = self.entry(account)?;
     match entry.get_secret() {
-      Ok(bytes) => String::from_utf8(bytes).map_err(|_| StorageError::CredentialAccess),
+      Ok(bytes) => match String::from_utf8(bytes) {
+        // New entries are stored as raw UTF-8 via set_secret.
+        Ok(text) if !text.contains('\0') => Ok(text),
+        // Legacy entries were written via set_password, which UTF-16-encodes on Windows.
+        // get_secret returns those raw UTF-16LE bytes; from_utf8 "succeeds" because NUL
+        // (U+0000) is valid UTF-8, producing NUL-laced garbage that breaks header parsing.
+        // Re-read via get_password, which decodes UTF-16LE back to the original secret.
+        _ => match entry.get_password() {
+          Ok(text) => Ok(text),
+          Err(keyring::Error::NoEntry) => Err(StorageError::NotFound("credential entry".into())),
+          Err(e) => Err(map_keyring_error(e)),
+        },
+      },
       Err(keyring::Error::NoEntry) => Err(StorageError::NotFound("credential entry".into())),
       Err(secret_err) => {
         // Backward compatible with secrets written via set_password.
@@ -321,8 +334,7 @@ fn map_keyring_error(err: keyring::Error) -> StorageError {
     keyring::Error::NotSupportedByStore(_) => StorageError::CredentialAccess,
     other => {
       let msg = other.to_string().to_lowercase();
-      if msg.contains("unavailable") || msg.contains("no storage access") || msg.contains("secret service")
-      {
+      if msg.contains("unavailable") || msg.contains("no storage access") || msg.contains("secret service") {
         StorageError::CredentialUnavailable
       } else {
         StorageError::CredentialAccess
@@ -567,5 +579,4 @@ mod tests {
     assert!(!vault.overflow_path(&account).exists());
     drop(guard);
   }
-
 }

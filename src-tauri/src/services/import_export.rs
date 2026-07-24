@@ -4,12 +4,15 @@ use crate::credentials::CredentialVault;
 use crate::credentials::coordinator;
 use crate::domain::import_export::{
   ConfigurationExport, EXPORT_FORMAT_VERSION, ImportConflictMode, ImportPreview, ImportResult,
+  IntegrationInstanceExport, export_json_contains_forbidden_secret_keys, parse_and_normalize_export_document,
 };
 use crate::domain::provider::ProviderExport;
 use crate::domain::time::{new_id, now_rfc3339};
 use crate::error::StorageError;
 use crate::repositories::credential_operations::{self, CredentialOperation, OwnerKind};
-use crate::repositories::{app_credentials, app_settings, provider_instances, provider_models, translation_profiles};
+use crate::repositories::{
+  app_credentials, app_settings, integration_instances, provider_instances, provider_models, translation_profiles,
+};
 use crate::services::import_validation::{self, ValidatedImportPlan};
 use crate::storage::Database;
 use std::collections::HashMap;
@@ -34,6 +37,7 @@ impl ImportExportService {
       let translation_profiles = translation_profiles::list(conn)?;
       let profile_models = translation_profiles::list_all_targets(conn)?;
       let profile_prompt_templates = translation_profiles::list_all_prompt_templates(conn)?;
+      let integrations = integration_instances::list(conn)?;
       let app_settings = app_settings::get(conn)?;
 
       let mut provider_exports: Vec<ProviderExport> = providers.iter().map(ProviderExport::from).collect();
@@ -51,7 +55,24 @@ impl ImportExportService {
       let mut templates = profile_prompt_templates;
       templates.sort_by_key(|t| (t.translation_profile_id, t.sort_order, t.id));
 
-      Ok(ConfigurationExport {
+      let mut integration_exports: Vec<IntegrationInstanceExport> = integrations
+        .into_iter()
+        .map(|i| IntegrationInstanceExport {
+          id: i.id,
+          plugin_id: i.plugin_id,
+          plugin_version: i.plugin_version,
+          display_name: i.display_name,
+          enabled: i.enabled,
+          config_json: i.config_json,
+          config_schema_version: i.config_schema_version,
+          health_status: i.health_status.as_str().to_string(),
+          created_at: i.created_at,
+          updated_at: i.updated_at,
+        })
+        .collect();
+      integration_exports.sort_by_key(|i| i.id);
+
+      let doc = ConfigurationExport {
         format_version: EXPORT_FORMAT_VERSION,
         exported_at: now_rfc3339(),
         providers: provider_exports,
@@ -59,9 +80,32 @@ impl ImportExportService {
         translation_profiles: profiles,
         profile_models: targets,
         profile_prompt_templates: templates,
+        integration_instances: integration_exports,
         app_settings,
-      })
+      };
+
+      // Fail closed if serialization ever includes secret/ref field names.
+      let json = serde_json::to_string(&doc)?;
+      let forbidden = export_json_contains_forbidden_secret_keys(&json);
+      if !forbidden.is_empty() {
+        return Err(StorageError::Validation(format!(
+          "export document contains forbidden secret keys: {}",
+          forbidden.join(", ")
+        )));
+      }
+
+      Ok(doc)
     })
+  }
+
+  /// Preview import from an untrusted JSON value (formatVersion parsed first, then normalized to v4).
+  pub fn preview_raw(
+    &self,
+    document: serde_json::Value,
+    mode: ImportConflictMode,
+  ) -> Result<ImportPreview, StorageError> {
+    let normalized = parse_and_normalize_export_document(document).map_err(StorageError::Validation)?;
+    self.preview(&normalized, mode)
   }
 
   pub fn preview(
@@ -73,6 +117,16 @@ impl ImportExportService {
       let plan = import_validation::build_validated_plan(conn, document, mode)?;
       Ok(plan.preview)
     })
+  }
+
+  /// Import from an untrusted JSON value (formatVersion parsed first, then normalized to v4).
+  pub fn import_raw(
+    &self,
+    document: serde_json::Value,
+    mode: ImportConflictMode,
+  ) -> Result<ImportResult, StorageError> {
+    let normalized = parse_and_normalize_export_document(document).map_err(StorageError::Validation)?;
+    self.import(normalized, mode)
   }
 
   pub fn import(&self, document: ConfigurationExport, mode: ImportConflictMode) -> Result<ImportResult, StorageError> {
@@ -141,6 +195,29 @@ impl ImportExportService {
     plan: &ValidatedImportPlan,
   ) -> Result<Vec<CredentialOperation>, StorageError> {
     let mut cleanup_ops = Vec::new();
+
+    // Integrations first so plugin profiles can bind via FK.
+    for instance in &plan.integrations {
+      if integration_instances::get(conn, instance.id).is_ok() {
+        // Merge: update structural config; leave credential bindings empty/unchanged (never imported).
+        integration_instances::compare_and_set(
+          conn,
+          instance.id,
+          // Use current updated_at if present; fall back to imported stamp.
+          &integration_instances::get(conn, instance.id)?.updated_at,
+          &instance.display_name,
+          instance.enabled,
+          &instance.config_json,
+          instance.config_schema_version,
+          instance.health_status,
+          instance.last_validated_at.as_deref(),
+          instance.last_error_code.as_deref(),
+          &instance.updated_at,
+        )?;
+      } else {
+        integration_instances::insert(conn, instance)?;
+      }
+    }
 
     // Providers
     for p in &plan.providers {

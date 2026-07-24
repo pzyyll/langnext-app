@@ -1,5 +1,5 @@
 // ABOUTME: Language detector domain contract: config, IPC input/result, and strict LLM-output parser.
-// ABOUTME: Only LLM-backed detection exists today; the tagged enum leaves room for Google/Microsoft providers.
+// ABOUTME: Supports LLM detectors and service-integration detector results from plugin Profiles.
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -51,15 +51,18 @@ impl LanguageDetectorConfig {
 
 /// Detector backend that produced a `DetectLanguageResult`. Mirrors `LanguageDetectorConfig` tags.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub enum DetectorType {
   Llm,
+  /// Service-integration Detect capability (plugin Profile path).
+  ServiceIntegration,
 }
 
 impl DetectorType {
   pub fn as_str(self) -> &'static str {
     match self {
       Self::Llm => "llm",
+      Self::ServiceIntegration => "service_integration",
     }
   }
 }

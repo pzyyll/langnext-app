@@ -1,19 +1,12 @@
 // ABOUTME: Tests for bootstrapStorage Effect: Tauri path, null-theme migration, browser path.
 // ABOUTME: Mocks Tauri invoke only; installs a minimal DOM/localStorage like themeSync tests.
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { Effect } from "effect";
+import { installTauriInvokeMock, invokeMock, resetInvokeMock } from "../test/tauriInvokeMock";
 import { isIpcError } from "./ipcError";
 import type { AppSettingsDto } from "./types";
 
-const invokeMock = mock(async (cmd: string, args?: Record<string, unknown>) => {
-  void cmd;
-  void args;
-  return undefined;
-});
-
-mock.module("@tauri-apps/api/core", () => ({
-  invoke: (cmd: string, args?: Record<string, unknown>) => invokeMock(cmd, args),
-}));
+installTauriInvokeMock();
 
 const { bootstrapStorage, bootstrapStorageEffect, readThemeCache } = await import("./bootstrap");
 
@@ -108,7 +101,8 @@ function setTauriRuntime(enabled: boolean): void {
 
 describe("bootstrapStorage", () => {
   beforeEach(() => {
-    invokeMock.mockReset();
+    resetInvokeMock();
+    invokeMock.mockImplementation(async () => undefined);
     invokeMock.mockImplementation(async () => undefined);
     installDomAndStorage("light");
   });

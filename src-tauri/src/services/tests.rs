@@ -10,7 +10,10 @@ use crate::domain::provider::{
 use crate::domain::settings::{
   AppSettingsUpdate, AppSettingsV1, GlobalProxyMode, NetworkSettings, ProxyCredentialUpdate, TranslationPreferences,
 };
-use crate::domain::translation_profile::{PromptTemplate, TranslationProfile, TranslationProfileWrite};
+use crate::domain::translation_profile::{
+  LlmModelChainEngine, LlmModelChainEngineWrite, PromptTemplate, TranslationProfile, TranslationProfileEngine,
+  TranslationProfileEngineWrite, TranslationProfileWrite,
+};
 use crate::error::StorageError;
 use crate::services::{ImportExportService, ModelService, ProviderService, SettingsService, TranslationProfileService};
 use crate::storage::Database;
@@ -42,7 +45,10 @@ fn setup() -> (
   let vault = Arc::new(MemoryCredentialVault::new());
   let providers = ProviderService::new(db.clone(), vault.clone());
   let models = ModelService::new(db.clone(), vault.clone(), models_dev_cache_dir(&dir));
-  let profiles = TranslationProfileService::new(db.clone());
+  let profiles = TranslationProfileService::new(
+    db.clone(),
+    Arc::new(crate::services::ServiceIntegrationRegistry::bundled().unwrap()),
+  );
   let settings = SettingsService::new(db.clone(), vault.clone());
   let import_export = ImportExportService::new(db.clone(), vault.clone());
   (dir, db, vault, providers, models, profiles, settings, import_export)
@@ -379,43 +385,45 @@ fn profile_save_persists_multiple_prompt_templates_and_default() {
       id: None,
       name: "Multi".into(),
       enabled: true,
-      template_version: 1,
-      default_prompt_template_id: t2,
-      prompt_templates: vec![
-        PromptTemplate {
-          id: t1,
-          name: "First".into(),
-          system_template: "sys-one".into(),
-          user_template: "one {{text}}".into(),
-        },
-        PromptTemplate {
-          id: t2,
-          name: "Second".into(),
-          system_template: "sys-two".into(),
-          user_template: "two {{text}}".into(),
-        },
-      ],
-      temperature: None,
-      max_output_tokens: None,
-      provider_options_json: None,
       source_lang: Some("auto".into()),
       target_lang: Some("auto".into()),
       primary_lang: Some("zh".into()),
       preferred_target_lang: Some("en".into()),
-      language_detection: None,
-      target_model_ids: vec![m.id],
+      engine: TranslationProfileEngineWrite::LlmModelChain(LlmModelChainEngineWrite {
+        template_version: 1,
+        default_prompt_template_id: t2,
+        prompt_templates: vec![
+          PromptTemplate {
+            id: t1,
+            name: "First".into(),
+            system_template: "sys-one".into(),
+            user_template: "one {{text}}".into(),
+          },
+          PromptTemplate {
+            id: t2,
+            name: "Second".into(),
+            system_template: "sys-two".into(),
+            user_template: "two {{text}}".into(),
+          },
+        ],
+        temperature: None,
+        max_output_tokens: None,
+        provider_options_json: None,
+        language_detection: None,
+        target_model_ids: vec![m.id],
+      }),
     })
     .unwrap();
 
   assert_eq!(dto.prompt_templates.len(), 2);
   assert_eq!(dto.prompt_templates[0].id, t1);
   assert_eq!(dto.prompt_templates[1].id, t2);
-  assert_eq!(dto.profile.default_prompt_template_id, t2);
+  assert_eq!(dto.profile.engine.as_llm().unwrap().default_prompt_template_id, t2);
 
   let listed = profiles.list().unwrap();
   let found = listed.iter().find(|row| row.profile.id == dto.profile.id).unwrap();
   assert_eq!(found.prompt_templates.len(), 2);
-  assert_eq!(found.profile.default_prompt_template_id, t2);
+  assert_eq!(found.profile.engine.as_llm().unwrap().default_prompt_template_id, t2);
 }
 
 #[test]
@@ -475,18 +483,20 @@ fn profile_list_includes_ordered_targets_bulk() {
         id: None,
         name: "Zero".into(),
         enabled: true,
-        template_version: 1,
-        default_prompt_template_id,
-        prompt_templates,
-        temperature: None,
-        max_output_tokens: None,
-        provider_options_json: None,
         source_lang: None,
         target_lang: None,
         primary_lang: Some("zh".into()),
         preferred_target_lang: Some("en".into()),
-        language_detection: None,
-        target_model_ids: vec![],
+        engine: TranslationProfileEngineWrite::LlmModelChain(LlmModelChainEngineWrite {
+          template_version: 1,
+          default_prompt_template_id,
+          prompt_templates,
+          temperature: None,
+          max_output_tokens: None,
+          provider_options_json: None,
+          language_detection: None,
+          target_model_ids: vec![],
+        }),
       }
     })
     .unwrap_err();
@@ -502,18 +512,20 @@ fn profile_list_includes_ordered_targets_bulk() {
         id: None,
         name: "One".into(),
         enabled: true,
-        template_version: 1,
-        default_prompt_template_id,
-        prompt_templates,
-        temperature: None,
-        max_output_tokens: None,
-        provider_options_json: None,
         source_lang: None,
         target_lang: None,
         primary_lang: Some("zh".into()),
         preferred_target_lang: Some("en".into()),
-        language_detection: None,
-        target_model_ids: vec![m1.id],
+        engine: TranslationProfileEngineWrite::LlmModelChain(LlmModelChainEngineWrite {
+          template_version: 1,
+          default_prompt_template_id,
+          prompt_templates,
+          temperature: None,
+          max_output_tokens: None,
+          provider_options_json: None,
+          language_detection: None,
+          target_model_ids: vec![m1.id],
+        }),
       }
     })
     .unwrap();
@@ -524,19 +536,20 @@ fn profile_list_includes_ordered_targets_bulk() {
         id: None,
         name: "Many".into(),
         enabled: true,
-        template_version: 1,
-        default_prompt_template_id,
-        prompt_templates,
-        temperature: None,
-        max_output_tokens: None,
-        provider_options_json: None,
         source_lang: None,
         target_lang: None,
         primary_lang: Some("zh".into()),
         preferred_target_lang: Some("en".into()),
-        language_detection: None,
-        // Intentional reverse insert order vs name sort of profiles.
-        target_model_ids: vec![m2.id, m1.id],
+        engine: TranslationProfileEngineWrite::LlmModelChain(LlmModelChainEngineWrite {
+          template_version: 1,
+          default_prompt_template_id,
+          prompt_templates,
+          temperature: None,
+          max_output_tokens: None,
+          provider_options_json: None,
+          language_detection: None,
+          target_model_ids: vec![m2.id, m1.id],
+        }),
       }
     })
     .unwrap();
@@ -594,18 +607,20 @@ fn profile_save_and_fallback_order() {
         id: None,
         name: "Fast".into(),
         enabled: true,
-        template_version: 1,
-        default_prompt_template_id,
-        prompt_templates,
-        temperature: Some(0.1),
-        max_output_tokens: Some(2048),
-        provider_options_json: None,
         source_lang: Some("zh".into()),
         target_lang: Some("en".into()),
         primary_lang: Some("zh".into()),
         preferred_target_lang: Some("en".into()),
-        language_detection: None,
-        target_model_ids: vec![m1.id, m2.id],
+        engine: TranslationProfileEngineWrite::LlmModelChain(LlmModelChainEngineWrite {
+          template_version: 1,
+          default_prompt_template_id,
+          prompt_templates,
+          temperature: Some(0.1),
+          max_output_tokens: Some(2048),
+          provider_options_json: None,
+          language_detection: None,
+          target_model_ids: vec![m1.id, m2.id],
+        }),
       }
     })
     .unwrap();
@@ -638,18 +653,20 @@ fn profile_language_preferences_round_trip() {
         id: None,
         name: "Prefs".into(),
         enabled: true,
-        template_version: 1,
-        default_prompt_template_id,
-        prompt_templates,
-        temperature: None,
-        max_output_tokens: None,
-        provider_options_json: None,
         source_lang: Some("auto".into()),
         target_lang: Some("auto".into()),
         primary_lang: Some("zh".into()),
         preferred_target_lang: Some("en".into()),
-        language_detection: None,
-        target_model_ids: vec![m.id],
+        engine: TranslationProfileEngineWrite::LlmModelChain(LlmModelChainEngineWrite {
+          template_version: 1,
+          default_prompt_template_id,
+          prompt_templates,
+          temperature: None,
+          max_output_tokens: None,
+          provider_options_json: None,
+          language_detection: None,
+          target_model_ids: vec![m.id],
+        }),
       }
     })
     .unwrap();
@@ -669,18 +686,20 @@ fn profile_language_preferences_round_trip() {
       id: Some(dto.profile.id),
       name: "Prefs".into(),
       enabled: true,
-      template_version: 1,
-      default_prompt_template_id,
-      prompt_templates,
-      temperature: None,
-      max_output_tokens: None,
-      provider_options_json: None,
       source_lang: Some("auto".into()),
       target_lang: Some("en".into()),
       primary_lang: Some("zh".into()),
       preferred_target_lang: Some("en".into()),
-      language_detection: None,
-      target_model_ids: vec![m.id],
+      engine: TranslationProfileEngineWrite::LlmModelChain(LlmModelChainEngineWrite {
+        template_version: 1,
+        default_prompt_template_id,
+        prompt_templates,
+        temperature: None,
+        max_output_tokens: None,
+        provider_options_json: None,
+        language_detection: None,
+        target_model_ids: vec![m.id],
+      }),
     }
   };
   cleared.primary_lang = None;
@@ -716,18 +735,20 @@ fn profile_language_preferences_validation_rejects_invalid_pairs() {
       id: None,
       name: "Prefs".into(),
       enabled: true,
-      template_version: 1,
-      default_prompt_template_id,
-      prompt_templates,
-      temperature: None,
-      max_output_tokens: None,
-      provider_options_json: None,
       source_lang: Some("auto".into()),
       target_lang: Some("auto".into()),
       primary_lang: Some("zh".into()),
       preferred_target_lang: Some("en".into()),
-      language_detection: None,
-      target_model_ids: vec![m],
+      engine: TranslationProfileEngineWrite::LlmModelChain(LlmModelChainEngineWrite {
+        template_version: 1,
+        default_prompt_template_id,
+        prompt_templates,
+        temperature: None,
+        max_output_tokens: None,
+        provider_options_json: None,
+        language_detection: None,
+        target_model_ids: vec![m],
+      }),
     }
   }
 
@@ -792,18 +813,20 @@ fn delete_provider_cascades_to_models_and_targets() {
         id: None,
         name: "Cascade Profile".into(),
         enabled: true,
-        template_version: 1,
-        default_prompt_template_id,
-        prompt_templates,
-        temperature: None,
-        max_output_tokens: None,
-        provider_options_json: None,
         source_lang: None,
         target_lang: None,
         primary_lang: Some("zh".into()),
         preferred_target_lang: Some("en".into()),
-        language_detection: None,
-        target_model_ids: vec![model.id],
+        engine: TranslationProfileEngineWrite::LlmModelChain(LlmModelChainEngineWrite {
+          template_version: 1,
+          default_prompt_template_id,
+          prompt_templates,
+          temperature: None,
+          max_output_tokens: None,
+          provider_options_json: None,
+          language_detection: None,
+          target_model_ids: vec![model.id],
+        }),
       }
     })
     .unwrap();
@@ -910,18 +933,20 @@ fn import_export_round_trip_and_secret_exclusion() {
         id: None,
         name: "P".into(),
         enabled: true,
-        template_version: 1,
-        default_prompt_template_id,
-        prompt_templates,
-        temperature: None,
-        max_output_tokens: None,
-        provider_options_json: None,
         source_lang: None,
         target_lang: None,
         primary_lang: Some("zh".into()),
         preferred_target_lang: Some("en".into()),
-        language_detection: None,
-        target_model_ids: vec![m.id],
+        engine: TranslationProfileEngineWrite::LlmModelChain(LlmModelChainEngineWrite {
+          template_version: 1,
+          default_prompt_template_id,
+          prompt_templates,
+          temperature: None,
+          max_output_tokens: None,
+          provider_options_json: None,
+          language_detection: None,
+          target_model_ids: vec![m.id],
+        }),
       }
     })
     .unwrap();
@@ -1006,18 +1031,20 @@ fn import_rejects_malformed_graphs() {
         id: None,
         name: "P".into(),
         enabled: true,
-        template_version: 1,
-        default_prompt_template_id,
-        prompt_templates,
-        temperature: None,
-        max_output_tokens: None,
-        provider_options_json: None,
         source_lang: None,
         target_lang: None,
         primary_lang: Some("zh".into()),
         preferred_target_lang: Some("en".into()),
-        language_detection: None,
-        target_model_ids: vec![m.id],
+        engine: TranslationProfileEngineWrite::LlmModelChain(LlmModelChainEngineWrite {
+          template_version: 1,
+          default_prompt_template_id,
+          prompt_templates,
+          temperature: None,
+          max_output_tokens: None,
+          provider_options_json: None,
+          language_detection: None,
+          target_model_ids: vec![m.id],
+        }),
       }
     })
     .unwrap();
@@ -1091,18 +1118,20 @@ fn import_accepts_legacy_preferences_and_rejects_invalid_pairs() {
         id: None,
         name: "Prefs".into(),
         enabled: true,
-        template_version: 1,
-        default_prompt_template_id,
-        prompt_templates,
-        temperature: None,
-        max_output_tokens: None,
-        provider_options_json: None,
         source_lang: Some("auto".into()),
         target_lang: Some("auto".into()),
         primary_lang: Some("zh".into()),
         preferred_target_lang: Some("en".into()),
-        language_detection: None,
-        target_model_ids: vec![m.id],
+        engine: TranslationProfileEngineWrite::LlmModelChain(LlmModelChainEngineWrite {
+          template_version: 1,
+          default_prompt_template_id,
+          prompt_templates,
+          temperature: None,
+          max_output_tokens: None,
+          provider_options_json: None,
+          language_detection: None,
+          target_model_ids: vec![m.id],
+        }),
       }
     })
     .unwrap();
@@ -1160,18 +1189,20 @@ fn import_accepts_legacy_profile_missing_preference_keys() {
         id: None,
         name: "Prefs".into(),
         enabled: true,
-        template_version: 1,
-        default_prompt_template_id,
-        prompt_templates,
-        temperature: None,
-        max_output_tokens: None,
-        provider_options_json: None,
         source_lang: Some("auto".into()),
         target_lang: Some("auto".into()),
         primary_lang: Some("zh".into()),
         preferred_target_lang: Some("en".into()),
-        language_detection: None,
-        target_model_ids: vec![m.id],
+        engine: TranslationProfileEngineWrite::LlmModelChain(LlmModelChainEngineWrite {
+          template_version: 1,
+          default_prompt_template_id,
+          prompt_templates,
+          temperature: None,
+          max_output_tokens: None,
+          provider_options_json: None,
+          language_detection: None,
+          target_model_ids: vec![m.id],
+        }),
       }
     })
     .unwrap();
@@ -1696,18 +1727,20 @@ fn delete_all_models_keeps_provider_and_connection() {
         id: None,
         name: "Uses models".into(),
         enabled: true,
-        template_version: 1,
-        default_prompt_template_id,
-        prompt_templates,
-        temperature: None,
-        max_output_tokens: None,
-        provider_options_json: None,
         source_lang: None,
         target_lang: None,
         primary_lang: Some("zh".into()),
         preferred_target_lang: Some("en".into()),
-        language_detection: None,
-        target_model_ids: vec![m1.id, m2.id],
+        engine: TranslationProfileEngineWrite::LlmModelChain(LlmModelChainEngineWrite {
+          template_version: 1,
+          default_prompt_template_id,
+          prompt_templates,
+          temperature: None,
+          max_output_tokens: None,
+          provider_options_json: None,
+          language_detection: None,
+          target_model_ids: vec![m1.id, m2.id],
+        }),
       }
     })
     .unwrap();
@@ -1782,18 +1815,20 @@ fn delete_many_models_all_or_nothing() {
         id: None,
         name: "Holds bulk-c".into(),
         enabled: true,
-        template_version: 1,
-        default_prompt_template_id,
-        prompt_templates,
-        temperature: None,
-        max_output_tokens: None,
-        provider_options_json: None,
         source_lang: None,
         target_lang: None,
         primary_lang: Some("zh".into()),
         preferred_target_lang: Some("en".into()),
-        language_detection: None,
-        target_model_ids: vec![m3.id],
+        engine: TranslationProfileEngineWrite::LlmModelChain(LlmModelChainEngineWrite {
+          template_version: 1,
+          default_prompt_template_id,
+          prompt_templates,
+          temperature: None,
+          max_output_tokens: None,
+          provider_options_json: None,
+          language_detection: None,
+          target_model_ids: vec![m3.id],
+        }),
       }
     })
     .unwrap();
@@ -1917,16 +1952,18 @@ fn sample_profile(
     id,
     name: name.into(),
     enabled: true,
-    template_version: 1,
-    default_prompt_template_id: template_id,
-    temperature: None,
-    max_output_tokens: None,
-    provider_options_json: None,
     source_lang: None,
     target_lang: None,
     primary_lang: None,
     preferred_target_lang: None,
-    language_detection,
+    engine: TranslationProfileEngine::LlmModelChain(LlmModelChainEngine {
+      template_version: 1,
+      default_prompt_template_id: template_id,
+      temperature: None,
+      max_output_tokens: None,
+      provider_options_json: None,
+      language_detection,
+    }),
     created_at: now.clone(),
     updated_at: now,
   };
@@ -1970,30 +2007,32 @@ fn profile_save_persists_dedicated_detection_model_and_empty_config() {
         id: None,
         name: "Detect profile".into(),
         enabled: true,
-        template_version: 1,
-        default_prompt_template_id,
-        prompt_templates,
-        temperature: None,
-        max_output_tokens: None,
-        provider_options_json: None,
         source_lang: None,
         target_lang: None,
         primary_lang: Some("zh".into()),
         preferred_target_lang: Some("en".into()),
-        language_detection: Some(LanguageDetectorConfig::Llm { model_id: Some(m1.id) }),
-        target_model_ids: vec![m2.id],
+        engine: TranslationProfileEngineWrite::LlmModelChain(LlmModelChainEngineWrite {
+          template_version: 1,
+          default_prompt_template_id,
+          prompt_templates,
+          temperature: None,
+          max_output_tokens: None,
+          provider_options_json: None,
+          language_detection: Some(LanguageDetectorConfig::Llm { model_id: Some(m1.id) }),
+          target_model_ids: vec![m2.id],
+        }),
       }
     })
     .unwrap();
   assert_eq!(
-    saved.profile.language_detection,
+    saved.profile.engine.as_llm().unwrap().language_detection,
     Some(LanguageDetectorConfig::Llm { model_id: Some(m1.id) })
   );
 
   // Re-read round-trips the config JSON from SQLite.
   let reread = profiles.get(saved.profile.id).unwrap();
   assert_eq!(
-    reread.profile.language_detection,
+    reread.profile.engine.as_llm().unwrap().language_detection,
     Some(LanguageDetectorConfig::Llm { model_id: Some(m1.id) })
   );
 
@@ -2005,27 +2044,32 @@ fn profile_save_persists_dedicated_detection_model_and_empty_config() {
         id: Some(saved.profile.id),
         name: "Detect profile".into(),
         enabled: true,
-        template_version: 1,
-        default_prompt_template_id,
-        prompt_templates,
-        temperature: None,
-        max_output_tokens: None,
-        provider_options_json: None,
         source_lang: None,
         target_lang: None,
         primary_lang: Some("zh".into()),
         preferred_target_lang: Some("en".into()),
-        language_detection: None,
-        target_model_ids: vec![m2.id],
+        engine: TranslationProfileEngineWrite::LlmModelChain(LlmModelChainEngineWrite {
+          template_version: 1,
+          default_prompt_template_id,
+          prompt_templates,
+          temperature: None,
+          max_output_tokens: None,
+          provider_options_json: None,
+          language_detection: None,
+          target_model_ids: vec![m2.id],
+        }),
       }
     })
     .unwrap();
-  assert!(cleared.profile.language_detection.is_none());
+  assert!(cleared.profile.engine.as_llm().unwrap().language_detection.is_none());
   assert!(
     profiles
       .get(saved.profile.id)
       .unwrap()
       .profile
+      .engine
+      .as_llm()
+      .unwrap()
       .language_detection
       .is_none()
   );
@@ -2056,18 +2100,20 @@ fn profile_save_rejects_detection_model_that_does_not_exist() {
         id: None,
         name: "Bad detect".into(),
         enabled: true,
-        template_version: 1,
-        default_prompt_template_id,
-        prompt_templates,
-        temperature: None,
-        max_output_tokens: None,
-        provider_options_json: None,
         source_lang: None,
         target_lang: None,
         primary_lang: Some("zh".into()),
         preferred_target_lang: Some("en".into()),
-        language_detection: Some(LanguageDetectorConfig::Llm { model_id: Some(ghost) }),
-        target_model_ids: vec![m.id],
+        engine: TranslationProfileEngineWrite::LlmModelChain(LlmModelChainEngineWrite {
+          template_version: 1,
+          default_prompt_template_id,
+          prompt_templates,
+          temperature: None,
+          max_output_tokens: None,
+          provider_options_json: None,
+          language_detection: Some(LanguageDetectorConfig::Llm { model_id: Some(ghost) }),
+          target_model_ids: vec![m.id],
+        }),
       }
     })
     .unwrap_err();
@@ -2126,20 +2172,22 @@ fn delete_model_and_provider_clear_detection_config() {
         id: None,
         name: "Dedicated detector".into(),
         enabled: true,
-        template_version: 1,
-        default_prompt_template_id,
-        prompt_templates,
-        temperature: None,
-        max_output_tokens: None,
-        provider_options_json: None,
         source_lang: Some("auto".into()),
         target_lang: Some("en".into()),
         primary_lang: Some("zh".into()),
         preferred_target_lang: Some("en".into()),
-        language_detection: Some(LanguageDetectorConfig::Llm {
-          model_id: Some(detector.id),
+        engine: TranslationProfileEngineWrite::LlmModelChain(LlmModelChainEngineWrite {
+          template_version: 1,
+          default_prompt_template_id,
+          prompt_templates,
+          temperature: None,
+          max_output_tokens: None,
+          provider_options_json: None,
+          language_detection: Some(LanguageDetectorConfig::Llm {
+            model_id: Some(detector.id),
+          }),
+          target_model_ids: vec![primary.id],
         }),
-        target_model_ids: vec![primary.id],
       }
     })
     .unwrap();
@@ -2147,7 +2195,15 @@ fn delete_model_and_provider_clear_detection_config() {
   // Direct model delete detaches the dedicated detector config.
   models.delete(detector.id).unwrap();
   let after_model_delete = profiles.get(profile.profile.id).unwrap();
-  assert!(after_model_delete.profile.language_detection.is_none());
+  assert!(
+    after_model_delete
+      .profile
+      .engine
+      .as_llm()
+      .unwrap()
+      .language_detection
+      .is_none()
+  );
   assert_eq!(after_model_delete.targets[0].provider_model_id, primary.id);
 
   // Re-bind detector to another model, then provider delete still clears config.
@@ -2158,27 +2214,29 @@ fn delete_model_and_provider_clear_detection_config() {
         id: Some(profile.profile.id),
         name: "Dedicated detector".into(),
         enabled: true,
-        template_version: 1,
-        default_prompt_template_id,
-        prompt_templates,
-        temperature: None,
-        max_output_tokens: None,
-        provider_options_json: None,
         source_lang: Some("auto".into()),
         target_lang: Some("en".into()),
         primary_lang: Some("zh".into()),
         preferred_target_lang: Some("en".into()),
-        language_detection: Some(LanguageDetectorConfig::Llm {
-          model_id: Some(detector_b.id),
+        engine: TranslationProfileEngineWrite::LlmModelChain(LlmModelChainEngineWrite {
+          template_version: 1,
+          default_prompt_template_id,
+          prompt_templates,
+          temperature: None,
+          max_output_tokens: None,
+          provider_options_json: None,
+          language_detection: Some(LanguageDetectorConfig::Llm {
+            model_id: Some(detector_b.id),
+          }),
+          target_model_ids: vec![primary.id],
         }),
-        target_model_ids: vec![primary.id],
       }
     })
     .unwrap();
 
   providers.delete(detector_b_provider.id).unwrap();
   let reread = profiles.get(profile.profile.id).unwrap();
-  assert!(reread.profile.language_detection.is_none());
+  assert!(reread.profile.engine.as_llm().unwrap().language_detection.is_none());
   assert_eq!(reread.targets[0].provider_model_id, primary.id);
 }
 
@@ -2217,18 +2275,20 @@ fn import_copy_rewrites_detection_model_id() {
         id: None,
         name: "Detect profile".into(),
         enabled: true,
-        template_version: 1,
-        default_prompt_template_id,
-        prompt_templates,
-        temperature: None,
-        max_output_tokens: None,
-        provider_options_json: None,
         source_lang: None,
         target_lang: None,
         primary_lang: Some("zh".into()),
         preferred_target_lang: Some("en".into()),
-        language_detection: Some(LanguageDetectorConfig::Llm { model_id: Some(m.id) }),
-        target_model_ids: vec![primary.id],
+        engine: TranslationProfileEngineWrite::LlmModelChain(LlmModelChainEngineWrite {
+          template_version: 1,
+          default_prompt_template_id,
+          prompt_templates,
+          temperature: None,
+          max_output_tokens: None,
+          provider_options_json: None,
+          language_detection: Some(LanguageDetectorConfig::Llm { model_id: Some(m.id) }),
+          target_model_ids: vec![primary.id],
+        }),
       }
     })
     .unwrap();
@@ -2266,7 +2326,7 @@ fn import_copy_rewrites_detection_model_id() {
     copied_detector_id, copied_primary_id,
     "detector remains dedicated after copy"
   );
-  match &copied.profile.language_detection {
+  match &copied.profile.engine.as_llm().unwrap().language_detection {
     Some(LanguageDetectorConfig::Llm { model_id: Some(id) }) => {
       assert_eq!(
         *id, copied_detector_id,
@@ -2301,18 +2361,20 @@ fn import_rejects_profile_detection_referencing_missing_model() {
         id: None,
         name: "Detect profile".into(),
         enabled: true,
-        template_version: 1,
-        default_prompt_template_id,
-        prompt_templates,
-        temperature: None,
-        max_output_tokens: None,
-        provider_options_json: None,
         source_lang: None,
         target_lang: None,
         primary_lang: Some("zh".into()),
         preferred_target_lang: Some("en".into()),
-        language_detection: Some(LanguageDetectorConfig::Llm { model_id: Some(m.id) }),
-        target_model_ids: vec![m.id],
+        engine: TranslationProfileEngineWrite::LlmModelChain(LlmModelChainEngineWrite {
+          template_version: 1,
+          default_prompt_template_id,
+          prompt_templates,
+          temperature: None,
+          max_output_tokens: None,
+          provider_options_json: None,
+          language_detection: Some(LanguageDetectorConfig::Llm { model_id: Some(m.id) }),
+          target_model_ids: vec![m.id],
+        }),
       }
     })
     .unwrap();
@@ -2320,8 +2382,10 @@ fn import_rejects_profile_detection_referencing_missing_model() {
   let mut doc = ie.export().unwrap();
   // Point the detection model id at a model that does not exist in the document.
   let ghost = uuid::Uuid::now_v7();
-  if let Some(LanguageDetectorConfig::Llm { model_id }) = doc.translation_profiles[0].language_detection.as_mut() {
-    *model_id = Some(ghost);
+  if let TranslationProfileEngine::LlmModelChain(ref mut llm) = doc.translation_profiles[0].engine {
+    if let Some(LanguageDetectorConfig::Llm { model_id }) = llm.language_detection.as_mut() {
+      *model_id = Some(ghost);
+    }
   }
   let preview = ie.preview(&doc, ImportConflictMode::Merge).unwrap();
   assert!(!preview.valid);
@@ -2332,5 +2396,396 @@ fn import_rejects_profile_detection_referencing_missing_model() {
       .any(|e| e.contains("language detection")),
     "expected a language-detection reference error, got {:?}",
     preview.validation_errors
+  );
+}
+
+#[test]
+fn plugin_profile_save_requires_ready_instance_and_rejects_engine_change() {
+  use crate::domain::service_integration::{
+    GOOGLE_CLOUD_DEFAULT_LOCATION, GOOGLE_CLOUD_PLUGIN_ID, GoogleCloudConfigV1, IntegrationHealthStatus,
+    IntegrationInstance,
+  };
+  use crate::domain::translation_profile::{
+    GOOGLE_TRANSLATE_PREFERENCES_SCHEMA_VERSION, PluginCapabilityEngineWrite, empty_google_translate_preferences,
+  };
+  use crate::repositories::integration_instances;
+  use crate::services::google_cloud::{GOOGLE_DETECT_LANGUAGE_CAPABILITY_ID, GOOGLE_TRANSLATE_TEXT_CAPABILITY_ID};
+
+  let (_d, db, _v, _providers, _models, profiles, ..) = setup();
+  let instance_id = crate::domain::time::new_id();
+  let now = crate::domain::time::now_rfc3339();
+  let config = GoogleCloudConfigV1 {
+    project_id: "demo-project".into(),
+    location: GOOGLE_CLOUD_DEFAULT_LOCATION.into(),
+    proxy_mode: ProxyMode::Direct,
+  };
+  db.transaction(|uow| {
+    integration_instances::insert(
+      uow.conn(),
+      &IntegrationInstance {
+        id: instance_id,
+        plugin_id: GOOGLE_CLOUD_PLUGIN_ID.into(),
+        plugin_version: "1.0.0".into(),
+        display_name: "Work".into(),
+        enabled: true,
+        config_json: serde_json::to_string(&config).unwrap(),
+        config_schema_version: 1,
+        health_status: IntegrationHealthStatus::Ready,
+        last_validated_at: Some(now.clone()),
+        last_error_code: None,
+        created_at: now.clone(),
+        updated_at: now.clone(),
+      },
+    )?;
+    Ok(())
+  })
+  .unwrap();
+
+  let saved = profiles
+    .save(TranslationProfileWrite {
+      id: None,
+      name: "Google Profile".into(),
+      enabled: true,
+      source_lang: Some("auto".into()),
+      target_lang: Some("en".into()),
+      primary_lang: Some("zh".into()),
+      preferred_target_lang: Some("en".into()),
+      engine: TranslationProfileEngineWrite::PluginCapability(PluginCapabilityEngineWrite {
+        integration_instance_id: instance_id,
+        translate_capability_id: GOOGLE_TRANSLATE_TEXT_CAPABILITY_ID.into(),
+        detect_capability_id: Some(GOOGLE_DETECT_LANGUAGE_CAPABILITY_ID.into()),
+        capability_preferences_version: GOOGLE_TRANSLATE_PREFERENCES_SCHEMA_VERSION,
+        capability_preferences: empty_google_translate_preferences(),
+      }),
+    })
+    .unwrap();
+
+  assert!(saved.profile.engine.is_plugin());
+  assert!(saved.targets.is_empty());
+  assert!(saved.prompt_templates.is_empty());
+  let plugin = saved.profile.engine.as_plugin().unwrap();
+  assert_eq!(plugin.integration_instance_id, instance_id);
+  assert_eq!(plugin.translate_capability_id, GOOGLE_TRANSLATE_TEXT_CAPABILITY_ID);
+
+  // Engine kind is immutable.
+  let (default_prompt_template_id, prompt_templates) = attach_default_templates("s", "{{text}}");
+  let m_err = profiles
+    .save(TranslationProfileWrite {
+      id: Some(saved.profile.id),
+      name: "Google Profile".into(),
+      enabled: true,
+      source_lang: Some("auto".into()),
+      target_lang: Some("en".into()),
+      primary_lang: Some("zh".into()),
+      preferred_target_lang: Some("en".into()),
+      engine: TranslationProfileEngineWrite::LlmModelChain(LlmModelChainEngineWrite {
+        template_version: 1,
+        default_prompt_template_id,
+        prompt_templates,
+        temperature: None,
+        max_output_tokens: None,
+        provider_options_json: None,
+        language_detection: None,
+        target_model_ids: vec![uuid::Uuid::now_v7()],
+      }),
+    })
+    .unwrap_err();
+  assert!(
+    matches!(m_err, StorageError::Validation(ref msg) if msg.contains("immutable")),
+    "expected immutable engine error, got {m_err:?}"
+  );
+
+  // Non-empty Google preferences rejected.
+  let prefs_err = profiles
+    .save(TranslationProfileWrite {
+      id: Some(saved.profile.id),
+      name: "Google Profile".into(),
+      enabled: true,
+      source_lang: Some("auto".into()),
+      target_lang: Some("en".into()),
+      primary_lang: Some("zh".into()),
+      preferred_target_lang: Some("en".into()),
+      engine: TranslationProfileEngineWrite::PluginCapability(PluginCapabilityEngineWrite {
+        integration_instance_id: instance_id,
+        translate_capability_id: GOOGLE_TRANSLATE_TEXT_CAPABILITY_ID.into(),
+        detect_capability_id: Some(GOOGLE_DETECT_LANGUAGE_CAPABILITY_ID.into()),
+        capability_preferences_version: GOOGLE_TRANSLATE_PREFERENCES_SCHEMA_VERSION,
+        capability_preferences: serde_json::json!({"foo": 1}),
+      }),
+    })
+    .unwrap_err();
+  assert!(matches!(prefs_err, StorageError::Validation(_)));
+
+  // Dependency lookup includes profile.
+  let deps = db
+    .read(|conn| integration_instances::list_dependencies(conn, instance_id))
+    .unwrap();
+  assert_eq!(deps.len(), 1);
+  assert_eq!(deps[0].kind, "translation_profile");
+  assert_eq!(deps[0].id, saved.profile.id);
+  assert_eq!(deps[0].display_name, "Google Profile");
+}
+
+#[test]
+fn plugin_profile_rebind_accepts_compatible_ready_instance() {
+  use crate::domain::service_integration::{
+    GOOGLE_CLOUD_DEFAULT_LOCATION, GOOGLE_CLOUD_PLUGIN_ID, GoogleCloudConfigV1, IntegrationHealthStatus,
+    IntegrationInstance,
+  };
+  use crate::domain::translation_profile::{
+    GOOGLE_TRANSLATE_PREFERENCES_SCHEMA_VERSION, PluginCapabilityEngineWrite, empty_google_translate_preferences,
+  };
+  use crate::repositories::integration_instances;
+  use crate::services::google_cloud::{GOOGLE_DETECT_LANGUAGE_CAPABILITY_ID, GOOGLE_TRANSLATE_TEXT_CAPABILITY_ID};
+
+  let (_d, db, _v, _providers, _models, profiles, ..) = setup();
+  let now = crate::domain::time::now_rfc3339();
+  let config = GoogleCloudConfigV1 {
+    project_id: "demo-project".into(),
+    location: GOOGLE_CLOUD_DEFAULT_LOCATION.into(),
+    proxy_mode: ProxyMode::Direct,
+  };
+  let instance_a = crate::domain::time::new_id();
+  let instance_b = crate::domain::time::new_id();
+  db.transaction(|uow| {
+    for (id, name) in [(instance_a, "Work A"), (instance_b, "Work B")] {
+      integration_instances::insert(
+        uow.conn(),
+        &IntegrationInstance {
+          id,
+          plugin_id: GOOGLE_CLOUD_PLUGIN_ID.into(),
+          plugin_version: "1.0.0".into(),
+          display_name: name.into(),
+          enabled: true,
+          config_json: serde_json::to_string(&config).unwrap(),
+          config_schema_version: 1,
+          health_status: IntegrationHealthStatus::Ready,
+          last_validated_at: Some(now.clone()),
+          last_error_code: None,
+          created_at: now.clone(),
+          updated_at: now.clone(),
+        },
+      )?;
+    }
+    Ok(())
+  })
+  .unwrap();
+
+  let saved = profiles
+    .save(TranslationProfileWrite {
+      id: None,
+      name: "Google Profile".into(),
+      enabled: true,
+      source_lang: Some("auto".into()),
+      target_lang: Some("en".into()),
+      primary_lang: Some("zh".into()),
+      preferred_target_lang: Some("en".into()),
+      engine: TranslationProfileEngineWrite::PluginCapability(PluginCapabilityEngineWrite {
+        integration_instance_id: instance_a,
+        translate_capability_id: GOOGLE_TRANSLATE_TEXT_CAPABILITY_ID.into(),
+        detect_capability_id: Some(GOOGLE_DETECT_LANGUAGE_CAPABILITY_ID.into()),
+        capability_preferences_version: GOOGLE_TRANSLATE_PREFERENCES_SCHEMA_VERSION,
+        capability_preferences: empty_google_translate_preferences(),
+      }),
+    })
+    .unwrap();
+
+  let rebound = profiles
+    .save(TranslationProfileWrite {
+      id: Some(saved.profile.id),
+      name: "Google Profile".into(),
+      enabled: true,
+      source_lang: Some("auto".into()),
+      target_lang: Some("en".into()),
+      primary_lang: Some("zh".into()),
+      preferred_target_lang: Some("en".into()),
+      engine: TranslationProfileEngineWrite::PluginCapability(PluginCapabilityEngineWrite {
+        integration_instance_id: instance_b,
+        translate_capability_id: GOOGLE_TRANSLATE_TEXT_CAPABILITY_ID.into(),
+        detect_capability_id: Some(GOOGLE_DETECT_LANGUAGE_CAPABILITY_ID.into()),
+        capability_preferences_version: GOOGLE_TRANSLATE_PREFERENCES_SCHEMA_VERSION,
+        capability_preferences: empty_google_translate_preferences(),
+      }),
+    })
+    .unwrap();
+  let plugin = rebound.profile.engine.as_plugin().unwrap();
+  assert_eq!(plugin.integration_instance_id, instance_b);
+}
+
+#[test]
+fn plugin_profile_rebind_rejects_incompatible_capability_major() {
+  use crate::domain::service_integration::{
+    GOOGLE_CLOUD_DEFAULT_LOCATION, GOOGLE_CLOUD_PLUGIN_ID, GoogleCloudConfigV1, IntegrationHealthStatus,
+    IntegrationInstance,
+  };
+  use crate::domain::translation_profile::{
+    GOOGLE_TRANSLATE_PREFERENCES_SCHEMA_VERSION, PluginCapabilityEngineWrite, empty_google_translate_preferences,
+  };
+  use crate::repositories::integration_instances;
+  use crate::services::google_cloud::{GOOGLE_DETECT_LANGUAGE_CAPABILITY_ID, GOOGLE_TRANSLATE_TEXT_CAPABILITY_ID};
+
+  let (_d, db, _v, _providers, _models, profiles, ..) = setup();
+  let now = crate::domain::time::now_rfc3339();
+  let config = GoogleCloudConfigV1 {
+    project_id: "demo-project".into(),
+    location: GOOGLE_CLOUD_DEFAULT_LOCATION.into(),
+    proxy_mode: ProxyMode::Direct,
+  };
+  let instance_id = crate::domain::time::new_id();
+  db.transaction(|uow| {
+    integration_instances::insert(
+      uow.conn(),
+      &IntegrationInstance {
+        id: instance_id,
+        plugin_id: GOOGLE_CLOUD_PLUGIN_ID.into(),
+        plugin_version: "1.0.0".into(),
+        display_name: "Work".into(),
+        enabled: true,
+        config_json: serde_json::to_string(&config).unwrap(),
+        config_schema_version: 1,
+        health_status: IntegrationHealthStatus::Ready,
+        last_validated_at: Some(now.clone()),
+        last_error_code: None,
+        created_at: now.clone(),
+        updated_at: now.clone(),
+      },
+    )?;
+    Ok(())
+  })
+  .unwrap();
+
+  let saved = profiles
+    .save(TranslationProfileWrite {
+      id: None,
+      name: "Google Profile".into(),
+      enabled: true,
+      source_lang: Some("auto".into()),
+      target_lang: Some("en".into()),
+      primary_lang: Some("zh".into()),
+      preferred_target_lang: Some("en".into()),
+      engine: TranslationProfileEngineWrite::PluginCapability(PluginCapabilityEngineWrite {
+        integration_instance_id: instance_id,
+        translate_capability_id: GOOGLE_TRANSLATE_TEXT_CAPABILITY_ID.into(),
+        detect_capability_id: Some(GOOGLE_DETECT_LANGUAGE_CAPABILITY_ID.into()),
+        capability_preferences_version: GOOGLE_TRANSLATE_PREFERENCES_SCHEMA_VERSION,
+        capability_preferences: empty_google_translate_preferences(),
+      }),
+    })
+    .unwrap();
+
+  // Same instance but incompatible major version string — also fails capability declaration.
+  let err = profiles
+    .save(TranslationProfileWrite {
+      id: Some(saved.profile.id),
+      name: "Google Profile".into(),
+      enabled: true,
+      source_lang: Some("auto".into()),
+      target_lang: Some("en".into()),
+      primary_lang: Some("zh".into()),
+      preferred_target_lang: Some("en".into()),
+      engine: TranslationProfileEngineWrite::PluginCapability(PluginCapabilityEngineWrite {
+        integration_instance_id: instance_id,
+        translate_capability_id: "translate.text@99".into(),
+        detect_capability_id: Some(GOOGLE_DETECT_LANGUAGE_CAPABILITY_ID.into()),
+        capability_preferences_version: GOOGLE_TRANSLATE_PREFERENCES_SCHEMA_VERSION,
+        capability_preferences: empty_google_translate_preferences(),
+      }),
+    })
+    .unwrap_err();
+  assert!(
+    matches!(err, StorageError::Validation(ref msg) if msg.contains("not declared") || msg.contains("incompatible")),
+    "expected incompatible rebind/declaration error, got {err:?}"
+  );
+}
+
+#[test]
+fn plugin_profile_blocks_integration_delete_with_in_use() {
+  use crate::domain::service_capability::{CapabilityError, CapabilityErrorCode};
+  use crate::domain::service_integration::{
+    GOOGLE_CLOUD_DEFAULT_LOCATION, GOOGLE_CLOUD_PLUGIN_ID, GoogleCloudConfigV1, IntegrationHealthStatus,
+    IntegrationInstance,
+  };
+  use crate::domain::translation_profile::{
+    GOOGLE_TRANSLATE_PREFERENCES_SCHEMA_VERSION, PluginCapabilityEngineWrite, empty_google_translate_preferences,
+  };
+  use crate::repositories::integration_instances;
+  use crate::services::google_cloud::{GOOGLE_DETECT_LANGUAGE_CAPABILITY_ID, GOOGLE_TRANSLATE_TEXT_CAPABILITY_ID};
+  use crate::services::service_integration_registry::ServiceIntegrationRegistry;
+  use crate::services::service_integrations::ServiceIntegrationService;
+  use crate::services::token_grant::{ExchangedToken, GoogleTokenExchanger, TokenGrantService};
+  use std::future::Future;
+  use std::pin::Pin;
+  use std::sync::Arc;
+
+  struct NoopExchanger;
+  impl GoogleTokenExchanger for NoopExchanger {
+    fn exchange(
+      &self,
+      _instance_id: uuid::Uuid,
+      _scopes: Vec<String>,
+      _now_unix_secs: u64,
+      _cancel: Option<crate::domain::cancel::CancelToken>,
+    ) -> Pin<Box<dyn Future<Output = Result<ExchangedToken, CapabilityError>> + Send + '_>> {
+      Box::pin(async { Err(CapabilityError::new(CapabilityErrorCode::Internal, "noop")) })
+    }
+  }
+
+  let (_d, db, vault, _providers, _models, profiles, ..) = setup();
+  let registry = Arc::new(ServiceIntegrationRegistry::bundled().unwrap());
+  let tokens = Arc::new(TokenGrantService::new(Arc::new(NoopExchanger)));
+  let integrations = ServiceIntegrationService::new(db.clone(), vault.clone(), registry, tokens);
+
+  let now = crate::domain::time::now_rfc3339();
+  let config = GoogleCloudConfigV1 {
+    project_id: "demo-project".into(),
+    location: GOOGLE_CLOUD_DEFAULT_LOCATION.into(),
+    proxy_mode: ProxyMode::Direct,
+  };
+  let instance_id = crate::domain::time::new_id();
+  db.transaction(|uow| {
+    integration_instances::insert(
+      uow.conn(),
+      &IntegrationInstance {
+        id: instance_id,
+        plugin_id: GOOGLE_CLOUD_PLUGIN_ID.into(),
+        plugin_version: "1.0.0".into(),
+        display_name: "Work".into(),
+        enabled: true,
+        config_json: serde_json::to_string(&config).unwrap(),
+        config_schema_version: 1,
+        health_status: IntegrationHealthStatus::Ready,
+        last_validated_at: Some(now.clone()),
+        last_error_code: None,
+        created_at: now.clone(),
+        updated_at: now.clone(),
+      },
+    )?;
+    Ok(())
+  })
+  .unwrap();
+
+  profiles
+    .save(TranslationProfileWrite {
+      id: None,
+      name: "Bound Profile".into(),
+      enabled: true,
+      source_lang: Some("auto".into()),
+      target_lang: Some("en".into()),
+      primary_lang: Some("zh".into()),
+      preferred_target_lang: Some("en".into()),
+      engine: TranslationProfileEngineWrite::PluginCapability(PluginCapabilityEngineWrite {
+        integration_instance_id: instance_id,
+        translate_capability_id: GOOGLE_TRANSLATE_TEXT_CAPABILITY_ID.into(),
+        detect_capability_id: Some(GOOGLE_DETECT_LANGUAGE_CAPABILITY_ID.into()),
+        capability_preferences_version: GOOGLE_TRANSLATE_PREFERENCES_SCHEMA_VERSION,
+        capability_preferences: empty_google_translate_preferences(),
+      }),
+    })
+    .unwrap();
+
+  let err = integrations.delete(instance_id).unwrap_err();
+  assert!(
+    matches!(err, StorageError::InUse(_)),
+    "expected in_use when profile references instance, got {err:?}"
   );
 }

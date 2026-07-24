@@ -68,6 +68,9 @@ export function saveConfigurationDocumentToFile(
 export type LoadConfigurationResult =
   { readonly status: "loaded"; readonly document: ConfigurationExport } | { readonly status: "cancelled" };
 
+/** Supported configuration export format versions (backend normalizes to v4). */
+export const SUPPORTED_CONFIGURATION_FORMAT_VERSIONS = [2, 3, 4] as const;
+
 /** Structural check for a configuration export document (not full schema validation). */
 export function parseConfigurationExportJson(raw: string): ConfigurationExport {
   let parsed: unknown;
@@ -83,9 +86,16 @@ export function parseConfigurationExportJson(raw: string): ConfigurationExport {
   if (typeof record.formatVersion !== "number") {
     throw new FsError({ operation: "parse", message: "missing formatVersion" });
   }
+  if (!(SUPPORTED_CONFIGURATION_FORMAT_VERSIONS as readonly number[]).includes(record.formatVersion)) {
+    throw new FsError({
+      operation: "parse",
+      message: `unsupported formatVersion ${String(record.formatVersion)}`,
+    });
+  }
   if (!Array.isArray(record.providers) || !Array.isArray(record.models)) {
     throw new FsError({ operation: "parse", message: "missing providers or models arrays" });
   }
+  // Backend accepts untrusted JSON Value and normalizes v2/v3 → v4; keep the envelope as-is.
   return parsed as ConfigurationExport;
 }
 

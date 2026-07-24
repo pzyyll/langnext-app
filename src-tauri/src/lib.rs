@@ -136,6 +136,8 @@ pub fn run() {
       cmds::translation_profiles::save_translation_profile,
       cmds::translation_profiles::set_translation_profile_enabled,
       cmds::translation_profiles::delete_translation_profile,
+      cmds::service_translation::translate_service_profile,
+      cmds::service_translation::detect_service_profile_language,
       cmds::ocr_services::list_ocr_services,
       cmds::ocr_services::get_ocr_service,
       cmds::ocr_services::save_ocr_service,

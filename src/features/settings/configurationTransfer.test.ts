@@ -6,7 +6,9 @@ import { isIpcError } from "../../storage/ipcError";
 import type { ConfigurationExport, ImportPreview, ImportResult } from "../../storage/types";
 import { isFsError } from "../fsError";
 
-const invokeMock = mock<(cmd: string, args?: Record<string, unknown>) => Promise<unknown>>(async () => undefined);
+import { installTauriInvokeMock, invokeMock, resetInvokeMock } from "../../test/tauriInvokeMock";
+
+installTauriInvokeMock();
 const saveMock = mock(async (): Promise<string | null> => null);
 const openMock = mock(async (): Promise<string | null> => null);
 const writeTextFileMock = mock(async (path: string, data: string): Promise<void> => {
@@ -17,10 +19,6 @@ const readTextFileMock = mock(async (path: string): Promise<string> => {
   void path;
   return "";
 });
-
-mock.module("@tauri-apps/api/core", () => ({
-  invoke: (cmd: string, args?: Record<string, unknown>) => invokeMock(cmd, args),
-}));
 
 mock.module("@tauri-apps/plugin-dialog", () => ({
   save: () => saveMock(),
@@ -45,13 +43,14 @@ const {
 
 function sampleDocument(): ConfigurationExport {
   return {
-    formatVersion: 1,
+    formatVersion: 4,
     exportedAt: "2026-01-01T00:00:00Z",
     providers: [],
     models: [],
     translationProfiles: [],
     profileModels: [],
     profilePromptTemplates: [],
+    integrationInstances: [],
     appSettings: {
       schemaVersion: 1,
       uiLanguage: "en",
@@ -78,9 +77,13 @@ function validPreview(): ImportPreview {
       profilesCreate: 0,
       profilesUpdate: 0,
       profilesCopy: 0,
+      integrationsCreate: 0,
+      integrationsUpdate: 0,
+      integrationsCopy: 0,
     },
     validationErrors: [],
     requiresAuthentication: [],
+    integrationRequiresAuthentication: [],
     proxyRequiresAuthentication: false,
     defaultProfileCleared: false,
   };
@@ -89,7 +92,18 @@ function validPreview(): ImportPreview {
 describe("parseConfigurationExportJson", () => {
   test("accepts a minimal valid document shape", () => {
     const doc = parseConfigurationExportJson(JSON.stringify(sampleDocument()));
-    expect(doc.formatVersion).toBe(1);
+    expect(doc.formatVersion).toBe(4);
+  });
+
+  test("accepts supported legacy formatVersion 2 and 3 envelopes", () => {
+    for (const formatVersion of [2, 3]) {
+      const doc = parseConfigurationExportJson(JSON.stringify({ ...sampleDocument(), formatVersion }));
+      expect(doc.formatVersion).toBe(formatVersion);
+    }
+  });
+
+  test("rejects unsupported formatVersion", () => {
+    expect(() => parseConfigurationExportJson(JSON.stringify({ ...sampleDocument(), formatVersion: 99 }))).toThrow();
   });
 
   test("rejects invalid JSON with FsError parse", () => {
@@ -111,7 +125,8 @@ describe("parseConfigurationExportJson", () => {
 
 describe("configuration IPC helpers", () => {
   beforeEach(() => {
-    invokeMock.mockReset();
+    resetInvokeMock();
+    invokeMock.mockImplementation(async () => undefined);
   });
 
   test("exportConfigurationDocument invokes export_configuration", async () => {
@@ -149,7 +164,8 @@ describe("configuration IPC helpers", () => {
 
 describe("exportConfigurationToFile", () => {
   beforeEach(() => {
-    invokeMock.mockReset();
+    resetInvokeMock();
+    invokeMock.mockImplementation(async () => undefined);
     saveMock.mockReset();
     writeTextFileMock.mockReset();
   });
@@ -189,7 +205,8 @@ describe("exportConfigurationToFile", () => {
 
 describe("importConfigurationFromFile", () => {
   beforeEach(() => {
-    invokeMock.mockReset();
+    resetInvokeMock();
+    invokeMock.mockImplementation(async () => undefined);
     openMock.mockReset();
     readTextFileMock.mockReset();
   });

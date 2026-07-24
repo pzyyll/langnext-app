@@ -27,9 +27,7 @@ describe("DATA_CHANGE_EVENT_BINDINGS", () => {
   });
 
   test("DATA_SERVICE_INTEGRATIONS_CHANGED invalidates integrationKeys.all", () => {
-    const binding = DATA_CHANGE_EVENT_BINDINGS.find(
-      (entry) => entry.event === DATA_SERVICE_INTEGRATIONS_CHANGED,
-    );
+    const binding = DATA_CHANGE_EVENT_BINDINGS.find((entry) => entry.event === DATA_SERVICE_INTEGRATIONS_CHANGED);
     expect(binding).toBeDefined();
     expect(binding?.invalidateKeys).toEqual([integrationKeys.all]);
     expect(binding?.invalidateKeys[0]?.[0]).toBe(integrationKeys.all[0]);

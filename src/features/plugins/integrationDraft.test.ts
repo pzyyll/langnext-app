@@ -7,6 +7,7 @@ import {
   buildGoogleCloudWrite,
   draftFromIntegrationDto,
   emptyGoogleCloudDraft,
+  hasRemoteRelevantMutation,
   toCredentialUpdate,
 } from "./integrationDraft";
 
@@ -75,6 +76,54 @@ describe("integrationDraft", () => {
       action: "replace",
       value: '{"client_email":"a@b.com"}',
     });
+  });
+
+  test("hasRemoteRelevantMutation detects credential or Google Cloud config mutation, never name-only", () => {
+    // Credential replace with value.
+    const replace = draftFromIntegrationDto(sampleDto());
+    replace.serviceAccountAction = "replace";
+    replace.serviceAccountJson = '{"client_email":"a@b.com"}';
+    expect(hasRemoteRelevantMutation(replace, sampleDto())).toBe(true);
+
+    // replace with no value is a no-op keep.
+    const replaceEmpty = draftFromIntegrationDto(sampleDto());
+    replaceEmpty.serviceAccountAction = "replace";
+    replaceEmpty.serviceAccountJson = "   ";
+    expect(hasRemoteRelevantMutation(replaceEmpty, sampleDto())).toBe(false);
+
+    // clear only mutates when a credential was previously stored.
+    const clearExisting = draftFromIntegrationDto(sampleDto());
+    clearExisting.serviceAccountAction = "clear";
+    expect(hasRemoteRelevantMutation(clearExisting, sampleDto())).toBe(true);
+
+    const missingDto = sampleDto({
+      credentialSlots: [{ slotId: GOOGLE_CLOUD_SERVICE_ACCOUNT_SLOT, hasCredential: false, credentialRevision: 0 }],
+    });
+    const clearMissing = draftFromIntegrationDto(missingDto);
+    clearMissing.serviceAccountAction = "clear";
+    expect(hasRemoteRelevantMutation(clearMissing, missingDto)).toBe(false);
+
+    // Google Cloud config mutation (projectId/location/proxyMode).
+    const projectId = draftFromIntegrationDto(sampleDto());
+    projectId.projectId = "other-project";
+    expect(hasRemoteRelevantMutation(projectId, sampleDto())).toBe(true);
+
+    const location = draftFromIntegrationDto(sampleDto());
+    location.location = "us-central1";
+    expect(hasRemoteRelevantMutation(location, sampleDto())).toBe(true);
+
+    const proxyMode = draftFromIntegrationDto(sampleDto());
+    proxyMode.proxyMode = "direct";
+    expect(hasRemoteRelevantMutation(proxyMode, sampleDto())).toBe(true);
+
+    // Name-only change does not need a remote re-check.
+    const nameOnly = draftFromIntegrationDto(sampleDto());
+    nameOnly.displayName = "Renamed";
+    expect(hasRemoteRelevantMutation(nameOnly, sampleDto())).toBe(false);
+
+    // Clean draft has no mutation.
+    const clean = draftFromIntegrationDto(sampleDto());
+    expect(hasRemoteRelevantMutation(clean, sampleDto())).toBe(false);
   });
 
   test("buildGoogleCloudWrite clear does not include secret text", () => {

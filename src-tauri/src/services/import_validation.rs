@@ -2,20 +2,24 @@
 // ABOUTME: Preview and apply share one plan; apply revalidates inside the write transaction.
 use crate::domain::import_export::{
   ConfigurationExport, EXPORT_FORMAT_VERSION, ImportConflictMode, ImportPreview, ImportPreviewCounts,
-  PREVIOUS_EXPORT_FORMAT_VERSION,
+  IntegrationInstanceExport,
 };
 use crate::domain::language_detection::LanguageDetectorConfig;
 use crate::domain::model::{CapabilityOverridesV1, ProviderModel};
 use crate::domain::provider::{
   CredentialKind, ModelsSyncStatus, ProviderExport, ProviderInstance, validate_adapter_id,
 };
+use crate::domain::service_integration::{IntegrationHealthStatus, IntegrationInstance};
 use crate::domain::settings::{AppSettingsV1, GlobalProxyMode};
 use crate::domain::time::{new_id, now_rfc3339};
 use crate::domain::translation_profile::{
-  PromptTemplate, TranslationProfile, TranslationProfilePromptTemplate, TranslationProfileTarget,
+  PromptTemplate, TranslationProfile, TranslationProfileEngine, TranslationProfilePromptTemplate,
+  TranslationProfileTarget,
 };
 use crate::error::StorageError;
-use crate::repositories::{ocr_services, provider_instances, provider_models, translation_profiles};
+use crate::repositories::{
+  integration_instances, ocr_services, provider_instances, provider_models, translation_profiles,
+};
 use crate::services::providers::validate_provider_url;
 use crate::services::settings::{validate_default_ocr_service, validate_default_profile, validate_settings_document};
 use crate::services::translation_profiles::{validate_profile_language_preferences, validate_prompt_templates};
@@ -33,6 +37,7 @@ pub struct ValidatedImportPlan {
   pub profiles: Vec<TranslationProfile>,
   pub targets: Vec<TranslationProfileTarget>,
   pub prompt_templates: Vec<TranslationProfilePromptTemplate>,
+  pub integrations: Vec<IntegrationInstance>,
   pub settings: AppSettingsV1,
   /// Providers that need credential cleanup when merging over existing rows.
   pub provider_cleanup_ids: Vec<Uuid>,
@@ -51,7 +56,8 @@ pub fn build_validated_plan(
 ) -> Result<ValidatedImportPlan, StorageError> {
   let mut errors = Vec::new();
 
-  if document.format_version != EXPORT_FORMAT_VERSION && document.format_version != PREVIOUS_EXPORT_FORMAT_VERSION {
+  // Documents reaching this path are already normalized to v4.
+  if document.format_version != EXPORT_FORMAT_VERSION {
     errors.push(format!("unsupported formatVersion {}", document.format_version));
   }
 
@@ -61,6 +67,11 @@ pub fn build_validated_plan(
   reject_duplicate_ids(
     document.translation_profiles.iter().map(|p| p.id),
     "profile",
+    &mut errors,
+  );
+  reject_duplicate_ids(
+    document.integration_instances.iter().map(|i| i.id),
+    "integration",
     &mut errors,
   );
 
@@ -92,11 +103,16 @@ pub fn build_validated_plan(
     .into_iter()
     .map(|p| (p.id, p))
     .collect();
+  let local_integrations: HashMap<Uuid, _> = integration_instances::list(conn)?
+    .into_iter()
+    .map(|i| (i.id, i))
+    .collect();
   let local_proxy_ref = crate::repositories::app_credentials::get_global_proxy_ref(conn)?;
 
   let doc_provider_ids: HashSet<Uuid> = document.providers.iter().map(|p| p.id).collect();
   let doc_model_ids: HashSet<Uuid> = document.models.iter().map(|m| m.id).collect();
   let doc_profile_ids: HashSet<Uuid> = document.translation_profiles.iter().map(|p| p.id).collect();
+  let doc_integration_ids: HashSet<Uuid> = document.integration_instances.iter().map(|i| i.id).collect();
 
   // Providers
   for p in &document.providers {
@@ -176,10 +192,12 @@ pub fn build_validated_plan(
   let mut provider_id_map: HashMap<Uuid, Uuid> = HashMap::new();
   let mut model_id_map: HashMap<Uuid, Uuid> = HashMap::new();
   let mut profile_id_map: HashMap<Uuid, Uuid> = HashMap::new();
+  let mut integration_id_map: HashMap<Uuid, Uuid> = HashMap::new();
 
   // Counts and ID rewriting for copy mode.
   let mut counts = ImportPreviewCounts::default();
   let mut requires_authentication = Vec::new();
+  let mut integration_requires_authentication = Vec::new();
 
   match mode {
     ImportConflictMode::Merge => {
@@ -207,6 +225,15 @@ pub fn build_validated_plan(
           counts.profiles_create += 1;
         }
       }
+      for i in &document.integration_instances {
+        if local_integrations.contains_key(&i.id) {
+          counts.integrations_update += 1;
+        } else {
+          counts.integrations_create += 1;
+        }
+        // Import never carries credentials; every instance requires re-auth.
+        integration_requires_authentication.push(i.id);
+      }
       if let Some(pid) = settings.default_profile_id {
         if !doc_profile_ids.contains(&pid) && !local_profiles.contains_key(&pid) {
           // Self-contained rule: non-null default must resolve in document.
@@ -225,6 +252,7 @@ pub fn build_validated_plan(
       counts.providers_copy = document.providers.len() as u32;
       counts.models_copy = document.models.len() as u32;
       counts.profiles_copy = document.translation_profiles.len() as u32;
+      counts.integrations_copy = document.integration_instances.len() as u32;
       for p in &document.providers {
         provider_id_map.insert(p.id, new_id());
         if p.credential_kind != CredentialKind::None {
@@ -236,6 +264,11 @@ pub fn build_validated_plan(
       }
       for p in &document.translation_profiles {
         profile_id_map.insert(p.id, new_id());
+      }
+      for i in &document.integration_instances {
+        let new_integration_id = new_id();
+        integration_id_map.insert(i.id, new_integration_id);
+        integration_requires_authentication.push(new_integration_id);
       }
       if let Some(old_default) = settings.default_profile_id {
         if let Some(new_id) = profile_id_map.get(&old_default) {
@@ -251,11 +284,26 @@ pub fn build_validated_plan(
   let proxy_requires_authentication =
     settings.network.proxy_mode == GlobalProxyMode::Custom || settings.network.proxy_url.is_some();
 
+  // Plugin profiles must reference an integration present in the document (or surviving local merge).
+  for profile in &document.translation_profiles {
+    if let Some(plugin) = profile.engine.as_plugin() {
+      if !doc_integration_ids.contains(&plugin.integration_instance_id)
+        && !(mode == ImportConflictMode::Merge && local_integrations.contains_key(&plugin.integration_instance_id))
+      {
+        errors.push(format!(
+          "profile {} references missing integration {}",
+          profile.id, plugin.integration_instance_id
+        ));
+      }
+    }
+  }
+
   let preview = ImportPreview {
     valid: errors.is_empty(),
     counts,
     validation_errors: errors.clone(),
     requires_authentication,
+    integration_requires_authentication,
     proxy_requires_authentication,
     default_profile_cleared,
   };
@@ -269,6 +317,7 @@ pub fn build_validated_plan(
       profiles: vec![],
       targets: vec![],
       prompt_templates: vec![],
+      integrations: vec![],
       settings,
       provider_cleanup_ids: vec![],
       clear_global_proxy: false,
@@ -386,20 +435,29 @@ pub fn build_validated_plan(
     p.id = id;
     p.created_at = created_at;
     p.updated_at = now.clone();
-    // Copy mode rewrites the detection LLM model id to the copied model's new id.
+    // Copy mode rewrites LLM detection/template ids and plugin integration bindings.
     if matches!(mode, ImportConflictMode::Copy) {
-      if let Some(LanguageDetectorConfig::Llm {
-        model_id: Some(old_model),
-      }) = p.language_detection
-      {
-        let new_model = *model_id_map.get(&old_model).expect("detection model map");
-        p.language_detection = Some(LanguageDetectorConfig::Llm {
-          model_id: Some(new_model),
-        });
+      match &mut p.engine {
+        TranslationProfileEngine::LlmModelChain(llm) => {
+          if let Some(LanguageDetectorConfig::Llm {
+            model_id: Some(old_model),
+          }) = llm.language_detection
+          {
+            let new_model = *model_id_map.get(&old_model).expect("detection model map");
+            llm.language_detection = Some(LanguageDetectorConfig::Llm {
+              model_id: Some(new_model),
+            });
+          }
+          llm.default_prompt_template_id = *template_id_map
+            .get(&llm.default_prompt_template_id)
+            .expect("default template map");
+        }
+        TranslationProfileEngine::PluginCapability(plugin) => {
+          plugin.integration_instance_id = *integration_id_map
+            .get(&plugin.integration_instance_id)
+            .expect("integration map");
+        }
       }
-      p.default_prompt_template_id = *template_id_map
-        .get(&profile.default_prompt_template_id)
-        .expect("default template map");
     }
     profiles.push(p);
 
@@ -477,6 +535,25 @@ pub fn build_validated_plan(
     }
   }
 
+  // Integrations: structural config only; credentials always empty after import.
+  let mut integrations = Vec::new();
+  for exported in &document.integration_instances {
+    let (id, created_at) = match mode {
+      ImportConflictMode::Merge => {
+        if let Some(local) = local_integrations.get(&exported.id) {
+          (exported.id, local.created_at.clone())
+        } else {
+          (exported.id, now.clone())
+        }
+      }
+      ImportConflictMode::Copy => {
+        let new_id = *integration_id_map.get(&exported.id).expect("integration map");
+        (new_id, now.clone())
+      }
+    };
+    integrations.push(integration_from_export(exported, id, created_at, now.clone()));
+  }
+
   Ok(ValidatedImportPlan {
     mode,
     preview,
@@ -485,12 +562,36 @@ pub fn build_validated_plan(
     profiles,
     targets,
     prompt_templates,
+    integrations,
     settings,
     provider_cleanup_ids,
     clear_global_proxy,
     expected_provider_refs,
     expected_proxy_ref: local_proxy_ref,
   })
+}
+
+fn integration_from_export(
+  exported: &IntegrationInstanceExport,
+  id: Uuid,
+  created_at: String,
+  updated_at: String,
+) -> IntegrationInstance {
+  // Imported instances always require re-auth: force unconfigured and clear validation stamps.
+  IntegrationInstance {
+    id,
+    plugin_id: exported.plugin_id.clone(),
+    plugin_version: exported.plugin_version.clone(),
+    display_name: exported.display_name.clone(),
+    enabled: exported.enabled,
+    config_json: exported.config_json.clone(),
+    config_schema_version: exported.config_schema_version,
+    health_status: IntegrationHealthStatus::Unconfigured,
+    last_validated_at: None,
+    last_error_code: None,
+    created_at,
+    updated_at,
+  }
 }
 
 fn reject_duplicate_ids<I>(ids: I, label: &str, errors: &mut Vec<String>)
@@ -569,73 +670,95 @@ fn validate_import_profile(
   if profile.name.trim().is_empty() {
     return Err(StorageError::Validation("profile name must not be empty".into()));
   }
-  if targets.is_empty() {
-    return Err(StorageError::Validation(
-      "profile requires at least one target model".into(),
-    ));
-  }
-  let mut seen_models = HashSet::new();
-  let mut priorities: Vec<i32> = targets.iter().map(|t| t.priority).collect();
-  priorities.sort_unstable();
-  for (i, prio) in priorities.iter().enumerate() {
-    if *prio != i as i32 {
-      return Err(StorageError::Validation(
-        "profile target priorities must be contiguous starting at 0".into(),
-      ));
-    }
-  }
-  for t in targets {
-    if !seen_models.insert(t.provider_model_id) {
-      return Err(StorageError::Validation("profile targets must be unique models".into()));
-    }
-  }
-  if let Some(temp) = profile.temperature {
-    if temp < 0.0 {
-      return Err(StorageError::Validation("temperature must be >= 0".into()));
-    }
-  }
-  if let Some(tokens) = profile.max_output_tokens {
-    if tokens <= 0 {
-      return Err(StorageError::Validation("max_output_tokens must be > 0".into()));
-    }
-  }
-
-  let mut sort_orders: Vec<i32> = templates.iter().map(|t| t.sort_order).collect();
-  sort_orders.sort_unstable();
-  for (i, order) in sort_orders.iter().enumerate() {
-    if *order != i as i32 {
-      return Err(StorageError::Validation(
-        "prompt template sort_order must be contiguous starting at 0".into(),
-      ));
-    }
-  }
-  let prompt_templates: Vec<PromptTemplate> = templates
-    .iter()
-    .map(|t| PromptTemplate {
-      id: t.id,
-      name: t.name.clone(),
-      system_template: t.system_template.clone(),
-      user_template: t.user_template.clone(),
-    })
-    .collect();
-  validate_prompt_templates(&prompt_templates, profile.default_prompt_template_id)?;
-
-  // Provider-specific profile options are not used; only empty/null objects are accepted.
-  if let Some(options) = &profile.provider_options_json {
-    if !options.is_null() && options.as_object().map(|o| !o.is_empty()).unwrap_or(true) {
-      return Err(StorageError::Validation("provider_options_json must be empty".into()));
-    }
-  }
   validate_profile_language_preferences(&profile.primary_lang, &profile.preferred_target_lang)?;
-  // A configured LLM detector must reference a model present in the import document.
-  if let Some(LanguageDetectorConfig::Llm {
-    model_id: Some(model_id),
-  }) = profile.language_detection
-  {
-    if !doc_model_ids.contains(&model_id) {
-      return Err(StorageError::Validation(format!(
-        "language detection references missing model {model_id}"
-      )));
+
+  match &profile.engine {
+    TranslationProfileEngine::LlmModelChain(llm) => {
+      if targets.is_empty() {
+        return Err(StorageError::Validation(
+          "profile requires at least one target model".into(),
+        ));
+      }
+      let mut seen_models = HashSet::new();
+      let mut priorities: Vec<i32> = targets.iter().map(|t| t.priority).collect();
+      priorities.sort_unstable();
+      for (i, prio) in priorities.iter().enumerate() {
+        if *prio != i as i32 {
+          return Err(StorageError::Validation(
+            "profile target priorities must be contiguous starting at 0".into(),
+          ));
+        }
+      }
+      for t in targets {
+        if !seen_models.insert(t.provider_model_id) {
+          return Err(StorageError::Validation("profile targets must be unique models".into()));
+        }
+      }
+      if let Some(temp) = llm.temperature {
+        if temp < 0.0 {
+          return Err(StorageError::Validation("temperature must be >= 0".into()));
+        }
+      }
+      if let Some(tokens) = llm.max_output_tokens {
+        if tokens <= 0 {
+          return Err(StorageError::Validation("max_output_tokens must be > 0".into()));
+        }
+      }
+
+      let mut sort_orders: Vec<i32> = templates.iter().map(|t| t.sort_order).collect();
+      sort_orders.sort_unstable();
+      for (i, order) in sort_orders.iter().enumerate() {
+        if *order != i as i32 {
+          return Err(StorageError::Validation(
+            "prompt template sort_order must be contiguous starting at 0".into(),
+          ));
+        }
+      }
+      let prompt_templates: Vec<PromptTemplate> = templates
+        .iter()
+        .map(|t| PromptTemplate {
+          id: t.id,
+          name: t.name.clone(),
+          system_template: t.system_template.clone(),
+          user_template: t.user_template.clone(),
+        })
+        .collect();
+      validate_prompt_templates(&prompt_templates, llm.default_prompt_template_id)?;
+
+      // Provider-specific profile options are not used; only empty/null objects are accepted.
+      if let Some(options) = &llm.provider_options_json {
+        if !options.is_null() && options.as_object().map(|o| !o.is_empty()).unwrap_or(true) {
+          return Err(StorageError::Validation("provider_options_json must be empty".into()));
+        }
+      }
+      // A configured LLM detector must reference a model present in the import document.
+      if let Some(LanguageDetectorConfig::Llm {
+        model_id: Some(model_id),
+      }) = llm.language_detection
+      {
+        if !doc_model_ids.contains(&model_id) {
+          return Err(StorageError::Validation(format!(
+            "language detection references missing model {model_id}"
+          )));
+        }
+      }
+    }
+    TranslationProfileEngine::PluginCapability(plugin) => {
+      if !targets.is_empty() {
+        return Err(StorageError::Validation(
+          "plugin profile must not include model targets".into(),
+        ));
+      }
+      if !templates.is_empty() {
+        return Err(StorageError::Validation(
+          "plugin profile must not include prompt templates".into(),
+        ));
+      }
+      if plugin.translate_capability_id.trim().is_empty() {
+        return Err(StorageError::Validation("translate_capability_id is required".into()));
+      }
+      // Integration existence is revalidated when applying v4 documents that include instances.
+      let _ = plugin.integration_instance_id;
     }
   }
   Ok(())

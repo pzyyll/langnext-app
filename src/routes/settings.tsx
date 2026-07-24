@@ -26,10 +26,10 @@ import {
   runExportConfigurationToFile,
   runImportConfigurationFromFile,
 } from "../features/settings/configurationTransfer";
+import { importAuthWarningKind, invalidateAfterConfigurationImport } from "../features/settings/importAcceptance";
 import { getUserErrorMessage } from "../features/userErrorMessage";
 import { APP_LANGUAGES, type AppLanguage } from "../i18n/languages";
 import { useLanguage } from "../i18n/useLanguage";
-import { modelKeys, profileKeys, providerKeys } from "../query/keys";
 import { getAppSettings, setAppShortcuts } from "../storage/client";
 import {
   DEFAULT_OPEN_QUICK_TRANSLATE_BINDING,
@@ -273,19 +273,24 @@ function BackupSettingsSection() {
       // Activate imported app_settings in this process (DB write alone does not rebind UI/OS).
       await applyImportedAppSettings();
 
-      void queryClient.invalidateQueries({ queryKey: providerKeys.all });
-      void queryClient.invalidateQueries({ queryKey: modelKeys.all });
-      void queryClient.invalidateQueries({ queryKey: profileKeys.all });
+      // Local invalidate covers this webview immediately; QueryEventSync also invalidates
+      // provider/model/profile/integration prefixes from backend DATA_* events in every window.
+      invalidateAfterConfigurationImport(queryClient);
 
-      const needsAuth =
-        result.result.preview.requiresAuthentication.length > 0 || result.result.preview.proxyRequiresAuthentication;
-      if (needsAuth) {
+      const authKind = importAuthWarningKind(result.result.preview);
+      if (authKind === "none") {
+        toast.success({ title: t("settings.backup.importSuccess") });
+      } else {
+        const description =
+          authKind === "integrations"
+            ? t("settings.backup.importNeedsIntegrationAuth")
+            : authKind === "both"
+              ? t("settings.backup.importNeedsAuthBoth")
+              : t("settings.backup.importNeedsAuth");
         toast.success({
           title: t("settings.backup.importSuccess"),
-          description: t("settings.backup.importNeedsAuth"),
+          description,
         });
-      } else {
-        toast.success({ title: t("settings.backup.importSuccess") });
       }
     } catch (err) {
       toast.error({

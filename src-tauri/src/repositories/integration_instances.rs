@@ -213,9 +213,18 @@ pub fn delete(conn: &Connection, id: Uuid) -> Result<(), StorageError> {
 
 /// Dependency query hook for delete guards.
 ///
-/// Phase 1A has no domain FKs yet (Profiles land in Phase 1C). Ensures the instance
-/// exists and returns an empty list so callers share one repository primitive.
+/// Returns translation profiles bound to this integration instance (plugin engine).
 pub fn list_dependencies(conn: &Connection, id: Uuid) -> Result<Vec<IntegrationDependencyDto>, StorageError> {
   get(conn, id)?;
-  Ok(Vec::new())
+  let profiles = crate::repositories::translation_profiles::list_by_integration_instance(conn, id)?;
+  Ok(
+    profiles
+      .into_iter()
+      .map(|profile| IntegrationDependencyDto {
+        kind: "translation_profile".into(),
+        id: profile.id,
+        display_name: profile.name,
+      })
+      .collect(),
+  )
 }

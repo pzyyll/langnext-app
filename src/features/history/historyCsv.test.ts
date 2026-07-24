@@ -94,6 +94,25 @@ describe("buildHistoryCsv", () => {
     expect(fields[10]).toBe("network");
     expect(fields[11]).toBe("boom");
   });
+
+  it("renders service completions with null modelId safely", () => {
+    const csv = buildHistoryCsv([
+      sampleRow({
+        modelId: null,
+        modelDisplayName: "translate.text@1",
+        providerDisplayName: "Work",
+        profileName: "Google Work",
+      }),
+    ]);
+    const lines = csv.slice(1).split("\r\n");
+    const fields = parseCsvLine(lines[1] ?? "");
+    // Model column uses display name; null modelId must not appear as "null"/UUID.
+    expect(fields[5]).toBe("translate.text@1");
+    expect(fields[6]).toBe("Work");
+    expect(fields[7]).toBe("Google Work");
+    expect(fields.join(",")).not.toContain("null");
+    expect(csv).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+  });
 });
 
 /** Minimal RFC 4180 line parser for test assertions only. */

@@ -1,16 +1,16 @@
 // ABOUTME: Service integration CRUD, credential slots, and remote auth validation.
 // ABOUTME: Token success means authentication health only — not Translate/Vision IAM access.
 use crate::credentials::coordinator;
-use crate::credentials::{integration_ref, CredentialVault};
+use crate::credentials::{CredentialVault, integration_ref};
 use crate::domain::cancel::CancelToken;
 use crate::domain::provider::CredentialUpdate;
-use crate::domain::service_capability::{CapabilityErrorCode, CAPABILITY_DEFAULT_TIMEOUT};
+use crate::domain::service_capability::{CAPABILITY_DEFAULT_TIMEOUT, CapabilityErrorCode};
 use crate::domain::service_integration::{
-  derive_effective_status, validate_plugin_id, validate_slot_id, CredentialSlotStatusDto, GoogleCloudConfigV1,
+  CredentialSlotStatusDto, GOOGLE_CLOUD_DEFAULT_LOCATION, GOOGLE_CLOUD_PLUGIN_ID, GOOGLE_CLOUD_SERVICE_ACCOUNT_SLOT,
+  GOOGLE_OAUTH_TOKEN_URI, GoogleCloudConfigV1, INTEGRATION_CONFIG_JSON_MAX_LEN, INTEGRATION_DISPLAY_NAME_MAX_LEN,
   IntegrationDependencyDto, IntegrationHealthStatus, IntegrationInstance, IntegrationInstanceDto,
-  IntegrationInstanceWrite, IntegrationValidationResult, ServiceIntegrationManifest, GOOGLE_CLOUD_DEFAULT_LOCATION,
-  GOOGLE_CLOUD_PLUGIN_ID, GOOGLE_CLOUD_SERVICE_ACCOUNT_SLOT, GOOGLE_OAUTH_TOKEN_URI, INTEGRATION_CONFIG_JSON_MAX_LEN,
-  INTEGRATION_DISPLAY_NAME_MAX_LEN, SERVICE_ACCOUNT_JSON_MAX_LEN,
+  IntegrationInstanceWrite, IntegrationValidationResult, SERVICE_ACCOUNT_JSON_MAX_LEN, ServiceIntegrationManifest,
+  derive_effective_status, validate_plugin_id, validate_slot_id,
 };
 use crate::domain::time::{new_id, now_rfc3339};
 use crate::error::StorageError;
@@ -18,8 +18,8 @@ use crate::repositories::credential_operations::{self, CredentialOperation, Owne
 use crate::repositories::{integration_credential_bindings, integration_instances};
 use crate::services::service_integration_registry::ServiceIntegrationRegistry;
 use crate::services::token_grant::{
-  TokenGrant, TokenGrantRequest, TokenGrantService, GOOGLE_CLOUD_TRANSLATION_SCOPE, GOOGLE_OAUTH_AUDIENCE_POLICY_ID,
-  GOOGLE_SERVICE_ACCOUNT_AUTH_DRIVER_ID,
+  GOOGLE_CLOUD_TRANSLATION_SCOPE, GOOGLE_OAUTH_AUDIENCE_POLICY_ID, GOOGLE_SERVICE_ACCOUNT_AUTH_DRIVER_ID, TokenGrant,
+  TokenGrantRequest, TokenGrantService,
 };
 use crate::storage::Database;
 use serde_json::Value;
@@ -1131,7 +1131,7 @@ mod tests {
   use crate::domain::provider::ProxyMode;
   use crate::domain::service_capability::{CapabilityError, CapabilityErrorCode};
   use crate::domain::service_integration::{IntegrationEffectiveStatus, IntegrationSlotCredentialWrite};
-  use crate::services::google_cloud::{GoogleCloudCapabilities, GOOGLE_TRANSLATE_TEXT_CAPABILITY_ID};
+  use crate::services::google_cloud::{GOOGLE_TRANSLATE_TEXT_CAPABILITY_ID, GoogleCloudCapabilities};
   use crate::services::network_broker::NetworkBroker;
   use crate::services::service_capabilities::{ServiceCapabilityRegistry, ServiceCapabilityService};
   use crate::services::token_grant::{ExchangedToken, GoogleTokenExchanger};
@@ -1432,11 +1432,13 @@ mod tests {
     let result = service.validate_instance(created.id).await.unwrap();
     assert!(result.remote_checked);
     assert_eq!(result.health_status, IntegrationHealthStatus::Ready);
-    assert!(result
-      .message
-      .as_deref()
-      .unwrap_or("")
-      .contains("Credentials validated"));
+    assert!(
+      result
+        .message
+        .as_deref()
+        .unwrap_or("")
+        .contains("Credentials validated")
+    );
     assert!(result.message.as_deref().unwrap_or("").contains("not verified"));
   }
 

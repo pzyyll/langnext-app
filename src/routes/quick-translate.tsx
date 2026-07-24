@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import { useAutoAnimate } from "@formkit/auto-animate/react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { listen } from "@tauri-apps/api/event";
 import { Button } from "@base-ui/react/button";
 import { Collapsible } from "@base-ui/react/collapsible";
@@ -45,6 +45,7 @@ import {
 import { QUICK_TRANSLATE_CLIPBOARD_TEXT, QUICK_TRANSLATE_OCR_REQUEST } from "../query/events";
 import {
   allProviderModelsOptions,
+  integrationListOptions,
   profileDetailOptions,
   profileListOptions,
   providerListOptions,
@@ -57,7 +58,10 @@ import {
   type QuickTranslateSlot,
 } from "../features/translate/quickTranslateSession";
 import { isTauriRuntime, notifyReady, resizeWindowHeight, setPin } from "../features/translate/quickTranslateWindow";
-import { resolveTranslateFailureMessage } from "../features/translate/resolveTranslateFailureMessage";
+import {
+  resolveTranslateFailureMessage,
+  resolveTranslateFailureRecovery,
+} from "../features/translate/resolveTranslateFailureMessage";
 import { runDetectLanguage, runStartSlotStreamBatch } from "../features/translate/runTranslate";
 import { DETECT_REQUEST_KEY, useSlotStreamSessions } from "../features/translate/useSlotStreamSessions";
 import { getIpcErrorMessage } from "../storage/errors";
@@ -123,11 +127,15 @@ function resolveSlotPromptTemplateId(promptTemplateId: string, profile: Translat
 }
 
 function primaryModelId(profile: TranslationProfileDto | undefined): string {
-  if (!profile) {
+  if (!profile || profile.engine.kind !== "llm_model_chain") {
     return "";
   }
   const primary = [...profile.targets].sort((a, b) => a.priority - b.priority)[0];
   return primary?.providerModelId ?? "";
+}
+
+function isPluginProfileAvailable(profile: TranslationProfileDto | undefined): boolean {
+  return !!profile && profile.enabled && profile.engine.kind === "plugin_capability";
 }
 
 const emptyResult: SlotResult = { text: "", error: null, isTranslating: false };
@@ -166,6 +174,7 @@ function LeadingIconTooltip({ label, children }: { label: string; children: Reac
 function QuickTranslatePage() {
   const { t, i18n } = useTranslation();
   const toast = useToast();
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [sessionSeed] = useState(() => loadQuickTranslateSession());
   const [slotListRef] = useAutoAnimate(slotListAutoAnimate);
@@ -194,6 +203,7 @@ function QuickTranslatePage() {
   const profilesQuery = useQuery(profileListOptions());
   const providersQuery = useQuery(providerListOptions());
   const modelsQuery = useQuery(allProviderModelsOptions());
+  const integrationsQuery = useQuery(integrationListOptions());
 
   const profiles = useMemo(() => (profilesQuery.data ?? []).filter((profile) => profile.enabled), [profilesQuery.data]);
   const profileById = useMemo(() => new Map(profiles.map((profile) => [profile.id, profile])), [profiles]);
@@ -329,15 +339,24 @@ function QuickTranslatePage() {
   }, []);
 
   const showTranslateErrorToast = useCallback(
-    (message: string) => {
+    (message: string, errorCode?: string | null) => {
       const title = t("translate.errorPrefix");
+      const recovery = resolveTranslateFailureRecovery(errorCode);
+      const action = recovery
+        ? {
+            label: t("translate.openPlugins"),
+            onClick: () => {
+              void navigate({ to: recovery.path });
+            },
+          }
+        : undefined;
       if (!message || message === title) {
-        toast.error({ title });
+        toast.error({ title, action });
         return;
       }
-      toast.error({ title, description: message });
+      toast.error({ title, description: message, action });
     },
-    [t, toast],
+    [navigate, t, toast],
   );
 
   /** Stop slot spinners on shared failures; toast carries the message (not card body). */
@@ -454,6 +473,7 @@ function QuickTranslatePage() {
               providersById: new Map((providersQuery.data ?? []).map((p) => [p.id, p])),
               modelsById: new Map((modelsQuery.data ?? []).map((m) => [m.id, m])),
               profile: (profilesQuery.data ?? []).find((p) => p.id === detectProfileId) ?? null,
+              integrationsById: new Map((integrationsQuery.data ?? []).map((i) => [i.id, i])),
             },
           );
           if (detectEpoch !== slotStreams.getDetectEpoch()) {
@@ -513,6 +533,13 @@ function QuickTranslatePage() {
           timeout: t("translate.errors.timeout"),
           invalidResponse: t("translate.errors.invalidResponse"),
           fallback: t("translate.errorPrefix"),
+          integrationDisabled: t("translate.errors.integrationDisabled"),
+          integrationUnconfigured: t("translate.errors.integrationUnconfigured"),
+          integrationUnvalidated: t("translate.errors.integrationUnvalidated"),
+          integrationDegraded: t("translate.errors.integrationDegraded"),
+          pluginMissing: t("translate.errors.pluginMissing"),
+          invalidConfiguration: t("translate.errors.invalidConfiguration"),
+          languageUnresolved: t("translate.errors.languageUnresolved"),
         });
 
       // Per-slot: prepare listeners, then batch-start that job (N parallel single-job batches).
@@ -535,8 +562,9 @@ function QuickTranslatePage() {
             }
 
             const slotInputKey = inputKeyFor(slot);
-            const modelId = primaryModelId(profile);
-            if (!modelId || !enabledModelIds.has(modelId)) {
+            const pluginProfile = isPluginProfileAvailable(profile);
+            const modelId = pluginProfile ? "" : primaryModelId(profile);
+            if (!pluginProfile && (!modelId || !enabledModelIds.has(modelId))) {
               patchResult(slot.id, {
                 text: "",
                 error: t("quickTranslate.noModel"),
@@ -562,12 +590,12 @@ function QuickTranslatePage() {
             const resolvedPromptTemplateId = resolveSlotPromptTemplateId(slot.promptTemplateId, profile);
 
             const payload: TranslateInput = {
-              modelId,
+              modelId: pluginProfile ? null : modelId || null,
               sourceLang: t(`translate.languages.${sourceId}`),
               targetLang: t(`translate.languages.${effectiveTargetId}`),
               text: trimmed,
               profileId: slot.profileId,
-              promptTemplateId: resolvedPromptTemplateId || null,
+              promptTemplateId: pluginProfile ? null : resolvedPromptTemplateId || null,
               sourceLangId: sourceLang,
               targetLangId: targetLang,
               effectiveSourceLangId: sourceId,
@@ -583,6 +611,7 @@ function QuickTranslatePage() {
               providersById: new Map((providersQuery.data ?? []).map((p) => [p.id, p])),
               modelsById: new Map((modelsQuery.data ?? []).map((m) => [m.id, m])),
               profile: (profilesQuery.data ?? []).find((p) => p.id === payload.profileId) ?? null,
+              integrationsById: new Map((integrationsQuery.data ?? []).map((i) => [i.id, i])),
             };
             const prepared = await slotStreams.prepareSlotStream(slot.id, epoch, requestId, payload, snapshots, {
               onChunk: (delta) => {
@@ -623,7 +652,7 @@ function QuickTranslatePage() {
                     inputKey: slotInputKey,
                   });
                 } else {
-                  showTranslateErrorToast(resolveFailureMessage(done.errorCode, done.message));
+                  showTranslateErrorToast(resolveFailureMessage(done.errorCode, done.message), done.errorCode);
                   patchResult(slot.id, {
                     error: null,
                     isTranslating: false,
@@ -633,7 +662,7 @@ function QuickTranslatePage() {
                 }
               },
               onError: (err) => {
-                showTranslateErrorToast(resolveFailureMessage(err.errorCode, err.message));
+                showTranslateErrorToast(resolveFailureMessage(err.errorCode, err.message), err.errorCode);
                 patchResult(slot.id, {
                   error: null,
                   isTranslating: false,
@@ -1535,6 +1564,7 @@ function QuickTranslatePage() {
                   !profile && slot.profileId
                     ? [{ value: slot.profileId, label: t("quickTranslate.missingProfile") }]
                     : undefined;
+                const isPluginSlot = profile?.engine.kind === "plugin_capability";
                 const promptTemplateOptions = profile
                   ? [
                       { value: "", label: t("translate.promptTemplateDefault") },
@@ -1602,25 +1632,27 @@ function QuickTranslatePage() {
                             icon={<ChevronUpDownIcon className="pointer-events-none size-4" />}
                           />
                         </div>
-                        <div className="max-w-48 min-w-0 shrink">
-                          <SelectField
-                            className="
-                              h-7 border-0 bg-transparent text-body-tight
-                              hover:not-data-disabled:bg-transparent
-                              data-popup-open:bg-transparent
-                            "
-                            value={resolvedPromptTemplateId}
-                            onValueChange={(value) => {
-                              updateSlotPromptTemplate(slot.id, value ?? "");
-                            }}
-                            options={promptTemplateOptions}
-                            disabled={profilesLoading || !profile}
-                            placeholder={profilesLoading ? t("translate.promptTemplateLoading") : undefined}
-                            aria-label={t("translate.promptTemplateAria")}
-                            compact
-                            icon={<ChevronUpDownIcon className="pointer-events-none size-4" />}
-                          />
-                        </div>
+                        {!isPluginSlot ? (
+                          <div className="max-w-48 min-w-0 shrink">
+                            <SelectField
+                              className="
+                                h-7 border-0 bg-transparent text-body-tight
+                                hover:not-data-disabled:bg-transparent
+                                data-popup-open:bg-transparent
+                              "
+                              value={resolvedPromptTemplateId}
+                              onValueChange={(value) => {
+                                updateSlotPromptTemplate(slot.id, value ?? "");
+                              }}
+                              options={promptTemplateOptions}
+                              disabled={profilesLoading || !profile}
+                              placeholder={profilesLoading ? t("translate.promptTemplateLoading") : undefined}
+                              aria-label={t("translate.promptTemplateAria")}
+                              compact
+                              icon={<ChevronUpDownIcon className="pointer-events-none size-4" />}
+                            />
+                          </div>
+                        ) : null}
                       </div>
                       {/* flex-1 spacer: large blank hit target that toggles collapse */}
                       <div className="min-h-full min-w-0 flex-1" />

@@ -17,6 +17,7 @@ pub const MIGRATIONS: &[&str] = &[
   include_str!("../../migrations/0010_ocr_services.sql"),
   include_str!("../../migrations/0011_provider_transport_contract.sql"),
   include_str!("../../migrations/0012_service_integrations.sql"),
+  include_str!("../../migrations/0013_translation_profile_engines.sql"),
 ];
 
 pub fn latest_version() -> i32 {
@@ -198,6 +199,121 @@ mod tests {
       )
       .unwrap();
     assert_eq!(has_slot_col, 1);
+    // v13 engine_kind column exists on translation_profiles.
+    let has_engine_col: i64 = conn
+      .query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('translation_profiles') WHERE name = 'engine_kind'",
+        [],
+        |r| r.get(0),
+      )
+      .unwrap();
+    assert_eq!(has_engine_col, 1);
+    let has_integration_col: i64 = conn
+      .query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('translation_profiles') WHERE name = 'integration_instance_id'",
+        [],
+        |r| r.get(0),
+      )
+      .unwrap();
+    assert_eq!(has_integration_col, 1);
+  }
+
+  #[test]
+  fn migrate_v12_to_v13_backfills_llm_engine_kind_byte_equivalent() {
+    let mut conn = Connection::open_in_memory().unwrap();
+    migrate_with(&mut conn, &MIGRATIONS[..12]).unwrap();
+    assert_eq!(read_user_version(&conn).unwrap(), 12);
+
+    // Seed an LLM profile at v12 shape (no engine_kind).
+    conn
+      .execute(
+        "INSERT INTO translation_profiles (
+          id, name, enabled, template_version, default_prompt_template_id,
+          temperature, max_output_tokens, provider_options_json,
+          source_lang, target_lang, primary_lang, preferred_target_lang,
+          language_detection_json, created_at, updated_at
+        ) VALUES (
+          'profile-1', 'Legacy LLM', 1, 1, 'template-1',
+          0.2, 1024, NULL,
+          'zh', 'en', 'zh', 'en',
+          NULL, 't0', 't1'
+        )",
+        [],
+      )
+      .unwrap();
+
+    migrate(&mut conn).unwrap();
+    assert_eq!(read_user_version(&conn).unwrap(), 13);
+
+    let (
+      engine_kind,
+      name,
+      template_version,
+      default_prompt_template_id,
+      temperature,
+      max_output_tokens,
+      source_lang,
+      target_lang,
+      primary_lang,
+      preferred_target_lang,
+      created_at,
+      updated_at,
+      integration_instance_id,
+    ): (
+      String,
+      String,
+      i32,
+      String,
+      f64,
+      i64,
+      String,
+      String,
+      String,
+      String,
+      String,
+      String,
+      Option<String>,
+    ) = conn
+      .query_row(
+        "SELECT engine_kind, name, template_version, default_prompt_template_id,
+                temperature, max_output_tokens, source_lang, target_lang,
+                primary_lang, preferred_target_lang, created_at, updated_at,
+                integration_instance_id
+         FROM translation_profiles WHERE id = 'profile-1'",
+        [],
+        |r| {
+          Ok((
+            r.get(0)?,
+            r.get(1)?,
+            r.get(2)?,
+            r.get(3)?,
+            r.get(4)?,
+            r.get(5)?,
+            r.get(6)?,
+            r.get(7)?,
+            r.get(8)?,
+            r.get(9)?,
+            r.get(10)?,
+            r.get(11)?,
+            r.get(12)?,
+          ))
+        },
+      )
+      .unwrap();
+
+    assert_eq!(engine_kind, "llm_model_chain");
+    assert_eq!(name, "Legacy LLM");
+    assert_eq!(template_version, 1);
+    assert_eq!(default_prompt_template_id, "template-1");
+    assert!((temperature - 0.2).abs() < f64::EPSILON);
+    assert_eq!(max_output_tokens, 1024);
+    assert_eq!(source_lang, "zh");
+    assert_eq!(target_lang, "en");
+    assert_eq!(primary_lang, "zh");
+    assert_eq!(preferred_target_lang, "en");
+    assert_eq!(created_at, "t0");
+    assert_eq!(updated_at, "t1");
+    assert!(integration_instance_id.is_none());
   }
 
   #[test]
@@ -218,7 +334,7 @@ mod tests {
       .unwrap();
 
     migrate(&mut conn).unwrap();
-    assert_eq!(read_user_version(&conn).unwrap(), 12);
+    assert_eq!(read_user_version(&conn).unwrap(), latest_version());
 
     let (owner_kind, owner_id, slot_id, new_ref, state): (String, String, String, String, String) = conn
       .query_row(

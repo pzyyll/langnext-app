@@ -57,6 +57,8 @@ const toastContentClassName =
 
 const toastTitleClassName = "text-body-bold font-bold text-on-surface";
 const toastDescriptionClassName = "text-body-tight text-neutral";
+const toastActionClassName =
+  "mt-1 self-start text-body-tight font-semibold text-accent underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-on-surface";
 
 type StatusIcon = ComponentType<SVGProps<SVGSVGElement>>;
 
@@ -107,6 +109,7 @@ function ToastList() {
           <div className="flex min-w-0 flex-1 flex-col gap-0.5">
             <Toast.Title className={toastTitleClassName} />
             <Toast.Description className={toastDescriptionClassName} />
+            {toast.actionProps ? <Toast.Action className={toastActionClassName} /> : null}
           </div>
           <Toast.Close className={iconButtonClassName} aria-label="Dismiss notification">
             <IconMaterialSymbolsLightClose className="size-4" aria-hidden />

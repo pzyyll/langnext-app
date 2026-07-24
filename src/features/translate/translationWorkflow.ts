@@ -11,13 +11,18 @@ import { ProviderProtocolError, type StreamParseResult } from "../providers/type
 import { newClientRequestId } from "./newClientRequestId";
 import {
   resolveTranslationContext,
+  type LlmTranslationExecutionContext,
+  type ServiceTranslationExecutionContext,
   type TranslationContextSnapshots,
-  type TranslationExecutionContext,
 } from "./translationContext";
 
 export type TranslationStreamHandlers = {
   onChunk: (delta: string) => void;
-  onReset: (modelId: string) => void;
+  /**
+   * Model/service display key for UI reset.
+   * LLM: model id (looked up by callers). Service: non-UUID integration/capability label.
+   */
+  onReset: (modelOrServiceLabel: string) => void;
   onDone: (result: TranslateResult) => void;
   onError: (result: TranslateResult) => void;
 };
@@ -105,6 +110,9 @@ export async function runTranslationNonStream(
   if (ctx.earlyFailure) {
     return failureResult(ctx.earlyFailure.errorCode, ctx.earlyFailure.message, 0);
   }
+  if (ctx.kind === "service_integration") {
+    return runServiceTranslation(input, ctx, signal, started);
+  }
   return runAttempts(input, ctx, snapshots, false, undefined, signal, started);
 }
 
@@ -121,6 +129,21 @@ export async function runTranslationStream(
     handlers.onError(failureResult(ctx.earlyFailure.errorCode, ctx.earlyFailure.message, 0));
     return;
   }
+  if (ctx.kind === "service_integration") {
+    // Unary service call: onReset then one terminal onDone/onError (no fake chunks).
+    // Pass a human label (never profile UUID) so UI does not render opaque ids.
+    const serviceLabel = ctx.integrationDisplayName || ctx.capabilityLabel;
+    handlers.onReset(serviceLabel);
+    const result = await runServiceTranslation(input, ctx, signal, started, requestId);
+    if (result.ok) {
+      handlers.onDone(result);
+    } else if (result.errorCode === "cancelled") {
+      return;
+    } else {
+      handlers.onError(result);
+    }
+    return;
+  }
   const result = await runAttempts(input, ctx, snapshots, true, handlers, signal, started, requestId);
   if (result.ok) {
     handlers.onDone(result);
@@ -132,9 +155,99 @@ export async function runTranslationStream(
   }
 }
 
+/** Concrete app language id for service Translate IPC (never `auto` or display labels). */
+const AUTO_LANGUAGE_ID = "auto";
+
+/**
+ * Service Translate IPC must receive concrete app language IDs only.
+ * UI Auto is resolved upstream (detect source / LLM target Auto rules) into effective* fields.
+ */
+function resolveServiceRuntimeLanguageIds(
+  input: TranslateInput,
+): { sourceLang: string; targetLang: string } | { errorCode: string; message: string } {
+  const sourceLang = input.effectiveSourceLangId?.trim() ?? "";
+  const targetLang = input.effectiveTargetLangId?.trim() ?? "";
+  if (!sourceLang || sourceLang.toLowerCase() === AUTO_LANGUAGE_ID) {
+    return {
+      errorCode: "validation_failed",
+      message: "Concrete source language id is required for service translation",
+    };
+  }
+  if (!targetLang || targetLang.toLowerCase() === AUTO_LANGUAGE_ID) {
+    return {
+      errorCode: "validation_failed",
+      message: "Concrete target language id is required for service translation",
+    };
+  }
+  return { sourceLang, targetLang };
+}
+
+async function runServiceTranslation(
+  input: TranslateInput,
+  ctx: ServiceTranslationExecutionContext,
+  signal: AbortSignal | undefined,
+  started: number,
+  requestId?: string,
+): Promise<TranslateResult> {
+  if (signal?.aborted) {
+    return failureResult("cancelled", "Request cancelled", Math.round(performance.now() - started));
+  }
+  const languages = resolveServiceRuntimeLanguageIds(input);
+  if ("errorCode" in languages) {
+    return failureResult(languages.errorCode, languages.message, Math.round(performance.now() - started));
+  }
+  const completionId = crypto.randomUUID();
+  const rid = requestId ?? newClientRequestId("svc");
+  try {
+    const result = await runStorage(
+      invokeEffect<TranslateResult>("translate_service_profile", {
+        input: {
+          requestId: rid,
+          profileId: ctx.profileId,
+          text: input.text,
+          // Concrete app language IDs only — never UI labels or `auto`.
+          sourceLang: languages.sourceLang,
+          targetLang: languages.targetLang,
+        },
+      }),
+    );
+    if (signal?.aborted || result.errorCode === "cancelled") {
+      return failureResult("cancelled", "Request cancelled", Math.round(performance.now() - started));
+    }
+    if (result.ok) {
+      await recordHistoryBestEffort({
+        completionId,
+        ok: true,
+        translatedText: result.translatedText,
+        errorCode: null,
+        message: result.message,
+        modelId: null,
+        modelDisplayName: ctx.capabilityLabel,
+        providerDisplayName: ctx.integrationDisplayName,
+        profileId: ctx.profileId,
+        profileName: ctx.profileName,
+        latencyMs: result.latencyMs,
+        // History keeps UI labels when present; effective ids track concrete runtime languages.
+        sourceLang: input.sourceLang,
+        targetLang: input.targetLang,
+        sourceText: input.text,
+        effectiveSourceLang: languages.sourceLang,
+        effectiveTargetLang: languages.targetLang,
+      });
+    }
+    return { ...result, modelId: null };
+  } catch (error) {
+    if (signal?.aborted) {
+      return failureResult("cancelled", "Request cancelled", Math.round(performance.now() - started));
+    }
+    const normalized = normalizeProviderError(error);
+    return failureResult(normalized.code, normalized.message, Math.round(performance.now() - started), null);
+  }
+}
+
 async function runAttempts(
   input: TranslateInput,
-  ctx: TranslationExecutionContext,
+  ctx: LlmTranslationExecutionContext,
   _snapshots: TranslationContextSnapshots,
   stream: boolean,
   handlers: TranslationStreamHandlers | undefined,

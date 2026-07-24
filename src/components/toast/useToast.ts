@@ -6,6 +6,12 @@ import { Toast } from "@base-ui/react/toast";
 /** Visual / semantic toast variants used across the app. */
 export type ToastVariant = "success" | "error" | "warning" | "info";
 
+/** Optional action button shown inside a toast (e.g. Open Plugins). */
+export type ToastActionOptions = {
+  label: string;
+  onClick: () => void;
+};
+
 /** Payload for a single toast notification. */
 export type ToastShowOptions = {
   /** Short headline shown as the toast title. */
@@ -14,6 +20,8 @@ export type ToastShowOptions = {
   description?: string;
   /** Auto-dismiss timeout in ms; omit for variant defaults. `0` disables auto-dismiss. */
   duration?: number;
+  /** Optional recovery/control action rendered via Base UI Toast.Action. */
+  action?: ToastActionOptions;
 };
 
 /** Options for `toast.show`, including the variant. */
@@ -60,13 +68,19 @@ export function useToast(): ToastApi {
 
   return useMemo(() => {
     function show(options: ToastShowWithVariantOptions): string {
-      const { variant, title, description, duration } = options;
+      const { variant, title, description, duration, action } = options;
       return managerRef.current.add({
         type: variant,
         title,
         description,
         timeout: duration ?? DEFAULT_DURATION_MS[variant],
         priority: variant === "error" ? "high" : "low",
+        actionProps: action
+          ? {
+              children: action.label,
+              onClick: action.onClick,
+            }
+          : undefined,
       });
     }
 

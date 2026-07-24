@@ -1,6 +1,6 @@
 // ABOUTME: Selected integration instance editor shell with status, form, and dependencies.
 // ABOUTME: Hosts the typed Google Cloud form; secrets stay write-only until save.
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { Button } from "@base-ui/react/button";
@@ -42,6 +42,7 @@ import {
   buildGoogleCloudWrite,
   draftFromIntegrationDto,
   emptyGoogleCloudDraft,
+  hasRemoteRelevantMutation,
   isGoogleCloudDraftClean,
   type GoogleCloudIntegrationDraft,
 } from "./integrationDraft";
@@ -109,6 +110,10 @@ export function IntegrationEditor({ integrationInstanceId }: IntegrationEditorPr
     return definition?.capabilities.map((capability) => capability.id) ?? [];
   }, [definitionsQuery.data, instance]);
 
+  // Tracks whether the most recent save mutated credentials or Google Cloud config, so
+  // onSuccess can trigger remote validation only when a re-check is meaningful (not name-only).
+  const remoteRelevantSaveRef = useRef(false);
+
   const saveMutation = useMutation({
     mutationFn: saveIntegrationInstance,
     onSuccess: (saved) => {
@@ -117,6 +122,13 @@ export function IntegrationEditor({ integrationInstanceId }: IntegrationEditorPr
       // Clear pending secret after successful replacement.
       setDraft(draftFromIntegrationDto(saved));
       toast.success({ title: t("plugins.toast.saved") });
+      // Remote validation is re-checked after credential or Google Cloud config mutation;
+      // name-only saves leave auth/config valid and do not need a network round-trip.
+      const remoteRelevant = remoteRelevantSaveRef.current;
+      remoteRelevantSaveRef.current = false;
+      if (remoteRelevant && !pluginMissing) {
+        validateMutation.mutate();
+      }
     },
     onError: (error) => {
       const message =
@@ -345,6 +357,7 @@ export function IntegrationEditor({ integrationInstanceId }: IntegrationEditorPr
               disabled={pending || !dirty || pluginMissing}
               onClick={() => {
                 // Enabled is persisted via setIntegrationInstanceEnabled; keep write in sync.
+                remoteRelevantSaveRef.current = hasRemoteRelevantMutation(draft, instance);
                 saveMutation.mutate(buildGoogleCloudWrite(draft, { id: instance.id }));
               }}
             >

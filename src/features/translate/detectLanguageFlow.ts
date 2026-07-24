@@ -5,14 +5,18 @@ import { IpcError } from "../../storage/ipcError";
 import type {
   DetectLanguageInput,
   DetectLanguageResult,
+  IntegrationInstanceDto,
   ProviderInstanceDto,
   ProviderModelDto,
   TranslationProfileDto,
 } from "../../storage/types";
+import { invokeEffect } from "../../storage/invokeEffect";
+import { runStorage } from "../../storage/runStorage";
 import { mapHttpStatus, normalizeProviderError } from "../providers/errors";
 import { providerFetch } from "../providers/providerFetch";
 import { requireProviderPlugin } from "../providers/registry";
 import { newClientRequestId } from "./newClientRequestId";
+import { isPluginProfile } from "./translationContext";
 
 const DETECT_SAMPLE_CHARS = 5000;
 const DETECT_TEMPERATURE = 0.0;
@@ -44,6 +48,7 @@ export type DetectLanguageContext = {
   providersById: Map<string, ProviderInstanceDto>;
   modelsById: Map<string, ProviderModelDto>;
   profile: TranslationProfileDto | null;
+  integrationsById?: Map<string, IntegrationInstanceDto>;
 };
 
 function softFailure(
@@ -51,11 +56,12 @@ function softFailure(
   errorCode: string | null,
   latencyMs: number,
   modelId?: string | null,
+  detectorType: DetectLanguageResult["detectorType"] = "llm",
 ): DetectLanguageResult {
   return {
     ok: false,
     languageId: null,
-    detectorType: "llm",
+    detectorType,
     modelId: modelId ?? null,
     latencyMs,
     errorCode,
@@ -68,10 +74,10 @@ function resolveDetectModelId(input: DetectLanguageInput, ctx: DetectLanguageCon
     return input.modelId;
   }
   const profile = ctx.profile;
-  if (!profile) {
+  if (!profile || profile.engine.kind !== "llm_model_chain") {
     return null;
   }
-  const detection = profile.languageDetection;
+  const detection = profile.engine.languageDetection;
   if (detection?.type === "llm" && detection.modelId) {
     return detection.modelId;
   }
@@ -88,6 +94,42 @@ export async function detectLanguage(
   if (!text) {
     return softFailure("Source text must not be empty", "validation_failed", 0);
   }
+
+  // Plugin Profile path: unary Rust Detect capability (never requireProviderPlugin).
+  if (context.profile && isPluginProfile(context.profile)) {
+    const engine = context.profile.engine;
+    if (engine.kind !== "plugin_capability" || !engine.detectCapabilityId) {
+      return softFailure(
+        "Source auto-detect is unavailable for this service profile",
+        "detect_unavailable",
+        0,
+        null,
+        "service_integration",
+      );
+    }
+    try {
+      const result = await runStorage(
+        invokeEffect<DetectLanguageResult>("detect_service_profile_language", {
+          input: {
+            requestId: requestId ?? newClientRequestId("detect"),
+            profileId: context.profile.id,
+            text,
+          },
+        }),
+      );
+      return { ...result, modelId: null, detectorType: "service_integration" };
+    } catch (error) {
+      const normalized = normalizeProviderError(error);
+      return softFailure(
+        normalized.message,
+        normalized.code,
+        Math.round(performance.now() - started),
+        null,
+        "service_integration",
+      );
+    }
+  }
+
   const sample = text.length > DETECT_SAMPLE_CHARS ? text.slice(0, DETECT_SAMPLE_CHARS) : text;
   const modelId = resolveDetectModelId(input, context);
   if (!modelId) {

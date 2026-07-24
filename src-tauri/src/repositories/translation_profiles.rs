@@ -1,42 +1,83 @@
 // ABOUTME: Translation profile and fallback-chain transactional persistence.
-// ABOUTME: Profile saves replace the complete ordered target list and prompt templates in one unit of work.
+// ABOUTME: Engine-aware saves replace LLM targets/templates or plugin bindings in one unit of work.
 use crate::domain::language_detection::LanguageDetectorConfig;
 use crate::domain::translation_profile::{
-  PromptTemplate, TranslationProfile, TranslationProfileDto, TranslationProfilePromptTemplate, TranslationProfileTarget,
+  ENGINE_KIND_LLM_MODEL_CHAIN, ENGINE_KIND_PLUGIN_CAPABILITY, LlmModelChainEngine, PluginCapabilityEngine,
+  PromptTemplate, TranslationProfile, TranslationProfileDto, TranslationProfileEngine,
+  TranslationProfilePromptTemplate, TranslationProfileTarget,
 };
 use crate::error::StorageError;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use std::collections::HashSet;
 use uuid::Uuid;
 
+fn parse_uuid(value: &str, column: usize) -> Result<Uuid, rusqlite::Error> {
+  Uuid::parse_str(value)
+    .map_err(|e| rusqlite::Error::FromSqlConversionFailure(column, rusqlite::types::Type::Text, Box::new(e)))
+}
+
 fn map_profile(row: &Row<'_>) -> Result<TranslationProfile, rusqlite::Error> {
   let id: String = row.get("id")?;
   let enabled: i64 = row.get("enabled")?;
-  let default_prompt_template_id: String = row.get("default_prompt_template_id")?;
-  let provider_options: Option<String> = row.get("provider_options_json")?;
-  let language_detection: Option<String> = row.get("language_detection_json")?;
+  let engine_kind: String = row.get("engine_kind")?;
+  let engine = match engine_kind.as_str() {
+    ENGINE_KIND_LLM_MODEL_CHAIN => {
+      let template_version: i32 = row.get("template_version")?;
+      let default_prompt_template_id: String = row.get("default_prompt_template_id")?;
+      let provider_options: Option<String> = row.get("provider_options_json")?;
+      let language_detection: Option<String> = row.get("language_detection_json")?;
+      TranslationProfileEngine::LlmModelChain(LlmModelChainEngine {
+        template_version,
+        default_prompt_template_id: parse_uuid(&default_prompt_template_id, 0)?,
+        temperature: row.get("temperature")?,
+        max_output_tokens: row.get("max_output_tokens")?,
+        provider_options_json: provider_options
+          .map(|s| serde_json::from_str(&s))
+          .transpose()
+          .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?,
+        language_detection: language_detection
+          .map(|s| serde_json::from_str::<LanguageDetectorConfig>(&s))
+          .transpose()
+          .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?,
+      })
+    }
+    ENGINE_KIND_PLUGIN_CAPABILITY => {
+      let integration_instance_id: String = row.get("integration_instance_id")?;
+      let translate_capability_id: String = row.get("translate_capability_id")?;
+      let detect_capability_id: Option<String> = row.get("detect_capability_id")?;
+      let capability_preferences_version: i32 = row.get("capability_preferences_version")?;
+      let preferences_json: String = row.get("capability_preferences_json")?;
+      let capability_preferences = serde_json::from_str(&preferences_json)
+        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?;
+      TranslationProfileEngine::PluginCapability(PluginCapabilityEngine {
+        integration_instance_id: parse_uuid(&integration_instance_id, 0)?,
+        translate_capability_id,
+        detect_capability_id,
+        capability_preferences_version,
+        capability_preferences,
+      })
+    }
+    other => {
+      return Err(rusqlite::Error::FromSqlConversionFailure(
+        0,
+        rusqlite::types::Type::Text,
+        Box::new(std::io::Error::new(
+          std::io::ErrorKind::InvalidData,
+          format!("invalid engine_kind: {other}"),
+        )),
+      ));
+    }
+  };
+
   Ok(TranslationProfile {
-    id: Uuid::parse_str(&id)
-      .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?,
+    id: parse_uuid(&id, 0)?,
     name: row.get("name")?,
     enabled: enabled != 0,
-    template_version: row.get("template_version")?,
-    default_prompt_template_id: Uuid::parse_str(&default_prompt_template_id)
-      .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?,
-    temperature: row.get("temperature")?,
-    max_output_tokens: row.get("max_output_tokens")?,
-    provider_options_json: provider_options
-      .map(|s| serde_json::from_str(&s))
-      .transpose()
-      .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?,
     source_lang: row.get("source_lang")?,
     target_lang: row.get("target_lang")?,
     primary_lang: row.get("primary_lang")?,
     preferred_target_lang: row.get("preferred_target_lang")?,
-    language_detection: language_detection
-      .map(|s| serde_json::from_str::<LanguageDetectorConfig>(&s))
-      .transpose()
-      .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?,
+    engine,
     created_at: row.get("created_at")?,
     updated_at: row.get("updated_at")?,
   })
@@ -46,10 +87,8 @@ fn map_target(row: &Row<'_>) -> Result<TranslationProfileTarget, rusqlite::Error
   let profile_id: String = row.get("translation_profile_id")?;
   let model_id: String = row.get("provider_model_id")?;
   Ok(TranslationProfileTarget {
-    translation_profile_id: Uuid::parse_str(&profile_id)
-      .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?,
-    provider_model_id: Uuid::parse_str(&model_id)
-      .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?,
+    translation_profile_id: parse_uuid(&profile_id, 0)?,
+    provider_model_id: parse_uuid(&model_id, 0)?,
     priority: row.get("priority")?,
   })
 }
@@ -58,10 +97,8 @@ fn map_prompt_template_row(row: &Row<'_>) -> Result<TranslationProfilePromptTemp
   let id: String = row.get("id")?;
   let profile_id: String = row.get("translation_profile_id")?;
   Ok(TranslationProfilePromptTemplate {
-    id: Uuid::parse_str(&id)
-      .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?,
-    translation_profile_id: Uuid::parse_str(&profile_id)
-      .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?,
+    id: parse_uuid(&id, 0)?,
+    translation_profile_id: parse_uuid(&profile_id, 0)?,
     name: row.get("name")?,
     system_template: row.get("system_template")?,
     user_template: row.get("user_template")?,
@@ -75,6 +112,70 @@ fn to_prompt_template(row: TranslationProfilePromptTemplate) -> PromptTemplate {
     name: row.name,
     system_template: row.system_template,
     user_template: row.user_template,
+  }
+}
+
+fn engine_columns(
+  engine: &TranslationProfileEngine,
+) -> Result<
+  (
+    &'static str,
+    Option<i32>,
+    Option<String>,
+    Option<f64>,
+    Option<i64>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<i32>,
+    Option<String>,
+  ),
+  StorageError,
+> {
+  match engine {
+    TranslationProfileEngine::LlmModelChain(llm) => {
+      let options = match &llm.provider_options_json {
+        Some(v) => Some(serde_json::to_string(v)?),
+        None => None,
+      };
+      let detection = match &llm.language_detection {
+        Some(v) => Some(serde_json::to_string(v)?),
+        None => None,
+      };
+      Ok((
+        ENGINE_KIND_LLM_MODEL_CHAIN,
+        Some(llm.template_version),
+        Some(llm.default_prompt_template_id.to_string()),
+        llm.temperature,
+        llm.max_output_tokens,
+        options,
+        detection,
+        None,
+        None,
+        None,
+        None,
+        None,
+      ))
+    }
+    TranslationProfileEngine::PluginCapability(plugin) => {
+      let preferences = serde_json::to_string(&plugin.capability_preferences)?;
+      Ok((
+        ENGINE_KIND_PLUGIN_CAPABILITY,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Some(plugin.integration_instance_id.to_string()),
+        Some(plugin.translate_capability_id.clone()),
+        plugin.detect_capability_id.clone(),
+        Some(plugin.capability_preferences_version),
+        Some(preferences),
+      ))
+    }
   }
 }
 
@@ -104,6 +205,22 @@ pub fn list_all_prompt_templates(conn: &Connection) -> Result<Vec<TranslationPro
   Ok(rows)
 }
 
+/// List plugin profiles bound to a given integration instance (for dependency guards).
+pub fn list_by_integration_instance(
+  conn: &Connection,
+  integration_instance_id: Uuid,
+) -> Result<Vec<TranslationProfile>, StorageError> {
+  let mut stmt = conn.prepare(
+    "SELECT * FROM translation_profiles
+         WHERE integration_instance_id = ?1
+         ORDER BY name ASC, id ASC",
+  )?;
+  let rows = stmt
+    .query_map(params![integration_instance_id.to_string()], map_profile)?
+    .collect::<Result<Vec<_>, _>>()?;
+  Ok(rows)
+}
+
 pub fn get(conn: &Connection, id: Uuid) -> Result<TranslationProfileDto, StorageError> {
   let profile = conn
     .query_row(
@@ -113,8 +230,16 @@ pub fn get(conn: &Connection, id: Uuid) -> Result<TranslationProfileDto, Storage
     )
     .optional()?
     .ok_or_else(|| StorageError::NotFound(format!("profile {id}")))?;
-  let targets = list_targets(conn, id)?;
-  let prompt_templates = list_prompt_templates(conn, id)?;
+  let targets = if profile.engine.is_llm() {
+    list_targets(conn, id)?
+  } else {
+    Vec::new()
+  };
+  let prompt_templates = if profile.engine.is_llm() {
+    list_prompt_templates(conn, id)?
+  } else {
+    Vec::new()
+  };
   Ok(TranslationProfileDto {
     profile,
     targets,
@@ -165,35 +290,54 @@ pub fn get_prompt_template_for_profile(
 }
 
 pub fn insert_profile(conn: &Connection, profile: &TranslationProfile) -> Result<(), StorageError> {
-  let options = match &profile.provider_options_json {
-    Some(v) => Some(serde_json::to_string(v)?),
-    None => None,
-  };
-  let detection = match &profile.language_detection {
-    Some(v) => Some(serde_json::to_string(v)?),
-    None => None,
-  };
+  let (
+    engine_kind,
+    template_version,
+    default_prompt_template_id,
+    temperature,
+    max_output_tokens,
+    options,
+    detection,
+    integration_instance_id,
+    translate_capability_id,
+    detect_capability_id,
+    capability_preferences_version,
+    capability_preferences_json,
+  ) = engine_columns(&profile.engine)?;
+
   conn
     .execute(
       "INSERT INTO translation_profiles (
-            id, name, enabled, template_version, default_prompt_template_id,
-            temperature, max_output_tokens, provider_options_json, source_lang, target_lang,
-            primary_lang, preferred_target_lang, language_detection_json, created_at, updated_at
-        ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
+            id, name, enabled, engine_kind,
+            template_version, default_prompt_template_id,
+            temperature, max_output_tokens, provider_options_json, language_detection_json,
+            integration_instance_id, translate_capability_id, detect_capability_id,
+            capability_preferences_version, capability_preferences_json,
+            source_lang, target_lang, primary_lang, preferred_target_lang,
+            created_at, updated_at
+        ) VALUES (
+            ?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21
+        )",
       params![
         profile.id.to_string(),
         profile.name,
         profile.enabled as i64,
-        profile.template_version,
-        profile.default_prompt_template_id.to_string(),
-        profile.temperature,
-        profile.max_output_tokens,
+        engine_kind,
+        template_version,
+        default_prompt_template_id,
+        temperature,
+        max_output_tokens,
         options,
+        detection,
+        integration_instance_id,
+        translate_capability_id,
+        detect_capability_id,
+        capability_preferences_version,
+        capability_preferences_json,
         profile.source_lang,
         profile.target_lang,
         profile.primary_lang,
         profile.preferred_target_lang,
-        detection,
         profile.created_at,
         profile.updated_at,
       ],
@@ -203,45 +347,64 @@ pub fn insert_profile(conn: &Connection, profile: &TranslationProfile) -> Result
 }
 
 pub fn update_profile(conn: &Connection, profile: &TranslationProfile) -> Result<(), StorageError> {
-  let options = match &profile.provider_options_json {
-    Some(v) => Some(serde_json::to_string(v)?),
-    None => None,
-  };
-  let detection = match &profile.language_detection {
-    Some(v) => Some(serde_json::to_string(v)?),
-    None => None,
-  };
+  let (
+    engine_kind,
+    template_version,
+    default_prompt_template_id,
+    temperature,
+    max_output_tokens,
+    options,
+    detection,
+    integration_instance_id,
+    translate_capability_id,
+    detect_capability_id,
+    capability_preferences_version,
+    capability_preferences_json,
+  ) = engine_columns(&profile.engine)?;
+
   let changed = conn
     .execute(
       "UPDATE translation_profiles SET
             name = ?2,
             enabled = ?3,
-            template_version = ?4,
-            default_prompt_template_id = ?5,
-            temperature = ?6,
-            max_output_tokens = ?7,
-            provider_options_json = ?8,
-            source_lang = ?9,
-            target_lang = ?10,
-            primary_lang = ?11,
-            preferred_target_lang = ?12,
-            language_detection_json = ?13,
-            updated_at = ?14
+            engine_kind = ?4,
+            template_version = ?5,
+            default_prompt_template_id = ?6,
+            temperature = ?7,
+            max_output_tokens = ?8,
+            provider_options_json = ?9,
+            language_detection_json = ?10,
+            integration_instance_id = ?11,
+            translate_capability_id = ?12,
+            detect_capability_id = ?13,
+            capability_preferences_version = ?14,
+            capability_preferences_json = ?15,
+            source_lang = ?16,
+            target_lang = ?17,
+            primary_lang = ?18,
+            preferred_target_lang = ?19,
+            updated_at = ?20
          WHERE id = ?1",
       params![
         profile.id.to_string(),
         profile.name,
         profile.enabled as i64,
-        profile.template_version,
-        profile.default_prompt_template_id.to_string(),
-        profile.temperature,
-        profile.max_output_tokens,
+        engine_kind,
+        template_version,
+        default_prompt_template_id,
+        temperature,
+        max_output_tokens,
         options,
+        detection,
+        integration_instance_id,
+        translate_capability_id,
+        detect_capability_id,
+        capability_preferences_version,
+        capability_preferences_json,
         profile.source_lang,
         profile.target_lang,
         profile.primary_lang,
         profile.preferred_target_lang,
-        detection,
         profile.updated_at,
       ],
     )
@@ -308,6 +471,7 @@ pub fn replace_prompt_templates(
 
 /// Clear dedicated detector configs that reference any of the given model ids.
 /// Profiles then fall back to their primary model instead of retaining orphaned JSON ids.
+/// Only LLM profiles carry detector config; plugin profiles are skipped.
 pub fn clear_detection_models(
   conn: &Connection,
   model_ids: &HashSet<Uuid>,
@@ -318,13 +482,18 @@ pub fn clear_detection_models(
   }
 
   for mut profile in list(conn)? {
-    let references_model = profile
+    let Some(llm) = profile.engine.as_llm() else {
+      continue;
+    };
+    let references_model = llm
       .language_detection
       .as_ref()
       .and_then(|config| config.llm_model_id())
       .is_some_and(|model_id| model_ids.contains(&model_id));
     if references_model {
-      profile.language_detection = None;
+      if let TranslationProfileEngine::LlmModelChain(ref mut engine) = profile.engine {
+        engine.language_detection = None;
+      }
       profile.updated_at = updated_at.to_string();
       update_profile(conn, &profile)?;
     }
@@ -343,8 +512,7 @@ pub fn clear_detection_models_by_provider(
     let ids = stmt
       .query_map(params![provider_id.to_string()], |row| {
         let id: String = row.get(0)?;
-        Uuid::parse_str(&id)
-          .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))
+        parse_uuid(&id, 0)
       })?
       .collect::<Result<_, _>>()?;
     ids
@@ -369,8 +537,7 @@ pub fn delete_targets_by_models(conn: &Connection, model_ids: &[Uuid]) -> Result
       let profile_ids = stmt
         .query_map(params![model_id.to_string()], |row| {
           let id: String = row.get(0)?;
-          Uuid::parse_str(&id)
-            .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))
+          parse_uuid(&id, 0)
         })?
         .collect::<Result<Vec<_>, _>>()?;
       affected_profiles.extend(profile_ids);
@@ -402,8 +569,7 @@ pub fn delete_targets_by_provider(conn: &Connection, provider_id: Uuid) -> Resul
     let ids = stmt
       .query_map(params![provider_id.to_string()], |row| {
         let id: String = row.get(0)?;
-        Uuid::parse_str(&id)
-          .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))
+        parse_uuid(&id, 0)
       })?
       .collect::<Result<Vec<_>, _>>()?;
     ids.into_iter().collect()
@@ -446,6 +612,7 @@ fn recompact_target_priorities(conn: &Connection, profile_id: Uuid) -> Result<()
 }
 
 /// Insert or update profile and replace targets + templates atomically on the given connection/transaction.
+/// Plugin profiles must pass empty targets/templates (enforced by service validation).
 pub fn save_with_targets(
   conn: &Connection,
   profile: &TranslationProfile,

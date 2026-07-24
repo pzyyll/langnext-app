@@ -151,7 +151,8 @@ export interface ModelConfigWrite {
 
 /** Input for one-shot or streaming translate via a configured provider model. */
 export interface TranslateInput {
-  modelId: string;
+  /** Required for LLM execution; null/omitted for plugin service profiles. */
+  modelId?: string | null;
   sourceLang: string;
   targetLang: string;
   text: string;
@@ -213,7 +214,7 @@ export interface TranslateStreamError {
 }
 
 /** Detector backend that produced a DetectLanguageResult. Mirrors the Rust tagged enum. */
-export type DetectorType = "llm";
+export type DetectorType = "llm" | "service_integration";
 
 /** Tagged language detector config. `type` selects the backend; only `llm` exists today. */
 export type LanguageDetectorConfig = { type: "llm"; modelId?: string | null };
@@ -434,24 +435,43 @@ export interface TranslationProfilePromptTemplate extends PromptTemplate {
   sortOrder: number;
 }
 
-export interface TranslationProfile {
-  id: string;
-  name: string;
-  enabled: boolean;
+/** LLM model-chain engine payload on a translation profile. */
+export interface LlmModelChainEngine {
+  kind: "llm_model_chain";
   templateVersion: number;
   /** Id of the template used when translate does not pass an override. */
   defaultPromptTemplateId: string;
   temperature: number | null;
   maxOutputTokens: number | null;
   providerOptionsJson: unknown | null;
+  /** Optional language detector config; null/absent uses the default LLM detector. */
+  languageDetection?: LanguageDetectorConfig | null;
+}
+
+/** Plugin capability engine payload on a translation profile. */
+export interface PluginCapabilityEngine {
+  kind: "plugin_capability";
+  integrationInstanceId: string;
+  translateCapabilityId: string;
+  detectCapabilityId?: string | null;
+  capabilityPreferencesVersion: number;
+  /** Capability-specific preferences. Google Translate v1 is exactly `{}`. */
+  capabilityPreferences: unknown;
+}
+
+export type TranslationProfileEngine = LlmModelChainEngine | PluginCapabilityEngine;
+
+export interface TranslationProfile {
+  id: string;
+  name: string;
+  enabled: boolean;
   sourceLang?: string | null;
   targetLang?: string | null;
   /** Profile Primary preference (concrete supported id); null on legacy profiles. */
   primaryLang?: string | null;
   /** Profile Target preference (concrete supported id); null on legacy profiles. */
   preferredTargetLang?: string | null;
-  /** Optional language detector config; null/absent uses the default LLM detector. */
-  languageDetection?: LanguageDetectorConfig | null;
+  engine: TranslationProfileEngine;
   createdAt: string;
   updatedAt: string;
 }
@@ -468,10 +488,9 @@ export interface TranslationProfileDto extends TranslationProfile {
   promptTemplates: PromptTemplate[];
 }
 
-export interface TranslationProfileWrite {
-  id?: string | null;
-  name: string;
-  enabled: boolean;
+/** LLM write payload including ordered targets/templates. */
+export interface LlmModelChainEngineWrite {
+  kind: "llm_model_chain";
   templateVersion: number;
   /** Must reference one entry in promptTemplates. */
   defaultPromptTemplateId: string;
@@ -480,15 +499,34 @@ export interface TranslationProfileWrite {
   temperature?: number | null;
   maxOutputTokens?: number | null;
   providerOptionsJson?: unknown | null;
+  /** Optional language detector config; null/absent clears to the default LLM detector. */
+  languageDetection?: LanguageDetectorConfig | null;
+  targetModelIds: string[];
+}
+
+/** Plugin write payload for integration binding + preferences. */
+export interface PluginCapabilityEngineWrite {
+  kind: "plugin_capability";
+  integrationInstanceId: string;
+  translateCapabilityId: string;
+  detectCapabilityId?: string | null;
+  capabilityPreferencesVersion: number;
+  capabilityPreferences: unknown;
+}
+
+export type TranslationProfileEngineWrite = LlmModelChainEngineWrite | PluginCapabilityEngineWrite;
+
+export interface TranslationProfileWrite {
+  id?: string | null;
+  name: string;
+  enabled: boolean;
   sourceLang?: string | null;
   targetLang?: string | null;
   /** Profile Primary preference (concrete supported id); omitted on legacy writes. */
   primaryLang?: string | null;
   /** Profile Target preference (concrete supported id); omitted on legacy writes. */
   preferredTargetLang?: string | null;
-  /** Optional language detector config; null/absent clears to the default LLM detector. */
-  languageDetection?: LanguageDetectorConfig | null;
-  targetModelIds: string[];
+  engine: TranslationProfileEngineWrite;
 }
 
 export interface NetworkSettings {
@@ -603,6 +641,20 @@ export interface ProviderExport {
   updatedAt: string;
 }
 
+/** Sanitized integration instance for configuration export/import (no secrets). */
+export interface IntegrationInstanceExport {
+  id: string;
+  pluginId: string;
+  pluginVersion: string;
+  displayName: string;
+  enabled: boolean;
+  configJson: string;
+  configSchemaVersion: number;
+  healthStatus: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface ConfigurationExport {
   formatVersion: number;
   exportedAt: string;
@@ -612,6 +664,8 @@ export interface ConfigurationExport {
   profileModels: TranslationProfileTarget[];
   /** Ordered prompt templates for all profiles. */
   profilePromptTemplates: TranslationProfilePromptTemplate[];
+  /** Sanitized integration instances (no credentials/refs). */
+  integrationInstances?: IntegrationInstanceExport[];
   appSettings: AppSettingsV1;
 }
 
@@ -625,6 +679,9 @@ export interface ImportPreviewCounts {
   profilesCreate: number;
   profilesUpdate: number;
   profilesCopy: number;
+  integrationsCreate?: number;
+  integrationsUpdate?: number;
+  integrationsCopy?: number;
 }
 
 export interface ImportPreview {
@@ -632,6 +689,8 @@ export interface ImportPreview {
   counts: ImportPreviewCounts;
   validationErrors: string[];
   requiresAuthentication: string[];
+  /** Integration instance IDs that need credential re-entry after import. */
+  integrationRequiresAuthentication?: string[];
   proxyRequiresAuthentication: boolean;
   defaultProfileCleared: boolean;
 }
@@ -795,22 +854,25 @@ const _modelDtoFixture = {
 const _profileWriteFixture = {
   name: "Default",
   enabled: true,
-  templateVersion: 1,
-  defaultPromptTemplateId: "00000000-0000-7000-8000-0000000000aa",
-  promptTemplates: [
-    {
-      id: "00000000-0000-7000-8000-0000000000aa",
-      name: "Default",
-      systemTemplate: "Translate carefully.",
-      userTemplate: "{{text}}",
-    },
-  ],
-  temperature: 0.2,
-  maxOutputTokens: 1024,
-  providerOptionsJson: {},
   primaryLang: "zh",
   preferredTargetLang: "en",
-  targetModelIds: ["00000000-0000-7000-8000-000000000002"],
+  engine: {
+    kind: "llm_model_chain",
+    templateVersion: 1,
+    defaultPromptTemplateId: "00000000-0000-7000-8000-0000000000aa",
+    promptTemplates: [
+      {
+        id: "00000000-0000-7000-8000-0000000000aa",
+        name: "Default",
+        systemTemplate: "Translate carefully.",
+        userTemplate: "{{text}}",
+      },
+    ],
+    temperature: 0.2,
+    maxOutputTokens: 1024,
+    providerOptionsJson: {},
+    targetModelIds: ["00000000-0000-7000-8000-000000000002"],
+  },
 } as const satisfies TranslationProfileWrite;
 
 const _importPreviewFixture = {

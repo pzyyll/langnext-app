@@ -13,6 +13,8 @@ import type { IntegrationInstanceDto, ServiceIntegrationManifest } from "../../s
 import { GOOGLE_CLOUD_PLUGIN_ID } from "../../storage/types";
 import { buildGoogleCloudWrite, emptyGoogleCloudDraft } from "./integrationDraft";
 
+const INTEGRATION_OPTION_MAX_COLUMNS = 3;
+
 export type AddIntegrationDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -36,9 +38,6 @@ export function AddIntegrationDialog({ open, onOpenChange, onCreated }: AddInteg
             <Dialog.Title className="text-title-dialog font-bold text-on-surface">
               {t("plugins.add.title")}
             </Dialog.Title>
-            <Dialog.Description className="text-body-tight text-neutral">
-              {t("plugins.add.description")}
-            </Dialog.Description>
           </div>
           {open ? (
             <AddIntegrationForm
@@ -81,6 +80,8 @@ function AddIntegrationForm({ onCreated }: AddIntegrationFormProps) {
   const loadError = definitionsQuery.isError
     ? getIpcErrorMessage(definitionsQuery.error, t("plugins.add.loadFailed"))
     : null;
+  const pending = createMutation.isPending;
+  const columnCount = Math.min(definitions.length || 1, INTEGRATION_OPTION_MAX_COLUMNS);
 
   function definitionLabel(definition: ServiceIntegrationManifest): string {
     if (definition.id === GOOGLE_CLOUD_PLUGIN_ID) {
@@ -91,11 +92,48 @@ function AddIntegrationForm({ onCreated }: AddIntegrationFormProps) {
 
   return (
     <div className="flex flex-col gap-3">
+      <div
+        className="grid gap-2"
+        style={{ gridTemplateColumns: `repeat(${columnCount}, minmax(0, 1fr))` }}
+      >
+        {loading
+          ? null
+          : definitions.map((definition) => {
+              if (definition.id !== GOOGLE_CLOUD_PLUGIN_ID) {
+                return null;
+              }
+              return (
+                <button
+                  key={definition.id}
+                  type="button"
+                  disabled={pending}
+                  onClick={() => {
+                    setError(null);
+                    const draft = emptyGoogleCloudDraft(t("plugins.googleCloud.defaultName"));
+                    createMutation.mutate(buildGoogleCloudWrite(draft));
+                  }}
+                  className={`
+                    flex min-w-0 items-center gap-2 border border-line bg-surface p-3 text-left text-on-surface
+                    transition-colors
+                    hover:bg-surface-container-highest
+                    disabled:cursor-default disabled:opacity-60
+                    disabled:hover:bg-surface
+                  `}
+                >
+                  <span className="min-w-0 truncate text-body-md font-bold">{definitionLabel(definition)}</span>
+                </button>
+              );
+            })}
+      </div>
+
       {loading ? <p className="text-body-tight text-neutral">{t("plugins.loading")}</p> : null}
       {loadError ? (
         <p className="text-body-tight text-error" role="alert">
           {loadError}
         </p>
+      ) : null}
+      {!loading && !loadError && definitions.length === 0 ? (
+        <p className="text-body-tight text-neutral">{t("plugins.add.empty")}</p>
       ) : null}
       {error ? (
         <p className="text-body-tight text-error" role="alert">
@@ -103,39 +141,11 @@ function AddIntegrationForm({ onCreated }: AddIntegrationFormProps) {
         </p>
       ) : null}
 
-      {!loading && !loadError && definitions.length === 0 ? (
-        <p className="text-body-tight text-neutral">{t("plugins.add.empty")}</p>
-      ) : null}
-
-      <ul className="m-0 flex list-none flex-col gap-2 p-0">
-        {definitions.map((definition) => (
-          <li key={definition.id}>
-            <button
-              type="button"
-              className={`
-                ${outlineButtonClassName}
-                w-full justify-start bg-surface-2 p-3 text-left
-                hover:not-data-disabled:bg-surface-3
-              `}
-              disabled={createMutation.isPending}
-              onClick={() => {
-                setError(null);
-                if (definition.id !== GOOGLE_CLOUD_PLUGIN_ID) {
-                  setError(t("plugins.add.unsupported"));
-                  return;
-                }
-                const draft = emptyGoogleCloudDraft(t("plugins.googleCloud.defaultName"));
-                createMutation.mutate(buildGoogleCloudWrite(draft));
-              }}
-            >
-              <span className="flex min-w-0 flex-col gap-0.5">
-                <span className="text-label-sm font-bold text-on-surface">{definitionLabel(definition)}</span>
-                <span className="text-body-tight text-neutral">{t("plugins.add.createInstanceHint")}</span>
-              </span>
-            </button>
-          </li>
-        ))}
-      </ul>
+      <div className="flex justify-end gap-2">
+        <Dialog.Close className={outlineButtonClassName} disabled={pending}>
+          {t("common.cancel")}
+        </Dialog.Close>
+      </div>
     </div>
   );
 }

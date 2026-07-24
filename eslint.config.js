@@ -11,7 +11,7 @@ import { defineConfig } from "eslint/config";
 
 export default defineConfig([
   {
-    ignores: ["dist", "src-tauri", "node_modules", "src/routeTree.gen.ts", ".agents", ".worktrees"],
+    ignores: ["dist", "src-tauri", "node_modules", "src/routeTree.gen.ts", "src/test/**", ".agents", ".worktrees"],
   },
   {
     extends: [

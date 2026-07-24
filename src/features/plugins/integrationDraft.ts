@@ -114,6 +114,32 @@ export function buildGoogleCloudWrite(
   };
 }
 
+/** True when the draft will mutate the service-account credential on save (replace or clear of an existing binding). */
+export function hasCredentialMutation(draft: GoogleCloudIntegrationDraft): boolean {
+  if (draft.serviceAccountAction === "replace" && draft.serviceAccountJson.trim()) {
+    return true;
+  }
+  if (draft.serviceAccountAction === "clear" && draft.hasServiceAccount) {
+    return true;
+  }
+  return false;
+}
+
+/** True when the draft changes Google Cloud config vs the persisted instance (projectId/location/proxyMode). */
+export function hasConfigMutation(draft: GoogleCloudIntegrationDraft, instance: IntegrationInstanceDto): boolean {
+  const baseline = draftFromIntegrationDto(instance);
+  return (
+    draft.projectId !== baseline.projectId ||
+    draft.location !== baseline.location ||
+    draft.proxyMode !== baseline.proxyMode
+  );
+}
+
+/** True when the save needs a remote re-check: credential or Google Cloud config mutation (never name-only). */
+export function hasRemoteRelevantMutation(draft: GoogleCloudIntegrationDraft, instance: IntegrationInstanceDto): boolean {
+  return hasCredentialMutation(draft) || hasConfigMutation(draft, instance);
+}
+
 export function isGoogleCloudDraftClean(draft: GoogleCloudIntegrationDraft, instance: IntegrationInstanceDto): boolean {
   const baseline = draftFromIntegrationDto(instance);
   // `enabled` is persisted via setIntegrationInstanceEnabled, not full save.

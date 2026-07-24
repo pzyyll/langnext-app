@@ -2,7 +2,7 @@
 // ABOUTME: Nested under /translate; selects profiles and calls provider models via IPC.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
 import IconMaterialSymbolsLightClose from "~icons/material-symbols-light/close";
 import IconMaterialSymbolsLightContentCopy from "~icons/material-symbols-light/content-copy";
@@ -21,12 +21,16 @@ import { toggleOutputViewMode, type OutputViewMode } from "../../lib/output-view
 import { shouldApplyProfileResult } from "../../query/profileApplyGuard";
 import {
   allProviderModelsOptions,
+  integrationListOptions,
   profileDetailOptions,
   profileListOptions,
   providerListOptions,
 } from "../../query/options";
 import { newClientRequestId } from "../../features/translate/newClientRequestId";
-import { resolveTranslateFailureMessage } from "../../features/translate/resolveTranslateFailureMessage";
+import {
+  resolveTranslateFailureMessage,
+  resolveTranslateFailureRecovery,
+} from "../../features/translate/resolveTranslateFailureMessage";
 import { runDetectLanguage, runStartTranslateStream } from "../../features/translate/runTranslate";
 import { useTranslateStreamSession } from "../../features/translate/useTranslateStreamSession";
 import { getIpcErrorMessage } from "../../storage/errors";
@@ -109,6 +113,7 @@ function buildModelOptions(
 function TranslatePage() {
   const { t, i18n } = useTranslation();
   const toast = useToast();
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   // Restore workspaces (presets, languages, draft text) across navigation and restarts.
   const [boot] = useState(() => {
@@ -151,6 +156,7 @@ function TranslatePage() {
   const providersQuery = useQuery(providerListOptions());
   const modelsQuery = useQuery(allProviderModelsOptions());
   const profilesQuery = useQuery(profileListOptions());
+  const integrationsQuery = useQuery(integrationListOptions());
 
   const modelOptions = useMemo(
     () =>
@@ -174,12 +180,17 @@ function TranslatePage() {
       : profileApplyError;
 
   // Keep selection valid when options change after invalidation (derived, no effect).
-  const resolvedModelId =
-    selectedModelId && modelOptions.some((option) => option.id === selectedModelId)
-      ? selectedModelId
-      : (modelOptions[0]?.id ?? "");
   const resolvedProfileId = profiles.some((profile) => profile.id === selectedProfileId) ? selectedProfileId : "";
   const activeProfile = profiles.find((profile) => profile.id === resolvedProfileId) ?? null;
+  const activeIsPluginProfile = activeProfile?.engine.kind === "plugin_capability";
+  // Plugin profiles do not overwrite workspace model selection.
+  const resolvedModelId = activeIsPluginProfile
+    ? selectedModelId && modelOptions.some((option) => option.id === selectedModelId)
+      ? selectedModelId
+      : (modelOptions[0]?.id ?? "")
+    : selectedModelId && modelOptions.some((option) => option.id === selectedModelId)
+      ? selectedModelId
+      : (modelOptions[0]?.id ?? "");
   const promptTemplateOptions = useMemo(() => {
     if (!activeProfile) {
       return [] as Array<{ value: string; label: string }>;
@@ -558,13 +569,22 @@ function TranslatePage() {
   }
 
   /** Runtime translate failures go to the shared toast, not the output pane. */
-  function showTranslateErrorToast(message: string) {
+  function showTranslateErrorToast(message: string, errorCode?: string | null) {
     const title = t("translate.errorPrefix");
+    const recovery = resolveTranslateFailureRecovery(errorCode);
+    const action = recovery
+      ? {
+          label: t("translate.openPlugins"),
+          onClick: () => {
+            void navigate({ to: recovery.path });
+          },
+        }
+      : undefined;
     if (!message || message === title) {
-      toast.error({ title });
+      toast.error({ title, action });
       return;
     }
-    toast.error({ title, description: message });
+    toast.error({ title, description: message, action });
   }
 
   /** Map known backend error codes to localized copy; fall back to server message. */
@@ -573,6 +593,13 @@ function TranslatePage() {
       timeout: t("translate.errors.timeout"),
       invalidResponse: t("translate.errors.invalidResponse"),
       fallback: t("translate.errorPrefix"),
+      integrationDisabled: t("translate.errors.integrationDisabled"),
+      integrationUnconfigured: t("translate.errors.integrationUnconfigured"),
+      integrationUnvalidated: t("translate.errors.integrationUnvalidated"),
+      integrationDegraded: t("translate.errors.integrationDegraded"),
+      pluginMissing: t("translate.errors.pluginMissing"),
+      invalidConfiguration: t("translate.errors.invalidConfiguration"),
+      languageUnresolved: t("translate.errors.languageUnresolved"),
     });
   }
 
@@ -635,7 +662,7 @@ function TranslatePage() {
     setStreamOutputActive(false);
   }
 
-  function finishErrorUi(generation: number, message: string, latency: number | null) {
+  function finishErrorUi(generation: number, message: string, latency: number | null, errorCode?: string | null) {
     if (generation !== translateGeneration.current) {
       return;
     }
@@ -644,7 +671,7 @@ function TranslatePage() {
     setErrorMessage(null);
     setIsTranslating(false);
     setStreamOutputActive(false);
-    showTranslateErrorToast(message);
+    showTranslateErrorToast(message, errorCode);
   }
 
   function finishCancelledUi(generation: number) {
@@ -662,11 +689,12 @@ function TranslatePage() {
   async function handleTranslateStreaming(
     generation: number,
     payload: {
-      modelId: string;
+      modelId?: string | null;
       sourceLang: string;
       targetLang: string;
       text: string;
       profileId?: string | null;
+      promptTemplateId?: string | null;
       sourceLangId?: string | null;
       targetLangId?: string | null;
       effectiveSourceLangId?: string | null;
@@ -717,7 +745,7 @@ function TranslatePage() {
               // Prefer full text so we do not drift on partial assembly.
               finishSuccessUi(generation, done.translatedText, done.latencyMs, done.modelId ?? null);
             } else {
-              finishErrorUi(generation, failureMessage(done.errorCode, done.message), done.latencyMs);
+              finishErrorUi(generation, failureMessage(done.errorCode, done.message), done.latencyMs, done.errorCode);
             }
           },
           onError: (err) => {
@@ -729,7 +757,7 @@ function TranslatePage() {
               finishCancelledUi(generation);
               return;
             }
-            finishErrorUi(generation, failureMessage(err.errorCode, err.message), err.latencyMs);
+            finishErrorUi(generation, failureMessage(err.errorCode, err.message), err.latencyMs, err.errorCode);
           },
         },
         () => generation === translateGeneration.current,
@@ -740,9 +768,10 @@ function TranslatePage() {
 
       const providersById = new Map((providersQuery.data ?? []).map((p) => [p.id, p]));
       const modelsById = new Map((modelsQuery.data ?? []).map((m) => [m.id, m]));
+      const integrationsById = new Map((integrationsQuery.data ?? []).map((i) => [i.id, i]));
       const profile = (profilesQuery.data ?? []).find((p) => p.id === payload.profileId) ?? null;
       await runStartTranslateStream(payload, requestId, {
-        snapshots: { providersById, modelsById, profile },
+        snapshots: { providersById, modelsById, profile, integrationsById },
         handlers: prepared,
       });
       if (generation !== translateGeneration.current) {
@@ -763,7 +792,11 @@ function TranslatePage() {
     if (!trimmed) {
       return;
     }
-    if (!resolvedModelId) {
+    if (!activeIsPluginProfile && !resolvedModelId) {
+      toast.error({ title: t("translate.selectModelFirst") });
+      return;
+    }
+    if (activeIsPluginProfile && !resolvedProfileId) {
       toast.error({ title: t("translate.selectModelFirst") });
       return;
     }
@@ -791,6 +824,7 @@ function TranslatePage() {
             providersById: new Map((providersQuery.data ?? []).map((p) => [p.id, p])),
             modelsById: new Map((modelsQuery.data ?? []).map((m) => [m.id, m])),
             profile: (profilesQuery.data ?? []).find((p) => p.id === resolvedProfileId) ?? null,
+            integrationsById: new Map((integrationsQuery.data ?? []).map((i) => [i.id, i])),
           },
         );
         if (generation !== translateGeneration.current) {
@@ -842,12 +876,13 @@ function TranslatePage() {
     const sourceLabel = t(`translate.languages.${effectiveSourceId}`);
     const targetLabel = t(`translate.languages.${effectiveTargetId}`);
     const payload = {
-      modelId: resolvedModelId,
+      // Plugin profiles do not use modelId; omit rather than inventing a placeholder UUID.
+      modelId: activeIsPluginProfile ? null : resolvedModelId,
       sourceLang: sourceLabel,
       targetLang: targetLabel,
       text: trimmed,
       profileId: resolvedProfileId || null,
-      promptTemplateId: resolvedPromptTemplateId || null,
+      promptTemplateId: activeIsPluginProfile ? null : resolvedPromptTemplateId || null,
       sourceLangId: sourceLang,
       targetLangId: targetLang,
       effectiveSourceLangId: effectiveSourceId,
@@ -932,7 +967,7 @@ function TranslatePage() {
             />
           </div>
 
-          {resolvedProfileId ? (
+          {resolvedProfileId && !activeIsPluginProfile ? (
             <div className="flex min-w-0 items-center gap-2">
               <label className="text-label-sm text-neutral uppercase" id="translate-prompt-template-label">
                 {t("translate.promptTemplateLabel")}

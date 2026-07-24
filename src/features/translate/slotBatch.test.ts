@@ -1,17 +1,11 @@
 // ABOUTME: Tests for multi-slot cancel isolation and batch outcome shape.
 // ABOUTME: Mocks cancel_provider_http; stream starts use empty snapshots for early fail isolation.
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { Effect } from "effect";
 import type { TranslateInput } from "../../storage/types";
+import { installTauriInvokeMock, invokeMock, resetInvokeMock } from "../../test/tauriInvokeMock";
 
-const invokeMock = mock<(cmd: string, args?: Record<string, unknown>) => Promise<unknown>>(async () => undefined);
-
-mock.module("@tauri-apps/api/core", () => ({
-  invoke: (cmd: string, args?: Record<string, unknown>) => invokeMock(cmd, args),
-  Channel: class {
-    onmessage: ((event: unknown) => void) | null = null;
-  },
-}));
+installTauriInvokeMock();
 
 const { startSlotStreamBatch, cancelRequestIds } = await import("./slotBatch");
 const { runCancelRequestIds } = await import("./runTranslate");
@@ -65,7 +59,8 @@ describe("startSlotStreamBatch", () => {
 
 describe("cancelRequestIds", () => {
   beforeEach(() => {
-    invokeMock.mockReset();
+    resetInvokeMock();
+    invokeMock.mockImplementation(async () => undefined);
   });
 
   test("calls cancel_provider_http for each id and swallows failures", async () => {

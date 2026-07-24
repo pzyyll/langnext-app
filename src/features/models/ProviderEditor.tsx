@@ -239,10 +239,14 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
       return false;
     }
     for (const profile of profilesQuery.data ?? []) {
+      if (profile.engine.kind !== "llm_model_chain") {
+        continue;
+      }
       if (profile.targets.some((target) => selectedModelIds.has(target.providerModelId))) {
         return true;
       }
-      const detectorModelId = profile.languageDetection?.modelId;
+      const detectorModelId =
+        profile.engine.languageDetection?.type === "llm" ? profile.engine.languageDetection.modelId : null;
       if (detectorModelId && selectedModelIds.has(detectorModelId)) {
         return true;
       }

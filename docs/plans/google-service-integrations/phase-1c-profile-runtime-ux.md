@@ -71,19 +71,19 @@
 
 **Steps:**
 
-- [ ] Rebuild `translation_profiles` with `engine_kind TEXT NOT NULL CHECK (engine_kind IN ('llm_model_chain','plugin_capability'))`; make LLM-only `template_version`, `default_prompt_template_id`, `temperature`, and `max_output_tokens` nullable; add nullable integration/capability/preference fields.
-- [ ] Add an OCR-style branch CHECK:
+- [x] Rebuild `translation_profiles` with `engine_kind TEXT NOT NULL CHECK (engine_kind IN ('llm_model_chain','plugin_capability'))`; make LLM-only `template_version`, `default_prompt_template_id`, `temperature`, and `max_output_tokens` nullable; add nullable integration/capability/preference fields.
+- [x] Add an OCR-style branch CHECK:
   - `llm_model_chain`: `template_version` and `default_prompt_template_id` are non-null; all integration/capability/preference fields are NULL; existing optional LLM fields retain their current validation.
   - `plugin_capability`: `template_version`, `default_prompt_template_id`, `temperature`, `max_output_tokens`, `provider_options_json`, and `language_detection_json` are NULL; `integration_instance_id` and Translate capability are non-null; Detect capability is nullable; preferences JSON/version are non-null.
-- [ ] Backfill every existing row as `llm_model_chain` without changing targets, prompt-template rows, timestamps, language settings, or existing LLM parameters.
-- [ ] Add FK from plugin Profile to `integration_instances` with `ON DELETE RESTRICT`.
-- [ ] Keep target/template child tables, but service validation must require ≥1 target/template for LLM and exactly zero target/template rows for plugin Profiles.
-- [ ] Add parent-engine guards/triggers only if repository/service encapsulation cannot prevent invalid child inserts; document whichever enforcement is chosen.
-- [ ] Define a tagged Rust/TypeScript Profile engine union in the same task:
+- [x] Backfill every existing row as `llm_model_chain` without changing targets, prompt-template rows, timestamps, language settings, or existing LLM parameters.
+- [x] Add FK from plugin Profile to `integration_instances` with `ON DELETE RESTRICT`.
+- [x] Keep target/template child tables, but service validation must require ≥1 target/template for LLM and exactly zero target/template rows for plugin Profiles.
+- [x] Add parent-engine guards/triggers only if repository/service encapsulation cannot prevent invalid child inserts; document whichever enforcement is chosen.
+- [x] Define a tagged Rust/TypeScript Profile engine union in the same task:
   - `LlmModelChain` owns existing targets/templates/default template/temperature/tokens/language detection.
   - `PluginCapability` owns integration instance/capability/detect capability/preferences.
-- [ ] Keep common Profile name/enabled/source/target/primary/preferred-target fields outside the engine union.
-- [ ] Add fresh and v12→v13 migration tests proving byte-equivalent relevant legacy values.
+- [x] Keep common Profile name/enabled/source/target/primary/preferred-target fields outside the engine union.
+- [x] Add fresh and v12→v13 migration tests proving byte-equivalent relevant legacy values.
 
 **Validation:**
 
@@ -103,16 +103,16 @@
 
 **Steps:**
 
-- [ ] Read/write both engine variants without N+1 queries.
-- [ ] LLM validation retains current model existence/uniqueness, prompt-template, temperature/token, and detector rules.
-- [ ] Plugin validation requires a ready/enabled instance and exact compatible Translate capability; detect capability is optional but must belong to the same instance/plugin.
-- [ ] Lock Google Translate capability preferences schema v1 to exactly `{}`; common Profile language fields carry source/target preferences and unknown preference keys are rejected.
-- [ ] Plugin Profile requires no model target, prompt template, default template, temperature, max tokens, or LLM detector.
-- [ ] Reject engine-kind changes on update.
-- [ ] Allow rebind only to another ready instance with compatible capability major versions.
-- [ ] Extend integration dependency lookup with Profile id/name.
-- [ ] Keep model/provider deletion logic scoped to LLM Profile targets.
-- [ ] Expose plugin-missing/unconfigured/disabled Profile states without mutating persisted bindings.
+- [x] Read/write both engine variants without N+1 queries.
+- [x] LLM validation retains current model existence/uniqueness, prompt-template, temperature/token, and detector rules.
+- [x] Plugin validation requires a ready/enabled instance and exact compatible Translate capability; detect capability is optional but must belong to the same instance/plugin.
+- [x] Lock Google Translate capability preferences schema v1 to exactly `{}`; common Profile language fields carry source/target preferences and unknown preference keys are rejected.
+- [x] Plugin Profile requires no model target, prompt template, default template, temperature, max tokens, or LLM detector.
+- [x] Reject engine-kind changes on update.
+- [x] Allow rebind only to another ready instance with compatible capability major versions.
+- [x] Extend integration dependency lookup with Profile id/name.
+- [x] Keep model/provider deletion logic scoped to LLM Profile targets.
+- [x] Expose plugin-missing/unconfigured/disabled Profile states without mutating persisted bindings.
 
 **Validation:**
 
@@ -130,19 +130,19 @@
 
 **Steps:**
 
-- [ ] Replace the single `PREVIOUS_EXPORT_FORMAT_VERSION` model with an explicit supported-version set `{2, 3, 4}` and sequential normalizers.
-- [ ] Change preview/import IPC to accept an untrusted raw `serde_json::Value` (frontend structural envelope with `formatVersion`) rather than deserializing directly into the current `ConfigurationExport` shape.
-- [ ] Parse/validate `formatVersion` first, then deserialize the matching versioned document struct.
-- [ ] Implement `normalize_v2_to_v3` followed by `normalize_v3_to_v4`; all downstream validation/import consumes only normalized v4.
-- [ ] Define v4 fields explicitly: current provider/model/settings data, sanitized `integrationInstances`, engine-tagged translation profiles, LLM target/template arrays, and no credential bindings/secrets.
-- [ ] Export sanitized integration instances, non-secret config, and both Profile engine variants.
-- [ ] Omit integration credential binding rows, refs, revisions if sensitive, journal data, service-account JSON, tokens, and validation provider bodies.
-- [ ] Merge mode updates structural integration config but leaves imported integration credentials empty/re-auth-required.
-- [ ] Copy mode assigns new integration/Profile IDs and rewrites all internal plugin binding references.
-- [ ] Preserve missing plugin definitions as `plugin_missing` instances and visible non-executable Profiles.
-- [ ] Extend import preview counts and authentication requirements for integration instances.
-- [ ] Broadcast integration + Profile change events after successful import.
-- [ ] Add secret-scanning assertions over serialized export JSON.
+- [x] Replace the single `PREVIOUS_EXPORT_FORMAT_VERSION` model with an explicit supported-version set `{2, 3, 4}` and sequential normalizers.
+- [x] Change preview/import IPC to accept an untrusted raw `serde_json::Value` (frontend structural envelope with `formatVersion`) rather than deserializing directly into the current `ConfigurationExport` shape.
+- [x] Parse/validate `formatVersion` first, then deserialize the matching versioned document struct.
+- [x] Implement `normalize_v2_to_v3` followed by `normalize_v3_to_v4`; all downstream validation/import consumes only normalized v4.
+- [x] Define v4 fields explicitly: current provider/model/settings data, sanitized `integrationInstances`, engine-tagged translation profiles, LLM target/template arrays, and no credential bindings/secrets.
+- [x] Export sanitized integration instances, non-secret config, and both Profile engine variants.
+- [x] Omit integration credential binding rows, refs, revisions if sensitive, journal data, service-account JSON, tokens, and validation provider bodies.
+- [x] Merge mode updates structural integration config but leaves imported integration credentials empty/re-auth-required.
+- [x] Copy mode assigns new integration/Profile IDs and rewrites all internal plugin binding references.
+- [x] Preserve missing plugin definitions as `plugin_missing` instances and visible non-executable Profiles.
+- [x] Extend import preview counts and authentication requirements for integration instances.
+- [x] Broadcast integration + Profile change events after successful import.
+- [x] Add secret-scanning assertions over serialized export JSON.
 
 **Validation:**
 
@@ -162,15 +162,15 @@
 
 **Steps:**
 
-- [ ] Build one explicit built-in LLM option from existing enabled model availability.
-- [ ] Build integration options from Rust definition/instance DTOs implementing `translate.text@1`.
-- [ ] Label instances distinctly, e.g. `Google Cloud — Work`.
-- [ ] Show disabled/unconfigured/degraded/plugin-missing options disabled with a direct `/plugins` configuration hint.
-- [ ] Preserve deterministic option ordering and stable IDs.
-- [ ] Selecting LLM creates the current LLM draft/default prompt behavior.
-- [ ] Selecting an integration creates a plugin draft bound to its Translate/Detect capabilities.
-- [ ] Replace existing direct New Profile creation buttons with the dialog.
-- [ ] Do not register Google in `src/features/providers/registry.ts` or invent a provider model.
+- [x] Build one explicit built-in LLM option from existing enabled model availability.
+- [x] Build integration options from Rust definition/instance DTOs implementing `translate.text@1`.
+- [x] Label instances distinctly, e.g. `Google Cloud — Work`.
+- [x] Show disabled/unconfigured/degraded/plugin-missing options disabled with a direct `/plugins` configuration hint.
+- [x] Preserve deterministic option ordering and stable IDs.
+- [x] Selecting LLM creates the current LLM draft/default prompt behavior.
+- [x] Selecting an integration creates a plugin draft bound to its Translate/Detect capabilities.
+- [x] Replace existing direct New Profile creation buttons with the dialog.
+- [x] Do not register Google in `src/features/providers/registry.ts` or invent a provider model.
 
 **Validation:**
 
@@ -190,14 +190,14 @@
 
 **Steps:**
 
-- [ ] Extend local draft conversion/dirty detection/save payloads for both engine variants.
-- [ ] Preserve existing LLM model chain, fallback, prompt templates, detector model, temperature, and token UX unchanged.
-- [ ] Plugin editor shows instance, Translate capability, Detect capability availability, execution status, and capability-specific preferences only.
-- [ ] Hide model/prompt/LLM detector controls for plugin Profiles.
-- [ ] Allow compatible integration-instance rebind with explicit confirmation if execution behavior changes.
-- [ ] Profile rail renders integration/capability labels instead of “missing model.”
-- [ ] Use integration Query data directly; do not copy authoritative lists into local state.
-- [ ] Keep route files thin by extracting helpers/forms when needed.
+- [x] Extend local draft conversion/dirty detection/save payloads for both engine variants.
+- [x] Preserve existing LLM model chain, fallback, prompt templates, detector model, temperature, and token UX unchanged.
+- [x] Plugin editor shows instance, Translate capability, Detect capability availability, execution status, and capability-specific preferences only.
+- [x] Hide model/prompt/LLM detector controls for plugin Profiles.
+- [x] Allow compatible integration-instance rebind with explicit confirmation if execution behavior changes.
+- [x] Profile rail renders integration/capability labels instead of “missing model.”
+- [x] Use integration Query data directly; do not copy authoritative lists into local state.
+- [x] Keep route files thin by extracting helpers/forms when needed.
 
 **Validation:**
 
@@ -218,15 +218,15 @@
 
 **Steps:**
 
-- [ ] Add `translate_service_profile` input with request ID, Profile ID, source text, app source language, and app target language.
-- [ ] Add `detect_service_profile_language` input with request ID, Profile ID, and text.
-- [ ] Never accept plugin ID, endpoint, credential, project, model, or capability override from the frontend.
-- [ ] Reload Profile, instance, and registered handler from SQLite/registry.
-- [ ] Validate enabled/readiness/config/capability compatibility immediately before execution.
-- [ ] Register request ID in the existing request-session registry and propagate cancellation/deadline through token/network brokers.
-- [ ] Return existing translate/detect result shapes where practical, with `modelId = null` and a service-integration detector type.
-- [ ] Normalize capability errors to stable IPC/soft failure shapes without provider bodies.
-- [ ] Add tests for stale frontend DTO, disabled instance, missing plugin, cancellation, timeout, and success.
+- [x] Add `translate_service_profile` input with request ID, Profile ID, source text, app source language, and app target language.
+- [x] Add `detect_service_profile_language` input with request ID, Profile ID, and text.
+- [x] Never accept plugin ID, endpoint, credential, project, model, or capability override from the frontend.
+- [x] Reload Profile, instance, and registered handler from SQLite/registry.
+- [x] Validate enabled/readiness/config/capability compatibility immediately before execution.
+- [x] Register request ID in the existing request-session registry and propagate cancellation/deadline through token/network brokers.
+- [x] Return existing translate/detect result shapes where practical, with `modelId = null` and a service-integration detector type.
+- [x] Normalize capability errors to stable IPC/soft failure shapes without provider bodies.
+- [x] Add tests for stale frontend DTO, disabled instance, missing plugin, cancellation, timeout, and success.
 
 **Validation:**
 
@@ -243,16 +243,16 @@
 
 **Steps:**
 
-- [ ] Resolve translation context as `llm` or `service_integration`.
-- [ ] Keep LLM attempt/fallback/plugin logic byte-for-byte scoped where possible.
-- [ ] Service branch calls the new Promise runner once; it must short-circuit before prompt/model resolution and must never call `requireProviderPlugin`.
-- [ ] For stream-facing callers, emit `onReset` then one terminal `onDone`/`onError`; do not fabricate incremental chunks.
-- [ ] Source auto detection calls the Profile's service Detect capability where registered.
-- [ ] Make model ID nullable only where service results require it; retain model requirements in LLM contexts.
-- [ ] Preserve slot request IDs, epoch guards, cancellation, and terminal-result isolation.
-- [ ] Record history once: `modelId = null`, safe capability label as model display, integration instance name as provider display.
-- [ ] Do not record cancelled execution, matching current policy.
-- [ ] Add service success/error/cancel tests, including an assertion that plugin Profiles never call `requireProviderPlugin`, while retaining all existing LLM fallback/stream tests.
+- [x] Resolve translation context as `llm` or `service_integration`.
+- [x] Keep LLM attempt/fallback/plugin logic byte-for-byte scoped where possible.
+- [x] Service branch calls the new Promise runner once; it must short-circuit before prompt/model resolution and must never call `requireProviderPlugin`.
+- [x] For stream-facing callers, emit `onReset` then one terminal `onDone`/`onError`; do not fabricate incremental chunks.
+- [x] Source auto detection calls the Profile's service Detect capability where registered.
+- [x] Make model ID nullable only where service results require it; retain model requirements in LLM contexts.
+- [x] Preserve slot request IDs, epoch guards, cancellation, and terminal-result isolation.
+- [x] Record history once: `modelId = null`, safe capability label as model display, integration instance name as provider display.
+- [x] Do not record cancelled execution, matching current policy.
+- [x] Add service success/error/cancel tests, including an assertion that plugin Profiles never call `requireProviderPlugin`, while retaining all existing LLM fallback/stream tests.
 
 **Validation:**
 
@@ -271,14 +271,14 @@
 
 **Steps:**
 
-- [ ] Determine Profile availability by engine-specific rules rather than primary-model presence.
-- [ ] Hide/disable prompt-template selection for plugin Profile cards and sessions.
-- [ ] Do not overwrite workspace model selection when a plugin Profile is selected.
-- [ ] Restore existing model/prompt behavior when switching back to LLM/no Profile.
-- [ ] Preserve source/target language preferences and auto-target logic.
-- [ ] Show non-streaming progress/cancel state through existing session controls.
-- [ ] Surface unconfigured/disabled/plugin-missing errors with a `/plugins` action where appropriate.
-- [ ] Preserve existing selected-context/UI work in `quick-translate.tsx`; inspect local changes before editing.
+- [x] Determine Profile availability by engine-specific rules rather than primary-model presence.
+- [x] Hide/disable prompt-template selection for plugin Profile cards and sessions.
+- [x] Do not overwrite workspace model selection when a plugin Profile is selected.
+- [x] Restore existing model/prompt behavior when switching back to LLM/no Profile.
+- [x] Preserve source/target language preferences and auto-target logic.
+- [x] Show non-streaming progress/cancel state through existing session controls.
+- [x] Surface unconfigured/disabled/plugin-missing errors with a `/plugins` action where appropriate.
+- [x] Preserve existing selected-context/UI work in `quick-translate.tsx`; inspect local changes before editing.
 
 **Validation:**
 
@@ -297,14 +297,14 @@
 
 **Steps:**
 
-- [ ] Invalidate integration and Profile Query prefixes after import/mutation events in every webview.
-- [ ] Show imported integration instances requiring credentials without exposing missing-secret details.
-- [ ] Verify referenced integration deletion returns `in_use` from Profile and plugin pages.
-- [ ] Test crash recovery for prepared and DB-committed integration credential operations.
-- [ ] Test token-cache eviction after credential revision changes.
-- [ ] Scan export/event/error/log test fixtures for secret/ref fields.
-- [ ] Add history/UI coverage proving service completions with `modelId = null` render safely.
-- [ ] Re-run existing Provider, model, LLM Profile, Baidu OCR, and AI OCR suites unchanged.
+- [x] Invalidate integration and Profile Query prefixes after import/mutation events in every webview.
+- [x] Show imported integration instances requiring credentials without exposing missing-secret details.
+- [x] Verify referenced integration deletion returns `in_use` from Profile and plugin pages.
+- [x] Test crash recovery for prepared and DB-committed integration credential operations.
+- [x] Test token-cache eviction after credential revision changes.
+- [x] Scan export/event/error/log test fixtures for secret/ref fields.
+- [x] Add history/UI coverage proving service completions with `modelId = null` render safely.
+- [x] Re-run existing Provider, model, LLM Profile, Baidu OCR, and AI OCR suites unchanged.
 
 **Validation:**
 

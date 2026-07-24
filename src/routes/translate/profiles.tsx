@@ -33,6 +33,8 @@ import { SelectField } from "../../components/SelectField";
 import { profileKeys } from "../../query/keys";
 import {
   allProviderModelsOptions,
+  integrationDefinitionListOptions,
+  integrationListOptions,
   profileDetailOptions,
   profileListOptions,
   providerListOptions,
@@ -40,6 +42,12 @@ import {
 import { deleteTranslationProfile, saveTranslationProfile, setTranslationProfileEnabled } from "../../storage/client";
 import { getIpcErrorMessage } from "../../storage/errors";
 import type { PromptTemplate, ProviderInstanceDto, ProviderModelDto, TranslationProfileDto } from "../../storage/types";
+import { AddTranslationProfileDialog } from "../../features/translate/AddTranslationProfileDialog";
+import {
+  buildTranslationEngineOptions,
+  listCompatiblePluginRebindCandidates,
+  type TranslationEngineOption,
+} from "../../features/translate/translationEngineOptions";
 import {
   AUTO_LANGUAGE,
   LANGUAGE_IDS,
@@ -135,6 +143,9 @@ type ProfileDraft = {
   targetLang: SelectableLanguageId;
   primaryLang: LanguageId;
   preferredTargetLang: LanguageId;
+  /** Engine discriminant; immutable after create. */
+  engineKind: "llm_model_chain" | "plugin_capability";
+  // LLM fields
   primaryModelId: string;
   languageDetectionModelId: string;
   fallbackModelIds: string[];
@@ -144,6 +155,12 @@ type ProfileDraft = {
   promptTemplates: PromptTemplate[];
   templateVersion: number;
   providerOptionsJson: unknown | null;
+  // Plugin fields
+  integrationInstanceId: string;
+  translateCapabilityId: string;
+  detectCapabilityId: string;
+  capabilityPreferencesVersion: number;
+  capabilityPreferences: unknown;
 };
 
 function newPromptTemplateId(): string {
@@ -160,6 +177,13 @@ function createDefaultPromptTemplate(name = DEFAULT_PROMPT_TEMPLATE_NAME): Promp
 }
 
 function toListItem(dto: TranslationProfileDto): ProfileListItem {
+  if (dto.engine.kind === "plugin_capability") {
+    return {
+      ...dto,
+      primaryModelId: null,
+      fallbackCount: 0,
+    };
+  }
   const sorted = [...dto.targets].sort((a, b) => a.priority - b.priority);
   return {
     ...dto,
@@ -210,6 +234,7 @@ function emptyDraft(defaultModelId: string, uiLanguage: string): ProfileDraft {
     targetLang: AUTO_LANGUAGE,
     primaryLang: primary,
     preferredTargetLang: target,
+    engineKind: "llm_model_chain",
     primaryModelId: defaultModelId,
     languageDetectionModelId: "",
     fallbackModelIds: [],
@@ -219,10 +244,70 @@ function emptyDraft(defaultModelId: string, uiLanguage: string): ProfileDraft {
     promptTemplates: [defaultTemplate],
     templateVersion: 1,
     providerOptionsJson: null,
+    integrationInstanceId: "",
+    translateCapabilityId: "",
+    detectCapabilityId: "",
+    capabilityPreferencesVersion: 1,
+    capabilityPreferences: {},
+  };
+}
+
+function emptyPluginDraft(
+  uiLanguage: string,
+  integrationInstanceId: string,
+  translateCapabilityId: string,
+  detectCapabilityId: string | null,
+): ProfileDraft {
+  const base = emptyDraft("", uiLanguage);
+  return {
+    ...base,
+    engineKind: "plugin_capability",
+    primaryModelId: "",
+    promptTemplates: [],
+    defaultPromptTemplateId: "",
+    integrationInstanceId,
+    translateCapabilityId,
+    detectCapabilityId: detectCapabilityId ?? "",
+    capabilityPreferencesVersion: 1,
+    capabilityPreferences: {},
   };
 }
 
 function draftFromDto(dto: TranslationProfileDto, modelOptions: ModelOption[], uiLanguage: string): ProfileDraft {
+  const defaults = getDefaultProfileLanguages(uiLanguage);
+  const common = {
+    id: dto.id as string | null,
+    name: dto.name,
+    enabled: dto.enabled,
+    sourceLang: (isSelectableLanguageId(dto.sourceLang) ? dto.sourceLang : "auto") as SourceLanguageId,
+    targetLang: (isSelectableLanguageId(dto.targetLang) ? dto.targetLang : AUTO_LANGUAGE) as SelectableLanguageId,
+    primaryLang: (isLanguageId(dto.primaryLang) ? dto.primaryLang : defaults.primary) as LanguageId,
+    preferredTargetLang: (isLanguageId(dto.preferredTargetLang)
+      ? dto.preferredTargetLang
+      : defaults.target) as LanguageId,
+  };
+
+  if (dto.engine.kind === "plugin_capability") {
+    return {
+      ...common,
+      engineKind: "plugin_capability",
+      primaryModelId: "",
+      languageDetectionModelId: "",
+      fallbackModelIds: [],
+      temperature: "",
+      maxOutputTokens: "",
+      defaultPromptTemplateId: "",
+      promptTemplates: [],
+      templateVersion: 1,
+      providerOptionsJson: null,
+      integrationInstanceId: dto.engine.integrationInstanceId,
+      translateCapabilityId: dto.engine.translateCapabilityId,
+      detectCapabilityId: dto.engine.detectCapabilityId ?? "",
+      capabilityPreferencesVersion: dto.engine.capabilityPreferencesVersion,
+      capabilityPreferences: dto.engine.capabilityPreferences,
+    };
+  }
+
   const sortedTargets = [...dto.targets].sort((a, b) => a.priority - b.priority);
   const modelIds = sortedTargets.map((target) => target.providerModelId);
   // Only keep ids that still exist. Do not invent modelOptions[0] — that made empty-target
@@ -231,35 +316,41 @@ function draftFromDto(dto: TranslationProfileDto, modelOptions: ModelOption[], u
   const fallbackModelIds = modelIds.filter(
     (id) => id !== primaryModelId && modelOptions.some((option) => option.id === id),
   );
+  const llmEngine = dto.engine;
+  if (llmEngine.kind !== "llm_model_chain") {
+    // Exhaustiveness guard; plugin branch returned above.
+    throw new Error("expected llm_model_chain engine");
+  }
   // Inherit the profile primary model unless an explicit LLM detector model is configured.
-  const languageDetectionModelId =
-    dto.languageDetection?.type === "llm" && dto.languageDetection.modelId != null ? dto.languageDetection.modelId : "";
-  const defaults = getDefaultProfileLanguages(uiLanguage);
+  const languageDetection =
+    llmEngine.languageDetection?.type === "llm" && llmEngine.languageDetection.modelId != null
+      ? llmEngine.languageDetection.modelId
+      : "";
   const promptTemplates =
     dto.promptTemplates.length > 0
       ? dto.promptTemplates.map((template) => ({ ...template }))
       : [createDefaultPromptTemplate()];
-  const defaultPromptTemplateId = promptTemplates.some((template) => template.id === dto.defaultPromptTemplateId)
-    ? dto.defaultPromptTemplateId
+  const defaultPromptTemplateId = promptTemplates.some((template) => template.id === llmEngine.defaultPromptTemplateId)
+    ? llmEngine.defaultPromptTemplateId
     : promptTemplates[0]!.id;
 
   return {
-    id: dto.id,
-    name: dto.name,
-    enabled: dto.enabled,
-    sourceLang: isSelectableLanguageId(dto.sourceLang) ? dto.sourceLang : "auto",
-    targetLang: isSelectableLanguageId(dto.targetLang) ? dto.targetLang : AUTO_LANGUAGE,
-    primaryLang: isLanguageId(dto.primaryLang) ? dto.primaryLang : defaults.primary,
-    preferredTargetLang: isLanguageId(dto.preferredTargetLang) ? dto.preferredTargetLang : defaults.target,
+    ...common,
+    engineKind: "llm_model_chain",
     primaryModelId,
-    languageDetectionModelId,
+    languageDetectionModelId: languageDetection,
     fallbackModelIds,
-    temperature: dto.temperature != null ? String(dto.temperature) : "",
-    maxOutputTokens: dto.maxOutputTokens != null ? String(dto.maxOutputTokens) : "",
+    temperature: llmEngine.temperature != null ? String(llmEngine.temperature) : "",
+    maxOutputTokens: llmEngine.maxOutputTokens != null ? String(llmEngine.maxOutputTokens) : "",
     defaultPromptTemplateId,
     promptTemplates,
-    templateVersion: dto.templateVersion,
-    providerOptionsJson: dto.providerOptionsJson,
+    templateVersion: llmEngine.templateVersion,
+    providerOptionsJson: llmEngine.providerOptionsJson,
+    integrationInstanceId: "",
+    translateCapabilityId: "",
+    detectCapabilityId: "",
+    capabilityPreferencesVersion: 1,
+    capabilityPreferences: {},
   };
 }
 
@@ -326,15 +417,21 @@ function isProfileDraftClean(draft: ProfileDraft, baseline: ProfileDraft): boole
     draft.targetLang === baseline.targetLang &&
     draft.primaryLang === baseline.primaryLang &&
     draft.preferredTargetLang === baseline.preferredTargetLang &&
+    draft.engineKind === baseline.engineKind &&
     draft.primaryModelId === baseline.primaryModelId &&
     draft.languageDetectionModelId === baseline.languageDetectionModelId &&
     draft.temperature === baseline.temperature &&
     draft.maxOutputTokens === baseline.maxOutputTokens &&
     draft.defaultPromptTemplateId === baseline.defaultPromptTemplateId &&
     draft.templateVersion === baseline.templateVersion &&
+    draft.integrationInstanceId === baseline.integrationInstanceId &&
+    draft.translateCapabilityId === baseline.translateCapabilityId &&
+    draft.detectCapabilityId === baseline.detectCapabilityId &&
+    draft.capabilityPreferencesVersion === baseline.capabilityPreferencesVersion &&
     JSON.stringify(draft.fallbackModelIds) === JSON.stringify(baseline.fallbackModelIds) &&
     JSON.stringify(draft.promptTemplates) === JSON.stringify(baseline.promptTemplates) &&
-    JSON.stringify(draft.providerOptionsJson) === JSON.stringify(baseline.providerOptionsJson)
+    JSON.stringify(draft.providerOptionsJson) === JSON.stringify(baseline.providerOptionsJson) &&
+    JSON.stringify(draft.capabilityPreferences) === JSON.stringify(baseline.capabilityPreferences)
   );
 }
 
@@ -346,16 +443,21 @@ function TranslateProfilesPage() {
   const profilesQuery = useQuery(profileListOptions());
   const providersQuery = useQuery(providerListOptions());
   const modelsQuery = useQuery(allProviderModelsOptions());
+  const integrationsQuery = useQuery(integrationListOptions());
+  const integrationDefsQuery = useQuery(integrationDefinitionListOptions());
 
   /** Explicit selection; null means "use first list item when not creating". */
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
+  const [addEngineOpen, setAddEngineOpen] = useState(false);
   /** Local edits only; null means derive draft from detail query. */
   const [draftOverride, setDraftOverride] = useState<ProfileDraft | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
   /** Prompt template pending delete confirmation; null when closed. */
   const [templateDeleteId, setTemplateDeleteId] = useState<string | null>(null);
+  /** Pending plugin integration rebind awaiting explicit confirmation. */
+  const [pendingRebindInstanceId, setPendingRebindInstanceId] = useState<string | null>(null);
   /** Inline rename target for one prompt template card title at a time. */
   const [renamingTemplateId, setRenamingTemplateId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
@@ -624,13 +726,67 @@ function TranslateProfilesPage() {
   }
 
   function startCreate() {
+    setAddEngineOpen(true);
+  }
+
+  function startCreateWithEngine(option: TranslationEngineOption) {
     setIsCreating(true);
     setSelectedId(null);
     setSaveError(null);
-    setDraftOverride(emptyDraft(modelOptions[0]?.id ?? "", uiLanguage));
     cancelRenameTemplate();
     cancelRenameProfile();
+    if (option.kind === "plugin_capability" && option.integrationInstanceId && option.translateCapabilityId) {
+      setDraftOverride(
+        emptyPluginDraft(
+          uiLanguage,
+          option.integrationInstanceId,
+          option.translateCapabilityId,
+          option.detectCapabilityId,
+        ),
+      );
+      return;
+    }
+    setDraftOverride(emptyDraft(modelOptions[0]?.id ?? "", uiLanguage));
   }
+
+  const engineOptionLabels = useMemo(
+    () => ({
+      llmLabel: t("translate.profiles.engineLlmLabel"),
+      llmDescriptionReady: t("translate.profiles.engineLlmDescriptionReady"),
+      llmDescriptionNoModel: t("translate.profiles.engineLlmDescriptionNoModel"),
+      statusDisabled: t("translate.profiles.engineStatusDisabled"),
+      statusPluginMissing: t("translate.profiles.engineStatusPluginMissing"),
+      statusNeedsConfig: t("translate.profiles.engineStatusNeedsConfig"),
+      statusGeneric: t("translate.profiles.engineStatusGeneric"),
+      integrationLabel: t("translate.profiles.engineIntegrationLabel"),
+    }),
+    [t],
+  );
+
+  const engineOptions = useMemo(
+    () =>
+      buildTranslationEngineOptions({
+        enabledModels: modelsQuery.data ?? [],
+        instances: integrationsQuery.data ?? [],
+        definitions: integrationDefsQuery.data ?? [],
+        labels: engineOptionLabels,
+      }),
+    [modelsQuery.data, integrationsQuery.data, integrationDefsQuery.data, engineOptionLabels],
+  );
+
+  const rebindCandidates = useMemo(() => {
+    if (!draft || draft.engineKind !== "plugin_capability" || !draft.translateCapabilityId) {
+      return [];
+    }
+    return listCompatiblePluginRebindCandidates({
+      currentInstanceId: draft.integrationInstanceId,
+      translateCapabilityId: draft.translateCapabilityId,
+      detectCapabilityId: draft.detectCapabilityId || null,
+      instances: integrationsQuery.data ?? [],
+      definitions: integrationDefsQuery.data ?? [],
+      labels: { integrationLabel: engineOptionLabels.integrationLabel },
+    });
+  }, [draft, integrationsQuery.data, integrationDefsQuery.data, engineOptionLabels.integrationLabel]);
 
   function updateDraft(patch: Partial<ProfileDraft>) {
     setDraftOverride((current) => {
@@ -803,12 +959,39 @@ function TranslateProfilesPage() {
       setSaveError(t("translate.profileNameRequired"));
       return;
     }
-    if (!draft.primaryModelId) {
-      setSaveError(t("translate.profiles.primaryModelRequired"));
-      return;
-    }
     if (draft.primaryLang === draft.preferredTargetLang) {
       setSaveError(t("translate.profiles.langPrefEqual"));
+      return;
+    }
+
+    if (draft.engineKind === "plugin_capability") {
+      if (!draft.integrationInstanceId || !draft.translateCapabilityId) {
+        setSaveError(t("translate.profiles.engineBindingRequired"));
+        return;
+      }
+      setSaveError(null);
+      saveMutation.mutate({
+        id: draft.id,
+        name,
+        enabled: draft.enabled,
+        sourceLang: draft.sourceLang,
+        targetLang: draft.targetLang,
+        primaryLang: draft.primaryLang,
+        preferredTargetLang: draft.preferredTargetLang,
+        engine: {
+          kind: "plugin_capability",
+          integrationInstanceId: draft.integrationInstanceId,
+          translateCapabilityId: draft.translateCapabilityId,
+          detectCapabilityId: draft.detectCapabilityId || null,
+          capabilityPreferencesVersion: draft.capabilityPreferencesVersion,
+          capabilityPreferences: draft.capabilityPreferences ?? {},
+        },
+      });
+      return;
+    }
+
+    if (!draft.primaryModelId) {
+      setSaveError(t("translate.profiles.primaryModelRequired"));
       return;
     }
     if (promptTemplates.length === 0) {
@@ -844,25 +1027,28 @@ function TranslateProfilesPage() {
       id: draft.id,
       name,
       enabled: draft.enabled,
-      templateVersion: draft.templateVersion,
-      defaultPromptTemplateId: draft.defaultPromptTemplateId,
-      promptTemplates: promptTemplates.map((template) => ({
-        id: template.id,
-        name: template.name.trim(),
-        systemTemplate: template.systemTemplate,
-        userTemplate: template.userTemplate,
-      })),
-      temperature,
-      maxOutputTokens,
-      providerOptionsJson: draft.providerOptionsJson,
       sourceLang: draft.sourceLang,
       targetLang: draft.targetLang,
       primaryLang: draft.primaryLang,
       preferredTargetLang: draft.preferredTargetLang,
-      languageDetection: draft.languageDetectionModelId
-        ? { type: "llm", modelId: draft.languageDetectionModelId }
-        : null,
-      targetModelIds: uniqueTargetIds,
+      engine: {
+        kind: "llm_model_chain",
+        templateVersion: draft.templateVersion,
+        defaultPromptTemplateId: draft.defaultPromptTemplateId,
+        promptTemplates: promptTemplates.map((template) => ({
+          id: template.id,
+          name: template.name.trim(),
+          systemTemplate: template.systemTemplate,
+          userTemplate: template.userTemplate,
+        })),
+        temperature,
+        maxOutputTokens,
+        providerOptionsJson: draft.providerOptionsJson,
+        languageDetection: draft.languageDetectionModelId
+          ? { type: "llm", modelId: draft.languageDetectionModelId }
+          : null,
+        targetModelIds: uniqueTargetIds,
+      },
     });
   }
 
@@ -985,9 +1171,16 @@ function TranslateProfilesPage() {
                           })}
                         </div>
                         <div className="truncate text-code-inline text-disabled">
-                          {profile.primaryModelId
-                            ? (modelLabelById.get(profile.primaryModelId) ?? profile.primaryModelId)
-                            : t("translate.profiles.noPrimaryModel")}
+                          {profile.engine.kind === "plugin_capability"
+                            ? (integrationsQuery.data?.find(
+                                (i) =>
+                                  profile.engine.kind === "plugin_capability" &&
+                                  i.id === profile.engine.integrationInstanceId,
+                              )?.displayName ??
+                              (profile.engine.kind === "plugin_capability" ? profile.engine.translateCapabilityId : ""))
+                            : profile.primaryModelId
+                              ? (modelLabelById.get(profile.primaryModelId) ?? profile.primaryModelId)
+                              : t("translate.profiles.noPrimaryModel")}
                         </div>
                       </button>
                     </li>
@@ -1286,98 +1479,153 @@ function TranslateProfilesPage() {
                   <p className="text-table-header text-neutral">{t("translate.profiles.langPrefHint")}</p>
                 </div>
 
-                {/* Models */}
-                <div className={sectionDividerClassName}>
-                  <div className="flex flex-col gap-1">
-                    <label className={fieldLabelClassName} id="profile-primary-model-label">
-                      {t("translate.profiles.primaryModel")}
-                    </label>
-                    <SelectField
-                      value={draft.primaryModelId}
-                      onValueChange={(value) => {
-                        const nextPrimary = value ?? "";
-                        updateDraft({
-                          primaryModelId: nextPrimary,
-                          fallbackModelIds: draft.fallbackModelIds.filter((id) => id !== nextPrimary),
-                        });
-                      }}
-                      options={
-                        modelsLoading || modelOptions.length === 0
-                          ? []
-                          : modelOptions.map((option) => ({ value: option.id, label: option.label }))
-                      }
-                      disabled={savePending || modelsLoading || modelOptions.length === 0}
-                      placeholder={
-                        modelsLoading
-                          ? t("translate.modelLoading")
-                          : modelOptions.length === 0
-                            ? t("translate.modelEmpty")
-                            : undefined
-                      }
-                      aria-labelledby="profile-primary-model-label"
-                    />
+                {draft.engineKind === "plugin_capability" ? (
+                  <div className={sectionDividerClassName}>
+                    <div className="flex flex-col gap-2">
+                      <label className={fieldLabelClassName} id="profile-service-integration-label">
+                        {t("translate.profiles.serviceIntegration")}
+                      </label>
+                      <SelectField
+                        value={draft.integrationInstanceId}
+                        onValueChange={(value) => {
+                          if (!value || value === draft.integrationInstanceId) {
+                            return;
+                          }
+                          // Existing profiles require explicit confirmation before rebind.
+                          if (draft.id) {
+                            setPendingRebindInstanceId(value);
+                            return;
+                          }
+                          const candidate = rebindCandidates.find((c) => c.id === value);
+                          updateDraft({
+                            integrationInstanceId: value,
+                            translateCapabilityId: candidate?.translateCapabilityId ?? draft.translateCapabilityId,
+                            detectCapabilityId: candidate?.detectCapabilityId ?? draft.detectCapabilityId,
+                          });
+                        }}
+                        options={rebindCandidates
+                          .filter((c) => c.ready || c.id === draft.integrationInstanceId)
+                          .map((c) => ({
+                            value: c.id,
+                            label: c.ready ? c.label : `${c.label} (${t("translate.profiles.integrationNotReady")})`,
+                            disabled: !c.ready && c.id !== draft.integrationInstanceId,
+                          }))}
+                        disabled={savePending || rebindCandidates.length === 0}
+                        placeholder={t("translate.profiles.serviceIntegrationPlaceholder")}
+                        aria-labelledby="profile-service-integration-label"
+                      />
+                      <p className="text-code-inline text-neutral">{draft.translateCapabilityId}</p>
+                      {draft.detectCapabilityId ? (
+                        <p className="text-code-inline text-neutral">{draft.detectCapabilityId}</p>
+                      ) : (
+                        <p className="text-code-inline text-disabled">{t("translate.profiles.detectUnavailable")}</p>
+                      )}
+                      {(() => {
+                        const status = integrationsQuery.data?.find(
+                          (i) => i.id === draft.integrationInstanceId,
+                        )?.effectiveStatus;
+                        return status ? <p className="text-code-inline text-neutral">{status}</p> : null;
+                      })()}
+                      <p className="text-table-header text-neutral">{t("translate.profiles.rebindHint")}</p>
+                    </div>
                   </div>
+                ) : null}
 
-                  <div className="flex flex-col gap-1">
-                    <label className={fieldLabelClassName} id="profile-detection-model-label">
-                      {t("translate.profiles.detectionModel")}
-                    </label>
-                    <SelectField
-                      value={draft.languageDetectionModelId}
-                      onValueChange={(value) => updateDraft({ languageDetectionModelId: value ?? "" })}
-                      options={[
-                        { value: "", label: t("translate.profiles.detectionModelUsePrimary") },
-                        ...modelOptions.map((option) => ({ value: option.id, label: option.label })),
-                      ]}
-                      extraOptions={
-                        draft.languageDetectionModelId &&
-                        !modelOptions.some((o) => o.id === draft.languageDetectionModelId)
-                          ? [
-                              {
-                                value: draft.languageDetectionModelId,
-                                label:
-                                  modelLabelById.get(draft.languageDetectionModelId) ?? draft.languageDetectionModelId,
-                              },
-                            ]
-                          : undefined
-                      }
-                      disabled={savePending || modelsLoading || modelOptions.length === 0}
-                      aria-labelledby="profile-detection-model-label"
-                    />
-                    <p className="text-body-tight text-neutral">{t("translate.profiles.detectionModelHint")}</p>
-                  </div>
+                {/* Models + prompts (LLM only) */}
+                {draft.engineKind === "llm_model_chain" ? (
+                  <>
+                    <div className={sectionDividerClassName}>
+                      <div className="flex flex-col gap-1">
+                        <label className={fieldLabelClassName} id="profile-primary-model-label">
+                          {t("translate.profiles.primaryModel")}
+                        </label>
+                        <SelectField
+                          value={draft.primaryModelId}
+                          onValueChange={(value) => {
+                            const nextPrimary = value ?? "";
+                            updateDraft({
+                              primaryModelId: nextPrimary,
+                              fallbackModelIds: draft.fallbackModelIds.filter((id) => id !== nextPrimary),
+                            });
+                          }}
+                          options={
+                            modelsLoading || modelOptions.length === 0
+                              ? []
+                              : modelOptions.map((option) => ({ value: option.id, label: option.label }))
+                          }
+                          disabled={savePending || modelsLoading || modelOptions.length === 0}
+                          placeholder={
+                            modelsLoading
+                              ? t("translate.modelLoading")
+                              : modelOptions.length === 0
+                                ? t("translate.modelEmpty")
+                                : undefined
+                          }
+                          aria-labelledby="profile-primary-model-label"
+                        />
+                      </div>
 
-                  <div className="space-y-2">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span className={fieldLabelClassName}>{t("translate.profiles.fallbackModels")}</span>
-                      <Button
-                        type="button"
-                        className={`
+                      <div className="flex flex-col gap-1">
+                        <label className={fieldLabelClassName} id="profile-detection-model-label">
+                          {t("translate.profiles.detectionModel")}
+                        </label>
+                        <SelectField
+                          value={draft.languageDetectionModelId}
+                          onValueChange={(value) => updateDraft({ languageDetectionModelId: value ?? "" })}
+                          options={[
+                            { value: "", label: t("translate.profiles.detectionModelUsePrimary") },
+                            ...modelOptions.map((option) => ({ value: option.id, label: option.label })),
+                          ]}
+                          extraOptions={
+                            draft.languageDetectionModelId &&
+                            !modelOptions.some((o) => o.id === draft.languageDetectionModelId)
+                              ? [
+                                  {
+                                    value: draft.languageDetectionModelId,
+                                    label:
+                                      modelLabelById.get(draft.languageDetectionModelId) ??
+                                      draft.languageDetectionModelId,
+                                  },
+                                ]
+                              : undefined
+                          }
+                          disabled={savePending || modelsLoading || modelOptions.length === 0}
+                          aria-labelledby="profile-detection-model-label"
+                        />
+                        <p className="text-body-tight text-neutral">{t("translate.profiles.detectionModelHint")}</p>
+                      </div>
+
+                      <div className="space-y-2">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className={fieldLabelClassName}>{t("translate.profiles.fallbackModels")}</span>
+                          <Button
+                            type="button"
+                            className={`
                             ${outlineButtonClassName}
                             h-6 px-2 text-table-header font-bold uppercase
                           `}
-                        disabled={savePending || !canAddFallback}
-                        onClick={addFallback}
-                      >
-                        {t("translate.profiles.addFallback")}
-                      </Button>
-                    </div>
-                    {draft.fallbackModelIds.length === 0 ? (
-                      <p className="text-body-tight text-neutral">{t("translate.profiles.fallbackEmpty")}</p>
-                    ) : (
-                      <ul className="space-y-2">
-                        {draft.fallbackModelIds.map((modelId, index) => (
-                          <li key={`fallback-${index}-${modelId}`} className="flex flex-wrap items-center gap-2">
-                            <div
-                              className="
+                            disabled={savePending || !canAddFallback}
+                            onClick={addFallback}
+                          >
+                            {t("translate.profiles.addFallback")}
+                          </Button>
+                        </div>
+                        {draft.fallbackModelIds.length === 0 ? (
+                          <p className="text-body-tight text-neutral">{t("translate.profiles.fallbackEmpty")}</p>
+                        ) : (
+                          <ul className="space-y-2">
+                            {draft.fallbackModelIds.map((modelId, index) => (
+                              <li key={`fallback-${index}-${modelId}`} className="flex flex-wrap items-center gap-2">
+                                <div
+                                  className="
                                   flex size-control-height shrink-0 items-center justify-center border border-line
                                   bg-surface-2 text-code-inline font-bold text-on-surface
                                 "
-                            >
-                              {index + 1}
-                            </div>
-                            <SelectField
-                              className="
+                                >
+                                  {index + 1}
+                                </div>
+                                <SelectField
+                                  className="
                                   flex h-control-height min-w-0 flex-1 items-center justify-between gap-2 rounded-none
                                   border border-line bg-surface px-2 text-body-tight font-normal text-on-surface
                                   select-none
@@ -1387,164 +1635,248 @@ function TranslateProfilesPage() {
                                   data-disabled:border-disabled data-disabled:text-disabled
                                   data-popup-open:bg-surface-2
                                 "
-                              value={modelId}
-                              onValueChange={(value) => setFallbackAt(index, value ?? "")}
-                              options={modelOptions.map((option) => ({
-                                value: option.id,
-                                label: option.label,
-                              }))}
-                              extraOptions={
-                                modelId && !modelOptions.some((o) => o.id === modelId)
-                                  ? [{ value: modelId, label: modelLabelById.get(modelId) ?? modelId }]
-                                  : undefined
-                              }
-                              disabled={savePending}
-                              aria-label={t("translate.profiles.fallbackItemAria", {
-                                index: index + 1,
-                              })}
-                            />
-                            <Button
-                              type="button"
-                              className={squareIconButtonClassName}
-                              disabled={savePending || index === 0}
-                              aria-label={t("translate.profiles.moveUp")}
-                              onClick={() => {
-                                moveFallback(index, -1);
-                              }}
-                            >
-                              ↑
-                            </Button>
-                            <Button
-                              type="button"
-                              className={squareIconButtonClassName}
-                              disabled={savePending || index === draft.fallbackModelIds.length - 1}
-                              aria-label={t("translate.profiles.moveDown")}
-                              onClick={() => {
-                                moveFallback(index, 1);
-                              }}
-                            >
-                              ↓
-                            </Button>
-                            <Button
-                              type="button"
-                              className={dangerButtonClassName}
-                              disabled={savePending}
-                              aria-label={t("translate.profiles.removeFallback")}
-                              onClick={() => {
-                                removeFallback(index);
-                              }}
-                            >
-                              {t("translate.profiles.removeFallback")}
-                            </Button>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
-                </div>
+                                  value={modelId}
+                                  onValueChange={(value) => setFallbackAt(index, value ?? "")}
+                                  options={modelOptions.map((option) => ({
+                                    value: option.id,
+                                    label: option.label,
+                                  }))}
+                                  extraOptions={
+                                    modelId && !modelOptions.some((o) => o.id === modelId)
+                                      ? [{ value: modelId, label: modelLabelById.get(modelId) ?? modelId }]
+                                      : undefined
+                                  }
+                                  disabled={savePending}
+                                  aria-label={t("translate.profiles.fallbackItemAria", {
+                                    index: index + 1,
+                                  })}
+                                />
+                                <Button
+                                  type="button"
+                                  className={squareIconButtonClassName}
+                                  disabled={savePending || index === 0}
+                                  aria-label={t("translate.profiles.moveUp")}
+                                  onClick={() => {
+                                    moveFallback(index, -1);
+                                  }}
+                                >
+                                  ↑
+                                </Button>
+                                <Button
+                                  type="button"
+                                  className={squareIconButtonClassName}
+                                  disabled={savePending || index === draft.fallbackModelIds.length - 1}
+                                  aria-label={t("translate.profiles.moveDown")}
+                                  onClick={() => {
+                                    moveFallback(index, 1);
+                                  }}
+                                >
+                                  ↓
+                                </Button>
+                                <Button
+                                  type="button"
+                                  className={dangerButtonClassName}
+                                  disabled={savePending}
+                                  aria-label={t("translate.profiles.removeFallback")}
+                                  onClick={() => {
+                                    removeFallback(index);
+                                  }}
+                                >
+                                  {t("translate.profiles.removeFallback")}
+                                </Button>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+                    </div>
 
-                {/* Parameters */}
-                <div className="space-y-4 border-t border-outline-variant pt-4">
-                  <div
-                    className="
+                    {/* Parameters */}
+                    <div className="space-y-4 border-t border-outline-variant pt-4">
+                      <div
+                        className="
                         grid grid-cols-1 gap-8
                         sm:grid-cols-2
                       "
-                  >
-                    <div className="flex flex-col gap-1">
-                      <label className={fieldLabelClassName} htmlFor="profile-temperature">
-                        {t("translate.profiles.temperature")}
-                      </label>
-                      <Input
-                        id="profile-temperature"
-                        className={inputClassName}
-                        type="number"
-                        step="0.1"
-                        min="0"
-                        max="2"
-                        value={draft.temperature}
-                        placeholder={t("common.default", { value: DEFAULT_TEMPERATURE })}
-                        disabled={savePending}
-                        onChange={(event) => {
-                          updateDraft({ temperature: event.currentTarget.value });
-                        }}
-                      />
+                      >
+                        <div className="flex flex-col gap-1">
+                          <label className={fieldLabelClassName} htmlFor="profile-temperature">
+                            {t("translate.profiles.temperature")}
+                          </label>
+                          <Input
+                            id="profile-temperature"
+                            className={inputClassName}
+                            type="number"
+                            step="0.1"
+                            min="0"
+                            max="2"
+                            value={draft.temperature}
+                            placeholder={t("common.default", { value: DEFAULT_TEMPERATURE })}
+                            disabled={savePending}
+                            onChange={(event) => {
+                              updateDraft({ temperature: event.currentTarget.value });
+                            }}
+                          />
+                        </div>
+                        <div className="flex flex-col gap-1">
+                          <label className={fieldLabelClassName} htmlFor="profile-max-tokens">
+                            {t("translate.profiles.maxTokens")}
+                          </label>
+                          <Input
+                            id="profile-max-tokens"
+                            className={inputClassName}
+                            type="number"
+                            step="1"
+                            min="1"
+                            value={draft.maxOutputTokens}
+                            placeholder={t("translate.profiles.maxTokensModelDefault")}
+                            disabled={savePending}
+                            onChange={(event) => {
+                              updateDraft({ maxOutputTokens: event.currentTarget.value });
+                            }}
+                          />
+                        </div>
+                      </div>
                     </div>
-                    <div className="flex flex-col gap-1">
-                      <label className={fieldLabelClassName} htmlFor="profile-max-tokens">
-                        {t("translate.profiles.maxTokens")}
-                      </label>
-                      <Input
-                        id="profile-max-tokens"
-                        className={inputClassName}
-                        type="number"
-                        step="1"
-                        min="1"
-                        value={draft.maxOutputTokens}
-                        placeholder={t("translate.profiles.maxTokensModelDefault")}
-                        disabled={savePending}
-                        onChange={(event) => {
-                          updateDraft({ maxOutputTokens: event.currentTarget.value });
+
+                    {/* Prompt templates */}
+                    <div className="space-y-4 border-t border-outline-variant pt-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className={fieldLabelClassName}>{t("translate.profiles.promptTemplates")}</span>
+                      </div>
+
+                      <RadioGroup
+                        value={draft.defaultPromptTemplateId}
+                        onValueChange={(value) => {
+                          if (value) {
+                            updateDraft({ defaultPromptTemplateId: value });
+                          }
                         }}
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                {/* Prompt templates */}
-                <div className="space-y-4 border-t border-outline-variant pt-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <span className={fieldLabelClassName}>{t("translate.profiles.promptTemplates")}</span>
-                  </div>
-
-                  <RadioGroup
-                    value={draft.defaultPromptTemplateId}
-                    onValueChange={(value) => {
-                      if (value) {
-                        updateDraft({ defaultPromptTemplateId: value });
-                      }
-                    }}
-                    className="space-y-4"
-                    disabled={savePending}
-                  >
-                    {draft.promptTemplates.map((template) => {
-                      const canRemove = draft.promptTemplates.length > 1;
-                      const isRenaming = renamingTemplateId === template.id;
-                      const isOpen = !collapsedTemplateIds.has(template.id);
-                      const nameFieldId = `profile-template-name-${template.id}`;
-                      const systemFieldId = `profile-template-system-${template.id}`;
-                      const userFieldId = `profile-template-user-${template.id}`;
-                      return (
-                        <Collapsible.Root
-                          key={template.id}
-                          open={isOpen}
-                          onOpenChange={(open) => {
-                            setTemplateOpen(template.id, open);
-                          }}
-                          className={promptTemplateCardClassName}
-                        >
-                          {/* Header is a div trigger so nested controls stay valid HTML. */}
-                          <Collapsible.Trigger
-                            nativeButton={false}
-                            render={<div />}
-                            className={promptTemplateCardHeaderClassName}
-                            aria-label={
-                              isOpen
-                                ? t("translate.profiles.promptTemplateCollapse")
-                                : t("translate.profiles.promptTemplateExpand")
-                            }
-                          >
-                            <div className="flex min-w-0 flex-1 items-center gap-2">
-                              <ExpandCircleDownOutlineIcon
-                                className="
+                        className="space-y-4"
+                        disabled={savePending}
+                      >
+                        {draft.promptTemplates.map((template) => {
+                          const canRemove = draft.promptTemplates.length > 1;
+                          const isRenaming = renamingTemplateId === template.id;
+                          const isOpen = !collapsedTemplateIds.has(template.id);
+                          const nameFieldId = `profile-template-name-${template.id}`;
+                          const systemFieldId = `profile-template-system-${template.id}`;
+                          const userFieldId = `profile-template-user-${template.id}`;
+                          return (
+                            <Collapsible.Root
+                              key={template.id}
+                              open={isOpen}
+                              onOpenChange={(open) => {
+                                setTemplateOpen(template.id, open);
+                              }}
+                              className={promptTemplateCardClassName}
+                            >
+                              {/* Header is a div trigger so nested controls stay valid HTML. */}
+                              <Collapsible.Trigger
+                                nativeButton={false}
+                                render={<div />}
+                                className={promptTemplateCardHeaderClassName}
+                                aria-label={
+                                  isOpen
+                                    ? t("translate.profiles.promptTemplateCollapse")
+                                    : t("translate.profiles.promptTemplateExpand")
+                                }
+                              >
+                                <div className="flex min-w-0 flex-1 items-center gap-2">
+                                  <ExpandCircleDownOutlineIcon
+                                    className="
                                     size-5 shrink-0 text-on-surface transition-transform duration-100 ease-out
                                     group-data-panel-open:rotate-180
                                   "
-                                aria-hidden
-                              />
-                              {isRenaming ? (
+                                    aria-hidden
+                                  />
+                                  {isRenaming ? (
+                                    <div
+                                      className="flex min-w-0 flex-1 items-center gap-2"
+                                      onClick={(event) => {
+                                        event.stopPropagation();
+                                      }}
+                                      onPointerDown={(event) => {
+                                        event.stopPropagation();
+                                      }}
+                                    >
+                                      <Input
+                                        ref={renameInputRef}
+                                        id={nameFieldId}
+                                        className={promptTemplateRenameInputClassName}
+                                        value={renameValue}
+                                        placeholder={t("translate.profiles.promptTemplateNamePlaceholder")}
+                                        aria-label={t("translate.profiles.promptTemplateName")}
+                                        spellCheck={false}
+                                        autoComplete="off"
+                                        disabled={savePending}
+                                        onChange={(event) => {
+                                          setRenameValue(event.currentTarget.value);
+                                        }}
+                                        onKeyDown={(event) => {
+                                          if (savePending) {
+                                            return;
+                                          }
+                                          // Stage rename into draft only; never submit the profile form.
+                                          if (event.key === "Enter") {
+                                            event.preventDefault();
+                                            commitRenameTemplate(template.id);
+                                            return;
+                                          }
+                                          if (event.key === "Escape") {
+                                            event.preventDefault();
+                                            cancelRenameTemplate();
+                                          }
+                                        }}
+                                      />
+                                      <Button
+                                        type="button"
+                                        className={iconButtonClassName}
+                                        aria-label={t("translate.profiles.promptTemplateSaveName")}
+                                        disabled={savePending || !renameValue.trim()}
+                                        onClick={() => {
+                                          commitRenameTemplate(template.id);
+                                        }}
+                                      >
+                                        <IconMaterialSymbolsLightCheck className="pointer-events-none size-5 shrink-0" />
+                                      </Button>
+                                      <Button
+                                        type="button"
+                                        className={iconButtonClassName}
+                                        aria-label={t("translate.profiles.promptTemplateCancelRename")}
+                                        disabled={savePending}
+                                        onClick={() => {
+                                          cancelRenameTemplate();
+                                        }}
+                                      >
+                                        <IconMaterialSymbolsLightClose className="pointer-events-none size-5 shrink-0" />
+                                      </Button>
+                                    </div>
+                                  ) : (
+                                    <div className="flex min-w-0 flex-1 items-center gap-1">
+                                      <h3 className={promptTemplateTitleClassName}>{template.name}</h3>
+                                      <Button
+                                        type="button"
+                                        className={iconButtonClassName}
+                                        aria-label={t("translate.profiles.promptTemplateRename")}
+                                        title={t("translate.profiles.promptTemplateRename")}
+                                        disabled={savePending}
+                                        onClick={(event) => {
+                                          event.stopPropagation();
+                                          startRenameTemplate(template);
+                                        }}
+                                        onPointerDown={(event) => {
+                                          event.stopPropagation();
+                                        }}
+                                      >
+                                        <IconMaterialSymbolsLightEditSquareOutlineSharp className="pointer-events-none size-5 shrink-0" />
+                                      </Button>
+                                    </div>
+                                  )}
+                                </div>
+
                                 <div
-                                  className="flex min-w-0 flex-1 items-center gap-2"
+                                  className="flex shrink-0 flex-wrap items-center gap-3"
                                   onClick={(event) => {
                                     event.stopPropagation();
                                   }}
@@ -1552,174 +1884,92 @@ function TranslateProfilesPage() {
                                     event.stopPropagation();
                                   }}
                                 >
-                                  <Input
-                                    ref={renameInputRef}
-                                    id={nameFieldId}
-                                    className={promptTemplateRenameInputClassName}
-                                    value={renameValue}
-                                    placeholder={t("translate.profiles.promptTemplateNamePlaceholder")}
-                                    aria-label={t("translate.profiles.promptTemplateName")}
-                                    spellCheck={false}
-                                    autoComplete="off"
-                                    disabled={savePending}
-                                    onChange={(event) => {
-                                      setRenameValue(event.currentTarget.value);
-                                    }}
-                                    onKeyDown={(event) => {
-                                      if (savePending) {
-                                        return;
-                                      }
-                                      // Stage rename into draft only; never submit the profile form.
-                                      if (event.key === "Enter") {
-                                        event.preventDefault();
-                                        commitRenameTemplate(template.id);
-                                        return;
-                                      }
-                                      if (event.key === "Escape") {
-                                        event.preventDefault();
-                                        cancelRenameTemplate();
-                                      }
-                                    }}
-                                  />
-                                  <Button
-                                    type="button"
-                                    className={iconButtonClassName}
-                                    aria-label={t("translate.profiles.promptTemplateSaveName")}
-                                    disabled={savePending || !renameValue.trim()}
-                                    onClick={() => {
-                                      commitRenameTemplate(template.id);
-                                    }}
-                                  >
-                                    <IconMaterialSymbolsLightCheck className="pointer-events-none size-5 shrink-0" />
-                                  </Button>
-                                  <Button
-                                    type="button"
-                                    className={iconButtonClassName}
-                                    aria-label={t("translate.profiles.promptTemplateCancelRename")}
-                                    disabled={savePending}
-                                    onClick={() => {
-                                      cancelRenameTemplate();
-                                    }}
-                                  >
-                                    <IconMaterialSymbolsLightClose className="pointer-events-none size-5 shrink-0" />
-                                  </Button>
+                                  <label className="flex items-center gap-2 text-body-tight text-on-surface">
+                                    <Radio.Root value={template.id} className={radioClassName}>
+                                      <Radio.Indicator className={radioIndicatorClassName} />
+                                    </Radio.Root>
+                                    <span>{t("translate.profiles.promptTemplateSetDefault")}</span>
+                                  </label>
+                                  {canRemove ? (
+                                    <Button
+                                      type="button"
+                                      className={dangerIconButtonClassName}
+                                      aria-label={t("translate.profiles.promptTemplateRemove")}
+                                      title={t("translate.profiles.promptTemplateRemove")}
+                                      disabled={savePending}
+                                      onClick={() => {
+                                        setTemplateDeleteId(template.id);
+                                      }}
+                                    >
+                                      <IconMaterialSymbolsLightDeleteOutlineSharp className="pointer-events-none size-5 shrink-0" />
+                                    </Button>
+                                  ) : null}
                                 </div>
-                              ) : (
-                                <div className="flex min-w-0 flex-1 items-center gap-1">
-                                  <h3 className={promptTemplateTitleClassName}>{template.name}</h3>
-                                  <Button
-                                    type="button"
-                                    className={iconButtonClassName}
-                                    aria-label={t("translate.profiles.promptTemplateRename")}
-                                    title={t("translate.profiles.promptTemplateRename")}
-                                    disabled={savePending}
-                                    onClick={(event) => {
-                                      event.stopPropagation();
-                                      startRenameTemplate(template);
-                                    }}
-                                    onPointerDown={(event) => {
-                                      event.stopPropagation();
-                                    }}
-                                  >
-                                    <IconMaterialSymbolsLightEditSquareOutlineSharp className="pointer-events-none size-5 shrink-0" />
-                                  </Button>
+                              </Collapsible.Trigger>
+
+                              <Collapsible.Panel className={promptTemplateCardPanelClassName}>
+                                <div className={promptTemplateCardBodyClassName}>
+                                  <div className="flex flex-col gap-1">
+                                    <label className={fieldLabelClassName} htmlFor={systemFieldId}>
+                                      {t("translate.systemTemplateLabel")}
+                                    </label>
+                                    <textarea
+                                      id={systemFieldId}
+                                      className={templateTextareaClassName}
+                                      value={template.systemTemplate}
+                                      spellCheck={false}
+                                      disabled={savePending}
+                                      onChange={(event) => {
+                                        updatePromptTemplate(template.id, {
+                                          systemTemplate: event.currentTarget.value,
+                                        });
+                                      }}
+                                    />
+                                  </div>
+
+                                  <div className="flex flex-col gap-1">
+                                    <label className={fieldLabelClassName} htmlFor={userFieldId}>
+                                      {t("translate.userTemplateLabel")}
+                                    </label>
+                                    <textarea
+                                      id={userFieldId}
+                                      className={templateTextareaClassName}
+                                      value={template.userTemplate}
+                                      spellCheck={false}
+                                      disabled={savePending}
+                                      onChange={(event) => {
+                                        updatePromptTemplate(template.id, {
+                                          userTemplate: event.currentTarget.value,
+                                        });
+                                      }}
+                                    />
+                                    <span className="font-mono text-table-header text-disabled italic">
+                                      {templateVarsHint}
+                                    </span>
+                                  </div>
                                 </div>
-                              )}
-                            </div>
+                              </Collapsible.Panel>
+                            </Collapsible.Root>
+                          );
+                        })}
+                      </RadioGroup>
 
-                            <div
-                              className="flex shrink-0 flex-wrap items-center gap-3"
-                              onClick={(event) => {
-                                event.stopPropagation();
-                              }}
-                              onPointerDown={(event) => {
-                                event.stopPropagation();
-                              }}
-                            >
-                              <label className="flex items-center gap-2 text-body-tight text-on-surface">
-                                <Radio.Root value={template.id} className={radioClassName}>
-                                  <Radio.Indicator className={radioIndicatorClassName} />
-                                </Radio.Root>
-                                <span>{t("translate.profiles.promptTemplateSetDefault")}</span>
-                              </label>
-                              {canRemove ? (
-                                <Button
-                                  type="button"
-                                  className={dangerIconButtonClassName}
-                                  aria-label={t("translate.profiles.promptTemplateRemove")}
-                                  title={t("translate.profiles.promptTemplateRemove")}
-                                  disabled={savePending}
-                                  onClick={() => {
-                                    setTemplateDeleteId(template.id);
-                                  }}
-                                >
-                                  <IconMaterialSymbolsLightDeleteOutlineSharp className="pointer-events-none size-5 shrink-0" />
-                                </Button>
-                              ) : null}
-                            </div>
-                          </Collapsible.Trigger>
-
-                          <Collapsible.Panel className={promptTemplateCardPanelClassName}>
-                            <div className={promptTemplateCardBodyClassName}>
-                              <div className="flex flex-col gap-1">
-                                <label className={fieldLabelClassName} htmlFor={systemFieldId}>
-                                  {t("translate.systemTemplateLabel")}
-                                </label>
-                                <textarea
-                                  id={systemFieldId}
-                                  className={templateTextareaClassName}
-                                  value={template.systemTemplate}
-                                  spellCheck={false}
-                                  disabled={savePending}
-                                  onChange={(event) => {
-                                    updatePromptTemplate(template.id, {
-                                      systemTemplate: event.currentTarget.value,
-                                    });
-                                  }}
-                                />
-                              </div>
-
-                              <div className="flex flex-col gap-1">
-                                <label className={fieldLabelClassName} htmlFor={userFieldId}>
-                                  {t("translate.userTemplateLabel")}
-                                </label>
-                                <textarea
-                                  id={userFieldId}
-                                  className={templateTextareaClassName}
-                                  value={template.userTemplate}
-                                  spellCheck={false}
-                                  disabled={savePending}
-                                  onChange={(event) => {
-                                    updatePromptTemplate(template.id, {
-                                      userTemplate: event.currentTarget.value,
-                                    });
-                                  }}
-                                />
-                                <span className="font-mono text-table-header text-disabled italic">
-                                  {templateVarsHint}
-                                </span>
-                              </div>
-                            </div>
-                          </Collapsible.Panel>
-                        </Collapsible.Root>
-                      );
-                    })}
-                  </RadioGroup>
-
-                  <Button
-                    type="button"
-                    className={`
+                      <Button
+                        type="button"
+                        className={`
                         ${outlineButtonClassName}
                         w-full font-bold
                       `}
-                    disabled={savePending}
-                    onClick={() => {
-                      addPromptTemplate();
-                    }}
-                  >
-                    {t("translate.profiles.promptTemplateAdd")}
-                  </Button>
-                </div>
+                        disabled={savePending}
+                        onClick={() => {
+                          addPromptTemplate();
+                        }}
+                      >
+                        {t("translate.profiles.promptTemplateAdd")}
+                      </Button>
+                    </div>
+                  </>
+                ) : null}
 
                 {saveError ? (
                   <p className="text-body-tight text-error" role="alert">
@@ -1731,6 +1981,13 @@ function TranslateProfilesPage() {
           ) : null}
         </section>
       </PageLayout>
+
+      <AddTranslationProfileDialog
+        open={addEngineOpen}
+        onOpenChange={setAddEngineOpen}
+        options={engineOptions}
+        onSelect={startCreateWithEngine}
+      />
 
       <ConfirmDialog
         open={deleteOpen}
@@ -1765,6 +2022,31 @@ function TranslateProfilesPage() {
             removePromptTemplate(templateDeleteId);
           }
           setTemplateDeleteId(null);
+        }}
+      />
+
+      <ConfirmDialog
+        open={pendingRebindInstanceId !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setPendingRebindInstanceId(null);
+          }
+        }}
+        title={t("translate.profiles.rebindTitle")}
+        description={t("translate.profiles.rebindConfirm")}
+        confirmText={t("translate.profiles.rebindConfirmAction")}
+        onConfirm={() => {
+          if (!draft || !pendingRebindInstanceId) {
+            setPendingRebindInstanceId(null);
+            return;
+          }
+          const candidate = rebindCandidates.find((c) => c.id === pendingRebindInstanceId);
+          updateDraft({
+            integrationInstanceId: pendingRebindInstanceId,
+            translateCapabilityId: candidate?.translateCapabilityId ?? draft.translateCapabilityId,
+            detectCapabilityId: candidate?.detectCapabilityId ?? draft.detectCapabilityId,
+          });
+          setPendingRebindInstanceId(null);
         }}
       />
     </>

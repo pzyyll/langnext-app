@@ -1,14 +1,11 @@
 // ABOUTME: Tests for invokeEffect success and conflict rejection decoding.
 // ABOUTME: Mocks Tauri invoke so failures surface as typed IpcError Effects.
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { Effect } from "effect";
+import { installTauriInvokeMock, invokeMock, resetInvokeMock } from "../test/tauriInvokeMock";
 import { isIpcError } from "./ipcError";
 
-const invokeMock = mock<(cmd: string, args?: Record<string, unknown>) => Promise<unknown>>(async () => undefined);
-
-mock.module("@tauri-apps/api/core", () => ({
-  invoke: (cmd: string, args?: Record<string, unknown>) => invokeMock(cmd, args),
-}));
+installTauriInvokeMock();
 
 const { invokeEffect } = await import("./invokeEffect");
 const { runStorage } = await import("./runStorage");
@@ -16,7 +13,8 @@ const { isConflictError } = await import("./errors");
 
 describe("invokeEffect", () => {
   beforeEach(() => {
-    invokeMock.mockReset();
+    resetInvokeMock();
+    invokeMock.mockImplementation(async () => undefined);
   });
 
   test("succeeds with invoke result", async () => {
