@@ -735,6 +735,7 @@ const zhCN = {
     loadFailed: "加载插件失败",
     emptyList: "暂无配置。",
     emptyPage: "请选择配置，或新建一个。",
+    createNew: "新建配置",
     addAria: "添加插件配置",
     renameAria: "重命名配置",
     deleteAria: "删除配置",

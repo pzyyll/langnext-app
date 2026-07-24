@@ -743,6 +743,7 @@ const en = {
     loadFailed: "Failed to load plugins",
     emptyList: "No configurations yet.",
     emptyPage: "Select a configuration or create one.",
+    createNew: "New configuration",
     addAria: "Add plugin configuration",
     renameAria: "Rename configuration",
     deleteAria: "Delete configuration",
