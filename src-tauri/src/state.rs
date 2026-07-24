@@ -68,7 +68,12 @@ impl AppState {
     let providers = ProviderService::new(db.clone(), vault.clone());
     let models = ModelService::new(db.clone(), vault.clone(), app_data_dir.join("cache"));
     let profiles = TranslationProfileService::new(db.clone(), registry.clone());
-    let ocr_services = OcrServiceService::new(db.clone(), vault.clone());
+    let ocr_services = OcrServiceService::new(
+      db.clone(),
+      vault.clone(),
+      registry.clone(),
+      service_capabilities.clone(),
+    );
     let service_integrations =
       ServiceIntegrationService::new(db.clone(), vault.clone(), registry, token_grants.clone());
     let settings = SettingsService::new(db.clone(), vault.clone());

@@ -2,13 +2,17 @@
 // ABOUTME: Preview and apply share one plan; apply revalidates inside the write transaction.
 use crate::domain::import_export::{
   ConfigurationExport, EXPORT_FORMAT_VERSION, ImportConflictMode, ImportPreview, ImportPreviewCounts,
-  IntegrationInstanceExport,
+  IntegrationInstanceExport, OcrPromptTemplateExport, OcrServiceExport,
 };
 use crate::domain::language_detection::LanguageDetectorConfig;
 use crate::domain::model::{CapabilityOverridesV1, ProviderModel};
+use crate::domain::ocr_service::{
+  GOOGLE_VISION_PREFERENCES_SCHEMA_VERSION, OcrProviderType, OcrService, parse_ocr_image_preferences,
+};
 use crate::domain::provider::{
   CredentialKind, ModelsSyncStatus, ProviderExport, ProviderInstance, validate_adapter_id,
 };
+use crate::domain::service_capability::validate_ocr_image_preferences;
 use crate::domain::service_integration::{IntegrationHealthStatus, IntegrationInstance};
 use crate::domain::settings::{AppSettingsV1, GlobalProxyMode};
 use crate::domain::time::{new_id, now_rfc3339};
@@ -38,6 +42,8 @@ pub struct ValidatedImportPlan {
   pub targets: Vec<TranslationProfileTarget>,
   pub prompt_templates: Vec<TranslationProfilePromptTemplate>,
   pub integrations: Vec<IntegrationInstance>,
+  pub ocr_services: Vec<OcrService>,
+  pub ocr_prompt_templates: Vec<OcrPromptTemplateExport>,
   pub settings: AppSettingsV1,
   /// Providers that need credential cleanup when merging over existing rows.
   pub provider_cleanup_ids: Vec<Uuid>,
@@ -45,6 +51,10 @@ pub struct ValidatedImportPlan {
   pub clear_global_proxy: bool,
   /// Expected local credential refs for merge ownership CAS (provider_id -> ref).
   pub expected_provider_refs: HashMap<Uuid, Option<String>>,
+  /// Expected local Baidu OCR api key refs for merge CAS (service_id -> ref).
+  pub expected_ocr_api_key_refs: HashMap<Uuid, Option<String>>,
+  /// Expected local Baidu OCR secret key refs for merge CAS (service_id -> ref).
+  pub expected_ocr_secret_key_refs: HashMap<Uuid, Option<String>>,
   pub expected_proxy_ref: Option<String>,
 }
 
@@ -56,7 +66,7 @@ pub fn build_validated_plan(
 ) -> Result<ValidatedImportPlan, StorageError> {
   let mut errors = Vec::new();
 
-  // Documents reaching this path are already normalized to v4.
+  // Documents reaching this path are already normalized to the current format version.
   if document.format_version != EXPORT_FORMAT_VERSION {
     errors.push(format!("unsupported formatVersion {}", document.format_version));
   }
@@ -72,6 +82,12 @@ pub fn build_validated_plan(
   reject_duplicate_ids(
     document.integration_instances.iter().map(|i| i.id),
     "integration",
+    &mut errors,
+  );
+  reject_duplicate_ids(document.ocr_services.iter().map(|s| s.id), "ocr service", &mut errors);
+  reject_duplicate_ids(
+    document.ocr_prompt_templates.iter().map(|t| t.id),
+    "ocr prompt template",
     &mut errors,
   );
 
@@ -107,12 +123,15 @@ pub fn build_validated_plan(
     .into_iter()
     .map(|i| (i.id, i))
     .collect();
+  let local_ocr_services: HashMap<Uuid, OcrService> =
+    ocr_services::list(conn)?.into_iter().map(|s| (s.id, s)).collect();
   let local_proxy_ref = crate::repositories::app_credentials::get_global_proxy_ref(conn)?;
 
   let doc_provider_ids: HashSet<Uuid> = document.providers.iter().map(|p| p.id).collect();
   let doc_model_ids: HashSet<Uuid> = document.models.iter().map(|m| m.id).collect();
   let doc_profile_ids: HashSet<Uuid> = document.translation_profiles.iter().map(|p| p.id).collect();
   let doc_integration_ids: HashSet<Uuid> = document.integration_instances.iter().map(|i| i.id).collect();
+  let doc_ocr_service_ids: HashSet<Uuid> = document.ocr_services.iter().map(|s| s.id).collect();
 
   // Providers
   for p in &document.providers {
@@ -181,6 +200,46 @@ pub fn build_validated_plan(
     }
   }
 
+  // OCR services + templates
+  let mut ocr_templates_by_service: HashMap<Uuid, Vec<&OcrPromptTemplateExport>> = HashMap::new();
+  for template in &document.ocr_prompt_templates {
+    if !doc_ocr_service_ids.contains(&template.ocr_service_id) {
+      errors.push(format!(
+        "ocr prompt template references missing service {}",
+        template.ocr_service_id
+      ));
+    }
+    ocr_templates_by_service
+      .entry(template.ocr_service_id)
+      .or_default()
+      .push(template);
+  }
+  for service in &document.ocr_services {
+    if let Err(e) = validate_import_ocr_service(
+      service,
+      ocr_templates_by_service
+        .get(&service.id)
+        .map(|v| v.as_slice())
+        .unwrap_or(&[]),
+      &doc_model_ids,
+      &doc_integration_ids,
+      mode,
+      &local_integrations,
+    ) {
+      errors.push(format!("ocr service {}: {e}", service.id));
+    }
+    if mode == ImportConflictMode::Merge {
+      if let Some(local) = local_ocr_services.get(&service.id) {
+        if local.provider_type != service.provider_type {
+          errors.push(format!(
+            "ocr service {} provider_type is immutable (local {:?}, import {:?})",
+            service.id, local.provider_type, service.provider_type
+          ));
+        }
+      }
+    }
+  }
+
   // Settings (pure document rules)
   if let Err(e) = validate_settings_document(&document.app_settings) {
     errors.push(format!("appSettings: {e}"));
@@ -193,11 +252,13 @@ pub fn build_validated_plan(
   let mut model_id_map: HashMap<Uuid, Uuid> = HashMap::new();
   let mut profile_id_map: HashMap<Uuid, Uuid> = HashMap::new();
   let mut integration_id_map: HashMap<Uuid, Uuid> = HashMap::new();
+  let mut ocr_service_id_map: HashMap<Uuid, Uuid> = HashMap::new();
 
   // Counts and ID rewriting for copy mode.
   let mut counts = ImportPreviewCounts::default();
   let mut requires_authentication = Vec::new();
   let mut integration_requires_authentication = Vec::new();
+  let mut ocr_requires_authentication = Vec::new();
 
   match mode {
     ImportConflictMode::Merge => {
@@ -234,6 +295,16 @@ pub fn build_validated_plan(
         // Import never carries credentials; every instance requires re-auth.
         integration_requires_authentication.push(i.id);
       }
+      for service in &document.ocr_services {
+        if local_ocr_services.contains_key(&service.id) {
+          counts.ocr_services_update += 1;
+        } else {
+          counts.ocr_services_create += 1;
+        }
+        if matches!(service.provider_type, OcrProviderType::Baidu) {
+          ocr_requires_authentication.push(service.id);
+        }
+      }
       if let Some(pid) = settings.default_profile_id {
         if !doc_profile_ids.contains(&pid) && !local_profiles.contains_key(&pid) {
           // Self-contained rule: non-null default must resolve in document.
@@ -247,12 +318,22 @@ pub fn build_validated_plan(
           default_profile_cleared = true;
         }
       }
+      if let Some(oid) = settings.default_ocr_service_id {
+        if !doc_ocr_service_ids.contains(&oid) && !local_ocr_services.contains_key(&oid) {
+          errors.push(format!(
+            "default_ocr_service_id {oid} is not present in the import document"
+          ));
+        } else if !doc_ocr_service_ids.contains(&oid) {
+          settings.default_ocr_service_id = None;
+        }
+      }
     }
     ImportConflictMode::Copy => {
       counts.providers_copy = document.providers.len() as u32;
       counts.models_copy = document.models.len() as u32;
       counts.profiles_copy = document.translation_profiles.len() as u32;
       counts.integrations_copy = document.integration_instances.len() as u32;
+      counts.ocr_services_copy = document.ocr_services.len() as u32;
       for p in &document.providers {
         provider_id_map.insert(p.id, new_id());
         if p.credential_kind != CredentialKind::None {
@@ -270,12 +351,26 @@ pub fn build_validated_plan(
         integration_id_map.insert(i.id, new_integration_id);
         integration_requires_authentication.push(new_integration_id);
       }
+      for service in &document.ocr_services {
+        let new_ocr_id = new_id();
+        ocr_service_id_map.insert(service.id, new_ocr_id);
+        if matches!(service.provider_type, OcrProviderType::Baidu) {
+          ocr_requires_authentication.push(new_ocr_id);
+        }
+      }
       if let Some(old_default) = settings.default_profile_id {
         if let Some(new_id) = profile_id_map.get(&old_default) {
           settings.default_profile_id = Some(*new_id);
         } else {
           settings.default_profile_id = None;
           default_profile_cleared = true;
+        }
+      }
+      if let Some(old_default) = settings.default_ocr_service_id {
+        if let Some(new_id) = ocr_service_id_map.get(&old_default) {
+          settings.default_ocr_service_id = Some(*new_id);
+        } else {
+          settings.default_ocr_service_id = None;
         }
       }
     }
@@ -304,6 +399,7 @@ pub fn build_validated_plan(
     validation_errors: errors.clone(),
     requires_authentication,
     integration_requires_authentication,
+    ocr_requires_authentication,
     proxy_requires_authentication,
     default_profile_cleared,
   };
@@ -318,10 +414,14 @@ pub fn build_validated_plan(
       targets: vec![],
       prompt_templates: vec![],
       integrations: vec![],
+      ocr_services: vec![],
+      ocr_prompt_templates: vec![],
       settings,
       provider_cleanup_ids: vec![],
       clear_global_proxy: false,
       expected_provider_refs: HashMap::new(),
+      expected_ocr_api_key_refs: HashMap::new(),
+      expected_ocr_secret_key_refs: HashMap::new(),
       expected_proxy_ref: local_proxy_ref,
     });
   }
@@ -528,13 +628,6 @@ pub fn build_validated_plan(
     }
   }
 
-  // OCR services are not part of configuration export; keep only if still local.
-  if let Some(oid) = settings.default_ocr_service_id {
-    if ocr_services::get(conn, oid).is_err() {
-      settings.default_ocr_service_id = None;
-    }
-  }
-
   // Integrations: structural config only; credentials always empty after import.
   let mut integrations = Vec::new();
   for exported in &document.integration_instances {
@@ -554,6 +647,105 @@ pub fn build_validated_plan(
     integrations.push(integration_from_export(exported, id, created_at, now.clone()));
   }
 
+  // OCR services + templates (secrets always empty after import).
+  let mut ocr_template_id_map: HashMap<Uuid, Uuid> = HashMap::new();
+  if matches!(mode, ImportConflictMode::Copy) {
+    for template in &document.ocr_prompt_templates {
+      ocr_template_id_map.insert(template.id, new_id());
+    }
+  }
+
+  let mut planned_ocr_services = Vec::new();
+  let mut planned_ocr_templates = Vec::new();
+  let mut expected_ocr_api_key_refs = HashMap::new();
+  let mut expected_ocr_secret_key_refs = HashMap::new();
+
+  for exported in &document.ocr_services {
+    let (id, created_at) = match mode {
+      ImportConflictMode::Merge => {
+        if let Some(local) = local_ocr_services.get(&exported.id) {
+          expected_ocr_api_key_refs.insert(exported.id, local.api_key_ref.clone());
+          expected_ocr_secret_key_refs.insert(exported.id, local.secret_key_ref.clone());
+          (exported.id, local.created_at.clone())
+        } else {
+          expected_ocr_api_key_refs.insert(exported.id, None);
+          expected_ocr_secret_key_refs.insert(exported.id, None);
+          (exported.id, exported.created_at.clone())
+        }
+      }
+      ImportConflictMode::Copy => {
+        let new_id = *ocr_service_id_map.get(&exported.id).expect("ocr service map");
+        (new_id, now.clone())
+      }
+    };
+
+    let mut provider_model_id = exported.provider_model_id;
+    let mut default_prompt_template_id = exported.default_prompt_template_id;
+    let mut integration_instance_id = exported.integration_instance_id;
+    if matches!(mode, ImportConflictMode::Copy) {
+      if let Some(old_model) = provider_model_id {
+        provider_model_id = Some(*model_id_map.get(&old_model).expect("ocr model map"));
+      }
+      if let Some(old_template) = default_prompt_template_id {
+        default_prompt_template_id = Some(*ocr_template_id_map.get(&old_template).expect("ocr template map"));
+      }
+      if let Some(old_integration) = integration_instance_id {
+        integration_instance_id = Some(*integration_id_map.get(&old_integration).expect("ocr integration map"));
+      }
+    }
+
+    planned_ocr_services.push(OcrService {
+      id,
+      provider_type: exported.provider_type,
+      display_name: exported.display_name.clone(),
+      enabled: exported.enabled,
+      sort_order: exported.sort_order,
+      baidu_action: exported.baidu_action,
+      api_key_ref: None,
+      secret_key_ref: None,
+      provider_model_id,
+      temperature: exported.temperature,
+      default_prompt_template_id,
+      integration_instance_id,
+      ocr_capability_id: exported.ocr_capability_id.clone(),
+      capability_preferences_version: exported.capability_preferences_version,
+      capability_preferences: exported.capability_preferences.clone(),
+      created_at,
+      updated_at: now.clone(),
+    });
+  }
+
+  for template in &document.ocr_prompt_templates {
+    let (id, ocr_service_id) = match mode {
+      ImportConflictMode::Merge => (template.id, template.ocr_service_id),
+      ImportConflictMode::Copy => (
+        *ocr_template_id_map.get(&template.id).expect("ocr template map"),
+        *ocr_service_id_map
+          .get(&template.ocr_service_id)
+          .expect("ocr service map for template"),
+      ),
+    };
+    planned_ocr_templates.push(OcrPromptTemplateExport {
+      id,
+      ocr_service_id,
+      name: template.name.clone(),
+      system_template: template.system_template.clone(),
+      user_template: template.user_template.clone(),
+      sort_order: template.sort_order,
+    });
+  }
+
+  // Default OCR must resolve after plan apply when non-null.
+  if let Some(oid) = settings.default_ocr_service_id {
+    let exists_in_plan = planned_ocr_services.iter().any(|s| s.id == oid);
+    let exists_local = local_ocr_services.contains_key(&oid);
+    if !exists_in_plan && !exists_local {
+      return Err(StorageError::Validation(format!(
+        "default_ocr_service_id {oid} does not exist"
+      )));
+    }
+  }
+
   Ok(ValidatedImportPlan {
     mode,
     preview,
@@ -563,10 +755,14 @@ pub fn build_validated_plan(
     targets,
     prompt_templates,
     integrations,
+    ocr_services: planned_ocr_services,
+    ocr_prompt_templates: planned_ocr_templates,
     settings,
     provider_cleanup_ids,
     clear_global_proxy,
     expected_provider_refs,
+    expected_ocr_api_key_refs,
+    expected_ocr_secret_key_refs,
     expected_proxy_ref: local_proxy_ref,
   })
 }
@@ -759,6 +955,130 @@ fn validate_import_profile(
       }
       // Integration existence is revalidated when applying v4 documents that include instances.
       let _ = plugin.integration_instance_id;
+    }
+  }
+  Ok(())
+}
+
+fn validate_import_ocr_service(
+  service: &OcrServiceExport,
+  templates: &[&OcrPromptTemplateExport],
+  doc_model_ids: &HashSet<Uuid>,
+  doc_integration_ids: &HashSet<Uuid>,
+  mode: ImportConflictMode,
+  local_integrations: &HashMap<Uuid, IntegrationInstance>,
+) -> Result<(), StorageError> {
+  if service.display_name.trim().is_empty() {
+    return Err(StorageError::Validation("display_name must not be empty".into()));
+  }
+  match service.provider_type {
+    OcrProviderType::Baidu => {
+      if service.baidu_action.is_none() {
+        return Err(StorageError::Validation(
+          "baidu_action is required for baidu OCR".into(),
+        ));
+      }
+      if service.provider_model_id.is_some()
+        || service.default_prompt_template_id.is_some()
+        || service.integration_instance_id.is_some()
+        || service.ocr_capability_id.is_some()
+        || service.capability_preferences_version.is_some()
+        || service.capability_preferences.is_some()
+      {
+        return Err(StorageError::Validation(
+          "baidu OCR must not include ai/plugin fields".into(),
+        ));
+      }
+      if !templates.is_empty() {
+        return Err(StorageError::Validation(
+          "baidu OCR must not include prompt templates".into(),
+        ));
+      }
+    }
+    OcrProviderType::Ai => {
+      let model_id = service
+        .provider_model_id
+        .ok_or_else(|| StorageError::Validation("provider_model_id is required for ai OCR".into()))?;
+      if !doc_model_ids.contains(&model_id) {
+        return Err(StorageError::Validation(format!(
+          "ai OCR references missing model {model_id}"
+        )));
+      }
+      if templates.is_empty() {
+        return Err(StorageError::Validation(
+          "ai OCR requires at least one prompt template".into(),
+        ));
+      }
+      let default_id = service
+        .default_prompt_template_id
+        .ok_or_else(|| StorageError::Validation("default_prompt_template_id is required for ai OCR".into()))?;
+      if !templates.iter().any(|t| t.id == default_id) {
+        return Err(StorageError::Validation(
+          "default_prompt_template_id must reference an OCR prompt template".into(),
+        ));
+      }
+      if service.baidu_action.is_some()
+        || service.integration_instance_id.is_some()
+        || service.ocr_capability_id.is_some()
+        || service.capability_preferences_version.is_some()
+        || service.capability_preferences.is_some()
+      {
+        return Err(StorageError::Validation(
+          "ai OCR must not include baidu/plugin fields".into(),
+        ));
+      }
+    }
+    OcrProviderType::PluginCapability => {
+      let integration_id = service
+        .integration_instance_id
+        .ok_or_else(|| StorageError::Validation("integration_instance_id is required for plugin OCR".into()))?;
+      // Fail closed when the bound integration is absent from the document (and not a surviving local merge).
+      if !doc_integration_ids.contains(&integration_id)
+        && !(mode == ImportConflictMode::Merge && local_integrations.contains_key(&integration_id))
+      {
+        return Err(StorageError::Validation(format!(
+          "plugin OCR references missing integration {integration_id}"
+        )));
+      }
+      let capability_id = service
+        .ocr_capability_id
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| StorageError::Validation("ocr_capability_id is required for plugin OCR".into()))?;
+      if !capability_id.starts_with("ocr.image@") {
+        return Err(StorageError::Validation(
+          "ocr_capability_id must be an ocr.image@N capability".into(),
+        ));
+      }
+      let prefs_version = service
+        .capability_preferences_version
+        .ok_or_else(|| StorageError::Validation("capability_preferences_version is required for plugin OCR".into()))?;
+      if prefs_version != GOOGLE_VISION_PREFERENCES_SCHEMA_VERSION {
+        return Err(StorageError::Validation(format!(
+          "unsupported OCR preferences schema version {prefs_version}"
+        )));
+      }
+      let prefs = service
+        .capability_preferences
+        .as_ref()
+        .ok_or_else(|| StorageError::Validation("capability_preferences is required for plugin OCR".into()))?;
+      // Reuse the save-path validator: known keys via typed parse, operation enum, hint bounds.
+      let typed = parse_ocr_image_preferences(prefs).map_err(StorageError::Validation)?;
+      validate_ocr_image_preferences(&typed).map_err(|e| StorageError::Validation(e.message))?;
+      if service.baidu_action.is_some()
+        || service.provider_model_id.is_some()
+        || service.default_prompt_template_id.is_some()
+      {
+        return Err(StorageError::Validation(
+          "plugin OCR must not include baidu/ai fields".into(),
+        ));
+      }
+      if !templates.is_empty() {
+        return Err(StorageError::Validation(
+          "plugin OCR must not include prompt templates".into(),
+        ));
+      }
     }
   }
   Ok(())

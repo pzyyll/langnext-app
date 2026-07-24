@@ -4,7 +4,8 @@ use crate::cmds::runtime::run_blocking;
 use crate::domain::import_export::{ConfigurationExport, ImportConflictMode, ImportPreview, ImportResult};
 use crate::error::IpcError;
 use crate::events::{
-  MODELS_CHANGED, PROVIDERS_CHANGED, SERVICE_INTEGRATIONS_CHANGED, TRANSLATION_PROFILES_CHANGED, emit_data_changed,
+  APP_SETTINGS_CHANGED, MODELS_CHANGED, OCR_SERVICES_CHANGED, PROVIDERS_CHANGED, SERVICE_INTEGRATIONS_CHANGED,
+  TRANSLATION_PROFILES_CHANGED, emit_data_changed,
 };
 use crate::state::AppState;
 use tauri::{AppHandle, State};
@@ -37,12 +38,14 @@ pub async fn import_configuration(
 ) -> Result<ImportResult, IpcError> {
   let service = state.import_export.clone();
   let result = run_blocking("import_configuration", move || service.import_raw(document, mode)).await?;
-  // Import may replace or merge providers, models, profiles, and integrations.
+  // Import may replace or merge providers, models, profiles, integrations, and OCR services.
   if result.applied {
     emit_data_changed(&app, PROVIDERS_CHANGED);
     emit_data_changed(&app, MODELS_CHANGED);
     emit_data_changed(&app, TRANSLATION_PROFILES_CHANGED);
     emit_data_changed(&app, SERVICE_INTEGRATIONS_CHANGED);
+    emit_data_changed(&app, OCR_SERVICES_CHANGED);
+    emit_data_changed(&app, APP_SETTINGS_CHANGED);
   }
   Ok(result)
 }

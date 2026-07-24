@@ -1,7 +1,7 @@
 // ABOUTME: Pure helpers for post-import Query invalidation and re-auth warnings.
 // ABOUTME: Keeps settings route free of import acceptance branching logic.
 import type { QueryClient } from "@tanstack/react-query";
-import { integrationKeys, modelKeys, profileKeys, providerKeys } from "../../query/keys";
+import { integrationKeys, modelKeys, ocrKeys, profileKeys, providerKeys, settingsKeys } from "../../query/keys";
 import type { ImportPreview } from "../../storage/types";
 
 /** Query prefixes that must refresh after a successful configuration import. */
@@ -10,9 +10,11 @@ export const IMPORT_INVALIDATION_KEYS = [
   modelKeys.all,
   profileKeys.all,
   integrationKeys.all,
+  ocrKeys.all,
+  settingsKeys.all,
 ] as const;
 
-/** Invalidate provider/model/profile/integration Query prefixes after import. */
+/** Invalidate provider/model/profile/integration/OCR Query prefixes after import. */
 export function invalidateAfterConfigurationImport(queryClient: QueryClient): void {
   for (const queryKey of IMPORT_INVALIDATION_KEYS) {
     void queryClient.invalidateQueries({ queryKey });
@@ -23,11 +25,20 @@ export function invalidateAfterConfigurationImport(queryClient: QueryClient): vo
 export function importRequiresAuthentication(
   preview: Pick<
     ImportPreview,
-    "requiresAuthentication" | "integrationRequiresAuthentication" | "proxyRequiresAuthentication"
+    | "requiresAuthentication"
+    | "integrationRequiresAuthentication"
+    | "ocrRequiresAuthentication"
+    | "proxyRequiresAuthentication"
   >,
 ): boolean {
   const integrationNeedsAuth = (preview.integrationRequiresAuthentication ?? []).length > 0;
-  return preview.requiresAuthentication.length > 0 || integrationNeedsAuth || preview.proxyRequiresAuthentication;
+  const ocrNeedsAuth = (preview.ocrRequiresAuthentication ?? []).length > 0;
+  return (
+    preview.requiresAuthentication.length > 0 ||
+    integrationNeedsAuth ||
+    ocrNeedsAuth ||
+    preview.proxyRequiresAuthentication
+  );
 }
 
 /**
@@ -37,16 +48,24 @@ export function importRequiresAuthentication(
 export function importAuthWarningKind(
   preview: Pick<
     ImportPreview,
-    "requiresAuthentication" | "integrationRequiresAuthentication" | "proxyRequiresAuthentication"
+    | "requiresAuthentication"
+    | "integrationRequiresAuthentication"
+    | "ocrRequiresAuthentication"
+    | "proxyRequiresAuthentication"
   >,
-): "none" | "providers" | "integrations" | "both" {
+): "none" | "providers" | "integrations" | "ocr" | "mixed" {
   const providersNeedAuth = preview.requiresAuthentication.length > 0 || preview.proxyRequiresAuthentication;
   const integrationsNeedAuth = (preview.integrationRequiresAuthentication ?? []).length > 0;
-  if (providersNeedAuth && integrationsNeedAuth) {
-    return "both";
+  const ocrNeedsAuth = (preview.ocrRequiresAuthentication ?? []).length > 0;
+  const kindCount = [providersNeedAuth, integrationsNeedAuth, ocrNeedsAuth].filter(Boolean).length;
+  if (kindCount > 1) {
+    return "mixed";
   }
   if (integrationsNeedAuth) {
     return "integrations";
+  }
+  if (ocrNeedsAuth) {
+    return "ocr";
   }
   if (providersNeedAuth) {
     return "providers";

@@ -18,6 +18,7 @@ pub const MIGRATIONS: &[&str] = &[
   include_str!("../../migrations/0011_provider_transport_contract.sql"),
   include_str!("../../migrations/0012_service_integrations.sql"),
   include_str!("../../migrations/0013_translation_profile_engines.sql"),
+  include_str!("../../migrations/0014_ocr_service_integration_binding.sql"),
 ];
 
 pub fn latest_version() -> i32 {
@@ -216,6 +217,15 @@ mod tests {
       )
       .unwrap();
     assert_eq!(has_integration_col, 1);
+    // v14 OCR plugin binding columns exist on a fresh database.
+    let has_ocr_integration_col: i64 = conn
+      .query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('ocr_services') WHERE name = 'integration_instance_id'",
+        [],
+        |r| r.get(0),
+      )
+      .unwrap();
+    assert_eq!(has_ocr_integration_col, 1);
   }
 
   #[test]
@@ -243,7 +253,7 @@ mod tests {
       .unwrap();
 
     migrate(&mut conn).unwrap();
-    assert_eq!(read_user_version(&conn).unwrap(), 13);
+    assert_eq!(read_user_version(&conn).unwrap(), latest_version());
 
     let (
       engine_kind,
@@ -314,6 +324,91 @@ mod tests {
     assert_eq!(created_at, "t0");
     assert_eq!(updated_at, "t1");
     assert!(integration_instance_id.is_none());
+  }
+
+  #[test]
+  fn migrate_v13_to_v14_preserves_ocr_rows_and_adds_plugin_columns() {
+    let mut conn = Connection::open_in_memory().unwrap();
+    migrate_with(&mut conn, &MIGRATIONS[..13]).unwrap();
+    assert_eq!(read_user_version(&conn).unwrap(), 13);
+
+    conn
+      .execute(
+        "INSERT INTO ocr_services (
+          id, provider_type, display_name, enabled, sort_order,
+          baidu_action, api_key_ref, secret_key_ref,
+          provider_model_id, temperature, default_prompt_template_id,
+          created_at, updated_at
+        ) VALUES (
+          'ocr-baidu-1', 'baidu', 'Baidu OCR', 1, 0,
+          'accurate', 'ocr/api', 'ocr/secret',
+          NULL, NULL, NULL,
+          't0', 't1'
+        )",
+        [],
+      )
+      .unwrap();
+
+    migrate(&mut conn).unwrap();
+    assert_eq!(read_user_version(&conn).unwrap(), latest_version());
+
+    let has_integration_col: i64 = conn
+      .query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('ocr_services') WHERE name = 'integration_instance_id'",
+        [],
+        |r| r.get(0),
+      )
+      .unwrap();
+    assert_eq!(has_integration_col, 1);
+
+    let (
+      provider_type,
+      display_name,
+      baidu_action,
+      api_key_ref,
+      integration_instance_id,
+      ocr_capability_id,
+      capability_preferences_version,
+      capability_preferences_json,
+    ): (
+      String,
+      String,
+      Option<String>,
+      Option<String>,
+      Option<String>,
+      Option<String>,
+      Option<i64>,
+      Option<String>,
+    ) = conn
+      .query_row(
+        "SELECT provider_type, display_name, baidu_action, api_key_ref,
+                integration_instance_id, ocr_capability_id,
+                capability_preferences_version, capability_preferences_json
+         FROM ocr_services WHERE id = 'ocr-baidu-1'",
+        [],
+        |r| {
+          Ok((
+            r.get(0)?,
+            r.get(1)?,
+            r.get(2)?,
+            r.get(3)?,
+            r.get(4)?,
+            r.get(5)?,
+            r.get(6)?,
+            r.get(7)?,
+          ))
+        },
+      )
+      .unwrap();
+
+    assert_eq!(provider_type, "baidu");
+    assert_eq!(display_name, "Baidu OCR");
+    assert_eq!(baidu_action.as_deref(), Some("accurate"));
+    assert_eq!(api_key_ref.as_deref(), Some("ocr/api"));
+    assert!(integration_instance_id.is_none());
+    assert!(ocr_capability_id.is_none());
+    assert!(capability_preferences_version.is_none());
+    assert!(capability_preferences_json.is_none());
   }
 
   #[test]

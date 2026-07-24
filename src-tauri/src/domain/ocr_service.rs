@@ -1,19 +1,24 @@
 // ABOUTME: OCR service domain entities, write inputs, and sanitized DTOs.
 // ABOUTME: Vault refs and secrets never appear on IPC DTOs.
 use crate::domain::provider::CredentialUpdate;
+use crate::domain::service_capability::{OcrImageOperation, OcrImagePreferences};
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 use uuid::Uuid;
 
 /// Maximum length for OCR service display names.
 pub const OCR_DISPLAY_NAME_MAX_LEN: usize = 128;
 /// Maximum length for OCR AI prompt template names.
 pub const OCR_PROMPT_TEMPLATE_NAME_MAX_LEN: usize = 64;
+/// Google Vision OCR preferences schema version (v1: operation + languageHints).
+pub const GOOGLE_VISION_PREFERENCES_SCHEMA_VERSION: i32 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OcrProviderType {
   Baidu,
   Ai,
+  PluginCapability,
 }
 
 impl OcrProviderType {
@@ -21,6 +26,7 @@ impl OcrProviderType {
     match self {
       Self::Baidu => "baidu",
       Self::Ai => "ai",
+      Self::PluginCapability => "plugin_capability",
     }
   }
 
@@ -28,6 +34,7 @@ impl OcrProviderType {
     match value {
       "baidu" => Ok(Self::Baidu),
       "ai" => Ok(Self::Ai),
+      "plugin_capability" => Ok(Self::PluginCapability),
       other => Err(format!("invalid ocr provider_type: {other}")),
     }
   }
@@ -63,6 +70,19 @@ impl BaiduOcrAction {
   }
 }
 
+/// Default Google Vision OCR preferences for schema v1.
+pub fn default_google_vision_preferences() -> Value {
+  json!({
+    "operation": "document_text_detection",
+    "languageHints": [],
+  })
+}
+
+/// Parse stored preferences JSON into typed OCR image preferences.
+pub fn parse_ocr_image_preferences(value: &Value) -> Result<OcrImagePreferences, String> {
+  serde_json::from_value(value.clone()).map_err(|e| format!("invalid OCR preferences: {e}"))
+}
+
 /// Internal OCR service row including opaque vault references.
 #[derive(Debug, Clone, PartialEq)]
 pub struct OcrService {
@@ -77,6 +97,14 @@ pub struct OcrService {
   pub provider_model_id: Option<Uuid>,
   pub temperature: Option<f64>,
   pub default_prompt_template_id: Option<Uuid>,
+  /// Plugin-only: integration instance binding.
+  pub integration_instance_id: Option<Uuid>,
+  /// Plugin-only: capability id (e.g. `ocr.image@1`).
+  pub ocr_capability_id: Option<String>,
+  /// Plugin-only: preferences schema version.
+  pub capability_preferences_version: Option<i32>,
+  /// Plugin-only: preferences JSON object.
+  pub capability_preferences: Option<Value>,
   pub created_at: String,
   pub updated_at: String,
 }
@@ -111,16 +139,28 @@ pub struct OcrServiceDto {
   pub display_name: String,
   pub enabled: bool,
   pub sort_order: i32,
-  /// Baidu only; null for ai.
+  /// Baidu only; null for ai / plugin.
   pub baidu_action: Option<BaiduOcrAction>,
   pub has_api_key: bool,
   pub has_secret_key: bool,
-  /// AI only; null for baidu.
+  /// AI only; null for baidu / plugin.
   pub provider_model_id: Option<Uuid>,
   pub temperature: Option<f64>,
   pub default_prompt_template_id: Option<Uuid>,
-  /// Empty for baidu; ordered templates for ai.
+  /// Empty for baidu / plugin; ordered templates for ai.
   pub prompt_templates: Vec<OcrPromptTemplate>,
+  /// Plugin only; null for baidu / ai.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub integration_instance_id: Option<Uuid>,
+  /// Plugin only; null for baidu / ai.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub ocr_capability_id: Option<String>,
+  /// Plugin only; null for baidu / ai.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub capability_preferences_version: Option<i32>,
+  /// Plugin only; null for baidu / ai.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub capability_preferences: Option<Value>,
   pub created_at: String,
   pub updated_at: String,
 }
@@ -140,6 +180,10 @@ impl OcrServiceDto {
       temperature: service.temperature,
       default_prompt_template_id: service.default_prompt_template_id,
       prompt_templates,
+      integration_instance_id: service.integration_instance_id,
+      ocr_capability_id: service.ocr_capability_id.clone(),
+      capability_preferences_version: service.capability_preferences_version,
+      capability_preferences: service.capability_preferences.clone(),
       created_at: service.created_at.clone(),
       updated_at: service.updated_at.clone(),
     }
@@ -155,6 +199,9 @@ pub struct OcrRecognizeInput {
   /// Explicit service; when null/absent the app settings default is used.
   #[serde(default)]
   pub ocr_service_id: Option<Uuid>,
+  /// Optional client request id for cancellation via the shared session registry.
+  #[serde(default)]
+  pub request_id: Option<String>,
 }
 
 /// Recognized plain text from an OCR service.
@@ -187,12 +234,32 @@ pub struct OcrServiceWrite {
   pub temperature: Option<f64>,
   #[serde(default)]
   pub default_prompt_template_id: Option<Uuid>,
-  /// Full ordered list; required for ai (≥1). Empty/ignored for baidu.
+  /// Full ordered list; required for ai (≥1). Empty/ignored for baidu / plugin.
   #[serde(default)]
   pub prompt_templates: Vec<OcrPromptTemplate>,
+  /// Plugin required on plugin writes.
+  #[serde(default)]
+  pub integration_instance_id: Option<Uuid>,
+  /// Plugin required on plugin writes (e.g. `ocr.image@1`).
+  #[serde(default)]
+  pub ocr_capability_id: Option<String>,
+  /// Plugin required on plugin writes.
+  #[serde(default)]
+  pub capability_preferences_version: Option<i32>,
+  /// Plugin required on plugin writes (JSON object).
+  #[serde(default)]
+  pub capability_preferences: Option<Value>,
   /// Required on update.
   #[serde(default)]
   pub expected_updated_at: Option<String>,
+}
+
+/// Build a default typed preferences object for Google Vision schema v1.
+pub fn default_ocr_image_preferences() -> OcrImagePreferences {
+  OcrImagePreferences {
+    operation: OcrImageOperation::DocumentTextDetection,
+    language_hints: vec![],
+  }
 }
 
 #[cfg(test)]
@@ -214,6 +281,10 @@ mod tests {
       provider_model_id: None,
       temperature: None,
       default_prompt_template_id: None,
+      integration_instance_id: None,
+      ocr_capability_id: None,
+      capability_preferences_version: None,
+      capability_preferences: None,
       created_at: now_rfc3339(),
       updated_at: now_rfc3339(),
     };
@@ -233,5 +304,24 @@ mod tests {
     assert_eq!(value, serde_json::json!("accurate_basic"));
     let parsed: BaiduOcrAction = serde_json::from_value(value).unwrap();
     assert_eq!(parsed, BaiduOcrAction::AccurateBasic);
+  }
+
+  #[test]
+  fn plugin_provider_type_roundtrip() {
+    assert_eq!(OcrProviderType::PluginCapability.as_str(), "plugin_capability");
+    assert_eq!(
+      OcrProviderType::parse("plugin_capability").unwrap(),
+      OcrProviderType::PluginCapability
+    );
+  }
+
+  #[test]
+  fn default_google_vision_preferences_shape() {
+    let prefs = default_google_vision_preferences();
+    assert_eq!(prefs["operation"], "document_text_detection");
+    assert_eq!(prefs["languageHints"], json!([]));
+    let typed = parse_ocr_image_preferences(&prefs).unwrap();
+    assert_eq!(typed.operation, OcrImageOperation::DocumentTextDetection);
+    assert!(typed.language_hints.is_empty());
   }
 }

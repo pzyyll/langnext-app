@@ -1,5 +1,5 @@
-// ABOUTME: Frontend OCR recognition for AI providers via plugins; Baidu stays native.
-// ABOUTME: Builds multimodal chat with plugin wire format and raw providerFetch transport.
+// ABOUTME: Frontend OCR recognition: AI via provider plugins; Baidu + plugin via Rust IPC.
+// ABOUTME: Backend recognize_ocr dispatches Baidu native and plugin_capability (Vision).
 import {
   getAppSettings,
   getOcrService,
@@ -43,6 +43,22 @@ async function resolveOcrService(ocrServiceId?: string | null): Promise<OcrServi
     throw new Error("default OCR service is not configured");
   }
   return getOcrService(settings.defaultOcrServiceId);
+}
+
+/**
+ * Native/backend OCR path. Used for Baidu and plugin_capability (Vision).
+ * IPC command is still named recognize_ocr; client helper keeps historical name.
+ */
+async function recognizeNativeOcr(
+  service: OcrServiceDto,
+  pngBase64: string,
+  requestId?: string | null,
+): Promise<OcrRecognizeResult> {
+  return recognizeBaiduOcr({
+    pngBase64,
+    ocrServiceId: service.id,
+    requestId: requestId ?? newClientRequestId("ocr"),
+  });
 }
 
 async function recognizeAiOcr(
@@ -118,7 +134,9 @@ async function recognizeAiOcr(
 }
 
 /**
- * Recognize OCR text. Baidu uses native Rust; AI uses frontend provider plugins.
+ * Recognize OCR text.
+ * - baidu / plugin_capability → Rust `recognize_ocr` (native Baidu or Vision plugin)
+ * - ai → frontend provider plugin multimodal chat
  */
 export async function recognizeOcrFlow(input: OcrRecognizeInput): Promise<OcrRecognizeResult> {
   const pngBase64 = input.pngBase64.trim();
@@ -127,11 +145,8 @@ export async function recognizeOcrFlow(input: OcrRecognizeInput): Promise<OcrRec
   }
 
   const service = await resolveOcrService(input.ocrServiceId);
-  if (service.providerType === "baidu") {
-    return recognizeBaiduOcr({
-      pngBase64,
-      ocrServiceId: service.id,
-    });
+  if (service.providerType === "baidu" || service.providerType === "plugin_capability") {
+    return recognizeNativeOcr(service, pngBase64, input.requestId);
   }
 
   try {

@@ -3,7 +3,7 @@
 use crate::domain::cancel::CancelToken;
 use crate::domain::service_capability::{
   CapabilityError, CapabilityErrorCode, DetectLanguageRequest, DetectLanguageResponse, ExecutionContext,
-  TranslateTextRequest, TranslateTextResponse,
+  OCR_IMAGE_CAPABILITY_ID, OcrImageRequest, OcrImageResponse, TranslateTextRequest, TranslateTextResponse,
 };
 use crate::domain::service_integration::IntegrationHealthStatus;
 use crate::error::StorageError;
@@ -24,6 +24,7 @@ use uuid::Uuid;
 pub enum CapabilityHandler {
   TranslateText(Arc<dyn TranslateTextCapability>),
   DetectLanguage(Arc<dyn DetectLanguageCapability>),
+  OcrImage(Arc<dyn OcrImageCapability>),
 }
 
 /// Typed translate-text capability contract.
@@ -46,6 +47,16 @@ pub trait DetectLanguageCapability: Send + Sync + 'static {
   ) -> Pin<Box<dyn Future<Output = Result<DetectLanguageResponse, CapabilityError>> + Send + '_>>;
 }
 
+/// Typed image OCR capability contract.
+pub trait OcrImageCapability: Send + Sync + 'static {
+  fn recognize(
+    &self,
+    instance_id: Uuid,
+    request: OcrImageRequest,
+    context: ExecutionContext,
+  ) -> Pin<Box<dyn Future<Output = Result<OcrImageResponse, CapabilityError>> + Send + '_>>;
+}
+
 impl TranslateTextCapability for GoogleCloudCapabilities {
   fn translate(
     &self,
@@ -65,6 +76,17 @@ impl DetectLanguageCapability for GoogleCloudCapabilities {
     context: ExecutionContext,
   ) -> Pin<Box<dyn Future<Output = Result<DetectLanguageResponse, CapabilityError>> + Send + '_>> {
     Box::pin(async move { self.detect_language(instance_id, request, context).await })
+  }
+}
+
+impl OcrImageCapability for GoogleCloudCapabilities {
+  fn recognize(
+    &self,
+    instance_id: Uuid,
+    request: OcrImageRequest,
+    context: ExecutionContext,
+  ) -> Pin<Box<dyn Future<Output = Result<OcrImageResponse, CapabilityError>> + Send + '_>> {
+    Box::pin(async move { self.ocr_image(instance_id, request, context).await })
   }
 }
 
@@ -94,7 +116,7 @@ impl ServiceCapabilityRegistry {
     self.handlers.get(&(plugin_id.to_string(), capability_id.to_string()))
   }
 
-  /// Build the production registry with Google Cloud Translate/Detect handlers.
+  /// Build the production registry with Google Cloud Translate/Detect/OCR handlers.
   pub fn with_google_cloud(google: Arc<GoogleCloudCapabilities>) -> Self {
     let mut registry = Self::new();
     registry.register(
@@ -105,7 +127,12 @@ impl ServiceCapabilityRegistry {
     registry.register(
       crate::domain::service_integration::GOOGLE_CLOUD_PLUGIN_ID,
       GOOGLE_DETECT_LANGUAGE_CAPABILITY_ID,
-      CapabilityHandler::DetectLanguage(google),
+      CapabilityHandler::DetectLanguage(google.clone()),
+    );
+    registry.register(
+      crate::domain::service_integration::GOOGLE_CLOUD_PLUGIN_ID,
+      OCR_IMAGE_CAPABILITY_ID,
+      CapabilityHandler::OcrImage(google),
     );
     registry
   }
@@ -170,6 +197,25 @@ impl ServiceCapabilityService {
     }
   }
 
+  /// Look up an OCR image handler after verifying instance/plugin/capability state.
+  pub fn resolve_ocr(
+    &self,
+    instance_id: Uuid,
+    capability_id: &str,
+  ) -> Result<Arc<dyn OcrImageCapability>, CapabilityError> {
+    let handler = self.resolve_handler(instance_id, capability_id)?;
+    match handler {
+      CapabilityHandler::OcrImage(h) => Ok(h),
+      _ => Err(
+        CapabilityError::new(
+          CapabilityErrorCode::PermissionDenied,
+          "capability handler type mismatch",
+        )
+        .with_capability_id(capability_id),
+      ),
+    }
+  }
+
   fn resolve_handler(&self, instance_id: Uuid, capability_id: &str) -> Result<CapabilityHandler, CapabilityError> {
     let instance = self
       .db
@@ -211,12 +257,28 @@ impl ServiceCapabilityService {
       );
     }
 
-    // Unconfigured instances must not execute.
-    if matches!(instance.health_status, IntegrationHealthStatus::Unconfigured) {
-      return Err(CapabilityError::new(
-        CapabilityErrorCode::InvalidConfiguration,
-        "integration instance is unconfigured",
-      ));
+    // Execution requires a ready instance (unconfigured/unvalidated/degraded fail closed).
+    // Capability-specific IAM failures still surface as permission_denied from the provider call.
+    match instance.health_status {
+      IntegrationHealthStatus::Ready => {}
+      IntegrationHealthStatus::Unconfigured => {
+        return Err(CapabilityError::new(
+          CapabilityErrorCode::InvalidConfiguration,
+          "integration instance is unconfigured",
+        ));
+      }
+      IntegrationHealthStatus::Unvalidated => {
+        return Err(CapabilityError::new(
+          CapabilityErrorCode::InvalidConfiguration,
+          "integration instance is not validated",
+        ));
+      }
+      IntegrationHealthStatus::Degraded => {
+        return Err(CapabilityError::new(
+          CapabilityErrorCode::ProviderUnavailable,
+          "integration instance is degraded",
+        ));
+      }
     }
 
     self
@@ -297,7 +359,7 @@ mod tests {
         &IntegrationInstance {
           id,
           plugin_id: GOOGLE_CLOUD_PLUGIN_ID.into(),
-          plugin_version: "1.0.0".into(),
+          plugin_version: "1.1.0".into(),
           display_name: "Test".into(),
           enabled,
           config_json: serde_json::to_string(&config).unwrap(),
@@ -345,7 +407,7 @@ mod tests {
     db.initialize().unwrap();
     let id = seed_instance(&db, true, IntegrationHealthStatus::Ready);
     let svc = service(db);
-    let err = match svc.resolve_translate(id, "ocr.image@1") {
+    let err = match svc.resolve_translate(id, "speech.audio@1") {
       Ok(_) => panic!("expected missing capability rejection"),
       Err(e) => e,
     };
@@ -382,6 +444,26 @@ mod tests {
   }
 
   #[test]
+  fn service_capability_lookup_rejects_unvalidated_and_degraded() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::new(dir.path()).unwrap();
+    db.initialize().unwrap();
+    let unvalidated = seed_instance(&db, true, IntegrationHealthStatus::Unvalidated);
+    let degraded = seed_instance(&db, true, IntegrationHealthStatus::Degraded);
+    let svc = service(db);
+    let err = svc
+      .resolve_ocr(unvalidated, OCR_IMAGE_CAPABILITY_ID)
+      .err()
+      .expect("unvalidated must fail");
+    assert_eq!(err.code, CapabilityErrorCode::InvalidConfiguration);
+    let err = svc
+      .resolve_ocr(degraded, OCR_IMAGE_CAPABILITY_ID)
+      .err()
+      .expect("degraded must fail");
+    assert_eq!(err.code, CapabilityErrorCode::ProviderUnavailable);
+  }
+
+  #[test]
   fn service_capability_lookup_returns_translate_handler() {
     let dir = tempfile::tempdir().unwrap();
     let db = Database::new(dir.path()).unwrap();
@@ -390,5 +472,21 @@ mod tests {
     let svc = service(db);
     assert!(svc.resolve_translate(id, GOOGLE_TRANSLATE_TEXT_CAPABILITY_ID).is_ok());
     assert!(svc.resolve_detect(id, GOOGLE_DETECT_LANGUAGE_CAPABILITY_ID).is_ok());
+  }
+
+  #[test]
+  fn service_capability_lookup_returns_ocr_handler() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::new(dir.path()).unwrap();
+    db.initialize().unwrap();
+    let id = seed_instance(&db, true, IntegrationHealthStatus::Ready);
+    let svc = service(db);
+    assert!(svc.resolve_ocr(id, OCR_IMAGE_CAPABILITY_ID).is_ok());
+    // OCR handler must not resolve as translate.
+    let err = match svc.resolve_translate(id, OCR_IMAGE_CAPABILITY_ID) {
+      Ok(_) => panic!("expected type mismatch for ocr as translate"),
+      Err(e) => e,
+    };
+    assert_eq!(err.code, CapabilityErrorCode::PermissionDenied);
   }
 }

@@ -20,16 +20,32 @@
 
 ## Required Product Gate
 
-Lock these before implementation:
+**Status: locked (2026-07-24)**
 
-1. Initial operation set: `TEXT_DETECTION`, `DOCUMENT_TEXT_DETECTION`, or both.
-2. Default operation.
-3. Supported language-hint UI and maximum hint count.
-4. Maximum image dimensions/encoded bytes and downscale policy.
-5. Narrowest Google OAuth scope supporting Vision annotate.
-6. Whether export v5 should include all existing Baidu/AI OCR configurations (recommended for consistency).
+| #   | Decision          | Locked value                                                                                                                                                                                                     |
+| --- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Operation set     | Both `TEXT_DETECTION` and `DOCUMENT_TEXT_DETECTION`                                                                                                                                                              |
+| 2   | Default operation | `DOCUMENT_TEXT_DETECTION` (dense UI/screenshot text)                                                                                                                                                             |
+| 3   | Language hints    | Optional multi-select from app language IDs, mapped to Google OCR BCP-47 codes; max **3** hints; empty list = auto; unknown IDs rejected on save; provider unsupported-hint errors map to `unsupported_language` |
+| 4   | Image limits      | Decoded PNG max **8 MiB**; max edge **10_000** px; max pixels **40_000_000**; no downscale — reject locally with `unsupported_input`                                                                             |
+| 5   | OAuth scope       | `https://www.googleapis.com/auth/cloud-vision` (not `cloud-platform`)                                                                                                                                            |
+| 6   | Export v5 OCR     | Include **all** Baidu / AI / plugin OCR services and AI prompt templates; omit all secrets/refs                                                                                                                  |
+| —   | REST              | `POST https://vision.googleapis.com/v1/images:annotate` via pinned `vision` endpoint alias                                                                                                                       |
+| —   | Result shape      | Plain text only (`fullTextAnnotation.text` preferred, else `textAnnotations[0].description`); no blocks/layout/confidence in this phase                                                                          |
 
-If these decisions are not locked, do not begin Phase 3 implementation.
+Named constants (implementation):
+
+```text
+OCR_IMAGE_CAPABILITY_ID = ocr.image@1
+GOOGLE_CLOUD_VISION_SCOPE = https://www.googleapis.com/auth/cloud-vision
+GOOGLE_VISION_ENDPOINT_ALIAS = vision
+GOOGLE_VISION_ANNOTATE_PATH = v1/images:annotate
+OCR_IMAGE_MAX_DECODED_BYTES = 8 * 1024 * 1024
+OCR_IMAGE_MAX_EDGE_PX = 10_000
+OCR_IMAGE_MAX_PIXELS = 40_000_000
+OCR_LANGUAGE_HINTS_MAX = 3
+GOOGLE_VISION_PREFERENCES_SCHEMA_VERSION = 1
+```
 
 ## File Map
 
@@ -78,12 +94,12 @@ If these decisions are not locked, do not begin Phase 3 implementation.
 
 **Steps:**
 
-- [ ] Confirm supported operation enum and default.
-- [ ] Confirm language-hint source, maximum count, normalization, and behavior for unsupported hints.
-- [ ] Name max encoded bytes, decoded dimensions/pixels, and optional downscale constants.
-- [ ] Confirm REST endpoint/method and narrow OAuth scope from current Google documentation.
-- [ ] Confirm v5 export includes all OCR service structures and omits all OCR/integration secrets.
-- [ ] Confirm Vision results return plain text only in this phase; blocks/layout/confidence are out of scope unless explicitly required.
+- [x] Confirm supported operation enum and default.
+- [x] Confirm language-hint source, maximum count, normalization, and behavior for unsupported hints.
+- [x] Name max encoded bytes, decoded dimensions/pixels, and optional downscale constants.
+- [x] Confirm REST endpoint/method and narrow OAuth scope from current Google documentation.
+- [x] Confirm v5 export includes all OCR service structures and omits all OCR/integration secrets.
+- [x] Confirm Vision results return plain text only in this phase; blocks/layout/confidence are out of scope unless explicitly required.
 
 **Validation:**
 

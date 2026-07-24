@@ -251,9 +251,18 @@ export interface PromptTemplate {
   userTemplate: string;
 }
 
-export type OcrProviderType = "baidu" | "ai";
+export type OcrProviderType = "baidu" | "ai" | "plugin_capability";
 
 export type BaiduOcrAction = "accurate" | "accurate_basic" | "general" | "general_basic";
+
+/** Google Vision OCR operation for ocr.image@1 preferences v1. */
+export type OcrImageOperation = "document_text_detection" | "text_detection";
+
+/** Runtime preferences for plugin OCR (ocr.image@1 schema v1). */
+export interface OcrCapabilityPreferencesV1 {
+  operation?: OcrImageOperation | string;
+  languageHints?: string[];
+}
 
 /** One named prompt template belonging to an AI OCR service. */
 export interface OcrPromptTemplate {
@@ -270,16 +279,24 @@ export interface OcrServiceDto {
   displayName: string;
   enabled: boolean;
   sortOrder: number;
-  /** Baidu only; null for ai. */
+  /** Baidu only; null for ai / plugin. */
   baiduAction: BaiduOcrAction | null;
   hasApiKey: boolean;
   hasSecretKey: boolean;
-  /** AI only; null for baidu. */
+  /** AI only; null for baidu / plugin. */
   providerModelId: string | null;
   temperature: number | null;
   defaultPromptTemplateId: string | null;
-  /** Empty for baidu. */
+  /** Empty for baidu / plugin. */
   promptTemplates: OcrPromptTemplate[];
+  /** Plugin only; null for baidu / ai. */
+  integrationInstanceId?: string | null;
+  /** Plugin only; null for baidu / ai. */
+  ocrCapabilityId?: string | null;
+  /** Plugin only; null for baidu / ai. */
+  capabilityPreferencesVersion?: number | null;
+  /** Plugin only; null for baidu / ai. */
+  capabilityPreferences?: OcrCapabilityPreferencesV1 | Record<string, unknown> | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -297,8 +314,16 @@ export interface OcrServiceWrite {
   providerModelId?: string | null;
   temperature?: number | null;
   defaultPromptTemplateId?: string | null;
-  /** Full ordered list; required for ai (≥1). Empty for baidu. */
+  /** Full ordered list; required for ai (≥1). Empty for baidu / plugin. */
   promptTemplates?: OcrPromptTemplate[];
+  /** Plugin required on plugin writes. */
+  integrationInstanceId?: string | null;
+  /** Plugin required on plugin writes (e.g. ocr.image@1). */
+  ocrCapabilityId?: string | null;
+  /** Plugin required on plugin writes. */
+  capabilityPreferencesVersion?: number | null;
+  /** Plugin required on plugin writes. */
+  capabilityPreferences?: OcrCapabilityPreferencesV1 | Record<string, unknown> | null;
   /** Required on update. */
   expectedUpdatedAt?: string | null;
 }
@@ -309,6 +334,8 @@ export interface OcrRecognizeInput {
   pngBase64: string;
   /** Explicit service; omit/null to use app settings default. */
   ocrServiceId?: string | null;
+  /** Optional client request id for cancellation via the shared session registry. */
+  requestId?: string | null;
 }
 
 /** Recognized plain text from an OCR service. */
@@ -655,6 +682,35 @@ export interface IntegrationInstanceExport {
   updatedAt: string;
 }
 
+/** Sanitized OCR service for configuration export/import (no vault refs/secrets). */
+export interface OcrServiceExport {
+  id: string;
+  providerType: OcrProviderType;
+  displayName: string;
+  enabled: boolean;
+  sortOrder: number;
+  baiduAction?: BaiduOcrAction | null;
+  providerModelId?: string | null;
+  temperature?: number | null;
+  defaultPromptTemplateId?: string | null;
+  integrationInstanceId?: string | null;
+  ocrCapabilityId?: string | null;
+  capabilityPreferencesVersion?: number | null;
+  capabilityPreferences?: OcrCapabilityPreferencesV1 | Record<string, unknown> | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** AI OCR prompt template row for configuration export/import. */
+export interface OcrPromptTemplateExport {
+  id: string;
+  ocrServiceId: string;
+  name: string;
+  systemTemplate: string;
+  userTemplate: string;
+  sortOrder: number;
+}
+
 export interface ConfigurationExport {
   formatVersion: number;
   exportedAt: string;
@@ -666,6 +722,10 @@ export interface ConfigurationExport {
   profilePromptTemplates: TranslationProfilePromptTemplate[];
   /** Sanitized integration instances (no credentials/refs). */
   integrationInstances?: IntegrationInstanceExport[];
+  /** OCR services (baidu/ai/plugin); secrets omitted. */
+  ocrServices?: OcrServiceExport[];
+  /** Ordered AI OCR prompt templates for all OCR services. */
+  ocrPromptTemplates?: OcrPromptTemplateExport[];
   appSettings: AppSettingsV1;
 }
 
@@ -682,6 +742,9 @@ export interface ImportPreviewCounts {
   integrationsCreate?: number;
   integrationsUpdate?: number;
   integrationsCopy?: number;
+  ocrServicesCreate?: number;
+  ocrServicesUpdate?: number;
+  ocrServicesCopy?: number;
 }
 
 export interface ImportPreview {
@@ -691,6 +754,8 @@ export interface ImportPreview {
   requiresAuthentication: string[];
   /** Integration instance IDs that need credential re-entry after import. */
   integrationRequiresAuthentication?: string[];
+  /** Baidu OCR service IDs that need API/secret re-entry after import. */
+  ocrRequiresAuthentication?: string[];
   proxyRequiresAuthentication: boolean;
   defaultProfileCleared: boolean;
 }

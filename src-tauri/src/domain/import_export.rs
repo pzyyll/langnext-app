@@ -2,6 +2,7 @@
 // ABOUTME: Documents never carry secrets, credential refs, or device state.
 use crate::domain::language_detection::LanguageDetectorConfig;
 use crate::domain::model::ProviderModel;
+use crate::domain::ocr_service::{BaiduOcrAction, OcrProviderType};
 use crate::domain::provider::ProviderExport;
 use crate::domain::settings::AppSettingsV1;
 use crate::domain::translation_profile::{
@@ -9,12 +10,13 @@ use crate::domain::translation_profile::{
   TranslationProfileTarget,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use uuid::Uuid;
 
-/// Current configuration export format version (engine-tagged profiles + integrations).
-pub const EXPORT_FORMAT_VERSION: u32 = 4;
-/// Supported import format versions (normalized sequentially to v4).
-pub const SUPPORTED_EXPORT_FORMAT_VERSIONS: &[u32] = &[2, 3, 4];
+/// Current configuration export format version (OCR services + templates).
+pub const EXPORT_FORMAT_VERSION: u32 = 5;
+/// Supported import format versions (normalized sequentially to v5).
+pub const SUPPORTED_EXPORT_FORMAT_VERSIONS: &[u32] = &[2, 3, 4, 5];
 
 /// Sanitized integration instance row for export/import (no secrets, refs, or journal data).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -34,7 +36,48 @@ pub struct IntegrationInstanceExport {
   pub updated_at: String,
 }
 
-/// Current (v4) configuration export document.
+/// Sanitized OCR service for export/import (no vault refs or secrets).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OcrServiceExport {
+  pub id: Uuid,
+  pub provider_type: OcrProviderType,
+  pub display_name: String,
+  pub enabled: bool,
+  pub sort_order: i32,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub baidu_action: Option<BaiduOcrAction>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub provider_model_id: Option<Uuid>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub temperature: Option<f64>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub default_prompt_template_id: Option<Uuid>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub integration_instance_id: Option<Uuid>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub ocr_capability_id: Option<String>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub capability_preferences_version: Option<i32>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub capability_preferences: Option<Value>,
+  pub created_at: String,
+  pub updated_at: String,
+}
+
+/// AI OCR prompt template row for export/import.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct OcrPromptTemplateExport {
+  pub id: Uuid,
+  pub ocr_service_id: Uuid,
+  pub name: String,
+  pub system_template: String,
+  pub user_template: String,
+  pub sort_order: i32,
+}
+
+/// Current (v5) configuration export document.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfigurationExport {
@@ -49,6 +92,12 @@ pub struct ConfigurationExport {
   /// Sanitized integration instances (no credentials/refs).
   #[serde(default)]
   pub integration_instances: Vec<IntegrationInstanceExport>,
+  /// OCR services (baidu/ai/plugin); secrets omitted.
+  #[serde(default)]
+  pub ocr_services: Vec<OcrServiceExport>,
+  /// Ordered AI OCR prompt templates for all OCR services.
+  #[serde(default)]
+  pub ocr_prompt_templates: Vec<OcrPromptTemplateExport>,
   pub app_settings: AppSettingsV1,
 }
 
@@ -116,6 +165,22 @@ pub struct ConfigurationExportV3 {
   pub app_settings: AppSettingsV1,
 }
 
+/// v4 document shape (engine-tagged profiles + integrations; no OCR arrays).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigurationExportV4 {
+  pub format_version: u32,
+  pub exported_at: String,
+  pub providers: Vec<ProviderExport>,
+  pub models: Vec<ProviderModel>,
+  pub translation_profiles: Vec<TranslationProfile>,
+  pub profile_models: Vec<TranslationProfileTarget>,
+  pub profile_prompt_templates: Vec<TranslationProfilePromptTemplate>,
+  #[serde(default)]
+  pub integration_instances: Vec<IntegrationInstanceExport>,
+  pub app_settings: AppSettingsV1,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ImportConflictMode {
@@ -141,6 +206,12 @@ pub struct ImportPreviewCounts {
   pub integrations_update: u32,
   #[serde(default)]
   pub integrations_copy: u32,
+  #[serde(default)]
+  pub ocr_services_create: u32,
+  #[serde(default)]
+  pub ocr_services_update: u32,
+  #[serde(default)]
+  pub ocr_services_copy: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -154,6 +225,9 @@ pub struct ImportPreview {
   /// Integration instance IDs that need credential re-entry after import.
   #[serde(default)]
   pub integration_requires_authentication: Vec<Uuid>,
+  /// Baidu OCR service IDs that need API/secret re-entry after import.
+  #[serde(default)]
+  pub ocr_requires_authentication: Vec<Uuid>,
   pub proxy_requires_authentication: bool,
   pub default_profile_cleared: bool,
 }
@@ -182,7 +256,7 @@ pub fn normalize_v2_to_v3(mut value: serde_json::Value) -> Result<serde_json::Va
 }
 
 /// Normalize a v3 document value to v4 (flat profiles → engine union, empty integrations).
-pub fn normalize_v3_to_v4(value: serde_json::Value) -> Result<ConfigurationExport, String> {
+pub fn normalize_v3_to_v4(value: serde_json::Value) -> Result<ConfigurationExportV4, String> {
   let v3: ConfigurationExportV3 =
     serde_json::from_value(value).map_err(|e| format!("invalid v3 configuration document: {e}"))?;
   if v3.format_version != 3 {
@@ -191,8 +265,8 @@ pub fn normalize_v3_to_v4(value: serde_json::Value) -> Result<ConfigurationExpor
       v3.format_version
     ));
   }
-  Ok(ConfigurationExport {
-    format_version: EXPORT_FORMAT_VERSION,
+  Ok(ConfigurationExportV4 {
+    format_version: 4,
     exported_at: v3.exported_at,
     providers: v3.providers,
     models: v3.models,
@@ -208,7 +282,32 @@ pub fn normalize_v3_to_v4(value: serde_json::Value) -> Result<ConfigurationExpor
   })
 }
 
-/// Parse an untrusted JSON value into a normalized v4 configuration document.
+/// Normalize a v4 document to v5 (add empty OCR arrays).
+pub fn normalize_v4_to_v5(value: serde_json::Value) -> Result<ConfigurationExport, String> {
+  let v4: ConfigurationExportV4 =
+    serde_json::from_value(value).map_err(|e| format!("invalid v4 configuration document: {e}"))?;
+  if v4.format_version != 4 {
+    return Err(format!(
+      "normalize_v4_to_v5 expects formatVersion 4, got {}",
+      v4.format_version
+    ));
+  }
+  Ok(ConfigurationExport {
+    format_version: EXPORT_FORMAT_VERSION,
+    exported_at: v4.exported_at,
+    providers: v4.providers,
+    models: v4.models,
+    translation_profiles: v4.translation_profiles,
+    profile_models: v4.profile_models,
+    profile_prompt_templates: v4.profile_prompt_templates,
+    integration_instances: v4.integration_instances,
+    ocr_services: Vec::new(),
+    ocr_prompt_templates: Vec::new(),
+    app_settings: v4.app_settings,
+  })
+}
+
+/// Parse an untrusted JSON value into a normalized v5 configuration document.
 pub fn parse_and_normalize_export_document(value: serde_json::Value) -> Result<ConfigurationExport, String> {
   let version = value
     .get("formatVersion")
@@ -220,10 +319,15 @@ pub fn parse_and_normalize_export_document(value: serde_json::Value) -> Result<C
   match version {
     2 => {
       let v3_value = normalize_v2_to_v3(value)?;
-      normalize_v3_to_v4(v3_value)
+      let v4 = normalize_v3_to_v4(v3_value)?;
+      normalize_v4_to_v5(serde_json::to_value(v4).map_err(|e| e.to_string())?)
     }
-    3 => normalize_v3_to_v4(value),
-    4 => serde_json::from_value(value).map_err(|e| format!("invalid v4 configuration document: {e}")),
+    3 => {
+      let v4 = normalize_v3_to_v4(value)?;
+      normalize_v4_to_v5(serde_json::to_value(v4).map_err(|e| e.to_string())?)
+    }
+    4 => normalize_v4_to_v5(value),
+    5 => serde_json::from_value(value).map_err(|e| format!("invalid v5 configuration document: {e}")),
     other => Err(format!("unsupported formatVersion {other}")),
   }
 }
@@ -276,12 +380,16 @@ mod tests {
       profile_models: vec![],
       profile_prompt_templates: vec![],
       integration_instances: vec![],
+      ocr_services: vec![],
+      ocr_prompt_templates: vec![],
       app_settings: AppSettingsV1::default_document(),
     };
     let json = serde_json::to_string(&doc).unwrap();
     assert!(json.contains("formatVersion"));
     assert!(json.contains("profilePromptTemplates"));
     assert!(json.contains("integrationInstances"));
+    assert!(json.contains("ocrServices"));
+    assert!(json.contains("ocrPromptTemplates"));
     assert!(!json.contains("credentialRef"));
     assert!(!json.contains("credential_ref"));
     let back: ConfigurationExport = serde_json::from_str(&json).unwrap();
@@ -353,6 +461,29 @@ mod tests {
         .default_prompt_template_id,
       template_id
     );
+    let v5 = normalize_v4_to_v5(serde_json::to_value(&v4).unwrap()).unwrap();
+    assert_eq!(v5.format_version, 5);
+    assert!(v5.ocr_services.is_empty());
+    assert!(v5.ocr_prompt_templates.is_empty());
+  }
+
+  #[test]
+  fn normalize_v4_to_v5_adds_empty_ocr_arrays() {
+    let v4 = ConfigurationExportV4 {
+      format_version: 4,
+      exported_at: "t".into(),
+      providers: vec![],
+      models: vec![],
+      translation_profiles: vec![],
+      profile_models: vec![],
+      profile_prompt_templates: vec![],
+      integration_instances: vec![],
+      app_settings: AppSettingsV1::default_document(),
+    };
+    let v5 = normalize_v4_to_v5(serde_json::to_value(&v4).unwrap()).unwrap();
+    assert_eq!(v5.format_version, EXPORT_FORMAT_VERSION);
+    assert!(v5.ocr_services.is_empty());
+    assert!(v5.ocr_prompt_templates.is_empty());
   }
 
   #[test]

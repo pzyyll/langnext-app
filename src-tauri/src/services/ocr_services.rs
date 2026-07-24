@@ -2,16 +2,28 @@
 // ABOUTME: Baidu secrets use the crash-safe credential journal; AI rows store model + templates.
 use crate::credentials::coordinator;
 use crate::credentials::{CredentialVault, ocr_api_key_ref, ocr_secret_key_ref};
+use crate::domain::cancel::CancelToken;
+use crate::domain::language_detection::SUPPORTED_LANGUAGES;
 use crate::domain::ocr_service::{
-  BaiduOcrAction, OCR_DISPLAY_NAME_MAX_LEN, OCR_PROMPT_TEMPLATE_NAME_MAX_LEN, OcrPromptTemplate, OcrProviderType,
-  OcrRecognizeInput, OcrRecognizeResult, OcrService, OcrServiceDto, OcrServiceWrite,
+  BaiduOcrAction, GOOGLE_VISION_PREFERENCES_SCHEMA_VERSION, OCR_DISPLAY_NAME_MAX_LEN, OCR_PROMPT_TEMPLATE_NAME_MAX_LEN,
+  OcrPromptTemplate, OcrProviderType, OcrRecognizeInput, OcrRecognizeResult, OcrService, OcrServiceDto,
+  OcrServiceWrite, default_google_vision_preferences, parse_ocr_image_preferences,
 };
 use crate::domain::provider::{CredentialUpdate, ProxyMode};
+use crate::domain::service_capability::{
+  CapabilityError, CapabilityErrorCode, OCR_IMAGE_CAPABILITY_ID, OCR_LANGUAGE_HINTS_MAX, OcrImagePreferences,
+  OcrImageRequest, validate_ocr_image_preferences,
+};
+use crate::domain::service_integration::{IntegrationHealthStatus, validate_capability_id};
 use crate::domain::time::{new_id, now_rfc3339};
 use crate::error::StorageError;
 use crate::repositories::credential_operations::{self, CredentialOperation, OwnerKind};
-use crate::repositories::{app_settings, ocr_prompt_templates, ocr_services, provider_models};
+use crate::repositories::{app_settings, integration_instances, ocr_prompt_templates, ocr_services, provider_models};
+use crate::services::service_capabilities::{ServiceCapabilityService, execution_context};
+use crate::services::service_integration_registry::ServiceIntegrationRegistry;
+use crate::services::translation_profiles::{capabilities_major_compatible, capability_name};
 use crate::storage::Database;
+use serde_json::Value;
 use std::collections::HashSet;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -20,16 +32,30 @@ use uuid::Uuid;
 const BAIDU_OAUTH_TOKEN_URL: &str = "https://aip.baidubce.com/oauth/2.0/token";
 /// Baidu OCR REST base path template (`{action}` is the API version slug).
 const BAIDU_OCR_URL_PREFIX: &str = "https://aip.baidubce.com/rest/2.0/ocr/v1/";
+/// Capability name prefix for image OCR (`ocr.image@N`).
+const OCR_IMAGE_CAPABILITY_NAME: &str = "ocr.image";
 
 #[derive(Clone)]
 pub struct OcrServiceService {
   db: Database,
   vault: Arc<dyn CredentialVault>,
+  definition_registry: Arc<ServiceIntegrationRegistry>,
+  service_capabilities: ServiceCapabilityService,
 }
 
 impl OcrServiceService {
-  pub fn new(db: Database, vault: Arc<dyn CredentialVault>) -> Self {
-    Self { db, vault }
+  pub fn new(
+    db: Database,
+    vault: Arc<dyn CredentialVault>,
+    definition_registry: Arc<ServiceIntegrationRegistry>,
+    service_capabilities: ServiceCapabilityService,
+  ) -> Self {
+    Self {
+      db,
+      vault,
+      definition_registry,
+      service_capabilities,
+    }
   }
 
   pub fn list(&self) -> Result<Vec<OcrServiceDto>, StorageError> {
@@ -129,6 +155,7 @@ impl OcrServiceService {
     match input.provider_type {
       OcrProviderType::Baidu => self.create_baidu(id, input, &now),
       OcrProviderType::Ai => self.create_ai(id, input, &now),
+      OcrProviderType::PluginCapability => self.create_plugin(id, input, &now),
     }
   }
 
@@ -167,6 +194,10 @@ impl OcrServiceService {
       provider_model_id: None,
       temperature: None,
       default_prompt_template_id: None,
+      integration_instance_id: None,
+      ocr_capability_id: None,
+      capability_preferences_version: None,
+      capability_preferences: None,
       created_at: now.to_string(),
       updated_at: now.to_string(),
     };
@@ -221,6 +252,10 @@ impl OcrServiceService {
         provider_model_id: Some(provider_model_id),
         temperature: input.temperature,
         default_prompt_template_id: Some(default_prompt_template_id),
+        integration_instance_id: None,
+        ocr_capability_id: None,
+        capability_preferences_version: None,
+        capability_preferences: None,
         created_at: now.to_string(),
         updated_at: now.to_string(),
       };
@@ -228,6 +263,35 @@ impl OcrServiceService {
       ocr_prompt_templates::replace_for_service(uow.conn(), id, &templates)?;
       let stored = ocr_services::get(uow.conn(), id)?;
       Ok(OcrServiceDto::from_service(&stored, templates))
+    })
+  }
+
+  fn create_plugin(&self, id: Uuid, input: OcrServiceWrite, now: &str) -> Result<OcrServiceDto, StorageError> {
+    let binding = resolve_plugin_write_fields(&input)?;
+    self.db.transaction(|uow| {
+      validate_plugin_ocr_binding(uow.conn(), self.definition_registry.as_ref(), &binding)?;
+      let service = OcrService {
+        id,
+        provider_type: OcrProviderType::PluginCapability,
+        display_name: input.display_name.trim().to_string(),
+        enabled: input.enabled,
+        sort_order: 0,
+        baidu_action: None,
+        api_key_ref: None,
+        secret_key_ref: None,
+        provider_model_id: None,
+        temperature: None,
+        default_prompt_template_id: None,
+        integration_instance_id: Some(binding.integration_instance_id),
+        ocr_capability_id: Some(binding.ocr_capability_id.clone()),
+        capability_preferences_version: Some(binding.capability_preferences_version),
+        capability_preferences: Some(binding.capability_preferences.clone()),
+        created_at: now.to_string(),
+        updated_at: now.to_string(),
+      };
+      ocr_services::insert(uow.conn(), &service)?;
+      let stored = ocr_services::get(uow.conn(), id)?;
+      Ok(OcrServiceDto::from_service(&stored, vec![]))
     })
   }
 
@@ -247,6 +311,7 @@ impl OcrServiceService {
     match input.provider_type {
       OcrProviderType::Baidu => self.update_baidu(existing, input, &expected_updated_at),
       OcrProviderType::Ai => self.update_ai(existing, input, &expected_updated_at),
+      OcrProviderType::PluginCapability => self.update_plugin(existing, input, &expected_updated_at),
     }
   }
 
@@ -351,6 +416,47 @@ impl OcrServiceService {
       ocr_prompt_templates::replace_for_service(uow.conn(), existing.id, &templates)?;
       let service = ocr_services::get(uow.conn(), existing.id)?;
       Ok(OcrServiceDto::from_service(&service, templates))
+    })
+  }
+
+  fn update_plugin(
+    &self,
+    existing: OcrService,
+    input: OcrServiceWrite,
+    expected_updated_at: &str,
+  ) -> Result<OcrServiceDto, StorageError> {
+    let binding = resolve_plugin_write_fields(&input)?;
+    // Rebind is allowed when capability major stays compatible.
+    if let (Some(old_cap), Some(old_instance)) =
+      (existing.ocr_capability_id.as_deref(), existing.integration_instance_id)
+    {
+      if old_instance != binding.integration_instance_id || old_cap.trim() != binding.ocr_capability_id {
+        if !capabilities_major_compatible(old_cap, &binding.ocr_capability_id) {
+          return Err(StorageError::Validation(
+            "rebind rejected: OCR capability major is incompatible".into(),
+          ));
+        }
+      }
+    }
+
+    let now = now_rfc3339();
+    self.db.transaction(|uow| {
+      let latest = ocr_services::get(uow.conn(), existing.id)?;
+      ensure_expected_version(&latest, expected_updated_at)?;
+      validate_plugin_ocr_binding(uow.conn(), self.definition_registry.as_ref(), &binding)?;
+      ocr_services::update_plugin_configuration(
+        uow.conn(),
+        existing.id,
+        input.display_name.trim(),
+        input.enabled,
+        binding.integration_instance_id,
+        &binding.ocr_capability_id,
+        binding.capability_preferences_version,
+        &binding.capability_preferences,
+        &now,
+      )?;
+      let service = ocr_services::get(uow.conn(), existing.id)?;
+      Ok(OcrServiceDto::from_service(&service, vec![]))
     })
   }
 
@@ -543,10 +649,16 @@ impl OcrServiceService {
     Ok(prepared)
   }
 
-  /// Recognize text with a Baidu OCR service.
+  /// Recognize text with a Baidu or plugin OCR service.
   ///
   /// AI OCR is executed on the frontend through provider plugins + `provider_http_*`.
-  pub async fn recognize(&self, input: OcrRecognizeInput) -> Result<OcrRecognizeResult, StorageError> {
+  /// When `input.request_id` is set, the caller must have registered it on the shared
+  /// session registry (see `recognize_ocr` command); this method reuses that token.
+  pub async fn recognize(
+    &self,
+    input: OcrRecognizeInput,
+    cancel: CancelToken,
+  ) -> Result<OcrRecognizeResult, StorageError> {
     let png_base64 = input.png_base64.trim().to_string();
     if png_base64.is_empty() {
       return Err(StorageError::Validation("png_base64 must not be empty".into()));
@@ -554,22 +666,55 @@ impl OcrServiceService {
 
     let db = self.db.clone();
     let vault = self.vault.clone();
-    let prepared = spawn_blocking_storage(move || {
-      prepare_baidu_ocr_recognition(&db, vault.as_ref(), input.ocr_service_id, png_base64)
-    })
-    .await?;
+    let prepared =
+      spawn_blocking_storage(move || prepare_ocr_recognition(&db, vault.as_ref(), input.ocr_service_id, png_base64))
+        .await?;
 
-    let text = recognize_baidu_ocr(
-      prepared.api_key,
-      prepared.secret_key,
-      prepared.action,
-      prepared.png_base64,
-    )
-    .await?;
-    Ok(OcrRecognizeResult {
-      text,
-      ocr_service_id: prepared.service_id,
-    })
+    match prepared {
+      PreparedOcr::Baidu(baidu) => {
+        if cancel.is_cancelled() {
+          return Err(StorageError::Validation("OCR request cancelled".into()));
+        }
+        let text = recognize_baidu_ocr(baidu.api_key, baidu.secret_key, baidu.action, baidu.png_base64).await?;
+        Ok(OcrRecognizeResult {
+          text,
+          ocr_service_id: baidu.service_id,
+        })
+      }
+      PreparedOcr::Plugin(plugin) => {
+        let handler = self
+          .service_capabilities
+          .resolve_ocr(plugin.integration_instance_id, &plugin.ocr_capability_id)
+          .map_err(map_capability_error)?;
+        let request_id = input
+          .request_id
+          .clone()
+          .filter(|s| !s.trim().is_empty())
+          .unwrap_or_else(|| new_id().to_string());
+        let context = execution_context(
+          request_id,
+          cancel,
+          plugin.integration_instance_id,
+          plugin.plugin_id,
+          plugin.ocr_capability_id.clone(),
+        );
+        let response = handler
+          .recognize(
+            plugin.integration_instance_id,
+            OcrImageRequest {
+              png_base64: plugin.png_base64,
+              preferences: plugin.preferences,
+            },
+            context,
+          )
+          .await
+          .map_err(map_capability_error)?;
+        Ok(OcrRecognizeResult {
+          text: response.text,
+          ocr_service_id: plugin.service_id,
+        })
+      }
+    }
   }
 }
 
@@ -582,12 +727,27 @@ struct PreparedBaiduOcr {
   png_base64: String,
 }
 
-fn prepare_baidu_ocr_recognition(
+/// Prepared plugin OCR call after DB resolution.
+struct PreparedPluginOcr {
+  service_id: Uuid,
+  integration_instance_id: Uuid,
+  plugin_id: String,
+  ocr_capability_id: String,
+  preferences: OcrImagePreferences,
+  png_base64: String,
+}
+
+enum PreparedOcr {
+  Baidu(PreparedBaiduOcr),
+  Plugin(PreparedPluginOcr),
+}
+
+fn prepare_ocr_recognition(
   db: &Database,
   vault: &dyn CredentialVault,
   requested_service_id: Option<Uuid>,
   png_base64: String,
-) -> Result<PreparedBaiduOcr, StorageError> {
+) -> Result<PreparedOcr, StorageError> {
   let service_id = match requested_service_id {
     Some(id) => id,
     None => {
@@ -604,30 +764,65 @@ fn prepare_baidu_ocr_recognition(
     return Err(StorageError::Validation("OCR service is disabled".into()));
   }
 
-  if !matches!(service.provider_type, OcrProviderType::Baidu) {
-    return Err(StorageError::Validation(
+  match service.provider_type {
+    OcrProviderType::Baidu => {
+      let action = service.baidu_action.unwrap_or(BaiduOcrAction::Accurate);
+      let api_key_ref = service
+        .api_key_ref
+        .as_deref()
+        .ok_or_else(|| StorageError::Validation("Baidu OCR API key is not configured".into()))?;
+      let secret_key_ref = service
+        .secret_key_ref
+        .as_deref()
+        .ok_or_else(|| StorageError::Validation("Baidu OCR secret key is not configured".into()))?;
+      let api_key = vault.get_for_backend_use(api_key_ref)?;
+      let secret_key = vault.get_for_backend_use(secret_key_ref)?;
+      Ok(PreparedOcr::Baidu(PreparedBaiduOcr {
+        service_id: service.id,
+        api_key,
+        secret_key,
+        action,
+        png_base64,
+      }))
+    }
+    OcrProviderType::Ai => Err(StorageError::Validation(
       "AI OCR is handled by the frontend provider plugin workflow".into(),
-    ));
+    )),
+    OcrProviderType::PluginCapability => {
+      let integration_instance_id = service
+        .integration_instance_id
+        .ok_or_else(|| StorageError::Validation("plugin OCR service is missing integration_instance_id".into()))?;
+      let ocr_capability_id = service
+        .ocr_capability_id
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+        .ok_or_else(|| StorageError::Validation("plugin OCR service is missing ocr_capability_id".into()))?;
+      let preferences_value = service
+        .capability_preferences
+        .clone()
+        .unwrap_or_else(default_google_vision_preferences);
+      let preferences = parse_ocr_image_preferences(&preferences_value)
+        .map_err(StorageError::Validation)
+        .and_then(|prefs| {
+          validate_ocr_image_preferences(&prefs).map_err(map_capability_error)?;
+          Ok(prefs)
+        })?;
+      let instance = db.read(|conn| integration_instances::get(conn, integration_instance_id))?;
+      if !instance.enabled {
+        return Err(StorageError::PluginUnavailable(
+          "integration instance is disabled".into(),
+        ));
+      }
+      Ok(PreparedOcr::Plugin(PreparedPluginOcr {
+        service_id: service.id,
+        integration_instance_id,
+        plugin_id: instance.plugin_id,
+        ocr_capability_id,
+        preferences,
+        png_base64,
+      }))
+    }
   }
-
-  let action = service.baidu_action.unwrap_or(BaiduOcrAction::Accurate);
-  let api_key_ref = service
-    .api_key_ref
-    .as_deref()
-    .ok_or_else(|| StorageError::Validation("Baidu OCR API key is not configured".into()))?;
-  let secret_key_ref = service
-    .secret_key_ref
-    .as_deref()
-    .ok_or_else(|| StorageError::Validation("Baidu OCR secret key is not configured".into()))?;
-  let api_key = vault.get_for_backend_use(api_key_ref)?;
-  let secret_key = vault.get_for_backend_use(secret_key_ref)?;
-  Ok(PreparedBaiduOcr {
-    service_id: service.id,
-    api_key,
-    secret_key,
-    action,
-    png_base64,
-  })
 }
 
 async fn recognize_baidu_ocr(
@@ -876,6 +1071,7 @@ fn validate_ocr_write(input: &OcrServiceWrite) -> Result<(), StorageError> {
           "AI-only fields must be empty for Baidu OCR".into(),
         ));
       }
+      reject_plugin_fields_for_non_plugin(input)?;
     }
     OcrProviderType::Ai => {
       if input.baidu_action.is_some() {
@@ -900,9 +1096,171 @@ fn validate_ocr_write(input: &OcrServiceWrite) -> Result<(), StorageError> {
         .default_prompt_template_id
         .ok_or_else(|| StorageError::Validation("default_prompt_template_id is required for AI OCR".into()))?;
       validate_ocr_prompt_templates(&input.prompt_templates, default_id)?;
+      reject_plugin_fields_for_non_plugin(input)?;
+    }
+    OcrProviderType::PluginCapability => {
+      if input.baidu_action.is_some() {
+        return Err(StorageError::Validation(
+          "baidu_action must be empty for plugin OCR".into(),
+        ));
+      }
+      if !matches!(input.api_key, CredentialUpdate::Keep) || !matches!(input.secret_key, CredentialUpdate::Keep) {
+        return Err(StorageError::Validation(
+          "credential fields are not accepted for plugin OCR".into(),
+        ));
+      }
+      if input.provider_model_id.is_some()
+        || input.temperature.is_some()
+        || input.default_prompt_template_id.is_some()
+        || !input.prompt_templates.is_empty()
+      {
+        return Err(StorageError::Validation(
+          "AI-only fields must be empty for plugin OCR".into(),
+        ));
+      }
+      // Full binding validation (instance ready / schema) runs inside create/update transactions.
+      let _ = resolve_plugin_write_fields(input)?;
     }
   }
   Ok(())
+}
+
+fn reject_plugin_fields_for_non_plugin(input: &OcrServiceWrite) -> Result<(), StorageError> {
+  if input.integration_instance_id.is_some()
+    || input.ocr_capability_id.is_some()
+    || input.capability_preferences_version.is_some()
+    || input.capability_preferences.is_some()
+  {
+    return Err(StorageError::Validation(
+      "plugin-only fields must be empty for non-plugin OCR".into(),
+    ));
+  }
+  Ok(())
+}
+
+struct PluginOcrWriteFields {
+  integration_instance_id: Uuid,
+  ocr_capability_id: String,
+  capability_preferences_version: i32,
+  capability_preferences: Value,
+}
+
+fn resolve_plugin_write_fields(input: &OcrServiceWrite) -> Result<PluginOcrWriteFields, StorageError> {
+  let integration_instance_id = input
+    .integration_instance_id
+    .ok_or_else(|| StorageError::Validation("integration_instance_id is required for plugin OCR".into()))?;
+  let ocr_capability_id = input
+    .ocr_capability_id
+    .as_ref()
+    .map(|s| s.trim().to_string())
+    .filter(|s| !s.is_empty())
+    .ok_or_else(|| StorageError::Validation("ocr_capability_id is required for plugin OCR".into()))?;
+  validate_capability_id(&ocr_capability_id).map_err(StorageError::Validation)?;
+  if capability_name(&ocr_capability_id) != Some(OCR_IMAGE_CAPABILITY_NAME) {
+    return Err(StorageError::Validation(
+      "ocr_capability_id must be an ocr.image@N capability".into(),
+    ));
+  }
+
+  let capability_preferences_version = input
+    .capability_preferences_version
+    .ok_or_else(|| StorageError::Validation("capability_preferences_version is required for plugin OCR".into()))?;
+  let capability_preferences = input
+    .capability_preferences
+    .clone()
+    .unwrap_or_else(default_google_vision_preferences);
+  if !capability_preferences.is_object() {
+    return Err(StorageError::Validation(
+      "capability_preferences must be a JSON object".into(),
+    ));
+  }
+
+  // Structural preferences validation (schema-agnostic bounds).
+  let typed = parse_ocr_image_preferences(&capability_preferences).map_err(StorageError::Validation)?;
+  validate_ocr_image_preferences(&typed).map_err(map_capability_error)?;
+  for hint in &typed.language_hints {
+    if !is_supported_app_language(hint) {
+      return Err(StorageError::Validation(format!("unknown language hint: {hint}")));
+    }
+  }
+
+  Ok(PluginOcrWriteFields {
+    integration_instance_id,
+    ocr_capability_id,
+    capability_preferences_version,
+    capability_preferences,
+  })
+}
+
+fn validate_plugin_ocr_binding(
+  conn: &rusqlite::Connection,
+  registry: &ServiceIntegrationRegistry,
+  binding: &PluginOcrWriteFields,
+) -> Result<(), StorageError> {
+  let instance = integration_instances::get(conn, binding.integration_instance_id)?;
+  if !instance.enabled {
+    return Err(StorageError::Validation(
+      "integration instance must be enabled for plugin OCR".into(),
+    ));
+  }
+  if !matches!(instance.health_status, IntegrationHealthStatus::Ready) {
+    return Err(StorageError::Validation(
+      "integration instance must be ready for plugin OCR".into(),
+    ));
+  }
+  if !registry.contains(&instance.plugin_id) {
+    return Err(StorageError::Validation(
+      "integration plugin definition is missing".into(),
+    ));
+  }
+  let manifest = registry
+    .get(&instance.plugin_id)
+    .ok_or_else(|| StorageError::Validation("integration plugin definition is missing".into()))?;
+
+  if !manifest.capabilities.iter().any(|c| c.id == binding.ocr_capability_id) {
+    return Err(StorageError::Validation(format!(
+      "OCR capability {} is not declared on plugin {}",
+      binding.ocr_capability_id, instance.plugin_id
+    )));
+  }
+
+  // Google Vision preferences schema v1.
+  if binding.ocr_capability_id == OCR_IMAGE_CAPABILITY_ID {
+    if binding.capability_preferences_version != GOOGLE_VISION_PREFERENCES_SCHEMA_VERSION {
+      return Err(StorageError::Validation(format!(
+        "Google Vision preferences schema version must be {GOOGLE_VISION_PREFERENCES_SCHEMA_VERSION}"
+      )));
+    }
+    // Ensure only known keys for schema v1.
+    let obj = binding
+      .capability_preferences
+      .as_object()
+      .ok_or_else(|| StorageError::Validation("capability_preferences must be a JSON object".into()))?;
+    for key in obj.keys() {
+      if key != "operation" && key != "languageHints" {
+        return Err(StorageError::Validation(format!(
+          "capability preferences contain unsupported key: {key}"
+        )));
+      }
+    }
+  }
+
+  let _ = OCR_LANGUAGE_HINTS_MAX;
+  Ok(())
+}
+
+fn is_supported_app_language(language_id: &str) -> bool {
+  let candidate = language_id.trim().to_ascii_lowercase();
+  SUPPORTED_LANGUAGES.iter().any(|lang| *lang == candidate)
+}
+
+/// Map capability failures into storage/IPC-facing errors without leaking provider bodies.
+fn map_capability_error(err: CapabilityError) -> StorageError {
+  match err.code {
+    CapabilityErrorCode::PluginUnavailable => StorageError::PluginUnavailable(err.message),
+    CapabilityErrorCode::Internal => StorageError::Internal(err.message),
+    _ => StorageError::Validation(format!("{}: {}", err.code.as_str(), err.message)),
+  }
 }
 
 fn validate_ocr_prompt_templates(
@@ -962,12 +1320,57 @@ mod tests {
   use std::sync::Arc;
   use tempfile::TempDir;
 
+  fn test_ocr_service(db: Database, vault: Arc<dyn CredentialVault>) -> OcrServiceService {
+    let registry = Arc::new(ServiceIntegrationRegistry::bundled().unwrap());
+    let network = Arc::new(crate::services::network_broker::NetworkBroker::new(
+      db.clone(),
+      registry.clone(),
+    ));
+    let tokens = Arc::new(crate::services::token_grant::TokenGrantService::new(Arc::new(
+      TestExchanger,
+    )));
+    let google = Arc::new(crate::services::google_cloud::GoogleCloudCapabilities::new(
+      db.clone(),
+      network,
+      tokens,
+    ));
+    let handlers =
+      Arc::new(crate::services::service_capabilities::ServiceCapabilityRegistry::with_google_cloud(google));
+    let caps = ServiceCapabilityService::new(db.clone(), registry.clone(), handlers);
+    OcrServiceService::new(db, vault, registry, caps)
+  }
+
+  struct TestExchanger;
+  impl crate::services::token_grant::GoogleTokenExchanger for TestExchanger {
+    fn exchange(
+      &self,
+      _instance_id: Uuid,
+      _scopes: Vec<String>,
+      _now_unix_secs: u64,
+      _cancel: Option<CancelToken>,
+    ) -> std::pin::Pin<
+      Box<
+        dyn std::future::Future<Output = Result<crate::services::token_grant::ExchangedToken, CapabilityError>>
+          + Send
+          + '_,
+      >,
+    > {
+      Box::pin(async {
+        Ok(crate::services::token_grant::ExchangedToken {
+          access_token: "t".into(),
+          expires_in: 3600,
+          credential_revision: 1,
+        })
+      })
+    }
+  }
+
   fn setup() -> (TempDir, OcrServiceService, Database) {
     let dir = TempDir::new().unwrap();
     let db = Database::new(dir.path()).unwrap();
     db.initialize().unwrap();
     let vault: Arc<dyn CredentialVault> = Arc::new(MemoryCredentialVault::default());
-    let service = OcrServiceService::new(db.clone(), vault);
+    let service = test_ocr_service(db.clone(), vault);
     (dir, service, db)
   }
 
@@ -1038,6 +1441,10 @@ mod tests {
         temperature: None,
         default_prompt_template_id: None,
         prompt_templates: vec![],
+        integration_instance_id: None,
+        ocr_capability_id: None,
+        capability_preferences_version: None,
+        capability_preferences: None,
         expected_updated_at: None,
       })
       .unwrap();
@@ -1059,6 +1466,10 @@ mod tests {
         temperature: None,
         default_prompt_template_id: None,
         prompt_templates: vec![],
+        integration_instance_id: None,
+        ocr_capability_id: None,
+        capability_preferences_version: None,
+        capability_preferences: None,
         expected_updated_at: Some(created.updated_at),
       })
       .unwrap();
@@ -1095,6 +1506,10 @@ mod tests {
           system_template: "sys".into(),
           user_template: "user".into(),
         }],
+        integration_instance_id: None,
+        ocr_capability_id: None,
+        capability_preferences_version: None,
+        capability_preferences: None,
         expected_updated_at: None,
       })
       .unwrap();
@@ -1114,6 +1529,10 @@ mod tests {
         temperature: None,
         default_prompt_template_id: Some(template_id),
         prompt_templates: vec![],
+        integration_instance_id: None,
+        ocr_capability_id: None,
+        capability_preferences_version: None,
+        capability_preferences: None,
         expected_updated_at: None,
       })
       .unwrap_err();
@@ -1136,6 +1555,10 @@ mod tests {
         temperature: None,
         default_prompt_template_id: None,
         prompt_templates: vec![],
+        integration_instance_id: None,
+        ocr_capability_id: None,
+        capability_preferences_version: None,
+        capability_preferences: None,
         expected_updated_at: None,
       })
       .unwrap();
@@ -1152,6 +1575,10 @@ mod tests {
         temperature: None,
         default_prompt_template_id: None,
         prompt_templates: vec![],
+        integration_instance_id: None,
+        ocr_capability_id: None,
+        capability_preferences_version: None,
+        capability_preferences: None,
         expected_updated_at: None,
       })
       .unwrap_err();
@@ -1170,6 +1597,10 @@ mod tests {
         temperature: None,
         default_prompt_template_id: None,
         prompt_templates: vec![],
+        integration_instance_id: None,
+        ocr_capability_id: None,
+        capability_preferences_version: None,
+        capability_preferences: None,
         expected_updated_at: Some("not-the-real-version".into()),
       })
       .unwrap_err();
@@ -1221,7 +1652,7 @@ mod tests {
     db.initialize().unwrap();
     // First vault.set succeeds (api_key), second fails (secret_key).
     let vault = Arc::new(FailAfterNSetsVault::new(1));
-    let service = OcrServiceService::new(db, vault as Arc<dyn CredentialVault>);
+    let service = test_ocr_service(db, vault as Arc<dyn CredentialVault>);
 
     let created = service
       .save(OcrServiceWrite {
@@ -1236,6 +1667,10 @@ mod tests {
         temperature: None,
         default_prompt_template_id: None,
         prompt_templates: vec![],
+        integration_instance_id: None,
+        ocr_capability_id: None,
+        capability_preferences_version: None,
+        capability_preferences: None,
         expected_updated_at: None,
       })
       .unwrap();
@@ -1255,6 +1690,10 @@ mod tests {
         temperature: None,
         default_prompt_template_id: None,
         prompt_templates: vec![],
+        integration_instance_id: None,
+        ocr_capability_id: None,
+        capability_preferences_version: None,
+        capability_preferences: None,
         expected_updated_at: Some(created.updated_at.clone()),
       })
       .unwrap_err();

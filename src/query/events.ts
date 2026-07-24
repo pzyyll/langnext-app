@@ -18,6 +18,9 @@ export const DATA_OCR_SERVICES_CHANGED = "data://ocr-services-changed";
 /** Coarse notification after service-integration instance create/update/enable/validate/delete. */
 export const DATA_SERVICE_INTEGRATIONS_CHANGED = "data://service-integrations-changed";
 
+/** Coarse notification after app settings import or multi-window settings mutations. */
+export const DATA_APP_SETTINGS_CHANGED = "data://app-settings-changed";
+
 /** Clipboard text emitted to the Quick Translate window on double Ctrl+C / OCR delivery. */
 export const QUICK_TRANSLATE_CLIPBOARD_TEXT = "quick-translate://clipboard-text";
 

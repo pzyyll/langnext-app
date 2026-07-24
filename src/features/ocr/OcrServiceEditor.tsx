@@ -1,5 +1,5 @@
 // ABOUTME: Selected OCR service editor shell matching Models provider editor layout.
-// ABOUTME: Hosts Baidu and AI forms with inline rename, scroll body, and footer actions.
+// ABOUTME: Hosts Baidu, AI, and Google Vision plugin forms with rename and footer actions.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
@@ -23,18 +23,32 @@ import {
   switchThumbClassName,
 } from "../../components/ui";
 import { ocrKeys, settingsKeys } from "../../query/keys";
-import { allProviderModelsOptions, ocrListOptions, providerListOptions } from "../../query/options";
+import {
+  allProviderModelsOptions,
+  integrationDefinitionListOptions,
+  integrationListOptions,
+  ocrListOptions,
+  providerListOptions,
+} from "../../query/options";
 import { deleteOcrService, saveOcrService } from "../../storage/client";
 import { getIpcErrorMessage } from "../../storage/errors";
 import type {
   BaiduOcrAction,
   CredentialUpdate,
+  OcrImageOperation,
   OcrPromptTemplate,
   OcrServiceDto,
   OcrServiceWrite,
 } from "../../storage/types";
 import { AiOcrForm } from "./AiOcrForm";
 import { BaiduOcrForm, type CredentialAction } from "./BaiduOcrForm";
+import { GoogleVisionOcrForm } from "./GoogleVisionOcrForm";
+import {
+  GOOGLE_VISION_PREFERENCES_SCHEMA_VERSION,
+  OCR_IMAGE_CAPABILITY_ID,
+  OCR_LANGUAGE_HINTS_MAX,
+  defaultGoogleVisionPreferences,
+} from "./ocrProviderOptions";
 
 export type OcrServiceEditorProps = {
   ocrServiceId: string;
@@ -51,10 +65,41 @@ type EditorDraft = {
   temperature: string;
   defaultPromptTemplateId: string;
   promptTemplates: OcrPromptTemplate[];
+  integrationInstanceId: string;
+  ocrCapabilityId: string;
+  capabilityPreferencesVersion: number;
+  operation: OcrImageOperation;
+  languageHints: string[];
   expectedUpdatedAt: string;
 };
 
+function parseOperation(value: unknown): OcrImageOperation {
+  return value === "text_detection" ? "text_detection" : "document_text_detection";
+}
+
+function parseLanguageHints(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const hints: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "string") {
+      continue;
+    }
+    const trimmed = entry.trim();
+    if (!trimmed || hints.includes(trimmed)) {
+      continue;
+    }
+    hints.push(trimmed);
+    if (hints.length >= OCR_LANGUAGE_HINTS_MAX) {
+      break;
+    }
+  }
+  return hints;
+}
+
 function draftFromDto(service: OcrServiceDto): EditorDraft {
+  const prefs = service.capabilityPreferences ?? defaultGoogleVisionPreferences();
   return {
     enabled: service.enabled,
     baiduAction: service.baiduAction ?? "accurate",
@@ -66,6 +111,11 @@ function draftFromDto(service: OcrServiceDto): EditorDraft {
     temperature: service.temperature != null ? String(service.temperature) : "",
     defaultPromptTemplateId: service.defaultPromptTemplateId ?? service.promptTemplates[0]?.id ?? "",
     promptTemplates: service.promptTemplates.map((template) => ({ ...template })),
+    integrationInstanceId: service.integrationInstanceId ?? "",
+    ocrCapabilityId: service.ocrCapabilityId ?? OCR_IMAGE_CAPABILITY_ID,
+    capabilityPreferencesVersion: service.capabilityPreferencesVersion ?? GOOGLE_VISION_PREFERENCES_SCHEMA_VERSION,
+    operation: parseOperation((prefs as { operation?: unknown }).operation),
+    languageHints: parseLanguageHints((prefs as { languageHints?: unknown }).languageHints),
     expectedUpdatedAt: service.updatedAt,
   };
 }
@@ -82,7 +132,12 @@ function isDraftFieldsClean(draft: EditorDraft, service: OcrServiceDto): boolean
     draft.providerModelId === baseline.providerModelId &&
     draft.temperature === baseline.temperature &&
     draft.defaultPromptTemplateId === baseline.defaultPromptTemplateId &&
-    JSON.stringify(draft.promptTemplates) === JSON.stringify(baseline.promptTemplates)
+    JSON.stringify(draft.promptTemplates) === JSON.stringify(baseline.promptTemplates) &&
+    draft.integrationInstanceId === baseline.integrationInstanceId &&
+    draft.ocrCapabilityId === baseline.ocrCapabilityId &&
+    draft.capabilityPreferencesVersion === baseline.capabilityPreferencesVersion &&
+    draft.operation === baseline.operation &&
+    JSON.stringify(draft.languageHints) === JSON.stringify(baseline.languageHints)
   );
 }
 
@@ -119,6 +174,25 @@ function renameWrite(service: OcrServiceDto, displayName: string): OcrServiceWri
       baiduAction: service.baiduAction ?? "accurate",
       apiKey: { action: "keep" },
       secretKey: { action: "keep" },
+      promptTemplates: [],
+      expectedUpdatedAt: service.updatedAt,
+    };
+  }
+
+  if (service.providerType === "plugin_capability") {
+    const prefs = service.capabilityPreferences ?? defaultGoogleVisionPreferences();
+    return {
+      id: service.id,
+      providerType: "plugin_capability",
+      displayName,
+      enabled: service.enabled,
+      integrationInstanceId: service.integrationInstanceId ?? "",
+      ocrCapabilityId: service.ocrCapabilityId ?? OCR_IMAGE_CAPABILITY_ID,
+      capabilityPreferencesVersion: service.capabilityPreferencesVersion ?? GOOGLE_VISION_PREFERENCES_SCHEMA_VERSION,
+      capabilityPreferences: {
+        operation: parseOperation((prefs as { operation?: unknown }).operation),
+        languageHints: parseLanguageHints((prefs as { languageHints?: unknown }).languageHints),
+      },
       promptTemplates: [],
       expectedUpdatedAt: service.updatedAt,
     };
@@ -200,6 +274,8 @@ function OcrServiceEditorLoaded({ service }: OcrServiceEditorLoadedProps) {
   const queryClient = useQueryClient();
   const modelsQuery = useQuery(allProviderModelsOptions());
   const providersQuery = useQuery(providerListOptions());
+  const integrationsQuery = useQuery(integrationListOptions());
+  const definitionsQuery = useQuery(integrationDefinitionListOptions());
 
   const [draft, setDraft] = useState<EditorDraft>(() => draftFromDto(service));
   const [trackedService, setTrackedService] = useState(service);
@@ -316,6 +392,30 @@ function OcrServiceEditorLoaded({ service }: OcrServiceEditorLoadedProps) {
         baiduAction: draft.baiduAction,
         apiKey: toCredentialUpdate(draft.apiKeyAction, draft.apiKey),
         secretKey: toCredentialUpdate(draft.secretKeyAction, draft.secretKey),
+        promptTemplates: [],
+        expectedUpdatedAt: draft.expectedUpdatedAt,
+      };
+    } else if (service.providerType === "plugin_capability") {
+      if (!draft.integrationInstanceId) {
+        setValidationError(t("ocr.validation.integrationRequired"));
+        return;
+      }
+      if (draft.languageHints.length > OCR_LANGUAGE_HINTS_MAX) {
+        setValidationError(t("ocr.validation.languageHintsMax", { max: OCR_LANGUAGE_HINTS_MAX }));
+        return;
+      }
+      write = {
+        id: service.id,
+        providerType: "plugin_capability",
+        displayName: service.displayName,
+        enabled: draft.enabled,
+        integrationInstanceId: draft.integrationInstanceId,
+        ocrCapabilityId: draft.ocrCapabilityId || OCR_IMAGE_CAPABILITY_ID,
+        capabilityPreferencesVersion: draft.capabilityPreferencesVersion,
+        capabilityPreferences: {
+          operation: draft.operation,
+          languageHints: draft.languageHints,
+        },
         promptTemplates: [],
         expectedUpdatedAt: draft.expectedUpdatedAt,
       };
@@ -579,6 +679,28 @@ function OcrServiceEditorLoaded({ service }: OcrServiceEditorLoadedProps) {
             }}
             onBaiduActionChange={(action) => {
               updateDraft({ baiduAction: action });
+            }}
+          />
+        ) : service.providerType === "plugin_capability" ? (
+          <GoogleVisionOcrForm
+            integrationInstanceId={draft.integrationInstanceId}
+            ocrCapabilityId={draft.ocrCapabilityId}
+            operation={draft.operation}
+            languageHints={draft.languageHints}
+            instances={integrationsQuery.data ?? []}
+            definitions={definitionsQuery.data ?? []}
+            disabled={formDisabled}
+            onIntegrationInstanceIdChange={(instanceId, capabilityId) => {
+              updateDraft({
+                integrationInstanceId: instanceId,
+                ocrCapabilityId: capabilityId,
+              });
+            }}
+            onOperationChange={(next) => {
+              updateDraft({ operation: next });
+            }}
+            onLanguageHintsChange={(hints) => {
+              updateDraft({ languageHints: hints });
             }}
           />
         ) : (

@@ -23,11 +23,14 @@ use uuid::Uuid;
 pub const BROKER_MAX_RESPONSE_BODY_BYTES: usize = MAX_RESPONSE_BODY_BYTES;
 /// Max relative path length accepted by the broker.
 pub const BROKER_RELATIVE_PATH_MAX_LEN: usize = 512;
-/// Max request body size accepted by the broker.
+/// Default max request body size for text-scale capability calls (Translate/Detect).
 pub const BROKER_REQUEST_BODY_MAX_BYTES: usize = 64 * 1024;
+/// Max request body for Vision annotate: base64(8 MiB PNG) ≈ 4/3 expansion + JSON envelope.
+/// Named from OCR_IMAGE_MAX_DECODED_BYTES so the broker contract matches the product gate.
+pub const BROKER_OCR_REQUEST_BODY_MAX_BYTES: usize =
+  (crate::domain::service_capability::OCR_IMAGE_MAX_DECODED_BYTES * 4 / 3) + (64 * 1024);
 
 /// Capability-scoped network request using a manifest endpoint alias.
-#[derive(Debug)]
 pub struct BrokerRequest {
   pub integration_instance_id: Uuid,
   pub capability_id: String,
@@ -42,6 +45,28 @@ pub struct BrokerRequest {
   pub request_id: String,
   pub cancel: Option<CancelToken>,
   pub max_response_body_bytes: Option<usize>,
+  /// Optional per-request body cap; defaults to [`BROKER_REQUEST_BODY_MAX_BYTES`].
+  pub max_request_body_bytes: Option<usize>,
+}
+
+impl std::fmt::Debug for BrokerRequest {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.debug_struct("BrokerRequest")
+      .field("integration_instance_id", &self.integration_instance_id)
+      .field("capability_id", &self.capability_id)
+      .field("endpoint_alias", &self.endpoint_alias)
+      .field("method", &self.method)
+      .field("relative_path_len", &self.relative_path.len())
+      .field("query_len", &self.query.len())
+      .field("header_names", &self.headers.keys().collect::<Vec<_>>())
+      .field("body_len", &self.body.as_ref().map(|b| b.len()))
+      .field("content_type", &self.content_type)
+      .field("has_auth", &self.auth.is_some())
+      .field("request_id", &self.request_id)
+      .field("max_response_body_bytes", &self.max_response_body_bytes)
+      .field("max_request_body_bytes", &self.max_request_body_bytes)
+      .finish_non_exhaustive()
+  }
 }
 
 #[derive(Clone)]
@@ -88,8 +113,9 @@ impl NetworkBroker {
         "relative path exceeds limit",
       ));
     }
+    let max_request_body = request.max_request_body_bytes.unwrap_or(BROKER_REQUEST_BODY_MAX_BYTES);
     if let Some(body) = &request.body {
-      if body.len() > BROKER_REQUEST_BODY_MAX_BYTES {
+      if body.len() > max_request_body {
         return Err(CapabilityError::new(
           CapabilityErrorCode::UnsupportedInput,
           "request body exceeds limit",
@@ -406,6 +432,7 @@ mod tests {
         request_id: "req-1".into(),
         cancel: None,
         max_response_body_bytes: None,
+        max_request_body_bytes: None,
       })
       .await
       .unwrap();
@@ -445,6 +472,7 @@ mod tests {
         request_id: "req-2".into(),
         cancel: None,
         max_response_body_bytes: None,
+        max_request_body_bytes: None,
       })
       .await
       .unwrap_err();
@@ -482,6 +510,7 @@ mod tests {
         request_id: "req-3".into(),
         cancel: None,
         max_response_body_bytes: None,
+        max_request_body_bytes: None,
       })
       .await
       .unwrap_err();
@@ -502,6 +531,7 @@ mod tests {
         request_id: "req-4".into(),
         cancel: None,
         max_response_body_bytes: None,
+        max_request_body_bytes: None,
       })
       .await
       .unwrap_err();
@@ -522,6 +552,7 @@ mod tests {
         request_id: "req-5".into(),
         cancel: None,
         max_response_body_bytes: None,
+        max_request_body_bytes: None,
       })
       .await
       .unwrap_err();
@@ -561,6 +592,7 @@ mod tests {
         request_id: "req-6".into(),
         cancel: Some(cancel),
         max_response_body_bytes: None,
+        max_request_body_bytes: None,
       })
       .await
       .unwrap_err();
@@ -586,9 +618,80 @@ mod tests {
         request_id: "req-7".into(),
         cancel: None,
         max_response_body_bytes: Some(8),
+        max_request_body_bytes: None,
       })
       .await
       .unwrap_err();
     assert_eq!(err.code, CapabilityErrorCode::InvalidResponse);
+  }
+
+  #[tokio::test]
+  async fn network_broker_ocr_request_body_limit_allows_megabyte_payload() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::new(dir.path()).unwrap();
+    db.initialize().unwrap();
+    let id = seed_google_instance(&db);
+
+    // Default 64 KiB limit must reject mid-size bodies that OCR still accepts.
+    let mid_body = "x".repeat(BROKER_REQUEST_BODY_MAX_BYTES + 1);
+    let transport = Arc::new(CaptureTransport {
+      last: Mutex::new(None),
+      response: Mutex::new(Ok(ProviderHttpResponse {
+        status: 200,
+        headers: HashMap::new(),
+        body: "{}".into(),
+      })),
+    });
+    let broker = broker_with(db.clone(), transport.clone());
+    let err = broker
+      .execute(BrokerRequest {
+        integration_instance_id: id,
+        capability_id: "ocr.image@1".into(),
+        endpoint_alias: "vision".into(),
+        method: ProviderHttpMethod::Post,
+        relative_path: "v1/images:annotate".into(),
+        query: vec![],
+        headers: HashMap::new(),
+        body: Some(mid_body.clone()),
+        content_type: Some("application/json".into()),
+        auth: None,
+        request_id: "req-ocr-default".into(),
+        cancel: None,
+        max_response_body_bytes: None,
+        max_request_body_bytes: None,
+      })
+      .await
+      .unwrap_err();
+    assert_eq!(err.code, CapabilityErrorCode::UnsupportedInput);
+
+    // OCR override must accept the same body (still well under OCR max).
+    let transport = Arc::new(CaptureTransport {
+      last: Mutex::new(None),
+      response: Mutex::new(Ok(ProviderHttpResponse {
+        status: 200,
+        headers: HashMap::new(),
+        body: "{}".into(),
+      })),
+    });
+    let broker = broker_with(db, transport);
+    broker
+      .execute(BrokerRequest {
+        integration_instance_id: id,
+        capability_id: "ocr.image@1".into(),
+        endpoint_alias: "vision".into(),
+        method: ProviderHttpMethod::Post,
+        relative_path: "v1/images:annotate".into(),
+        query: vec![],
+        headers: HashMap::new(),
+        body: Some(mid_body),
+        content_type: Some("application/json".into()),
+        auth: None,
+        request_id: "req-ocr-override".into(),
+        cancel: None,
+        max_response_body_bytes: None,
+        max_request_body_bytes: Some(BROKER_OCR_REQUEST_BODY_MAX_BYTES),
+      })
+      .await
+      .expect("OCR request body limit must accept multi-KB annotate payloads");
   }
 }

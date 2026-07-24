@@ -43,7 +43,7 @@ const {
 
 function sampleDocument(): ConfigurationExport {
   return {
-    formatVersion: 4,
+    formatVersion: 5,
     exportedAt: "2026-01-01T00:00:00Z",
     providers: [],
     models: [],
@@ -51,6 +51,8 @@ function sampleDocument(): ConfigurationExport {
     profileModels: [],
     profilePromptTemplates: [],
     integrationInstances: [],
+    ocrServices: [],
+    ocrPromptTemplates: [],
     appSettings: {
       schemaVersion: 1,
       uiLanguage: "en",
@@ -92,11 +94,11 @@ function validPreview(): ImportPreview {
 describe("parseConfigurationExportJson", () => {
   test("accepts a minimal valid document shape", () => {
     const doc = parseConfigurationExportJson(JSON.stringify(sampleDocument()));
-    expect(doc.formatVersion).toBe(4);
+    expect(doc.formatVersion).toBe(5);
   });
 
-  test("accepts supported legacy formatVersion 2 and 3 envelopes", () => {
-    for (const formatVersion of [2, 3]) {
+  test("accepts supported legacy formatVersion 2, 3, and 4 envelopes", () => {
+    for (const formatVersion of [2, 3, 4]) {
       const doc = parseConfigurationExportJson(JSON.stringify({ ...sampleDocument(), formatVersion }));
       expect(doc.formatVersion).toBe(formatVersion);
     }

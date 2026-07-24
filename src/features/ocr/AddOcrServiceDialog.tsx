@@ -1,21 +1,32 @@
-// ABOUTME: Dialog for creating a Baidu or AI OCR service through Tauri IPC.
-// ABOUTME: AI create requires at least one configured model; seeds default prompts.
+// ABOUTME: Dialog for creating Baidu, AI, or plugin OCR services through Tauri IPC.
+// ABOUTME: Plugin create binds ready ocr.image@1 instances; AI seeds default prompts.
 import { useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Dialog } from "@base-ui/react/dialog";
 import { useTranslation } from "react-i18next";
 import { dialogBackdropClassName, dialogPopupClassName, outlineButtonClassName } from "../../components/ui";
 import { useToast } from "../../components/toast/useToast";
-import { allProviderModelsOptions, providerListOptions } from "../../query/options";
+import {
+  allProviderModelsOptions,
+  integrationDefinitionListOptions,
+  integrationListOptions,
+  providerListOptions,
+} from "../../query/options";
 import { saveOcrService } from "../../storage/client";
 import { getIpcErrorMessage } from "../../storage/errors";
-import type { OcrProviderType, OcrServiceDto, OcrServiceWrite } from "../../storage/types";
+import type { OcrServiceDto, OcrServiceWrite } from "../../storage/types";
 import {
   DEFAULT_AI_OCR_PROMPT_TEMPLATE_NAME,
   DEFAULT_AI_OCR_SYSTEM_TEMPLATE,
   DEFAULT_AI_OCR_USER_TEMPLATE,
 } from "./defaultAiOcrPrompt";
-import { OCR_PROVIDER_OPTIONS } from "./ocrProviderOptions";
+import {
+  GOOGLE_VISION_PREFERENCES_SCHEMA_VERSION,
+  OCR_IMAGE_CAPABILITY_ID,
+  buildOcrProviderCreateOptions,
+  defaultGoogleVisionPreferences,
+  type OcrProviderCreateOption,
+} from "./ocrProviderOptions";
 
 const PROVIDER_GRID_MAX_COLUMNS = 3;
 
@@ -66,11 +77,22 @@ function AddOcrServiceForm({ onCreated }: AddOcrServiceFormProps) {
 
   const modelsQuery = useQuery(allProviderModelsOptions());
   const providersQuery = useQuery(providerListOptions());
+  const integrationsQuery = useQuery(integrationListOptions());
+  const definitionsQuery = useQuery(integrationDefinitionListOptions());
 
   const modelsPending = modelsQuery.isPending;
   const modelsLoadError = modelsQuery.isError
     ? getIpcErrorMessage(modelsQuery.error, t("ocr.add.modelsLoadFailed"))
     : null;
+
+  const hasEnabledImageModel = useMemo(() => {
+    if (!modelsQuery.isSuccess) {
+      return false;
+    }
+    return (modelsQuery.data ?? []).some(
+      (model) => model.enabled && model.capabilityOverridesJson?.imageAnalysis === true,
+    );
+  }, [modelsQuery.data, modelsQuery.isSuccess]);
 
   const defaultModelId = useMemo(() => {
     if (!modelsQuery.isSuccess) {
@@ -95,6 +117,22 @@ function AddOcrServiceForm({ onCreated }: AddOcrServiceFormProps) {
     return sorted[0]?.id ?? null;
   }, [modelsQuery.data, modelsQuery.isSuccess, providersQuery.data]);
 
+  const createOptions = useMemo(
+    () =>
+      buildOcrProviderCreateOptions({
+        hasEnabledImageModel,
+        modelsPending,
+        instances: integrationsQuery.data ?? [],
+        definitions: definitionsQuery.data ?? [],
+        labels: {
+          baiduLabel: t("ocr.provider.baidu"),
+          aiLabel: t("ocr.provider.ai"),
+          integrationLabel: t("ocr.vision.integrationLabel"),
+        },
+      }),
+    [definitionsQuery.data, hasEnabledImageModel, integrationsQuery.data, modelsPending, t],
+  );
+
   const createMutation = useMutation({
     mutationFn: saveOcrService,
     onSuccess: (created) => {
@@ -109,27 +147,18 @@ function AddOcrServiceForm({ onCreated }: AddOcrServiceFormProps) {
   });
 
   const pending = createMutation.isPending;
-  const providerColumnCount = Math.min(OCR_PROVIDER_OPTIONS.length, PROVIDER_GRID_MAX_COLUMNS);
+  const providerColumnCount = Math.min(Math.max(createOptions.length, 1), PROVIDER_GRID_MAX_COLUMNS);
 
-  function isOptionDisabled(providerType: OcrProviderType) {
-    if (pending) {
-      return true;
-    }
-    // AI create needs the model list; block clicks until it settles.
-    return providerType === "ai" && modelsPending;
-  }
-
-  function handleCreate(providerType: OcrProviderType) {
-    if (isOptionDisabled(providerType)) {
+  function handleCreate(option: OcrProviderCreateOption) {
+    if (pending || option.disabled) {
       return;
     }
 
-    if (providerType === "ai") {
+    if (option.kind === "ai") {
       if (modelsLoadError) {
         setError(modelsLoadError);
         return;
       }
-      // Only treat as "no models" after a successful query with zero enabled models.
       if (!modelsQuery.isSuccess) {
         return;
       }
@@ -161,6 +190,27 @@ function AddOcrServiceForm({ onCreated }: AddOcrServiceFormProps) {
       return;
     }
 
+    if (option.kind === "plugin_capability") {
+      if (!option.integrationInstanceId || !option.ocrCapabilityId) {
+        setError(t("ocr.add.needIntegration"));
+        return;
+      }
+      const write: OcrServiceWrite = {
+        id: null,
+        providerType: "plugin_capability",
+        displayName: t("ocr.defaults.visionName"),
+        enabled: true,
+        integrationInstanceId: option.integrationInstanceId,
+        ocrCapabilityId: option.ocrCapabilityId || OCR_IMAGE_CAPABILITY_ID,
+        capabilityPreferencesVersion: GOOGLE_VISION_PREFERENCES_SCHEMA_VERSION,
+        capabilityPreferences: defaultGoogleVisionPreferences(),
+        promptTemplates: [],
+      };
+      setError(null);
+      createMutation.mutate(write);
+      return;
+    }
+
     const write: OcrServiceWrite = {
       id: null,
       providerType: "baidu",
@@ -178,16 +228,16 @@ function AddOcrServiceForm({ onCreated }: AddOcrServiceFormProps) {
   return (
     <div className="flex flex-col gap-3">
       <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${providerColumnCount}, minmax(0, 1fr))` }}>
-        {OCR_PROVIDER_OPTIONS.map((option) => {
+        {createOptions.map((option) => {
           const Icon = option.Icon;
-          const disabled = isOptionDisabled(option.id);
+          const disabled = pending || option.disabled;
           return (
             <button
               key={option.id}
               type="button"
               disabled={disabled}
               onClick={() => {
-                handleCreate(option.id);
+                handleCreate(option);
               }}
               className={`
                 flex min-w-0 items-center gap-2 border border-line bg-surface p-3 text-left text-on-surface
@@ -198,9 +248,7 @@ function AddOcrServiceForm({ onCreated }: AddOcrServiceFormProps) {
               `}
             >
               <Icon className="size-5 shrink-0" aria-hidden />
-              <span className="min-w-0 truncate text-body-md font-bold">
-                {option.id === "ai" && modelsPending ? t("ocr.add.loadingModels") : t(option.labelKey)}
-              </span>
+              <span className="min-w-0 truncate text-body-md font-bold">{option.label}</span>
             </button>
           );
         })}

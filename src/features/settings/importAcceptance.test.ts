@@ -1,26 +1,46 @@
 // ABOUTME: Focused tests for post-import invalidation keys and re-auth warning kinds.
-// ABOUTME: Covers provider, integration, proxy, and combined authentication requirements.
+// ABOUTME: Covers provider, integration, OCR, proxy, and combined authentication requirements.
 import { describe, expect, test } from "bun:test";
-import { integrationKeys, modelKeys, profileKeys, providerKeys } from "../../query/keys";
+import { integrationKeys, modelKeys, ocrKeys, profileKeys, providerKeys, settingsKeys } from "../../query/keys";
 import type { ImportPreview } from "../../storage/types";
 import { IMPORT_INVALIDATION_KEYS, importAuthWarningKind, importRequiresAuthentication } from "./importAcceptance";
 
 function preview(
   overrides: Partial<
-    Pick<ImportPreview, "requiresAuthentication" | "integrationRequiresAuthentication" | "proxyRequiresAuthentication">
+    Pick<
+      ImportPreview,
+      | "requiresAuthentication"
+      | "integrationRequiresAuthentication"
+      | "ocrRequiresAuthentication"
+      | "proxyRequiresAuthentication"
+    >
   > = {},
-): Pick<ImportPreview, "requiresAuthentication" | "integrationRequiresAuthentication" | "proxyRequiresAuthentication"> {
+): Pick<
+  ImportPreview,
+  | "requiresAuthentication"
+  | "integrationRequiresAuthentication"
+  | "ocrRequiresAuthentication"
+  | "proxyRequiresAuthentication"
+> {
   return {
     requiresAuthentication: [],
     integrationRequiresAuthentication: [],
+    ocrRequiresAuthentication: [],
     proxyRequiresAuthentication: false,
     ...overrides,
   };
 }
 
 describe("IMPORT_INVALIDATION_KEYS", () => {
-  test("includes provider, model, profile, and integration prefixes", () => {
-    expect(IMPORT_INVALIDATION_KEYS).toEqual([providerKeys.all, modelKeys.all, profileKeys.all, integrationKeys.all]);
+  test("includes provider, model, profile, integration, OCR, and settings prefixes", () => {
+    expect(IMPORT_INVALIDATION_KEYS).toEqual([
+      providerKeys.all,
+      modelKeys.all,
+      profileKeys.all,
+      integrationKeys.all,
+      ocrKeys.all,
+      settingsKeys.all,
+    ]);
   });
 });
 
@@ -35,6 +55,10 @@ describe("importRequiresAuthentication", () => {
 
   test("is true for integration auth requirements", () => {
     expect(importRequiresAuthentication(preview({ integrationRequiresAuthentication: ["integration-1"] }))).toBe(true);
+  });
+
+  test("is true for OCR auth requirements", () => {
+    expect(importRequiresAuthentication(preview({ ocrRequiresAuthentication: ["ocr-1"] }))).toBe(true);
   });
 
   test("is true for proxy auth requirement", () => {
@@ -65,7 +89,11 @@ describe("importAuthWarningKind", () => {
     expect(importAuthWarningKind(preview({ integrationRequiresAuthentication: ["i1"] }))).toBe("integrations");
   });
 
-  test("returns both when providers and integrations need re-auth", () => {
+  test("returns ocr for Baidu OCR re-auth only", () => {
+    expect(importAuthWarningKind(preview({ ocrRequiresAuthentication: ["o1"] }))).toBe("ocr");
+  });
+
+  test("returns mixed when multiple auth domains need re-auth", () => {
     expect(
       importAuthWarningKind(
         preview({
@@ -73,6 +101,14 @@ describe("importAuthWarningKind", () => {
           integrationRequiresAuthentication: ["i1"],
         }),
       ),
-    ).toBe("both");
+    ).toBe("mixed");
+    expect(
+      importAuthWarningKind(
+        preview({
+          ocrRequiresAuthentication: ["o1"],
+          integrationRequiresAuthentication: ["i1"],
+        }),
+      ),
+    ).toBe("mixed");
   });
 });

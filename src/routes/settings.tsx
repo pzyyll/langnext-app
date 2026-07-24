@@ -284,9 +284,11 @@ function BackupSettingsSection() {
         const description =
           authKind === "integrations"
             ? t("settings.backup.importNeedsIntegrationAuth")
-            : authKind === "both"
-              ? t("settings.backup.importNeedsAuthBoth")
-              : t("settings.backup.importNeedsAuth");
+            : authKind === "ocr"
+              ? t("settings.backup.importNeedsOcrAuth")
+              : authKind === "mixed"
+                ? t("settings.backup.importNeedsAuthMixed")
+                : t("settings.backup.importNeedsAuth");
         toast.success({
           title: t("settings.backup.importSuccess"),
           description,

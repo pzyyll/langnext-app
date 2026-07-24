@@ -2,6 +2,7 @@
 // ABOUTME: Dispatches blocking storage work and maps failures to IpcError.
 use crate::cmds::runtime::run_blocking;
 use crate::domain::ocr_service::{OcrRecognizeInput, OcrRecognizeResult, OcrServiceDto, OcrServiceWrite};
+use crate::domain::service_capability::validate_capability_request_id;
 use crate::error::IpcError;
 use crate::events::{OCR_SERVICES_CHANGED, emit_data_changed};
 use crate::state::AppState;
@@ -41,11 +42,26 @@ pub async fn delete_ocr_service(app: AppHandle, state: State<'_, AppState>, id: 
 }
 
 /// Recognize text from a PNG image using the configured (or default) OCR service.
+/// When `request_id` is set, registers a cancel token on the shared session registry.
 #[tauri::command]
 pub async fn recognize_ocr(
   state: State<'_, AppState>,
   input: OcrRecognizeInput,
 ) -> Result<OcrRecognizeResult, IpcError> {
   let services = state.ocr_services.clone();
-  services.recognize(input).await.map_err(IpcError::from)
+  let sessions = state.request_sessions.clone();
+  let request_id = input.request_id.clone();
+  let cancel = if let Some(ref rid) = request_id {
+    if let Err(err) = validate_capability_request_id(rid) {
+      return Err(IpcError::from(crate::error::StorageError::Validation(err.message)));
+    }
+    sessions.begin(rid)
+  } else {
+    crate::domain::cancel::CancelToken::new()
+  };
+  let result = services.recognize(input, cancel).await.map_err(IpcError::from);
+  if let Some(ref rid) = request_id {
+    sessions.end(rid);
+  }
+  result
 }

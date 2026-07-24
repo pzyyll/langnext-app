@@ -4,14 +4,17 @@ use crate::credentials::CredentialVault;
 use crate::credentials::coordinator;
 use crate::domain::import_export::{
   ConfigurationExport, EXPORT_FORMAT_VERSION, ImportConflictMode, ImportPreview, ImportResult,
-  IntegrationInstanceExport, export_json_contains_forbidden_secret_keys, parse_and_normalize_export_document,
+  IntegrationInstanceExport, OcrPromptTemplateExport, OcrServiceExport, export_json_contains_forbidden_secret_keys,
+  parse_and_normalize_export_document,
 };
+use crate::domain::ocr_service::{OcrPromptTemplate, OcrProviderType, OcrService};
 use crate::domain::provider::ProviderExport;
 use crate::domain::time::{new_id, now_rfc3339};
 use crate::error::StorageError;
 use crate::repositories::credential_operations::{self, CredentialOperation, OwnerKind};
 use crate::repositories::{
-  app_credentials, app_settings, integration_instances, provider_instances, provider_models, translation_profiles,
+  app_credentials, app_settings, integration_instances, ocr_prompt_templates, ocr_services, provider_instances,
+  provider_models, translation_profiles,
 };
 use crate::services::import_validation::{self, ValidatedImportPlan};
 use crate::storage::Database;
@@ -38,6 +41,8 @@ impl ImportExportService {
       let profile_models = translation_profiles::list_all_targets(conn)?;
       let profile_prompt_templates = translation_profiles::list_all_prompt_templates(conn)?;
       let integrations = integration_instances::list(conn)?;
+      let ocr_service_rows = ocr_services::list(conn)?;
+      let ocr_template_rows = ocr_prompt_templates::list_all(conn)?;
       let app_settings = app_settings::get(conn)?;
 
       let mut provider_exports: Vec<ProviderExport> = providers.iter().map(ProviderExport::from).collect();
@@ -72,6 +77,22 @@ impl ImportExportService {
         .collect();
       integration_exports.sort_by_key(|i| i.id);
 
+      let mut ocr_exports: Vec<OcrServiceExport> = ocr_service_rows.into_iter().map(ocr_service_to_export).collect();
+      ocr_exports.sort_by_key(|s| (s.sort_order, s.id));
+
+      let mut ocr_prompt_exports: Vec<OcrPromptTemplateExport> = ocr_template_rows
+        .into_iter()
+        .map(|row| OcrPromptTemplateExport {
+          id: row.id,
+          ocr_service_id: row.ocr_service_id,
+          name: row.name,
+          system_template: row.system_template,
+          user_template: row.user_template,
+          sort_order: row.sort_order,
+        })
+        .collect();
+      ocr_prompt_exports.sort_by_key(|t| (t.ocr_service_id, t.sort_order, t.id));
+
       let doc = ConfigurationExport {
         format_version: EXPORT_FORMAT_VERSION,
         exported_at: now_rfc3339(),
@@ -81,6 +102,8 @@ impl ImportExportService {
         profile_models: targets,
         profile_prompt_templates: templates,
         integration_instances: integration_exports,
+        ocr_services: ocr_exports,
+        ocr_prompt_templates: ocr_prompt_exports,
         app_settings,
       };
 
@@ -98,7 +121,7 @@ impl ImportExportService {
     })
   }
 
-  /// Preview import from an untrusted JSON value (formatVersion parsed first, then normalized to v4).
+  /// Preview import from an untrusted JSON value (formatVersion parsed first, then normalized).
   pub fn preview_raw(
     &self,
     document: serde_json::Value,
@@ -119,7 +142,7 @@ impl ImportExportService {
     })
   }
 
-  /// Import from an untrusted JSON value (formatVersion parsed first, then normalized to v4).
+  /// Import from an untrusted JSON value (formatVersion parsed first, then normalized).
   pub fn import_raw(
     &self,
     document: serde_json::Value,
@@ -167,6 +190,22 @@ impl ImportExportService {
       for p in &document.providers {
         coordinator::preflight_owner(&self.db, self.vault.as_ref(), OwnerKind::Provider, &p.id.to_string())?;
       }
+      for service in &document.ocr_services {
+        if service.provider_type == OcrProviderType::Baidu {
+          coordinator::preflight_owner(
+            &self.db,
+            self.vault.as_ref(),
+            OwnerKind::OcrApiKey,
+            &service.id.to_string(),
+          )?;
+          coordinator::preflight_owner(
+            &self.db,
+            self.vault.as_ref(),
+            OwnerKind::OcrSecretKey,
+            &service.id.to_string(),
+          )?;
+        }
+      }
     }
     Ok(())
   }
@@ -185,6 +224,15 @@ impl ImportExportService {
           return Err(StorageError::CredentialBusy);
         }
       }
+      for service in &plan.ocr_services {
+        if service.provider_type == OcrProviderType::Baidu {
+          if credential_operations::get_for_owner(conn, OwnerKind::OcrApiKey, &service.id.to_string())?.is_some()
+            || credential_operations::get_for_owner(conn, OwnerKind::OcrSecretKey, &service.id.to_string())?.is_some()
+          {
+            return Err(StorageError::CredentialBusy);
+          }
+        }
+      }
     }
     Ok(())
   }
@@ -196,7 +244,7 @@ impl ImportExportService {
   ) -> Result<Vec<CredentialOperation>, StorageError> {
     let mut cleanup_ops = Vec::new();
 
-    // Integrations first so plugin profiles can bind via FK.
+    // Integrations first so plugin profiles/OCR can bind via FK.
     for instance in &plan.integrations {
       if integration_instances::get(conn, instance.id).is_ok() {
         // Merge: update structural config; leave credential bindings empty/unchanged (never imported).
@@ -277,6 +325,120 @@ impl ImportExportService {
       translation_profiles::save_with_targets(conn, profile, &targets, &prompt_templates, is_new)?;
     }
 
+    // OCR services + templates (after models/integrations so FKs resolve).
+    let mut ocr_templates_by_service: HashMap<Uuid, Vec<(i32, OcrPromptTemplate)>> = HashMap::new();
+    for template in &plan.ocr_prompt_templates {
+      ocr_templates_by_service
+        .entry(template.ocr_service_id)
+        .or_default()
+        .push((
+          template.sort_order,
+          OcrPromptTemplate {
+            id: template.id,
+            name: template.name.clone(),
+            system_template: template.system_template.clone(),
+            user_template: template.user_template.clone(),
+          },
+        ));
+    }
+    for templates in ocr_templates_by_service.values_mut() {
+      templates.sort_by_key(|(sort_order, template)| (*sort_order, template.id));
+    }
+    for service in &plan.ocr_services {
+      let templates: Vec<OcrPromptTemplate> = ocr_templates_by_service
+        .remove(&service.id)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(_, template)| template)
+        .collect();
+      if ocr_services::get(conn, service.id).is_ok() {
+        // Merge: clear Baidu credentials, then rewrite configuration fields.
+        let expected_api = plan.expected_ocr_api_key_refs.get(&service.id).cloned().unwrap_or(None);
+        let expected_secret = plan
+          .expected_ocr_secret_key_refs
+          .get(&service.id)
+          .cloned()
+          .unwrap_or(None);
+        if let Some(old_ref) = expected_api.clone() {
+          let op = credential_operations::insert_db_committed(
+            conn,
+            new_id(),
+            OwnerKind::OcrApiKey,
+            &service.id.to_string(),
+            Some(&old_ref),
+            None,
+          )?;
+          ocr_services::compare_and_set_api_key_ref(conn, service.id, Some(&old_ref), None, &service.updated_at)?;
+          cleanup_ops.push(op);
+        }
+        if let Some(old_ref) = expected_secret.clone() {
+          let op = credential_operations::insert_db_committed(
+            conn,
+            new_id(),
+            OwnerKind::OcrSecretKey,
+            &service.id.to_string(),
+            Some(&old_ref),
+            None,
+          )?;
+          ocr_services::compare_and_set_secret_key_ref(conn, service.id, Some(&old_ref), None, &service.updated_at)?;
+          cleanup_ops.push(op);
+        }
+        match service.provider_type {
+          OcrProviderType::Baidu | OcrProviderType::Ai => {
+            ocr_services::update_configuration_keep_credentials(
+              conn,
+              service.id,
+              &service.display_name,
+              service.enabled,
+              service.baidu_action,
+              service.provider_model_id,
+              service.temperature,
+              service.default_prompt_template_id,
+              &service.updated_at,
+            )?;
+          }
+          OcrProviderType::PluginCapability => {
+            let integration_instance_id = service.integration_instance_id.ok_or_else(|| {
+              StorageError::Validation(format!("ocr service {} missing integration_instance_id", service.id))
+            })?;
+            let ocr_capability_id = service.ocr_capability_id.as_deref().ok_or_else(|| {
+              StorageError::Validation(format!("ocr service {} missing ocr_capability_id", service.id))
+            })?;
+            let prefs_version = service.capability_preferences_version.ok_or_else(|| {
+              StorageError::Validation(format!(
+                "ocr service {} missing capability_preferences_version",
+                service.id
+              ))
+            })?;
+            let prefs = service.capability_preferences.as_ref().ok_or_else(|| {
+              StorageError::Validation(format!("ocr service {} missing capability_preferences", service.id))
+            })?;
+            ocr_services::update_plugin_configuration(
+              conn,
+              service.id,
+              &service.display_name,
+              service.enabled,
+              integration_instance_id,
+              ocr_capability_id,
+              prefs_version,
+              prefs,
+              &service.updated_at,
+            )?;
+          }
+        }
+        if service.provider_type == OcrProviderType::Ai {
+          ocr_prompt_templates::replace_for_service(conn, service.id, &templates)?;
+        } else {
+          ocr_prompt_templates::replace_for_service(conn, service.id, &[])?;
+        }
+      } else {
+        ocr_services::insert(conn, service)?;
+        if service.provider_type == OcrProviderType::Ai {
+          ocr_prompt_templates::replace_for_service(conn, service.id, &templates)?;
+        }
+      }
+    }
+
     // Settings + optional global proxy clear
     if plan.clear_global_proxy {
       if let Some(old_ref) = plan.expected_proxy_ref.clone() {
@@ -296,5 +458,25 @@ impl ImportExportService {
     import_validation::validate_plan_default_profile(conn, &plan.settings)?;
     app_settings::update(conn, &plan.settings)?;
     Ok(cleanup_ops)
+  }
+}
+
+fn ocr_service_to_export(service: OcrService) -> OcrServiceExport {
+  OcrServiceExport {
+    id: service.id,
+    provider_type: service.provider_type,
+    display_name: service.display_name,
+    enabled: service.enabled,
+    sort_order: service.sort_order,
+    baidu_action: service.baidu_action,
+    provider_model_id: service.provider_model_id,
+    temperature: service.temperature,
+    default_prompt_template_id: service.default_prompt_template_id,
+    integration_instance_id: service.integration_instance_id,
+    ocr_capability_id: service.ocr_capability_id,
+    capability_preferences_version: service.capability_preferences_version,
+    capability_preferences: service.capability_preferences,
+    created_at: service.created_at,
+    updated_at: service.updated_at,
   }
 }

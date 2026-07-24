@@ -1,24 +1,28 @@
-// ABOUTME: Google Cloud Translation v3beta1 Translate/Detect capability handlers.
+// ABOUTME: Google Cloud Translation and Vision OCR capability handlers.
 // ABOUTME: Maps app language IDs, builds pinned relative requests, and sanitizes provider errors.
 use crate::domain::language_detection::SUPPORTED_LANGUAGES;
 use crate::domain::provider_http::ProviderHttpMethod;
 use crate::domain::service_capability::{
   CAPABILITY_PROVIDER_CODE_MAX_LEN, CapabilityError, CapabilityErrorCode, DetectLanguageRequest,
-  DetectLanguageResponse, ExecutionContext, TranslateTextRequest, TranslateTextResponse,
-  validate_capability_language_id, validate_capability_request_id, validate_capability_text,
+  DetectLanguageResponse, ExecutionContext, OCR_IMAGE_CAPABILITY_ID, OcrImageRequest, OcrImageResponse,
+  TranslateTextRequest, TranslateTextResponse, validate_capability_language_id, validate_capability_request_id,
+  validate_capability_text, validate_ocr_image_preferences, validate_ocr_png_bounds,
 };
 use crate::domain::service_integration::{GOOGLE_CLOUD_DEFAULT_LOCATION, GOOGLE_CLOUD_PLUGIN_ID, GoogleCloudConfigV1};
 use crate::error::StorageError;
 use crate::repositories::integration_instances;
-use crate::services::network_broker::{BrokerRequest, NetworkBroker};
+use crate::services::network_broker::{BROKER_OCR_REQUEST_BODY_MAX_BYTES, BrokerRequest, NetworkBroker};
 use crate::services::token_grant::{
-  GOOGLE_CLOUD_TRANSLATION_SCOPE, GOOGLE_OAUTH_AUDIENCE_POLICY_ID, GOOGLE_SERVICE_ACCOUNT_AUTH_DRIVER_ID,
-  TokenGrantRequest, TokenGrantService,
+  GOOGLE_CLOUD_TRANSLATION_SCOPE, GOOGLE_CLOUD_VISION_SCOPE, GOOGLE_OAUTH_AUDIENCE_POLICY_ID,
+  GOOGLE_SERVICE_ACCOUNT_AUTH_DRIVER_ID, TokenGrantRequest, TokenGrantService,
 };
 use crate::storage::Database;
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use image::ImageReader;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::HashMap;
+use std::io::Cursor;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -32,6 +36,10 @@ pub const GOOGLE_TRANSLATE_MIME_TYPE: &str = "text/plain";
 pub const GOOGLE_TRANSLATE_TEXT_CAPABILITY_ID: &str = "translate.text@1";
 /// Capability id for language detection.
 pub const GOOGLE_DETECT_LANGUAGE_CAPABILITY_ID: &str = "translate.detect@1";
+/// Manifest endpoint alias for Vision API origin.
+pub const GOOGLE_VISION_ENDPOINT_ALIAS: &str = "vision";
+/// Relative path for Vision images:annotate.
+pub const GOOGLE_VISION_ANNOTATE_PATH: &str = "v1/images:annotate";
 /// Max Google language list entries inspected for detection.
 const DETECT_LANGUAGES_MAX_ITEMS: usize = 16;
 /// Max path segment length for project/location.
@@ -125,6 +133,7 @@ impl GoogleCloudCapabilities {
         request_id: context.request_id.clone(),
         cancel: Some(context.cancel.clone()),
         max_response_body_bytes: None,
+        max_request_body_bytes: None,
       })
       .await
       .map_err(|e| {
@@ -189,6 +198,7 @@ impl GoogleCloudCapabilities {
         request_id: context.request_id.clone(),
         cancel: Some(context.cancel.clone()),
         max_response_body_bytes: None,
+        max_request_body_bytes: None,
       })
       .await
       .map_err(|e| {
@@ -201,9 +211,126 @@ impl GoogleCloudCapabilities {
         .with_request_id(&context.request_id)
     })
   }
+
+  pub async fn ocr_image(
+    &self,
+    instance_id: Uuid,
+    request: OcrImageRequest,
+    context: ExecutionContext,
+  ) -> Result<OcrImageResponse, CapabilityError> {
+    validate_capability_request_id(&context.request_id)?;
+    validate_ocr_image_preferences(&request.preferences).map_err(|e| {
+      e.with_capability_id(OCR_IMAGE_CAPABILITY_ID)
+        .with_request_id(&context.request_id)
+    })?;
+
+    // Decode and bound-check before any network or token work.
+    let _bounds = decode_and_validate_ocr_png(&request.png_base64).map_err(|e| {
+      e.with_capability_id(OCR_IMAGE_CAPABILITY_ID)
+        .with_request_id(&context.request_id)
+    })?;
+
+    let language_hints = map_ocr_language_hints(&request.preferences.language_hints).map_err(|e| {
+      e.with_capability_id(OCR_IMAGE_CAPABILITY_ID)
+        .with_request_id(&context.request_id)
+    })?;
+
+    // Ensure the instance is a Google Cloud integration (no project path needed for annotate).
+    ensure_google_cloud_instance(&self.db, instance_id).map_err(|e| {
+      e.with_capability_id(OCR_IMAGE_CAPABILITY_ID)
+        .with_request_id(&context.request_id)
+    })?;
+
+    let mut annotate_request = json!({
+      "image": { "content": request.png_base64.trim() },
+      "features": [{ "type": request.preferences.operation.google_feature_type() }],
+    });
+    if !language_hints.is_empty() {
+      annotate_request["imageContext"] = json!({ "languageHints": language_hints });
+    }
+    let body = json!({ "requests": [annotate_request] });
+
+    let grant = self
+      .tokens
+      .acquire(
+        TokenGrantRequest {
+          instance_id,
+          capability_id: OCR_IMAGE_CAPABILITY_ID.into(),
+          auth_driver_id: GOOGLE_SERVICE_ACCOUNT_AUTH_DRIVER_ID.into(),
+          scopes: vec![GOOGLE_CLOUD_VISION_SCOPE.into()],
+          audience_policy_id: GOOGLE_OAUTH_AUDIENCE_POLICY_ID.into(),
+        },
+        Some(&context.cancel),
+      )
+      .await
+      .map_err(|e| {
+        e.with_capability_id(OCR_IMAGE_CAPABILITY_ID)
+          .with_request_id(&context.request_id)
+      })?;
+
+    let response = self
+      .network
+      .execute(BrokerRequest {
+        integration_instance_id: instance_id,
+        capability_id: OCR_IMAGE_CAPABILITY_ID.into(),
+        endpoint_alias: GOOGLE_VISION_ENDPOINT_ALIAS.into(),
+        method: ProviderHttpMethod::Post,
+        relative_path: GOOGLE_VISION_ANNOTATE_PATH.into(),
+        query: vec![],
+        headers: HashMap::new(),
+        body: Some(body.to_string()),
+        content_type: Some("application/json".into()),
+        auth: Some(grant),
+        request_id: context.request_id.clone(),
+        cancel: Some(context.cancel.clone()),
+        max_response_body_bytes: None,
+        // Honor the locked 8 MiB decoded PNG contract (base64 + JSON overhead).
+        max_request_body_bytes: Some(BROKER_OCR_REQUEST_BODY_MAX_BYTES),
+      })
+      .await
+      .map_err(|e| {
+        e.with_capability_id(OCR_IMAGE_CAPABILITY_ID)
+          .with_request_id(&context.request_id)
+      })?;
+
+    parse_vision_annotate_response(response.status, &response.body).map_err(|e| {
+      e.with_capability_id(OCR_IMAGE_CAPABILITY_ID)
+        .with_request_id(&context.request_id)
+    })
+  }
 }
 
 fn load_project_location(db: &Database, instance_id: Uuid) -> Result<(String, String), CapabilityError> {
+  let instance = load_google_cloud_instance(db, instance_id)?;
+
+  let config: GoogleCloudConfigV1 = serde_json::from_str(&instance.config_json).map_err(|_| {
+    CapabilityError::new(
+      CapabilityErrorCode::InvalidConfiguration,
+      "invalid Google Cloud configuration",
+    )
+  })?;
+
+  let project_id = validate_path_segment(&config.project_id, "project_id")?;
+  let location = {
+    let loc = config.location.trim();
+    let loc = if loc.is_empty() {
+      GOOGLE_CLOUD_DEFAULT_LOCATION
+    } else {
+      loc
+    };
+    validate_path_segment(loc, "location")?
+  };
+  Ok((project_id, location))
+}
+
+fn ensure_google_cloud_instance(db: &Database, instance_id: Uuid) -> Result<(), CapabilityError> {
+  load_google_cloud_instance(db, instance_id).map(|_| ())
+}
+
+fn load_google_cloud_instance(
+  db: &Database,
+  instance_id: Uuid,
+) -> Result<crate::domain::service_integration::IntegrationInstance, CapabilityError> {
   let instance = db
     .read(|conn| integration_instances::get(conn, instance_id))
     .map_err(|e| match e {
@@ -226,25 +353,86 @@ fn load_project_location(db: &Database, instance_id: Uuid) -> Result<(String, St
       "integration instance is disabled",
     ));
   }
+  Ok(instance)
+}
 
-  let config: GoogleCloudConfigV1 = serde_json::from_str(&instance.config_json).map_err(|_| {
+/// Max standard-base64 character length that can decode to OCR_IMAGE_MAX_DECODED_BYTES.
+/// Standard base64 encodes 3 bytes as 4 chars; pad keeps length a multiple of 4.
+pub const OCR_IMAGE_MAX_BASE64_CHARS: usize =
+  ((crate::domain::service_capability::OCR_IMAGE_MAX_DECODED_BYTES + 2) / 3) * 4;
+
+/// Decode standard base64 PNG and enforce decoded size / dimension limits.
+pub fn decode_and_validate_ocr_png(
+  png_base64: &str,
+) -> Result<crate::domain::service_capability::OcrPngBounds, CapabilityError> {
+  let trimmed = png_base64.trim();
+  if trimmed.is_empty() {
+    return Err(CapabilityError::new(
+      CapabilityErrorCode::InvalidRequest,
+      "png_base64 must not be empty",
+    ));
+  }
+
+  // Preflight encoded length before allocating a decoded buffer (fail closed on abuse).
+  if trimmed.len() > OCR_IMAGE_MAX_BASE64_CHARS {
+    return Err(CapabilityError::new(
+      CapabilityErrorCode::UnsupportedInput,
+      format!(
+        "PNG exceeds {} decoded bytes",
+        crate::domain::service_capability::OCR_IMAGE_MAX_DECODED_BYTES
+      ),
+    ));
+  }
+
+  let decoded = BASE64.decode(trimmed.as_bytes()).map_err(|_| {
     CapabilityError::new(
-      CapabilityErrorCode::InvalidConfiguration,
-      "invalid Google Cloud configuration",
+      CapabilityErrorCode::UnsupportedInput,
+      "png_base64 is not valid standard base64",
     )
   })?;
 
-  let project_id = validate_path_segment(&config.project_id, "project_id")?;
-  let location = {
-    let loc = config.location.trim();
-    let loc = if loc.is_empty() {
-      GOOGLE_CLOUD_DEFAULT_LOCATION
-    } else {
-      loc
-    };
-    validate_path_segment(loc, "location")?
-  };
-  Ok((project_id, location))
+  // Reject before image decode when the decoded byte length already exceeds the bound.
+  if decoded.len() > crate::domain::service_capability::OCR_IMAGE_MAX_DECODED_BYTES {
+    return Err(CapabilityError::new(
+      CapabilityErrorCode::UnsupportedInput,
+      format!(
+        "PNG exceeds {} decoded bytes",
+        crate::domain::service_capability::OCR_IMAGE_MAX_DECODED_BYTES
+      ),
+    ));
+  }
+
+  let reader = ImageReader::new(Cursor::new(&decoded))
+    .with_guessed_format()
+    .map_err(|_| CapabilityError::new(CapabilityErrorCode::UnsupportedInput, "PNG image could not be read"))?;
+
+  // Fail closed unless the decoded format is PNG.
+  if reader.format() != Some(image::ImageFormat::Png) {
+    return Err(CapabilityError::new(
+      CapabilityErrorCode::UnsupportedInput,
+      "image must be PNG",
+    ));
+  }
+
+  let dyn_image = reader
+    .decode()
+    .map_err(|_| CapabilityError::new(CapabilityErrorCode::UnsupportedInput, "PNG image is invalid"))?;
+
+  validate_ocr_png_bounds(dyn_image.width(), dyn_image.height(), decoded.len())
+}
+
+fn map_ocr_language_hints(hints: &[String]) -> Result<Vec<String>, CapabilityError> {
+  let mut mapped = Vec::with_capacity(hints.len());
+  for hint in hints {
+    let google = app_language_to_google(hint).ok_or_else(|| {
+      CapabilityError::new(
+        CapabilityErrorCode::UnsupportedLanguage,
+        format!("unsupported language hint: {hint}"),
+      )
+    })?;
+    mapped.push(google.to_string());
+  }
+  Ok(mapped)
 }
 
 fn validate_path_segment(value: &str, field: &str) -> Result<String, CapabilityError> {
@@ -366,6 +554,168 @@ pub fn parse_translate_response(status: u16, body: &str) -> Result<TranslateText
     translated_text: translated,
     detected_source_language_id: detected,
   })
+}
+
+#[derive(Debug, Deserialize)]
+struct VisionAnnotateApiResponse {
+  #[serde(default)]
+  responses: Vec<VisionAnnotateApiItem>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct VisionAnnotateApiItem {
+  full_text_annotation: Option<VisionFullTextAnnotation>,
+  #[serde(default)]
+  text_annotations: Vec<VisionTextAnnotation>,
+  error: Option<VisionPerImageError>,
+}
+
+#[derive(Debug, Deserialize)]
+struct VisionFullTextAnnotation {
+  text: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct VisionTextAnnotation {
+  description: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct VisionPerImageError {
+  /// Google RPC numeric code when present.
+  code: Option<i64>,
+  /// Provider status name or short reason (never logged as free-form message).
+  status: Option<String>,
+  /// Present on some Vision per-image errors; never surfaced to callers.
+  #[allow(dead_code)]
+  message: Option<String>,
+}
+
+/// Parse Vision `images:annotate` response into plain text.
+pub fn parse_vision_annotate_response(status: u16, body: &str) -> Result<OcrImageResponse, CapabilityError> {
+  map_google_http_error(status, body)?;
+  let parsed: VisionAnnotateApiResponse = serde_json::from_str(body).map_err(|_| {
+    CapabilityError::new(
+      CapabilityErrorCode::InvalidResponse,
+      "vision annotate response was malformed",
+    )
+  })?;
+  let first = parsed.responses.into_iter().next().ok_or_else(|| {
+    CapabilityError::new(
+      CapabilityErrorCode::InvalidResponse,
+      "vision annotate response missing responses",
+    )
+  })?;
+
+  if let Some(error) = first.error {
+    return Err(map_vision_per_image_error(error));
+  }
+
+  if let Some(full) = first.full_text_annotation.and_then(|f| f.text) {
+    return Ok(OcrImageResponse { text: full });
+  }
+  if let Some(first_annotation) = first.text_annotations.into_iter().next() {
+    if let Some(description) = first_annotation.description {
+      return Ok(OcrImageResponse { text: description });
+    }
+  }
+  // Empty text is a successful OCR result (no text found).
+  Ok(OcrImageResponse { text: String::new() })
+}
+
+/// True when a Vision error payload indicates a language-hint rejection.
+/// Body/message is inspected only for mapping; never returned or logged.
+fn vision_error_mentions_language(message: Option<&str>) -> bool {
+  let Some(raw) = message.map(str::trim).filter(|s| !s.is_empty()) else {
+    return false;
+  };
+  let lower = raw.to_ascii_lowercase();
+  lower.contains("language") || lower.contains("lang hint") || lower.contains("languagehint")
+}
+
+fn map_vision_per_image_error(error: VisionPerImageError) -> CapabilityError {
+  let status_name = error
+    .status
+    .as_deref()
+    .map(|s| s.trim().to_ascii_uppercase())
+    .filter(|s| !s.is_empty() && s.len() <= CAPABILITY_PROVIDER_CODE_MAX_LEN);
+  let provider_code = status_name
+    .clone()
+    .or_else(|| error.code.map(|c| c.to_string()))
+    .unwrap_or_else(|| "vision_error".into());
+  let status_name = status_name.unwrap_or_default();
+
+  // Never include error.message — it can contain image/path details.
+  let (code, message, retryable) = match status_name.as_str() {
+    "UNAUTHENTICATED" => (CapabilityErrorCode::Auth, "Google Cloud authentication failed", false),
+    "PERMISSION_DENIED" => (
+      CapabilityErrorCode::PermissionDenied,
+      "Google Cloud permission denied",
+      false,
+    ),
+    "RESOURCE_EXHAUSTED" => (CapabilityErrorCode::QuotaExceeded, "Google Cloud quota exceeded", true),
+    "INVALID_ARGUMENT" => {
+      // Product gate: provider-rejected language hints map to unsupported_language.
+      // Inspect body only for mapping; never surface it to callers/logs.
+      if vision_error_mentions_language(error.message.as_deref()) {
+        (
+          CapabilityErrorCode::UnsupportedLanguage,
+          "Google Cloud rejected a language hint",
+          false,
+        )
+      } else {
+        (
+          CapabilityErrorCode::InvalidRequest,
+          "Google Cloud rejected the request",
+          false,
+        )
+      }
+    }
+    "FAILED_PRECONDITION" | "OUT_OF_RANGE" => (
+      CapabilityErrorCode::UnsupportedInput,
+      "Google Cloud rejected the image input",
+      false,
+    ),
+    "UNAVAILABLE" => (
+      CapabilityErrorCode::ProviderUnavailable,
+      "Google Cloud service unavailable",
+      true,
+    ),
+    _ => match error.code {
+      Some(7) => (
+        CapabilityErrorCode::PermissionDenied,
+        "Google Cloud permission denied",
+        false,
+      ),
+      Some(16) => (CapabilityErrorCode::Auth, "Google Cloud authentication failed", false),
+      Some(8) => (CapabilityErrorCode::QuotaExceeded, "Google Cloud quota exceeded", true),
+      Some(3) => {
+        if vision_error_mentions_language(error.message.as_deref()) {
+          (
+            CapabilityErrorCode::UnsupportedLanguage,
+            "Google Cloud rejected a language hint",
+            false,
+          )
+        } else {
+          (
+            CapabilityErrorCode::InvalidRequest,
+            "Google Cloud rejected the request",
+            false,
+          )
+        }
+      }
+      _ => (
+        CapabilityErrorCode::ProviderUnavailable,
+        "Google Cloud vision request failed",
+        false,
+      ),
+    },
+  };
+
+  CapabilityError::new(code, message)
+    .with_retryable(retryable)
+    .with_provider_code(provider_code)
 }
 
 pub fn parse_detect_response(status: u16, body: &str) -> Result<DetectLanguageResponse, CapabilityError> {
@@ -505,6 +855,18 @@ fn map_google_http_error(status: u16, body: &str) -> Result<(), CapabilityError>
     || reason == "RATE_LIMIT_EXCEEDED"
     || reason == "DAILY_LIMIT_EXCEEDED"
     || reason == "USER_RATE_LIMIT_EXCEEDED";
+
+  // Vision language-hint rejections arrive as INVALID_ARGUMENT / 400 with a language message.
+  if (status == 400 || status_name == "INVALID_ARGUMENT") && vision_error_mentions_language(Some(body)) {
+    return Err(
+      CapabilityError::new(
+        CapabilityErrorCode::UnsupportedLanguage,
+        "Google Cloud rejected a language hint",
+      )
+      .with_retryable(false)
+      .with_provider_code(signals.provider_code),
+    );
+  }
 
   // Prefer semantic signals over bare HTTP status when both are present.
   if is_quota || status == 429 {
@@ -733,6 +1095,118 @@ mod tests {
     assert!(validate_path_segment("", "project_id").is_err());
   }
 
+  #[test]
+  fn google_cloud_vision_parses_full_text_annotation() {
+    let body = r#"{
+      "responses": [{
+        "fullTextAnnotation": { "text": "Hello\nWorld" },
+        "textAnnotations": [{ "description": "Hello\nWorld" }]
+      }]
+    }"#;
+    let resp = parse_vision_annotate_response(200, body).unwrap();
+    assert_eq!(resp.text, "Hello\nWorld");
+  }
+
+  #[test]
+  fn google_cloud_vision_falls_back_to_text_annotations() {
+    let body = r#"{
+      "responses": [{
+        "textAnnotations": [{ "description": "fallback text" }]
+      }]
+    }"#;
+    let resp = parse_vision_annotate_response(200, body).unwrap();
+    assert_eq!(resp.text, "fallback text");
+  }
+
+  #[test]
+  fn google_cloud_vision_empty_text_is_success() {
+    let body = r#"{ "responses": [{}] }"#;
+    let resp = parse_vision_annotate_response(200, body).unwrap();
+    assert_eq!(resp.text, "");
+  }
+
+  #[test]
+  fn google_cloud_vision_per_image_error_maps_permission() {
+    let body = r#"{
+      "responses": [{
+        "error": {
+          "code": 7,
+          "message": "Cloud Vision API has not been used in project secret-project",
+          "status": "PERMISSION_DENIED"
+        }
+      }]
+    }"#;
+    let err = parse_vision_annotate_response(200, body).unwrap_err();
+    assert_eq!(err.code, CapabilityErrorCode::PermissionDenied);
+    assert_eq!(err.provider_code.as_deref(), Some("PERMISSION_DENIED"));
+    assert!(!err.message.contains("secret-project"));
+    assert!(!format!("{err:?}").contains("secret-project"));
+  }
+
+  #[test]
+  fn google_cloud_vision_malformed_response() {
+    let err = parse_vision_annotate_response(200, "not-json").unwrap_err();
+    assert_eq!(err.code, CapabilityErrorCode::InvalidResponse);
+
+    let err = parse_vision_annotate_response(200, r#"{"responses":[]}"#).unwrap_err();
+    assert_eq!(err.code, CapabilityErrorCode::InvalidResponse);
+  }
+
+  #[test]
+  fn google_cloud_vision_http_error_mapping() {
+    let err = parse_vision_annotate_response(401, r#"{"error":{"status":"UNAUTHENTICATED"}}"#).unwrap_err();
+    assert_eq!(err.code, CapabilityErrorCode::Auth);
+
+    let err = parse_vision_annotate_response(429, "{}").unwrap_err();
+    assert_eq!(err.code, CapabilityErrorCode::RateLimited);
+  }
+
+  #[test]
+  fn google_cloud_vision_png_validation_rejects_invalid_and_oversized() {
+    let err = decode_and_validate_ocr_png("").unwrap_err();
+    assert_eq!(err.code, CapabilityErrorCode::InvalidRequest);
+
+    let err = decode_and_validate_ocr_png("%%%not-base64%%%").unwrap_err();
+    assert_eq!(err.code, CapabilityErrorCode::UnsupportedInput);
+
+    // Valid base64 that is not a PNG.
+    let not_png = BASE64.encode(b"hello world");
+    let err = decode_and_validate_ocr_png(&not_png).unwrap_err();
+    assert_eq!(err.code, CapabilityErrorCode::UnsupportedInput);
+
+    // Oversized decoded payload (skip image decode).
+    let huge = BASE64.encode(vec![
+      0u8;
+      crate::domain::service_capability::OCR_IMAGE_MAX_DECODED_BYTES + 1
+    ]);
+    let err = decode_and_validate_ocr_png(&huge).unwrap_err();
+    assert_eq!(err.code, CapabilityErrorCode::UnsupportedInput);
+  }
+
+  #[test]
+  fn google_cloud_vision_png_validation_accepts_minimal_png() {
+    // 1x1 transparent PNG.
+    let png_bytes: &[u8] = &[
+      0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00,
+      0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0A, 0x49,
+      0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00, 0x00,
+      0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+    ];
+    let encoded = BASE64.encode(png_bytes);
+    let bounds = decode_and_validate_ocr_png(&encoded).unwrap();
+    assert_eq!(bounds.width, 1);
+    assert_eq!(bounds.height, 1);
+  }
+
+  #[test]
+  fn google_cloud_vision_language_hint_mapping() {
+    let mapped = map_ocr_language_hints(&["zh".into(), "en".into()]).unwrap();
+    assert_eq!(mapped, vec!["zh-CN".to_string(), "en".to_string()]);
+
+    let err = map_ocr_language_hints(&["xx".into()]).unwrap_err();
+    assert_eq!(err.code, CapabilityErrorCode::UnsupportedLanguage);
+  }
+
   // --- grant → broker → request path tests (fake vault/token/network only) ---
 
   use crate::domain::cancel::CancelToken;
@@ -947,5 +1421,63 @@ mod tests {
     let body = prepared.body.as_deref().unwrap_or("");
     assert!(body.contains("こんにちは"));
     assert!(body.contains("text/plain"));
+  }
+
+  #[tokio::test]
+  async fn ocr_image_grant_broker_request_path() {
+    use crate::domain::service_capability::{OcrImageOperation, OcrImagePreferences};
+
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::new(dir.path()).unwrap();
+    db.initialize().unwrap();
+    let instance_id = seed_google_instance(&db, "vision-project");
+
+    let png_bytes: &[u8] = &[
+      0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00,
+      0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0A, 0x49,
+      0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00, 0x00,
+      0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+    ];
+    let png_base64 = BASE64.encode(png_bytes);
+
+    let transport = Arc::new(CaptureTransport {
+      last: Mutex::new(None),
+      response: Mutex::new(Ok(ProviderHttpResponse {
+        status: 200,
+        headers: HashMap::new(),
+        body: r#"{"responses":[{"fullTextAnnotation":{"text":"vision-ok"}}]}"#.into(),
+      })),
+    });
+    let caps = make_capabilities(db, transport.clone());
+
+    let response = caps
+      .ocr_image(
+        instance_id,
+        OcrImageRequest {
+          png_base64: png_base64.clone(),
+          preferences: OcrImagePreferences {
+            operation: OcrImageOperation::DocumentTextDetection,
+            language_hints: vec!["en".into(), "zh".into()],
+          },
+        },
+        exec_ctx(instance_id, OCR_IMAGE_CAPABILITY_ID),
+      )
+      .await
+      .unwrap();
+
+    assert_eq!(response.text, "vision-ok");
+
+    let prepared = transport.last.lock().unwrap().take().expect("broker executed request");
+    assert!(prepared.url.as_str().contains("v1/images:annotate"));
+    assert!(prepared.url.as_str().contains("vision.googleapis.com"));
+    assert_eq!(
+      prepared.headers.get("Authorization").map(String::as_str),
+      Some("Bearer path-test-token")
+    );
+    let body = prepared.body.as_deref().unwrap_or("");
+    assert!(body.contains("DOCUMENT_TEXT_DETECTION"));
+    assert!(body.contains("languageHints"));
+    assert!(body.contains("zh-CN"));
+    assert!(body.contains(&png_base64));
   }
 }

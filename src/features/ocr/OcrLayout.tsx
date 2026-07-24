@@ -12,7 +12,7 @@ import { useToast } from "../../components/toast/useToast";
 import { outlineButtonClassName } from "../../components/ui";
 import { cn } from "../../lib/cn";
 import { ocrKeys, settingsKeys } from "../../query/keys";
-import { appSettingsOptions, ocrListOptions } from "../../query/options";
+import { appSettingsOptions, integrationListOptions, ocrListOptions } from "../../query/options";
 import { setAppDefaultOcrService } from "../../storage/client";
 import { getIpcErrorMessage } from "../../storage/errors";
 import type { AppSettingsDto, OcrServiceDto } from "../../storage/types";
@@ -35,7 +35,15 @@ export function OcrLayout() {
 
   const servicesQuery = useQuery(ocrListOptions());
   const settingsQuery = useQuery(appSettingsOptions());
+  const integrationsQuery = useQuery(integrationListOptions());
   const services = useMemo(() => servicesQuery.data ?? [], [servicesQuery.data]);
+  const integrationNameById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const instance of integrationsQuery.data ?? []) {
+      map.set(instance.id, instance.displayName);
+    }
+    return map;
+  }, [integrationsQuery.data]);
   const loading = servicesQuery.isLoading;
   const error = servicesQuery.error != null ? getIpcErrorMessage(servicesQuery.error, t("ocr.loadFailed")) : null;
 
@@ -161,7 +169,15 @@ export function OcrLayout() {
                   const active = service.id === selectedId;
                   const provider = getOcrProviderOption(service.providerType);
                   const ProviderIcon = provider.Icon;
-                  const providerLabel = t(provider.labelKey);
+                  const providerLabel =
+                    service.providerType === "plugin_capability"
+                      ? t("ocr.provider.pluginNamed", {
+                          name:
+                            (service.integrationInstanceId
+                              ? integrationNameById.get(service.integrationInstanceId)
+                              : null) ?? t("ocr.provider.pluginUnknownInstance"),
+                        })
+                      : t(provider.labelKey);
                   return (
                     <li key={service.id} role="option" aria-selected={active}>
                       <Link
@@ -169,8 +185,8 @@ export function OcrLayout() {
                         params={{ ocrServiceId: service.id }}
                         className={cn(
                           `
-                            group flex items-center gap-1 border-l-4 px-2 py-1.5 text-left text-body-tight text-on-surface
-                            transition-colors
+                            group flex items-center gap-1 border-l-4 px-2 py-1.5 text-left text-body-tight
+                            text-on-surface transition-colors
                           `,
                           active
                             ? "border-tertiary bg-surface-container-low"

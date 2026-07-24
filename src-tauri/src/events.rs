@@ -20,6 +20,9 @@ pub const OCR_SERVICES_CHANGED: &str = "data://ocr-services-changed";
 /// Emitted after service-integration instance create, update, enable, validate, or delete.
 pub const SERVICE_INTEGRATIONS_CHANGED: &str = "data://service-integrations-changed";
 
+/// Emitted after app settings import or other multi-window settings mutations that need Query refresh.
+pub const APP_SETTINGS_CHANGED: &str = "data://app-settings-changed";
+
 /// Broadcast a coarse data-change notification; log emit failures for observability.
 pub fn emit_data_changed(app: &AppHandle, event: &str) {
   if let Err(error) = app.emit(event, serde_json::json!({})) {

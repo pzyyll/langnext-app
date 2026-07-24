@@ -440,6 +440,10 @@ fn sample_baidu_ocr(id: Uuid, name: &str) -> OcrService {
     provider_model_id: None,
     temperature: None,
     default_prompt_template_id: None,
+    integration_instance_id: None,
+    ocr_capability_id: None,
+    capability_preferences_version: None,
+    capability_preferences: None,
     created_at: now.clone(),
     updated_at: now,
   }
@@ -459,6 +463,10 @@ fn sample_ai_ocr(id: Uuid, model_id: Uuid, default_template_id: Uuid, name: &str
     provider_model_id: Some(model_id),
     temperature: Some(0.2),
     default_prompt_template_id: Some(default_template_id),
+    integration_instance_id: None,
+    ocr_capability_id: None,
+    capability_preferences_version: None,
+    capability_preferences: None,
     created_at: now.clone(),
     updated_at: now,
   }

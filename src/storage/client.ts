@@ -156,7 +156,10 @@ export async function validateIntegrationInstance(id: string): Promise<Integrati
   return runStorage(invokeEffect<IntegrationValidationResult>("validate_integration_instance", { id }));
 }
 
-/** Native Baidu OCR only. AI OCR is handled by `src/features/ocr/recognizeOcrFlow.ts`. */
+/**
+ * Backend OCR recognition (`recognize_ocr`).
+ * Dispatches Baidu native and plugin_capability (Vision); AI OCR stays on the frontend.
+ */
 export async function recognizeBaiduOcr(input: OcrRecognizeInput): Promise<OcrRecognizeResult> {
   return runStorage(invokeEffect<OcrRecognizeResult>("recognize_ocr", { input }));
 }

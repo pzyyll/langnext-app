@@ -15,9 +15,13 @@ pub const GOOGLE_SERVICE_ACCOUNT_AUTH_DRIVER_ID: &str = "com.langnext.auth.googl
 pub const GOOGLE_OAUTH_AUDIENCE_POLICY_ID: &str = "google-oauth-token";
 /// Narrowest documented OAuth scope for Cloud Translation Translate/Detect.
 pub const GOOGLE_CLOUD_TRANSLATION_SCOPE: &str = "https://www.googleapis.com/auth/cloud-translation";
+/// Narrowest documented OAuth scope for Cloud Vision annotate.
+pub const GOOGLE_CLOUD_VISION_SCOPE: &str = "https://www.googleapis.com/auth/cloud-vision";
 /// Capability ids authorized to request the translation scope (fail-closed allow-list).
 const TRANSLATE_TEXT_CAPABILITY_ID: &str = "translate.text@1";
 const DETECT_LANGUAGE_CAPABILITY_ID: &str = "translate.detect@1";
+/// Capability id authorized to request the vision scope.
+const OCR_IMAGE_CAPABILITY_ID: &str = "ocr.image@1";
 /// Safety skew subtracted from token expiry before reuse.
 pub const TOKEN_EXPIRY_SAFETY_SKEW: Duration = Duration::from_secs(60);
 /// Max concurrent cached grants retained in process memory.
@@ -372,6 +376,7 @@ fn validate_grant_request(request: &TokenGrantRequest) -> Result<(), CapabilityE
 fn allowed_scopes_for_capability(capability_id: &str) -> Result<&'static [&'static str], CapabilityError> {
   match capability_id {
     TRANSLATE_TEXT_CAPABILITY_ID | DETECT_LANGUAGE_CAPABILITY_ID => Ok(&[GOOGLE_CLOUD_TRANSLATION_SCOPE]),
+    OCR_IMAGE_CAPABILITY_ID => Ok(&[GOOGLE_CLOUD_VISION_SCOPE]),
     _ => Err(CapabilityError::new(
       CapabilityErrorCode::PermissionDenied,
       "capability is not authorized for token grants",
@@ -785,6 +790,60 @@ mod tests {
     };
     let rendered = format!("{grant:?}");
     assert!(!rendered.contains("super-secret-token"));
+  }
+
+  #[tokio::test]
+  async fn token_grant_ocr_accepts_vision_scope_only() {
+    let exchanger = Arc::new(FakeExchanger::new(1, 3600, "tok-vision"));
+    let service = TokenGrantService::new(exchanger.clone());
+    let id = Uuid::nil();
+
+    let grant = service
+      .acquire(
+        TokenGrantRequest {
+          instance_id: id,
+          capability_id: OCR_IMAGE_CAPABILITY_ID.into(),
+          auth_driver_id: GOOGLE_SERVICE_ACCOUNT_AUTH_DRIVER_ID.into(),
+          scopes: vec![GOOGLE_CLOUD_VISION_SCOPE.into()],
+          audience_policy_id: GOOGLE_OAUTH_AUDIENCE_POLICY_ID.into(),
+        },
+        None,
+      )
+      .await
+      .unwrap();
+    assert_eq!(grant.credential_revision(), 1);
+
+    // Translate capability must not receive the vision scope.
+    let err = service
+      .acquire(
+        TokenGrantRequest {
+          instance_id: id,
+          capability_id: TRANSLATE_TEXT_CAPABILITY_ID.into(),
+          auth_driver_id: GOOGLE_SERVICE_ACCOUNT_AUTH_DRIVER_ID.into(),
+          scopes: vec![GOOGLE_CLOUD_VISION_SCOPE.into()],
+          audience_policy_id: GOOGLE_OAUTH_AUDIENCE_POLICY_ID.into(),
+        },
+        None,
+      )
+      .await
+      .unwrap_err();
+    assert_eq!(err.code, CapabilityErrorCode::PermissionDenied);
+
+    // OCR capability must not receive the translation scope.
+    let err = service
+      .acquire(
+        TokenGrantRequest {
+          instance_id: id,
+          capability_id: OCR_IMAGE_CAPABILITY_ID.into(),
+          auth_driver_id: GOOGLE_SERVICE_ACCOUNT_AUTH_DRIVER_ID.into(),
+          scopes: vec![GOOGLE_CLOUD_TRANSLATION_SCOPE.into()],
+          audience_policy_id: GOOGLE_OAUTH_AUDIENCE_POLICY_ID.into(),
+        },
+        None,
+      )
+      .await
+      .unwrap_err();
+    assert_eq!(err.code, CapabilityErrorCode::PermissionDenied);
   }
 
   #[test]
