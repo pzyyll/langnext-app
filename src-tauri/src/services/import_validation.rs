@@ -9,7 +9,9 @@ use crate::domain::model::{CapabilityOverridesV1, ProviderModel};
 use crate::domain::provider::{
   CredentialKind, ModelsSyncStatus, ProviderExport, ProviderInstance, validate_adapter_id,
 };
-use crate::domain::service_integration::{IntegrationHealthStatus, IntegrationInstance};
+use crate::domain::service_integration::{
+  GOOGLE_CLOUD_PLUGIN_ID, GOOGLE_TRANSLATE_WEB_PLUGIN_ID, IntegrationHealthStatus, IntegrationInstance,
+};
 use crate::domain::settings::{AppSettingsV1, GlobalProxyMode};
 use crate::domain::time::{new_id, now_rfc3339};
 use crate::domain::translation_profile::{
@@ -20,11 +22,16 @@ use crate::error::StorageError;
 use crate::repositories::{
   integration_instances, ocr_services, provider_instances, provider_models, translation_profiles,
 };
+use crate::services::google_translate_web::{
+  google_translate_web_config_complete, validate_google_translate_web_config,
+};
 use crate::services::providers::validate_provider_url;
+use crate::services::service_integration_registry::ServiceIntegrationRegistry;
 use crate::services::settings::{validate_default_ocr_service, validate_default_profile, validate_settings_document};
 use crate::services::translation_profiles::{validate_profile_language_preferences, validate_prompt_templates};
 use rusqlite::Connection;
 use std::collections::{HashMap, HashSet};
+use std::sync::OnceLock;
 use uuid::Uuid;
 
 /// Normalized, self-contained import plan ready for transactional apply.
@@ -135,6 +142,25 @@ pub fn build_validated_plan(
     }
   }
 
+  // Integrations: plugin-aware config validation/normalization before plan materialization.
+  let mut normalized_integration_configs: HashMap<Uuid, String> = HashMap::new();
+  for i in &document.integration_instances {
+    if i.display_name.trim().is_empty() {
+      errors.push(format!("integration {}: display_name must not be empty", i.id));
+    }
+    match normalize_imported_integration_config(&i.plugin_id, &i.config_json) {
+      Ok(config_json) => {
+        normalized_integration_configs.insert(i.id, config_json);
+      }
+      Err(StorageError::Validation(msg)) => {
+        errors.push(format!("integration {}: {msg}", i.id));
+      }
+      Err(e) => {
+        errors.push(format!("integration {}: {e}", i.id));
+      }
+    }
+  }
+
   // Profiles, targets, and prompt templates
   let mut targets_by_profile: HashMap<Uuid, Vec<&TranslationProfileTarget>> = HashMap::new();
   for t in &document.profile_models {
@@ -231,8 +257,10 @@ pub fn build_validated_plan(
         } else {
           counts.integrations_create += 1;
         }
-        // Import never carries credentials; every instance requires re-auth.
-        integration_requires_authentication.push(i.id);
+        // Only credential-bearing plugins require re-auth after secret-free import.
+        if integration_plugin_requires_authentication(&i.plugin_id) {
+          integration_requires_authentication.push(i.id);
+        }
       }
       if let Some(pid) = settings.default_profile_id {
         if !doc_profile_ids.contains(&pid) && !local_profiles.contains_key(&pid) {
@@ -268,7 +296,9 @@ pub fn build_validated_plan(
       for i in &document.integration_instances {
         let new_integration_id = new_id();
         integration_id_map.insert(i.id, new_integration_id);
-        integration_requires_authentication.push(new_integration_id);
+        if integration_plugin_requires_authentication(&i.plugin_id) {
+          integration_requires_authentication.push(new_integration_id);
+        }
       }
       if let Some(old_default) = settings.default_profile_id {
         if let Some(new_id) = profile_id_map.get(&old_default) {
@@ -551,7 +581,17 @@ pub fn build_validated_plan(
         (new_id, now.clone())
       }
     };
-    integrations.push(integration_from_export(exported, id, created_at, now.clone()));
+    let config_json = normalized_integration_configs
+      .get(&exported.id)
+      .cloned()
+      .unwrap_or_else(|| exported.config_json.clone());
+    integrations.push(integration_from_export(
+      exported,
+      id,
+      created_at,
+      now.clone(),
+      config_json,
+    ));
   }
 
   Ok(ValidatedImportPlan {
@@ -576,22 +616,77 @@ fn integration_from_export(
   id: Uuid,
   created_at: String,
   updated_at: String,
+  config_json: String,
 ) -> IntegrationInstance {
-  // Imported instances always require re-auth: force unconfigured and clear validation stamps.
+  // Credential-bearing plugins stay unconfigured until re-auth.
+  // Zero-secret Web instances with complete validated config are Ready and executable.
+  let health_status = imported_integration_health(&exported.plugin_id, &config_json);
   IntegrationInstance {
     id,
     plugin_id: exported.plugin_id.clone(),
     plugin_version: exported.plugin_version.clone(),
     display_name: exported.display_name.clone(),
     enabled: exported.enabled,
-    config_json: exported.config_json.clone(),
+    config_json,
     config_schema_version: exported.config_schema_version,
-    health_status: IntegrationHealthStatus::Unconfigured,
+    health_status,
     last_validated_at: None,
     last_error_code: None,
     created_at,
     updated_at,
   }
+}
+
+fn bundled_registry() -> Option<&'static ServiceIntegrationRegistry> {
+  static REGISTRY: OnceLock<Option<ServiceIntegrationRegistry>> = OnceLock::new();
+  REGISTRY
+    .get_or_init(|| ServiceIntegrationRegistry::bundled().ok())
+    .as_ref()
+}
+
+/// True when the plugin declares credential slots (secrets never travel with import).
+fn integration_plugin_requires_authentication(plugin_id: &str) -> bool {
+  match bundled_registry().and_then(|reg| reg.get(plugin_id)) {
+    Some(manifest) => !manifest.credential_slots.is_empty(),
+    // Unknown plugins: fail closed and require re-auth rather than claiming zero-secret readiness.
+    None => true,
+  }
+}
+
+/// Normalize/validate plugin config for import. Rejects unsafe Web proxy URLs; strips GTX proxy_url.
+fn normalize_imported_integration_config(plugin_id: &str, config_json: &str) -> Result<String, StorageError> {
+  if plugin_id == GOOGLE_TRANSLATE_WEB_PLUGIN_ID {
+    return validate_google_translate_web_config(config_json);
+  }
+  if plugin_id == GOOGLE_CLOUD_PLUGIN_ID {
+    // Structural JSON only — credentials are never present and auth is re-required separately.
+    let value: serde_json::Value = serde_json::from_str(config_json)
+      .map_err(|_| StorageError::Validation("config_json must be valid JSON".into()))?;
+    if !value.is_object() {
+      return Err(StorageError::Validation("config_json must be an object".into()));
+    }
+    // Reject accidental Web-only channel field on Cloud configs (credential fields must not mix).
+    if value.get("channel").is_some() || value.get("proxyUrl").is_some() {
+      return Err(StorageError::Validation(
+        "Google Cloud config rejects Web channel/proxyUrl fields".into(),
+      ));
+    }
+    return Ok(config_json.to_string());
+  }
+  // Unknown plugins: accept JSON objects as structural config.
+  let value: serde_json::Value =
+    serde_json::from_str(config_json).map_err(|_| StorageError::Validation("config_json must be valid JSON".into()))?;
+  if !value.is_object() {
+    return Err(StorageError::Validation("config_json must be an object".into()));
+  }
+  Ok(config_json.to_string())
+}
+
+fn imported_integration_health(plugin_id: &str, config_json: &str) -> IntegrationHealthStatus {
+  if plugin_id == GOOGLE_TRANSLATE_WEB_PLUGIN_ID && google_translate_web_config_complete(config_json) {
+    return IntegrationHealthStatus::Ready;
+  }
+  IntegrationHealthStatus::Unconfigured
 }
 
 fn reject_duplicate_ids<I>(ids: I, label: &str, errors: &mut Vec<String>)
@@ -768,4 +863,192 @@ fn validate_import_profile(
 pub fn validate_plan_default_profile(conn: &Connection, settings: &AppSettingsV1) -> Result<(), StorageError> {
   validate_default_profile(conn, settings.default_profile_id)?;
   validate_default_ocr_service(conn, settings.default_ocr_service_id)
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::domain::import_export::EXPORT_FORMAT_VERSION;
+  use crate::domain::time::now_rfc3339;
+  use crate::storage::Database;
+
+  fn empty_doc() -> ConfigurationExport {
+    ConfigurationExport {
+      format_version: EXPORT_FORMAT_VERSION,
+      exported_at: now_rfc3339(),
+      providers: vec![],
+      models: vec![],
+      translation_profiles: vec![],
+      profile_models: vec![],
+      profile_prompt_templates: vec![],
+      integration_instances: vec![],
+      app_settings: AppSettingsV1::default_document(),
+    }
+  }
+
+  fn web_export(id: Uuid, config_json: &str) -> IntegrationInstanceExport {
+    IntegrationInstanceExport {
+      id,
+      plugin_id: GOOGLE_TRANSLATE_WEB_PLUGIN_ID.into(),
+      plugin_version: "1.0.0".into(),
+      display_name: "Web".into(),
+      enabled: true,
+      config_json: config_json.into(),
+      config_schema_version: 1,
+      health_status: "ready".into(),
+      created_at: now_rfc3339(),
+      updated_at: now_rfc3339(),
+    }
+  }
+
+  fn cloud_export(id: Uuid) -> IntegrationInstanceExport {
+    IntegrationInstanceExport {
+      id,
+      plugin_id: GOOGLE_CLOUD_PLUGIN_ID.into(),
+      plugin_version: "1.0.0".into(),
+      display_name: "Cloud".into(),
+      enabled: true,
+      config_json: r#"{"projectId":"demo","location":"global","proxyMode":"inherit"}"#.into(),
+      config_schema_version: 1,
+      health_status: "ready".into(),
+      created_at: now_rfc3339(),
+      updated_at: now_rfc3339(),
+    }
+  }
+
+  #[test]
+  fn import_web_gtx_requires_no_auth_and_is_ready() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::new(dir.path()).unwrap();
+    db.initialize().unwrap();
+    let web_id = new_id();
+    let mut doc = empty_doc();
+    doc.integration_instances = vec![web_export(web_id, r#"{"channel":"gtx"}"#)];
+
+    let plan = db
+      .read(|conn| build_validated_plan(conn, &doc, ImportConflictMode::Merge))
+      .unwrap();
+    assert!(plan.preview.valid, "errors: {:?}", plan.preview.validation_errors);
+    assert!(plan.preview.integration_requires_authentication.is_empty());
+    assert_eq!(plan.integrations.len(), 1);
+    assert_eq!(plan.integrations[0].health_status, IntegrationHealthStatus::Ready);
+    assert_eq!(plan.integrations[0].plugin_id, GOOGLE_TRANSLATE_WEB_PLUGIN_ID);
+    assert!(!plan.integrations[0].config_json.contains("projectId"));
+  }
+
+  #[test]
+  fn import_web_rejects_unsafe_proxy_url() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::new(dir.path()).unwrap();
+    db.initialize().unwrap();
+    let web_id = new_id();
+    let mut doc = empty_doc();
+    doc.integration_instances = vec![web_export(
+      web_id,
+      r#"{"channel":"https_proxy","proxyUrl":"http://insecure.example/t"}"#,
+    )];
+
+    let plan = db
+      .read(|conn| build_validated_plan(conn, &doc, ImportConflictMode::Merge))
+      .unwrap();
+    assert!(!plan.preview.valid);
+    assert!(plan.preview.validation_errors.iter().any(|e| e.contains("https")));
+    assert!(plan.integrations.is_empty());
+  }
+
+  #[test]
+  fn import_cloud_requires_auth_and_stays_unconfigured() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::new(dir.path()).unwrap();
+    db.initialize().unwrap();
+    let cloud_id = new_id();
+    let mut doc = empty_doc();
+    doc.integration_instances = vec![cloud_export(cloud_id)];
+
+    let plan = db
+      .read(|conn| build_validated_plan(conn, &doc, ImportConflictMode::Merge))
+      .unwrap();
+    assert!(plan.preview.valid, "errors: {:?}", plan.preview.validation_errors);
+    assert_eq!(plan.preview.integration_requires_authentication, vec![cloud_id]);
+    assert_eq!(
+      plan.integrations[0].health_status,
+      IntegrationHealthStatus::Unconfigured
+    );
+    assert_eq!(plan.integrations[0].plugin_id, GOOGLE_CLOUD_PLUGIN_ID);
+  }
+
+  #[test]
+  fn import_rejects_mixed_cloud_web_credential_fields() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::new(dir.path()).unwrap();
+    db.initialize().unwrap();
+    let web_id = new_id();
+    let cloud_id = new_id();
+    let mut doc = empty_doc();
+    doc.integration_instances = vec![
+      web_export(web_id, r#"{"channel":"gtx","projectId":"x"}"#),
+      IntegrationInstanceExport {
+        id: cloud_id,
+        plugin_id: GOOGLE_CLOUD_PLUGIN_ID.into(),
+        plugin_version: "1.0.0".into(),
+        display_name: "Cloud".into(),
+        enabled: true,
+        config_json: r#"{"projectId":"demo","location":"global","proxyMode":"inherit","channel":"gtx"}"#.into(),
+        config_schema_version: 1,
+        health_status: "ready".into(),
+        created_at: now_rfc3339(),
+        updated_at: now_rfc3339(),
+      },
+    ];
+
+    let plan = db
+      .read(|conn| build_validated_plan(conn, &doc, ImportConflictMode::Merge))
+      .unwrap();
+    assert!(!plan.preview.valid);
+    assert!(plan.preview.validation_errors.iter().any(|e| e.contains("projectId")));
+    assert!(
+      plan
+        .preview
+        .validation_errors
+        .iter()
+        .any(|e| e.contains("channel") || e.contains("proxyUrl"))
+    );
+  }
+
+  #[test]
+  fn import_web_proxy_normalizes_url_and_stays_executable() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::new(dir.path()).unwrap();
+    db.initialize().unwrap();
+    let web_id = new_id();
+    let mut doc = empty_doc();
+    doc.integration_instances = vec![web_export(
+      web_id,
+      r#"{"channel":"https_proxy","proxyUrl":"https://googlet.deno.dev/translate?foo=1"}"#,
+    )];
+
+    let plan = db
+      .read(|conn| build_validated_plan(conn, &doc, ImportConflictMode::Merge))
+      .unwrap();
+    assert!(plan.preview.valid, "errors: {:?}", plan.preview.validation_errors);
+    assert!(plan.preview.integration_requires_authentication.is_empty());
+    assert_eq!(plan.integrations[0].health_status, IntegrationHealthStatus::Ready);
+    assert!(
+      plan.integrations[0]
+        .config_json
+        .contains("https://googlet.deno.dev/translate")
+    );
+    assert!(!plan.integrations[0].config_json.contains("foo=1"));
+  }
+
+  #[test]
+  fn auth_requirement_is_registry_aware() {
+    assert!(!integration_plugin_requires_authentication(
+      GOOGLE_TRANSLATE_WEB_PLUGIN_ID
+    ));
+    assert!(integration_plugin_requires_authentication(GOOGLE_CLOUD_PLUGIN_ID));
+    assert!(integration_plugin_requires_authentication(
+      "com.langnext.unknown-plugin"
+    ));
+  }
 }

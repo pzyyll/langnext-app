@@ -63,6 +63,8 @@ pub struct PreparedHttpRequest {
   pub proxy_mode: ProxyMode,
   /// Optional per-request response body cap (defaults to MAX_RESPONSE_BODY_BYTES).
   pub max_response_body_bytes: Option<usize>,
+  /// Optional per-request total timeout override (defaults to client REQUEST_TIMEOUT).
+  pub timeout: Option<Duration>,
 }
 
 /// Backward-compatible alias used by Provider HTTP.
@@ -78,6 +80,7 @@ impl std::fmt::Debug for PreparedHttpRequest {
       .field("content_type", &self.content_type)
       .field("proxy_mode", &self.proxy_mode)
       .field("max_response_body_bytes", &self.max_response_body_bytes)
+      .field("timeout", &self.timeout)
       .finish()
   }
 }
@@ -252,6 +255,10 @@ async fn execute_request(prepared: PreparedHttpRequest) -> Result<ProviderHttpRe
     builder = builder
       .header(reqwest::header::CONTENT_TYPE, content_type)
       .body(body.clone());
+  }
+  // Per-request override (e.g. stricter free-text Web timeout) without changing shared clients.
+  if let Some(timeout) = prepared.timeout {
+    builder = builder.timeout(timeout);
   }
 
   let response = builder.send().await.map_err(map_reqwest_error)?;
@@ -457,5 +464,13 @@ mod tests {
     assert!(is_blocked_header("Authorization"));
     assert!(is_blocked_header("cookie"));
     assert!(!is_blocked_header("X-Custom"));
+  }
+
+  #[test]
+  fn bounded_http_default_timeout_and_redirect_policy_constants() {
+    // Shared non-stream clients use REQUEST_TIMEOUT and Policy::none() (see client_for).
+    // Redirect following is intentionally disabled for all service-integration HTTP.
+    assert_eq!(REQUEST_TIMEOUT, Duration::from_secs(20));
+    assert_eq!(STREAM_CONNECT_TIMEOUT, Duration::from_secs(20));
   }
 }

@@ -6,6 +6,7 @@ use crate::domain::cancel::RequestSessionRegistry;
 use crate::error::StorageError;
 use crate::services::google_cloud::GoogleCloudCapabilities;
 use crate::services::google_service_account::GoogleServiceAccountExchanger;
+use crate::services::google_translate_web::GoogleTranslateWebCapabilities;
 use crate::services::network_broker::NetworkBroker;
 use crate::services::service_capabilities::{ServiceCapabilityRegistry, ServiceCapabilityService};
 use crate::services::token_grant::TokenGrantService;
@@ -62,7 +63,9 @@ impl AppState {
       network_broker.clone(),
       token_grants.clone(),
     ));
-    let capability_handlers = Arc::new(ServiceCapabilityRegistry::with_google_cloud(google_caps));
+    let google_web_caps = Arc::new(GoogleTranslateWebCapabilities::new(db.clone(), network_broker.clone()));
+    let capability_handlers =
+      Arc::new(ServiceCapabilityRegistry::with_google_cloud(google_caps).with_google_translate_web(google_web_caps));
     let service_capabilities = ServiceCapabilityService::new(db.clone(), registry.clone(), capability_handlers);
 
     let providers = ProviderService::new(db.clone(), vault.clone());

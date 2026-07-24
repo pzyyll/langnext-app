@@ -1,9 +1,10 @@
 // ABOUTME: Bundled service-integration catalog registration and sanitized lookup.
-// ABOUTME: Phase 1A registers Google Cloud metadata only; no provider network calls.
+// ABOUTME: Registers Google Cloud and credential-free Google Web translation definitions.
 use crate::domain::service_integration::{
   CredentialSlotDescriptor, CredentialSlotKind, EndpointGrant, GOOGLE_CLOUD_PLUGIN_ID,
-  GOOGLE_CLOUD_SERVICE_ACCOUNT_SLOT, IntegrationCapabilityDescriptor, ServiceIntegrationManifest,
-  validate_capability_id, validate_plugin_id, validate_slot_id,
+  GOOGLE_CLOUD_SERVICE_ACCOUNT_SLOT, GOOGLE_TRANSLATE_WEB_DEFAULT_PROXY_URL, GOOGLE_TRANSLATE_WEB_GTX_ORIGIN,
+  GOOGLE_TRANSLATE_WEB_PLUGIN_ID, IntegrationCapabilityDescriptor, ServiceIntegrationManifest, validate_capability_id,
+  validate_plugin_id, validate_slot_id,
 };
 use crate::error::StorageError;
 use std::collections::{HashMap, HashSet};
@@ -24,6 +25,7 @@ impl ServiceIntegrationRegistry {
       by_id: HashMap::new(),
     };
     registry.register(google_cloud_manifest())?;
+    registry.register(google_translate_web_manifest())?;
     Ok(registry)
   }
 
@@ -98,6 +100,47 @@ fn google_cloud_manifest() -> ServiceIntegrationManifest {
         id: "translate.detect@1".into(),
         preferences_schema_version: 1,
         endpoint_aliases: vec!["oauth".into(), "translate".into()],
+      },
+    ],
+  }
+}
+
+fn google_translate_web_manifest() -> ServiceIntegrationManifest {
+  // Default proxy base is origin-only; instance config supplies the validated origin at runtime.
+  let default_proxy_origin = url::Url::parse(GOOGLE_TRANSLATE_WEB_DEFAULT_PROXY_URL)
+    .map(|u| u.origin().ascii_serialization())
+    .unwrap_or_else(|_| "https://googlet.deno.dev".into());
+  ServiceIntegrationManifest {
+    manifest_version: 1,
+    plugin_api_version: "1.0".into(),
+    id: GOOGLE_TRANSLATE_WEB_PLUGIN_ID.into(),
+    version: "1.0.0".into(),
+    display_name_key: "plugins.googleTranslateWeb.name".into(),
+    min_host_version: "0.1.0".into(),
+    config_schema_version: 1,
+    credential_slots: vec![],
+    endpoints: vec![
+      EndpointGrant {
+        alias: "gtx".into(),
+        base_url: GOOGLE_TRANSLATE_WEB_GTX_ORIGIN.into(),
+      },
+      EndpointGrant {
+        alias: "https_proxy".into(),
+        // Placeholder origin; NetworkBroker replaces with instance-validated HTTPS origin.
+        base_url: default_proxy_origin,
+      },
+    ],
+    capabilities: vec![
+      IntegrationCapabilityDescriptor {
+        id: "translate.text@1".into(),
+        preferences_schema_version: 1,
+        endpoint_aliases: vec!["gtx".into(), "https_proxy".into()],
+      },
+      IntegrationCapabilityDescriptor {
+        id: "translate.detect@1".into(),
+        preferences_schema_version: 1,
+        // Detect always uses pinned GTX, even in proxy channel mode.
+        endpoint_aliases: vec!["gtx".into()],
       },
     ],
   }
@@ -181,7 +224,7 @@ mod tests {
   fn bundled_registers_google_cloud() {
     let registry = ServiceIntegrationRegistry::bundled().unwrap();
     let defs = registry.list_definitions();
-    assert_eq!(defs.len(), 1);
+    assert_eq!(defs.len(), 2);
     let google = registry.get(GOOGLE_CLOUD_PLUGIN_ID).unwrap();
     assert_eq!(google.config_schema_version, 1);
     assert_eq!(google.credential_slots.len(), 1);
@@ -189,6 +232,27 @@ mod tests {
     assert_eq!(google.capabilities.len(), 2);
     assert!(google.capabilities.iter().any(|c| c.id == "translate.text@1"));
     assert!(google.capabilities.iter().any(|c| c.id == "translate.detect@1"));
+  }
+
+  #[test]
+  fn bundled_registers_google_translate_web_zero_secret() {
+    let registry = ServiceIntegrationRegistry::bundled().unwrap();
+    let web = registry.get(GOOGLE_TRANSLATE_WEB_PLUGIN_ID).unwrap();
+    assert_eq!(web.config_schema_version, 1);
+    assert!(web.credential_slots.is_empty());
+    assert_eq!(web.capabilities.len(), 2);
+    assert!(web.capabilities.iter().any(|c| c.id == "translate.text@1"));
+    assert!(web.capabilities.iter().any(|c| c.id == "translate.detect@1"));
+    let translate = web.capabilities.iter().find(|c| c.id == "translate.text@1").unwrap();
+    assert!(translate.endpoint_aliases.iter().any(|a| a == "gtx"));
+    assert!(translate.endpoint_aliases.iter().any(|a| a == "https_proxy"));
+    let detect = web.capabilities.iter().find(|c| c.id == "translate.detect@1").unwrap();
+    assert_eq!(detect.endpoint_aliases, vec!["gtx".to_string()]);
+    assert!(defs_contain_separate_cloud_and_web(&registry));
+  }
+
+  fn defs_contain_separate_cloud_and_web(registry: &ServiceIntegrationRegistry) -> bool {
+    registry.contains(GOOGLE_CLOUD_PLUGIN_ID) && registry.contains(GOOGLE_TRANSLATE_WEB_PLUGIN_ID)
   }
 
   #[test]

@@ -759,6 +759,8 @@ function TranslateProfilesPage() {
       statusNeedsConfig: t("translate.profiles.engineStatusNeedsConfig"),
       statusGeneric: t("translate.profiles.engineStatusGeneric"),
       integrationLabel: t("translate.profiles.engineIntegrationLabel"),
+      webChannelGtx: t("plugins.googleTranslateWeb.channelLabelGtx"),
+      webChannelProxy: t("plugins.googleTranslateWeb.channelLabelProxy"),
     }),
     [t],
   );

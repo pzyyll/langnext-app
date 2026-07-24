@@ -4,7 +4,9 @@ use crate::domain::cancel::CancelToken;
 use crate::domain::provider::ProxyMode;
 use crate::domain::provider_http::{ProviderHttpMethod, ProviderHttpResponse};
 use crate::domain::service_capability::{CapabilityError, CapabilityErrorCode};
-use crate::domain::service_integration::{GoogleCloudConfigV1, ServiceIntegrationManifest};
+use crate::domain::service_integration::{
+  GOOGLE_TRANSLATE_WEB_PLUGIN_ID, GoogleCloudConfigV1, IntegrationInstance, ServiceIntegrationManifest,
+};
 use crate::error::StorageError;
 use crate::repositories::integration_instances;
 use crate::services::bounded_http::{
@@ -12,11 +14,13 @@ use crate::services::bounded_http::{
   build_endpoint, is_blocked_header, validate_caller_name, validate_relative_path, validate_request_id,
   value_looks_like_secret_key, with_cancel,
 };
+use crate::services::google_translate_web::{GOOGLE_WEB_PROXY_ENDPOINT_ALIAS, resolve_instance_proxy_origin};
 use crate::services::service_integration_registry::ServiceIntegrationRegistry;
 use crate::services::token_grant::TokenGrant;
 use crate::storage::Database;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 use uuid::Uuid;
 
 /// Default max response body for service-integration broker calls.
@@ -42,6 +46,8 @@ pub struct BrokerRequest {
   pub request_id: String,
   pub cancel: Option<CancelToken>,
   pub max_response_body_bytes: Option<usize>,
+  /// Optional per-request total timeout override for the underlying HTTP call.
+  pub timeout: Option<Duration>,
 }
 
 #[derive(Clone)]
@@ -132,8 +138,8 @@ impl NetworkBroker {
       ));
     }
 
-    let base_url = resolve_endpoint_alias(manifest, &request.endpoint_alias)?;
-    // Official Google origins are pinned by the manifest; never accept caller origins.
+    let base_url = resolve_endpoint_base(manifest, &instance, &request.endpoint_alias)?;
+    // Origins come from pinned manifest grants or instance-validated HTTPS proxy config only.
     let mut url = build_endpoint(&base_url, &request.relative_path).map_err(map_validation)?;
 
     for (name, value) in &request.query {
@@ -160,7 +166,15 @@ impl NetworkBroker {
       headers.insert(name.clone(), value.clone());
     }
 
-    if let Some(grant) = &request.auth {
+    // Zero-secret Google Web integrations never receive token grants or auth headers.
+    if instance.plugin_id == GOOGLE_TRANSLATE_WEB_PLUGIN_ID {
+      if request.auth.is_some() {
+        return Err(CapabilityError::new(
+          CapabilityErrorCode::PermissionDenied,
+          "Google Web integration cannot use token grants",
+        ));
+      }
+    } else if let Some(grant) = &request.auth {
       if grant.instance_id() != request.integration_instance_id {
         return Err(CapabilityError::new(
           CapabilityErrorCode::PermissionDenied,
@@ -197,6 +211,7 @@ impl NetworkBroker {
         content_type: request.content_type,
         proxy_mode,
         max_response_body_bytes: Some(max_body),
+        timeout: request.timeout,
       },
     ))
   }
@@ -214,6 +229,21 @@ fn resolve_endpoint_alias(manifest: &ServiceIntegrationManifest, alias: &str) ->
         format!("unknown endpoint alias '{alias}'"),
       )
     })
+}
+
+/// Resolve endpoint base URL from pinned manifest grants or instance-scoped HTTPS proxy config.
+fn resolve_endpoint_base(
+  manifest: &ServiceIntegrationManifest,
+  instance: &IntegrationInstance,
+  alias: &str,
+) -> Result<String, CapabilityError> {
+  // Capability already authorized the alias; still require it on the manifest.
+  let _pinned = resolve_endpoint_alias(manifest, alias)?;
+  if manifest.id == GOOGLE_TRANSLATE_WEB_PLUGIN_ID && alias == GOOGLE_WEB_PROXY_ENDPOINT_ALIAS {
+    // User-configured HTTPS origin class: validated proxy URL on this instance only.
+    return resolve_instance_proxy_origin(&instance.config_json);
+  }
+  resolve_endpoint_alias(manifest, alias)
 }
 
 fn resolve_proxy_mode(config_json: &str) -> ProxyMode {
@@ -406,6 +436,7 @@ mod tests {
         request_id: "req-1".into(),
         cancel: None,
         max_response_body_bytes: None,
+        timeout: None,
       })
       .await
       .unwrap();
@@ -413,6 +444,7 @@ mod tests {
     let prepared = transport.last.lock().unwrap().take().unwrap();
     assert!(prepared.url.as_str().starts_with("https://translation.googleapis.com/"));
     assert!(prepared.headers.contains_key("Authorization"));
+    assert!(prepared.timeout.is_none());
   }
 
   #[tokio::test]
@@ -445,6 +477,7 @@ mod tests {
         request_id: "req-2".into(),
         cancel: None,
         max_response_body_bytes: None,
+        timeout: None,
       })
       .await
       .unwrap_err();
@@ -482,6 +515,7 @@ mod tests {
         request_id: "req-3".into(),
         cancel: None,
         max_response_body_bytes: None,
+        timeout: None,
       })
       .await
       .unwrap_err();
@@ -502,6 +536,7 @@ mod tests {
         request_id: "req-4".into(),
         cancel: None,
         max_response_body_bytes: None,
+        timeout: None,
       })
       .await
       .unwrap_err();
@@ -522,6 +557,7 @@ mod tests {
         request_id: "req-5".into(),
         cancel: None,
         max_response_body_bytes: None,
+        timeout: None,
       })
       .await
       .unwrap_err();
@@ -561,6 +597,7 @@ mod tests {
         request_id: "req-6".into(),
         cancel: Some(cancel),
         max_response_body_bytes: None,
+        timeout: None,
       })
       .await
       .unwrap_err();
@@ -586,9 +623,95 @@ mod tests {
         request_id: "req-7".into(),
         cancel: None,
         max_response_body_bytes: Some(8),
+        timeout: None,
       })
       .await
       .unwrap_err();
     assert_eq!(err.code, CapabilityErrorCode::InvalidResponse);
+  }
+
+  fn seed_web_instance(db: &Database) -> Uuid {
+    use crate::domain::service_integration::{
+      GOOGLE_TRANSLATE_WEB_PLUGIN_ID, GoogleTranslateWebChannel, GoogleTranslateWebConfigV1,
+    };
+    let id = new_id();
+    let now = now_rfc3339();
+    let config = GoogleTranslateWebConfigV1 {
+      channel: GoogleTranslateWebChannel::Gtx,
+      proxy_url: None,
+    };
+    db.transaction(|uow| {
+      integration_instances::insert(
+        uow.conn(),
+        &IntegrationInstance {
+          id,
+          plugin_id: GOOGLE_TRANSLATE_WEB_PLUGIN_ID.into(),
+          plugin_version: "1.0.0".into(),
+          display_name: "Web".into(),
+          enabled: true,
+          config_json: serde_json::to_string(&config).unwrap(),
+          config_schema_version: 1,
+          health_status: IntegrationHealthStatus::Ready,
+          last_validated_at: None,
+          last_error_code: None,
+          created_at: now.clone(),
+          updated_at: now,
+        },
+      )?;
+      Ok(())
+    })
+    .unwrap();
+    id
+  }
+
+  #[tokio::test]
+  async fn network_broker_rejects_token_grant_for_google_web() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::new(dir.path()).unwrap();
+    db.initialize().unwrap();
+    let cloud_id = seed_google_instance(&db);
+    let web_id = seed_web_instance(&db);
+    let transport = Arc::new(CaptureTransport {
+      last: Mutex::new(None),
+      response: Mutex::new(Ok(ProviderHttpResponse {
+        status: 200,
+        headers: HashMap::new(),
+        body: r#"[[["x"]],null,"en"]"#.into(),
+      })),
+    });
+    let broker = broker_with(db, transport);
+    // Mint a grant against a Cloud instance, then attempt to attach it to a Web request.
+    let grant = make_grant(cloud_id).await;
+    let err = broker
+      .execute(BrokerRequest {
+        integration_instance_id: web_id,
+        capability_id: "translate.text@1".into(),
+        endpoint_alias: "gtx".into(),
+        method: ProviderHttpMethod::Get,
+        relative_path: "translate_a/single".into(),
+        query: vec![],
+        headers: HashMap::new(),
+        body: None,
+        content_type: None,
+        auth: Some(grant),
+        request_id: "req-web-auth".into(),
+        cancel: None,
+        max_response_body_bytes: None,
+        timeout: Some(Duration::from_secs(10)),
+      })
+      .await
+      .unwrap_err();
+    assert_eq!(err.code, CapabilityErrorCode::PermissionDenied);
+    assert!(err.message.contains("token grant"));
+  }
+
+  #[test]
+  fn network_broker_maps_timeout_transport_errors() {
+    let err = map_transport_error(StorageError::Validation("request timed out".into()));
+    assert_eq!(err.code, CapabilityErrorCode::Timeout);
+    let err = map_transport_error(StorageError::Validation("stream idle timeout".into()));
+    assert_eq!(err.code, CapabilityErrorCode::Timeout);
+    let err = map_transport_error(StorageError::Validation("network request failed".into()));
+    assert_eq!(err.code, CapabilityErrorCode::Network);
   }
 }

@@ -1,6 +1,12 @@
 // ABOUTME: Dual-catalog options for creating translation profiles (LLM + integrations).
 // ABOUTME: Built-in LLM option plus ready translate.text@1 integration instances.
-import type { IntegrationInstanceDto, ProviderModelDto, ServiceIntegrationManifest } from "../../storage/types";
+import type {
+  GoogleTranslateWebChannel,
+  IntegrationInstanceDto,
+  ProviderModelDto,
+  ServiceIntegrationManifest,
+} from "../../storage/types";
+import { GOOGLE_TRANSLATE_WEB_PLUGIN_ID } from "../../storage/types";
 
 /** Translate capability major contract used by Google Cloud and compatible plugins. */
 export const TRANSLATE_TEXT_CAPABILITY_ID = "translate.text@1";
@@ -36,6 +42,9 @@ export type TranslationEngineOptionLabels = {
   statusGeneric: string;
   /** `{{plugin}}` and `{{name}}` placeholders. */
   integrationLabel: string;
+  /** Optional channel suffix labels for Google Web instances. */
+  webChannelGtx?: string;
+  webChannelProxy?: string;
 };
 
 const LLM_OPTION_ID = "llm";
@@ -49,6 +58,8 @@ const DEFAULT_LABELS: TranslationEngineOptionLabels = {
   statusNeedsConfig: "Needs configuration under Plugins",
   statusGeneric: "{{plugin}} · {{status}}",
   integrationLabel: "{{plugin}} — {{name}}",
+  webChannelGtx: "GTX",
+  webChannelProxy: "Proxy",
 };
 
 function applyTemplate(template: string, vars: Record<string, string>): string {
@@ -61,12 +72,43 @@ function pluginDisplayName(pluginId: string, definitionsById: Map<string, Servic
     return pluginId;
   }
   // displayNameKey is i18n key; fall back to last segment of plugin id for option labels.
+  if (pluginId === GOOGLE_TRANSLATE_WEB_PLUGIN_ID) {
+    return "Google Translate Web";
+  }
   const segments = pluginId.split(".");
   const last = segments[segments.length - 1] ?? pluginId;
   return last
     .split("-")
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
+}
+
+function parseWebChannel(configJson: string): GoogleTranslateWebChannel | null {
+  try {
+    const parsed = JSON.parse(configJson) as { channel?: unknown };
+    if (parsed.channel === "https_proxy") {
+      return "https_proxy";
+    }
+    if (parsed.channel === "gtx") {
+      return "gtx";
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function webChannelLabel(
+  channel: GoogleTranslateWebChannel | null,
+  labels: TranslationEngineOptionLabels,
+): string | null {
+  if (channel === "gtx") {
+    return labels.webChannelGtx ?? DEFAULT_LABELS.webChannelGtx ?? null;
+  }
+  if (channel === "https_proxy") {
+    return labels.webChannelProxy ?? DEFAULT_LABELS.webChannelProxy ?? null;
+  }
+  return null;
 }
 
 function capabilityIdsForPlugin(
@@ -137,10 +179,16 @@ export function buildTranslationEngineOptions(input: {
     const pluginLabel = pluginDisplayName(instance.pluginId, definitionsById);
     const caps = capabilityIdsForPlugin(instance.pluginId, definitionsById);
     const ready = instance.enabled && instance.effectiveStatus === "ready";
+    const channel = instance.pluginId === GOOGLE_TRANSLATE_WEB_PLUGIN_ID ? parseWebChannel(instance.configJson) : null;
+    const channelSuffix = webChannelLabel(channel, labels);
+    const displayName = channelSuffix != null ? `${instance.displayName} (${channelSuffix})` : instance.displayName;
     let description = applyTemplate(labels.statusGeneric, {
       plugin: pluginLabel,
       status: instance.effectiveStatus,
     });
+    if (channelSuffix != null && ready) {
+      description = `${pluginLabel} · ${channelSuffix}`;
+    }
     let disabled = !ready;
     let configurePath: "/plugins" | null = null;
     if (!instance.enabled || instance.effectiveStatus === "disabled") {
@@ -166,7 +214,7 @@ export function buildTranslationEngineOptions(input: {
       kind: "plugin_capability",
       label: applyTemplate(labels.integrationLabel, {
         plugin: pluginLabel,
-        name: instance.displayName,
+        name: displayName,
       }),
       description,
       disabled,

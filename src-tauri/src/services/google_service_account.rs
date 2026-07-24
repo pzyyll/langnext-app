@@ -283,6 +283,7 @@ async fn exchange_jwt_for_token(
     content_type: Some("application/x-www-form-urlencoded".into()),
     proxy_mode,
     max_response_body_bytes: Some(16 * 1024),
+    timeout: None,
   };
 
   let response = with_cancel(cancel, transport.request(prepared))

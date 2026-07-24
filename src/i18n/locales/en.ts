@@ -760,6 +760,29 @@ const en = {
       credentialRemovedOnSave: "Stored credential will be removed when you save.",
       credentialReplaceHint: "New service-account JSON will replace the stored secret on save.",
     },
+    googleTranslateWeb: {
+      name: "Google Translate Web",
+      defaultName: "Google Translate Web",
+      channel: "Channel",
+      channelGtx: "GTX (unofficial)",
+      channelProxy: "HTTPS proxy",
+      proxyUrl: "Proxy URL",
+      gtxWarning:
+        "Uses the unofficial translate.google.com GTX endpoint. It may stop working without notice and is not covered by Google Cloud terms.",
+      proxyWarning:
+        "Sends translation text to a third-party HTTPS proxy. Prefer a host you trust; no auth headers or cookies are sent.",
+      proxyWarningWithHost:
+        "Sends translation text to {{host}}. Prefer a host you trust; no auth headers or cookies are sent.",
+      privacyNote:
+        "This integration stores no credentials. Detect always uses the pinned GTX endpoint, even in proxy mode.",
+      statusReady: "Ready",
+      readyHint: "No credentials required. Configuration is ready to use.",
+      unconfiguredHint: "Finish channel configuration to use this integration.",
+      disabledHint: "Enable this configuration to use it.",
+      pluginMissingHint: "Plugin missing — check Integrations.",
+      channelLabelGtx: "GTX",
+      channelLabelProxy: "Proxy",
+    },
     deleteConfirm: {
       title: "Delete configuration?",
       description: "Delete “{{name}}”? Domain resources that still depend on it must be reassigned first.",

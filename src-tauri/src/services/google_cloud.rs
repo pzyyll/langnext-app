@@ -125,6 +125,7 @@ impl GoogleCloudCapabilities {
         request_id: context.request_id.clone(),
         cancel: Some(context.cancel.clone()),
         max_response_body_bytes: None,
+        timeout: None,
       })
       .await
       .map_err(|e| {
@@ -189,6 +190,7 @@ impl GoogleCloudCapabilities {
         request_id: context.request_id.clone(),
         cancel: Some(context.cancel.clone()),
         max_response_body_bytes: None,
+        timeout: None,
       })
       .await
       .map_err(|e| {

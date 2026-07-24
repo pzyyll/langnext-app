@@ -7,15 +7,18 @@ use crate::domain::provider::CredentialUpdate;
 use crate::domain::service_capability::{CAPABILITY_DEFAULT_TIMEOUT, CapabilityErrorCode};
 use crate::domain::service_integration::{
   CredentialSlotStatusDto, GOOGLE_CLOUD_DEFAULT_LOCATION, GOOGLE_CLOUD_PLUGIN_ID, GOOGLE_CLOUD_SERVICE_ACCOUNT_SLOT,
-  GOOGLE_OAUTH_TOKEN_URI, GoogleCloudConfigV1, INTEGRATION_CONFIG_JSON_MAX_LEN, INTEGRATION_DISPLAY_NAME_MAX_LEN,
-  IntegrationDependencyDto, IntegrationHealthStatus, IntegrationInstance, IntegrationInstanceDto,
-  IntegrationInstanceWrite, IntegrationValidationResult, SERVICE_ACCOUNT_JSON_MAX_LEN, ServiceIntegrationManifest,
-  derive_effective_status, validate_plugin_id, validate_slot_id,
+  GOOGLE_OAUTH_TOKEN_URI, GOOGLE_TRANSLATE_WEB_PLUGIN_ID, GoogleCloudConfigV1, INTEGRATION_CONFIG_JSON_MAX_LEN,
+  INTEGRATION_DISPLAY_NAME_MAX_LEN, IntegrationDependencyDto, IntegrationHealthStatus, IntegrationInstance,
+  IntegrationInstanceDto, IntegrationInstanceWrite, IntegrationValidationResult, SERVICE_ACCOUNT_JSON_MAX_LEN,
+  ServiceIntegrationManifest, derive_effective_status, validate_plugin_id, validate_slot_id,
 };
 use crate::domain::time::{new_id, now_rfc3339};
 use crate::error::StorageError;
 use crate::repositories::credential_operations::{self, CredentialOperation, OwnerKind};
 use crate::repositories::{integration_credential_bindings, integration_instances};
+use crate::services::google_translate_web::{
+  google_translate_web_config_complete, validate_google_translate_web_config,
+};
 use crate::services::service_integration_registry::ServiceIntegrationRegistry;
 use crate::services::token_grant::{
   GOOGLE_CLOUD_TRANSLATION_SCOPE, GOOGLE_OAUTH_AUDIENCE_POLICY_ID, GOOGLE_SERVICE_ACCOUNT_AUTH_DRIVER_ID, TokenGrant,
@@ -214,7 +217,7 @@ impl ServiceIntegrationService {
 
     let has_required_credentials = required_slots_satisfied(manifest, &bindings);
     let config_ok = validate_config_for_plugin(manifest, &instance.config_json).is_ok()
-      && google_cloud_config_complete(manifest, &instance.config_json);
+      && plugin_config_complete(manifest, &instance.config_json);
 
     if !config_ok || !has_required_credentials {
       self.persist_validation_health(id, IntegrationHealthStatus::Unconfigured, Some("invalid_configuration"))?;
@@ -225,6 +228,19 @@ impl ServiceIntegrationService {
         effective_status: refreshed.effective_status,
         remote_checked: false,
         message: Some("configuration or required credentials are incomplete".into()),
+      });
+    }
+
+    // Zero-secret Google Web instances are ready from local config alone — no token grant.
+    if is_zero_secret_ready_plugin(manifest) {
+      self.persist_validation_health(id, IntegrationHealthStatus::Ready, None)?;
+      let refreshed = self.get_instance(id)?;
+      return Ok(IntegrationValidationResult {
+        instance_id: id,
+        health_status: refreshed.health_status,
+        effective_status: refreshed.effective_status,
+        remote_checked: false,
+        message: Some("Configuration is ready. No credentials are used by this integration.".into()),
       });
     }
 
@@ -264,7 +280,7 @@ impl ServiceIntegrationService {
 
     let current_has_required = required_slots_satisfied(manifest, &current_bindings);
     let current_config_ok = validate_config_for_plugin(manifest, &current.config_json).is_ok()
-      && google_cloud_config_complete(manifest, &current.config_json);
+      && plugin_config_complete(manifest, &current.config_json);
 
     if !current_config_ok || !current_has_required {
       self.persist_validation_health(id, IntegrationHealthStatus::Unconfigured, Some("invalid_configuration"))?;
@@ -435,7 +451,7 @@ impl ServiceIntegrationService {
         let bindings = integration_credential_bindings::list_for_instance(uow.conn(), id)?;
         let has_required = required_slots_satisfied(manifest, &bindings);
         let config_ok = validate_config_for_plugin(manifest, &current.config_json).is_ok()
-          && google_cloud_config_complete(manifest, &current.config_json);
+          && plugin_config_complete(manifest, &current.config_json);
 
         let (decision, write_health, write_code) = if !config_ok || !has_required {
           (
@@ -930,6 +946,9 @@ fn validate_config_for_plugin(
   if manifest.id == GOOGLE_CLOUD_PLUGIN_ID {
     return validate_google_cloud_config(config_json);
   }
+  if manifest.id == GOOGLE_TRANSLATE_WEB_PLUGIN_ID {
+    return validate_google_translate_web_config(config_json);
+  }
   // Unknown plugins should not reach here when registry is authoritative.
   Err(StorageError::PluginUnavailable(manifest.id.clone()))
 }
@@ -1099,7 +1118,7 @@ fn compute_local_health(
   slot_refs: &HashMap<String, Option<String>>,
 ) -> IntegrationHealthStatus {
   let config_ok =
-    validate_config_for_plugin(manifest, config_json).is_ok() && google_cloud_config_complete(manifest, config_json);
+    validate_config_for_plugin(manifest, config_json).is_ok() && plugin_config_complete(manifest, config_json);
   let credentials_ok = manifest.credential_slots.iter().all(|slot| {
     if !slot.required {
       return true;
@@ -1108,16 +1127,30 @@ fn compute_local_health(
   });
   if !config_ok || !credentials_ok {
     IntegrationHealthStatus::Unconfigured
+  } else if is_zero_secret_ready_plugin(manifest) {
+    // Credential-free integrations become Ready from local config alone.
+    IntegrationHealthStatus::Ready
   } else {
-    // Locally valid only — never ready from Phase 1A local validation.
+    // Credential-bearing integrations stay Unvalidated until remote token grant succeeds.
     IntegrationHealthStatus::Unvalidated
   }
 }
 
-fn google_cloud_config_complete(manifest: &ServiceIntegrationManifest, config_json: &str) -> bool {
-  if manifest.id != GOOGLE_CLOUD_PLUGIN_ID {
-    return true;
+fn is_zero_secret_ready_plugin(manifest: &ServiceIntegrationManifest) -> bool {
+  manifest.id == GOOGLE_TRANSLATE_WEB_PLUGIN_ID && manifest.credential_slots.is_empty()
+}
+
+fn plugin_config_complete(manifest: &ServiceIntegrationManifest, config_json: &str) -> bool {
+  if manifest.id == GOOGLE_CLOUD_PLUGIN_ID {
+    return google_cloud_config_complete(config_json);
   }
+  if manifest.id == GOOGLE_TRANSLATE_WEB_PLUGIN_ID {
+    return google_translate_web_config_complete(config_json);
+  }
+  true
+}
+
+fn google_cloud_config_complete(config_json: &str) -> bool {
   match serde_json::from_str::<GoogleCloudConfigV1>(config_json) {
     Ok(config) => !config.project_id.trim().is_empty() && !config.location.trim().is_empty(),
     Err(_) => false,
@@ -1853,8 +1886,33 @@ mod tests {
   fn service_integrations_list_definitions() {
     let (_d, service, _vault) = setup();
     let defs = service.list_definitions();
-    assert_eq!(defs.len(), 1);
+    assert_eq!(defs.len(), 2);
     assert_eq!(defs[0].id, GOOGLE_CLOUD_PLUGIN_ID);
+    assert_eq!(defs[1].id, GOOGLE_TRANSLATE_WEB_PLUGIN_ID);
+    let web = defs.iter().find(|d| d.id == GOOGLE_TRANSLATE_WEB_PLUGIN_ID).unwrap();
+    assert!(web.credential_slots.is_empty());
+  }
+
+  #[test]
+  fn service_integrations_web_create_ready_without_credentials() {
+    use crate::services::google_translate_web::default_web_config;
+    let (_d, service, _vault) = setup();
+    let config = default_web_config();
+    let created = service
+      .save(IntegrationInstanceWrite {
+        id: None,
+        plugin_id: GOOGLE_TRANSLATE_WEB_PLUGIN_ID.into(),
+        display_name: "Web GTX".into(),
+        enabled: true,
+        config_json: serde_json::to_string(&config).unwrap(),
+        credentials: vec![],
+        expected_updated_at: None,
+      })
+      .unwrap();
+    assert_eq!(created.plugin_id, GOOGLE_TRANSLATE_WEB_PLUGIN_ID);
+    assert_eq!(created.health_status, IntegrationHealthStatus::Ready);
+    assert_eq!(created.effective_status, IntegrationEffectiveStatus::Ready);
+    assert!(created.credential_slots.is_empty());
   }
 
   #[test]

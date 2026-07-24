@@ -85,6 +85,7 @@ impl ProviderHttpService {
       content_type: None,
       proxy_mode: provider.proxy_mode,
       max_response_body_bytes: None,
+      timeout: None,
     })
   }
 }

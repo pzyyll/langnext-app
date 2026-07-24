@@ -2,11 +2,19 @@
 // ABOUTME: Ensures DTO→draft never echoes secrets and keep/replace/clear map correctly.
 import { describe, expect, test } from "bun:test";
 import type { IntegrationInstanceDto } from "../../storage/types";
-import { GOOGLE_CLOUD_PLUGIN_ID, GOOGLE_CLOUD_SERVICE_ACCOUNT_SLOT } from "../../storage/types";
+import {
+  GOOGLE_CLOUD_PLUGIN_ID,
+  GOOGLE_CLOUD_SERVICE_ACCOUNT_SLOT,
+  GOOGLE_TRANSLATE_WEB_DEFAULT_PROXY_URL,
+  GOOGLE_TRANSLATE_WEB_PLUGIN_ID,
+} from "../../storage/types";
 import {
   buildGoogleCloudWrite,
+  buildGoogleTranslateWebWrite,
+  draftFromGoogleTranslateWebDto,
   draftFromIntegrationDto,
   emptyGoogleCloudDraft,
+  emptyGoogleTranslateWebDraft,
   hasRemoteRelevantMutation,
   toCredentialUpdate,
 } from "./integrationDraft";
@@ -132,5 +140,50 @@ describe("integrationDraft", () => {
     draft.serviceAccountJson = "should-not-send";
     const write = buildGoogleCloudWrite(draft, { id: draft.expectedUpdatedAt ? sampleDto().id : null });
     expect(write.credentials?.[0]?.credential).toEqual({ action: "clear" });
+  });
+
+  test("Google Web draft defaults to GTX with empty credentials and no Cloud fields", () => {
+    const draft = emptyGoogleTranslateWebDraft("Web");
+    expect(draft.pluginId).toBe(GOOGLE_TRANSLATE_WEB_PLUGIN_ID);
+    expect(draft.channel).toBe("gtx");
+    const write = buildGoogleTranslateWebWrite(draft);
+    expect(write.pluginId).toBe(GOOGLE_TRANSLATE_WEB_PLUGIN_ID);
+    expect(write.credentials).toEqual([]);
+    const config = JSON.parse(write.configJson) as Record<string, unknown>;
+    expect(config.channel).toBe("gtx");
+    expect(config).not.toHaveProperty("projectId");
+    expect(config).not.toHaveProperty("location");
+    expect(config).not.toHaveProperty("serviceAccount");
+  });
+
+  test("Google Web proxy draft persists proxy URL only", () => {
+    const dto: IntegrationInstanceDto = {
+      id: "22222222-2222-2222-2222-222222222222",
+      pluginId: GOOGLE_TRANSLATE_WEB_PLUGIN_ID,
+      pluginVersion: "1.0.0",
+      displayName: "Proxy",
+      enabled: true,
+      configJson: JSON.stringify({
+        channel: "https_proxy",
+        proxyUrl: GOOGLE_TRANSLATE_WEB_DEFAULT_PROXY_URL,
+      }),
+      configSchemaVersion: 1,
+      healthStatus: "ready",
+      effectiveStatus: "ready",
+      lastValidatedAt: null,
+      lastErrorCode: null,
+      credentialSlots: [],
+      createdAt: "t0",
+      updatedAt: "t1",
+    };
+    const draft = draftFromGoogleTranslateWebDto(dto);
+    expect(draft.channel).toBe("https_proxy");
+    expect(draft.proxyUrl).toBe(GOOGLE_TRANSLATE_WEB_DEFAULT_PROXY_URL);
+    const write = buildGoogleTranslateWebWrite(draft, { id: dto.id });
+    expect(write.credentials).toEqual([]);
+    expect(JSON.parse(write.configJson)).toEqual({
+      channel: "https_proxy",
+      proxyUrl: GOOGLE_TRANSLATE_WEB_DEFAULT_PROXY_URL,
+    });
   });
 });

@@ -3,6 +3,7 @@
 pub mod bounded_http;
 pub mod google_cloud;
 pub mod google_service_account;
+pub mod google_translate_web;
 pub mod import_export;
 pub mod import_validation;
 pub mod models;

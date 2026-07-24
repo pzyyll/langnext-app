@@ -9,9 +9,14 @@ import { useToast } from "../../components/toast/useToast";
 import { integrationDefinitionListOptions } from "../../query/options";
 import { saveIntegrationInstance } from "../../storage/client";
 import { getIpcErrorMessage } from "../../storage/errors";
-import type { IntegrationInstanceDto, ServiceIntegrationManifest } from "../../storage/types";
-import { GOOGLE_CLOUD_PLUGIN_ID } from "../../storage/types";
-import { buildGoogleCloudWrite, emptyGoogleCloudDraft } from "./integrationDraft";
+import type { IntegrationInstanceDto, IntegrationInstanceWrite, ServiceIntegrationManifest } from "../../storage/types";
+import { GOOGLE_CLOUD_PLUGIN_ID, GOOGLE_TRANSLATE_WEB_PLUGIN_ID } from "../../storage/types";
+import {
+  buildGoogleCloudWrite,
+  buildGoogleTranslateWebWrite,
+  emptyGoogleCloudDraft,
+  emptyGoogleTranslateWebDraft,
+} from "./integrationDraft";
 
 const INTEGRATION_OPTION_MAX_COLUMNS = 3;
 
@@ -87,7 +92,20 @@ function AddIntegrationForm({ onCreated }: AddIntegrationFormProps) {
     if (definition.id === GOOGLE_CLOUD_PLUGIN_ID) {
       return t("plugins.googleCloud.name");
     }
+    if (definition.id === GOOGLE_TRANSLATE_WEB_PLUGIN_ID) {
+      return t("plugins.googleTranslateWeb.name");
+    }
     return definition.id;
+  }
+
+  function createWrite(definitionId: string): IntegrationInstanceWrite | null {
+    if (definitionId === GOOGLE_CLOUD_PLUGIN_ID) {
+      return buildGoogleCloudWrite(emptyGoogleCloudDraft(t("plugins.googleCloud.defaultName")));
+    }
+    if (definitionId === GOOGLE_TRANSLATE_WEB_PLUGIN_ID) {
+      return buildGoogleTranslateWebWrite(emptyGoogleTranslateWebDraft(t("plugins.googleTranslateWeb.defaultName")));
+    }
+    return null;
   }
 
   return (
@@ -96,7 +114,8 @@ function AddIntegrationForm({ onCreated }: AddIntegrationFormProps) {
         {loading
           ? null
           : definitions.map((definition) => {
-              if (definition.id !== GOOGLE_CLOUD_PLUGIN_ID) {
+              const write = createWrite(definition.id);
+              if (!write) {
                 return null;
               }
               return (
@@ -106,8 +125,7 @@ function AddIntegrationForm({ onCreated }: AddIntegrationFormProps) {
                   disabled={pending}
                   onClick={() => {
                     setError(null);
-                    const draft = emptyGoogleCloudDraft(t("plugins.googleCloud.defaultName"));
-                    createMutation.mutate(buildGoogleCloudWrite(draft));
+                    createMutation.mutate(write);
                   }}
                   className={`
                     flex min-w-0 items-center gap-2 border border-line bg-surface p-3 text-left text-on-surface

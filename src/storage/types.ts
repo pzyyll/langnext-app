@@ -422,12 +422,26 @@ export interface GoogleCloudConfigV1 {
   proxyMode: ProxyMode;
 }
 
+/** Google Web translation channel (schema v1). */
+export type GoogleTranslateWebChannel = "gtx" | "https_proxy";
+
+/** Google Web non-secret config (schema v1). Zero credential slots. */
+export interface GoogleTranslateWebConfigV1 {
+  channel: GoogleTranslateWebChannel;
+  /** Normalized HTTPS proxy URL when channel is https_proxy. */
+  proxyUrl?: string | null;
+}
+
 /** Bundled Google Cloud plugin id. */
 export const GOOGLE_CLOUD_PLUGIN_ID = "com.langnext.google-cloud" as const;
+/** Bundled Google Web (GTX / HTTPS proxy) plugin id. */
+export const GOOGLE_TRANSLATE_WEB_PLUGIN_ID = "com.langnext.google-translate-web" as const;
 /** Google Cloud service-account credential slot. */
 export const GOOGLE_CLOUD_SERVICE_ACCOUNT_SLOT = "service-account-json" as const;
 /** Default Cloud Translation location. */
 export const GOOGLE_CLOUD_DEFAULT_LOCATION = "global" as const;
+/** Default third-party HTTPS proxy URL for Google Web. */
+export const GOOGLE_TRANSLATE_WEB_DEFAULT_PROXY_URL = "https://googlet.deno.dev/translate" as const;
 
 /** Persistence/export row for a prompt template (includes profile ownership + list order). */
 export interface TranslationProfilePromptTemplate extends PromptTemplate {
