@@ -38,10 +38,7 @@ export function AddTranslationProfileDialog({
               {t("translate.profiles.addEngineTitle")}
             </Dialog.Title>
           </div>
-          <div
-            className="grid gap-2"
-            style={{ gridTemplateColumns: `repeat(${columnCount}, minmax(0, 1fr))` }}
-          >
+          <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${columnCount}, minmax(0, 1fr))` }}>
             {options.map((option) => (
               <button
                 key={option.id}
@@ -65,9 +62,7 @@ export function AddTranslationProfileDialog({
             ))}
           </div>
           <div className="flex justify-end gap-2">
-            <Dialog.Close className={outlineButtonClassName}>
-              {t("common.cancel")}
-            </Dialog.Close>
+            <Dialog.Close className={outlineButtonClassName}>{t("common.cancel")}</Dialog.Close>
           </div>
         </Dialog.Popup>
       </Dialog.Portal>

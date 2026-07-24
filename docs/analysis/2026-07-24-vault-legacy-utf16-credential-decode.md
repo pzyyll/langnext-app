@@ -88,12 +88,12 @@ Scope: one function, no schema migration, no credential re-entry required. The t
 
 ## Validation
 
-| Command                                  | Result                                    |
-| ---------------------------------------- | ----------------------------------------- |
-| `cargo check` (src-tauri)                | Passed                                    |
-| `cargo test --lib vault`                 | 8 passed, 2 ignored (interactive OS vault) |
-| `cargo test --quiet --lib`              | 306 passed, 2 ignored                     |
-| `git diff -- src-tauri/src/services/bounded_http.rs` | Empty (diagnostics reverted)    |
+| Command                                              | Result                                     |
+| ---------------------------------------------------- | ------------------------------------------ |
+| `cargo check` (src-tauri)                            | Passed                                     |
+| `cargo test --lib vault`                             | 8 passed, 2 ignored (interactive OS vault) |
+| `cargo test --quiet --lib`                           | 306 passed, 2 ignored                      |
+| `git diff -- src-tauri/src/services/bounded_http.rs` | Empty (diagnostics reverted)               |
 
 The two ignored `vault` tests require a live OS credential store session and cannot exercise `get_os_keyring` without an injectable `keyring::Entry`. No unit test for the legacy decode path was added; a regression test would require either pinning `keyring::Entry` behind a trait or seeding a Windows Cred Manager entry written via `set_password`, both out of scope for this fix.
 
