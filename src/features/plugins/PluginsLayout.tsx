@@ -1,5 +1,5 @@
-// ABOUTME: Integrations feature layout with instance rail, nested editor outlet, and create dialog.
-// ABOUTME: Loads sanitized integration instances via Query; URL selection drives the editor.
+// ABOUTME: Plugins feature layout with instance rail, nested editor outlet, and create dialog.
+// ABOUTME: Loads sanitized plugin instances via Query; URL selection drives the editor.
 import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, Outlet, useNavigate, useParams } from "@tanstack/react-router";

@@ -3,6 +3,8 @@
 import type {
   CredentialUpdate,
   GoogleCloudConfigV1,
+  GoogleTranslateWebChannel,
+  GoogleTranslateWebConfigV1,
   IntegrationInstanceDto,
   IntegrationInstanceWrite,
   ProxyMode,
@@ -11,6 +13,8 @@ import {
   GOOGLE_CLOUD_DEFAULT_LOCATION,
   GOOGLE_CLOUD_PLUGIN_ID,
   GOOGLE_CLOUD_SERVICE_ACCOUNT_SLOT,
+  GOOGLE_TRANSLATE_WEB_DEFAULT_PROXY_URL,
+  GOOGLE_TRANSLATE_WEB_PLUGIN_ID,
 } from "../../storage/types";
 
 export type CredentialAction = "keep" | "replace" | "clear";
@@ -153,5 +157,105 @@ export function isGoogleCloudDraftClean(draft: GoogleCloudIntegrationDraft, inst
     draft.proxyMode === baseline.proxyMode &&
     draft.serviceAccountAction === "keep" &&
     !draft.serviceAccountJson.trim()
+  );
+}
+
+export type GoogleTranslateWebIntegrationDraft = {
+  pluginId: typeof GOOGLE_TRANSLATE_WEB_PLUGIN_ID;
+  displayName: string;
+  enabled: boolean;
+  channel: GoogleTranslateWebChannel;
+  proxyUrl: string;
+  expectedUpdatedAt: string | null;
+};
+
+export function emptyGoogleTranslateWebDraft(displayName = ""): GoogleTranslateWebIntegrationDraft {
+  return {
+    pluginId: GOOGLE_TRANSLATE_WEB_PLUGIN_ID,
+    displayName,
+    enabled: true,
+    channel: "gtx",
+    proxyUrl: GOOGLE_TRANSLATE_WEB_DEFAULT_PROXY_URL,
+    expectedUpdatedAt: null,
+  };
+}
+
+export function parseGoogleTranslateWebConfig(configJson: string): GoogleTranslateWebConfigV1 {
+  try {
+    const parsed = JSON.parse(configJson) as Partial<GoogleTranslateWebConfigV1>;
+    const channel: GoogleTranslateWebChannel = parsed.channel === "https_proxy" ? "https_proxy" : "gtx";
+    return {
+      channel,
+      proxyUrl:
+        typeof parsed.proxyUrl === "string" && parsed.proxyUrl.trim()
+          ? parsed.proxyUrl.trim()
+          : channel === "https_proxy"
+            ? GOOGLE_TRANSLATE_WEB_DEFAULT_PROXY_URL
+            : null,
+    };
+  } catch {
+    return {
+      channel: "gtx",
+      proxyUrl: null,
+    };
+  }
+}
+
+export function draftFromGoogleTranslateWebDto(instance: IntegrationInstanceDto): GoogleTranslateWebIntegrationDraft {
+  const config = parseGoogleTranslateWebConfig(instance.configJson);
+  return {
+    pluginId: GOOGLE_TRANSLATE_WEB_PLUGIN_ID,
+    displayName: instance.displayName,
+    enabled: instance.enabled,
+    channel: config.channel,
+    proxyUrl:
+      typeof config.proxyUrl === "string" && config.proxyUrl.trim()
+        ? config.proxyUrl
+        : GOOGLE_TRANSLATE_WEB_DEFAULT_PROXY_URL,
+    expectedUpdatedAt: instance.updatedAt,
+  };
+}
+
+export function buildGoogleTranslateWebWrite(
+  draft: GoogleTranslateWebIntegrationDraft,
+  options?: { id?: string | null },
+): IntegrationInstanceWrite {
+  const config: GoogleTranslateWebConfigV1 =
+    draft.channel === "https_proxy"
+      ? {
+          channel: "https_proxy",
+          proxyUrl: draft.proxyUrl.trim() || GOOGLE_TRANSLATE_WEB_DEFAULT_PROXY_URL,
+        }
+      : {
+          channel: "gtx",
+        };
+  return {
+    id: options?.id ?? null,
+    pluginId: draft.pluginId,
+    displayName: draft.displayName.trim(),
+    enabled: draft.enabled,
+    configJson: JSON.stringify(config),
+    credentials: [],
+    expectedUpdatedAt: draft.expectedUpdatedAt,
+  };
+}
+
+export function hasGoogleTranslateWebConfigMutation(
+  draft: GoogleTranslateWebIntegrationDraft,
+  instance: IntegrationInstanceDto,
+): boolean {
+  const baseline = draftFromGoogleTranslateWebDto(instance);
+  return draft.channel !== baseline.channel || draft.proxyUrl !== baseline.proxyUrl;
+}
+
+export function isGoogleTranslateWebDraftClean(
+  draft: GoogleTranslateWebIntegrationDraft,
+  instance: IntegrationInstanceDto,
+): boolean {
+  const baseline = draftFromGoogleTranslateWebDto(instance);
+  return (
+    draft.displayName === baseline.displayName &&
+    draft.channel === baseline.channel &&
+    draft.proxyUrl === baseline.proxyUrl
   );
 }

@@ -1,4 +1,4 @@
-// ABOUTME: Dynamic Integrations child route for one selected configuration instance.
+// ABOUTME: Dynamic Plugins child route for one selected configuration instance.
 // ABOUTME: Reads the instance ID from the URL and renders its configuration editor.
 import { createFileRoute } from "@tanstack/react-router";
 import { IntegrationEditor } from "../../features/plugins/IntegrationEditor";

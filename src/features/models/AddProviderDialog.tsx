@@ -1,6 +1,6 @@
 // ABOUTME: Dialog for creating a real provider instance through Tauri IPC.
 // ABOUTME: Collects adapter, endpoint, credential policy, and initial enabled state.
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { Button } from "@base-ui/react/button";
 import { Checkbox } from "@base-ui/react/checkbox";
@@ -22,7 +22,7 @@ import { useToast } from "../../components/toast/useToast";
 import { saveProviderInstance } from "../../storage/client";
 import { getIpcErrorMessage } from "../../storage/errors";
 import type { CredentialKind, CredentialUpdate, ProviderInstanceDto } from "../../storage/types";
-import { ADAPTER_OPTIONS, getDefaultBaseUrl, resolveAuthScheme, resolveBaseUrlFields } from "./adapterOptions";
+import { getDefaultBaseUrl, listAdapterOptions, resolveAuthScheme, resolveBaseUrlFields } from "./adapterOptions";
 
 export type AddProviderDialogProps = {
   open: boolean;
@@ -72,8 +72,10 @@ type AddProviderFormProps = {
 function AddProviderForm({ onCreated }: AddProviderFormProps) {
   const { t } = useTranslation();
   const toast = useToast();
+  // Registered plugins are fixed at module load; options are stable for the dialog's lifetime.
+  const adapterOptions = useMemo(() => listAdapterOptions(), []);
   const [displayName, setDisplayName] = useState("");
-  const [adapterId, setAdapterId] = useState(ADAPTER_OPTIONS[0]?.id ?? "openai-compatible");
+  const [adapterId, setAdapterId] = useState(adapterOptions[0]?.id ?? "openai-compatible");
   const [baseUrl, setBaseUrl] = useState("");
   const [credentialKind, setCredentialKind] = useState<CredentialKind>("api_key");
   const [token, setToken] = useState("");
@@ -160,8 +162,8 @@ function AddProviderForm({ onCreated }: AddProviderFormProps) {
         </label>
         <SelectField
           value={adapterId}
-          onValueChange={(value) => setAdapterId(value ?? ADAPTER_OPTIONS[0]?.id ?? "")}
-          options={ADAPTER_OPTIONS.map((option) => ({ value: option.id, label: option.label }))}
+          onValueChange={(value) => setAdapterId(value ?? adapterOptions[0]?.id ?? "")}
+          options={adapterOptions.map((option) => ({ value: option.id, label: option.label }))}
           disabled={pending}
           aria-labelledby="add-provider-adapter-label"
         />

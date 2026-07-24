@@ -2,6 +2,7 @@
 // ABOUTME: Covers LLM availability, ready integrations, ordering, and disabled states.
 import { describe, expect, test } from "bun:test";
 import type { IntegrationInstanceDto, ProviderModelDto, ServiceIntegrationManifest } from "../../storage/types";
+import { GOOGLE_CLOUD_PLUGIN_ID, GOOGLE_TRANSLATE_WEB_PLUGIN_ID } from "../../storage/types";
 import {
   DETECT_LANGUAGE_CAPABILITY_ID,
   TRANSLATE_TEXT_CAPABILITY_ID,
@@ -52,10 +53,11 @@ function instance(
   displayName: string,
   effectiveStatus: IntegrationInstanceDto["effectiveStatus"],
   enabled = true,
+  overrides?: Partial<IntegrationInstanceDto>,
 ): IntegrationInstanceDto {
   return {
     id,
-    pluginId: "com.langnext.google-cloud",
+    pluginId: GOOGLE_CLOUD_PLUGIN_ID,
     pluginVersion: "1.0.0",
     displayName,
     enabled,
@@ -68,6 +70,32 @@ function instance(
     credentialSlots: [],
     createdAt: "t",
     updatedAt: "t",
+    ...overrides,
+  };
+}
+
+function webDefinition(): ServiceIntegrationManifest {
+  return {
+    ...definition(GOOGLE_TRANSLATE_WEB_PLUGIN_ID),
+    id: GOOGLE_TRANSLATE_WEB_PLUGIN_ID,
+    displayNameKey: "plugins.googleTranslateWeb.name",
+    credentialSlots: [],
+    endpoints: [
+      { alias: "gtx", baseUrl: "https://translate.google.com" },
+      { alias: "https_proxy", baseUrl: "https://googlet.deno.dev" },
+    ],
+    capabilities: [
+      {
+        id: TRANSLATE_TEXT_CAPABILITY_ID,
+        preferencesSchemaVersion: 1,
+        endpointAliases: ["gtx", "https_proxy"],
+      },
+      {
+        id: DETECT_LANGUAGE_CAPABILITY_ID,
+        preferencesSchemaVersion: 1,
+        endpointAliases: ["gtx"],
+      },
+    ],
   };
 }
 
@@ -167,5 +195,102 @@ describe("capabilitiesMajorCompatible", () => {
     expect(capabilitiesMajorCompatible("translate.text@1", "translate.text@1")).toBe(true);
     expect(capabilitiesMajorCompatible("translate.text@1", "translate.text@2")).toBe(false);
     expect(capabilitiesMajorCompatible("translate.text@1", "translate.detect@1")).toBe(false);
+  });
+});
+
+describe("Google Cloud vs Google Web options", () => {
+  test("lists ready Web instances with distinct GTX/proxy labels and no Cloud credential fields", () => {
+    const cloud = instance("cloud-1", "Work Cloud", "ready", true, {
+      pluginId: GOOGLE_CLOUD_PLUGIN_ID,
+      configJson: JSON.stringify({ projectId: "demo", location: "global", proxyMode: "inherit" }),
+      credentialSlots: [{ slotId: "service-account-json", hasCredential: true, credentialRevision: 1 }],
+    });
+    const webGtx = instance("web-gtx", "Free GTX", "ready", true, {
+      pluginId: GOOGLE_TRANSLATE_WEB_PLUGIN_ID,
+      configJson: JSON.stringify({ channel: "gtx" }),
+      credentialSlots: [],
+    });
+    const webProxy = instance("web-proxy", "Free Proxy", "ready", true, {
+      pluginId: GOOGLE_TRANSLATE_WEB_PLUGIN_ID,
+      configJson: JSON.stringify({
+        channel: "https_proxy",
+        proxyUrl: "https://googlet.deno.dev/translate",
+      }),
+      credentialSlots: [],
+    });
+
+    const options = buildTranslationEngineOptions({
+      enabledModels: [model("m1")],
+      instances: [cloud, webProxy, webGtx],
+      definitions: [definition(GOOGLE_CLOUD_PLUGIN_ID), webDefinition()],
+    });
+
+    const service = options.filter((o) => o.kind === "plugin_capability");
+    expect(service).toHaveLength(3);
+
+    const gtx = service.find((o) => o.integrationInstanceId === "web-gtx");
+    const proxy = service.find((o) => o.integrationInstanceId === "web-proxy");
+    const cloudOpt = service.find((o) => o.integrationInstanceId === "cloud-1");
+
+    expect(gtx?.disabled).toBe(false);
+    expect(proxy?.disabled).toBe(false);
+    expect(cloudOpt?.disabled).toBe(false);
+    expect(gtx?.label).toContain("(GTX)");
+    expect(proxy?.label).toContain("(Proxy)");
+    expect(cloudOpt?.label).not.toContain("(GTX)");
+    expect(cloudOpt?.label).not.toContain("(Proxy)");
+
+    // Cloud and Web options must not share status/credential-shaped fields on the option DTO.
+    for (const option of service) {
+      expect(option).not.toHaveProperty("credentialSlots");
+      expect(option).not.toHaveProperty("healthStatus");
+      expect(option).not.toHaveProperty("projectId");
+      expect(option).not.toHaveProperty("serviceAccount");
+      expect(option.pluginId === GOOGLE_CLOUD_PLUGIN_ID || option.pluginId === GOOGLE_TRANSLATE_WEB_PLUGIN_ID).toBe(
+        true,
+      );
+    }
+    expect(gtx?.pluginId).toBe(GOOGLE_TRANSLATE_WEB_PLUGIN_ID);
+    expect(cloudOpt?.pluginId).toBe(GOOGLE_CLOUD_PLUGIN_ID);
+  });
+
+  test("uses localized GTX/proxy channel labels when provided", () => {
+    const webGtx = instance("web-gtx", "Free GTX", "ready", true, {
+      pluginId: GOOGLE_TRANSLATE_WEB_PLUGIN_ID,
+      configJson: JSON.stringify({ channel: "gtx" }),
+      credentialSlots: [],
+    });
+    const webProxy = instance("web-proxy", "Free Proxy", "ready", true, {
+      pluginId: GOOGLE_TRANSLATE_WEB_PLUGIN_ID,
+      configJson: JSON.stringify({
+        channel: "https_proxy",
+        proxyUrl: "https://googlet.deno.dev/translate",
+      }),
+      credentialSlots: [],
+    });
+
+    const options = buildTranslationEngineOptions({
+      enabledModels: [model("m1")],
+      instances: [webGtx, webProxy],
+      definitions: [webDefinition()],
+      labels: {
+        llmLabel: "LLM model chain",
+        llmDescriptionReady: "ready",
+        llmDescriptionNoModel: "no model",
+        statusDisabled: "disabled",
+        statusPluginMissing: "missing",
+        statusNeedsConfig: "needs config",
+        statusGeneric: "{{plugin}} · {{status}}",
+        integrationLabel: "{{plugin}} — {{name}}",
+        webChannelGtx: "GTX",
+        webChannelProxy: "代理",
+      },
+    });
+
+    const gtx = options.find((o) => o.integrationInstanceId === "web-gtx");
+    const proxy = options.find((o) => o.integrationInstanceId === "web-proxy");
+    expect(gtx?.label).toContain("(GTX)");
+    expect(proxy?.label).toContain("(代理)");
+    expect(proxy?.label).not.toContain("(Proxy)");
   });
 });

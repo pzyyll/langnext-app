@@ -759,6 +759,8 @@ function TranslateProfilesPage() {
       statusNeedsConfig: t("translate.profiles.engineStatusNeedsConfig"),
       statusGeneric: t("translate.profiles.engineStatusGeneric"),
       integrationLabel: t("translate.profiles.engineIntegrationLabel"),
+      webChannelGtx: t("plugins.googleTranslateWeb.channelLabelGtx"),
+      webChannelProxy: t("plugins.googleTranslateWeb.channelLabelProxy"),
     }),
     [t],
   );
@@ -1365,7 +1367,9 @@ function TranslateProfilesPage() {
                     </span>
                     {savePending ? (
                       <span
-                        className="absolute size-4 animate-spin rounded-full border-2 border-current border-r-transparent"
+                        className="
+                          absolute size-4 animate-spin rounded-full border-2 border-current border-r-transparent
+                        "
                         aria-hidden="true"
                       />
                     ) : null}
@@ -1378,9 +1382,9 @@ function TranslateProfilesPage() {
                 <div className="space-y-4">
                   <div
                     className="
-                        grid grid-cols-1 gap-4
-                        sm:grid-cols-2
-                      "
+                      grid grid-cols-1 gap-4
+                      sm:grid-cols-2
+                    "
                   >
                     <div className="flex flex-col gap-1">
                       <label className={fieldLabelClassName} id="profile-source-lang-label">
@@ -1415,9 +1419,9 @@ function TranslateProfilesPage() {
                   {/* Primary / Target preference (used when target is Auto) */}
                   <div
                     className="
-                        grid grid-cols-1 gap-4
-                        sm:grid-cols-2
-                      "
+                      grid grid-cols-1 gap-4
+                      sm:grid-cols-2
+                    "
                   >
                     <div className="flex flex-col gap-1">
                       <label className={fieldLabelClassName} id="profile-primary-lang-label">
@@ -1601,9 +1605,9 @@ function TranslateProfilesPage() {
                           <Button
                             type="button"
                             className={`
-                            ${outlineButtonClassName}
-                            h-6 px-2 text-table-header font-bold uppercase
-                          `}
+                              ${outlineButtonClassName}
+                              h-6 px-2 text-table-header font-bold uppercase
+                            `}
                             disabled={savePending || !canAddFallback}
                             onClick={addFallback}
                           >
@@ -1618,23 +1622,23 @@ function TranslateProfilesPage() {
                               <li key={`fallback-${index}-${modelId}`} className="flex flex-wrap items-center gap-2">
                                 <div
                                   className="
-                                  flex size-control-height shrink-0 items-center justify-center border border-line
-                                  bg-surface-2 text-code-inline font-bold text-on-surface
-                                "
+                                    flex size-control-height shrink-0 items-center justify-center border border-line
+                                    bg-surface-2 text-code-inline font-bold text-on-surface
+                                  "
                                 >
                                   {index + 1}
                                 </div>
                                 <SelectField
                                   className="
-                                  flex h-control-height min-w-0 flex-1 items-center justify-between gap-2 rounded-none
-                                  border border-line bg-surface px-2 text-body-tight font-normal text-on-surface
-                                  select-none
-                                  hover:not-data-disabled:bg-surface-2
-                                  focus-visible:outline-2 focus-visible:-outline-offset-1
-                                  focus-visible:outline-on-surface
-                                  data-disabled:border-disabled data-disabled:text-disabled
-                                  data-popup-open:bg-surface-2
-                                "
+                                    flex h-control-height min-w-0 flex-1 items-center justify-between gap-2 rounded-none
+                                    border border-line bg-surface px-2 text-body-tight font-normal text-on-surface
+                                    select-none
+                                    hover:not-data-disabled:bg-surface-2
+                                    focus-visible:outline-2 focus-visible:-outline-offset-1
+                                    focus-visible:outline-on-surface
+                                    data-disabled:border-disabled data-disabled:text-disabled
+                                    data-popup-open:bg-surface-2
+                                  "
                                   value={modelId}
                                   onValueChange={(value) => setFallbackAt(index, value ?? "")}
                                   options={modelOptions.map((option) => ({
@@ -1695,9 +1699,9 @@ function TranslateProfilesPage() {
                     <div className="space-y-4 border-t border-outline-variant pt-4">
                       <div
                         className="
-                        grid grid-cols-1 gap-8
-                        sm:grid-cols-2
-                      "
+                          grid grid-cols-1 gap-8
+                          sm:grid-cols-2
+                        "
                       >
                         <div className="flex flex-col gap-1">
                           <label className={fieldLabelClassName} htmlFor="profile-temperature">
@@ -1785,9 +1789,9 @@ function TranslateProfilesPage() {
                                 <div className="flex min-w-0 flex-1 items-center gap-2">
                                   <ExpandCircleDownOutlineIcon
                                     className="
-                                    size-5 shrink-0 text-on-surface transition-transform duration-100 ease-out
-                                    group-data-panel-open:rotate-180
-                                  "
+                                      size-5 shrink-0 text-on-surface transition-transform duration-100 ease-out
+                                      group-data-panel-open:rotate-180
+                                    "
                                     aria-hidden
                                   />
                                   {isRenaming ? (
@@ -1957,9 +1961,9 @@ function TranslateProfilesPage() {
                       <Button
                         type="button"
                         className={`
-                        ${outlineButtonClassName}
-                        w-full font-bold
-                      `}
+                          ${outlineButtonClassName}
+                          w-full font-bold
+                        `}
                         disabled={savePending}
                         onClick={() => {
                           addPromptTemplate();

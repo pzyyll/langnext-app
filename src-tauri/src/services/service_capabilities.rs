@@ -11,6 +11,9 @@ use crate::repositories::integration_instances;
 use crate::services::google_cloud::{
   GOOGLE_DETECT_LANGUAGE_CAPABILITY_ID, GOOGLE_TRANSLATE_TEXT_CAPABILITY_ID, GoogleCloudCapabilities,
 };
+use crate::services::google_translate_web::{
+  GOOGLE_WEB_DETECT_LANGUAGE_CAPABILITY_ID, GOOGLE_WEB_TRANSLATE_TEXT_CAPABILITY_ID, GoogleTranslateWebCapabilities,
+};
 use crate::services::service_integration_registry::ServiceIntegrationRegistry;
 use crate::storage::Database;
 use std::collections::HashMap;
@@ -90,6 +93,28 @@ impl OcrImageCapability for GoogleCloudCapabilities {
   }
 }
 
+impl TranslateTextCapability for GoogleTranslateWebCapabilities {
+  fn translate(
+    &self,
+    instance_id: Uuid,
+    request: TranslateTextRequest,
+    context: ExecutionContext,
+  ) -> Pin<Box<dyn Future<Output = Result<TranslateTextResponse, CapabilityError>> + Send + '_>> {
+    Box::pin(async move { self.translate_text(instance_id, request, context).await })
+  }
+}
+
+impl DetectLanguageCapability for GoogleTranslateWebCapabilities {
+  fn detect(
+    &self,
+    instance_id: Uuid,
+    request: DetectLanguageRequest,
+    context: ExecutionContext,
+  ) -> Pin<Box<dyn Future<Output = Result<DetectLanguageResponse, CapabilityError>> + Send + '_>> {
+    Box::pin(async move { self.detect_language(instance_id, request, context).await })
+  }
+}
+
 /// Registry of capability handlers keyed by plugin_id + capability_id.
 #[derive(Clone, Default)]
 pub struct ServiceCapabilityRegistry {
@@ -135,6 +160,21 @@ impl ServiceCapabilityRegistry {
       CapabilityHandler::OcrImage(google),
     );
     registry
+  }
+
+  /// Register credential-free Google Web Translate/Detect handlers.
+  pub fn with_google_translate_web(mut self, web: Arc<GoogleTranslateWebCapabilities>) -> Self {
+    self.register(
+      crate::domain::service_integration::GOOGLE_TRANSLATE_WEB_PLUGIN_ID,
+      GOOGLE_WEB_TRANSLATE_TEXT_CAPABILITY_ID,
+      CapabilityHandler::TranslateText(web.clone()),
+    );
+    self.register(
+      crate::domain::service_integration::GOOGLE_TRANSLATE_WEB_PLUGIN_ID,
+      GOOGLE_WEB_DETECT_LANGUAGE_CAPABILITY_ID,
+      CapabilityHandler::DetectLanguage(web),
+    );
+    self
   }
 }
 

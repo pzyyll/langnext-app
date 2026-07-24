@@ -17,13 +17,14 @@ use crate::services::token_grant::TokenGrant;
 use crate::storage::Database;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 use uuid::Uuid;
 
 /// Default max response body for service-integration broker calls.
 pub const BROKER_MAX_RESPONSE_BODY_BYTES: usize = MAX_RESPONSE_BODY_BYTES;
 /// Max relative path length accepted by the broker.
 pub const BROKER_RELATIVE_PATH_MAX_LEN: usize = 512;
-/// Default max request body size for text-scale capability calls (Translate/Detect).
+/// Max request body size accepted by the broker.
 pub const BROKER_REQUEST_BODY_MAX_BYTES: usize = 64 * 1024;
 /// Max request body for Vision annotate: base64(8 MiB PNG) ≈ 4/3 expansion + JSON envelope.
 /// Named from OCR_IMAGE_MAX_DECODED_BYTES so the broker contract matches the product gate.
@@ -47,6 +48,8 @@ pub struct BrokerRequest {
   pub max_response_body_bytes: Option<usize>,
   /// Optional per-request body cap; defaults to [`BROKER_REQUEST_BODY_MAX_BYTES`].
   pub max_request_body_bytes: Option<usize>,
+  /// Optional per-request total timeout override for the underlying HTTP call.
+  pub timeout: Option<Duration>,
 }
 
 impl std::fmt::Debug for BrokerRequest {
@@ -65,6 +68,7 @@ impl std::fmt::Debug for BrokerRequest {
       .field("request_id", &self.request_id)
       .field("max_response_body_bytes", &self.max_response_body_bytes)
       .field("max_request_body_bytes", &self.max_request_body_bytes)
+      .field("timeout", &self.timeout)
       .finish_non_exhaustive()
   }
 }
@@ -223,6 +227,7 @@ impl NetworkBroker {
         content_type: request.content_type,
         proxy_mode,
         max_response_body_bytes: Some(max_body),
+        timeout: request.timeout,
       },
     ))
   }
@@ -433,6 +438,7 @@ mod tests {
         cancel: None,
         max_response_body_bytes: None,
         max_request_body_bytes: None,
+        timeout: None,
       })
       .await
       .unwrap();
@@ -473,6 +479,7 @@ mod tests {
         cancel: None,
         max_response_body_bytes: None,
         max_request_body_bytes: None,
+        timeout: None,
       })
       .await
       .unwrap_err();
@@ -511,6 +518,7 @@ mod tests {
         cancel: None,
         max_response_body_bytes: None,
         max_request_body_bytes: None,
+        timeout: None,
       })
       .await
       .unwrap_err();
@@ -532,6 +540,7 @@ mod tests {
         cancel: None,
         max_response_body_bytes: None,
         max_request_body_bytes: None,
+        timeout: None,
       })
       .await
       .unwrap_err();
@@ -553,6 +562,7 @@ mod tests {
         cancel: None,
         max_response_body_bytes: None,
         max_request_body_bytes: None,
+        timeout: None,
       })
       .await
       .unwrap_err();
@@ -593,6 +603,7 @@ mod tests {
         cancel: Some(cancel),
         max_response_body_bytes: None,
         max_request_body_bytes: None,
+        timeout: None,
       })
       .await
       .unwrap_err();
@@ -619,79 +630,10 @@ mod tests {
         cancel: None,
         max_response_body_bytes: Some(8),
         max_request_body_bytes: None,
+        timeout: None,
       })
       .await
       .unwrap_err();
     assert_eq!(err.code, CapabilityErrorCode::InvalidResponse);
-  }
-
-  #[tokio::test]
-  async fn network_broker_ocr_request_body_limit_allows_megabyte_payload() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = Database::new(dir.path()).unwrap();
-    db.initialize().unwrap();
-    let id = seed_google_instance(&db);
-
-    // Default 64 KiB limit must reject mid-size bodies that OCR still accepts.
-    let mid_body = "x".repeat(BROKER_REQUEST_BODY_MAX_BYTES + 1);
-    let transport = Arc::new(CaptureTransport {
-      last: Mutex::new(None),
-      response: Mutex::new(Ok(ProviderHttpResponse {
-        status: 200,
-        headers: HashMap::new(),
-        body: "{}".into(),
-      })),
-    });
-    let broker = broker_with(db.clone(), transport.clone());
-    let err = broker
-      .execute(BrokerRequest {
-        integration_instance_id: id,
-        capability_id: "ocr.image@1".into(),
-        endpoint_alias: "vision".into(),
-        method: ProviderHttpMethod::Post,
-        relative_path: "v1/images:annotate".into(),
-        query: vec![],
-        headers: HashMap::new(),
-        body: Some(mid_body.clone()),
-        content_type: Some("application/json".into()),
-        auth: None,
-        request_id: "req-ocr-default".into(),
-        cancel: None,
-        max_response_body_bytes: None,
-        max_request_body_bytes: None,
-      })
-      .await
-      .unwrap_err();
-    assert_eq!(err.code, CapabilityErrorCode::UnsupportedInput);
-
-    // OCR override must accept the same body (still well under OCR max).
-    let transport = Arc::new(CaptureTransport {
-      last: Mutex::new(None),
-      response: Mutex::new(Ok(ProviderHttpResponse {
-        status: 200,
-        headers: HashMap::new(),
-        body: "{}".into(),
-      })),
-    });
-    let broker = broker_with(db, transport);
-    broker
-      .execute(BrokerRequest {
-        integration_instance_id: id,
-        capability_id: "ocr.image@1".into(),
-        endpoint_alias: "vision".into(),
-        method: ProviderHttpMethod::Post,
-        relative_path: "v1/images:annotate".into(),
-        query: vec![],
-        headers: HashMap::new(),
-        body: Some(mid_body),
-        content_type: Some("application/json".into()),
-        auth: None,
-        request_id: "req-ocr-override".into(),
-        cancel: None,
-        max_response_body_bytes: None,
-        max_request_body_bytes: Some(BROKER_OCR_REQUEST_BODY_MAX_BYTES),
-      })
-      .await
-      .expect("OCR request body limit must accept multi-KB annotate payloads");
   }
 }

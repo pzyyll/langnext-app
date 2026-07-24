@@ -23,7 +23,7 @@ import { useToast } from "../../components/toast/useToast";
 import { updateModelConfig } from "../../storage/client";
 import { getIpcErrorMessage } from "../../storage/errors";
 import type { CapabilityOverridesV1, ProviderModelDto } from "../../storage/types";
-import { ADAPTER_OPTIONS, getAdapterLabel } from "./adapterOptions";
+import { getAdapterLabel, listAdapterOptions } from "./adapterOptions";
 
 const TOKEN_MIN = 1;
 const TOKEN_MAX = 0xffff_ffff;
@@ -95,6 +95,8 @@ function EditModelConfigForm({ model, onSaved }: EditModelConfigFormProps) {
   const { t } = useTranslation();
   const toast = useToast();
   const initial = useMemo(() => formStateFromModel(model), [model]);
+  // Registered plugins are fixed at module load; options are stable for the dialog's lifetime.
+  const adapterOptions = useMemo(() => listAdapterOptions(), []);
 
   const [displayNameOverride, setDisplayNameOverride] = useState(initial.displayNameOverride);
   const [adapterId, setAdapterId] = useState(initial.adapterId);
@@ -196,10 +198,10 @@ function EditModelConfigForm({ model, onSaved }: EditModelConfigFormProps) {
             onValueChange={(value) => setAdapterId(value ?? "")}
             options={[
               { value: "", label: t("models.apiTypeInherit") },
-              ...ADAPTER_OPTIONS.map((option) => ({ value: option.id, label: option.label })),
+              ...adapterOptions.map((option) => ({ value: option.id, label: option.label })),
             ]}
             extraOptions={
-              adapterId && !ADAPTER_OPTIONS.some((o) => o.id === adapterId)
+              adapterId && !adapterOptions.some((o) => o.id === adapterId)
                 ? [{ value: adapterId, label: getAdapterLabel(adapterId) }]
                 : undefined
             }

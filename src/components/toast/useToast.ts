@@ -1,6 +1,6 @@
 // ABOUTME: Convenience hook over Base UI Toast.useToastManager for app feedback.
 // ABOUTME: Exposes success/error/warning/info helpers with project default durations.
-import { useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { Toast } from "@base-ui/react/toast";
 
 /** Visual / semantic toast variants used across the app. */
@@ -63,17 +63,22 @@ export function useToast(): ToastApi {
   const manager = Toast.useToastManager();
   // Keep a stable ToastApi identity across renders so callbacks that depend on
   // `toast` (e.g. auto-translate effects) do not thrash every state update.
+  // The manager object changes on every toast list mutation, so we mirror it
+  // into a ref inside an effect (not during render) to keep the API stable.
   const managerRef = useRef(manager);
-  managerRef.current = manager;
+  useEffect(() => {
+    managerRef.current = manager;
+  }, [manager]);
 
   return useMemo(() => {
     function show(options: ToastShowWithVariantOptions): string {
       const { variant, title, description, duration, action } = options;
-      return managerRef.current.add({
+      const autoTimeout = duration ?? DEFAULT_DURATION_MS[variant];
+      const id = managerRef.current.add({
         type: variant,
         title,
         description,
-        timeout: duration ?? DEFAULT_DURATION_MS[variant],
+        timeout: autoTimeout,
         priority: variant === "error" ? "high" : "low",
         actionProps: action
           ? {
@@ -82,6 +87,16 @@ export function useToast(): ToastApi {
             }
           : undefined,
       });
+      // Base UI pauses the internal close timer whenever the viewport is
+      // expanded (hover/focus) or the window is blurred. In a stacked viewport
+      // that pause path can keep stacked toasts from ever starting their timer,
+      // so they linger until manually closed. Schedule an independent close so
+      // the duration is honored regardless; `close(id)` is a no-op once the
+      // toast has already been removed. `duration: 0` stays an opt-out.
+      if (autoTimeout > 0) {
+        setTimeout(() => managerRef.current.close(id), autoTimeout);
+      }
+      return id;
     }
 
     return {

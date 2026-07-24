@@ -21,7 +21,7 @@ export const navItems = [
 
 export type NavItem = (typeof navItems)[number];
 
-/** Primary sidebar links (Translate / Profiles / History / Models / OCR / Integrations). Settings is rendered at the footer. */
+/** Primary sidebar links (Translate / Profiles / History / Models / OCR / Plugins). Settings is rendered at the footer. */
 export const primaryNavItems = [navItems[0], navItems[1], navItems[2], navItems[3], navItems[4], navItems[5]] as const;
 
 /** Settings entry shown in the sidebar footer. */

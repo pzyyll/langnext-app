@@ -134,6 +134,7 @@ impl GoogleCloudCapabilities {
         cancel: Some(context.cancel.clone()),
         max_response_body_bytes: None,
         max_request_body_bytes: None,
+        timeout: None,
       })
       .await
       .map_err(|e| {
@@ -199,6 +200,7 @@ impl GoogleCloudCapabilities {
         cancel: Some(context.cancel.clone()),
         max_response_body_bytes: None,
         max_request_body_bytes: None,
+        timeout: None,
       })
       .await
       .map_err(|e| {
@@ -284,6 +286,7 @@ impl GoogleCloudCapabilities {
         request_id: context.request_id.clone(),
         cancel: Some(context.cancel.clone()),
         max_response_body_bytes: None,
+        timeout: None,
         // Honor the locked 8 MiB decoded PNG contract (base64 + JSON overhead).
         max_request_body_bytes: Some(BROKER_OCR_REQUEST_BODY_MAX_BYTES),
       })

@@ -27,9 +27,6 @@ export function listAdapterOptions(): readonly AdapterOption[] {
   }));
 }
 
-/** @deprecated Prefer listAdapterOptions(); retained for gradual call-site migration. */
-export const ADAPTER_OPTIONS: readonly AdapterOption[] = listAdapterOptions();
-
 /** Look up the documented default Base URL for a plugin ID. */
 export function getDefaultBaseUrl(adapterId: string): string | null {
   return getPluginDefaultBaseUrl(adapterId);

@@ -47,13 +47,13 @@
 
 **Steps:**
 
-- [ ] Register `com.langnext.google-translate-web` with Translate/Detect capabilities and no credential slots.
-- [ ] Define config schema version 1 with channel `gtx | https_proxy` and optional proxy URL.
-- [ ] Default new instances to GTX and show a persistent unofficial-endpoint warning.
-- [ ] Mark a valid/enabled zero-secret instance ready without credential validation.
-- [ ] Add a typed editor that never displays Google Cloud project/location/service-account fields.
-- [ ] Show persistent privacy/reliability disclosure for unofficial GTX and third-party proxy modes.
-- [ ] Ensure Cloud and Web integration definitions remain separate in DTO/export.
+- [x] Register `com.langnext.google-translate-web` with Translate/Detect capabilities and no credential slots.
+- [x] Define config schema version 1 with channel `gtx | https_proxy` and optional proxy URL.
+- [x] Default new instances to GTX and show a persistent unofficial-endpoint warning.
+- [x] Mark a valid/enabled zero-secret instance ready without credential validation.
+- [x] Add a typed editor that never displays Google Cloud project/location/service-account fields.
+- [x] Show persistent privacy/reliability disclosure for unofficial GTX and third-party proxy modes.
+- [x] Ensure Cloud and Web integration definitions remain separate in DTO/export.
 
 **Validation:**
 
@@ -73,15 +73,15 @@
 
 **Steps:**
 
-- [ ] Define named constants for GTX origin/path/client and payload/response limits.
-- [ ] Build GET query with `client=gtx`, source, target, encoding fields, `dt=t`, and text.
-- [ ] Treat source `auto` explicitly and use the shared Google language-code mapping where compatible.
-- [ ] Parse translated segments from the nested response and join them in response order.
-- [ ] Parse detected language from the documented observed array position only after validating shape/length.
-- [ ] Normalize detected variants into app language IDs.
-- [ ] Map 429/network/timeout/invalid response to stable capability errors.
-- [ ] Never send Cloud token grants or auth headers.
-- [ ] Test multiline/Unicode/segment joins, malformed arrays, empty results, detected variants, cancellation, and limits.
+- [x] Define named constants for GTX origin/path/client and payload/response limits.
+- [x] Build GET query with `client=gtx`, source, target, encoding fields, `dt=t`, and text.
+- [x] Treat source `auto` explicitly and use the shared Google language-code mapping where compatible.
+- [x] Parse translated segments from the nested response and join them in response order.
+- [x] Parse detected language from the documented observed array position only after validating shape/length.
+- [x] Normalize detected variants into app language IDs.
+- [x] Map 429/network/timeout/invalid response to stable capability errors.
+- [x] Never send Cloud token grants or auth headers.
+- [x] Test multiline/Unicode/segment joins, malformed arrays, empty results, detected variants, cancellation, and limits.
 
 **Validation:**
 
@@ -99,17 +99,17 @@
 
 **Steps:**
 
-- [ ] Default proxy URL to `https://googlet.deno.dev/translate` as a named constant.
-- [ ] Require `https` scheme, non-empty host, no userinfo, no fragment, and no credential-like query parameters.
-- [ ] Normalize and persist only the origin/path needed by the fixed contract.
-- [ ] Build POST JSON `{ text, source_lang, target_lang }`.
-- [ ] Parse bounded `{ data: string }` response.
-- [ ] Register the validated origin as a capability-scoped endpoint for this instance only.
-- [ ] Prohibit auth grants, Authorization headers, cookies, redirects, and Cloud credential access.
-- [ ] Apply stricter request/response timeout and size limits suitable for text translation.
-- [ ] DetectLanguage continues through pinned GTX; proxy mode does not invent a detect contract.
-- [ ] Show the exact configured hostname in the data-egress warning.
-- [ ] Test HTTP rejection, userinfo/fragment/query-secret rejection, redirect rejection, credential-header absence, malformed response, and instance isolation.
+- [x] Default proxy URL to `https://googlet.deno.dev/translate` as a named constant.
+- [x] Require `https` scheme, non-empty host, no userinfo, no fragment, and no credential-like query parameters.
+- [x] Normalize and persist only the origin/path needed by the fixed contract.
+- [x] Build POST JSON `{ text, source_lang, target_lang }`.
+- [x] Parse bounded `{ data: string }` response.
+- [x] Register the validated origin as a capability-scoped endpoint for this instance only.
+- [x] Prohibit auth grants, Authorization headers, cookies, redirects, and Cloud credential access.
+- [x] Apply stricter request/response timeout and size limits suitable for text translation.
+- [x] DetectLanguage continues through pinned GTX; proxy mode does not invent a detect contract.
+- [x] Show the exact configured hostname in the data-egress warning.
+- [x] Test HTTP rejection, userinfo/fragment/query-secret rejection, redirect rejection, credential-header absence, malformed response, and instance isolation.
 
 **Validation:**
 
@@ -126,13 +126,13 @@
 
 **Steps:**
 
-- [ ] Add ready Web instances to existing `translate.text@1` discovery.
-- [ ] Use distinct labels for GTX and proxy instances.
-- [ ] Reuse the Phase 1 plugin Profile engine and unary runtime.
-- [ ] Store channel/proxy configuration at the integration instance, not in Profile credentials.
-- [ ] Export/import sanitized Web instance config through v4 without a format bump if the generic v4 structure already covers it.
-- [ ] Keep imported zero-secret GTX instances executable after validation; proxy instances remain subject to URL validation.
-- [ ] Add tests proving Cloud and Web options do not share status/credential fields.
+- [x] Add ready Web instances to existing `translate.text@1` discovery.
+- [x] Use distinct labels for GTX and proxy instances.
+- [x] Reuse the Phase 1 plugin Profile engine and unary runtime.
+- [x] Store channel/proxy configuration at the integration instance, not in Profile credentials.
+- [x] Export/import sanitized Web instance config through v4 without a format bump if the generic v4 structure already covers it.
+- [x] Keep imported zero-secret GTX instances executable after validation; proxy instances remain subject to URL validation.
+- [x] Add tests proving Cloud and Web options do not share status/credential fields.
 
 **Validation:**
 

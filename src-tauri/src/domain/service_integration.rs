@@ -18,12 +18,20 @@ pub const CAPABILITY_ID_MAX_LEN: usize = 128;
 pub const SLOT_ID_MAX_LEN: usize = 64;
 /// Google Cloud bundled plugin id.
 pub const GOOGLE_CLOUD_PLUGIN_ID: &str = "com.langnext.google-cloud";
+/// Google Web (GTX / HTTPS proxy) bundled plugin id.
+pub const GOOGLE_TRANSLATE_WEB_PLUGIN_ID: &str = "com.langnext.google-translate-web";
 /// Google Cloud service-account credential slot.
 pub const GOOGLE_CLOUD_SERVICE_ACCOUNT_SLOT: &str = "service-account-json";
 /// Pinned Google OAuth token URI required in service-account JSON.
 pub const GOOGLE_OAUTH_TOKEN_URI: &str = "https://oauth2.googleapis.com/token";
 /// Default Cloud Translation location.
 pub const GOOGLE_CLOUD_DEFAULT_LOCATION: &str = "global";
+/// Default third-party HTTPS proxy URL for Google Web (fixed contract).
+pub const GOOGLE_TRANSLATE_WEB_DEFAULT_PROXY_URL: &str = "https://googlet.deno.dev/translate";
+/// Pinned GTX origin (unofficial translate.google.com web endpoint).
+pub const GOOGLE_TRANSLATE_WEB_GTX_ORIGIN: &str = "https://translate.google.com";
+/// Max length for a stored HTTPS proxy URL after normalization.
+pub const GOOGLE_TRANSLATE_WEB_PROXY_URL_MAX_LEN: usize = 512;
 
 /// Persisted health values only (never disabled/plugin_missing).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -257,6 +265,33 @@ pub struct GoogleCloudConfigV1 {
 
 fn default_google_location() -> String {
   GOOGLE_CLOUD_DEFAULT_LOCATION.to_string()
+}
+
+/// Google Web translation channel (schema v1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GoogleTranslateWebChannel {
+  Gtx,
+  HttpsProxy,
+}
+
+impl GoogleTranslateWebChannel {
+  pub fn as_str(self) -> &'static str {
+    match self {
+      Self::Gtx => "gtx",
+      Self::HttpsProxy => "https_proxy",
+    }
+  }
+}
+
+/// Google Web non-secret config (schema v1). Zero credential slots.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GoogleTranslateWebConfigV1 {
+  pub channel: GoogleTranslateWebChannel,
+  /// Normalized HTTPS proxy URL when `channel` is `https_proxy`.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub proxy_url: Option<String>,
 }
 
 /// Validate reverse-domain plugin ids (ASCII, bounded).
