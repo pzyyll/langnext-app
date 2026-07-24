@@ -193,8 +193,8 @@ function SettingsPage() {
                       </Radio.Root>
                       <span
                         className="
-                        pointer-events-none size-4 shrink-0 text-center text-[10px]/4 font-bold tracking-wide
-                      "
+                          pointer-events-none size-4 shrink-0 text-center text-[10px]/4 font-bold tracking-wide
+                        "
                       >
                         {option.value === "en" ? "EN" : "中"}
                       </span>

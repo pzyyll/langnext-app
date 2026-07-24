@@ -729,6 +729,7 @@ function QuickTranslatePage() {
       enabledModelIds,
       failSlots,
       i18n.language,
+      integrationsQuery.data,
       modelsQuery.data,
       patchResult,
       profileById,

@@ -79,10 +79,10 @@ export function SelectField({
             icon
               ? "inline-flex size-4 shrink-0 items-center justify-center"
               : `
-            inline-flex size-4 shrink-0 rotate-180 items-center justify-center transition-transform duration-200
-            ease-out
-            data-popup-open:rotate-0
-          `
+                inline-flex size-4 shrink-0 rotate-180 items-center justify-center transition-transform duration-200
+                ease-out
+                data-popup-open:rotate-0
+              `
           }
         >
           {icon ?? <IconClarityAngleLine className="pointer-events-none size-4" />}

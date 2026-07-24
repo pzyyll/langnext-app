@@ -1,4 +1,4 @@
-// ABOUTME: Empty Integrations child route shown before an instance is selected.
+// ABOUTME: Empty Plugins child route shown before an instance is selected.
 // ABOUTME: Prompts the user to select or create a configuration instance.
 import { createFileRoute } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";

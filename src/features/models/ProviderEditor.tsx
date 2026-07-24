@@ -41,7 +41,7 @@ import { testProviderConnectionFrontend } from "./providerConnection";
 import { syncProviderModelsFrontend } from "./providerModelSync";
 import { getIpcErrorMessage, isConflictError } from "../../storage/errors";
 import type { CredentialUpdate, ProviderInstanceDto, ProviderModelDto } from "../../storage/types";
-import { ADAPTER_OPTIONS, getDefaultBaseUrl, resolveAuthScheme, resolveBaseUrlFields } from "./adapterOptions";
+import { getDefaultBaseUrl, listAdapterOptions, resolveAuthScheme, resolveBaseUrlFields } from "./adapterOptions";
 import { AddManualModelDialog } from "./AddManualModelDialog";
 import { EditModelConfigDialog } from "./EditModelConfigDialog";
 import { useModelsContext } from "./ModelsContext";
@@ -180,6 +180,9 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
    * Banner reappears if remote advances again past this value.
    */
   const [dismissedConflictUpdatedAt, setDismissedConflictUpdatedAt] = useState<string | null>(null);
+
+  // Registered plugins are fixed at module load; options are stable for the editor's lifetime.
+  const adapterOptions = useMemo(() => listAdapterOptions(), []);
 
   const [savePending, setSavePending] = useState(false);
   const [, setSaveError] = useState<string | null>(null);
@@ -478,7 +481,7 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
 
     const credential = buildCredential();
     // When the plugin is missing, preserve the existing auth scheme until restored.
-    const knownPlugin = ADAPTER_OPTIONS.some((option) => option.id === adapterId);
+    const knownPlugin = adapterOptions.some((option) => option.id === adapterId);
     const authScheme = knownPlugin ? resolveAuthScheme(adapterId, provider.credentialKind) : provider.authScheme;
 
     setSavePending(true);
@@ -837,9 +840,9 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
             <Button
               type="button"
               className={`
-              ${dangerIconButtonClassName}
-              mr-auto
-            `}
+                ${dangerIconButtonClassName}
+                mr-auto
+              `}
               aria-label={t("models.deleteChannel")}
               title={t("models.deleteChannel")}
               disabled={connectionFormDisabled}
@@ -861,9 +864,9 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
             <Button
               type="button"
               className={`
-              ${primaryButtonClassName}
-              relative
-            `}
+                ${primaryButtonClassName}
+                relative
+              `}
               disabled={connectionFormDisabled || !formDirty || !formValid}
               focusableWhenDisabled
               aria-busy={connectionFormDisabled}
@@ -919,14 +922,14 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
               <SelectField
                 value={adapterId}
                 onValueChange={(value) => {
-                  setAdapterId(value ?? ADAPTER_OPTIONS[0]?.id ?? "");
+                  setAdapterId(value ?? adapterOptions[0]?.id ?? "");
                   setFormDirty(true);
                   setSaveSuccess(false);
                   clearConnectionTestResult();
                 }}
-                options={ADAPTER_OPTIONS.map((option) => ({ value: option.id, label: option.label }))}
+                options={adapterOptions.map((option) => ({ value: option.id, label: option.label }))}
                 extraOptions={
-                  adapterId && !ADAPTER_OPTIONS.some((o) => o.id === adapterId)
+                  adapterId && !adapterOptions.some((o) => o.id === adapterId)
                     ? [{ value: adapterId, label: adapterId }]
                     : undefined
                 }

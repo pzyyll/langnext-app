@@ -1,4 +1,4 @@
-// ABOUTME: Selected integration instance editor shell with status, form, and dependencies.
+// ABOUTME: Selected plugin instance editor shell with status, form, and dependencies.
 // ABOUTME: Hosts typed Google Cloud and Google Web forms; secrets stay write-only until save.
 import { useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";

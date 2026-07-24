@@ -1,6 +1,6 @@
 // ABOUTME: Dialog for adding a manual model to the selected provider.
 // ABOUTME: Persists model identity, display override, optional API Type, and enabled state through IPC.
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Button } from "@base-ui/react/button";
 import { Checkbox } from "@base-ui/react/checkbox";
 import { Dialog } from "@base-ui/react/dialog";
@@ -21,7 +21,7 @@ import { useToast } from "../../components/toast/useToast";
 import { saveManualModel } from "../../storage/client";
 import { getIpcErrorMessage } from "../../storage/errors";
 import type { ProviderModelDto } from "../../storage/types";
-import { ADAPTER_OPTIONS } from "./adapterOptions";
+import { listAdapterOptions } from "./adapterOptions";
 
 export type AddManualModelDialogProps = {
   open: boolean;
@@ -69,6 +69,8 @@ type AddManualModelFormProps = {
 function AddManualModelForm({ providerId, onCreated }: AddManualModelFormProps) {
   const { t } = useTranslation();
   const toast = useToast();
+  // Registered plugins are fixed at module load; options are stable for the dialog's lifetime.
+  const adapterOptions = useMemo(() => listAdapterOptions(), []);
   const [modelKey, setModelKey] = useState("");
   const [displayNameOverride, setDisplayNameOverride] = useState("");
   /** Empty string means inherit the channel API Type. */
@@ -160,7 +162,7 @@ function AddManualModelForm({ providerId, onCreated }: AddManualModelFormProps) 
           onValueChange={(value) => setAdapterId(value ?? "")}
           options={[
             { value: "", label: t("models.apiTypeInherit") },
-            ...ADAPTER_OPTIONS.map((option) => ({ value: option.id, label: option.label })),
+            ...adapterOptions.map((option) => ({ value: option.id, label: option.label })),
           ]}
           disabled={pending}
           aria-labelledby="add-model-api-type-label"

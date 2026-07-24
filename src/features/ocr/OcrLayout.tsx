@@ -169,8 +169,8 @@ export function OcrLayout() {
                         params={{ ocrServiceId: service.id }}
                         className={cn(
                           `
-                            group flex items-center gap-1 border-l-4 px-2 py-1.5 text-left text-body-tight text-on-surface
-                            transition-colors
+                            group flex items-center gap-1 border-l-4 px-2 py-1.5 text-left text-body-tight
+                            text-on-surface transition-colors
                           `,
                           active
                             ? "border-tertiary bg-surface-container-low"
