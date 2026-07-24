@@ -92,10 +92,7 @@ function AddIntegrationForm({ onCreated }: AddIntegrationFormProps) {
 
   return (
     <div className="flex flex-col gap-3">
-      <div
-        className="grid gap-2"
-        style={{ gridTemplateColumns: `repeat(${columnCount}, minmax(0, 1fr))` }}
-      >
+      <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${columnCount}, minmax(0, 1fr))` }}>
         {loading
           ? null
           : definitions.map((definition) => {

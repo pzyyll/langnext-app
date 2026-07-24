@@ -136,7 +136,10 @@ export function hasConfigMutation(draft: GoogleCloudIntegrationDraft, instance: 
 }
 
 /** True when the save needs a remote re-check: credential or Google Cloud config mutation (never name-only). */
-export function hasRemoteRelevantMutation(draft: GoogleCloudIntegrationDraft, instance: IntegrationInstanceDto): boolean {
+export function hasRemoteRelevantMutation(
+  draft: GoogleCloudIntegrationDraft,
+  instance: IntegrationInstanceDto,
+): boolean {
   return hasCredentialMutation(draft) || hasConfigMutation(draft, instance);
 }
 
