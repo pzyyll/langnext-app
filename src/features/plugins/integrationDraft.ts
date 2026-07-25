@@ -2,6 +2,7 @@
 // ABOUTME: Never copies secret values from DTOs into the draft.
 import type {
   CredentialUpdate,
+  EdgeTtsConfigV1,
   GoogleCloudConfigV1,
   GoogleTranslateWebChannel,
   GoogleTranslateWebConfigV1,
@@ -10,6 +11,8 @@ import type {
   ProxyMode,
 } from "../../storage/types";
 import {
+  EDGE_TTS_DEFAULT_BASE_URL,
+  EDGE_TTS_PLUGIN_ID,
   GOOGLE_CLOUD_DEFAULT_LOCATION,
   GOOGLE_CLOUD_PLUGIN_ID,
   GOOGLE_CLOUD_SERVICE_ACCOUNT_SLOT,
@@ -258,4 +261,75 @@ export function isGoogleTranslateWebDraftClean(
     draft.channel === baseline.channel &&
     draft.proxyUrl === baseline.proxyUrl
   );
+}
+
+export type EdgeTtsIntegrationDraft = {
+  pluginId: typeof EDGE_TTS_PLUGIN_ID;
+  displayName: string;
+  enabled: boolean;
+  baseUrl: string;
+  expectedUpdatedAt: string | null;
+};
+
+export function emptyEdgeTtsDraft(displayName = ""): EdgeTtsIntegrationDraft {
+  return {
+    pluginId: EDGE_TTS_PLUGIN_ID,
+    displayName,
+    enabled: true,
+    baseUrl: EDGE_TTS_DEFAULT_BASE_URL,
+    expectedUpdatedAt: null,
+  };
+}
+
+export function parseEdgeTtsConfig(configJson: string): EdgeTtsConfigV1 {
+  try {
+    const parsed = JSON.parse(configJson) as Partial<EdgeTtsConfigV1>;
+    return {
+      baseUrl:
+        typeof parsed.baseUrl === "string" && parsed.baseUrl.trim() ? parsed.baseUrl.trim() : EDGE_TTS_DEFAULT_BASE_URL,
+    };
+  } catch {
+    return {
+      baseUrl: EDGE_TTS_DEFAULT_BASE_URL,
+    };
+  }
+}
+
+export function draftFromEdgeTtsDto(instance: IntegrationInstanceDto): EdgeTtsIntegrationDraft {
+  const config = parseEdgeTtsConfig(instance.configJson);
+  return {
+    pluginId: EDGE_TTS_PLUGIN_ID,
+    displayName: instance.displayName,
+    enabled: instance.enabled,
+    baseUrl: config.baseUrl,
+    expectedUpdatedAt: instance.updatedAt,
+  };
+}
+
+export function buildEdgeTtsWrite(
+  draft: EdgeTtsIntegrationDraft,
+  options?: { id?: string | null },
+): IntegrationInstanceWrite {
+  const config: EdgeTtsConfigV1 = {
+    baseUrl: draft.baseUrl.trim() || EDGE_TTS_DEFAULT_BASE_URL,
+  };
+  return {
+    id: options?.id ?? null,
+    pluginId: draft.pluginId,
+    displayName: draft.displayName.trim(),
+    enabled: draft.enabled,
+    configJson: JSON.stringify(config),
+    credentials: [],
+    expectedUpdatedAt: draft.expectedUpdatedAt,
+  };
+}
+
+export function hasEdgeTtsConfigMutation(draft: EdgeTtsIntegrationDraft, instance: IntegrationInstanceDto): boolean {
+  const baseline = draftFromEdgeTtsDto(instance);
+  return draft.baseUrl !== baseline.baseUrl;
+}
+
+export function isEdgeTtsDraftClean(draft: EdgeTtsIntegrationDraft, instance: IntegrationInstanceDto): boolean {
+  const baseline = draftFromEdgeTtsDto(instance);
+  return draft.displayName === baseline.displayName && draft.baseUrl === baseline.baseUrl;
 }

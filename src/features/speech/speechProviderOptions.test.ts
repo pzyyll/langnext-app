@@ -2,15 +2,18 @@
 // ABOUTME: Covers speech.synthesize@1 integration filtering and readiness.
 import { describe, expect, mock, test } from "bun:test";
 import type { IntegrationInstanceDto, ServiceIntegrationManifest } from "../../storage/types";
+import { EDGE_TTS_PLUGIN_ID } from "../../storage/types";
 
 // unplugin-icons virtual modules are unavailable under bun:test.
 mock.module("~icons/svgs/google-cloud", () => ({ default: () => null }));
+mock.module("~icons/svgs/edge", () => ({ default: () => null }));
 
 const {
   SPEECH_SYNTHESIZE_CAPABILITY_ID,
   buildSpeechProviderCreateOptions,
-  listCompatibleSpeechRebindCandidates,
+  defaultEdgeTtsPreferences,
   defaultGoogleTtsPreferences,
+  listCompatibleSpeechRebindCandidates,
 } = await import("./speechProviderOptions");
 
 function instance(overrides: Partial<IntegrationInstanceDto>): IntegrationInstanceDto {
@@ -61,6 +64,17 @@ describe("defaultGoogleTtsPreferences", () => {
   });
 });
 
+describe("defaultEdgeTtsPreferences", () => {
+  test("returns schema v1 voice, speed, pitch, and style defaults", () => {
+    expect(defaultEdgeTtsPreferences()).toEqual({
+      voice: "zh-CN-XiaoxiaoNeural",
+      speed: 1.0,
+      pitch: 0,
+      style: "general",
+    });
+  });
+});
+
 describe("buildSpeechProviderCreateOptions", () => {
   test("lists Speech-capable integrations ordered by name then id", () => {
     const options = buildSpeechProviderCreateOptions({
@@ -103,6 +117,30 @@ describe("buildSpeechProviderCreateOptions", () => {
     });
     expect(options).toHaveLength(1);
     expect(options[0]?.disabled).toBe(true);
+  });
+
+  test("includes ready Edge TTS integrations as enabled create options", () => {
+    const edgeDefinition: ServiceIntegrationManifest = {
+      ...ttsDefinition,
+      id: EDGE_TTS_PLUGIN_ID,
+      capabilities: [{ id: SPEECH_SYNTHESIZE_CAPABILITY_ID, preferencesSchemaVersion: 1 }],
+    };
+    const options = buildSpeechProviderCreateOptions({
+      instances: [
+        instance({ id: "int-edge", pluginId: EDGE_TTS_PLUGIN_ID, displayName: "Edge A" }),
+        instance({
+          id: "int-edge-missing",
+          pluginId: EDGE_TTS_PLUGIN_ID,
+          displayName: "Edge Missing",
+          effectiveStatus: "plugin_missing",
+          enabled: false,
+        }),
+      ],
+      definitions: [edgeDefinition],
+    });
+    expect(options.map((option) => option.id)).toEqual(["integration:int-edge", "integration:int-edge-missing"]);
+    expect(options.find((option) => option.id === "integration:int-edge")?.disabled).toBe(false);
+    expect(options.find((option) => option.id === "integration:int-edge-missing")?.disabled).toBe(true);
   });
 });
 

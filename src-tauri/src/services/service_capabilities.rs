@@ -9,6 +9,7 @@ use crate::domain::service_capability::{
 use crate::domain::service_integration::IntegrationHealthStatus;
 use crate::error::StorageError;
 use crate::repositories::integration_instances;
+use crate::services::edge_tts::EdgeTtsCapabilities;
 use crate::services::google_cloud::{
   GOOGLE_DETECT_LANGUAGE_CAPABILITY_ID, GOOGLE_TRANSLATE_TEXT_CAPABILITY_ID, GoogleCloudCapabilities,
 };
@@ -116,6 +117,17 @@ impl SpeechSynthesizeCapability for GoogleCloudCapabilities {
   }
 }
 
+impl SpeechSynthesizeCapability for EdgeTtsCapabilities {
+  fn synthesize(
+    &self,
+    instance_id: Uuid,
+    request: SpeechSynthesizeRequest,
+    context: ExecutionContext,
+  ) -> Pin<Box<dyn Future<Output = Result<SpeechSynthesizeResponse, CapabilityError>> + Send + '_>> {
+    Box::pin(async move { self.synthesize_speech(instance_id, request, context).await })
+  }
+}
+
 impl TranslateTextCapability for GoogleTranslateWebCapabilities {
   fn translate(
     &self,
@@ -201,6 +213,16 @@ impl ServiceCapabilityRegistry {
       crate::domain::service_integration::GOOGLE_TRANSLATE_WEB_PLUGIN_ID,
       GOOGLE_WEB_DETECT_LANGUAGE_CAPABILITY_ID,
       CapabilityHandler::DetectLanguage(web),
+    );
+    self
+  }
+
+  /// Register credential-free Edge TTS speech synthesis handler.
+  pub fn with_edge_tts(mut self, edge: Arc<EdgeTtsCapabilities>) -> Self {
+    self.register(
+      crate::domain::service_integration::EDGE_TTS_PLUGIN_ID,
+      SPEECH_SYNTHESIZE_CAPABILITY_ID,
+      CapabilityHandler::SpeechSynthesize(edge),
     );
     self
   }

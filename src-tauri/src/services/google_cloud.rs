@@ -5,10 +5,11 @@ use crate::domain::provider_http::ProviderHttpMethod;
 use crate::domain::service_capability::{
   CAPABILITY_PROVIDER_CODE_MAX_LEN, CapabilityError, CapabilityErrorCode, DetectLanguageRequest,
   DetectLanguageResponse, ExecutionContext, OCR_IMAGE_CAPABILITY_ID, OcrImageRequest, OcrImageResponse,
-  SPEECH_AUDIO_MAX_BYTES, SPEECH_PROVIDER_RESPONSE_MAX_BYTES, SPEECH_SYNTHESIZE_CAPABILITY_ID, SpeechSynthesizeRequest,
-  SpeechSynthesizeResponse, TranslateTextRequest, TranslateTextResponse, validate_capability_language_id,
-  validate_capability_request_id, validate_capability_text, validate_ocr_image_preferences, validate_ocr_png_bounds,
-  validate_speech_synthesize_preferences, validate_speech_synthesize_text,
+  SPEECH_AUDIO_MAX_BYTES, SPEECH_PROVIDER_RESPONSE_MAX_BYTES, SPEECH_SYNTHESIZE_CAPABILITY_ID,
+  SpeechSynthesizePreferences, SpeechSynthesizeRequest, SpeechSynthesizeResponse, TranslateTextRequest,
+  TranslateTextResponse, validate_capability_language_id, validate_capability_request_id, validate_capability_text,
+  validate_ocr_image_preferences, validate_ocr_png_bounds, validate_speech_synthesize_preferences,
+  validate_speech_synthesize_text,
 };
 use crate::domain::service_integration::{GOOGLE_CLOUD_DEFAULT_LOCATION, GOOGLE_CLOUD_PLUGIN_ID, GoogleCloudConfigV1};
 use crate::error::StorageError;
@@ -325,7 +326,13 @@ impl GoogleCloudCapabilities {
       e.with_capability_id(SPEECH_SYNTHESIZE_CAPABILITY_ID)
         .with_request_id(&context.request_id)
     })?;
-    validate_speech_synthesize_preferences(&request.preferences).map_err(|e| {
+    let preferences: SpeechSynthesizePreferences =
+      serde_json::from_value(request.preferences.clone()).map_err(|_| {
+        CapabilityError::new(CapabilityErrorCode::InvalidRequest, "invalid Google TTS preferences")
+          .with_capability_id(SPEECH_SYNTHESIZE_CAPABILITY_ID)
+          .with_request_id(&context.request_id)
+      })?;
+    validate_speech_synthesize_preferences(&preferences).map_err(|e| {
       e.with_capability_id(SPEECH_SYNTHESIZE_CAPABILITY_ID)
         .with_request_id(&context.request_id)
     })?;
@@ -346,8 +353,8 @@ impl GoogleCloudCapabilities {
       "voice": { "languageCode": language_code },
       "audioConfig": {
         "audioEncoding": "MP3",
-        "speakingRate": request.preferences.speaking_rate,
-        "pitch": request.preferences.pitch,
+        "speakingRate": preferences.speaking_rate,
+        "pitch": preferences.pitch,
       },
     });
 

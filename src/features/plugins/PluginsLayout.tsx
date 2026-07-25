@@ -14,7 +14,7 @@ import { integrationKeys } from "../../query/keys";
 import { integrationListOptions } from "../../query/options";
 import { getIpcErrorMessage } from "../../storage/errors";
 import type { IntegrationInstanceDto } from "../../storage/types";
-import { GOOGLE_CLOUD_PLUGIN_ID } from "../../storage/types";
+import { EDGE_TTS_PLUGIN_ID, GOOGLE_CLOUD_PLUGIN_ID, GOOGLE_TRANSLATE_WEB_PLUGIN_ID } from "../../storage/types";
 import { AddIntegrationDialog } from "./AddIntegrationDialog";
 
 /** Shared rail footer: fixed border-box block size so rail matches profiles layout. */
@@ -50,6 +50,12 @@ export function PluginsLayout() {
   function pluginLabel(instance: IntegrationInstanceDto): string {
     if (instance.pluginId === GOOGLE_CLOUD_PLUGIN_ID) {
       return t("plugins.googleCloud.name");
+    }
+    if (instance.pluginId === GOOGLE_TRANSLATE_WEB_PLUGIN_ID) {
+      return t("plugins.googleTranslateWeb.name");
+    }
+    if (instance.pluginId === EDGE_TTS_PLUGIN_ID) {
+      return t("plugins.edgeTts.name");
     }
     return instance.pluginId;
   }
