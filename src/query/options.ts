@@ -11,6 +11,8 @@ import {
   listIntegrationInstanceDependencies,
   listIntegrationInstances,
   listOcrServices,
+  listSpeechServices,
+  getSpeechService,
   listProviderInstances,
   listProviderModels,
   listServiceIntegrationDefinitions,
@@ -19,7 +21,16 @@ import {
   listTranslationProfiles,
 } from "../storage/client";
 import type { TranslationHistoryListQuery } from "../storage/types";
-import { historyKeys, integrationKeys, modelKeys, ocrKeys, profileKeys, providerKeys, settingsKeys } from "./keys";
+import {
+  historyKeys,
+  integrationKeys,
+  modelKeys,
+  ocrKeys,
+  profileKeys,
+  providerKeys,
+  settingsKeys,
+  speechKeys,
+} from "./keys";
 
 export function providerListOptions() {
   return queryOptions({
@@ -91,6 +102,21 @@ export function ocrDetailOptions(id: string) {
   return queryOptions({
     queryKey: ocrKeys.detail(id),
     queryFn: () => getOcrService(id),
+    enabled: id.length > 0,
+  });
+}
+
+export function speechListOptions() {
+  return queryOptions({
+    queryKey: speechKeys.list(),
+    queryFn: listSpeechServices,
+  });
+}
+
+export function speechDetailOptions(id: string) {
+  return queryOptions({
+    queryKey: speechKeys.detail(id),
+    queryFn: () => getSpeechService(id),
     enabled: id.length > 0,
   });
 }

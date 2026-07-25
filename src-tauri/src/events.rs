@@ -17,6 +17,9 @@ pub const TRANSLATION_HISTORY_CHANGED: &str = "data://translation-history-change
 /// Emitted after OCR service create, update, or delete.
 pub const OCR_SERVICES_CHANGED: &str = "data://ocr-services-changed";
 
+/// Emitted after Speech service create, update, or delete.
+pub const SPEECH_SERVICES_CHANGED: &str = "data://speech-services-changed";
+
 /// Emitted after service-integration instance create, update, enable, validate, or delete.
 pub const SERVICE_INTEGRATIONS_CHANGED: &str = "data://service-integrations-changed";
 

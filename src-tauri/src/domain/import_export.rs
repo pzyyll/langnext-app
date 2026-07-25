@@ -13,10 +13,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
-/// Current configuration export format version (OCR services + templates).
-pub const EXPORT_FORMAT_VERSION: u32 = 5;
-/// Supported import format versions (normalized sequentially to v5).
-pub const SUPPORTED_EXPORT_FORMAT_VERSIONS: &[u32] = &[2, 3, 4, 5];
+/// Current configuration export format version (Speech services + OCR + integrations).
+pub const EXPORT_FORMAT_VERSION: u32 = 6;
+/// Supported import format versions (normalized sequentially to v6).
+pub const SUPPORTED_EXPORT_FORMAT_VERSIONS: &[u32] = &[2, 3, 4, 5, 6];
 
 /// Sanitized integration instance row for export/import (no secrets, refs, or journal data).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -77,7 +77,23 @@ pub struct OcrPromptTemplateExport {
   pub sort_order: i32,
 }
 
-/// Current (v5) configuration export document.
+/// Sanitized Speech service for export/import (no audio, text, or credentials).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SpeechServiceExport {
+  pub id: Uuid,
+  pub display_name: String,
+  pub enabled: bool,
+  pub sort_order: i32,
+  pub integration_instance_id: Uuid,
+  pub capability_id: String,
+  pub preferences_schema_version: i32,
+  pub preferences: Value,
+  pub created_at: String,
+  pub updated_at: String,
+}
+
+/// Current (v6) configuration export document.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfigurationExport {
@@ -96,6 +112,29 @@ pub struct ConfigurationExport {
   #[serde(default)]
   pub ocr_services: Vec<OcrServiceExport>,
   /// Ordered AI OCR prompt templates for all OCR services.
+  #[serde(default)]
+  pub ocr_prompt_templates: Vec<OcrPromptTemplateExport>,
+  /// Speech services (capability-backed); audio/text/credentials omitted.
+  #[serde(default)]
+  pub speech_services: Vec<SpeechServiceExport>,
+  pub app_settings: AppSettingsV1,
+}
+
+/// v5 document shape (OCR services + templates; no Speech arrays).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigurationExportV5 {
+  pub format_version: u32,
+  pub exported_at: String,
+  pub providers: Vec<ProviderExport>,
+  pub models: Vec<ProviderModel>,
+  pub translation_profiles: Vec<TranslationProfile>,
+  pub profile_models: Vec<TranslationProfileTarget>,
+  pub profile_prompt_templates: Vec<TranslationProfilePromptTemplate>,
+  #[serde(default)]
+  pub integration_instances: Vec<IntegrationInstanceExport>,
+  #[serde(default)]
+  pub ocr_services: Vec<OcrServiceExport>,
   #[serde(default)]
   pub ocr_prompt_templates: Vec<OcrPromptTemplateExport>,
   pub app_settings: AppSettingsV1,
@@ -212,6 +251,12 @@ pub struct ImportPreviewCounts {
   pub ocr_services_update: u32,
   #[serde(default)]
   pub ocr_services_copy: u32,
+  #[serde(default)]
+  pub speech_services_create: u32,
+  #[serde(default)]
+  pub speech_services_update: u32,
+  #[serde(default)]
+  pub speech_services_copy: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -283,7 +328,7 @@ pub fn normalize_v3_to_v4(value: serde_json::Value) -> Result<ConfigurationExpor
 }
 
 /// Normalize a v4 document to v5 (add empty OCR arrays).
-pub fn normalize_v4_to_v5(value: serde_json::Value) -> Result<ConfigurationExport, String> {
+pub fn normalize_v4_to_v5(value: serde_json::Value) -> Result<ConfigurationExportV5, String> {
   let v4: ConfigurationExportV4 =
     serde_json::from_value(value).map_err(|e| format!("invalid v4 configuration document: {e}"))?;
   if v4.format_version != 4 {
@@ -292,8 +337,8 @@ pub fn normalize_v4_to_v5(value: serde_json::Value) -> Result<ConfigurationExpor
       v4.format_version
     ));
   }
-  Ok(ConfigurationExport {
-    format_version: EXPORT_FORMAT_VERSION,
+  Ok(ConfigurationExportV5 {
+    format_version: 5,
     exported_at: v4.exported_at,
     providers: v4.providers,
     models: v4.models,
@@ -307,7 +352,33 @@ pub fn normalize_v4_to_v5(value: serde_json::Value) -> Result<ConfigurationExpor
   })
 }
 
-/// Parse an untrusted JSON value into a normalized v5 configuration document.
+/// Normalize a v5 document to v6 (add empty Speech services array).
+pub fn normalize_v5_to_v6(value: serde_json::Value) -> Result<ConfigurationExport, String> {
+  let v5: ConfigurationExportV5 =
+    serde_json::from_value(value).map_err(|e| format!("invalid v5 configuration document: {e}"))?;
+  if v5.format_version != 5 {
+    return Err(format!(
+      "normalize_v5_to_v6 expects formatVersion 5, got {}",
+      v5.format_version
+    ));
+  }
+  Ok(ConfigurationExport {
+    format_version: EXPORT_FORMAT_VERSION,
+    exported_at: v5.exported_at,
+    providers: v5.providers,
+    models: v5.models,
+    translation_profiles: v5.translation_profiles,
+    profile_models: v5.profile_models,
+    profile_prompt_templates: v5.profile_prompt_templates,
+    integration_instances: v5.integration_instances,
+    ocr_services: v5.ocr_services,
+    ocr_prompt_templates: v5.ocr_prompt_templates,
+    speech_services: Vec::new(),
+    app_settings: v5.app_settings,
+  })
+}
+
+/// Parse an untrusted JSON value into a normalized v6 configuration document.
 pub fn parse_and_normalize_export_document(value: serde_json::Value) -> Result<ConfigurationExport, String> {
   let version = value
     .get("formatVersion")
@@ -320,14 +391,20 @@ pub fn parse_and_normalize_export_document(value: serde_json::Value) -> Result<C
     2 => {
       let v3_value = normalize_v2_to_v3(value)?;
       let v4 = normalize_v3_to_v4(v3_value)?;
-      normalize_v4_to_v5(serde_json::to_value(v4).map_err(|e| e.to_string())?)
+      let v5 = normalize_v4_to_v5(serde_json::to_value(v4).map_err(|e| e.to_string())?)?;
+      normalize_v5_to_v6(serde_json::to_value(v5).map_err(|e| e.to_string())?)
     }
     3 => {
       let v4 = normalize_v3_to_v4(value)?;
-      normalize_v4_to_v5(serde_json::to_value(v4).map_err(|e| e.to_string())?)
+      let v5 = normalize_v4_to_v5(serde_json::to_value(v4).map_err(|e| e.to_string())?)?;
+      normalize_v5_to_v6(serde_json::to_value(v5).map_err(|e| e.to_string())?)
     }
-    4 => normalize_v4_to_v5(value),
-    5 => serde_json::from_value(value).map_err(|e| format!("invalid v5 configuration document: {e}")),
+    4 => {
+      let v5 = normalize_v4_to_v5(value)?;
+      normalize_v5_to_v6(serde_json::to_value(v5).map_err(|e| e.to_string())?)
+    }
+    5 => normalize_v5_to_v6(value),
+    6 => serde_json::from_value(value).map_err(|e| format!("invalid v6 configuration document: {e}")),
     other => Err(format!("unsupported formatVersion {other}")),
   }
 }
@@ -348,6 +425,11 @@ pub const FORBIDDEN_EXPORT_SECRET_KEYS: &[&str] = &[
   "service_account_json",
   "newRef",
   "expectedOldRef",
+  // Speech runtime payloads must never appear in configuration documents.
+  "audioContent",
+  "audio_content",
+  "mp3Bytes",
+  "mp3_bytes",
 ];
 
 /// Scan serialized export JSON text for forbidden secret/ref keys.
@@ -382,6 +464,7 @@ mod tests {
       integration_instances: vec![],
       ocr_services: vec![],
       ocr_prompt_templates: vec![],
+      speech_services: vec![],
       app_settings: AppSettingsV1::default_document(),
     };
     let json = serde_json::to_string(&doc).unwrap();
@@ -390,8 +473,11 @@ mod tests {
     assert!(json.contains("integrationInstances"));
     assert!(json.contains("ocrServices"));
     assert!(json.contains("ocrPromptTemplates"));
+    assert!(json.contains("speechServices"));
     assert!(!json.contains("credentialRef"));
     assert!(!json.contains("credential_ref"));
+    assert!(!json.contains("audioContent"));
+    assert!(!json.contains("mp3Bytes"));
     let back: ConfigurationExport = serde_json::from_str(&json).unwrap();
     assert_eq!(back, doc);
     assert!(export_json_contains_forbidden_secret_keys(&json).is_empty());
@@ -404,6 +490,8 @@ mod tests {
       r#"{"errorCode":"auth","private_key":"BEGIN","message":"no"}"#,
       r#"{"log":"token","access_token":"ya29.abc","level":"info"}"#,
       r#"{"binding":{"service_account_json":"{}"}}"#,
+      r#"{"response":{"audioContent":"ID3fake"}}"#,
+      r#"{"payload":{"mp3Bytes":"not-exported"}}"#,
     ];
     for fixture in fixtures {
       let found = export_json_contains_forbidden_secret_keys(fixture);
@@ -465,6 +553,9 @@ mod tests {
     assert_eq!(v5.format_version, 5);
     assert!(v5.ocr_services.is_empty());
     assert!(v5.ocr_prompt_templates.is_empty());
+    let v6 = normalize_v5_to_v6(serde_json::to_value(&v5).unwrap()).unwrap();
+    assert_eq!(v6.format_version, 6);
+    assert!(v6.speech_services.is_empty());
   }
 
   #[test]
@@ -481,9 +572,49 @@ mod tests {
       app_settings: AppSettingsV1::default_document(),
     };
     let v5 = normalize_v4_to_v5(serde_json::to_value(&v4).unwrap()).unwrap();
-    assert_eq!(v5.format_version, EXPORT_FORMAT_VERSION);
+    assert_eq!(v5.format_version, 5);
     assert!(v5.ocr_services.is_empty());
     assert!(v5.ocr_prompt_templates.is_empty());
+  }
+
+  #[test]
+  fn normalize_v5_to_v6_adds_empty_speech_services() {
+    let v5 = ConfigurationExportV5 {
+      format_version: 5,
+      exported_at: "t".into(),
+      providers: vec![],
+      models: vec![],
+      translation_profiles: vec![],
+      profile_models: vec![],
+      profile_prompt_templates: vec![],
+      integration_instances: vec![],
+      ocr_services: vec![],
+      ocr_prompt_templates: vec![],
+      app_settings: AppSettingsV1::default_document(),
+    };
+    let v6 = normalize_v5_to_v6(serde_json::to_value(&v5).unwrap()).unwrap();
+    assert_eq!(v6.format_version, EXPORT_FORMAT_VERSION);
+    assert!(v6.speech_services.is_empty());
+  }
+
+  #[test]
+  fn parse_and_normalize_v5_yields_v6_empty_speech() {
+    let v5 = ConfigurationExportV5 {
+      format_version: 5,
+      exported_at: "t".into(),
+      providers: vec![],
+      models: vec![],
+      translation_profiles: vec![],
+      profile_models: vec![],
+      profile_prompt_templates: vec![],
+      integration_instances: vec![],
+      ocr_services: vec![],
+      ocr_prompt_templates: vec![],
+      app_settings: AppSettingsV1::default_document(),
+    };
+    let doc = parse_and_normalize_export_document(serde_json::to_value(&v5).unwrap()).unwrap();
+    assert_eq!(doc.format_version, 6);
+    assert!(doc.speech_services.is_empty());
   }
 
   #[test]

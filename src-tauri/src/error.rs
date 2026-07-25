@@ -48,6 +48,9 @@ pub enum StorageError {
   #[error("migration failed: {0}")]
   Migration(String),
 
+  #[error("capability error: {code}")]
+  Capability { code: String, message: String },
+
   #[error("internal error")]
   Internal(String),
 }
@@ -88,6 +91,7 @@ impl From<StorageError> for IpcError {
       StorageError::Sqlite(_) => IpcError::new("storage_unavailable", "Database error"),
       StorageError::Serialization(_) => IpcError::new("validation_failed", "Invalid configuration data"),
       StorageError::Migration(msg) => IpcError::new("storage_unavailable", msg),
+      StorageError::Capability { code, message } => IpcError::new(code, message),
       StorageError::Internal(_) => IpcError::new("internal_error", "An internal error occurred"),
     }
   }

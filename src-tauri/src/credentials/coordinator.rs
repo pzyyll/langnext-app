@@ -274,6 +274,7 @@ fn error_code(err: &StorageError) -> &'static str {
     StorageError::Sqlite(_) => "sqlite",
     StorageError::Serialization(_) => "serialization",
     StorageError::Migration(_) => "migration",
+    StorageError::Capability { .. } => "capability_error",
     StorageError::Internal(_) => "internal_error",
   }
 }

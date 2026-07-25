@@ -9,6 +9,7 @@ import IconMaterialSymbolsLightDocumentScannerOutline from "~icons/material-symb
 import IconMaterialSymbolsLightExtensionOutline from "~icons/material-symbols-light/extension-outline";
 import IconMaterialSymbolsLightHistory from "~icons/material-symbols-light/history";
 import IconMaterialSymbolsLightNeurology from "~icons/material-symbols-light/neurology";
+import IconMaterialSymbolsLightRecordVoiceOverOutline from "~icons/material-symbols-light/record-voice-over-outline";
 import IconMaterialSymbolsLightSettings from "~icons/material-symbols-light/settings";
 import IconMaterialSymbolsLightTranslate from "~icons/material-symbols-light/translate";
 import { iconButtonClassName } from "../components/ui";
@@ -98,6 +99,7 @@ const navIconById: Record<NavIconId, ComponentType<SVGProps<SVGSVGElement>>> = {
   history: IconMaterialSymbolsLightHistory,
   neurology: IconMaterialSymbolsLightNeurology,
   document_scanner: IconMaterialSymbolsLightDocumentScannerOutline,
+  record_voice_over: IconMaterialSymbolsLightRecordVoiceOverOutline,
   extension: IconMaterialSymbolsLightExtensionOutline,
   settings: IconMaterialSymbolsLightSettings,
 };

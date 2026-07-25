@@ -1,6 +1,6 @@
 # Google Service Integrations Implementation Roadmap
 
-**Goal:** Deliver a host-managed service integration system through vertical slices, starting with Google Cloud Translation v3beta1, then Google Web translation and Google Cloud Vision OCR.
+**Goal:** Deliver a host-managed service integration system through vertical slices, starting with Google Cloud Translation v3beta1, then Google Web translation, Google Cloud Vision OCR, and Google Cloud Text-to-Speech.
 
 **Inputs:** `docs/analysis/google-cloud-plugin-architecture.md`, current Provider/OCR/Profile architecture, and the requirement to replace `docs/plans/2026-07-24-google-translate-profile-plan.md`.
 
@@ -8,13 +8,13 @@
 
 - “Plugin” means bundled application-level service integration code in the current roadmap, not a downloadable Tauri/native plugin.
 - User-configured records are named **integration instances** in persistence and IPC to avoid confusion with existing LLM `provider_instances`.
-- Existing TypeScript LLM `ProviderPlugin` registration and execution remain unchanged through Phases 1–3.
+- Existing TypeScript LLM `ProviderPlugin` registration and execution remain unchanged through Phases 1–4.
 - Rust is authoritative only for bundled service integrations and their capabilities.
 - Existing Provider, global proxy, Baidu OCR, and AI OCR credential storage is not migrated in Phase 1.
 - Google Cloud official services and Google Web/free translation are separate integration definitions.
-- Speech, generic schema-rendered forms, WASM packages, and an installable plugin marketplace require explicit future product gates.
+- Google Cloud text-to-speech proceeds only through the locked Phase 4 scope; speech recognition, streaming/long audio, generic schema-rendered forms, WASM packages, and an installable plugin marketplace retain explicit future product gates.
 
-**Architecture:** A bundled Rust integration registry exposes versioned, typed capabilities. Users create integration instances that own shared non-secret configuration and host-vault credential slots. Translation Profiles and OCR services reference an instance/capability and retain only runtime preferences. The host owns credential persistence, OAuth token grants, endpoint authorization, bounded HTTP, cancellation, error normalization, and observability.
+**Architecture:** A bundled Rust integration registry exposes versioned, typed capabilities. Users create integration instances that own shared non-secret configuration and host-vault credential slots. Translation Profiles, OCR services, and Speech services reference an instance/capability and retain only runtime preferences. The host owns credential persistence, OAuth token grants, endpoint authorization, bounded HTTP, cancellation, error normalization, and observability.
 
 **Tech Stack:** Tauri 2, Rust, SQLite/rusqlite, OS credential vault, reqwest, React 19, TanStack Router/Query, Effect IPC, Base UI, Tailwind CSS v4, i18next, Bun.
 
@@ -30,7 +30,7 @@
 | Instance multiplicity           | Multiple instances per plugin definition are allowed                                                   |
 | Google Cloud plugin ID          | `com.langnext.google-cloud`                                                                            |
 | Google Web plugin ID            | `com.langnext.google-translate-web`                                                                    |
-| Capability IDs                  | `translate.text@1`, `translate.detect@1`, `ocr.image@1`                                                |
+| Capability IDs                  | `translate.text@1`, `translate.detect@1`, `ocr.image@1`, `speech.synthesize@1`                         |
 | Google official API             | Cloud Translation REST `v3beta1` only                                                                  |
 | Official auth                   | Service-account JSON in host vault; OAuth access tokens minted by a trusted host driver                |
 | Secret boundary                 | Secrets/tokens never appear in read DTOs, events, exports, logs, or plugin handler inputs              |
@@ -42,7 +42,7 @@
 | Google Translate preferences v1 | Empty object only; source/target languages remain common Profile fields; unknown keys rejected         |
 | OCR engine type                 | Preserve `baidu` and `ai`; add `plugin_capability` in Phase 3                                          |
 | Integration deletion            | `ON DELETE RESTRICT`; dependencies must be reassigned or removed explicitly                            |
-| Forms                           | Host-owned typed forms through Phase 3; no generic schema renderer yet                                 |
+| Forms                           | Host-owned typed forms through Phase 4; no generic schema renderer yet                                 |
 | Route/label                     | Route `/plugins`; primary-nav label `Integrations`; `NavIconId` adds `extension`                       |
 | External plugins                | WASM Component Model only after a real installable-plugin requirement                                  |
 
@@ -52,26 +52,27 @@
 | -------------------- | --------------------------------------------------------------------------------------------------- |
 | Plugin definition    | Bundled code, manifest, endpoint grants, credential slots, and capability handlers                  |
 | Integration instance | One configured account/environment for a plugin definition                                          |
-| Capability binding   | Profile/OCR record referencing an integration instance and capability                               |
+| Capability binding   | Profile/OCR/Speech record referencing an integration instance and capability                        |
 | Credential slot      | Named secret binding owned by the host, e.g. `service-account-json`                                 |
 | Token grant          | Host-authorized request for a short-lived provider token; not the token itself                      |
 | Network broker       | Host service that enforces endpoint aliases, auth injection, limits, proxy policy, and cancellation |
 
 ## Stage Map
 
-| Stage                                              | Deliverable                                                      | Depends on        | Release value                                          |
-| -------------------------------------------------- | ---------------------------------------------------------------- | ----------------- | ------------------------------------------------------ |
-| [Phase 1A](./phase-1a-integration-core.md)         | Minimal registry, instance CRUD, credential slots, `/plugins`    | None              | Google Cloud account configured once                   |
-| [Phase 1B](./phase-1b-google-cloud-translation.md) | OAuth token grants, network broker, v3beta1 Translate/Detect     | Phase 1A          | Backend Google Cloud translation capability works      |
-| [Phase 1C](./phase-1c-profile-runtime-ux.md)       | Plugin-backed Profiles, Translate/Quick Translate, import/export | Phase 1B          | Google Cloud Translation is user-facing and releasable |
-| [Phase 2](./phase-2-google-web-translation.md)     | Separate GTX/HTTPS proxy integration                             | Phase 1C          | Credential-free Google translation choices             |
-| [Phase 3](./phase-3-google-cloud-vision-ocr.md)    | Vision OCR reusing the Cloud instance                            | Phase 1C          | One Cloud credential serves Translate + OCR            |
-| [Future gates](./future-gates.md)                  | Speech/schema UI/WASM entry criteria                             | Real product need | Prevent speculative infrastructure                     |
+| Stage                                               | Deliverable                                                      | Depends on        | Release value                                          |
+| --------------------------------------------------- | ---------------------------------------------------------------- | ----------------- | ------------------------------------------------------ |
+| [Phase 1A](./phase-1a-integration-core.md)          | Minimal registry, instance CRUD, credential slots, `/plugins`    | None              | Google Cloud account configured once                   |
+| [Phase 1B](./phase-1b-google-cloud-translation.md)  | OAuth token grants, network broker, v3beta1 Translate/Detect     | Phase 1A          | Backend Google Cloud translation capability works      |
+| [Phase 1C](./phase-1c-profile-runtime-ux.md)        | Plugin-backed Profiles, Translate/Quick Translate, import/export | Phase 1B          | Google Cloud Translation is user-facing and releasable |
+| [Phase 2](./phase-2-google-web-translation.md)      | Separate GTX/HTTPS proxy integration                             | Phase 1C          | Credential-free Google translation choices             |
+| [Phase 3](./phase-3-google-cloud-vision-ocr.md)     | Vision OCR reusing the Cloud instance                            | Phase 1C          | One Cloud credential serves Translate + OCR            |
+| [Phase 4](./phase-4-google-cloud-text-to-speech.md) | Google Cloud TTS services and Translate playback                 | Phase 3           | Source/result text can be synthesized and played       |
+| [Future gates](./future-gates.md)                   | STT/streaming/schema UI/WASM entry criteria                      | Real product need | Prevent speculative infrastructure                     |
 
 ```text
 Phase 1A → Phase 1B → Phase 1C → Phase 2
-                              └→ Phase 3
-                                  └→ Future Speech gate
+                              └→ Phase 3 → Phase 4 (TTS)
+                                             └→ Remaining Speech gates
 ```
 
 ## Migration Order
@@ -81,6 +82,7 @@ Phase 1A → Phase 1B → Phase 1C → Phase 2
 | `0012_service_integrations.sql`            | Phase 1A | Integration instances, credential slots, slot-aware credential journal |
 | `0013_translation_profile_engines.sql`     | Phase 1C | LLM/plugin Profile engine discriminant and integration FK              |
 | `0014_ocr_service_integration_binding.sql` | Phase 3  | OCR plugin capability binding while preserving Baidu/AI rows           |
+| `0015_speech_services.sql`                 | Phase 4  | Capability-backed Speech services using shared integration instances   |
 
 Each migration must pass both fresh-database and upgrade-from-previous-version tests. `src-tauri/src/storage/migrations.rs` remains the ordered embed list.
 
@@ -104,6 +106,9 @@ ocr_services
        ├─ baidu → existing native path
        ├─ ai → existing TS model/prompt path
        └─ plugin_capability → integration_instance + capability + preferences
+
+speech_services
+  └─ integration_instance + speech.synthesize@1 + speaking preferences
 ```
 
 ## Cross-Cutting Requirements
@@ -157,7 +162,8 @@ Errors may include bounded `retryable`, `providerCode`, `capabilityId`, and `req
 
 - Phase 1C introduces export format v4 with `integrationInstances` and engine-tagged Profiles.
 - Phase 3 introduces v5 with OCR services/templates and default OCR reference remapping.
-- Import accepts an untrusted raw JSON value, reads `formatVersion` first, then runs explicit normalizers: v2→v3→v4 (and v4→v5 in Phase 3).
+- Phase 4 introduces v6 with Speech services and default Speech reference remapping; synthesis text/audio remains excluded.
+- Import accepts an untrusted raw JSON value, reads `formatVersion` first, then runs explicit normalizers: v2→v3→v4→v5→v6.
 - Supported-version checks use an explicit set/range, not one `PREVIOUS_EXPORT_FORMAT_VERSION` constant.
 - Secrets and vault refs are always omitted.
 - Imported integration instances require credential re-entry.
@@ -181,6 +187,10 @@ Errors may include bounded `retryable`, `providerCode`, `capabilityId`, and `req
 - `src-tauri/src/services/google_cloud.rs` — Google Cloud capabilities.
 - `src-tauri/src/cmds/service_integrations.rs` — catalog/instance IPC.
 - `src-tauri/src/cmds/service_translation.rs` — plugin-profile translation/detection IPC.
+- `src-tauri/src/domain/speech_service.rs` — capability-backed Speech service DTOs and synthesis input.
+- `src-tauri/src/repositories/speech_services.rs` — Speech service persistence and dependency lookup.
+- `src-tauri/src/services/speech_services.rs` — Speech CRUD/default resolution and synthesis dispatch.
+- `src-tauri/src/cmds/speech_services.rs` — Speech CRUD/synthesis/cancellation IPC.
 
 ### New frontend areas
 
@@ -190,6 +200,8 @@ Errors may include bounded `retryable`, `providerCode`, `capabilityId`, and `req
 - `src/routes/plugins/$integrationInstanceId.tsx` — instance editor route.
 - `src/features/translate/AddTranslationProfileDialog.tsx` — LLM + integration-capability chooser.
 - `src/features/translate/translationEngineOptions.ts` — explicit dual-catalog merge.
+- `src/features/speech/` — Speech service management and one-audio playback orchestration.
+- `src/routes/speech.tsx`, `src/routes/speech/` — Speech layout, empty state, and editor routes.
 
 ## Stage Exit Rules
 
@@ -230,6 +242,7 @@ Expected: the phase-specific manual checklist passes with no secret exposure in 
 
 - Release Phase 1 only after 1A, 1B, and 1C are all complete; 1A/1B are internal milestones.
 - Phase 2 and Phase 3 are independent after Phase 1C.
+- Phase 4 follows Phase 3 and reuses its capability-binding and OCR-style service-management patterns.
 - Do not implement tasks from the superseded profile-owned Google plan.
 - Do not manually edit `src/routeTree.gen.ts`; regenerate it through the TanStack Router plugin and commit the generated result.
 

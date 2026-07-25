@@ -71,7 +71,7 @@ fn google_cloud_manifest() -> ServiceIntegrationManifest {
     manifest_version: 1,
     plugin_api_version: "1.0".into(),
     id: GOOGLE_CLOUD_PLUGIN_ID.into(),
-    version: "1.1.0".into(),
+    version: "1.2.0".into(),
     display_name_key: "plugins.googleCloud.name".into(),
     min_host_version: "0.1.0".into(),
     config_schema_version: 1,
@@ -93,6 +93,10 @@ fn google_cloud_manifest() -> ServiceIntegrationManifest {
         alias: "vision".into(),
         base_url: "https://vision.googleapis.com".into(),
       },
+      EndpointGrant {
+        alias: "text_to_speech".into(),
+        base_url: "https://texttospeech.googleapis.com".into(),
+      },
     ],
     capabilities: vec![
       IntegrationCapabilityDescriptor {
@@ -109,6 +113,11 @@ fn google_cloud_manifest() -> ServiceIntegrationManifest {
         id: "ocr.image@1".into(),
         preferences_schema_version: 1,
         endpoint_aliases: vec!["oauth".into(), "vision".into()],
+      },
+      IntegrationCapabilityDescriptor {
+        id: "speech.synthesize@1".into(),
+        preferences_schema_version: 1,
+        endpoint_aliases: vec!["oauth".into(), "text_to_speech".into()],
       },
     ],
   }
@@ -238,12 +247,14 @@ mod tests {
     assert_eq!(google.config_schema_version, 1);
     assert_eq!(google.credential_slots.len(), 1);
     assert_eq!(google.credential_slots[0].id, GOOGLE_CLOUD_SERVICE_ACCOUNT_SLOT);
-    assert_eq!(google.version, "1.1.0");
-    assert_eq!(google.capabilities.len(), 3);
+    assert_eq!(google.version, "1.2.0");
+    assert_eq!(google.capabilities.len(), 4);
     assert!(google.capabilities.iter().any(|c| c.id == "translate.text@1"));
     assert!(google.capabilities.iter().any(|c| c.id == "translate.detect@1"));
     assert!(google.capabilities.iter().any(|c| c.id == "ocr.image@1"));
+    assert!(google.capabilities.iter().any(|c| c.id == "speech.synthesize@1"));
     assert!(google.endpoints.iter().any(|e| e.alias == "vision"));
+    assert!(google.endpoints.iter().any(|e| e.alias == "text_to_speech"));
     assert_eq!(
       google
         .endpoints
@@ -251,6 +262,14 @@ mod tests {
         .find(|e| e.alias == "vision")
         .map(|e| e.base_url.as_str()),
       Some("https://vision.googleapis.com")
+    );
+    assert_eq!(
+      google
+        .endpoints
+        .iter()
+        .find(|e| e.alias == "text_to_speech")
+        .map(|e| e.base_url.as_str()),
+      Some("https://texttospeech.googleapis.com")
     );
   }
 

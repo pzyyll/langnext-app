@@ -16,6 +16,7 @@ pub mod service_capabilities;
 pub mod service_integration_registry;
 pub mod service_integrations;
 pub mod settings;
+pub mod speech_services;
 pub mod token_grant;
 pub mod translation_history;
 pub mod translation_profiles;
@@ -28,6 +29,7 @@ pub use providers::ProviderService;
 pub use service_integration_registry::ServiceIntegrationRegistry;
 pub use service_integrations::ServiceIntegrationService;
 pub use settings::SettingsService;
+pub use speech_services::SpeechServiceService;
 pub use translation_history::TranslationHistoryService;
 pub use translation_profiles::TranslationProfileService;
 

@@ -344,6 +344,50 @@ export interface OcrRecognizeResult {
   ocrServiceId: string;
 }
 
+/** Google TTS preferences schema v1 (speakingRate + pitch). */
+export interface SpeechSynthesizePreferencesV1 {
+  speakingRate: number;
+  pitch: number;
+}
+
+/** Sanitized Speech service DTO — no vault refs, no secrets. */
+export interface SpeechServiceDto {
+  id: string;
+  displayName: string;
+  enabled: boolean;
+  sortOrder: number;
+  integrationInstanceId: string;
+  capabilityId: string;
+  preferencesSchemaVersion: number;
+  preferences: SpeechSynthesizePreferencesV1 | Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Create/update input for a Speech service. */
+export interface SpeechServiceWrite {
+  id?: string | null;
+  displayName: string;
+  enabled: boolean;
+  integrationInstanceId: string;
+  capabilityId: string;
+  preferencesSchemaVersion: number;
+  preferences: SpeechSynthesizePreferencesV1 | Record<string, unknown>;
+  /** Required on update. */
+  expectedUpdatedAt?: string | null;
+}
+
+/** One-shot speech synthesis input. */
+export interface SpeechSynthesizeInput {
+  text: string;
+  /** Application language id (e.g. `en`, `zh`); never a free-form BCP-47 override. */
+  languageId: string;
+  /** Explicit service; omit/null to use app settings default. */
+  speechServiceId?: string | null;
+  /** Optional client request id for cancellation via the shared session registry. */
+  requestId?: string | null;
+}
+
 /** Persisted integration health (never disabled/plugin_missing). */
 export type IntegrationHealthStatus = "unconfigured" | "unvalidated" | "ready" | "degraded";
 
@@ -651,6 +695,8 @@ export interface AppSettingsV1 {
   defaultProfileId: string | null;
   /** OCR service used for region-screenshot text recognition; null means unset. */
   defaultOcrServiceId: string | null;
+  /** Speech service used for Translate playback; null means unset. */
+  defaultSpeechServiceId: string | null;
   translation: TranslationPreferences;
   shortcuts: ShortcutDefinition[];
   network: NetworkSettings;
@@ -725,6 +771,20 @@ export interface OcrPromptTemplateExport {
   sortOrder: number;
 }
 
+/** Sanitized Speech service for configuration export/import (no audio/text/credentials). */
+export interface SpeechServiceExport {
+  id: string;
+  displayName: string;
+  enabled: boolean;
+  sortOrder: number;
+  integrationInstanceId: string;
+  capabilityId: string;
+  preferencesSchemaVersion: number;
+  preferences: SpeechSynthesizePreferencesV1 | Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface ConfigurationExport {
   formatVersion: number;
   exportedAt: string;
@@ -740,6 +800,8 @@ export interface ConfigurationExport {
   ocrServices?: OcrServiceExport[];
   /** Ordered AI OCR prompt templates for all OCR services. */
   ocrPromptTemplates?: OcrPromptTemplateExport[];
+  /** Speech services (capability-backed); audio/text/credentials omitted. */
+  speechServices?: SpeechServiceExport[];
   appSettings: AppSettingsV1;
 }
 
@@ -759,6 +821,9 @@ export interface ImportPreviewCounts {
   ocrServicesCreate?: number;
   ocrServicesUpdate?: number;
   ocrServicesCopy?: number;
+  speechServicesCreate?: number;
+  speechServicesUpdate?: number;
+  speechServicesCopy?: number;
 }
 
 export interface ImportPreview {
@@ -883,6 +948,7 @@ const _settingsUpdateFixture = {
     theme: "dark",
     defaultProfileId: null,
     defaultOcrServiceId: null,
+    defaultSpeechServiceId: null,
     translation: { autoDetectSource: true, preserveFormatting: true },
     shortcuts: [
       { id: SHORTCUT_OPEN_QUICK_TRANSLATE, binding: DEFAULT_OPEN_QUICK_TRANSLATE_BINDING, enabled: true },

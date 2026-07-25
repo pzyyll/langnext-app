@@ -6,10 +6,20 @@ import {
   DATA_OCR_SERVICES_CHANGED,
   DATA_PROVIDERS_CHANGED,
   DATA_SERVICE_INTEGRATIONS_CHANGED,
+  DATA_SPEECH_SERVICES_CHANGED,
   DATA_TRANSLATION_HISTORY_CHANGED,
   DATA_TRANSLATION_PROFILES_CHANGED,
 } from "./events";
-import { historyKeys, integrationKeys, modelKeys, ocrKeys, profileKeys, providerKeys, settingsKeys } from "./keys";
+import {
+  historyKeys,
+  integrationKeys,
+  modelKeys,
+  ocrKeys,
+  profileKeys,
+  providerKeys,
+  settingsKeys,
+  speechKeys,
+} from "./keys";
 
 /** One backend data-change event and the Query prefixes it must invalidate. */
 export type DataChangeEventBinding = {
@@ -44,9 +54,13 @@ export const DATA_CHANGE_EVENT_BINDINGS: readonly DataChangeEventBinding[] = [
     invalidateKeys: [ocrKeys.all],
   },
   {
+    event: DATA_SPEECH_SERVICES_CHANGED,
+    invalidateKeys: [speechKeys.all],
+  },
+  {
     event: DATA_SERVICE_INTEGRATIONS_CHANGED,
-    // Integration health/rebind affects plugin OCR service labels and readiness.
-    invalidateKeys: [integrationKeys.all, ocrKeys.all],
+    // Integration health/rebind affects plugin OCR/Speech labels and readiness.
+    invalidateKeys: [integrationKeys.all, ocrKeys.all, speechKeys.all],
   },
   {
     event: DATA_APP_SETTINGS_CHANGED,

@@ -63,3 +63,19 @@ pub async fn set_app_default_ocr_service(
   })
   .await
 }
+
+/// Persist the Speech service used for Translate source/result playback.
+#[tauri::command]
+pub async fn set_app_default_speech_service(
+  app: AppHandle,
+  state: State<'_, AppState>,
+  default_speech_service_id: Option<Uuid>,
+) -> Result<AppSettingsDto, IpcError> {
+  let settings = state.settings.clone();
+  let result = run_blocking("set_app_default_speech_service", move || {
+    settings.set_default_speech_service_id(default_speech_service_id)
+  })
+  .await?;
+  crate::events::emit_data_changed(&app, crate::events::APP_SETTINGS_CHANGED);
+  Ok(result)
+}

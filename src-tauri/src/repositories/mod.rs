@@ -9,6 +9,7 @@ pub mod ocr_prompt_templates;
 pub mod ocr_services;
 pub mod provider_instances;
 pub mod provider_models;
+pub mod speech_services;
 pub mod translation_history;
 pub mod translation_profiles;
 

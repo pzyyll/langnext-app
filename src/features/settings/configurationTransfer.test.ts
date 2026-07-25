@@ -43,7 +43,7 @@ const {
 
 function sampleDocument(): ConfigurationExport {
   return {
-    formatVersion: 5,
+    formatVersion: 6,
     exportedAt: "2026-01-01T00:00:00Z",
     providers: [],
     models: [],
@@ -53,12 +53,14 @@ function sampleDocument(): ConfigurationExport {
     integrationInstances: [],
     ocrServices: [],
     ocrPromptTemplates: [],
+    speechServices: [],
     appSettings: {
       schemaVersion: 1,
       uiLanguage: "en",
       theme: "light",
       defaultProfileId: null,
       defaultOcrServiceId: null,
+      defaultSpeechServiceId: null,
       translation: { autoDetectSource: true, preserveFormatting: true },
       shortcuts: [],
       network: { proxyMode: "system", proxyUrl: null },
@@ -94,11 +96,11 @@ function validPreview(): ImportPreview {
 describe("parseConfigurationExportJson", () => {
   test("accepts a minimal valid document shape", () => {
     const doc = parseConfigurationExportJson(JSON.stringify(sampleDocument()));
-    expect(doc.formatVersion).toBe(5);
+    expect(doc.formatVersion).toBe(6);
   });
 
-  test("accepts supported legacy formatVersion 2, 3, and 4 envelopes", () => {
-    for (const formatVersion of [2, 3, 4]) {
+  test("accepts supported legacy formatVersion 2–5 envelopes", () => {
+    for (const formatVersion of [2, 3, 4, 5]) {
       const doc = parseConfigurationExportJson(JSON.stringify({ ...sampleDocument(), formatVersion }));
       expect(doc.formatVersion).toBe(formatVersion);
     }

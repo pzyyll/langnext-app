@@ -1,49 +1,64 @@
 # Future Service Integration Gates
 
-**Goal:** Define evidence required before expanding the service integration system into Speech, generic schema-rendered UI, external WASM plugins, or catalog consolidation.
+**Goal:** Define evidence required before expanding beyond approved Google Cloud TTS into remaining Speech, generic schema-rendered UI, external WASM plugins, or catalog consolidation.
 
 **Inputs:** `README.md` and `docs/analysis/google-cloud-plugin-architecture.md`.
 
-**Assumptions:** These are gates, not implementation commitments.
+**Assumptions:** The approved Google Cloud TTS subset is an implementation commitment only through its linked Phase 4 plan; every other item remains a gate.
 
 **Architecture:** New infrastructure is introduced only after a concrete product need demonstrates that the current typed bundled integration system cannot satisfy it safely and maintainably.
 
-**Tech Stack:** To be selected only after each gate is approved.
+**Tech Stack:** Defined in a promoted phase plan only after its gate is approved.
 
 ---
 
 ## Gate 1: Speech
 
-Do not add a generic `speech` operation.
-
-Proceed only after requirements answer:
-
-- Is the feature speech recognition (STT), synthesis (TTS), or both?
-- Is input/output streaming required?
-- Which audio formats, sample rates, channels, duration, and file-size limits are supported?
-- How does recording/playback work across Tauri windows?
-- Are partial transcripts required?
-- What are cancellation, buffering, retry, and offline behaviors?
-- Which runtime preferences belong to an integration instance versus a Speech profile?
-- Which history/privacy policies apply to audio and transcripts?
-
-When approved, define separate capability majors:
+Do not add a generic `speech` operation. Keep recognition and synthesis as separate capability majors:
 
 ```text
 speech.recognize@1
 speech.synthesize@1
 ```
 
-Before provider implementation:
+### Approved subset: Google Cloud text-to-speech
 
-1. Define typed requests/results/events.
-2. Add binary Tauri Channel or host resource/file-handle transport.
-3. Define hard byte/duration/buffer limits.
-4. Add cancellation/deadline semantics.
-5. Add permission and capability-scoped token/network grants.
-6. Add a Speech profile/configuration plan.
+**Status: promoted to [Phase 4](./phase-4-google-cloud-text-to-speech.md) (2026-07-24).**
 
-Never send large/streaming audio as unbounded base64 IPC.
+The approved subset is deliberately narrow:
+
+- `speech.synthesize@1` only through `com.langnext.google-cloud`;
+- plain text up to 5,000 UTF-8 bytes; no SSML;
+- Google-selected voice from the runtime effective source/target language;
+- configurable speaking rate and pitch only;
+- synchronous complete MP3 playback for Translate source/result;
+- one active playback with cancellation/replacement;
+- bounded raw Tauri binary response; no base64 audio DTO, stream, cache, download, file, history, or export;
+- audio/text excluded from logs and persistence.
+
+For bounded unary audio, `tauri::ipc::Response` is the approved transport. Tauri Channel or host resource/file-handle transport remains mandatory before any streaming or long-audio implementation.
+
+### Remaining Speech gate
+
+Do not implement `speech.recognize@1`, microphone capture, input/output streaming, long-audio synthesis, or partial results until requirements answer:
+
+- Which audio formats, sample rates, channels, duration, and file-size limits are supported?
+- How do recording permissions and capture work across Tauri windows and operating systems?
+- Are partial transcripts required, and how are ordered events represented?
+- What are cancellation, buffering, backpressure, retry, and offline behaviors?
+- Which runtime preferences belong to an integration instance versus a Speech service/profile?
+- Which history/privacy/retention policies apply to audio and transcripts?
+
+Before promoting another Speech subset:
+
+1. Define typed requests/results/events separately from `speech.synthesize@1` v1.
+2. Add bounded Channel or host resource/file-handle transport when audio streams or exceeds unary limits.
+3. Define hard byte/duration/buffer/backpressure limits.
+4. Add cancellation/deadline and permission semantics.
+5. Add capability-scoped token/network grants.
+6. Write a focused requirements/spec and implementation plan.
+
+Never send large or streaming audio as unbounded base64 IPC.
 
 ## Gate 2: Generic settings schema renderer
 
@@ -110,7 +125,7 @@ Do not add this runtime for network-only REST providers.
 
 ## Gate 5: LLM/service catalog consolidation
 
-Through Phase 3:
+Through Phase 4:
 
 - TypeScript `ProviderPlugin` stays authoritative for LLM provider/model wire logic.
 - Rust integration registry stays authoritative for service integrations.
@@ -125,13 +140,13 @@ Plan consolidation only if measured duplication or UX inconsistency becomes mate
 - missing plugin visibility;
 - current tests and import compatibility.
 
-Do not block Google Cloud Translation/OCR on this consolidation.
+Do not block Google Cloud Translation/OCR/TTS on this consolidation.
 
 ## Gate Validation
 
 Before promoting any gate to an implementation phase:
 
-1. Write a dedicated requirements/spec document.
+1. Write a dedicated requirements/spec document or a locked Required Product Gate in the focused phase plan.
 2. Inspect current code and retrieve current library/provider documentation.
 3. Create a focused implementation plan with exact files/tasks/validation.
 4. Review security, privacy, migration, and rollback.
@@ -139,4 +154,4 @@ Before promoting any gate to an implementation phase:
 
 ## Open Questions
 
-None. Each future area intentionally remains gated until concrete requirements exist.
+None. Google Cloud TTS has been promoted to Phase 4; every remaining future area stays gated until concrete requirements exist.

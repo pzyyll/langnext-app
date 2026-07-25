@@ -29,6 +29,26 @@ pub const OCR_IMAGE_MAX_PIXELS: u64 = 40_000_000;
 pub const OCR_LANGUAGE_HINTS_MAX: usize = 3;
 /// Capability id for image OCR.
 pub const OCR_IMAGE_CAPABILITY_ID: &str = "ocr.image@1";
+/// Capability id for text-to-speech synthesis.
+pub const SPEECH_SYNTHESIZE_CAPABILITY_ID: &str = "speech.synthesize@1";
+/// Max UTF-8 text bytes accepted by `speech.synthesize@1` (Google content limit).
+pub const SPEECH_TEXT_MAX_BYTES: usize = 5_000;
+/// Max decoded MP3 bytes accepted after synthesis.
+pub const SPEECH_AUDIO_MAX_BYTES: usize = 12 * 1024 * 1024;
+/// Max Google JSON response body for TTS (base64 expansion + envelope).
+pub const SPEECH_PROVIDER_RESPONSE_MAX_BYTES: usize = (SPEECH_AUDIO_MAX_BYTES * 4 / 3) + (64 * 1024);
+/// Speaking rate lower bound (Google AudioConfig).
+pub const SPEECH_SPEAKING_RATE_MIN: f64 = 0.25;
+/// Speaking rate upper bound (Google AudioConfig).
+pub const SPEECH_SPEAKING_RATE_MAX: f64 = 2.0;
+/// Default speaking rate (native speed).
+pub const SPEECH_SPEAKING_RATE_DEFAULT: f64 = 1.0;
+/// Pitch lower bound in semitones (Google AudioConfig).
+pub const SPEECH_PITCH_MIN: f64 = -20.0;
+/// Pitch upper bound in semitones (Google AudioConfig).
+pub const SPEECH_PITCH_MAX: f64 = 20.0;
+/// Default pitch (native pitch).
+pub const SPEECH_PITCH_DEFAULT: f64 = 0.0;
 
 /// Stable capability failure codes (never embed secrets or raw provider bodies).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -252,6 +272,87 @@ pub struct OcrImageResponse {
   pub text: String,
 }
 
+/// Runtime preferences for `speech.synthesize@1`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SpeechSynthesizePreferences {
+  #[serde(default = "default_speech_speaking_rate")]
+  pub speaking_rate: f64,
+  #[serde(default = "default_speech_pitch")]
+  pub pitch: f64,
+}
+
+fn default_speech_speaking_rate() -> f64 {
+  SPEECH_SPEAKING_RATE_DEFAULT
+}
+
+fn default_speech_pitch() -> f64 {
+  SPEECH_PITCH_DEFAULT
+}
+
+impl Default for SpeechSynthesizePreferences {
+  fn default() -> Self {
+    Self {
+      speaking_rate: SPEECH_SPEAKING_RATE_DEFAULT,
+      pitch: SPEECH_PITCH_DEFAULT,
+    }
+  }
+}
+
+/// Text-to-speech capability request (plain text + app language id).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpeechSynthesizeRequest {
+  pub text: String,
+  pub language_id: String,
+  pub preferences: SpeechSynthesizePreferences,
+}
+
+/// Text-to-speech capability response (raw MP3 bytes; not a frontend DTO).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpeechSynthesizeResponse {
+  pub mp3_bytes: Vec<u8>,
+}
+
+/// Validate speech preferences against host bounds.
+pub fn validate_speech_synthesize_preferences(
+  preferences: &SpeechSynthesizePreferences,
+) -> Result<(), CapabilityError> {
+  if !preferences.speaking_rate.is_finite()
+    || preferences.speaking_rate < SPEECH_SPEAKING_RATE_MIN
+    || preferences.speaking_rate > SPEECH_SPEAKING_RATE_MAX
+  {
+    return Err(CapabilityError::new(
+      CapabilityErrorCode::InvalidRequest,
+      format!("speakingRate must be finite and in [{SPEECH_SPEAKING_RATE_MIN}, {SPEECH_SPEAKING_RATE_MAX}]"),
+    ));
+  }
+  if !preferences.pitch.is_finite() || preferences.pitch < SPEECH_PITCH_MIN || preferences.pitch > SPEECH_PITCH_MAX {
+    return Err(CapabilityError::new(
+      CapabilityErrorCode::InvalidRequest,
+      format!("pitch must be finite and in [{SPEECH_PITCH_MIN}, {SPEECH_PITCH_MAX}]"),
+    ));
+  }
+  Ok(())
+}
+
+/// Validate synthesis text against the Google content limit (UTF-8 bytes).
+pub fn validate_speech_synthesize_text(text: &str) -> Result<(), CapabilityError> {
+  if text.is_empty() {
+    return Err(CapabilityError::new(
+      CapabilityErrorCode::InvalidRequest,
+      "text must not be empty",
+    ));
+  }
+  if text.len() > SPEECH_TEXT_MAX_BYTES {
+    return Err(CapabilityError::new(
+      CapabilityErrorCode::UnsupportedInput,
+      format!("text exceeds {SPEECH_TEXT_MAX_BYTES} bytes"),
+    ));
+  }
+  Ok(())
+}
+
 /// Validate OCR preferences against host bounds (hint count + language id shape).
 pub fn validate_ocr_image_preferences(preferences: &OcrImagePreferences) -> Result<(), CapabilityError> {
   if preferences.language_hints.len() > OCR_LANGUAGE_HINTS_MAX {
@@ -468,5 +569,43 @@ mod tests {
     let value = serde_json::to_value(OcrImageOperation::DocumentTextDetection).unwrap();
     assert_eq!(value, serde_json::json!("document_text_detection"));
     assert_eq!(OcrImageOperation::TextDetection.google_feature_type(), "TEXT_DETECTION");
+  }
+
+  #[test]
+  fn speech_preferences_reject_out_of_range_and_non_finite() {
+    let ok = SpeechSynthesizePreferences::default();
+    assert!(validate_speech_synthesize_preferences(&ok).is_ok());
+
+    let too_fast = SpeechSynthesizePreferences {
+      speaking_rate: SPEECH_SPEAKING_RATE_MAX + 0.01,
+      pitch: 0.0,
+    };
+    assert_eq!(
+      validate_speech_synthesize_preferences(&too_fast).unwrap_err().code,
+      CapabilityErrorCode::InvalidRequest
+    );
+
+    let nan_pitch = SpeechSynthesizePreferences {
+      speaking_rate: 1.0,
+      pitch: f64::NAN,
+    };
+    assert_eq!(
+      validate_speech_synthesize_preferences(&nan_pitch).unwrap_err().code,
+      CapabilityErrorCode::InvalidRequest
+    );
+  }
+
+  #[test]
+  fn speech_text_rejects_empty_and_oversized() {
+    assert_eq!(
+      validate_speech_synthesize_text("").unwrap_err().code,
+      CapabilityErrorCode::InvalidRequest
+    );
+    let long = "a".repeat(SPEECH_TEXT_MAX_BYTES + 1);
+    assert_eq!(
+      validate_speech_synthesize_text(&long).unwrap_err().code,
+      CapabilityErrorCode::UnsupportedInput
+    );
+    assert!(validate_speech_synthesize_text("hello").is_ok());
   }
 }

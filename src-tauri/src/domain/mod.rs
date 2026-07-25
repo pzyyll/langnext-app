@@ -10,6 +10,7 @@ pub mod provider_http;
 pub mod service_capability;
 pub mod service_integration;
 pub mod settings;
+pub mod speech_service;
 pub mod time;
 pub mod translation;
 pub mod translation_history;

@@ -213,7 +213,7 @@ pub fn delete(conn: &Connection, id: Uuid) -> Result<(), StorageError> {
 
 /// Dependency query hook for delete guards.
 ///
-/// Returns translation profiles and OCR services bound to this integration instance.
+/// Returns translation profiles, OCR services, and Speech services bound to this integration instance.
 pub fn list_dependencies(conn: &Connection, id: Uuid) -> Result<Vec<IntegrationDependencyDto>, StorageError> {
   get(conn, id)?;
   let profiles = crate::repositories::translation_profiles::list_by_integration_instance(conn, id)?;
@@ -229,6 +229,13 @@ pub fn list_dependencies(conn: &Connection, id: Uuid) -> Result<Vec<IntegrationD
   let ocr_services = crate::repositories::ocr_services::list_by_integration_instance(conn, id)?;
   deps.extend(ocr_services.into_iter().map(|service| IntegrationDependencyDto {
     kind: "ocr_service".into(),
+    id: service.id,
+    display_name: service.display_name,
+  }));
+
+  let speech_services = crate::repositories::speech_services::list_by_integration_instance(conn, id)?;
+  deps.extend(speech_services.into_iter().map(|service| IntegrationDependencyDto {
+    kind: "speech_service".into(),
     id: service.id,
     display_name: service.display_name,
   }));

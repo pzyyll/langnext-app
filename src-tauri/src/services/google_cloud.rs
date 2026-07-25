@@ -1,20 +1,22 @@
-// ABOUTME: Google Cloud Translation and Vision OCR capability handlers.
+// ABOUTME: Google Cloud Translation, Vision OCR, and Text-to-Speech capability handlers.
 // ABOUTME: Maps app language IDs, builds pinned relative requests, and sanitizes provider errors.
 use crate::domain::language_detection::SUPPORTED_LANGUAGES;
 use crate::domain::provider_http::ProviderHttpMethod;
 use crate::domain::service_capability::{
   CAPABILITY_PROVIDER_CODE_MAX_LEN, CapabilityError, CapabilityErrorCode, DetectLanguageRequest,
   DetectLanguageResponse, ExecutionContext, OCR_IMAGE_CAPABILITY_ID, OcrImageRequest, OcrImageResponse,
-  TranslateTextRequest, TranslateTextResponse, validate_capability_language_id, validate_capability_request_id,
-  validate_capability_text, validate_ocr_image_preferences, validate_ocr_png_bounds,
+  SPEECH_AUDIO_MAX_BYTES, SPEECH_PROVIDER_RESPONSE_MAX_BYTES, SPEECH_SYNTHESIZE_CAPABILITY_ID, SpeechSynthesizeRequest,
+  SpeechSynthesizeResponse, TranslateTextRequest, TranslateTextResponse, validate_capability_language_id,
+  validate_capability_request_id, validate_capability_text, validate_ocr_image_preferences, validate_ocr_png_bounds,
+  validate_speech_synthesize_preferences, validate_speech_synthesize_text,
 };
 use crate::domain::service_integration::{GOOGLE_CLOUD_DEFAULT_LOCATION, GOOGLE_CLOUD_PLUGIN_ID, GoogleCloudConfigV1};
 use crate::error::StorageError;
 use crate::repositories::integration_instances;
 use crate::services::network_broker::{BROKER_OCR_REQUEST_BODY_MAX_BYTES, BrokerRequest, NetworkBroker};
 use crate::services::token_grant::{
-  GOOGLE_CLOUD_TRANSLATION_SCOPE, GOOGLE_CLOUD_VISION_SCOPE, GOOGLE_OAUTH_AUDIENCE_POLICY_ID,
-  GOOGLE_SERVICE_ACCOUNT_AUTH_DRIVER_ID, TokenGrantRequest, TokenGrantService,
+  GOOGLE_CLOUD_TEXT_TO_SPEECH_SCOPE, GOOGLE_CLOUD_TRANSLATION_SCOPE, GOOGLE_CLOUD_VISION_SCOPE,
+  GOOGLE_OAUTH_AUDIENCE_POLICY_ID, GOOGLE_SERVICE_ACCOUNT_AUTH_DRIVER_ID, TokenGrantRequest, TokenGrantService,
 };
 use crate::storage::Database;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
@@ -40,6 +42,12 @@ pub const GOOGLE_DETECT_LANGUAGE_CAPABILITY_ID: &str = "translate.detect@1";
 pub const GOOGLE_VISION_ENDPOINT_ALIAS: &str = "vision";
 /// Relative path for Vision images:annotate.
 pub const GOOGLE_VISION_ANNOTATE_PATH: &str = "v1/images:annotate";
+/// Manifest endpoint alias for Text-to-Speech API origin.
+pub const GOOGLE_TEXT_TO_SPEECH_ENDPOINT_ALIAS: &str = "text_to_speech";
+/// Relative path for Text-to-Speech synthesize.
+pub const GOOGLE_TEXT_TO_SPEECH_SYNTHESIZE_PATH: &str = "v1/text:synthesize";
+/// Fixed synthesis timeout for TTS (provider may take longer than translate).
+pub const SPEECH_SYNTHESIS_TIMEOUT_SECS: u64 = 60;
 /// Max Google language list entries inspected for detection.
 const DETECT_LANGUAGES_MAX_ITEMS: usize = 16;
 /// Max path segment length for project/location.
@@ -298,6 +306,96 @@ impl GoogleCloudCapabilities {
 
     parse_vision_annotate_response(response.status, &response.body).map_err(|e| {
       e.with_capability_id(OCR_IMAGE_CAPABILITY_ID)
+        .with_request_id(&context.request_id)
+    })
+  }
+
+  pub async fn synthesize_speech(
+    &self,
+    instance_id: Uuid,
+    request: SpeechSynthesizeRequest,
+    context: ExecutionContext,
+  ) -> Result<SpeechSynthesizeResponse, CapabilityError> {
+    validate_capability_request_id(&context.request_id)?;
+    validate_speech_synthesize_text(&request.text).map_err(|e| {
+      e.with_capability_id(SPEECH_SYNTHESIZE_CAPABILITY_ID)
+        .with_request_id(&context.request_id)
+    })?;
+    validate_capability_language_id(&request.language_id, "language_id").map_err(|e| {
+      e.with_capability_id(SPEECH_SYNTHESIZE_CAPABILITY_ID)
+        .with_request_id(&context.request_id)
+    })?;
+    validate_speech_synthesize_preferences(&request.preferences).map_err(|e| {
+      e.with_capability_id(SPEECH_SYNTHESIZE_CAPABILITY_ID)
+        .with_request_id(&context.request_id)
+    })?;
+
+    let language_code = app_language_to_google(&request.language_id).ok_or_else(|| {
+      CapabilityError::new(CapabilityErrorCode::UnsupportedLanguage, "unsupported language")
+        .with_capability_id(SPEECH_SYNTHESIZE_CAPABILITY_ID)
+        .with_request_id(&context.request_id)
+    })?;
+
+    ensure_google_cloud_instance(&self.db, instance_id).map_err(|e| {
+      e.with_capability_id(SPEECH_SYNTHESIZE_CAPABILITY_ID)
+        .with_request_id(&context.request_id)
+    })?;
+
+    let body = json!({
+      "input": { "text": request.text },
+      "voice": { "languageCode": language_code },
+      "audioConfig": {
+        "audioEncoding": "MP3",
+        "speakingRate": request.preferences.speaking_rate,
+        "pitch": request.preferences.pitch,
+      },
+    });
+
+    let grant = self
+      .tokens
+      .acquire(
+        TokenGrantRequest {
+          instance_id,
+          capability_id: SPEECH_SYNTHESIZE_CAPABILITY_ID.into(),
+          auth_driver_id: GOOGLE_SERVICE_ACCOUNT_AUTH_DRIVER_ID.into(),
+          scopes: vec![GOOGLE_CLOUD_TEXT_TO_SPEECH_SCOPE.into()],
+          audience_policy_id: GOOGLE_OAUTH_AUDIENCE_POLICY_ID.into(),
+        },
+        Some(&context.cancel),
+      )
+      .await
+      .map_err(|e| {
+        e.with_capability_id(SPEECH_SYNTHESIZE_CAPABILITY_ID)
+          .with_request_id(&context.request_id)
+      })?;
+
+    let response = self
+      .network
+      .execute(BrokerRequest {
+        integration_instance_id: instance_id,
+        capability_id: SPEECH_SYNTHESIZE_CAPABILITY_ID.into(),
+        endpoint_alias: GOOGLE_TEXT_TO_SPEECH_ENDPOINT_ALIAS.into(),
+        method: ProviderHttpMethod::Post,
+        relative_path: GOOGLE_TEXT_TO_SPEECH_SYNTHESIZE_PATH.into(),
+        query: vec![],
+        headers: HashMap::new(),
+        body: Some(body.to_string()),
+        content_type: Some("application/json".into()),
+        auth: Some(grant),
+        request_id: context.request_id.clone(),
+        cancel: Some(context.cancel.clone()),
+        max_response_body_bytes: Some(SPEECH_PROVIDER_RESPONSE_MAX_BYTES),
+        timeout: Some(std::time::Duration::from_secs(SPEECH_SYNTHESIS_TIMEOUT_SECS)),
+        max_request_body_bytes: None,
+      })
+      .await
+      .map_err(|e| {
+        e.with_capability_id(SPEECH_SYNTHESIZE_CAPABILITY_ID)
+          .with_request_id(&context.request_id)
+      })?;
+
+    parse_tts_synthesize_response(response.status, &response.body).map_err(|e| {
+      e.with_capability_id(SPEECH_SYNTHESIZE_CAPABILITY_ID)
         .with_request_id(&context.request_id)
     })
   }
@@ -625,6 +723,63 @@ pub fn parse_vision_annotate_response(status: u16, body: &str) -> Result<OcrImag
   }
   // Empty text is a successful OCR result (no text found).
   Ok(OcrImageResponse { text: String::new() })
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TtsSynthesizeApiResponse {
+  audio_content: Option<String>,
+}
+
+/// Parse Text-to-Speech synthesize response into bounded MP3 bytes.
+pub fn parse_tts_synthesize_response(status: u16, body: &str) -> Result<SpeechSynthesizeResponse, CapabilityError> {
+  map_google_http_error(status, body)?;
+  let parsed: TtsSynthesizeApiResponse = serde_json::from_str(body).map_err(|_| {
+    CapabilityError::new(
+      CapabilityErrorCode::InvalidResponse,
+      "text-to-speech response was malformed",
+    )
+  })?;
+  let audio_b64 = parsed
+    .audio_content
+    .as_deref()
+    .map(str::trim)
+    .filter(|s| !s.is_empty())
+    .ok_or_else(|| {
+      CapabilityError::new(
+        CapabilityErrorCode::InvalidResponse,
+        "text-to-speech response missing audioContent",
+      )
+    })?;
+
+  // Reject oversized base64 before decoding when clearly above the decoded bound.
+  let max_base64_chars = (SPEECH_AUDIO_MAX_BYTES * 4 / 3) + 8;
+  if audio_b64.len() > max_base64_chars {
+    return Err(CapabilityError::new(
+      CapabilityErrorCode::InvalidResponse,
+      "text-to-speech audio exceeds size limit",
+    ));
+  }
+
+  let mp3_bytes = BASE64.decode(audio_b64).map_err(|_| {
+    CapabilityError::new(
+      CapabilityErrorCode::InvalidResponse,
+      "text-to-speech audioContent is not valid standard base64",
+    )
+  })?;
+  if mp3_bytes.is_empty() {
+    return Err(CapabilityError::new(
+      CapabilityErrorCode::InvalidResponse,
+      "text-to-speech audioContent is empty",
+    ));
+  }
+  if mp3_bytes.len() > SPEECH_AUDIO_MAX_BYTES {
+    return Err(CapabilityError::new(
+      CapabilityErrorCode::InvalidResponse,
+      "text-to-speech audio exceeds size limit",
+    ));
+  }
+  Ok(SpeechSynthesizeResponse { mp3_bytes })
 }
 
 /// True when a Vision error payload indicates a language-hint rejection.
@@ -1144,6 +1299,20 @@ mod tests {
     assert_eq!(err.provider_code.as_deref(), Some("PERMISSION_DENIED"));
     assert!(!err.message.contains("secret-project"));
     assert!(!format!("{err:?}").contains("secret-project"));
+  }
+
+  #[test]
+  fn google_cloud_tts_parse_valid_and_rejects_empty_or_invalid() {
+    let audio = BASE64.encode(b"ID3fake-mp3");
+    let body = format!(r#"{{"audioContent":"{audio}"}}"#);
+    let response = parse_tts_synthesize_response(200, &body).unwrap();
+    assert_eq!(response.mp3_bytes, b"ID3fake-mp3");
+
+    let err = parse_tts_synthesize_response(200, r#"{"audioContent":""}"#).unwrap_err();
+    assert_eq!(err.code, CapabilityErrorCode::InvalidResponse);
+
+    let err = parse_tts_synthesize_response(200, r#"{"audioContent":"%%%"}"#).unwrap_err();
+    assert_eq!(err.code, CapabilityErrorCode::InvalidResponse);
   }
 
   #[test]
