@@ -197,14 +197,16 @@ Plugin Package
   -> immutable, signed/versioned artifacts and manifest
 
 Installed Plugin Version
-  -> verified package digest + approved permission-grant revision
+  -> verified package digest + non-executable package approval
   -> optional default-for-new-instances marker (never an execution override)
 
 Plugin Definition
   -> sanitized catalog metadata derived from an installed version
 
 Plugin Instance
-  -> user configuration, credential bindings, enabled state, health, version pin
+  -> user configuration, credential bindings, enabled state, health
+  -> one atomic runtime/package pin + execution grant-set revision
+  -> grant-set entries scoped by capability authority or page/action authority
 
 Capability Binding
   -> Translation/OCR/Speech/LLM domain resource -> instance + capability major
@@ -251,9 +253,22 @@ A conceptual manifest:
   "publisher": "example",
   "runtime": {
     "kind": "wasm-component",
-    "artifact": "artifacts/plugin.wasm",
-    "sha256": "..."
+    "artifact": "artifacts/plugin.wasm"
   },
+  "files": [
+    {
+      "path": "artifacts/plugin.wasm",
+      "role": "runtime-artifact",
+      "bytes": 1234,
+      "sha256": "..."
+    },
+    {
+      "path": "locales/en.json",
+      "role": "locale",
+      "bytes": 234,
+      "sha256": "..."
+    }
+  ],
   "capabilities": [
     {
       "id": "translate.text@1",
@@ -285,19 +300,20 @@ A conceptual manifest:
 }
 ```
 
-The manifest requests permissions. It does not grant them. Installation produces a separate host-owned approval record.
+The manifest requests permissions. It does not grant them. Installation produces a host-owned package approval that permits catalog availability but has no runtime authority. Runtime activation separately creates one execution grant-set revision bound to an instance and package; typed entries authorize exact capability/origin/method/auth/resource combinations and optional page/action/capability delegation. The exact `plugin.json` bytes are signed; its file index covers every other payload entry, including artifacts, schemas, locales, licenses, icons, and UI assets. `signatures/manifest.sig` is the only archive entry outside that index.
 
 ### Package installation lifecycle
 
 ```text
-archive
+final signed archive bytes -> SHA-256 package identity
   -> bounded staging extraction
   -> reject traversal, symlinks, duplicates, and decompression abuse
   -> validate manifest and compatibility
-  -> verify every artifact digest
-  -> verify publisher signature
+  -> require archive entries to equal manifest + signature + signed file index
+  -> verify every indexed file digest/length/role
+  -> verify publisher signature over exact manifest bytes
   -> show requested permissions
-  -> persist host approval
+  -> persist non-executable package approval
   -> atomically move to content-addressed directory
   -> optionally set the version as the default for newly created instances
   -> publish catalog change event
@@ -305,15 +321,19 @@ archive
 
 Required properties:
 
+- first-party builds produce deterministic unsigned staging trees; an external release signer signs exact manifest bytes, then a keyless canonical finalizer writes the archive and computes its final SHA-256;
+- `package_digest` identifies the exact final signed archive bytes, not a pre-signing build;
 - same `plugin_id + version` with a different digest is rejected;
 - installed files are treated as immutable;
-- plugin instances pin an exact installed version/digest and permission-grant revision;
+- package approval and instance execution grant sets are distinct records; package approval can never satisfy broker/runtime authorization;
+- plugin instances atomically pin one exact installed version/digest and one grant-set revision; mixed per-capability executors cannot exist inside one instance;
+- grant-set child entries independently constrain capability network/auth/resource authority and optional page/action authority;
 - a catalog default affects only newly created instances and never redirects an existing instance;
 - the runtime router resolves the pinned package identity instead of trusting the current `plugin_version` string alone;
 - upgrades cannot silently expand permissions;
-- an instance upgrade is one compare-and-swap transition across package digest, config schema/version, approved grant revision, capability compatibility, and non-secret preference migrations;
+- an instance upgrade is one compare-and-swap transition across package digest, config schema/version, approved execution grant-set revision, capability compatibility, and non-secret preference migrations;
 - credential bindings remain host-owned and are reused only when slot IDs and kinds remain compatible;
-- the previous version, grant revision, and configuration/preference migration snapshot remain available for rollback;
+- the previous version, grant-set revision, and configuration/preference migration snapshot remain available for rollback;
 - in-use versions cannot be removed;
 - missing packages preserve instances and bindings as `plugin_missing`;
 - config migrations run against copied JSON in the sandbox and never execute SQL.
@@ -439,7 +459,7 @@ plugin id + version
 plugin instance id
 capability id + major
 request id
-approved permission grant revision
+approved execution grant-set revision
 ```
 
 ### Network broker
@@ -448,7 +468,8 @@ A guest requests an approved endpoint alias and relative path. It never supplies
 
 The broker enforces:
 
-- endpoint permission approved at install time;
+- package installation approval is ignored for execution authorization;
+- endpoint permission approved for the exact instance/package/capability grant;
 - capability-to-endpoint association;
 - allowed methods;
 - relative-path confinement;
@@ -543,8 +564,10 @@ Recommended initial model:
 - serve only verified package assets through a host-owned protocol or host shell;
 - make the host, not plugin HTML, set the CSP and security response headers;
 - use host navigation checks to block undeclared origins, top-level navigation, popups, downloads, and external schemes;
-- grant only a narrow plugin-page bridge permission through a statically defined `webviews` capability;
-- bind every bridge call to the WebView label, package digest, instance ID, and session nonce;
+- grant page open only to trusted app WebViews and grant one-time bootstrap/bridge/self-close only to plugin-page labels;
+- require an explicit page/action authority entry in the current instance/package grant set before opening a page;
+- deliver the session nonce through a one-time WebView-label-bound bootstrap command, never through URL/storage/global events;
+- bind every bridge call to the WebView label, package digest, instance ID, page/action authority entry, grant-set revision, and session nonce;
 - deny direct network access unless the page calls the same broker through an approved action;
 - expose sanitized state and schema mutations only;
 - close or invalidate the session when the package/version changes.
@@ -614,7 +637,7 @@ Optional plugin pages are catalog entries opened through one host route or windo
 /plugin-page/$integrationInstanceId/$pageId
 ```
 
-The host validates that the selected installed package declares the page.
+The host validates that the selected installed package declares the page and that the instance's current execution grant set explicitly approves that page/action subset.
 
 ## Security truth table
 
@@ -666,7 +689,7 @@ Deliverables:
 - package manifest and compatibility rules;
 - WIT capability majors;
 - limited UI schema dialect;
-- permission request and approval model;
+- non-executable package request/approval model plus separately instance-scoped atomic execution grant sets with capability/page entries;
 - app command ACL plan;
 - CSP and asset-scope baseline;
 - conformance test contract.
@@ -736,7 +759,7 @@ Exit criteria:
 
 ### Phase 6: Google Cloud multi-capability plugin
 
-Port Google Cloud Translate, Detect, OCR, and TTS. Keep Google OAuth and token policy host-owned. Add STT only after its product contract defines formats, duration, streaming, microphone permissions, and retention.
+Port Google Cloud Translate, Detect, OCR, and TTS in reviewable implementation slices, but seed/migrate only after the complete package passes conformance. One Google Cloud instance and all of its bindings atomically switch package/grant-set revision and rollback together; per-capability health remains independent. Keep Google OAuth and token policy host-owned. Add STT only after its product contract defines formats, duration, streaming, microphone permissions, and retention.
 
 Exit criteria:
 
@@ -776,9 +799,10 @@ Required behavior:
 
 - export plugin ID, semantic version, package digest, publisher identity, config schema version, and capability major requirements;
 - do not export package artifacts, secrets, credential refs, or trusted approval state;
-- imported packages require local installation and permission approval again;
+- imported runtime requirements require local installation, package approval, and instance-scoped execution-grant approval again;
 - absent packages restore instances and bindings as `plugin_missing` without downloading or executing code;
-- import validates config and preference migrations against the exact installed version before activation;
+- import preview/apply never instantiate, migrate through, execute, grant authority to, or activate plugin code; it persists external runtimes inactive;
+- a distinct confirmed post-import lifecycle operation validates/migrates copied config and preferences against the exact installed version before activation;
 - rollback snapshots remain local runtime state and are not treated as portable trust evidence.
 
 ## Recommended first implementation slice
