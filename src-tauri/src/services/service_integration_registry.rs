@@ -1,7 +1,7 @@
 // ABOUTME: Bundled service-integration catalog registration and sanitized lookup.
 // ABOUTME: Registers Google Cloud and credential-free Google Web translation definitions.
 use crate::domain::service_integration::{
-  CredentialSlotDescriptor, CredentialSlotKind, EndpointGrant, GOOGLE_CLOUD_PLUGIN_ID,
+  CredentialSlotDescriptor, CredentialSlotKind, EDGE_TTS_PLUGIN_ID, EndpointGrant, GOOGLE_CLOUD_PLUGIN_ID,
   GOOGLE_CLOUD_SERVICE_ACCOUNT_SLOT, GOOGLE_TRANSLATE_WEB_DEFAULT_PROXY_URL, GOOGLE_TRANSLATE_WEB_GTX_ORIGIN,
   GOOGLE_TRANSLATE_WEB_PLUGIN_ID, IntegrationCapabilityDescriptor, ServiceIntegrationManifest, validate_capability_id,
   validate_plugin_id, validate_slot_id,
@@ -26,6 +26,7 @@ impl ServiceIntegrationRegistry {
     };
     registry.register(google_cloud_manifest())?;
     registry.register(google_translate_web_manifest())?;
+    registry.register(edge_tts_manifest())?;
     Ok(registry)
   }
 
@@ -164,6 +165,27 @@ fn google_translate_web_manifest() -> ServiceIntegrationManifest {
   }
 }
 
+fn edge_tts_manifest() -> ServiceIntegrationManifest {
+  // Credential-free OpenAI-compatible Edge TTS. The handler calls reqwest directly because the
+  // service returns raw MP3 bytes and reads a per-instance base URL; no broker endpoint alias is used.
+  ServiceIntegrationManifest {
+    manifest_version: 1,
+    plugin_api_version: "1.0".into(),
+    id: EDGE_TTS_PLUGIN_ID.into(),
+    version: "1.0.0".into(),
+    display_name_key: "plugins.edgeTts.name".into(),
+    min_host_version: "0.1.0".into(),
+    config_schema_version: 1,
+    credential_slots: vec![],
+    endpoints: vec![],
+    capabilities: vec![IntegrationCapabilityDescriptor {
+      id: "speech.synthesize@1".into(),
+      preferences_schema_version: 1,
+      endpoint_aliases: vec![],
+    }],
+  }
+}
+
 fn validate_manifest(manifest: &ServiceIntegrationManifest) -> Result<(), StorageError> {
   if manifest.manifest_version == 0 {
     return Err(StorageError::Validation("manifest_version must be >= 1".into()));
@@ -242,7 +264,7 @@ mod tests {
   fn bundled_registers_google_cloud() {
     let registry = ServiceIntegrationRegistry::bundled().unwrap();
     let defs = registry.list_definitions();
-    assert_eq!(defs.len(), 2);
+    assert_eq!(defs.len(), 3);
     let google = registry.get(GOOGLE_CLOUD_PLUGIN_ID).unwrap();
     assert_eq!(google.config_schema_version, 1);
     assert_eq!(google.credential_slots.len(), 1);
@@ -271,6 +293,17 @@ mod tests {
         .map(|e| e.base_url.as_str()),
       Some("https://texttospeech.googleapis.com")
     );
+  }
+
+  #[test]
+  fn bundled_registers_edge_tts_zero_secret() {
+    let registry = ServiceIntegrationRegistry::bundled().unwrap();
+    let edge = registry.get(EDGE_TTS_PLUGIN_ID).unwrap();
+    assert!(edge.credential_slots.is_empty());
+    assert!(edge.endpoints.is_empty());
+    assert_eq!(edge.capabilities.len(), 1);
+    assert!(edge.capabilities.iter().any(|c| c.id == "speech.synthesize@1"));
+    assert_eq!(edge.display_name_key, "plugins.edgeTts.name");
   }
 
   #[test]

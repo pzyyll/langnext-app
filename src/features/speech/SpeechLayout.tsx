@@ -16,6 +16,7 @@ import { appSettingsOptions, integrationListOptions, speechListOptions } from ".
 import { setAppDefaultSpeechService } from "../../storage/client";
 import { getIpcErrorMessage } from "../../storage/errors";
 import type { AppSettingsDto, SpeechServiceDto } from "../../storage/types";
+import { EDGE_TTS_PLUGIN_ID, GOOGLE_CLOUD_PLUGIN_ID } from "../../storage/types";
 import { AddSpeechServiceDialog } from "./AddSpeechServiceDialog";
 import { SpeechContext } from "./SpeechContext";
 import { getSpeechProviderIcon } from "./speechProviderOptions";
@@ -37,10 +38,10 @@ export function SpeechLayout() {
   const settingsQuery = useQuery(appSettingsOptions());
   const integrationsQuery = useQuery(integrationListOptions());
   const services = useMemo(() => servicesQuery.data ?? [], [servicesQuery.data]);
-  const integrationNameById = useMemo(() => {
-    const map = new Map<string, string>();
+  const integrationById = useMemo(() => {
+    const map = new Map<string, { displayName: string; pluginId: string }>();
     for (const instance of integrationsQuery.data ?? []) {
-      map.set(instance.id, instance.displayName);
+      map.set(instance.id, { displayName: instance.displayName, pluginId: instance.pluginId });
     }
     return map;
   }, [integrationsQuery.data]);
@@ -95,7 +96,16 @@ export function SpeechLayout() {
 
   const defaultSpeechSelectId = "speech-default";
   const defaultSelectDisabled = setDefaultSpeechMutation.isPending || settingsQuery.isLoading || services.length === 0;
-  const ProviderIcon = getSpeechProviderIcon();
+
+  function pluginDisplayName(pluginId: string): string {
+    if (pluginId === GOOGLE_CLOUD_PLUGIN_ID) {
+      return t("plugins.googleCloud.name");
+    }
+    if (pluginId === EDGE_TTS_PLUGIN_ID) {
+      return t("plugins.edgeTts.name");
+    }
+    return pluginId;
+  }
 
   return (
     <SpeechContext.Provider value={contextValue}>
@@ -168,10 +178,16 @@ export function SpeechLayout() {
               >
                 {services.map((service) => {
                   const active = service.id === selectedId;
-                  const integrationName =
-                    integrationNameById.get(service.integrationInstanceId) ??
-                    t("speech.provider.pluginUnknownInstance");
-                  const providerLabel = t("speech.provider.pluginNamed", { name: integrationName });
+                  const integration = integrationById.get(service.integrationInstanceId);
+                  const integrationName = integration?.displayName ?? t("speech.provider.pluginUnknownInstance");
+                  const pluginName = integration
+                    ? pluginDisplayName(integration.pluginId)
+                    : t("speech.provider.pluginUnknownInstance");
+                  const providerLabel = t("speech.provider.pluginNamed", {
+                    plugin: pluginName,
+                    name: integrationName,
+                  });
+                  const ProviderIcon = getSpeechProviderIcon(integration?.pluginId);
                   return (
                     <li key={service.id} role="option" aria-selected={active}>
                       <Link

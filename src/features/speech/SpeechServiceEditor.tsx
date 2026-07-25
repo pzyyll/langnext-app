@@ -1,5 +1,5 @@
 // ABOUTME: Selected Speech service editor shell matching OCR service editor layout.
-// ABOUTME: Hosts Google Cloud TTS form with rename, enable, save, reset, and delete.
+// ABOUTME: Hosts Google Cloud TTS and Edge TTS forms with rename, enable, save, reset, and delete.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
@@ -26,9 +26,22 @@ import { settingsKeys, speechKeys } from "../../query/keys";
 import { integrationDefinitionListOptions, integrationListOptions, speechListOptions } from "../../query/options";
 import { deleteSpeechService, saveSpeechService } from "../../storage/client";
 import { getIpcErrorMessage } from "../../storage/errors";
-import type { SpeechServiceDto, SpeechServiceWrite } from "../../storage/types";
+import type { IntegrationInstanceDto, SpeechServiceDto, SpeechServiceWrite } from "../../storage/types";
+import { EDGE_TTS_PLUGIN_ID } from "../../storage/types";
+import { EdgeTtsForm } from "./EdgeTtsForm";
 import { GoogleCloudTtsForm } from "./GoogleCloudTtsForm";
 import {
+  EDGE_TTS_PITCH_DEFAULT,
+  EDGE_TTS_PITCH_MAX,
+  EDGE_TTS_PITCH_MIN,
+  EDGE_TTS_PREFERENCES_SCHEMA_VERSION,
+  EDGE_TTS_SPEED_DEFAULT,
+  EDGE_TTS_SPEED_MAX,
+  EDGE_TTS_SPEED_MIN,
+  EDGE_TTS_STYLE_DEFAULT,
+  EDGE_TTS_STYLES,
+  EDGE_TTS_VOICE_DEFAULT,
+  EDGE_TTS_VOICES,
   GOOGLE_TTS_PREFERENCES_SCHEMA_VERSION,
   SPEECH_PITCH_DEFAULT,
   SPEECH_PITCH_MAX,
@@ -37,6 +50,7 @@ import {
   SPEECH_SPEAKING_RATE_MAX,
   SPEECH_SPEAKING_RATE_MIN,
   SPEECH_SYNTHESIZE_CAPABILITY_ID,
+  defaultEdgeTtsPreferences,
   defaultGoogleTtsPreferences,
 } from "./speechProviderOptions";
 
@@ -44,13 +58,22 @@ export type SpeechServiceEditorProps = {
   speechServiceId: string;
 };
 
+type SpeechPluginKind = "google" | "edge";
+
 type EditorDraft = {
   enabled: boolean;
   integrationInstanceId: string;
   capabilityId: string;
   preferencesSchemaVersion: number;
+  kind: SpeechPluginKind;
+  // Google Cloud TTS
   speakingRate: number;
-  pitch: number;
+  googlePitch: number;
+  // Edge TTS
+  voice: string;
+  speed: number;
+  edgePitch: number;
+  style: string;
   expectedUpdatedAt: string;
 };
 
@@ -58,47 +81,137 @@ function parseFiniteNumber(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
-function draftFromDto(service: SpeechServiceDto): EditorDraft {
-  const prefs = service.preferences ?? defaultGoogleTtsPreferences();
+function parseString(value: unknown, fallback: string): string {
+  return typeof value === "string" && value.trim() ? value.trim() : fallback;
+}
+
+function pluginKindFromInstance(
+  integrationInstanceId: string,
+  instances: readonly IntegrationInstanceDto[],
+  preferences?: SpeechServiceDto["preferences"],
+): SpeechPluginKind {
+  const instance = instances.find((item) => item.id === integrationInstanceId);
+  if (instance) {
+    return instance.pluginId === EDGE_TTS_PLUGIN_ID ? "edge" : "google";
+  }
+  // Integrations may still be loading; sniff the stored preferences shape.
+  if (preferences && typeof preferences === "object" && preferences !== null && "voice" in preferences) {
+    return "edge";
+  }
+  return "google";
+}
+
+function draftFromDto(service: SpeechServiceDto, instances: readonly IntegrationInstanceDto[]): EditorDraft {
+  const kind = pluginKindFromInstance(service.integrationInstanceId, instances, service.preferences);
+  const prefs = service.preferences ?? (kind === "edge" ? defaultEdgeTtsPreferences() : defaultGoogleTtsPreferences());
   return {
     enabled: service.enabled,
     integrationInstanceId: service.integrationInstanceId,
     capabilityId: service.capabilityId || SPEECH_SYNTHESIZE_CAPABILITY_ID,
-    preferencesSchemaVersion: service.preferencesSchemaVersion || GOOGLE_TTS_PREFERENCES_SCHEMA_VERSION,
+    preferencesSchemaVersion:
+      service.preferencesSchemaVersion ||
+      (kind === "edge" ? EDGE_TTS_PREFERENCES_SCHEMA_VERSION : GOOGLE_TTS_PREFERENCES_SCHEMA_VERSION),
+    kind,
     speakingRate: parseFiniteNumber((prefs as { speakingRate?: unknown }).speakingRate, SPEECH_SPEAKING_RATE_DEFAULT),
-    pitch: parseFiniteNumber((prefs as { pitch?: unknown }).pitch, SPEECH_PITCH_DEFAULT),
+    googlePitch: parseFiniteNumber((prefs as { pitch?: unknown }).pitch, SPEECH_PITCH_DEFAULT),
+    voice: parseString((prefs as { voice?: unknown }).voice, EDGE_TTS_VOICE_DEFAULT),
+    speed: parseFiniteNumber((prefs as { speed?: unknown }).speed, EDGE_TTS_SPEED_DEFAULT),
+    edgePitch: parseFiniteNumber((prefs as { pitch?: unknown }).pitch, EDGE_TTS_PITCH_DEFAULT),
+    style: parseString((prefs as { style?: unknown }).style, EDGE_TTS_STYLE_DEFAULT),
     expectedUpdatedAt: service.updatedAt,
   };
 }
 
-function isDraftFieldsClean(draft: EditorDraft, service: SpeechServiceDto): boolean {
-  const baseline = draftFromDto(service);
-  return (
-    draft.enabled === baseline.enabled &&
-    draft.integrationInstanceId === baseline.integrationInstanceId &&
-    draft.capabilityId === baseline.capabilityId &&
-    draft.preferencesSchemaVersion === baseline.preferencesSchemaVersion &&
-    draft.speakingRate === baseline.speakingRate &&
-    draft.pitch === baseline.pitch
-  );
+function isDraftFieldsClean(
+  draft: EditorDraft,
+  service: SpeechServiceDto,
+  instances: readonly IntegrationInstanceDto[],
+): boolean {
+  const baseline = draftFromDto(service, instances);
+  if (
+    draft.enabled !== baseline.enabled ||
+    draft.integrationInstanceId !== baseline.integrationInstanceId ||
+    draft.capabilityId !== baseline.capabilityId ||
+    draft.preferencesSchemaVersion !== baseline.preferencesSchemaVersion ||
+    draft.kind !== baseline.kind
+  ) {
+    return false;
+  }
+  if (draft.kind === "edge") {
+    return (
+      draft.voice === baseline.voice &&
+      draft.speed === baseline.speed &&
+      draft.edgePitch === baseline.edgePitch &&
+      draft.style === baseline.style
+    );
+  }
+  return draft.speakingRate === baseline.speakingRate && draft.googlePitch === baseline.googlePitch;
+}
+
+function preferencesFromService(service: SpeechServiceDto, instances: readonly IntegrationInstanceDto[]) {
+  const kind = pluginKindFromInstance(service.integrationInstanceId, instances, service.preferences);
+  if (kind === "edge") {
+    const prefs = service.preferences ?? defaultEdgeTtsPreferences();
+    return {
+      kind,
+      preferencesSchemaVersion: service.preferencesSchemaVersion || EDGE_TTS_PREFERENCES_SCHEMA_VERSION,
+      preferences: {
+        voice: parseString((prefs as { voice?: unknown }).voice, EDGE_TTS_VOICE_DEFAULT),
+        speed: parseFiniteNumber((prefs as { speed?: unknown }).speed, EDGE_TTS_SPEED_DEFAULT),
+        pitch: parseFiniteNumber((prefs as { pitch?: unknown }).pitch, EDGE_TTS_PITCH_DEFAULT),
+        style: parseString((prefs as { style?: unknown }).style, EDGE_TTS_STYLE_DEFAULT),
+      },
+    } as const;
+  }
+  const prefs = service.preferences ?? defaultGoogleTtsPreferences();
+  return {
+    kind,
+    preferencesSchemaVersion: service.preferencesSchemaVersion || GOOGLE_TTS_PREFERENCES_SCHEMA_VERSION,
+    preferences: {
+      speakingRate: parseFiniteNumber((prefs as { speakingRate?: unknown }).speakingRate, SPEECH_SPEAKING_RATE_DEFAULT),
+      pitch: parseFiniteNumber((prefs as { pitch?: unknown }).pitch, SPEECH_PITCH_DEFAULT),
+    },
+  } as const;
 }
 
 /** Persist a rename without applying unsaved form fields. */
-function renameWrite(service: SpeechServiceDto, displayName: string): SpeechServiceWrite {
-  const prefs = service.preferences ?? defaultGoogleTtsPreferences();
+function renameWrite(
+  service: SpeechServiceDto,
+  displayName: string,
+  instances: readonly IntegrationInstanceDto[],
+): SpeechServiceWrite {
+  const resolved = preferencesFromService(service, instances);
   return {
     id: service.id,
     displayName,
     enabled: service.enabled,
     integrationInstanceId: service.integrationInstanceId,
     capabilityId: service.capabilityId || SPEECH_SYNTHESIZE_CAPABILITY_ID,
-    preferencesSchemaVersion: service.preferencesSchemaVersion || GOOGLE_TTS_PREFERENCES_SCHEMA_VERSION,
-    preferences: {
-      speakingRate: parseFiniteNumber((prefs as { speakingRate?: unknown }).speakingRate, SPEECH_SPEAKING_RATE_DEFAULT),
-      pitch: parseFiniteNumber((prefs as { pitch?: unknown }).pitch, SPEECH_PITCH_DEFAULT),
-    },
+    preferencesSchemaVersion: resolved.preferencesSchemaVersion,
+    preferences: resolved.preferences,
     expectedUpdatedAt: service.updatedAt,
   };
+}
+
+function preferencesFromDraft(draft: EditorDraft) {
+  if (draft.kind === "edge") {
+    return {
+      preferencesSchemaVersion: EDGE_TTS_PREFERENCES_SCHEMA_VERSION,
+      preferences: {
+        voice: draft.voice,
+        speed: draft.speed,
+        pitch: draft.edgePitch,
+        style: draft.style,
+      },
+    } as const;
+  }
+  return {
+    preferencesSchemaVersion: GOOGLE_TTS_PREFERENCES_SCHEMA_VERSION,
+    preferences: {
+      speakingRate: draft.speakingRate,
+      pitch: draft.googlePitch,
+    },
+  } as const;
 }
 
 export function SpeechServiceEditor({ speechServiceId }: SpeechServiceEditorProps) {
@@ -164,8 +277,9 @@ function SpeechServiceEditorLoaded({ service }: SpeechServiceEditorLoadedProps) 
   const queryClient = useQueryClient();
   const integrationsQuery = useQuery(integrationListOptions());
   const definitionsQuery = useQuery(integrationDefinitionListOptions());
+  const instances = useMemo(() => integrationsQuery.data ?? [], [integrationsQuery.data]);
 
-  const [draft, setDraft] = useState<EditorDraft>(() => draftFromDto(service));
+  const [draft, setDraft] = useState<EditorDraft>(() => draftFromDto(service, instances));
   const [trackedService, setTrackedService] = useState(service);
   const [savePending, setSavePending] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -180,10 +294,10 @@ function SpeechServiceEditorLoaded({ service }: SpeechServiceEditorLoadedProps) 
 
   // Accept remote service updates into the draft only while the form is clean.
   if (service.updatedAt !== trackedService.updatedAt || service.id !== trackedService.id) {
-    const shouldResetDraft = service.id !== trackedService.id || isDraftFieldsClean(draft, trackedService);
+    const shouldResetDraft = service.id !== trackedService.id || isDraftFieldsClean(draft, trackedService, instances);
     setTrackedService(service);
     if (shouldResetDraft) {
-      setDraft(draftFromDto(service));
+      setDraft(draftFromDto(service, instances));
     }
   }
 
@@ -201,7 +315,7 @@ function SpeechServiceEditorLoaded({ service }: SpeechServiceEditorLoadedProps) 
     }
   }, [renaming]);
 
-  const isDirty = useMemo(() => !isDraftFieldsClean(draft, service), [draft, service]);
+  const isDirty = useMemo(() => !isDraftFieldsClean(draft, service, instances), [draft, instances, service]);
 
   const formDisabled = savePending || deletePending || renamePending;
   const renameDisabled = formDisabled;
@@ -252,7 +366,7 @@ function SpeechServiceEditorLoaded({ service }: SpeechServiceEditorLoadedProps) 
     setRenamePending(true);
     setRenameError(null);
     try {
-      const saved = await saveSpeechService(renameWrite(service, trimmed));
+      const saved = await saveSpeechService(renameWrite(service, trimmed, instances));
       seedService(saved);
       setDraft((current) => ({ ...current, expectedUpdatedAt: saved.updatedAt }));
       setRenaming(false);
@@ -274,35 +388,60 @@ function SpeechServiceEditorLoaded({ service }: SpeechServiceEditorLoadedProps) 
       setValidationError(t("speech.validation.integrationRequired"));
       return;
     }
-    if (
-      !Number.isFinite(draft.speakingRate) ||
-      draft.speakingRate < SPEECH_SPEAKING_RATE_MIN ||
-      draft.speakingRate > SPEECH_SPEAKING_RATE_MAX
-    ) {
-      setValidationError(
-        t("speech.validation.speakingRateRange", {
-          min: SPEECH_SPEAKING_RATE_MIN,
-          max: SPEECH_SPEAKING_RATE_MAX,
-        }),
-      );
-      return;
-    }
-    if (!Number.isFinite(draft.pitch) || draft.pitch < SPEECH_PITCH_MIN || draft.pitch > SPEECH_PITCH_MAX) {
-      setValidationError(t("speech.validation.pitchRange", { min: SPEECH_PITCH_MIN, max: SPEECH_PITCH_MAX }));
-      return;
+    if (draft.kind === "edge") {
+      if (!(EDGE_TTS_VOICES as readonly string[]).includes(draft.voice)) {
+        setValidationError(t("speech.validation.voiceRequired"));
+        return;
+      }
+      if (!(EDGE_TTS_STYLES as readonly string[]).includes(draft.style)) {
+        setValidationError(t("speech.validation.styleRequired"));
+        return;
+      }
+      if (!Number.isFinite(draft.speed) || draft.speed < EDGE_TTS_SPEED_MIN || draft.speed > EDGE_TTS_SPEED_MAX) {
+        setValidationError(t("speech.validation.speedRange", { min: EDGE_TTS_SPEED_MIN, max: EDGE_TTS_SPEED_MAX }));
+        return;
+      }
+      if (
+        !Number.isFinite(draft.edgePitch) ||
+        draft.edgePitch < EDGE_TTS_PITCH_MIN ||
+        draft.edgePitch > EDGE_TTS_PITCH_MAX
+      ) {
+        setValidationError(t("speech.validation.edgePitchRange", { min: EDGE_TTS_PITCH_MIN, max: EDGE_TTS_PITCH_MAX }));
+        return;
+      }
+    } else {
+      if (
+        !Number.isFinite(draft.speakingRate) ||
+        draft.speakingRate < SPEECH_SPEAKING_RATE_MIN ||
+        draft.speakingRate > SPEECH_SPEAKING_RATE_MAX
+      ) {
+        setValidationError(
+          t("speech.validation.speakingRateRange", {
+            min: SPEECH_SPEAKING_RATE_MIN,
+            max: SPEECH_SPEAKING_RATE_MAX,
+          }),
+        );
+        return;
+      }
+      if (
+        !Number.isFinite(draft.googlePitch) ||
+        draft.googlePitch < SPEECH_PITCH_MIN ||
+        draft.googlePitch > SPEECH_PITCH_MAX
+      ) {
+        setValidationError(t("speech.validation.pitchRange", { min: SPEECH_PITCH_MIN, max: SPEECH_PITCH_MAX }));
+        return;
+      }
     }
 
+    const resolvedPrefs = preferencesFromDraft(draft);
     const write: SpeechServiceWrite = {
       id: service.id,
       displayName: service.displayName,
       enabled: draft.enabled,
       integrationInstanceId: draft.integrationInstanceId,
       capabilityId: draft.capabilityId || SPEECH_SYNTHESIZE_CAPABILITY_ID,
-      preferencesSchemaVersion: draft.preferencesSchemaVersion,
-      preferences: {
-        speakingRate: draft.speakingRate,
-        pitch: draft.pitch,
-      },
+      preferencesSchemaVersion: resolvedPrefs.preferencesSchemaVersion,
+      preferences: resolvedPrefs.preferences,
       expectedUpdatedAt: draft.expectedUpdatedAt,
     };
 
@@ -311,7 +450,7 @@ function SpeechServiceEditorLoaded({ service }: SpeechServiceEditorLoadedProps) 
     try {
       const saved = await saveSpeechService(write);
       seedService(saved);
-      setDraft(draftFromDto(saved));
+      setDraft(draftFromDto(saved, instances));
       toast.success({ title: t("speech.toast.saved"), description: saved.displayName });
       void queryClient.invalidateQueries({ queryKey: speechKeys.all });
     } catch (error) {
@@ -352,8 +491,35 @@ function SpeechServiceEditorLoaded({ service }: SpeechServiceEditorLoadedProps) 
   }
 
   function resetForm() {
-    setDraft(draftFromDto(service));
+    setDraft(draftFromDto(service, instances));
     setValidationError(null);
+  }
+
+  function handleIntegrationRebind(instanceId: string, nextCapabilityId: string) {
+    const nextKind = pluginKindFromInstance(instanceId, instances);
+    if (nextKind !== draft.kind) {
+      // Plugin switch resets preferences to the target plugin defaults.
+      const edgeDefaults = defaultEdgeTtsPreferences();
+      const googleDefaults = defaultGoogleTtsPreferences();
+      updateDraft({
+        integrationInstanceId: instanceId,
+        capabilityId: nextCapabilityId,
+        kind: nextKind,
+        preferencesSchemaVersion:
+          nextKind === "edge" ? EDGE_TTS_PREFERENCES_SCHEMA_VERSION : GOOGLE_TTS_PREFERENCES_SCHEMA_VERSION,
+        speakingRate: googleDefaults.speakingRate,
+        googlePitch: googleDefaults.pitch,
+        voice: edgeDefaults.voice,
+        speed: edgeDefaults.speed,
+        edgePitch: edgeDefaults.pitch,
+        style: edgeDefaults.style,
+      });
+      return;
+    }
+    updateDraft({
+      integrationInstanceId: instanceId,
+      capabilityId: nextCapabilityId,
+    });
   }
 
   return (
@@ -491,27 +657,49 @@ function SpeechServiceEditorLoaded({ service }: SpeechServiceEditorLoadedProps) 
           </>
         }
       >
-        <GoogleCloudTtsForm
-          integrationInstanceId={draft.integrationInstanceId}
-          capabilityId={draft.capabilityId}
-          speakingRate={draft.speakingRate}
-          pitch={draft.pitch}
-          instances={integrationsQuery.data ?? []}
-          definitions={definitionsQuery.data ?? []}
-          disabled={formDisabled}
-          onIntegrationInstanceIdChange={(instanceId, nextCapabilityId) => {
-            updateDraft({
-              integrationInstanceId: instanceId,
-              capabilityId: nextCapabilityId,
-            });
-          }}
-          onSpeakingRateChange={(value) => {
-            updateDraft({ speakingRate: value });
-          }}
-          onPitchChange={(value) => {
-            updateDraft({ pitch: value });
-          }}
-        />
+        {draft.kind === "edge" ? (
+          <EdgeTtsForm
+            integrationInstanceId={draft.integrationInstanceId}
+            capabilityId={draft.capabilityId}
+            voice={draft.voice}
+            speed={draft.speed}
+            pitch={draft.edgePitch}
+            style={draft.style}
+            instances={instances}
+            definitions={definitionsQuery.data ?? []}
+            disabled={formDisabled}
+            onIntegrationInstanceIdChange={handleIntegrationRebind}
+            onVoiceChange={(value) => {
+              updateDraft({ voice: value });
+            }}
+            onSpeedChange={(value) => {
+              updateDraft({ speed: value });
+            }}
+            onPitchChange={(value) => {
+              updateDraft({ edgePitch: value });
+            }}
+            onStyleChange={(value) => {
+              updateDraft({ style: value });
+            }}
+          />
+        ) : (
+          <GoogleCloudTtsForm
+            integrationInstanceId={draft.integrationInstanceId}
+            capabilityId={draft.capabilityId}
+            speakingRate={draft.speakingRate}
+            pitch={draft.googlePitch}
+            instances={instances}
+            definitions={definitionsQuery.data ?? []}
+            disabled={formDisabled}
+            onIntegrationInstanceIdChange={handleIntegrationRebind}
+            onSpeakingRateChange={(value) => {
+              updateDraft({ speakingRate: value });
+            }}
+            onPitchChange={(value) => {
+              updateDraft({ googlePitch: value });
+            }}
+          />
+        )}
 
         {validationError ? (
           <p className="mt-6 text-body-tight text-error" role="alert">

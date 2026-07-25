@@ -6,16 +6,18 @@ use crate::domain::cancel::CancelToken;
 use crate::domain::provider::CredentialUpdate;
 use crate::domain::service_capability::{CAPABILITY_DEFAULT_TIMEOUT, CapabilityErrorCode};
 use crate::domain::service_integration::{
-  CredentialSlotStatusDto, GOOGLE_CLOUD_DEFAULT_LOCATION, GOOGLE_CLOUD_PLUGIN_ID, GOOGLE_CLOUD_SERVICE_ACCOUNT_SLOT,
-  GOOGLE_OAUTH_TOKEN_URI, GOOGLE_TRANSLATE_WEB_PLUGIN_ID, GoogleCloudConfigV1, INTEGRATION_CONFIG_JSON_MAX_LEN,
-  INTEGRATION_DISPLAY_NAME_MAX_LEN, IntegrationDependencyDto, IntegrationHealthStatus, IntegrationInstance,
-  IntegrationInstanceDto, IntegrationInstanceWrite, IntegrationValidationResult, SERVICE_ACCOUNT_JSON_MAX_LEN,
-  ServiceIntegrationManifest, derive_effective_status, validate_plugin_id, validate_slot_id,
+  CredentialSlotStatusDto, EDGE_TTS_PLUGIN_ID, GOOGLE_CLOUD_DEFAULT_LOCATION, GOOGLE_CLOUD_PLUGIN_ID,
+  GOOGLE_CLOUD_SERVICE_ACCOUNT_SLOT, GOOGLE_OAUTH_TOKEN_URI, GOOGLE_TRANSLATE_WEB_PLUGIN_ID, GoogleCloudConfigV1,
+  INTEGRATION_CONFIG_JSON_MAX_LEN, INTEGRATION_DISPLAY_NAME_MAX_LEN, IntegrationDependencyDto, IntegrationHealthStatus,
+  IntegrationInstance, IntegrationInstanceDto, IntegrationInstanceWrite, IntegrationValidationResult,
+  SERVICE_ACCOUNT_JSON_MAX_LEN, ServiceIntegrationManifest, derive_effective_status, validate_plugin_id,
+  validate_slot_id,
 };
 use crate::domain::time::{new_id, now_rfc3339};
 use crate::error::StorageError;
 use crate::repositories::credential_operations::{self, CredentialOperation, OwnerKind};
 use crate::repositories::{integration_credential_bindings, integration_instances};
+use crate::services::edge_tts::{edge_tts_config_complete, validate_edge_tts_config};
 use crate::services::google_translate_web::{
   google_translate_web_config_complete, validate_google_translate_web_config,
 };
@@ -949,6 +951,9 @@ fn validate_config_for_plugin(
   if manifest.id == GOOGLE_TRANSLATE_WEB_PLUGIN_ID {
     return validate_google_translate_web_config(config_json);
   }
+  if manifest.id == EDGE_TTS_PLUGIN_ID {
+    return validate_edge_tts_config(config_json);
+  }
   // Unknown plugins should not reach here when registry is authoritative.
   Err(StorageError::PluginUnavailable(manifest.id.clone()))
 }
@@ -1137,7 +1142,8 @@ fn compute_local_health(
 }
 
 fn is_zero_secret_ready_plugin(manifest: &ServiceIntegrationManifest) -> bool {
-  manifest.id == GOOGLE_TRANSLATE_WEB_PLUGIN_ID && manifest.credential_slots.is_empty()
+  manifest.credential_slots.is_empty()
+    && (manifest.id == GOOGLE_TRANSLATE_WEB_PLUGIN_ID || manifest.id == EDGE_TTS_PLUGIN_ID)
 }
 
 fn plugin_config_complete(manifest: &ServiceIntegrationManifest, config_json: &str) -> bool {
@@ -1146,6 +1152,9 @@ fn plugin_config_complete(manifest: &ServiceIntegrationManifest, config_json: &s
   }
   if manifest.id == GOOGLE_TRANSLATE_WEB_PLUGIN_ID {
     return google_translate_web_config_complete(config_json);
+  }
+  if manifest.id == EDGE_TTS_PLUGIN_ID {
+    return edge_tts_config_complete(config_json);
   }
   true
 }
@@ -1886,11 +1895,15 @@ mod tests {
   fn service_integrations_list_definitions() {
     let (_d, service, _vault) = setup();
     let defs = service.list_definitions();
-    assert_eq!(defs.len(), 2);
+    assert_eq!(defs.len(), 3);
     assert_eq!(defs[0].id, GOOGLE_CLOUD_PLUGIN_ID);
     assert_eq!(defs[1].id, GOOGLE_TRANSLATE_WEB_PLUGIN_ID);
+    assert_eq!(defs[2].id, EDGE_TTS_PLUGIN_ID);
     let web = defs.iter().find(|d| d.id == GOOGLE_TRANSLATE_WEB_PLUGIN_ID).unwrap();
     assert!(web.credential_slots.is_empty());
+    let edge = defs.iter().find(|d| d.id == EDGE_TTS_PLUGIN_ID).unwrap();
+    assert!(edge.credential_slots.is_empty());
+    assert!(edge.capabilities.iter().any(|c| c.id == "speech.synthesize@1"));
   }
 
   #[test]

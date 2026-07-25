@@ -350,6 +350,14 @@ export interface SpeechSynthesizePreferencesV1 {
   pitch: number;
 }
 
+/** Edge TTS preferences schema v1 (voice + speed + pitch + style). */
+export interface EdgeTtsPreferencesV1 {
+  voice: string;
+  speed: number;
+  pitch: number;
+  style: string;
+}
+
 /** Sanitized Speech service DTO — no vault refs, no secrets. */
 export interface SpeechServiceDto {
   id: string;
@@ -359,7 +367,7 @@ export interface SpeechServiceDto {
   integrationInstanceId: string;
   capabilityId: string;
   preferencesSchemaVersion: number;
-  preferences: SpeechSynthesizePreferencesV1 | Record<string, unknown>;
+  preferences: SpeechSynthesizePreferencesV1 | EdgeTtsPreferencesV1 | Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
 }
@@ -372,7 +380,7 @@ export interface SpeechServiceWrite {
   integrationInstanceId: string;
   capabilityId: string;
   preferencesSchemaVersion: number;
-  preferences: SpeechSynthesizePreferencesV1 | Record<string, unknown>;
+  preferences: SpeechSynthesizePreferencesV1 | EdgeTtsPreferencesV1 | Record<string, unknown>;
   /** Required on update. */
   expectedUpdatedAt?: string | null;
 }
@@ -503,16 +511,25 @@ export interface GoogleTranslateWebConfigV1 {
   proxyUrl?: string | null;
 }
 
+/** Edge TTS non-secret config (schema v1). Zero credential slots; base URL is configurable. */
+export interface EdgeTtsConfigV1 {
+  baseUrl: string;
+}
+
 /** Bundled Google Cloud plugin id. */
 export const GOOGLE_CLOUD_PLUGIN_ID = "com.langnext.google-cloud" as const;
 /** Bundled Google Web (GTX / HTTPS proxy) plugin id. */
 export const GOOGLE_TRANSLATE_WEB_PLUGIN_ID = "com.langnext.google-translate-web" as const;
+/** Bundled Edge TTS plugin id (OpenAI-compatible tts.wangwangit.com). */
+export const EDGE_TTS_PLUGIN_ID = "com.langnext.edge-tts" as const;
 /** Google Cloud service-account credential slot. */
 export const GOOGLE_CLOUD_SERVICE_ACCOUNT_SLOT = "service-account-json" as const;
 /** Default Cloud Translation location. */
 export const GOOGLE_CLOUD_DEFAULT_LOCATION = "global" as const;
 /** Default third-party HTTPS proxy URL for Google Web. */
 export const GOOGLE_TRANSLATE_WEB_DEFAULT_PROXY_URL = "https://googlet.deno.dev/translate" as const;
+/** Default Edge TTS API base URL. */
+export const EDGE_TTS_DEFAULT_BASE_URL = "https://tts.wangwangit.com" as const;
 
 /** Persistence/export row for a prompt template (includes profile ownership + list order). */
 export interface TranslationProfilePromptTemplate extends PromptTemplate {
@@ -780,7 +797,7 @@ export interface SpeechServiceExport {
   integrationInstanceId: string;
   capabilityId: string;
   preferencesSchemaVersion: number;
-  preferences: SpeechSynthesizePreferencesV1 | Record<string, unknown>;
+  preferences: SpeechSynthesizePreferencesV1 | EdgeTtsPreferencesV1 | Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
 }

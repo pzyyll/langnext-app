@@ -2,13 +2,13 @@
 // ABOUTME: Capability-backed only; reuses shared Google Cloud integration instances.
 use crate::domain::cancel::CancelToken;
 use crate::domain::service_capability::{
-  SpeechSynthesizePreferences, SpeechSynthesizeRequest, validate_speech_synthesize_preferences,
+  EdgeTtsPreferences, SpeechSynthesizeRequest, validate_edge_tts_preferences, validate_speech_synthesize_preferences,
   validate_speech_synthesize_text,
 };
-use crate::domain::service_integration::{IntegrationHealthStatus, validate_capability_id};
+use crate::domain::service_integration::{EDGE_TTS_PLUGIN_ID, IntegrationHealthStatus, validate_capability_id};
 use crate::domain::speech_service::{
-  GOOGLE_TTS_PREFERENCES_SCHEMA_VERSION, SPEECH_DISPLAY_NAME_MAX_LEN, SpeechService, SpeechServiceDto,
-  SpeechServiceWrite, SpeechSynthesizeInput, parse_speech_synthesize_preferences,
+  EDGE_TTS_PREFERENCES_SCHEMA_VERSION, GOOGLE_TTS_PREFERENCES_SCHEMA_VERSION, SPEECH_DISPLAY_NAME_MAX_LEN,
+  SpeechService, SpeechServiceDto, SpeechServiceWrite, SpeechSynthesizeInput, parse_speech_synthesize_preferences,
 };
 use crate::domain::time::{new_id, now_rfc3339};
 use crate::error::StorageError;
@@ -165,14 +165,6 @@ impl SpeechServiceService {
         "unsupported speech capability id: {capability_id}"
       )));
     }
-    if preferences_schema_version != GOOGLE_TTS_PREFERENCES_SCHEMA_VERSION {
-      return Err(StorageError::Validation(format!(
-        "unsupported speech preferences schema version: {preferences_schema_version}"
-      )));
-    }
-
-    let prefs = parse_speech_synthesize_preferences(preferences).map_err(StorageError::Validation)?;
-    validate_speech_synthesize_preferences(&prefs).map_err(|e| StorageError::Validation(e.message))?;
 
     let instance = self
       .db
@@ -198,6 +190,7 @@ impl SpeechServiceService {
         "integration instance must be ready before binding".into(),
       ));
     }
+    validate_speech_preferences_for_plugin(&instance.plugin_id, preferences_schema_version, preferences)?;
     Ok(())
   }
 
@@ -256,7 +249,7 @@ struct PreparedSpeechSynthesis {
   integration_instance_id: Uuid,
   plugin_id: String,
   capability_id: String,
-  preferences: SpeechSynthesizePreferences,
+  preferences: Value,
   text: String,
   language_id: String,
 }
@@ -290,8 +283,8 @@ fn prepare_speech_synthesis(
     return Err(StorageError::Validation("integration instance is not ready".into()));
   }
 
-  let preferences = parse_speech_synthesize_preferences(&service.preferences).map_err(StorageError::Validation)?;
-  validate_speech_synthesize_preferences(&preferences).map_err(|e| StorageError::Validation(e.message))?;
+  let preferences = service.preferences.clone();
+  validate_speech_preferences_for_plugin(&instance.plugin_id, service.preferences_schema_version, &preferences)?;
 
   Ok(PreparedSpeechSynthesis {
     integration_instance_id: service.integration_instance_id,
@@ -301,6 +294,35 @@ fn prepare_speech_synthesis(
     text,
     language_id: language_id.trim().to_string(),
   })
+}
+
+/// Validate speech preferences by dispatching on the bound plugin id.
+/// Google Cloud uses schema v1 (speakingRate + pitch); Edge TTS uses schema v1 (voice/speed/pitch/style).
+fn validate_speech_preferences_for_plugin(
+  plugin_id: &str,
+  schema_version: i32,
+  preferences: &Value,
+) -> Result<(), StorageError> {
+  if plugin_id == EDGE_TTS_PLUGIN_ID {
+    if schema_version != EDGE_TTS_PREFERENCES_SCHEMA_VERSION {
+      return Err(StorageError::Validation(format!(
+        "unsupported speech preferences schema version: {schema_version}"
+      )));
+    }
+    let prefs: EdgeTtsPreferences = serde_json::from_value(preferences.clone())
+      .map_err(|e| StorageError::Validation(format!("invalid Edge TTS preferences: {e}")))?;
+    validate_edge_tts_preferences(&prefs).map_err(|e| StorageError::Validation(e.message))?;
+    return Ok(());
+  }
+  // Default: Google Cloud schema.
+  if schema_version != GOOGLE_TTS_PREFERENCES_SCHEMA_VERSION {
+    return Err(StorageError::Validation(format!(
+      "unsupported speech preferences schema version: {schema_version}"
+    )));
+  }
+  let prefs = parse_speech_synthesize_preferences(preferences).map_err(StorageError::Validation)?;
+  validate_speech_synthesize_preferences(&prefs).map_err(|e| StorageError::Validation(e.message))?;
+  Ok(())
 }
 
 fn validate_speech_write(input: &SpeechServiceWrite) -> Result<(), StorageError> {

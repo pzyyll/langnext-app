@@ -4,6 +4,7 @@ use crate::credentials::{CredentialVault, NativeCredentialVault};
 use crate::device_state::{DeviceStateManager, SharedDeviceState};
 use crate::domain::cancel::RequestSessionRegistry;
 use crate::error::StorageError;
+use crate::services::edge_tts::EdgeTtsCapabilities;
 use crate::services::google_cloud::GoogleCloudCapabilities;
 use crate::services::google_service_account::GoogleServiceAccountExchanger;
 use crate::services::google_translate_web::GoogleTranslateWebCapabilities;
@@ -65,8 +66,12 @@ impl AppState {
       token_grants.clone(),
     ));
     let google_web_caps = Arc::new(GoogleTranslateWebCapabilities::new(db.clone(), network_broker.clone()));
-    let capability_handlers =
-      Arc::new(ServiceCapabilityRegistry::with_google_cloud(google_caps).with_google_translate_web(google_web_caps));
+    let edge_tts_caps = Arc::new(EdgeTtsCapabilities::new(db.clone()));
+    let capability_handlers = Arc::new(
+      ServiceCapabilityRegistry::with_google_cloud(google_caps)
+        .with_google_translate_web(google_web_caps)
+        .with_edge_tts(edge_tts_caps),
+    );
     let service_capabilities = ServiceCapabilityService::new(db.clone(), registry.clone(), capability_handlers);
 
     let providers = ProviderService::new(db.clone(), vault.clone());

@@ -1,5 +1,5 @@
 // ABOUTME: Dialog for creating Speech services from ready speech.synthesize@1 integrations.
-// ABOUTME: Seeds Google TTS schema-v1 defaults; credentials stay on the integration instance.
+// ABOUTME: Seeds Google or Edge TTS schema-v1 defaults; credentials stay on the integration instance.
 import { useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Dialog } from "@base-ui/react/dialog";
@@ -10,10 +10,13 @@ import { integrationDefinitionListOptions, integrationListOptions } from "../../
 import { saveSpeechService } from "../../storage/client";
 import { getIpcErrorMessage } from "../../storage/errors";
 import type { SpeechServiceDto, SpeechServiceWrite } from "../../storage/types";
+import { EDGE_TTS_PLUGIN_ID } from "../../storage/types";
 import {
+  EDGE_TTS_PREFERENCES_SCHEMA_VERSION,
   GOOGLE_TTS_PREFERENCES_SCHEMA_VERSION,
   SPEECH_SYNTHESIZE_CAPABILITY_ID,
   buildSpeechProviderCreateOptions,
+  defaultEdgeTtsPreferences,
   defaultGoogleTtsPreferences,
   type SpeechProviderCreateOption,
 } from "./speechProviderOptions";
@@ -104,14 +107,15 @@ function AddSpeechServiceForm({ onCreated }: AddSpeechServiceFormProps) {
       setError(t("speech.add.needIntegration"));
       return;
     }
+    const isEdge = option.pluginId === EDGE_TTS_PLUGIN_ID;
     const write: SpeechServiceWrite = {
       id: null,
-      displayName: t("speech.defaults.googleTtsName"),
+      displayName: isEdge ? t("speech.defaults.edgeTtsName") : t("speech.defaults.googleTtsName"),
       enabled: true,
       integrationInstanceId: option.integrationInstanceId,
       capabilityId: option.capabilityId || SPEECH_SYNTHESIZE_CAPABILITY_ID,
-      preferencesSchemaVersion: GOOGLE_TTS_PREFERENCES_SCHEMA_VERSION,
-      preferences: defaultGoogleTtsPreferences(),
+      preferencesSchemaVersion: isEdge ? EDGE_TTS_PREFERENCES_SCHEMA_VERSION : GOOGLE_TTS_PREFERENCES_SCHEMA_VERSION,
+      preferences: isEdge ? defaultEdgeTtsPreferences() : defaultGoogleTtsPreferences(),
     };
     setError(null);
     createMutation.mutate(write);

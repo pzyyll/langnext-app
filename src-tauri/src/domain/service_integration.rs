@@ -20,6 +20,8 @@ pub const SLOT_ID_MAX_LEN: usize = 64;
 pub const GOOGLE_CLOUD_PLUGIN_ID: &str = "com.langnext.google-cloud";
 /// Google Web (GTX / HTTPS proxy) bundled plugin id.
 pub const GOOGLE_TRANSLATE_WEB_PLUGIN_ID: &str = "com.langnext.google-translate-web";
+/// Edge TTS bundled plugin id (OpenAI-compatible tts.wangwangit.com).
+pub const EDGE_TTS_PLUGIN_ID: &str = "com.langnext.edge-tts";
 /// Google Cloud service-account credential slot.
 pub const GOOGLE_CLOUD_SERVICE_ACCOUNT_SLOT: &str = "service-account-json";
 /// Pinned Google OAuth token URI required in service-account JSON.
@@ -32,6 +34,10 @@ pub const GOOGLE_TRANSLATE_WEB_DEFAULT_PROXY_URL: &str = "https://googlet.deno.d
 pub const GOOGLE_TRANSLATE_WEB_GTX_ORIGIN: &str = "https://translate.google.com";
 /// Max length for a stored HTTPS proxy URL after normalization.
 pub const GOOGLE_TRANSLATE_WEB_PROXY_URL_MAX_LEN: usize = 512;
+/// Default Edge TTS API base URL (OpenAI-compatible public service).
+pub const EDGE_TTS_DEFAULT_BASE_URL: &str = "https://tts.wangwangit.com";
+/// Max length for a stored Edge TTS base URL after normalization.
+pub const EDGE_TTS_BASE_URL_MAX_LEN: usize = 512;
 
 /// Persisted health values only (never disabled/plugin_missing).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -292,6 +298,19 @@ pub struct GoogleTranslateWebConfigV1 {
   /// Normalized HTTPS proxy URL when `channel` is `https_proxy`.
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub proxy_url: Option<String>,
+}
+
+/// Edge TTS non-secret config (schema v1). Zero credential slots; base URL is configurable.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EdgeTtsConfigV1 {
+  /// Normalized API base URL (origin + optional path). Defaults to the bundled service.
+  #[serde(default = "default_edge_tts_base_url")]
+  pub base_url: String,
+}
+
+fn default_edge_tts_base_url() -> String {
+  EDGE_TTS_DEFAULT_BASE_URL.to_string()
 }
 
 /// Validate reverse-domain plugin ids (ASCII, bounded).

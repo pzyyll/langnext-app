@@ -272,7 +272,7 @@ pub struct OcrImageResponse {
   pub text: String,
 }
 
-/// Runtime preferences for `speech.synthesize@1`.
+/// Runtime preferences for `speech.synthesize@1` (Google Cloud schema).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SpeechSynthesizePreferences {
@@ -280,6 +280,92 @@ pub struct SpeechSynthesizePreferences {
   pub speaking_rate: f64,
   #[serde(default = "default_speech_pitch")]
   pub pitch: f64,
+}
+
+/// Edge TTS voice ids supported by the bundled plugin (zh-CN only).
+pub const EDGE_TTS_VOICES: &[&str] = &[
+  "zh-CN-XiaoxiaoNeural",
+  "zh-CN-XiaoyiNeural",
+  "zh-CN-XiaochenNeural",
+  "zh-CN-XiaohanNeural",
+  "zh-CN-XiaomengNeural",
+  "zh-CN-XiaomoNeural",
+  "zh-CN-XiaoqiuNeural",
+  "zh-CN-XiaoruiNeural",
+  "zh-CN-XiaoshuangNeural",
+  "zh-CN-XiaoxuanNeural",
+  "zh-CN-XiaoyanNeural",
+  "zh-CN-XiaoyouNeural",
+  "zh-CN-XiaozhenNeural",
+  "zh-CN-YunxiNeural",
+  "zh-CN-YunyangNeural",
+  "zh-CN-YunjianNeural",
+  "zh-CN-YunfengNeural",
+  "zh-CN-YunhaoNeural",
+  "zh-CN-YunxiaNeural",
+  "zh-CN-YunyeNeural",
+  "zh-CN-YunzeNeural",
+];
+
+/// Edge TTS style ids supported by the bundled plugin.
+pub const EDGE_TTS_STYLES: &[&str] = &[
+  "general",
+  "assistant",
+  "chat",
+  "customerservice",
+  "newscast",
+  "affectionate",
+  "calm",
+  "cheerful",
+  "gentle",
+  "lyrical",
+  "serious",
+];
+/// Edge TTS speed lower bound.
+pub const EDGE_TTS_SPEED_MIN: f64 = 0.5;
+/// Edge TTS speed upper bound.
+pub const EDGE_TTS_SPEED_MAX: f64 = 2.0;
+/// Edge TTS speed default.
+pub const EDGE_TTS_SPEED_DEFAULT: f64 = 1.0;
+/// Edge TTS pitch lower bound.
+pub const EDGE_TTS_PITCH_MIN: f64 = -50.0;
+/// Edge TTS pitch upper bound.
+pub const EDGE_TTS_PITCH_MAX: f64 = 50.0;
+/// Edge TTS pitch default.
+pub const EDGE_TTS_PITCH_DEFAULT: f64 = 0.0;
+/// Default Edge TTS voice.
+pub const EDGE_TTS_VOICE_DEFAULT: &str = "zh-CN-XiaoxiaoNeural";
+/// Default Edge TTS style.
+pub const EDGE_TTS_STYLE_DEFAULT: &str = "general";
+
+/// Runtime preferences for Edge TTS `speech.synthesize@1` (schema v1).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EdgeTtsPreferences {
+  #[serde(default = "default_edge_tts_voice")]
+  pub voice: String,
+  #[serde(default = "default_edge_tts_speed")]
+  pub speed: f64,
+  #[serde(default = "default_edge_tts_pitch")]
+  pub pitch: f64,
+  #[serde(default = "default_edge_tts_style")]
+  pub style: String,
+}
+
+fn default_edge_tts_voice() -> String {
+  EDGE_TTS_VOICE_DEFAULT.into()
+}
+
+fn default_edge_tts_speed() -> f64 {
+  EDGE_TTS_SPEED_DEFAULT
+}
+
+fn default_edge_tts_pitch() -> f64 {
+  EDGE_TTS_PITCH_DEFAULT
+}
+
+fn default_edge_tts_style() -> String {
+  EDGE_TTS_STYLE_DEFAULT.into()
 }
 
 fn default_speech_speaking_rate() -> f64 {
@@ -300,12 +386,15 @@ impl Default for SpeechSynthesizePreferences {
 }
 
 /// Text-to-speech capability request (plain text + app language id).
+///
+/// `preferences` is the raw stored JSON; each plugin handler parses its own schema
+/// (Google `SpeechSynthesizePreferences` or Edge `EdgeTtsPreferences`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SpeechSynthesizeRequest {
   pub text: String,
   pub language_id: String,
-  pub preferences: SpeechSynthesizePreferences,
+  pub preferences: serde_json::Value,
 }
 
 /// Text-to-speech capability response (raw MP3 bytes; not a frontend DTO).
@@ -331,6 +420,37 @@ pub fn validate_speech_synthesize_preferences(
     return Err(CapabilityError::new(
       CapabilityErrorCode::InvalidRequest,
       format!("pitch must be finite and in [{SPEECH_PITCH_MIN}, {SPEECH_PITCH_MAX}]"),
+    ));
+  }
+  Ok(())
+}
+
+/// Validate Edge TTS preferences against host bounds.
+pub fn validate_edge_tts_preferences(preferences: &EdgeTtsPreferences) -> Result<(), CapabilityError> {
+  if !EDGE_TTS_VOICES.contains(&preferences.voice.as_str()) {
+    return Err(CapabilityError::new(
+      CapabilityErrorCode::InvalidRequest,
+      "voice is not a supported Edge TTS voice",
+    ));
+  }
+  if !preferences.speed.is_finite() || preferences.speed < EDGE_TTS_SPEED_MIN || preferences.speed > EDGE_TTS_SPEED_MAX
+  {
+    return Err(CapabilityError::new(
+      CapabilityErrorCode::InvalidRequest,
+      format!("speed must be finite and in [{EDGE_TTS_SPEED_MIN}, {EDGE_TTS_SPEED_MAX}]"),
+    ));
+  }
+  if !preferences.pitch.is_finite() || preferences.pitch < EDGE_TTS_PITCH_MIN || preferences.pitch > EDGE_TTS_PITCH_MAX
+  {
+    return Err(CapabilityError::new(
+      CapabilityErrorCode::InvalidRequest,
+      format!("pitch must be finite and in [{EDGE_TTS_PITCH_MIN}, {EDGE_TTS_PITCH_MAX}]"),
+    ));
+  }
+  if !EDGE_TTS_STYLES.contains(&preferences.style.as_str()) {
+    return Err(CapabilityError::new(
+      CapabilityErrorCode::InvalidRequest,
+      "style is not a supported Edge TTS style",
     ));
   }
   Ok(())
@@ -607,5 +727,49 @@ mod tests {
       CapabilityErrorCode::UnsupportedInput
     );
     assert!(validate_speech_synthesize_text("hello").is_ok());
+  }
+
+  #[test]
+  fn edge_tts_preferences_reject_invalid_voice_and_style() {
+    let ok = EdgeTtsPreferences {
+      voice: EDGE_TTS_VOICE_DEFAULT.into(),
+      speed: EDGE_TTS_SPEED_DEFAULT,
+      pitch: EDGE_TTS_PITCH_DEFAULT,
+      style: EDGE_TTS_STYLE_DEFAULT.into(),
+    };
+    assert!(validate_edge_tts_preferences(&ok).is_ok());
+
+    let bad_voice = EdgeTtsPreferences {
+      voice: "zh-CN-BogusNeural".into(),
+      ..ok.clone()
+    };
+    assert_eq!(
+      validate_edge_tts_preferences(&bad_voice).unwrap_err().code,
+      CapabilityErrorCode::InvalidRequest
+    );
+
+    let bad_style = EdgeTtsPreferences {
+      style: "singing".into(),
+      ..ok.clone()
+    };
+    assert_eq!(
+      validate_edge_tts_preferences(&bad_style).unwrap_err().code,
+      CapabilityErrorCode::InvalidRequest
+    );
+
+    let bad_speed = EdgeTtsPreferences {
+      speed: EDGE_TTS_SPEED_MAX + 0.01,
+      ..ok.clone()
+    };
+    assert_eq!(
+      validate_edge_tts_preferences(&bad_speed).unwrap_err().code,
+      CapabilityErrorCode::InvalidRequest
+    );
+
+    let nan_pitch = EdgeTtsPreferences { pitch: f64::NAN, ..ok };
+    assert_eq!(
+      validate_edge_tts_preferences(&nan_pitch).unwrap_err().code,
+      CapabilityErrorCode::InvalidRequest
+    );
   }
 }

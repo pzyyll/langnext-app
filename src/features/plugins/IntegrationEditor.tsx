@@ -36,18 +36,24 @@ import {
 } from "../../storage/client";
 import { getIpcErrorCode, getIpcErrorMessage } from "../../storage/errors";
 import type { IntegrationInstanceDto, IntegrationInstanceWrite } from "../../storage/types";
-import { GOOGLE_CLOUD_PLUGIN_ID, GOOGLE_TRANSLATE_WEB_PLUGIN_ID } from "../../storage/types";
+import { EDGE_TTS_PLUGIN_ID, GOOGLE_CLOUD_PLUGIN_ID, GOOGLE_TRANSLATE_WEB_PLUGIN_ID } from "../../storage/types";
+import { EdgeTtsIntegrationForm } from "./EdgeTtsIntegrationForm";
 import { GoogleCloudIntegrationForm } from "./GoogleCloudIntegrationForm";
 import { GoogleTranslateWebIntegrationForm } from "./GoogleTranslateWebIntegrationForm";
 import {
+  buildEdgeTtsWrite,
   buildGoogleCloudWrite,
   buildGoogleTranslateWebWrite,
+  draftFromEdgeTtsDto,
   draftFromGoogleTranslateWebDto,
   draftFromIntegrationDto,
+  hasEdgeTtsConfigMutation,
   hasGoogleTranslateWebConfigMutation,
   hasRemoteRelevantMutation,
+  isEdgeTtsDraftClean,
   isGoogleCloudDraftClean,
   isGoogleTranslateWebDraftClean,
+  type EdgeTtsIntegrationDraft,
   type GoogleCloudIntegrationDraft,
   type GoogleTranslateWebIntegrationDraft,
 } from "./integrationDraft";
@@ -56,7 +62,7 @@ export type IntegrationEditorProps = {
   integrationInstanceId: string;
 };
 
-type EditorDraft = GoogleCloudIntegrationDraft | GoogleTranslateWebIntegrationDraft;
+type EditorDraft = GoogleCloudIntegrationDraft | GoogleTranslateWebIntegrationDraft | EdgeTtsIntegrationDraft;
 
 const STATUS_LABEL_KEYS = {
   unconfigured: "plugins.status.unconfigured",
@@ -74,12 +80,19 @@ function statusLabelKey(
 }
 
 function isSupportedPlugin(pluginId: string): boolean {
-  return pluginId === GOOGLE_CLOUD_PLUGIN_ID || pluginId === GOOGLE_TRANSLATE_WEB_PLUGIN_ID;
+  return (
+    pluginId === GOOGLE_CLOUD_PLUGIN_ID ||
+    pluginId === GOOGLE_TRANSLATE_WEB_PLUGIN_ID ||
+    pluginId === EDGE_TTS_PLUGIN_ID
+  );
 }
 
 function draftFromInstance(instance: IntegrationInstanceDto): EditorDraft {
   if (instance.pluginId === GOOGLE_TRANSLATE_WEB_PLUGIN_ID) {
     return draftFromGoogleTranslateWebDto(instance);
+  }
+  if (instance.pluginId === EDGE_TTS_PLUGIN_ID) {
+    return draftFromEdgeTtsDto(instance);
   }
   return draftFromIntegrationDto(instance);
 }
@@ -88,12 +101,17 @@ function isDraftClean(draft: EditorDraft, instance: IntegrationInstanceDto): boo
   if (draft.pluginId === GOOGLE_TRANSLATE_WEB_PLUGIN_ID) {
     return isGoogleTranslateWebDraftClean(draft, instance);
   }
+  if (draft.pluginId === EDGE_TTS_PLUGIN_ID) {
+    return isEdgeTtsDraftClean(draft, instance);
+  }
   return isGoogleCloudDraftClean(draft, instance);
 }
 
 function patchDraft(
   current: EditorDraft | null,
-  patch: Partial<GoogleCloudIntegrationDraft> & Partial<GoogleTranslateWebIntegrationDraft>,
+  patch: Partial<GoogleCloudIntegrationDraft> &
+    Partial<GoogleTranslateWebIntegrationDraft> &
+    Partial<EdgeTtsIntegrationDraft>,
 ): EditorDraft | null {
   return current ? ({ ...current, ...patch } as EditorDraft) : current;
 }
@@ -107,6 +125,12 @@ function buildWrite(draft: EditorDraft, instanceId: string, expectedUpdatedAt: s
       expectedUpdatedAt,
     };
   }
+  if (draft.pluginId === EDGE_TTS_PLUGIN_ID) {
+    return {
+      ...buildEdgeTtsWrite(draft, { id: instanceId }),
+      expectedUpdatedAt,
+    };
+  }
   return {
     ...buildGoogleCloudWrite(draft, { id: instanceId }),
     expectedUpdatedAt,
@@ -116,6 +140,10 @@ function buildWrite(draft: EditorDraft, instanceId: string, expectedUpdatedAt: s
 function needsRemoteRelevantSave(draft: EditorDraft, instance: IntegrationInstanceDto): boolean {
   if (draft.pluginId === GOOGLE_TRANSLATE_WEB_PLUGIN_ID) {
     return hasGoogleTranslateWebConfigMutation(draft, instance);
+  }
+  if (draft.pluginId === EDGE_TTS_PLUGIN_ID) {
+    // Base URL change is local-only; credential-free Ready does not need a remote re-check.
+    return hasEdgeTtsConfigMutation(draft, instance);
   }
   return hasRemoteRelevantMutation(draft, instance);
 }
@@ -238,11 +266,18 @@ export function IntegrationEditor({ integrationInstanceId }: IntegrationEditorPr
       void queryClient.invalidateQueries({ queryKey: integrationKeys.all });
       const description = result.message ?? undefined;
       const isWeb = instance?.pluginId === GOOGLE_TRANSLATE_WEB_PLUGIN_ID;
-      if (result.healthStatus === "ready" && (result.remoteChecked || isWeb)) {
+      const isEdge = instance?.pluginId === EDGE_TTS_PLUGIN_ID;
+      const isZeroSecret = isWeb || isEdge;
+      if (result.healthStatus === "ready" && (result.remoteChecked || isZeroSecret)) {
         toast.success({
           title: t("plugins.toast.validated"),
           description:
-            description ?? (isWeb ? t("plugins.googleTranslateWeb.readyHint") : t("plugins.status.authReadyHint")),
+            description ??
+            (isEdge
+              ? t("plugins.edgeTts.readyHint")
+              : isWeb
+                ? t("plugins.googleTranslateWeb.readyHint")
+                : t("plugins.status.authReadyHint")),
         });
         return;
       }
@@ -320,6 +355,7 @@ export function IntegrationEditor({ integrationInstanceId }: IntegrationEditorPr
 
   const pluginMissing = instance.effectiveStatus === "plugin_missing";
   const isWeb = instance.pluginId === GOOGLE_TRANSLATE_WEB_PLUGIN_ID;
+  const isEdge = instance.pluginId === EDGE_TTS_PLUGIN_ID;
   const pending =
     saveMutation.isPending || deleteMutation.isPending || validateMutation.isPending || enabledMutation.isPending;
   const dependencies = depsQuery.data ?? [];
@@ -473,8 +509,10 @@ export function IntegrationEditor({ integrationInstanceId }: IntegrationEditorPr
               {t("plugins.status.label")}
             </h3>
             <p className="text-body-md text-on-surface">
-              {isWeb && instance.effectiveStatus === "ready"
-                ? t("plugins.googleTranslateWeb.statusReady")
+              {(isWeb || isEdge) && instance.effectiveStatus === "ready"
+                ? isEdge
+                  ? t("plugins.edgeTts.statusReady")
+                  : t("plugins.googleTranslateWeb.statusReady")
                 : t(statusLabelKey(instance.effectiveStatus))}
             </p>
             {instance.lastErrorCode ? (
@@ -483,21 +521,31 @@ export function IntegrationEditor({ integrationInstanceId }: IntegrationEditorPr
               </p>
             ) : null}
             <p className="text-body-tight text-neutral">
-              {isWeb
+              {isEdge
                 ? instance.effectiveStatus === "ready"
-                  ? t("plugins.googleTranslateWeb.readyHint")
+                  ? t("plugins.edgeTts.readyHint")
                   : instance.effectiveStatus === "disabled"
-                    ? t("plugins.googleTranslateWeb.disabledHint")
+                    ? t("plugins.edgeTts.disabledHint")
                     : instance.effectiveStatus === "plugin_missing"
-                      ? t("plugins.googleTranslateWeb.pluginMissingHint")
+                      ? t("plugins.edgeTts.pluginMissingHint")
                       : instance.effectiveStatus === "unconfigured"
-                        ? t("plugins.googleTranslateWeb.unconfiguredHint")
-                        : t("plugins.googleTranslateWeb.privacyNote")
-                : instance.healthStatus === "ready"
-                  ? t("plugins.status.authReadyHint")
-                  : instance.healthStatus === "degraded"
-                    ? t("plugins.status.authDegradedHint")
-                    : t("plugins.status.localOnlyHint")}
+                        ? t("plugins.edgeTts.unconfiguredHint")
+                        : t("plugins.edgeTts.privacyNote")
+                : isWeb
+                  ? instance.effectiveStatus === "ready"
+                    ? t("plugins.googleTranslateWeb.readyHint")
+                    : instance.effectiveStatus === "disabled"
+                      ? t("plugins.googleTranslateWeb.disabledHint")
+                      : instance.effectiveStatus === "plugin_missing"
+                        ? t("plugins.googleTranslateWeb.pluginMissingHint")
+                        : instance.effectiveStatus === "unconfigured"
+                          ? t("plugins.googleTranslateWeb.unconfiguredHint")
+                          : t("plugins.googleTranslateWeb.privacyNote")
+                  : instance.healthStatus === "ready"
+                    ? t("plugins.status.authReadyHint")
+                    : instance.healthStatus === "degraded"
+                      ? t("plugins.status.authDegradedHint")
+                      : t("plugins.status.localOnlyHint")}
             </p>
           </section>
 
@@ -524,6 +572,13 @@ export function IntegrationEditor({ integrationInstanceId }: IntegrationEditorPr
             {instance.pluginId === GOOGLE_TRANSLATE_WEB_PLUGIN_ID &&
             draft.pluginId === GOOGLE_TRANSLATE_WEB_PLUGIN_ID ? (
               <GoogleTranslateWebIntegrationForm
+                key={instance.id}
+                draft={draft}
+                disabled={pending || pluginMissing}
+                onChange={setDraft}
+              />
+            ) : instance.pluginId === EDGE_TTS_PLUGIN_ID && draft.pluginId === EDGE_TTS_PLUGIN_ID ? (
+              <EdgeTtsIntegrationForm
                 key={instance.id}
                 draft={draft}
                 disabled={pending || pluginMissing}

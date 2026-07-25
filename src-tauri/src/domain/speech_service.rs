@@ -9,6 +9,8 @@ use uuid::Uuid;
 pub const SPEECH_DISPLAY_NAME_MAX_LEN: usize = 128;
 /// Google TTS preferences schema version (v1: speakingRate + pitch).
 pub const GOOGLE_TTS_PREFERENCES_SCHEMA_VERSION: i32 = 1;
+/// Edge TTS preferences schema version (v1: voice + speed + pitch + style).
+pub const EDGE_TTS_PREFERENCES_SCHEMA_VERSION: i32 = 1;
 
 /// Internal Speech service row.
 #[derive(Debug, Clone, PartialEq)]
@@ -94,6 +96,16 @@ pub fn default_google_tts_preferences() -> Value {
   json!({
     "speakingRate": 1.0,
     "pitch": 0.0,
+  })
+}
+
+/// Default Edge TTS preferences for schema v1 (Xiaoxiao voice, general style).
+pub fn default_edge_tts_preferences() -> Value {
+  json!({
+    "voice": "zh-CN-XiaoxiaoNeural",
+    "speed": 1.0,
+    "pitch": 0,
+    "style": "general",
   })
 }
 

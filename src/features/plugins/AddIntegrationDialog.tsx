@@ -10,10 +10,12 @@ import { integrationDefinitionListOptions } from "../../query/options";
 import { saveIntegrationInstance } from "../../storage/client";
 import { getIpcErrorMessage } from "../../storage/errors";
 import type { IntegrationInstanceDto, IntegrationInstanceWrite, ServiceIntegrationManifest } from "../../storage/types";
-import { GOOGLE_CLOUD_PLUGIN_ID, GOOGLE_TRANSLATE_WEB_PLUGIN_ID } from "../../storage/types";
+import { EDGE_TTS_PLUGIN_ID, GOOGLE_CLOUD_PLUGIN_ID, GOOGLE_TRANSLATE_WEB_PLUGIN_ID } from "../../storage/types";
 import {
+  buildEdgeTtsWrite,
   buildGoogleCloudWrite,
   buildGoogleTranslateWebWrite,
+  emptyEdgeTtsDraft,
   emptyGoogleCloudDraft,
   emptyGoogleTranslateWebDraft,
 } from "./integrationDraft";
@@ -95,6 +97,9 @@ function AddIntegrationForm({ onCreated }: AddIntegrationFormProps) {
     if (definition.id === GOOGLE_TRANSLATE_WEB_PLUGIN_ID) {
       return t("plugins.googleTranslateWeb.name");
     }
+    if (definition.id === EDGE_TTS_PLUGIN_ID) {
+      return t("plugins.edgeTts.name");
+    }
     return definition.id;
   }
 
@@ -104,6 +109,9 @@ function AddIntegrationForm({ onCreated }: AddIntegrationFormProps) {
     }
     if (definitionId === GOOGLE_TRANSLATE_WEB_PLUGIN_ID) {
       return buildGoogleTranslateWebWrite(emptyGoogleTranslateWebDraft(t("plugins.googleTranslateWeb.defaultName")));
+    }
+    if (definitionId === EDGE_TTS_PLUGIN_ID) {
+      return buildEdgeTtsWrite(emptyEdgeTtsDraft(t("plugins.edgeTts.defaultName")));
     }
     return null;
   }
