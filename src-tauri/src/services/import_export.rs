@@ -4,17 +4,18 @@ use crate::credentials::CredentialVault;
 use crate::credentials::coordinator;
 use crate::domain::import_export::{
   ConfigurationExport, EXPORT_FORMAT_VERSION, ImportConflictMode, ImportPreview, ImportResult,
-  IntegrationInstanceExport, OcrPromptTemplateExport, OcrServiceExport, export_json_contains_forbidden_secret_keys,
-  parse_and_normalize_export_document,
+  IntegrationInstanceExport, OcrPromptTemplateExport, OcrServiceExport, SpeechServiceExport,
+  export_json_contains_forbidden_secret_keys, parse_and_normalize_export_document,
 };
 use crate::domain::ocr_service::{OcrPromptTemplate, OcrProviderType, OcrService};
 use crate::domain::provider::ProviderExport;
+use crate::domain::speech_service::SpeechService;
 use crate::domain::time::{new_id, now_rfc3339};
 use crate::error::StorageError;
 use crate::repositories::credential_operations::{self, CredentialOperation, OwnerKind};
 use crate::repositories::{
   app_credentials, app_settings, integration_instances, ocr_prompt_templates, ocr_services, provider_instances,
-  provider_models, translation_profiles,
+  provider_models, speech_services, translation_profiles,
 };
 use crate::services::import_validation::{self, ValidatedImportPlan};
 use crate::storage::Database;
@@ -43,6 +44,7 @@ impl ImportExportService {
       let integrations = integration_instances::list(conn)?;
       let ocr_service_rows = ocr_services::list(conn)?;
       let ocr_template_rows = ocr_prompt_templates::list_all(conn)?;
+      let speech_service_rows = speech_services::list(conn)?;
       let app_settings = app_settings::get(conn)?;
 
       let mut provider_exports: Vec<ProviderExport> = providers.iter().map(ProviderExport::from).collect();
@@ -93,6 +95,10 @@ impl ImportExportService {
         .collect();
       ocr_prompt_exports.sort_by_key(|t| (t.ocr_service_id, t.sort_order, t.id));
 
+      let mut speech_exports: Vec<SpeechServiceExport> =
+        speech_service_rows.into_iter().map(speech_service_to_export).collect();
+      speech_exports.sort_by_key(|s| (s.sort_order, s.id));
+
       let doc = ConfigurationExport {
         format_version: EXPORT_FORMAT_VERSION,
         exported_at: now_rfc3339(),
@@ -104,6 +110,7 @@ impl ImportExportService {
         integration_instances: integration_exports,
         ocr_services: ocr_exports,
         ocr_prompt_templates: ocr_prompt_exports,
+        speech_services: speech_exports,
         app_settings,
       };
 
@@ -439,6 +446,25 @@ impl ImportExportService {
       }
     }
 
+    // Speech services (after integrations so FKs resolve; no secrets to clear).
+    for service in &plan.speech_services {
+      if speech_services::get(conn, service.id).is_ok() {
+        speech_services::update_configuration(
+          conn,
+          service.id,
+          &service.display_name,
+          service.enabled,
+          service.integration_instance_id,
+          &service.capability_id,
+          service.preferences_schema_version,
+          &service.preferences,
+          &service.updated_at,
+        )?;
+      } else {
+        speech_services::insert(conn, service)?;
+      }
+    }
+
     // Settings + optional global proxy clear
     if plan.clear_global_proxy {
       if let Some(old_ref) = plan.expected_proxy_ref.clone() {
@@ -476,6 +502,21 @@ fn ocr_service_to_export(service: OcrService) -> OcrServiceExport {
     ocr_capability_id: service.ocr_capability_id,
     capability_preferences_version: service.capability_preferences_version,
     capability_preferences: service.capability_preferences,
+    created_at: service.created_at,
+    updated_at: service.updated_at,
+  }
+}
+
+fn speech_service_to_export(service: SpeechService) -> SpeechServiceExport {
+  SpeechServiceExport {
+    id: service.id,
+    display_name: service.display_name,
+    enabled: service.enabled,
+    sort_order: service.sort_order,
+    integration_instance_id: service.integration_instance_id,
+    capability_id: service.capability_id,
+    preferences_schema_version: service.preferences_schema_version,
+    preferences: service.preferences,
     created_at: service.created_at,
     updated_at: service.updated_at,
   }

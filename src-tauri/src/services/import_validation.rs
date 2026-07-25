@@ -2,7 +2,7 @@
 // ABOUTME: Preview and apply share one plan; apply revalidates inside the write transaction.
 use crate::domain::import_export::{
   ConfigurationExport, EXPORT_FORMAT_VERSION, ImportConflictMode, ImportPreview, ImportPreviewCounts,
-  IntegrationInstanceExport, OcrPromptTemplateExport, OcrServiceExport,
+  IntegrationInstanceExport, OcrPromptTemplateExport, OcrServiceExport, SpeechServiceExport,
 };
 use crate::domain::language_detection::LanguageDetectorConfig;
 use crate::domain::model::{CapabilityOverridesV1, ProviderModel};
@@ -12,11 +12,15 @@ use crate::domain::ocr_service::{
 use crate::domain::provider::{
   CredentialKind, ModelsSyncStatus, ProviderExport, ProviderInstance, validate_adapter_id,
 };
-use crate::domain::service_capability::validate_ocr_image_preferences;
+use crate::domain::service_capability::{validate_ocr_image_preferences, validate_speech_synthesize_preferences};
 use crate::domain::service_integration::{
   GOOGLE_CLOUD_PLUGIN_ID, GOOGLE_TRANSLATE_WEB_PLUGIN_ID, IntegrationHealthStatus, IntegrationInstance,
 };
 use crate::domain::settings::{AppSettingsV1, GlobalProxyMode};
+use crate::domain::speech_service::{
+  GOOGLE_TTS_PREFERENCES_SCHEMA_VERSION, SPEECH_DISPLAY_NAME_MAX_LEN, SpeechService,
+  parse_speech_synthesize_preferences,
+};
 use crate::domain::time::{new_id, now_rfc3339};
 use crate::domain::translation_profile::{
   PromptTemplate, TranslationProfile, TranslationProfileEngine, TranslationProfilePromptTemplate,
@@ -24,14 +28,16 @@ use crate::domain::translation_profile::{
 };
 use crate::error::StorageError;
 use crate::repositories::{
-  integration_instances, ocr_services, provider_instances, provider_models, translation_profiles,
+  integration_instances, ocr_services, provider_instances, provider_models, speech_services, translation_profiles,
 };
 use crate::services::google_translate_web::{
   google_translate_web_config_complete, validate_google_translate_web_config,
 };
 use crate::services::providers::validate_provider_url;
 use crate::services::service_integration_registry::ServiceIntegrationRegistry;
-use crate::services::settings::{validate_default_ocr_service, validate_default_profile, validate_settings_document};
+use crate::services::settings::{
+  validate_default_ocr_service, validate_default_profile, validate_default_speech_service, validate_settings_document,
+};
 use crate::services::translation_profiles::{validate_profile_language_preferences, validate_prompt_templates};
 use rusqlite::Connection;
 use std::collections::{HashMap, HashSet};
@@ -51,6 +57,7 @@ pub struct ValidatedImportPlan {
   pub integrations: Vec<IntegrationInstance>,
   pub ocr_services: Vec<OcrService>,
   pub ocr_prompt_templates: Vec<OcrPromptTemplateExport>,
+  pub speech_services: Vec<SpeechService>,
   pub settings: AppSettingsV1,
   /// Providers that need credential cleanup when merging over existing rows.
   pub provider_cleanup_ids: Vec<Uuid>,
@@ -97,6 +104,11 @@ pub fn build_validated_plan(
     "ocr prompt template",
     &mut errors,
   );
+  reject_duplicate_ids(
+    document.speech_services.iter().map(|s| s.id),
+    "speech service",
+    &mut errors,
+  );
 
   let mut target_keys = HashSet::new();
   for t in &document.profile_models {
@@ -132,6 +144,8 @@ pub fn build_validated_plan(
     .collect();
   let local_ocr_services: HashMap<Uuid, OcrService> =
     ocr_services::list(conn)?.into_iter().map(|s| (s.id, s)).collect();
+  let local_speech_services: HashMap<Uuid, SpeechService> =
+    speech_services::list(conn)?.into_iter().map(|s| (s.id, s)).collect();
   let local_proxy_ref = crate::repositories::app_credentials::get_global_proxy_ref(conn)?;
 
   let doc_provider_ids: HashSet<Uuid> = document.providers.iter().map(|p| p.id).collect();
@@ -139,6 +153,7 @@ pub fn build_validated_plan(
   let doc_profile_ids: HashSet<Uuid> = document.translation_profiles.iter().map(|p| p.id).collect();
   let doc_integration_ids: HashSet<Uuid> = document.integration_instances.iter().map(|i| i.id).collect();
   let doc_ocr_service_ids: HashSet<Uuid> = document.ocr_services.iter().map(|s| s.id).collect();
+  let doc_speech_service_ids: HashSet<Uuid> = document.speech_services.iter().map(|s| s.id).collect();
 
   // Providers
   for p in &document.providers {
@@ -266,6 +281,13 @@ pub fn build_validated_plan(
     }
   }
 
+  // Speech services (capability-backed; secrets never present).
+  for service in &document.speech_services {
+    if let Err(e) = validate_import_speech_service(service, &doc_integration_ids, mode, &local_integrations) {
+      errors.push(format!("speech service {}: {e}", service.id));
+    }
+  }
+
   // Settings (pure document rules)
   if let Err(e) = validate_settings_document(&document.app_settings) {
     errors.push(format!("appSettings: {e}"));
@@ -279,6 +301,7 @@ pub fn build_validated_plan(
   let mut profile_id_map: HashMap<Uuid, Uuid> = HashMap::new();
   let mut integration_id_map: HashMap<Uuid, Uuid> = HashMap::new();
   let mut ocr_service_id_map: HashMap<Uuid, Uuid> = HashMap::new();
+  let mut speech_service_id_map: HashMap<Uuid, Uuid> = HashMap::new();
 
   // Counts and ID rewriting for copy mode.
   let mut counts = ImportPreviewCounts::default();
@@ -333,6 +356,13 @@ pub fn build_validated_plan(
           ocr_requires_authentication.push(service.id);
         }
       }
+      for service in &document.speech_services {
+        if local_speech_services.contains_key(&service.id) {
+          counts.speech_services_update += 1;
+        } else {
+          counts.speech_services_create += 1;
+        }
+      }
       if let Some(pid) = settings.default_profile_id {
         if !doc_profile_ids.contains(&pid) && !local_profiles.contains_key(&pid) {
           // Self-contained rule: non-null default must resolve in document.
@@ -355,6 +385,15 @@ pub fn build_validated_plan(
           settings.default_ocr_service_id = None;
         }
       }
+      if let Some(sid) = settings.default_speech_service_id {
+        if !doc_speech_service_ids.contains(&sid) && !local_speech_services.contains_key(&sid) {
+          errors.push(format!(
+            "default_speech_service_id {sid} is not present in the import document"
+          ));
+        } else if !doc_speech_service_ids.contains(&sid) {
+          settings.default_speech_service_id = None;
+        }
+      }
     }
     ImportConflictMode::Copy => {
       counts.providers_copy = document.providers.len() as u32;
@@ -362,6 +401,7 @@ pub fn build_validated_plan(
       counts.profiles_copy = document.translation_profiles.len() as u32;
       counts.integrations_copy = document.integration_instances.len() as u32;
       counts.ocr_services_copy = document.ocr_services.len() as u32;
+      counts.speech_services_copy = document.speech_services.len() as u32;
       for p in &document.providers {
         provider_id_map.insert(p.id, new_id());
         if p.credential_kind != CredentialKind::None {
@@ -388,6 +428,9 @@ pub fn build_validated_plan(
           ocr_requires_authentication.push(new_ocr_id);
         }
       }
+      for service in &document.speech_services {
+        speech_service_id_map.insert(service.id, new_id());
+      }
       if let Some(old_default) = settings.default_profile_id {
         if let Some(new_id) = profile_id_map.get(&old_default) {
           settings.default_profile_id = Some(*new_id);
@@ -401,6 +444,13 @@ pub fn build_validated_plan(
           settings.default_ocr_service_id = Some(*new_id);
         } else {
           settings.default_ocr_service_id = None;
+        }
+      }
+      if let Some(old_default) = settings.default_speech_service_id {
+        if let Some(new_id) = speech_service_id_map.get(&old_default) {
+          settings.default_speech_service_id = Some(*new_id);
+        } else {
+          settings.default_speech_service_id = None;
         }
       }
     }
@@ -446,6 +496,7 @@ pub fn build_validated_plan(
       integrations: vec![],
       ocr_services: vec![],
       ocr_prompt_templates: vec![],
+      speech_services: vec![],
       settings,
       provider_cleanup_ids: vec![],
       clear_global_proxy: false,
@@ -786,6 +837,55 @@ pub fn build_validated_plan(
     }
   }
 
+  // Speech services (after integrations so FKs resolve; secrets never present).
+  let mut planned_speech_services = Vec::new();
+  for exported in &document.speech_services {
+    let (id, created_at) = match mode {
+      ImportConflictMode::Merge => {
+        if let Some(local) = local_speech_services.get(&exported.id) {
+          (exported.id, local.created_at.clone())
+        } else {
+          (exported.id, exported.created_at.clone())
+        }
+      }
+      ImportConflictMode::Copy => {
+        let new_id = *speech_service_id_map.get(&exported.id).expect("speech service map");
+        (new_id, now.clone())
+      }
+    };
+
+    let mut integration_instance_id = exported.integration_instance_id;
+    if matches!(mode, ImportConflictMode::Copy) {
+      integration_instance_id = *integration_id_map
+        .get(&exported.integration_instance_id)
+        .expect("speech integration map");
+    }
+
+    planned_speech_services.push(SpeechService {
+      id,
+      display_name: exported.display_name.clone(),
+      enabled: exported.enabled,
+      sort_order: exported.sort_order,
+      integration_instance_id,
+      capability_id: exported.capability_id.clone(),
+      preferences_schema_version: exported.preferences_schema_version,
+      preferences: exported.preferences.clone(),
+      created_at,
+      updated_at: now.clone(),
+    });
+  }
+
+  // Default Speech must resolve after plan apply when non-null.
+  if let Some(sid) = settings.default_speech_service_id {
+    let exists_in_plan = planned_speech_services.iter().any(|s| s.id == sid);
+    let exists_local = local_speech_services.contains_key(&sid);
+    if !exists_in_plan && !exists_local {
+      return Err(StorageError::Validation(format!(
+        "default_speech_service_id {sid} does not exist"
+      )));
+    }
+  }
+
   Ok(ValidatedImportPlan {
     mode,
     preview,
@@ -797,6 +897,7 @@ pub fn build_validated_plan(
     integrations,
     ocr_services: planned_ocr_services,
     ocr_prompt_templates: planned_ocr_templates,
+    speech_services: planned_speech_services,
     settings,
     provider_cleanup_ids,
     clear_global_proxy,
@@ -1179,10 +1280,59 @@ fn validate_import_ocr_service(
   Ok(())
 }
 
-/// Ensure default profile exists after entities are written (connection-scoped).
+fn validate_import_speech_service(
+  service: &SpeechServiceExport,
+  doc_integration_ids: &HashSet<Uuid>,
+  mode: ImportConflictMode,
+  local_integrations: &HashMap<Uuid, IntegrationInstance>,
+) -> Result<(), StorageError> {
+  let name = service.display_name.trim();
+  if name.is_empty() {
+    return Err(StorageError::Validation("display_name must not be empty".into()));
+  }
+  if name.chars().count() > SPEECH_DISPLAY_NAME_MAX_LEN {
+    return Err(StorageError::Validation(format!(
+      "display_name exceeds {SPEECH_DISPLAY_NAME_MAX_LEN} characters"
+    )));
+  }
+  // Fail closed when the bound integration is absent from the document (and not a surviving local merge).
+  if !doc_integration_ids.contains(&service.integration_instance_id)
+    && !(mode == ImportConflictMode::Merge && local_integrations.contains_key(&service.integration_instance_id))
+  {
+    return Err(StorageError::Validation(format!(
+      "speech service references missing integration {}",
+      service.integration_instance_id
+    )));
+  }
+  let capability_id = service.capability_id.trim();
+  if capability_id.is_empty() {
+    return Err(StorageError::Validation("capability_id is required".into()));
+  }
+  if !capability_id.starts_with("speech.synthesize@") {
+    return Err(StorageError::Validation(
+      "capability_id must be a speech.synthesize@N capability".into(),
+    ));
+  }
+  if service.preferences_schema_version != GOOGLE_TTS_PREFERENCES_SCHEMA_VERSION {
+    return Err(StorageError::Validation(format!(
+      "unsupported Speech preferences schema version {}",
+      service.preferences_schema_version
+    )));
+  }
+  if service.preferences.is_null() {
+    return Err(StorageError::Validation("preferences are required".into()));
+  }
+  // Reuse the save-path validator: known keys via typed parse + host bounds.
+  let typed = parse_speech_synthesize_preferences(&service.preferences).map_err(StorageError::Validation)?;
+  validate_speech_synthesize_preferences(&typed).map_err(|e| StorageError::Validation(e.message))?;
+  Ok(())
+}
+
+/// Ensure default profile/OCR/Speech exist after entities are written (connection-scoped).
 pub fn validate_plan_default_profile(conn: &Connection, settings: &AppSettingsV1) -> Result<(), StorageError> {
   validate_default_profile(conn, settings.default_profile_id)?;
-  validate_default_ocr_service(conn, settings.default_ocr_service_id)
+  validate_default_ocr_service(conn, settings.default_ocr_service_id)?;
+  validate_default_speech_service(conn, settings.default_speech_service_id)
 }
 
 #[cfg(test)]
@@ -1204,6 +1354,7 @@ mod tests {
       integration_instances: vec![],
       ocr_services: vec![],
       ocr_prompt_templates: vec![],
+      speech_services: vec![],
       app_settings: AppSettingsV1::default_document(),
     }
   }
@@ -1372,5 +1523,116 @@ mod tests {
     assert!(integration_plugin_requires_authentication(
       "com.langnext.unknown-plugin"
     ));
+  }
+
+  fn speech_export(id: Uuid, integration_instance_id: Uuid) -> SpeechServiceExport {
+    SpeechServiceExport {
+      id,
+      display_name: "Google Cloud TTS".into(),
+      enabled: true,
+      sort_order: 0,
+      integration_instance_id,
+      capability_id: "speech.synthesize@1".into(),
+      preferences_schema_version: GOOGLE_TTS_PREFERENCES_SCHEMA_VERSION,
+      preferences: crate::domain::speech_service::default_google_tts_preferences(),
+      created_at: now_rfc3339(),
+      updated_at: now_rfc3339(),
+    }
+  }
+
+  #[test]
+  fn import_speech_service_merge_and_copy_remap_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::new(dir.path()).unwrap();
+    db.initialize().unwrap();
+    let cloud_id = new_id();
+    let speech_id = new_id();
+    let mut doc = empty_doc();
+    doc.integration_instances = vec![cloud_export(cloud_id)];
+    doc.speech_services = vec![speech_export(speech_id, cloud_id)];
+    doc.app_settings.default_speech_service_id = Some(speech_id);
+
+    let merge = db
+      .read(|conn| build_validated_plan(conn, &doc, ImportConflictMode::Merge))
+      .unwrap();
+    assert!(merge.preview.valid, "errors: {:?}", merge.preview.validation_errors);
+    assert_eq!(merge.preview.counts.speech_services_create, 1);
+    assert_eq!(merge.speech_services.len(), 1);
+    assert_eq!(merge.speech_services[0].id, speech_id);
+    assert_eq!(merge.speech_services[0].integration_instance_id, cloud_id);
+    assert_eq!(merge.settings.default_speech_service_id, Some(speech_id));
+
+    let copy = db
+      .read(|conn| build_validated_plan(conn, &doc, ImportConflictMode::Copy))
+      .unwrap();
+    assert!(copy.preview.valid, "errors: {:?}", copy.preview.validation_errors);
+    assert_eq!(copy.preview.counts.speech_services_copy, 1);
+    assert_eq!(copy.speech_services.len(), 1);
+    assert_ne!(copy.speech_services[0].id, speech_id);
+    assert_ne!(copy.speech_services[0].integration_instance_id, cloud_id);
+    assert_eq!(
+      copy.settings.default_speech_service_id,
+      Some(copy.speech_services[0].id)
+    );
+  }
+
+  #[test]
+  fn import_speech_rejects_invalid_preferences_and_missing_integration() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::new(dir.path()).unwrap();
+    db.initialize().unwrap();
+    let cloud_id = new_id();
+    let speech_id = new_id();
+    let mut doc = empty_doc();
+    doc.integration_instances = vec![cloud_export(cloud_id)];
+    let mut service = speech_export(speech_id, cloud_id);
+    service.preferences = serde_json::json!({"speakingRate": 99.0, "pitch": 0.0});
+    doc.speech_services = vec![service];
+
+    let plan = db
+      .read(|conn| build_validated_plan(conn, &doc, ImportConflictMode::Merge))
+      .unwrap();
+    assert!(!plan.preview.valid);
+    assert!(
+      plan
+        .preview
+        .validation_errors
+        .iter()
+        .any(|e| e.contains("speech service") || e.contains("speaking"))
+    );
+
+    let mut missing = empty_doc();
+    missing.speech_services = vec![speech_export(new_id(), new_id())];
+    let plan = db
+      .read(|conn| build_validated_plan(conn, &missing, ImportConflictMode::Merge))
+      .unwrap();
+    assert!(!plan.preview.valid);
+    assert!(
+      plan
+        .preview
+        .validation_errors
+        .iter()
+        .any(|e| e.contains("missing integration"))
+    );
+  }
+
+  #[test]
+  fn import_speech_rejects_unknown_default_speech_service_id() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::new(dir.path()).unwrap();
+    db.initialize().unwrap();
+    let mut doc = empty_doc();
+    doc.app_settings.default_speech_service_id = Some(new_id());
+    let plan = db
+      .read(|conn| build_validated_plan(conn, &doc, ImportConflictMode::Merge))
+      .unwrap();
+    assert!(!plan.preview.valid);
+    assert!(
+      plan
+        .preview
+        .validation_errors
+        .iter()
+        .any(|e| e.contains("default_speech_service_id"))
+    );
   }
 }

@@ -3,7 +3,8 @@
 use crate::domain::cancel::CancelToken;
 use crate::domain::service_capability::{
   CapabilityError, CapabilityErrorCode, DetectLanguageRequest, DetectLanguageResponse, ExecutionContext,
-  OCR_IMAGE_CAPABILITY_ID, OcrImageRequest, OcrImageResponse, TranslateTextRequest, TranslateTextResponse,
+  OCR_IMAGE_CAPABILITY_ID, OcrImageRequest, OcrImageResponse, SPEECH_SYNTHESIZE_CAPABILITY_ID, SpeechSynthesizeRequest,
+  SpeechSynthesizeResponse, TranslateTextRequest, TranslateTextResponse,
 };
 use crate::domain::service_integration::IntegrationHealthStatus;
 use crate::error::StorageError;
@@ -28,6 +29,7 @@ pub enum CapabilityHandler {
   TranslateText(Arc<dyn TranslateTextCapability>),
   DetectLanguage(Arc<dyn DetectLanguageCapability>),
   OcrImage(Arc<dyn OcrImageCapability>),
+  SpeechSynthesize(Arc<dyn SpeechSynthesizeCapability>),
 }
 
 /// Typed translate-text capability contract.
@@ -60,6 +62,16 @@ pub trait OcrImageCapability: Send + Sync + 'static {
   ) -> Pin<Box<dyn Future<Output = Result<OcrImageResponse, CapabilityError>> + Send + '_>>;
 }
 
+/// Typed text-to-speech capability contract.
+pub trait SpeechSynthesizeCapability: Send + Sync + 'static {
+  fn synthesize(
+    &self,
+    instance_id: Uuid,
+    request: SpeechSynthesizeRequest,
+    context: ExecutionContext,
+  ) -> Pin<Box<dyn Future<Output = Result<SpeechSynthesizeResponse, CapabilityError>> + Send + '_>>;
+}
+
 impl TranslateTextCapability for GoogleCloudCapabilities {
   fn translate(
     &self,
@@ -90,6 +102,17 @@ impl OcrImageCapability for GoogleCloudCapabilities {
     context: ExecutionContext,
   ) -> Pin<Box<dyn Future<Output = Result<OcrImageResponse, CapabilityError>> + Send + '_>> {
     Box::pin(async move { self.ocr_image(instance_id, request, context).await })
+  }
+}
+
+impl SpeechSynthesizeCapability for GoogleCloudCapabilities {
+  fn synthesize(
+    &self,
+    instance_id: Uuid,
+    request: SpeechSynthesizeRequest,
+    context: ExecutionContext,
+  ) -> Pin<Box<dyn Future<Output = Result<SpeechSynthesizeResponse, CapabilityError>> + Send + '_>> {
+    Box::pin(async move { self.synthesize_speech(instance_id, request, context).await })
   }
 }
 
@@ -141,7 +164,7 @@ impl ServiceCapabilityRegistry {
     self.handlers.get(&(plugin_id.to_string(), capability_id.to_string()))
   }
 
-  /// Build the production registry with Google Cloud Translate/Detect/OCR handlers.
+  /// Build the production registry with Google Cloud Translate/Detect/OCR/TTS handlers.
   pub fn with_google_cloud(google: Arc<GoogleCloudCapabilities>) -> Self {
     let mut registry = Self::new();
     registry.register(
@@ -157,7 +180,12 @@ impl ServiceCapabilityRegistry {
     registry.register(
       crate::domain::service_integration::GOOGLE_CLOUD_PLUGIN_ID,
       OCR_IMAGE_CAPABILITY_ID,
-      CapabilityHandler::OcrImage(google),
+      CapabilityHandler::OcrImage(google.clone()),
+    );
+    registry.register(
+      crate::domain::service_integration::GOOGLE_CLOUD_PLUGIN_ID,
+      SPEECH_SYNTHESIZE_CAPABILITY_ID,
+      CapabilityHandler::SpeechSynthesize(google),
     );
     registry
   }
@@ -246,6 +274,25 @@ impl ServiceCapabilityService {
     let handler = self.resolve_handler(instance_id, capability_id)?;
     match handler {
       CapabilityHandler::OcrImage(h) => Ok(h),
+      _ => Err(
+        CapabilityError::new(
+          CapabilityErrorCode::PermissionDenied,
+          "capability handler type mismatch",
+        )
+        .with_capability_id(capability_id),
+      ),
+    }
+  }
+
+  /// Look up a speech synthesis handler after verifying instance/plugin/capability state.
+  pub fn resolve_speech_synthesize(
+    &self,
+    instance_id: Uuid,
+    capability_id: &str,
+  ) -> Result<Arc<dyn SpeechSynthesizeCapability>, CapabilityError> {
+    let handler = self.resolve_handler(instance_id, capability_id)?;
+    match handler {
+      CapabilityHandler::SpeechSynthesize(h) => Ok(h),
       _ => Err(
         CapabilityError::new(
           CapabilityErrorCode::PermissionDenied,

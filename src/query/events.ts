@@ -15,6 +15,9 @@ export const DATA_TRANSLATION_HISTORY_CHANGED = "data://translation-history-chan
 /** Coarse notification after OCR service create/update/delete. */
 export const DATA_OCR_SERVICES_CHANGED = "data://ocr-services-changed";
 
+/** Coarse notification after Speech service create/update/delete. */
+export const DATA_SPEECH_SERVICES_CHANGED = "data://speech-services-changed";
+
 /** Coarse notification after service-integration instance create/update/enable/validate/delete. */
 export const DATA_SERVICE_INTEGRATIONS_CHANGED = "data://service-integrations-changed";
 

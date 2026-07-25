@@ -122,6 +122,9 @@ pub struct AppSettingsV1 {
   /// OCR service used for region-screenshot text recognition; null means unset.
   #[serde(default)]
   pub default_ocr_service_id: Option<Uuid>,
+  /// Speech service used for Translate source/result playback; null means unset.
+  #[serde(default)]
+  pub default_speech_service_id: Option<Uuid>,
   pub translation: TranslationPreferences,
   pub shortcuts: Vec<ShortcutDefinition>,
   pub network: NetworkSettings,
@@ -137,6 +140,7 @@ impl AppSettingsV1 {
       theme: None,
       default_profile_id: None,
       default_ocr_service_id: None,
+      default_speech_service_id: None,
       translation: TranslationPreferences {
         auto_detect_source: true,
         preserve_formatting: true,
@@ -197,6 +201,7 @@ mod tests {
     assert!(json.contains("schemaVersion"));
     assert!(json.contains("proxyMode"));
     assert!(json.contains("defaultOcrServiceId"));
+    assert!(json.contains("defaultSpeechServiceId"));
     let back: AppSettingsV1 = serde_json::from_str(&json).unwrap();
     assert_eq!(back, settings);
   }
@@ -214,6 +219,7 @@ mod tests {
     }"#;
     let parsed: AppSettingsV1 = serde_json::from_str(json).unwrap();
     assert_eq!(parsed.default_ocr_service_id, None);
+    assert_eq!(parsed.default_speech_service_id, None);
   }
 
   #[test]

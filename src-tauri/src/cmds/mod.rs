@@ -10,5 +10,6 @@ pub mod service_integrations;
 pub mod service_translation;
 pub mod settings;
 pub mod snap;
+pub mod speech_services;
 pub mod translation_history;
 pub mod translation_profiles;

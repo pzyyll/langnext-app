@@ -17,11 +17,15 @@ pub const GOOGLE_OAUTH_AUDIENCE_POLICY_ID: &str = "google-oauth-token";
 pub const GOOGLE_CLOUD_TRANSLATION_SCOPE: &str = "https://www.googleapis.com/auth/cloud-translation";
 /// Narrowest documented OAuth scope for Cloud Vision annotate.
 pub const GOOGLE_CLOUD_VISION_SCOPE: &str = "https://www.googleapis.com/auth/cloud-vision";
+/// Documented OAuth scope for Cloud Text-to-Speech synthesize (capability-scoped allow-list only).
+pub const GOOGLE_CLOUD_TEXT_TO_SPEECH_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
 /// Capability ids authorized to request the translation scope (fail-closed allow-list).
 const TRANSLATE_TEXT_CAPABILITY_ID: &str = "translate.text@1";
 const DETECT_LANGUAGE_CAPABILITY_ID: &str = "translate.detect@1";
 /// Capability id authorized to request the vision scope.
 const OCR_IMAGE_CAPABILITY_ID: &str = "ocr.image@1";
+/// Capability id authorized to request the Text-to-Speech scope.
+const SPEECH_SYNTHESIZE_CAPABILITY_ID: &str = "speech.synthesize@1";
 /// Safety skew subtracted from token expiry before reuse.
 pub const TOKEN_EXPIRY_SAFETY_SKEW: Duration = Duration::from_secs(60);
 /// Max concurrent cached grants retained in process memory.
@@ -377,6 +381,7 @@ fn allowed_scopes_for_capability(capability_id: &str) -> Result<&'static [&'stat
   match capability_id {
     TRANSLATE_TEXT_CAPABILITY_ID | DETECT_LANGUAGE_CAPABILITY_ID => Ok(&[GOOGLE_CLOUD_TRANSLATION_SCOPE]),
     OCR_IMAGE_CAPABILITY_ID => Ok(&[GOOGLE_CLOUD_VISION_SCOPE]),
+    SPEECH_SYNTHESIZE_CAPABILITY_ID => Ok(&[GOOGLE_CLOUD_TEXT_TO_SPEECH_SCOPE]),
     _ => Err(CapabilityError::new(
       CapabilityErrorCode::PermissionDenied,
       "capability is not authorized for token grants",

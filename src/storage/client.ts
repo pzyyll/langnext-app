@@ -13,6 +13,9 @@ import type {
   OcrRecognizeResult,
   OcrServiceDto,
   OcrServiceWrite,
+  SpeechServiceDto,
+  SpeechServiceWrite,
+  SpeechSynthesizeInput,
   ProviderInstanceDto,
   ProviderInstanceWrite,
   ProviderModelDto,
@@ -123,6 +126,39 @@ export async function deleteOcrService(id: string): Promise<void> {
   return runStorage(invokeEffect<void>("delete_ocr_service", { id }));
 }
 
+export async function listSpeechServices(): Promise<SpeechServiceDto[]> {
+  return runStorage(invokeEffect<SpeechServiceDto[]>("list_speech_services"));
+}
+
+export async function getSpeechService(id: string): Promise<SpeechServiceDto> {
+  return runStorage(invokeEffect<SpeechServiceDto>("get_speech_service", { id }));
+}
+
+export async function saveSpeechService(input: SpeechServiceWrite): Promise<SpeechServiceDto> {
+  return runStorage(invokeEffect<SpeechServiceDto>("save_speech_service", { input }));
+}
+
+export async function deleteSpeechService(id: string): Promise<void> {
+  return runStorage(invokeEffect<void>("delete_speech_service", { id }));
+}
+
+/**
+ * Synthesize speech to raw MP3 bytes via Tauri binary IPC.
+ * Normalizes ArrayBuffer | Uint8Array responses to Uint8Array.
+ */
+export async function synthesizeSpeech(input: SpeechSynthesizeInput): Promise<Uint8Array> {
+  const raw = await runStorage(invokeEffect<ArrayBuffer | Uint8Array>("synthesize_speech", { input }));
+  if (raw instanceof Uint8Array) {
+    return raw;
+  }
+  return new Uint8Array(raw);
+}
+
+/** Cancel an in-flight speech synthesis request by client request id. */
+export async function cancelSpeechSynthesis(requestId: string): Promise<boolean> {
+  return runStorage(invokeEffect<boolean>("cancel_speech_synthesis", { requestId }));
+}
+
 export async function listServiceIntegrationDefinitions(): Promise<ServiceIntegrationManifest[]> {
   return runStorage(invokeEffect<ServiceIntegrationManifest[]>("list_service_integration_definitions"));
 }
@@ -187,6 +223,11 @@ export async function setAppShortcuts(shortcuts: ShortcutDefinition[]): Promise<
 /** Persist the OCR service used for region-screenshot text recognition. */
 export async function setAppDefaultOcrService(defaultOcrServiceId: string | null): Promise<AppSettingsDto> {
   return runStorage(invokeEffect<AppSettingsDto>("set_app_default_ocr_service", { defaultOcrServiceId }));
+}
+
+/** Persist the Speech service used for Translate playback. */
+export async function setAppDefaultSpeechService(defaultSpeechServiceId: string | null): Promise<AppSettingsDto> {
+  return runStorage(invokeEffect<AppSettingsDto>("set_app_default_speech_service", { defaultSpeechServiceId }));
 }
 
 /** Full-monitor PNG backdrop path for the active region-screenshot overlay. */

@@ -17,6 +17,7 @@ function baseSettings(overrides: Partial<AppSettingsDto> = {}): AppSettingsDto {
     theme: "dark",
     defaultProfileId: null,
     defaultOcrServiceId: null,
+    defaultSpeechServiceId: null,
     translation: { autoDetectSource: true, preserveFormatting: true },
     shortcuts: [],
     network: { proxyMode: "system", proxyUrl: null },

@@ -12,8 +12,8 @@ use crate::services::service_capabilities::{ServiceCapabilityRegistry, ServiceCa
 use crate::services::token_grant::TokenGrantService;
 use crate::services::{
   ImportExportService, ModelService, OcrServiceService, ProviderHttpService, ProviderService,
-  ServiceIntegrationRegistry, ServiceIntegrationService, SettingsService, TranslationHistoryService,
-  TranslationProfileService,
+  ServiceIntegrationRegistry, ServiceIntegrationService, SettingsService, SpeechServiceService,
+  TranslationHistoryService, TranslationProfileService,
 };
 use crate::storage::Database;
 use std::path::PathBuf;
@@ -27,6 +27,7 @@ pub struct AppState {
   pub models: ModelService,
   pub profiles: TranslationProfileService,
   pub ocr_services: OcrServiceService,
+  pub speech_services: SpeechServiceService,
   pub service_integrations: ServiceIntegrationService,
   pub service_capabilities: ServiceCapabilityService,
   pub token_grants: Arc<TokenGrantService>,
@@ -77,6 +78,7 @@ impl AppState {
       registry.clone(),
       service_capabilities.clone(),
     );
+    let speech_services = SpeechServiceService::new(db.clone(), registry.clone(), service_capabilities.clone());
     let service_integrations =
       ServiceIntegrationService::new(db.clone(), vault.clone(), registry, token_grants.clone());
     let settings = SettingsService::new(db.clone(), vault.clone());
@@ -93,6 +95,7 @@ impl AppState {
       models,
       profiles,
       ocr_services,
+      speech_services,
       service_integrations,
       service_capabilities,
       token_grants,

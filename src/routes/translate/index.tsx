@@ -26,6 +26,7 @@ import {
   profileListOptions,
   providerListOptions,
 } from "../../query/options";
+import { useSpeechPlayback } from "../../features/speech/useSpeechPlayback";
 import { newClientRequestId } from "../../features/translate/newClientRequestId";
 import {
   resolveTranslateFailureMessage,
@@ -34,6 +35,7 @@ import {
 import { runDetectLanguage, runStartTranslateStream } from "../../features/translate/runTranslate";
 import { useTranslateStreamSession } from "../../features/translate/useTranslateStreamSession";
 import { getIpcErrorMessage } from "../../storage/errors";
+import { isIpcError } from "../../storage/ipcError";
 import {
   AUTO_LANGUAGE,
   LANGUAGE_IDS,
@@ -46,6 +48,7 @@ import {
   type SelectableLanguageId,
   type SourceLanguageId,
 } from "./-languages";
+import { resolveSourceSpeechLanguage } from "./-speechLanguage";
 import { LanguageChipBar } from "./-LanguageChipBar";
 import { WorkspaceSidebar } from "./-WorkspaceSidebar";
 import {
@@ -131,6 +134,10 @@ function TranslatePage() {
   const [profilePreferredTargetLang, setProfilePreferredTargetLang] = useState<LanguageId | null>(null);
   const [sourceText, setSourceText] = useState(boot.workspace.sourceText);
   const [outputText, setOutputText] = useState(boot.workspace.outputText);
+  /** Effective target language used to generate the current output; null when no translation has completed. */
+  const [outputEffectiveLang, setOutputEffectiveLang] = useState<LanguageId | null>(null);
+  /** Stash the effective target for the in-flight translation so stream callbacks can record it on success. */
+  const pendingOutputEffectiveLang = useRef<LanguageId | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(boot.workspace.errorMessage);
   /** Tracks whether a translate attempt has finished; kept for session UX side-effects (clear on edit). */
   const [, setHasTranslated] = useState(false);
@@ -143,6 +150,9 @@ function TranslatePage() {
   const [outputViewMode, setOutputViewMode] = useState<OutputViewMode>(boot.workspace.outputViewMode);
   const isMarkdownView = outputViewMode === "markdown";
   const [activeModelLabel, setActiveModelLabel] = useState<string | null>(boot.workspace.activeModelLabel);
+  const speechPlayback = useSpeechPlayback();
+  /** Generation guard for speech source-language detection (Auto source). Prevents stale detection from launching playback. */
+  const speechDetectGeneration = useRef(0);
 
   const [selectedModelId, setSelectedModelId] = useState(boot.workspace.modelId);
   const [selectedProfileId, setSelectedProfileId] = useState(boot.workspace.profileId);
@@ -252,6 +262,7 @@ function TranslatePage() {
     setSelectedPromptTemplateId(workspace.promptTemplateId);
     setSourceText(workspace.sourceText);
     setOutputText(workspace.outputText);
+    setOutputEffectiveLang(null);
     setDetectedSourceLang(workspace.detectedSourceLang);
     setLatencyMs(workspace.latencyMs);
     setActiveModelLabel(workspace.activeModelLabel);
@@ -576,6 +587,7 @@ function TranslatePage() {
     if (outputText && !errorMessage) {
       setSourceText(outputText);
       setOutputText(sourceText);
+      setOutputEffectiveLang(null);
     }
   }
 
@@ -669,6 +681,7 @@ function TranslatePage() {
     setLatencyMs(latency);
     setHasTranslated(true);
     setOutputText(text);
+    setOutputEffectiveLang(pendingOutputEffectiveLang.current);
     setErrorMessage(null);
     if (modelId) {
       setActiveModelLabel(modelLabelById.get(modelId) ?? modelId);
@@ -735,6 +748,7 @@ function TranslatePage() {
               setStreamOutputActive(true);
             }
             setOutputText((prev) => (isFirstChunk ? delta : prev + delta));
+            setOutputEffectiveLang(pendingOutputEffectiveLang.current);
             setHasTranslated(true);
           },
           onReset: (modelId) => {
@@ -745,6 +759,7 @@ function TranslatePage() {
             receivedChunk = false;
             setStreamOutputActive(false);
             setOutputText("");
+            setOutputEffectiveLang(null);
             setActiveModelLabel(modelLabelById.get(modelId) ?? modelId);
           },
           onDone: (done) => {
@@ -888,6 +903,7 @@ function TranslatePage() {
       primary: profileLangPrefs.primary,
       preferredTarget: profileLangPrefs.preferredTarget,
     });
+    pendingOutputEffectiveLang.current = effectiveTargetId;
     const sourceLabel = t(`translate.languages.${effectiveSourceId}`);
     const targetLabel = t(`translate.languages.${effectiveTargetId}`);
     const payload = {
@@ -922,6 +938,196 @@ function TranslatePage() {
       // Clipboard may be unavailable outside a secure context; ignore quietly.
     }
   }
+
+  function showSpeechError(code: string | null | undefined, fallbackMessage?: string) {
+    if (code === "cancelled") {
+      toast.info({ title: t("translate.speech.cancelled"), duration: STOPPED_TOAST_MS });
+      return;
+    }
+    if (code === "playback_rejected") {
+      toast.error({ title: t("translate.speech.playbackRejected") });
+      return;
+    }
+    if (code === "playback_failed") {
+      toast.error({ title: t("translate.speech.playbackFailed") });
+      return;
+    }
+    if (code === "not_found") {
+      toast.error({
+        title: t("translate.speech.noDefault"),
+        action: {
+          label: t("nav.speech"),
+          onClick: () => {
+            void navigate({ to: "/speech" });
+          },
+        },
+      });
+      return;
+    }
+    if (code === "validation_failed") {
+      toast.error({ title: t("translate.speech.synthesizeFailed") });
+      return;
+    }
+    if (code === "permission_denied" || code === "auth") {
+      toast.error({ title: t("translate.speech.permissionDenied") });
+      return;
+    }
+    if (code === "quota_exceeded" || code === "rate_limited") {
+      toast.error({ title: t("translate.speech.quotaExceeded") });
+      return;
+    }
+    if (code === "unsupported_language") {
+      toast.error({ title: t("translate.speech.unresolvedLanguage") });
+      return;
+    }
+    if (code === "unsupported_input") {
+      toast.error({ title: t("translate.speech.textTooLong") });
+      return;
+    }
+    if (code === "network" || code === "timeout") {
+      toast.error({ title: t("translate.speech.networkError") });
+      return;
+    }
+    if (code === "invalid_response") {
+      toast.error({ title: t("translate.speech.invalidAudio") });
+      return;
+    }
+    toast.error({
+      title: fallbackMessage?.trim() || t("translate.speech.synthesizeFailed"),
+    });
+  }
+
+  async function resolveSourceLanguageForSpeech(): Promise<LanguageId | null> {
+    const resolved = resolveSourceSpeechLanguage({
+      sourceLang,
+      detectedSourceLang,
+    });
+    if (resolved.kind === "ready") {
+      return resolved.languageId;
+    }
+    if (resolved.kind === "unresolved") {
+      toast.error({ title: t("translate.speech.unresolvedLanguage") });
+      return null;
+    }
+
+    const trimmed = sourceText.trim();
+    if (!trimmed) {
+      return null;
+    }
+
+    // Bump generation so a concurrent speak/stop invalidates this detection.
+    speechDetectGeneration.current += 1;
+    const myGeneration = speechDetectGeneration.current;
+
+    try {
+      const detected = await runDetectLanguage(
+        { text: trimmed, modelId: resolvedModelId || null, profileId: resolvedProfileId || null },
+        newClientRequestId("speech-detect"),
+        {
+          providersById: new Map((providersQuery.data ?? []).map((p) => [p.id, p])),
+          modelsById: new Map((modelsQuery.data ?? []).map((m) => [m.id, m])),
+          profile: (profilesQuery.data ?? []).find((p) => p.id === resolvedProfileId) ?? null,
+          integrationsById: new Map((integrationsQuery.data ?? []).map((i) => [i.id, i])),
+        },
+      );
+      // Stale guard: a newer speak/stop/detect has superseded this detection.
+      if (myGeneration !== speechDetectGeneration.current) {
+        return null;
+      }
+      if (!detected.ok) {
+        if (detected.errorCode === "cancelled") {
+          toast.info({ title: t("translate.speech.cancelled"), duration: STOPPED_TOAST_MS });
+        } else {
+          toast.error({ title: t("translate.speech.detectFailed") });
+        }
+        return null;
+      }
+      if (!isLanguageId(detected.languageId)) {
+        toast.error({ title: t("translate.speech.detectFailed") });
+        return null;
+      }
+      setDetectedSourceLang(detected.languageId);
+      return detected.languageId;
+    } catch (err) {
+      if (myGeneration !== speechDetectGeneration.current) {
+        return null;
+      }
+      toast.error({
+        title: getIpcErrorMessage(err, t("translate.speech.detectFailed")),
+      });
+      return null;
+    }
+  }
+
+  async function handleSpeakSource() {
+    if (speechPlayback.isTargetActive("source")) {
+      await speechPlayback.stop();
+      return;
+    }
+    // Invalidate any in-flight detection before starting a new playback path.
+    speechDetectGeneration.current += 1;
+    // Stop any active playback (source or output) before proceeding.
+    await speechPlayback.stop();
+    const trimmed = sourceText.trim();
+    if (!trimmed) {
+      return;
+    }
+    const languageId = await resolveSourceLanguageForSpeech();
+    if (!languageId) {
+      return;
+    }
+    try {
+      const result = await speechPlayback.speak({
+        target: "source",
+        text: trimmed,
+        languageId,
+      });
+      if (result.error) {
+        showSpeechError(result.error);
+      }
+    } catch (err) {
+      const code = isIpcError(err) ? err.code : "synthesize_failed";
+      showSpeechError(code, isIpcError(err) ? err.message : undefined);
+    }
+  }
+
+  async function handleSpeakOutput() {
+    if (speechPlayback.isTargetActive("output")) {
+      await speechPlayback.stop();
+      return;
+    }
+    // Invalidate any in-flight source detection before starting output playback.
+    speechDetectGeneration.current += 1;
+    // Stop any active playback (source or output) before proceeding.
+    await speechPlayback.stop();
+    const trimmed = outputText.trim();
+    if (!trimmed || errorMessage || isTranslating) {
+      return;
+    }
+    // Use the effective target language that generated this translation, not a fresh recalculation.
+    if (!outputEffectiveLang) {
+      toast.error({ title: t("translate.speech.unresolvedLanguage") });
+      return;
+    }
+    try {
+      const result = await speechPlayback.speak({
+        target: "output",
+        text: trimmed,
+        languageId: outputEffectiveLang,
+      });
+      if (result.error) {
+        showSpeechError(result.error);
+      }
+    } catch (err) {
+      const code = isIpcError(err) ? err.code : "synthesize_failed";
+      showSpeechError(code, isIpcError(err) ? err.message : undefined);
+    }
+  }
+
+  const sourceSpeechActive = speechPlayback.isTargetActive("source");
+  const outputSpeechActive = speechPlayback.isTargetActive("output");
+  const canSpeakSource = sourceText.trim().length > 0;
+  const canSpeakOutput = outputText.trim().length > 0 && !errorMessage && !isTranslating && !!outputEffectiveLang;
 
   const modelSelectDisabled = modelsLoading || modelOptions.length === 0;
   const profileSelectDisabled = profilesLoading;
@@ -1141,6 +1347,20 @@ function TranslatePage() {
               >
                 {charCount > 0 ? <span className="text-label-sm text-neutral tabular-nums">{charCount}</span> : null}
                 <div className="flex-1" />
+                <IconButton
+                  aria-label={sourceSpeechActive ? t("translate.stopSpeak") : t("translate.speakSource")}
+                  disabled={!canSpeakSource && !sourceSpeechActive}
+                  focusableWhenDisabled
+                  onClick={() => {
+                    void handleSpeakSource();
+                  }}
+                >
+                  {sourceSpeechActive ? (
+                    <IconMaterialSymbolsLightStopCircleOutline aria-hidden />
+                  ) : (
+                    <IconMaterialSymbolsLightVolumeUp aria-hidden />
+                  )}
+                </IconButton>
                 {sourceText ? (
                   <IconButton
                     aria-label={t("translate.clearSource")}
@@ -1248,8 +1468,19 @@ function TranslatePage() {
                 >
                   <IconMaterialSymbolsLightContentCopy aria-hidden />
                 </IconButton>
-                <IconButton aria-label={t("translate.speak")} disabled>
-                  <IconMaterialSymbolsLightVolumeUp aria-hidden />
+                <IconButton
+                  aria-label={outputSpeechActive ? t("translate.stopSpeak") : t("translate.speak")}
+                  disabled={!canSpeakOutput && !outputSpeechActive}
+                  focusableWhenDisabled
+                  onClick={() => {
+                    void handleSpeakOutput();
+                  }}
+                >
+                  {outputSpeechActive ? (
+                    <IconMaterialSymbolsLightStopCircleOutline aria-hidden />
+                  ) : (
+                    <IconMaterialSymbolsLightVolumeUp aria-hidden />
+                  )}
                 </IconButton>
               </div>
             </section>

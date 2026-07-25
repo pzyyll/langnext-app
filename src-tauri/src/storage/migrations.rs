@@ -19,6 +19,7 @@ pub const MIGRATIONS: &[&str] = &[
   include_str!("../../migrations/0012_service_integrations.sql"),
   include_str!("../../migrations/0013_translation_profile_engines.sql"),
   include_str!("../../migrations/0014_ocr_service_integration_binding.sql"),
+  include_str!("../../migrations/0015_speech_services.sql"),
 ];
 
 pub fn latest_version() -> i32 {
@@ -226,6 +227,11 @@ mod tests {
       )
       .unwrap();
     assert_eq!(has_ocr_integration_col, 1);
+    // v15 speech_services table exists and is empty on a fresh database.
+    let speech_count: i64 = conn
+      .query_row("SELECT COUNT(*) FROM speech_services", [], |r| r.get(0))
+      .unwrap();
+    assert_eq!(speech_count, 0);
   }
 
   #[test]
@@ -324,6 +330,30 @@ mod tests {
     assert_eq!(created_at, "t0");
     assert_eq!(updated_at, "t1");
     assert!(integration_instance_id.is_none());
+  }
+
+  #[test]
+  fn migrate_v14_to_v15_creates_empty_speech_services() {
+    let mut conn = Connection::open_in_memory().unwrap();
+    migrate_with(&mut conn, &MIGRATIONS[..14]).unwrap();
+    assert_eq!(read_user_version(&conn).unwrap(), 14);
+
+    migrate(&mut conn).unwrap();
+    assert_eq!(read_user_version(&conn).unwrap(), latest_version());
+
+    let speech_count: i64 = conn
+      .query_row("SELECT COUNT(*) FROM speech_services", [], |r| r.get(0))
+      .unwrap();
+    assert_eq!(speech_count, 0);
+
+    let has_capability_col: i64 = conn
+      .query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('speech_services') WHERE name = 'capability_id'",
+        [],
+        |r| r.get(0),
+      )
+      .unwrap();
+    assert_eq!(has_capability_col, 1);
   }
 
   #[test]

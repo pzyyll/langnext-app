@@ -32,6 +32,12 @@ export const ocrKeys = {
   detail: (id: string) => [...ocrKeys.all, "detail", id] as const,
 };
 
+export const speechKeys = {
+  all: ["speech-services"] as const,
+  list: () => [...speechKeys.all, "list"] as const,
+  detail: (id: string) => [...speechKeys.all, "detail", id] as const,
+};
+
 export const integrationKeys = {
   all: ["service-integrations"] as const,
   list: () => [...integrationKeys.all, "list"] as const,

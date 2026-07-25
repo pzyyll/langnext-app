@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from "./routes/__root"
 import { Route as TranslateRouteImport } from "./routes/translate"
+import { Route as SpeechRouteImport } from "./routes/speech"
 import { Route as SettingsRouteImport } from "./routes/settings"
 import { Route as ScreenshotOverlayRouteImport } from "./routes/screenshot-overlay"
 import { Route as QuickTranslateRouteImport } from "./routes/quick-translate"
@@ -19,10 +20,12 @@ import { Route as ModelsRouteImport } from "./routes/models"
 import { Route as HistoryRouteImport } from "./routes/history"
 import { Route as IndexRouteImport } from "./routes/index"
 import { Route as TranslateIndexRouteImport } from "./routes/translate/index"
+import { Route as SpeechIndexRouteImport } from "./routes/speech/index"
 import { Route as PluginsIndexRouteImport } from "./routes/plugins/index"
 import { Route as OcrIndexRouteImport } from "./routes/ocr/index"
 import { Route as ModelsIndexRouteImport } from "./routes/models/index"
 import { Route as TranslateProfilesRouteImport } from "./routes/translate/profiles"
+import { Route as SpeechSpeechServiceIdRouteImport } from "./routes/speech/$speechServiceId"
 import { Route as PluginsIntegrationInstanceIdRouteImport } from "./routes/plugins/$integrationInstanceId"
 import { Route as OcrOcrServiceIdRouteImport } from "./routes/ocr/$ocrServiceId"
 import { Route as ModelsProviderIdRouteImport } from "./routes/models/$providerId"
@@ -30,6 +33,11 @@ import { Route as ModelsProviderIdRouteImport } from "./routes/models/$providerI
 const TranslateRoute = TranslateRouteImport.update({
   id: "/translate",
   path: "/translate",
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SpeechRoute = SpeechRouteImport.update({
+  id: "/speech",
+  path: "/speech",
   getParentRoute: () => rootRouteImport,
 } as any)
 const SettingsRoute = SettingsRouteImport.update({
@@ -77,6 +85,11 @@ const TranslateIndexRoute = TranslateIndexRouteImport.update({
   path: "/",
   getParentRoute: () => TranslateRoute,
 } as any)
+const SpeechIndexRoute = SpeechIndexRouteImport.update({
+  id: "/",
+  path: "/",
+  getParentRoute: () => SpeechRoute,
+} as any)
 const PluginsIndexRoute = PluginsIndexRouteImport.update({
   id: "/",
   path: "/",
@@ -96,6 +109,11 @@ const TranslateProfilesRoute = TranslateProfilesRouteImport.update({
   id: "/profiles",
   path: "/profiles",
   getParentRoute: () => TranslateRoute,
+} as any)
+const SpeechSpeechServiceIdRoute = SpeechSpeechServiceIdRouteImport.update({
+  id: "/$speechServiceId",
+  path: "/$speechServiceId",
+  getParentRoute: () => SpeechRoute,
 } as any)
 const PluginsIntegrationInstanceIdRoute =
   PluginsIntegrationInstanceIdRouteImport.update({
@@ -123,14 +141,17 @@ export interface FileRoutesByFullPath {
   "/quick-translate": typeof QuickTranslateRoute
   "/screenshot-overlay": typeof ScreenshotOverlayRoute
   "/settings": typeof SettingsRoute
+  "/speech": typeof SpeechRouteWithChildren
   "/translate": typeof TranslateRouteWithChildren
   "/models/$providerId": typeof ModelsProviderIdRoute
   "/ocr/$ocrServiceId": typeof OcrOcrServiceIdRoute
   "/plugins/$integrationInstanceId": typeof PluginsIntegrationInstanceIdRoute
+  "/speech/$speechServiceId": typeof SpeechSpeechServiceIdRoute
   "/translate/profiles": typeof TranslateProfilesRoute
   "/models/": typeof ModelsIndexRoute
   "/ocr/": typeof OcrIndexRoute
   "/plugins/": typeof PluginsIndexRoute
+  "/speech/": typeof SpeechIndexRoute
   "/translate/": typeof TranslateIndexRoute
 }
 export interface FileRoutesByTo {
@@ -142,10 +163,12 @@ export interface FileRoutesByTo {
   "/models/$providerId": typeof ModelsProviderIdRoute
   "/ocr/$ocrServiceId": typeof OcrOcrServiceIdRoute
   "/plugins/$integrationInstanceId": typeof PluginsIntegrationInstanceIdRoute
+  "/speech/$speechServiceId": typeof SpeechSpeechServiceIdRoute
   "/translate/profiles": typeof TranslateProfilesRoute
   "/models": typeof ModelsIndexRoute
   "/ocr": typeof OcrIndexRoute
   "/plugins": typeof PluginsIndexRoute
+  "/speech": typeof SpeechIndexRoute
   "/translate": typeof TranslateIndexRoute
 }
 export interface FileRoutesById {
@@ -158,14 +181,17 @@ export interface FileRoutesById {
   "/quick-translate": typeof QuickTranslateRoute
   "/screenshot-overlay": typeof ScreenshotOverlayRoute
   "/settings": typeof SettingsRoute
+  "/speech": typeof SpeechRouteWithChildren
   "/translate": typeof TranslateRouteWithChildren
   "/models/$providerId": typeof ModelsProviderIdRoute
   "/ocr/$ocrServiceId": typeof OcrOcrServiceIdRoute
   "/plugins/$integrationInstanceId": typeof PluginsIntegrationInstanceIdRoute
+  "/speech/$speechServiceId": typeof SpeechSpeechServiceIdRoute
   "/translate/profiles": typeof TranslateProfilesRoute
   "/models/": typeof ModelsIndexRoute
   "/ocr/": typeof OcrIndexRoute
   "/plugins/": typeof PluginsIndexRoute
+  "/speech/": typeof SpeechIndexRoute
   "/translate/": typeof TranslateIndexRoute
 }
 export interface FileRouteTypes {
@@ -179,14 +205,17 @@ export interface FileRouteTypes {
     | "/quick-translate"
     | "/screenshot-overlay"
     | "/settings"
+    | "/speech"
     | "/translate"
     | "/models/$providerId"
     | "/ocr/$ocrServiceId"
     | "/plugins/$integrationInstanceId"
+    | "/speech/$speechServiceId"
     | "/translate/profiles"
     | "/models/"
     | "/ocr/"
     | "/plugins/"
+    | "/speech/"
     | "/translate/"
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -198,10 +227,12 @@ export interface FileRouteTypes {
     | "/models/$providerId"
     | "/ocr/$ocrServiceId"
     | "/plugins/$integrationInstanceId"
+    | "/speech/$speechServiceId"
     | "/translate/profiles"
     | "/models"
     | "/ocr"
     | "/plugins"
+    | "/speech"
     | "/translate"
   id:
     | "__root__"
@@ -213,14 +244,17 @@ export interface FileRouteTypes {
     | "/quick-translate"
     | "/screenshot-overlay"
     | "/settings"
+    | "/speech"
     | "/translate"
     | "/models/$providerId"
     | "/ocr/$ocrServiceId"
     | "/plugins/$integrationInstanceId"
+    | "/speech/$speechServiceId"
     | "/translate/profiles"
     | "/models/"
     | "/ocr/"
     | "/plugins/"
+    | "/speech/"
     | "/translate/"
   fileRoutesById: FileRoutesById
 }
@@ -233,6 +267,7 @@ export interface RootRouteChildren {
   QuickTranslateRoute: typeof QuickTranslateRoute
   ScreenshotOverlayRoute: typeof ScreenshotOverlayRoute
   SettingsRoute: typeof SettingsRoute
+  SpeechRoute: typeof SpeechRouteWithChildren
   TranslateRoute: typeof TranslateRouteWithChildren
 }
 
@@ -243,6 +278,13 @@ declare module "@tanstack/react-router" {
       path: "/translate"
       fullPath: "/translate"
       preLoaderRoute: typeof TranslateRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    "/speech": {
+      id: "/speech"
+      path: "/speech"
+      fullPath: "/speech"
+      preLoaderRoute: typeof SpeechRouteImport
       parentRoute: typeof rootRouteImport
     }
     "/settings": {
@@ -308,6 +350,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof TranslateIndexRouteImport
       parentRoute: typeof TranslateRoute
     }
+    "/speech/": {
+      id: "/speech/"
+      path: "/"
+      fullPath: "/speech/"
+      preLoaderRoute: typeof SpeechIndexRouteImport
+      parentRoute: typeof SpeechRoute
+    }
     "/plugins/": {
       id: "/plugins/"
       path: "/"
@@ -335,6 +384,13 @@ declare module "@tanstack/react-router" {
       fullPath: "/translate/profiles"
       preLoaderRoute: typeof TranslateProfilesRouteImport
       parentRoute: typeof TranslateRoute
+    }
+    "/speech/$speechServiceId": {
+      id: "/speech/$speechServiceId"
+      path: "/$speechServiceId"
+      fullPath: "/speech/$speechServiceId"
+      preLoaderRoute: typeof SpeechSpeechServiceIdRouteImport
+      parentRoute: typeof SpeechRoute
     }
     "/plugins/$integrationInstanceId": {
       id: "/plugins/$integrationInstanceId"
@@ -398,6 +454,19 @@ const PluginsRouteChildren: PluginsRouteChildren = {
 const PluginsRouteWithChildren =
   PluginsRoute._addFileChildren(PluginsRouteChildren)
 
+interface SpeechRouteChildren {
+  SpeechSpeechServiceIdRoute: typeof SpeechSpeechServiceIdRoute
+  SpeechIndexRoute: typeof SpeechIndexRoute
+}
+
+const SpeechRouteChildren: SpeechRouteChildren = {
+  SpeechSpeechServiceIdRoute: SpeechSpeechServiceIdRoute,
+  SpeechIndexRoute: SpeechIndexRoute,
+}
+
+const SpeechRouteWithChildren =
+  SpeechRoute._addFileChildren(SpeechRouteChildren)
+
 interface TranslateRouteChildren {
   TranslateProfilesRoute: typeof TranslateProfilesRoute
   TranslateIndexRoute: typeof TranslateIndexRoute
@@ -421,6 +490,7 @@ const rootRouteChildren: RootRouteChildren = {
   QuickTranslateRoute: QuickTranslateRoute,
   ScreenshotOverlayRoute: ScreenshotOverlayRoute,
   SettingsRoute: SettingsRoute,
+  SpeechRoute: SpeechRouteWithChildren,
   TranslateRoute: TranslateRouteWithChildren,
 }
 export const routeTree = rootRouteImport

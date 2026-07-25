@@ -9,7 +9,9 @@ use crate::domain::settings::{
 use crate::domain::time::new_id;
 use crate::error::StorageError;
 use crate::repositories::credential_operations::OwnerKind;
-use crate::repositories::{app_credentials, app_settings, credential_operations, ocr_services, translation_profiles};
+use crate::repositories::{
+  app_credentials, app_settings, credential_operations, ocr_services, speech_services, translation_profiles,
+};
 use crate::storage::Database;
 use std::sync::Arc;
 use url::Url;
@@ -136,6 +138,25 @@ impl SettingsService {
     })
   }
 
+  /// Atomic default Speech service update for Translate playback.
+  pub fn set_default_speech_service_id(
+    &self,
+    default_speech_service_id: Option<Uuid>,
+  ) -> Result<AppSettingsDto, StorageError> {
+    self.db.transaction(|uow| {
+      validate_default_speech_service(uow.conn(), default_speech_service_id)?;
+      let mut settings = app_settings::get(uow.conn())?;
+      settings.default_speech_service_id = default_speech_service_id;
+      app_settings::update(uow.conn(), &settings)?;
+      settings.shortcuts = normalize_shortcuts(settings.shortcuts);
+      let proxy_has_credential = app_credentials::get_global_proxy_ref(uow.conn())?.is_some();
+      Ok(AppSettingsDto {
+        settings,
+        proxy_has_credential,
+      })
+    })
+  }
+
   fn update_keep(&self, settings: AppSettingsV1) -> Result<(), StorageError> {
     self.db.transaction(|uow| {
       let conn = uow.conn();
@@ -152,6 +173,7 @@ impl SettingsService {
       }
       validate_default_profile(conn, settings.default_profile_id)?;
       validate_default_ocr_service(conn, settings.default_ocr_service_id)?;
+      validate_default_speech_service(conn, settings.default_speech_service_id)?;
       app_settings::update(conn, &settings)?;
       Ok(())
     })
@@ -184,6 +206,7 @@ impl SettingsService {
     let commit = self.db.transaction(|uow| {
       validate_default_profile(uow.conn(), settings.default_profile_id)?;
       validate_default_ocr_service(uow.conn(), settings.default_ocr_service_id)?;
+      validate_default_speech_service(uow.conn(), settings.default_speech_service_id)?;
       app_settings::update(uow.conn(), settings)?;
       app_credentials::compare_and_set_global_proxy_ref(uow.conn(), old_ref.as_deref(), Some(&new_ref))?;
       let op = credential_operations::mark_db_committed(uow.conn(), op_id)?;
@@ -221,6 +244,7 @@ impl SettingsService {
     let commit = self.db.transaction(|uow| {
       validate_default_profile(uow.conn(), settings.default_profile_id)?;
       validate_default_ocr_service(uow.conn(), settings.default_ocr_service_id)?;
+      validate_default_speech_service(uow.conn(), settings.default_speech_service_id)?;
       app_settings::update(uow.conn(), settings)?;
       app_credentials::compare_and_set_global_proxy_ref(uow.conn(), old_ref.as_deref(), None)?;
       let op = credential_operations::mark_db_committed(uow.conn(), op_id)?;
@@ -304,12 +328,29 @@ pub fn validate_default_ocr_service(
   Ok(())
 }
 
-/// Full settings validation against a live database (document + default profile/OCR).
+/// Connection-scoped default Speech service existence check.
+pub fn validate_default_speech_service(
+  conn: &rusqlite::Connection,
+  speech_service_id: Option<Uuid>,
+) -> Result<(), StorageError> {
+  if let Some(speech_service_id) = speech_service_id {
+    speech_services::get(conn, speech_service_id).map_err(|e| match e {
+      StorageError::NotFound(_) => {
+        StorageError::Validation(format!("default_speech_service_id {speech_service_id} does not exist"))
+      }
+      other => other,
+    })?;
+  }
+  Ok(())
+}
+
+/// Full settings validation against a live database (document + default profile/OCR/Speech).
 pub fn validate_settings(settings: &AppSettingsV1, db: &Database) -> Result<(), StorageError> {
   validate_settings_document(settings)?;
   db.read(|conn| {
     validate_default_profile(conn, settings.default_profile_id)?;
-    validate_default_ocr_service(conn, settings.default_ocr_service_id)
+    validate_default_ocr_service(conn, settings.default_ocr_service_id)?;
+    validate_default_speech_service(conn, settings.default_speech_service_id)
   })
 }
 
