@@ -1,0 +1,46 @@
+// ABOUTME: translate.text@1 and translate.detect@1 capability contracts for the
+// ABOUTME: langnext runtime-plugin v1 WIT package. Config/preferences are copied JSON bytes.
+/// `translate.text@1`: translate text between application languages.
+interface translate-text {
+  use common.{request-id, language-id, plugin-error, json-bytes};
+
+  record text-request {
+    request-id: request-id,
+    text: string,
+    source-language-id: language-id,
+    target-language-id: language-id,
+  }
+
+  record text-response {
+    translated-text: string,
+    detected-source-language-id: option<language-id>,
+  }
+
+  /// Translate text. Config and preferences are bounded copied JSON bytes; never credentials.
+  text: func(
+    config: json-bytes,
+    preferences: json-bytes,
+    request: text-request,
+  ) -> result<text-response, plugin-error>;
+}
+
+/// `translate.detect@1`: detect the dominant language of a text.
+interface translate-detect {
+  use common.{request-id, language-id, plugin-error, json-bytes};
+
+  record detect-request {
+    request-id: request-id,
+    text: string,
+  }
+
+  record detect-response {
+    language-id: language-id,
+    confidence: option<f32>,
+  }
+
+  detect: func(
+    config: json-bytes,
+    preferences: json-bytes,
+    request: detect-request,
+  ) -> result<detect-response, plugin-error>;
+}

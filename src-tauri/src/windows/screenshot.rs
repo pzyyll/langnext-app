@@ -304,9 +304,16 @@ fn capture_monitor_at(x: i32, y: i32) -> Result<MonitorCapture, String> {
   }
 }
 
+/// Pure construction of the screenshot temp subtree from a base temp directory. Extracted so
+/// the security conformance test can call it and compare against the assetProtocol scope
+/// without searching source strings. The dirname is `SCREENSHOT_TEMP_DIRNAME`.
+pub(crate) fn screenshot_temp_dir_from_base(base: &Path) -> PathBuf {
+  base.join(SCREENSHOT_TEMP_DIRNAME)
+}
+
 fn screenshot_temp_dir<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBuf, String> {
   let temp = app.path().temp_dir().map_err(|e| format!("resolve temp dir: {e}"))?;
-  let dir = temp.join(SCREENSHOT_TEMP_DIRNAME);
+  let dir = screenshot_temp_dir_from_base(&temp);
   std::fs::create_dir_all(&dir).map_err(|e| format!("create screenshot temp dir: {e}"))?;
   Ok(dir)
 }

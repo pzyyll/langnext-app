@@ -1,0 +1,74 @@
+// ABOUTME: Capability worlds and the pure copied-JSON migration world for the langnext
+// ABOUTME: runtime-plugin v1 WIT package. Each world imports only `common` and `host`.
+/// Pure copied-JSON config/preference migration exports. No network, blobs, or streams.
+interface migration {
+  use common.{json-bytes, plugin-error};
+
+  /// Migrate copied config JSON between schema versions. Pure: no IO, no execution.
+  migrate-config: func(
+    from-version: u32,
+    to-version: u32,
+    config: json-bytes,
+  ) -> result<json-bytes, plugin-error>;
+
+  /// Migrate copied preference JSON for a capability between schema versions.
+  migrate-preferences: func(
+    capability: string,
+    from-version: u32,
+    to-version: u32,
+    preferences: json-bytes,
+  ) -> result<json-bytes, plugin-error>;
+}
+
+// Each capability major is a dedicated world so a plugin component targets one capability.
+// Every world imports `common` and `host` only; no WASI interfaces are linked. An
+// incompatible resource or capability signature change requires a new interface/world
+// version and an explicit dual-link compatibility matrix.
+
+world translate-text-world {
+  import common;
+  import host;
+  export translate-text;
+}
+
+world translate-detect-world {
+  import common;
+  import host;
+  export translate-detect;
+}
+
+world ocr-image-world {
+  import common;
+  import host;
+  export ocr-image;
+}
+
+world speech-synthesize-world {
+  import common;
+  import host;
+  export speech-synthesize;
+}
+
+world speech-recognize-world {
+  import common;
+  import host;
+  export speech-recognize;
+}
+
+world llm-models-world {
+  import common;
+  import host;
+  export llm-models;
+}
+
+world llm-chat-world {
+  import common;
+  import host;
+  export llm-chat;
+}
+
+/// Migration world: pure copied-JSON exports; host imports limited to `common`.
+world migration-world {
+  import common;
+  export migration;
+}

@@ -1,0 +1,66 @@
+// ABOUTME: llm.models.list@1 and llm.chat@1 capability contracts for the langnext
+// ABOUTME: runtime-plugin v1 WIT package. Models list is typed; chat streams through paired endpoints.
+/// `llm.models.list@1`: list models offered by an LLM provider as a typed, bounded response.
+interface llm-models {
+  use common.{request-id, plugin-error, json-bytes};
+
+  record models-list-request {
+    request-id: request-id,
+  }
+
+  /// Typed model descriptor. Provider-specific metadata is host-bounded; v1 exposes id/label.
+  record model-descriptor {
+    id: string,
+    label: option<string>,
+  }
+
+  /// Typed models-list response (not raw JSON bytes).
+  record models-list-response {
+    models: list<model-descriptor>,
+  }
+
+  models-list: func(
+    config: json-bytes,
+    request: models-list-request,
+  ) -> result<models-list-response, plugin-error>;
+}
+
+/// `llm.chat@1`: chat completion, optionally streaming through a host-created writer/reader pair.
+interface llm-chat {
+  use common.{request-id, plugin-error, json-bytes, blob-handle, stream-writer};
+
+  record chat-message {
+    role: string,
+    content: string,
+  }
+
+  record chat-request {
+    request-id: request-id,
+    model: string,
+    messages: list<chat-message>,
+    images: list<borrow<blob-handle>>,
+    preferences: json-bytes,
+  }
+
+  record chat-response {
+    message: chat-message,
+  }
+
+  variant chat-result {
+    /// Non-streaming completion.
+    complete(chat-response),
+    /// The host owns the paired reader before invoking chat, so it can consume frames while
+    /// the guest owns and writes the supplied stream writer.
+    streaming,
+  }
+
+  /// Chat with zero or more host-owned image blob-handles. Image bytes never cross as
+  /// base64; the guest reads them via `host`.
+  /// `output` is supplied by the host from a writer/reader pair; the guest consumes it by
+  /// calling `host.stream-finish` or `host.stream-fail` after ordered typed delta writes.
+  chat: func(
+    config: json-bytes,
+    request: chat-request,
+    output: own<stream-writer>,
+  ) -> result<chat-result, plugin-error>;
+}

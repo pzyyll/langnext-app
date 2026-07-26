@@ -1,0 +1,48 @@
+// ABOUTME: speech.synthesize@1 and speech.recognize@1 capability contracts for the
+// ABOUTME: langnext runtime-plugin v1 WIT package. Audio crosses via host-owned blob-handles.
+/// `speech.synthesize@1`: synthesize speech into a host-owned output blob-handle.
+interface speech-synthesize {
+  use common.{request-id, language-id, plugin-error, json-bytes, blob-handle, media-metadata};
+
+  record synthesize-request {
+    request-id: request-id,
+    text: string,
+    language-id: language-id,
+    preferences: json-bytes,
+  }
+
+  record synthesize-response {
+    output: own<blob-handle>,
+    media: media-metadata,
+  }
+
+  /// Synthesize speech. Audio is returned as a host-owned output blob-handle plus media
+  /// metadata; binary bytes never cross as base64.
+  synthesize: func(
+    config: json-bytes,
+    request: synthesize-request,
+  ) -> result<synthesize-response, plugin-error>;
+}
+
+/// `speech.recognize@1`: recognize speech from a host-owned input audio blob-handle.
+interface speech-recognize {
+  use common.{request-id, language-id, plugin-error, json-bytes, blob-handle};
+
+  record recognize-request {
+    request-id: request-id,
+    input: borrow<blob-handle>,
+    language-id: option<language-id>,
+    preferences: json-bytes,
+  }
+
+  record recognize-response {
+    text: string,
+  }
+
+  /// Recognize speech. The input audio is a host-owned blob-handle the guest reads via
+  /// `host`; binary bytes never cross as base64.
+  recognize: func(
+    config: json-bytes,
+    request: recognize-request,
+  ) -> result<recognize-response, plugin-error>;
+}

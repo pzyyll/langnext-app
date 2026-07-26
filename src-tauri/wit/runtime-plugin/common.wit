@@ -1,0 +1,114 @@
+// ABOUTME: Common IDs, errors, opaque resource handles, and typed stream frames for the
+// ABOUTME: langnext runtime-plugin v1 WIT package. Shared by host imports and capability exports.
+package langnext:runtime-plugin@1.0.0;
+interface common {
+  /// Bounded UTF-8 request identifier (never credential material).
+  type request-id = string;
+
+  /// Bounded application language identifier (e.g. `zh`, `en`).
+  type language-id = string;
+
+  /// Bounded, validated UTF-8 JSON bytes. Carries copied config/preferences only;
+  /// never credential material.
+  type json-bytes = list<u8>;
+
+  /// Stable plugin failure codes. Messages are bounded and never contain secrets.
+  variant plugin-error {
+    invalid-request(string),
+    invalid-configuration,
+    invalid-input(string),
+    auth,
+    permission-denied,
+    quota-exceeded,
+    rate-limited,
+    unsupported-input(string),
+    unsupported-language(string),
+    network(string),
+    timeout,
+    invalid-response(string),
+    provider-unavailable,
+    plugin-unavailable,
+    cancelled,
+    internal(string),
+  }
+
+  /// Resource operation errors (ownership, direction, bounds, state).
+  variant resource-error {
+    not-owned,
+    wrong-direction,
+    exhausted,
+    out-of-bounds,
+    closed,
+    cancelled,
+    internal(string),
+  }
+
+  /// Blob/stream direction. `input` = guest reads; `output` = guest writes.
+  enum blob-direction {
+    input,
+    output,
+  }
+
+  /// Immutable payload kind bound to a stream at creation. The host rejects mixed-kind
+  /// non-terminal frames: a `network-binary` stream carries only `network-binary` frames
+  /// (plus one terminal), and an `llm-delta` stream carries only `llm-delta` frames
+  /// (plus one terminal). This keeps binary chunks and structured LLM deltas disjoint so
+  /// the host/frontend never parses opaque bytes to classify a delta or terminal state.
+  enum stream-kind {
+    network-binary,
+    llm-delta,
+  }
+
+  /// Media metadata for blob/stream payloads.
+  record media-metadata {
+    content-type: option<string>,
+    byte-length: option<u64>,
+  }
+
+  /// Closed LLM completion status. The host never infers this from opaque delta bytes.
+  enum llm-completion-status {
+    stop,
+    length,
+    tool-calls,
+  }
+
+  /// Structured tool-call delta. Arguments are copied JSON bytes, never an opaque stream.
+  record llm-tool-call-delta {
+    id: string,
+    name: string,
+    arguments-json: json-bytes,
+  }
+
+  /// Closed structured LLM delta contract for v1 streaming chat.
+  variant llm-delta {
+    text(string),
+    reasoning(string),
+    tool-call(llm-tool-call-delta),
+    complete(llm-completion-status),
+  }
+
+  /// Ordered typed stream frame. Network binary chunks and LLM deltas remain distinct, so
+  /// the host/frontend never parses opaque bytes to classify a delta or terminal state.
+  variant stream-frame {
+    network-binary(list<u8>),
+    llm-delta(llm-delta),
+    terminal(stream-terminal-state),
+  }
+
+  /// Terminal state of a stream, queryable via `host.stream-state` and terminal frames.
+  variant stream-terminal-state {
+    finished,
+    failed(string),
+    cancelled,
+  }
+
+  /// Opaque host-owned blob handle. Operations are host imports (see `host`). Handles are
+  /// host table indices scoped to one principal/request; they cannot be persisted or reused.
+  resource blob-handle;
+
+  /// Opaque host-owned stream handle. Operations are host imports (see `host`).
+  /// Producer and consumer endpoints are separate resources so the host can read while a
+  /// guest writes. Writers are transferred into a capability call; readers stay with the host.
+  resource stream-writer;
+  resource stream-reader;
+}

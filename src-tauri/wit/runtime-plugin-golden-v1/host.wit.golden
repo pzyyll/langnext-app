@@ -1,0 +1,121 @@
+// ABOUTME: Narrow host imports for the runtime-plugin v1 ABI: network broker body union,
+// ABOUTME: bounded logs, deadline, cancellation, and complete blob/stream resource operations.
+interface host {
+  use common.{
+    blob-handle, stream-writer, stream-reader, blob-direction, stream-kind, media-metadata, resource-error, json-bytes, stream-frame,
+    stream-terminal-state,
+  };
+
+  // --- Network broker body union ---
+  // Request body matches the phase-0 spec: `variant { empty, json(list<u8>), blob(blob-handle) }`.
+  // `blob(own<blob-handle>)` transfers ownership of a host-owned blob to the broker.
+  variant broker-body-request {
+    empty,
+    json(json-bytes),
+    blob(own<blob-handle>),
+  }
+
+  // Response body matches the phase-0 spec: `variant { json, blob, stream }`. `%stream`
+  // escapes the WIT keyword while preserving the exact ABI case name `stream`.
+  variant broker-body-response {
+    json(json-bytes),
+    blob(own<blob-handle>),
+    %stream(own<stream-reader>),
+  }
+
+  record broker-request {
+    endpoint-id: string,
+    relative-path: string,
+    method: string,
+    headers: list<tuple<string, string>>,
+    body: broker-body-request,
+  }
+
+  record broker-response {
+    status: u16,
+    headers: list<tuple<string, string>>,
+    body: broker-body-response,
+  }
+
+  variant broker-error {
+    not-approved,
+    method-not-allowed,
+    path-confined,
+    header-blocked,
+    network(string),
+    timeout,
+    cancelled,
+    limit-exceeded,
+    internal(string),
+  }
+
+  /// Fetch an approved endpoint. Endpoint and auth policy are host-resolved; the guest
+  /// never supplies a secret-bearing URL. Binary/stream bodies never cross as base64.
+  broker-fetch: func(request: broker-request) -> result<broker-response, broker-error>;
+
+  // --- Bounded structured logs (fixed field allowlist enforced by host) ---
+  enum log-level {
+    trace,
+    debug,
+    info,
+    warn,
+    error,
+  }
+
+  log: func(level: log-level, message: string, fields: list<tuple<string, string>>);
+
+  // --- Monotonic deadline checks ---
+  /// Remaining milliseconds until the request deadline, or none if no deadline.
+  /// The host enforces the deadline regardless of this hint.
+  deadline-remaining: func() -> option<u64>;
+
+  // --- Cancellation ---
+  is-cancelled: func() -> bool;
+
+  // --- Blob resource operations (host-owned) ---
+  /// Create a bounded blob. `max-bytes` caps total content; the host rejects writes beyond it.
+  blob-create: func(
+    direction: blob-direction,
+    content-type: option<string>,
+    max-bytes: u64,
+  ) -> result<own<blob-handle>, resource-error>;
+  /// Write `bytes` at `offset`. Returns bytes accepted. Bounds and direction are enforced.
+  blob-write: func(handle: borrow<blob-handle>, offset: u64, bytes: list<u8>) -> result<u64, resource-error>;
+  /// Read up to `max-bytes` starting at `offset`. Bounded reads avoid whole-blob copies.
+  blob-read: func(handle: borrow<blob-handle>, offset: u64, max-bytes: u64) -> result<list<u8>, resource-error>;
+  blob-length: func(handle: borrow<blob-handle>) -> result<u64, resource-error>;
+  /// Query the blob's media metadata (content-type and byte-length). The content-type is the
+  /// value supplied at creation (or derived by the host); byte-length reflects accepted bytes.
+  blob-metadata: func(handle: borrow<blob-handle>) -> result<media-metadata, resource-error>;
+  blob-close: func(handle: own<blob-handle>) -> result<_, resource-error>;
+  blob-discard: func(handle: own<blob-handle>);
+
+  // --- Stream resource operations (host-owned, ordered typed frames) ---
+  // `stream-frame` is closed: network-binary and structured llm-delta payloads are distinct,
+  // and terminal frames carry a typed terminal state instead of opaque bytes.
+  // `stream-create` binds one immutable `kind`; direction is inherent to the endpoint type
+  // (writer = output/producer, reader = input/consumer), not a separate parameter. The host
+  // rejects mixed-kind non-terminal frames and allows exactly one terminal transition.
+  stream-create: func(
+    kind: stream-kind,
+    content-type: option<string>,
+    max-bytes: u64,
+  ) -> result<tuple<own<stream-writer>, own<stream-reader>>, resource-error>;
+  /// Send one ordered typed frame. The writer is the output endpoint; payload kind, order,
+  /// and bounds are enforced.
+  stream-send: func(writer: borrow<stream-writer>, frame: stream-frame) -> result<_, resource-error>;
+  /// Receive the next ordered typed frame, or none after its typed terminal state.
+  stream-receive: func(reader: borrow<stream-reader>) -> result<option<stream-frame>, resource-error>;
+  /// Query terminal state: none while open, or the terminal reason once closed.
+  stream-state: func(reader: borrow<stream-reader>) -> result<option<stream-terminal-state>, resource-error>;
+  /// Consume and seal an output writer; its paired reader remains available to the host.
+  stream-finish: func(writer: own<stream-writer>) -> result<_, resource-error>;
+  stream-fail: func(writer: own<stream-writer>, code: string) -> result<_, resource-error>;
+  /// Request cancellation from the reader side while the guest owns the paired writer.
+  stream-cancel: func(reader: borrow<stream-reader>) -> result<_, resource-error>;
+  stream-metadata: func(reader: borrow<stream-reader>) -> result<media-metadata, resource-error>;
+  /// Release an owned reader after consuming the stream; cancels a still-open paired writer.
+  stream-reader-close: func(reader: own<stream-reader>) -> result<_, resource-error>;
+  /// Release an owned reader without consuming the remainder; cancels a still-open paired writer.
+  stream-reader-discard: func(reader: own<stream-reader>);
+}

@@ -3,4 +3,21 @@
 # ABOUTME: Run via `mise run tauri:dev`
 #MISE description="Run the full Tauri desktop app"
 set -euo pipefail
-tauri dev
+
+if [[ -z "${TAURI_DEV_HOST:-}" ]]; then
+  tauri dev
+  exit 0
+fi
+
+# Tauri embeds devCsp at build time; it does not interpolate arbitrary environment variables.
+# For a mobile/device Vite host, pass a temporary, auditable config overlay with only that host.
+if [[ ! "$TAURI_DEV_HOST" =~ ^[A-Za-z0-9.-]+$ ]]; then
+  echo "TAURI_DEV_HOST must be an ASCII hostname or IPv4 address" >&2
+  exit 1
+fi
+
+config_override="$(mktemp)"
+trap 'rm -f "$config_override"' EXIT
+printf '{"app":{"security":{"devCsp":{"connect-src":"'"'"'self'"'"' ipc: http://ipc.localhost http://%s:1420 ws://%s:1421"}}}}' \
+  "$TAURI_DEV_HOST" "$TAURI_DEV_HOST" >"$config_override"
+tauri dev --config "$config_override"

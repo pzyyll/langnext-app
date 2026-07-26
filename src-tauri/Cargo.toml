@@ -18,6 +18,11 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
+[dev-dependencies]
+# WIT text parsing for runtime-plugin capability world conformance tests (Phase 0 contracts).
+# Text-only: no wasm decoding/wat features pulled in.
+wit-parser = { version = "0.244", default-features = false }
+
 [dependencies]
 tauri = { version = "2", features = ["protocol-asset", "tray-icon", "image-ico", "image-png", "unstable"] }
 tauri-plugin-opener = "2"
@@ -33,6 +38,7 @@ uuid = { version = "1.23.4", features = ["v7", "serde"] }
 time = { version = "0.3.53", features = ["formatting", "parsing", "serde", "serde-well-known"] }
 thiserror = "2.0.18"
 url = "2"
+semver = "1"
 tempfile = "3.27.0"
 reqwest = { version = "0.13", features = ["json", "form"] }
 tokio = { version = "1", default-features = false, features = ["macros", "sync", "time"] }

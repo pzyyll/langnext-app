@@ -1,12 +1,10 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
-  "identifier": "default",
-  "description": "Capability for the main, quick-translate, and screenshot-overlay windows and tray",
-  "windows": ["main", "quick-translate", "screenshot-overlay"],
+  "identifier": "trusted-app",
+  "description": "Trusted application WebViews (main, quick-translate, screenshot-overlay): app-local IPC commands, core window/tray, global shortcut, clipboard, dialog, fs text files, opener, and logging. Granted by explicit webview labels only; no windows glob match and no plugin-page label.",
+  "webviews": ["main", "quick-translate", "screenshot-overlay"],
   "permissions": [
     "core:default",
-    "opener:default",
-    "log:default",
     "core:window:default",
     "core:window:allow-create",
     "core:window:allow-show",
@@ -33,6 +31,9 @@
     "clipboard-manager:allow-read-image",
     "dialog:default",
     "fs:allow-read-text-file",
-    "fs:allow-write-text-file"
+    "fs:allow-write-text-file",
+    "opener:default",
+    "log:default",
+    "allow-trusted-app-commands"
   ]
 }

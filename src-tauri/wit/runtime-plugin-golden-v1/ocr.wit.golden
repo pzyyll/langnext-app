@@ -1,0 +1,28 @@
+// ABOUTME: ocr.image@1 capability contract for the langnext runtime-plugin v1 WIT package.
+// ABOUTME: Input image is a host-owned blob-handle; binary bytes never cross as base64.
+/// `ocr.image@1`: recognize text in an image carried by a host-owned input blob-handle.
+interface ocr-image {
+  use common.{request-id, language-id, plugin-error, json-bytes, blob-handle};
+
+  record ocr-preferences {
+    operation: option<string>,
+    language-hints: list<language-id>,
+  }
+
+  record image-request {
+    request-id: request-id,
+    input: borrow<blob-handle>,
+    preferences: ocr-preferences,
+  }
+
+  record image-response {
+    text: string,
+  }
+
+  /// OCR an image. The input PNG is a host-owned blob-handle the guest reads via `host`;
+  /// binary bytes never cross as base64.
+  image: func(
+    config: json-bytes,
+    request: image-request,
+  ) -> result<image-response, plugin-error>;
+}
