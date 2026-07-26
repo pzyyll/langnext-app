@@ -4,7 +4,9 @@ use crate::domain::cancel::CancelToken;
 use crate::domain::provider::ProxyMode;
 use crate::domain::provider_http::{ProviderHttpMethod, ProviderHttpResponse};
 use crate::domain::service_capability::{CapabilityError, CapabilityErrorCode};
-use crate::domain::service_integration::{GoogleCloudConfigV1, ServiceIntegrationManifest};
+use crate::domain::service_integration::{
+  GOOGLE_TRANSLATE_WEB_PLUGIN_ID, GoogleCloudConfigV1, IntegrationInstance, ServiceIntegrationManifest,
+};
 use crate::error::StorageError;
 use crate::repositories::integration_instances;
 use crate::services::bounded_http::{
@@ -12,6 +14,7 @@ use crate::services::bounded_http::{
   build_endpoint, is_blocked_header, validate_caller_name, validate_relative_path, validate_request_id,
   value_looks_like_secret_key, with_cancel,
 };
+use crate::services::google_translate_web::{GOOGLE_WEB_PROXY_ENDPOINT_ALIAS, resolve_instance_proxy_origin};
 use crate::services::service_integration_registry::ServiceIntegrationRegistry;
 use crate::services::token_grant::TokenGrant;
 use crate::storage::Database;
@@ -162,8 +165,8 @@ impl NetworkBroker {
       ));
     }
 
-    let base_url = resolve_endpoint_alias(manifest, &request.endpoint_alias)?;
-    // Official Google origins are pinned by the manifest; never accept caller origins.
+    let base_url = resolve_endpoint_base(manifest, &instance, &request.endpoint_alias)?;
+    // Origins come from pinned manifest grants or instance-validated HTTPS proxy config only.
     let mut url = build_endpoint(&base_url, &request.relative_path).map_err(map_validation)?;
 
     for (name, value) in &request.query {
@@ -190,7 +193,15 @@ impl NetworkBroker {
       headers.insert(name.clone(), value.clone());
     }
 
-    if let Some(grant) = &request.auth {
+    // Zero-secret Google Web integrations never receive token grants or auth headers.
+    if instance.plugin_id == GOOGLE_TRANSLATE_WEB_PLUGIN_ID {
+      if request.auth.is_some() {
+        return Err(CapabilityError::new(
+          CapabilityErrorCode::PermissionDenied,
+          "Google Web integration cannot use token grants",
+        ));
+      }
+    } else if let Some(grant) = &request.auth {
       if grant.instance_id() != request.integration_instance_id {
         return Err(CapabilityError::new(
           CapabilityErrorCode::PermissionDenied,
@@ -245,6 +256,21 @@ fn resolve_endpoint_alias(manifest: &ServiceIntegrationManifest, alias: &str) ->
         format!("unknown endpoint alias '{alias}'"),
       )
     })
+}
+
+/// Resolve endpoint base URL from pinned manifest grants or instance-scoped HTTPS proxy config.
+fn resolve_endpoint_base(
+  manifest: &ServiceIntegrationManifest,
+  instance: &IntegrationInstance,
+  alias: &str,
+) -> Result<String, CapabilityError> {
+  // Capability already authorized the alias; still require it on the manifest.
+  let _pinned = resolve_endpoint_alias(manifest, alias)?;
+  if manifest.id == GOOGLE_TRANSLATE_WEB_PLUGIN_ID && alias == GOOGLE_WEB_PROXY_ENDPOINT_ALIAS {
+    // User-configured HTTPS origin class: validated proxy URL on this instance only.
+    return resolve_instance_proxy_origin(&instance.config_json);
+  }
+  resolve_endpoint_alias(manifest, alias)
 }
 
 fn resolve_proxy_mode(config_json: &str) -> ProxyMode {
