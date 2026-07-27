@@ -3,7 +3,7 @@
 use crate::cmds::runtime::run_blocking;
 use crate::domain::service_integration::{
   IntegrationDependencyDto, IntegrationInstanceDto, IntegrationInstanceWrite, IntegrationValidationResult,
-  ServiceIntegrationManifest,
+  ServiceIntegrationDefinitionDto,
 };
 use crate::error::IpcError;
 use crate::events::{SERVICE_INTEGRATIONS_CHANGED, emit_data_changed};
@@ -14,7 +14,7 @@ use uuid::Uuid;
 #[tauri::command]
 pub async fn list_service_integration_definitions(
   state: State<'_, AppState>,
-) -> Result<Vec<ServiceIntegrationManifest>, IpcError> {
+) -> Result<Vec<ServiceIntegrationDefinitionDto>, IpcError> {
   let services = state.service_integrations.clone();
   run_blocking("list_service_integration_definitions", move || {
     Ok(services.list_definitions())

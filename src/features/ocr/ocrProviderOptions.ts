@@ -1,17 +1,13 @@
-// ABOUTME: OCR provider catalog for add dialog logos and service list labels.
-// ABOUTME: Static Baidu/AI plus dynamic ocr.image@1 integration create options.
+// ABOUTME: OCR provider catalog for static Baidu/AI and schema-backed ocr.image integrations.
+// ABOUTME: Discovers capabilities and labels from sanitized registration metadata, never plugin-ID branches.
 import type { ComponentType, SVGProps } from "react";
-import type { IntegrationInstanceDto, OcrProviderType, ServiceIntegrationManifest } from "../../storage/types";
+import type { IntegrationInstanceDto, OcrProviderType, ServiceIntegrationDefinitionDto } from "../../storage/types";
 import BaiduIcon from "~icons/svgs/baiducloud";
 import AiIcon from "~icons/ri/ai";
-import GoogleCloudIcon from "~icons/svgs/google-cloud";
+import PluginIcon from "~icons/svgs/google-cloud";
 
-/** Image OCR capability major contract used by Google Cloud Vision. */
+/** Image OCR capability major contract used by bundled and future compatible plugins. */
 export const OCR_IMAGE_CAPABILITY_ID = "ocr.image@1";
-/** Google Vision OCR preferences schema version (operation + languageHints). */
-export const GOOGLE_VISION_PREFERENCES_SCHEMA_VERSION = 1;
-/** Max language hints accepted by ocr.image@1. */
-export const OCR_LANGUAGE_HINTS_MAX = 3;
 
 type OcrProviderIcon = ComponentType<SVGProps<SVGSVGElement>>;
 
@@ -23,41 +19,18 @@ export type OcrProviderOption = {
 
 /** Static built-in OCR providers (Baidu + AI). Integration options are built separately. */
 export const OCR_PROVIDER_OPTIONS: readonly OcrProviderOption[] = [
-  {
-    id: "baidu",
-    labelKey: "ocr.provider.baidu",
-    Icon: BaiduIcon,
-  },
-  {
-    id: "ai",
-    labelKey: "ocr.provider.ai",
-    Icon: AiIcon,
-  },
+  { id: "baidu", labelKey: "ocr.provider.baidu", Icon: BaiduIcon },
+  { id: "ai", labelKey: "ocr.provider.ai", Icon: AiIcon },
 ] as const;
 
 const OCR_PROVIDER_OPTION_BY_ID: ReadonlyMap<OcrProviderType, OcrProviderOption> = new Map([
   ...OCR_PROVIDER_OPTIONS.map((option) => [option.id, option] as const),
-  [
-    "plugin_capability",
-    {
-      id: "plugin_capability",
-      labelKey: "ocr.provider.plugin",
-      Icon: GoogleCloudIcon,
-    },
-  ],
+  ["plugin_capability", { id: "plugin_capability", labelKey: "ocr.provider.plugin", Icon: PluginIcon }],
 ]);
 
-/**
- * Resolve a static logo/label option for any provider type.
- * Plugin services use a generic Vision/plugin icon; never throws for plugin_capability.
- */
+/** Resolve a static logo/label option for any provider type without inferring a concrete plugin. */
 export function getOcrProviderOption(providerType: OcrProviderType): OcrProviderOption {
-  const option = OCR_PROVIDER_OPTION_BY_ID.get(providerType);
-  if (!option) {
-    // Unknown future types fall back to plugin presentation instead of crashing the rail.
-    return OCR_PROVIDER_OPTION_BY_ID.get("plugin_capability")!;
-  }
-  return option;
+  return OCR_PROVIDER_OPTION_BY_ID.get(providerType) ?? OCR_PROVIDER_OPTION_BY_ID.get("plugin_capability")!;
 }
 
 export type OcrProviderCreateOptionKind = "baidu" | "ai" | "plugin_capability";
@@ -74,12 +47,13 @@ export type OcrProviderCreateOption = {
   Icon: OcrProviderIcon;
 };
 
-/** Localized copy for dual-catalog option labels (instance names stay dynamic). */
+/** Localized copy for catalog labels; plugin names resolve from definition presentation metadata. */
 export type OcrProviderCreateOptionLabels = {
   baiduLabel: string;
   aiLabel: string;
   /** `{{plugin}}` and `{{name}}` placeholders. */
   integrationLabel: string;
+  resolvePluginLabel?: (definition: ServiceIntegrationDefinitionDto) => string;
 };
 
 const DEFAULT_CREATE_LABELS: OcrProviderCreateOptionLabels = {
@@ -92,60 +66,48 @@ function applyTemplate(template: string, vars: Record<string, string>): string {
   return template.replace(/\{\{(\w+)\}\}/g, (_, key: string) => vars[key] ?? "");
 }
 
-function pluginDisplayName(pluginId: string, definitionsById: Map<string, ServiceIntegrationManifest>): string {
+function pluginDisplayName(
+  pluginId: string,
+  definitionsById: ReadonlyMap<string, ServiceIntegrationDefinitionDto>,
+  resolvePluginLabel: ((definition: ServiceIntegrationDefinitionDto) => string) | undefined,
+): string {
   const definition = definitionsById.get(pluginId);
-  if (!definition) {
-    return pluginId;
-  }
-  const segments = pluginId.split(".");
-  const last = segments[segments.length - 1] ?? pluginId;
-  return last
-    .split("-")
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
+  return definition ? (resolvePluginLabel?.(definition) ?? definition.presentation.displayNameFallback) : pluginId;
 }
 
 function ocrCapabilityIdForPlugin(
   pluginId: string,
-  definitionsById: Map<string, ServiceIntegrationManifest>,
+  definitionsById: ReadonlyMap<string, ServiceIntegrationDefinitionDto>,
 ): string | null {
   const definition = definitionsById.get(pluginId);
   if (!definition) {
     return null;
   }
   return (
-    definition.capabilities.find((c) => c.id === OCR_IMAGE_CAPABILITY_ID)?.id ??
-    definition.capabilities.find((c) => c.id.startsWith("ocr.image@"))?.id ??
+    definition.capabilities.find((capability) => capability.id === OCR_IMAGE_CAPABILITY_ID)?.id ??
+    definition.capabilities.find((capability) => capability.id.startsWith("ocr.image@"))?.id ??
     null
   );
 }
 
 function isOcrCapable(
   instance: IntegrationInstanceDto,
-  definitionsById: Map<string, ServiceIntegrationManifest>,
+  definitionsById: ReadonlyMap<string, ServiceIntegrationDefinitionDto>,
 ): boolean {
-  if (ocrCapabilityIdForPlugin(instance.pluginId, definitionsById) != null) {
-    return true;
-  }
-  // Keep plugin-missing Google Cloud instances visible as disabled create options.
-  return instance.effectiveStatus === "plugin_missing" && instance.pluginId.includes("google-cloud");
+  return ocrCapabilityIdForPlugin(instance.pluginId, definitionsById) != null;
 }
 
-/**
- * Build deterministic create options: static Baidu/AI first, then OCR-capable integrations.
- * Integrations ordered by display name then id.
- */
+/** Build deterministic create options: static providers first, then OCR-capable integrations. */
 export function buildOcrProviderCreateOptions(input: {
   hasEnabledImageModel: boolean;
   modelsPending?: boolean;
   instances: readonly IntegrationInstanceDto[];
-  definitions: readonly ServiceIntegrationManifest[];
+  definitions: readonly ServiceIntegrationDefinitionDto[];
   labels?: OcrProviderCreateOptionLabels;
 }): OcrProviderCreateOption[] {
   const labels = input.labels ?? DEFAULT_CREATE_LABELS;
-  const definitionsById = new Map(input.definitions.map((d) => [d.id, d]));
+  const definitionsById = new Map(input.definitions.map((definition) => [definition.id, definition]));
   const modelsPending = input.modelsPending === true;
-
   const options: OcrProviderCreateOption[] = [
     {
       id: "baidu",
@@ -161,7 +123,6 @@ export function buildOcrProviderCreateOptions(input: {
       id: "ai",
       kind: "ai",
       label: labels.aiLabel,
-      // Models still loading: block create clicks until the list settles.
       disabled: modelsPending,
       integrationInstanceId: null,
       ocrCapabilityId: null,
@@ -173,29 +134,21 @@ export function buildOcrProviderCreateOptions(input: {
   const ocrInstances = input.instances
     .filter((instance) => isOcrCapable(instance, definitionsById))
     .slice()
-    .sort((a, b) => {
-      const byName = a.displayName.localeCompare(b.displayName);
-      if (byName !== 0) return byName;
-      return a.id.localeCompare(b.id);
-    });
+    .sort((left, right) => left.displayName.localeCompare(right.displayName) || left.id.localeCompare(right.id));
 
   for (const instance of ocrInstances) {
-    const pluginLabel = pluginDisplayName(instance.pluginId, definitionsById);
+    const pluginLabel = pluginDisplayName(instance.pluginId, definitionsById, labels.resolvePluginLabel);
     const ocrCapabilityId = ocrCapabilityIdForPlugin(instance.pluginId, definitionsById);
     const ready = instance.enabled && instance.effectiveStatus === "ready";
-
     options.push({
       id: `integration:${instance.id}`,
       kind: "plugin_capability",
-      label: applyTemplate(labels.integrationLabel, {
-        plugin: pluginLabel,
-        name: instance.displayName,
-      }),
+      label: applyTemplate(labels.integrationLabel, { plugin: pluginLabel, name: instance.displayName }),
       disabled: !ready,
       integrationInstanceId: instance.id,
       ocrCapabilityId,
       pluginId: instance.pluginId,
-      Icon: GoogleCloudIcon,
+      Icon: PluginIcon,
     });
   }
 
@@ -210,17 +163,14 @@ export function capabilityMajorKey(capabilityId: string): string | null {
   }
   const name = capabilityId.slice(0, at);
   const major = capabilityId.slice(at + 1);
-  if (!/^[0-9]+$/.test(major)) {
-    return null;
-  }
-  return `${name}@${major}`;
+  return /^[0-9]+$/.test(major) ? `${name}@${major}` : null;
 }
 
 /** True when two capability ids share name and major version. */
 export function capabilitiesMajorCompatible(left: string, right: string): boolean {
-  const a = capabilityMajorKey(left);
-  const b = capabilityMajorKey(right);
-  return a != null && b != null && a === b;
+  const leftKey = capabilityMajorKey(left);
+  const rightKey = capabilityMajorKey(right);
+  return leftKey != null && leftKey === rightKey;
 }
 
 export type OcrPluginRebindCandidate = {
@@ -230,55 +180,29 @@ export type OcrPluginRebindCandidate = {
   ready: boolean;
 };
 
-/**
- * Ready/enabled integration candidates compatible with a plugin OCR rebind.
- * Candidates must implement the same ocr.image capability major.
- */
+/** List integration candidates compatible with a bound OCR capability major. */
 export function listCompatibleOcrRebindCandidates(input: {
   currentInstanceId: string;
   ocrCapabilityId: string;
   instances: readonly IntegrationInstanceDto[];
-  definitions: readonly ServiceIntegrationManifest[];
-  labels?: Pick<OcrProviderCreateOptionLabels, "integrationLabel">;
+  definitions: readonly ServiceIntegrationDefinitionDto[];
+  labels?: Pick<OcrProviderCreateOptionLabels, "integrationLabel" | "resolvePluginLabel">;
 }): OcrPluginRebindCandidate[] {
   const integrationLabel = input.labels?.integrationLabel ?? DEFAULT_CREATE_LABELS.integrationLabel;
-  const definitionsById = new Map(input.definitions.map((d) => [d.id, d]));
+  const definitionsById = new Map(input.definitions.map((definition) => [definition.id, definition]));
   const candidates: OcrPluginRebindCandidate[] = [];
   for (const instance of input.instances) {
     const ocrCapabilityId = ocrCapabilityIdForPlugin(instance.pluginId, definitionsById);
-    if (!ocrCapabilityId) {
+    if (!ocrCapabilityId || !capabilitiesMajorCompatible(input.ocrCapabilityId, ocrCapabilityId)) {
       continue;
     }
-    if (!capabilitiesMajorCompatible(input.ocrCapabilityId, ocrCapabilityId)) {
-      continue;
-    }
-    const ready = instance.enabled && instance.effectiveStatus === "ready";
-    const pluginLabel = pluginDisplayName(instance.pluginId, definitionsById);
+    const pluginLabel = pluginDisplayName(instance.pluginId, definitionsById, input.labels?.resolvePluginLabel);
     candidates.push({
       id: instance.id,
-      label: applyTemplate(integrationLabel, {
-        plugin: pluginLabel,
-        name: instance.displayName,
-      }),
+      label: applyTemplate(integrationLabel, { plugin: pluginLabel, name: instance.displayName }),
       ocrCapabilityId,
-      ready,
+      ready: instance.enabled && instance.effectiveStatus === "ready",
     });
   }
-  candidates.sort((a, b) => {
-    const byLabel = a.label.localeCompare(b.label);
-    if (byLabel !== 0) return byLabel;
-    return a.id.localeCompare(b.id);
-  });
-  return candidates;
-}
-
-/** Default plugin OCR preferences for schema v1. */
-export function defaultGoogleVisionPreferences(): {
-  operation: "document_text_detection";
-  languageHints: string[];
-} {
-  return {
-    operation: "document_text_detection",
-    languageHints: [],
-  };
+  return candidates.sort((left, right) => left.label.localeCompare(right.label) || left.id.localeCompare(right.id));
 }

@@ -12,11 +12,16 @@ import { useToast } from "../../components/toast/useToast";
 import { outlineButtonClassName } from "../../components/ui";
 import { cn } from "../../lib/cn";
 import { settingsKeys, speechKeys } from "../../query/keys";
-import { appSettingsOptions, integrationListOptions, speechListOptions } from "../../query/options";
+import {
+  appSettingsOptions,
+  integrationDefinitionListOptions,
+  integrationListOptions,
+  speechListOptions,
+} from "../../query/options";
 import { setAppDefaultSpeechService } from "../../storage/client";
 import { getIpcErrorMessage } from "../../storage/errors";
 import type { AppSettingsDto, SpeechServiceDto } from "../../storage/types";
-import { EDGE_TTS_PLUGIN_ID, GOOGLE_CLOUD_PLUGIN_ID } from "../../storage/types";
+import { resolvePluginDisplayName } from "../plugins/pluginPresentation";
 import { AddSpeechServiceDialog } from "./AddSpeechServiceDialog";
 import { SpeechContext } from "./SpeechContext";
 import { getSpeechProviderIcon } from "./speechProviderOptions";
@@ -37,6 +42,7 @@ export function SpeechLayout() {
   const servicesQuery = useQuery(speechListOptions());
   const settingsQuery = useQuery(appSettingsOptions());
   const integrationsQuery = useQuery(integrationListOptions());
+  const definitionsQuery = useQuery(integrationDefinitionListOptions());
   const services = useMemo(() => servicesQuery.data ?? [], [servicesQuery.data]);
   const integrationById = useMemo(() => {
     const map = new Map<string, { displayName: string; pluginId: string }>();
@@ -45,6 +51,10 @@ export function SpeechLayout() {
     }
     return map;
   }, [integrationsQuery.data]);
+  const definitionsById = useMemo(
+    () => new Map((definitionsQuery.data ?? []).map((definition) => [definition.id, definition])),
+    [definitionsQuery.data],
+  );
   const loading = servicesQuery.isLoading;
   const error = servicesQuery.error != null ? getIpcErrorMessage(servicesQuery.error, t("speech.loadFailed")) : null;
 
@@ -96,16 +106,6 @@ export function SpeechLayout() {
 
   const defaultSpeechSelectId = "speech-default";
   const defaultSelectDisabled = setDefaultSpeechMutation.isPending || settingsQuery.isLoading || services.length === 0;
-
-  function pluginDisplayName(pluginId: string): string {
-    if (pluginId === GOOGLE_CLOUD_PLUGIN_ID) {
-      return t("plugins.googleCloud.name");
-    }
-    if (pluginId === EDGE_TTS_PLUGIN_ID) {
-      return t("plugins.edgeTts.name");
-    }
-    return pluginId;
-  }
 
   return (
     <SpeechContext.Provider value={contextValue}>
@@ -180,14 +180,15 @@ export function SpeechLayout() {
                   const active = service.id === selectedId;
                   const integration = integrationById.get(service.integrationInstanceId);
                   const integrationName = integration?.displayName ?? t("speech.provider.pluginUnknownInstance");
-                  const pluginName = integration
-                    ? pluginDisplayName(integration.pluginId)
+                  const definition = integration ? definitionsById.get(integration.pluginId) : undefined;
+                  const pluginName = definition
+                    ? resolvePluginDisplayName(definition, (key, options) => t(key, options))
                     : t("speech.provider.pluginUnknownInstance");
                   const providerLabel = t("speech.provider.pluginNamed", {
                     plugin: pluginName,
                     name: integrationName,
                   });
-                  const ProviderIcon = getSpeechProviderIcon(integration?.pluginId);
+                  const ProviderIcon = getSpeechProviderIcon();
                   return (
                     <li key={service.id} role="option" aria-selected={active}>
                       <Link

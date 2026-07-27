@@ -12,7 +12,7 @@ use crate::domain::service_integration::{
 use crate::error::StorageError;
 use crate::repositories::{integration_credential_bindings, integration_instances};
 use crate::services::bounded_http::{
-  PreparedHttpRequest, RawHttpTransport, ReqwestRawHttpTransport, build_endpoint, with_cancel,
+  DestinationPolicy, PreparedHttpRequest, RawHttpTransport, ReqwestRawHttpTransport, build_endpoint, with_cancel,
 };
 use crate::services::token_grant::{ExchangedToken, GoogleTokenExchanger};
 use crate::storage::Database;
@@ -282,12 +282,15 @@ async fn exchange_jwt_for_token(
     body: Some(body),
     content_type: Some("application/x-www-form-urlencoded".into()),
     proxy_mode,
+    destination_policy: DestinationPolicy::PublicInternet,
     max_response_body_bytes: Some(16 * 1024),
     timeout: None,
   };
 
   let response = with_cancel(cancel, transport.request(prepared))
     .await
+    .map_err(map_http_error_to_capability)?
+    .into_provider_http_response()
     .map_err(map_http_error_to_capability)?;
   classify_oauth_response(response)
 }
@@ -376,9 +379,7 @@ fn map_http_error_to_capability(err: StorageError) -> CapabilityError {
     StorageError::Validation(msg) if msg.contains("timed out") => {
       CapabilityError::new(CapabilityErrorCode::Timeout, "request timed out")
     }
-    StorageError::Validation(msg) if msg.contains("network") => {
-      CapabilityError::new(CapabilityErrorCode::Network, "network request failed")
-    }
+    StorageError::Validation(msg) if msg.contains("network") => CapabilityError::new(CapabilityErrorCode::Network, msg),
     other => map_storage_to_capability(other),
   }
 }
@@ -392,6 +393,7 @@ mod tests {
     GOOGLE_CLOUD_DEFAULT_LOCATION, IntegrationCredentialBinding, IntegrationHealthStatus, IntegrationInstance,
   };
   use crate::domain::time::{new_id, now_rfc3339};
+  use crate::services::bounded_http::BoundedHttpResponse;
   use crate::services::service_integration_registry::ServiceIntegrationRegistry;
   use crate::services::token_grant::{
     GOOGLE_OAUTH_AUDIENCE_POLICY_ID, GOOGLE_SERVICE_ACCOUNT_AUTH_DRIVER_ID, TokenGrantRequest, TokenGrantService,
@@ -492,7 +494,7 @@ F91NhBYyyc/NJWl83dBkI/I=
   }
 
   struct ScriptedTransport {
-    responses: Mutex<Vec<Result<ProviderHttpResponse, StorageError>>>,
+    responses: Mutex<Vec<Result<BoundedHttpResponse, StorageError>>>,
     last_body: Mutex<Option<String>>,
   }
 
@@ -500,7 +502,7 @@ F91NhBYyyc/NJWl83dBkI/I=
     fn request(
       &self,
       prepared: PreparedHttpRequest,
-    ) -> Pin<Box<dyn Future<Output = Result<ProviderHttpResponse, StorageError>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = Result<BoundedHttpResponse, StorageError>> + Send + '_>> {
       Box::pin(async move {
         *self.last_body.lock().unwrap() = prepared.body.clone();
         self
@@ -519,6 +521,14 @@ F91NhBYyyc/NJWl83dBkI/I=
       _on_event: Box<dyn Fn(ProviderHttpStreamEvent) -> Result<(), StorageError> + Send>,
     ) -> Pin<Box<dyn Future<Output = Result<(), StorageError>> + Send + '_>> {
       Box::pin(async { Err(StorageError::Validation("stream not supported".into())) })
+    }
+  }
+
+  fn response(status: u16, body: &str) -> BoundedHttpResponse {
+    BoundedHttpResponse {
+      status,
+      headers: HashMap::new(),
+      body: body.as_bytes().to_vec(),
     }
   }
 
@@ -579,11 +589,7 @@ F91NhBYyyc/NJWl83dBkI/I=
     let vault = Arc::new(MemoryCredentialVault::new());
     let id = seed_instance(&db, vault.as_ref(), &valid_sa_json());
     let transport = Arc::new(ScriptedTransport {
-      responses: Mutex::new(vec![Ok(ProviderHttpResponse {
-        status: 401,
-        headers: HashMap::new(),
-        body: r#"{"error":"invalid_grant"}"#.into(),
-      })]),
+      responses: Mutex::new(vec![Ok(response(401, r#"{"error":"invalid_grant"}"#))]),
       last_body: Mutex::new(None),
     });
     let exchanger = GoogleServiceAccountExchanger::with_transport(db, vault, transport);
@@ -611,11 +617,10 @@ F91NhBYyyc/NJWl83dBkI/I=
     let vault = Arc::new(MemoryCredentialVault::new());
     let id = seed_instance(&db, vault.as_ref(), &valid_sa_json());
     let transport = Arc::new(ScriptedTransport {
-      responses: Mutex::new(vec![Ok(ProviderHttpResponse {
-        status: 200,
-        headers: HashMap::new(),
-        body: r#"{"access_token":"ya29.test","expires_in":3600,"token_type":"Bearer"}"#.into(),
-      })]),
+      responses: Mutex::new(vec![Ok(response(
+        200,
+        r#"{"access_token":"ya29.test","expires_in":3600,"token_type":"Bearer"}"#,
+      ))]),
       last_body: Mutex::new(None),
     });
     let exchanger = Arc::new(GoogleServiceAccountExchanger::with_transport(

@@ -41,7 +41,7 @@ url = "2"
 semver = "1"
 tempfile = "3.27.0"
 reqwest = { version = "0.13", features = ["json", "form"] }
-tokio = { version = "1", default-features = false, features = ["macros", "sync", "time"] }
+tokio = { version = "1", default-features = false, features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
 base64 = "0.22"
 # Google service-account JWT assertions (RS256 + PEM). rust_crypto backend avoids native OpenSSL.
 jsonwebtoken = { version = "10.4.0", features = ["rust_crypto"] }

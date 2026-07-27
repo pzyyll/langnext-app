@@ -6,28 +6,18 @@ use crate::domain::cancel::CancelToken;
 use crate::domain::provider::CredentialUpdate;
 use crate::domain::service_capability::{CAPABILITY_DEFAULT_TIMEOUT, CapabilityErrorCode};
 use crate::domain::service_integration::{
-  CredentialSlotStatusDto, EDGE_TTS_PLUGIN_ID, GOOGLE_CLOUD_DEFAULT_LOCATION, GOOGLE_CLOUD_PLUGIN_ID,
-  GOOGLE_CLOUD_SERVICE_ACCOUNT_SLOT, GOOGLE_OAUTH_TOKEN_URI, GOOGLE_TRANSLATE_WEB_PLUGIN_ID, GoogleCloudConfigV1,
-  INTEGRATION_CONFIG_JSON_MAX_LEN, INTEGRATION_DISPLAY_NAME_MAX_LEN, IntegrationDependencyDto, IntegrationHealthStatus,
-  IntegrationInstance, IntegrationInstanceDto, IntegrationInstanceWrite, IntegrationValidationResult,
-  SERVICE_ACCOUNT_JSON_MAX_LEN, ServiceIntegrationManifest, derive_effective_status, validate_plugin_id,
-  validate_slot_id,
+  CredentialSlotStatusDto, INTEGRATION_CONFIG_JSON_MAX_LEN, INTEGRATION_DISPLAY_NAME_MAX_LEN, IntegrationDependencyDto,
+  IntegrationHealthStatus, IntegrationInstance, IntegrationInstanceDto, IntegrationInstanceWrite,
+  IntegrationValidationResult, SERVICE_ACCOUNT_JSON_MAX_LEN, ServiceIntegrationDefinitionDto,
+  ServiceIntegrationManifest, derive_effective_status, validate_plugin_id, validate_slot_id,
 };
 use crate::domain::time::{new_id, now_rfc3339};
 use crate::error::StorageError;
 use crate::repositories::credential_operations::{self, CredentialOperation, OwnerKind};
 use crate::repositories::{integration_credential_bindings, integration_instances};
-use crate::services::edge_tts::{edge_tts_config_complete, validate_edge_tts_config};
-use crate::services::google_translate_web::{
-  google_translate_web_config_complete, validate_google_translate_web_config,
-};
 use crate::services::service_integration_registry::ServiceIntegrationRegistry;
-use crate::services::token_grant::{
-  GOOGLE_CLOUD_TRANSLATION_SCOPE, GOOGLE_OAUTH_AUDIENCE_POLICY_ID, GOOGLE_SERVICE_ACCOUNT_AUTH_DRIVER_ID, TokenGrant,
-  TokenGrantRequest, TokenGrantService,
-};
+use crate::services::token_grant::{TokenGrant, TokenGrantRequest, TokenGrantService};
 use crate::storage::Database;
-use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -92,7 +82,7 @@ impl ServiceIntegrationService {
     self
   }
 
-  pub fn list_definitions(&self) -> Vec<ServiceIntegrationManifest> {
+  pub fn list_definitions(&self) -> Vec<ServiceIntegrationDefinitionDto> {
     self.registry.list_definitions()
   }
 
@@ -212,14 +202,18 @@ impl ServiceIntegrationService {
       });
     }
 
-    let manifest = self
+    let registration = self
       .registry
-      .get(&instance.plugin_id)
+      .get_registration(&instance.plugin_id)
       .ok_or_else(|| StorageError::PluginUnavailable(instance.plugin_id.clone()))?;
+    let manifest = &registration.manifest;
 
     let has_required_credentials = required_slots_satisfied(manifest, &bindings);
-    let config_ok = validate_config_for_plugin(manifest, &instance.config_json).is_ok()
-      && plugin_config_complete(manifest, &instance.config_json);
+    let config_ok = registration
+      .config_adapter
+      .normalize_config(&instance.config_json)
+      .is_ok()
+      && registration.config_adapter.config_ready(&instance.config_json);
 
     if !config_ok || !has_required_credentials {
       self.persist_validation_health(id, IntegrationHealthStatus::Unconfigured, Some("invalid_configuration"))?;
@@ -233,8 +227,8 @@ impl ServiceIntegrationService {
       });
     }
 
-    // Zero-secret Google Web instances are ready from local config alone — no token grant.
-    if is_zero_secret_ready_plugin(manifest) {
+    // Credential-free integrations are ready from local config alone - no token grant.
+    if !registration.requires_remote_auth() {
       self.persist_validation_health(id, IntegrationHealthStatus::Ready, None)?;
       let refreshed = self.get_instance(id)?;
       return Ok(IntegrationValidationResult {
@@ -251,6 +245,11 @@ impl ServiceIntegrationService {
     let credential_snapshot = snapshot_required_credentials(manifest, &bindings);
 
     // Remote validation: acquire a token only (no user text, no Translate/Detect call).
+    // Auth driver/policy/scope come from the registration's host-owned auth-policy binding.
+    let auth = registration
+      .auth_policy
+      .as_ref()
+      .ok_or_else(|| StorageError::Validation("remote validation requested for a credential-free plugin".into()))?;
     let cancel = CancelToken::new();
     // biased + acquire-first: when acquire and timeout are both ready, prefer the real result.
     let grant_result = tokio::select! {
@@ -259,9 +258,9 @@ impl ServiceIntegrationService {
         TokenGrantRequest {
           instance_id: id,
           capability_id: "translate.text@1".into(),
-          auth_driver_id: GOOGLE_SERVICE_ACCOUNT_AUTH_DRIVER_ID.into(),
-          scopes: vec![GOOGLE_CLOUD_TRANSLATION_SCOPE.into()],
-          audience_policy_id: GOOGLE_OAUTH_AUDIENCE_POLICY_ID.into(),
+          auth_driver_id: auth.auth_driver_id.clone(),
+          scopes: auth.scopes.clone(),
+          audience_policy_id: auth.audience_policy_id.clone(),
         },
         Some(&cancel),
       ) => Ok(result),
@@ -281,8 +280,11 @@ impl ServiceIntegrationService {
     })?;
 
     let current_has_required = required_slots_satisfied(manifest, &current_bindings);
-    let current_config_ok = validate_config_for_plugin(manifest, &current.config_json).is_ok()
-      && plugin_config_complete(manifest, &current.config_json);
+    let current_config_ok = registration
+      .config_adapter
+      .normalize_config(&current.config_json)
+      .is_ok()
+      && registration.config_adapter.config_ready(&current.config_json);
 
     if !current_config_ok || !current_has_required {
       self.persist_validation_health(id, IntegrationHealthStatus::Unconfigured, Some("invalid_configuration"))?;
@@ -300,14 +302,14 @@ impl ServiceIntegrationService {
     if current_snapshot != credential_snapshot {
       // New secret / cleared-then-restored identity: never apply health from the old grant.
       // Persist via transactional recheck so a concurrent Clear cannot be stamped Unvalidated.
-      return self.finish_stale_remote_validation(id, manifest, &credential_snapshot);
+      return self.finish_stale_remote_validation(id, registration, &credential_snapshot);
     }
 
     let (health, error_code, message) = match grant_result {
       Ok(Ok(grant)) => {
         // Exchange must report the same revision that was snapshotted / still current.
         if !grant_matches_credential_snapshot(&grant, &credential_snapshot) {
-          return self.finish_stale_remote_validation(id, manifest, &credential_snapshot);
+          return self.finish_stale_remote_validation(id, registration, &credential_snapshot);
         }
         (
           IntegrationHealthStatus::Ready,
@@ -332,7 +334,13 @@ impl ServiceIntegrationService {
 
     // Write remote health only while required credential identity still matches the snapshot.
     // Concurrent rename/enable retries CAS; concurrent replace/clear discards this result.
-    match self.persist_remote_validation_health(id, manifest, &credential_snapshot, health, error_code.as_deref())? {
+    match self.persist_remote_validation_health(
+      id,
+      registration,
+      &credential_snapshot,
+      health,
+      error_code.as_deref(),
+    )? {
       RemoteValidationPersist::Applied => {}
       RemoteValidationPersist::Unconfigured => {
         let refreshed = self.get_instance(id)?;
@@ -372,12 +380,12 @@ impl ServiceIntegrationService {
   fn finish_stale_remote_validation(
     &self,
     id: Uuid,
-    manifest: &ServiceIntegrationManifest,
+    registration: &crate::services::bundled_plugins::BundledPluginRegistration,
     expected: &[RequiredCredentialSnapshot],
   ) -> Result<IntegrationValidationResult, StorageError> {
     let decision = self.persist_remote_validation_health(
       id,
-      manifest,
+      registration,
       expected,
       IntegrationHealthStatus::Unvalidated,
       Some("credentials_changed"),
@@ -439,11 +447,12 @@ impl ServiceIntegrationService {
   fn persist_remote_validation_health(
     &self,
     id: Uuid,
-    manifest: &ServiceIntegrationManifest,
+    registration: &crate::services::bundled_plugins::BundledPluginRegistration,
     expected: &[RequiredCredentialSnapshot],
     health: IntegrationHealthStatus,
     error_code: Option<&str>,
   ) -> Result<RemoteValidationPersist, StorageError> {
+    let manifest = &registration.manifest;
     let mut attempt = 0u32;
     loop {
       attempt += 1;
@@ -452,8 +461,11 @@ impl ServiceIntegrationService {
         let current = integration_instances::get(uow.conn(), id)?;
         let bindings = integration_credential_bindings::list_for_instance(uow.conn(), id)?;
         let has_required = required_slots_satisfied(manifest, &bindings);
-        let config_ok = validate_config_for_plugin(manifest, &current.config_json).is_ok()
-          && plugin_config_complete(manifest, &current.config_json);
+        let config_ok = registration
+          .config_adapter
+          .normalize_config(&current.config_json)
+          .is_ok()
+          && registration.config_adapter.config_ready(&current.config_json);
 
         let (decision, write_health, write_code) = if !config_ok || !has_required {
           (
@@ -494,20 +506,21 @@ impl ServiceIntegrationService {
   fn create(&self, input: IntegrationInstanceWrite) -> Result<IntegrationInstanceDto, StorageError> {
     let plugin_id = input.plugin_id.trim().to_string();
     validate_plugin_id(&plugin_id).map_err(StorageError::Validation)?;
-    let manifest = self
+    let registration = self
       .registry
-      .get(&plugin_id)
+      .get_registration(&plugin_id)
       .ok_or_else(|| StorageError::PluginUnavailable(plugin_id.clone()))?
       .clone();
+    let manifest = &registration.manifest;
 
     let display_name = validate_display_name(&input.display_name)?;
-    let config_json = normalize_and_validate_config(&manifest, &input.config_json)?;
-    let credential_map = collect_credential_updates(&input, &manifest)?;
+    let config_json = normalize_and_validate_config(&registration, &input.config_json)?;
+    let credential_map = collect_credential_updates(&input, manifest)?;
 
     // Pre-validate replace payloads before any vault write.
     for slot in &manifest.credential_slots {
       if let Some(CredentialUpdate::Replace(secret)) = credential_map.get(&slot.id) {
-        validate_slot_secret(&manifest, &slot.id, secret)?;
+        validate_slot_secret(&registration, &slot.id, secret)?;
       } else if slot.required {
         // Create without required secret → unconfigured (allowed).
       }
@@ -543,7 +556,7 @@ impl ServiceIntegrationService {
       }
     }
 
-    let health = compute_local_health(&manifest, &config_json, &slot_refs);
+    let health = compute_local_health(&registration, &config_json, &slot_refs);
     let instance = IntegrationInstance {
       id,
       plugin_id: manifest.id.clone(),
@@ -617,16 +630,17 @@ impl ServiceIntegrationService {
 
     // Missing plugin: retain instance and block execution. set_enabled remains available for
     // metadata disable without a manifest. Full save requires the definition for schema/slots.
-    let manifest = match self.registry.get(&existing.plugin_id) {
-      Some(m) => m.clone(),
+    let registration = match self.registry.get_registration(&existing.plugin_id) {
+      Some(r) => r.clone(),
       None => {
         return Err(StorageError::PluginUnavailable(existing.plugin_id.clone()));
       }
     };
+    let manifest = &registration.manifest;
 
     let display_name = validate_display_name(&input.display_name)?;
-    let config_json = normalize_and_validate_config(&manifest, &input.config_json)?;
-    let credential_map = collect_credential_updates(&input, &manifest)?;
+    let config_json = normalize_and_validate_config(&registration, &input.config_json)?;
+    let credential_map = collect_credential_updates(&input, manifest)?;
 
     let existing_bindings = self
       .db
@@ -636,7 +650,7 @@ impl ServiceIntegrationService {
     // Validate replace secrets before any vault or journal work.
     for slot in &manifest.credential_slots {
       if let Some(CredentialUpdate::Replace(secret)) = credential_map.get(&slot.id) {
-        validate_slot_secret(&manifest, &slot.id, secret)?;
+        validate_slot_secret(&registration, &slot.id, secret)?;
       }
     }
 
@@ -731,7 +745,7 @@ impl ServiceIntegrationService {
         }
       }
     }
-    let health = compute_local_health(&manifest, &config_json, &final_refs);
+    let health = compute_local_health(&registration, &config_json, &final_refs);
     let now = now_rfc3339();
 
     let commit = self.db.transaction(|uow| {
@@ -930,7 +944,7 @@ fn collect_credential_updates(
 }
 
 fn normalize_and_validate_config(
-  manifest: &ServiceIntegrationManifest,
+  registration: &crate::services::bundled_plugins::BundledPluginRegistration,
   config_json: &str,
 ) -> Result<String, StorageError> {
   if config_json.len() > INTEGRATION_CONFIG_JSON_MAX_LEN {
@@ -938,77 +952,11 @@ fn normalize_and_validate_config(
       "config_json exceeds {INTEGRATION_CONFIG_JSON_MAX_LEN} bytes"
     )));
   }
-  validate_config_for_plugin(manifest, config_json)
-}
-
-fn validate_config_for_plugin(
-  manifest: &ServiceIntegrationManifest,
-  config_json: &str,
-) -> Result<String, StorageError> {
-  if manifest.id == GOOGLE_CLOUD_PLUGIN_ID {
-    return validate_google_cloud_config(config_json);
-  }
-  if manifest.id == GOOGLE_TRANSLATE_WEB_PLUGIN_ID {
-    return validate_google_translate_web_config(config_json);
-  }
-  if manifest.id == EDGE_TTS_PLUGIN_ID {
-    return validate_edge_tts_config(config_json);
-  }
-  // Unknown plugins should not reach here when registry is authoritative.
-  Err(StorageError::PluginUnavailable(manifest.id.clone()))
-}
-
-fn validate_google_cloud_config(config_json: &str) -> Result<String, StorageError> {
-  let value: Value =
-    serde_json::from_str(config_json).map_err(|_| StorageError::Validation("config_json must be valid JSON".into()))?;
-  let obj = value
-    .as_object()
-    .ok_or_else(|| StorageError::Validation("config_json must be an object".into()))?;
-
-  // Reject custom base URL / proxy endpoint fields.
-  for forbidden in [
-    "baseUrl",
-    "base_url",
-    "proxyUrl",
-    "proxy_url",
-    "endpoint",
-    "customEndpoint",
-  ] {
-    if obj.contains_key(forbidden) {
-      return Err(StorageError::Validation(format!(
-        "Google Cloud config rejects custom field `{forbidden}`"
-      )));
-    }
-  }
-
-  let mut config: GoogleCloudConfigV1 =
-    serde_json::from_value(value).map_err(|e| StorageError::Validation(format!("invalid Google Cloud config: {e}")))?;
-
-  config.project_id = config.project_id.trim().to_string();
-  config.location = {
-    let loc = config.location.trim();
-    if loc.is_empty() {
-      GOOGLE_CLOUD_DEFAULT_LOCATION.to_string()
-    } else {
-      loc.to_string()
-    }
-  };
-
-  // Empty project_id is allowed and yields health_status = unconfigured.
-  if config.project_id.len() > 128 {
-    return Err(StorageError::Validation("project_id exceeds 128 characters".into()));
-  }
-  if config.location.len() > 64 {
-    return Err(StorageError::Validation("location exceeds 64 characters".into()));
-  }
-  // ProxyMode only inherit | direct (enum already enforces).
-  let _ = config.proxy_mode.as_str();
-
-  serde_json::to_string(&config).map_err(StorageError::from)
+  registration.config_adapter.normalize_config(config_json)
 }
 
 fn validate_slot_secret(
-  manifest: &ServiceIntegrationManifest,
+  registration: &crate::services::bundled_plugins::BundledPluginRegistration,
   slot_id: &str,
   secret: &str,
 ) -> Result<(), StorageError> {
@@ -1020,52 +968,10 @@ fn validate_slot_secret(
   if secret.trim().is_empty() {
     return Err(StorageError::Validation("credential value is required".into()));
   }
-  if manifest.id == GOOGLE_CLOUD_PLUGIN_ID && slot_id == GOOGLE_CLOUD_SERVICE_ACCOUNT_SLOT {
-    return validate_service_account_json(secret);
+  match registration.credential_validators.get(slot_id) {
+    Some(validator) => validator.validate(secret),
+    None => Ok(()),
   }
-  Ok(())
-}
-
-fn validate_service_account_json(secret: &str) -> Result<(), StorageError> {
-  let value: Value = serde_json::from_str(secret)
-    .map_err(|_| StorageError::Validation("service-account credential must be valid JSON".into()))?;
-  let obj = value
-    .as_object()
-    .ok_or_else(|| StorageError::Validation("service-account credential must be a JSON object".into()))?;
-
-  let client_email = obj
-    .get("client_email")
-    .and_then(|v| v.as_str())
-    .map(str::trim)
-    .filter(|s| !s.is_empty());
-  if client_email.is_none() {
-    return Err(StorageError::Validation(
-      "service-account JSON requires client_email".into(),
-    ));
-  }
-
-  let private_key = obj
-    .get("private_key")
-    .and_then(|v| v.as_str())
-    .map(str::trim)
-    .filter(|s| !s.is_empty());
-  if private_key.is_none() {
-    return Err(StorageError::Validation(
-      "service-account JSON requires private_key".into(),
-    ));
-  }
-
-  let token_uri = obj
-    .get("token_uri")
-    .and_then(|v| v.as_str())
-    .map(str::trim)
-    .unwrap_or("");
-  if token_uri != GOOGLE_OAUTH_TOKEN_URI {
-    return Err(StorageError::Validation(format!(
-      "service-account JSON requires token_uri = {GOOGLE_OAUTH_TOKEN_URI}"
-    )));
-  }
-  Ok(())
 }
 
 fn required_slots_satisfied(
@@ -1118,13 +1024,12 @@ fn grant_matches_credential_snapshot(grant: &TokenGrant, snapshot: &[RequiredCre
 }
 
 fn compute_local_health(
-  manifest: &ServiceIntegrationManifest,
+  registration: &crate::services::bundled_plugins::BundledPluginRegistration,
   config_json: &str,
   slot_refs: &HashMap<String, Option<String>>,
 ) -> IntegrationHealthStatus {
-  let config_ok =
-    validate_config_for_plugin(manifest, config_json).is_ok() && plugin_config_complete(manifest, config_json);
-  let credentials_ok = manifest.credential_slots.iter().all(|slot| {
+  let config_ok = registration.config_adapter.config_ready(config_json);
+  let credentials_ok = registration.manifest.credential_slots.iter().all(|slot| {
     if !slot.required {
       return true;
     }
@@ -1132,37 +1037,12 @@ fn compute_local_health(
   });
   if !config_ok || !credentials_ok {
     IntegrationHealthStatus::Unconfigured
-  } else if is_zero_secret_ready_plugin(manifest) {
+  } else if !registration.requires_remote_auth() {
     // Credential-free integrations become Ready from local config alone.
     IntegrationHealthStatus::Ready
   } else {
     // Credential-bearing integrations stay Unvalidated until remote token grant succeeds.
     IntegrationHealthStatus::Unvalidated
-  }
-}
-
-fn is_zero_secret_ready_plugin(manifest: &ServiceIntegrationManifest) -> bool {
-  manifest.credential_slots.is_empty()
-    && (manifest.id == GOOGLE_TRANSLATE_WEB_PLUGIN_ID || manifest.id == EDGE_TTS_PLUGIN_ID)
-}
-
-fn plugin_config_complete(manifest: &ServiceIntegrationManifest, config_json: &str) -> bool {
-  if manifest.id == GOOGLE_CLOUD_PLUGIN_ID {
-    return google_cloud_config_complete(config_json);
-  }
-  if manifest.id == GOOGLE_TRANSLATE_WEB_PLUGIN_ID {
-    return google_translate_web_config_complete(config_json);
-  }
-  if manifest.id == EDGE_TTS_PLUGIN_ID {
-    return edge_tts_config_complete(config_json);
-  }
-  true
-}
-
-fn google_cloud_config_complete(config_json: &str) -> bool {
-  match serde_json::from_str::<GoogleCloudConfigV1>(config_json) {
-    Ok(config) => !config.project_id.trim().is_empty() && !config.location.trim().is_empty(),
-    Err(_) => false,
   }
 }
 
@@ -1172,10 +1052,14 @@ mod tests {
   use crate::credentials::{FailingCredentialVault, MemoryCredentialVault};
   use crate::domain::provider::ProxyMode;
   use crate::domain::service_capability::{CapabilityError, CapabilityErrorCode};
-  use crate::domain::service_integration::{IntegrationEffectiveStatus, IntegrationSlotCredentialWrite};
-  use crate::services::google_cloud::{GOOGLE_TRANSLATE_TEXT_CAPABILITY_ID, GoogleCloudCapabilities};
+  use crate::domain::service_integration::{
+    EDGE_TTS_PLUGIN_ID, GOOGLE_CLOUD_DEFAULT_LOCATION, GOOGLE_CLOUD_PLUGIN_ID, GOOGLE_CLOUD_SERVICE_ACCOUNT_SLOT,
+    GOOGLE_OAUTH_TOKEN_URI, GOOGLE_TRANSLATE_WEB_PLUGIN_ID, GoogleCloudConfigV1, IntegrationEffectiveStatus,
+    IntegrationSlotCredentialWrite,
+  };
+  use crate::services::google_cloud::GOOGLE_TRANSLATE_TEXT_CAPABILITY_ID;
   use crate::services::network_broker::NetworkBroker;
-  use crate::services::service_capabilities::{ServiceCapabilityRegistry, ServiceCapabilityService};
+  use crate::services::service_capabilities::ServiceCapabilityService;
   use crate::services::token_grant::{ExchangedToken, GoogleTokenExchanger};
   use std::future::Future;
   use std::path::Path;
@@ -1296,8 +1180,17 @@ mod tests {
     let defs = Arc::new(ServiceIntegrationRegistry::bundled().unwrap());
     let network = Arc::new(NetworkBroker::new(db.clone(), defs.clone()));
     let tokens = Arc::new(TokenGrantService::new(Arc::new(StubTokenExchanger { fail: false })));
-    let google = Arc::new(GoogleCloudCapabilities::new(db.clone(), network, tokens));
-    let handlers = Arc::new(ServiceCapabilityRegistry::with_google_cloud(google));
+    let handlers = Arc::new(
+      crate::services::bundled_plugins::build_capability_registry(
+        crate::services::bundled_plugins::HandlerDeps {
+          db: db.clone(),
+          broker: network,
+          tokens,
+        },
+        &defs,
+      )
+      .unwrap(),
+    );
     ServiceCapabilityService::new(db, defs, handlers)
   }
 
@@ -1782,12 +1675,17 @@ mod tests {
   fn service_integration_stale_discard_keeps_unconfigured_after_clear() {
     let (_d, service, _vault) = setup();
     let created = service.save(write_create(true)).unwrap();
-    let manifest = service.registry.get(GOOGLE_CLOUD_PLUGIN_ID).unwrap().clone();
+    let registration = service
+      .registry
+      .get_registration(GOOGLE_CLOUD_PLUGIN_ID)
+      .unwrap()
+      .clone();
+    let manifest = &registration.manifest;
     let bindings = service
       .db
       .read(|conn| integration_credential_bindings::list_for_instance(conn, created.id))
       .unwrap();
-    let snapshot = snapshot_required_credentials(&manifest, &bindings);
+    let snapshot = snapshot_required_credentials(manifest, &bindings);
 
     let cleared = service
       .save(IntegrationInstanceWrite {
@@ -1807,7 +1705,7 @@ mod tests {
 
     // Simulate credentials_changed / grant-revision early discard after a concurrent Clear.
     let result = service
-      .finish_stale_remote_validation(created.id, &manifest, &snapshot)
+      .finish_stale_remote_validation(created.id, &registration, &snapshot)
       .unwrap();
     assert_eq!(result.health_status, IntegrationHealthStatus::Unconfigured);
     assert_eq!(
@@ -1824,12 +1722,17 @@ mod tests {
   fn service_integration_stale_discard_keeps_unvalidated_after_replace() {
     let (_d, service, _vault) = setup();
     let created = service.save(write_create(true)).unwrap();
-    let manifest = service.registry.get(GOOGLE_CLOUD_PLUGIN_ID).unwrap().clone();
+    let registration = service
+      .registry
+      .get_registration(GOOGLE_CLOUD_PLUGIN_ID)
+      .unwrap()
+      .clone();
+    let manifest = &registration.manifest;
     let bindings = service
       .db
       .read(|conn| integration_credential_bindings::list_for_instance(conn, created.id))
       .unwrap();
-    let snapshot = snapshot_required_credentials(&manifest, &bindings);
+    let snapshot = snapshot_required_credentials(manifest, &bindings);
 
     let replaced = service
       .save(IntegrationInstanceWrite {
@@ -1849,7 +1752,7 @@ mod tests {
     assert_eq!(replaced.credential_slots[0].credential_revision, 1);
 
     let result = service
-      .finish_stale_remote_validation(created.id, &manifest, &snapshot)
+      .finish_stale_remote_validation(created.id, &registration, &snapshot)
       .unwrap();
     assert_eq!(result.health_status, IntegrationHealthStatus::Unvalidated);
     assert_eq!(result.message.as_deref(), Some(VALIDATION_CREDENTIALS_CHANGED_MESSAGE));
@@ -1896,14 +1799,37 @@ mod tests {
     let (_d, service, _vault) = setup();
     let defs = service.list_definitions();
     assert_eq!(defs.len(), 3);
-    assert_eq!(defs[0].id, GOOGLE_CLOUD_PLUGIN_ID);
-    assert_eq!(defs[1].id, GOOGLE_TRANSLATE_WEB_PLUGIN_ID);
-    assert_eq!(defs[2].id, EDGE_TTS_PLUGIN_ID);
-    let web = defs.iter().find(|d| d.id == GOOGLE_TRANSLATE_WEB_PLUGIN_ID).unwrap();
-    assert!(web.credential_slots.is_empty());
-    let edge = defs.iter().find(|d| d.id == EDGE_TTS_PLUGIN_ID).unwrap();
-    assert!(edge.credential_slots.is_empty());
-    assert!(edge.capabilities.iter().any(|c| c.id == "speech.synthesize@1"));
+    assert_eq!(defs[0].manifest.id, GOOGLE_CLOUD_PLUGIN_ID);
+    assert_eq!(defs[1].manifest.id, GOOGLE_TRANSLATE_WEB_PLUGIN_ID);
+    assert_eq!(defs[2].manifest.id, EDGE_TTS_PLUGIN_ID);
+    let web = defs
+      .iter()
+      .find(|definition| definition.manifest.id == GOOGLE_TRANSLATE_WEB_PLUGIN_ID)
+      .unwrap();
+    assert!(web.manifest.credential_slots.is_empty());
+    assert!(web.config_schema.fields.iter().any(|field| field.id == "channel"));
+    let edge = defs
+      .iter()
+      .find(|definition| definition.manifest.id == EDGE_TTS_PLUGIN_ID)
+      .unwrap();
+    assert!(edge.manifest.credential_slots.is_empty());
+    assert!(
+      edge
+        .manifest
+        .capabilities
+        .iter()
+        .any(|capability| capability.id == "speech.synthesize@1")
+    );
+    assert!(edge.capability_schemas.iter().any(|schema| {
+      schema.capability_id == "speech.synthesize@1"
+        && schema.preference_schema.fields.iter().any(|field| field.id == "voice")
+    }));
+    assert_eq!(edge.presentation.display_name_fallback, "Edge TTS");
+    let serialized = serde_json::to_value(edge).unwrap();
+    assert!(serialized.get("configSchema").is_some());
+    assert!(serialized.get("capabilitySchemas").is_some());
+    assert!(serialized.get("authPolicy").is_none());
+    assert!(serialized.get("credentialValidators").is_none());
   }
 
   #[test]

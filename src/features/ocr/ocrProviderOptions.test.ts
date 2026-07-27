@@ -1,7 +1,7 @@
 // ABOUTME: Unit tests for OCR create options and plugin rebind candidate helpers.
 // ABOUTME: Covers static Baidu/AI options and ocr.image@1 integration filtering.
 import { describe, expect, mock, test } from "bun:test";
-import type { IntegrationInstanceDto, ServiceIntegrationManifest } from "../../storage/types";
+import type { IntegrationInstanceDto, ServiceIntegrationDefinitionDto } from "../../storage/types";
 
 // unplugin-icons virtual modules are unavailable under bun:test.
 mock.module("~icons/svgs/baiducloud", () => ({ default: () => null }));
@@ -35,7 +35,7 @@ function instance(overrides: Partial<IntegrationInstanceDto>): IntegrationInstan
   };
 }
 
-const visionDefinition: ServiceIntegrationManifest = {
+const visionDefinition: ServiceIntegrationDefinitionDto = {
   manifestVersion: 1,
   pluginApiVersion: "1",
   id: "com.langnext.google-cloud",
@@ -49,6 +49,9 @@ const visionDefinition: ServiceIntegrationManifest = {
     { id: OCR_IMAGE_CAPABILITY_ID, preferencesSchemaVersion: 1 },
     { id: "translate.text@1", preferencesSchemaVersion: 1 },
   ],
+  configSchema: { version: 1, fields: [], groups: [] },
+  capabilitySchemas: [],
+  presentation: { displayNameFallback: "Cloud OCR", icon: "google-cloud" },
 };
 
 describe("getOcrProviderOption", () => {

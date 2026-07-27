@@ -4,12 +4,10 @@ use crate::credentials::{CredentialVault, NativeCredentialVault};
 use crate::device_state::{DeviceStateManager, SharedDeviceState};
 use crate::domain::cancel::RequestSessionRegistry;
 use crate::error::StorageError;
-use crate::services::edge_tts::EdgeTtsCapabilities;
-use crate::services::google_cloud::GoogleCloudCapabilities;
+use crate::services::bundled_plugins::HandlerDeps;
 use crate::services::google_service_account::GoogleServiceAccountExchanger;
-use crate::services::google_translate_web::GoogleTranslateWebCapabilities;
 use crate::services::network_broker::NetworkBroker;
-use crate::services::service_capabilities::{ServiceCapabilityRegistry, ServiceCapabilityService};
+use crate::services::service_capabilities::ServiceCapabilityService;
 use crate::services::token_grant::TokenGrantService;
 use crate::services::{
   ImportExportService, ModelService, OcrServiceService, ProviderHttpService, ProviderService,
@@ -60,18 +58,14 @@ impl AppState {
     let exchanger = Arc::new(GoogleServiceAccountExchanger::new(db.clone(), vault.clone()));
     let token_grants = Arc::new(TokenGrantService::new(exchanger));
     let network_broker = Arc::new(NetworkBroker::new(db.clone(), registry.clone()));
-    let google_caps = Arc::new(GoogleCloudCapabilities::new(
-      db.clone(),
-      network_broker.clone(),
-      token_grants.clone(),
-    ));
-    let google_web_caps = Arc::new(GoogleTranslateWebCapabilities::new(db.clone(), network_broker.clone()));
-    let edge_tts_caps = Arc::new(EdgeTtsCapabilities::new(db.clone()));
-    let capability_handlers = Arc::new(
-      ServiceCapabilityRegistry::with_google_cloud(google_caps)
-        .with_google_translate_web(google_web_caps)
-        .with_edge_tts(edge_tts_caps),
-    );
+    let capability_handlers = Arc::new(crate::services::bundled_plugins::build_capability_registry(
+      HandlerDeps {
+        db: db.clone(),
+        broker: network_broker.clone(),
+        tokens: token_grants.clone(),
+      },
+      &registry,
+    )?);
     let service_capabilities = ServiceCapabilityService::new(db.clone(), registry.clone(), capability_handlers);
 
     let providers = ProviderService::new(db.clone(), vault.clone());

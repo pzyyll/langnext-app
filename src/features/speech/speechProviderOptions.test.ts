@@ -1,27 +1,20 @@
-// ABOUTME: Unit tests for Speech create options and rebind candidate helpers.
-// ABOUTME: Covers speech.synthesize@1 integration filtering and readiness.
+// ABOUTME: Unit tests for schema-backed Speech create options and rebind candidate helpers.
+// ABOUTME: Covers descriptor discovery, readiness, and major-version compatibility without plugin identity inference.
 import { describe, expect, mock, test } from "bun:test";
-import type { IntegrationInstanceDto, ServiceIntegrationManifest } from "../../storage/types";
-import { EDGE_TTS_PLUGIN_ID } from "../../storage/types";
+import type { IntegrationInstanceDto, ServiceIntegrationDefinitionDto } from "../../storage/types";
 
 // unplugin-icons virtual modules are unavailable under bun:test.
 mock.module("~icons/svgs/google-cloud", () => ({ default: () => null }));
-mock.module("~icons/svgs/edge", () => ({ default: () => null }));
 
-const {
-  SPEECH_SYNTHESIZE_CAPABILITY_ID,
-  buildSpeechProviderCreateOptions,
-  defaultEdgeTtsPreferences,
-  defaultGoogleTtsPreferences,
-  listCompatibleSpeechRebindCandidates,
-} = await import("./speechProviderOptions");
+const { SPEECH_SYNTHESIZE_CAPABILITY_ID, buildSpeechProviderCreateOptions, listCompatibleSpeechRebindCandidates } =
+  await import("./speechProviderOptions");
 
 function instance(overrides: Partial<IntegrationInstanceDto>): IntegrationInstanceDto {
   return {
     id: "int-1",
-    pluginId: "com.langnext.google-cloud",
-    pluginVersion: "1.2.0",
-    displayName: "Cloud A",
+    pluginId: "com.example.speech",
+    pluginVersion: "1.0.0",
+    displayName: "Speech A",
     enabled: true,
     configJson: "{}",
     configSchemaVersion: 1,
@@ -36,12 +29,12 @@ function instance(overrides: Partial<IntegrationInstanceDto>): IntegrationInstan
   };
 }
 
-const ttsDefinition: ServiceIntegrationManifest = {
+const speechDefinition: ServiceIntegrationDefinitionDto = {
   manifestVersion: 1,
   pluginApiVersion: "1",
-  id: "com.langnext.google-cloud",
-  version: "1.2.0",
-  displayNameKey: "plugins.googleCloud.name",
+  id: "com.example.speech",
+  version: "1.0.0",
+  displayNameKey: "plugins.example.name",
   minHostVersion: "0.1.0",
   configSchemaVersion: 1,
   credentialSlots: [],
@@ -50,30 +43,17 @@ const ttsDefinition: ServiceIntegrationManifest = {
     { id: SPEECH_SYNTHESIZE_CAPABILITY_ID, preferencesSchemaVersion: 1 },
     { id: "ocr.image@1", preferencesSchemaVersion: 1 },
   ],
+  configSchema: { version: 1, fields: [], groups: [] },
+  capabilitySchemas: [],
+  presentation: { displayNameFallback: "Example Speech", icon: "extension" },
 };
 
-const visionOnlyDefinition: ServiceIntegrationManifest = {
-  ...ttsDefinition,
-  id: "com.langnext.other",
+const visionOnlyDefinition: ServiceIntegrationDefinitionDto = {
+  ...speechDefinition,
+  id: "com.example.vision",
   capabilities: [{ id: "ocr.image@1", preferencesSchemaVersion: 1 }],
+  presentation: { displayNameFallback: "Example Vision", icon: "extension" },
 };
-
-describe("defaultGoogleTtsPreferences", () => {
-  test("returns schema v1 speakingRate and pitch defaults", () => {
-    expect(defaultGoogleTtsPreferences()).toEqual({ speakingRate: 1.0, pitch: 0.0 });
-  });
-});
-
-describe("defaultEdgeTtsPreferences", () => {
-  test("returns schema v1 voice, speed, pitch, and style defaults", () => {
-    expect(defaultEdgeTtsPreferences()).toEqual({
-      voice: "zh-CN-XiaoxiaoNeural",
-      speed: 1.0,
-      pitch: 0,
-      style: "general",
-    });
-  });
-});
 
 describe("buildSpeechProviderCreateOptions", () => {
   test("lists Speech-capable integrations ordered by name then id", () => {
@@ -82,7 +62,7 @@ describe("buildSpeechProviderCreateOptions", () => {
         instance({ id: "int-b", displayName: "B", effectiveStatus: "ready" }),
         instance({ id: "int-a", displayName: "A", effectiveStatus: "degraded" }),
       ],
-      definitions: [ttsDefinition],
+      definitions: [speechDefinition],
     });
     expect(options.map((option) => option.id)).toEqual(["integration:int-a", "integration:int-b"]);
     expect(options.find((option) => option.id === "integration:int-a")?.disabled).toBe(true);
@@ -92,55 +72,27 @@ describe("buildSpeechProviderCreateOptions", () => {
     );
   });
 
-  test("excludes integrations without speech.synthesize capability", () => {
+  test("uses the definition presentation fallback for the option label", () => {
+    const options = buildSpeechProviderCreateOptions({
+      instances: [instance({ displayName: "Desk" })],
+      definitions: [speechDefinition],
+      labels: {
+        integrationLabel: "{{plugin}} / {{name}}",
+      },
+    });
+    expect(options[0]?.label).toBe("Example Speech / Desk");
+  });
+
+  test("excludes integrations without a registered speech.synthesize descriptor", () => {
     const options = buildSpeechProviderCreateOptions({
       instances: [
-        instance({ id: "int-1", pluginId: "com.langnext.other", displayName: "Other" }),
-        instance({ id: "int-2", displayName: "Cloud" }),
+        instance({ id: "int-1", pluginId: "com.example.vision", displayName: "Vision" }),
+        instance({ id: "int-2", displayName: "Speech" }),
+        instance({ id: "int-missing", pluginId: "com.example.missing", effectiveStatus: "plugin_missing" }),
       ],
-      definitions: [ttsDefinition, visionOnlyDefinition],
+      definitions: [speechDefinition, visionOnlyDefinition],
     });
     expect(options.map((option) => option.id)).toEqual(["integration:int-2"]);
-  });
-
-  test("includes plugin-missing Google Cloud instances as disabled", () => {
-    const options = buildSpeechProviderCreateOptions({
-      instances: [
-        instance({
-          id: "int-missing",
-          displayName: "Missing",
-          effectiveStatus: "plugin_missing",
-          enabled: false,
-        }),
-      ],
-      definitions: [],
-    });
-    expect(options).toHaveLength(1);
-    expect(options[0]?.disabled).toBe(true);
-  });
-
-  test("includes ready Edge TTS integrations as enabled create options", () => {
-    const edgeDefinition: ServiceIntegrationManifest = {
-      ...ttsDefinition,
-      id: EDGE_TTS_PLUGIN_ID,
-      capabilities: [{ id: SPEECH_SYNTHESIZE_CAPABILITY_ID, preferencesSchemaVersion: 1 }],
-    };
-    const options = buildSpeechProviderCreateOptions({
-      instances: [
-        instance({ id: "int-edge", pluginId: EDGE_TTS_PLUGIN_ID, displayName: "Edge A" }),
-        instance({
-          id: "int-edge-missing",
-          pluginId: EDGE_TTS_PLUGIN_ID,
-          displayName: "Edge Missing",
-          effectiveStatus: "plugin_missing",
-          enabled: false,
-        }),
-      ],
-      definitions: [edgeDefinition],
-    });
-    expect(options.map((option) => option.id)).toEqual(["integration:int-edge", "integration:int-edge-missing"]);
-    expect(options.find((option) => option.id === "integration:int-edge")?.disabled).toBe(false);
-    expect(options.find((option) => option.id === "integration:int-edge-missing")?.disabled).toBe(true);
   });
 });
 
@@ -154,10 +106,10 @@ describe("listCompatibleSpeechRebindCandidates", () => {
         instance({ id: "int-2", displayName: "Other", effectiveStatus: "ready" }),
         instance({ id: "int-3", displayName: "Bad", effectiveStatus: "unconfigured" }),
       ],
-      definitions: [ttsDefinition],
+      definitions: [speechDefinition],
     });
-    expect(candidates.map((c) => c.id).sort()).toEqual(["int-1", "int-2", "int-3"]);
-    expect(candidates.find((c) => c.id === "int-2")?.ready).toBe(true);
-    expect(candidates.find((c) => c.id === "int-3")?.ready).toBe(false);
+    expect(candidates.map((candidate) => candidate.id).sort()).toEqual(["int-1", "int-2", "int-3"]);
+    expect(candidates.find((candidate) => candidate.id === "int-2")?.ready).toBe(true);
+    expect(candidates.find((candidate) => candidate.id === "int-3")?.ready).toBe(false);
   });
 });

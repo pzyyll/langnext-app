@@ -3,19 +3,15 @@
 use crate::domain::cancel::CancelToken;
 use crate::domain::service_capability::{
   CapabilityError, CapabilityErrorCode, DetectLanguageRequest, DetectLanguageResponse, ExecutionContext,
-  OCR_IMAGE_CAPABILITY_ID, OcrImageRequest, OcrImageResponse, SPEECH_SYNTHESIZE_CAPABILITY_ID, SpeechSynthesizeRequest,
-  SpeechSynthesizeResponse, TranslateTextRequest, TranslateTextResponse,
+  OcrImageRequest, OcrImageResponse, SpeechSynthesizeRequest, SpeechSynthesizeResponse, TranslateTextRequest,
+  TranslateTextResponse,
 };
 use crate::domain::service_integration::IntegrationHealthStatus;
 use crate::error::StorageError;
 use crate::repositories::integration_instances;
 use crate::services::edge_tts::EdgeTtsCapabilities;
-use crate::services::google_cloud::{
-  GOOGLE_DETECT_LANGUAGE_CAPABILITY_ID, GOOGLE_TRANSLATE_TEXT_CAPABILITY_ID, GoogleCloudCapabilities,
-};
-use crate::services::google_translate_web::{
-  GOOGLE_WEB_DETECT_LANGUAGE_CAPABILITY_ID, GOOGLE_WEB_TRANSLATE_TEXT_CAPABILITY_ID, GoogleTranslateWebCapabilities,
-};
+use crate::services::google_cloud::GoogleCloudCapabilities;
+use crate::services::google_translate_web::GoogleTranslateWebCapabilities;
 use crate::services::service_integration_registry::ServiceIntegrationRegistry;
 use crate::storage::Database;
 use std::collections::HashMap;
@@ -174,57 +170,6 @@ impl ServiceCapabilityRegistry {
 
   pub fn get(&self, plugin_id: &str, capability_id: &str) -> Option<&CapabilityHandler> {
     self.handlers.get(&(plugin_id.to_string(), capability_id.to_string()))
-  }
-
-  /// Build the production registry with Google Cloud Translate/Detect/OCR/TTS handlers.
-  pub fn with_google_cloud(google: Arc<GoogleCloudCapabilities>) -> Self {
-    let mut registry = Self::new();
-    registry.register(
-      crate::domain::service_integration::GOOGLE_CLOUD_PLUGIN_ID,
-      GOOGLE_TRANSLATE_TEXT_CAPABILITY_ID,
-      CapabilityHandler::TranslateText(google.clone()),
-    );
-    registry.register(
-      crate::domain::service_integration::GOOGLE_CLOUD_PLUGIN_ID,
-      GOOGLE_DETECT_LANGUAGE_CAPABILITY_ID,
-      CapabilityHandler::DetectLanguage(google.clone()),
-    );
-    registry.register(
-      crate::domain::service_integration::GOOGLE_CLOUD_PLUGIN_ID,
-      OCR_IMAGE_CAPABILITY_ID,
-      CapabilityHandler::OcrImage(google.clone()),
-    );
-    registry.register(
-      crate::domain::service_integration::GOOGLE_CLOUD_PLUGIN_ID,
-      SPEECH_SYNTHESIZE_CAPABILITY_ID,
-      CapabilityHandler::SpeechSynthesize(google),
-    );
-    registry
-  }
-
-  /// Register credential-free Google Web Translate/Detect handlers.
-  pub fn with_google_translate_web(mut self, web: Arc<GoogleTranslateWebCapabilities>) -> Self {
-    self.register(
-      crate::domain::service_integration::GOOGLE_TRANSLATE_WEB_PLUGIN_ID,
-      GOOGLE_WEB_TRANSLATE_TEXT_CAPABILITY_ID,
-      CapabilityHandler::TranslateText(web.clone()),
-    );
-    self.register(
-      crate::domain::service_integration::GOOGLE_TRANSLATE_WEB_PLUGIN_ID,
-      GOOGLE_WEB_DETECT_LANGUAGE_CAPABILITY_ID,
-      CapabilityHandler::DetectLanguage(web),
-    );
-    self
-  }
-
-  /// Register credential-free Edge TTS speech synthesis handler.
-  pub fn with_edge_tts(mut self, edge: Arc<EdgeTtsCapabilities>) -> Self {
-    self.register(
-      crate::domain::service_integration::EDGE_TTS_PLUGIN_ID,
-      SPEECH_SYNTHESIZE_CAPABILITY_ID,
-      CapabilityHandler::SpeechSynthesize(edge),
-    );
-    self
   }
 }
 
@@ -426,12 +371,13 @@ pub fn execution_context(
 mod tests {
   use super::*;
   use crate::domain::provider::ProxyMode;
+  use crate::domain::service_capability::OCR_IMAGE_CAPABILITY_ID;
   use crate::domain::service_integration::{
     GOOGLE_CLOUD_DEFAULT_LOCATION, GOOGLE_CLOUD_PLUGIN_ID, GoogleCloudConfigV1, IntegrationHealthStatus,
     IntegrationInstance,
   };
   use crate::domain::time::{new_id, now_rfc3339};
-  use crate::services::google_cloud::GoogleCloudCapabilities;
+  use crate::services::google_cloud::{GOOGLE_DETECT_LANGUAGE_CAPABILITY_ID, GOOGLE_TRANSLATE_TEXT_CAPABILITY_ID};
   use crate::services::network_broker::NetworkBroker;
   use crate::services::token_grant::{ExchangedToken, GoogleTokenExchanger, TokenGrantService};
 
@@ -490,8 +436,17 @@ mod tests {
     let defs = Arc::new(ServiceIntegrationRegistry::bundled().unwrap());
     let network = Arc::new(NetworkBroker::new(db.clone(), defs.clone()));
     let tokens = Arc::new(TokenGrantService::new(Arc::new(StubExchanger)));
-    let google = Arc::new(GoogleCloudCapabilities::new(db.clone(), network, tokens));
-    let handlers = Arc::new(ServiceCapabilityRegistry::with_google_cloud(google));
+    let handlers = Arc::new(
+      crate::services::bundled_plugins::build_capability_registry(
+        crate::services::bundled_plugins::HandlerDeps {
+          db: db.clone(),
+          broker: network,
+          tokens,
+        },
+        &defs,
+      )
+      .unwrap(),
+    );
     ServiceCapabilityService::new(db, defs, handlers)
   }
 

@@ -2,30 +2,17 @@
 // ABOUTME: Capability handlers receive grants without raw tokens; only the broker injects Bearer auth.
 use crate::domain::cancel::CancelToken;
 use crate::domain::service_capability::{CapabilityError, CapabilityErrorCode};
-use crate::domain::service_integration::GOOGLE_CLOUD_PLUGIN_ID;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
-/// Trusted Google Cloud service-account auth driver id.
-pub const GOOGLE_SERVICE_ACCOUNT_AUTH_DRIVER_ID: &str = "com.langnext.auth.google-service-account";
-/// Audience policy for the pinned Google OAuth token endpoint.
-pub const GOOGLE_OAUTH_AUDIENCE_POLICY_ID: &str = "google-oauth-token";
-/// Narrowest documented OAuth scope for Cloud Translation Translate/Detect.
-pub const GOOGLE_CLOUD_TRANSLATION_SCOPE: &str = "https://www.googleapis.com/auth/cloud-translation";
-/// Narrowest documented OAuth scope for Cloud Vision annotate.
-pub const GOOGLE_CLOUD_VISION_SCOPE: &str = "https://www.googleapis.com/auth/cloud-vision";
-/// Documented OAuth scope for Cloud Text-to-Speech synthesize (capability-scoped allow-list only).
-pub const GOOGLE_CLOUD_TEXT_TO_SPEECH_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
-/// Capability ids authorized to request the translation scope (fail-closed allow-list).
-const TRANSLATE_TEXT_CAPABILITY_ID: &str = "translate.text@1";
-const DETECT_LANGUAGE_CAPABILITY_ID: &str = "translate.detect@1";
-/// Capability id authorized to request the vision scope.
-const OCR_IMAGE_CAPABILITY_ID: &str = "ocr.image@1";
-/// Capability id authorized to request the Text-to-Speech scope.
-const SPEECH_SYNTHESIZE_CAPABILITY_ID: &str = "speech.synthesize@1";
+// Auth-policy constants and grant-request validation live in the host-owned auth_policies module.
+pub use crate::services::auth_policies::{
+  GOOGLE_CLOUD_TEXT_TO_SPEECH_SCOPE, GOOGLE_CLOUD_TRANSLATION_SCOPE, GOOGLE_CLOUD_VISION_SCOPE,
+  GOOGLE_OAUTH_AUDIENCE_POLICY_ID, GOOGLE_SERVICE_ACCOUNT_AUTH_DRIVER_ID,
+};
 /// Safety skew subtracted from token expiry before reuse.
 pub const TOKEN_EXPIRY_SAFETY_SKEW: Duration = Duration::from_secs(60);
 /// Max concurrent cached grants retained in process memory.
@@ -48,6 +35,12 @@ pub struct TokenGrant {
   expires_at: Instant,
   instance_id: Uuid,
   credential_revision: i64,
+  /// Capability authority for which this opaque handle was issued.
+  capability_id: String,
+  /// Host-owned token driver that issued this grant.
+  auth_driver_id: String,
+  /// Host-owned audience policy validated at issuance.
+  audience_policy_id: String,
   scope_key: String,
 }
 
@@ -65,6 +58,18 @@ impl TokenGrant {
     self.credential_revision
   }
 
+  pub(crate) fn capability_id(&self) -> &str {
+    &self.capability_id
+  }
+
+  pub(crate) fn auth_driver_id(&self) -> &str {
+    &self.auth_driver_id
+  }
+
+  pub(crate) fn audience_policy_id(&self) -> &str {
+    &self.audience_policy_id
+  }
+
   pub fn is_expired(&self, now: Instant) -> bool {
     now >= self.expires_at
   }
@@ -75,6 +80,9 @@ impl fmt::Debug for TokenGrant {
     f.debug_struct("TokenGrant")
       .field("instance_id", &self.instance_id)
       .field("credential_revision", &self.credential_revision)
+      .field("capability_id", &self.capability_id)
+      .field("auth_driver_id", &self.auth_driver_id)
+      .field("audience_policy_id", &self.audience_policy_id)
       .field("scope_key", &self.scope_key)
       .field("expired", &self.is_expired(Instant::now()))
       .finish_non_exhaustive()
@@ -190,7 +198,7 @@ impl TokenGrantService {
     request: TokenGrantRequest,
     cancel: Option<&CancelToken>,
   ) -> Result<TokenGrant, CapabilityError> {
-    validate_grant_request(&request)?;
+    crate::services::auth_policies::validate_grant_request(&request)?;
     let scope_key = normalize_scope_key(&request.scopes);
     let index_key = instance_scope_index_key(request.instance_id, &scope_key);
 
@@ -199,13 +207,7 @@ impl TokenGrantService {
         .cache
         .lock()
         .map_err(|_| CapabilityError::new(CapabilityErrorCode::Internal, "token cache lock poisoned"))?;
-      if let Some(grant) = cached_grant_from_state(
-        &state,
-        request.instance_id,
-        &scope_key,
-        &index_key,
-        self.clock.now_instant(),
-      ) {
+      if let Some(grant) = cached_grant_from_state(&state, &request, &scope_key, &index_key, self.clock.now_instant()) {
         return Ok(grant);
       }
       state.generation(request.instance_id)
@@ -250,6 +252,9 @@ impl TokenGrantService {
       expires_at,
       instance_id: request.instance_id,
       credential_revision: exchanged.credential_revision,
+      capability_id: request.capability_id.clone(),
+      auth_driver_id: request.auth_driver_id.clone(),
+      audience_policy_id: request.audience_policy_id.clone(),
       scope_key: scope_key.clone(),
     };
 
@@ -326,87 +331,28 @@ impl TokenGrantService {
 
 fn cached_grant_from_state(
   state: &TokenCacheState,
-  instance_id: Uuid,
+  request: &TokenGrantRequest,
   scope_key: &str,
   index_key: &str,
   now: Instant,
 ) -> Option<TokenGrant> {
   let revision = *state.latest_revision.get(index_key)?;
-  let entry = state.entries.get(&cache_key(instance_id, revision, scope_key))?;
+  let entry = state
+    .entries
+    .get(&cache_key(request.instance_id, revision, scope_key))?;
   if entry.expires_at <= now {
     return None;
   }
   Some(TokenGrant {
     access_token: entry.access_token.clone(),
     expires_at: entry.expires_at,
-    instance_id,
+    instance_id: request.instance_id,
     credential_revision: entry.credential_revision,
+    capability_id: request.capability_id.clone(),
+    auth_driver_id: request.auth_driver_id.clone(),
+    audience_policy_id: request.audience_policy_id.clone(),
     scope_key: scope_key.to_string(),
   })
-}
-
-fn validate_grant_request(request: &TokenGrantRequest) -> Result<(), CapabilityError> {
-  if request.auth_driver_id != GOOGLE_SERVICE_ACCOUNT_AUTH_DRIVER_ID {
-    return Err(CapabilityError::new(
-      CapabilityErrorCode::PermissionDenied,
-      "untrusted auth driver",
-    ));
-  }
-  if request.audience_policy_id != GOOGLE_OAUTH_AUDIENCE_POLICY_ID {
-    return Err(CapabilityError::new(
-      CapabilityErrorCode::PermissionDenied,
-      "unsupported audience policy",
-    ));
-  }
-  if request.scopes.is_empty() {
-    return Err(CapabilityError::new(
-      CapabilityErrorCode::InvalidRequest,
-      "at least one OAuth scope is required",
-    ));
-  }
-  if request.capability_id.trim().is_empty() {
-    return Err(CapabilityError::new(
-      CapabilityErrorCode::InvalidRequest,
-      "capability_id is required",
-    ));
-  }
-  validate_scopes_for_capability(&request.capability_id, &request.scopes)?;
-  // Capability handlers never supply raw token URLs; audience is policy-id only.
-  let _ = GOOGLE_CLOUD_PLUGIN_ID;
-  Ok(())
-}
-
-/// Fail-closed scope allow-list derived from driver/capability contracts.
-fn allowed_scopes_for_capability(capability_id: &str) -> Result<&'static [&'static str], CapabilityError> {
-  match capability_id {
-    TRANSLATE_TEXT_CAPABILITY_ID | DETECT_LANGUAGE_CAPABILITY_ID => Ok(&[GOOGLE_CLOUD_TRANSLATION_SCOPE]),
-    OCR_IMAGE_CAPABILITY_ID => Ok(&[GOOGLE_CLOUD_VISION_SCOPE]),
-    SPEECH_SYNTHESIZE_CAPABILITY_ID => Ok(&[GOOGLE_CLOUD_TEXT_TO_SPEECH_SCOPE]),
-    _ => Err(CapabilityError::new(
-      CapabilityErrorCode::PermissionDenied,
-      "capability is not authorized for token grants",
-    )),
-  }
-}
-
-fn validate_scopes_for_capability(capability_id: &str, scopes: &[String]) -> Result<(), CapabilityError> {
-  let allowed = allowed_scopes_for_capability(capability_id)?;
-  for scope in scopes {
-    let trimmed = scope.trim();
-    if trimmed.is_empty() {
-      return Err(CapabilityError::new(
-        CapabilityErrorCode::InvalidRequest,
-        "OAuth scope must not be empty",
-      ));
-    }
-    if !allowed.iter().any(|allowed_scope| *allowed_scope == trimmed) {
-      return Err(CapabilityError::new(
-        CapabilityErrorCode::PermissionDenied,
-        "OAuth scope is not allowed for this capability",
-      ));
-    }
-  }
-  Ok(())
 }
 
 pub fn normalize_scope_key(scopes: &[String]) -> String {
@@ -431,6 +377,11 @@ fn instance_scope_index_key(instance_id: Uuid, scope_key: &str) -> String {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::domain::service_capability::OCR_IMAGE_CAPABILITY_ID;
+  use crate::services::google_cloud::{
+    GOOGLE_DETECT_LANGUAGE_CAPABILITY_ID as DETECT_LANGUAGE_CAPABILITY_ID,
+    GOOGLE_TRANSLATE_TEXT_CAPABILITY_ID as TRANSLATE_TEXT_CAPABILITY_ID,
+  };
   use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
   use tokio::sync::Notify;
 
@@ -702,7 +653,7 @@ mod tests {
       .await
       .unwrap();
     // Same scope normalizes to one key — second call is a cache hit.
-    service
+    let detect_grant = service
       .acquire(
         TokenGrantRequest {
           instance_id: id,
@@ -716,6 +667,9 @@ mod tests {
       .await
       .unwrap();
     assert_eq!(exchanger.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(detect_grant.capability_id(), DETECT_LANGUAGE_CAPABILITY_ID);
+    assert_eq!(detect_grant.auth_driver_id(), GOOGLE_SERVICE_ACCOUNT_AUTH_DRIVER_ID);
+    assert_eq!(detect_grant.audience_policy_id(), GOOGLE_OAUTH_AUDIENCE_POLICY_ID);
   }
 
   #[tokio::test]
@@ -791,6 +745,9 @@ mod tests {
       expires_at: Instant::now() + Duration::from_secs(60),
       instance_id: Uuid::nil(),
       credential_revision: 1,
+      capability_id: "translate.text@1".into(),
+      auth_driver_id: GOOGLE_SERVICE_ACCOUNT_AUTH_DRIVER_ID.into(),
+      audience_policy_id: GOOGLE_OAUTH_AUDIENCE_POLICY_ID.into(),
       scope_key: "s".into(),
     };
     let rendered = format!("{grant:?}");

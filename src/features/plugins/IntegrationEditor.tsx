@@ -1,6 +1,6 @@
-// ABOUTME: Selected plugin instance editor shell with status, form, and dependencies.
-// ABOUTME: Hosts typed Google Cloud and Google Web forms; secrets stay write-only until save.
-import { useMemo, useRef, useState } from "react";
+// ABOUTME: Schema-driven integration instance editor with status, validation, and dependencies.
+// ABOUTME: Keeps credentials write-only and preserves CAS, enable, validate, and delete workflows.
+import { useCallback, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { Button } from "@base-ui/react/button";
@@ -35,34 +35,23 @@ import {
   validateIntegrationInstance,
 } from "../../storage/client";
 import { getIpcErrorCode, getIpcErrorMessage } from "../../storage/errors";
-import type { IntegrationInstanceDto, IntegrationInstanceWrite } from "../../storage/types";
-import { EDGE_TTS_PLUGIN_ID, GOOGLE_CLOUD_PLUGIN_ID, GOOGLE_TRANSLATE_WEB_PLUGIN_ID } from "../../storage/types";
-import { EdgeTtsIntegrationForm } from "./EdgeTtsIntegrationForm";
-import { GoogleCloudIntegrationForm } from "./GoogleCloudIntegrationForm";
-import { GoogleTranslateWebIntegrationForm } from "./GoogleTranslateWebIntegrationForm";
+import type { IntegrationInstanceDto, ServiceIntegrationDefinitionDto } from "../../storage/types";
+import { resolveLocalizedText } from "./pluginPresentation";
+import { SchemaForm } from "./schema/SchemaForm";
+import type { SchemaTextResolver } from "./schema/SchemaField";
+import { createSchemaHostOptionResolver } from "./schema/schemaHostOptions";
+import { setSchemaCredentialAction, setSchemaCredentialValue, setSchemaDraftValue } from "./schema/schemaDraft";
 import {
-  buildEdgeTtsWrite,
-  buildGoogleCloudWrite,
-  buildGoogleTranslateWebWrite,
-  draftFromEdgeTtsDto,
-  draftFromGoogleTranslateWebDto,
+  buildIntegrationWrite,
   draftFromIntegrationDto,
-  hasEdgeTtsConfigMutation,
-  hasGoogleTranslateWebConfigMutation,
-  hasRemoteRelevantMutation,
-  isEdgeTtsDraftClean,
-  isGoogleCloudDraftClean,
-  isGoogleTranslateWebDraftClean,
-  type EdgeTtsIntegrationDraft,
-  type GoogleCloudIntegrationDraft,
-  type GoogleTranslateWebIntegrationDraft,
+  hasIntegrationRemoteRelevantMutation,
+  isIntegrationDraftClean,
+  type IntegrationSchemaDraft,
 } from "./integrationDraft";
 
 export type IntegrationEditorProps = {
   integrationInstanceId: string;
 };
-
-type EditorDraft = GoogleCloudIntegrationDraft | GoogleTranslateWebIntegrationDraft | EdgeTtsIntegrationDraft;
 
 const STATUS_LABEL_KEYS = {
   unconfigured: "plugins.status.unconfigured",
@@ -79,73 +68,15 @@ function statusLabelKey(
   return STATUS_LABEL_KEYS[status];
 }
 
-function isSupportedPlugin(pluginId: string): boolean {
+function isSupportedSchema(definition: ServiceIntegrationDefinitionDto, instance: IntegrationInstanceDto): boolean {
   return (
-    pluginId === GOOGLE_CLOUD_PLUGIN_ID ||
-    pluginId === GOOGLE_TRANSLATE_WEB_PLUGIN_ID ||
-    pluginId === EDGE_TTS_PLUGIN_ID
+    definition.configSchema.version === definition.configSchemaVersion &&
+    instance.configSchemaVersion === definition.configSchemaVersion
   );
 }
 
-function draftFromInstance(instance: IntegrationInstanceDto): EditorDraft {
-  if (instance.pluginId === GOOGLE_TRANSLATE_WEB_PLUGIN_ID) {
-    return draftFromGoogleTranslateWebDto(instance);
-  }
-  if (instance.pluginId === EDGE_TTS_PLUGIN_ID) {
-    return draftFromEdgeTtsDto(instance);
-  }
-  return draftFromIntegrationDto(instance);
-}
-
-function isDraftClean(draft: EditorDraft, instance: IntegrationInstanceDto): boolean {
-  if (draft.pluginId === GOOGLE_TRANSLATE_WEB_PLUGIN_ID) {
-    return isGoogleTranslateWebDraftClean(draft, instance);
-  }
-  if (draft.pluginId === EDGE_TTS_PLUGIN_ID) {
-    return isEdgeTtsDraftClean(draft, instance);
-  }
-  return isGoogleCloudDraftClean(draft, instance);
-}
-
-function patchDraft(
-  current: EditorDraft | null,
-  patch: Partial<GoogleCloudIntegrationDraft> &
-    Partial<GoogleTranslateWebIntegrationDraft> &
-    Partial<EdgeTtsIntegrationDraft>,
-): EditorDraft | null {
-  return current ? ({ ...current, ...patch } as EditorDraft) : current;
-}
-
-function buildWrite(draft: EditorDraft, instanceId: string, expectedUpdatedAt: string): IntegrationInstanceWrite {
-  // Always stamp the server revision at save time so a stale/null draft field cannot
-  // omit expectedUpdatedAt (backend requires it on update).
-  if (draft.pluginId === GOOGLE_TRANSLATE_WEB_PLUGIN_ID) {
-    return {
-      ...buildGoogleTranslateWebWrite(draft, { id: instanceId }),
-      expectedUpdatedAt,
-    };
-  }
-  if (draft.pluginId === EDGE_TTS_PLUGIN_ID) {
-    return {
-      ...buildEdgeTtsWrite(draft, { id: instanceId }),
-      expectedUpdatedAt,
-    };
-  }
-  return {
-    ...buildGoogleCloudWrite(draft, { id: instanceId }),
-    expectedUpdatedAt,
-  };
-}
-
-function needsRemoteRelevantSave(draft: EditorDraft, instance: IntegrationInstanceDto): boolean {
-  if (draft.pluginId === GOOGLE_TRANSLATE_WEB_PLUGIN_ID) {
-    return hasGoogleTranslateWebConfigMutation(draft, instance);
-  }
-  if (draft.pluginId === EDGE_TTS_PLUGIN_ID) {
-    // Base URL change is local-only; credential-free Ready does not need a remote re-check.
-    return hasEdgeTtsConfigMutation(draft, instance);
-  }
-  return hasRemoteRelevantMutation(draft, instance);
+function requiresCredential(definition: ServiceIntegrationDefinitionDto): boolean {
+  return definition.credentialSlots.some((slot) => slot.required);
 }
 
 export function IntegrationEditor({ integrationInstanceId }: IntegrationEditorProps) {
@@ -158,15 +89,25 @@ export function IntegrationEditor({ integrationInstanceId }: IntegrationEditorPr
   const depsQuery = useQuery(integrationDependencyListOptions(integrationInstanceId));
   const definitionsQuery = useQuery(integrationDefinitionListOptions());
   const instance = detailQuery.data;
+  const definition = useMemo(
+    () => definitionsQuery.data?.find((entry) => entry.id === instance?.pluginId),
+    [definitionsQuery.data, instance?.pluginId],
+  );
+  const schemaSupported = Boolean(definition && instance && isSupportedSchema(definition, instance));
 
-  // null until the loaded instance is applied — avoids a Cloud empty draft bleeding into Web.
-  const [draft, setDraft] = useState<EditorDraft | null>(null);
+  const schemaText = useCallback<SchemaTextResolver>(
+    (key, fallback) => resolveLocalizedText((translationKey, options) => t(translationKey, options), key, fallback),
+    [t],
+  );
+  const schemaHostOptions = useMemo(() => createSchemaHostOptionResolver(schemaText), [schemaText]);
+
+  // null until a compatible definition is applied; prevents a prior instance's values leaking into another editor.
+  const [draft, setDraft] = useState<IntegrationSchemaDraft | null>(null);
   const [trackedInstance, setTrackedInstance] = useState<IntegrationInstanceDto | null>(null);
   const [renaming, setRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState("");
   const [deleteOpen, setDeleteOpen] = useState(false);
 
-  // Route id change: drop previous plugin draft entirely (plugin isolation).
   if (trackedInstance && trackedInstance.id !== integrationInstanceId) {
     setTrackedInstance(null);
     setDraft(null);
@@ -174,46 +115,38 @@ export function IntegrationEditor({ integrationInstanceId }: IntegrationEditorPr
     setRenameValue("");
   }
 
-  // Accept remote instance updates into the draft only while the form is clean.
-  // Always reset when instance id or plugin kind changes so Cloud/Web never share draft state.
-  if (instance) {
+  if (instance && definition && schemaSupported) {
     const pluginChanged = trackedInstance != null && trackedInstance.pluginId !== instance.pluginId;
     const idChanged = trackedInstance == null || trackedInstance.id !== instance.id;
     const revisionChanged = trackedInstance != null && trackedInstance.updatedAt !== instance.updatedAt;
-    const draftKindMismatch = draft != null && draft.pluginId !== instance.pluginId;
-    if (idChanged || pluginChanged || draftKindMismatch || revisionChanged) {
+    const definitionChanged = draft != null && draft.schemaVersion !== definition.configSchemaVersion;
+    const draftPluginMismatch = draft != null && draft.pluginId !== instance.pluginId;
+    if (idChanged || pluginChanged || draftPluginMismatch || definitionChanged || revisionChanged) {
       const shouldResetDraft =
         idChanged ||
         pluginChanged ||
-        draftKindMismatch ||
+        draftPluginMismatch ||
+        definitionChanged ||
         draft == null ||
-        (trackedInstance != null && isDraftClean(draft, trackedInstance));
+        (trackedInstance != null && isIntegrationDraftClean(definition, draft, trackedInstance));
       setTrackedInstance(instance);
       if (shouldResetDraft) {
-        setDraft(draftFromInstance(instance));
+        setDraft(draftFromIntegrationDto(instance, definition));
         setRenameValue(instance.displayName);
         setRenaming(false);
-      } else if (draft != null && draft.expectedUpdatedAt !== instance.updatedAt) {
-        // Keep user edits, but refresh the CAS token so save cannot send a null/stale empty field.
+      } else if (draft.expectedUpdatedAt !== instance.updatedAt) {
         setDraft({ ...draft, expectedUpdatedAt: instance.updatedAt });
       }
     }
   }
 
   const dirty = useMemo(() => {
-    if (!instance || !draft) return false;
-    if (draft.pluginId !== instance.pluginId) return false;
-    return !isDraftClean(draft, instance);
-  }, [draft, instance]);
+    if (!instance || !definition || !draft || !schemaSupported) {
+      return false;
+    }
+    return !isIntegrationDraftClean(definition, draft, instance);
+  }, [definition, draft, instance, schemaSupported]);
 
-  const capabilityIds = useMemo(() => {
-    if (!instance) return [];
-    const definition = definitionsQuery.data?.find((entry) => entry.id === instance.pluginId);
-    return definition?.capabilities.map((capability) => capability.id) ?? [];
-  }, [definitionsQuery.data, instance]);
-
-  // Tracks whether the most recent save mutated credentials or config, so
-  // onSuccess can trigger remote validation only when a re-check is meaningful (not name-only).
   const remoteRelevantSaveRef = useRef(false);
 
   const saveMutation = useMutation({
@@ -221,15 +154,14 @@ export function IntegrationEditor({ integrationInstanceId }: IntegrationEditorPr
     onSuccess: (saved) => {
       queryClient.setQueryData(integrationKeys.detail(saved.id), saved);
       void queryClient.invalidateQueries({ queryKey: integrationKeys.all });
-      // Clear pending secret after successful replacement.
-      setDraft(draftFromInstance(saved));
-      setTrackedInstance(saved);
+      if (definition && saved.pluginId === definition.id) {
+        setDraft(draftFromIntegrationDto(saved, definition));
+        setTrackedInstance(saved);
+      }
       toast.success({ title: t("plugins.toast.saved") });
-      // Remote validation is re-checked after credential or config mutation;
-      // name-only saves leave auth/config valid and do not need a network round-trip.
       const remoteRelevant = remoteRelevantSaveRef.current;
       remoteRelevantSaveRef.current = false;
-      if (remoteRelevant && !pluginMissing) {
+      if (remoteRelevant && saved.effectiveStatus !== "plugin_missing") {
         validateMutation.mutate();
       }
     },
@@ -242,15 +174,13 @@ export function IntegrationEditor({ integrationInstanceId }: IntegrationEditorPr
     },
   });
 
-  // Enable/disable is a dedicated IPC so missing-plugin instances can still be disabled
-  // without a full save (save requires the manifest for config/credential validation).
   const enabledMutation = useMutation({
     mutationFn: (enabled: boolean) => setIntegrationInstanceEnabled(integrationInstanceId, enabled),
     onSuccess: (saved) => {
       queryClient.setQueryData(integrationKeys.detail(saved.id), saved);
       void queryClient.invalidateQueries({ queryKey: integrationKeys.all });
       setDraft((current) =>
-        current ? { ...current, enabled: saved.enabled, expectedUpdatedAt: saved.updatedAt } : draftFromInstance(saved),
+        current ? { ...current, enabled: saved.enabled, expectedUpdatedAt: saved.updatedAt } : current,
       );
       setTrackedInstance(saved);
     },
@@ -265,34 +195,22 @@ export function IntegrationEditor({ integrationInstanceId }: IntegrationEditorPr
     onSuccess: (result) => {
       void queryClient.invalidateQueries({ queryKey: integrationKeys.all });
       const description = result.message ?? undefined;
-      const isWeb = instance?.pluginId === GOOGLE_TRANSLATE_WEB_PLUGIN_ID;
-      const isEdge = instance?.pluginId === EDGE_TTS_PLUGIN_ID;
-      const isZeroSecret = isWeb || isEdge;
-      if (result.healthStatus === "ready" && (result.remoteChecked || isZeroSecret)) {
+      if (result.healthStatus === "ready") {
         toast.success({
           title: t("plugins.toast.validated"),
           description:
             description ??
-            (isEdge
-              ? t("plugins.edgeTts.readyHint")
-              : isWeb
-                ? t("plugins.googleTranslateWeb.readyHint")
-                : t("plugins.status.authReadyHint")),
+            (definition && requiresCredential(definition)
+              ? t("plugins.status.authReadyHint")
+              : t("plugins.status.localOnlyHint")),
         });
         return;
       }
       if (result.healthStatus === "degraded") {
-        toast.warning({
-          title: t("plugins.toast.validateDegraded"),
-          description,
-        });
+        toast.warning({ title: t("plugins.toast.validateDegraded"), description });
         return;
       }
-      // unconfigured / missing plugin / local-only incomplete checks
-      toast.error({
-        title: t("plugins.toast.validateFailed"),
-        description,
-      });
+      toast.error({ title: t("plugins.toast.validateFailed"), description });
     },
     onError: (error) => {
       const message = getIpcErrorMessage(error, t("plugins.toast.validateFailed"));
@@ -314,7 +232,7 @@ export function IntegrationEditor({ integrationInstanceId }: IntegrationEditorPr
     },
   });
 
-  if (detailQuery.isLoading) {
+  if (detailQuery.isLoading || definitionsQuery.isLoading) {
     return (
       <div className="flex flex-1 items-center p-8">
         <p className="text-body-md text-neutral">{t("plugins.loading")}</p>
@@ -336,16 +254,21 @@ export function IntegrationEditor({ integrationInstanceId }: IntegrationEditorPr
     );
   }
 
-  if (!isSupportedPlugin(instance.pluginId)) {
+  if (!definition || !schemaSupported) {
     return (
-      <div className="flex flex-1 items-center p-8">
+      <div className="flex flex-1 flex-col items-start justify-center gap-2 p-8" role="status">
+        <h2 className="text-headline-display font-bold text-on-surface">{instance.displayName}</h2>
         <p className="text-body-md text-neutral">{t("plugins.unsupportedInstance")}</p>
       </div>
     );
   }
 
-  // Wait until draft is bound to this instance/plugin before rendering the editor shell.
-  if (!draft || draft.pluginId !== instance.pluginId || trackedInstance?.id !== instance.id) {
+  if (
+    !draft ||
+    draft.pluginId !== instance.pluginId ||
+    draft.schemaVersion !== definition.configSchemaVersion ||
+    trackedInstance?.id !== instance.id
+  ) {
     return (
       <div className="flex flex-1 items-center p-8">
         <p className="text-body-md text-neutral">{t("plugins.loading")}</p>
@@ -354,12 +277,19 @@ export function IntegrationEditor({ integrationInstanceId }: IntegrationEditorPr
   }
 
   const pluginMissing = instance.effectiveStatus === "plugin_missing";
-  const isWeb = instance.pluginId === GOOGLE_TRANSLATE_WEB_PLUGIN_ID;
-  const isEdge = instance.pluginId === EDGE_TTS_PLUGIN_ID;
   const pending =
     saveMutation.isPending || deleteMutation.isPending || validateMutation.isPending || enabledMutation.isPending;
   const dependencies = depsQuery.data ?? [];
-  // Prefer draft CAS token; fall back to loaded instance revision (never null on update).
+  const capabilityIds = definition.capabilities.map((capability) => capability.id);
+  const hasRequiredCredential = requiresCredential(definition);
+  const statusHint =
+    instance.healthStatus === "ready"
+      ? hasRequiredCredential
+        ? t("plugins.status.authReadyHint")
+        : t("plugins.status.localOnlyHint")
+      : instance.healthStatus === "degraded"
+        ? t("plugins.status.authDegradedHint")
+        : t("plugins.status.localOnlyHint");
   const saveExpectedUpdatedAt = draft.expectedUpdatedAt?.trim() || instance.updatedAt;
   const canSave = dirty && !pluginMissing && !pending && Boolean(saveExpectedUpdatedAt);
 
@@ -374,16 +304,12 @@ export function IntegrationEditor({ integrationInstanceId }: IntegrationEditorPr
                 className={configEditorRenameInputClassName}
                 value={renameValue}
                 disabled={pending}
-                onChange={(event) => {
-                  setRenameValue(event.currentTarget.value);
-                }}
+                onChange={(event) => setRenameValue(event.currentTarget.value)}
                 onKeyDown={(event) => {
                   if (event.key === "Enter") {
                     event.preventDefault();
                     setDraft((current) =>
-                      patchDraft(current, {
-                        displayName: renameValue.trim() || current?.displayName || "",
-                      }),
+                      current ? { ...current, displayName: renameValue.trim() || current.displayName } : current,
                     );
                     setRenaming(false);
                   }
@@ -401,9 +327,7 @@ export function IntegrationEditor({ integrationInstanceId }: IntegrationEditorPr
                 disabled={pending}
                 onClick={() => {
                   setDraft((current) =>
-                    patchDraft(current, {
-                      displayName: renameValue.trim() || current?.displayName || "",
-                    }),
+                    current ? { ...current, displayName: renameValue.trim() || current.displayName } : current,
                   );
                   setRenaming(false);
                 }}
@@ -450,11 +374,10 @@ export function IntegrationEditor({ integrationInstanceId }: IntegrationEditorPr
                 checked={draft.enabled}
                 disabled={pending}
                 onCheckedChange={(checked) => {
-                  // Optimistic local mirror; mutation is authoritative.
-                  setDraft((current) => patchDraft(current, { enabled: checked }));
+                  setDraft((current) => (current ? { ...current, enabled: checked } : current));
                   enabledMutation.mutate(checked, {
                     onError: () => {
-                      setDraft((current) => patchDraft(current, { enabled: !checked }));
+                      setDraft((current) => (current ? { ...current, enabled: !checked } : current));
                     },
                   });
                 }}
@@ -467,9 +390,7 @@ export function IntegrationEditor({ integrationInstanceId }: IntegrationEditorPr
               className={dangerIconButtonClassName}
               aria-label={t("plugins.deleteAria")}
               disabled={pending}
-              onClick={() => {
-                setDeleteOpen(true);
-              }}
+              onClick={() => setDeleteOpen(true)}
             >
               <IconMaterialSymbolsLightDeleteOutlineSharp className="size-4" />
             </Button>
@@ -481,9 +402,7 @@ export function IntegrationEditor({ integrationInstanceId }: IntegrationEditorPr
               type="button"
               className={outlineButtonClassName}
               disabled={pending || dirty || pluginMissing}
-              onClick={() => {
-                validateMutation.mutate();
-              }}
+              onClick={() => validateMutation.mutate()}
             >
               {t("plugins.validate")}
             </Button>
@@ -492,10 +411,16 @@ export function IntegrationEditor({ integrationInstanceId }: IntegrationEditorPr
               className={primaryButtonClassName}
               disabled={!canSave}
               onClick={() => {
-                if (!canSave) return;
-                // Enabled is persisted via setIntegrationInstanceEnabled; keep write in sync.
-                remoteRelevantSaveRef.current = needsRemoteRelevantSave(draft, instance);
-                saveMutation.mutate(buildWrite(draft, instance.id, saveExpectedUpdatedAt));
+                if (!canSave) {
+                  return;
+                }
+                remoteRelevantSaveRef.current = hasIntegrationRemoteRelevantMutation(definition, draft, instance);
+                saveMutation.mutate(
+                  buildIntegrationWrite(definition, draft, {
+                    id: instance.id,
+                    expectedUpdatedAt: saveExpectedUpdatedAt,
+                  }),
+                );
               }}
             >
               {saveMutation.isPending ? t("common.saving") : t("common.save")}
@@ -508,45 +433,13 @@ export function IntegrationEditor({ integrationInstanceId }: IntegrationEditorPr
             <h3 className="text-label-sm font-bold tracking-wide text-neutral uppercase">
               {t("plugins.status.label")}
             </h3>
-            <p className="text-body-md text-on-surface">
-              {(isWeb || isEdge) && instance.effectiveStatus === "ready"
-                ? isEdge
-                  ? t("plugins.edgeTts.statusReady")
-                  : t("plugins.googleTranslateWeb.statusReady")
-                : t(statusLabelKey(instance.effectiveStatus))}
-            </p>
+            <p className="text-body-md text-on-surface">{t(statusLabelKey(instance.effectiveStatus))}</p>
             {instance.lastErrorCode ? (
               <p className="text-body-tight text-error">
                 {t("plugins.status.lastError", { code: instance.lastErrorCode })}
               </p>
             ) : null}
-            <p className="text-body-tight text-neutral">
-              {isEdge
-                ? instance.effectiveStatus === "ready"
-                  ? t("plugins.edgeTts.readyHint")
-                  : instance.effectiveStatus === "disabled"
-                    ? t("plugins.edgeTts.disabledHint")
-                    : instance.effectiveStatus === "plugin_missing"
-                      ? t("plugins.edgeTts.pluginMissingHint")
-                      : instance.effectiveStatus === "unconfigured"
-                        ? t("plugins.edgeTts.unconfiguredHint")
-                        : t("plugins.edgeTts.privacyNote")
-                : isWeb
-                  ? instance.effectiveStatus === "ready"
-                    ? t("plugins.googleTranslateWeb.readyHint")
-                    : instance.effectiveStatus === "disabled"
-                      ? t("plugins.googleTranslateWeb.disabledHint")
-                      : instance.effectiveStatus === "plugin_missing"
-                        ? t("plugins.googleTranslateWeb.pluginMissingHint")
-                        : instance.effectiveStatus === "unconfigured"
-                          ? t("plugins.googleTranslateWeb.unconfiguredHint")
-                          : t("plugins.googleTranslateWeb.privacyNote")
-                  : instance.healthStatus === "ready"
-                    ? t("plugins.status.authReadyHint")
-                    : instance.healthStatus === "degraded"
-                      ? t("plugins.status.authDegradedHint")
-                      : t("plugins.status.localOnlyHint")}
-            </p>
+            <p className="text-body-tight text-neutral">{statusHint}</p>
           </section>
 
           <section className="space-y-2">
@@ -568,32 +461,38 @@ export function IntegrationEditor({ integrationInstanceId }: IntegrationEditorPr
             <h3 className="text-label-sm font-bold tracking-wide text-neutral uppercase">
               {t("plugins.configuration")}
             </h3>
-            {/* Form kind is driven by instance.pluginId (authoritative), not residual draft state. */}
-            {instance.pluginId === GOOGLE_TRANSLATE_WEB_PLUGIN_ID &&
-            draft.pluginId === GOOGLE_TRANSLATE_WEB_PLUGIN_ID ? (
-              <GoogleTranslateWebIntegrationForm
-                key={instance.id}
-                draft={draft}
-                disabled={pending || pluginMissing}
-                onChange={setDraft}
-              />
-            ) : instance.pluginId === EDGE_TTS_PLUGIN_ID && draft.pluginId === EDGE_TTS_PLUGIN_ID ? (
-              <EdgeTtsIntegrationForm
-                key={instance.id}
-                draft={draft}
-                disabled={pending || pluginMissing}
-                onChange={setDraft}
-              />
-            ) : instance.pluginId === GOOGLE_CLOUD_PLUGIN_ID && draft.pluginId === GOOGLE_CLOUD_PLUGIN_ID ? (
-              <GoogleCloudIntegrationForm
-                key={instance.id}
-                draft={draft}
-                disabled={pending || pluginMissing}
-                onChange={setDraft}
-              />
-            ) : (
-              <p className="text-body-tight text-neutral">{t("plugins.unsupportedInstance")}</p>
-            )}
+            <SchemaForm
+              schema={definition.configSchema}
+              values={draft.schema.values}
+              credentials={draft.schema.credentials}
+              idPrefix={`integration-${instance.id}`}
+              disabled={pending || pluginMissing}
+              resolveText={schemaText}
+              resolveOptions={schemaHostOptions}
+              onValueChange={(fieldId, value) => {
+                setDraft((current) =>
+                  current
+                    ? {
+                        ...current,
+                        schema: setSchemaDraftValue(current.schema, fieldId, value),
+                      }
+                    : current,
+                );
+              }}
+              onCredentialChange={(slotId, credential) => {
+                setDraft((current) => {
+                  if (!current) {
+                    return current;
+                  }
+                  const currentValue = current.schema.credentials[slotId]?.value ?? "";
+                  const nextSchema =
+                    credential.action === "replace" && credential.value !== currentValue
+                      ? setSchemaCredentialValue(current.schema, slotId, credential.value)
+                      : setSchemaCredentialAction(current.schema, slotId, credential.action);
+                  return { ...current, schema: nextSchema };
+                });
+              }}
+            />
           </section>
 
           <section className="space-y-2">
@@ -606,9 +505,9 @@ export function IntegrationEditor({ integrationInstanceId }: IntegrationEditorPr
               <p className="text-body-tight text-neutral">{t("plugins.dependencies.empty")}</p>
             ) : (
               <ul className="m-0 list-disc space-y-1 pl-5 text-body-tight text-on-surface">
-                {dependencies.map((dep) => (
-                  <li key={`${dep.kind}:${dep.id}`}>
-                    {dep.displayName} ({dep.kind})
+                {dependencies.map((dependency) => (
+                  <li key={`${dependency.kind}:${dependency.id}`}>
+                    {dependency.displayName} ({dependency.kind})
                   </li>
                 ))}
               </ul>

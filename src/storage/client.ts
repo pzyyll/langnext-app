@@ -22,7 +22,7 @@ import type {
   RegionScreenshotBackdrop,
   RegionScreenshotResult,
   RegionScreenshotSelection,
-  ServiceIntegrationManifest,
+  ServiceIntegrationDefinitionDto,
   ShortcutDefinition,
   TranslationHistoryDto,
   TranslationHistoryListQuery,
@@ -159,8 +159,8 @@ export async function cancelSpeechSynthesis(requestId: string): Promise<boolean>
   return runStorage(invokeEffect<boolean>("cancel_speech_synthesis", { requestId }));
 }
 
-export async function listServiceIntegrationDefinitions(): Promise<ServiceIntegrationManifest[]> {
-  return runStorage(invokeEffect<ServiceIntegrationManifest[]>("list_service_integration_definitions"));
+export async function listServiceIntegrationDefinitions(): Promise<ServiceIntegrationDefinitionDto[]> {
+  return runStorage(invokeEffect<ServiceIntegrationDefinitionDto[]>("list_service_integration_definitions"));
 }
 
 export async function listIntegrationInstances(): Promise<IntegrationInstanceDto[]> {

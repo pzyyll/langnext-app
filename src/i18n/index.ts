@@ -49,7 +49,7 @@ export async function handleLanguageStorageEvent(event: Pick<StorageEvent, "key"
  * Same-window updates use LANGUAGE_CHANGE_EVENT / i18n.languageChanged instead.
  */
 export function installLanguageCrossWindowSync(): void {
-  if (typeof window === "undefined" || languageSyncInstalled) {
+  if (typeof window === "undefined" || typeof window.addEventListener !== "function" || languageSyncInstalled) {
     return;
   }
   languageSyncInstalled = true;

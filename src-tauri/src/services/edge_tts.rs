@@ -1,5 +1,6 @@
 // ABOUTME: Edge TTS capability handler (speech.synthesize@1) over a configurable OpenAI-compatible API.
-// ABOUTME: Credential-free; calls reqwest directly to read raw MP3 bytes that the broker cannot carry.
+// ABOUTME: Credential-free; routes bounded binary MP3 responses through the shared network broker.
+use crate::domain::provider_http::ProviderHttpMethod;
 use crate::domain::service_capability::{
   CapabilityError, CapabilityErrorCode, EdgeTtsPreferences, ExecutionContext, SPEECH_AUDIO_MAX_BYTES,
   SPEECH_SYNTHESIZE_CAPABILITY_ID, SpeechSynthesizeRequest, SpeechSynthesizeResponse, validate_capability_language_id,
@@ -7,44 +8,29 @@ use crate::domain::service_capability::{
 };
 use crate::domain::service_integration::{EDGE_TTS_BASE_URL_MAX_LEN, EDGE_TTS_DEFAULT_BASE_URL, EdgeTtsConfigV1};
 use crate::error::StorageError;
-use crate::repositories::integration_instances;
-use crate::storage::Database;
+use crate::services::network_broker::{BrokerRequest, NetworkBroker};
 use serde_json::{Value, json};
-use std::sync::OnceLock;
+use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 use uuid::Uuid;
 
+/// Manifest endpoint alias for the instance-scoped OpenAI-compatible TTS base URL.
+pub const EDGE_TTS_ENDPOINT_ALIAS: &str = "tts_api";
 /// Relative path appended to the configured base URL for synthesis.
 pub const EDGE_TTS_SYNTHESIZE_PATH: &str = "v1/audio/speech";
 /// Fixed synthesis timeout (provider may take longer than the default 20s).
 pub const EDGE_TTS_SYNTHESIS_TIMEOUT: Duration = Duration::from_secs(60);
 
-static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-
-fn shared_client() -> Result<&'static reqwest::Client, CapabilityError> {
-  if CLIENT.get().is_none() {
-    let client = reqwest::Client::builder()
-      .timeout(EDGE_TTS_SYNTHESIS_TIMEOUT)
-      .connect_timeout(EDGE_TTS_SYNTHESIS_TIMEOUT)
-      .redirect(reqwest::redirect::Policy::none())
-      .build()
-      .map_err(|_| CapabilityError::new(CapabilityErrorCode::Internal, "failed to build HTTP client"))?;
-    let _ = CLIENT.set(client);
-  }
-  CLIENT
-    .get()
-    .ok_or_else(|| CapabilityError::new(CapabilityErrorCode::Internal, "HTTP client unavailable"))
-}
-
-/// Edge TTS capability surface bound to storage for instance config lookup.
+/// Edge TTS capability surface routed through the host-owned network broker.
 #[derive(Clone)]
 pub struct EdgeTtsCapabilities {
-  db: Database,
+  network: Arc<NetworkBroker>,
 }
 
 impl EdgeTtsCapabilities {
-  pub fn new(db: Database) -> Self {
-    Self { db }
+  pub fn new(network: Arc<NetworkBroker>) -> Self {
+    Self { network }
   }
 
   pub async fn synthesize_speech(
@@ -67,11 +53,6 @@ impl EdgeTtsCapabilities {
     })?;
     validate_edge_tts_preferences(&preferences).map_err(|e| e.with_capability_id(cap).with_request_id(rid))?;
 
-    let base_url = load_edge_tts_base_url(&self.db, instance_id)
-      .map_err(|e| e.with_capability_id(cap).with_request_id(rid))?
-      .to_string();
-    let url = format!("{base_url}/{EDGE_TTS_SYNTHESIZE_PATH}");
-
     // Edge TTS pitch is a string scalar ("-50".."50"); Rust f64 Display strips trailing zeros.
     let body = json!({
       "input": request.text,
@@ -82,79 +63,67 @@ impl EdgeTtsCapabilities {
     });
 
     if context.cancel.is_cancelled() {
-      return Err(CapabilityError::new(
-        CapabilityErrorCode::Cancelled,
-        "speech synthesis cancelled",
-      ));
+      return Err(
+        CapabilityError::new(CapabilityErrorCode::Cancelled, "speech synthesis cancelled")
+          .with_capability_id(cap)
+          .with_request_id(rid),
+      );
     }
 
-    let response = shared_client()?
-      .post(url)
-      .header(reqwest::header::CONTENT_TYPE, "application/json")
-      .header(reqwest::header::ACCEPT, "audio/mpeg")
-      .body(body.to_string())
-      .send()
+    let response = self
+      .network
+      .execute_bytes(BrokerRequest {
+        integration_instance_id: instance_id,
+        capability_id: cap.into(),
+        execution_principal: context.principal(),
+        endpoint_alias: EDGE_TTS_ENDPOINT_ALIAS.into(),
+        method: ProviderHttpMethod::Post,
+        relative_path: EDGE_TTS_SYNTHESIZE_PATH.into(),
+        query: vec![],
+        headers: HashMap::from([("Accept".into(), "audio/mpeg".into())]),
+        body: Some(body.to_string()),
+        content_type: Some("application/json".into()),
+        auth: None,
+        request_id: rid.into(),
+        cancel: Some(context.cancel.clone()),
+        max_response_body_bytes: Some(SPEECH_AUDIO_MAX_BYTES),
+        max_request_body_bytes: None,
+        timeout: Some(EDGE_TTS_SYNTHESIS_TIMEOUT),
+      })
       .await
-      .map_err(map_reqwest_error)?;
+      .map_err(|e| e.with_capability_id(cap).with_request_id(rid))?;
 
-    let status = response.status().as_u16();
-    if !(200..300).contains(&status) {
-      // Drain a bounded text body for error diagnostics; binary-safe because we cap the bytes.
-      let text = response.text().await.unwrap_or_default();
-      return Err(map_edge_tts_http_error(status, &text));
+    if !(200..300).contains(&response.status) {
+      let error_body = String::from_utf8_lossy(&response.body);
+      return Err(
+        map_edge_tts_http_error(response.status, error_body.as_ref())
+          .with_capability_id(cap)
+          .with_request_id(rid),
+      );
     }
 
-    // Reject oversized payloads before slurping the full body when Content-Length is known.
-    if let Some(declared) = response.content_length() {
-      if declared > SPEECH_AUDIO_MAX_BYTES as u64 {
-        return Err(CapabilityError::new(
+    let mp3_bytes = response.body;
+    if mp3_bytes.is_empty() {
+      return Err(
+        CapabilityError::new(CapabilityErrorCode::InvalidResponse, "Edge TTS returned empty audio")
+          .with_capability_id(cap)
+          .with_request_id(rid),
+      );
+    }
+    // The broker applies this exact cap before returning bytes; retain a local defense-in-depth check.
+    if mp3_bytes.len() > SPEECH_AUDIO_MAX_BYTES {
+      return Err(
+        CapabilityError::new(
           CapabilityErrorCode::InvalidResponse,
           "Edge TTS audio exceeds size limit",
-        ));
-      }
-    }
-
-    let mp3_bytes = response
-      .bytes()
-      .await
-      .map_err(|_| CapabilityError::new(CapabilityErrorCode::Network, "failed to read Edge TTS audio"))?
-      .to_vec();
-    if mp3_bytes.is_empty() {
-      return Err(CapabilityError::new(
-        CapabilityErrorCode::InvalidResponse,
-        "Edge TTS returned empty audio",
-      ));
-    }
-    if mp3_bytes.len() > SPEECH_AUDIO_MAX_BYTES {
-      return Err(CapabilityError::new(
-        CapabilityErrorCode::InvalidResponse,
-        "Edge TTS audio exceeds size limit",
-      ));
+        )
+        .with_capability_id(cap)
+        .with_request_id(rid),
+      );
     }
 
     Ok(SpeechSynthesizeResponse { mp3_bytes })
   }
-}
-
-fn load_edge_tts_base_url(db: &Database, instance_id: Uuid) -> Result<String, CapabilityError> {
-  let instance = db
-    .read(|conn| integration_instances::get(conn, instance_id))
-    .map_err(|e| match e {
-      StorageError::NotFound(_) => CapabilityError::new(
-        CapabilityErrorCode::InvalidConfiguration,
-        "integration instance not found",
-      ),
-      _ => CapabilityError::new(CapabilityErrorCode::Internal, "failed to load integration instance"),
-    })?;
-  let config: EdgeTtsConfigV1 = serde_json::from_str(&instance.config_json).map_err(|_| {
-    CapabilityError::new(
-      CapabilityErrorCode::InvalidConfiguration,
-      "invalid Edge TTS configuration",
-    )
-  })?;
-  let normalized = normalize_edge_tts_base_url(&config.base_url)
-    .map_err(|msg| CapabilityError::new(CapabilityErrorCode::InvalidConfiguration, msg))?;
-  Ok(normalized.canonical_url)
 }
 
 /// Normalized Edge TTS base URL parts.
@@ -311,22 +280,82 @@ fn extract_provider_code(body: &str) -> String {
     .collect()
 }
 
-fn map_reqwest_error(err: reqwest::Error) -> CapabilityError {
-  if err.is_timeout() {
-    return CapabilityError::new(CapabilityErrorCode::Timeout, "Edge TTS request timed out").with_retryable(true);
-  }
-  if err.is_connect() || err.is_request() {
-    return CapabilityError::new(CapabilityErrorCode::Network, "Edge TTS network request failed").with_retryable(true);
-  }
-  CapabilityError::new(CapabilityErrorCode::Network, "Edge TTS network request failed").with_retryable(true)
-}
-
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::domain::cancel::CancelToken;
+  use crate::domain::provider_http::ProviderHttpStreamEvent;
   use crate::domain::service_capability::EDGE_TTS_VOICE_DEFAULT;
   use crate::domain::service_integration::{EDGE_TTS_PLUGIN_ID, IntegrationHealthStatus, IntegrationInstance};
   use crate::domain::time::{new_id, now_rfc3339};
+  use crate::repositories::integration_instances;
+  use crate::services::bounded_http::{BoundedHttpResponse, PreparedHttpRequest, RawHttpTransport};
+  use crate::services::network_broker::NetworkBroker;
+  use crate::services::service_integration_registry::ServiceIntegrationRegistry;
+  use crate::storage::Database;
+  use std::future::Future;
+  use std::pin::Pin;
+  use std::sync::Mutex;
+
+  struct CaptureTransport {
+    last: Mutex<Option<PreparedHttpRequest>>,
+    response: Mutex<Result<BoundedHttpResponse, StorageError>>,
+  }
+
+  impl RawHttpTransport for CaptureTransport {
+    fn request(
+      &self,
+      prepared: PreparedHttpRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<BoundedHttpResponse, StorageError>> + Send + '_>> {
+      Box::pin(async move {
+        *self.last.lock().unwrap() = Some(prepared);
+        match &*self.response.lock().unwrap() {
+          Ok(response) => Ok(response.clone()),
+          Err(error) => Err(StorageError::Validation(error.to_string())),
+        }
+      })
+    }
+
+    fn stream(
+      &self,
+      _prepared: PreparedHttpRequest,
+      _cancel: CancelToken,
+      _on_event: Box<dyn Fn(ProviderHttpStreamEvent) -> Result<(), StorageError> + Send>,
+    ) -> Pin<Box<dyn Future<Output = Result<(), StorageError>> + Send + '_>> {
+      Box::pin(async { Err(StorageError::Validation("stream not supported".into())) })
+    }
+  }
+
+  fn seed_edge_instance(db: &Database, base_url: &str) -> Uuid {
+    let id = new_id();
+    let now = now_rfc3339();
+    let config_json = serialize_edge_tts_config(&EdgeTtsConfigV1 {
+      base_url: base_url.into(),
+    })
+    .unwrap();
+    db.transaction(|uow| {
+      integration_instances::insert(
+        uow.conn(),
+        &IntegrationInstance {
+          id,
+          plugin_id: EDGE_TTS_PLUGIN_ID.into(),
+          plugin_version: "1.0.0".into(),
+          display_name: "Edge TTS".into(),
+          enabled: true,
+          config_json,
+          config_schema_version: 1,
+          health_status: IntegrationHealthStatus::Ready,
+          last_validated_at: None,
+          last_error_code: None,
+          created_at: now.clone(),
+          updated_at: now,
+        },
+      )?;
+      Ok(())
+    })
+    .unwrap();
+    id
+  }
 
   #[test]
   fn normalize_base_url_accepts_default_and_strips_trailing_slash() {
@@ -348,8 +377,8 @@ mod tests {
 
   #[test]
   fn validate_config_normalizes_and_rejects_forbidden() {
-    let canonical = validate_edge_tts_config("{\"baseUrl\":\"https://my.host/api/\"}").unwrap();
-    assert!(canonical.contains("\"baseUrl\":\"https://my.host/api\""));
+    let canonical = validate_edge_tts_config("{\"base-url\":\"https://my.host/api/\"}").unwrap();
+    assert!(canonical.contains("\"base-url\":\"https://my.host/api\""));
     assert!(validate_edge_tts_config("{\"apiKey\":\"x\"}").is_err());
     // Empty base URL falls back to the bundled default.
     let fallback = validate_edge_tts_config("{}").unwrap();
@@ -358,8 +387,8 @@ mod tests {
 
   #[test]
   fn config_complete_is_true_for_valid_base_url() {
-    assert!(edge_tts_config_complete("{\"baseUrl\":\"https://my.host\"}"));
-    assert!(!edge_tts_config_complete("{\"baseUrl\":\"http://my.host\"}"));
+    assert!(edge_tts_config_complete("{\"base-url\":\"https://my.host\"}"));
+    assert!(!edge_tts_config_complete("{\"base-url\":\"http://my.host\"}"));
     assert!(!edge_tts_config_complete("not json"));
   }
 
@@ -387,37 +416,58 @@ mod tests {
     assert!(extract_provider_code("not json").is_empty());
   }
 
-  #[test]
-  fn load_base_url_reads_instance_config() {
+  #[tokio::test]
+  async fn synthesize_routes_binary_audio_through_broker() {
     let dir = tempfile::tempdir().unwrap();
     let db = Database::new(dir.path()).unwrap();
     db.initialize().unwrap();
-    let id = new_id();
-    let now = now_rfc3339();
-    let config = serialize_edge_tts_config(&default_edge_tts_config()).unwrap();
-    db.transaction(|uow| {
-      integration_instances::insert(
-        uow.conn(),
-        &IntegrationInstance {
-          id,
-          plugin_id: EDGE_TTS_PLUGIN_ID.into(),
-          plugin_version: "1.0.0".into(),
-          display_name: "Edge TTS".into(),
-          enabled: true,
-          config_json: config,
-          config_schema_version: 1,
-          health_status: IntegrationHealthStatus::Ready,
-          last_validated_at: None,
-          last_error_code: None,
-          created_at: now.clone(),
-          updated_at: now,
+    let instance_id = seed_edge_instance(&db, "https://edge.example/api");
+    let mp3_bytes = vec![0xFF, 0xFB, 0x90, 0x64];
+    let transport = Arc::new(CaptureTransport {
+      last: Mutex::new(None),
+      response: Mutex::new(Ok(BoundedHttpResponse {
+        status: 200,
+        headers: HashMap::from([("content-type".into(), "audio/mpeg".into())]),
+        body: mp3_bytes.clone(),
+      })),
+    });
+    let registry = Arc::new(ServiceIntegrationRegistry::bundled().unwrap());
+    let broker = Arc::new(NetworkBroker::with_transport(db, registry, transport.clone()));
+    let capabilities = EdgeTtsCapabilities::new(broker);
+
+    let response = capabilities
+      .synthesize_speech(
+        instance_id,
+        SpeechSynthesizeRequest {
+          text: "你好".into(),
+          language_id: "zh".into(),
+          preferences: serde_json::json!({
+            "voice": EDGE_TTS_VOICE_DEFAULT,
+            "speed": 1.0,
+            "pitch": 0.0,
+            "style": "general",
+          }),
         },
-      )?;
-      Ok(())
-    })
-    .unwrap();
-    let url = load_edge_tts_base_url(&db, id).unwrap();
-    assert_eq!(url, "https://tts.wangwangit.com");
+        ExecutionContext {
+          request_id: "edge-broker-1".into(),
+          cancel: CancelToken::new(),
+          deadline: None,
+          integration_instance_id: instance_id,
+          plugin_id: EDGE_TTS_PLUGIN_ID.into(),
+          capability_id: SPEECH_SYNTHESIZE_CAPABILITY_ID.into(),
+        },
+      )
+      .await
+      .unwrap();
+
+    assert_eq!(response.mp3_bytes, mp3_bytes);
+    let prepared = transport.last.lock().unwrap().take().unwrap();
+    assert_eq!(prepared.url.as_str(), "https://edge.example/api/v1/audio/speech");
+    assert_eq!(prepared.headers.get("Accept").map(String::as_str), Some("audio/mpeg"));
+    assert_eq!(prepared.content_type.as_deref(), Some("application/json"));
+    assert_eq!(prepared.max_response_body_bytes, Some(SPEECH_AUDIO_MAX_BYTES));
+    assert_eq!(prepared.timeout, Some(EDGE_TTS_SYNTHESIS_TIMEOUT));
+    assert!(!prepared.headers.contains_key("Authorization"));
   }
 
   // Silence unused import warning for EDGE_TTS_VOICE_DEFAULT in test builds if not referenced.

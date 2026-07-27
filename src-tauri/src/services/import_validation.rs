@@ -13,9 +13,7 @@ use crate::domain::provider::{
   CredentialKind, ModelsSyncStatus, ProviderExport, ProviderInstance, validate_adapter_id,
 };
 use crate::domain::service_capability::{validate_ocr_image_preferences, validate_speech_synthesize_preferences};
-use crate::domain::service_integration::{
-  GOOGLE_CLOUD_PLUGIN_ID, GOOGLE_TRANSLATE_WEB_PLUGIN_ID, IntegrationHealthStatus, IntegrationInstance,
-};
+use crate::domain::service_integration::{IntegrationHealthStatus, IntegrationInstance};
 use crate::domain::settings::{AppSettingsV1, GlobalProxyMode};
 use crate::domain::speech_service::{
   GOOGLE_TTS_PREFERENCES_SCHEMA_VERSION, SPEECH_DISPLAY_NAME_MAX_LEN, SpeechService,
@@ -29,9 +27,6 @@ use crate::domain::translation_profile::{
 use crate::error::StorageError;
 use crate::repositories::{
   integration_instances, ocr_services, provider_instances, provider_models, speech_services, translation_profiles,
-};
-use crate::services::google_translate_web::{
-  google_translate_web_config_complete, validate_google_translate_web_config,
 };
 use crate::services::providers::validate_provider_url;
 use crate::services::service_integration_registry::ServiceIntegrationRegistry;
@@ -917,7 +912,7 @@ fn integration_from_export(
 ) -> IntegrationInstance {
   // Credential-bearing plugins stay unconfigured until re-auth.
   // Zero-secret Web instances with complete validated config are Ready and executable.
-  let health_status = imported_integration_health(&exported.plugin_id, &config_json);
+  let health_status = imported_integration_health(&exported.plugin_id, &config_json, exported.config_schema_version);
   IntegrationInstance {
     id,
     plugin_id: exported.plugin_id.clone(),
@@ -941,49 +936,53 @@ fn bundled_registry() -> Option<&'static ServiceIntegrationRegistry> {
     .as_ref()
 }
 
-/// True when the plugin declares credential slots (secrets never travel with import).
+/// True when the plugin requires remote auth (token grant) before becoming Ready.
 fn integration_plugin_requires_authentication(plugin_id: &str) -> bool {
-  match bundled_registry().and_then(|reg| reg.get(plugin_id)) {
-    Some(manifest) => !manifest.credential_slots.is_empty(),
+  match bundled_registry().and_then(|reg| reg.get_registration(plugin_id)) {
+    Some(registration) => registration.requires_remote_auth(),
     // Unknown plugins: fail closed and require re-auth rather than claiming zero-secret readiness.
     None => true,
   }
 }
 
-/// Normalize/validate plugin config for import. Rejects unsafe Web proxy URLs; strips GTX proxy_url.
+/// Normalize/validate plugin config for import via the registration's config adapter.
 fn normalize_imported_integration_config(plugin_id: &str, config_json: &str) -> Result<String, StorageError> {
-  if plugin_id == GOOGLE_TRANSLATE_WEB_PLUGIN_ID {
-    return validate_google_translate_web_config(config_json);
-  }
-  if plugin_id == GOOGLE_CLOUD_PLUGIN_ID {
-    // Structural JSON only — credentials are never present and auth is re-required separately.
-    let value: serde_json::Value = serde_json::from_str(config_json)
-      .map_err(|_| StorageError::Validation("config_json must be valid JSON".into()))?;
-    if !value.is_object() {
-      return Err(StorageError::Validation("config_json must be an object".into()));
+  match bundled_registry().and_then(|reg| reg.get_registration(plugin_id)) {
+    Some(registration) => registration.config_adapter.normalize_config(config_json),
+    None => {
+      // Unknown plugins: accept JSON objects as structural config.
+      let value: serde_json::Value = serde_json::from_str(config_json)
+        .map_err(|_| StorageError::Validation("config_json must be valid JSON".into()))?;
+      if !value.is_object() {
+        return Err(StorageError::Validation("config_json must be an object".into()));
+      }
+      Ok(config_json.to_string())
     }
-    // Reject accidental Web-only channel field on Cloud configs (credential fields must not mix).
-    if value.get("channel").is_some() || value.get("proxyUrl").is_some() {
-      return Err(StorageError::Validation(
-        "Google Cloud config rejects Web channel/proxyUrl fields".into(),
-      ));
-    }
-    return Ok(config_json.to_string());
   }
-  // Unknown plugins: accept JSON objects as structural config.
-  let value: serde_json::Value =
-    serde_json::from_str(config_json).map_err(|_| StorageError::Validation("config_json must be valid JSON".into()))?;
-  if !value.is_object() {
-    return Err(StorageError::Validation("config_json must be an object".into()));
-  }
-  Ok(config_json.to_string())
 }
 
-fn imported_integration_health(plugin_id: &str, config_json: &str) -> IntegrationHealthStatus {
-  if plugin_id == GOOGLE_TRANSLATE_WEB_PLUGIN_ID && google_translate_web_config_complete(config_json) {
-    return IntegrationHealthStatus::Ready;
+fn imported_integration_health(
+  plugin_id: &str,
+  config_json: &str,
+  config_schema_version: u32,
+) -> IntegrationHealthStatus {
+  match bundled_registry().and_then(|reg| reg.get_registration(plugin_id)) {
+    Some(registration) => {
+      // Unsupported schema version: retain data but mark unconfigured (read-only unresolved).
+      if registration.config_schema.version != config_schema_version {
+        return IntegrationHealthStatus::Unconfigured;
+      }
+      if registration.requires_remote_auth() {
+        // Auth-bearing integrations need re-configuration/re-auth after import.
+        IntegrationHealthStatus::Unconfigured
+      } else if registration.config_adapter.config_ready(config_json) {
+        IntegrationHealthStatus::Ready
+      } else {
+        IntegrationHealthStatus::Unconfigured
+      }
+    }
+    None => IntegrationHealthStatus::Unconfigured,
   }
-  IntegrationHealthStatus::Unconfigured
 }
 
 fn reject_duplicate_ids<I>(ids: I, label: &str, errors: &mut Vec<String>)
@@ -1339,6 +1338,7 @@ pub fn validate_plan_default_profile(conn: &Connection, settings: &AppSettingsV1
 mod tests {
   use super::*;
   use crate::domain::import_export::EXPORT_FORMAT_VERSION;
+  use crate::domain::service_integration::{GOOGLE_CLOUD_PLUGIN_ID, GOOGLE_TRANSLATE_WEB_PLUGIN_ID};
   use crate::domain::time::now_rfc3339;
   use crate::storage::Database;
 
@@ -1381,7 +1381,7 @@ mod tests {
       plugin_version: "1.0.0".into(),
       display_name: "Cloud".into(),
       enabled: true,
-      config_json: r#"{"projectId":"demo","location":"global","proxyMode":"inherit"}"#.into(),
+      config_json: r#"{"project-id":"demo","location":"global","proxy-mode":"inherit"}"#.into(),
       config_schema_version: 1,
       health_status: "ready".into(),
       created_at: now_rfc3339(),
@@ -1418,7 +1418,7 @@ mod tests {
     let mut doc = empty_doc();
     doc.integration_instances = vec![web_export(
       web_id,
-      r#"{"channel":"https_proxy","proxyUrl":"http://insecure.example/t"}"#,
+      r#"{"channel":"https_proxy","proxy-url":"http://insecure.example/t"}"#,
     )];
 
     let plan = db
@@ -1497,7 +1497,7 @@ mod tests {
     let mut doc = empty_doc();
     doc.integration_instances = vec![web_export(
       web_id,
-      r#"{"channel":"https_proxy","proxyUrl":"https://googlet.deno.dev/translate?foo=1"}"#,
+      r#"{"channel":"https_proxy","proxy-url":"https://googlet.deno.dev/translate?foo=1"}"#,
     )];
 
     let plan = db

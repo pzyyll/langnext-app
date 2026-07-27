@@ -2,12 +2,11 @@
 // ABOUTME: Engine-aware CRUD for LLM model chains and plugin capability bindings.
 
 use crate::domain::language_detection::{LanguageDetectorConfig, SUPPORTED_LANGUAGES};
-use crate::domain::service_integration::{GOOGLE_CLOUD_PLUGIN_ID, IntegrationHealthStatus, validate_capability_id};
+use crate::domain::service_integration::{IntegrationHealthStatus, validate_capability_id};
 use crate::domain::time::{new_id, now_rfc3339};
 use crate::domain::translation_profile::{
-  GOOGLE_TRANSLATE_PREFERENCES_SCHEMA_VERSION, LlmModelChainEngine, PluginCapabilityEngine, PromptTemplate,
-  TranslationProfile, TranslationProfileDto, TranslationProfileEngine, TranslationProfileEngineWrite,
-  TranslationProfileTarget, TranslationProfileWrite, empty_google_translate_preferences, is_empty_object_preferences,
+  LlmModelChainEngine, PluginCapabilityEngine, PromptTemplate, TranslationProfile, TranslationProfileDto,
+  TranslationProfileEngine, TranslationProfileEngineWrite, TranslationProfileTarget, TranslationProfileWrite,
 };
 use crate::error::StorageError;
 use crate::repositories::{integration_instances, provider_models, translation_profiles};
@@ -146,7 +145,7 @@ impl TranslationProfileService {
           (engine, targets, llm.prompt_templates.clone())
         }
         TranslationProfileEngineWrite::PluginCapability(plugin) => {
-          validate_plugin_engine_write(conn, self.registry.as_ref(), plugin)?;
+          let normalized_preferences = validate_plugin_engine_write(conn, self.registry.as_ref(), plugin)?;
           if let Some(old_plugin) = existing_plugin.as_ref() {
             validate_plugin_rebind_compatibility(old_plugin, plugin)?;
           }
@@ -159,7 +158,7 @@ impl TranslationProfileService {
               .map(|s| s.trim().to_string())
               .filter(|s| !s.is_empty()),
             capability_preferences_version: plugin.capability_preferences_version,
-            capability_preferences: plugin.capability_preferences.clone(),
+            capability_preferences: normalized_preferences,
           });
           (engine, Vec::new(), Vec::new())
         }
@@ -243,7 +242,7 @@ fn validate_plugin_engine_write(
   conn: &rusqlite::Connection,
   registry: &ServiceIntegrationRegistry,
   plugin: &crate::domain::translation_profile::PluginCapabilityEngineWrite,
-) -> Result<(), StorageError> {
+) -> Result<serde_json::Value, StorageError> {
   let translate_id = plugin.translate_capability_id.trim();
   if translate_id.is_empty() {
     return Err(StorageError::Validation("translate_capability_id is required".into()));
@@ -280,23 +279,17 @@ fn validate_plugin_engine_write(
       "integration instance must be ready for plugin profiles".into(),
     ));
   }
-  if !registry.contains(&instance.plugin_id) {
-    return Err(StorageError::Validation(
-      "integration plugin definition is missing".into(),
-    ));
-  }
-  let manifest = registry
-    .get(&instance.plugin_id)
+  let registration = registry
+    .get_registration(&instance.plugin_id)
     .ok_or_else(|| StorageError::Validation("integration plugin definition is missing".into()))?;
-
-  if !manifest.capabilities.iter().any(|c| c.id == translate_id) {
-    return Err(StorageError::Validation(format!(
+  let translate_capability = registration.capability(translate_id).ok_or_else(|| {
+    StorageError::Validation(format!(
       "translate capability {translate_id} is not declared on plugin {}",
       instance.plugin_id
-    )));
-  }
+    ))
+  })?;
   if let Some(ref detect) = detect_id {
-    if !manifest.capabilities.iter().any(|c| c.id == *detect) {
+    if registration.capability(detect).is_none() {
       return Err(StorageError::Validation(format!(
         "detect capability {detect} is not declared on plugin {}",
         instance.plugin_id
@@ -304,36 +297,22 @@ fn validate_plugin_engine_write(
     }
   }
 
-  // Google Translate preferences schema v1 = exactly `{}`.
-  if instance.plugin_id == GOOGLE_CLOUD_PLUGIN_ID {
-    if plugin.capability_preferences_version != GOOGLE_TRANSLATE_PREFERENCES_SCHEMA_VERSION {
-      return Err(StorageError::Validation(format!(
-        "Google Translate preferences schema version must be {GOOGLE_TRANSLATE_PREFERENCES_SCHEMA_VERSION}"
-      )));
-    }
-    if !is_empty_object_preferences(&plugin.capability_preferences) {
-      return Err(StorageError::Validation(
-        "Google Translate preferences schema v1 must be exactly {}".into(),
-      ));
-    }
-  } else if !is_empty_object_preferences(&plugin.capability_preferences)
-    && plugin.capability_preferences_version == GOOGLE_TRANSLATE_PREFERENCES_SCHEMA_VERSION
-  {
-    // Unknown plugins still reject unexpected keys on schema v1 empty-object convention.
-    return Err(StorageError::Validation(
-      "capability preferences contain unsupported keys".into(),
-    ));
+  let schema_version = i32::try_from(translate_capability.descriptor.preferences_schema_version)
+    .map_err(|_| StorageError::Validation("translate preferences schema version is unsupported".into()))?;
+  if plugin.capability_preferences_version != schema_version {
+    return Err(StorageError::Validation(format!(
+      "translate preferences schema version must be {schema_version}"
+    )));
   }
-
-  // Ensure stored preferences are a JSON object (not array/string/null).
   if !plugin.capability_preferences.is_object() {
     return Err(StorageError::Validation(
       "capability_preferences must be a JSON object".into(),
     ));
   }
 
-  let _ = empty_google_translate_preferences();
-  Ok(())
+  translate_capability
+    .preference_adapter
+    .normalize_preferences(&plugin.capability_preferences)
 }
 
 /// Extract capability name before `@major` (e.g. `translate.text` from `translate.text@1`).

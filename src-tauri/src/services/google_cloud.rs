@@ -108,6 +108,16 @@ impl GoogleCloudCapabilities {
       body["sourceLanguageCode"] = Value::String(source.to_string());
     }
 
+    self.network.pre_authorize(
+      instance_id,
+      &context.principal(),
+      GOOGLE_TRANSLATE_TEXT_CAPABILITY_ID,
+      GOOGLE_TRANSLATE_ENDPOINT_ALIAS,
+      ProviderHttpMethod::Post,
+      &relative_path,
+      &context.request_id,
+    )?;
+
     let grant = self
       .tokens
       .acquire(
@@ -131,6 +141,7 @@ impl GoogleCloudCapabilities {
       .execute(BrokerRequest {
         integration_instance_id: instance_id,
         capability_id: GOOGLE_TRANSLATE_TEXT_CAPABILITY_ID.into(),
+        execution_principal: context.principal(),
         endpoint_alias: GOOGLE_TRANSLATE_ENDPOINT_ALIAS.into(),
         method: ProviderHttpMethod::Post,
         relative_path,
@@ -174,6 +185,16 @@ impl GoogleCloudCapabilities {
       "mimeType": GOOGLE_TRANSLATE_MIME_TYPE,
     });
 
+    self.network.pre_authorize(
+      instance_id,
+      &context.principal(),
+      GOOGLE_DETECT_LANGUAGE_CAPABILITY_ID,
+      GOOGLE_TRANSLATE_ENDPOINT_ALIAS,
+      ProviderHttpMethod::Post,
+      &relative_path,
+      &context.request_id,
+    )?;
+
     let grant = self
       .tokens
       .acquire(
@@ -197,6 +218,7 @@ impl GoogleCloudCapabilities {
       .execute(BrokerRequest {
         integration_instance_id: instance_id,
         capability_id: GOOGLE_DETECT_LANGUAGE_CAPABILITY_ID.into(),
+        execution_principal: context.principal(),
         endpoint_alias: GOOGLE_TRANSLATE_ENDPOINT_ALIAS.into(),
         method: ProviderHttpMethod::Post,
         relative_path,
@@ -261,6 +283,16 @@ impl GoogleCloudCapabilities {
     }
     let body = json!({ "requests": [annotate_request] });
 
+    self.network.pre_authorize(
+      instance_id,
+      &context.principal(),
+      OCR_IMAGE_CAPABILITY_ID,
+      GOOGLE_VISION_ENDPOINT_ALIAS,
+      ProviderHttpMethod::Post,
+      GOOGLE_VISION_ANNOTATE_PATH,
+      &context.request_id,
+    )?;
+
     let grant = self
       .tokens
       .acquire(
@@ -284,6 +316,7 @@ impl GoogleCloudCapabilities {
       .execute(BrokerRequest {
         integration_instance_id: instance_id,
         capability_id: OCR_IMAGE_CAPABILITY_ID.into(),
+        execution_principal: context.principal(),
         endpoint_alias: GOOGLE_VISION_ENDPOINT_ALIAS.into(),
         method: ProviderHttpMethod::Post,
         relative_path: GOOGLE_VISION_ANNOTATE_PATH.into(),
@@ -358,6 +391,16 @@ impl GoogleCloudCapabilities {
       },
     });
 
+    self.network.pre_authorize(
+      instance_id,
+      &context.principal(),
+      SPEECH_SYNTHESIZE_CAPABILITY_ID,
+      GOOGLE_TEXT_TO_SPEECH_ENDPOINT_ALIAS,
+      ProviderHttpMethod::Post,
+      GOOGLE_TEXT_TO_SPEECH_SYNTHESIZE_PATH,
+      &context.request_id,
+    )?;
+
     let grant = self
       .tokens
       .acquire(
@@ -381,6 +424,7 @@ impl GoogleCloudCapabilities {
       .execute(BrokerRequest {
         integration_instance_id: instance_id,
         capability_id: SPEECH_SYNTHESIZE_CAPABILITY_ID.into(),
+        execution_principal: context.principal(),
         endpoint_alias: GOOGLE_TEXT_TO_SPEECH_ENDPOINT_ALIAS.into(),
         method: ProviderHttpMethod::Post,
         relative_path: GOOGLE_TEXT_TO_SPEECH_SYNTHESIZE_PATH.into(),
@@ -1390,12 +1434,14 @@ mod tests {
 
   use crate::domain::cancel::CancelToken;
   use crate::domain::provider::ProxyMode;
-  use crate::domain::provider_http::{ProviderHttpResponse, ProviderHttpStreamEvent};
+  use crate::domain::provider_http::ProviderHttpStreamEvent;
   use crate::domain::service_integration::{
-    GOOGLE_CLOUD_DEFAULT_LOCATION, IntegrationHealthStatus, IntegrationInstance,
+    GOOGLE_CLOUD_DEFAULT_LOCATION, GOOGLE_CLOUD_SERVICE_ACCOUNT_SLOT, IntegrationCredentialBinding,
+    IntegrationHealthStatus, IntegrationInstance,
   };
   use crate::domain::time::{new_id, now_rfc3339};
-  use crate::services::bounded_http::{PreparedHttpRequest, RawHttpTransport};
+  use crate::repositories::integration_credential_bindings;
+  use crate::services::bounded_http::{BoundedHttpResponse, PreparedHttpRequest, RawHttpTransport};
   use crate::services::network_broker::NetworkBroker;
   use crate::services::service_integration_registry::ServiceIntegrationRegistry;
   use crate::services::token_grant::{ExchangedToken, GoogleTokenExchanger, TokenGrantService};
@@ -1403,17 +1449,18 @@ mod tests {
   use std::future::Future;
   use std::pin::Pin;
   use std::sync::Mutex;
+  use std::sync::atomic::{AtomicUsize, Ordering};
 
   struct CaptureTransport {
     last: Mutex<Option<PreparedHttpRequest>>,
-    response: Mutex<Result<ProviderHttpResponse, StorageError>>,
+    response: Mutex<Result<BoundedHttpResponse, StorageError>>,
   }
 
   impl RawHttpTransport for CaptureTransport {
     fn request(
       &self,
       prepared: PreparedHttpRequest,
-    ) -> Pin<Box<dyn Future<Output = Result<ProviderHttpResponse, StorageError>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = Result<BoundedHttpResponse, StorageError>> + Send + '_>> {
       Box::pin(async move {
         *self.last.lock().unwrap() = Some(prepared);
         match &*self.response.lock().unwrap() {
@@ -1430,6 +1477,14 @@ mod tests {
       _on_event: Box<dyn Fn(ProviderHttpStreamEvent) -> Result<(), StorageError> + Send>,
     ) -> Pin<Box<dyn Future<Output = Result<(), StorageError>> + Send + '_>> {
       Box::pin(async { Err(StorageError::Validation("stream not supported".into())) })
+    }
+  }
+
+  fn json_response(body: &str) -> BoundedHttpResponse {
+    BoundedHttpResponse {
+      status: 200,
+      headers: HashMap::new(),
+      body: body.as_bytes().to_vec(),
     }
   }
 
@@ -1476,6 +1531,18 @@ mod tests {
           last_validated_at: None,
           last_error_code: None,
           created_at: now.clone(),
+          updated_at: now.clone(),
+        },
+      )?;
+      integration_credential_bindings::insert(
+        uow.conn(),
+        &IntegrationCredentialBinding {
+          id: new_id(),
+          integration_instance_id: id,
+          slot_id: GOOGLE_CLOUD_SERVICE_ACCOUNT_SLOT.into(),
+          credential_ref: Some("path-test-credential-ref".into()),
+          credential_revision: 1,
+          created_at: now.clone(),
           updated_at: now,
         },
       )?;
@@ -1512,11 +1579,9 @@ mod tests {
 
     let transport = Arc::new(CaptureTransport {
       last: Mutex::new(None),
-      response: Mutex::new(Ok(ProviderHttpResponse {
-        status: 200,
-        headers: HashMap::new(),
-        body: r#"{"translations":[{"translatedText":"hola","detectedLanguageCode":"en"}]}"#.into(),
-      })),
+      response: Mutex::new(Ok(json_response(
+        r#"{"translations":[{"translatedText":"hola","detectedLanguageCode":"en"}]}"#,
+      ))),
     });
     let caps = make_capabilities(db, transport.clone());
 
@@ -1564,11 +1629,9 @@ mod tests {
 
     let transport = Arc::new(CaptureTransport {
       last: Mutex::new(None),
-      response: Mutex::new(Ok(ProviderHttpResponse {
-        status: 200,
-        headers: HashMap::new(),
-        body: r#"{"languages":[{"languageCode":"ja","confidence":0.91}]}"#.into(),
-      })),
+      response: Mutex::new(Ok(json_response(
+        r#"{"languages":[{"languageCode":"ja","confidence":0.91}]}"#,
+      ))),
     });
     let caps = make_capabilities(db, transport.clone());
 
@@ -1621,11 +1684,9 @@ mod tests {
 
     let transport = Arc::new(CaptureTransport {
       last: Mutex::new(None),
-      response: Mutex::new(Ok(ProviderHttpResponse {
-        status: 200,
-        headers: HashMap::new(),
-        body: r#"{"responses":[{"fullTextAnnotation":{"text":"vision-ok"}}]}"#.into(),
-      })),
+      response: Mutex::new(Ok(json_response(
+        r#"{"responses":[{"fullTextAnnotation":{"text":"vision-ok"}}]}"#,
+      ))),
     });
     let caps = make_capabilities(db, transport.clone());
 
@@ -1658,5 +1719,77 @@ mod tests {
     assert!(body.contains("languageHints"));
     assert!(body.contains("zh-CN"));
     assert!(body.contains(&png_base64));
+  }
+
+  struct CountingExchanger {
+    calls: AtomicUsize,
+  }
+
+  impl GoogleTokenExchanger for CountingExchanger {
+    fn exchange(
+      &self,
+      _instance_id: Uuid,
+      _scopes: Vec<String>,
+      _now_unix_secs: u64,
+      _cancel: Option<CancelToken>,
+    ) -> Pin<Box<dyn Future<Output = Result<ExchangedToken, CapabilityError>> + Send + '_>> {
+      self.calls.fetch_add(1, Ordering::SeqCst);
+      Box::pin(async {
+        Ok(ExchangedToken {
+          access_token: "counting-token".into(),
+          expires_in: 3600,
+          credential_revision: 1,
+        })
+      })
+    }
+  }
+
+  #[tokio::test]
+  async fn pre_authorize_rejects_before_token_vault_access() {
+    use crate::repositories::integration_instances;
+
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::new(dir.path()).unwrap();
+    db.initialize().unwrap();
+    let instance_id = seed_google_instance(&db, "gate-project");
+
+    // Disable the instance so pre_authorize rejects before tokens.acquire.
+    db.transaction(|uow| {
+      integration_instances::set_enabled(uow.conn(), instance_id, false, &now_rfc3339())?;
+      Ok(())
+    })
+    .unwrap();
+
+    let exchanger = Arc::new(CountingExchanger {
+      calls: AtomicUsize::new(0),
+    });
+    let registry = Arc::new(ServiceIntegrationRegistry::bundled().unwrap());
+    let transport = Arc::new(CaptureTransport {
+      last: Mutex::new(None),
+      response: Mutex::new(Ok(json_response("{}"))),
+    });
+    let network = Arc::new(NetworkBroker::with_transport(db.clone(), registry, transport));
+    let tokens = Arc::new(TokenGrantService::new(exchanger.clone()));
+    let caps = GoogleCloudCapabilities::new(db, network, tokens);
+
+    let err = caps
+      .translate_text(
+        instance_id,
+        TranslateTextRequest {
+          text: "hello".into(),
+          source_language_id: "auto".into(),
+          target_language_id: "es".into(),
+        },
+        exec_ctx(instance_id, GOOGLE_TRANSLATE_TEXT_CAPABILITY_ID),
+      )
+      .await
+      .unwrap_err();
+
+    assert_eq!(err.code, CapabilityErrorCode::PluginUnavailable);
+    assert_eq!(
+      exchanger.calls.load(Ordering::SeqCst),
+      0,
+      "token exchanger must not be called when pre_authorize rejects"
+    );
   }
 }

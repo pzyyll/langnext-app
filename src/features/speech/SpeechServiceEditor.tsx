@@ -1,5 +1,5 @@
-// ABOUTME: Selected Speech service editor shell matching OCR service editor layout.
-// ABOUTME: Hosts Google Cloud TTS and Edge TTS forms with rename, enable, save, reset, and delete.
+// ABOUTME: Schema-driven editor for Speech services bound to speech.synthesize capabilities.
+// ABOUTME: Preserves rename, enable, save, reset, and delete while removing provider identity inference.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
@@ -27,191 +27,93 @@ import { integrationDefinitionListOptions, integrationListOptions, speechListOpt
 import { deleteSpeechService, saveSpeechService } from "../../storage/client";
 import { getIpcErrorMessage } from "../../storage/errors";
 import type { IntegrationInstanceDto, SpeechServiceDto, SpeechServiceWrite } from "../../storage/types";
-import { EDGE_TTS_PLUGIN_ID } from "../../storage/types";
-import { EdgeTtsForm } from "./EdgeTtsForm";
-import { GoogleCloudTtsForm } from "./GoogleCloudTtsForm";
+import { PluginSpeechForm } from "./PluginSpeechForm";
+import { preferenceSchemaForBinding } from "../plugins/schema/capabilitySchema";
 import {
-  EDGE_TTS_PITCH_DEFAULT,
-  EDGE_TTS_PITCH_MAX,
-  EDGE_TTS_PITCH_MIN,
-  EDGE_TTS_PREFERENCES_SCHEMA_VERSION,
-  EDGE_TTS_SPEED_DEFAULT,
-  EDGE_TTS_SPEED_MAX,
-  EDGE_TTS_SPEED_MIN,
-  EDGE_TTS_STYLE_DEFAULT,
-  EDGE_TTS_STYLES,
-  EDGE_TTS_VOICE_DEFAULT,
-  EDGE_TTS_VOICES,
-  GOOGLE_TTS_PREFERENCES_SCHEMA_VERSION,
-  SPEECH_PITCH_DEFAULT,
-  SPEECH_PITCH_MAX,
-  SPEECH_PITCH_MIN,
-  SPEECH_SPEAKING_RATE_DEFAULT,
-  SPEECH_SPEAKING_RATE_MAX,
-  SPEECH_SPEAKING_RATE_MIN,
-  SPEECH_SYNTHESIZE_CAPABILITY_ID,
-  defaultEdgeTtsPreferences,
-  defaultGoogleTtsPreferences,
-} from "./speechProviderOptions";
+  buildSchemaConfig,
+  createSchemaDraft,
+  isSchemaDraftDirty,
+  type SchemaDraft,
+} from "../plugins/schema/schemaDraft";
 
 export type SpeechServiceEditorProps = {
   speechServiceId: string;
 };
 
-type SpeechPluginKind = "google" | "edge";
+const deleteButtonClassName = [dangerIconButtonClassName, "mr-auto"].join(" ");
+const saveButtonClassName = [primaryButtonClassName, "relative"].join(" ");
 
-type EditorDraft = {
+type SpeechDraft = {
   enabled: boolean;
   integrationInstanceId: string;
   capabilityId: string;
   preferencesSchemaVersion: number;
-  kind: SpeechPluginKind;
-  // Google Cloud TTS
-  speakingRate: number;
-  googlePitch: number;
-  // Edge TTS
-  voice: string;
-  speed: number;
-  edgePitch: number;
-  style: string;
+  preferences: SchemaDraft;
+  schemaKey: string;
   expectedUpdatedAt: string;
 };
 
-function parseFiniteNumber(value: unknown, fallback: number): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+function schemaKey(instanceId: string, capabilityId: string, schemaVersion: number): string {
+  return `${instanceId}:${capabilityId}:${schemaVersion}`;
 }
 
-function parseString(value: unknown, fallback: string): string {
-  return typeof value === "string" && value.trim() ? value.trim() : fallback;
-}
-
-function pluginKindFromInstance(
-  integrationInstanceId: string,
+function draftFromDto(
+  service: SpeechServiceDto,
   instances: readonly IntegrationInstanceDto[],
-  preferences?: SpeechServiceDto["preferences"],
-): SpeechPluginKind {
-  const instance = instances.find((item) => item.id === integrationInstanceId);
-  if (instance) {
-    return instance.pluginId === EDGE_TTS_PLUGIN_ID ? "edge" : "google";
-  }
-  // Integrations may still be loading; sniff the stored preferences shape.
-  if (preferences && typeof preferences === "object" && preferences !== null && "voice" in preferences) {
-    return "edge";
-  }
-  return "google";
-}
-
-function draftFromDto(service: SpeechServiceDto, instances: readonly IntegrationInstanceDto[]): EditorDraft {
-  const kind = pluginKindFromInstance(service.integrationInstanceId, instances, service.preferences);
-  const prefs = service.preferences ?? (kind === "edge" ? defaultEdgeTtsPreferences() : defaultGoogleTtsPreferences());
+  definitions: Parameters<typeof preferenceSchemaForBinding>[1],
+): SpeechDraft {
+  const binding = preferenceSchemaForBinding(
+    instances,
+    definitions,
+    service.integrationInstanceId,
+    service.capabilityId,
+  );
+  const preferencesSchemaVersion = binding?.descriptor.preferencesSchemaVersion ?? service.preferencesSchemaVersion;
   return {
     enabled: service.enabled,
     integrationInstanceId: service.integrationInstanceId,
-    capabilityId: service.capabilityId || SPEECH_SYNTHESIZE_CAPABILITY_ID,
-    preferencesSchemaVersion:
-      service.preferencesSchemaVersion ||
-      (kind === "edge" ? EDGE_TTS_PREFERENCES_SCHEMA_VERSION : GOOGLE_TTS_PREFERENCES_SCHEMA_VERSION),
-    kind,
-    speakingRate: parseFiniteNumber((prefs as { speakingRate?: unknown }).speakingRate, SPEECH_SPEAKING_RATE_DEFAULT),
-    googlePitch: parseFiniteNumber((prefs as { pitch?: unknown }).pitch, SPEECH_PITCH_DEFAULT),
-    voice: parseString((prefs as { voice?: unknown }).voice, EDGE_TTS_VOICE_DEFAULT),
-    speed: parseFiniteNumber((prefs as { speed?: unknown }).speed, EDGE_TTS_SPEED_DEFAULT),
-    edgePitch: parseFiniteNumber((prefs as { pitch?: unknown }).pitch, EDGE_TTS_PITCH_DEFAULT),
-    style: parseString((prefs as { style?: unknown }).style, EDGE_TTS_STYLE_DEFAULT),
+    capabilityId: service.capabilityId,
+    preferencesSchemaVersion,
+    preferences: binding
+      ? createSchemaDraft(binding.schema, { config: service.preferences })
+      : createSchemaDraft({ version: 1, fields: [], groups: [] }),
+    schemaKey: binding ? schemaKey(service.integrationInstanceId, service.capabilityId, preferencesSchemaVersion) : "",
     expectedUpdatedAt: service.updatedAt,
   };
 }
 
 function isDraftFieldsClean(
-  draft: EditorDraft,
+  draft: SpeechDraft,
   service: SpeechServiceDto,
   instances: readonly IntegrationInstanceDto[],
+  definitions: Parameters<typeof preferenceSchemaForBinding>[1],
 ): boolean {
-  const baseline = draftFromDto(service, instances);
+  const baseline = draftFromDto(service, instances, definitions);
   if (
     draft.enabled !== baseline.enabled ||
     draft.integrationInstanceId !== baseline.integrationInstanceId ||
     draft.capabilityId !== baseline.capabilityId ||
     draft.preferencesSchemaVersion !== baseline.preferencesSchemaVersion ||
-    draft.kind !== baseline.kind
+    draft.schemaKey !== baseline.schemaKey
   ) {
     return false;
   }
-  if (draft.kind === "edge") {
-    return (
-      draft.voice === baseline.voice &&
-      draft.speed === baseline.speed &&
-      draft.edgePitch === baseline.edgePitch &&
-      draft.style === baseline.style
-    );
-  }
-  return draft.speakingRate === baseline.speakingRate && draft.googlePitch === baseline.googlePitch;
+  const binding = preferenceSchemaForBinding(instances, definitions, draft.integrationInstanceId, draft.capabilityId);
+  return binding ? !isSchemaDraftDirty(binding.schema, draft.preferences, baseline.preferences) : true;
 }
 
-function preferencesFromService(service: SpeechServiceDto, instances: readonly IntegrationInstanceDto[]) {
-  const kind = pluginKindFromInstance(service.integrationInstanceId, instances, service.preferences);
-  if (kind === "edge") {
-    const prefs = service.preferences ?? defaultEdgeTtsPreferences();
-    return {
-      kind,
-      preferencesSchemaVersion: service.preferencesSchemaVersion || EDGE_TTS_PREFERENCES_SCHEMA_VERSION,
-      preferences: {
-        voice: parseString((prefs as { voice?: unknown }).voice, EDGE_TTS_VOICE_DEFAULT),
-        speed: parseFiniteNumber((prefs as { speed?: unknown }).speed, EDGE_TTS_SPEED_DEFAULT),
-        pitch: parseFiniteNumber((prefs as { pitch?: unknown }).pitch, EDGE_TTS_PITCH_DEFAULT),
-        style: parseString((prefs as { style?: unknown }).style, EDGE_TTS_STYLE_DEFAULT),
-      },
-    } as const;
-  }
-  const prefs = service.preferences ?? defaultGoogleTtsPreferences();
-  return {
-    kind,
-    preferencesSchemaVersion: service.preferencesSchemaVersion || GOOGLE_TTS_PREFERENCES_SCHEMA_VERSION,
-    preferences: {
-      speakingRate: parseFiniteNumber((prefs as { speakingRate?: unknown }).speakingRate, SPEECH_SPEAKING_RATE_DEFAULT),
-      pitch: parseFiniteNumber((prefs as { pitch?: unknown }).pitch, SPEECH_PITCH_DEFAULT),
-    },
-  } as const;
-}
-
-/** Persist a rename without applying unsaved form fields. */
-function renameWrite(
-  service: SpeechServiceDto,
-  displayName: string,
-  instances: readonly IntegrationInstanceDto[],
-): SpeechServiceWrite {
-  const resolved = preferencesFromService(service, instances);
+/** Persist a rename without changing the current binding or opaque stored preference JSON. */
+function renameWrite(service: SpeechServiceDto, displayName: string): SpeechServiceWrite {
   return {
     id: service.id,
     displayName,
     enabled: service.enabled,
     integrationInstanceId: service.integrationInstanceId,
-    capabilityId: service.capabilityId || SPEECH_SYNTHESIZE_CAPABILITY_ID,
-    preferencesSchemaVersion: resolved.preferencesSchemaVersion,
-    preferences: resolved.preferences,
+    capabilityId: service.capabilityId,
+    preferencesSchemaVersion: service.preferencesSchemaVersion,
+    preferences: service.preferences,
     expectedUpdatedAt: service.updatedAt,
   };
-}
-
-function preferencesFromDraft(draft: EditorDraft) {
-  if (draft.kind === "edge") {
-    return {
-      preferencesSchemaVersion: EDGE_TTS_PREFERENCES_SCHEMA_VERSION,
-      preferences: {
-        voice: draft.voice,
-        speed: draft.speed,
-        pitch: draft.edgePitch,
-        style: draft.style,
-      },
-    } as const;
-  }
-  return {
-    preferencesSchemaVersion: GOOGLE_TTS_PREFERENCES_SCHEMA_VERSION,
-    preferences: {
-      speakingRate: draft.speakingRate,
-      pitch: draft.googlePitch,
-    },
-  } as const;
 }
 
 export function SpeechServiceEditor({ speechServiceId }: SpeechServiceEditorProps) {
@@ -230,26 +132,18 @@ export function SpeechServiceEditor({ speechServiceId }: SpeechServiceEditorProp
       </div>
     );
   }
-
   if (error) {
     return (
       <div className="flex flex-1 flex-col items-start gap-3 p-8">
         <p className="text-body-tight text-error" role="alert">
           {error}
         </p>
-        <Button
-          type="button"
-          className={outlineButtonClassName}
-          onClick={() => {
-            void servicesQuery.refetch();
-          }}
-        >
+        <Button type="button" className={outlineButtonClassName} onClick={() => void servicesQuery.refetch()}>
           {t("common.retry")}
         </Button>
       </div>
     );
   }
-
   if (!service) {
     return (
       <div className="flex flex-1 flex-col items-start gap-3 p-8">
@@ -261,16 +155,10 @@ export function SpeechServiceEditor({ speechServiceId }: SpeechServiceEditorProp
       </div>
     );
   }
-
-  // Remount only when the selected service changes so rename/save keep local draft state.
   return <SpeechServiceEditorLoaded key={service.id} service={service} />;
 }
 
-type SpeechServiceEditorLoadedProps = {
-  service: SpeechServiceDto;
-};
-
-function SpeechServiceEditorLoaded({ service }: SpeechServiceEditorLoadedProps) {
+function SpeechServiceEditorLoaded({ service }: { service: SpeechServiceDto }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const toast = useToast();
@@ -278,95 +166,89 @@ function SpeechServiceEditorLoaded({ service }: SpeechServiceEditorLoadedProps) 
   const integrationsQuery = useQuery(integrationListOptions());
   const definitionsQuery = useQuery(integrationDefinitionListOptions());
   const instances = useMemo(() => integrationsQuery.data ?? [], [integrationsQuery.data]);
+  const definitions = useMemo(() => definitionsQuery.data ?? [], [definitionsQuery.data]);
+  const currentBinding = preferenceSchemaForBinding(
+    instances,
+    definitions,
+    service.integrationInstanceId,
+    service.capabilityId,
+  );
+  const currentSchemaKey = currentBinding
+    ? schemaKey(service.integrationInstanceId, service.capabilityId, currentBinding.descriptor.preferencesSchemaVersion)
+    : "";
 
-  const [draft, setDraft] = useState<EditorDraft>(() => draftFromDto(service, instances));
+  const [draft, setDraft] = useState<SpeechDraft>(() => draftFromDto(service, instances, definitions));
   const [trackedService, setTrackedService] = useState(service);
   const [savePending, setSavePending] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deletePending, setDeletePending] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
-
   const [renaming, setRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState("");
   const [renamePending, setRenamePending] = useState(false);
   const [renameError, setRenameError] = useState<string | null>(null);
   const renameInputRef = useRef<HTMLElement | null>(null);
 
-  // Accept remote service updates into the draft only while the form is clean.
-  if (service.updatedAt !== trackedService.updatedAt || service.id !== trackedService.id) {
-    const shouldResetDraft = service.id !== trackedService.id || isDraftFieldsClean(draft, trackedService, instances);
+  if (
+    service.updatedAt !== trackedService.updatedAt ||
+    service.id !== trackedService.id ||
+    draft.schemaKey !== currentSchemaKey
+  ) {
+    const shouldReset =
+      service.id !== trackedService.id ||
+      draft.schemaKey !== currentSchemaKey ||
+      isDraftFieldsClean(draft, trackedService, instances, definitions);
     setTrackedService(service);
-    if (shouldResetDraft) {
-      setDraft(draftFromDto(service, instances));
+    if (shouldReset) {
+      setDraft(draftFromDto(service, instances, definitions));
     }
   }
 
   useEffect(() => {
-    if (!renaming) {
+    if (!renaming || !renameInputRef.current) {
       return;
     }
-    const node = renameInputRef.current;
-    if (!node) {
-      return;
-    }
-    node.focus();
-    if (node instanceof HTMLInputElement) {
-      node.select();
+    renameInputRef.current.focus();
+    if (renameInputRef.current instanceof HTMLInputElement) {
+      renameInputRef.current.select();
     }
   }, [renaming]);
 
-  const isDirty = useMemo(() => !isDraftFieldsClean(draft, service, instances), [draft, instances, service]);
-
+  const isDirty = useMemo(
+    () => isDraftFieldsClean(draft, service, instances, definitions) === false,
+    [definitions, draft, instances, service],
+  );
   const formDisabled = savePending || deletePending || renamePending;
-  const renameDisabled = formDisabled;
-
-  function updateDraft(patch: Partial<EditorDraft>) {
-    setDraft((current) => ({ ...current, ...patch }));
-    setValidationError(null);
-  }
+  const draftBinding = preferenceSchemaForBinding(
+    instances,
+    definitions,
+    draft.integrationInstanceId,
+    draft.capabilityId,
+  );
 
   function seedService(next: SpeechServiceDto) {
     queryClient.setQueryData<SpeechServiceDto[]>(speechKeys.list(), (current) => {
-      if (!current) {
-        return [next];
-      }
-      const index = current.findIndex((item) => item.id === next.id);
-      if (index < 0) {
-        return [...current, next];
-      }
-      const copy = current.slice();
-      copy[index] = next;
-      return copy;
+      if (!current) return [next];
+      return current.map((item) => (item.id === next.id ? next : item));
     });
     queryClient.setQueryData(speechKeys.detail(next.id), next);
   }
 
-  function startRename() {
-    setRenameValue(service.displayName);
-    setRenameError(null);
-    setRenaming(true);
-  }
-
-  function cancelRename() {
-    setRenaming(false);
-    setRenameValue("");
-    setRenameError(null);
+  function updateDraft(patch: Partial<SpeechDraft>) {
+    setDraft((current) => ({ ...current, ...patch }));
+    setValidationError(null);
   }
 
   async function commitRename() {
-    const trimmed = renameValue.trim();
-    if (!trimmed || renamePending) {
+    const displayName = renameValue.trim();
+    if (!displayName || renamePending) return;
+    if (displayName === service.displayName) {
+      setRenaming(false);
       return;
     }
-    if (trimmed === service.displayName) {
-      cancelRename();
-      return;
-    }
-
     setRenamePending(true);
-    setRenameError(null);
     try {
-      const saved = await saveSpeechService(renameWrite(service, trimmed, instances));
+      const saved = await saveSpeechService(renameWrite(service, displayName));
       seedService(saved);
       setDraft((current) => ({ ...current, expectedUpdatedAt: saved.updatedAt }));
       setRenaming(false);
@@ -380,77 +262,28 @@ function SpeechServiceEditorLoaded({ service }: SpeechServiceEditorLoadedProps) 
   }
 
   async function handleSave() {
-    if (savePending || !isDirty) {
+    if (savePending || !isDirty) return;
+    const binding = preferenceSchemaForBinding(instances, definitions, draft.integrationInstanceId, draft.capabilityId);
+    if (!binding) {
+      setValidationError(t("plugins.unsupportedInstance"));
       return;
     }
-
-    if (!draft.integrationInstanceId) {
-      setValidationError(t("speech.validation.integrationRequired"));
-      return;
-    }
-    if (draft.kind === "edge") {
-      if (!(EDGE_TTS_VOICES as readonly string[]).includes(draft.voice)) {
-        setValidationError(t("speech.validation.voiceRequired"));
-        return;
-      }
-      if (!(EDGE_TTS_STYLES as readonly string[]).includes(draft.style)) {
-        setValidationError(t("speech.validation.styleRequired"));
-        return;
-      }
-      if (!Number.isFinite(draft.speed) || draft.speed < EDGE_TTS_SPEED_MIN || draft.speed > EDGE_TTS_SPEED_MAX) {
-        setValidationError(t("speech.validation.speedRange", { min: EDGE_TTS_SPEED_MIN, max: EDGE_TTS_SPEED_MAX }));
-        return;
-      }
-      if (
-        !Number.isFinite(draft.edgePitch) ||
-        draft.edgePitch < EDGE_TTS_PITCH_MIN ||
-        draft.edgePitch > EDGE_TTS_PITCH_MAX
-      ) {
-        setValidationError(t("speech.validation.edgePitchRange", { min: EDGE_TTS_PITCH_MIN, max: EDGE_TTS_PITCH_MAX }));
-        return;
-      }
-    } else {
-      if (
-        !Number.isFinite(draft.speakingRate) ||
-        draft.speakingRate < SPEECH_SPEAKING_RATE_MIN ||
-        draft.speakingRate > SPEECH_SPEAKING_RATE_MAX
-      ) {
-        setValidationError(
-          t("speech.validation.speakingRateRange", {
-            min: SPEECH_SPEAKING_RATE_MIN,
-            max: SPEECH_SPEAKING_RATE_MAX,
-          }),
-        );
-        return;
-      }
-      if (
-        !Number.isFinite(draft.googlePitch) ||
-        draft.googlePitch < SPEECH_PITCH_MIN ||
-        draft.googlePitch > SPEECH_PITCH_MAX
-      ) {
-        setValidationError(t("speech.validation.pitchRange", { min: SPEECH_PITCH_MIN, max: SPEECH_PITCH_MAX }));
-        return;
-      }
-    }
-
-    const resolvedPrefs = preferencesFromDraft(draft);
     const write: SpeechServiceWrite = {
       id: service.id,
       displayName: service.displayName,
       enabled: draft.enabled,
       integrationInstanceId: draft.integrationInstanceId,
-      capabilityId: draft.capabilityId || SPEECH_SYNTHESIZE_CAPABILITY_ID,
-      preferencesSchemaVersion: resolvedPrefs.preferencesSchemaVersion,
-      preferences: resolvedPrefs.preferences,
+      capabilityId: draft.capabilityId,
+      preferencesSchemaVersion: binding.descriptor.preferencesSchemaVersion,
+      preferences: buildSchemaConfig(binding.schema, draft.preferences),
       expectedUpdatedAt: draft.expectedUpdatedAt,
     };
-
-    setValidationError(null);
     setSavePending(true);
+    setValidationError(null);
     try {
       const saved = await saveSpeechService(write);
       seedService(saved);
-      setDraft(draftFromDto(saved, instances));
+      setDraft(draftFromDto(saved, instances, definitions));
       toast.success({ title: t("speech.toast.saved"), description: saved.displayName });
       void queryClient.invalidateQueries({ queryKey: speechKeys.all });
     } catch (error) {
@@ -464,21 +297,17 @@ function SpeechServiceEditorLoaded({ service }: SpeechServiceEditorLoadedProps) 
   }
 
   async function handleDelete() {
-    if (deletePending) {
-      return;
-    }
+    if (deletePending) return;
     setDeletePending(true);
     try {
       await deleteSpeechService(service.id);
     } catch (error) {
       const message = getIpcErrorMessage(error, t("speech.toast.deleteFailed"));
       toast.error({ title: t("speech.toast.deleteFailed"), description: message });
-      // Rethrow so ConfirmDialog stays open (matches OCR editor).
       throw Object.assign(new Error(message), { cause: error });
     } finally {
       setDeletePending(false);
     }
-
     queryClient.setQueryData<SpeechServiceDto[]>(speechKeys.list(), (current) =>
       (current ?? []).filter((item) => item.id !== service.id),
     );
@@ -486,40 +315,7 @@ function SpeechServiceEditorLoaded({ service }: SpeechServiceEditorLoadedProps) 
     toast.success({ title: t("speech.toast.deleted"), description: service.displayName });
     void navigate({ to: "/speech" });
     void queryClient.invalidateQueries({ queryKey: speechKeys.all });
-    // Backend clears defaultSpeechServiceId when the selected service is deleted.
     void queryClient.invalidateQueries({ queryKey: settingsKeys.all });
-  }
-
-  function resetForm() {
-    setDraft(draftFromDto(service, instances));
-    setValidationError(null);
-  }
-
-  function handleIntegrationRebind(instanceId: string, nextCapabilityId: string) {
-    const nextKind = pluginKindFromInstance(instanceId, instances);
-    if (nextKind !== draft.kind) {
-      // Plugin switch resets preferences to the target plugin defaults.
-      const edgeDefaults = defaultEdgeTtsPreferences();
-      const googleDefaults = defaultGoogleTtsPreferences();
-      updateDraft({
-        integrationInstanceId: instanceId,
-        capabilityId: nextCapabilityId,
-        kind: nextKind,
-        preferencesSchemaVersion:
-          nextKind === "edge" ? EDGE_TTS_PREFERENCES_SCHEMA_VERSION : GOOGLE_TTS_PREFERENCES_SCHEMA_VERSION,
-        speakingRate: googleDefaults.speakingRate,
-        googlePitch: googleDefaults.pitch,
-        voice: edgeDefaults.voice,
-        speed: edgeDefaults.speed,
-        edgePitch: edgeDefaults.pitch,
-        style: edgeDefaults.style,
-      });
-      return;
-    }
-    updateDraft({
-      integrationInstanceId: instanceId,
-      capabilityId: nextCapabilityId,
-    });
   }
 
   return (
@@ -545,7 +341,7 @@ function SpeechServiceEditorLoaded({ service }: SpeechServiceEditorLoadedProps) 
                 onKeyDown={(event) => {
                   if (event.key === "Escape" && !renamePending) {
                     event.preventDefault();
-                    cancelRename();
+                    setRenaming(false);
                   }
                 }}
                 maxLength={128}
@@ -566,7 +362,7 @@ function SpeechServiceEditorLoaded({ service }: SpeechServiceEditorLoadedProps) 
                 className={iconButtonClassName}
                 aria-label={t("speech.cancelRename")}
                 disabled={renamePending}
-                onClick={cancelRename}
+                onClick={() => setRenaming(false)}
               >
                 <IconMaterialSymbolsLightClose className="pointer-events-none size-5 shrink-0" />
               </Button>
@@ -579,8 +375,12 @@ function SpeechServiceEditorLoaded({ service }: SpeechServiceEditorLoadedProps) 
                 className={iconButtonClassName}
                 aria-label={t("speech.renameService")}
                 title={t("speech.renameService")}
-                disabled={renameDisabled}
-                onClick={startRename}
+                disabled={formDisabled}
+                onClick={() => {
+                  setRenameValue(service.displayName);
+                  setRenameError(null);
+                  setRenaming(true);
+                }}
               >
                 <IconMaterialSymbolsLightEditSquareOutlineSharp className="pointer-events-none size-5 shrink-0" />
               </Button>
@@ -594,9 +394,7 @@ function SpeechServiceEditorLoaded({ service }: SpeechServiceEditorLoadedProps) 
               disabled={formDisabled}
               className={switchRootClassName}
               aria-label={t("speech.enabledAria")}
-              onCheckedChange={(checked) => {
-                updateDraft({ enabled: checked });
-              }}
+              onCheckedChange={(enabled) => updateDraft({ enabled })}
             >
               <Switch.Thumb className={switchThumbClassName} />
             </Switch.Root>
@@ -613,36 +411,33 @@ function SpeechServiceEditorLoaded({ service }: SpeechServiceEditorLoadedProps) 
           <>
             <Button
               type="button"
-              className={`
-                ${dangerIconButtonClassName}
-                mr-auto
-              `}
+              className={deleteButtonClassName}
               aria-label={t("speech.deleteConfirmTitle")}
               title={t("speech.deleteConfirmTitle")}
               disabled={formDisabled}
-              onClick={() => {
-                setDeleteOpen(true);
-              }}
+              onClick={() => setDeleteOpen(true)}
             >
               <IconMaterialSymbolsLightDeleteOutlineSharp className="pointer-events-none size-5 shrink-0" />
             </Button>
-
-            <Button type="button" className={outlineButtonClassName} disabled={formDisabled} onClick={resetForm}>
+            <Button
+              type="button"
+              className={outlineButtonClassName}
+              disabled={formDisabled}
+              onClick={() => {
+                setDraft(draftFromDto(service, instances, definitions));
+                setValidationError(null);
+              }}
+            >
               {t("common.cancel")}
             </Button>
             <Button
               type="button"
-              className={`
-                ${primaryButtonClassName}
-                relative
-              `}
-              disabled={formDisabled || !isDirty}
+              className={saveButtonClassName}
+              disabled={formDisabled || !isDirty || !draftBinding}
               focusableWhenDisabled
               aria-busy={savePending}
               aria-label={savePending ? t("common.saving") : t("common.save")}
-              onClick={() => {
-                void handleSave();
-              }}
+              onClick={() => void handleSave()}
             >
               <span className={savePending ? "invisible" : undefined} aria-hidden="true">
                 {t("common.save")}
@@ -657,50 +452,29 @@ function SpeechServiceEditorLoaded({ service }: SpeechServiceEditorLoadedProps) 
           </>
         }
       >
-        {draft.kind === "edge" ? (
-          <EdgeTtsForm
-            integrationInstanceId={draft.integrationInstanceId}
-            capabilityId={draft.capabilityId}
-            voice={draft.voice}
-            speed={draft.speed}
-            pitch={draft.edgePitch}
-            style={draft.style}
-            instances={instances}
-            definitions={definitionsQuery.data ?? []}
-            disabled={formDisabled}
-            onIntegrationInstanceIdChange={handleIntegrationRebind}
-            onVoiceChange={(value) => {
-              updateDraft({ voice: value });
-            }}
-            onSpeedChange={(value) => {
-              updateDraft({ speed: value });
-            }}
-            onPitchChange={(value) => {
-              updateDraft({ edgePitch: value });
-            }}
-            onStyleChange={(value) => {
-              updateDraft({ style: value });
-            }}
-          />
-        ) : (
-          <GoogleCloudTtsForm
-            integrationInstanceId={draft.integrationInstanceId}
-            capabilityId={draft.capabilityId}
-            speakingRate={draft.speakingRate}
-            pitch={draft.googlePitch}
-            instances={instances}
-            definitions={definitionsQuery.data ?? []}
-            disabled={formDisabled}
-            onIntegrationInstanceIdChange={handleIntegrationRebind}
-            onSpeakingRateChange={(value) => {
-              updateDraft({ speakingRate: value });
-            }}
-            onPitchChange={(value) => {
-              updateDraft({ googlePitch: value });
-            }}
-          />
-        )}
-
+        <PluginSpeechForm
+          integrationInstanceId={draft.integrationInstanceId}
+          capabilityId={draft.capabilityId}
+          preferences={draft.preferences}
+          instances={instances}
+          definitions={definitions}
+          disabled={formDisabled}
+          onIntegrationInstanceIdChange={(integrationInstanceId, capabilityId) => {
+            const binding = preferenceSchemaForBinding(instances, definitions, integrationInstanceId, capabilityId);
+            if (!binding) {
+              setValidationError(t("plugins.unsupportedInstance"));
+              return;
+            }
+            updateDraft({
+              integrationInstanceId,
+              capabilityId,
+              preferencesSchemaVersion: binding.descriptor.preferencesSchemaVersion,
+              preferences: createSchemaDraft(binding.schema),
+              schemaKey: schemaKey(integrationInstanceId, capabilityId, binding.descriptor.preferencesSchemaVersion),
+            });
+          }}
+          onPreferencesChange={(preferences) => updateDraft({ preferences })}
+        />
         {validationError ? (
           <p className="mt-6 text-body-tight text-error" role="alert">
             {validationError}

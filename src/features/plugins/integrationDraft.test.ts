@@ -1,48 +1,76 @@
-// ABOUTME: Unit tests for integration draft conversion and credential update helpers.
-// ABOUTME: Ensures DTO→draft never echoes secrets and keep/replace/clear map correctly.
+// ABOUTME: Tests generic integration draft projection from schema definitions and instance DTOs.
+// ABOUTME: Ensures defaults, camelCase migration, dirty state, and write-only credentials stay intact.
 import { describe, expect, test } from "bun:test";
-import type { IntegrationInstanceDto } from "../../storage/types";
+import type { IntegrationInstanceDto, ServiceIntegrationDefinitionDto } from "../../storage/types";
+import { setSchemaCredentialValue, setSchemaDraftValue } from "./schema/schemaDraft";
 import {
-  GOOGLE_CLOUD_PLUGIN_ID,
-  GOOGLE_CLOUD_SERVICE_ACCOUNT_SLOT,
-  GOOGLE_TRANSLATE_WEB_DEFAULT_PROXY_URL,
-  GOOGLE_TRANSLATE_WEB_PLUGIN_ID,
-} from "../../storage/types";
-import {
-  buildGoogleCloudWrite,
-  buildGoogleTranslateWebWrite,
-  draftFromGoogleTranslateWebDto,
+  buildIntegrationWrite,
+  createIntegrationDraft,
   draftFromIntegrationDto,
-  emptyGoogleCloudDraft,
-  emptyGoogleTranslateWebDraft,
-  hasRemoteRelevantMutation,
-  toCredentialUpdate,
+  hasIntegrationRemoteRelevantMutation,
+  isIntegrationDraftClean,
 } from "./integrationDraft";
 
-function sampleDto(overrides?: Partial<IntegrationInstanceDto>): IntegrationInstanceDto {
+const pluginId = "com.example.schema-plugin";
+const credentialSlotId = "service-account-json";
+
+const definition: ServiceIntegrationDefinitionDto = {
+  manifestVersion: 1,
+  pluginApiVersion: "1.0",
+  id: pluginId,
+  version: "1.0.0",
+  displayNameKey: "plugins.example.name",
+  minHostVersion: "0.1.0",
+  configSchemaVersion: 1,
+  credentialSlots: [{ id: credentialSlotId, kind: "secret_json", required: true }],
+  endpoints: [],
+  capabilities: [],
+  configSchema: {
+    version: 1,
+    fields: [
+      {
+        id: "project-id",
+        control: { kind: "string", spec: {} },
+        requiredForReady: true,
+      },
+      {
+        id: "proxy-mode",
+        control: {
+          kind: "enum",
+          spec: {
+            source: { type: "fixed", options: [{ value: "inherit" }, { value: "direct" }] },
+            default: "inherit",
+          },
+        },
+        requiredForReady: true,
+      },
+      {
+        id: "service-account",
+        control: { kind: "credential-slot", spec: { slotId: credentialSlotId } },
+        requiredForReady: true,
+      },
+    ],
+    groups: [],
+  },
+  capabilitySchemas: [],
+  presentation: { displayNameFallback: "Example plugin", icon: "extension" },
+};
+
+function sampleInstance(overrides?: Partial<IntegrationInstanceDto>): IntegrationInstanceDto {
   return {
     id: "11111111-1111-1111-1111-111111111111",
-    pluginId: GOOGLE_CLOUD_PLUGIN_ID,
+    pluginId,
     pluginVersion: "1.0.0",
-    displayName: "GCP",
+    displayName: "Example",
     enabled: true,
-    configJson: JSON.stringify({
-      projectId: "my-project",
-      location: "global",
-      proxyMode: "inherit",
-    }),
+    // Legacy frontend shape; the generic draft projects it to schema field IDs.
+    configJson: JSON.stringify({ projectId: "my-project", proxyMode: "inherit" }),
     configSchemaVersion: 1,
     healthStatus: "unvalidated",
     effectiveStatus: "unvalidated",
     lastValidatedAt: null,
     lastErrorCode: null,
-    credentialSlots: [
-      {
-        slotId: GOOGLE_CLOUD_SERVICE_ACCOUNT_SLOT,
-        hasCredential: true,
-        credentialRevision: 2,
-      },
-    ],
+    credentialSlots: [{ slotId: credentialSlotId, hasCredential: true, credentialRevision: 2 }],
     createdAt: "t0",
     updatedAt: "t1",
     ...overrides,
@@ -50,140 +78,54 @@ function sampleDto(overrides?: Partial<IntegrationInstanceDto>): IntegrationInst
 }
 
 describe("integrationDraft", () => {
-  test("draftFromIntegrationDto never copies secrets and only reports stored state", () => {
-    const dto = sampleDto();
-    const draft = draftFromIntegrationDto(dto);
-    expect(draft.serviceAccountJson).toBe("");
-    expect(draft.serviceAccountAction).toBe("keep");
-    expect(draft.hasServiceAccount).toBe(true);
-    expect(draft.projectId).toBe("my-project");
-    expect(draft.expectedUpdatedAt).toBe("t1");
+  test("builds an empty draft from schema defaults", () => {
+    const draft = createIntegrationDraft(definition, "Example plugin");
+
+    expect(draft.pluginId).toBe(pluginId);
+    expect(draft.schema.values).toEqual({ "proxy-mode": "inherit" });
+    expect(draft.schema.credentials[credentialSlotId]).toEqual({ action: "keep", value: "", hasCredential: false });
+  });
+
+  test("projects legacy config keys without copying secret values", () => {
+    const instance = sampleInstance();
+    const draft = draftFromIntegrationDto(instance, definition);
+
+    expect(draft.schema.values).toEqual({ "project-id": "my-project", "proxy-mode": "inherit" });
+    expect(draft.schema.credentials[credentialSlotId]).toEqual({ action: "keep", value: "", hasCredential: true });
     expect(JSON.stringify(draft)).not.toContain("private_key");
   });
 
-  test("toCredentialUpdate maps keep replace clear", () => {
-    expect(toCredentialUpdate("keep", "")).toEqual({ action: "keep" });
-    expect(toCredentialUpdate("replace", "  secret  ")).toEqual({
-      action: "replace",
-      value: "secret",
-    });
-    expect(toCredentialUpdate("replace", "   ")).toEqual({ action: "keep" });
-    expect(toCredentialUpdate("clear", "anything")).toEqual({ action: "clear" });
-  });
-
-  test("buildGoogleCloudWrite emits replace credential without echoing into config", () => {
-    const draft = emptyGoogleCloudDraft("Cloud A");
-    draft.projectId = "proj";
-    draft.serviceAccountAction = "replace";
-    draft.serviceAccountJson = '{"client_email":"a@b.com"}';
-    const write = buildGoogleCloudWrite(draft);
-    expect(write.pluginId).toBe(GOOGLE_CLOUD_PLUGIN_ID);
-    expect(write.configJson).not.toContain("client_email");
-    expect(write.credentials?.[0]?.slotId).toBe(GOOGLE_CLOUD_SERVICE_ACCOUNT_SLOT);
-    expect(write.credentials?.[0]?.credential).toEqual({
-      action: "replace",
-      value: '{"client_email":"a@b.com"}',
-    });
-  });
-
-  test("hasRemoteRelevantMutation detects credential or Google Cloud config mutation, never name-only", () => {
-    // Credential replace with value.
-    const replace = draftFromIntegrationDto(sampleDto());
-    replace.serviceAccountAction = "replace";
-    replace.serviceAccountJson = '{"client_email":"a@b.com"}';
-    expect(hasRemoteRelevantMutation(replace, sampleDto())).toBe(true);
-
-    // replace with no value is a no-op keep.
-    const replaceEmpty = draftFromIntegrationDto(sampleDto());
-    replaceEmpty.serviceAccountAction = "replace";
-    replaceEmpty.serviceAccountJson = "   ";
-    expect(hasRemoteRelevantMutation(replaceEmpty, sampleDto())).toBe(false);
-
-    // clear only mutates when a credential was previously stored.
-    const clearExisting = draftFromIntegrationDto(sampleDto());
-    clearExisting.serviceAccountAction = "clear";
-    expect(hasRemoteRelevantMutation(clearExisting, sampleDto())).toBe(true);
-
-    const missingDto = sampleDto({
-      credentialSlots: [{ slotId: GOOGLE_CLOUD_SERVICE_ACCOUNT_SLOT, hasCredential: false, credentialRevision: 0 }],
-    });
-    const clearMissing = draftFromIntegrationDto(missingDto);
-    clearMissing.serviceAccountAction = "clear";
-    expect(hasRemoteRelevantMutation(clearMissing, missingDto)).toBe(false);
-
-    // Google Cloud config mutation (projectId/location/proxyMode).
-    const projectId = draftFromIntegrationDto(sampleDto());
-    projectId.projectId = "other-project";
-    expect(hasRemoteRelevantMutation(projectId, sampleDto())).toBe(true);
-
-    const location = draftFromIntegrationDto(sampleDto());
-    location.location = "us-central1";
-    expect(hasRemoteRelevantMutation(location, sampleDto())).toBe(true);
-
-    const proxyMode = draftFromIntegrationDto(sampleDto());
-    proxyMode.proxyMode = "direct";
-    expect(hasRemoteRelevantMutation(proxyMode, sampleDto())).toBe(true);
-
-    // Name-only change does not need a remote re-check.
-    const nameOnly = draftFromIntegrationDto(sampleDto());
-    nameOnly.displayName = "Renamed";
-    expect(hasRemoteRelevantMutation(nameOnly, sampleDto())).toBe(false);
-
-    // Clean draft has no mutation.
-    const clean = draftFromIntegrationDto(sampleDto());
-    expect(hasRemoteRelevantMutation(clean, sampleDto())).toBe(false);
-  });
-
-  test("buildGoogleCloudWrite clear does not include secret text", () => {
-    const draft = draftFromIntegrationDto(sampleDto());
-    draft.serviceAccountAction = "clear";
-    draft.serviceAccountJson = "should-not-send";
-    const write = buildGoogleCloudWrite(draft, { id: draft.expectedUpdatedAt ? sampleDto().id : null });
-    expect(write.credentials?.[0]?.credential).toEqual({ action: "clear" });
-  });
-
-  test("Google Web draft defaults to GTX with empty credentials and no Cloud fields", () => {
-    const draft = emptyGoogleTranslateWebDraft("Web");
-    expect(draft.pluginId).toBe(GOOGLE_TRANSLATE_WEB_PLUGIN_ID);
-    expect(draft.channel).toBe("gtx");
-    const write = buildGoogleTranslateWebWrite(draft);
-    expect(write.pluginId).toBe(GOOGLE_TRANSLATE_WEB_PLUGIN_ID);
-    expect(write.credentials).toEqual([]);
-    const config = JSON.parse(write.configJson) as Record<string, unknown>;
-    expect(config.channel).toBe("gtx");
-    expect(config).not.toHaveProperty("projectId");
-    expect(config).not.toHaveProperty("location");
-    expect(config).not.toHaveProperty("serviceAccount");
-  });
-
-  test("Google Web proxy draft persists proxy URL only", () => {
-    const dto: IntegrationInstanceDto = {
-      id: "22222222-2222-2222-2222-222222222222",
-      pluginId: GOOGLE_TRANSLATE_WEB_PLUGIN_ID,
-      pluginVersion: "1.0.0",
-      displayName: "Proxy",
-      enabled: true,
-      configJson: JSON.stringify({
-        channel: "https_proxy",
-        proxyUrl: GOOGLE_TRANSLATE_WEB_DEFAULT_PROXY_URL,
-      }),
-      configSchemaVersion: 1,
-      healthStatus: "ready",
-      effectiveStatus: "ready",
-      lastValidatedAt: null,
-      lastErrorCode: null,
-      credentialSlots: [],
-      createdAt: "t0",
-      updatedAt: "t1",
+  test("builds canonical config JSON and a separate write-only credential action", () => {
+    const instance = sampleInstance();
+    let draft = draftFromIntegrationDto(instance, definition);
+    draft = {
+      ...draft,
+      schema: setSchemaCredentialValue(draft.schema, credentialSlotId, "  secret-json  "),
     };
-    const draft = draftFromGoogleTranslateWebDto(dto);
-    expect(draft.channel).toBe("https_proxy");
-    expect(draft.proxyUrl).toBe(GOOGLE_TRANSLATE_WEB_DEFAULT_PROXY_URL);
-    const write = buildGoogleTranslateWebWrite(draft, { id: dto.id });
-    expect(write.credentials).toEqual([]);
-    expect(JSON.parse(write.configJson)).toEqual({
-      channel: "https_proxy",
-      proxyUrl: GOOGLE_TRANSLATE_WEB_DEFAULT_PROXY_URL,
-    });
+
+    const write = buildIntegrationWrite(definition, draft, { id: instance.id });
+    expect(write.configJson).toBe(JSON.stringify({ "project-id": "my-project", "proxy-mode": "inherit" }));
+    expect(write.configJson).not.toContain("secret-json");
+    expect(write.credentials).toEqual([
+      {
+        slotId: credentialSlotId,
+        credential: { action: "replace", value: "secret-json" },
+      },
+    ]);
+  });
+
+  test("distinguishes name-only changes from config and credential changes", () => {
+    const instance = sampleInstance();
+    const initial = draftFromIntegrationDto(instance, definition);
+    const renamed = { ...initial, displayName: "Renamed" };
+    const configChanged = {
+      ...initial,
+      schema: setSchemaDraftValue(initial.schema, "project-id", "other-project"),
+    };
+
+    expect(isIntegrationDraftClean(definition, initial, instance)).toBe(true);
+    expect(isIntegrationDraftClean(definition, renamed, instance)).toBe(false);
+    expect(hasIntegrationRemoteRelevantMutation(definition, renamed, instance)).toBe(false);
+    expect(hasIntegrationRemoteRelevantMutation(definition, configChanged, instance)).toBe(true);
   });
 });

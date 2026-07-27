@@ -1,5 +1,5 @@
-// ABOUTME: Selected OCR service editor shell matching Models provider editor layout.
-// ABOUTME: Hosts Baidu, AI, and Google Vision plugin forms with rename and footer actions.
+// ABOUTME: OCR service editor preserving Baidu/AI flows and rendering plugin preferences from schemas.
+// ABOUTME: Keeps credentials write-only and rebuilds plugin preference drafts on compatible rebinds.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
@@ -35,26 +35,33 @@ import { getIpcErrorMessage } from "../../storage/errors";
 import type {
   BaiduOcrAction,
   CredentialUpdate,
-  OcrImageOperation,
+  IntegrationInstanceDto,
   OcrPromptTemplate,
   OcrServiceDto,
   OcrServiceWrite,
+  ServiceIntegrationDefinitionDto,
 } from "../../storage/types";
 import { AiOcrForm } from "./AiOcrForm";
 import { BaiduOcrForm, type CredentialAction } from "./BaiduOcrForm";
-import { GoogleVisionOcrForm } from "./GoogleVisionOcrForm";
+import { PluginOcrForm } from "./PluginOcrForm";
+import { OCR_IMAGE_CAPABILITY_ID } from "./ocrProviderOptions";
+import { preferenceSchemaForBinding } from "../plugins/schema/capabilitySchema";
 import {
-  GOOGLE_VISION_PREFERENCES_SCHEMA_VERSION,
-  OCR_IMAGE_CAPABILITY_ID,
-  OCR_LANGUAGE_HINTS_MAX,
-  defaultGoogleVisionPreferences,
-} from "./ocrProviderOptions";
+  buildSchemaConfig,
+  createSchemaDraft,
+  isSchemaDraftDirty,
+  type SchemaDraft,
+} from "../plugins/schema/schemaDraft";
 
 export type OcrServiceEditorProps = {
   ocrServiceId: string;
 };
 
-type EditorDraft = {
+const emptyPreferenceSchema = { version: 1, fields: [], groups: [] };
+const deleteButtonClassName = [dangerIconButtonClassName, "mr-auto"].join(" ");
+const saveButtonClassName = [primaryButtonClassName, "relative"].join(" ");
+
+type OcrDraft = {
   enabled: boolean;
   baiduAction: BaiduOcrAction;
   apiKey: string;
@@ -68,38 +75,40 @@ type EditorDraft = {
   integrationInstanceId: string;
   ocrCapabilityId: string;
   capabilityPreferencesVersion: number;
-  operation: OcrImageOperation;
-  languageHints: string[];
+  pluginPreferences: SchemaDraft;
+  schemaKey: string;
   expectedUpdatedAt: string;
 };
 
-function parseOperation(value: unknown): OcrImageOperation {
-  return value === "text_detection" ? "text_detection" : "document_text_detection";
+function preferenceKey(instanceId: string, capabilityId: string, schemaVersion: number): string {
+  return `${instanceId}:${capabilityId}:${schemaVersion}`;
 }
 
-function parseLanguageHints(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  const hints: string[] = [];
-  for (const entry of value) {
-    if (typeof entry !== "string") {
-      continue;
-    }
-    const trimmed = entry.trim();
-    if (!trimmed || hints.includes(trimmed)) {
-      continue;
-    }
-    hints.push(trimmed);
-    if (hints.length >= OCR_LANGUAGE_HINTS_MAX) {
-      break;
-    }
-  }
-  return hints;
+function parseOptionalTemperature(raw: string): number | null | "invalid" {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const value = Number(trimmed);
+  return Number.isFinite(value) && value >= 0 ? value : "invalid";
 }
 
-function draftFromDto(service: OcrServiceDto): EditorDraft {
-  const prefs = service.capabilityPreferences ?? defaultGoogleVisionPreferences();
+function toCredentialUpdate(action: CredentialAction, value: string): CredentialUpdate {
+  if (action === "clear") return { action: "clear" };
+  return action === "replace" && value.trim() ? { action: "replace", value: value.trim() } : { action: "keep" };
+}
+
+function draftFromDto(
+  service: OcrServiceDto,
+  instances: readonly IntegrationInstanceDto[],
+  definitions: readonly ServiceIntegrationDefinitionDto[],
+): OcrDraft {
+  const integrationInstanceId = service.integrationInstanceId ?? "";
+  const ocrCapabilityId = service.ocrCapabilityId ?? OCR_IMAGE_CAPABILITY_ID;
+  const binding =
+    service.providerType === "plugin_capability"
+      ? preferenceSchemaForBinding(instances, definitions, integrationInstanceId, ocrCapabilityId)
+      : null;
+  const capabilityPreferencesVersion =
+    binding?.descriptor.preferencesSchemaVersion ?? service.capabilityPreferencesVersion ?? 1;
   return {
     enabled: service.enabled,
     baiduAction: service.baiduAction ?? "accurate",
@@ -111,59 +120,52 @@ function draftFromDto(service: OcrServiceDto): EditorDraft {
     temperature: service.temperature != null ? String(service.temperature) : "",
     defaultPromptTemplateId: service.defaultPromptTemplateId ?? service.promptTemplates[0]?.id ?? "",
     promptTemplates: service.promptTemplates.map((template) => ({ ...template })),
-    integrationInstanceId: service.integrationInstanceId ?? "",
-    ocrCapabilityId: service.ocrCapabilityId ?? OCR_IMAGE_CAPABILITY_ID,
-    capabilityPreferencesVersion: service.capabilityPreferencesVersion ?? GOOGLE_VISION_PREFERENCES_SCHEMA_VERSION,
-    operation: parseOperation((prefs as { operation?: unknown }).operation),
-    languageHints: parseLanguageHints((prefs as { languageHints?: unknown }).languageHints),
+    integrationInstanceId,
+    ocrCapabilityId,
+    capabilityPreferencesVersion,
+    pluginPreferences: binding
+      ? createSchemaDraft(binding.schema, { config: service.capabilityPreferences ?? {} })
+      : createSchemaDraft(emptyPreferenceSchema),
+    schemaKey: binding ? preferenceKey(integrationInstanceId, ocrCapabilityId, capabilityPreferencesVersion) : "",
     expectedUpdatedAt: service.updatedAt,
   };
 }
 
-function isDraftFieldsClean(draft: EditorDraft, service: OcrServiceDto): boolean {
-  const baseline = draftFromDto(service);
-  return (
-    draft.enabled === baseline.enabled &&
-    draft.baiduAction === baseline.baiduAction &&
-    draft.apiKeyAction === "keep" &&
-    draft.secretKeyAction === "keep" &&
-    !draft.apiKey.trim() &&
-    !draft.secretKey.trim() &&
-    draft.providerModelId === baseline.providerModelId &&
-    draft.temperature === baseline.temperature &&
-    draft.defaultPromptTemplateId === baseline.defaultPromptTemplateId &&
-    JSON.stringify(draft.promptTemplates) === JSON.stringify(baseline.promptTemplates) &&
-    draft.integrationInstanceId === baseline.integrationInstanceId &&
-    draft.ocrCapabilityId === baseline.ocrCapabilityId &&
-    draft.capabilityPreferencesVersion === baseline.capabilityPreferencesVersion &&
-    draft.operation === baseline.operation &&
-    JSON.stringify(draft.languageHints) === JSON.stringify(baseline.languageHints)
+function isDraftFieldsClean(
+  draft: OcrDraft,
+  service: OcrServiceDto,
+  instances: readonly IntegrationInstanceDto[],
+  definitions: readonly ServiceIntegrationDefinitionDto[],
+): boolean {
+  const baseline = draftFromDto(service, instances, definitions);
+  if (
+    draft.enabled !== baseline.enabled ||
+    draft.baiduAction !== baseline.baiduAction ||
+    draft.apiKeyAction !== "keep" ||
+    draft.secretKeyAction !== "keep" ||
+    Boolean(draft.apiKey.trim()) ||
+    Boolean(draft.secretKey.trim()) ||
+    draft.providerModelId !== baseline.providerModelId ||
+    draft.temperature !== baseline.temperature ||
+    draft.defaultPromptTemplateId !== baseline.defaultPromptTemplateId ||
+    draft.integrationInstanceId !== baseline.integrationInstanceId ||
+    draft.ocrCapabilityId !== baseline.ocrCapabilityId ||
+    draft.capabilityPreferencesVersion !== baseline.capabilityPreferencesVersion ||
+    draft.schemaKey !== baseline.schemaKey ||
+    JSON.stringify(draft.promptTemplates) !== JSON.stringify(baseline.promptTemplates)
+  ) {
+    return false;
+  }
+  const binding = preferenceSchemaForBinding(
+    instances,
+    definitions,
+    draft.integrationInstanceId,
+    draft.ocrCapabilityId,
   );
+  return binding ? !isSchemaDraftDirty(binding.schema, draft.pluginPreferences, baseline.pluginPreferences) : true;
 }
 
-function toCredentialUpdate(action: CredentialAction, value: string): CredentialUpdate {
-  if (action === "clear") {
-    return { action: "clear" };
-  }
-  if (action === "replace" && value.trim()) {
-    return { action: "replace", value: value.trim() };
-  }
-  return { action: "keep" };
-}
-
-function parseOptionalTemperature(raw: string): number | null | "invalid" {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const value = Number(trimmed);
-  if (!Number.isFinite(value) || value < 0) {
-    return "invalid";
-  }
-  return value;
-}
-
-/** Persist a rename without applying unsaved form fields. */
+/** Persist a rename without altering provider-specific values or opaque plugin preference data. */
 function renameWrite(service: OcrServiceDto, displayName: string): OcrServiceWrite {
   if (service.providerType === "baidu") {
     return {
@@ -178,9 +180,7 @@ function renameWrite(service: OcrServiceDto, displayName: string): OcrServiceWri
       expectedUpdatedAt: service.updatedAt,
     };
   }
-
   if (service.providerType === "plugin_capability") {
-    const prefs = service.capabilityPreferences ?? defaultGoogleVisionPreferences();
     return {
       id: service.id,
       providerType: "plugin_capability",
@@ -188,16 +188,12 @@ function renameWrite(service: OcrServiceDto, displayName: string): OcrServiceWri
       enabled: service.enabled,
       integrationInstanceId: service.integrationInstanceId ?? "",
       ocrCapabilityId: service.ocrCapabilityId ?? OCR_IMAGE_CAPABILITY_ID,
-      capabilityPreferencesVersion: service.capabilityPreferencesVersion ?? GOOGLE_VISION_PREFERENCES_SCHEMA_VERSION,
-      capabilityPreferences: {
-        operation: parseOperation((prefs as { operation?: unknown }).operation),
-        languageHints: parseLanguageHints((prefs as { languageHints?: unknown }).languageHints),
-      },
+      capabilityPreferencesVersion: service.capabilityPreferencesVersion ?? 1,
+      capabilityPreferences: service.capabilityPreferences ?? {},
       promptTemplates: [],
       expectedUpdatedAt: service.updatedAt,
     };
   }
-
   return {
     id: service.id,
     providerType: "ai",
@@ -215,10 +211,9 @@ export function OcrServiceEditor({ ocrServiceId }: OcrServiceEditorProps) {
   const { t } = useTranslation();
   const servicesQuery = useQuery(ocrListOptions());
   const service = (servicesQuery.data ?? []).find((item) => item.id === ocrServiceId) ?? null;
-  const loading = servicesQuery.isLoading;
   const error = servicesQuery.error != null ? getIpcErrorMessage(servicesQuery.error, t("ocr.loadFailed")) : null;
 
-  if (loading) {
+  if (servicesQuery.isLoading) {
     return (
       <div className="flex flex-1 items-center justify-center p-8">
         <p className="text-body-tight text-neutral" aria-live="polite">
@@ -227,26 +222,18 @@ export function OcrServiceEditor({ ocrServiceId }: OcrServiceEditorProps) {
       </div>
     );
   }
-
   if (error) {
     return (
       <div className="flex flex-1 flex-col items-start gap-3 p-8">
         <p className="text-body-tight text-error" role="alert">
           {error}
         </p>
-        <Button
-          type="button"
-          className={outlineButtonClassName}
-          onClick={() => {
-            void servicesQuery.refetch();
-          }}
-        >
+        <Button type="button" className={outlineButtonClassName} onClick={() => void servicesQuery.refetch()}>
           {t("common.retry")}
         </Button>
       </div>
     );
   }
-
   if (!service) {
     return (
       <div className="flex flex-1 flex-col items-start gap-3 p-8">
@@ -258,16 +245,10 @@ export function OcrServiceEditor({ ocrServiceId }: OcrServiceEditorProps) {
       </div>
     );
   }
-
-  // Remount only when the selected service changes so rename/save keep local draft state.
   return <OcrServiceEditorLoaded key={service.id} service={service} />;
 }
 
-type OcrServiceEditorLoadedProps = {
-  service: OcrServiceDto;
-};
-
-function OcrServiceEditorLoaded({ service }: OcrServiceEditorLoadedProps) {
+function OcrServiceEditorLoaded({ service }: { service: OcrServiceDto }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const toast = useToast();
@@ -276,95 +257,87 @@ function OcrServiceEditorLoaded({ service }: OcrServiceEditorLoadedProps) {
   const providersQuery = useQuery(providerListOptions());
   const integrationsQuery = useQuery(integrationListOptions());
   const definitionsQuery = useQuery(integrationDefinitionListOptions());
+  const instances = useMemo(() => integrationsQuery.data ?? [], [integrationsQuery.data]);
+  const definitions = useMemo(() => definitionsQuery.data ?? [], [definitionsQuery.data]);
+  const currentBinding = preferenceSchemaForBinding(
+    instances,
+    definitions,
+    service.integrationInstanceId ?? "",
+    service.ocrCapabilityId ?? OCR_IMAGE_CAPABILITY_ID,
+  );
+  const currentSchemaKey = currentBinding
+    ? preferenceKey(
+        service.integrationInstanceId ?? "",
+        service.ocrCapabilityId ?? OCR_IMAGE_CAPABILITY_ID,
+        currentBinding.descriptor.preferencesSchemaVersion,
+      )
+    : "";
 
-  const [draft, setDraft] = useState<EditorDraft>(() => draftFromDto(service));
+  const [draft, setDraft] = useState<OcrDraft>(() => draftFromDto(service, instances, definitions));
   const [trackedService, setTrackedService] = useState(service);
   const [savePending, setSavePending] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deletePending, setDeletePending] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
-
   const [renaming, setRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState("");
   const [renamePending, setRenamePending] = useState(false);
   const [renameError, setRenameError] = useState<string | null>(null);
   const renameInputRef = useRef<HTMLElement | null>(null);
 
-  // Accept remote service updates into the draft only while the form is clean.
-  if (service.updatedAt !== trackedService.updatedAt || service.id !== trackedService.id) {
-    const shouldResetDraft = service.id !== trackedService.id || isDraftFieldsClean(draft, trackedService);
+  if (
+    service.updatedAt !== trackedService.updatedAt ||
+    service.id !== trackedService.id ||
+    (service.providerType === "plugin_capability" && draft.schemaKey !== currentSchemaKey)
+  ) {
+    const shouldReset =
+      service.id !== trackedService.id ||
+      (service.providerType === "plugin_capability" && draft.schemaKey !== currentSchemaKey) ||
+      isDraftFieldsClean(draft, trackedService, instances, definitions);
     setTrackedService(service);
-    if (shouldResetDraft) {
-      setDraft(draftFromDto(service));
-    }
+    if (shouldReset) setDraft(draftFromDto(service, instances, definitions));
   }
 
   useEffect(() => {
-    if (!renaming) {
-      return;
-    }
-    const node = renameInputRef.current;
-    if (!node) {
-      return;
-    }
-    node.focus();
-    if (node instanceof HTMLInputElement) {
-      node.select();
-    }
+    if (!renaming || !renameInputRef.current) return;
+    renameInputRef.current.focus();
+    if (renameInputRef.current instanceof HTMLInputElement) renameInputRef.current.select();
   }, [renaming]);
 
-  const isDirty = useMemo(() => !isDraftFieldsClean(draft, service), [draft, service]);
-
+  const isDirty = useMemo(
+    () => !isDraftFieldsClean(draft, service, instances, definitions),
+    [definitions, draft, instances, service],
+  );
   const formDisabled = savePending || deletePending || renamePending;
-  const renameDisabled = formDisabled;
-
-  function updateDraft(patch: Partial<EditorDraft>) {
-    setDraft((current) => ({ ...current, ...patch }));
-    setValidationError(null);
-  }
+  const draftBinding =
+    service.providerType === "plugin_capability"
+      ? preferenceSchemaForBinding(instances, definitions, draft.integrationInstanceId, draft.ocrCapabilityId)
+      : null;
+  const pluginSchemaUnavailable = service.providerType === "plugin_capability" && !draftBinding;
 
   function seedService(next: OcrServiceDto) {
     queryClient.setQueryData<OcrServiceDto[]>(ocrKeys.list(), (current) => {
-      if (!current) {
-        return [next];
-      }
-      const index = current.findIndex((item) => item.id === next.id);
-      if (index < 0) {
-        return [...current, next];
-      }
-      const copy = current.slice();
-      copy[index] = next;
-      return copy;
+      if (!current) return [next];
+      return current.map((item) => (item.id === next.id ? next : item));
     });
     queryClient.setQueryData(ocrKeys.detail(next.id), next);
   }
 
-  function startRename() {
-    setRenameValue(service.displayName);
-    setRenameError(null);
-    setRenaming(true);
-  }
-
-  function cancelRename() {
-    setRenaming(false);
-    setRenameValue("");
-    setRenameError(null);
+  function updateDraft(patch: Partial<OcrDraft>) {
+    setDraft((current) => ({ ...current, ...patch }));
+    setValidationError(null);
   }
 
   async function commitRename() {
-    const trimmed = renameValue.trim();
-    if (!trimmed || renamePending) {
+    const displayName = renameValue.trim();
+    if (!displayName || renamePending) return;
+    if (displayName === service.displayName) {
+      setRenaming(false);
       return;
     }
-    if (trimmed === service.displayName) {
-      cancelRename();
-      return;
-    }
-
     setRenamePending(true);
-    setRenameError(null);
     try {
-      const saved = await saveOcrService(renameWrite(service, trimmed));
+      const saved = await saveOcrService(renameWrite(service, displayName));
       seedService(saved);
       setDraft((current) => ({ ...current, expectedUpdatedAt: saved.updatedAt }));
       setRenaming(false);
@@ -378,10 +351,7 @@ function OcrServiceEditorLoaded({ service }: OcrServiceEditorLoadedProps) {
   }
 
   async function handleSave() {
-    if (savePending || !isDirty) {
-      return;
-    }
-
+    if (savePending || !isDirty) return;
     let write: OcrServiceWrite;
     if (service.providerType === "baidu") {
       write = {
@@ -396,12 +366,14 @@ function OcrServiceEditorLoaded({ service }: OcrServiceEditorLoadedProps) {
         expectedUpdatedAt: draft.expectedUpdatedAt,
       };
     } else if (service.providerType === "plugin_capability") {
-      if (!draft.integrationInstanceId) {
-        setValidationError(t("ocr.validation.integrationRequired"));
-        return;
-      }
-      if (draft.languageHints.length > OCR_LANGUAGE_HINTS_MAX) {
-        setValidationError(t("ocr.validation.languageHintsMax", { max: OCR_LANGUAGE_HINTS_MAX }));
+      const binding = preferenceSchemaForBinding(
+        instances,
+        definitions,
+        draft.integrationInstanceId,
+        draft.ocrCapabilityId,
+      );
+      if (!binding) {
+        setValidationError(t("plugins.unsupportedInstance"));
         return;
       }
       write = {
@@ -410,12 +382,9 @@ function OcrServiceEditorLoaded({ service }: OcrServiceEditorLoadedProps) {
         displayName: service.displayName,
         enabled: draft.enabled,
         integrationInstanceId: draft.integrationInstanceId,
-        ocrCapabilityId: draft.ocrCapabilityId || OCR_IMAGE_CAPABILITY_ID,
-        capabilityPreferencesVersion: draft.capabilityPreferencesVersion,
-        capabilityPreferences: {
-          operation: draft.operation,
-          languageHints: draft.languageHints,
-        },
+        ocrCapabilityId: draft.ocrCapabilityId,
+        capabilityPreferencesVersion: binding.descriptor.preferencesSchemaVersion,
+        capabilityPreferences: buildSchemaConfig(binding.schema, draft.pluginPreferences),
         promptTemplates: [],
         expectedUpdatedAt: draft.expectedUpdatedAt,
       };
@@ -437,13 +406,9 @@ function OcrServiceEditorLoaded({ service }: OcrServiceEditorLoadedProps) {
         setValidationError(t("ocr.validation.templatesRequired"));
         return;
       }
-      if (draft.promptTemplates.some((template) => template.name.trim() === "")) {
-        setValidationError(t("ocr.validation.templateNameRequired"));
-        return;
-      }
       if (
         draft.promptTemplates.some(
-          (template) => template.systemTemplate.trim() === "" || template.userTemplate.trim() === "",
+          (template) => !template.name.trim() || !template.systemTemplate.trim() || !template.userTemplate.trim(),
         )
       ) {
         setValidationError(t("ocr.validation.templateBodyRequired"));
@@ -461,22 +426,17 @@ function OcrServiceEditorLoaded({ service }: OcrServiceEditorLoadedProps) {
         providerModelId: draft.providerModelId,
         temperature,
         defaultPromptTemplateId: draft.defaultPromptTemplateId,
-        promptTemplates: draft.promptTemplates.map((template) => ({
-          id: template.id,
-          name: template.name.trim(),
-          systemTemplate: template.systemTemplate,
-          userTemplate: template.userTemplate,
-        })),
+        promptTemplates: draft.promptTemplates.map((template) => ({ ...template, name: template.name.trim() })),
         expectedUpdatedAt: draft.expectedUpdatedAt,
       };
     }
 
-    setValidationError(null);
     setSavePending(true);
+    setValidationError(null);
     try {
       const saved = await saveOcrService(write);
       seedService(saved);
-      setDraft(draftFromDto(saved));
+      setDraft(draftFromDto(saved, instances, definitions));
       toast.success({ title: t("ocr.toast.saved"), description: saved.displayName });
       void queryClient.invalidateQueries({ queryKey: ocrKeys.all });
     } catch (error) {
@@ -490,21 +450,17 @@ function OcrServiceEditorLoaded({ service }: OcrServiceEditorLoadedProps) {
   }
 
   async function handleDelete() {
-    if (deletePending) {
-      return;
-    }
+    if (deletePending) return;
     setDeletePending(true);
     try {
       await deleteOcrService(service.id);
     } catch (error) {
       const message = getIpcErrorMessage(error, t("ocr.toast.deleteFailed"));
       toast.error({ title: t("ocr.toast.deleteFailed"), description: message });
-      // Rethrow so ConfirmDialog stays open (matches Models ProviderEditor).
       throw Object.assign(new Error(message), { cause: error });
     } finally {
       setDeletePending(false);
     }
-
     queryClient.setQueryData<OcrServiceDto[]>(ocrKeys.list(), (current) =>
       (current ?? []).filter((item) => item.id !== service.id),
     );
@@ -512,13 +468,7 @@ function OcrServiceEditorLoaded({ service }: OcrServiceEditorLoadedProps) {
     toast.success({ title: t("ocr.toast.deleted"), description: service.displayName });
     void navigate({ to: "/ocr" });
     void queryClient.invalidateQueries({ queryKey: ocrKeys.all });
-    // Backend clears defaultOcrServiceId when the selected service is deleted.
     void queryClient.invalidateQueries({ queryKey: settingsKeys.all });
-  }
-
-  function resetForm() {
-    setDraft(draftFromDto(service));
-    setValidationError(null);
   }
 
   return (
@@ -544,7 +494,7 @@ function OcrServiceEditorLoaded({ service }: OcrServiceEditorLoadedProps) {
                 onKeyDown={(event) => {
                   if (event.key === "Escape" && !renamePending) {
                     event.preventDefault();
-                    cancelRename();
+                    setRenaming(false);
                   }
                 }}
                 maxLength={128}
@@ -565,7 +515,7 @@ function OcrServiceEditorLoaded({ service }: OcrServiceEditorLoadedProps) {
                 className={iconButtonClassName}
                 aria-label={t("ocr.cancelRename")}
                 disabled={renamePending}
-                onClick={cancelRename}
+                onClick={() => setRenaming(false)}
               >
                 <IconMaterialSymbolsLightClose className="pointer-events-none size-5 shrink-0" />
               </Button>
@@ -578,8 +528,12 @@ function OcrServiceEditorLoaded({ service }: OcrServiceEditorLoadedProps) {
                 className={iconButtonClassName}
                 aria-label={t("ocr.renameService")}
                 title={t("ocr.renameService")}
-                disabled={renameDisabled}
-                onClick={startRename}
+                disabled={formDisabled}
+                onClick={() => {
+                  setRenameValue(service.displayName);
+                  setRenameError(null);
+                  setRenaming(true);
+                }}
               >
                 <IconMaterialSymbolsLightEditSquareOutlineSharp className="pointer-events-none size-5 shrink-0" />
               </Button>
@@ -592,9 +546,7 @@ function OcrServiceEditorLoaded({ service }: OcrServiceEditorLoadedProps) {
               checked={draft.enabled}
               disabled={formDisabled}
               className={switchRootClassName}
-              onCheckedChange={(checked) => {
-                updateDraft({ enabled: checked });
-              }}
+              onCheckedChange={(enabled) => updateDraft({ enabled })}
             >
               <Switch.Thumb className={switchThumbClassName} />
             </Switch.Root>
@@ -611,36 +563,33 @@ function OcrServiceEditorLoaded({ service }: OcrServiceEditorLoadedProps) {
           <>
             <Button
               type="button"
-              className={`
-                ${dangerIconButtonClassName}
-                mr-auto
-              `}
+              className={deleteButtonClassName}
               aria-label={t("ocr.deleteConfirmTitle")}
               title={t("ocr.deleteConfirmTitle")}
               disabled={formDisabled}
-              onClick={() => {
-                setDeleteOpen(true);
-              }}
+              onClick={() => setDeleteOpen(true)}
             >
               <IconMaterialSymbolsLightDeleteOutlineSharp className="pointer-events-none size-5 shrink-0" />
             </Button>
-
-            <Button type="button" className={outlineButtonClassName} disabled={formDisabled} onClick={resetForm}>
+            <Button
+              type="button"
+              className={outlineButtonClassName}
+              disabled={formDisabled}
+              onClick={() => {
+                setDraft(draftFromDto(service, instances, definitions));
+                setValidationError(null);
+              }}
+            >
               {t("common.cancel")}
             </Button>
             <Button
               type="button"
-              className={`
-                ${primaryButtonClassName}
-                relative
-              `}
-              disabled={formDisabled || !isDirty}
+              className={saveButtonClassName}
+              disabled={formDisabled || !isDirty || pluginSchemaUnavailable}
               focusableWhenDisabled
               aria-busy={savePending}
               aria-label={savePending ? t("common.saving") : t("common.save")}
-              onClick={() => {
-                void handleSave();
-              }}
+              onClick={() => void handleSave()}
             >
               <span className={savePending ? "invisible" : undefined} aria-hidden="true">
                 {t("common.save")}
@@ -665,43 +614,44 @@ function OcrServiceEditorLoaded({ service }: OcrServiceEditorLoadedProps) {
             hasSecretKey={service.hasSecretKey}
             baiduAction={draft.baiduAction}
             disabled={formDisabled}
-            onApiKeyChange={(value) => {
-              updateDraft({ apiKey: value });
-            }}
-            onSecretKeyChange={(value) => {
-              updateDraft({ secretKey: value });
-            }}
-            onApiKeyActionChange={(action) => {
-              updateDraft({ apiKeyAction: action });
-            }}
-            onSecretKeyActionChange={(action) => {
-              updateDraft({ secretKeyAction: action });
-            }}
-            onBaiduActionChange={(action) => {
-              updateDraft({ baiduAction: action });
-            }}
+            onApiKeyChange={(apiKey) => updateDraft({ apiKey })}
+            onSecretKeyChange={(secretKey) => updateDraft({ secretKey })}
+            onApiKeyActionChange={(apiKeyAction) => updateDraft({ apiKeyAction })}
+            onSecretKeyActionChange={(secretKeyAction) => updateDraft({ secretKeyAction })}
+            onBaiduActionChange={(baiduAction) => updateDraft({ baiduAction })}
           />
         ) : service.providerType === "plugin_capability" ? (
-          <GoogleVisionOcrForm
+          <PluginOcrForm
             integrationInstanceId={draft.integrationInstanceId}
             ocrCapabilityId={draft.ocrCapabilityId}
-            operation={draft.operation}
-            languageHints={draft.languageHints}
-            instances={integrationsQuery.data ?? []}
-            definitions={definitionsQuery.data ?? []}
+            preferences={draft.pluginPreferences}
+            instances={instances}
+            definitions={definitions}
             disabled={formDisabled}
-            onIntegrationInstanceIdChange={(instanceId, capabilityId) => {
+            onIntegrationInstanceIdChange={(integrationInstanceId, ocrCapabilityId) => {
+              const binding = preferenceSchemaForBinding(
+                instances,
+                definitions,
+                integrationInstanceId,
+                ocrCapabilityId,
+              );
+              if (!binding) {
+                setValidationError(t("plugins.unsupportedInstance"));
+                return;
+              }
               updateDraft({
-                integrationInstanceId: instanceId,
-                ocrCapabilityId: capabilityId,
+                integrationInstanceId,
+                ocrCapabilityId,
+                capabilityPreferencesVersion: binding.descriptor.preferencesSchemaVersion,
+                pluginPreferences: createSchemaDraft(binding.schema),
+                schemaKey: preferenceKey(
+                  integrationInstanceId,
+                  ocrCapabilityId,
+                  binding.descriptor.preferencesSchemaVersion,
+                ),
               });
             }}
-            onOperationChange={(next) => {
-              updateDraft({ operation: next });
-            }}
-            onLanguageHintsChange={(hints) => {
-              updateDraft({ languageHints: hints });
-            }}
+            onPreferencesChange={(pluginPreferences) => updateDraft({ pluginPreferences })}
           />
         ) : (
           <AiOcrForm
@@ -712,21 +662,12 @@ function OcrServiceEditorLoaded({ service }: OcrServiceEditorLoadedProps) {
             models={modelsQuery.data ?? []}
             providers={providersQuery.data ?? []}
             disabled={formDisabled}
-            onProviderModelIdChange={(value) => {
-              updateDraft({ providerModelId: value });
-            }}
-            onTemperatureChange={(value) => {
-              updateDraft({ temperature: value });
-            }}
-            onDefaultPromptTemplateIdChange={(value) => {
-              updateDraft({ defaultPromptTemplateId: value });
-            }}
-            onPromptTemplatesChange={(templates) => {
-              updateDraft({ promptTemplates: templates });
-            }}
+            onProviderModelIdChange={(providerModelId) => updateDraft({ providerModelId })}
+            onTemperatureChange={(temperature) => updateDraft({ temperature })}
+            onDefaultPromptTemplateIdChange={(defaultPromptTemplateId) => updateDraft({ defaultPromptTemplateId })}
+            onPromptTemplatesChange={(promptTemplates) => updateDraft({ promptTemplates })}
           />
         )}
-
         {validationError ? (
           <p className="mt-6 text-body-tight text-error" role="alert">
             {validationError}

@@ -1,5 +1,6 @@
 // ABOUTME: Service integration domain entities, manifests, and sanitized IPC DTOs.
 // ABOUTME: Credential refs and secret values never appear on serializable DTOs.
+use crate::domain::plugin_schema::PluginSchemaV1;
 use crate::domain::provider::{CredentialUpdate, ProxyMode};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -154,6 +155,35 @@ pub struct ServiceIntegrationManifest {
   pub capabilities: Vec<IntegrationCapabilityDescriptor>,
 }
 
+/// Sanitized preference schema associated with one declared capability.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IntegrationCapabilitySchemaDto {
+  pub capability_id: String,
+  pub preference_schema: PluginSchemaV1,
+}
+
+/// Localized fallback presentation metadata for an integration definition.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServiceIntegrationPresentationDto {
+  pub display_name_fallback: String,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub icon: Option<String>,
+}
+
+/// Frontend-safe integration definition: manifest metadata plus closed schemas and presentation.
+/// Runtime adapters, handlers, auth policies, credential refs, and secret values are excluded.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServiceIntegrationDefinitionDto {
+  #[serde(flatten)]
+  pub manifest: ServiceIntegrationManifest,
+  pub config_schema: PluginSchemaV1,
+  pub capability_schemas: Vec<IntegrationCapabilitySchemaDto>,
+  pub presentation: ServiceIntegrationPresentationDto,
+}
+
 /// Internal integration instance row (no secret values).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IntegrationInstance {
@@ -261,7 +291,7 @@ pub struct IntegrationValidationResult {
 
 /// Google Cloud non-secret config (schema v1).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "kebab-case")]
 pub struct GoogleCloudConfigV1 {
   pub project_id: String,
   #[serde(default = "default_google_location")]
@@ -292,7 +322,7 @@ impl GoogleTranslateWebChannel {
 
 /// Google Web non-secret config (schema v1). Zero credential slots.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "kebab-case")]
 pub struct GoogleTranslateWebConfigV1 {
   pub channel: GoogleTranslateWebChannel,
   /// Normalized HTTPS proxy URL when `channel` is `https_proxy`.
@@ -302,7 +332,7 @@ pub struct GoogleTranslateWebConfigV1 {
 
 /// Edge TTS non-secret config (schema v1). Zero credential slots; base URL is configurable.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "kebab-case")]
 pub struct EdgeTtsConfigV1 {
   /// Normalized API base URL (origin + optional path). Defaults to the bundled service.
   #[serde(default = "default_edge_tts_base_url")]

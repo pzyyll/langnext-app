@@ -3,4 +3,4 @@
 # ABOUTME: Discovers all frontend *.test.ts files under src/.
 set -euo pipefail
 cd "${MISE_PROJECT_ROOT:-.}"
-bun test src
+bun test --isolate src

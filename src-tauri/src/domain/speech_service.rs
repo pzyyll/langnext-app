@@ -94,7 +94,7 @@ pub struct SpeechSynthesizeInput {
 /// Default Google TTS preferences for schema v1.
 pub fn default_google_tts_preferences() -> Value {
   json!({
-    "speakingRate": 1.0,
+    "speaking-rate": 1.0,
     "pitch": 0.0,
   })
 }
@@ -141,7 +141,7 @@ mod tests {
     let dto = SpeechServiceDto::from_service(&service);
     let json = serde_json::to_string(&dto).unwrap();
     assert!(json.contains("\"capabilityId\":\"speech.synthesize@1\""));
-    assert!(json.contains("\"speakingRate\":1.0"));
+    assert!(json.contains("\"speaking-rate\":1.0"));
     assert!(!json.contains("credential"));
     assert!(!json.contains("token"));
   }

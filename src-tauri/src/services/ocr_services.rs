@@ -3,16 +3,14 @@
 use crate::credentials::coordinator;
 use crate::credentials::{CredentialVault, ocr_api_key_ref, ocr_secret_key_ref};
 use crate::domain::cancel::CancelToken;
-use crate::domain::language_detection::SUPPORTED_LANGUAGES;
 use crate::domain::ocr_service::{
-  BaiduOcrAction, GOOGLE_VISION_PREFERENCES_SCHEMA_VERSION, OCR_DISPLAY_NAME_MAX_LEN, OCR_PROMPT_TEMPLATE_NAME_MAX_LEN,
-  OcrPromptTemplate, OcrProviderType, OcrRecognizeInput, OcrRecognizeResult, OcrService, OcrServiceDto,
-  OcrServiceWrite, default_google_vision_preferences, parse_ocr_image_preferences,
+  BaiduOcrAction, OCR_DISPLAY_NAME_MAX_LEN, OCR_PROMPT_TEMPLATE_NAME_MAX_LEN, OcrPromptTemplate, OcrProviderType,
+  OcrRecognizeInput, OcrRecognizeResult, OcrService, OcrServiceDto, OcrServiceWrite, default_google_vision_preferences,
+  parse_ocr_image_preferences,
 };
 use crate::domain::provider::{CredentialUpdate, ProxyMode};
 use crate::domain::service_capability::{
-  CapabilityError, CapabilityErrorCode, OCR_IMAGE_CAPABILITY_ID, OCR_LANGUAGE_HINTS_MAX, OcrImagePreferences,
-  OcrImageRequest, validate_ocr_image_preferences,
+  CapabilityError, CapabilityErrorCode, OcrImagePreferences, OcrImageRequest, validate_ocr_image_preferences,
 };
 use crate::domain::service_integration::{IntegrationHealthStatus, validate_capability_id};
 use crate::domain::time::{new_id, now_rfc3339};
@@ -269,7 +267,7 @@ impl OcrServiceService {
   fn create_plugin(&self, id: Uuid, input: OcrServiceWrite, now: &str) -> Result<OcrServiceDto, StorageError> {
     let binding = resolve_plugin_write_fields(&input)?;
     self.db.transaction(|uow| {
-      validate_plugin_ocr_binding(uow.conn(), self.definition_registry.as_ref(), &binding)?;
+      let preferences = validate_plugin_ocr_binding(uow.conn(), self.definition_registry.as_ref(), &binding)?;
       let service = OcrService {
         id,
         provider_type: OcrProviderType::PluginCapability,
@@ -285,7 +283,7 @@ impl OcrServiceService {
         integration_instance_id: Some(binding.integration_instance_id),
         ocr_capability_id: Some(binding.ocr_capability_id.clone()),
         capability_preferences_version: Some(binding.capability_preferences_version),
-        capability_preferences: Some(binding.capability_preferences.clone()),
+        capability_preferences: Some(preferences),
         created_at: now.to_string(),
         updated_at: now.to_string(),
       };
@@ -443,7 +441,7 @@ impl OcrServiceService {
     self.db.transaction(|uow| {
       let latest = ocr_services::get(uow.conn(), existing.id)?;
       ensure_expected_version(&latest, expected_updated_at)?;
-      validate_plugin_ocr_binding(uow.conn(), self.definition_registry.as_ref(), &binding)?;
+      let preferences = validate_plugin_ocr_binding(uow.conn(), self.definition_registry.as_ref(), &binding)?;
       ocr_services::update_plugin_configuration(
         uow.conn(),
         existing.id,
@@ -452,7 +450,7 @@ impl OcrServiceService {
         binding.integration_instance_id,
         &binding.ocr_capability_id,
         binding.capability_preferences_version,
-        &binding.capability_preferences,
+        &preferences,
         &now,
       )?;
       let service = ocr_services::get(uow.conn(), existing.id)?;
@@ -1175,15 +1173,6 @@ fn resolve_plugin_write_fields(input: &OcrServiceWrite) -> Result<PluginOcrWrite
     ));
   }
 
-  // Structural preferences validation (schema-agnostic bounds).
-  let typed = parse_ocr_image_preferences(&capability_preferences).map_err(StorageError::Validation)?;
-  validate_ocr_image_preferences(&typed).map_err(map_capability_error)?;
-  for hint in &typed.language_hints {
-    if !is_supported_app_language(hint) {
-      return Err(StorageError::Validation(format!("unknown language hint: {hint}")));
-    }
-  }
-
   Ok(PluginOcrWriteFields {
     integration_instance_id,
     ocr_capability_id,
@@ -1196,7 +1185,7 @@ fn validate_plugin_ocr_binding(
   conn: &rusqlite::Connection,
   registry: &ServiceIntegrationRegistry,
   binding: &PluginOcrWriteFields,
-) -> Result<(), StorageError> {
+) -> Result<Value, StorageError> {
   let instance = integration_instances::get(conn, binding.integration_instance_id)?;
   if !instance.enabled {
     return Err(StorageError::Validation(
@@ -1208,50 +1197,31 @@ fn validate_plugin_ocr_binding(
       "integration instance must be ready for plugin OCR".into(),
     ));
   }
-  if !registry.contains(&instance.plugin_id) {
-    return Err(StorageError::Validation(
-      "integration plugin definition is missing".into(),
-    ));
-  }
-  let manifest = registry
-    .get(&instance.plugin_id)
+  let registration = registry
+    .get_registration(&instance.plugin_id)
     .ok_or_else(|| StorageError::Validation("integration plugin definition is missing".into()))?;
-
-  if !manifest.capabilities.iter().any(|c| c.id == binding.ocr_capability_id) {
-    return Err(StorageError::Validation(format!(
+  let cap_def = registration.capability(&binding.ocr_capability_id).ok_or_else(|| {
+    StorageError::Validation(format!(
       "OCR capability {} is not declared on plugin {}",
       binding.ocr_capability_id, instance.plugin_id
+    ))
+  })?;
+  if binding.capability_preferences_version != cap_def.descriptor.preferences_schema_version as i32 {
+    return Err(StorageError::Validation(format!(
+      "OCR preferences schema version must be {}",
+      cap_def.descriptor.preferences_schema_version
     )));
   }
-
-  // Google Vision preferences schema v1.
-  if binding.ocr_capability_id == OCR_IMAGE_CAPABILITY_ID {
-    if binding.capability_preferences_version != GOOGLE_VISION_PREFERENCES_SCHEMA_VERSION {
-      return Err(StorageError::Validation(format!(
-        "Google Vision preferences schema version must be {GOOGLE_VISION_PREFERENCES_SCHEMA_VERSION}"
-      )));
-    }
-    // Ensure only known keys for schema v1.
-    let obj = binding
-      .capability_preferences
-      .as_object()
-      .ok_or_else(|| StorageError::Validation("capability_preferences must be a JSON object".into()))?;
-    for key in obj.keys() {
-      if key != "operation" && key != "languageHints" {
-        return Err(StorageError::Validation(format!(
-          "capability preferences contain unsupported key: {key}"
-        )));
-      }
-    }
-  }
-
-  let _ = OCR_LANGUAGE_HINTS_MAX;
-  Ok(())
+  cap_def
+    .preference_adapter
+    .normalize_preferences(&binding.capability_preferences)
 }
 
 fn is_supported_app_language(language_id: &str) -> bool {
   let candidate = language_id.trim().to_ascii_lowercase();
-  SUPPORTED_LANGUAGES.iter().any(|lang| *lang == candidate)
+  crate::domain::language_detection::supported_languages()
+    .iter()
+    .any(|lang| *lang == candidate)
 }
 
 /// Map capability failures into storage/IPC-facing errors without leaking provider bodies.
@@ -1329,13 +1299,17 @@ mod tests {
     let tokens = Arc::new(crate::services::token_grant::TokenGrantService::new(Arc::new(
       TestExchanger,
     )));
-    let google = Arc::new(crate::services::google_cloud::GoogleCloudCapabilities::new(
-      db.clone(),
-      network,
-      tokens,
-    ));
-    let handlers =
-      Arc::new(crate::services::service_capabilities::ServiceCapabilityRegistry::with_google_cloud(google));
+    let handlers = Arc::new(
+      crate::services::bundled_plugins::build_capability_registry(
+        crate::services::bundled_plugins::HandlerDeps {
+          db: db.clone(),
+          broker: network,
+          tokens,
+        },
+        &registry,
+      )
+      .unwrap(),
+    );
     let caps = ServiceCapabilityService::new(db.clone(), registry.clone(), handlers);
     OcrServiceService::new(db, vault, registry, caps)
   }

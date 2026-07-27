@@ -1,6 +1,6 @@
 // ABOUTME: Nested translation profile management page at /translate/profiles.
 // ABOUTME: Full CRUD for profiles, model chains, languages, and prompt templates.
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { Button } from "@base-ui/react/button";
@@ -41,8 +41,26 @@ import {
 } from "../../query/options";
 import { deleteTranslationProfile, saveTranslationProfile, setTranslationProfileEnabled } from "../../storage/client";
 import { getIpcErrorMessage } from "../../storage/errors";
-import type { PromptTemplate, ProviderInstanceDto, ProviderModelDto, TranslationProfileDto } from "../../storage/types";
+import type {
+  IntegrationInstanceDto,
+  PromptTemplate,
+  ProviderInstanceDto,
+  ProviderModelDto,
+  ServiceIntegrationDefinitionDto,
+  TranslationProfileDto,
+} from "../../storage/types";
 import { AddTranslationProfileDialog } from "../../features/translate/AddTranslationProfileDialog";
+import { resolveLocalizedText, resolvePluginDisplayName } from "../../features/plugins/pluginPresentation";
+import { SchemaForm } from "../../features/plugins/schema/SchemaForm";
+import type { SchemaTextResolver } from "../../features/plugins/schema/SchemaField";
+import { preferenceSchemaForBinding } from "../../features/plugins/schema/capabilitySchema";
+import { createSchemaHostOptionResolver } from "../../features/plugins/schema/schemaHostOptions";
+import {
+  buildSchemaConfig,
+  createSchemaDraft,
+  setSchemaDraftValue,
+  type SchemaDraft,
+} from "../../features/plugins/schema/schemaDraft";
 import {
   buildTranslationEngineOptions,
   listCompatiblePluginRebindCandidates,
@@ -114,6 +132,7 @@ const sectionDividerClassName = "space-y-4 border-t border-outline-variant pt-4"
 const squareIconButtonClassName = `${outlineButtonClassName} size-control-height shrink-0 px-0`;
 
 const newProfileButtonClassName = `${outlineButtonClassName} w-full font-bold hover:not-data-disabled:bg-on-surface`;
+const emptyPreferenceSchema = { version: 1, fields: [], groups: [] };
 
 /**
  * Shared rail/editor footer: fixed border-box block size so both columns match.
@@ -160,7 +179,8 @@ type ProfileDraft = {
   translateCapabilityId: string;
   detectCapabilityId: string;
   capabilityPreferencesVersion: number;
-  capabilityPreferences: unknown;
+  pluginPreferences: SchemaDraft;
+  preferenceSchemaKey: string;
 };
 
 function newPromptTemplateId(): string {
@@ -248,7 +268,33 @@ function emptyDraft(defaultModelId: string, uiLanguage: string): ProfileDraft {
     translateCapabilityId: "",
     detectCapabilityId: "",
     capabilityPreferencesVersion: 1,
-    capabilityPreferences: {},
+    pluginPreferences: createSchemaDraft(emptyPreferenceSchema),
+    preferenceSchemaKey: "",
+  };
+}
+
+type PluginPreferenceState = {
+  version: number;
+  preferences: SchemaDraft;
+  key: string;
+};
+
+function pluginPreferenceState(
+  instances: readonly IntegrationInstanceDto[],
+  definitions: readonly ServiceIntegrationDefinitionDto[],
+  integrationInstanceId: string,
+  translateCapabilityId: string,
+  storedPreferences: unknown,
+  fallbackVersion: number,
+): PluginPreferenceState {
+  const binding = preferenceSchemaForBinding(instances, definitions, integrationInstanceId, translateCapabilityId);
+  const version = binding?.descriptor.preferencesSchemaVersion ?? fallbackVersion;
+  return {
+    version,
+    preferences: binding
+      ? createSchemaDraft(binding.schema, { config: storedPreferences })
+      : createSchemaDraft(emptyPreferenceSchema),
+    key: binding ? `${integrationInstanceId}:${translateCapabilityId}:${version}` : "",
   };
 }
 
@@ -257,8 +303,18 @@ function emptyPluginDraft(
   integrationInstanceId: string,
   translateCapabilityId: string,
   detectCapabilityId: string | null,
+  instances: readonly IntegrationInstanceDto[],
+  definitions: readonly ServiceIntegrationDefinitionDto[],
 ): ProfileDraft {
   const base = emptyDraft("", uiLanguage);
+  const preferenceState = pluginPreferenceState(
+    instances,
+    definitions,
+    integrationInstanceId,
+    translateCapabilityId,
+    {},
+    1,
+  );
   return {
     ...base,
     engineKind: "plugin_capability",
@@ -268,12 +324,19 @@ function emptyPluginDraft(
     integrationInstanceId,
     translateCapabilityId,
     detectCapabilityId: detectCapabilityId ?? "",
-    capabilityPreferencesVersion: 1,
-    capabilityPreferences: {},
+    capabilityPreferencesVersion: preferenceState.version,
+    pluginPreferences: preferenceState.preferences,
+    preferenceSchemaKey: preferenceState.key,
   };
 }
 
-function draftFromDto(dto: TranslationProfileDto, modelOptions: ModelOption[], uiLanguage: string): ProfileDraft {
+function draftFromDto(
+  dto: TranslationProfileDto,
+  modelOptions: ModelOption[],
+  uiLanguage: string,
+  instances: readonly IntegrationInstanceDto[],
+  definitions: readonly ServiceIntegrationDefinitionDto[],
+): ProfileDraft {
   const defaults = getDefaultProfileLanguages(uiLanguage);
   const common = {
     id: dto.id as string | null,
@@ -288,6 +351,14 @@ function draftFromDto(dto: TranslationProfileDto, modelOptions: ModelOption[], u
   };
 
   if (dto.engine.kind === "plugin_capability") {
+    const preferenceState = pluginPreferenceState(
+      instances,
+      definitions,
+      dto.engine.integrationInstanceId,
+      dto.engine.translateCapabilityId,
+      dto.engine.capabilityPreferences,
+      dto.engine.capabilityPreferencesVersion,
+    );
     return {
       ...common,
       engineKind: "plugin_capability",
@@ -303,8 +374,9 @@ function draftFromDto(dto: TranslationProfileDto, modelOptions: ModelOption[], u
       integrationInstanceId: dto.engine.integrationInstanceId,
       translateCapabilityId: dto.engine.translateCapabilityId,
       detectCapabilityId: dto.engine.detectCapabilityId ?? "",
-      capabilityPreferencesVersion: dto.engine.capabilityPreferencesVersion,
-      capabilityPreferences: dto.engine.capabilityPreferences,
+      capabilityPreferencesVersion: preferenceState.version,
+      pluginPreferences: preferenceState.preferences,
+      preferenceSchemaKey: preferenceState.key,
     };
   }
 
@@ -350,7 +422,8 @@ function draftFromDto(dto: TranslationProfileDto, modelOptions: ModelOption[], u
     translateCapabilityId: "",
     detectCapabilityId: "",
     capabilityPreferencesVersion: 1,
-    capabilityPreferences: {},
+    pluginPreferences: createSchemaDraft(emptyPreferenceSchema),
+    preferenceSchemaKey: "",
   };
 }
 
@@ -428,10 +501,11 @@ function isProfileDraftClean(draft: ProfileDraft, baseline: ProfileDraft): boole
     draft.translateCapabilityId === baseline.translateCapabilityId &&
     draft.detectCapabilityId === baseline.detectCapabilityId &&
     draft.capabilityPreferencesVersion === baseline.capabilityPreferencesVersion &&
+    draft.preferenceSchemaKey === baseline.preferenceSchemaKey &&
     JSON.stringify(draft.fallbackModelIds) === JSON.stringify(baseline.fallbackModelIds) &&
     JSON.stringify(draft.promptTemplates) === JSON.stringify(baseline.promptTemplates) &&
     JSON.stringify(draft.providerOptionsJson) === JSON.stringify(baseline.providerOptionsJson) &&
-    JSON.stringify(draft.capabilityPreferences) === JSON.stringify(baseline.capabilityPreferences)
+    JSON.stringify(draft.pluginPreferences.values) === JSON.stringify(baseline.pluginPreferences.values)
   );
 }
 
@@ -445,6 +519,8 @@ function TranslateProfilesPage() {
   const modelsQuery = useQuery(allProviderModelsOptions());
   const integrationsQuery = useQuery(integrationListOptions());
   const integrationDefsQuery = useQuery(integrationDefinitionListOptions());
+  const integrationInstances = useMemo(() => integrationsQuery.data ?? [], [integrationsQuery.data]);
+  const integrationDefinitions = useMemo(() => integrationDefsQuery.data ?? [], [integrationDefsQuery.data]);
 
   /** Explicit selection; null means "use first list item when not creating". */
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -562,11 +638,16 @@ function TranslateProfilesPage() {
   }, [modelOptions]);
 
   const uiLanguage = i18n.language;
+  const schemaText = useCallback<SchemaTextResolver>(
+    (key, fallback) => resolveLocalizedText((translationKey, options) => t(translationKey, options), key, fallback),
+    [t],
+  );
+  const schemaHostOptions = useMemo(() => createSchemaHostOptionResolver(schemaText), [schemaText]);
 
   // Derive draft from detail when not creating and no local override; never mutate cache objects.
   const derivedDraft =
     !isCreating && detailQuery.isSuccess && detailQuery.data
-      ? draftFromDto(detailQuery.data, modelOptions, uiLanguage)
+      ? draftFromDto(detailQuery.data, modelOptions, uiLanguage, integrationInstances, integrationDefinitions)
       : null;
   const draft = isCreating || draftOverride != null ? draftOverride : derivedDraft;
   const templatePendingDelete =
@@ -742,6 +823,8 @@ function TranslateProfilesPage() {
           option.integrationInstanceId,
           option.translateCapabilityId,
           option.detectCapabilityId,
+          integrationInstances,
+          integrationDefinitions,
         ),
       );
       return;
@@ -759,8 +842,8 @@ function TranslateProfilesPage() {
       statusNeedsConfig: t("translate.profiles.engineStatusNeedsConfig"),
       statusGeneric: t("translate.profiles.engineStatusGeneric"),
       integrationLabel: t("translate.profiles.engineIntegrationLabel"),
-      webChannelGtx: t("plugins.googleTranslateWeb.channelLabelGtx"),
-      webChannelProxy: t("plugins.googleTranslateWeb.channelLabelProxy"),
+      resolvePluginLabel: (definition: ServiceIntegrationDefinitionDto) =>
+        resolvePluginDisplayName(definition, (key, options) => t(key, options)),
     }),
     [t],
   );
@@ -769,11 +852,11 @@ function TranslateProfilesPage() {
     () =>
       buildTranslationEngineOptions({
         enabledModels: modelsQuery.data ?? [],
-        instances: integrationsQuery.data ?? [],
-        definitions: integrationDefsQuery.data ?? [],
+        instances: integrationInstances,
+        definitions: integrationDefinitions,
         labels: engineOptionLabels,
       }),
-    [modelsQuery.data, integrationsQuery.data, integrationDefsQuery.data, engineOptionLabels],
+    [modelsQuery.data, integrationDefinitions, integrationInstances, engineOptionLabels],
   );
 
   const rebindCandidates = useMemo(() => {
@@ -784,17 +867,34 @@ function TranslateProfilesPage() {
       currentInstanceId: draft.integrationInstanceId,
       translateCapabilityId: draft.translateCapabilityId,
       detectCapabilityId: draft.detectCapabilityId || null,
-      instances: integrationsQuery.data ?? [],
-      definitions: integrationDefsQuery.data ?? [],
-      labels: { integrationLabel: engineOptionLabels.integrationLabel },
+      instances: integrationInstances,
+      definitions: integrationDefinitions,
+      labels: {
+        integrationLabel: engineOptionLabels.integrationLabel,
+        resolvePluginLabel: engineOptionLabels.resolvePluginLabel,
+      },
     });
-  }, [draft, integrationsQuery.data, integrationDefsQuery.data, engineOptionLabels.integrationLabel]);
+  }, [draft, integrationDefinitions, integrationInstances, engineOptionLabels]);
+
+  const profilePreferenceBinding = useMemo(() => {
+    if (!draft || draft.engineKind !== "plugin_capability") {
+      return null;
+    }
+    return preferenceSchemaForBinding(
+      integrationInstances,
+      integrationDefinitions,
+      draft.integrationInstanceId,
+      draft.translateCapabilityId,
+    );
+  }, [draft, integrationDefinitions, integrationInstances]);
 
   function updateDraft(patch: Partial<ProfileDraft>) {
     setDraftOverride((current) => {
       const base =
         current ??
-        (detailQuery.data ? draftFromDto(detailQuery.data, modelOptions, uiLanguage) : null) ??
+        (detailQuery.data
+          ? draftFromDto(detailQuery.data, modelOptions, uiLanguage, integrationInstances, integrationDefinitions)
+          : null) ??
         (isCreating ? emptyDraft(modelOptions[0]?.id ?? "", uiLanguage) : null);
       return base ? { ...base, ...patch } : current;
     });
@@ -967,7 +1067,7 @@ function TranslateProfilesPage() {
     }
 
     if (draft.engineKind === "plugin_capability") {
-      if (!draft.integrationInstanceId || !draft.translateCapabilityId) {
+      if (!draft.integrationInstanceId || !draft.translateCapabilityId || !profilePreferenceBinding) {
         setSaveError(t("translate.profiles.engineBindingRequired"));
         return;
       }
@@ -985,8 +1085,8 @@ function TranslateProfilesPage() {
           integrationInstanceId: draft.integrationInstanceId,
           translateCapabilityId: draft.translateCapabilityId,
           detectCapabilityId: draft.detectCapabilityId || null,
-          capabilityPreferencesVersion: draft.capabilityPreferencesVersion,
-          capabilityPreferences: draft.capabilityPreferences ?? {},
+          capabilityPreferencesVersion: profilePreferenceBinding.descriptor.preferencesSchemaVersion,
+          capabilityPreferences: buildSchemaConfig(profilePreferenceBinding.schema, draft.pluginPreferences),
         },
       });
       return;
@@ -1321,7 +1421,11 @@ function TranslateProfilesPage() {
                 <label className="flex shrink-0 items-center gap-2 text-body-tight text-on-surface">
                   <Switch.Root
                     checked={draft.enabled}
-                    disabled={enabledPending || savePending}
+                    disabled={
+                      enabledPending ||
+                      savePending ||
+                      (draft.engineKind === "plugin_capability" && !profilePreferenceBinding)
+                    }
                     onCheckedChange={(checked) => {
                       handleEnabledChange(checked);
                     }}
@@ -1357,7 +1461,9 @@ function TranslateProfilesPage() {
                       ${primaryButtonClassName}
                       relative
                     `}
-                    disabled={savePending || !isDirty}
+                    disabled={
+                      savePending || !isDirty || (draft.engineKind === "plugin_capability" && !profilePreferenceBinding)
+                    }
                     focusableWhenDisabled
                     aria-busy={savePending}
                     aria-label={savePending ? t("common.saving") : t("common.save")}
@@ -1501,10 +1607,24 @@ function TranslateProfilesPage() {
                             return;
                           }
                           const candidate = rebindCandidates.find((c) => c.id === value);
+                          const translateCapabilityId = candidate?.translateCapabilityId ?? draft.translateCapabilityId;
+                          const binding = preferenceSchemaForBinding(
+                            integrationInstances,
+                            integrationDefinitions,
+                            value,
+                            translateCapabilityId,
+                          );
+                          if (!binding) {
+                            setSaveError(t("plugins.unsupportedInstance"));
+                            return;
+                          }
                           updateDraft({
                             integrationInstanceId: value,
-                            translateCapabilityId: candidate?.translateCapabilityId ?? draft.translateCapabilityId,
+                            translateCapabilityId,
                             detectCapabilityId: candidate?.detectCapabilityId ?? draft.detectCapabilityId,
+                            capabilityPreferencesVersion: binding.descriptor.preferencesSchemaVersion,
+                            pluginPreferences: createSchemaDraft(binding.schema),
+                            preferenceSchemaKey: `${value}:${translateCapabilityId}:${binding.descriptor.preferencesSchemaVersion}`,
                           });
                         }}
                         options={rebindCandidates
@@ -1532,6 +1652,25 @@ function TranslateProfilesPage() {
                       })()}
                       <p className="text-table-header text-neutral">{t("translate.profiles.rebindHint")}</p>
                     </div>
+                    {profilePreferenceBinding ? (
+                      <SchemaForm
+                        schema={profilePreferenceBinding.schema}
+                        values={draft.pluginPreferences.values}
+                        idPrefix={`profile-preferences-${draft.integrationInstanceId}`}
+                        disabled={savePending}
+                        resolveText={schemaText}
+                        resolveOptions={schemaHostOptions}
+                        onValueChange={(fieldId, value) => {
+                          updateDraft({
+                            pluginPreferences: setSchemaDraftValue(draft.pluginPreferences, fieldId, value),
+                          });
+                        }}
+                      />
+                    ) : (
+                      <p className="text-body-tight text-neutral" role="status">
+                        {t("plugins.unsupportedInstance")}
+                      </p>
+                    )}
                   </div>
                 ) : null}
 
@@ -2045,10 +2184,25 @@ function TranslateProfilesPage() {
             return;
           }
           const candidate = rebindCandidates.find((c) => c.id === pendingRebindInstanceId);
+          const translateCapabilityId = candidate?.translateCapabilityId ?? draft.translateCapabilityId;
+          const binding = preferenceSchemaForBinding(
+            integrationInstances,
+            integrationDefinitions,
+            pendingRebindInstanceId,
+            translateCapabilityId,
+          );
+          if (!binding) {
+            setSaveError(t("plugins.unsupportedInstance"));
+            setPendingRebindInstanceId(null);
+            return;
+          }
           updateDraft({
             integrationInstanceId: pendingRebindInstanceId,
-            translateCapabilityId: candidate?.translateCapabilityId ?? draft.translateCapabilityId,
+            translateCapabilityId,
             detectCapabilityId: candidate?.detectCapabilityId ?? draft.detectCapabilityId,
+            capabilityPreferencesVersion: binding.descriptor.preferencesSchemaVersion,
+            pluginPreferences: createSchemaDraft(binding.schema),
+            preferenceSchemaKey: `${pendingRebindInstanceId}:${translateCapabilityId}:${binding.descriptor.preferencesSchemaVersion}`,
           });
           setPendingRebindInstanceId(null);
         }}

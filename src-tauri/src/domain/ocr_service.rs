@@ -74,7 +74,7 @@ impl BaiduOcrAction {
 pub fn default_google_vision_preferences() -> Value {
   json!({
     "operation": "document_text_detection",
-    "languageHints": [],
+    "language-hints": [],
   })
 }
 
@@ -319,7 +319,7 @@ mod tests {
   fn default_google_vision_preferences_shape() {
     let prefs = default_google_vision_preferences();
     assert_eq!(prefs["operation"], "document_text_detection");
-    assert_eq!(prefs["languageHints"], json!([]));
+    assert_eq!(prefs["language-hints"], json!([]));
     let typed = parse_ocr_image_preferences(&prefs).unwrap();
     assert_eq!(typed.operation, OcrImageOperation::DocumentTextDetection);
     assert!(typed.language_hints.is_empty());

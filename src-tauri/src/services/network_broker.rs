@@ -1,26 +1,26 @@
 // ABOUTME: Service-integration network broker resolving manifest endpoint aliases only.
 // ABOUTME: Injects opaque token grants and enforces path/header/size/cancel policy before transport.
 use crate::domain::cancel::CancelToken;
-use crate::domain::provider::ProxyMode;
 use crate::domain::provider_http::{ProviderHttpMethod, ProviderHttpResponse};
-use crate::domain::service_capability::{CapabilityError, CapabilityErrorCode};
-use crate::domain::service_integration::{
-  GOOGLE_TRANSLATE_WEB_PLUGIN_ID, GoogleCloudConfigV1, IntegrationInstance, ServiceIntegrationManifest,
-};
+use crate::domain::service_capability::{CapabilityError, CapabilityErrorCode, CapabilityExecutionPrincipal};
+use crate::domain::service_integration::{IntegrationInstance, ServiceIntegrationManifest};
 use crate::error::StorageError;
-use crate::repositories::integration_instances;
+use crate::repositories::{integration_credential_bindings, integration_instances};
 use crate::services::bounded_http::{
-  MAX_RESPONSE_BODY_BYTES, PreparedHttpRequest, RawHttpTransport, ReqwestRawHttpTransport, append_query_pairs,
-  build_endpoint, is_blocked_header, validate_caller_name, validate_relative_path, validate_request_id,
+  BoundedHttpResponse, DestinationPolicy, MAX_RESPONSE_BODY_BYTES, PreparedHttpRequest, REQUEST_TIMEOUT,
+  RawHttpTransport, ReqwestRawHttpTransport, append_query_pairs, build_endpoint, is_blocked_header,
+  validate_caller_name, validate_external_destination, validate_relative_path, validate_request_id,
   value_looks_like_secret_key, with_cancel,
 };
-use crate::services::google_translate_web::{GOOGLE_WEB_PROXY_ENDPOINT_ALIAS, resolve_instance_proxy_origin};
+use crate::services::bundled_plugins::{
+  BundledPluginRegistration, CapabilityEndpointAuthority, CapabilityPathAuthority,
+};
 use crate::services::service_integration_registry::ServiceIntegrationRegistry;
 use crate::services::token_grant::TokenGrant;
 use crate::storage::Database;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 /// Default max response body for service-integration broker calls.
@@ -33,11 +33,23 @@ pub const BROKER_REQUEST_BODY_MAX_BYTES: usize = 64 * 1024;
 /// Named from OCR_IMAGE_MAX_DECODED_BYTES so the broker contract matches the product gate.
 pub const BROKER_OCR_REQUEST_BODY_MAX_BYTES: usize =
   (crate::domain::service_capability::OCR_IMAGE_MAX_DECODED_BYTES * 4 / 3) + (64 * 1024);
+/// Hard upper limit across all capability authority request body limits.
+pub const BROKER_ABSOLUTE_REQUEST_BODY_MAX_BYTES: usize = BROKER_OCR_REQUEST_BODY_MAX_BYTES;
+/// Maximum caller-provided query pairs accepted before authority matching.
+pub const BROKER_MAX_QUERY_PAIRS: usize = 32;
+/// Maximum caller-provided headers accepted before authority matching.
+pub const BROKER_MAX_HEADERS: usize = 16;
+/// Maximum UTF-8 bytes in one caller-provided query value or header value.
+pub const BROKER_CALLER_VALUE_MAX_BYTES: usize = 8 * 1024;
+/// Maximum content-type bytes supplied by a capability handler.
+pub const BROKER_CONTENT_TYPE_MAX_BYTES: usize = 128;
 
 /// Capability-scoped network request using a manifest endpoint alias.
 pub struct BrokerRequest {
   pub integration_instance_id: Uuid,
   pub capability_id: String,
+  /// Immutable caller identity issued by the resolved capability invocation.
+  pub execution_principal: CapabilityExecutionPrincipal,
   pub endpoint_alias: String,
   pub method: ProviderHttpMethod,
   pub relative_path: String,
@@ -60,6 +72,7 @@ impl std::fmt::Debug for BrokerRequest {
     f.debug_struct("BrokerRequest")
       .field("integration_instance_id", &self.integration_instance_id)
       .field("capability_id", &self.capability_id)
+      .field("execution_principal", &self.execution_principal)
       .field("endpoint_alias", &self.endpoint_alias)
       .field("method", &self.method)
       .field("relative_path_len", &self.relative_path.len())
@@ -104,12 +117,124 @@ impl NetworkBroker {
     }
   }
 
+  /// Execute a brokered request whose response body must be valid UTF-8.
+  /// Existing JSON-based providers use this compatibility adapter.
   pub async fn execute(&self, request: BrokerRequest) -> Result<ProviderHttpResponse, CapabilityError> {
-    let prepared = self.prepare(request)?;
-    let (cancel, work) = prepared;
+    self
+      .execute_bytes(request)
+      .await?
+      .into_provider_http_response()
+      .map_err(map_transport_error)
+  }
+
+  /// Execute a brokered request and retain the bounded response body as raw bytes.
+  /// Binary capabilities such as Edge TTS use this path; it never attempts UTF-8 decoding.
+  pub async fn execute_bytes(&self, request: BrokerRequest) -> Result<BoundedHttpResponse, CapabilityError> {
+    let (cancel, work) = self.prepare(request)?;
     with_cancel(cancel.as_ref(), self.transport.request(work))
       .await
       .map_err(map_transport_error)
+  }
+
+  /// Validate execution principal, instance eligibility, and exact capability authority
+  /// (endpoint alias, method, path) before a handler acquires a token grant or accesses the
+  /// credential vault. Required by Phase 1 Task 3: the broker must authorize the principal
+  /// and capability authority entry before credential/token access. Grant-set revision and
+  /// grant binding are validated later in [`execute`]/[`execute_bytes`] when the grant is
+  /// presented.
+  pub fn pre_authorize(
+    &self,
+    integration_instance_id: Uuid,
+    execution_principal: &CapabilityExecutionPrincipal,
+    capability_id: &str,
+    endpoint_alias: &str,
+    method: ProviderHttpMethod,
+    relative_path: &str,
+    request_id: &str,
+  ) -> Result<(), CapabilityError> {
+    validate_request_id(request_id).map_err(map_validation)?;
+    validate_relative_path(relative_path).map_err(map_validation)?;
+
+    let instance = self
+      .db
+      .read(|conn| integration_instances::get(conn, integration_instance_id))
+      .map_err(map_storage)?;
+    if !instance.enabled {
+      return Err(CapabilityError::new(
+        CapabilityErrorCode::PluginUnavailable,
+        "integration instance is disabled",
+      ));
+    }
+    validate_execution_principal(
+      execution_principal,
+      request_id,
+      integration_instance_id,
+      &instance.plugin_id,
+      capability_id,
+    )?;
+
+    let registration = self
+      .registry
+      .get_registration(&instance.plugin_id)
+      .ok_or_else(|| CapabilityError::new(CapabilityErrorCode::PluginUnavailable, "plugin definition is missing"))?;
+    let capability = registration.capability(capability_id).ok_or_else(|| {
+      CapabilityError::new(
+        CapabilityErrorCode::PermissionDenied,
+        "capability is not declared on this plugin",
+      )
+    })?;
+    resolve_capability_authority(
+      registration,
+      capability.endpoint_authorities.as_slice(),
+      &instance.config_json,
+      endpoint_alias,
+      method,
+      relative_path,
+    )?;
+    Ok(())
+  }
+
+  /// Verify that an opaque grant belongs to this instance and still matches every required
+  /// credential slot revision before it can be injected into a brokered request.
+  fn validate_current_grant_set(
+    &self,
+    instance_id: Uuid,
+    registration: &crate::services::bundled_plugins::BundledPluginRegistration,
+    grant: &TokenGrant,
+  ) -> Result<(), CapabilityError> {
+    if grant.instance_id() != instance_id {
+      return Err(CapabilityError::new(
+        CapabilityErrorCode::PermissionDenied,
+        "token grant instance mismatch",
+      ));
+    }
+    let bindings = self
+      .db
+      .read(|conn| integration_credential_bindings::list_for_instance(conn, instance_id))
+      .map_err(map_storage)?;
+    let binding_by_slot: HashMap<&str, _> = bindings
+      .iter()
+      .map(|binding| (binding.slot_id.as_str(), binding))
+      .collect();
+    let grant_revision = grant.credential_revision();
+    for slot in registration
+      .manifest
+      .credential_slots
+      .iter()
+      .filter(|slot| slot.required)
+    {
+      let binding = binding_by_slot.get(slot.id.as_str()).copied();
+      let current = binding
+        .filter(|binding| binding.credential_ref.is_some())
+        .map(|binding| binding.credential_revision);
+      if current != Some(grant_revision) {
+        return Err(CapabilityError::new(
+          CapabilityErrorCode::PermissionDenied,
+          "token grant credential revision is stale",
+        ));
+      }
+    }
+    Ok(())
   }
 
   fn prepare(&self, request: BrokerRequest) -> Result<(Option<CancelToken>, PreparedHttpRequest), CapabilityError> {
@@ -120,16 +245,27 @@ impl NetworkBroker {
         "relative path exceeds limit",
       ));
     }
-    let max_request_body = request.max_request_body_bytes.unwrap_or(BROKER_REQUEST_BODY_MAX_BYTES);
+    validate_relative_path(&request.relative_path).map_err(map_validation)?;
+    if request.query.len() > BROKER_MAX_QUERY_PAIRS {
+      return Err(CapabilityError::new(
+        CapabilityErrorCode::InvalidRequest,
+        "query pair count exceeds limit",
+      ));
+    }
+    if request.headers.len() > BROKER_MAX_HEADERS {
+      return Err(CapabilityError::new(
+        CapabilityErrorCode::InvalidRequest,
+        "header count exceeds limit",
+      ));
+    }
     if let Some(body) = &request.body {
-      if body.len() > max_request_body {
+      if body.len() > BROKER_ABSOLUTE_REQUEST_BODY_MAX_BYTES {
         return Err(CapabilityError::new(
           CapabilityErrorCode::UnsupportedInput,
-          "request body exceeds limit",
+          "request body exceeds absolute limit",
         ));
       }
     }
-    validate_relative_path(&request.relative_path).map_err(map_validation)?;
 
     let instance = self
       .db
@@ -141,80 +277,164 @@ impl NetworkBroker {
         "integration instance is disabled",
       ));
     }
+    validate_execution_principal(
+      &request.execution_principal,
+      &request.request_id,
+      request.integration_instance_id,
+      &instance.plugin_id,
+      &request.capability_id,
+    )?;
 
-    let manifest = self
+    let registration = self
       .registry
-      .get(&instance.plugin_id)
+      .get_registration(&instance.plugin_id)
       .ok_or_else(|| CapabilityError::new(CapabilityErrorCode::PluginUnavailable, "plugin definition is missing"))?;
+    let capability = registration.capability(&request.capability_id).ok_or_else(|| {
+      CapabilityError::new(
+        CapabilityErrorCode::PermissionDenied,
+        "capability is not declared on this plugin",
+      )
+    })?;
+    let authority = resolve_capability_authority(
+      registration,
+      capability.endpoint_authorities.as_slice(),
+      &instance.config_json,
+      &request.endpoint_alias,
+      request.method,
+      &request.relative_path,
+    )?;
 
-    let capability = manifest
-      .capabilities
-      .iter()
-      .find(|c| c.id == request.capability_id)
-      .ok_or_else(|| {
-        CapabilityError::new(
-          CapabilityErrorCode::PermissionDenied,
-          "capability is not declared on this plugin",
-        )
-      })?;
-
-    if !capability.endpoint_aliases.iter().any(|a| a == &request.endpoint_alias) {
+    let requested_request_limit = request
+      .max_request_body_bytes
+      .unwrap_or(authority.max_request_body_bytes);
+    if requested_request_limit > authority.max_request_body_bytes {
       return Err(CapabilityError::new(
         CapabilityErrorCode::PermissionDenied,
-        "capability is not allowed to use this endpoint alias",
+        "request body limit exceeds capability authority",
       ));
     }
+    if let Some(body) = &request.body {
+      if body.len() > requested_request_limit {
+        return Err(CapabilityError::new(
+          CapabilityErrorCode::UnsupportedInput,
+          "request body exceeds capability limit",
+        ));
+      }
+    }
+    let requested_response_limit = request
+      .max_response_body_bytes
+      .unwrap_or(authority.max_response_body_bytes);
+    if requested_response_limit > authority.max_response_body_bytes {
+      return Err(CapabilityError::new(
+        CapabilityErrorCode::PermissionDenied,
+        "response body limit exceeds capability authority",
+      ));
+    }
+    let timeout = request.timeout.unwrap_or(REQUEST_TIMEOUT);
+    if timeout > authority.max_timeout {
+      return Err(CapabilityError::new(
+        CapabilityErrorCode::PermissionDenied,
+        "timeout exceeds capability authority",
+      ));
+    }
+    if let Some(content_type) = request.content_type.as_deref() {
+      if content_type.len() > BROKER_CONTENT_TYPE_MAX_BYTES || content_type != "application/json" {
+        return Err(CapabilityError::new(
+          CapabilityErrorCode::PermissionDenied,
+          "content type is not authorized for this broker request",
+        ));
+      }
+    }
 
-    let base_url = resolve_endpoint_base(manifest, &instance, &request.endpoint_alias)?;
+    let base_url = resolve_endpoint_base(registration, &registration.manifest, &instance, &request.endpoint_alias)?;
     // Origins come from pinned manifest grants or instance-validated HTTPS proxy config only.
     let mut url = build_endpoint(&base_url, &request.relative_path).map_err(map_validation)?;
 
     for (name, value) in &request.query {
       validate_caller_name(name, "query").map_err(map_validation)?;
-      if value_looks_like_secret_key(name) {
+      if value.len() > BROKER_CALLER_VALUE_MAX_BYTES {
         return Err(CapabilityError::new(
-          CapabilityErrorCode::PermissionDenied,
-          format!("caller query name '{name}' is restricted"),
+          CapabilityErrorCode::InvalidRequest,
+          "query value exceeds limit",
         ));
       }
-      let _ = value;
+      if value_looks_like_secret_key(name) || !authority_allows_name(&authority.allowed_query_names, name) {
+        return Err(CapabilityError::new(
+          CapabilityErrorCode::PermissionDenied,
+          format!("caller query name '{name}' is not authorized"),
+        ));
+      }
     }
     append_query_pairs(&mut url, &request.query).map_err(map_validation)?;
+    validate_external_destination(&url).map_err(map_validation)?;
 
     let mut headers = HashMap::new();
     for (name, value) in &request.headers {
       validate_caller_name(name, "header").map_err(map_validation)?;
-      if is_blocked_header(name) || value_looks_like_secret_key(name) {
+      if value.len() > BROKER_CALLER_VALUE_MAX_BYTES {
+        return Err(CapabilityError::new(
+          CapabilityErrorCode::InvalidRequest,
+          "header value exceeds limit",
+        ));
+      }
+      if is_blocked_header(name)
+        || value_looks_like_secret_key(name)
+        || !authority_allows_name(&authority.allowed_header_names, name)
+      {
         return Err(CapabilityError::new(
           CapabilityErrorCode::PermissionDenied,
-          format!("caller header '{name}' is restricted"),
+          format!("caller header '{name}' is not authorized"),
         ));
       }
       headers.insert(name.clone(), value.clone());
     }
 
-    // Zero-secret Google Web integrations never receive token grants or auth headers.
-    if instance.plugin_id == GOOGLE_TRANSLATE_WEB_PLUGIN_ID {
-      if request.auth.is_some() {
+    match (&authority.auth_policy_id, request.auth.as_ref()) {
+      (None, Some(_)) => {
         return Err(CapabilityError::new(
           CapabilityErrorCode::PermissionDenied,
-          "Google Web integration cannot use token grants",
+          "credential-free capability cannot use token grants",
         ));
       }
-    } else if let Some(grant) = &request.auth {
-      if grant.instance_id() != request.integration_instance_id {
+      (None, None) => {}
+      (Some(policy_id), Some(grant)) => {
+        let binding = registration
+          .auth_policy
+          .as_ref()
+          .filter(|binding| &binding.auth_policy_id == policy_id)
+          .ok_or_else(|| {
+            CapabilityError::new(
+              CapabilityErrorCode::PermissionDenied,
+              "capability auth policy is unavailable",
+            )
+          })?;
+        self.validate_current_grant_set(request.integration_instance_id, registration, grant)?;
+        if grant.is_expired(Instant::now()) {
+          return Err(CapabilityError::new(
+            CapabilityErrorCode::PermissionDenied,
+            "token grant has expired",
+          ));
+        }
+        if grant.capability_id() != request.capability_id
+          || grant.auth_driver_id() != binding.auth_driver_id
+          || grant.audience_policy_id() != binding.audience_policy_id
+        {
+          return Err(CapabilityError::new(
+            CapabilityErrorCode::PermissionDenied,
+            "token grant authority does not match capability",
+          ));
+        }
+        grant.apply_bearer_auth(&mut headers);
+      }
+      (Some(_), None) => {
         return Err(CapabilityError::new(
           CapabilityErrorCode::PermissionDenied,
-          "token grant instance mismatch",
+          "capability requires a token grant",
         ));
       }
-      grant.apply_bearer_auth(&mut headers);
     }
 
-    let proxy_mode = resolve_proxy_mode(&instance.config_json);
-    let max_body = request
-      .max_response_body_bytes
-      .unwrap_or(BROKER_MAX_RESPONSE_BODY_BYTES);
+    let proxy_mode = registration.config_adapter.proxy_mode(&instance.config_json);
 
     log::debug!(
       "network_broker origin={} method={:?} path_len={} header_names={:?} body_len={} request_id={} capability={} instance={}",
@@ -237,11 +457,69 @@ impl NetworkBroker {
         body: request.body,
         content_type: request.content_type,
         proxy_mode,
-        max_response_body_bytes: Some(max_body),
-        timeout: request.timeout,
+        destination_policy: DestinationPolicy::PublicInternet,
+        max_response_body_bytes: Some(requested_response_limit),
+        timeout: Some(timeout),
       },
     ))
   }
+}
+
+fn validate_execution_principal(
+  principal: &CapabilityExecutionPrincipal,
+  request_id: &str,
+  integration_instance_id: Uuid,
+  instance_plugin_id: &str,
+  capability_id: &str,
+) -> Result<(), CapabilityError> {
+  if principal.request_id != request_id
+    || principal.integration_instance_id != integration_instance_id
+    || principal.plugin_id != instance_plugin_id
+    || principal.capability_id != capability_id
+  {
+    return Err(CapabilityError::new(
+      CapabilityErrorCode::PermissionDenied,
+      "execution principal does not match broker request",
+    ));
+  }
+  Ok(())
+}
+
+fn resolve_capability_authority<'a>(
+  registration: &BundledPluginRegistration,
+  authorities: &'a [CapabilityEndpointAuthority],
+  config_json: &str,
+  endpoint_alias: &str,
+  method: ProviderHttpMethod,
+  relative_path: &str,
+) -> Result<&'a CapabilityEndpointAuthority, CapabilityError> {
+  for authority in authorities {
+    if authority.endpoint_alias != endpoint_alias || authority.method != method {
+      continue;
+    }
+    let path_matches = match &authority.path {
+      CapabilityPathAuthority::InstanceConfigured => {
+        registration
+          .config_adapter
+          .instance_endpoint_relative_path(config_json, endpoint_alias)
+          .map_err(map_validation)?
+          .as_deref()
+          == Some(relative_path)
+      }
+      path => path.matches_static(relative_path),
+    };
+    if path_matches {
+      return Ok(authority);
+    }
+  }
+  Err(CapabilityError::new(
+    CapabilityErrorCode::PermissionDenied,
+    "capability authority does not allow this endpoint, method, or path",
+  ))
+}
+
+fn authority_allows_name(allowed: &[String], candidate: &str) -> bool {
+  allowed.iter().any(|name| name.eq_ignore_ascii_case(candidate))
 }
 
 fn resolve_endpoint_alias(manifest: &ServiceIntegrationManifest, alias: &str) -> Result<String, CapabilityError> {
@@ -258,25 +536,25 @@ fn resolve_endpoint_alias(manifest: &ServiceIntegrationManifest, alias: &str) ->
     })
 }
 
-/// Resolve endpoint base URL from pinned manifest grants or instance-scoped HTTPS proxy config.
+/// Resolve endpoint base URL from pinned manifest grants or instance-sourced origins.
 fn resolve_endpoint_base(
+  registration: &crate::services::bundled_plugins::BundledPluginRegistration,
   manifest: &ServiceIntegrationManifest,
   instance: &IntegrationInstance,
   alias: &str,
 ) -> Result<String, CapabilityError> {
   // Capability already authorized the alias; still require it on the manifest.
-  let _pinned = resolve_endpoint_alias(manifest, alias)?;
-  if manifest.id == GOOGLE_TRANSLATE_WEB_PLUGIN_ID && alias == GOOGLE_WEB_PROXY_ENDPOINT_ALIAS {
-    // User-configured HTTPS origin class: validated proxy URL on this instance only.
-    return resolve_instance_proxy_origin(&instance.config_json);
+  let pinned = resolve_endpoint_alias(manifest, alias)?;
+  if registration.endpoint_policy.allow_instance_endpoints {
+    if let Some(origin) = registration
+      .config_adapter
+      .instance_endpoint_origin(&instance.config_json, alias)
+      .map_err(map_validation)?
+    {
+      return Ok(origin);
+    }
   }
-  resolve_endpoint_alias(manifest, alias)
-}
-
-fn resolve_proxy_mode(config_json: &str) -> ProxyMode {
-  serde_json::from_str::<GoogleCloudConfigV1>(config_json)
-    .map(|c| c.proxy_mode)
-    .unwrap_or(ProxyMode::Inherit)
+  Ok(pinned)
 }
 
 fn map_validation(err: StorageError) -> CapabilityError {
@@ -306,9 +584,7 @@ fn map_transport_error(err: StorageError) -> CapabilityError {
     StorageError::Validation(msg) if msg.contains("exceeds size limit") || msg.contains("byte cap") => {
       CapabilityError::new(CapabilityErrorCode::InvalidResponse, "response body exceeds size limit")
     }
-    StorageError::Validation(msg) if msg.contains("network") => {
-      CapabilityError::new(CapabilityErrorCode::Network, "network request failed")
-    }
+    StorageError::Validation(msg) if msg.contains("network") => CapabilityError::new(CapabilityErrorCode::Network, msg),
     StorageError::Validation(msg) => CapabilityError::new(CapabilityErrorCode::Network, msg),
     other => map_storage(other),
   }
@@ -317,11 +593,14 @@ fn map_transport_error(err: StorageError) -> CapabilityError {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::domain::provider::ProxyMode;
   use crate::domain::provider_http::ProviderHttpStreamEvent;
   use crate::domain::service_integration::{
-    GOOGLE_CLOUD_DEFAULT_LOCATION, GOOGLE_CLOUD_PLUGIN_ID, IntegrationHealthStatus, IntegrationInstance,
+    GOOGLE_CLOUD_DEFAULT_LOCATION, GOOGLE_CLOUD_PLUGIN_ID, GOOGLE_CLOUD_SERVICE_ACCOUNT_SLOT, GoogleCloudConfigV1,
+    IntegrationCredentialBinding, IntegrationHealthStatus, IntegrationInstance,
   };
   use crate::domain::time::{new_id, now_rfc3339};
+  use crate::repositories::integration_credential_bindings;
   use crate::services::token_grant::TokenGrant;
   use std::future::Future;
   use std::pin::Pin;
@@ -329,14 +608,14 @@ mod tests {
 
   struct CaptureTransport {
     last: Mutex<Option<PreparedHttpRequest>>,
-    response: Mutex<Result<ProviderHttpResponse, StorageError>>,
+    response: Mutex<Result<BoundedHttpResponse, StorageError>>,
   }
 
   impl RawHttpTransport for CaptureTransport {
     fn request(
       &self,
       prepared: PreparedHttpRequest,
-    ) -> Pin<Box<dyn Future<Output = Result<ProviderHttpResponse, StorageError>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = Result<BoundedHttpResponse, StorageError>> + Send + '_>> {
       Box::pin(async move {
         *self.last.lock().unwrap() = Some(prepared);
         match &*self.response.lock().unwrap() {
@@ -353,6 +632,14 @@ mod tests {
       _on_event: Box<dyn Fn(ProviderHttpStreamEvent) -> Result<(), StorageError> + Send>,
     ) -> Pin<Box<dyn Future<Output = Result<(), StorageError>> + Send + '_>> {
       Box::pin(async { Err(StorageError::Validation("stream not supported".into())) })
+    }
+  }
+
+  fn text_response(body: &str) -> BoundedHttpResponse {
+    BoundedHttpResponse {
+      status: 200,
+      headers: HashMap::new(),
+      body: body.as_bytes().to_vec(),
     }
   }
 
@@ -379,6 +666,18 @@ mod tests {
           last_validated_at: None,
           last_error_code: None,
           created_at: now.clone(),
+          updated_at: now.clone(),
+        },
+      )?;
+      integration_credential_bindings::insert(
+        uow.conn(),
+        &IntegrationCredentialBinding {
+          id: new_id(),
+          integration_instance_id: id,
+          slot_id: GOOGLE_CLOUD_SERVICE_ACCOUNT_SLOT.into(),
+          credential_ref: Some("test-credential-ref".into()),
+          credential_revision: 1,
+          created_at: now.clone(),
           updated_at: now,
         },
       )?;
@@ -386,6 +685,15 @@ mod tests {
     })
     .unwrap();
     id
+  }
+
+  fn principal(instance_id: Uuid, capability_id: &str, request_id: &str) -> CapabilityExecutionPrincipal {
+    CapabilityExecutionPrincipal {
+      request_id: request_id.into(),
+      integration_instance_id: instance_id,
+      plugin_id: GOOGLE_CLOUD_PLUGIN_ID.into(),
+      capability_id: capability_id.into(),
+    }
   }
 
   async fn make_grant(instance_id: Uuid) -> TokenGrant {
@@ -440,11 +748,7 @@ mod tests {
     let id = seed_google_instance(&db);
     let transport = Arc::new(CaptureTransport {
       last: Mutex::new(None),
-      response: Mutex::new(Ok(ProviderHttpResponse {
-        status: 200,
-        headers: HashMap::new(),
-        body: "{}".into(),
-      })),
+      response: Mutex::new(Ok(text_response("{}"))),
     });
     let broker = broker_with(db, transport.clone());
     let grant = make_grant(id).await;
@@ -452,11 +756,12 @@ mod tests {
       .execute(BrokerRequest {
         integration_instance_id: id,
         capability_id: "translate.text@1".into(),
+        execution_principal: principal(id, "translate.text@1", "req-1"),
         endpoint_alias: "translate".into(),
         method: ProviderHttpMethod::Post,
         relative_path: "v3beta1/projects/demo/locations/global:translateText".into(),
         query: vec![],
-        headers: HashMap::from([("X-Client".into(), "test".into())]),
+        headers: HashMap::new(),
         body: Some("{}".into()),
         content_type: Some("application/json".into()),
         auth: Some(grant),
@@ -482,17 +787,14 @@ mod tests {
     let id = seed_google_instance(&db);
     let transport = Arc::new(CaptureTransport {
       last: Mutex::new(None),
-      response: Mutex::new(Ok(ProviderHttpResponse {
-        status: 200,
-        headers: HashMap::new(),
-        body: "{}".into(),
-      })),
+      response: Mutex::new(Ok(text_response("{}"))),
     });
     let broker = broker_with(db, transport);
     let err = broker
       .execute(BrokerRequest {
         integration_instance_id: id,
         capability_id: "translate.text@1".into(),
+        execution_principal: principal(id, "translate.text@1", "req-2"),
         endpoint_alias: "vision".into(),
         method: ProviderHttpMethod::Post,
         relative_path: "v1/images:annotate".into(),
@@ -520,11 +822,7 @@ mod tests {
     let id = seed_google_instance(&db);
     let transport = Arc::new(CaptureTransport {
       last: Mutex::new(None),
-      response: Mutex::new(Ok(ProviderHttpResponse {
-        status: 200,
-        headers: HashMap::new(),
-        body: "{}".into(),
-      })),
+      response: Mutex::new(Ok(text_response("{}"))),
     });
     let broker = broker_with(db, transport);
 
@@ -532,6 +830,7 @@ mod tests {
       .execute(BrokerRequest {
         integration_instance_id: id,
         capability_id: "translate.text@1".into(),
+        execution_principal: principal(id, "translate.text@1", "req-3"),
         endpoint_alias: "translate".into(),
         method: ProviderHttpMethod::Post,
         relative_path: "https://evil.example/x".into(),
@@ -554,6 +853,7 @@ mod tests {
       .execute(BrokerRequest {
         integration_instance_id: id,
         capability_id: "translate.text@1".into(),
+        execution_principal: principal(id, "translate.text@1", "req-4"),
         endpoint_alias: "translate".into(),
         method: ProviderHttpMethod::Post,
         relative_path: "../secret".into(),
@@ -576,6 +876,7 @@ mod tests {
       .execute(BrokerRequest {
         integration_instance_id: id,
         capability_id: "translate.text@1".into(),
+        execution_principal: principal(id, "translate.text@1", "req-5"),
         endpoint_alias: "translate".into(),
         method: ProviderHttpMethod::Post,
         relative_path: "v3beta1/ok".into(),
@@ -596,6 +897,157 @@ mod tests {
   }
 
   #[tokio::test]
+  async fn network_broker_rejects_stale_grant_before_transport() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::new(dir.path()).unwrap();
+    db.initialize().unwrap();
+    let id = seed_google_instance(&db);
+    let grant = make_grant(id).await;
+    db.transaction(|uow| {
+      integration_credential_bindings::compare_and_set_ref(
+        uow.conn(),
+        id,
+        GOOGLE_CLOUD_SERVICE_ACCOUNT_SLOT,
+        Some("test-credential-ref"),
+        Some("rotated-credential-ref"),
+        &now_rfc3339(),
+      )?;
+      Ok(())
+    })
+    .unwrap();
+
+    let transport = Arc::new(CaptureTransport {
+      last: Mutex::new(None),
+      response: Mutex::new(Ok(text_response("{}"))),
+    });
+    let broker = broker_with(db, transport.clone());
+    let err = broker
+      .execute(BrokerRequest {
+        integration_instance_id: id,
+        capability_id: "translate.text@1".into(),
+        execution_principal: principal(id, "translate.text@1", "req-stale-grant"),
+        endpoint_alias: "translate".into(),
+        method: ProviderHttpMethod::Post,
+        relative_path: "v3beta1/projects/demo/locations/global:translateText".into(),
+        query: vec![],
+        headers: HashMap::new(),
+        body: Some("{}".into()),
+        content_type: Some("application/json".into()),
+        auth: Some(grant),
+        request_id: "req-stale-grant".into(),
+        cancel: None,
+        max_response_body_bytes: None,
+        max_request_body_bytes: None,
+        timeout: None,
+      })
+      .await
+      .unwrap_err();
+
+    assert_eq!(err.code, CapabilityErrorCode::PermissionDenied);
+    assert!(transport.last.lock().unwrap().is_none());
+  }
+
+  #[tokio::test]
+  async fn network_broker_rejects_cross_capability_grants_before_transport() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::new(dir.path()).unwrap();
+    db.initialize().unwrap();
+    let id = seed_google_instance(&db);
+    let transport = Arc::new(CaptureTransport {
+      last: Mutex::new(None),
+      response: Mutex::new(Ok(text_response("{}"))),
+    });
+    let broker = broker_with(db, transport.clone());
+    let text_grant = make_grant(id).await;
+
+    let err = broker
+      .execute(BrokerRequest {
+        integration_instance_id: id,
+        capability_id: "translate.detect@1".into(),
+        execution_principal: principal(id, "translate.detect@1", "req-cross-grant"),
+        endpoint_alias: "translate".into(),
+        method: ProviderHttpMethod::Post,
+        relative_path: "v3beta1/projects/demo/locations/global:detectLanguage".into(),
+        query: vec![],
+        headers: HashMap::new(),
+        body: Some("{}".into()),
+        content_type: Some("application/json".into()),
+        auth: Some(text_grant),
+        request_id: "req-cross-grant".into(),
+        cancel: None,
+        max_response_body_bytes: None,
+        max_request_body_bytes: None,
+        timeout: None,
+      })
+      .await
+      .unwrap_err();
+
+    assert_eq!(err.code, CapabilityErrorCode::PermissionDenied);
+    assert!(transport.last.lock().unwrap().is_none());
+  }
+
+  #[tokio::test]
+  async fn network_broker_rejects_mismatched_principal_and_unapproved_headers_before_transport() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::new(dir.path()).unwrap();
+    db.initialize().unwrap();
+    let id = seed_google_instance(&db);
+    let transport = Arc::new(CaptureTransport {
+      last: Mutex::new(None),
+      response: Mutex::new(Ok(text_response("{}"))),
+    });
+    let broker = broker_with(db.clone(), transport.clone());
+
+    let err = broker
+      .execute(BrokerRequest {
+        integration_instance_id: id,
+        capability_id: "translate.text@1".into(),
+        execution_principal: principal(id, "translate.text@1", "wrong-request-id"),
+        endpoint_alias: "translate".into(),
+        method: ProviderHttpMethod::Post,
+        relative_path: "v3beta1/projects/demo/locations/global:translateText".into(),
+        query: vec![],
+        headers: HashMap::new(),
+        body: Some("{}".into()),
+        content_type: Some("application/json".into()),
+        auth: Some(make_grant(id).await),
+        request_id: "req-principal".into(),
+        cancel: None,
+        max_response_body_bytes: None,
+        max_request_body_bytes: None,
+        timeout: None,
+      })
+      .await
+      .unwrap_err();
+    assert_eq!(err.code, CapabilityErrorCode::PermissionDenied);
+    assert!(transport.last.lock().unwrap().is_none());
+
+    let err = broker
+      .execute(BrokerRequest {
+        integration_instance_id: id,
+        capability_id: "translate.text@1".into(),
+        execution_principal: principal(id, "translate.text@1", "req-header"),
+        endpoint_alias: "translate".into(),
+        method: ProviderHttpMethod::Post,
+        relative_path: "v3beta1/projects/demo/locations/global:translateText".into(),
+        query: vec![],
+        headers: HashMap::from([("X-Unapproved".into(), "value".into())]),
+        body: Some("{}".into()),
+        content_type: Some("application/json".into()),
+        auth: Some(make_grant(id).await),
+        request_id: "req-header".into(),
+        cancel: None,
+        max_response_body_bytes: None,
+        max_request_body_bytes: None,
+        timeout: None,
+      })
+      .await
+      .unwrap_err();
+    assert_eq!(err.code, CapabilityErrorCode::PermissionDenied);
+    assert!(transport.last.lock().unwrap().is_none());
+  }
+
+  #[tokio::test]
   async fn network_broker_cancellation_and_overflow() {
     let dir = tempfile::tempdir().unwrap();
     let db = Database::new(dir.path()).unwrap();
@@ -606,25 +1058,23 @@ mod tests {
     cancel.cancel();
     let transport = Arc::new(CaptureTransport {
       last: Mutex::new(None),
-      response: Mutex::new(Ok(ProviderHttpResponse {
-        status: 200,
-        headers: HashMap::new(),
-        body: "{}".into(),
-      })),
+      response: Mutex::new(Ok(text_response("{}"))),
     });
     let broker = broker_with(db.clone(), transport);
+    let grant = make_grant(id).await;
     let err = broker
       .execute(BrokerRequest {
         integration_instance_id: id,
         capability_id: "translate.text@1".into(),
+        execution_principal: principal(id, "translate.text@1", "req-6"),
         endpoint_alias: "translate".into(),
         method: ProviderHttpMethod::Post,
-        relative_path: "v3beta1/ok".into(),
+        relative_path: "v3beta1/projects/demo/locations/global:translateText".into(),
         query: vec![],
         headers: HashMap::new(),
         body: None,
         content_type: None,
-        auth: None,
+        auth: Some(grant),
         request_id: "req-6".into(),
         cancel: Some(cancel),
         max_response_body_bytes: None,
@@ -640,18 +1090,20 @@ mod tests {
       response: Mutex::new(Err(StorageError::Validation("response body exceeds size limit".into()))),
     });
     let broker = broker_with(db, transport);
+    let grant = make_grant(id).await;
     let err = broker
       .execute(BrokerRequest {
         integration_instance_id: id,
         capability_id: "translate.text@1".into(),
+        execution_principal: principal(id, "translate.text@1", "req-7"),
         endpoint_alias: "translate".into(),
         method: ProviderHttpMethod::Post,
-        relative_path: "v3beta1/ok".into(),
+        relative_path: "v3beta1/projects/demo/locations/global:translateText".into(),
         query: vec![],
         headers: HashMap::new(),
         body: None,
         content_type: None,
-        auth: None,
+        auth: Some(grant),
         request_id: "req-7".into(),
         cancel: None,
         max_response_body_bytes: Some(8),
@@ -661,5 +1113,104 @@ mod tests {
       .await
       .unwrap_err();
     assert_eq!(err.code, CapabilityErrorCode::InvalidResponse);
+  }
+
+  #[test]
+  fn pre_authorize_allows_approved_capability_authority() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::new(dir.path()).unwrap();
+    db.initialize().unwrap();
+    let id = seed_google_instance(&db);
+    let transport = Arc::new(CaptureTransport {
+      last: Mutex::new(None),
+      response: Mutex::new(Ok(text_response("{}"))),
+    });
+    let broker = broker_with(db, transport);
+    broker
+      .pre_authorize(
+        id,
+        &principal(id, "translate.text@1", "req-pre-1"),
+        "translate.text@1",
+        "translate",
+        ProviderHttpMethod::Post,
+        "v3beta1/projects/demo/locations/global:translateText",
+        "req-pre-1",
+      )
+      .expect("approved authority should pre-authorize");
+  }
+
+  #[test]
+  fn pre_authorize_rejects_wrong_endpoint_before_token_access() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::new(dir.path()).unwrap();
+    db.initialize().unwrap();
+    let id = seed_google_instance(&db);
+    let transport = Arc::new(CaptureTransport {
+      last: Mutex::new(None),
+      response: Mutex::new(Ok(text_response("{}"))),
+    });
+    let broker = broker_with(db, transport);
+    let err = broker
+      .pre_authorize(
+        id,
+        &principal(id, "translate.text@1", "req-pre-2"),
+        "translate.text@1",
+        "vision",
+        ProviderHttpMethod::Post,
+        "v1/images:annotate",
+        "req-pre-2",
+      )
+      .unwrap_err();
+    assert_eq!(err.code, CapabilityErrorCode::PermissionDenied);
+  }
+
+  #[test]
+  fn pre_authorize_rejects_wrong_method_before_token_access() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::new(dir.path()).unwrap();
+    db.initialize().unwrap();
+    let id = seed_google_instance(&db);
+    let transport = Arc::new(CaptureTransport {
+      last: Mutex::new(None),
+      response: Mutex::new(Ok(text_response("{}"))),
+    });
+    let broker = broker_with(db, transport);
+    let err = broker
+      .pre_authorize(
+        id,
+        &principal(id, "translate.text@1", "req-pre-3"),
+        "translate.text@1",
+        "translate",
+        ProviderHttpMethod::Get,
+        "v3beta1/projects/demo/locations/global:translateText",
+        "req-pre-3",
+      )
+      .unwrap_err();
+    assert_eq!(err.code, CapabilityErrorCode::PermissionDenied);
+  }
+
+  #[test]
+  fn pre_authorize_rejects_mismatched_principal_before_token_access() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::new(dir.path()).unwrap();
+    db.initialize().unwrap();
+    let id = seed_google_instance(&db);
+    let transport = Arc::new(CaptureTransport {
+      last: Mutex::new(None),
+      response: Mutex::new(Ok(text_response("{}"))),
+    });
+    let broker = broker_with(db, transport);
+    let err = broker
+      .pre_authorize(
+        id,
+        &principal(id, "translate.text@1", "tampered-request-id"),
+        "translate.text@1",
+        "translate",
+        ProviderHttpMethod::Post,
+        "v3beta1/projects/demo/locations/global:translateText",
+        "req-pre-4",
+      )
+      .unwrap_err();
+    assert_eq!(err.code, CapabilityErrorCode::PermissionDenied);
   }
 }

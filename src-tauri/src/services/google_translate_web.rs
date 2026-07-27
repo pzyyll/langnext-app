@@ -128,6 +128,7 @@ impl GoogleTranslateWebCapabilities {
       .execute(BrokerRequest {
         integration_instance_id: instance_id,
         capability_id: GOOGLE_WEB_TRANSLATE_TEXT_CAPABILITY_ID.into(),
+        execution_principal: context.principal(),
         endpoint_alias: GOOGLE_WEB_GTX_ENDPOINT_ALIAS.into(),
         method: ProviderHttpMethod::Get,
         relative_path: GOOGLE_WEB_GTX_RELATIVE_PATH.into(),
@@ -166,6 +167,7 @@ impl GoogleTranslateWebCapabilities {
       .execute(BrokerRequest {
         integration_instance_id: instance_id,
         capability_id: GOOGLE_WEB_DETECT_LANGUAGE_CAPABILITY_ID.into(),
+        execution_principal: context.principal(),
         endpoint_alias: GOOGLE_WEB_GTX_ENDPOINT_ALIAS.into(),
         method: ProviderHttpMethod::Get,
         relative_path: GOOGLE_WEB_GTX_RELATIVE_PATH.into(),
@@ -234,6 +236,7 @@ impl GoogleTranslateWebCapabilities {
       .execute(BrokerRequest {
         integration_instance_id: instance_id,
         capability_id: GOOGLE_WEB_TRANSLATE_TEXT_CAPABILITY_ID.into(),
+        execution_principal: context.principal(),
         endpoint_alias: GOOGLE_WEB_PROXY_ENDPOINT_ALIAS.into(),
         method: ProviderHttpMethod::Post,
         relative_path: normalized.relative_path,
@@ -693,12 +696,12 @@ pub fn resolve_instance_proxy_origin(config_json: &str) -> Result<String, Capabi
 mod tests {
   use super::*;
   use crate::domain::cancel::CancelToken;
-  use crate::domain::provider_http::{ProviderHttpResponse, ProviderHttpStreamEvent};
+  use crate::domain::provider_http::ProviderHttpStreamEvent;
   use crate::domain::service_integration::{
     GOOGLE_TRANSLATE_WEB_GTX_ORIGIN, IntegrationHealthStatus, IntegrationInstance,
   };
   use crate::domain::time::{new_id, now_rfc3339};
-  use crate::services::bounded_http::{PreparedHttpRequest, RawHttpTransport};
+  use crate::services::bounded_http::{BoundedHttpResponse, PreparedHttpRequest, RawHttpTransport};
   use crate::services::service_integration_registry::ServiceIntegrationRegistry;
   use std::future::Future;
   use std::pin::Pin;
@@ -706,14 +709,14 @@ mod tests {
 
   struct CaptureTransport {
     last: Mutex<Option<PreparedHttpRequest>>,
-    response: Mutex<Result<ProviderHttpResponse, StorageError>>,
+    response: Mutex<Result<BoundedHttpResponse, StorageError>>,
   }
 
   impl RawHttpTransport for CaptureTransport {
     fn request(
       &self,
       prepared: PreparedHttpRequest,
-    ) -> Pin<Box<dyn Future<Output = Result<ProviderHttpResponse, StorageError>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = Result<BoundedHttpResponse, StorageError>> + Send + '_>> {
       Box::pin(async move {
         *self.last.lock().unwrap() = Some(prepared);
         match &*self.response.lock().unwrap() {
@@ -730,6 +733,14 @@ mod tests {
       _on_event: Box<dyn Fn(ProviderHttpStreamEvent) -> Result<(), StorageError> + Send>,
     ) -> Pin<Box<dyn Future<Output = Result<(), StorageError>> + Send + '_>> {
       Box::pin(async { Err(StorageError::Validation("stream not supported".into())) })
+    }
+  }
+
+  fn text_response(body: &str) -> BoundedHttpResponse {
+    BoundedHttpResponse {
+      status: 200,
+      headers: HashMap::new(),
+      body: body.as_bytes().to_vec(),
     }
   }
 
@@ -865,11 +876,7 @@ mod tests {
     );
     let transport = Arc::new(CaptureTransport {
       last: Mutex::new(None),
-      response: Mutex::new(Ok(ProviderHttpResponse {
-        status: 200,
-        headers: HashMap::new(),
-        body: r#"[[["Hi","你好",null,null,1]],null,"zh"]"#.into(),
-      })),
+      response: Mutex::new(Ok(text_response(r#"[[["Hi","你好",null,null,1]],null,"zh"]"#))),
     });
     let caps = caps_with(db, transport.clone());
     let resp = caps
@@ -914,11 +921,7 @@ mod tests {
     );
     let transport = Arc::new(CaptureTransport {
       last: Mutex::new(None),
-      response: Mutex::new(Ok(ProviderHttpResponse {
-        status: 200,
-        headers: HashMap::new(),
-        body: r#"[[["x"]],null,"en"]"#.into(),
-      })),
+      response: Mutex::new(Ok(text_response(r#"[[["x"]],null,"en"]"#))),
     });
     let caps = caps_with(db, transport);
     let cancel = CancelToken::new();
@@ -991,11 +994,7 @@ mod tests {
     );
     let transport = Arc::new(CaptureTransport {
       last: Mutex::new(None),
-      response: Mutex::new(Ok(ProviderHttpResponse {
-        status: 200,
-        headers: HashMap::new(),
-        body: r#"{"data":"Hello"}"#.into(),
-      })),
+      response: Mutex::new(Ok(text_response(r#"{"data":"Hello"}"#))),
     });
     let caps = caps_with(db, transport.clone());
     let resp = caps
@@ -1043,11 +1042,7 @@ mod tests {
     );
     let transport = Arc::new(CaptureTransport {
       last: Mutex::new(None),
-      response: Mutex::new(Ok(ProviderHttpResponse {
-        status: 200,
-        headers: HashMap::new(),
-        body: r#"[[["x"]],null,"en"]"#.into(),
-      })),
+      response: Mutex::new(Ok(text_response(r#"[[["x"]],null,"en"]"#))),
     });
     let caps = caps_with(db, transport.clone());
     let resp = caps
@@ -1091,11 +1086,7 @@ mod tests {
     );
     let transport = Arc::new(CaptureTransport {
       last: Mutex::new(None),
-      response: Mutex::new(Ok(ProviderHttpResponse {
-        status: 200,
-        headers: HashMap::new(),
-        body: r#"{"data":"ok"}"#.into(),
-      })),
+      response: Mutex::new(Ok(text_response(r#"{"data":"ok"}"#))),
     });
     let caps = caps_with(db, transport.clone());
     let ctx = |id: Uuid, rid: &str| ExecutionContext {
@@ -1138,7 +1129,7 @@ mod tests {
     let err = validate_google_translate_web_config(r#"{"channel":"gtx","projectId":"x"}"#).unwrap_err();
     assert!(matches!(err, StorageError::Validation(msg) if msg.contains("projectId")));
 
-    let err = validate_google_translate_web_config(r#"{"channel":"https_proxy","proxyUrl":"http://x"}"#).unwrap_err();
+    let err = validate_google_translate_web_config(r#"{"channel":"https_proxy","proxy-url":"http://x"}"#).unwrap_err();
     assert!(matches!(err, StorageError::Validation(msg) if msg.contains("https")));
   }
 }

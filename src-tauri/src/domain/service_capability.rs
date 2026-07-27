@@ -185,6 +185,28 @@ pub struct ExecutionContext {
   pub capability_id: String,
 }
 
+/// Immutable capability invocation identity propagated into host-owned broker calls.
+/// It contains no credentials and prevents a handler from borrowing authority from another
+/// instance, plugin, capability, or request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CapabilityExecutionPrincipal {
+  pub request_id: String,
+  pub integration_instance_id: Uuid,
+  pub plugin_id: String,
+  pub capability_id: String,
+}
+
+impl ExecutionContext {
+  pub fn principal(&self) -> CapabilityExecutionPrincipal {
+    CapabilityExecutionPrincipal {
+      request_id: self.request_id.clone(),
+      integration_instance_id: self.integration_instance_id,
+      plugin_id: self.plugin_id.clone(),
+      capability_id: self.capability_id.clone(),
+    }
+  }
+}
+
 /// Translate text capability request (application language ids).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -248,12 +270,12 @@ impl OcrImageOperation {
 
 /// Runtime preferences for `ocr.image@1`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct OcrImagePreferences {
   #[serde(default)]
   pub operation: OcrImageOperation,
   /// App language ids (max 3). Empty list means provider auto-detect.
-  #[serde(default)]
+  #[serde(default, alias = "languageHints")]
   pub language_hints: Vec<String>,
 }
 
@@ -274,9 +296,9 @@ pub struct OcrImageResponse {
 
 /// Runtime preferences for `speech.synthesize@1` (Google Cloud schema).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct SpeechSynthesizePreferences {
-  #[serde(default = "default_speech_speaking_rate")]
+  #[serde(default = "default_speech_speaking_rate", alias = "speakingRate")]
   pub speaking_rate: f64,
   #[serde(default = "default_speech_pitch")]
   pub pitch: f64,
@@ -340,7 +362,7 @@ pub const EDGE_TTS_STYLE_DEFAULT: &str = "general";
 
 /// Runtime preferences for Edge TTS `speech.synthesize@1` (schema v1).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct EdgeTtsPreferences {
   #[serde(default = "default_edge_tts_voice")]
   pub voice: String,

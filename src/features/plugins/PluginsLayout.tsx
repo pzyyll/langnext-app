@@ -1,27 +1,57 @@
-// ABOUTME: Plugins feature layout with instance rail, nested editor outlet, and create dialog.
-// ABOUTME: Loads sanitized plugin instances via Query; URL selection drives the editor.
+// ABOUTME: Plugins feature layout with instance rail, schema-backed labels, and create dialog.
+// ABOUTME: Loads sanitized instances and registration definitions; URL selection drives the editor.
 import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, Outlet, useNavigate, useParams } from "@tanstack/react-router";
 import { Button } from "@base-ui/react/button";
 import { useTranslation } from "react-i18next";
+import IconMaterialSymbolsLightCloud from "~icons/material-symbols-light/cloud";
+import IconMaterialSymbolsLightExtensionOutline from "~icons/material-symbols-light/extension-outline";
+import IconMaterialSymbolsLightRecordVoiceOverOutline from "~icons/material-symbols-light/record-voice-over-outline";
+import IconMaterialSymbolsLightTranslate from "~icons/material-symbols-light/translate";
 import { Badge } from "../../components/Badge";
 import { ConfigRailHeader } from "../../components/layouts/ConfigRailHeader";
 import { PageLayout } from "../../components/layouts/PageLayout";
 import { outlineButtonClassName } from "../../components/ui";
 import { cn } from "../../lib/cn";
 import { integrationKeys } from "../../query/keys";
-import { integrationListOptions } from "../../query/options";
+import { integrationDefinitionListOptions, integrationListOptions } from "../../query/options";
 import { getIpcErrorMessage } from "../../storage/errors";
-import type { IntegrationInstanceDto } from "../../storage/types";
-import { EDGE_TTS_PLUGIN_ID, GOOGLE_CLOUD_PLUGIN_ID, GOOGLE_TRANSLATE_WEB_PLUGIN_ID } from "../../storage/types";
+import type { IntegrationInstanceDto, ServiceIntegrationDefinitionDto } from "../../storage/types";
+import { resolvePluginDisplayName, resolvePluginIcon, type PluginTextLookup } from "./pluginPresentation";
 import { AddIntegrationDialog } from "./AddIntegrationDialog";
 
-/** Shared rail footer: fixed border-box block size so rail matches profiles layout. */
 const panelFooterClassName =
   "box-border flex h-[calc(2rem+2rem+1px)] max-h-[calc(2rem+2rem+1px)] min-h-[calc(2rem+2rem+1px)] shrink-0 grow-0 items-center border-t border-line px-8 py-4";
-
 const newInstanceButtonClassName = `${outlineButtonClassName} w-full font-bold hover:not-data-disabled:bg-on-surface`;
+
+type PluginIconProps = {
+  iconId: string | undefined;
+};
+
+function PluginIcon({ iconId }: PluginIconProps) {
+  const resolved = resolvePluginIcon(iconId);
+  const className = "size-4 shrink-0 text-neutral";
+  switch (resolved) {
+    case "google-cloud":
+      return <IconMaterialSymbolsLightCloud className={className} aria-hidden />;
+    case "google-translate-web":
+      return <IconMaterialSymbolsLightTranslate className={className} aria-hidden />;
+    case "edge-tts":
+      return <IconMaterialSymbolsLightRecordVoiceOverOutline className={className} aria-hidden />;
+    case "extension":
+      return <IconMaterialSymbolsLightExtensionOutline className={className} aria-hidden />;
+  }
+}
+
+function pluginLabel(
+  instance: IntegrationInstanceDto,
+  definitionsById: ReadonlyMap<string, ServiceIntegrationDefinitionDto>,
+  translate: PluginTextLookup,
+): string {
+  const definition = definitionsById.get(instance.pluginId);
+  return definition ? resolvePluginDisplayName(definition, translate) : instance.pluginId;
+}
 
 export function PluginsLayout() {
   const { t } = useTranslation();
@@ -31,34 +61,26 @@ export function PluginsLayout() {
   const selectedId = params.integrationInstanceId;
 
   const instancesQuery = useQuery(integrationListOptions());
+  const definitionsQuery = useQuery(integrationDefinitionListOptions());
   const instances = useMemo(() => instancesQuery.data ?? [], [instancesQuery.data]);
+  const definitionsById = useMemo(
+    () => new Map((definitionsQuery.data ?? []).map((definition) => [definition.id, definition])),
+    [definitionsQuery.data],
+  );
   const loading = instancesQuery.isLoading;
   const error = instancesQuery.error != null ? getIpcErrorMessage(instancesQuery.error, t("plugins.loadFailed")) : null;
 
   const [addOpen, setAddOpen] = useState(false);
 
   useEffect(() => {
-    if (loading || error) return;
-    if (selectedId) return;
-    if (instances.length === 0) return;
+    if (loading || error || selectedId || instances.length === 0) {
+      return;
+    }
     void navigate({
       to: "/plugins/$integrationInstanceId",
       params: { integrationInstanceId: instances[0].id },
     });
   }, [instances, loading, error, selectedId, navigate]);
-
-  function pluginLabel(instance: IntegrationInstanceDto): string {
-    if (instance.pluginId === GOOGLE_CLOUD_PLUGIN_ID) {
-      return t("plugins.googleCloud.name");
-    }
-    if (instance.pluginId === GOOGLE_TRANSLATE_WEB_PLUGIN_ID) {
-      return t("plugins.googleTranslateWeb.name");
-    }
-    if (instance.pluginId === EDGE_TTS_PLUGIN_ID) {
-      return t("plugins.edgeTts.name");
-    }
-    return instance.pluginId;
-  }
 
   return (
     <PageLayout title={t("plugins.title")} contentClassName="flex-col overflow-hidden lg:flex-row">
@@ -81,13 +103,7 @@ export function PluginsLayout() {
           {error ? (
             <div className="flex flex-col gap-2" role="alert">
               <p className="text-body-tight text-error">{error}</p>
-              <Button
-                type="button"
-                className={outlineButtonClassName}
-                onClick={() => {
-                  void instancesQuery.refetch();
-                }}
-              >
+              <Button type="button" className={outlineButtonClassName} onClick={() => void instancesQuery.refetch()}>
                 {t("common.retry")}
               </Button>
             </div>
@@ -101,6 +117,7 @@ export function PluginsLayout() {
             <ul className="space-y-4">
               {instances.map((instance) => {
                 const active = instance.id === selectedId;
+                const definition = definitionsById.get(instance.pluginId);
                 return (
                   <li key={instance.id}>
                     <Link
@@ -121,7 +138,10 @@ export function PluginsLayout() {
                         </span>
                         {instance.enabled ? <Badge tone="accent">{t("common.enabled")}</Badge> : null}
                       </div>
-                      <div className="truncate text-code-inline text-neutral">{pluginLabel(instance)}</div>
+                      <div className="flex min-w-0 items-center gap-1 text-code-inline text-neutral">
+                        <PluginIcon iconId={definition?.presentation.icon} />
+                        <span className="truncate">{pluginLabel(instance, definitionsById, t)}</span>
+                      </div>
                     </Link>
                   </li>
                 );
@@ -131,13 +151,7 @@ export function PluginsLayout() {
         </div>
 
         <div className={panelFooterClassName}>
-          <Button
-            type="button"
-            className={newInstanceButtonClassName}
-            onClick={() => {
-              setAddOpen(true);
-            }}
-          >
+          <Button type="button" className={newInstanceButtonClassName} onClick={() => setAddOpen(true)}>
             + {t("plugins.createNew")}
           </Button>
         </div>

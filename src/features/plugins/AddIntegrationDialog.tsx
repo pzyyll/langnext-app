@@ -1,5 +1,5 @@
-// ABOUTME: Dialog to create a service-integration configuration instance from bundled definitions.
-// ABOUTME: Describes creating a configuration instance, not installing executable code.
+// ABOUTME: Dialog to create schema-backed service-integration instances from bundled definitions.
+// ABOUTME: Creates configuration data only; it never installs executable plugin code or reads secrets.
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Dialog } from "@base-ui/react/dialog";
@@ -9,18 +9,11 @@ import { useToast } from "../../components/toast/useToast";
 import { integrationDefinitionListOptions } from "../../query/options";
 import { saveIntegrationInstance } from "../../storage/client";
 import { getIpcErrorMessage } from "../../storage/errors";
-import type { IntegrationInstanceDto, IntegrationInstanceWrite, ServiceIntegrationManifest } from "../../storage/types";
-import { EDGE_TTS_PLUGIN_ID, GOOGLE_CLOUD_PLUGIN_ID, GOOGLE_TRANSLATE_WEB_PLUGIN_ID } from "../../storage/types";
-import {
-  buildEdgeTtsWrite,
-  buildGoogleCloudWrite,
-  buildGoogleTranslateWebWrite,
-  emptyEdgeTtsDraft,
-  emptyGoogleCloudDraft,
-  emptyGoogleTranslateWebDraft,
-} from "./integrationDraft";
+import type { IntegrationInstanceDto, ServiceIntegrationDefinitionDto } from "../../storage/types";
+import { resolvePluginDisplayName } from "./pluginPresentation";
+import { buildIntegrationWrite, createIntegrationDraft } from "./integrationDraft";
 
-const INTEGRATION_OPTION_MAX_COLUMNS = 3;
+const integrationOptionMaxColumns = 3;
 
 export type AddIntegrationDialogProps = {
   open: boolean;
@@ -64,6 +57,10 @@ type AddIntegrationFormProps = {
   onCreated: (instance: IntegrationInstanceDto) => void;
 };
 
+function supportsCreate(definition: ServiceIntegrationDefinitionDto): boolean {
+  return definition.configSchema.version === definition.configSchemaVersion;
+}
+
 function AddIntegrationForm({ onCreated }: AddIntegrationFormProps) {
   const { t } = useTranslation();
   const toast = useToast();
@@ -72,9 +69,7 @@ function AddIntegrationForm({ onCreated }: AddIntegrationFormProps) {
 
   const createMutation = useMutation({
     mutationFn: saveIntegrationInstance,
-    onSuccess: (created) => {
-      onCreated(created);
-    },
+    onSuccess: (created) => onCreated(created),
     onError: (mutationError) => {
       const message = getIpcErrorMessage(mutationError, t("plugins.toast.createFailed"));
       setError(message);
@@ -88,32 +83,15 @@ function AddIntegrationForm({ onCreated }: AddIntegrationFormProps) {
     ? getIpcErrorMessage(definitionsQuery.error, t("plugins.add.loadFailed"))
     : null;
   const pending = createMutation.isPending;
-  const columnCount = Math.min(definitions.length || 1, INTEGRATION_OPTION_MAX_COLUMNS);
+  const columnCount = Math.min(definitions.length || 1, integrationOptionMaxColumns);
 
-  function definitionLabel(definition: ServiceIntegrationManifest): string {
-    if (definition.id === GOOGLE_CLOUD_PLUGIN_ID) {
-      return t("plugins.googleCloud.name");
-    }
-    if (definition.id === GOOGLE_TRANSLATE_WEB_PLUGIN_ID) {
-      return t("plugins.googleTranslateWeb.name");
-    }
-    if (definition.id === EDGE_TTS_PLUGIN_ID) {
-      return t("plugins.edgeTts.name");
-    }
-    return definition.id;
+  function definitionLabel(definition: ServiceIntegrationDefinitionDto): string {
+    return resolvePluginDisplayName(definition, (key, options) => t(key, options));
   }
 
-  function createWrite(definitionId: string): IntegrationInstanceWrite | null {
-    if (definitionId === GOOGLE_CLOUD_PLUGIN_ID) {
-      return buildGoogleCloudWrite(emptyGoogleCloudDraft(t("plugins.googleCloud.defaultName")));
-    }
-    if (definitionId === GOOGLE_TRANSLATE_WEB_PLUGIN_ID) {
-      return buildGoogleTranslateWebWrite(emptyGoogleTranslateWebDraft(t("plugins.googleTranslateWeb.defaultName")));
-    }
-    if (definitionId === EDGE_TTS_PLUGIN_ID) {
-      return buildEdgeTtsWrite(emptyEdgeTtsDraft(t("plugins.edgeTts.defaultName")));
-    }
-    return null;
+  function createWrite(definition: ServiceIntegrationDefinitionDto) {
+    const displayName = definitionLabel(definition);
+    return buildIntegrationWrite(definition, createIntegrationDraft(definition, displayName));
   }
 
   return (
@@ -122,18 +100,18 @@ function AddIntegrationForm({ onCreated }: AddIntegrationFormProps) {
         {loading
           ? null
           : definitions.map((definition) => {
-              const write = createWrite(definition.id);
-              if (!write) {
-                return null;
-              }
+              const supported = supportsCreate(definition);
               return (
                 <button
                   key={definition.id}
                   type="button"
-                  disabled={pending}
+                  disabled={pending || !supported}
                   onClick={() => {
+                    if (!supported) {
+                      return;
+                    }
                     setError(null);
-                    createMutation.mutate(write);
+                    createMutation.mutate(createWrite(definition));
                   }}
                   className={`
                     flex min-w-0 items-center gap-2 border border-line bg-surface p-3 text-left text-on-surface

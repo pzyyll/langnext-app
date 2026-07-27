@@ -47,6 +47,13 @@ impl std::fmt::Display for SchemaError {
 
 impl std::error::Error for SchemaError {}
 
+/// Schema errors map to validation failures so adapters can use `?` against `StorageError`.
+impl From<SchemaError> for crate::error::StorageError {
+  fn from(err: SchemaError) -> Self {
+    crate::error::StorageError::Validation(err.to_string())
+  }
+}
+
 /// Readiness report: incomplete instances can be saved but cannot execute.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReadinessReport {
@@ -686,6 +693,45 @@ pub fn check_readiness(
   for slot in manifest.credential_slots() {
     if slot.required && !bound.contains(slot.id.as_str()) {
       missing.push(slot.id.clone());
+    }
+  }
+  missing.sort();
+  missing.dedup();
+  Ok(ReadinessReport {
+    ready: missing.is_empty(),
+    missing_required: missing,
+  })
+}
+
+/// Check config-only readiness (non-credential `requiredForReady` fields) without a
+/// validated manifest. Bundled plugin registrations use this because their credential
+/// slot satisfaction is enforced separately by the integration service, and they do not
+/// carry a Phase 0 `ValidatedPluginManifest`. Credential-slot fields are skipped here.
+pub fn check_config_readiness(
+  schema: &PluginSchemaV1,
+  config: &Value,
+  host_options: &HostOptionResolver,
+) -> Result<ReadinessReport, SchemaError> {
+  let normalized = normalize_config(schema, config, host_options)?;
+  let map = normalized.as_object();
+  let mut missing = Vec::new();
+  for field in &schema.fields {
+    if !field.required_for_ready {
+      continue;
+    }
+    if matches!(field.control, FieldControl::CredentialSlot(_)) {
+      continue;
+    }
+    let visible = map.map(|m| is_field_visible(field, m)).unwrap_or(true);
+    if !visible {
+      continue;
+    }
+    let satisfied = map
+      .and_then(|m| m.get(&field.id))
+      .map(|v| !is_empty_value(v))
+      .unwrap_or(false);
+    if !satisfied {
+      missing.push(field.id.clone());
     }
   }
   missing.sort();

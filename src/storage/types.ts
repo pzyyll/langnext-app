@@ -435,6 +435,101 @@ export interface ServiceIntegrationManifest {
   capabilities: IntegrationCapabilityDescriptor[];
 }
 
+export interface SchemaOption {
+  value: string;
+  labelKey?: string;
+  labelFallback?: string;
+}
+
+export type SchemaOptionSource = { type: "fixed"; options: SchemaOption[] } | { type: "host"; id: string };
+
+export interface SchemaStringControl {
+  maxLength?: number;
+  default?: string;
+}
+
+export interface SchemaNumberControl {
+  min?: number;
+  max?: number;
+  step?: number;
+  default?: number;
+}
+
+export interface SchemaBooleanControl {
+  default: boolean;
+}
+
+export interface SchemaEnumControl {
+  source: SchemaOptionSource;
+  default?: string;
+}
+
+export interface SchemaMultiEnumControl {
+  source: SchemaOptionSource;
+  maxSelected: number;
+  default: string[];
+}
+
+export interface SchemaCredentialSlotControl {
+  slotId: string;
+}
+
+export type SchemaFieldControl =
+  | { kind: "string"; spec: SchemaStringControl }
+  | { kind: "multiline-string"; spec: SchemaStringControl }
+  | { kind: "number"; spec: SchemaNumberControl }
+  | { kind: "boolean"; spec: SchemaBooleanControl }
+  | { kind: "enum"; spec: SchemaEnumControl }
+  | { kind: "multi-enum"; spec: SchemaMultiEnumControl }
+  | { kind: "credential-slot"; spec: SchemaCredentialSlotControl };
+
+export interface SchemaVisibleWhen {
+  field: string;
+  equals: unknown;
+}
+
+export interface SchemaField {
+  id: string;
+  control: SchemaFieldControl;
+  labelKey?: string;
+  labelFallback?: string;
+  descriptionKey?: string;
+  descriptionFallback?: string;
+  requiredForReady: boolean;
+  visibleWhen?: SchemaVisibleWhen;
+}
+
+export interface SchemaGroup {
+  id: string;
+  labelKey?: string;
+  labelFallback?: string;
+  fields: string[];
+}
+
+/** Closed Phase 1 schema dialect received from the Rust registration catalog. */
+export interface PluginSchemaV1 {
+  version: number;
+  fields: SchemaField[];
+  groups: SchemaGroup[];
+}
+
+export interface IntegrationCapabilitySchemaDto {
+  capabilityId: string;
+  preferenceSchema: PluginSchemaV1;
+}
+
+export interface ServiceIntegrationPresentationDto {
+  displayNameFallback: string;
+  icon?: string;
+}
+
+/** Sanitized manifest metadata plus schemas and closed host presentation metadata. */
+export interface ServiceIntegrationDefinitionDto extends ServiceIntegrationManifest {
+  configSchema: PluginSchemaV1;
+  capabilitySchemas: IntegrationCapabilitySchemaDto[];
+  presentation: ServiceIntegrationPresentationDto;
+}
+
 export interface CredentialSlotStatusDto {
   slotId: string;
   hasCredential: boolean;

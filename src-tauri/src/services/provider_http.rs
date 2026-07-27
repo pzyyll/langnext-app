@@ -9,8 +9,8 @@ use crate::domain::provider_http::{
 use crate::error::StorageError;
 use crate::repositories::provider_instances;
 use crate::services::bounded_http::{
-  self, PreparedHttpRequest, ReqwestRawHttpTransport, is_blocked_header, validate_caller_name, validate_relative_path,
-  validate_request_id, value_looks_like_secret_key, with_cancel,
+  self, DestinationPolicy, PreparedHttpRequest, ReqwestRawHttpTransport, is_blocked_header, validate_caller_name,
+  validate_relative_path, validate_request_id, value_looks_like_secret_key, with_cancel,
 };
 use crate::storage::Database;
 use std::collections::HashMap;
@@ -47,7 +47,7 @@ impl ProviderHttpService {
     validate_request_id(&input.request_id)?;
     let prepared = self.prepare(input)?;
     let work = self.transport.request(prepared);
-    with_cancel(cancel, work).await
+    with_cancel(cancel, work).await?.into_provider_http_response()
   }
 
   pub async fn stream(
@@ -84,6 +84,7 @@ impl ProviderHttpService {
       body: input.wire.body,
       content_type: None,
       proxy_mode: provider.proxy_mode,
+      destination_policy: DestinationPolicy::Configured,
       max_response_body_bytes: None,
       timeout: None,
     })

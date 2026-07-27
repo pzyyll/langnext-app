@@ -1,14 +1,11 @@
 // ABOUTME: Speech service validation, CRUD, default resolution, and TTS synthesis dispatch.
 // ABOUTME: Capability-backed only; reuses shared Google Cloud integration instances.
 use crate::domain::cancel::CancelToken;
-use crate::domain::service_capability::{
-  EdgeTtsPreferences, SpeechSynthesizeRequest, validate_edge_tts_preferences, validate_speech_synthesize_preferences,
-  validate_speech_synthesize_text,
-};
-use crate::domain::service_integration::{EDGE_TTS_PLUGIN_ID, IntegrationHealthStatus, validate_capability_id};
+use crate::domain::service_capability::SpeechSynthesizeRequest;
+use crate::domain::service_capability::validate_speech_synthesize_text;
+use crate::domain::service_integration::{IntegrationHealthStatus, validate_capability_id};
 use crate::domain::speech_service::{
-  EDGE_TTS_PREFERENCES_SCHEMA_VERSION, GOOGLE_TTS_PREFERENCES_SCHEMA_VERSION, SPEECH_DISPLAY_NAME_MAX_LEN,
-  SpeechService, SpeechServiceDto, SpeechServiceWrite, SpeechSynthesizeInput, parse_speech_synthesize_preferences,
+  SPEECH_DISPLAY_NAME_MAX_LEN, SpeechService, SpeechServiceDto, SpeechServiceWrite, SpeechSynthesizeInput,
 };
 use crate::domain::time::{new_id, now_rfc3339};
 use crate::error::StorageError;
@@ -84,7 +81,7 @@ impl SpeechServiceService {
   }
 
   fn create(&self, input: SpeechServiceWrite) -> Result<SpeechServiceDto, StorageError> {
-    self.validate_plugin_binding(
+    let preferences = self.validate_plugin_binding(
       input.integration_instance_id,
       &input.capability_id,
       input.preferences_schema_version,
@@ -100,7 +97,7 @@ impl SpeechServiceService {
       integration_instance_id: input.integration_instance_id,
       capability_id: input.capability_id.trim().to_string(),
       preferences_schema_version: input.preferences_schema_version,
-      preferences: input.preferences,
+      preferences,
       created_at: now.clone(),
       updated_at: now,
     };
@@ -127,7 +124,7 @@ impl SpeechServiceService {
       ));
     }
 
-    self.validate_plugin_binding(
+    let preferences = self.validate_plugin_binding(
       input.integration_instance_id,
       &input.capability_id,
       input.preferences_schema_version,
@@ -144,7 +141,7 @@ impl SpeechServiceService {
         input.integration_instance_id,
         input.capability_id.trim(),
         input.preferences_schema_version,
-        &input.preferences,
+        &preferences,
         &now,
       )?;
       let saved = speech_services::get(uow.conn(), id)?;
@@ -158,7 +155,7 @@ impl SpeechServiceService {
     capability_id: &str,
     preferences_schema_version: i32,
     preferences: &Value,
-  ) -> Result<(), StorageError> {
+  ) -> Result<Value, StorageError> {
     validate_capability_id(capability_id).map_err(StorageError::Validation)?;
     if capability_name(capability_id) != Some(SPEECH_SYNTHESIZE_CAPABILITY_NAME) {
       return Err(StorageError::Validation(format!(
@@ -172,17 +169,19 @@ impl SpeechServiceService {
     if !instance.enabled {
       return Err(StorageError::Validation("integration instance is disabled".into()));
     }
-    if !self.definition_registry.contains(&instance.plugin_id) {
-      return Err(StorageError::Validation("plugin definition is missing".into()));
-    }
-    let manifest = self
+    let registration = self
       .definition_registry
-      .get(&instance.plugin_id)
+      .get_registration(&instance.plugin_id)
       .ok_or_else(|| StorageError::Validation("plugin definition is missing".into()))?;
-    if !manifest.capabilities.iter().any(|c| c.id == capability_id) {
-      return Err(StorageError::Validation(format!(
+    let cap_def = registration.capability(capability_id).ok_or_else(|| {
+      StorageError::Validation(format!(
         "capability {capability_id} is not declared on plugin {}",
         instance.plugin_id
+      ))
+    })?;
+    if preferences_schema_version != cap_def.descriptor.preferences_schema_version as i32 {
+      return Err(StorageError::Validation(format!(
+        "unsupported speech preferences schema version: {preferences_schema_version}"
       )));
     }
     if instance.health_status != IntegrationHealthStatus::Ready {
@@ -190,8 +189,7 @@ impl SpeechServiceService {
         "integration instance must be ready before binding".into(),
       ));
     }
-    validate_speech_preferences_for_plugin(&instance.plugin_id, preferences_schema_version, preferences)?;
-    Ok(())
+    cap_def.preference_adapter.normalize_preferences(preferences)
   }
 
   /// Synthesize MP3 bytes for the given text/language via the selected or default Speech service.
@@ -207,8 +205,9 @@ impl SpeechServiceService {
       .filter(|s| !s.trim().is_empty())
       .unwrap_or_else(|| new_id().to_string());
     let db = self.db.clone();
+    let registry = self.definition_registry.clone();
     let prepared = spawn_blocking_storage(move || {
-      prepare_speech_synthesis(&db, input.speech_service_id, input.text, input.language_id)
+      prepare_speech_synthesis(&db, &registry, input.speech_service_id, input.text, input.language_id)
     })
     .await?;
 
@@ -256,6 +255,7 @@ struct PreparedSpeechSynthesis {
 
 fn prepare_speech_synthesis(
   db: &Database,
+  registry: &ServiceIntegrationRegistry,
   requested_service_id: Option<Uuid>,
   text: String,
   language_id: String,
@@ -284,7 +284,19 @@ fn prepare_speech_synthesis(
   }
 
   let preferences = service.preferences.clone();
-  validate_speech_preferences_for_plugin(&instance.plugin_id, service.preferences_schema_version, &preferences)?;
+  let registration = registry
+    .get_registration(&instance.plugin_id)
+    .ok_or_else(|| StorageError::Validation("plugin definition is missing".into()))?;
+  let cap_def = registration
+    .capability(&service.capability_id)
+    .ok_or_else(|| StorageError::Validation("capability is not declared on plugin".into()))?;
+  if service.preferences_schema_version != cap_def.descriptor.preferences_schema_version as i32 {
+    return Err(StorageError::Validation(
+      "speech preferences schema version mismatch".into(),
+    ));
+  }
+  // Preferences were normalized at save time; re-normalize as a defense-in-depth check.
+  let preferences = cap_def.preference_adapter.normalize_preferences(&preferences)?;
 
   Ok(PreparedSpeechSynthesis {
     integration_instance_id: service.integration_instance_id,
@@ -294,35 +306,6 @@ fn prepare_speech_synthesis(
     text,
     language_id: language_id.trim().to_string(),
   })
-}
-
-/// Validate speech preferences by dispatching on the bound plugin id.
-/// Google Cloud uses schema v1 (speakingRate + pitch); Edge TTS uses schema v1 (voice/speed/pitch/style).
-fn validate_speech_preferences_for_plugin(
-  plugin_id: &str,
-  schema_version: i32,
-  preferences: &Value,
-) -> Result<(), StorageError> {
-  if plugin_id == EDGE_TTS_PLUGIN_ID {
-    if schema_version != EDGE_TTS_PREFERENCES_SCHEMA_VERSION {
-      return Err(StorageError::Validation(format!(
-        "unsupported speech preferences schema version: {schema_version}"
-      )));
-    }
-    let prefs: EdgeTtsPreferences = serde_json::from_value(preferences.clone())
-      .map_err(|e| StorageError::Validation(format!("invalid Edge TTS preferences: {e}")))?;
-    validate_edge_tts_preferences(&prefs).map_err(|e| StorageError::Validation(e.message))?;
-    return Ok(());
-  }
-  // Default: Google Cloud schema.
-  if schema_version != GOOGLE_TTS_PREFERENCES_SCHEMA_VERSION {
-    return Err(StorageError::Validation(format!(
-      "unsupported speech preferences schema version: {schema_version}"
-    )));
-  }
-  let prefs = parse_speech_synthesize_preferences(preferences).map_err(StorageError::Validation)?;
-  validate_speech_synthesize_preferences(&prefs).map_err(|e| StorageError::Validation(e.message))?;
-  Ok(())
 }
 
 fn validate_speech_write(input: &SpeechServiceWrite) -> Result<(), StorageError> {
@@ -418,8 +401,12 @@ where
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::domain::service_capability::{SPEECH_SYNTHESIZE_CAPABILITY_ID, SpeechSynthesizePreferences};
-  use crate::domain::speech_service::default_google_tts_preferences;
+  use crate::domain::service_capability::{
+    SPEECH_SYNTHESIZE_CAPABILITY_ID, SpeechSynthesizePreferences, validate_speech_synthesize_preferences,
+  };
+  use crate::domain::speech_service::{
+    GOOGLE_TTS_PREFERENCES_SCHEMA_VERSION, default_google_tts_preferences, parse_speech_synthesize_preferences,
+  };
 
   #[test]
   fn validate_speech_write_rejects_blank_and_oversized_names() {
