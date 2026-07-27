@@ -1,0 +1,22 @@
+{
+  "suite": "translate-detect-world conformance",
+  "fixture": "fixtures/langnext-conformance-detect-wasm.wasm",
+  "modes": [
+    {
+      "mode": "success",
+      "config": { "mode": "success" },
+      "expected_language_id": "en",
+      "expected_confidence": 0.95
+    },
+    {
+      "mode": "failure",
+      "config": { "mode": "failure" },
+      "expected_error": "unsupported_language"
+    },
+    {
+      "mode": "invalid-confidence",
+      "config": { "mode": "invalid-confidence" },
+      "expected_error": "invalid_response"
+    }
+  ]
+}

@@ -1,0 +1,4 @@
+# cargo-component regenerates this std bindings file on every build; the guest uses
+# `wit_bindgen::generate!` directly (no_std), so this file is unused and must not be committed.
+src/bindings.rs
+/target

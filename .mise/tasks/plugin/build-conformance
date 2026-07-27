@@ -1,0 +1,149 @@
+#!/usr/bin/env bash
+# ABOUTME: Deterministically rebuild the Phase 2 conformance Wasm Components and verify digests,
+# ABOUTME: sizes, and plugin.json manifests against committed fixtures using pinned Bun (no jq).
+#MISE description="Rebuild conformance Wasm Components and verify digests + plugin.json"
+set -euo pipefail
+
+# --- Pinned guest toolchain check ---
+EXPECTED_CARGO_COMPONENT="0.21.1"
+CARGO_COMPONENT_VERSION=$(cargo component --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
+if [[ -z "$CARGO_COMPONENT_VERSION" ]]; then
+  echo "error: cargo-component not found; expected $EXPECTED_CARGO_COMPONENT (mise pins it via the cargo: backend)" >&2
+  exit 1
+fi
+if [[ "$CARGO_COMPONENT_VERSION" != "$EXPECTED_CARGO_COMPONENT" ]]; then
+  echo "error: cargo-component version $CARGO_COMPONENT_VERSION != pinned $EXPECTED_CARGO_COMPONENT" >&2
+  echo "  run \`mise install\` to install the pinned version" >&2
+  exit 1
+fi
+echo "ok: cargo-component $CARGO_COMPONENT_VERSION (pinned)"
+
+if ! command -v bun >/dev/null 2>&1; then
+  echo "error: bun is required (pinned by mise) to validate plugin.json without unpinned jq" >&2
+  exit 1
+fi
+
+# --- Validate a plugin.json manifest against its committed fixture using pinned Bun ---
+validate_plugin_json() {
+  local crate_dir="$1"
+  local plugin_json="$crate_dir/plugin.json"
+  if [[ ! -f "$plugin_json" ]]; then
+    echo "error: $plugin_json is missing" >&2
+    return 1
+  fi
+
+  # Bun is pinned in mise.toml; avoids an unpinned jq dependency.
+  local validation
+  validation=$(bun -e "
+    const fs = require('fs');
+    const path = require('path');
+    const crateDir = process.argv[1];
+    const pluginPath = path.join(crateDir, 'plugin.json');
+    const plugin = JSON.parse(fs.readFileSync(pluginPath, 'utf8'));
+    const artifact = (plugin.files || []).find((f) => f.role === 'runtime-artifact');
+    if (!artifact) {
+      console.error('error: no runtime-artifact file entry');
+      process.exit(1);
+    }
+    if (!artifact.path || artifact.bytes == null || !artifact.sha256) {
+      console.error('error: runtime-artifact missing path/bytes/sha256');
+      process.exit(1);
+    }
+    if (!plugin.runtime || plugin.runtime.artifact !== artifact.path) {
+      console.error('error: runtime.artifact does not match file entry path');
+      process.exit(1);
+    }
+    const full = path.join(crateDir, artifact.path);
+    if (!fs.existsSync(full)) {
+      console.error('error: declared artifact missing: ' + full);
+      process.exit(1);
+    }
+    const bytes = fs.readFileSync(full);
+    const actualBytes = bytes.length;
+    const crypto = require('crypto');
+    const actualSha = crypto.createHash('sha256').update(bytes).digest('hex');
+    if (Number(artifact.bytes) !== actualBytes) {
+      console.error('error: artifact bytes mismatch: manifest=' + artifact.bytes + ' actual=' + actualBytes);
+      process.exit(1);
+    }
+    if (artifact.sha256 !== actualSha) {
+      console.error('error: artifact sha256 mismatch: manifest=' + artifact.sha256 + ' actual=' + actualSha);
+      process.exit(1);
+    }
+    // Capability and network permission shape for closed-loop grants.
+    if (!Array.isArray(plugin.capabilities) || plugin.capabilities.length < 1) {
+      console.error('error: capabilities missing');
+      process.exit(1);
+    }
+    if (!plugin.permissions || !Array.isArray(plugin.permissions.network)) {
+      console.error('error: permissions.network missing');
+      process.exit(1);
+    }
+    console.log('ok: ' + pluginPath + ' validated (bytes=' + actualBytes + ' sha256=' + actualSha + ')');
+  " "$crate_dir") || return 1
+  echo "$validation"
+}
+
+validate_plugin_json "runtime-plugins/conformance/wasm-component"
+validate_plugin_json "runtime-plugins/conformance/wasm-detect-component"
+
+# --- Rebuild + verify the translate conformance component ---
+CRATE_DIR="runtime-plugins/conformance/wasm-component"
+FIXTURE="$CRATE_DIR/fixtures/langnext-conformance-wasm.wasm"
+MANIFEST="$CRATE_DIR/fixtures/langnext-conformance-wasm.wasm.sha256"
+
+COMMITTED_DIGEST=$(tr -d '[:space:]' < "$MANIFEST")
+COMMITTED_ACTUAL=$(sha256sum "$FIXTURE" | awk '{print $1}')
+if [[ "$COMMITTED_DIGEST" != "$COMMITTED_ACTUAL" ]]; then
+  echo "error: committed translate fixture does not match digest manifest" >&2
+  echo "  manifest: $COMMITTED_DIGEST" >&2
+  echo "  fixture:  $COMMITTED_ACTUAL" >&2
+  exit 1
+fi
+
+cargo component build --manifest-path "$CRATE_DIR/Cargo.toml" --target wasm32-unknown-unknown --release --locked
+
+COMPILED="$CRATE_DIR/target/wasm32-unknown-unknown/release/langnext_conformance_wasm.wasm"
+[[ -f "$COMPILED" ]] || { echo "error: compiled component not found at $COMPILED" >&2; exit 1; }
+REBUILD_DIGEST=$(sha256sum "$COMPILED" | awk '{print $1}')
+if [[ "$REBUILD_DIGEST" != "$COMMITTED_DIGEST" ]]; then
+  echo "error: translate conformance component digest drift (rebuild != committed)" >&2
+  echo "  committed: $COMMITTED_DIGEST" >&2
+  echo "  rebuild:   $REBUILD_DIGEST" >&2
+  echo "  if intended, rebuild the fixture, update $MANIFEST and plugin.json, then re-run" >&2
+  exit 1
+fi
+echo "ok: translate conformance component digest matches ($REBUILD_DIGEST)"
+
+# --- Rebuild + verify the detect conformance component ---
+DETECT_CRATE_DIR="runtime-plugins/conformance/wasm-detect-component"
+DETECT_FIXTURE="$DETECT_CRATE_DIR/fixtures/langnext-conformance-detect-wasm.wasm"
+DETECT_MANIFEST="$DETECT_CRATE_DIR/fixtures/langnext-conformance-detect-wasm.wasm.sha256"
+
+DETECT_COMMITTED=$(tr -d '[:space:]' < "$DETECT_MANIFEST")
+DETECT_ACTUAL=$(sha256sum "$DETECT_FIXTURE" | awk '{print $1}')
+if [[ "$DETECT_COMMITTED" != "$DETECT_ACTUAL" ]]; then
+  echo "error: committed detect fixture does not match digest manifest" >&2
+  exit 1
+fi
+
+cargo component build --manifest-path "$DETECT_CRATE_DIR/Cargo.toml" --target wasm32-unknown-unknown --release --locked
+
+DETECT_COMPILED="$DETECT_CRATE_DIR/target/wasm32-unknown-unknown/release/langnext_conformance_detect_wasm.wasm"
+[[ -f "$DETECT_COMPILED" ]] || { echo "error: compiled detect component not found" >&2; exit 1; }
+DETECT_REBUILD=$(sha256sum "$DETECT_COMPILED" | awk '{print $1}')
+if [[ "$DETECT_REBUILD" != "$DETECT_COMMITTED" ]]; then
+  echo "error: detect conformance component digest drift" >&2
+  echo "  committed: $DETECT_COMMITTED" >&2
+  echo "  rebuild:   $DETECT_REBUILD" >&2
+  exit 1
+fi
+echo "ok: detect conformance component digest matches ($DETECT_REBUILD)"
+
+validate_plugin_json "runtime-plugins/conformance/wasm-component"
+validate_plugin_json "runtime-plugins/conformance/wasm-detect-component"
+
+# Formal manifest closed-loop test (parse_manifest + grant construction), not only field checks.
+cargo test --manifest-path src-tauri/Cargo.toml translate_and_detect_manifest_grant_closed_loop -- --nocapture
+
+echo "ok: conformance components rebuilt and verified (pinned toolchain, --locked, plugin.json + manifest grant gate)"

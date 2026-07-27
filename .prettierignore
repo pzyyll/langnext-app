@@ -7,3 +7,8 @@ src/routeTree.gen.ts
 package-lock.json
 *.gen.ts
 .agents
+# Guest cargo-component generated bindings (not application source).
+runtime-plugins/conformance/**/src/bindings.rs
+runtime-plugins/conformance/**/target
+# Local accidental rustup home at repo root (see .gitignore).
+/undefined/

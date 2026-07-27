@@ -1,0 +1,51 @@
+{
+  "manifestVersion": 1,
+  "pluginApiVersion": "1.0",
+  "id": "langnext.conformance",
+  "version": "0.1.0",
+  "publisher": {
+    "keyId": "langnext.conformance",
+    "keyFingerprint": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "runtime": {
+    "kind": "wasm-component",
+    "artifact": "fixtures/langnext-conformance-wasm.wasm"
+  },
+  "files": [
+    {
+      "path": "fixtures/langnext-conformance-wasm.wasm",
+      "role": "runtime-artifact",
+      "bytes": 15793,
+      "sha256": "ea979f14bbbe04122a176d608a77ad95e49de16daf286930f8461c6b14e587ab"
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "translate.text@1"
+    }
+  ],
+  "permissions": {
+    "network": [
+      {
+        "id": "approved",
+        "origins": ["https://conformance.example"],
+        "methods": ["GET"]
+      },
+      {
+        "id": "slow",
+        "origins": ["https://conformance.example"],
+        "methods": ["GET"]
+      },
+      {
+        "id": "wait-cancel",
+        "origins": ["https://conformance.example"],
+        "methods": ["GET"]
+      }
+    ],
+    "authPolicies": ["host.none.v1"]
+  },
+  "ui": {
+    "mode": "schema",
+    "pages": []
+  }
+}

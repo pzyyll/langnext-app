@@ -1,0 +1,55 @@
+{
+  "suite": "translate-text-world conformance",
+  "fixture": "fixtures/langnext-conformance-wasm.wasm",
+  "modes": [
+    {
+      "mode": "success",
+      "config": { "mode": "success" },
+      "expected_text": "[hello]"
+    },
+    {
+      "mode": "broker-call",
+      "config": { "mode": "broker-call" },
+      "expected_text": "\"translated\""
+    },
+    {
+      "mode": "denied-endpoint",
+      "config": { "mode": "denied-endpoint" },
+      "expected_error": "permission_denied"
+    },
+    {
+      "mode": "trap",
+      "config": { "mode": "trap" },
+      "expected_error": "plugin_unavailable"
+    },
+    {
+      "mode": "oversized-output",
+      "config": { "mode": "oversized-output" },
+      "expected_error": "invalid_response"
+    },
+    {
+      "mode": "memory-growth",
+      "config": { "mode": "memory-growth" },
+      "expected_error": "quota_exceeded"
+    },
+    {
+      "mode": "infinite-loop",
+      "config": { "mode": "infinite-loop" },
+      "expected_error": "quota_exceeded",
+      "deadline_ms": 600000,
+      "notes": "fuel exhaustion under a far-future deadline; dedicated test also covers epoch/timeout"
+    },
+    {
+      "mode": "slow-host-call",
+      "config": { "mode": "slow-host-call" },
+      "expected_error": "timeout",
+      "deadline_ms": 200
+    },
+    {
+      "mode": "cancellation",
+      "config": { "mode": "cancellation" },
+      "expected_error": "cancelled",
+      "cancel_after_ms": 100
+    }
+  ]
+}

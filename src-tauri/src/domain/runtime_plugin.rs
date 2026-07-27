@@ -178,6 +178,37 @@ impl PackageDigest {
   }
 }
 
+/// Lowercase hex SHA-256 digest of a runtime Component artifact file (the package file-index
+/// entry with role `runtime-artifact`). Distinct from [`PackageDigest`]: the package digest
+/// covers the final signed `.lnplugin` archive bytes, while this digest covers only the
+/// Component file bytes that the host compiles and executes. Never use one as the other.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ComponentArtifactDigest(String);
+
+impl ComponentArtifactDigest {
+  pub fn parse(value: &str) -> Result<Self, String> {
+    if value.is_empty() {
+      return Err("component artifact digest is required".into());
+    }
+    if value.len() != SHA256_HEX_LEN {
+      return Err(format!(
+        "component artifact digest must be {SHA256_HEX_LEN} hex characters"
+      ));
+    }
+    if value != value.trim() {
+      return Err("component artifact digest must not have surrounding whitespace".into());
+    }
+    if !is_lowercase_hex(value) {
+      return Err("component artifact digest must be lowercase hex (0-9a-f)".into());
+    }
+    Ok(Self(value.to_string()))
+  }
+
+  pub fn as_str(&self) -> &str {
+    &self.0
+  }
+}
+
 /// Publisher verification key identifier (bounded reverse-domain ASCII, not key material).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PublisherKeyId(String);

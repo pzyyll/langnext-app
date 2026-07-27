@@ -9,6 +9,7 @@ use crate::services::google_service_account::GoogleServiceAccountExchanger;
 use crate::services::network_broker::NetworkBroker;
 use crate::services::service_capabilities::ServiceCapabilityService;
 use crate::services::token_grant::TokenGrantService;
+use crate::services::wasm_runtime::WasmRuntime;
 use crate::services::{
   ImportExportService, ModelService, OcrServiceService, ProviderHttpService, ProviderService,
   ServiceIntegrationRegistry, ServiceIntegrationService, SettingsService, SpeechServiceService,
@@ -39,6 +40,9 @@ pub struct AppState {
   pub provider_http: ProviderHttpService,
   /// In-flight request ids → cancel tokens (provider HTTP).
   pub request_sessions: Arc<RequestSessionRegistry>,
+  /// Shared Wasm Component runtime for external service plugins (Phase 2 conformance surface;
+  /// unreachable from production plugin instances until Phase 4 activation).
+  pub wasm_runtime: Arc<WasmRuntime>,
 }
 
 impl AppState {
@@ -86,6 +90,7 @@ impl AppState {
     let provider_http = ProviderHttpService::new(db.clone(), vault.clone());
     let device_state = Arc::new(DeviceStateManager::load(&app_data_dir)?);
     let request_sessions = Arc::new(RequestSessionRegistry::new());
+    let wasm_runtime = Arc::new(WasmRuntime::new().map_err(|e| StorageError::Internal(e.to_string()))?);
 
     Ok(Self {
       db,
@@ -105,6 +110,7 @@ impl AppState {
       device_state,
       provider_http,
       request_sessions,
+      wasm_runtime,
     })
   }
 }

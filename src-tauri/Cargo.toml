@@ -22,6 +22,9 @@ tauri-build = { version = "2", features = [] }
 # WIT text parsing for runtime-plugin capability world conformance tests (Phase 0 contracts).
 # Text-only: no wasm decoding/wat features pulled in.
 wit-parser = { version = "0.244", default-features = false }
+# WAT parser for synthesizing adversarial Component fixtures (undeclared/unlinked imports) in
+# Phase 2 runtime tests. Not used in production builds.
+wat = "1.254"
 
 [dependencies]
 tauri = { version = "2", features = ["protocol-asset", "tray-icon", "image-ico", "image-png", "unstable"] }
@@ -51,6 +54,24 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 aes-gcm = "0.10"
 sha2 = "0.10"
 rand = "0.8"
+# Host target triple for compiled Component cache identity (Issue 6: complete arch-vendor-os-env
+# triple, not the incomplete std::env::consts arch-os form). Pinned to the version wasmtime 47
+# depends on so the host and wasmtime agree on the host triple.
+target-lexicon = "0.13"
+# Phase 2: Wasm Component runtime for external service plugins. Pinned to 47.0.2; minimal
+# feature set excludes WASI, the Component async ABI, threads, and stack-switching. The host
+# uses async embedding (Store/Linker `*_async`) plus LangNext StreamHandle semantics instead
+# of `component-model-async`. See `src-tauri/src/services/wasm_runtime/` and
+# docs/plans/runtime-plugin-system/phase-2-wasm-runtime.md.
+wasmtime = { version = "=47.0.2", default-features = false, features = [
+  "async",
+  "cache",
+  "component-model",
+  "cranelift",
+  "pooling-allocator",
+  "runtime",
+  "std",
+] }
 
 # Desktop-only: global hotkey, clipboard, and region screenshot capture.
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]

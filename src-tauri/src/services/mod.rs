@@ -25,6 +25,7 @@ pub mod speech_services;
 pub mod token_grant;
 pub mod translation_history;
 pub mod translation_profiles;
+pub mod wasm_runtime;
 
 pub use import_export::ImportExportService;
 pub use models::ModelService;

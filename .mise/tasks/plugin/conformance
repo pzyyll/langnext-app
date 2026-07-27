@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# ABOUTME: Run the Phase 2 Wasm runtime conformance suite and verify required mode/key tests.
+# ABOUTME: Fail-closed: missing required tests or zero tests is an error.
+#MISE description="Run Wasm runtime conformance suite (arg: wasm)"
+set -euo pipefail
+
+MODE="${1:-all}"
+
+# Plan-required mode/key tests that must execute under wasm_runtime (exact names).
+REQUIRED_TESTS=(
+  "services::wasm_runtime::tests::wasm_executor::conformance_modes_fixture_manifest_matches_runtime"
+  "services::wasm_runtime::tests::wasm_executor::detect_conformance_modes_fixture_manifest_matches_runtime"
+  "services::wasm_runtime::tests::wasm_executor::success_mode"
+  "services::wasm_runtime::tests::wasm_executor::broker_call_mode"
+  "services::wasm_runtime::tests::wasm_executor::denied_endpoint_mode"
+  "services::wasm_runtime::tests::wasm_executor::trap_mode_maps_to_plugin_unavailable"
+  "services::wasm_runtime::tests::wasm_executor::oversized_output_rejected"
+  "services::wasm_runtime::tests::wasm_executor::memory_growth_rejected"
+  "services::wasm_runtime::tests::wasm_executor::slow_host_call_times_out"
+  "services::wasm_runtime::tests::wasm_executor::cancellation_propagates"
+  "services::wasm_runtime::tests::wasm_executor::detect_world_success"
+  "services::wasm_runtime::tests::wasm_executor::translate_and_detect_manifest_grant_closed_loop"
+  "services::wasm_runtime::tests::wasm_limits::infinite_loop_exhausts_fuel"
+  "services::wasm_runtime::tests::wasm_host_imports::undeclared_import_component_fails_instantiation"
+  "services::wasm_runtime::tests::wasm_limits::package_a_component_rejected_under_package_b_grant"
+  "services::wasm_runtime::tests::wasm_host_imports::relative_path_confinement_rejects_absolute_and_traversal"
+  "services::wasm_runtime::tests::wasm_host_imports::blocked_request_headers_rejected"
+  "services::wasm_runtime::tests::wasm_host_imports::max_request_bytes_over_limit_rejected"
+  "services::wasm_runtime::tests::wasm_host_imports::broker_blob_and_stream_response_are_stable_unsupported"
+)
+
+MIN_TOTAL_TESTS=10
+
+case "$MODE" in
+  wasm|all)
+    OUTPUT=$(cargo test --manifest-path src-tauri/Cargo.toml wasm_runtime -- --nocapture 2>&1)
+    EXIT_CODE=$?
+    echo "$OUTPUT"
+    if [[ $EXIT_CODE -ne 0 ]]; then
+      echo "error: conformance tests failed (exit $EXIT_CODE)" >&2
+      exit 1
+    fi
+
+    # Sum all "test result: ok. N passed" lines; zero is fail-closed.
+    TOTAL_PASSED=0
+    while read -r count; do
+      [[ -n "$count" ]] || continue
+      TOTAL_PASSED=$((TOTAL_PASSED + count))
+    done < <(echo "$OUTPUT" | grep -E '^test result: ok\.' | awk '{print $4}')
+
+    if [[ "$TOTAL_PASSED" -lt "$MIN_TOTAL_TESTS" ]]; then
+      echo "error: conformance suite ran $TOTAL_PASSED tests; expected at least $MIN_TOTAL_TESTS (fail-closed)" >&2
+      exit 1
+    fi
+
+    for name in "${REQUIRED_TESTS[@]}"; do
+      if ! grep -Eq "test ${name} \\.\\.\\. ok" <<<"$OUTPUT"; then
+        echo "error: required conformance test missing or not ok: $name" >&2
+        exit 1
+      fi
+    done
+    echo "ok: conformance suite passed ($TOTAL_PASSED tests; ${#REQUIRED_TESTS[@]} required names verified)"
+    ;;
+  *)
+    echo "usage: mise run plugin:conformance [wasm|all]" >&2
+    exit 1
+    ;;
+esac

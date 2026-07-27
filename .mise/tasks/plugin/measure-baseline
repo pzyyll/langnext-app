@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+# ABOUTME: Measure debug/release binary size and cold-start time for the Wasm runtime, writing a
+# ABOUTME: stable committed baseline under docs/analysis/. Measurement failures exit nonzero.
+#MISE description="Measure Wasm runtime binary size and cold-start baseline to docs/analysis/"
+set -euo pipefail
+
+CARGO_MANIFEST="src-tauri/Cargo.toml"
+RESULTS_FILE="docs/analysis/wasm-runtime-baseline.md"
+
+mkdir -p docs/analysis
+
+# --- Environment ---
+RUSTC_VERSION=$(rustc --version)
+CARGO_COMPONENT_VERSION=$(cargo component --version 2>/dev/null || true)
+if [[ -z "$CARGO_COMPONENT_VERSION" ]]; then
+  echo "error: cargo-component not found; cannot measure baseline" >&2
+  exit 1
+fi
+OS_INFO=$(uname -s)$(uname -r 2>/dev/null)$(uname -m 2>/dev/null)
+WASMTIME_VERSION="47.0.2 (pinned)"
+
+# --- Debug binary size ---
+echo "measuring debug binary size..." >&2
+cargo build --manifest-path "$CARGO_MANIFEST" --lib >/dev/null 2>&1 || {
+  echo "error: debug build failed; cannot measure debug binary size" >&2
+  exit 1
+}
+DEBUG_BIN=$(find src-tauri/target/debug -maxdepth 1 \( -name "langnext_app_lib.dll" -o -name "liblangnext_app_lib.so" -o -name "liblangnext_app_lib.dylib" \) 2>/dev/null | head -1)
+if [[ -z "$DEBUG_BIN" ]]; then
+  echo "error: debug binary not found after successful build" >&2
+  exit 1
+fi
+DEBUG_SIZE=$(wc -c < "$DEBUG_BIN" | tr -d ' ')
+
+# --- Release binary size ---
+echo "measuring release binary size..." >&2
+cargo build --manifest-path "$CARGO_MANIFEST" --lib --release >/dev/null 2>&1 || {
+  echo "error: release build failed; cannot measure release binary size" >&2
+  exit 1
+}
+RELEASE_BIN=$(find src-tauri/target/release -maxdepth 1 \( -name "langnext_app_lib.dll" -o -name "liblangnext_app_lib.so" -o -name "liblangnext_app_lib.dylib" \) 2>/dev/null | head -1)
+if [[ -z "$RELEASE_BIN" ]]; then
+  echo "error: release binary not found after successful build" >&2
+  exit 1
+fi
+RELEASE_SIZE=$(wc -c < "$RELEASE_BIN" | tr -d ' ')
+
+# --- Conformance fixture size ---
+FIXTURE="runtime-plugins/conformance/wasm-component/fixtures/langnext-conformance-wasm.wasm"
+if [[ ! -f "$FIXTURE" ]]; then
+  echo "error: conformance fixture missing: $FIXTURE" >&2
+  exit 1
+fi
+FIXTURE_SIZE=$(wc -c < "$FIXTURE" | tr -d ' ')
+FIXTURE_DIGEST=$(sha256sum "$FIXTURE" | awk '{print $1}')
+
+# --- Cold-start measurement ---
+echo "measuring cold-start..." >&2
+COLD_START_OUTPUT=$(cargo test --manifest-path "$CARGO_MANIFEST" wasm_runtime_cold_start -- --nocapture --ignored 2>&1) || {
+  echo "error: cold-start measurement test failed" >&2
+  echo "$COLD_START_OUTPUT" >&2
+  exit 1
+}
+COLD_START_LINE=$(echo "$COLD_START_OUTPUT" | grep -E "cold-start baseline:" | head -1 || true)
+if [[ -z "$COLD_START_LINE" ]]; then
+  echo "error: cold-start test did not emit a measurement" >&2
+  echo "$COLD_START_OUTPUT" >&2
+  exit 1
+fi
+
+# --- Write the stable baseline file ---
+cat > "$RESULTS_FILE" <<EOF
+# Wasm Runtime Rollout Baseline
+
+Real measurements for Phase 3 rollout decisions. Regenerate with \`mise run plugin:measure-baseline\`.
+
+## Environment
+
+- **OS:** $OS_INFO
+- **Rust:** $RUSTC_VERSION
+- **cargo-component:** $CARGO_COMPONENT_VERSION
+- **Wasmtime:** $WASMTIME_VERSION
+
+## Binary Size
+
+| Artifact | Size (bytes) |
+| --- | --- |
+| Debug lib | $DEBUG_SIZE |
+| Release lib | $RELEASE_SIZE |
+
+## Conformance Fixture
+
+| Property | Value |
+| --- | --- |
+| Bytes | $FIXTURE_SIZE |
+| SHA-256 | $FIXTURE_DIGEST |
+
+## Cold-Start
+
+Engine creation, component compilation (cache miss + hit), and first invocation latency:
+
+\`\`\`
+$COLD_START_LINE
+\`\`\`
+
+## Rollout Decision
+
+Compare these values against the prior baseline before approving Phase 3 activation. If debug or
+release binary size or cold-start increased materially, review before enabling production plugin
+instances.
+EOF
+
+if command -v prettier >/dev/null 2>&1; then
+  prettier --write "$RESULTS_FILE" >/dev/null 2>&1 || {
+    echo "error: prettier failed formatting $RESULTS_FILE" >&2
+    exit 1
+  }
+fi
+
+echo "ok: baseline written to $RESULTS_FILE"
+cat "$RESULTS_FILE"

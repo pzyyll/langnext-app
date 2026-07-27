@@ -4,4 +4,7 @@
 #MISE description="Install JS dependencies with bun and ensure Rust components"
 set -euo pipefail
 bun install
+# The wasm32-unknown-unknown target is pinned in mise.toml for fresh installs, but mise does not
+# re-apply target changes to an existing toolchain install, so ensure it explicitly here.
+rustup target add wasm32-unknown-unknown
 rustup component add rust-analyzer clippy rustfmt

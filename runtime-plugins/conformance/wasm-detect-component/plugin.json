@@ -1,0 +1,35 @@
+{
+  "manifestVersion": 1,
+  "pluginApiVersion": "1.0",
+  "id": "langnext.conformance.detect",
+  "version": "0.1.0",
+  "publisher": {
+    "keyId": "langnext.conformance",
+    "keyFingerprint": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "runtime": {
+    "kind": "wasm-component",
+    "artifact": "fixtures/langnext-conformance-detect-wasm.wasm"
+  },
+  "files": [
+    {
+      "path": "fixtures/langnext-conformance-detect-wasm.wasm",
+      "role": "runtime-artifact",
+      "bytes": 4568,
+      "sha256": "86f9732bcc143c541ee916e03b37ad04478ebfefa51ab32fd027948532f2ec31"
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "translate.detect@1"
+    }
+  ],
+  "permissions": {
+    "network": [],
+    "authPolicies": []
+  },
+  "ui": {
+    "mode": "schema",
+    "pages": []
+  }
+}

@@ -9,6 +9,7 @@ use crate::domain::runtime_plugin::{
   RuntimeDescriptor, SIGNATURE_FILE_PATH, SemVerVersion, UiDeclaration, check_file_index_collisions,
   validate_archive_entry_path, validate_archive_path, validate_slot_id_strict,
 };
+// Re-export PermissionRequests for ValidatedPluginManifest public API consumers.
 use std::collections::HashMap;
 
 /// Stable contract failure codes. Phase 3 distinguishes hard-reject codes from staging-only codes.
@@ -79,6 +80,36 @@ impl ValidatedPluginManifest {
   /// The validated manifest's credential slot ids, for schema cross-validation.
   pub fn credential_slot_ids(&self) -> impl Iterator<Item = &str> {
     self.manifest.credential_slots.iter().map(|slot| slot.id.as_str())
+  }
+
+  /// Plugin id from the validated manifest.
+  pub fn id(&self) -> &str {
+    &self.manifest.id
+  }
+
+  /// Plugin version from the validated manifest.
+  pub fn version(&self) -> &str {
+    &self.manifest.version
+  }
+
+  /// Capability declarations from the validated manifest.
+  pub fn capabilities(&self) -> &[CapabilityDeclaration] {
+    &self.manifest.capabilities
+  }
+
+  /// Permission requests from the validated manifest (requests, not grants).
+  pub fn permissions(&self) -> &PermissionRequests {
+    &self.manifest.permissions
+  }
+
+  /// Runtime descriptor from the validated manifest.
+  pub fn runtime(&self) -> &RuntimeDescriptor {
+    &self.manifest.runtime
+  }
+
+  /// Signed file-index entries from the validated manifest.
+  pub fn files(&self) -> &[PluginFileEntry] {
+    &self.manifest.files
   }
 
   /// The underlying validated manifest reference (crate-private; for archive-shape checks).

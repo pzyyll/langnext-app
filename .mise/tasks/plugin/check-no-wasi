@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# ABOUTME: Assert no WASI host implementation is linked into the Tauri backend or imported by
+# ABOUTME: the conformance guests. Fail-closed: requires exact wasm_guest_imports test coverage.
+#MISE description="Assert no WASI in host dependency tree or guest imports"
+set -euo pipefail
+
+EXPECTED_GUEST_IMPORT_TESTS=2
+EXPECTED_GUEST_IMPORT_TEST_NAMES=(
+  "services::wasm_runtime::tests::wasm_guest_imports::translate_conformance_guest_imports_only_langnext"
+  "services::wasm_runtime::tests::wasm_guest_imports::detect_conformance_guest_imports_only_langnext"
+)
+
+# Check 1: cargo tree must succeed. Capture the full output ONCE so a grep miss cannot trigger a
+# pipefail/SIGPIPE, then inspect the captured string.
+TREE_OUTPUT=$(cargo tree --manifest-path src-tauri/Cargo.toml --depth 999 2>&1) || {
+  echo "error: cargo tree failed; cannot verify dependency tree" >&2
+  echo "$TREE_OUTPUT" | tail -5 >&2
+  exit 1
+}
+
+# Check 2: the captured host dependency tree must not contain wasmtime-wasi.
+if grep -q 'wasmtime-wasi' <<<"$TREE_OUTPUT"; then
+  echo "error: wasmtime-wasi is present in the host dependency tree" >&2
+  grep 'wasmtime-wasi' <<<"$TREE_OUTPUT" >&2 || true
+  exit 1
+fi
+echo "ok: host dependency tree has no wasmtime-wasi"
+
+# Check 3: both conformance guest Cargo.toml files must not depend on wasi or wasmtime-wasi.
+for guest_cargo in \
+  runtime-plugins/conformance/wasm-component/Cargo.toml \
+  runtime-plugins/conformance/wasm-detect-component/Cargo.toml; do
+  if [[ ! -f "$guest_cargo" ]]; then
+    echo "error: guest Cargo.toml missing: $guest_cargo" >&2
+    exit 1
+  fi
+  if grep -qiE 'wasmtime-wasi|^wasi[[:space:]]*=|wasi[[:space:]]*=' "$guest_cargo"; then
+    echo "error: $guest_cargo references WASI dependencies" >&2
+    grep -niE 'wasmtime-wasi|wasi[[:space:]]*=' "$guest_cargo" >&2 || true
+    exit 1
+  fi
+done
+echo "ok: guest Cargo.toml files declare no WASI dependencies"
+
+# Check 4: run guest-import inspection tests and require the exact expected set/count.
+# Zero tests succeeding is a hard failure (fail-closed).
+TEST_OUTPUT=$(cargo test --manifest-path src-tauri/Cargo.toml wasm_guest_imports -- --nocapture 2>&1) || {
+  echo "error: guest component import inspection failed" >&2
+  echo "$TEST_OUTPUT" >&2
+  exit 1
+}
+echo "$TEST_OUTPUT"
+
+PASSED_COUNT=$(echo "$TEST_OUTPUT" | grep -E '^test result: ok\.' | head -1 | awk '{print $4}')
+if [[ -z "${PASSED_COUNT:-}" || "$PASSED_COUNT" -lt "$EXPECTED_GUEST_IMPORT_TESTS" ]]; then
+  echo "error: wasm_guest_imports ran ${PASSED_COUNT:-0} tests; expected at least $EXPECTED_GUEST_IMPORT_TESTS (fail-closed)" >&2
+  exit 1
+fi
+
+for name in "${EXPECTED_GUEST_IMPORT_TEST_NAMES[@]}"; do
+  if ! grep -Eq "test ${name} \\.\\.\\. ok" <<<"$TEST_OUTPUT"; then
+    echo "error: required wasm_guest_imports test missing or failed: $name" >&2
+    exit 1
+  fi
+done
+echo "ok: compiled conformance guest components import only langnext:runtime-plugin interfaces ($PASSED_COUNT tests)"
+
+echo "ok: no WASI in host dependency tree or guest imports"
