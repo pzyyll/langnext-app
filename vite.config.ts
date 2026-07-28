@@ -67,6 +67,10 @@ export default defineConfig(async () => ({
   //
   // 1. prevent Vite from obscuring rust errors
   clearScreen: false,
+  // Restrict dependency discovery to the app entry; the repo also contains Rustdoc HTML.
+  optimizeDeps: {
+    entries: ["index.html"],
+  },
   // 2. tauri expects a fixed port, fail if that port is not available
   server: {
     port: 1420,
@@ -80,8 +84,8 @@ export default defineConfig(async () => ({
         }
       : undefined,
     watch: {
-      // 3. tell Vite to ignore watching `src-tauri`
-      ignored: ["**/src-tauri/**"],
+      // 3. ignore non-frontend trees; some contain hundreds of thousands of generated files
+      ignored: ["**/src-tauri/**", "**/runtime-plugins/**/target/**", "**/.worktrees/**", "**/undefined/**"],
     },
   },
 }));
