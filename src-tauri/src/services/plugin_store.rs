@@ -11,8 +11,8 @@ use crate::domain::plugin_package::{
 use crate::domain::time::{new_id, now_rfc3339};
 use crate::error::StorageError;
 use crate::repositories::{
-  installed_plugin_versions, plugin_install_operations, plugin_package_approvals, plugin_publishers,
-  plugin_uninstall_operations,
+  installed_plugin_versions, integration_instances, plugin_install_operations, plugin_package_approvals,
+  plugin_publishers, plugin_uninstall_operations,
 };
 use crate::services::plugin_package::{
   PackageVerifyError, VerifiedPackage, hash_file, inspect_package_bytes, public_key_fingerprint, read_file_bounded,
@@ -87,6 +87,22 @@ pub struct PluginPackageService {
   vendor_roots: Arc<Vec<VendorPublicKey>>,
   #[cfg(test)]
   install_fault: Arc<Mutex<Option<InstallFaultPoint>>>,
+  #[cfg(test)]
+  restore_fault: Arc<Mutex<Option<UninstallRestoreFault>>>,
+  /// When true, catalog delete fails after quarantine so restore is exercised.
+  #[cfg(test)]
+  catalog_delete_fault: Arc<Mutex<bool>>,
+}
+
+/// Test-only fault points for uninstall restore/rehash paths.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UninstallRestoreFault {
+  BeforeRestore,
+  AfterRestoreBeforeRehash,
+  AfterRehashBeforeAvailability,
+  MarkFailedWrite,
+  AvailabilityWrite,
 }
 
 impl PluginPackageService {
@@ -108,6 +124,10 @@ impl PluginPackageService {
       vendor_roots: Arc::new(vendor_roots),
       #[cfg(test)]
       install_fault: Arc::new(Mutex::new(None)),
+      #[cfg(test)]
+      restore_fault: Arc::new(Mutex::new(None)),
+      #[cfg(test)]
+      catalog_delete_fault: Arc::new(Mutex::new(false)),
     };
     if let Err(err) = service.seed_vendor_publishers() {
       log::error!("vendor_publisher_seed_failed error={err}");
@@ -131,8 +151,18 @@ impl PluginPackageService {
     self.plugins_root().join("quarantine")
   }
 
-  fn store_package_dir(&self, digest: &str) -> PathBuf {
+  pub(crate) fn store_package_dir(&self, digest: &str) -> PathBuf {
     self.store_root().join(digest)
+  }
+
+  /// Absolute path to the retained exact signed archive for a package digest.
+  pub fn package_archive_path(&self, package_digest: &str) -> PathBuf {
+    self.store_package_dir(package_digest).join("package.lnplugin")
+  }
+
+  /// Absolute path to the extracted immutable content tree for a package digest.
+  pub fn package_content_path(&self, package_digest: &str) -> PathBuf {
+    self.store_package_dir(package_digest).join("content")
   }
 
   /// Seed only the configured vendor public keys into SQLite (no fabricated production defaults).
@@ -254,52 +284,69 @@ impl PluginPackageService {
   }
 
   fn recover_one_uninstall(&self, op: &PluginUninstallOperation) -> Result<(), StorageError> {
+    // Location + exact digest decide recovery. Never delete catalog when a verified store package
+    // is present (covers crash after restore/rehash and before journal/availability update).
+    let store_verified = self.package_store_archive_matches(&op.package_digest);
+    let qpath_opt = op.quarantine_path.as_deref().map(Path::new);
+    let quarantine_verified = qpath_opt
+      .filter(|p| p.exists())
+      .map(|p| self.quarantine_path_is_safe(p) && self.quarantine_archive_matches(&op.package_digest, p))
+      .unwrap_or(false);
+
     match op.state {
-      UninstallOperationState::Prepared => {
-        // Either finish quarantine+catalog delete, or mark failed if package is gone already.
-        let store_dir = self.store_package_dir(&op.package_digest);
-        if store_dir.exists() {
-          let qpath = self.quarantine_path_return_dest(&store_dir, "uninstall_recover")?;
+      UninstallOperationState::Prepared | UninstallOperationState::ContentQuarantined => {
+        if store_verified {
           self.db.transaction(|uow| {
-            plugin_uninstall_operations::mark_content_quarantined(uow.conn(), op.id, &qpath.to_string_lossy())?;
+            if installed_plugin_versions::get_optional(uow.conn(), &op.package_digest)?.is_some() {
+              installed_plugin_versions::set_content_available(uow.conn(), &op.package_digest, true)?;
+            }
+            plugin_uninstall_operations::mark_restored(uow.conn(), op.id, "recovered_store_present")?;
             Ok(())
           })?;
+          return Ok(());
         }
-        // Fall through to catalog cleanup whether or not store existed.
+
+        if quarantine_verified {
+          let qpath = PathBuf::from(op.quarantine_path.as_deref().unwrap_or_default());
+          if self
+            .db
+            .read(|conn| installed_plugin_versions::get_optional(conn, &op.package_digest))?
+            .is_some()
+          {
+            self.restore_and_reverify_package(&op.package_digest, &qpath)?;
+            if !self.package_store_archive_matches(&op.package_digest) {
+              self.db.transaction(|uow| {
+                installed_plugin_versions::set_content_available(uow.conn(), &op.package_digest, false)?;
+                plugin_uninstall_operations::mark_failed(uow.conn(), op.id, "blocked_restore_digest_mismatch")?;
+                Ok(())
+              })?;
+              return Ok(());
+            }
+            self.db.transaction(|uow| {
+              installed_plugin_versions::set_content_available(uow.conn(), &op.package_digest, true)?;
+              plugin_uninstall_operations::mark_rolled_back(uow.conn(), op.id, "recovered_from_quarantine")?;
+              Ok(())
+            })?;
+            return Ok(());
+          }
+          // No catalog row: content only in quarantine — drop only when path+digest verified.
+          let _ = self.remove_path(&qpath);
+          self.db.transaction(|uow| {
+            plugin_uninstall_operations::mark_catalog_deleted(uow.conn(), op.id)?;
+            plugin_uninstall_operations::mark_finalized(uow.conn(), op.id)?;
+            Ok(())
+          })?;
+          return Ok(());
+        }
+
         if self
           .db
           .read(|conn| installed_plugin_versions::get_optional(conn, &op.package_digest))?
           .is_some()
         {
           self.db.transaction(|uow| {
-            plugin_package_approvals::delete_for_package(uow.conn(), &op.package_digest)?;
-            installed_plugin_versions::clear_default_if_matches(uow.conn(), &op.package_digest)?;
-            installed_plugin_versions::delete(uow.conn(), &op.package_digest)?;
-            plugin_uninstall_operations::mark_catalog_deleted(uow.conn(), op.id)?;
-            plugin_uninstall_operations::mark_finalized(uow.conn(), op.id)?;
-            Ok(())
-          })?;
-        } else {
-          self.db.transaction(|uow| {
-            plugin_uninstall_operations::mark_catalog_deleted(uow.conn(), op.id)?;
-            plugin_uninstall_operations::mark_finalized(uow.conn(), op.id)?;
-            Ok(())
-          })?;
-        }
-      }
-      UninstallOperationState::ContentQuarantined => {
-        // Content is safe in quarantine; finish catalog delete.
-        if self
-          .db
-          .read(|conn| installed_plugin_versions::get_optional(conn, &op.package_digest))?
-          .is_some()
-        {
-          self.db.transaction(|uow| {
-            plugin_package_approvals::delete_for_package(uow.conn(), &op.package_digest)?;
-            installed_plugin_versions::clear_default_if_matches(uow.conn(), &op.package_digest)?;
-            installed_plugin_versions::delete(uow.conn(), &op.package_digest)?;
-            plugin_uninstall_operations::mark_catalog_deleted(uow.conn(), op.id)?;
-            plugin_uninstall_operations::mark_finalized(uow.conn(), op.id)?;
+            installed_plugin_versions::set_content_available(uow.conn(), &op.package_digest, false)?;
+            plugin_uninstall_operations::mark_failed(uow.conn(), op.id, "recovered_content_missing")?;
             Ok(())
           })?;
         } else {
@@ -311,15 +358,68 @@ impl PluginPackageService {
         }
       }
       UninstallOperationState::CatalogDeleted => {
-        // Catalog already gone; content (if any) is quarantined — finalize.
+        // Catalog already gone; only delete quarantine when under quarantine root + digest match.
+        if let Some(q) = op.quarantine_path.as_deref() {
+          let qpath = Path::new(q);
+          if qpath.exists() {
+            if self.quarantine_path_is_safe(qpath) && self.quarantine_archive_matches(&op.package_digest, qpath) {
+              let _ = self.remove_path(qpath);
+            } else {
+              // Do not delete untrusted paths; leave blocked for manual recovery.
+              self.db.transaction(|uow| {
+                plugin_uninstall_operations::mark_failed(uow.conn(), op.id, "blocked_quarantine_path_or_digest")?;
+                Ok(())
+              })?;
+              return Ok(());
+            }
+          }
+        }
         self.db.transaction(|uow| {
           plugin_uninstall_operations::mark_finalized(uow.conn(), op.id)?;
           Ok(())
         })?;
       }
-      UninstallOperationState::Finalized | UninstallOperationState::Failed => {}
+      UninstallOperationState::Finalized
+      | UninstallOperationState::Failed
+      | UninstallOperationState::Restored
+      | UninstallOperationState::RolledBack => {}
     }
     Ok(())
+  }
+
+  /// Quarantine path must resolve under the service quarantine root (no path escape).
+  fn quarantine_path_is_safe(&self, quarantine_path: &Path) -> bool {
+    let root = match self.quarantine_root().canonicalize() {
+      Ok(p) => p,
+      Err(_) => return false,
+    };
+    let path = match quarantine_path.canonicalize() {
+      Ok(p) => p,
+      Err(_) => return false,
+    };
+    path.starts_with(&root)
+  }
+
+  /// True when the CAS store holds an archive whose SHA-256 equals `package_digest`.
+  fn package_store_archive_matches(&self, package_digest: &str) -> bool {
+    let archive = self.package_archive_path(package_digest);
+    if !archive.is_file() {
+      return false;
+    }
+    crate::services::plugin_package::hash_file(&archive)
+      .map(|d| d == package_digest)
+      .unwrap_or(false)
+  }
+
+  /// True when a quarantine package directory holds `package.lnplugin` with matching digest.
+  fn quarantine_archive_matches(&self, package_digest: &str, quarantine_path: &Path) -> bool {
+    let archive = quarantine_path.join("package.lnplugin");
+    if !archive.is_file() {
+      return false;
+    }
+    crate::services::plugin_package::hash_file(&archive)
+      .map(|d| d == package_digest)
+      .unwrap_or(false)
   }
 
   fn recover_one(&self, op: &PluginInstallOperation) -> Result<(), StorageError> {
@@ -1165,45 +1265,78 @@ impl PluginPackageService {
   }
 
   pub fn uninstall_version(&self, package_digest: &str) -> Result<(), StorageError> {
-    let version = self
-      .db
-      .read(|conn| installed_plugin_versions::get(conn, package_digest))?;
-    let users = self
-      .db
-      .read(|conn| installed_plugin_versions::count_integration_users(conn, &version.plugin_id, &version.version))?;
-    let is_default = self
-      .db
-      .read(|conn| installed_plugin_versions::get_default(conn, &version.plugin_id))?
-      .is_some_and(|d| d.package_digest == package_digest);
-    if !users.is_empty() || is_default {
-      return Err(StorageError::InUse(format!(
-        "package {package_digest} is in use (instances={}, is_default={is_default})",
-        users.len()
-      )));
-    }
-
-    // Crash-safe uninstall journal: prepared → content_quarantined → catalog_deleted → finalized.
-    // Never delete catalog while store content remains outside quarantine; never leave catalog
-    // pointing at a missing store without recovery.
+    // Crash-safe uninstall with TOCTOU protection:
+    // 1) atomic content_available true→false (uninstalling gate)
+    // 2) re-check exact-digest deps while gated
+    // 3) journal prepared, then move content, then catalog delete
+    // Lifecycle preview/apply already rejects content_available=false packages.
     let op_id = new_id();
     self.db.transaction(|uow| {
+      let version = installed_plugin_versions::get(uow.conn(), package_digest)?;
+      if !version.content_available {
+        return Err(StorageError::Conflict(format!(
+          "package {package_digest} is already unavailable (uninstalling or incomplete)"
+        )));
+      }
+      // Gate the package before any filesystem mutation so concurrent pins/lifecycle fail closed.
+      installed_plugin_versions::compare_and_set_content_available(uow.conn(), package_digest, true, false)?;
+      reject_if_package_has_dependencies(uow.conn(), package_digest, &version.plugin_id, &version.version)?;
       plugin_uninstall_operations::insert_prepared(uow.conn(), op_id, package_digest)?;
       Ok(())
     })?;
 
     let store_dir = self.store_package_dir(package_digest);
     let quarantine_path = if store_dir.exists() {
-      let qpath = self.quarantine_path_return_dest(&store_dir, "uninstall")?;
-      self.db.transaction(|uow| {
-        plugin_uninstall_operations::mark_content_quarantined(uow.conn(), op_id, &qpath.to_string_lossy())?;
-        Ok(())
-      })?;
-      Some(qpath)
+      match self.quarantine_path_return_dest(&store_dir, "uninstall") {
+        Ok(qpath) => {
+          if let Err(err) = self.db.transaction(|uow| {
+            plugin_uninstall_operations::mark_content_quarantined(uow.conn(), op_id, &qpath.to_string_lossy())?;
+            Ok(())
+          }) {
+            // Journal failed after move: attempt restore; only reopen availability after reverify.
+            return Err(self.fail_uninstall_with_restore(
+              package_digest,
+              op_id,
+              Some(&qpath),
+              err,
+              "quarantine_journal_failed",
+            ));
+          }
+          Some(qpath)
+        }
+        Err(err) => {
+          // Move never happened; content still on disk — safe to reopen availability.
+          if let Err(journal_err) = self.db.transaction(|uow| {
+            installed_plugin_versions::set_content_available(uow.conn(), package_digest, true)?;
+            plugin_uninstall_operations::mark_failed(uow.conn(), op_id, "content_quarantine_failed")?;
+            Ok(())
+          }) {
+            return Err(StorageError::Internal(format!(
+              "{err}; quarantine failed and journal reopen also failed: {journal_err}"
+            )));
+          }
+          return Err(err);
+        }
+      }
     } else {
       None
     };
 
+    #[cfg(test)]
+    if self.take_catalog_delete_fault() {
+      return Err(self.fail_uninstall_with_restore(
+        package_digest,
+        op_id,
+        quarantine_path.as_deref(),
+        StorageError::Internal("injected catalog delete failure".into()),
+        "catalog_delete_failed",
+      ));
+    }
+
     match self.db.transaction(|uow| {
+      // Final dependency re-check while gated and after content move.
+      let version = installed_plugin_versions::get(uow.conn(), package_digest)?;
+      reject_if_package_has_dependencies(uow.conn(), package_digest, &version.plugin_id, &version.version)?;
       plugin_package_approvals::delete_for_package(uow.conn(), package_digest)?;
       installed_plugin_versions::clear_default_if_matches(uow.conn(), package_digest)?;
       installed_plugin_versions::delete(uow.conn(), package_digest)?;
@@ -1212,13 +1345,13 @@ impl PluginPackageService {
     }) {
       Ok(()) => {}
       Err(err) => {
-        self.db.transaction(|uow| {
-          plugin_uninstall_operations::mark_failed(uow.conn(), op_id, "catalog_delete_failed")?;
-          Ok(())
-        })?;
-        // Content is quarantined; leave journal failed for recovery to finish catalog delete.
-        let _ = quarantine_path;
-        return Err(err);
+        return Err(self.fail_uninstall_with_restore(
+          package_digest,
+          op_id,
+          quarantine_path.as_deref(),
+          err,
+          "catalog_delete_failed",
+        ));
       }
     }
 
@@ -1227,6 +1360,174 @@ impl PluginPackageService {
       Ok(())
     })?;
     Ok(())
+  }
+
+  fn restore_package_from_quarantine(&self, package_digest: &str, quarantine_path: &Path) -> Result<(), StorageError> {
+    let dest = self.store_package_dir(package_digest);
+    if dest.exists() {
+      return Ok(());
+    }
+    if !quarantine_path.exists() {
+      return Err(StorageError::Internal(format!(
+        "quarantine path missing for package {package_digest}"
+      )));
+    }
+    std::fs::rename(quarantine_path, &dest).map_err(|e| StorageError::Internal(e.to_string()))?;
+    Ok(())
+  }
+
+  /// Test-only restore fault injection.
+  #[cfg(test)]
+  pub fn set_restore_fault(&self, fault: Option<UninstallRestoreFault>) {
+    *self.restore_fault.lock().unwrap_or_else(|e| e.into_inner()) = fault;
+  }
+
+  /// Test-only: force catalog delete to fail after quarantine (exercises restore).
+  #[cfg(test)]
+  pub fn set_catalog_delete_fault(&self, enabled: bool) {
+    *self.catalog_delete_fault.lock().unwrap_or_else(|e| e.into_inner()) = enabled;
+  }
+
+  #[cfg(test)]
+  fn take_catalog_delete_fault(&self) -> bool {
+    let mut guard = self.catalog_delete_fault.lock().unwrap_or_else(|e| e.into_inner());
+    if *guard {
+      *guard = false;
+      true
+    } else {
+      false
+    }
+  }
+
+  #[cfg(test)]
+  fn take_restore_fault(&self, expected: UninstallRestoreFault) -> bool {
+    let mut guard = self.restore_fault.lock().unwrap_or_else(|e| e.into_inner());
+    if *guard == Some(expected) {
+      *guard = None;
+      true
+    } else {
+      false
+    }
+  }
+
+  /// Restore store content and re-verify archive digest before reopening availability.
+  fn restore_and_reverify_package(&self, package_digest: &str, quarantine_path: &Path) -> Result<(), StorageError> {
+    #[cfg(test)]
+    if self.take_restore_fault(UninstallRestoreFault::BeforeRestore) {
+      return Err(StorageError::Internal("injected restore failure".into()));
+    }
+    self.restore_package_from_quarantine(package_digest, quarantine_path)?;
+    #[cfg(test)]
+    if self.take_restore_fault(UninstallRestoreFault::AfterRestoreBeforeRehash) {
+      return Err(StorageError::Internal("injected rehash failure".into()));
+    }
+    let archive = self.package_archive_path(package_digest);
+    if !archive.is_file() {
+      return Err(StorageError::Internal(format!(
+        "restored package archive missing for {package_digest}"
+      )));
+    }
+    let digest = crate::services::plugin_package::hash_file(&archive)
+      .map_err(|e| StorageError::Internal(format!("failed to rehash restored package: {}", e.message)))?;
+    if digest != package_digest {
+      return Err(StorageError::Internal(format!(
+        "restored package archive digest mismatch for {package_digest}"
+      )));
+    }
+    Ok(())
+  }
+
+  /// On uninstall failure after content may have moved: restore only reopens availability after reverify.
+  /// No-quarantine path requires canonical store archive + exact digest before content_available=true.
+  fn fail_uninstall_with_restore(
+    &self,
+    package_digest: &str,
+    op_id: Uuid,
+    quarantine_path: Option<&Path>,
+    primary_err: StorageError,
+    failure_code: &str,
+  ) -> StorageError {
+    let restore_result = match quarantine_path {
+      Some(qpath) => self.restore_and_reverify_package(package_digest, qpath),
+      None => {
+        // No quarantine move happened: only reopen when the store archive is present and matches.
+        if self.package_store_archive_matches(package_digest) {
+          Ok(())
+        } else {
+          Err(StorageError::Internal(format!(
+            "store archive missing or digest mismatch for {package_digest} (no quarantine path)"
+          )))
+        }
+      }
+    };
+    match restore_result {
+      Ok(()) => {
+        #[cfg(test)]
+        if self.take_restore_fault(UninstallRestoreFault::AfterRehashBeforeAvailability) {
+          return StorageError::Internal(format!(
+            "{primary_err}; injected failure after restore/rehash before availability reopen"
+          ));
+        }
+        // Gate availability on a final store reverify (covers no-quarantine and restore paths).
+        if !self.package_store_archive_matches(package_digest) {
+          let journal = self.db.transaction(|uow| {
+            plugin_uninstall_operations::mark_failed(uow.conn(), op_id, &format!("{failure_code}_store_unverified"))?;
+            Ok(())
+          });
+          return match journal {
+            Ok(()) => StorageError::Internal(format!(
+              "{primary_err}; store archive digest reverify failed before availability reopen"
+            )),
+            Err(journal_err) => StorageError::Internal(format!(
+              "{primary_err}; store reverify failed and journal mark_failed also failed: {journal_err}"
+            )),
+          };
+        }
+        let journal = self.db.transaction(|uow| {
+          #[cfg(test)]
+          if self.take_restore_fault(UninstallRestoreFault::AvailabilityWrite) {
+            return Err(StorageError::Internal("injected availability write failure".into()));
+          }
+          if installed_plugin_versions::get_optional(uow.conn(), package_digest)?.is_some() {
+            installed_plugin_versions::set_content_available(uow.conn(), package_digest, true)?;
+          }
+          #[cfg(test)]
+          if self.take_restore_fault(UninstallRestoreFault::MarkFailedWrite) {
+            return Err(StorageError::Internal("injected mark_failed write failure".into()));
+          }
+          // Terminal success state (not failed): excluded from unfinished recovery replay.
+          if quarantine_path.is_some() {
+            plugin_uninstall_operations::mark_rolled_back(uow.conn(), op_id, failure_code)?;
+          } else {
+            plugin_uninstall_operations::mark_restored(uow.conn(), op_id, failure_code)?;
+          }
+          Ok(())
+        });
+        match journal {
+          Ok(()) => primary_err,
+          Err(journal_err) => StorageError::Internal(format!(
+            "{primary_err}; restore succeeded but journal/availability update failed: {journal_err}"
+          )),
+        }
+      }
+      Err(restore_err) => {
+        // Never mark content_available=true when restore/reverify failed — leave unavailable + journal.
+        let journal = self.db.transaction(|uow| {
+          #[cfg(test)]
+          if self.take_restore_fault(UninstallRestoreFault::MarkFailedWrite) {
+            return Err(StorageError::Internal("injected mark_failed write failure".into()));
+          }
+          plugin_uninstall_operations::mark_failed(uow.conn(), op_id, &format!("{failure_code}_restore_failed"))?;
+          Ok(())
+        });
+        match journal {
+          Ok(()) => StorageError::Internal(format!("{primary_err}; package restore/reverify failed: {restore_err}")),
+          Err(journal_err) => StorageError::Internal(format!(
+            "{primary_err}; package restore/reverify failed: {restore_err}; journal mark_failed also failed: {journal_err}"
+          )),
+        }
+      }
+    }
   }
 
   pub fn version_dependencies(&self, package_digest: &str) -> Result<PluginVersionDependenciesDto, StorageError> {
@@ -1273,6 +1574,7 @@ impl PluginPackageService {
         files: vec![],
         capabilities: vec![],
         configuration_schema: None,
+        config_schema_version: None,
         credential_slots: vec![],
         permissions: Default::default(),
         ui: Default::default(),
@@ -1451,6 +1753,29 @@ fn clear_readonly_recursive(path: &Path) {
     perms.set_readonly(false);
     let _ = std::fs::set_permissions(path, perms);
   }
+}
+
+fn reject_if_package_has_dependencies(
+  conn: &rusqlite::Connection,
+  package_digest: &str,
+  plugin_id: &str,
+  version: &str,
+) -> Result<(), StorageError> {
+  let pin_users = integration_instances::list_by_package_digest(conn, package_digest)?;
+  let grant_count = crate::repositories::plugin_permission_grants::count_for_package(conn, package_digest)?;
+  let snapshot_ref =
+    crate::repositories::plugin_upgrade_snapshots::package_referenced_by_snapshot(conn, package_digest)?;
+  let users = installed_plugin_versions::count_integration_users(conn, plugin_id, version)?;
+  let is_default =
+    installed_plugin_versions::get_default(conn, plugin_id)?.is_some_and(|d| d.package_digest == package_digest);
+  if !pin_users.is_empty() || grant_count > 0 || snapshot_ref || !users.is_empty() || is_default {
+    return Err(StorageError::InUse(format!(
+      "package {package_digest} is in use (pins={}, grants={grant_count}, snapshots={snapshot_ref}, instances={}, is_default={is_default})",
+      pin_users.len(),
+      users.len()
+    )));
+  }
+  Ok(())
 }
 
 #[cfg(test)]

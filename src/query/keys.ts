@@ -57,3 +57,11 @@ export const pluginPackageKeys = {
   publishers: () => [...pluginPackageKeys.all, "publishers"] as const,
   dependencies: (packageDigest: string) => [...pluginPackageKeys.all, "dependencies", packageDigest] as const,
 };
+
+/** Runtime upgrade/rollback previews are ephemeral; mutations invalidate integration + package keys. */
+export const runtimeLifecycleKeys = {
+  all: ["runtime-lifecycle"] as const,
+  upgradePreview: (instanceId: string, targetPackageDigest: string) =>
+    [...runtimeLifecycleKeys.all, "upgrade-preview", instanceId, targetPackageDigest] as const,
+  rollbackPreview: (instanceId: string) => [...runtimeLifecycleKeys.all, "rollback-preview", instanceId] as const,
+};

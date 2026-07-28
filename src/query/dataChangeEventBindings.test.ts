@@ -21,6 +21,7 @@ import {
   pluginPackageKeys,
   profileKeys,
   providerKeys,
+  runtimeLifecycleKeys,
   settingsKeys,
   speechKeys,
 } from "./keys";
@@ -42,13 +43,17 @@ describe("DATA_CHANGE_EVENT_BINDINGS", () => {
     expect(new Set(events).size).toBe(events.length);
   });
 
-  test("DATA_SERVICE_INTEGRATIONS_CHANGED invalidates integrations, OCR, and Speech", () => {
+  test("DATA_SERVICE_INTEGRATIONS_CHANGED invalidates integrations, profiles, OCR, Speech, packages, lifecycle", () => {
     const binding = DATA_CHANGE_EVENT_BINDINGS.find((entry) => entry.event === DATA_SERVICE_INTEGRATIONS_CHANGED);
     expect(binding).toBeDefined();
-    expect(binding?.invalidateKeys).toEqual([integrationKeys.all, ocrKeys.all, speechKeys.all, pluginPackageKeys.all]);
-    expect(binding?.invalidateKeys[0]?.[0]).toBe(integrationKeys.all[0]);
-    expect(binding?.invalidateKeys[1]?.[0]).toBe(ocrKeys.all[0]);
-    expect(binding?.invalidateKeys[2]?.[0]).toBe(speechKeys.all[0]);
+    expect(binding?.invalidateKeys).toEqual([
+      integrationKeys.all,
+      profileKeys.all,
+      ocrKeys.all,
+      speechKeys.all,
+      pluginPackageKeys.all,
+      runtimeLifecycleKeys.all,
+    ]);
   });
 
   test("existing domains keep their invalidation prefixes", () => {

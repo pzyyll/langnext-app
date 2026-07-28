@@ -197,8 +197,34 @@ pub struct IntegrationInstance {
   pub health_status: IntegrationHealthStatus,
   pub last_validated_at: Option<String>,
   pub last_error_code: Option<String>,
+  /// Stable kebab-case runtime kind (`bundled-rust`, `wasm-component`, ...).
+  pub runtime_kind: String,
+  /// Exact installed package digest when runtime is package-backed.
+  pub package_digest: Option<String>,
+  /// Execution grant-set revision pinned with the package digest.
+  pub execution_grant_set_revision: Option<u64>,
+  /// Host-owned runtime pin state (`active`, `pending_activation`, `unavailable`).
+  pub runtime_state: String,
+  pub runtime_error_code: Option<String>,
+  pub runtime_error_message: Option<String>,
+  /// Serialized `RuntimeRequirementExport` for unresolved restore / export fidelity.
+  pub runtime_requirement_json: Option<String>,
   pub created_at: String,
   pub updated_at: String,
+}
+
+impl IntegrationInstance {
+  /// Default bundled-rust pin used by existing create/import paths until activation.
+  pub fn with_bundled_runtime(mut self) -> Self {
+    self.runtime_kind = "bundled-rust".into();
+    self.package_digest = None;
+    self.execution_grant_set_revision = None;
+    self.runtime_state = "active".into();
+    self.runtime_error_code = None;
+    self.runtime_error_message = None;
+    self.runtime_requirement_json = None;
+    self
+  }
 }
 
 /// Internal credential binding row (opaque vault ref stays internal).
@@ -238,6 +264,19 @@ pub struct IntegrationInstanceDto {
   pub effective_status: IntegrationEffectiveStatus,
   pub last_validated_at: Option<String>,
   pub last_error_code: Option<String>,
+  pub runtime_kind: String,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub package_digest: Option<String>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub execution_grant_set_revision: Option<u64>,
+  pub runtime_state: String,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub runtime_error_code: Option<String>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub runtime_error_message: Option<String>,
+  /// Exact unresolved/active runtime requirement (export v7 shape when present).
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub runtime_requirement: Option<crate::domain::runtime_lifecycle::RuntimeRequirementExport>,
   pub credential_slots: Vec<CredentialSlotStatusDto>,
   pub created_at: String,
   pub updated_at: String,

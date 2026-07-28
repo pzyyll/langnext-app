@@ -49,9 +49,9 @@ const CONFORMANCE_PACKAGE_DIGEST_HEX: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 /// Synthetic package-archive digest for the detect conformance package.
 const CONFORMANCE_DETECT_PACKAGE_DIGEST_HEX: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 /// Committed Component artifact digest for the translate fixture (file-index sha256).
-const CONFORMANCE_ARTIFACT_DIGEST_HEX: &str = "ea979f14bbbe04122a176d608a77ad95e49de16daf286930f8461c6b14e587ab";
+const CONFORMANCE_ARTIFACT_DIGEST_HEX: &str = "0552022658d9cdd88cfd277cca46344a086e6f48da648cae16571a3d7e45a892";
 /// Committed Component artifact digest for the detect fixture (file-index sha256).
-const CONFORMANCE_DETECT_ARTIFACT_DIGEST_HEX: &str = "86f9732bcc143c541ee916e03b37ad04478ebfefa51ab32fd027948532f2ec31";
+const CONFORMANCE_DETECT_ARTIFACT_DIGEST_HEX: &str = "11f70810a2e25add888be750ee019d9f98311b4bcb682a780b3419d130ed37d0";
 /// Conformance plugin ids declared in committed plugin.json manifests.
 const CONFORMANCE_PLUGIN_ID: &str = "langnext.conformance";
 const CONFORMANCE_DETECT_PLUGIN_ID: &str = "langnext.conformance.detect";

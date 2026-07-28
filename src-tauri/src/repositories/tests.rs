@@ -19,7 +19,7 @@ use crate::error::StorageError;
 use crate::repositories::{
   app_credentials, app_settings, credential_operations, installed_plugin_versions, integration_credential_bindings,
   integration_instances, ocr_prompt_templates, ocr_services, plugin_install_operations, plugin_package_approvals,
-  plugin_publishers, provider_instances, provider_models, translation_profiles,
+  plugin_permission_grants, plugin_publishers, provider_instances, provider_models, translation_profiles,
 };
 use crate::storage::Database;
 use uuid::Uuid;
@@ -840,6 +840,13 @@ fn integration_instance_crud_cas_and_slot_isolation() {
     health_status: IntegrationHealthStatus::Unconfigured,
     last_validated_at: None,
     last_error_code: None,
+    runtime_kind: "bundled-rust".into(),
+    package_digest: None,
+    execution_grant_set_revision: None,
+    runtime_state: "active".into(),
+    runtime_error_code: None,
+    runtime_error_message: None,
+    runtime_requirement_json: None,
     created_at: now.clone(),
     updated_at: now.clone(),
   };
@@ -1063,6 +1070,274 @@ fn installed_plugin_package_lifecycle_constraints() {
     plugin_install_operations::mark_verified(uow.conn(), op_id, &digest)?;
     plugin_install_operations::mark_db_committed(uow.conn(), op_id)?;
     plugin_install_operations::mark_finalized(uow.conn(), op_id)?;
+    Ok(())
+  })
+  .unwrap();
+}
+
+#[test]
+fn runtime_instance_pin_backfill_and_constraints() {
+  let dir = tempfile::tempdir().unwrap();
+  let db = Database::new(dir.path()).unwrap();
+  db.initialize().unwrap();
+  let now = now_rfc3339();
+  let id = new_id();
+
+  db.transaction(|uow| {
+    integration_instances::insert(
+      uow.conn(),
+      &IntegrationInstance {
+        id,
+        plugin_id: "com.langnext.google-cloud".into(),
+        plugin_version: "1.0.0".into(),
+        display_name: "Cloud".into(),
+        enabled: true,
+        config_json: "{}".into(),
+        config_schema_version: 1,
+        health_status: IntegrationHealthStatus::Ready,
+        last_validated_at: None,
+        last_error_code: None,
+        runtime_kind: "bundled-rust".into(),
+        package_digest: None,
+        execution_grant_set_revision: None,
+        runtime_state: "active".into(),
+        runtime_error_code: None,
+        runtime_error_message: None,
+        runtime_requirement_json: None,
+        created_at: now.clone(),
+        updated_at: now.clone(),
+      },
+    )?;
+    let loaded = integration_instances::get(uow.conn(), id)?;
+    assert_eq!(loaded.runtime_kind, "bundled-rust");
+    assert!(loaded.package_digest.is_none());
+    assert!(loaded.execution_grant_set_revision.is_none());
+
+    // Invalid wasm pin without package/grant is rejected by SQLite CHECK.
+    let bad = uow.conn().execute(
+      "INSERT INTO integration_instances (
+            id, plugin_id, plugin_version, display_name, enabled,
+            config_json, config_schema_version, health_status,
+            runtime_kind, package_digest, execution_grant_set_revision,
+            runtime_state, created_at, updated_at
+        ) VALUES (
+            'bad-wasm', 'com.example.x', '1.0.0', 'Bad', 1,
+            '{}', 1, 'ready',
+            'wasm-component', NULL, NULL,
+            'active', ?1, ?1
+        )",
+      rusqlite::params![now],
+    );
+    assert!(bad.is_err());
+    Ok(())
+  })
+  .unwrap();
+}
+
+#[test]
+fn runtime_instance_pin_package_approval_never_authorizes_execution() {
+  let (_dir, db) = setup();
+  let digest = "a".repeat(64);
+  let now = now_rfc3339();
+  let key_id = "com.example.keys.auth";
+  let fingerprint = "c".repeat(64);
+  let approval_id = new_id();
+  let subject_a = new_id();
+  let subject_b = new_id();
+  let provider_subject = new_id();
+
+  db.transaction(|uow| {
+    plugin_publishers::insert(
+      uow.conn(),
+      &PluginPublisher {
+        key_id: key_id.into(),
+        fingerprint: fingerprint.clone(),
+        public_key_hex: "d".repeat(64),
+        source: PublisherSource::UserApproved,
+        enabled: true,
+        revoked: false,
+        created_at: now.clone(),
+        updated_at: now.clone(),
+      },
+    )?;
+    installed_plugin_versions::insert(
+      uow.conn(),
+      &InstalledPluginVersion {
+        package_digest: digest.clone(),
+        plugin_id: "com.example.translate".into(),
+        version: "1.0.0".into(),
+        publisher_key_id: key_id.into(),
+        publisher_fingerprint: fingerprint.clone(),
+        runtime_kind: "wasm-component".into(),
+        manifest_json: "{}".into(),
+        permission_request_digest: "e".repeat(64),
+        content_available: true,
+        installed_at: now.clone(),
+      },
+    )?;
+    plugin_package_approvals::insert(
+      uow.conn(),
+      &PluginPackageApproval {
+        id: approval_id,
+        package_digest: digest.clone(),
+        revision: 1,
+        publisher_key_id: key_id.into(),
+        publisher_decision: PublisherDecision::UserApproved,
+        permission_request_digest: "e".repeat(64),
+        approved_at: now.clone(),
+      },
+    )?;
+    // Package approval id must never satisfy execution grant lookup.
+    assert!(plugin_package_approvals::get_execution_grant_set(uow.conn(), approval_id)?.is_none());
+    assert!(matches!(
+      plugin_permission_grants::reject_if_package_approval_id(uow.conn(), approval_id),
+      Err(StorageError::Validation(_))
+    ));
+
+    // Build full authority entries for subject A (capability + network + empty pages).
+    use crate::domain::runtime_lifecycle::{
+      CapabilityGrantEntryRecord, ExecutionGrantSetBundle, ExecutionGrantSetRecord, GrantSubjectKind,
+      NetworkGrantEntryRecord, PageGrantEntryRecord,
+    };
+    use crate::domain::runtime_plugin::{
+      AuthPolicyId, CapabilityId, EndpointId, HttpMethod, HttpsOrigin, NetworkGrantEntry, ResourceLimits,
+      compute_authority_digest,
+    };
+    let grant_a = new_id();
+    let caps = vec![CapabilityId::parse("translate.text@1").unwrap()];
+    let net = vec![NetworkGrantEntry::new(
+      CapabilityId::parse("translate.text@1").unwrap(),
+      EndpointId::parse("approved").unwrap(),
+      HttpsOrigin::parse("https://conformance.example").unwrap(),
+      HttpMethod::Get,
+      AuthPolicyId::parse("host.none.v1").unwrap(),
+      ResourceLimits::default(),
+    )];
+    let authority = compute_authority_digest(&caps, &net, &[]);
+    let bundle_a = ExecutionGrantSetBundle {
+      header: ExecutionGrantSetRecord {
+        id: grant_a,
+        revision: 1,
+        subject_kind: GrantSubjectKind::IntegrationInstance,
+        subject_id: subject_a,
+        plugin_id: "com.example.translate".into(),
+        plugin_version: "1.0.0".into(),
+        package_digest: digest.clone(),
+        permission_request_digest: "e".repeat(64),
+        authority_digest: authority.as_str().to_string(),
+        approved_at: now.clone(),
+      },
+      capabilities: vec![CapabilityGrantEntryRecord {
+        id: new_id(),
+        grant_set_id: grant_a,
+        capability_id: "translate.text@1".into(),
+      }],
+      network: vec![NetworkGrantEntryRecord {
+        id: new_id(),
+        grant_set_id: grant_a,
+        capability_id: "translate.text@1".into(),
+        endpoint_id: "approved".into(),
+        origin: "https://conformance.example".into(),
+        method: "GET".into(),
+        auth_policy: "host.none.v1".into(),
+        resource_mode: "bounded".into(),
+        max_request_bytes: 1024 * 1024,
+        max_response_bytes: 8 * 1024 * 1024,
+        max_stream_bytes: 16 * 1024 * 1024,
+        timeout_ms: 20_000,
+      }],
+      // Phase 9: page authority remains empty until explicit approval.
+      pages: Vec::<PageGrantEntryRecord>::new(),
+    };
+    plugin_permission_grants::insert_bundle(uow.conn(), &bundle_a)?;
+
+    // Cross-instance denial: subject B cannot load subject A grant.
+    assert!(matches!(
+      plugin_permission_grants::get_bundle_for_subject_package_revision(
+        uow.conn(),
+        GrantSubjectKind::IntegrationInstance,
+        subject_b,
+        &digest,
+        1,
+      ),
+      Err(StorageError::NotFound(_))
+    ));
+
+    // Cross-provider-instance denial: provider subject cannot load integration grant.
+    assert!(matches!(
+      plugin_permission_grants::get_bundle_for_subject_package_revision(
+        uow.conn(),
+        GrantSubjectKind::ProviderInstance,
+        provider_subject,
+        &digest,
+        1,
+      ),
+      Err(StorageError::NotFound(_))
+    ));
+
+    // Cross-capability: grant has translate.text@1 only — OCR capability entry absent.
+    let loaded = plugin_permission_grants::get_bundle(uow.conn(), grant_a)?;
+    assert!(!loaded.capabilities.iter().any(|c| c.capability_id == "ocr.image@1"));
+    // Cross-origin / method / auth / resource mode: only the exact network tuple is present.
+    assert_eq!(loaded.network.len(), 1);
+    assert_eq!(loaded.network[0].origin, "https://conformance.example");
+    assert_eq!(loaded.network[0].method, "GET");
+    assert_eq!(loaded.network[0].auth_policy, "host.none.v1");
+    assert_eq!(loaded.network[0].resource_mode, "bounded");
+    assert!(!loaded.network.iter().any(|n| n.origin == "https://other.example"));
+    assert!(!loaded.network.iter().any(|n| n.method == "POST"));
+    assert!(!loaded.network.iter().any(|n| n.auth_policy == "host.api-key.header.v1"));
+    assert!(!loaded.network.iter().any(|n| n.resource_mode == "unlimited"));
+
+    // Page / action / delegation fixtures: insert a page entry and deny mismatched lookups.
+    let page_id = new_id();
+    uow.conn().execute(
+      "INSERT INTO execution_grant_page_entries (
+            id, grant_set_id, page_id, allowed_actions_json,
+            delegated_capability_majors_json, delegated_endpoint_aliases_json
+        ) VALUES (?1, ?2, 'settings-page', '[\"open\"]', '[\"translate.text@1\"]', '[\"approved\"]')",
+      rusqlite::params![page_id.to_string(), grant_a.to_string()],
+    )?;
+    let with_page = plugin_permission_grants::get_bundle(uow.conn(), grant_a)?;
+    assert_eq!(with_page.pages.len(), 1);
+    assert_eq!(with_page.pages[0].page_id, "settings-page");
+    assert_eq!(with_page.pages[0].allowed_actions, vec!["open".to_string()]);
+    assert_eq!(
+      with_page.pages[0].delegated_capability_majors,
+      vec!["translate.text@1".to_string()]
+    );
+    assert_eq!(
+      with_page.pages[0].delegated_endpoint_aliases,
+      vec!["approved".to_string()]
+    );
+    // Cross-page / cross-action / cross-delegation denials (entry present but wrong values absent).
+    assert!(!with_page.pages.iter().any(|p| p.page_id == "other-page"));
+    assert!(
+      !with_page
+        .pages
+        .iter()
+        .any(|p| p.allowed_actions.iter().any(|a| a == "delete"))
+    );
+    assert!(
+      !with_page
+        .pages
+        .iter()
+        .any(|p| p.delegated_capability_majors.iter().any(|c| c == "ocr.image@1"))
+    );
+    assert!(
+      !with_page
+        .pages
+        .iter()
+        .any(|p| p.delegated_endpoint_aliases.iter().any(|e| e == "denied"))
+    );
+
+    // Domain digest includes page delegation + network resource mode.
+    use crate::domain::runtime_plugin::PageGrantEntry;
+    let page =
+      PageGrantEntry::parse_with_delegation("settings-page", &["open"], &["translate.text@1"], &["approved"]).unwrap();
+    let with_page_digest = compute_authority_digest(&caps, &net, &[page]);
+    let without_page_digest = compute_authority_digest(&caps, &net, &[]);
+    assert_ne!(with_page_digest.as_str(), without_page_digest.as_str());
     Ok(())
   })
   .unwrap();

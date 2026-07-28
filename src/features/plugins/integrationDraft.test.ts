@@ -70,6 +70,8 @@ function sampleInstance(overrides?: Partial<IntegrationInstanceDto>): Integratio
     effectiveStatus: "unvalidated",
     lastValidatedAt: null,
     lastErrorCode: null,
+    runtimeKind: "bundled-rust",
+    runtimeState: "active",
     credentialSlots: [{ slotId: credentialSlotId, hasCredential: true, credentialRevision: 2 }],
     createdAt: "t0",
     updatedAt: "t1",

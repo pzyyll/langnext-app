@@ -231,6 +231,10 @@ pub enum UninstallOperationState {
   CatalogDeleted,
   Finalized,
   Failed,
+  /// Terminal: content verified in store and availability reopened (uninstall aborted).
+  Restored,
+  /// Terminal: content restored from quarantine and availability reopened.
+  RolledBack,
 }
 
 impl UninstallOperationState {
@@ -241,6 +245,8 @@ impl UninstallOperationState {
       Self::CatalogDeleted => "catalog_deleted",
       Self::Finalized => "finalized",
       Self::Failed => "failed",
+      Self::Restored => "restored",
+      Self::RolledBack => "rolled_back",
     }
   }
 
@@ -251,8 +257,15 @@ impl UninstallOperationState {
       "catalog_deleted" => Ok(Self::CatalogDeleted),
       "finalized" => Ok(Self::Finalized),
       "failed" => Ok(Self::Failed),
+      "restored" => Ok(Self::Restored),
+      "rolled_back" => Ok(Self::RolledBack),
       other => Err(format!("unknown uninstall operation state: {other}")),
     }
+  }
+
+  /// States that still need startup recovery work.
+  pub fn is_unfinished(self) -> bool {
+    matches!(self, Self::Prepared | Self::ContentQuarantined | Self::CatalogDeleted)
   }
 }
 
@@ -596,6 +609,7 @@ mod tests {
         preferences_schema: None,
       }],
       configuration_schema: None,
+      config_schema_version: None,
       credential_slots: vec![],
       permissions: PermissionRequests {
         network: vec![],

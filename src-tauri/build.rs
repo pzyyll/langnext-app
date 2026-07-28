@@ -77,6 +77,12 @@ const APP_COMMANDS: &[&str] = &[
   "revoke_plugin_publisher",
   "uninstall_plugin_version",
   "get_plugin_version_dependencies",
+  // Runtime lifecycle (pin/upgrade/rollback)
+  "preview_integration_runtime_upgrade",
+  "apply_integration_runtime_upgrade",
+  "preview_integration_runtime_rollback",
+  "apply_integration_runtime_rollback",
+  "discard_integration_runtime_snapshot",
   // Service integrations (plugin instances)
   "list_service_integration_definitions",
   "list_integration_instances",

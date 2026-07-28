@@ -568,6 +568,13 @@ impl ServiceIntegrationService {
       health_status: health,
       last_validated_at: None,
       last_error_code: None,
+      runtime_kind: "bundled-rust".into(),
+      package_digest: None,
+      execution_grant_set_revision: None,
+      runtime_state: "active".into(),
+      runtime_error_code: None,
+      runtime_error_message: None,
+      runtime_requirement_json: None,
       created_at: now.clone(),
       updated_at: now.clone(),
     };
@@ -859,8 +866,7 @@ impl ServiceIntegrationService {
     instance: &IntegrationInstance,
     bindings: &[crate::domain::service_integration::IntegrationCredentialBinding],
   ) -> IntegrationInstanceDto {
-    let plugin_present = self.registry.contains(&instance.plugin_id);
-    let effective = derive_effective_status(instance.enabled, plugin_present, instance.health_status);
+    let registry_present = self.registry.contains(&instance.plugin_id);
     let credential_slots = if let Some(manifest) = self.registry.get(&instance.plugin_id) {
       let binding_map: HashMap<&str, _> = bindings.iter().map(|b| (b.slot_id.as_str(), b)).collect();
       manifest
@@ -886,6 +892,28 @@ impl ServiceIntegrationService {
         .collect()
     };
 
+    let runtime_requirement = instance
+      .runtime_requirement_json
+      .as_deref()
+      .and_then(|raw| serde_json::from_str(raw).ok());
+    // Derive plugin_missing from missing package pin / unresolved runtime as well as registry miss.
+    let plugin_present =
+      if instance.runtime_kind == "wasm-component" || instance.runtime_kind == "trusted-native-worker" {
+        match instance.package_digest.as_deref() {
+          Some(digest) if instance.runtime_state == "active" && instance.execution_grant_set_revision.is_some() => self
+            .db
+            .read(|conn| crate::repositories::installed_plugin_versions::get_optional(conn, digest))
+            .ok()
+            .flatten()
+            .map(|v| v.content_available)
+            .unwrap_or(false),
+          _ => false,
+        }
+      } else {
+        registry_present
+      };
+    let effective = derive_effective_status(instance.enabled, plugin_present, instance.health_status);
+
     IntegrationInstanceDto {
       id: instance.id,
       plugin_id: instance.plugin_id.clone(),
@@ -898,6 +926,13 @@ impl ServiceIntegrationService {
       effective_status: effective,
       last_validated_at: instance.last_validated_at.clone(),
       last_error_code: instance.last_error_code.clone(),
+      runtime_kind: instance.runtime_kind.clone(),
+      package_digest: instance.package_digest.clone(),
+      execution_grant_set_revision: instance.execution_grant_set_revision,
+      runtime_state: instance.runtime_state.clone(),
+      runtime_error_code: instance.runtime_error_code.clone(),
+      runtime_error_message: instance.runtime_error_message.clone(),
+      runtime_requirement,
       credential_slots,
       created_at: instance.created_at.clone(),
       updated_at: instance.updated_at.clone(),
@@ -1196,7 +1231,7 @@ mod tests {
 
   fn assert_capability_rejects_unconfigured(path: &Path, instance_id: Uuid) {
     let caps = capability_service_at(path);
-    let err = match caps.resolve_translate(instance_id, GOOGLE_TRANSLATE_TEXT_CAPABILITY_ID) {
+    let err = match caps.resolve_translate(instance_id, GOOGLE_TRANSLATE_TEXT_CAPABILITY_ID, b"{}".to_vec()) {
       Ok(_) => panic!("unconfigured instance must fail capability resolve"),
       Err(e) => e,
     };

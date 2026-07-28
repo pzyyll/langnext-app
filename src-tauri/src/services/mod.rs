@@ -18,7 +18,14 @@ pub mod plugin_schema;
 pub mod plugin_store;
 pub mod provider_http;
 pub mod providers;
+pub mod runtime_lifecycle;
 pub mod runtime_plugin_contracts;
+pub mod runtime_router;
+
+#[cfg(test)]
+mod runtime_lifecycle_installed_tests;
+#[cfg(test)]
+mod runtime_lifecycle_preference_tests;
 pub mod service_capabilities;
 pub mod service_integration_registry;
 pub mod service_integrations;
@@ -36,6 +43,8 @@ pub use ocr_services::OcrServiceService;
 pub use plugin_store::PluginPackageService;
 pub use provider_http::ProviderHttpService;
 pub use providers::ProviderService;
+pub use runtime_lifecycle::RuntimeLifecycleService;
+pub use runtime_router::RuntimeRouter;
 pub use service_integration_registry::ServiceIntegrationRegistry;
 pub use service_integrations::ServiceIntegrationService;
 pub use settings::SettingsService;

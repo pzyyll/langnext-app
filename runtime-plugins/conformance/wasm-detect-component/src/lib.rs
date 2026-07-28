@@ -49,17 +49,55 @@ fn mode(config: &[u8]) -> &'static str {
 
 struct Component;
 
+/// True when preferences are a non-empty JSON object (not `{}` / blank).
+fn preferences_nonempty(preferences: &[u8]) -> bool {
+    let trimmed = core::str::from_utf8(preferences)
+        .unwrap_or("")
+        .trim();
+    !(trimmed.is_empty() || trimmed == "{}")
+}
+
+/// Extract a JSON string value for a key without a full parser.
+fn extract_json_string(bytes: &[u8], key: &[u8]) -> Option<String> {
+    let mut i = 0;
+    while i + key.len() <= bytes.len() {
+        if &bytes[i..i + key.len()] == key {
+            let rest = &bytes[i + key.len()..];
+            if let Some(start) = rest.iter().position(|b| *b == b'"') {
+                let after = &rest[start + 1..];
+                if let Some(end) = after.iter().position(|b| *b == b'"') {
+                    return String::from_utf8(after[..end].to_vec()).ok();
+                }
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
 impl Guest for Component {
     fn detect(
         config: Vec<u8>,
-        _preferences: Vec<u8>,
+        preferences: Vec<u8>,
         _request: DetectRequest,
     ) -> Result<DetectResponse, PluginError> {
         match mode(&config) {
-            "success" => Ok(DetectResponse {
-                language_id: String::from("en"),
-                confidence: Some(SUCCESS_CONFIDENCE),
-            }),
+            "success" => {
+                // Prefer explicit `language` preference when present so host E2E can observe prefs
+                // without breaking language-id validation.
+                let language_id = extract_json_string(&preferences, b"\"language\"")
+                    .unwrap_or_else(|| String::from("en"));
+                let confidence = if preferences_nonempty(&preferences) {
+                    // Distinct from the empty-prefs path so hosts can assert prefs were received.
+                    Some(0.91)
+                } else {
+                    Some(SUCCESS_CONFIDENCE)
+                };
+                Ok(DetectResponse {
+                    language_id,
+                    confidence,
+                })
+            }
             "failure" => Err(PluginError::UnsupportedLanguage(String::from(
                 "conformance failure mode",
             ))),

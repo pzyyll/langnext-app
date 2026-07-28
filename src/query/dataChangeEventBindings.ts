@@ -19,6 +19,7 @@ import {
   pluginPackageKeys,
   profileKeys,
   providerKeys,
+  runtimeLifecycleKeys,
   settingsKeys,
   speechKeys,
 } from "./keys";
@@ -61,9 +62,15 @@ export const DATA_CHANGE_EVENT_BINDINGS: readonly DataChangeEventBinding[] = [
   },
   {
     event: DATA_SERVICE_INTEGRATIONS_CHANGED,
-    // Integration health/rebind affects plugin OCR/Speech labels and readiness.
-    // Package in_use is derived from integration bindings, so package lists must refresh too.
-    invalidateKeys: [integrationKeys.all, ocrKeys.all, speechKeys.all, pluginPackageKeys.all],
+    // Runtime upgrade/rollback CAS co-mutates profiles/OCR/Speech preferences and package in_use.
+    invalidateKeys: [
+      integrationKeys.all,
+      profileKeys.all,
+      ocrKeys.all,
+      speechKeys.all,
+      pluginPackageKeys.all,
+      runtimeLifecycleKeys.all,
+    ],
   },
   {
     event: DATA_APP_SETTINGS_CHANGED,

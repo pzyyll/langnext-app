@@ -806,6 +806,7 @@ mod tests {
       files: vec![],
       capabilities: vec![],
       configuration_schema: None,
+      config_schema_version: None,
       credential_slots: slots
         .iter()
         .map(|(id, required)| CredentialSlotDecl {

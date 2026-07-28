@@ -60,6 +60,12 @@ impl CompiledComponentCache {
     }
   }
 
+  /// Drop every cached artifact (lifecycle CAS commit / package pin change).
+  pub fn clear(&self) {
+    let mut entries = self.entries.lock().expect("cache entries poisoned");
+    entries.clear();
+  }
+
   /// Insert a serialized Component. If the cache is full, evict the least-recently-used entry
   /// before inserting. No-op if `identity` already exists (the existing entry is kept).
   pub fn insert(&self, identity: String, serialized: Vec<u8>) {

@@ -913,6 +913,157 @@ fn integration_from_export(
   // Credential-bearing plugins stay unconfigured until re-auth.
   // Zero-secret Web instances with complete validated config are Ready and executable.
   let health_status = imported_integration_health(&exported.plugin_id, &config_json, exported.config_schema_version);
+  // Preserve exact runtime requirements. Never invent digests, never download packages, never
+  // issue grants or activate. Package-backed imports stay unresolved until local install +
+  // trust + permission approval + explicit activation.
+  // v7 requires an explicit runtime record. Missing runtime is only legal on pre-v7 documents
+  // after sequential normalization (which synthesizes bundled-rust). Never activate missing
+  // package-backed pins as bundled.
+  let Some(req) = exported.runtime.as_ref() else {
+    // Fail closed: a normalized plan must always carry runtime after v6→v7.
+    return IntegrationInstance {
+      id,
+      plugin_id: exported.plugin_id.clone(),
+      plugin_version: exported.plugin_version.clone(),
+      display_name: exported.display_name.clone(),
+      enabled: false,
+      config_json,
+      config_schema_version: exported.config_schema_version,
+      health_status: IntegrationHealthStatus::Unconfigured,
+      last_validated_at: None,
+      last_error_code: Some("invalid_runtime".into()),
+      runtime_kind: "bundled-rust".into(),
+      package_digest: None,
+      execution_grant_set_revision: None,
+      runtime_state: "unavailable".into(),
+      runtime_error_code: Some("invalid_runtime".into()),
+      runtime_error_message: Some("import is missing runtime requirement".into()),
+      runtime_requirement_json: None,
+      created_at,
+      updated_at,
+    };
+  };
+  if req.plugin_id != exported.plugin_id || req.plugin_version != exported.plugin_version {
+    return IntegrationInstance {
+      id,
+      plugin_id: exported.plugin_id.clone(),
+      plugin_version: exported.plugin_version.clone(),
+      display_name: exported.display_name.clone(),
+      enabled: false,
+      config_json,
+      config_schema_version: exported.config_schema_version,
+      health_status: IntegrationHealthStatus::Unconfigured,
+      last_validated_at: None,
+      last_error_code: Some("invalid_runtime".into()),
+      runtime_kind: "bundled-rust".into(),
+      package_digest: None,
+      execution_grant_set_revision: None,
+      runtime_state: "unavailable".into(),
+      runtime_error_code: Some("invalid_runtime".into()),
+      runtime_error_message: Some("runtime identity does not match outer instance fields".into()),
+      runtime_requirement_json: None,
+      created_at,
+      updated_at,
+    };
+  }
+  let requirement_json = match serde_json::to_string(req) {
+    Ok(v) => Some(v),
+    Err(_) => None,
+  };
+  let parsed_kind = crate::domain::runtime_lifecycle::parse_runtime_kind(&req.runtime_kind);
+  let (
+    runtime_kind,
+    package_digest,
+    execution_grant_set_revision,
+    runtime_state,
+    runtime_error_code,
+    runtime_error_message,
+    runtime_requirement_json,
+  ) = match parsed_kind {
+    Ok(crate::domain::runtime_plugin::RuntimeKind::WasmComponent)
+    | Ok(crate::domain::runtime_plugin::RuntimeKind::TrustedNativeWorker) => {
+      use crate::domain::runtime_plugin::{PackageDigest, PluginApiVersion, PublisherKeyFingerprint, PublisherKeyId};
+      // Empty-only trim; parsers get the raw wire string so whitespace fails closed.
+      let digest_ok = req.package_digest.as_deref().and_then(|d| {
+        if d.trim().is_empty() {
+          None
+        } else {
+          PackageDigest::parse(d).ok()
+        }
+      });
+      let key_ok = req.publisher_key_id.as_deref().and_then(|k| {
+        if k.trim().is_empty() {
+          None
+        } else {
+          PublisherKeyId::parse(k).ok()
+        }
+      });
+      let fp_ok = req.publisher_key_fingerprint.as_deref().and_then(|f| {
+        if f.trim().is_empty() {
+          None
+        } else {
+          PublisherKeyFingerprint::parse(f).ok()
+        }
+      });
+      let api_ok = req.plugin_api_version.as_deref().and_then(|a| {
+        if a.trim().is_empty() {
+          None
+        } else {
+          PluginApiVersion::parse(a).ok()
+        }
+      });
+      if digest_ok.is_none() || key_ok.is_none() || fp_ok.is_none() || api_ok.is_none() {
+        (
+          req.runtime_kind.clone(),
+          None,
+          None,
+          "unavailable".to_string(),
+          Some("invalid_runtime".to_string()),
+          Some("package-backed runtime requirement is incomplete or invalid".to_string()),
+          requirement_json,
+        )
+      } else {
+        (
+          req.runtime_kind.clone(),
+          digest_ok.map(|d| d.as_str().to_string()),
+          None, // grant issued only on explicit activation
+          "unavailable".to_string(),
+          Some("plugin_missing".to_string()),
+          Some("required package is not installed or not activated".to_string()),
+          requirement_json,
+        )
+      }
+    }
+    Ok(crate::domain::runtime_plugin::RuntimeKind::LegacyFrontendProvider) => (
+      req.runtime_kind.clone(),
+      None,
+      None,
+      "pending_activation".to_string(),
+      None,
+      None,
+      requirement_json,
+    ),
+    Ok(crate::domain::runtime_plugin::RuntimeKind::BundledRust) => (
+      req.runtime_kind.clone(),
+      None,
+      None,
+      "active".to_string(),
+      None,
+      None,
+      requirement_json,
+    ),
+    Err(_) => (
+      // Unknown runtimeKind must never import as active.
+      req.runtime_kind.clone(),
+      None,
+      None,
+      "unavailable".to_string(),
+      Some("invalid_runtime".to_string()),
+      Some("unknown runtimeKind".to_string()),
+      requirement_json,
+    ),
+  };
+
   IntegrationInstance {
     id,
     plugin_id: exported.plugin_id.clone(),
@@ -924,6 +1075,13 @@ fn integration_from_export(
     health_status,
     last_validated_at: None,
     last_error_code: None,
+    runtime_kind,
+    package_digest,
+    execution_grant_set_revision,
+    runtime_state,
+    runtime_error_code,
+    runtime_error_message,
+    runtime_requirement_json,
     created_at,
     updated_at,
   }
@@ -1369,6 +1527,7 @@ mod tests {
       config_json: config_json.into(),
       config_schema_version: 1,
       health_status: "ready".into(),
+      runtime: None,
       created_at: now_rfc3339(),
       updated_at: now_rfc3339(),
     }
@@ -1384,6 +1543,7 @@ mod tests {
       config_json: r#"{"project-id":"demo","location":"global","proxy-mode":"inherit"}"#.into(),
       config_schema_version: 1,
       health_status: "ready".into(),
+      runtime: None,
       created_at: now_rfc3339(),
       updated_at: now_rfc3339(),
     }
@@ -1469,6 +1629,7 @@ mod tests {
         config_json: r#"{"projectId":"demo","location":"global","proxyMode":"inherit","channel":"gtx"}"#.into(),
         config_schema_version: 1,
         health_status: "ready".into(),
+        runtime: None,
         created_at: now_rfc3339(),
         updated_at: now_rfc3339(),
       },

@@ -123,7 +123,7 @@ pub fn get_execution_grant_set(conn: &Connection, id: Uuid) -> Result<Option<(St
   )
 }
 
-/// Insert a Phase-4-reserved execution grant-set header (tests only until Phase 4).
+/// Insert an execution grant-set header (tests only).
 #[cfg(test)]
 pub fn insert_execution_grant_set_for_test(
   conn: &Connection,
@@ -138,16 +138,18 @@ pub fn insert_execution_grant_set_for_test(
 ) -> Result<(), StorageError> {
   conn.execute(
     "INSERT INTO execution_grant_sets (
-          id, revision, subject_kind, subject_id, plugin_id,
-          package_digest, permission_request_digest, approved_at
-      ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+          id, revision, subject_kind, subject_id, plugin_id, plugin_version,
+          package_digest, permission_request_digest, authority_digest, approved_at
+      ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
     params![
       id.to_string(),
       revision as i64,
       subject_kind,
       subject_id,
       plugin_id,
+      "1.0.0",
       package_digest,
+      permission_request_digest,
       permission_request_digest,
       approved_at,
     ],

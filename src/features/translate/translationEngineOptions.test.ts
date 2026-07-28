@@ -69,6 +69,8 @@ function instance(
     effectiveStatus,
     lastValidatedAt: null,
     lastErrorCode: null,
+    runtimeKind: "bundled-rust",
+    runtimeState: "active",
     credentialSlots: [],
     createdAt: "t",
     updatedAt: "t",

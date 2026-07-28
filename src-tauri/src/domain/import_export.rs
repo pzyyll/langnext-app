@@ -13,10 +13,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
-/// Current configuration export format version (Speech services + OCR + integrations).
-pub const EXPORT_FORMAT_VERSION: u32 = 6;
-/// Supported import format versions (normalized sequentially to v6).
-pub const SUPPORTED_EXPORT_FORMAT_VERSIONS: &[u32] = &[2, 3, 4, 5, 6];
+/// Current configuration export format version (runtime requirements + Speech + OCR + integrations).
+pub const EXPORT_FORMAT_VERSION: u32 = 7;
+/// Supported import format versions (normalized sequentially to v7).
+pub const SUPPORTED_EXPORT_FORMAT_VERSIONS: &[u32] = &[2, 3, 4, 5, 6, 7];
 
 /// Sanitized integration instance row for export/import (no secrets, refs, or journal data).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -32,6 +32,9 @@ pub struct IntegrationInstanceExport {
   pub config_schema_version: u32,
   /// Last known health (may become unconfigured after import until re-auth).
   pub health_status: String,
+  /// Exact runtime requirement (v7+). Older formats normalize to bundled-rust.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub runtime: Option<crate::domain::runtime_lifecycle::RuntimeRequirementExport>,
   pub created_at: String,
   pub updated_at: String,
 }
@@ -93,7 +96,7 @@ pub struct SpeechServiceExport {
   pub updated_at: String,
 }
 
-/// Current (v6) configuration export document.
+/// Current (v7) configuration export document.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfigurationExport {
@@ -115,6 +118,28 @@ pub struct ConfigurationExport {
   #[serde(default)]
   pub ocr_prompt_templates: Vec<OcrPromptTemplateExport>,
   /// Speech services (capability-backed); audio/text/credentials omitted.
+  #[serde(default)]
+  pub speech_services: Vec<SpeechServiceExport>,
+  pub app_settings: AppSettingsV1,
+}
+
+/// v6 document shape (Speech services; no required runtime requirement records).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigurationExportV6 {
+  pub format_version: u32,
+  pub exported_at: String,
+  pub providers: Vec<ProviderExport>,
+  pub models: Vec<ProviderModel>,
+  pub translation_profiles: Vec<TranslationProfile>,
+  pub profile_models: Vec<TranslationProfileTarget>,
+  pub profile_prompt_templates: Vec<TranslationProfilePromptTemplate>,
+  #[serde(default)]
+  pub integration_instances: Vec<IntegrationInstanceExport>,
+  #[serde(default)]
+  pub ocr_services: Vec<OcrServiceExport>,
+  #[serde(default)]
+  pub ocr_prompt_templates: Vec<OcrPromptTemplateExport>,
   #[serde(default)]
   pub speech_services: Vec<SpeechServiceExport>,
   pub app_settings: AppSettingsV1,
@@ -353,7 +378,7 @@ pub fn normalize_v4_to_v5(value: serde_json::Value) -> Result<ConfigurationExpor
 }
 
 /// Normalize a v5 document to v6 (add empty Speech services array).
-pub fn normalize_v5_to_v6(value: serde_json::Value) -> Result<ConfigurationExport, String> {
+pub fn normalize_v5_to_v6(value: serde_json::Value) -> Result<ConfigurationExportV6, String> {
   let v5: ConfigurationExportV5 =
     serde_json::from_value(value).map_err(|e| format!("invalid v5 configuration document: {e}"))?;
   if v5.format_version != 5 {
@@ -362,8 +387,8 @@ pub fn normalize_v5_to_v6(value: serde_json::Value) -> Result<ConfigurationExpor
       v5.format_version
     ));
   }
-  Ok(ConfigurationExport {
-    format_version: EXPORT_FORMAT_VERSION,
+  Ok(ConfigurationExportV6 {
+    format_version: 6,
     exported_at: v5.exported_at,
     providers: v5.providers,
     models: v5.models,
@@ -378,7 +403,55 @@ pub fn normalize_v5_to_v6(value: serde_json::Value) -> Result<ConfigurationExpor
   })
 }
 
-/// Parse an untrusted JSON value into a normalized v6 configuration document.
+/// Normalize a v6 document to v7 (map integrations/providers to Bundled Rust identities).
+pub fn normalize_v6_to_v7(value: serde_json::Value) -> Result<ConfigurationExport, String> {
+  let v6: ConfigurationExportV6 =
+    serde_json::from_value(value).map_err(|e| format!("invalid v6 configuration document: {e}"))?;
+  if v6.format_version != 6 {
+    return Err(format!(
+      "normalize_v6_to_v7 expects formatVersion 6, got {}",
+      v6.format_version
+    ));
+  }
+  let integration_instances = v6
+    .integration_instances
+    .into_iter()
+    .map(|mut row| {
+      if row.runtime.is_none() {
+        row.runtime = Some(crate::domain::runtime_lifecycle::RuntimeRequirementExport {
+          plugin_id: row.plugin_id.clone(),
+          plugin_version: row.plugin_version.clone(),
+          runtime_kind: "bundled-rust".into(),
+          package_digest: None,
+          publisher_key_id: None,
+          publisher_key_fingerprint: None,
+          plugin_api_version: None,
+          config_schema_version: row.config_schema_version,
+          required_capability_majors: Vec::new(),
+          provider_runtime_kind: None,
+          provider_package_digest: None,
+        });
+      }
+      row
+    })
+    .collect();
+  Ok(ConfigurationExport {
+    format_version: EXPORT_FORMAT_VERSION,
+    exported_at: v6.exported_at,
+    providers: v6.providers,
+    models: v6.models,
+    translation_profiles: v6.translation_profiles,
+    profile_models: v6.profile_models,
+    profile_prompt_templates: v6.profile_prompt_templates,
+    integration_instances,
+    ocr_services: v6.ocr_services,
+    ocr_prompt_templates: v6.ocr_prompt_templates,
+    speech_services: v6.speech_services,
+    app_settings: v6.app_settings,
+  })
+}
+
+/// Parse an untrusted JSON value into a normalized v7 configuration document.
 pub fn parse_and_normalize_export_document(value: serde_json::Value) -> Result<ConfigurationExport, String> {
   let version = value
     .get("formatVersion")
@@ -392,19 +465,140 @@ pub fn parse_and_normalize_export_document(value: serde_json::Value) -> Result<C
       let v3_value = normalize_v2_to_v3(value)?;
       let v4 = normalize_v3_to_v4(v3_value)?;
       let v5 = normalize_v4_to_v5(serde_json::to_value(v4).map_err(|e| e.to_string())?)?;
-      normalize_v5_to_v6(serde_json::to_value(v5).map_err(|e| e.to_string())?)
+      let v6 = normalize_v5_to_v6(serde_json::to_value(v5).map_err(|e| e.to_string())?)?;
+      normalize_v6_to_v7(serde_json::to_value(v6).map_err(|e| e.to_string())?)
     }
     3 => {
       let v4 = normalize_v3_to_v4(value)?;
       let v5 = normalize_v4_to_v5(serde_json::to_value(v4).map_err(|e| e.to_string())?)?;
-      normalize_v5_to_v6(serde_json::to_value(v5).map_err(|e| e.to_string())?)
+      let v6 = normalize_v5_to_v6(serde_json::to_value(v5).map_err(|e| e.to_string())?)?;
+      normalize_v6_to_v7(serde_json::to_value(v6).map_err(|e| e.to_string())?)
     }
     4 => {
       let v5 = normalize_v4_to_v5(value)?;
-      normalize_v5_to_v6(serde_json::to_value(v5).map_err(|e| e.to_string())?)
+      let v6 = normalize_v5_to_v6(serde_json::to_value(v5).map_err(|e| e.to_string())?)?;
+      normalize_v6_to_v7(serde_json::to_value(v6).map_err(|e| e.to_string())?)
     }
-    5 => normalize_v5_to_v6(value),
-    6 => serde_json::from_value(value).map_err(|e| format!("invalid v6 configuration document: {e}")),
+    5 => {
+      let v6 = normalize_v5_to_v6(value)?;
+      normalize_v6_to_v7(serde_json::to_value(v6).map_err(|e| e.to_string())?)
+    }
+    6 => normalize_v6_to_v7(value),
+    7 => {
+      let doc: ConfigurationExport =
+        serde_json::from_value(value).map_err(|e| format!("invalid v7 configuration document: {e}"))?;
+      // v7 documents must carry explicit runtime records; only v2–v6 normalization may synthesize
+      // bundled identities. Fail closed on missing/malformed package-backed fields.
+      for row in &doc.integration_instances {
+        let Some(req) = row.runtime.as_ref() else {
+          return Err(format!(
+            "v7 integration {} is missing required runtime requirement",
+            row.id
+          ));
+        };
+        if req.plugin_id != row.plugin_id || req.plugin_version != row.plugin_version {
+          return Err(format!(
+            "v7 integration {} runtime identity does not match outer fields",
+            row.id
+          ));
+        }
+        if req.config_schema_version != row.config_schema_version {
+          return Err(format!(
+            "v7 integration {} runtime config_schema_version mismatch",
+            row.id
+          ));
+        }
+        let kind = crate::domain::runtime_lifecycle::parse_runtime_kind(&req.runtime_kind)
+          .map_err(|e| format!("v7 integration {} has invalid runtimeKind: {e}", row.id))?;
+        // Domain parsers for plugin identity and schema majors (fail closed).
+        crate::domain::runtime_plugin::SemVerVersion::parse(&req.plugin_version)
+          .map_err(|e| format!("v7 integration {} has invalid pluginVersion: {e}", row.id))?;
+        if req.config_schema_version < 1 {
+          return Err(format!("v7 integration {} config_schema_version must be >= 1", row.id));
+        }
+        for major in &req.required_capability_majors {
+          crate::domain::runtime_plugin::CapabilityId::parse(major).map_err(|e| {
+            format!(
+              "v7 integration {} has invalid requiredCapabilityMajors entry: {e:?}",
+              row.id
+            )
+          })?;
+        }
+        match kind {
+          crate::domain::runtime_plugin::RuntimeKind::WasmComponent
+          | crate::domain::runtime_plugin::RuntimeKind::TrustedNativeWorker => {
+            // Trim only for empty-presence checks; domain parsers receive the raw string
+            // so surrounding whitespace fails closed.
+            let digest = req.package_digest.as_deref().ok_or_else(|| {
+              format!(
+                "v7 integration {} package-backed runtime is missing mandatory fields",
+                row.id
+              )
+            })?;
+            if digest.trim().is_empty() {
+              return Err(format!(
+                "v7 integration {} package-backed runtime is missing mandatory fields",
+                row.id
+              ));
+            }
+            crate::domain::runtime_plugin::PackageDigest::parse(digest)
+              .map_err(|e| format!("v7 integration {} has invalid packageDigest: {e}", row.id))?;
+            let key_id = req.publisher_key_id.as_deref().ok_or_else(|| {
+              format!(
+                "v7 integration {} package-backed runtime is missing mandatory fields",
+                row.id
+              )
+            })?;
+            if key_id.trim().is_empty() {
+              return Err(format!(
+                "v7 integration {} package-backed runtime is missing mandatory fields",
+                row.id
+              ));
+            }
+            crate::domain::runtime_plugin::PublisherKeyId::parse(key_id)
+              .map_err(|e| format!("v7 integration {} has invalid publisherKeyId: {e}", row.id))?;
+            let fingerprint = req.publisher_key_fingerprint.as_deref().ok_or_else(|| {
+              format!(
+                "v7 integration {} package-backed runtime is missing mandatory fields",
+                row.id
+              )
+            })?;
+            if fingerprint.trim().is_empty() {
+              return Err(format!(
+                "v7 integration {} package-backed runtime is missing mandatory fields",
+                row.id
+              ));
+            }
+            crate::domain::runtime_plugin::PublisherKeyFingerprint::parse(fingerprint)
+              .map_err(|e| format!("v7 integration {} has invalid publisherKeyFingerprint: {e}", row.id))?;
+            let api = req.plugin_api_version.as_deref().ok_or_else(|| {
+              format!(
+                "v7 integration {} package-backed runtime is missing mandatory fields",
+                row.id
+              )
+            })?;
+            if api.trim().is_empty() {
+              return Err(format!(
+                "v7 integration {} package-backed runtime is missing mandatory fields",
+                row.id
+              ));
+            }
+            crate::domain::runtime_plugin::PluginApiVersion::parse(api)
+              .map_err(|e| format!("v7 integration {} has invalid pluginApiVersion: {e}", row.id))?;
+          }
+          crate::domain::runtime_plugin::RuntimeKind::BundledRust => {
+            if req.package_digest.is_some() {
+              return Err(format!(
+                "v7 integration {} bundled runtime must not include package digest",
+                row.id
+              ));
+            }
+          }
+          crate::domain::runtime_plugin::RuntimeKind::LegacyFrontendProvider => {}
+        }
+      }
+      Ok(doc)
+    }
     other => Err(format!("unsupported formatVersion {other}")),
   }
 }
@@ -593,12 +787,39 @@ mod tests {
       app_settings: AppSettingsV1::default_document(),
     };
     let v6 = normalize_v5_to_v6(serde_json::to_value(&v5).unwrap()).unwrap();
-    assert_eq!(v6.format_version, EXPORT_FORMAT_VERSION);
+    assert_eq!(v6.format_version, 6);
     assert!(v6.speech_services.is_empty());
   }
 
   #[test]
-  fn parse_and_normalize_v5_yields_v6_empty_speech() {
+  fn import_format_v2_through_v7_normalizes_to_current() {
+    for version in [2_u32, 3, 4, 5, 6, 7] {
+      let mut value = serde_json::json!({
+        "formatVersion": version,
+        "exportedAt": "t",
+        "providers": [],
+        "models": [],
+        "translationProfiles": [],
+        "profileModels": [],
+        "profilePromptTemplates": [],
+        "appSettings": AppSettingsV1::default_document(),
+      });
+      if version >= 3 {
+        // v3+ flat profile shape is accepted by sequential normalization helpers.
+      }
+      if version == 7 {
+        value["integrationInstances"] = serde_json::json!([]);
+        value["ocrServices"] = serde_json::json!([]);
+        value["ocrPromptTemplates"] = serde_json::json!([]);
+        value["speechServices"] = serde_json::json!([]);
+      }
+      let doc = parse_and_normalize_export_document(value).unwrap_or_else(|e| panic!("v{version}: {e}"));
+      assert_eq!(doc.format_version, EXPORT_FORMAT_VERSION, "version {version}");
+    }
+  }
+
+  #[test]
+  fn parse_and_normalize_v5_yields_v7_empty_speech() {
     let v5 = ConfigurationExportV5 {
       format_version: 5,
       exported_at: "t".into(),
@@ -613,8 +834,43 @@ mod tests {
       app_settings: AppSettingsV1::default_document(),
     };
     let doc = parse_and_normalize_export_document(serde_json::to_value(&v5).unwrap()).unwrap();
-    assert_eq!(doc.format_version, 6);
+    assert_eq!(doc.format_version, 7);
     assert!(doc.speech_services.is_empty());
+  }
+
+  #[test]
+  fn runtime_plugin_export_v7_maps_legacy_integrations_to_bundled_rust() {
+    let v6 = ConfigurationExportV6 {
+      format_version: 6,
+      exported_at: "t".into(),
+      providers: vec![],
+      models: vec![],
+      translation_profiles: vec![],
+      profile_models: vec![],
+      profile_prompt_templates: vec![],
+      integration_instances: vec![IntegrationInstanceExport {
+        id: uuid::Uuid::nil(),
+        plugin_id: "com.langnext.google-cloud".into(),
+        plugin_version: "1.0.0".into(),
+        display_name: "Cloud".into(),
+        enabled: true,
+        config_json: "{}".into(),
+        config_schema_version: 1,
+        health_status: "ready".into(),
+        runtime: None,
+        created_at: "t".into(),
+        updated_at: "t".into(),
+      }],
+      ocr_services: vec![],
+      ocr_prompt_templates: vec![],
+      speech_services: vec![],
+      app_settings: AppSettingsV1::default_document(),
+    };
+    let doc = normalize_v6_to_v7(serde_json::to_value(&v6).unwrap()).unwrap();
+    assert_eq!(doc.format_version, 7);
+    let runtime = doc.integration_instances[0].runtime.as_ref().unwrap();
+    assert_eq!(runtime.runtime_kind, "bundled-rust");
+    assert!(runtime.package_digest.is_none());
   }
 
   #[test]
@@ -622,5 +878,305 @@ mod tests {
     let value = serde_json::json!({ "formatVersion": 99, "exportedAt": "t" });
     let err = parse_and_normalize_export_document(value).unwrap_err();
     assert!(err.contains("unsupported formatVersion"));
+  }
+
+  #[test]
+  fn v7_missing_runtime_fails_closed() {
+    let value = serde_json::json!({
+      "formatVersion": 7,
+      "exportedAt": "t",
+      "providers": [],
+      "models": [],
+      "translationProfiles": [],
+      "profileModels": [],
+      "profilePromptTemplates": [],
+      "integrationInstances": [{
+        "id": "00000000-0000-0000-0000-000000000001",
+        "pluginId": "com.langnext.google-translate-web",
+        "pluginVersion": "1.0.0",
+        "displayName": "Web",
+        "enabled": true,
+        "configJson": "{}",
+        "configSchemaVersion": 1,
+        "healthStatus": "ready",
+        "createdAt": "t",
+        "updatedAt": "t"
+      }],
+      "ocrServices": [],
+      "ocrPromptTemplates": [],
+      "speechServices": [],
+      "appSettings": AppSettingsV1::default_document(),
+    });
+    let err = parse_and_normalize_export_document(value).unwrap_err();
+    assert!(
+      err.contains("missing required runtime") || err.contains("runtime"),
+      "expected missing runtime error, got {err}"
+    );
+  }
+
+  #[test]
+  fn v7_package_backed_missing_fingerprint_fails_closed() {
+    let value = serde_json::json!({
+      "formatVersion": 7,
+      "exportedAt": "t",
+      "providers": [],
+      "models": [],
+      "translationProfiles": [],
+      "profileModels": [],
+      "profilePromptTemplates": [],
+      "integrationInstances": [{
+        "id": "00000000-0000-0000-0000-000000000002",
+        "pluginId": "langnext.conformance",
+        "pluginVersion": "1.0.0",
+        "displayName": "Wasm",
+        "enabled": true,
+        "configJson": "{}",
+        "configSchemaVersion": 1,
+        "healthStatus": "ready",
+        "runtime": {
+          "pluginId": "langnext.conformance",
+          "pluginVersion": "1.0.0",
+          "runtimeKind": "wasm-component",
+          "packageDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "publisherKeyId": "com.example.keys.1",
+          "pluginApiVersion": "1.0",
+          "configSchemaVersion": 1,
+          "requiredCapabilityMajors": ["translate.text@1"]
+        },
+        "createdAt": "t",
+        "updatedAt": "t"
+      }],
+      "ocrServices": [],
+      "ocrPromptTemplates": [],
+      "speechServices": [],
+      "appSettings": AppSettingsV1::default_document(),
+    });
+    let err = parse_and_normalize_export_document(value).unwrap_err();
+    assert!(
+      err.contains("mandatory fields") || err.contains("fingerprint"),
+      "expected package-backed mandatory field error, got {err}"
+    );
+  }
+
+  #[test]
+  fn v7_unknown_runtime_kind_fails_closed() {
+    let value = serde_json::json!({
+      "formatVersion": 7,
+      "exportedAt": "t",
+      "providers": [],
+      "models": [],
+      "translationProfiles": [],
+      "profileModels": [],
+      "profilePromptTemplates": [],
+      "integrationInstances": [{
+        "id": "00000000-0000-0000-0000-000000000099",
+        "pluginId": "com.example.x",
+        "pluginVersion": "1.0.0",
+        "displayName": "X",
+        "enabled": true,
+        "configJson": "{}",
+        "configSchemaVersion": 1,
+        "healthStatus": "ready",
+        "runtime": {
+          "pluginId": "com.example.x",
+          "pluginVersion": "1.0.0",
+          "runtimeKind": "not-a-real-kind",
+          "configSchemaVersion": 1,
+          "requiredCapabilityMajors": []
+        },
+        "createdAt": "t",
+        "updatedAt": "t"
+      }],
+      "ocrServices": [],
+      "ocrPromptTemplates": [],
+      "speechServices": [],
+      "appSettings": AppSettingsV1::default_document(),
+    });
+    let err = parse_and_normalize_export_document(value).unwrap_err();
+    assert!(
+      err.contains("invalid runtimeKind") || err.contains("runtimeKind"),
+      "expected unknown runtimeKind error, got {err}"
+    );
+  }
+
+  #[test]
+  fn v7_invalid_package_digest_fails_closed() {
+    let doc = serde_json::json!({
+      "formatVersion": 7,
+      "exportedAt": "t",
+      "providers": [],
+      "models": [],
+      "translationProfiles": [],
+      "profileModels": [],
+      "profilePromptTemplates": [],
+      "integrationInstances": [{
+        "id": "00000000-0000-0000-0000-000000000001",
+        "pluginId": "langnext.conformance",
+        "pluginVersion": "1.0.0",
+        "displayName": "x",
+        "enabled": true,
+        "configJson": "{}",
+        "configSchemaVersion": 1,
+        "healthStatus": "ready",
+        "runtime": {
+          "pluginId": "langnext.conformance",
+          "pluginVersion": "1.0.0",
+          "runtimeKind": "wasm-component",
+          "packageDigest": "not-hex",
+          "publisherKeyId": "langnext.vendor.test",
+          "publisherKeyFingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "pluginApiVersion": "1.0",
+          "configSchemaVersion": 1,
+          "requiredCapabilityMajors": ["translate.text@1"]
+        },
+        "createdAt": "t",
+        "updatedAt": "t"
+      }],
+      "ocrServices": [],
+      "ocrPromptTemplates": [],
+      "speechServices": [],
+      "appSettings": AppSettingsV1::default_document(),
+    });
+    let err = parse_and_normalize_export_document(doc).unwrap_err();
+    assert!(
+      err.contains("packageDigest") || err.contains("package digest"),
+      "expected package digest error, got {err}"
+    );
+  }
+
+  #[test]
+  fn v7_invalid_publisher_key_id_fails_closed() {
+    let doc = serde_json::json!({
+      "formatVersion": 7,
+      "exportedAt": "t",
+      "providers": [],
+      "models": [],
+      "translationProfiles": [],
+      "profileModels": [],
+      "profilePromptTemplates": [],
+      "integrationInstances": [{
+        "id": "00000000-0000-0000-0000-000000000002",
+        "pluginId": "langnext.conformance",
+        "pluginVersion": "1.0.0",
+        "displayName": "x",
+        "enabled": true,
+        "configJson": "{}",
+        "configSchemaVersion": 1,
+        "healthStatus": "ready",
+        "runtime": {
+          "pluginId": "langnext.conformance",
+          "pluginVersion": "1.0.0",
+          "runtimeKind": "wasm-component",
+          "packageDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "publisherKeyId": "BAD KEY",
+          "publisherKeyFingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "pluginApiVersion": "1.0",
+          "configSchemaVersion": 1,
+          "requiredCapabilityMajors": ["translate.text@1"]
+        },
+        "createdAt": "t",
+        "updatedAt": "t"
+      }],
+      "ocrServices": [],
+      "ocrPromptTemplates": [],
+      "speechServices": [],
+      "appSettings": AppSettingsV1::default_document(),
+    });
+    let err = parse_and_normalize_export_document(doc).unwrap_err();
+    assert!(
+      err.contains("publisherKeyId") || err.contains("publisher key id"),
+      "expected publisher key id error, got {err}"
+    );
+  }
+
+  #[test]
+  fn v7_invalid_capability_major_fails_closed() {
+    let doc = serde_json::json!({
+      "formatVersion": 7,
+      "exportedAt": "t",
+      "providers": [],
+      "models": [],
+      "translationProfiles": [],
+      "profileModels": [],
+      "profilePromptTemplates": [],
+      "integrationInstances": [{
+        "id": "00000000-0000-0000-0000-000000000003",
+        "pluginId": "langnext.conformance",
+        "pluginVersion": "1.0.0",
+        "displayName": "x",
+        "enabled": true,
+        "configJson": "{}",
+        "configSchemaVersion": 1,
+        "healthStatus": "ready",
+        "runtime": {
+          "pluginId": "langnext.conformance",
+          "pluginVersion": "1.0.0",
+          "runtimeKind": "wasm-component",
+          "packageDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "publisherKeyId": "langnext.vendor.test",
+          "publisherKeyFingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "pluginApiVersion": "1.0",
+          "configSchemaVersion": 1,
+          "requiredCapabilityMajors": ["not-a-capability"]
+        },
+        "createdAt": "t",
+        "updatedAt": "t"
+      }],
+      "ocrServices": [],
+      "ocrPromptTemplates": [],
+      "speechServices": [],
+      "appSettings": AppSettingsV1::default_document(),
+    });
+    let err = parse_and_normalize_export_document(doc).unwrap_err();
+    assert!(
+      err.contains("requiredCapabilityMajors") || err.contains("capability"),
+      "expected capability major error, got {err}"
+    );
+  }
+
+  #[test]
+  fn v7_package_digest_surrounding_whitespace_fails_closed() {
+    let padded = format!(" {} ", "a".repeat(64));
+    let doc = serde_json::json!({
+      "formatVersion": 7,
+      "exportedAt": "t",
+      "providers": [],
+      "models": [],
+      "translationProfiles": [],
+      "profileModels": [],
+      "profilePromptTemplates": [],
+      "integrationInstances": [{
+        "id": "00000000-0000-0000-0000-000000000011",
+        "pluginId": "langnext.conformance",
+        "pluginVersion": "1.0.0",
+        "displayName": "x",
+        "enabled": true,
+        "configJson": "{}",
+        "configSchemaVersion": 1,
+        "healthStatus": "ready",
+        "runtime": {
+          "pluginId": "langnext.conformance",
+          "pluginVersion": "1.0.0",
+          "runtimeKind": "wasm-component",
+          "packageDigest": padded,
+          "publisherKeyId": "langnext.vendor.test",
+          "publisherKeyFingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "pluginApiVersion": "1.0",
+          "configSchemaVersion": 1,
+          "requiredCapabilityMajors": ["translate.text@1"]
+        },
+        "createdAt": "t",
+        "updatedAt": "t"
+      }],
+      "ocrServices": [],
+      "ocrPromptTemplates": [],
+      "speechServices": [],
+      "appSettings": AppSettingsV1::default_document(),
+    });
+    let err = parse_and_normalize_export_document(doc).unwrap_err();
+    assert!(
+      err.contains("packageDigest") || err.contains("package digest") || err.contains("whitespace"),
+      "expected whitespace digest fail, got {err}"
+    );
   }
 }

@@ -9,6 +9,7 @@ pub mod plugin_package;
 pub mod plugin_schema;
 pub mod provider;
 pub mod provider_http;
+pub mod runtime_lifecycle;
 pub mod runtime_plugin;
 pub mod service_capability;
 pub mod service_integration;

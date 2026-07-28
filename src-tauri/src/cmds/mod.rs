@@ -7,6 +7,7 @@ pub mod plugin_packages;
 pub mod provider_http;
 pub mod providers;
 pub mod runtime;
+pub mod runtime_lifecycle;
 pub mod service_integrations;
 pub mod service_translation;
 pub mod settings;

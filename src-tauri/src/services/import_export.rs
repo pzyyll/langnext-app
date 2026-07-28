@@ -7,6 +7,7 @@ use crate::domain::import_export::{
   IntegrationInstanceExport, OcrPromptTemplateExport, OcrServiceExport, SpeechServiceExport,
   export_json_contains_forbidden_secret_keys, parse_and_normalize_export_document,
 };
+// EXPORT_FORMAT_VERSION is also used by validate_v7_runtime_records.
 use crate::domain::ocr_service::{OcrPromptTemplate, OcrProviderType, OcrService};
 use crate::domain::provider::ProviderExport;
 use crate::domain::speech_service::SpeechService;
@@ -62,9 +63,24 @@ impl ImportExportService {
       let mut templates = profile_prompt_templates;
       templates.sort_by_key(|t| (t.translation_profile_id, t.sort_order, t.id));
 
-      let mut integration_exports: Vec<IntegrationInstanceExport> = integrations
-        .into_iter()
-        .map(|i| IntegrationInstanceExport {
+      let mut integration_exports = Vec::with_capacity(integrations.len());
+      for i in integrations {
+        // v7 requires an explicit runtime record per integration. Never silently drop fields.
+        let runtime = match i.runtime_requirement_json.as_deref() {
+          Some(raw) => {
+            let parsed: crate::domain::runtime_lifecycle::RuntimeRequirementExport = serde_json::from_str(raw)
+              .map_err(|e| {
+                StorageError::Validation(format!(
+                  "integration {} has invalid runtime_requirement_json: {e}",
+                  i.id
+                ))
+              })?;
+            validate_export_requirement_for_instance(&i, parsed)?
+          }
+          None => rebuild_export_requirement_from_pin(conn, &i)?,
+        };
+        let runtime = validate_export_requirement_for_instance(&i, runtime)?;
+        integration_exports.push(IntegrationInstanceExport {
           id: i.id,
           plugin_id: i.plugin_id,
           plugin_version: i.plugin_version,
@@ -73,10 +89,11 @@ impl ImportExportService {
           config_json: i.config_json,
           config_schema_version: i.config_schema_version,
           health_status: i.health_status.as_str().to_string(),
+          runtime: Some(runtime),
           created_at: i.created_at,
           updated_at: i.updated_at,
-        })
-        .collect();
+        });
+      }
       integration_exports.sort_by_key(|i| i.id);
 
       let mut ocr_exports: Vec<OcrServiceExport> = ocr_service_rows.into_iter().map(ocr_service_to_export).collect();
@@ -485,6 +502,181 @@ impl ImportExportService {
     app_settings::update(conn, &plan.settings)?;
     Ok(cleanup_ops)
   }
+}
+
+fn non_empty(value: Option<&str>) -> bool {
+  value.map(str::trim).filter(|v| !v.is_empty()).is_some()
+}
+
+fn validate_export_requirement_for_instance(
+  instance: &crate::domain::service_integration::IntegrationInstance,
+  req: crate::domain::runtime_lifecycle::RuntimeRequirementExport,
+) -> Result<crate::domain::runtime_lifecycle::RuntimeRequirementExport, StorageError> {
+  if req.plugin_id != instance.plugin_id {
+    return Err(StorageError::Validation(format!(
+      "runtime requirement plugin_id does not match instance {}",
+      instance.id
+    )));
+  }
+  if req.plugin_version != instance.plugin_version {
+    return Err(StorageError::Validation(format!(
+      "runtime requirement plugin_version does not match instance {}",
+      instance.id
+    )));
+  }
+  if req.runtime_kind != instance.runtime_kind {
+    return Err(StorageError::Validation(format!(
+      "runtime requirement runtime_kind does not match instance {}",
+      instance.id
+    )));
+  }
+  if req.config_schema_version != instance.config_schema_version {
+    return Err(StorageError::Validation(format!(
+      "runtime requirement config_schema_version does not match instance {}",
+      instance.id
+    )));
+  }
+  match req.runtime_kind.as_str() {
+    "wasm-component" | "trusted-native-worker" => {
+      if !non_empty(req.package_digest.as_deref()) {
+        return Err(StorageError::Validation(
+          "package-backed runtime requirement missing package digest".into(),
+        ));
+      }
+      if req.package_digest.as_deref() != instance.package_digest.as_deref() {
+        return Err(StorageError::Validation(
+          "runtime requirement package digest does not match instance pin".into(),
+        ));
+      }
+      if !non_empty(req.publisher_key_id.as_deref()) {
+        return Err(StorageError::Validation(
+          "package-backed runtime requirement missing publisher key id".into(),
+        ));
+      }
+      if !non_empty(req.publisher_key_fingerprint.as_deref()) {
+        return Err(StorageError::Validation(
+          "package-backed runtime requirement missing publisher fingerprint".into(),
+        ));
+      }
+      if !non_empty(req.plugin_api_version.as_deref()) {
+        return Err(StorageError::Validation(
+          "package-backed runtime requirement missing plugin api version".into(),
+        ));
+      }
+    }
+    "bundled-rust" => {
+      if req.package_digest.is_some() {
+        return Err(StorageError::Validation(
+          "bundled-rust runtime requirement must not carry a package digest".into(),
+        ));
+      }
+    }
+    _ => {}
+  }
+  Ok(req)
+}
+
+/// Strict v7 document validation used on import parse (after sequential normalization).
+pub fn validate_v7_runtime_records(doc: &ConfigurationExport) -> Result<(), StorageError> {
+  if doc.format_version != EXPORT_FORMAT_VERSION {
+    return Err(StorageError::Validation(format!(
+      "validate_v7_runtime_records expects formatVersion {EXPORT_FORMAT_VERSION}"
+    )));
+  }
+  for row in &doc.integration_instances {
+    let Some(req) = row.runtime.as_ref() else {
+      return Err(StorageError::Validation(format!(
+        "v7 integration {} is missing runtime requirement",
+        row.id
+      )));
+    };
+    if req.plugin_id != row.plugin_id || req.plugin_version != row.plugin_version {
+      return Err(StorageError::Validation(format!(
+        "v7 integration {} runtime identity does not match outer instance fields",
+        row.id
+      )));
+    }
+    if req.config_schema_version != row.config_schema_version {
+      return Err(StorageError::Validation(format!(
+        "v7 integration {} runtime config_schema_version mismatch",
+        row.id
+      )));
+    }
+    match req.runtime_kind.as_str() {
+      "wasm-component" | "trusted-native-worker" => {
+        if !non_empty(req.package_digest.as_deref())
+          || !non_empty(req.publisher_key_id.as_deref())
+          || !non_empty(req.publisher_key_fingerprint.as_deref())
+          || !non_empty(req.plugin_api_version.as_deref())
+        {
+          return Err(StorageError::Validation(format!(
+            "v7 integration {} package-backed runtime is missing mandatory fields",
+            row.id
+          )));
+        }
+      }
+      "bundled-rust" => {
+        if req.package_digest.is_some() {
+          return Err(StorageError::Validation(format!(
+            "v7 integration {} bundled runtime must not include package digest",
+            row.id
+          )));
+        }
+      }
+      _ => {}
+    }
+  }
+  Ok(())
+}
+
+fn rebuild_export_requirement_from_pin(
+  conn: &rusqlite::Connection,
+  instance: &crate::domain::service_integration::IntegrationInstance,
+) -> Result<crate::domain::runtime_lifecycle::RuntimeRequirementExport, StorageError> {
+  if instance.runtime_kind == "bundled-rust" || instance.package_digest.is_none() {
+    return Ok(crate::domain::runtime_lifecycle::RuntimeRequirementExport {
+      plugin_id: instance.plugin_id.clone(),
+      plugin_version: instance.plugin_version.clone(),
+      runtime_kind: instance.runtime_kind.clone(),
+      package_digest: None,
+      publisher_key_id: None,
+      publisher_key_fingerprint: None,
+      plugin_api_version: None,
+      config_schema_version: instance.config_schema_version,
+      required_capability_majors: Vec::new(),
+      provider_runtime_kind: None,
+      provider_package_digest: None,
+    });
+  }
+  let digest = instance
+    .package_digest
+    .as_deref()
+    .ok_or_else(|| StorageError::Validation("package-backed pin missing digest".into()))?;
+  let version = crate::repositories::installed_plugin_versions::get_optional(conn, digest)?.ok_or_else(|| {
+    StorageError::PluginUnavailable(format!(
+      "cannot rebuild export requirement; package {digest} is not installed"
+    ))
+  })?;
+  let manifest: crate::domain::runtime_plugin::PluginManifestV1 = serde_json::from_str(&version.manifest_json)
+    .map_err(|e| StorageError::Validation(format!("invalid installed package manifest: {e}")))?;
+  if version.publisher_key_id.trim().is_empty() || version.publisher_fingerprint.trim().is_empty() {
+    return Err(StorageError::Validation(
+      "installed package missing publisher identity for export".into(),
+    ));
+  }
+  Ok(crate::domain::runtime_lifecycle::RuntimeRequirementExport {
+    plugin_id: version.plugin_id,
+    plugin_version: version.version,
+    runtime_kind: version.runtime_kind,
+    package_digest: Some(version.package_digest),
+    publisher_key_id: Some(version.publisher_key_id),
+    publisher_key_fingerprint: Some(version.publisher_fingerprint),
+    plugin_api_version: Some(manifest.plugin_api_version),
+    config_schema_version: instance.config_schema_version,
+    required_capability_majors: manifest.capabilities.into_iter().map(|c| c.id).collect(),
+    provider_runtime_kind: None,
+    provider_package_digest: None,
+  })
 }
 
 fn ocr_service_to_export(service: OcrService) -> OcrServiceExport {

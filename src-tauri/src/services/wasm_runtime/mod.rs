@@ -16,9 +16,8 @@ pub mod executor;
 pub mod host;
 pub mod store;
 
-// Re-export the verified-component boundary type as the public runtime surface.
-#[allow(unused_imports)] // public API; callers outside this module consume it.
-pub use executor::{VerifiedComponent, WasmRuntime};
+// Re-export the verified-component boundary type and typed capability adapters.
+pub use executor::{VerifiedComponent, WasmDetectLanguageAdapter, WasmRuntime, WasmTranslateTextAdapter};
 
 #[cfg(test)]
 mod tests;

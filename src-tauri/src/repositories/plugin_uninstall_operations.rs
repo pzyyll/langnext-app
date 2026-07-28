@@ -140,3 +140,31 @@ pub fn mark_failed(conn: &Connection, id: Uuid, error_code: &str) -> Result<(), 
   )?;
   Ok(())
 }
+
+/// Terminal success: content verified in store; availability reopened; excluded from unfinished.
+pub fn mark_restored(conn: &Connection, id: Uuid, error_code: &str) -> Result<(), StorageError> {
+  let now = now_rfc3339();
+  conn.execute(
+    "UPDATE plugin_uninstall_operations SET
+          state = 'restored',
+          error_code = ?2,
+          updated_at = ?3
+       WHERE id = ?1",
+    params![id.to_string(), error_code, now],
+  )?;
+  Ok(())
+}
+
+/// Terminal success: content rolled back from quarantine; excluded from unfinished.
+pub fn mark_rolled_back(conn: &Connection, id: Uuid, error_code: &str) -> Result<(), StorageError> {
+  let now = now_rfc3339();
+  conn.execute(
+    "UPDATE plugin_uninstall_operations SET
+          state = 'rolled_back',
+          error_code = ?2,
+          updated_at = ?3
+       WHERE id = ?1",
+    params![id.to_string(), error_code, now],
+  )?;
+  Ok(())
+}

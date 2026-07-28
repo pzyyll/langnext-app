@@ -70,6 +70,9 @@ pub struct WasmRuntime {
   engine: WasmEngine,
   cache: CompiledComponentCache,
   epoch_ticker: EpochTicker,
+  /// Test-only side effect invoked at the start of `compile_component` (simulates mid-compile races).
+  #[cfg(test)]
+  compile_side_effect: std::sync::Mutex<Option<Box<dyn FnMut() + Send>>>,
 }
 
 impl WasmRuntime {
@@ -85,7 +88,15 @@ impl WasmRuntime {
       engine,
       cache: CompiledComponentCache::default(),
       epoch_ticker,
+      #[cfg(test)]
+      compile_side_effect: std::sync::Mutex::new(None),
     })
+  }
+
+  /// Install a one-shot side effect that runs at the start of the next `compile_component` call.
+  #[cfg(test)]
+  pub fn set_compile_side_effect(&self, hook: impl FnMut() + Send + 'static) {
+    *self.compile_side_effect.lock().unwrap_or_else(|e| e.into_inner()) = Some(Box::new(hook));
   }
 
   pub fn engine(&self) -> &WasmEngine {
@@ -102,6 +113,12 @@ impl WasmRuntime {
     self.engine.config_revision()
   }
 
+  /// Invalidate compiled Component cache entries after a runtime pin change.
+  /// Package digests participate in cache identity; clearing is the safe CAS post-commit action.
+  pub fn invalidate_package_digests(&self, _package_digests: Vec<&str>) {
+    self.cache.clear();
+  }
+
   /// Compile a Component from raw bytes under a package archive digest and a Component artifact
   /// digest. **Bytes are verified only against the artifact digest** ([`ComponentArtifactDigest`]):
   /// [`PackageDigest`] identifies the signed `.lnplugin` archive and must never be used as a
@@ -114,6 +131,15 @@ impl WasmRuntime {
     artifact_digest: &ComponentArtifactDigest,
     bytes: &[u8],
   ) -> wasmtime::Result<VerifiedComponent> {
+    #[cfg(test)]
+    if let Some(mut hook) = self
+      .compile_side_effect
+      .lock()
+      .unwrap_or_else(|e| e.into_inner())
+      .take()
+    {
+      hook();
+    }
     // Security chokepoint: verify the Component file bytes hash to the artifact digest before
     // any cache use. Package digest is archive identity only and is never compared to bytes.
     let computed = compute_sha256_hex(bytes);
@@ -295,6 +321,127 @@ impl WasmRuntime {
       Ok(Err(plugin_error)) => Err(map_translate_detect_plugin_error(plugin_error)),
       Err(capability_error) => Err(capability_error),
     }
+  }
+
+  /// Run pure migration-world `migrate-config` against copied JSON bytes only.
+  pub async fn execute_migrate_config(
+    &self,
+    migration_component_bytes: &[u8],
+    from_version: u32,
+    to_version: u32,
+    config: Vec<u8>,
+  ) -> Result<Vec<u8>, CapabilityError> {
+    validate_copied_json(&config, CONFIG_MAX_BYTES, "config")?;
+    self
+      .run_migration_export(migration_component_bytes, from_version, to_version, None, config)
+      .await
+  }
+
+  /// Run pure migration-world `migrate-preferences` against copied preference JSON.
+  pub async fn execute_migrate_preferences(
+    &self,
+    migration_component_bytes: &[u8],
+    capability: &str,
+    from_version: u32,
+    to_version: u32,
+    preferences: Vec<u8>,
+  ) -> Result<Vec<u8>, CapabilityError> {
+    validate_copied_json(&preferences, PREFERENCES_MAX_BYTES, "preferences")?;
+    self
+      .run_migration_export(
+        migration_component_bytes,
+        from_version,
+        to_version,
+        Some(capability),
+        preferences,
+      )
+      .await
+  }
+
+  async fn run_migration_export(
+    &self,
+    migration_component_bytes: &[u8],
+    from_version: u32,
+    to_version: u32,
+    capability: Option<&str>,
+    payload: Vec<u8>,
+  ) -> Result<Vec<u8>, CapabilityError> {
+    use super::bindings::migration;
+    use crate::domain::cancel::CancelToken;
+    use crate::domain::runtime_plugin::{CapabilityId, ExecutionGrantSet, PluginId, RuntimeIdentity, SemVerVersion};
+    use uuid::Uuid;
+    use wasmtime::component::Component;
+
+    let component = Component::new(self.engine.engine(), migration_component_bytes).map_err(map_instantiate_error)?;
+    let grant = ExecutionGrantSet::initial(
+      Uuid::nil(),
+      RuntimeIdentity::Bundled,
+      PluginId::parse("langnext.migration.dummy")
+        .map_err(|e| CapabilityError::new(CapabilityErrorCode::Internal, e))?,
+      SemVerVersion::parse("1.0.0").map_err(|e| CapabilityError::new(CapabilityErrorCode::Internal, e))?,
+      vec![
+        CapabilityId::parse("translate.text@1")
+          .map_err(|e| CapabilityError::new(CapabilityErrorCode::Internal, format!("{e:?}")))?,
+      ],
+      vec![],
+      vec![],
+    )
+    .map_err(|e| CapabilityError::new(CapabilityErrorCode::Internal, e.to_string()))?;
+    let principal = grant
+      .principal_for_request("translate.text@1", "migration-request")
+      .map_err(|e| CapabilityError::new(CapabilityErrorCode::Internal, e.to_string()))?;
+    let state = new_state(
+      principal,
+      grant,
+      CancelToken::new(),
+      None,
+      Box::new(MigrationDeniedBroker),
+    );
+    let mut store = build_store(self.engine.engine(), state);
+    let mut linker = wasmtime::component::Linker::new(self.engine.engine());
+    migration::MigrationWorld::add_to_linker::<_, HasSelf<super::store::PluginHostState>>(&mut linker, |s| s)
+      .map_err(map_instantiate_error)?;
+    let world = migration::MigrationWorld::instantiate_async(&mut store, &component, &linker)
+      .await
+      .map_err(map_instantiate_error)?;
+    let guest = world.langnext_runtime_plugin_migration();
+    let call_result = if let Some(capability) = capability {
+      guest
+        .call_migrate_preferences(&mut store, capability, from_version, to_version, &payload)
+        .await
+    } else {
+      guest
+        .call_migrate_config(&mut store, from_version, to_version, &payload)
+        .await
+    };
+    match call_result {
+      Ok(Ok(bytes)) => {
+        validate_copied_json(&bytes, CONFIG_MAX_BYTES, "migrated json")?;
+        Ok(bytes)
+      }
+      Ok(Err(_plugin_error)) => Err(CapabilityError::new(
+        CapabilityErrorCode::InvalidConfiguration,
+        "migration component rejected the copied JSON",
+      )),
+      Err(err) => Err(map_instantiate_error(err)),
+    }
+  }
+}
+
+/// Broker handle that always denies; migration world never calls host.broker.
+struct MigrationDeniedBroker;
+
+impl BrokerHandle for MigrationDeniedBroker {
+  fn fetch(
+    &self,
+    _principal: &crate::domain::runtime_plugin::PluginPrincipal,
+    _grant: &crate::domain::runtime_plugin::ExecutionGrantSet,
+    _request: super::host::BrokerFetchRequest,
+    _authorization: super::host::BrokerAuthorization,
+    _cancel: &CancelToken,
+    _deadline: Option<Instant>,
+  ) -> std::pin::Pin<Box<dyn std::future::Future<Output = super::host::BrokerFetchOutcome> + Send + '_>> {
+    Box::pin(async { Err(super::host::BrokerFetchError::NotApproved) })
   }
 }
 

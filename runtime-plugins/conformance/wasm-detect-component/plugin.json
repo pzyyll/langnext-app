@@ -15,8 +15,8 @@
     {
       "path": "fixtures/langnext-conformance-detect-wasm.wasm",
       "role": "runtime-artifact",
-      "bytes": 4568,
-      "sha256": "86f9732bcc143c541ee916e03b37ad04478ebfefa51ab32fd027948532f2ec31"
+      "bytes": 6840,
+      "sha256": "11f70810a2e25add888be750ee019d9f98311b4bcb682a780b3419d130ed37d0"
     }
   ],
   "capabilities": [

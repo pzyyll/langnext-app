@@ -360,7 +360,7 @@ pub mod llm_chat {
   });
 }
 
-/// Bindings for `migration-world` (pure copied-JSON exports). Compiled but not instantiated in Phase 2.
+/// Bindings for `migration-world` (pure copied-JSON exports). Instantiated for lifecycle upgrades.
 pub mod migration {
   use super::bindgen;
   bindgen!({
@@ -375,3 +375,31 @@ pub mod migration {
     },
   });
 }
+
+// Migration world imports only `common` (no host). Implement common Host* for PluginHostState.
+const _: () = {
+  use super::host::{BlobResource, StreamReaderResource, StreamWriterResource};
+  use super::store::PluginHostState;
+  use migration::langnext::runtime_plugin::common;
+  use wasmtime::component::Resource;
+
+  impl common::HostBlobHandle for PluginHostState {
+    async fn drop(&mut self, rep: Resource<BlobResource>) -> wasmtime::Result<()> {
+      let _ = self.table.delete(rep);
+      Ok(())
+    }
+  }
+  impl common::HostStreamWriter for PluginHostState {
+    async fn drop(&mut self, rep: Resource<StreamWriterResource>) -> wasmtime::Result<()> {
+      let _ = self.table.delete(rep);
+      Ok(())
+    }
+  }
+  impl common::HostStreamReader for PluginHostState {
+    async fn drop(&mut self, rep: Resource<StreamReaderResource>) -> wasmtime::Result<()> {
+      let _ = self.table.delete(rep);
+      Ok(())
+    }
+  }
+  impl common::Host for PluginHostState {}
+};

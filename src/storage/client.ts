@@ -200,6 +200,53 @@ export async function validateIntegrationInstance(id: string): Promise<Integrati
   return runStorage(invokeEffect<IntegrationValidationResult>("validate_integration_instance", { id }));
 }
 
+/** Preview a package pin upgrade for one integration instance. */
+export async function previewIntegrationRuntimeUpgrade(
+  instanceId: string,
+  targetPackageDigest: string,
+): Promise<import("./types").RuntimeUpgradePreviewDto> {
+  return runStorage(
+    invokeEffect<import("./types").RuntimeUpgradePreviewDto>("preview_integration_runtime_upgrade", {
+      instanceId,
+      targetPackageDigest,
+    }),
+  );
+}
+
+/** Apply a previously previewed runtime upgrade (CAS). */
+export async function applyIntegrationRuntimeUpgrade(
+  input: import("./types").ApplyRuntimeUpgradeInput,
+): Promise<import("./types").RuntimeLifecycleResultDto> {
+  return runStorage(
+    invokeEffect<import("./types").RuntimeLifecycleResultDto>("apply_integration_runtime_upgrade", { input }),
+  );
+}
+
+/** Preview rollback to the latest host-owned snapshot. */
+export async function previewIntegrationRuntimeRollback(
+  instanceId: string,
+): Promise<import("./types").RuntimeRollbackPreviewDto> {
+  return runStorage(
+    invokeEffect<import("./types").RuntimeRollbackPreviewDto>("preview_integration_runtime_rollback", {
+      instanceId,
+    }),
+  );
+}
+
+/** Apply a previously previewed runtime rollback (CAS). */
+export async function applyIntegrationRuntimeRollback(
+  input: import("./types").ApplyRuntimeRollbackInput,
+): Promise<import("./types").RuntimeLifecycleResultDto> {
+  return runStorage(
+    invokeEffect<import("./types").RuntimeLifecycleResultDto>("apply_integration_runtime_rollback", { input }),
+  );
+}
+
+/** Explicitly discard a rollback snapshot when uninstall risk is accepted. */
+export async function discardIntegrationRuntimeSnapshot(snapshotId: string): Promise<void> {
+  return runStorage(invokeEffect<void>("discard_integration_runtime_snapshot", { snapshotId }));
+}
+
 /** Preview a local `.lnplugin` path. Rust owns file reading and verification. */
 export async function previewPluginPackage(path: string): Promise<PluginPackagePreviewDto> {
   return runStorage(invokeEffect<PluginPackagePreviewDto>("preview_plugin_package", { path }));

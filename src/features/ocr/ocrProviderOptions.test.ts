@@ -28,6 +28,8 @@ function instance(overrides: Partial<IntegrationInstanceDto>): IntegrationInstan
     effectiveStatus: "ready",
     lastValidatedAt: null,
     lastErrorCode: null,
+    runtimeKind: "bundled-rust",
+    runtimeState: "active",
     credentialSlots: [],
     createdAt: "t0",
     updatedAt: "t0",

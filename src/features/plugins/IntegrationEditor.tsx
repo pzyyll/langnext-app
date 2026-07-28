@@ -48,6 +48,8 @@ import {
   isIntegrationDraftClean,
   type IntegrationSchemaDraft,
 } from "./integrationDraft";
+import { isRuntimeUnresolved } from "./runtimeLifecyclePresentation";
+import { RuntimeLifecyclePanel } from "./RuntimeLifecyclePanel";
 
 export type IntegrationEditorProps = {
   integrationInstanceId: string;
@@ -277,6 +279,7 @@ export function IntegrationEditor({ integrationInstanceId }: IntegrationEditorPr
   }
 
   const pluginMissing = instance.effectiveStatus === "plugin_missing";
+  const runtimeUnavailable = isRuntimeUnresolved(instance);
   const pending =
     saveMutation.isPending || deleteMutation.isPending || validateMutation.isPending || enabledMutation.isPending;
   const dependencies = depsQuery.data ?? [];
@@ -441,6 +444,28 @@ export function IntegrationEditor({ integrationInstanceId }: IntegrationEditorPr
             ) : null}
             <p className="text-body-tight text-neutral">{statusHint}</p>
           </section>
+
+          <section className="space-y-2">
+            <h3 className="text-label-sm font-bold tracking-wide text-neutral uppercase">Runtime</h3>
+            <p className="text-body-md text-on-surface">{instance.runtimeKind}</p>
+            <p className="text-body-tight text-neutral">{instance.runtimeState}</p>
+            {instance.packageDigest ? (
+              <p className="font-mono text-body-tight wrap-break-word text-neutral">{instance.packageDigest}</p>
+            ) : null}
+            {instance.executionGrantSetRevision != null ? (
+              <p className="text-body-tight text-neutral">grant rev {instance.executionGrantSetRevision}</p>
+            ) : null}
+            {runtimeUnavailable && instance.runtimeErrorMessage ? (
+              <p className="text-body-tight text-error">{instance.runtimeErrorMessage}</p>
+            ) : null}
+            {instance.runtimeRequirement?.packageDigest ? (
+              <p className="font-mono text-body-tight wrap-break-word text-neutral">
+                required {instance.runtimeRequirement.packageDigest}
+              </p>
+            ) : null}
+          </section>
+
+          <RuntimeLifecyclePanel instance={instance} />
 
           <section className="space-y-2">
             <h3 className="text-label-sm font-bold tracking-wide text-neutral uppercase">

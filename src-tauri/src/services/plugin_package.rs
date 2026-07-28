@@ -824,6 +824,7 @@ pub mod test_support {
         preferences_schema: None,
       }],
       configuration_schema: None,
+      config_schema_version: None,
       credential_slots: vec![],
       permissions: PermissionRequests {
         network: vec![],

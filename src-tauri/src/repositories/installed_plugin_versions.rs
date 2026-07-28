@@ -126,6 +126,33 @@ pub fn set_content_available(conn: &Connection, package_digest: &str, available:
   Ok(())
 }
 
+/// Atomic content_available CAS used as the uninstall protection gate.
+pub fn compare_and_set_content_available(
+  conn: &Connection,
+  package_digest: &str,
+  expected: bool,
+  next: bool,
+) -> Result<(), StorageError> {
+  let changed = conn.execute(
+    "UPDATE installed_plugin_versions
+     SET content_available = ?3
+     WHERE package_digest = ?1 AND content_available = ?2",
+    params![package_digest, expected as i64, next as i64],
+  )?;
+  if changed == 0 {
+    match get_optional(conn, package_digest)? {
+      Some(_) => Err(StorageError::Conflict(format!(
+        "package {package_digest} content_available changed concurrently"
+      ))),
+      None => Err(StorageError::NotFound(format!(
+        "installed plugin version {package_digest}"
+      ))),
+    }
+  } else {
+    Ok(())
+  }
+}
+
 pub fn delete(conn: &Connection, package_digest: &str) -> Result<(), StorageError> {
   let changed = conn.execute(
     "DELETE FROM installed_plugin_versions WHERE package_digest = ?1",

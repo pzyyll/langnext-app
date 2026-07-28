@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
-# ABOUTME: Run the Phase 2 Wasm runtime conformance suite and verify required mode/key tests.
-# ABOUTME: Fail-closed: missing required tests or zero tests is an error.
-#MISE description="Run Wasm runtime conformance suite (arg: wasm)"
-set -euo pipefail
+# ABOUTME: Run Wasm runtime and installed-lifecycle conformance suites with required tests.
+# ABOUTME: Fail-closed: missing required tests or zero tests is an error; capture suite exit without set -e.
+#MISE description="Run plugin conformance suite (arg: wasm|installed-lifecycle|all)"
+set -uo pipefail
 
 MODE="${1:-all}"
 
-# Plan-required mode/key tests that must execute under wasm_runtime (exact names).
-REQUIRED_TESTS=(
+REQUIRED_WASM_TESTS=(
   "services::wasm_runtime::tests::wasm_executor::conformance_modes_fixture_manifest_matches_runtime"
   "services::wasm_runtime::tests::wasm_executor::detect_conformance_modes_fixture_manifest_matches_runtime"
   "services::wasm_runtime::tests::wasm_executor::success_mode"
@@ -29,40 +28,86 @@ REQUIRED_TESTS=(
   "services::wasm_runtime::tests::wasm_host_imports::broker_blob_and_stream_response_are_stable_unsupported"
 )
 
+REQUIRED_LIFECYCLE_TESTS=(
+  "services::runtime_lifecycle_installed_tests::runtime_compatible_migration_translate_detect_upgrade_rollback_uninstall"
+  "services::runtime_lifecycle_installed_tests::runtime_upgrade_apply_failure_injection_leaves_source_unchanged"
+  "services::runtime_lifecycle_installed_tests::runtime_discard_snapshot_and_migration_trap_no_mutation"
+  "services::runtime_lifecycle_installed_tests::runtime_plugin_export_v7_missing_package_restores_unresolved_exact_requirement"
+  "services::runtime_lifecycle_installed_tests::runtime_rollback_stale_preview_and_missing_snapshot_fail_closed"
+  "services::runtime_lifecycle_installed_tests::runtime_router_selects_wasm_adapter_for_active_pin"
+  "services::runtime_lifecycle_preference_tests::runtime_preference_snapshot_is_pre_migration_and_rollback_restores_exact_json"
+  "services::runtime_lifecycle_preference_tests::runtime_rollback_restores_grant_from_snapshot_when_live_grant_missing"
+  "services::runtime_lifecycle_preference_tests::runtime_preference_stale_cas_fails_without_partial_mutation"
+  "services::runtime_lifecycle_preference_tests::runtime_preference_byte_exact_whitespace_preserved_in_snapshot"
+  "services::runtime_lifecycle_preference_tests::runtime_rollback_foreign_or_stale_dependency_fails_closed"
+  "services::runtime_lifecycle_preference_tests::runtime_grant_snapshot_tamper_matrix_fails_closed"
+  "services::runtime_lifecycle_preference_tests::runtime_uninstall_blocks_pin_grant_snapshot_dependencies_and_preserves_files"
+  "services::runtime_lifecycle::tests::runtime_upgrade_preview_missing_package_fails_closed"
+  "services::runtime_lifecycle::tests::runtime_upgrade_apply_unknown_preview_is_conflict"
+  "services::runtime_lifecycle::tests::runtime_rollback_without_snapshot_fails_closed"
+  "services::runtime_router::tests::runtime_router_bundle_round_trip_preserves_authority"
+  "services::runtime_router::tests::runtime_router_cross_instance_grant_lookup_denied"
+  "domain::import_export::tests::runtime_plugin_export_v7_maps_legacy_integrations_to_bundled_rust"
+  "storage::migrations::tests::migrate_v16_to_v17_backfills_bundled_runtime_pins"
+  "repositories::tests::runtime_instance_pin_backfill_and_constraints"
+  "repositories::tests::runtime_instance_pin_package_approval_never_authorizes_execution"
+)
+
 MIN_TOTAL_TESTS=10
 
+run_filter_suite() {
+  local filter="$1"
+  shift
+  local -a required=("$@")
+  local OUTPUT EXIT_CODE TOTAL_PASSED count name
+
+  # Capture exit code without aborting under errexit (set +e around cargo).
+  set +e
+  OUTPUT=$(cargo test --manifest-path src-tauri/Cargo.toml "$filter" -- --nocapture 2>&1)
+  EXIT_CODE=$?
+  set -e
+  echo "$OUTPUT"
+  if [[ $EXIT_CODE -ne 0 ]]; then
+    echo "error: conformance tests failed for filter=$filter (exit $EXIT_CODE)" >&2
+    exit 1
+  fi
+
+  TOTAL_PASSED=0
+  while read -r count; do
+    [[ -n "$count" ]] || continue
+    TOTAL_PASSED=$((TOTAL_PASSED + count))
+  done < <(echo "$OUTPUT" | grep -E '^test result: ok\.' | awk '{print $4}')
+
+  if [[ "$filter" == "wasm_runtime" && "$TOTAL_PASSED" -lt "$MIN_TOTAL_TESTS" ]]; then
+    echo "error: conformance suite ran $TOTAL_PASSED tests; expected at least $MIN_TOTAL_TESTS (fail-closed)" >&2
+    exit 1
+  fi
+
+  for name in "${required[@]}"; do
+    if ! grep -Eq "test ${name} \\.\\.\\. ok" <<<"$OUTPUT"; then
+      echo "error: required conformance test missing or not ok: $name" >&2
+      exit 1
+    fi
+  done
+  echo "ok: $filter suite passed ($TOTAL_PASSED tests; ${#required[@]} required names verified)"
+}
+
+set -e
+
 case "$MODE" in
-  wasm|all)
-    OUTPUT=$(cargo test --manifest-path src-tauri/Cargo.toml wasm_runtime -- --nocapture 2>&1)
-    EXIT_CODE=$?
-    echo "$OUTPUT"
-    if [[ $EXIT_CODE -ne 0 ]]; then
-      echo "error: conformance tests failed (exit $EXIT_CODE)" >&2
-      exit 1
-    fi
-
-    # Sum all "test result: ok. N passed" lines; zero is fail-closed.
-    TOTAL_PASSED=0
-    while read -r count; do
-      [[ -n "$count" ]] || continue
-      TOTAL_PASSED=$((TOTAL_PASSED + count))
-    done < <(echo "$OUTPUT" | grep -E '^test result: ok\.' | awk '{print $4}')
-
-    if [[ "$TOTAL_PASSED" -lt "$MIN_TOTAL_TESTS" ]]; then
-      echo "error: conformance suite ran $TOTAL_PASSED tests; expected at least $MIN_TOTAL_TESTS (fail-closed)" >&2
-      exit 1
-    fi
-
-    for name in "${REQUIRED_TESTS[@]}"; do
-      if ! grep -Eq "test ${name} \\.\\.\\. ok" <<<"$OUTPUT"; then
-        echo "error: required conformance test missing or not ok: $name" >&2
-        exit 1
-      fi
-    done
-    echo "ok: conformance suite passed ($TOTAL_PASSED tests; ${#REQUIRED_TESTS[@]} required names verified)"
+  wasm)
+    run_filter_suite "wasm_runtime" "${REQUIRED_WASM_TESTS[@]}"
+    ;;
+  installed-lifecycle)
+    # Full install→migrate→Translate/Detect→approval→upgrade→rollback→uninstall suite.
+    run_filter_suite "runtime_" "${REQUIRED_LIFECYCLE_TESTS[@]}"
+    ;;
+  all)
+    run_filter_suite "wasm_runtime" "${REQUIRED_WASM_TESTS[@]}"
+    run_filter_suite "runtime_" "${REQUIRED_LIFECYCLE_TESTS[@]}"
     ;;
   *)
-    echo "usage: mise run plugin:conformance [wasm|all]" >&2
+    echo "usage: mise run plugin:conformance [wasm|installed-lifecycle|all]" >&2
     exit 1
     ;;
 esac

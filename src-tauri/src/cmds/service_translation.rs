@@ -47,60 +47,7 @@ pub async fn translate_service_profile(
   state: State<'_, AppState>,
   input: ServiceProfileTranslateInput,
 ) -> Result<TranslateResult, IpcError> {
-  let started = Instant::now();
-  if let Err(err) = validate_capability_request_id(&input.request_id) {
-    return Ok(capability_to_translate_failure(&err, elapsed_ms(started)));
-  }
-  if let Err(err) = validate_capability_text(&input.text) {
-    return Ok(capability_to_translate_failure(&err, elapsed_ms(started)));
-  }
-  if let Err(err) = validate_runtime_language_id(&input.source_lang, "source_lang") {
-    return Ok(capability_to_translate_failure(&err, elapsed_ms(started)));
-  }
-  if let Err(err) = validate_runtime_language_id(&input.target_lang, "target_lang") {
-    return Ok(capability_to_translate_failure(&err, elapsed_ms(started)));
-  }
-
-  let sessions = state.request_sessions.clone();
-  let token = sessions.begin(&input.request_id);
-  let result = match resolve_plugin_profile(&state, input.profile_id).await {
-    Ok(resolved) => {
-      match state
-        .service_capabilities
-        .resolve_translate(resolved.instance_id, &resolved.translate_capability_id)
-      {
-        Ok(handler) => {
-          let ctx = execution_context(
-            input.request_id.clone(),
-            token.clone(),
-            resolved.instance_id,
-            resolved.plugin_id,
-            resolved.translate_capability_id.clone(),
-          );
-          let request = TranslateTextRequest {
-            text: input.text,
-            source_language_id: input.source_lang,
-            target_language_id: input.target_lang,
-          };
-          match handler.translate(resolved.instance_id, request, ctx).await {
-            Ok(response) => TranslateResult {
-              translated_text: response.translated_text,
-              latency_ms: elapsed_ms(started),
-              error_code: None,
-              message: "ok".into(),
-              ok: true,
-              model_id: None,
-            },
-            Err(err) => capability_to_translate_failure(&err, elapsed_ms(started)),
-          }
-        }
-        Err(err) => capability_to_translate_failure(&err, elapsed_ms(started)),
-      }
-    }
-    Err(err) => resolve_error_to_translate(err, elapsed_ms(started), &token),
-  };
-  sessions.end(&input.request_id);
-  Ok(result)
+  Ok(run_translate_service_profile(&state.service_capabilities, &state.request_sessions, input).await)
 }
 
 #[tauri::command]
@@ -108,63 +55,7 @@ pub async fn detect_service_profile_language(
   state: State<'_, AppState>,
   input: ServiceProfileDetectInput,
 ) -> Result<DetectLanguageResult, IpcError> {
-  let started = Instant::now();
-  if let Err(err) = validate_capability_request_id(&input.request_id) {
-    return Ok(capability_to_detect_failure(&err, elapsed_ms(started)));
-  }
-  if let Err(err) = validate_capability_text(&input.text) {
-    return Ok(capability_to_detect_failure(&err, elapsed_ms(started)));
-  }
-
-  let sessions = state.request_sessions.clone();
-  let token = sessions.begin(&input.request_id);
-  let result = match resolve_plugin_profile(&state, input.profile_id).await {
-    Ok(resolved) => {
-      let Some(detect_capability_id) = resolved.detect_capability_id.clone() else {
-        sessions.end(&input.request_id);
-        return Ok(DetectLanguageResult {
-          ok: false,
-          language_id: None,
-          detector_type: DetectorType::ServiceIntegration,
-          model_id: None,
-          latency_ms: elapsed_ms(started),
-          error_code: Some("detect_unavailable".into()),
-          message: "profile has no detect capability".into(),
-        });
-      };
-      match state
-        .service_capabilities
-        .resolve_detect(resolved.instance_id, &detect_capability_id)
-      {
-        Ok(handler) => {
-          let ctx = execution_context(
-            input.request_id.clone(),
-            token.clone(),
-            resolved.instance_id,
-            resolved.plugin_id,
-            detect_capability_id,
-          );
-          let request = DetectLanguageRequest { text: input.text };
-          match handler.detect(resolved.instance_id, request, ctx).await {
-            Ok(response) => DetectLanguageResult {
-              ok: true,
-              language_id: Some(response.language_id),
-              detector_type: DetectorType::ServiceIntegration,
-              model_id: None,
-              latency_ms: elapsed_ms(started),
-              error_code: None,
-              message: "ok".into(),
-            },
-            Err(err) => capability_to_detect_failure(&err, elapsed_ms(started)),
-          }
-        }
-        Err(err) => capability_to_detect_failure(&err, elapsed_ms(started)),
-      }
-    }
-    Err(err) => resolve_error_to_detect(err, elapsed_ms(started), &token),
-  };
-  sessions.end(&input.request_id);
-  Ok(result)
+  Ok(run_detect_service_profile_language(&state.service_capabilities, &state.request_sessions, input).await)
 }
 
 #[derive(Debug)]
@@ -173,6 +64,8 @@ struct ResolvedPluginProfile {
   plugin_id: String,
   translate_capability_id: String,
   detect_capability_id: Option<String>,
+  /// Exact SQLite preference TEXT for the bound profile (byte-exact Wasm copy).
+  preferences_json: Vec<u8>,
 }
 
 /// Reload Profile + instance from SQLite and validate plugin branch readiness.
@@ -182,6 +75,205 @@ async fn resolve_plugin_profile(state: &AppState, profile_id: Uuid) -> Result<Re
     .await
     .map_err(|e| ResolveError::Join(e.to_string()))?
     .map_err(ResolveError::Storage)
+}
+
+/// Load one immutable profile/runtime snapshot for Translate (true) or Detect (false).
+async fn resolve_plugin_profile_snapshot(
+  state: &AppState,
+  profile_id: Uuid,
+  translate: bool,
+) -> Result<crate::services::service_capabilities::ProfileInvocationSnapshot, ResolveError> {
+  let caps = state.service_capabilities.clone();
+  let kind = if translate {
+    crate::services::service_capabilities::ProfileCapabilityKind::Translate
+  } else {
+    crate::services::service_capabilities::ProfileCapabilityKind::Detect
+  };
+  tauri::async_runtime::spawn_blocking(move || caps.load_profile_invocation_snapshot(profile_id, kind))
+    .await
+    .map_err(|e| ResolveError::Join(e.to_string()))?
+    .map_err(|e| {
+      use crate::services::service_capabilities::ProfileSnapshotLoadError;
+      match e {
+        ProfileSnapshotLoadError::NotFound(msg) => ResolveError::Storage(StorageError::NotFound(msg)),
+        ProfileSnapshotLoadError::PluginUnavailable(msg) => ResolveError::Storage(StorageError::PluginUnavailable(msg)),
+        ProfileSnapshotLoadError::InvalidConfiguration(msg) => {
+          // Keep detect-unavailable distinguishable for missing detect binding.
+          if msg.contains("no detect capability") {
+            ResolveError::DetectUnavailable
+          } else {
+            ResolveError::Storage(StorageError::Validation(msg))
+          }
+        }
+        ProfileSnapshotLoadError::Internal(msg) => ResolveError::Storage(StorageError::Internal(msg)),
+      }
+    })
+}
+
+/// Testable formal translate workflow (same path as the Tauri command).
+/// SQLite snapshot load + archive/artifact rehash + component resolution run on a blocking pool;
+/// only the typed capability call stays on the async path (cancel/error semantics preserved).
+pub async fn run_translate_service_profile(
+  caps: &crate::services::service_capabilities::ServiceCapabilityService,
+  sessions: &crate::domain::cancel::RequestSessionRegistry,
+  input: ServiceProfileTranslateInput,
+) -> TranslateResult {
+  let started = Instant::now();
+  if let Err(err) = validate_capability_request_id(&input.request_id) {
+    return capability_to_translate_failure(&err, elapsed_ms(started));
+  }
+  if let Err(err) = validate_capability_text(&input.text) {
+    return capability_to_translate_failure(&err, elapsed_ms(started));
+  }
+  if let Err(err) = validate_runtime_language_id(&input.source_lang, "source_lang") {
+    return capability_to_translate_failure(&err, elapsed_ms(started));
+  }
+  if let Err(err) = validate_runtime_language_id(&input.target_lang, "target_lang") {
+    return capability_to_translate_failure(&err, elapsed_ms(started));
+  }
+  let token = sessions.begin(&input.request_id);
+  let caps = caps.clone();
+  let profile_id = input.profile_id;
+  let prepared = tauri::async_runtime::spawn_blocking(move || {
+    use crate::services::service_capabilities::ProfileCapabilityKind;
+    let snapshot = caps.load_profile_invocation_snapshot(profile_id, ProfileCapabilityKind::Translate)?;
+    let handler = caps
+      .resolve_translate_from_snapshot(&snapshot)
+      .map_err(crate::services::service_capabilities::ProfileSnapshotLoadError::from_capability)?;
+    Ok::<_, crate::services::service_capabilities::ProfileSnapshotLoadError>((snapshot, handler))
+  })
+  .await;
+  let result = match prepared {
+    Ok(Ok((snapshot, handler))) => {
+      let ctx = execution_context(
+        input.request_id.clone(),
+        token.clone(),
+        snapshot.instance_id,
+        snapshot.plugin_id.clone(),
+        snapshot.capability_id.clone(),
+      );
+      let request = TranslateTextRequest {
+        text: input.text,
+        source_language_id: input.source_lang,
+        target_language_id: input.target_lang,
+      };
+      match handler.translate(snapshot.instance_id, request, ctx).await {
+        Ok(response) => TranslateResult {
+          translated_text: response.translated_text,
+          latency_ms: elapsed_ms(started),
+          error_code: None,
+          message: "ok".into(),
+          ok: true,
+          model_id: None,
+        },
+        Err(err) => capability_to_translate_failure(&err, elapsed_ms(started)),
+      }
+    }
+    Ok(Err(err)) => resolve_error_to_translate(snapshot_load_to_resolve(err), elapsed_ms(started), &token),
+    Err(join_err) => {
+      log::error!("translate_service_profile_blocking_join_failed error={join_err}");
+      resolve_error_to_translate(
+        ResolveError::Join("blocking join failed".into()),
+        elapsed_ms(started),
+        &token,
+      )
+    }
+  };
+  sessions.end(&input.request_id);
+  result
+}
+
+/// Testable formal detect workflow (same path as the Tauri command).
+/// Snapshot + rehash + resolve run via spawn_blocking; only capability await stays async.
+pub async fn run_detect_service_profile_language(
+  caps: &crate::services::service_capabilities::ServiceCapabilityService,
+  sessions: &crate::domain::cancel::RequestSessionRegistry,
+  input: ServiceProfileDetectInput,
+) -> DetectLanguageResult {
+  let started = Instant::now();
+  if let Err(err) = validate_capability_request_id(&input.request_id) {
+    return capability_to_detect_failure(&err, elapsed_ms(started));
+  }
+  if let Err(err) = validate_capability_text(&input.text) {
+    return capability_to_detect_failure(&err, elapsed_ms(started));
+  }
+  let token = sessions.begin(&input.request_id);
+  let caps = caps.clone();
+  let profile_id = input.profile_id;
+  let prepared = tauri::async_runtime::spawn_blocking(move || {
+    use crate::services::service_capabilities::ProfileCapabilityKind;
+    let snapshot = caps.load_profile_invocation_snapshot(profile_id, ProfileCapabilityKind::Detect)?;
+    let handler = caps
+      .resolve_detect_from_snapshot(&snapshot)
+      .map_err(crate::services::service_capabilities::ProfileSnapshotLoadError::from_capability)?;
+    Ok::<_, crate::services::service_capabilities::ProfileSnapshotLoadError>((snapshot, handler))
+  })
+  .await;
+  let result = match prepared {
+    Ok(Ok((snapshot, handler))) => {
+      let ctx = execution_context(
+        input.request_id.clone(),
+        token.clone(),
+        snapshot.instance_id,
+        snapshot.plugin_id.clone(),
+        snapshot.capability_id.clone(),
+      );
+      let request = DetectLanguageRequest { text: input.text };
+      match handler.detect(snapshot.instance_id, request, ctx).await {
+        Ok(response) => DetectLanguageResult {
+          ok: true,
+          language_id: Some(response.language_id),
+          detector_type: DetectorType::ServiceIntegration,
+          model_id: None,
+          latency_ms: elapsed_ms(started),
+          error_code: None,
+          message: "ok".into(),
+        },
+        Err(err) => capability_to_detect_failure(&err, elapsed_ms(started)),
+      }
+    }
+    Ok(Err(err)) => resolve_error_to_detect(snapshot_load_to_resolve(err), elapsed_ms(started), &token),
+    Err(join_err) => {
+      log::error!("detect_service_profile_blocking_join_failed error={join_err}");
+      resolve_error_to_detect(
+        ResolveError::Join("blocking join failed".into()),
+        elapsed_ms(started),
+        &token,
+      )
+    }
+  };
+  sessions.end(&input.request_id);
+  result
+}
+
+fn snapshot_load_to_resolve(err: crate::services::service_capabilities::ProfileSnapshotLoadError) -> ResolveError {
+  use crate::services::service_capabilities::ProfileSnapshotLoadError;
+  match err {
+    ProfileSnapshotLoadError::NotFound(msg) => ResolveError::Storage(StorageError::NotFound(msg)),
+    ProfileSnapshotLoadError::PluginUnavailable(msg) => ResolveError::Storage(StorageError::PluginUnavailable(msg)),
+    ProfileSnapshotLoadError::InvalidConfiguration(msg) => {
+      if msg.contains("no detect capability") {
+        ResolveError::DetectUnavailable
+      } else {
+        ResolveError::Storage(StorageError::Validation(msg))
+      }
+    }
+    ProfileSnapshotLoadError::Internal(msg) => ResolveError::Storage(StorageError::Internal(msg)),
+  }
+}
+
+fn map_capability_to_resolve(err: CapabilityError) -> ResolveError {
+  use CapabilityErrorCode::*;
+  // Preserve stable capability codes; do not collapse everything into Validation.
+  if err.message.contains("no detect capability") {
+    return ResolveError::DetectUnavailable;
+  }
+  match err.code {
+    PluginUnavailable => ResolveError::Storage(StorageError::PluginUnavailable(err.message)),
+    InvalidConfiguration | InvalidRequest => ResolveError::Storage(StorageError::Validation(err.message)),
+    PermissionDenied | Cancelled | Timeout | Auth | QuotaExceeded | RateLimited | Network | InvalidResponse
+    | ProviderUnavailable | UnsupportedInput | UnsupportedLanguage | Internal => ResolveError::Capability(err),
+  }
 }
 
 /// Authoritative Profile/instance reload used immediately before capability execution.
@@ -209,16 +301,25 @@ fn resolve_plugin_profile_conn(
   if !matches!(instance.health_status, IntegrationHealthStatus::Ready) {
     return Err(StorageError::Validation("integration instance is not ready".into()));
   }
+  // Prefer the authoritative SQLite TEXT so Wasm receives the exact migrated preferences.
+  let preferences_json: String = conn.query_row(
+    "SELECT capability_preferences_json FROM translation_profiles WHERE id = ?1",
+    rusqlite::params![profile_id.to_string()],
+    |row| row.get(0),
+  )?;
   Ok(ResolvedPluginProfile {
     instance_id: instance.id,
     plugin_id: instance.plugin_id,
     translate_capability_id: plugin.translate_capability_id.clone(),
     detect_capability_id: plugin.detect_capability_id.clone(),
+    preferences_json: preferences_json.into_bytes(),
   })
 }
 
 enum ResolveError {
   Storage(StorageError),
+  Capability(CapabilityError),
+  DetectUnavailable,
   Join(String),
 }
 
@@ -277,7 +378,14 @@ fn resolve_error_to_translate(err: ResolveError, latency_ms: u64, token: &Cancel
     ResolveError::Storage(StorageError::Validation(msg)) => {
       TranslateResult::failure("invalid_configuration", msg, latency_ms)
     }
+    ResolveError::Storage(StorageError::PluginUnavailable(msg)) => {
+      TranslateResult::failure("plugin_unavailable", msg, latency_ms)
+    }
     ResolveError::Storage(other) => TranslateResult::failure("internal", other.to_string(), latency_ms),
+    ResolveError::Capability(err) => capability_to_translate_failure(&err, latency_ms),
+    ResolveError::DetectUnavailable => {
+      TranslateResult::failure("detect_unavailable", "profile has no detect capability", latency_ms)
+    }
     ResolveError::Join(msg) => TranslateResult::failure("internal", msg, latency_ms),
   }
 }
@@ -297,7 +405,10 @@ fn resolve_error_to_detect(err: ResolveError, latency_ms: u64, token: &CancelTok
   let (code, message) = match err {
     ResolveError::Storage(StorageError::NotFound(msg)) => ("not_found", msg),
     ResolveError::Storage(StorageError::Validation(msg)) => ("invalid_configuration", msg),
+    ResolveError::Storage(StorageError::PluginUnavailable(msg)) => ("plugin_unavailable", msg),
     ResolveError::Storage(other) => ("internal", other.to_string()),
+    ResolveError::Capability(err) => return capability_to_detect_failure(&err, latency_ms),
+    ResolveError::DetectUnavailable => ("detect_unavailable", "profile has no detect capability".into()),
     ResolveError::Join(msg) => ("internal", msg),
   };
   DetectLanguageResult {
@@ -438,6 +549,13 @@ mod tests {
           health_status: health,
           last_validated_at: Some(now.clone()),
           last_error_code: None,
+          runtime_kind: "bundled-rust".into(),
+          package_digest: None,
+          execution_grant_set_revision: None,
+          runtime_state: "active".into(),
+          runtime_error_code: None,
+          runtime_error_message: None,
+          runtime_requirement_json: None,
           created_at: now.clone(),
           updated_at: now.clone(),
         },
@@ -485,7 +603,21 @@ mod tests {
         CapabilityHandler::DetectLanguage(Arc::new(FakeDetect)),
       );
     }
-    let caps = Arc::new(ServiceCapabilityService::new(db.clone(), registry, Arc::new(handlers)));
+    let handlers = Arc::new(handlers);
+    let packages = crate::services::plugin_store::PluginPackageService::with_vendor_roots(
+      db.clone(),
+      dir.path().to_path_buf(),
+      vec![],
+    );
+    let wasm = Arc::new(crate::services::wasm_runtime::WasmRuntime::new().unwrap());
+    let router = crate::services::runtime_router::RuntimeRouter::new(
+      db.clone(),
+      registry.clone(),
+      handlers.clone(),
+      packages,
+      wasm.clone(),
+    );
+    let caps = Arc::new(ServiceCapabilityService::new(db.clone(), registry, handlers).with_router(router, wasm));
     Fixture {
       db,
       profile_id,
@@ -504,10 +636,11 @@ mod tests {
       .db
       .read(|conn| resolve_plugin_profile_conn(conn, fixture.profile_id))
     {
-      Ok(resolved) => match fixture
-        .caps
-        .resolve_translate(resolved.instance_id, &resolved.translate_capability_id)
-      {
+      Ok(resolved) => match fixture.caps.resolve_translate(
+        resolved.instance_id,
+        &resolved.translate_capability_id,
+        resolved.preferences_json.clone(),
+      ) {
         Ok(handler) => {
           let ctx = execution_context(
             request_id.to_string(),
@@ -590,7 +723,19 @@ mod tests {
   #[test]
   fn service_translation_success_null_model_id() {
     let fixture = setup_fixture(true, true, IntegrationHealthStatus::Ready, GOOGLE_CLOUD_PLUGIN_ID, true);
-    let result = execute_translate(&fixture, "req-success", "hello");
+    // Formal workflow helper (same path as the Tauri command).
+    let sessions = crate::domain::cancel::RequestSessionRegistry::new();
+    let result = tauri::async_runtime::block_on(run_translate_service_profile(
+      &fixture.caps,
+      &sessions,
+      ServiceProfileTranslateInput {
+        request_id: "req-success".into(),
+        profile_id: fixture.profile_id,
+        text: "hello".into(),
+        source_lang: "en".into(),
+        target_lang: "zh".into(),
+      },
+    ));
     assert!(result.ok, "{result:?}");
     assert_eq!(result.translated_text, "T:hello");
     assert!(result.model_id.is_none());
@@ -601,16 +746,51 @@ mod tests {
   fn service_translation_stale_profile_id_fails_closed() {
     let fixture = setup_fixture(true, true, IntegrationHealthStatus::Ready, GOOGLE_CLOUD_PLUGIN_ID, true);
     let missing = new_id();
-    let err = fixture
-      .db
-      .read(|conn| resolve_plugin_profile_conn(conn, missing))
-      .unwrap_err();
-    assert!(matches!(err, StorageError::NotFound(_)));
-    let token = CancelToken::new();
-    let result = resolve_error_to_translate(ResolveError::Storage(err), 1, &token);
+    let sessions = crate::domain::cancel::RequestSessionRegistry::new();
+    let result = tauri::async_runtime::block_on(run_translate_service_profile(
+      &fixture.caps,
+      &sessions,
+      ServiceProfileTranslateInput {
+        request_id: "req-missing".into(),
+        profile_id: missing,
+        text: "hello".into(),
+        source_lang: "en".into(),
+        target_lang: "zh".into(),
+      },
+    ));
     assert!(!result.ok);
     assert_eq!(result.error_code.as_deref(), Some("not_found"));
     assert!(result.model_id.is_none());
+  }
+
+  #[test]
+  fn service_translation_package_unavailable_maps_plugin_unavailable() {
+    // Typed snapshot load maps package/grant issues to plugin_unavailable, not not_found.
+    let err = crate::services::service_capabilities::ProfileSnapshotLoadError::PluginUnavailable(
+      "installed package missing".into(),
+    );
+    let storage = err.into_resolve_storage();
+    assert!(matches!(storage, StorageError::PluginUnavailable(_)));
+    let token = CancelToken::new();
+    let result = resolve_error_to_translate(ResolveError::Storage(storage), 1, &token);
+    assert_eq!(result.error_code.as_deref(), Some("plugin_unavailable"));
+  }
+
+  #[test]
+  fn service_detect_formal_missing_profile_is_not_found() {
+    let fixture = setup_fixture(true, true, IntegrationHealthStatus::Ready, GOOGLE_CLOUD_PLUGIN_ID, true);
+    let sessions = crate::domain::cancel::RequestSessionRegistry::new();
+    let result = tauri::async_runtime::block_on(run_detect_service_profile_language(
+      &fixture.caps,
+      &sessions,
+      ServiceProfileDetectInput {
+        request_id: "req-det-missing".into(),
+        profile_id: new_id(),
+        text: "hello".into(),
+      },
+    ));
+    assert!(!result.ok);
+    assert_eq!(result.error_code.as_deref(), Some("not_found"));
   }
 
   #[test]
@@ -661,7 +841,8 @@ mod tests {
     assert!(result.model_id.is_none());
     assert!(
       result.error_code.as_deref() == Some("plugin_unavailable")
-        || result.error_code.as_deref() == Some("invalid_configuration"),
+        || result.error_code.as_deref() == Some("invalid_configuration")
+        || result.error_code.as_deref() == Some("permission_denied"),
       "{result:?}"
     );
   }
@@ -670,48 +851,85 @@ mod tests {
   fn service_translation_cancellation_maps_stable_code() {
     let fixture = setup_fixture(true, true, IntegrationHealthStatus::Ready, GOOGLE_CLOUD_PLUGIN_ID, true);
     fixture.fake.hang_until_cancel.store(true, Ordering::SeqCst);
-    let sessions = crate::domain::cancel::RequestSessionRegistry::new();
-    let request_id = "req-cancel";
-    let token = sessions.begin(request_id);
-    let started = Instant::now();
-    let resolved = fixture
-      .db
-      .read(|conn| resolve_plugin_profile_conn(conn, fixture.profile_id))
-      .unwrap();
-    let handler = fixture
-      .caps
-      .resolve_translate(resolved.instance_id, &resolved.translate_capability_id)
-      .unwrap();
-    let ctx = execution_context(
-      request_id.to_string(),
-      token.clone(),
-      resolved.instance_id,
-      resolved.plugin_id,
-      resolved.translate_capability_id.clone(),
+    let sessions = Arc::new(crate::domain::cancel::RequestSessionRegistry::new());
+    let request_id = "req-cancel-formal".to_string();
+    let sessions_cancel = sessions.clone();
+    let rid = request_id.clone();
+    // Cancel during capability await via registry (formal run_* path).
+    let cancel_thread = std::thread::spawn(move || {
+      std::thread::sleep(Duration::from_millis(20));
+      // Cancel by starting a token for the same request id if already registered, else no-op.
+      // The formal helper begins the session; race cancel after a short delay via public API:
+      // re-begin is not allowed, so use cancel_request if available.
+      sessions_cancel.cancel(&rid);
+    });
+    let result = tauri::async_runtime::block_on(run_translate_service_profile(
+      &fixture.caps,
+      sessions.as_ref(),
+      ServiceProfileTranslateInput {
+        request_id: request_id.clone(),
+        profile_id: fixture.profile_id,
+        text: "hello".into(),
+        source_lang: "en".into(),
+        target_lang: "zh".into(),
+      },
+    ));
+    let _ = cancel_thread.join();
+    assert!(!result.ok, "{result:?}");
+    assert_eq!(
+      result.error_code.as_deref(),
+      Some(TRANSLATE_CANCELLED_CODE),
+      "{result:?}"
     );
-    let request = TranslateTextRequest {
-      text: "hello".into(),
-      source_language_id: "en".into(),
-      target_language_id: "zh".into(),
-    };
-    let handle =
-      tauri::async_runtime::spawn(async move { handler.translate(resolved.instance_id, request, ctx).await });
-    // Cancel shortly after starting the hanging handler.
-    std::thread::sleep(Duration::from_millis(15));
-    token.cancel();
-    let err = tauri::async_runtime::block_on(handle).unwrap().unwrap_err();
-    let result = capability_to_translate_failure(&err, elapsed_ms(started));
-    sessions.end(request_id);
-    assert!(!result.ok);
-    assert_eq!(result.error_code.as_deref(), Some(TRANSLATE_CANCELLED_CODE));
     assert!(result.model_id.is_none());
+    // Session cleaned up by run_* (cancel after end is unknown).
+    assert!(!sessions.cancel(&request_id));
+  }
+
+  #[test]
+  fn service_detect_formal_cancellation_maps_stable_code() {
+    let fixture = setup_fixture(true, true, IntegrationHealthStatus::Ready, GOOGLE_CLOUD_PLUGIN_ID, true);
+    // Detect completes quickly; still exercise concurrent cancel + formal helper cleanup.
+    let sessions = Arc::new(crate::domain::cancel::RequestSessionRegistry::new());
+    let request_id = "req-det-cancel".to_string();
+    let sessions_cancel = sessions.clone();
+    let rid = request_id.clone();
+    let cancel_thread = std::thread::spawn(move || {
+      std::thread::sleep(Duration::from_millis(5));
+      sessions_cancel.cancel(&rid);
+    });
+    let result = tauri::async_runtime::block_on(run_detect_service_profile_language(
+      &fixture.caps,
+      sessions.as_ref(),
+      ServiceProfileDetectInput {
+        request_id: request_id.clone(),
+        profile_id: fixture.profile_id,
+        text: "hello".into(),
+      },
+    ));
+    let _ = cancel_thread.join();
+    assert!(!sessions.cancel(&request_id), "session must be cleaned up");
+    if !result.ok {
+      assert_eq!(result.error_code.as_deref(), Some(DETECT_CANCELLED_CODE), "{result:?}");
+    }
   }
 
   #[test]
   fn service_translation_timeout_maps_stable_code() {
     let fixture = setup_fixture(true, true, IntegrationHealthStatus::Ready, GOOGLE_CLOUD_PLUGIN_ID, true);
     fixture.fake.timeout.store(true, Ordering::SeqCst);
-    let result = execute_translate(&fixture, "req-timeout", "hello");
+    let sessions = crate::domain::cancel::RequestSessionRegistry::new();
+    let result = tauri::async_runtime::block_on(run_translate_service_profile(
+      &fixture.caps,
+      &sessions,
+      ServiceProfileTranslateInput {
+        request_id: "req-timeout".into(),
+        profile_id: fixture.profile_id,
+        text: "hello".into(),
+        source_lang: "en".into(),
+        target_lang: "zh".into(),
+      },
+    ));
     assert!(!result.ok);
     assert_eq!(result.error_code.as_deref(), Some("timeout"));
     assert!(result.model_id.is_none());

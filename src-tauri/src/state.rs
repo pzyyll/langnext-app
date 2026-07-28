@@ -12,8 +12,8 @@ use crate::services::token_grant::TokenGrantService;
 use crate::services::wasm_runtime::WasmRuntime;
 use crate::services::{
   ImportExportService, ModelService, OcrServiceService, PluginPackageService, ProviderHttpService, ProviderService,
-  ServiceIntegrationRegistry, ServiceIntegrationService, SettingsService, SpeechServiceService,
-  TranslationHistoryService, TranslationProfileService,
+  RuntimeLifecycleService, RuntimeRouter, ServiceIntegrationRegistry, ServiceIntegrationService, SettingsService,
+  SpeechServiceService, TranslationHistoryService, TranslationProfileService,
 };
 use crate::storage::Database;
 use std::path::PathBuf;
@@ -31,6 +31,8 @@ pub struct AppState {
   pub plugin_packages: PluginPackageService,
   pub service_integrations: ServiceIntegrationService,
   pub service_capabilities: ServiceCapabilityService,
+  pub runtime_router: RuntimeRouter,
+  pub runtime_lifecycle: RuntimeLifecycleService,
   pub token_grants: Arc<TokenGrantService>,
   pub network_broker: Arc<NetworkBroker>,
   pub settings: SettingsService,
@@ -41,8 +43,7 @@ pub struct AppState {
   pub provider_http: ProviderHttpService,
   /// In-flight request ids → cancel tokens (provider HTTP).
   pub request_sessions: Arc<RequestSessionRegistry>,
-  /// Shared Wasm Component runtime for external service plugins (Phase 2 conformance surface;
-  /// unreachable from production plugin instances until Phase 4 activation).
+  /// Shared Wasm Component runtime for external service plugins.
   pub wasm_runtime: Arc<WasmRuntime>,
 }
 
@@ -71,18 +72,10 @@ impl AppState {
       },
       &registry,
     )?);
-    let service_capabilities = ServiceCapabilityService::new(db.clone(), registry.clone(), capability_handlers);
 
     let providers = ProviderService::new(db.clone(), vault.clone());
     let models = ModelService::new(db.clone(), vault.clone(), app_data_dir.join("cache"));
     let profiles = TranslationProfileService::new(db.clone(), registry.clone());
-    let ocr_services = OcrServiceService::new(
-      db.clone(),
-      vault.clone(),
-      registry.clone(),
-      service_capabilities.clone(),
-    );
-    let speech_services = SpeechServiceService::new(db.clone(), registry.clone(), service_capabilities.clone());
     let plugin_packages = PluginPackageService::new(db.clone(), app_data_dir.clone());
     // Best-effort crash recovery for interrupted package installs/uninstalls (no package execution).
     if let Err(err) = plugin_packages.recover_install_operations() {
@@ -94,7 +87,7 @@ impl AppState {
     // and Drop of StagingSweepHandle only signals stop; recovery already ran at startup.
     std::mem::forget(_staging_sweep);
     let service_integrations =
-      ServiceIntegrationService::new(db.clone(), vault.clone(), registry, token_grants.clone());
+      ServiceIntegrationService::new(db.clone(), vault.clone(), registry.clone(), token_grants.clone());
     let settings = SettingsService::new(db.clone(), vault.clone());
     let import_export = ImportExportService::new(db.clone(), vault.clone());
     let history = TranslationHistoryService::new(db.clone());
@@ -102,6 +95,26 @@ impl AppState {
     let device_state = Arc::new(DeviceStateManager::load(&app_data_dir)?);
     let request_sessions = Arc::new(RequestSessionRegistry::new());
     let wasm_runtime = Arc::new(WasmRuntime::new().map_err(|e| StorageError::Internal(e.to_string()))?);
+    let runtime_router = RuntimeRouter::new(
+      db.clone(),
+      registry.clone(),
+      capability_handlers.clone(),
+      plugin_packages.clone(),
+      wasm_runtime.clone(),
+    );
+    // Capability dispatch always goes through the runtime router (no silent executor fallback).
+    let service_capabilities = ServiceCapabilityService::new(db.clone(), registry.clone(), capability_handlers)
+      .with_router(runtime_router.clone(), wasm_runtime.clone());
+    let ocr_services = OcrServiceService::new(
+      db.clone(),
+      vault.clone(),
+      registry.clone(),
+      service_capabilities.clone(),
+    );
+    let speech_services = SpeechServiceService::new(db.clone(), registry.clone(), service_capabilities.clone());
+    let runtime_lifecycle = RuntimeLifecycleService::new(db.clone(), plugin_packages.clone(), registry.clone())
+      .with_runtime(wasm_runtime.clone(), token_grants.clone())
+      .with_vault(vault.clone());
 
     Ok(Self {
       db,
@@ -114,6 +127,8 @@ impl AppState {
       plugin_packages,
       service_integrations,
       service_capabilities,
+      runtime_router,
+      runtime_lifecycle,
       token_grants,
       network_broker,
       settings,

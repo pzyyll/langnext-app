@@ -21,6 +21,8 @@ pub const MIGRATIONS: &[&str] = &[
   include_str!("../../migrations/0014_ocr_service_integration_binding.sql"),
   include_str!("../../migrations/0015_speech_services.sql"),
   include_str!("../../migrations/0016_runtime_plugin_packages.sql"),
+  include_str!("../../migrations/0017_runtime_plugin_instance_pins.sql"),
+  include_str!("../../migrations/0018_plugin_uninstall_restored_states.sql"),
 ];
 
 pub fn latest_version() -> i32 {
@@ -247,6 +249,63 @@ mod tests {
         .unwrap_or_else(|e| panic!("{table} missing: {e}"));
       assert_eq!(count, 0, "{table} should be empty");
     }
+    // v17 runtime pin columns and grant-entry/snapshot tables exist.
+    let has_runtime_kind: i64 = conn
+      .query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('integration_instances') WHERE name = 'runtime_kind'",
+        [],
+        |r| r.get(0),
+      )
+      .unwrap();
+    assert_eq!(has_runtime_kind, 1);
+    for table in [
+      "execution_grant_capability_entries",
+      "execution_grant_network_entries",
+      "execution_grant_page_entries",
+      "plugin_upgrade_snapshots",
+    ] {
+      let count: i64 = conn
+        .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+        .unwrap_or_else(|e| panic!("{table} missing: {e}"));
+      assert_eq!(count, 0, "{table} should be empty");
+    }
+  }
+
+  #[test]
+  fn migrate_v16_to_v17_backfills_bundled_runtime_pins() {
+    let mut conn = Connection::open_in_memory().unwrap();
+    migrate_with(&mut conn, &MIGRATIONS[..16]).unwrap();
+    assert_eq!(read_user_version(&conn).unwrap(), 16);
+    conn
+      .execute(
+        "INSERT INTO integration_instances (
+          id, plugin_id, plugin_version, display_name, enabled,
+          config_json, config_schema_version, health_status,
+          last_validated_at, last_error_code, created_at, updated_at
+        ) VALUES (
+          'inst-1', 'com.langnext.google-cloud', '1.0.0', 'Cloud', 1,
+          '{}', 1, 'ready',
+          NULL, NULL, 't0', 't1'
+        )",
+        [],
+      )
+      .unwrap();
+
+    migrate(&mut conn).unwrap();
+    assert_eq!(read_user_version(&conn).unwrap(), latest_version());
+
+    let (runtime_kind, package_digest, grant_rev, runtime_state): (String, Option<String>, Option<i64>, String) = conn
+      .query_row(
+        "SELECT runtime_kind, package_digest, execution_grant_set_revision, runtime_state
+           FROM integration_instances WHERE id = 'inst-1'",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+      )
+      .unwrap();
+    assert_eq!(runtime_kind, "bundled-rust");
+    assert!(package_digest.is_none());
+    assert!(grant_rev.is_none());
+    assert_eq!(runtime_state, "active");
   }
 
   #[test]

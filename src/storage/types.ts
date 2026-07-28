@@ -536,6 +536,34 @@ export interface CredentialSlotStatusDto {
   credentialRevision: number;
 }
 
+/** Host-owned runtime pin state for an integration instance. */
+export type InstanceRuntimeState = "active" | "pending_activation" | "unavailable";
+
+/** Sanitized runtime identity — never includes secrets, grants, or package bytes. */
+export interface RuntimeIdentityDto {
+  runtimeKind: string;
+  packageDigest?: string | null;
+  executionGrantSetRevision?: number | null;
+  runtimeState: InstanceRuntimeState;
+  runtimeErrorCode?: string | null;
+  runtimeErrorMessage?: string | null;
+}
+
+/** Exact runtime requirement carried in export format v7. */
+export interface RuntimeRequirementExport {
+  pluginId: string;
+  pluginVersion: string;
+  runtimeKind: string;
+  packageDigest?: string | null;
+  publisherKeyId?: string | null;
+  publisherKeyFingerprint?: string | null;
+  pluginApiVersion?: string | null;
+  configSchemaVersion: number;
+  requiredCapabilityMajors?: string[];
+  providerRuntimeKind?: string | null;
+  providerPackageDigest?: string | null;
+}
+
 /** Sanitized integration instance — never includes secrets or vault refs. */
 export interface IntegrationInstanceDto {
   id: string;
@@ -550,8 +578,95 @@ export interface IntegrationInstanceDto {
   effectiveStatus: IntegrationEffectiveStatus;
   lastValidatedAt: string | null;
   lastErrorCode: string | null;
+  runtimeKind: string;
+  packageDigest?: string | null;
+  executionGrantSetRevision?: number | null;
+  runtimeState: InstanceRuntimeState;
+  runtimeErrorCode?: string | null;
+  runtimeErrorMessage?: string | null;
+  runtimeRequirement?: RuntimeRequirementExport | null;
   credentialSlots: CredentialSlotStatusDto[];
   createdAt: string;
+  updatedAt: string;
+}
+
+export interface PublisherIdentityDto {
+  keyId: string;
+  keyFingerprint: string;
+}
+
+export interface PermissionDifferenceDto {
+  kind: string;
+  summary: string;
+  resource?: string | null;
+  origin?: string | null;
+  method?: string | null;
+  authPolicy?: string | null;
+}
+
+export interface CapabilityCompatibilityDto {
+  capabilityId: string;
+  status: string;
+  detail?: string | null;
+}
+
+export interface SchemaMigrationDto {
+  kind: string;
+  fromVersion: number;
+  toVersion: number;
+  status: string;
+  detail?: string | null;
+}
+
+export interface CredentialSlotCompatibilityDto {
+  slotId: string;
+  status: string;
+  required: boolean;
+  /** Target slot kind (`secret_text` / `secret_json`). Never a secret value. */
+  kind: string;
+}
+
+export interface RuntimeUpgradePreviewDto {
+  previewId: string;
+  instanceId: string;
+  source: RuntimeIdentityDto;
+  target: RuntimeIdentityDto;
+  sourcePluginVersion: string;
+  targetPluginVersion: string;
+  sourcePublisher?: PublisherIdentityDto | null;
+  targetPublisher: PublisherIdentityDto;
+  requiresPermissionApproval: boolean;
+  requiresPublisherReapproval: boolean;
+  capabilityCompatibility: CapabilityCompatibilityDto[];
+  schemaMigrations: SchemaMigrationDto[];
+  credentialSlots: CredentialSlotCompatibilityDto[];
+  permissionDifferences: PermissionDifferenceDto[];
+  expiresAt: string;
+}
+
+export interface ApplyRuntimeUpgradeInput {
+  previewId: string;
+  acknowledgePermissions?: boolean;
+}
+
+export interface RuntimeRollbackPreviewDto {
+  previewId: string;
+  instanceId: string;
+  snapshotId: string;
+  current: RuntimeIdentityDto;
+  target: RuntimeIdentityDto;
+  targetPluginVersion: string;
+  expiresAt: string;
+}
+
+export interface ApplyRuntimeRollbackInput {
+  previewId: string;
+}
+
+export interface RuntimeLifecycleResultDto {
+  instanceId: string;
+  runtime: RuntimeIdentityDto;
+  pluginVersion: string;
   updatedAt: string;
 }
 
@@ -941,6 +1056,8 @@ export interface IntegrationInstanceExport {
   configJson: string;
   configSchemaVersion: number;
   healthStatus: string;
+  /** Exact runtime requirement (export format v7+). */
+  runtime?: RuntimeRequirementExport | null;
   createdAt: string;
   updatedAt: string;
 }

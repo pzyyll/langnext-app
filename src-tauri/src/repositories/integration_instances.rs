@@ -10,6 +10,7 @@ fn map_row(row: &Row<'_>) -> Result<IntegrationInstance, rusqlite::Error> {
   let health_status: String = row.get("health_status")?;
   let enabled: i64 = row.get("enabled")?;
   let config_schema_version: i64 = row.get("config_schema_version")?;
+  let grant_revision: Option<i64> = row.get("execution_grant_set_revision")?;
   Ok(IntegrationInstance {
     id: Uuid::parse_str(&id)
       .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?,
@@ -24,6 +25,18 @@ fn map_row(row: &Row<'_>) -> Result<IntegrationInstance, rusqlite::Error> {
       .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, e.into()))?,
     last_validated_at: row.get("last_validated_at")?,
     last_error_code: row.get("last_error_code")?,
+    runtime_kind: row.get("runtime_kind")?,
+    package_digest: row.get("package_digest")?,
+    execution_grant_set_revision: grant_revision
+      .map(|value| {
+        u64::try_from(value)
+          .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Integer, Box::new(e)))
+      })
+      .transpose()?,
+    runtime_state: row.get("runtime_state")?,
+    runtime_error_code: row.get("runtime_error_code")?,
+    runtime_error_message: row.get("runtime_error_message")?,
+    runtime_requirement_json: row.get("runtime_requirement_json")?,
     created_at: row.get("created_at")?,
     updated_at: row.get("updated_at")?,
   })
@@ -50,6 +63,21 @@ pub fn list_by_plugin(conn: &Connection, plugin_id: &str) -> Result<Vec<Integrat
   Ok(rows)
 }
 
+pub fn list_by_package_digest(
+  conn: &Connection,
+  package_digest: &str,
+) -> Result<Vec<IntegrationInstance>, StorageError> {
+  let mut stmt = conn.prepare(
+    "SELECT * FROM integration_instances
+     WHERE package_digest = ?1
+     ORDER BY display_name ASC, created_at ASC, id ASC",
+  )?;
+  let rows = stmt
+    .query_map(params![package_digest], map_row)?
+    .collect::<Result<Vec<_>, _>>()?;
+  Ok(rows)
+}
+
 pub fn get(conn: &Connection, id: Uuid) -> Result<IntegrationInstance, StorageError> {
   conn
     .query_row(
@@ -67,8 +95,12 @@ pub fn insert(conn: &Connection, instance: &IntegrationInstance) -> Result<(), S
       "INSERT INTO integration_instances (
             id, plugin_id, plugin_version, display_name, enabled,
             config_json, config_schema_version, health_status,
-            last_validated_at, last_error_code, created_at, updated_at
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            last_validated_at, last_error_code,
+            runtime_kind, package_digest, execution_grant_set_revision,
+            runtime_state, runtime_error_code, runtime_error_message,
+            runtime_requirement_json,
+            created_at, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
       params![
         instance.id.to_string(),
         instance.plugin_id,
@@ -80,6 +112,13 @@ pub fn insert(conn: &Connection, instance: &IntegrationInstance) -> Result<(), S
         instance.health_status.as_str(),
         instance.last_validated_at,
         instance.last_error_code,
+        instance.runtime_kind,
+        instance.package_digest,
+        instance.execution_grant_set_revision.map(|v| v as i64),
+        instance.runtime_state,
+        instance.runtime_error_code,
+        instance.runtime_error_message,
+        instance.runtime_requirement_json,
         instance.created_at,
         instance.updated_at,
       ],
@@ -130,6 +169,111 @@ pub fn compare_and_set(
     .map_err(|e| StorageError::from_sqlite_constraint(e, "integration instance"))?;
   if changed == 0 {
     // Distinguish missing vs concurrent update.
+    match get(conn, id) {
+      Ok(_) => {
+        return Err(StorageError::Conflict(
+          "integration instance changed concurrently".into(),
+        ));
+      }
+      Err(StorageError::NotFound(_)) => {
+        return Err(StorageError::NotFound(format!("integration instance {id}")));
+      }
+      Err(e) => return Err(e),
+    }
+  }
+  Ok(())
+}
+
+/// Atomic CAS of runtime identity + config together (upgrade/rollback apply path).
+pub fn compare_and_set_runtime_pin(
+  conn: &Connection,
+  id: Uuid,
+  expected_updated_at: &str,
+  plugin_version: &str,
+  config_json: &str,
+  config_schema_version: u32,
+  runtime_kind: &str,
+  package_digest: Option<&str>,
+  execution_grant_set_revision: Option<u64>,
+  runtime_state: &str,
+  runtime_error_code: Option<&str>,
+  runtime_error_message: Option<&str>,
+  runtime_requirement_json: Option<&str>,
+  updated_at: &str,
+) -> Result<(), StorageError> {
+  let changed = conn
+    .execute(
+      "UPDATE integration_instances SET
+            plugin_version = ?3,
+            config_json = ?4,
+            config_schema_version = ?5,
+            runtime_kind = ?6,
+            package_digest = ?7,
+            execution_grant_set_revision = ?8,
+            runtime_state = ?9,
+            runtime_error_code = ?10,
+            runtime_error_message = ?11,
+            runtime_requirement_json = ?12,
+            updated_at = ?13
+         WHERE id = ?1 AND updated_at = ?2",
+      params![
+        id.to_string(),
+        expected_updated_at,
+        plugin_version,
+        config_json,
+        config_schema_version as i64,
+        runtime_kind,
+        package_digest,
+        execution_grant_set_revision.map(|v| v as i64),
+        runtime_state,
+        runtime_error_code,
+        runtime_error_message,
+        runtime_requirement_json,
+        updated_at,
+      ],
+    )
+    .map_err(|e| StorageError::from_sqlite_constraint(e, "integration instance runtime pin"))?;
+  if changed == 0 {
+    match get(conn, id) {
+      Ok(_) => {
+        return Err(StorageError::Conflict(
+          "integration instance changed concurrently".into(),
+        ));
+      }
+      Err(StorageError::NotFound(_)) => {
+        return Err(StorageError::NotFound(format!("integration instance {id}")));
+      }
+      Err(e) => return Err(e),
+    }
+  }
+  Ok(())
+}
+
+/// Mark runtime unavailable without changing package pin (missing content/grant).
+pub fn mark_runtime_unavailable(
+  conn: &Connection,
+  id: Uuid,
+  expected_updated_at: &str,
+  error_code: &str,
+  error_message: &str,
+  updated_at: &str,
+) -> Result<(), StorageError> {
+  let changed = conn.execute(
+    "UPDATE integration_instances SET
+          runtime_state = 'unavailable',
+          runtime_error_code = ?3,
+          runtime_error_message = ?4,
+          updated_at = ?5
+       WHERE id = ?1 AND updated_at = ?2",
+    params![
+      id.to_string(),
+      expected_updated_at,
+      error_code,
+      error_message,
+      updated_at
+    ],
+  )?;
+  if changed == 0 {
     match get(conn, id) {
       Ok(_) => {
         return Err(StorageError::Conflict(

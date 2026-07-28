@@ -290,6 +290,20 @@ impl AuthorityDigest {
     Self(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
   }
 
+  /// Parse a persisted lowercase-hex authority digest.
+  pub fn parse(value: &str) -> Result<Self, String> {
+    if value.len() != SHA256_HEX_LEN {
+      return Err(format!("authority digest must be {SHA256_HEX_LEN} hex characters"));
+    }
+    if value != value.trim() {
+      return Err("authority digest must not have surrounding whitespace".into());
+    }
+    if !is_lowercase_hex(value) {
+      return Err("authority digest must be lowercase hex (0-9a-f)".into());
+    }
+    Ok(Self(value.to_string()))
+  }
+
   pub fn as_str(&self) -> &str {
     &self.0
   }
@@ -321,12 +335,13 @@ pub(crate) fn compute_authority_digest(
     .map(|entry| {
       let limits = entry.resource_limits();
       format!(
-        "{}\u{1f}{}\u{1f}{}\u{1f}{:?}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}",
+        "{}\u{1f}{}\u{1f}{}\u{1f}{:?}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}",
         entry.capability_id().as_str(),
         entry.endpoint_id().as_str(),
         entry.origin().as_str(),
         entry.method(),
         entry.auth_policy().as_str(),
+        entry.resource_mode().as_str(),
         limits.max_request_bytes(),
         limits.max_response_bytes(),
         limits.max_stream_bytes(),
@@ -345,7 +360,17 @@ pub(crate) fn compute_authority_digest(
     .map(|entry| {
       let mut actions: Vec<&str> = entry.actions().map(|action| action.as_str()).collect();
       actions.sort_unstable();
-      format!("{}\u{1f}{}", entry.page_id().as_str(), actions.join(","))
+      let mut majors: Vec<&str> = entry.delegated_capability_majors().map(|cap| cap.as_str()).collect();
+      majors.sort_unstable();
+      let mut aliases: Vec<&str> = entry.delegated_endpoint_aliases().map(|alias| alias.as_str()).collect();
+      aliases.sort_unstable();
+      format!(
+        "{}\u{1f}{}\u{1f}{}\u{1f}{}",
+        entry.page_id().as_str(),
+        actions.join(","),
+        majors.join(","),
+        aliases.join(",")
+      )
     })
     .collect();
   page_reps.sort_unstable();
@@ -836,8 +861,30 @@ impl Default for ResourceLimits {
   }
 }
 
+/// Host-reviewed network resource mode bound into grant authority.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NetworkResourceMode {
+  /// Only mode in Phase 4: fixed host limits, no unlimited fetch.
+  Bounded,
+}
+
+impl NetworkResourceMode {
+  pub fn as_str(self) -> &'static str {
+    match self {
+      Self::Bounded => "bounded",
+    }
+  }
+
+  pub fn parse(value: &str) -> Result<Self, String> {
+    match value {
+      "bounded" => Ok(Self::Bounded),
+      other => Err(format!("invalid network resource mode: {other}")),
+    }
+  }
+}
+
 /// One reviewed network authority entry: binds capability, endpoint, origin, method, auth
-/// policy, and resource limits. Endpoint/auth policy remain host-resolved.
+/// policy, resource mode, and resource limits. Endpoint/auth policy remain host-resolved.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NetworkGrantEntry {
   capability_id: CapabilityId,
@@ -845,6 +892,7 @@ pub struct NetworkGrantEntry {
   origin: HttpsOrigin,
   method: HttpMethod,
   auth_policy: AuthPolicyId,
+  resource_mode: NetworkResourceMode,
   resource_limits: ResourceLimits,
 }
 
@@ -858,12 +906,34 @@ impl NetworkGrantEntry {
     auth_policy: AuthPolicyId,
     resource_limits: ResourceLimits,
   ) -> Self {
+    Self::with_mode(
+      capability_id,
+      endpoint_id,
+      origin,
+      method,
+      auth_policy,
+      NetworkResourceMode::Bounded,
+      resource_limits,
+    )
+  }
+
+  /// Construct a network grant with an explicit resource mode (authority content).
+  pub fn with_mode(
+    capability_id: CapabilityId,
+    endpoint_id: EndpointId,
+    origin: HttpsOrigin,
+    method: HttpMethod,
+    auth_policy: AuthPolicyId,
+    resource_mode: NetworkResourceMode,
+    resource_limits: ResourceLimits,
+  ) -> Self {
     Self {
       capability_id,
       endpoint_id,
       origin,
       method,
       auth_policy,
+      resource_mode,
       resource_limits,
     }
   }
@@ -888,16 +958,22 @@ impl NetworkGrantEntry {
     &self.auth_policy
   }
 
+  pub fn resource_mode(&self) -> NetworkResourceMode {
+    self.resource_mode
+  }
+
   pub fn resource_limits(&self) -> &ResourceLimits {
     &self.resource_limits
   }
 }
 
-/// One reviewed page authority entry: binds a page id and its allowed action ids.
+/// One reviewed page authority entry: page id, allowed actions, and delegated majors/aliases.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PageGrantEntry {
   page_id: PageId,
   actions: Vec<PageActionId>,
+  delegated_capability_majors: Vec<CapabilityId>,
+  delegated_endpoint_aliases: Vec<EndpointId>,
 }
 
 impl PageGrantEntry {
@@ -907,6 +983,14 @@ impl PageGrantEntry {
 
   pub fn actions(&self) -> impl ExactSizeIterator<Item = &PageActionId> {
     self.actions.iter()
+  }
+
+  pub fn delegated_capability_majors(&self) -> impl ExactSizeIterator<Item = &CapabilityId> {
+    self.delegated_capability_majors.iter()
+  }
+
+  pub fn delegated_endpoint_aliases(&self) -> impl ExactSizeIterator<Item = &EndpointId> {
+    self.delegated_endpoint_aliases.iter()
   }
 }
 
@@ -1282,14 +1366,34 @@ impl ExecutionGrantSet {
 impl PageGrantEntry {
   /// Construct a page grant entry, validating the page id and each action id.
   pub fn parse(page_id: &str, actions: &[&str]) -> Result<Self, String> {
+    Self::parse_with_delegation(page_id, actions, &[], &[])
+  }
+
+  /// Construct a page grant with delegated capability majors and endpoint aliases.
+  pub fn parse_with_delegation(
+    page_id: &str,
+    actions: &[&str],
+    delegated_capability_majors: &[&str],
+    delegated_endpoint_aliases: &[&str],
+  ) -> Result<Self, String> {
     let page_id = PageId::parse(page_id)?;
     let mut parsed_actions = Vec::with_capacity(actions.len());
     for a in actions {
       parsed_actions.push(PageActionId::parse(a)?);
     }
+    let mut majors = Vec::with_capacity(delegated_capability_majors.len());
+    for major in delegated_capability_majors {
+      majors.push(CapabilityId::parse(major).map_err(|e| format!("{e:?}"))?);
+    }
+    let mut aliases = Vec::with_capacity(delegated_endpoint_aliases.len());
+    for alias in delegated_endpoint_aliases {
+      aliases.push(EndpointId::parse(alias)?);
+    }
     Ok(Self {
       page_id,
       actions: parsed_actions,
+      delegated_capability_majors: majors,
+      delegated_endpoint_aliases: aliases,
     })
   }
 }
@@ -1470,6 +1574,9 @@ pub struct PluginManifestV1 {
   pub capabilities: Vec<CapabilityDeclaration>,
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub configuration_schema: Option<String>,
+  /// Host-tracked config schema revision for migration (distinct from PluginSchemaV1 dialect version).
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub config_schema_version: Option<u32>,
   #[serde(default)]
   pub credential_slots: Vec<CredentialSlotDecl>,
   #[serde(default)]

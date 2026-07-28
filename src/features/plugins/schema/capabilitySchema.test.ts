@@ -34,6 +34,8 @@ const instance: IntegrationInstanceDto = {
   effectiveStatus: "ready",
   lastValidatedAt: null,
   lastErrorCode: null,
+  runtimeKind: "bundled-rust",
+  runtimeState: "active",
   credentialSlots: [],
   createdAt: "t0",
   updatedAt: "t0",

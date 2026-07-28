@@ -22,6 +22,8 @@ import {
   listTranslationHistory,
   listTranslationHistoryModelFacets,
   listTranslationProfiles,
+  previewIntegrationRuntimeRollback,
+  previewIntegrationRuntimeUpgrade,
 } from "../storage/client";
 import type { TranslationHistoryListQuery } from "../storage/types";
 import {
@@ -32,6 +34,7 @@ import {
   pluginPackageKeys,
   profileKeys,
   providerKeys,
+  runtimeLifecycleKeys,
   settingsKeys,
   speechKeys,
 } from "./keys";
@@ -181,5 +184,23 @@ export function pluginVersionDependencyOptions(packageDigest: string) {
     queryKey: pluginPackageKeys.dependencies(packageDigest),
     queryFn: () => getPluginVersionDependencies(packageDigest),
     enabled: packageDigest.length > 0,
+  });
+}
+
+/** Ephemeral upgrade preview; disabled until a target digest is supplied. */
+export function runtimeUpgradePreviewOptions(instanceId: string, targetPackageDigest: string) {
+  return queryOptions({
+    queryKey: runtimeLifecycleKeys.upgradePreview(instanceId, targetPackageDigest),
+    queryFn: () => previewIntegrationRuntimeUpgrade(instanceId, targetPackageDigest),
+    enabled: instanceId.length > 0 && targetPackageDigest.length === 64,
+  });
+}
+
+/** Ephemeral rollback preview for the latest host-owned snapshot. */
+export function runtimeRollbackPreviewOptions(instanceId: string, enabled = false) {
+  return queryOptions({
+    queryKey: runtimeLifecycleKeys.rollbackPreview(instanceId),
+    queryFn: () => previewIntegrationRuntimeRollback(instanceId),
+    enabled: enabled && instanceId.length > 0,
   });
 }

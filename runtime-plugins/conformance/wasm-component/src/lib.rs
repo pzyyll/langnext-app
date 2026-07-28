@@ -60,17 +60,34 @@ fn mode(config: &[u8]) -> &'static str {
 
 struct Component;
 
+/// True when preferences are a non-empty JSON object (not `{}` / blank).
+fn preferences_nonempty(preferences: &[u8]) -> bool {
+    let trimmed = core::str::from_utf8(preferences)
+        .unwrap_or("")
+        .trim();
+    !(trimmed.is_empty() || trimmed == "{}")
+}
+
 impl Guest for Component {
     fn text(
         config: Vec<u8>,
-        _preferences: Vec<u8>,
+        preferences: Vec<u8>,
         request: TextRequest,
     ) -> Result<TextResponse, PluginError> {
         match mode(&config) {
-            "success" => Ok(TextResponse {
-                translated_text: format!("[{}]", request.text),
-                detected_source_language_id: None,
-            }),
+            "success" => {
+                let translated_text = if preferences_nonempty(&preferences) {
+                    // Surface exact preference JSON so host E2E can assert migrated prefs.
+                    let prefs = String::from_utf8_lossy(&preferences);
+                    format!("[{}]|prefs:{prefs}", request.text)
+                } else {
+                    format!("[{}]", request.text)
+                };
+                Ok(TextResponse {
+                    translated_text,
+                    detected_source_language_id: None,
+                })
+            }
             "broker-call" => {
                 let resp = do_broker_fetch("approved", "GET").map_err(broker_err)?;
                 let translated = match resp.body {

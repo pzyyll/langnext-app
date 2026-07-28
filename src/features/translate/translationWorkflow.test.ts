@@ -96,6 +96,8 @@ function integration(partial: Partial<IntegrationInstanceDto> = {}): Integration
     effectiveStatus: "ready",
     lastValidatedAt: "t",
     lastErrorCode: null,
+    runtimeKind: "bundled-rust",
+    runtimeState: "active",
     createdAt: "t",
     updatedAt: "t",
     credentialSlots: [],

@@ -52,6 +52,8 @@ function integration(): IntegrationInstanceDto {
     effectiveStatus: "ready",
     lastValidatedAt: "t",
     lastErrorCode: null,
+    runtimeKind: "bundled-rust",
+    runtimeState: "active",
     createdAt: "t",
     updatedAt: "t",
     credentialSlots: [],
