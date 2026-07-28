@@ -2,6 +2,10 @@
 // ABOUTME: Exercises CRUD, uniqueness, rollback, and credential journal rules.
 use crate::domain::model::{Availability, ModelSource, ProviderModel};
 use crate::domain::ocr_service::{BaiduOcrAction, OcrPromptTemplate, OcrProviderType, OcrService};
+use crate::domain::plugin_package::{
+  InstallOperationState, InstalledPluginVersion, PluginPackageApproval, PluginPublisher, PublisherDecision,
+  PublisherSource,
+};
 use crate::domain::provider::{
   AuthSchemeV1, BaseUrlSource, CredentialKind, ModelsSyncStatus, ProviderInstance, ProxyMode,
 };
@@ -13,8 +17,9 @@ use crate::domain::translation_profile::{
 };
 use crate::error::StorageError;
 use crate::repositories::{
-  app_credentials, app_settings, credential_operations, integration_credential_bindings, integration_instances,
-  ocr_prompt_templates, ocr_services, provider_instances, provider_models, translation_profiles,
+  app_credentials, app_settings, credential_operations, installed_plugin_versions, integration_credential_bindings,
+  integration_instances, ocr_prompt_templates, ocr_services, plugin_install_operations, plugin_package_approvals,
+  plugin_publishers, provider_instances, provider_models, translation_profiles,
 };
 use crate::storage::Database;
 use uuid::Uuid;
@@ -963,6 +968,101 @@ fn integration_instance_crud_cas_and_slot_isolation() {
 
     integration_credential_bindings::delete_for_instance(uow.conn(), id)?;
     integration_instances::delete(uow.conn(), id)?;
+    Ok(())
+  })
+  .unwrap();
+}
+
+#[test]
+fn installed_plugin_package_lifecycle_constraints() {
+  let (_dir, db) = setup();
+  let digest = "a".repeat(64);
+  let other_digest = "b".repeat(64);
+  let now = now_rfc3339();
+  let key_id = "com.example.keys.1";
+  let fingerprint = "c".repeat(64);
+
+  db.transaction(|uow| {
+    plugin_publishers::insert(
+      uow.conn(),
+      &PluginPublisher {
+        key_id: key_id.into(),
+        fingerprint: fingerprint.clone(),
+        public_key_hex: "d".repeat(64),
+        source: PublisherSource::UserApproved,
+        enabled: true,
+        revoked: false,
+        created_at: now.clone(),
+        updated_at: now.clone(),
+      },
+    )?;
+    installed_plugin_versions::insert(
+      uow.conn(),
+      &InstalledPluginVersion {
+        package_digest: digest.clone(),
+        plugin_id: "com.example.translate".into(),
+        version: "1.0.0".into(),
+        publisher_key_id: key_id.into(),
+        publisher_fingerprint: fingerprint.clone(),
+        runtime_kind: "wasm-component".into(),
+        manifest_json: "{}".into(),
+        permission_request_digest: "e".repeat(64),
+        content_available: true,
+        installed_at: now.clone(),
+      },
+    )?;
+    // Unique (plugin_id, version)
+    let conflict = installed_plugin_versions::insert(
+      uow.conn(),
+      &InstalledPluginVersion {
+        package_digest: other_digest.clone(),
+        plugin_id: "com.example.translate".into(),
+        version: "1.0.0".into(),
+        publisher_key_id: key_id.into(),
+        publisher_fingerprint: fingerprint.clone(),
+        runtime_kind: "wasm-component".into(),
+        manifest_json: "{}".into(),
+        permission_request_digest: "e".repeat(64),
+        content_available: true,
+        installed_at: now.clone(),
+      },
+    );
+    assert!(matches!(conflict, Err(StorageError::Conflict(_))));
+
+    let approval_id = new_id();
+    plugin_package_approvals::insert(
+      uow.conn(),
+      &PluginPackageApproval {
+        id: approval_id,
+        package_digest: digest.clone(),
+        revision: 1,
+        publisher_key_id: key_id.into(),
+        publisher_decision: PublisherDecision::UserApproved,
+        permission_request_digest: "e".repeat(64),
+        approved_at: now.clone(),
+      },
+    )?;
+    assert_eq!(plugin_package_approvals::next_revision(uow.conn(), &digest)?, 2);
+
+    // Package approval id cannot satisfy execution grant-set lookup.
+    assert!(plugin_package_approvals::get_execution_grant_set(uow.conn(), approval_id)?.is_none());
+
+    installed_plugin_versions::set_default(uow.conn(), "com.example.translate", &digest)?;
+
+    // ON DELETE RESTRICT: cannot delete version while approval references it.
+    let del = installed_plugin_versions::delete(uow.conn(), &digest);
+    assert!(del.is_err());
+
+    plugin_package_approvals::delete_for_package(uow.conn(), &digest)?;
+    installed_plugin_versions::clear_default_if_matches(uow.conn(), &digest)?;
+    installed_plugin_versions::delete(uow.conn(), &digest)?;
+
+    let op_id = new_id();
+    let op = plugin_install_operations::insert_prepared(uow.conn(), op_id, "/tmp/staging")?;
+    assert_eq!(op.state, InstallOperationState::Prepared);
+    plugin_install_operations::mark_verified(uow.conn(), op_id, &digest)?;
+    plugin_install_operations::mark_db_committed(uow.conn(), op_id)?;
+    plugin_install_operations::mark_finalized(uow.conn(), op_id)?;
     Ok(())
   })
   .unwrap();

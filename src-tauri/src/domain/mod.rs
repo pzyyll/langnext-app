@@ -5,6 +5,7 @@ pub mod import_export;
 pub mod language_detection;
 pub mod model;
 pub mod ocr_service;
+pub mod plugin_package;
 pub mod plugin_schema;
 pub mod provider;
 pub mod provider_http;

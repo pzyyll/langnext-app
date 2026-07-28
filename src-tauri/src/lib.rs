@@ -15,7 +15,7 @@ mod events;
 mod logging;
 mod panic;
 mod repositories;
-mod services;
+pub mod services;
 mod shortcuts;
 mod state;
 mod storage;
@@ -149,6 +149,16 @@ pub fn run() {
       cmds::speech_services::delete_speech_service,
       cmds::speech_services::synthesize_speech,
       cmds::speech_services::cancel_speech_synthesis,
+      cmds::plugin_packages::preview_plugin_package,
+      cmds::plugin_packages::approve_plugin_package,
+      cmds::plugin_packages::discard_plugin_package_preview,
+      cmds::plugin_packages::list_installed_plugin_versions,
+      cmds::plugin_packages::set_default_plugin_package,
+      cmds::plugin_packages::list_plugin_publishers,
+      cmds::plugin_packages::approve_user_plugin_publisher,
+      cmds::plugin_packages::revoke_plugin_publisher,
+      cmds::plugin_packages::uninstall_plugin_version,
+      cmds::plugin_packages::get_plugin_version_dependencies,
       cmds::service_integrations::list_service_integration_definitions,
       cmds::service_integrations::list_integration_instances,
       cmds::service_integrations::get_integration_instance,

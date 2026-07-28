@@ -4,10 +4,11 @@ use crate::domain::runtime_plugin::{
   self, AUTH_POLICIES_MAX_COUNT, CAPABILITIES_MAX_COUNT, CREDENTIAL_SLOTS_MAX_COUNT, CapabilityDeclaration,
   CapabilityId, CapabilityIdError, CredentialSlotDecl, EndpointId, FILE_MAX_BYTES, FILES_MAX_COUNT, FileRole,
   HOST_PLUGIN_API_VERSION_MAJOR, HttpsOrigin, MANIFEST_FILE_PATH, MANIFEST_VERSION_V1, METHODS_MAX_COUNT,
-  NETWORK_ENDPOINTS_MAX_COUNT, ORIGINS_MAX_COUNT, PAGES_MAX_COUNT, PageId, PermissionRequests, PluginApiVersion,
-  PluginFileEntry, PluginId, PluginManifestV1, PublisherDeclaration, PublisherKeyFingerprint, PublisherKeyId,
-  RuntimeDescriptor, SIGNATURE_FILE_PATH, SemVerVersion, UiDeclaration, check_file_index_collisions,
-  validate_archive_entry_path, validate_archive_path, validate_slot_id_strict,
+  NETWORK_ENDPOINTS_MAX_COUNT, ORIGINS_MAX_COUNT, PACKAGE_TARGETS_MAX_COUNT, PAGES_MAX_COUNT, PageId,
+  PermissionRequests, PluginApiVersion, PluginFileEntry, PluginId, PluginManifestV1, PublisherDeclaration,
+  PublisherKeyFingerprint, PublisherKeyId, RuntimeDescriptor, SIGNATURE_FILE_PATH, SemVerVersion, UiDeclaration,
+  check_file_index_collisions, host_package_target, package_targets_compatible, validate_archive_entry_path,
+  validate_archive_path, validate_package_target_constraint, validate_slot_id_strict,
 };
 // Re-export PermissionRequests for ValidatedPluginManifest public API consumers.
 use std::collections::HashMap;
@@ -180,10 +181,45 @@ pub fn validate_manifest(manifest: &PluginManifestV1) -> Result<ValidatedPluginM
   validate_credential_slots(&manifest.credential_slots)?;
   validate_permissions(&manifest.permissions)?;
   validate_ui(&manifest.ui, &file_index)?;
+  validate_targets(&manifest.targets)?;
 
   Ok(ValidatedPluginManifest {
     manifest: manifest.clone(),
   })
+}
+
+/// Validate closed-set platform/architecture target constraints (shape only).
+fn validate_targets(targets: &[crate::domain::runtime_plugin::PackageTargetConstraint]) -> Result<(), ContractError> {
+  if targets.len() > PACKAGE_TARGETS_MAX_COUNT {
+    return Err(ContractError::new(
+      ContractErrorCode::LimitExceeded,
+      format!(
+        "targets exceeds {PACKAGE_TARGETS_MAX_COUNT} entries (got {})",
+        targets.len()
+      ),
+    ));
+  }
+  for (index, target) in targets.iter().enumerate() {
+    validate_package_target_constraint(target)
+      .map_err(|e| ContractError::new(ContractErrorCode::InvalidField, format!("targets[{index}]: {e}")))?;
+  }
+  Ok(())
+}
+
+/// Host target compatibility check used by package preview/install (fail closed).
+pub fn validate_manifest_host_targets(manifest: &PluginManifestV1) -> Result<(), ContractError> {
+  validate_targets(&manifest.targets)?;
+  let host = host_package_target();
+  if !package_targets_compatible(&manifest.targets, &host) {
+    return Err(ContractError::new(
+      ContractErrorCode::UnsupportedPluginApi,
+      format!(
+        "package targets do not include host {}/{}",
+        host.platform, host.architecture
+      ),
+    ));
+  }
+  Ok(())
 }
 
 /// Validate that the archive payload matches the signed file index shape exactly.
@@ -599,6 +635,7 @@ mod tests {
         kind: RuntimeKind::WasmComponent,
         artifact: Some("artifacts/plugin.wasm".into()),
       },
+      targets: vec![],
       files: vec![file("artifacts/plugin.wasm", FileRole::RuntimeArtifact, 1024)],
       capabilities: vec![CapabilityDeclaration {
         id: "translate.text@1".into(),

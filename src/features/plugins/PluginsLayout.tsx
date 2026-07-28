@@ -20,9 +20,12 @@ import { getIpcErrorMessage } from "../../storage/errors";
 import type { IntegrationInstanceDto, ServiceIntegrationDefinitionDto } from "../../storage/types";
 import { resolvePluginDisplayName, resolvePluginIcon, type PluginTextLookup } from "./pluginPresentation";
 import { AddIntegrationDialog } from "./AddIntegrationDialog";
+import { InstallPluginDialog } from "./InstallPluginDialog";
+import { InstalledPluginVersions } from "./InstalledPluginVersions";
 
+/** Footer grows with stacked package-management actions (no fixed single-row height). */
 const panelFooterClassName =
-  "box-border flex h-[calc(2rem+2rem+1px)] max-h-[calc(2rem+2rem+1px)] min-h-[calc(2rem+2rem+1px)] shrink-0 grow-0 items-center border-t border-line px-8 py-4";
+  "box-border flex shrink-0 grow-0 flex-col items-stretch gap-2 border-t border-line px-4 py-3";
 const newInstanceButtonClassName = `${outlineButtonClassName} w-full font-bold hover:not-data-disabled:bg-on-surface`;
 
 type PluginIconProps = {
@@ -71,6 +74,8 @@ export function PluginsLayout() {
   const error = instancesQuery.error != null ? getIpcErrorMessage(instancesQuery.error, t("plugins.loadFailed")) : null;
 
   const [addOpen, setAddOpen] = useState(false);
+  const [installOpen, setInstallOpen] = useState(false);
+  const [packagesOpen, setPackagesOpen] = useState(false);
 
   useEffect(() => {
     if (loading || error || selectedId || instances.length === 0) {
@@ -154,12 +159,31 @@ export function PluginsLayout() {
           <Button type="button" className={newInstanceButtonClassName} onClick={() => setAddOpen(true)}>
             + {t("plugins.createNew")}
           </Button>
+          <Button type="button" className={newInstanceButtonClassName} onClick={() => setInstallOpen(true)}>
+            {t("plugins.packages.install")}
+          </Button>
+          <Button type="button" className={newInstanceButtonClassName} onClick={() => setPackagesOpen((open) => !open)}>
+            {packagesOpen ? t("plugins.packages.hideInstalled") : t("plugins.packages.showInstalled")}
+          </Button>
         </div>
       </aside>
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        {packagesOpen ? (
+          <div
+            className="
+              min-h-0 flex-1 overflow-y-auto border-b border-line p-4
+              lg:border-r lg:border-b-0
+            "
+          >
+            <h2 className="mb-3 text-body-tight font-bold text-on-surface">{t("plugins.packages.installedTitle")}</h2>
+            <InstalledPluginVersions />
+          </div>
+        ) : null}
         <Outlet />
       </div>
+
+      <InstallPluginDialog open={installOpen} onOpenChange={setInstallOpen} />
 
       <AddIntegrationDialog
         open={addOpen}

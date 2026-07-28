@@ -5,6 +5,7 @@ description = "LangNext desktop application"
 authors = ["pzyyll"]
 edition = "2024"
 license = "Apache-2.0"
+default-run = "langnext-app"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -14,6 +15,11 @@ license = "Apache-2.0"
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
 name = "langnext_app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "plugin_tool"
+path = "src/bin/plugin_tool.rs"
+# Offline package finalize/verify helper; not the Tauri desktop entrypoint.
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -53,6 +59,11 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 # when stored via UTF-16 passwords; overflow files are AES-GCM sealed with a keyring master key.
 aes-gcm = "0.10"
 sha2 = "0.10"
+hex = "0.4"
+# Phase 3: bounded ZIP archive read/write for signed `.lnplugin` packages.
+zip = { version = "=8.6.0", default-features = false, features = ["deflate"] }
+# Phase 3: Ed25519 verification of exact plugin.json bytes (signing used in tests/tooling only).
+ed25519-dalek = { version = "=3.0.0", default-features = true, features = ["rand_core"] }
 rand = "0.8"
 # Host target triple for compiled Component cache identity (Issue 6: complete arch-vendor-os-env
 # triple, not the incomplete std::env::consts arch-os form). Pinned to the version wasmtime 47

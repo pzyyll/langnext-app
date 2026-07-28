@@ -20,6 +20,7 @@ pub const MIGRATIONS: &[&str] = &[
   include_str!("../../migrations/0013_translation_profile_engines.sql"),
   include_str!("../../migrations/0014_ocr_service_integration_binding.sql"),
   include_str!("../../migrations/0015_speech_services.sql"),
+  include_str!("../../migrations/0016_runtime_plugin_packages.sql"),
 ];
 
 pub fn latest_version() -> i32 {
@@ -232,6 +233,47 @@ mod tests {
       .query_row("SELECT COUNT(*) FROM speech_services", [], |r| r.get(0))
       .unwrap();
     assert_eq!(speech_count, 0);
+    // v16 plugin package lifecycle tables exist and are empty on a fresh database.
+    for table in [
+      "plugin_publishers",
+      "installed_plugin_versions",
+      "plugin_package_approvals",
+      "plugin_default_versions",
+      "plugin_install_operations",
+      "execution_grant_sets",
+    ] {
+      let count: i64 = conn
+        .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+        .unwrap_or_else(|e| panic!("{table} missing: {e}"));
+      assert_eq!(count, 0, "{table} should be empty");
+    }
+  }
+
+  #[test]
+  fn migrate_v15_to_v16_creates_plugin_package_tables() {
+    let mut conn = Connection::open_in_memory().unwrap();
+    migrate_with(&mut conn, &MIGRATIONS[..15]).unwrap();
+    assert_eq!(read_user_version(&conn).unwrap(), 15);
+
+    migrate(&mut conn).unwrap();
+    assert_eq!(read_user_version(&conn).unwrap(), latest_version());
+
+    let publishers: i64 = conn
+      .query_row("SELECT COUNT(*) FROM plugin_publishers", [], |r| r.get(0))
+      .unwrap();
+    assert_eq!(publishers, 0);
+    let versions: i64 = conn
+      .query_row("SELECT COUNT(*) FROM installed_plugin_versions", [], |r| r.get(0))
+      .unwrap();
+    assert_eq!(versions, 0);
+    let approvals: i64 = conn
+      .query_row("SELECT COUNT(*) FROM plugin_package_approvals", [], |r| r.get(0))
+      .unwrap();
+    assert_eq!(approvals, 0);
+    let grants: i64 = conn
+      .query_row("SELECT COUNT(*) FROM execution_grant_sets", [], |r| r.get(0))
+      .unwrap();
+    assert_eq!(grants, 0);
   }
 
   #[test]

@@ -1,0 +1,6 @@
+# Binary plugin package fixtures and signatures (prevent false whitespace warnings).
+*.lnplugin binary
+*.sig binary
+*.wasm binary
+runtime-plugins/conformance/fixtures/packages/**/*.sig binary
+runtime-plugins/conformance/fixtures/packages/**/*.lnplugin binary

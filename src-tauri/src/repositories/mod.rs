@@ -3,10 +3,15 @@
 pub mod app_credentials;
 pub mod app_settings;
 pub mod credential_operations;
+pub mod installed_plugin_versions;
 pub mod integration_credential_bindings;
 pub mod integration_instances;
 pub mod ocr_prompt_templates;
 pub mod ocr_services;
+pub mod plugin_install_operations;
+pub mod plugin_package_approvals;
+pub mod plugin_publishers;
+pub mod plugin_uninstall_operations;
 pub mod provider_instances;
 pub mod provider_models;
 pub mod speech_services;

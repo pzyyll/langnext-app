@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# ABOUTME: Offline verification of a signed `.lnplugin` via the project Rust verifier.
+# ABOUTME: Requires a trusted public key (--public-key-hex or --public-key-file); fail closed without one.
+#MISE description="Verify a signed .lnplugin package (args: path --public-key-hex hex | --public-key-file path)"
+set -euo pipefail
+
+if [[ $# -lt 1 ]]; then
+  echo "usage: mise run plugin:verify -- <package.lnplugin> --public-key-hex <hex>" >&2
+  echo "   or: mise run plugin:verify -- <package.lnplugin> --public-key-file <path>" >&2
+  exit 2
+fi
+
+# Drop a leading `--` that mise may forward from `mise run plugin:verify -- args`.
+if [[ "${1:-}" == "--" ]]; then
+  shift
+fi
+
+cargo run --manifest-path src-tauri/Cargo.toml --bin plugin_tool --quiet -- verify "$@"

@@ -66,6 +66,17 @@ const APP_COMMANDS: &[&str] = &[
   "delete_speech_service",
   "synthesize_speech",
   "cancel_speech_synthesis",
+  // Plugin packages (signed install lifecycle; no execution)
+  "preview_plugin_package",
+  "approve_plugin_package",
+  "discard_plugin_package_preview",
+  "list_installed_plugin_versions",
+  "set_default_plugin_package",
+  "list_plugin_publishers",
+  "approve_user_plugin_publisher",
+  "revoke_plugin_publisher",
+  "uninstall_plugin_version",
+  "get_plugin_version_dependencies",
   // Service integrations (plugin instances)
   "list_service_integration_definitions",
   "list_integration_instances",

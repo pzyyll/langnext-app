@@ -50,3 +50,10 @@ export const settingsKeys = {
   all: ["app-settings"] as const,
   detail: () => [...settingsKeys.all, "detail"] as const,
 };
+
+export const pluginPackageKeys = {
+  all: ["plugin-packages"] as const,
+  versions: () => [...pluginPackageKeys.all, "versions"] as const,
+  publishers: () => [...pluginPackageKeys.all, "publishers"] as const,
+  dependencies: (packageDigest: string) => [...pluginPackageKeys.all, "dependencies", packageDigest] as const,
+};

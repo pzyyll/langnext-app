@@ -1,7 +1,7 @@
 // ABOUTME: Contract tests for Query key hierarchy and prefix invalidation shape.
 // ABOUTME: Pure key factories only — no DOM or IPC required.
 import { describe, expect, test } from "bun:test";
-import { integrationKeys, modelKeys, ocrKeys, profileKeys, providerKeys, speechKeys } from "./keys";
+import { integrationKeys, modelKeys, ocrKeys, pluginPackageKeys, profileKeys, providerKeys, speechKeys } from "./keys";
 
 describe("providerKeys", () => {
   test("list key starts with providerKeys.all", () => {
@@ -100,5 +100,21 @@ describe("integrationKeys", () => {
     expect(definitions).toEqual(["service-integrations", "definitions"]);
     expect(dependencies).toEqual(["service-integrations", "dependencies", "id-a"]);
     expect(detailA).not.toEqual(detailB);
+  });
+});
+
+describe("pluginPackageKeys", () => {
+  test("versions, publishers, and dependencies share pluginPackageKeys.all prefix", () => {
+    const versions = pluginPackageKeys.versions();
+    const publishers = pluginPackageKeys.publishers();
+    const dependencies = pluginPackageKeys.dependencies("abc");
+
+    expect(versions[0]).toBe(pluginPackageKeys.all[0]);
+    expect(publishers[0]).toBe(pluginPackageKeys.all[0]);
+    expect(dependencies[0]).toBe(pluginPackageKeys.all[0]);
+
+    expect(versions).toEqual(["plugin-packages", "versions"]);
+    expect(publishers).toEqual(["plugin-packages", "publishers"]);
+    expect(dependencies).toEqual(["plugin-packages", "dependencies", "abc"]);
   });
 });

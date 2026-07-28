@@ -802,6 +802,7 @@ mod tests {
         kind: RuntimeKind::BundledRust,
         artifact: None,
       },
+      targets: vec![],
       files: vec![],
       capabilities: vec![],
       configuration_schema: None,

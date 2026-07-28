@@ -589,6 +589,97 @@ export interface IntegrationValidationResult {
   message: string | null;
 }
 
+/** Publisher key source for installed plugin packages. */
+export type PublisherSource = "vendor" | "user_approved";
+
+/** Publisher trust state returned by package preview. */
+export type PublisherTrustState = "trusted_vendor" | "trusted_user" | "unknown" | "revoked" | "disabled";
+
+export interface PluginPublisherDto {
+  keyId: string;
+  fingerprint: string;
+  source: PublisherSource;
+  enabled: boolean;
+  revoked: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PackageNetworkPermissionDto {
+  id: string;
+  origins: string[];
+  methods: string[];
+}
+
+/** Sanitized package preview; opaque ID only (no absolute paths or archive bytes). */
+export interface PluginPackagePreviewDto {
+  previewId: string;
+  packageDigest: string;
+  pluginId: string;
+  version: string;
+  publisherKeyId: string;
+  publisherFingerprint: string;
+  publisherTrust: PublisherTrustState;
+  requiresPublisherApproval: boolean;
+  runtimeKind: string;
+  capabilities: string[];
+  configurationSchema: string | null;
+  network: PackageNetworkPermissionDto[];
+  authPolicies: string[];
+  permissionRequestDigest: string;
+  /** Permission deltas vs currently installed version of the same plugin (if any). */
+  permissionDifferences: string[];
+  warnings: string[];
+  expiresAt: string;
+}
+
+export interface ApprovePluginPackageInput {
+  previewId: string;
+  approvePublisher?: boolean;
+  publisherPublicKeyHex?: string | null;
+  acknowledgePermissions: boolean;
+  setAsDefault?: boolean;
+}
+
+export interface InstalledPluginVersionDto {
+  packageDigest: string;
+  pluginId: string;
+  version: string;
+  publisherKeyId: string;
+  publisherFingerprint: string;
+  runtimeKind: string;
+  permissionRequestDigest: string;
+  contentAvailable: boolean;
+  isDefault: boolean;
+  inUse: boolean;
+  installedAt: string;
+  capabilities: string[];
+}
+
+export interface ApprovePluginPackageResult {
+  version: InstalledPluginVersionDto;
+  approvalId: string;
+  approvalRevision: number;
+}
+
+export interface ApproveUserPublisherInput {
+  keyId: string;
+  fingerprint: string;
+  publicKeyHex: string;
+}
+
+export interface PluginDefaultVersionDto {
+  pluginId: string;
+  packageDigest: string;
+  updatedAt: string;
+}
+
+export interface PluginVersionDependenciesDto {
+  packageDigest: string;
+  integrationInstanceIds: string[];
+  isDefault: boolean;
+}
+
 /** Google Cloud non-secret config (schema v1). */
 export interface GoogleCloudConfigV1 {
   projectId: string;

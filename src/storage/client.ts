@@ -3,16 +3,24 @@
 import type {
   AppSettingsDto,
   AppSettingsUpdate,
+  ApprovePluginPackageInput,
+  ApprovePluginPackageResult,
+  ApproveUserPublisherInput,
   IntegrationDependencyDto,
   IntegrationInstanceDto,
   IntegrationInstanceWrite,
   IntegrationValidationResult,
+  InstalledPluginVersionDto,
   ManualModelWrite,
   ModelConfigWrite,
   OcrRecognizeInput,
   OcrRecognizeResult,
   OcrServiceDto,
   OcrServiceWrite,
+  PluginDefaultVersionDto,
+  PluginPackagePreviewDto,
+  PluginPublisherDto,
+  PluginVersionDependenciesDto,
   SpeechServiceDto,
   SpeechServiceWrite,
   SpeechSynthesizeInput,
@@ -190,6 +198,51 @@ export async function deleteIntegrationInstance(id: string): Promise<void> {
 /** Local-only validation (Phase 1A). Never claims remote/IAM health. */
 export async function validateIntegrationInstance(id: string): Promise<IntegrationValidationResult> {
   return runStorage(invokeEffect<IntegrationValidationResult>("validate_integration_instance", { id }));
+}
+
+/** Preview a local `.lnplugin` path. Rust owns file reading and verification. */
+export async function previewPluginPackage(path: string): Promise<PluginPackagePreviewDto> {
+  return runStorage(invokeEffect<PluginPackagePreviewDto>("preview_plugin_package", { path }));
+}
+
+/** Approve and install a previously previewed package by opaque preview id. */
+export async function approvePluginPackage(input: ApprovePluginPackageInput): Promise<ApprovePluginPackageResult> {
+  return runStorage(invokeEffect<ApprovePluginPackageResult>("approve_plugin_package", { input }));
+}
+
+export async function discardPluginPackagePreview(previewId: string): Promise<void> {
+  return runStorage(invokeEffect<void>("discard_plugin_package_preview", { previewId }));
+}
+
+export async function listInstalledPluginVersions(): Promise<InstalledPluginVersionDto[]> {
+  return runStorage(invokeEffect<InstalledPluginVersionDto[]>("list_installed_plugin_versions"));
+}
+
+export async function setDefaultPluginPackage(
+  pluginId: string,
+  packageDigest: string,
+): Promise<PluginDefaultVersionDto> {
+  return runStorage(invokeEffect<PluginDefaultVersionDto>("set_default_plugin_package", { pluginId, packageDigest }));
+}
+
+export async function listPluginPublishers(): Promise<PluginPublisherDto[]> {
+  return runStorage(invokeEffect<PluginPublisherDto[]>("list_plugin_publishers"));
+}
+
+export async function approveUserPluginPublisher(input: ApproveUserPublisherInput): Promise<PluginPublisherDto> {
+  return runStorage(invokeEffect<PluginPublisherDto>("approve_user_plugin_publisher", { input }));
+}
+
+export async function revokePluginPublisher(keyId: string): Promise<PluginPublisherDto> {
+  return runStorage(invokeEffect<PluginPublisherDto>("revoke_plugin_publisher", { keyId }));
+}
+
+export async function uninstallPluginVersion(packageDigest: string): Promise<void> {
+  return runStorage(invokeEffect<void>("uninstall_plugin_version", { packageDigest }));
+}
+
+export async function getPluginVersionDependencies(packageDigest: string): Promise<PluginVersionDependenciesDto> {
+  return runStorage(invokeEffect<PluginVersionDependenciesDto>("get_plugin_version_dependencies", { packageDigest }));
 }
 
 /**

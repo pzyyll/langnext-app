@@ -6,6 +6,7 @@ import {
   DATA_APP_SETTINGS_CHANGED,
   DATA_MODELS_CHANGED,
   DATA_OCR_SERVICES_CHANGED,
+  DATA_PLUGIN_PACKAGES_CHANGED,
   DATA_PROVIDERS_CHANGED,
   DATA_SERVICE_INTEGRATIONS_CHANGED,
   DATA_SPEECH_SERVICES_CHANGED,
@@ -17,6 +18,7 @@ import {
   integrationKeys,
   modelKeys,
   ocrKeys,
+  pluginPackageKeys,
   profileKeys,
   providerKeys,
   settingsKeys,
@@ -35,6 +37,7 @@ describe("DATA_CHANGE_EVENT_BINDINGS", () => {
       DATA_SPEECH_SERVICES_CHANGED,
       DATA_SERVICE_INTEGRATIONS_CHANGED,
       DATA_APP_SETTINGS_CHANGED,
+      DATA_PLUGIN_PACKAGES_CHANGED,
     ]);
     expect(new Set(events).size).toBe(events.length);
   });
@@ -42,7 +45,7 @@ describe("DATA_CHANGE_EVENT_BINDINGS", () => {
   test("DATA_SERVICE_INTEGRATIONS_CHANGED invalidates integrations, OCR, and Speech", () => {
     const binding = DATA_CHANGE_EVENT_BINDINGS.find((entry) => entry.event === DATA_SERVICE_INTEGRATIONS_CHANGED);
     expect(binding).toBeDefined();
-    expect(binding?.invalidateKeys).toEqual([integrationKeys.all, ocrKeys.all, speechKeys.all]);
+    expect(binding?.invalidateKeys).toEqual([integrationKeys.all, ocrKeys.all, speechKeys.all, pluginPackageKeys.all]);
     expect(binding?.invalidateKeys[0]?.[0]).toBe(integrationKeys.all[0]);
     expect(binding?.invalidateKeys[1]?.[0]).toBe(ocrKeys.all[0]);
     expect(binding?.invalidateKeys[2]?.[0]).toBe(speechKeys.all[0]);
@@ -58,6 +61,7 @@ describe("DATA_CHANGE_EVENT_BINDINGS", () => {
     expect(byEvent.get(DATA_OCR_SERVICES_CHANGED)).toEqual([ocrKeys.all]);
     expect(byEvent.get(DATA_SPEECH_SERVICES_CHANGED)).toEqual([speechKeys.all]);
     expect(byEvent.get(DATA_APP_SETTINGS_CHANGED)).toEqual([settingsKeys.all]);
+    expect(byEvent.get(DATA_PLUGIN_PACKAGES_CHANGED)).toEqual([pluginPackageKeys.all]);
   });
 
   test("every binding invalidates at least one non-empty key prefix", () => {

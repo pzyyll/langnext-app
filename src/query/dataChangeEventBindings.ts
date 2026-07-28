@@ -4,6 +4,7 @@ import {
   DATA_APP_SETTINGS_CHANGED,
   DATA_MODELS_CHANGED,
   DATA_OCR_SERVICES_CHANGED,
+  DATA_PLUGIN_PACKAGES_CHANGED,
   DATA_PROVIDERS_CHANGED,
   DATA_SERVICE_INTEGRATIONS_CHANGED,
   DATA_SPEECH_SERVICES_CHANGED,
@@ -15,6 +16,7 @@ import {
   integrationKeys,
   modelKeys,
   ocrKeys,
+  pluginPackageKeys,
   profileKeys,
   providerKeys,
   settingsKeys,
@@ -60,10 +62,15 @@ export const DATA_CHANGE_EVENT_BINDINGS: readonly DataChangeEventBinding[] = [
   {
     event: DATA_SERVICE_INTEGRATIONS_CHANGED,
     // Integration health/rebind affects plugin OCR/Speech labels and readiness.
-    invalidateKeys: [integrationKeys.all, ocrKeys.all, speechKeys.all],
+    // Package in_use is derived from integration bindings, so package lists must refresh too.
+    invalidateKeys: [integrationKeys.all, ocrKeys.all, speechKeys.all, pluginPackageKeys.all],
   },
   {
     event: DATA_APP_SETTINGS_CHANGED,
     invalidateKeys: [settingsKeys.all],
+  },
+  {
+    event: DATA_PLUGIN_PACKAGES_CHANGED,
+    invalidateKeys: [pluginPackageKeys.all],
   },
 ];

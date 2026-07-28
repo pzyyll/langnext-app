@@ -47,6 +47,12 @@ pub const GRANT_PAGE_MAX_ENTRIES: usize = 16;
 pub const GRANT_PAGE_MAX_ACTIONS: usize = 16;
 pub const ORIGINS_MAX_COUNT: usize = 8;
 pub const METHODS_MAX_COUNT: usize = 8;
+/// Maximum number of platform/architecture target constraints on a package manifest.
+pub const PACKAGE_TARGETS_MAX_COUNT: usize = 16;
+/// Closed-set package platform tokens accepted by the host.
+pub const PACKAGE_TARGET_PLATFORMS: &[&str] = &["any", "windows", "macos", "linux"];
+/// Closed-set package architecture tokens accepted by the host.
+pub const PACKAGE_TARGET_ARCHITECTURES: &[&str] = &["any", "x86_64", "aarch64"];
 /// Upper bound on a single indexed file's byte length (256 MiB).
 pub const FILE_MAX_BYTES: u64 = 256 * MEBIBYTE_BYTES;
 /// Default resource limits seed for grant entries (host may tighten per grant).
@@ -1434,6 +1440,17 @@ impl Default for UiDeclaration {
   }
 }
 
+/// Platform/architecture install constraint carried in the signed package manifest.
+///
+/// Empty `targets` (default) means the package is accepted on any host. Non-empty lists require
+/// the host to match at least one constraint (`platform`/`architecture` may be `any`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PackageTargetConstraint {
+  pub platform: String,
+  pub architecture: String,
+}
+
 /// Plugin manifest v1: the signed payload shape (signature verification is Phase 3).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1444,6 +1461,9 @@ pub struct PluginManifestV1 {
   pub version: String,
   pub publisher: PublisherDeclaration,
   pub runtime: RuntimeDescriptor,
+  /// Optional host target constraints. Empty preserves backward compatibility (any host).
+  #[serde(default)]
+  pub targets: Vec<PackageTargetConstraint>,
   #[serde(default)]
   pub files: Vec<PluginFileEntry>,
   #[serde(default)]
@@ -1456,6 +1476,64 @@ pub struct PluginManifestV1 {
   pub permissions: PermissionRequests,
   #[serde(default)]
   pub ui: UiDeclaration,
+}
+
+/// Normalize `std::env::consts::OS` into a package platform token.
+pub fn host_package_platform() -> &'static str {
+  match std::env::consts::OS {
+    "windows" => "windows",
+    "macos" => "macos",
+    "linux" => "linux",
+    other => other,
+  }
+}
+
+/// Normalize `std::env::consts::ARCH` into a package architecture token.
+pub fn host_package_architecture() -> &'static str {
+  match std::env::consts::ARCH {
+    "x86_64" => "x86_64",
+    "aarch64" => "aarch64",
+    other => other,
+  }
+}
+
+/// Current host target used for package compatibility checks.
+pub fn host_package_target() -> PackageTargetConstraint {
+  PackageTargetConstraint {
+    platform: host_package_platform().to_string(),
+    architecture: host_package_architecture().to_string(),
+  }
+}
+
+/// Return true when `targets` is empty (universal) or the host matches at least one entry.
+pub fn package_targets_compatible(targets: &[PackageTargetConstraint], host: &PackageTargetConstraint) -> bool {
+  if targets.is_empty() {
+    return true;
+  }
+  targets.iter().any(|target| {
+    let platform_ok = target.platform == "any" || target.platform == host.platform;
+    let arch_ok = target.architecture == "any" || target.architecture == host.architecture;
+    platform_ok && arch_ok
+  })
+}
+
+/// Validate a single target constraint against the closed platform/architecture sets.
+pub fn validate_package_target_constraint(target: &PackageTargetConstraint) -> Result<(), String> {
+  if !PACKAGE_TARGET_PLATFORMS.contains(&target.platform.as_str()) {
+    return Err(format!(
+      "unsupported package target platform '{}' (allowed: {})",
+      target.platform,
+      PACKAGE_TARGET_PLATFORMS.join(", ")
+    ));
+  }
+  if !PACKAGE_TARGET_ARCHITECTURES.contains(&target.architecture.as_str()) {
+    return Err(format!(
+      "unsupported package target architecture '{}' (allowed: {})",
+      target.architecture,
+      PACKAGE_TARGET_ARCHITECTURES.join(", ")
+    ));
+  }
+  Ok(())
 }
 
 /// Returns true when every character is a lowercase hex digit (0-9a-f).

@@ -11,7 +11,7 @@ use crate::services::service_capabilities::ServiceCapabilityService;
 use crate::services::token_grant::TokenGrantService;
 use crate::services::wasm_runtime::WasmRuntime;
 use crate::services::{
-  ImportExportService, ModelService, OcrServiceService, ProviderHttpService, ProviderService,
+  ImportExportService, ModelService, OcrServiceService, PluginPackageService, ProviderHttpService, ProviderService,
   ServiceIntegrationRegistry, ServiceIntegrationService, SettingsService, SpeechServiceService,
   TranslationHistoryService, TranslationProfileService,
 };
@@ -28,6 +28,7 @@ pub struct AppState {
   pub profiles: TranslationProfileService,
   pub ocr_services: OcrServiceService,
   pub speech_services: SpeechServiceService,
+  pub plugin_packages: PluginPackageService,
   pub service_integrations: ServiceIntegrationService,
   pub service_capabilities: ServiceCapabilityService,
   pub token_grants: Arc<TokenGrantService>,
@@ -82,6 +83,16 @@ impl AppState {
       service_capabilities.clone(),
     );
     let speech_services = SpeechServiceService::new(db.clone(), registry.clone(), service_capabilities.clone());
+    let plugin_packages = PluginPackageService::new(db.clone(), app_data_dir.clone());
+    // Best-effort crash recovery for interrupted package installs/uninstalls (no package execution).
+    if let Err(err) = plugin_packages.recover_install_operations() {
+      log::error!("plugin_package_recovery_failed error={err}");
+    }
+    // Active staging/preview TTL sweep while the app is running (stoppable via Drop on process exit).
+    let _staging_sweep = plugin_packages.start_staging_sweep();
+    // Keep the handle alive for the process lifetime by leaking intentionally: AppState is long-lived
+    // and Drop of StagingSweepHandle only signals stop; recovery already ran at startup.
+    std::mem::forget(_staging_sweep);
     let service_integrations =
       ServiceIntegrationService::new(db.clone(), vault.clone(), registry, token_grants.clone());
     let settings = SettingsService::new(db.clone(), vault.clone());
@@ -100,6 +111,7 @@ impl AppState {
       profiles,
       ocr_services,
       speech_services,
+      plugin_packages,
       service_integrations,
       service_capabilities,
       token_grants,

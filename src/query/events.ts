@@ -24,6 +24,9 @@ export const DATA_SERVICE_INTEGRATIONS_CHANGED = "data://service-integrations-ch
 /** Coarse notification after app settings import or multi-window settings mutations. */
 export const DATA_APP_SETTINGS_CHANGED = "data://app-settings-changed";
 
+/** Coarse notification after plugin package install/default/publisher/uninstall mutations. */
+export const DATA_PLUGIN_PACKAGES_CHANGED = "data://plugin-packages-changed";
+
 /** Clipboard text emitted to the Quick Translate window on double Ctrl+C / OCR delivery. */
 export const QUICK_TRANSLATE_CLIPBOARD_TEXT = "quick-translate://clipboard-text";
 
