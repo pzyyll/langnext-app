@@ -346,9 +346,9 @@ impl NetworkBroker {
       }
     }
 
-    let base_url = resolve_endpoint_base(registration, &registration.manifest, &instance, &request.endpoint_alias)?;
+    let endpoint = resolve_endpoint_base(registration, &registration.manifest, &instance, &request.endpoint_alias)?;
     // Origins come from pinned manifest grants or instance-validated HTTPS proxy config only.
-    let mut url = build_endpoint(&base_url, &request.relative_path).map_err(map_validation)?;
+    let mut url = build_endpoint(&endpoint.base_url, &request.relative_path).map_err(map_validation)?;
 
     for (name, value) in &request.query {
       validate_caller_name(name, "query").map_err(map_validation)?;
@@ -457,7 +457,7 @@ impl NetworkBroker {
         body: request.body,
         content_type: request.content_type,
         proxy_mode,
-        destination_policy: DestinationPolicy::PublicInternet,
+        destination_policy: endpoint.destination_policy,
         max_response_body_bytes: Some(requested_response_limit),
         timeout: Some(timeout),
       },
@@ -536,14 +536,21 @@ fn resolve_endpoint_alias(manifest: &ServiceIntegrationManifest, alias: &str) ->
     })
 }
 
-/// Resolve endpoint base URL from pinned manifest grants or instance-sourced origins.
+/// Host-selected endpoint base plus its DNS/proxy policy. The caller cannot supply this value.
+struct ResolvedEndpointBase {
+  base_url: String,
+  destination_policy: DestinationPolicy,
+}
+
+/// Resolve endpoint base URL from host-owned manifests or instance-sourced origins. Only fixed
+/// bundled manifest entries receive OS/TUN DNS; user-configured origins retain DNS pinning.
 fn resolve_endpoint_base(
   registration: &crate::services::bundled_plugins::BundledPluginRegistration,
   manifest: &ServiceIntegrationManifest,
   instance: &IntegrationInstance,
   alias: &str,
-) -> Result<String, CapabilityError> {
-  // Capability already authorized the alias; still require it on the manifest.
+) -> Result<ResolvedEndpointBase, CapabilityError> {
+  // Capability already authorized the alias; still require it on the host-owned manifest.
   let pinned = resolve_endpoint_alias(manifest, alias)?;
   if registration.endpoint_policy.allow_instance_endpoints {
     if let Some(origin) = registration
@@ -551,10 +558,16 @@ fn resolve_endpoint_base(
       .instance_endpoint_origin(&instance.config_json, alias)
       .map_err(map_validation)?
     {
-      return Ok(origin);
+      return Ok(ResolvedEndpointBase {
+        base_url: origin,
+        destination_policy: DestinationPolicy::PublicInternet,
+      });
     }
   }
-  Ok(pinned)
+  Ok(ResolvedEndpointBase {
+    base_url: pinned,
+    destination_policy: DestinationPolicy::TrustedFixed,
+  })
 }
 
 fn map_validation(err: StorageError) -> CapabilityError {
@@ -783,6 +796,7 @@ mod tests {
     assert_eq!(response.status, 200);
     let prepared = transport.last.lock().unwrap().take().unwrap();
     assert!(prepared.url.as_str().starts_with("https://translation.googleapis.com/"));
+    assert_eq!(prepared.destination_policy, DestinationPolicy::TrustedFixed);
     assert!(prepared.headers.contains_key("Authorization"));
   }
 

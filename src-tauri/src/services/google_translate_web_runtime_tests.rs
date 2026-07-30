@@ -10,8 +10,10 @@ use crate::domain::plugin_package::{
 };
 use crate::domain::runtime_lifecycle::{ApplyRuntimeUpgradeInput, InstanceRuntimeState};
 use crate::domain::runtime_plugin::{
-  CapabilityDeclaration, FileRole, HttpMethod, MANIFEST_FILE_PATH, NetworkEndpointRequest, PermissionRequests,
-  PluginFileEntry, PluginManifestV1, PublisherDeclaration, RuntimeDescriptor, RuntimeKind, SIGNATURE_FILE_PATH,
+  AuthPolicyId, CapabilityDeclaration, CapabilityId, EndpointId, FileRole, HttpMethod, HttpsOrigin, MANIFEST_FILE_PATH,
+  NetworkEndpointRequest, NetworkGrantEntry, NetworkOriginKind, NetworkResourceMode, PermissionRequests,
+  PluginFileEntry, PluginManifestV1, PublisherDeclaration, ResourceLimits, RuntimeDescriptor, RuntimeKind,
+  SIGNATURE_FILE_PATH,
 };
 use crate::domain::service_capability::{
   CapabilityErrorCode, DetectLanguageRequest, ExecutionContext, TranslateTextRequest,
@@ -20,17 +22,22 @@ use crate::domain::service_integration::{
   GOOGLE_TRANSLATE_WEB_DEFAULT_PROXY_URL, GOOGLE_TRANSLATE_WEB_PLUGIN_ID, IntegrationHealthStatus, IntegrationInstance,
 };
 use crate::domain::time::{new_id, now_rfc3339};
+use crate::domain::translation_profile::{
+  GOOGLE_TRANSLATE_PREFERENCES_SCHEMA_VERSION, PluginCapabilityEngine, TranslationProfile, TranslationProfileEngine,
+};
 use crate::error::StorageError;
-use crate::repositories::{installed_plugin_versions, integration_instances, plugin_publishers};
-use crate::services::bounded_http::{BoundedHttpResponse, PreparedHttpRequest, RawHttpTransport};
+use crate::repositories::{installed_plugin_versions, integration_instances, plugin_publishers, translation_profiles};
+use crate::services::bounded_http::{BoundedHttpResponse, DestinationPolicy, PreparedHttpRequest, RawHttpTransport};
 use crate::services::plugin_package::{
   hash_archive_bytes, inspect_package_bytes, public_sha256_hex, set_readonly, verify_package_bytes,
   write_extracted_content,
 };
-use crate::services::plugin_store::PluginPackageService;
+use crate::services::plugin_store::{PluginPackageService, VendorDefaultBindingMode};
 use crate::services::runtime_lifecycle::RuntimeLifecycleService;
 use crate::services::runtime_router::RuntimeRouter;
-use crate::services::service_capabilities::{ServiceCapabilityRegistry, ServiceCapabilityService};
+use crate::services::service_capabilities::{
+  ProfileCapabilityKind, ServiceCapabilityRegistry, ServiceCapabilityService,
+};
 use crate::services::service_integration_registry::ServiceIntegrationRegistry;
 use crate::services::service_integrations::ServiceIntegrationService;
 use crate::services::token_grant::TokenGrantService;
@@ -46,7 +53,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::io::Write;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::Notify;
@@ -87,11 +94,31 @@ const DETECT_CAP: &str = "translate.detect@1";
 const GTX_ORIGIN: &str = "https://translate.google.com";
 const TRANSLATE_ARTIFACT_PATH: &str = "translate/fixtures/langnext-google-translate-web-translate.wasm";
 const DETECT_ARTIFACT_PATH: &str = "detect/fixtures/langnext-google-translate-web-detect.wasm";
+const USER_SIGNED_PACKAGE_VERSION: &str = "1.0.0";
+const THIRD_PARTY_STATIC_ENDPOINT_ID: &str = "third-party-static";
+const THIRD_PARTY_STATIC_MANIFEST_ORIGIN: &str = "https://third-party.example";
+const TAMPERED_PUBLIC_HTTPS_ORIGIN: &str = "https://attacker.example";
+const EMPTY_PREFERENCES_JSON: &[u8] = b"{}";
+const TEST_PROFILE_NAME: &str = "Static Origin Test";
+const TEST_PROFILE_SOURCE_LANGUAGE: &str = "en";
+const TEST_PROFILE_TARGET_LANGUAGE: &str = "zh";
 
 /// Capture transport: records the last prepared request and returns a configurable response.
 struct CaptureTransport {
   last: Mutex<Option<PreparedHttpRequest>>,
+  calls: AtomicUsize,
   response: Mutex<Result<BoundedHttpResponse, String>>,
+}
+
+impl CaptureTransport {
+  fn call_count(&self) -> usize {
+    self.calls.load(Ordering::SeqCst)
+  }
+
+  fn reset(&self) {
+    self.calls.store(0, Ordering::SeqCst);
+    *self.last.lock().unwrap() = None;
+  }
 }
 
 impl RawHttpTransport for CaptureTransport {
@@ -99,8 +126,9 @@ impl RawHttpTransport for CaptureTransport {
     &self,
     prepared: PreparedHttpRequest,
   ) -> Pin<Box<dyn Future<Output = Result<BoundedHttpResponse, crate::error::StorageError>> + Send + '_>> {
+    self.calls.fetch_add(1, Ordering::SeqCst);
+    *self.last.lock().unwrap() = Some(prepared);
     Box::pin(async move {
-      *self.last.lock().unwrap() = Some(prepared);
       match &*self.response.lock().unwrap() {
         Ok(r) => Ok(r.clone()),
         Err(msg) => Err(crate::error::StorageError::Validation(msg.clone())),
@@ -116,6 +144,7 @@ impl RawHttpTransport for CaptureTransport {
       dyn Fn(crate::domain::provider_http::ProviderHttpStreamEvent) -> Result<(), crate::error::StorageError> + Send,
     >,
   ) -> Pin<Box<dyn Future<Output = Result<(), crate::error::StorageError>> + Send + '_>> {
+    self.calls.fetch_add(1, Ordering::SeqCst);
     Box::pin(async { Err(crate::error::StorageError::Validation("stream not supported".into())) })
   }
 }
@@ -298,6 +327,13 @@ fn build_google_web_proxy_package() -> (Vec<u8>, String) {
 /// **vendor** digest/identity and never a user-approved package sharing the same id/version.
 /// Returns (pkg, digest, user_public_key_hex).
 fn build_google_web_user_signed_package(version: &str) -> (Vec<u8>, String, String) {
+  build_google_web_user_signed_package_with_extra_network(version, vec![])
+}
+
+fn build_google_web_user_signed_package_with_extra_network(
+  version: &str,
+  extra_network: Vec<NetworkEndpointRequest>,
+) -> (Vec<u8>, String, String) {
   let user_sk = SigningKey::from_bytes(&[9u8; 32]);
   let user_pub = user_sk.verifying_key();
   let user_pub_bytes = user_pub.to_bytes();
@@ -389,12 +425,16 @@ fn build_google_web_user_signed_package(version: &str) -> (Vec<u8>, String, Stri
     config_schema_version: Some(1),
     credential_slots: vec![],
     permissions: PermissionRequests {
-      network: vec![NetworkEndpointRequest {
-        id: "gtx".into(),
-        origins: vec![GTX_ORIGIN.into()],
-        methods: vec![HttpMethod::Get],
-        instance_origin_config_field: None,
-      }],
+      network: {
+        let mut network = vec![NetworkEndpointRequest {
+          id: "gtx".into(),
+          origins: vec![GTX_ORIGIN.into()],
+          methods: vec![HttpMethod::Get],
+          instance_origin_config_field: None,
+        }];
+        network.extend(extra_network);
+        network
+      },
       auth_policies: vec!["host.none.v1".into()],
     },
     ui: Default::default(),
@@ -457,6 +497,7 @@ fn setup() -> (
   );
   let transport = Arc::new(CaptureTransport {
     last: Mutex::new(None),
+    calls: AtomicUsize::new(0),
     response: Mutex::new(Ok(text_response(r#"[[["Hi","你好",null,null,1]],null,"zh"]"#))),
   });
   let broker_transport = transport.clone();
@@ -568,6 +609,112 @@ fn setup_blocking() -> (
   (dir, db, packages, lifecycle, caps, blocking)
 }
 
+const EXPECTED_CONTROL_WASM_REQUESTS: usize = 1;
+const NO_TRANSPORT_REQUESTS: usize = 0;
+const TAMPERED_GRANT_PLUGIN_ID: &str = "langnext.google-translate-web.tampered";
+const TAMPERED_GRANT_PLUGIN_VERSION: &str = "9.9.9";
+const TAMPERED_PERMISSION_REQUEST_DIGEST: &str = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+
+#[derive(Clone, Copy)]
+enum GrantHeaderField {
+  PluginId,
+  PluginVersion,
+  PermissionRequestDigest,
+}
+
+impl GrantHeaderField {
+  fn column(self) -> &'static str {
+    match self {
+      Self::PluginId => "plugin_id",
+      Self::PluginVersion => "plugin_version",
+      Self::PermissionRequestDigest => "permission_request_digest",
+    }
+  }
+
+  fn label(self) -> &'static str {
+    match self {
+      Self::PluginId => "plugin_id",
+      Self::PluginVersion => "plugin_version",
+      Self::PermissionRequestDigest => "permission_request_digest",
+    }
+  }
+}
+
+fn rehash_grant_bundle_authority(bundle: &crate::domain::runtime_lifecycle::ExecutionGrantSetBundle) -> String {
+  assert!(bundle.pages.is_empty(), "test fixture must not have page grants");
+  let capabilities = bundle
+    .capabilities
+    .iter()
+    .map(|entry| CapabilityId::parse(&entry.capability_id).expect("valid test grant capability"))
+    .collect::<Vec<_>>();
+  let network = bundle
+    .network
+    .iter()
+    .map(|entry| {
+      NetworkGrantEntry::with_mode_and_origin_kind(
+        CapabilityId::parse(&entry.capability_id).expect("valid test grant capability"),
+        EndpointId::parse(&entry.endpoint_id).expect("valid test grant endpoint"),
+        HttpsOrigin::parse(&entry.origin).expect("valid test grant origin"),
+        NetworkOriginKind::parse(&entry.origin_kind).expect("valid test grant origin kind"),
+        crate::services::runtime_router::parse_http_method(&entry.method).expect("valid test grant method"),
+        AuthPolicyId::parse(&entry.auth_policy).expect("valid test grant auth policy"),
+        NetworkResourceMode::parse(&entry.resource_mode).expect("valid test grant resource mode"),
+        ResourceLimits::new(
+          entry.max_request_bytes,
+          entry.max_response_bytes,
+          entry.max_stream_bytes,
+          entry.timeout_ms,
+        )
+        .expect("valid test grant resource limits"),
+      )
+    })
+    .collect::<Vec<_>>();
+  crate::domain::runtime_plugin::compute_authority_digest(&capabilities, &network, &[])
+    .as_str()
+    .to_string()
+}
+
+/// Mutate a persisted canonical header and write an authority digest recomputed from its unchanged children.
+/// This models a database attacker who knows the child hashing format but cannot alter the signed archive.
+fn tamper_grant_header_and_rehash(
+  db: &Database,
+  instance_id: Uuid,
+  field: GrantHeaderField,
+  tampered_value: &str,
+) -> String {
+  db.transaction(|uow| {
+    let instance = integration_instances::get(uow.conn(), instance_id)?;
+    let mut bundle = crate::repositories::plugin_permission_grants::get_bundle_for_subject_package_revision(
+      uow.conn(),
+      crate::domain::runtime_lifecycle::GrantSubjectKind::IntegrationInstance,
+      instance_id,
+      instance.package_digest.as_deref().expect("activated package digest"),
+      instance.execution_grant_set_revision.expect("activated grant revision"),
+    )?;
+    let original_authority_digest = bundle.header.authority_digest.clone();
+    match field {
+      GrantHeaderField::PluginId => bundle.header.plugin_id = tampered_value.into(),
+      GrantHeaderField::PluginVersion => bundle.header.plugin_version = tampered_value.into(),
+      GrantHeaderField::PermissionRequestDigest => bundle.header.permission_request_digest = tampered_value.into(),
+    }
+    let rehashed_authority_digest = rehash_grant_bundle_authority(&bundle);
+    assert_eq!(
+      rehashed_authority_digest, original_authority_digest,
+      "authority digest authenticates children, not canonical header fields"
+    );
+    let update = format!(
+      "UPDATE execution_grant_sets SET {} = ?1, authority_digest = ?2 WHERE id = ?3",
+      field.column()
+    );
+    uow.conn().execute(
+      &update,
+      rusqlite::params![tampered_value, &rehashed_authority_digest, bundle.header.id.to_string()],
+    )?;
+    Ok::<_, StorageError>(rehashed_authority_digest)
+  })
+  .unwrap()
+}
+
 fn install_package(packages: &PluginPackageService, dir: &std::path::Path, bytes: &[u8]) -> String {
   let src = dir.join(format!("{}.lnplugin", new_id()));
   std::fs::write(&src, bytes).unwrap();
@@ -617,6 +764,37 @@ fn seed_instance(db: &Database, config_json: &str) -> Uuid {
   })
   .unwrap();
   id
+}
+
+fn seed_translate_profile(db: &Database, integration_instance_id: Uuid) -> Uuid {
+  let profile_id = new_id();
+  let now = now_rfc3339();
+  db.transaction(|uow| {
+    translation_profiles::insert_profile(
+      uow.conn(),
+      &TranslationProfile {
+        id: profile_id,
+        name: TEST_PROFILE_NAME.into(),
+        enabled: true,
+        source_lang: Some(TEST_PROFILE_SOURCE_LANGUAGE.into()),
+        target_lang: Some(TEST_PROFILE_TARGET_LANGUAGE.into()),
+        primary_lang: Some(TEST_PROFILE_SOURCE_LANGUAGE.into()),
+        preferred_target_lang: Some(TEST_PROFILE_TARGET_LANGUAGE.into()),
+        engine: TranslationProfileEngine::PluginCapability(PluginCapabilityEngine {
+          integration_instance_id,
+          translate_capability_id: TRANSLATE_CAP.into(),
+          detect_capability_id: None,
+          capability_preferences_version: GOOGLE_TRANSLATE_PREFERENCES_SCHEMA_VERSION,
+          capability_preferences: serde_json::json!({}),
+        }),
+        created_at: now.clone(),
+        updated_at: now,
+      },
+    )?;
+    Ok(())
+  })
+  .unwrap();
+  profile_id
 }
 
 fn activate(lifecycle: &RuntimeLifecycleService, instance_id: Uuid, digest: &str) {
@@ -680,6 +858,7 @@ fn google_translate_web_runtime_gtx_translate_and_detect() {
   assert_eq!(resp.detected_source_language_id.as_deref(), Some("zh"));
   let prepared = transport.last.lock().unwrap().take().unwrap();
   assert!(prepared.url.as_str().starts_with(GTX_ORIGIN));
+  assert_eq!(prepared.destination_policy, DestinationPolicy::TrustedFixed);
   assert!(prepared.url.as_str().contains("translate_a/single"));
   assert!(prepared.url.as_str().contains("client=gtx"));
   assert!(prepared.url.as_str().contains("sl=zh-CN"));
@@ -956,7 +1135,12 @@ fn set_vendor_bootstrap_default_binds_exact_vendor_1_0_0_digest() {
   assert_eq!(gtx_import.package_digest(), gtx_digest);
   // Bind the default to the exact vendor 1.0.0 verified import identity.
   let default = packages
-    .set_vendor_bootstrap_default(PLUGIN_ID, "1.0.0", Some(&gtx_import))
+    .set_vendor_bootstrap_default(
+      PLUGIN_ID,
+      "1.0.0",
+      Some(&gtx_import),
+      VendorDefaultBindingMode::ReplaceExisting,
+    )
     .unwrap();
   assert_eq!(default.package_digest, gtx_digest);
   assert_ne!(default.package_digest, proxy_digest);
@@ -980,7 +1164,7 @@ fn set_vendor_bootstrap_default_clears_wrong_default_when_vendor_1_0_0_missing()
   assert_eq!(stale.package_digest, proxy_digest);
   // Vendor 1.0.0 absent: bind fails closed and atomically clears the existing 1.1.0 default.
   let err = packages
-    .set_vendor_bootstrap_default(PLUGIN_ID, "1.0.0", None)
+    .set_vendor_bootstrap_default(PLUGIN_ID, "1.0.0", None, VendorDefaultBindingMode::ReplaceExisting)
     .unwrap_err();
   assert!(matches!(err, StorageError::NotFound(_)), "{err:?}");
   let default = db
@@ -1028,7 +1212,7 @@ fn set_vendor_bootstrap_default_rejects_user_approved_same_id_version() {
   );
   // Vendor 1.0.0 absent (None) must clear the user-approved default rather than promote it.
   let err = packages
-    .set_vendor_bootstrap_default(PLUGIN_ID, "1.0.0", None)
+    .set_vendor_bootstrap_default(PLUGIN_ID, "1.0.0", None, VendorDefaultBindingMode::ReplaceExisting)
     .unwrap_err();
   assert!(matches!(err, StorageError::NotFound(_)), "{err:?}");
   let default = db
@@ -1038,6 +1222,210 @@ fn set_vendor_bootstrap_default_rejects_user_approved_same_id_version() {
     default.is_none(),
     "user-approved same id/version must never remain default when vendor 1.0.0 is unbound"
   );
+}
+
+#[test]
+fn runtime_router_rejects_rehashed_user_signed_static_origin_tamper() {
+  let (dir, db, packages, lifecycle, caps, transport) = setup();
+  let (package, package_digest, user_public_key_hex) = build_google_web_user_signed_package_with_extra_network(
+    USER_SIGNED_PACKAGE_VERSION,
+    vec![NetworkEndpointRequest {
+      id: THIRD_PARTY_STATIC_ENDPOINT_ID.into(),
+      origins: vec![THIRD_PARTY_STATIC_MANIFEST_ORIGIN.into()],
+      methods: vec![HttpMethod::Get],
+      instance_origin_config_field: None,
+    }],
+  );
+  let source = dir.path().join("user-static-origin.lnplugin");
+  std::fs::write(&source, package).unwrap();
+  let preview = packages.preview_package(&source).unwrap();
+  let approved = packages
+    .approve_package(ApprovePluginPackageInput {
+      preview_id: preview.preview_id,
+      approve_publisher: true,
+      publisher_public_key_hex: Some(user_public_key_hex),
+      acknowledge_permissions: true,
+      set_as_default: true,
+    })
+    .unwrap();
+  assert_eq!(approved.version.package_digest, package_digest);
+
+  let instance_id = seed_instance(&db, r#"{"channel":"gtx"}"#);
+  activate(&lifecycle, instance_id, &package_digest);
+  let profile_id = seed_translate_profile(&db, instance_id);
+  let control = caps
+    .resolve_translate(instance_id, TRANSLATE_CAP, EMPTY_PREFERENCES_JSON.to_vec())
+    .expect("verified user-signed static endpoint grant resolves before tampering");
+  block_on(control.translate(
+    instance_id,
+    TranslateTextRequest {
+      text: "control".into(),
+      source_language_id: TEST_PROFILE_SOURCE_LANGUAGE.into(),
+      target_language_id: TEST_PROFILE_TARGET_LANGUAGE.into(),
+    },
+    ctx(instance_id, "req-static-origin-control", TRANSLATE_CAP),
+  ))
+  .expect("verified user-signed static endpoint executes before tampering");
+  assert_eq!(transport.call_count(), EXPECTED_CONTROL_WASM_REQUESTS);
+  transport.reset();
+  let control_snapshot = caps
+    .load_profile_invocation_snapshot(profile_id, ProfileCapabilityKind::Translate)
+    .expect("verified user-signed static endpoint snapshot loads before tampering");
+  caps
+    .resolve_translate_from_snapshot(&control_snapshot)
+    .expect("verified user-signed static endpoint snapshot resolves before tampering");
+
+  let rehashed_authority_digest = db
+    .transaction(|uow| {
+      let instance = integration_instances::get(uow.conn(), instance_id)?;
+      let mut bundle = crate::repositories::plugin_permission_grants::get_bundle_for_subject_package_revision(
+        uow.conn(),
+        crate::domain::runtime_lifecycle::GrantSubjectKind::IntegrationInstance,
+        instance_id,
+        instance.package_digest.as_deref().expect("activated package digest"),
+        instance.execution_grant_set_revision.expect("activated grant revision"),
+      )?;
+      let entry = bundle
+        .network
+        .iter_mut()
+        .find(|entry| entry.endpoint_id == THIRD_PARTY_STATIC_ENDPOINT_ID)
+        .expect("third-party static grant entry");
+      assert_eq!(entry.origin, THIRD_PARTY_STATIC_MANIFEST_ORIGIN);
+      assert_eq!(entry.origin_kind, NetworkOriginKind::InstanceConfigured.as_str());
+      let entry_id = entry.id;
+      entry.origin = TAMPERED_PUBLIC_HTTPS_ORIGIN.into();
+      let rehashed = rehash_grant_bundle_authority(&bundle);
+      assert_ne!(rehashed, bundle.header.authority_digest);
+      uow.conn().execute(
+        "UPDATE execution_grant_network_entries SET origin = ?1 WHERE id = ?2",
+        rusqlite::params![TAMPERED_PUBLIC_HTTPS_ORIGIN, entry_id.to_string()],
+      )?;
+      uow.conn().execute(
+        "UPDATE execution_grant_sets SET authority_digest = ?1 WHERE id = ?2",
+        rusqlite::params![&rehashed, bundle.header.id.to_string()],
+      )?;
+      Ok::<_, StorageError>(rehashed)
+    })
+    .unwrap();
+  let persisted_authority_digest = db
+    .read(|conn| {
+      let instance = integration_instances::get(conn, instance_id)?;
+      let grant = crate::repositories::plugin_permission_grants::get_bundle_for_subject_package_revision(
+        conn,
+        crate::domain::runtime_lifecycle::GrantSubjectKind::IntegrationInstance,
+        instance_id,
+        instance.package_digest.as_deref().expect("activated package digest"),
+        instance.execution_grant_set_revision.expect("activated grant revision"),
+      )?;
+      Ok::<_, StorageError>(grant.header.authority_digest)
+    })
+    .unwrap();
+  assert_eq!(persisted_authority_digest, rehashed_authority_digest);
+
+  let error = match caps.resolve_translate(instance_id, TRANSLATE_CAP, EMPTY_PREFERENCES_JSON.to_vec()) {
+    Ok(_) => panic!("rehashed static origin tamper must fail before runtime resolution"),
+    Err(error) => error,
+  };
+  assert_eq!(error.code, CapabilityErrorCode::PermissionDenied);
+  let tampered_snapshot = caps
+    .load_profile_invocation_snapshot(profile_id, ProfileCapabilityKind::Translate)
+    .expect("tampered profile snapshot loads for runtime validation");
+  let snapshot_error = match caps.resolve_translate_from_snapshot(&tampered_snapshot) {
+    Ok(_) => panic!("rehashed static origin tamper must fail in snapshot runtime resolution"),
+    Err(error) => error,
+  };
+  assert_eq!(snapshot_error.code, CapabilityErrorCode::PermissionDenied);
+  assert_eq!(
+    transport.call_count(),
+    NO_TRANSPORT_REQUESTS,
+    "direct and snapshot grant rejection must occur before the Wasm transport handle is invoked"
+  );
+}
+
+#[test]
+fn runtime_router_rejects_rehashed_grant_headers_in_direct_and_snapshot_paths() {
+  let header_tampers = [
+    (GrantHeaderField::PluginId, TAMPERED_GRANT_PLUGIN_ID),
+    (GrantHeaderField::PluginVersion, TAMPERED_GRANT_PLUGIN_VERSION),
+    (
+      GrantHeaderField::PermissionRequestDigest,
+      TAMPERED_PERMISSION_REQUEST_DIGEST,
+    ),
+  ];
+
+  for (field, tampered_value) in header_tampers {
+    let (dir, db, packages, lifecycle, caps, transport) = setup();
+    let (package, package_digest) = build_google_web_package();
+    install_package(&packages, dir.path(), &package);
+    let instance_id = seed_instance(&db, r#"{"channel":"gtx"}"#);
+    activate(&lifecycle, instance_id, &package_digest);
+    let profile_id = seed_translate_profile(&db, instance_id);
+
+    // First execute real Wasm through the capture transport, proving the negative assertion below
+    // is not a vacuous resolver-only test.
+    let control = caps
+      .resolve_translate(instance_id, TRANSLATE_CAP, EMPTY_PREFERENCES_JSON.to_vec())
+      .expect("verified grant resolves before header tampering");
+    block_on(control.translate(
+      instance_id,
+      TranslateTextRequest {
+        text: "control".into(),
+        source_language_id: TEST_PROFILE_SOURCE_LANGUAGE.into(),
+        target_language_id: TEST_PROFILE_TARGET_LANGUAGE.into(),
+      },
+      ctx(instance_id, "req-header-control", TRANSLATE_CAP),
+    ))
+    .expect("verified grant executes before header tampering");
+    assert_eq!(transport.call_count(), EXPECTED_CONTROL_WASM_REQUESTS);
+    transport.reset();
+
+    let rehashed_authority_digest = tamper_grant_header_and_rehash(&db, instance_id, field, tampered_value);
+    let persisted_authority_digest = db
+      .read(|conn| {
+        let instance = integration_instances::get(conn, instance_id)?;
+        let grant = crate::repositories::plugin_permission_grants::get_bundle_for_subject_package_revision(
+          conn,
+          crate::domain::runtime_lifecycle::GrantSubjectKind::IntegrationInstance,
+          instance_id,
+          instance.package_digest.as_deref().expect("activated package digest"),
+          instance.execution_grant_set_revision.expect("activated grant revision"),
+        )?;
+        Ok::<_, StorageError>(grant.header.authority_digest)
+      })
+      .unwrap();
+    assert_eq!(persisted_authority_digest, rehashed_authority_digest);
+
+    let direct_error = match caps.resolve_translate(instance_id, TRANSLATE_CAP, EMPTY_PREFERENCES_JSON.to_vec()) {
+      Ok(_) => panic!("direct runtime resolution must reject rehashed canonical header tampering"),
+      Err(error) => error,
+    };
+    assert_eq!(
+      direct_error.code,
+      CapabilityErrorCode::PermissionDenied,
+      "direct resolver must reject tampered {} before constructing a principal",
+      field.label()
+    );
+
+    let tampered_snapshot = caps
+      .load_profile_invocation_snapshot(profile_id, ProfileCapabilityKind::Translate)
+      .expect("tampered profile snapshot loads for runtime validation");
+    let snapshot_error = match caps.resolve_translate_from_snapshot(&tampered_snapshot) {
+      Ok(_) => panic!("snapshot runtime resolution must reject rehashed canonical header tampering"),
+      Err(error) => error,
+    };
+    assert_eq!(
+      snapshot_error.code,
+      CapabilityErrorCode::PermissionDenied,
+      "snapshot resolver must reject tampered {} before constructing a principal",
+      field.label()
+    );
+    assert_eq!(
+      transport.call_count(),
+      NO_TRANSPORT_REQUESTS,
+      "{} tampering must be rejected before the Wasm transport handle is invoked",
+      field.label()
+    );
+  }
 }
 
 #[test]
@@ -1051,7 +1439,12 @@ fn set_vendor_bootstrap_default_rejects_publisher_metadata_mismatch() {
   let gtx_import = packages.bootstrap_bundled_package(&gtx_pkg, false).unwrap();
   // Bind succeeds while the publisher row matches the verified import identity.
   let bound = packages
-    .set_vendor_bootstrap_default(PLUGIN_ID, "1.0.0", Some(&gtx_import))
+    .set_vendor_bootstrap_default(
+      PLUGIN_ID,
+      "1.0.0",
+      Some(&gtx_import),
+      VendorDefaultBindingMode::ReplaceExisting,
+    )
     .unwrap();
   assert_eq!(bound.package_digest, gtx_digest);
   // Tamper the publisher row's public key so it no longer matches the verified import identity
@@ -1065,7 +1458,12 @@ fn set_vendor_bootstrap_default_rejects_publisher_metadata_mismatch() {
   })
   .unwrap();
   let err = packages
-    .set_vendor_bootstrap_default(PLUGIN_ID, "1.0.0", Some(&gtx_import))
+    .set_vendor_bootstrap_default(
+      PLUGIN_ID,
+      "1.0.0",
+      Some(&gtx_import),
+      VendorDefaultBindingMode::ReplaceExisting,
+    )
     .unwrap_err();
   assert!(matches!(err, StorageError::NotFound(_)), "{err:?}");
   let default = db
@@ -1958,9 +2356,14 @@ fn google_translate_web_proxy_channel_uses_default_url() {
   ))
   .unwrap();
   assert_eq!(response.translated_text, "Hello");
+  let prepared = transport.last.lock().unwrap();
   assert_eq!(
-    transport.last.lock().unwrap().as_ref().unwrap().url.as_str(),
+    prepared.as_ref().unwrap().url.as_str(),
     GOOGLE_TRANSLATE_WEB_DEFAULT_PROXY_URL
+  );
+  assert_eq!(
+    prepared.as_ref().unwrap().destination_policy,
+    DestinationPolicy::PublicInternet
   );
 }
 
@@ -1991,6 +2394,7 @@ fn google_translate_web_proxy_channel_translates_and_detect_stays_on_gtx() {
   assert_eq!(resp.translated_text, "Hello");
   let prepared = transport.last.lock().unwrap().take().unwrap();
   assert_eq!(prepared.url.as_str(), "https://proxy-a.example/v1/custom");
+  assert_eq!(prepared.destination_policy, DestinationPolicy::PublicInternet);
   assert_eq!(prepared.method, crate::domain::provider_http::ProviderHttpMethod::Post);
   assert!(prepared.body.is_some());
   let body: serde_json::Value = serde_json::from_str(prepared.body.as_ref().unwrap()).unwrap();
@@ -2015,6 +2419,7 @@ fn google_translate_web_proxy_channel_translates_and_detect_stays_on_gtx() {
     "detect must stay on GTX: {}",
     prepared.url
   );
+  assert_eq!(prepared.destination_policy, DestinationPolicy::TrustedFixed);
 }
 
 #[test]

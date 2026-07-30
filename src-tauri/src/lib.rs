@@ -163,6 +163,8 @@ pub fn run() {
       cmds::plugin_packages::list_plugin_publishers,
       cmds::plugin_packages::approve_user_plugin_publisher,
       cmds::plugin_packages::revoke_plugin_publisher,
+      cmds::plugin_packages::restore_plugin_publisher,
+      cmds::plugin_packages::remove_plugin_publisher,
       cmds::plugin_packages::uninstall_plugin_version,
       cmds::plugin_packages::get_plugin_version_dependencies,
       cmds::runtime_lifecycle::preview_integration_runtime_upgrade,

@@ -975,6 +975,22 @@ const en = {
         "Revoking clears defaults for packages signed by this key. Installed packages remain listed.",
       revokeConfirm: "Revoke",
       revokeVendorBlocked: "Vendor roots cannot be revoked here",
+      restore: "Restore",
+      restoring: "Restoring…",
+      restoreSuccess: "Publisher restored",
+      restoreFailed: "Could not restore publisher",
+      restoreConfirmTitle: "Restore publisher?",
+      restoreConfirmDescription:
+        "Re-enable this vendor publisher. Rebind verified packages only when no default is already selected for new instances.",
+      restoreConfirm: "Restore",
+      remove: "Remove record",
+      removing: "Removing…",
+      removeSuccess: "Publisher record removed",
+      removeFailed: "Could not remove publisher record",
+      removeConfirmTitle: "Remove publisher record?",
+      removeConfirmDescription:
+        "Only the trust record is removed, not packages signed by this key. Removal is refused while packages still reference it.",
+      removeConfirm: "Remove record",
       trust: {
         trustedVendor: "Vendor",
         trustedUser: "User trusted",

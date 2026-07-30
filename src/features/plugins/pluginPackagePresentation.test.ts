@@ -47,8 +47,10 @@ describe("pluginPackagePresentation", () => {
     expect(summary).toEqual([{ id: "api", summary: "POST, GET → https://api.example.com" }]);
   });
 
-  test("package execution remains disabled in Phase 3", () => {
-    expect(isPackageExecutionEnabled({ runtimeKind: "wasm-component" })).toBe(false);
+  test("package execution is enabled only for the supported Wasm runtime", () => {
+    expect(isPackageExecutionEnabled({ runtimeKind: "wasm-component" })).toBe(true);
+    expect(isPackageExecutionEnabled({ runtimeKind: "bundled-rust" })).toBe(false);
+    expect(isPackageExecutionEnabled({ runtimeKind: "unknown" })).toBe(false);
   });
 
   test("publisherApprovalKeyHex forwards the resolved publisher.pub key as-is", () => {

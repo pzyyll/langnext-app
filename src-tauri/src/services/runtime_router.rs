@@ -6,8 +6,9 @@ use crate::domain::runtime_lifecycle::{
 };
 use crate::domain::runtime_plugin::{
   AuthPolicyId, AuthorityDigest, CapabilityId, ComponentArtifactDigest, EndpointId, ExecutionGrantSet, FileRole,
-  GrantSetRevision, HttpMethod, HttpsOrigin, NetworkGrantEntry, PackageDigest, PackageIdentity, PageGrantEntry,
-  PluginId, PluginManifestV1, PluginPrincipal, ResourceLimits, RuntimeIdentity, RuntimeKind, SemVerVersion,
+  GrantSetRevision, HttpMethod, HttpsOrigin, NetworkGrantEntry, NetworkOriginKind, NetworkResourceMode, PackageDigest,
+  PackageIdentity, PageGrantEntry, PluginId, PluginManifestV1, PluginPrincipal, ResourceLimits, RuntimeIdentity,
+  RuntimeKind, SemVerVersion,
 };
 use crate::domain::service_capability::{CapabilityError, CapabilityErrorCode};
 use crate::error::StorageError;
@@ -271,7 +272,6 @@ impl RuntimeRouter {
         format!("invalid installed manifest: {e}"),
       )
     })?;
-    validate_instance_configured_origins(&instance.config_json, &manifest, &bundle)?;
     let (artifact_digest, artifact_bytes) = self.load_verified_wasm_artifact(
       package_digest,
       &manifest,
@@ -281,6 +281,18 @@ impl RuntimeRouter {
       &publisher.public_key_hex,
       publisher.source,
     )?;
+    // The archive check above proves this catalog manifest is the signed package manifest.
+    // A database authority digest is not a signature, so bind grant children and headers only
+    // after that proof, exactly as the immutable snapshot path does.
+    let bind = GrantCanonicalBind {
+      subject_id: instance.id,
+      plugin_id: &instance.plugin_id,
+      package_plugin_id: &version.plugin_id,
+      package_plugin_version: &version.version,
+      package_permission_request_digest: &version.permission_request_digest,
+    };
+    verify_grant_canonical_bind(&bind, &bundle, &manifest, package_digest, grant_revision, capability_id)?;
+    validate_instance_configured_origins(&instance.config_json, &manifest, &bundle)?;
 
     let grant = bundle_to_execution_grant_set(&bundle).map_err(|e| {
       CapabilityError::new(
@@ -514,10 +526,6 @@ impl RuntimeRouter {
         "package plugin id does not match instance",
       ));
     }
-    // Canonical grant bind: recompute permission_request_digest from signed manifest and
-    // verify grant header + children against instance/package/manifest identity.
-    verify_grant_canonical_bind(pin, bundle, &manifest, package_digest, grant_revision, capability_id)?;
-    validate_instance_configured_origins(&pin.instance_config_json, &manifest, bundle)?;
     let publisher_key_id = pin.publisher_key_id.as_deref().ok_or_else(|| {
       CapabilityError::new(
         CapabilityErrorCode::PluginUnavailable,
@@ -551,6 +559,33 @@ impl RuntimeRouter {
       publisher_public_key_hex,
       publisher_source,
     )?;
+    // The archive check above proves this snapshot manifest is the signed package manifest.
+    // A database authority digest is not a signature, so bind grant children and headers only
+    // after that proof, exactly as the direct resolver path does.
+    let bind = GrantCanonicalBind {
+      subject_id: pin.instance_id,
+      plugin_id: &pin.plugin_id,
+      package_plugin_id: pin.package_plugin_id.as_deref().ok_or_else(|| {
+        CapabilityError::new(
+          CapabilityErrorCode::PluginUnavailable,
+          "package plugin id is missing from invocation snapshot",
+        )
+      })?,
+      package_plugin_version: pin.package_plugin_version.as_deref().ok_or_else(|| {
+        CapabilityError::new(
+          CapabilityErrorCode::PluginUnavailable,
+          "package plugin version is missing from invocation snapshot",
+        )
+      })?,
+      package_permission_request_digest: pin.package_permission_request_digest.as_deref().ok_or_else(|| {
+        CapabilityError::new(
+          CapabilityErrorCode::PluginUnavailable,
+          "package permission request digest is missing from invocation snapshot",
+        )
+      })?,
+    };
+    verify_grant_canonical_bind(&bind, bundle, &manifest, package_digest, grant_revision, capability_id)?;
+    validate_instance_configured_origins(&pin.instance_config_json, &manifest, bundle)?;
     let grant = bundle_to_execution_grant_set(bundle).map_err(|e| {
       CapabilityError::new(
         CapabilityErrorCode::InvalidConfiguration,
@@ -820,6 +855,7 @@ fn canonical_grant_bundles_equal(a: Option<&ExecutionGrantSetBundle>, b: Option<
             n.capability_id.as_str(),
             n.endpoint_id.as_str(),
             n.origin.as_str(),
+            n.origin_kind.as_str(),
             n.method.as_str(),
             n.auth_policy.as_str(),
             n.resource_mode.as_str(),
@@ -838,6 +874,7 @@ fn canonical_grant_bundles_equal(a: Option<&ExecutionGrantSetBundle>, b: Option<
             n.capability_id.as_str(),
             n.endpoint_id.as_str(),
             n.origin.as_str(),
+            n.origin_kind.as_str(),
             n.method.as_str(),
             n.auth_policy.as_str(),
             n.resource_mode.as_str(),
@@ -895,9 +932,18 @@ fn map_storage_capability(err: StorageError, fallback: &str) -> CapabilityError 
   }
 }
 
-/// Fail closed when the snapshot grant is not a canonical bind of the signed package + pin.
+/// Immutable authority values a grant header must match after its package archive is verified.
+struct GrantCanonicalBind<'a> {
+  subject_id: Uuid,
+  plugin_id: &'a str,
+  package_plugin_id: &'a str,
+  package_plugin_version: &'a str,
+  package_permission_request_digest: &'a str,
+}
+
+/// Fail closed when a direct or snapshot grant is not a canonical bind of the signed package + pin.
 fn verify_grant_canonical_bind(
-  pin: &SnapshotRuntimeResolution,
+  bind: &GrantCanonicalBind<'_>,
   bundle: &ExecutionGrantSetBundle,
   manifest: &PluginManifestV1,
   package_digest: &str,
@@ -913,33 +959,41 @@ fn verify_grant_canonical_bind(
       "grant subject_kind is not integration_instance",
     ));
   }
-  if bundle.header.subject_id != pin.instance_id {
+  if bundle.header.subject_id != bind.subject_id {
     return Err(CapabilityError::new(
       CapabilityErrorCode::PermissionDenied,
       "grant subject_id does not match instance",
     ));
   }
-  if bundle.header.plugin_id != pin.plugin_id {
+  if bundle.header.plugin_id != bind.plugin_id {
     return Err(CapabilityError::new(
       CapabilityErrorCode::PermissionDenied,
       "grant plugin_id does not match instance",
     ));
   }
-  if let Some(pkg_plugin_id) = pin.package_plugin_id.as_deref() {
-    if bundle.header.plugin_id != pkg_plugin_id {
-      return Err(CapabilityError::new(
-        CapabilityErrorCode::PermissionDenied,
-        "grant plugin_id does not match installed package",
-      ));
-    }
+  if manifest.id != bind.package_plugin_id {
+    return Err(CapabilityError::new(
+      CapabilityErrorCode::PermissionDenied,
+      "signed manifest plugin_id does not match installed package",
+    ));
   }
-  if let Some(pkg_version) = pin.package_plugin_version.as_deref() {
-    if bundle.header.plugin_version != pkg_version {
-      return Err(CapabilityError::new(
-        CapabilityErrorCode::PermissionDenied,
-        "grant plugin_version does not match installed package",
-      ));
-    }
+  if bundle.header.plugin_id != bind.package_plugin_id {
+    return Err(CapabilityError::new(
+      CapabilityErrorCode::PermissionDenied,
+      "grant plugin_id does not match installed package",
+    ));
+  }
+  if manifest.version != bind.package_plugin_version {
+    return Err(CapabilityError::new(
+      CapabilityErrorCode::PermissionDenied,
+      "signed manifest plugin_version does not match installed package",
+    ));
+  }
+  if bundle.header.plugin_version != bind.package_plugin_version {
+    return Err(CapabilityError::new(
+      CapabilityErrorCode::PermissionDenied,
+      "grant plugin_version does not match installed package",
+    ));
   }
   if bundle.header.package_digest != package_digest {
     return Err(CapabilityError::new(
@@ -960,14 +1014,19 @@ fn verify_grant_canonical_bind(
       "grant permission_request_digest does not match signed manifest",
     ));
   }
-  if let Some(pkg_permission) = pin.package_permission_request_digest.as_deref() {
-    if bundle.header.permission_request_digest != pkg_permission {
-      return Err(CapabilityError::new(
-        CapabilityErrorCode::PermissionDenied,
-        "grant permission_request_digest does not match installed package record",
-      ));
-    }
+  if bind.package_permission_request_digest != expected_permission {
+    return Err(CapabilityError::new(
+      CapabilityErrorCode::PermissionDenied,
+      "installed package permission_request_digest does not match signed manifest",
+    ));
   }
+  if bundle.header.permission_request_digest != bind.package_permission_request_digest {
+    return Err(CapabilityError::new(
+      CapabilityErrorCode::PermissionDenied,
+      "grant permission_request_digest does not match installed package record",
+    ));
+  }
+  validate_manifest_bound_network_origin_kinds(manifest, bundle)?;
   // Reconstruct domain grant and verify authority digest + child consistency.
   let grant = bundle_to_execution_grant_set(bundle).map_err(|e| {
     CapabilityError::new(
@@ -1003,6 +1062,101 @@ fn verify_grant_canonical_bind(
   Ok(())
 }
 
+/// Reject network authority that does not exactly match the verified package manifest and fixed
+/// host policy. An authority digest detects incidental corruption but never substitutes for this
+/// signed-manifest bind before a Wasm handle sees the grant.
+fn validate_manifest_bound_network_origin_kinds(
+  manifest: &PluginManifestV1,
+  bundle: &ExecutionGrantSetBundle,
+) -> Result<(), CapabilityError> {
+  const DEFAULT_AUTH_POLICY: &str = "host.none.v1";
+
+  let default_limits = ResourceLimits::default();
+  for entry in &bundle.network {
+    if !manifest
+      .capabilities
+      .iter()
+      .any(|capability| capability.id == entry.capability_id)
+    {
+      return Err(CapabilityError::new(
+        CapabilityErrorCode::PermissionDenied,
+        "grant network entry references an unknown capability",
+      ));
+    }
+    let endpoint = manifest
+      .permissions
+      .network
+      .iter()
+      .find(|endpoint| endpoint.id == entry.endpoint_id)
+      .ok_or_else(|| {
+        CapabilityError::new(
+          CapabilityErrorCode::PermissionDenied,
+          "grant references unknown endpoint",
+        )
+      })?;
+    let expected = crate::services::runtime_lifecycle::origin_kind_for_verified_network_endpoint(manifest, endpoint);
+    let actual = NetworkOriginKind::parse(&entry.origin_kind).map_err(|_| {
+      CapabilityError::new(
+        CapabilityErrorCode::PermissionDenied,
+        "grant network origin provenance is invalid",
+      )
+    })?;
+    if actual != expected {
+      return Err(CapabilityError::new(
+        CapabilityErrorCode::PermissionDenied,
+        "grant network origin provenance does not match verified manifest",
+      ));
+    }
+    if endpoint.instance_origin_config_field.is_none() && !endpoint.origins.iter().any(|origin| origin == &entry.origin)
+    {
+      return Err(CapabilityError::new(
+        CapabilityErrorCode::PermissionDenied,
+        "grant static origin is not declared by the verified manifest",
+      ));
+    }
+    let method = parse_http_method(&entry.method)
+      .map_err(|_| CapabilityError::new(CapabilityErrorCode::PermissionDenied, "grant network method is invalid"))?;
+    if !endpoint.methods.contains(&method) {
+      return Err(CapabilityError::new(
+        CapabilityErrorCode::PermissionDenied,
+        "grant network method is not declared by the verified manifest",
+      ));
+    }
+    let auth_policy_is_declared = if manifest.permissions.auth_policies.is_empty() {
+      entry.auth_policy == DEFAULT_AUTH_POLICY
+    } else {
+      manifest
+        .permissions
+        .auth_policies
+        .iter()
+        .any(|policy| policy == &entry.auth_policy)
+    };
+    if !auth_policy_is_declared {
+      return Err(CapabilityError::new(
+        CapabilityErrorCode::PermissionDenied,
+        "grant network auth policy is not declared by the verified manifest",
+      ));
+    }
+    if NetworkResourceMode::parse(&entry.resource_mode).ok() != Some(NetworkResourceMode::Bounded) {
+      return Err(CapabilityError::new(
+        CapabilityErrorCode::PermissionDenied,
+        "grant network resource mode is not approved by host policy",
+      ));
+    }
+    if entry.max_request_bytes != default_limits.max_request_bytes()
+      || entry.max_response_bytes != default_limits.max_response_bytes()
+      || entry.max_stream_bytes != default_limits.max_stream_bytes()
+      || entry.timeout_ms != default_limits.timeout_ms()
+    {
+      return Err(CapabilityError::new(
+        CapabilityErrorCode::PermissionDenied,
+        "grant network resource limits are not approved by host policy",
+      ));
+    }
+  }
+  Ok(())
+}
+
 /// Rebuild the in-memory ExecutionGrantSet from a persisted bundle.
 pub fn bundle_to_execution_grant_set(bundle: &ExecutionGrantSetBundle) -> Result<ExecutionGrantSet, String> {
   let package_digest = PackageDigest::parse(&bundle.header.package_digest)?;
@@ -1027,10 +1181,12 @@ pub fn bundle_to_execution_grant_set(bundle: &ExecutionGrantSetBundle) -> Result
     )
     .map_err(|e| e.to_string())?;
     let mode = crate::domain::runtime_plugin::NetworkResourceMode::parse(&entry.resource_mode)?;
-    network.push(NetworkGrantEntry::with_mode(
+    let origin_kind = NetworkOriginKind::parse(&entry.origin_kind)?;
+    network.push(NetworkGrantEntry::with_mode_and_origin_kind(
       CapabilityId::parse(&entry.capability_id).map_err(|e| format!("{e:?}"))?,
       EndpointId::parse(&entry.endpoint_id)?,
       HttpsOrigin::parse(&entry.origin)?,
+      origin_kind,
       method,
       AuthPolicyId::parse(&entry.auth_policy)?,
       mode,
@@ -1105,6 +1261,43 @@ mod tests {
   use crate::repositories::plugin_permission_grants;
   use crate::storage::Database;
 
+  fn sample_manifest() -> PluginManifestV1 {
+    PluginManifestV1 {
+      manifest_version: 1,
+      plugin_api_version: "1.0".into(),
+      id: "langnext.conformance".into(),
+      version: "0.1.0".into(),
+      publisher: crate::domain::runtime_plugin::PublisherDeclaration {
+        key_id: "test.publisher".into(),
+        key_fingerprint: "a".repeat(64),
+      },
+      runtime: crate::domain::runtime_plugin::RuntimeDescriptor {
+        kind: RuntimeKind::WasmComponent,
+        artifact: Some("artifacts/plugin.wasm".into()),
+      },
+      targets: vec![],
+      files: vec![],
+      capabilities: vec![crate::domain::runtime_plugin::CapabilityDeclaration {
+        id: "translate.text@1".into(),
+        preferences_schema: None,
+        artifact: None,
+      }],
+      configuration_schema: None,
+      config_schema_version: None,
+      credential_slots: vec![],
+      permissions: crate::domain::runtime_plugin::PermissionRequests {
+        network: vec![crate::domain::runtime_plugin::NetworkEndpointRequest {
+          id: "approved".into(),
+          origins: vec!["https://conformance.example".into()],
+          methods: vec![HttpMethod::Get],
+          instance_origin_config_field: None,
+        }],
+        auth_policies: vec!["host.none.v1".into()],
+      },
+      ui: Default::default(),
+    }
+  }
+
   fn sample_bundle(subject_id: Uuid, package_digest: &str) -> ExecutionGrantSetBundle {
     let grant_id = new_id();
     let now = now_rfc3339();
@@ -1119,6 +1312,7 @@ mod tests {
       capability_id: "translate.text@1".into(),
       endpoint_id: "approved".into(),
       origin: "https://conformance.example".into(),
+      origin_kind: "instance_configured".into(),
       method: "GET".into(),
       auth_policy: "host.none.v1".into(),
       resource_mode: "bounded".into(),
@@ -1155,6 +1349,39 @@ mod tests {
       network,
       pages: vec![],
     }
+  }
+
+  #[test]
+  fn runtime_router_rejects_rehashed_network_authority_expansion() {
+    const TAMPERED_CAPABILITY_ID: &str = "ocr.image@1";
+    const TAMPERED_METHOD: &str = "POST";
+    const TAMPERED_AUTH_POLICY: &str = "host.api-key.header.v1";
+    const TAMPERED_RESOURCE_MODE: &str = "stream";
+    const TAMPERED_MAX_REQUEST_BYTES: u64 = RESOURCE_LIMIT_DEFAULT_MAX_REQUEST_BYTES + 1;
+
+    let subject = new_id();
+    let digest = "a".repeat(64);
+    let manifest = sample_manifest();
+
+    let mut capability = sample_bundle(subject, &digest);
+    capability.network[0].capability_id = TAMPERED_CAPABILITY_ID.into();
+    assert!(validate_manifest_bound_network_origin_kinds(&manifest, &capability).is_err());
+
+    let mut method = sample_bundle(subject, &digest);
+    method.network[0].method = TAMPERED_METHOD.into();
+    assert!(validate_manifest_bound_network_origin_kinds(&manifest, &method).is_err());
+
+    let mut auth_policy = sample_bundle(subject, &digest);
+    auth_policy.network[0].auth_policy = TAMPERED_AUTH_POLICY.into();
+    assert!(validate_manifest_bound_network_origin_kinds(&manifest, &auth_policy).is_err());
+
+    let mut resource_mode = sample_bundle(subject, &digest);
+    resource_mode.network[0].resource_mode = TAMPERED_RESOURCE_MODE.into();
+    assert!(validate_manifest_bound_network_origin_kinds(&manifest, &resource_mode).is_err());
+
+    let mut limit = sample_bundle(subject, &digest);
+    limit.network[0].max_request_bytes = TAMPERED_MAX_REQUEST_BYTES;
+    assert!(validate_manifest_bound_network_origin_kinds(&manifest, &limit).is_err());
   }
 
   #[test]

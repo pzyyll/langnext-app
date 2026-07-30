@@ -319,7 +319,9 @@ const AUTHORITY_DIGEST_SEP: u8 = 0x1f;
 /// Compute the canonical authority digest over a grant set's authority content. The content is
 /// sorted deterministically (capabilities by id, network entries by their full key, pages by id
 /// with sorted actions) so the same authority always yields the same digest regardless of input
-/// order. Resource limits are part of each network entry's authority and are included.
+/// order. Resource limits are part of each network entry's authority and are included. The
+/// default strict provenance preserves the legacy encoding; the privileged `HostFixed` marker is
+/// added to the digest so changing a dynamic grant to fixed always invalidates its authority.
 pub(crate) fn compute_authority_digest(
   capabilities: &[CapabilityId],
   network: &[NetworkGrantEntry],
@@ -338,11 +340,16 @@ pub(crate) fn compute_authority_digest(
     .iter()
     .map(|entry| {
       let limits = entry.resource_limits();
+      let fixed_origin_marker = match entry.origin_kind() {
+        NetworkOriginKind::HostFixed => format!("\u{1f}{}", NetworkOriginKind::HostFixed.as_str()),
+        NetworkOriginKind::InstanceConfigured => String::new(),
+      };
       format!(
-        "{}\u{1f}{}\u{1f}{}\u{1f}{:?}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}",
+        "{}\u{1f}{}\u{1f}{}{}\u{1f}{:?}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}",
         entry.capability_id().as_str(),
         entry.endpoint_id().as_str(),
         entry.origin().as_str(),
+        fixed_origin_marker,
         entry.method(),
         entry.auth_policy().as_str(),
         entry.resource_mode().as_str(),
@@ -887,13 +894,39 @@ impl NetworkResourceMode {
   }
 }
 
-/// One reviewed network authority entry: binds capability, endpoint, origin, method, auth
-/// policy, resource mode, and resource limits. Endpoint/auth policy remain host-resolved.
+/// Origin provenance sealed into network authority. `HostFixed` is available only to the
+/// host-maintained fixed-origin allowlist; all other and legacy authority remains strict.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NetworkOriginKind {
+  HostFixed,
+  InstanceConfigured,
+}
+
+impl NetworkOriginKind {
+  pub fn as_str(self) -> &'static str {
+    match self {
+      Self::HostFixed => "host_fixed",
+      Self::InstanceConfigured => "instance_configured",
+    }
+  }
+
+  pub fn parse(value: &str) -> Result<Self, String> {
+    match value {
+      "host_fixed" => Ok(Self::HostFixed),
+      "instance_configured" => Ok(Self::InstanceConfigured),
+      other => Err(format!("invalid network origin kind: {other}")),
+    }
+  }
+}
+
+/// One reviewed network authority entry: binds capability, endpoint, origin provenance, method,
+/// auth policy, resource mode, and resource limits. Endpoint/auth policy remain host-resolved.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NetworkGrantEntry {
   capability_id: CapabilityId,
   endpoint_id: EndpointId,
   origin: HttpsOrigin,
+  origin_kind: NetworkOriginKind,
   method: HttpMethod,
   auth_policy: AuthPolicyId,
   resource_mode: NetworkResourceMode,
@@ -921,7 +954,8 @@ impl NetworkGrantEntry {
     )
   }
 
-  /// Construct a network grant with an explicit resource mode (authority content).
+  /// Construct a strict-by-default network grant with an explicit resource mode. Callers must
+  /// use [`Self::with_mode_and_origin_kind`] after verifying a host-owned fixed-origin allowlist.
   pub fn with_mode(
     capability_id: CapabilityId,
     endpoint_id: EndpointId,
@@ -931,10 +965,34 @@ impl NetworkGrantEntry {
     resource_mode: NetworkResourceMode,
     resource_limits: ResourceLimits,
   ) -> Self {
+    Self::with_mode_and_origin_kind(
+      capability_id,
+      endpoint_id,
+      origin,
+      NetworkOriginKind::InstanceConfigured,
+      method,
+      auth_policy,
+      resource_mode,
+      resource_limits,
+    )
+  }
+
+  /// Construct a network grant with host-verified origin provenance (authority content).
+  pub fn with_mode_and_origin_kind(
+    capability_id: CapabilityId,
+    endpoint_id: EndpointId,
+    origin: HttpsOrigin,
+    origin_kind: NetworkOriginKind,
+    method: HttpMethod,
+    auth_policy: AuthPolicyId,
+    resource_mode: NetworkResourceMode,
+    resource_limits: ResourceLimits,
+  ) -> Self {
     Self {
       capability_id,
       endpoint_id,
       origin,
+      origin_kind,
       method,
       auth_policy,
       resource_mode,
@@ -952,6 +1010,10 @@ impl NetworkGrantEntry {
 
   pub fn origin(&self) -> &HttpsOrigin {
     &self.origin
+  }
+
+  pub fn origin_kind(&self) -> NetworkOriginKind {
+    self.origin_kind
   }
 
   pub fn method(&self) -> HttpMethod {

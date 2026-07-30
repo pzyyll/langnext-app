@@ -2,7 +2,7 @@
 // ABOUTME: reach approved HTTPS origins (GTX/proxy) without credentials or ambient network access.
 use crate::domain::cancel::CancelToken;
 use crate::domain::provider_http::ProviderHttpMethod;
-use crate::domain::runtime_plugin::{ExecutionGrantSet, PluginPrincipal};
+use crate::domain::runtime_plugin::{ExecutionGrantSet, NetworkOriginKind, PluginPrincipal};
 use crate::services::bounded_http::{
   BoundedHttpResponse, DestinationPolicy, PreparedHttpRequest, RawHttpTransport, validate_external_destination,
   with_cancel,
@@ -15,6 +15,9 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Instant;
+
+/// Host-maintained Wasm endpoint id for the bundled Google Web GTX transport.
+const GOOGLE_WEB_GTX_ENDPOINT_ID: &str = "gtx";
 
 /// Auth policy id for credential-free endpoints. The network broker handle never injects auth;
 /// any other policy cannot be fulfilled and is denied before transport.
@@ -41,7 +44,7 @@ impl NetworkBrokerHandle {
 impl BrokerHandle for NetworkBrokerHandle {
   fn fetch(
     &self,
-    _principal: &PluginPrincipal,
+    principal: &PluginPrincipal,
     _grant: &ExecutionGrantSet,
     request: BrokerFetchRequest,
     authorization: BrokerAuthorization,
@@ -49,11 +52,13 @@ impl BrokerHandle for NetworkBrokerHandle {
     deadline: Option<Instant>,
   ) -> Pin<Box<dyn Future<Output = BrokerFetchOutcome> + Send + '_>> {
     let transport = self.transport.clone();
+    let principal = principal.clone();
     let cancel = cancel.clone();
     Box::pin(async move {
       if authorization.auth_policy.as_str() != AUTH_POLICY_NONE_V1 {
         return Err(BrokerFetchError::NotApproved);
       }
+      let destination_policy = destination_policy_for_authorization(&principal, &authorization)?;
       let method = parse_method(&request.method)?;
       let origin = authorization.origin.as_str();
       let (path_part, query_part) = request
@@ -93,7 +98,7 @@ impl BrokerHandle for NetworkBrokerHandle {
         body,
         content_type,
         proxy_mode: crate::domain::provider::ProxyMode::Direct,
-        destination_policy: DestinationPolicy::PublicInternet,
+        destination_policy,
         max_response_body_bytes: Some(max_response_bytes as usize),
         timeout: Some(timeout),
       };
@@ -109,6 +114,25 @@ impl BrokerHandle for NetworkBrokerHandle {
       }
       Ok(bounded_to_broker_response(response))
     })
+  }
+}
+
+/// Select trusted transport only from sealed grant provenance plus the host's exact origin
+/// allowlist. The guest supplies neither this marker nor a policy selector.
+fn destination_policy_for_authorization(
+  principal: &PluginPrincipal,
+  authorization: &BrokerAuthorization,
+) -> Result<DestinationPolicy, BrokerFetchError> {
+  match authorization.origin_kind {
+    NetworkOriginKind::InstanceConfigured => Ok(DestinationPolicy::PublicInternet),
+    NetworkOriginKind::HostFixed
+      if principal.plugin_id().as_str() == crate::domain::service_integration::GOOGLE_TRANSLATE_WEB_PLUGIN_ID
+        && authorization.endpoint_id.as_str() == GOOGLE_WEB_GTX_ENDPOINT_ID
+        && authorization.origin.as_str() == crate::domain::service_integration::GOOGLE_TRANSLATE_WEB_GTX_ORIGIN =>
+    {
+      Ok(DestinationPolicy::TrustedFixed)
+    }
+    NetworkOriginKind::HostFixed => Err(BrokerFetchError::NotApproved),
   }
 }
 

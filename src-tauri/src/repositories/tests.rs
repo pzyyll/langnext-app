@@ -1238,6 +1238,7 @@ fn runtime_instance_pin_package_approval_never_authorizes_execution() {
         capability_id: "translate.text@1".into(),
         endpoint_id: "approved".into(),
         origin: "https://conformance.example".into(),
+        origin_kind: "instance_configured".into(),
         method: "GET".into(),
         auth_policy: "host.none.v1".into(),
         resource_mode: "bounded".into(),

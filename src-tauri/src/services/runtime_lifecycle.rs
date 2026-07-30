@@ -12,12 +12,14 @@ use crate::domain::runtime_lifecycle::{
 };
 use crate::domain::runtime_plugin::{
   AuthPolicyId, CapabilityId, EndpointId, ExecutionGrantSet, FileRole, GrantSetRevision, HttpsOrigin,
-  NetworkGrantEntry, NetworkResourceMode, PackageDigest, PackageIdentity, PageGrantEntry, PluginId, PluginManifestV1,
-  RESOURCE_LIMIT_DEFAULT_MAX_REQUEST_BYTES, RESOURCE_LIMIT_DEFAULT_MAX_RESPONSE_BYTES,
-  RESOURCE_LIMIT_DEFAULT_MAX_STREAM_BYTES, RESOURCE_LIMIT_DEFAULT_TIMEOUT_MS, ResourceLimits, RuntimeIdentity,
-  RuntimeKind, SemVerVersion,
+  NetworkEndpointRequest, NetworkGrantEntry, NetworkOriginKind, NetworkResourceMode, PackageDigest, PackageIdentity,
+  PageGrantEntry, PluginId, PluginManifestV1, RESOURCE_LIMIT_DEFAULT_MAX_REQUEST_BYTES,
+  RESOURCE_LIMIT_DEFAULT_MAX_RESPONSE_BYTES, RESOURCE_LIMIT_DEFAULT_MAX_STREAM_BYTES,
+  RESOURCE_LIMIT_DEFAULT_TIMEOUT_MS, ResourceLimits, RuntimeIdentity, RuntimeKind, SemVerVersion,
 };
-use crate::domain::service_integration::IntegrationInstance;
+use crate::domain::service_integration::{
+  GOOGLE_TRANSLATE_WEB_GTX_ORIGIN, GOOGLE_TRANSLATE_WEB_PLUGIN_ID, IntegrationInstance,
+};
 use crate::domain::time::{new_id, now_rfc3339};
 use crate::error::StorageError;
 use crate::repositories::{
@@ -1955,6 +1957,31 @@ fn verify_preference_cas(
   Ok(())
 }
 
+/// Assign strict transport provenance from a verified package manifest. Only the host-maintained
+/// Google Web GTX tuple can use OS/TUN DNS; every user/instance-configured endpoint stays strict.
+pub(crate) fn origin_kind_for_verified_network_endpoint(
+  manifest: &PluginManifestV1,
+  endpoint: &NetworkEndpointRequest,
+) -> NetworkOriginKind {
+  const GOOGLE_WEB_GTX_ENDPOINT_ID: &str = "gtx";
+
+  if endpoint.instance_origin_config_field.is_some() {
+    return NetworkOriginKind::InstanceConfigured;
+  }
+  let is_google_web_gtx = manifest.id == GOOGLE_TRANSLATE_WEB_PLUGIN_ID
+    && endpoint.id == GOOGLE_WEB_GTX_ENDPOINT_ID
+    && endpoint.origins.len() == 1
+    && endpoint
+      .origins
+      .first()
+      .is_some_and(|origin| origin == GOOGLE_TRANSLATE_WEB_GTX_ORIGIN);
+  if is_google_web_gtx {
+    NetworkOriginKind::HostFixed
+  } else {
+    NetworkOriginKind::InstanceConfigured
+  }
+}
+
 fn build_grant_bundle_for_target(
   db: &Database,
   packages: &PluginPackageService,
@@ -2031,6 +2058,7 @@ fn build_grant_bundle_for_target(
     let capability_id = CapabilityId::parse(&cap.id).map_err(|e| StorageError::Validation(format!("{e:?}")))?;
     for endpoint in &target_manifest.permissions.network {
       let endpoint_id = EndpointId::parse(&endpoint.id).map_err(StorageError::Validation)?;
+      let origin_kind = origin_kind_for_verified_network_endpoint(target_manifest, endpoint);
       // Effective origins: static declared origins, or the instance-configured origin resolved
       // from the named config field (e.g. proxy-url) and normalized to an HTTPS origin.
       let effective_origins: Vec<String> = if let Some(field) = &endpoint.instance_origin_config_field {
@@ -2072,10 +2100,11 @@ fn build_grant_bundle_for_target(
           for policy in &auth_policies {
             let auth = AuthPolicyId::parse(policy).map_err(StorageError::Validation)?;
             let limits = ResourceLimits::default();
-            domain_net.push(NetworkGrantEntry::with_mode(
+            domain_net.push(NetworkGrantEntry::with_mode_and_origin_kind(
               capability_id.clone(),
               endpoint_id.clone(),
               origin.clone(),
+              origin_kind,
               *method,
               auth.clone(),
               NetworkResourceMode::Bounded,
@@ -2087,6 +2116,7 @@ fn build_grant_bundle_for_target(
               capability_id: capability_id.as_str().to_string(),
               endpoint_id: endpoint_id.as_str().to_string(),
               origin: origin.as_str().to_string(),
+              origin_kind: origin_kind.as_str().into(),
               method: http_method_as_str(*method).into(),
               auth_policy: auth.as_str().to_string(),
               resource_mode: NetworkResourceMode::Bounded.as_str().into(),

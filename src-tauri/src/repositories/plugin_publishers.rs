@@ -150,3 +150,61 @@ pub fn revoke(conn: &Connection, key_id: &str) -> Result<PluginPublisher, Storag
   }
   get(conn, key_id)
 }
+
+pub fn clear_revoked(conn: &Connection, key_id: &str) -> Result<PluginPublisher, StorageError> {
+  let now = now_rfc3339();
+  let changed = conn.execute(
+    "UPDATE plugin_publishers SET revoked = 0, enabled = 1, updated_at = ?2 WHERE key_id = ?1 AND source = 'vendor' AND revoked = 1",
+    params![key_id, now],
+  )?;
+  if changed == 0 {
+    return Err(StorageError::NotFound(format!(
+      "vendor plugin publisher {key_id} not found or not in revoked state"
+    )));
+  }
+  get(conn, key_id)
+}
+
+/// Whether an installed package or its approval still references a publisher.
+pub fn has_package_references(conn: &Connection, key_id: &str) -> Result<bool, StorageError> {
+  let has_references: i64 = conn.query_row(
+    "SELECT EXISTS (
+        SELECT 1 FROM installed_plugin_versions WHERE publisher_key_id = ?1
+        UNION ALL
+        SELECT 1 FROM plugin_package_approvals WHERE publisher_key_id = ?1
+      )",
+    params![key_id],
+    |row| row.get(0),
+  )?;
+  Ok(has_references != 0)
+}
+
+/// Atomically delete only a revoked, unreferenced user-approved publisher.
+///
+/// The service validates policy first for a specific error. These predicates make the deletion
+/// itself race-safe, while the FK mapping remains a guard for future referencing tables.
+pub fn delete_revoked_user_approved_unreferenced(conn: &Connection, key_id: &str) -> Result<bool, StorageError> {
+  let deleted = conn
+    .execute(
+      "DELETE FROM plugin_publishers
+       WHERE key_id = ?1
+         AND source = 'user_approved'
+         AND revoked = 1
+         AND NOT EXISTS (
+           SELECT 1 FROM installed_plugin_versions WHERE publisher_key_id = ?1
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM plugin_package_approvals WHERE publisher_key_id = ?1
+         )",
+      params![key_id],
+    )
+    .map_err(
+      |error| match StorageError::from_sqlite_constraint(error, "plugin publisher") {
+        StorageError::InUse(_) => StorageError::Conflict(format!(
+          "publisher {key_id} is still referenced; remove related packages before removing the publisher"
+        )),
+        other => other,
+      },
+    )?;
+  Ok(deleted == 1)
+}

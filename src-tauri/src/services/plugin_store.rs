@@ -131,6 +131,15 @@ pub enum UninstallRestoreFault {
   AvailabilityWrite,
 }
 
+/// Whether a vendor default binding may replace an existing default for the same plugin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VendorDefaultBindingMode {
+  /// Bootstrap repairs a stale or unverified default by replacing it.
+  ReplaceExisting,
+  /// Publisher recovery binds only when no different default was selected by the user.
+  OnlyIfUnset,
+}
+
 /// Verified identity of a bundled vendor-signed package imported by
 /// [`PluginPackageService::bootstrap_bundled_package`]. Every field comes from full Ed25519
 /// package signature/index/artifact verification of the exact retained archive against a
@@ -1648,19 +1657,17 @@ impl PluginPackageService {
   /// digest only and requires its publisher to be a trusted, enabled, non-revoked **vendor** key
   /// whose key id, fingerprint, and public key all match the verified import identity.
   ///
-  /// Validate, clear, and set run in a **single transaction**: any existing default for the
-  /// plugin is cleared first, then the verified import identity is cross-bound with the installed
-  /// version row and publisher row, and only then is the new default set. There is no TOCTOU
-  /// window between validate and set, and a validation failure commits the clear (via `Ok(None)`)
-  /// so a stale wrong default (e.g. 1.1.0, or a user-approved 1.0.0 from a prior install) is never
-  /// retained. When `verified_import` is `None` (vendor 1.0.0 was not imported this round) the
-  /// existing default is cleared and NotFound is returned. Used by
+  /// Validate, clear, and set run in a **single transaction**. Bootstrap replacement clears a
+  /// stale default before binding, including when `verified_import` is `None`, so it fails closed.
+  /// Recovery uses [`VendorDefaultBindingMode::OnlyIfUnset`], which checks the current default in
+  /// that transaction and leaves a different user-selected digest untouched. Used by
   /// [`crate::state::AppState::initialize`] after bundled archives are imported.
   pub fn set_vendor_bootstrap_default(
     &self,
     plugin_id: &str,
     expected_version: &str,
     verified_import: Option<&VerifiedVendorImport>,
+    binding_mode: VendorDefaultBindingMode,
   ) -> Result<PluginDefaultVersion, StorageError> {
     // Never trust caller-held identity fields alone. Re-verify the exact retained archive with
     // the external vendor root immediately before binding so a replaced archive/content or a
@@ -1682,9 +1689,20 @@ impl PluginPackageService {
       None => None,
     };
     let bound = self.db.transaction(|uow| {
-      // Always clear any existing default first; the clear commits with this transaction. A
-      // validation failure returns Ok(None) so the clear persists and no stale wrong default is
-      // retained, with no TOCTOU window between validate, clear, and set.
+      if binding_mode == VendorDefaultBindingMode::OnlyIfUnset {
+        let Some(import) = rechecked_import.as_ref() else {
+          return Ok::<_, StorageError>(None);
+        };
+        if let Some(default) = installed_plugin_versions::get_default(uow.conn(), plugin_id)? {
+          if default.package_digest != import.package_digest() {
+            return Err(StorageError::Conflict(format!(
+              "plugin {plugin_id} already has a user-selected default"
+            )));
+          }
+        }
+      }
+      // Bootstrap replacement clears any existing default before binding. Recovery reaches this
+      // only when the transaction observed no conflicting user-selected default.
       installed_plugin_versions::clear_default_for_plugin(uow.conn(), plugin_id)?;
       let Some(import) = rechecked_import.as_ref() else {
         return Ok::<_, StorageError>(None);
@@ -1801,6 +1819,117 @@ impl PluginPackageService {
       }
       Ok(PluginPublisherDto::from(&publisher))
     })
+  }
+
+  /// Remove a revoked user-approved publisher after all package references are removed.
+  pub fn remove_publisher(&self, key_id: &str) -> Result<(), StorageError> {
+    self.db.transaction(|uow| {
+      let publisher = plugin_publishers::get(uow.conn(), key_id)?;
+      if publisher.source != PublisherSource::UserApproved {
+        return Err(StorageError::Validation(format!(
+          "vendor publisher {key_id} cannot be removed"
+        )));
+      }
+      if !publisher.revoked {
+        return Err(StorageError::Conflict(format!(
+          "publisher {key_id} must be revoked before it can be removed"
+        )));
+      }
+      if plugin_publishers::has_package_references(uow.conn(), key_id)? {
+        return Err(StorageError::Conflict(format!(
+          "publisher {key_id} is still referenced; remove related packages before removing the publisher"
+        )));
+      }
+      if !plugin_publishers::delete_revoked_user_approved_unreferenced(uow.conn(), key_id)? {
+        return Err(StorageError::Conflict(format!(
+          "publisher {key_id} changed while removing; refresh and retry"
+        )));
+      }
+      Ok(())
+    })
+  }
+
+  /// Restore a revoked vendor publisher only when its catalog identity still matches a current
+  /// external vendor root. Database source metadata alone is never sufficient to restore trust.
+  pub fn restore_vendor_publisher(&self, key_id: &str) -> Result<PluginPublisherDto, StorageError> {
+    let dto = self.db.transaction(|uow| {
+      let publisher = plugin_publishers::get(uow.conn(), key_id)?;
+      self.verify_vendor_publisher_root(&publisher)?;
+      let publisher = plugin_publishers::clear_revoked(uow.conn(), key_id)?;
+      Ok::<_, StorageError>(PluginPublisherDto::from(&publisher))
+    })?;
+    // After restoring, re-attempt vendor defaults for installed packages signed by this key.
+    if let Err(err) = self.try_restore_vendor_defaults(key_id) {
+      log::warn!("vendor publisher {key_id} restored but default re-bind failed: {err}");
+    }
+    Ok(dto)
+  }
+
+  /// Verify a vendor publisher row against the configured external roots before changing trust.
+  fn verify_vendor_publisher_root(&self, publisher: &PluginPublisher) -> Result<(), StorageError> {
+    if publisher.source != PublisherSource::Vendor {
+      return Err(StorageError::Validation(format!(
+        "publisher {} is not a vendor publisher",
+        publisher.key_id
+      )));
+    }
+    let root = self.resolve_vendor_root(&publisher.key_id, Some(&publisher.fingerprint))?;
+    if root.public_key_hex != publisher.public_key_hex {
+      return Err(StorageError::Validation(format!(
+        "vendor publisher {} public key does not match the configured vendor root",
+        publisher.key_id
+      )));
+    }
+    Ok(())
+  }
+
+  /// Best-effort: re-bind defaults for fully re-verified installed vendor packages after restore.
+  fn try_restore_vendor_defaults(&self, key_id: &str) -> Result<(), StorageError> {
+    let candidates: Vec<String> = self.db.read(|conn| {
+      let versions = installed_plugin_versions::list(conn)?;
+      Ok::<_, StorageError>(
+        versions
+          .into_iter()
+          .filter(|v| v.publisher_key_id == key_id && v.content_available)
+          .map(|v| v.package_digest)
+          .collect(),
+      )
+    })?;
+    for package_digest in candidates {
+      let import = match self.reverify_vendor_import(&package_digest) {
+        Ok(import) if import.publisher_key_id() == key_id => import,
+        Ok(_) => {
+          log::warn!("vendor package {package_digest} publisher identity changed during restore");
+          continue;
+        }
+        Err(err) => {
+          log::warn!("vendor package {package_digest} failed re-verification during restore: {err}");
+          continue;
+        }
+      };
+      match self.set_vendor_bootstrap_default(
+        import.plugin_id(),
+        import.version(),
+        Some(&import),
+        VendorDefaultBindingMode::OnlyIfUnset,
+      ) {
+        Ok(_) => {}
+        Err(StorageError::Conflict(_)) => {
+          log::debug!(
+            "vendor {} default restore skipped because a user default exists",
+            import.plugin_id()
+          );
+        }
+        Err(err) => {
+          log::warn!(
+            "vendor {}@{} default restore skipped: {err}",
+            import.plugin_id(),
+            import.version()
+          );
+        }
+      }
+    }
+    Ok(())
   }
 
   pub fn uninstall_version(&self, package_digest: &str) -> Result<(), StorageError> {
@@ -2417,6 +2546,9 @@ mod tests {
   use std::io::Write;
   use std::time::Duration;
 
+  const TEST_VENDOR_ALTERNATE_VERSION: &str = "1.0.1";
+  const ROTATED_VENDOR_TEST_SEED: [u8; 32] = [11_u8; 32];
+
   fn setup() -> (tempfile::TempDir, PluginPackageService) {
     let dir = tempfile::tempdir().unwrap();
     let db = Database::new(dir.path()).unwrap();
@@ -2479,9 +2611,14 @@ mod tests {
   }
 
   fn build_vendor_signed_package() -> (Vec<u8>, String) {
+    build_vendor_signed_package_with_version("1.0.0")
+  }
+
+  fn build_vendor_signed_package_with_version(version: &str) -> (Vec<u8>, String) {
     let sk = fixture_vendor_signing_key();
     let wasm = b"\0asm\x01\x00\x00\x00";
     let mut manifest = sample_manifest(wasm);
+    manifest.version = version.to_string();
     manifest.publisher.key_id = VENDOR_PUBLISHER_KEY_ID.into();
     manifest.publisher.key_fingerprint = fixture_vendor_fingerprint();
     let manifest_bytes = serde_json::to_vec(&manifest).unwrap();
@@ -2917,6 +3054,170 @@ mod tests {
     assert!(!service.list_versions().unwrap()[0].is_default);
     let err = service.set_default("com.example.translate", &digest).unwrap_err();
     assert!(matches!(err, StorageError::Validation(_)));
+  }
+
+  #[test]
+  fn remove_publisher_deletes_revoked_user_approved_without_package_references() {
+    let (_dir, service) = setup();
+    let key_id = "com.example.keys.1";
+    service.revoke_publisher(key_id).unwrap();
+
+    service.remove_publisher(key_id).unwrap();
+
+    assert!(
+      service
+        .list_publishers()
+        .unwrap()
+        .iter()
+        .all(|publisher| publisher.key_id != key_id)
+    );
+  }
+
+  #[test]
+  fn remove_publisher_rejects_active_user_approved_publisher() {
+    let (_dir, service) = setup();
+
+    let err = service.remove_publisher("com.example.keys.1").unwrap_err();
+
+    assert!(matches!(err, StorageError::Conflict(_)), "{err:?}");
+  }
+
+  #[test]
+  fn remove_publisher_rejects_vendor_publisher() {
+    let (_dir, service) = setup();
+
+    let err = service.remove_publisher(VENDOR_PUBLISHER_KEY_ID).unwrap_err();
+
+    assert!(matches!(err, StorageError::Validation(_)), "{err:?}");
+  }
+
+  #[test]
+  fn remove_publisher_rejects_installed_package_and_approval_references() {
+    let (dir, service) = setup();
+    let (digest, _) = install_valid(&service, dir.path(), false);
+    service.revoke_publisher("com.example.keys.1").unwrap();
+    let approval_count = service
+      .db
+      .read(|conn| plugin_package_approvals::list_for_package(conn, &digest).map(|approvals| approvals.len()))
+      .unwrap();
+    assert_eq!(
+      approval_count, 1,
+      "installed package fixture must include its approval reference"
+    );
+
+    let err = service.remove_publisher("com.example.keys.1").unwrap_err();
+    let message = err.to_string();
+
+    assert!(matches!(err, StorageError::Conflict(_)), "{message}");
+    assert!(message.contains("remove related packages"), "{message}");
+  }
+
+  #[test]
+  fn remove_publisher_rejects_missing_publisher() {
+    let (_dir, service) = setup();
+
+    let err = service.remove_publisher("com.example.keys.missing").unwrap_err();
+
+    assert!(matches!(err, StorageError::NotFound(_)), "{err:?}");
+  }
+
+  #[test]
+  fn restore_vendor_publisher_succeeds_for_current_vendor_root() {
+    let (_dir, service) = setup();
+    service.revoke_publisher(VENDOR_PUBLISHER_KEY_ID).unwrap();
+
+    let restored = service.restore_vendor_publisher(VENDOR_PUBLISHER_KEY_ID).unwrap();
+
+    assert!(restored.enabled);
+    assert!(!restored.revoked);
+    assert_eq!(restored.source, PublisherSource::Vendor);
+  }
+
+  #[test]
+  fn restore_vendor_publisher_rebinds_default_from_verified_import() {
+    let (_dir, service) = setup();
+    let (package, digest) = build_vendor_signed_package();
+    service.bootstrap_bundled_package(&package, false).unwrap();
+    service.revoke_publisher(VENDOR_PUBLISHER_KEY_ID).unwrap();
+
+    service.restore_vendor_publisher(VENDOR_PUBLISHER_KEY_ID).unwrap();
+
+    let default = service
+      .db
+      .read(|conn| installed_plugin_versions::get_default(conn, "com.example.translate"))
+      .unwrap()
+      .expect("restored vendor package must become the default");
+    assert_eq!(default.package_digest, digest);
+  }
+
+  #[test]
+  fn restore_vendor_publisher_rejects_non_revoked_vendor() {
+    let (_dir, service) = setup();
+
+    let err = service.restore_vendor_publisher(VENDOR_PUBLISHER_KEY_ID).unwrap_err();
+
+    assert!(matches!(err, StorageError::NotFound(_)), "{err:?}");
+  }
+
+  #[test]
+  fn restore_vendor_publisher_rejects_user_approved_key() {
+    let (_dir, service) = setup();
+    service.revoke_publisher("com.example.keys.1").unwrap();
+
+    let err = service.restore_vendor_publisher("com.example.keys.1").unwrap_err();
+
+    assert!(matches!(err, StorageError::Validation(_)), "{err:?}");
+  }
+
+  #[test]
+  fn restore_vendor_publisher_rejects_removed_or_rotated_vendor_root() {
+    let (dir, service) = setup();
+    service.revoke_publisher(VENDOR_PUBLISHER_KEY_ID).unwrap();
+
+    let without_root =
+      PluginPackageService::with_vendor_roots(service.db.clone(), dir.path().to_path_buf(), Vec::new());
+    let err = without_root
+      .restore_vendor_publisher(VENDOR_PUBLISHER_KEY_ID)
+      .unwrap_err();
+    assert!(matches!(err, StorageError::NotFound(_)), "{err:?}");
+
+    let rotated_key = SigningKey::from_bytes(&ROTATED_VENDOR_TEST_SEED);
+    let rotated = PluginPackageService {
+      vendor_roots: Arc::new(vec![VendorPublicKey {
+        key_id: VENDOR_PUBLISHER_KEY_ID.to_string(),
+        public_key_hex: encode_lowercase_hex(&rotated_key.verifying_key().to_bytes()),
+      }]),
+      ..service
+    };
+    let err = rotated.restore_vendor_publisher(VENDOR_PUBLISHER_KEY_ID).unwrap_err();
+    assert!(matches!(err, StorageError::Validation(_)), "{err:?}");
+    let publisher = rotated
+      .list_publishers()
+      .unwrap()
+      .into_iter()
+      .find(|publisher| publisher.key_id == VENDOR_PUBLISHER_KEY_ID)
+      .expect("vendor publisher must remain in the catalog");
+    assert!(publisher.revoked);
+    assert!(!publisher.enabled);
+  }
+
+  #[test]
+  fn restore_vendor_publisher_preserves_user_selected_default() {
+    let (dir, service) = setup();
+    let (vendor_package, vendor_digest) = build_vendor_signed_package_with_version(TEST_VENDOR_ALTERNATE_VERSION);
+    service.bootstrap_bundled_package(&vendor_package, false).unwrap();
+    let (user_digest, _) = install_valid(&service, dir.path(), true);
+    service.revoke_publisher(VENDOR_PUBLISHER_KEY_ID).unwrap();
+
+    service.restore_vendor_publisher(VENDOR_PUBLISHER_KEY_ID).unwrap();
+
+    let default = service
+      .db
+      .read(|conn| installed_plugin_versions::get_default(conn, "com.example.translate"))
+      .unwrap()
+      .expect("user default must remain bound");
+    assert_eq!(default.package_digest, user_digest);
+    assert_ne!(default.package_digest, vendor_digest);
   }
 
   #[test]

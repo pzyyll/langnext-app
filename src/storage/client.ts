@@ -284,6 +284,14 @@ export async function revokePluginPublisher(keyId: string): Promise<PluginPublis
   return runStorage(invokeEffect<PluginPublisherDto>("revoke_plugin_publisher", { keyId }));
 }
 
+export async function restorePluginPublisher(keyId: string): Promise<PluginPublisherDto> {
+  return runStorage(invokeEffect<PluginPublisherDto>("restore_plugin_publisher", { keyId }));
+}
+
+export async function removePluginPublisher(keyId: string): Promise<void> {
+  return runStorage(invokeEffect<void>("remove_plugin_publisher", { keyId }));
+}
+
 export async function uninstallPluginVersion(packageDigest: string): Promise<void> {
   return runStorage(invokeEffect<void>("uninstall_plugin_version", { packageDigest }));
 }

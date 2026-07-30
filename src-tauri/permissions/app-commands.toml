@@ -62,6 +62,8 @@ permissions = [
   "allow-list-plugin-publishers",
   "allow-approve-user-plugin-publisher",
   "allow-revoke-plugin-publisher",
+  "allow-restore-plugin-publisher",
+  "allow-remove-plugin-publisher",
   "allow-uninstall-plugin-version",
   "allow-get-plugin-version-dependencies",
   "allow-preview-integration-runtime-upgrade",

@@ -56,6 +56,9 @@ static INHERIT_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 static DIRECT_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 static STREAM_INHERIT_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 static STREAM_DIRECT_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+// TrustedFixed clients use OS DNS but never a system proxy; ProxyMode is intentionally ignored.
+static TRUSTED_FIXED_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+static TRUSTED_FIXED_STREAM_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 // Public-destination clients always disable system proxies (see build_public_client); a single
 // cached client per transport kind is sufficient because ProxyMode is intentionally ignored.
 static PUBLIC_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
@@ -177,6 +180,9 @@ pub trait RawHttpTransport: Send + Sync + 'static {
 pub enum DestinationPolicy {
   /// Preserve the configured provider destination, including explicit loopback development providers.
   Configured,
+  /// Reach a host-owned, exact HTTPS origin through the OS/TUN resolver with no system proxy.
+  /// TLS hostname verification remains reqwest's default; ProxyMode is intentionally ignored.
+  TrustedFixed,
   /// Resolve and connect only to publicly routable external addresses.
   PublicInternet,
 }
@@ -580,6 +586,7 @@ fn client_for(
 ) -> Result<&'static reqwest::Client, StorageError> {
   match destination_policy {
     DestinationPolicy::Configured => configured_client_for(mode),
+    DestinationPolicy::TrustedFixed => trusted_fixed_client_for(),
     DestinationPolicy::PublicInternet => public_client_for(mode),
   }
 }
@@ -601,10 +608,22 @@ fn configured_client_for(mode: ProxyMode) -> Result<&'static reqwest::Client, St
 /// system-proxy detection (env/OS); Direct disables it. Exposed so behavior tests can build a
 /// non-cached client under a controlled proxy environment.
 fn build_configured_client(mode: ProxyMode) -> Result<reqwest::Client, StorageError> {
-  let builder = reqwest::Client::builder()
+  build_configured_client_with_resolver(mode, None)
+}
+
+/// Build an OS/TUN-resolved client. Production passes no resolver, deliberately leaving DNS to
+/// the platform network stack; test probes may inject an unfiltered resolver to observe connect.
+fn build_configured_client_with_resolver(
+  mode: ProxyMode,
+  resolver: Option<Arc<dyn Resolve>>,
+) -> Result<reqwest::Client, StorageError> {
+  let mut builder = reqwest::Client::builder()
     .timeout(REQUEST_TIMEOUT)
     .connect_timeout(REQUEST_TIMEOUT)
     .redirect(reqwest::redirect::Policy::none());
+  if let Some(resolver) = resolver {
+    builder = builder.dns_resolver(resolver);
+  }
   let builder = match mode {
     ProxyMode::Inherit => builder,
     ProxyMode::Direct => builder.no_proxy(),
@@ -612,6 +631,38 @@ fn build_configured_client(mode: ProxyMode) -> Result<reqwest::Client, StorageEr
   builder
     .build()
     .map_err(|_| StorageError::Internal("failed to build HTTP client".into()))
+}
+
+/// Return the dedicated fixed-origin client: platform DNS with no environment or OS proxy.
+fn trusted_fixed_client_for() -> Result<&'static reqwest::Client, StorageError> {
+  if TRUSTED_FIXED_CLIENT.get().is_none() {
+    let _ = TRUSTED_FIXED_CLIENT.set(build_trusted_fixed_client()?);
+  }
+  TRUSTED_FIXED_CLIENT
+    .get()
+    .ok_or_else(|| StorageError::Internal("trusted fixed HTTP client unavailable".into()))
+}
+
+/// Build an OS/TUN-resolved fixed-origin client that always bypasses system proxies. Tests can
+/// inject an unfiltered resolver to prove fixed origins are not subject to the public-DNS filter.
+fn build_trusted_fixed_client() -> Result<reqwest::Client, StorageError> {
+  build_trusted_fixed_client_with_resolver(None)
+}
+
+fn build_trusted_fixed_client_with_resolver(
+  resolver: Option<Arc<dyn Resolve>>,
+) -> Result<reqwest::Client, StorageError> {
+  let mut builder = reqwest::Client::builder()
+    .timeout(REQUEST_TIMEOUT)
+    .connect_timeout(REQUEST_TIMEOUT)
+    .no_proxy()
+    .redirect(reqwest::redirect::Policy::none());
+  if let Some(resolver) = resolver {
+    builder = builder.dns_resolver(resolver);
+  }
+  builder
+    .build()
+    .map_err(|_| StorageError::Internal("failed to build trusted fixed HTTP client".into()))
 }
 
 fn public_client_for(_mode: ProxyMode) -> Result<&'static reqwest::Client, StorageError> {
@@ -630,10 +681,16 @@ fn public_client_for(_mode: ProxyMode) -> Result<&'static reqwest::Client, Stora
 /// Build a fresh public-destination client: public DNS pinning + no system proxy. Single source of
 /// truth for `public_client_for`; behavior tests build a non-cached client through this helper.
 fn build_public_client() -> Result<reqwest::Client, StorageError> {
+  build_public_client_with_resolver(Arc::new(PublicDestinationResolver::default()))
+}
+
+/// Build a strict public-destination client with an explicit resolver. The production caller
+/// supplies [`PublicDestinationResolver`]; tests inject DNS answers without external lookups.
+fn build_public_client_with_resolver(resolver: Arc<dyn Resolve>) -> Result<reqwest::Client, StorageError> {
   // reqwest replaces port 0 in the resolver's SocketAddrs with the URL's explicit port or the
   // scheme default before connect, so the resolver may return port-0 addresses safely.
   reqwest::Client::builder()
-    .dns_resolver(PublicDestinationResolver::default())
+    .dns_resolver(resolver)
     .timeout(REQUEST_TIMEOUT)
     .connect_timeout(REQUEST_TIMEOUT)
     .no_proxy()
@@ -648,6 +705,7 @@ fn stream_client_for(
 ) -> Result<&'static reqwest::Client, StorageError> {
   match destination_policy {
     DestinationPolicy::Configured => configured_stream_client_for(mode),
+    DestinationPolicy::TrustedFixed => trusted_fixed_stream_client_for(),
     DestinationPolicy::PublicInternet => public_stream_client_for(mode),
   }
 }
@@ -680,6 +738,36 @@ fn build_configured_stream_client(mode: ProxyMode) -> Result<reqwest::Client, St
     .map_err(|_| StorageError::Internal("failed to build stream HTTP client".into()))
 }
 
+/// Return the dedicated fixed-origin stream client: platform DNS with no environment or OS proxy.
+fn trusted_fixed_stream_client_for() -> Result<&'static reqwest::Client, StorageError> {
+  if TRUSTED_FIXED_STREAM_CLIENT.get().is_none() {
+    let _ = TRUSTED_FIXED_STREAM_CLIENT.set(build_trusted_fixed_stream_client()?);
+  }
+  TRUSTED_FIXED_STREAM_CLIENT
+    .get()
+    .ok_or_else(|| StorageError::Internal("trusted fixed stream HTTP client unavailable".into()))
+}
+
+/// Build an OS/TUN-resolved fixed-origin stream client that always bypasses system proxies.
+fn build_trusted_fixed_stream_client() -> Result<reqwest::Client, StorageError> {
+  build_trusted_fixed_stream_client_with_resolver(None)
+}
+
+fn build_trusted_fixed_stream_client_with_resolver(
+  resolver: Option<Arc<dyn Resolve>>,
+) -> Result<reqwest::Client, StorageError> {
+  let mut builder = reqwest::Client::builder()
+    .connect_timeout(STREAM_CONNECT_TIMEOUT)
+    .no_proxy()
+    .redirect(reqwest::redirect::Policy::none());
+  if let Some(resolver) = resolver {
+    builder = builder.dns_resolver(resolver);
+  }
+  builder
+    .build()
+    .map_err(|_| StorageError::Internal("failed to build trusted fixed stream HTTP client".into()))
+}
+
 fn public_stream_client_for(_mode: ProxyMode) -> Result<&'static reqwest::Client, StorageError> {
   // Stream clients share the public-destination DNS pinning and no-proxy policy of non-stream
   // public clients (see public_client_for).
@@ -706,8 +794,8 @@ pub fn map_reqwest_error(err: reqwest::Error) -> StorageError {
   if err.is_timeout() {
     return StorageError::Validation("request timed out".into());
   }
-  // Include the reqwest error category so callers can distinguish DNS, connect, and TLS
-  // failures without exposing the full URL or request body.
+  // Preserve a coarse category without formatting reqwest or its source: either may include a
+  // request URL (including query values). Request bodies and credentials must never reach errors.
   let category = if err.is_connect() {
     "connect"
   } else if err.is_request() {
@@ -715,10 +803,7 @@ pub fn map_reqwest_error(err: reqwest::Error) -> StorageError {
   } else {
     "transport"
   };
-  let source = <dyn std::error::Error>::source(&err)
-    .map(|s| s.to_string())
-    .unwrap_or_else(|| err.to_string());
-  StorageError::Validation(format!("network request failed ({category}): {source}"))
+  StorageError::Validation(format!("network request failed ({category})"))
 }
 
 #[cfg(test)]
@@ -879,6 +964,132 @@ mod tests {
     }
   }
 
+  /// Test resolver that deliberately preserves every answer, emulating OS/TUN DNS for a fixed
+  /// host-owned origin. It proves TrustedFixed does not apply the public-destination filter.
+  #[derive(Clone)]
+  struct UnfilteredTestResolver {
+    lookup: DnsLookupFn,
+  }
+
+  impl Resolve for UnfilteredTestResolver {
+    fn resolve(&self, name: Name) -> Resolving {
+      let lookup = self.lookup.clone();
+      let hostname = name.as_str().to_owned();
+      Box::pin(async move {
+        let addresses = (lookup)(&hostname).await?;
+        if addresses.is_empty() {
+          return Err(std::io::Error::other("test DNS returned no destinations").into());
+        }
+        Ok(Box::new(addresses.into_iter()) as Addrs)
+      })
+    }
+  }
+
+  /// Bounded wait for dynamic-client DNS rejection without opening a socket.
+  const BENCHMARK_CONNECT_PROBE_TIMEOUT: Duration = Duration::from_millis(100);
+  const BENCHMARK_DNS_PROBE_IP: [u8; 4] = [198, 18, 0, 1];
+  const BENCHMARK_DNS_PROBE_PORT: u16 = 443;
+
+  async fn assert_trusted_fixed_resolver_keeps_benchmark_dns_result(
+    build_client: impl FnOnce(Arc<dyn Resolve>) -> Result<reqwest::Client, StorageError>,
+  ) {
+    const BENCHMARK_DNS_PROBE_HOST: &str = "benchmark-origin.test";
+    const LOOPBACK_DNS_PROBE_HOST: &str = "loopback-origin.test";
+    const LOOPBACK_DNS_PROBE_IP: [u8; 4] = [127, 0, 0, 1];
+
+    let listener = tokio::net::TcpListener::bind(SocketAddr::from((LOOPBACK_DNS_PROBE_IP, 0)))
+      .await
+      .expect("bind loopback probe listener");
+    let loopback_port = listener.local_addr().expect("loopback probe listener address").port();
+    let lookup_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let calls = lookup_count.clone();
+    let resolver: Arc<dyn Resolve> = Arc::new(UnfilteredTestResolver {
+      lookup: Arc::new(move |hostname| {
+        let calls = calls.clone();
+        let hostname = hostname.to_owned();
+        Box::pin(async move {
+          calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+          match hostname.as_str() {
+            BENCHMARK_DNS_PROBE_HOST => Ok(vec![SocketAddr::from((
+              BENCHMARK_DNS_PROBE_IP,
+              BENCHMARK_DNS_PROBE_PORT,
+            ))]),
+            LOOPBACK_DNS_PROBE_HOST => Ok(vec![SocketAddr::from((LOOPBACK_DNS_PROBE_IP, 0))]),
+            _ => Err(std::io::Error::other("unexpected trusted-fixed DNS probe hostname")),
+          }
+        })
+      }),
+    });
+    let benchmark_name: Name = BENCHMARK_DNS_PROBE_HOST.parse().unwrap();
+    let addresses: Vec<_> = resolver.resolve(benchmark_name).await.unwrap().collect();
+    assert_eq!(
+      addresses,
+      vec![SocketAddr::from((BENCHMARK_DNS_PROBE_IP, BENCHMARK_DNS_PROBE_PORT))]
+    );
+    let client = build_client(resolver).expect("trusted fixed client accepts the unfiltered resolver");
+    let request_url = format!("https://{LOOPBACK_DNS_PROBE_HOST}:{loopback_port}/");
+    let send = client.get(request_url).send();
+    tokio::pin!(send);
+    tokio::select! {
+      biased;
+      accepted = listener.accept() => {
+        accepted.expect("trusted fixed client must reach the loopback resolver answer");
+      }
+      result = &mut send => panic!("trusted fixed client did not reach the loopback resolver answer: {result:?}"),
+      _ = tokio::time::sleep(PROBE_ACCEPT_RACE_TIMEOUT) => {
+        panic!("trusted fixed client did not reach the loopback resolver answer before timeout");
+      }
+    }
+    assert_eq!(lookup_count.load(std::sync::atomic::Ordering::SeqCst), 2);
+  }
+
+  #[tokio::test]
+  async fn bounded_http_trusted_fixed_client_keeps_benchmark_dns_result_without_prefiltering() {
+    assert_trusted_fixed_resolver_keeps_benchmark_dns_result(|resolver| {
+      build_trusted_fixed_client_with_resolver(Some(resolver))
+    })
+    .await;
+  }
+
+  #[tokio::test]
+  async fn bounded_http_trusted_fixed_stream_client_keeps_benchmark_dns_result_without_prefiltering() {
+    assert_trusted_fixed_resolver_keeps_benchmark_dns_result(|resolver| {
+      build_trusted_fixed_stream_client_with_resolver(Some(resolver))
+    })
+    .await;
+  }
+
+  #[tokio::test]
+  async fn bounded_http_dynamic_client_rejects_benchmark_dns_before_connect() {
+    let lookup_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let calls = lookup_count.clone();
+    let resolver = Arc::new(PublicDestinationResolver::with_lookup(Arc::new(move |_host| {
+      let calls = calls.clone();
+      Box::pin(async move {
+        calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(vec![SocketAddr::from((
+          BENCHMARK_DNS_PROBE_IP,
+          BENCHMARK_DNS_PROBE_PORT,
+        ))])
+      })
+    })));
+    let client = build_public_client_with_resolver(resolver).unwrap();
+    let result = tokio::time::timeout(
+      BENCHMARK_CONNECT_PROBE_TIMEOUT,
+      client.get("https://dynamic-origin.test/").send(),
+    )
+    .await
+    .expect("dynamic DNS filtering must fail before a connect timeout")
+    .expect_err("benchmark DNS result must be rejected");
+    assert_eq!(lookup_count.load(std::sync::atomic::Ordering::SeqCst), 1);
+    // reqwest intentionally normalizes resolver details, but completion within the connect probe
+    // proves its client stopped at the strict resolver rather than opening this fake-IP socket.
+    assert!(
+      !result.is_timeout(),
+      "dynamic DNS rejection must not reach connect timeout"
+    );
+  }
+
   #[tokio::test]
   async fn bounded_http_resolver_fails_closed_when_dns_lookup_errors() {
     use reqwest::dns::{Name, Resolve};
@@ -953,6 +1164,14 @@ mod tests {
     let client = match mode.as_str() {
       "public-ignores-proxy" => build_public_client().expect("public client"),
       "public-stream-ignores-proxy" => build_public_stream_client().expect("public stream client"),
+      "trusted-fixed-inherit-ignores-proxy" => client_for(ProxyMode::Inherit, DestinationPolicy::TrustedFixed)
+        .expect("trusted fixed client")
+        .clone(),
+      "trusted-fixed-stream-inherit-ignores-proxy" => {
+        stream_client_for(ProxyMode::Inherit, DestinationPolicy::TrustedFixed)
+          .expect("trusted fixed stream client")
+          .clone()
+      }
       "inherit-respects-proxy" => build_configured_client(ProxyMode::Inherit).expect("configured inherit client"),
       "inherit-stream-respects-proxy" => {
         build_configured_stream_client(ProxyMode::Inherit).expect("configured inherit stream client")
@@ -1023,6 +1242,36 @@ mod tests {
     assert_eq!(
       winner, "target",
       "public stream client must connect directly (no system proxy)"
+    );
+  }
+
+  #[test]
+  fn bounded_http_trusted_fixed_clients_ignore_proxy_mode() {
+    assert!(std::ptr::eq(
+      client_for(ProxyMode::Inherit, DestinationPolicy::TrustedFixed).unwrap(),
+      client_for(ProxyMode::Direct, DestinationPolicy::TrustedFixed).unwrap(),
+    ));
+    assert!(std::ptr::eq(
+      stream_client_for(ProxyMode::Inherit, DestinationPolicy::TrustedFixed).unwrap(),
+      stream_client_for(ProxyMode::Direct, DestinationPolicy::TrustedFixed).unwrap(),
+    ));
+  }
+
+  #[test]
+  fn bounded_http_trusted_fixed_client_ignores_system_proxy_in_inherit_mode() {
+    let winner = run_proxy_probe("trusted-fixed-inherit-ignores-proxy");
+    assert_eq!(
+      winner, "target",
+      "trusted fixed client must connect directly even in Inherit mode"
+    );
+  }
+
+  #[test]
+  fn bounded_http_trusted_fixed_stream_client_ignores_system_proxy_in_inherit_mode() {
+    let winner = run_proxy_probe("trusted-fixed-stream-inherit-ignores-proxy");
+    assert_eq!(
+      winner, "target",
+      "trusted fixed stream client must connect directly even in Inherit mode"
     );
   }
 

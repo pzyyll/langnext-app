@@ -10,7 +10,13 @@ import { dangerButtonClassName, outlineButtonClassName } from "../../components/
 import { useToast } from "../../components/toast/useToast";
 import { pluginPackageKeys } from "../../query/keys";
 import { installedPluginVersionListOptions, pluginPublisherListOptions } from "../../query/options";
-import { revokePluginPublisher, setDefaultPluginPackage, uninstallPluginVersion } from "../../storage/client";
+import {
+  removePluginPublisher,
+  revokePluginPublisher,
+  restorePluginPublisher,
+  setDefaultPluginPackage,
+  uninstallPluginVersion,
+} from "../../storage/client";
 import { getIpcErrorMessage } from "../../storage/errors";
 import type { InstalledPluginVersionDto, PluginPublisherDto } from "../../storage/types";
 import { isPackageExecutionEnabled } from "./pluginPackagePresentation";
@@ -25,8 +31,12 @@ export function InstalledPluginVersions() {
   const publishers = publishersQuery.data ?? [];
   const [pendingUninstallDigest, setPendingUninstallDigest] = useState<string | null>(null);
   const [pendingRevokeKeyId, setPendingRevokeKeyId] = useState<string | null>(null);
+  const [pendingRestoreKeyId, setPendingRestoreKeyId] = useState<string | null>(null);
+  const [pendingRemoveKeyId, setPendingRemoveKeyId] = useState<string | null>(null);
   const [confirmUninstallDigest, setConfirmUninstallDigest] = useState<string | null>(null);
   const [confirmRevokeKeyId, setConfirmRevokeKeyId] = useState<string | null>(null);
+  const [confirmRestoreKeyId, setConfirmRestoreKeyId] = useState<string | null>(null);
+  const [confirmRemoveKeyId, setConfirmRemoveKeyId] = useState<string | null>(null);
 
   const setDefaultMutation = useMutation({
     mutationFn: ({ pluginId, packageDigest }: { pluginId: string; packageDigest: string }) =>
@@ -83,6 +93,46 @@ export function InstalledPluginVersions() {
     },
   });
 
+  const restoreMutation = useMutation({
+    mutationFn: (keyId: string) => restorePluginPublisher(keyId),
+    onMutate: (keyId) => {
+      setPendingRestoreKeyId(keyId);
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: pluginPackageKeys.all });
+      toast.success({ title: t("plugins.packages.restoreSuccess") });
+    },
+    onError: (error) => {
+      toast.error({
+        title: t("plugins.packages.restoreFailed"),
+        description: getIpcErrorMessage(error, t("plugins.packages.restoreFailed")),
+      });
+    },
+    onSettled: () => {
+      setPendingRestoreKeyId(null);
+    },
+  });
+
+  const removeMutation = useMutation({
+    mutationFn: (keyId: string) => removePluginPublisher(keyId),
+    onMutate: (keyId) => {
+      setPendingRemoveKeyId(keyId);
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: pluginPackageKeys.all });
+      toast.success({ title: t("plugins.packages.removeSuccess") });
+    },
+    onError: (error) => {
+      toast.error({
+        title: t("plugins.packages.removeFailed"),
+        description: getIpcErrorMessage(error, t("plugins.packages.removeFailed")),
+      });
+    },
+    onSettled: () => {
+      setPendingRemoveKeyId(null);
+    },
+  });
+
   if (versionsQuery.isLoading || publishersQuery.isLoading) {
     return <p className="text-body-tight text-neutral">{t("plugins.packages.loading")}</p>;
   }
@@ -102,6 +152,8 @@ export function InstalledPluginVersions() {
 
   const confirmUninstallVersion = versions.find((v) => v.packageDigest === confirmUninstallDigest) ?? null;
   const confirmRevokePublisher = publishers.find((p) => p.keyId === confirmRevokeKeyId) ?? null;
+  const confirmRestorePublisher = publishers.find((p) => p.keyId === confirmRestoreKeyId) ?? null;
+  const confirmRemovePublisher = publishers.find((p) => p.keyId === confirmRemoveKeyId) ?? null;
 
   return (
     <div className="flex flex-col gap-6">
@@ -143,7 +195,11 @@ export function InstalledPluginVersions() {
                 key={publisher.keyId}
                 publisher={publisher}
                 revokePending={pendingRevokeKeyId === publisher.keyId}
+                restorePending={pendingRestoreKeyId === publisher.keyId}
+                removePending={pendingRemoveKeyId === publisher.keyId}
                 onRevoke={() => setConfirmRevokeKeyId(publisher.keyId)}
+                onRestore={() => setConfirmRestoreKeyId(publisher.keyId)}
+                onRemove={() => setConfirmRemoveKeyId(publisher.keyId)}
               />
             ))}
           </ul>
@@ -193,6 +249,65 @@ export function InstalledPluginVersions() {
             return;
           }
           await revokeMutation.mutateAsync(confirmRevokeKeyId);
+        }}
+      />
+
+      <ConfirmDialog
+        open={confirmRestoreKeyId !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setConfirmRestoreKeyId(null);
+          }
+        }}
+        title={t("plugins.packages.restoreConfirmTitle")}
+        description={
+          confirmRestorePublisher ? (
+            <>
+              <span className="font-mono">{confirmRestorePublisher.keyId}</span>
+              <br />
+              {t("plugins.packages.restoreConfirmDescription")}
+            </>
+          ) : (
+            t("plugins.packages.restoreConfirmDescription")
+          )
+        }
+        confirmText={t("plugins.packages.restoreConfirm")}
+        pendingText={t("plugins.packages.restoring")}
+        onConfirm={async () => {
+          if (!confirmRestoreKeyId) {
+            return;
+          }
+          await restoreMutation.mutateAsync(confirmRestoreKeyId);
+        }}
+      />
+
+      <ConfirmDialog
+        open={confirmRemoveKeyId !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setConfirmRemoveKeyId(null);
+          }
+        }}
+        title={t("plugins.packages.removeConfirmTitle")}
+        description={
+          confirmRemovePublisher ? (
+            <>
+              <span className="font-mono">{confirmRemovePublisher.keyId}</span>
+              <br />
+              {t("plugins.packages.removeConfirmDescription")}
+            </>
+          ) : (
+            t("plugins.packages.removeConfirmDescription")
+          )
+        }
+        confirmText={t("plugins.packages.removeConfirm")}
+        pendingText={t("plugins.packages.removing")}
+        danger
+        onConfirm={async () => {
+          if (!confirmRemoveKeyId) {
+            return;
+          }
+          await removeMutation.mutateAsync(confirmRemoveKeyId);
         }}
       />
     </div>
@@ -270,10 +385,22 @@ function InstalledVersionRow({
 type PublisherRowProps = {
   publisher: PluginPublisherDto;
   revokePending: boolean;
+  restorePending: boolean;
+  removePending: boolean;
   onRevoke: () => void;
+  onRestore: () => void;
+  onRemove: () => void;
 };
 
-function PublisherRow({ publisher, revokePending, onRevoke }: PublisherRowProps) {
+function PublisherRow({
+  publisher,
+  revokePending,
+  restorePending,
+  removePending,
+  onRevoke,
+  onRestore,
+  onRemove,
+}: PublisherRowProps) {
   const { t } = useTranslation();
   const sourceLabel =
     publisher.source === "vendor" ? t("plugins.packages.trust.trustedVendor") : t("plugins.packages.trust.trustedUser");
@@ -297,15 +424,25 @@ function PublisherRow({ publisher, revokePending, onRevoke }: PublisherRowProps)
         </div>
       </div>
       <div className="flex flex-wrap gap-2">
-        <Button
-          type="button"
-          className={dangerButtonClassName}
-          disabled={revokePending || publisher.revoked || publisher.source === "vendor"}
-          onClick={onRevoke}
-          title={publisher.source === "vendor" ? t("plugins.packages.revokeVendorBlocked") : undefined}
-        >
-          {revokePending ? t("plugins.packages.revoking") : t("plugins.packages.revoke")}
-        </Button>
+        {publisher.revoked && publisher.source === "vendor" ? (
+          <Button type="button" className={outlineButtonClassName} disabled={restorePending} onClick={onRestore}>
+            {restorePending ? t("plugins.packages.restoring") : t("plugins.packages.restore")}
+          </Button>
+        ) : publisher.revoked ? (
+          <Button type="button" className={dangerButtonClassName} disabled={removePending} onClick={onRemove}>
+            {removePending ? t("plugins.packages.removing") : t("plugins.packages.remove")}
+          </Button>
+        ) : (
+          <Button
+            type="button"
+            className={dangerButtonClassName}
+            disabled={revokePending || publisher.source === "vendor"}
+            onClick={onRevoke}
+            title={publisher.source === "vendor" ? t("plugins.packages.revokeVendorBlocked") : undefined}
+          >
+            {revokePending ? t("plugins.packages.revoking") : t("plugins.packages.revoke")}
+          </Button>
+        )}
       </div>
     </li>
   );

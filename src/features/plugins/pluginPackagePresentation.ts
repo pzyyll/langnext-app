@@ -67,8 +67,7 @@ export function summarizeNetworkPermissions(
   }));
 }
 
-/** Execution is always disabled for external packages in Phase 3. */
+/** Whether the installed package runtime is supported by the host executor. */
 export function isPackageExecutionEnabled(version: Pick<InstalledPluginVersionDto, "runtimeKind">): boolean {
-  void version.runtimeKind;
-  return false;
+  return version.runtimeKind === "wasm-component";
 }

@@ -100,6 +100,33 @@ pub async fn revoke_plugin_publisher(
 }
 
 #[tauri::command]
+pub async fn restore_plugin_publisher(
+  app: AppHandle,
+  state: State<'_, AppState>,
+  key_id: String,
+) -> Result<PluginPublisherDto, IpcError> {
+  let services = state.plugin_packages.clone();
+  let result = run_blocking("restore_plugin_publisher", move || {
+    services.restore_vendor_publisher(&key_id)
+  })
+  .await?;
+  emit_data_changed(&app, PLUGIN_PACKAGES_CHANGED);
+  Ok(result)
+}
+
+#[tauri::command]
+pub async fn remove_plugin_publisher(
+  app: AppHandle,
+  state: State<'_, AppState>,
+  key_id: String,
+) -> Result<(), IpcError> {
+  let services = state.plugin_packages.clone();
+  run_blocking("remove_plugin_publisher", move || services.remove_publisher(&key_id)).await?;
+  emit_data_changed(&app, PLUGIN_PACKAGES_CHANGED);
+  Ok(())
+}
+
+#[tauri::command]
 pub async fn uninstall_plugin_version(
   app: AppHandle,
   state: State<'_, AppState>,

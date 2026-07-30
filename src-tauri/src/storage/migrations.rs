@@ -23,6 +23,7 @@ pub const MIGRATIONS: &[&str] = &[
   include_str!("../../migrations/0016_runtime_plugin_packages.sql"),
   include_str!("../../migrations/0017_runtime_plugin_instance_pins.sql"),
   include_str!("../../migrations/0018_plugin_uninstall_restored_states.sql"),
+  include_str!("../../migrations/0019_execution_grant_origin_kind.sql"),
 ];
 
 pub fn latest_version() -> i32 {
@@ -109,7 +110,7 @@ pub fn migrate_with(conn: &mut Connection, migrations: &[&str]) -> Result<i32, S
 #[cfg(test)]
 mod tests {
   use super::*;
-  use rusqlite::{Connection, OptionalExtension};
+  use rusqlite::{Connection, OptionalExtension, params};
 
   #[test]
   fn migrate_empty_database_to_latest() {
@@ -269,6 +270,14 @@ mod tests {
         .unwrap_or_else(|e| panic!("{table} missing: {e}"));
       assert_eq!(count, 0, "{table} should be empty");
     }
+    let has_origin_kind: i64 = conn
+      .query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('execution_grant_network_entries') WHERE name = 'origin_kind'",
+        [],
+        |r| r.get(0),
+      )
+      .unwrap();
+    assert_eq!(has_origin_kind, 1);
   }
 
   #[test]
@@ -306,6 +315,108 @@ mod tests {
     assert!(package_digest.is_none());
     assert!(grant_rev.is_none());
     assert_eq!(runtime_state, "active");
+  }
+
+  #[test]
+  fn migrate_v18_to_v19_backfills_legacy_grants_to_strict_origin_kind() {
+    const VERSION_BEFORE_ORIGIN_KIND: usize = 18;
+    const LEGACY_PUBLISHER_KEY_ID: &str = "legacy-publisher";
+    const LEGACY_PUBLISHER_FINGERPRINT: &str = "legacy-fingerprint";
+    const LEGACY_PUBLISHER_PUBLIC_KEY: &str = "legacy-public-key";
+    const LEGACY_PACKAGE_DIGEST: &str = "legacy-package-digest";
+    const LEGACY_PLUGIN_ID: &str = "legacy.plugin";
+    const LEGACY_PLUGIN_VERSION: &str = "1.0.0";
+    const LEGACY_GRANT_ID: &str = "legacy-grant";
+    const LEGACY_NETWORK_ENTRY_ID: &str = "legacy-network-entry";
+    const LEGACY_SUBJECT_ID: &str = "legacy-subject";
+    const LEGACY_TIMESTAMP: &str = "legacy-time";
+    const LEGACY_PERMISSION_DIGEST: &str = "legacy-permission-digest";
+    const LEGACY_AUTHORITY_DIGEST: &str = "legacy-authority-digest";
+    const LEGACY_NETWORK_ORIGIN: &str = "https://legacy.example";
+    const INVALID_ORIGIN_KIND: &str = "invalid-origin-kind";
+    const DEFAULT_ORIGIN_KIND: &str = "instance_configured";
+
+    let mut conn = Connection::open_in_memory().unwrap();
+    migrate_with(&mut conn, &MIGRATIONS[..VERSION_BEFORE_ORIGIN_KIND]).unwrap();
+    assert_eq!(read_user_version(&conn).unwrap(), VERSION_BEFORE_ORIGIN_KIND as i32);
+    conn
+      .execute(
+        "INSERT INTO plugin_publishers (
+          key_id, fingerprint, public_key_hex, source, enabled, revoked, created_at, updated_at
+        ) VALUES (?1, ?2, ?3, 'vendor', 1, 0, ?4, ?4)",
+        params![
+          LEGACY_PUBLISHER_KEY_ID,
+          LEGACY_PUBLISHER_FINGERPRINT,
+          LEGACY_PUBLISHER_PUBLIC_KEY,
+          LEGACY_TIMESTAMP,
+        ],
+      )
+      .unwrap();
+    conn
+      .execute(
+        "INSERT INTO installed_plugin_versions (
+          package_digest, plugin_id, version, publisher_key_id, publisher_fingerprint,
+          runtime_kind, manifest_json, permission_request_digest, content_available, installed_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, 'wasm-component', '{}', ?6, 1, ?7)",
+        params![
+          LEGACY_PACKAGE_DIGEST,
+          LEGACY_PLUGIN_ID,
+          LEGACY_PLUGIN_VERSION,
+          LEGACY_PUBLISHER_KEY_ID,
+          LEGACY_PUBLISHER_FINGERPRINT,
+          LEGACY_PERMISSION_DIGEST,
+          LEGACY_TIMESTAMP,
+        ],
+      )
+      .unwrap();
+    conn
+      .execute(
+        "INSERT INTO execution_grant_sets (
+          id, revision, subject_kind, subject_id, plugin_id, plugin_version,
+          package_digest, permission_request_digest, authority_digest, approved_at
+        ) VALUES (?1, 1, 'integration_instance', ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+          LEGACY_GRANT_ID,
+          LEGACY_SUBJECT_ID,
+          LEGACY_PLUGIN_ID,
+          LEGACY_PLUGIN_VERSION,
+          LEGACY_PACKAGE_DIGEST,
+          LEGACY_PERMISSION_DIGEST,
+          LEGACY_AUTHORITY_DIGEST,
+          LEGACY_TIMESTAMP,
+        ],
+      )
+      .unwrap();
+    conn
+      .execute(
+        "INSERT INTO execution_grant_network_entries (
+          id, grant_set_id, capability_id, endpoint_id, origin, method, auth_policy, resource_mode,
+          max_request_bytes, max_response_bytes, max_stream_bytes, timeout_ms
+        ) VALUES (?1, ?2, 'translate.text@1', 'legacy-endpoint', ?3, 'GET', 'host.none.v1', 'bounded',
+          1, 1, 1, 1)",
+        params![LEGACY_NETWORK_ENTRY_ID, LEGACY_GRANT_ID, LEGACY_NETWORK_ORIGIN],
+      )
+      .unwrap();
+
+    migrate(&mut conn).unwrap();
+    assert_eq!(read_user_version(&conn).unwrap(), latest_version());
+    let origin_kind: String = conn
+      .query_row(
+        "SELECT origin_kind FROM execution_grant_network_entries WHERE id = ?1",
+        params![LEGACY_NETWORK_ENTRY_ID],
+        |row| row.get(0),
+      )
+      .unwrap();
+    assert_eq!(origin_kind, DEFAULT_ORIGIN_KIND);
+    assert!(
+      conn
+        .execute(
+          "UPDATE execution_grant_network_entries SET origin_kind = ?1 WHERE id = ?2",
+          params![INVALID_ORIGIN_KIND, LEGACY_NETWORK_ENTRY_ID],
+        )
+        .is_err(),
+      "origin_kind CHECK must reject values outside the closed enum"
+    );
   }
 
   #[test]

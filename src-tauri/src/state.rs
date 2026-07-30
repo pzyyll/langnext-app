@@ -7,6 +7,7 @@ use crate::error::StorageError;
 use crate::services::bundled_plugins::HandlerDeps;
 use crate::services::google_service_account::GoogleServiceAccountExchanger;
 use crate::services::network_broker::NetworkBroker;
+use crate::services::plugin_store::VendorDefaultBindingMode;
 use crate::services::service_capabilities::ServiceCapabilityService;
 use crate::services::token_grant::TokenGrantService;
 use crate::services::wasm_runtime::WasmRuntime;
@@ -120,6 +121,7 @@ impl AppState {
       crate::domain::service_integration::GOOGLE_TRANSLATE_WEB_PLUGIN_ID,
       GOOGLE_WEB_DEFAULT_VERSION,
       vendor_default_import.as_ref(),
+      VendorDefaultBindingMode::ReplaceExisting,
     ) {
       log::warn!(
         "google_web_default_bind_failed plugin={} version={} error={err}",

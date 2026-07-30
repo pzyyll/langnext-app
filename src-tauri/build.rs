@@ -75,6 +75,8 @@ const APP_COMMANDS: &[&str] = &[
   "list_plugin_publishers",
   "approve_user_plugin_publisher",
   "revoke_plugin_publisher",
+  "restore_plugin_publisher",
+  "remove_plugin_publisher",
   "uninstall_plugin_version",
   "get_plugin_version_dependencies",
   // Runtime lifecycle (pin/upgrade/rollback)

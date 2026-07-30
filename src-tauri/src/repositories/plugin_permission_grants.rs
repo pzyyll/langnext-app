@@ -146,20 +146,20 @@ fn list_capabilities(conn: &Connection, grant_set_id: Uuid) -> Result<Vec<Capabi
 
 fn list_network(conn: &Connection, grant_set_id: Uuid) -> Result<Vec<NetworkGrantEntryRecord>, StorageError> {
   let mut stmt = conn.prepare(
-    "SELECT id, grant_set_id, capability_id, endpoint_id, origin, method, auth_policy,
+    "SELECT id, grant_set_id, capability_id, endpoint_id, origin, origin_kind, method, auth_policy,
             resource_mode, max_request_bytes, max_response_bytes, max_stream_bytes, timeout_ms
      FROM execution_grant_network_entries
      WHERE grant_set_id = ?1
-     ORDER BY capability_id ASC, endpoint_id ASC, origin ASC, method ASC, auth_policy ASC, resource_mode ASC",
+     ORDER BY capability_id ASC, endpoint_id ASC, origin ASC, origin_kind ASC, method ASC, auth_policy ASC, resource_mode ASC",
   )?;
   let rows = stmt
     .query_map(params![grant_set_id.to_string()], |row| {
       let id: String = row.get(0)?;
       let grant_id: String = row.get(1)?;
-      let max_request_bytes: i64 = row.get(8)?;
-      let max_response_bytes: i64 = row.get(9)?;
-      let max_stream_bytes: i64 = row.get(10)?;
-      let timeout_ms: i64 = row.get(11)?;
+      let max_request_bytes: i64 = row.get(9)?;
+      let max_response_bytes: i64 = row.get(10)?;
+      let max_stream_bytes: i64 = row.get(11)?;
+      let timeout_ms: i64 = row.get(12)?;
       Ok(NetworkGrantEntryRecord {
         id: Uuid::parse_str(&id)
           .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?,
@@ -168,9 +168,10 @@ fn list_network(conn: &Connection, grant_set_id: Uuid) -> Result<Vec<NetworkGran
         capability_id: row.get(2)?,
         endpoint_id: row.get(3)?,
         origin: row.get(4)?,
-        method: row.get(5)?,
-        auth_policy: row.get(6)?,
-        resource_mode: row.get(7)?,
+        origin_kind: row.get(5)?,
+        method: row.get(6)?,
+        auth_policy: row.get(7)?,
+        resource_mode: row.get(8)?,
         max_request_bytes: max_request_bytes as u64,
         max_response_bytes: max_response_bytes as u64,
         max_stream_bytes: max_stream_bytes as u64,
@@ -274,15 +275,16 @@ pub fn insert_bundle(conn: &Connection, bundle: &ExecutionGrantSetBundle) -> Res
     conn
       .execute(
         "INSERT INTO execution_grant_network_entries (
-              id, grant_set_id, capability_id, endpoint_id, origin, method, auth_policy,
+              id, grant_set_id, capability_id, endpoint_id, origin, origin_kind, method, auth_policy,
               resource_mode, max_request_bytes, max_response_bytes, max_stream_bytes, timeout_ms
-          ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+          ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
         params![
           net.id.to_string(),
           net.grant_set_id.to_string(),
           net.capability_id,
           net.endpoint_id,
           net.origin,
+          net.origin_kind,
           net.method,
           net.auth_policy,
           net.resource_mode,

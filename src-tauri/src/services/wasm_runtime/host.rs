@@ -2,7 +2,8 @@
 // ABOUTME: PluginHostState helper methods backing the generated LangNext host import traits.
 use crate::domain::cancel::CancelToken;
 use crate::domain::runtime_plugin::{
-  AuthPolicyId, ExecutionGrantSet, GrantError, HttpsOrigin, PluginPrincipal, ResourceLimits,
+  AuthPolicyId, EndpointId, ExecutionGrantSet, GrantError, HttpsOrigin, NetworkOriginKind, PluginPrincipal,
+  ResourceLimits,
 };
 use std::time::{Duration, Instant};
 
@@ -38,7 +39,10 @@ pub enum NeutralLogLevel {
 /// receives this so it never needs to re-derive authority from the raw grant set.
 #[derive(Debug, Clone)]
 pub struct BrokerAuthorization {
+  pub endpoint_id: EndpointId,
   pub origin: HttpsOrigin,
+  /// Immutable origin provenance copied from the verified grant entry, never guest input.
+  pub origin_kind: NetworkOriginKind,
   pub auth_policy: AuthPolicyId,
   pub resource_limits: ResourceLimits,
 }
@@ -95,7 +99,9 @@ impl PluginHostState {
     validate_broker_relative_path(&request.relative_path)?;
     validate_broker_headers(&request.headers)?;
     Ok(BrokerAuthorization {
+      endpoint_id: entry.endpoint_id().clone(),
       origin: entry.origin().clone(),
+      origin_kind: entry.origin_kind(),
       auth_policy: entry.auth_policy().clone(),
       resource_limits: *entry.resource_limits(),
     })

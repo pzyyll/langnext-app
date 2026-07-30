@@ -154,6 +154,9 @@ pub struct NetworkGrantEntryRecord {
   pub capability_id: String,
   pub endpoint_id: String,
   pub origin: String,
+  /// Manifest-bound origin provenance. Missing legacy snapshot fields fail closed as dynamic.
+  #[serde(default = "default_network_origin_kind")]
+  pub origin_kind: String,
   pub method: String,
   pub auth_policy: String,
   /// Host-reviewed resource mode (`bounded`).
@@ -162,6 +165,10 @@ pub struct NetworkGrantEntryRecord {
   pub max_response_bytes: u64,
   pub max_stream_bytes: u64,
   pub timeout_ms: u64,
+}
+
+fn default_network_origin_kind() -> String {
+  "instance_configured".into()
 }
 
 /// Page authority entry under a grant-set revision (empty until Phase 9).

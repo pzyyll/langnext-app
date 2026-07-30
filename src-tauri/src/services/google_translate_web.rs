@@ -908,6 +908,10 @@ mod tests {
     assert_eq!(resp.translated_text, "Hi");
     let prepared = transport.last.lock().unwrap().take().unwrap();
     assert!(prepared.url.as_str().starts_with(GOOGLE_TRANSLATE_WEB_GTX_ORIGIN));
+    assert_eq!(
+      prepared.destination_policy,
+      crate::services::bounded_http::DestinationPolicy::TrustedFixed
+    );
     assert!(prepared.url.as_str().contains("client=gtx"));
     assert!(!prepared.headers.keys().any(|k| k.eq_ignore_ascii_case("Authorization")));
     assert!(prepared.body.is_none());
@@ -1026,6 +1030,10 @@ mod tests {
     assert_eq!(resp.translated_text, "Hello");
     let prepared = transport.last.lock().unwrap().take().unwrap();
     assert_eq!(prepared.url.as_str(), "https://googlet.deno.dev/translate");
+    assert_eq!(
+      prepared.destination_policy,
+      crate::services::bounded_http::DestinationPolicy::PublicInternet
+    );
     assert!(!prepared.headers.keys().any(|k| k.eq_ignore_ascii_case("Authorization")));
     assert!(!prepared.headers.keys().any(|k| k.eq_ignore_ascii_case("Cookie")));
     assert_eq!(prepared.timeout, Some(GOOGLE_WEB_REQUEST_TIMEOUT));

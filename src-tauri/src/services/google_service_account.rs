@@ -282,7 +282,8 @@ async fn exchange_jwt_for_token(
     body: Some(body),
     content_type: Some("application/x-www-form-urlencoded".into()),
     proxy_mode,
-    destination_policy: DestinationPolicy::PublicInternet,
+    // OAuth URI is a host-pinned constant validated from the service-account credential.
+    destination_policy: DestinationPolicy::TrustedFixed,
     max_response_body_bytes: Some(16 * 1024),
     timeout: None,
   };
@@ -496,6 +497,7 @@ F91NhBYyyc/NJWl83dBkI/I=
   struct ScriptedTransport {
     responses: Mutex<Vec<Result<BoundedHttpResponse, StorageError>>>,
     last_body: Mutex<Option<String>>,
+    last_destination_policy: Mutex<Option<DestinationPolicy>>,
   }
 
   impl RawHttpTransport for ScriptedTransport {
@@ -505,6 +507,7 @@ F91NhBYyyc/NJWl83dBkI/I=
     ) -> Pin<Box<dyn Future<Output = Result<BoundedHttpResponse, StorageError>> + Send + '_>> {
       Box::pin(async move {
         *self.last_body.lock().unwrap() = prepared.body.clone();
+        *self.last_destination_policy.lock().unwrap() = Some(prepared.destination_policy);
         self
           .responses
           .lock()
@@ -598,6 +601,7 @@ F91NhBYyyc/NJWl83dBkI/I=
     let transport = Arc::new(ScriptedTransport {
       responses: Mutex::new(vec![Ok(response(401, r#"{"error":"invalid_grant"}"#))]),
       last_body: Mutex::new(None),
+      last_destination_policy: Mutex::new(None),
     });
     let exchanger = GoogleServiceAccountExchanger::with_transport(db, vault, transport);
     let err = match exchanger
@@ -629,6 +633,7 @@ F91NhBYyyc/NJWl83dBkI/I=
         r#"{"access_token":"ya29.test","expires_in":3600,"token_type":"Bearer"}"#,
       ))]),
       last_body: Mutex::new(None),
+      last_destination_policy: Mutex::new(None),
     });
     let exchanger = Arc::new(GoogleServiceAccountExchanger::with_transport(
       db,
@@ -653,6 +658,10 @@ F91NhBYyyc/NJWl83dBkI/I=
     let body = transport.last_body.lock().unwrap().clone().unwrap();
     assert!(body.contains("grant_type="));
     assert!(body.contains("assertion="));
+    assert_eq!(
+      *transport.last_destination_policy.lock().unwrap(),
+      Some(DestinationPolicy::TrustedFixed)
+    );
     assert!(!format!("{grant:?}").contains("ya29.test"));
   }
 }
