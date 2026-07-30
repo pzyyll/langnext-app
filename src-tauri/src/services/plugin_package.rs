@@ -7,8 +7,8 @@ use crate::domain::plugin_package::{
   PACKAGE_UI_ASSET_MAX_BYTES, PackageErrorCode, decode_lowercase_hex, encode_lowercase_hex, sha256_hex,
 };
 use crate::domain::runtime_plugin::{
-  FileRole, MANIFEST_FILE_PATH, PluginFileEntry, PluginManifestV1, SIGNATURE_FILE_PATH, host_package_target,
-  package_targets_compatible, validate_archive_entry_path,
+  FileRole, MANIFEST_FILE_PATH, PUBLISHER_PUBLIC_KEY_PATH, PluginFileEntry, PluginManifestV1, SIGNATURE_FILE_PATH,
+  host_package_target, package_targets_compatible, validate_archive_entry_path,
 };
 use crate::services::runtime_plugin_contracts::{
   ArchiveEntry, ContractError, ContractErrorCode, ValidatedPluginManifest, parse_manifest, validate_archive_shape,
@@ -229,7 +229,7 @@ fn normalize_entry_path(raw: &str) -> Result<String, PackageVerifyError> {
 /// Used only for unknown-publisher previews. Install/approve and offline verify always call
 /// [`verify_package_bytes`] with an explicit trusted public key (fail closed).
 pub fn inspect_package_bytes(archive_bytes: &[u8]) -> Result<VerifiedPackage, PackageVerifyError> {
-  let mut inspected = parse_and_validate_package_bytes(archive_bytes)?;
+  let inspected = parse_and_validate_package_bytes(archive_bytes)?;
   // Signature must be the correct length, but crypto verification is deferred until a key is supplied.
   if inspected.signature_bytes.len() != ED25519_SIGNATURE_LEN {
     return Err(PackageVerifyError::new(
@@ -237,7 +237,7 @@ pub fn inspect_package_bytes(archive_bytes: &[u8]) -> Result<VerifiedPackage, Pa
       format!("signature must be {ED25519_SIGNATURE_LEN} bytes"),
     ));
   }
-  inspected.publisher_public_key_hex.clear();
+  // Keep auto-resolved key from publisher.pub when present.
   Ok(inspected)
 }
 
@@ -431,6 +431,27 @@ fn parse_and_validate_package_bytes(archive_bytes: &[u8]) -> Result<VerifiedPack
   // Semantic validation before any preview/install proceeds (fail closed).
   validate_package_semantics(&manifest, &validated, &extracted)?;
 
+  // Self-authenticating publisher public key (optional). When present, verify sha256(pub)
+  // matches the signed manifest's publisher key fingerprint so the preview can auto-populate it.
+  let publisher_public_key_hex = if let Some(pub_bytes) = extracted.get(PUBLISHER_PUBLIC_KEY_PATH) {
+    if pub_bytes.len() != ED25519_PUBLIC_KEY_LEN {
+      return Err(PackageVerifyError::new(
+        PackageErrorCode::InvalidManifest,
+        format!("publisher.pub must be {ED25519_PUBLIC_KEY_LEN} bytes"),
+      ));
+    }
+    let fingerprint = sha256_hex(pub_bytes);
+    if fingerprint != manifest.publisher.key_fingerprint {
+      return Err(PackageVerifyError::new(
+        PackageErrorCode::SignatureInvalid,
+        "publisher.pub does not match manifest key fingerprint",
+      ));
+    }
+    Some(encode_lowercase_hex(pub_bytes))
+  } else {
+    None
+  };
+
   Ok(VerifiedPackage {
     package_digest,
     manifest_bytes,
@@ -438,7 +459,7 @@ fn parse_and_validate_package_bytes(archive_bytes: &[u8]) -> Result<VerifiedPack
     manifest: manifest.clone(),
     validated,
     extracted_files: extracted,
-    publisher_public_key_hex: String::new(),
+    publisher_public_key_hex: publisher_public_key_hex.unwrap_or_default(),
     publisher_fingerprint: manifest.publisher.key_fingerprint.clone(),
   })
 }
@@ -574,7 +595,20 @@ pub fn verify_store_content(
       "verified package digest does not match store key",
     ));
   }
-  // Every indexed file (and reserved entries) must match extracted content on disk.
+  verify_extracted_content_snapshot(&verified, content_dir)?;
+  Ok(verified)
+}
+
+/// Check an extracted store tree against an already-verified in-memory archive snapshot.
+///
+/// The caller retains and executes only bytes from [`VerifiedPackage::extracted_files`]. Disk
+/// reads here are comparison-only, so replacing a path after this check cannot swap bytes into a
+/// later runtime load.
+pub fn verify_extracted_content_snapshot(
+  verified: &VerifiedPackage,
+  content_dir: &Path,
+) -> Result<(), PackageVerifyError> {
+  // Every indexed file (and reserved entries) must match the immutable archive snapshot.
   for (rel, expected_bytes) in &verified.extracted_files {
     let path = confined_join(content_dir, rel)?;
     if !path.is_file() {
@@ -591,7 +625,7 @@ pub fn verify_store_content(
       ));
     }
   }
-  Ok(verified)
+  Ok(())
 }
 
 fn enforce_indexed_file_limits(file: &PluginFileEntry, bytes: Option<&Vec<u8>>) -> Result<(), PackageVerifyError> {
@@ -735,8 +769,12 @@ pub fn finalize_package_from_staging(
   extracted_for_semantics.insert(SIGNATURE_FILE_PATH.to_string(), signature_bytes.clone());
   validate_package_semantics(&manifest, &validated, &extracted_for_semantics)?;
 
-  let mut entries: Vec<(String, Vec<u8>)> = Vec::with_capacity(indexed_entries.len() + 2);
+  let mut entries: Vec<(String, Vec<u8>)> = Vec::with_capacity(indexed_entries.len() + 3);
   entries.push((MANIFEST_FILE_PATH.to_string(), manifest_bytes));
+  // Optional self-authenticating publisher public key.
+  if let Some(pub_bytes) = staged_pub_bytes(staging_dir) {
+    entries.push((PUBLISHER_PUBLIC_KEY_PATH.to_string(), pub_bytes));
+  }
   entries.extend(indexed_entries);
   entries.push((SIGNATURE_FILE_PATH.to_string(), signature_bytes));
 
@@ -767,6 +805,17 @@ pub fn finalize_package_from_staging(
   std::fs::write(&sha_path, format!("{digest}\n"))
     .map_err(|e| PackageVerifyError::new(PackageErrorCode::Internal, e.to_string()))?;
   Ok(digest)
+}
+
+/// Read the optional publisher.pub from staging, returning raw 32 bytes if present and valid.
+fn staged_pub_bytes(staging_dir: &Path) -> Option<Vec<u8>> {
+  let path = staging_dir.join(PUBLISHER_PUBLIC_KEY_PATH);
+  let bytes = std::fs::read(&path).ok()?;
+  if bytes.len() == ED25519_PUBLIC_KEY_LEN {
+    Some(bytes)
+  } else {
+    None
+  }
 }
 
 /// Offline verify entry point used by `mise run plugin:verify`.
@@ -822,6 +871,7 @@ pub mod test_support {
       capabilities: vec![CapabilityDeclaration {
         id: "translate.text@1".into(),
         preferences_schema: None,
+        artifact: None,
       }],
       configuration_schema: None,
       config_schema_version: None,
@@ -1329,6 +1379,7 @@ mod tests {
           id: "api".into(),
           origins: vec!["https://api.example.com".into()],
           methods: vec![HttpMethod::Post],
+          instance_origin_config_field: None,
         }],
         auth_policies: vec![],
       };

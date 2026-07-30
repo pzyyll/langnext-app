@@ -38,6 +38,25 @@ export function requiresPublisherApproval(
   return preview.requiresPublisherApproval;
 }
 
+/**
+ * Key hex forwarded to `approve_plugin_package`. Uses the package's self-authenticating
+ * `publisher.pub` (auto-resolved by the backend) when present; falls back to user-entered
+ * manual input otherwise. The resolved key is never editable and is forwarded as-is.
+ */
+export function publisherApprovalKeyHex(
+  preview: Pick<PluginPackagePreviewDto, "resolvedPublisherPublicKeyHex">,
+  manualInput: string,
+): string {
+  return preview.resolvedPublisherPublicKeyHex ?? manualInput.trim();
+}
+
+/** Whether the manual publisher-key input should be shown (only when no resolved `publisher.pub`). */
+export function shouldShowManualPublisherKeyInput(
+  preview: Pick<PluginPackagePreviewDto, "resolvedPublisherPublicKeyHex">,
+): boolean {
+  return !preview.resolvedPublisherPublicKeyHex;
+}
+
 /** Summarize requested network permissions for review. */
 export function summarizeNetworkPermissions(
   network: PluginPackagePreviewDto["network"],

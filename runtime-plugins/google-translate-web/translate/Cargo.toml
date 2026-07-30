@@ -1,0 +1,34 @@
+[package]
+name = "langnext-google-translate-web-translate"
+version = "1.0.0"
+edition = "2021"
+publish = false
+license = "Apache-2.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[features]
+# Declared so wit-bindgen `std_feature` cfg checks are known; never enable for the no_std guest.
+std = []
+
+[dependencies]
+wit-bindgen = { version = "=0.41.0", default-features = false, features = ["macros", "realloc"] }
+langnext-google-translate-web-protocol = { path = "../protocol" }
+
+[profile.release]
+# Deterministic builds for the committed plugin artifact.
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[package.metadata.component]
+package = "langnext:google-translate-web-translate"
+
+[package.metadata.component.target]
+path = "../../../src-tauri/wit/runtime-plugin"
+world = "translate-text-world"
+
+[package.metadata.component.dependencies]

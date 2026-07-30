@@ -14,6 +14,7 @@ pub mod engine;
 pub mod errors;
 pub mod executor;
 pub mod host;
+pub mod network_handle;
 pub mod store;
 
 // Re-export the verified-component boundary type and typed capability adapters.

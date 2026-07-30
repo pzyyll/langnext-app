@@ -393,6 +393,11 @@ pub struct PluginPackagePreviewDto {
   pub publisher_fingerprint: String,
   pub publisher_trust: PublisherTrustState,
   pub requires_publisher_approval: bool,
+  /// Auto-resolved hex when the package ships a self-authenticating `publisher.pub`.
+  /// The frontend must forward this value as-is in `ApprovePluginPackageInput.publisher_public_key_hex`
+  /// so the user never types a hex string by hand.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub resolved_publisher_public_key_hex: Option<String>,
   pub runtime_kind: String,
   pub capabilities: Vec<String>,
   pub configuration_schema: Option<String>,
@@ -607,6 +612,7 @@ mod tests {
       capabilities: vec![CapabilityDeclaration {
         id: "translate.text@1".into(),
         preferences_schema: None,
+        artifact: None,
       }],
       configuration_schema: None,
       config_schema_version: None,

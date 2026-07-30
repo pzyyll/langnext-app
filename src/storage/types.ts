@@ -736,6 +736,8 @@ export interface PluginPackagePreviewDto {
   publisherFingerprint: string;
   publisherTrust: PublisherTrustState;
   requiresPublisherApproval: boolean;
+  /** Auto-resolved when the package ships `publisher.pub`; forward as-is to approve. */
+  resolvedPublisherPublicKeyHex?: string | null;
   runtimeKind: string;
   capabilities: string[];
   configurationSchema: string | null;

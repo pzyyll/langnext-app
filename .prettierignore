@@ -7,9 +7,10 @@ src/routeTree.gen.ts
 package-lock.json
 *.gen.ts
 .agents
-# Guest cargo-component generated bindings (not application source).
-runtime-plugins/conformance/**/src/bindings.rs
-runtime-plugins/conformance/**/target
+# Guest cargo-component outputs (generated, not application source).
+runtime-plugins/**/src/bindings.rs
+runtime-plugins/**/target
+runtime-plugins/dist
 # Signed package fixtures: exact bytes (plugin.json + archives) must not be reformatted.
 runtime-plugins/conformance/fixtures/packages/**
 # Local accidental rustup home at repo root (see .gitignore).

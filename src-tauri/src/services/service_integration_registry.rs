@@ -53,6 +53,21 @@ impl ServiceIntegrationRegistry {
     Ok(())
   }
 
+  /// Test-only: register a bare capability manifest as a manifest-only registration so lifecycle
+  /// tests can exercise bundled->Wasm upgrades for synthetic plugins (e.g. `langnext.conformance`)
+  /// with a registry-backed source identity. Inserts directly (bypassing cross-registration
+  /// validation) because the manifest is test-only and carries no real capability definitions;
+  /// `source_capability_majors` only reads `manifest.capabilities`.
+  #[cfg(test)]
+  pub fn register_test_manifest(&mut self, manifest: crate::domain::service_integration::ServiceIntegrationManifest) {
+    let id = manifest.id.clone();
+    let registration = crate::services::bundled_plugins::test_manifest_registration(manifest);
+    if !self.by_id.contains_key(&id) {
+      self.order.push(id.clone());
+    }
+    self.by_id.insert(id, registration);
+  }
+
   /// Look up the atomic registration for a plugin id.
   pub fn get_registration(&self, plugin_id: &str) -> Option<&BundledPluginRegistration> {
     self.by_id.get(plugin_id)

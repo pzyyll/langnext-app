@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# ABOUTME: Print ed25519 pubkey and fingerprint from a 32-byte hex seed.
+# ABOUTME: Uses the project's plugin_tool binary — zero external deps beyond Rust.
+#MISE description="Derive Ed25519 pubkey from a hex seed"
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+cd "$ROOT_DIR"
+
+if [[ $# -ge 1 ]]; then
+  SEED="$1"
+else
+  SEED="${SEED_HEX:-}"
+fi
+
+if [[ -z "$SEED" ]]; then
+  echo "usage: mise run keys:derive-public-key -- <64-char-hex-seed>" >&2
+  echo "   or: SEED_HEX=... mise run keys:derive-public-key" >&2
+  echo "" >&2
+  echo "Generate a random seed first:" >&2
+  echo "  openssl rand -hex 32  # Linux / macOS / MSYS2" >&2
+  echo "  powershell -Command \"-join ((1..32) | %% {'{0:x2}' -f (Get-Random -Max 256)})\"  # Windows" >&2
+  exit 2
+fi
+
+cargo run --manifest-path src-tauri/Cargo.toml --bin plugin_tool --quiet -- derive-public-key "$SEED"

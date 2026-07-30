@@ -77,18 +77,20 @@
 - [ ] Declare zero credential slots and one pinned GTX origin permission.
 - [ ] Use schema config v1 with `channel = gtx` only in the initial package.
 - [ ] Make `plugin:build-google-web` compile the Component, generate the complete signed file index, copy all indexed files into a deterministic staging tree, and emit the exact `plugin.json` signing input; it must not claim or write a final package digest.
-- [ ] In release CI, sign the exact staged `plugin.json` bytes with the offline/vendor signing service and inject only `signatures/manifest.sig`; the app build and developer task never receive a private key.
-- [ ] Run `plugin:finalize-package` after signature injection to revalidate the file index, canonically create `runtime-plugins/dist/com.langnext.google-translate-web-1.0.0.lnplugin`, and emit `runtime-plugins/dist/com.langnext.google-translate-web-1.0.0.lnplugin.sha256` from the final archive bytes. Treat only this post-signing digest as package identity.
-- [ ] On first startup, import the bundled final archive into the same immutable store idempotently.
-- [ ] Set it as default for new Google Web instances without migrating existing instances.
+- [ ] In release CI, sign the exact staged `plugin.json` bytes with the offline/vendor signing service and inject only `signatures/manifest.sig`; the app build and developer task never receive a private key. `mise run plugin:sign-staging` is a **development/fixture-only exception** that signs with a committed dev vendor seed so local builds produce a verifiable staging tree; the production vendor private key always remains offline and never enters the app build or developer task.
+- [ ] Run `plugin:finalize-package` after signature injection to revalidate the file index, canonically create `runtime-plugins/dist/com.langnext.google-translate-web-1.0.0.lnplugin` (and the 1.1.0 proxy archive), and emit the matching `.sha256` from the final archive bytes. Treat only this post-signing digest as package identity.
+- [ ] On first startup, import every bundled final archive (1.0.0 GTX and 1.1.0 proxy) into the same immutable store idempotently.
+- [ ] Set 1.0.0 GTX as the default for new Google Web instances without migrating existing instances; 1.1.0 proxy is imported as an available upgrade target and never becomes the default.
 
 **Validation:**
 
 - Run locally: `mise run plugin:build-google-web`
-- Run in release CI after signature injection: `mise run plugin:finalize-package runtime-plugins/dist/staging/com.langnext.google-translate-web-1.0.0 runtime-plugins/dist/com.langnext.google-translate-web-1.0.0.lnplugin`
-- Run: `mise run plugin:verify runtime-plugins/dist/com.langnext.google-translate-web-1.0.0.lnplugin`
+- Run in release CI after signature injection:
+  - `mise run plugin:finalize-package -- runtime-plugins/dist/staging/com.langnext.google-translate-web-1.0.0 runtime-plugins/dist/com.langnext.google-translate-web-1.0.0.lnplugin --public-key-hex <vendor-public-key>`
+  - `mise run plugin:finalize-package -- runtime-plugins/dist/staging/com.langnext.google-translate-web-1.1.0 runtime-plugins/dist/com.langnext.google-translate-web-1.1.0.lnplugin --public-key-hex <vendor-public-key>`
+- Run: `mise run plugin:verify -- runtime-plugins/dist/com.langnext.google-translate-web-1.0.0.lnplugin --public-key-hex <vendor-public-key>` (and the 1.1.0 archive)
 - Run: `mise run test vendor_package_bootstrap -- --nocapture`
-- Expected: the unsigned staging tree is reproducible, finalization occurs only after external signing, the `.sha256` matches the final archive, package verifies/seeds once, and signing private material is absent from bundle inputs.
+- Expected: the unsigned staging tree is reproducible, finalization occurs only after external signing, the `.sha256` matches the final archive, package verifies/seeds once, and signing private material is absent from bundle inputs (dev `sign-staging` fixture signing excepted).
 
 ### Task 3: Execute GTX through the runtime router
 
@@ -123,7 +125,7 @@
 
 **Steps:**
 
-- [ ] Offer migration only for matching plugin ID/capability majors and compatible config schema.
+- [ ] Offer migration only for matching plugin ID/capability majors and compatible config schema; an incompatible target (dropped/major-changed capability or schema that cannot migrate the current config) fails closed at preview.
 - [ ] Convert current GTX config to package schema through the normal preview/CAS flow.
 - [ ] Keep integration instance and Translation Profile UUIDs unchanged.
 - [ ] Retain Bundled Rust snapshot/handler for one stable release.
@@ -146,8 +148,8 @@
 
 **Steps:**
 
-- [ ] Release a new package version adding `https_proxy` channel and proxy URL field.
-- [ ] Normalize to one HTTPS effective origin; reject userinfo, fragments, forbidden query keys, private/link-local/loopback addresses, and non-HTTPS URLs.
+- [ ] Release a new package version (1.1.0) adding `https_proxy` channel and proxy URL field, with a committed `plugin-1.1.0.json` signing input and a deterministic build/staging/finalize flow distinct from test-constructed fixtures.
+- [ ] Normalize to one HTTPS effective origin; reject userinfo, fragments, forbidden query keys, private/link-local/loopback addresses, and non-HTTPS URLs. The final resolved address is pinned via the host DNS resolver so DNS rebinding cannot redirect the connection to a private destination.
 - [ ] Persist the approved effective origin in the instance grant rather than trusting mutable config alone.
 - [ ] Require a new explicit permission approval on GTX→proxy upgrade or URL change.
 - [ ] Show a third-party data-egress warning and never attach credentials.
@@ -177,14 +179,17 @@
 
 - Manual: `mise run tauri:dev`
 - Expected: complete flow works; logs/DTO/export contain no user text, provider body, path, or unapproved URL.
+- This task exercises live Google/proxy network, the desktop UI, and user-visible privacy behavior. It cannot be automated or asserted by unit tests; any conformance/test suite passing does **not** satisfy Task 6. It must be executed manually and must never be faked or marked complete from a test run.
 
 ## Final Validation
 
 ```bash
 mise run plugin:build-google-web
-# Release CI only, after external signature injection:
-mise run plugin:finalize-package runtime-plugins/dist/staging/com.langnext.google-translate-web-1.0.0 runtime-plugins/dist/com.langnext.google-translate-web-1.0.0.lnplugin
-mise run plugin:verify runtime-plugins/dist/com.langnext.google-translate-web-1.0.0.lnplugin
+# Release CI only, after external signature injection (both GTX and proxy archives):
+mise run plugin:finalize-package -- runtime-plugins/dist/staging/com.langnext.google-translate-web-1.0.0 runtime-plugins/dist/com.langnext.google-translate-web-1.0.0.lnplugin --public-key-hex <vendor-public-key>
+mise run plugin:finalize-package -- runtime-plugins/dist/staging/com.langnext.google-translate-web-1.1.0 runtime-plugins/dist/com.langnext.google-translate-web-1.1.0.lnplugin --public-key-hex <vendor-public-key>
+mise run plugin:verify -- runtime-plugins/dist/com.langnext.google-translate-web-1.0.0.lnplugin --public-key-hex <vendor-public-key>
+mise run plugin:verify -- runtime-plugins/dist/com.langnext.google-translate-web-1.1.0.lnplugin --public-key-hex <vendor-public-key>
 mise run plugin:conformance google-web
 mise run test google_translate_web_runtime -- --nocapture
 mise run test-frontend
@@ -194,7 +199,7 @@ mise run format:check
 mise run build
 ```
 
-Expected: GTX and approved proxy paths work through Wasm; Bundled Rust rollback remains available.
+Expected: GTX and approved proxy paths work through Wasm; Bundled Rust rollback remains available. Task 6 (real network/UI/privacy smoke) is manual-only and is not covered by this block.
 
 ## Failure Behavior
 

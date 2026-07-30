@@ -14,7 +14,9 @@ use crate::domain::runtime_plugin::{
   FileRole, MANIFEST_FILE_PATH, PluginManifestV1, RuntimeDescriptor, RuntimeKind, SIGNATURE_FILE_PATH,
 };
 use crate::domain::service_capability::{DetectLanguageRequest, ExecutionContext, TranslateTextRequest};
-use crate::domain::service_integration::{IntegrationHealthStatus, IntegrationInstance};
+use crate::domain::service_integration::{
+  IntegrationCapabilityDescriptor, IntegrationHealthStatus, IntegrationInstance, ServiceIntegrationManifest,
+};
 use crate::domain::settings::AppSettingsV1;
 use crate::domain::time::{new_id, now_rfc3339};
 use crate::error::StorageError;
@@ -55,6 +57,27 @@ const DETECT_PLUGIN_ID: &str = "langnext.conformance.detect";
 const TRANSLATE_CAP: &str = "translate.text@1";
 const DETECT_CAP: &str = "translate.detect@1";
 
+/// Minimal registry-backed manifest for a synthetic conformance plugin so bundled->Wasm upgrades
+/// have a verifiable source capability identity (the source major must be preserved by the target).
+fn conformance_manifest(plugin_id: &str, capability_id: &str) -> ServiceIntegrationManifest {
+  ServiceIntegrationManifest {
+    manifest_version: 1,
+    plugin_api_version: "1.0".into(),
+    id: plugin_id.into(),
+    version: "1.0.0".into(),
+    display_name_key: "conformance".into(),
+    min_host_version: "0.1.0".into(),
+    config_schema_version: 1,
+    credential_slots: vec![],
+    endpoints: vec![],
+    capabilities: vec![IntegrationCapabilityDescriptor {
+      id: capability_id.into(),
+      preferences_schema_version: 1,
+      endpoint_aliases: vec![],
+    }],
+  }
+}
+
 fn setup() -> (
   tempfile::TempDir,
   Database,
@@ -67,7 +90,10 @@ fn setup() -> (
   db.initialize().unwrap();
   let packages =
     PluginPackageService::with_vendor_roots(db.clone(), dir.path().to_path_buf(), vec![fixture_vendor_public_key()]);
-  let registry = Arc::new(ServiceIntegrationRegistry::bundled().unwrap());
+  let mut registry = ServiceIntegrationRegistry::bundled().unwrap();
+  registry.register_test_manifest(conformance_manifest(TRANSLATE_PLUGIN_ID, TRANSLATE_CAP));
+  registry.register_test_manifest(conformance_manifest(DETECT_PLUGIN_ID, DETECT_CAP));
+  let registry = Arc::new(registry);
   let wasm = Arc::new(WasmRuntime::new().unwrap());
   // Minimal token service for cache eviction wiring (no vault needed for empty grants).
   let tokens = Arc::new(TokenGrantService::new(Arc::new(
@@ -103,12 +129,14 @@ fn build_signed_package(
     id: "approved".into(),
     origins: vec!["https://conformance.example".into()],
     methods: vec![crate::domain::runtime_plugin::HttpMethod::Get],
+    instance_origin_config_field: None,
   }];
   if let Some(id) = extra_endpoint {
     network.push(crate::domain::runtime_plugin::NetworkEndpointRequest {
       id: id.into(),
       origins: vec!["https://conformance.example".into()],
       methods: vec![crate::domain::runtime_plugin::HttpMethod::Get],
+      instance_origin_config_field: None,
     });
   }
   // Fixture declares host config_schema_version on the manifest (not package semver, not dialect).
@@ -190,6 +218,7 @@ fn build_signed_package(
       .map(|id| crate::domain::runtime_plugin::CapabilityDeclaration {
         id: (*id).into(),
         preferences_schema: Some("schemas/preferences.json".into()),
+        artifact: None,
       })
       .collect(),
     configuration_schema: Some("schemas/config.json".into()),
@@ -898,4 +927,110 @@ fn runtime_discard_snapshot_and_migration_trap_no_mutation() {
   let still = db.read(|conn| integration_instances::get(conn, id2)).unwrap();
   assert_eq!(still.package_digest, before.package_digest);
   assert_eq!(still.config_json, "not-json");
+}
+
+#[test]
+fn runtime_upgrade_preview_fails_closed_when_source_package_version_missing() {
+  let (dir, db, packages, lifecycle, _caps) = setup();
+  // Real target package (the upgrade candidate).
+  let (pkg_target, digest_target) = build_signed_package(
+    TRANSLATE_PLUGIN_ID,
+    "2.0.0",
+    TRANSLATE_WASM,
+    "artifacts/plugin.wasm",
+    &[TRANSLATE_CAP],
+    None,
+    true,
+  );
+  install_package(&packages, dir.path(), &pkg_target, false);
+  // Instance pinned to a digest whose installed version row is missing (corruption / uninstall).
+  // source_capability_majors must fail closed instead of returning an empty set.
+  let id = new_id();
+  let now = now_rfc3339();
+  db.transaction(|uow| {
+    integration_instances::insert(
+      uow.conn(),
+      &IntegrationInstance {
+        id,
+        plugin_id: TRANSLATE_PLUGIN_ID.into(),
+        plugin_version: "1.0.0".into(),
+        display_name: "Missing Source".into(),
+        enabled: true,
+        config_json: r#"{"mode":"success"}"#.into(),
+        config_schema_version: 1,
+        health_status: IntegrationHealthStatus::Ready,
+        last_validated_at: None,
+        last_error_code: None,
+        runtime_kind: "wasm-component".into(),
+        package_digest: Some("a".repeat(64)),
+        execution_grant_set_revision: None,
+        runtime_state: "unavailable".into(),
+        runtime_error_code: None,
+        runtime_error_message: None,
+        runtime_requirement_json: None,
+        created_at: now.clone(),
+        updated_at: now,
+      },
+    )?;
+    Ok::<_, StorageError>(())
+  })
+  .unwrap();
+  let before = db.read(|conn| integration_instances::get(conn, id)).unwrap();
+  let err = lifecycle.preview_upgrade(id, &digest_target).unwrap_err();
+  assert!(
+    matches!(err, StorageError::PluginUnavailable(_)),
+    "expected fail-closed PluginUnavailable, got {err:?}"
+  );
+  let after = db.read(|conn| integration_instances::get(conn, id)).unwrap();
+  assert_eq!(after.package_digest, before.package_digest);
+  assert_eq!(after.updated_at, before.updated_at);
+}
+
+#[test]
+fn runtime_upgrade_preview_fails_closed_when_bundled_registry_definition_missing() {
+  let (dir, db, packages, lifecycle, _caps) = setup();
+  // Target package for a plugin id that is NOT in the bundled registry.
+  let missing_plugin_id = "langnext.conformance.missing";
+  let (pkg_target, digest_target) = build_signed_package(
+    missing_plugin_id,
+    "2.0.0",
+    TRANSLATE_WASM,
+    "artifacts/plugin.wasm",
+    &[TRANSLATE_CAP],
+    None,
+    true,
+  );
+  install_package(&packages, dir.path(), &pkg_target, false);
+  // Bundled-rust instance whose plugin definition is absent from the host registry.
+  let id = seed_instance(&db, missing_plugin_id, "1.0.0", r#"{"mode":"success"}"#, 1);
+  let err = lifecycle.preview_upgrade(id, &digest_target).unwrap_err();
+  assert!(
+    matches!(err, StorageError::PluginUnavailable(_)),
+    "expected fail-closed PluginUnavailable, got {err:?}"
+  );
+}
+
+#[test]
+fn pin_default_skips_non_google_web_plugin_leaves_bundled_rust() {
+  let (dir, db, packages, lifecycle, _caps) = setup();
+  // A non-Google-Web plugin set as its catalog default must never be auto-pinned/acknowledged.
+  let (pkg, _digest) = build_signed_package(
+    TRANSLATE_PLUGIN_ID,
+    "1.0.0",
+    TRANSLATE_WASM,
+    "artifacts/plugin.wasm",
+    &[TRANSLATE_CAP],
+    None,
+    true,
+  );
+  install_package(&packages, dir.path(), &pkg, true);
+  let id = seed_instance(&db, TRANSLATE_PLUGIN_ID, "1.0.0", r#"{"mode":"success"}"#, 1);
+  lifecycle.pin_default_package_for_new_instance(id).unwrap();
+  let after = db.read(|conn| integration_instances::get(conn, id)).unwrap();
+  assert_eq!(after.runtime_kind, "bundled-rust");
+  assert!(
+    after.package_digest.is_none(),
+    "non-Google-Web plugin must not be auto-pinned"
+  );
+  assert!(after.execution_grant_set_revision.is_none());
 }

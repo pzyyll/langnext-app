@@ -8,6 +8,9 @@ import type {
   RuntimeUpgradePreviewDto,
 } from "../../storage/types";
 
+/** Pinned first-party GTX origin; any other network origin is third-party egress. */
+const FIRST_PARTY_GTX_ORIGIN = "https://translate.google.com";
+
 /** True when the instance cannot execute until a package is installed/activated. */
 export function isRuntimeUnresolved(
   instance: Pick<IntegrationInstanceDto, "runtimeState" | "runtimeErrorCode" | "effectiveStatus">,
@@ -75,6 +78,17 @@ export function upgradeApprovalDetailsReady(preview: RuntimeUpgradePreviewDto): 
 /** Whether upgrade preview requires an explicit permission acknowledgement. */
 export function upgradeRequiresAcknowledgement(preview: RuntimeUpgradePreviewDto): boolean {
   return preview.requiresPermissionApproval || preview.requiresPublisherReapproval;
+}
+
+/**
+ * True when the upgrade adds or changes a network endpoint whose origin is NOT the pinned
+ * first-party GTX origin - i.e. translated text will be sent to a third-party proxy server.
+ * Used to surface an explicit third-party data-egress warning separate from the permission list.
+ */
+export function hasThirdPartyEgressChange(preview: RuntimeUpgradePreviewDto): boolean {
+  return preview.permissionDifferences.some(
+    (diff) => diff.kind === "network_endpoint_added" && diff.origin != null && diff.origin !== FIRST_PARTY_GTX_ORIGIN,
+  );
 }
 
 /**

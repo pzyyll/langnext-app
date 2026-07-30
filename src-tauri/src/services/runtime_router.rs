@@ -1,6 +1,6 @@
 // ABOUTME: Resolve one immutable runtime adapter from authoritative instance pin state.
-// ABOUTME: Rehashes package archive and runtime artifact before binding a PluginPrincipal.
-use crate::domain::plugin_package::runtime_kind_storage;
+// ABOUTME: Loads Wasm artifacts only from immutable, trusted archive snapshots before binding a PluginPrincipal.
+use crate::domain::plugin_package::{PublisherSource, runtime_kind_storage};
 use crate::domain::runtime_lifecycle::{
   ExecutionGrantSetBundle, GrantSubjectKind, InstanceRuntimeState, parse_runtime_kind,
 };
@@ -14,7 +14,6 @@ use crate::error::StorageError;
 use crate::repositories::{
   installed_plugin_versions, integration_instances, plugin_permission_grants, plugin_publishers,
 };
-use crate::services::plugin_package::{hash_file, public_sha256_hex};
 use crate::services::plugin_store::PluginPackageService;
 use crate::services::service_capabilities::{
   CapabilityHandler, DetectLanguageCapability, ServiceCapabilityRegistry, TranslateTextCapability,
@@ -22,6 +21,7 @@ use crate::services::service_capabilities::{
 use crate::services::service_integration_registry::ServiceIntegrationRegistry;
 use crate::services::wasm_runtime::WasmRuntime;
 use crate::storage::Database;
+use std::collections::HashSet;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -72,6 +72,7 @@ pub struct SnapshotRuntimeResolution {
   pub runtime_kind: String,
   pub runtime_state: String,
   pub instance_updated_at: String,
+  pub instance_config_json: String,
   pub package_digest: Option<String>,
   pub execution_grant_set_revision: Option<u64>,
   pub package_manifest_json: Option<String>,
@@ -81,6 +82,8 @@ pub struct SnapshotRuntimeResolution {
   pub package_plugin_version: Option<String>,
   pub publisher_key_id: Option<String>,
   pub publisher_fingerprint: Option<String>,
+  pub publisher_public_key_hex: Option<String>,
+  pub publisher_source: Option<PublisherSource>,
   pub publisher_enabled: bool,
   pub publisher_revoked: bool,
   pub grant_bundle: Option<ExecutionGrantSetBundle>,
@@ -262,66 +265,22 @@ impl RuntimeRouter {
       );
     }
 
-    let package_path = self.plugin_packages.package_archive_path(package_digest);
-    let archive_digest = hash_file(&package_path).map_err(|e| {
-      CapabilityError::new(
-        CapabilityErrorCode::PluginUnavailable,
-        format!("failed to rehash package archive: {}", e.message),
-      )
-    })?;
-    if archive_digest != package_digest {
-      return Err(CapabilityError::new(
-        CapabilityErrorCode::PluginUnavailable,
-        "package archive digest mismatch",
-      ));
-    }
-
     let manifest: PluginManifestV1 = serde_json::from_str(&version.manifest_json).map_err(|e| {
       CapabilityError::new(
         CapabilityErrorCode::InvalidConfiguration,
         format!("invalid installed manifest: {e}"),
       )
     })?;
-    let artifact_path_rel = manifest.runtime.artifact.as_deref().ok_or_else(|| {
-      CapabilityError::new(
-        CapabilityErrorCode::InvalidConfiguration,
-        "wasm package is missing runtime artifact path",
-      )
-    })?;
-    let file_entry = manifest
-      .files
-      .iter()
-      .find(|f| f.path == artifact_path_rel && f.role == FileRole::RuntimeArtifact)
-      .ok_or_else(|| {
-        CapabilityError::new(
-          CapabilityErrorCode::InvalidConfiguration,
-          "runtime artifact is missing from signed file index",
-        )
-      })?;
-
-    let artifact_abs = self
-      .plugin_packages
-      .package_content_path(package_digest)
-      .join(artifact_path_rel);
-    let artifact_bytes = std::fs::read(&artifact_abs).map_err(|_| {
-      CapabilityError::new(
-        CapabilityErrorCode::PluginUnavailable,
-        "runtime artifact file is missing",
-      )
-    })?;
-    if artifact_bytes.len() as u64 != file_entry.bytes {
-      return Err(CapabilityError::new(
-        CapabilityErrorCode::PluginUnavailable,
-        "runtime artifact length mismatch",
-      ));
-    }
-    let computed_artifact = public_sha256_hex(&artifact_bytes);
-    if computed_artifact != file_entry.sha256 {
-      return Err(CapabilityError::new(
-        CapabilityErrorCode::PluginUnavailable,
-        "runtime artifact digest mismatch",
-      ));
-    }
+    validate_instance_configured_origins(&instance.config_json, &manifest, &bundle)?;
+    let (artifact_digest, artifact_bytes) = self.load_verified_wasm_artifact(
+      package_digest,
+      &manifest,
+      capability_id,
+      &publisher.key_id,
+      &publisher.fingerprint,
+      &publisher.public_key_hex,
+      publisher.source,
+    )?;
 
     let grant = bundle_to_execution_grant_set(&bundle).map_err(|e| {
       CapabilityError::new(
@@ -333,16 +292,16 @@ impl RuntimeRouter {
     Ok(RuntimeAdapter::WasmComponent {
       package_digest: PackageDigest::parse(package_digest)
         .map_err(|e| CapabilityError::new(CapabilityErrorCode::Internal, e))?,
-      artifact_digest: ComponentArtifactDigest::parse(&file_entry.sha256)
-        .map_err(|e| CapabilityError::new(CapabilityErrorCode::Internal, e))?,
-      artifact_bytes: Arc::new(artifact_bytes),
+      artifact_digest,
+      artifact_bytes,
       principal_factory: WasmPrincipalFactory { grant: grant.clone() },
       grant,
     })
   }
 
   /// Resolve using an immutable invocation snapshot (no SQLite reload of pin/grant/package rows).
-  /// Filesystem rehash of archive/artifact is allowed; call [`Self::recheck_pin_matches`] after.
+  /// Package bytes are loaded from a verified in-memory archive snapshot; call
+  /// [`Self::recheck_pin_matches`] after the external verification.
   pub fn resolve_from_snapshot(
     &self,
     pin: &SnapshotRuntimeResolution,
@@ -385,6 +344,8 @@ impl RuntimeRouter {
         let mut package_plugin_version = None;
         let mut publisher_key_id = None;
         let mut publisher_fingerprint = None;
+        let mut publisher_public_key_hex = None;
+        let mut publisher_source = None;
         let mut publisher_enabled = false;
         let mut publisher_revoked = true;
         let mut grant_bundle = None;
@@ -401,6 +362,8 @@ impl RuntimeRouter {
           package_plugin_version = Some(version.version.clone());
           publisher_key_id = Some(publisher.key_id.clone());
           publisher_fingerprint = Some(publisher.fingerprint.clone());
+          publisher_public_key_hex = Some(publisher.public_key_hex.clone());
+          publisher_source = Some(publisher.source);
           publisher_enabled = publisher.enabled;
           publisher_revoked = publisher.revoked;
           grant_bundle = Some(plugin_permission_grants::get_bundle_for_subject_package_revision(
@@ -411,6 +374,7 @@ impl RuntimeRouter {
             rev,
           )?);
         }
+        let instance_config_json = instance.config_json.clone();
         Ok((
           instance,
           SnapshotRuntimeResolution {
@@ -419,6 +383,7 @@ impl RuntimeRouter {
             runtime_kind: String::new(),
             runtime_state: String::new(),
             instance_updated_at: String::new(),
+            instance_config_json,
             package_digest: None,
             execution_grant_set_revision: None,
             package_manifest_json,
@@ -428,6 +393,8 @@ impl RuntimeRouter {
             package_plugin_version,
             publisher_key_id,
             publisher_fingerprint,
+            publisher_public_key_hex,
+            publisher_source,
             publisher_enabled,
             publisher_revoked,
             grant_bundle,
@@ -442,6 +409,7 @@ impl RuntimeRouter {
       || instance.runtime_kind != pin.runtime_kind
       || instance.runtime_state != pin.runtime_state
       || instance.plugin_id != pin.plugin_id
+      || instance.config_json != pin.instance_config_json
       || !instance.enabled
     {
       return Err(CapabilityError::new(
@@ -457,6 +425,8 @@ impl RuntimeRouter {
         || live_pkg.package_plugin_version != pin.package_plugin_version
         || live_pkg.publisher_key_id != pin.publisher_key_id
         || live_pkg.publisher_fingerprint != pin.publisher_fingerprint
+        || live_pkg.publisher_public_key_hex != pin.publisher_public_key_hex
+        || live_pkg.publisher_source != pin.publisher_source
         || live_pkg.publisher_enabled != pin.publisher_enabled
         || live_pkg.publisher_revoked != pin.publisher_revoked
         || !canonical_grant_bundles_equal(live_pkg.grant_bundle.as_ref(), pin.grant_bundle.as_ref())
@@ -547,58 +517,40 @@ impl RuntimeRouter {
     // Canonical grant bind: recompute permission_request_digest from signed manifest and
     // verify grant header + children against instance/package/manifest identity.
     verify_grant_canonical_bind(pin, bundle, &manifest, package_digest, grant_revision, capability_id)?;
-    // External archive/artifact verification only (no SQLite reloads).
-    let package_path = self.plugin_packages.package_archive_path(package_digest);
-    let archive_digest = hash_file(&package_path).map_err(|e| {
+    validate_instance_configured_origins(&pin.instance_config_json, &manifest, bundle)?;
+    let publisher_key_id = pin.publisher_key_id.as_deref().ok_or_else(|| {
       CapabilityError::new(
         CapabilityErrorCode::PluginUnavailable,
-        format!("failed to rehash package archive: {}", e.message),
+        "publisher key id is missing from invocation snapshot",
       )
     })?;
-    if archive_digest != package_digest {
-      return Err(CapabilityError::new(
-        CapabilityErrorCode::PluginUnavailable,
-        "package archive digest mismatch",
-      ));
-    }
-    let artifact_path_rel = manifest.runtime.artifact.as_deref().ok_or_else(|| {
-      CapabilityError::new(
-        CapabilityErrorCode::InvalidConfiguration,
-        "wasm package is missing runtime artifact path",
-      )
-    })?;
-    let file_entry = manifest
-      .files
-      .iter()
-      .find(|f| f.path == artifact_path_rel && f.role == FileRole::RuntimeArtifact)
-      .ok_or_else(|| {
-        CapabilityError::new(
-          CapabilityErrorCode::InvalidConfiguration,
-          "runtime artifact is missing from signed file index",
-        )
-      })?;
-    let artifact_abs = self
-      .plugin_packages
-      .package_content_path(package_digest)
-      .join(artifact_path_rel);
-    let artifact_bytes = std::fs::read(&artifact_abs).map_err(|_| {
+    let publisher_fingerprint = pin.publisher_fingerprint.as_deref().ok_or_else(|| {
       CapabilityError::new(
         CapabilityErrorCode::PluginUnavailable,
-        "runtime artifact file is missing",
+        "publisher fingerprint is missing from invocation snapshot",
       )
     })?;
-    if artifact_bytes.len() as u64 != file_entry.bytes {
-      return Err(CapabilityError::new(
+    let publisher_public_key_hex = pin.publisher_public_key_hex.as_deref().ok_or_else(|| {
+      CapabilityError::new(
         CapabilityErrorCode::PluginUnavailable,
-        "runtime artifact length mismatch",
-      ));
-    }
-    if public_sha256_hex(&artifact_bytes) != file_entry.sha256 {
-      return Err(CapabilityError::new(
+        "publisher public key is missing from invocation snapshot",
+      )
+    })?;
+    let publisher_source = pin.publisher_source.ok_or_else(|| {
+      CapabilityError::new(
         CapabilityErrorCode::PluginUnavailable,
-        "runtime artifact digest mismatch",
-      ));
-    }
+        "publisher source is missing from invocation snapshot",
+      )
+    })?;
+    let (artifact_digest, artifact_bytes) = self.load_verified_wasm_artifact(
+      package_digest,
+      &manifest,
+      capability_id,
+      publisher_key_id,
+      publisher_fingerprint,
+      publisher_public_key_hex,
+      publisher_source,
+    )?;
     let grant = bundle_to_execution_grant_set(bundle).map_err(|e| {
       CapabilityError::new(
         CapabilityErrorCode::InvalidConfiguration,
@@ -608,12 +560,75 @@ impl RuntimeRouter {
     Ok(RuntimeAdapter::WasmComponent {
       package_digest: PackageDigest::parse(package_digest)
         .map_err(|e| CapabilityError::new(CapabilityErrorCode::Internal, e))?,
-      artifact_digest: ComponentArtifactDigest::parse(&file_entry.sha256)
-        .map_err(|e| CapabilityError::new(CapabilityErrorCode::Internal, e))?,
-      artifact_bytes: Arc::new(artifact_bytes),
+      artifact_digest,
+      artifact_bytes,
       principal_factory: WasmPrincipalFactory { grant: grant.clone() },
       grant,
     })
+  }
+
+  /// Load one executable artifact from an immutable archive snapshot verified at this call.
+  ///
+  /// The store tree is compared against the snapshot but never reopened for Wasm bytes, closing
+  /// the verify-then-reopen window for external same-permission store replacements.
+  fn load_verified_wasm_artifact(
+    &self,
+    package_digest: &str,
+    expected_manifest: &PluginManifestV1,
+    capability_id: &str,
+    publisher_key_id: &str,
+    publisher_fingerprint: &str,
+    publisher_public_key_hex: &str,
+    publisher_source: PublisherSource,
+  ) -> Result<(ComponentArtifactDigest, Arc<Vec<u8>>), CapabilityError> {
+    let verified = self
+      .plugin_packages
+      .verify_runtime_store_snapshot(
+        package_digest,
+        publisher_key_id,
+        publisher_fingerprint,
+        publisher_public_key_hex,
+        publisher_source,
+      )
+      .map_err(|err| {
+        CapabilityError::new(
+          CapabilityErrorCode::PluginUnavailable,
+          format!("runtime package snapshot verification failed: {err}"),
+        )
+      })?;
+    if verified.manifest != *expected_manifest {
+      return Err(CapabilityError::new(
+        CapabilityErrorCode::PluginUnavailable,
+        "signed package manifest differs from the installed package record",
+      ));
+    }
+    let artifact_path = artifact_path_for_capability(&verified.manifest, capability_id)?;
+    let file_entry = verified
+      .manifest
+      .files
+      .iter()
+      .find(|file| file.path == artifact_path && file.role == FileRole::RuntimeArtifact)
+      .ok_or_else(|| {
+        CapabilityError::new(
+          CapabilityErrorCode::PluginUnavailable,
+          "runtime artifact is missing from the signed file index",
+        )
+      })?;
+    let artifact_bytes = verified.extracted_files.get(artifact_path).cloned().ok_or_else(|| {
+      CapabilityError::new(
+        CapabilityErrorCode::PluginUnavailable,
+        "runtime artifact is missing from the verified archive snapshot",
+      )
+    })?;
+    if artifact_bytes.len() as u64 != file_entry.bytes {
+      return Err(CapabilityError::new(
+        CapabilityErrorCode::PluginUnavailable,
+        "runtime artifact length differs from the verified file index",
+      ));
+    }
+    let artifact_digest = ComponentArtifactDigest::parse(&file_entry.sha256)
+      .map_err(|err| CapabilityError::new(CapabilityErrorCode::PluginUnavailable, err))?;
+    Ok((artifact_digest, Arc::new(artifact_bytes)))
   }
 
   pub fn resolve_translate(
@@ -675,6 +690,82 @@ impl RuntimeRouter {
       }),
     }
   }
+}
+
+/// Resolve the runtime artifact path for a capability: the capability's declared artifact
+/// if present, otherwise the package default `runtime.artifact`. Supports packages shipping
+/// one component per WIT world (e.g. translate.text + translate.detect) behind one plugin id.
+fn validate_instance_configured_origins(
+  config_json: &str,
+  manifest: &PluginManifestV1,
+  grant: &ExecutionGrantSetBundle,
+) -> Result<(), CapabilityError> {
+  let config: serde_json::Value = serde_json::from_str(config_json).map_err(|_| {
+    CapabilityError::new(
+      CapabilityErrorCode::InvalidConfiguration,
+      "integration config is not valid JSON",
+    )
+  })?;
+  for endpoint in manifest
+    .permissions
+    .network
+    .iter()
+    .filter(|endpoint| endpoint.instance_origin_config_field.is_some())
+  {
+    let field = endpoint.instance_origin_config_field.as_deref().unwrap_or_default();
+    let raw = config
+      .get(field)
+      .and_then(serde_json::Value::as_str)
+      .unwrap_or("")
+      .trim();
+    let granted_origins: HashSet<&str> = grant
+      .network
+      .iter()
+      .filter(|entry| entry.endpoint_id == endpoint.id)
+      .map(|entry| entry.origin.as_str())
+      .collect();
+    if granted_origins.is_empty() {
+      continue;
+    }
+    if raw.is_empty() {
+      return Err(CapabilityError::new(
+        CapabilityErrorCode::PermissionDenied,
+        format!(
+          "configured network origin for {} requires permission approval",
+          endpoint.id
+        ),
+      ));
+    }
+    let normalized = crate::services::google_translate_web::normalize_proxy_url(raw)
+      .map_err(|message| CapabilityError::new(CapabilityErrorCode::InvalidConfiguration, message))?;
+    if granted_origins.len() != 1 || !granted_origins.contains(normalized.origin.as_str()) {
+      return Err(CapabilityError::new(
+        CapabilityErrorCode::PermissionDenied,
+        format!(
+          "configured network origin for {} requires permission approval",
+          endpoint.id
+        ),
+      ));
+    }
+  }
+  Ok(())
+}
+
+fn artifact_path_for_capability<'a>(
+  manifest: &'a PluginManifestV1,
+  capability_id: &str,
+) -> Result<&'a str, CapabilityError> {
+  if let Some(cap) = manifest.capabilities.iter().find(|c| c.id == capability_id) {
+    if let Some(artifact) = &cap.artifact {
+      return Ok(artifact.as_str());
+    }
+  }
+  manifest.runtime.artifact.as_deref().ok_or_else(|| {
+    CapabilityError::new(
+      CapabilityErrorCode::InvalidConfiguration,
+      "wasm package is missing runtime artifact path",
+    )
+  })
 }
 
 pub enum ResolvedTranslate {

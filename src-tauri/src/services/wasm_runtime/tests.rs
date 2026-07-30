@@ -1357,18 +1357,22 @@ mod wasm_host_imports {
       "../x",
       "a/./b",
       "https://evil.example/x",
-      "a?q=1",
       "a#f",
       "a\\b",
+      "a?b#c",
+      "a?api_key=secret",
+      "a?token=x",
     ] {
       let mut request = approved_request();
       request.relative_path = path.into();
       let outcome = state.do_broker_fetch(request).await;
-      assert!(
-        matches!(outcome.unwrap_err(), BrokerFetchError::PathConfined),
-        "path {path:?} must be PathConfined"
-      );
+      assert!(outcome.is_err(), "path {path:?} must be rejected");
     }
+    // A confined path with a query suffix is accepted (GTX query pairs).
+    let mut request = approved_request();
+    request.relative_path = "translate_a/single?client=gtx&sl=auto&tl=en&q=Hi".into();
+    let outcome = state.do_broker_fetch(request).await;
+    assert!(outcome.is_ok(), "confined query path should pass: {outcome:?}");
   }
 
   #[tokio::test]

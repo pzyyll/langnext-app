@@ -32,7 +32,13 @@ fn app_setup<R: Runtime>(app: &mut tauri::App<R>) -> Result<(), Box<dyn std::err
     .app_data_dir()
     .map_err(|e| format!("resolve app data dir: {e}"))?;
 
-  let state = AppState::initialize(app_data_dir).map_err(|e| format!("storage initialization failed: {e}"))?;
+  let resource_dir = app
+    .path()
+    .resource_dir()
+    .map_err(|e| format!("resolve resource dir: {e}"))?;
+
+  let state = AppState::initialize(app_data_dir, Some(resource_dir))
+    .map_err(|e| format!("storage initialization failed: {e}"))?;
   let initial_shortcuts = state
     .settings
     .get()

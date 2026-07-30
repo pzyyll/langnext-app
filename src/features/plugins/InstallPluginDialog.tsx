@@ -27,7 +27,12 @@ import {
   runDiscardPluginPackagePreview,
   runSelectAndPreviewPluginPackage,
 } from "./installPluginPackageFlow";
-import { requiresPublisherApproval, summarizeNetworkPermissions } from "./pluginPackagePresentation";
+import {
+  requiresPublisherApproval,
+  shouldShowManualPublisherKeyInput,
+  publisherApprovalKeyHex,
+  summarizeNetworkPermissions,
+} from "./pluginPackagePresentation";
 
 function trustLabel(
   t: (
@@ -117,6 +122,7 @@ function InstallPluginForm({ onClose, onPreviewIdChange }: InstallPluginFormProp
   const [approvePublisher, setApprovePublisher] = useState(false);
   const [setAsDefault, setSetAsDefault] = useState(true);
   const [publicKeyHex, setPublicKeyHex] = useState("");
+  const publisherApprovalKeyHexValue = preview ? publisherApprovalKeyHex(preview, publicKeyHex) : "";
 
   useEffect(() => {
     onPreviewIdChange(preview?.previewId ?? null);
@@ -151,7 +157,7 @@ function InstallPluginForm({ onClose, onPreviewIdChange }: InstallPluginFormProp
         acknowledgePermissions: ackPermissions,
         approvePublisher: requiresPublisherApproval(preview) ? approvePublisher : false,
         publisherPublicKeyHex:
-          requiresPublisherApproval(preview) && approvePublisher ? publicKeyHex.trim() || null : null,
+          requiresPublisherApproval(preview) && approvePublisher ? publisherApprovalKeyHexValue || null : null,
         setAsDefault,
       });
     },
@@ -290,7 +296,7 @@ function InstallPluginForm({ onClose, onPreviewIdChange }: InstallPluginFormProp
                 </Checkbox.Root>
                 <span>{t("plugins.packages.approvePublisher")}</span>
               </label>
-              {approvePublisher ? (
+              {approvePublisher && shouldShowManualPublisherKeyInput(preview) ? (
                 <label className="flex flex-col gap-1 text-body-tight text-on-surface">
                   <span>{t("plugins.packages.publicKeyLabel")}</span>
                   <Input
@@ -347,7 +353,7 @@ function InstallPluginForm({ onClose, onPreviewIdChange }: InstallPluginFormProp
             disabled={
               installMutation.isPending ||
               !ackPermissions ||
-              (requiresPublisherApproval(preview) && (!approvePublisher || publicKeyHex.trim().length === 0))
+              (requiresPublisherApproval(preview) && (!approvePublisher || publisherApprovalKeyHexValue.length === 0))
             }
             onClick={() => installMutation.mutate()}
           >

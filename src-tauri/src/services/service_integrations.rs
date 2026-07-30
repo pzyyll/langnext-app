@@ -58,6 +58,7 @@ pub struct ServiceIntegrationService {
   registry: Arc<ServiceIntegrationRegistry>,
   tokens: Arc<TokenGrantService>,
   validation_timeout: Duration,
+  runtime_lifecycle: Option<crate::services::runtime_lifecycle::RuntimeLifecycleService>,
 }
 
 impl ServiceIntegrationService {
@@ -73,12 +74,23 @@ impl ServiceIntegrationService {
       registry,
       tokens,
       validation_timeout: INTEGRATION_VALIDATION_TIMEOUT,
+      runtime_lifecycle: None,
     }
   }
 
   /// Override the remote validation timeout (tests and specialized hosts).
   pub fn with_validation_timeout(mut self, timeout: Duration) -> Self {
     self.validation_timeout = timeout;
+    self
+  }
+
+  /// Wire the runtime lifecycle service so new instances can pin the default installed Wasm
+  /// package (safe-fail: leaves the instance Bundled Rust when no/invalid default exists).
+  pub fn with_runtime_lifecycle(
+    mut self,
+    runtime_lifecycle: crate::services::runtime_lifecycle::RuntimeLifecycleService,
+  ) -> Self {
+    self.runtime_lifecycle = Some(runtime_lifecycle);
     self
   }
 
@@ -604,6 +616,15 @@ impl ServiceIntegrationService {
       Ok(ops) => {
         for op in ops {
           let _ = coordinator::finalize_operation(&self.db, self.vault.as_ref(), &op);
+        }
+        // Pin the default installed Wasm package for new instances (e.g. Google Web GTX) without
+        // migrating existing instances. Safe-fail: any preview/apply failure leaves the instance
+        // Bundled Rust, which remains a valid executor. Dynamic-origin (proxy) packages are never
+        // auto-approved here; they require explicit migration with a third-party egress warning.
+        if let Some(lifecycle) = &self.runtime_lifecycle {
+          if let Err(err) = lifecycle.pin_default_package_for_new_instance(id) {
+            log::warn!("new_instance_default_pin_failed instance={id} error={err}");
+          }
         }
         self.get_instance(id)
       }

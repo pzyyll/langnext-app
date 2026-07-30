@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# ABOUTME: Generate a fresh Ed25519 key pair and print private key (seed), public key, and fingerprint.
+# ABOUTME: Uses the project's plugin_tool binary for deterministic derivation.
+#MISE description="Generate a fresh Ed25519 key pair"
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+cd "$ROOT_DIR"
+
+SEED=$(openssl rand -hex 32 2>/dev/null) || true
+
+if [[ -z "$SEED" ]]; then
+  # Windows fallback — try powershell
+  SEED=$(powershell -Command "-join ((1..32) | %% {'{0:x2}' -f (Get-Random -Max 256)})" 2>/dev/null) || true
+fi
+
+if [[ -z "$SEED" || ${#SEED} -ne 64 ]]; then
+  echo "error: failed to generate a random 32-byte seed. Install openssl or use Windows PowerShell." >&2
+  exit 1
+fi
+
+echo "private_key = $SEED"
+cargo run --manifest-path src-tauri/Cargo.toml --bin plugin_tool --quiet -- derive-public-key "$SEED"

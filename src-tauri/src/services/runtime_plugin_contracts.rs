@@ -4,11 +4,11 @@ use crate::domain::runtime_plugin::{
   self, AUTH_POLICIES_MAX_COUNT, CAPABILITIES_MAX_COUNT, CREDENTIAL_SLOTS_MAX_COUNT, CapabilityDeclaration,
   CapabilityId, CapabilityIdError, CredentialSlotDecl, EndpointId, FILE_MAX_BYTES, FILES_MAX_COUNT, FileRole,
   HOST_PLUGIN_API_VERSION_MAJOR, HttpsOrigin, MANIFEST_FILE_PATH, MANIFEST_VERSION_V1, METHODS_MAX_COUNT,
-  NETWORK_ENDPOINTS_MAX_COUNT, ORIGINS_MAX_COUNT, PACKAGE_TARGETS_MAX_COUNT, PAGES_MAX_COUNT, PageId,
-  PermissionRequests, PluginApiVersion, PluginFileEntry, PluginId, PluginManifestV1, PublisherDeclaration,
-  PublisherKeyFingerprint, PublisherKeyId, RuntimeDescriptor, SIGNATURE_FILE_PATH, SemVerVersion, UiDeclaration,
-  check_file_index_collisions, host_package_target, package_targets_compatible, validate_archive_entry_path,
-  validate_archive_path, validate_package_target_constraint, validate_slot_id_strict,
+  NETWORK_ENDPOINTS_MAX_COUNT, ORIGINS_MAX_COUNT, PACKAGE_TARGETS_MAX_COUNT, PAGES_MAX_COUNT,
+  PUBLISHER_PUBLIC_KEY_PATH, PageId, PermissionRequests, PluginApiVersion, PluginFileEntry, PluginId, PluginManifestV1,
+  PublisherDeclaration, PublisherKeyFingerprint, PublisherKeyId, RuntimeDescriptor, SIGNATURE_FILE_PATH, SemVerVersion,
+  UiDeclaration, check_file_index_collisions, host_package_target, package_targets_compatible,
+  validate_archive_entry_path, validate_archive_path, validate_package_target_constraint, validate_slot_id_strict,
 };
 // Re-export PermissionRequests for ValidatedPluginManifest public API consumers.
 use std::collections::HashMap;
@@ -289,7 +289,7 @@ pub fn validate_archive_shape(manifest: &PluginManifestV1, entries: &[ArchiveEnt
 
   let indexed: std::collections::HashSet<&str> = manifest.files.iter().map(|f| f.path.as_str()).collect();
   for path in archive.keys() {
-    if path == MANIFEST_FILE_PATH || path == SIGNATURE_FILE_PATH {
+    if path == MANIFEST_FILE_PATH || path == SIGNATURE_FILE_PATH || path == PUBLISHER_PUBLIC_KEY_PATH {
       continue;
     }
     if !indexed.contains(path.as_str()) {
@@ -416,6 +416,9 @@ fn validate_capabilities(
     if let Some(schema) = &cap.preferences_schema {
       require_file_role(file_index, schema, FileRole::PreferenceSchema, "preferencesSchema")?;
     }
+    if let Some(artifact) = &cap.artifact {
+      require_file_role(file_index, artifact, FileRole::RuntimeArtifact, "artifact")?;
+    }
   }
   Ok(())
 }
@@ -475,7 +478,7 @@ fn validate_permissions(permissions: &PermissionRequests) -> Result<(), Contract
         format!("duplicate network endpoint id: {}", endpoint.id),
       ));
     }
-    if endpoint.origins.is_empty() {
+    if endpoint.origins.is_empty() && endpoint.instance_origin_config_field.is_none() {
       return Err(ContractError::new(
         ContractErrorCode::InvalidField,
         format!("network endpoint {} must declare at least one origin", endpoint.id),
@@ -640,6 +643,7 @@ mod tests {
       capabilities: vec![CapabilityDeclaration {
         id: "translate.text@1".into(),
         preferences_schema: None,
+        artifact: None,
       }],
       configuration_schema: None,
       config_schema_version: None,
@@ -791,6 +795,7 @@ mod tests {
     manifest.capabilities.push(CapabilityDeclaration {
       id: "translate.text@1".into(),
       preferences_schema: None,
+      artifact: None,
     });
     let err = validate_manifest(&manifest).unwrap_err();
     assert_eq!(err.code, ContractErrorCode::DuplicateId);
@@ -883,6 +888,7 @@ mod tests {
         id: "translate-api".into(),
         origins: vec![bad.into()],
         methods: vec![HttpMethod::Post],
+        instance_origin_config_field: None,
       });
       assert!(validate_manifest(&manifest).is_err(), "origin {bad} should be rejected");
     }
@@ -892,6 +898,7 @@ mod tests {
       id: "translate-api".into(),
       origins: vec!["https://api.example.com".into(), "https://api.example.com:8443".into()],
       methods: vec![HttpMethod::Post],
+      instance_origin_config_field: None,
     });
     validate_manifest(&manifest).expect("canonical origins pass");
   }
@@ -903,6 +910,7 @@ mod tests {
       id: "translate-api".into(),
       origins: vec!["https://api.example.com".into()],
       methods: vec![HttpMethod::Post],
+      instance_origin_config_field: None,
     };
     manifest.permissions.network.push(endpoint.clone());
     manifest.permissions.network.push(endpoint);

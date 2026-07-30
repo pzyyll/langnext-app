@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# ABOUTME: Ed25519-sign plugin.json in a staging tree with a 32-byte seed (hex) and inject manifest.sig.
+# ABOUTME: Dev-only; production signing runs offline outside CI with the real vendor private key.
+#MISE description="Sign a staging tree with an Ed25519 seed (args: staging-dir 64-char-hex-seed)"
+set -euo pipefail
+
+if [[ $# -lt 2 ]]; then
+  echo "usage: mise run plugin:sign-staging -- <staging-dir> <64-char-hex-seed>" >&2
+  echo "" >&2
+  echo "Staging dir is the output of 'mise run plugin:build-google-web'." >&2
+  echo "Seed is a 32-byte Ed25519 signing key as 64 lowercase hex chars." >&2
+  echo "" >&2
+  echo "Dev fixture keys:" >&2
+  echo "  Test package seed (conformance):  0909090909090909090909090909090909090909090909090909090909090909" >&2
+  echo "  Vendor     seed (google-web):     0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a" >&2
+  echo "" >&2
+  echo "Full local workflow:" >&2
+  echo "  mise run plugin:build-google-web" >&2
+  echo "  mise run plugin:sign-staging -- runtime-plugins/dist/staging/com.langnext.google-translate-web-1.0.0 0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a" >&2
+  echo "  mise run plugin:finalize-package -- runtime-plugins/dist/staging/com.langnext.google-translate-web-1.0.0 runtime-plugins/dist/com.langnext.google-translate-web-1.0.0.lnplugin --public-key-hex 43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c" >&2
+  echo "  mise run plugin:verify -- runtime-plugins/dist/com.langnext.google-translate-web-1.0.0.lnplugin --public-key-hex 43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c" >&2
+  exit 2
+fi
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+cd "$ROOT_DIR"
+
+cargo run --manifest-path src-tauri/Cargo.toml --bin plugin_tool --quiet -- sign-staging "$@"

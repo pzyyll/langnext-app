@@ -7,9 +7,9 @@ use crate::error::StorageError;
 use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 use std::collections::HashMap;
 use std::future::Future;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::pin::Pin;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 /// Total request timeout for non-streaming HTTP.
@@ -56,27 +56,75 @@ static INHERIT_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 static DIRECT_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 static STREAM_INHERIT_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 static STREAM_DIRECT_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-static PUBLIC_INHERIT_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-static PUBLIC_DIRECT_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-static PUBLIC_STREAM_INHERIT_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-static PUBLIC_STREAM_DIRECT_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+// Public-destination clients always disable system proxies (see build_public_client); a single
+// cached client per transport kind is sufficient because ProxyMode is intentionally ignored.
+static PUBLIC_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+static PUBLIC_STREAM_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+/// DNS lookup function used by [`PublicDestinationResolver`]. Returns resolved socket
+/// addresses; port 0 is acceptable because reqwest replaces it with the URL's explicit port
+/// or the scheme default before opening a socket.
+type DnsLookupFn =
+  Arc<dyn Fn(&str) -> Pin<Box<dyn Future<Output = std::io::Result<Vec<SocketAddr>>> + Send>> + Send + Sync>;
 
 /// Resolver that rejects all DNS results outside public unicast address space before reqwest
 /// opens a socket. Returning the vetted addresses pins this connection attempt to the checked
-/// result and closes literal-IP and DNS rebinding paths for direct service requests.
-#[derive(Debug, Default)]
-struct PublicDestinationResolver;
+/// result and closes literal-IP and DNS rebinding paths for dynamic-origin (e.g. proxy) egress.
+/// Production builds resolve through the system resolver; tests inject a synthetic lookup so the
+/// private/link-local/loopback filter is exercised without real network access.
+#[derive(Clone)]
+struct PublicDestinationResolver {
+  lookup: DnsLookupFn,
+}
+
+impl std::fmt::Debug for PublicDestinationResolver {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.debug_struct("PublicDestinationResolver").finish_non_exhaustive()
+  }
+}
+
+impl Default for PublicDestinationResolver {
+  fn default() -> Self {
+    Self {
+      lookup: Arc::new(system_dns_lookup),
+    }
+  }
+}
+
+impl PublicDestinationResolver {
+  /// Test-only resolver backed by an injected lookup function.
+  #[cfg(test)]
+  fn with_lookup(lookup: DnsLookupFn) -> Self {
+    Self { lookup }
+  }
+}
+
+/// System DNS lookup used by the default resolver: resolves `host:0` and collects socket addrs.
+/// Port 0 is intentional - reqwest replaces it with the URL's explicit port or scheme default.
+fn system_dns_lookup(hostname: &str) -> Pin<Box<dyn Future<Output = std::io::Result<Vec<SocketAddr>>> + Send>> {
+  let host = hostname.to_owned();
+  Box::pin(async move {
+    let addrs: Vec<_> = tokio::net::lookup_host((host.as_str(), 0u16)).await?.collect();
+    Ok(addrs)
+  })
+}
+
+/// Filter resolved addresses down to publicly routable destinations. Public so transport-level
+/// tests can exercise the SSRF filter independently of live DNS.
+fn filter_public_resolved(addrs: Vec<SocketAddr>) -> Vec<SocketAddr> {
+  addrs
+    .into_iter()
+    .filter(|addr| is_public_destination_ip(addr.ip()))
+    .collect()
+}
 
 impl Resolve for PublicDestinationResolver {
   fn resolve(&self, name: Name) -> Resolving {
+    let lookup = self.lookup.clone();
     let hostname = name.as_str().to_owned();
     Box::pin(async move {
-      // Port zero tells reqwest to retain the URL's explicit port or its scheme default.
-      let addresses: Vec<_> = tokio::net::lookup_host((hostname.as_str(), 0u16)).await?.collect();
-      let public: Vec<_> = addresses
-        .into_iter()
-        .filter(|addr| is_public_destination_ip(addr.ip()))
-        .collect();
+      let addresses = (lookup)(&hostname).await?;
+      let public = filter_public_resolved(addresses);
       if public.is_empty() {
         return Err(
           std::io::Error::other(format!("DNS resolution for {hostname} returned no public destinations")).into(),
@@ -537,46 +585,61 @@ fn client_for(
 }
 
 fn configured_client_for(mode: ProxyMode) -> Result<&'static reqwest::Client, StorageError> {
-  match mode {
-    ProxyMode::Inherit => {
-      if INHERIT_CLIENT.get().is_none() {
-        let client = reqwest::Client::builder()
-          .timeout(REQUEST_TIMEOUT)
-          .connect_timeout(REQUEST_TIMEOUT)
-          .redirect(reqwest::redirect::Policy::none())
-          .build()
-          .map_err(|_| StorageError::Internal("failed to build HTTP client".into()))?;
-        let _ = INHERIT_CLIENT.set(client);
-      }
-      INHERIT_CLIENT
-        .get()
-        .ok_or_else(|| StorageError::Internal("HTTP client unavailable".into()))
-    }
-    ProxyMode::Direct => {
-      if DIRECT_CLIENT.get().is_none() {
-        let client = reqwest::Client::builder()
-          .timeout(REQUEST_TIMEOUT)
-          .connect_timeout(REQUEST_TIMEOUT)
-          .no_proxy()
-          .redirect(reqwest::redirect::Policy::none())
-          .build()
-          .map_err(|_| StorageError::Internal("failed to build HTTP client".into()))?;
-        let _ = DIRECT_CLIENT.set(client);
-      }
-      DIRECT_CLIENT
-        .get()
-        .ok_or_else(|| StorageError::Internal("HTTP client unavailable".into()))
-    }
+  let cell = match mode {
+    ProxyMode::Inherit => &INHERIT_CLIENT,
+    ProxyMode::Direct => &DIRECT_CLIENT,
+  };
+  if cell.get().is_none() {
+    let _ = cell.set(build_configured_client(mode)?);
   }
+  cell
+    .get()
+    .ok_or_else(|| StorageError::Internal("HTTP client unavailable".into()))
 }
 
-fn public_client_for(mode: ProxyMode) -> Result<&'static reqwest::Client, StorageError> {
-  // Public clients use the same reqwest default DNS resolver as configured clients.
-  // SSRF protection for bundled plugins is enforced by validate_external_destination
-  // (rejects literal private/loopback/localhost hosts) and pinned manifest endpoints.
-  // The custom PublicDestinationResolver was removed because reqwest 0.13's dns_resolver
-  // integration caused spurious connect failures on some systems.
-  configured_client_for(mode)
+/// Build a fresh Configured-destination client honoring ProxyMode. Inherit keeps reqwest's default
+/// system-proxy detection (env/OS); Direct disables it. Exposed so behavior tests can build a
+/// non-cached client under a controlled proxy environment.
+fn build_configured_client(mode: ProxyMode) -> Result<reqwest::Client, StorageError> {
+  let builder = reqwest::Client::builder()
+    .timeout(REQUEST_TIMEOUT)
+    .connect_timeout(REQUEST_TIMEOUT)
+    .redirect(reqwest::redirect::Policy::none());
+  let builder = match mode {
+    ProxyMode::Inherit => builder,
+    ProxyMode::Direct => builder.no_proxy(),
+  };
+  builder
+    .build()
+    .map_err(|_| StorageError::Internal("failed to build HTTP client".into()))
+}
+
+fn public_client_for(_mode: ProxyMode) -> Result<&'static reqwest::Client, StorageError> {
+  // PublicInternet always disables system proxies. With an HTTPS proxy reqwest resolves only the
+  // proxy host and leaves the target hostname for the proxy to resolve, which defeats the
+  // PublicDestinationResolver pin and reopens rebinding/private-network egress through the proxy.
+  // ProxyMode is accepted for API symmetry but never honored for public destinations.
+  if PUBLIC_CLIENT.get().is_none() {
+    let _ = PUBLIC_CLIENT.set(build_public_client()?);
+  }
+  PUBLIC_CLIENT
+    .get()
+    .ok_or_else(|| StorageError::Internal("HTTP client unavailable".into()))
+}
+
+/// Build a fresh public-destination client: public DNS pinning + no system proxy. Single source of
+/// truth for `public_client_for`; behavior tests build a non-cached client through this helper.
+fn build_public_client() -> Result<reqwest::Client, StorageError> {
+  // reqwest replaces port 0 in the resolver's SocketAddrs with the URL's explicit port or the
+  // scheme default before connect, so the resolver may return port-0 addresses safely.
+  reqwest::Client::builder()
+    .dns_resolver(PublicDestinationResolver::default())
+    .timeout(REQUEST_TIMEOUT)
+    .connect_timeout(REQUEST_TIMEOUT)
+    .no_proxy()
+    .redirect(reqwest::redirect::Policy::none())
+    .build()
+    .map_err(|_| StorageError::Internal("failed to build HTTP client".into()))
 }
 
 fn stream_client_for(
@@ -590,39 +653,53 @@ fn stream_client_for(
 }
 
 fn configured_stream_client_for(mode: ProxyMode) -> Result<&'static reqwest::Client, StorageError> {
-  match mode {
-    ProxyMode::Inherit => {
-      if STREAM_INHERIT_CLIENT.get().is_none() {
-        let client = reqwest::Client::builder()
-          .connect_timeout(STREAM_CONNECT_TIMEOUT)
-          .redirect(reqwest::redirect::Policy::none())
-          .build()
-          .map_err(|_| StorageError::Internal("failed to build stream HTTP client".into()))?;
-        let _ = STREAM_INHERIT_CLIENT.set(client);
-      }
-      STREAM_INHERIT_CLIENT
-        .get()
-        .ok_or_else(|| StorageError::Internal("stream HTTP client unavailable".into()))
-    }
-    ProxyMode::Direct => {
-      if STREAM_DIRECT_CLIENT.get().is_none() {
-        let client = reqwest::Client::builder()
-          .connect_timeout(STREAM_CONNECT_TIMEOUT)
-          .no_proxy()
-          .redirect(reqwest::redirect::Policy::none())
-          .build()
-          .map_err(|_| StorageError::Internal("failed to build stream HTTP client".into()))?;
-        let _ = STREAM_DIRECT_CLIENT.set(client);
-      }
-      STREAM_DIRECT_CLIENT
-        .get()
-        .ok_or_else(|| StorageError::Internal("stream HTTP client unavailable".into()))
-    }
+  let cell = match mode {
+    ProxyMode::Inherit => &STREAM_INHERIT_CLIENT,
+    ProxyMode::Direct => &STREAM_DIRECT_CLIENT,
+  };
+  if cell.get().is_none() {
+    let _ = cell.set(build_configured_stream_client(mode)?);
   }
+  cell
+    .get()
+    .ok_or_else(|| StorageError::Internal("stream HTTP client unavailable".into()))
 }
 
-fn public_stream_client_for(mode: ProxyMode) -> Result<&'static reqwest::Client, StorageError> {
-  configured_stream_client_for(mode)
+/// Build a fresh Configured-destination stream client honoring ProxyMode (no body timeout; the
+/// caller drives chunk/idle timeouts). Exposed for behavior-test parity with non-stream clients.
+fn build_configured_stream_client(mode: ProxyMode) -> Result<reqwest::Client, StorageError> {
+  let builder = reqwest::Client::builder()
+    .connect_timeout(STREAM_CONNECT_TIMEOUT)
+    .redirect(reqwest::redirect::Policy::none());
+  let builder = match mode {
+    ProxyMode::Inherit => builder,
+    ProxyMode::Direct => builder.no_proxy(),
+  };
+  builder
+    .build()
+    .map_err(|_| StorageError::Internal("failed to build stream HTTP client".into()))
+}
+
+fn public_stream_client_for(_mode: ProxyMode) -> Result<&'static reqwest::Client, StorageError> {
+  // Stream clients share the public-destination DNS pinning and no-proxy policy of non-stream
+  // public clients (see public_client_for).
+  if PUBLIC_STREAM_CLIENT.get().is_none() {
+    let _ = PUBLIC_STREAM_CLIENT.set(build_public_stream_client()?);
+  }
+  PUBLIC_STREAM_CLIENT
+    .get()
+    .ok_or_else(|| StorageError::Internal("stream HTTP client unavailable".into()))
+}
+
+/// Build a fresh public-destination stream client (public DNS pinning + no system proxy).
+fn build_public_stream_client() -> Result<reqwest::Client, StorageError> {
+  reqwest::Client::builder()
+    .dns_resolver(PublicDestinationResolver::default())
+    .connect_timeout(STREAM_CONNECT_TIMEOUT)
+    .no_proxy()
+    .redirect(reqwest::redirect::Policy::none())
+    .build()
+    .map_err(|_| StorageError::Internal("failed to build stream HTTP client".into()))
 }
 
 pub fn map_reqwest_error(err: reqwest::Error) -> StorageError {
@@ -742,5 +819,225 @@ mod tests {
     }
     assert!(is_public_destination_ip("8.8.8.8".parse().unwrap()));
     assert!(is_public_destination_ip("2606:4700:4700::1111".parse().unwrap()));
+  }
+
+  #[test]
+  fn bounded_http_filter_public_resolved_drops_non_routable() {
+    let addrs = vec![
+      SocketAddr::from(([127, 0, 0, 1], 0)),
+      SocketAddr::from(([10, 0, 0, 1], 0)),
+      SocketAddr::from(([169, 254, 1, 1], 0)),
+      SocketAddr::from(([8, 8, 8, 8], 0)),
+      SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 1], 0)),
+    ];
+    let public = filter_public_resolved(addrs);
+    assert_eq!(public.len(), 1);
+    assert_eq!(public[0].ip(), "8.8.8.8".parse::<IpAddr>().unwrap());
+    // All-private input yields an empty (not panicking) result.
+    let empty = filter_public_resolved(vec![SocketAddr::from(([127, 0, 0, 1], 0))]);
+    assert!(empty.is_empty());
+  }
+
+  #[tokio::test]
+  async fn bounded_http_resolver_keeps_only_public_dns_results() {
+    use reqwest::dns::{Name, Resolve};
+    let resolver = PublicDestinationResolver::with_lookup(Arc::new(|_host| {
+      Box::pin(async move {
+        Ok(vec![
+          SocketAddr::from(([127, 0, 0, 1], 0)),
+          SocketAddr::from(([10, 0, 0, 1], 0)),
+          SocketAddr::from(([169, 254, 1, 1], 0)),
+          SocketAddr::from(([8, 8, 8, 8], 0)),
+        ])
+      })
+    }));
+    let name: Name = "proxy.example".parse().unwrap();
+    let addrs_iter = resolver.resolve(name).await.expect("resolution must succeed");
+    let addrs: Vec<_> = addrs_iter.collect();
+    assert_eq!(addrs.len(), 1);
+    assert_eq!(addrs[0].ip(), "8.8.8.8".parse::<IpAddr>().unwrap());
+  }
+
+  #[tokio::test]
+  async fn bounded_http_resolver_fails_closed_when_only_private_dns_results() {
+    use reqwest::dns::{Name, Resolve};
+    let resolver = PublicDestinationResolver::with_lookup(Arc::new(|_host| {
+      Box::pin(async move {
+        Ok(vec![
+          SocketAddr::from(([127, 0, 0, 1], 0)),
+          SocketAddr::from(([169, 254, 1, 1], 0)),
+        ])
+      })
+    }));
+    let name: Name = "rebind.example".parse().unwrap();
+    match resolver.resolve(name).await {
+      Ok(addrs) => panic!("expected error, got addrs: {:?}", addrs.collect::<Vec<_>>()),
+      Err(err) => assert!(
+        err.to_string().contains("no public destinations"),
+        "expected no-public-destinations error, got {err}"
+      ),
+    }
+  }
+
+  #[tokio::test]
+  async fn bounded_http_resolver_fails_closed_when_dns_lookup_errors() {
+    use reqwest::dns::{Name, Resolve};
+    let resolver = PublicDestinationResolver::with_lookup(Arc::new(|_host| {
+      Box::pin(async move { Err(std::io::Error::other("nameserver unreachable")) })
+    }));
+    let name: Name = "down.example".parse().unwrap();
+    match resolver.resolve(name).await {
+      Ok(addrs) => panic!("expected error, got addrs: {:?}", addrs.collect::<Vec<_>>()),
+      Err(err) => assert!(
+        err.to_string().contains("nameserver unreachable"),
+        "expected nameserver-unreachable error, got {err}"
+      ),
+    }
+  }
+
+  // --- Public/Configured destination proxy behavior tests (isolated subprocess) ---
+  //
+  // Each probe runs in an isolated child process (the test binary re-invoked with --exact) so the
+  // parent test process never mutates proxy env vars. The child clears ALL_PROXY/all_proxy/
+  // HTTP_PROXY/http_proxy/HTTPS_PROXY/https_proxy/NO_PROXY/no_proxy (avoiding CI override and
+  // parallel races), sets ALL_PROXY at a freshly bound loopback proxy listener, builds the client
+  // under test, issues one GET to a loopback target, and deterministically races the two listener
+  // accepts (no fixed sleep). The winner is written to a temp file the parent reads back.
+  //
+  // Production semantics verified: PublicInternet clients always disable system proxies (no_proxy);
+  // Configured Inherit keeps reqwest's default system-proxy detection.
+  //
+  // Every reqwest-consulted proxy env var. Cleared in the child before ALL_PROXY is set so a CI
+  // environment cannot override the probe; restore is implicit because the child exits.
+  const PROXY_ENV_VARS: &[&str] = &[
+    "ALL_PROXY",
+    "all_proxy",
+    "HTTP_PROXY",
+    "http_proxy",
+    "HTTPS_PROXY",
+    "https_proxy",
+    "NO_PROXY",
+    "no_proxy",
+  ];
+  const PROBE_MODE_ENV: &str = "LANGNEXT_BOUNDED_HTTP_PROBE_MODE";
+  const PROBE_OUT_ENV: &str = "LANGNEXT_BOUNDED_HTTP_PROBE_OUT";
+  /// Upper bound on the accept race so a regression fails fast instead of hanging the suite.
+  const PROBE_ACCEPT_RACE_TIMEOUT: Duration = Duration::from_secs(5);
+
+  /// Subprocess entry point. Runs only when [`PROBE_MODE_ENV`] is set; otherwise a no-op so a
+  /// normal `cargo test` run of this function is harmless.
+  #[tokio::test]
+  async fn bounded_http_proxy_probe_entry() {
+    let mode = match std::env::var(PROBE_MODE_ENV) {
+      Ok(mode) => mode,
+      Err(_) => return,
+    };
+    let out_path = std::env::var(PROBE_OUT_ENV).expect("probe out path");
+
+    // Bind fresh loopback listeners; their addresses are unknown to the parent, so the child sets
+    // ALL_PROXY itself (only in this isolated process).
+    let proxy_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind proxy");
+    let proxy_addr = proxy_listener.local_addr().expect("proxy addr");
+    let target_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind target");
+    let target_addr = target_listener.local_addr().expect("target addr");
+
+    // Clear every reqwest-consulted proxy env var (CI may set HTTP_PROXY/HTTPS_PROXY) then point
+    // ALL_PROXY at the probe proxy. SAFETY: this is an isolated child process running a single
+    // test; it exits immediately after the probe and never shares env with the parent or parallel
+    // tests.
+    for var in PROXY_ENV_VARS {
+      unsafe { std::env::remove_var(var) };
+    }
+    unsafe { std::env::set_var("ALL_PROXY", format!("http://{proxy_addr}")) };
+
+    let client = match mode.as_str() {
+      "public-ignores-proxy" => build_public_client().expect("public client"),
+      "public-stream-ignores-proxy" => build_public_stream_client().expect("public stream client"),
+      "inherit-respects-proxy" => build_configured_client(ProxyMode::Inherit).expect("configured inherit client"),
+      "inherit-stream-respects-proxy" => {
+        build_configured_stream_client(ProxyMode::Inherit).expect("configured inherit stream client")
+      }
+      _ => panic!("unknown probe mode: {mode}"),
+    };
+
+    // Issue one GET to the target. The client connects to either the proxy (Inherit) or the target
+    // directly (Public); the accept race records which listener received the connection. The send
+    // result is irrelevant (the probe listeners never speak HTTP), so it is raced alongside the
+    // accepts to avoid a fixed sleep.
+    let send = client.get(format!("http://127.0.0.1:{}/", target_addr.port())).send();
+    tokio::pin!(send);
+    let winner = tokio::select! {
+      Ok(_) = proxy_listener.accept() => "proxy",
+      Ok(_) = target_listener.accept() => "target",
+      _ = &mut send => "send-without-accept",
+      _ = tokio::time::sleep(PROBE_ACCEPT_RACE_TIMEOUT) => "timeout",
+    };
+    std::fs::write(&out_path, winner).expect("write probe result");
+  }
+
+  /// Spawn the probe subprocess for `mode` and return which listener won the accept race.
+  fn run_proxy_probe(mode: &str) -> String {
+    let exe = std::env::current_exe().expect("test exe path");
+    let out_dir = tempfile::TempDir::new().expect("probe temp dir");
+    let out_path = out_dir.path().join("probe-result.txt");
+    // libtest test names omit the crate name; strip it from module_path!() so --exact matches.
+    let module = module_path!();
+    let path = module.split_once("::").map(|(_, rest)| rest).unwrap_or(module);
+    let filter = format!("{path}::bounded_http_proxy_probe_entry");
+    let output = std::process::Command::new(exe)
+      .args(["--exact", &filter])
+      .env(PROBE_MODE_ENV, mode)
+      .env(PROBE_OUT_ENV, &out_path)
+      .output()
+      .unwrap_or_else(|err| panic!("failed to spawn probe subprocess for {mode}: {err}"));
+    let winner = std::fs::read_to_string(&out_path).unwrap_or_else(|_| {
+      panic!(
+        "probe subprocess for {mode} did not write a result (filter={filter} status={:?})\nstdout: {}\nstderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+      )
+    });
+    assert!(
+      output.status.success(),
+      "probe subprocess for {mode} failed: {:?}\nstderr: {}",
+      output.status,
+      String::from_utf8_lossy(&output.stderr)
+    );
+    drop(out_dir);
+    winner
+  }
+
+  #[test]
+  fn bounded_http_public_client_ignores_system_proxy() {
+    let winner = run_proxy_probe("public-ignores-proxy");
+    assert_eq!(
+      winner, "target",
+      "public client must connect directly (no system proxy)"
+    );
+  }
+
+  #[test]
+  fn bounded_http_public_stream_client_ignores_system_proxy() {
+    let winner = run_proxy_probe("public-stream-ignores-proxy");
+    assert_eq!(
+      winner, "target",
+      "public stream client must connect directly (no system proxy)"
+    );
+  }
+
+  #[test]
+  fn bounded_http_configured_inherit_client_respects_system_proxy() {
+    let winner = run_proxy_probe("inherit-respects-proxy");
+    assert_eq!(winner, "proxy", "configured inherit client must honor the system proxy");
+  }
+
+  #[test]
+  fn bounded_http_configured_inherit_stream_client_respects_system_proxy() {
+    let winner = run_proxy_probe("inherit-stream-respects-proxy");
+    assert_eq!(
+      winner, "proxy",
+      "configured inherit stream client must honor the system proxy"
+    );
   }
 }

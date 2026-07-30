@@ -1,0 +1,88 @@
+{
+  "manifestVersion": 1,
+  "pluginApiVersion": "1.0",
+  "id": "com.langnext.google-translate-web",
+  "version": "1.1.0",
+  "publisher": {
+    "keyId": "com.langnext.vendor.keys.1",
+    "keyFingerprint": "506ef1879d748ce0713b0dd01da32ad2a4b1ce97b5a852ff18800c1e52982376"
+  },
+  "runtime": {
+    "kind": "wasm-component",
+    "artifact": "translate/fixtures/langnext-google-translate-web-translate.wasm"
+  },
+  "targets": [],
+  "files": [
+    {
+      "path": "translate/fixtures/langnext-google-translate-web-translate.wasm",
+      "role": "runtime-artifact",
+      "bytes": 52357,
+      "sha256": "02d6f86b58f62601f754d701763506a0b91b5d6ea3a7b22d6a4ccc86f30a3bef"
+    },
+    {
+      "path": "detect/fixtures/langnext-google-translate-web-detect.wasm",
+      "role": "runtime-artifact",
+      "bytes": 31687,
+      "sha256": "e822e5466447c157fd2d3a72d784f8c76b30b94a85a4a96ccca75c79016c23d1"
+    },
+    {
+      "path": "schemas/config-proxy.json",
+      "role": "config-schema",
+      "bytes": 952,
+      "sha256": "ecab63e07e41ffd580461ea9a905423dabbed9e5fa77b082278c481026612dac"
+    },
+    {
+      "path": "schemas/translate-preferences.json",
+      "role": "preference-schema",
+      "bytes": 51,
+      "sha256": "acceefffbdd72d4528e667e154fd32cb3a02de4a25483980c6221c775b77a914"
+    },
+    {
+      "path": "locales/en.json",
+      "role": "locale",
+      "bytes": 147,
+      "sha256": "773de98ead164a285ffd738c9605d8f92084f7ab1dfdae732e30e7fc2d348c89"
+    },
+    {
+      "path": "locales/zh-CN.json",
+      "role": "locale",
+      "bytes": 133,
+      "sha256": "0cccb6479e21a1f17b96ce1ad649375c91b7a2e3781396a89a5fe64f3dcdcbe8"
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "translate.text@1",
+      "preferencesSchema": "schemas/translate-preferences.json",
+      "artifact": "translate/fixtures/langnext-google-translate-web-translate.wasm"
+    },
+    {
+      "id": "translate.detect@1",
+      "preferencesSchema": "schemas/translate-preferences.json",
+      "artifact": "detect/fixtures/langnext-google-translate-web-detect.wasm"
+    }
+  ],
+  "configurationSchema": "schemas/config-proxy.json",
+  "configSchemaVersion": 1,
+  "credentialSlots": [],
+  "permissions": {
+    "network": [
+      {
+        "id": "gtx",
+        "origins": ["https://translate.google.com"],
+        "methods": ["GET"]
+      },
+      {
+        "id": "https-proxy",
+        "origins": [],
+        "methods": ["POST"],
+        "instanceOriginConfigField": "proxy-url"
+      }
+    ],
+    "authPolicies": ["host.none.v1"]
+  },
+  "ui": {
+    "mode": "schema",
+    "pages": []
+  }
+}

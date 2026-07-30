@@ -6,6 +6,7 @@ import {
   formatPermissionDifference,
   formatPublisherIdentity,
   formatRuntimeIdentity,
+  hasThirdPartyEgressChange,
   isRuntimeUnresolved,
   upgradeApprovalDetailsReady,
   upgradeRequiresAcknowledgement,
@@ -133,5 +134,29 @@ describe("runtimeLifecyclePresentation", () => {
         permissionDifferences: [],
       }),
     ).toBe(false);
+  });
+
+  test("hasThirdPartyEgressChange flags non-GTX proxy origin additions only", () => {
+    const gtx = basePreview({
+      requiresPermissionApproval: true,
+      permissionDifferences: [
+        { kind: "network_endpoint_added", summary: "gtx", origin: "https://translate.google.com" },
+      ],
+    });
+    expect(hasThirdPartyEgressChange(gtx)).toBe(false);
+
+    const proxy = basePreview({
+      requiresPermissionApproval: true,
+      permissionDifferences: [{ kind: "network_endpoint_added", summary: "proxy", origin: "https://proxy-a.example" }],
+    });
+    expect(hasThirdPartyEgressChange(proxy)).toBe(true);
+
+    const removedOnly = basePreview({
+      requiresPermissionApproval: true,
+      permissionDifferences: [
+        { kind: "network_endpoint_removed", summary: "old proxy", origin: "https://proxy-a.example" },
+      ],
+    });
+    expect(hasThirdPartyEgressChange(removedOnly)).toBe(false);
   });
 });

@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "fields": [
+    {
+      "id": "channel",
+      "control": {
+        "kind": "enum",
+        "spec": {
+          "source": {
+            "type": "fixed",
+            "options": [
+              {
+                "value": "gtx",
+                "labelFallback": "GTX"
+              }
+            ]
+          },
+          "default": "gtx"
+        }
+      },
+      "labelFallback": "Channel",
+      "requiredForReady": true
+    }
+  ],
+  "groups": []
+}

@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "fields": [
+    {
+      "id": "channel",
+      "control": {
+        "kind": "enum",
+        "spec": {
+          "source": {
+            "type": "fixed",
+            "options": [
+              {
+                "value": "gtx",
+                "labelFallback": "GTX"
+              },
+              {
+                "value": "https_proxy",
+                "labelFallback": "HTTPS Proxy"
+              }
+            ]
+          },
+          "default": "gtx"
+        }
+      },
+      "labelFallback": "Channel",
+      "requiredForReady": true
+    },
+    {
+      "id": "proxy-url",
+      "control": {
+        "kind": "string",
+        "spec": {
+          "maxLength": 512,
+          "default": "https://googlet.deno.dev/translate"
+        }
+      },
+      "labelFallback": "Proxy URL",
+      "requiredForReady": true,
+      "visibleWhen": {
+        "field": "channel",
+        "equals": "https_proxy"
+      }
+    }
+  ],
+  "groups": []
+}

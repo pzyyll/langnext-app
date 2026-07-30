@@ -187,6 +187,10 @@ pub struct ServiceCapabilityService {
   /// Authoritative adapter selection. Always set in production; tests may use `with_router`.
   router: Option<RuntimeRouter>,
   wasm_runtime: Option<Arc<WasmRuntime>>,
+  /// Factory for Wasm guest broker handles. Production wires `NetworkBrokerHandle` over the
+  /// bounded HTTP transport; defaults to `DeniedBroker` so legacy tests that never call the
+  /// broker are unaffected. Phase 5 google-web Wasm execution requires a real transport.
+  broker_factory: Arc<dyn Fn() -> Box<dyn BrokerHandle> + Send + Sync>,
 }
 
 impl ServiceCapabilityService {
@@ -201,6 +205,7 @@ impl ServiceCapabilityService {
       handlers,
       router: None,
       wasm_runtime: None,
+      broker_factory: Arc::new(|| Box::new(DeniedBroker) as Box<dyn BrokerHandle>),
     }
   }
 
@@ -208,6 +213,14 @@ impl ServiceCapabilityService {
   pub fn with_router(mut self, router: RuntimeRouter, wasm_runtime: Arc<WasmRuntime>) -> Self {
     self.router = Some(router);
     self.wasm_runtime = Some(wasm_runtime);
+    self
+  }
+
+  /// Attach the Wasm guest broker handle factory (Phase 5 production wiring). Without this,
+  /// Wasm guests that call `host.broker-fetch` are denied; google-web Wasm execution requires a
+  /// transport-backed handle.
+  pub fn with_broker_factory(mut self, factory: Arc<dyn Fn() -> Box<dyn BrokerHandle> + Send + Sync>) -> Self {
+    self.broker_factory = factory;
     self
   }
 
@@ -291,6 +304,8 @@ impl ServiceCapabilityService {
       || a.package_manifest_json != b.package_manifest_json
       || a.publisher_key_id != b.publisher_key_id
       || a.publisher_fingerprint != b.publisher_fingerprint
+      || a.publisher_public_key_hex != b.publisher_public_key_hex
+      || a.publisher_source != b.publisher_source
       || a.publisher_enabled != b.publisher_enabled
       || a.publisher_revoked != b.publisher_revoked
     {
@@ -366,7 +381,7 @@ impl ServiceCapabilityService {
           snapshot.capability_id.clone(),
           snapshot.config_json.clone(),
           preferences,
-          Arc::new(|| Box::new(DeniedBroker) as Box<dyn BrokerHandle>),
+          self.broker_factory.clone(),
         )))
       }
     }
@@ -416,7 +431,7 @@ impl ServiceCapabilityService {
             capability_id.to_string(),
             config_json,
             preferences,
-            Arc::new(|| Box::new(DeniedBroker) as Box<dyn BrokerHandle>),
+            self.broker_factory.clone(),
           );
           Ok(Arc::new(adapter))
         }
@@ -514,7 +529,7 @@ impl ServiceCapabilityService {
           snapshot.capability_id.clone(),
           snapshot.config_json.clone(),
           preferences,
-          Arc::new(|| Box::new(DeniedBroker) as Box<dyn BrokerHandle>),
+          self.broker_factory.clone(),
         )))
       }
     }
@@ -564,7 +579,7 @@ impl ServiceCapabilityService {
             capability_id.to_string(),
             config_json,
             preferences,
-            Arc::new(|| Box::new(DeniedBroker) as Box<dyn BrokerHandle>),
+            self.broker_factory.clone(),
           );
           Ok(Arc::new(adapter))
         }
@@ -880,6 +895,8 @@ fn load_profile_invocation_snapshot_conn(
   let mut package_plugin_version = None;
   let mut publisher_key_id = None;
   let mut publisher_fingerprint = None;
+  let mut publisher_public_key_hex = None;
+  let mut publisher_source = None;
   let mut publisher_enabled = false;
   let mut publisher_revoked = true;
   let mut grant_bundle: Option<ExecutionGrantSetBundle> = None;
@@ -920,6 +937,8 @@ fn load_profile_invocation_snapshot_conn(
       ));
     }
     publisher_fingerprint = Some(publisher.fingerprint);
+    publisher_public_key_hex = Some(publisher.public_key_hex);
+    publisher_source = Some(publisher.source);
     publisher_enabled = publisher.enabled;
     publisher_revoked = publisher.revoked;
     if publisher.revoked || !publisher.enabled {
@@ -949,6 +968,7 @@ fn load_profile_invocation_snapshot_conn(
     runtime_kind: instance.runtime_kind.clone(),
     runtime_state: instance.runtime_state.clone(),
     instance_updated_at: instance.updated_at.clone(),
+    instance_config_json: instance.config_json.clone(),
     package_digest: instance.package_digest.clone(),
     execution_grant_set_revision: instance.execution_grant_set_revision,
     package_manifest_json,
@@ -958,6 +978,8 @@ fn load_profile_invocation_snapshot_conn(
     package_plugin_version,
     publisher_key_id,
     publisher_fingerprint,
+    publisher_public_key_hex,
+    publisher_source,
     publisher_enabled,
     publisher_revoked,
     grant_bundle,

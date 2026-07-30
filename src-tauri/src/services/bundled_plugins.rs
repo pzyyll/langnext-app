@@ -192,6 +192,57 @@ impl BundledPluginRegistration {
   }
 }
 
+/// Test-only manifest-only registration for synthetic plugins (e.g. `langnext.conformance`) so
+/// lifecycle tests can exercise bundled->Wasm upgrades with a registry-backed source identity
+/// without constructing full production adapters. All non-manifest fields are inert dummies;
+/// the empty v1 schema validates and the config adapter agrees with it. Never use outside tests.
+#[cfg(test)]
+pub fn test_manifest_registration(manifest: ServiceIntegrationManifest) -> BundledPluginRegistration {
+  /// Inert config adapter returning a minimal valid empty v1 schema; never normalizes or resolves.
+  struct DummyTestConfigAdapter;
+  impl PluginConfigAdapter for DummyTestConfigAdapter {
+    fn config_schema(&self) -> &PluginSchemaV1 {
+      static SCHEMA: std::sync::OnceLock<PluginSchemaV1> = std::sync::OnceLock::new();
+      SCHEMA.get_or_init(|| PluginSchemaV1 {
+        version: 1,
+        fields: Vec::new(),
+        groups: Vec::new(),
+      })
+    }
+    fn normalize_config(&self, config_json: &str) -> Result<String, StorageError> {
+      Ok(config_json.into())
+    }
+    fn config_ready(&self, _config_json: &str) -> bool {
+      true
+    }
+    fn proxy_mode(&self, _config_json: &str) -> ProxyMode {
+      ProxyMode::Direct
+    }
+    fn instance_endpoint_origin(&self, _config_json: &str, _alias: &str) -> Result<Option<String>, StorageError> {
+      Ok(None)
+    }
+  }
+  BundledPluginRegistration {
+    manifest,
+    config_schema: PluginSchemaV1 {
+      version: 1,
+      fields: Vec::new(),
+      groups: Vec::new(),
+    },
+    config_adapter: Arc::new(DummyTestConfigAdapter),
+    credential_validators: HashMap::new(),
+    capabilities: Vec::new(),
+    endpoint_policy: EndpointPolicy::default(),
+    auth_policy: None,
+    presentation: PluginPresentation {
+      display_name_key: String::new(),
+      display_name_fallback: String::new(),
+      icon: None,
+    },
+    handler_factory: Arc::new(|_deps: &HandlerDeps, _capability_id: &str| Option::<CapabilityHandler>::None),
+  }
+}
+
 /// Build the deterministic production registration list for all bundled plugins.
 pub fn bundled() -> Result<Vec<BundledPluginRegistration>, StorageError> {
   let mut registrations = Vec::new();

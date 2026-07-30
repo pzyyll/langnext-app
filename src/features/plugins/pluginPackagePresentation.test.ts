@@ -5,8 +5,10 @@ import {
   formatPackageDigestShort,
   isPackageExecutionEnabled,
   isUninstallDisabled,
+  publisherApprovalKeyHex,
   publisherTrustLabelKey,
   requiresPublisherApproval,
+  shouldShowManualPublisherKeyInput,
   summarizeNetworkPermissions,
 } from "./pluginPackagePresentation";
 
@@ -47,5 +49,22 @@ describe("pluginPackagePresentation", () => {
 
   test("package execution remains disabled in Phase 3", () => {
     expect(isPackageExecutionEnabled({ runtimeKind: "wasm-component" })).toBe(false);
+  });
+
+  test("publisherApprovalKeyHex forwards the resolved publisher.pub key as-is", () => {
+    const resolved = { resolvedPublisherPublicKeyHex: "ab".repeat(32) };
+    expect(publisherApprovalKeyHex(resolved, "ignored manual input")).toBe("ab".repeat(32));
+  });
+
+  test("publisherApprovalKeyHex falls back to trimmed manual input when no resolved key", () => {
+    const noResolved = { resolvedPublisherPublicKeyHex: null };
+    expect(publisherApprovalKeyHex(noResolved, "  deadbeef  ")).toBe("deadbeef");
+    expect(publisherApprovalKeyHex(noResolved, "")).toBe("");
+  });
+
+  test("shouldShowManualPublisherKeyInput hides input when publisher.pub is resolved", () => {
+    expect(shouldShowManualPublisherKeyInput({ resolvedPublisherPublicKeyHex: "ab".repeat(32) })).toBe(false);
+    expect(shouldShowManualPublisherKeyInput({ resolvedPublisherPublicKeyHex: null })).toBe(true);
+    expect(shouldShowManualPublisherKeyInput({ resolvedPublisherPublicKeyHex: undefined })).toBe(true);
   });
 });

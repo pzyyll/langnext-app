@@ -331,6 +331,10 @@ pub const LOG_ALLOWED_FIELD_NAMES: &[&str] = &["capability", "request_id", "atte
 
 /// Maximum header count per broker request (defense-in-depth against header flooding).
 pub const BROKER_MAX_HEADERS: usize = 32;
+/// Maximum query pairs accepted in a broker relative-path `?query` suffix.
+pub const BROKER_QUERY_MAX_PAIRS: usize = 32;
+/// Maximum UTF-8 bytes per query key in a broker relative-path `?query` suffix.
+pub const BROKER_QUERY_KEY_MAX_BYTES: usize = 128;
 /// Maximum UTF-8 bytes per broker request header name.
 pub const BROKER_MAX_HEADER_NAME_BYTES: usize = 128;
 /// Maximum UTF-8 bytes per broker request header value.
@@ -342,9 +346,11 @@ pub const BROKER_BLOCKED_REQUEST_HEADER_NAMES: &[&str] =
 /// Stable guest-visible label for Phase 2 unsupported blob/stream broker response bodies.
 pub const BROKER_UNSUPPORTED_BLOB_STREAM_MESSAGE: &str = "unsupported";
 
-/// Validate a broker `relative_path` as a confined relative path. Rejects empty values, absolute
-/// URLs/schemes, authority prefixes (`//`), backslashes, `.`/`..` segments, query, fragment, and
-/// control characters. This is the host authorize chokepoint for path confinement.
+/// Validate a broker `relative_path` as a confined relative path with an optional query
+/// suffix (`path?k=v&k=v`). Rejects empty values, absolute URLs/schemes, authority prefixes
+/// (`//`), backslashes, `.`/`..` segments, fragments, control characters, and credential-like
+/// query keys. The query suffix is the only way for a guest to convey GTX query pairs (the
+/// v1 `broker-request` record has no query field); values must already be percent-encoded.
 pub(crate) fn validate_broker_relative_path(path: &str) -> Result<(), BrokerFetchError> {
   if path.is_empty() {
     return Err(BrokerFetchError::PathConfined);
@@ -353,6 +359,24 @@ pub(crate) fn validate_broker_relative_path(path: &str) -> Result<(), BrokerFetc
     return Err(BrokerFetchError::PathConfined);
   }
   if path.chars().any(|c| c.is_control()) {
+    return Err(BrokerFetchError::PathConfined);
+  }
+  // Split an optional `?query` suffix once; the path part stays confined, the query is validated
+  // separately. Fragments (`#`) remain rejected in both parts.
+  let (path_part, query_part) = match path.split_once('?') {
+    Some((p, q)) => (p, Some(q)),
+    None => (path, None),
+  };
+  validate_path_part(path_part)?;
+  if let Some(query) = query_part {
+    validate_query_part(query)?;
+  }
+  Ok(())
+}
+
+/// Validate the path portion (before any `?`): relative, no scheme/authority/traversal/fragment.
+fn validate_path_part(path: &str) -> Result<(), BrokerFetchError> {
+  if path.is_empty() {
     return Err(BrokerFetchError::PathConfined);
   }
   if path.starts_with('/') || path.starts_with('\\') {
@@ -367,10 +391,9 @@ pub(crate) fn validate_broker_relative_path(path: &str) -> Result<(), BrokerFetc
   if path.contains("://") {
     return Err(BrokerFetchError::PathConfined);
   }
-  if path.contains('?') || path.contains('#') {
+  if path.contains('#') {
     return Err(BrokerFetchError::PathConfined);
   }
-  // Reject absolute-looking schemes without `://` (e.g. `https:evil`) and Windows drive paths.
   if path.contains(':') {
     return Err(BrokerFetchError::PathConfined);
   }
@@ -380,6 +403,59 @@ pub(crate) fn validate_broker_relative_path(path: &str) -> Result<(), BrokerFetc
     }
   }
   Ok(())
+}
+
+/// Validate a query suffix (`k=v&k=v`): bounded pairs, no fragments/controls, no
+/// credential-like keys. Values are already percent-encoded by the guest and are not re-encoded.
+fn validate_query_part(query: &str) -> Result<(), BrokerFetchError> {
+  if query.is_empty() {
+    return Ok(());
+  }
+  if query.contains('#') || query.chars().any(|c| c.is_control()) {
+    return Err(BrokerFetchError::PathConfined);
+  }
+  if query.matches('&').count() >= BROKER_QUERY_MAX_PAIRS {
+    return Err(BrokerFetchError::LimitExceeded);
+  }
+  for pair in query.split('&') {
+    if pair.is_empty() {
+      return Err(BrokerFetchError::PathConfined);
+    }
+    let key = match pair.split_once('=') {
+      Some((k, _)) => k,
+      None => pair,
+    };
+    if key.is_empty() || key.len() > BROKER_QUERY_KEY_MAX_BYTES {
+      return Err(BrokerFetchError::PathConfined);
+    }
+    if credential_like_query_key(key) {
+      return Err(BrokerFetchError::HeaderBlocked);
+    }
+  }
+  Ok(())
+}
+
+/// True when a query key looks like it carries credentials (mirrors the broker's secret-key heuristic).
+fn credential_like_query_key(name: &str) -> bool {
+  let lower = name.to_ascii_lowercase();
+  matches!(
+    lower.as_str(),
+    "api_key"
+      | "apikey"
+      | "access_token"
+      | "token"
+      | "authorization"
+      | "auth"
+      | "key"
+      | "secret"
+      | "password"
+      | "passwd"
+      | "credential"
+      | "credentials"
+  ) || lower.contains("token")
+    || lower.contains("secret")
+    || lower.contains("password")
+    || lower.contains("auth")
 }
 
 /// Validate broker request headers: count/size bounds, no control characters in name/value, and
@@ -490,11 +566,14 @@ mod tests {
     assert!(validate_broker_relative_path("v1/test").is_ok());
     assert!(validate_broker_relative_path("models").is_ok());
     assert!(validate_broker_relative_path("a/b/c.json").is_ok());
+    // Query suffix is accepted for endpoints like GTX that require query pairs.
+    assert!(validate_broker_relative_path("translate_a/single?client=gtx&sl=auto&tl=en&q=Hi").is_ok());
+    assert!(validate_broker_relative_path("translate_a/single?").is_ok());
   }
 
   #[test]
   fn relative_path_rejects_absolute_url_traversal_and_controls() {
-    let rejected = [
+    let path_confined = [
       "",
       "/abs",
       "//evil",
@@ -507,15 +586,25 @@ mod tests {
       "a/../b",
       "a/./b",
       "a//b",
-      "a?q=1",
       "a#frag",
       " a",
       "a\0b",
+      "a?b#c",
     ];
-    for path in rejected {
+    for path in path_confined {
       assert!(
         matches!(validate_broker_relative_path(path), Err(BrokerFetchError::PathConfined)),
         "path {path:?} must be PathConfined"
+      );
+    }
+    // Credential-like query keys are rejected as HeaderBlocked (not PathConfined).
+    for path in ["a?api_key=secret", "a?token=x", "a?secret=y"] {
+      assert!(
+        matches!(
+          validate_broker_relative_path(path),
+          Err(BrokerFetchError::HeaderBlocked)
+        ),
+        "path {path:?} must be HeaderBlocked"
       );
     }
   }

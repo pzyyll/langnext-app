@@ -16,14 +16,14 @@ use crate::repositories::{
 };
 use crate::services::plugin_package::{
   PackageVerifyError, VerifiedPackage, hash_file, inspect_package_bytes, public_key_fingerprint, read_file_bounded,
-  set_readonly, verify_package_bytes, verify_store_content, write_extracted_content,
+  set_readonly, verify_extracted_content_snapshot, verify_package_bytes, verify_store_content, write_extracted_content,
 };
 use crate::services::vendor_trust::{self, VendorPublicKey, cargo_resources_root};
 use crate::storage::Database;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -43,6 +43,7 @@ pub enum InstallFaultPoint {
   AfterDbCommitBeforeRename,
   AfterRenameBeforePostVerify,
   AfterPostVerifyBeforeFinalize,
+  FinalizationDbWrite,
 }
 
 struct PreviewSession {
@@ -54,6 +55,17 @@ struct PreviewSession {
   requires_publisher_approval: bool,
   expires_at_unix: u64,
   created_at: String,
+}
+
+/// Bumps the store generation when a fallible filesystem operation may have changed the store.
+struct StoreMutationGuard<'a> {
+  service: &'a PluginPackageService,
+}
+
+impl Drop for StoreMutationGuard<'_> {
+  fn drop(&mut self) {
+    self.service.bump_store_generation();
+  }
 }
 
 /// Handle for the background staging TTL sweep thread (stoppable).
@@ -85,6 +97,11 @@ pub struct PluginPackageService {
   previews: Arc<Mutex<HashMap<Uuid, PreviewSession>>>,
   /// Production or injected vendor public keys (never private keys).
   vendor_roots: Arc<Vec<VendorPublicKey>>,
+  /// Host-owned exclusive lock for package-store filesystem mutations and critical
+  /// re-verify→commit windows. Shared by install, uninstall, recover, and auto-pin.
+  store_lock: Arc<Mutex<()>>,
+  /// Monotonic generation bumped after every successful store FS mutation under [`Self::store_lock`].
+  store_generation: Arc<AtomicU64>,
   #[cfg(test)]
   install_fault: Arc<Mutex<Option<InstallFaultPoint>>>,
   #[cfg(test)]
@@ -92,6 +109,15 @@ pub struct PluginPackageService {
   /// When true, catalog delete fails after quarantine so restore is exercised.
   #[cfg(test)]
   catalog_delete_fault: Arc<Mutex<bool>>,
+  /// One-shot fault for quarantine deletion during recovery.
+  #[cfg(test)]
+  quarantine_delete_fault: Arc<Mutex<bool>>,
+  /// One-shot fault for a recovery transaction after its filesystem mutation.
+  #[cfg(test)]
+  recovery_db_fault: Arc<Mutex<bool>>,
+  /// One-shot hook after archive verification and before extracted-content comparison.
+  #[cfg(test)]
+  runtime_snapshot_after_archive_read: Arc<Mutex<Option<Box<dyn FnOnce() + Send>>>>,
 }
 
 /// Test-only fault points for uninstall restore/rehash paths.
@@ -103,6 +129,52 @@ pub enum UninstallRestoreFault {
   AfterRehashBeforeAvailability,
   MarkFailedWrite,
   AvailabilityWrite,
+}
+
+/// Verified identity of a bundled vendor-signed package imported by
+/// [`PluginPackageService::bootstrap_bundled_package`]. Every field comes from full Ed25519
+/// package signature/index/artifact verification of the exact retained archive against a
+/// configured external vendor root (never from structural inspection, catalog rows, or caller-
+/// supplied identity). Fields are private so only archive re-verification can construct this
+/// type; callers cannot forge identity fields. Bootstrap binds the catalog default to the exact
+/// `package_digest` here (never an id+version lookup that could match a user-approved package
+/// with the same id/version), and [`PluginPackageService::set_vendor_bootstrap_default`] re-
+/// verifies the exact digest with the external vendor root and reverse-binds the trusted vendor
+/// publisher row in a single transaction.
+#[derive(Debug, Clone)]
+pub struct VerifiedVendorImport {
+  package_digest: String,
+  plugin_id: String,
+  version: String,
+  publisher_key_id: String,
+  publisher_fingerprint: String,
+  publisher_public_key_hex: String,
+}
+
+impl VerifiedVendorImport {
+  pub fn package_digest(&self) -> &str {
+    &self.package_digest
+  }
+
+  pub fn plugin_id(&self) -> &str {
+    &self.plugin_id
+  }
+
+  pub fn version(&self) -> &str {
+    &self.version
+  }
+
+  pub fn publisher_key_id(&self) -> &str {
+    &self.publisher_key_id
+  }
+
+  pub fn publisher_fingerprint(&self) -> &str {
+    &self.publisher_fingerprint
+  }
+
+  pub fn publisher_public_key_hex(&self) -> &str {
+    &self.publisher_public_key_hex
+  }
 }
 
 impl PluginPackageService {
@@ -122,12 +194,20 @@ impl PluginPackageService {
       app_data_dir,
       previews: Arc::new(Mutex::new(HashMap::new())),
       vendor_roots: Arc::new(vendor_roots),
+      store_lock: Arc::new(Mutex::new(())),
+      store_generation: Arc::new(AtomicU64::new(0)),
       #[cfg(test)]
       install_fault: Arc::new(Mutex::new(None)),
       #[cfg(test)]
       restore_fault: Arc::new(Mutex::new(None)),
       #[cfg(test)]
       catalog_delete_fault: Arc::new(Mutex::new(false)),
+      #[cfg(test)]
+      quarantine_delete_fault: Arc::new(Mutex::new(false)),
+      #[cfg(test)]
+      recovery_db_fault: Arc::new(Mutex::new(false)),
+      #[cfg(test)]
+      runtime_snapshot_after_archive_read: Arc::new(Mutex::new(None)),
     };
     if let Err(err) = service.seed_vendor_publishers() {
       log::error!("vendor_publisher_seed_failed error={err}");
@@ -165,6 +245,199 @@ impl PluginPackageService {
     self.store_package_dir(package_digest).join("content")
   }
 
+  /// Configured external vendor trust roots (public keys only). Never DB publisher rows.
+  pub fn vendor_roots(&self) -> &[VendorPublicKey] {
+    &self.vendor_roots
+  }
+
+  /// Acquire the host-owned package-store mutation/read generation lock.
+  ///
+  /// Hold across final store re-validation → DB grant/pin commit so archive/content cannot be
+  /// replaced by coordinated install/uninstall/recover mutations. Always acquire this lock
+  /// **before** opening a DB transaction when both are needed (store → DB order) to avoid deadlock.
+  /// Callers that mutate store files must [`Self::bump_store_generation`] before release.
+  pub(crate) fn lock_store(&self) -> Result<MutexGuard<'_, ()>, StorageError> {
+    self
+      .store_lock
+      .lock()
+      .map_err(|_| StorageError::Internal("package store generation lock poisoned".into()))
+  }
+
+  /// Current package-store generation. Reverse-bind this across final re-verify → commit.
+  pub(crate) fn store_generation(&self) -> u64 {
+    self.store_generation.load(Ordering::SeqCst)
+  }
+
+  /// Bump generation after a store filesystem mutation or possible partial mutation while holding [`Self::lock_store`].
+  pub(crate) fn bump_store_generation(&self) {
+    self.store_generation.fetch_add(1, Ordering::SeqCst);
+  }
+
+  /// Enter a fallible filesystem region that can mutate the store before it reports an error.
+  fn store_mutation_guard(&self) -> StoreMutationGuard<'_> {
+    StoreMutationGuard { service: self }
+  }
+
+  /// Select a configured vendor root by publisher key id and optional fingerprint.
+  ///
+  /// This is the only auto-pin / bootstrap trust source. DB `plugin_publishers.public_key_hex` is
+  /// never used as a signature root. Missing or fingerprint-mismatched roots fail closed.
+  pub fn resolve_vendor_root(
+    &self,
+    key_id: &str,
+    key_fingerprint: Option<&str>,
+  ) -> Result<VendorPublicKey, StorageError> {
+    let root = self
+      .vendor_roots
+      .iter()
+      .find(|root| root.key_id == key_id)
+      .cloned()
+      .ok_or_else(|| StorageError::NotFound(format!("publisher key id {key_id} is not a configured vendor root")))?;
+    if let Some(expected_fp) = key_fingerprint {
+      let root_fp = public_key_fingerprint(&root.public_key_hex).map_err(StorageError::from)?;
+      if root_fp != expected_fp {
+        return Err(StorageError::Validation(format!(
+          "vendor root fingerprint mismatch for key id {key_id}"
+        )));
+      }
+    }
+    Ok(root)
+  }
+
+  /// Resolve the external vendor root for a retained store digest from the archive's declared
+  /// publisher key id/fingerprint (structural inspect only selects the root; crypto verification
+  /// always uses the resolved root's public key).
+  pub fn resolve_vendor_root_for_digest(&self, package_digest: &str) -> Result<VendorPublicKey, StorageError> {
+    let archive_path = self.package_archive_path(package_digest);
+    let archive_bytes = read_file_bounded(&archive_path, PACKAGE_ARCHIVE_MAX_BYTES).map_err(StorageError::from)?;
+    let inspected = inspect_package_bytes(&archive_bytes).map_err(StorageError::from)?;
+    self.resolve_vendor_root(
+      &inspected.manifest.publisher.key_id,
+      Some(inspected.manifest.publisher.key_fingerprint.as_str()),
+    )
+  }
+
+  /// Full Ed25519 + file-index + content verification of a retained store package using only a
+  /// configured external vendor root. Returns the verified snapshot and the root that signed it.
+  ///
+  /// The archive is opened once and parsed from those exact in-memory bytes. The returned
+  /// [`VerifiedPackage`] owns the extracted immutable bytes used by runtime loading; content-tree
+  /// paths are comparison-only and are never reopened to obtain executable bytes. DB
+  /// publisher/version/manifest rows are never used as trust material.
+  pub fn verify_store_with_vendor_root(
+    &self,
+    package_digest: &str,
+  ) -> Result<(VerifiedPackage, VendorPublicKey), StorageError> {
+    let archive_bytes = read_file_bounded(&self.package_archive_path(package_digest), PACKAGE_ARCHIVE_MAX_BYTES)
+      .map_err(StorageError::from)?;
+    let inspected = inspect_package_bytes(&archive_bytes).map_err(StorageError::from)?;
+    let vendor_root = self.resolve_vendor_root(
+      &inspected.manifest.publisher.key_id,
+      Some(inspected.manifest.publisher.key_fingerprint.as_str()),
+    )?;
+    let verified =
+      self.verify_store_snapshot_from_archive_bytes(package_digest, &archive_bytes, &vendor_root.public_key_hex)?;
+    if verified.manifest.publisher.key_id != vendor_root.key_id
+      || verified.publisher_public_key_hex != vendor_root.public_key_hex
+    {
+      return Err(StorageError::Validation(
+        "verified publisher identity does not reverse-bind the external vendor root".into(),
+      ));
+    }
+    let root_fp = public_key_fingerprint(&vendor_root.public_key_hex).map_err(StorageError::from)?;
+    if verified.publisher_fingerprint != root_fp || verified.manifest.publisher.key_fingerprint != root_fp {
+      return Err(StorageError::Validation(
+        "verified publisher fingerprint does not reverse-bind the external vendor root".into(),
+      ));
+    }
+    Ok((verified, vendor_root))
+  }
+
+  /// Build an immutable, fully verified runtime snapshot for the catalog's trusted publisher.
+  ///
+  /// Vendor packages must verify against a configured external root. User-approved packages use
+  /// their explicitly approved key, but still execute only artifact bytes parsed from the one
+  /// verified archive snapshot rather than any later path reopen.
+  pub fn verify_runtime_store_snapshot(
+    &self,
+    package_digest: &str,
+    expected_key_id: &str,
+    expected_fingerprint: &str,
+    expected_public_key_hex: &str,
+    publisher_source: PublisherSource,
+  ) -> Result<VerifiedPackage, StorageError> {
+    let verified = match publisher_source {
+      PublisherSource::Vendor => {
+        let (verified, vendor_root) = self.verify_store_with_vendor_root(package_digest)?;
+        if vendor_root.key_id != expected_key_id || vendor_root.public_key_hex != expected_public_key_hex {
+          return Err(StorageError::Validation(
+            "catalog vendor publisher does not match configured external root".into(),
+          ));
+        }
+        verified
+      }
+      PublisherSource::UserApproved => {
+        let archive_bytes = read_file_bounded(&self.package_archive_path(package_digest), PACKAGE_ARCHIVE_MAX_BYTES)
+          .map_err(StorageError::from)?;
+        self.verify_store_snapshot_from_archive_bytes(package_digest, &archive_bytes, expected_public_key_hex)?
+      }
+    };
+    if verified.manifest.publisher.key_id != expected_key_id
+      || verified.manifest.publisher.key_fingerprint != expected_fingerprint
+      || verified.publisher_public_key_hex != expected_public_key_hex
+      || verified.publisher_fingerprint != expected_fingerprint
+    {
+      return Err(StorageError::Validation(
+        "runtime package publisher does not match the trusted catalog identity".into(),
+      ));
+    }
+    Ok(verified)
+  }
+
+  /// Verify archive bytes and compare the store tree to that same immutable archive snapshot.
+  fn verify_store_snapshot_from_archive_bytes(
+    &self,
+    package_digest: &str,
+    archive_bytes: &[u8],
+    public_key_hex: &str,
+  ) -> Result<VerifiedPackage, StorageError> {
+    let verified = verify_package_bytes(archive_bytes, public_key_hex).map_err(StorageError::from)?;
+    if verified.package_digest != package_digest {
+      return Err(StorageError::Validation(
+        "verified package digest does not match store key".into(),
+      ));
+    }
+    #[cfg(test)]
+    if let Some(hook) = self.take_runtime_snapshot_after_archive_read_hook() {
+      hook();
+    }
+    verify_extracted_content_snapshot(&verified, &self.package_content_path(package_digest))
+      .map_err(StorageError::from)?;
+    self.recheck_archive_snapshot_identity(package_digest, archive_bytes, public_key_hex)?;
+    Ok(verified)
+  }
+
+  /// Re-read the archive only to ensure its on-disk identity still matches the verified snapshot.
+  /// This comparison never supplies runtime bytes; execution remains bound to `archive_bytes`.
+  fn recheck_archive_snapshot_identity(
+    &self,
+    package_digest: &str,
+    archive_bytes: &[u8],
+    public_key_hex: &str,
+  ) -> Result<(), StorageError> {
+    let current_archive = read_file_bounded(&self.package_archive_path(package_digest), PACKAGE_ARCHIVE_MAX_BYTES)
+      .map_err(StorageError::from)?;
+    if current_archive != archive_bytes {
+      // Verify only the replacement bytes in memory so an invalid replacement reports its
+      // signature failure. Neither branch ever returns these bytes for runtime execution.
+      verify_package_bytes(&current_archive, public_key_hex).map_err(StorageError::from)?;
+      return Err(StorageError::Validation(
+        "runtime archive changed during snapshot verification".into(),
+      ));
+    }
+    Ok(())
+  }
+
   /// Seed only the configured vendor public keys into SQLite (no fabricated production defaults).
   pub fn seed_vendor_publishers(&self) -> Result<(), StorageError> {
     self.db.transaction(|uow| {
@@ -174,6 +447,68 @@ impl PluginPackageService {
         plugin_publishers::upsert_vendor(uow.conn(), &root.key_id, &fingerprint, &root.public_key_hex)?;
       }
       Ok(())
+    })
+  }
+
+  /// Idempotently import a bundled vendor-signed `.lnplugin` archive (bytes) into the immutable
+  /// store and set it as the default for its plugin. Used on first startup to seed the
+  /// Google Translate Web runtime package without migrating existing instances. If the exact
+  /// digest is already installed, only the default is reaffirmed. The caller supplies the exact
+  /// final signed archive bytes (release CI signs externally; this method never reads a private key).
+  ///
+  /// Returns a [`VerifiedVendorImport`] whose identity fields come from re-verifying the exact
+  /// retained archive + extracted content with the matching vendor public key (full Ed25519
+  /// signature/index/artifact verification). The returned identity is what
+  /// [`Self::set_vendor_bootstrap_default`] cross-binds with the trusted vendor publisher.
+  pub fn bootstrap_bundled_package(
+    &self,
+    archive_bytes: &[u8],
+    set_default: bool,
+  ) -> Result<VerifiedVendorImport, StorageError> {
+    let inspected = inspect_package_bytes(archive_bytes).map_err(StorageError::from)?;
+    let digest = inspected.package_digest.clone();
+    let already = self
+      .db
+      .read(|conn| installed_plugin_versions::get_optional(conn, &digest))?;
+    if already.is_some() {
+      let import = self.reverify_vendor_import(&digest)?;
+      if set_default {
+        self.set_default(&import.plugin_id, &digest)?;
+      }
+      return Ok(import);
+    }
+    // Not installed: run the normal preview + approve flow against a temp staging copy.
+    let operation_id = new_id();
+    let staging_dir = self.staging_root().join(format!("bootstrap-{operation_id}"));
+    std::fs::create_dir_all(&staging_dir)?;
+    let src = staging_dir.join("package.lnplugin");
+    std::fs::write(&src, archive_bytes)?;
+    set_readonly(&src);
+    let preview = self.preview_package(&src)?;
+    self.approve_package(ApprovePluginPackageInput {
+      preview_id: preview.preview_id,
+      approve_publisher: false,
+      publisher_public_key_hex: None,
+      acknowledge_permissions: true,
+      set_as_default: set_default,
+    })?;
+    self.reverify_vendor_import(&digest)
+  }
+
+  /// Re-verify the exact retained archive + extracted content for `digest` with the matching
+  /// external vendor root and return the fully verified vendor import identity. The identity
+  /// fields (key id, fingerprint, public key) come only from Ed25519 package verification against
+  /// configured `vendor_roots`, never from catalog rows, structural inspection, or caller input.
+  /// This is the sole constructor for [`VerifiedVendorImport`].
+  fn reverify_vendor_import(&self, digest: &str) -> Result<VerifiedVendorImport, StorageError> {
+    let (verified, _root) = self.verify_store_with_vendor_root(digest)?;
+    Ok(VerifiedVendorImport {
+      package_digest: verified.package_digest,
+      plugin_id: verified.manifest.id.clone(),
+      version: verified.manifest.version.clone(),
+      publisher_key_id: verified.manifest.publisher.key_id.clone(),
+      publisher_fingerprint: verified.manifest.publisher.key_fingerprint.clone(),
+      publisher_public_key_hex: verified.publisher_public_key_hex.clone(),
     })
   }
 
@@ -284,6 +619,12 @@ impl PluginPackageService {
   }
 
   fn recover_one_uninstall(&self, op: &PluginUninstallOperation) -> Result<(), StorageError> {
+    // Hold the host store generation lock for all recovery FS mutations (store → DB order).
+    let _store_guard = self.lock_store()?;
+    self.recover_one_uninstall_locked(op)
+  }
+
+  fn recover_one_uninstall_locked(&self, op: &PluginUninstallOperation) -> Result<(), StorageError> {
     // Location + exact digest decide recovery. Never delete catalog when a verified store package
     // is present (covers crash after restore/rehash and before journal/availability update).
     let store_verified = self.package_store_archive_matches(&op.package_digest);
@@ -294,7 +635,40 @@ impl PluginPackageService {
       .unwrap_or(false);
 
     match op.state {
-      UninstallOperationState::Prepared | UninstallOperationState::ContentQuarantined => {
+      // Prepared: content not moved yet. If store is still present, reopen availability.
+      UninstallOperationState::Prepared => {
+        if store_verified {
+          self.db.transaction(|uow| {
+            if installed_plugin_versions::get_optional(uow.conn(), &op.package_digest)?.is_some() {
+              installed_plugin_versions::set_content_available(uow.conn(), &op.package_digest, true)?;
+            }
+            plugin_uninstall_operations::mark_restored(uow.conn(), op.id, "recovered_store_present")?;
+            Ok(())
+          })?;
+          return Ok(());
+        }
+        // Content missing before quarantine: keep catalog unavailable and mark failed.
+        if self
+          .db
+          .read(|conn| installed_plugin_versions::get_optional(conn, &op.package_digest))?
+          .is_some()
+        {
+          self.db.transaction(|uow| {
+            installed_plugin_versions::set_content_available(uow.conn(), &op.package_digest, false)?;
+            plugin_uninstall_operations::mark_failed(uow.conn(), op.id, "recovered_content_missing")?;
+            Ok(())
+          })?;
+        } else {
+          self.db.transaction(|uow| {
+            plugin_uninstall_operations::mark_catalog_deleted(uow.conn(), op.id)?;
+            plugin_uninstall_operations::mark_finalized(uow.conn(), op.id)?;
+            Ok(())
+          })?;
+        }
+      }
+      // ContentQuarantined: uninstall already moved content. Finish catalog delete (do not restore)
+      // unless the store already holds a verified package (crash after an in-process restore).
+      UninstallOperationState::ContentQuarantined => {
         if store_verified {
           self.db.transaction(|uow| {
             if installed_plugin_versions::get_optional(uow.conn(), &op.package_digest)?.is_some() {
@@ -308,37 +682,39 @@ impl PluginPackageService {
 
         if quarantine_verified {
           let qpath = PathBuf::from(op.quarantine_path.as_deref().unwrap_or_default());
+          // Content was intentionally quarantined for uninstall: finish catalog delete, then drop
+          // quarantine only when path+digest are verified. Never restore a half-uninstalled package
+          // back into the live store from ContentQuarantined recovery.
           if self
             .db
             .read(|conn| installed_plugin_versions::get_optional(conn, &op.package_digest))?
             .is_some()
           {
-            self.restore_and_reverify_package(&op.package_digest, &qpath)?;
-            if !self.package_store_archive_matches(&op.package_digest) {
-              self.db.transaction(|uow| {
-                installed_plugin_versions::set_content_available(uow.conn(), &op.package_digest, false)?;
-                plugin_uninstall_operations::mark_failed(uow.conn(), op.id, "blocked_restore_digest_mismatch")?;
-                Ok(())
-              })?;
-              return Ok(());
-            }
             self.db.transaction(|uow| {
-              installed_plugin_versions::set_content_available(uow.conn(), &op.package_digest, true)?;
-              plugin_uninstall_operations::mark_rolled_back(uow.conn(), op.id, "recovered_from_quarantine")?;
+              installed_plugin_versions::set_content_available(uow.conn(), &op.package_digest, false)?;
+              plugin_package_approvals::delete_for_package(uow.conn(), &op.package_digest)?;
+              installed_plugin_versions::clear_default_if_matches(uow.conn(), &op.package_digest)?;
+              installed_plugin_versions::delete(uow.conn(), &op.package_digest)?;
+              plugin_uninstall_operations::mark_catalog_deleted(uow.conn(), op.id)?;
               Ok(())
             })?;
-            return Ok(());
+          } else {
+            self.db.transaction(|uow| {
+              plugin_uninstall_operations::mark_catalog_deleted(uow.conn(), op.id)?;
+              Ok(())
+            })?;
           }
-          // No catalog row: content only in quarantine — drop only when path+digest verified.
-          let _ = self.remove_path(&qpath);
+          // Deletion failure leaves the committed CatalogDeleted journal state for retry; never
+          // finalize while a verified quarantine path remains.
+          self.remove_verified_quarantine_path(&qpath)?;
           self.db.transaction(|uow| {
-            plugin_uninstall_operations::mark_catalog_deleted(uow.conn(), op.id)?;
             plugin_uninstall_operations::mark_finalized(uow.conn(), op.id)?;
             Ok(())
           })?;
           return Ok(());
         }
 
+        // Quarantine path missing/untrusted: fail closed without deleting untrusted paths.
         if self
           .db
           .read(|conn| installed_plugin_versions::get_optional(conn, &op.package_digest))?
@@ -358,16 +734,20 @@ impl PluginPackageService {
         }
       }
       UninstallOperationState::CatalogDeleted => {
-        // Catalog already gone; only delete quarantine when under quarantine root + digest match.
+        // CatalogDeleted is the durable proof that this exact quarantine path was already
+        // digest-verified before its catalog entry was removed. A prior remove_dir_all may have
+        // deleted package.lnplugin before returning an error, so requiring a second archive hash
+        // would turn a safe retry into a terminal leak. Keep the path confinement check and retry
+        // deletion of any residual directory without reopening content as executable bytes.
         if let Some(q) = op.quarantine_path.as_deref() {
           let qpath = Path::new(q);
           if qpath.exists() {
-            if self.quarantine_path_is_safe(qpath) && self.quarantine_archive_matches(&op.package_digest, qpath) {
-              let _ = self.remove_path(qpath);
+            if self.quarantine_path_is_safe(qpath) {
+              self.remove_verified_quarantine_path(qpath)?;
             } else {
-              // Do not delete untrusted paths; leave blocked for manual recovery.
+              // Do not delete paths outside the host-owned quarantine root.
               self.db.transaction(|uow| {
-                plugin_uninstall_operations::mark_failed(uow.conn(), op.id, "blocked_quarantine_path_or_digest")?;
+                plugin_uninstall_operations::mark_failed(uow.conn(), op.id, "blocked_quarantine_path")?;
                 Ok(())
               })?;
               return Ok(());
@@ -425,15 +805,23 @@ impl PluginPackageService {
   fn recover_one(&self, op: &PluginInstallOperation) -> Result<(), StorageError> {
     match op.state {
       InstallOperationState::Prepared | InstallOperationState::Verified => {
-        // Not committed: quarantine staging and mark failed.
+        // Not committed: quarantine staging and mark failed under store generation lock.
+        let _store_guard = self.lock_store()?;
         self.quarantine_path(Path::new(&op.staging_path), "recovered_incomplete")?;
+        self.bump_store_generation();
         self.db.transaction(|uow| {
+          #[cfg(test)]
+          if self.take_recovery_db_fault() {
+            return Err(StorageError::Internal("injected recovery database failure".into()));
+          }
           plugin_install_operations::mark_failed(uow.conn(), op.id, "recovered_incomplete")?;
           Ok(())
         })?;
       }
       InstallOperationState::DbCommitted => {
         // DB rows exist; finalize only after full re-verification of archive + content index.
+        // Hold store lock across rename/quarantine so auto-pin cannot race recovery mutations.
+        let _store_guard = self.lock_store()?;
         if let Some(digest) = &op.package_digest {
           let staging = PathBuf::from(&op.staging_path);
           let dest = self.store_package_dir(digest);
@@ -456,6 +844,10 @@ impl PluginPackageService {
             self.remove_path(&staging)?;
             if content_ok {
               self.db.transaction(|uow| {
+                #[cfg(test)]
+                if self.take_recovery_db_fault() {
+                  return Err(StorageError::Internal("injected recovery database failure".into()));
+                }
                 plugin_install_operations::mark_finalized(uow.conn(), op.id)?;
                 installed_plugin_versions::set_content_available(uow.conn(), digest, true)?;
                 Ok(())
@@ -463,6 +855,7 @@ impl PluginPackageService {
             } else {
               // Partial or tampered store target — quarantine and keep catalog unavailable.
               self.quarantine_path(&dest, "partial_store")?;
+              self.bump_store_generation();
               self.db.transaction(|uow| {
                 installed_plugin_versions::set_content_available(uow.conn(), digest, false)?;
                 plugin_install_operations::mark_failed(uow.conn(), op.id, "content_unverified")?;
@@ -486,6 +879,7 @@ impl PluginPackageService {
                     })?;
                   } else {
                     self.quarantine_path(&self.store_package_dir(digest), "post_rename_unverified")?;
+                    self.bump_store_generation();
                     self.db.transaction(|uow| {
                       installed_plugin_versions::set_content_available(uow.conn(), digest, false)?;
                       plugin_install_operations::mark_failed(uow.conn(), op.id, "content_unverified")?;
@@ -495,6 +889,7 @@ impl PluginPackageService {
                 }
                 Err(_) => {
                   self.quarantine_path(&staging, "staging_unverified")?;
+                  self.bump_store_generation();
                   self.db.transaction(|uow| {
                     installed_plugin_versions::set_content_available(uow.conn(), digest, false)?;
                     plugin_install_operations::mark_failed(uow.conn(), op.id, "content_unverified")?;
@@ -504,6 +899,7 @@ impl PluginPackageService {
               }
             } else {
               self.quarantine_path(&staging, "missing_publisher")?;
+              self.bump_store_generation();
               self.db.transaction(|uow| {
                 installed_plugin_versions::set_content_available(uow.conn(), digest, false)?;
                 plugin_install_operations::mark_failed(uow.conn(), op.id, "missing_publisher")?;
@@ -725,7 +1121,20 @@ impl PluginPackageService {
         };
         (trust, false, Some(p.public_key_hex))
       }
-      None => (PublisherTrustState::Unknown, true, None),
+      None => {
+        // Unknown publisher: if the package provided a self-authenticating publisher.pub,
+        // the key is already resolved; full verification can happen immediately.
+        let trust_state = if structural.publisher_public_key_hex.is_empty() {
+          (PublisherTrustState::Unknown, true, None)
+        } else {
+          (
+            PublisherTrustState::Unknown,
+            true,
+            Some(structural.publisher_public_key_hex.clone()),
+          )
+        };
+        trust_state
+      }
     };
 
     // Trusted publishers: full Ed25519 over exact plugin.json bytes (fail closed).
@@ -799,6 +1208,12 @@ impl PluginPackageService {
       publisher_fingerprint: verified.manifest.publisher.key_fingerprint.clone(),
       publisher_trust,
       requires_publisher_approval,
+      resolved_publisher_public_key_hex: if requires_publisher_approval && !verified.publisher_public_key_hex.is_empty()
+      {
+        Some(verified.publisher_public_key_hex.clone())
+      } else {
+        None
+      },
       runtime_kind: runtime_kind_storage(verified.manifest.runtime.kind).to_string(),
       capabilities,
       configuration_schema: verified.manifest.configuration_schema.clone(),
@@ -1050,65 +1465,75 @@ impl PluginPackageService {
       return Err(StorageError::Internal("injected fault after db_committed".into()));
     }
 
-    if let Err(err) = self.atomic_install_from_staging(&session.staging_dir, &verified.package_digest) {
-      // Leave db_committed for recovery; mark content unavailable; quarantine partial target.
-      self.quarantine_path(&self.store_package_dir(&verified.package_digest), "rename_failed")?;
-      self.db.transaction(|uow| {
-        installed_plugin_versions::set_content_available(uow.conn(), &verified.package_digest, false)?;
-        Ok(())
-      })?;
-      return Err(err);
-    }
-
-    #[cfg(test)]
-    if self.take_install_fault(InstallFaultPoint::AfterRenameBeforePostVerify) {
-      return Err(StorageError::Internal("injected fault after rename".into()));
-    }
-
-    // Never mark content_available without full archive+index re-verification after rename.
-    if let Err(err) = self.verify_dest_against_digest(
-      &self.store_package_dir(&verified.package_digest),
-      &verified.package_digest,
-      &public_key_hex,
-    ) {
-      self.quarantine_path(
-        &self.store_package_dir(&verified.package_digest),
-        "post_install_unverified",
-      )?;
-      self.db.transaction(|uow| {
-        installed_plugin_versions::set_content_available(uow.conn(), &verified.package_digest, false)?;
-        plugin_install_operations::mark_failed(uow.conn(), session.operation_id, "content_unverified")?;
-        Ok(())
-      })?;
-      return Err(err);
-    }
-
-    #[cfg(test)]
-    if self.take_install_fault(InstallFaultPoint::AfterPostVerifyBeforeFinalize) {
-      return Err(StorageError::Internal("injected fault after post-rename verify".into()));
-    }
-
-    // set_as_default rejected for revoked/disabled publishers (backend authority).
+    // Store FS mutation + post-rename re-verify under the host store generation lock so auto-pin
+    // and concurrent uninstall/recover cannot race the install window. Lock order: store then DB.
     let allow_default = input.set_as_default
       && matches!(
         publisher_decision,
         PublisherDecision::TrustedVendor | PublisherDecision::UserApproved | PublisherDecision::AlreadyTrusted
       );
-
-    self.db.transaction(|uow| {
-      plugin_install_operations::mark_finalized(uow.conn(), session.operation_id)?;
-      installed_plugin_versions::set_content_available(uow.conn(), &verified.package_digest, true)?;
-      if allow_default {
-        let publisher = plugin_publishers::get(uow.conn(), &verified.manifest.publisher.key_id)?;
-        if publisher.revoked || !publisher.enabled {
-          return Err(StorageError::Validation(
-            "cannot set default: publisher is revoked or disabled".into(),
-          ));
-        }
-        installed_plugin_versions::set_default(uow.conn(), &verified.manifest.id, &verified.package_digest)?;
+    {
+      let _store_guard = self.lock_store()?;
+      if let Err(err) = self.atomic_install_from_staging(&session.staging_dir, &verified.package_digest) {
+        // Leave db_committed for recovery; mark content unavailable; quarantine partial target.
+        self.quarantine_path(&self.store_package_dir(&verified.package_digest), "rename_failed")?;
+        self.bump_store_generation();
+        self.db.transaction(|uow| {
+          installed_plugin_versions::set_content_available(uow.conn(), &verified.package_digest, false)?;
+          Ok(())
+        })?;
+        return Err(err);
       }
-      Ok(())
-    })?;
+
+      #[cfg(test)]
+      if self.take_install_fault(InstallFaultPoint::AfterRenameBeforePostVerify) {
+        return Err(StorageError::Internal("injected fault after rename".into()));
+      }
+
+      // Never mark content_available without full archive+index re-verification after rename.
+      if let Err(err) = self.verify_dest_against_digest(
+        &self.store_package_dir(&verified.package_digest),
+        &verified.package_digest,
+        &public_key_hex,
+      ) {
+        self.quarantine_path(
+          &self.store_package_dir(&verified.package_digest),
+          "post_install_unverified",
+        )?;
+        self.bump_store_generation();
+        self.db.transaction(|uow| {
+          installed_plugin_versions::set_content_available(uow.conn(), &verified.package_digest, false)?;
+          plugin_install_operations::mark_failed(uow.conn(), session.operation_id, "content_unverified")?;
+          Ok(())
+        })?;
+        return Err(err);
+      }
+
+      #[cfg(test)]
+      if self.take_install_fault(InstallFaultPoint::AfterPostVerifyBeforeFinalize) {
+        return Err(StorageError::Internal("injected fault after post-rename verify".into()));
+      }
+
+      // set_as_default rejected for revoked/disabled publishers (backend authority).
+      self.db.transaction(|uow| {
+        #[cfg(test)]
+        if self.take_install_fault(InstallFaultPoint::FinalizationDbWrite) {
+          return Err(StorageError::Internal("injected finalization database failure".into()));
+        }
+        plugin_install_operations::mark_finalized(uow.conn(), session.operation_id)?;
+        installed_plugin_versions::set_content_available(uow.conn(), &verified.package_digest, true)?;
+        if allow_default {
+          let publisher = plugin_publishers::get(uow.conn(), &verified.manifest.publisher.key_id)?;
+          if publisher.revoked || !publisher.enabled {
+            return Err(StorageError::Validation(
+              "cannot set default: publisher is revoked or disabled".into(),
+            ));
+          }
+          installed_plugin_versions::set_default(uow.conn(), &verified.manifest.id, &verified.package_digest)?;
+        }
+        Ok(())
+      })?;
+    }
 
     let version = self.to_version_dto(
       &self
@@ -1135,6 +1560,7 @@ impl PluginPackageService {
     if dest.exists() {
       // Incomplete prior target must not be treated as finalized; quarantine it.
       self.quarantine_path(&dest, "incomplete_store_target")?;
+      self.bump_store_generation();
     }
     // Same-filesystem atomic rename of the operation directory (archive + content).
     // No recursive-copy fallback — cross-device or partial copies fail closed.
@@ -1143,8 +1569,10 @@ impl PluginPackageService {
         "atomic rename staging→store failed for {digest} (same-filesystem required): {err}"
       ))
     })?;
+    self.bump_store_generation();
     if !dest.join("package.lnplugin").is_file() || !dest.join("content").is_dir() {
       self.quarantine_path(&dest, "partial_rename")?;
+      self.bump_store_generation();
       return Err(StorageError::Internal(format!(
         "store install incomplete after rename for {digest}"
       )));
@@ -1193,6 +1621,117 @@ impl PluginPackageService {
     self
       .db
       .transaction(|uow| installed_plugin_versions::set_default(uow.conn(), plugin_id, package_digest))
+  }
+
+  /// Set the default installed package for a plugin by its verified plugin ID + version. Used by
+  /// bootstrap to explicitly select the vendor default (e.g. Google Web 1.0.0 GTX) after all
+  /// bundled archives are imported, instead of relying on archive path ordering or array index.
+  /// Fails closed (NotFound) when the version is not installed; PluginUnavailable when its content
+  /// is unavailable. A higher version (e.g. 1.1.0) is never accidentally promoted.
+  pub fn set_default_version(&self, plugin_id: &str, version: &str) -> Result<PluginDefaultVersion, StorageError> {
+    let version_row = self
+      .db
+      .read(|conn| installed_plugin_versions::get_by_plugin_version(conn, plugin_id, version))?
+      .ok_or_else(|| StorageError::NotFound(format!("plugin {plugin_id} version {version} is not installed")))?;
+    if !version_row.content_available {
+      return Err(StorageError::PluginUnavailable(format!(
+        "plugin {plugin_id} version {version} content is unavailable"
+      )));
+    }
+    self.set_default(plugin_id, &version_row.package_digest)
+  }
+
+  /// Bind the bootstrap catalog default to the exact digest and verified publisher identity of
+  /// the vendor package imported and verified this round. Unlike [`Self::set_default_version`]
+  /// (which resolves by plugin id + version and could match a user-approved package sharing the
+  /// same id/version), this looks up the installed version by the exact `verified_import`
+  /// digest only and requires its publisher to be a trusted, enabled, non-revoked **vendor** key
+  /// whose key id, fingerprint, and public key all match the verified import identity.
+  ///
+  /// Validate, clear, and set run in a **single transaction**: any existing default for the
+  /// plugin is cleared first, then the verified import identity is cross-bound with the installed
+  /// version row and publisher row, and only then is the new default set. There is no TOCTOU
+  /// window between validate and set, and a validation failure commits the clear (via `Ok(None)`)
+  /// so a stale wrong default (e.g. 1.1.0, or a user-approved 1.0.0 from a prior install) is never
+  /// retained. When `verified_import` is `None` (vendor 1.0.0 was not imported this round) the
+  /// existing default is cleared and NotFound is returned. Used by
+  /// [`crate::state::AppState::initialize`] after bundled archives are imported.
+  pub fn set_vendor_bootstrap_default(
+    &self,
+    plugin_id: &str,
+    expected_version: &str,
+    verified_import: Option<&VerifiedVendorImport>,
+  ) -> Result<PluginDefaultVersion, StorageError> {
+    // Never trust caller-held identity fields alone. Re-verify the exact retained archive with
+    // the external vendor root immediately before binding so a replaced archive/content or a
+    // stale handle cannot promote an unverified package.
+    let rechecked_import = match verified_import {
+      Some(import) => match self.reverify_vendor_import(import.package_digest()) {
+        Ok(rechecked)
+          if rechecked.package_digest() == import.package_digest()
+            && rechecked.plugin_id() == import.plugin_id()
+            && rechecked.version() == import.version()
+            && rechecked.publisher_key_id() == import.publisher_key_id()
+            && rechecked.publisher_fingerprint() == import.publisher_fingerprint()
+            && rechecked.publisher_public_key_hex() == import.publisher_public_key_hex() =>
+        {
+          Some(rechecked)
+        }
+        Ok(_) | Err(_) => None,
+      },
+      None => None,
+    };
+    let bound = self.db.transaction(|uow| {
+      // Always clear any existing default first; the clear commits with this transaction. A
+      // validation failure returns Ok(None) so the clear persists and no stale wrong default is
+      // retained, with no TOCTOU window between validate, clear, and set.
+      installed_plugin_versions::clear_default_for_plugin(uow.conn(), plugin_id)?;
+      let Some(import) = rechecked_import.as_ref() else {
+        return Ok::<_, StorageError>(None);
+      };
+      // Bind the exact re-verified digest and id/version (never an id+version lookup that could
+      // match a user-approved package sharing the same id/version).
+      if import.plugin_id() != plugin_id || import.version() != expected_version {
+        return Ok(None);
+      }
+      let version = installed_plugin_versions::get_optional(uow.conn(), import.package_digest())?;
+      let Some(version) = version else {
+        return Ok(None);
+      };
+      // Reverse-bind the installed version row with the re-verified import identity.
+      if version.plugin_id != plugin_id
+        || version.version != expected_version
+        || !version.content_available
+        || version.package_digest != import.package_digest()
+        || version.publisher_key_id != import.publisher_key_id()
+        || version.publisher_fingerprint != import.publisher_fingerprint()
+      {
+        return Ok(None);
+      }
+      let publisher = plugin_publishers::get_optional(uow.conn(), &version.publisher_key_id)?;
+      let Some(publisher) = publisher else {
+        return Ok(None);
+      };
+      // Reverse-bind DB publisher to the external-root-verified identity. Any mismatch
+      // (user-approved publisher, spoofed key id/fingerprint/public key, revoked/disabled/
+      // non-vendor source) fails closed.
+      if publisher.key_id != import.publisher_key_id()
+        || publisher.fingerprint != import.publisher_fingerprint()
+        || publisher.public_key_hex != import.publisher_public_key_hex()
+        || publisher.source != PublisherSource::Vendor
+        || !publisher.enabled
+        || publisher.revoked
+      {
+        return Ok(None);
+      }
+      let default = installed_plugin_versions::set_default(uow.conn(), plugin_id, import.package_digest())?;
+      Ok(Some(default))
+    })?;
+    bound.ok_or_else(|| {
+      StorageError::NotFound(format!(
+        "vendor {plugin_id} {expected_version} default could not be bound to a verified vendor package"
+      ))
+    })
   }
 
   pub fn list_publishers(&self) -> Result<Vec<PluginPublisherDto>, StorageError> {
@@ -1285,15 +1824,19 @@ impl PluginPackageService {
       Ok(())
     })?;
 
+    // Quarantine + catalog delete under store generation lock (store → DB). Coordinated with auto-pin.
+    let _store_guard = self.lock_store()?;
     let store_dir = self.store_package_dir(package_digest);
     let quarantine_path = if store_dir.exists() {
       match self.quarantine_path_return_dest(&store_dir, "uninstall") {
         Ok(qpath) => {
+          self.bump_store_generation();
           if let Err(err) = self.db.transaction(|uow| {
             plugin_uninstall_operations::mark_content_quarantined(uow.conn(), op_id, &qpath.to_string_lossy())?;
             Ok(())
           }) {
             // Journal failed after move: attempt restore; only reopen availability after reverify.
+            // fail_uninstall_with_restore mutates store; caller already holds the store lock.
             return Err(self.fail_uninstall_with_restore(
               package_digest,
               op_id,
@@ -1388,6 +1931,27 @@ impl PluginPackageService {
     *self.catalog_delete_fault.lock().unwrap_or_else(|e| e.into_inner()) = enabled;
   }
 
+  /// Test-only: fail the next recovery quarantine deletion after catalog deletion committed.
+  #[cfg(test)]
+  pub fn set_quarantine_delete_fault(&self, enabled: bool) {
+    *self.quarantine_delete_fault.lock().unwrap_or_else(|e| e.into_inner()) = enabled;
+  }
+
+  /// Test-only: fail the next recovery transaction after its filesystem mutation.
+  #[cfg(test)]
+  pub fn set_recovery_db_fault(&self, enabled: bool) {
+    *self.recovery_db_fault.lock().unwrap_or_else(|e| e.into_inner()) = enabled;
+  }
+
+  /// Test-only: run once after an archive snapshot verifies and before content-tree comparison.
+  #[cfg(test)]
+  pub fn set_runtime_snapshot_after_archive_read_hook(&self, hook: Option<Box<dyn FnOnce() + Send>>) {
+    *self
+      .runtime_snapshot_after_archive_read
+      .lock()
+      .unwrap_or_else(|e| e.into_inner()) = hook;
+  }
+
   #[cfg(test)]
   fn take_catalog_delete_fault(&self) -> bool {
     let mut guard = self.catalog_delete_fault.lock().unwrap_or_else(|e| e.into_inner());
@@ -1397,6 +1961,37 @@ impl PluginPackageService {
     } else {
       false
     }
+  }
+
+  #[cfg(test)]
+  fn take_quarantine_delete_fault(&self) -> bool {
+    let mut guard = self.quarantine_delete_fault.lock().unwrap_or_else(|e| e.into_inner());
+    if *guard {
+      *guard = false;
+      true
+    } else {
+      false
+    }
+  }
+
+  #[cfg(test)]
+  fn take_recovery_db_fault(&self) -> bool {
+    let mut guard = self.recovery_db_fault.lock().unwrap_or_else(|e| e.into_inner());
+    if *guard {
+      *guard = false;
+      true
+    } else {
+      false
+    }
+  }
+
+  #[cfg(test)]
+  fn take_runtime_snapshot_after_archive_read_hook(&self) -> Option<Box<dyn FnOnce() + Send>> {
+    self
+      .runtime_snapshot_after_archive_read
+      .lock()
+      .unwrap_or_else(|e| e.into_inner())
+      .take()
   }
 
   #[cfg(test)]
@@ -1417,6 +2012,8 @@ impl PluginPackageService {
       return Err(StorageError::Internal("injected restore failure".into()));
     }
     self.restore_package_from_quarantine(package_digest, quarantine_path)?;
+    // Caller holds store lock (uninstall/recover); publish a new generation after restore rename.
+    self.bump_store_generation();
     #[cfg(test)]
     if self.take_restore_fault(UninstallRestoreFault::AfterRestoreBeforeRehash) {
       return Err(StorageError::Internal("injected rehash failure".into()));
@@ -1629,10 +2226,34 @@ impl PluginPackageService {
     Ok(dest)
   }
 
+  /// Delete a quarantine directory only after recovery has verified its location and digest.
+  fn remove_verified_quarantine_path(&self, path: &Path) -> Result<(), StorageError> {
+    #[cfg(test)]
+    if self.take_quarantine_delete_fault() {
+      // Model `remove_dir_all` removing the archive before a later residual deletion fails.
+      // The guard publishes that possible mutation even though this method returns an error.
+      let _mutation_guard = self.store_mutation_guard();
+      let archive = path.join("package.lnplugin");
+      if archive.is_file() {
+        let mut perms = std::fs::metadata(&archive)?.permissions();
+        perms.set_readonly(false);
+        let _ = std::fs::set_permissions(&archive, perms);
+        std::fs::remove_file(&archive)?;
+      }
+      return Err(StorageError::Internal(
+        "injected quarantine deletion failure after archive removal".into(),
+      ));
+    }
+    self.remove_path(path)
+  }
+
   fn remove_path(&self, path: &Path) -> Result<(), StorageError> {
     if !path.exists() {
       return Ok(());
     }
+    // Recursive deletion can remove entries before reporting an error. Publish a new generation
+    // on both success and error so subsequent recovery re-verifies instead of trusting a stale view.
+    let _mutation_guard = self.store_mutation_guard();
     if path.is_dir() {
       clear_readonly_recursive(path);
       std::fs::remove_dir_all(path)?;
@@ -1865,12 +2486,17 @@ mod tests {
     manifest.publisher.key_fingerprint = fixture_vendor_fingerprint();
     let manifest_bytes = serde_json::to_vec(&manifest).unwrap();
     let signature = sk.sign(&manifest_bytes).to_bytes().to_vec();
+    let pub_key_hex = fixture_vendor_public_key_hex();
+    let pub_key_bytes = crate::domain::plugin_package::decode_lowercase_hex::<32>(&pub_key_hex, "vendor pub")
+      .expect("vendor public key hex");
     let mut cursor = std::io::Cursor::new(Vec::new());
     {
       let mut zip = zip::ZipWriter::new(&mut cursor);
       let options = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
       zip.start_file(MANIFEST_FILE_PATH, options).unwrap();
       zip.write_all(&manifest_bytes).unwrap();
+      zip.start_file("publisher.pub", options).unwrap();
+      zip.write_all(&pub_key_bytes).unwrap();
       zip.start_file("artifacts/plugin.wasm", options).unwrap();
       zip.write_all(wasm).unwrap();
       zip.start_file(SIGNATURE_FILE_PATH, options).unwrap();
@@ -2061,6 +2687,7 @@ mod tests {
       InstallFaultPoint::AfterDbCommitBeforeRename,
       InstallFaultPoint::AfterRenameBeforePostVerify,
       InstallFaultPoint::AfterPostVerifyBeforeFinalize,
+      InstallFaultPoint::FinalizationDbWrite,
     ] {
       let _ = service.db.transaction(|uow| {
         if installed_plugin_versions::get_optional(uow.conn(), &digest)?.is_some() {
@@ -2072,6 +2699,7 @@ mod tests {
       });
       let _ = service.remove_path(&service.store_package_dir(&digest));
 
+      let generation_before = service.store_generation();
       service.set_install_fault(Some(fault));
       let preview = service.preview_package(&src).unwrap();
       let err = service
@@ -2084,6 +2712,17 @@ mod tests {
         })
         .unwrap_err();
       assert!(matches!(err, StorageError::Internal(_)), "fault {fault:?}");
+      if matches!(
+        fault,
+        InstallFaultPoint::AfterRenameBeforePostVerify
+          | InstallFaultPoint::AfterPostVerifyBeforeFinalize
+          | InstallFaultPoint::FinalizationDbWrite
+      ) {
+        assert!(
+          service.store_generation() > generation_before,
+          "successful install mutation must publish a generation before later failure: {fault:?}"
+        );
+      }
 
       service.recover_install_operations().unwrap();
       let version = service
@@ -2120,6 +2759,89 @@ mod tests {
     let (digest2, result) = install_valid(&service, dir.path(), false);
     assert_eq!(digest2, digest);
     assert!(result.version.content_available);
+  }
+
+  #[test]
+  fn recovery_bumps_generation_before_database_failure() {
+    let (_dir, service) = setup();
+    let op_id = new_id();
+    let staging = service.staging_root().join(op_id.to_string());
+    std::fs::create_dir_all(&staging).unwrap();
+    service
+      .db
+      .transaction(|uow| {
+        plugin_install_operations::insert_prepared(uow.conn(), op_id, &staging.to_string_lossy())?;
+        Ok(())
+      })
+      .unwrap();
+
+    let op = service
+      .db
+      .read(|conn| plugin_install_operations::get(conn, op_id))
+      .unwrap();
+    let generation_before = service.store_generation();
+    service.set_recovery_db_fault(true);
+    let err = service.recover_one(&op).unwrap_err();
+    assert!(matches!(err, StorageError::Internal(_)));
+    assert!(
+      service.store_generation() > generation_before,
+      "recovery must publish its filesystem mutation before a later database failure"
+    );
+    assert!(
+      !staging.exists(),
+      "recovery must have quarantined staging before the DB failure"
+    );
+
+    service.recover_one(&op).unwrap();
+    let after = service
+      .db
+      .read(|conn| plugin_install_operations::get(conn, op_id))
+      .unwrap();
+    assert_eq!(after.state, InstallOperationState::Failed);
+  }
+
+  #[test]
+  fn db_committed_recovery_bumps_generation_before_database_failure() {
+    let (dir, service) = setup();
+    let (digest, _) = install_valid(&service, dir.path(), false);
+    let op_id = new_id();
+    let staging = service.staging_root().join(op_id.to_string());
+    std::fs::create_dir_all(&staging).unwrap();
+    std::fs::write(staging.join("orphan"), b"stale recovery staging").unwrap();
+    service
+      .db
+      .transaction(|uow| {
+        installed_plugin_versions::set_content_available(uow.conn(), &digest, false)?;
+        plugin_install_operations::insert_prepared(uow.conn(), op_id, &staging.to_string_lossy())?;
+        plugin_install_operations::mark_verified(uow.conn(), op_id, &digest)?;
+        plugin_install_operations::mark_db_committed(uow.conn(), op_id)?;
+        Ok(())
+      })
+      .unwrap();
+
+    let op = service
+      .db
+      .read(|conn| plugin_install_operations::get(conn, op_id))
+      .unwrap();
+    let generation_before = service.store_generation();
+    service.set_recovery_db_fault(true);
+    let err = service.recover_one(&op).unwrap_err();
+    assert!(matches!(err, StorageError::Internal(_)));
+    assert!(
+      service.store_generation() > generation_before,
+      "db_committed recovery must publish staging deletion before a later database failure"
+    );
+    assert!(
+      !staging.exists(),
+      "recovery must remove stale staging before the DB failure"
+    );
+
+    service.recover_one(&op).unwrap();
+    let after = service
+      .db
+      .read(|conn| plugin_install_operations::get(conn, op_id))
+      .unwrap();
+    assert_eq!(after.state, InstallOperationState::Finalized);
   }
 
   #[test]
@@ -2212,6 +2934,63 @@ mod tests {
   }
 
   #[test]
+  fn publisher_pub_auto_resolves_key_no_manual_input_needed() {
+    // Build a package with publisher.pub (unknown publisher, auto-resolved key).
+    let (dir, service) = setup();
+    let alt_key = SigningKey::from_bytes(&[12u8; 32]);
+    let public_hex = encode_lowercase_hex(&alt_key.verifying_key().to_bytes());
+    let public_bytes = alt_key.verifying_key().to_bytes().to_vec();
+    let fingerprint = sha256_hex(&alt_key.verifying_key().to_bytes());
+    let wasm = b"\0asm\x01\x00\x00\x00";
+    let mut manifest = sample_manifest(wasm);
+    manifest.publisher.key_id = "com.auto.keys.1".into();
+    manifest.publisher.key_fingerprint = fingerprint;
+    let manifest_bytes = serde_json::to_vec(&manifest).unwrap();
+    let signature = alt_key.sign(&manifest_bytes).to_bytes().to_vec();
+    let mut cursor = std::io::Cursor::new(Vec::new());
+    {
+      let mut zip = zip::ZipWriter::new(&mut cursor);
+      let options = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+      zip.start_file(MANIFEST_FILE_PATH, options).unwrap();
+      zip.write_all(&manifest_bytes).unwrap();
+      zip.start_file("publisher.pub", options).unwrap();
+      zip.write_all(&public_bytes).unwrap();
+      zip.start_file("artifacts/plugin.wasm", options).unwrap();
+      zip.write_all(wasm).unwrap();
+      zip.start_file(SIGNATURE_FILE_PATH, options).unwrap();
+      zip.write_all(&signature).unwrap();
+      zip.finish().unwrap();
+    }
+    let pkg = cursor.into_inner();
+    let src = dir.path().join("auto.lnplugin");
+    std::fs::write(&src, &pkg).unwrap();
+
+    // Preview: key auto-resolved from publisher.pub.
+    let preview = service.preview_package(&src).unwrap();
+    assert!(preview.requires_publisher_approval);
+    assert!(
+      preview.resolved_publisher_public_key_hex.is_some(),
+      "auto-resolved key must be present when publisher.pub is shipped"
+    );
+    assert_eq!(
+      preview.resolved_publisher_public_key_hex.as_deref(),
+      Some(public_hex.as_str())
+    );
+
+    // Approve using the auto-resolved key (no manual hex input).
+    let result = service
+      .approve_package(ApprovePluginPackageInput {
+        preview_id: preview.preview_id,
+        approve_publisher: true,
+        publisher_public_key_hex: preview.resolved_publisher_public_key_hex.clone(),
+        acknowledge_permissions: true,
+        set_as_default: false,
+      })
+      .unwrap();
+    assert!(result.version.content_available);
+  }
+
+  #[test]
   fn unknown_publisher_requires_key_and_ed25519_on_approve() {
     let (dir, service) = setup();
     let alt_key = SigningKey::from_bytes(&[11u8; 32]);
@@ -2287,6 +3066,7 @@ mod tests {
         id: "api".into(),
         origins: vec!["https://a.example".into()],
         methods: vec![HttpMethod::Get],
+        instance_origin_config_field: None,
       }],
       auth_policies: vec!["host.none.v1".into()],
     };
@@ -2299,6 +3079,7 @@ mod tests {
       .push(crate::domain::runtime_plugin::CapabilityDeclaration {
         id: "translate.detect@1".into(),
         preferences_schema: None,
+        artifact: None,
       });
     let diffs = diff_permissions(&prev, &next);
     assert!(diffs.iter().any(|d| d == "network:~api"), "{diffs:?}");
@@ -2332,20 +3113,50 @@ mod tests {
     );
     assert!(!service.store_package_dir(&digest).exists());
 
+    let generation_before_partial_delete = service.store_generation();
+    service.set_quarantine_delete_fault(true);
     service.recover_install_operations().unwrap();
+    assert!(
+      service.store_generation() > generation_before_partial_delete,
+      "a partially successful quarantine delete must publish a new generation before returning an error"
+    );
     assert!(
       service
         .db
         .read(|conn| installed_plugin_versions::get_optional(conn, &digest))
         .unwrap()
         .is_none(),
-      "recovery must finish catalog delete"
+      "recovery must commit catalog deletion before retrying quarantine cleanup"
     );
-    let op = service
+    let pending = service
       .db
       .read(|conn| plugin_uninstall_operations::get(conn, op_id))
       .unwrap();
-    assert_eq!(op.state, UninstallOperationState::Finalized);
+    assert_eq!(
+      pending.state,
+      UninstallOperationState::CatalogDeleted,
+      "quarantine deletion failure must keep a retryable journal state"
+    );
+    assert!(
+      qpath.exists(),
+      "partial cleanup must retain residual quarantine content for retry"
+    );
+    assert!(
+      !qpath.join("package.lnplugin").exists(),
+      "fault injection must remove the archive before the later cleanup failure"
+    );
+
+    let generation_before_retry = service.store_generation();
+    service.recover_install_operations().unwrap();
+    assert!(
+      service.store_generation() > generation_before_retry,
+      "successful residual quarantine cleanup must also publish a new generation"
+    );
+    let finalized = service
+      .db
+      .read(|conn| plugin_uninstall_operations::get(conn, op_id))
+      .unwrap();
+    assert_eq!(finalized.state, UninstallOperationState::Finalized);
   }
 
   #[test]

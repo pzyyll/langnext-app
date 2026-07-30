@@ -53,6 +53,25 @@ REQUIRED_LIFECYCLE_TESTS=(
   "repositories::tests::runtime_instance_pin_package_approval_never_authorizes_execution"
 )
 
+REQUIRED_GOOGLE_WEB_TESTS=(
+  "services::google_translate_web_runtime_tests::google_translate_web_runtime_gtx_translate_and_detect"
+  "services::google_translate_web_runtime_tests::google_translate_web_runtime_gtx_cancellation"
+  "services::google_translate_web_runtime_tests::google_translate_web_runtime_gtx_rate_limit_maps_to_rate_limited"
+  "services::google_translate_web_runtime_tests::google_translate_web_runtime_gtx_invalid_response_maps_to_invalid_response"
+  "services::google_translate_web_runtime_tests::google_translate_web_runtime_single_executor_no_fallback"
+  "services::google_translate_web_runtime_tests::google_translate_web_runtime_timeout_maps_to_timeout"
+  "services::google_translate_web_runtime_tests::google_translate_web_runtime_bundled_rollback_remains_available"
+  "services::google_translate_web_runtime_tests::vendor_package_bootstrap_is_idempotent_and_sets_default"
+  "services::google_translate_web_runtime_tests::vendor_bootstrap_imports_proxy_version_without_changing_default"
+  "services::google_translate_web_runtime_tests::google_web_package_verifies_with_vendor_public_key"
+  "services::google_translate_web_runtime_tests::google_translate_web_proxy_channel_translates_and_detect_stays_on_gtx"
+  "services::google_translate_web_runtime_tests::google_translate_web_proxy_url_change_requires_new_grant"
+  "services::google_translate_web_runtime_tests::google_web_new_instance_pins_default_wasm_package"
+  "services::google_translate_web_runtime_tests::google_web_new_instance_falls_back_to_bundled_when_no_default_package"
+  "services::google_translate_web_runtime_tests::google_web_migration_rejects_incompatible_capability_major"
+  "services::google_translate_web_runtime_tests::google_web_migration_rejects_schema_incompatible_target"
+)
+
 MIN_TOTAL_TESTS=10
 
 run_filter_suite() {
@@ -105,6 +124,11 @@ case "$MODE" in
   all)
     run_filter_suite "wasm_runtime" "${REQUIRED_WASM_TESTS[@]}"
     run_filter_suite "runtime_" "${REQUIRED_LIFECYCLE_TESTS[@]}"
+    run_filter_suite "google_translate_web_runtime" "${REQUIRED_GOOGLE_WEB_TESTS[@]}"
+    ;;
+  google-web|google-web-gtx|google-web-proxy)
+    cargo test --manifest-path runtime-plugins/google-translate-web/protocol/Cargo.toml -- --nocapture
+    run_filter_suite "google_translate_web_runtime" "${REQUIRED_GOOGLE_WEB_TESTS[@]}"
     ;;
   *)
     echo "usage: mise run plugin:conformance [wasm|installed-lifecycle|all]" >&2

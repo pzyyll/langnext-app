@@ -448,6 +448,7 @@ export function IntegrationEditor({ integrationInstanceId }: IntegrationEditorPr
           <section className="space-y-2">
             <h3 className="text-label-sm font-bold tracking-wide text-neutral uppercase">Runtime</h3>
             <p className="text-body-md text-on-surface">{instance.runtimeKind}</p>
+            <p className="text-body-tight text-neutral">plugin version {instance.pluginVersion}</p>
             <p className="text-body-tight text-neutral">{instance.runtimeState}</p>
             {instance.packageDigest ? (
               <p className="font-mono text-body-tight wrap-break-word text-neutral">{instance.packageDigest}</p>

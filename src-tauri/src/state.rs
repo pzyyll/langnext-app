@@ -48,7 +48,7 @@ pub struct AppState {
 }
 
 impl AppState {
-  pub fn initialize(app_data_dir: PathBuf) -> Result<Self, StorageError> {
+  pub fn initialize(app_data_dir: PathBuf, resource_dir: Option<PathBuf>) -> Result<Self, StorageError> {
     std::fs::create_dir_all(&app_data_dir)?;
     let db = Database::new(&app_data_dir)?;
     db.initialize()?;
@@ -81,6 +81,52 @@ impl AppState {
     if let Err(err) = plugin_packages.recover_install_operations() {
       log::error!("plugin_package_recovery_failed error={err}");
     }
+    // Idempotently import the bundled vendor-signed Google Translate Web packages on first startup.
+    // Release CI places signed archives at resources/plugins/...; local dev has none (no-op).
+    // All archives are imported without setting a default; the default is then bound to the exact
+    // digest and verified publisher identity of the vendor Google Web 1.0.0 import (never an
+    // id+version lookup that could match a user-approved package sharing the same id/version). A
+    // failed/missing 1.0.0 import atomically clears any existing default so a wrong default (e.g.
+    // 1.1.0) is never retained. Existing instances are never migrated; only the catalog default
+    // for new instances is set.
+    let mut bundled_archives = locate_bundled_google_web_packages(resource_dir.as_deref());
+    bundled_archives.sort();
+    let mut vendor_default_import: Option<crate::services::plugin_store::VerifiedVendorImport> = None;
+    for bundled in &bundled_archives {
+      match std::fs::read(bundled) {
+        Ok(bytes) => match plugin_packages.bootstrap_bundled_package(&bytes, false) {
+          Ok(import) => {
+            if import.plugin_id() == crate::domain::service_integration::GOOGLE_TRANSLATE_WEB_PLUGIN_ID
+              && import.version() == GOOGLE_WEB_DEFAULT_VERSION
+            {
+              vendor_default_import = Some(import);
+            }
+          }
+          Err(err) => log::error!(
+            "google_web_bootstrap_import_failed path={} error={err}",
+            bundled.display()
+          ),
+        },
+        Err(err) => log::warn!(
+          "google_web_bootstrap_read_failed path={} error={err}",
+          bundled.display()
+        ),
+      }
+    }
+    // Bind the default to the exact vendor 1.0.0 verified import identity, or atomically clear any
+    // existing default when 1.0.0 is absent/unverified (fail closed; 1.1.0 is never accidentally
+    // promoted).
+    if let Err(err) = plugin_packages.set_vendor_bootstrap_default(
+      crate::domain::service_integration::GOOGLE_TRANSLATE_WEB_PLUGIN_ID,
+      GOOGLE_WEB_DEFAULT_VERSION,
+      vendor_default_import.as_ref(),
+    ) {
+      log::warn!(
+        "google_web_default_bind_failed plugin={} version={} error={err}",
+        crate::domain::service_integration::GOOGLE_TRANSLATE_WEB_PLUGIN_ID,
+        GOOGLE_WEB_DEFAULT_VERSION
+      );
+    }
     // Active staging/preview TTL sweep while the app is running (stoppable via Drop on process exit).
     let _staging_sweep = plugin_packages.start_staging_sweep();
     // Keep the handle alive for the process lifetime by leaking intentionally: AppState is long-lived
@@ -103,8 +149,19 @@ impl AppState {
       wasm_runtime.clone(),
     );
     // Capability dispatch always goes through the runtime router (no silent executor fallback).
+    // Phase 5: Wasm guests (google-web) reach approved HTTPS origins through a bounded transport
+    // via NetworkBrokerHandle. No credentials/cookies/auth headers are ever injected.
+    let broker_transport: Arc<dyn crate::services::bounded_http::RawHttpTransport> =
+      Arc::new(crate::services::bounded_http::ReqwestRawHttpTransport);
+    let broker_factory: Arc<dyn Fn() -> Box<dyn crate::services::wasm_runtime::host::BrokerHandle> + Send + Sync> =
+      Arc::new(move || {
+        Box::new(crate::services::wasm_runtime::network_handle::NetworkBrokerHandle::new(
+          broker_transport.clone(),
+        ))
+      });
     let service_capabilities = ServiceCapabilityService::new(db.clone(), registry.clone(), capability_handlers)
-      .with_router(runtime_router.clone(), wasm_runtime.clone());
+      .with_router(runtime_router.clone(), wasm_runtime.clone())
+      .with_broker_factory(broker_factory);
     let ocr_services = OcrServiceService::new(
       db.clone(),
       vault.clone(),
@@ -115,6 +172,7 @@ impl AppState {
     let runtime_lifecycle = RuntimeLifecycleService::new(db.clone(), plugin_packages.clone(), registry.clone())
       .with_runtime(wasm_runtime.clone(), token_grants.clone())
       .with_vault(vault.clone());
+    let service_integrations = service_integrations.with_runtime_lifecycle(runtime_lifecycle.clone());
 
     Ok(Self {
       db,
@@ -140,4 +198,54 @@ impl AppState {
       wasm_runtime,
     })
   }
+}
+
+/// Bundled Google Translate Web package filename prefix (release CI signs and places archives as
+/// resources). Both 1.0.0 GTX and 1.1.0 proxy archives may be present.
+const BUNDLED_GOOGLE_WEB_PACKAGE_PREFIX: &str = "com.langnext.google-translate-web-";
+const BUNDLED_GOOGLE_WEB_PACKAGE_SUFFIX: &str = ".lnplugin";
+/// Env override pointing at a single bundled signed package (release/CI/test injection).
+const BUNDLED_GOOGLE_WEB_PACKAGE_ENV: &str = "LANGNEXT_BUNDLED_GOOGLE_WEB_PACKAGE";
+/// Vendor default version explicitly selected as the new-instance catalog default after all
+/// bundled archives are imported. Must match the verified installed manifest version.
+const GOOGLE_WEB_DEFAULT_VERSION: &str = "1.0.0";
+
+/// Locate bundled vendor-signed Google Translate Web `.lnplugin` archives to import on first
+/// startup. Checks (1) an env override (single archive), (2) the cargo resources dir (dev/test),
+/// (3) `resources/plugins` / `plugins` paths beside the resource root. Returns all matching
+/// archives (unsorted); the caller sets the lowest version as default. Returns an empty vec when
+/// no bundled archive is present (local dev).
+fn locate_bundled_google_web_packages(resource_dir: Option<&std::path::Path>) -> Vec<std::path::PathBuf> {
+  if let Ok(path) = std::env::var(BUNDLED_GOOGLE_WEB_PACKAGE_ENV) {
+    let path = std::path::PathBuf::from(path);
+    if path.is_file() {
+      return vec![path];
+    }
+  }
+
+  let mut dirs = Vec::new();
+  if let Some(resource_dir) = resource_dir {
+    dirs.push(resource_dir.join("resources").join("plugins"));
+    dirs.push(resource_dir.join("plugins"));
+  }
+  dirs.push(crate::services::vendor_trust::cargo_resources_root().join("plugins"));
+
+  let mut archives = Vec::new();
+  for dir in &dirs {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+      continue;
+    };
+    for entry in entries.flatten() {
+      let path = entry.path();
+      if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+        if name.starts_with(BUNDLED_GOOGLE_WEB_PACKAGE_PREFIX)
+          && name.ends_with(BUNDLED_GOOGLE_WEB_PACKAGE_SUFFIX)
+          && path.is_file()
+        {
+          archives.push(path);
+        }
+      }
+    }
+  }
+  archives
 }

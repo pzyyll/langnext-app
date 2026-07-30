@@ -23,6 +23,10 @@ pub const HOST_PLUGIN_API_VERSION_CURRENT: &str = "1.0";
 pub const MANIFEST_FILE_PATH: &str = "plugin.json";
 /// Canonical signature entry path; the only unsigned archive entry.
 pub const SIGNATURE_FILE_PATH: &str = "signatures/manifest.sig";
+/// Optional self-authenticating publisher public key (32 bytes raw Ed25519).
+/// When present, the host auto-resolves the key by verifying sha256(pub) matches the signed
+/// manifest's publisher key fingerprint. Not a member of the signed file index.
+pub const PUBLISHER_PUBLIC_KEY_PATH: &str = "publisher.pub";
 
 /// Byte size used to express binary resource limits.
 pub const MEBIBYTE_BYTES: u64 = 1024 * 1024;
@@ -1443,13 +1447,16 @@ pub struct PublisherDeclaration {
 }
 
 /// Capability declaration: a closed-set `capability@major` id and optional preferences
-/// schema reference.
+/// schema reference. `artifact` optionally pins a per-capability runtime artifact (path into
+/// the signed file index) so one package can ship multiple Wasm components, one per world.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CapabilityDeclaration {
   pub id: String,
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub preferences_schema: Option<String>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub artifact: Option<String>,
 }
 
 /// Credential slot declared by a manifest. Secrets remain outside config JSON and are
@@ -1491,6 +1498,12 @@ pub struct NetworkEndpointRequest {
   pub id: String,
   pub origins: Vec<String>,
   pub methods: Vec<HttpMethod>,
+  /// Optional config field whose normalized HTTPS origin is the approved grant origin at
+  /// upgrade time (e.g. `proxy-url` for a third-party HTTPS proxy). When set, `origins` may be
+  /// empty; the effective origin is resolved from instance config and persisted in the grant
+  /// so a later URL change invalidates the grant and requires a new explicit approval.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub instance_origin_config_field: Option<String>,
 }
 
 /// Optional custom page declaration. The host grants page/action authority separately
@@ -1774,14 +1787,15 @@ fn validate_archive_path_impl(value: &str, allow_reserved: bool) -> Result<Strin
     return Err("file path must be relative".into());
   }
   let lower = value.to_ascii_lowercase();
-  let has_reserved_prefix =
-    lower.starts_with(&format!("{MANIFEST_FILE_PATH}/")) || lower.starts_with(&format!("{SIGNATURE_FILE_PATH}/"));
+  let has_reserved_prefix = lower.starts_with(&format!("{MANIFEST_FILE_PATH}/"))
+    || lower.starts_with(&format!("{SIGNATURE_FILE_PATH}/"))
+    || lower.starts_with(&format!("{PUBLISHER_PUBLIC_KEY_PATH}/"));
   if has_reserved_prefix {
     return Err(format!(
       "file path {value} uses a reserved archive entry as a directory prefix"
     ));
   }
-  if lower == MANIFEST_FILE_PATH || lower == SIGNATURE_FILE_PATH {
+  if lower == MANIFEST_FILE_PATH || lower == SIGNATURE_FILE_PATH || lower == PUBLISHER_PUBLIC_KEY_PATH {
     if !allow_reserved {
       return Err(format!(
         "file path {value} is a reserved archive entry (case-insensitive) and cannot be indexed"
@@ -1789,8 +1803,10 @@ fn validate_archive_path_impl(value: &str, allow_reserved: bool) -> Result<Strin
     }
     let canonical = if lower == MANIFEST_FILE_PATH {
       MANIFEST_FILE_PATH
-    } else {
+    } else if lower == SIGNATURE_FILE_PATH {
       SIGNATURE_FILE_PATH
+    } else {
+      PUBLISHER_PUBLIC_KEY_PATH
     };
     if value != canonical {
       return Err(format!(

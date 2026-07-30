@@ -228,6 +228,16 @@ pub fn clear_default_if_matches(conn: &Connection, package_digest: &str) -> Resu
   Ok(())
 }
 
+/// Atomically clear the catalog default for a plugin id (used by bootstrap fail-closed when the
+/// vendor default is missing or unverified, so a stale wrong default is never retained).
+pub fn clear_default_for_plugin(conn: &Connection, plugin_id: &str) -> Result<(), StorageError> {
+  conn.execute(
+    "DELETE FROM plugin_default_versions WHERE plugin_id = ?1",
+    params![plugin_id],
+  )?;
+  Ok(())
+}
+
 /// Count integration instances that reference this plugin_id + version string.
 /// Phase 4 will pin digests; Phase 3 uses plugin_id/version as the dependency signal.
 pub fn count_integration_users(conn: &Connection, plugin_id: &str, version: &str) -> Result<Vec<String>, StorageError> {

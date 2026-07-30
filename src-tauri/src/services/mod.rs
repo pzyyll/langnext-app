@@ -23,6 +23,8 @@ pub mod runtime_plugin_contracts;
 pub mod runtime_router;
 
 #[cfg(test)]
+mod google_translate_web_runtime_tests;
+#[cfg(test)]
 mod runtime_lifecycle_installed_tests;
 #[cfg(test)]
 mod runtime_lifecycle_preference_tests;

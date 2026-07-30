@@ -10,7 +10,9 @@ use crate::domain::runtime_lifecycle::{
 use crate::domain::runtime_plugin::{
   FileRole, MANIFEST_FILE_PATH, PluginManifestV1, RuntimeDescriptor, RuntimeKind, SIGNATURE_FILE_PATH,
 };
-use crate::domain::service_integration::{IntegrationHealthStatus, IntegrationInstance};
+use crate::domain::service_integration::{
+  IntegrationCapabilityDescriptor, IntegrationHealthStatus, IntegrationInstance, ServiceIntegrationManifest,
+};
 use crate::domain::speech_service::SpeechService;
 use crate::domain::time::{new_id, now_rfc3339};
 use crate::domain::translation_profile::{PluginCapabilityEngine, TranslationProfile, TranslationProfileEngine};
@@ -46,6 +48,27 @@ const MIGRATION_WASM: &[u8] = include_bytes!(concat!(
 const PLUGIN_ID: &str = "langnext.conformance";
 const TRANSLATE_CAP: &str = "translate.text@1";
 
+/// Minimal registry-backed manifest for the synthetic conformance plugin so bundled->Wasm upgrades
+/// have a verifiable source capability identity (the source major must be preserved by the target).
+fn conformance_manifest(plugin_id: &str, capability_id: &str) -> ServiceIntegrationManifest {
+  ServiceIntegrationManifest {
+    manifest_version: 1,
+    plugin_api_version: "1.0".into(),
+    id: plugin_id.into(),
+    version: "1.0.0".into(),
+    display_name_key: "conformance".into(),
+    min_host_version: "0.1.0".into(),
+    config_schema_version: 1,
+    credential_slots: vec![],
+    endpoints: vec![],
+    capabilities: vec![IntegrationCapabilityDescriptor {
+      id: capability_id.into(),
+      preferences_schema_version: 1,
+      endpoint_aliases: vec![],
+    }],
+  }
+}
+
 fn setup() -> (
   tempfile::TempDir,
   Database,
@@ -57,7 +80,9 @@ fn setup() -> (
   db.initialize().unwrap();
   let packages =
     PluginPackageService::with_vendor_roots(db.clone(), dir.path().to_path_buf(), vec![fixture_vendor_public_key()]);
-  let registry = Arc::new(ServiceIntegrationRegistry::bundled().unwrap());
+  let mut registry = ServiceIntegrationRegistry::bundled().unwrap();
+  registry.register_test_manifest(conformance_manifest(PLUGIN_ID, TRANSLATE_CAP));
+  let registry = Arc::new(registry);
   let wasm = Arc::new(WasmRuntime::new().unwrap());
   let tokens = Arc::new(TokenGrantService::new(Arc::new(
     crate::services::google_service_account::GoogleServiceAccountExchanger::new(
@@ -75,12 +100,14 @@ fn build_pkg(version: &str, extra: Option<&str>) -> (Vec<u8>, String) {
     id: "approved".into(),
     origins: vec!["https://conformance.example".into()],
     methods: vec![crate::domain::runtime_plugin::HttpMethod::Get],
+    instance_origin_config_field: None,
   }];
   if let Some(id) = extra {
     network.push(crate::domain::runtime_plugin::NetworkEndpointRequest {
       id: id.into(),
       origins: vec!["https://conformance.example".into()],
       methods: vec![crate::domain::runtime_plugin::HttpMethod::Get],
+      instance_origin_config_field: None,
     });
   }
   let config_schema_version: u32 = version
@@ -153,14 +180,17 @@ fn build_pkg(version: &str, extra: Option<&str>) -> (Vec<u8>, String) {
       crate::domain::runtime_plugin::CapabilityDeclaration {
         id: TRANSLATE_CAP.into(),
         preferences_schema: Some("schemas/preferences.json".into()),
+        artifact: None,
       },
       crate::domain::runtime_plugin::CapabilityDeclaration {
         id: "ocr.image@1".into(),
         preferences_schema: Some("schemas/preferences.json".into()),
+        artifact: None,
       },
       crate::domain::runtime_plugin::CapabilityDeclaration {
         id: "speech.synthesize@1".into(),
         preferences_schema: Some("schemas/preferences.json".into()),
+        artifact: None,
       },
     ],
     configuration_schema: Some("schemas/config.json".into()),

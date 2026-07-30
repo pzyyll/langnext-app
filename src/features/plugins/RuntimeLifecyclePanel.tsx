@@ -28,6 +28,7 @@ import {
   formatPermissionDifference,
   formatPublisherIdentity,
   formatRuntimeIdentity,
+  hasThirdPartyEgressChange,
   isRuntimeUnresolved,
   upgradeApprovalDetailsReady,
   upgradeRequiresAcknowledgement,
@@ -161,6 +162,12 @@ export function RuntimeLifecyclePanel({ instance }: RuntimeLifecyclePanelProps) 
             Publisher: {formatPublisherIdentity(upgradePreviewQuery.data.sourcePublisher)} →{" "}
             {formatPublisherIdentity(upgradePreviewQuery.data.targetPublisher)}
           </p>
+          {hasThirdPartyEgressChange(upgradePreviewQuery.data) ? (
+            <p className="text-error" role="alert">
+              Third-party data egress: this upgrade sends your translated text to a third-party proxy server (the
+              approved proxy origin). Detect stays on Google GTX. Never use for private content.
+            </p>
+          ) : null}
           {upgradePreviewQuery.data.permissionDifferences.length ? (
             <ul className="m-0 list-disc space-y-1 pl-5">
               {upgradePreviewQuery.data.permissionDifferences.map((diff) => (
