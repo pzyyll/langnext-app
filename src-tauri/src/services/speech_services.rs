@@ -351,6 +351,7 @@ fn map_capability_error(err: crate::domain::service_capability::CapabilityError)
       code: "permission_denied".into(),
       message: err.message,
     },
+    CapabilityErrorCode::EndpointTrustRequired => StorageError::EndpointTrustRequired(err.message),
     CapabilityErrorCode::QuotaExceeded => StorageError::Capability {
       code: "quota_exceeded".into(),
       message: err.message,

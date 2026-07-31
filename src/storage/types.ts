@@ -402,6 +402,9 @@ export type IntegrationHealthStatus = "unconfigured" | "unvalidated" | "ready" |
 /** DTO effective status including derived disabled/plugin_missing. */
 export type IntegrationEffectiveStatus = IntegrationHealthStatus | "disabled" | "plugin_missing";
 
+/** Host-owned endpoint trust state returned with an integration instance. */
+export type EndpointTrustStatus = "official" | "trusted_custom" | "review_required" | "not_applicable";
+
 export type CredentialSlotKind = "secret_json";
 
 export interface CredentialSlotDescriptor {
@@ -576,6 +579,8 @@ export interface IntegrationInstanceDto {
   configSchemaVersion: number;
   healthStatus: IntegrationHealthStatus;
   effectiveStatus: IntegrationEffectiveStatus;
+  /** Host-owned endpoint trust state (official / trusted custom / review required / not applicable). */
+  endpointTrustStatus: EndpointTrustStatus;
   lastValidatedAt: string | null;
   lastErrorCode: string | null;
   runtimeKind: string;
@@ -675,6 +680,32 @@ export interface IntegrationSlotCredentialWrite {
   credential?: CredentialUpdate;
 }
 
+/** Frontend input for a host-owned endpoint review preview. */
+export interface EndpointTrustPreviewInput {
+  pluginId: string;
+  instanceId?: string | null;
+  configJson: string;
+  expectedUpdatedAt?: string | null;
+}
+
+/** Sanitized endpoint review preview. The legacy `origin` field carries the full canonical base URL. */
+export interface EndpointTrustPreviewDto {
+  previewId: string;
+  instanceId: string | null;
+  pluginId: string;
+  endpointAlias: string;
+  origin: string;
+  method: string;
+  relativePath: string;
+  expiresAt: string;
+}
+
+/** Opaque acknowledged endpoint-trust fields appended to an integration save. */
+export interface EndpointTrustSavePayload {
+  endpointTrustPreviewId: string;
+  acknowledgeEndpointTrust: true;
+}
+
 export interface IntegrationInstanceWrite {
   id?: string | null;
   pluginId: string;
@@ -683,6 +714,10 @@ export interface IntegrationInstanceWrite {
   configJson: string;
   credentials?: IntegrationSlotCredentialWrite[];
   expectedUpdatedAt?: string | null;
+  /** Opaque host preview id; required only for a custom Edge TTS endpoint save. */
+  endpointTrustPreviewId?: string | null;
+  /** Must be true only after the user checks the host-provided acknowledgement box. */
+  acknowledgeEndpointTrust?: boolean;
 }
 
 export interface IntegrationDependencyDto {

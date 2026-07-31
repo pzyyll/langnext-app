@@ -1,11 +1,10 @@
 // ABOUTME: Service-integration network broker resolving manifest endpoint aliases only.
 // ABOUTME: Injects opaque token grants and enforces path/header/size/cancel policy before transport.
 use crate::domain::cancel::CancelToken;
+use crate::domain::endpoint_trust::{EDGE_TTS_TRUST_ENDPOINT_ALIAS, EndpointEgressPolicy};
 use crate::domain::provider_http::{ProviderHttpMethod, ProviderHttpResponse};
 use crate::domain::service_capability::{CapabilityError, CapabilityErrorCode, CapabilityExecutionPrincipal};
-use crate::domain::service_integration::{
-  EDGE_TTS_DEFAULT_BASE_URL, EDGE_TTS_PLUGIN_ID, IntegrationInstance, ServiceIntegrationManifest,
-};
+use crate::domain::service_integration::{EDGE_TTS_PLUGIN_ID, IntegrationInstance, ServiceIntegrationManifest};
 use crate::error::StorageError;
 use crate::repositories::{integration_credential_bindings, integration_instances};
 use crate::services::bounded_http::{
@@ -18,6 +17,7 @@ use crate::services::bundled_plugins::{
   BundledPluginRegistration, CapabilityEndpointAuthority, CapabilityPathAuthority,
 };
 use crate::services::edge_tts::EDGE_TTS_ENDPOINT_ALIAS;
+use crate::services::endpoint_trust::{EndpointTrustService, classify_for_execution};
 use crate::services::service_integration_registry::ServiceIntegrationRegistry;
 use crate::services::token_grant::TokenGrant;
 use crate::storage::Database;
@@ -97,11 +97,13 @@ pub struct NetworkBroker {
   db: Database,
   registry: Arc<ServiceIntegrationRegistry>,
   transport: Arc<dyn RawHttpTransport>,
+  endpoint_trust: Arc<EndpointTrustService>,
 }
 
 impl NetworkBroker {
   pub fn new(db: Database, registry: Arc<ServiceIntegrationRegistry>) -> Self {
     Self {
+      endpoint_trust: Arc::new(EndpointTrustService::new(db.clone(), registry.clone())),
       db,
       registry,
       transport: Arc::new(ReqwestRawHttpTransport),
@@ -114,6 +116,7 @@ impl NetworkBroker {
     transport: Arc<dyn RawHttpTransport>,
   ) -> Self {
     Self {
+      endpoint_trust: Arc::new(EndpointTrustService::new(db.clone(), registry.clone())),
       db,
       registry,
       transport,
@@ -349,7 +352,14 @@ impl NetworkBroker {
       }
     }
 
-    let endpoint = resolve_endpoint_base(registration, &registration.manifest, &instance, &request.endpoint_alias)?;
+    let current_approval = self.current_endpoint_approval(registration, &instance, &request.endpoint_alias)?;
+    let endpoint = resolve_endpoint_base(
+      registration,
+      &registration.manifest,
+      &instance,
+      &request.endpoint_alias,
+      current_approval,
+    )?;
     // Origins come from pinned manifest grants or instance-validated HTTPS proxy config only.
     let mut url = build_endpoint(&endpoint.base_url, &request.relative_path).map_err(map_validation)?;
 
@@ -440,8 +450,10 @@ impl NetworkBroker {
     let proxy_mode = registration.config_adapter.proxy_mode(&instance.config_json);
 
     log::debug!(
-      "network_broker origin={} method={:?} path_len={} header_names={:?} body_len={} request_id={} capability={} instance={}",
-      url.origin().ascii_serialization(),
+      "network_broker policy={:?} endpoint_alias={} plugin={} method={:?} path_len={} header_names={:?} body_len={} request_id={} capability={} instance={}",
+      endpoint.destination_policy,
+      request.endpoint_alias,
+      registration.manifest.id,
       request.method,
       request.relative_path.len(),
       headers.keys().collect::<Vec<_>>(),
@@ -465,6 +477,45 @@ impl NetworkBroker {
         timeout: Some(timeout),
       },
     ))
+  }
+
+  fn current_endpoint_approval(
+    &self,
+    registration: &BundledPluginRegistration,
+    instance: &IntegrationInstance,
+    endpoint_alias: &str,
+  ) -> Result<bool, CapabilityError> {
+    if registration.manifest.id != EDGE_TTS_PLUGIN_ID || endpoint_alias != EDGE_TTS_TRUST_ENDPOINT_ALIAS {
+      return Ok(false);
+    }
+    let normalized_config = registration
+      .config_adapter
+      .normalize_config(&instance.config_json)
+      .map_err(map_validation)?;
+    let Some(base_url) = registration
+      .config_adapter
+      .instance_endpoint_origin(&normalized_config, endpoint_alias)
+      .map_err(map_validation)?
+    else {
+      return Ok(false);
+    };
+    self
+      .db
+      .read(|conn| {
+        self.endpoint_trust.current_approval(
+          conn,
+          instance.id,
+          &instance.plugin_id,
+          &instance.plugin_version,
+          &instance.runtime_kind,
+          instance.package_digest.as_deref(),
+          &normalized_config,
+          endpoint_alias,
+          &base_url,
+        )
+      })
+      .map(|approval| approval.is_some())
+      .map_err(map_storage)
   }
 }
 
@@ -540,18 +591,20 @@ fn resolve_endpoint_alias(manifest: &ServiceIntegrationManifest, alias: &str) ->
 }
 
 /// Host-selected endpoint base plus its DNS/proxy policy. The caller cannot supply this value.
+#[derive(Debug)]
 struct ResolvedEndpointBase {
   base_url: String,
   destination_policy: DestinationPolicy,
 }
 
-/// Resolve endpoint base URL from host-owned manifests or instance-sourced origins. Only fixed
-/// bundled manifest entries receive OS/TUN DNS; user-configured origins retain DNS pinning.
+/// Resolve endpoint base URL from host-owned manifests or instance-sourced origins. Custom Edge
+/// origins require a current exact approval before the configured OS DNS/proxy transport is used.
 fn resolve_endpoint_base(
   registration: &crate::services::bundled_plugins::BundledPluginRegistration,
   manifest: &ServiceIntegrationManifest,
   instance: &IntegrationInstance,
   alias: &str,
+  current_approval: bool,
 ) -> Result<ResolvedEndpointBase, CapabilityError> {
   // Capability already authorized the alias; still require it on the host-owned manifest.
   let pinned = resolve_endpoint_alias(manifest, alias)?;
@@ -561,11 +614,18 @@ fn resolve_endpoint_base(
       .instance_endpoint_origin(&instance.config_json, alias)
       .map_err(map_validation)?
     {
-      let destination_policy = if registration.manifest.id == EDGE_TTS_PLUGIN_ID
-        && alias == EDGE_TTS_ENDPOINT_ALIAS
-        && origin == EDGE_TTS_DEFAULT_BASE_URL
-      {
-        DestinationPolicy::TrustedFixed
+      let destination_policy = if registration.manifest.id == EDGE_TTS_PLUGIN_ID && alias == EDGE_TTS_ENDPOINT_ALIAS {
+        match classify_for_execution(&registration.manifest.id, alias, &origin, None, current_approval) {
+          EndpointEgressPolicy::TrustedFixed => DestinationPolicy::TrustedFixed,
+          EndpointEgressPolicy::PublicInternet => DestinationPolicy::PublicInternet,
+          EndpointEgressPolicy::UserApprovedCustom => DestinationPolicy::UserApprovedCustom,
+          EndpointEgressPolicy::ReviewRequired => {
+            return Err(CapabilityError::new(
+              CapabilityErrorCode::EndpointTrustRequired,
+              "custom endpoint requires explicit review",
+            ));
+          }
+        }
       } else {
         DestinationPolicy::PublicInternet
       };
@@ -592,6 +652,10 @@ fn map_storage(err: StorageError) -> CapabilityError {
   match err {
     StorageError::NotFound(msg) => CapabilityError::new(CapabilityErrorCode::InvalidConfiguration, msg),
     StorageError::PluginUnavailable(msg) => CapabilityError::new(CapabilityErrorCode::PluginUnavailable, msg),
+    StorageError::EndpointTrustRequired(_) | StorageError::EndpointTrustStale(_) => CapabilityError::new(
+      CapabilityErrorCode::EndpointTrustRequired,
+      "custom endpoint requires review",
+    ),
     StorageError::Validation(msg) => CapabilityError::new(CapabilityErrorCode::InvalidRequest, msg),
     _ => CapabilityError::new(CapabilityErrorCode::Internal, "internal storage error"),
   }
@@ -617,18 +681,23 @@ fn map_transport_error(err: StorageError) -> CapabilityError {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::domain::endpoint_trust::EndpointTrustPreviewInput;
   use crate::domain::provider::ProxyMode;
   use crate::domain::provider_http::ProviderHttpStreamEvent;
   use crate::domain::service_integration::{
-    GOOGLE_CLOUD_DEFAULT_LOCATION, GOOGLE_CLOUD_PLUGIN_ID, GOOGLE_CLOUD_SERVICE_ACCOUNT_SLOT, GoogleCloudConfigV1,
-    IntegrationCredentialBinding, IntegrationHealthStatus, IntegrationInstance,
+    EDGE_TTS_DEFAULT_BASE_URL, GOOGLE_CLOUD_DEFAULT_LOCATION, GOOGLE_CLOUD_PLUGIN_ID,
+    GOOGLE_CLOUD_SERVICE_ACCOUNT_SLOT, GoogleCloudConfigV1, IntegrationCredentialBinding, IntegrationHealthStatus,
+    IntegrationInstance,
   };
   use crate::domain::time::{new_id, now_rfc3339};
-  use crate::repositories::integration_credential_bindings;
+  use crate::repositories::{integration_credential_bindings, integration_endpoint_trusts};
+  use crate::services::bounded_http::{ResolverBackedTestTransport, TestDnsLookupFn};
   use crate::services::token_grant::TokenGrant;
   use std::future::Future;
+  use std::net::SocketAddr;
   use std::pin::Pin;
-  use std::sync::Mutex;
+  use std::sync::{Arc, Mutex};
+  use std::time::Duration;
 
   struct CaptureTransport {
     last: Mutex<Option<PreparedHttpRequest>>,
@@ -689,6 +758,43 @@ mod tests {
       runtime_requirement_json: None,
       created_at: now.clone(),
       updated_at: now,
+    }
+  }
+
+  fn seed_edge_instance(db: &Database, base_url: &str) -> IntegrationInstance {
+    let id = new_id();
+    let instance = edge_tts_instance(base_url);
+    db.transaction(|uow| {
+      integration_instances::insert(uow.conn(), &IntegrationInstance { id, ..instance.clone() })?;
+      Ok(())
+    })
+    .unwrap();
+    IntegrationInstance { id, ..instance }
+  }
+
+  fn edge_request(instance_id: Uuid, request_id: &str) -> BrokerRequest {
+    BrokerRequest {
+      integration_instance_id: instance_id,
+      capability_id: "speech.synthesize@1".into(),
+      execution_principal: CapabilityExecutionPrincipal {
+        request_id: request_id.into(),
+        integration_instance_id: instance_id,
+        plugin_id: EDGE_TTS_PLUGIN_ID.into(),
+        capability_id: "speech.synthesize@1".into(),
+      },
+      endpoint_alias: EDGE_TTS_ENDPOINT_ALIAS.into(),
+      method: ProviderHttpMethod::Post,
+      relative_path: "v1/audio/speech".into(),
+      query: vec![],
+      headers: HashMap::from([("Accept".into(), "audio/mpeg".into())]),
+      body: Some("{}".into()),
+      content_type: Some("application/json".into()),
+      auth: None,
+      request_id: request_id.into(),
+      cancel: None,
+      max_response_body_bytes: None,
+      max_request_body_bytes: None,
+      timeout: None,
     }
   }
 
@@ -796,6 +902,113 @@ mod tests {
     NetworkBroker::with_transport(db, registry, transport)
   }
 
+  fn approve_edge_custom_endpoint(db: &Database, instance: &IntegrationInstance) {
+    let registry = Arc::new(ServiceIntegrationRegistry::bundled().unwrap());
+    let trust_service = EndpointTrustService::new(db.clone(), registry.clone());
+    let normalized_config = registry
+      .get_registration(EDGE_TTS_PLUGIN_ID)
+      .unwrap()
+      .config_adapter
+      .normalize_config(&instance.config_json)
+      .unwrap();
+    let preview = trust_service
+      .preview(EndpointTrustPreviewInput {
+        plugin_id: EDGE_TTS_PLUGIN_ID.into(),
+        instance_id: Some(instance.id),
+        config_json: instance.config_json.clone(),
+        expected_updated_at: Some(instance.updated_at.clone()),
+      })
+      .unwrap();
+    let trust = trust_service
+      .consume_for_save(
+        instance.id,
+        EDGE_TTS_PLUGIN_ID,
+        &instance.plugin_version,
+        &instance.runtime_kind,
+        instance.package_digest.as_deref(),
+        &normalized_config,
+        Some(&instance.updated_at),
+        Some(&preview.preview_id),
+        true,
+      )
+      .unwrap()
+      .unwrap();
+    db.transaction(|uow| integration_endpoint_trusts::upsert(uow.conn(), &trust))
+      .unwrap();
+  }
+
+  async fn assert_approved_custom_dns_answer_reaches_bundled_broker(
+    hostname: &'static str,
+    synthetic_ip: [u8; 4],
+    request_id: &'static str,
+  ) {
+    const LOOPBACK_IP: [u8; 4] = [127, 0, 0, 1];
+    const DNS_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+
+    let listener = tokio::net::TcpListener::bind(SocketAddr::from((LOOPBACK_IP, 0)))
+      .await
+      .unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let expected_answers = vec![SocketAddr::from((LOOPBACK_IP, 0)), SocketAddr::from((synthetic_ip, 0))];
+    let observed = Arc::new(Mutex::new(Vec::<(String, Vec<SocketAddr>)>::new()));
+    let observed_for_lookup = observed.clone();
+    let expected_answers_for_lookup = expected_answers.clone();
+    let lookup: TestDnsLookupFn = Arc::new(move |requested_host| {
+      let observed = observed_for_lookup.clone();
+      let requested_host = requested_host.to_owned();
+      let answers = expected_answers_for_lookup.clone();
+      Box::pin(async move {
+        observed.lock().unwrap().push((requested_host, answers.clone()));
+        Ok(answers)
+      })
+    });
+
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::new(dir.path()).unwrap();
+    db.initialize().unwrap();
+    let instance = seed_edge_instance(&db, &format!("https://{hostname}:{port}"));
+    approve_edge_custom_endpoint(&db, &instance);
+    let transport = Arc::new(ResolverBackedTestTransport::new(lookup));
+    let broker = broker_with(db, transport);
+
+    const TLS_FATAL_ALERT: [u8; 7] = [0x15, 0x03, 0x03, 0x00, 0x02, 0x02, 0x28];
+    let accept_probe = async {
+      let stream = listener.accept().await.unwrap().0;
+      let _ = stream.try_write(&TLS_FATAL_ALERT);
+    };
+    let (result, accepted) = tokio::join!(
+      broker.execute_bytes(edge_request(instance.id, request_id)),
+      tokio::time::timeout(DNS_PROBE_TIMEOUT, accept_probe),
+    );
+    accepted.expect("approved custom DNS transport must reach the local probe");
+    assert!(result.is_err(), "the plaintext probe is intentionally not a TLS server");
+
+    let observed = observed.lock().unwrap();
+    assert_eq!(observed.len(), 1);
+    assert_eq!(observed[0].0, hostname);
+    assert_eq!(observed[0].1, expected_answers);
+  }
+
+  #[tokio::test]
+  async fn network_broker_approved_fake_ip_dns_answer_reaches_unfiltered_transport() {
+    assert_approved_custom_dns_answer_reaches_bundled_broker(
+      "approved-fake-ip.test",
+      [198, 18, 0, 1],
+      "edge-bundled-approved-fake-ip-dns",
+    )
+    .await;
+  }
+
+  #[tokio::test]
+  async fn network_broker_approved_private_dns_answer_reaches_unfiltered_transport() {
+    assert_approved_custom_dns_answer_reaches_bundled_broker(
+      "approved-private-dns.test",
+      [10, 0, 0, 7],
+      "edge-bundled-approved-private-dns",
+    )
+    .await;
+  }
+
   #[tokio::test]
   async fn network_broker_allows_approved_relative_request() {
     let dir = tempfile::tempdir().unwrap();
@@ -849,6 +1062,7 @@ mod tests {
       &registration.manifest,
       &edge_tts_instance(EDGE_TTS_DEFAULT_BASE_URL),
       EDGE_TTS_ENDPOINT_ALIAS,
+      false,
     )
     .unwrap();
     assert_eq!(default_endpoint.destination_policy, DestinationPolicy::TrustedFixed);
@@ -858,9 +1072,99 @@ mod tests {
       &registration.manifest,
       &edge_tts_instance("https://custom.example"),
       EDGE_TTS_ENDPOINT_ALIAS,
+      true,
     )
     .unwrap();
-    assert_eq!(custom_endpoint.destination_policy, DestinationPolicy::PublicInternet);
+    assert_eq!(
+      custom_endpoint.destination_policy,
+      DestinationPolicy::UserApprovedCustom
+    );
+
+    let official_origin_custom_path = resolve_endpoint_base(
+      &registration,
+      &registration.manifest,
+      &edge_tts_instance("https://tts.wangwangit.com/api"),
+      EDGE_TTS_ENDPOINT_ALIAS,
+      false,
+    )
+    .unwrap_err();
+    assert_eq!(
+      official_origin_custom_path.code,
+      CapabilityErrorCode::EndpointTrustRequired
+    );
+  }
+
+  #[tokio::test]
+  async fn network_broker_blocks_unapproved_custom_endpoint_before_transport() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::new(dir.path()).unwrap();
+    db.initialize().unwrap();
+    let instance = seed_edge_instance(&db, "https://custom.example");
+    let transport = Arc::new(CaptureTransport {
+      last: Mutex::new(None),
+      response: Mutex::new(Ok(text_response("{}"))),
+    });
+    let broker = broker_with(db, transport.clone());
+    let error = broker
+      .execute(edge_request(instance.id, "edge-review-required"))
+      .await
+      .unwrap_err();
+    assert_eq!(error.code, CapabilityErrorCode::EndpointTrustRequired);
+    assert!(transport.last.lock().unwrap().is_none());
+  }
+
+  #[tokio::test]
+  async fn network_broker_uses_user_approved_custom_transport_policy() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::new(dir.path()).unwrap();
+    db.initialize().unwrap();
+    let instance = seed_edge_instance(&db, "https://custom.example/api/");
+    let registry = Arc::new(ServiceIntegrationRegistry::bundled().unwrap());
+    let trust_service = EndpointTrustService::new(db.clone(), registry.clone());
+    let normalized_config = registry
+      .get_registration(EDGE_TTS_PLUGIN_ID)
+      .unwrap()
+      .config_adapter
+      .normalize_config(&instance.config_json)
+      .unwrap();
+    let preview = trust_service
+      .preview(EndpointTrustPreviewInput {
+        plugin_id: EDGE_TTS_PLUGIN_ID.into(),
+        instance_id: Some(instance.id),
+        config_json: instance.config_json.clone(),
+        expected_updated_at: Some(instance.updated_at.clone()),
+      })
+      .unwrap();
+    let trust = trust_service
+      .consume_for_save(
+        instance.id,
+        EDGE_TTS_PLUGIN_ID,
+        &instance.plugin_version,
+        &instance.runtime_kind,
+        instance.package_digest.as_deref(),
+        &normalized_config,
+        Some(&instance.updated_at),
+        Some(&preview.preview_id),
+        true,
+      )
+      .unwrap()
+      .unwrap();
+    db.transaction(|uow| integration_endpoint_trusts::upsert(uow.conn(), &trust))
+      .unwrap();
+
+    let transport = Arc::new(CaptureTransport {
+      last: Mutex::new(None),
+      response: Mutex::new(Ok(text_response("{}"))),
+    });
+    let broker = NetworkBroker::with_transport(db, registry, transport.clone());
+    broker
+      .execute(edge_request(instance.id, "edge-approved"))
+      .await
+      .unwrap();
+    let prepared = transport.last.lock().unwrap().take().unwrap();
+    assert_eq!(prepared.destination_policy, DestinationPolicy::UserApprovedCustom);
+    assert_eq!(prepared.proxy_mode, ProxyMode::Inherit);
+    assert_eq!(prepared.url.path(), "/api/v1/audio/speech");
   }
 
   #[tokio::test]

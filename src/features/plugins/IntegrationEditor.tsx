@@ -30,12 +30,26 @@ import {
 } from "../../query/options";
 import {
   deleteIntegrationInstance,
+  previewIntegrationEndpointTrust,
   saveIntegrationInstance,
   setIntegrationInstanceEnabled,
   validateIntegrationInstance,
 } from "../../storage/client";
 import { getIpcErrorCode, getIpcErrorMessage } from "../../storage/errors";
-import type { IntegrationInstanceDto, ServiceIntegrationDefinitionDto } from "../../storage/types";
+import { EDGE_TTS_DEFAULT_BASE_URL, EDGE_TTS_PLUGIN_ID } from "../../storage/types";
+import type {
+  IntegrationInstanceDto,
+  IntegrationInstanceWrite,
+  ServiceIntegrationDefinitionDto,
+} from "../../storage/types";
+import { EndpointTrustDialog } from "./EndpointTrustDialog";
+import {
+  deriveEndpointTrustStatus,
+  readEdgeTtsBaseUrl,
+  requiresEndpointTrustPreview,
+  type EndpointTrustPreviewDto,
+  type EndpointTrustSavePayload,
+} from "./endpointTrustPresentation";
 import { resolveLocalizedText } from "./pluginPresentation";
 import { SchemaForm } from "./schema/SchemaForm";
 import type { SchemaTextResolver } from "./schema/SchemaField";
@@ -109,6 +123,9 @@ export function IntegrationEditor({ integrationInstanceId }: IntegrationEditorPr
   const [renaming, setRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState("");
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [trustPreview, setTrustPreview] = useState<EndpointTrustPreviewDto | null>(null);
+  const [trustDialogOpen, setTrustDialogOpen] = useState(false);
+  const [trustCandidateBaseUrl, setTrustCandidateBaseUrl] = useState("");
 
   if (trackedInstance && trackedInstance.id !== integrationInstanceId) {
     setTrackedInstance(null);
@@ -150,6 +167,7 @@ export function IntegrationEditor({ integrationInstanceId }: IntegrationEditorPr
   }, [definition, draft, instance, schemaSupported]);
 
   const remoteRelevantSaveRef = useRef(false);
+  const pendingEndpointTrustWriteRef = useRef<IntegrationInstanceWrite | null>(null);
 
   const saveMutation = useMutation({
     mutationFn: saveIntegrationInstance,
@@ -234,6 +252,27 @@ export function IntegrationEditor({ integrationInstanceId }: IntegrationEditorPr
     },
   });
 
+  const previewTrustMutation = useMutation({
+    mutationFn: previewIntegrationEndpointTrust,
+    onSuccess: (result) => {
+      const pendingWrite = pendingEndpointTrustWriteRef.current;
+      pendingEndpointTrustWriteRef.current = null;
+      // The host's normalized classification is authoritative. An equivalent spelling of the
+      // official URL must never open a custom-endpoint acknowledgement dialog.
+      if (pendingWrite && result.origin === EDGE_TTS_DEFAULT_BASE_URL) {
+        saveMutation.mutate(pendingWrite);
+        return;
+      }
+      setTrustPreview(result);
+      setTrustDialogOpen(true);
+    },
+    onError: (error) => {
+      pendingEndpointTrustWriteRef.current = null;
+      const message = getIpcErrorMessage(error, t("plugins.endpointTrust.previewFailed"));
+      toast.error({ title: t("plugins.endpointTrust.previewFailed"), description: message });
+    },
+  });
+
   if (detailQuery.isLoading || definitionsQuery.isLoading) {
     return (
       <div className="flex flex-1 items-center p-8">
@@ -281,7 +320,11 @@ export function IntegrationEditor({ integrationInstanceId }: IntegrationEditorPr
   const pluginMissing = instance.effectiveStatus === "plugin_missing";
   const runtimeUnavailable = isRuntimeUnresolved(instance);
   const pending =
-    saveMutation.isPending || deleteMutation.isPending || validateMutation.isPending || enabledMutation.isPending;
+    saveMutation.isPending ||
+    deleteMutation.isPending ||
+    validateMutation.isPending ||
+    enabledMutation.isPending ||
+    previewTrustMutation.isPending;
   const dependencies = depsQuery.data ?? [];
   const capabilityIds = definition.capabilities.map((capability) => capability.id);
   const hasRequiredCredential = requiresCredential(definition);
@@ -294,7 +337,78 @@ export function IntegrationEditor({ integrationInstanceId }: IntegrationEditorPr
         ? t("plugins.status.authDegradedHint")
         : t("plugins.status.localOnlyHint");
   const saveExpectedUpdatedAt = draft.expectedUpdatedAt?.trim() || instance.updatedAt;
-  const canSave = dirty && !pluginMissing && !pending && Boolean(saveExpectedUpdatedAt);
+
+  const endpointTrustApplicable = definition.id === EDGE_TTS_PLUGIN_ID;
+  const candidateBaseUrl = endpointTrustApplicable ? String(draft.schema.values["base-url"] ?? "") : "";
+  const persistedBaseUrl = endpointTrustApplicable ? readEdgeTtsBaseUrl(instance.configJson) : "";
+  const endpointTrustStatus = endpointTrustApplicable
+    ? deriveEndpointTrustStatus({
+        applicable: true,
+        candidateBaseUrl,
+        officialBaseUrl: EDGE_TTS_DEFAULT_BASE_URL,
+        persistedBaseUrl,
+        persistedStatus: instance.endpointTrustStatus,
+      })
+    : "not_applicable";
+  const endpointTrustStatusLabelKey =
+    endpointTrustStatus === "official"
+      ? "plugins.endpointTrust.statusOfficial"
+      : endpointTrustStatus === "trusted_custom"
+        ? "plugins.endpointTrust.statusTrusted"
+        : endpointTrustStatus === "review_required"
+          ? "plugins.endpointTrust.statusReviewRequired"
+          : null;
+  // A runtime identity change can invalidate a previously trusted endpoint without changing the
+  // draft. Keep Save available so the user can review and re-sign the same configuration.
+  const canReconfirmEndpointTrust = endpointTrustApplicable && endpointTrustStatus === "review_required";
+  const canSave = (dirty || canReconfirmEndpointTrust) && !pluginMissing && !pending && Boolean(saveExpectedUpdatedAt);
+
+  const handleSaveClick = () => {
+    if (!canSave) {
+      return;
+    }
+    remoteRelevantSaveRef.current = hasIntegrationRemoteRelevantMutation(definition, draft, instance);
+    const write = buildIntegrationWrite(definition, draft, {
+      id: instance.id,
+      expectedUpdatedAt: saveExpectedUpdatedAt,
+    });
+    const endpointTrustNeedsPreview =
+      requiresEndpointTrustPreview({
+        applicable: endpointTrustApplicable,
+        candidateBaseUrl,
+        officialBaseUrl: EDGE_TTS_DEFAULT_BASE_URL,
+      }) && endpointTrustStatus !== "trusted_custom";
+    if (!endpointTrustNeedsPreview) {
+      saveMutation.mutate(write);
+      return;
+    }
+    setTrustCandidateBaseUrl(candidateBaseUrl);
+    pendingEndpointTrustWriteRef.current = write;
+    previewTrustMutation.mutate({
+      pluginId: definition.id,
+      instanceId: instance.id,
+      configJson: write.configJson,
+      expectedUpdatedAt: saveExpectedUpdatedAt,
+    });
+  };
+
+  const handleTrustSave = async (payload: EndpointTrustSavePayload) => {
+    const write = buildIntegrationWrite(definition, draft, {
+      id: instance.id,
+      expectedUpdatedAt: saveExpectedUpdatedAt,
+      endpointTrust: payload,
+    });
+    try {
+      await saveMutation.mutateAsync(write);
+    } catch (error) {
+      const code = getIpcErrorCode(error);
+      const message =
+        code === "endpoint_trust_required" || code === "endpoint_trust_stale"
+          ? t("plugins.endpointTrust.stale")
+          : getIpcErrorMessage(error, t("plugins.toast.saveFailed"));
+      throw Object.assign(new Error(message), { cause: error });
+    }
+  };
 
   return (
     <>
@@ -409,23 +523,7 @@ export function IntegrationEditor({ integrationInstanceId }: IntegrationEditorPr
             >
               {t("plugins.validate")}
             </Button>
-            <Button
-              type="button"
-              className={primaryButtonClassName}
-              disabled={!canSave}
-              onClick={() => {
-                if (!canSave) {
-                  return;
-                }
-                remoteRelevantSaveRef.current = hasIntegrationRemoteRelevantMutation(definition, draft, instance);
-                saveMutation.mutate(
-                  buildIntegrationWrite(definition, draft, {
-                    id: instance.id,
-                    expectedUpdatedAt: saveExpectedUpdatedAt,
-                  }),
-                );
-              }}
-            >
+            <Button type="button" className={primaryButtonClassName} disabled={!canSave} onClick={handleSaveClick}>
               {saveMutation.isPending ? t("common.saving") : t("common.save")}
             </Button>
           </div>
@@ -519,6 +617,9 @@ export function IntegrationEditor({ integrationInstanceId }: IntegrationEditorPr
                 });
               }}
             />
+            {endpointTrustStatusLabelKey ? (
+              <p className="text-body-tight text-neutral">{t(endpointTrustStatusLabelKey)}</p>
+            ) : null}
           </section>
 
           <section className="space-y-2">
@@ -558,6 +659,20 @@ export function IntegrationEditor({ integrationInstanceId }: IntegrationEditorPr
             throw Object.assign(new Error(message), { cause: error });
           }
         }}
+      />
+
+      <EndpointTrustDialog
+        open={trustDialogOpen}
+        onOpenChange={(open) => {
+          setTrustDialogOpen(open);
+          if (!open) {
+            setTrustPreview(null);
+          }
+        }}
+        preview={trustPreview}
+        candidateBaseUrlAtPreview={trustCandidateBaseUrl}
+        currentCandidateBaseUrl={candidateBaseUrl}
+        onTrust={handleTrustSave}
       />
     </>
   );

@@ -154,6 +154,9 @@ pub struct NetworkGrantEntryRecord {
   pub capability_id: String,
   pub endpoint_id: String,
   pub origin: String,
+  /// Complete canonical endpoint base URL used by the Wasm broker.
+  #[serde(default)]
+  pub base_url: String,
   /// Manifest-bound origin provenance. Missing legacy snapshot fields fail closed as dynamic.
   #[serde(default = "default_network_origin_kind")]
   pub origin_kind: String,

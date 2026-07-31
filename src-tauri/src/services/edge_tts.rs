@@ -151,19 +151,26 @@ pub fn normalize_edge_tts_base_url(raw: &str) -> Result<NormalizedEdgeTtsBaseUrl
   if !parsed.username().is_empty() || parsed.password().is_some() {
     return Err("base URL must not include userinfo".into());
   }
+  if parsed.query().is_some() {
+    return Err("base URL must not include a query".into());
+  }
   if parsed.fragment().is_some() {
     return Err("base URL must not include a fragment".into());
   }
   let host = match parsed.host() {
     Some(url::Host::Domain(domain)) => {
-      let domain = domain.trim();
+      let domain = domain.trim().trim_end_matches('.').to_ascii_lowercase();
       if domain.is_empty() {
         return Err("base URL host is required".into());
       }
-      domain.to_string()
+      if domain == "localhost" || domain.ends_with(".localhost") {
+        return Err("base URL host must be a DNS name".into());
+      }
+      domain
     }
-    Some(url::Host::Ipv4(addr)) => addr.to_string(),
-    Some(url::Host::Ipv6(addr)) => addr.to_string(),
+    Some(url::Host::Ipv4(_)) | Some(url::Host::Ipv6(_)) => {
+      return Err("base URL host must be a DNS name".into());
+    }
     None => return Err("base URL host is required".into()),
   };
   let path = parsed.path().trim_end_matches('/').to_string();
@@ -372,6 +379,9 @@ mod tests {
 
     let n = normalize_edge_tts_base_url("https://my.host/api/").unwrap();
     assert_eq!(n.canonical_url, "https://my.host/api");
+
+    let n = normalize_edge_tts_base_url("https://tts.wangwangit.com/api").unwrap();
+    assert_ne!(n.canonical_url, EDGE_TTS_DEFAULT_BASE_URL);
   }
 
   #[test]
@@ -379,6 +389,7 @@ mod tests {
     assert!(normalize_edge_tts_base_url("http://my.host").is_err());
     assert!(normalize_edge_tts_base_url("https://user:pass@my.host").is_err());
     assert!(normalize_edge_tts_base_url("https://my.host#frag").is_err());
+    assert!(normalize_edge_tts_base_url("https://tts.wangwangit.com?route=/custom").is_err());
     assert!(normalize_edge_tts_base_url("").is_err());
   }
 
@@ -428,7 +439,7 @@ mod tests {
     let dir = tempfile::tempdir().unwrap();
     let db = Database::new(dir.path()).unwrap();
     db.initialize().unwrap();
-    let instance_id = seed_edge_instance(&db, "https://edge.example/api");
+    let instance_id = seed_edge_instance(&db, EDGE_TTS_DEFAULT_BASE_URL);
     let mp3_bytes = vec![0xFF, 0xFB, 0x90, 0x64];
     let transport = Arc::new(CaptureTransport {
       last: Mutex::new(None),
@@ -469,7 +480,7 @@ mod tests {
 
     assert_eq!(response.mp3_bytes, mp3_bytes);
     let prepared = transport.last.lock().unwrap().take().unwrap();
-    assert_eq!(prepared.url.as_str(), "https://edge.example/api/v1/audio/speech");
+    assert_eq!(prepared.url.as_str(), "https://tts.wangwangit.com/v1/audio/speech");
     assert_eq!(prepared.headers.get("Accept").map(String::as_str), Some("audio/mpeg"));
     assert_eq!(prepared.content_type.as_deref(), Some("application/json"));
     assert_eq!(prepared.max_response_body_bytes, Some(SPEECH_AUDIO_MAX_BYTES));

@@ -247,6 +247,9 @@ pub enum DestinationPolicy {
   TrustedFixed,
   /// Resolve and connect only to publicly routable external addresses.
   PublicInternet,
+  /// Use OS DNS and the selected instance ProxyMode without filtering DNS address classes.
+  /// This is available only after an exact host approval for one DNS origin.
+  UserApprovedCustom,
 }
 
 /// Secret-bearing request ready for native execution (never returned over IPC).
@@ -520,9 +523,100 @@ impl RawHttpTransport for ReqwestRawHttpTransport {
   }
 }
 
+/// Test-only transport that runs the real reqwest request with an injected DNS resolver.
+/// `UserApprovedCustom` deliberately uses the unfiltered configured client; `PublicInternet`
+/// deliberately uses the strict resolver so a policy regression fails at the public broker seam.
+#[cfg(test)]
+pub(crate) type TestDnsLookupFn = DnsLookupFn;
+
+#[cfg(test)]
+const TEST_DNS_TRANSPORT_TIMEOUT: Duration = Duration::from_secs(2);
+
+#[cfg(test)]
+#[derive(Clone)]
+struct UnfilteredDnsResolver {
+  lookup: DnsLookupFn,
+}
+
+#[cfg(test)]
+impl Resolve for UnfilteredDnsResolver {
+  fn resolve(&self, name: Name) -> Resolving {
+    let lookup = self.lookup.clone();
+    let hostname = name.as_str().to_owned();
+    Box::pin(async move {
+      let addresses = (lookup)(&hostname).await?;
+      if addresses.is_empty() {
+        return Err(std::io::Error::other("test DNS returned no destinations").into());
+      }
+      Ok(Box::new(addresses.into_iter()) as Addrs)
+    })
+  }
+}
+
+#[cfg(test)]
+pub(crate) struct ResolverBackedTestTransport {
+  lookup: TestDnsLookupFn,
+}
+
+#[cfg(test)]
+impl ResolverBackedTestTransport {
+  pub(crate) fn new(lookup: TestDnsLookupFn) -> Self {
+    Self { lookup }
+  }
+}
+
+#[cfg(test)]
+impl RawHttpTransport for ResolverBackedTestTransport {
+  fn request(
+    &self,
+    prepared: PreparedHttpRequest,
+  ) -> Pin<Box<dyn Future<Output = Result<BoundedHttpResponse, StorageError>> + Send + '_>> {
+    let lookup = self.lookup.clone();
+    Box::pin(async move {
+      let client_kind = destination_client_kind(prepared.destination_policy);
+      let resolver: Arc<dyn Resolve> = match client_kind {
+        DestinationClientKind::PublicInternet => Arc::new(PublicDestinationResolver::with_lookup(lookup.clone())),
+        _ => Arc::new(UnfilteredDnsResolver { lookup: lookup.clone() }),
+      };
+      // Tests use Direct to prevent inherited CI proxy settings from making a live request; the
+      // prepared request still carries the production-selected ProxyMode for seam assertions.
+      let client = match client_kind {
+        DestinationClientKind::PublicInternet => build_public_client_with_resolver(resolver)?,
+        DestinationClientKind::TrustedFixed => build_trusted_fixed_client_with_resolver(Some(resolver))?,
+        DestinationClientKind::Configured => build_configured_client_with_resolver(ProxyMode::Direct, Some(resolver))?,
+      };
+      match tokio::time::timeout(
+        TEST_DNS_TRANSPORT_TIMEOUT,
+        execute_request_with_client(&client, prepared),
+      )
+      .await
+      {
+        Ok(result) => result,
+        Err(_) => Err(StorageError::Validation("test DNS transport timed out".into())),
+      }
+    })
+  }
+
+  fn stream(
+    &self,
+    _prepared: PreparedHttpRequest,
+    _cancel: CancelToken,
+    _on_event: Box<dyn Fn(ProviderHttpStreamEvent) -> Result<(), StorageError> + Send>,
+  ) -> Pin<Box<dyn Future<Output = Result<(), StorageError>> + Send + '_>> {
+    Box::pin(async { Err(StorageError::Validation("test transport stream not supported".into())) })
+  }
+}
+
 async fn execute_request(prepared: PreparedHttpRequest) -> Result<BoundedHttpResponse, StorageError> {
-  let max_body = prepared.max_response_body_bytes.unwrap_or(MAX_RESPONSE_BODY_BYTES);
   let client = client_for(prepared.proxy_mode, prepared.destination_policy)?;
+  execute_request_with_client(client, prepared).await
+}
+
+async fn execute_request_with_client(
+  client: &reqwest::Client,
+  prepared: PreparedHttpRequest,
+) -> Result<BoundedHttpResponse, StorageError> {
+  let max_body = prepared.max_response_body_bytes.unwrap_or(MAX_RESPONSE_BODY_BYTES);
   let mut builder = match prepared.method {
     ProviderHttpMethod::Get => client.get(prepared.url.clone()),
     ProviderHttpMethod::Post => client.post(prepared.url.clone()),
@@ -666,14 +760,29 @@ async fn read_response_body_bounded(mut response: reqwest::Response, max_body: u
   Ok(body)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DestinationClientKind {
+  Configured,
+  TrustedFixed,
+  PublicInternet,
+}
+
+fn destination_client_kind(destination_policy: DestinationPolicy) -> DestinationClientKind {
+  match destination_policy {
+    DestinationPolicy::Configured | DestinationPolicy::UserApprovedCustom => DestinationClientKind::Configured,
+    DestinationPolicy::TrustedFixed => DestinationClientKind::TrustedFixed,
+    DestinationPolicy::PublicInternet => DestinationClientKind::PublicInternet,
+  }
+}
+
 fn client_for(
   mode: ProxyMode,
   destination_policy: DestinationPolicy,
 ) -> Result<&'static reqwest::Client, StorageError> {
-  match destination_policy {
-    DestinationPolicy::Configured => configured_client_for(mode),
-    DestinationPolicy::TrustedFixed => trusted_fixed_client_for(),
-    DestinationPolicy::PublicInternet => public_client_for(mode),
+  match destination_client_kind(destination_policy) {
+    DestinationClientKind::Configured => configured_client_for(mode),
+    DestinationClientKind::TrustedFixed => trusted_fixed_client_for(),
+    DestinationClientKind::PublicInternet => public_client_for(mode),
   }
 }
 
@@ -789,10 +898,10 @@ fn stream_client_for(
   mode: ProxyMode,
   destination_policy: DestinationPolicy,
 ) -> Result<&'static reqwest::Client, StorageError> {
-  match destination_policy {
-    DestinationPolicy::Configured => configured_stream_client_for(mode),
-    DestinationPolicy::TrustedFixed => trusted_fixed_stream_client_for(),
-    DestinationPolicy::PublicInternet => public_stream_client_for(mode),
+  match destination_client_kind(destination_policy) {
+    DestinationClientKind::Configured => configured_stream_client_for(mode),
+    DestinationClientKind::TrustedFixed => trusted_fixed_stream_client_for(),
+    DestinationClientKind::PublicInternet => public_stream_client_for(mode),
   }
 }
 
@@ -1177,6 +1286,59 @@ mod tests {
   }
 
   #[tokio::test]
+  async fn bounded_http_user_approved_custom_client_keeps_fake_ip_and_private_dns_answers() {
+    use reqwest::dns::{Name, Resolve};
+    const BENCHMARK_HOST: &str = "approved-benchmark.test";
+    const PRIVATE_HOST: &str = "approved-private.test";
+    const LOOPBACK_HOST: &str = "approved-loopback.test";
+    const BENCHMARK_IP: [u8; 4] = [198, 18, 0, 1];
+    const PRIVATE_IP: [u8; 4] = [10, 0, 0, 7];
+    const LOOPBACK_IP: [u8; 4] = [127, 0, 0, 1];
+
+    let lookup_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let calls = lookup_count.clone();
+    let resolver: Arc<dyn Resolve> = Arc::new(UnfilteredTestResolver {
+      lookup: Arc::new(move |hostname| {
+        let calls = calls.clone();
+        let hostname = hostname.to_owned();
+        Box::pin(async move {
+          calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+          match hostname.as_str() {
+            BENCHMARK_HOST => Ok(vec![SocketAddr::from((BENCHMARK_IP, 0))]),
+            PRIVATE_HOST => Ok(vec![SocketAddr::from((PRIVATE_IP, 0))]),
+            LOOPBACK_HOST => Ok(vec![SocketAddr::from((LOOPBACK_IP, 0))]),
+            _ => Err(std::io::Error::other("unexpected approved-custom DNS hostname")),
+          }
+        })
+      }),
+    });
+    for (host, expected) in [(BENCHMARK_HOST, BENCHMARK_IP), (PRIVATE_HOST, PRIVATE_IP)] {
+      let name: Name = host.parse().unwrap();
+      let addresses: Vec<_> = resolver.resolve(name).await.unwrap().collect();
+      assert_eq!(addresses, vec![SocketAddr::from((expected, 0))]);
+    }
+
+    let listener = tokio::net::TcpListener::bind(SocketAddr::from((LOOPBACK_IP, 0)))
+      .await
+      .expect("bind approved-custom DNS probe listener");
+    let port = listener.local_addr().unwrap().port();
+    let client = build_configured_client_with_resolver(ProxyMode::Direct, Some(resolver)).unwrap();
+    let send = client.get(format!("https://{LOOPBACK_HOST}:{port}/")).send();
+    tokio::pin!(send);
+    tokio::select! {
+      biased;
+      accepted = listener.accept() => {
+        accepted.expect("approved custom client must use the unfiltered configured resolver");
+      }
+      result = &mut send => panic!("approved custom client did not reach synthetic DNS answer: {result:?}"),
+      _ = tokio::time::sleep(PROBE_ACCEPT_RACE_TIMEOUT) => {
+        panic!("approved custom client did not reach synthetic DNS answer before timeout");
+      }
+    }
+    assert!(lookup_count.load(std::sync::atomic::Ordering::SeqCst) >= 3);
+  }
+
+  #[tokio::test]
   async fn bounded_http_resolver_fails_closed_when_dns_lookup_errors() {
     use reqwest::dns::{Name, Resolve};
     let resolver = PublicDestinationResolver::with_lookup(Arc::new(|_host| {
@@ -1329,6 +1491,26 @@ mod tests {
       winner, "target",
       "public stream client must connect directly (no system proxy)"
     );
+  }
+
+  #[test]
+  fn bounded_http_user_approved_custom_uses_configured_dns_and_proxy_clients() {
+    assert!(std::ptr::eq(
+      client_for(ProxyMode::Inherit, DestinationPolicy::UserApprovedCustom).unwrap(),
+      configured_client_for(ProxyMode::Inherit).unwrap(),
+    ));
+    assert!(std::ptr::eq(
+      client_for(ProxyMode::Direct, DestinationPolicy::UserApprovedCustom).unwrap(),
+      configured_client_for(ProxyMode::Direct).unwrap(),
+    ));
+    assert!(std::ptr::eq(
+      stream_client_for(ProxyMode::Inherit, DestinationPolicy::UserApprovedCustom).unwrap(),
+      configured_stream_client_for(ProxyMode::Inherit).unwrap(),
+    ));
+    assert!(std::ptr::eq(
+      stream_client_for(ProxyMode::Direct, DestinationPolicy::UserApprovedCustom).unwrap(),
+      configured_stream_client_for(ProxyMode::Direct).unwrap(),
+    ));
   }
 
   #[test]

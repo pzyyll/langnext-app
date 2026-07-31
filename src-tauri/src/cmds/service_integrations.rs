@@ -1,6 +1,7 @@
 // ABOUTME: Sanitized service-integration definition/instance Tauri commands.
 // ABOUTME: Emits coarse change events after successful mutations only.
 use crate::cmds::runtime::run_blocking;
+use crate::domain::endpoint_trust::{EndpointTrustPreviewDto, EndpointTrustPreviewInput};
 use crate::domain::service_integration::{
   IntegrationDependencyDto, IntegrationInstanceDto, IntegrationInstanceWrite, IntegrationValidationResult,
   ServiceIntegrationDefinitionDto,
@@ -35,6 +36,18 @@ pub async fn get_integration_instance(
 ) -> Result<IntegrationInstanceDto, IpcError> {
   let services = state.service_integrations.clone();
   run_blocking("get_integration_instance", move || services.get_instance(id)).await
+}
+
+#[tauri::command]
+pub async fn preview_integration_endpoint_trust(
+  state: State<'_, AppState>,
+  input: EndpointTrustPreviewInput,
+) -> Result<EndpointTrustPreviewDto, IpcError> {
+  let endpoint_trust = state.endpoint_trust.clone();
+  run_blocking("preview_integration_endpoint_trust", move || {
+    endpoint_trust.preview(input)
+  })
+  .await
 }
 
 #[tauri::command]

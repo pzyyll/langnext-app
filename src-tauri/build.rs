@@ -87,6 +87,7 @@ const APP_COMMANDS: &[&str] = &[
   "discard_integration_runtime_snapshot",
   // Service integrations (plugin instances)
   "list_service_integration_definitions",
+  "preview_integration_endpoint_trust",
   "list_integration_instances",
   "get_integration_instance",
   "save_integration_instance",

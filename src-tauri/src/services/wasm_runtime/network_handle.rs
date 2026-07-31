@@ -1,13 +1,14 @@
 // ABOUTME: BrokerHandle implementation backed by a bounded RawHttpTransport so Wasm guests can
 // ABOUTME: reach approved HTTPS origins (GTX/proxy) without credentials or ambient network access.
 use crate::domain::cancel::CancelToken;
+use crate::domain::endpoint_trust::{ENDPOINT_TRUST_REQUIRED_MARKER, EndpointEgressPolicy, classify_endpoint_egress};
 use crate::domain::plugin_resource::{
   NetworkResponseBodyMode, RESOURCE_MAX_CHUNK_BYTES, ResourceCreateParams, ResourceDirection, ResourceOwner,
 };
 use crate::domain::provider_http::{ProviderHttpMethod, ProviderHttpStreamEvent};
 use crate::domain::runtime_plugin::{ExecutionGrantSet, NetworkOriginKind, PluginPrincipal};
 use crate::services::bounded_http::{
-  BoundedHttpResponse, DestinationPolicy, PreparedHttpRequest, RawHttpTransport, RequestBody,
+  BoundedHttpResponse, DestinationPolicy, PreparedHttpRequest, RawHttpTransport, RequestBody, build_endpoint,
   validate_external_destination, with_cancel,
 };
 use crate::services::stream_resources::{
@@ -21,9 +22,6 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-
-/// Host-maintained Wasm endpoint id for the bundled Google Web GTX transport.
-const GOOGLE_WEB_GTX_ENDPOINT_ID: &str = "gtx";
 
 /// Auth policy id for credential-free endpoints. The network broker handle never injects auth;
 /// any other policy cannot be fulfilled and is denied before transport.
@@ -42,9 +40,10 @@ const STREAM_FRAME_MAX_BYTES: u64 = RESOURCE_MAX_CHUNK_BYTES;
 ///
 /// Authorization (origin, method, path, headers, body size) is already enforced by the host
 /// runtime before `fetch` is called; this handle only executes the authorized transport against
-/// the matched origin. It never injects credentials, cookies, or auth headers, and rejects
-/// private/loopback/link-local final destinations. Non-`host.none.v1` auth policies are denied
-/// because the handle has no token access (Phase 7+ adds authenticated providers).
+/// the matched origin. It never injects credentials, cookies, or auth headers. Literal private,
+/// loopback, link-local, and localhost destinations remain rejected; an approved DNS hostname
+/// intentionally accepts any resolver result. Non-`host.none.v1` auth policies are denied because
+/// the handle has no token access (Phase 7+ adds authenticated providers).
 #[derive(Clone)]
 pub struct NetworkBrokerHandle {
   transport: Arc<dyn RawHttpTransport>,
@@ -75,20 +74,17 @@ impl BrokerHandle for NetworkBrokerHandle {
       }
       let destination_policy = destination_policy_for_authorization(&principal, &authorization)?;
       let method = parse_method(&request.method)?;
-      let origin = authorization.origin.as_str();
       let (path_part, query_part) = request
         .relative_path
         .split_once('?')
         .unwrap_or((&request.relative_path, ""));
-      let full = if query_part.is_empty() {
-        format!("{origin}/{path_part}")
-      } else {
-        format!("{origin}/{path_part}?{query_part}")
-      };
-      let url = match url::Url::parse(&full) {
-        Ok(u) => u,
+      let mut url = match build_endpoint(&authorization.base_url, path_part) {
+        Ok(url) => url,
         Err(_) => return Err(BrokerFetchError::Network("invalid endpoint url".into())),
       };
+      if !query_part.is_empty() {
+        url.set_query(Some(query_part));
+      }
       if validate_external_destination(&url).is_err() {
         return Err(BrokerFetchError::Network("destination rejected by host policy".into()));
       }
@@ -105,7 +101,11 @@ impl BrokerHandle for NetworkBrokerHandle {
         headers,
         body,
         content_type,
-        proxy_mode: crate::domain::provider::ProxyMode::Direct,
+        proxy_mode: if destination_policy == DestinationPolicy::UserApprovedCustom {
+          crate::domain::provider::ProxyMode::Inherit
+        } else {
+          crate::domain::provider::ProxyMode::Direct
+        },
         destination_policy,
         max_response_body_bytes: Some(max_response_bytes as usize),
         timeout: Some(timeout),
@@ -525,28 +525,18 @@ fn destination_policy_for_authorization(
   principal: &PluginPrincipal,
   authorization: &BrokerAuthorization,
 ) -> Result<DestinationPolicy, BrokerFetchError> {
-  match authorization.origin_kind {
-    NetworkOriginKind::InstanceConfigured => {
-      // Vendor default origin uses TrustedFixed (OS DNS) so proxy-software fake-IP results in
-      // RFC 2544 range are not rejected by the PublicInternet SSRF pre-filter; custom origins
-      // keep PublicInternet.
-      if principal.plugin_id().as_str() == crate::domain::service_integration::EDGE_TTS_PLUGIN_ID
-        && authorization.endpoint_id.as_str() == crate::services::edge_tts::EDGE_TTS_ENDPOINT_ALIAS
-        && authorization.origin.as_str() == crate::services::edge_tts_runtime::EDGE_TTS_VENDOR_DEFAULT_ORIGIN
-      {
-        Ok(DestinationPolicy::TrustedFixed)
-      } else {
-        Ok(DestinationPolicy::PublicInternet)
-      }
-    }
-    NetworkOriginKind::HostFixed
-      if principal.plugin_id().as_str() == crate::domain::service_integration::GOOGLE_TRANSLATE_WEB_PLUGIN_ID
-        && authorization.endpoint_id.as_str() == GOOGLE_WEB_GTX_ENDPOINT_ID
-        && authorization.origin.as_str() == crate::domain::service_integration::GOOGLE_TRANSLATE_WEB_GTX_ORIGIN =>
-    {
-      Ok(DestinationPolicy::TrustedFixed)
-    }
-    NetworkOriginKind::HostFixed => Err(BrokerFetchError::NotApproved),
+  let current_approval = authorization.origin_kind == NetworkOriginKind::UserApprovedInstance;
+  match classify_endpoint_egress(
+    principal.plugin_id().as_str(),
+    authorization.endpoint_id.as_str(),
+    authorization.base_url.as_str(),
+    Some(authorization.origin_kind),
+    current_approval,
+  ) {
+    EndpointEgressPolicy::TrustedFixed => Ok(DestinationPolicy::TrustedFixed),
+    EndpointEgressPolicy::PublicInternet => Ok(DestinationPolicy::PublicInternet),
+    EndpointEgressPolicy::UserApprovedCustom => Ok(DestinationPolicy::UserApprovedCustom),
+    EndpointEgressPolicy::ReviewRequired => Err(BrokerFetchError::Network(ENDPOINT_TRUST_REQUIRED_MARKER.into())),
   }
 }
 
@@ -616,8 +606,11 @@ mod tests {
     AuthPolicyId, CapabilityId, EndpointId, ExecutionGrantSet, HttpsOrigin, NetworkOriginKind, PackageDigest,
     PackageIdentity, PluginId, ResourceLimits, RuntimeIdentity, SemVerVersion,
   };
-  use crate::services::bounded_http::BoundedHttpResponse;
+  use crate::services::bounded_http::{BoundedHttpResponse, ResolverBackedTestTransport, TestDnsLookupFn};
   use std::collections::HashMap;
+  use std::net::SocketAddr;
+  use std::sync::{Arc, Mutex};
+  use std::time::Duration;
   use uuid::Uuid;
 
   fn principal() -> PluginPrincipal {
@@ -667,12 +660,217 @@ mod tests {
     BrokerAuthorization {
       endpoint_id: EndpointId::parse("ep").unwrap(),
       origin: HttpsOrigin::parse("https://example.com").unwrap(),
+      base_url: "https://example.com".into(),
       origin_kind: NetworkOriginKind::InstanceConfigured,
       auth_policy: AuthPolicyId::parse("host.none.v1").unwrap(),
       resource_limits: ResourceLimits::default(),
       response_body_modes: NetworkResponseBodyModes::ALL,
       selected_response_mode: mode,
     }
+  }
+
+  fn edge_principal() -> PluginPrincipal {
+    let grant = ExecutionGrantSet::initial(
+      Uuid::nil(),
+      RuntimeIdentity::Package(PackageIdentity {
+        package_digest: PackageDigest::parse("dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd")
+          .unwrap(),
+      }),
+      PluginId::parse(crate::domain::service_integration::EDGE_TTS_PLUGIN_ID).unwrap(),
+      SemVerVersion::parse("1.0.0").unwrap(),
+      vec![CapabilityId::parse("speech.synthesize@1").unwrap()],
+      vec![],
+      vec![],
+    )
+    .unwrap();
+    grant
+      .principal_for_request("speech.synthesize@1", "edge-policy-request")
+      .unwrap()
+  }
+
+  fn edge_authorization(origin: &str, origin_kind: NetworkOriginKind) -> BrokerAuthorization {
+    BrokerAuthorization {
+      endpoint_id: EndpointId::parse(crate::domain::endpoint_trust::EDGE_TTS_TRUST_ENDPOINT_ALIAS).unwrap(),
+      origin: HttpsOrigin::parse(origin).unwrap(),
+      base_url: origin.into(),
+      origin_kind,
+      auth_policy: AuthPolicyId::parse("host.none.v1").unwrap(),
+      resource_limits: ResourceLimits::default(),
+      response_body_modes: NetworkResponseBodyModes::JSON_ONLY,
+      selected_response_mode: NetworkResponseBodyMode::Json,
+    }
+  }
+
+  async fn assert_approved_custom_dns_answer_reaches_unfiltered_handle(hostname: &'static str, synthetic_ip: [u8; 4]) {
+    const LOOPBACK_IP: [u8; 4] = [127, 0, 0, 1];
+    const DNS_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+
+    let listener = tokio::net::TcpListener::bind(SocketAddr::from((LOOPBACK_IP, 0)))
+      .await
+      .unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let expected_answers = vec![SocketAddr::from((LOOPBACK_IP, 0)), SocketAddr::from((synthetic_ip, 0))];
+    let observed = Arc::new(Mutex::new(Vec::<(String, Vec<SocketAddr>)>::new()));
+    let observed_for_lookup = observed.clone();
+    let expected_answers_for_lookup = expected_answers.clone();
+    let lookup: TestDnsLookupFn = Arc::new(move |requested_host| {
+      let observed = observed_for_lookup.clone();
+      let requested_host = requested_host.to_owned();
+      let answers = expected_answers_for_lookup.clone();
+      Box::pin(async move {
+        observed.lock().unwrap().push((requested_host, answers.clone()));
+        Ok(answers)
+      })
+    });
+
+    let transport = Arc::new(ResolverBackedTestTransport::new(lookup));
+    let handle = NetworkBrokerHandle::new(transport);
+    let principal = edge_principal();
+    let grant = ExecutionGrantSet::initial(
+      Uuid::nil(),
+      RuntimeIdentity::Bundled,
+      PluginId::parse(crate::domain::service_integration::EDGE_TTS_PLUGIN_ID).unwrap(),
+      SemVerVersion::parse("1.0.0").unwrap(),
+      vec![],
+      vec![],
+      vec![],
+    )
+    .unwrap();
+    let authorization = edge_authorization(
+      &format!("https://{hostname}:{port}"),
+      NetworkOriginKind::UserApprovedInstance,
+    );
+    const TLS_FATAL_ALERT: [u8; 7] = [0x15, 0x03, 0x03, 0x00, 0x02, 0x02, 0x28];
+    let accept_probe = async {
+      let stream = listener.accept().await.unwrap().0;
+      let _ = stream.try_write(&TLS_FATAL_ALERT);
+    };
+    let (outcome, accepted) = tokio::join!(
+      handle.fetch(
+        &principal,
+        &grant,
+        BrokerFetchRequest {
+          endpoint_id: crate::domain::endpoint_trust::EDGE_TTS_TRUST_ENDPOINT_ALIAS.into(),
+          relative_path: "v1/audio/speech".into(),
+          method: "POST".into(),
+          headers: vec![("Accept".into(), "audio/mpeg".into())],
+          body: BrokerRequestBody::Json(br#"{}"#.to_vec()),
+        },
+        authorization,
+        &CancelToken::new(),
+        None,
+      ),
+      tokio::time::timeout(DNS_PROBE_TIMEOUT, accept_probe),
+    );
+    accepted.expect("approved custom DNS transport must reach the local probe");
+    assert!(
+      matches!(outcome, Err(BrokerFetchError::Network(_))),
+      "the plaintext probe is intentionally not a TLS server: {outcome:?}"
+    );
+
+    let observed = observed.lock().unwrap();
+    assert_eq!(observed.len(), 1);
+    assert_eq!(observed[0].0, hostname);
+    assert_eq!(observed[0].1, expected_answers);
+  }
+
+  #[tokio::test]
+  async fn edge_approved_fake_ip_dns_answer_reaches_unfiltered_transport() {
+    assert_approved_custom_dns_answer_reaches_unfiltered_handle("approved-fake-ip.test", [198, 18, 0, 1]).await;
+  }
+
+  #[tokio::test]
+  async fn edge_approved_private_dns_answer_reaches_unfiltered_transport() {
+    assert_approved_custom_dns_answer_reaches_unfiltered_handle("approved-private-dns.test", [10, 0, 0, 7]).await;
+  }
+
+  #[tokio::test]
+  async fn edge_unapproved_custom_origin_is_rejected_before_transport() {
+    let transport = Arc::new(FixedTransport {
+      response: BoundedHttpResponse {
+        status: 200,
+        headers: HashMap::new(),
+        body: br#"{}"#.to_vec(),
+      },
+      last: std::sync::Mutex::new(None),
+    });
+    let handle = NetworkBrokerHandle::new(transport.clone());
+    let principal = edge_principal();
+    let grant = ExecutionGrantSet::initial(
+      Uuid::nil(),
+      RuntimeIdentity::Bundled,
+      PluginId::parse(crate::domain::service_integration::EDGE_TTS_PLUGIN_ID).unwrap(),
+      SemVerVersion::parse("1.0.0").unwrap(),
+      vec![],
+      vec![],
+      vec![],
+    )
+    .unwrap();
+    let outcome = handle
+      .fetch(
+        &principal,
+        &grant,
+        BrokerFetchRequest {
+          endpoint_id: crate::domain::endpoint_trust::EDGE_TTS_TRUST_ENDPOINT_ALIAS.into(),
+          relative_path: "v1/audio/speech".into(),
+          method: "POST".into(),
+          headers: vec![("Accept".into(), "application/json".into())],
+          body: BrokerRequestBody::Json(br#"{}"#.to_vec()),
+        },
+        edge_authorization("https://custom.example", NetworkOriginKind::InstanceConfigured),
+        &CancelToken::new(),
+        None,
+      )
+      .await;
+    assert!(matches!(
+      outcome,
+      Err(BrokerFetchError::Network(message)) if message == ENDPOINT_TRUST_REQUIRED_MARKER
+    ));
+    assert!(transport.last.lock().unwrap().is_none());
+  }
+
+  #[tokio::test]
+  async fn edge_approved_custom_origin_uses_user_approved_transport_policy() {
+    let transport = Arc::new(FixedTransport {
+      response: BoundedHttpResponse {
+        status: 200,
+        headers: HashMap::new(),
+        body: br#"{}"#.to_vec(),
+      },
+      last: std::sync::Mutex::new(None),
+    });
+    let handle = NetworkBrokerHandle::new(transport.clone());
+    let principal = edge_principal();
+    let grant = ExecutionGrantSet::initial(
+      Uuid::nil(),
+      RuntimeIdentity::Bundled,
+      PluginId::parse(crate::domain::service_integration::EDGE_TTS_PLUGIN_ID).unwrap(),
+      SemVerVersion::parse("1.0.0").unwrap(),
+      vec![],
+      vec![],
+      vec![],
+    )
+    .unwrap();
+    let outcome = handle
+      .fetch(
+        &principal,
+        &grant,
+        BrokerFetchRequest {
+          endpoint_id: crate::domain::endpoint_trust::EDGE_TTS_TRUST_ENDPOINT_ALIAS.into(),
+          relative_path: "v1/audio/speech".into(),
+          method: "POST".into(),
+          headers: vec![("Accept".into(), "application/json".into())],
+          body: BrokerRequestBody::Json(br#"{}"#.to_vec()),
+        },
+        edge_authorization("https://custom.example", NetworkOriginKind::UserApprovedInstance),
+        &CancelToken::new(),
+        None,
+      )
+      .await;
+    assert!(outcome.is_ok(), "approved custom endpoint should execute: {outcome:?}");
+    let prepared = transport.last.lock().unwrap().take().unwrap();
+    assert_eq!(prepared.destination_policy, DestinationPolicy::UserApprovedCustom);
+    assert_eq!(prepared.proxy_mode, crate::domain::provider::ProxyMode::Inherit);
   }
 
   #[tokio::test]
@@ -1030,6 +1228,7 @@ mod tests {
     BrokerAuthorization {
       endpoint_id: EndpointId::parse("ep").unwrap(),
       origin: HttpsOrigin::parse("https://example.com").unwrap(),
+      base_url: "https://example.com".into(),
       origin_kind: NetworkOriginKind::InstanceConfigured,
       auth_policy: AuthPolicyId::parse("host.none.v1").unwrap(),
       resource_limits: ResourceLimits::new(1024, 1024, max_stream_bytes, 60_000).unwrap(),

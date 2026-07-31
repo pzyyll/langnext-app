@@ -15,6 +15,12 @@ pub enum StorageError {
   #[error("conflict: {0}")]
   Conflict(String),
 
+  #[error("endpoint trust required: {0}")]
+  EndpointTrustRequired(String),
+
+  #[error("endpoint trust review is stale: {0}")]
+  EndpointTrustStale(String),
+
   #[error("in use: {0}")]
   InUse(String),
 
@@ -78,6 +84,14 @@ impl From<StorageError> for IpcError {
       StorageError::Validation(msg) => IpcError::new("validation_failed", msg),
       StorageError::NotFound(msg) => IpcError::new("not_found", msg),
       StorageError::Conflict(msg) => IpcError::new("conflict", msg),
+      StorageError::EndpointTrustRequired(_) => IpcError::new(
+        "endpoint_trust_required",
+        "Review and acknowledge this endpoint before saving",
+      ),
+      StorageError::EndpointTrustStale(_) => IpcError::new(
+        "endpoint_trust_stale",
+        "The endpoint review is stale; review it again before saving",
+      ),
       StorageError::InUse(msg) => IpcError::new("in_use", msg),
       StorageError::PluginUnavailable(msg) => IpcError::new("plugin_unavailable", msg),
       StorageError::CredentialBusy => IpcError::new("credential_busy", "A credential operation is already in progress"),

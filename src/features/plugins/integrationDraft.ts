@@ -1,6 +1,7 @@
 // ABOUTME: Generic schema-backed integration drafts and storage write projections.
 // ABOUTME: Keeps credentials write-only and migrates legacy camelCase config keys on the next save.
 import type {
+  EndpointTrustSavePayload,
   IntegrationInstanceDto,
   IntegrationInstanceWrite,
   ServiceIntegrationDefinitionDto,
@@ -57,7 +58,11 @@ export function draftFromIntegrationDto(
 export function buildIntegrationWrite(
   definition: ServiceIntegrationDefinitionDto,
   draft: IntegrationSchemaDraft,
-  options: { id?: string | null; expectedUpdatedAt?: string | null } = {},
+  options: {
+    id?: string | null;
+    expectedUpdatedAt?: string | null;
+    endpointTrust?: EndpointTrustSavePayload | null;
+  } = {},
 ): IntegrationInstanceWrite {
   return {
     id: options.id ?? null,
@@ -67,6 +72,8 @@ export function buildIntegrationWrite(
     configJson: JSON.stringify(buildSchemaConfig(definition.configSchema, draft.schema)),
     credentials: buildSchemaCredentialWrites(definition.configSchema, draft.schema),
     expectedUpdatedAt: options.expectedUpdatedAt ?? draft.expectedUpdatedAt,
+    endpointTrustPreviewId: options.endpointTrust?.endpointTrustPreviewId ?? null,
+    acknowledgeEndpointTrust: options.endpointTrust?.acknowledgeEndpointTrust ?? false,
   };
 }
 

@@ -6,6 +6,8 @@ import type {
   ApprovePluginPackageInput,
   ApprovePluginPackageResult,
   ApproveUserPublisherInput,
+  EndpointTrustPreviewDto,
+  EndpointTrustPreviewInput,
   IntegrationDependencyDto,
   IntegrationInstanceDto,
   IntegrationInstanceWrite,
@@ -181,6 +183,13 @@ export async function getIntegrationInstance(id: string): Promise<IntegrationIns
 
 export async function saveIntegrationInstance(input: IntegrationInstanceWrite): Promise<IntegrationInstanceDto> {
   return runStorage(invokeEffect<IntegrationInstanceDto>("save_integration_instance", { input }));
+}
+
+/** Request a short-lived host preview for a custom Edge TTS endpoint review. */
+export async function previewIntegrationEndpointTrust(
+  input: EndpointTrustPreviewInput,
+): Promise<EndpointTrustPreviewDto> {
+  return runStorage(invokeEffect<EndpointTrustPreviewDto>("preview_integration_endpoint_trust", { input }));
 }
 
 export async function setIntegrationInstanceEnabled(id: string, enabled: boolean): Promise<IntegrationInstanceDto> {

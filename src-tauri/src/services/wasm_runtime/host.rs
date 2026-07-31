@@ -9,6 +9,9 @@ use crate::domain::runtime_plugin::{
 use crate::services::stream_resources::StreamReaderHandle;
 use std::time::{Duration, Instant};
 
+const EDGE_TTS_ENDPOINT_ALIAS: &str = "tts-api";
+const EDGE_TTS_SYNTHESIZE_PATH: &str = "v1/audio/speech";
+
 use super::store::{
   BROKER_IMPORT_CLEANUP_TIMEOUT, BROKER_IMPORT_MAX_TIMEOUT, BROKER_IMPORT_NO_DEADLINE_DEFAULT, PluginHostState,
 };
@@ -50,6 +53,8 @@ pub enum NeutralLogLevel {
 pub struct BrokerAuthorization {
   pub endpoint_id: EndpointId,
   pub origin: HttpsOrigin,
+  /// Complete canonical base URL copied from the verified grant entry, never guest input.
+  pub base_url: String,
   /// Immutable origin provenance copied from the verified grant entry, never guest input.
   pub origin_kind: NetworkOriginKind,
   pub auth_policy: AuthPolicyId,
@@ -110,12 +115,18 @@ impl PluginHostState {
     }
     // Path/header chokepoint: confined relative path + blocked sensitive headers.
     validate_broker_relative_path(&request.relative_path)?;
+    validate_fixed_endpoint_scope(
+      entry.endpoint_id().as_str(),
+      entry.capability_id().as_str(),
+      &request.relative_path,
+    )?;
     validate_broker_headers(&request.headers)?;
     let response_body_modes = entry.response_body_modes();
     let selected_response_mode = select_response_mode(&request.headers, response_body_modes)?;
     Ok(BrokerAuthorization {
       endpoint_id: entry.endpoint_id().clone(),
       origin: entry.origin().clone(),
+      base_url: entry.base_url().to_string(),
       origin_kind: entry.origin_kind(),
       auth_policy: entry.auth_policy().clone(),
       resource_limits: *entry.resource_limits(),
@@ -482,6 +493,20 @@ pub(crate) fn validate_broker_relative_path(path: &str) -> Result<(), BrokerFetc
   Ok(())
 }
 
+fn validate_fixed_endpoint_scope(
+  endpoint_id: &str,
+  capability_id: &str,
+  relative_path: &str,
+) -> Result<(), BrokerFetchError> {
+  if endpoint_id == EDGE_TTS_ENDPOINT_ALIAS
+    && capability_id == crate::domain::service_capability::SPEECH_SYNTHESIZE_CAPABILITY_ID
+    && relative_path != EDGE_TTS_SYNTHESIZE_PATH
+  {
+    return Err(BrokerFetchError::PathConfined);
+  }
+  Ok(())
+}
+
 /// Validate the path portion (before any `?`): relative, no scheme/authority/traversal/fragment.
 fn validate_path_part(path: &str) -> Result<(), BrokerFetchError> {
   if path.is_empty() {
@@ -686,6 +711,13 @@ mod tests {
     // Query suffix is accepted for endpoints like GTX that require query pairs.
     assert!(validate_broker_relative_path("translate_a/single?client=gtx&sl=auto&tl=en&q=Hi").is_ok());
     assert!(validate_broker_relative_path("translate_a/single?").is_ok());
+  }
+
+  #[test]
+  fn edge_tts_scope_stays_fixed_even_with_a_base_path() {
+    assert!(validate_fixed_endpoint_scope("tts-api", "speech.synthesize@1", "v1/audio/speech").is_ok());
+    assert!(validate_fixed_endpoint_scope("tts-api", "speech.synthesize@1", "api/v1/audio/speech").is_err());
+    assert!(validate_fixed_endpoint_scope("tts-api", "speech.synthesize@1", "v1/audio/speech?route=other").is_err());
   }
 
   #[test]

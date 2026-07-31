@@ -12,9 +12,10 @@ use crate::services::service_capabilities::ServiceCapabilityService;
 use crate::services::token_grant::TokenGrantService;
 use crate::services::wasm_runtime::WasmRuntime;
 use crate::services::{
-  ImportExportService, ModelService, OcrServiceService, PluginPackageService, ProviderHttpService, ProviderService,
-  RuntimeLifecycleService, RuntimeRouter, ServiceIntegrationRegistry, ServiceIntegrationService, SettingsService,
-  SpeechServiceService, TranslationHistoryService, TranslationProfileService,
+  EndpointTrustService, ImportExportService, ModelService, OcrServiceService, PluginPackageService,
+  ProviderHttpService, ProviderService, RuntimeLifecycleService, RuntimeRouter, ServiceIntegrationRegistry,
+  ServiceIntegrationService, SettingsService, SpeechServiceService, TranslationHistoryService,
+  TranslationProfileService,
 };
 use crate::storage::Database;
 use std::path::PathBuf;
@@ -31,6 +32,7 @@ pub struct AppState {
   pub speech_services: SpeechServiceService,
   pub plugin_packages: PluginPackageService,
   pub service_integrations: ServiceIntegrationService,
+  pub endpoint_trust: Arc<EndpointTrustService>,
   pub service_capabilities: ServiceCapabilityService,
   pub runtime_router: RuntimeRouter,
   pub runtime_lifecycle: RuntimeLifecycleService,
@@ -151,8 +153,10 @@ impl AppState {
     // Keep the handle alive for the process lifetime by leaking intentionally: AppState is long-lived
     // and Drop of StagingSweepHandle only signals stop; recovery already ran at startup.
     std::mem::forget(_staging_sweep);
+    let endpoint_trust = Arc::new(EndpointTrustService::new(db.clone(), registry.clone()));
     let service_integrations =
-      ServiceIntegrationService::new(db.clone(), vault.clone(), registry.clone(), token_grants.clone());
+      ServiceIntegrationService::new(db.clone(), vault.clone(), registry.clone(), token_grants.clone())
+        .with_endpoint_trust(endpoint_trust.clone());
     let settings = SettingsService::new(db.clone(), vault.clone());
     let import_export = ImportExportService::new(db.clone(), vault.clone());
     let history = TranslationHistoryService::new(db.clone());
@@ -203,6 +207,7 @@ impl AppState {
       speech_services,
       plugin_packages,
       service_integrations,
+      endpoint_trust,
       service_capabilities,
       runtime_router,
       runtime_lifecycle,

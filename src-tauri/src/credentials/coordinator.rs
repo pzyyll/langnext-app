@@ -266,6 +266,8 @@ fn error_code(err: &StorageError) -> &'static str {
     StorageError::NotFound(_) => "not_found",
     StorageError::Validation(_) => "validation_failed",
     StorageError::Conflict(_) => "conflict",
+    StorageError::EndpointTrustRequired(_) => "endpoint_trust_required",
+    StorageError::EndpointTrustStale(_) => "endpoint_trust_stale",
     StorageError::InUse(_) => "in_use",
     StorageError::PluginUnavailable(_) => "plugin_unavailable",
     StorageError::StorageUnavailable(_) => "storage_unavailable",

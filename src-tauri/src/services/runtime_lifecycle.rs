@@ -1,5 +1,9 @@
 // ABOUTME: Prepare/approve CAS upgrade and rollback for integration runtime pins.
 // ABOUTME: Migrations run on copied non-secret JSON only; secrets never enter snapshots.
+use crate::domain::endpoint_trust::{
+  EDGE_TTS_TRUST_ENDPOINT_ALIAS, RuntimeIdentityFingerprintInput, configuration_fingerprint,
+  runtime_identity_fingerprint,
+};
 use crate::domain::plugin_package::compute_permission_request_digest;
 use crate::domain::plugin_package::runtime_kind_storage;
 use crate::domain::runtime_lifecycle::{
@@ -23,8 +27,8 @@ use crate::domain::service_integration::{
 use crate::domain::time::{new_id, now_rfc3339};
 use crate::error::StorageError;
 use crate::repositories::{
-  installed_plugin_versions, integration_credential_bindings, integration_instances, plugin_permission_grants,
-  plugin_publishers, plugin_upgrade_snapshots,
+  installed_plugin_versions, integration_credential_bindings, integration_endpoint_trusts, integration_instances,
+  plugin_permission_grants, plugin_publishers, plugin_upgrade_snapshots,
 };
 use crate::services::plugin_package::{VerifiedPackage, public_sha256_hex};
 use crate::services::plugin_store::PluginPackageService;
@@ -414,6 +418,100 @@ impl RuntimeLifecycleService {
     Ok(dto)
   }
 
+  /// Atomically seal a freshly acknowledged Edge TTS base URL into the active Wasm grant.
+  /// The caller must already have updated the instance config and exact approval row inside the
+  /// same SQLite transaction. Any grant-build, approval, or pin failure aborts that transaction.
+  pub fn refresh_edge_tts_grant_for_instance_in_transaction(
+    &self,
+    conn: &rusqlite::Connection,
+    instance_id: Uuid,
+  ) -> Result<(), StorageError> {
+    let instance = integration_instances::get(conn, instance_id)?;
+    if instance.runtime_kind != runtime_kind_storage(RuntimeKind::WasmComponent)
+      || instance.package_digest.is_none()
+      || instance.execution_grant_set_revision.is_none()
+    {
+      return Ok(());
+    }
+    if instance.plugin_id != crate::domain::service_integration::EDGE_TTS_PLUGIN_ID {
+      return Err(StorageError::Validation(
+        "Edge TTS grant refresh received a non-Edge instance".into(),
+      ));
+    }
+    let package_digest = instance
+      .package_digest
+      .as_deref()
+      .ok_or_else(|| StorageError::Conflict("active Edge TTS package digest is missing".into()))?;
+    let target_version = installed_plugin_versions::get(conn, package_digest)?;
+    if target_version.plugin_id != instance.plugin_id || target_version.version != instance.plugin_version {
+      return Err(StorageError::Conflict(
+        "active Edge TTS package identity does not match the instance".into(),
+      ));
+    }
+    let target_manifest: PluginManifestV1 = serde_json::from_str(&target_version.manifest_json)
+      .map_err(|error| StorageError::Validation(format!("invalid active Edge TTS manifest: {error}")))?;
+    let grant_bundle = build_grant_bundle_for_target_on_conn(
+      conn,
+      &self.plugin_packages,
+      &instance,
+      &instance.config_json,
+      &target_version,
+      &target_manifest,
+      None,
+    )?;
+    let requirement = build_runtime_requirement(&target_version, &target_manifest, instance.config_schema_version)?;
+    let requirement_json = serde_json::to_string(&requirement)?;
+    plugin_permission_grants::insert_bundle(conn, &grant_bundle)?;
+    integration_instances::compare_and_set_runtime_pin(
+      conn,
+      instance_id,
+      &instance.updated_at,
+      &target_version.version,
+      &instance.config_json,
+      instance.config_schema_version,
+      runtime_kind_storage(RuntimeKind::WasmComponent),
+      Some(package_digest),
+      Some(grant_bundle.header.revision),
+      InstanceRuntimeState::Active.as_str(),
+      None,
+      None,
+      Some(&requirement_json),
+      &now_rfc3339(),
+    )?;
+    Ok(())
+  }
+
+  pub fn refresh_active_grant_for_instance(
+    &self,
+    instance_id: Uuid,
+    acknowledge_permissions: bool,
+  ) -> Result<(), StorageError> {
+    let package_digest = self.db.read(|conn| {
+      let instance = integration_instances::get(conn, instance_id)?;
+      if instance.runtime_kind != runtime_kind_storage(RuntimeKind::WasmComponent)
+        || instance.package_digest.is_none()
+        || instance.execution_grant_set_revision.is_none()
+      {
+        return Ok(None);
+      }
+      Ok(instance.package_digest)
+    })?;
+    let Some(package_digest) = package_digest else {
+      return Ok(());
+    };
+    let preview = self.preview_upgrade(instance_id, &package_digest)?;
+    if (preview.requires_permission_approval || preview.requires_publisher_reapproval) && !acknowledge_permissions {
+      return Err(StorageError::Conflict(
+        "active runtime grant refresh requires explicit permission acknowledgement".into(),
+      ));
+    }
+    self.apply_upgrade(ApplyRuntimeUpgradeInput {
+      preview_id: preview.preview_id,
+      acknowledge_permissions,
+    })?;
+    Ok(())
+  }
+
   pub fn apply_upgrade(&self, input: ApplyRuntimeUpgradeInput) -> Result<RuntimeLifecycleResultDto, StorageError> {
     self.expire_previews();
     let session = {
@@ -540,6 +638,17 @@ impl RuntimeLifecycleService {
       }
 
       plugin_permission_grants::insert_bundle(uow.conn(), &session.grant_bundle)?;
+      // Keep an endpoint approval only when the newly sealed grant carries the exact matching
+      // user-approved provenance. This covers config migrations as well as package/runtime
+      // identity changes: a changed target without a fresh exact approval revokes old rows.
+      let target_has_endpoint_approval = session
+        .grant_bundle
+        .network
+        .iter()
+        .any(|entry| entry.origin_kind == NetworkOriginKind::UserApprovedInstance.as_str());
+      if !target_has_endpoint_approval {
+        integration_endpoint_trusts::delete_for_instance(uow.conn(), session.instance_id)?;
+      }
       if self.take_apply_fault(UpgradeApplyFault::AfterGrantBeforePin) {
         return Err(StorageError::Internal("injected fault: after grant before pin".into()));
       }
@@ -774,6 +883,9 @@ impl RuntimeLifecycleService {
 
       // Restore exact grant authority from snapshot when the live grant is missing or diverged.
       restore_grant_from_snapshot(uow.conn(), &snapshot)?;
+      // Rollback never restores endpoint approval. Any prior user acknowledgement is stale for
+      // the restored runtime identity and requires a fresh review/save cycle.
+      integration_endpoint_trusts::delete_for_instance(uow.conn(), session.instance_id)?;
 
       // Restore pre-migration preference JSON/schema only (byte-exact TEXT).
       write_preference_rows(
@@ -1208,6 +1320,7 @@ impl RuntimeLifecycleService {
       plugin_upgrade_snapshots::insert(uow.conn(), &snapshot)?;
       prune_snapshots(uow.conn(), instance_id, &now)?;
       plugin_permission_grants::insert_bundle(uow.conn(), &grant_bundle)?;
+      integration_endpoint_trusts::delete_for_instance(uow.conn(), instance_id)?;
 
       let requirement = build_runtime_requirement(&live_version, &target_manifest, target_schema)?;
       let requirement_json = serde_json::to_string(&requirement)?;
@@ -1666,17 +1779,17 @@ fn is_edge_tts_vendor_default(
       .any(|cap| cap.id == "speech.synthesize@1" && cap.preferences_schema.is_some())
 }
 
-/// Edge TTS vendor-default effective origin. Auto-pin is only safe when the instance's migrated
-/// `base-url` resolves to exactly this origin (normalized equivalently); any custom origin
-/// requires explicit migration consent and must not be host-auto-approved.
-const EDGE_TTS_VENDOR_DEFAULT_ORIGIN: &str = "https://tts.wangwangit.com";
+/// Edge TTS vendor-default effective complete Base URL. Auto-pin is only safe when the
+/// instance's migrated `base-url` resolves to exactly this canonical URL; a custom path or
+/// origin requires explicit migration consent and must not be host-auto-approved.
+const EDGE_TTS_VENDOR_DEFAULT_ORIGIN: &str = crate::domain::service_integration::EDGE_TTS_DEFAULT_BASE_URL;
 
-/// True when the migrated Edge TTS config resolves to the vendor-default origin. Extracts the
-/// `base-url` config field, normalizes it through the shared Edge TTS normalizer, and compares
-/// the HTTPS origin to the exact vendor default. A custom origin, missing field, or malformed/
+/// True when the migrated Edge TTS config resolves to the vendor-default complete Base URL.
+/// Extracts the `base-url` config field, normalizes it through the shared Edge TTS normalizer,
+/// and compares the full canonical URL. A custom path/origin, missing field, or malformed/
 /// non-HTTPS base URL returns false so auto-pin fails closed and the instance requires explicit
 /// migration consent. This complements the manifest-structural [`is_edge_tts_vendor_default`]
-/// check by validating the EFFECTIVE origin/config, not just the manifest endpoint shape.
+/// check by validating the EFFECTIVE URL/config, not just the manifest endpoint shape.
 fn edge_tts_effective_origin_is_vendor_default(migrated_config: &str) -> bool {
   let Ok(value) = serde_json::from_str::<serde_json::Value>(migrated_config) else {
     return false;
@@ -1687,10 +1800,7 @@ fn edge_tts_effective_origin_is_vendor_default(migrated_config: &str) -> bool {
   let Ok(normalized) = crate::services::edge_tts::normalize_edge_tts_base_url(raw) else {
     return false;
   };
-  let Ok(url) = url::Url::parse(&normalized.canonical_url) else {
-    return false;
-  };
-  url.origin().ascii_serialization() == EDGE_TTS_VENDOR_DEFAULT_ORIGIN
+  normalized.canonical_url == EDGE_TTS_VENDOR_DEFAULT_ORIGIN
 }
 
 /// True when the verified package matches either host-allowed vendor default (Google Web GTX or
@@ -2089,8 +2199,23 @@ pub(crate) fn origin_kind_for_verified_network_endpoint(
   manifest: &PluginManifestV1,
   endpoint: &NetworkEndpointRequest,
 ) -> NetworkOriginKind {
+  origin_kind_for_verified_network_endpoint_with_approval(manifest, endpoint, false)
+}
+
+pub(crate) fn origin_kind_for_verified_network_endpoint_with_approval(
+  manifest: &PluginManifestV1,
+  endpoint: &NetworkEndpointRequest,
+  current_approval: bool,
+) -> NetworkOriginKind {
   const GOOGLE_WEB_GTX_ENDPOINT_ID: &str = "gtx";
 
+  if current_approval
+    && manifest.id == crate::domain::service_integration::EDGE_TTS_PLUGIN_ID
+    && endpoint.id == EDGE_TTS_TRUST_ENDPOINT_ALIAS
+    && endpoint.instance_origin_config_field.as_deref() == Some("base-url")
+  {
+    return NetworkOriginKind::UserApprovedInstance;
+  }
   if endpoint.instance_origin_config_field.is_some() {
     return NetworkOriginKind::InstanceConfigured;
   }
@@ -2117,6 +2242,28 @@ fn build_grant_bundle_for_target(
   target_manifest: &PluginManifestV1,
   source_grant: Option<&ExecutionGrantSetBundle>,
 ) -> Result<ExecutionGrantSetBundle, StorageError> {
+  db.read(|conn| {
+    build_grant_bundle_for_target_on_conn(
+      conn,
+      packages,
+      instance,
+      target_config_json,
+      target_version,
+      target_manifest,
+      source_grant,
+    )
+  })
+}
+
+fn build_grant_bundle_for_target_on_conn(
+  conn: &rusqlite::Connection,
+  packages: &PluginPackageService,
+  instance: &IntegrationInstance,
+  target_config_json: &str,
+  target_version: &crate::domain::plugin_package::InstalledPluginVersion,
+  target_manifest: &PluginManifestV1,
+  source_grant: Option<&ExecutionGrantSetBundle>,
+) -> Result<ExecutionGrantSetBundle, StorageError> {
   if let Some(source) = source_grant {
     if source.header.subject_id != instance.id {
       return Err(StorageError::Validation(
@@ -2125,14 +2272,12 @@ fn build_grant_bundle_for_target(
     }
   }
 
-  let revision = db.read(|conn| {
-    plugin_permission_grants::next_revision_for_subject_package(
-      conn,
-      GrantSubjectKind::IntegrationInstance,
-      instance.id,
-      &target_version.package_digest,
-    )
-  })?;
+  let revision = plugin_permission_grants::next_revision_for_subject_package(
+    conn,
+    GrantSubjectKind::IntegrationInstance,
+    instance.id,
+    &target_version.package_digest,
+  )?;
   let _ = GrantSetRevision::new(revision).map_err(StorageError::Validation)?;
   let grant_id = new_id();
   let now = now_rfc3339();
@@ -2162,6 +2307,14 @@ fn build_grant_bundle_for_target(
   // visibility condition is inactive and receives no grant.
   let target_config_value: serde_json::Value = serde_json::from_str(target_config_json)
     .map_err(|e| StorageError::Validation(format!("target config is not valid JSON: {e}")))?;
+  let target_configuration_fingerprint =
+    configuration_fingerprint(target_config_json).map_err(StorageError::Validation)?;
+  let target_runtime_identity_fingerprint = runtime_identity_fingerprint(RuntimeIdentityFingerprintInput {
+    plugin_id: &target_version.plugin_id,
+    plugin_version: &target_version.version,
+    runtime_kind: runtime_kind_storage(RuntimeKind::WasmComponent),
+    package_digest: Some(&target_version.package_digest),
+  });
   let target_config_schema = if target_manifest
     .permissions
     .network
@@ -2184,10 +2337,9 @@ fn build_grant_bundle_for_target(
     let capability_id = CapabilityId::parse(&cap.id).map_err(|e| StorageError::Validation(format!("{e:?}")))?;
     for endpoint in &target_manifest.permissions.network {
       let endpoint_id = EndpointId::parse(&endpoint.id).map_err(StorageError::Validation)?;
-      let origin_kind = origin_kind_for_verified_network_endpoint(target_manifest, endpoint);
-      // Effective origins: static declared origins, or the instance-configured origin resolved
-      // from the named config field (e.g. proxy-url) and normalized to an HTTPS origin.
-      let effective_origins: Vec<String> = if let Some(field) = &endpoint.instance_origin_config_field {
+      // Effective origins: static declared origins, or the instance-configured complete base URL
+      // resolved from the named config field and normalized by the shared host normalizer.
+      let effective_origins: Vec<(String, String)> = if let Some(field) = &endpoint.instance_origin_config_field {
         let schema_field = target_config_schema
           .as_ref()
           .and_then(|schema| schema.fields.iter().find(|candidate| candidate.id == *field))
@@ -2214,25 +2366,51 @@ fn build_grant_bundle_for_target(
             endpoint.id
           )));
         }
-        let origin = if field == "base-url" {
+        let (origin, base_url) = if field == "base-url" {
           let normalized =
             crate::services::edge_tts::normalize_edge_tts_base_url(raw).map_err(StorageError::Validation)?;
-          // Grant authority stores HTTPS origin only; path remains on the instance config.
-          url::Url::parse(&normalized.canonical_url)
+          let origin = url::Url::parse(&normalized.canonical_url)
             .map_err(|e| StorageError::Validation(format!("invalid edge tts base URL: {e}")))?
             .origin()
-            .ascii_serialization()
+            .ascii_serialization();
+          (origin, normalized.canonical_url)
         } else {
           let normalized =
             crate::services::google_translate_web::normalize_proxy_url(raw).map_err(StorageError::Validation)?;
-          normalized.origin
+          (normalized.origin.clone(), normalized.origin)
         };
-        vec![origin]
+        vec![(origin, base_url)]
       } else {
-        endpoint.origins.clone()
+        endpoint
+          .origins
+          .iter()
+          .cloned()
+          .map(|origin| (origin.clone(), origin))
+          .collect()
       };
-      for origin in &effective_origins {
-        let origin = HttpsOrigin::parse(origin).map_err(StorageError::Validation)?;
+      for (origin_value, base_url) in &effective_origins {
+        let origin = HttpsOrigin::parse(origin_value).map_err(StorageError::Validation)?;
+        let current_approval = if target_manifest.id == crate::domain::service_integration::EDGE_TTS_PLUGIN_ID
+          && endpoint.id == EDGE_TTS_TRUST_ENDPOINT_ALIAS
+          && endpoint.instance_origin_config_field.as_deref() == Some("base-url")
+          && base_url.as_str() != crate::domain::service_integration::EDGE_TTS_DEFAULT_BASE_URL
+        {
+          integration_endpoint_trusts::get_exact(
+            conn,
+            instance.id,
+            &target_version.plugin_id,
+            &target_version.version,
+            EDGE_TTS_TRUST_ENDPOINT_ALIAS,
+            base_url,
+            &target_configuration_fingerprint,
+            &target_runtime_identity_fingerprint,
+          )?
+          .is_some()
+        } else {
+          false
+        };
+        let origin_kind =
+          origin_kind_for_verified_network_endpoint_with_approval(target_manifest, endpoint, current_approval);
         for method in &endpoint.methods {
           for policy in &auth_policies {
             let auth = AuthPolicyId::parse(policy).map_err(StorageError::Validation)?;
@@ -2256,11 +2434,12 @@ fn build_grant_bundle_for_target(
               };
             let limits = ResourceLimits::new(max_request_bytes, max_response_bytes, max_stream_bytes, timeout_ms)
               .map_err(|e| StorageError::Validation(e.to_string()))?;
-            domain_net.push(NetworkGrantEntry::with_mode_origin_and_response_modes(
+            domain_net.push(NetworkGrantEntry::with_mode_origin_and_response_modes_and_base_url(
               capability_id.clone(),
               endpoint_id.clone(),
               origin.clone(),
               origin_kind,
+              base_url.clone(),
               *method,
               auth.clone(),
               NetworkResourceMode::Bounded,
@@ -2273,6 +2452,7 @@ fn build_grant_bundle_for_target(
               capability_id: capability_id.as_str().to_string(),
               endpoint_id: endpoint_id.as_str().to_string(),
               origin: origin.as_str().to_string(),
+              base_url: base_url.clone(),
               origin_kind: origin_kind.as_str().into(),
               method: http_method_as_str(*method).into(),
               auth_policy: auth.as_str().to_string(),
@@ -2410,7 +2590,11 @@ fn diff_permissions(
         .map(|n| {
           (
             n.endpoint_id.clone(),
-            n.origin.clone(),
+            if n.base_url.is_empty() {
+              n.origin.clone()
+            } else {
+              n.base_url.clone()
+            },
             n.method.clone(),
             n.auth_policy.clone(),
           )
@@ -2424,7 +2608,11 @@ fn diff_permissions(
     .map(|n| {
       (
         n.endpoint_id.clone(),
-        n.origin.clone(),
+        if n.base_url.is_empty() {
+          n.origin.clone()
+        } else {
+          n.base_url.clone()
+        },
         n.method.clone(),
         n.auth_policy.clone(),
       )
