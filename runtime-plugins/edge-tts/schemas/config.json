@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "fields": [
+    {
+      "id": "base-url",
+      "control": {
+        "kind": "string",
+        "spec": {
+          "maxLength": 512,
+          "default": "https://tts.wangwangit.com"
+        }
+      },
+      "labelFallback": "Base URL",
+      "descriptionFallback": "OpenAI-compatible TTS base URL. Must use HTTPS; the host approves the effective origin.",
+      "requiredForReady": true
+    }
+  ],
+  "groups": []
+}

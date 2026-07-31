@@ -1,0 +1,98 @@
+{
+  "version": 1,
+  "fields": [
+    {
+      "id": "voice",
+      "control": {
+        "kind": "enum",
+        "spec": {
+          "source": {
+            "type": "fixed",
+            "options": [
+              { "value": "zh-CN-XiaoxiaoNeural", "labelFallback": "Xiaoxiao" },
+              { "value": "zh-CN-XiaoyiNeural", "labelFallback": "Xiaoyi" },
+              { "value": "zh-CN-XiaochenNeural", "labelFallback": "Xiaochen" },
+              { "value": "zh-CN-XiaohanNeural", "labelFallback": "Xiaohan" },
+              { "value": "zh-CN-XiaomengNeural", "labelFallback": "Xiaomeng" },
+              { "value": "zh-CN-XiaomoNeural", "labelFallback": "Xiaomo" },
+              { "value": "zh-CN-XiaoqiuNeural", "labelFallback": "Xiaoqiu" },
+              { "value": "zh-CN-XiaoruiNeural", "labelFallback": "Xiaorui" },
+              { "value": "zh-CN-XiaoshuangNeural", "labelFallback": "Xiaoshuang" },
+              { "value": "zh-CN-XiaoxuanNeural", "labelFallback": "Xiaoxuan" },
+              { "value": "zh-CN-XiaoyanNeural", "labelFallback": "Xiaoyan" },
+              { "value": "zh-CN-XiaoyouNeural", "labelFallback": "Xiaoyou" },
+              { "value": "zh-CN-XiaozhenNeural", "labelFallback": "Xiaozhen" },
+              { "value": "zh-CN-YunxiNeural", "labelFallback": "Yunxi" },
+              { "value": "zh-CN-YunyangNeural", "labelFallback": "Yunyang" },
+              { "value": "zh-CN-YunjianNeural", "labelFallback": "Yunjian" },
+              { "value": "zh-CN-YunfengNeural", "labelFallback": "Yunfeng" },
+              { "value": "zh-CN-YunhaoNeural", "labelFallback": "Yunhao" },
+              { "value": "zh-CN-YunxiaNeural", "labelFallback": "Yunxia" },
+              { "value": "zh-CN-YunyeNeural", "labelFallback": "Yunye" },
+              { "value": "zh-CN-YunzeNeural", "labelFallback": "Yunze" }
+            ]
+          },
+          "default": "zh-CN-XiaoxiaoNeural"
+        }
+      },
+      "labelFallback": "Voice",
+      "requiredForReady": true
+    },
+    {
+      "id": "speed",
+      "control": {
+        "kind": "number",
+        "spec": {
+          "min": 0.5,
+          "max": 2,
+          "step": 0.1,
+          "default": 1
+        }
+      },
+      "labelFallback": "Speed",
+      "requiredForReady": true
+    },
+    {
+      "id": "pitch",
+      "control": {
+        "kind": "number",
+        "spec": {
+          "min": -50,
+          "max": 50,
+          "step": 1,
+          "default": 0
+        }
+      },
+      "labelFallback": "Pitch",
+      "requiredForReady": true
+    },
+    {
+      "id": "style",
+      "control": {
+        "kind": "enum",
+        "spec": {
+          "source": {
+            "type": "fixed",
+            "options": [
+              { "value": "general", "labelFallback": "General" },
+              { "value": "assistant", "labelFallback": "Assistant" },
+              { "value": "chat", "labelFallback": "Chat" },
+              { "value": "customerservice", "labelFallback": "Customer Service" },
+              { "value": "newscast", "labelFallback": "Newscast" },
+              { "value": "affectionate", "labelFallback": "Affectionate" },
+              { "value": "calm", "labelFallback": "Calm" },
+              { "value": "cheerful", "labelFallback": "Cheerful" },
+              { "value": "gentle", "labelFallback": "Gentle" },
+              { "value": "lyrical", "labelFallback": "Lyrical" },
+              { "value": "serious", "labelFallback": "Serious" }
+            ]
+          },
+          "default": "general"
+        }
+      },
+      "labelFallback": "Style",
+      "requiredForReady": true
+    }
+  ],
+  "groups": []
+}

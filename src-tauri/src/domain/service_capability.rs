@@ -35,6 +35,97 @@ pub const SPEECH_SYNTHESIZE_CAPABILITY_ID: &str = "speech.synthesize@1";
 pub const SPEECH_TEXT_MAX_BYTES: usize = 5_000;
 /// Max decoded MP3 bytes accepted after synthesis.
 pub const SPEECH_AUDIO_MAX_BYTES: usize = 12 * 1024 * 1024;
+/// Expected audio MIME type for speech synthesis responses (MP3). Provider contract validation:
+/// a 200 response with a non-audio content type (e.g. JSON error body) must not be accepted as MP3.
+pub const SPEECH_EXPECTED_AUDIO_MIME: &str = "audio/mpeg";
+
+/// The only optional parameter accepted from the Edge TTS audio response. The response contract
+/// uses this legacy spelling; unknown parameters are rejected rather than treated as metadata.
+const SPEECH_AUDIO_CHARSET_PARAMETER: &str = "charset";
+/// The only accepted value for [`SPEECH_AUDIO_CHARSET_PARAMETER`].
+const SPEECH_AUDIO_CHARSET_BINARY_VALUE: &str = "binary";
+
+/// True when `content_type` is strict `audio/mpeg` with no parameters or one allowlisted
+/// `charset=binary` parameter. This intentionally small parser follows HTTP token/quoted-string
+/// rules needed by this exact provider contract without adding a MIME dependency solely for one
+/// header: it permits OWS only at grammar boundaries and rejects malformed empty/duplicate/
+/// unsupported parameters, invalid tokens, control characters, and malformed quoted values.
+pub fn is_valid_speech_audio_content_type(content_type: &str) -> bool {
+  if content_type.bytes().any(is_forbidden_content_type_control) {
+    return false;
+  }
+
+  let mut parts = content_type.split(';');
+  let Some(media_type) = parts.next() else {
+    return false;
+  };
+  if !trim_ows(media_type).eq_ignore_ascii_case(SPEECH_EXPECTED_AUDIO_MIME) {
+    return false;
+  }
+
+  let mut charset_seen = false;
+  for part in parts {
+    let parameter = trim_ows(part);
+    if parameter.is_empty() {
+      return false;
+    }
+    let Some((raw_name, raw_value)) = parameter.split_once('=') else {
+      return false;
+    };
+    let name = trim_ows(raw_name);
+    let value = trim_ows(raw_value);
+    if !is_http_token(name) || !name.eq_ignore_ascii_case(SPEECH_AUDIO_CHARSET_PARAMETER) || charset_seen {
+      return false;
+    }
+    if !is_allowed_speech_charset_value(value) {
+      return false;
+    }
+    charset_seen = true;
+  }
+  true
+}
+
+/// Trim RFC OWS (`SP` / `HTAB`) only. General Unicode whitespace is not HTTP OWS and remains
+/// invalid when token grammar is checked.
+fn trim_ows(value: &str) -> &str {
+  value.trim_matches([' ', '\t'])
+}
+
+/// Reject C0 controls other than HTAB (which is valid OWS) and DEL before parsing header syntax.
+fn is_forbidden_content_type_control(byte: u8) -> bool {
+  (byte < 0x20 && byte != b'\t') || byte == 0x7f
+}
+
+/// RFC HTTP `tchar` token grammar used by media parameters. Spaces, quotes, separators, and
+/// non-ASCII bytes are rejected for unquoted values so `charset=foo bar` cannot be accepted.
+fn is_http_token(value: &str) -> bool {
+  !value.is_empty()
+    && value.bytes().all(|byte| {
+      byte.is_ascii_alphanumeric()
+        || matches!(
+          byte,
+          b'!' | b'#' | b'$' | b'%' | b'&' | b'\'' | b'*' | b'+' | b'-' | b'.' | b'^' | b'_' | b'`' | b'|' | b'~'
+        )
+    })
+}
+
+/// Validate the one allowlisted charset value as either an HTTP token or a complete quoted
+/// string. Escapes, unescaped quotes, and trailing text are rejected because they cannot encode
+/// the exact allowlisted `binary` value.
+fn is_allowed_speech_charset_value(value: &str) -> bool {
+  if let Some(quoted) = value.strip_prefix('"') {
+    let Some(inner) = quoted.strip_suffix('"') else {
+      return false;
+    };
+    !inner.is_empty()
+      && !inner
+        .bytes()
+        .any(|byte| is_forbidden_content_type_control(byte) || byte == b'"' || byte == b'\\')
+      && inner.eq_ignore_ascii_case(SPEECH_AUDIO_CHARSET_BINARY_VALUE)
+  } else {
+    is_http_token(value) && value.eq_ignore_ascii_case(SPEECH_AUDIO_CHARSET_BINARY_VALUE)
+  }
+}
 /// Max Google JSON response body for TTS (base64 expansion + envelope).
 pub const SPEECH_PROVIDER_RESPONSE_MAX_BYTES: usize = (SPEECH_AUDIO_MAX_BYTES * 4 / 3) + (64 * 1024);
 /// Speaking rate lower bound (Google AudioConfig).
@@ -749,6 +840,34 @@ mod tests {
       CapabilityErrorCode::UnsupportedInput
     );
     assert!(validate_speech_synthesize_text("hello").is_ok());
+  }
+
+  #[test]
+  fn speech_audio_content_type_strictly_parses_allowlisted_parameters() {
+    let cases = [
+      ("audio/mpeg", true),
+      (" AUDIO/MPEG\t", true),
+      ("audio/mpeg; charset=binary", true),
+      ("audio/mpeg ; charset = \"BINARY\"", true),
+      ("audio/mpeg;", false),
+      ("audio/mpeg;; charset=binary", false),
+      ("audio/mpeg; charset=foo bar", false),
+      ("audio/mpeg; charset=", false),
+      ("audio/mpeg; charset=\"binary", false),
+      ("audio/mpeg; charset=\"bin\\ary\"", false),
+      ("audio/mpeg; charset=binary; charset=binary", false),
+      ("audio/mpeg; boundary=x", false),
+      ("audio/mpeg; charset=binary\u{0001}", false),
+      ("audio/mp3", false),
+    ];
+
+    for (content_type, expected) in cases {
+      assert_eq!(
+        is_valid_speech_audio_content_type(content_type),
+        expected,
+        "content type {content_type:?}"
+      );
+    }
   }
 
   #[test]

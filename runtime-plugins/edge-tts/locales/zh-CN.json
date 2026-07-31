@@ -1,0 +1,4 @@
+{
+  "name": "Edge TTS",
+  "description": "通过受代理的 Edge TTS 端点进行免凭证的 OpenAI 兼容语音合成。"
+}

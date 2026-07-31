@@ -175,6 +175,68 @@ pub trait RawHttpTransport: Send + Sync + 'static {
   ) -> Pin<Box<dyn Future<Output = Result<(), StorageError>> + Send + '_>>;
 }
 
+/// Request body representation that preserves both UTF-8 text (JSON/string callers) and
+/// arbitrary binary octets without lossy conversion. Existing string callers use
+/// [`RequestBody::text`]; binary callers use [`RequestBody::bytes`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RequestBody {
+  /// No body.
+  None,
+  /// UTF-8 text body (JSON, form-encoded, etc.).
+  Text(String),
+  /// Arbitrary binary octets (Blob request bodies, protobuf, etc.).
+  Bytes(Vec<u8>),
+}
+
+impl RequestBody {
+  /// Build a text body from a string.
+  pub fn text(body: impl Into<String>) -> Self {
+    Self::Text(body.into())
+  }
+
+  /// Build a binary body from raw bytes.
+  pub fn bytes(body: impl Into<Vec<u8>>) -> Self {
+    Self::Bytes(body.into())
+  }
+
+  /// True when no body is present.
+  pub fn is_none(&self) -> bool {
+    matches!(self, Self::None)
+  }
+
+  /// Byte length of the body payload (0 for empty/none).
+  pub fn len(&self) -> usize {
+    match self {
+      Self::None => 0,
+      Self::Text(s) => s.len(),
+      Self::Bytes(b) => b.len(),
+    }
+  }
+
+  /// Borrow the body as a UTF-8 string slice when it is a text body; `None` for bytes/none.
+  pub fn as_text(&self) -> Option<&str> {
+    match self {
+      Self::Text(s) => Some(s.as_str()),
+      _ => None,
+    }
+  }
+
+  /// Borrow the body as raw bytes (text bodies return their UTF-8 bytes).
+  pub fn as_bytes(&self) -> Option<&[u8]> {
+    match self {
+      Self::None => None,
+      Self::Text(s) => Some(s.as_bytes()),
+      Self::Bytes(b) => Some(b.as_slice()),
+    }
+  }
+}
+
+impl Default for RequestBody {
+  fn default() -> Self {
+    Self::None
+  }
+}
+
 /// Destination restriction selected by the host before native transport begins.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DestinationPolicy {
@@ -192,7 +254,7 @@ pub struct PreparedHttpRequest {
   pub method: ProviderHttpMethod,
   pub url: url::Url,
   pub headers: HashMap<String, String>,
-  pub body: Option<String>,
+  pub body: RequestBody,
   /// When set, overrides default JSON content-type for the body.
   pub content_type: Option<String>,
   pub proxy_mode: ProxyMode,
@@ -213,7 +275,7 @@ impl std::fmt::Debug for PreparedHttpRequest {
       .field("method", &self.method)
       .field("url_origin", &self.url.origin().ascii_serialization())
       .field("header_names", &self.headers.keys().collect::<Vec<_>>())
-      .field("has_body", &self.body.is_some())
+      .field("has_body", &!self.body.is_none())
       .field("content_type", &self.content_type)
       .field("proxy_mode", &self.proxy_mode)
       .field("destination_policy", &self.destination_policy)
@@ -468,7 +530,12 @@ async fn execute_request(prepared: PreparedHttpRequest) -> Result<BoundedHttpRes
   for (name, value) in &prepared.headers {
     builder = builder.header(name, value);
   }
-  if let Some(body) = &prepared.body {
+  let body_bytes: Option<Vec<u8>> = match &prepared.body {
+    RequestBody::None => None,
+    RequestBody::Text(s) => Some(s.as_bytes().to_vec()),
+    RequestBody::Bytes(b) => Some(b.clone()),
+  };
+  if let Some(body) = &body_bytes {
     let content_type = prepared.content_type.as_deref().unwrap_or("application/json");
     builder = builder
       .header(reqwest::header::CONTENT_TYPE, content_type)
@@ -495,6 +562,11 @@ async fn execute_stream(
   if cancel.is_cancelled() {
     return Err(StorageError::Validation("request cancelled".into()));
   }
+  // Thread grant/request limits through instead of relying on fixed defaults: the stream byte
+  // cap comes from the prepared request (grant max_stream_bytes / max_response_body_bytes),
+  // falling back to the host default only when the caller sets no cap.
+  let max_total_bytes = prepared.max_response_body_bytes.unwrap_or(MAX_STREAM_TOTAL_BYTES);
+  let total_timeout = prepared.timeout;
   let client = stream_client_for(prepared.proxy_mode, prepared.destination_policy)?;
   let mut builder = match prepared.method {
     ProviderHttpMethod::Get => client.get(prepared.url.clone()),
@@ -503,49 +575,63 @@ async fn execute_stream(
   for (name, value) in &prepared.headers {
     builder = builder.header(name, value);
   }
-  if let Some(body) = &prepared.body {
+  let body_bytes: Option<Vec<u8>> = match &prepared.body {
+    RequestBody::None => None,
+    RequestBody::Text(s) => Some(s.as_bytes().to_vec()),
+    RequestBody::Bytes(b) => Some(b.clone()),
+  };
+  if let Some(body) = &body_bytes {
     let content_type = prepared.content_type.as_deref().unwrap_or("application/json");
     builder = builder
       .header(reqwest::header::CONTENT_TYPE, content_type)
       .body(body.clone());
   }
 
-  let response = tokio::select! {
-    biased;
-    _ = cancel.cancelled() => return Err(StorageError::Validation("request cancelled".into())),
-    result = builder.send() => result.map_err(map_reqwest_error)?,
-  };
-
-  let status = response.status().as_u16();
-  let headers = extract_response_headers(response.headers());
-  on_event(ProviderHttpStreamEvent::Started { status, headers })?;
-
-  let mut response = response;
-  let mut total_bytes = 0usize;
-  loop {
-    if cancel.is_cancelled() {
-      return Err(StorageError::Validation("request cancelled".into()));
-    }
-    let next = tokio::select! {
+  let send = async move {
+    let response = tokio::select! {
       biased;
       _ = cancel.cancelled() => return Err(StorageError::Validation("request cancelled".into())),
-      chunk = tokio::time::timeout(STREAM_IDLE_TIMEOUT, response.chunk()) => chunk,
+      result = builder.send() => result.map_err(map_reqwest_error)?,
     };
-    match next {
-      Ok(Ok(Some(chunk))) => {
-        total_bytes = total_bytes.saturating_add(chunk.len());
-        if total_bytes > MAX_STREAM_TOTAL_BYTES {
-          return Err(StorageError::Validation("stream exceeded byte cap".into()));
-        }
-        on_event(ProviderHttpStreamEvent::Chunk { bytes: chunk.to_vec() })?;
+    let status = response.status().as_u16();
+    let headers = extract_response_headers(response.headers());
+    on_event(ProviderHttpStreamEvent::Started { status, headers })?;
+    let mut response = response;
+    let mut total_bytes = 0usize;
+    loop {
+      if cancel.is_cancelled() {
+        return Err(StorageError::Validation("request cancelled".into()));
       }
-      Ok(Ok(None)) => break,
-      Ok(Err(err)) => return Err(map_reqwest_error(err)),
-      Err(_) => return Err(StorageError::Validation("stream idle timeout".into())),
+      let next = tokio::select! {
+        biased;
+        _ = cancel.cancelled() => return Err(StorageError::Validation("request cancelled".into())),
+        chunk = tokio::time::timeout(STREAM_IDLE_TIMEOUT, response.chunk()) => chunk,
+      };
+      match next {
+        Ok(Ok(Some(chunk))) => {
+          total_bytes = total_bytes.saturating_add(chunk.len());
+          if total_bytes > max_total_bytes {
+            return Err(StorageError::Validation("stream exceeded byte cap".into()));
+          }
+          on_event(ProviderHttpStreamEvent::Chunk { bytes: chunk.to_vec() })?;
+        }
+        Ok(Ok(None)) => break,
+        Ok(Err(err)) => return Err(map_reqwest_error(err)),
+        Err(_) => return Err(StorageError::Validation("stream idle timeout".into())),
+      }
     }
+    on_event(ProviderHttpStreamEvent::Finished)?;
+    Ok(())
+  };
+  // Enforce the grant/request total timeout around the whole stream so continuously active
+  // traffic cannot exceed the bound even when each chunk arrives within the idle timeout.
+  match total_timeout {
+    Some(timeout) => match tokio::time::timeout(timeout, send).await {
+      Ok(result) => result,
+      Err(_) => Err(StorageError::Validation("stream total timeout".into())),
+    },
+    None => send.await,
   }
-  on_event(ProviderHttpStreamEvent::Finished)?;
-  Ok(())
 }
 
 fn extract_response_headers(headers: &reqwest::header::HeaderMap) -> HashMap<String, String> {

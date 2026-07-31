@@ -3,18 +3,21 @@
 use crate::domain::cancel::CancelToken;
 use crate::domain::provider_http::{ProviderHttpMethod, ProviderHttpResponse};
 use crate::domain::service_capability::{CapabilityError, CapabilityErrorCode, CapabilityExecutionPrincipal};
-use crate::domain::service_integration::{IntegrationInstance, ServiceIntegrationManifest};
+use crate::domain::service_integration::{
+  EDGE_TTS_DEFAULT_BASE_URL, EDGE_TTS_PLUGIN_ID, IntegrationInstance, ServiceIntegrationManifest,
+};
 use crate::error::StorageError;
 use crate::repositories::{integration_credential_bindings, integration_instances};
 use crate::services::bounded_http::{
   BoundedHttpResponse, DestinationPolicy, MAX_RESPONSE_BODY_BYTES, PreparedHttpRequest, REQUEST_TIMEOUT,
-  RawHttpTransport, ReqwestRawHttpTransport, append_query_pairs, build_endpoint, is_blocked_header,
+  RawHttpTransport, RequestBody, ReqwestRawHttpTransport, append_query_pairs, build_endpoint, is_blocked_header,
   validate_caller_name, validate_external_destination, validate_relative_path, validate_request_id,
   value_looks_like_secret_key, with_cancel,
 };
 use crate::services::bundled_plugins::{
   BundledPluginRegistration, CapabilityEndpointAuthority, CapabilityPathAuthority,
 };
+use crate::services::edge_tts::EDGE_TTS_ENDPOINT_ALIAS;
 use crate::services::service_integration_registry::ServiceIntegrationRegistry;
 use crate::services::token_grant::TokenGrant;
 use crate::storage::Database;
@@ -454,7 +457,7 @@ impl NetworkBroker {
         method: request.method,
         url,
         headers,
-        body: request.body,
+        body: request.body.map(RequestBody::text).unwrap_or_default(),
         content_type: request.content_type,
         proxy_mode,
         destination_policy: endpoint.destination_policy,
@@ -558,9 +561,17 @@ fn resolve_endpoint_base(
       .instance_endpoint_origin(&instance.config_json, alias)
       .map_err(map_validation)?
     {
+      let destination_policy = if registration.manifest.id == EDGE_TTS_PLUGIN_ID
+        && alias == EDGE_TTS_ENDPOINT_ALIAS
+        && origin == EDGE_TTS_DEFAULT_BASE_URL
+      {
+        DestinationPolicy::TrustedFixed
+      } else {
+        DestinationPolicy::PublicInternet
+      };
       return Ok(ResolvedEndpointBase {
         base_url: origin,
-        destination_policy: DestinationPolicy::PublicInternet,
+        destination_policy,
       });
     }
   }
@@ -653,6 +664,31 @@ mod tests {
       status: 200,
       headers: HashMap::new(),
       body: body.as_bytes().to_vec(),
+    }
+  }
+
+  fn edge_tts_instance(base_url: &str) -> IntegrationInstance {
+    let now = now_rfc3339();
+    IntegrationInstance {
+      id: new_id(),
+      plugin_id: EDGE_TTS_PLUGIN_ID.into(),
+      plugin_version: "1.0.0".into(),
+      display_name: "Edge TTS".into(),
+      enabled: true,
+      config_json: serde_json::json!({ "base-url": base_url }).to_string(),
+      config_schema_version: 1,
+      health_status: IntegrationHealthStatus::Unvalidated,
+      last_validated_at: None,
+      last_error_code: None,
+      runtime_kind: "bundled-rust".into(),
+      package_digest: None,
+      execution_grant_set_revision: None,
+      runtime_state: "active".into(),
+      runtime_error_code: None,
+      runtime_error_message: None,
+      runtime_requirement_json: None,
+      created_at: now.clone(),
+      updated_at: now,
     }
   }
 
@@ -798,6 +834,33 @@ mod tests {
     assert!(prepared.url.as_str().starts_with("https://translation.googleapis.com/"));
     assert_eq!(prepared.destination_policy, DestinationPolicy::TrustedFixed);
     assert!(prepared.headers.contains_key("Authorization"));
+  }
+
+  #[test]
+  fn edge_tts_vendor_default_uses_trusted_fixed_destination() {
+    let registration = crate::services::bundled_plugins::bundled()
+      .unwrap()
+      .into_iter()
+      .find(|registration| registration.manifest.id == EDGE_TTS_PLUGIN_ID)
+      .expect("Edge TTS registration must exist");
+
+    let default_endpoint = resolve_endpoint_base(
+      &registration,
+      &registration.manifest,
+      &edge_tts_instance(EDGE_TTS_DEFAULT_BASE_URL),
+      EDGE_TTS_ENDPOINT_ALIAS,
+    )
+    .unwrap();
+    assert_eq!(default_endpoint.destination_policy, DestinationPolicy::TrustedFixed);
+
+    let custom_endpoint = resolve_endpoint_base(
+      &registration,
+      &registration.manifest,
+      &edge_tts_instance("https://custom.example"),
+      EDGE_TTS_ENDPOINT_ALIAS,
+    )
+    .unwrap();
+    assert_eq!(custom_endpoint.destination_policy, DestinationPolicy::PublicInternet);
   }
 
   #[tokio::test]

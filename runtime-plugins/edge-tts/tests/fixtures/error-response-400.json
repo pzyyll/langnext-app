@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "voice_not_found",
+    "message": "The specified voice does not exist."
+  }
+}

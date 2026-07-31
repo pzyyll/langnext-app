@@ -869,10 +869,12 @@ impl RuntimeLifecycleService {
   /// Used by [`crate::services::service_integrations::ServiceIntegrationService::create`] so new
   /// Google Web instances run on the vendor-default Wasm package instead of silently staying
   /// Bundled Rust. Safe-fail: when no default package exists, the external vendor root is missing,
-  /// verification fails, the package is not the host-allowed GTX default, or the atomic apply
-  /// fails, the instance is left Bundled Rust (still a valid executor). Packages declaring a
-  /// dynamic (instance-configured) network origin are never auto-approved here — third-party
-  /// egress must go through explicit migration with a consent warning.
+  /// verification fails, the package is not a host-allowed vendor default, or the atomic apply
+  /// fails, the instance is left Bundled Rust (still a valid executor). Auto-pin is restricted to
+  /// the host-allowed vendor defaults: Google Web GTX (host-fixed origin) and Edge TTS
+  /// (instance-configured origin resolved to the vendor-default base URL). All other packages,
+  /// including those with a non-default instance-configured origin, require explicit migration
+  /// with a consent warning.
   ///
   /// Security:
   /// - Trust root is only the external `vendor_roots` held by [`PluginPackageService`] (app
@@ -920,9 +922,11 @@ impl RuntimeLifecycleService {
         return Ok(());
       }
     };
-    // Auto-acknowledgment is restricted to the host-allowed Google Web 1.0.0 GTX vendor default.
-    // Reverse-bind DB rows to the external-root-verified snapshot; any divergence fails closed.
-    if !is_google_web_gtx_vendor_default(&default, &verified, &vendor_root, &publisher) {
+    // Auto-acknowledgment is restricted to host-allowed vendor defaults (Google Web GTX 1.0.0 or
+    // Edge TTS 1.0.0). Reverse-bind DB rows to the external-root-verified snapshot; any divergence
+    // fails closed. Edge TTS uses an instance-configured origin resolved to the vendor-default
+    // base URL from the migrated config, so auto-pin is safe.
+    if !is_host_allowed_vendor_default(&default, &verified, &vendor_root, &publisher) {
       log::info!(
         "new_instance_default_pin_skipped_not_vendor_default instance={instance_id} plugin={plugin_id} version={}",
         default.version
@@ -1001,7 +1005,7 @@ impl RuntimeLifecycleService {
         "auto-pin catalog row does not reverse-bind the verified snapshot".into(),
       ));
     }
-    if !is_google_web_gtx_vendor_default(&target_version, &rechecked, vendor_root, &publisher) {
+    if !is_host_allowed_vendor_default(&target_version, &rechecked, vendor_root, &publisher) {
       return Err(StorageError::Validation(
         "auto-pin package no longer matches host-allowed vendor default policy".into(),
       ));
@@ -1047,6 +1051,19 @@ impl RuntimeLifecycleService {
         migrated_ocr,
         migrated_speech,
       )?;
+    // Auto-pin consent gate: Edge TTS uses an instance-configured origin (`base-url`), so the
+    // manifest-structural check alone is insufficient. Auto-pin is only safe when the EFFECTIVE
+    // origin resolved from the migrated config equals the exact vendor default. Any custom
+    // origin must go through explicit permission preview/approval and must not be host-auto-
+    // approved. Google Web GTX uses a host-fixed origin (no instance config), so this gate only
+    // applies to Edge TTS.
+    if target_manifest.id == crate::domain::service_integration::EDGE_TTS_PLUGIN_ID
+      && !edge_tts_effective_origin_is_vendor_default(&migrated_config)
+    {
+      return Err(StorageError::Conflict(
+        "auto-pin requires Edge TTS effective origin to equal the vendor default; a custom base-url needs explicit migration consent".into(),
+      ));
+    }
     let migrated_config_digest = public_sha256_hex(migrated_config.as_bytes());
     let grant_bundle = build_grant_bundle_for_target(
       &self.db,
@@ -1580,6 +1597,115 @@ fn is_google_web_gtx_vendor_default(
     && endpoint.instance_origin_config_field.is_none()
 }
 
+/// Verify a verified package matches the host-allowed Edge TTS vendor default. Mirrors
+/// [`is_google_web_gtx_vendor_default`] but with Edge constraints: the `tts-api` endpoint uses an
+/// instance-configured origin (`base-url` config field) instead of a host-fixed origin. Auto-pin is
+/// safe because the migrated config resolves to the vendor-default origin
+/// (`https://tts.wangwangit.com`); a non-default base URL requires explicit migration consent.
+fn is_edge_tts_vendor_default(
+  version: &crate::domain::plugin_package::InstalledPluginVersion,
+  verified: &VerifiedPackage,
+  vendor_root: &crate::services::vendor_trust::VendorPublicKey,
+  publisher: &crate::domain::plugin_package::PluginPublisher,
+) -> bool {
+  const EDGE_TTS_VERSION: &str = "1.0.0";
+  const TTS_ENDPOINT_ID: &str = "tts-api";
+  const TTS_CONFIG_FIELD: &str = "base-url";
+  const HOST_NONE_AUTH_POLICY: &str = "host.none.v1";
+  let manifest = &verified.manifest;
+  if verified.package_digest != version.package_digest {
+    return false;
+  }
+  if manifest.id != crate::domain::service_integration::EDGE_TTS_PLUGIN_ID || version.plugin_id != manifest.id {
+    return false;
+  }
+  if manifest.version != EDGE_TTS_VERSION || version.version != EDGE_TTS_VERSION {
+    return false;
+  }
+  if manifest.runtime.kind != RuntimeKind::WasmComponent
+    || version.runtime_kind != runtime_kind_storage(RuntimeKind::WasmComponent)
+  {
+    return false;
+  }
+  let vendor_key_id = crate::services::vendor_trust::VENDOR_PUBLISHER_KEY_ID;
+  let vendor_fingerprint = manifest.publisher.key_fingerprint.as_str();
+  if vendor_root.key_id != vendor_key_id
+    || manifest.publisher.key_id != vendor_key_id
+    || version.publisher_key_id != vendor_key_id
+    || publisher.key_id != vendor_key_id
+    || version.publisher_fingerprint != vendor_fingerprint
+    || publisher.fingerprint != vendor_fingerprint
+    || verified.publisher_fingerprint != vendor_fingerprint
+    || verified.publisher_public_key_hex != vendor_root.public_key_hex
+    || publisher.public_key_hex != vendor_root.public_key_hex
+    || publisher.source != crate::domain::plugin_package::PublisherSource::Vendor
+    || publisher.revoked
+    || !publisher.enabled
+  {
+    return false;
+  }
+  if !manifest.credential_slots.is_empty() {
+    return false;
+  }
+  if manifest.permissions.auth_policies != vec![HOST_NONE_AUTH_POLICY.to_string()] {
+    return false;
+  }
+  if manifest.permissions.network.len() != 1 {
+    return false;
+  }
+  let endpoint = &manifest.permissions.network[0];
+  // Edge TTS uses an instance-configured origin (base-url), not a host-fixed origin. Static
+  // origins must be empty; the effective origin is resolved from the config field at grant time.
+  endpoint.id == TTS_ENDPOINT_ID
+    && endpoint.origins.is_empty()
+    && endpoint.methods == vec![crate::domain::runtime_plugin::HttpMethod::Post]
+    && endpoint.instance_origin_config_field.as_deref() == Some(TTS_CONFIG_FIELD)
+    && manifest
+      .capabilities
+      .iter()
+      .any(|cap| cap.id == "speech.synthesize@1" && cap.preferences_schema.is_some())
+}
+
+/// Edge TTS vendor-default effective origin. Auto-pin is only safe when the instance's migrated
+/// `base-url` resolves to exactly this origin (normalized equivalently); any custom origin
+/// requires explicit migration consent and must not be host-auto-approved.
+const EDGE_TTS_VENDOR_DEFAULT_ORIGIN: &str = "https://tts.wangwangit.com";
+
+/// True when the migrated Edge TTS config resolves to the vendor-default origin. Extracts the
+/// `base-url` config field, normalizes it through the shared Edge TTS normalizer, and compares
+/// the HTTPS origin to the exact vendor default. A custom origin, missing field, or malformed/
+/// non-HTTPS base URL returns false so auto-pin fails closed and the instance requires explicit
+/// migration consent. This complements the manifest-structural [`is_edge_tts_vendor_default`]
+/// check by validating the EFFECTIVE origin/config, not just the manifest endpoint shape.
+fn edge_tts_effective_origin_is_vendor_default(migrated_config: &str) -> bool {
+  let Ok(value) = serde_json::from_str::<serde_json::Value>(migrated_config) else {
+    return false;
+  };
+  let Some(raw) = value.get("base-url").and_then(|v| v.as_str()) else {
+    return false;
+  };
+  let Ok(normalized) = crate::services::edge_tts::normalize_edge_tts_base_url(raw) else {
+    return false;
+  };
+  let Ok(url) = url::Url::parse(&normalized.canonical_url) else {
+    return false;
+  };
+  url.origin().ascii_serialization() == EDGE_TTS_VENDOR_DEFAULT_ORIGIN
+}
+
+/// True when the verified package matches either host-allowed vendor default (Google Web GTX or
+/// Edge TTS). Auto-pin is restricted to these two vendor defaults; all other packages require
+/// explicit migration with a consent warning.
+fn is_host_allowed_vendor_default(
+  version: &crate::domain::plugin_package::InstalledPluginVersion,
+  verified: &VerifiedPackage,
+  vendor_root: &crate::services::vendor_trust::VendorPublicKey,
+  publisher: &crate::domain::plugin_package::PluginPublisher,
+) -> bool {
+  is_google_web_gtx_vendor_default(version, verified, vendor_root, publisher)
+    || is_edge_tts_vendor_default(version, verified, vendor_root, publisher)
+}
+
 /// Validate migrated payloads against signed schemas and return normalized prepared payloads.
 /// Always run real `normalize_config` for declared schemas (empty and non-empty fields).
 /// Preference rows are validated against the exact bound capability id schema — never a prefix match.
@@ -2088,9 +2214,20 @@ fn build_grant_bundle_for_target(
             endpoint.id
           )));
         }
-        let normalized =
-          crate::services::google_translate_web::normalize_proxy_url(raw).map_err(StorageError::Validation)?;
-        vec![normalized.origin]
+        let origin = if field == "base-url" {
+          let normalized =
+            crate::services::edge_tts::normalize_edge_tts_base_url(raw).map_err(StorageError::Validation)?;
+          // Grant authority stores HTTPS origin only; path remains on the instance config.
+          url::Url::parse(&normalized.canonical_url)
+            .map_err(|e| StorageError::Validation(format!("invalid edge tts base URL: {e}")))?
+            .origin()
+            .ascii_serialization()
+        } else {
+          let normalized =
+            crate::services::google_translate_web::normalize_proxy_url(raw).map_err(StorageError::Validation)?;
+          normalized.origin
+        };
+        vec![origin]
       } else {
         endpoint.origins.clone()
       };
@@ -2099,8 +2236,27 @@ fn build_grant_bundle_for_target(
         for method in &endpoint.methods {
           for policy in &auth_policies {
             let auth = AuthPolicyId::parse(policy).map_err(StorageError::Validation)?;
-            let limits = ResourceLimits::default();
-            domain_net.push(NetworkGrantEntry::with_mode_and_origin_kind(
+            let (max_request_bytes, max_response_bytes, max_stream_bytes, timeout_ms, response_modes) =
+              if capability_id.as_str() == "speech.synthesize@1" {
+                (
+                  RESOURCE_LIMIT_DEFAULT_MAX_REQUEST_BYTES,
+                  crate::domain::service_capability::SPEECH_AUDIO_MAX_BYTES as u64,
+                  RESOURCE_LIMIT_DEFAULT_MAX_STREAM_BYTES,
+                  60_000u64,
+                  crate::domain::plugin_resource::NetworkResponseBodyModes::JSON_AND_BYTES,
+                )
+              } else {
+                (
+                  RESOURCE_LIMIT_DEFAULT_MAX_REQUEST_BYTES,
+                  RESOURCE_LIMIT_DEFAULT_MAX_RESPONSE_BYTES,
+                  RESOURCE_LIMIT_DEFAULT_MAX_STREAM_BYTES,
+                  RESOURCE_LIMIT_DEFAULT_TIMEOUT_MS,
+                  crate::domain::plugin_resource::NetworkResponseBodyModes::JSON_ONLY,
+                )
+              };
+            let limits = ResourceLimits::new(max_request_bytes, max_response_bytes, max_stream_bytes, timeout_ms)
+              .map_err(|e| StorageError::Validation(e.to_string()))?;
+            domain_net.push(NetworkGrantEntry::with_mode_origin_and_response_modes(
               capability_id.clone(),
               endpoint_id.clone(),
               origin.clone(),
@@ -2109,6 +2265,7 @@ fn build_grant_bundle_for_target(
               auth.clone(),
               NetworkResourceMode::Bounded,
               limits,
+              response_modes,
             ));
             network.push(NetworkGrantEntryRecord {
               id: new_id(),
@@ -2120,10 +2277,12 @@ fn build_grant_bundle_for_target(
               method: http_method_as_str(*method).into(),
               auth_policy: auth.as_str().to_string(),
               resource_mode: NetworkResourceMode::Bounded.as_str().into(),
-              max_request_bytes: RESOURCE_LIMIT_DEFAULT_MAX_REQUEST_BYTES,
-              max_response_bytes: RESOURCE_LIMIT_DEFAULT_MAX_RESPONSE_BYTES,
-              max_stream_bytes: RESOURCE_LIMIT_DEFAULT_MAX_STREAM_BYTES,
-              timeout_ms: RESOURCE_LIMIT_DEFAULT_TIMEOUT_MS,
+              max_request_bytes,
+              max_response_bytes,
+              max_stream_bytes,
+              timeout_ms,
+              // Persisted string only at the repository boundary; typed mode is the source of truth.
+              response_body_modes: response_modes.as_canonical(),
             });
           }
         }
@@ -2697,6 +2856,7 @@ fn canonical_bundles_equal(a: &ExecutionGrantSetBundle, b: &ExecutionGrantSetBun
         n.max_response_bytes,
         n.max_stream_bytes,
         n.timeout_ms,
+        n.response_body_modes.as_str(),
       )
     })
     .collect();
@@ -2715,6 +2875,7 @@ fn canonical_bundles_equal(a: &ExecutionGrantSetBundle, b: &ExecutionGrantSetBun
         n.max_response_bytes,
         n.max_stream_bytes,
         n.timeout_ms,
+        n.response_body_modes.as_str(),
       )
     })
     .collect();

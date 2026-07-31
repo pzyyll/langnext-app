@@ -90,9 +90,10 @@ impl AppState {
     // failed/missing 1.0.0 import atomically clears any existing default so a wrong default (e.g.
     // 1.1.0) is never retained. Existing instances are never migrated; only the catalog default
     // for new instances is set.
-    let mut bundled_archives = locate_bundled_google_web_packages(resource_dir.as_deref());
+    let mut bundled_archives = locate_bundled_vendor_packages(resource_dir.as_deref());
     bundled_archives.sort();
-    let mut vendor_default_import: Option<crate::services::plugin_store::VerifiedVendorImport> = None;
+    let mut google_web_default_import: Option<crate::services::plugin_store::VerifiedVendorImport> = None;
+    let mut edge_tts_default_import: Option<crate::services::plugin_store::VerifiedVendorImport> = None;
     for bundled in &bundled_archives {
       match std::fs::read(bundled) {
         Ok(bytes) => match plugin_packages.bootstrap_bundled_package(&bytes, false) {
@@ -100,16 +101,20 @@ impl AppState {
             if import.plugin_id() == crate::domain::service_integration::GOOGLE_TRANSLATE_WEB_PLUGIN_ID
               && import.version() == GOOGLE_WEB_DEFAULT_VERSION
             {
-              vendor_default_import = Some(import);
+              google_web_default_import = Some(import);
+            } else if import.plugin_id() == crate::domain::service_integration::EDGE_TTS_PLUGIN_ID
+              && import.version() == EDGE_TTS_DEFAULT_VERSION
+            {
+              edge_tts_default_import = Some(import);
             }
           }
           Err(err) => log::error!(
-            "google_web_bootstrap_import_failed path={} error={err}",
+            "vendor_package_bootstrap_import_failed path={} error={err}",
             bundled.display()
           ),
         },
         Err(err) => log::warn!(
-          "google_web_bootstrap_read_failed path={} error={err}",
+          "vendor_package_bootstrap_read_failed path={} error={err}",
           bundled.display()
         ),
       }
@@ -120,13 +125,25 @@ impl AppState {
     if let Err(err) = plugin_packages.set_vendor_bootstrap_default(
       crate::domain::service_integration::GOOGLE_TRANSLATE_WEB_PLUGIN_ID,
       GOOGLE_WEB_DEFAULT_VERSION,
-      vendor_default_import.as_ref(),
+      google_web_default_import.as_ref(),
       VendorDefaultBindingMode::ReplaceExisting,
     ) {
       log::warn!(
         "google_web_default_bind_failed plugin={} version={} error={err}",
         crate::domain::service_integration::GOOGLE_TRANSLATE_WEB_PLUGIN_ID,
         GOOGLE_WEB_DEFAULT_VERSION
+      );
+    }
+    if let Err(err) = plugin_packages.set_vendor_bootstrap_default(
+      crate::domain::service_integration::EDGE_TTS_PLUGIN_ID,
+      EDGE_TTS_DEFAULT_VERSION,
+      edge_tts_default_import.as_ref(),
+      VendorDefaultBindingMode::ReplaceExisting,
+    ) {
+      log::warn!(
+        "edge_tts_default_bind_failed plugin={} version={} error={err}",
+        crate::domain::service_integration::EDGE_TTS_PLUGIN_ID,
+        EDGE_TTS_DEFAULT_VERSION
       );
     }
     // Active staging/preview TTL sweep while the app is running (stoppable via Drop on process exit).
@@ -205,24 +222,33 @@ impl AppState {
 /// Bundled Google Translate Web package filename prefix (release CI signs and places archives as
 /// resources). Both 1.0.0 GTX and 1.1.0 proxy archives may be present.
 const BUNDLED_GOOGLE_WEB_PACKAGE_PREFIX: &str = "com.langnext.google-translate-web-";
-const BUNDLED_GOOGLE_WEB_PACKAGE_SUFFIX: &str = ".lnplugin";
+/// Bundled Edge TTS package filename prefix.
+const BUNDLED_EDGE_TTS_PACKAGE_PREFIX: &str = "com.langnext.edge-tts-";
+const BUNDLED_VENDOR_PACKAGE_SUFFIX: &str = ".lnplugin";
 /// Env override pointing at a single bundled signed package (release/CI/test injection).
 const BUNDLED_GOOGLE_WEB_PACKAGE_ENV: &str = "LANGNEXT_BUNDLED_GOOGLE_WEB_PACKAGE";
+const BUNDLED_EDGE_TTS_PACKAGE_ENV: &str = "LANGNEXT_BUNDLED_EDGE_TTS_PACKAGE";
 /// Vendor default version explicitly selected as the new-instance catalog default after all
 /// bundled archives are imported. Must match the verified installed manifest version.
 const GOOGLE_WEB_DEFAULT_VERSION: &str = "1.0.0";
+const EDGE_TTS_DEFAULT_VERSION: &str = "1.0.0";
 
-/// Locate bundled vendor-signed Google Translate Web `.lnplugin` archives to import on first
-/// startup. Checks (1) an env override (single archive), (2) the cargo resources dir (dev/test),
-/// (3) `resources/plugins` / `plugins` paths beside the resource root. Returns all matching
-/// archives (unsorted); the caller sets the lowest version as default. Returns an empty vec when
-/// no bundled archive is present (local dev).
-fn locate_bundled_google_web_packages(resource_dir: Option<&std::path::Path>) -> Vec<std::path::PathBuf> {
-  if let Ok(path) = std::env::var(BUNDLED_GOOGLE_WEB_PACKAGE_ENV) {
-    let path = std::path::PathBuf::from(path);
-    if path.is_file() {
-      return vec![path];
+/// Locate bundled vendor-signed `.lnplugin` archives (Google Web + Edge TTS) to import on first
+/// startup. Checks env overrides, the cargo resources dir (dev/test), and `resources/plugins` /
+/// `plugins` paths beside the resource root. Returns an empty vec when no bundled archive is
+/// present (local dev).
+fn locate_bundled_vendor_packages(resource_dir: Option<&std::path::Path>) -> Vec<std::path::PathBuf> {
+  let mut archives = Vec::new();
+  for env_key in [BUNDLED_GOOGLE_WEB_PACKAGE_ENV, BUNDLED_EDGE_TTS_PACKAGE_ENV] {
+    if let Ok(path) = std::env::var(env_key) {
+      let path = std::path::PathBuf::from(path);
+      if path.is_file() {
+        archives.push(path);
+      }
     }
+  }
+  if !archives.is_empty() {
+    return archives;
   }
 
   let mut dirs = Vec::new();
@@ -232,7 +258,6 @@ fn locate_bundled_google_web_packages(resource_dir: Option<&std::path::Path>) ->
   }
   dirs.push(crate::services::vendor_trust::cargo_resources_root().join("plugins"));
 
-  let mut archives = Vec::new();
   for dir in &dirs {
     let Ok(entries) = std::fs::read_dir(dir) else {
       continue;
@@ -240,10 +265,11 @@ fn locate_bundled_google_web_packages(resource_dir: Option<&std::path::Path>) ->
     for entry in entries.flatten() {
       let path = entry.path();
       if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-        if name.starts_with(BUNDLED_GOOGLE_WEB_PACKAGE_PREFIX)
-          && name.ends_with(BUNDLED_GOOGLE_WEB_PACKAGE_SUFFIX)
-          && path.is_file()
-        {
+        let is_vendor = (name.starts_with(BUNDLED_GOOGLE_WEB_PACKAGE_PREFIX)
+          || name.starts_with(BUNDLED_EDGE_TTS_PACKAGE_PREFIX))
+          && name.ends_with(BUNDLED_VENDOR_PACKAGE_SUFFIX)
+          && path.is_file();
+        if is_vendor {
           archives.push(path);
         }
       }

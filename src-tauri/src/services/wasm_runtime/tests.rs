@@ -19,8 +19,8 @@ use crate::services::wasm_runtime::executor::{
   WasmDetectLanguageAdapter, WasmTranslateTextAdapter, compute_sha256_hex, principal_from_context,
 };
 use crate::services::wasm_runtime::host::{
-  BROKER_UNSUPPORTED_BLOB_STREAM_MESSAGE, BrokerAuthorization, BrokerFetchError, BrokerFetchOutcome,
-  BrokerFetchRequest, BrokerFetchResponse, BrokerHandle, BrokerResponseBody, NeutralLogLevel,
+  BrokerAuthorization, BrokerFetchError, BrokerFetchOutcome, BrokerFetchRequest, BrokerFetchResponse, BrokerHandle,
+  BrokerResponseBody, NeutralLogLevel,
 };
 use crate::services::wasm_runtime::store::{build_store, new_state, new_state_with_fuel};
 use crate::services::wasm_runtime::{WasmRuntime, bindings};
@@ -1423,54 +1423,184 @@ mod wasm_host_imports {
   }
 
   #[tokio::test]
-  async fn broker_blob_and_stream_response_are_stable_unsupported() {
-    for body in [BrokerResponseBody::Blob, BrokerResponseBody::Stream] {
-      let (principal, grant) = conformance_principal_grant();
-      let broker = Box::new(StaticResponseBroker {
-        response: Ok(BrokerFetchResponse {
-          status: 200,
-          headers: vec![],
-          body,
-        }),
-      });
-      let mut state = host_state_with_broker(principal, grant, broker);
-      // authorize + transport succeed; host maps blob/stream response to stable unsupported after.
-      // do_broker_fetch itself returns Ok(Blob/Stream); the bindings layer maps to guest-visible
-      // Internal("unsupported"). Prove do_broker_fetch does not trap and returns the body variants.
-      let outcome = state.do_broker_fetch(approved_request()).await;
-      let response = outcome.expect("blob/stream transport must not trap in host authorize path");
-      assert!(
-        matches!(response.body, BrokerResponseBody::Blob | BrokerResponseBody::Stream),
-        "body must remain blob/stream for bindings to map to stable unsupported"
-      );
+  async fn broker_bytes_response_mode_requires_accept_and_grant() {
+    use crate::domain::plugin_resource::NetworkResponseBodyModes;
+    use crate::domain::runtime_plugin::{
+      AuthPolicyId, CapabilityId, EndpointId, ExecutionGrantSet, HttpMethod, HttpsOrigin, NetworkGrantEntry,
+      PackageDigest, PackageIdentity, PluginId, ResourceLimits, RuntimeIdentity, SemVerVersion,
+    };
+    let grant = ExecutionGrantSet::initial(
+      Uuid::nil(),
+      RuntimeIdentity::Package(PackageIdentity {
+        package_digest: PackageDigest::parse(CONFORMANCE_PACKAGE_DIGEST_HEX).unwrap(),
+      }),
+      PluginId::parse(CONFORMANCE_PLUGIN_ID).unwrap(),
+      SemVerVersion::parse(CONFORMANCE_PLUGIN_VERSION).unwrap(),
+      vec![CapabilityId::parse(CONFORMANCE_CAPABILITY_TEXT).unwrap()],
+      vec![NetworkGrantEntry::with_mode_origin_and_response_modes(
+        CapabilityId::parse(CONFORMANCE_CAPABILITY_TEXT).unwrap(),
+        EndpointId::parse("approved").unwrap(),
+        HttpsOrigin::parse(CONFORMANCE_ORIGIN).unwrap(),
+        crate::domain::runtime_plugin::NetworkOriginKind::InstanceConfigured,
+        HttpMethod::Get,
+        AuthPolicyId::parse(CONFORMANCE_AUTH_POLICY).unwrap(),
+        crate::domain::runtime_plugin::NetworkResourceMode::Bounded,
+        ResourceLimits::default(),
+        NetworkResponseBodyModes::JSON_AND_BYTES,
+      )],
+      vec![],
+    )
+    .unwrap();
+    let principal = grant
+      .principal_for_request(CONFORMANCE_CAPABILITY_TEXT, "req-bytes")
+      .unwrap();
+    let broker = Box::new(StaticResponseBroker {
+      response: Ok(BrokerFetchResponse {
+        status: 200,
+        headers: vec![("content-type".into(), "audio/mpeg".into())],
+        body: BrokerResponseBody::Bytes {
+          content_type: Some("audio/mpeg".into()),
+          bytes: vec![1, 2, 3, 4],
+        },
+      }),
+    });
+    let mut state = host_state_with_broker(principal, grant, broker);
+    let mut request = approved_request();
+    request.headers = vec![("Accept".into(), "audio/mpeg".into())];
+    let response = state.do_broker_fetch(request).await.expect("bytes mode ok");
+    match response.body {
+      BrokerResponseBody::Bytes { bytes, .. } => assert_eq!(bytes, vec![1, 2, 3, 4]),
+      other => panic!("expected bytes body, got {other:?}"),
     }
   }
 
   #[tokio::test]
-  async fn blob_and_stream_resource_ops_return_stable_unsupported() {
+  async fn blob_and_stream_resource_ops_work() {
     use bindings::translate_text::langnext::runtime_plugin::host::{BlobDirection, Host as HostImports, StreamKind};
     let (principal, grant) = conformance_principal_grant();
     let mut state = host_state(principal, grant, CancelToken::new());
-    let blob = state
-      .blob_create(BlobDirection::Output, None, 64)
+    let handle = state
+      .blob_create(BlobDirection::Output, Some("application/octet-stream".into()), 64)
       .await
       .expect("host call must not trap")
-      .expect_err("blob_create must be unsupported");
-    assert!(
-      format!("{blob:?}").to_ascii_lowercase().contains("unsupported") || format!("{blob:?}").contains("Internal"),
-      "blob_create error must be stable unsupported, got {blob:?}"
-    );
-    let stream = state
+      .expect("blob_create must succeed");
+    // Resource handles are moved into each host call; exercise write then close on the same handle.
+    let written = state
+      .blob_write(handle, 0, b"hello".to_vec())
+      .await
+      .expect("host call must not trap")
+      .expect("blob_write must succeed");
+    assert_eq!(written, 5);
+    // length/close use a freshly created handle after write verification via table.
+    let handle2 = state
+      .blob_create(BlobDirection::Output, None, 16)
+      .await
+      .expect("host call must not trap")
+      .expect("blob_create must succeed");
+    state
+      .blob_close(handle2)
+      .await
+      .expect("host call must not trap")
+      .expect("blob_close must succeed");
+
+    let (_writer, _reader) = state
       .stream_create(StreamKind::NetworkBinary, None, 64)
       .await
       .expect("host call must not trap")
-      .expect_err("stream_create must be unsupported");
+      .expect("stream_create must succeed");
+  }
+
+  /// Broker request body passed as a Blob handle is atomically consumed: the host takes the
+  /// bytes out of the BlobResourceTable, removes the entry (no inaccessible leak), and forwards
+  /// the exact arbitrary binary to the broker. Repeat access via the same handle fails because
+  /// the wasmtime resource is deleted after consume.
+  #[tokio::test]
+  async fn broker_fetch_blob_body_consumed_not_leaked() {
+    use crate::domain::plugin_resource::{ResourceCreateParams, ResourceDirection, ResourceOwner};
+    use crate::services::wasm_runtime::host::{BlobResource, BrokerRequestBody};
+    use bindings::translate_text::langnext::runtime_plugin::host::{
+      BrokerBodyRequest, BrokerRequest, Host as HostImports,
+    };
+
+    struct BodyCapturingBroker {
+      captured: Arc<Mutex<Option<BrokerRequestBody>>>,
+    }
+    impl BrokerHandle for BodyCapturingBroker {
+      #[allow(clippy::too_many_arguments)]
+      fn fetch(
+        &self,
+        _principal: &PluginPrincipal,
+        _grant: &ExecutionGrantSet,
+        request: BrokerFetchRequest,
+        _authorization: BrokerAuthorization,
+        _cancel: &CancelToken,
+        _deadline: Option<Instant>,
+      ) -> Pin<Box<dyn Future<Output = BrokerFetchOutcome> + Send + '_>> {
+        let captured = self.captured.clone();
+        Box::pin(async move {
+          *captured.lock().unwrap() = Some(request.body);
+          Ok(BrokerFetchResponse {
+            status: 200,
+            headers: vec![],
+            body: BrokerResponseBody::Json(b"\"ok\"".to_vec()),
+          })
+        })
+      }
+    }
+
+    let (principal, grant) = conformance_principal_grant();
+    let captured: Arc<Mutex<Option<BrokerRequestBody>>> = Arc::new(Mutex::new(None));
+    let broker = Box::new(BodyCapturingBroker {
+      captured: captured.clone(),
+    });
+    let mut state = host_state_with_broker(principal, grant, broker);
+
+    // Create an output blob and write arbitrary binary (incl. non-UTF-8) directly into the table,
+    // then push a fresh host resource handle so the broker request can carry it.
+    let owner = ResourceOwner::from_principal(&state.principal);
+    let id = state
+      .blobs
+      .create(ResourceCreateParams {
+        owner,
+        direction: ResourceDirection::Output,
+        content_type: Some("application/octet-stream".into()),
+        max_bytes: 64,
+        expires_at: None,
+        cancel: state.cancel.clone(),
+      })
+      .expect("blob create");
+    let binary = vec![0xFFu8, 0xFE, 0x00, 0x01, 0x80, 0x7F];
+    state.blobs.write(id, &state.principal, 0, &binary).expect("blob write");
+    assert_eq!(state.blobs.len(), 1);
+    let handle = state.table.push(BlobResource { id }).expect("table push");
+
+    // Build a broker request carrying the blob handle as the body and execute through the host
+    // import (the generated binding that performs the consume).
+    let request = BrokerRequest {
+      endpoint_id: "approved".into(),
+      relative_path: "v1/test".into(),
+      method: "GET".into(),
+      headers: vec![],
+      body: BrokerBodyRequest::Blob(handle),
+    };
+    let result = state.broker_fetch(request).await.expect("host call must not trap");
+    assert!(result.is_ok(), "broker_fetch should succeed: {:?}", result.err());
+
+    // The BlobResourceTable entry is consumed (no leak): the table is empty after the transfer.
     assert!(
-      format!("{stream:?}").to_ascii_lowercase().contains("unsupported") || format!("{stream:?}").contains("Internal"),
-      "stream_create error must be stable unsupported, got {stream:?}"
+      state.blobs.is_empty(),
+      "blob entry must be removed after consume, got len={}",
+      state.blobs.len()
     );
-    // Keep the constant referenced so the bindings guest-visible label stays wired.
-    assert_eq!(BROKER_UNSUPPORTED_BLOB_STREAM_MESSAGE, "unsupported");
+    // The broker received the exact arbitrary binary bytes (no lossy UTF-8 conversion).
+    let body = captured.lock().unwrap().take().expect("broker received body");
+    match body {
+      BrokerRequestBody::Blob { bytes, byte_len } => {
+        assert_eq!(bytes, binary);
+        assert_eq!(byte_len, binary.len());
+      }
+      other => panic!("expected Blob body, got {other:?}"),
+    }
   }
 
   // --- Sanitized logging (Issue 3): no guest raw value in logs ---

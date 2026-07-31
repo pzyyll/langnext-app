@@ -1,9 +1,11 @@
 // ABOUTME: Application services enforcing business rules before repository writes.
 // ABOUTME: Commands call services; services own validation and credential orchestration.
 pub mod auth_policies;
+pub mod blob_resources;
 pub mod bounded_http;
 pub mod bundled_plugins;
 pub mod edge_tts;
+pub mod edge_tts_runtime;
 pub mod google_cloud;
 pub mod google_service_account;
 pub mod google_translate_web;
@@ -23,6 +25,8 @@ pub mod runtime_plugin_contracts;
 pub mod runtime_router;
 
 #[cfg(test)]
+mod edge_tts_runtime_tests;
+#[cfg(test)]
 mod google_translate_web_runtime_tests;
 #[cfg(test)]
 mod runtime_lifecycle_installed_tests;
@@ -33,6 +37,7 @@ pub mod service_integration_registry;
 pub mod service_integrations;
 pub mod settings;
 pub mod speech_services;
+pub mod stream_resources;
 pub mod token_grant;
 pub mod translation_history;
 pub mod translation_profiles;

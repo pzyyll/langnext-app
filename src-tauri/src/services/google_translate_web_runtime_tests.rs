@@ -2396,8 +2396,8 @@ fn google_translate_web_proxy_channel_translates_and_detect_stays_on_gtx() {
   assert_eq!(prepared.url.as_str(), "https://proxy-a.example/v1/custom");
   assert_eq!(prepared.destination_policy, DestinationPolicy::PublicInternet);
   assert_eq!(prepared.method, crate::domain::provider_http::ProviderHttpMethod::Post);
-  assert!(prepared.body.is_some());
-  let body: serde_json::Value = serde_json::from_str(prepared.body.as_ref().unwrap()).unwrap();
+  assert!(prepared.body.as_text().is_some());
+  let body: serde_json::Value = serde_json::from_str(prepared.body.as_text().unwrap()).unwrap();
   assert_eq!(body["text"], "你好");
   assert_eq!(body["source_lang"], "zh-CN");
   assert_eq!(body["target_lang"], "en");

@@ -12,7 +12,8 @@ use crate::domain::service_integration::{
 use crate::error::StorageError;
 use crate::repositories::{integration_credential_bindings, integration_instances};
 use crate::services::bounded_http::{
-  DestinationPolicy, PreparedHttpRequest, RawHttpTransport, ReqwestRawHttpTransport, build_endpoint, with_cancel,
+  DestinationPolicy, PreparedHttpRequest, RawHttpTransport, RequestBody, ReqwestRawHttpTransport, build_endpoint,
+  with_cancel,
 };
 use crate::services::token_grant::{ExchangedToken, GoogleTokenExchanger};
 use crate::storage::Database;
@@ -279,7 +280,7 @@ async fn exchange_jwt_for_token(
     method: ProviderHttpMethod::Post,
     url,
     headers: HashMap::new(),
-    body: Some(body),
+    body: RequestBody::text(body),
     content_type: Some("application/x-www-form-urlencoded".into()),
     proxy_mode,
     // OAuth URI is a host-pinned constant validated from the service-account credential.
@@ -506,7 +507,7 @@ F91NhBYyyc/NJWl83dBkI/I=
       prepared: PreparedHttpRequest,
     ) -> Pin<Box<dyn Future<Output = Result<BoundedHttpResponse, StorageError>> + Send + '_>> {
       Box::pin(async move {
-        *self.last_body.lock().unwrap() = prepared.body.clone();
+        *self.last_body.lock().unwrap() = prepared.body.as_text().map(String::from);
         *self.last_destination_policy.lock().unwrap() = Some(prepared.destination_policy);
         self
           .responses

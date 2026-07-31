@@ -1,0 +1,4 @@
+{
+  "name": "Edge TTS",
+  "description": "Credential-free OpenAI-compatible text-to-speech via a brokered Edge TTS endpoint."
+}

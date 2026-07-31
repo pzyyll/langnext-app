@@ -2,6 +2,8 @@
 // ABOUTME: Component runtime. A fresh Store<PluginHostState> is created per request; never reused.
 use crate::domain::cancel::CancelToken;
 use crate::domain::runtime_plugin::{ExecutionGrantSet, PluginPrincipal};
+use crate::services::blob_resources::BlobResourceTable;
+use crate::services::stream_resources::StreamResourceTable;
 use std::time::{Duration, Instant};
 use wasmtime::component::ResourceTable;
 use wasmtime::{Engine, Store, StoreLimits, StoreLimitsBuilder};
@@ -33,6 +35,9 @@ pub const BROKER_IMPORT_MAX_TIMEOUT: Duration = Duration::from_secs(30);
 /// Default per-import timeout when no explicit request deadline is set. Shorter than
 /// [`BROKER_IMPORT_MAX_TIMEOUT`] so imports without a deadline still bounded.
 pub const BROKER_IMPORT_NO_DEADLINE_DEFAULT: Duration = Duration::from_secs(20);
+/// Bounded grace period for a broker future to observe cancellation/deadline before the import
+/// returns. Stream brokers use it to cancel, join, and if needed abort their pre-header task.
+pub const BROKER_IMPORT_CLEANUP_TIMEOUT: Duration = Duration::from_secs(4);
 
 /// Per-invocation host state bound to one principal, grant set, cancellation, deadline, broker
 /// handle, and resource table. A fresh `Store<PluginHostState>` is created per request; this
@@ -50,14 +55,25 @@ pub struct PluginHostState {
   pub log_budget: LogBudget,
   /// Broker handle. Phase 2 uses a conformance broker; Phase 5+ swaps in real transport.
   pub broker: Box<dyn BrokerHandle>,
-  /// Host resource table for opaque blob/stream handles. Phase 2 never pushes (create is
-  /// unsupported); drop/discard paths are no-ops. Kept for Phase 6 forward compatibility.
+  /// Wasmtime resource table mapping guest handle indices to host Blob/Stream resources.
   pub table: ResourceTable,
+  /// Bounded blob bytes owned by this request (opaque to guests except via host imports).
+  pub blobs: BlobResourceTable,
+  /// Ordered stream pairs owned by this request.
+  pub streams: StreamResourceTable,
   /// Per-store resource limits (memory/tables/instances). Applied via `Store::limiter`.
   pub limits: StoreLimits,
   /// Initial fuel granted to this invocation. Guest CPU work beyond this traps. Stored on the
   /// state so tests can override it (e.g. to prove epoch yielding with ample fuel).
   pub fuel: u64,
+}
+
+impl Drop for PluginHostState {
+  fn drop(&mut self) {
+    // Request completion / store drop: release all host-owned binary resources.
+    self.blobs.clear();
+    self.streams.clear();
+  }
 }
 
 /// Build a fresh `Store<PluginHostState>` with resource limits, initial fuel, and an epoch
@@ -125,7 +141,118 @@ pub fn new_state_with_fuel(
     log_budget: LogBudget::default(),
     broker,
     table: ResourceTable::new(),
+    blobs: BlobResourceTable::new(),
+    streams: StreamResourceTable::new(),
     limits: default_store_limits(),
     fuel,
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::domain::plugin_resource::{ResourceCreateParams, ResourceDirection, ResourceOwner};
+  use crate::domain::runtime_plugin::{
+    CapabilityId, PackageDigest, PackageIdentity, PluginId, RuntimeIdentity, SemVerVersion,
+  };
+  use crate::services::wasm_runtime::host::{
+    BrokerAuthorization, BrokerFetchError, BrokerFetchOutcome, BrokerFetchRequest,
+  };
+  use std::future::Future;
+  use std::pin::Pin;
+  use std::sync::Arc;
+  use std::sync::atomic::{AtomicUsize, Ordering};
+  use uuid::Uuid;
+
+  const STORE_DROP_ABORT_WAIT: Duration = Duration::from_secs(1);
+  const STORE_DROP_TASK_COUNT: usize = 2;
+
+  struct NoopBroker;
+
+  impl BrokerHandle for NoopBroker {
+    fn fetch(
+      &self,
+      _principal: &PluginPrincipal,
+      _grant: &ExecutionGrantSet,
+      _request: BrokerFetchRequest,
+      _authorization: BrokerAuthorization,
+      _cancel: &CancelToken,
+      _deadline: Option<Instant>,
+    ) -> Pin<Box<dyn Future<Output = BrokerFetchOutcome> + Send + '_>> {
+      Box::pin(async { Err(BrokerFetchError::NotApproved) })
+    }
+  }
+
+  struct AbortCounter(Arc<AtomicUsize>);
+
+  impl Drop for AbortCounter {
+    fn drop(&mut self) {
+      self.0.fetch_add(1, Ordering::SeqCst);
+    }
+  }
+
+  fn spawn_stubborn_task(
+    started: tokio::sync::oneshot::Sender<()>,
+    aborted: Arc<AtomicUsize>,
+  ) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+      let _counter = AbortCounter(aborted);
+      let _ = started.send(());
+      std::future::pending::<()>().await;
+    })
+  }
+
+  fn test_state() -> PluginHostState {
+    let grant = ExecutionGrantSet::initial(
+      Uuid::nil(),
+      RuntimeIdentity::Package(PackageIdentity {
+        package_digest: PackageDigest::parse("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
+          .unwrap(),
+      }),
+      PluginId::parse("com.langnext.store-drop-test").unwrap(),
+      SemVerVersion::parse("1.0.0").unwrap(),
+      vec![CapabilityId::parse("translate.text@1").unwrap()],
+      vec![],
+      vec![],
+    )
+    .unwrap();
+    let principal = grant
+      .principal_for_request("translate.text@1", "store-drop-request")
+      .unwrap();
+    new_state(principal, grant, CancelToken::new(), None, Box::new(NoopBroker))
+  }
+
+  #[tokio::test]
+  async fn plugin_host_state_drop_aborts_owned_stream_tasks() {
+    let mut state = test_state();
+    let params = ResourceCreateParams {
+      owner: ResourceOwner::from_principal(&state.principal),
+      direction: ResourceDirection::Output,
+      content_type: None,
+      max_bytes: 1,
+      expires_at: None,
+      cancel: CancelToken::new(),
+    };
+    let (_writer, mut reader) = StreamResourceTable::create_network_binary_pair(params).unwrap();
+    let aborted = Arc::new(AtomicUsize::new(0));
+    let (transport_started_tx, transport_started_rx) = tokio::sync::oneshot::channel();
+    let (pump_started_tx, pump_started_rx) = tokio::sync::oneshot::channel();
+    reader.install_pump_handles(
+      spawn_stubborn_task(transport_started_tx, aborted.clone()),
+      spawn_stubborn_task(pump_started_tx, aborted.clone()),
+    );
+    state.streams.adopt_reader(reader).unwrap();
+    transport_started_rx.await.expect("transport task started");
+    pump_started_rx.await.expect("pump task started");
+
+    drop(state);
+
+    tokio::time::timeout(STORE_DROP_ABORT_WAIT, async {
+      while aborted.load(Ordering::SeqCst) != STORE_DROP_TASK_COUNT {
+        tokio::task::yield_now().await;
+      }
+    })
+    .await
+    .expect("store drop must abort every owned stream task");
   }
 }

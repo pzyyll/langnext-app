@@ -165,10 +165,17 @@ pub struct NetworkGrantEntryRecord {
   pub max_response_bytes: u64,
   pub max_stream_bytes: u64,
   pub timeout_ms: u64,
+  /// Allowed broker response body modes (`json`, `json,bytes`, …). Default preserves legacy grants.
+  #[serde(default = "default_response_body_modes")]
+  pub response_body_modes: String,
 }
 
 fn default_network_origin_kind() -> String {
   "instance_configured".into()
+}
+
+fn default_response_body_modes() -> String {
+  crate::domain::plugin_resource::NetworkResponseBodyModes::JSON_ONLY.as_canonical()
 }
 
 /// Page authority entry under a grant-set revision (empty until Phase 9).

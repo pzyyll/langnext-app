@@ -1037,7 +1037,7 @@ mod tests {
     assert!(!prepared.headers.keys().any(|k| k.eq_ignore_ascii_case("Authorization")));
     assert!(!prepared.headers.keys().any(|k| k.eq_ignore_ascii_case("Cookie")));
     assert_eq!(prepared.timeout, Some(GOOGLE_WEB_REQUEST_TIMEOUT));
-    let body: Value = serde_json::from_str(prepared.body.as_ref().unwrap()).unwrap();
+    let body: Value = serde_json::from_str(prepared.body.as_text().unwrap()).unwrap();
     assert_eq!(body["text"], "你好");
     assert_eq!(body["source_lang"], "zh-CN");
     assert_eq!(body["target_lang"], "en");

@@ -1246,6 +1246,7 @@ fn runtime_instance_pin_package_approval_never_authorizes_execution() {
         max_response_bytes: 8 * 1024 * 1024,
         max_stream_bytes: 16 * 1024 * 1024,
         timeout_ms: 20_000,
+        response_body_modes: crate::domain::plugin_resource::NetworkResponseBodyModes::JSON_ONLY.as_canonical(),
       }],
       // Phase 9: page authority remains empty until explicit approval.
       pages: Vec::<PageGrantEntryRecord>::new(),

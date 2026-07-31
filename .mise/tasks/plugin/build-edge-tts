@@ -1,0 +1,231 @@
+#!/usr/bin/env bash
+# ABOUTME: Deterministically build the Edge TTS Wasm Component and stage an unsigned plugin tree.
+# ABOUTME: Never signs; release CI injects signatures/manifest.sig externally via plugin:sign-staging.
+#MISE description="Build edge-tts staging tree (unsigned; release CI signs externally)"
+set -euo pipefail
+
+# --- Pinned guest toolchain check ---
+EXPECTED_CARGO_COMPONENT="0.21.1"
+CARGO_COMPONENT_VERSION=$(cargo component --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
+if [[ -z "$CARGO_COMPONENT_VERSION" ]]; then
+  echo "error: cargo-component not found; expected $EXPECTED_CARGO_COMPONENT (mise pins it via the cargo: backend)" >&2
+  exit 1
+fi
+if [[ "$CARGO_COMPONENT_VERSION" != "$EXPECTED_CARGO_COMPONENT" ]]; then
+  echo "error: cargo-component version $CARGO_COMPONENT_VERSION != pinned $EXPECTED_CARGO_COMPONENT" >&2
+  exit 1
+fi
+echo "ok: cargo-component $CARGO_COMPONENT_VERSION (pinned)"
+
+if ! command -v bun >/dev/null 2>&1; then
+  echo "error: bun is required (pinned by mise) to generate plugin.json without unpinned jq" >&2
+  exit 1
+fi
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+PLUGIN_DIR="$ROOT_DIR/runtime-plugins/edge-tts"
+STAGING_ROOT="$ROOT_DIR/runtime-plugins/dist/staging"
+STAGING="$STAGING_ROOT/com.langnext.edge-tts-1.0.0"
+CRATE_NAME="langnext_edge_tts"
+FIXTURE="$PLUGIN_DIR/fixtures/langnext-edge-tts.wasm"
+FIXTURE_SHA="$FIXTURE.sha256"
+
+# Vendor public key (public material only). Default to the dev/fixture vendor key so local builds
+# produce a verifiable staging tree; release CI overrides with the real offline vendor public key.
+PUBLIC_KEY_HEX="${LANGNEXT_VENDOR_PUBLIC_KEY_HEX:-}"
+if [[ -z "$PUBLIC_KEY_HEX" ]]; then
+  DEFAULT_KEY_FILE="$ROOT_DIR/runtime-plugins/conformance/fixtures/packages/keys/vendor-public-key.hex"
+  if [[ -f "$DEFAULT_KEY_FILE" ]]; then
+    PUBLIC_KEY_HEX="$(tr -d '[:space:]' < "$DEFAULT_KEY_FILE")"
+  fi
+fi
+if [[ -z "$PUBLIC_KEY_HEX" ]]; then
+  echo "error: vendor public key required (set LANGNEXT_VENDOR_PUBLIC_KEY_HEX or keep the dev fixture key)" >&2
+  exit 1
+fi
+echo "ok: vendor public key ${PUBLIC_KEY_HEX:0:12}... (fingerprint computed below)"
+
+# --- Generate Cargo.lock on first build so --locked is stable afterwards ---
+if [[ ! -f "$PLUGIN_DIR/Cargo.lock" ]]; then
+  echo "ok: generating Cargo.lock for edge-tts (first build)"
+  cargo generate-lockfile --manifest-path "$PLUGIN_DIR/Cargo.toml"
+fi
+
+# --- Build the Wasm Component ---
+cargo component build \
+  --manifest-path "$PLUGIN_DIR/Cargo.toml" \
+  --target wasm32-unknown-unknown \
+  --release \
+  --locked
+
+COMPILED="$PLUGIN_DIR/target/wasm32-unknown-unknown/release/${CRATE_NAME}.wasm"
+[[ -f "$COMPILED" ]] || { echo "error: compiled component not found at $COMPILED" >&2; exit 1; }
+
+REBUILD_DIGEST="$(sha256sum "$COMPILED" | awk '{print $1}')"
+
+# Commit the fixture + digest on first build; verify determinism on subsequent builds.
+if [[ -f "$FIXTURE_SHA" ]]; then
+  COMMITTED_DIGEST="$(tr -d '[:space:]' < "$FIXTURE_SHA")"
+  COMMITTED_ACTUAL="$(sha256sum "$FIXTURE" | awk '{print $1}')"
+  if [[ "$COMMITTED_DIGEST" != "$COMMITTED_ACTUAL" ]]; then
+    echo "error: committed edge-tts fixture does not match digest manifest" >&2
+    exit 1
+  fi
+  if [[ "$REBUILD_DIGEST" != "$COMMITTED_DIGEST" ]]; then
+    echo "error: edge-tts component digest drift (rebuild != committed)" >&2
+    echo "  committed: $COMMITTED_DIGEST" >&2
+    echo "  rebuild:   $REBUILD_DIGEST" >&2
+    echo "  if intended, rebuild the fixture, update $FIXTURE_SHA and plugin.json, then re-run" >&2
+    exit 1
+  fi
+  echo "ok: edge-tts component digest matches ($REBUILD_DIGEST)"
+else
+  mkdir -p "$PLUGIN_DIR/fixtures"
+  cp "$COMPILED" "$FIXTURE"
+  echo "$REBUILD_DIGEST" > "$FIXTURE_SHA"
+  echo "ok: edge-tts fixture created ($REBUILD_DIGEST)"
+fi
+
+# --- Assemble the deterministic staging tree ---
+rm -rf "$STAGING"
+mkdir -p "$STAGING/fixtures" "$STAGING/schemas" "$STAGING/locales" "$STAGING/signatures"
+cp "$FIXTURE" "$STAGING/fixtures/langnext-edge-tts.wasm"
+cp "$PLUGIN_DIR/schemas/config.json" "$STAGING/schemas/config.json"
+cp "$PLUGIN_DIR/schemas/speech-preferences.json" "$STAGING/schemas/speech-preferences.json"
+cp "$PLUGIN_DIR/locales/en.json" "$STAGING/locales/en.json"
+cp "$PLUGIN_DIR/locales/zh-CN.json" "$STAGING/locales/zh-CN.json"
+
+# --- Generate publisher.pub from the vendor public key (32 raw bytes) ---
+bun -e '
+const fs = require("fs");
+const path = require("path");
+const staging = process.argv[1];
+const publicKeyHex = process.argv[2];
+const pubBytes = Buffer.from(publicKeyHex, "hex");
+if (pubBytes.length !== 32) {
+  console.error("error: public key must be 32 bytes (64 hex chars)");
+  process.exit(1);
+}
+fs.writeFileSync(path.join(staging, "publisher.pub"), pubBytes);
+console.log("ok: publisher.pub written");
+' "$STAGING" "$PUBLIC_KEY_HEX"
+
+# --- Generate plugin.json with real file digests from the committed template ---
+# Reads the committed template (structure source of truth), computes each file entry's bytes/sha256
+# from the staged artifacts, verifies the publisher fingerprint, and writes both staging/plugin.json
+# and the committed plugin.json so the repo stays in sync with the built artifact.
+TEMPLATE="$PLUGIN_DIR/plugin.json"
+bun -e '
+const fs = require("fs");
+const crypto = require("crypto");
+const path = require("path");
+const staging = process.argv[1];
+const templatePath = process.argv[2];
+const publicKeyHex = process.argv[3];
+const pluginDir = process.argv[4];
+const publicKeyBytes = Buffer.from(publicKeyHex, "hex");
+if (publicKeyBytes.length !== 32) {
+  console.error("error: vendor public key must be 32 bytes (64 hex chars)");
+  process.exit(1);
+}
+const expectedFingerprint = crypto.createHash("sha256").update(publicKeyBytes).digest("hex");
+const manifest = JSON.parse(fs.readFileSync(templatePath, "utf8"));
+const failures = [];
+const push = (m) => failures.push(m);
+if (manifest.manifestVersion !== 1) push("manifestVersion must be 1");
+if (manifest.pluginApiVersion !== "1.0") push("pluginApiVersion must be 1.0");
+if (manifest.id !== "com.langnext.edge-tts") push("id must be com.langnext.edge-tts");
+if (manifest.version !== "1.0.0") push("version must be 1.0.0");
+if (manifest.runtime.kind !== "wasm-component") push("runtime.kind must be wasm-component");
+if (manifest.publisher.keyId !== "com.langnext.vendor.keys.1") push("publisher.keyId must be com.langnext.vendor.keys.1");
+if (manifest.publisher.keyFingerprint !== expectedFingerprint) push("publisher.keyFingerprint must match the vendor public key");
+if (manifest.configSchemaVersion !== 1) push("configSchemaVersion must be 1");
+if (!Array.isArray(manifest.files) || manifest.files.length === 0) push("files must be a non-empty array");
+// Exact path -> role expected map for the Edge TTS single-component package.
+const EXPECTED_PATH_ROLES = {
+  "fixtures/langnext-edge-tts.wasm": "runtime-artifact",
+  "schemas/config.json": "config-schema",
+  "schemas/speech-preferences.json": "preference-schema",
+  "locales/en.json": "locale",
+  "locales/zh-CN.json": "locale",
+};
+const expectedPaths = new Set(Object.keys(EXPECTED_PATH_ROLES));
+const manifestPaths = new Set();
+for (const entry of manifest.files) {
+  if (manifestPaths.has(entry.path)) push("duplicate file path: " + entry.path);
+  manifestPaths.add(entry.path);
+  const expectedRole = EXPECTED_PATH_ROLES[entry.path];
+  if (expectedRole === undefined) {
+    push("unexpected file path in signed index: " + entry.path);
+  } else if (expectedRole !== entry.role) {
+    push("file " + entry.path + " role mismatch: expected " + expectedRole + " got " + entry.role);
+  }
+  let bytes;
+  try {
+    bytes = fs.readFileSync(path.join(staging, entry.path));
+  } catch (e) {
+    push("file " + entry.path + " missing from staging: " + e.message);
+    continue;
+  }
+  entry.bytes = bytes.length;
+  entry.sha256 = crypto.createHash("sha256").update(bytes).digest("hex");
+}
+for (const p of expectedPaths) {
+  if (!manifestPaths.has(p)) push("expected file path missing from signed index: " + p);
+}
+if (manifest.runtime.artifact && !manifestPaths.has(manifest.runtime.artifact)) push("runtime artifact missing from signed file index");
+if (manifest.configurationSchema !== "schemas/config.json") push("configurationSchema must be schemas/config.json");
+// Permissions: one POST endpoint alias tts-api with instance-configured base-url origin.
+const net = manifest.permissions && manifest.permissions.network;
+if (!Array.isArray(net) || net.length !== 1) push("permissions.network must have exactly one endpoint");
+if (net && (net[0].id !== "tts-api" || !Array.isArray(net[0].methods) || net[0].methods.length !== 1 || net[0].methods[0] !== "POST" || net[0].instanceOriginConfigField !== "base-url")) {
+  push("permissions.network[0] must be tts-api POST with instanceOriginConfigField=base-url");
+}
+if (!Array.isArray(manifest.permissions.authPolicies) || manifest.permissions.authPolicies.length !== 1 || manifest.permissions.authPolicies[0] !== "host.none.v1") {
+  push("permissions.authPolicies must be [host.none.v1]");
+}
+// Capability: speech.synthesize@1 with preferencesSchema and artifact.
+const cap = manifest.capabilities && manifest.capabilities[0];
+if (!cap || cap.id !== "speech.synthesize@1" || cap.preferencesSchema !== "schemas/speech-preferences.json" || cap.artifact !== "fixtures/langnext-edge-tts.wasm") {
+  push("capabilities[0] must be speech.synthesize@1 with preferencesSchema and artifact");
+}
+// Bidirectional payload path set: staging payload (excluding package structure) must equal the index.
+const SKIP_FILES = new Set(["plugin.json", "publisher.pub"]);
+const stagingPayloadPaths = new Set();
+const walk = (dir, rel) => {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const relPath = rel ? rel + "/" + entry.name : entry.name;
+    if (entry.isDirectory()) {
+      if (entry.name === "signatures") continue;
+      walk(path.join(dir, entry.name), relPath);
+    } else if (!SKIP_FILES.has(entry.name)) {
+      stagingPayloadPaths.add(relPath);
+    }
+  }
+};
+walk(staging, "");
+for (const p of manifestPaths) {
+  if (!stagingPayloadPaths.has(p)) push("signed file index path missing from staging payload: " + p);
+}
+for (const p of stagingPayloadPaths) {
+  if (!manifestPaths.has(p)) push("staging payload path missing from signed file index: " + p);
+}
+if (failures.length > 0) {
+  console.error("error: plugin.json generation failed");
+  for (const m of failures) console.error("  - " + m);
+  process.exit(1);
+}
+const serialized = JSON.stringify(manifest, null, 2) + "\n";
+fs.writeFileSync(path.join(staging, "plugin.json"), serialized);
+// Keep the committed template in sync with real digests so the repo reflects the built artifact.
+fs.writeFileSync(path.join(pluginDir, "plugin.json"), serialized);
+console.log("ok: plugin.json generated (files=" + manifest.files.length + " payload=" + stagingPayloadPaths.size + " fingerprint=" + expectedFingerprint.slice(0, 12) + "...)");
+' "$STAGING" "$TEMPLATE" "$PUBLIC_KEY_HEX" "$PLUGIN_DIR"
+
+# Reformat both generated manifests with the project Prettier so they pass format:check.
+prettier --write "$STAGING/plugin.json" "$PLUGIN_DIR/plugin.json" >/dev/null
+
+echo "ok: edge-tts staging tree built at $STAGING"
+echo "    next (release CI only): sign the staging plugin.json with the offline vendor key,"
+echo "    inject signatures/manifest.sig, then run:"
+echo "    mise run plugin:finalize-package -- $STAGING runtime-plugins/dist/com.langnext.edge-tts-1.0.0.lnplugin --public-key-hex <vendor-public-key>"

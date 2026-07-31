@@ -18,7 +18,9 @@ pub mod network_handle;
 pub mod store;
 
 // Re-export the verified-component boundary type and typed capability adapters.
-pub use executor::{VerifiedComponent, WasmDetectLanguageAdapter, WasmRuntime, WasmTranslateTextAdapter};
+pub use executor::{
+  VerifiedComponent, WasmDetectLanguageAdapter, WasmRuntime, WasmSpeechSynthesizeAdapter, WasmTranslateTextAdapter,
+};
 
 #[cfg(test)]
 mod tests;

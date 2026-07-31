@@ -1143,14 +1143,32 @@ fn validate_manifest_bound_network_origin_kinds(
         "grant network resource mode is not approved by host policy",
       ));
     }
-    if entry.max_request_bytes != default_limits.max_request_bytes()
-      || entry.max_response_bytes != default_limits.max_response_bytes()
-      || entry.max_stream_bytes != default_limits.max_stream_bytes()
-      || entry.timeout_ms != default_limits.timeout_ms()
-    {
+    let speech_limits_ok = entry.max_request_bytes == default_limits.max_request_bytes()
+      && entry.max_response_bytes == crate::domain::service_capability::SPEECH_AUDIO_MAX_BYTES as u64
+      && entry.max_stream_bytes == default_limits.max_stream_bytes()
+      && entry.timeout_ms == 60_000;
+    let default_limits_ok = entry.max_request_bytes == default_limits.max_request_bytes()
+      && entry.max_response_bytes == default_limits.max_response_bytes()
+      && entry.max_stream_bytes == default_limits.max_stream_bytes()
+      && entry.timeout_ms == default_limits.timeout_ms();
+    if !default_limits_ok && !speech_limits_ok {
       return Err(CapabilityError::new(
         CapabilityErrorCode::PermissionDenied,
         "grant network resource limits are not approved by host policy",
+      ));
+    }
+    let modes = crate::domain::plugin_resource::NetworkResponseBodyModes::parse(&entry.response_body_modes)
+      .map_err(|e| CapabilityError::new(CapabilityErrorCode::PermissionDenied, e))?;
+    // Host-approved modes: json-only (default), json+bytes (speech/binary), or all (stream-capable
+    // for future LLM/network streaming). The guest cannot broaden beyond the grant.
+    if !(modes == crate::domain::plugin_resource::NetworkResponseBodyModes::JSON_ONLY
+      || modes == crate::domain::plugin_resource::NetworkResponseBodyModes::JSON_AND_BYTES
+      || modes == crate::domain::plugin_resource::NetworkResponseBodyModes::BYTES_ONLY
+      || modes == crate::domain::plugin_resource::NetworkResponseBodyModes::ALL)
+    {
+      return Err(CapabilityError::new(
+        CapabilityErrorCode::PermissionDenied,
+        "grant network response body modes are not approved by host policy",
       ));
     }
   }
@@ -1182,7 +1200,9 @@ pub fn bundle_to_execution_grant_set(bundle: &ExecutionGrantSetBundle) -> Result
     .map_err(|e| e.to_string())?;
     let mode = crate::domain::runtime_plugin::NetworkResourceMode::parse(&entry.resource_mode)?;
     let origin_kind = NetworkOriginKind::parse(&entry.origin_kind)?;
-    network.push(NetworkGrantEntry::with_mode_and_origin_kind(
+    let response_body_modes =
+      crate::domain::plugin_resource::NetworkResponseBodyModes::parse(&entry.response_body_modes)?;
+    network.push(NetworkGrantEntry::with_mode_origin_and_response_modes(
       CapabilityId::parse(&entry.capability_id).map_err(|e| format!("{e:?}"))?,
       EndpointId::parse(&entry.endpoint_id)?,
       HttpsOrigin::parse(&entry.origin)?,
@@ -1191,6 +1211,7 @@ pub fn bundle_to_execution_grant_set(bundle: &ExecutionGrantSetBundle) -> Result
       AuthPolicyId::parse(&entry.auth_policy)?,
       mode,
       limits,
+      response_body_modes,
     ));
   }
 
@@ -1320,6 +1341,7 @@ mod tests {
       max_response_bytes: RESOURCE_LIMIT_DEFAULT_MAX_RESPONSE_BYTES,
       max_stream_bytes: RESOURCE_LIMIT_DEFAULT_MAX_STREAM_BYTES,
       timeout_ms: RESOURCE_LIMIT_DEFAULT_TIMEOUT_MS,
+      response_body_modes: crate::domain::plugin_resource::NetworkResponseBodyModes::JSON_ONLY.as_canonical(),
     }];
     // Build authority digest from domain types.
     let domain_caps = vec![CapabilityId::parse("translate.text@1").unwrap()];

@@ -24,6 +24,7 @@ pub const MIGRATIONS: &[&str] = &[
   include_str!("../../migrations/0017_runtime_plugin_instance_pins.sql"),
   include_str!("../../migrations/0018_plugin_uninstall_restored_states.sql"),
   include_str!("../../migrations/0019_execution_grant_origin_kind.sql"),
+  include_str!("../../migrations/0020_execution_grant_response_body_modes.sql"),
 ];
 
 pub fn latest_version() -> i32 {

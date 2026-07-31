@@ -31,6 +31,9 @@ wit-parser = { version = "0.244", default-features = false }
 # WAT parser for synthesizing adversarial Component fixtures (undeclared/unlinked imports) in
 # Phase 2 runtime tests. Not used in production builds.
 wat = "1.254"
+# tokio test-util enables `start_paused`/`time::pause` for deterministic stream pump idle/deadline
+# tests without real multi-second waits. Only enabled for test builds.
+tokio = { version = "1", features = ["test-util", "rt", "rt-multi-thread", "macros", "time"] }
 
 [dependencies]
 tauri = { version = "2", features = ["protocol-asset", "tray-icon", "image-ico", "image-png", "unstable"] }

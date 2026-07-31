@@ -5,10 +5,13 @@ use crate::domain::cancel::CancelToken;
 use crate::domain::runtime_plugin::{ComponentArtifactDigest, ExecutionGrantSet, PackageDigest, PluginPrincipal};
 use crate::domain::service_capability::{
   CapabilityError, CapabilityErrorCode, DetectLanguageRequest, DetectLanguageResponse, ExecutionContext,
-  TranslateTextRequest, TranslateTextResponse, validate_capability_language_id, validate_capability_request_id,
-  validate_capability_text,
+  SPEECH_AUDIO_MAX_BYTES, SpeechSynthesizeRequest, SpeechSynthesizeResponse, TranslateTextRequest,
+  TranslateTextResponse, validate_capability_language_id, validate_capability_request_id, validate_capability_text,
+  validate_speech_synthesize_text,
 };
-use crate::services::service_capabilities::{DetectLanguageCapability, TranslateTextCapability};
+use crate::services::service_capabilities::{
+  DetectLanguageCapability, SpeechSynthesizeCapability, TranslateTextCapability,
+};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -29,6 +32,8 @@ use translate_text::exports::langnext::runtime_plugin::translate_text as tt_expo
 /// Bounded wall-clock time for a single guest invocation when no explicit deadline is supplied.
 /// Host imports enforce their own per-call timeouts; this bounds the whole call.
 pub const DEFAULT_INVOCATION_TIMEOUT: Duration = Duration::from_secs(20);
+/// Speech synthesis may wait on provider audio generation longer than the default translate path.
+pub const SPEECH_INVOCATION_TIMEOUT: Duration = Duration::from_secs(60);
 /// Maximum UTF-8 bytes accepted in copied config JSON.
 pub const CONFIG_MAX_BYTES: usize = 64 * 1024;
 /// Maximum UTF-8 bytes accepted in copied preferences JSON.
@@ -323,6 +328,115 @@ impl WasmRuntime {
     }
   }
 
+  /// Execute `speech.synthesize@1` against a [`VerifiedComponent`]. Returns bounded MP3 bytes
+  /// taken from the host-owned output blob; binary never crosses as base64.
+  pub async fn execute_speech_synthesize(
+    &self,
+    verified: &VerifiedComponent,
+    principal: PluginPrincipal,
+    grant: ExecutionGrantSet,
+    cancel: CancelToken,
+    deadline: Option<Instant>,
+    broker: Box<dyn BrokerHandle>,
+    config: Vec<u8>,
+    request: SpeechSynthesizeRequest,
+  ) -> Result<SpeechSynthesizeResponse, CapabilityError> {
+    use super::bindings::speech_synthesize;
+    use speech_synthesize::exports::langnext::runtime_plugin::speech_synthesize as ss_export;
+
+    enforce_package_binding(&principal, verified)?;
+    grant
+      .grants_capability(&principal)
+      .map_err(|_| CapabilityError::new(CapabilityErrorCode::PermissionDenied, "principal not authorized"))?;
+    validate_copied_json(&config, CONFIG_MAX_BYTES, "config")?;
+    let preferences = serde_json::to_vec(&request.preferences)
+      .map_err(|_| CapabilityError::new(CapabilityErrorCode::InvalidRequest, "preferences must be valid JSON"))?;
+    validate_copied_json(&preferences, PREFERENCES_MAX_BYTES, "preferences")?;
+    validate_capability_request_id(principal.request_id().as_str())?;
+    validate_speech_synthesize_text(&request.text)?;
+    validate_capability_language_id(&request.language_id, "language_id")?;
+
+    let cancel = cancel.clone();
+    let state = new_state(principal, grant, cancel.clone(), deadline, broker);
+    let mut store = build_store(self.engine.engine(), state);
+    let mut linker = wasmtime::component::Linker::new(self.engine.engine());
+    speech_synthesize::SpeechSynthesizeWorld::add_to_linker::<_, HasSelf<PluginHostState>>(&mut linker, |s| s)
+      .map_err(map_instantiate_error)?;
+    let world = speech_synthesize::SpeechSynthesizeWorld::instantiate_async(&mut store, verified.component(), &linker)
+      .await
+      .map_err(map_instantiate_error)?;
+    let guest = world.langnext_runtime_plugin_speech_synthesize();
+    let wit_request = ss_export::SynthesizeRequest {
+      request_id: store.data().principal.request_id().as_str().to_string(),
+      text: request.text,
+      language_id: request.language_id,
+      preferences,
+    };
+
+    // Speech uses a longer wall bound than translate when no explicit deadline is set.
+    let speech_deadline = deadline.or_else(|| Some(Instant::now() + SPEECH_INVOCATION_TIMEOUT));
+    let call_result = run_with_interruption(
+      speech_deadline,
+      cancel.clone(),
+      guest.call_synthesize(&mut store, &config, &wit_request),
+    )
+    .await;
+
+    match call_result {
+      Ok(Ok(response)) => {
+        // Take the owned blob handle from the guest response and drain bytes.
+        let blob_resource = response.output;
+        // Convert the component Resource to our host BlobResource via the table.
+        // The generated type is Resource<BlobResource> owned by the guest return.
+        let host_blob = store
+          .data_mut()
+          .table
+          .get(&blob_resource)
+          .map_err(|_| CapabilityError::new(CapabilityErrorCode::InvalidResponse, "invalid output blob"))?
+          .id;
+        let principal = store.data().principal.clone();
+        let mp3_bytes = store
+          .data_mut()
+          .blobs
+          .take_bytes(host_blob, &principal)
+          .map_err(|_| CapabilityError::new(CapabilityErrorCode::InvalidResponse, "output blob unavailable"))?;
+        // Drop the wasmtime resource entry.
+        let _ = store.data_mut().table.delete(blob_resource);
+
+        if mp3_bytes.is_empty() {
+          return Err(CapabilityError::new(
+            CapabilityErrorCode::InvalidResponse,
+            "speech synthesis returned empty audio",
+          ));
+        }
+        if mp3_bytes.len() > SPEECH_AUDIO_MAX_BYTES {
+          return Err(CapabilityError::new(
+            CapabilityErrorCode::InvalidResponse,
+            "speech synthesis audio exceeds size limit",
+          ));
+        }
+        // Provider contract validation: the response MUST carry a content type and it MUST be
+        // `audio/mpeg` (with allowed parameters). MIME is metadata, but a missing header, a 200
+        // JSON/text error body, or a near-miss MIME must not be accepted as MP3.
+        let content_type = response.media.content_type.as_deref().ok_or_else(|| {
+          CapabilityError::new(
+            CapabilityErrorCode::InvalidResponse,
+            "speech synthesis response is missing a content type",
+          )
+        })?;
+        if !crate::domain::service_capability::is_valid_speech_audio_content_type(content_type) {
+          return Err(CapabilityError::new(
+            CapabilityErrorCode::InvalidResponse,
+            "speech synthesis returned a non-audio/mpeg content type",
+          ));
+        }
+        Ok(SpeechSynthesizeResponse { mp3_bytes })
+      }
+      Ok(Err(plugin_error)) => Err(map_speech_synthesize_plugin_error(plugin_error)),
+      Err(capability_error) => Err(capability_error),
+    }
+  }
+
   /// Run pure migration-world `migrate-config` against copied JSON bytes only.
   pub async fn execute_migrate_config(
     &self,
@@ -603,6 +717,66 @@ impl DetectLanguageCapability for WasmDetectLanguageAdapter {
   }
 }
 
+/// Adapter wrapping [`WasmRuntime`] for `speech.synthesize@1`. Preferences ride on each request
+/// (Speech service binding); config is the instance config JSON snapshot.
+pub struct WasmSpeechSynthesizeAdapter {
+  runtime: Arc<WasmRuntime>,
+  verified: Arc<VerifiedComponent>,
+  grant: ExecutionGrantSet,
+  capability_id: String,
+  config: Vec<u8>,
+  broker_factory: Arc<dyn Fn() -> Box<dyn BrokerHandle> + Send + Sync>,
+}
+
+impl WasmSpeechSynthesizeAdapter {
+  pub fn new(
+    runtime: Arc<WasmRuntime>,
+    verified: Arc<VerifiedComponent>,
+    grant: ExecutionGrantSet,
+    capability_id: impl Into<String>,
+    config: Vec<u8>,
+    broker_factory: Arc<dyn Fn() -> Box<dyn BrokerHandle> + Send + Sync>,
+  ) -> Self {
+    Self {
+      runtime,
+      verified,
+      grant,
+      capability_id: capability_id.into(),
+      config,
+      broker_factory,
+    }
+  }
+}
+
+impl SpeechSynthesizeCapability for WasmSpeechSynthesizeAdapter {
+  fn synthesize(
+    &self,
+    instance_id: Uuid,
+    request: SpeechSynthesizeRequest,
+    context: ExecutionContext,
+  ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<SpeechSynthesizeResponse, CapabilityError>> + Send + '_>>
+  {
+    let runtime = self.runtime.clone();
+    let verified = self.verified.clone();
+    let grant = self.grant.clone();
+    let capability_id = self.capability_id.clone();
+    let config = self.config.clone();
+    let broker = (self.broker_factory)();
+    Box::pin(async move {
+      let principal = principal_from_context(&grant, &capability_id, instance_id, &context)?;
+      let cancel = context.cancel.clone();
+      // Prefer an explicit context deadline; otherwise allow the speech wall bound.
+      let deadline = context
+        .deadline
+        .map(|d| Instant::now() + d)
+        .or_else(|| Some(Instant::now() + SPEECH_INVOCATION_TIMEOUT));
+      runtime
+        .execute_speech_synthesize(&verified, principal, grant, cancel, deadline, broker, config, request)
+        .await
+    })
+  }
+}
+
 /// Enforce that the principal is a package principal whose package digest matches the verified
 /// Component. Wasm package execution requires a package digest: a Bundled principal (or any
 /// principal without a package digest) is rejected, and a digest mismatch is denied. This is the
@@ -745,6 +919,10 @@ impl_plugin_error_mapper!(
 impl_plugin_error_mapper!(
   map_translate_detect_plugin_error,
   super::bindings::translate_detect::langnext::runtime_plugin::common::PluginError
+);
+impl_plugin_error_mapper!(
+  map_speech_synthesize_plugin_error,
+  super::bindings::speech_synthesize::langnext::runtime_plugin::common::PluginError
 );
 
 /// Run a guest future under a wall deadline and cooperative cancellation. The shared engine

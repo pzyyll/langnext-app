@@ -147,7 +147,8 @@ fn list_capabilities(conn: &Connection, grant_set_id: Uuid) -> Result<Vec<Capabi
 fn list_network(conn: &Connection, grant_set_id: Uuid) -> Result<Vec<NetworkGrantEntryRecord>, StorageError> {
   let mut stmt = conn.prepare(
     "SELECT id, grant_set_id, capability_id, endpoint_id, origin, origin_kind, method, auth_policy,
-            resource_mode, max_request_bytes, max_response_bytes, max_stream_bytes, timeout_ms
+            resource_mode, max_request_bytes, max_response_bytes, max_stream_bytes, timeout_ms,
+            response_body_modes
      FROM execution_grant_network_entries
      WHERE grant_set_id = ?1
      ORDER BY capability_id ASC, endpoint_id ASC, origin ASC, origin_kind ASC, method ASC, auth_policy ASC, resource_mode ASC",
@@ -176,6 +177,7 @@ fn list_network(conn: &Connection, grant_set_id: Uuid) -> Result<Vec<NetworkGran
         max_response_bytes: max_response_bytes as u64,
         max_stream_bytes: max_stream_bytes as u64,
         timeout_ms: timeout_ms as u64,
+        response_body_modes: row.get(13)?,
       })
     })?
     .collect::<Result<Vec<_>, _>>()?;
@@ -276,8 +278,9 @@ pub fn insert_bundle(conn: &Connection, bundle: &ExecutionGrantSetBundle) -> Res
       .execute(
         "INSERT INTO execution_grant_network_entries (
               id, grant_set_id, capability_id, endpoint_id, origin, origin_kind, method, auth_policy,
-              resource_mode, max_request_bytes, max_response_bytes, max_stream_bytes, timeout_ms
-          ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+              resource_mode, max_request_bytes, max_response_bytes, max_stream_bytes, timeout_ms,
+              response_body_modes
+          ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
         params![
           net.id.to_string(),
           net.grant_set_id.to_string(),
@@ -292,6 +295,7 @@ pub fn insert_bundle(conn: &Connection, bundle: &ExecutionGrantSetBundle) -> Res
           net.max_response_bytes as i64,
           net.max_stream_bytes as i64,
           net.timeout_ms as i64,
+          net.response_body_modes,
         ],
       )
       .map_err(|e| StorageError::from_sqlite_constraint(e, "execution grant network entry"))?;

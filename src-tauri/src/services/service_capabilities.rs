@@ -17,7 +17,9 @@ use crate::services::google_translate_web::GoogleTranslateWebCapabilities;
 use crate::services::runtime_router::{ResolvedDetect, ResolvedTranslate, RuntimeRouter, SnapshotRuntimeResolution};
 use crate::services::service_integration_registry::ServiceIntegrationRegistry;
 use crate::services::wasm_runtime::host::{BrokerFetchError, BrokerFetchOutcome, BrokerFetchRequest, BrokerHandle};
-use crate::services::wasm_runtime::{WasmDetectLanguageAdapter, WasmRuntime, WasmTranslateTextAdapter};
+use crate::services::wasm_runtime::{
+  WasmDetectLanguageAdapter, WasmRuntime, WasmSpeechSynthesizeAdapter, WasmTranslateTextAdapter,
+};
 use crate::storage::Database;
 use std::collections::HashMap;
 use std::future::Future;
@@ -639,12 +641,63 @@ impl ServiceCapabilityService {
     }
   }
 
-  /// Look up a speech synthesis handler after verifying instance/plugin/capability state.
+  /// Look up a speech synthesis handler after authoritative runtime resolution.
   pub fn resolve_speech_synthesize(
     &self,
     instance_id: Uuid,
     capability_id: &str,
   ) -> Result<Arc<dyn SpeechSynthesizeCapability>, CapabilityError> {
+    if let Some(router) = &self.router {
+      return match router.resolve(instance_id, capability_id)? {
+        crate::services::runtime_router::RuntimeAdapter::BundledRust {
+          handler: CapabilityHandler::SpeechSynthesize(h),
+        } => {
+          self.ensure_bundled_ready(instance_id)?;
+          Ok(h)
+        }
+        crate::services::runtime_router::RuntimeAdapter::BundledRust { .. } => Err(
+          CapabilityError::new(
+            CapabilityErrorCode::PermissionDenied,
+            "capability handler type mismatch",
+          )
+          .with_capability_id(capability_id),
+        ),
+        crate::services::runtime_router::RuntimeAdapter::WasmComponent {
+          package_digest,
+          artifact_digest,
+          artifact_bytes,
+          grant,
+          principal_factory: _,
+        } => {
+          let runtime = self
+            .wasm_runtime
+            .as_ref()
+            .ok_or_else(|| CapabilityError::new(CapabilityErrorCode::Internal, "wasm runtime is not configured"))?;
+          let verified = runtime
+            .compile_component(&package_digest, &artifact_digest, artifact_bytes.as_slice())
+            .map_err(|e| {
+              CapabilityError::new(
+                CapabilityErrorCode::PluginUnavailable,
+                format!("component compile failed: {e}"),
+              )
+            })?;
+          let config_json = self
+            .db
+            .read(|conn| integration_instances::get(conn, instance_id))
+            .map_err(|_| CapabilityError::new(CapabilityErrorCode::Internal, "failed to load instance"))?
+            .config_json
+            .into_bytes();
+          Ok(Arc::new(WasmSpeechSynthesizeAdapter::new(
+            runtime.clone(),
+            Arc::new(verified),
+            grant,
+            capability_id.to_string(),
+            config_json,
+            self.broker_factory.clone(),
+          )))
+        }
+      };
+    }
     let handler = self.resolve_handler(instance_id, capability_id)?;
     match handler {
       CapabilityHandler::SpeechSynthesize(h) => Ok(h),

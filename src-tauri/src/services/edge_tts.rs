@@ -16,7 +16,7 @@ use std::time::Duration;
 use uuid::Uuid;
 
 /// Manifest endpoint alias for the instance-scoped OpenAI-compatible TTS base URL.
-pub const EDGE_TTS_ENDPOINT_ALIAS: &str = "tts_api";
+pub const EDGE_TTS_ENDPOINT_ALIAS: &str = "tts-api";
 /// Relative path appended to the configured base URL for synthesis.
 pub const EDGE_TTS_SYNTHESIZE_PATH: &str = "v1/audio/speech";
 /// Fixed synthesis timeout (provider may take longer than the default 20s).

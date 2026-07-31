@@ -344,8 +344,13 @@ pub(crate) fn compute_authority_digest(
         NetworkOriginKind::HostFixed => format!("\u{1f}{}", NetworkOriginKind::HostFixed.as_str()),
         NetworkOriginKind::InstanceConfigured => String::new(),
       };
+      let response_modes_marker = if entry.response_body_modes().is_default() {
+        String::new()
+      } else {
+        format!("\u{1f}{}", entry.response_body_modes().as_canonical())
+      };
       format!(
-        "{}\u{1f}{}\u{1f}{}{}\u{1f}{:?}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}",
+        "{}\u{1f}{}\u{1f}{}{}\u{1f}{:?}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}{}",
         entry.capability_id().as_str(),
         entry.endpoint_id().as_str(),
         entry.origin().as_str(),
@@ -356,7 +361,8 @@ pub(crate) fn compute_authority_digest(
         limits.max_request_bytes(),
         limits.max_response_bytes(),
         limits.max_stream_bytes(),
-        limits.timeout_ms()
+        limits.timeout_ms(),
+        response_modes_marker
       )
     })
     .collect();
@@ -920,7 +926,7 @@ impl NetworkOriginKind {
 }
 
 /// One reviewed network authority entry: binds capability, endpoint, origin provenance, method,
-/// auth policy, resource mode, and resource limits. Endpoint/auth policy remain host-resolved.
+/// auth policy, resource mode, response body modes, and resource limits. Endpoint/auth policy remain host-resolved.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NetworkGrantEntry {
   capability_id: CapabilityId,
@@ -931,6 +937,8 @@ pub struct NetworkGrantEntry {
   auth_policy: AuthPolicyId,
   resource_mode: NetworkResourceMode,
   resource_limits: ResourceLimits,
+  /// Allowed broker response body variants (json/bytes/stream). Default JSON-only preserves digests.
+  response_body_modes: crate::domain::plugin_resource::NetworkResponseBodyModes,
 }
 
 impl NetworkGrantEntry {
@@ -997,6 +1005,32 @@ impl NetworkGrantEntry {
       auth_policy,
       resource_mode,
       resource_limits,
+      response_body_modes: crate::domain::plugin_resource::NetworkResponseBodyModes::JSON_ONLY,
+    }
+  }
+
+  /// Construct a network grant with explicit response body modes (json/bytes/stream).
+  pub fn with_mode_origin_and_response_modes(
+    capability_id: CapabilityId,
+    endpoint_id: EndpointId,
+    origin: HttpsOrigin,
+    origin_kind: NetworkOriginKind,
+    method: HttpMethod,
+    auth_policy: AuthPolicyId,
+    resource_mode: NetworkResourceMode,
+    resource_limits: ResourceLimits,
+    response_body_modes: crate::domain::plugin_resource::NetworkResponseBodyModes,
+  ) -> Self {
+    Self {
+      capability_id,
+      endpoint_id,
+      origin,
+      origin_kind,
+      method,
+      auth_policy,
+      resource_mode,
+      resource_limits,
+      response_body_modes,
     }
   }
 
@@ -1030,6 +1064,10 @@ impl NetworkGrantEntry {
 
   pub fn resource_limits(&self) -> &ResourceLimits {
     &self.resource_limits
+  }
+
+  pub fn response_body_modes(&self) -> crate::domain::plugin_resource::NetworkResponseBodyModes {
+    self.response_body_modes
   }
 }
 

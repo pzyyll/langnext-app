@@ -1,27 +1,36 @@
 // ABOUTME: Host resource types, neutral broker/log types, the BrokerHandle abstraction, and the
 // ABOUTME: PluginHostState helper methods backing the generated LangNext host import traits.
 use crate::domain::cancel::CancelToken;
+use crate::domain::plugin_resource::{NetworkResponseBodyMode, NetworkResponseBodyModes, ResourceId};
 use crate::domain::runtime_plugin::{
   AuthPolicyId, EndpointId, ExecutionGrantSet, GrantError, HttpsOrigin, NetworkOriginKind, PluginPrincipal,
   ResourceLimits,
 };
+use crate::services::stream_resources::StreamReaderHandle;
 use std::time::{Duration, Instant};
 
-use super::store::{BROKER_IMPORT_MAX_TIMEOUT, BROKER_IMPORT_NO_DEADLINE_DEFAULT, PluginHostState};
+use super::store::{
+  BROKER_IMPORT_CLEANUP_TIMEOUT, BROKER_IMPORT_MAX_TIMEOUT, BROKER_IMPORT_NO_DEADLINE_DEFAULT, PluginHostState,
+};
 
-/// Host-owned blob handle backing storage. Phase 2 keeps blob/stream operations unsupported;
-/// Phase 6 fills this with real bounded content. Opaque to guests: only `Resource<BlobResource>`
+/// Host-owned blob handle backing storage. Opaque to guests: only `Resource<BlobResource>`
 /// table indices ever cross the ABI, never raw bytes.
-#[derive(Debug, Default)]
-pub struct BlobResource;
+#[derive(Debug)]
+pub struct BlobResource {
+  pub id: ResourceId,
+}
 
 /// Host-owned stream writer backing storage (output/producer endpoint).
-#[derive(Debug, Default)]
-pub struct StreamWriterResource;
+#[derive(Debug)]
+pub struct StreamWriterResource {
+  pub id: ResourceId,
+}
 
 /// Host-owned stream reader backing storage (input/consumer endpoint).
-#[derive(Debug, Default)]
-pub struct StreamReaderResource;
+#[derive(Debug)]
+pub struct StreamReaderResource {
+  pub id: ResourceId,
+}
 
 /// Neutral log level mirroring the WIT `host.log-level` enum, independent of generated types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,6 +54,10 @@ pub struct BrokerAuthorization {
   pub origin_kind: NetworkOriginKind,
   pub auth_policy: AuthPolicyId,
   pub resource_limits: ResourceLimits,
+  /// Allowed response body variants from the grant (guest cannot broaden).
+  pub response_body_modes: NetworkResponseBodyModes,
+  /// Selected response mode for this fetch (Accept-driven, grant-checked).
+  pub selected_response_mode: NetworkResponseBodyMode,
 }
 
 impl PluginHostState {
@@ -86,7 +99,7 @@ impl PluginHostState {
     let body_bytes = match &request.body {
       BrokerRequestBody::Empty => 0,
       BrokerRequestBody::Json(bytes) => bytes.len(),
-      BrokerRequestBody::Blob => 0,
+      BrokerRequestBody::Blob { byte_len, .. } => *byte_len,
     };
     if body_bytes as u64 > entry.resource_limits().max_request_bytes() {
       return Err(BrokerFetchError::LimitExceeded);
@@ -98,12 +111,16 @@ impl PluginHostState {
     // Path/header chokepoint: confined relative path + blocked sensitive headers.
     validate_broker_relative_path(&request.relative_path)?;
     validate_broker_headers(&request.headers)?;
+    let response_body_modes = entry.response_body_modes();
+    let selected_response_mode = select_response_mode(&request.headers, response_body_modes)?;
     Ok(BrokerAuthorization {
       endpoint_id: entry.endpoint_id().clone(),
       origin: entry.origin().clone(),
       origin_kind: entry.origin_kind(),
       auth_policy: entry.auth_policy().clone(),
       resource_limits: *entry.resource_limits(),
+      response_body_modes,
+      selected_response_mode,
     })
   }
 
@@ -118,16 +135,46 @@ impl PluginHostState {
       Err(error) => return Err(error),
     };
     let import_timeout = compute_import_timeout(self.deadline, &authorization);
+    let import_deadline = Instant::now() + import_timeout;
+    // Pass the effective import deadline into the broker so a stream transport and its
+    // transport-specific token observe the same bound as this host import select.
+    let broker_deadline = Some(
+      self
+        .deadline
+        .map_or(import_deadline, |deadline| deadline.min(import_deadline)),
+    );
     let principal = &self.principal;
     let grant = &self.grant;
     let cancel = &self.cancel;
     let broker = &self.broker;
-    let broker_future = broker.fetch(principal, grant, request, authorization.clone(), cancel, self.deadline);
+    let broker_future = broker.fetch(
+      principal,
+      grant,
+      request,
+      authorization.clone(),
+      cancel,
+      broker_deadline,
+    );
+    tokio::pin!(broker_future);
     tokio::select! {
       biased;
-      _ = cancel.cancelled() => Err(BrokerFetchError::Cancelled),
-      _ = tokio::time::sleep(import_timeout) => Err(BrokerFetchError::Timeout),
-      outcome = broker_future => match outcome {
+      _ = cancel.cancelled() => {
+        // Do not immediately drop the broker future: the network stream's pre-header path sees
+        // this same token, cancels its transport token, and joins/aborts the raw task first.
+        if tokio::time::timeout(BROKER_IMPORT_CLEANUP_TIMEOUT, &mut broker_future).await.is_err() {
+          log::warn!("broker future exceeded cancellation cleanup timeout");
+        }
+        Err(BrokerFetchError::Cancelled)
+      }
+      _ = tokio::time::sleep(import_timeout) => {
+        // The broker received `broker_deadline`, so it can stop a pre-header transport before
+        // this import returns. Keep the grace bounded for non-cooperating implementations.
+        if tokio::time::timeout(BROKER_IMPORT_CLEANUP_TIMEOUT, &mut broker_future).await.is_err() {
+          log::warn!("broker future exceeded deadline cleanup timeout");
+        }
+        Err(BrokerFetchError::Timeout)
+      }
+      outcome = &mut broker_future => match outcome {
         Ok(response) => validate_broker_response(&response, &authorization).map(|()| response),
         Err(error) => Err(error),
       },
@@ -242,12 +289,19 @@ fn validate_broker_response(
   authorization: &BrokerAuthorization,
 ) -> Result<(), BrokerFetchError> {
   let body_len = match &response.body {
-    BrokerResponseBody::Json(bytes) => bytes.len(),
-    BrokerResponseBody::Blob => 0,
-    BrokerResponseBody::Stream => 0,
+    BrokerResponseBody::Json(bytes) => bytes.len() as u64,
+    BrokerResponseBody::Bytes { bytes, .. } => bytes.len() as u64,
+    BrokerResponseBody::Stream { .. } => 0,
   };
-  if body_len as u64 > authorization.resource_limits.max_response_bytes() {
+  if body_len > authorization.resource_limits.max_response_bytes() {
     return Err(BrokerFetchError::LimitExceeded);
+  }
+  // Guest/grant mode selection must match the transport body variant.
+  match (&response.body, authorization.selected_response_mode) {
+    (BrokerResponseBody::Json(_), NetworkResponseBodyMode::Json) => {}
+    (BrokerResponseBody::Bytes { .. }, NetworkResponseBodyMode::Bytes) => {}
+    (BrokerResponseBody::Stream { .. }, NetworkResponseBodyMode::Stream) => {}
+    _ => return Err(BrokerFetchError::NotApproved),
   }
   if response.headers.len() > BROKER_MAX_HEADERS {
     return Err(BrokerFetchError::HeaderBlocked);
@@ -266,6 +320,54 @@ fn validate_broker_response(
     validate_json_bytes(bytes).map_err(|_| BrokerFetchError::HeaderBlocked)?;
   }
   Ok(())
+}
+
+/// Select the broker response body mode from guest Accept headers within grant-allowed modes.
+pub(crate) fn select_response_mode(
+  headers: &[(String, String)],
+  allowed: NetworkResponseBodyModes,
+) -> Result<NetworkResponseBodyMode, BrokerFetchError> {
+  let accept = headers
+    .iter()
+    .find(|(name, _)| name.eq_ignore_ascii_case("accept"))
+    .map(|(_, value)| value.as_str())
+    .unwrap_or("");
+  let accept_l = accept.to_ascii_lowercase();
+  let requested = if accept_l.is_empty() || accept_l.contains("application/json") || accept_l == "*/*" {
+    // Prefer JSON when Accept is missing, wildcard, or explicitly JSON.
+    // Binary Accept values take precedence below when more specific.
+    if accept_l.contains("audio/")
+      || accept_l.contains("image/")
+      || accept_l.contains("application/octet-stream")
+      || accept_l.contains("application/pdf")
+    {
+      NetworkResponseBodyMode::Bytes
+    } else if accept_l.contains("text/event-stream") {
+      NetworkResponseBodyMode::Stream
+    } else {
+      NetworkResponseBodyMode::Json
+    }
+  } else if accept_l.contains("text/event-stream") {
+    NetworkResponseBodyMode::Stream
+  } else if accept_l.contains("audio/")
+    || accept_l.contains("image/")
+    || accept_l.contains("application/octet-stream")
+    || accept_l.contains("application/pdf")
+    || accept_l.contains("video/")
+  {
+    NetworkResponseBodyMode::Bytes
+  } else {
+    NetworkResponseBodyMode::Json
+  };
+  let permitted = match requested {
+    NetworkResponseBodyMode::Json => allowed.allows_json(),
+    NetworkResponseBodyMode::Bytes => allowed.allows_bytes(),
+    NetworkResponseBodyMode::Stream => allowed.allows_stream(),
+  };
+  if !permitted {
+    return Err(BrokerFetchError::NotApproved);
+  }
+  Ok(requested)
 }
 
 /// Validate that `bytes` are valid UTF-8 and parse as a JSON value. Used for both request and
@@ -349,7 +451,7 @@ pub const BROKER_MAX_HEADER_VALUE_BYTES: usize = 8192;
 /// auth/cookie/host material itself when policy requires it.
 pub const BROKER_BLOCKED_REQUEST_HEADER_NAMES: &[&str] =
   &["authorization", "proxy-authorization", "cookie", "set-cookie", "host"];
-/// Stable guest-visible label for Phase 2 unsupported blob/stream broker response bodies.
+/// Legacy constant retained for test references; blob/stream bodies are implemented in Phase 6.
 pub const BROKER_UNSUPPORTED_BLOB_STREAM_MESSAGE: &str = "unsupported";
 
 /// Validate a broker `relative_path` as a confined relative path with an optional query
@@ -525,7 +627,11 @@ pub struct BrokerFetchRequest {
 pub enum BrokerRequestBody {
   Empty,
   Json(Vec<u8>),
-  Blob,
+  /// Blob body already materialized by the host (byte_len used for grant limit checks).
+  Blob {
+    bytes: Vec<u8>,
+    byte_len: usize,
+  },
 }
 
 /// Broker fetch outcome: the WIT `result<broker-response, broker-error>` lifted to host types.
@@ -539,14 +645,19 @@ pub struct BrokerFetchResponse {
   pub body: BrokerResponseBody,
 }
 
-/// Broker response body union mirroring the WIT `broker-body-response`.
+/// Broker response body union. Json/Bytes carry payload bytes; Stream carries a host reader
+/// handle already bound to a network-binary stream pair created by the broker transport path.
+/// The host adopts it into the request's stream table before handing a reader resource to the guest.
 #[derive(Debug, Clone)]
 pub enum BrokerResponseBody {
   Json(Vec<u8>),
-  /// Blob/Stream bodies require host-owned handles implemented in Phase 6; Phase 2 conformance
-  /// brokers return only `Json`.
-  Blob,
-  Stream,
+  Bytes {
+    content_type: Option<String>,
+    bytes: Vec<u8>,
+  },
+  Stream {
+    reader: StreamReaderHandle,
+  },
 }
 
 /// Stable broker error mirroring the WIT `broker-error` variant.

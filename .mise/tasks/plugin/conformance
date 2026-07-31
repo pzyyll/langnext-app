@@ -25,7 +25,9 @@ REQUIRED_WASM_TESTS=(
   "services::wasm_runtime::tests::wasm_host_imports::relative_path_confinement_rejects_absolute_and_traversal"
   "services::wasm_runtime::tests::wasm_host_imports::blocked_request_headers_rejected"
   "services::wasm_runtime::tests::wasm_host_imports::max_request_bytes_over_limit_rejected"
-  "services::wasm_runtime::tests::wasm_host_imports::broker_blob_and_stream_response_are_stable_unsupported"
+  "services::wasm_runtime::tests::wasm_host_imports::broker_bytes_response_mode_requires_accept_and_grant"
+  "services::wasm_runtime::tests::wasm_host_imports::blob_and_stream_resource_ops_work"
+  "services::wasm_runtime::store::tests::plugin_host_state_drop_aborts_owned_stream_tasks"
 )
 
 REQUIRED_LIFECYCLE_TESTS=(
@@ -51,6 +53,68 @@ REQUIRED_LIFECYCLE_TESTS=(
   "storage::migrations::tests::migrate_v16_to_v17_backfills_bundled_runtime_pins"
   "repositories::tests::runtime_instance_pin_backfill_and_constraints"
   "repositories::tests::runtime_instance_pin_package_approval_never_authorizes_execution"
+)
+
+REQUIRED_EDGE_TTS_TESTS=(
+  "services::edge_tts_runtime_tests::edge_tts_runtime_synthesize_returns_binary_audio_via_blob"
+  "services::edge_tts_runtime_tests::edge_tts_runtime_bundled_rollback_remains_available"
+  "services::edge_tts_runtime_tests::edge_tts_runtime_rejects_wrong_content_type"
+  "services::edge_tts_runtime_tests::edge_tts_runtime_accepts_audio_mpeg_with_parameters"
+  "services::edge_tts_runtime_tests::edge_tts_runtime_rejects_missing_content_type"
+  "services::edge_tts_runtime_tests::edge_tts_runtime_rejects_near_miss_mime"
+  "services::edge_tts_runtime_tests::edge_tts_runtime_new_instance_auto_pins_default_package"
+  "services::edge_tts_runtime_tests::edge_tts_runtime_migration_preserves_speech_default_references"
+  "services::edge_tts_runtime_tests::edge_tts_runtime_auto_pin_rejects_non_vendor_package"
+  "services::edge_tts_runtime_tests::edge_tts_runtime_auto_pin_rejects_custom_origin"
+  "services::edge_tts_runtime_tests::edge_tts_runtime_auto_pin_accepts_equivalent_normalized_default"
+  "services::edge_tts_runtime_tests::edge_tts_runtime_auto_pin_rejects_non_https_origin"
+  # Executes the guest through router/executor/broker and compares captured transport output to
+  # synthesize-request.json; a fixture-only parser test is not sufficient conformance coverage.
+  "services::edge_tts_runtime_tests::edge_tts_runtime_request_fixture_matches_guest_contract"
+  "services::edge_tts_runtime_tests::edge_tts_runtime_error_400_fixture_maps_to_invalid_request"
+  "services::edge_tts_runtime_tests::edge_tts_runtime_error_429_fixture_maps_to_rate_limited"
+  "services::edge_tts_runtime_tests::edge_tts_runtime_rejects_oversized_audio"
+)
+
+# Per-filter required lists for the resources/stream suites. Each list is paired with a cargo
+# test filter that runs exactly those tests so every required name is verified against real
+# output (not merely listed).
+REQUIRED_BLOB_FILTER_TESTS=(
+  "services::blob_resources::tests::ownership_cap_chunk_close_cancel_and_cleanup"
+  "services::blob_resources::tests::take_bytes_arbitrary_binary_removed_after_transfer"
+  "services::blob_resources::tests::take_bytes_wrong_owner_does_not_leak"
+  "services::blob_resources::tests::take_bytes_cancelled_blob_fails_without_leak"
+)
+REQUIRED_STREAM_FILTER_TESTS=(
+  "services::stream_resources::tests::ordering_backpressure_terminal_and_cross_owner"
+  "services::stream_resources::tests::cancellation_wakes_blocked_producer_under_backpressure"
+  "services::stream_resources::tests::cancellation_wakes_blocked_consumer_waiting_for_data"
+  "services::stream_resources::tests::llm_delta_variants_round_trip_losslessly"
+  "services::stream_resources::tests::async_reader_close_aborts_stubborn_tasks_after_shutdown_timeout"
+  "services::stream_resources::tests::shutdown_does_not_repoll_a_completed_task_after_timeout"
+  "services::stream_resources::tests::request_cleanup_aborts_stubborn_tasks"
+  "services::stream_resources::tests::synchronous_clear_and_supervisor_drop_abort_stubborn_tasks"
+)
+REQUIRED_WASM_RESOURCE_FILTER_TESTS=(
+  "services::wasm_runtime::tests::wasm_host_imports::blob_and_stream_resource_ops_work"
+  "services::wasm_runtime::tests::wasm_host_imports::broker_bytes_response_mode_requires_accept_and_grant"
+  "services::wasm_runtime::tests::wasm_host_imports::broker_fetch_blob_body_consumed_not_leaked"
+)
+REQUIRED_NETWORK_HANDLE_FILTER_TESTS=(
+  "services::wasm_runtime::network_handle::tests::blob_request_body_preserves_non_utf8_bytes"
+  "services::wasm_runtime::network_handle::tests::stream_mode_returns_real_reader_not_internal_error"
+  "services::wasm_runtime::network_handle::tests::stream_e2e_started_chunk_finished_in_order"
+  "services::wasm_runtime::network_handle::tests::stream_reader_close_stops_transport_and_joins"
+  "services::wasm_runtime::network_handle::tests::stream_request_cancellation_fails_writer"
+  "services::wasm_runtime::network_handle::tests::stream_size_overflow_fails_writer"
+  "services::wasm_runtime::network_handle::tests::stream_backpressure_deadline_fails_writer"
+  "services::wasm_runtime::network_handle::tests::stream_total_deadline_fails_writer"
+  "services::wasm_runtime::network_handle::tests::stream_idle_timeout_fails_writer"
+  "services::wasm_runtime::network_handle::tests::stream_transport_error_after_started_chunk_fails_writer"
+  "services::wasm_runtime::network_handle::tests::stream_channel_close_without_finished_fails_writer"
+  "services::wasm_runtime::network_handle::tests::stream_preheader_request_cancellation_stops_transport"
+  "services::wasm_runtime::network_handle::tests::stream_preheader_deadline_stops_transport"
+  "services::wasm_runtime::network_handle::tests::stream_preheader_transport_error_is_sanitized"
 )
 
 REQUIRED_GOOGLE_WEB_TESTS=(
@@ -125,13 +189,43 @@ case "$MODE" in
     run_filter_suite "wasm_runtime" "${REQUIRED_WASM_TESTS[@]}"
     run_filter_suite "runtime_" "${REQUIRED_LIFECYCLE_TESTS[@]}"
     run_filter_suite "google_translate_web_runtime" "${REQUIRED_GOOGLE_WEB_TESTS[@]}"
+    run_filter_suite "edge_tts_runtime" "${REQUIRED_EDGE_TTS_TESTS[@]}"
+    run_filter_suite "blob_resources" "${REQUIRED_BLOB_FILTER_TESTS[@]}"
+    run_filter_suite "stream_resources" "${REQUIRED_STREAM_FILTER_TESTS[@]}"
+    run_filter_suite "wasm_host_imports" "${REQUIRED_WASM_RESOURCE_FILTER_TESTS[@]}"
+    run_filter_suite "network_handle" "${REQUIRED_NETWORK_HANDLE_FILTER_TESTS[@]}"
+    ;;
+  resources)
+    run_filter_suite "blob_resources" "${REQUIRED_BLOB_FILTER_TESTS[@]}"
+    run_filter_suite "stream_resources" "${REQUIRED_STREAM_FILTER_TESTS[@]}"
+    run_filter_suite "wasm_host_imports" "${REQUIRED_WASM_RESOURCE_FILTER_TESTS[@]}"
+    run_filter_suite "network_handle" "${REQUIRED_NETWORK_HANDLE_FILTER_TESTS[@]}"
     ;;
   google-web|google-web-gtx|google-web-proxy)
     cargo test --manifest-path runtime-plugins/google-translate-web/protocol/Cargo.toml -- --nocapture
     run_filter_suite "google_translate_web_runtime" "${REQUIRED_GOOGLE_WEB_TESTS[@]}"
     ;;
+  edge-tts)
+    # Edge TTS guest is a single speech-synthesize-world cdylib component (no_std + custom
+    # panic_handler), so it cannot host a cargo test harness. Host conformance tests are wired
+    # in Phase 6 Task 5; until then this verifies the committed artifact digests.
+    if [[ ! -f "runtime-plugins/edge-tts/fixtures/langnext-edge-tts.wasm" ]]; then
+      echo "error: edge-tts fixture missing; run mise run plugin:build-edge-tts" >&2
+      exit 1
+    fi
+    if [[ ${#REQUIRED_EDGE_TTS_TESTS[@]} -gt 0 ]]; then
+      run_filter_suite "edge_tts_runtime" "${REQUIRED_EDGE_TTS_TESTS[@]}"
+    else
+      echo "ok: edge-tts host conformance list is empty until runtime adapter wiring lands"
+    fi
+    # Stream pump and cancellation tests prove the broker stream/network path is real (not stubbed):
+    # a successful end-to-end lifecycle (Started/Chunk/Finished via actual broker binding) plus
+    # negative lifecycle tests (reader close, request cancel, total deadline, idle timeout, size overflow).
+    run_filter_suite "network_handle" "${REQUIRED_NETWORK_HANDLE_FILTER_TESTS[@]}"
+    run_filter_suite "stream_resources" "${REQUIRED_STREAM_FILTER_TESTS[@]}"
+    ;;
   *)
-    echo "usage: mise run plugin:conformance [wasm|installed-lifecycle|all]" >&2
+    echo "usage: mise run plugin:conformance [wasm|installed-lifecycle|all|edge-tts|resources]" >&2
     exit 1
     ;;
 esac

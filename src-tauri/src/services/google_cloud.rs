@@ -1619,7 +1619,7 @@ mod tests {
       prepared.headers.get("Authorization").map(String::as_str),
       Some("Bearer path-test-token")
     );
-    let body = prepared.body.as_deref().unwrap_or("");
+    let body = prepared.body.as_text().unwrap_or("");
     assert!(body.contains("\"contents\""));
     assert!(body.contains("hello"));
     assert!(body.contains("text/plain"));
@@ -1667,7 +1667,7 @@ mod tests {
       prepared.headers.get("Authorization").map(String::as_str),
       Some("Bearer path-test-token")
     );
-    let body = prepared.body.as_deref().unwrap_or("");
+    let body = prepared.body.as_text().unwrap_or("");
     assert!(body.contains("こんにちは"));
     assert!(body.contains("text/plain"));
   }
@@ -1721,7 +1721,7 @@ mod tests {
       prepared.headers.get("Authorization").map(String::as_str),
       Some("Bearer path-test-token")
     );
-    let body = prepared.body.as_deref().unwrap_or("");
+    let body = prepared.body.as_text().unwrap_or("");
     assert!(body.contains("DOCUMENT_TEXT_DETECTION"));
     assert!(body.contains("languageHints"));
     assert!(body.contains("zh-CN"));

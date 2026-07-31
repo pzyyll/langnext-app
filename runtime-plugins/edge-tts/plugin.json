@@ -1,0 +1,72 @@
+{
+  "manifestVersion": 1,
+  "pluginApiVersion": "1.0",
+  "id": "com.langnext.edge-tts",
+  "version": "1.0.0",
+  "publisher": {
+    "keyId": "com.langnext.vendor.keys.1",
+    "keyFingerprint": "506ef1879d748ce0713b0dd01da32ad2a4b1ce97b5a852ff18800c1e52982376"
+  },
+  "runtime": {
+    "kind": "wasm-component",
+    "artifact": "fixtures/langnext-edge-tts.wasm"
+  },
+  "targets": [],
+  "files": [
+    {
+      "path": "fixtures/langnext-edge-tts.wasm",
+      "role": "runtime-artifact",
+      "bytes": 73446,
+      "sha256": "127bcb9c31c1e1de5be3da999456ef296cc0dcb96e4f82c8b744216192cf1854"
+    },
+    {
+      "path": "schemas/config.json",
+      "role": "config-schema",
+      "bytes": 436,
+      "sha256": "5c470fb0f51c94e155604a6b93ddff33099b4b2cde6364203bb06433c22f757b"
+    },
+    {
+      "path": "schemas/speech-preferences.json",
+      "role": "preference-schema",
+      "bytes": 3600,
+      "sha256": "5d885bcc858f53c66403952a8a7557b3b11ed15cd4ef998c6199e08df2cf7947"
+    },
+    {
+      "path": "locales/en.json",
+      "role": "locale",
+      "bytes": 128,
+      "sha256": "9eaabfeb51c2f76bc990053d8115eb52cf231765be4168cbee00c087e7871468"
+    },
+    {
+      "path": "locales/zh-CN.json",
+      "role": "locale",
+      "bytes": 127,
+      "sha256": "6ed93fb0b21610e1d2e60849e2d0e6d4ea735f01126932ad4ce1e06f0c91f666"
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "speech.synthesize@1",
+      "preferencesSchema": "schemas/speech-preferences.json",
+      "artifact": "fixtures/langnext-edge-tts.wasm"
+    }
+  ],
+  "configurationSchema": "schemas/config.json",
+  "configSchemaVersion": 1,
+  "credentialSlots": [],
+  "permissions": {
+    "network": [
+      {
+        "id": "tts-api",
+        "origins": [],
+        "methods": ["POST"],
+        "instanceOriginConfigField": "base-url"
+      }
+    ],
+    "authPolicies": ["host.none.v1"]
+  },
+  "ui": {
+    "mode": "schema",
+    "pages": []
+  }
+}

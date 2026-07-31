@@ -1,0 +1,5 @@
+# cargo-component regenerates std bindings files on every build; guests use
+# `wit_bindgen::generate!` directly (no_std), so these are unused and must not be committed.
+**/src/bindings.rs
+# All cargo build artifacts under the crate.
+**/target
