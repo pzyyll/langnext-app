@@ -1496,6 +1496,7 @@ pub fn validate_plan_default_profile(conn: &Connection, settings: &AppSettingsV1
 mod tests {
   use super::*;
   use crate::domain::import_export::EXPORT_FORMAT_VERSION;
+  use crate::domain::runtime_lifecycle::RuntimeRequirementExport;
   use crate::domain::service_integration::{GOOGLE_CLOUD_PLUGIN_ID, GOOGLE_TRANSLATE_WEB_PLUGIN_ID};
   use crate::domain::time::now_rfc3339;
   use crate::storage::Database;
@@ -1527,7 +1528,19 @@ mod tests {
       config_json: config_json.into(),
       config_schema_version: 1,
       health_status: "ready".into(),
-      runtime: None,
+      runtime: Some(RuntimeRequirementExport {
+        plugin_id: GOOGLE_TRANSLATE_WEB_PLUGIN_ID.into(),
+        plugin_version: "1.0.0".into(),
+        runtime_kind: "bundled-rust".into(),
+        package_digest: None,
+        publisher_key_id: None,
+        publisher_key_fingerprint: None,
+        plugin_api_version: None,
+        config_schema_version: 1,
+        required_capability_majors: vec![],
+        provider_runtime_kind: None,
+        provider_package_digest: None,
+      }),
       created_at: now_rfc3339(),
       updated_at: now_rfc3339(),
     }

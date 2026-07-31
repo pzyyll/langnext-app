@@ -1,5 +1,6 @@
 // ABOUTME: Service integration domain entities, manifests, and sanitized IPC DTOs.
 // ABOUTME: Credential refs and secret values never appear on serializable DTOs.
+use crate::domain::endpoint_trust::EndpointTrustStatus;
 use crate::domain::plugin_schema::PluginSchemaV1;
 use crate::domain::provider::{CredentialUpdate, ProxyMode};
 use serde::{Deserialize, Serialize};
@@ -262,6 +263,8 @@ pub struct IntegrationInstanceDto {
   pub config_schema_version: u32,
   pub health_status: IntegrationHealthStatus,
   pub effective_status: IntegrationEffectiveStatus,
+  #[serde(default)]
+  pub endpoint_trust_status: EndpointTrustStatus,
   pub last_validated_at: Option<String>,
   pub last_error_code: Option<String>,
   pub runtime_kind: String,
@@ -306,6 +309,12 @@ pub struct IntegrationInstanceWrite {
   /// Required on update.
   #[serde(default)]
   pub expected_updated_at: Option<String>,
+  /// Opaque host preview id; frontend cannot provide an origin or transport policy.
+  #[serde(default)]
+  pub endpoint_trust_preview_id: Option<String>,
+  /// Must be true only after the user checks the host-provided acknowledgement box.
+  #[serde(default)]
+  pub acknowledge_endpoint_trust: bool,
 }
 
 /// Domain resource depending on an integration instance (empty until Phase 1C/3).

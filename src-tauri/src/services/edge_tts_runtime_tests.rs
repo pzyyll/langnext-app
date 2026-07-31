@@ -3,20 +3,27 @@
 #![cfg(test)]
 
 use crate::domain::cancel::CancelToken;
+use crate::domain::endpoint_trust::{
+  EDGE_TTS_TRUST_ENDPOINT_ALIAS, EndpointTrustPreviewInput, IntegrationEndpointTrust, RuntimeIdentityFingerprintInput,
+  configuration_fingerprint, runtime_identity_fingerprint,
+};
 use crate::domain::runtime_lifecycle::{ApplyRuntimeUpgradeInput, InstanceRuntimeState};
 use crate::domain::service_capability::{
   EDGE_TTS_VOICE_DEFAULT, ExecutionContext, SPEECH_SYNTHESIZE_CAPABILITY_ID, SpeechSynthesizeRequest,
 };
-use crate::domain::service_integration::{EDGE_TTS_PLUGIN_ID, IntegrationHealthStatus, IntegrationInstance};
+use crate::domain::service_integration::{
+  EDGE_TTS_PLUGIN_ID, IntegrationHealthStatus, IntegrationInstance, IntegrationInstanceWrite,
+};
 use crate::domain::time::{new_id, now_rfc3339};
-use crate::repositories::integration_instances;
+use crate::repositories::{integration_endpoint_trusts, integration_instances, plugin_permission_grants};
 use crate::services::bounded_http::{BoundedHttpResponse, PreparedHttpRequest, RawHttpTransport};
-use crate::services::edge_tts::{EDGE_TTS_SYNTHESIZE_PATH, serialize_edge_tts_config};
+use crate::services::edge_tts::{EDGE_TTS_SYNTHESIZE_PATH, normalize_edge_tts_base_url, serialize_edge_tts_config};
 use crate::services::plugin_store::PluginPackageService;
 use crate::services::runtime_lifecycle::RuntimeLifecycleService;
 use crate::services::runtime_router::RuntimeRouter;
 use crate::services::service_capabilities::{ServiceCapabilityRegistry, ServiceCapabilityService};
 use crate::services::service_integration_registry::ServiceIntegrationRegistry;
+use crate::services::service_integrations::ServiceIntegrationService;
 use crate::services::token_grant::TokenGrantService;
 use crate::services::vendor_trust::test_vendor_fixture::fixture_vendor_public_key;
 use crate::services::wasm_runtime::WasmRuntime;
@@ -119,6 +126,19 @@ fn setup() -> (
   (dir, db, packages, lifecycle, caps, transport)
 }
 
+fn integration_service_without_lifecycle(db: &Database) -> ServiceIntegrationService {
+  let registry = Arc::new(ServiceIntegrationRegistry::bundled().unwrap());
+  let vault = Arc::new(crate::credentials::MemoryCredentialVault::default());
+  let tokens = Arc::new(TokenGrantService::new(Arc::new(
+    crate::services::google_service_account::GoogleServiceAccountExchanger::new(db.clone(), vault.clone()),
+  )));
+  ServiceIntegrationService::new(db.clone(), vault, registry, tokens)
+}
+
+fn integration_service(db: &Database, lifecycle: &RuntimeLifecycleService) -> ServiceIntegrationService {
+  integration_service_without_lifecycle(db).with_runtime_lifecycle(lifecycle.clone())
+}
+
 fn seed_instance(db: &Database, base_url: &str) -> Uuid {
   let id = new_id();
   let now = now_rfc3339();
@@ -157,6 +177,40 @@ fn seed_instance(db: &Database, base_url: &str) -> Uuid {
   id
 }
 
+fn approve_target_custom_endpoint(db: &Database, instance_id: Uuid, digest: &str) {
+  let instance = db.read(|conn| integration_instances::get(conn, instance_id)).unwrap();
+  let config_fingerprint = configuration_fingerprint(&instance.config_json).unwrap();
+  let config_value = serde_json::from_str::<serde_json::Value>(&instance.config_json).unwrap();
+  let base_url = config_value
+    .get("base-url")
+    .and_then(serde_json::Value::as_str)
+    .unwrap();
+  let normalized_base_url = normalize_edge_tts_base_url(base_url).unwrap().canonical_url;
+  let runtime_identity_fingerprint = runtime_identity_fingerprint(RuntimeIdentityFingerprintInput {
+    plugin_id: EDGE_TTS_PLUGIN_ID,
+    plugin_version: "1.0.0",
+    runtime_kind: "wasm-component",
+    package_digest: Some(digest),
+  });
+  db.transaction(|uow| {
+    integration_endpoint_trusts::upsert(
+      uow.conn(),
+      &IntegrationEndpointTrust {
+        id: new_id(),
+        integration_instance_id: instance_id,
+        plugin_id: EDGE_TTS_PLUGIN_ID.into(),
+        plugin_version: "1.0.0".into(),
+        endpoint_alias: EDGE_TTS_TRUST_ENDPOINT_ALIAS.into(),
+        normalized_origin: normalized_base_url,
+        configuration_fingerprint: config_fingerprint,
+        runtime_identity_fingerprint,
+        approved_at: now_rfc3339(),
+      },
+    )
+  })
+  .unwrap();
+}
+
 fn activate(lifecycle: &RuntimeLifecycleService, instance_id: Uuid, digest: &str) {
   let preview = lifecycle.preview_upgrade(instance_id, digest).unwrap();
   lifecycle
@@ -165,6 +219,38 @@ fn activate(lifecycle: &RuntimeLifecycleService, instance_id: Uuid, digest: &str
       acknowledge_permissions: true,
     })
     .unwrap();
+}
+
+fn run_approved_wasm_synthesis(base_url: &str, request_id: &str) -> PreparedHttpRequest {
+  let (_dir, db, packages, lifecycle, caps, transport) = setup();
+  let import = packages
+    .bootstrap_bundled_package(EDGE_TTS_LNPLUGIN, true)
+    .expect("bootstrap edge-tts package");
+  let digest = import.package_digest().to_string();
+  let id = seed_instance(&db, base_url);
+  approve_target_custom_endpoint(&db, id, &digest);
+  activate(&lifecycle, id, &digest);
+
+  let handler = caps
+    .resolve_speech_synthesize(id, SPEECH_SYNTHESIZE_CAPABILITY_ID)
+    .expect("resolve speech");
+  let response = block_on(handler.synthesize(
+    id,
+    SpeechSynthesizeRequest {
+      text: "approved DNS result".into(),
+      language_id: "en".into(),
+      preferences: serde_json::json!({
+        "voice": EDGE_TTS_VOICE_DEFAULT,
+        "speed": 1.0,
+        "pitch": 0.0,
+        "style": "general",
+      }),
+    },
+    ctx(id, request_id),
+  ))
+  .expect("approved custom endpoint should execute through Wasm and BrokerHandle");
+  assert!(!response.mp3_bytes.is_empty());
+  transport.last.lock().unwrap().take().expect("transport called")
 }
 
 fn block_on<T>(fut: impl std::future::Future<Output = T>) -> T {
@@ -193,7 +279,7 @@ fn edge_tts_runtime_synthesize_returns_binary_audio_via_blob() {
     .bootstrap_bundled_package(EDGE_TTS_LNPLUGIN, true)
     .expect("bootstrap edge-tts package");
   let digest = import.package_digest().to_string();
-  let id = seed_instance(&db, "https://edge.example/api");
+  let id = seed_instance(&db, "https://tts.wangwangit.com");
   activate(&lifecycle, id, &digest);
 
   let mp3 = vec![0xFF, 0xFB, 0x90, 0x64, 0x00, 0x01];
@@ -234,6 +320,335 @@ fn edge_tts_runtime_synthesize_returns_binary_audio_via_blob() {
 }
 
 #[test]
+fn edge_tts_runtime_approved_custom_origin_uses_user_approved_policy() {
+  let (_dir, db, packages, lifecycle, caps, transport) = setup();
+  let import = packages
+    .bootstrap_bundled_package(EDGE_TTS_LNPLUGIN, true)
+    .expect("bootstrap edge-tts package");
+  let digest = import.package_digest().to_string();
+  let id = seed_instance(&db, "https://edge.example/api");
+  approve_target_custom_endpoint(&db, id, &digest);
+  activate(&lifecycle, id, &digest);
+
+  let handler = caps
+    .resolve_speech_synthesize(id, SPEECH_SYNTHESIZE_CAPABILITY_ID)
+    .expect("resolve speech");
+  let response = block_on(handler.synthesize(
+    id,
+    SpeechSynthesizeRequest {
+      text: "approved".into(),
+      language_id: "en".into(),
+      preferences: serde_json::json!({
+        "voice": EDGE_TTS_VOICE_DEFAULT,
+        "speed": 1.0,
+        "pitch": 0.0,
+        "style": "general",
+      }),
+    },
+    ctx(id, "edge-wasm-approved-custom"),
+  ))
+  .expect("approved custom endpoint should execute");
+  assert!(!response.mp3_bytes.is_empty());
+  let prepared = transport.last.lock().unwrap().take().expect("transport called");
+  assert_eq!(
+    prepared.destination_policy,
+    crate::services::bounded_http::DestinationPolicy::UserApprovedCustom
+  );
+  assert_eq!(prepared.proxy_mode, crate::domain::provider::ProxyMode::Inherit);
+  assert_eq!(prepared.url.path(), "/api/v1/audio/speech");
+}
+
+/// The bounded HTTP synthetic-resolver test proves that this policy preserves a fake-IP DNS
+/// answer. This runtime test proves the approved decision reaches the Wasm BrokerHandle instead
+/// of being downgraded to PublicInternet or rejected before the transport seam.
+#[test]
+fn edge_tts_runtime_approved_fake_ip_dns_result_uses_user_approved_policy() {
+  let prepared = run_approved_wasm_synthesis("https://approved-fake-ip.test", "edge-wasm-approved-fake-ip");
+  assert_eq!(
+    prepared.destination_policy,
+    crate::services::bounded_http::DestinationPolicy::UserApprovedCustom
+  );
+  assert_eq!(prepared.proxy_mode, crate::domain::provider::ProxyMode::Inherit);
+  assert_eq!(prepared.url.host_str(), Some("approved-fake-ip.test"));
+}
+
+/// The bounded HTTP synthetic-resolver test proves that this policy preserves a private DNS
+/// answer. This runtime test proves the approved decision reaches the Wasm BrokerHandle without
+/// exposing a DNS-result class to the guest or changing the host-selected policy.
+#[test]
+fn edge_tts_runtime_approved_private_dns_result_uses_user_approved_policy() {
+  let prepared = run_approved_wasm_synthesis("https://approved-private.test", "edge-wasm-approved-private");
+  assert_eq!(
+    prepared.destination_policy,
+    crate::services::bounded_http::DestinationPolicy::UserApprovedCustom
+  );
+  assert_eq!(prepared.proxy_mode, crate::domain::provider::ProxyMode::Inherit);
+  assert_eq!(prepared.url.host_str(), Some("approved-private.test"));
+}
+
+#[test]
+fn edge_tts_runtime_reconfirmation_resigns_user_approved_provenance_after_lifecycle_change() {
+  let (_dir, db, packages, lifecycle, caps, transport) = setup();
+  let import = packages
+    .bootstrap_bundled_package(EDGE_TTS_LNPLUGIN, true)
+    .expect("bootstrap edge-tts package");
+  let digest = import.package_digest().to_string();
+  let service = integration_service(&db, &lifecycle);
+  let custom_config = r#"{"base-url":"https://edge.example/api"}"#;
+  let create = IntegrationInstanceWrite {
+    id: None,
+    plugin_id: EDGE_TTS_PLUGIN_ID.into(),
+    display_name: "Edge TTS".into(),
+    enabled: true,
+    config_json: custom_config.into(),
+    credentials: vec![],
+    expected_updated_at: None,
+    endpoint_trust_preview_id: None,
+    acknowledge_endpoint_trust: false,
+  };
+  let preview = service
+    .preview_endpoint_trust(EndpointTrustPreviewInput {
+      plugin_id: EDGE_TTS_PLUGIN_ID.into(),
+      instance_id: None,
+      config_json: custom_config.into(),
+      expected_updated_at: None,
+    })
+    .expect("custom create preview");
+  let created = service
+    .save(IntegrationInstanceWrite {
+      endpoint_trust_preview_id: Some(preview.preview_id),
+      acknowledge_endpoint_trust: true,
+      ..create
+    })
+    .expect("custom create");
+  assert_eq!(
+    created.endpoint_trust_status,
+    crate::domain::endpoint_trust::EndpointTrustStatus::TrustedCustom
+  );
+
+  // The public integration save created a bundled-runtime approval. Exercise that real Bundled
+  // Rust handler through NetworkBroker before changing the runtime identity.
+  let bundled_registry = Arc::new(ServiceIntegrationRegistry::bundled().unwrap());
+  let bundled_network = Arc::new(crate::services::network_broker::NetworkBroker::with_transport(
+    db.clone(),
+    bundled_registry,
+    transport.clone(),
+  ));
+  let bundled_handler = crate::services::edge_tts::EdgeTtsCapabilities::new(bundled_network);
+  let bundled_response = block_on(bundled_handler.synthesize_speech(
+    created.id,
+    SpeechSynthesizeRequest {
+      text: "bundled approved".into(),
+      language_id: "en".into(),
+      preferences: serde_json::json!({
+        "voice": EDGE_TTS_VOICE_DEFAULT,
+        "speed": 1.0,
+        "pitch": 0.0,
+        "style": "general",
+      }),
+    },
+    ctx(created.id, "edge-bundled-approved"),
+  ))
+  .expect("approved custom endpoint should execute through Bundled Rust and NetworkBroker");
+  assert!(!bundled_response.mp3_bytes.is_empty());
+  let bundled_prepared = transport.last.lock().unwrap().take().expect("bundled transport called");
+  assert_eq!(
+    bundled_prepared.destination_policy,
+    crate::services::bounded_http::DestinationPolicy::UserApprovedCustom
+  );
+  let calls_after_bundled = transport.calls.load(Ordering::SeqCst);
+
+  // The lifecycle identity change revokes the bundled-runtime approval and leaves the active Wasm
+  // grant fail-closed until the user reviews the same base URL again.
+  activate(&lifecycle, created.id, &digest);
+  let activated = service.get_instance(created.id).expect("activated instance");
+  assert_eq!(
+    activated.endpoint_trust_status,
+    crate::domain::endpoint_trust::EndpointTrustStatus::ReviewRequired
+  );
+  let wasm_handler = caps
+    .resolve_speech_synthesize(created.id, SPEECH_SYNTHESIZE_CAPABILITY_ID)
+    .expect("resolve active Wasm speech");
+  let stale_error = block_on(wasm_handler.synthesize(
+    created.id,
+    SpeechSynthesizeRequest {
+      text: "stale approval".into(),
+      language_id: "en".into(),
+      preferences: serde_json::json!({
+        "voice": EDGE_TTS_VOICE_DEFAULT,
+        "speed": 1.0,
+        "pitch": 0.0,
+        "style": "general",
+      }),
+    },
+    ctx(created.id, "edge-wasm-stale-approval"),
+  ))
+  .unwrap_err();
+  assert_eq!(
+    stale_error.code,
+    crate::domain::service_capability::CapabilityErrorCode::EndpointTrustRequired
+  );
+  assert_eq!(transport.calls.load(Ordering::SeqCst), calls_after_bundled);
+
+  let reconfirm_preview = service
+    .preview_endpoint_trust(EndpointTrustPreviewInput {
+      plugin_id: EDGE_TTS_PLUGIN_ID.into(),
+      instance_id: Some(created.id),
+      config_json: activated.config_json.clone(),
+      expected_updated_at: Some(activated.updated_at.clone()),
+    })
+    .expect("reconfirmation preview");
+  let resigned = service
+    .save(IntegrationInstanceWrite {
+      id: Some(created.id),
+      plugin_id: EDGE_TTS_PLUGIN_ID.into(),
+      display_name: activated.display_name.clone(),
+      enabled: activated.enabled,
+      config_json: activated.config_json.clone(),
+      credentials: vec![],
+      expected_updated_at: Some(activated.updated_at.clone()),
+      endpoint_trust_preview_id: Some(reconfirm_preview.preview_id),
+      acknowledge_endpoint_trust: true,
+    })
+    .expect("reconfirmation must save and re-sign atomically");
+  assert_eq!(
+    resigned.endpoint_trust_status,
+    crate::domain::endpoint_trust::EndpointTrustStatus::TrustedCustom
+  );
+  assert!(resigned.execution_grant_set_revision.unwrap() > activated.execution_grant_set_revision.unwrap());
+
+  let bundle = db
+    .read(|conn| {
+      plugin_permission_grants::get_bundle_for_subject_package_revision(
+        conn,
+        crate::domain::runtime_lifecycle::GrantSubjectKind::IntegrationInstance,
+        created.id,
+        &digest,
+        resigned.execution_grant_set_revision.unwrap(),
+      )
+    })
+    .expect("re-signed grant");
+  let entry = bundle
+    .network
+    .iter()
+    .find(|entry| entry.endpoint_id == EDGE_TTS_TRUST_ENDPOINT_ALIAS)
+    .expect("Edge TTS network grant");
+  assert_eq!(entry.origin_kind, "user_approved_instance");
+  assert_eq!(entry.base_url, "https://edge.example/api");
+  assert_eq!(entry.origin, "https://edge.example");
+
+  let reconfirmed_handler = caps
+    .resolve_speech_synthesize(created.id, SPEECH_SYNTHESIZE_CAPABILITY_ID)
+    .expect("resolve re-signed Wasm speech");
+  let wasm_response = block_on(reconfirmed_handler.synthesize(
+    created.id,
+    SpeechSynthesizeRequest {
+      text: "reconfirmed".into(),
+      language_id: "en".into(),
+      preferences: serde_json::json!({
+        "voice": EDGE_TTS_VOICE_DEFAULT,
+        "speed": 1.0,
+        "pitch": 0.0,
+        "style": "general",
+      }),
+    },
+    ctx(created.id, "edge-wasm-reconfirmed"),
+  ))
+  .expect("reconfirmed custom endpoint should execute through Wasm and BrokerHandle");
+  assert!(!wasm_response.mp3_bytes.is_empty());
+  let wasm_prepared = transport
+    .last
+    .lock()
+    .unwrap()
+    .take()
+    .expect("reconfirmed transport called");
+  assert_eq!(
+    wasm_prepared.destination_policy,
+    crate::services::bounded_http::DestinationPolicy::UserApprovedCustom
+  );
+  assert_eq!(wasm_prepared.proxy_mode, crate::domain::provider::ProxyMode::Inherit);
+}
+
+#[test]
+fn edge_tts_runtime_reconfirmation_failure_does_not_report_trusted() {
+  let (_dir, db, packages, lifecycle, _caps, _transport) = setup();
+  let import = packages
+    .bootstrap_bundled_package(EDGE_TTS_LNPLUGIN, true)
+    .expect("bootstrap edge-tts package");
+  let digest = import.package_digest().to_string();
+  let id = seed_instance(&db, "https://edge.example/api");
+  activate(&lifecycle, id, &digest);
+  let service = integration_service_without_lifecycle(&db);
+  let current = service.get_instance(id).expect("active instance");
+  let preview = service
+    .preview_endpoint_trust(EndpointTrustPreviewInput {
+      plugin_id: EDGE_TTS_PLUGIN_ID.into(),
+      instance_id: Some(id),
+      config_json: current.config_json.clone(),
+      expected_updated_at: Some(current.updated_at.clone()),
+    })
+    .expect("reconfirmation preview");
+  let error = service
+    .save(IntegrationInstanceWrite {
+      id: Some(id),
+      plugin_id: EDGE_TTS_PLUGIN_ID.into(),
+      display_name: current.display_name,
+      enabled: current.enabled,
+      config_json: current.config_json,
+      credentials: vec![],
+      expected_updated_at: Some(current.updated_at),
+      endpoint_trust_preview_id: Some(preview.preview_id),
+      acknowledge_endpoint_trust: true,
+    })
+    .unwrap_err();
+  assert!(matches!(error, crate::error::StorageError::Internal(_)));
+  let unchanged = service.get_instance(id).expect("rolled back instance");
+  assert_eq!(
+    unchanged.endpoint_trust_status,
+    crate::domain::endpoint_trust::EndpointTrustStatus::ReviewRequired
+  );
+  assert_eq!(
+    unchanged.execution_grant_set_revision,
+    current.execution_grant_set_revision
+  );
+}
+
+#[test]
+fn edge_tts_runtime_unapproved_custom_origin_returns_endpoint_trust_required() {
+  let (_dir, db, packages, lifecycle, caps, transport) = setup();
+  let import = packages
+    .bootstrap_bundled_package(EDGE_TTS_LNPLUGIN, true)
+    .expect("bootstrap edge-tts package");
+  let digest = import.package_digest().to_string();
+  let id = seed_instance(&db, "https://edge.example/api");
+  activate(&lifecycle, id, &digest);
+
+  let handler = caps
+    .resolve_speech_synthesize(id, SPEECH_SYNTHESIZE_CAPABILITY_ID)
+    .expect("resolve speech");
+  let error = block_on(handler.synthesize(
+    id,
+    SpeechSynthesizeRequest {
+      text: "blocked".into(),
+      language_id: "en".into(),
+      preferences: serde_json::json!({
+        "voice": EDGE_TTS_VOICE_DEFAULT,
+        "speed": 1.0,
+        "pitch": 0.0,
+        "style": "general",
+      }),
+    },
+    ctx(id, "edge-wasm-unapproved-custom"),
+  ))
+  .unwrap_err();
+  assert_eq!(
+    error.code,
+    crate::domain::service_capability::CapabilityErrorCode::EndpointTrustRequired
+  );
+  assert_eq!(transport.calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
 fn edge_tts_runtime_bundled_rollback_remains_available() {
   let (_dir, db, packages, lifecycle, _caps, _transport) = setup();
   let import = packages
@@ -270,7 +685,7 @@ fn edge_tts_runtime_rejects_wrong_content_type() {
     .bootstrap_bundled_package(EDGE_TTS_LNPLUGIN, true)
     .expect("bootstrap edge-tts package");
   let digest = import.package_digest().to_string();
-  let id = seed_instance(&db, "https://edge.example/api");
+  let id = seed_instance(&db, "https://tts.wangwangit.com");
   activate(&lifecycle, id, &digest);
 
   // 200 OK but content-type is application/json (e.g. an error body smuggled as audio).
@@ -316,7 +731,7 @@ fn edge_tts_runtime_accepts_audio_mpeg_with_parameters() {
     .bootstrap_bundled_package(EDGE_TTS_LNPLUGIN, true)
     .expect("bootstrap edge-tts package");
   let digest = import.package_digest().to_string();
-  let id = seed_instance(&db, "https://edge.example/api");
+  let id = seed_instance(&db, "https://tts.wangwangit.com");
   activate(&lifecycle, id, &digest);
 
   let mp3 = vec![0xFF, 0xFB, 0x90, 0x64];
@@ -356,7 +771,7 @@ fn edge_tts_runtime_rejects_missing_content_type() {
     .bootstrap_bundled_package(EDGE_TTS_LNPLUGIN, true)
     .expect("bootstrap edge-tts package");
   let digest = import.package_digest().to_string();
-  let id = seed_instance(&db, "https://edge.example/api");
+  let id = seed_instance(&db, "https://tts.wangwangit.com");
   activate(&lifecycle, id, &digest);
 
   // 200 OK but no content-type header at all.
@@ -399,7 +814,7 @@ fn edge_tts_runtime_rejects_near_miss_mime() {
     .bootstrap_bundled_package(EDGE_TTS_LNPLUGIN, true)
     .expect("bootstrap edge-tts package");
   let digest = import.package_digest().to_string();
-  let id = seed_instance(&db, "https://edge.example/api");
+  let id = seed_instance(&db, "https://tts.wangwangit.com");
   activate(&lifecycle, id, &digest);
 
   // 200 OK but content-type is audio/mp3 (near-miss, not audio/mpeg).
@@ -454,8 +869,8 @@ const ERROR_RESPONSE_429_FIXTURE: &str = include_str!(concat!(
 /// drift while a fixture-only assertion still passes.
 #[test]
 fn edge_tts_runtime_request_fixture_matches_guest_contract() {
-  const FIXTURE_BASE_URL: &str = "https://edge.example";
-  const FIXTURE_SYNTHESIZE_URL: &str = "https://edge.example/v1/audio/speech";
+  const FIXTURE_BASE_URL: &str = "https://tts.wangwangit.com";
+  const FIXTURE_SYNTHESIZE_URL: &str = "https://tts.wangwangit.com/v1/audio/speech";
   const FIXTURE_REQUEST_ID: &str = "edge-wasm-request-fixture";
 
   let expected_body: serde_json::Value =
@@ -529,7 +944,7 @@ fn edge_tts_runtime_error_400_fixture_maps_to_invalid_request() {
     .bootstrap_bundled_package(EDGE_TTS_LNPLUGIN, true)
     .expect("bootstrap edge-tts package");
   let digest = import.package_digest().to_string();
-  let id = seed_instance(&db, "https://edge.example/api");
+  let id = seed_instance(&db, "https://tts.wangwangit.com");
   activate(&lifecycle, id, &digest);
 
   // The fixture must be valid JSON and carry the OpenAI error envelope.
@@ -577,7 +992,7 @@ fn edge_tts_runtime_error_429_fixture_maps_to_rate_limited() {
     .bootstrap_bundled_package(EDGE_TTS_LNPLUGIN, true)
     .expect("bootstrap edge-tts package");
   let digest = import.package_digest().to_string();
-  let id = seed_instance(&db, "https://edge.example/api");
+  let id = seed_instance(&db, "https://tts.wangwangit.com");
   activate(&lifecycle, id, &digest);
 
   let fixture: serde_json::Value =
@@ -626,7 +1041,7 @@ fn edge_tts_runtime_rejects_oversized_audio() {
     .bootstrap_bundled_package(EDGE_TTS_LNPLUGIN, true)
     .expect("bootstrap edge-tts package");
   let digest = import.package_digest().to_string();
-  let id = seed_instance(&db, "https://edge.example/api");
+  let id = seed_instance(&db, "https://tts.wangwangit.com");
   activate(&lifecycle, id, &digest);
 
   // One byte over the host audio cap.
@@ -855,6 +1270,16 @@ fn edge_tts_runtime_auto_pin_rejects_custom_origin() {
   assert!(after.package_digest.is_none(), "no grant for custom origin");
   assert!(after.execution_grant_set_revision.is_none());
   let _ = digest; // vendor package exists but must not be auto-pinned for a custom origin.
+
+  let official_origin_custom_path = seed_instance(&db, "https://tts.wangwangit.com/api");
+  lifecycle
+    .pin_default_package_for_new_instance(official_origin_custom_path)
+    .unwrap();
+  let path_variant = db
+    .read(|conn| integration_instances::get(conn, official_origin_custom_path))
+    .unwrap();
+  assert_eq!(path_variant.runtime_kind, "bundled-rust");
+  assert!(path_variant.package_digest.is_none());
 }
 
 /// Equivalent normalized default origin auto-pins: a trailing slash on the vendor-default URL

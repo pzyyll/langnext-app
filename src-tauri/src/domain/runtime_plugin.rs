@@ -320,8 +320,9 @@ const AUTHORITY_DIGEST_SEP: u8 = 0x1f;
 /// sorted deterministically (capabilities by id, network entries by their full key, pages by id
 /// with sorted actions) so the same authority always yields the same digest regardless of input
 /// order. Resource limits are part of each network entry's authority and are included. The
-/// default strict provenance preserves the legacy encoding; the privileged `HostFixed` marker is
-/// added to the digest so changing a dynamic grant to fixed always invalidates its authority.
+/// default strict provenance preserves the legacy encoding; privileged host-fixed and
+/// user-approved markers are added so changing a dynamic grant broadens authority only with a
+/// new digest.
 pub(crate) fn compute_authority_digest(
   capabilities: &[CapabilityId],
   network: &[NetworkGrantEntry],
@@ -340,9 +341,16 @@ pub(crate) fn compute_authority_digest(
     .iter()
     .map(|entry| {
       let limits = entry.resource_limits();
-      let fixed_origin_marker = match entry.origin_kind() {
-        NetworkOriginKind::HostFixed => format!("\u{1f}{}", NetworkOriginKind::HostFixed.as_str()),
+      let origin_kind_marker = match entry.origin_kind() {
         NetworkOriginKind::InstanceConfigured => String::new(),
+        NetworkOriginKind::HostFixed | NetworkOriginKind::UserApprovedInstance => {
+          format!("\u{1f}{}", entry.origin_kind().as_str())
+        }
+      };
+      let base_url_marker = if entry.base_url() == entry.origin().as_str() {
+        String::new()
+      } else {
+        format!("\u{1f}{}", entry.base_url())
       };
       let response_modes_marker = if entry.response_body_modes().is_default() {
         String::new()
@@ -350,11 +358,12 @@ pub(crate) fn compute_authority_digest(
         format!("\u{1f}{}", entry.response_body_modes().as_canonical())
       };
       format!(
-        "{}\u{1f}{}\u{1f}{}{}\u{1f}{:?}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}{}",
+        "{}\u{1f}{}\u{1f}{}{}{}\u{1f}{:?}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}{}",
         entry.capability_id().as_str(),
         entry.endpoint_id().as_str(),
         entry.origin().as_str(),
-        fixed_origin_marker,
+        base_url_marker,
+        origin_kind_marker,
         entry.method(),
         entry.auth_policy().as_str(),
         entry.resource_mode().as_str(),
@@ -900,12 +909,13 @@ impl NetworkResourceMode {
   }
 }
 
-/// Origin provenance sealed into network authority. `HostFixed` is available only to the
-/// host-maintained fixed-origin allowlist; all other and legacy authority remains strict.
+/// Origin provenance sealed into network authority. `HostFixed` is host-maintained trust;
+/// `UserApprovedInstance` is an exact user acknowledgement bound to one instance/config/runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NetworkOriginKind {
   HostFixed,
   InstanceConfigured,
+  UserApprovedInstance,
 }
 
 impl NetworkOriginKind {
@@ -913,6 +923,7 @@ impl NetworkOriginKind {
     match self {
       Self::HostFixed => "host_fixed",
       Self::InstanceConfigured => "instance_configured",
+      Self::UserApprovedInstance => "user_approved_instance",
     }
   }
 
@@ -920,18 +931,22 @@ impl NetworkOriginKind {
     match value {
       "host_fixed" => Ok(Self::HostFixed),
       "instance_configured" => Ok(Self::InstanceConfigured),
+      "user_approved_instance" => Ok(Self::UserApprovedInstance),
       other => Err(format!("invalid network origin kind: {other}")),
     }
   }
 }
 
-/// One reviewed network authority entry: binds capability, endpoint, origin provenance, method,
-/// auth policy, resource mode, response body modes, and resource limits. Endpoint/auth policy remain host-resolved.
+/// One reviewed network authority entry: binds capability, endpoint, complete base URL,
+/// origin provenance, method, auth policy, resource mode, response body modes, and resource
+/// limits. Endpoint/auth policy remain host-resolved.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NetworkGrantEntry {
   capability_id: CapabilityId,
   endpoint_id: EndpointId,
   origin: HttpsOrigin,
+  /// Complete canonical endpoint base URL used to join the fixed relative request scope.
+  base_url: String,
   origin_kind: NetworkOriginKind,
   method: HttpMethod,
   auth_policy: AuthPolicyId,
@@ -996,10 +1011,12 @@ impl NetworkGrantEntry {
     resource_mode: NetworkResourceMode,
     resource_limits: ResourceLimits,
   ) -> Self {
+    let base_url = origin.as_str().to_string();
     Self {
       capability_id,
       endpoint_id,
       origin,
+      base_url,
       origin_kind,
       method,
       auth_policy,
@@ -1021,10 +1038,40 @@ impl NetworkGrantEntry {
     resource_limits: ResourceLimits,
     response_body_modes: crate::domain::plugin_resource::NetworkResponseBodyModes,
   ) -> Self {
+    let base_url = origin.as_str().to_string();
+    Self::with_mode_origin_and_response_modes_and_base_url(
+      capability_id,
+      endpoint_id,
+      origin,
+      origin_kind,
+      base_url,
+      method,
+      auth_policy,
+      resource_mode,
+      resource_limits,
+      response_body_modes,
+    )
+  }
+
+  /// Construct a network grant with a complete canonical base URL. The host validates the URL
+  /// against the instance configuration before this authority is persisted or executed.
+  pub fn with_mode_origin_and_response_modes_and_base_url(
+    capability_id: CapabilityId,
+    endpoint_id: EndpointId,
+    origin: HttpsOrigin,
+    origin_kind: NetworkOriginKind,
+    base_url: String,
+    method: HttpMethod,
+    auth_policy: AuthPolicyId,
+    resource_mode: NetworkResourceMode,
+    resource_limits: ResourceLimits,
+    response_body_modes: crate::domain::plugin_resource::NetworkResponseBodyModes,
+  ) -> Self {
     Self {
       capability_id,
       endpoint_id,
       origin,
+      base_url,
       origin_kind,
       method,
       auth_policy,
@@ -1048,6 +1095,10 @@ impl NetworkGrantEntry {
 
   pub fn origin_kind(&self) -> NetworkOriginKind {
     self.origin_kind
+  }
+
+  pub fn base_url(&self) -> &str {
+    &self.base_url
   }
 
   pub fn method(&self) -> HttpMethod {

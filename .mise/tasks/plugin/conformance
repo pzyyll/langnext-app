@@ -56,6 +56,10 @@ REQUIRED_LIFECYCLE_TESTS=(
 )
 
 REQUIRED_EDGE_TTS_TESTS=(
+  "services::edge_tts_runtime_tests::edge_tts_runtime_unapproved_custom_origin_returns_endpoint_trust_required"
+  "services::edge_tts_runtime_tests::edge_tts_runtime_approved_custom_origin_uses_user_approved_policy"
+  "services::edge_tts_runtime_tests::edge_tts_runtime_reconfirmation_resigns_user_approved_provenance_after_lifecycle_change"
+  "services::edge_tts_runtime_tests::edge_tts_runtime_reconfirmation_failure_does_not_report_trusted"
   "services::edge_tts_runtime_tests::edge_tts_runtime_synthesize_returns_binary_audio_via_blob"
   "services::edge_tts_runtime_tests::edge_tts_runtime_bundled_rollback_remains_available"
   "services::edge_tts_runtime_tests::edge_tts_runtime_rejects_wrong_content_type"
@@ -101,6 +105,10 @@ REQUIRED_WASM_RESOURCE_FILTER_TESTS=(
   "services::wasm_runtime::tests::wasm_host_imports::broker_fetch_blob_body_consumed_not_leaked"
 )
 REQUIRED_NETWORK_HANDLE_FILTER_TESTS=(
+  "services::wasm_runtime::network_handle::tests::edge_unapproved_custom_origin_is_rejected_before_transport"
+  "services::wasm_runtime::network_handle::tests::edge_approved_custom_origin_uses_user_approved_transport_policy"
+  "services::wasm_runtime::network_handle::tests::edge_approved_fake_ip_dns_answer_reaches_unfiltered_transport"
+  "services::wasm_runtime::network_handle::tests::edge_approved_private_dns_answer_reaches_unfiltered_transport"
   "services::wasm_runtime::network_handle::tests::blob_request_body_preserves_non_utf8_bytes"
   "services::wasm_runtime::network_handle::tests::stream_mode_returns_real_reader_not_internal_error"
   "services::wasm_runtime::network_handle::tests::stream_e2e_started_chunk_finished_in_order"
@@ -115,6 +123,22 @@ REQUIRED_NETWORK_HANDLE_FILTER_TESTS=(
   "services::wasm_runtime::network_handle::tests::stream_preheader_request_cancellation_stops_transport"
   "services::wasm_runtime::network_handle::tests::stream_preheader_deadline_stops_transport"
   "services::wasm_runtime::network_handle::tests::stream_preheader_transport_error_is_sanitized"
+)
+
+REQUIRED_NETWORK_BROKER_FILTER_TESTS=(
+  "services::network_broker::tests::network_broker_blocks_unapproved_custom_endpoint_before_transport"
+  "services::network_broker::tests::network_broker_uses_user_approved_custom_transport_policy"
+  "services::network_broker::tests::network_broker_approved_fake_ip_dns_answer_reaches_unfiltered_transport"
+  "services::network_broker::tests::network_broker_approved_private_dns_answer_reaches_unfiltered_transport"
+)
+
+# Edge endpoint approval conformance also runs the real synthetic-resolver and public save seams.
+# The broker/handle lists above and the runtime tests below ensure these checks are not fixture-only.
+REQUIRED_EDGE_TTS_BOUNDED_HTTP_TESTS=(
+  "services::bounded_http::tests::bounded_http_user_approved_custom_client_keeps_fake_ip_and_private_dns_answers"
+)
+REQUIRED_EDGE_TTS_INTEGRATION_TESTS=(
+  "services::service_integrations::tests::custom_edge_endpoint_requires_preview_acknowledgement_and_revokes_on_default_save"
 )
 
 REQUIRED_GOOGLE_WEB_TESTS=(
@@ -194,6 +218,7 @@ case "$MODE" in
     run_filter_suite "stream_resources" "${REQUIRED_STREAM_FILTER_TESTS[@]}"
     run_filter_suite "wasm_host_imports" "${REQUIRED_WASM_RESOURCE_FILTER_TESTS[@]}"
     run_filter_suite "network_handle" "${REQUIRED_NETWORK_HANDLE_FILTER_TESTS[@]}"
+    run_filter_suite "network_broker" "${REQUIRED_NETWORK_BROKER_FILTER_TESTS[@]}"
     ;;
   resources)
     run_filter_suite "blob_resources" "${REQUIRED_BLOB_FILTER_TESTS[@]}"
@@ -207,8 +232,8 @@ case "$MODE" in
     ;;
   edge-tts)
     # Edge TTS guest is a single speech-synthesize-world cdylib component (no_std + custom
-    # panic_handler), so it cannot host a cargo test harness. Host conformance tests are wired
-    # in Phase 6 Task 5; until then this verifies the committed artifact digests.
+    # panic_handler), so it cannot host a cargo test harness. Host conformance executes the
+    # installed guest through the lifecycle, router, executor, and capture transport.
     if [[ ! -f "runtime-plugins/edge-tts/fixtures/langnext-edge-tts.wasm" ]]; then
       echo "error: edge-tts fixture missing; run mise run plugin:build-edge-tts" >&2
       exit 1
@@ -222,6 +247,11 @@ case "$MODE" in
     # a successful end-to-end lifecycle (Started/Chunk/Finished via actual broker binding) plus
     # negative lifecycle tests (reader close, request cancel, total deadline, idle timeout, size overflow).
     run_filter_suite "network_handle" "${REQUIRED_NETWORK_HANDLE_FILTER_TESTS[@]}"
+    run_filter_suite "network_broker" "${REQUIRED_NETWORK_BROKER_FILTER_TESTS[@]}"
+    run_filter_suite "bounded_http::tests::bounded_http_user_approved_custom_client_keeps_fake_ip_and_private_dns_answers" \
+      "${REQUIRED_EDGE_TTS_BOUNDED_HTTP_TESTS[@]}"
+    run_filter_suite "service_integrations::tests::custom_edge_endpoint_requires_preview_acknowledgement_and_revokes_on_default_save" \
+      "${REQUIRED_EDGE_TTS_INTEGRATION_TESTS[@]}"
     run_filter_suite "stream_resources" "${REQUIRED_STREAM_FILTER_TESTS[@]}"
     ;;
   *)

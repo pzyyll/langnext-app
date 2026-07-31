@@ -22,6 +22,8 @@ export type ConfirmDialogProps = {
   pendingText?: string;
   onConfirm: () => void | Promise<void>;
   danger?: boolean;
+  /** Keep the confirm action disabled (e.g. until acknowledgement) instead of failing after click. */
+  confirmDisabled?: boolean;
 };
 
 export function ConfirmDialog({
@@ -34,6 +36,7 @@ export function ConfirmDialog({
   pendingText,
   onConfirm,
   danger = false,
+  confirmDisabled = false,
 }: ConfirmDialogProps) {
   const { t } = useTranslation();
   const [pending, setPending] = useState(false);
@@ -79,7 +82,9 @@ export function ConfirmDialog({
         <Dialog.Popup className={dialogPopupClassName}>
           <div className="flex flex-col gap-1">
             <Dialog.Title className="text-title-dialog font-bold text-on-surface">{title}</Dialog.Title>
-            <Dialog.Description className="text-body-tight text-neutral">{description ?? ""}</Dialog.Description>
+            <Dialog.Description render={<div className="text-body-tight text-neutral" />}>
+              {description}
+            </Dialog.Description>
           </div>
 
           {error ? (
@@ -95,7 +100,7 @@ export function ConfirmDialog({
             <Button
               type="button"
               className={danger ? dangerButtonClassName : primaryButtonClassName}
-              disabled={pending}
+              disabled={pending || confirmDisabled}
               focusableWhenDisabled
               onClick={() => {
                 void handleConfirm();

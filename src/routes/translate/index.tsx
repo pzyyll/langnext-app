@@ -34,8 +34,7 @@ import {
 } from "../../features/translate/resolveTranslateFailureMessage";
 import { runDetectLanguage, runStartTranslateStream } from "../../features/translate/runTranslate";
 import { useTranslateStreamSession } from "../../features/translate/useTranslateStreamSession";
-import { getIpcErrorMessage } from "../../storage/errors";
-import { isIpcError } from "../../storage/ipcError";
+import { getIpcErrorCode, getIpcErrorMessage } from "../../storage/errors";
 import {
   AUTO_LANGUAGE,
   LANGUAGE_IDS,
@@ -600,7 +599,10 @@ function TranslatePage() {
   /** Runtime translate failures go to the shared toast, not the output pane. */
   function showTranslateErrorToast(message: string, errorCode?: string | null) {
     const title = t("translate.errorPrefix");
-    const recovery = resolveTranslateFailureRecovery(errorCode);
+    const recovery =
+      errorCode === "endpoint_trust_required"
+        ? { path: "/plugins" as const }
+        : resolveTranslateFailureRecovery(errorCode);
     const action = recovery
       ? {
           label: t("translate.openPlugins"),
@@ -618,6 +620,9 @@ function TranslatePage() {
 
   /** Map known backend error codes to localized copy; fall back to server message. */
   function failureMessage(errorCode: string | null | undefined, message: string | undefined): string {
+    if (errorCode === "endpoint_trust_required") {
+      return t("translate.errors.endpointTrustRequired");
+    }
     return resolveTranslateFailureMessage(errorCode, message, {
       timeout: t("translate.errors.timeout"),
       invalidResponse: t("translate.errors.invalidResponse"),
@@ -816,7 +821,13 @@ function TranslatePage() {
       }
       streamSession.clearListeners();
       streamSession.releaseIfActive(requestId);
-      finishErrorUi(generation, getIpcErrorMessage(err, t("translate.errorPrefix")), null);
+      const errorCode = getIpcErrorCode(err);
+      finishErrorUi(
+        generation,
+        failureMessage(errorCode, getIpcErrorMessage(err, t("translate.errorPrefix"))),
+        null,
+        errorCode,
+      );
     }
   }
 
@@ -868,11 +879,13 @@ function TranslatePage() {
           if (detected.errorCode === "cancelled") {
             finishCancelledUi(generation);
           } else {
-            const message =
+            const message = failureMessage(
+              detected.errorCode,
               detected.errorCode === "invalid_response"
                 ? t("translate.errors.detectFailed")
-                : detected.message || t("translate.errors.detectFailed");
-            finishErrorUi(generation, message, detected.latencyMs);
+                : detected.message || t("translate.errors.detectFailed"),
+            );
+            finishErrorUi(generation, message, detected.latencyMs, detected.errorCode);
           }
           return;
         }
@@ -888,7 +901,13 @@ function TranslatePage() {
           return;
         }
         streamSession.releaseIfActive(requestId);
-        finishErrorUi(generation, getIpcErrorMessage(err, t("translate.errors.detectFailed")), null);
+        const errorCode = getIpcErrorCode(err);
+        finishErrorUi(
+          generation,
+          failureMessage(errorCode, getIpcErrorMessage(err, t("translate.errors.detectFailed"))),
+          null,
+          errorCode,
+        );
         return;
       }
       if (generation !== translateGeneration.current) {
@@ -943,6 +962,18 @@ function TranslatePage() {
   }
 
   function showSpeechError(code: string | null | undefined, fallbackMessage?: string) {
+    if (code === "endpoint_trust_required") {
+      toast.error({
+        title: t("translate.errors.endpointTrustRequired"),
+        action: {
+          label: t("translate.openPlugins"),
+          onClick: () => {
+            void navigate({ to: "/plugins" });
+          },
+        },
+      });
+      return;
+    }
     if (code === "cancelled") {
       toast.info({ title: t("translate.speech.cancelled"), duration: STOPPED_TOAST_MS });
       return;
@@ -1038,7 +1069,9 @@ function TranslatePage() {
         return null;
       }
       if (!detected.ok) {
-        if (detected.errorCode === "cancelled") {
+        if (detected.errorCode === "endpoint_trust_required") {
+          showSpeechError(detected.errorCode);
+        } else if (detected.errorCode === "cancelled") {
           toast.info({ title: t("translate.speech.cancelled"), duration: STOPPED_TOAST_MS });
         } else {
           toast.error({ title: t("translate.speech.detectFailed") });
@@ -1055,9 +1088,14 @@ function TranslatePage() {
       if (myGeneration !== speechDetectGeneration.current) {
         return null;
       }
-      toast.error({
-        title: getIpcErrorMessage(err, t("translate.speech.detectFailed")),
-      });
+      const errorCode = getIpcErrorCode(err);
+      if (errorCode === "endpoint_trust_required") {
+        showSpeechError(errorCode);
+      } else {
+        toast.error({
+          title: getIpcErrorMessage(err, t("translate.speech.detectFailed")),
+        });
+      }
       return null;
     }
   }
@@ -1089,8 +1127,8 @@ function TranslatePage() {
         showSpeechError(result.error);
       }
     } catch (err) {
-      const code = isIpcError(err) ? err.code : "synthesize_failed";
-      showSpeechError(code, isIpcError(err) ? err.message : undefined);
+      const code = getIpcErrorCode(err) ?? "synthesize_failed";
+      showSpeechError(code, getIpcErrorMessage(err, t("translate.speech.synthesizeFailed")));
     }
   }
 
@@ -1122,8 +1160,8 @@ function TranslatePage() {
         showSpeechError(result.error);
       }
     } catch (err) {
-      const code = isIpcError(err) ? err.code : "synthesize_failed";
-      showSpeechError(code, isIpcError(err) ? err.message : undefined);
+      const code = getIpcErrorCode(err) ?? "synthesize_failed";
+      showSpeechError(code, getIpcErrorMessage(err, t("translate.speech.synthesizeFailed")));
     }
   }
 

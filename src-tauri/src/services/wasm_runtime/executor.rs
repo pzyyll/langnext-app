@@ -899,6 +899,10 @@ macro_rules! impl_plugin_error_mapper {
         PluginError::RateLimited => (CapabilityErrorCode::RateLimited, "rate limited"),
         PluginError::UnsupportedInput(_) => (CapabilityErrorCode::UnsupportedInput, "unsupported input"),
         PluginError::UnsupportedLanguage(_) => (CapabilityErrorCode::UnsupportedLanguage, "unsupported language"),
+        PluginError::Network(message) if message == crate::domain::endpoint_trust::ENDPOINT_TRUST_REQUIRED_MARKER => (
+          CapabilityErrorCode::EndpointTrustRequired,
+          "custom endpoint requires review",
+        ),
         PluginError::Network(_) => (CapabilityErrorCode::Network, "network error"),
         PluginError::Timeout => (CapabilityErrorCode::Timeout, "timeout"),
         PluginError::InvalidResponse(_) => (CapabilityErrorCode::InvalidResponse, "invalid response"),

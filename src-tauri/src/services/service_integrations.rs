@@ -3,6 +3,7 @@
 use crate::credentials::coordinator;
 use crate::credentials::{CredentialVault, integration_ref};
 use crate::domain::cancel::CancelToken;
+use crate::domain::endpoint_trust::{EndpointTrustPreviewDto, EndpointTrustPreviewInput, EndpointTrustStatus};
 use crate::domain::provider::CredentialUpdate;
 use crate::domain::service_capability::{CAPABILITY_DEFAULT_TIMEOUT, CapabilityErrorCode};
 use crate::domain::service_integration::{
@@ -14,7 +15,8 @@ use crate::domain::service_integration::{
 use crate::domain::time::{new_id, now_rfc3339};
 use crate::error::StorageError;
 use crate::repositories::credential_operations::{self, CredentialOperation, OwnerKind};
-use crate::repositories::{integration_credential_bindings, integration_instances};
+use crate::repositories::{integration_credential_bindings, integration_endpoint_trusts, integration_instances};
+use crate::services::endpoint_trust::EndpointTrustService;
 use crate::services::service_integration_registry::ServiceIntegrationRegistry;
 use crate::services::token_grant::{TokenGrant, TokenGrantRequest, TokenGrantService};
 use crate::storage::Database;
@@ -59,6 +61,7 @@ pub struct ServiceIntegrationService {
   tokens: Arc<TokenGrantService>,
   validation_timeout: Duration,
   runtime_lifecycle: Option<crate::services::runtime_lifecycle::RuntimeLifecycleService>,
+  endpoint_trust: Arc<EndpointTrustService>,
 }
 
 impl ServiceIntegrationService {
@@ -69,12 +72,13 @@ impl ServiceIntegrationService {
     tokens: Arc<TokenGrantService>,
   ) -> Self {
     Self {
-      db,
+      db: db.clone(),
       vault,
-      registry,
+      registry: registry.clone(),
       tokens,
       validation_timeout: INTEGRATION_VALIDATION_TIMEOUT,
       runtime_lifecycle: None,
+      endpoint_trust: Arc::new(EndpointTrustService::new(db.clone(), registry.clone())),
     }
   }
 
@@ -94,6 +98,18 @@ impl ServiceIntegrationService {
     self
   }
 
+  pub fn with_endpoint_trust(mut self, endpoint_trust: Arc<EndpointTrustService>) -> Self {
+    self.endpoint_trust = endpoint_trust;
+    self
+  }
+
+  pub fn preview_endpoint_trust(
+    &self,
+    input: EndpointTrustPreviewInput,
+  ) -> Result<EndpointTrustPreviewDto, StorageError> {
+    self.endpoint_trust.preview(input)
+  }
+
   pub fn list_definitions(&self) -> Vec<ServiceIntegrationDefinitionDto> {
     self.registry.list_definitions()
   }
@@ -104,7 +120,7 @@ impl ServiceIntegrationService {
       let mut dtos = Vec::with_capacity(instances.len());
       for instance in instances {
         let bindings = integration_credential_bindings::list_for_instance(conn, instance.id)?;
-        dtos.push(self.to_dto(&instance, &bindings));
+        dtos.push(self.to_dto(conn, &instance, &bindings));
       }
       Ok(dtos)
     })
@@ -114,7 +130,7 @@ impl ServiceIntegrationService {
     self.db.read(|conn| {
       let instance = integration_instances::get(conn, id)?;
       let bindings = integration_credential_bindings::list_for_instance(conn, id)?;
-      Ok(self.to_dto(&instance, &bindings))
+      Ok(self.to_dto(conn, &instance, &bindings))
     })
   }
 
@@ -538,7 +554,10 @@ impl ServiceIntegrationService {
       }
     }
 
-    let id = new_id();
+    let id = self
+      .endpoint_trust
+      .reserved_create_instance_id(input.endpoint_trust_preview_id.as_deref())?
+      .unwrap_or_else(new_id);
     let now = now_rfc3339();
     let mut prepared_ops: Vec<CredentialOperation> = Vec::new();
     let mut slot_refs: HashMap<String, Option<String>> = HashMap::new();
@@ -591,8 +610,31 @@ impl ServiceIntegrationService {
       updated_at: now.clone(),
     };
 
+    let endpoint_trust = match self.endpoint_trust.consume_for_save(
+      id,
+      &manifest.id,
+      &manifest.version,
+      "bundled-rust",
+      None,
+      &instance.config_json,
+      None,
+      input.endpoint_trust_preview_id.as_deref(),
+      input.acknowledge_endpoint_trust,
+    ) {
+      Ok(trust) => trust,
+      Err(error) => {
+        for op in &prepared_ops {
+          let _ = coordinator::finalize_operation(&self.db, self.vault.as_ref(), op);
+        }
+        return Err(error);
+      }
+    };
+
     let commit = self.db.transaction(|uow| {
       integration_instances::insert(uow.conn(), &instance)?;
+      if let Some(trust) = &endpoint_trust {
+        integration_endpoint_trusts::upsert(uow.conn(), trust)?;
+      }
       for slot in &manifest.credential_slots {
         let binding = crate::domain::service_integration::IntegrationCredentialBinding {
           id: new_id(),
@@ -614,6 +656,9 @@ impl ServiceIntegrationService {
 
     match commit {
       Ok(ops) => {
+        self
+          .endpoint_trust
+          .commit_preview_consumption(input.endpoint_trust_preview_id.as_deref());
         for op in ops {
           let _ = coordinator::finalize_operation(&self.db, self.vault.as_ref(), &op);
         }
@@ -632,6 +677,9 @@ impl ServiceIntegrationService {
         for op in &prepared_ops {
           let _ = coordinator::finalize_operation(&self.db, self.vault.as_ref(), op);
         }
+        self
+          .endpoint_trust
+          .rollback_preview_consumption(input.endpoint_trust_preview_id.as_deref());
         Err(e)
       }
     }
@@ -668,6 +716,24 @@ impl ServiceIntegrationService {
 
     let display_name = validate_display_name(&input.display_name)?;
     let config_json = normalize_and_validate_config(&registration, &input.config_json)?;
+    let retain_existing_endpoint_trust = input.endpoint_trust_preview_id.is_none()
+      && !input.acknowledge_endpoint_trust
+      && existing.config_json == config_json;
+    let retained_endpoint_trust = if retain_existing_endpoint_trust {
+      self.db.read(|conn| {
+        self.endpoint_trust.current_approval_for_config(
+          conn,
+          id,
+          &existing.plugin_id,
+          &existing.plugin_version,
+          &existing.runtime_kind,
+          existing.package_digest.as_deref(),
+          &config_json,
+        )
+      })?
+    } else {
+      None
+    };
     let credential_map = collect_credential_updates(&input, manifest)?;
 
     let existing_bindings = self
@@ -774,6 +840,38 @@ impl ServiceIntegrationService {
       }
     }
     let health = compute_local_health(&registration, &config_json, &final_refs);
+    let endpoint_trust = if retain_existing_endpoint_trust {
+      retained_endpoint_trust
+    } else {
+      match self.endpoint_trust.consume_for_save(
+        id,
+        &existing.plugin_id,
+        &existing.plugin_version,
+        &existing.runtime_kind,
+        existing.package_digest.as_deref(),
+        &config_json,
+        Some(&expected_updated_at),
+        input.endpoint_trust_preview_id.as_deref(),
+        input.acknowledge_endpoint_trust,
+      ) {
+        Ok(trust) => trust,
+        Err(error) => {
+          for op in &prepared_ops {
+            let _ = coordinator::finalize_operation(&self.db, self.vault.as_ref(), op);
+          }
+          return Err(error);
+        }
+      }
+    };
+    let refresh_edge_runtime_grant = existing.plugin_id == crate::domain::service_integration::EDGE_TTS_PLUGIN_ID
+      && existing.runtime_kind
+        == crate::domain::runtime_lifecycle::runtime_kind_as_str(
+          crate::domain::runtime_plugin::RuntimeKind::WasmComponent,
+        )
+      && existing.package_digest.is_some()
+      && existing.execution_grant_set_revision.is_some()
+      && (existing.config_json != config_json
+        || (input.endpoint_trust_preview_id.is_some() && input.acknowledge_endpoint_trust));
     let now = now_rfc3339();
 
     let commit = self.db.transaction(|uow| {
@@ -790,6 +888,12 @@ impl ServiceIntegrationService {
         existing.last_error_code.as_deref(),
         &now,
       )?;
+      // Approval rows are exact to this saved config/runtime tuple. Replace the instance's
+      // previous row set so changing origin, path, or runtime identity revokes stale approvals.
+      self.endpoint_trust.revoke_for_instance(uow.conn(), id)?;
+      if let Some(trust) = &endpoint_trust {
+        integration_endpoint_trusts::upsert(uow.conn(), trust)?;
+      }
       for (slot_id, mutation) in &slot_mutations {
         if let Some((expected_old, new_ref)) = mutation {
           integration_credential_bindings::compare_and_set_ref(
@@ -806,11 +910,21 @@ impl ServiceIntegrationService {
       for op in &prepared_ops {
         committed.push(credential_operations::mark_db_committed(uow.conn(), op.id)?);
       }
+      if refresh_edge_runtime_grant {
+        let lifecycle = self
+          .runtime_lifecycle
+          .as_ref()
+          .ok_or_else(|| StorageError::Internal("active Edge TTS runtime cannot be refreshed by this host".into()))?;
+        lifecycle.refresh_edge_tts_grant_for_instance_in_transaction(uow.conn(), id)?;
+      }
       Ok(committed)
     });
 
     match commit {
       Ok(ops) => {
+        self
+          .endpoint_trust
+          .commit_preview_consumption(input.endpoint_trust_preview_id.as_deref());
         let mutated_credentials = !ops.is_empty();
         for op in ops {
           let _ = coordinator::finalize_operation(&self.db, self.vault.as_ref(), &op);
@@ -821,6 +935,9 @@ impl ServiceIntegrationService {
         self.get_instance(id)
       }
       Err(e) => {
+        self
+          .endpoint_trust
+          .rollback_preview_consumption(input.endpoint_trust_preview_id.as_deref());
         for op in &prepared_ops {
           let _ = coordinator::finalize_operation(&self.db, self.vault.as_ref(), op);
         }
@@ -884,6 +1001,7 @@ impl ServiceIntegrationService {
 
   fn to_dto(
     &self,
+    conn: &rusqlite::Connection,
     instance: &IntegrationInstance,
     bindings: &[crate::domain::service_integration::IntegrationCredentialBinding],
   ) -> IntegrationInstanceDto {
@@ -934,6 +1052,13 @@ impl ServiceIntegrationService {
         registry_present
       };
     let effective = derive_effective_status(instance.enabled, plugin_present, instance.health_status);
+    let endpoint_trust_status = self.endpoint_trust.status_for_instance(conn, instance).unwrap_or(
+      if instance.plugin_id == crate::domain::service_integration::EDGE_TTS_PLUGIN_ID {
+        EndpointTrustStatus::ReviewRequired
+      } else {
+        EndpointTrustStatus::NotApplicable
+      },
+    );
 
     IntegrationInstanceDto {
       id: instance.id,
@@ -945,6 +1070,7 @@ impl ServiceIntegrationService {
       config_schema_version: instance.config_schema_version,
       health_status: instance.health_status,
       effective_status: effective,
+      endpoint_trust_status,
       last_validated_at: instance.last_validated_at.clone(),
       last_error_code: instance.last_error_code.clone(),
       runtime_kind: instance.runtime_kind.clone(),
@@ -1106,6 +1232,7 @@ fn compute_local_health(
 mod tests {
   use super::*;
   use crate::credentials::{FailingCredentialVault, MemoryCredentialVault};
+  use crate::domain::endpoint_trust::EndpointTrustPreviewInput;
   use crate::domain::provider::ProxyMode;
   use crate::domain::service_capability::{CapabilityError, CapabilityErrorCode};
   use crate::domain::service_integration::{
@@ -1316,6 +1443,8 @@ mod tests {
       config_json: google_config("my-project"),
       credentials,
       expected_updated_at: None,
+      endpoint_trust_preview_id: None,
+      acknowledge_endpoint_trust: false,
     }
   }
 
@@ -1365,6 +1494,91 @@ mod tests {
   }
 
   #[test]
+  fn custom_edge_endpoint_requires_preview_acknowledgement_and_revokes_on_default_save() {
+    let (directory, service, _vault) = setup();
+    let custom_config = r#"{"base-url":"https://custom.example/api/"}"#;
+    let create = IntegrationInstanceWrite {
+      id: None,
+      plugin_id: EDGE_TTS_PLUGIN_ID.into(),
+      display_name: "Edge TTS".into(),
+      enabled: true,
+      config_json: custom_config.into(),
+      credentials: vec![],
+      expected_updated_at: None,
+      endpoint_trust_preview_id: None,
+      acknowledge_endpoint_trust: false,
+    };
+    let error = service.save(create.clone()).unwrap_err();
+    assert!(matches!(error, StorageError::EndpointTrustRequired(_)));
+
+    let preview = service
+      .preview_endpoint_trust(EndpointTrustPreviewInput {
+        plugin_id: EDGE_TTS_PLUGIN_ID.into(),
+        instance_id: None,
+        config_json: custom_config.into(),
+        expected_updated_at: None,
+      })
+      .unwrap();
+    let created = service
+      .save(IntegrationInstanceWrite {
+        endpoint_trust_preview_id: Some(preview.preview_id),
+        acknowledge_endpoint_trust: true,
+        ..create
+      })
+      .unwrap();
+    assert_eq!(created.endpoint_trust_status, EndpointTrustStatus::TrustedCustom);
+    let database = Database::new(directory.path()).unwrap();
+    assert_eq!(
+      database
+        .read(|conn| integration_endpoint_trusts::count_for_instance(conn, created.id))
+        .unwrap(),
+      1
+    );
+
+    let renamed = service
+      .save(IntegrationInstanceWrite {
+        id: Some(created.id),
+        plugin_id: EDGE_TTS_PLUGIN_ID.into(),
+        display_name: "Edge TTS renamed".into(),
+        enabled: true,
+        config_json: created.config_json.clone(),
+        credentials: vec![],
+        expected_updated_at: Some(created.updated_at.clone()),
+        endpoint_trust_preview_id: None,
+        acknowledge_endpoint_trust: false,
+      })
+      .unwrap();
+    assert_eq!(renamed.endpoint_trust_status, EndpointTrustStatus::TrustedCustom);
+    assert_eq!(
+      database
+        .read(|conn| integration_endpoint_trusts::count_for_instance(conn, renamed.id))
+        .unwrap(),
+      1
+    );
+
+    let default = service
+      .save(IntegrationInstanceWrite {
+        id: Some(renamed.id),
+        plugin_id: EDGE_TTS_PLUGIN_ID.into(),
+        display_name: renamed.display_name,
+        enabled: true,
+        config_json: r#"{"base-url":"https://tts.wangwangit.com"}"#.into(),
+        credentials: vec![],
+        expected_updated_at: Some(renamed.updated_at),
+        endpoint_trust_preview_id: None,
+        acknowledge_endpoint_trust: false,
+      })
+      .unwrap();
+    assert_eq!(default.endpoint_trust_status, EndpointTrustStatus::Official);
+    assert_eq!(
+      database
+        .read(|conn| integration_endpoint_trusts::count_for_instance(conn, default.id))
+        .unwrap(),
+      0
+    );
+  }
+
+  #[test]
   fn service_integrations_update_clear_and_conflict() {
     let (_d, service, vault) = setup();
     let created = service.save(write_create(true)).unwrap();
@@ -1382,6 +1596,8 @@ mod tests {
           credential: CredentialUpdate::Clear,
         }],
         expected_updated_at: Some(created.updated_at.clone()),
+        endpoint_trust_preview_id: None,
+        acknowledge_endpoint_trust: false,
       })
       .unwrap();
     assert!(!cleared.credential_slots[0].has_credential);
@@ -1398,6 +1614,8 @@ mod tests {
         config_json: created.config_json.clone(),
         credentials: vec![],
         expected_updated_at: Some(created.updated_at), // stale
+        endpoint_trust_preview_id: None,
+        acknowledge_endpoint_trust: false,
       })
       .unwrap_err();
     assert!(matches!(err, StorageError::Conflict(_)));
@@ -1539,6 +1757,8 @@ mod tests {
         config_json: created.config_json.clone(),
         credentials: vec![],
         expected_updated_at: Some(original_updated_at),
+        endpoint_trust_preview_id: None,
+        acknowledge_endpoint_trust: false,
       })
       .unwrap();
     assert_ne!(renamed.updated_at, created.updated_at);
@@ -1589,6 +1809,8 @@ mod tests {
           credential: CredentialUpdate::Replace(valid_sa_json()),
         }],
         expected_updated_at: Some(original_updated_at),
+        endpoint_trust_preview_id: None,
+        acknowledge_endpoint_trust: false,
       })
       .unwrap();
     assert_eq!(replaced.credential_slots[0].credential_revision, 1);
@@ -1638,6 +1860,8 @@ mod tests {
           credential: CredentialUpdate::Clear,
         }],
         expected_updated_at: Some(original_updated_at),
+        endpoint_trust_preview_id: None,
+        acknowledge_endpoint_trust: false,
       })
       .unwrap();
     assert!(!cleared.credential_slots[0].has_credential);
@@ -1689,6 +1913,8 @@ mod tests {
           credential: CredentialUpdate::Replace(valid_sa_json()),
         }],
         expected_updated_at: Some(original_updated_at),
+        endpoint_trust_preview_id: None,
+        acknowledge_endpoint_trust: false,
       })
       .unwrap();
     assert_eq!(replaced.credential_slots[0].credential_revision, 1);
@@ -1706,6 +1932,8 @@ mod tests {
           credential: CredentialUpdate::Clear,
         }],
         expected_updated_at: Some(replaced.updated_at),
+        endpoint_trust_preview_id: None,
+        acknowledge_endpoint_trust: false,
       })
       .unwrap();
     assert!(!cleared.credential_slots[0].has_credential);
@@ -1755,6 +1983,8 @@ mod tests {
           credential: CredentialUpdate::Clear,
         }],
         expected_updated_at: Some(created.updated_at),
+        endpoint_trust_preview_id: None,
+        acknowledge_endpoint_trust: false,
       })
       .unwrap();
     assert_eq!(cleared.health_status, IntegrationHealthStatus::Unconfigured);
@@ -1802,6 +2032,8 @@ mod tests {
           credential: CredentialUpdate::Replace(valid_sa_json()),
         }],
         expected_updated_at: Some(created.updated_at),
+        endpoint_trust_preview_id: None,
+        acknowledge_endpoint_trust: false,
       })
       .unwrap();
     assert_eq!(replaced.health_status, IntegrationHealthStatus::Unvalidated);
@@ -1845,6 +2077,8 @@ mod tests {
         config_json: created.config_json,
         credentials: vec![],
         expected_updated_at: Some(created.updated_at),
+        endpoint_trust_preview_id: None,
+        acknowledge_endpoint_trust: false,
       })
       .unwrap_err();
     assert!(matches!(err, StorageError::Validation(msg) if msg.contains("immutable")));
@@ -1902,6 +2136,8 @@ mod tests {
         config_json: serde_json::to_string(&config).unwrap(),
         credentials: vec![],
         expected_updated_at: None,
+        endpoint_trust_preview_id: None,
+        acknowledge_endpoint_trust: false,
       })
       .unwrap();
     assert_eq!(created.plugin_id, GOOGLE_TRANSLATE_WEB_PLUGIN_ID);
@@ -1994,6 +2230,8 @@ mod tests {
           credential: CredentialUpdate::Replace(valid_sa_json()),
         }],
         expected_updated_at: Some(disabled.updated_at.clone()),
+        endpoint_trust_preview_id: None,
+        acknowledge_endpoint_trust: false,
       })
       .unwrap_err();
     assert!(matches!(err, StorageError::PluginUnavailable(_)));
@@ -2008,6 +2246,8 @@ mod tests {
         config_json: created.config_json.clone(),
         credentials: vec![],
         expected_updated_at: Some(disabled.updated_at),
+        endpoint_trust_preview_id: None,
+        acknowledge_endpoint_trust: false,
       })
       .unwrap_err();
     assert!(matches!(err_keep, StorageError::PluginUnavailable(_)));
@@ -2093,6 +2333,8 @@ mod tests {
           credential: CredentialUpdate::Keep,
         }],
         expected_updated_at: Some(created.updated_at.clone()),
+        endpoint_trust_preview_id: None,
+        acknowledge_endpoint_trust: false,
       })
       .unwrap();
     assert_eq!(updated.display_name, "Google Cloud (2)");
@@ -2132,6 +2374,8 @@ mod tests {
           credential: CredentialUpdate::Replace(valid_sa_json()),
         }],
         expected_updated_at: Some(created.updated_at.clone()),
+        endpoint_trust_preview_id: None,
+        acknowledge_endpoint_trust: false,
       })
       .unwrap_err();
     assert!(matches!(
@@ -2163,6 +2407,8 @@ mod tests {
           credential: CredentialUpdate::Keep,
         }],
         expected_updated_at: Some(created.updated_at),
+        endpoint_trust_preview_id: None,
+        acknowledge_endpoint_trust: false,
       })
       .unwrap();
     assert_eq!(updated.display_name, "Renamed after vault failure");

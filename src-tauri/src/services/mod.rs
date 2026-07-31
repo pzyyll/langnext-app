@@ -6,6 +6,7 @@ pub mod bounded_http;
 pub mod bundled_plugins;
 pub mod edge_tts;
 pub mod edge_tts_runtime;
+pub mod endpoint_trust;
 pub mod google_cloud;
 pub mod google_service_account;
 pub mod google_translate_web;
@@ -44,6 +45,7 @@ pub mod translation_profiles;
 pub mod vendor_trust;
 pub mod wasm_runtime;
 
+pub use endpoint_trust::EndpointTrustService;
 pub use import_export::ImportExportService;
 pub use models::ModelService;
 pub use ocr_services::OcrServiceService;

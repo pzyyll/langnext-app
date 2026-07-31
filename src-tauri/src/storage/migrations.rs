@@ -25,6 +25,8 @@ pub const MIGRATIONS: &[&str] = &[
   include_str!("../../migrations/0018_plugin_uninstall_restored_states.sql"),
   include_str!("../../migrations/0019_execution_grant_origin_kind.sql"),
   include_str!("../../migrations/0020_execution_grant_response_body_modes.sql"),
+  include_str!("../../migrations/0021_integration_endpoint_trusts.sql"),
+  include_str!("../../migrations/0022_execution_grant_base_urls.sql"),
 ];
 
 pub fn latest_version() -> i32 {
@@ -279,6 +281,10 @@ mod tests {
       )
       .unwrap();
     assert_eq!(has_origin_kind, 1);
+    let endpoint_trust_count: i64 = conn
+      .query_row("SELECT COUNT(*) FROM integration_endpoint_trusts", [], |r| r.get(0))
+      .unwrap();
+    assert_eq!(endpoint_trust_count, 0);
   }
 
   #[test]

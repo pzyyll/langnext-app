@@ -1,5 +1,9 @@
 // ABOUTME: Resolve one immutable runtime adapter from authoritative instance pin state.
 // ABOUTME: Loads Wasm artifacts only from immutable, trusted archive snapshots before binding a PluginPrincipal.
+use crate::domain::endpoint_trust::{
+  EDGE_TTS_TRUST_ENDPOINT_ALIAS, RuntimeIdentityFingerprintInput, configuration_fingerprint,
+  runtime_identity_fingerprint,
+};
 use crate::domain::plugin_package::{PublisherSource, runtime_kind_storage};
 use crate::domain::runtime_lifecycle::{
   ExecutionGrantSetBundle, GrantSubjectKind, InstanceRuntimeState, parse_runtime_kind,
@@ -13,7 +17,8 @@ use crate::domain::runtime_plugin::{
 use crate::domain::service_capability::{CapabilityError, CapabilityErrorCode};
 use crate::error::StorageError;
 use crate::repositories::{
-  installed_plugin_versions, integration_instances, plugin_permission_grants, plugin_publishers,
+  installed_plugin_versions, integration_endpoint_trusts, integration_instances, plugin_permission_grants,
+  plugin_publishers,
 };
 use crate::services::plugin_store::PluginPackageService;
 use crate::services::service_capabilities::{
@@ -292,7 +297,17 @@ impl RuntimeRouter {
       package_permission_request_digest: &version.permission_request_digest,
     };
     verify_grant_canonical_bind(&bind, &bundle, &manifest, package_digest, grant_revision, capability_id)?;
-    validate_instance_configured_origins(&instance.config_json, &manifest, &bundle)?;
+    validate_instance_configured_origins(
+      &self.db,
+      instance.id,
+      &instance.plugin_id,
+      &version.version,
+      &instance.runtime_kind,
+      package_digest,
+      &instance.config_json,
+      &manifest,
+      &bundle,
+    )?;
 
     let grant = bundle_to_execution_grant_set(&bundle).map_err(|e| {
       CapabilityError::new(
@@ -585,7 +600,17 @@ impl RuntimeRouter {
       })?,
     };
     verify_grant_canonical_bind(&bind, bundle, &manifest, package_digest, grant_revision, capability_id)?;
-    validate_instance_configured_origins(&pin.instance_config_json, &manifest, bundle)?;
+    validate_instance_configured_origins(
+      &self.db,
+      pin.instance_id,
+      &pin.plugin_id,
+      pin.package_plugin_version.as_deref().unwrap_or_default(),
+      &pin.runtime_kind,
+      package_digest,
+      &pin.instance_config_json,
+      &manifest,
+      bundle,
+    )?;
     let grant = bundle_to_execution_grant_set(bundle).map_err(|e| {
       CapabilityError::new(
         CapabilityErrorCode::InvalidConfiguration,
@@ -731,6 +756,12 @@ impl RuntimeRouter {
 /// if present, otherwise the package default `runtime.artifact`. Supports packages shipping
 /// one component per WIT world (e.g. translate.text + translate.detect) behind one plugin id.
 fn validate_instance_configured_origins(
+  db: &Database,
+  instance_id: Uuid,
+  plugin_id: &str,
+  plugin_version: &str,
+  runtime_kind: &str,
+  package_digest: &str,
   config_json: &str,
   manifest: &PluginManifestV1,
   grant: &ExecutionGrantSetBundle,
@@ -741,6 +772,14 @@ fn validate_instance_configured_origins(
       "integration config is not valid JSON",
     )
   })?;
+  let configuration_fingerprint = configuration_fingerprint(config_json)
+    .map_err(|message| CapabilityError::new(CapabilityErrorCode::InvalidConfiguration, message))?;
+  let runtime_identity_fingerprint = runtime_identity_fingerprint(RuntimeIdentityFingerprintInput {
+    plugin_id,
+    plugin_version,
+    runtime_kind,
+    package_digest: Some(package_digest),
+  });
   for endpoint in manifest
     .permissions
     .network
@@ -753,13 +792,22 @@ fn validate_instance_configured_origins(
       .and_then(serde_json::Value::as_str)
       .unwrap_or("")
       .trim();
-    let granted_origins: HashSet<&str> = grant
+    let entries: Vec<_> = grant
       .network
       .iter()
       .filter(|entry| entry.endpoint_id == endpoint.id)
-      .map(|entry| entry.origin.as_str())
       .collect();
-    if granted_origins.is_empty() {
+    let granted_base_urls: HashSet<&str> = entries
+      .iter()
+      .map(|entry| {
+        if entry.base_url.is_empty() {
+          entry.origin.as_str()
+        } else {
+          entry.base_url.as_str()
+        }
+      })
+      .collect();
+    if granted_base_urls.is_empty() {
       continue;
     }
     if raw.is_empty() {
@@ -771,9 +819,20 @@ fn validate_instance_configured_origins(
         ),
       ));
     }
-    let normalized = crate::services::google_translate_web::normalize_proxy_url(raw)
-      .map_err(|message| CapabilityError::new(CapabilityErrorCode::InvalidConfiguration, message))?;
-    if granted_origins.len() != 1 || !granted_origins.contains(normalized.origin.as_str()) {
+    let (normalized_base_url, normalized_origin) = if field == "base-url" {
+      let normalized = crate::services::edge_tts::normalize_edge_tts_base_url(raw)
+        .map_err(|message| CapabilityError::new(CapabilityErrorCode::InvalidConfiguration, message))?;
+      let origin = url::Url::parse(&normalized.canonical_url)
+        .map_err(|message| CapabilityError::new(CapabilityErrorCode::InvalidConfiguration, message.to_string()))?
+        .origin()
+        .ascii_serialization();
+      (normalized.canonical_url, origin)
+    } else {
+      let normalized = crate::services::google_translate_web::normalize_proxy_url(raw)
+        .map_err(|message| CapabilityError::new(CapabilityErrorCode::InvalidConfiguration, message))?;
+      (normalized.origin.clone(), normalized.origin)
+    };
+    if granted_base_urls.len() != 1 || !granted_base_urls.contains(normalized_base_url.as_str()) {
       return Err(CapabilityError::new(
         CapabilityErrorCode::PermissionDenied,
         format!(
@@ -781,6 +840,51 @@ fn validate_instance_configured_origins(
           endpoint.id
         ),
       ));
+    }
+    for entry in entries {
+      let origin_kind = NetworkOriginKind::parse(&entry.origin_kind).map_err(|_| {
+        CapabilityError::new(
+          CapabilityErrorCode::PermissionDenied,
+          "grant network origin provenance is invalid",
+        )
+      })?;
+      if origin_kind == NetworkOriginKind::UserApprovedInstance {
+        if plugin_id != crate::domain::service_integration::EDGE_TTS_PLUGIN_ID
+          || endpoint.id != EDGE_TTS_TRUST_ENDPOINT_ALIAS
+          || field != "base-url"
+          || entry.origin != normalized_origin
+          || (if entry.base_url.is_empty() {
+            entry.origin.as_str()
+          } else {
+            entry.base_url.as_str()
+          }) != normalized_base_url
+        {
+          return Err(CapabilityError::new(
+            CapabilityErrorCode::PermissionDenied,
+            "user-approved network origin is not valid for this endpoint",
+          ));
+        }
+        let approved = db
+          .read(|conn| {
+            integration_endpoint_trusts::get_exact(
+              conn,
+              instance_id,
+              plugin_id,
+              plugin_version,
+              EDGE_TTS_TRUST_ENDPOINT_ALIAS,
+              &normalized_base_url,
+              &configuration_fingerprint,
+              &runtime_identity_fingerprint,
+            )
+          })
+          .map_err(|error| map_storage_capability(error, "failed to validate endpoint approval"))?;
+        if approved.is_none() {
+          return Err(CapabilityError::new(
+            CapabilityErrorCode::EndpointTrustRequired,
+            "custom endpoint approval is stale or missing",
+          ));
+        }
+      }
     }
   }
   Ok(())
@@ -926,6 +1030,9 @@ fn map_storage_capability(err: StorageError, fallback: &str) -> CapabilityError 
   match err {
     StorageError::NotFound(msg) => CapabilityError::new(CapabilityErrorCode::PluginUnavailable, msg),
     StorageError::PluginUnavailable(msg) => CapabilityError::new(CapabilityErrorCode::PluginUnavailable, msg),
+    StorageError::EndpointTrustRequired(msg) | StorageError::EndpointTrustStale(msg) => {
+      CapabilityError::new(CapabilityErrorCode::EndpointTrustRequired, msg)
+    }
     StorageError::Validation(msg) => CapabilityError::new(CapabilityErrorCode::InvalidConfiguration, msg),
     StorageError::Conflict(msg) => CapabilityError::new(CapabilityErrorCode::Internal, msg),
     _ => CapabilityError::new(CapabilityErrorCode::Internal, fallback),
@@ -1101,18 +1208,38 @@ fn validate_manifest_bound_network_origin_kinds(
         "grant network origin provenance is invalid",
       )
     })?;
-    if actual != expected {
+    let user_approved_dynamic_edge = actual == NetworkOriginKind::UserApprovedInstance
+      && manifest.id == crate::domain::service_integration::EDGE_TTS_PLUGIN_ID
+      && endpoint.id == EDGE_TTS_TRUST_ENDPOINT_ALIAS
+      && endpoint.instance_origin_config_field.as_deref() == Some("base-url");
+    if actual != expected && !user_approved_dynamic_edge {
       return Err(CapabilityError::new(
         CapabilityErrorCode::PermissionDenied,
         "grant network origin provenance does not match verified manifest",
       ));
     }
-    if endpoint.instance_origin_config_field.is_none() && !endpoint.origins.iter().any(|origin| origin == &entry.origin)
-    {
+    let base_url = if entry.base_url.is_empty() {
+      entry.origin.as_str()
+    } else {
+      entry.base_url.as_str()
+    };
+    let base_url_origin = url::Url::parse(base_url)
+      .map_err(|_| CapabilityError::new(CapabilityErrorCode::PermissionDenied, "grant base URL is invalid"))?
+      .origin()
+      .ascii_serialization();
+    if base_url_origin != entry.origin {
       return Err(CapabilityError::new(
         CapabilityErrorCode::PermissionDenied,
-        "grant static origin is not declared by the verified manifest",
+        "grant base URL origin does not match grant origin",
       ));
+    }
+    if endpoint.instance_origin_config_field.is_none() {
+      if base_url != entry.origin || !endpoint.origins.iter().any(|origin| origin == &entry.origin) {
+        return Err(CapabilityError::new(
+          CapabilityErrorCode::PermissionDenied,
+          "grant static origin or base URL is not declared by the verified manifest",
+        ));
+      }
     }
     let method = parse_http_method(&entry.method)
       .map_err(|_| CapabilityError::new(CapabilityErrorCode::PermissionDenied, "grant network method is invalid"))?;
@@ -1202,11 +1329,18 @@ pub fn bundle_to_execution_grant_set(bundle: &ExecutionGrantSetBundle) -> Result
     let origin_kind = NetworkOriginKind::parse(&entry.origin_kind)?;
     let response_body_modes =
       crate::domain::plugin_resource::NetworkResponseBodyModes::parse(&entry.response_body_modes)?;
-    network.push(NetworkGrantEntry::with_mode_origin_and_response_modes(
+    let origin = HttpsOrigin::parse(&entry.origin)?;
+    let base_url = if entry.base_url.is_empty() {
+      entry.origin.clone()
+    } else {
+      entry.base_url.clone()
+    };
+    network.push(NetworkGrantEntry::with_mode_origin_and_response_modes_and_base_url(
       CapabilityId::parse(&entry.capability_id).map_err(|e| format!("{e:?}"))?,
       EndpointId::parse(&entry.endpoint_id)?,
-      HttpsOrigin::parse(&entry.origin)?,
+      origin,
       origin_kind,
+      base_url,
       method,
       AuthPolicyId::parse(&entry.auth_policy)?,
       mode,
@@ -1333,6 +1467,7 @@ mod tests {
       capability_id: "translate.text@1".into(),
       endpoint_id: "approved".into(),
       origin: "https://conformance.example".into(),
+      base_url: "https://conformance.example".into(),
       origin_kind: "instance_configured".into(),
       method: "GET".into(),
       auth_policy: "host.none.v1".into(),

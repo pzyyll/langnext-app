@@ -2668,6 +2668,8 @@ fn google_web_new_instance_pins_default_wasm_package() {
       config_json: r#"{"channel":"gtx"}"#.into(),
       credentials: vec![],
       expected_updated_at: None,
+      endpoint_trust_preview_id: None,
+      acknowledge_endpoint_trust: false,
     })
     .unwrap();
 
@@ -2700,6 +2702,8 @@ fn google_web_new_instance_falls_back_to_bundled_when_no_default_package() {
       config_json: r#"{"channel":"gtx"}"#.into(),
       credentials: vec![],
       expected_updated_at: None,
+      endpoint_trust_preview_id: None,
+      acknowledge_endpoint_trust: false,
     })
     .unwrap();
 

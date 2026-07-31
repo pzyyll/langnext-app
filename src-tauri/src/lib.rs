@@ -175,6 +175,7 @@ pub fn run() {
       cmds::service_integrations::list_service_integration_definitions,
       cmds::service_integrations::list_integration_instances,
       cmds::service_integrations::get_integration_instance,
+      cmds::service_integrations::preview_integration_endpoint_trust,
       cmds::service_integrations::save_integration_instance,
       cmds::service_integrations::set_integration_instance_enabled,
       cmds::service_integrations::list_integration_instance_dependencies,

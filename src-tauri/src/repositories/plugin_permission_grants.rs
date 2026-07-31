@@ -146,7 +146,7 @@ fn list_capabilities(conn: &Connection, grant_set_id: Uuid) -> Result<Vec<Capabi
 
 fn list_network(conn: &Connection, grant_set_id: Uuid) -> Result<Vec<NetworkGrantEntryRecord>, StorageError> {
   let mut stmt = conn.prepare(
-    "SELECT id, grant_set_id, capability_id, endpoint_id, origin, origin_kind, method, auth_policy,
+    "SELECT id, grant_set_id, capability_id, endpoint_id, origin, base_url, origin_kind, method, auth_policy,
             resource_mode, max_request_bytes, max_response_bytes, max_stream_bytes, timeout_ms,
             response_body_modes
      FROM execution_grant_network_entries
@@ -157,10 +157,10 @@ fn list_network(conn: &Connection, grant_set_id: Uuid) -> Result<Vec<NetworkGran
     .query_map(params![grant_set_id.to_string()], |row| {
       let id: String = row.get(0)?;
       let grant_id: String = row.get(1)?;
-      let max_request_bytes: i64 = row.get(9)?;
-      let max_response_bytes: i64 = row.get(10)?;
-      let max_stream_bytes: i64 = row.get(11)?;
-      let timeout_ms: i64 = row.get(12)?;
+      let max_request_bytes: i64 = row.get(10)?;
+      let max_response_bytes: i64 = row.get(11)?;
+      let max_stream_bytes: i64 = row.get(12)?;
+      let timeout_ms: i64 = row.get(13)?;
       Ok(NetworkGrantEntryRecord {
         id: Uuid::parse_str(&id)
           .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?,
@@ -169,15 +169,16 @@ fn list_network(conn: &Connection, grant_set_id: Uuid) -> Result<Vec<NetworkGran
         capability_id: row.get(2)?,
         endpoint_id: row.get(3)?,
         origin: row.get(4)?,
-        origin_kind: row.get(5)?,
-        method: row.get(6)?,
-        auth_policy: row.get(7)?,
-        resource_mode: row.get(8)?,
+        base_url: row.get(5)?,
+        origin_kind: row.get(6)?,
+        method: row.get(7)?,
+        auth_policy: row.get(8)?,
+        resource_mode: row.get(9)?,
         max_request_bytes: max_request_bytes as u64,
         max_response_bytes: max_response_bytes as u64,
         max_stream_bytes: max_stream_bytes as u64,
         timeout_ms: timeout_ms as u64,
-        response_body_modes: row.get(13)?,
+        response_body_modes: row.get(14)?,
       })
     })?
     .collect::<Result<Vec<_>, _>>()?;
@@ -277,16 +278,21 @@ pub fn insert_bundle(conn: &Connection, bundle: &ExecutionGrantSetBundle) -> Res
     conn
       .execute(
         "INSERT INTO execution_grant_network_entries (
-              id, grant_set_id, capability_id, endpoint_id, origin, origin_kind, method, auth_policy,
+              id, grant_set_id, capability_id, endpoint_id, origin, base_url, origin_kind, method, auth_policy,
               resource_mode, max_request_bytes, max_response_bytes, max_stream_bytes, timeout_ms,
               response_body_modes
-          ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+          ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
         params![
           net.id.to_string(),
           net.grant_set_id.to_string(),
           net.capability_id,
           net.endpoint_id,
           net.origin,
+          if net.base_url.is_empty() {
+            net.origin.clone()
+          } else {
+            net.base_url.clone()
+          },
           net.origin_kind,
           net.method,
           net.auth_policy,
