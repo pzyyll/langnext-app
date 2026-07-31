@@ -135,7 +135,7 @@ function TranslatePage() {
   const [sourceText, setSourceText] = useState(boot.workspace.sourceText);
   const [outputText, setOutputText] = useState(boot.workspace.outputText);
   /** Effective target language used to generate the current output; null when no translation has completed. */
-  const [outputEffectiveLang, setOutputEffectiveLang] = useState<LanguageId | null>(null);
+  const [outputEffectiveLang, setOutputEffectiveLang] = useState<LanguageId | null>(boot.workspace.outputEffectiveLang);
   /** Stash the effective target for the in-flight translation so stream callbacks can record it on success. */
   const pendingOutputEffectiveLang = useRef<LanguageId | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(boot.workspace.errorMessage);
@@ -245,6 +245,7 @@ function TranslatePage() {
       sourceText,
       outputText,
       detectedSourceLang,
+      outputEffectiveLang,
       latencyMs,
       activeModelLabel,
       errorMessage,
@@ -262,7 +263,7 @@ function TranslatePage() {
     setSelectedPromptTemplateId(workspace.promptTemplateId);
     setSourceText(workspace.sourceText);
     setOutputText(workspace.outputText);
-    setOutputEffectiveLang(null);
+    setOutputEffectiveLang(workspace.outputEffectiveLang);
     setDetectedSourceLang(workspace.detectedSourceLang);
     setLatencyMs(workspace.latencyMs);
     setActiveModelLabel(workspace.activeModelLabel);
@@ -404,6 +405,7 @@ function TranslatePage() {
     sourceText,
     outputText,
     detectedSourceLang,
+    outputEffectiveLang,
     latencyMs,
     activeModelLabel,
     errorMessage,
@@ -657,6 +659,7 @@ function TranslatePage() {
     setStreamOutputActive(false);
     setActiveModelLabel(null);
     setDetectedSourceLang(null);
+    setOutputEffectiveLang(null);
     if (hadActive) {
       showStoppedToast();
     }

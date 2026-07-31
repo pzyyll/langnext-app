@@ -50,6 +50,12 @@ export interface TranslateWorkspace {
   sourceText: string;
   outputText: string;
   detectedSourceLang: LanguageId | null;
+  /**
+   * Effective concrete target language used to generate the stored output text; null when
+   * the output is empty or no translation has completed (e.g. legacy rows). Drives result-pane
+   * speech playback; persisted so the speak button stays usable after a page remount.
+   */
+  outputEffectiveLang: LanguageId | null;
   latencyMs: number | null;
   activeModelLabel: string | null;
   errorMessage: string | null;
@@ -119,6 +125,7 @@ export function createTranslateWorkspace(
     sourceText: "",
     outputText: "",
     detectedSourceLang: null,
+    outputEffectiveLang: null,
     latencyMs: null,
     activeModelLabel: null,
     errorMessage: null,
@@ -146,6 +153,9 @@ export function normalizeTranslateWorkspace(raw: unknown, now = Date.now()): Tra
     typeof record.detectedSourceLang === "string" && isLanguageId(record.detectedSourceLang)
       ? record.detectedSourceLang
       : null;
+  const outputEffectiveLangRaw = record.outputEffectiveLang;
+  const outputEffectiveLang =
+    typeof outputEffectiveLangRaw === "string" && isLanguageId(outputEffectiveLangRaw) ? outputEffectiveLangRaw : null;
 
   const latencyRaw = record.latencyMs;
   const latencyMs =
@@ -168,6 +178,7 @@ export function normalizeTranslateWorkspace(raw: unknown, now = Date.now()): Tra
     sourceText: clampText(typeof record.sourceText === "string" ? record.sourceText : ""),
     outputText: clampText(typeof record.outputText === "string" ? record.outputText : ""),
     detectedSourceLang: detected,
+    outputEffectiveLang,
     latencyMs,
     activeModelLabel: typeof record.activeModelLabel === "string" ? record.activeModelLabel : null,
     errorMessage: typeof record.errorMessage === "string" ? record.errorMessage : null,

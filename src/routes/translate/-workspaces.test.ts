@@ -88,6 +88,7 @@ describe("normalizeTranslateWorkspace", () => {
       sourceText: "你好",
       outputText: "Hello",
       detectedSourceLang: "zh",
+      outputEffectiveLang: "en",
       latencyMs: 120.2,
       activeModelLabel: "GPT",
       errorMessage: null,
@@ -107,6 +108,7 @@ describe("normalizeTranslateWorkspace", () => {
       sourceText: "你好",
       outputText: "Hello",
       detectedSourceLang: "zh",
+      outputEffectiveLang: "en",
       latencyMs: 120,
       activeModelLabel: "GPT",
       errorMessage: null,
@@ -152,6 +154,14 @@ describe("normalizeTranslateWorkspace", () => {
     expect(ws?.sourceLang).toBe("auto");
     expect(ws?.targetLang).toBe("auto");
     expect(ws?.detectedSourceLang).toBeNull();
+  });
+
+  test("defaults outputEffectiveLang to null when missing or invalid", () => {
+    const missing = normalizeTranslateWorkspace({ id: "w1", name: "A", outputText: "hi" });
+    expect(missing?.outputEffectiveLang).toBeNull();
+
+    const invalid = normalizeTranslateWorkspace({ id: "w2", name: "B", outputEffectiveLang: "nonsense" });
+    expect(invalid?.outputEffectiveLang).toBeNull();
   });
 });
 
