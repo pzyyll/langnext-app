@@ -1,2 +1,2 @@
 # Reformat commits to hide from git blame.
-# Add the oxfmt migration commit SHA here after it lands.
+e16c5d4 chore(format): migrate formatter from Prettier to oxfmt
