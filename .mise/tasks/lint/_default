@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# ABOUTME: Run ESLint across the project
+# ABOUTME: Run ESLint (authoritative) then oxlint (fast correctness companion)
 # ABOUTME: Run via `mise run lint`
-#MISE description="Run ESLint"
+#MISE description="Run ESLint and oxlint"
 set -euo pipefail
 eslint .
+oxlint .

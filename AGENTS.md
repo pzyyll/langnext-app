@@ -51,7 +51,8 @@ mise run dev           # Run the Vite frontend
 mise run build         # Typecheck and build the frontend
 mise run typecheck     # Run tsc --noEmit
 mise run preview       # Preview the Vite production build
-mise run lint          # Run ESLint
+mise run lint          # Run ESLint (authoritative) + oxlint (fast companion)
+mise run lint:oxlint   # Run oxlint only
 mise run format        # Write Prettier and cargo fmt changes
 mise run format:check  # Check Prettier and cargo fmt formatting
 mise run tauri:dev     # Run the desktop application

@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# ABOUTME: Run only oxlint (fast subset of lint; ESLint stays authoritative)
+# ABOUTME: Run via `mise run lint:oxlint`
+#MISE description="Run oxlint only"
+set -euo pipefail
+oxlint .

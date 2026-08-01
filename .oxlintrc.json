@@ -1,0 +1,37 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  // ABOUTME: oxlint companion config to eslint.config.js (ESLint stays authoritative).
+  // ABOUTME: Mirrors the migratable subset: correctness category + react-hooks/react-refresh ports.
+  "plugins": ["unicorn", "typescript", "oxc", "react"],
+  "env": {
+    "browser": true
+  },
+  "ignorePatterns": [
+    "dist",
+    "src-tauri",
+    "node_modules",
+    "src/routeTree.gen.ts",
+    "src/test/**",
+    ".agents",
+    ".worktrees"
+  ],
+  "categories": {
+    "correctness": "error"
+  },
+  "rules": {
+    // react-hooks v7 ports present in oxlint; severity mirrors eslint.config.js.
+    "react/rules-of-hooks": "error",
+    "react/exhaustive-deps": "warn",
+    // react-refresh/only-export-components with the same allowConstantExport option.
+    "react/only-export-components": ["warn", { "allowConstantExport": true }]
+  },
+  "overrides": [
+    {
+      // TanStack file routes export `Route` alongside page components.
+      "files": ["src/routes/**/*.{ts,tsx}"],
+      "rules": {
+        "react/only-export-components": "off"
+      }
+    }
+  ]
+}
