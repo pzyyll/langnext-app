@@ -5,15 +5,17 @@ use crate::domain::cancel::CancelToken;
 use crate::domain::runtime_plugin::{ComponentArtifactDigest, ExecutionGrantSet, PackageDigest, PluginPrincipal};
 use crate::domain::service_capability::{
   CapabilityError, CapabilityErrorCode, DetectLanguageRequest, DetectLanguageResponse, ExecutionContext,
-  SPEECH_AUDIO_MAX_BYTES, SpeechSynthesizeRequest, SpeechSynthesizeResponse, TranslateTextRequest,
-  TranslateTextResponse, validate_capability_language_id, validate_capability_request_id, validate_capability_text,
-  validate_speech_synthesize_text,
+  OcrImageRequest, OcrImageResponse, ProviderAttemptTracker, SPEECH_AUDIO_MAX_BYTES, SpeechSynthesizeRequest,
+  SpeechSynthesizeResponse, TranslateTextRequest, TranslateTextResponse, validate_capability_language_id,
+  validate_capability_request_id, validate_capability_text, validate_ocr_png_bounds, validate_speech_synthesize_text,
 };
 use crate::services::service_capabilities::{
-  DetectLanguageCapability, SpeechSynthesizeCapability, TranslateTextCapability,
+  DetectLanguageCapability, OcrImageCapability, SpeechSynthesizeCapability, TranslateTextCapability,
 };
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
+#[cfg(test)]
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use uuid::Uuid;
@@ -23,8 +25,16 @@ use super::bindings::translate_text;
 use super::cache::{CACHE_HOST_API_VERSION, CompiledComponentCache, component_cache_identity};
 use super::engine::{WasmEngine, host_target_triple};
 use super::errors::{map_instantiate_error, map_wasmtime_error};
+use super::host::BlobResource;
 use super::host::BrokerHandle;
-use super::store::{EPOCH_TICK_INTERVAL, PluginHostState, build_store, new_state};
+use super::store::{
+  EPOCH_TICK_INTERVAL, PluginHostState, build_store, new_state, new_state_with_fuel_and_provider_attempt,
+  new_state_with_provider_attempt,
+};
+use crate::domain::plugin_resource::{ResourceCreateParams, ResourceDirection, ResourceOwner};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use image::ImageReader;
+use std::io::Cursor;
 
 /// Re-export of the generated translate-text export-interface module for request/response types.
 use translate_text::exports::langnext::runtime_plugin::translate_text as tt_export;
@@ -38,6 +48,8 @@ pub const SPEECH_INVOCATION_TIMEOUT: Duration = Duration::from_secs(60);
 pub const CONFIG_MAX_BYTES: usize = 64 * 1024;
 /// Maximum UTF-8 bytes accepted in copied preferences JSON.
 pub const PREFERENCES_MAX_BYTES: usize = 64 * 1024;
+/// Fuel for bounded binary payload guests whose base64/JSON work is larger than text calls.
+pub const PAYLOAD_INVOCATION_FUEL: u64 = 100_000_000;
 
 /// A Component that has passed package+artifact digest verification at compile time. Fields are
 /// private so callers cannot construct one from a raw `Component` or mix digests. Execution APIs
@@ -78,6 +90,9 @@ pub struct WasmRuntime {
   /// Test-only side effect invoked at the start of `compile_component` (simulates mid-compile races).
   #[cfg(test)]
   compile_side_effect: std::sync::Mutex<Option<Box<dyn FnMut() + Send>>>,
+  /// Test-only request cleanup observer; production execution has no observer state.
+  #[cfg(test)]
+  cleanup_probe: Mutex<Option<Arc<AtomicBool>>>,
 }
 
 impl WasmRuntime {
@@ -95,7 +110,25 @@ impl WasmRuntime {
       epoch_ticker,
       #[cfg(test)]
       compile_side_effect: std::sync::Mutex::new(None),
+      #[cfg(test)]
+      cleanup_probe: Mutex::new(None),
     })
+  }
+
+  /// Install a request cleanup observer for host-resource lifecycle assertions.
+  #[cfg(test)]
+  pub fn set_cleanup_probe(&self, probe: Arc<AtomicBool>) {
+    *self.cleanup_probe.lock().unwrap_or_else(|error| error.into_inner()) = Some(probe);
+  }
+
+  #[cfg(test)]
+  fn attach_cleanup_probe(&self, mut state: PluginHostState) -> PluginHostState {
+    state.cleanup_probe = self
+      .cleanup_probe
+      .lock()
+      .unwrap_or_else(|error| error.into_inner())
+      .clone();
+    state
   }
 
   /// Install a one-shot side effect that runs at the start of the next `compile_component` call.
@@ -204,6 +237,35 @@ impl WasmRuntime {
     preferences: Vec<u8>,
     request: TranslateTextRequest,
   ) -> Result<TranslateTextResponse, CapabilityError> {
+    self
+      .execute_translate_text_with_attempt(
+        verified,
+        principal,
+        grant,
+        cancel,
+        deadline,
+        broker,
+        config,
+        preferences,
+        request,
+        None,
+      )
+      .await
+  }
+
+  pub async fn execute_translate_text_with_attempt(
+    &self,
+    verified: &VerifiedComponent,
+    principal: PluginPrincipal,
+    grant: ExecutionGrantSet,
+    cancel: CancelToken,
+    deadline: Option<Instant>,
+    broker: Box<dyn BrokerHandle>,
+    config: Vec<u8>,
+    preferences: Vec<u8>,
+    request: TranslateTextRequest,
+    provider_attempt: Option<ProviderAttemptTracker>,
+  ) -> Result<TranslateTextResponse, CapabilityError> {
     // Authorization at invocation start: package identity + principal↔grant before guest work.
     enforce_package_binding(&principal, verified)?;
     grant
@@ -213,7 +275,7 @@ impl WasmRuntime {
     validate_copied_json(&preferences, PREFERENCES_MAX_BYTES, "preferences")?;
     validate_translate_text_request(principal.request_id().as_str(), &request)?;
     let cancel = cancel.clone();
-    let state = new_state(principal, grant, cancel.clone(), deadline, broker);
+    let state = new_state_with_provider_attempt(principal, grant, cancel.clone(), deadline, broker, provider_attempt);
     let mut store = build_store(self.engine.engine(), state);
     let mut linker = wasmtime::component::Linker::new(self.engine.engine());
     translate_text::TranslateTextWorld::add_to_linker::<_, HasSelf<PluginHostState>>(&mut linker, |state| state)
@@ -231,10 +293,13 @@ impl WasmRuntime {
       target_language_id: request.target_language_id,
     };
 
+    let provider_attempt = store.data().provider_attempt.clone();
     let call_result = run_with_interruption(
       deadline,
       cancel,
       guest.call_text(&mut store, &config, &preferences, &wit_request),
+      provider_attempt,
+      DEFAULT_INVOCATION_TIMEOUT,
     )
     .await;
 
@@ -275,6 +340,35 @@ impl WasmRuntime {
     preferences: Vec<u8>,
     request: DetectLanguageRequest,
   ) -> Result<DetectLanguageResponse, CapabilityError> {
+    self
+      .execute_translate_detect_with_attempt(
+        verified,
+        principal,
+        grant,
+        cancel,
+        deadline,
+        broker,
+        config,
+        preferences,
+        request,
+        None,
+      )
+      .await
+  }
+
+  pub async fn execute_translate_detect_with_attempt(
+    &self,
+    verified: &VerifiedComponent,
+    principal: PluginPrincipal,
+    grant: ExecutionGrantSet,
+    cancel: CancelToken,
+    deadline: Option<Instant>,
+    broker: Box<dyn BrokerHandle>,
+    config: Vec<u8>,
+    preferences: Vec<u8>,
+    request: DetectLanguageRequest,
+    provider_attempt: Option<ProviderAttemptTracker>,
+  ) -> Result<DetectLanguageResponse, CapabilityError> {
     use super::bindings::translate_detect;
     use translate_detect::exports::langnext::runtime_plugin::translate_detect as td_export;
     // Authorization at invocation start: package identity + principal↔grant.
@@ -287,7 +381,7 @@ impl WasmRuntime {
     validate_capability_request_id(principal.request_id().as_str())?;
     validate_capability_text(&request.text)?;
     let cancel = cancel.clone();
-    let state = new_state(principal, grant, cancel.clone(), deadline, broker);
+    let state = new_state_with_provider_attempt(principal, grant, cancel.clone(), deadline, broker, provider_attempt);
     let mut store = build_store(self.engine.engine(), state);
     let mut linker = wasmtime::component::Linker::new(self.engine.engine());
     translate_detect::TranslateDetectWorld::add_to_linker::<_, HasSelf<PluginHostState>>(&mut linker, |state| state)
@@ -300,10 +394,13 @@ impl WasmRuntime {
       request_id: store.data().principal.request_id().as_str().to_string(),
       text: request.text,
     };
+    let provider_attempt = store.data().provider_attempt.clone();
     let call_result = run_with_interruption(
       deadline,
       cancel,
       guest.call_detect(&mut store, &config, &preferences, &wit_request),
+      provider_attempt,
+      DEFAULT_INVOCATION_TIMEOUT,
     )
     .await;
     match call_result {
@@ -328,6 +425,125 @@ impl WasmRuntime {
     }
   }
 
+  /// Execute `ocr.image@1` against a [`VerifiedComponent`]. The host decodes and validates the
+  /// frontend base64 input, then transfers only an owned input BlobHandle into the guest.
+  pub async fn execute_ocr_image(
+    &self,
+    verified: &VerifiedComponent,
+    principal: PluginPrincipal,
+    grant: ExecutionGrantSet,
+    cancel: CancelToken,
+    deadline: Option<Instant>,
+    broker: Box<dyn BrokerHandle>,
+    config: Vec<u8>,
+    request: OcrImageRequest,
+  ) -> Result<OcrImageResponse, CapabilityError> {
+    self
+      .execute_ocr_image_with_attempt(
+        verified, principal, grant, cancel, deadline, broker, config, request, None,
+      )
+      .await
+  }
+
+  pub async fn execute_ocr_image_with_attempt(
+    &self,
+    verified: &VerifiedComponent,
+    principal: PluginPrincipal,
+    grant: ExecutionGrantSet,
+    cancel: CancelToken,
+    deadline: Option<Instant>,
+    broker: Box<dyn BrokerHandle>,
+    config: Vec<u8>,
+    request: OcrImageRequest,
+    provider_attempt: Option<ProviderAttemptTracker>,
+  ) -> Result<OcrImageResponse, CapabilityError> {
+    use super::bindings::ocr_image;
+    use ocr_image::exports::langnext::runtime_plugin::ocr_image as oi_export;
+
+    enforce_package_binding(&principal, verified)?;
+    grant
+      .grants_capability(&principal)
+      .map_err(|_| CapabilityError::new(CapabilityErrorCode::PermissionDenied, "principal not authorized"))?;
+    validate_copied_json(&config, CONFIG_MAX_BYTES, "config")?;
+    validate_capability_request_id(principal.request_id().as_str())?;
+    crate::domain::service_capability::validate_ocr_image_preferences(&request.preferences)?;
+    let input_bytes = decode_and_validate_ocr_png_bytes(&request.png_base64)?;
+
+    let cancel = cancel.clone();
+    let state = new_state_with_fuel_and_provider_attempt(
+      principal,
+      grant,
+      cancel.clone(),
+      deadline,
+      broker,
+      PAYLOAD_INVOCATION_FUEL,
+      provider_attempt,
+    );
+    #[cfg(test)]
+    let state = self.attach_cleanup_probe(state);
+    let mut state = state;
+    let input_id = state
+      .blobs
+      .create_with_bytes(
+        ResourceCreateParams {
+          owner: ResourceOwner::from_principal(&state.principal),
+          direction: ResourceDirection::Input,
+          content_type: Some("image/png".into()),
+          max_bytes: input_bytes.len().max(1) as u64,
+          expires_at: None,
+          cancel: cancel.clone(),
+        },
+        input_bytes,
+      )
+      .map_err(|_| CapabilityError::new(CapabilityErrorCode::Internal, "failed to create OCR input blob"))?;
+    let mut store = build_store(self.engine.engine(), state);
+    let input_handle = store
+      .data_mut()
+      .table
+      .push(BlobResource { id: input_id })
+      .map_err(|_| CapabilityError::new(CapabilityErrorCode::Internal, "failed to bind OCR input blob"))?;
+    let mut linker = wasmtime::component::Linker::new(self.engine.engine());
+    ocr_image::OcrImageWorld::add_to_linker::<_, HasSelf<PluginHostState>>(&mut linker, |state| state)
+      .map_err(map_instantiate_error)?;
+    let world = ocr_image::OcrImageWorld::instantiate_async(&mut store, verified.component(), &linker)
+      .await
+      .map_err(map_instantiate_error)?;
+    let guest = world.langnext_runtime_plugin_ocr_image();
+    let wit_request = oi_export::ImageRequest {
+      request_id: store.data().principal.request_id().as_str().to_string(),
+      input: input_handle,
+      preferences: oi_export::OcrPreferences {
+        operation: Some(request.preferences.operation.as_str().to_string()),
+        language_hints: request.preferences.language_hints,
+      },
+    };
+    let provider_attempt = store.data().provider_attempt.clone();
+    let call_result = run_with_interruption(
+      deadline,
+      cancel,
+      guest.call_image(&mut store, &config, &wit_request),
+      provider_attempt,
+      DEFAULT_INVOCATION_TIMEOUT,
+    )
+    .await;
+    // Dropping the request store releases the input blob on every success, guest error, trap,
+    // cancellation, and limit path before the host returns to the workflow.
+    drop(store);
+    match call_result {
+      Ok(Ok(response)) => {
+        if response.text.len() > crate::domain::service_capability::CAPABILITY_TEXT_MAX_BYTES {
+          return Err(CapabilityError::new(
+            CapabilityErrorCode::InvalidResponse,
+            "OCR response exceeds host response bound",
+          ));
+        }
+        Ok(OcrImageResponse { text: response.text })
+      }
+      Ok(Err(plugin_error)) => Err(map_ocr_image_plugin_error(plugin_error)),
+      Err(capability_error) => Err(capability_error),
+    }
+  }
+
   /// Execute `speech.synthesize@1` against a [`VerifiedComponent`]. Returns bounded MP3 bytes
   /// taken from the host-owned output blob; binary never crosses as base64.
   pub async fn execute_speech_synthesize(
@@ -340,6 +556,25 @@ impl WasmRuntime {
     broker: Box<dyn BrokerHandle>,
     config: Vec<u8>,
     request: SpeechSynthesizeRequest,
+  ) -> Result<SpeechSynthesizeResponse, CapabilityError> {
+    self
+      .execute_speech_synthesize_with_attempt(
+        verified, principal, grant, cancel, deadline, broker, config, request, None,
+      )
+      .await
+  }
+
+  pub async fn execute_speech_synthesize_with_attempt(
+    &self,
+    verified: &VerifiedComponent,
+    principal: PluginPrincipal,
+    grant: ExecutionGrantSet,
+    cancel: CancelToken,
+    deadline: Option<Instant>,
+    broker: Box<dyn BrokerHandle>,
+    config: Vec<u8>,
+    request: SpeechSynthesizeRequest,
+    provider_attempt: Option<ProviderAttemptTracker>,
   ) -> Result<SpeechSynthesizeResponse, CapabilityError> {
     use super::bindings::speech_synthesize;
     use speech_synthesize::exports::langnext::runtime_plugin::speech_synthesize as ss_export;
@@ -356,8 +591,21 @@ impl WasmRuntime {
     validate_speech_synthesize_text(&request.text)?;
     validate_capability_language_id(&request.language_id, "language_id")?;
 
+    // Speech uses a longer wall bound than translate when no explicit deadline is set. The same
+    // effective deadline must reach the host store so broker imports honor the 60-second grant.
+    let speech_deadline = deadline.or_else(|| Some(Instant::now() + SPEECH_INVOCATION_TIMEOUT));
     let cancel = cancel.clone();
-    let state = new_state(principal, grant, cancel.clone(), deadline, broker);
+    let state = new_state_with_fuel_and_provider_attempt(
+      principal,
+      grant,
+      cancel.clone(),
+      speech_deadline,
+      broker,
+      PAYLOAD_INVOCATION_FUEL,
+      provider_attempt,
+    );
+    #[cfg(test)]
+    let state = self.attach_cleanup_probe(state);
     let mut store = build_store(self.engine.engine(), state);
     let mut linker = wasmtime::component::Linker::new(self.engine.engine());
     speech_synthesize::SpeechSynthesizeWorld::add_to_linker::<_, HasSelf<PluginHostState>>(&mut linker, |s| s)
@@ -373,12 +621,13 @@ impl WasmRuntime {
       preferences,
     };
 
-    // Speech uses a longer wall bound than translate when no explicit deadline is set.
-    let speech_deadline = deadline.or_else(|| Some(Instant::now() + SPEECH_INVOCATION_TIMEOUT));
+    let provider_attempt = store.data().provider_attempt.clone();
     let call_result = run_with_interruption(
       speech_deadline,
       cancel.clone(),
       guest.call_synthesize(&mut store, &config, &wit_request),
+      provider_attempt,
+      SPEECH_INVOCATION_TIMEOUT,
     )
     .await;
 
@@ -629,7 +878,7 @@ impl TranslateTextCapability for WasmTranslateTextAdapter {
       let cancel = context.cancel.clone();
       let deadline = context.deadline.map(|d| Instant::now() + d);
       runtime
-        .execute_translate_text(
+        .execute_translate_text_with_attempt(
           &verified,
           principal,
           grant,
@@ -639,6 +888,7 @@ impl TranslateTextCapability for WasmTranslateTextAdapter {
           config,
           preferences,
           request,
+          Some(context.provider_attempt.clone()),
         )
         .await
     })
@@ -701,7 +951,7 @@ impl DetectLanguageCapability for WasmDetectLanguageAdapter {
       let cancel = context.cancel.clone();
       let deadline = context.deadline.map(|d| Instant::now() + d);
       runtime
-        .execute_translate_detect(
+        .execute_translate_detect_with_attempt(
           &verified,
           principal,
           grant,
@@ -711,6 +961,72 @@ impl DetectLanguageCapability for WasmDetectLanguageAdapter {
           config,
           preferences,
           request,
+          Some(context.provider_attempt.clone()),
+        )
+        .await
+    })
+  }
+}
+
+/// Adapter wrapping [`WasmRuntime`] for `ocr.image@1`. The request's base64 is decoded only by
+/// the host before it becomes an input BlobHandle.
+pub struct WasmOcrImageAdapter {
+  runtime: Arc<WasmRuntime>,
+  verified: Arc<VerifiedComponent>,
+  grant: ExecutionGrantSet,
+  capability_id: String,
+  config: Vec<u8>,
+  broker_factory: Arc<dyn Fn() -> Box<dyn BrokerHandle> + Send + Sync>,
+}
+
+impl WasmOcrImageAdapter {
+  pub fn new(
+    runtime: Arc<WasmRuntime>,
+    verified: Arc<VerifiedComponent>,
+    grant: ExecutionGrantSet,
+    capability_id: impl Into<String>,
+    config: Vec<u8>,
+    broker_factory: Arc<dyn Fn() -> Box<dyn BrokerHandle> + Send + Sync>,
+  ) -> Self {
+    Self {
+      runtime,
+      verified,
+      grant,
+      capability_id: capability_id.into(),
+      config,
+      broker_factory,
+    }
+  }
+}
+
+impl OcrImageCapability for WasmOcrImageAdapter {
+  fn recognize(
+    &self,
+    instance_id: Uuid,
+    request: OcrImageRequest,
+    context: ExecutionContext,
+  ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<OcrImageResponse, CapabilityError>> + Send + '_>> {
+    let runtime = self.runtime.clone();
+    let verified = self.verified.clone();
+    let grant = self.grant.clone();
+    let capability_id = self.capability_id.clone();
+    let config = self.config.clone();
+    let broker = (self.broker_factory)();
+    Box::pin(async move {
+      let principal = principal_from_context(&grant, &capability_id, instance_id, &context)?;
+      let cancel = context.cancel.clone();
+      let deadline = context.deadline.map(|d| Instant::now() + d);
+      runtime
+        .execute_ocr_image_with_attempt(
+          &verified,
+          principal,
+          grant,
+          cancel,
+          deadline,
+          broker,
+          config,
+          request,
+          Some(context.provider_attempt.clone()),
         )
         .await
     })
@@ -771,7 +1087,17 @@ impl SpeechSynthesizeCapability for WasmSpeechSynthesizeAdapter {
         .map(|d| Instant::now() + d)
         .or_else(|| Some(Instant::now() + SPEECH_INVOCATION_TIMEOUT));
       runtime
-        .execute_speech_synthesize(&verified, principal, grant, cancel, deadline, broker, config, request)
+        .execute_speech_synthesize_with_attempt(
+          &verified,
+          principal,
+          grant,
+          cancel,
+          deadline,
+          broker,
+          config,
+          request,
+          Some(context.provider_attempt.clone()),
+        )
         .await
     })
   }
@@ -879,6 +1205,81 @@ fn validate_translate_text_request(request_id: &str, request: &TranslateTextRequ
   Ok(())
 }
 
+fn decode_and_validate_ocr_png_bytes(png_base64: &str) -> Result<Vec<u8>, CapabilityError> {
+  let trimmed = png_base64.trim();
+  if trimmed.is_empty() {
+    return Err(CapabilityError::new(
+      CapabilityErrorCode::InvalidRequest,
+      "png_base64 must not be empty",
+    ));
+  }
+  let max_base64_chars = ((crate::domain::service_capability::OCR_IMAGE_MAX_DECODED_BYTES + 2) / 3) * 4;
+  if trimmed.len() > max_base64_chars {
+    return Err(CapabilityError::new(
+      CapabilityErrorCode::UnsupportedInput,
+      "PNG exceeds size limit",
+    ));
+  }
+  let decoded = BASE64.decode(trimmed.as_bytes()).map_err(|_| {
+    CapabilityError::new(
+      CapabilityErrorCode::UnsupportedInput,
+      "png_base64 is not valid standard base64",
+    )
+  })?;
+  if decoded.len() > crate::domain::service_capability::OCR_IMAGE_MAX_DECODED_BYTES {
+    return Err(CapabilityError::new(
+      CapabilityErrorCode::UnsupportedInput,
+      "PNG exceeds size limit",
+    ));
+  }
+  let reader = ImageReader::new(Cursor::new(&decoded))
+    .with_guessed_format()
+    .map_err(|_| CapabilityError::new(CapabilityErrorCode::UnsupportedInput, "PNG image could not be read"))?;
+  if reader.format() != Some(image::ImageFormat::Png) {
+    return Err(CapabilityError::new(
+      CapabilityErrorCode::UnsupportedInput,
+      "image must be PNG",
+    ));
+  }
+  let (width, height) = reader
+    .into_dimensions()
+    .map_err(|_| CapabilityError::new(CapabilityErrorCode::UnsupportedInput, "PNG dimensions are invalid"))?;
+  validate_ocr_png_bounds(width, height, decoded.len())?;
+  // Decode only after cheap header dimensions pass the edge/pixel limits. This prevents a small
+  // compressed bomb from allocating an unbounded pixel buffer before rejection.
+  ImageReader::new(Cursor::new(&decoded))
+    .with_guessed_format()
+    .map_err(|_| CapabilityError::new(CapabilityErrorCode::UnsupportedInput, "PNG image could not be read"))?
+    .decode()
+    .map_err(|_| CapabilityError::new(CapabilityErrorCode::UnsupportedInput, "PNG image is invalid"))?;
+  Ok(decoded)
+}
+
+fn map_ocr_image_plugin_error(
+  error: super::bindings::ocr_image::langnext::runtime_plugin::common::PluginError,
+) -> CapabilityError {
+  use super::bindings::ocr_image::langnext::runtime_plugin::common::PluginError;
+  let (code, label) = match error {
+    PluginError::InvalidRequest(_) => (CapabilityErrorCode::InvalidRequest, "invalid request"),
+    PluginError::InvalidConfiguration => (CapabilityErrorCode::InvalidConfiguration, "invalid configuration"),
+    PluginError::InvalidInput(_) => (CapabilityErrorCode::InvalidRequest, "invalid input"),
+    PluginError::Auth => (CapabilityErrorCode::Auth, "auth failed"),
+    PluginError::PermissionDenied => (CapabilityErrorCode::PermissionDenied, "permission denied"),
+    PluginError::QuotaExceeded => (CapabilityErrorCode::QuotaExceeded, "quota exceeded"),
+    PluginError::RateLimited => (CapabilityErrorCode::RateLimited, "rate limited"),
+    PluginError::UnsupportedInput(_) => (CapabilityErrorCode::UnsupportedInput, "unsupported input"),
+    PluginError::UnsupportedLanguage(_) => (CapabilityErrorCode::UnsupportedLanguage, "unsupported language"),
+    PluginError::Network(_) => (CapabilityErrorCode::Network, "network error"),
+    PluginError::Timeout => (CapabilityErrorCode::Timeout, "timeout"),
+    PluginError::InvalidResponse(_) => (CapabilityErrorCode::InvalidResponse, "invalid response"),
+    PluginError::ProviderUnavailable => (CapabilityErrorCode::ProviderUnavailable, "provider unavailable"),
+    PluginError::PluginUnavailable => (CapabilityErrorCode::PluginUnavailable, "plugin unavailable"),
+    PluginError::Cancelled => (CapabilityErrorCode::Cancelled, "cancelled"),
+    PluginError::Internal(_) => (CapabilityErrorCode::Internal, "internal error"),
+  };
+  CapabilityError::new(code, label)
+}
+
 /// Map a guest-returned `plugin-error` to a stable `CapabilityError` without leaking detail.
 /// Works for any generated `PluginError` enum (translate-text/translate-detect share the v1 ABI).
 macro_rules! impl_plugin_error_mapper {
@@ -937,15 +1338,31 @@ pub(crate) async fn run_with_interruption<F, T>(
   deadline: Option<Instant>,
   cancel: CancelToken,
   guest_future: F,
+  provider_attempt: Option<ProviderAttemptTracker>,
+  max_duration: Duration,
 ) -> Result<T, CapabilityError>
 where
   F: std::future::Future<Output = wasmtime::Result<T>>,
 {
-  let timeout = deadline_to_duration(deadline);
+  let timeout = deadline_to_duration_with_cap(deadline, max_duration);
   tokio::select! {
     biased;
-    _ = cancel.cancelled() => Err(CapabilityError::new(CapabilityErrorCode::Cancelled, "request cancelled")),
-    _ = tokio::time::sleep(timeout) => Err(CapabilityError::new(CapabilityErrorCode::Timeout, "request deadline exceeded")),
+    _ = cancel.cancelled() => {
+      if let Some(tracker) = &provider_attempt {
+        tracker.mark_cancelled();
+      }
+      Err(CapabilityError::new(CapabilityErrorCode::Cancelled, "request cancelled"))
+    }
+    _ = tokio::time::sleep(timeout) => {
+      if let Some(tracker) = &provider_attempt {
+        if cancel.is_cancelled() {
+          tracker.mark_cancelled();
+        } else {
+          tracker.mark_completed();
+        }
+      }
+      Err(CapabilityError::new(CapabilityErrorCode::Timeout, "request deadline exceeded"))
+    }
     outcome = guest_future => outcome.map_err(map_wasmtime_error),
   }
 }
@@ -999,6 +1416,10 @@ impl Drop for EpochTicker {
 /// timeout. A far-future deadline is capped to [`DEFAULT_INVOCATION_TIMEOUT`] so a caller can
 /// never request an unbounded invocation; the host always bounds execution time.
 pub(crate) fn deadline_to_duration(deadline: Option<Instant>) -> Duration {
+  deadline_to_duration_with_cap(deadline, DEFAULT_INVOCATION_TIMEOUT)
+}
+
+pub(crate) fn deadline_to_duration_with_cap(deadline: Option<Instant>, max_duration: Duration) -> Duration {
   match deadline {
     Some(deadline) => {
       let now = Instant::now();
@@ -1007,9 +1428,9 @@ pub(crate) fn deadline_to_duration(deadline: Option<Instant>) -> Duration {
       } else {
         deadline.duration_since(now)
       };
-      remaining.min(DEFAULT_INVOCATION_TIMEOUT)
+      remaining.min(max_duration)
     }
-    None => DEFAULT_INVOCATION_TIMEOUT,
+    None => max_duration,
   }
 }
 

@@ -143,6 +143,25 @@ echo "ok: detect conformance component digest matches ($DETECT_REBUILD)"
 validate_plugin_json "runtime-plugins/conformance/wasm-component"
 validate_plugin_json "runtime-plugins/conformance/wasm-detect-component"
 
+# --- Build test-only OCR trap and oversized-output Components for Phase 7 ---
+build_ocr_failure_component() {
+  local crate_dir="$1" crate_name="$2" fixture="$3"
+  cargo component build --manifest-path "$crate_dir/Cargo.toml" --target wasm32-unknown-unknown --release --locked
+  local output="$crate_dir/target/wasm32-unknown-unknown/release/$crate_name.wasm"
+  [[ -f "$output" ]] || { echo "error: OCR failure Component missing at $output" >&2; exit 1; }
+  [[ -f "$fixture" && -f "$fixture.sha256" ]] || { echo "error: OCR failure fixture missing at $fixture; refresh it intentionally" >&2; exit 1; }
+  local committed="$(tr -d '[:space:]' < "$fixture.sha256")"
+  local actual="$(sha256sum "$fixture" | awk '{print $1}')"
+  local rebuilt="$(sha256sum "$output" | awk '{print $1}')"
+  [[ "$committed" == "$actual" && "$rebuilt" == "$committed" ]] || {
+    echo "error: OCR failure Component digest drift for $crate_name" >&2
+    exit 1
+  }
+  echo "ok: $crate_name OCR failure Component built and digest-verified"
+}
+build_ocr_failure_component "runtime-plugins/conformance/wasm-ocr-trap-component" "langnext_conformance_ocr_trap" "runtime-plugins/conformance/wasm-ocr-trap-component/fixtures/langnext-conformance-ocr-trap.wasm"
+build_ocr_failure_component "runtime-plugins/conformance/wasm-ocr-oversized-component" "langnext_conformance_ocr_oversized" "runtime-plugins/conformance/wasm-ocr-oversized-component/fixtures/langnext-conformance-ocr-oversized.wasm"
+
 # Formal manifest closed-loop test (parse_manifest + grant construction), not only field checks.
 cargo test --manifest-path src-tauri/Cargo.toml translate_and_detect_manifest_grant_closed_loop -- --nocapture
 

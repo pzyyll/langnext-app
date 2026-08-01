@@ -1,24 +1,29 @@
 // ABOUTME: Typed capability handler registry and instance-aware capability lookup.
 // ABOUTME: Routes through RuntimeRouter so SQLite pins select one executor without fallback.
 use crate::domain::cancel::CancelToken;
+use crate::domain::integration_capability_health::CapabilityHealthStatus;
 use crate::domain::runtime_lifecycle::{ExecutionGrantSetBundle, GrantSubjectKind};
 use crate::domain::service_capability::{
   CapabilityError, CapabilityErrorCode, DetectLanguageRequest, DetectLanguageResponse, ExecutionContext,
-  OcrImageRequest, OcrImageResponse, SpeechSynthesizeRequest, SpeechSynthesizeResponse, TranslateTextRequest,
-  TranslateTextResponse,
+  OcrImageRequest, OcrImageResponse, ProviderAttemptTracker, SpeechSynthesizeRequest, SpeechSynthesizeResponse,
+  TranslateTextRequest, TranslateTextResponse,
 };
 use crate::domain::service_integration::IntegrationHealthStatus;
+use crate::domain::time::now_rfc3339;
 use crate::error::StorageError;
+use crate::repositories::integration_capability_health;
 use crate::repositories::integration_instances;
 use crate::repositories::{installed_plugin_versions, plugin_permission_grants, plugin_publishers};
 use crate::services::edge_tts::EdgeTtsCapabilities;
 use crate::services::google_cloud::GoogleCloudCapabilities;
 use crate::services::google_translate_web::GoogleTranslateWebCapabilities;
-use crate::services::runtime_router::{ResolvedDetect, ResolvedTranslate, RuntimeRouter, SnapshotRuntimeResolution};
+use crate::services::runtime_router::{
+  ResolvedDetect, ResolvedOcr, ResolvedTranslate, RuntimeRouter, SnapshotRuntimeResolution,
+};
 use crate::services::service_integration_registry::ServiceIntegrationRegistry;
 use crate::services::wasm_runtime::host::{BrokerFetchError, BrokerFetchOutcome, BrokerFetchRequest, BrokerHandle};
 use crate::services::wasm_runtime::{
-  WasmDetectLanguageAdapter, WasmRuntime, WasmSpeechSynthesizeAdapter, WasmTranslateTextAdapter,
+  WasmDetectLanguageAdapter, WasmOcrImageAdapter, WasmRuntime, WasmSpeechSynthesizeAdapter, WasmTranslateTextAdapter,
 };
 use crate::storage::Database;
 use std::collections::HashMap;
@@ -224,6 +229,63 @@ impl ServiceCapabilityService {
   pub fn with_broker_factory(mut self, factory: Arc<dyn Fn() -> Box<dyn BrokerHandle> + Send + Sync>) -> Self {
     self.broker_factory = factory;
     self
+  }
+
+  /// Persist a sanitized capability result only after host provenance confirms a completed
+  /// provider attempt. Preflight, resolution, and cancellation are deliberate no-ops.
+  pub fn record_provider_result(
+    &self,
+    instance_id: Uuid,
+    capability_id: &str,
+    provider_attempt: &ProviderAttemptTracker,
+    success: bool,
+    error_code: Option<CapabilityErrorCode>,
+  ) -> Result<(), StorageError> {
+    self.record_provider_result_if_current(instance_id, capability_id, provider_attempt, success, error_code, None)
+  }
+
+  /// Persist health only when the authority revision captured before dispatch is still current.
+  /// This prevents an older in-flight call from recreating a row after config, credentials, or
+  /// runtime authority has been invalidated.
+  pub fn record_provider_result_if_current(
+    &self,
+    instance_id: Uuid,
+    capability_id: &str,
+    provider_attempt: &ProviderAttemptTracker,
+    success: bool,
+    error_code: Option<CapabilityErrorCode>,
+    expected_updated_at: Option<&str>,
+  ) -> Result<(), StorageError> {
+    if provider_attempt.state() != crate::domain::service_capability::ProviderAttemptState::Completed {
+      return Ok(());
+    }
+    let status = if success {
+      CapabilityHealthStatus::Ready
+    } else {
+      CapabilityHealthStatus::Degraded
+    };
+    let sanitized_code = if success {
+      None
+    } else {
+      error_code.map(CapabilityErrorCode::as_str)
+    };
+    let checked_at = now_rfc3339();
+    self.db.transaction(|uow| {
+      if let Some(expected_updated_at) = expected_updated_at {
+        let current = integration_instances::get(uow.conn(), instance_id)?;
+        if current.updated_at != expected_updated_at {
+          return Ok(());
+        }
+      }
+      integration_capability_health::upsert_result(
+        uow.conn(),
+        instance_id,
+        capability_id,
+        status,
+        sanitized_code,
+        &checked_at,
+      )
+    })
   }
 
   /// One SQLite-authoritative snapshot for a profile capability invocation.
@@ -628,6 +690,64 @@ impl ServiceCapabilityService {
     instance_id: Uuid,
     capability_id: &str,
   ) -> Result<Arc<dyn OcrImageCapability>, CapabilityError> {
+    if let Some(router) = &self.router {
+      let resolved = router.resolve_ocr(instance_id, capability_id)?;
+      return match resolved {
+        ResolvedOcr::Bundled(handler) => {
+          self.ensure_bundled_ready(instance_id)?;
+          Ok(handler)
+        }
+        ResolvedOcr::Wasm {
+          package_digest,
+          artifact_digest,
+          artifact_bytes,
+          grant,
+          principal_factory: _,
+        } => {
+          let runtime = self
+            .wasm_runtime
+            .as_ref()
+            .ok_or_else(|| CapabilityError::new(CapabilityErrorCode::Internal, "wasm runtime is not configured"))?;
+          let verified = runtime
+            .compile_component(&package_digest, &artifact_digest, artifact_bytes.as_slice())
+            .map_err(|_| CapabilityError::new(CapabilityErrorCode::PluginUnavailable, "component compile failed"))?;
+          // Resolve the authoritative pin again after external archive verification; a changed
+          // package/grant identity discards the compiled adapter instead of mixing executor state.
+          let rechecked = router.resolve_ocr(instance_id, capability_id)?;
+          let (rechecked_digest, rechecked_revision) = match rechecked {
+            ResolvedOcr::Wasm {
+              package_digest, grant, ..
+            } => (package_digest, grant.revision().as_u64()),
+            ResolvedOcr::Bundled(_) => {
+              return Err(CapabilityError::new(
+                CapabilityErrorCode::PluginUnavailable,
+                "runtime changed during OCR resolution",
+              ));
+            }
+          };
+          if rechecked_digest != package_digest || rechecked_revision != grant.revision().as_u64() {
+            return Err(CapabilityError::new(
+              CapabilityErrorCode::PluginUnavailable,
+              "runtime pin changed during OCR resolution",
+            ));
+          }
+          let config_json = self
+            .db
+            .read(|conn| integration_instances::get(conn, instance_id))
+            .map_err(|_| CapabilityError::new(CapabilityErrorCode::Internal, "failed to load instance"))?
+            .config_json
+            .into_bytes();
+          Ok(Arc::new(WasmOcrImageAdapter::new(
+            runtime.clone(),
+            Arc::new(verified),
+            grant,
+            capability_id.to_string(),
+            config_json,
+            self.broker_factory.clone(),
+          )))
+        }
+      };
+    }
     let handler = self.resolve_handler(instance_id, capability_id)?;
     match handler {
       CapabilityHandler::OcrImage(h) => Ok(h),
@@ -681,6 +801,33 @@ impl ServiceCapabilityService {
                 format!("component compile failed: {e}"),
               )
             })?;
+          // Re-resolve after external archive verification so a concurrent package/grant change
+          // cannot return an adapter backed by stale runtime authority.
+          let rechecked = router.resolve(instance_id, capability_id)?;
+          let (rechecked_digest, rechecked_artifact, rechecked_grant) = match rechecked {
+            crate::services::runtime_router::RuntimeAdapter::WasmComponent {
+              package_digest,
+              artifact_digest,
+              grant,
+              ..
+            } => (package_digest, artifact_digest, grant),
+            crate::services::runtime_router::RuntimeAdapter::BundledRust { .. } => {
+              return Err(CapabilityError::new(
+                CapabilityErrorCode::PluginUnavailable,
+                "runtime changed during speech resolution",
+              ));
+            }
+          };
+          if rechecked_digest != package_digest
+            || rechecked_artifact != artifact_digest
+            || rechecked_grant.revision() != grant.revision()
+            || rechecked_grant.authority_digest() != grant.authority_digest()
+          {
+            return Err(CapabilityError::new(
+              CapabilityErrorCode::PluginUnavailable,
+              "runtime authority changed during speech resolution",
+            ));
+          }
           let config_json = self
             .db
             .read(|conn| integration_instances::get(conn, instance_id))
@@ -816,6 +963,24 @@ pub fn execution_context(
   plugin_id: impl Into<String>,
   capability_id: impl Into<String>,
 ) -> ExecutionContext {
+  execution_context_with_tracker(
+    request_id,
+    cancel,
+    instance_id,
+    plugin_id,
+    capability_id,
+    ProviderAttemptTracker::new(),
+  )
+}
+
+pub fn execution_context_with_tracker(
+  request_id: impl Into<String>,
+  cancel: CancelToken,
+  instance_id: Uuid,
+  plugin_id: impl Into<String>,
+  capability_id: impl Into<String>,
+  provider_attempt: ProviderAttemptTracker,
+) -> ExecutionContext {
   ExecutionContext {
     request_id: request_id.into(),
     cancel,
@@ -823,6 +988,7 @@ pub fn execution_context(
     integration_instance_id: instance_id,
     plugin_id: plugin_id.into(),
     capability_id: capability_id.into(),
+    provider_attempt,
   }
 }
 

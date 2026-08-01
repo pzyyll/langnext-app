@@ -3,14 +3,15 @@
 use crate::domain::cancel::CancelToken;
 use crate::domain::language_detection::{DETECT_CANCELLED_CODE, DetectLanguageResult, DetectorType};
 use crate::domain::service_capability::{
-  CapabilityError, CapabilityErrorCode, DetectLanguageRequest, TranslateTextRequest, validate_capability_language_id,
-  validate_capability_request_id, validate_capability_text,
+  CapabilityError, CapabilityErrorCode, DetectLanguageRequest, ProviderAttemptTracker, TranslateTextRequest,
+  validate_capability_language_id, validate_capability_request_id, validate_capability_text,
 };
 use crate::domain::service_integration::IntegrationHealthStatus;
 use crate::domain::translation::{TRANSLATE_CANCELLED_CODE, TranslateResult};
 use crate::error::{IpcError, StorageError};
+use crate::events::{SERVICE_INTEGRATIONS_CHANGED, emit_data_changed};
 use crate::repositories::{integration_instances, translation_profiles};
-use crate::services::service_capabilities::execution_context;
+use crate::services::service_capabilities::execution_context_with_tracker;
 use crate::state::AppState;
 use serde::Deserialize;
 use std::time::Instant;
@@ -44,18 +45,24 @@ pub struct ServiceProfileDetectInput {
 
 #[tauri::command]
 pub async fn translate_service_profile(
+  app: tauri::AppHandle,
   state: State<'_, AppState>,
   input: ServiceProfileTranslateInput,
 ) -> Result<TranslateResult, IpcError> {
-  Ok(run_translate_service_profile(&state.service_capabilities, &state.request_sessions, input).await)
+  let result = run_translate_service_profile(&state.service_capabilities, &state.request_sessions, input).await;
+  emit_data_changed(&app, SERVICE_INTEGRATIONS_CHANGED);
+  Ok(result)
 }
 
 #[tauri::command]
 pub async fn detect_service_profile_language(
+  app: tauri::AppHandle,
   state: State<'_, AppState>,
   input: ServiceProfileDetectInput,
 ) -> Result<DetectLanguageResult, IpcError> {
-  Ok(run_detect_service_profile_language(&state.service_capabilities, &state.request_sessions, input).await)
+  let result = run_detect_service_profile_language(&state.service_capabilities, &state.request_sessions, input).await;
+  emit_data_changed(&app, SERVICE_INTEGRATIONS_CHANGED);
+  Ok(result)
 }
 
 #[derive(Debug)]
@@ -133,11 +140,12 @@ pub async fn run_translate_service_profile(
   }
   let token = sessions.begin(&input.request_id);
   let caps = caps.clone();
+  let caps_for_prepare = caps.clone();
   let profile_id = input.profile_id;
   let prepared = tauri::async_runtime::spawn_blocking(move || {
     use crate::services::service_capabilities::ProfileCapabilityKind;
-    let snapshot = caps.load_profile_invocation_snapshot(profile_id, ProfileCapabilityKind::Translate)?;
-    let handler = caps
+    let snapshot = caps_for_prepare.load_profile_invocation_snapshot(profile_id, ProfileCapabilityKind::Translate)?;
+    let handler = caps_for_prepare
       .resolve_translate_from_snapshot(&snapshot)
       .map_err(crate::services::service_capabilities::ProfileSnapshotLoadError::from_capability)?;
     Ok::<_, crate::services::service_capabilities::ProfileSnapshotLoadError>((snapshot, handler))
@@ -145,29 +153,52 @@ pub async fn run_translate_service_profile(
   .await;
   let result = match prepared {
     Ok(Ok((snapshot, handler))) => {
-      let ctx = execution_context(
+      let provider_attempt = ProviderAttemptTracker::new();
+      let provider_cancel = token.clone();
+      let ctx = execution_context_with_tracker(
         input.request_id.clone(),
         token.clone(),
         snapshot.instance_id,
         snapshot.plugin_id.clone(),
         snapshot.capability_id.clone(),
+        provider_attempt.clone(),
       );
       let request = TranslateTextRequest {
         text: input.text,
         source_language_id: input.source_lang,
         target_language_id: input.target_lang,
       };
-      match handler.translate(snapshot.instance_id, request, ctx).await {
-        Ok(response) => TranslateResult {
-          translated_text: response.translated_text,
+      let call_result = handler.translate(snapshot.instance_id, request, ctx).await;
+      let call_result = if provider_cancel.is_cancelled() {
+        Err(CapabilityError::new(
+          CapabilityErrorCode::Cancelled,
+          "translation cancelled",
+        ))
+      } else {
+        call_result
+      };
+      let result = match &call_result {
+        Ok(_) => TranslateResult {
+          translated_text: call_result.as_ref().expect("successful result").translated_text.clone(),
           latency_ms: elapsed_ms(started),
           error_code: None,
           message: "ok".into(),
           ok: true,
           model_id: None,
         },
-        Err(err) => capability_to_translate_failure(&err, elapsed_ms(started)),
+        Err(err) => capability_to_translate_failure(err, elapsed_ms(started)),
+      };
+      if !provider_cancel.is_cancelled() {
+        let _ = caps.record_provider_result_if_current(
+          snapshot.instance_id,
+          &snapshot.capability_id,
+          &provider_attempt,
+          result.ok,
+          call_result.as_ref().err().map(|error| error.code),
+          Some(snapshot.runtime_pin.instance_updated_at.as_str()),
+        );
       }
+      result
     }
     Ok(Err(err)) => resolve_error_to_translate(snapshot_load_to_resolve(err), elapsed_ms(started), &token),
     Err(join_err) => {
@@ -199,11 +230,12 @@ pub async fn run_detect_service_profile_language(
   }
   let token = sessions.begin(&input.request_id);
   let caps = caps.clone();
+  let caps_for_prepare = caps.clone();
   let profile_id = input.profile_id;
   let prepared = tauri::async_runtime::spawn_blocking(move || {
     use crate::services::service_capabilities::ProfileCapabilityKind;
-    let snapshot = caps.load_profile_invocation_snapshot(profile_id, ProfileCapabilityKind::Detect)?;
-    let handler = caps
+    let snapshot = caps_for_prepare.load_profile_invocation_snapshot(profile_id, ProfileCapabilityKind::Detect)?;
+    let handler = caps_for_prepare
       .resolve_detect_from_snapshot(&snapshot)
       .map_err(crate::services::service_capabilities::ProfileSnapshotLoadError::from_capability)?;
     Ok::<_, crate::services::service_capabilities::ProfileSnapshotLoadError>((snapshot, handler))
@@ -211,26 +243,49 @@ pub async fn run_detect_service_profile_language(
   .await;
   let result = match prepared {
     Ok(Ok((snapshot, handler))) => {
-      let ctx = execution_context(
+      let provider_attempt = ProviderAttemptTracker::new();
+      let provider_cancel = token.clone();
+      let ctx = execution_context_with_tracker(
         input.request_id.clone(),
         token.clone(),
         snapshot.instance_id,
         snapshot.plugin_id.clone(),
         snapshot.capability_id.clone(),
+        provider_attempt.clone(),
       );
       let request = DetectLanguageRequest { text: input.text };
-      match handler.detect(snapshot.instance_id, request, ctx).await {
+      let call_result = handler.detect(snapshot.instance_id, request, ctx).await;
+      let call_result = if provider_cancel.is_cancelled() {
+        Err(CapabilityError::new(
+          CapabilityErrorCode::Cancelled,
+          "language detection cancelled",
+        ))
+      } else {
+        call_result
+      };
+      let result = match &call_result {
         Ok(response) => DetectLanguageResult {
           ok: true,
-          language_id: Some(response.language_id),
+          language_id: Some(response.language_id.clone()),
           detector_type: DetectorType::ServiceIntegration,
           model_id: None,
           latency_ms: elapsed_ms(started),
           error_code: None,
           message: "ok".into(),
         },
-        Err(err) => capability_to_detect_failure(&err, elapsed_ms(started)),
+        Err(err) => capability_to_detect_failure(err, elapsed_ms(started)),
+      };
+      if !provider_cancel.is_cancelled() {
+        let _ = caps.record_provider_result_if_current(
+          snapshot.instance_id,
+          &snapshot.capability_id,
+          &provider_attempt,
+          result.ok,
+          call_result.as_ref().err().map(|error| error.code),
+          Some(snapshot.runtime_pin.instance_updated_at.as_str()),
+        );
       }
+      result
     }
     Ok(Err(err)) => resolve_error_to_detect(snapshot_load_to_resolve(err), elapsed_ms(started), &token),
     Err(join_err) => {
@@ -439,6 +494,7 @@ mod tests {
   use crate::repositories::integration_instances;
   use crate::repositories::translation_profiles as profile_repo;
   use crate::services::google_cloud::{GOOGLE_DETECT_LANGUAGE_CAPABILITY_ID, GOOGLE_TRANSLATE_TEXT_CAPABILITY_ID};
+  use crate::services::service_capabilities::execution_context;
   use crate::services::service_capabilities::{
     CapabilityHandler, DetectLanguageCapability, ServiceCapabilityRegistry, ServiceCapabilityService,
     TranslateTextCapability,

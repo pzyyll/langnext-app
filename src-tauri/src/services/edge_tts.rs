@@ -473,6 +473,7 @@ mod tests {
           integration_instance_id: instance_id,
           plugin_id: EDGE_TTS_PLUGIN_ID.into(),
           capability_id: SPEECH_SYNTHESIZE_CAPABILITY_ID.into(),
+          provider_attempt: crate::domain::service_capability::ProviderAttemptTracker::new(),
         },
       )
       .await

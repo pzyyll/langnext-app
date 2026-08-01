@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# ABOUTME: Refresh the dev-signed Google Cloud Component and package fixtures.
+# ABOUTME: Uses only the committed fixture seed, then finalizes and verifies with the dev public key.
+#MISE description="Refresh Google Cloud dev package fixture"
+set -euo pipefail
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+FIXTURE_SEED="0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a"
+PUBLIC_KEY_FILE="$ROOT_DIR/runtime-plugins/conformance/fixtures/packages/keys/vendor-public-key.hex"
+STAGING="$ROOT_DIR/runtime-plugins/dist/staging/com.langnext.google-cloud-1.2.0"
+PACKAGE="$ROOT_DIR/runtime-plugins/google-cloud/fixtures/com.langnext.google-cloud-1.2.0.lnplugin"
+cd "$ROOT_DIR"
+mise run plugin:build-google-cloud -- --update-fixtures
+mise run plugin:sign-staging -- "$STAGING" "$FIXTURE_SEED"
+mise run plugin:finalize-package -- "$STAGING" "$PACKAGE" --public-key-file "$PUBLIC_KEY_FILE"
+mise run plugin:verify -- "$PACKAGE" --public-key-file "$PUBLIC_KEY_FILE"
+sha256sum "$PACKAGE" | awk '{print $1}' > "$PACKAGE.sha256"
+echo "ok: refreshed and verified Google Cloud fixture package"

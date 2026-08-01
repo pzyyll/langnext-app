@@ -27,8 +27,9 @@ use crate::domain::service_integration::{
 use crate::domain::time::{new_id, now_rfc3339};
 use crate::error::StorageError;
 use crate::repositories::{
-  installed_plugin_versions, integration_credential_bindings, integration_endpoint_trusts, integration_instances,
-  plugin_permission_grants, plugin_publishers, plugin_upgrade_snapshots,
+  installed_plugin_versions, integration_capability_health, integration_credential_bindings,
+  integration_endpoint_trusts, integration_instances, plugin_permission_grants, plugin_publishers,
+  plugin_upgrade_snapshots,
 };
 use crate::services::plugin_package::{VerifiedPackage, public_sha256_hex};
 use crate::services::plugin_store::PluginPackageService;
@@ -80,12 +81,15 @@ struct RollbackPreviewSession {
 }
 
 /// Injected failure points for CAS apply failure-injection tests.
+/// Test-only: never compiled into production builds.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UpgradeApplyFault {
   BeforeSnapshot,
   AfterSnapshotBeforeGrant,
   AfterGrantBeforePin,
   AfterPinBeforePreferences,
+  AfterPreferencesBeforeCommit,
 }
 
 /// Runtime lifecycle service: preview, CAS apply, and rollback.
@@ -99,6 +103,7 @@ pub struct RuntimeLifecycleService {
   vault: Option<Arc<dyn crate::credentials::CredentialVault>>,
   upgrade_previews: Arc<Mutex<std::collections::HashMap<String, UpgradePreviewSession>>>,
   rollback_previews: Arc<Mutex<std::collections::HashMap<String, RollbackPreviewSession>>>,
+  #[cfg(test)]
   apply_fault: Arc<Mutex<Option<UpgradeApplyFault>>>,
   /// Test-only hook fired after the initial vendor-root verify and before the final auto-pin
   /// re-verify/apply, so TOCTOU replacement of DB/content can be proven fail-closed.
@@ -122,6 +127,7 @@ impl RuntimeLifecycleService {
       vault: None,
       upgrade_previews: Arc::new(Mutex::new(std::collections::HashMap::new())),
       rollback_previews: Arc::new(Mutex::new(std::collections::HashMap::new())),
+      #[cfg(test)]
       apply_fault: Arc::new(Mutex::new(None)),
       #[cfg(test)]
       auto_pin_between_verify_and_apply: Arc::new(Mutex::new(None)),
@@ -146,10 +152,13 @@ impl RuntimeLifecycleService {
   }
 
   /// Test-only: inject a one-shot failure inside the apply transaction.
+  /// Never compiled into production builds.
+  #[cfg(test)]
   pub fn set_apply_fault(&self, fault: Option<UpgradeApplyFault>) {
     *self.apply_fault.lock().unwrap_or_else(|e| e.into_inner()) = fault;
   }
 
+  #[cfg(test)]
   fn take_apply_fault(&self, expected: UpgradeApplyFault) -> bool {
     let mut guard = self.apply_fault.lock().unwrap_or_else(|e| e.into_inner());
     if *guard == Some(expected) {
@@ -244,6 +253,8 @@ impl RuntimeLifecycleService {
 
     let target_manifest: PluginManifestV1 = serde_json::from_str(&target_version.manifest_json)
       .map_err(|e| StorageError::Validation(format!("invalid target manifest: {e}")))?;
+    crate::services::auth_policies::validate_google_cloud_manifest_authority(&target_manifest, publisher.source)
+      .map_err(StorageError::Validation)?;
     if target_manifest.runtime.kind != RuntimeKind::WasmComponent {
       return Err(StorageError::Validation(
         "Phase 4 upgrades target Wasm Component packages only".into(),
@@ -535,6 +546,7 @@ impl RuntimeLifecycleService {
 
     let now = now_rfc3339();
     let result = self.db.transaction(|uow| {
+      #[cfg(test)]
       if self.take_apply_fault(UpgradeApplyFault::BeforeSnapshot) {
         return Err(StorageError::Internal("injected fault: before snapshot".into()));
       }
@@ -631,6 +643,7 @@ impl RuntimeLifecycleService {
       };
       plugin_upgrade_snapshots::insert(uow.conn(), &snapshot)?;
       prune_snapshots(uow.conn(), session.instance_id, &now)?;
+      #[cfg(test)]
       if self.take_apply_fault(UpgradeApplyFault::AfterSnapshotBeforeGrant) {
         return Err(StorageError::Internal(
           "injected fault: after snapshot before grant".into(),
@@ -649,6 +662,7 @@ impl RuntimeLifecycleService {
       if !target_has_endpoint_approval {
         integration_endpoint_trusts::delete_for_instance(uow.conn(), session.instance_id)?;
       }
+      #[cfg(test)]
       if self.take_apply_fault(UpgradeApplyFault::AfterGrantBeforePin) {
         return Err(StorageError::Internal("injected fault: after grant before pin".into()));
       }
@@ -677,11 +691,13 @@ impl RuntimeLifecycleService {
         Some(&requirement_json),
         &now,
       )?;
+      #[cfg(test)]
       if self.take_apply_fault(UpgradeApplyFault::AfterPinBeforePreferences) {
         return Err(StorageError::Internal(
           "injected fault: after pin before preferences".into(),
         ));
       }
+      integration_capability_health::delete_for_instance(uow.conn(), session.instance_id)?;
 
       // Write migrated preference rows (never the snapshot rows).
       write_preference_rows(
@@ -693,6 +709,12 @@ impl RuntimeLifecycleService {
         false,
         session.instance_id,
       )?;
+      #[cfg(test)]
+      if self.take_apply_fault(UpgradeApplyFault::AfterPreferencesBeforeCommit) {
+        return Err(StorageError::Internal(
+          "injected fault: after preferences before commit".into(),
+        ));
+      }
 
       let updated = integration_instances::get(uow.conn(), session.instance_id)?;
       Ok(RuntimeLifecycleResultDto {
@@ -933,6 +955,7 @@ impl RuntimeLifecycleService {
         requirement_json.as_deref(),
         &now,
       )?;
+      integration_capability_health::delete_for_instance(uow.conn(), session.instance_id)?;
 
       let updated = integration_instances::get(uow.conn(), session.instance_id)?;
       Ok((
@@ -2193,6 +2216,20 @@ fn verify_preference_cas(
   Ok(())
 }
 
+/// Return the fixed host policy mapping for Google Cloud capability egress. Older generic package
+/// manifests do not carry endpoint aliases per capability, so the host closes that gap here.
+pub(crate) fn google_cloud_capability_uses_endpoint(plugin_id: &str, capability_id: &str, endpoint_id: &str) -> bool {
+  if plugin_id != crate::domain::service_integration::GOOGLE_CLOUD_PLUGIN_ID {
+    return true;
+  }
+  match capability_id {
+    "translate.text@1" | "translate.detect@1" => endpoint_id == "translate",
+    "ocr.image@1" => endpoint_id == "vision",
+    "speech.synthesize@1" => endpoint_id == "text-to-speech" || endpoint_id == "text_to_speech",
+    _ => false,
+  }
+}
+
 /// Assign strict transport provenance from a verified package manifest. Only the host-maintained
 /// Google Web GTX tuple can use OS/TUN DNS; every user/instance-configured endpoint stays strict.
 pub(crate) fn origin_kind_for_verified_network_endpoint(
@@ -2226,7 +2263,16 @@ pub(crate) fn origin_kind_for_verified_network_endpoint_with_approval(
       .origins
       .first()
       .is_some_and(|origin| origin == GOOGLE_TRANSLATE_WEB_GTX_ORIGIN);
-  if is_google_web_gtx {
+  let is_google_cloud_fixed = manifest.id == crate::domain::service_integration::GOOGLE_CLOUD_PLUGIN_ID
+    && endpoint.origins.len() == 1
+    && matches!(
+      (endpoint.id.as_str(), endpoint.origins.first().map(String::as_str)),
+      ("translate", Some("https://translation.googleapis.com"))
+        | ("vision", Some("https://vision.googleapis.com"))
+        | ("text-to-speech", Some("https://texttospeech.googleapis.com"))
+        | ("text_to_speech", Some("https://texttospeech.googleapis.com"))
+    );
+  if is_google_web_gtx || is_google_cloud_fixed {
     NetworkOriginKind::HostFixed
   } else {
     NetworkOriginKind::InstanceConfigured
@@ -2336,6 +2382,9 @@ fn build_grant_bundle_for_target_on_conn(
   for cap in &target_manifest.capabilities {
     let capability_id = CapabilityId::parse(&cap.id).map_err(|e| StorageError::Validation(format!("{e:?}")))?;
     for endpoint in &target_manifest.permissions.network {
+      if !google_cloud_capability_uses_endpoint(&target_manifest.id, &cap.id, &endpoint.id) {
+        continue;
+      }
       let endpoint_id = EndpointId::parse(&endpoint.id).map_err(StorageError::Validation)?;
       // Effective origins: static declared origins, or the instance-configured complete base URL
       // resolved from the named config field and normalized by the shared host normalizer.
@@ -2418,10 +2467,18 @@ fn build_grant_bundle_for_target_on_conn(
               if capability_id.as_str() == "speech.synthesize@1" {
                 (
                   RESOURCE_LIMIT_DEFAULT_MAX_REQUEST_BYTES,
-                  crate::domain::service_capability::SPEECH_AUDIO_MAX_BYTES as u64,
+                  crate::domain::service_capability::SPEECH_PROVIDER_RESPONSE_MAX_BYTES as u64,
                   RESOURCE_LIMIT_DEFAULT_MAX_STREAM_BYTES,
                   60_000u64,
                   crate::domain::plugin_resource::NetworkResponseBodyModes::JSON_AND_BYTES,
+                )
+              } else if capability_id.as_str() == crate::domain::service_capability::OCR_IMAGE_CAPABILITY_ID {
+                (
+                  crate::services::network_broker::BROKER_OCR_REQUEST_BODY_MAX_BYTES as u64,
+                  RESOURCE_LIMIT_DEFAULT_MAX_RESPONSE_BYTES,
+                  RESOURCE_LIMIT_DEFAULT_MAX_STREAM_BYTES,
+                  RESOURCE_LIMIT_DEFAULT_TIMEOUT_MS,
+                  crate::domain::plugin_resource::NetworkResponseBodyModes::JSON_ONLY,
                 )
               } else {
                 (

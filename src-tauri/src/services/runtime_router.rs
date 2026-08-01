@@ -22,7 +22,7 @@ use crate::repositories::{
 };
 use crate::services::plugin_store::PluginPackageService;
 use crate::services::service_capabilities::{
-  CapabilityHandler, DetectLanguageCapability, ServiceCapabilityRegistry, TranslateTextCapability,
+  CapabilityHandler, DetectLanguageCapability, OcrImageCapability, ServiceCapabilityRegistry, TranslateTextCapability,
 };
 use crate::services::service_integration_registry::ServiceIntegrationRegistry;
 use crate::services::wasm_runtime::WasmRuntime;
@@ -277,6 +277,8 @@ impl RuntimeRouter {
         format!("invalid installed manifest: {e}"),
       )
     })?;
+    crate::services::auth_policies::validate_google_cloud_manifest_authority(&manifest, publisher.source)
+      .map_err(|message| CapabilityError::new(CapabilityErrorCode::PermissionDenied, message))?;
     let (artifact_digest, artifact_bytes) = self.load_verified_wasm_artifact(
       package_digest,
       &manifest,
@@ -535,6 +537,14 @@ impl RuntimeRouter {
         format!("invalid installed manifest: {e}"),
       )
     })?;
+    let snapshot_publisher_source = pin.publisher_source.ok_or_else(|| {
+      CapabilityError::new(
+        CapabilityErrorCode::PluginUnavailable,
+        "publisher source is missing from invocation snapshot",
+      )
+    })?;
+    crate::services::auth_policies::validate_google_cloud_manifest_authority(&manifest, snapshot_publisher_source)
+      .map_err(|message| CapabilityError::new(CapabilityErrorCode::PermissionDenied, message))?;
     if manifest.id != pin.plugin_id {
       return Err(CapabilityError::new(
         CapabilityErrorCode::PermissionDenied,
@@ -714,6 +724,34 @@ impl RuntimeRouter {
         grant,
         principal_factory,
       } => Ok(ResolvedTranslate::Wasm {
+        package_digest,
+        artifact_digest,
+        artifact_bytes,
+        grant,
+        principal_factory,
+      }),
+    }
+  }
+
+  pub fn resolve_ocr(&self, instance_id: Uuid, capability_id: &str) -> Result<ResolvedOcr, CapabilityError> {
+    match self.resolve(instance_id, capability_id)? {
+      RuntimeAdapter::BundledRust {
+        handler: CapabilityHandler::OcrImage(handler),
+      } => Ok(ResolvedOcr::Bundled(handler)),
+      RuntimeAdapter::BundledRust { .. } => Err(
+        CapabilityError::new(
+          CapabilityErrorCode::PermissionDenied,
+          "capability handler type mismatch",
+        )
+        .with_capability_id(capability_id),
+      ),
+      RuntimeAdapter::WasmComponent {
+        package_digest,
+        artifact_digest,
+        artifact_bytes,
+        grant,
+        principal_factory,
+      } => Ok(ResolvedOcr::Wasm {
         package_digest,
         artifact_digest,
         artifact_bytes,
@@ -909,6 +947,17 @@ fn artifact_path_for_capability<'a>(
 
 pub enum ResolvedTranslate {
   Bundled(Arc<dyn TranslateTextCapability>),
+  Wasm {
+    package_digest: PackageDigest,
+    artifact_digest: ComponentArtifactDigest,
+    artifact_bytes: Arc<Vec<u8>>,
+    grant: ExecutionGrantSet,
+    principal_factory: WasmPrincipalFactory,
+  },
+}
+
+pub enum ResolvedOcr {
+  Bundled(Arc<dyn OcrImageCapability>),
   Wasm {
     package_digest: PackageDigest,
     artifact_digest: ComponentArtifactDigest,
@@ -1190,6 +1239,16 @@ fn validate_manifest_bound_network_origin_kinds(
         "grant network entry references an unknown capability",
       ));
     }
+    if !crate::services::runtime_lifecycle::google_cloud_capability_uses_endpoint(
+      &manifest.id,
+      &entry.capability_id,
+      &entry.endpoint_id,
+    ) {
+      return Err(CapabilityError::new(
+        CapabilityErrorCode::PermissionDenied,
+        "grant endpoint is not authorized for this capability",
+      ));
+    }
     let endpoint = manifest
       .permissions
       .network
@@ -1271,14 +1330,19 @@ fn validate_manifest_bound_network_origin_kinds(
       ));
     }
     let speech_limits_ok = entry.max_request_bytes == default_limits.max_request_bytes()
-      && entry.max_response_bytes == crate::domain::service_capability::SPEECH_AUDIO_MAX_BYTES as u64
+      && entry.max_response_bytes == crate::domain::service_capability::SPEECH_PROVIDER_RESPONSE_MAX_BYTES as u64
       && entry.max_stream_bytes == default_limits.max_stream_bytes()
       && entry.timeout_ms == 60_000;
+    let ocr_limits_ok = entry.capability_id == crate::domain::service_capability::OCR_IMAGE_CAPABILITY_ID
+      && entry.max_request_bytes == crate::services::network_broker::BROKER_OCR_REQUEST_BODY_MAX_BYTES as u64
+      && entry.max_response_bytes == default_limits.max_response_bytes()
+      && entry.max_stream_bytes == default_limits.max_stream_bytes()
+      && entry.timeout_ms == default_limits.timeout_ms();
     let default_limits_ok = entry.max_request_bytes == default_limits.max_request_bytes()
       && entry.max_response_bytes == default_limits.max_response_bytes()
       && entry.max_stream_bytes == default_limits.max_stream_bytes()
       && entry.timeout_ms == default_limits.timeout_ms();
-    if !default_limits_ok && !speech_limits_ok {
+    if !default_limits_ok && !speech_limits_ok && !ocr_limits_ok {
       return Err(CapabilityError::new(
         CapabilityErrorCode::PermissionDenied,
         "grant network resource limits are not approved by host policy",

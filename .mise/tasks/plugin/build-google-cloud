@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+# ABOUTME: Deterministically build and stage the four Google Cloud Wasm Components.
+# ABOUTME: Normal builds verify committed fixtures and manifest digests; fixture refresh explicitly updates them.
+#MISE description="Build google-cloud staging tree (unsigned; release CI signs externally)"
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+PLUGIN_DIR="$ROOT_DIR/runtime-plugins/google-cloud"
+STAGING="$ROOT_DIR/runtime-plugins/dist/staging/com.langnext.google-cloud-1.2.0"
+PACKAGE_FIXTURE="$PLUGIN_DIR/fixtures/com.langnext.google-cloud-1.2.0.lnplugin"
+PACKAGE_DIGEST_FILE="$PACKAGE_FIXTURE.sha256"
+UPDATE_FIXTURES=0
+SELF_TEST=0
+for arg in "$@"; do
+  case "$arg" in
+    --update-fixtures) UPDATE_FIXTURES=1 ;;
+    --self-test) SELF_TEST=1 ;;
+    --) ;;
+    *) echo "error: unknown argument $arg" >&2; exit 2 ;;
+  esac
+done
+
+EXPECTED_CARGO_COMPONENT="0.21.1"
+CARGO_COMPONENT_VERSION="$(cargo component --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
+if [[ "$CARGO_COMPONENT_VERSION" != "$EXPECTED_CARGO_COMPONENT" ]]; then
+  echo "error: cargo-component $CARGO_COMPONENT_VERSION != pinned $EXPECTED_CARGO_COMPONENT" >&2
+  exit 1
+fi
+command -v bun >/dev/null 2>&1 || { echo "error: bun is required" >&2; exit 1; }
+
+PUBLIC_KEY_FILE="$ROOT_DIR/runtime-plugins/conformance/fixtures/packages/keys/vendor-public-key.hex"
+PUBLIC_KEY_HEX="${LANGNEXT_VENDOR_PUBLIC_KEY_HEX:-$(tr -d '[:space:]' < "$PUBLIC_KEY_FILE")}"
+
+build_component() {
+  local crate_dir="$1" crate_name="$2" fixture="$3"
+  local compiled="$crate_dir/target/wasm32-unknown-unknown/release/$crate_name.wasm"
+  local digest_file="$fixture.sha256"
+  cargo component build --manifest-path "$crate_dir/Cargo.toml" --target wasm32-unknown-unknown --release --locked
+  [[ -f "$compiled" ]] || { echo "error: missing compiled Component $compiled" >&2; exit 1; }
+  local digest
+  digest="$(sha256sum "$compiled" | awk '{print $1}')"
+  if [[ "$UPDATE_FIXTURES" -eq 1 ]]; then
+    mkdir -p "$(dirname "$fixture")"
+    cp "$compiled" "$fixture"
+    printf '%s\n' "$digest" > "$digest_file"
+  else
+    [[ -f "$fixture" && -f "$digest_file" ]] || { echo "error: fixture or digest missing for $crate_name; run refresh task" >&2; exit 1; }
+    [[ "$(sha256sum "$fixture" | awk '{print $1}')" == "$(tr -d '[:space:]' < "$digest_file")" ]] || { echo "error: committed fixture digest is stale for $crate_name" >&2; exit 1; }
+    [[ "$digest" == "$(tr -d '[:space:]' < "$digest_file")" ]] || { echo "error: Component digest drift for $crate_name; use --update-fixtures only in the dev refresh task" >&2; exit 1; }
+  fi
+  echo "ok: $crate_name Component $digest"
+}
+
+build_component "$PLUGIN_DIR/translate" langnext_google_cloud_translate "$PLUGIN_DIR/translate/fixtures/langnext-google-cloud-translate.wasm"
+build_component "$PLUGIN_DIR/detect" langnext_google_cloud_detect "$PLUGIN_DIR/detect/fixtures/langnext-google-cloud-detect.wasm"
+build_component "$PLUGIN_DIR/ocr" langnext_google_cloud_ocr "$PLUGIN_DIR/ocr/fixtures/langnext-google-cloud-ocr.wasm"
+build_component "$PLUGIN_DIR/tts" langnext_google_cloud_tts "$PLUGIN_DIR/tts/fixtures/langnext-google-cloud-tts.wasm"
+
+rm -rf "$STAGING"
+mkdir -p "$STAGING/translate/fixtures" "$STAGING/detect/fixtures" "$STAGING/ocr/fixtures" "$STAGING/tts/fixtures" "$STAGING/schemas" "$STAGING/locales" "$STAGING/signatures"
+cp "$PLUGIN_DIR/translate/fixtures/langnext-google-cloud-translate.wasm" "$STAGING/translate/fixtures/"
+cp "$PLUGIN_DIR/detect/fixtures/langnext-google-cloud-detect.wasm" "$STAGING/detect/fixtures/"
+cp "$PLUGIN_DIR/ocr/fixtures/langnext-google-cloud-ocr.wasm" "$STAGING/ocr/fixtures/"
+cp "$PLUGIN_DIR/tts/fixtures/langnext-google-cloud-tts.wasm" "$STAGING/tts/fixtures/"
+cp "$PLUGIN_DIR/schemas/"*.json "$STAGING/schemas/"
+cp "$PLUGIN_DIR/locales/"*.json "$STAGING/locales/"
+cp "$PLUGIN_DIR/plugin.json" "$STAGING/plugin.json"
+bun -e 'const fs=require("fs");const p=process.argv[1];const key=Buffer.from(process.argv[2],"hex");if(key.length!==32)throw new Error("vendor key must be 32 bytes");fs.writeFileSync(p+"/publisher.pub",key);' "$STAGING" "$PUBLIC_KEY_HEX"
+bun "$ROOT_DIR/scripts/build-google-cloud-manifest.js" "$STAGING" "$PLUGIN_DIR" "$UPDATE_FIXTURES" "$PUBLIC_KEY_HEX"
+if [[ "$UPDATE_FIXTURES" -eq 1 ]]; then
+  bunx prettier --write "$PLUGIN_DIR/plugin.json" >/dev/null
+  cp "$PLUGIN_DIR/plugin.json" "$STAGING/plugin.json"
+else
+  bunx prettier --check "$PLUGIN_DIR/plugin.json" >/dev/null
+fi
+bun -e '
+  const fs = require("fs");
+  const [committedManifestPath, stagingManifestPath] = process.argv.slice(1);
+  if (!fs.readFileSync(committedManifestPath).equals(fs.readFileSync(stagingManifestPath))) {
+    process.exit(1);
+  }
+' "$PLUGIN_DIR/plugin.json" "$STAGING/plugin.json" || {
+  echo "error: staging manifest differs from committed manifest" >&2
+  exit 1
+}
+if [[ "$UPDATE_FIXTURES" -eq 0 ]]; then
+  [[ -f "$PACKAGE_FIXTURE" && -f "$PACKAGE_DIGEST_FILE" ]] || {
+    echo "error: package fixture or digest missing; run refresh task" >&2
+    exit 1
+  }
+  PACKAGE_DIGEST="$(sha256sum "$PACKAGE_FIXTURE" | awk '{print $1}')"
+  [[ "$PACKAGE_DIGEST" == "$(tr -d '[:space:]' < "$PACKAGE_DIGEST_FILE")" ]] || {
+    echo "error: committed package fixture digest is stale" >&2
+    exit 1
+  }
+  bun -e '
+    const fs = require("fs");
+    const path = require("path");
+    const { execFileSync } = require("child_process");
+    const [packagePath, stagingPath] = process.argv.slice(1);
+    const readArchive = (entryPath) => execFileSync("unzip", ["-p", packagePath, entryPath]);
+    const manifestBytes = readArchive("plugin.json");
+    const stagingManifest = fs.readFileSync(path.join(stagingPath, "plugin.json"));
+    if (!manifestBytes.equals(stagingManifest)) throw new Error("package manifest differs from staging manifest");
+    const manifest = JSON.parse(manifestBytes.toString("utf8"));
+    for (const entry of manifest.files ?? []) {
+      const archiveBytes = readArchive(entry.path);
+      const stagingBytes = fs.readFileSync(path.join(stagingPath, entry.path));
+      if (!archiveBytes.equals(stagingBytes)) throw new Error(`package payload differs from staging: ${entry.path}`);
+    }
+  ' "$PACKAGE_FIXTURE" "$STAGING"
+fi
+
+if [[ "$SELF_TEST" -eq 1 ]]; then
+  [[ -f "$PLUGIN_DIR/plugin.json" ]] || exit 1
+  cargo run --manifest-path "$ROOT_DIR/src-tauri/Cargo.toml" --bin plugin_tool --quiet -- verify \
+    "$PACKAGE_FIXTURE" \
+    --public-key-file "$PUBLIC_KEY_FILE" >/dev/null
+  echo "ok: Google Cloud build self-test verified the committed package fixture"
+fi
+echo "ok: Google Cloud staging tree at $STAGING"

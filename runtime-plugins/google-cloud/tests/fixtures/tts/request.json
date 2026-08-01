@@ -1,0 +1,9 @@
+{
+  "input": { "text": "Hello" },
+  "voice": { "languageCode": "en" },
+  "audioConfig": {
+    "audioEncoding": "MP3",
+    "speakingRate": 1.0,
+    "pitch": 0.0
+  }
+}

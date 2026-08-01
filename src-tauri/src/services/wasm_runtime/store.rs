@@ -2,6 +2,7 @@
 // ABOUTME: Component runtime. A fresh Store<PluginHostState> is created per request; never reused.
 use crate::domain::cancel::CancelToken;
 use crate::domain::runtime_plugin::{ExecutionGrantSet, PluginPrincipal};
+use crate::domain::service_capability::ProviderAttemptTracker;
 use crate::services::blob_resources::BlobResourceTable;
 use crate::services::stream_resources::StreamResourceTable;
 use std::time::{Duration, Instant};
@@ -10,8 +11,9 @@ use wasmtime::{Engine, Store, StoreLimits, StoreLimitsBuilder};
 
 use super::host::{BrokerHandle, LogBudget};
 
-/// Maximum bytes a single guest linear memory may grow to (16 MiB).
-pub const STORE_MEMORY_MAX_BYTES: usize = 16 * 1024 * 1024;
+/// Maximum bytes a single guest linear memory may grow to (128 MiB).
+/// This covers bounded OCR base64/JSON peak copies and bounded TTS response decoding.
+pub const STORE_MEMORY_MAX_BYTES: usize = 128 * 1024 * 1024;
 /// Maximum elements per guest table.
 pub const STORE_TABLE_MAX_ELEMENTS: usize = 10_000;
 /// Maximum core instances per store. A single component may instantiate a few core modules.
@@ -30,8 +32,9 @@ pub const STORE_DEFAULT_EPOCH_YIELD_DELTA: u64 = 1;
 /// of fuel/epoch interruption for infinite-loop detection.
 pub const EPOCH_TICK_INTERVAL: Duration = Duration::from_millis(10);
 /// Hard upper bound on a single broker import's wall-clock duration, even when no explicit
-/// deadline is set. Prevents a missing deadline from hanging the host.
-pub const BROKER_IMPORT_MAX_TIMEOUT: Duration = Duration::from_secs(30);
+/// deadline is set. This matches the signed Google TTS 60-second provider grant while the
+/// no-deadline default below keeps ordinary imports at 20 seconds.
+pub const BROKER_IMPORT_MAX_TIMEOUT: Duration = Duration::from_secs(60);
 /// Default per-import timeout when no explicit request deadline is set. Shorter than
 /// [`BROKER_IMPORT_MAX_TIMEOUT`] so imports without a deadline still bounded.
 pub const BROKER_IMPORT_NO_DEADLINE_DEFAULT: Duration = Duration::from_secs(20);
@@ -49,6 +52,11 @@ pub struct PluginHostState {
   pub grant: ExecutionGrantSet,
   /// Cooperative cancellation token. Imports check it and abort promptly.
   pub cancel: CancelToken,
+  /// Optional host-owned provider-attempt provenance for this capability call.
+  pub provider_attempt: Option<ProviderAttemptTracker>,
+  /// Test-only observer set after request-owned blobs are cleared on store drop.
+  #[cfg(test)]
+  pub cleanup_probe: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
   /// Wall-clock request deadline. Imports enforce it regardless of guest hints.
   pub deadline: Option<Instant>,
   /// Bounded structured-log policy (enforced on every `host.log`).
@@ -73,6 +81,10 @@ impl Drop for PluginHostState {
     // Request completion / store drop: release all host-owned binary resources.
     self.blobs.clear();
     self.streams.clear();
+    #[cfg(test)]
+    if let Some(probe) = &self.cleanup_probe {
+      probe.store(self.blobs.is_empty(), std::sync::atomic::Ordering::SeqCst);
+    }
   }
 }
 
@@ -119,7 +131,27 @@ pub fn new_state(
   deadline: Option<Instant>,
   broker: Box<dyn BrokerHandle>,
 ) -> PluginHostState {
-  new_state_with_fuel(principal, grant, cancel, deadline, broker, STORE_DEFAULT_FUEL)
+  new_state_with_provider_attempt(principal, grant, cancel, deadline, broker, None)
+}
+
+/// Construct host state with a request-scoped provider-attempt tracker.
+pub fn new_state_with_provider_attempt(
+  principal: PluginPrincipal,
+  grant: ExecutionGrantSet,
+  cancel: CancelToken,
+  deadline: Option<Instant>,
+  broker: Box<dyn BrokerHandle>,
+  provider_attempt: Option<ProviderAttemptTracker>,
+) -> PluginHostState {
+  new_state_with_fuel_and_provider_attempt(
+    principal,
+    grant,
+    cancel,
+    deadline,
+    broker,
+    STORE_DEFAULT_FUEL,
+    provider_attempt,
+  )
 }
 
 /// Build a `PluginHostState` with an explicit fuel grant. Used by tests that need to isolate
@@ -133,10 +165,25 @@ pub fn new_state_with_fuel(
   broker: Box<dyn BrokerHandle>,
   fuel: u64,
 ) -> PluginHostState {
+  new_state_with_fuel_and_provider_attempt(principal, grant, cancel, deadline, broker, fuel, None)
+}
+
+pub fn new_state_with_fuel_and_provider_attempt(
+  principal: PluginPrincipal,
+  grant: ExecutionGrantSet,
+  cancel: CancelToken,
+  deadline: Option<Instant>,
+  broker: Box<dyn BrokerHandle>,
+  fuel: u64,
+  provider_attempt: Option<ProviderAttemptTracker>,
+) -> PluginHostState {
   PluginHostState {
     principal,
     grant,
     cancel,
+    provider_attempt,
+    #[cfg(test)]
+    cleanup_probe: None,
     deadline,
     log_budget: LogBudget::default(),
     broker,

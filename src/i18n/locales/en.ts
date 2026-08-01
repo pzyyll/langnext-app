@@ -204,8 +204,8 @@ const en = {
       playbackFailed: "Could not play synthesized audio.",
       synthesizeFailed: "Speech synthesis failed.",
       cancelled: "Speech stopped",
-      permissionDenied: "Google Cloud denied the request. Check Text-to-Speech API access.",
-      quotaExceeded: "Google Cloud speech quota or rate limit reached.",
+      permissionDenied: "The current Speech service denied the request. Check its access settings.",
+      quotaExceeded: "The current Speech service quota or rate limit was reached.",
       textTooLong: "Text is too long for speech synthesis.",
       networkError: "Network error during speech synthesis.",
       invalidAudio: "Received invalid audio from the provider.",
@@ -905,6 +905,21 @@ const en = {
     dependencies: {
       title: "Dependencies",
       empty: "No domain bindings yet.",
+    },
+    capabilityHealth: {
+      title: "Capability health",
+      status: {
+        ready: "Ready",
+        degraded: "Degraded",
+        notChecked: "Not checked",
+      },
+      capabilities: {
+        translate: "Translate",
+        detect: "Detect",
+        ocr: "OCR",
+        tts: "Text to Speech",
+        unknown: "Capability",
+      },
     },
     add: {
       title: "Add configuration",

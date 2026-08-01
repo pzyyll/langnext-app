@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# ABOUTME: Validate the Google Cloud fixture and launch its local manual smoke-test environment.
+# ABOUTME: Creates a temporary dev-only vendor trust root; it never writes production trust material.
+#MISE description="Run Google Cloud manual smoke test (arg: --preflight-only)"
+set -euo pipefail
+
+readonly PREFLIGHT_ONLY_FLAG="--preflight-only"
+readonly VENDOR_PUBLISHER_KEY_ID="com.langnext.vendor.keys.1"
+readonly ED25519_PUBLIC_KEY_HEX_LENGTH=64
+readonly PACKAGE_RELATIVE_PATH="runtime-plugins/google-cloud/fixtures/com.langnext.google-cloud-1.2.0.lnplugin"
+readonly VENDOR_PUBLIC_KEY_RELATIVE_PATH="runtime-plugins/conformance/fixtures/packages/keys/vendor-public-key.hex"
+
+if [[ "${1:-}" == "--" ]]; then
+  shift
+fi
+
+case "${1:-}" in
+  "") PREFLIGHT_ONLY=0 ;;
+  "$PREFLIGHT_ONLY_FLAG") PREFLIGHT_ONLY=1 ;;
+  *)
+    echo "usage: mise run smoke:google-cloud [--preflight-only]" >&2
+    exit 2
+    ;;
+esac
+
+if [[ $# -gt 1 ]]; then
+  echo "usage: mise run smoke:google-cloud [--preflight-only]" >&2
+  exit 2
+fi
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+PACKAGE_PATH="$ROOT_DIR/$PACKAGE_RELATIVE_PATH"
+PUBLIC_KEY_PATH="$ROOT_DIR/$VENDOR_PUBLIC_KEY_RELATIVE_PATH"
+
+[[ -f "$PACKAGE_PATH" ]] || {
+  echo "error: Google Cloud fixture package is missing: $PACKAGE_PATH" >&2
+  exit 1
+}
+[[ -f "$PUBLIC_KEY_PATH" ]] || {
+  echo "error: Google Cloud fixture vendor key is missing: $PUBLIC_KEY_PATH" >&2
+  exit 1
+}
+
+PUBLIC_KEY_HEX="$(tr -d '[:space:]' < "$PUBLIC_KEY_PATH")"
+if [[ ${#PUBLIC_KEY_HEX} -ne $ED25519_PUBLIC_KEY_HEX_LENGTH || ! "$PUBLIC_KEY_HEX" =~ ^[0-9a-f]+$ ]]; then
+  echo "error: Google Cloud fixture vendor key must be $ED25519_PUBLIC_KEY_HEX_LENGTH lowercase hexadecimal characters" >&2
+  exit 1
+fi
+
+# Workspace-relative temp dir so native Windows Tauri/bun (spawned from MSYS bash via mise)
+# read the same filesystem as bash. Plain `mktemp` under /tmp maps to a different filesystem
+# view for native binaries (C:/msys64/tmp vs AppData/Local/Temp); same pattern as build-google-web
+# self-tests. The dev-only trust file lives under gitignored runtime-plugins/dist and is removed
+# on exit; production resources are never written.
+VENDOR_TRUST_DIR="$ROOT_DIR/runtime-plugins/dist/smoke-google-cloud-$$"
+rm -rf "$VENDOR_TRUST_DIR"
+mkdir -p "$VENDOR_TRUST_DIR"
+VENDOR_TRUST_JSON="$VENDOR_TRUST_DIR/vendor-trust.json"
+cleanup() {
+  rm -rf "$VENDOR_TRUST_DIR"
+}
+trap cleanup EXIT
+
+# Native Windows path conversion for the env-var exports: Tauri (Rust std::fs) and bun are native
+# binaries that cannot resolve MSYS POSIX paths (/tmp/..., /f/...). cygpath -w yields C:\... paths
+# they can read; POSIX paths are retained on non-MSYS systems (Linux/macOS CI).
+native_path() {
+  if command -v cygpath >/dev/null 2>&1; then
+    cygpath -w "$1"
+  else
+    printf '%s\n' "$1"
+  fi
+}
+
+printf '[\n  {\n    "keyId": "%s",\n    "publicKeyHex": "%s"\n  }\n]\n' \
+  "$VENDOR_PUBLISHER_KEY_ID" "$PUBLIC_KEY_HEX" > "$VENDOR_TRUST_JSON"
+
+export LANGNEXT_VENDOR_TRUST_JSON="$(native_path "$VENDOR_TRUST_JSON")"
+export LANGNEXT_BUNDLED_GOOGLE_CLOUD_PACKAGE="$(native_path "$PACKAGE_PATH")"
+
+cd "$ROOT_DIR"
+mise run plugin:build-google-cloud -- --self-test
+mise run plugin:conformance google-cloud
+
+if [[ $PREFLIGHT_ONLY -eq 1 ]]; then
+  echo "ok: Google Cloud smoke-test preflight passed"
+  exit 0
+fi
+
+echo "ok: launching Tauri with the local Google Cloud fixture and temporary vendor trust"
+mise run tauri:dev

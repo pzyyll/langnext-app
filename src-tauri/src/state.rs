@@ -176,11 +176,15 @@ impl AppState {
     // via NetworkBrokerHandle. No credentials/cookies/auth headers are ever injected.
     let broker_transport: Arc<dyn crate::services::bounded_http::RawHttpTransport> =
       Arc::new(crate::services::bounded_http::ReqwestRawHttpTransport);
+    let wasm_token_grants = token_grants.clone();
     let broker_factory: Arc<dyn Fn() -> Box<dyn crate::services::wasm_runtime::host::BrokerHandle> + Send + Sync> =
       Arc::new(move || {
-        Box::new(crate::services::wasm_runtime::network_handle::NetworkBrokerHandle::new(
-          broker_transport.clone(),
-        ))
+        Box::new(
+          crate::services::wasm_runtime::network_handle::NetworkBrokerHandle::new_with_token_grants(
+            broker_transport.clone(),
+            wasm_token_grants.clone(),
+          ),
+        )
       });
     let service_capabilities = ServiceCapabilityService::new(db.clone(), registry.clone(), capability_handlers)
       .with_router(runtime_router.clone(), wasm_runtime.clone())
@@ -229,22 +233,29 @@ impl AppState {
 const BUNDLED_GOOGLE_WEB_PACKAGE_PREFIX: &str = "com.langnext.google-translate-web-";
 /// Bundled Edge TTS package filename prefix.
 const BUNDLED_EDGE_TTS_PACKAGE_PREFIX: &str = "com.langnext.edge-tts-";
+/// Bundled Google Cloud package filename prefix; imported for discovery only, never auto-pinned.
+const BUNDLED_GOOGLE_CLOUD_PACKAGE_PREFIX: &str = "com.langnext.google-cloud-";
 const BUNDLED_VENDOR_PACKAGE_SUFFIX: &str = ".lnplugin";
 /// Env override pointing at a single bundled signed package (release/CI/test injection).
 const BUNDLED_GOOGLE_WEB_PACKAGE_ENV: &str = "LANGNEXT_BUNDLED_GOOGLE_WEB_PACKAGE";
 const BUNDLED_EDGE_TTS_PACKAGE_ENV: &str = "LANGNEXT_BUNDLED_EDGE_TTS_PACKAGE";
+const BUNDLED_GOOGLE_CLOUD_PACKAGE_ENV: &str = "LANGNEXT_BUNDLED_GOOGLE_CLOUD_PACKAGE";
 /// Vendor default version explicitly selected as the new-instance catalog default after all
 /// bundled archives are imported. Must match the verified installed manifest version.
 const GOOGLE_WEB_DEFAULT_VERSION: &str = "1.0.0";
 const EDGE_TTS_DEFAULT_VERSION: &str = "1.0.0";
 
-/// Locate bundled vendor-signed `.lnplugin` archives (Google Web + Edge TTS) to import on first
-/// startup. Checks env overrides, the cargo resources dir (dev/test), and `resources/plugins` /
+/// Locate bundled vendor-signed `.lnplugin` archives (Google Web, Edge TTS, and Google Cloud) to
+/// import on first startup. Checks env overrides, the cargo resources dir (dev/test), and `resources/plugins` /
 /// `plugins` paths beside the resource root. Returns an empty vec when no bundled archive is
 /// present (local dev).
 fn locate_bundled_vendor_packages(resource_dir: Option<&std::path::Path>) -> Vec<std::path::PathBuf> {
   let mut archives = Vec::new();
-  for env_key in [BUNDLED_GOOGLE_WEB_PACKAGE_ENV, BUNDLED_EDGE_TTS_PACKAGE_ENV] {
+  for env_key in [
+    BUNDLED_GOOGLE_WEB_PACKAGE_ENV,
+    BUNDLED_EDGE_TTS_PACKAGE_ENV,
+    BUNDLED_GOOGLE_CLOUD_PACKAGE_ENV,
+  ] {
     if let Ok(path) = std::env::var(env_key) {
       let path = std::path::PathBuf::from(path);
       if path.is_file() {
@@ -271,7 +282,8 @@ fn locate_bundled_vendor_packages(resource_dir: Option<&std::path::Path>) -> Vec
       let path = entry.path();
       if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
         let is_vendor = (name.starts_with(BUNDLED_GOOGLE_WEB_PACKAGE_PREFIX)
-          || name.starts_with(BUNDLED_EDGE_TTS_PACKAGE_PREFIX))
+          || name.starts_with(BUNDLED_EDGE_TTS_PACKAGE_PREFIX)
+          || name.starts_with(BUNDLED_GOOGLE_CLOUD_PACKAGE_PREFIX))
           && name.ends_with(BUNDLED_VENDOR_PACKAGE_SUFFIX)
           && path.is_file();
         if is_vendor {

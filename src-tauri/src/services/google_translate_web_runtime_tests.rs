@@ -828,6 +828,7 @@ fn ctx(id: Uuid, rid: &str, cap: &str) -> ExecutionContext {
     integration_instance_id: id,
     plugin_id: PLUGIN_ID.into(),
     capability_id: cap.into(),
+    provider_attempt: crate::domain::service_capability::ProviderAttemptTracker::new(),
   }
 }
 
@@ -922,6 +923,7 @@ fn google_translate_web_runtime_gtx_cancellation() {
           integration_instance_id: id,
           plugin_id: PLUGIN_ID.into(),
           capability_id: TRANSLATE_CAP.into(),
+          provider_attempt: crate::domain::service_capability::ProviderAttemptTracker::new(),
         },
       ),
     )
@@ -1044,6 +1046,7 @@ fn google_translate_web_runtime_timeout_maps_to_timeout() {
           integration_instance_id: id,
           plugin_id: PLUGIN_ID.into(),
           capability_id: TRANSLATE_CAP.into(),
+          provider_attempt: crate::domain::service_capability::ProviderAttemptTracker::new(),
         },
       ),
     )

@@ -27,6 +27,7 @@ pub const MIGRATIONS: &[&str] = &[
   include_str!("../../migrations/0020_execution_grant_response_body_modes.sql"),
   include_str!("../../migrations/0021_integration_endpoint_trusts.sql"),
   include_str!("../../migrations/0022_execution_grant_base_urls.sql"),
+  include_str!("../../migrations/0023_integration_capability_health.sql"),
 ];
 
 pub fn latest_version() -> i32 {

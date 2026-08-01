@@ -1,0 +1,3 @@
+# cargo-component regenerates bindings and target artifacts.
+src/bindings.rs
+target/

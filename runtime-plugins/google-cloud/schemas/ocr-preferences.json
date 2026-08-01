@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "fields": [
+    {
+      "id": "operation",
+      "control": {
+        "kind": "enum",
+        "spec": {
+          "source": {
+            "type": "fixed",
+            "options": [
+              { "value": "text_detection", "labelFallback": "Text Detection" },
+              { "value": "document_text_detection", "labelFallback": "Document Text Detection" }
+            ]
+          },
+          "default": "document_text_detection"
+        }
+      },
+      "labelFallback": "Operation",
+      "requiredForReady": false
+    },
+    {
+      "id": "language-hints",
+      "control": {
+        "kind": "multi-enum",
+        "spec": {
+          "source": { "type": "host", "id": "host.supported-languages@1" },
+          "maxSelected": 3,
+          "default": []
+        }
+      },
+      "labelFallback": "Language Hints",
+      "requiredForReady": false
+    }
+  ],
+  "groups": []
+}

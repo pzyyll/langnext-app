@@ -402,6 +402,16 @@ export type IntegrationHealthStatus = "unconfigured" | "unvalidated" | "ready" |
 /** DTO effective status including derived disabled/plugin_missing. */
 export type IntegrationEffectiveStatus = IntegrationHealthStatus | "disabled" | "plugin_missing";
 
+export type CapabilityHealthStatus = "ready" | "degraded";
+
+/** Sanitized per-capability provider result; provider bodies and user content never cross IPC. */
+export interface CapabilityHealthDto {
+  capabilityId: string;
+  status: CapabilityHealthStatus;
+  errorCode?: string | null;
+  checkedAt: string;
+}
+
 /** Host-owned endpoint trust state returned with an integration instance. */
 export type EndpointTrustStatus = "official" | "trusted_custom" | "review_required" | "not_applicable";
 
@@ -590,6 +600,8 @@ export interface IntegrationInstanceDto {
   runtimeErrorCode?: string | null;
   runtimeErrorMessage?: string | null;
   runtimeRequirement?: RuntimeRequirementExport | null;
+  /** Capability-specific health; absent entries are presented as not checked. */
+  capabilityHealth?: CapabilityHealthDto[];
   credentialSlots: CredentialSlotStatusDto[];
   createdAt: string;
   updatedAt: string;

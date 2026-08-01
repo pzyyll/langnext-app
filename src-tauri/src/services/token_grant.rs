@@ -11,7 +11,7 @@ use uuid::Uuid;
 // Auth-policy constants and grant-request validation live in the host-owned auth_policies module.
 pub use crate::services::auth_policies::{
   GOOGLE_CLOUD_TEXT_TO_SPEECH_SCOPE, GOOGLE_CLOUD_TRANSLATION_SCOPE, GOOGLE_CLOUD_VISION_SCOPE,
-  GOOGLE_OAUTH_AUDIENCE_POLICY_ID, GOOGLE_SERVICE_ACCOUNT_AUTH_DRIVER_ID,
+  GOOGLE_OAUTH_AUDIENCE_POLICY_ID, GOOGLE_SERVICE_ACCOUNT_AUTH_DRIVER_ID, GOOGLE_SERVICE_ACCOUNT_AUTH_POLICY_ID,
 };
 /// Safety skew subtracted from token expiry before reuse.
 pub const TOKEN_EXPIRY_SAFETY_SKEW: Duration = Duration::from_secs(60);

@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "fields": [
+    {
+      "id": "speaking-rate",
+      "control": { "kind": "number", "spec": { "min": 0.25, "max": 2, "default": 1 } },
+      "labelFallback": "Speaking Rate",
+      "requiredForReady": false
+    },
+    {
+      "id": "pitch",
+      "control": { "kind": "number", "spec": { "min": -20, "max": 20, "default": 0 } },
+      "labelFallback": "Pitch",
+      "requiredForReady": false
+    }
+  ],
+  "groups": []
+}

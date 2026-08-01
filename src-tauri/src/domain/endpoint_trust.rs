@@ -147,6 +147,18 @@ pub fn classify_endpoint_egress(
     return EndpointEgressPolicy::TrustedFixed;
   }
 
+  let is_google_cloud_fixed = plugin_id == crate::domain::service_integration::GOOGLE_CLOUD_PLUGIN_ID
+    && matches!(
+      (endpoint_alias, normalized_origin),
+      ("translate", "https://translation.googleapis.com")
+        | ("vision", "https://vision.googleapis.com")
+        | ("text-to-speech", "https://texttospeech.googleapis.com")
+        | ("text_to_speech", "https://texttospeech.googleapis.com")
+    );
+  if is_google_cloud_fixed && origin_kind == Some(NetworkOriginKind::HostFixed) {
+    return EndpointEgressPolicy::TrustedFixed;
+  }
+
   if is_edge_tts {
     if current_approval && (origin_kind.is_none() || origin_kind == Some(NetworkOriginKind::UserApprovedInstance)) {
       return EndpointEgressPolicy::UserApprovedCustom;

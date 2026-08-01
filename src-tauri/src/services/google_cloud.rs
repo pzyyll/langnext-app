@@ -54,6 +54,31 @@ const DETECT_LANGUAGES_MAX_ITEMS: usize = 16;
 /// Max path segment length for project/location.
 const PATH_SEGMENT_MAX_LEN: usize = 128;
 
+struct ProviderAttemptGuard {
+  tracker: crate::domain::service_capability::ProviderAttemptTracker,
+  cancel: crate::domain::cancel::CancelToken,
+}
+
+impl ProviderAttemptGuard {
+  fn start(context: &ExecutionContext) -> Self {
+    context.provider_attempt.mark_started();
+    Self {
+      tracker: context.provider_attempt.clone(),
+      cancel: context.cancel.clone(),
+    }
+  }
+}
+
+impl Drop for ProviderAttemptGuard {
+  fn drop(&mut self) {
+    if self.cancel.is_cancelled() {
+      self.tracker.mark_cancelled();
+    } else {
+      self.tracker.mark_completed();
+    }
+  }
+}
+
 #[derive(Clone)]
 pub struct GoogleCloudCapabilities {
   db: Database,
@@ -117,6 +142,7 @@ impl GoogleCloudCapabilities {
       &relative_path,
       &context.request_id,
     )?;
+    let _attempt = ProviderAttemptGuard::start(&context);
 
     let grant = self
       .tokens
@@ -194,6 +220,7 @@ impl GoogleCloudCapabilities {
       &relative_path,
       &context.request_id,
     )?;
+    let _attempt = ProviderAttemptGuard::start(&context);
 
     let grant = self
       .tokens
@@ -292,6 +319,7 @@ impl GoogleCloudCapabilities {
       GOOGLE_VISION_ANNOTATE_PATH,
       &context.request_id,
     )?;
+    let _attempt = ProviderAttemptGuard::start(&context);
 
     let grant = self
       .tokens
@@ -400,6 +428,7 @@ impl GoogleCloudCapabilities {
       GOOGLE_TEXT_TO_SPEECH_SYNTHESIZE_PATH,
       &context.request_id,
     )?;
+    let _attempt = ProviderAttemptGuard::start(&context);
 
     let grant = self
       .tokens
@@ -1574,6 +1603,7 @@ mod tests {
       integration_instance_id: instance_id,
       plugin_id: GOOGLE_CLOUD_PLUGIN_ID.into(),
       capability_id: capability_id.into(),
+      provider_attempt: crate::domain::service_capability::ProviderAttemptTracker::new(),
     }
   }
 

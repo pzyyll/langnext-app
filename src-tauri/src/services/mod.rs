@@ -28,6 +28,8 @@ pub mod runtime_router;
 #[cfg(test)]
 mod edge_tts_runtime_tests;
 #[cfg(test)]
+mod google_cloud_runtime_tests;
+#[cfg(test)]
 mod google_translate_web_runtime_tests;
 #[cfg(test)]
 mod runtime_lifecycle_installed_tests;

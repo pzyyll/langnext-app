@@ -10,14 +10,15 @@ use crate::domain::ocr_service::{
 };
 use crate::domain::provider::{CredentialUpdate, ProxyMode};
 use crate::domain::service_capability::{
-  CapabilityError, CapabilityErrorCode, OcrImagePreferences, OcrImageRequest, validate_ocr_image_preferences,
+  CapabilityError, CapabilityErrorCode, OcrImagePreferences, OcrImageRequest, ProviderAttemptTracker,
+  validate_ocr_image_preferences,
 };
 use crate::domain::service_integration::{IntegrationHealthStatus, validate_capability_id};
 use crate::domain::time::{new_id, now_rfc3339};
 use crate::error::StorageError;
 use crate::repositories::credential_operations::{self, CredentialOperation, OwnerKind};
 use crate::repositories::{app_settings, integration_instances, ocr_prompt_templates, ocr_services, provider_models};
-use crate::services::service_capabilities::{ServiceCapabilityService, execution_context};
+use crate::services::service_capabilities::{ServiceCapabilityService, execution_context_with_tracker};
 use crate::services::service_integration_registry::ServiceIntegrationRegistry;
 use crate::services::translation_profiles::{capabilities_major_compatible, capability_name};
 use crate::storage::Database;
@@ -689,14 +690,17 @@ impl OcrServiceService {
           .clone()
           .filter(|s| !s.trim().is_empty())
           .unwrap_or_else(|| new_id().to_string());
-        let context = execution_context(
+        let provider_attempt = ProviderAttemptTracker::new();
+        let call_cancel = cancel.clone();
+        let context = execution_context_with_tracker(
           request_id,
           cancel,
           plugin.integration_instance_id,
           plugin.plugin_id,
           plugin.ocr_capability_id.clone(),
+          provider_attempt.clone(),
         );
-        let response = handler
+        let call_result = handler
           .recognize(
             plugin.integration_instance_id,
             OcrImageRequest {
@@ -705,8 +709,26 @@ impl OcrServiceService {
             },
             context,
           )
-          .await
-          .map_err(map_capability_error)?;
+          .await;
+        let call_result = if call_cancel.is_cancelled() {
+          Err(CapabilityError::new(
+            CapabilityErrorCode::Cancelled,
+            "OCR request cancelled",
+          ))
+        } else {
+          call_result
+        };
+        if !call_cancel.is_cancelled() {
+          let _ = self.service_capabilities.record_provider_result_if_current(
+            plugin.integration_instance_id,
+            &plugin.ocr_capability_id,
+            &provider_attempt,
+            call_result.is_ok(),
+            call_result.as_ref().err().map(|error| error.code),
+            Some(plugin.instance_updated_at.as_str()),
+          );
+        }
+        let response = call_result.map_err(map_capability_error)?;
         Ok(OcrRecognizeResult {
           text: response.text,
           ocr_service_id: plugin.service_id,
@@ -729,6 +751,7 @@ struct PreparedBaiduOcr {
 struct PreparedPluginOcr {
   service_id: Uuid,
   integration_instance_id: Uuid,
+  instance_updated_at: String,
   plugin_id: String,
   ocr_capability_id: String,
   preferences: OcrImagePreferences,
@@ -814,6 +837,7 @@ fn prepare_ocr_recognition(
       Ok(PreparedOcr::Plugin(PreparedPluginOcr {
         service_id: service.id,
         integration_instance_id,
+        instance_updated_at: instance.updated_at,
         plugin_id: instance.plugin_id,
         ocr_capability_id,
         preferences,

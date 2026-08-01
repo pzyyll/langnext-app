@@ -743,7 +743,7 @@ Expected:
 
 ## Manual Validation
 
-Run `mise run tauri:dev` with user-supplied test credentials only after automated conformance passes:
+Run `mise run smoke:google-cloud` with user-supplied test credentials. The task runs the required Google Cloud fixture self-test and conformance suite, supplies a temporary dev-only fixture vendor trust root, then starts Tauri. Use `mise run smoke:google-cloud -- --preflight-only` to run only the non-interactive preflight:
 
 1. Create one Google Cloud integration and bind Translate, OCR, and Speech resources.
 2. Confirm the imported package does not activate automatically.

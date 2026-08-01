@@ -64,6 +64,7 @@ import {
 } from "./integrationDraft";
 import { isRuntimeUnresolved } from "./runtimeLifecyclePresentation";
 import { RuntimeLifecyclePanel } from "./RuntimeLifecyclePanel";
+import { presentCapabilityHealthList } from "./capabilityHealthPresentation";
 
 export type IntegrationEditorProps = {
   integrationInstanceId: string;
@@ -327,6 +328,7 @@ export function IntegrationEditor({ integrationInstanceId }: IntegrationEditorPr
     previewTrustMutation.isPending;
   const dependencies = depsQuery.data ?? [];
   const capabilityIds = definition.capabilities.map((capability) => capability.id);
+  const capabilityHealth = presentCapabilityHealthList(capabilityIds, instance.capabilityHealth);
   const hasRequiredCredential = requiresCredential(definition);
   const statusHint =
     instance.healthStatus === "ready"
@@ -573,9 +575,20 @@ export function IntegrationEditor({ integrationInstanceId }: IntegrationEditorPr
             {capabilityIds.length === 0 ? (
               <p className="text-body-tight text-neutral">{t("plugins.unsupportedInstance")}</p>
             ) : (
-              <ul className="m-0 list-disc space-y-1 pl-5 text-body-tight text-on-surface">
-                {capabilityIds.map((capabilityId) => (
-                  <li key={capabilityId}>{capabilityId}</li>
+              <ul className="m-0 space-y-2 text-body-tight text-on-surface">
+                {capabilityHealth.map((health) => (
+                  <li key={health.capabilityId} className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                    <span className="font-medium">
+                      {t(health.capabilityLabelKey, { defaultValue: health.capabilityId })}
+                    </span>
+                    <span>{t(health.statusLabelKey, { defaultValue: health.status })}</span>
+                    {health.normalizedCode ? <span className="text-error">({health.normalizedCode})</span> : null}
+                    {health.checkedAt ? (
+                      <time className="text-neutral" dateTime={health.checkedAt}>
+                        {health.checkedAt}
+                      </time>
+                    ) : null}
+                  </li>
                 ))}
               </ul>
             )}

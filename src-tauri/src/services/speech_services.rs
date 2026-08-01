@@ -1,8 +1,10 @@
 // ABOUTME: Speech service validation, CRUD, default resolution, and TTS synthesis dispatch.
 // ABOUTME: Capability-backed only; reuses shared Google Cloud integration instances.
 use crate::domain::cancel::CancelToken;
-use crate::domain::service_capability::SpeechSynthesizeRequest;
 use crate::domain::service_capability::validate_speech_synthesize_text;
+use crate::domain::service_capability::{
+  CapabilityError, CapabilityErrorCode, ProviderAttemptTracker, SpeechSynthesizeRequest,
+};
 use crate::domain::service_integration::{IntegrationHealthStatus, validate_capability_id};
 use crate::domain::speech_service::{
   SPEECH_DISPLAY_NAME_MAX_LEN, SpeechService, SpeechServiceDto, SpeechServiceWrite, SpeechSynthesizeInput,
@@ -10,7 +12,7 @@ use crate::domain::speech_service::{
 use crate::domain::time::{new_id, now_rfc3339};
 use crate::error::StorageError;
 use crate::repositories::{app_settings, integration_instances, speech_services};
-use crate::services::service_capabilities::{ServiceCapabilityService, execution_context};
+use crate::services::service_capabilities::{ServiceCapabilityService, execution_context_with_tracker};
 use crate::services::service_integration_registry::ServiceIntegrationRegistry;
 use crate::services::translation_profiles::{capabilities_major_compatible, capability_name};
 use crate::storage::Database;
@@ -212,7 +214,10 @@ impl SpeechServiceService {
     .await?;
 
     if cancel.is_cancelled() {
-      return Err(StorageError::Validation("speech synthesis cancelled".into()));
+      return Err(StorageError::Capability {
+        code: "cancelled".into(),
+        message: "speech synthesis cancelled".into(),
+      });
     }
 
     let handler = self
@@ -220,15 +225,18 @@ impl SpeechServiceService {
       .resolve_speech_synthesize(prepared.integration_instance_id, &prepared.capability_id)
       .map_err(map_capability_error)?;
 
-    let context = execution_context(
+    let provider_attempt = ProviderAttemptTracker::new();
+    let call_cancel = cancel.clone();
+    let context = execution_context_with_tracker(
       request_id,
       cancel,
       prepared.integration_instance_id,
       prepared.plugin_id,
       prepared.capability_id.clone(),
+      provider_attempt.clone(),
     );
 
-    let response = handler
+    let call_result = handler
       .synthesize(
         prepared.integration_instance_id,
         SpeechSynthesizeRequest {
@@ -238,14 +246,33 @@ impl SpeechServiceService {
         },
         context,
       )
-      .await
-      .map_err(map_capability_error)?;
+      .await;
+    let call_result = if call_cancel.is_cancelled() {
+      Err(CapabilityError::new(
+        CapabilityErrorCode::Cancelled,
+        "speech synthesis cancelled",
+      ))
+    } else {
+      call_result
+    };
+    if !call_cancel.is_cancelled() {
+      let _ = self.service_capabilities.record_provider_result_if_current(
+        prepared.integration_instance_id,
+        &prepared.capability_id,
+        &provider_attempt,
+        call_result.is_ok(),
+        call_result.as_ref().err().map(|error| error.code),
+        Some(prepared.instance_updated_at.as_str()),
+      );
+    }
+    let response = call_result.map_err(map_capability_error)?;
     Ok(response.mp3_bytes)
   }
 }
 
 struct PreparedSpeechSynthesis {
   integration_instance_id: Uuid,
+  instance_updated_at: String,
   plugin_id: String,
   capability_id: String,
   preferences: Value,
@@ -300,6 +327,7 @@ fn prepare_speech_synthesis(
 
   Ok(PreparedSpeechSynthesis {
     integration_instance_id: service.integration_instance_id,
+    instance_updated_at: instance.updated_at,
     plugin_id: instance.plugin_id,
     capability_id: service.capability_id,
     preferences,

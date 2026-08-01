@@ -901,6 +901,7 @@ mod tests {
           integration_instance_id: id,
           plugin_id: GOOGLE_TRANSLATE_WEB_PLUGIN_ID.into(),
           capability_id: GOOGLE_WEB_TRANSLATE_TEXT_CAPABILITY_ID.into(),
+          provider_attempt: crate::domain::service_capability::ProviderAttemptTracker::new(),
         },
       )
       .await
@@ -952,6 +953,7 @@ mod tests {
           integration_instance_id: id,
           plugin_id: GOOGLE_TRANSLATE_WEB_PLUGIN_ID.into(),
           capability_id: GOOGLE_WEB_TRANSLATE_TEXT_CAPABILITY_ID.into(),
+          provider_attempt: crate::domain::service_capability::ProviderAttemptTracker::new(),
         },
       )
       .await
@@ -1023,6 +1025,7 @@ mod tests {
           integration_instance_id: id,
           plugin_id: GOOGLE_TRANSLATE_WEB_PLUGIN_ID.into(),
           capability_id: GOOGLE_WEB_TRANSLATE_TEXT_CAPABILITY_ID.into(),
+          provider_attempt: crate::domain::service_capability::ProviderAttemptTracker::new(),
         },
       )
       .await
@@ -1071,6 +1074,7 @@ mod tests {
           integration_instance_id: id,
           plugin_id: GOOGLE_TRANSLATE_WEB_PLUGIN_ID.into(),
           capability_id: GOOGLE_WEB_DETECT_LANGUAGE_CAPABILITY_ID.into(),
+          provider_attempt: crate::domain::service_capability::ProviderAttemptTracker::new(),
         },
       )
       .await
@@ -1111,6 +1115,7 @@ mod tests {
       integration_instance_id: id,
       plugin_id: GOOGLE_TRANSLATE_WEB_PLUGIN_ID.into(),
       capability_id: GOOGLE_WEB_TRANSLATE_TEXT_CAPABILITY_ID.into(),
+      provider_attempt: crate::domain::service_capability::ProviderAttemptTracker::new(),
     };
     let req = TranslateTextRequest {
       text: "hi".into(),

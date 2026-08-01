@@ -141,6 +141,39 @@ REQUIRED_EDGE_TTS_INTEGRATION_TESTS=(
   "services::service_integrations::tests::custom_edge_endpoint_requires_preview_acknowledgement_and_revokes_on_default_save"
 )
 
+REQUIRED_GOOGLE_CLOUD_TRANSLATE_TESTS=(
+  "services::google_cloud_runtime_tests::google_cloud_wasm_broker_injects_host_bearer_for_approved_translate_grant"
+  "services::google_cloud_runtime_tests::google_cloud_runtime_translate_matches_golden_contract"
+  "services::google_cloud_runtime_tests::google_cloud_runtime_translate_maps_provider_errors"
+  "services::google_cloud_runtime_tests::google_cloud_runtime_detect_uses_translation_scope_and_maps_language"
+)
+REQUIRED_GOOGLE_CLOUD_OCR_TESTS=(
+  "services::google_cloud_runtime_tests::google_cloud_runtime_ocr_uses_blob_and_returns_golden_text"
+  "services::google_cloud_runtime_tests::google_cloud_runtime_ocr_rejects_invalid_and_provider_error_content"
+  "services::google_cloud_runtime_tests::google_cloud_runtime_ocr_trap_and_limit_cleanup_preserve_rollback"
+)
+REQUIRED_GOOGLE_CLOUD_TTS_TESTS=(
+  "services::google_cloud_runtime_tests::google_cloud_runtime_tts_returns_golden_audio_via_blob"
+  "services::google_cloud_runtime_tests::google_cloud_runtime_tts_failure_does_not_return_partial_audio"
+)
+REQUIRED_GOOGLE_CLOUD_TESTS=(
+  "${REQUIRED_GOOGLE_CLOUD_TRANSLATE_TESTS[@]}"
+  "${REQUIRED_GOOGLE_CLOUD_OCR_TESTS[@]}"
+  "${REQUIRED_GOOGLE_CLOUD_TTS_TESTS[@]}"
+  "services::google_cloud_runtime_tests::google_cloud_runtime_complete_package_routes_all_capabilities_from_one_pin"
+  "services::google_cloud_runtime_tests::google_cloud_runtime_cancellation_stops_active_capability_without_fallback"
+  "services::google_cloud_runtime_tests::google_cloud_runtime_provider_attempt_provenance_distinguishes_no_attempt_cancel_and_completed"
+  "services::google_cloud_runtime_tests::integration_capability_health_round_trip_is_scoped_by_instance_and_capability"
+  "services::google_cloud_runtime_tests::google_cloud_runtime_text_capability_health_is_independent"
+  "services::google_cloud_runtime_tests::google_cloud_runtime_ocr_health_does_not_change_text_or_tts"
+  "services::google_cloud_runtime_tests::google_cloud_runtime_tts_health_does_not_change_translate_detect_or_ocr"
+  "services::google_cloud_runtime_tests::service_integration_remote_mutation_invalidates_capability_health"
+  "services::google_cloud_runtime_tests::google_cloud_runtime_authority_change_invalidates_capability_health_atomically"
+  "services::google_cloud_runtime_tests::google_cloud_runtime_bundled_package_requires_explicit_atomic_transition_and_rolls_back_all_bindings"
+  "services::google_cloud_runtime_tests::google_cloud_dependency_protected_delete_preserves_instance_and_credentials"
+  "services::google_cloud_runtime_tests::google_cloud_export_import_round_trip_preserves_exact_runtime_requirement"
+)
+
 REQUIRED_GOOGLE_WEB_TESTS=(
   "services::google_translate_web_runtime_tests::google_translate_web_runtime_gtx_translate_and_detect"
   "services::google_translate_web_runtime_tests::google_translate_web_runtime_gtx_cancellation"
@@ -213,6 +246,7 @@ case "$MODE" in
     run_filter_suite "wasm_runtime" "${REQUIRED_WASM_TESTS[@]}"
     run_filter_suite "runtime_" "${REQUIRED_LIFECYCLE_TESTS[@]}"
     run_filter_suite "google_translate_web_runtime" "${REQUIRED_GOOGLE_WEB_TESTS[@]}"
+    run_filter_suite "google_cloud_runtime_tests" "${REQUIRED_GOOGLE_CLOUD_TESTS[@]}"
     run_filter_suite "edge_tts_runtime" "${REQUIRED_EDGE_TTS_TESTS[@]}"
     run_filter_suite "blob_resources" "${REQUIRED_BLOB_FILTER_TESTS[@]}"
     run_filter_suite "stream_resources" "${REQUIRED_STREAM_FILTER_TESTS[@]}"
@@ -229,6 +263,21 @@ case "$MODE" in
   google-web|google-web-gtx|google-web-proxy)
     cargo test --manifest-path runtime-plugins/google-translate-web/protocol/Cargo.toml -- --nocapture
     run_filter_suite "google_translate_web_runtime" "${REQUIRED_GOOGLE_WEB_TESTS[@]}"
+    ;;
+  google-cloud-translate)
+    cargo test --manifest-path runtime-plugins/google-cloud/protocol/Cargo.toml -- --nocapture
+    run_filter_suite "google_cloud_runtime_tests" "${REQUIRED_GOOGLE_CLOUD_TRANSLATE_TESTS[@]}"
+    ;;
+  google-cloud-ocr)
+    run_filter_suite "google_cloud_runtime_tests" "${REQUIRED_GOOGLE_CLOUD_OCR_TESTS[@]}"
+    ;;
+  google-cloud-tts)
+    run_filter_suite "google_cloud_runtime_tests" "${REQUIRED_GOOGLE_CLOUD_TTS_TESTS[@]}"
+    ;;
+  google-cloud)
+    run_filter_suite "google_cloud_runtime_tests" "${REQUIRED_GOOGLE_CLOUD_TESTS[@]}"
+    run_filter_suite "integration_capability_health_round_trip_is_scoped_by_instance_and_capability" \
+      "repositories::integration_capability_health::tests::integration_capability_health_round_trip_is_scoped_by_instance_and_capability"
     ;;
   edge-tts)
     # Edge TTS guest is a single speech-synthesize-world cdylib component (no_std + custom
@@ -255,7 +304,7 @@ case "$MODE" in
     run_filter_suite "stream_resources" "${REQUIRED_STREAM_FILTER_TESTS[@]}"
     ;;
   *)
-    echo "usage: mise run plugin:conformance [wasm|installed-lifecycle|all|edge-tts|resources]" >&2
+    echo "usage: mise run plugin:conformance [wasm|installed-lifecycle|all|google-cloud|google-cloud-translate|google-cloud-ocr|google-cloud-tts|edge-tts|resources]" >&2
     exit 1
     ;;
 esac

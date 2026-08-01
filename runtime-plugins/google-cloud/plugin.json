@@ -1,0 +1,132 @@
+{
+  "manifestVersion": 1,
+  "pluginApiVersion": "1.0",
+  "id": "com.langnext.google-cloud",
+  "version": "1.2.0",
+  "publisher": {
+    "keyId": "com.langnext.vendor.keys.1",
+    "keyFingerprint": "506ef1879d748ce0713b0dd01da32ad2a4b1ce97b5a852ff18800c1e52982376"
+  },
+  "runtime": {
+    "kind": "wasm-component",
+    "artifact": "translate/fixtures/langnext-google-cloud-translate.wasm"
+  },
+  "targets": [],
+  "files": [
+    {
+      "path": "translate/fixtures/langnext-google-cloud-translate.wasm",
+      "role": "runtime-artifact",
+      "bytes": 75657,
+      "sha256": "bb34f683f9874824fd6d52e1595b0f33b012f09410468be4011ca9d89ef1f19f"
+    },
+    {
+      "path": "detect/fixtures/langnext-google-cloud-detect.wasm",
+      "role": "runtime-artifact",
+      "bytes": 74712,
+      "sha256": "42357c8f30bf63851f286d8f01a9025f04e2c6ce4054b20cb2cd9cc6cc70b873"
+    },
+    {
+      "path": "ocr/fixtures/langnext-google-cloud-ocr.wasm",
+      "role": "runtime-artifact",
+      "bytes": 88874,
+      "sha256": "257c5982a3db01323f7b76d4696fbc8cb84a11fde750e72f8acf96ec63a0abba"
+    },
+    {
+      "path": "tts/fixtures/langnext-google-cloud-tts.wasm",
+      "role": "runtime-artifact",
+      "bytes": 80397,
+      "sha256": "472254a7c671c296054346d1f1945d369b8c9fe83aae52a29bffd96b13dd383b"
+    },
+    {
+      "path": "schemas/config.json",
+      "role": "config-schema",
+      "bytes": 1182,
+      "sha256": "7518bebe0065b23eec3f3115870d556d76043ec309c028984d391d1a13e80a0f"
+    },
+    {
+      "path": "schemas/translate-preferences.json",
+      "role": "preference-schema",
+      "bytes": 51,
+      "sha256": "acceefffbdd72d4528e667e154fd32cb3a02de4a25483980c6221c775b77a914"
+    },
+    {
+      "path": "schemas/ocr-preferences.json",
+      "role": "preference-schema",
+      "bytes": 896,
+      "sha256": "7622bbb01dffd0f09dd8f5bbfbd831986a5f022b15f4a1849bc5a3cb7b59c894"
+    },
+    {
+      "path": "schemas/speech-preferences.json",
+      "role": "preference-schema",
+      "bytes": 441,
+      "sha256": "81e12fbd83a9be242b8627a414432a45f2088f6d08d2dc6cfc5b706b8fb1b86c"
+    },
+    {
+      "path": "locales/en.json",
+      "role": "locale",
+      "bytes": 139,
+      "sha256": "10277e98a1ba92dc972b19bbfbd7b70deae4f2762b9521be42bd0252547956a2"
+    },
+    {
+      "path": "locales/zh-CN.json",
+      "role": "locale",
+      "bytes": 141,
+      "sha256": "d5302480637aa4a0b17ec05ef5a81b7d26635ccb3320d21d73ef666aec9f0625"
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "translate.text@1",
+      "preferencesSchema": "schemas/translate-preferences.json",
+      "artifact": "translate/fixtures/langnext-google-cloud-translate.wasm"
+    },
+    {
+      "id": "translate.detect@1",
+      "preferencesSchema": "schemas/translate-preferences.json",
+      "artifact": "detect/fixtures/langnext-google-cloud-detect.wasm"
+    },
+    {
+      "id": "ocr.image@1",
+      "preferencesSchema": "schemas/ocr-preferences.json",
+      "artifact": "ocr/fixtures/langnext-google-cloud-ocr.wasm"
+    },
+    {
+      "id": "speech.synthesize@1",
+      "preferencesSchema": "schemas/speech-preferences.json",
+      "artifact": "tts/fixtures/langnext-google-cloud-tts.wasm"
+    }
+  ],
+  "configurationSchema": "schemas/config.json",
+  "configSchemaVersion": 1,
+  "credentialSlots": [
+    {
+      "id": "service-account-json",
+      "kind": "secret-json",
+      "required": true
+    }
+  ],
+  "permissions": {
+    "network": [
+      {
+        "id": "translate",
+        "origins": ["https://translation.googleapis.com"],
+        "methods": ["POST"]
+      },
+      {
+        "id": "vision",
+        "origins": ["https://vision.googleapis.com"],
+        "methods": ["POST"]
+      },
+      {
+        "id": "text-to-speech",
+        "origins": ["https://texttospeech.googleapis.com"],
+        "methods": ["POST"]
+      }
+    ],
+    "authPolicies": ["com.langnext.auth.google-service-account"]
+  },
+  "ui": {
+    "mode": "schema",
+    "pages": []
+  }
+}

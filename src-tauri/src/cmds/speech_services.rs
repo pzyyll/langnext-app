@@ -4,7 +4,7 @@ use crate::cmds::runtime::run_blocking;
 use crate::domain::service_capability::validate_capability_request_id;
 use crate::domain::speech_service::{SpeechServiceDto, SpeechServiceWrite, SpeechSynthesizeInput};
 use crate::error::IpcError;
-use crate::events::{SPEECH_SERVICES_CHANGED, emit_data_changed};
+use crate::events::{SERVICE_INTEGRATIONS_CHANGED, SPEECH_SERVICES_CHANGED, emit_data_changed};
 use crate::state::AppState;
 use tauri::ipc::Response;
 use tauri::{AppHandle, State};
@@ -46,7 +46,11 @@ pub async fn delete_speech_service(app: AppHandle, state: State<'_, AppState>, i
 
 /// Synthesize speech to bounded MP3 bytes. Returns raw binary on success.
 #[tauri::command]
-pub async fn synthesize_speech(state: State<'_, AppState>, input: SpeechSynthesizeInput) -> Result<Response, IpcError> {
+pub async fn synthesize_speech(
+  app: AppHandle,
+  state: State<'_, AppState>,
+  input: SpeechSynthesizeInput,
+) -> Result<Response, IpcError> {
   let services = state.speech_services.clone();
   let sessions = state.request_sessions.clone();
   let request_id = input.request_id.clone();
@@ -59,6 +63,7 @@ pub async fn synthesize_speech(state: State<'_, AppState>, input: SpeechSynthesi
     crate::domain::cancel::CancelToken::new()
   };
   let result = services.synthesize(input, cancel).await.map_err(IpcError::from);
+  emit_data_changed(&app, SERVICE_INTEGRATIONS_CHANGED);
   if let Some(ref rid) = request_id {
     sessions.end(rid);
   }

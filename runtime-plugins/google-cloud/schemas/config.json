@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "fields": [
+    {
+      "id": "project-id",
+      "control": { "kind": "string", "spec": { "maxLength": 128 } },
+      "labelFallback": "Project ID",
+      "requiredForReady": true
+    },
+    {
+      "id": "location",
+      "control": { "kind": "string", "spec": { "maxLength": 128, "default": "global" } },
+      "labelFallback": "Location",
+      "requiredForReady": false
+    },
+    {
+      "id": "proxy-mode",
+      "control": {
+        "kind": "enum",
+        "spec": {
+          "source": {
+            "type": "fixed",
+            "options": [
+              { "value": "inherit", "labelFallback": "Inherit" },
+              { "value": "direct", "labelFallback": "Direct" }
+            ]
+          },
+          "default": "inherit"
+        }
+      },
+      "labelFallback": "Proxy Mode",
+      "requiredForReady": false
+    },
+    {
+      "id": "service-account-json",
+      "control": { "kind": "credential-slot", "spec": { "slotId": "service-account-json" } },
+      "labelFallback": "Service Account JSON",
+      "descriptionFallback": "Stored in the host vault and never sent to the plugin.",
+      "requiredForReady": true
+    }
+  ],
+  "groups": []
+}

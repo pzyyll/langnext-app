@@ -4,7 +4,7 @@ use crate::cmds::runtime::run_blocking;
 use crate::domain::ocr_service::{OcrRecognizeInput, OcrRecognizeResult, OcrServiceDto, OcrServiceWrite};
 use crate::domain::service_capability::validate_capability_request_id;
 use crate::error::IpcError;
-use crate::events::{OCR_SERVICES_CHANGED, emit_data_changed};
+use crate::events::{OCR_SERVICES_CHANGED, SERVICE_INTEGRATIONS_CHANGED, emit_data_changed};
 use crate::state::AppState;
 use tauri::{AppHandle, State};
 use uuid::Uuid;
@@ -45,6 +45,7 @@ pub async fn delete_ocr_service(app: AppHandle, state: State<'_, AppState>, id: 
 /// When `request_id` is set, registers a cancel token on the shared session registry.
 #[tauri::command]
 pub async fn recognize_ocr(
+  app: AppHandle,
   state: State<'_, AppState>,
   input: OcrRecognizeInput,
 ) -> Result<OcrRecognizeResult, IpcError> {
@@ -60,6 +61,7 @@ pub async fn recognize_ocr(
     crate::domain::cancel::CancelToken::new()
   };
   let result = services.recognize(input, cancel).await.map_err(IpcError::from);
+  emit_data_changed(&app, SERVICE_INTEGRATIONS_CHANGED);
   if let Some(ref rid) = request_id {
     sessions.end(rid);
   }

@@ -595,7 +595,7 @@ pub mod translate_detect {
 }
 impl_world_host!(translate_detect);
 
-/// Bindings for `ocr-image-world`. Compiled but not instantiated in Phase 2.
+/// Bindings for `ocr-image-world` (`ocr.image@1`).
 pub mod ocr_image {
   use super::bindgen;
   bindgen!({
@@ -610,6 +610,7 @@ pub mod ocr_image {
     },
   });
 }
+impl_world_host!(ocr_image);
 
 /// Bindings for `speech-synthesize-world` (exports `speech.synthesize@1`). Executed in Phase 6.
 pub mod speech_synthesize {

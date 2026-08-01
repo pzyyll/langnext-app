@@ -370,6 +370,7 @@ fn runtime_upgrade_apply_failure_injection_leaves_source_unchanged() {
     UpgradeApplyFault::AfterSnapshotBeforeGrant,
     UpgradeApplyFault::AfterGrantBeforePin,
     UpgradeApplyFault::AfterPinBeforePreferences,
+    UpgradeApplyFault::AfterPreferencesBeforeCommit,
   ] {
     let preview = lifecycle.preview_upgrade(id, &digest_b).unwrap();
     assert!(preview.requires_permission_approval);
@@ -493,6 +494,7 @@ fn runtime_compatible_migration_translate_detect_upgrade_rollback_uninstall() {
     integration_instance_id: translate_id,
     plugin_id: TRANSLATE_PLUGIN_ID.into(),
     capability_id: TRANSLATE_CAP.into(),
+    provider_attempt: crate::domain::service_capability::ProviderAttemptTracker::new(),
   };
   let tr = block_on(translate.translate(
     translate_id,
@@ -517,6 +519,7 @@ fn runtime_compatible_migration_translate_detect_upgrade_rollback_uninstall() {
     integration_instance_id: detect_id,
     plugin_id: DETECT_PLUGIN_ID.into(),
     capability_id: DETECT_CAP.into(),
+    provider_attempt: crate::domain::service_capability::ProviderAttemptTracker::new(),
   };
   let det = block_on(detect.detect(detect_id, DetectLanguageRequest { text: "hello".into() }, dctx)).expect("detect");
   assert!(det.language_id == "en" || det.language_id.starts_with("en"));
@@ -589,6 +592,7 @@ fn runtime_compatible_migration_translate_detect_upgrade_rollback_uninstall() {
       integration_instance_id: tr_snap.instance_id,
       plugin_id: tr_snap.plugin_id.clone(),
       capability_id: tr_snap.capability_id.clone(),
+      provider_attempt: crate::domain::service_capability::ProviderAttemptTracker::new(),
     },
   ))
   .expect("translate with prefs");
@@ -658,6 +662,7 @@ fn runtime_compatible_migration_translate_detect_upgrade_rollback_uninstall() {
       integration_instance_id: det_snap.instance_id,
       plugin_id: det_snap.plugin_id.clone(),
       capability_id: det_snap.capability_id.clone(),
+      provider_attempt: crate::domain::service_capability::ProviderAttemptTracker::new(),
     },
   ))
   .expect("detect with prefs");

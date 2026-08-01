@@ -7,6 +7,7 @@ use crate::domain::plugin_resource::{
 };
 use crate::domain::provider_http::{ProviderHttpMethod, ProviderHttpStreamEvent};
 use crate::domain::runtime_plugin::{ExecutionGrantSet, NetworkOriginKind, PluginPrincipal};
+use crate::services::auth_policies::GOOGLE_SERVICE_ACCOUNT_AUTH_POLICY_ID;
 use crate::services::bounded_http::{
   BoundedHttpResponse, DestinationPolicy, PreparedHttpRequest, RawHttpTransport, RequestBody, build_endpoint,
   validate_external_destination, with_cancel,
@@ -14,6 +15,7 @@ use crate::services::bounded_http::{
 use crate::services::stream_resources::{
   STREAM_PUMP_SHUTDOWN_TIMEOUT, StreamFrame, StreamResourceTable, sleep_until_deadline,
 };
+use crate::services::token_grant::TokenGrantService;
 use crate::services::wasm_runtime::host::{
   BrokerAuthorization, BrokerFetchError, BrokerFetchOutcome, BrokerFetchRequest, BrokerFetchResponse, BrokerHandle,
   BrokerRequestBody, BrokerResponseBody,
@@ -23,9 +25,10 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-/// Auth policy id for credential-free endpoints. The network broker handle never injects auth;
-/// any other policy cannot be fulfilled and is denied before transport.
+/// Auth policy id for credential-free endpoints.
 const AUTH_POLICY_NONE_V1: &str = "host.none.v1";
+/// Fixed broker marker used to preserve token-exchange auth classification across frozen WIT.
+pub(crate) const TOKEN_GRANT_AUTH_FAILURE_MARKER: &str = "token-grant-auth-failed";
 
 /// Bounded event channel capacity between the transport stream driver and the stream-writer pump.
 /// The writer's own frame buffer provides the primary backpressure bound; this channel absorbs
@@ -39,19 +42,29 @@ const STREAM_FRAME_MAX_BYTES: u64 = RESOURCE_MAX_CHUNK_BYTES;
 /// `BrokerHandle` that executes grant-authorized HTTPS requests through a bounded transport.
 ///
 /// Authorization (origin, method, path, headers, body size) is already enforced by the host
-/// runtime before `fetch` is called; this handle only executes the authorized transport against
-/// the matched origin. It never injects credentials, cookies, or auth headers. Literal private,
-/// loopback, link-local, and localhost destinations remain rejected; an approved DNS hostname
-/// intentionally accepts any resolver result. Non-`host.none.v1` auth policies are denied because
-/// the handle has no token access (Phase 7+ adds authenticated providers).
+/// runtime before `fetch` is called. Credential-free calls never inject auth; the Google policy
+/// acquires an opaque host token and injects Bearer only inside this handle.
 #[derive(Clone)]
 pub struct NetworkBrokerHandle {
   transport: Arc<dyn RawHttpTransport>,
+  token_grants: Option<Arc<TokenGrantService>>,
 }
 
 impl NetworkBrokerHandle {
   pub fn new(transport: Arc<dyn RawHttpTransport>) -> Self {
-    Self { transport }
+    Self {
+      transport,
+      token_grants: None,
+    }
+  }
+
+  pub fn with_token_grants(mut self, token_grants: Arc<TokenGrantService>) -> Self {
+    self.token_grants = Some(token_grants);
+    self
+  }
+
+  pub fn new_with_token_grants(transport: Arc<dyn RawHttpTransport>, token_grants: Arc<TokenGrantService>) -> Self {
+    Self::new(transport).with_token_grants(token_grants)
   }
 }
 
@@ -66,10 +79,13 @@ impl BrokerHandle for NetworkBrokerHandle {
     deadline: Option<Instant>,
   ) -> Pin<Box<dyn Future<Output = BrokerFetchOutcome> + Send + '_>> {
     let transport = self.transport.clone();
+    let token_grants = self.token_grants.clone();
     let principal = principal.clone();
     let cancel = cancel.clone();
     Box::pin(async move {
-      if authorization.auth_policy.as_str() != AUTH_POLICY_NONE_V1 {
+      if authorization.auth_policy.as_str() != AUTH_POLICY_NONE_V1
+        && authorization.auth_policy.as_str() != GOOGLE_SERVICE_ACCOUNT_AUTH_POLICY_ID
+      {
         return Err(BrokerFetchError::NotApproved);
       }
       let destination_policy = destination_policy_for_authorization(&principal, &authorization)?;
@@ -93,6 +109,20 @@ impl BrokerHandle for NetworkBrokerHandle {
       for (name, value) in &request.headers {
         headers.insert(name.clone(), value.clone());
       }
+      if authorization.auth_policy.as_str() == GOOGLE_SERVICE_ACCOUNT_AUTH_POLICY_ID {
+        let token_grants = token_grants.ok_or(BrokerFetchError::NotApproved)?;
+        let grant_request = crate::services::auth_policies::token_grant_request_for_capability(
+          principal.instance_id(),
+          authorization.auth_policy.as_str(),
+          principal.capability_id().as_str(),
+        )
+        .map_err(map_token_grant_error)?;
+        let grant = token_grants
+          .acquire(grant_request, Some(&cancel))
+          .await
+          .map_err(map_token_grant_error)?;
+        grant.apply_bearer_auth(&mut headers);
+      }
       let max_response_bytes = authorization.resource_limits.max_response_bytes();
       let timeout = std::time::Duration::from_millis(authorization.resource_limits.timeout_ms());
       let prepared = PreparedHttpRequest {
@@ -101,6 +131,9 @@ impl BrokerHandle for NetworkBrokerHandle {
         headers,
         body,
         content_type,
+        // Host-fixed Google origins intentionally use the trusted-fixed transport, which
+        // bypasses ambient proxies; the configured proxy mode remains host-owned for OAuth
+        // token exchange. User-approved custom origins retain their explicit inherit policy.
         proxy_mode: if destination_policy == DestinationPolicy::UserApprovedCustom {
           crate::domain::provider::ProxyMode::Inherit
         } else {
@@ -126,6 +159,17 @@ impl BrokerHandle for NetworkBrokerHandle {
       }
       bounded_to_broker_response(response, mode)
     })
+  }
+}
+
+fn map_token_grant_error(error: crate::domain::service_capability::CapabilityError) -> BrokerFetchError {
+  use crate::domain::service_capability::CapabilityErrorCode;
+  match error.code {
+    CapabilityErrorCode::Cancelled => BrokerFetchError::Cancelled,
+    CapabilityErrorCode::Timeout => BrokerFetchError::Timeout,
+    CapabilityErrorCode::Auth => BrokerFetchError::Network(TOKEN_GRANT_AUTH_FAILURE_MARKER.into()),
+    CapabilityErrorCode::PermissionDenied | CapabilityErrorCode::InvalidConfiguration => BrokerFetchError::NotApproved,
+    _ => BrokerFetchError::Network("token grant failed".into()),
   }
 }
 

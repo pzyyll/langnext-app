@@ -1,6 +1,7 @@
 // ABOUTME: Service integration domain entities, manifests, and sanitized IPC DTOs.
 // ABOUTME: Credential refs and secret values never appear on serializable DTOs.
 use crate::domain::endpoint_trust::EndpointTrustStatus;
+use crate::domain::integration_capability_health::CapabilityHealthDto;
 use crate::domain::plugin_schema::PluginSchemaV1;
 use crate::domain::provider::{CredentialUpdate, ProxyMode};
 use serde::{Deserialize, Serialize};
@@ -280,6 +281,8 @@ pub struct IntegrationInstanceDto {
   /// Exact unresolved/active runtime requirement (export v7 shape when present).
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub runtime_requirement: Option<crate::domain::runtime_lifecycle::RuntimeRequirementExport>,
+  #[serde(default)]
+  pub capability_health: Vec<CapabilityHealthDto>,
   pub credential_slots: Vec<CredentialSlotStatusDto>,
   pub created_at: String,
   pub updated_at: String,

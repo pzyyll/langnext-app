@@ -19,7 +19,8 @@ pub mod store;
 
 // Re-export the verified-component boundary type and typed capability adapters.
 pub use executor::{
-  VerifiedComponent, WasmDetectLanguageAdapter, WasmRuntime, WasmSpeechSynthesizeAdapter, WasmTranslateTextAdapter,
+  VerifiedComponent, WasmDetectLanguageAdapter, WasmOcrImageAdapter, WasmRuntime, WasmSpeechSynthesizeAdapter,
+  WasmTranslateTextAdapter,
 };
 
 #[cfg(test)]

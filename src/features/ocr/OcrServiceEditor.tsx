@@ -46,6 +46,7 @@ import { BaiduOcrForm, type CredentialAction } from "./BaiduOcrForm";
 import { PluginOcrForm } from "./PluginOcrForm";
 import { OCR_IMAGE_CAPABILITY_ID } from "./ocrProviderOptions";
 import { preferenceSchemaForBinding } from "../plugins/schema/capabilitySchema";
+import { presentCapabilityHealth } from "../plugins/capabilityHealthPresentation";
 import {
   buildSchemaConfig,
   createSchemaDraft,
@@ -259,6 +260,14 @@ function OcrServiceEditorLoaded({ service }: { service: OcrServiceDto }) {
   const definitionsQuery = useQuery(integrationDefinitionListOptions());
   const instances = useMemo(() => integrationsQuery.data ?? [], [integrationsQuery.data]);
   const definitions = useMemo(() => definitionsQuery.data ?? [], [definitionsQuery.data]);
+  const integrationInstance = instances.find((item) => item.id === service.integrationInstanceId) ?? null;
+  const capabilityHealth =
+    service.providerType === "plugin_capability" && integrationInstance
+      ? presentCapabilityHealth(
+          service.ocrCapabilityId ?? OCR_IMAGE_CAPABILITY_ID,
+          integrationInstance.capabilityHealth,
+        )
+      : null;
   const currentBinding = preferenceSchemaForBinding(
     instances,
     definitions,
@@ -668,6 +677,18 @@ function OcrServiceEditorLoaded({ service }: { service: OcrServiceDto }) {
             onPromptTemplatesChange={(promptTemplates) => updateDraft({ promptTemplates })}
           />
         )}
+        {capabilityHealth ? (
+          <section className="mt-6 space-y-1" aria-label={t("plugins.capabilityHealth.title")}>
+            <h3 className="text-label-sm font-bold tracking-wide text-neutral uppercase">
+              {t("plugins.capabilityHealth.title")}
+            </h3>
+            <p className="text-body-tight text-on-surface">
+              {t(capabilityHealth.capabilityLabelKey, { defaultValue: capabilityHealth.capabilityId })}:{" "}
+              {t(capabilityHealth.statusLabelKey, { defaultValue: capabilityHealth.status })}
+              {capabilityHealth.normalizedCode ? ` (${capabilityHealth.normalizedCode})` : ""}
+            </p>
+          </section>
+        ) : null}
         {validationError ? (
           <p className="mt-6 text-body-tight text-error" role="alert">
             {validationError}

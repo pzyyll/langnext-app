@@ -15,7 +15,9 @@ use crate::domain::service_integration::{
 use crate::domain::time::{new_id, now_rfc3339};
 use crate::error::StorageError;
 use crate::repositories::credential_operations::{self, CredentialOperation, OwnerKind};
-use crate::repositories::{integration_credential_bindings, integration_endpoint_trusts, integration_instances};
+use crate::repositories::{
+  integration_capability_health, integration_credential_bindings, integration_endpoint_trusts, integration_instances,
+};
 use crate::services::endpoint_trust::EndpointTrustService;
 use crate::services::service_integration_registry::ServiceIntegrationRegistry;
 use crate::services::token_grant::{TokenGrant, TokenGrantRequest, TokenGrantService};
@@ -863,6 +865,8 @@ impl ServiceIntegrationService {
         }
       }
     };
+    let remote_relevant_mutation = !config_values_equal(&existing.config_json, &config_json)
+      || slot_mutations.values().any(|mutation| mutation.is_some());
     let refresh_edge_runtime_grant = existing.plugin_id == crate::domain::service_integration::EDGE_TTS_PLUGIN_ID
       && existing.runtime_kind
         == crate::domain::runtime_lifecycle::runtime_kind_as_str(
@@ -888,6 +892,9 @@ impl ServiceIntegrationService {
         existing.last_error_code.as_deref(),
         &now,
       )?;
+      if remote_relevant_mutation {
+        integration_capability_health::delete_for_instance(uow.conn(), id)?;
+      }
       // Approval rows are exact to this saved config/runtime tuple. Replace the instance's
       // previous row set so changing origin, path, or runtime identity revokes stale approvals.
       self.endpoint_trust.revoke_for_instance(uow.conn(), id)?;
@@ -1059,6 +1066,11 @@ impl ServiceIntegrationService {
         EndpointTrustStatus::NotApplicable
       },
     );
+    let capability_health = integration_capability_health::list_for_instance(conn, instance.id)
+      .unwrap_or_default()
+      .into_iter()
+      .map(|record| record.dto())
+      .collect();
 
     IntegrationInstanceDto {
       id: instance.id,
@@ -1080,6 +1092,7 @@ impl ServiceIntegrationService {
       runtime_error_code: instance.runtime_error_code.clone(),
       runtime_error_message: instance.runtime_error_message.clone(),
       runtime_requirement,
+      capability_health,
       credential_slots,
       created_at: instance.created_at.clone(),
       updated_at: instance.updated_at.clone(),
@@ -1123,6 +1136,16 @@ fn collect_credential_updates(
     map.insert(entry.slot_id.clone(), entry.credential.clone());
   }
   Ok(map)
+}
+
+fn config_values_equal(left: &str, right: &str) -> bool {
+  match (
+    serde_json::from_str::<serde_json::Value>(left),
+    serde_json::from_str::<serde_json::Value>(right),
+  ) {
+    (Ok(left), Ok(right)) => left == right,
+    _ => left == right,
+  }
 }
 
 fn normalize_and_validate_config(

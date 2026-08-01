@@ -1,13 +1,17 @@
 // ABOUTME: Host-owned auth-policy registry and drivers for service-integration token grants.
 // ABOUTME: A manifest never carries executable auth logic; drivers live here and bind by host id.
+use crate::domain::plugin_package::PublisherSource;
+use crate::domain::runtime_plugin::{HttpMethod, PluginManifestV1, RuntimeKind};
 use crate::domain::service_capability::{
   CapabilityError, CapabilityErrorCode, OCR_IMAGE_CAPABILITY_ID, SPEECH_SYNTHESIZE_CAPABILITY_ID,
 };
 use crate::services::google_cloud::{GOOGLE_DETECT_LANGUAGE_CAPABILITY_ID, GOOGLE_TRANSLATE_TEXT_CAPABILITY_ID};
 use crate::services::token_grant::TokenGrantRequest;
 
-/// Host-defined auth driver id for the Google service-account OAuth2 exchange.
+/// Host-defined auth policy/driver id for the Google service-account OAuth2 exchange.
+/// Signed runtime packages use this id in their manifest; the audience remains host-derived.
 pub const GOOGLE_SERVICE_ACCOUNT_AUTH_DRIVER_ID: &str = "com.langnext.auth.google-service-account";
+pub const GOOGLE_SERVICE_ACCOUNT_AUTH_POLICY_ID: &str = GOOGLE_SERVICE_ACCOUNT_AUTH_DRIVER_ID;
 /// Host-defined audience policy id for the Google OAuth2 token endpoint.
 pub const GOOGLE_OAUTH_AUDIENCE_POLICY_ID: &str = "google-oauth-token";
 /// OAuth2 scope for Cloud Translation.
@@ -93,6 +97,113 @@ fn allowed_scopes_for_capability<'a>(
         "capability is not authorized for token grants",
       )
     })
+}
+
+/// Derive a least-privilege token request from the trusted Google auth policy and capability.
+/// Callers cannot provide an audience or scope set of their choosing.
+/// Validate the fixed Google Cloud package authority before a package can receive bearer auth.
+/// User-approved packages cannot claim the first-party Google plugin id and redirect its token.
+pub fn validate_google_cloud_manifest_authority(
+  manifest: &PluginManifestV1,
+  publisher_source: PublisherSource,
+) -> Result<(), String> {
+  if manifest.id != crate::domain::service_integration::GOOGLE_CLOUD_PLUGIN_ID {
+    return Ok(());
+  }
+  if publisher_source != PublisherSource::Vendor {
+    return Err("Google Cloud runtime requires a vendor publisher".into());
+  }
+  if manifest.version != "1.2.0" || manifest.runtime.kind != RuntimeKind::WasmComponent {
+    return Err("Google Cloud runtime identity is incompatible".into());
+  }
+  if manifest.permissions.auth_policies != vec![GOOGLE_SERVICE_ACCOUNT_AUTH_POLICY_ID.to_string()] {
+    return Err("Google Cloud auth policy is not the host service-account policy".into());
+  }
+  if manifest.credential_slots.len() != 1
+    || manifest.credential_slots[0].id != crate::domain::service_integration::GOOGLE_CLOUD_SERVICE_ACCOUNT_SLOT
+    || manifest.credential_slots[0].kind != crate::domain::runtime_plugin::CredentialSlotKindV1::SecretJson
+    || !manifest.credential_slots[0].required
+  {
+    return Err("Google Cloud credential slot authority is invalid".into());
+  }
+  let expected_capabilities = [
+    (
+      "translate.text@1",
+      "schemas/translate-preferences.json",
+      "translate/fixtures/langnext-google-cloud-translate.wasm",
+    ),
+    (
+      "translate.detect@1",
+      "schemas/translate-preferences.json",
+      "detect/fixtures/langnext-google-cloud-detect.wasm",
+    ),
+    (
+      "ocr.image@1",
+      "schemas/ocr-preferences.json",
+      "ocr/fixtures/langnext-google-cloud-ocr.wasm",
+    ),
+    (
+      "speech.synthesize@1",
+      "schemas/speech-preferences.json",
+      "tts/fixtures/langnext-google-cloud-tts.wasm",
+    ),
+  ];
+  if manifest.capabilities.len() != expected_capabilities.len()
+    || expected_capabilities.iter().any(|(id, schema, artifact)| {
+      !manifest.capabilities.iter().any(|capability| {
+        capability.id == *id
+          && capability.preferences_schema.as_deref() == Some(*schema)
+          && capability.artifact.as_deref() == Some(*artifact)
+      })
+    })
+  {
+    return Err("Google Cloud capability authority is incomplete or widened".into());
+  }
+  let expected_endpoints = [
+    ("translate", "https://translation.googleapis.com"),
+    ("vision", "https://vision.googleapis.com"),
+    ("text-to-speech", "https://texttospeech.googleapis.com"),
+  ];
+  if manifest.permissions.network.len() != expected_endpoints.len()
+    || expected_endpoints.iter().any(|(id, origin)| {
+      !manifest.permissions.network.iter().any(|endpoint| {
+        endpoint.id == *id
+          && endpoint.origins == vec![origin.to_string()]
+          && endpoint.methods == vec![HttpMethod::Post]
+          && endpoint.instance_origin_config_field.is_none()
+      })
+    })
+  {
+    return Err("Google Cloud endpoint authority is not fixed to the approved origins".into());
+  }
+  Ok(())
+}
+
+pub fn token_grant_request_for_capability(
+  instance_id: uuid::Uuid,
+  auth_policy_id: &str,
+  capability_id: &str,
+) -> Result<TokenGrantRequest, CapabilityError> {
+  if auth_policy_id != GOOGLE_SERVICE_ACCOUNT_AUTH_POLICY_ID {
+    return Err(CapabilityError::new(
+      CapabilityErrorCode::PermissionDenied,
+      "untrusted auth policy",
+    ));
+  }
+  let driver = find_driver(GOOGLE_SERVICE_ACCOUNT_AUTH_DRIVER_ID).ok_or_else(|| {
+    CapabilityError::new(
+      CapabilityErrorCode::PermissionDenied,
+      "Google auth policy is unavailable",
+    )
+  })?;
+  let allowed = allowed_scopes_for_capability(capability_id, driver)?;
+  Ok(TokenGrantRequest {
+    instance_id,
+    capability_id: capability_id.to_string(),
+    auth_driver_id: driver.auth_driver_id.to_string(),
+    scopes: allowed.iter().map(|scope| (*scope).to_string()).collect(),
+    audience_policy_id: driver.audience_policy_id.to_string(),
+  })
 }
 
 fn validate_scopes_for_capability(

@@ -202,8 +202,8 @@ const zhCN = {
       playbackFailed: "无法播放合成音频。",
       synthesizeFailed: "语音合成失败。",
       cancelled: "已停止朗读",
-      permissionDenied: "Google Cloud 拒绝了请求，请检查 Text-to-Speech API 访问权限。",
-      quotaExceeded: "已达到 Google Cloud 语音配额或速率限制。",
+      permissionDenied: "当前语音服务拒绝了请求，请检查其访问权限。",
+      quotaExceeded: "当前语音服务已达到配额或速率限制。",
       textTooLong: "文本过长，无法合成语音。",
       networkError: "语音合成时发生网络错误。",
       invalidAudio: "收到无效的音频数据。",
@@ -896,6 +896,21 @@ const zhCN = {
     dependencies: {
       title: "依赖",
       empty: "尚无业务绑定。",
+    },
+    capabilityHealth: {
+      title: "能力健康",
+      status: {
+        ready: "正常",
+        degraded: "降级",
+        notChecked: "未检查",
+      },
+      capabilities: {
+        translate: "翻译",
+        detect: "语言检测",
+        ocr: "OCR",
+        tts: "文本转语音",
+        unknown: "能力",
+      },
     },
     add: {
       title: "添加配置",

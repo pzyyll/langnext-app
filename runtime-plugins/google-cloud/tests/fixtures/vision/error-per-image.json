@@ -1,0 +1,11 @@
+{
+  "responses": [
+    {
+      "error": {
+        "code": 7,
+        "status": "PERMISSION_DENIED",
+        "message": "secret image/project"
+      }
+    }
+  ]
+}

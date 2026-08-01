@@ -62,8 +62,8 @@ const CONFORMANCE_CAPABILITY_TEXT: &str = "translate.text@1";
 const CONFORMANCE_CAPABILITY_DETECT: &str = "translate.detect@1";
 /// Oversized table element count used by the oversized-table rejection fixture.
 const OVERSIZED_TABLE_ELEMENTS: u32 = 20_000;
-/// Minimum linear-memory pages used by the oversized-memory rejection fixture (257 * 64KiB > 16MiB).
-const OVERSIZED_MEMORY_MIN_PAGES: u32 = 257;
+/// Minimum linear-memory pages used by the oversized-memory rejection fixture (2049 * 64KiB > 128MiB).
+const OVERSIZED_MEMORY_MIN_PAGES: u32 = 2049;
 
 const CONFORMANCE_PLUGIN_JSON: &str = include_str!(concat!(
   env!("CARGO_MANIFEST_DIR"),
@@ -476,10 +476,13 @@ async fn run_infinite_loop_with_fuel(
     source_language_id: "auto".into(),
     target_language_id: "zh".into(),
   };
+  let provider_attempt = store.data().provider_attempt.clone();
   let call_result = crate::services::wasm_runtime::executor::run_with_interruption(
     deadline,
     cancel,
     guest.call_text(&mut store, &config, &vec![], &wit_request),
+    provider_attempt,
+    crate::services::wasm_runtime::executor::DEFAULT_INVOCATION_TIMEOUT,
   )
   .await;
   match call_result {
@@ -806,6 +809,7 @@ mod wasm_executor {
       integration_instance_id: Uuid::nil(),
       plugin_id: CONFORMANCE_PLUGIN_ID.into(),
       capability_id: CONFORMANCE_CAPABILITY_TEXT.into(),
+      provider_attempt: crate::domain::service_capability::ProviderAttemptTracker::new(),
     };
     let request = translate_request();
     let response = TranslateTextCapability::translate(&adapter, Uuid::nil(), request, context)
@@ -849,6 +853,7 @@ mod wasm_executor {
       integration_instance_id: Uuid::nil(),
       plugin_id: CONFORMANCE_PLUGIN_ID.into(),
       capability_id: CONFORMANCE_CAPABILITY_TEXT.into(),
+      provider_attempt: crate::domain::service_capability::ProviderAttemptTracker::new(),
     };
     let err = TranslateTextCapability::translate(&adapter, Uuid::now_v7(), translate_request(), context)
       .await
@@ -883,6 +888,7 @@ mod wasm_executor {
       integration_instance_id: Uuid::nil(),
       plugin_id: "other.plugin".into(),
       capability_id: CONFORMANCE_CAPABILITY_TEXT.into(),
+      provider_attempt: crate::domain::service_capability::ProviderAttemptTracker::new(),
     };
     let err = TranslateTextCapability::translate(&adapter, Uuid::nil(), translate_request(), context)
       .await
@@ -917,6 +923,7 @@ mod wasm_executor {
       integration_instance_id: Uuid::nil(),
       plugin_id: CONFORMANCE_PLUGIN_ID.into(),
       capability_id: CONFORMANCE_CAPABILITY_DETECT.into(),
+      provider_attempt: crate::domain::service_capability::ProviderAttemptTracker::new(),
     };
     let err = TranslateTextCapability::translate(&adapter, Uuid::nil(), translate_request(), context)
       .await
@@ -1030,6 +1037,7 @@ mod wasm_executor {
       integration_instance_id: Uuid::nil(),
       plugin_id: CONFORMANCE_DETECT_PLUGIN_ID.into(),
       capability_id: CONFORMANCE_CAPABILITY_DETECT.into(),
+      provider_attempt: crate::domain::service_capability::ProviderAttemptTracker::new(),
     };
     // Direct principal-factory proof: context request_id enters a fresh principal (not inferred
     // from a successful detect call alone).
@@ -1689,20 +1697,30 @@ mod wasm_host_imports {
 
 mod wasm_limits {
   use super::*;
-  use crate::services::wasm_runtime::executor::deadline_to_duration;
+  use crate::services::wasm_runtime::executor::{
+    DEFAULT_INVOCATION_TIMEOUT, SPEECH_INVOCATION_TIMEOUT, deadline_to_duration, deadline_to_duration_with_cap,
+  };
+
+  #[test]
+  fn speech_deadline_cap_preserves_sixty_second_bound() {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let duration = deadline_to_duration_with_cap(Some(deadline), SPEECH_INVOCATION_TIMEOUT);
+    assert!(duration > DEFAULT_INVOCATION_TIMEOUT);
+    assert!(duration <= Duration::from_secs(30));
+  }
 
   #[tokio::test]
   async fn oversized_minimum_memory_rejected() {
-    let wasm_big = wat::parse_str(
+    let wasm_big = wat::parse_str(format!(
       r#"
         (component
           (core module $m
-            (memory 257)
+            (memory {OVERSIZED_MEMORY_MIN_PAGES})
           )
           (core instance $i (instantiate $m))
         )
       "#,
-    )
+    ))
     .unwrap();
     let runtime = WasmRuntime::new().unwrap();
     let result = runtime.compile_component(

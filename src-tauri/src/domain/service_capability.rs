@@ -3,6 +3,7 @@
 use crate::domain::cancel::CancelToken;
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -267,6 +268,68 @@ impl fmt::Display for CapabilityError {
 
 impl std::error::Error for CapabilityError {}
 
+/// Provider work provenance visible to host workflows without exposing provider payloads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderAttemptState {
+  NotStarted,
+  Started,
+  Completed,
+  Cancelled,
+}
+
+/// Cloneable request-scoped provider-attempt state. The tracker stores no token, provider body,
+/// user text, image bytes, or audio; it only records the lifecycle state of remote work.
+#[derive(Debug, Clone)]
+pub struct ProviderAttemptTracker {
+  state: Arc<Mutex<ProviderAttemptState>>,
+}
+
+impl ProviderAttemptTracker {
+  pub fn new() -> Self {
+    Self {
+      state: Arc::new(Mutex::new(ProviderAttemptState::NotStarted)),
+    }
+  }
+
+  pub fn state(&self) -> ProviderAttemptState {
+    self
+      .state
+      .lock()
+      .map(|state| *state)
+      .unwrap_or(ProviderAttemptState::NotStarted)
+  }
+
+  pub fn mark_started(&self) {
+    if let Ok(mut state) = self.state.lock() {
+      if *state == ProviderAttemptState::NotStarted {
+        *state = ProviderAttemptState::Started;
+      }
+    }
+  }
+
+  pub fn mark_completed(&self) {
+    if let Ok(mut state) = self.state.lock() {
+      if *state == ProviderAttemptState::Started {
+        *state = ProviderAttemptState::Completed;
+      }
+    }
+  }
+
+  pub fn mark_cancelled(&self) {
+    if let Ok(mut state) = self.state.lock() {
+      if *state == ProviderAttemptState::Started {
+        *state = ProviderAttemptState::Cancelled;
+      }
+    }
+  }
+}
+
+impl Default for ProviderAttemptTracker {
+  fn default() -> Self {
+    Self::new()
+  }
+}
+
 /// Per-invocation execution identity and cancellation (broker handles stay on services).
 #[derive(Debug, Clone)]
 pub struct ExecutionContext {
@@ -276,6 +339,7 @@ pub struct ExecutionContext {
   pub integration_instance_id: Uuid,
   pub plugin_id: String,
   pub capability_id: String,
+  pub provider_attempt: ProviderAttemptTracker,
 }
 
 /// Immutable capability invocation identity propagated into host-owned broker calls.

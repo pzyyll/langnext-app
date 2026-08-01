@@ -120,6 +120,15 @@ impl PluginHostState {
       entry.capability_id().as_str(),
       &request.relative_path,
     )?;
+    validate_google_cloud_authority(
+      self.principal.plugin_id().as_str(),
+      entry.endpoint_id().as_str(),
+      entry.capability_id().as_str(),
+      entry.origin().as_str(),
+      entry.base_url(),
+      entry.auth_policy().as_str(),
+      &request.relative_path,
+    )?;
     validate_broker_headers(&request.headers)?;
     let response_body_modes = entry.response_body_modes();
     let selected_response_mode = select_response_mode(&request.headers, response_body_modes)?;
@@ -158,6 +167,9 @@ impl PluginHostState {
     let grant = &self.grant;
     let cancel = &self.cancel;
     let broker = &self.broker;
+    if let Some(tracker) = &self.provider_attempt {
+      tracker.mark_started();
+    }
     let broker_future = broker.fetch(
       principal,
       grant,
@@ -175,6 +187,9 @@ impl PluginHostState {
         if tokio::time::timeout(BROKER_IMPORT_CLEANUP_TIMEOUT, &mut broker_future).await.is_err() {
           log::warn!("broker future exceeded cancellation cleanup timeout");
         }
+        if let Some(tracker) = &self.provider_attempt {
+          tracker.mark_cancelled();
+        }
         Err(BrokerFetchError::Cancelled)
       }
       _ = tokio::time::sleep(import_timeout) => {
@@ -183,11 +198,28 @@ impl PluginHostState {
         if tokio::time::timeout(BROKER_IMPORT_CLEANUP_TIMEOUT, &mut broker_future).await.is_err() {
           log::warn!("broker future exceeded deadline cleanup timeout");
         }
+        if let Some(tracker) = &self.provider_attempt {
+          if self.cancel.is_cancelled() {
+            tracker.mark_cancelled();
+          } else {
+            tracker.mark_completed();
+          }
+        }
         Err(BrokerFetchError::Timeout)
       }
-      outcome = &mut broker_future => match outcome {
-        Ok(response) => validate_broker_response(&response, &authorization).map(|()| response),
-        Err(error) => Err(error),
+      outcome = &mut broker_future => {
+        let result = match outcome {
+          Ok(response) => validate_broker_response(&response, &authorization).map(|()| response),
+          Err(error) => Err(error),
+        };
+        if let Some(tracker) = &self.provider_attempt {
+          if matches!(result, Err(BrokerFetchError::Cancelled)) || self.cancel.is_cancelled() {
+            tracker.mark_cancelled();
+          } else {
+            tracker.mark_completed();
+          }
+        }
+        result
       },
     }
   }
@@ -507,6 +539,74 @@ fn validate_fixed_endpoint_scope(
   Ok(())
 }
 
+/// Google Cloud's signed package uses fixed origins and one host-approved RPC path per
+/// capability. This check runs before token acquisition, so a package/guest cannot redirect an
+/// injected bearer or OCR payload to an attacker origin or an unrelated Google API.
+fn validate_google_cloud_authority(
+  plugin_id: &str,
+  endpoint_id: &str,
+  capability_id: &str,
+  origin: &str,
+  base_url: &str,
+  auth_policy: &str,
+  relative_path: &str,
+) -> Result<(), BrokerFetchError> {
+  if plugin_id != crate::domain::service_integration::GOOGLE_CLOUD_PLUGIN_ID {
+    return Ok(());
+  }
+  if auth_policy != crate::services::auth_policies::GOOGLE_SERVICE_ACCOUNT_AUTH_POLICY_ID || base_url != origin {
+    return Err(BrokerFetchError::NotApproved);
+  }
+  let expected = match (endpoint_id, capability_id) {
+    ("translate", "translate.text@1") => (
+      "https://translation.googleapis.com",
+      google_translate_rpc_path(relative_path, "translateText"),
+    ),
+    ("translate", "translate.detect@1") => (
+      "https://translation.googleapis.com",
+      google_translate_rpc_path(relative_path, "detectLanguage"),
+    ),
+    ("vision", "ocr.image@1") => ("https://vision.googleapis.com", relative_path == "v1/images:annotate"),
+    ("text-to-speech", "speech.synthesize@1") => (
+      "https://texttospeech.googleapis.com",
+      relative_path == "v1/text:synthesize",
+    ),
+    _ => return Err(BrokerFetchError::NotApproved),
+  };
+  if origin != expected.0 || !expected.1 {
+    return Err(BrokerFetchError::NotApproved);
+  }
+  Ok(())
+}
+
+fn google_translate_rpc_path(relative_path: &str, operation: &str) -> bool {
+  const PREFIX: &str = "v3beta1/projects/";
+  let Some(rest) = relative_path.strip_prefix(PREFIX) else {
+    return false;
+  };
+  let Some((project, location_and_operation)) = rest.split_once("/locations/") else {
+    return false;
+  };
+  let suffix = match operation {
+    "translateText" => ":translateText",
+    "detectLanguage" => ":detectLanguage",
+    _ => return false,
+  };
+  let Some(location) = location_and_operation.strip_suffix(suffix) else {
+    return false;
+  };
+  !project.is_empty()
+    && !location.is_empty()
+    && project.len() <= 128
+    && location.len() <= 128
+    && project
+      .bytes()
+      .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    && location
+      .bytes()
+      .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+}
+
 /// Validate the path portion (before any `?`): relative, no scheme/authority/traversal/fragment.
 fn validate_path_part(path: &str) -> Result<(), BrokerFetchError> {
   if path.is_empty() {
@@ -527,7 +627,10 @@ fn validate_path_part(path: &str) -> Result<(), BrokerFetchError> {
   if path.contains('#') {
     return Err(BrokerFetchError::PathConfined);
   }
-  if path.contains(':') {
+  // A colon is valid in the fixed Google RPC-style suffixes (e.g. `:translateText` and
+  // `images:annotate`). Reject only URI schemes and Windows drive prefixes here; endpoint/capability
+  // authority performs the exact fixed-path check before transport.
+  if path.starts_with("http:") || path.starts_with("https:") || path.as_bytes().get(1) == Some(&b':') {
     return Err(BrokerFetchError::PathConfined);
   }
   for segment in path.split('/') {
@@ -718,6 +821,46 @@ mod tests {
     assert!(validate_fixed_endpoint_scope("tts-api", "speech.synthesize@1", "v1/audio/speech").is_ok());
     assert!(validate_fixed_endpoint_scope("tts-api", "speech.synthesize@1", "api/v1/audio/speech").is_err());
     assert!(validate_fixed_endpoint_scope("tts-api", "speech.synthesize@1", "v1/audio/speech?route=other").is_err());
+  }
+
+  #[test]
+  fn google_cloud_authority_is_bound_to_fixed_origin_capability_and_rpc_path() {
+    assert!(
+      validate_google_cloud_authority(
+        crate::domain::service_integration::GOOGLE_CLOUD_PLUGIN_ID,
+        "translate",
+        "translate.text@1",
+        "https://translation.googleapis.com",
+        "https://translation.googleapis.com",
+        crate::services::auth_policies::GOOGLE_SERVICE_ACCOUNT_AUTH_POLICY_ID,
+        "v3beta1/projects/demo/locations/global:translateText",
+      )
+      .is_ok()
+    );
+    assert!(
+      validate_google_cloud_authority(
+        crate::domain::service_integration::GOOGLE_CLOUD_PLUGIN_ID,
+        "translate",
+        "translate.text@1",
+        "https://attacker.example",
+        "https://attacker.example",
+        crate::services::auth_policies::GOOGLE_SERVICE_ACCOUNT_AUTH_POLICY_ID,
+        "v3beta1/projects/demo/locations/global:translateText",
+      )
+      .is_err()
+    );
+    assert!(
+      validate_google_cloud_authority(
+        crate::domain::service_integration::GOOGLE_CLOUD_PLUGIN_ID,
+        "translate",
+        "translate.text@1",
+        "https://translation.googleapis.com",
+        "https://translation.googleapis.com",
+        crate::services::auth_policies::GOOGLE_SERVICE_ACCOUNT_AUTH_POLICY_ID,
+        "v1/projects/demo:models.list",
+      )
+      .is_err()
+    );
   }
 
   #[test]

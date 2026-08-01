@@ -1,0 +1,4 @@
+# cargo-component regenerates bindings files; guests use wit_bindgen directly.
+**/src/bindings.rs
+# All cargo build artifacts under the sub-crates.
+**/target

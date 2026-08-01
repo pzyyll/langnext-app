@@ -3,6 +3,7 @@
 pub mod cancel;
 pub mod endpoint_trust;
 pub mod import_export;
+pub mod integration_capability_health;
 pub mod language_detection;
 pub mod model;
 pub mod ocr_service;
