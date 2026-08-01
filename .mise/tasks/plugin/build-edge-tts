@@ -222,8 +222,8 @@ fs.writeFileSync(path.join(pluginDir, "plugin.json"), serialized);
 console.log("ok: plugin.json generated (files=" + manifest.files.length + " payload=" + stagingPayloadPaths.size + " fingerprint=" + expectedFingerprint.slice(0, 12) + "...)");
 ' "$STAGING" "$TEMPLATE" "$PUBLIC_KEY_HEX" "$PLUGIN_DIR"
 
-# Reformat both generated manifests with the project Prettier so they pass format:check.
-prettier --write "$STAGING/plugin.json" "$PLUGIN_DIR/plugin.json" >/dev/null
+# Reformat both generated manifests with the project oxfmt so they pass format:check.
+oxfmt --write "$STAGING/plugin.json" "$PLUGIN_DIR/plugin.json" >/dev/null
 
 echo "ok: edge-tts staging tree built at $STAGING"
 echo "    next (release CI only): sign the staging plugin.json with the offline vendor key,"

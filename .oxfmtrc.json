@@ -1,0 +1,14 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  // ABOUTME: oxfmt config mirroring the former .prettierrc (migrated from Prettier).
+  // ABOUTME: sortPackageJson is off to keep pure formatting semantics (no field reordering).
+  "printWidth": 120,
+  "tabWidth": 2,
+  "useTabs": false,
+  "semi": true,
+  "singleQuote": false,
+  "trailingComma": "all",
+  "arrowParens": "always",
+  "endOfLine": "lf",
+  "sortPackageJson": false
+}

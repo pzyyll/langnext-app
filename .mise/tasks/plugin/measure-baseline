@@ -110,9 +110,9 @@ release binary size or cold-start increased materially, review before enabling p
 instances.
 EOF
 
-if command -v prettier >/dev/null 2>&1; then
-  prettier --write "$RESULTS_FILE" >/dev/null 2>&1 || {
-    echo "error: prettier failed formatting $RESULTS_FILE" >&2
+if command -v oxfmt >/dev/null 2>&1; then
+  oxfmt --write "$RESULTS_FILE" >/dev/null 2>&1 || {
+    echo "error: oxfmt failed formatting $RESULTS_FILE" >&2
     exit 1
   }
 fi

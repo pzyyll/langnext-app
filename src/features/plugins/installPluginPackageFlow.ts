@@ -13,7 +13,8 @@ import type {
 import { FsError, toFsError } from "../fsError";
 
 export type SelectPluginPackageResult =
-  { readonly status: "selected"; readonly path: string } | { readonly status: "cancelled" };
+  | { readonly status: "selected"; readonly path: string }
+  | { readonly status: "cancelled" };
 
 /** Native dialog to pick a single `.lnplugin` path. Cancel is a success status. */
 export function selectPluginPackageFile(): Effect.Effect<SelectPluginPackageResult, FsError> {

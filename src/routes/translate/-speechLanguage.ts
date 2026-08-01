@@ -16,7 +16,9 @@ export type SpeechSourceLanguageInput = {
 };
 
 export type SpeechSourceLanguageResult =
-  { kind: "ready"; languageId: LanguageId } | { kind: "needs_detection" } | { kind: "unresolved" };
+  | { kind: "ready"; languageId: LanguageId }
+  | { kind: "needs_detection" }
+  | { kind: "unresolved" };
 
 /**
  * Resolve the concrete language for source-pane playback.

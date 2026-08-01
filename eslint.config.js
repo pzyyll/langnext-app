@@ -1,4 +1,4 @@
-// ABOUTME: Flat ESLint config for TypeScript React with Prettier integration.
+// ABOUTME: Flat ESLint config for TypeScript React with oxfmt integration.
 // ABOUTME: Ignores build output, Tauri Rust tree, and generated route tree.
 import js from "@eslint/js";
 import globals from "globals";
@@ -40,7 +40,7 @@ export default defineConfig([
     rules: {
       ...reactHooks.configs.recommended.rules,
       "react-refresh/only-export-components": ["warn", { allowConstantExport: true }],
-      // Match .prettierrc printWidth; loose avoids endless Prettier↔ESLint wrap fights.
+      // Match .oxfmtrc.json printWidth; loose avoids endless oxfmt↔ESLint wrap fights.
       "better-tailwindcss/enforce-consistent-line-wrapping": [
         "warn",
         {
@@ -87,6 +87,6 @@ export default defineConfig([
       "@typescript-eslint/no-deprecated": "warn",
     },
   },
-  // Keep after Tailwind rules so Prettier still owns pure formatting conflicts.
+  // Keep after Tailwind rules so oxfmt still owns pure formatting conflicts.
   eslintConfigPrettier,
 ]);

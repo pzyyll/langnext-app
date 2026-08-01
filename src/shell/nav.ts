@@ -3,7 +3,14 @@
 
 /** Icon keys consumed by the shell sidebar (material-symbols-light). */
 export type NavIconId =
-  "translate" | "book" | "history" | "neurology" | "document_scanner" | "record_voice_over" | "extension" | "settings";
+  | "translate"
+  | "book"
+  | "history"
+  | "neurology"
+  | "document_scanner"
+  | "record_voice_over"
+  | "extension"
+  | "settings";
 
 export const navItems = [
   { to: "/translate", labelKey: "nav.translate", exact: true, icon: "translate" },

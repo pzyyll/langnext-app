@@ -96,5 +96,5 @@ permissions = [
   "allow-set-app-default-speech-service",
   "allow-export-configuration",
   "allow-preview-configuration-import",
-  "allow-import-configuration"
+  "allow-import-configuration",
 ]

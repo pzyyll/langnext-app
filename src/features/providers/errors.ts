@@ -5,7 +5,11 @@ import type { ModelsSyncErrorCode } from "../../storage/types";
 import { ProviderProtocolError } from "./types";
 
 export type ProviderWorkflowErrorCode =
-  ModelsSyncErrorCode | "cancelled" | "plugin_unavailable" | "provider_reconfiguration_required" | "validation_failed";
+  | ModelsSyncErrorCode
+  | "cancelled"
+  | "plugin_unavailable"
+  | "provider_reconfiguration_required"
+  | "validation_failed";
 
 export interface NormalizedProviderError {
   code: ProviderWorkflowErrorCode;

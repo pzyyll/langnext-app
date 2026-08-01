@@ -17,7 +17,13 @@ export type GlobalProxyMode = "system" | "custom";
 export type ImportConflictMode = "merge" | "copy";
 /** Bounded codes persisted on ProviderInstanceDto.modelsSyncErrorCode. */
 export type ModelsSyncErrorCode =
-  "auth" | "rate_limited" | "network" | "timeout" | "server" | "invalid_response" | "credential_unavailable";
+  | "auth"
+  | "rate_limited"
+  | "network"
+  | "timeout"
+  | "server"
+  | "invalid_response"
+  | "credential_unavailable";
 
 /**
  * Codes returned by frontend model sync / apply_provider_model_sync IPC.

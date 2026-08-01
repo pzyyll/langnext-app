@@ -68,10 +68,10 @@ cp "$PLUGIN_DIR/plugin.json" "$STAGING/plugin.json"
 bun -e 'const fs=require("fs");const p=process.argv[1];const key=Buffer.from(process.argv[2],"hex");if(key.length!==32)throw new Error("vendor key must be 32 bytes");fs.writeFileSync(p+"/publisher.pub",key);' "$STAGING" "$PUBLIC_KEY_HEX"
 bun "$ROOT_DIR/scripts/build-google-cloud-manifest.js" "$STAGING" "$PLUGIN_DIR" "$UPDATE_FIXTURES" "$PUBLIC_KEY_HEX"
 if [[ "$UPDATE_FIXTURES" -eq 1 ]]; then
-  bunx prettier --write "$PLUGIN_DIR/plugin.json" >/dev/null
+  bunx oxfmt --write "$PLUGIN_DIR/plugin.json" >/dev/null
   cp "$PLUGIN_DIR/plugin.json" "$STAGING/plugin.json"
 else
-  bunx prettier --check "$PLUGIN_DIR/plugin.json" >/dev/null
+  bunx oxfmt --check "$PLUGIN_DIR/plugin.json" >/dev/null
 fi
 bun -e '
   const fs = require("fs");

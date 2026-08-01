@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# ABOUTME: Check Prettier and rustfmt without writing files
+# ABOUTME: Check oxfmt and rustfmt without writing files
 # ABOUTME: Run via `mise run format:check`
-#MISE description="Check formatting (Prettier + rustfmt)"
+#MISE description="Check formatting (oxfmt + rustfmt)"
 set -euo pipefail
-prettier --check .
+oxfmt --check
 cargo fmt --manifest-path src-tauri/Cargo.toml -- --check

@@ -81,7 +81,9 @@ export interface SseEvent {
 }
 
 export type StreamParseResult =
-  { kind: "delta"; text: string } | { kind: "error"; message: string } | { kind: "ignore" };
+  | { kind: "delta"; text: string }
+  | { kind: "error"; message: string }
+  | { kind: "ignore" };
 
 export interface DetectPolicyInput {
   modelKey: string;

@@ -17,7 +17,8 @@ export type SlotStreamJob = {
 };
 
 export type SlotStreamStartOutcome =
-  { slotId: string; requestId: string; ok: true } | { slotId: string; requestId: string; ok: false; error: IpcError };
+  | { slotId: string; requestId: string; ok: true }
+  | { slotId: string; requestId: string; ok: false; error: IpcError };
 
 /**
  * Start every slot stream concurrently. Individual failures become outcomes.
@@ -30,18 +31,21 @@ export function startSlotStreamBatch(jobs: readonly SlotStreamJob[]): Effect.Eff
         try: () => runTranslationStream(job.input, job.snapshots, job.requestId, job.handlers, job.signal),
         catch: (error) => error as IpcError,
       }).pipe(
-        Effect.map((): SlotStreamStartOutcome => ({
-          slotId: job.slotId,
-          requestId: job.requestId,
-          ok: true as const,
-        })),
-        Effect.catchAll((error): Effect.Effect<SlotStreamStartOutcome, never> =>
-          Effect.succeed({
+        Effect.map(
+          (): SlotStreamStartOutcome => ({
             slotId: job.slotId,
             requestId: job.requestId,
-            ok: false as const,
-            error,
+            ok: true as const,
           }),
+        ),
+        Effect.catchAll(
+          (error): Effect.Effect<SlotStreamStartOutcome, never> =>
+            Effect.succeed({
+              slotId: job.slotId,
+              requestId: job.requestId,
+              ok: false as const,
+              error,
+            }),
         ),
       ),
     { concurrency: "unbounded" },
