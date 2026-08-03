@@ -817,6 +817,7 @@ mod tests {
         .collect(),
       permissions: PermissionRequests::default(),
       ui: UiDeclaration::default(),
+      provider_runtime: None,
     }
   }
 

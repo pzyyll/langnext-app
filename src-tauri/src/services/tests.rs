@@ -7,6 +7,9 @@ use crate::domain::model::{Availability, ManualModelWrite, ModelConfigWrite, Mod
 use crate::domain::provider::{
   AuthSchemeV1, BaseUrlSource, CredentialKind, CredentialUpdate, ProviderInstanceWrite, ProxyMode,
 };
+use crate::domain::runtime_provider::{
+  ProviderRuntimeBinding, ProviderRuntimeKind, ProviderRuntimeRequirementExport, ProviderRuntimeState,
+};
 use crate::domain::settings::{
   AppSettingsUpdate, AppSettingsV1, GlobalProxyMode, NetworkSettings, ProxyCredentialUpdate, TranslationPreferences,
 };
@@ -15,6 +18,7 @@ use crate::domain::translation_profile::{
   TranslationProfileEngineWrite, TranslationProfileWrite,
 };
 use crate::error::StorageError;
+use crate::repositories::provider_runtime_bindings::{self, ProviderRuntimeSnapshotScope, ProviderRuntimeSnapshotSet};
 use crate::services::{ImportExportService, ModelService, ProviderService, SettingsService, TranslationProfileService};
 use crate::storage::Database;
 use std::sync::Arc;
@@ -135,6 +139,7 @@ fn provider_keep_allows_base_url_change_with_stored_credential() {
   models
     .apply_remote_merge(
       dto.id,
+      "openai-compatible",
       &[RemoteModelSyncItem {
         model_key: "m1".into(),
         remote_display_name: None,
@@ -249,6 +254,7 @@ fn model_merge_marks_missing_preserves_manual() {
   models
     .apply_remote_merge(
       p.id,
+      "openai-compatible",
       &[
         RemoteModelSyncItem {
           model_key: "remote-a".into(),
@@ -279,6 +285,7 @@ fn model_merge_marks_missing_preserves_manual() {
   models
     .apply_remote_merge(
       p.id,
+      "openai-compatible",
       &[RemoteModelSyncItem {
         model_key: "remote-b".into(),
         remote_display_name: None,
@@ -986,6 +993,339 @@ fn import_export_round_trip_and_secret_exclusion() {
   assert!(providers.list().unwrap().len() > before);
 }
 
+/// Merge import makes the document-declared runtime binding collection the Provider's
+/// COMPLETE runtime interface set: local bindings the document omits are removed, and the
+/// removed binding's Provider/package grant is released reference-aware (no active binding
+/// and no undiscarded snapshot references it). The Provider default API type keeps its
+/// legacy row, so the per-interface read invariant survives the reconciliation.
+#[test]
+fn import_merge_reconciles_runtime_bindings_to_document_set() {
+  let (_d, db, _v, providers, _models, _profiles, _settings, ie, ..) = setup();
+
+  // Provider with a legacy default binding only (no credential, so merge never touches vault).
+  let provider = providers
+    .save(provider_write(CredentialKind::None, CredentialUpdate::Keep))
+    .unwrap();
+  let provider_id = provider.id;
+
+  // The export document declares exactly the legacy default interface.
+  let doc = ie.export().unwrap();
+  assert_eq!(doc.providers.len(), 1);
+  assert_eq!(doc.providers[0].runtime_bindings.len(), 1);
+
+  // Locally the Provider additionally owns a wasm interface binding with an execution grant
+  // (simulating a previously attached package the document omits).
+  let stale_digest = "a".repeat(64);
+  db.transaction(|uow| {
+    let conn = uow.conn();
+    conn
+      .execute(
+        "INSERT INTO plugin_publishers (
+          key_id, fingerprint, public_key_hex, source, enabled, revoked, created_at, updated_at
+        ) VALUES ('com.langnext.test.keys.1', ?1, 'k', 'user_approved', 1, 0, 't0', 't0')",
+        rusqlite::params!["f".repeat(64)],
+      )
+      .unwrap();
+    conn
+      .execute(
+        "INSERT INTO installed_plugin_versions (
+          package_digest, plugin_id, version, publisher_key_id, publisher_fingerprint,
+          runtime_kind, manifest_json, permission_request_digest, content_available, installed_at
+        ) VALUES (?1, 'com.langnext.provider.openai-responses', '1.0.0', 'com.langnext.test.keys.1',
+          ?2, 'wasm-component', '{}', 'perm', 1, 't0')",
+        rusqlite::params![stale_digest, "f".repeat(64)],
+      )
+      .unwrap();
+    provider_runtime_bindings::insert(
+      conn,
+      &ProviderRuntimeBinding {
+        provider_id,
+        adapter_id: "openai-responses".into(),
+        runtime_kind: ProviderRuntimeKind::WasmComponent,
+        package_digest: Some(stale_digest.clone()),
+        grant_set_revision: Some(7),
+        state: ProviderRuntimeState::Unavailable,
+        error_code: Some("plugin_unavailable".into()),
+        error_message: None,
+        runtime_requirement_json: None,
+        created_at: "t0".into(),
+        updated_at: "t0".into(),
+      },
+    )
+    .unwrap();
+    conn
+      .execute(
+        "INSERT INTO execution_grant_sets (
+          id, revision, subject_kind, subject_id, plugin_id, plugin_version,
+          package_digest, permission_request_digest, authority_digest, approved_at
+        ) VALUES (?1, 7, 'provider_instance', ?2, 'com.langnext.provider.openai-responses',
+          '1.0.0', ?3, 'perm', 'auth', 't0')",
+        rusqlite::params![
+          crate::domain::time::new_id().to_string(),
+          provider_id.to_string(),
+          stale_digest
+        ],
+      )
+      .unwrap();
+    Ok(())
+  })
+  .unwrap();
+
+  let result = ie.import(doc, ImportConflictMode::Merge).unwrap();
+  assert!(result.applied);
+
+  // The omitted binding is gone and its grant was released (no snapshot references it).
+  let stale = db
+    .read(|conn| provider_runtime_bindings::get_optional(conn, provider_id, "openai-responses"))
+    .unwrap();
+  assert!(
+    stale.is_none(),
+    "document-omitted binding must be removed by merge import"
+  );
+  let grant_count: i64 = db
+    .read(|conn| {
+      Ok(
+        conn
+          .query_row(
+            "SELECT COUNT(*) FROM execution_grant_sets
+              WHERE subject_kind = 'provider_instance' AND subject_id = ?1 AND package_digest = ?2",
+            rusqlite::params![provider_id.to_string(), stale_digest],
+            |row| row.get(0),
+          )
+          .unwrap(),
+      )
+    })
+    .unwrap();
+  assert_eq!(grant_count, 0, "removed binding must not leave an orphan grant");
+
+  // Provider default API type invariant survives: the default adapter owns a binding row.
+  let default = db
+    .read(|conn| provider_runtime_bindings::get(conn, provider_id, "openai-compatible"))
+    .unwrap();
+  assert_eq!(default.runtime_kind, ProviderRuntimeKind::LegacyFrontendProvider);
+}
+
+/// Insert an adapter-keyed wasm binding carrying an execution grant (simulating a package
+/// that was previously attached and approved for the Provider).
+fn insert_granted_wasm_binding(db: &Database, provider_id: uuid::Uuid, adapter_id: &str, digest: &str) {
+  db.transaction(|uow| {
+    let conn = uow.conn();
+    conn
+      .execute(
+        "INSERT INTO plugin_publishers (
+          key_id, fingerprint, public_key_hex, source, enabled, revoked, created_at, updated_at
+        ) VALUES ('com.langnext.test.keys.1', ?1, 'k', 'user_approved', 1, 0, 't0', 't0')",
+        rusqlite::params!["f".repeat(64)],
+      )
+      .unwrap();
+    conn
+      .execute(
+        "INSERT INTO installed_plugin_versions (
+          package_digest, plugin_id, version, publisher_key_id, publisher_fingerprint,
+          runtime_kind, manifest_json, permission_request_digest, content_available, installed_at
+        ) VALUES (?1, 'com.langnext.provider.openai-responses', '1.0.0', 'com.langnext.test.keys.1',
+          ?2, 'wasm-component', '{}', 'perm', 1, 't0')",
+        rusqlite::params![digest, "f".repeat(64)],
+      )
+      .unwrap();
+    provider_runtime_bindings::insert(
+      conn,
+      &ProviderRuntimeBinding {
+        provider_id,
+        adapter_id: adapter_id.into(),
+        runtime_kind: ProviderRuntimeKind::WasmComponent,
+        package_digest: Some(digest.into()),
+        grant_set_revision: Some(7),
+        state: ProviderRuntimeState::Active,
+        error_code: None,
+        error_message: None,
+        runtime_requirement_json: None,
+        created_at: "t0".into(),
+        updated_at: "t0".into(),
+      },
+    )
+    .unwrap();
+    conn
+      .execute(
+        "INSERT INTO execution_grant_sets (
+          id, revision, subject_kind, subject_id, plugin_id, plugin_version,
+          package_digest, permission_request_digest, authority_digest, approved_at
+        ) VALUES (?1, 7, 'provider_instance', ?2, 'com.langnext.provider.openai-responses',
+          '1.0.0', ?3, 'perm', 'auth', 't0')",
+        rusqlite::params![
+          crate::domain::time::new_id().to_string(),
+          provider_id.to_string(),
+          digest
+        ],
+      )
+      .unwrap();
+    Ok(())
+  })
+  .unwrap();
+}
+
+/// Grant-set count for one Provider/package (grant release assertions).
+fn provider_grant_count(db: &Database, provider_id: uuid::Uuid, digest: &str) -> i64 {
+  db.read(|conn| {
+    Ok(
+      conn
+        .query_row(
+          "SELECT COUNT(*) FROM execution_grant_sets
+            WHERE subject_kind = 'provider_instance' AND subject_id = ?1 AND package_digest = ?2",
+          rusqlite::params![provider_id.to_string(), digest],
+          |row| row.get(0),
+        )
+        .unwrap(),
+    )
+  })
+  .unwrap()
+}
+
+/// v8 wasm runtime binding requirement for an imported document.
+fn wasm_requirement(adapter_id: &str, digest: &str) -> ProviderRuntimeRequirementExport {
+  ProviderRuntimeRequirementExport {
+    adapter_id: Some(adapter_id.into()),
+    runtime_kind: "wasm-component".into(),
+    package_digest: Some(digest.into()),
+    plugin_id: Some("com.langnext.provider.openai-responses".into()),
+    plugin_version: Some("1.0.0".into()),
+    publisher_key_id: Some("com.langnext.test.keys.1".into()),
+    publisher_key_fingerprint: Some("f".repeat(64)),
+    plugin_api_version: Some("1.0".into()),
+    legacy_aliases: vec![adapter_id.into()],
+    capabilities: vec!["llm.chat@1".into(), "llm.models.list@1".into()],
+  }
+}
+
+/// Merge import overwriting the SAME adapter with the SAME package must release the old
+/// grant: import restores unavailable metadata that never carries a grant revision, so the
+/// previously granted revision becomes unreferenced by the binding row.
+#[test]
+fn import_merge_releases_same_package_replaced_binding_grant() {
+  let (_d, db, _v, providers, _models, _profiles, _settings, ie, ..) = setup();
+  let provider = providers
+    .save(provider_write(CredentialKind::None, CredentialUpdate::Keep))
+    .unwrap();
+  let provider_id = provider.id;
+  // Build the import document BEFORE inserting the local stale binding: export walks
+  // installed manifests of existing wasm bindings.
+  let mut doc = ie.export().unwrap();
+  let digest = "a".repeat(64);
+  insert_granted_wasm_binding(&db, provider_id, "openai-responses", &digest);
+
+  // Re-import the same adapter + package: the document declares it as unavailable metadata.
+  doc.providers[0]
+    .runtime_bindings
+    .push(wasm_requirement("openai-responses", &digest));
+
+  let result = ie.import(doc, ImportConflictMode::Merge).unwrap();
+  assert!(result.applied);
+
+  let binding = db
+    .read(|conn| provider_runtime_bindings::get(conn, provider_id, "openai-responses"))
+    .unwrap();
+  assert_eq!(
+    binding.grant_set_revision, None,
+    "import restores unavailable metadata without a grant"
+  );
+  assert_eq!(
+    provider_grant_count(&db, provider_id, &digest),
+    0,
+    "same-package replacement must release the orphaned grant"
+  );
+}
+
+/// Merge import overwriting the SAME adapter with a DIFFERENT package must release the old
+/// package's grant (the adapter's package/revision identity changed).
+#[test]
+fn import_merge_releases_different_package_replaced_binding_grant() {
+  let (_d, db, _v, providers, _models, _profiles, _settings, ie, ..) = setup();
+  let provider = providers
+    .save(provider_write(CredentialKind::None, CredentialUpdate::Keep))
+    .unwrap();
+  let provider_id = provider.id;
+  // Build the import document BEFORE inserting the local stale binding: export walks
+  // installed manifests of existing wasm bindings.
+  let mut doc = ie.export().unwrap();
+  let old_digest = "a".repeat(64);
+  insert_granted_wasm_binding(&db, provider_id, "openai-responses", &old_digest);
+
+  let new_digest = "b".repeat(64);
+  doc.providers[0]
+    .runtime_bindings
+    .push(wasm_requirement("openai-responses", &new_digest));
+
+  let result = ie.import(doc, ImportConflictMode::Merge).unwrap();
+  assert!(result.applied);
+
+  let binding = db
+    .read(|conn| provider_runtime_bindings::get(conn, provider_id, "openai-responses"))
+    .unwrap();
+  assert_eq!(binding.package_digest.as_deref(), Some(new_digest.as_str()));
+  assert_eq!(
+    provider_grant_count(&db, provider_id, &old_digest),
+    0,
+    "replaced package identity must release the orphaned grant"
+  );
+}
+
+/// The replacement release is reference-aware: an undiscarded rollback snapshot that still
+/// references the exact package/grant revision keeps the grant.
+#[test]
+fn import_merge_keeps_replaced_binding_grant_referenced_by_snapshot() {
+  let (_d, db, _v, providers, _models, _profiles, _settings, ie, ..) = setup();
+  let provider = providers
+    .save(provider_write(CredentialKind::None, CredentialUpdate::Keep))
+    .unwrap();
+  let provider_id = provider.id;
+  // Build the import document BEFORE inserting the local stale binding: export walks
+  // installed manifests of existing wasm bindings.
+  let mut doc = ie.export().unwrap();
+  let digest = "a".repeat(64);
+  insert_granted_wasm_binding(&db, provider_id, "openai-responses", &digest);
+
+  db.transaction(|uow| {
+    let conn = uow.conn();
+    provider_runtime_bindings::insert_snapshot_set(
+      conn,
+      &ProviderRuntimeSnapshotSet {
+        id: crate::domain::time::new_id(),
+        provider_id,
+        scope: ProviderRuntimeSnapshotScope::Adapter,
+        created_at: "t0".into(),
+        discarded_at: None,
+        runtime_kind: ProviderRuntimeKind::WasmComponent,
+        package_digest: Some(digest.clone()),
+        grant_set_revision: Some(7),
+        grant_set_id: None,
+        plugin_id: "com.langnext.provider.openai-responses".into(),
+        plugin_version: "1.0.0".into(),
+        publisher_key_id: None,
+        publisher_fingerprint: None,
+        plugin_api_version: None,
+        capability_ids_json: "[]".into(),
+        updated_at: "t0".into(),
+      },
+    )
+    .unwrap();
+    Ok(())
+  })
+  .unwrap();
+
+  doc.providers[0]
+    .runtime_bindings
+    .push(wasm_requirement("openai-responses", &digest));
+
+  let result = ie.import(doc, ImportConflictMode::Merge).unwrap();
+  assert!(result.applied);
+
+  assert_eq!(
+    provider_grant_count(&db, provider_id, &digest),
+    1,
+    "snapshot-referenced grant must survive the replacement release"
+  );
+}
+
 #[test]
 fn credential_debug_redaction() {
   let update = CredentialUpdate::Replace("super-secret-value".into());
@@ -1249,6 +1589,7 @@ fn model_sync_error_preserves_last_success_timestamp() {
   models
     .apply_remote_merge(
       p.id,
+      "openai-compatible",
       &[RemoteModelSyncItem {
         model_key: "a".into(),
         remote_display_name: None,
@@ -1443,6 +1784,7 @@ fn save_connection_identity_change_resets_models_sync_status() {
   models
     .apply_remote_merge(
       p.id,
+      "openai-compatible",
       &[RemoteModelSyncItem {
         model_key: "m1".into(),
         remote_display_name: None,
@@ -1490,6 +1832,7 @@ fn save_none_keep_after_sync_preserves_status_when_identity_unchanged() {
   models
     .apply_remote_merge(
       p.id,
+      "openai-compatible",
       &[RemoteModelSyncItem {
         model_key: "m1".into(),
         remote_display_name: None,
@@ -1533,6 +1876,7 @@ fn save_none_keep_after_sync_resets_when_identity_changed() {
   models
     .apply_remote_merge(
       p.id,
+      "openai-compatible",
       &[RemoteModelSyncItem {
         model_key: "m1".into(),
         remote_display_name: None,
@@ -1574,6 +1918,7 @@ fn save_display_name_only_preserves_models_sync_status() {
   models
     .apply_remote_merge(
       p.id,
+      "openai-compatible",
       &[RemoteModelSyncItem {
         model_key: "m1".into(),
         remote_display_name: None,
@@ -1616,6 +1961,7 @@ fn save_credential_replace_resets_models_sync_status() {
   models
     .apply_remote_merge(
       p.id,
+      "openai-compatible",
       &[RemoteModelSyncItem {
         model_key: "m1".into(),
         remote_display_name: None,
@@ -1657,6 +2003,7 @@ fn save_proxy_mode_change_resets_models_sync_status() {
   models
     .apply_remote_merge(
       p.id,
+      "openai-compatible",
       &[RemoteModelSyncItem {
         model_key: "m1".into(),
         remote_display_name: None,

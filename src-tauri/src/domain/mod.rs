@@ -14,6 +14,7 @@ pub mod provider;
 pub mod provider_http;
 pub mod runtime_lifecycle;
 pub mod runtime_plugin;
+pub mod runtime_provider;
 pub mod service_capability;
 pub mod service_integration;
 pub mod settings;

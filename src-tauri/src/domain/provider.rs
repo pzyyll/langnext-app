@@ -3,6 +3,10 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::domain::runtime_provider::{
+  ProviderRuntimeBinding, ProviderRuntimeBindingDto, ProviderRuntimeRequirementExport,
+};
+
 /// Maximum length for generic auth header or query parameter names.
 pub const MAX_AUTH_SCHEME_NAME_LEN: usize = 64;
 
@@ -343,12 +347,43 @@ pub struct ProviderInstanceDto {
   pub models_synced_at: Option<String>,
   pub models_sync_status: ModelsSyncStatus,
   pub models_sync_error_code: Option<String>,
+  /// Deprecated compatibility projection of the Provider default API type binding. Kept
+  /// until every frontend caller moves to `runtime_bindings`; never execution authority.
+  pub runtime: ProviderRuntimeBindingDto,
+  /// Authoritative sanitized adapter-keyed interface bindings, ordered by adapter id
+  /// (Phase 8 multi-interface). Never includes package bytes, grants, snapshots,
+  /// credential references, or secret material.
+  pub runtime_bindings: Vec<ProviderRuntimeBindingDto>,
   pub created_at: String,
   pub updated_at: String,
 }
 
-impl From<&ProviderInstance> for ProviderInstanceDto {
-  fn from(value: &ProviderInstance) -> Self {
+impl ProviderInstanceDto {
+  /// Build the sanitized DTO from the authoritative provider row plus its adapter-keyed
+  /// interface binding collection. The deprecated `runtime` projection is the Provider
+  /// default API type binding (or a synthesized legacy identity when missing).
+  pub fn from_provider_and_runtime(value: &ProviderInstance, bindings: &[ProviderRuntimeBinding]) -> Self {
+    let mut ordered: Vec<&ProviderRuntimeBinding> = bindings.iter().collect();
+    ordered.sort_by(|a, b| a.adapter_id.cmp(&b.adapter_id));
+    let default_binding = ordered
+      .iter()
+      .find(|binding| binding.adapter_id == value.adapter_id)
+      .map(|binding| ProviderRuntimeBindingDto::from(*binding))
+      .unwrap_or_else(|| {
+        ProviderRuntimeBindingDto::from(&ProviderRuntimeBinding {
+          provider_id: value.id,
+          adapter_id: value.adapter_id.clone(),
+          runtime_kind: crate::domain::runtime_provider::ProviderRuntimeKind::LegacyFrontendProvider,
+          package_digest: None,
+          grant_set_revision: None,
+          state: crate::domain::runtime_provider::ProviderRuntimeState::Active,
+          error_code: None,
+          error_message: None,
+          runtime_requirement_json: None,
+          created_at: value.created_at.clone(),
+          updated_at: value.updated_at.clone(),
+        })
+      });
     Self {
       id: value.id,
       adapter_id: value.adapter_id.clone(),
@@ -364,6 +399,8 @@ impl From<&ProviderInstance> for ProviderInstanceDto {
       models_synced_at: value.models_synced_at.clone(),
       models_sync_status: value.models_sync_status,
       models_sync_error_code: value.models_sync_error_code.clone(),
+      runtime: default_binding,
+      runtime_bindings: ordered.into_iter().map(ProviderRuntimeBindingDto::from).collect(),
       created_at: value.created_at.clone(),
       updated_at: value.updated_at.clone(),
     }
@@ -414,7 +451,9 @@ pub struct ProviderInstanceWrite {
 /// Export-only Provider shape (no credentials, sync errors, or device fields).
 ///
 /// Deserialization accepts v2 documents (baseUrlOverride only) and normalizes via
-/// [`ProviderExport::normalize_transport`]. Current exports always set v3 fields.
+/// [`ProviderExport::normalize_transport`]. Current exports always set v3 fields. The optional
+/// `runtime` requirement preserves the exact Phase 8 provider runtime identity; older formats
+/// (and pre-Phase 8 v7 documents) normalize to legacy-frontend-provider on import.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderExport {
@@ -434,6 +473,15 @@ pub struct ProviderExport {
   pub enabled: bool,
   pub proxy_mode: ProxyMode,
   pub insecure_http_confirmed_at: Option<String>,
+  /// Exact non-secret provider runtime requirement (Phase 8 v7). Never serializes grants,
+  /// package bytes, credential references, or activation authority.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub runtime: Option<ProviderRuntimeRequirementExport>,
+  /// Ordered adapter-keyed runtime interface requirements (export format v8+). Each entry
+  /// names one exact API type identity; never serializes grants, package bytes, credential
+  /// references, snapshots, or activation authority.
+  #[serde(default, skip_serializing_if = "Vec::is_empty")]
+  pub runtime_bindings: Vec<ProviderRuntimeRequirementExport>,
   pub created_at: String,
   pub updated_at: String,
 }
@@ -460,6 +508,10 @@ impl From<&ProviderInstance> for ProviderExport {
       enabled: value.enabled,
       proxy_mode: value.proxy_mode,
       insecure_http_confirmed_at: value.insecure_http_confirmed_at.clone(),
+      // The export service attaches the authoritative runtime requirements from the
+      // adapter-keyed binding collection.
+      runtime: None,
+      runtime_bindings: Vec::new(),
       created_at: value.created_at.clone(),
       updated_at: value.updated_at.clone(),
     }
@@ -531,6 +583,7 @@ mod tests {
 
   #[test]
   fn dto_omits_credential_ref() {
+    use crate::domain::runtime_provider::{ProviderRuntimeBinding, ProviderRuntimeKind, ProviderRuntimeState};
     let provider = ProviderInstance {
       id: Uuid::nil(),
       adapter_id: "openai-compatible".into(),
@@ -549,11 +602,26 @@ mod tests {
       created_at: "t".into(),
       updated_at: "t".into(),
     };
-    let dto = ProviderInstanceDto::from(&provider);
+    let binding = ProviderRuntimeBinding {
+      provider_id: Uuid::nil(),
+      adapter_id: "openai-compatible".into(),
+      runtime_kind: ProviderRuntimeKind::LegacyFrontendProvider,
+      package_digest: None,
+      grant_set_revision: None,
+      state: ProviderRuntimeState::Active,
+      error_code: None,
+      error_message: None,
+      runtime_requirement_json: None,
+      created_at: "t".into(),
+      updated_at: "t".into(),
+    };
+    let dto = ProviderInstanceDto::from_provider_and_runtime(&provider, &[binding]);
     let json = serde_json::to_string(&dto).unwrap();
     assert!(json.contains("hasCredential"));
     assert!(json.contains("baseUrl"));
     assert!(json.contains("authScheme"));
+    assert!(json.contains("runtimeKind"));
+    assert!(json.contains("runtimeBindings"));
     assert!(!json.contains("credentialRef"));
     assert!(!json.contains("provider/x/y"));
     assert!(dto.has_credential);

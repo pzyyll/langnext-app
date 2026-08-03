@@ -660,6 +660,7 @@ pub mod llm_models {
     },
   });
 }
+impl_world_host!(llm_models);
 
 /// Bindings for `llm-chat-world`. Compiled but not instantiated in Phase 2.
 pub mod llm_chat {
@@ -676,6 +677,7 @@ pub mod llm_chat {
     },
   });
 }
+impl_world_host!(llm_chat);
 
 /// Bindings for `migration-world` (pure copied-JSON exports). Instantiated for lifecycle upgrades.
 pub mod migration {

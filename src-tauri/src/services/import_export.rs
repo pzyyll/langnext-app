@@ -10,17 +10,24 @@ use crate::domain::import_export::{
 // EXPORT_FORMAT_VERSION is also used by validate_v7_runtime_records.
 use crate::domain::ocr_service::{OcrPromptTemplate, OcrProviderType, OcrService};
 use crate::domain::provider::ProviderExport;
+use crate::domain::runtime_plugin::PluginManifestV1;
+use crate::domain::runtime_provider::{
+  ProviderRuntimeBinding, ProviderRuntimeKind, ProviderRuntimeRequirementExport, ProviderRuntimeState,
+  legacy_frontend_binding,
+};
 use crate::domain::speech_service::SpeechService;
 use crate::domain::time::{new_id, now_rfc3339};
 use crate::error::StorageError;
 use crate::repositories::credential_operations::{self, CredentialOperation, OwnerKind};
 use crate::repositories::{
-  app_credentials, app_settings, integration_instances, ocr_prompt_templates, ocr_services, provider_instances,
-  provider_models, speech_services, translation_profiles,
+  app_credentials, app_settings, installed_plugin_versions, integration_instances, ocr_prompt_templates, ocr_services,
+  provider_instances, provider_models, provider_runtime_bindings, speech_services, translation_profiles,
 };
 use crate::services::import_validation::{self, ValidatedImportPlan};
+use crate::services::runtime_plugin_contracts::parse_manifest;
+use crate::services::runtime_providers::release_grant_after_removal;
 use crate::storage::Database;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -37,7 +44,6 @@ impl ImportExportService {
 
   pub fn export(&self) -> Result<ConfigurationExport, StorageError> {
     self.db.read_snapshot(|conn| {
-      let providers = provider_instances::list(conn)?;
       let models = provider_models::list_all(conn)?;
       let translation_profiles = translation_profiles::list(conn)?;
       let profile_models = translation_profiles::list_all_targets(conn)?;
@@ -48,7 +54,25 @@ impl ImportExportService {
       let speech_service_rows = speech_services::list(conn)?;
       let app_settings = app_settings::get(conn)?;
 
-      let mut provider_exports: Vec<ProviderExport> = providers.iter().map(ProviderExport::from).collect();
+      let provider_rows = provider_instances::list_with_runtime(conn)?;
+      let mut provider_exports: Vec<ProviderExport> = provider_rows
+        .iter()
+        .map(|(provider, bindings)| {
+          let mut export = ProviderExport::from(provider);
+          let mut requirements = bindings
+            .iter()
+            .map(|binding| provider_runtime_requirement(conn, binding))
+            .collect::<Result<Vec<_>, StorageError>>()?;
+          requirements.sort_by(|a, b| {
+            a.adapter_id
+              .as_deref()
+              .cmp(&b.adapter_id.as_deref())
+              .then_with(|| a.runtime_kind.cmp(&b.runtime_kind))
+          });
+          export.runtime_bindings = requirements;
+          Ok(export)
+        })
+        .collect::<Result<Vec<_>, StorageError>>()?;
       provider_exports.sort_by_key(|p| p.id);
 
       let mut models = models;
@@ -314,6 +338,59 @@ impl ImportExportService {
       }
     }
 
+    // Provider runtime bindings: restore exact requirements as unavailable metadata without
+    // downloading, instantiating, granting, default-binding, or activating any package. The
+    // imported document is the Provider's COMPLETE runtime interface collection: local
+    // bindings the document omits are removed, and every replaced or removed binding's grant
+    // is released reference-aware (kept while an active alias row or an undiscarded rollback
+    // snapshot still references it). The document always declares the Provider default API
+    // type, so the per-interface read invariant survives the reconciliation.
+    let now = now_rfc3339();
+    for (provider_id, requirements) in &plan.provider_runtime_requirements {
+      let default_adapter = plan
+        .providers
+        .iter()
+        .find(|provider| provider.id == *provider_id)
+        .map(|provider| provider.adapter_id.clone())
+        .ok_or_else(|| {
+          StorageError::Validation(format!(
+            "provider {provider_id} runtime requirements have no provider row"
+          ))
+        })?;
+      // Capture the pre-import binding identities BEFORE the upserts so replaced rows can
+      // release their exact Provider/package grant once the collection is reconciled.
+      let preexisting = provider_runtime_bindings::list_by_provider(conn, *provider_id)?;
+      let mut declared_adapters = HashSet::new();
+      for requirement in requirements {
+        let adapter_id = requirement
+          .adapter_id
+          .as_deref()
+          .map(str::trim)
+          .filter(|s| !s.is_empty())
+          .unwrap_or(&default_adapter)
+          .to_string();
+        declared_adapters.insert(adapter_id.clone());
+        upsert_provider_runtime_binding(conn, *provider_id, &adapter_id, requirement, &now)?;
+      }
+      // Collection reconciliation: removed adapters are deleted, and any pre-existing
+      // identity the same adapter no longer carries (replaced package/revision) has its
+      // grant released. Import always restores unavailable metadata without a grant, so a
+      // previously granted revision is unreferenced by the binding row after an upsert;
+      // reference-aware release keeps it while an active alias row or an undiscarded
+      // rollback snapshot still references the exact package/revision.
+      let current = provider_runtime_bindings::list_by_provider(conn, *provider_id)?;
+      for binding in &preexisting {
+        if !declared_adapters.contains(&binding.adapter_id) {
+          provider_runtime_bindings::delete(conn, *provider_id, &binding.adapter_id)?;
+          release_grant_after_removal(conn, *provider_id, binding)?;
+        } else if let Some(replacement) = current.iter().find(|b| b.adapter_id == binding.adapter_id) {
+          if binding_identity_changed(binding, replacement) {
+            release_grant_after_removal(conn, *provider_id, binding)?;
+          }
+        }
+      }
+    }
+
     // Models
     for m in &plan.models {
       if provider_models::get(conn, m.id).is_ok() {
@@ -504,6 +581,123 @@ impl ImportExportService {
   }
 }
 
+/// Build the exact non-secret provider runtime requirement for export. Legacy bindings
+/// normalize to `legacy-frontend-provider`; package bindings preserve exact identity from the
+/// installed manifest (or from the persisted unresolved requirement when the package is absent).
+fn provider_runtime_requirement(
+  conn: &rusqlite::Connection,
+  binding: &ProviderRuntimeBinding,
+) -> Result<ProviderRuntimeRequirementExport, StorageError> {
+  let mut requirement = provider_runtime_requirement_identity(conn, binding)?;
+  requirement.adapter_id = Some(binding.adapter_id.clone());
+  Ok(requirement)
+}
+
+/// Build the exact non-secret provider runtime requirement identity for export from one
+/// adapter-keyed binding. Legacy bindings normalize to `legacy-frontend-provider`; package
+/// bindings preserve exact identity from the installed manifest (or from the persisted
+/// unresolved requirement when the package is absent).
+fn provider_runtime_requirement_identity(
+  conn: &rusqlite::Connection,
+  binding: &ProviderRuntimeBinding,
+) -> Result<ProviderRuntimeRequirementExport, StorageError> {
+  match binding.runtime_kind {
+    ProviderRuntimeKind::LegacyFrontendProvider => Ok(ProviderRuntimeRequirementExport::legacy()),
+    ProviderRuntimeKind::WasmComponent => {
+      // Preserve the exact previously imported/restored requirement when the package is absent.
+      if let Some(raw) = binding.runtime_requirement_json.as_deref() {
+        let parsed: ProviderRuntimeRequirementExport = serde_json::from_str(raw).map_err(|e| {
+          StorageError::Validation(format!(
+            "provider {} has invalid runtime_requirement_json: {e}",
+            binding.provider_id
+          ))
+        })?;
+        if !parsed.is_legacy() && parsed.package_digest.as_deref() == binding.package_digest.as_deref() {
+          return Ok(parsed);
+        }
+      }
+      let digest = binding.package_digest.as_deref().ok_or_else(|| {
+        StorageError::Validation(format!(
+          "provider {} wasm binding is missing its package digest",
+          binding.provider_id
+        ))
+      })?;
+      let version = installed_plugin_versions::get(conn, digest)?;
+      let manifest: PluginManifestV1 = parse_manifest(&version.manifest_json).map_err(|e| {
+        StorageError::Validation(format!("provider runtime package {} manifest: {e}", version.plugin_id))
+      })?;
+      let declaration = manifest.provider_runtime.as_ref().ok_or_else(|| {
+        StorageError::Validation(format!(
+          "provider runtime package {} has no providerRuntime declaration",
+          manifest.id
+        ))
+      })?;
+      let mut capabilities: Vec<String> = declaration.capabilities.keys().cloned().collect();
+      capabilities.sort();
+      Ok(ProviderRuntimeRequirementExport {
+        adapter_id: None,
+        runtime_kind: "wasm-component".into(),
+        package_digest: Some(digest.to_string()),
+        plugin_id: Some(version.plugin_id),
+        plugin_version: Some(version.version),
+        publisher_key_id: Some(version.publisher_key_id),
+        publisher_key_fingerprint: Some(version.publisher_fingerprint),
+        plugin_api_version: Some(manifest.plugin_api_version),
+        legacy_aliases: declaration.legacy_aliases.clone(),
+        capabilities,
+      })
+    }
+  }
+}
+
+/// Upsert the adapter-keyed provider runtime binding from an imported requirement. Package
+/// requirements are restored as `unavailable` metadata: no download, instantiation, migration,
+/// grant, default bind, or activation happens during import (recovery is an explicit lifecycle
+/// action). A missing `adapter_id` falls back to the Provider default API type (resolved by
+/// the caller).
+fn upsert_provider_runtime_binding(
+  conn: &rusqlite::Connection,
+  provider_id: Uuid,
+  adapter_id: &str,
+  requirement: &ProviderRuntimeRequirementExport,
+  now: &str,
+) -> Result<(), StorageError> {
+  let existing = provider_runtime_bindings::get_optional(conn, provider_id, adapter_id)?;
+  let created_at = existing
+    .as_ref()
+    .map(|binding| binding.created_at.clone())
+    .unwrap_or_else(|| now.to_string());
+  let mut binding = if requirement.is_legacy() {
+    legacy_frontend_binding(provider_id, adapter_id, now)
+  } else {
+    ProviderRuntimeBinding {
+      provider_id,
+      adapter_id: adapter_id.to_string(),
+      runtime_kind: ProviderRuntimeKind::WasmComponent,
+      package_digest: requirement.package_digest.clone(),
+      grant_set_revision: None,
+      state: ProviderRuntimeState::Unavailable,
+      error_code: Some("plugin_unavailable".into()),
+      error_message: Some("provider runtime package is not installed or approved".into()),
+      runtime_requirement_json: Some(serde_json::to_string(requirement).map_err(StorageError::from)?),
+      created_at: created_at.clone(),
+      updated_at: now.to_string(),
+    }
+  };
+  binding.created_at = created_at;
+  match existing {
+    Some(_) => provider_runtime_bindings::update(conn, &binding),
+    None => provider_runtime_bindings::insert(conn, &binding),
+  }
+}
+
+/// True when an imported upsert replaced the binding's package/revision identity: the old
+/// identity's Provider/package grant, if any, is no longer carried by the adapter's row and
+/// must be released reference-aware after the collection reconciliation.
+fn binding_identity_changed(old: &ProviderRuntimeBinding, current: &ProviderRuntimeBinding) -> bool {
+  old.package_digest != current.package_digest || old.grant_set_revision != current.grant_set_revision
+}
+
 fn non_empty(value: Option<&str>) -> bool {
   value.map(str::trim).filter(|v| !v.is_empty()).is_some()
 }
@@ -576,57 +770,15 @@ fn validate_export_requirement_for_instance(
   Ok(req)
 }
 
-/// Strict v7 document validation used on import parse (after sequential normalization).
+/// Strict current-format (v8) document validation used on import parse (after sequential
+/// normalization): integration runtime records plus adapter-keyed provider runtime bindings.
 pub fn validate_v7_runtime_records(doc: &ConfigurationExport) -> Result<(), StorageError> {
   if doc.format_version != EXPORT_FORMAT_VERSION {
     return Err(StorageError::Validation(format!(
       "validate_v7_runtime_records expects formatVersion {EXPORT_FORMAT_VERSION}"
     )));
   }
-  for row in &doc.integration_instances {
-    let Some(req) = row.runtime.as_ref() else {
-      return Err(StorageError::Validation(format!(
-        "v7 integration {} is missing runtime requirement",
-        row.id
-      )));
-    };
-    if req.plugin_id != row.plugin_id || req.plugin_version != row.plugin_version {
-      return Err(StorageError::Validation(format!(
-        "v7 integration {} runtime identity does not match outer instance fields",
-        row.id
-      )));
-    }
-    if req.config_schema_version != row.config_schema_version {
-      return Err(StorageError::Validation(format!(
-        "v7 integration {} runtime config_schema_version mismatch",
-        row.id
-      )));
-    }
-    match req.runtime_kind.as_str() {
-      "wasm-component" | "trusted-native-worker" => {
-        if !non_empty(req.package_digest.as_deref())
-          || !non_empty(req.publisher_key_id.as_deref())
-          || !non_empty(req.publisher_key_fingerprint.as_deref())
-          || !non_empty(req.plugin_api_version.as_deref())
-        {
-          return Err(StorageError::Validation(format!(
-            "v7 integration {} package-backed runtime is missing mandatory fields",
-            row.id
-          )));
-        }
-      }
-      "bundled-rust" => {
-        if req.package_digest.is_some() {
-          return Err(StorageError::Validation(format!(
-            "v7 integration {} bundled runtime must not include package digest",
-            row.id
-          )));
-        }
-      }
-      _ => {}
-    }
-  }
-  Ok(())
+  crate::domain::import_export::validate_current_format_runtime_records(doc).map_err(StorageError::Validation)
 }
 
 fn rebuild_export_requirement_from_pin(

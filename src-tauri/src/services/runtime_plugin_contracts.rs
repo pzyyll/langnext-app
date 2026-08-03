@@ -1,14 +1,18 @@
 // ABOUTME: Runtime plugin manifest and archive-shape validation (Phase 0 contracts).
 // ABOUTME: Validates IDs, paths, digests, bounds, references, host compatibility, and WIT ABI shape.
+use crate::domain::provider::validate_adapter_id;
 use crate::domain::runtime_plugin::{
   self, AUTH_POLICIES_MAX_COUNT, CAPABILITIES_MAX_COUNT, CREDENTIAL_SLOTS_MAX_COUNT, CapabilityDeclaration,
   CapabilityId, CapabilityIdError, CredentialSlotDecl, EndpointId, FILE_MAX_BYTES, FILES_MAX_COUNT, FileRole,
-  HOST_PLUGIN_API_VERSION_MAJOR, HttpsOrigin, MANIFEST_FILE_PATH, MANIFEST_VERSION_V1, METHODS_MAX_COUNT,
-  NETWORK_ENDPOINTS_MAX_COUNT, ORIGINS_MAX_COUNT, PACKAGE_TARGETS_MAX_COUNT, PAGES_MAX_COUNT,
+  HOST_PLUGIN_API_VERSION_MAJOR, HOST_PROVIDER_INSTANCE_AUTH_POLICY_ID, HttpsOrigin, MANIFEST_FILE_PATH,
+  MANIFEST_VERSION_V1, METHODS_MAX_COUNT, NETWORK_ENDPOINTS_MAX_COUNT, ORIGINS_MAX_COUNT, PACKAGE_TARGETS_MAX_COUNT,
+  PAGES_MAX_COUNT, PROVIDER_DETECTION_MAX_TOKENS_MAX, PROVIDER_RUNTIME_ALIAS_MAX_LEN,
+  PROVIDER_RUNTIME_ENDPOINT_FORM_PROVIDER_INSTANCE, PROVIDER_RUNTIME_LEGACY_ALIASES_MAX_COUNT,
   PUBLISHER_PUBLIC_KEY_PATH, PageId, PermissionRequests, PluginApiVersion, PluginFileEntry, PluginId, PluginManifestV1,
-  PublisherDeclaration, PublisherKeyFingerprint, PublisherKeyId, RuntimeDescriptor, SIGNATURE_FILE_PATH, SemVerVersion,
-  UiDeclaration, check_file_index_collisions, host_package_target, package_targets_compatible,
-  validate_archive_entry_path, validate_archive_path, validate_package_target_constraint, validate_slot_id_strict,
+  ProviderRuntimeDeclaration, PublisherDeclaration, PublisherKeyFingerprint, PublisherKeyId, RuntimeDescriptor,
+  SIGNATURE_FILE_PATH, SemVerVersion, UiDeclaration, check_file_index_collisions, host_package_target,
+  package_targets_compatible, validate_archive_entry_path, validate_archive_path, validate_package_target_constraint,
+  validate_slot_id_strict,
 };
 // Re-export PermissionRequests for ValidatedPluginManifest public API consumers.
 use std::collections::HashMap;
@@ -182,10 +186,156 @@ pub fn validate_manifest(manifest: &PluginManifestV1) -> Result<ValidatedPluginM
   validate_permissions(&manifest.permissions)?;
   validate_ui(&manifest.ui, &file_index)?;
   validate_targets(&manifest.targets)?;
+  if let Some(provider_runtime) = &manifest.provider_runtime {
+    validate_provider_runtime(
+      provider_runtime,
+      &manifest.capabilities,
+      &manifest.permissions,
+      &file_index,
+    )?;
+  }
 
   Ok(ValidatedPluginManifest {
     manifest: manifest.clone(),
   })
+}
+
+/// Validate closed-set platform/architecture target constraints (shape only).
+/// Validate the optional signed `providerRuntime` declaration (Phase 8).
+///
+/// The declaration requests capability/transport shape only; it never grants execution
+/// authority. Rules: bounded unique legacy aliases; exactly the two frozen LLM capabilities
+/// (`llm.models.list@1`, `llm.chat@1`), each mapped to its own indexed `runtime-artifact` path
+/// matching the manifest capability declaration; the closed provider-instance endpoint form
+/// with the closed host auth policy; bounded optional detection defaults.
+fn validate_provider_runtime(
+  declaration: &ProviderRuntimeDeclaration,
+  capabilities: &[CapabilityDeclaration],
+  permissions: &PermissionRequests,
+  file_index: &HashMap<String, PluginFileEntry>,
+) -> Result<(), ContractError> {
+  // Bounded, unique legacy aliases with the same structural rules as provider adapter ids.
+  if declaration.legacy_aliases.len() > PROVIDER_RUNTIME_LEGACY_ALIASES_MAX_COUNT {
+    return Err(ContractError::new(
+      ContractErrorCode::LimitExceeded,
+      format!("providerRuntime.legacyAliases exceeds {PROVIDER_RUNTIME_LEGACY_ALIASES_MAX_COUNT} entries"),
+    ));
+  }
+  let mut seen_aliases = std::collections::HashSet::new();
+  for alias in &declaration.legacy_aliases {
+    if alias.len() > PROVIDER_RUNTIME_ALIAS_MAX_LEN {
+      return Err(ContractError::new(
+        ContractErrorCode::InvalidField,
+        format!("providerRuntime.legacyAliases entry exceeds {PROVIDER_RUNTIME_ALIAS_MAX_LEN} characters"),
+      ));
+    }
+    validate_adapter_id(alias).map_err(|e| {
+      ContractError::new(
+        ContractErrorCode::InvalidField,
+        format!("providerRuntime.legacyAliases: {e}"),
+      )
+    })?;
+    if !seen_aliases.insert(alias.clone()) {
+      return Err(ContractError::new(
+        ContractErrorCode::DuplicateId,
+        format!("providerRuntime.legacyAliases repeats alias {alias}"),
+      ));
+    }
+  }
+
+  // Exactly the two frozen LLM capabilities, each bound to a distinct indexed artifact.
+  const REQUIRED_LLM_CAPABILITIES: [&str; 2] = ["llm.models.list@1", "llm.chat@1"];
+  if declaration.capabilities.len() != REQUIRED_LLM_CAPABILITIES.len() {
+    return Err(ContractError::new(
+      ContractErrorCode::InvalidField,
+      "providerRuntime.capabilities must declare exactly llm.models.list@1 and llm.chat@1",
+    ));
+  }
+  for required in REQUIRED_LLM_CAPABILITIES {
+    let artifact = declaration.capabilities.get(required).ok_or_else(|| {
+      ContractError::new(
+        ContractErrorCode::InvalidField,
+        format!("providerRuntime.capabilities is missing {required}"),
+      )
+    })?;
+    let normalized = validate_archive_path(artifact).map_err(|e| {
+      ContractError::new(
+        ContractErrorCode::InvalidPath,
+        format!("providerRuntime.capabilities[{required}]: {e}"),
+      )
+    })?;
+    let entry = file_index.get(&normalized).ok_or_else(|| {
+      ContractError::new(
+        ContractErrorCode::UndeclaredReference,
+        format!("providerRuntime capability {required} artifact {normalized} is not in the file index"),
+      )
+    })?;
+    if entry.role != FileRole::RuntimeArtifact {
+      return Err(ContractError::new(
+        ContractErrorCode::ReferenceMismatch,
+        format!("providerRuntime capability {required} artifact {normalized} must have role runtime-artifact"),
+      ));
+    }
+    // Cross-check: the capability declaration must bind the same artifact path.
+    let declared = capabilities.iter().find(|cap| cap.id == required).ok_or_else(|| {
+      ContractError::new(
+        ContractErrorCode::UndeclaredReference,
+        format!("providerRuntime capability {required} is not declared in manifest capabilities"),
+      )
+    })?;
+    if declared.artifact.as_deref() != Some(normalized.as_str()) {
+      return Err(ContractError::new(
+        ContractErrorCode::ReferenceMismatch,
+        format!(
+          "providerRuntime capability {required} artifact {normalized} differs from manifest capability declaration"
+        ),
+      ));
+    }
+  }
+  let artifacts: std::collections::HashSet<&str> = declaration.capabilities.values().map(String::as_str).collect();
+  if artifacts.len() != declaration.capabilities.len() {
+    return Err(ContractError::new(
+      ContractErrorCode::InvalidField,
+      "providerRuntime capabilities must map to distinct artifact paths (one digest per world)",
+    ));
+  }
+
+  // Closed provider-instance endpoint/auth form.
+  if declaration.endpoint.form != PROVIDER_RUNTIME_ENDPOINT_FORM_PROVIDER_INSTANCE {
+    return Err(ContractError::new(
+      ContractErrorCode::InvalidField,
+      format!("providerRuntime.endpoint.form must be {PROVIDER_RUNTIME_ENDPOINT_FORM_PROVIDER_INSTANCE}"),
+    ));
+  }
+  if declaration.endpoint.auth_policy != HOST_PROVIDER_INSTANCE_AUTH_POLICY_ID {
+    return Err(ContractError::new(
+      ContractErrorCode::InvalidField,
+      format!("providerRuntime.endpoint.authPolicy must be {HOST_PROVIDER_INSTANCE_AUTH_POLICY_ID}"),
+    ));
+  }
+  if !permissions
+    .auth_policies
+    .iter()
+    .any(|policy| policy == HOST_PROVIDER_INSTANCE_AUTH_POLICY_ID)
+  {
+    return Err(ContractError::new(
+      ContractErrorCode::UndeclaredReference,
+      format!(
+        "providerRuntime auth policy {HOST_PROVIDER_INSTANCE_AUTH_POLICY_ID} must be declared in permissions.authPolicies"
+      ),
+    ));
+  }
+
+  // Bounded host-interpreted detection defaults.
+  if let Some(detection) = &declaration.detection {
+    if detection.max_tokens == 0 || detection.max_tokens > PROVIDER_DETECTION_MAX_TOKENS_MAX {
+      return Err(ContractError::new(
+        ContractErrorCode::InvalidField,
+        format!("providerRuntime.detection.maxTokens must be in 1..={PROVIDER_DETECTION_MAX_TOKENS_MAX}"),
+      ));
+    }
+  }
+  Ok(())
 }
 
 /// Validate closed-set platform/architecture target constraints (shape only).
@@ -656,6 +806,7 @@ mod tests {
         mode: UiMode::Schema,
         pages: vec![],
       },
+      provider_runtime: None,
     }
   }
 

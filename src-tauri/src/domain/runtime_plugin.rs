@@ -1665,7 +1665,6 @@ pub struct PageDeclaration {
   pub id: String,
   pub entry: String,
 }
-
 /// Permission requests grouped by surface. Requests are not grants.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1719,6 +1718,55 @@ pub struct PackageTargetConstraint {
   pub architecture: String,
 }
 
+/// Closed provider-instance endpoint form: the host resolves the bound provider instance's
+/// persisted connection. A manifest can never select a package-owned origin.
+pub const PROVIDER_RUNTIME_ENDPOINT_FORM_PROVIDER_INSTANCE: &str = "provider-instance";
+/// Fixed reserved broker endpoint id used by provider-runtime guests (`host.broker-fetch`).
+/// The host resolves the current provider instance; a different endpoint id is never a
+/// provider-runtime request.
+pub const PROVIDER_RUNTIME_ENDPOINT_ID: &str = "provider-instance";
+/// Closed host auth policy bound to a provider-runtime manifest plus a `ProviderInstance`
+/// grant subject (implemented in Phase 8 Task 5).
+pub const HOST_PROVIDER_INSTANCE_AUTH_POLICY_ID: &str = "host.provider-instance-auth.v1";
+/// Maximum number of bounded legacy aliases a provider runtime may declare.
+pub const PROVIDER_RUNTIME_LEGACY_ALIASES_MAX_COUNT: usize = 8;
+/// Maximum legacy alias length (same bound as adapter ids).
+pub const PROVIDER_RUNTIME_ALIAS_MAX_LEN: usize = 128;
+/// Upper bound for host-interpreted detection max-token defaults.
+pub const PROVIDER_DETECTION_MAX_TOKENS_MAX: u32 = 4096;
+
+/// Fixed provider-instance endpoint/auth form declared by a provider runtime package.
+/// Requests capability/transport shape only; it never grants execution authority.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProviderRuntimeEndpointDecl {
+  pub form: String,
+  pub auth_policy: String,
+}
+
+/// Bounded host-interpreted language-detection defaults. The host validates and projects
+/// these; the guest never receives workflow-policy authority.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProviderRuntimeDetectionDecl {
+  pub max_tokens: u32,
+  pub thinking: bool,
+}
+
+/// Optional signed `providerRuntime` manifest declaration (deny-unknown). Declares bounded
+/// legacy aliases, exactly the two frozen LLM capabilities with distinct indexed artifact
+/// paths, the closed provider-instance endpoint/auth form, and optional detection defaults.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProviderRuntimeDeclaration {
+  pub legacy_aliases: Vec<String>,
+  /// Capability id (`llm.models.list@1` / `llm.chat@1`) to its own indexed artifact path.
+  pub capabilities: std::collections::BTreeMap<String, String>,
+  pub endpoint: ProviderRuntimeEndpointDecl,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub detection: Option<ProviderRuntimeDetectionDecl>,
+}
+
 /// Plugin manifest v1: the signed payload shape (signature verification is Phase 3).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1747,6 +1795,10 @@ pub struct PluginManifestV1 {
   pub permissions: PermissionRequests,
   #[serde(default)]
   pub ui: UiDeclaration,
+  /// Optional provider runtime declaration (Phase 8). Requests capability/transport shape;
+  /// it never grants execution authority.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub provider_runtime: Option<ProviderRuntimeDeclaration>,
 }
 
 /// Normalize `std::env::consts::OS` into a package platform token.

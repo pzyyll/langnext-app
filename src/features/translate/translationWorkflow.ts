@@ -3,11 +3,8 @@
 import { invokeEffect } from "../../storage/invokeEffect";
 import { runStorage } from "../../storage/runStorage";
 import type { TranslateInput, TranslateResult } from "../../storage/types";
-import { isRetryableCode, mapHttpStatus, normalizeProviderError } from "../providers/errors";
-import { providerFetch, providerFetchStream } from "../providers/providerFetch";
-import { requireProviderPlugin } from "../providers/registry";
-import { SseEventDecoder, Utf8StreamDecoder } from "../providers/sse";
-import { ProviderProtocolError, type StreamParseResult } from "../providers/types";
+import { normalizeProviderError } from "../providers/errors";
+import type { ExecutorChatInput } from "../providers/executor";
 import { newClientRequestId } from "./newClientRequestId";
 import {
   resolveTranslationContext,
@@ -269,42 +266,21 @@ async function runAttempts(
     }
     attempted = true;
     const requestId = parentRequestId && index === 0 ? parentRequestId : newClientRequestId("tr");
+    const chatInput: ExecutorChatInput = {
+      operation: "translate",
+      stream,
+      modelKey: attempt.modelKey,
+      systemPrompt: ctx.systemPrompt,
+      userPrompt: ctx.userPrompt,
+      temperature: attempt.temperature,
+      maxTokens: attempt.maxTokens,
+      thinking: attempt.thinking,
+      imagePngBase64: null,
+    };
     try {
-      const plugin = requireProviderPlugin(attempt.pluginId);
-      const wire = plugin.buildChatRequest({
-        operation: "translate",
-        stream,
-        modelKey: attempt.modelKey,
-        systemPrompt: ctx.systemPrompt,
-        userPrompt: ctx.userPrompt,
-        temperature: attempt.temperature,
-        maxTokens: attempt.maxTokens,
-        thinking: attempt.thinking,
-        imagePngBase64: null,
-      });
-
       if (!stream) {
-        const response = await providerFetch({
-          requestId,
-          providerInstanceId: attempt.providerId,
-          wire,
-          signal,
-        });
-        if (response.status < 200 || response.status >= 300) {
-          const code = mapHttpStatus(response.status);
-          lastFailure = failureResult(
-            code,
-            `Provider HTTP ${response.status}`,
-            Math.round(performance.now() - started),
-            attempt.modelId,
-          );
-          if (!isRetryableCode(code)) {
-            break;
-          }
-          continue;
-        }
-        const text = plugin.parseChatResponse(response);
-        const result = successResult(text, Math.round(performance.now() - started), attempt.modelId);
+        const response = await attempt.executor.chat({ ...chatInput, requestId, signal });
+        const result = successResult(response.text, Math.round(performance.now() - started), attempt.modelId);
         await recordHistoryBestEffort({
           completionId,
           ok: true,
@@ -326,84 +302,24 @@ async function runAttempts(
         return result;
       }
 
-      // Stream path
-      const utf8 = new Utf8StreamDecoder();
-      const sse = new SseEventDecoder();
+      // Stream path: typed executor deltas; provider-reported errors surface as provider_error.
       let accumulated = "";
-      let httpStatus = 200;
-      /** Provider-reported stream error (e.g. Responses `error` / `response.failed`). */
       let streamErrorMessage: string | null = null;
-
-      const applyStreamEvent = (parsed: StreamParseResult): void => {
-        if (parsed.kind === "delta") {
-          accumulated += parsed.text;
-          handlers?.onChunk(parsed.text);
-          return;
-        }
-        if (parsed.kind === "error" && streamErrorMessage == null) {
-          streamErrorMessage = parsed.message;
-        }
-      };
-
-      await providerFetchStream(
+      await attempt.executor.chatStream(
+        { ...chatInput, requestId, signal },
         {
-          requestId,
-          providerInstanceId: attempt.providerId,
-          wire,
-          signal,
-        },
-        {
-          onStarted: (status) => {
-            httpStatus = status;
+          onDelta: (text) => {
+            accumulated += text;
+            handlers?.onChunk(text);
           },
-          onChunk: (bytes) => {
-            if (httpStatus < 200 || httpStatus >= 300 || streamErrorMessage != null) {
-              return;
-            }
-            const text = utf8.push(bytes);
-            const events = sse.push(text);
-            for (const event of events) {
-              applyStreamEvent(plugin.parseStreamEvent(event));
-              if (streamErrorMessage != null) {
-                break;
-              }
+          onProviderError: (message) => {
+            if (streamErrorMessage == null) {
+              streamErrorMessage = message;
             }
           },
         },
       );
-      if (streamErrorMessage == null) {
-        const tailText = utf8.finish();
-        if (tailText) {
-          for (const event of sse.push(tailText)) {
-            applyStreamEvent(plugin.parseStreamEvent(event));
-            if (streamErrorMessage != null) {
-              break;
-            }
-          }
-        }
-      }
-      if (streamErrorMessage == null) {
-        for (const event of sse.finish()) {
-          applyStreamEvent(plugin.parseStreamEvent(event));
-          if (streamErrorMessage != null) {
-            break;
-          }
-        }
-      }
 
-      if (httpStatus < 200 || httpStatus >= 300) {
-        const code = mapHttpStatus(httpStatus);
-        lastFailure = failureResult(
-          code,
-          `Provider HTTP ${httpStatus}`,
-          Math.round(performance.now() - started),
-          attempt.modelId,
-        );
-        if (!isRetryableCode(code)) {
-          break;
-        }
-        continue;
-      }
       if (streamErrorMessage != null) {
         // Surface provider stream errors to the UI toast via provider_error.
         // Try the next fallback model when available.
@@ -461,9 +377,9 @@ async function runAttempts(
         Math.round(performance.now() - started),
         attempt.modelId,
       );
-      const retryable =
-        error instanceof ProviderProtocolError || (normalized.retryable && isRetryableCode(normalized.code as never));
-      if (!retryable) {
+      // A runtime error advances only the existing configured next-model fallback after the
+      // attempt ends; it is never replayed through the same provider's legacy executor.
+      if (!normalized.retryable) {
         break;
       }
     }

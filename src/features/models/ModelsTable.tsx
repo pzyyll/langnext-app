@@ -27,6 +27,7 @@ import {
 import { SelectField } from "../../components/SelectField";
 import type { ProviderModelDto } from "../../storage/types";
 import { getAdapterLabel } from "./adapterOptions";
+import { resolveModelApiTypeDisplay } from "./modelApiTypeDisplay";
 import {
   getModelEnabledFilter,
   isModelEnabledFilter,
@@ -259,6 +260,7 @@ export function ModelsTable({
                   const pending = pendingModelIds.has(model.id);
                   const canEditConfig = onEditModel !== undefined;
                   const capabilities = resolveCapabilityFlags(model);
+                  const apiTypeDisplay = resolveModelApiTypeDisplay(model);
                   return (
                     <tr key={model.id}>
                       {selectionMode ? (
@@ -283,7 +285,11 @@ export function ModelsTable({
                       </td>
                       <td className="py-4 text-center text-body-tight text-neutral">{resolveDisplayName(model)}</td>
                       <td className="py-4 text-center text-body-tight text-neutral">
-                        {model.adapterId ? getAdapterLabel(model.adapterId) : t("models.apiTypeInherit")}
+                        {apiTypeDisplay.kind === "override"
+                          ? getAdapterLabel(apiTypeDisplay.adapterId)
+                          : apiTypeDisplay.kind === "source"
+                            ? t("models.apiTypeFromSource", { type: getAdapterLabel(apiTypeDisplay.adapterId) })
+                            : t("models.apiTypeInherit")}
                       </td>
                       <td className="py-4">
                         <div className="flex items-center justify-center gap-1.5">

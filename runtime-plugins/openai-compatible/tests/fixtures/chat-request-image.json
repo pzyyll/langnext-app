@@ -1,0 +1,1 @@
+{"model":"gpt-4o-mini","messages":[{"role":"system","content":"sys"},{"role":"user","content":[{"type":"text","text":"What is in this image?"},{"type":"image_url","image_url":{"url":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGIAAQAABQABDQottAAAAABJRU5ErkJggg=="}}]}],"stream":false,"temperature":0.2,"max_tokens":128}

@@ -201,6 +201,7 @@ fn build_pkg(version: &str, extra: Option<&str>) -> (Vec<u8>, String) {
       auth_policies: vec!["host.none.v1".into()],
     },
     ui: Default::default(),
+    provider_runtime: None,
   };
   let sk = fixture_vendor_signing_key();
   let manifest_bytes = serde_json::to_vec(&manifest).unwrap();

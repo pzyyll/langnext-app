@@ -21,6 +21,7 @@ import {
   pluginPackageKeys,
   profileKeys,
   providerKeys,
+  providerRuntimeKeys,
   runtimeLifecycleKeys,
   settingsKeys,
   speechKeys,
@@ -66,7 +67,7 @@ describe("DATA_CHANGE_EVENT_BINDINGS", () => {
     expect(byEvent.get(DATA_OCR_SERVICES_CHANGED)).toEqual([ocrKeys.all]);
     expect(byEvent.get(DATA_SPEECH_SERVICES_CHANGED)).toEqual([speechKeys.all]);
     expect(byEvent.get(DATA_APP_SETTINGS_CHANGED)).toEqual([settingsKeys.all]);
-    expect(byEvent.get(DATA_PLUGIN_PACKAGES_CHANGED)).toEqual([pluginPackageKeys.all]);
+    expect(byEvent.get(DATA_PLUGIN_PACKAGES_CHANGED)).toEqual([pluginPackageKeys.all, providerRuntimeKeys.catalog()]);
   });
 
   test("every binding invalidates at least one non-empty key prefix", () => {

@@ -10,6 +10,8 @@ const getOcrServiceMock = mock(async (id: string): Promise<OcrServiceDto> => {
 });
 const listAllProviderModelsMock = mock(async (): Promise<ProviderModelDto[]> => []);
 const listProviderInstancesMock = mock(async (): Promise<ProviderInstanceDto[]> => []);
+const listRuntimeProviderCatalogMock = mock(async () => []);
+const runProviderRuntimeChatMock = mock(async () => null);
 const recognizeBaiduOcrMock = mock(async () => ({ text: "native", ocrServiceId: "svc" }));
 
 mock.module("../../storage/client", () => ({
@@ -17,6 +19,10 @@ mock.module("../../storage/client", () => ({
   getOcrService: (id: string) => getOcrServiceMock(id),
   listAllProviderModels: () => listAllProviderModelsMock(),
   listProviderInstances: () => listProviderInstancesMock(),
+  listRuntimeProviderCatalog: () => listRuntimeProviderCatalogMock(),
+  listRuntimeProviderModels: async () => ({ models: [] }),
+  runProviderRuntimeChat: (input: unknown, onEvent?: unknown) => runProviderRuntimeChatMock(input, onEvent),
+  cancelProviderRuntime: async () => false,
   recognizeBaiduOcr: (input: unknown) => recognizeBaiduOcrMock(input),
 }));
 
@@ -27,11 +33,13 @@ const mapHttpStatusMock = mock(() => "http_error");
 mock.module("../providers/errors", () => ({
   normalizeProviderError: (error: unknown) => normalizeProviderErrorMock(error),
   mapHttpStatus: (status: number) => mapHttpStatusMock(status),
+  DEFAULT_DETECT_MAX_TOKENS: 256,
 }));
 
 const providerFetchMock = mock(async () => ({ status: 200, body: "{}" }));
 mock.module("../providers/providerFetch", () => ({
   providerFetch: (input: unknown) => providerFetchMock(input),
+  providerFetchStream: async () => undefined,
 }));
 
 const requireProviderPluginMock = mock(() => {
@@ -157,5 +165,215 @@ describe("recognizeOcrFlow", () => {
     await expect(recognizeOcrFlow({ pngBase64: "img", ocrServiceId: "ai-1" })).rejects.toThrow();
     expect(recognizeBaiduOcrMock).not.toHaveBeenCalled();
     expect(listAllProviderModelsMock).toHaveBeenCalled();
+  });
+});
+
+describe("runtime_executor_ai_ocr_uses_host_blob_path_without_legacy_http", () => {
+  // Fixed 1x1 PNG payload (base64), never expected to appear in errors or requests.
+  const FIXED_PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
+  const CATALOG_ENTRY = {
+    pluginId: "langnext.conformance.llm-provider",
+    version: "1.0.0",
+    packageDigest: "digest-1",
+    publisher: { keyId: "key-1", keyFingerprint: "fp-1" },
+    legacyAliases: ["openai-compatible"],
+    capabilities: [
+      { capabilityId: "llm.models.list@1", artifactPath: "fixtures/llm-models.wasm", artifactDigest: "a" },
+      { capabilityId: "llm.chat@1", artifactPath: "fixtures/llm-chat.wasm", artifactDigest: "b" },
+    ],
+    detection: null,
+  };
+
+  function runtimeProvider(): ProviderInstanceDto {
+    return {
+      id: "p1",
+      adapterId: "openai-compatible",
+      displayName: "P",
+      baseUrl: "https://api.openai.com/v1",
+      baseUrlSource: "custom",
+      authScheme: { schemaVersion: 1, type: "bearer" },
+      credentialKind: "api_key",
+      hasCredential: true,
+      enabled: true,
+      proxyMode: "inherit",
+      insecureHttpConfirmedAt: null,
+      modelsSyncedAt: null,
+      modelsSyncStatus: "never",
+      modelsSyncErrorCode: null,
+      runtime: {
+        runtimeKind: "wasm-component",
+        packageDigest: "digest-1",
+        grantSetRevision: 1,
+        state: "active",
+        errorCode: null,
+        errorMessage: null,
+        updatedAt: "t",
+      },
+      runtimeBindings: [
+        {
+          adapterId: "openai-compatible",
+          runtimeKind: "wasm-component",
+          packageDigest: "digest-1",
+          grantSetRevision: 1,
+          state: "active",
+          errorCode: null,
+          errorMessage: null,
+          updatedAt: "t",
+        },
+      ],
+      createdAt: "t",
+      updatedAt: "t",
+    };
+  }
+
+  function aiModel(): ProviderModelDto {
+    return {
+      id: "model-1",
+      providerInstanceId: "p1",
+      source: "remote",
+      modelKey: "gpt-4o",
+      remoteDisplayName: null,
+      displayNameOverride: null,
+      enabled: true,
+      availability: "available",
+      remoteMetadataJson: null,
+      capabilityOverridesJson: null,
+      adapterId: null,
+      lastSeenAt: null,
+      createdAt: "t",
+      updatedAt: "t",
+    };
+  }
+
+  function aiService(): OcrServiceDto {
+    return baseService({
+      providerType: "ai",
+      id: "ai-1",
+      baiduAction: null,
+      hasApiKey: false,
+      hasSecretKey: false,
+      providerModelId: "model-1",
+      temperature: 0.2,
+      defaultPromptTemplateId: "tpl-1",
+      promptTemplates: [
+        {
+          id: "tpl-1",
+          name: "Default",
+          systemTemplate: "Extract text",
+          userTemplate: "Read this image",
+        },
+      ],
+    });
+  }
+
+  beforeEach(() => {
+    listRuntimeProviderCatalogMock.mockReset();
+    listRuntimeProviderCatalogMock.mockResolvedValue([]);
+    runProviderRuntimeChatMock.mockReset();
+    runProviderRuntimeChatMock.mockResolvedValue(null);
+  });
+
+  test("runtime AI OCR invokes runtime Chat with host Blob image input and no legacy HTTP", async () => {
+    let chatInput: Record<string, unknown> | null = null;
+    runProviderRuntimeChatMock.mockImplementation(async (input: Record<string, unknown>) => {
+      chatInput = input;
+      return { role: "assistant", content: "Hello OCR" };
+    });
+    getOcrServiceMock.mockResolvedValueOnce(aiService());
+    listAllProviderModelsMock.mockResolvedValueOnce([aiModel()]);
+    listProviderInstancesMock.mockResolvedValueOnce([runtimeProvider()]);
+    listRuntimeProviderCatalogMock.mockResolvedValueOnce([CATALOG_ENTRY]);
+
+    const result = await recognizeOcrFlow({ pngBase64: FIXED_PNG, ocrServiceId: "ai-1" });
+    expect(result).toEqual({ text: "Hello OCR", ocrServiceId: "ai-1" });
+    expect(providerFetchMock).not.toHaveBeenCalled();
+    const request = chatInput?.request as {
+      model: string;
+      messages: Array<{ role: string; content: string }>;
+      images: number[][];
+      preferences: { stream: boolean; temperature: number; maxTokens: number; thinking: boolean };
+    };
+    expect(request.model).toBe("gpt-4o");
+    expect(request.messages).toEqual([
+      { role: "system", content: "Extract text" },
+      { role: "user", content: "Read this image" },
+    ]);
+    expect(request.images).toHaveLength(1);
+    expect(request.images[0]?.length).toBeGreaterThan(0);
+    expect(request.preferences).toEqual({ stream: false, temperature: 0.2, maxTokens: 32768, thinking: false });
+    expect(chatInput?.providerModelId).toBe("model-1");
+    expect(recognizeBaiduOcrMock).not.toHaveBeenCalled();
+  });
+
+  test("a synced OCR model without an override recognizes through its source interface", async () => {
+    runProviderRuntimeChatMock.mockImplementation(async (input: Record<string, unknown>) => {
+      expect((input as { providerModelId?: string }).providerModelId).toBe("model-1");
+      return { role: "assistant", content: "Hello OCR" };
+    });
+    getOcrServiceMock.mockResolvedValueOnce(aiService());
+    listAllProviderModelsMock.mockResolvedValueOnce([{ ...aiModel(), sourceAdapterId: "gemini" }]);
+    // Provider default API type stays legacy; the gemini interface is runtime-bound.
+    listProviderInstancesMock.mockResolvedValueOnce([
+      {
+        ...runtimeProvider(),
+        runtime: {
+          runtimeKind: "legacy-frontend-provider",
+          packageDigest: null,
+          grantSetRevision: null,
+          state: "active",
+          errorCode: null,
+          errorMessage: null,
+          updatedAt: "t",
+        },
+        runtimeBindings: [
+          {
+            adapterId: "openai-compatible",
+            runtimeKind: "legacy-frontend-provider",
+            packageDigest: null,
+            grantSetRevision: null,
+            state: "active",
+            errorCode: null,
+            errorMessage: null,
+            updatedAt: "t",
+          },
+          {
+            adapterId: "gemini",
+            runtimeKind: "wasm-component",
+            packageDigest: "digest-2",
+            grantSetRevision: 1,
+            state: "active",
+            errorCode: null,
+            errorMessage: null,
+            updatedAt: "t",
+          },
+        ],
+      },
+    ]);
+    listRuntimeProviderCatalogMock.mockResolvedValueOnce([
+      { ...CATALOG_ENTRY, packageDigest: "digest-2", legacyAliases: ["gemini"] },
+    ]);
+
+    const result = await recognizeOcrFlow({ pngBase64: FIXED_PNG, ocrServiceId: "ai-1" });
+    expect(result).toEqual({ text: "Hello OCR", ocrServiceId: "ai-1" });
+    expect(providerFetchMock).not.toHaveBeenCalled();
+    expect(requireProviderPluginMock).not.toHaveBeenCalled();
+  });
+
+  test("runtime image/guest errors normalize without leaking PNG content and never retry legacy", async () => {
+    runProviderRuntimeChatMock.mockRejectedValueOnce({ code: "invalid_response", message: "guest failed" });
+    getOcrServiceMock.mockResolvedValueOnce(aiService());
+    listAllProviderModelsMock.mockResolvedValueOnce([aiModel()]);
+    listProviderInstancesMock.mockResolvedValueOnce([runtimeProvider()]);
+    listRuntimeProviderCatalogMock.mockResolvedValueOnce([CATALOG_ENTRY]);
+
+    const rejection = await recognizeOcrFlow({ pngBase64: FIXED_PNG, ocrServiceId: "ai-1" }).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect((rejection as Error).message).toBe("normalized");
+    expect((rejection as Error).message).not.toContain(FIXED_PNG);
+    expect(providerFetchMock).not.toHaveBeenCalled();
+    expect(runProviderRuntimeChatMock).toHaveBeenCalledTimes(1);
   });
 });

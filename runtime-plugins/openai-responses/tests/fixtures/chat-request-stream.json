@@ -1,0 +1,1 @@
+{"model":"gpt-5.4-mini","instructions":"sys","input":"hello","stream":true,"temperature":0.2,"max_output_tokens":128}

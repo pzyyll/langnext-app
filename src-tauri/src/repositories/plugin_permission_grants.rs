@@ -332,6 +332,24 @@ pub fn insert_bundle(conn: &Connection, bundle: &ExecutionGrantSetBundle) -> Res
   Ok(())
 }
 
+/// Delete one exact subject/package/revision grant bundle (header + entries). Used when the
+/// final active binding or undiscarded rollback snapshot reference disappears. Entry rows
+/// cascade from the header FK; callers must already hold the write transaction.
+pub fn delete_for_subject_package_revision(
+  conn: &Connection,
+  subject_kind: GrantSubjectKind,
+  subject_id: Uuid,
+  package_digest: &str,
+  revision: u64,
+) -> Result<(), StorageError> {
+  let header = get_for_subject_package_revision(conn, subject_kind, subject_id, package_digest, revision)?;
+  conn.execute(
+    "DELETE FROM execution_grant_sets WHERE id = ?1",
+    params![header.id.to_string()],
+  )?;
+  Ok(())
+}
+
 /// Count grant sets that reference a package (blocks uninstall while authority remains).
 pub fn count_for_package(conn: &Connection, package_digest: &str) -> Result<i64, StorageError> {
   Ok(conn.query_row(

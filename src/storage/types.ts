@@ -35,6 +35,26 @@ export type CredentialUpdate = { action: "keep" } | { action: "replace"; value: 
 
 export type ProxyCredentialUpdate = { action: "keep" } | { action: "replace"; value: string } | { action: "clear" };
 
+/** Host-owned provider runtime executor kind (Phase 8). */
+export type ProviderRuntimeKind = "legacy-frontend-provider" | "wasm-component";
+
+/** Host-owned provider runtime binding state. */
+export type ProviderRuntimeState = "active" | "pending_activation" | "unavailable";
+
+/** Sanitized provider runtime binding identity on Provider DTOs. Never includes package
+ * bytes, grants, snapshots, credential references, or secret material. */
+export interface ProviderRuntimeBindingDto {
+  /** Persisted effective API type this binding owns (Provider default or model override). */
+  adapterId: string;
+  runtimeKind: ProviderRuntimeKind;
+  packageDigest: string | null;
+  grantSetRevision: number | null;
+  state: ProviderRuntimeState;
+  errorCode: string | null;
+  errorMessage: string | null;
+  updatedAt: string;
+}
+
 export interface ProviderInstanceDto {
   id: string;
   adapterId: string;
@@ -50,6 +70,10 @@ export interface ProviderInstanceDto {
   modelsSyncedAt: string | null;
   modelsSyncStatus: ModelsSyncStatus;
   modelsSyncErrorCode: ModelsSyncErrorCode | null;
+  /** Deprecated compatibility projection of the Provider default API type binding. */
+  runtime: ProviderRuntimeBindingDto;
+  /** Authoritative sanitized adapter-keyed interface bindings, ordered by adapter id. */
+  runtimeBindings: ProviderRuntimeBindingDto[];
   createdAt: string;
   updatedAt: string;
 }
@@ -126,8 +150,10 @@ export interface ProviderModelDto {
   availability: Availability;
   remoteMetadataJson: unknown | null;
   capabilityOverridesJson: CapabilityOverridesV1 | null;
-  /** Optional API Type override; null inherits the channel adapter at runtime. */
+  /** Optional API Type override; null inherits the effective source at runtime. */
   adapterId: string | null;
+  /** Discovery provenance: API type that discovered this remote model; null for manual/builtin. */
+  sourceAdapterId: string | null;
   lastSeenAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -1084,6 +1110,23 @@ export interface AppSettingsUpdate {
   proxyCredential: ProxyCredentialUpdate;
 }
 
+/** Exact non-secret provider runtime requirement in configuration documents (Phase 8).
+ * Never serializes an execution grant, grant revision, package bytes, credential reference,
+ * or any activation authority. */
+export interface ProviderRuntimeRequirementExport {
+  /** Persisted effective API type this requirement names (v8+); older docs omit it. */
+  adapterId?: string | null;
+  runtimeKind: "legacy-frontend-provider" | "wasm-component";
+  packageDigest?: string | null;
+  pluginId?: string | null;
+  pluginVersion?: string | null;
+  publisherKeyId?: string | null;
+  publisherKeyFingerprint?: string | null;
+  pluginApiVersion?: string | null;
+  legacyAliases?: string[];
+  capabilities?: string[];
+}
+
 export interface ProviderExport {
   id: string;
   adapterId: string;
@@ -1097,6 +1140,10 @@ export interface ProviderExport {
   enabled: boolean;
   proxyMode: ProxyMode;
   insecureHttpConfirmedAt: string | null;
+  /** v7 singular requirement accepted on import; v8 exports never write it. */
+  runtime?: ProviderRuntimeRequirementExport | null;
+  /** Ordered adapter-keyed runtime interface requirements (export format v8). */
+  runtimeBindings?: ProviderRuntimeRequirementExport[];
   createdAt: string;
   updatedAt: string;
 }
@@ -1312,6 +1359,28 @@ const _providerDtoFixture = {
   modelsSyncedAt: null,
   modelsSyncStatus: "never",
   modelsSyncErrorCode: null,
+  runtime: {
+    adapterId: "openai-compatible",
+    runtimeKind: "legacy-frontend-provider",
+    packageDigest: null,
+    grantSetRevision: null,
+    state: "active",
+    errorCode: null,
+    errorMessage: null,
+    updatedAt: "2026-07-10T00:00:00Z",
+  },
+  runtimeBindings: [
+    {
+      adapterId: "openai-compatible",
+      runtimeKind: "legacy-frontend-provider",
+      packageDigest: null,
+      grantSetRevision: null,
+      state: "active",
+      errorCode: null,
+      errorMessage: null,
+      updatedAt: "2026-07-10T00:00:00Z",
+    },
+  ],
   createdAt: "2026-07-10T00:00:00Z",
   updatedAt: "2026-07-10T00:00:00Z",
 } as const satisfies ProviderInstanceDto;
@@ -1366,6 +1435,7 @@ const _modelDtoFixture = {
   remoteMetadataJson: null,
   capabilityOverridesJson: _capabilityFixture,
   adapterId: null,
+  sourceAdapterId: null,
   lastSeenAt: null,
   createdAt: "2026-07-10T00:00:00Z",
   updatedAt: "2026-07-10T00:00:00Z",
@@ -1448,6 +1518,205 @@ const _syncModelsFixture = {
   models: [_modelDtoFixture],
   provider: _providerDtoFixture,
 } as const satisfies SyncModelsResult;
+
+/** One verified provider-runtime capability in the catalog (Phase 8). */
+export interface ProviderRuntimeCatalogCapabilityDto {
+  capabilityId: string;
+  artifactPath: string;
+  artifactDigest: string;
+}
+
+/** Bounded host-interpreted detection defaults projected from a verified manifest. */
+export interface ProviderRuntimeDetectionDto {
+  maxTokens: number;
+  thinking: boolean;
+}
+
+/** Sanitized provider runtime package catalog entry (no package bytes/grants/secrets). */
+export interface ProviderRuntimeCatalogEntryDto {
+  pluginId: string;
+  version: string;
+  packageDigest: string;
+  publisher: { keyId: string; keyFingerprint: string };
+  legacyAliases: string[];
+  capabilities: ProviderRuntimeCatalogCapabilityDto[];
+  detection: ProviderRuntimeDetectionDto | null;
+}
+
+/** Upgrade preview returned by the runtime lifecycle (no secrets/package bytes/grants). */
+export interface ProviderRuntimeUpgradePreviewDto {
+  previewId: string;
+  providerId: string;
+  source: ProviderRuntimeBindingDto;
+  target: ProviderRuntimeBindingDto;
+  targetPluginVersion: string;
+  targetPublisher: { keyId: string; keyFingerprint: string };
+  legacyAliases: string[];
+  requiresPermissionApproval: boolean;
+  expiresAt: string;
+}
+
+export interface ApplyProviderRuntimeUpgradeInput {
+  previewId: string;
+  acknowledgePermissions: boolean;
+}
+
+/** Rollback preview showing the stored prior host-owned identity. */
+export interface ProviderRuntimeRollbackPreviewDto {
+  previewId: string;
+  providerId: string;
+  snapshotId: string;
+  current: ProviderRuntimeBindingDto;
+  target: ProviderRuntimeBindingDto;
+  expiresAt: string;
+}
+
+export interface ApplyProviderRuntimeRollbackInput {
+  previewId: string;
+}
+
+/** Result of apply provider runtime upgrade/rollback. */
+export interface ProviderRuntimeLifecycleResultDto {
+  providerId: string;
+  runtime: ProviderRuntimeBindingDto;
+  updatedAt: string;
+}
+
+/** Preview of attaching/replacing ONE API type binding (no secrets/package bytes/grants). */
+export interface ProviderRuntimeInterfacePreviewDto {
+  previewId: string;
+  providerId: string;
+  adapterId: string;
+  source: ProviderRuntimeBindingDto;
+  target: ProviderRuntimeBindingDto;
+  targetPluginVersion: string;
+  targetPublisher: { keyId: string; keyFingerprint: string };
+  legacyAliases: string[];
+  requiresPermissionApproval: boolean;
+  expiresAt: string;
+}
+
+export interface PreviewProviderRuntimeInterfaceAttachInput {
+  providerId: string;
+  adapterId: string;
+  packageDigest: string;
+}
+
+export interface ApplyProviderRuntimeInterfaceAttachInput {
+  previewId: string;
+  acknowledgePermissions: boolean;
+}
+
+/** Rollback preview for ONE API type binding (Provider-scoped migrated sets restore whole). */
+export interface ProviderRuntimeInterfaceRollbackPreviewDto {
+  previewId: string;
+  providerId: string;
+  adapterId: string;
+  snapshotId: string;
+  snapshotScope: "provider" | "adapter";
+  current: ProviderRuntimeBindingDto;
+  target: ProviderRuntimeBindingDto;
+  expiresAt: string;
+}
+
+export interface PreviewProviderRuntimeInterfaceRollbackInput {
+  providerId: string;
+  adapterId: string;
+}
+
+export interface ApplyProviderRuntimeInterfaceRollbackInput {
+  previewId: string;
+}
+
+export interface ProviderRuntimeInterfaceDetachInput {
+  providerId: string;
+  adapterId: string;
+  expectedUpdatedAt: string;
+  /** `updatedAt` of the target binding row when the page loaded it (stale-replace CAS). */
+  expectedBindingUpdatedAt: string;
+}
+
+export interface ProviderRuntimeInterfaceDiscardSnapshotInput {
+  providerId: string;
+  snapshotId: string;
+  expectedUpdatedAt: string;
+}
+
+/** Sanitized provider runtime rollback snapshot (cleanup seam for attach/replace/detach). */
+export interface ProviderRuntimeSnapshotDto {
+  id: string;
+  providerId: string;
+  /** "adapter" or "provider" (migrated whole-Provider rollback scope). */
+  scope: "adapter" | "provider";
+  createdAt: string;
+  pluginId: string;
+  pluginVersion: string;
+  packageDigest?: string | null;
+  adapterIds: string[];
+}
+
+/** Result of interface attach/replace/rollback/detach lifecycle writes. */
+export interface ProviderRuntimeInterfaceLifecycleResultDto {
+  providerId: string;
+  adapterId: string;
+  binding: ProviderRuntimeBindingDto;
+  updatedAt: string;
+}
+
+/** One bounded model descriptor returned by a verified `llm.models.list@1` Component (Phase 8). */
+export interface LlmModelDescriptor {
+  id: string;
+  label?: string | null;
+}
+
+/** Complete bounded model set returned by `provider_runtime_models_list`. */
+export interface LlmModelsListResult {
+  models: LlmModelDescriptor[];
+}
+
+/** One semantic chat message; never a provider wire payload. */
+export interface LlmChatMessage {
+  role: string;
+  content: string;
+}
+
+/** Host-owned chat preferences envelope; the host selects stream/temperature/maxTokens/thinking. */
+export interface LlmChatPreferencesV1 {
+  stream: boolean;
+  temperature?: number | null;
+  maxTokens?: number | null;
+  thinking: boolean;
+}
+
+/** Semantic unary/streaming chat request; images are PNG byte arrays (host Blob conversion). */
+export interface LlmChatRequest {
+  model: string;
+  messages: LlmChatMessage[];
+  images?: number[][];
+  preferences: LlmChatPreferencesV1;
+}
+
+/** IPC input for the `provider_runtime_chat` command. The host resolves the effective API
+ * type and exact binding from the persisted model; callers never pass a package digest. */
+export interface ProviderRuntimeChatCommandInput {
+  requestId: string;
+  providerModelId: string;
+  config: number[];
+  request: LlmChatRequest;
+}
+
+/** Bounded unary chat completion returned by `provider_runtime_chat`. */
+export interface LlmChatCompleteResult {
+  role: string;
+  content: string;
+}
+
+/** Sanitized typed delta from the runtime stream bridge; only `text` is user-visible. */
+export type ProviderRuntimeChatEvent =
+  | { event: "text"; text: string }
+  | { event: "reasoning"; text: string }
+  | { event: "toolCall"; id: string; name: string; argumentsJson: string }
+  | { event: "complete"; status: string };
 
 const _syncModelsConnectionChangedFixture = {
   ok: false,

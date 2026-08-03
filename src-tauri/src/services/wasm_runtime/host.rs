@@ -65,6 +65,11 @@ pub struct BrokerAuthorization {
   pub selected_response_mode: NetworkResponseBodyMode,
 }
 
+/// Placeholder HTTPS origin for the provider-instance broker authorization. It is never
+/// resolved for transport: the provider-runtime broker joins the confined path onto the bound
+/// provider's persisted Base URL. Kept valid-HTTPS so host types stay well-formed.
+const PROVIDER_INSTANCE_PLACEHOLDER_ORIGIN: &str = "https://provider.invalid";
+
 impl PluginHostState {
   /// Authorize a broker fetch against the principal and grant set before delegating to the
   /// broker handle. The host runtime — not the broker — enforces:
@@ -87,6 +92,17 @@ impl PluginHostState {
       .grant
       .grants_capability(&self.principal)
       .map_err(map_grant_error_to_broker)?;
+    // Provider-runtime principals carry NO network entries in their grant: origin authority is
+    // host-resolved from the bound provider instance, never package-selected. The fixed
+    // provider-instance endpoint is the only endpoint a provider-runtime request may use, and
+    // only for a package principal without grant network authority. The broker handle then
+    // resolves the exact provider binding before any vault lookup or transport.
+    if request.endpoint_id == crate::domain::runtime_plugin::PROVIDER_RUNTIME_ENDPOINT_ID {
+      if self.grant.network_entries().next().is_none() && self.principal.package_digest().is_some() {
+        return self.authorize_provider_instance_fetch(request);
+      }
+      return Err(BrokerFetchError::NotApproved);
+    }
     // Find the network entry matching the principal's capability + requested endpoint.
     let entry = self
       .grant
@@ -139,6 +155,62 @@ impl PluginHostState {
       origin_kind: entry.origin_kind(),
       auth_policy: entry.auth_policy().clone(),
       resource_limits: *entry.resource_limits(),
+      response_body_modes,
+      selected_response_mode,
+    })
+  }
+
+  /// Authorize a broker fetch for the fixed provider-instance endpoint. The closed
+  /// `host.provider-instance-auth.v1` policy resolves "the current provider instance": the
+  /// broker handle re-loads the persisted binding/connection AFTER this shape authorization and
+  /// before any vault lookup or transport. This method enforces request shape only (method,
+  /// body, confined relative path, sensitive headers, response mode) with host-owned default
+  /// resource limits; the binding/package/grant authority is the broker's provider-instance
+  /// check. A guest can never select an origin, Base URL, or auth policy here.
+  fn authorize_provider_instance_fetch(
+    &self,
+    request: &BrokerFetchRequest,
+  ) -> Result<BrokerAuthorization, BrokerFetchError> {
+    use crate::domain::plugin_resource::NetworkResponseBodyModes;
+    use crate::domain::runtime_plugin::{
+      AuthPolicyId, EndpointId, HOST_PROVIDER_INSTANCE_AUTH_POLICY_ID, HttpsOrigin, PROVIDER_RUNTIME_ENDPOINT_ID,
+    };
+    use crate::domain::runtime_plugin::{NetworkOriginKind, ResourceLimits};
+
+    // Request method must be one the bounded provider transport supports (GET/POST mirror the
+    // frontend Provider HTTP wire contract). The principal capability is already validated by
+    // `grants_capability` (provider grants contain only the two LLM capabilities).
+    let request_method = http_method_from_str(&request.method).ok_or(BrokerFetchError::MethodNotAllowed)?;
+    match request_method {
+      crate::domain::runtime_plugin::HttpMethod::Get | crate::domain::runtime_plugin::HttpMethod::Post => {}
+      _ => return Err(BrokerFetchError::MethodNotAllowed),
+    }
+    let body_bytes = match &request.body {
+      BrokerRequestBody::Empty => 0,
+      BrokerRequestBody::Json(bytes) => bytes.len(),
+      BrokerRequestBody::Blob { byte_len, .. } => *byte_len,
+    };
+    if body_bytes as u64 > ResourceLimits::default().max_request_bytes() {
+      return Err(BrokerFetchError::LimitExceeded);
+    }
+    if let BrokerRequestBody::Json(bytes) = &request.body {
+      validate_json_bytes(bytes).map_err(|_| BrokerFetchError::HeaderBlocked)?;
+    }
+    validate_broker_relative_path(&request.relative_path)?;
+    validate_broker_headers(&request.headers)?;
+    let response_body_modes = NetworkResponseBodyModes::ALL;
+    let selected_response_mode = select_response_mode(&request.headers, response_body_modes)?;
+    Ok(BrokerAuthorization {
+      endpoint_id: EndpointId::parse(PROVIDER_RUNTIME_ENDPOINT_ID).map_err(|_| BrokerFetchError::NotApproved)?,
+      // Placeholder origin/Base URL: never used for transport. The provider-runtime broker
+      // resolves the persisted provider connection itself and joins the confined relative
+      // path onto that host-owned Base URL only.
+      origin: HttpsOrigin::parse(PROVIDER_INSTANCE_PLACEHOLDER_ORIGIN).map_err(|_| BrokerFetchError::NotApproved)?,
+      base_url: String::new(),
+      origin_kind: NetworkOriginKind::InstanceConfigured,
+      auth_policy: AuthPolicyId::parse(HOST_PROVIDER_INSTANCE_AUTH_POLICY_ID)
+        .map_err(|_| BrokerFetchError::NotApproved)?,
+      resource_limits: ResourceLimits::default(),
       response_body_modes,
       selected_response_mode,
     })
@@ -688,7 +760,12 @@ fn credential_like_query_key(name: &str) -> bool {
       | "passwd"
       | "credential"
       | "credentials"
-  ) || lower.contains("token")
+  ) || lower == "token"
+    // Credential tokens are separated forms (`access_token`, `id_token`, `refresh_token`,
+    // `api-token`); camelCase pagination cursors like `pageToken` carry no credential and are
+    // required by the Gemini Models List guest for its host-bounded page traversal.
+    || lower.contains("_token")
+    || lower.contains("-token")
     || lower.contains("secret")
     || lower.contains("password")
     || lower.contains("auth")

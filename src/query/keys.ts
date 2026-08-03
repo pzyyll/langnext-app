@@ -65,3 +65,10 @@ export const runtimeLifecycleKeys = {
     [...runtimeLifecycleKeys.all, "upgrade-preview", instanceId, targetPackageDigest] as const,
   rollbackPreview: (instanceId: string) => [...runtimeLifecycleKeys.all, "rollback-preview", instanceId] as const,
 };
+
+/** Provider runtime package catalog (Phase 8); changes only with package install/removal. */
+export const providerRuntimeKeys = {
+  all: ["provider-runtime"] as const,
+  catalog: () => [...providerRuntimeKeys.all, "catalog"] as const,
+  snapshots: (providerInstanceId: string) => [...providerRuntimeKeys.all, "snapshots", providerInstanceId] as const,
+};

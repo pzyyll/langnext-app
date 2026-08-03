@@ -1,87 +1,38 @@
-// ABOUTME: Frontend connection-test workflow using provider plugins and raw HTTP.
+// ABOUTME: Frontend connection-test workflow through the persisted provider executor.
 // ABOUTME: Does not persist model rows; preserves bounded error codes and version race guard.
+import type { ConnectionTestResult, ProviderInstanceDto, ProviderRuntimeCatalogEntryDto } from "../../storage/types";
+import { resolveProviderExecutor } from "../providers/executor";
+import { normalizeProviderError } from "../providers/errors";
 import { newClientRequestId } from "../translate/newClientRequestId";
-import { mapHttpStatus, normalizeProviderError } from "../providers/errors";
-import { providerFetch } from "../providers/providerFetch";
-import { requireProviderPlugin } from "../providers/registry";
-import type { ConnectionTestResult, ModelsSyncErrorCode, ProviderInstanceDto } from "../../storage/types";
 
-const MAX_PAGES = 100;
-const MAX_TOTAL_MODELS = 2000;
-
-export async function testProviderConnectionFrontend(provider: ProviderInstanceDto): Promise<ConnectionTestResult> {
+/**
+ * Test one provider's saved connection by enumerating remote models through the persisted
+ * executor for ONE selected API type. Legacy providers keep the current frontend pagination
+ * loop; runtime providers consume the guest's bounded aggregate list. Never writes model rows.
+ */
+export async function testProviderConnectionFrontend(
+  provider: ProviderInstanceDto,
+  runtimeCatalog: readonly ProviderRuntimeCatalogEntryDto[] = [],
+  adapterId?: string,
+): Promise<ConnectionTestResult> {
   const providerUpdatedAt = provider.updatedAt;
+  const selectedAdapterId = (adapterId?.trim() || provider.adapterId).trim();
   try {
-    const plugin = requireProviderPlugin(provider.adapterId);
-    let continuation: string | null = null;
-    const seenCursors = new Set<string>();
+    const executor = resolveProviderExecutor({
+      provider,
+      modelAdapterId: selectedAdapterId,
+      catalog: runtimeCatalog,
+    });
+    const result = await executor.modelsList({ requestId: newClientRequestId("conn") });
     const seenKeys = new Set<string>();
-    let pages = 0;
     let modelCount = 0;
-
-    while (true) {
-      pages += 1;
-      if (pages > MAX_PAGES) {
-        return {
-          ok: false,
-          errorCode: "invalid_response",
-          message: "Too many model list pages",
-          modelCount: null,
-          providerUpdatedAt,
-        };
+    for (const item of result.models) {
+      if (seenKeys.has(item.modelKey)) {
+        continue;
       }
-      if (continuation) {
-        if (seenCursors.has(continuation)) {
-          return {
-            ok: false,
-            errorCode: "invalid_response",
-            message: "Repeated model list cursor",
-            modelCount: null,
-            providerUpdatedAt,
-          };
-        }
-        seenCursors.add(continuation);
-      }
-
-      const wire = plugin.buildModelListRequest({ continuation });
-      const response = await providerFetch({
-        requestId: newClientRequestId("conn"),
-        providerInstanceId: provider.id,
-        wire,
-      });
-      if (response.status < 200 || response.status >= 300) {
-        const code = mapHttpStatus(response.status) as ModelsSyncErrorCode;
-        return {
-          ok: false,
-          errorCode: code,
-          message: `Connection failed (${response.status})`,
-          modelCount: null,
-          providerUpdatedAt,
-        };
-      }
-      const page = plugin.parseModelListPage(response);
-      for (const item of page.items) {
-        if (seenKeys.has(item.modelKey)) {
-          continue;
-        }
-        seenKeys.add(item.modelKey);
-        modelCount += 1;
-        if (modelCount > MAX_TOTAL_MODELS) {
-          return {
-            ok: false,
-            errorCode: "invalid_response",
-            message: "Too many models",
-            modelCount: null,
-            providerUpdatedAt,
-          };
-        }
-      }
-      if (!page.continuation) {
-        break;
-      }
-      continuation = page.continuation;
+      seenKeys.add(item.modelKey);
+      modelCount += 1;
     }
-
     return {
       ok: true,
       errorCode: null,

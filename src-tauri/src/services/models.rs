@@ -8,7 +8,7 @@ use crate::domain::model::{
 use crate::domain::provider::{ModelsSyncStatus, ProviderInstanceDto};
 use crate::domain::time::{new_id, now_rfc3339};
 use crate::error::StorageError;
-use crate::repositories::{provider_instances, provider_models, translation_profiles};
+use crate::repositories::{provider_instances, provider_models, provider_runtime_bindings, translation_profiles};
 use crate::services::models_dev_catalog::ModelsDevCatalog;
 use crate::storage::Database;
 use std::path::PathBuf;
@@ -78,6 +78,7 @@ impl ModelService {
             remote_metadata_json: None,
             capability_overrides_json,
             adapter_id,
+            source_adapter_id: String::new(),
             last_seen_at: None,
             created_at: now.clone(),
             updated_at: now,
@@ -121,6 +122,7 @@ impl ModelService {
     let adapter_id = normalize_model_adapter_id(&adapter_id)?;
     let now = now_rfc3339();
     self.db.transaction(|uow| {
+      provider_models::get(uow.conn(), id)?;
       provider_models::set_adapter_id(uow.conn(), id, adapter_id.as_deref(), &now)?;
       provider_models::get(uow.conn(), id)
     })
@@ -171,11 +173,12 @@ impl ModelService {
   pub fn apply_remote_merge(
     &self,
     provider_id: Uuid,
+    source_adapter_id: &str,
     remote_models: &[RemoteModelSyncItem],
   ) -> Result<(), StorageError> {
     let seen_at = now_rfc3339();
     self.db.transaction(|uow| {
-      provider_models::apply_remote_sync(uow.conn(), provider_id, remote_models, &seen_at)?;
+      provider_models::apply_remote_sync(uow.conn(), provider_id, source_adapter_id, remote_models, &seen_at)?;
       provider_instances::update_sync_status(
         uow.conn(),
         provider_id,
@@ -188,21 +191,37 @@ impl ModelService {
     })
   }
 
-  /// Frontend model-sync persistence: apply a complete remote snapshot when `expected_updated_at` still matches.
+  /// Frontend model-sync persistence: apply a complete remote snapshot for ONE selected API
+  /// type when `expected_updated_at` still matches. The selected type must have a binding row
+  /// for this provider (attached interface or Provider default); an unknown type fails
+  /// closed before any model row changes.
   pub fn apply_provider_model_sync(
     &self,
     provider_id: Uuid,
+    adapter_id: &str,
     expected_updated_at: &str,
     remote_models: &[RemoteModelSyncItem],
   ) -> Result<SyncModelsResult, StorageError> {
+    let adapter_id = adapter_id.trim().to_string();
+    if adapter_id.is_empty() {
+      return Err(StorageError::Validation("adapter_id is required for model sync".into()));
+    }
+    crate::domain::provider::validate_adapter_id(&adapter_id).map_err(StorageError::Validation)?;
     let seeded = remote_models.to_vec();
     let outcome = self.db.transaction(|uow| {
       let provider = provider_instances::get(uow.conn(), provider_id)?;
       if provider.updated_at != expected_updated_at {
         return Ok(SyncWriteOutcome::ConnectionChanged);
       }
+      // Per-interface authority: the selected API type must be attached (binding row exists).
+      let binding = provider_runtime_bindings::get_optional(uow.conn(), provider_id, &adapter_id)?;
+      if binding.is_none() {
+        return Err(StorageError::Validation(format!(
+          "API type '{adapter_id}' is not attached to this provider"
+        )));
+      }
       let seen_at = now_rfc3339();
-      provider_models::apply_remote_sync(uow.conn(), provider_id, &seeded, &seen_at)?;
+      provider_models::apply_remote_sync(uow.conn(), provider_id, &adapter_id, &seeded, &seen_at)?;
       provider_instances::update_sync_status(
         uow.conn(),
         provider_id,
@@ -213,7 +232,9 @@ impl ModelService {
       )?;
       Ok(SyncWriteOutcome::Applied)
     })?;
-    let provider = self.db.read(|conn| provider_instances::get(conn, provider_id))?;
+    let (provider, bindings) = self
+      .db
+      .read(|conn| provider_instances::get_with_runtime(conn, provider_id))?;
     let models = self.list_by_provider(provider_id)?;
     match outcome {
       SyncWriteOutcome::Applied => Ok(SyncModelsResult {
@@ -224,14 +245,14 @@ impl ModelService {
           models.iter().filter(|m| m.source == ModelSource::Remote).count()
         ),
         models,
-        provider: ProviderInstanceDto::from(&provider),
+        provider: ProviderInstanceDto::from_provider_and_runtime(&provider, &bindings),
       }),
       SyncWriteOutcome::ConnectionChanged => Ok(SyncModelsResult {
         ok: false,
         error_code: Some(CONNECTION_CHANGED_CODE.into()),
         message: "Provider connection changed during sync".into(),
         models,
-        provider: ProviderInstanceDto::from(&provider),
+        provider: ProviderInstanceDto::from_provider_and_runtime(&provider, &bindings),
       }),
     }
   }
@@ -259,7 +280,9 @@ impl ModelService {
       )?;
       Ok(SyncWriteOutcome::Applied)
     })?;
-    let provider = self.db.read(|conn| provider_instances::get(conn, provider_id))?;
+    let (provider, bindings) = self
+      .db
+      .read(|conn| provider_instances::get_with_runtime(conn, provider_id))?;
     let models = self.list_by_provider(provider_id)?;
     match outcome {
       SyncWriteOutcome::Applied => Ok(SyncModelsResult {
@@ -267,14 +290,14 @@ impl ModelService {
         error_code: Some(error_code.to_string()),
         message: format!("Model sync failed: {error_code}"),
         models,
-        provider: ProviderInstanceDto::from(&provider),
+        provider: ProviderInstanceDto::from_provider_and_runtime(&provider, &bindings),
       }),
       SyncWriteOutcome::ConnectionChanged => Ok(SyncModelsResult {
         ok: false,
         error_code: Some(CONNECTION_CHANGED_CODE.into()),
         message: "Provider connection changed during sync".into(),
         models,
-        provider: ProviderInstanceDto::from(&provider),
+        provider: ProviderInstanceDto::from_provider_and_runtime(&provider, &bindings),
       }),
     }
   }
@@ -312,13 +335,20 @@ impl ModelService {
   }
 }
 
-/// Prefer a non-empty model adapter override; otherwise use the channel default.
+/// Resolve the effective API type for one model row: explicit override → discovery source
+/// type → Provider default. Delegates to the domain helper.
+pub fn resolve_model_effective_adapter(
+  model_adapter_id: Option<&str>,
+  source_adapter_id: &str,
+  provider_adapter_id: &str,
+) -> String {
+  crate::domain::model::resolve_model_effective_adapter(model_adapter_id, source_adapter_id, provider_adapter_id)
+}
+
+/// Prefer a non-empty model adapter override; otherwise use the channel default. Retained
+/// for legacy callers; the source-aware effective resolver supersedes it.
 pub(crate) fn resolve_model_adapter_id(model_adapter_id: Option<&str>, channel_adapter_id: &str) -> String {
-  model_adapter_id
-    .map(str::trim)
-    .filter(|s| !s.is_empty())
-    .map(|s| s.to_string())
-    .unwrap_or_else(|| channel_adapter_id.to_string())
+  resolve_model_effective_adapter(model_adapter_id, "", channel_adapter_id)
 }
 
 fn normalize_model_adapter_id(adapter_id: &Option<String>) -> Result<Option<String>, StorageError> {
@@ -388,6 +418,26 @@ mod resolve_tests {
     assert_eq!(
       resolve_model_adapter_id(Some(""), "openai-responses"),
       "openai-responses"
+    );
+  }
+
+  #[test]
+  fn effective_adapter_prefers_override_then_source_then_provider_default() {
+    assert_eq!(
+      resolve_model_effective_adapter(Some("override"), "source-type", "provider-default"),
+      "override"
+    );
+    assert_eq!(
+      resolve_model_effective_adapter(None, "source-type", "provider-default"),
+      "source-type"
+    );
+    assert_eq!(
+      resolve_model_effective_adapter(Some("  "), "source-type", "provider-default"),
+      "source-type"
+    );
+    assert_eq!(
+      resolve_model_effective_adapter(None, "", "provider-default"),
+      "provider-default"
     );
   }
 }

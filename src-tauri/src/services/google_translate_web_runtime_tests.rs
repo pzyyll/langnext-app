@@ -261,6 +261,7 @@ fn build_google_web_package_with(
       auth_policies: vec!["host.none.v1".into()],
     },
     ui: Default::default(),
+    provider_runtime: None,
   };
   let sk = fixture_vendor_signing_key();
   let manifest_bytes = serde_json::to_vec(&manifest).unwrap();
@@ -438,6 +439,7 @@ fn build_google_web_user_signed_package_with_extra_network(
       auth_policies: vec!["host.none.v1".into()],
     },
     ui: Default::default(),
+    provider_runtime: None,
   };
   let manifest_bytes = serde_json::to_vec(&manifest).unwrap();
   let signature = user_sk.sign(&manifest_bytes).to_bytes().to_vec();
@@ -1796,6 +1798,7 @@ fn build_attacker_gtx_package_declaring_vendor_key() -> (Vec<u8>, String, String
       auth_policies: vec!["host.none.v1".into()],
     },
     ui: Default::default(),
+    provider_runtime: None,
   };
   let manifest_bytes = serde_json::to_vec(&manifest).unwrap();
   let signature = attacker_sk.sign(&manifest_bytes).to_bytes().to_vec();

@@ -881,6 +881,7 @@ pub mod test_support {
         auth_policies: vec![],
       },
       ui: Default::default(),
+      provider_runtime: None,
     }
   }
 
@@ -889,8 +890,17 @@ pub mod test_support {
   }
 
   pub fn build_signed_package(manifest: &PluginManifestV1, files: &[(&str, &[u8])]) -> Vec<u8> {
+    build_signed_package_with_key(manifest, files, &test_signing_key())
+  }
+
+  /// Build a signed archive with an explicit signing key (vendor fixture or user key).
+  pub fn build_signed_package_with_key(
+    manifest: &PluginManifestV1,
+    files: &[(&str, &[u8])],
+    signing_key: &SigningKey,
+  ) -> Vec<u8> {
     let manifest_bytes = serde_json::to_vec(manifest).expect("manifest json");
-    let signature = sign_manifest(&manifest_bytes);
+    let signature = signing_key.sign(&manifest_bytes).to_bytes().to_vec();
     let mut cursor = std::io::Cursor::new(Vec::new());
     {
       let mut zip = zip::ZipWriter::new(&mut cursor);

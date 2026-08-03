@@ -1,0 +1,1 @@
+{"model":"gpt-4o-mini","messages":[{"role":"system","content":"sys"},{"role":"user","content":"hello"}],"stream":false,"temperature":0.2,"max_tokens":128}

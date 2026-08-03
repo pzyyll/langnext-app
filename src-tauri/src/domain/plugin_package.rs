@@ -622,6 +622,7 @@ mod tests {
         auth_policies: vec![],
       },
       ui: Default::default(),
+      provider_runtime: None,
     }
   }
 

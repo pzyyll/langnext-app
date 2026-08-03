@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+# ABOUTME: Automate the Phase 8 runtime-provider smoke: fixture gates, headless lifecycle walkthrough, and workflows.
+# ABOUTME: Live provider-account steps stay manual; this task proves every fixture-backed path and launches the dev app.
+#MISE description="Run Phase 8 runtime-provider smoke (arg: --preflight-only)"
+set -euo pipefail
+
+readonly PREFLIGHT_ONLY_FLAG="--preflight-only"
+readonly VENDOR_PUBLISHER_KEY_ID="com.langnext.vendor.keys.1"
+readonly ED25519_PUBLIC_KEY_HEX_LENGTH=64
+readonly OPENAI_COMPATIBLE_PACKAGE_RELATIVE_PATH="runtime-plugins/openai-compatible/fixtures/packages/com.langnext.provider.openai-compatible-1.0.0.lnplugin"
+readonly VENDOR_PUBLIC_KEY_RELATIVE_PATH="runtime-plugins/conformance/fixtures/packages/keys/vendor-public-key.hex"
+
+if [[ "${1:-}" == "--" ]]; then
+  shift
+fi
+
+case "${1:-}" in
+  "") PREFLIGHT_ONLY=0 ;;
+  "$PREFLIGHT_ONLY_FLAG") PREFLIGHT_ONLY=1 ;;
+  *)
+    echo "usage: mise run smoke:runtime-providers [--preflight-only]" >&2
+    exit 2
+    ;;
+esac
+
+if [[ $# -gt 1 ]]; then
+  echo "usage: mise run smoke:runtime-providers [--preflight-only]" >&2
+  exit 2
+fi
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+PACKAGE_PATH="$ROOT_DIR/$OPENAI_COMPATIBLE_PACKAGE_RELATIVE_PATH"
+PUBLIC_KEY_PATH="$ROOT_DIR/$VENDOR_PUBLIC_KEY_RELATIVE_PATH"
+
+[[ -f "$PACKAGE_PATH" ]] || {
+  echo "error: OpenAI Compatible fixture package is missing: $PACKAGE_PATH" >&2
+  exit 1
+}
+[[ -f "$PUBLIC_KEY_PATH" ]] || {
+  echo "error: fixture vendor key is missing: $PUBLIC_KEY_PATH" >&2
+  exit 1
+}
+
+PUBLIC_KEY_HEX="$(tr -d '[:space:]' < "$PUBLIC_KEY_PATH")"
+if [[ ${#PUBLIC_KEY_HEX} -ne $ED25519_PUBLIC_KEY_HEX_LENGTH || ! "$PUBLIC_KEY_HEX" =~ ^[0-9a-f]+$ ]]; then
+  echo "error: fixture vendor key must be $ED25519_PUBLIC_KEY_HEX_LENGTH lowercase hexadecimal characters" >&2
+  exit 1
+fi
+
+# Workspace-relative temp dir so native Windows Tauri/bun (spawned from MSYS bash via mise)
+# read the same filesystem as bash. The dev-only trust file lives under gitignored
+# runtime-plugins/dist and is removed on exit; production resources are never written.
+# The vars are exported ONLY for the interactive app launch: exporting them during the
+# automated suites would leak a bundled default package into every test process (several
+# runtime-provider tests are sensitive to startup default resolution).
+VENDOR_TRUST_DIR="$ROOT_DIR/runtime-plugins/dist/smoke-runtime-providers-$$"
+rm -rf "$VENDOR_TRUST_DIR"
+mkdir -p "$VENDOR_TRUST_DIR"
+VENDOR_TRUST_JSON="$VENDOR_TRUST_DIR/vendor-trust.json"
+cleanup() {
+  rm -rf "$VENDOR_TRUST_DIR"
+}
+trap cleanup EXIT
+
+# Native Windows path conversion for the env-var exports: Tauri (Rust std::fs) and bun are native
+# binaries that cannot resolve MSYS POSIX paths (/tmp/..., /f/...). cygpath -w yields C:\... paths
+# they can read; POSIX paths are retained on non-MSYS systems (Linux/macOS CI).
+native_path() {
+  if command -v cygpath >/dev/null 2>&1; then
+    cygpath -w "$1"
+  else
+    printf '%s\n' "$1"
+  fi
+}
+
+cd "$ROOT_DIR"
+
+echo "== stage 1: deterministic fixture gates"
+mise run plugin:build-openai-compatible
+mise run plugin:build-gemini
+mise run plugin:verify -- "$PACKAGE_PATH" --public-key-file "$PUBLIC_KEY_PATH"
+
+readonly GEMINI_PACKAGE_RELATIVE_PATH="runtime-plugins/gemini/fixtures/packages/com.langnext.provider.gemini-1.0.0.lnplugin"
+GEMINI_PACKAGE_PATH="$ROOT_DIR/$GEMINI_PACKAGE_RELATIVE_PATH"
+[[ -f "$GEMINI_PACKAGE_PATH" ]] || {
+  echo "error: Gemini fixture package is missing: $GEMINI_PACKAGE_PATH" >&2
+  exit 1
+}
+mise run plugin:verify -- "$GEMINI_PACKAGE_PATH" --public-key-file "$PUBLIC_KEY_PATH"
+
+echo "== stage 2: headless backend smoke (two interfaces, lifecycle/models/chat/stream/cancel/rollback/privacy)"
+RUN_RUNTIME_PROVIDER_SMOKE=1 mise run test runtime_provider -- --nocapture
+
+echo "== stage 3: fail-closed conformance"
+mise run plugin:conformance llm
+mise run plugin:check-no-wasi
+
+echo "== stage 4: frontend workflow suites (executor, sync, translation, detect, OCR)"
+bun test --isolate \
+  src/features/providers/executor.test.ts \
+  src/features/providers/runtimeExecutor.test.ts \
+  src/features/models/providerConnection.test.ts \
+  src/features/models/providerModelSync.test.ts \
+  src/features/translate/translationWorkflow.test.ts \
+  src/features/translate/detectLanguageFlow.test.ts \
+  src/features/ocr/recognizeOcrFlow.test.ts
+
+echo ""
+echo "SMOKE PASS: fixture gates, two-interface headless walkthrough, conformance, and workflow suites all green."
+echo "This walkthrough proves one Provider can use two attached signed runtime interfaces plus a legacy API type:"
+echo "  - per-interface attach/replace/rollback/detach with exact Provider-scoped grants"
+echo "  - models list/chat routed per persisted API type; no same-request runtime→legacy replay"
+echo "  - per-interface model sync without cross-interface missing states"
+echo "  - v8 export/import keeps multi-interface requirements unavailable until explicit approval"
+echo "Still manual (needs a user-owned harmless provider account and the live UI):"
+echo "  - real provider network calls (connection/sync/translate/detect/OCR against the account)"
+echo "  - UI fallback reset between models and stream cancel in the running app"
+echo "  - manual inspection of app logs for credentials/prompts/images/raw output"
+echo "  - rollback click-through in the Provider editor"
+
+if [[ $PREFLIGHT_ONLY -eq 1 ]]; then
+  echo "ok: runtime-provider smoke preflight passed"
+  exit 0
+fi
+
+# Interactive launch only: inject the dev fixture package and temporary vendor trust so a NEW
+# matching Provider in the UI receives the reviewed default. The automated suites above never
+# see these variables (they would alter startup default resolution in unrelated tests).
+printf '[\n  {\n    "keyId": "%s",\n    "publicKeyHex": "%s"\n  }\n]\n' \
+  "$VENDOR_PUBLISHER_KEY_ID" "$PUBLIC_KEY_HEX" > "$VENDOR_TRUST_JSON"
+export LANGNEXT_VENDOR_TRUST_JSON="$(native_path "$VENDOR_TRUST_JSON")"
+export LANGNEXT_BUNDLED_OPENAI_COMPATIBLE_PACKAGE="$(native_path "$PACKAGE_PATH")"
+
+echo "ok: launching Tauri with the OpenAI Compatible fixture and temporary vendor trust"
+mise run tauri:dev

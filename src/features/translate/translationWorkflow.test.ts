@@ -34,6 +34,27 @@ function provider(
     modelsSyncedAt: null,
     modelsSyncStatus: "never",
     modelsSyncErrorCode: null,
+    runtime: {
+      runtimeKind: "legacy-frontend-provider",
+      packageDigest: null,
+      grantSetRevision: null,
+      state: "active",
+      errorCode: null,
+      errorMessage: null,
+      updatedAt: "t",
+    },
+    runtimeBindings: [
+      {
+        adapterId: "openai-compatible",
+        runtimeKind: "legacy-frontend-provider",
+        packageDigest: null,
+        grantSetRevision: null,
+        state: "active",
+        errorCode: null,
+        errorMessage: null,
+        updatedAt: "t",
+      },
+    ],
     createdAt: "t",
     updatedAt: "t",
     ...partial,
@@ -546,5 +567,354 @@ describe("runTranslationStream service branch", () => {
     expect(events).toEqual(["reset"]);
     const historyCalls = invokeMock.mock.calls.filter((c) => c[0] === "record_translation_history_completion");
     expect(historyCalls).toHaveLength(0);
+  });
+});
+
+/** Capture history writes across tests (module-scoped helper). */
+function historyWrites(): Array<{ ok: boolean; errorCode: string | null }> {
+  return invokeMock.mock.calls
+    .filter(([cmd]) => cmd === "record_translation_history_completion")
+    .map(([, args]) => {
+      const input = (args as { input: { ok: boolean; errorCode: string | null } }).input;
+      return { ok: input.ok, errorCode: input.errorCode };
+    });
+}
+
+describe("legacy_executor_preserves_translation_cancel_and_history_contract", () => {
+  // Fixed OpenAI Compatible fixture literal (ported from builtin/openaiCompatible.test.ts).
+  const FIXED_CHAT_BODY = JSON.stringify({ choices: [{ message: { content: "  hi  " } }] });
+  const FIXED_STREAM_DELTA_EVENT = JSON.stringify({ choices: [{ delta: { content: "wo" } }] });
+
+  function encodeSseEvents(...dataLines: string[]): number[] {
+    return Array.from(new TextEncoder().encode(dataLines.map((line) => `data: ${line}\n\n`).join("")));
+  }
+
+  test("terminal success and failure write history exactly once; cancellation writes none", async () => {
+    const p = provider({ id: "p1", adapterId: "openai-compatible" });
+    const m = model({ id: "m1", providerInstanceId: "p1", modelKey: "gpt-4o-mini", adapterId: null });
+    const snapshots = {
+      providersById: new Map([["p1", p]]),
+      modelsById: new Map([["m1", m]]),
+      profile: null,
+    };
+    const translateInput = { modelId: "m1", sourceLang: "en", targetLang: "zh", text: "hello" };
+
+    // Non-stream terminal success writes history once.
+    invokeMock.mockClear();
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "provider_http_request") {
+        return { status: 200, headers: {}, body: FIXED_CHAT_BODY };
+      }
+      if (cmd === "record_translation_history_completion") {
+        return undefined;
+      }
+      throw new Error(`unexpected cmd ${cmd}`);
+    });
+    const success = await runTranslationNonStream(translateInput, snapshots);
+    expect(success.ok).toBe(true);
+    expect(success.translatedText).toBe("hi");
+    expect(historyWrites()).toEqual([{ ok: true, errorCode: null }]);
+
+    // Non-stream terminal failure (HTTP 500) writes history once with the bounded code.
+    invokeMock.mockClear();
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "provider_http_request") {
+        return { status: 500, headers: {}, body: "" };
+      }
+      if (cmd === "record_translation_history_completion") {
+        return undefined;
+      }
+      throw new Error(`unexpected cmd ${cmd}`);
+    });
+    const failure = await runTranslationNonStream(translateInput, snapshots);
+    expect(failure.ok).toBe(false);
+    expect(failure.errorCode).toBe("server");
+    expect(historyWrites()).toEqual([{ ok: false, errorCode: "server" }]);
+
+    // Stream terminal success writes history once.
+    invokeMock.mockClear();
+    invokeMock.mockImplementation(async (cmd: string, args: Record<string, unknown>) => {
+      if (cmd === "provider_http_stream") {
+        const onEvent = (args.onEvent as { onmessage: (event: unknown) => void }).onmessage;
+        onEvent({ event: "started", data: { status: 200, headers: {} } });
+        onEvent({ event: "chunk", data: { bytes: encodeSseEvents(FIXED_STREAM_DELTA_EVENT, "[DONE]") } });
+        onEvent({ event: "finished", data: null });
+        return undefined;
+      }
+      if (cmd === "record_translation_history_completion") {
+        return undefined;
+      }
+      throw new Error(`unexpected cmd ${cmd}`);
+    });
+    const streamEvents: string[] = [];
+    const streamDone = await new Promise<string>((resolve, reject) => {
+      void runTranslationStream(translateInput, snapshots, "req-ok", {
+        onChunk: () => streamEvents.push("chunk"),
+        onReset: () => streamEvents.push("reset"),
+        onDone: (result) => resolve(result.errorCode ?? "ok"),
+        onError: (result) => reject(new Error(`unexpected onError ${result.errorCode}`)),
+      });
+    });
+    expect(streamDone).toBe("ok");
+    expect(streamEvents).toEqual(["chunk"]);
+    expect(historyWrites()).toEqual([{ ok: true, errorCode: null }]);
+
+    // Cancellation after partial output writes no history and emits no terminal callback.
+    const controller = new AbortController();
+    invokeMock.mockClear();
+    invokeMock.mockImplementation(async (cmd: string, args: Record<string, unknown>) => {
+      if (cmd === "provider_http_stream") {
+        const onEvent = (args.onEvent as { onmessage: (event: unknown) => void }).onmessage;
+        onEvent({ event: "started", data: { status: 200, headers: {} } });
+        onEvent({
+          event: "chunk",
+          data: { bytes: encodeSseEvents(JSON.stringify({ choices: [{ delta: { content: "hello" } }] })) },
+        });
+        controller.abort();
+        throw { code: "cancelled", message: "Request cancelled" };
+      }
+      if (cmd === "cancel_provider_http") {
+        return true;
+      }
+      if (cmd === "record_translation_history_completion") {
+        throw new Error("history must not be written for cancelled work");
+      }
+      throw new Error(`unexpected cmd ${cmd}`);
+    });
+    const cancelledEvents: string[] = [];
+    await runTranslationStream(
+      translateInput,
+      snapshots,
+      "req-cancel",
+      {
+        onChunk: () => cancelledEvents.push("chunk"),
+        onReset: () => cancelledEvents.push("reset"),
+        onDone: () => cancelledEvents.push("done"),
+        onError: () => cancelledEvents.push("error"),
+      },
+      controller.signal,
+    );
+    expect(cancelledEvents).toEqual(["chunk"]);
+    expect(historyWrites()).toEqual([]);
+    const cancelCalls = invokeMock.mock.calls.filter(([cmd]) => cmd === "cancel_provider_http");
+    expect(cancelCalls.map(([, args]) => args)).toEqual([{ requestId: "req-cancel" }]);
+  });
+});
+
+describe("runtime_executor_translation_preserves_host_fallback_reset_cancel_and_history_once", () => {
+  function encodeSseEvents(...dataLines: string[]): number[] {
+    return Array.from(new TextEncoder().encode(dataLines.map((line) => `data: ${line}\n\n`).join("")));
+  }
+
+  // Fixed sanitized catalog entry for the conformance fixture (legacy alias openai-compatible).
+  const CATALOG_ENTRY = {
+    pluginId: "langnext.conformance.llm-provider",
+    version: "1.0.0",
+    packageDigest: "digest-1",
+    publisher: { keyId: "key-1", keyFingerprint: "fp-1" },
+    legacyAliases: ["openai-compatible"],
+    capabilities: [
+      { capabilityId: "llm.models.list@1", artifactPath: "fixtures/llm-models.wasm", artifactDigest: "a" },
+      { capabilityId: "llm.chat@1", artifactPath: "fixtures/llm-chat.wasm", artifactDigest: "b" },
+    ],
+    detection: null,
+  };
+
+  const FIXED_CHAT_BODY = JSON.stringify({ choices: [{ message: { content: "hola" } }] });
+
+  function runtimeProvider(): ProviderInstanceDto {
+    return provider({
+      id: "p1",
+      adapterId: "openai-compatible",
+      runtime: {
+        runtimeKind: "wasm-component",
+        packageDigest: "digest-1",
+        grantSetRevision: 1,
+        state: "active",
+        errorCode: null,
+        errorMessage: null,
+        updatedAt: "t",
+      },
+      runtimeBindings: [
+        {
+          adapterId: "openai-compatible",
+          runtimeKind: "wasm-component",
+          packageDigest: "digest-1",
+          grantSetRevision: 1,
+          state: "active",
+          errorCode: null,
+          errorMessage: null,
+          updatedAt: "t",
+        },
+      ],
+    });
+  }
+
+  function fallbackProfile(): TranslationProfileDto {
+    return {
+      id: "prof-fallback",
+      name: "Fallback",
+      enabled: true,
+      sourceLang: "en",
+      targetLang: "es",
+      primaryLang: "en",
+      preferredTargetLang: "es",
+      createdAt: "t",
+      updatedAt: "t",
+      engine: {
+        kind: "llm_model_chain",
+        templateVersion: 1,
+        defaultPromptTemplateId: "t1",
+        temperature: 0.2,
+        maxOutputTokens: 512,
+        providerOptionsJson: null,
+      },
+      targets: [
+        { translationProfileId: "prof-fallback", providerModelId: "m1", priority: 0 },
+        { translationProfileId: "prof-fallback", providerModelId: "m2", priority: 1 },
+      ],
+      promptTemplates: [{ id: "t1", name: "Default", systemTemplate: "S", userTemplate: "{{text}}" }],
+    };
+  }
+
+  function runtimeSnapshots(): {
+    providersById: Map<string, ProviderInstanceDto>;
+    modelsById: Map<string, ProviderModelDto>;
+    profile: TranslationProfileDto;
+    runtimeCatalog: readonly unknown[];
+  } {
+    const p1 = runtimeProvider();
+    const p2 = provider({ id: "p2", adapterId: "openai-compatible" });
+    const m1 = model({ id: "m1", providerInstanceId: "p1", modelKey: "runtime-model", adapterId: null });
+    const m2 = model({ id: "m2", providerInstanceId: "p2", modelKey: "gpt-4o-mini", adapterId: null });
+    return {
+      providersById: new Map([
+        ["p1", p1],
+        ["p2", p2],
+      ]),
+      modelsById: new Map([
+        ["m1", m1],
+        ["m2", m2],
+      ]),
+      profile: fallbackProfile(),
+      runtimeCatalog: [CATALOG_ENTRY],
+    };
+  }
+
+  test("non-stream runtime failure advances only the configured fallback; no legacy replay on the primary provider", async () => {
+    const httpProviderIds: string[] = [];
+    let runtimeChatCalls = 0;
+    invokeMock.mockImplementation(async (cmd: string, args: Record<string, unknown>) => {
+      if (cmd === "provider_runtime_chat") {
+        runtimeChatCalls += 1;
+        throw { code: "network", message: "guest upstream failed" };
+      }
+      if (cmd === "provider_http_request") {
+        httpProviderIds.push((args as { input: { providerInstanceId: string } }).input.providerInstanceId);
+        return { status: 200, headers: {}, body: FIXED_CHAT_BODY };
+      }
+      if (cmd === "record_translation_history_completion") {
+        return undefined;
+      }
+      throw new Error(`unexpected cmd ${cmd}`);
+    });
+
+    const snapshots = runtimeSnapshots();
+    const result = await runTranslationNonStream(
+      { modelId: "m1", sourceLang: "en", targetLang: "es", text: "hi", profileId: "prof-fallback" },
+      snapshots,
+    );
+    expect(result.ok).toBe(true);
+    expect(result.translatedText).toBe("hola");
+    expect(result.modelId).toBe("m2");
+    expect(runtimeChatCalls).toBe(1);
+    // Fallback ran only on the separate legacy provider — never a replay on the runtime provider.
+    expect(httpProviderIds).toEqual(["p2"]);
+    expect(historyWrites()).toEqual([{ ok: true, errorCode: null }]);
+  });
+
+  test("stream runtime failure resets once before the next model text and writes one history record", async () => {
+    invokeMock.mockImplementation(async (cmd: string, args: Record<string, unknown>) => {
+      console.log("DBG INVOKE", cmd);
+      if (cmd === "provider_runtime_chat") {
+        const onEvent = (args.onEvent as { onmessage: (event: unknown) => void }).onmessage;
+        onEvent({ event: "text", text: "par" });
+        throw { code: "network", message: "guest upstream dropped" };
+      }
+      if (cmd === "provider_http_stream") {
+        const onEvent = (args.onEvent as { onmessage: (event: unknown) => void }).onmessage;
+        onEvent({ event: "started", data: { status: 200, headers: {} } });
+        onEvent({
+          event: "chunk",
+          data: { bytes: encodeSseEvents(JSON.stringify({ choices: [{ delta: { content: "tial" } }] })) },
+        });
+        onEvent({ event: "chunk", data: { bytes: encodeSseEvents("[DONE]") } });
+        onEvent({ event: "finished", data: null });
+        return undefined;
+      }
+      if (cmd === "record_translation_history_completion") {
+        return undefined;
+      }
+      throw new Error(`unexpected cmd ${cmd}`);
+    });
+
+    const snapshots = runtimeSnapshots();
+    const events: string[] = [];
+    const done = await new Promise<string>((resolve, reject) => {
+      void runTranslationStream(
+        { modelId: "m1", sourceLang: "en", targetLang: "es", text: "hi", profileId: "prof-fallback" },
+        snapshots,
+        "req-s1",
+        {
+          onChunk: () => events.push("chunk"),
+          onReset: () => events.push("reset"),
+          onDone: (result) => resolve(`${result.modelId}:${result.translatedText}`),
+          onError: (result) => reject(new Error(`unexpected onError ${result.errorCode}`)),
+        },
+      );
+    });
+    expect(events).toEqual(["chunk", "reset", "chunk"]);
+    expect(done).toBe("m2:tial");
+    expect(historyWrites()).toEqual([{ ok: true, errorCode: null }]);
+    const runtimeCalls = invokeMock.mock.calls.filter(([cmd]) => cmd === "provider_runtime_chat");
+    expect(runtimeCalls).toHaveLength(1);
+  });
+
+  test("cancellation during a runtime stream writes no history and emits no terminal callback", async () => {
+    const controller = new AbortController();
+    invokeMock.mockImplementation(async (cmd: string, args: Record<string, unknown>) => {
+      if (cmd === "provider_runtime_chat") {
+        const onEvent = (args.onEvent as { onmessage: (event: unknown) => void }).onmessage;
+        onEvent({ event: "text", text: "par" });
+        controller.abort();
+        throw { code: "cancelled", message: "request cancelled" };
+      }
+      if (cmd === "cancel_provider_runtime") {
+        return true;
+      }
+      if (cmd === "record_translation_history_completion") {
+        throw new Error("history must not be written for cancelled work");
+      }
+      throw new Error(`unexpected cmd ${cmd}`);
+    });
+
+    const snapshots = runtimeSnapshots();
+    const events: string[] = [];
+    await runTranslationStream(
+      { modelId: "m1", sourceLang: "en", targetLang: "es", text: "hi", profileId: "prof-fallback" },
+      snapshots,
+      "req-cancel-runtime",
+      {
+        onChunk: () => events.push("chunk"),
+        onReset: () => events.push("reset"),
+        onDone: () => events.push("done"),
+        onError: () => events.push("error"),
+      },
+      controller.signal,
+    );
+    expect(events).toEqual(["chunk"]);
+    expect(historyWrites()).toEqual([]);
+    const cancelCalls = invokeMock.mock.calls.filter(([cmd]) => cmd === "cancel_provider_runtime");
+    expect(cancelCalls.map(([, args]) => args)).toEqual([{ requestId: "req-cancel-runtime" }]);
   });
 });

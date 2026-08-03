@@ -2,6 +2,7 @@
 // ABOUTME: Provider JSON error extraction stays inside each plugin.
 import { IpcError, isIpcError } from "../../storage/ipcError";
 import type { ModelsSyncErrorCode } from "../../storage/types";
+import { ExecutorHttpStatusError, ExecutorProtocolError, ProviderRuntimeUnavailableError } from "./executor";
 import { ProviderProtocolError } from "./types";
 
 export type ProviderWorkflowErrorCode =
@@ -49,12 +50,21 @@ export function isRetryableCode(code: ProviderWorkflowErrorCode): boolean {
 }
 
 export function normalizeProviderError(error: unknown): NormalizedProviderError {
-  if (error instanceof ProviderProtocolError) {
+  if (error instanceof ProviderProtocolError || error instanceof ExecutorProtocolError) {
     return {
       code: "invalid_response",
       message: error.message,
       retryable: true,
     };
+  }
+  if (error instanceof ExecutorHttpStatusError) {
+    // Preserve the workflow's non-2xx status mapping (auth vs retryable codes).
+    const code = mapHttpStatus(error.status);
+    return { code, message: error.message, retryable: isRetryableCode(code) };
+  }
+  if (error instanceof ProviderRuntimeUnavailableError) {
+    // Missing/revoked runtime binding: bounded and never retried through legacy transport.
+    return { code: "plugin_unavailable", message: error.message, retryable: false };
   }
   if (isIpcError(error)) {
     return mapIpcError(error);
@@ -80,6 +90,30 @@ function mapIpcError(error: IpcError): NormalizedProviderError {
   const code = error.code;
   if (code === "credential_unavailable") {
     return { code: "credential_unavailable", message: error.message, retryable: false };
+  }
+  if (code === "cancelled") {
+    return { code: "cancelled", message: error.message, retryable: false };
+  }
+  if (code === "rate_limited") {
+    return { code: "rate_limited", message: error.message, retryable: true };
+  }
+  if (code === "network") {
+    return { code: "network", message: error.message, retryable: true };
+  }
+  if (code === "provider_unavailable") {
+    return { code: "plugin_unavailable", message: error.message, retryable: false };
+  }
+  if (code === "timeout") {
+    return { code: "timeout", message: error.message, retryable: true };
+  }
+  if (code === "auth") {
+    return { code: "auth", message: error.message, retryable: false };
+  }
+  if (code === "plugin_unavailable") {
+    return { code: "plugin_unavailable", message: error.message, retryable: false };
+  }
+  if (code === "provider_reconfiguration_required") {
+    return { code: "provider_reconfiguration_required", message: error.message, retryable: false };
   }
   if (code === "validation_failed") {
     const lower = error.message.toLowerCase();

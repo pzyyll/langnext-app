@@ -18,6 +18,7 @@ pub mod plugin_uninstall_operations;
 pub mod plugin_upgrade_snapshots;
 pub mod provider_instances;
 pub mod provider_models;
+pub mod provider_runtime_bindings;
 pub mod speech_services;
 pub mod translation_history;
 pub mod translation_profiles;

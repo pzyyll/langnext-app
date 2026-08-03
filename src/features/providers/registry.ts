@@ -1,5 +1,5 @@
-// ABOUTME: Provider plugin registration, lookup, and auth-compatibility helpers.
-// ABOUTME: Duplicate IDs fail during registration; missing plugins stay visible but unusable.
+// ABOUTME: Legacy provider plugin registration, lookup, and auth-compatibility helpers.
+// ABOUTME: Backed by `LegacyFrontendProviderExecutor`; duplicate IDs fail at registration.
 import type { AuthSchemeV1, CredentialKind } from "../../storage/types";
 import type { ProviderPlugin, ProviderPluginManifest } from "./types";
 

@@ -1,0 +1,1 @@
+{"model":"claude-3-5-haiku","system":"sys","messages":[{"role":"user","content":"hi"}],"max_tokens":32768,"temperature":0.1}

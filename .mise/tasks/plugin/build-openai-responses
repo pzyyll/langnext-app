@@ -1,0 +1,205 @@
+#!/usr/bin/env bash
+# ABOUTME: Deterministically build the OpenAI Responses provider staging tree (unsigned):
+# ABOUTME: pinned cargo-component --locked, fixture + plugin.json verification, no final digest.
+#MISE description="Build openai-responses provider staging tree (unsigned; release CI signs externally)"
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+cd "$ROOT_DIR"
+PLUGIN_DIR="$ROOT_DIR/runtime-plugins/openai-responses"
+STAGING="$ROOT_DIR/runtime-plugins/dist/staging/com.langnext.provider.openai-responses-1.0.0"
+
+# --- Pinned guest toolchain check ---
+EXPECTED_CARGO_COMPONENT="0.21.1"
+CARGO_COMPONENT_VERSION=$(cargo component --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
+if [[ -z "$CARGO_COMPONENT_VERSION" ]]; then
+  echo "error: cargo-component not found; expected $EXPECTED_CARGO_COMPONENT (mise pins it via the cargo: backend)" >&2
+  exit 1
+fi
+if [[ "$CARGO_COMPONENT_VERSION" != "$EXPECTED_CARGO_COMPONENT" ]]; then
+  echo "error: cargo-component version $CARGO_COMPONENT_VERSION != pinned $EXPECTED_CARGO_COMPONENT" >&2
+  exit 1
+fi
+echo "ok: cargo-component $CARGO_COMPONENT_VERSION (pinned)"
+
+if ! command -v bun >/dev/null 2>&1; then
+  echo "error: bun is required (pinned by mise) to validate plugin.json without unpinned jq" >&2
+  exit 1
+fi
+
+# --- Rebuild both Components with --locked and verify the committed artifact fixtures ---
+build_component() {
+  local crate_dir="$1" crate_name="$2" fixture="$3"
+  cargo component build --manifest-path "$crate_dir/Cargo.toml" --target wasm32-unknown-unknown --release --locked
+  local compiled="$crate_dir/target/wasm32-unknown-unknown/release/${crate_name}.wasm"
+  [[ -f "$compiled" ]] || { echo "error: compiled component not found at $compiled" >&2; exit 1; }
+  [[ -f "$fixture" && -f "$fixture.sha256" ]] || { echo "error: committed fixture missing at $fixture; run the refresh task" >&2; exit 1; }
+  local committed="$(tr -d '[:space:]' < "$fixture.sha256")"
+  local actual="$(sha256sum "$fixture" | awk '{print $1}')"
+  local rebuilt="$(sha256sum "$compiled" | awk '{print $1}')"
+  [[ "$committed" == "$actual" && "$rebuilt" == "$committed" ]] || {
+    echo "error: $crate_name component digest drift (rebuild != committed)" >&2
+    echo "  committed: $committed" >&2
+    echo "  rebuild:   $rebuilt" >&2
+    echo "  if intended, run plugin:refresh-openai-responses-fixture" >&2
+    exit 1
+  }
+  echo "ok: $crate_name component digest matches ($rebuilt)"
+}
+build_component "$PLUGIN_DIR/models" "langnext_openai_responses_models_wasm" \
+  "$PLUGIN_DIR/fixtures/llm-models.wasm"
+build_component "$PLUGIN_DIR/chat" "langnext_openai_responses_chat_wasm" \
+  "$PLUGIN_DIR/fixtures/llm-chat.wasm"
+
+# The chat bindings are committed with one sanctioned export-shim fix; a fresh regeneration
+# plus the patch must byte-match the committed file (fail-closed against WIT/toolchain drift).
+bun "$PLUGIN_DIR/chat/patch-bindings.js" "$PLUGIN_DIR/chat"
+
+# --- Vendor public key (public material only) ---
+PUBLIC_KEY_FILE="$ROOT_DIR/runtime-plugins/conformance/fixtures/packages/keys/vendor-public-key.hex"
+PUBLIC_KEY_HEX="${LANGNEXT_VENDOR_PUBLIC_KEY_HEX:-$(tr -d '[:space:]' < "$PUBLIC_KEY_FILE")}"
+if [[ -z "$PUBLIC_KEY_HEX" || "${#PUBLIC_KEY_HEX}" -ne 64 ]]; then
+  echo "error: vendor public key required (set LANGNEXT_VENDOR_PUBLIC_KEY_HEX or keep the dev fixture key)" >&2
+  exit 1
+fi
+
+# --- Verify the committed plugin.json against the staged artifacts and manifest shape ---
+# Recomputes every signed file entry's bytes/sha256 from the actual files, checks the publisher
+# fingerprint, the frozen providerRuntime declaration (aliases, capability->artifact map, closed
+# provider-instance endpoint/auth policy, detection bounds, no credential slots), and the
+# bidirectional payload path set. Never writes a final package digest or a signature.
+verify_staging_manifest() {
+  local staging="$1" committed="$2" public_key_hex="$3"
+  bun -e '
+const fs = require("fs");
+const crypto = require("crypto");
+const path = require("path");
+const staging = process.argv[1];
+const committedManifestPath = process.argv[2];
+const publicKeyHex = process.argv[3];
+const publicKeyBytes = Buffer.from(publicKeyHex, "hex");
+if (publicKeyBytes.length !== 32) {
+  console.error("error: vendor public key must be 32 bytes (64 hex chars)");
+  process.exit(1);
+}
+const expectedFingerprint = crypto.createHash("sha256").update(publicKeyBytes).digest("hex");
+const failures = [];
+const push = (m) => failures.push(m);
+const stagingManifestBytes = fs.readFileSync(path.join(staging, "plugin.json"));
+const committedManifestBytes = fs.readFileSync(committedManifestPath);
+if (!stagingManifestBytes.equals(committedManifestBytes)) {
+  push("staging plugin.json is not byte-identical to the committed manifest");
+}
+const manifest = JSON.parse(stagingManifestBytes.toString("utf8"));
+if (manifest.manifestVersion !== 1) push("manifestVersion must be 1");
+if (manifest.pluginApiVersion !== "1.0") push("pluginApiVersion must be 1.0");
+if (manifest.id !== "com.langnext.provider.openai-responses") push("id mismatch");
+if (manifest.version !== "1.0.0") push("version must be 1.0.0");
+if (manifest.runtime.kind !== "wasm-component") push("runtime.kind must be wasm-component");
+if (manifest.publisher.keyId !== "com.langnext.vendor.keys.1") push("publisher.keyId mismatch");
+if (manifest.publisher.keyFingerprint !== expectedFingerprint) push("publisher.keyFingerprint mismatch");
+if (manifest.configSchemaVersion !== 1) push("configSchemaVersion must be 1");
+if (manifest.configurationSchema !== "schemas/config.json") push("configurationSchema mismatch");
+if (!Array.isArray(manifest.credentialSlots) || manifest.credentialSlots.length !== 0) {
+  push("provider package must declare no credential slots");
+}
+// Frozen providerRuntime declaration shape (host-interpreted metadata only).
+const pr = manifest.providerRuntime;
+if (!pr) push("providerRuntime declaration missing");
+if (pr) {
+  if (!Array.isArray(pr.legacyAliases) || pr.legacyAliases.length !== 1 || pr.legacyAliases[0] !== "openai-responses") {
+    push("legacyAliases must be exactly [openai-responses]");
+  }
+  const caps = pr.capabilities;
+  if (!caps || caps["llm.models.list@1"] !== "fixtures/llm-models.wasm" || caps["llm.chat@1"] !== "fixtures/llm-chat.wasm") {
+    push("providerRuntime capability->artifact map mismatch");
+  }
+  if (!pr.endpoint || pr.endpoint.form !== "provider-instance" || pr.endpoint.authPolicy !== "host.provider-instance-auth.v1") {
+    push("providerRuntime endpoint must be the closed provider-instance form");
+  }
+  if (!pr.detection || pr.detection.maxTokens !== 256 || pr.detection.thinking !== false) {
+    push("providerRuntime detection bounds mismatch");
+  }
+}
+const EXPECTED_PATH_ROLES = {
+  "fixtures/llm-models.wasm": "runtime-artifact",
+  "fixtures/llm-chat.wasm": "runtime-artifact",
+  "schemas/config.json": "config-schema",
+};
+const expectedPaths = new Set(Object.keys(EXPECTED_PATH_ROLES));
+const manifestPaths = new Set();
+for (const entry of manifest.files) {
+  if (manifestPaths.has(entry.path)) push("duplicate file path: " + entry.path);
+  manifestPaths.add(entry.path);
+  const expectedRole = EXPECTED_PATH_ROLES[entry.path];
+  if (expectedRole === undefined) {
+    push("unexpected file path in signed index: " + entry.path);
+  } else if (expectedRole !== entry.role) {
+    push("file " + entry.path + " role mismatch: expected " + expectedRole + " got " + entry.role);
+  }
+  let bytes;
+  try {
+    bytes = fs.readFileSync(path.join(staging, entry.path));
+  } catch (e) {
+    push("file " + entry.path + " missing from staging");
+    continue;
+  }
+  if (bytes.length !== entry.bytes) push("file " + entry.path + " bytes mismatch (staged=" + bytes.length + " manifest=" + entry.bytes + ")");
+  const sha256 = crypto.createHash("sha256").update(bytes).digest("hex");
+  if (sha256 !== entry.sha256) push("file " + entry.path + " sha256 mismatch (staged=" + sha256 + " manifest=" + entry.sha256 + ")");
+}
+for (const p of expectedPaths) {
+  if (!manifestPaths.has(p)) push("expected file path missing from signed index: " + p);
+}
+if (manifest.runtime.artifact !== "fixtures/llm-models.wasm") push("runtime.artifact mismatch");
+// Bidirectional payload path set: staging payload must equal the signed file index.
+const SKIP_FILES = new Set(["plugin.json", "publisher.pub"]);
+const stagingPayloadPaths = new Set();
+const walk = (dir, rel) => {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const relPath = rel ? rel + "/" + entry.name : entry.name;
+    if (entry.isDirectory()) {
+      if (entry.name === "signatures") continue;
+      walk(path.join(dir, entry.name), relPath);
+    } else if (!SKIP_FILES.has(entry.name)) {
+      stagingPayloadPaths.add(relPath);
+    }
+  }
+};
+walk(staging, "");
+for (const p of manifestPaths) {
+  if (!stagingPayloadPaths.has(p)) push("signed file index path missing from staging payload: " + p);
+}
+for (const p of stagingPayloadPaths) {
+  if (!manifestPaths.has(p)) push("staging payload path missing from signed file index: " + p);
+}
+if (failures.length > 0) {
+  console.error("error: openai-responses staging verification failed");
+  for (const m of failures) console.error("  - " + m);
+  process.exit(1);
+}
+console.log("ok: staging manifest verified (files=" + manifest.files.length + " payload=" + stagingPayloadPaths.size + " fingerprint=" + expectedFingerprint.slice(0, 12) + "...)");
+' "$staging" "$committed" "$PUBLIC_KEY_HEX"
+}
+
+# --- Assemble a deterministic unsigned staging tree ---
+rm -rf "$STAGING"
+mkdir -p "$STAGING/fixtures" "$STAGING/schemas" "$STAGING/signatures"
+cp "$PLUGIN_DIR/fixtures/llm-models.wasm" "$STAGING/fixtures/"
+cp "$PLUGIN_DIR/fixtures/llm-chat.wasm" "$STAGING/fixtures/"
+cp "$PLUGIN_DIR/schemas/config.json" "$STAGING/schemas/config.json"
+# Copy the committed manifest verbatim so the final signing input is exact committed bytes.
+cp "$PLUGIN_DIR/plugin.json" "$STAGING/plugin.json"
+bun -e '
+const fs = require("fs");
+const [staging, hex] = process.argv.slice(1);
+const key = Buffer.from(hex, "hex");
+if (key.length !== 32) throw new Error("vendor key must be 32 bytes");
+fs.writeFileSync(staging + "/publisher.pub", key);
+' "$STAGING" "$PUBLIC_KEY_HEX"
+
+verify_staging_manifest "$STAGING" "$PLUGIN_DIR/plugin.json" "$PUBLIC_KEY_HEX"
+
+echo "ok: openai-responses staging tree built (unsigned)"
+echo "    next (release CI only): sign each plugin.json with the offline vendor key, then run:"
+echo "    mise run plugin:finalize-package -- $STAGING runtime-plugins/dist/com.langnext.provider.openai-responses-1.0.0.lnplugin --public-key-file <vendor-public-key-file>"

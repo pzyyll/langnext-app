@@ -19,6 +19,7 @@ import {
   pluginPackageKeys,
   profileKeys,
   providerKeys,
+  providerRuntimeKeys,
   runtimeLifecycleKeys,
   settingsKeys,
   speechKeys,
@@ -78,6 +79,7 @@ export const DATA_CHANGE_EVENT_BINDINGS: readonly DataChangeEventBinding[] = [
   },
   {
     event: DATA_PLUGIN_PACKAGES_CHANGED,
-    invalidateKeys: [pluginPackageKeys.all],
+    // Package install/removal changes the verified provider runtime catalog.
+    invalidateKeys: [pluginPackageKeys.all, providerRuntimeKeys.catalog()],
   },
 ];

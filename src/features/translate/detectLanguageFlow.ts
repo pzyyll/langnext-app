@@ -1,4 +1,4 @@
-// ABOUTME: Frontend language detection workflow using provider plugins and raw HTTP.
+// ABOUTME: Frontend language detection workflow through the persisted provider executor.
 // ABOUTME: Soft failures resolve as DetectLanguageResult; unexpected failures reject as IpcError.
 import { Effect } from "effect";
 import { IpcError } from "../../storage/ipcError";
@@ -8,13 +8,13 @@ import type {
   IntegrationInstanceDto,
   ProviderInstanceDto,
   ProviderModelDto,
+  ProviderRuntimeCatalogEntryDto,
   TranslationProfileDto,
 } from "../../storage/types";
 import { invokeEffect } from "../../storage/invokeEffect";
 import { runStorage } from "../../storage/runStorage";
-import { mapHttpStatus, normalizeProviderError } from "../providers/errors";
-import { providerFetch } from "../providers/providerFetch";
-import { requireProviderPlugin } from "../providers/registry";
+import { normalizeProviderError } from "../providers/errors";
+import { resolveEffectiveAdapterId, resolveHostDetectPolicy, resolveProviderExecutor } from "../providers/executor";
 import { newClientRequestId } from "./newClientRequestId";
 import { isPluginProfile } from "./translationContext";
 
@@ -49,6 +49,8 @@ export type DetectLanguageContext = {
   modelsById: Map<string, ProviderModelDto>;
   profile: TranslationProfileDto | null;
   integrationsById?: Map<string, IntegrationInstanceDto>;
+  /** Verified provider runtime catalog; empty when no runtime package is installed. */
+  runtimeCatalog?: readonly ProviderRuntimeCatalogEntryDto[];
 };
 
 function softFailure(
@@ -144,9 +146,19 @@ export async function detectLanguage(
     return softFailure("Detection provider unavailable", "validation_failed", 0, modelId);
   }
   try {
-    const pluginId = (model.adapterId?.trim() || provider.adapterId).trim();
-    const plugin = requireProviderPlugin(pluginId);
-    const policy = plugin.getDetectPolicy({
+    const effectiveAdapterId = resolveEffectiveAdapterId({
+      modelAdapterId: model.adapterId,
+      modelSourceAdapterId: model.sourceAdapterId,
+      providerAdapterId: provider.adapterId,
+    });
+    const binding = provider.runtimeBindings.find((candidate) => candidate.adapterId === effectiveAdapterId);
+    const catalogEntry =
+      context.runtimeCatalog?.find((entry) => entry.packageDigest === binding?.packageDigest) ?? null;
+    const policy = resolveHostDetectPolicy({
+      provider,
+      modelAdapterId: model.adapterId,
+      modelSourceAdapterId: model.sourceAdapterId,
+      catalogEntry,
       modelKey: model.modelKey,
       baseUrl: provider.baseUrl,
     });
@@ -154,7 +166,14 @@ export async function detectLanguage(
       "You are a language detector. Reply with only one supported language code from: " +
       Array.from(SUPPORTED_LANGUAGE_IDS).join(", ") +
       ". No explanation.";
-    const wire = plugin.buildChatRequest({
+    const executor = resolveProviderExecutor({
+      provider,
+      modelAdapterId: model.adapterId,
+      modelSourceAdapterId: model.sourceAdapterId,
+      modelId: model.id,
+      catalog: context.runtimeCatalog ?? [],
+    });
+    const response = await executor.chat({
       operation: "detect",
       stream: false,
       modelKey: model.modelKey,
@@ -164,17 +183,10 @@ export async function detectLanguage(
       maxTokens: policy.maxTokens,
       thinking: policy.thinking,
       imagePngBase64: null,
-    });
-    const response = await providerFetch({
       requestId: requestId ?? newClientRequestId("detect"),
-      providerInstanceId: provider.id,
-      wire,
     });
     const latencyMs = Math.round(performance.now() - started);
-    if (response.status < 200 || response.status >= 300) {
-      return softFailure(`Provider HTTP ${response.status}`, mapHttpStatus(response.status), latencyMs, modelId);
-    }
-    const content = plugin.parseChatResponse(response).trim().toLowerCase();
+    const content = response.text.trim().toLowerCase();
     const languageId = content.split(/[\s,;]+/)[0] ?? "";
     if (!SUPPORTED_LANGUAGE_IDS.has(languageId)) {
       return softFailure("Unsupported language code", "invalid_response", latencyMs, modelId);

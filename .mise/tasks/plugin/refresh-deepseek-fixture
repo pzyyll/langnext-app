@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# ABOUTME: Refresh the dev-signed DeepSeek provider package fixture (dev-only): rebuild both
+# ABOUTME: Components, sign with the committed dev seed, finalize, verify; no production keys.
+#MISE description="Refresh the signed deepseek provider package fixture (dev-only)"
+set -euo pipefail
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+cd "$ROOT_DIR"
+
+FIXTURE_SEED="0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a"
+PUBLIC_KEY_FILE="$ROOT_DIR/runtime-plugins/conformance/fixtures/packages/keys/vendor-public-key.hex"
+PLUGIN_DIR="$ROOT_DIR/runtime-plugins/deepseek"
+STAGING="$ROOT_DIR/runtime-plugins/dist/staging/com.langnext.provider.deepseek-1.0.0"
+PACKAGE="$ROOT_DIR/runtime-plugins/deepseek/fixtures/packages/com.langnext.provider.deepseek-1.0.0.lnplugin"
+MODELS_CRATE="$PLUGIN_DIR/models"
+CHAT_CRATE="$PLUGIN_DIR/chat"
+
+# 1) Deterministic rebuild of both LLM world Components (pinned toolchain, --locked).
+cargo component build --manifest-path "$MODELS_CRATE/Cargo.toml" --target wasm32-unknown-unknown --release --locked
+cargo component build --manifest-path "$CHAT_CRATE/Cargo.toml" --target wasm32-unknown-unknown --release --locked
+
+# 2) Update the committed fixture artifacts and digest manifests (dev-only fixture path).
+cp "$MODELS_CRATE/target/wasm32-unknown-unknown/release/langnext_deepseek_models_wasm.wasm" \
+  "$PLUGIN_DIR/fixtures/llm-models.wasm"
+sha256sum "$PLUGIN_DIR/fixtures/llm-models.wasm" | awk '{print $1}' > "$PLUGIN_DIR/fixtures/llm-models.wasm.sha256"
+cp "$CHAT_CRATE/target/wasm32-unknown-unknown/release/langnext_deepseek_chat_wasm.wasm" \
+  "$PLUGIN_DIR/fixtures/llm-chat.wasm"
+sha256sum "$PLUGIN_DIR/fixtures/llm-chat.wasm" | awk '{print $1}' > "$PLUGIN_DIR/fixtures/llm-chat.wasm.sha256"
+
+# 3) Update the committed plugin.json runtime-artifact entries (bytes + sha256) with pinned Bun.
+bun -e '
+  const fs = require("fs");
+  const path = require("path");
+  const crypto = require("crypto");
+  const dir = process.argv[1];
+  if (!dir) throw new Error("manifest dir argument missing");
+  const manifestPath = path.join(dir, "plugin.json");
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  for (const entry of manifest.files ?? []) {
+    const full = path.join(dir, entry.path);
+    const bytes = fs.readFileSync(full);
+    entry.bytes = bytes.length;
+    entry.sha256 = crypto.createHash("sha256").update(bytes).digest("hex");
+  }
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
+' "$PLUGIN_DIR"
+
+# 3b) oxfmt-normalize the committed manifest so format:check stays green (the signed bytes
+# are the exact committed bytes).
+oxfmt --write "$PLUGIN_DIR/plugin.json" >/dev/null 2>&1 || true
+
+# 4) Verify the committed fixtures now match the rebuild (digests, plugin.json, bindings patch).
+mise run plugin:build-deepseek
+
+# 5) Deterministic staging tree: fixture artifacts + committed plugin.json + dev publisher key.
+rm -rf "$STAGING"
+mkdir -p "$STAGING/fixtures" "$STAGING/schemas" "$STAGING/signatures"
+cp "$PLUGIN_DIR/fixtures/llm-models.wasm" "$STAGING/fixtures/"
+cp "$PLUGIN_DIR/fixtures/llm-chat.wasm" "$STAGING/fixtures/"
+cp "$PLUGIN_DIR/schemas/config.json" "$STAGING/schemas/config.json"
+cp "$PLUGIN_DIR/plugin.json" "$STAGING/plugin.json"
+PUBLIC_KEY_HEX="$(tr -d '[:space:]' < "$PUBLIC_KEY_FILE")"
+bun -e '
+  const fs = require("fs");
+  const [staging, hex] = process.argv.slice(1);
+  const key = Buffer.from(hex, "hex");
+  if (key.length !== 32) throw new Error("vendor key must be 32 bytes");
+  fs.writeFileSync(staging + "/publisher.pub", key);
+' "$STAGING" "$PUBLIC_KEY_HEX"
+
+mise run plugin:sign-staging -- "$STAGING" "$FIXTURE_SEED"
+mise run plugin:finalize-package -- "$STAGING" "$PACKAGE" --public-key-file "$PUBLIC_KEY_FILE"
+mise run plugin:verify -- "$PACKAGE" --public-key-file "$PUBLIC_KEY_FILE"
+sha256sum "$PACKAGE" | awk '{print $1}' > "$PACKAGE.sha256"
+echo "ok: refreshed and verified deepseek provider package fixture"

@@ -164,12 +164,34 @@ pub struct ProviderModel {
   pub remote_metadata_json: Option<serde_json::Value>,
   /// Versioned sparse capability overrides (`CapabilityOverridesV1` JSON).
   pub capability_overrides_json: Option<serde_json::Value>,
-  /// Optional API Type override; when null/absent, runtime inherits the channel adapter.
+  /// Optional API Type override; when null/absent, runtime inherits the effective source.
   #[serde(default)]
   pub adapter_id: Option<String>,
+  /// Non-null discovery provenance: the API type that discovered this remote model
+  /// (`""` sentinel for manual/builtin rows). DTOs expose the empty sentinel as `null`.
+  #[serde(
+    default,
+    serialize_with = "serialize_source_adapter_id",
+    deserialize_with = "deserialize_source_adapter_id"
+  )]
+  pub source_adapter_id: String,
   pub last_seen_at: Option<String>,
   pub created_at: String,
   pub updated_at: String,
+}
+
+/// Serialize the non-null source discriminator as JSON `null` for the empty sentinel.
+fn serialize_source_adapter_id<S: serde::Serializer>(value: &String, serializer: S) -> Result<S::Ok, S::Error> {
+  if value.is_empty() {
+    serializer.serialize_none()
+  } else {
+    serializer.serialize_str(value)
+  }
+}
+
+/// Deserialize a missing/null `sourceAdapterId` back to the `""` sentinel.
+fn deserialize_source_adapter_id<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+  Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 pub type ProviderModelDto = ProviderModel;
@@ -247,6 +269,22 @@ pub struct SyncModelsResult {
 
 /// Export shape for models (same fields; no secrets).
 pub type ModelExport = ProviderModel;
+
+/// Resolve the effective API type for one model row: explicit override → discovery source
+/// type → Provider default.
+pub fn resolve_model_effective_adapter(
+  model_adapter_id: Option<&str>,
+  source_adapter_id: &str,
+  provider_adapter_id: &str,
+) -> String {
+  if let Some(adapter) = model_adapter_id.map(str::trim).filter(|s| !s.is_empty()) {
+    return adapter.to_string();
+  }
+  if !source_adapter_id.is_empty() {
+    return source_adapter_id.to_string();
+  }
+  provider_adapter_id.to_string()
+}
 
 #[cfg(test)]
 mod tests {

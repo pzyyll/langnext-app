@@ -22,6 +22,7 @@ import { shouldApplyProfileResult } from "../../query/profileApplyGuard";
 import {
   allProviderModelsOptions,
   integrationListOptions,
+  providerRuntimeCatalogOptions,
   profileDetailOptions,
   profileListOptions,
   providerListOptions,
@@ -166,6 +167,7 @@ function TranslatePage() {
   const modelsQuery = useQuery(allProviderModelsOptions());
   const profilesQuery = useQuery(profileListOptions());
   const integrationsQuery = useQuery(integrationListOptions());
+  const runtimeCatalogQuery = useQuery(providerRuntimeCatalogOptions());
 
   const modelOptions = useMemo(
     () =>
@@ -809,7 +811,13 @@ function TranslatePage() {
       const integrationsById = new Map((integrationsQuery.data ?? []).map((i) => [i.id, i]));
       const profile = (profilesQuery.data ?? []).find((p) => p.id === payload.profileId) ?? null;
       await runStartTranslateStream(payload, requestId, {
-        snapshots: { providersById, modelsById, profile, integrationsById },
+        snapshots: {
+          providersById,
+          modelsById,
+          profile,
+          integrationsById,
+          runtimeCatalog: runtimeCatalogQuery.data ?? [],
+        },
         handlers: prepared,
       });
       if (generation !== translateGeneration.current) {
@@ -869,6 +877,7 @@ function TranslatePage() {
             modelsById: new Map((modelsQuery.data ?? []).map((m) => [m.id, m])),
             profile: (profilesQuery.data ?? []).find((p) => p.id === resolvedProfileId) ?? null,
             integrationsById: new Map((integrationsQuery.data ?? []).map((i) => [i.id, i])),
+            runtimeCatalog: runtimeCatalogQuery.data ?? [],
           },
         );
         if (generation !== translateGeneration.current) {
@@ -1062,6 +1071,7 @@ function TranslatePage() {
           modelsById: new Map((modelsQuery.data ?? []).map((m) => [m.id, m])),
           profile: (profilesQuery.data ?? []).find((p) => p.id === resolvedProfileId) ?? null,
           integrationsById: new Map((integrationsQuery.data ?? []).map((i) => [i.id, i])),
+          runtimeCatalog: runtimeCatalogQuery.data ?? [],
         },
       );
       // Stale guard: a newer speak/stop/detect has superseded this detection.

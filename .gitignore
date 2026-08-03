@@ -31,6 +31,13 @@ src-tauri/target
 # Conformance guest build outputs (local rebuilds only; fixtures are committed).
 runtime-plugins/conformance/**/target
 
+# Provider runtime guest build outputs (local rebuilds only; fixtures are committed).
+runtime-plugins/openai-compatible/**/target
+runtime-plugins/openai-responses/**/target
+runtime-plugins/anthropic/**/target
+runtime-plugins/gemini/**/target
+runtime-plugins/deepseek/**/target
+
 # Local rustup home accidentally created at repo root when RUSTUP_HOME is unset during
 # target auto-install. Directory name is literally `undefined/`; not application source.
 /undefined/

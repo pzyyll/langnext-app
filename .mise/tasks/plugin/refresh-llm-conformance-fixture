@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# ABOUTME: Refresh the dev-signed two-world LLM provider conformance fixture package: rebuild
+# ABOUTME: both Components, re-verify the bindings patch, sign/finalize/verify (dev key only).
+#MISE description="Refresh the signed llm-provider conformance fixture package"
+set -euo pipefail
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+cd "$ROOT_DIR"
+
+FIXTURE_SEED="0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a"
+PUBLIC_KEY_FILE="$ROOT_DIR/runtime-plugins/conformance/fixtures/packages/keys/vendor-public-key.hex"
+STAGING="$ROOT_DIR/runtime-plugins/dist/staging/langnext.conformance.llm-provider-1.0.0"
+PACKAGE="$ROOT_DIR/runtime-plugins/conformance/fixtures/packages/llm-provider-valid.lnplugin"
+PACKAGE_DIR="$ROOT_DIR/runtime-plugins/conformance/llm-provider"
+MODELS_CRATE="$ROOT_DIR/runtime-plugins/conformance/wasm-llm-models-component"
+CHAT_CRATE="$ROOT_DIR/runtime-plugins/conformance/wasm-llm-chat-component"
+
+# 1) Deterministic rebuild of both LLM world Components (pinned toolchain, --locked).
+cargo component build --manifest-path "$MODELS_CRATE/Cargo.toml" --target wasm32-unknown-unknown --release --locked
+cargo component build --manifest-path "$CHAT_CRATE/Cargo.toml" --target wasm32-unknown-unknown --release --locked
+
+# 2) Update the committed fixture artifacts and digest manifests (dev-only fixture path).
+cp "$MODELS_CRATE/target/wasm32-unknown-unknown/release/langnext_conformance_llm_models_wasm.wasm" \
+  "$PACKAGE_DIR/fixtures/llm-models.wasm"
+sha256sum "$PACKAGE_DIR/fixtures/llm-models.wasm" | awk '{print $1}' > "$PACKAGE_DIR/fixtures/llm-models.wasm.sha256"
+cp "$CHAT_CRATE/target/wasm32-unknown-unknown/release/langnext_conformance_llm_chat_wasm.wasm" \
+  "$PACKAGE_DIR/fixtures/llm-chat.wasm"
+sha256sum "$PACKAGE_DIR/fixtures/llm-chat.wasm" | awk '{print $1}' > "$PACKAGE_DIR/fixtures/llm-chat.wasm.sha256"
+
+# 3) Update the committed plugin.json runtime-artifact entries (bytes + sha256) with pinned Bun.
+bun -e '
+  const fs = require("fs");
+  const path = require("path");
+  const crypto = require("crypto");
+  const dir = process.argv[1];
+  if (!dir) throw new Error("manifest dir argument missing");
+  const manifestPath = path.join(dir, "plugin.json");
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  for (const entry of manifest.files ?? []) {
+    const full = path.join(dir, entry.path);
+    const bytes = fs.readFileSync(full);
+    entry.bytes = bytes.length;
+    entry.sha256 = crypto.createHash("sha256").update(bytes).digest("hex");
+  }
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
+' "$PACKAGE_DIR"
+
+# 4) Verify the committed fixtures now match the rebuild (digests, plugin.json, bindings patch).
+mise run plugin:build-conformance
+
+# 5) Deterministic staging tree: fixture artifacts + committed plugin.json + dev publisher key.
+rm -rf "$STAGING"
+mkdir -p "$STAGING/fixtures" "$STAGING/signatures"
+cp "$PACKAGE_DIR/fixtures/llm-models.wasm" "$PACKAGE_DIR/fixtures/llm-models.wasm.sha256" "$STAGING/fixtures/"
+cp "$PACKAGE_DIR/fixtures/llm-chat.wasm" "$PACKAGE_DIR/fixtures/llm-chat.wasm.sha256" "$STAGING/fixtures/"
+cp "$PACKAGE_DIR/plugin.json" "$STAGING/plugin.json"
+PUBLIC_KEY_HEX="$(tr -d '[:space:]' < "$PUBLIC_KEY_FILE")"
+bun -e '
+  const fs = require("fs");
+  const [staging, hex] = process.argv.slice(1);
+  const key = Buffer.from(hex, "hex");
+  if (key.length !== 32) throw new Error("vendor key must be 32 bytes");
+  fs.writeFileSync(staging + "/publisher.pub", key);
+' "$STAGING" "$PUBLIC_KEY_HEX"
+
+mise run plugin:sign-staging -- "$STAGING" "$FIXTURE_SEED"
+mise run plugin:finalize-package -- "$STAGING" "$PACKAGE" --public-key-file "$PUBLIC_KEY_FILE"
+mise run plugin:verify -- "$PACKAGE" --public-key-file "$PUBLIC_KEY_FILE"
+sha256sum "$PACKAGE" | awk '{print $1}' > "$PACKAGE.sha256"
+echo "ok: refreshed and verified llm-provider conformance fixture package"

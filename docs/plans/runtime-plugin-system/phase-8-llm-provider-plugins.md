@@ -740,7 +740,7 @@ mise run plugin:build-deepseek
 mise run plugin:check-no-wasi
 mise run plugin:verify -- \
   runtime-plugins/conformance/fixtures/packages/signed-valid.lnplugin \
-  --public-key-file runtime-plugins/conformance/fixtures/packages/keys/test-public-key.hex
+  --public-key-file runtime-plugins/conformance/fixtures/packages/keys/vendor-public-key.hex
 mise run plugin:conformance llm
 mise run plugin:conformance all
 mise run test runtime_provider -- --nocapture
@@ -821,3 +821,31 @@ Run `mise run tauri:dev` with a user-owned harmless test provider account after 
 
 - Confirm the proposed seams before implementation begins, as required by the TDD workflow.
 - Confirm whether v1 should expose reasoning/tool-call deltas in a future UI; this plan intentionally preserves them only inside the typed host bridge and displays/persists text deltas only.
+
+---
+
+## Superseded: Multi-Interface Control Plane (Post-Phase 8)
+
+The singular provider-level package pin described above is superseded by the multi-interface
+control plane in `docs/plans/2026-08-03-multi-interface-provider-runtime-plan.md` (migration
+0025 and later). The following Phase 8 assumptions no longer hold and are replaced there:
+
+- **Singular provider pin.** The control plane is now a set of `ProviderRuntimeInterfaceBinding`
+  records keyed by `(provider_id, adapter_id)`. One active binding owns one API type per
+  Provider; a package may serve several declared aliases, each with an independent
+  adapter-keyed row sharing the exact Provider/package grant revision.
+- **Mismatched override rejection.** Saving or attaching no longer rejects model API Type
+  overrides globally. The additive executor resolver routes a matching attached interface
+  through the runtime executor and an unbound API type through the legacy executor; a Wasm
+  binding that is unavailable/revoked fails closed.
+- **One package per Provider.** Reuse of the same verified package across Providers is safe:
+  grants are scoped to `(provider_instance, package_digest, revision)`.
+- **Provider-level rollback snapshots.** Lifecycle snapshots are adapter-scoped; migrated v24
+  snapshots become Provider-scoped atomic snapshot sets.
+- **Export format v7.** Configuration export advances to v8 with ordered `runtimeBindings`
+  requirements; v7 imports normalize to per-effective-type unavailable requirements.
+- **Provider DTO `runtime`.** Kept as a deprecated compatibility projection of the Provider
+  default API type; `runtimeBindings` is authoritative.
+
+WIT v1 stays byte-for-byte unchanged: API-type dispatch remains host-owned persistent
+control-plane state, never a guest-controlled WIT field.
