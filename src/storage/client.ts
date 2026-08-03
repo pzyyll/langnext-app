@@ -13,6 +13,8 @@ import type {
   IntegrationInstanceWrite,
   IntegrationValidationResult,
   InstalledPluginVersionDto,
+  LlmChatCompleteResult,
+  LlmModelsListResult,
   ManualModelWrite,
   ModelConfigWrite,
   OcrRecognizeInput,
@@ -29,6 +31,24 @@ import type {
   ProviderInstanceDto,
   ProviderInstanceWrite,
   ProviderModelDto,
+  ApplyProviderRuntimeRollbackInput,
+  ApplyProviderRuntimeInterfaceAttachInput,
+  ApplyProviderRuntimeInterfaceRollbackInput,
+  ApplyProviderRuntimeUpgradeInput,
+  PreviewProviderRuntimeInterfaceAttachInput,
+  PreviewProviderRuntimeInterfaceRollbackInput,
+  ProviderRuntimeCatalogEntryDto,
+  ProviderRuntimeChatCommandInput,
+  ProviderRuntimeChatEvent,
+  ProviderRuntimeInterfaceDiscardSnapshotInput,
+  ProviderRuntimeInterfaceDetachInput,
+  ProviderRuntimeInterfaceLifecycleResultDto,
+  ProviderRuntimeInterfacePreviewDto,
+  ProviderRuntimeInterfaceRollbackPreviewDto,
+  ProviderRuntimeLifecycleResultDto,
+  ProviderRuntimeRollbackPreviewDto,
+  ProviderRuntimeSnapshotDto,
+  ProviderRuntimeUpgradePreviewDto,
   RegionScreenshotBackdrop,
   RegionScreenshotResult,
   RegionScreenshotSelection,
@@ -41,6 +61,7 @@ import type {
   TranslationProfileDto,
   TranslationProfileWrite,
 } from "./types";
+import { Channel } from "@tauri-apps/api/core";
 import { invokeEffect } from "./invokeEffect";
 import { runStorage } from "./runStorage";
 
@@ -220,6 +241,125 @@ export async function previewIntegrationRuntimeUpgrade(
       targetPackageDigest,
     }),
   );
+}
+export async function listRuntimeProviderCatalog(): Promise<ProviderRuntimeCatalogEntryDto[]> {
+  return runStorage(invokeEffect<ProviderRuntimeCatalogEntryDto[]>("list_runtime_provider_catalog", {}));
+}
+
+export async function previewProviderRuntimeUpgrade(
+  providerId: string,
+  targetPackageDigest: string,
+): Promise<ProviderRuntimeUpgradePreviewDto> {
+  return runStorage(
+    invokeEffect<ProviderRuntimeUpgradePreviewDto>("preview_provider_runtime_upgrade", {
+      providerId,
+      targetPackageDigest,
+    }),
+  );
+}
+
+export async function applyProviderRuntimeUpgrade(
+  input: ApplyProviderRuntimeUpgradeInput,
+): Promise<ProviderRuntimeLifecycleResultDto> {
+  return runStorage(invokeEffect<ProviderRuntimeLifecycleResultDto>("apply_provider_runtime_upgrade", { input }));
+}
+
+export async function previewProviderRuntimeRollback(providerId: string): Promise<ProviderRuntimeRollbackPreviewDto> {
+  return runStorage(
+    invokeEffect<ProviderRuntimeRollbackPreviewDto>("preview_provider_runtime_rollback", { providerId }),
+  );
+}
+
+export async function applyProviderRuntimeRollback(
+  input: ApplyProviderRuntimeRollbackInput,
+): Promise<ProviderRuntimeLifecycleResultDto> {
+  return runStorage(invokeEffect<ProviderRuntimeLifecycleResultDto>("apply_provider_runtime_rollback", { input }));
+}
+
+/** Execute `llm.models.list@1` through the persisted interface binding for ONE API type. */
+export async function listRuntimeProviderModels(
+  providerId: string,
+  adapterId: string,
+  requestId: string,
+  config: number[] = [],
+): Promise<LlmModelsListResult> {
+  return runStorage(
+    invokeEffect<LlmModelsListResult>("provider_runtime_models_list", { providerId, adapterId, requestId, config }),
+  );
+}
+
+/**
+ * Execute `llm.chat@1` through the persisted model's effective interface binding. Pass
+ * `onEvent` for `stream = true` (typed `ProviderRuntimeChatEvent` deltas); unary runs return
+ * the complete message and `null` for a streaming run whose deltas were forwarded already.
+ */
+export async function runProviderRuntimeChat(
+  input: ProviderRuntimeChatCommandInput,
+  onEvent?: Channel<ProviderRuntimeChatEvent>,
+): Promise<LlmChatCompleteResult | null> {
+  return runStorage(invokeEffect<LlmChatCompleteResult | null>("provider_runtime_chat", { input, onEvent }));
+}
+
+/** Cancel an in-flight provider runtime request by session id (best-effort). */
+export async function cancelProviderRuntime(requestId: string): Promise<boolean> {
+  return runStorage(invokeEffect<boolean>("cancel_provider_runtime", { requestId }));
+}
+
+/** Preview attaching/replacing ONE API type binding with an exact signed package. */
+export async function previewProviderRuntimeInterfaceAttach(
+  input: PreviewProviderRuntimeInterfaceAttachInput,
+): Promise<ProviderRuntimeInterfacePreviewDto> {
+  return runStorage(
+    invokeEffect<ProviderRuntimeInterfacePreviewDto>("preview_provider_runtime_interface_attach", { input }),
+  );
+}
+
+/** Apply a previously previewed interface attach/replace atomically (CAS). */
+export async function applyProviderRuntimeInterfaceAttach(
+  input: ApplyProviderRuntimeInterfaceAttachInput,
+): Promise<ProviderRuntimeInterfaceLifecycleResultDto> {
+  return runStorage(
+    invokeEffect<ProviderRuntimeInterfaceLifecycleResultDto>("apply_provider_runtime_interface_attach", { input }),
+  );
+}
+
+/** Preview rolling ONE API type binding back to its stored identity. */
+export async function previewProviderRuntimeInterfaceRollback(
+  input: PreviewProviderRuntimeInterfaceRollbackInput,
+): Promise<ProviderRuntimeInterfaceRollbackPreviewDto> {
+  return runStorage(
+    invokeEffect<ProviderRuntimeInterfaceRollbackPreviewDto>("preview_provider_runtime_interface_rollback", { input }),
+  );
+}
+
+/** Apply a previously previewed interface rollback atomically (CAS). */
+export async function applyProviderRuntimeInterfaceRollback(
+  input: ApplyProviderRuntimeInterfaceRollbackInput,
+): Promise<ProviderRuntimeInterfaceLifecycleResultDto> {
+  return runStorage(
+    invokeEffect<ProviderRuntimeInterfaceLifecycleResultDto>("apply_provider_runtime_interface_rollback", { input }),
+  );
+}
+
+/** Detach ONE API type binding directly (provider version CAS). */
+export async function detachProviderRuntimeInterface(
+  input: ProviderRuntimeInterfaceDetachInput,
+): Promise<ProviderRuntimeInterfaceLifecycleResultDto> {
+  return runStorage(
+    invokeEffect<ProviderRuntimeInterfaceLifecycleResultDto>("detach_provider_runtime_interface", { input }),
+  );
+}
+
+/** Discard one undiscarded rollback snapshot set (provider version CAS). */
+export async function discardProviderRuntimeSnapshot(
+  input: ProviderRuntimeInterfaceDiscardSnapshotInput,
+): Promise<void> {
+  return runStorage(invokeEffect<void>("discard_provider_runtime_snapshot", { input }));
+}
+
+/** List undiscarded provider runtime rollback snapshots (cleanup seam). */
+export async function listProviderRuntimeSnapshots(providerId: string): Promise<ProviderRuntimeSnapshotDto[]> {
+  return runStorage(invokeEffect<ProviderRuntimeSnapshotDto[]>("list_provider_runtime_snapshots", { providerId }));
 }
 
 /** Apply a previously previewed runtime upgrade (CAS). */

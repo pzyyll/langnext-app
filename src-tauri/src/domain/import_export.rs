@@ -14,9 +14,9 @@ use serde_json::Value;
 use uuid::Uuid;
 
 /// Current configuration export format version (runtime requirements + Speech + OCR + integrations).
-pub const EXPORT_FORMAT_VERSION: u32 = 7;
+pub const EXPORT_FORMAT_VERSION: u32 = 8;
 /// Supported import format versions (normalized sequentially to v7).
-pub const SUPPORTED_EXPORT_FORMAT_VERSIONS: &[u32] = &[2, 3, 4, 5, 6, 7];
+pub const SUPPORTED_EXPORT_FORMAT_VERSIONS: &[u32] = &[2, 3, 4, 5, 6, 7, 8];
 
 /// Sanitized integration instance row for export/import (no secrets, refs, or journal data).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -436,7 +436,7 @@ pub fn normalize_v6_to_v7(value: serde_json::Value) -> Result<ConfigurationExpor
     })
     .collect();
   Ok(ConfigurationExport {
-    format_version: EXPORT_FORMAT_VERSION,
+    format_version: 7,
     exported_at: v6.exported_at,
     providers: v6.providers,
     models: v6.models,
@@ -466,141 +466,346 @@ pub fn parse_and_normalize_export_document(value: serde_json::Value) -> Result<C
       let v4 = normalize_v3_to_v4(v3_value)?;
       let v5 = normalize_v4_to_v5(serde_json::to_value(v4).map_err(|e| e.to_string())?)?;
       let v6 = normalize_v5_to_v6(serde_json::to_value(v5).map_err(|e| e.to_string())?)?;
-      normalize_v6_to_v7(serde_json::to_value(v6).map_err(|e| e.to_string())?)
+      v7_to_v8(normalize_v6_to_v7(
+        serde_json::to_value(v6).map_err(|e| e.to_string())?,
+      )?)
     }
     3 => {
       let v4 = normalize_v3_to_v4(value)?;
       let v5 = normalize_v4_to_v5(serde_json::to_value(v4).map_err(|e| e.to_string())?)?;
       let v6 = normalize_v5_to_v6(serde_json::to_value(v5).map_err(|e| e.to_string())?)?;
-      normalize_v6_to_v7(serde_json::to_value(v6).map_err(|e| e.to_string())?)
+      v7_to_v8(normalize_v6_to_v7(
+        serde_json::to_value(v6).map_err(|e| e.to_string())?,
+      )?)
     }
     4 => {
       let v5 = normalize_v4_to_v5(value)?;
       let v6 = normalize_v5_to_v6(serde_json::to_value(v5).map_err(|e| e.to_string())?)?;
-      normalize_v6_to_v7(serde_json::to_value(v6).map_err(|e| e.to_string())?)
+      v7_to_v8(normalize_v6_to_v7(
+        serde_json::to_value(v6).map_err(|e| e.to_string())?,
+      )?)
     }
     5 => {
       let v6 = normalize_v5_to_v6(value)?;
-      normalize_v6_to_v7(serde_json::to_value(v6).map_err(|e| e.to_string())?)
+      v7_to_v8(normalize_v6_to_v7(
+        serde_json::to_value(v6).map_err(|e| e.to_string())?,
+      )?)
     }
-    6 => normalize_v6_to_v7(value),
-    7 => {
+    6 => v7_to_v8(normalize_v6_to_v7(value)?),
+    7 => normalize_v7_to_v8(value),
+    8 => {
       let doc: ConfigurationExport =
-        serde_json::from_value(value).map_err(|e| format!("invalid v7 configuration document: {e}"))?;
-      // v7 documents must carry explicit runtime records; only v2–v6 normalization may synthesize
-      // bundled identities. Fail closed on missing/malformed package-backed fields.
-      for row in &doc.integration_instances {
-        let Some(req) = row.runtime.as_ref() else {
-          return Err(format!(
-            "v7 integration {} is missing required runtime requirement",
-            row.id
-          ));
-        };
-        if req.plugin_id != row.plugin_id || req.plugin_version != row.plugin_version {
-          return Err(format!(
-            "v7 integration {} runtime identity does not match outer fields",
-            row.id
-          ));
-        }
-        if req.config_schema_version != row.config_schema_version {
-          return Err(format!(
-            "v7 integration {} runtime config_schema_version mismatch",
-            row.id
-          ));
-        }
-        let kind = crate::domain::runtime_lifecycle::parse_runtime_kind(&req.runtime_kind)
-          .map_err(|e| format!("v7 integration {} has invalid runtimeKind: {e}", row.id))?;
-        // Domain parsers for plugin identity and schema majors (fail closed).
-        crate::domain::runtime_plugin::SemVerVersion::parse(&req.plugin_version)
-          .map_err(|e| format!("v7 integration {} has invalid pluginVersion: {e}", row.id))?;
-        if req.config_schema_version < 1 {
-          return Err(format!("v7 integration {} config_schema_version must be >= 1", row.id));
-        }
-        for major in &req.required_capability_majors {
-          crate::domain::runtime_plugin::CapabilityId::parse(major).map_err(|e| {
-            format!(
-              "v7 integration {} has invalid requiredCapabilityMajors entry: {e:?}",
-              row.id
-            )
-          })?;
-        }
-        match kind {
-          crate::domain::runtime_plugin::RuntimeKind::WasmComponent
-          | crate::domain::runtime_plugin::RuntimeKind::TrustedNativeWorker => {
-            // Trim only for empty-presence checks; domain parsers receive the raw string
-            // so surrounding whitespace fails closed.
-            let digest = req.package_digest.as_deref().ok_or_else(|| {
-              format!(
-                "v7 integration {} package-backed runtime is missing mandatory fields",
-                row.id
-              )
-            })?;
-            if digest.trim().is_empty() {
-              return Err(format!(
-                "v7 integration {} package-backed runtime is missing mandatory fields",
-                row.id
-              ));
-            }
-            crate::domain::runtime_plugin::PackageDigest::parse(digest)
-              .map_err(|e| format!("v7 integration {} has invalid packageDigest: {e}", row.id))?;
-            let key_id = req.publisher_key_id.as_deref().ok_or_else(|| {
-              format!(
-                "v7 integration {} package-backed runtime is missing mandatory fields",
-                row.id
-              )
-            })?;
-            if key_id.trim().is_empty() {
-              return Err(format!(
-                "v7 integration {} package-backed runtime is missing mandatory fields",
-                row.id
-              ));
-            }
-            crate::domain::runtime_plugin::PublisherKeyId::parse(key_id)
-              .map_err(|e| format!("v7 integration {} has invalid publisherKeyId: {e}", row.id))?;
-            let fingerprint = req.publisher_key_fingerprint.as_deref().ok_or_else(|| {
-              format!(
-                "v7 integration {} package-backed runtime is missing mandatory fields",
-                row.id
-              )
-            })?;
-            if fingerprint.trim().is_empty() {
-              return Err(format!(
-                "v7 integration {} package-backed runtime is missing mandatory fields",
-                row.id
-              ));
-            }
-            crate::domain::runtime_plugin::PublisherKeyFingerprint::parse(fingerprint)
-              .map_err(|e| format!("v7 integration {} has invalid publisherKeyFingerprint: {e}", row.id))?;
-            let api = req.plugin_api_version.as_deref().ok_or_else(|| {
-              format!(
-                "v7 integration {} package-backed runtime is missing mandatory fields",
-                row.id
-              )
-            })?;
-            if api.trim().is_empty() {
-              return Err(format!(
-                "v7 integration {} package-backed runtime is missing mandatory fields",
-                row.id
-              ));
-            }
-            crate::domain::runtime_plugin::PluginApiVersion::parse(api)
-              .map_err(|e| format!("v7 integration {} has invalid pluginApiVersion: {e}", row.id))?;
-          }
-          crate::domain::runtime_plugin::RuntimeKind::BundledRust => {
-            if req.package_digest.is_some() {
-              return Err(format!(
-                "v7 integration {} bundled runtime must not include package digest",
-                row.id
-              ));
-            }
-          }
-          crate::domain::runtime_plugin::RuntimeKind::LegacyFrontendProvider => {}
-        }
-      }
+        serde_json::from_value(value).map_err(|e| format!("invalid v8 configuration document: {e}"))?;
+      validate_v7_integration_runtime_records(&doc)?;
+      validate_v8_provider_runtime_bindings(&doc)?;
       Ok(doc)
     }
     other => Err(format!("unsupported formatVersion {other}")),
   }
+}
+
+/// Current-format (v8) runtime record validation used by the import service after parsing.
+pub fn validate_current_format_runtime_records(doc: &ConfigurationExport) -> Result<(), String> {
+  validate_v7_integration_runtime_records(doc)?;
+  validate_v8_provider_runtime_bindings(doc)
+}
+
+/// Serialize a normalized v7 document and advance it to the current v8 format.
+fn v7_to_v8(value: ConfigurationExport) -> Result<ConfigurationExport, String> {
+  normalize_v7_to_v8(serde_json::to_value(value).map_err(|e| e.to_string())?)
+}
+
+/// v7/v8 integration runtime record validation: every integration must carry an explicit
+/// runtime requirement whose identity matches the outer instance fields (fail closed).
+fn validate_v7_integration_runtime_records(doc: &ConfigurationExport) -> Result<(), String> {
+  for row in &doc.integration_instances {
+    let Some(req) = row.runtime.as_ref() else {
+      return Err(format!(
+        "v7 integration {} is missing required runtime requirement",
+        row.id
+      ));
+    };
+    if req.plugin_id != row.plugin_id || req.plugin_version != row.plugin_version {
+      return Err(format!(
+        "v7 integration {} runtime identity does not match outer fields",
+        row.id
+      ));
+    }
+    if req.config_schema_version != row.config_schema_version {
+      return Err(format!(
+        "v7 integration {} runtime config_schema_version mismatch",
+        row.id
+      ));
+    }
+    let kind = crate::domain::runtime_lifecycle::parse_runtime_kind(&req.runtime_kind)
+      .map_err(|e| format!("v7 integration {} has invalid runtimeKind: {e}", row.id))?;
+    // Domain parsers for plugin identity and schema majors (fail closed).
+    crate::domain::runtime_plugin::SemVerVersion::parse(&req.plugin_version)
+      .map_err(|e| format!("v7 integration {} has invalid pluginVersion: {e}", row.id))?;
+    if req.config_schema_version < 1 {
+      return Err(format!("v7 integration {} config_schema_version must be >= 1", row.id));
+    }
+    for major in &req.required_capability_majors {
+      crate::domain::runtime_plugin::CapabilityId::parse(major).map_err(|e| {
+        format!(
+          "v7 integration {} has invalid requiredCapabilityMajors entry: {e:?}",
+          row.id
+        )
+      })?;
+    }
+    match kind {
+      crate::domain::runtime_plugin::RuntimeKind::WasmComponent
+      | crate::domain::runtime_plugin::RuntimeKind::TrustedNativeWorker => {
+        // Trim only for empty-presence checks; domain parsers receive the raw string
+        // so surrounding whitespace fails closed.
+        let digest = req.package_digest.as_deref().ok_or_else(|| {
+          format!(
+            "v7 integration {} package-backed runtime is missing mandatory fields",
+            row.id
+          )
+        })?;
+        if digest.trim().is_empty() {
+          return Err(format!(
+            "v7 integration {} package-backed runtime is missing mandatory fields",
+            row.id
+          ));
+        }
+        crate::domain::runtime_plugin::PackageDigest::parse(digest)
+          .map_err(|e| format!("v7 integration {} has invalid packageDigest: {e}", row.id))?;
+        let key_id = req.publisher_key_id.as_deref().ok_or_else(|| {
+          format!(
+            "v7 integration {} package-backed runtime is missing mandatory fields",
+            row.id
+          )
+        })?;
+        if key_id.trim().is_empty() {
+          return Err(format!(
+            "v7 integration {} package-backed runtime is missing mandatory fields",
+            row.id
+          ));
+        }
+        crate::domain::runtime_plugin::PublisherKeyId::parse(key_id)
+          .map_err(|e| format!("v7 integration {} has invalid publisherKeyId: {e}", row.id))?;
+        let fingerprint = req.publisher_key_fingerprint.as_deref().ok_or_else(|| {
+          format!(
+            "v7 integration {} package-backed runtime is missing mandatory fields",
+            row.id
+          )
+        })?;
+        if fingerprint.trim().is_empty() {
+          return Err(format!(
+            "v7 integration {} package-backed runtime is missing mandatory fields",
+            row.id
+          ));
+        }
+        crate::domain::runtime_plugin::PublisherKeyFingerprint::parse(fingerprint)
+          .map_err(|e| format!("v7 integration {} has invalid publisherKeyFingerprint: {e}", row.id))?;
+        let api = req.plugin_api_version.as_deref().ok_or_else(|| {
+          format!(
+            "v7 integration {} package-backed runtime is missing mandatory fields",
+            row.id
+          )
+        })?;
+        if api.trim().is_empty() {
+          return Err(format!(
+            "v7 integration {} package-backed runtime is missing mandatory fields",
+            row.id
+          ));
+        }
+        crate::domain::runtime_plugin::PluginApiVersion::parse(api)
+          .map_err(|e| format!("v7 integration {} has invalid pluginApiVersion: {e}", row.id))?;
+      }
+      crate::domain::runtime_plugin::RuntimeKind::BundledRust => {
+        if req.package_digest.is_some() {
+          return Err(format!(
+            "v7 integration {} bundled runtime must not include package digest",
+            row.id
+          ));
+        }
+      }
+      crate::domain::runtime_plugin::RuntimeKind::LegacyFrontendProvider => {}
+    }
+  }
+  Ok(())
+}
+
+/// v8 provider runtime bindings validation: every adapter-keyed requirement is a closed
+/// identity document (no grants, revisions, package bytes, or secrets) and v8 documents
+/// never carry the deprecated singular `runtime` field. A non-empty binding list must also
+/// satisfy the persisted uniqueness invariant every read path assumes: each adapter appears
+/// at most once, every entry names its adapter explicitly, and the Provider default API type
+/// is present — an import that violated these would corrupt per-interface reads.
+fn validate_v8_provider_runtime_bindings(doc: &ConfigurationExport) -> Result<(), String> {
+  for provider in &doc.providers {
+    if provider.runtime.is_some() {
+      return Err(format!(
+        "v8 provider {} must not carry the singular runtime field; use runtimeBindings",
+        provider.id
+      ));
+    }
+    if provider.runtime_bindings.is_empty() {
+      continue;
+    }
+    let mut seen_adapters = std::collections::HashSet::new();
+    let mut has_default_adapter = false;
+    for requirement in &provider.runtime_bindings {
+      let Some(adapter) = requirement.adapter_id.as_deref() else {
+        return Err(format!(
+          "v8 provider {} runtime binding is missing adapterId",
+          provider.id
+        ));
+      };
+      crate::domain::provider::validate_adapter_id(adapter)
+        .map_err(|e| format!("provider {} runtime binding has invalid adapterId: {e}", provider.id))?;
+      if !seen_adapters.insert(adapter) {
+        return Err(format!(
+          "v8 provider {} runtime binding adapter '{adapter}' appears more than once",
+          provider.id
+        ));
+      }
+      if adapter == provider.adapter_id {
+        has_default_adapter = true;
+      }
+      validate_provider_runtime_requirement(requirement)
+        .map_err(|e| format!("provider {} has invalid runtime requirement: {e}", provider.id))?;
+    }
+    if !has_default_adapter {
+      return Err(format!(
+        "v8 provider {} runtimeBindings must include the Provider default API type '{}'",
+        provider.id, provider.adapter_id
+      ));
+    }
+  }
+  Ok(())
+}
+
+/// Normalize a v7 document to v8: expand the singular provider runtime requirement into
+/// adapter-keyed `runtimeBindings` entries covering the Provider default API type plus every
+/// persisted model override type. A package-backed requirement creates one unavailable
+/// requirement per effective type (v7 imports have no alias selection); legacy requirements
+/// keep only the Provider default API type. v7 documents keep their singular `runtime` fields
+/// exactly while being read; v8 exports never write `runtime`.
+pub fn normalize_v7_to_v8(value: serde_json::Value) -> Result<ConfigurationExport, String> {
+  let mut doc: ConfigurationExport =
+    serde_json::from_value(value).map_err(|e| format!("invalid v7 configuration document: {e}"))?;
+  if doc.format_version != 7 {
+    return Err(format!(
+      "normalize_v7_to_v8 expects formatVersion 7, got {}",
+      doc.format_version
+    ));
+  }
+  validate_v7_integration_runtime_records(&doc)?;
+  for provider in &mut doc.providers {
+    if !provider.runtime_bindings.is_empty() {
+      return Err(format!(
+        "v7 provider {} must not carry runtimeBindings (v8 field)",
+        provider.id
+      ));
+    }
+    let Some(requirement) = provider.runtime.take() else {
+      return Err(format!("v7 provider {} is missing runtime requirement", provider.id));
+    };
+    validate_provider_runtime_requirement(&requirement)
+      .map_err(|e| format!("provider {} has invalid runtime requirement: {e}", provider.id))?;
+    let mut adapters = vec![provider.adapter_id.clone()];
+    for model in &doc.models {
+      if model.provider_instance_id == provider.id {
+        if let Some(adapter) = model.adapter_id.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()) {
+          adapters.push(adapter.to_string());
+        }
+      }
+    }
+    adapters.sort();
+    adapters.dedup();
+    if requirement.is_legacy() {
+      // Legacy routes need no package review: only the Provider default API type carries a
+      // legacy requirement; every override stays a legacy route without a binding row.
+      adapters.retain(|adapter| *adapter == provider.adapter_id);
+    }
+    provider.runtime_bindings = adapters
+      .into_iter()
+      .map(|adapter| {
+        let mut entry = requirement.clone();
+        entry.adapter_id = Some(adapter);
+        entry
+      })
+      .collect();
+  }
+  doc.format_version = EXPORT_FORMAT_VERSION;
+  Ok(doc)
+}
+
+/// Fail-closed validation of an imported provider runtime requirement: closed runtime kinds,
+/// exact package identity fields, and bounded legacy aliases. Grants, revisions, package bytes,
+/// and secrets are never part of the requirement.
+pub fn validate_provider_runtime_requirement(
+  requirement: &crate::domain::runtime_provider::ProviderRuntimeRequirementExport,
+) -> Result<(), String> {
+  use crate::domain::provider::validate_adapter_id;
+  use crate::domain::runtime_plugin::{
+    CapabilityId, PROVIDER_RUNTIME_LEGACY_ALIASES_MAX_COUNT, PackageDigest, PluginApiVersion, PluginId,
+    PublisherKeyFingerprint, PublisherKeyId, SemVerVersion,
+  };
+  if let Some(adapter) = requirement.adapter_id.as_deref() {
+    validate_adapter_id(adapter).map_err(|e| format!("provider runtime adapterId: {e}"))?;
+  }
+  match requirement.runtime_kind.as_str() {
+    "legacy-frontend-provider" => {
+      if requirement.package_digest.is_some() {
+        return Err("legacy provider runtime requirement must not include a package digest".into());
+      }
+    }
+    "wasm-component" => {
+      let digest = requirement
+        .package_digest
+        .as_deref()
+        .ok_or_else(|| "wasm provider runtime requirement is missing packageDigest".to_string())?;
+      PackageDigest::parse(digest).map_err(|e| format!("provider runtime packageDigest: {e}"))?;
+      requirement
+        .plugin_id
+        .as_deref()
+        .map(|value| PluginId::parse(value).map_err(|e| format!("provider runtime pluginId: {e}")))
+        .transpose()?;
+      requirement
+        .plugin_version
+        .as_deref()
+        .map(|value| SemVerVersion::parse(value).map_err(|e| format!("provider runtime pluginVersion: {e}")))
+        .transpose()?;
+      requirement
+        .publisher_key_id
+        .as_deref()
+        .map(|value| PublisherKeyId::parse(value).map_err(|e| format!("provider runtime publisherKeyId: {e}")))
+        .transpose()?;
+      requirement
+        .publisher_key_fingerprint
+        .as_deref()
+        .map(|value| {
+          PublisherKeyFingerprint::parse(value).map_err(|e| format!("provider runtime publisherKeyFingerprint: {e}"))
+        })
+        .transpose()?;
+      requirement
+        .plugin_api_version
+        .as_deref()
+        .map(|value| PluginApiVersion::parse(value).map_err(|e| format!("provider runtime pluginApiVersion: {e}")))
+        .transpose()?;
+      if requirement.capabilities.is_empty() {
+        return Err("wasm provider runtime requirement must declare capabilities".into());
+      }
+      for capability in &requirement.capabilities {
+        CapabilityId::parse(capability).map_err(|e| format!("provider runtime capability {capability}: {e:?}"))?;
+      }
+    }
+    other => return Err(format!("invalid provider runtime kind {other}")),
+  }
+  if requirement.legacy_aliases.len() > PROVIDER_RUNTIME_LEGACY_ALIASES_MAX_COUNT {
+    return Err(format!(
+      "provider runtime legacyAliases exceed {PROVIDER_RUNTIME_LEGACY_ALIASES_MAX_COUNT} entries"
+    ));
+  }
+  for alias in &requirement.legacy_aliases {
+    validate_adapter_id(alias).map_err(|e| format!("provider runtime legacyAliases: {e}"))?;
+  }
+  Ok(())
 }
 
 /// Secret-like field names that must never appear in serialized export JSON.
@@ -819,7 +1024,7 @@ mod tests {
   }
 
   #[test]
-  fn parse_and_normalize_v5_yields_v7_empty_speech() {
+  fn parse_and_normalize_v5_yields_current_v8_empty_speech() {
     let v5 = ConfigurationExportV5 {
       format_version: 5,
       exported_at: "t".into(),
@@ -834,7 +1039,7 @@ mod tests {
       app_settings: AppSettingsV1::default_document(),
     };
     let doc = parse_and_normalize_export_document(serde_json::to_value(&v5).unwrap()).unwrap();
-    assert_eq!(doc.format_version, 7);
+    assert_eq!(doc.format_version, EXPORT_FORMAT_VERSION);
     assert!(doc.speech_services.is_empty());
   }
 
@@ -1132,6 +1337,96 @@ mod tests {
       err.contains("requiredCapabilityMajors") || err.contains("capability"),
       "expected capability major error, got {err}"
     );
+  }
+
+  /// v8 provider helper: one runtime binding requirement entry for a wasm package.
+  fn v8_wasm_binding(adapter_id: &str) -> serde_json::Value {
+    serde_json::json!({
+      "adapterId": adapter_id,
+      "runtimeKind": "wasm-component",
+      "packageDigest": "ab".repeat(32),
+      "pluginId": "com.langnext.provider.openai-compatible",
+      "pluginVersion": "1.0.0",
+      "publisherKeyId": "com.langnext.vendor.keys.1",
+      "publisherKeyFingerprint": "f".repeat(64),
+      "pluginApiVersion": "1.0",
+      "legacyAliases": [adapter_id],
+      "capabilities": ["llm.chat@1", "llm.models.list@1"]
+    })
+  }
+
+  /// v8 provider helper: one provider row with the given runtime binding requirements.
+  fn v8_provider_document(bindings: Vec<serde_json::Value>) -> serde_json::Value {
+    serde_json::json!({
+      "formatVersion": EXPORT_FORMAT_VERSION,
+      "exportedAt": "t",
+      "providers": [{
+        "id": "00000000-0000-7000-8000-000000000001",
+        "adapterId": "openai-compatible",
+        "displayName": "P",
+        "credentialKind": "api_key",
+        "enabled": true,
+        "proxyMode": "inherit",
+        "insecureHttpConfirmedAt": null,
+        "runtimeBindings": bindings,
+        "createdAt": "t",
+        "updatedAt": "t"
+      }],
+      "models": [],
+      "translationProfiles": [],
+      "profileModels": [],
+      "profilePromptTemplates": [],
+      "integrationInstances": [],
+      "ocrServices": [],
+      "ocrPromptTemplates": [],
+      "speechServices": [],
+      "appSettings": AppSettingsV1::default_document(),
+    })
+  }
+
+  #[test]
+  fn v8_duplicate_runtime_binding_adapters_fail_closed() {
+    let value = v8_provider_document(vec![
+      v8_wasm_binding("openai-compatible"),
+      v8_wasm_binding("openai-compatible"),
+    ]);
+    let err = parse_and_normalize_export_document(value).unwrap_err();
+    assert!(
+      err.contains("duplicate") || err.contains("more than once"),
+      "expected duplicate adapter error, got {err}"
+    );
+  }
+
+  #[test]
+  fn v8_runtime_bindings_missing_default_adapter_fail_closed() {
+    let value = v8_provider_document(vec![v8_wasm_binding("openai-responses")]);
+    let err = parse_and_normalize_export_document(value).unwrap_err();
+    assert!(
+      err.contains("default") && err.contains("openai-compatible"),
+      "expected missing default adapter error, got {err}"
+    );
+  }
+
+  #[test]
+  fn v8_runtime_bindings_without_adapter_id_fail_closed() {
+    let mut binding = v8_wasm_binding("openai-compatible");
+    binding.as_object_mut().unwrap().remove("adapterId");
+    let value = v8_provider_document(vec![binding]);
+    let err = parse_and_normalize_export_document(value).unwrap_err();
+    assert!(
+      err.contains("adapterId") || err.contains("adapter"),
+      "expected adapter identity error, got {err}"
+    );
+  }
+
+  #[test]
+  fn v8_distinct_binding_adapters_containing_default_pass() {
+    let value = v8_provider_document(vec![
+      v8_wasm_binding("openai-compatible"),
+      v8_wasm_binding("openai-responses"),
+    ]);
+    let doc = parse_and_normalize_export_document(value).unwrap();
+    assert_eq!(doc.providers[0].runtime_bindings.len(), 2);
   }
 
   #[test]

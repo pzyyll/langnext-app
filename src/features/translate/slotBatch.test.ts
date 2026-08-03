@@ -63,7 +63,7 @@ describe("cancelRequestIds", () => {
     invokeMock.mockImplementation(async () => undefined);
   });
 
-  test("calls cancel_provider_http for each id and swallows failures", async () => {
+  test("calls both cancel transports for each id and swallows failures", async () => {
     invokeMock.mockImplementation(async (cmd) => {
       if (cmd === "cancel_provider_http") {
         throw { code: "not_found", message: "gone" };
@@ -72,6 +72,7 @@ describe("cancelRequestIds", () => {
     });
     await runCancelRequestIds(["a", "b"]);
     expect(invokeMock.mock.calls.some((c) => c[0] === "cancel_provider_http")).toBe(true);
+    expect(invokeMock.mock.calls.some((c) => c[0] === "cancel_provider_runtime")).toBe(true);
     await Effect.runPromise(cancelRequestIds(["c"]));
   });
 });

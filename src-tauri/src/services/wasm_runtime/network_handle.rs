@@ -177,7 +177,7 @@ fn map_token_grant_error(error: crate::domain::service_capability::CapabilityErr
 /// UTF-8 conversion. JSON bodies are already UTF-8-validated by the host authorization layer;
 /// Blob bodies preserve arbitrary octets so binary request payloads (e.g. multipart audio) reach
 /// the transport intact.
-fn request_body_into_transport(body: &BrokerRequestBody) -> (RequestBody, Option<String>) {
+pub(crate) fn request_body_into_transport(body: &BrokerRequestBody) -> (RequestBody, Option<String>) {
   match body {
     BrokerRequestBody::Empty => (RequestBody::None, None),
     BrokerRequestBody::Json(bytes) => {
@@ -290,7 +290,7 @@ fn stream_transport_failure_code(error: &crate::error::StorageError) -> &'static
 /// The transport and pump tasks are supervised, not detached: the reader handle carries a
 /// [`StreamPumpSupervisor`] whose cancel token is stored in the stream state, so reader
 /// close/cancel/expiry stops the upstream transport, and `reader_close` joins both tasks.
-async fn pump_stream_response(
+pub(crate) async fn pump_stream_response(
   transport: Arc<dyn RawHttpTransport>,
   principal: PluginPrincipal,
   mut prepared: PreparedHttpRequest,
@@ -586,7 +586,7 @@ fn destination_policy_for_authorization(
 
 /// Convert a bounded transport response into the neutral broker response using the grant-selected
 /// response mode. JSON validates UTF-8; bytes mode returns raw payload for host Blob wrapping.
-fn bounded_to_broker_response(
+pub(crate) fn bounded_to_broker_response(
   response: BoundedHttpResponse,
   mode: NetworkResponseBodyMode,
 ) -> Result<BrokerFetchResponse, BrokerFetchError> {
@@ -621,7 +621,7 @@ fn bounded_to_broker_response(
   })
 }
 
-fn parse_method(method: &str) -> Result<ProviderHttpMethod, BrokerFetchError> {
+pub(crate) fn parse_method(method: &str) -> Result<ProviderHttpMethod, BrokerFetchError> {
   match method {
     "GET" => Ok(ProviderHttpMethod::Get),
     "POST" => Ok(ProviderHttpMethod::Post),
@@ -629,7 +629,7 @@ fn parse_method(method: &str) -> Result<ProviderHttpMethod, BrokerFetchError> {
   }
 }
 
-fn map_storage_to_broker(err: crate::error::StorageError) -> BrokerFetchError {
+pub(crate) fn map_storage_to_broker(err: crate::error::StorageError) -> BrokerFetchError {
   // Classify for stable guest behavior without reflecting provider/transport text. A raw error
   // can contain an endpoint, proxy response, or provider diagnostic and must not cross the ABI.
   let description = err.to_string().to_ascii_lowercase();

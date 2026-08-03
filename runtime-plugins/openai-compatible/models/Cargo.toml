@@ -1,0 +1,36 @@
+[package]
+name = "langnext-openai-compatible-models-wasm"
+version = "1.0.0"
+edition = "2021"
+publish = false
+license = "Apache-2.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[features]
+# Declared so wit-bindgen `std_feature` cfg checks are known; never enable for the no_std guest.
+std = []
+
+[dependencies]
+# Generated bindings use the `wit_bindgen` macro (no borrow-of-list issue in llm-models-world).
+wit-bindgen = { version = "=0.41.0", default-features = false, features = ["macros", "realloc"] }
+serde_json = { version = "1", default-features = false, features = ["alloc"] }
+langnext-openai-compatible-protocol = { path = "../protocol" }
+
+[profile.release]
+# Deterministic builds for the committed package fixture.
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[package.metadata.component]
+package = "langnext:openai-compatible-models"
+
+[package.metadata.component.target]
+path = "../../../src-tauri/wit/runtime-plugin"
+world = "llm-models-world"
+
+[package.metadata.component.dependencies]

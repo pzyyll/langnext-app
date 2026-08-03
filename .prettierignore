@@ -13,5 +13,16 @@ runtime-plugins/**/target
 runtime-plugins/dist
 # Signed package fixtures: exact bytes (plugin.json + archives) must not be reformatted.
 runtime-plugins/conformance/fixtures/packages/**
+# Byte-exact provider wire fixtures: captured request bodies/SSE must match the guests exactly.
+runtime-plugins/openai-compatible/tests/fixtures/**
+runtime-plugins/openai-compatible/fixtures/packages/**
+runtime-plugins/openai-responses/tests/fixtures/**
+runtime-plugins/openai-responses/fixtures/packages/**
+runtime-plugins/anthropic/tests/fixtures/**
+runtime-plugins/anthropic/fixtures/packages/**
+runtime-plugins/gemini/tests/fixtures/**
+runtime-plugins/gemini/fixtures/packages/**
+runtime-plugins/deepseek/tests/fixtures/**
+runtime-plugins/deepseek/fixtures/packages/**
 # Local accidental rustup home at repo root (see .gitignore).
 /undefined/

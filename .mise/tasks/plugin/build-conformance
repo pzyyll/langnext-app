@@ -40,34 +40,40 @@ validate_plugin_json() {
     const crateDir = process.argv[1];
     const pluginPath = path.join(crateDir, 'plugin.json');
     const plugin = JSON.parse(fs.readFileSync(pluginPath, 'utf8'));
-    const artifact = (plugin.files || []).find((f) => f.role === 'runtime-artifact');
-    if (!artifact) {
+    const artifacts = (plugin.files || []).filter((f) => f.role === 'runtime-artifact');
+    if (!artifacts.length) {
       console.error('error: no runtime-artifact file entry');
       process.exit(1);
     }
-    if (!artifact.path || artifact.bytes == null || !artifact.sha256) {
-      console.error('error: runtime-artifact missing path/bytes/sha256');
-      process.exit(1);
+    for (const artifact of artifacts) {
+      if (!artifact.path || artifact.bytes == null || !artifact.sha256) {
+        console.error('error: runtime-artifact missing path/bytes/sha256');
+        process.exit(1);
+      }
+      if (artifact.path !== plugin.runtime.artifact && !(plugin.capabilities || []).some((c) => c.artifact === artifact.path)) {
+        console.error('error: artifact not referenced by runtime.artifact or a capability: ' + artifact.path);
+        process.exit(1);
+      }
+      const full = path.join(crateDir, artifact.path);
+      if (!fs.existsSync(full)) {
+        console.error('error: declared artifact missing: ' + full);
+        process.exit(1);
+      }
+      const bytes = fs.readFileSync(full);
+      const actualBytes = bytes.length;
+      const crypto = require('crypto');
+      const actualSha = crypto.createHash('sha256').update(bytes).digest('hex');
+      if (Number(artifact.bytes) !== actualBytes) {
+        console.error('error: artifact bytes mismatch: manifest=' + artifact.bytes + ' actual=' + actualBytes);
+        process.exit(1);
+      }
+      if (artifact.sha256 !== actualSha) {
+        console.error('error: artifact sha256 mismatch: manifest=' + artifact.sha256 + ' actual=' + actualSha);
+        process.exit(1);
+      }
     }
-    if (!plugin.runtime || plugin.runtime.artifact !== artifact.path) {
-      console.error('error: runtime.artifact does not match file entry path');
-      process.exit(1);
-    }
-    const full = path.join(crateDir, artifact.path);
-    if (!fs.existsSync(full)) {
-      console.error('error: declared artifact missing: ' + full);
-      process.exit(1);
-    }
-    const bytes = fs.readFileSync(full);
-    const actualBytes = bytes.length;
-    const crypto = require('crypto');
-    const actualSha = crypto.createHash('sha256').update(bytes).digest('hex');
-    if (Number(artifact.bytes) !== actualBytes) {
-      console.error('error: artifact bytes mismatch: manifest=' + artifact.bytes + ' actual=' + actualBytes);
-      process.exit(1);
-    }
-    if (artifact.sha256 !== actualSha) {
-      console.error('error: artifact sha256 mismatch: manifest=' + artifact.sha256 + ' actual=' + actualSha);
+    if (!plugin.runtime || !artifacts.some((a) => a.path === plugin.runtime.artifact)) {
+      console.error('error: runtime.artifact does not match a file entry path');
       process.exit(1);
     }
     // Capability and network permission shape for closed-loop grants.
@@ -79,7 +85,7 @@ validate_plugin_json() {
       console.error('error: permissions.network missing');
       process.exit(1);
     }
-    console.log('ok: ' + pluginPath + ' validated (bytes=' + actualBytes + ' sha256=' + actualSha + ')');
+    console.log('ok: ' + pluginPath + ' validated (artifacts=' + artifacts.map((a) => a.bytes).join(',') + ')');
   " "$crate_dir") || return 1
   echo "$validation"
 }
@@ -164,5 +170,31 @@ build_ocr_failure_component "runtime-plugins/conformance/wasm-ocr-oversized-comp
 
 # Formal manifest closed-loop test (parse_manifest + grant construction), not only field checks.
 cargo test --manifest-path src-tauri/Cargo.toml translate_and_detect_manifest_grant_closed_loop -- --nocapture
+
+# --- Rebuild + verify the two LLM conformance Components (Phase 8) ---
+build_llm_component() {
+  local crate_dir="$1" crate_name="$2" fixture="$3"
+  cargo component build --manifest-path "$crate_dir/Cargo.toml" --target wasm32-unknown-unknown --release --locked
+  local output="$crate_dir/target/wasm32-unknown-unknown/release/$crate_name.wasm"
+  [[ -f "$output" ]] || { echo "error: LLM Component missing at $output" >&2; exit 1; }
+  [[ -f "$fixture" && -f "$fixture.sha256" ]] || { echo "error: LLM fixture missing at $fixture; run the refresh task" >&2; exit 1; }
+  local committed="$(tr -d '[:space:]' < "$fixture.sha256")"
+  local actual="$(sha256sum "$fixture" | awk '{print $1}')"
+  local rebuilt="$(sha256sum "$output" | awk '{print $1}')"
+  [[ "$committed" == "$actual" && "$rebuilt" == "$committed" ]] || {
+    echo "error: LLM Component digest drift for $crate_name" >&2
+    exit 1
+  }
+  echo "ok: $crate_name LLM Component built and digest-verified"
+}
+build_llm_component "runtime-plugins/conformance/wasm-llm-models-component" "langnext_conformance_llm_models_wasm" "runtime-plugins/conformance/llm-provider/fixtures/llm-models.wasm"
+build_llm_component "runtime-plugins/conformance/wasm-llm-chat-component" "langnext_conformance_llm_chat_wasm" "runtime-plugins/conformance/llm-provider/fixtures/llm-chat.wasm"
+
+# The chat bindings are committed with one sanctioned export-shim fix; a fresh regeneration
+# plus the patch must byte-match the committed file (fail-closed against WIT/toolchain drift).
+bun "runtime-plugins/conformance/wasm-llm-chat-component/patch-bindings.js" "runtime-plugins/conformance/wasm-llm-chat-component"
+
+# Validate the committed llm-provider manifest shape (runtime artifact + providerRuntime).
+validate_plugin_json "runtime-plugins/conformance/llm-provider"
 
 echo "ok: conformance components rebuilt and verified (pinned toolchain, --locked, plugin.json + manifest grant gate)"

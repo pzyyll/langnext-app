@@ -42,6 +42,16 @@ const CONFORMANCE_DETECT_WASM: &[u8] = include_bytes!(concat!(
   env!("CARGO_MANIFEST_DIR"),
   "/../runtime-plugins/conformance/wasm-detect-component/fixtures/langnext-conformance-detect-wasm.wasm"
 ));
+/// Phase 8 llm-models-world conformance Component artifact (llm-provider package fixture).
+const LLM_MODELS_WASM: &[u8] = include_bytes!(concat!(
+  env!("CARGO_MANIFEST_DIR"),
+  "/../runtime-plugins/conformance/llm-provider/fixtures/llm-models.wasm"
+));
+/// Phase 8 llm-chat-world conformance Component artifact (llm-provider package fixture).
+const LLM_CHAT_WASM: &[u8] = include_bytes!(concat!(
+  env!("CARGO_MANIFEST_DIR"),
+  "/../runtime-plugins/conformance/llm-provider/fixtures/llm-chat.wasm"
+));
 
 /// Synthetic package-archive digest for the translate conformance package. Distinct from the
 /// Component artifact digest: package digest is the signed `.lnplugin` archive identity.
@@ -409,6 +419,43 @@ fn compile_detect(runtime: &WasmRuntime) -> crate::services::wasm_runtime::Verif
       CONFORMANCE_DETECT_WASM,
     )
     .expect("detect conformance component compiles")
+}
+
+/// Synthetic package digest for the Phase 8 LLM conformance artifacts (world topology checks).
+fn llm_models_package_digest() -> PackageDigest {
+  PackageDigest::parse(&"c".repeat(crate::domain::runtime_plugin::SHA256_HEX_LEN)).unwrap()
+}
+
+fn llm_chat_package_digest() -> PackageDigest {
+  PackageDigest::parse(&"d".repeat(crate::domain::runtime_plugin::SHA256_HEX_LEN)).unwrap()
+}
+
+fn compile_llm_models(runtime: &WasmRuntime) -> crate::services::wasm_runtime::VerifiedComponent {
+  runtime
+    .compile_component(
+      &llm_models_package_digest(),
+      &ComponentArtifactDigest::parse(&sha256_hex_of(LLM_MODELS_WASM)).unwrap(),
+      LLM_MODELS_WASM,
+    )
+    .expect("llm-models conformance component compiles")
+}
+
+fn compile_llm_chat(runtime: &WasmRuntime) -> crate::services::wasm_runtime::VerifiedComponent {
+  runtime
+    .compile_component(
+      &llm_chat_package_digest(),
+      &ComponentArtifactDigest::parse(&sha256_hex_of(LLM_CHAT_WASM)).unwrap(),
+      LLM_CHAT_WASM,
+    )
+    .expect("llm-chat conformance component compiles")
+}
+
+/// Lowercase hex SHA-256 of artifact bytes (catalog-identical digest derivation).
+fn sha256_hex_of(bytes: &[u8]) -> String {
+  use sha2::{Digest, Sha256};
+  let mut hasher = Sha256::new();
+  hasher.update(bytes);
+  hasher.finalize().iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 /// Run `translate.text@1` against the conformance component with the given mode config.
@@ -2145,6 +2192,470 @@ mod wasm_guest_imports {
       );
     }
   }
+
+  /// Phase 8: the llm-models-world conformance Component imports only langnext interfaces
+  /// and exports exactly the llm-models world interface (never llm-chat).
+  #[test]
+  fn llm_models_conformance_guest_imports_only_langnext() {
+    let runtime = WasmRuntime::new().unwrap();
+    let verified = compile_llm_models(&runtime);
+    let engine = runtime.engine().engine();
+    let component_type = verified.component().component_type();
+    let mut has_common = false;
+    let mut has_host = false;
+    let mut found_models_export = false;
+    for (name, _extern) in component_type.imports(engine) {
+      assert!(
+        !name.starts_with("wasi:"),
+        "llm-models guest must not import WASI, found: {name}"
+      );
+      assert!(
+        name.starts_with("langnext:runtime-plugin/"),
+        "llm-models guest imports non-langnext interface {name}"
+      );
+      if name.starts_with("langnext:runtime-plugin/common") {
+        has_common = true;
+      }
+      if name.starts_with("langnext:runtime-plugin/host") {
+        has_host = true;
+      }
+    }
+    assert!(has_common, "llm-models guest must import common");
+    assert!(has_host, "llm-models guest must import host");
+    for (name, _extern) in component_type.exports(engine) {
+      assert!(
+        name.starts_with("langnext:runtime-plugin/llm-models"),
+        "llm-models guest must export only its world interface, found: {name}"
+      );
+      found_models_export = true;
+    }
+    assert!(found_models_export, "llm-models guest must export llm-models");
+  }
+
+  /// Phase 8: the llm-chat-world conformance Component imports only langnext interfaces
+  /// and exports exactly the llm-chat world interface (never llm-models).
+  #[test]
+  fn llm_chat_conformance_guest_imports_only_langnext() {
+    let runtime = WasmRuntime::new().unwrap();
+    let verified = compile_llm_chat(&runtime);
+    let engine = runtime.engine().engine();
+    let component_type = verified.component().component_type();
+    let mut has_common = false;
+    let mut has_host = false;
+    let mut found_chat_export = false;
+    for (name, _extern) in component_type.imports(engine) {
+      assert!(
+        !name.starts_with("wasi:"),
+        "llm-chat guest must not import WASI, found: {name}"
+      );
+      assert!(
+        name.starts_with("langnext:runtime-plugin/"),
+        "llm-chat guest imports non-langnext interface {name}"
+      );
+      if name.starts_with("langnext:runtime-plugin/common") {
+        has_common = true;
+      }
+      if name.starts_with("langnext:runtime-plugin/host") {
+        has_host = true;
+      }
+    }
+    assert!(has_common, "llm-chat guest must import common");
+    assert!(has_host, "llm-chat guest must import host");
+    for (name, _extern) in component_type.exports(engine) {
+      assert!(
+        name.starts_with("langnext:runtime-plugin/llm-chat"),
+        "llm-chat guest must export only its world interface, found: {name}"
+      );
+      found_chat_export = true;
+    }
+    assert!(found_chat_export, "llm-chat guest must export llm-chat");
+  }
+
+  /// Exact import audit for the production OpenAI Compatible llm-models-world artifact.
+  #[test]
+  fn llm_models_openai_compatible_guest_imports_only_langnext() {
+    let runtime = WasmRuntime::new().unwrap();
+    let verified = compile_openai_compatible_llm_models(&runtime);
+    let engine = runtime.engine().engine();
+    let component_type = verified.component().component_type();
+    let mut has_common = false;
+    let mut has_host = false;
+    let mut found_models_export = false;
+    for (name, _extern) in component_type.imports(engine) {
+      assert!(
+        !name.starts_with("wasi:"),
+        "openai-compatible models guest must not import WASI, found: {name}"
+      );
+      assert!(
+        name.starts_with("langnext:runtime-plugin/"),
+        "openai-compatible models guest imports non-langnext interface {name}"
+      );
+      if name.starts_with("langnext:runtime-plugin/common") {
+        has_common = true;
+      }
+      if name.starts_with("langnext:runtime-plugin/host") {
+        has_host = true;
+      }
+    }
+    assert!(has_common, "openai-compatible models guest must import common");
+    assert!(has_host, "openai-compatible models guest must import host");
+    for (name, _extern) in component_type.exports(engine) {
+      assert!(
+        name.starts_with("langnext:runtime-plugin/llm-models"),
+        "openai-compatible models guest must export only its world interface, found: {name}"
+      );
+      found_models_export = true;
+    }
+    assert!(
+      found_models_export,
+      "openai-compatible models guest must export llm-models"
+    );
+  }
+
+  /// Exact import audit for the production OpenAI Compatible llm-chat-world artifact.
+  #[test]
+  fn llm_chat_openai_compatible_guest_imports_only_langnext() {
+    let runtime = WasmRuntime::new().unwrap();
+    let verified = compile_openai_compatible_llm_chat(&runtime);
+    let engine = runtime.engine().engine();
+    let component_type = verified.component().component_type();
+    let mut has_common = false;
+    let mut has_host = false;
+    let mut found_chat_export = false;
+    for (name, _extern) in component_type.imports(engine) {
+      assert!(
+        !name.starts_with("wasi:"),
+        "openai-compatible chat guest must not import WASI, found: {name}"
+      );
+      assert!(
+        name.starts_with("langnext:runtime-plugin/"),
+        "openai-compatible chat guest imports non-langnext interface {name}"
+      );
+      if name.starts_with("langnext:runtime-plugin/common") {
+        has_common = true;
+      }
+      if name.starts_with("langnext:runtime-plugin/host") {
+        has_host = true;
+      }
+    }
+    assert!(has_common, "openai-compatible chat guest must import common");
+    assert!(has_host, "openai-compatible chat guest must import host");
+    for (name, _extern) in component_type.exports(engine) {
+      assert!(
+        name.starts_with("langnext:runtime-plugin/llm-chat"),
+        "openai-compatible chat guest must export only its world interface, found: {name}"
+      );
+      found_chat_export = true;
+    }
+    assert!(found_chat_export, "openai-compatible chat guest must export llm-chat");
+  }
+
+  /// Exact import audit for the production OpenAI Responses llm-models-world artifact.
+  #[test]
+  fn llm_models_openai_responses_guest_imports_only_langnext() {
+    let runtime = WasmRuntime::new().unwrap();
+    let verified = compile_openai_responses_llm_models(&runtime);
+    let engine = runtime.engine().engine();
+    let component_type = verified.component().component_type();
+    let mut has_common = false;
+    let mut has_host = false;
+    let mut found_models_export = false;
+    for (name, _extern) in component_type.imports(engine) {
+      assert!(
+        !name.starts_with("wasi:"),
+        "openai-responses models guest must not import WASI, found: {name}"
+      );
+      assert!(
+        name.starts_with("langnext:runtime-plugin/"),
+        "openai-responses models guest imports non-langnext interface {name}"
+      );
+      if name.starts_with("langnext:runtime-plugin/common") {
+        has_common = true;
+      }
+      if name.starts_with("langnext:runtime-plugin/host") {
+        has_host = true;
+      }
+    }
+    assert!(has_common, "openai-responses models guest must import common");
+    assert!(has_host, "openai-responses models guest must import host");
+    for (name, _extern) in component_type.exports(engine) {
+      assert!(
+        name.starts_with("langnext:runtime-plugin/llm-models"),
+        "openai-responses models guest must export only its world interface, found: {name}"
+      );
+      found_models_export = true;
+    }
+    assert!(
+      found_models_export,
+      "openai-responses models guest must export llm-models"
+    );
+  }
+
+  /// Exact import audit for the production OpenAI Responses llm-chat-world artifact.
+  #[test]
+  fn llm_chat_openai_responses_guest_imports_only_langnext() {
+    let runtime = WasmRuntime::new().unwrap();
+    let verified = compile_openai_responses_llm_chat(&runtime);
+    let engine = runtime.engine().engine();
+    let component_type = verified.component().component_type();
+    let mut has_common = false;
+    let mut has_host = false;
+    let mut found_chat_export = false;
+    for (name, _extern) in component_type.imports(engine) {
+      assert!(
+        !name.starts_with("wasi:"),
+        "openai-responses chat guest must not import WASI, found: {name}"
+      );
+      assert!(
+        name.starts_with("langnext:runtime-plugin/"),
+        "openai-responses chat guest imports non-langnext interface {name}"
+      );
+      if name.starts_with("langnext:runtime-plugin/common") {
+        has_common = true;
+      }
+      if name.starts_with("langnext:runtime-plugin/host") {
+        has_host = true;
+      }
+    }
+    assert!(has_common, "openai-responses chat guest must import common");
+    assert!(has_host, "openai-responses chat guest must import host");
+    for (name, _extern) in component_type.exports(engine) {
+      assert!(
+        name.starts_with("langnext:runtime-plugin/llm-chat"),
+        "openai-responses chat guest must export only its world interface, found: {name}"
+      );
+      found_chat_export = true;
+    }
+    assert!(found_chat_export, "openai-responses chat guest must export llm-chat");
+  }
+
+  /// Exact import audit for the production Anthropic llm-models-world artifact.
+  #[test]
+  fn llm_models_anthropic_guest_imports_only_langnext() {
+    let runtime = WasmRuntime::new().unwrap();
+    let verified = compile_anthropic_llm_models(&runtime);
+    let engine = runtime.engine().engine();
+    let component_type = verified.component().component_type();
+    let mut has_common = false;
+    let mut has_host = false;
+    let mut found_models_export = false;
+    for (name, _extern) in component_type.imports(engine) {
+      assert!(
+        !name.starts_with("wasi:"),
+        "anthropic models guest must not import WASI, found: {name}"
+      );
+      assert!(
+        name.starts_with("langnext:runtime-plugin/"),
+        "anthropic models guest imports non-langnext interface {name}"
+      );
+      if name.starts_with("langnext:runtime-plugin/common") {
+        has_common = true;
+      }
+      if name.starts_with("langnext:runtime-plugin/host") {
+        has_host = true;
+      }
+    }
+    assert!(has_common, "anthropic models guest must import common");
+    assert!(has_host, "anthropic models guest must import host");
+    for (name, _extern) in component_type.exports(engine) {
+      assert!(
+        name.starts_with("langnext:runtime-plugin/llm-models"),
+        "anthropic models guest must export only its world interface, found: {name}"
+      );
+      found_models_export = true;
+    }
+    assert!(found_models_export, "anthropic models guest must export llm-models");
+  }
+
+  /// Exact import audit for the production Anthropic llm-chat-world artifact.
+  #[test]
+  fn llm_chat_anthropic_guest_imports_only_langnext() {
+    let runtime = WasmRuntime::new().unwrap();
+    let verified = compile_anthropic_llm_chat(&runtime);
+    let engine = runtime.engine().engine();
+    let component_type = verified.component().component_type();
+    let mut has_common = false;
+    let mut has_host = false;
+    let mut found_chat_export = false;
+    for (name, _extern) in component_type.imports(engine) {
+      assert!(
+        !name.starts_with("wasi:"),
+        "anthropic chat guest must not import WASI, found: {name}"
+      );
+      assert!(
+        name.starts_with("langnext:runtime-plugin/"),
+        "anthropic chat guest imports non-langnext interface {name}"
+      );
+      if name.starts_with("langnext:runtime-plugin/common") {
+        has_common = true;
+      }
+      if name.starts_with("langnext:runtime-plugin/host") {
+        has_host = true;
+      }
+    }
+    assert!(has_common, "anthropic chat guest must import common");
+    assert!(has_host, "anthropic chat guest must import host");
+    for (name, _extern) in component_type.exports(engine) {
+      assert!(
+        name.starts_with("langnext:runtime-plugin/llm-chat"),
+        "anthropic chat guest must export only its world interface, found: {name}"
+      );
+      found_chat_export = true;
+    }
+    assert!(found_chat_export, "anthropic chat guest must export llm-chat");
+  }
+
+  /// Exact import audit for the production Gemini llm-models-world artifact.
+  #[test]
+  fn llm_models_gemini_guest_imports_only_langnext() {
+    let runtime = WasmRuntime::new().unwrap();
+    let verified = compile_gemini_llm_models(&runtime);
+    let engine = runtime.engine().engine();
+    let component_type = verified.component().component_type();
+    let mut has_common = false;
+    let mut has_host = false;
+    let mut found_models_export = false;
+    for (name, _extern) in component_type.imports(engine) {
+      assert!(
+        !name.starts_with("wasi:"),
+        "gemini models guest must not import WASI, found: {name}"
+      );
+      assert!(
+        name.starts_with("langnext:runtime-plugin/"),
+        "gemini models guest imports non-langnext interface {name}"
+      );
+      if name.starts_with("langnext:runtime-plugin/common") {
+        has_common = true;
+      }
+      if name.starts_with("langnext:runtime-plugin/host") {
+        has_host = true;
+      }
+    }
+    assert!(has_common, "gemini models guest must import common");
+    assert!(has_host, "gemini models guest must import host");
+    for (name, _extern) in component_type.exports(engine) {
+      assert!(
+        name.starts_with("langnext:runtime-plugin/llm-models"),
+        "gemini models guest must export only its world interface, found: {name}"
+      );
+      found_models_export = true;
+    }
+    assert!(found_models_export, "gemini models guest must export llm-models");
+  }
+
+  /// Exact import audit for the production Gemini llm-chat-world artifact.
+  #[test]
+  fn llm_chat_gemini_guest_imports_only_langnext() {
+    let runtime = WasmRuntime::new().unwrap();
+    let verified = compile_gemini_llm_chat(&runtime);
+    let engine = runtime.engine().engine();
+    let component_type = verified.component().component_type();
+    let mut has_common = false;
+    let mut has_host = false;
+    let mut found_chat_export = false;
+    for (name, _extern) in component_type.imports(engine) {
+      assert!(
+        !name.starts_with("wasi:"),
+        "gemini chat guest must not import WASI, found: {name}"
+      );
+      assert!(
+        name.starts_with("langnext:runtime-plugin/"),
+        "gemini chat guest imports non-langnext interface {name}"
+      );
+      if name.starts_with("langnext:runtime-plugin/common") {
+        has_common = true;
+      }
+      if name.starts_with("langnext:runtime-plugin/host") {
+        has_host = true;
+      }
+    }
+    assert!(has_common, "gemini chat guest must import common");
+    assert!(has_host, "gemini chat guest must import host");
+    for (name, _extern) in component_type.exports(engine) {
+      assert!(
+        name.starts_with("langnext:runtime-plugin/llm-chat"),
+        "gemini chat guest must export only its world interface, found: {name}"
+      );
+      found_chat_export = true;
+    }
+    assert!(found_chat_export, "gemini chat guest must export llm-chat");
+  }
+
+  /// Exact import audit for the production DeepSeek llm-models-world artifact.
+  #[test]
+  fn llm_models_deepseek_guest_imports_only_langnext() {
+    let runtime = WasmRuntime::new().unwrap();
+    let verified = compile_deepseek_llm_models(&runtime);
+    let engine = runtime.engine().engine();
+    let component_type = verified.component().component_type();
+    let mut has_common = false;
+    let mut has_host = false;
+    let mut found_models_export = false;
+    for (name, _extern) in component_type.imports(engine) {
+      assert!(
+        !name.starts_with("wasi:"),
+        "deepseek models guest must not import WASI, found: {name}"
+      );
+      assert!(
+        name.starts_with("langnext:runtime-plugin/"),
+        "deepseek models guest imports non-langnext interface {name}"
+      );
+      if name.starts_with("langnext:runtime-plugin/common") {
+        has_common = true;
+      }
+      if name.starts_with("langnext:runtime-plugin/host") {
+        has_host = true;
+      }
+    }
+    assert!(has_common, "deepseek models guest must import common");
+    assert!(has_host, "deepseek models guest must import host");
+    for (name, _extern) in component_type.exports(engine) {
+      assert!(
+        name.starts_with("langnext:runtime-plugin/llm-models"),
+        "deepseek models guest must export only its world interface, found: {name}"
+      );
+      found_models_export = true;
+    }
+    assert!(found_models_export, "deepseek models guest must export llm-models");
+  }
+
+  /// Exact import audit for the production DeepSeek llm-chat-world artifact.
+  #[test]
+  fn llm_chat_deepseek_guest_imports_only_langnext() {
+    let runtime = WasmRuntime::new().unwrap();
+    let verified = compile_deepseek_llm_chat(&runtime);
+    let engine = runtime.engine().engine();
+    let component_type = verified.component().component_type();
+    let mut has_common = false;
+    let mut has_host = false;
+    let mut found_chat_export = false;
+    for (name, _extern) in component_type.imports(engine) {
+      assert!(
+        !name.starts_with("wasi:"),
+        "deepseek chat guest must not import WASI, found: {name}"
+      );
+      assert!(
+        name.starts_with("langnext:runtime-plugin/"),
+        "deepseek chat guest imports non-langnext interface {name}"
+      );
+      if name.starts_with("langnext:runtime-plugin/common") {
+        has_common = true;
+      }
+      if name.starts_with("langnext:runtime-plugin/host") {
+        has_host = true;
+      }
+    }
+    assert!(has_common, "deepseek chat guest must import common");
+    assert!(has_host, "deepseek chat guest must import host");
+    for (name, _extern) in component_type.exports(engine) {
+      assert!(
+        name.starts_with("langnext:runtime-plugin/llm-chat"),
+        "deepseek chat guest must export only its world interface, found: {name}"
+      );
+      found_chat_export = true;
+    }
+    assert!(found_chat_export, "deepseek chat guest must export llm-chat");
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -2202,4 +2713,169 @@ mod wasm_runtime_cold_start {
     );
     assert_eq!(response.translated_text, "[hello]");
   }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 8 Task 11: production OpenAI Compatible package artifacts must import only
+// langnext:runtime-plugin interfaces (exact-name checks wired into plugin:check-no-wasi).
+// ---------------------------------------------------------------------------
+
+/// Phase 8 Task 11 llm-models-world OpenAI Compatible production Component artifact.
+const OPENAI_COMPATIBLE_MODELS_WASM: &[u8] = include_bytes!(concat!(
+  env!("CARGO_MANIFEST_DIR"),
+  "/../runtime-plugins/openai-compatible/fixtures/llm-models.wasm"
+));
+/// Phase 8 Task 11 llm-chat-world OpenAI Compatible production Component artifact.
+const OPENAI_COMPATIBLE_CHAT_WASM: &[u8] = include_bytes!(concat!(
+  env!("CARGO_MANIFEST_DIR"),
+  "/../runtime-plugins/openai-compatible/fixtures/llm-chat.wasm"
+));
+
+fn compile_openai_compatible_llm_models(runtime: &WasmRuntime) -> crate::services::wasm_runtime::VerifiedComponent {
+  runtime
+    .compile_component(
+      &llm_models_package_digest(),
+      &ComponentArtifactDigest::parse(&sha256_hex_of(OPENAI_COMPATIBLE_MODELS_WASM)).unwrap(),
+      OPENAI_COMPATIBLE_MODELS_WASM,
+    )
+    .expect("openai-compatible models component compiles")
+}
+
+fn compile_openai_compatible_llm_chat(runtime: &WasmRuntime) -> crate::services::wasm_runtime::VerifiedComponent {
+  runtime
+    .compile_component(
+      &llm_chat_package_digest(),
+      &ComponentArtifactDigest::parse(&sha256_hex_of(OPENAI_COMPATIBLE_CHAT_WASM)).unwrap(),
+      OPENAI_COMPATIBLE_CHAT_WASM,
+    )
+    .expect("openai-compatible chat component compiles")
+}
+
+// ---------------------------------------------------------------------------
+// Phase 8 Tasks 18/19: production OpenAI Responses and Anthropic package artifacts must
+// import only langnext:runtime-plugin interfaces (exact-name checks wired into
+// plugin:check-no-wasi).
+// ---------------------------------------------------------------------------
+
+/// Phase 8 Task 18 llm-models-world OpenAI Responses production Component artifact.
+const OPENAI_RESPONSES_MODELS_WASM: &[u8] = include_bytes!(concat!(
+  env!("CARGO_MANIFEST_DIR"),
+  "/../runtime-plugins/openai-responses/fixtures/llm-models.wasm"
+));
+/// Phase 8 Task 18 llm-chat-world OpenAI Responses production Component artifact.
+const OPENAI_RESPONSES_CHAT_WASM: &[u8] = include_bytes!(concat!(
+  env!("CARGO_MANIFEST_DIR"),
+  "/../runtime-plugins/openai-responses/fixtures/llm-chat.wasm"
+));
+/// Phase 8 Task 19 llm-models-world Anthropic production Component artifact.
+const ANTHROPIC_MODELS_WASM: &[u8] = include_bytes!(concat!(
+  env!("CARGO_MANIFEST_DIR"),
+  "/../runtime-plugins/anthropic/fixtures/llm-models.wasm"
+));
+/// Phase 8 Task 19 llm-chat-world Anthropic production Component artifact.
+const ANTHROPIC_CHAT_WASM: &[u8] = include_bytes!(concat!(
+  env!("CARGO_MANIFEST_DIR"),
+  "/../runtime-plugins/anthropic/fixtures/llm-chat.wasm"
+));
+
+fn compile_openai_responses_llm_models(runtime: &WasmRuntime) -> crate::services::wasm_runtime::VerifiedComponent {
+  runtime
+    .compile_component(
+      &llm_models_package_digest(),
+      &ComponentArtifactDigest::parse(&sha256_hex_of(OPENAI_RESPONSES_MODELS_WASM)).unwrap(),
+      OPENAI_RESPONSES_MODELS_WASM,
+    )
+    .expect("openai-responses models component compiles")
+}
+
+fn compile_openai_responses_llm_chat(runtime: &WasmRuntime) -> crate::services::wasm_runtime::VerifiedComponent {
+  runtime
+    .compile_component(
+      &llm_chat_package_digest(),
+      &ComponentArtifactDigest::parse(&sha256_hex_of(OPENAI_RESPONSES_CHAT_WASM)).unwrap(),
+      OPENAI_RESPONSES_CHAT_WASM,
+    )
+    .expect("openai-responses chat component compiles")
+}
+
+fn compile_anthropic_llm_models(runtime: &WasmRuntime) -> crate::services::wasm_runtime::VerifiedComponent {
+  runtime
+    .compile_component(
+      &llm_models_package_digest(),
+      &ComponentArtifactDigest::parse(&sha256_hex_of(ANTHROPIC_MODELS_WASM)).unwrap(),
+      ANTHROPIC_MODELS_WASM,
+    )
+    .expect("anthropic models component compiles")
+}
+
+fn compile_anthropic_llm_chat(runtime: &WasmRuntime) -> crate::services::wasm_runtime::VerifiedComponent {
+  runtime
+    .compile_component(
+      &llm_chat_package_digest(),
+      &ComponentArtifactDigest::parse(&sha256_hex_of(ANTHROPIC_CHAT_WASM)).unwrap(),
+      ANTHROPIC_CHAT_WASM,
+    )
+    .expect("anthropic chat component compiles")
+}
+
+/// Phase 8 Task 20 llm-models-world Gemini production Component artifact.
+const GEMINI_MODELS_WASM: &[u8] = include_bytes!(concat!(
+  env!("CARGO_MANIFEST_DIR"),
+  "/../runtime-plugins/gemini/fixtures/llm-models.wasm"
+));
+/// Phase 8 Task 20 llm-chat-world Gemini production Component artifact.
+const GEMINI_CHAT_WASM: &[u8] = include_bytes!(concat!(
+  env!("CARGO_MANIFEST_DIR"),
+  "/../runtime-plugins/gemini/fixtures/llm-chat.wasm"
+));
+
+fn compile_gemini_llm_models(runtime: &WasmRuntime) -> crate::services::wasm_runtime::VerifiedComponent {
+  runtime
+    .compile_component(
+      &llm_models_package_digest(),
+      &ComponentArtifactDigest::parse(&sha256_hex_of(GEMINI_MODELS_WASM)).unwrap(),
+      GEMINI_MODELS_WASM,
+    )
+    .expect("gemini models component compiles")
+}
+
+fn compile_gemini_llm_chat(runtime: &WasmRuntime) -> crate::services::wasm_runtime::VerifiedComponent {
+  runtime
+    .compile_component(
+      &llm_chat_package_digest(),
+      &ComponentArtifactDigest::parse(&sha256_hex_of(GEMINI_CHAT_WASM)).unwrap(),
+      GEMINI_CHAT_WASM,
+    )
+    .expect("gemini chat component compiles")
+}
+
+/// Phase 8 Task 21 llm-models-world DeepSeek production Component artifact.
+const DEEPSEEK_MODELS_WASM: &[u8] = include_bytes!(concat!(
+  env!("CARGO_MANIFEST_DIR"),
+  "/../runtime-plugins/deepseek/fixtures/llm-models.wasm"
+));
+/// Phase 8 Task 21 llm-chat-world DeepSeek production Component artifact.
+const DEEPSEEK_CHAT_WASM: &[u8] = include_bytes!(concat!(
+  env!("CARGO_MANIFEST_DIR"),
+  "/../runtime-plugins/deepseek/fixtures/llm-chat.wasm"
+));
+
+fn compile_deepseek_llm_models(runtime: &WasmRuntime) -> crate::services::wasm_runtime::VerifiedComponent {
+  runtime
+    .compile_component(
+      &llm_models_package_digest(),
+      &ComponentArtifactDigest::parse(&sha256_hex_of(DEEPSEEK_MODELS_WASM)).unwrap(),
+      DEEPSEEK_MODELS_WASM,
+    )
+    .expect("deepseek models component compiles")
+}
+
+fn compile_deepseek_llm_chat(runtime: &WasmRuntime) -> crate::services::wasm_runtime::VerifiedComponent {
+  runtime
+    .compile_component(
+      &llm_chat_package_digest(),
+      &ComponentArtifactDigest::parse(&sha256_hex_of(DEEPSEEK_CHAT_WASM)).unwrap(),
+      DEEPSEEK_CHAT_WASM,
+    )
+    .expect("deepseek chat component compiles")
 }

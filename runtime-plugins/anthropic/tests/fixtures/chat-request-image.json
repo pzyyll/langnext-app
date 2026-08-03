@@ -1,0 +1,1 @@
+{"model":"claude-3-5-haiku","system":"sys","messages":[{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGIAAQAABQABDQottAAAAABJRU5ErkJggg=="}},{"type":"text","text":"What is in this image?"}]}],"max_tokens":32768,"temperature":0.1}

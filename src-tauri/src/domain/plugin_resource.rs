@@ -98,6 +98,16 @@ pub enum LlmCompletionStatus {
   ToolCalls,
 }
 
+impl LlmCompletionStatus {
+  pub fn as_str(self) -> &'static str {
+    match self {
+      Self::Stop => "stop",
+      Self::Length => "length",
+      Self::ToolCalls => "tool-calls",
+    }
+  }
+}
+
 /// Structured tool-call delta (matches WIT `llm-tool-call-delta`). Arguments are copied JSON
 /// bytes, never an opaque stream.
 #[derive(Debug, Clone, PartialEq, Eq)]

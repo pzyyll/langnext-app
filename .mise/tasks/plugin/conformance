@@ -193,6 +193,69 @@ REQUIRED_GOOGLE_WEB_TESTS=(
   "services::google_translate_web_runtime_tests::google_web_migration_rejects_schema_incompatible_target"
 )
 
+# Phase 8 LLM provider runtime conformance: the named fixture/catalog/lifecycle tests are
+# required by exact name; Tasks 6-8 add real-component execution tests to this list. Every
+# built-in LLM provider (OpenAI Compatible, OpenAI Responses, Anthropic, Gemini, DeepSeek)
+# must register its required real-component test here; an omitted provider fails the
+# aggregate suite (fail-closed).
+REQUIRED_LLM_GENERIC_TESTS=(
+  "services::runtime_provider_tests::provider_runtime_fixture_package_verifies_and_projects_catalog"
+  "services::runtime_provider_tests::runtime_provider_lifecycle_binds_exact_package_and_provider_grant"
+  "services::runtime_provider_tests::runtime_provider_export_import_preserves_exact_requirement_without_activation"
+  "services::runtime_provider_tests::runtime_provider_broker_uses_only_bound_provider_connection"
+  "services::runtime_provider_tests::runtime_provider_models_list_executes_verified_component"
+  "services::runtime_provider_tests::runtime_provider_chat_complete_uses_host_mode_and_releases_all_resources"
+  "services::runtime_provider_tests::runtime_provider_streamed_chat_orders_deltas_and_cleans_on_cancel"
+)
+REQUIRED_LLM_OPENAI_COMPATIBLE_TESTS=(
+  "services::runtime_provider_tests::openai_compatible_runtime_component_matches_current_provider_fixtures"
+)
+REQUIRED_LLM_OPENAI_RESPONSES_TESTS=(
+  "services::runtime_provider_tests::openai_responses_runtime_component_matches_current_provider_fixtures"
+)
+REQUIRED_LLM_ANTHROPIC_TESTS=(
+  "services::runtime_provider_tests::anthropic_runtime_component_matches_current_provider_fixtures"
+)
+REQUIRED_LLM_GEMINI_TESTS=(
+  "services::runtime_provider_tests::gemini_runtime_component_aggregates_bounded_pages_and_matches_current_fixtures"
+)
+REQUIRED_LLM_DEEPSEEK_TESTS=(
+  "services::runtime_provider_tests::deepseek_runtime_component_matches_current_provider_and_detection_policy_fixtures"
+)
+REQUIRED_LLM_TESTS=(
+  "${REQUIRED_LLM_GENERIC_TESTS[@]}"
+  "${REQUIRED_LLM_OPENAI_COMPATIBLE_TESTS[@]}"
+  "${REQUIRED_LLM_OPENAI_RESPONSES_TESTS[@]}"
+  "${REQUIRED_LLM_ANTHROPIC_TESTS[@]}"
+  "${REQUIRED_LLM_GEMINI_TESTS[@]}"
+  "${REQUIRED_LLM_DEEPSEEK_TESTS[@]}"
+)
+# Fail closed if any of the five built-in provider groups is empty (a provider whose
+# real-component conformance registration is omitted must break the aggregate LLM suite).
+if [[   ${#REQUIRED_LLM_OPENAI_COMPATIBLE_TESTS[@]} -eq 0 ||   ${#REQUIRED_LLM_OPENAI_RESPONSES_TESTS[@]} -eq 0 ||   ${#REQUIRED_LLM_ANTHROPIC_TESTS[@]} -eq 0 ||   ${#REQUIRED_LLM_GEMINI_TESTS[@]} -eq 0 ||   ${#REQUIRED_LLM_DEEPSEEK_TESTS[@]} -eq 0
+]]; then
+  echo "error: one of the five built-in LLM provider conformance groups is empty (fail-closed)" >&2
+  exit 1
+fi
+
+# Both LLM conformance Components must import only langnext:runtime-plugin interfaces, and
+# the Task 11/18/19 production OpenAI Compatible, OpenAI Responses, and Anthropic artifacts
+# must pass the same exact import audit.
+REQUIRED_LLM_GUEST_IMPORT_TESTS=(
+  "services::wasm_runtime::tests::wasm_guest_imports::llm_models_conformance_guest_imports_only_langnext"
+  "services::wasm_runtime::tests::wasm_guest_imports::llm_chat_conformance_guest_imports_only_langnext"
+  "services::wasm_runtime::tests::wasm_guest_imports::llm_models_openai_compatible_guest_imports_only_langnext"
+  "services::wasm_runtime::tests::wasm_guest_imports::llm_chat_openai_compatible_guest_imports_only_langnext"
+  "services::wasm_runtime::tests::wasm_guest_imports::llm_models_openai_responses_guest_imports_only_langnext"
+  "services::wasm_runtime::tests::wasm_guest_imports::llm_chat_openai_responses_guest_imports_only_langnext"
+  "services::wasm_runtime::tests::wasm_guest_imports::llm_models_anthropic_guest_imports_only_langnext"
+  "services::wasm_runtime::tests::wasm_guest_imports::llm_chat_anthropic_guest_imports_only_langnext"
+  "services::wasm_runtime::tests::wasm_guest_imports::llm_models_gemini_guest_imports_only_langnext"
+  "services::wasm_runtime::tests::wasm_guest_imports::llm_chat_gemini_guest_imports_only_langnext"
+  "services::wasm_runtime::tests::wasm_guest_imports::llm_models_deepseek_guest_imports_only_langnext"
+  "services::wasm_runtime::tests::wasm_guest_imports::llm_chat_deepseek_guest_imports_only_langnext"
+)
+
 MIN_TOTAL_TESTS=10
 
 run_filter_suite() {
@@ -238,6 +301,18 @@ case "$MODE" in
   wasm)
     run_filter_suite "wasm_runtime" "${REQUIRED_WASM_TESTS[@]}"
     ;;
+  llm)
+    # Fail-closed Phase 8 LLM suite: the catalog fixture test must run; the named list is
+    # extended by Tasks 3-8, 11, 18, and 19 as lifecycle/execution tests land. The protocol
+    # crates for every migrated provider run their ported fixture unit tests first.
+    cargo test --manifest-path runtime-plugins/openai-compatible/protocol/Cargo.toml -- --nocapture
+    cargo test --manifest-path runtime-plugins/openai-responses/protocol/Cargo.toml -- --nocapture
+    cargo test --manifest-path runtime-plugins/anthropic/protocol/Cargo.toml -- --nocapture
+    cargo test --manifest-path runtime-plugins/gemini/protocol/Cargo.toml -- --nocapture
+    cargo test --manifest-path runtime-plugins/deepseek/protocol/Cargo.toml -- --nocapture
+    run_filter_suite "runtime_provider_tests" "${REQUIRED_LLM_TESTS[@]}"
+    run_filter_suite "wasm_guest_imports" "${REQUIRED_LLM_GUEST_IMPORT_TESTS[@]}"
+    ;;
   installed-lifecycle)
     # Full install→migrate→Translate/Detect→approval→upgrade→rollback→uninstall suite.
     run_filter_suite "runtime_" "${REQUIRED_LIFECYCLE_TESTS[@]}"
@@ -245,6 +320,7 @@ case "$MODE" in
   all)
     run_filter_suite "wasm_runtime" "${REQUIRED_WASM_TESTS[@]}"
     run_filter_suite "runtime_" "${REQUIRED_LIFECYCLE_TESTS[@]}"
+    run_filter_suite "runtime_provider_tests" "${REQUIRED_LLM_TESTS[@]}"
     run_filter_suite "google_translate_web_runtime" "${REQUIRED_GOOGLE_WEB_TESTS[@]}"
     run_filter_suite "google_cloud_runtime_tests" "${REQUIRED_GOOGLE_CLOUD_TESTS[@]}"
     run_filter_suite "edge_tts_runtime" "${REQUIRED_EDGE_TTS_TESTS[@]}"
@@ -304,7 +380,7 @@ case "$MODE" in
     run_filter_suite "stream_resources" "${REQUIRED_STREAM_FILTER_TESTS[@]}"
     ;;
   *)
-    echo "usage: mise run plugin:conformance [wasm|installed-lifecycle|all|google-cloud|google-cloud-translate|google-cloud-ocr|google-cloud-tts|edge-tts|resources]" >&2
+    echo "usage: mise run plugin:conformance [wasm|llm|installed-lifecycle|all|google-cloud|google-cloud-translate|google-cloud-ocr|google-cloud-tts|edge-tts|resources]" >&2
     exit 1
     ;;
 esac

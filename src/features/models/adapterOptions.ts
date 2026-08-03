@@ -1,6 +1,6 @@
 // ABOUTME: Compatibility facade over the provider plugin registry for model UI.
 // ABOUTME: Prefer registry selectors directly; this keeps existing call sites compiling.
-import type { AuthSchemeV1, BaseUrlSource, CredentialKind } from "../../storage/types";
+import type { AuthSchemeV1, BaseUrlSource, CredentialKind, ProviderRuntimeCatalogEntryDto } from "../../storage/types";
 import { registerBuiltinProviderPlugins } from "../providers/builtin";
 import {
   getPluginDefaultBaseUrl,
@@ -25,6 +25,32 @@ export function listAdapterOptions(): readonly AdapterOption[] {
     label: manifest.label,
     defaultBaseUrl: manifest.defaultBaseUrl,
   }));
+}
+
+/**
+ * Adapter options for attached runtime interface bindings (multi-interface). Runtime-only
+ * API types are labeled from the verified signed catalog metadata; an uninstalled or
+ * inactive binding is never presented as an option here. Legacy registered plugins are
+ * merged by the caller.
+ */
+export function listRuntimeAdapterOptions(
+  runtimeBindings: readonly { adapterId: string; runtimeKind: string; state: string; packageDigest: string | null }[],
+  catalog: readonly ProviderRuntimeCatalogEntryDto[],
+): readonly AdapterOption[] {
+  const options: AdapterOption[] = [];
+  for (const binding of runtimeBindings) {
+    if (binding.runtimeKind !== "wasm-component" || binding.state !== "active") {
+      continue;
+    }
+    const entry = catalog.find((candidate) => candidate.packageDigest === binding.packageDigest);
+    options.push({
+      id: binding.adapterId,
+      label: entry ? `${entry.pluginId} (${binding.adapterId})` : binding.adapterId,
+      defaultBaseUrl: null,
+    });
+  }
+  options.sort((a, b) => a.id.localeCompare(b.id));
+  return options;
 }
 
 /** Look up the documented default Base URL for a plugin ID. */

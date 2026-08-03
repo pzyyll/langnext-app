@@ -57,6 +57,10 @@ pub struct PluginHostState {
   /// Test-only observer set after request-owned blobs are cleared on store drop.
   #[cfg(test)]
   pub cleanup_probe: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+  /// Test-only observer recording whether the request left no stream endpoints behind when the
+  /// store dropped (set BEFORE the table clear so an explicit discard is observable).
+  #[cfg(test)]
+  pub streams_cleanup_probe: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
   /// Wall-clock request deadline. Imports enforce it regardless of guest hints.
   pub deadline: Option<Instant>,
   /// Bounded structured-log policy (enforced on every `host.log`).
@@ -78,12 +82,20 @@ pub struct PluginHostState {
 
 impl Drop for PluginHostState {
   fn drop(&mut self) {
+    // Record whether the request left no stream endpoints behind (explicit discards and guest
+    // resource drops) before the table clear, so tests can assert deterministic cleanup.
+    #[cfg(test)]
+    let streams_clean = self.streams.writer_count() == 0 && self.streams.reader_count() == 0;
     // Request completion / store drop: release all host-owned binary resources.
     self.blobs.clear();
     self.streams.clear();
     #[cfg(test)]
     if let Some(probe) = &self.cleanup_probe {
       probe.store(self.blobs.is_empty(), std::sync::atomic::Ordering::SeqCst);
+    }
+    #[cfg(test)]
+    if let Some(probe) = &self.streams_cleanup_probe {
+      probe.store(streams_clean, std::sync::atomic::Ordering::SeqCst);
     }
   }
 }
@@ -184,6 +196,8 @@ pub fn new_state_with_fuel_and_provider_attempt(
     provider_attempt,
     #[cfg(test)]
     cleanup_probe: None,
+    #[cfg(test)]
+    streams_cleanup_probe: None,
     deadline,
     log_budget: LogBudget::default(),
     broker,

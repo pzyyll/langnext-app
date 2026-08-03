@@ -4,10 +4,22 @@
 #MISE description="Assert no WASI in host dependency tree or guest imports"
 set -euo pipefail
 
-EXPECTED_GUEST_IMPORT_TESTS=2
+EXPECTED_GUEST_IMPORT_TESTS=14
 EXPECTED_GUEST_IMPORT_TEST_NAMES=(
   "services::wasm_runtime::tests::wasm_guest_imports::translate_conformance_guest_imports_only_langnext"
   "services::wasm_runtime::tests::wasm_guest_imports::detect_conformance_guest_imports_only_langnext"
+  "services::wasm_runtime::tests::wasm_guest_imports::llm_models_conformance_guest_imports_only_langnext"
+  "services::wasm_runtime::tests::wasm_guest_imports::llm_chat_conformance_guest_imports_only_langnext"
+  "services::wasm_runtime::tests::wasm_guest_imports::llm_models_openai_compatible_guest_imports_only_langnext"
+  "services::wasm_runtime::tests::wasm_guest_imports::llm_chat_openai_compatible_guest_imports_only_langnext"
+  "services::wasm_runtime::tests::wasm_guest_imports::llm_models_openai_responses_guest_imports_only_langnext"
+  "services::wasm_runtime::tests::wasm_guest_imports::llm_chat_openai_responses_guest_imports_only_langnext"
+  "services::wasm_runtime::tests::wasm_guest_imports::llm_models_anthropic_guest_imports_only_langnext"
+  "services::wasm_runtime::tests::wasm_guest_imports::llm_chat_anthropic_guest_imports_only_langnext"
+  "services::wasm_runtime::tests::wasm_guest_imports::llm_models_gemini_guest_imports_only_langnext"
+  "services::wasm_runtime::tests::wasm_guest_imports::llm_chat_gemini_guest_imports_only_langnext"
+  "services::wasm_runtime::tests::wasm_guest_imports::llm_models_deepseek_guest_imports_only_langnext"
+  "services::wasm_runtime::tests::wasm_guest_imports::llm_chat_deepseek_guest_imports_only_langnext"
 )
 
 # Check 1: cargo tree must succeed. Capture the full output ONCE so a grep miss cannot trigger a
@@ -26,10 +38,22 @@ if grep -q 'wasmtime-wasi' <<<"$TREE_OUTPUT"; then
 fi
 echo "ok: host dependency tree has no wasmtime-wasi"
 
-# Check 3: both conformance guest Cargo.toml files must not depend on wasi or wasmtime-wasi.
+# Check 3: all conformance guest Cargo.toml files must not depend on wasi or wasmtime-wasi.
 for guest_cargo in \
   runtime-plugins/conformance/wasm-component/Cargo.toml \
-  runtime-plugins/conformance/wasm-detect-component/Cargo.toml; do
+  runtime-plugins/conformance/wasm-detect-component/Cargo.toml \
+  runtime-plugins/conformance/wasm-llm-models-component/Cargo.toml \
+  runtime-plugins/conformance/wasm-llm-chat-component/Cargo.toml \
+  runtime-plugins/openai-compatible/models/Cargo.toml \
+  runtime-plugins/openai-compatible/chat/Cargo.toml \
+  runtime-plugins/openai-responses/models/Cargo.toml \
+  runtime-plugins/openai-responses/chat/Cargo.toml \
+  runtime-plugins/anthropic/models/Cargo.toml \
+  runtime-plugins/anthropic/chat/Cargo.toml \
+  runtime-plugins/gemini/models/Cargo.toml \
+  runtime-plugins/gemini/chat/Cargo.toml \
+  runtime-plugins/deepseek/models/Cargo.toml \
+  runtime-plugins/deepseek/chat/Cargo.toml; do
   if [[ ! -f "$guest_cargo" ]]; then
     echo "error: guest Cargo.toml missing: $guest_cargo" >&2
     exit 1

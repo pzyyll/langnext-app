@@ -5,6 +5,7 @@ import {
   getOcrService,
   listAllProviderModels,
   listProviderInstances,
+  listRuntimeProviderCatalog,
   recognizeBaiduOcr,
 } from "../../storage/client";
 import type {
@@ -13,9 +14,10 @@ import type {
   OcrServiceDto,
   ProviderInstanceDto,
   ProviderModelDto,
+  ProviderRuntimeCatalogEntryDto,
 } from "../../storage/types";
-import { mapHttpStatus, normalizeProviderError } from "../providers/errors";
-import { providerFetch } from "../providers/providerFetch";
+import { normalizeProviderError } from "../providers/errors";
+import { resolveEffectiveAdapterId, resolveProviderExecutor } from "../providers/executor";
 import { isModelApiTypeExecutable, requireProviderPlugin } from "../providers/registry";
 import { newClientRequestId } from "../translate/newClientRequestId";
 
@@ -66,6 +68,7 @@ async function recognizeAiOcr(
   pngBase64: string,
   modelsById: Map<string, ProviderModelDto>,
   providersById: Map<string, ProviderInstanceDto>,
+  runtimeCatalog: readonly ProviderRuntimeCatalogEntryDto[],
 ): Promise<OcrRecognizeResult> {
   if (!service.enabled) {
     throw new Error("OCR service is disabled");
@@ -90,22 +93,41 @@ async function recognizeAiOcr(
   if (!provider || !provider.enabled) {
     throw new Error("AI OCR provider is missing or disabled");
   }
-  const pluginId = (model.adapterId?.trim() || provider.adapterId).trim();
-  const plugin = requireProviderPlugin(pluginId);
-  const modelAuth = plugin.resolveAuthScheme(provider.credentialKind);
-  if (
-    !isModelApiTypeExecutable({
-      providerPluginId: provider.adapterId,
-      modelPluginId: pluginId,
-      providerAuthScheme: provider.authScheme,
-      modelAuthScheme: modelAuth,
-      baseUrlSource: provider.baseUrlSource,
-    })
-  ) {
-    throw new Error("AI OCR model API Type is incompatible with the provider endpoint");
+  // Unbound API types keep the existing model API Type / custom-relay compatibility rule;
+  // an active matching runtime binding enforces declared aliases inside the executor resolver.
+  const effectiveAdapterId = resolveEffectiveAdapterId({
+    modelAdapterId: model.adapterId,
+    modelSourceAdapterId: model.sourceAdapterId,
+    providerAdapterId: provider.adapterId,
+  });
+  const binding = provider.runtimeBindings.find((candidate) => candidate.adapterId === effectiveAdapterId);
+  if (!binding || binding.runtimeKind === "legacy-frontend-provider") {
+    const pluginId = effectiveAdapterId.trim();
+    const plugin = requireProviderPlugin(pluginId);
+    const modelAuth = plugin.resolveAuthScheme(provider.credentialKind);
+    if (
+      !isModelApiTypeExecutable({
+        providerPluginId: provider.adapterId,
+        modelPluginId: pluginId,
+        providerAuthScheme: provider.authScheme,
+        modelAuthScheme: modelAuth,
+        baseUrlSource: provider.baseUrlSource,
+      })
+    ) {
+      throw new Error("AI OCR model API Type is incompatible with the provider endpoint");
+    }
   }
 
-  const wire = plugin.buildChatRequest({
+  const executor = resolveProviderExecutor({
+    provider,
+    modelAdapterId: model.adapterId,
+    modelSourceAdapterId: model.sourceAdapterId,
+    modelId: model.id,
+    catalog: runtimeCatalog,
+  });
+  // The PNG travels only in semantic executor input; the runtime command converts it to
+  // the host-owned WIT image Blob, and legacy adapters encode it inside their wire body.
+  const response = await executor.chat({
     operation: "ocr",
     stream: false,
     modelKey: model.modelKey,
@@ -115,18 +137,9 @@ async function recognizeAiOcr(
     maxTokens: resolveMaxTokens(model),
     thinking: false,
     imagePngBase64: pngBase64,
-  });
-
-  const response = await providerFetch({
     requestId: newClientRequestId("ocr"),
-    providerInstanceId: provider.id,
-    wire,
   });
-  if (response.status < 200 || response.status >= 300) {
-    const code = mapHttpStatus(response.status);
-    throw new Error(`OCR provider HTTP ${response.status} (${code})`);
-  }
-  const text = plugin.parseChatResponse(response).trim();
+  const text = response.text.trim();
   return {
     text,
     ocrServiceId: service.id,
@@ -150,10 +163,14 @@ export async function recognizeOcrFlow(input: OcrRecognizeInput): Promise<OcrRec
   }
 
   try {
-    const [models, providers] = await Promise.all([listAllProviderModels(), listProviderInstances()]);
+    const [models, providers, runtimeCatalog] = await Promise.all([
+      listAllProviderModels(),
+      listProviderInstances(),
+      listRuntimeProviderCatalog(),
+    ]);
     const modelsById = new Map(models.map((m) => [m.id, m]));
     const providersById = new Map(providers.map((p) => [p.id, p]));
-    return await recognizeAiOcr(service, pngBase64, modelsById, providersById);
+    return await recognizeAiOcr(service, pngBase64, modelsById, providersById, runtimeCatalog);
   } catch (error) {
     const normalized = normalizeProviderError(error);
     const wrapped = new Error(normalized.message || "OCR recognition failed");

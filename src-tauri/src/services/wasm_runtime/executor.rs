@@ -3,6 +3,13 @@
 // Never auto-retries through Bundled Rust after guest execution starts.
 use crate::domain::cancel::CancelToken;
 use crate::domain::runtime_plugin::{ComponentArtifactDigest, ExecutionGrantSet, PackageDigest, PluginPrincipal};
+use crate::domain::runtime_provider::{
+  LLM_CHAT_COMPLETE_MESSAGE_MAX_BYTES, LLM_CHAT_DELTA_REASONING_MAX_BYTES, LLM_CHAT_DELTA_TEXT_MAX_BYTES,
+  LLM_CHAT_IMAGE_MAX_BYTES, LLM_CHAT_IMAGES_MAX_COUNT, LLM_CHAT_MAX_FRAMES, LLM_CHAT_MESSAGE_CONTENT_MAX_BYTES,
+  LLM_CHAT_MESSAGES_MAX_COUNT, LLM_CHAT_MODEL_MAX_BYTES, LLM_CHAT_ROLE_MAX_BYTES, LLM_CHAT_TOOL_ARGUMENTS_MAX_BYTES,
+  LLM_CHAT_TOOL_ID_MAX_BYTES, LLM_CHAT_TOOL_NAME_MAX_BYTES, LLM_CHAT_TOTAL_OUTPUT_MAX_BYTES, LlmChatCompleteResult,
+  LlmChatRequest, LlmChatResult, LlmModelDescriptor, LlmModelsListResult, ProviderRuntimeChatEvent,
+};
 use crate::domain::service_capability::{
   CapabilityError, CapabilityErrorCode, DetectLanguageRequest, DetectLanguageResponse, ExecutionContext,
   OcrImageRequest, OcrImageResponse, ProviderAttemptTracker, SPEECH_AUDIO_MAX_BYTES, SpeechSynthesizeRequest,
@@ -21,17 +28,22 @@ use std::time::{Duration, Instant};
 use uuid::Uuid;
 use wasmtime::component::{Component, HasSelf};
 
+use super::bindings::llm_models;
 use super::bindings::translate_text;
 use super::cache::{CACHE_HOST_API_VERSION, CompiledComponentCache, component_cache_identity};
 use super::engine::{WasmEngine, host_target_triple};
 use super::errors::{map_instantiate_error, map_wasmtime_error};
 use super::host::BlobResource;
 use super::host::BrokerHandle;
+use super::host::StreamWriterResource;
 use super::store::{
   EPOCH_TICK_INTERVAL, PluginHostState, build_store, new_state, new_state_with_fuel_and_provider_attempt,
   new_state_with_provider_attempt,
 };
-use crate::domain::plugin_resource::{ResourceCreateParams, ResourceDirection, ResourceOwner};
+use crate::domain::plugin_resource::{
+  LlmDelta, ResourceCreateParams, ResourceDirection, ResourceError, ResourceId, ResourceOwner,
+};
+use crate::services::stream_resources::{LlmReaderBridge, StreamFrame};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use image::ImageReader;
 use std::io::Cursor;
@@ -93,6 +105,9 @@ pub struct WasmRuntime {
   /// Test-only request cleanup observer; production execution has no observer state.
   #[cfg(test)]
   cleanup_probe: Mutex<Option<Arc<AtomicBool>>>,
+  /// Test-only stream-endpoint cleanup observer (set before the store-drop table clear).
+  #[cfg(test)]
+  streams_cleanup_probe: Mutex<Option<Arc<AtomicBool>>>,
 }
 
 impl WasmRuntime {
@@ -112,6 +127,8 @@ impl WasmRuntime {
       compile_side_effect: std::sync::Mutex::new(None),
       #[cfg(test)]
       cleanup_probe: Mutex::new(None),
+      #[cfg(test)]
+      streams_cleanup_probe: Mutex::new(None),
     })
   }
 
@@ -121,10 +138,24 @@ impl WasmRuntime {
     *self.cleanup_probe.lock().unwrap_or_else(|error| error.into_inner()) = Some(probe);
   }
 
+  /// Install a stream-endpoint cleanup observer for host-resource lifecycle assertions.
+  #[cfg(test)]
+  pub fn set_streams_cleanup_probe(&self, probe: Arc<AtomicBool>) {
+    *self
+      .streams_cleanup_probe
+      .lock()
+      .unwrap_or_else(|error| error.into_inner()) = Some(probe);
+  }
+
   #[cfg(test)]
   fn attach_cleanup_probe(&self, mut state: PluginHostState) -> PluginHostState {
     state.cleanup_probe = self
       .cleanup_probe
+      .lock()
+      .unwrap_or_else(|error| error.into_inner())
+      .clone();
+    state.streams_cleanup_probe = self
+      .streams_cleanup_probe
       .lock()
       .unwrap_or_else(|error| error.into_inner())
       .clone();
@@ -218,6 +249,437 @@ impl WasmRuntime {
       artifact_digest: artifact_digest.clone(),
       component,
     })
+  }
+
+  /// Verify a compiled artifact's WIT world shape without executing it: the component must
+  /// import only `langnext:runtime-plugin/*` interfaces and export exactly the declared LLM
+  /// world interface (never the other LLM world). Used by the provider runtime catalog before
+  /// any lifecycle action; execution remains a separate authorization step.
+  pub fn verify_artifact_world(
+    &self,
+    package_digest: &PackageDigest,
+    artifact_digest: &ComponentArtifactDigest,
+    bytes: &[u8],
+    world: &str,
+  ) -> wasmtime::Result<()> {
+    const LLM_MODELS_INTERFACE: &str = "langnext:runtime-plugin/llm-models";
+    const LLM_CHAT_INTERFACE: &str = "langnext:runtime-plugin/llm-chat";
+    let (expected_interface, forbidden_interface) = match world {
+      "llm-models-world" => (LLM_MODELS_INTERFACE, LLM_CHAT_INTERFACE),
+      "llm-chat-world" => (LLM_CHAT_INTERFACE, LLM_MODELS_INTERFACE),
+      other => return Err(wasmtime::Error::msg(format!("unsupported LLM world {other}"))),
+    };
+    let verified = self.compile_component(package_digest, artifact_digest, bytes)?;
+    let component_type = verified.component().component_type();
+    let engine = self.engine().engine();
+    for (name, _) in component_type.imports(engine) {
+      if !name.starts_with("langnext:runtime-plugin/") {
+        return Err(wasmtime::Error::msg(format!(
+          "{world} artifact imports non-langnext interface {name}"
+        )));
+      }
+    }
+    let mut found_expected = false;
+    for (name, _) in component_type.exports(engine) {
+      if name.starts_with(forbidden_interface) {
+        return Err(wasmtime::Error::msg(format!(
+          "{world} artifact exports {name}; one artifact must instantiate exactly one LLM world"
+        )));
+      }
+      if name.starts_with(expected_interface) {
+        found_expected = true;
+      }
+    }
+    if !found_expected {
+      return Err(wasmtime::Error::msg(format!(
+        "artifact does not instantiate the declared {world} (missing {expected_interface} export)"
+      )));
+    }
+    Ok(())
+  }
+
+  /// Execute `llm.models.list@1` against a [`VerifiedComponent`]. A verified package/artifact
+  /// binding and a `ProviderInstance` grant subject are enforced before guest work; the ABI
+  /// response is treated as ONE bounded aggregate list (no host pagination protocol). The
+  /// host rejects over-limit counts, empty/oversized ids, oversized labels, and duplicate ids.
+  pub async fn execute_llm_models_list(
+    &self,
+    verified: &VerifiedComponent,
+    principal: PluginPrincipal,
+    grant: ExecutionGrantSet,
+    cancel: CancelToken,
+    deadline: Option<Instant>,
+    broker: Box<dyn BrokerHandle>,
+    config: Vec<u8>,
+  ) -> Result<LlmModelsListResult, CapabilityError> {
+    use llm_models::exports::langnext::runtime_plugin::llm_models as lm_export;
+
+    // Authorization at invocation start: package identity + principal↔grant before guest work.
+    enforce_package_binding(&principal, verified)?;
+    grant
+      .grants_capability(&principal)
+      .map_err(|_| CapabilityError::new(CapabilityErrorCode::PermissionDenied, "principal not authorized"))?;
+    validate_copied_json(&config, CONFIG_MAX_BYTES, "config")?;
+    validate_capability_request_id(principal.request_id().as_str())?;
+    let cancel = cancel.clone();
+    let state = new_state(principal, grant, cancel.clone(), deadline, broker);
+    let mut store = build_store(self.engine.engine(), state);
+    let mut linker = wasmtime::component::Linker::new(self.engine.engine());
+    llm_models::LlmModelsWorld::add_to_linker::<_, HasSelf<PluginHostState>>(&mut linker, |state| state)
+      .map_err(map_instantiate_error)?;
+    let world = llm_models::LlmModelsWorld::instantiate_async(&mut store, verified.component(), &linker)
+      .await
+      .map_err(map_instantiate_error)?;
+    let guest = world.langnext_runtime_plugin_llm_models();
+    let wit_request = lm_export::ModelsListRequest {
+      request_id: store.data().principal.request_id().as_str().to_string(),
+    };
+    let call_result = run_with_interruption(
+      deadline,
+      cancel,
+      guest.call_models_list(&mut store, &config, &wit_request),
+      None,
+      DEFAULT_INVOCATION_TIMEOUT,
+    )
+    .await;
+    match call_result {
+      Ok(Ok(response)) => {
+        validate_llm_model_descriptors(&response.models)?;
+        Ok(LlmModelsListResult {
+          models: response
+            .models
+            .into_iter()
+            .map(|model| LlmModelDescriptor {
+              id: model.id,
+              label: model.label,
+            })
+            .collect(),
+        })
+      }
+      Ok(Err(plugin_error)) => Err(map_llm_models_plugin_error(plugin_error)),
+      Err(capability_error) => Err(capability_error),
+    }
+  }
+
+  /// Execute `llm.chat@1` against a [`VerifiedComponent`]. The host always creates the required
+  /// `llm-delta` writer/reader pair before the WIT call and transfers only the writer to the
+  /// guest. For `stream = false` the guest deterministically returns a complete message and the
+  /// host retains/discards the reader; for `stream = true` the host drains the paired reader
+  /// concurrently (typed delta bridge) and requires a streaming result. Input images become
+  /// host-owned Blobs; image bytes never cross WIT semantic fields, logs, DTOs, or errors.
+  #[allow(clippy::too_many_arguments)]
+  pub async fn execute_llm_chat(
+    &self,
+    verified: &VerifiedComponent,
+    principal: PluginPrincipal,
+    grant: ExecutionGrantSet,
+    cancel: CancelToken,
+    deadline: Option<Instant>,
+    broker: Box<dyn BrokerHandle>,
+    config: Vec<u8>,
+    request: LlmChatRequest,
+    on_event: Option<Box<dyn Fn(ProviderRuntimeChatEvent) -> Result<(), CapabilityError> + Send>>,
+  ) -> Result<LlmChatResult, CapabilityError> {
+    use super::bindings::llm_chat;
+    use llm_chat::exports::langnext::runtime_plugin::llm_chat as lc_export;
+
+    // Authorization at invocation start: package identity + principal↔grant before guest work.
+    enforce_package_binding(&principal, verified)?;
+    grant
+      .grants_capability(&principal)
+      .map_err(|_| CapabilityError::new(CapabilityErrorCode::PermissionDenied, "principal not authorized"))?;
+    validate_copied_json(&config, CONFIG_MAX_BYTES, "config")?;
+    validate_llm_chat_request(&request)?;
+    let preferences = serde_json::to_vec(&request.preferences)
+      .map_err(|_| CapabilityError::new(CapabilityErrorCode::InvalidRequest, "preferences must be valid JSON"))?;
+    validate_copied_json(&preferences, PREFERENCES_MAX_BYTES, "preferences")?;
+    // Re-parse the copied envelope so a tampered/unknown field is rejected fail-closed.
+    let parsed: crate::domain::runtime_provider::LlmChatPreferencesV1 = serde_json::from_slice(&preferences)
+      .map_err(|_| CapabilityError::new(CapabilityErrorCode::InvalidRequest, "preferences envelope is invalid"))?;
+    if parsed.stream != request.preferences.stream {
+      return Err(CapabilityError::new(
+        CapabilityErrorCode::InvalidRequest,
+        "preferences envelope changed during serialization",
+      ));
+    }
+    if request.preferences.stream && on_event.is_none() {
+      return Err(CapabilityError::new(
+        CapabilityErrorCode::InvalidRequest,
+        "streaming chat requires an event sink",
+      ));
+    }
+
+    let cancel = cancel.clone();
+    let state = new_state_with_fuel_and_provider_attempt(
+      principal,
+      grant,
+      cancel.clone(),
+      deadline,
+      broker,
+      PAYLOAD_INVOCATION_FUEL,
+      None,
+    );
+    #[cfg(test)]
+    let state = self.attach_cleanup_probe(state);
+    let mut store = build_store(self.engine.engine(), state);
+    let request_principal = store.data().principal.clone();
+
+    // Host-owned llm-delta pair created BEFORE the WIT call; only the writer crosses to the guest.
+    // The writer-side total cap mirrors the host's total-output bound; per-delta/frame-count
+    // bounds are enforced by the reader-side bridge before a delta is forwarded.
+    let (writer_id, reader_id) = store
+      .data_mut()
+      .streams
+      .create(
+        ResourceCreateParams {
+          owner: ResourceOwner::from_principal(&request_principal),
+          direction: ResourceDirection::Output,
+          content_type: None,
+          max_bytes: LLM_CHAT_TOTAL_OUTPUT_MAX_BYTES as u64,
+          expires_at: None,
+          cancel: cancel.clone(),
+        },
+        crate::domain::plugin_resource::StreamKind::LlmDelta,
+        None,
+      )
+      .map_err(|_| CapabilityError::new(CapabilityErrorCode::Internal, "failed to create chat stream pair"))?;
+
+    // Convert input PNGs to host-owned Blobs; WIT receives only borrowed blob handles.
+    let mut image_handles = Vec::with_capacity(request.images.len());
+    for image_bytes in &request.images {
+      let blob_id = store
+        .data_mut()
+        .blobs
+        .create_with_bytes(
+          ResourceCreateParams {
+            owner: ResourceOwner::from_principal(&request_principal),
+            direction: ResourceDirection::Input,
+            content_type: Some("image/png".into()),
+            max_bytes: image_bytes.len().max(1) as u64,
+            expires_at: None,
+            cancel: cancel.clone(),
+          },
+          image_bytes.clone(),
+        )
+        .map_err(|_| CapabilityError::new(CapabilityErrorCode::Internal, "failed to create chat image blob"))?;
+      image_handles.push(
+        store
+          .data_mut()
+          .table
+          .push(BlobResource { id: blob_id })
+          .map_err(|_| CapabilityError::new(CapabilityErrorCode::Internal, "failed to bind chat image blob"))?,
+      );
+    }
+    let writer_handle = store
+      .data_mut()
+      .table
+      .push(StreamWriterResource { id: writer_id })
+      .map_err(|_| CapabilityError::new(CapabilityErrorCode::Internal, "failed to bind chat stream writer"))?;
+
+    // Streaming: detach the reader into a bridge and drain it concurrently with the guest call.
+    let reader_bridge = if request.preferences.stream {
+      Some(
+        store
+          .data_mut()
+          .streams
+          .detach_reader(reader_id)
+          .map_err(|_| CapabilityError::new(CapabilityErrorCode::Internal, "failed to detach chat stream reader"))?,
+      )
+    } else {
+      None
+    };
+    let reader_task = match &reader_bridge {
+      Some(bridge) => {
+        let bridge = bridge.clone();
+        let task_principal = request_principal.clone();
+        let task_cancel = cancel.clone();
+        let task_deadline = deadline;
+        let on_event = on_event.expect("streaming chat requires an event sink");
+        Some(tokio::spawn(async move {
+          let mut total_bytes: usize = 0;
+          let mut frame_count: usize = 0;
+          let result: Result<(), CapabilityError> = loop {
+            match bridge.receive(&task_principal, task_deadline, Some(&task_cancel)).await {
+              Ok(Some(StreamFrame::LlmDelta(delta))) => {
+                frame_count += 1;
+                if frame_count > LLM_CHAT_MAX_FRAMES {
+                  break Err(CapabilityError::new(
+                    CapabilityErrorCode::InvalidResponse,
+                    format!("chat stream exceeds {LLM_CHAT_MAX_FRAMES} frames"),
+                  ));
+                }
+                let (event, event_bytes) = llm_delta_to_event(delta)?;
+                total_bytes = total_bytes.saturating_add(event_bytes);
+                if total_bytes > LLM_CHAT_TOTAL_OUTPUT_MAX_BYTES {
+                  break Err(CapabilityError::new(
+                    CapabilityErrorCode::InvalidResponse,
+                    format!("chat stream exceeds {LLM_CHAT_TOTAL_OUTPUT_MAX_BYTES} total output bytes"),
+                  ));
+                }
+                if let Err(error) = on_event(event) {
+                  break Err(error);
+                }
+              }
+              Ok(Some(StreamFrame::Terminal(_))) => break Ok(()),
+              // A table kind mismatch is impossible for an llm-delta pair; fail closed anyway.
+              Ok(Some(StreamFrame::NetworkBinary(_))) => {
+                break Err(CapabilityError::new(
+                  CapabilityErrorCode::InvalidResponse,
+                  "chat stream carried a binary frame",
+                ));
+              }
+              Ok(None) => {
+                break Err(CapabilityError::new(
+                  CapabilityErrorCode::Internal,
+                  "chat stream reader closed without a terminal frame",
+                ));
+              }
+              Err(ResourceError::Cancelled) | Err(ResourceError::Closed) => break Ok(()),
+              Err(other) => {
+                break Err(CapabilityError::new(
+                  CapabilityErrorCode::Internal,
+                  format!("chat stream read failed: {other:?}"),
+                ));
+              }
+            }
+          };
+          // A bridge failure (bounds breach, terminal read error) must wake a blocked guest
+          // writer instead of leaving it parked under backpressure until the invocation
+          // timeout: force-cancel the pair so the writer observes `Cancelled` and returns a
+          // stable plugin error. Idempotent when the guest already finished/discarded.
+          if result.is_err() {
+            bridge.discard().await;
+          }
+          result
+        }))
+      }
+      None => None,
+    };
+
+    let mut linker = wasmtime::component::Linker::new(self.engine.engine());
+    llm_chat::LlmChatWorld::add_to_linker::<_, HasSelf<PluginHostState>>(&mut linker, |state| state)
+      .map_err(map_instantiate_error)?;
+    let world = llm_chat::LlmChatWorld::instantiate_async(&mut store, verified.component(), &linker)
+      .await
+      .map_err(map_instantiate_error)?;
+    let guest = world.langnext_runtime_plugin_llm_chat();
+    let wit_request = lc_export::ChatRequest {
+      request_id: store.data().principal.request_id().as_str().to_string(),
+      model: request.model,
+      messages: request
+        .messages
+        .into_iter()
+        .map(|message| lc_export::ChatMessage {
+          role: message.role,
+          content: message.content,
+        })
+        .collect(),
+      images: image_handles,
+      preferences: preferences.clone(),
+    };
+    let call_result = run_with_interruption(
+      deadline,
+      cancel.clone(),
+      guest.call_chat(&mut store, &config, &wit_request, writer_handle),
+      None,
+      DEFAULT_INVOCATION_TIMEOUT,
+    )
+    .await;
+
+    let outcome = match call_result {
+      Ok(Ok(lc_export::ChatResult::Complete(response))) => {
+        if request.preferences.stream {
+          return finish_chat_with_cleanup(
+            store,
+            reader_bridge,
+            reader_task,
+            reader_id,
+            writer_id,
+            Err(CapabilityError::new(
+              CapabilityErrorCode::InvalidResponse,
+              "guest returned a complete result under a streaming preference",
+            )),
+          )
+          .await;
+        }
+        let content_len = response.message.content.len();
+        let role_len = response.message.role.len();
+        if content_len > LLM_CHAT_COMPLETE_MESSAGE_MAX_BYTES || role_len > LLM_CHAT_ROLE_MAX_BYTES {
+          return finish_chat_with_cleanup(
+            store,
+            reader_bridge,
+            reader_task,
+            reader_id,
+            writer_id,
+            Err(CapabilityError::new(
+              CapabilityErrorCode::InvalidResponse,
+              "chat complete message exceeds host response bound",
+            )),
+          )
+          .await;
+        }
+        finish_chat_with_cleanup(
+          store,
+          reader_bridge,
+          reader_task,
+          reader_id,
+          writer_id,
+          Ok(LlmChatResult::Complete(LlmChatCompleteResult {
+            role: response.message.role,
+            content: response.message.content,
+          })),
+        )
+        .await
+      }
+      Ok(Ok(lc_export::ChatResult::Streaming)) => {
+        if !request.preferences.stream {
+          return finish_chat_with_cleanup(
+            store,
+            reader_bridge,
+            reader_task,
+            reader_id,
+            writer_id,
+            Err(CapabilityError::new(
+              CapabilityErrorCode::InvalidResponse,
+              "guest streamed under a non-stream preference",
+            )),
+          )
+          .await;
+        }
+        finish_chat_with_cleanup(
+          store,
+          reader_bridge,
+          reader_task,
+          reader_id,
+          writer_id,
+          Ok(LlmChatResult::Streaming),
+        )
+        .await
+      }
+      Ok(Err(plugin_error)) => {
+        finish_chat_with_cleanup(
+          store,
+          reader_bridge,
+          reader_task,
+          reader_id,
+          writer_id,
+          Err(map_llm_chat_plugin_error(plugin_error)),
+        )
+        .await
+      }
+      Err(capability_error) => {
+        finish_chat_with_cleanup(
+          store,
+          reader_bridge,
+          reader_task,
+          reader_id,
+          writer_id,
+          Err(capability_error),
+        )
+        .await
+      }
+    };
+    outcome
   }
 
   /// Execute `translate.text@1` against a [`VerifiedComponent`]. A fresh store is created for this
@@ -791,6 +1253,173 @@ impl WasmRuntime {
   }
 }
 
+/// Maximum wall-clock wait for the LLM stream drain task to observe terminal/cancellation
+/// before the host aborts it. Shorter than the stream backpressure wait so a stalled reader
+/// never delays request cleanup beyond a bounded grace.
+pub const LLM_CHAT_STREAM_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Release every request resource on every chat terminal path: stop the drain task (bounded),
+/// discard the retained reader (unary) or bridge (streaming), drop the writer entry, and drop
+/// the store. A reader/drain failure replaces a success outcome; the primary guest error is
+/// kept when both failed. Never calls the legacy executor and never retries the request.
+async fn finish_chat_with_cleanup(
+  mut store: wasmtime::Store<PluginHostState>,
+  reader_bridge: Option<LlmReaderBridge>,
+  reader_task: Option<tokio::task::JoinHandle<Result<(), CapabilityError>>>,
+  reader_id: ResourceId,
+  writer_id: ResourceId,
+  outcome: Result<LlmChatResult, CapabilityError>,
+) -> Result<LlmChatResult, CapabilityError> {
+  // 1. Wake a possibly-blocked drain task by force-terminating the pair, then join it bounded.
+  let reader_error = if let Some(task) = reader_task {
+    if let Some(bridge) = &reader_bridge {
+      bridge.discard().await;
+    }
+    match tokio::time::timeout(LLM_CHAT_STREAM_DRAIN_TIMEOUT, task).await {
+      Ok(Ok(Ok(()))) => None,
+      Ok(Ok(Err(error))) => Some(error),
+      Ok(Err(join_error)) => {
+        log::warn!("chat stream drain task join failed: {join_error}");
+        None
+      }
+      Err(_) => {
+        log::warn!("chat stream drain task exceeded its shutdown timeout");
+        None
+      }
+    }
+  } else {
+    None
+  };
+  // 2. Release the retained endpoints: the reader stays table-owned for unary chat, and the
+  // writer entry is removed on every path (stream-finish may already have removed it).
+  let principal = store.data().principal.clone();
+  if reader_bridge.is_none() {
+    store.data_mut().streams.reader_discard(reader_id, &principal).await;
+  }
+  store.data_mut().streams.writer_drop(writer_id).await;
+  drop(store);
+  match (outcome, reader_error) {
+    (Ok(value), None) => Ok(value),
+    (Ok(_), Some(error)) => Err(error),
+    (Err(error), _) => Err(error),
+  }
+}
+
+/// Map one typed LLM delta to a sanitized runtime event with per-delta bounds. Tool arguments
+/// are copied JSON bytes and must be valid UTF-8; reasoning/tool deltas are never reparsed as
+/// opaque text. Returns the event plus its counted output bytes.
+fn llm_delta_to_event(delta: LlmDelta) -> Result<(ProviderRuntimeChatEvent, usize), CapabilityError> {
+  match delta {
+    LlmDelta::Text(text) => {
+      if text.len() > LLM_CHAT_DELTA_TEXT_MAX_BYTES {
+        return Err(CapabilityError::new(
+          CapabilityErrorCode::InvalidResponse,
+          format!("chat text delta exceeds {LLM_CHAT_DELTA_TEXT_MAX_BYTES} bytes"),
+        ));
+      }
+      let bytes = text.len();
+      Ok((ProviderRuntimeChatEvent::Text { text }, bytes))
+    }
+    LlmDelta::Reasoning(text) => {
+      if text.len() > LLM_CHAT_DELTA_REASONING_MAX_BYTES {
+        return Err(CapabilityError::new(
+          CapabilityErrorCode::InvalidResponse,
+          format!("chat reasoning delta exceeds {LLM_CHAT_DELTA_REASONING_MAX_BYTES} bytes"),
+        ));
+      }
+      let bytes = text.len();
+      Ok((ProviderRuntimeChatEvent::Reasoning { text }, bytes))
+    }
+    LlmDelta::ToolCall(tool) => {
+      if tool.id.len() > LLM_CHAT_TOOL_ID_MAX_BYTES || tool.name.len() > LLM_CHAT_TOOL_NAME_MAX_BYTES {
+        return Err(CapabilityError::new(
+          CapabilityErrorCode::InvalidResponse,
+          "chat tool-call id/name exceeds host bound",
+        ));
+      }
+      let arguments = String::from_utf8(tool.arguments_json).map_err(|_| {
+        CapabilityError::new(
+          CapabilityErrorCode::InvalidResponse,
+          "chat tool-call arguments are not valid UTF-8",
+        )
+      })?;
+      if arguments.len() > LLM_CHAT_TOOL_ARGUMENTS_MAX_BYTES {
+        return Err(CapabilityError::new(
+          CapabilityErrorCode::InvalidResponse,
+          format!("chat tool-call arguments exceed {LLM_CHAT_TOOL_ARGUMENTS_MAX_BYTES} bytes"),
+        ));
+      }
+      let bytes = arguments
+        .len()
+        .saturating_add(tool.id.len())
+        .saturating_add(tool.name.len());
+      Ok((
+        ProviderRuntimeChatEvent::ToolCall {
+          id: tool.id,
+          name: tool.name,
+          arguments_json: arguments,
+        },
+        bytes,
+      ))
+    }
+    LlmDelta::Complete(status) => Ok((
+      ProviderRuntimeChatEvent::Complete {
+        status: status.as_str().to_string(),
+      },
+      0,
+    )),
+  }
+}
+
+/// Validate bounded semantic chat inputs before guest execution. Image bytes are validated
+/// only for count/size bounds; decoding stays with the provider protocol (host-owned Blob).
+fn validate_llm_chat_request(request: &LlmChatRequest) -> Result<(), CapabilityError> {
+  if request.model.is_empty() || request.model.len() > LLM_CHAT_MODEL_MAX_BYTES {
+    return Err(CapabilityError::new(
+      CapabilityErrorCode::InvalidRequest,
+      format!("model id must be non-empty and at most {LLM_CHAT_MODEL_MAX_BYTES} bytes"),
+    ));
+  }
+  if request.messages.is_empty() || request.messages.len() > LLM_CHAT_MESSAGES_MAX_COUNT {
+    return Err(CapabilityError::new(
+      CapabilityErrorCode::InvalidRequest,
+      format!("messages must be 1..={LLM_CHAT_MESSAGES_MAX_COUNT}"),
+    ));
+  }
+  for message in &request.messages {
+    if message.role.is_empty() || message.role.len() > LLM_CHAT_ROLE_MAX_BYTES {
+      return Err(CapabilityError::new(
+        CapabilityErrorCode::InvalidRequest,
+        "message role is empty or exceeds host bound",
+      ));
+    }
+    if message.content.len() > LLM_CHAT_MESSAGE_CONTENT_MAX_BYTES {
+      return Err(CapabilityError::new(
+        CapabilityErrorCode::InvalidRequest,
+        format!("message content exceeds {LLM_CHAT_MESSAGE_CONTENT_MAX_BYTES} bytes"),
+      ));
+    }
+  }
+  if request.images.len() > LLM_CHAT_IMAGES_MAX_COUNT {
+    return Err(CapabilityError::new(
+      CapabilityErrorCode::InvalidRequest,
+      format!("images exceed {LLM_CHAT_IMAGES_MAX_COUNT}"),
+    ));
+  }
+  for image in &request.images {
+    if image.is_empty() || image.len() > LLM_CHAT_IMAGE_MAX_BYTES {
+      return Err(CapabilityError::new(
+        CapabilityErrorCode::InvalidRequest,
+        "image is empty or exceeds host bound",
+      ));
+    }
+  }
+  request
+    .preferences
+    .validate()
+    .map_err(|message| CapabilityError::new(CapabilityErrorCode::InvalidRequest, message))
+}
+
 /// Broker handle that always denies; migration world never calls host.broker.
 struct MigrationDeniedBroker;
 
@@ -1193,6 +1822,59 @@ fn validate_copied_json(bytes: &[u8], max_bytes: usize, field: &str) -> Result<(
   Ok(())
 }
 
+/// Named host maximum model count in one aggregate `llm.models.list@1` response. Guests that
+/// need remote cursor pagination must enforce their own page/item/total limits internally and
+/// return only this bounded aggregate; the host never pages a second time.
+pub const LLM_MODELS_LIST_MAX_MODELS: usize = 512;
+/// Maximum UTF-8 bytes in a model descriptor id.
+pub const LLM_MODEL_ID_MAX_BYTES: usize = 256;
+/// Maximum UTF-8 bytes in a model descriptor label.
+pub const LLM_MODEL_LABEL_MAX_BYTES: usize = 512;
+
+/// Validate a typed models-list response as one bounded aggregate: count, descriptor id/label
+/// bounds, and duplicate rejection. Any violation is a stable `InvalidResponse` so a guest can
+/// never push an unbounded or ambiguous model set into host state.
+fn validate_llm_model_descriptors(
+  models: &[llm_models::exports::langnext::runtime_plugin::llm_models::ModelDescriptor],
+) -> Result<(), CapabilityError> {
+  if models.len() > LLM_MODELS_LIST_MAX_MODELS {
+    return Err(CapabilityError::new(
+      CapabilityErrorCode::InvalidResponse,
+      format!("models list exceeds host maximum of {LLM_MODELS_LIST_MAX_MODELS}"),
+    ));
+  }
+  let mut seen = std::collections::HashSet::with_capacity(models.len().min(64));
+  for model in models {
+    if model.id.is_empty() {
+      return Err(CapabilityError::new(
+        CapabilityErrorCode::InvalidResponse,
+        "model descriptor id must not be empty",
+      ));
+    }
+    if model.id.len() > LLM_MODEL_ID_MAX_BYTES {
+      return Err(CapabilityError::new(
+        CapabilityErrorCode::InvalidResponse,
+        format!("model descriptor id exceeds {LLM_MODEL_ID_MAX_BYTES} bytes"),
+      ));
+    }
+    if let Some(label) = model.label.as_deref() {
+      if label.len() > LLM_MODEL_LABEL_MAX_BYTES {
+        return Err(CapabilityError::new(
+          CapabilityErrorCode::InvalidResponse,
+          format!("model descriptor label exceeds {LLM_MODEL_LABEL_MAX_BYTES} bytes"),
+        ));
+      }
+    }
+    if !seen.insert(model.id.as_str()) {
+      return Err(CapabilityError::new(
+        CapabilityErrorCode::InvalidResponse,
+        format!("duplicate model id '{}'", model.id),
+      ));
+    }
+  }
+  Ok(())
+}
+
 /// Validate a translate.text request against host bounds before guest execution.
 fn validate_translate_text_request(request_id: &str, request: &TranslateTextRequest) -> Result<(), CapabilityError> {
   validate_capability_request_id(request_id)?;
@@ -1328,6 +2010,14 @@ impl_plugin_error_mapper!(
 impl_plugin_error_mapper!(
   map_speech_synthesize_plugin_error,
   super::bindings::speech_synthesize::langnext::runtime_plugin::common::PluginError
+);
+impl_plugin_error_mapper!(
+  map_llm_models_plugin_error,
+  super::bindings::llm_models::langnext::runtime_plugin::common::PluginError
+);
+impl_plugin_error_mapper!(
+  map_llm_chat_plugin_error,
+  super::bindings::llm_chat::langnext::runtime_plugin::common::PluginError
 );
 
 /// Run a guest future under a wall deadline and cooperative cancellation. The shared engine

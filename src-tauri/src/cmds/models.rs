@@ -103,12 +103,13 @@ pub async fn delete_provider_models(
   Ok(())
 }
 
-/// Persist a frontend-parsed complete remote model snapshot.
+/// Persist a frontend-parsed complete remote model snapshot for ONE selected API type.
 #[tauri::command]
 pub async fn apply_provider_model_sync(
   app: AppHandle,
   state: State<'_, AppState>,
   provider_instance_id: Uuid,
+  adapter_id: String,
   expected_updated_at: String,
   remote_models: Vec<crate::domain::model::RemoteModelSyncItem>,
 ) -> Result<SyncModelsResult, IpcError> {
@@ -116,7 +117,7 @@ pub async fn apply_provider_model_sync(
   let seeded = models.seed_remote_capabilities(remote_models).await;
   let models = state.models.clone();
   let result = run_blocking("apply_provider_model_sync", move || {
-    models.apply_provider_model_sync(provider_instance_id, &expected_updated_at, &seeded)
+    models.apply_provider_model_sync(provider_instance_id, &adapter_id, &expected_updated_at, &seeded)
   })
   .await?;
   if result.ok {

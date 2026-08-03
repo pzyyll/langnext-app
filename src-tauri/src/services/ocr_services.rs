@@ -1412,6 +1412,7 @@ mod tests {
           remote_metadata_json: None,
           capability_overrides_json: None,
           adapter_id: None,
+          source_adapter_id: String::new(),
           last_seen_at: None,
           created_at: now.clone(),
           updated_at: now,

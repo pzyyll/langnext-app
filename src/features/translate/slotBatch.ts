@@ -53,15 +53,24 @@ export function startSlotStreamBatch(jobs: readonly SlotStreamJob[]): Effect.Eff
 }
 
 /**
- * Cancel every listed request id via cancel_provider_http. Swallows per-id failures.
+ * Cancel every listed request id through both the legacy HTTP and provider-runtime cancel
+ * commands (best-effort; whichever transport owns the request id wins). Swallows per-id failures.
  */
 export function cancelRequestIds(requestIds: readonly string[]): Effect.Effect<void, never> {
   return Effect.forEach(
     requestIds,
     (requestId) =>
-      invokeEffect<boolean>("cancel_provider_http", { requestId }).pipe(
-        Effect.catchAll(() => Effect.void),
-        Effect.asVoid,
+      Effect.forEach(
+        [
+          invokeEffect<boolean>("cancel_provider_http", { requestId }),
+          invokeEffect<boolean>("cancel_provider_runtime", { requestId }),
+        ],
+        (effect) =>
+          effect.pipe(
+            Effect.catchAll(() => Effect.void),
+            Effect.asVoid,
+          ),
+        { concurrency: "unbounded" },
       ),
     { concurrency: "unbounded" },
   ).pipe(Effect.asVoid);

@@ -28,9 +28,17 @@ export type AddManualModelDialogProps = {
   providerId: string;
   onOpenChange: (open: boolean) => void;
   onCreated: (model: ProviderModelDto) => void;
+  /** Attached runtime interface API types (labeled from signed catalog metadata). */
+  runtimeAdapterOptions?: readonly import("./adapterOptions").AdapterOption[];
 };
 
-export function AddManualModelDialog({ open, providerId, onOpenChange, onCreated }: AddManualModelDialogProps) {
+export function AddManualModelDialog({
+  open,
+  providerId,
+  onOpenChange,
+  onCreated,
+  runtimeAdapterOptions = [],
+}: AddManualModelDialogProps) {
   const { t } = useTranslation();
 
   return (
@@ -49,6 +57,7 @@ export function AddManualModelDialog({ open, providerId, onOpenChange, onCreated
           {open ? (
             <AddManualModelForm
               providerId={providerId}
+              runtimeAdapterOptions={runtimeAdapterOptions}
               onCreated={(model) => {
                 onCreated(model);
                 onOpenChange(false);
@@ -63,14 +72,15 @@ export function AddManualModelDialog({ open, providerId, onOpenChange, onCreated
 
 type AddManualModelFormProps = {
   providerId: string;
+  runtimeAdapterOptions?: readonly import("./adapterOptions").AdapterOption[];
   onCreated: (model: ProviderModelDto) => void;
 };
 
-function AddManualModelForm({ providerId, onCreated }: AddManualModelFormProps) {
+function AddManualModelForm({ providerId, runtimeAdapterOptions = [], onCreated }: AddManualModelFormProps) {
   const { t } = useTranslation();
   const toast = useToast();
   // Registered plugins are fixed at module load; options are stable for the dialog's lifetime.
-  const adapterOptions = useMemo(() => listAdapterOptions(), []);
+  const adapterOptions = useMemo(() => [...listAdapterOptions(), ...runtimeAdapterOptions], [runtimeAdapterOptions]);
   const [modelKey, setModelKey] = useState("");
   const [displayNameOverride, setDisplayNameOverride] = useState("");
   /** Empty string means inherit the channel API Type. */

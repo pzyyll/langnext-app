@@ -24,6 +24,7 @@ import { updateModelConfig } from "../../storage/client";
 import { getIpcErrorMessage } from "../../storage/errors";
 import type { CapabilityOverridesV1, ProviderModelDto } from "../../storage/types";
 import { getAdapterLabel, listAdapterOptions } from "./adapterOptions";
+import { resolveInheritApiTypeLabelKey } from "./modelApiTypeDisplay";
 
 const TOKEN_MIN = 1;
 const TOKEN_MAX = 0xffff_ffff;
@@ -47,9 +48,17 @@ export type EditModelConfigDialogProps = {
   model: ProviderModelDto | null;
   onOpenChange: (open: boolean) => void;
   onSaved: (model: ProviderModelDto) => void;
+  /** Attached runtime interface API types (labeled from signed catalog metadata). */
+  runtimeAdapterOptions?: readonly import("./adapterOptions").AdapterOption[];
 };
 
-export function EditModelConfigDialog({ open, model, onOpenChange, onSaved }: EditModelConfigDialogProps) {
+export function EditModelConfigDialog({
+  open,
+  model,
+  onOpenChange,
+  onSaved,
+  runtimeAdapterOptions = [],
+}: EditModelConfigDialogProps) {
   const { t } = useTranslation();
 
   return (
@@ -72,6 +81,7 @@ export function EditModelConfigDialog({ open, model, onOpenChange, onSaved }: Ed
           </div>
           {open && model ? (
             <EditModelConfigForm
+              runtimeAdapterOptions={runtimeAdapterOptions}
               key={model.id}
               model={model}
               onSaved={(updated) => {
@@ -88,15 +98,16 @@ export function EditModelConfigDialog({ open, model, onOpenChange, onSaved }: Ed
 
 type EditModelConfigFormProps = {
   model: ProviderModelDto;
+  runtimeAdapterOptions?: readonly import("./adapterOptions").AdapterOption[];
   onSaved: (model: ProviderModelDto) => void;
 };
 
-function EditModelConfigForm({ model, onSaved }: EditModelConfigFormProps) {
+function EditModelConfigForm({ model, runtimeAdapterOptions = [], onSaved }: EditModelConfigFormProps) {
   const { t } = useTranslation();
   const toast = useToast();
   const initial = useMemo(() => formStateFromModel(model), [model]);
   // Registered plugins are fixed at module load; options are stable for the dialog's lifetime.
-  const adapterOptions = useMemo(() => listAdapterOptions(), []);
+  const adapterOptions = useMemo(() => [...listAdapterOptions(), ...runtimeAdapterOptions], [runtimeAdapterOptions]);
 
   const [displayNameOverride, setDisplayNameOverride] = useState(initial.displayNameOverride);
   const [adapterId, setAdapterId] = useState(initial.adapterId);
@@ -110,6 +121,12 @@ function EditModelConfigForm({ model, onSaved }: EditModelConfigFormProps) {
   const [error, setError] = useState<string | null>(null);
 
   const displayNamePlaceholder = model.remoteDisplayName?.trim() || t("common.optional");
+
+  // Clearing the override returns to the discovery source for remote models, so the
+  // empty option names that source instead of a misleading generic default.
+  const inheritApiTypeLabel = t(resolveInheritApiTypeLabelKey(model.sourceAdapterId), {
+    type: model.sourceAdapterId ? getAdapterLabel(model.sourceAdapterId) : "",
+  });
 
   const isDirty =
     displayNameOverride !== initial.displayNameOverride ||
@@ -197,7 +214,7 @@ function EditModelConfigForm({ model, onSaved }: EditModelConfigFormProps) {
             value={adapterId}
             onValueChange={(value) => setAdapterId(value ?? "")}
             options={[
-              { value: "", label: t("models.apiTypeInherit") },
+              { value: "", label: inheritApiTypeLabel },
               ...adapterOptions.map((option) => ({ value: option.id, label: option.label })),
             ]}
             extraOptions={

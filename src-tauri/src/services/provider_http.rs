@@ -4,7 +4,7 @@ use crate::credentials::CredentialVault;
 use crate::domain::cancel::CancelToken;
 use crate::domain::provider::{AuthSchemeV1, ProviderInstance};
 use crate::domain::provider_http::{
-  ProviderHttpRequest, ProviderHttpResponse, ProviderHttpStreamEvent, ProviderWireRequest,
+  ProviderHttpMethod, ProviderHttpRequest, ProviderHttpResponse, ProviderHttpStreamEvent, ProviderWireRequest,
 };
 use crate::error::StorageError;
 use crate::repositories::provider_instances;
@@ -15,6 +15,8 @@ use crate::services::bounded_http::{
 use crate::storage::Database;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
+use uuid::Uuid;
 
 // Re-export shared transport types for existing call sites/tests.
 pub use bounded_http::{PreparedProviderRequest, RawHttpTransport, build_endpoint};
@@ -69,26 +71,93 @@ impl ProviderHttpService {
       return Err(StorageError::Validation("provider is disabled".into()));
     }
     validate_wire(&input.wire, &provider.auth_scheme)?;
-    let base_url = effective_base_url(&provider)?;
-    reject_insecure_http_if_needed(&base_url, provider.insecure_http_confirmed_at.as_deref())?;
-    let mut url = build_endpoint(&base_url, &input.wire.relative_path)?;
-    bounded_http::append_query_pairs(&mut url, &input.wire.query)?;
-    let secret = load_secret_for_scheme(self.vault.as_ref(), &provider)?;
-    let mut headers = input.wire.headers.clone();
-    inject_auth(&mut url, &mut headers, &provider.auth_scheme, secret.as_deref())?;
-
-    Ok(PreparedHttpRequest {
-      method: input.wire.method,
-      url,
-      headers,
-      body: input.wire.body.map(RequestBody::text).unwrap_or_default(),
-      content_type: None,
-      proxy_mode: provider.proxy_mode,
-      destination_policy: DestinationPolicy::Configured,
-      max_response_body_bytes: None,
-      timeout: None,
-    })
+    prepare_provider_transport(
+      &self.db,
+      self.vault.as_ref(),
+      input.provider_instance_id,
+      input.wire.method,
+      &input.wire.relative_path,
+      &input.wire.query,
+      &input.wire.headers,
+      input.wire.body.map(RequestBody::text).unwrap_or_default(),
+      None,
+      None,
+    )
   }
+}
+
+/// One already-authorized provider transport request (frontend Provider HTTP or the
+/// provider-runtime broker). Callers own authorization; this path never re-derives it.
+#[derive(Debug, Clone)]
+pub(crate) struct ProviderTransportRequest {
+  pub provider_id: Uuid,
+  pub method: ProviderHttpMethod,
+  pub relative_path: String,
+  pub query: Vec<(String, String)>,
+  pub headers: HashMap<String, String>,
+  pub body: RequestBody,
+}
+
+/// Shared binary-safe provider transport preparation used by the frontend Provider HTTP
+/// commands and the provider-runtime broker. Performs URL confinement, persisted proxy
+/// selection, host credential lookup, and auth injection after the caller has authorized the
+/// request; caller header/query name validation stays with each caller's wire contract.
+/// `max_response_body_bytes`/`timeout` are host-selected bounds (broker resource limits or
+/// command defaults).
+pub(crate) fn prepare_provider_transport(
+  db: &Database,
+  vault: &dyn CredentialVault,
+  provider_id: Uuid,
+  method: ProviderHttpMethod,
+  relative_path: &str,
+  query: &[(String, String)],
+  headers: &HashMap<String, String>,
+  body: RequestBody,
+  max_response_body_bytes: Option<usize>,
+  timeout: Option<Duration>,
+) -> Result<PreparedProviderRequest, StorageError> {
+  let provider = db.read(|conn| provider_instances::get(conn, provider_id))?;
+  if !provider.enabled {
+    return Err(StorageError::Validation("provider is disabled".into()));
+  }
+  validate_relative_path(relative_path)?;
+  for (name, _value) in query {
+    validate_caller_name(name, "query")?;
+    if value_looks_like_secret_key(name) {
+      return Err(StorageError::Validation(format!(
+        "caller query name '{name}' is restricted"
+      )));
+    }
+    reject_if_auth_name(name, &provider.auth_scheme, "query")?;
+  }
+  for (name, _value) in headers {
+    validate_caller_name(name, "header")?;
+    if is_blocked_header(name) {
+      return Err(StorageError::Validation(format!(
+        "caller header '{name}' is restricted"
+      )));
+    }
+    reject_if_auth_name(name, &provider.auth_scheme, "header")?;
+  }
+  let base_url = effective_base_url(&provider)?;
+  reject_insecure_http_if_needed(&base_url, provider.insecure_http_confirmed_at.as_deref())?;
+  let mut url = build_endpoint(&base_url, relative_path)?;
+  bounded_http::append_query_pairs(&mut url, query)?;
+  let secret = load_secret_for_scheme(vault, &provider)?;
+  let mut headers = headers.clone();
+  inject_auth(&mut url, &mut headers, &provider.auth_scheme, secret.as_deref())?;
+
+  Ok(PreparedHttpRequest {
+    method,
+    url,
+    headers,
+    body,
+    content_type: None,
+    proxy_mode: provider.proxy_mode,
+    destination_policy: DestinationPolicy::Configured,
+    max_response_body_bytes,
+    timeout,
+  })
 }
 
 fn effective_base_url(provider: &ProviderInstance) -> Result<String, StorageError> {

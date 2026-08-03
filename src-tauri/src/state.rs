@@ -48,10 +48,33 @@ pub struct AppState {
   pub request_sessions: Arc<RequestSessionRegistry>,
   /// Shared Wasm Component runtime for external service plugins.
   pub wasm_runtime: Arc<WasmRuntime>,
+  /// Provider runtime package catalog and lifecycle (Phase 8).
+  pub runtime_providers: crate::services::runtime_providers::ProviderRuntimeService,
+  /// Provider runtime binding/package/grant resolution and LLM execution (Phase 8).
+  pub provider_runtime_router: crate::services::provider_runtime_router::ProviderRuntimeRouter,
 }
 
 impl AppState {
   pub fn initialize(app_data_dir: PathBuf, resource_dir: Option<PathBuf>) -> Result<Self, StorageError> {
+    Self::initialize_inner(app_data_dir, resource_dir, Vec::new())
+  }
+
+  /// Test-only constructor with the committed dev fixture vendor root so real signed fixture
+  /// packages verify through the genuine package store (no mocked verification paths).
+  #[cfg(test)]
+  pub fn initialize_for_tests(app_data_dir: PathBuf) -> Result<Self, StorageError> {
+    Self::initialize_inner(
+      app_data_dir,
+      None,
+      vec![crate::services::vendor_trust::test_vendor_fixture::fixture_vendor_public_key()],
+    )
+  }
+
+  fn initialize_inner(
+    app_data_dir: PathBuf,
+    resource_dir: Option<PathBuf>,
+    vendor_roots: Vec<crate::services::vendor_trust::VendorPublicKey>,
+  ) -> Result<Self, StorageError> {
     std::fs::create_dir_all(&app_data_dir)?;
     let db = Database::new(&app_data_dir)?;
     db.initialize()?;
@@ -76,10 +99,13 @@ impl AppState {
       &registry,
     )?);
 
-    let providers = ProviderService::new(db.clone(), vault.clone());
     let models = ModelService::new(db.clone(), vault.clone(), app_data_dir.join("cache"));
     let profiles = TranslationProfileService::new(db.clone(), registry.clone());
-    let plugin_packages = PluginPackageService::new(db.clone(), app_data_dir.clone());
+    let plugin_packages = if vendor_roots.is_empty() {
+      PluginPackageService::new(db.clone(), app_data_dir.clone())
+    } else {
+      PluginPackageService::with_vendor_roots(db.clone(), app_data_dir.clone(), vendor_roots)
+    };
     // Best-effort crash recovery for interrupted package installs/uninstalls (no package execution).
     if let Err(err) = plugin_packages.recover_install_operations() {
       log::error!("plugin_package_recovery_failed error={err}");
@@ -96,6 +122,7 @@ impl AppState {
     bundled_archives.sort();
     let mut google_web_default_import: Option<crate::services::plugin_store::VerifiedVendorImport> = None;
     let mut edge_tts_default_import: Option<crate::services::plugin_store::VerifiedVendorImport> = None;
+    let mut openai_compatible_default_import: Option<crate::services::plugin_store::VerifiedVendorImport> = None;
     for bundled in &bundled_archives {
       match std::fs::read(bundled) {
         Ok(bytes) => match plugin_packages.bootstrap_bundled_package(&bytes, false) {
@@ -108,6 +135,14 @@ impl AppState {
               && import.version() == EDGE_TTS_DEFAULT_VERSION
             {
               edge_tts_default_import = Some(import);
+            } else if import.plugin_id() == OPENAI_COMPATIBLE_PLUGIN_ID
+              && import.version() == OPENAI_COMPATIBLE_DEFAULT_VERSION
+            {
+              // Keep the FIRST matching vendor archive; set_vendor_default fails closed on
+              // alias-ambiguity (a second verified digest claiming the same id/version).
+              if openai_compatible_default_import.is_none() {
+                openai_compatible_default_import = Some(import);
+              }
             }
           }
           Err(err) => log::error!(
@@ -200,6 +235,53 @@ impl AppState {
       .with_runtime(wasm_runtime.clone(), token_grants.clone())
       .with_vault(vault.clone());
     let service_integrations = service_integrations.with_runtime_lifecycle(runtime_lifecycle.clone());
+    let runtime_providers = crate::services::runtime_providers::ProviderRuntimeService::new(
+      db.clone(),
+      plugin_packages.clone(),
+      wasm_runtime.clone(),
+    );
+    // Resolve the reviewed OpenAI Compatible vendor default for NEW matching Providers only.
+    // The default is bound by exact digest/publisher identity/version/alias in the Provider
+    // create transaction; pre-existing Providers stay legacy and nothing auto-upgrades at
+    // startup/install/edit/sync/failure. Failure to resolve leaves no default (safe).
+    if let Err(err) = runtime_providers.set_vendor_default(openai_compatible_default_import.as_ref()) {
+      log::warn!(
+        "openai_compatible_default_resolve_failed plugin={} version={} error={err}",
+        OPENAI_COMPATIBLE_PLUGIN_ID,
+        OPENAI_COMPATIBLE_DEFAULT_VERSION
+      );
+    }
+    let providers =
+      ProviderService::new(db.clone(), vault.clone()).with_runtime_defaults(Arc::new(runtime_providers.clone()));
+    // Provider-runtime egress resolves ONLY the bound provider instance's persisted connection
+    // (Base URL, proxy, host-only credential) after package/grant authorization; it never uses
+    // the service-capability network broker or package-selected origins.
+    let provider_broker_transport: Arc<dyn crate::services::bounded_http::RawHttpTransport> =
+      Arc::new(crate::services::bounded_http::ReqwestRawHttpTransport);
+    let provider_broker_vault = vault.clone();
+    let provider_broker_db = db.clone();
+    let provider_broker_factory: Arc<
+      dyn Fn(
+          crate::services::provider_runtime_router::ProviderRuntimeBrokerContext,
+        ) -> Box<dyn crate::services::wasm_runtime::host::BrokerHandle>
+        + Send
+        + Sync,
+    > = Arc::new(move |context| {
+      Box::new(
+        crate::services::provider_runtime_broker::ProviderRuntimeBrokerHandle::new(
+          provider_broker_db.clone(),
+          provider_broker_vault.clone(),
+          provider_broker_transport.clone(),
+          context,
+        ),
+      )
+    });
+    let provider_runtime_router = crate::services::provider_runtime_router::ProviderRuntimeRouter::new(
+      db.clone(),
+      plugin_packages.clone(),
+      wasm_runtime.clone(),
+      provider_broker_factory,
+    );
 
     Ok(Self {
       db,
@@ -215,6 +297,8 @@ impl AppState {
       service_capabilities,
       runtime_router,
       runtime_lifecycle,
+      runtime_providers,
+      provider_runtime_router,
       token_grants,
       network_broker,
       settings,
@@ -235,15 +319,23 @@ const BUNDLED_GOOGLE_WEB_PACKAGE_PREFIX: &str = "com.langnext.google-translate-w
 const BUNDLED_EDGE_TTS_PACKAGE_PREFIX: &str = "com.langnext.edge-tts-";
 /// Bundled Google Cloud package filename prefix; imported for discovery only, never auto-pinned.
 const BUNDLED_GOOGLE_CLOUD_PACKAGE_PREFIX: &str = "com.langnext.google-cloud-";
+/// Bundled OpenAI Compatible provider package filename prefix (Phase 8 Task 12): release CI
+/// places the externally signed archive at `resources/plugins/`; the app imports it and
+/// resolves it as the reviewed default for NEW matching Providers only.
+const BUNDLED_OPENAI_COMPATIBLE_PACKAGE_PREFIX: &str = "com.langnext.provider.openai-compatible-";
 const BUNDLED_VENDOR_PACKAGE_SUFFIX: &str = ".lnplugin";
 /// Env override pointing at a single bundled signed package (release/CI/test injection).
 const BUNDLED_GOOGLE_WEB_PACKAGE_ENV: &str = "LANGNEXT_BUNDLED_GOOGLE_WEB_PACKAGE";
 const BUNDLED_EDGE_TTS_PACKAGE_ENV: &str = "LANGNEXT_BUNDLED_EDGE_TTS_PACKAGE";
 const BUNDLED_GOOGLE_CLOUD_PACKAGE_ENV: &str = "LANGNEXT_BUNDLED_GOOGLE_CLOUD_PACKAGE";
-/// Vendor default version explicitly selected as the new-instance catalog default after all
-/// bundled archives are imported. Must match the verified installed manifest version.
+const BUNDLED_OPENAI_COMPATIBLE_PACKAGE_ENV: &str = "LANGNEXT_BUNDLED_OPENAI_COMPATIBLE_PACKAGE";
+/// Vendor default version explicitly selected as the new-provider default after all bundled
+/// archives are imported. Must match the verified installed manifest version.
 const GOOGLE_WEB_DEFAULT_VERSION: &str = "1.0.0";
 const EDGE_TTS_DEFAULT_VERSION: &str = "1.0.0";
+const OPENAI_COMPATIBLE_DEFAULT_VERSION: &str = "1.0.0";
+/// Bundled OpenAI Compatible provider plugin id (Task 12 vendor default identity).
+const OPENAI_COMPATIBLE_PLUGIN_ID: &str = "com.langnext.provider.openai-compatible";
 
 /// Locate bundled vendor-signed `.lnplugin` archives (Google Web, Edge TTS, and Google Cloud) to
 /// import on first startup. Checks env overrides, the cargo resources dir (dev/test), and `resources/plugins` /
@@ -255,6 +347,7 @@ fn locate_bundled_vendor_packages(resource_dir: Option<&std::path::Path>) -> Vec
     BUNDLED_GOOGLE_WEB_PACKAGE_ENV,
     BUNDLED_EDGE_TTS_PACKAGE_ENV,
     BUNDLED_GOOGLE_CLOUD_PACKAGE_ENV,
+    BUNDLED_OPENAI_COMPATIBLE_PACKAGE_ENV,
   ] {
     if let Ok(path) = std::env::var(env_key) {
       let path = std::path::PathBuf::from(path);
@@ -283,7 +376,8 @@ fn locate_bundled_vendor_packages(resource_dir: Option<&std::path::Path>) -> Vec
       if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
         let is_vendor = (name.starts_with(BUNDLED_GOOGLE_WEB_PACKAGE_PREFIX)
           || name.starts_with(BUNDLED_EDGE_TTS_PACKAGE_PREFIX)
-          || name.starts_with(BUNDLED_GOOGLE_CLOUD_PACKAGE_PREFIX))
+          || name.starts_with(BUNDLED_GOOGLE_CLOUD_PACKAGE_PREFIX)
+          || name.starts_with(BUNDLED_OPENAI_COMPATIBLE_PACKAGE_PREFIX))
           && name.ends_with(BUNDLED_VENDOR_PACKAGE_SUFFIX)
           && path.is_file();
         if is_vendor {

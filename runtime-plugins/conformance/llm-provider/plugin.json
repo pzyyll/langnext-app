@@ -1,0 +1,65 @@
+{
+  "manifestVersion": 1,
+  "pluginApiVersion": "1.0",
+  "id": "langnext.conformance.llm-provider",
+  "version": "1.0.0",
+  "publisher": {
+    "keyId": "com.langnext.vendor.keys.1",
+    "keyFingerprint": "506ef1879d748ce0713b0dd01da32ad2a4b1ce97b5a852ff18800c1e52982376"
+  },
+  "runtime": {
+    "kind": "wasm-component",
+    "artifact": "fixtures/llm-models.wasm"
+  },
+  "targets": [],
+  "files": [
+    {
+      "path": "fixtures/llm-chat.wasm",
+      "role": "runtime-artifact",
+      "bytes": 39916,
+      "sha256": "06f28bde7d70c4fb08a2e50eaa6f44f7f6805489a0aa64ed8e58caa6b5c83a46"
+    },
+    {
+      "path": "fixtures/llm-models.wasm",
+      "role": "runtime-artifact",
+      "bytes": 32270,
+      "sha256": "27a65dfaae9e0373d9809c86275ab9c77ea8093dd86d15680f8e7f72b5aa310a"
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "llm.models.list@1",
+      "artifact": "fixtures/llm-models.wasm"
+    },
+    {
+      "id": "llm.chat@1",
+      "artifact": "fixtures/llm-chat.wasm"
+    }
+  ],
+  "configurationSchema": null,
+  "configSchemaVersion": null,
+  "credentialSlots": [],
+  "permissions": {
+    "network": [],
+    "authPolicies": ["host.provider-instance-auth.v1"]
+  },
+  "ui": {
+    "mode": "schema",
+    "pages": []
+  },
+  "providerRuntime": {
+    "legacyAliases": ["openai-compatible"],
+    "capabilities": {
+      "llm.models.list@1": "fixtures/llm-models.wasm",
+      "llm.chat@1": "fixtures/llm-chat.wasm"
+    },
+    "endpoint": {
+      "form": "provider-instance",
+      "authPolicy": "host.provider-instance-auth.v1"
+    },
+    "detection": {
+      "maxTokens": 256,
+      "thinking": false
+    }
+  }
+}

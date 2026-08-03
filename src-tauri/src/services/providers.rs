@@ -6,10 +6,15 @@ use crate::domain::provider::{
   AuthSchemeV1, BaseUrlSource, CredentialKind, CredentialUpdate, ModelsSyncStatus, ProviderInstance,
   ProviderInstanceDto, ProviderInstanceWrite, ProxyMode, validate_adapter_id,
 };
+use crate::domain::runtime_provider::legacy_frontend_binding;
 use crate::domain::time::{new_id, now_rfc3339};
 use crate::error::StorageError;
 use crate::repositories::credential_operations::{self, CredentialOperation, OwnerKind};
+use crate::repositories::provider_runtime_bindings;
 use crate::repositories::{provider_instances, provider_models, translation_profiles};
+use crate::services::runtime_providers::{
+  PreparedProviderVendorDefault, ProviderRuntimeService, apply_vendor_default_binding,
+};
 use crate::storage::Database;
 use std::sync::Arc;
 use url::Url;
@@ -19,6 +24,9 @@ use uuid::Uuid;
 pub struct ProviderService {
   db: Database,
   vault: Arc<dyn CredentialVault>,
+  /// Reviewed vendor default wiring (Task 12): new matching Providers receive the default
+  /// package/grant in their create transaction; every other provider stays legacy.
+  runtime_defaults: Option<Arc<ProviderRuntimeService>>,
 }
 
 /// Credential plan for create: optional ref name, secret material, and journal op id.
@@ -26,24 +34,37 @@ type PlannedCreateCredential = (Option<String>, Option<String>, Option<Uuid>);
 
 impl ProviderService {
   pub fn new(db: Database, vault: Arc<dyn CredentialVault>) -> Self {
-    Self { db, vault }
+    Self {
+      db,
+      vault,
+      runtime_defaults: None,
+    }
+  }
+
+  /// Attach the provider runtime service so newly created matching Providers receive the
+  /// reviewed vendor default package/grant (Task 12). Resolution failures leave the provider
+  /// legacy and never fail the CRUD operation.
+  pub fn with_runtime_defaults(mut self, runtime: Arc<ProviderRuntimeService>) -> Self {
+    self.runtime_defaults = Some(runtime);
+    self
   }
 
   pub fn list(&self) -> Result<Vec<ProviderInstanceDto>, StorageError> {
     self.db.read(|conn| {
       Ok(
-        provider_instances::list(conn)?
+        provider_instances::list_with_runtime(conn)?
           .iter()
-          .map(ProviderInstanceDto::from)
+          .map(|(provider, binding)| ProviderInstanceDto::from_provider_and_runtime(provider, binding))
           .collect(),
       )
     })
   }
 
   pub fn get(&self, id: Uuid) -> Result<ProviderInstanceDto, StorageError> {
-    self
-      .db
-      .read(|conn| Ok(ProviderInstanceDto::from(&provider_instances::get(conn, id)?)))
+    self.db.read(|conn| {
+      let (provider, binding) = provider_instances::get_with_runtime(conn, id)?;
+      Ok(ProviderInstanceDto::from_provider_and_runtime(&provider, &binding))
+    })
   }
 
   pub fn save(&self, input: ProviderInstanceWrite) -> Result<ProviderInstanceDto, StorageError> {
@@ -59,6 +80,21 @@ impl ProviderService {
     let id = new_id();
     let now = now_rfc3339();
     let (credential_ref, secret_to_store, op_id) = self.plan_create_credential(id, &input)?;
+
+    // Reviewed vendor default for THIS new provider (adapter alias + persisted connection
+    // requirements). Resolution is read-only; any failure leaves the provider legacy and
+    // never fails the Provider CRUD operation.
+    let default: Option<PreparedProviderVendorDefault> =
+      self
+        .runtime_defaults
+        .as_ref()
+        .and_then(|runtime| match runtime.vendor_default_candidate(&input) {
+          Ok(candidate) => candidate,
+          Err(err) => {
+            log::warn!("provider_default_resolution_failed provider={id} error={err}");
+            None
+          }
+        });
 
     if let (Some(ref_name), Some(secret)) = (&credential_ref, &secret_to_store) {
       // Journal prepared → vault write → SQLite commit → mark committed → finalize.
@@ -86,15 +122,22 @@ impl ProviderService {
       let provider = build_provider(id, &input, credential_ref.clone(), &now, &now);
       let commit = self.db.transaction(|uow| {
         provider_instances::insert(uow.conn(), &provider)?;
+        let legacy = legacy_frontend_binding(id, &input.adapter_id, &now);
+        crate::repositories::provider_runtime_bindings::insert(uow.conn(), &legacy)?;
+        // The reviewed default pin (if any) upgrades the binding inside this same transaction.
+        let binding = match &default {
+          Some(prepared) => apply_vendor_default_binding(uow.conn(), &provider, prepared, &now)?,
+          None => legacy,
+        };
         let op = credential_operations::mark_db_committed(uow.conn(), operation_id)?;
-        Ok((provider, op))
+        Ok((provider, binding, op))
       });
 
       match commit {
-        Ok((provider, op)) => {
+        Ok((provider, binding, op)) => {
           // Create has no old secret; finalize removes the journal only.
           let _ = coordinator::finalize_operation(&self.db, self.vault.as_ref(), &op);
-          Ok(ProviderInstanceDto::from(&provider))
+          Ok(ProviderInstanceDto::from_provider_and_runtime(&provider, &[binding]))
         }
         Err(e) => {
           // Compensate: delete unused new secret if possible; retain prepared on failure.
@@ -107,7 +150,13 @@ impl ProviderService {
       let provider = build_provider(id, &input, None, &now, &now);
       self.db.transaction(|uow| {
         provider_instances::insert(uow.conn(), &provider)?;
-        Ok(ProviderInstanceDto::from(&provider))
+        let legacy = legacy_frontend_binding(id, &input.adapter_id, &now);
+        crate::repositories::provider_runtime_bindings::insert(uow.conn(), &legacy)?;
+        let binding = match &default {
+          Some(prepared) => apply_vendor_default_binding(uow.conn(), &provider, prepared, &now)?,
+          None => legacy,
+        };
+        Ok(ProviderInstanceDto::from_provider_and_runtime(&provider, &[binding]))
       })
     }
   }
@@ -210,7 +259,11 @@ impl ProviderService {
       if connection_changed {
         provider_instances::update_sync_status(conn, id, None, ModelsSyncStatus::Never, None, &now)?;
       }
-      Ok(ProviderInstanceDto::from(&provider_instances::get(conn, id)?))
+      // The default API type may have changed: guarantee a binding row for the new adapter
+      // while keeping any interface binding that was keyed to the old adapter.
+      ensure_default_binding(conn, id, &input.adapter_id, &now)?;
+      let (provider, bindings) = provider_instances::get_with_runtime(conn, id)?;
+      Ok(ProviderInstanceDto::from_provider_and_runtime(&provider, &bindings))
     })
   }
 
@@ -273,6 +326,7 @@ impl ProviderService {
       // Single SQLite transaction after vault write: config + credential_ref + sync reset.
       provider_instances::update_configuration(conn, &provider)?;
       let op = credential_operations::mark_db_committed(conn, op_id)?;
+      ensure_default_binding(conn, existing.id, &input.adapter_id, &now)?;
       Ok((provider, op))
     });
 
@@ -280,7 +334,10 @@ impl ProviderService {
       Ok((provider, op)) => {
         // Business write committed; deferred cleanup retains db_committed journal.
         let _ = coordinator::finalize_operation(&self.db, self.vault.as_ref(), &op);
-        Ok(ProviderInstanceDto::from(&provider))
+        let (provider, bindings) = self
+          .db
+          .read(|conn| provider_instances::get_with_runtime(conn, provider.id))?;
+        Ok(ProviderInstanceDto::from_provider_and_runtime(&provider, &bindings))
       }
       Err(e) => {
         // Compensation: delete unused new secret; retain prepared on vault failure.
@@ -350,13 +407,17 @@ impl ProviderService {
 
       provider_instances::update_configuration(conn, &provider)?;
       let op = credential_operations::mark_db_committed(conn, op_id)?;
+      ensure_default_binding(conn, existing.id, &input.adapter_id, &now)?;
       Ok((provider, op))
     });
 
     match commit {
       Ok((provider, op)) => {
         let _ = coordinator::finalize_operation(&self.db, self.vault.as_ref(), &op);
-        Ok(ProviderInstanceDto::from(&provider))
+        let (provider, bindings) = self
+          .db
+          .read(|conn| provider_instances::get_with_runtime(conn, provider.id))?;
+        Ok(ProviderInstanceDto::from_provider_and_runtime(&provider, &bindings))
       }
       Err(e) => {
         // Clear never applied; drop prepared journal only (no vault delete).
@@ -372,7 +433,8 @@ impl ProviderService {
     let now = now_rfc3339();
     self.db.transaction(|uow| {
       provider_instances::set_enabled(uow.conn(), id, enabled, &now)?;
-      Ok(ProviderInstanceDto::from(&provider_instances::get(uow.conn(), id)?))
+      let (provider, binding) = provider_instances::get_with_runtime(uow.conn(), id)?;
+      Ok(ProviderInstanceDto::from_provider_and_runtime(&provider, &binding))
     })
   }
 
@@ -422,6 +484,22 @@ impl ProviderService {
   pub fn recover_credential_operations(db: &Database, vault: &dyn CredentialVault) -> coordinator::RecoveryReport {
     coordinator::recover_all(db, vault)
   }
+}
+
+/// Guarantee the Provider default API type owns a binding row after the persisted adapter
+/// changes. A missing row (e.g. after switching to a never-attached API type) receives an
+/// active legacy binding; existing interface bindings are never removed.
+fn ensure_default_binding(
+  conn: &rusqlite::Connection,
+  provider_id: Uuid,
+  adapter_id: &str,
+  now: &str,
+) -> Result<(), StorageError> {
+  if provider_runtime_bindings::get_optional(conn, provider_id, adapter_id)?.is_none() {
+    let legacy = legacy_frontend_binding(provider_id, adapter_id, now);
+    provider_runtime_bindings::insert(conn, &legacy)?;
+  }
+  Ok(())
 }
 
 fn build_provider(

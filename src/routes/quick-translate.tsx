@@ -46,6 +46,7 @@ import { QUICK_TRANSLATE_CLIPBOARD_TEXT, QUICK_TRANSLATE_OCR_REQUEST } from "../
 import {
   allProviderModelsOptions,
   integrationListOptions,
+  providerRuntimeCatalogOptions,
   profileDetailOptions,
   profileListOptions,
   providerListOptions,
@@ -204,6 +205,7 @@ function QuickTranslatePage() {
   const providersQuery = useQuery(providerListOptions());
   const modelsQuery = useQuery(allProviderModelsOptions());
   const integrationsQuery = useQuery(integrationListOptions());
+  const runtimeCatalogQuery = useQuery(providerRuntimeCatalogOptions());
 
   const profiles = useMemo(() => (profilesQuery.data ?? []).filter((profile) => profile.enabled), [profilesQuery.data]);
   const profileById = useMemo(() => new Map(profiles.map((profile) => [profile.id, profile])), [profiles]);
@@ -474,6 +476,7 @@ function QuickTranslatePage() {
               modelsById: new Map((modelsQuery.data ?? []).map((m) => [m.id, m])),
               profile: (profilesQuery.data ?? []).find((p) => p.id === detectProfileId) ?? null,
               integrationsById: new Map((integrationsQuery.data ?? []).map((i) => [i.id, i])),
+              runtimeCatalog: runtimeCatalogQuery.data ?? [],
             },
           );
           if (detectEpoch !== slotStreams.getDetectEpoch()) {
@@ -612,6 +615,7 @@ function QuickTranslatePage() {
               modelsById: new Map((modelsQuery.data ?? []).map((m) => [m.id, m])),
               profile: (profilesQuery.data ?? []).find((p) => p.id === payload.profileId) ?? null,
               integrationsById: new Map((integrationsQuery.data ?? []).map((i) => [i.id, i])),
+              runtimeCatalog: runtimeCatalogQuery.data ?? [],
             };
             const prepared = await slotStreams.prepareSlotStream(slot.id, epoch, requestId, payload, snapshots, {
               onChunk: (delta) => {
@@ -736,6 +740,7 @@ function QuickTranslatePage() {
       profilesQuery.data,
       providersQuery.data,
       queryClient,
+      runtimeCatalogQuery.data,
       showTranslateErrorToast,
       slotStreams,
       sourceLang,

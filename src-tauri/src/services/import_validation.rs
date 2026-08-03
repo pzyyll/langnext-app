@@ -5,13 +5,14 @@ use crate::domain::import_export::{
   IntegrationInstanceExport, OcrPromptTemplateExport, OcrServiceExport, SpeechServiceExport,
 };
 use crate::domain::language_detection::LanguageDetectorConfig;
-use crate::domain::model::{CapabilityOverridesV1, ProviderModel};
+use crate::domain::model::{CapabilityOverridesV1, ModelSource, ProviderModel};
 use crate::domain::ocr_service::{
   GOOGLE_VISION_PREFERENCES_SCHEMA_VERSION, OcrProviderType, OcrService, parse_ocr_image_preferences,
 };
 use crate::domain::provider::{
   CredentialKind, ModelsSyncStatus, ProviderExport, ProviderInstance, validate_adapter_id,
 };
+use crate::domain::runtime_provider::ProviderRuntimeRequirementExport;
 use crate::domain::service_capability::{validate_ocr_image_preferences, validate_speech_synthesize_preferences};
 use crate::domain::service_integration::{IntegrationHealthStatus, IntegrationInstance};
 use crate::domain::settings::{AppSettingsV1, GlobalProxyMode};
@@ -45,6 +46,9 @@ pub struct ValidatedImportPlan {
   pub mode: ImportConflictMode,
   pub preview: ImportPreview,
   pub providers: Vec<ProviderInstance>,
+  /// Exact non-secret provider runtime requirements keyed by final provider id, each naming
+  /// one adapter-keyed interface identity.
+  pub provider_runtime_requirements: HashMap<Uuid, Vec<ProviderRuntimeRequirementExport>>,
   pub models: Vec<ProviderModel>,
   pub profiles: Vec<TranslationProfile>,
   pub targets: Vec<TranslationProfileTarget>,
@@ -157,9 +161,29 @@ pub fn build_validated_plan(
     }
   }
 
+  // Provider-declared runtime interface set per provider (default API type + every imported
+  // runtimeBindings adapter). Remote model provenance claims are validated against it so an
+  // import never routes a model through an interface the document did not declare.
+  let mut declared_adapters: HashMap<Uuid, HashSet<String>> = HashMap::new();
+  for p in &document.providers {
+    let mut adapters = HashSet::new();
+    adapters.insert(p.adapter_id.clone());
+    for requirement in &p.runtime_bindings {
+      if let Some(adapter) = requirement
+        .adapter_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+      {
+        adapters.insert(adapter.to_string());
+      }
+    }
+    declared_adapters.insert(p.id, adapters);
+  }
+
   // Models
   for m in &document.models {
-    if let Err(e) = validate_import_model(m, &doc_provider_ids) {
+    if let Err(e) = validate_import_model(m, &doc_provider_ids, &declared_adapters) {
       errors.push(format!("model {}: {e}", m.id));
     }
     if mode == ImportConflictMode::Merge {
@@ -484,6 +508,7 @@ pub fn build_validated_plan(
       mode,
       preview,
       providers: vec![],
+      provider_runtime_requirements: HashMap::new(),
       models: vec![],
       profiles: vec![],
       targets: vec![],
@@ -505,6 +530,7 @@ pub fn build_validated_plan(
   // Build normalized entities.
   let now = now_rfc3339();
   let mut providers = Vec::new();
+  let mut provider_runtime_requirements = HashMap::new();
   let mut provider_cleanup_ids = Vec::new();
   let mut expected_provider_refs = HashMap::new();
 
@@ -548,6 +574,21 @@ pub fn build_validated_plan(
       created_at,
       updated_at: now.clone(),
     });
+    // Carry the exact non-secret adapter-keyed runtime requirements keyed by the final
+    // provider id (remapped in Copy mode). A provider without any requirement keeps one
+    // legacy requirement for its default API type so every imported provider owns its
+    // default binding identity. Package requirements restore as unavailable metadata only.
+    let requirements = if p.runtime_bindings.is_empty() {
+      vec![ProviderRuntimeRequirementExport::legacy()]
+    } else {
+      let mut requirements = Vec::with_capacity(p.runtime_bindings.len());
+      for requirement in &p.runtime_bindings {
+        validate_provider_runtime_requirement(requirement)?;
+        requirements.push(requirement.clone());
+      }
+      requirements
+    };
+    provider_runtime_requirements.insert(id, requirements);
   }
 
   let mut models = Vec::new();
@@ -579,6 +620,35 @@ pub fn build_validated_plan(
       .as_ref()
       .map(|s| s.trim().to_string())
       .filter(|s| !s.is_empty());
+    // Provenance canonicalization (validation above rejected undeclared remote sources and
+    // non-empty manual/builtin sources; here the persisted form is normalized): remote
+    // sources keep the trimmed declared value, whitespace-only remote sources backfill the
+    // Provider default API type (the old-format migration policy), and manual/builtin rows
+    // normalize to the empty sentinel.
+    let default_adapter = document
+      .providers
+      .iter()
+      .find(|p| p.id == m.provider_instance_id)
+      .map(|p| p.adapter_id.clone())
+      .ok_or_else(|| {
+        StorageError::Validation(format!(
+          "model {} references missing provider {}",
+          m.id, m.provider_instance_id
+        ))
+      })?;
+    match model.source {
+      ModelSource::Manual | ModelSource::Builtin => {
+        model.source_adapter_id = String::new();
+      }
+      ModelSource::Remote => {
+        let source = model.source_adapter_id.trim();
+        model.source_adapter_id = if source.is_empty() {
+          default_adapter
+        } else {
+          source.to_string()
+        };
+      }
+    }
     models.push(model);
   }
 
@@ -885,6 +955,7 @@ pub fn build_validated_plan(
     mode,
     preview,
     providers,
+    provider_runtime_requirements,
     models,
     profiles,
     targets,
@@ -1155,6 +1226,11 @@ where
   }
 }
 
+/// Fail-closed validation of an imported provider runtime requirement (domain rule).
+fn validate_provider_runtime_requirement(requirement: &ProviderRuntimeRequirementExport) -> Result<(), StorageError> {
+  crate::domain::import_export::validate_provider_runtime_requirement(requirement).map_err(StorageError::Validation)
+}
+
 fn validate_import_provider(p: &ProviderExport) -> Result<(), StorageError> {
   validate_adapter_id(&p.adapter_id).map_err(StorageError::Validation)?;
   if p.display_name.trim().is_empty() {
@@ -1187,7 +1263,11 @@ fn validate_import_provider(p: &ProviderExport) -> Result<(), StorageError> {
   Ok(())
 }
 
-fn validate_import_model(m: &ProviderModel, doc_providers: &HashSet<Uuid>) -> Result<(), StorageError> {
+fn validate_import_model(
+  m: &ProviderModel,
+  doc_providers: &HashSet<Uuid>,
+  declared_adapters: &HashMap<Uuid, HashSet<String>>,
+) -> Result<(), StorageError> {
   let key = m.model_key.trim();
   if key.is_empty() {
     return Err(StorageError::Validation("model_key must not be empty".into()));
@@ -1202,6 +1282,34 @@ fn validate_import_model(m: &ProviderModel, doc_providers: &HashSet<Uuid>) -> Re
       "references missing provider {}",
       m.provider_instance_id
     )));
+  }
+  // Provenance discriminator: manual/builtin rows are user-owned and must keep the empty
+  // sentinel; remote rows must claim a source the Provider's imported runtimeBindings (or
+  // its default API type) declares, otherwise the row could be routed through an interface
+  // the document never imported.
+  let source = m.source_adapter_id.trim();
+  match m.source {
+    ModelSource::Manual | ModelSource::Builtin => {
+      if !source.is_empty() {
+        return Err(StorageError::Validation(format!(
+          "sourceAdapterId must be empty for manual/builtin models, got '{source}'"
+        )));
+      }
+    }
+    ModelSource::Remote => {
+      if !source.is_empty() {
+        let declared = declared_adapters
+          .get(&m.provider_instance_id)
+          .map(|adapters| adapters.contains(source))
+          .unwrap_or(false);
+        if !declared {
+          return Err(StorageError::Validation(format!(
+            "sourceAdapterId '{source}' is not declared by provider {} runtimeBindings",
+            m.provider_instance_id
+          )));
+        }
+      }
+    }
   }
   if let Some(adapter_id) = m.adapter_id.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()) {
     validate_adapter_id(adapter_id).map_err(StorageError::Validation)?;
@@ -1496,6 +1604,7 @@ pub fn validate_plan_default_profile(conn: &Connection, settings: &AppSettingsV1
 mod tests {
   use super::*;
   use crate::domain::import_export::EXPORT_FORMAT_VERSION;
+  use crate::domain::model::ModelSource;
   use crate::domain::runtime_lifecycle::RuntimeRequirementExport;
   use crate::domain::service_integration::{GOOGLE_CLOUD_PLUGIN_ID, GOOGLE_TRANSLATE_WEB_PLUGIN_ID};
   use crate::domain::time::now_rfc3339;
@@ -1697,6 +1806,288 @@ mod tests {
     assert!(integration_plugin_requires_authentication(
       "com.langnext.unknown-plugin"
     ));
+  }
+
+  fn provider_export(
+    id: Uuid,
+    adapter_id: &str,
+    bindings: Vec<ProviderRuntimeRequirementExport>,
+  ) -> crate::domain::provider::ProviderExport {
+    crate::domain::provider::ProviderExport {
+      id,
+      adapter_id: adapter_id.into(),
+      display_name: "P".into(),
+      base_url: None,
+      base_url_source: None,
+      auth_scheme: None,
+      base_url_override: None,
+      credential_kind: crate::domain::provider::CredentialKind::ApiKey,
+      enabled: true,
+      proxy_mode: crate::domain::provider::ProxyMode::Inherit,
+      insecure_http_confirmed_at: None,
+      runtime: None,
+      runtime_bindings: bindings,
+      created_at: now_rfc3339(),
+      updated_at: now_rfc3339(),
+    }
+  }
+
+  fn declared_legacy(adapter_id: &str) -> ProviderRuntimeRequirementExport {
+    let mut requirement = ProviderRuntimeRequirementExport::legacy();
+    requirement.adapter_id = Some(adapter_id.into());
+    requirement
+  }
+
+  fn model_export(
+    id: Uuid,
+    provider_id: Uuid,
+    source: crate::domain::model::ModelSource,
+    source_adapter_id: &str,
+  ) -> crate::domain::model::ProviderModel {
+    crate::domain::model::ProviderModel {
+      id,
+      provider_instance_id: provider_id,
+      model_key: format!("m-{id}"),
+      source,
+      remote_display_name: None,
+      display_name_override: None,
+      enabled: true,
+      availability: crate::domain::model::Availability::Available,
+      remote_metadata_json: None,
+      capability_overrides_json: None,
+      adapter_id: None,
+      source_adapter_id: source_adapter_id.into(),
+      last_seen_at: None,
+      created_at: now_rfc3339(),
+      updated_at: now_rfc3339(),
+    }
+  }
+
+  /// Remote model provenance: a legacy document without a source backfills to the Provider
+  /// default API type (the migration policy), never to an undeclared type.
+  #[test]
+  fn import_remote_model_without_source_backfills_provider_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::new(dir.path()).unwrap();
+    db.initialize().unwrap();
+    let provider_id = new_id();
+    let model_id = new_id();
+    let mut doc = empty_doc();
+    doc.providers = vec![provider_export(
+      provider_id,
+      "openai-compatible",
+      vec![
+        declared_legacy("openai-compatible"),
+        declared_legacy("openai-responses"),
+      ],
+    )];
+    doc.models = vec![model_export(model_id, provider_id, ModelSource::Remote, "")];
+
+    let plan = db
+      .read(|conn| build_validated_plan(conn, &doc, ImportConflictMode::Merge))
+      .unwrap();
+    assert!(plan.preview.valid, "errors: {:?}", plan.preview.validation_errors);
+    assert_eq!(plan.models.len(), 1);
+    assert_eq!(plan.models[0].id, model_id, "model identity must be preserved");
+    assert_eq!(
+      plan.models[0].provider_instance_id, provider_id,
+      "provider relationship must be preserved"
+    );
+    assert_eq!(
+      plan.models[0].source_adapter_id, "openai-compatible",
+      "empty remote source must backfill to the Provider default API type"
+    );
+  }
+
+  /// Remote model provenance: a declared source that is part of the Provider's imported
+  /// runtimeBindings is preserved exactly.
+  #[test]
+  fn import_remote_model_with_declared_source_is_kept() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::new(dir.path()).unwrap();
+    db.initialize().unwrap();
+    let provider_id = new_id();
+    let model_id = new_id();
+    let mut doc = empty_doc();
+    doc.providers = vec![provider_export(
+      provider_id,
+      "openai-compatible",
+      vec![
+        declared_legacy("openai-compatible"),
+        declared_legacy("openai-responses"),
+      ],
+    )];
+    doc.models = vec![model_export(
+      model_id,
+      provider_id,
+      ModelSource::Remote,
+      "openai-responses",
+    )];
+
+    let plan = db
+      .read(|conn| build_validated_plan(conn, &doc, ImportConflictMode::Merge))
+      .unwrap();
+    assert!(plan.preview.valid, "errors: {:?}", plan.preview.validation_errors);
+    assert_eq!(plan.models[0].source_adapter_id, "openai-responses");
+    assert_eq!(plan.models[0].id, model_id);
+    assert_eq!(plan.models[0].provider_instance_id, provider_id);
+  }
+
+  /// A forged remote provenance claim (source outside the Provider's declared runtime
+  /// interface set) must be rejected: routing a model through an interface the import
+  /// document never declared would misroute requests.
+  #[test]
+  fn import_rejects_remote_model_with_undeclared_source() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::new(dir.path()).unwrap();
+    db.initialize().unwrap();
+    let provider_id = new_id();
+    let mut doc = empty_doc();
+    doc.providers = vec![provider_export(
+      provider_id,
+      "openai-compatible",
+      vec![declared_legacy("openai-compatible")],
+    )];
+    doc.models = vec![model_export(new_id(), provider_id, ModelSource::Remote, "gemini")];
+
+    let plan = db
+      .read(|conn| build_validated_plan(conn, &doc, ImportConflictMode::Merge))
+      .unwrap();
+    assert!(!plan.preview.valid);
+    assert!(
+      plan
+        .preview
+        .validation_errors
+        .iter()
+        .any(|e| e.contains("sourceAdapterId") && e.contains("gemini")),
+      "expected undeclared sourceAdapterId error, got {:?}",
+      plan.preview.validation_errors
+    );
+    assert!(plan.models.is_empty());
+  }
+
+  /// Manual/builtin rows are user-owned and must keep the empty source sentinel; a non-empty
+  /// provenance claim on them is a forged discriminator.
+  #[test]
+  fn import_rejects_manual_or_builtin_model_with_source() {
+    for source in [ModelSource::Manual, ModelSource::Builtin] {
+      let dir = tempfile::tempdir().unwrap();
+      let db = Database::new(dir.path()).unwrap();
+      db.initialize().unwrap();
+      let provider_id = new_id();
+      let mut doc = empty_doc();
+      doc.providers = vec![provider_export(
+        provider_id,
+        "openai-compatible",
+        vec![declared_legacy("openai-compatible")],
+      )];
+      doc.models = vec![model_export(new_id(), provider_id, source, "openai-compatible")];
+
+      let plan = db
+        .read(|conn| build_validated_plan(conn, &doc, ImportConflictMode::Merge))
+        .unwrap();
+      assert!(!plan.preview.valid, "{source:?} with source must be rejected");
+      assert!(
+        plan
+          .preview
+          .validation_errors
+          .iter()
+          .any(|e| e.contains("sourceAdapterId")),
+        "expected sourceAdapterId error, got {:?}",
+        plan.preview.validation_errors
+      );
+    }
+  }
+
+  /// A remote source with surrounding whitespace validates against the declared adapter set
+  /// but must persist the trimmed canonical value — untrimmed rows would break the exact
+  /// provenance match every read path assumes.
+  #[test]
+  fn import_remote_model_source_persists_trimmed() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::new(dir.path()).unwrap();
+    db.initialize().unwrap();
+    let provider_id = new_id();
+    let model_id = new_id();
+    let mut doc = empty_doc();
+    doc.providers = vec![provider_export(
+      provider_id,
+      "openai-compatible",
+      vec![
+        declared_legacy("openai-compatible"),
+        declared_legacy("openai-responses"),
+      ],
+    )];
+    doc.models = vec![model_export(
+      model_id,
+      provider_id,
+      ModelSource::Remote,
+      "  openai-responses  ",
+    )];
+
+    let plan = db
+      .read(|conn| build_validated_plan(conn, &doc, ImportConflictMode::Merge))
+      .unwrap();
+    assert!(plan.preview.valid, "errors: {:?}", plan.preview.validation_errors);
+    assert_eq!(
+      plan.models[0].source_adapter_id, "openai-responses",
+      "remote source must persist trimmed"
+    );
+  }
+
+  /// Manual/builtin rows are user-owned: whitespace-only provenance claims normalize to the
+  /// empty sentinel (validation rejects any non-empty claim, padded or not).
+  #[test]
+  fn import_manual_or_builtin_whitespace_source_normalizes_to_empty_sentinel() {
+    for source in [ModelSource::Manual, ModelSource::Builtin] {
+      let dir = tempfile::tempdir().unwrap();
+      let db = Database::new(dir.path()).unwrap();
+      db.initialize().unwrap();
+      let provider_id = new_id();
+      let mut doc = empty_doc();
+      doc.providers = vec![provider_export(
+        provider_id,
+        "openai-compatible",
+        vec![declared_legacy("openai-compatible")],
+      )];
+      doc.models = vec![model_export(new_id(), provider_id, source, "   ")];
+
+      let plan = db
+        .read(|conn| build_validated_plan(conn, &doc, ImportConflictMode::Merge))
+        .unwrap();
+      assert!(plan.preview.valid, "{source:?}: {:?}", plan.preview.validation_errors);
+      assert_eq!(
+        plan.models[0].source_adapter_id, "",
+        "{source:?} whitespace-only source must normalize to the empty sentinel"
+      );
+    }
+  }
+
+  /// A whitespace-only remote source is the same "no provenance" case as an absent source:
+  /// it backfills to the Provider default API type (the old-format migration policy).
+  #[test]
+  fn import_remote_whitespace_only_source_backfills_provider_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::new(dir.path()).unwrap();
+    db.initialize().unwrap();
+    let provider_id = new_id();
+    let model_id = new_id();
+    let mut doc = empty_doc();
+    doc.providers = vec![provider_export(
+      provider_id,
+      "openai-compatible",
+      vec![declared_legacy("openai-compatible")],
+    )];
+    doc.models = vec![model_export(model_id, provider_id, ModelSource::Remote, "   ")];
+
+    let plan = db
+      .read(|conn| build_validated_plan(conn, &doc, ImportConflictMode::Merge))
+      .unwrap();
+    assert!(plan.preview.valid, "errors: {:?}", plan.preview.validation_errors);
+    assert_eq!(
+      plan.models[0].source_adapter_id, "openai-compatible",
+      "whitespace-only remote source must backfill to the Provider default API type"
+    );
   }
 
   fn speech_export(id: Uuid, integration_instance_id: Uuid) -> SpeechServiceExport {

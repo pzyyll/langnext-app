@@ -1,0 +1,1 @@
+{"model":"gpt-5.4-mini","instructions":"sys","input":[{"role":"user","content":[{"type":"input_text","text":"What is in this image?"},{"type":"input_image","image_url":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGIAAQAABQABDQottAAAAABJRU5ErkJggg=="}]}],"stream":false,"temperature":0.2,"max_output_tokens":128}

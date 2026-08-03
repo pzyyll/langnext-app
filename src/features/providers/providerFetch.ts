@@ -1,9 +1,10 @@
-// ABOUTME: Fetch-like facade over provider_http_request / provider_http_stream IPC.
-// ABOUTME: Wires AbortSignal to cancel_provider_http; never accepts secret fields.
+// ABOUTME: Legacy fetch-like facade over provider_http_request / provider_http_stream IPC.
+// ABOUTME: Consumed through the legacy executor only; runtime providers never call these commands.
 import { Channel } from "@tauri-apps/api/core";
 import { invokeEffect } from "../../storage/invokeEffect";
 import { runStorage } from "../../storage/runStorage";
 import type { ProviderHttpRequest, ProviderHttpResponse, ProviderHttpStreamEvent, ProviderWireRequest } from "./types";
+import { attachRequestCancellation } from "./attachRequestCancellation";
 
 export type ProviderFetchInput = {
   requestId: string;
@@ -34,28 +35,6 @@ async function cancelProviderHttp(requestId: string): Promise<void> {
   }
 }
 
-function attachAbort(requestId: string, signal: AbortSignal | undefined): () => void {
-  if (!signal) {
-    return () => {};
-  }
-  if (signal.aborted) {
-    void cancelProviderHttp(requestId);
-    return () => {};
-  }
-  let cancelled = false;
-  const onAbort = () => {
-    if (cancelled) {
-      return;
-    }
-    cancelled = true;
-    void cancelProviderHttp(requestId);
-  };
-  signal.addEventListener("abort", onAbort, { once: true });
-  return () => {
-    signal.removeEventListener("abort", onAbort);
-  };
-}
-
 /** Non-stream provider HTTP request. */
 export async function providerFetch(input: ProviderFetchInput): Promise<ProviderHttpResponse> {
   assertNoSecretFields(input.wire);
@@ -64,7 +43,7 @@ export async function providerFetch(input: ProviderFetchInput): Promise<Provider
     providerInstanceId: input.providerInstanceId,
     wire: input.wire,
   };
-  const detach = attachAbort(input.requestId, input.signal);
+  const detach = attachRequestCancellation(input.requestId, input.signal, cancelProviderHttp);
   try {
     if (input.signal?.aborted) {
       throw new Error("request cancelled");
@@ -92,7 +71,7 @@ export async function providerFetchStream(
     providerInstanceId: input.providerInstanceId,
     wire: input.wire,
   };
-  const detach = attachAbort(input.requestId, input.signal);
+  const detach = attachRequestCancellation(input.requestId, input.signal, cancelProviderHttp);
   const channel = new Channel<ProviderHttpStreamEvent>();
   channel.onmessage = (event) => {
     if (event.event === "started") {

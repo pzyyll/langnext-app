@@ -1,0 +1,35 @@
+[package]
+name = "langnext-conformance-llm-models-wasm"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "Apache-2.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[features]
+# Declared so wit-bindgen `std_feature` cfg checks are known; never enable for the no_std guest.
+std = []
+
+[dependencies]
+wit-bindgen = { version = "=0.41.0", default-features = false, features = ["macros", "realloc"] }
+serde = { version = "1", default-features = false, features = ["alloc"] }
+serde_json = { version = "1", default-features = false, features = ["alloc"] }
+
+[profile.release]
+# Deterministic builds for the committed conformance fixture.
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[package.metadata.component]
+package = "langnext:conformance-llm-models-wasm"
+
+[package.metadata.component.target]
+path = "../../../src-tauri/wit/runtime-plugin"
+world = "llm-models-world"
+
+[package.metadata.component.dependencies]

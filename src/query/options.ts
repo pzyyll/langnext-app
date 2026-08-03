@@ -14,10 +14,12 @@ import {
   listIntegrationInstances,
   listOcrServices,
   listPluginPublishers,
+  listRuntimeProviderCatalog,
   listSpeechServices,
   getSpeechService,
   listProviderInstances,
   listProviderModels,
+  listProviderRuntimeSnapshots,
   listServiceIntegrationDefinitions,
   listTranslationHistory,
   listTranslationHistoryModelFacets,
@@ -34,6 +36,7 @@ import {
   pluginPackageKeys,
   profileKeys,
   providerKeys,
+  providerRuntimeKeys,
   runtimeLifecycleKeys,
   settingsKeys,
   speechKeys,
@@ -58,6 +61,21 @@ export function providerModelsOptions(providerInstanceId: string) {
     queryKey: modelKeys.byProvider(providerInstanceId),
     queryFn: () => listProviderModels(providerInstanceId),
     enabled: providerInstanceId.length > 0,
+  });
+}
+
+/** Verified provider runtime package catalog (Phase 8). */
+export function providerRuntimeCatalogOptions() {
+  return queryOptions({
+    queryKey: providerRuntimeKeys.catalog(),
+    queryFn: listRuntimeProviderCatalog,
+  });
+}
+
+export function providerRuntimeSnapshotsOptions(providerInstanceId: string) {
+  return queryOptions({
+    queryKey: providerRuntimeKeys.snapshots(providerInstanceId),
+    queryFn: () => listProviderRuntimeSnapshots(providerInstanceId),
   });
 }
 

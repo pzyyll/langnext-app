@@ -486,22 +486,29 @@ impl PluginPackageService {
       }
       return Ok(import);
     }
-    // Not installed: run the normal preview + approve flow against a temp staging copy.
+    // Not installed: run the normal preview + approve flow against a temp copy. The copy
+    // lives OUTSIDE the staging root so the orphan-staging sweep (which only journals
+    // preview/approve operations) can never quarantine it mid-bootstrap; the copy is
+    // removed on every terminal path.
     let operation_id = new_id();
-    let staging_dir = self.staging_root().join(format!("bootstrap-{operation_id}"));
-    std::fs::create_dir_all(&staging_dir)?;
-    let src = staging_dir.join("package.lnplugin");
+    let copy_dir = self.app_data_dir.join("tmp").join(format!("bootstrap-{operation_id}"));
+    std::fs::create_dir_all(&copy_dir)?;
+    let src = copy_dir.join("package.lnplugin");
     std::fs::write(&src, archive_bytes)?;
     set_readonly(&src);
-    let preview = self.preview_package(&src)?;
-    self.approve_package(ApprovePluginPackageInput {
-      preview_id: preview.preview_id,
-      approve_publisher: false,
-      publisher_public_key_hex: None,
-      acknowledge_permissions: true,
-      set_as_default: set_default,
-    })?;
-    self.reverify_vendor_import(&digest)
+    let result = (|| {
+      let preview = self.preview_package(&src)?;
+      self.approve_package(ApprovePluginPackageInput {
+        preview_id: preview.preview_id,
+        approve_publisher: false,
+        publisher_public_key_hex: None,
+        acknowledge_permissions: true,
+        set_as_default: set_default,
+      })?;
+      self.reverify_vendor_import(&digest)
+    })();
+    let _ = std::fs::remove_dir_all(&copy_dir);
+    result
   }
 
   /// Re-verify the exact retained archive + extracted content for `digest` with the matching
@@ -1007,7 +1014,16 @@ impl PluginPackageService {
       return Ok(());
     }
     let unfinished = self.db.read(plugin_install_operations::list_unfinished)?;
-    let live_paths: std::collections::HashSet<String> = unfinished.into_iter().map(|op| op.staging_path).collect();
+    let mut live_paths: std::collections::HashSet<String> = unfinished.into_iter().map(|op| op.staging_path).collect();
+    // Live preview sessions are not yet journaled as install operations; their staging
+    // dirs must never be swept mid-preview (the preview phase runs the slow verification
+    // and artifact-world checks before the operation row exists).
+    {
+      let previews = self.previews.lock().unwrap_or_else(|e| e.into_inner());
+      for session in previews.values() {
+        live_paths.insert(session.staging_dir.to_string_lossy().to_string());
+      }
+    }
     let mut first_err: Option<StorageError> = None;
     for entry in std::fs::read_dir(&root).into_iter().flatten().flatten() {
       let path = entry.path();
@@ -2304,6 +2320,7 @@ impl PluginPackageService {
         credential_slots: vec![],
         permissions: Default::default(),
         ui: Default::default(),
+        provider_runtime: None,
       });
     Ok(InstalledPluginVersionDto {
       package_digest: version.package_digest.clone(),
@@ -2515,12 +2532,23 @@ fn reject_if_package_has_dependencies(
   let grant_count = crate::repositories::plugin_permission_grants::count_for_package(conn, package_digest)?;
   let snapshot_ref =
     crate::repositories::plugin_upgrade_snapshots::package_referenced_by_snapshot(conn, package_digest)?;
+  let provider_binding_ref =
+    crate::repositories::provider_runtime_bindings::package_referenced_by_binding(conn, package_digest)?;
+  let provider_snapshot_ref =
+    crate::repositories::provider_runtime_bindings::package_referenced_by_snapshot_set(conn, package_digest)?;
   let users = installed_plugin_versions::count_integration_users(conn, plugin_id, version)?;
   let is_default =
     installed_plugin_versions::get_default(conn, plugin_id)?.is_some_and(|d| d.package_digest == package_digest);
-  if !pin_users.is_empty() || grant_count > 0 || snapshot_ref || !users.is_empty() || is_default {
+  if !pin_users.is_empty()
+    || grant_count > 0
+    || snapshot_ref
+    || provider_binding_ref
+    || provider_snapshot_ref
+    || !users.is_empty()
+    || is_default
+  {
     return Err(StorageError::InUse(format!(
-      "package {package_digest} is in use (pins={}, grants={grant_count}, snapshots={snapshot_ref}, instances={}, is_default={is_default})",
+      "package {package_digest} is in use (pins={}, grants={grant_count}, snapshots={snapshot_ref}, provider_bindings={provider_binding_ref}, provider_snapshots={provider_snapshot_ref}, instances={}, is_default={is_default})",
       pin_users.len(),
       users.len()
     )));

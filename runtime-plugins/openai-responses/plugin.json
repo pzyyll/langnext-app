@@ -1,0 +1,71 @@
+{
+  "manifestVersion": 1,
+  "pluginApiVersion": "1.0",
+  "id": "com.langnext.provider.openai-responses",
+  "version": "1.0.0",
+  "publisher": {
+    "keyId": "com.langnext.vendor.keys.1",
+    "keyFingerprint": "506ef1879d748ce0713b0dd01da32ad2a4b1ce97b5a852ff18800c1e52982376"
+  },
+  "runtime": {
+    "kind": "wasm-component",
+    "artifact": "fixtures/llm-models.wasm"
+  },
+  "targets": [],
+  "files": [
+    {
+      "path": "fixtures/llm-chat.wasm",
+      "role": "runtime-artifact",
+      "bytes": 68645,
+      "sha256": "73be6a5745fac16ae4971590b63e924663002ce0d062e9bfc6a1a38446f57e32"
+    },
+    {
+      "path": "fixtures/llm-models.wasm",
+      "role": "runtime-artifact",
+      "bytes": 33645,
+      "sha256": "5061a10ab421b89dd09911101bb46fde31275edf24dece6b8fe205993f651453"
+    },
+    {
+      "path": "schemas/config.json",
+      "role": "config-schema",
+      "bytes": 51,
+      "sha256": "acceefffbdd72d4528e667e154fd32cb3a02de4a25483980c6221c775b77a914"
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "llm.models.list@1",
+      "artifact": "fixtures/llm-models.wasm"
+    },
+    {
+      "id": "llm.chat@1",
+      "artifact": "fixtures/llm-chat.wasm"
+    }
+  ],
+  "configurationSchema": "schemas/config.json",
+  "configSchemaVersion": 1,
+  "credentialSlots": [],
+  "permissions": {
+    "network": [],
+    "authPolicies": ["host.provider-instance-auth.v1"]
+  },
+  "ui": {
+    "mode": "schema",
+    "pages": []
+  },
+  "providerRuntime": {
+    "legacyAliases": ["openai-responses"],
+    "capabilities": {
+      "llm.models.list@1": "fixtures/llm-models.wasm",
+      "llm.chat@1": "fixtures/llm-chat.wasm"
+    },
+    "endpoint": {
+      "form": "provider-instance",
+      "authPolicy": "host.provider-instance-auth.v1"
+    },
+    "detection": {
+      "maxTokens": 256,
+      "thinking": false
+    }
+  }
+}

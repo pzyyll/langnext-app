@@ -168,6 +168,22 @@ impl StreamResourceTable {
       .await
   }
 
+  /// Detach a table-owned reader into a host-side [`LlmReaderBridge`] so the host can consume
+  /// the reader concurrently while a guest owns the paired writer (llm-delta chat streaming).
+  /// The bridge keeps the shared pair state alive; the writer entry stays in this table until
+  /// the guest finishes/drops it and request cleanup runs.
+  pub fn detach_reader(&mut self, reader_id: ResourceId) -> Result<LlmReaderBridge, ResourceError> {
+    let shared = self.readers.remove(&reader_id).ok_or(ResourceError::NotOwned)?;
+    let request_id = {
+      let data = shared
+        .data
+        .try_lock()
+        .map_err(|_| ResourceError::Internal("stream locked".into()))?;
+      data.owner.request_id().to_string()
+    };
+    Ok(LlmReaderBridge { shared, request_id })
+  }
+
   /// Receive the next frame, or `None` after a terminal state has been observed.
   /// The request `CancelToken` is awaited directly so a blocked consumer wakes promptly on cancel.
   pub async fn receive(
@@ -178,41 +194,7 @@ impl StreamResourceTable {
     cancel: Option<&CancelToken>,
   ) -> Result<Option<StreamFrame>, ResourceError> {
     let shared = self.readers.get(&reader_id).ok_or(ResourceError::NotOwned)?.clone();
-    loop {
-      let notified = shared.data_notify.notified();
-      {
-        let mut data = shared.data.lock().await;
-        Self::refresh(&mut data);
-        Self::check_owner(&data, principal)?;
-        if !data.reader_open {
-          return Err(ResourceError::Closed);
-        }
-        if let Some(frame) = data.buffer.pop_front() {
-          drop(data);
-          shared.space_notify.notify_waiters();
-          return Ok(Some(frame));
-        }
-        if let Some(term) = data.terminal.clone() {
-          data.reader_open = false;
-          return Ok(Some(StreamFrame::Terminal(term)));
-        }
-        if !data.writer_open {
-          data.terminal = Some(StreamTerminalState::Cancelled);
-          return Ok(Some(StreamFrame::Terminal(StreamTerminalState::Cancelled)));
-        }
-      }
-      tokio::select! {
-        biased;
-        _ = notified => continue,
-        _ = cancel_cancelled(cancel) => return Err(ResourceError::Cancelled),
-        _ = tokio::time::sleep(STREAM_BACKPRESSURE_WAIT) => {
-          return Err(ResourceError::Internal("receive deadline".into()));
-        }
-        _ = sleep_until_deadline(deadline) => {
-          return Err(ResourceError::Internal("request deadline".into()));
-        }
-      }
-    }
+    receive_shared(&shared, principal, deadline, cancel).await
   }
 
   /// Non-blocking receive for host pumps that already hold frames (returns None if empty & open).
@@ -495,6 +477,95 @@ impl StreamResourceTable {
     if Instant::now() >= data.expires_at {
       data.set_terminal(StreamTerminalState::Failed("expired".into()));
     }
+  }
+}
+
+/// Receive the next frame from a reader's shared state, or `None` after a terminal state has
+/// been observed. Shared by [`StreamResourceTable::receive`] and [`LlmReaderBridge::receive`]
+/// so a detached reader (guest-owned writer) keeps the same ordering/backpressure/terminal
+/// semantics as a table-owned reader.
+async fn receive_shared(
+  shared: &Arc<StreamShared>,
+  principal: &PluginPrincipal,
+  deadline: Option<Instant>,
+  cancel: Option<&CancelToken>,
+) -> Result<Option<StreamFrame>, ResourceError> {
+  loop {
+    let notified = shared.data_notify.notified();
+    {
+      let mut data = shared.data.lock().await;
+      StreamResourceTable::refresh(&mut data);
+      StreamResourceTable::check_owner(&data, principal)?;
+      if !data.reader_open {
+        return Err(ResourceError::Closed);
+      }
+      if let Some(frame) = data.buffer.pop_front() {
+        drop(data);
+        shared.space_notify.notify_waiters();
+        return Ok(Some(frame));
+      }
+      if let Some(term) = data.terminal.clone() {
+        data.reader_open = false;
+        return Ok(Some(StreamFrame::Terminal(term)));
+      }
+      if !data.writer_open {
+        data.terminal = Some(StreamTerminalState::Cancelled);
+        return Ok(Some(StreamFrame::Terminal(StreamTerminalState::Cancelled)));
+      }
+    }
+    tokio::select! {
+      biased;
+      _ = notified => continue,
+      _ = cancel_cancelled(cancel) => return Err(ResourceError::Cancelled),
+      _ = tokio::time::sleep(STREAM_BACKPRESSURE_WAIT) => {
+        return Err(ResourceError::Internal("receive deadline".into()));
+      }
+      _ = sleep_until_deadline(deadline) => {
+        return Err(ResourceError::Internal("request deadline".into()));
+      }
+    }
+  }
+}
+
+/// Host-side reader bridge for an llm-delta stream pair whose writer is owned by a guest
+/// (streaming chat). The guest call borrows the request store, so the reader's shared state is
+/// detached into this bridge before the call; the bridge is dropped (releasing the pair state)
+/// after the host has drained the reader and the guest call has completed.
+#[derive(Clone)]
+pub struct LlmReaderBridge {
+  shared: Arc<StreamShared>,
+  request_id: String,
+}
+
+impl LlmReaderBridge {
+  /// The immutable request id bound to this pair (owner scope for cleanup bookkeeping).
+  pub fn request_id(&self) -> &str {
+    &self.request_id
+  }
+
+  /// Receive the next ordered frame with the same semantics as [`StreamResourceTable::receive`].
+  pub async fn receive(
+    &self,
+    principal: &PluginPrincipal,
+    deadline: Option<Instant>,
+    cancel: Option<&CancelToken>,
+  ) -> Result<Option<StreamFrame>, ResourceError> {
+    receive_shared(&self.shared, principal, deadline, cancel).await
+  }
+
+  /// Force-cancel a still-open pair and notify waiters (idempotent cleanup when the host stops
+  /// draining before a terminal state; a still-open guest writer observes `Cancelled`).
+  pub async fn discard(&self) {
+    {
+      let mut data = self.shared.data.lock().await;
+      if data.terminal.is_none() {
+        data.set_terminal(StreamTerminalState::Cancelled);
+      } else {
+        data.writer_open = false;
+      }
+    }
+    self.shared.data_notify.notify_waiters();
+    self.shared.space_notify.notify_waiters();
   }
 }
 

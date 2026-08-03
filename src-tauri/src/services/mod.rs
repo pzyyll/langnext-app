@@ -20,10 +20,16 @@ pub mod plugin_package;
 pub mod plugin_schema;
 pub mod plugin_store;
 pub mod provider_http;
+pub mod provider_runtime_broker;
+pub mod provider_runtime_router;
 pub mod providers;
 pub mod runtime_lifecycle;
 pub mod runtime_plugin_contracts;
+pub mod runtime_providers;
 pub mod runtime_router;
+
+#[cfg(test)]
+mod runtime_provider_tests;
 
 #[cfg(test)]
 mod edge_tts_runtime_tests;

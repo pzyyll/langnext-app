@@ -1,5 +1,5 @@
-// ABOUTME: Pure TypeScript contracts for provider plugins, wire requests, and SSE.
-// ABOUTME: No React, Effect, Query, or route imports — shared by plugins and workflows.
+// ABOUTME: Legacy-frontend-provider plugin contract types, wire requests, and SSE shapes.
+// ABOUTME: Consumed only by the legacy executor and legacy workflows; runtime executors never see these.
 import type { AuthSchemeV1, CredentialKind } from "../../storage/types";
 
 export type { AuthSchemeV1, CredentialKind };

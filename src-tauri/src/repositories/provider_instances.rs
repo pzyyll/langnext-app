@@ -3,7 +3,9 @@
 use crate::domain::provider::{
   AuthSchemeV1, BaseUrlSource, CredentialKind, ModelsSyncStatus, ProviderInstance, ProxyMode,
 };
+use crate::domain::runtime_provider::ProviderRuntimeBinding;
 use crate::error::StorageError;
+use crate::repositories::provider_runtime_bindings;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use uuid::Uuid;
 
@@ -56,6 +58,53 @@ pub fn get(conn: &Connection, id: Uuid) -> Result<ProviderInstance, StorageError
     )
     .optional()?
     .ok_or_else(|| StorageError::NotFound(format!("provider {id}")))
+}
+
+/// Read one provider plus its adapter-keyed runtime interface bindings. A provider row
+/// without its default binding violates the adapter-keyed invariant and fails closed.
+pub fn get_with_runtime(
+  conn: &Connection,
+  id: Uuid,
+) -> Result<(ProviderInstance, Vec<ProviderRuntimeBinding>), StorageError> {
+  let provider = get(conn, id)?;
+  let bindings = provider_runtime_bindings::list_by_provider(conn, id)?;
+  if !bindings.iter().any(|binding| binding.adapter_id == provider.adapter_id) {
+    return Err(StorageError::Internal(format!(
+      "provider {} has no default runtime binding (adapter-keyed invariant violated)",
+      provider.id
+    )));
+  }
+  Ok((provider, bindings))
+}
+
+/// List every provider plus its adapter-keyed runtime bindings (binding order matches rows).
+pub fn list_with_runtime(
+  conn: &Connection,
+) -> Result<Vec<(ProviderInstance, Vec<ProviderRuntimeBinding>)>, StorageError> {
+  let providers = list(conn)?;
+  let bindings = provider_runtime_bindings::list(conn)?;
+  let mut by_provider: std::collections::HashMap<Uuid, Vec<ProviderRuntimeBinding>> = std::collections::HashMap::new();
+  for binding in bindings {
+    by_provider.entry(binding.provider_id).or_default().push(binding);
+  }
+  providers
+    .into_iter()
+    .map(|provider| {
+      let bindings = by_provider.remove(&provider.id).ok_or_else(|| {
+        StorageError::Internal(format!(
+          "provider {} has no runtime bindings (adapter-keyed invariant violated)",
+          provider.id
+        ))
+      })?;
+      if !bindings.iter().any(|binding| binding.adapter_id == provider.adapter_id) {
+        return Err(StorageError::Internal(format!(
+          "provider {} has no default runtime binding (adapter-keyed invariant violated)",
+          provider.id
+        )));
+      }
+      Ok((provider, bindings))
+    })
+    .collect()
 }
 
 pub fn insert(conn: &Connection, provider: &ProviderInstance) -> Result<(), StorageError> {

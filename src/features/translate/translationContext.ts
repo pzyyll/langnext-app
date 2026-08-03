@@ -5,9 +5,16 @@ import type {
   IntegrationInstanceDto,
   ProviderInstanceDto,
   ProviderModelDto,
+  ProviderRuntimeCatalogEntryDto,
   TranslateInput,
   TranslationProfileDto,
 } from "../../storage/types";
+import {
+  ProviderRuntimeUnavailableError,
+  resolveEffectiveAdapterId,
+  resolveProviderExecutor,
+  type ProviderExecutor,
+} from "../providers/executor";
 import { isModelApiTypeExecutable, requireProviderPlugin } from "../providers/registry";
 import { PluginUnavailableError } from "../providers/registry";
 import { buildDefaultTranslateSystemPrompt, renderPromptTemplate } from "./promptTemplate";
@@ -21,10 +28,11 @@ export type TranslationAttemptContext = {
   modelDisplayName: string;
   providerId: string;
   providerDisplayName: string;
-  pluginId: string;
   maxTokens: number;
   temperature: number | null;
   thinking: boolean | null;
+  /** Persisted provider executor selected from the Provider DTO binding. */
+  executor: ProviderExecutor;
 };
 
 export type LlmTranslationExecutionContext = {
@@ -61,6 +69,8 @@ export type TranslationContextSnapshots = {
   profile: TranslationProfileDto | null;
   /** Integration instances keyed by id (required for plugin profiles). */
   integrationsById?: Map<string, IntegrationInstanceDto>;
+  /** Verified provider runtime catalog; empty when no runtime package is installed. */
+  runtimeCatalog?: readonly ProviderRuntimeCatalogEntryDto[];
 };
 
 export function isLlmProfile(profile: TranslationProfileDto): boolean {
@@ -214,40 +224,58 @@ function resolveLlmContext(
     if (!provider || !provider.enabled) {
       continue;
     }
-    const pluginId = (model.adapterId?.trim() || provider.adapterId).trim();
+    const pluginId = resolveEffectiveAdapterId({
+      modelAdapterId: model.adapterId,
+      modelSourceAdapterId: model.sourceAdapterId,
+      providerAdapterId: provider.adapterId,
+    });
+    const modelMax =
+      model.capabilityOverridesJson?.defaultOutputTokens ?? model.capabilityOverridesJson?.maxOutputTokens ?? null;
+    const maxTokens = profileMaxTokens ?? modelMax ?? DEFAULT_TRANSLATE_MAX_TOKENS;
+
+    // Additive executor selection: a matching active interface binding selects the runtime
+    // executor; an unavailable/revoked runtime interface fails closed and skips only that
+    // model; an unbound API type keeps the existing legacy plugin compatibility rule.
     try {
-      const plugin = requireProviderPlugin(pluginId);
-      const providerPlugin = requireProviderPlugin(provider.adapterId);
-      const modelAuth = plugin.resolveAuthScheme(provider.credentialKind);
-      const providerAuth = provider.authScheme as AuthSchemeV1;
-      if (
-        !isModelApiTypeExecutable({
-          providerPluginId: provider.adapterId,
-          modelPluginId: pluginId,
-          providerAuthScheme: providerAuth,
-          modelAuthScheme: modelAuth,
-          baseUrlSource: provider.baseUrlSource,
-        })
-      ) {
-        continue;
+      const executor = resolveProviderExecutor({
+        provider,
+        modelAdapterId: model.adapterId,
+        modelSourceAdapterId: model.sourceAdapterId,
+        modelId: model.id,
+        catalog: snapshots.runtimeCatalog ?? [],
+      });
+      if (executor.kind === "legacy-frontend-provider") {
+        // Legacy binding: keep the existing plugin availability and custom-relay rule.
+        const plugin = requireProviderPlugin(pluginId);
+        const providerPlugin = requireProviderPlugin(provider.adapterId);
+        const modelAuth = plugin.resolveAuthScheme(provider.credentialKind);
+        const providerAuth = provider.authScheme as AuthSchemeV1;
+        if (
+          !isModelApiTypeExecutable({
+            providerPluginId: provider.adapterId,
+            modelPluginId: pluginId,
+            providerAuthScheme: providerAuth,
+            modelAuthScheme: modelAuth,
+            baseUrlSource: provider.baseUrlSource,
+          })
+        ) {
+          continue;
+        }
+        void providerPlugin;
       }
-      void providerPlugin;
-      const modelMax =
-        model.capabilityOverridesJson?.defaultOutputTokens ?? model.capabilityOverridesJson?.maxOutputTokens ?? null;
-      const maxTokens = profileMaxTokens ?? modelMax ?? DEFAULT_TRANSLATE_MAX_TOKENS;
       attempts.push({
         modelId: model.id,
         modelKey: model.modelKey,
         modelDisplayName: modelDisplayName(model),
         providerId: provider.id,
         providerDisplayName: provider.displayName,
-        pluginId,
         maxTokens,
         temperature,
         thinking: null,
+        executor,
       });
     } catch (error) {
-      if (error instanceof PluginUnavailableError) {
+      if (error instanceof ProviderRuntimeUnavailableError || error instanceof PluginUnavailableError) {
         continue;
       }
       throw error;

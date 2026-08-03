@@ -1,20 +1,17 @@
-// ABOUTME: Frontend paginated model sync workflow with transactional persistence IPC.
-// ABOUTME: All pages complete before merge; page failures leave existing model rows unchanged.
+// ABOUTME: Frontend model sync workflow through the persisted provider executor.
+// ABOUTME: All remote models complete before merge; failures leave existing model rows unchanged.
 import { invokeEffect } from "../../storage/invokeEffect";
 import { runStorage } from "../../storage/runStorage";
 import type {
   ProviderInstanceDto,
   ProviderModelDto,
+  ProviderRuntimeCatalogEntryDto,
   SyncModelsResult,
   SyncModelsResultCode,
 } from "../../storage/types";
-import { mapHttpStatus, normalizeProviderError } from "../providers/errors";
-import { providerFetch } from "../providers/providerFetch";
-import { requireProviderPlugin } from "../providers/registry";
+import { resolveProviderExecutor } from "../providers/executor";
+import { normalizeProviderError } from "../providers/errors";
 import { newClientRequestId } from "../translate/newClientRequestId";
-
-const MAX_PAGES = 100;
-const MAX_TOTAL_MODELS = 2000;
 
 export type RemoteModelSyncItem = {
   modelKey: string;
@@ -25,12 +22,14 @@ export type RemoteModelSyncItem = {
 
 async function applyProviderModelSync(
   providerInstanceId: string,
+  adapterId: string,
   expectedUpdatedAt: string,
   remoteModels: RemoteModelSyncItem[],
 ): Promise<SyncModelsResult> {
   return runStorage(
     invokeEffect<SyncModelsResult>("apply_provider_model_sync", {
       providerInstanceId,
+      adapterId,
       expectedUpdatedAt,
       remoteModels,
     }),
@@ -51,63 +50,42 @@ async function applyProviderModelSyncFailure(
   );
 }
 
+/**
+ * Sync remote models through the persisted provider executor for ONE selected API type.
+ * Legacy providers keep the current frontend pagination loop; runtime providers consume the
+ * guest's bounded aggregate list. All pages/models complete before the transactional Rust
+ * persistence seam merges; the dedupe/caps/version-race/no-partial-merge semantics live in
+ * that seam. A per-interface sync never marks another interface's models missing.
+ */
 export async function syncProviderModelsFrontend(
   provider: ProviderInstanceDto,
   currentModels: ProviderModelDto[] = [],
+  runtimeCatalog: readonly ProviderRuntimeCatalogEntryDto[] = [],
+  adapterId?: string,
 ): Promise<SyncModelsResult> {
   const expectedUpdatedAt = provider.updatedAt;
+  const selectedAdapterId = (adapterId?.trim() || provider.adapterId).trim();
   try {
-    const plugin = requireProviderPlugin(provider.adapterId);
-    let continuation: string | null = null;
-    const seenCursors = new Set<string>();
+    const executor = resolveProviderExecutor({
+      provider,
+      modelAdapterId: selectedAdapterId,
+      catalog: runtimeCatalog,
+    });
+    const result = await executor.modelsList({ requestId: newClientRequestId("sync") });
     const seenKeys = new Set<string>();
     const remoteModels: RemoteModelSyncItem[] = [];
-    let pages = 0;
-
-    while (true) {
-      pages += 1;
-      if (pages > MAX_PAGES) {
-        return applyProviderModelSyncFailure(provider.id, expectedUpdatedAt, "invalid_response");
+    for (const item of result.models) {
+      if (seenKeys.has(item.modelKey)) {
+        continue;
       }
-      if (continuation) {
-        if (seenCursors.has(continuation)) {
-          return applyProviderModelSyncFailure(provider.id, expectedUpdatedAt, "invalid_response");
-        }
-        seenCursors.add(continuation);
-      }
-
-      const wire = plugin.buildModelListRequest({ continuation });
-      const response = await providerFetch({
-        requestId: newClientRequestId("sync"),
-        providerInstanceId: provider.id,
-        wire,
+      seenKeys.add(item.modelKey);
+      remoteModels.push({
+        modelKey: item.modelKey,
+        remoteDisplayName: item.remoteDisplayName ?? null,
+        remoteMetadataJson: item.remoteMetadataJson ?? null,
       });
-      if (response.status < 200 || response.status >= 300) {
-        const code = mapHttpStatus(response.status);
-        return applyProviderModelSyncFailure(provider.id, expectedUpdatedAt, code);
-      }
-      const page = plugin.parseModelListPage(response);
-      for (const item of page.items) {
-        if (seenKeys.has(item.modelKey)) {
-          continue;
-        }
-        seenKeys.add(item.modelKey);
-        remoteModels.push({
-          modelKey: item.modelKey,
-          remoteDisplayName: item.remoteDisplayName ?? null,
-          remoteMetadataJson: item.remoteMetadataJson ?? null,
-        });
-        if (remoteModels.length > MAX_TOTAL_MODELS) {
-          return applyProviderModelSyncFailure(provider.id, expectedUpdatedAt, "invalid_response");
-        }
-      }
-      if (!page.continuation) {
-        break;
-      }
-      continuation = page.continuation;
     }
-
-    return await applyProviderModelSync(provider.id, expectedUpdatedAt, remoteModels);
+    return await applyProviderModelSync(provider.id, selectedAdapterId, expectedUpdatedAt, remoteModels);
   } catch (error) {
     const normalized = normalizeProviderError(error);
     const code: SyncModelsResultCode =

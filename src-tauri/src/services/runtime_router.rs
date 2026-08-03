@@ -1514,6 +1514,7 @@ mod tests {
         auth_policies: vec!["host.none.v1".into()],
       },
       ui: Default::default(),
+      provider_runtime: None,
     }
   }
 

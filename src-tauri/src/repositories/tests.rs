@@ -19,7 +19,8 @@ use crate::error::StorageError;
 use crate::repositories::{
   app_credentials, app_settings, credential_operations, installed_plugin_versions, integration_credential_bindings,
   integration_instances, ocr_prompt_templates, ocr_services, plugin_install_operations, plugin_package_approvals,
-  plugin_permission_grants, plugin_publishers, provider_instances, provider_models, translation_profiles,
+  plugin_permission_grants, plugin_publishers, provider_instances, provider_models, provider_runtime_bindings,
+  translation_profiles,
 };
 use crate::storage::Database;
 use uuid::Uuid;
@@ -80,6 +81,7 @@ fn sample_model(id: Uuid, provider_id: Uuid, key: &str) -> ProviderModel {
     remote_metadata_json: None,
     capability_overrides_json: None,
     adapter_id: None,
+    source_adapter_id: String::new(),
     last_seen_at: None,
     created_at: now.clone(),
     updated_at: now,
@@ -1344,4 +1346,189 @@ fn runtime_instance_pin_package_approval_never_authorizes_execution() {
     Ok(())
   })
   .unwrap();
+}
+
+/// Phase 8 provider runtime interface bindings: the repository persists one binding per
+/// (provider, adapter) pair, enforces the same pin invariants as the Phase 4 instance pins,
+/// and the joined DTO never carries the credential reference.
+#[test]
+fn provider_runtime_binding_repository_and_dto_join() {
+  let (_dir, db) = setup();
+  let provider_id = new_id();
+  let now = now_rfc3339();
+  db.transaction(|uow| {
+    provider_instances::insert(
+      uow.conn(),
+      &ProviderInstance {
+        id: provider_id,
+        adapter_id: "openai-compatible".into(),
+        display_name: "Runtime".into(),
+        base_url: "https://api.openai.com/v1".into(),
+        base_url_source: BaseUrlSource::PluginDefault,
+        auth_scheme: AuthSchemeV1::bearer(),
+        credential_kind: CredentialKind::ApiKey,
+        credential_ref: Some(format!("provider/{provider_id}/op-1")),
+        enabled: true,
+        proxy_mode: ProxyMode::Inherit,
+        insecure_http_confirmed_at: None,
+        models_synced_at: None,
+        models_sync_status: ModelsSyncStatus::Never,
+        models_sync_error_code: None,
+        created_at: now.clone(),
+        updated_at: now.clone(),
+      },
+    )?;
+    Ok(())
+  })
+  .unwrap();
+
+  // A provider without its default binding fails closed instead of fabricating an identity.
+  assert!(
+    db.read(|conn| provider_instances::get_with_runtime(conn, provider_id))
+      .is_err()
+  );
+
+  let binding = crate::domain::runtime_provider::legacy_frontend_binding(provider_id, "openai-compatible", &now);
+  db.write(|conn| provider_runtime_bindings::insert(conn, &binding))
+    .unwrap();
+
+  // Repository round trip keyed by (provider, adapter) and ordered list.
+  let read = db
+    .read(|conn| provider_runtime_bindings::get(conn, provider_id, "openai-compatible"))
+    .unwrap();
+  assert_eq!(read, binding);
+  assert_eq!(db.read(|conn| provider_runtime_bindings::list(conn)).unwrap().len(), 1);
+
+  // Joined provider + binding collection, and the sanitized DTO contains no credential ref.
+  let (provider, joined) = db
+    .read(|conn| provider_instances::get_with_runtime(conn, provider_id))
+    .unwrap();
+  assert_eq!(joined.len(), 1);
+  assert_eq!(joined[0].provider_id, provider_id);
+  assert_eq!(joined[0].adapter_id, "openai-compatible");
+  let dto = crate::domain::provider::ProviderInstanceDto::from_provider_and_runtime(&provider, &joined);
+  let json = serde_json::to_string(&dto).unwrap();
+  assert!(json.contains("\"runtimeKind\":\"legacy-frontend-provider\""));
+  assert!(json.contains("\"state\":\"active\""));
+  assert!(json.contains("\"adapterId\":\"openai-compatible\""));
+  assert!(!json.contains("credentialRef"));
+  assert!(!json.contains("op-1"));
+
+  // Pin invariants equivalent to the Phase 4 instance pins: a legacy binding must not carry
+  // a package or grant pin, and a wasm binding requires a digest (and a revision while active).
+  use crate::domain::runtime_provider::{ProviderRuntimeBinding, ProviderRuntimeKind, ProviderRuntimeState};
+  let legacy_with_digest = ProviderRuntimeBinding {
+    provider_id,
+    adapter_id: "openai-compatible".into(),
+    runtime_kind: ProviderRuntimeKind::LegacyFrontendProvider,
+    package_digest: Some("a".repeat(64)),
+    grant_set_revision: None,
+    state: ProviderRuntimeState::Active,
+    error_code: None,
+    error_message: None,
+    runtime_requirement_json: None,
+    created_at: now.clone(),
+    updated_at: now.clone(),
+  };
+  assert!(
+    db.write(|conn| provider_runtime_bindings::insert(conn, &legacy_with_digest))
+      .is_err()
+  );
+
+  let wasm_without_digest = ProviderRuntimeBinding {
+    provider_id,
+    adapter_id: "openai-compatible".into(),
+    runtime_kind: ProviderRuntimeKind::WasmComponent,
+    package_digest: None,
+    grant_set_revision: None,
+    state: ProviderRuntimeState::Unavailable,
+    error_code: None,
+    error_message: None,
+    runtime_requirement_json: None,
+    created_at: now.clone(),
+    updated_at: now.clone(),
+  };
+  assert!(
+    db.write(|conn| provider_runtime_bindings::insert(conn, &wasm_without_digest))
+      .is_err()
+  );
+
+  let wasm_active_without_revision = ProviderRuntimeBinding {
+    provider_id,
+    adapter_id: "openai-compatible".into(),
+    runtime_kind: ProviderRuntimeKind::WasmComponent,
+    package_digest: Some("a".repeat(64)),
+    grant_set_revision: None,
+    state: ProviderRuntimeState::Active,
+    error_code: None,
+    error_message: None,
+    runtime_requirement_json: None,
+    created_at: now.clone(),
+    updated_at: now.clone(),
+  };
+  assert!(
+    db.write(|conn| provider_runtime_bindings::insert(conn, &wasm_active_without_revision))
+      .is_err()
+  );
+
+  // A package binding that is unavailable may carry a digest without a grant revision.
+  let wasm_unavailable = ProviderRuntimeBinding {
+    provider_id,
+    adapter_id: "openai-compatible".into(),
+    runtime_kind: ProviderRuntimeKind::WasmComponent,
+    package_digest: Some("a".repeat(64)),
+    grant_set_revision: None,
+    state: ProviderRuntimeState::Unavailable,
+    error_code: Some("plugin_unavailable".into()),
+    error_message: Some("package missing".into()),
+    runtime_requirement_json: Some("{}".into()),
+    created_at: now.clone(),
+    updated_at: now.clone(),
+  };
+  db.write(|conn| provider_runtime_bindings::insert(conn, &wasm_unavailable))
+    .unwrap_err(); // the default adapter row is still active legacy; PK conflict fails.
+  // Replace the legacy binding through the repository update path (lifecycle transition).
+  db.write(|conn| provider_runtime_bindings::update(conn, &wasm_unavailable))
+    .unwrap();
+  let after = db
+    .read(|conn| provider_runtime_bindings::get(conn, provider_id, "openai-compatible"))
+    .unwrap();
+  assert_eq!(after.runtime_kind, ProviderRuntimeKind::WasmComponent);
+  assert_eq!(after.state, ProviderRuntimeState::Unavailable);
+  assert_eq!(after.error_code.as_deref(), Some("plugin_unavailable"));
+
+  // A second adapter binding coexists with the default row (multi-interface).
+  let second = ProviderRuntimeBinding {
+    provider_id,
+    adapter_id: "gemini".into(),
+    runtime_kind: ProviderRuntimeKind::WasmComponent,
+    package_digest: Some("b".repeat(64)),
+    grant_set_revision: None,
+    state: ProviderRuntimeState::Unavailable,
+    error_code: Some("plugin_unavailable".into()),
+    error_message: Some("package missing".into()),
+    runtime_requirement_json: Some("{}".into()),
+    created_at: now.clone(),
+    updated_at: now.clone(),
+  };
+  db.write(|conn| provider_runtime_bindings::insert(conn, &second))
+    .unwrap();
+  let ordered = db
+    .read(|conn| provider_runtime_bindings::list_by_provider(conn, provider_id))
+    .unwrap();
+  assert_eq!(ordered.len(), 2);
+  assert_eq!(ordered[0].adapter_id, "gemini");
+  assert_eq!(ordered[1].adapter_id, "openai-compatible");
+
+  // The DTO still carries only sanitized identity after the transition.
+  let (provider, joined) = db
+    .read(|conn| provider_instances::get_with_runtime(conn, provider_id))
+    .unwrap();
+  let dto = crate::domain::provider::ProviderInstanceDto::from_provider_and_runtime(&provider, &joined);
+  let json = serde_json::to_string(&dto).unwrap();
+  assert!(json.contains("\"runtimeKind\":\"wasm-component\""));
+  assert!(json.contains("\"state\":\"unavailable\""));
+  assert!(json.contains("\"runtimeBindings\""));
+  assert!(!json.contains("credentialRef"));
+  assert!(!json.contains("runtimeRequirementJson"));
 }
