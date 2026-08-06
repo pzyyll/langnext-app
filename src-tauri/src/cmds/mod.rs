@@ -3,6 +3,7 @@
 pub mod import_export;
 pub mod models;
 pub mod ocr_services;
+pub mod plugin_models;
 pub mod plugin_packages;
 pub mod provider_http;
 pub mod providers;

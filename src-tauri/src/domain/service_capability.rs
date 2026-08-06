@@ -161,6 +161,10 @@ pub enum CapabilityErrorCode {
   ProviderUnavailable,
   PluginUnavailable,
   Cancelled,
+  /// Native worker process crashed or exited unexpectedly.
+  WorkerCrashed,
+  /// Declared host-managed model resource is missing or not ready.
+  ModelMissing,
   Internal,
 }
 
@@ -182,6 +186,8 @@ impl CapabilityErrorCode {
       Self::ProviderUnavailable => "provider_unavailable",
       Self::PluginUnavailable => "plugin_unavailable",
       Self::Cancelled => "cancelled",
+      Self::WorkerCrashed => "worker_crashed",
+      Self::ModelMissing => "model_missing",
       Self::Internal => "internal",
     }
   }

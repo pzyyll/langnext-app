@@ -864,6 +864,49 @@ export interface ApproveUserPublisherInput {
   publicKeyHex: string;
 }
 
+/** Sanitized model resource readiness for host-owned configuration pages. */
+export type PluginModelResourceStatus = "missing" | "downloading" | "ready" | "failed";
+
+export interface PluginModelResourceDto {
+  modelId: string;
+  version: string;
+  modelApiVersion: number;
+  languageSet: string;
+  status: PluginModelResourceStatus;
+  expectedDownloadBytes: number;
+  installedBytes?: number | null;
+  licenseLabel: string;
+  errorCode?: string | null;
+}
+
+export interface DownloadPluginModelInput {
+  instanceId: string;
+  modelId: string;
+}
+
+export interface CancelPluginModelDownloadInput {
+  instanceId: string;
+  modelId: string;
+  operationId: string;
+}
+
+export type PluginModelDownloadPhase =
+  | "starting"
+  | "downloading"
+  | "verifying"
+  | "installing"
+  | "ready"
+  | "failed"
+  | "cancelled";
+
+export interface PluginModelDownloadProgress {
+  operationId: string;
+  modelId: string;
+  bytesDownloaded: number;
+  totalBytes: number;
+  phase: PluginModelDownloadPhase;
+}
+
 export interface PluginDefaultVersionDto {
   pluginId: string;
   packageDigest: string;

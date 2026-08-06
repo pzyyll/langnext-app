@@ -413,6 +413,14 @@ fn map_capability_error(err: crate::domain::service_capability::CapabilityError)
       message: err.message,
     },
     CapabilityErrorCode::PluginUnavailable => StorageError::PluginUnavailable(err.message),
+    CapabilityErrorCode::WorkerCrashed => StorageError::Capability {
+      code: "worker_crashed".into(),
+      message: err.message,
+    },
+    CapabilityErrorCode::ModelMissing => StorageError::Capability {
+      code: "model_missing".into(),
+      message: err.message,
+    },
     CapabilityErrorCode::Internal => StorageError::Internal(err.message),
   }
 }

@@ -11,6 +11,7 @@ pub mod integration_instances;
 pub mod ocr_prompt_templates;
 pub mod ocr_services;
 pub mod plugin_install_operations;
+pub mod plugin_model_resources;
 pub mod plugin_package_approvals;
 pub mod plugin_permission_grants;
 pub mod plugin_publishers;

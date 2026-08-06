@@ -64,6 +64,8 @@ pub struct ServiceIntegrationService {
   validation_timeout: Duration,
   runtime_lifecycle: Option<crate::services::runtime_lifecycle::RuntimeLifecycleService>,
   endpoint_trust: Arc<EndpointTrustService>,
+  /// When set, PaddleOCR first-model health uses the same vendor-root re-verify seam as RuntimeRouter.
+  plugin_packages: Option<crate::services::plugin_store::PluginPackageService>,
 }
 
 impl ServiceIntegrationService {
@@ -81,6 +83,7 @@ impl ServiceIntegrationService {
       validation_timeout: INTEGRATION_VALIDATION_TIMEOUT,
       runtime_lifecycle: None,
       endpoint_trust: Arc::new(EndpointTrustService::new(db.clone(), registry.clone())),
+      plugin_packages: None,
     }
   }
 
@@ -97,6 +100,12 @@ impl ServiceIntegrationService {
     runtime_lifecycle: crate::services::runtime_lifecycle::RuntimeLifecycleService,
   ) -> Self {
     self.runtime_lifecycle = Some(runtime_lifecycle);
+    self
+  }
+
+  /// Wire plugin package re-verification so native health uses the signed archive (not mutable DB JSON).
+  pub fn with_plugin_packages(mut self, plugin_packages: crate::services::plugin_store::PluginPackageService) -> Self {
+    self.plugin_packages = Some(plugin_packages);
     self
   }
 
@@ -258,7 +267,46 @@ impl ServiceIntegrationService {
     }
 
     // Credential-free integrations are ready from local config alone - no token grant.
+    // PaddleOCR / trusted-native-worker requires an activated vendor package + ready model.
     if !registration.requires_remote_auth() {
+      if is_paddleocr_native_health_gate(&instance) {
+        let package_digest = instance.package_digest.as_deref().filter(|d| !d.is_empty());
+        let activated_native = instance.runtime_kind == "trusted-native-worker" && package_digest.is_some();
+        if !activated_native {
+          self.persist_validation_health(
+            id,
+            IntegrationHealthStatus::Degraded,
+            Some(crate::domain::plugin_model::PluginModelErrorCode::ModelMissing.as_str()),
+          )?;
+          let refreshed = self.get_instance(id)?;
+          return Ok(IntegrationValidationResult {
+            instance_id: id,
+            health_status: refreshed.health_status,
+            effective_status: refreshed.effective_status,
+            remote_checked: false,
+            message: Some("PaddleOCR requires an activated vendor package and a ready model before it can run.".into()),
+          });
+        }
+        // Authoritative readiness matches RuntimeRouter: first model resource from the
+        // vendor-root re-verified archive (not mutable DB manifest_json) must be Ready.
+        let digest = package_digest.expect("activated native has package digest");
+        let model_ready = self.paddleocr_first_model_ready(digest)?;
+        if !model_ready {
+          self.persist_validation_health(
+            id,
+            IntegrationHealthStatus::Degraded,
+            Some(crate::domain::plugin_model::PluginModelErrorCode::ModelMissing.as_str()),
+          )?;
+          let refreshed = self.get_instance(id)?;
+          return Ok(IntegrationValidationResult {
+            instance_id: id,
+            health_status: refreshed.health_status,
+            effective_status: refreshed.effective_status,
+            remote_checked: false,
+            message: Some("Required model is missing. Download it from the configuration page.".into()),
+          });
+        }
+      }
       self.persist_validation_health(id, IntegrationHealthStatus::Ready, None)?;
       let refreshed = self.get_instance(id)?;
       return Ok(IntegrationValidationResult {
@@ -1228,6 +1276,85 @@ fn grant_matches_credential_snapshot(grant: &TokenGrant, snapshot: &[RequiredCre
   snapshot.iter().all(|entry| entry.credential_revision == grant_revision)
 }
 
+/// PaddleOCR health stays Degraded until a vendor package is activated and the model is ready.
+fn is_paddleocr_native_health_gate(instance: &crate::domain::service_integration::IntegrationInstance) -> bool {
+  instance.plugin_id == crate::domain::service_integration::PADDLEOCR_PLUGIN_ID
+    || instance.runtime_kind == "trusted-native-worker"
+}
+
+impl ServiceIntegrationService {
+  /// Ready only when the **signed** package's first model resource is Ready at the exact
+  /// id/version/model_api_version — same vendor-root re-verify seam as RuntimeRouter.
+  fn paddleocr_first_model_ready(&self, package_digest: &str) -> Result<bool, StorageError> {
+    use crate::domain::plugin_model::PluginModelResourceStatus;
+    use crate::domain::runtime_plugin::PluginManifestV1;
+
+    let version = self
+      .db
+      .read(|conn| crate::repositories::installed_plugin_versions::get_optional(conn, package_digest))?;
+    let Some(version) = version else {
+      return Ok(false);
+    };
+    if !version.content_available {
+      return Ok(false);
+    }
+
+    // Same publisher eligibility as RuntimeRouter (enabled / revoked / vendor source / key id).
+    let publisher = self
+      .db
+      .read(|conn| crate::repositories::plugin_publishers::get(conn, &version.publisher_key_id))?;
+    if crate::services::plugin_package::require_native_worker_vendor_publisher(
+      publisher.source,
+      &publisher.key_id,
+      publisher.enabled,
+      publisher.revoked,
+    )
+    .is_err()
+    {
+      return Ok(false);
+    }
+
+    // Production path: first model identity comes only from the vendor-root re-verified archive.
+    // Mutable DB `manifest_json` is never the trust root when packages are wired (matches RuntimeRouter).
+    let manifest: PluginManifestV1 = if let Some(packages) = &self.plugin_packages {
+      let (verified, vendor_root) = match packages.verify_store_with_vendor_root(package_digest) {
+        Ok(pair) => pair,
+        Err(_) => return Ok(false),
+      };
+      if vendor_root.key_id != publisher.key_id
+        || verified.publisher_public_key_hex != publisher.public_key_hex
+        || verified.publisher_fingerprint != publisher.fingerprint
+        || verified.package_digest != package_digest
+      {
+        return Ok(false);
+      }
+      verified.manifest
+    } else {
+      // Unit-test path without a package service: still parse installed JSON, but production
+      // composition always injects plugin_packages via with_plugin_packages().
+      match serde_json::from_str(&version.manifest_json) {
+        Ok(m) => m,
+        Err(_) => return Ok(false),
+      }
+    };
+
+    let Some(first) = manifest.model_resources.as_ref().and_then(|list| list.first()) else {
+      return Ok(false);
+    };
+    let row = self.db.read(|conn| {
+      crate::repositories::plugin_model_resources::get_by_package_and_model(conn, package_digest, &first.id)
+    })?;
+    let Some(row) = row else {
+      return Ok(false);
+    };
+    Ok(
+      row.status == PluginModelResourceStatus::Ready
+        && row.model_version == first.version
+        && row.model_api_version == first.model_api_version,
+    )
+  }
+}
+
 fn compute_local_health(
   registration: &crate::services::bundled_plugins::BundledPluginRegistration,
   config_json: &str,
@@ -1242,6 +1369,10 @@ fn compute_local_health(
   });
   if !config_ok || !credentials_ok {
     IntegrationHealthStatus::Unconfigured
+  } else if registration.manifest.id == crate::domain::service_integration::PADDLEOCR_PLUGIN_ID {
+    // PaddleOCR is credential-free but still requires vendor package pin + model download.
+    // Keep create-time health out of Ready until validate_instance confirms readiness.
+    IntegrationHealthStatus::Unvalidated
   } else if !registration.requires_remote_auth() {
     // Credential-free integrations become Ready from local config alone.
     IntegrationHealthStatus::Ready
@@ -2111,7 +2242,7 @@ mod tests {
   fn service_integrations_list_definitions() {
     let (_d, service, _vault) = setup();
     let defs = service.list_definitions();
-    assert_eq!(defs.len(), 3);
+    assert_eq!(defs.len(), 4);
     assert_eq!(defs[0].manifest.id, GOOGLE_CLOUD_PLUGIN_ID);
     assert_eq!(defs[1].manifest.id, GOOGLE_TRANSLATE_WEB_PLUGIN_ID);
     assert_eq!(defs[2].manifest.id, EDGE_TTS_PLUGIN_ID);

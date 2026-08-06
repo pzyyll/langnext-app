@@ -21,6 +21,11 @@ name = "plugin_tool"
 path = "src/bin/plugin_tool.rs"
 # Offline package finalize/verify helper; not the Tauri desktop entrypoint.
 
+[[bin]]
+name = "native_hash_helper"
+path = "src/bin/native_hash_helper.rs"
+# Exec-only SHA-256 helper for Unix native-worker identity hashing (FD-based exec target).
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -52,7 +57,9 @@ thiserror = "2.0.18"
 url = "2"
 semver = "1"
 tempfile = "3.27.0"
-reqwest = { version = "0.13", features = ["json", "form"] }
+reqwest = { version = "0.13", features = ["json", "form", "blocking"] }
+# Phase 10: bounded TAR extraction for host-managed model archives.
+tar = "0.4"
 tokio = { version = "1", default-features = false, features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
 base64 = "0.22"
 # Google service-account JWT assertions (RS256 + PEM). rust_crypto backend avoids native OpenSSL.
@@ -104,3 +111,7 @@ arboard = "3"
 [target.'cfg(windows)'.dependencies]
 enigo = "0.1.3"
 kmhook = { git = "https://github.com/pzyyll/kmhook-rs.git", branch = "main" }
+
+# Direct libc dependency for native-worker process-tree kill on Unix hosts.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

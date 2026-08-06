@@ -464,6 +464,92 @@ fn parse_and_validate_package_bytes(archive_bytes: &[u8]) -> Result<VerifiedPack
   })
 }
 
+/// First-party native worker packages are limited to the host allowlist (PaddleOCR only).
+/// Publisher key id/fingerprint must reverse-bind the configured vendor root; user-approved
+/// publishers are never sufficient for trusted-native-worker packages.
+fn validate_native_worker_package_authority(manifest: &PluginManifestV1) -> Result<(), String> {
+  use crate::domain::native_worker::{PADDLEOCR_PLUGIN_ID, PADDLEOCR_PLUGIN_VERSION};
+  use crate::services::vendor_trust::VENDOR_PUBLISHER_KEY_ID;
+
+  if manifest.id != PADDLEOCR_PLUGIN_ID {
+    return Err(format!(
+      "native worker plugin id {} is not on the host allowlist",
+      manifest.id
+    ));
+  }
+  if manifest.version != PADDLEOCR_PLUGIN_VERSION {
+    return Err(format!(
+      "native worker version {} is not the allowlisted release",
+      manifest.version
+    ));
+  }
+  if manifest.publisher.key_id != VENDOR_PUBLISHER_KEY_ID {
+    return Err(format!(
+      "native worker publisher key id {} is not the vendor root key",
+      manifest.publisher.key_id
+    ));
+  }
+  if manifest.model_resources.as_ref().map(|r| r.is_empty()).unwrap_or(true) {
+    return Err("native worker package requires modelResources".into());
+  }
+  // Reject prohibited payload types that must never ship in a native package (any role).
+  for file in &manifest.files {
+    let lower = file.path.to_ascii_lowercase();
+    let is_declared_runtime_pe = matches!(file.role, crate::domain::runtime_plugin::FileRole::RuntimeArtifact)
+      && (lower.ends_with(".exe") || lower.ends_with(".dll"));
+    if !is_declared_runtime_pe
+      && (lower.ends_with(".exe")
+        || lower.ends_with(".dll")
+        || lower.ends_with(".sys")
+        || lower.ends_with(".scr")
+        || lower.ends_with(".com")
+        || lower.ends_with(".cpl")
+        || lower.ends_with(".ocx")
+        || lower.ends_with(".efi")
+        || lower.ends_with(".drv"))
+    {
+      return Err(format!("native package rejects disguised payload entry {}", file.path));
+    }
+    if lower.ends_with(".py")
+      || lower.ends_with(".pyc")
+      || lower.ends_with(".sh")
+      || lower.ends_with(".bat")
+      || lower.ends_with(".cmd")
+      || lower.ends_with(".ps1")
+      || lower.ends_with(".tar")
+      || lower.ends_with(".zip")
+      || lower.ends_with(".7z")
+      || lower.ends_with(".pdb")
+      || lower.ends_with(".pdiparams")
+      || lower.contains("pp-ocr")
+    {
+      return Err(format!("native package rejects prohibited payload entry {}", file.path));
+    }
+  }
+  Ok(())
+}
+
+/// Runtime authority for trusted-native-worker packages: vendor-only source + fixed key id.
+pub fn require_native_worker_vendor_publisher(
+  publisher_source: crate::domain::plugin_package::PublisherSource,
+  publisher_key_id: &str,
+  publisher_enabled: bool,
+  publisher_revoked: bool,
+) -> Result<(), String> {
+  use crate::domain::plugin_package::PublisherSource;
+  use crate::services::vendor_trust::VENDOR_PUBLISHER_KEY_ID;
+  if publisher_revoked || !publisher_enabled {
+    return Err("native worker publisher trust is revoked or disabled".into());
+  }
+  if publisher_source != PublisherSource::Vendor {
+    return Err("trusted-native-worker packages require a vendor publisher".into());
+  }
+  if publisher_key_id != VENDOR_PUBLISHER_KEY_ID {
+    return Err("trusted-native-worker packages require the host vendor publisher key".into());
+  }
+  Ok(())
+}
+
 /// Host-side semantic checks beyond structural manifest/archive validation.
 ///
 /// Covers runtime kind for external packages, embedded schema documents, and permission/auth
@@ -476,10 +562,14 @@ fn validate_package_semantics(
   use crate::domain::runtime_plugin::RuntimeKind;
   use crate::services::plugin_schema::{parse_schema, validate_schema, validate_schema_for_manifest};
 
-  // Phase 3 external packages may only install wasm-component runtimes (no native/bundled).
+  // External packages may install wasm-component, or an allowlisted first-party native worker.
   match manifest.runtime.kind {
     RuntimeKind::WasmComponent => {}
-    RuntimeKind::BundledRust | RuntimeKind::LegacyFrontendProvider | RuntimeKind::TrustedNativeWorker => {
+    RuntimeKind::TrustedNativeWorker => {
+      validate_native_worker_package_authority(manifest)
+        .map_err(|message| PackageVerifyError::new(PackageErrorCode::CompatibilityRejected, message))?;
+    }
+    RuntimeKind::BundledRust | RuntimeKind::LegacyFrontendProvider => {
       return Err(PackageVerifyError::new(
         PackageErrorCode::CompatibilityRejected,
         format!(
@@ -519,8 +609,28 @@ fn validate_package_semantics(
   } else {
     return Err(PackageVerifyError::new(
       PackageErrorCode::CompatibilityRejected,
-      "wasm-component packages require a runtime artifact",
+      "archive-backed packages require a runtime artifact",
     ));
+  }
+
+  // Native worker packages must include every declared dependency file with matching digests.
+  if manifest.runtime.kind == RuntimeKind::TrustedNativeWorker {
+    if let Some(deps) = &manifest.runtime.native_dependencies {
+      for dep in deps {
+        let Some(bytes) = extracted.get(dep) else {
+          return Err(PackageVerifyError::new(
+            PackageErrorCode::MissingIndexedFile,
+            format!("native dependency {dep} missing from archive"),
+          ));
+        };
+        if bytes.is_empty() {
+          return Err(PackageVerifyError::new(
+            PackageErrorCode::InvalidManifest,
+            format!("native dependency {dep} is empty"),
+          ));
+        }
+      }
+    }
   }
 
   // Validate every embedded config/preference schema document against host schema rules.
@@ -860,6 +970,8 @@ pub mod test_support {
       runtime: RuntimeDescriptor {
         kind: RuntimeKind::WasmComponent,
         artifact: Some("artifacts/plugin.wasm".into()),
+        native_protocol_version: None,
+        native_dependencies: None,
       },
       targets: vec![],
       files: vec![PluginFileEntry {
@@ -882,6 +994,7 @@ pub mod test_support {
       },
       ui: Default::default(),
       provider_runtime: None,
+      model_resources: None,
     }
   }
 

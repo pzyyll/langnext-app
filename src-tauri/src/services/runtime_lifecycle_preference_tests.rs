@@ -173,6 +173,8 @@ fn build_pkg(version: &str, extra: Option<&str>) -> (Vec<u8>, String) {
     runtime: RuntimeDescriptor {
       kind: RuntimeKind::WasmComponent,
       artifact: Some(runtime_path.into()),
+      native_protocol_version: None,
+      native_dependencies: None,
     },
     targets: vec![],
     files,
@@ -202,6 +204,7 @@ fn build_pkg(version: &str, extra: Option<&str>) -> (Vec<u8>, String) {
     },
     ui: Default::default(),
     provider_runtime: None,
+    model_resources: None,
   };
   let sk = fixture_vendor_signing_key();
   let manifest_bytes = serde_json::to_vec(&manifest).unwrap();

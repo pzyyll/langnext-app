@@ -128,7 +128,7 @@ mod tests {
   fn bundled_registers_google_cloud() {
     let registry = ServiceIntegrationRegistry::bundled().unwrap();
     let defs = registry.list_definitions();
-    assert_eq!(defs.len(), 3);
+    assert_eq!(defs.len(), 4);
     let google = registry.get(GOOGLE_CLOUD_PLUGIN_ID).unwrap();
     assert_eq!(google.config_schema_version, 1);
     assert_eq!(google.credential_slots.len(), 1);

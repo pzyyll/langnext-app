@@ -601,6 +601,8 @@ mod tests {
       runtime: RuntimeDescriptor {
         kind: RuntimeKind::WasmComponent,
         artifact: Some("artifacts/plugin.wasm".into()),
+        native_protocol_version: None,
+        native_dependencies: None,
       },
       targets: vec![],
       files: vec![PluginFileEntry {
@@ -623,6 +625,7 @@ mod tests {
       },
       ui: Default::default(),
       provider_runtime: None,
+      model_resources: None,
     }
   }
 

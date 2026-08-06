@@ -63,6 +63,7 @@ import {
   type IntegrationSchemaDraft,
 } from "./integrationDraft";
 import { isRuntimeUnresolved } from "./runtimeLifecyclePresentation";
+import { PluginModelResourcesPanel } from "./PluginModelResourcesPanel";
 import { RuntimeLifecyclePanel } from "./RuntimeLifecyclePanel";
 import { presentCapabilityHealthList } from "./capabilityHealthPresentation";
 
@@ -567,6 +568,11 @@ export function IntegrationEditor({ integrationInstanceId }: IntegrationEditorPr
           </section>
 
           <RuntimeLifecyclePanel instance={instance} />
+
+          <PluginModelResourcesPanel
+            instanceId={instance.id}
+            enabled={instance.runtimeKind === "trusted-native-worker"}
+          />
 
           <section className="space-y-2">
             <h3 className="text-label-sm font-bold tracking-wide text-neutral uppercase">

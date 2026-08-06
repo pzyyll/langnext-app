@@ -12,7 +12,7 @@ use crate::services::service_capabilities::ServiceCapabilityService;
 use crate::services::token_grant::TokenGrantService;
 use crate::services::wasm_runtime::WasmRuntime;
 use crate::services::{
-  EndpointTrustService, ImportExportService, ModelService, OcrServiceService, PluginPackageService,
+  EndpointTrustService, ImportExportService, ModelService, OcrServiceService, PluginModelService, PluginPackageService,
   ProviderHttpService, ProviderService, RuntimeLifecycleService, RuntimeRouter, ServiceIntegrationRegistry,
   ServiceIntegrationService, SettingsService, SpeechServiceService, TranslationHistoryService,
   TranslationProfileService,
@@ -31,6 +31,7 @@ pub struct AppState {
   pub ocr_services: OcrServiceService,
   pub speech_services: SpeechServiceService,
   pub plugin_packages: PluginPackageService,
+  pub plugin_models: PluginModelService,
   pub service_integrations: ServiceIntegrationService,
   pub endpoint_trust: Arc<EndpointTrustService>,
   pub service_capabilities: ServiceCapabilityService,
@@ -191,7 +192,9 @@ impl AppState {
     let endpoint_trust = Arc::new(EndpointTrustService::new(db.clone(), registry.clone()));
     let service_integrations =
       ServiceIntegrationService::new(db.clone(), vault.clone(), registry.clone(), token_grants.clone())
-        .with_endpoint_trust(endpoint_trust.clone());
+        .with_endpoint_trust(endpoint_trust.clone())
+        // Same vendor-root re-verify seam as RuntimeRouter for PaddleOCR first-model health.
+        .with_plugin_packages(plugin_packages.clone());
     let settings = SettingsService::new(db.clone(), vault.clone());
     let import_export = ImportExportService::new(db.clone(), vault.clone());
     let history = TranslationHistoryService::new(db.clone());
@@ -283,6 +286,13 @@ impl AppState {
       provider_broker_factory,
     );
 
+    let plugin_models = PluginModelService::with_packages(db.clone(), app_data_dir.clone(), plugin_packages.clone());
+    // Best-effort recovery: wipe incomplete model staging and fail closed in-flight downloads.
+    // Completed content-addressed installs under plugin-models/store are preserved.
+    if let Err(err) = plugin_models.recover_incomplete_operations() {
+      log::error!("plugin_model_recovery_failed error={err}");
+    }
+
     Ok(Self {
       db,
       app_data_dir,
@@ -292,6 +302,7 @@ impl AppState {
       ocr_services,
       speech_services,
       plugin_packages,
+      plugin_models,
       service_integrations,
       endpoint_trust,
       service_capabilities,
@@ -329,6 +340,7 @@ const BUNDLED_GOOGLE_WEB_PACKAGE_ENV: &str = "LANGNEXT_BUNDLED_GOOGLE_WEB_PACKAG
 const BUNDLED_EDGE_TTS_PACKAGE_ENV: &str = "LANGNEXT_BUNDLED_EDGE_TTS_PACKAGE";
 const BUNDLED_GOOGLE_CLOUD_PACKAGE_ENV: &str = "LANGNEXT_BUNDLED_GOOGLE_CLOUD_PACKAGE";
 const BUNDLED_OPENAI_COMPATIBLE_PACKAGE_ENV: &str = "LANGNEXT_BUNDLED_OPENAI_COMPATIBLE_PACKAGE";
+const BUNDLED_PADDLEOCR_PACKAGE_ENV: &str = "LANGNEXT_BUNDLED_PADDLEOCR_PACKAGE";
 /// Vendor default version explicitly selected as the new-provider default after all bundled
 /// archives are imported. Must match the verified installed manifest version.
 const GOOGLE_WEB_DEFAULT_VERSION: &str = "1.0.0";
@@ -336,6 +348,8 @@ const EDGE_TTS_DEFAULT_VERSION: &str = "1.0.0";
 const OPENAI_COMPATIBLE_DEFAULT_VERSION: &str = "1.0.0";
 /// Bundled OpenAI Compatible provider plugin id (Task 12 vendor default identity).
 const OPENAI_COMPATIBLE_PLUGIN_ID: &str = "com.langnext.provider.openai-compatible";
+/// Bundled/smoke PaddleOCR package filename prefix (Phase 10).
+const BUNDLED_PADDLEOCR_PACKAGE_PREFIX: &str = "com.langnext.paddleocr-";
 
 /// Locate bundled vendor-signed `.lnplugin` archives (Google Web, Edge TTS, and Google Cloud) to
 /// import on first startup. Checks env overrides, the cargo resources dir (dev/test), and `resources/plugins` /
@@ -348,6 +362,7 @@ fn locate_bundled_vendor_packages(resource_dir: Option<&std::path::Path>) -> Vec
     BUNDLED_EDGE_TTS_PACKAGE_ENV,
     BUNDLED_GOOGLE_CLOUD_PACKAGE_ENV,
     BUNDLED_OPENAI_COMPATIBLE_PACKAGE_ENV,
+    BUNDLED_PADDLEOCR_PACKAGE_ENV,
   ] {
     if let Ok(path) = std::env::var(env_key) {
       let path = std::path::PathBuf::from(path);
@@ -377,7 +392,8 @@ fn locate_bundled_vendor_packages(resource_dir: Option<&std::path::Path>) -> Vec
         let is_vendor = (name.starts_with(BUNDLED_GOOGLE_WEB_PACKAGE_PREFIX)
           || name.starts_with(BUNDLED_EDGE_TTS_PACKAGE_PREFIX)
           || name.starts_with(BUNDLED_GOOGLE_CLOUD_PACKAGE_PREFIX)
-          || name.starts_with(BUNDLED_OPENAI_COMPATIBLE_PACKAGE_PREFIX))
+          || name.starts_with(BUNDLED_OPENAI_COMPATIBLE_PACKAGE_PREFIX)
+          || name.starts_with(BUNDLED_PADDLEOCR_PACKAGE_PREFIX))
           && name.ends_with(BUNDLED_VENDOR_PACKAGE_SUFFIX)
           && path.is_file();
         if is_vendor {

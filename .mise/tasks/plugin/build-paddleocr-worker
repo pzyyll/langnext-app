@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# ABOUTME: Build the production PaddleOCR worker into a runtime directory.
+# ABOUTME: Fail-closed without LANGNEXT_PADDLE_ROOT; protocol stubs are not release artifacts.
+#MISE description="Build PaddleOCR native worker runtime directory"
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
+OUT="$ROOT/runtime-plugins/paddleocr/dist/runtime"
+BUILD="$ROOT/runtime-plugins/paddleocr/worker/build"
+
+if [[ -z "${LANGNEXT_PADDLE_ROOT:-}" ]]; then
+  echo "error: LANGNEXT_PADDLE_ROOT is required for a production PaddleOCR worker build" >&2
+  echo "error: protocol stubs must not be treated as release runtime inventory" >&2
+  exit 1
+fi
+if [[ ! -d "$LANGNEXT_PADDLE_ROOT" ]]; then
+  echo "error: LANGNEXT_PADDLE_ROOT does not exist: $LANGNEXT_PADDLE_ROOT" >&2
+  exit 1
+fi
+
+mkdir -p "$BUILD" "$OUT"
+cmake -S "$ROOT/runtime-plugins/paddleocr/worker" -B "$BUILD" \
+  -DLANGNEXT_PADDLE_ROOT="$LANGNEXT_PADDLE_ROOT"
+cmake --build "$BUILD" --config Release
+# Locate worker binary across multi-config generators.
+if [[ -f "$BUILD/Release/worker.exe" ]]; then
+  cp "$BUILD/Release/worker.exe" "$OUT/worker.exe"
+elif [[ -f "$BUILD/worker.exe" ]]; then
+  cp "$BUILD/worker.exe" "$OUT/worker.exe"
+elif [[ -f "$BUILD/worker" ]]; then
+  cp "$BUILD/worker" "$OUT/worker"
+else
+  echo "worker binary not found under $BUILD" >&2
+  exit 1
+fi
+echo "runtime directory: $OUT"
+ls -la "$OUT"

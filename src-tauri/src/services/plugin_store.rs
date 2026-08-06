@@ -250,6 +250,11 @@ impl PluginPackageService {
   }
 
   /// Absolute path to the extracted immutable content tree for a package digest.
+  /// Host app-data root used for plugin store and sibling host-managed resource trees.
+  pub fn app_data_dir(&self) -> &std::path::Path {
+    &self.app_data_dir
+  }
+
   pub fn package_content_path(&self, package_digest: &str) -> PathBuf {
     self.store_package_dir(package_digest).join("content")
   }
@@ -1407,6 +1412,39 @@ impl PluginPackageService {
       }
     };
 
+    // Trusted-native-worker packages are vendor-only: reject user-approved publishers even when
+    // the package id/version match the host allowlist and the key was explicitly approved.
+    if verified.manifest.runtime.kind == crate::domain::runtime_plugin::RuntimeKind::TrustedNativeWorker {
+      let source = match publisher_decision {
+        PublisherDecision::TrustedVendor => PublisherSource::Vendor,
+        _ => PublisherSource::UserApproved,
+      };
+      if let Err(message) = crate::services::plugin_package::require_native_worker_vendor_publisher(
+        source,
+        &verified.manifest.publisher.key_id,
+        true,
+        false,
+      ) {
+        self.quarantine_path(&session.staging_dir, PackageErrorCode::CompatibilityRejected.as_str())?;
+        self.fail_operation(session.operation_id, PackageErrorCode::CompatibilityRejected.as_str())?;
+        return Err(StorageError::Validation(message));
+      }
+      // Must reverse-bind a configured external vendor root (not merely a TrustedVendor DB row).
+      if self
+        .resolve_vendor_root(
+          &verified.manifest.publisher.key_id,
+          Some(verified.manifest.publisher.key_fingerprint.as_str()),
+        )
+        .is_err()
+      {
+        self.quarantine_path(&session.staging_dir, PackageErrorCode::CompatibilityRejected.as_str())?;
+        self.fail_operation(session.operation_id, PackageErrorCode::CompatibilityRejected.as_str())?;
+        return Err(StorageError::Validation(
+          "trusted-native-worker packages require a configured external vendor root".into(),
+        ));
+      }
+    }
+
     let permission_request_digest = compute_permission_request_digest(&verified.manifest);
     let approval_id = new_id();
     let installed_at = now_rfc3339();
@@ -2311,6 +2349,8 @@ impl PluginPackageService {
         runtime: crate::domain::runtime_plugin::RuntimeDescriptor {
           kind: crate::domain::runtime_plugin::RuntimeKind::WasmComponent,
           artifact: None,
+          native_protocol_version: None,
+          native_dependencies: None,
         },
         targets: vec![],
         files: vec![],
@@ -2321,6 +2361,7 @@ impl PluginPackageService {
         permissions: Default::default(),
         ui: Default::default(),
         provider_runtime: None,
+        model_resources: None,
       });
     Ok(InstalledPluginVersionDto {
       package_digest: version.package_digest.clone(),
