@@ -6,14 +6,22 @@ use crate::domain::runtime_plugin::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// Upper bound on a complete `.lnplugin` archive (64 MiB).
-pub const PACKAGE_ARCHIVE_MAX_BYTES: u64 = 64 * MEBIBYTE_BYTES;
+/// Upper bound on a complete `.lnplugin` archive.
+///
+/// Raised 2026-08-07 after measuring the Windows x64 PaddleOCR production inventory:
+/// total runtime directory = 348_200_192 bytes (plus manifest/schema/license).
+pub const PACKAGE_ARCHIVE_MAX_BYTES: u64 = 400 * MEBIBYTE_BYTES;
 /// Maximum number of ZIP entries (including directories).
 pub const PACKAGE_ENTRY_MAX_COUNT: usize = 1024;
 /// Maximum decompressed size of a single archive entry.
-pub const PACKAGE_ENTRY_MAX_BYTES: u64 = 32 * MEBIBYTE_BYTES;
+///
+/// Raised 2026-08-07: largest measured runtime entry is `paddle_inference.dll`
+/// at 93_563_904 bytes on the Windows x64 CPU inventory.
+pub const PACKAGE_ENTRY_MAX_BYTES: u64 = 100 * MEBIBYTE_BYTES;
 /// Maximum total decompressed payload across all file entries.
-pub const PACKAGE_TOTAL_DECOMPRESSED_MAX_BYTES: u64 = 128 * MEBIBYTE_BYTES;
+///
+/// Raised 2026-08-07 from the measured PaddleOCR runtime total of 348_200_192 bytes.
+pub const PACKAGE_TOTAL_DECOMPRESSED_MAX_BYTES: u64 = 400 * MEBIBYTE_BYTES;
 /// Maximum path depth (slash-separated segments) for archive entries.
 pub const PACKAGE_PATH_MAX_DEPTH: usize = 16;
 /// Maximum size of the exact `plugin.json` bytes.

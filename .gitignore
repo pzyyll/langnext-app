@@ -54,3 +54,6 @@ skills-lock.json
 next-prompt.md
 
 .vscode
+# PaddleOCR native worker build trees
+runtime-plugins/paddleocr/worker/build/
+runtime-plugins/**/compile_commands.json

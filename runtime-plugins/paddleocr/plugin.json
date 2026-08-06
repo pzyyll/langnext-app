@@ -5,22 +5,120 @@
   "version": "1.0.0",
   "publisher": {
     "keyId": "com.langnext.vendor.keys.1",
-    "keyFingerprint": "REPLACE_WITH_VENDOR_FINGERPRINT"
+    "keyFingerprint": "506ef1879d748ce0713b0dd01da32ad2a4b1ce97b5a852ff18800c1e52982376"
   },
   "runtime": {
     "kind": "trusted-native-worker",
     "artifact": "runtime/worker.exe",
     "nativeProtocolVersion": 1,
-    "nativeDependencies": []
+    "nativeDependencies": [
+      "runtime/abseil_dll.dll",
+      "runtime/common.dll",
+      "runtime/libiomp5md.dll",
+      "runtime/mkldnn.dll",
+      "runtime/mklml.dll",
+      "runtime/opencv_world470.dll",
+      "runtime/paddle_inference.dll",
+      "runtime/phi.dll",
+      "runtime/polyclipping.dll"
+    ]
   },
-  "targets": [{ "platform": "windows", "architecture": "x86_64" }],
-  "files": [],
-  "capabilities": [{ "id": "ocr.image@1" }],
+  "targets": [
+    {
+      "platform": "windows",
+      "architecture": "x86_64"
+    }
+  ],
+  "files": [
+    {
+      "path": "runtime/worker.exe",
+      "role": "runtime-artifact",
+      "bytes": 1245184,
+      "sha256": "393b2ec8eff49ebb5c51edd6471da5fbf564aa6cc7887fd5feff9e37cbfceac8"
+    },
+    {
+      "path": "runtime/abseil_dll.dll",
+      "role": "runtime-artifact",
+      "bytes": 1529344,
+      "sha256": "526e1315de171dfe71252edd5c656bf599a58b0594607dfaa5208083a9188bd7"
+    },
+    {
+      "path": "runtime/common.dll",
+      "role": "runtime-artifact",
+      "bytes": 745984,
+      "sha256": "75269908be432b34134752ca5e590f4f19fe494b17580805fbaca929e9f07cc8"
+    },
+    {
+      "path": "runtime/libiomp5md.dll",
+      "role": "runtime-artifact",
+      "bytes": 1726848,
+      "sha256": "bc9e17190505a3beda7feedd90ba3ab7b6dc3f7ca5d980b2140c53ae459fc5ae"
+    },
+    {
+      "path": "runtime/mkldnn.dll",
+      "role": "runtime-artifact",
+      "bytes": 47322112,
+      "sha256": "9e1e439ca83ba38e350891c96d006a7464167e3bbc7bed3daaf2a7fe500a70c2"
+    },
+    {
+      "path": "runtime/mklml.dll",
+      "role": "runtime-artifact",
+      "bytes": 92649344,
+      "sha256": "e2a7fd93e1534568626cffe22676b15164a5a2b3a62f1919a55993478b45811e"
+    },
+    {
+      "path": "runtime/opencv_world470.dll",
+      "role": "runtime-artifact",
+      "bytes": 63602176,
+      "sha256": "af2c759d580327554b30f3c750943b4e72d8eefc592d536e094e5d6fa984b91e"
+    },
+    {
+      "path": "runtime/paddle_inference.dll",
+      "role": "runtime-artifact",
+      "bytes": 93563904,
+      "sha256": "860e5790cbb10426c30e0351cd83de239c2eeb4da2577687a55b822d88881a3e"
+    },
+    {
+      "path": "runtime/phi.dll",
+      "role": "runtime-artifact",
+      "bytes": 45291520,
+      "sha256": "c6eaa54f6537455d054924503901594033463f53105605907d1d717ad6763afb"
+    },
+    {
+      "path": "runtime/polyclipping.dll",
+      "role": "runtime-artifact",
+      "bytes": 523776,
+      "sha256": "0056765bf83e0b0ba0db95df6de0e0698eca62fe32fd99fcf30aa2b52ba7df23"
+    },
+    {
+      "path": "schemas/config.json",
+      "role": "config-schema",
+      "bytes": 51,
+      "sha256": "acceefffbdd72d4528e667e154fd32cb3a02de4a25483980c6221c775b77a914"
+    },
+    {
+      "path": "licenses/NOTICE.txt",
+      "role": "license",
+      "bytes": 229,
+      "sha256": "55de0446778dd58b92804a672a80bb2fbd147cd73ad59986fa04dcc1174ea4ab"
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "ocr.image@1"
+    }
+  ],
   "configurationSchema": "schemas/config.json",
   "configSchemaVersion": 1,
   "credentialSlots": [],
-  "permissions": { "network": [], "authPolicies": [] },
-  "ui": { "mode": "schema", "pages": [] },
+  "permissions": {
+    "network": [],
+    "authPolicies": []
+  },
+  "ui": {
+    "mode": "schema",
+    "pages": []
+  },
   "modelResources": [
     {
       "id": "pp-ocrv6-medium",

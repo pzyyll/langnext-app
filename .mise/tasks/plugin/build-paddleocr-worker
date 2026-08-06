@@ -1,36 +1,79 @@
 #!/usr/bin/env bash
 # ABOUTME: Build the production PaddleOCR worker into a runtime directory.
-# ABOUTME: Fail-closed without LANGNEXT_PADDLE_ROOT; protocol stubs are not release artifacts.
+# ABOUTME: Requires LANGNEXT_PADDLE_ROOT + OPENCV_DIR + PADDLEOCR_CPP_INFER; collects DLL inventory.
 #MISE description="Build PaddleOCR native worker runtime directory"
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 OUT="$ROOT/runtime-plugins/paddleocr/dist/runtime"
 BUILD="$ROOT/runtime-plugins/paddleocr/worker/build"
+CMAKE_BIN="${CMAKE_BIN:-/c/Program Files/Microsoft Visual Studio/18/Community/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/cmake.exe}"
 
-if [[ -z "${LANGNEXT_PADDLE_ROOT:-}" ]]; then
-  echo "error: LANGNEXT_PADDLE_ROOT is required for a production PaddleOCR worker build" >&2
-  echo "error: protocol stubs must not be treated as release runtime inventory" >&2
-  exit 1
-fi
+: "${LANGNEXT_PADDLE_ROOT:=F:/workspace/sdks/paddle}"
+: "${OPENCV_DIR:=F:/workspace/sdks/opencv/opencv/build}"
+: "${PADDLEOCR_CPP_INFER:=F:/workspace/sdks/paddleocr/PaddleOCR/deploy/cpp_infer}"
+: "${LANGNEXT_DIRENT_INCLUDE:=F:/workspace/sdks/include}"
+
+export LANGNEXT_PADDLE_ROOT OPENCV_DIR PADDLEOCR_CPP_INFER LANGNEXT_DIRENT_INCLUDE
+
 if [[ ! -d "$LANGNEXT_PADDLE_ROOT" ]]; then
   echo "error: LANGNEXT_PADDLE_ROOT does not exist: $LANGNEXT_PADDLE_ROOT" >&2
   exit 1
 fi
+if [[ ! -d "$OPENCV_DIR" ]]; then
+  echo "error: OPENCV_DIR does not exist: $OPENCV_DIR" >&2
+  exit 1
+fi
+if [[ ! -d "$PADDLEOCR_CPP_INFER" ]]; then
+  echo "error: PADDLEOCR_CPP_INFER does not exist: $PADDLEOCR_CPP_INFER" >&2
+  exit 1
+fi
+if [[ ! -x "$CMAKE_BIN" && ! -f "$CMAKE_BIN" ]]; then
+  echo "error: cmake not found at $CMAKE_BIN" >&2
+  exit 1
+fi
 
 mkdir -p "$BUILD" "$OUT"
-cmake -S "$ROOT/runtime-plugins/paddleocr/worker" -B "$BUILD" \
-  -DLANGNEXT_PADDLE_ROOT="$LANGNEXT_PADDLE_ROOT"
-cmake --build "$BUILD" --config Release
+"$CMAKE_BIN" -S "$ROOT/runtime-plugins/paddleocr/worker" -B "$BUILD" \
+  -G "Visual Studio 18 2026" -A x64 \
+  -DLANGNEXT_PADDLE_ROOT="$LANGNEXT_PADDLE_ROOT" \
+  -DOPENCV_DIR="$OPENCV_DIR" \
+  -DPADDLEOCR_CPP_INFER="$PADDLEOCR_CPP_INFER" \
+  -DWITH_MKL=ON \
+  -DWITH_GPU=OFF
+"$CMAKE_BIN" --build "$BUILD" --config Release --parallel
+
 # Locate worker binary across multi-config generators.
 if [[ -f "$BUILD/Release/worker.exe" ]]; then
-  cp "$BUILD/Release/worker.exe" "$OUT/worker.exe"
+  WORKER_SRC="$BUILD/Release/worker.exe"
 elif [[ -f "$BUILD/worker.exe" ]]; then
-  cp "$BUILD/worker.exe" "$OUT/worker.exe"
-elif [[ -f "$BUILD/worker" ]]; then
-  cp "$BUILD/worker" "$OUT/worker"
+  WORKER_SRC="$BUILD/worker.exe"
 else
   echo "worker binary not found under $BUILD" >&2
   exit 1
 fi
+
+rm -rf "$OUT"
+mkdir -p "$OUT"
+cp "$WORKER_SRC" "$OUT/worker.exe"
+
+# Copy runtime DLLs next to worker.exe for the signed package inventory.
+copy_if_exists() {
+  local src="$1"
+  if [[ -f "$src" ]]; then
+    cp "$src" "$OUT/"
+  fi
+}
+copy_if_exists "$LANGNEXT_PADDLE_ROOT/paddle/lib/paddle_inference.dll"
+copy_if_exists "$LANGNEXT_PADDLE_ROOT/paddle/lib/common.dll"
+copy_if_exists "$LANGNEXT_PADDLE_ROOT/paddle/lib/phi.dll"
+copy_if_exists "$LANGNEXT_PADDLE_ROOT/third_party/install/mklml/lib/mklml.dll"
+copy_if_exists "$LANGNEXT_PADDLE_ROOT/third_party/install/mklml/lib/libiomp5md.dll"
+copy_if_exists "$LANGNEXT_PADDLE_ROOT/third_party/install/onednn/lib/mkldnn.dll"
+copy_if_exists "$OPENCV_DIR/x64/vc16/bin/opencv_world470.dll"
+# Optional clipper/abseil DLLs from the build tree when shared.
+find "$BUILD" -name "polyclipping.dll" -o -name "abseil_dll.dll" 2>/dev/null | while read -r dll; do
+  cp "$dll" "$OUT/" || true
+done
+
 echo "runtime directory: $OUT"
 ls -la "$OUT"

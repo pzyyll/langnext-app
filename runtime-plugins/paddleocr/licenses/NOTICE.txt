@@ -1,3 +1,11 @@
-PaddleOCR and PaddlePaddle are licensed under Apache-2.0.
-Model weights are downloaded from official PaddleX URLs and are not bundled in this package.
-Review model redistribution terms before mirroring or redistributing weights.
+PaddleOCR native worker third-party notices
+
+- PaddleOCR v3.7.0 — Apache-2.0 — https://github.com/PaddlePaddle/PaddleOCR
+- PaddlePaddle / Paddle Inference v3.3.0 — Apache-2.0 — https://github.com/PaddlePaddle/Paddle
+- OpenCV 4.7.0 — Apache-2.0 — https://opencv.org/
+- oneDNN / MKL-related runtime DLLs as redistributed with the Paddle Inference package
+- abseil-cpp, clipper (polyclipping), nlohmann/json as used by PaddleOCR deploy/cpp_infer
+
+Model weights (PP-OCRv6 medium) are NOT packaged. They are downloaded by the host from
+official Paddle URLs after explicit user action. Confirm redistribution terms before
+mirroring or bundling model bytes.
