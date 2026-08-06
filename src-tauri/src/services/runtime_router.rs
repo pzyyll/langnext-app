@@ -44,6 +44,23 @@ pub enum RuntimeAdapter {
     grant: ExecutionGrantSet,
     principal_factory: WasmPrincipalFactory,
   },
+  /// First-party trusted native worker (Phase 10). Model readiness is checked before spawn.
+  TrustedNativeWorker {
+    package_digest: PackageDigest,
+    content_dir: std::path::PathBuf,
+    worker_exe: std::path::PathBuf,
+    /// Signed digest of worker.exe from the re-verified package index.
+    worker_sha256: String,
+    model_root: std::path::PathBuf,
+    model_set_digest: String,
+    /// Expanded model file relative paths with pinned digests for host-side identity audit.
+    model_files: Vec<(String, String)>,
+    runtime_set_digest: String,
+    model_api_version: u32,
+    /// Declared runtime DLL paths with pinned digests for host-side module identity audit.
+    runtime_dependencies: Vec<(String, String)>,
+    grant: ExecutionGrantSet,
+  },
 }
 
 /// Factory that issues a request-scoped principal for a verified grant set.
@@ -154,10 +171,7 @@ impl RuntimeRouter {
         CapabilityErrorCode::PluginUnavailable,
         "legacy frontend provider runtime is not routed here",
       )),
-      RuntimeKind::TrustedNativeWorker => Err(CapabilityError::new(
-        CapabilityErrorCode::PluginUnavailable,
-        "trusted native worker runtime is reserved for a later phase",
-      )),
+      RuntimeKind::TrustedNativeWorker => self.resolve_native(&instance, capability_id),
     }
   }
 
@@ -180,6 +194,264 @@ impl RuntimeRouter {
         .with_capability_id(capability_id)
       })?;
     Ok(RuntimeAdapter::BundledRust { handler })
+  }
+
+  fn resolve_native(
+    &self,
+    instance: &crate::domain::service_integration::IntegrationInstance,
+    capability_id: &str,
+  ) -> Result<RuntimeAdapter, CapabilityError> {
+    if capability_id != "ocr.image@1" {
+      return Err(
+        CapabilityError::new(
+          CapabilityErrorCode::PermissionDenied,
+          "native worker only supports ocr.image@1",
+        )
+        .with_capability_id(capability_id),
+      );
+    }
+    let package_digest = instance.package_digest.as_deref().ok_or_else(|| {
+      CapabilityError::new(
+        CapabilityErrorCode::InvalidConfiguration,
+        "native runtime pin is missing package digest",
+      )
+    })?;
+    let grant_revision = instance.execution_grant_set_revision.ok_or_else(|| {
+      CapabilityError::new(
+        CapabilityErrorCode::InvalidConfiguration,
+        "native runtime pin is missing grant-set revision",
+      )
+    })?;
+    let version = self
+      .db
+      .read(|conn| installed_plugin_versions::get_optional(conn, package_digest))
+      .map_err(|e| map_storage_capability(e, "failed to load installed package"))?
+      .ok_or_else(|| CapabilityError::new(CapabilityErrorCode::PluginUnavailable, "installed package is missing"))?;
+    if !version.content_available {
+      return Err(CapabilityError::new(
+        CapabilityErrorCode::PluginUnavailable,
+        "installed package content is unavailable",
+      ));
+    }
+    let publisher = self
+      .db
+      .read(|conn| crate::repositories::plugin_publishers::get(conn, &version.publisher_key_id))
+      .map_err(|e| map_storage_capability(e, "failed to load publisher"))?;
+    crate::services::plugin_package::require_native_worker_vendor_publisher(
+      publisher.source,
+      &publisher.key_id,
+      publisher.enabled,
+      publisher.revoked,
+    )
+    .map_err(|message| CapabilityError::new(CapabilityErrorCode::PermissionDenied, message))?;
+
+    // Catalog manifest is only used to discover the declared model id for readiness gating.
+    // Worker/DLL/model identity still requires vendor-root re-verify before spawn below.
+    let catalog_manifest: PluginManifestV1 = serde_json::from_str(&version.manifest_json).map_err(|_| {
+      CapabilityError::new(
+        CapabilityErrorCode::InvalidConfiguration,
+        "installed manifest is invalid",
+      )
+    })?;
+    if catalog_manifest.runtime.kind != RuntimeKind::TrustedNativeWorker {
+      return Err(CapabilityError::new(
+        CapabilityErrorCode::PluginUnavailable,
+        "package runtime is not trusted-native-worker",
+      ));
+    }
+    let model_id = catalog_manifest
+      .model_resources
+      .as_ref()
+      .and_then(|list| list.first())
+      .map(|m| m.id.clone())
+      .ok_or_else(|| {
+        CapabilityError::new(
+          CapabilityErrorCode::InvalidConfiguration,
+          "native package is missing modelResources",
+        )
+      })?;
+    let model_record = self
+      .db
+      .read(|conn| {
+        crate::repositories::plugin_model_resources::get_by_package_and_model(conn, package_digest, &model_id)
+      })
+      .map_err(|e| map_storage_capability(e, "failed to load model resource"))?;
+    let Some(model_record) = model_record else {
+      return Err(CapabilityError::new(
+        CapabilityErrorCode::ModelMissing,
+        crate::domain::plugin_model::PluginModelErrorCode::ModelMissing.as_str(),
+      ));
+    };
+    if model_record.status != crate::domain::plugin_model::PluginModelResourceStatus::Ready {
+      return Err(CapabilityError::new(
+        CapabilityErrorCode::ModelMissing,
+        crate::domain::plugin_model::PluginModelErrorCode::ModelMissing.as_str(),
+      ));
+    }
+
+    // Re-verify the exact retained archive against the external vendor root. Mutable DB
+    // manifest_json is never the trust root for native worker resolution.
+    let (verified, vendor_root) = self
+      .plugin_packages
+      .verify_store_with_vendor_root(package_digest)
+      .map_err(|e| map_storage_capability(e, "native package vendor re-verify failed"))?;
+    if vendor_root.key_id != publisher.key_id
+      || verified.publisher_public_key_hex != publisher.public_key_hex
+      || verified.publisher_fingerprint != publisher.fingerprint
+      || verified.package_digest != package_digest
+    {
+      return Err(CapabilityError::new(
+        CapabilityErrorCode::PermissionDenied,
+        "native package no longer reverse-binds the external vendor root",
+      ));
+    }
+    let manifest = verified.manifest;
+    if manifest.runtime.kind != RuntimeKind::TrustedNativeWorker {
+      return Err(CapabilityError::new(
+        CapabilityErrorCode::PluginUnavailable,
+        "package runtime is not trusted-native-worker",
+      ));
+    }
+    let model = manifest
+      .model_resources
+      .as_ref()
+      .and_then(|list| list.iter().find(|m| m.id == model_id))
+      .ok_or_else(|| {
+        CapabilityError::new(
+          CapabilityErrorCode::InvalidConfiguration,
+          "native package is missing modelResources",
+        )
+      })?;
+    let content_address = model_record.content_address.ok_or_else(|| {
+      CapabilityError::new(
+        CapabilityErrorCode::ModelMissing,
+        crate::domain::plugin_model::PluginModelErrorCode::ModelMissing.as_str(),
+      )
+    })?;
+    // Host-private model store is a sibling of plugins/ under the shared app-data root.
+    let model_root = self
+      .plugin_packages
+      .app_data_dir()
+      .join("plugin-models")
+      .join("store")
+      .join(&content_address);
+    if !model_root.is_dir() {
+      return Err(CapabilityError::new(
+        CapabilityErrorCode::ModelMissing,
+        crate::domain::plugin_model::PluginModelErrorCode::ModelMissing.as_str(),
+      ));
+    }
+    let content_dir = self.plugin_packages.package_content_path(package_digest);
+    let worker_rel = manifest
+      .runtime
+      .artifact
+      .as_deref()
+      .unwrap_or(crate::domain::native_worker::NATIVE_WORKER_ARTIFACT_PATH);
+    let worker_exe = content_dir.join(worker_rel);
+    if !worker_exe.is_file() {
+      return Err(CapabilityError::new(
+        CapabilityErrorCode::PluginUnavailable,
+        "native worker executable is missing",
+      ));
+    }
+    let mut runtime_files = Vec::new();
+    let mut runtime_dependencies = Vec::new();
+    let mut worker_sha256 = None;
+    for file in &manifest.files {
+      if file.role == crate::domain::runtime_plugin::FileRole::RuntimeArtifact {
+        runtime_files.push((file.path.clone(), file.sha256.clone()));
+        let lower = file.path.to_ascii_lowercase();
+        if lower.ends_with(".dll") {
+          runtime_dependencies.push((file.path.clone(), file.sha256.clone()));
+        } else if lower == worker_rel.to_ascii_lowercase() || lower.ends_with("worker.exe") {
+          worker_sha256 = Some(file.sha256.clone());
+        }
+      }
+    }
+    let worker_sha256 = worker_sha256.ok_or_else(|| {
+      CapabilityError::new(
+        CapabilityErrorCode::PluginUnavailable,
+        "native worker executable digest is missing from the signed index",
+      )
+    })?;
+    let runtime_set_digest = crate::services::native_workers::runtime_set_digest(&runtime_files);
+    let model_set_digest = model_record.model_set_digest.clone();
+    let model_files: Vec<(String, String)> = model
+      .files
+      .iter()
+      .map(|file| (file.path.clone(), file.sha256.clone()))
+      .collect();
+    let bundle = self
+      .db
+      .read(|conn| {
+        plugin_permission_grants::get_bundle_for_subject_package_revision(
+          conn,
+          GrantSubjectKind::IntegrationInstance,
+          instance.id,
+          package_digest,
+          grant_revision,
+        )
+      })
+      .map_err(|e| map_storage_capability(e, "execution grant set is missing"))?;
+    if !bundle.capabilities.iter().any(|c| c.capability_id == capability_id) {
+      return Err(
+        CapabilityError::new(
+          CapabilityErrorCode::PermissionDenied,
+          "capability is not granted for this instance",
+        )
+        .with_capability_id(capability_id),
+      );
+    }
+    let grant = bundle_to_execution_grant_set(&bundle).map_err(|e| {
+      CapabilityError::new(
+        CapabilityErrorCode::InvalidConfiguration,
+        format!("invalid execution grant set: {e}"),
+      )
+    })?;
+    Ok(RuntimeAdapter::TrustedNativeWorker {
+      package_digest: PackageDigest::parse(package_digest)
+        .map_err(|e| CapabilityError::new(CapabilityErrorCode::Internal, e))?,
+      content_dir,
+      worker_exe,
+      worker_sha256,
+      model_root,
+      model_set_digest,
+      model_files,
+      runtime_set_digest,
+      model_api_version: model.model_api_version,
+      runtime_dependencies,
+      grant,
+    })
+  }
+
+  fn resolve_native_from_snapshot(
+    &self,
+    pin: &SnapshotRuntimeResolution,
+    capability_id: &str,
+  ) -> Result<RuntimeAdapter, CapabilityError> {
+    // Rebuild instance-shaped authority from the snapshot and reuse resolve_native.
+    let instance = crate::domain::service_integration::IntegrationInstance {
+      id: pin.instance_id,
+      plugin_id: pin.plugin_id.clone(),
+      plugin_version: String::new(),
+      display_name: String::new(),
+      enabled: true,
+      config_json: pin.instance_config_json.clone(),
+      config_schema_version: 1,
+      health_status: crate::domain::service_integration::IntegrationHealthStatus::Ready,
+      last_validated_at: None,
+      last_error_code: None,
+      runtime_kind: pin.runtime_kind.clone(),
+      package_digest: pin.package_digest.clone(),
+      execution_grant_set_revision: pin.execution_grant_set_revision,
+      runtime_state: pin.runtime_state.clone(),
+      runtime_error_code: None,
+      runtime_error_message: None,
+      runtime_requirement_json: None,
+      created_at: pin.instance_updated_at.clone(),
+      updated_at: pin.instance_updated_at.clone(),
+    };
+    self.resolve_native(&instance, capability_id)
   }
 
   fn resolve_wasm(
@@ -351,10 +623,7 @@ impl RuntimeRouter {
         CapabilityErrorCode::PluginUnavailable,
         "legacy frontend provider runtime is not routed here",
       )),
-      RuntimeKind::TrustedNativeWorker => Err(CapabilityError::new(
-        CapabilityErrorCode::PluginUnavailable,
-        "trusted native worker runtime is reserved for a later phase",
-      )),
+      RuntimeKind::TrustedNativeWorker => self.resolve_native_from_snapshot(pin, capability_id),
     }
   }
 
@@ -730,6 +999,13 @@ impl RuntimeRouter {
         grant,
         principal_factory,
       }),
+      RuntimeAdapter::TrustedNativeWorker { .. } => Err(
+        CapabilityError::new(
+          CapabilityErrorCode::PermissionDenied,
+          "native worker does not support translate",
+        )
+        .with_capability_id(capability_id),
+      ),
     }
   }
 
@@ -757,6 +1033,31 @@ impl RuntimeRouter {
         artifact_bytes,
         grant,
         principal_factory,
+      }),
+      RuntimeAdapter::TrustedNativeWorker {
+        package_digest,
+        content_dir,
+        worker_exe,
+        worker_sha256,
+        model_root,
+        model_set_digest,
+        model_files,
+        runtime_set_digest,
+        model_api_version,
+        runtime_dependencies,
+        grant,
+      } => Ok(ResolvedOcr::Native {
+        package_digest,
+        content_dir,
+        worker_exe,
+        worker_sha256,
+        model_root,
+        model_set_digest,
+        model_files,
+        runtime_set_digest,
+        model_api_version,
+        runtime_dependencies,
+        grant,
       }),
     }
   }
@@ -786,6 +1087,13 @@ impl RuntimeRouter {
         grant,
         principal_factory,
       }),
+      RuntimeAdapter::TrustedNativeWorker { .. } => Err(
+        CapabilityError::new(
+          CapabilityErrorCode::PermissionDenied,
+          "native worker does not support detect",
+        )
+        .with_capability_id(capability_id),
+      ),
     }
   }
 }
@@ -964,6 +1272,19 @@ pub enum ResolvedOcr {
     artifact_bytes: Arc<Vec<u8>>,
     grant: ExecutionGrantSet,
     principal_factory: WasmPrincipalFactory,
+  },
+  Native {
+    package_digest: PackageDigest,
+    content_dir: std::path::PathBuf,
+    worker_exe: std::path::PathBuf,
+    worker_sha256: String,
+    model_root: std::path::PathBuf,
+    model_set_digest: String,
+    model_files: Vec<(String, String)>,
+    runtime_set_digest: String,
+    model_api_version: u32,
+    runtime_dependencies: Vec<(String, String)>,
+    grant: ExecutionGrantSet,
   },
 }
 
@@ -1493,6 +1814,8 @@ mod tests {
       runtime: crate::domain::runtime_plugin::RuntimeDescriptor {
         kind: RuntimeKind::WasmComponent,
         artifact: Some("artifacts/plugin.wasm".into()),
+        native_protocol_version: None,
+        native_dependencies: None,
       },
       targets: vec![],
       files: vec![],
@@ -1515,6 +1838,7 @@ mod tests {
       },
       ui: Default::default(),
       provider_runtime: None,
+      model_resources: None,
     }
   }
 

@@ -13,6 +13,7 @@ import {
   listIntegrationInstanceDependencies,
   listIntegrationInstances,
   listOcrServices,
+  listPluginModelResources,
   listPluginPublishers,
   listRuntimeProviderCatalog,
   listSpeechServices,
@@ -173,6 +174,14 @@ export function integrationDependencyListOptions(id: string) {
     queryKey: integrationKeys.dependencies(id),
     queryFn: () => listIntegrationInstanceDependencies(id),
     enabled: id.length > 0,
+  });
+}
+
+export function pluginModelResourceListOptions(instanceId: string) {
+  return queryOptions({
+    queryKey: integrationKeys.modelResources(instanceId),
+    queryFn: () => listPluginModelResources(instanceId),
+    enabled: instanceId.length > 0,
   });
 }
 

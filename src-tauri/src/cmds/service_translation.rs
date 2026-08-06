@@ -328,7 +328,9 @@ fn map_capability_to_resolve(err: CapabilityError) -> ResolveError {
     InvalidConfiguration | InvalidRequest => ResolveError::Storage(StorageError::Validation(err.message)),
     EndpointTrustRequired => ResolveError::Storage(StorageError::EndpointTrustRequired(err.message)),
     PermissionDenied | Cancelled | Timeout | Auth | QuotaExceeded | RateLimited | Network | InvalidResponse
-    | ProviderUnavailable | UnsupportedInput | UnsupportedLanguage | Internal => ResolveError::Capability(err),
+    | ProviderUnavailable | UnsupportedInput | UnsupportedLanguage | WorkerCrashed | ModelMissing | Internal => {
+      ResolveError::Capability(err)
+    }
   }
 }
 

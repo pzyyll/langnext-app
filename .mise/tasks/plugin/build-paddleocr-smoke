@@ -1,0 +1,205 @@
+#!/usr/bin/env bash
+# ABOUTME: Build a vendor-signed PaddleOCR smoke fixture package for UI/lifecycle smoke only.
+# ABOUTME: Uses a protocol-stub runtime payload; never treat this package as a production release.
+#MISE description="Build signed PaddleOCR smoke fixture package (protocol stub; not production)"
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+cd "$ROOT_DIR"
+
+PLUGIN_DIR="$ROOT_DIR/runtime-plugins/paddleocr"
+STAGING_ROOT="$ROOT_DIR/runtime-plugins/dist/staging"
+STAGING="$STAGING_ROOT/com.langnext.paddleocr-1.0.0-smoke"
+OUT_DIR="$PLUGIN_DIR/fixtures/packages"
+OUT_PACKAGE="$OUT_DIR/com.langnext.paddleocr-1.0.0.lnplugin"
+PUBLIC_KEY_FILE="$ROOT_DIR/runtime-plugins/conformance/fixtures/packages/keys/vendor-public-key.hex"
+VENDOR_SEED="0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a"
+VENDOR_KEY_ID="com.langnext.vendor.keys.1"
+WORKER_PATH="runtime/worker.exe"
+DLL_A_PATH="runtime/paddle_inference.dll"
+DLL_B_PATH="runtime/opencv_world.dll"
+LICENSE_PATH="licenses/NOTICE.txt"
+SCHEMA_PATH="schemas/config.json"
+
+if [[ ! -f "$PUBLIC_KEY_FILE" ]]; then
+  echo "error: vendor public key fixture missing: $PUBLIC_KEY_FILE" >&2
+  exit 1
+fi
+PUBLIC_KEY_HEX="$(tr -d '[:space:]' < "$PUBLIC_KEY_FILE")"
+if [[ ${#PUBLIC_KEY_HEX} -ne 64 || ! "$PUBLIC_KEY_HEX" =~ ^[0-9a-f]+$ ]]; then
+  echo "error: vendor public key must be 64 lowercase hex characters" >&2
+  exit 1
+fi
+
+sha256_file() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  else
+    shasum -a 256 "$1" | awk '{print $1}'
+  fi
+}
+
+FINGERPRINT="$(printf '%s' "$PUBLIC_KEY_HEX" | python -c 'import sys,hashlib,binascii; print(hashlib.sha256(binascii.unhexlify(sys.stdin.read().strip())).hexdigest())')"
+
+rm -rf "$STAGING"
+mkdir -p "$STAGING/runtime" "$STAGING/licenses" "$STAGING/schemas" "$OUT_DIR"
+
+# Smoke package ships a real PE protocol fixture worker so CreateProcess/handshake can succeed.
+# This is still not production PaddleOCR (no Inference/OpenCV runtime, fixed OCR text).
+mise run plugin:build-native-conformance
+CONFORMANCE_EXE="$ROOT_DIR/runtime-plugins/conformance/native-worker/target/release/native-worker-conformance.exe"
+if [[ ! -f "$CONFORMANCE_EXE" ]]; then
+  # cargo on Unix may omit .exe; prefer the platform binary that exists.
+  CONFORMANCE_EXE="$ROOT_DIR/runtime-plugins/conformance/native-worker/target/release/native-worker-conformance"
+fi
+if [[ ! -f "$CONFORMANCE_EXE" ]]; then
+  echo "error: native-worker conformance binary missing after build" >&2
+  exit 1
+fi
+cp "$CONFORMANCE_EXE" "$STAGING/$WORKER_PATH"
+# Placeholder dependency files satisfy the signed runtime inventory; the fixture worker does not load them.
+printf 'smoke-paddle-inference-dll\n' >"$STAGING/$DLL_A_PATH"
+printf 'smoke-opencv-world-dll\n' >"$STAGING/$DLL_B_PATH"
+cp "$PLUGIN_DIR/licenses/NOTICE.txt" "$STAGING/$LICENSE_PATH"
+cp "$PLUGIN_DIR/schemas/config.json" "$STAGING/$SCHEMA_PATH"
+
+WORKER_BYTES="$(wc -c <"$STAGING/$WORKER_PATH" | tr -d ' ')"
+DLL_A_BYTES="$(wc -c <"$STAGING/$DLL_A_PATH" | tr -d ' ')"
+DLL_B_BYTES="$(wc -c <"$STAGING/$DLL_B_PATH" | tr -d ' ')"
+LICENSE_BYTES="$(wc -c <"$STAGING/$LICENSE_PATH" | tr -d ' ')"
+SCHEMA_BYTES="$(wc -c <"$STAGING/$SCHEMA_PATH" | tr -d ' ')"
+WORKER_SHA="$(sha256_file "$STAGING/$WORKER_PATH")"
+DLL_A_SHA="$(sha256_file "$STAGING/$DLL_A_PATH")"
+DLL_B_SHA="$(sha256_file "$STAGING/$DLL_B_PATH")"
+LICENSE_SHA="$(sha256_file "$STAGING/$LICENSE_PATH")"
+SCHEMA_SHA="$(sha256_file "$STAGING/$SCHEMA_PATH")"
+
+# modelResources match host-pinned PP-OCRv6 medium constants; package contains no model bytes.
+cat >"$STAGING/plugin.json" <<EOF
+{
+  "manifestVersion": 1,
+  "pluginApiVersion": "1.0",
+  "id": "com.langnext.paddleocr",
+  "version": "1.0.0",
+  "publisher": {
+    "keyId": "$VENDOR_KEY_ID",
+    "keyFingerprint": "$FINGERPRINT"
+  },
+  "runtime": {
+    "kind": "trusted-native-worker",
+    "artifact": "$WORKER_PATH",
+    "nativeProtocolVersion": 1,
+    "nativeDependencies": ["$DLL_B_PATH", "$DLL_A_PATH"]
+  },
+  "targets": [{ "platform": "windows", "architecture": "x86_64" }],
+  "files": [
+    {
+      "path": "$WORKER_PATH",
+      "role": "runtime-artifact",
+      "bytes": $WORKER_BYTES,
+      "sha256": "$WORKER_SHA"
+    },
+    {
+      "path": "$DLL_A_PATH",
+      "role": "runtime-artifact",
+      "bytes": $DLL_A_BYTES,
+      "sha256": "$DLL_A_SHA"
+    },
+    {
+      "path": "$DLL_B_PATH",
+      "role": "runtime-artifact",
+      "bytes": $DLL_B_BYTES,
+      "sha256": "$DLL_B_SHA"
+    },
+    {
+      "path": "$LICENSE_PATH",
+      "role": "license",
+      "bytes": $LICENSE_BYTES,
+      "sha256": "$LICENSE_SHA"
+    },
+    {
+      "path": "$SCHEMA_PATH",
+      "role": "config-schema",
+      "bytes": $SCHEMA_BYTES,
+      "sha256": "$SCHEMA_SHA"
+    }
+  ],
+  "capabilities": [{ "id": "ocr.image@1" }],
+  "configurationSchema": "$SCHEMA_PATH",
+  "configSchemaVersion": 1,
+  "credentialSlots": [],
+  "permissions": { "network": [], "authPolicies": [] },
+  "ui": { "mode": "schema", "pages": [] },
+  "modelResources": [
+    {
+      "id": "pp-ocrv6-medium",
+      "version": "1.0.0",
+      "modelApiVersion": 1,
+      "languageSet": "pp-ocrv6-50lang",
+      "totalDownloadBytes": 139130880,
+      "expandedBytes": 139110993,
+      "licenseId": "paddleocr-model-weights",
+      "licenseNoticePath": "$LICENSE_PATH",
+      "artifacts": [
+        {
+          "role": "detection",
+          "url": "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_medium_det_infer.tar",
+          "bytes": 62279680,
+          "sha256": "144d0621e059566e5086e228829171591c144c2deb07b2dad4962214fbabfcf7"
+        },
+        {
+          "role": "recognition",
+          "url": "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_medium_rec_infer.tar",
+          "bytes": 76851200,
+          "sha256": "4eecc1c6a4623765042e6fc15446da0da110b7d875b6b72b2d351d2b2dbd4da6"
+        }
+      ],
+      "files": [
+        {
+          "path": "PP-OCRv6_medium_det_infer/inference.json",
+          "role": "detection",
+          "bytes": 312150,
+          "sha256": "0f1a7ec35da36173529c7a60238b7f7919e3831929c3f700ad90ad4896adecd5"
+        },
+        {
+          "path": "PP-OCRv6_medium_det_infer/inference.pdiparams",
+          "role": "detection",
+          "bytes": 61960476,
+          "sha256": "85218d2e3d98f5a21c58b4220627be923a97aee5db3cc71f39536ab31ac53960"
+        },
+        {
+          "path": "PP-OCRv6_medium_det_infer/inference.yml",
+          "role": "detection",
+          "bytes": 886,
+          "sha256": "7298d5ead546584af2504d03355f881ac7a7bc0eb1e282d3e159277c1d0af871"
+        },
+        {
+          "path": "PP-OCRv6_medium_rec_infer/inference.json",
+          "role": "recognition",
+          "bytes": 221814,
+          "sha256": "0b2e25e990bd072f1bf77d59d67d508bce6c4bd44af6624e0fb27d6da2cd00e8"
+        },
+        {
+          "path": "PP-OCRv6_medium_rec_infer/inference.pdiparams",
+          "role": "recognition",
+          "bytes": 76465087,
+          "sha256": "1b01c79a914587933f615569e75de54f2e638ebb5d3f3b3c1b38c24ede8c7319"
+        },
+        {
+          "path": "PP-OCRv6_medium_rec_infer/inference.yml",
+          "role": "recognition",
+          "bytes": 150580,
+          "sha256": "991b700facf5b50a7de193468207d5f4255b538dde0d312ae3b7c7a9b6873129"
+        }
+      ]
+    }
+  ]
+}
+EOF
+
+mise run plugin:sign-staging -- "$STAGING" "$VENDOR_SEED"
+mise run plugin:finalize-package -- "$STAGING" "$OUT_PACKAGE" --public-key-hex "$PUBLIC_KEY_HEX"
+mise run plugin:verify -- "$OUT_PACKAGE" --public-key-hex "$PUBLIC_KEY_HEX"
+
+echo "ok: paddleocr smoke package written to $OUT_PACKAGE"
+echo "note: protocol-stub runtime only; not a production release artifact"

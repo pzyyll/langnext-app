@@ -425,6 +425,20 @@ export async function listPluginPublishers(): Promise<PluginPublisherDto[]> {
   return runStorage(invokeEffect<PluginPublisherDto[]>("list_plugin_publishers"));
 }
 
+export async function listPluginModelResources(
+  instanceId: string,
+): Promise<import("./types").PluginModelResourceDto[]> {
+  return runStorage(
+    invokeEffect<import("./types").PluginModelResourceDto[]>("list_plugin_model_resources", { instanceId }),
+  );
+}
+
+export async function cancelPluginModelDownload(
+  input: import("./types").CancelPluginModelDownloadInput,
+): Promise<void> {
+  return runStorage(invokeEffect<void>("cancel_plugin_model_download", { input }));
+}
+
 export async function approveUserPluginPublisher(input: ApproveUserPublisherInput): Promise<PluginPublisherDto> {
   return runStorage(invokeEffect<PluginPublisherDto>("approve_user_plugin_publisher", { input }));
 }

@@ -935,6 +935,17 @@ const zhCN = {
     configuration: "配置",
     capabilities: "能力",
     unsupportedInstance: "暂不支持此配置类型。",
+    models: {
+      title: "模型",
+      loading: "正在加载模型…",
+      download: "下载",
+      retry: "重试",
+      cancel: "取消",
+      ready: "就绪",
+      failed: "失败（{{code}}）",
+      versionSize: "{{version}} · {{size}}",
+      progress: "{{percent}}% · {{phase}}",
+    },
     status: {
       label: "状态",
       unconfigured: "未配置",
@@ -1093,6 +1104,12 @@ const zhCN = {
       pluginMissingHint: "插件缺失 — 请检查插件。",
       channelLabelGtx: "GTX",
       channelLabelProxy: "代理",
+    },
+    paddleocr: {
+      name: "PaddleOCR",
+      defaultName: "PaddleOCR",
+      readyHint: "请先下载已签名的模型包，再使用本地 OCR。",
+      pluginMissingHint: "插件缺失 — 请检查插件。",
     },
     edgeTts: {
       name: "Edge TTS",

@@ -233,6 +233,8 @@ fn build_google_web_package_with(
     runtime: RuntimeDescriptor {
       kind: RuntimeKind::WasmComponent,
       artifact: Some(translate_path.into()),
+      native_protocol_version: None,
+      native_dependencies: None,
     },
     targets: vec![],
     files,
@@ -262,6 +264,7 @@ fn build_google_web_package_with(
     },
     ui: Default::default(),
     provider_runtime: None,
+    model_resources: None,
   };
   let sk = fixture_vendor_signing_key();
   let manifest_bytes = serde_json::to_vec(&manifest).unwrap();
@@ -407,6 +410,8 @@ fn build_google_web_user_signed_package_with_extra_network(
     runtime: RuntimeDescriptor {
       kind: RuntimeKind::WasmComponent,
       artifact: Some(translate_path.into()),
+      native_protocol_version: None,
+      native_dependencies: None,
     },
     targets: vec![],
     files,
@@ -440,6 +445,7 @@ fn build_google_web_user_signed_package_with_extra_network(
     },
     ui: Default::default(),
     provider_runtime: None,
+    model_resources: None,
   };
   let manifest_bytes = serde_json::to_vec(&manifest).unwrap();
   let signature = user_sk.sign(&manifest_bytes).to_bytes().to_vec();
@@ -1770,6 +1776,8 @@ fn build_attacker_gtx_package_declaring_vendor_key() -> (Vec<u8>, String, String
     runtime: RuntimeDescriptor {
       kind: RuntimeKind::WasmComponent,
       artifact: Some(translate_path.into()),
+      native_protocol_version: None,
+      native_dependencies: None,
     },
     targets: vec![],
     files,
@@ -1799,6 +1807,7 @@ fn build_attacker_gtx_package_declaring_vendor_key() -> (Vec<u8>, String, String
     },
     ui: Default::default(),
     provider_runtime: None,
+    model_resources: None,
   };
   let manifest_bytes = serde_json::to_vec(&manifest).unwrap();
   let signature = attacker_sk.sign(&manifest_bytes).to_bytes().to_vec();

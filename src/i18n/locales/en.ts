@@ -945,6 +945,17 @@ const en = {
     configuration: "Configuration",
     capabilities: "Capabilities",
     unsupportedInstance: "This configuration type is not supported yet.",
+    models: {
+      title: "Models",
+      loading: "Loading models…",
+      download: "Download",
+      retry: "Retry",
+      cancel: "Cancel",
+      ready: "Ready",
+      failed: "Failed ({{code}})",
+      versionSize: "{{version}} · {{size}}",
+      progress: "{{percent}}% · {{phase}}",
+    },
     status: {
       label: "Status",
       unconfigured: "Unconfigured",
@@ -1112,6 +1123,12 @@ const en = {
       pluginMissingHint: "Plugin missing — check Plugins.",
       channelLabelGtx: "GTX",
       channelLabelProxy: "Proxy",
+    },
+    paddleocr: {
+      name: "PaddleOCR",
+      defaultName: "PaddleOCR",
+      readyHint: "Download the signed model bundle before local OCR.",
+      pluginMissingHint: "Plugin missing — check Plugins.",
     },
     edgeTts: {
       name: "Edge TTS",

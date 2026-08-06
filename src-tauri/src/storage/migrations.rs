@@ -30,6 +30,7 @@ pub const MIGRATIONS: &[&str] = &[
   include_str!("../../migrations/0023_integration_capability_health.sql"),
   include_str!("../../migrations/0024_runtime_provider_bindings.sql"),
   include_str!("../../migrations/0025_provider_runtime_interface_bindings.sql"),
+  include_str!("../../migrations/0026_plugin_model_resources.sql"),
 ];
 
 pub fn latest_version() -> i32 {

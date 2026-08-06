@@ -801,6 +801,8 @@ mod tests {
       runtime: RuntimeDescriptor {
         kind: RuntimeKind::BundledRust,
         artifact: None,
+        native_protocol_version: None,
+        native_dependencies: None,
       },
       targets: vec![],
       files: vec![],
@@ -818,6 +820,7 @@ mod tests {
       permissions: PermissionRequests::default(),
       ui: UiDeclaration::default(),
       provider_runtime: None,
+      model_resources: None,
     }
   }
 

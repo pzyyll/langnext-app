@@ -448,6 +448,10 @@ impl ServiceCapabilityService {
           self.broker_factory.clone(),
         )))
       }
+      crate::services::runtime_router::RuntimeAdapter::TrustedNativeWorker { .. } => Err(CapabilityError::new(
+        CapabilityErrorCode::PermissionDenied,
+        "trusted native worker is not supported for this capability path",
+      )),
     }
   }
 
@@ -596,6 +600,10 @@ impl ServiceCapabilityService {
           self.broker_factory.clone(),
         )))
       }
+      crate::services::runtime_router::RuntimeAdapter::TrustedNativeWorker { .. } => Err(CapabilityError::new(
+        CapabilityErrorCode::PermissionDenied,
+        "trusted native worker is not supported for this capability path",
+      )),
     }
   }
 
@@ -718,7 +726,7 @@ impl ServiceCapabilityService {
             ResolvedOcr::Wasm {
               package_digest, grant, ..
             } => (package_digest, grant.revision().as_u64()),
-            ResolvedOcr::Bundled(_) => {
+            ResolvedOcr::Bundled(_) | ResolvedOcr::Native { .. } => {
               return Err(CapabilityError::new(
                 CapabilityErrorCode::PluginUnavailable,
                 "runtime changed during OCR resolution",
@@ -746,6 +754,30 @@ impl ServiceCapabilityService {
             self.broker_factory.clone(),
           )))
         }
+        ResolvedOcr::Native {
+          package_digest,
+          content_dir,
+          worker_exe,
+          worker_sha256,
+          model_root,
+          model_set_digest,
+          model_files,
+          runtime_set_digest,
+          model_api_version,
+          runtime_dependencies,
+          grant: _,
+        } => Ok(Arc::new(crate::services::native_workers::NativeOcrImageAdapter::new(
+          package_digest,
+          content_dir,
+          worker_exe,
+          worker_sha256,
+          model_root,
+          model_set_digest,
+          model_files,
+          runtime_set_digest,
+          model_api_version,
+          runtime_dependencies,
+        ))),
       };
     }
     let handler = self.resolve_handler(instance_id, capability_id)?;
@@ -817,6 +849,12 @@ impl ServiceCapabilityService {
                 "runtime changed during speech resolution",
               ));
             }
+            crate::services::runtime_router::RuntimeAdapter::TrustedNativeWorker { .. } => {
+              return Err(CapabilityError::new(
+                CapabilityErrorCode::PluginUnavailable,
+                "runtime changed during speech resolution",
+              ));
+            }
           };
           if rechecked_digest != package_digest
             || rechecked_artifact != artifact_digest
@@ -843,6 +881,10 @@ impl ServiceCapabilityService {
             self.broker_factory.clone(),
           )))
         }
+        crate::services::runtime_router::RuntimeAdapter::TrustedNativeWorker { .. } => Err(CapabilityError::new(
+          CapabilityErrorCode::PermissionDenied,
+          "trusted native worker is not supported for this capability path",
+        )),
       };
     }
     let handler = self.resolve_handler(instance_id, capability_id)?;

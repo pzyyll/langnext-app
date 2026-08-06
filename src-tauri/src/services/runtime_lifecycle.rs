@@ -50,6 +50,8 @@ struct UpgradePreviewSession {
   source_grant_revision: Option<u64>,
   target_package_digest: String,
   target_plugin_version: String,
+  /// Storage form of the target package runtime kind (wasm-component or trusted-native-worker).
+  target_runtime_kind: String,
   target_config_json: String,
   target_config_schema_version: u32,
   migrated_config_digest: String,
@@ -255,10 +257,22 @@ impl RuntimeLifecycleService {
       .map_err(|e| StorageError::Validation(format!("invalid target manifest: {e}")))?;
     crate::services::auth_policies::validate_google_cloud_manifest_authority(&target_manifest, publisher.source)
       .map_err(StorageError::Validation)?;
-    if target_manifest.runtime.kind != RuntimeKind::WasmComponent {
-      return Err(StorageError::Validation(
-        "Phase 4 upgrades target Wasm Component packages only".into(),
-      ));
+    match target_manifest.runtime.kind {
+      RuntimeKind::WasmComponent => {}
+      RuntimeKind::TrustedNativeWorker => {
+        crate::services::plugin_package::require_native_worker_vendor_publisher(
+          publisher.source,
+          &publisher.key_id,
+          publisher.enabled,
+          publisher.revoked,
+        )
+        .map_err(StorageError::Validation)?;
+      }
+      _ => {
+        return Err(StorageError::Validation(
+          "upgrades target Wasm Component or trusted-native-worker packages only".into(),
+        ));
+      }
     }
 
     // Capability name+major compatibility: the target must declare every capability major the
@@ -379,7 +393,7 @@ impl RuntimeLifecycleService {
       instance_id,
       source: identity_dto_from_instance(&instance),
       target: RuntimeIdentityDto {
-        runtime_kind: runtime_kind_as_str(RuntimeKind::WasmComponent).into(),
+        runtime_kind: runtime_kind_as_str(target_manifest.runtime.kind).into(),
         package_digest: Some(package_digest.as_str().to_string()),
         execution_grant_set_revision: Some(grant_bundle.header.revision),
         runtime_state: InstanceRuntimeState::Active,
@@ -407,6 +421,7 @@ impl RuntimeLifecycleService {
       source_grant_revision: instance.execution_grant_set_revision,
       target_package_digest: package_digest.as_str().to_string(),
       target_plugin_version: target_version.version.clone(),
+      target_runtime_kind: runtime_kind_storage(target_manifest.runtime.kind).to_string(),
       target_config_json: migrated_config,
       target_config_schema_version: target_schema,
       migrated_config_digest,
@@ -682,7 +697,7 @@ impl RuntimeLifecycleService {
         &session.target_plugin_version,
         &session.target_config_json,
         session.target_config_schema_version,
-        runtime_kind_storage(RuntimeKind::WasmComponent),
+        &session.target_runtime_kind,
         Some(&session.target_package_digest),
         Some(session.grant_bundle.header.revision),
         InstanceRuntimeState::Active.as_str(),
@@ -1354,7 +1369,7 @@ impl RuntimeLifecycleService {
         &target_plugin_version,
         &migrated_config,
         target_schema,
-        runtime_kind_storage(RuntimeKind::WasmComponent),
+        runtime_kind_storage(target_manifest.runtime.kind),
         Some(&package_digest),
         Some(grant_bundle.header.revision),
         InstanceRuntimeState::Active.as_str(),
@@ -1826,9 +1841,9 @@ fn edge_tts_effective_origin_is_vendor_default(migrated_config: &str) -> bool {
   normalized.canonical_url == EDGE_TTS_VENDOR_DEFAULT_ORIGIN
 }
 
-/// True when the verified package matches either host-allowed vendor default (Google Web GTX or
-/// Edge TTS). Auto-pin is restricted to these two vendor defaults; all other packages require
-/// explicit migration with a consent warning.
+/// True when the verified package matches either host-allowed vendor default (Google Web GTX,
+/// Edge TTS, or first-party PaddleOCR). Auto-pin is restricted to these vendor defaults; all
+/// other packages require explicit migration with a consent warning.
 fn is_host_allowed_vendor_default(
   version: &crate::domain::plugin_package::InstalledPluginVersion,
   verified: &VerifiedPackage,
@@ -1837,6 +1852,57 @@ fn is_host_allowed_vendor_default(
 ) -> bool {
   is_google_web_gtx_vendor_default(version, verified, vendor_root, publisher)
     || is_edge_tts_vendor_default(version, verified, vendor_root, publisher)
+    || is_paddleocr_vendor_default(version, verified, vendor_root, publisher)
+}
+
+/// First-party PaddleOCR vendor default: trusted-native-worker, vendor publisher, ocr.image@1 only,
+/// no network/auth/credentials. Auto-pin only after the signed package is installed.
+fn is_paddleocr_vendor_default(
+  version: &crate::domain::plugin_package::InstalledPluginVersion,
+  verified: &VerifiedPackage,
+  vendor_root: &crate::services::vendor_trust::VendorPublicKey,
+  publisher: &crate::domain::plugin_package::PluginPublisher,
+) -> bool {
+  use crate::domain::native_worker::{PADDLEOCR_PLUGIN_ID, PADDLEOCR_PLUGIN_VERSION};
+  let manifest = &verified.manifest;
+  if verified.package_digest != version.package_digest {
+    return false;
+  }
+  if manifest.id != PADDLEOCR_PLUGIN_ID || version.plugin_id != manifest.id {
+    return false;
+  }
+  if manifest.version != PADDLEOCR_PLUGIN_VERSION || version.version != PADDLEOCR_PLUGIN_VERSION {
+    return false;
+  }
+  if manifest.runtime.kind != RuntimeKind::TrustedNativeWorker
+    || version.runtime_kind != runtime_kind_storage(RuntimeKind::TrustedNativeWorker)
+  {
+    return false;
+  }
+  let vendor_key_id = crate::services::vendor_trust::VENDOR_PUBLISHER_KEY_ID;
+  let vendor_fingerprint = manifest.publisher.key_fingerprint.as_str();
+  if vendor_root.key_id != vendor_key_id
+    || manifest.publisher.key_id != vendor_key_id
+    || version.publisher_key_id != vendor_key_id
+    || publisher.key_id != vendor_key_id
+    || version.publisher_fingerprint != vendor_fingerprint
+    || publisher.fingerprint != vendor_fingerprint
+    || verified.publisher_fingerprint != vendor_fingerprint
+    || verified.publisher_public_key_hex != vendor_root.public_key_hex
+    || publisher.public_key_hex != vendor_root.public_key_hex
+    || publisher.source != crate::domain::plugin_package::PublisherSource::Vendor
+    || publisher.revoked
+    || !publisher.enabled
+  {
+    return false;
+  }
+  if !manifest.credential_slots.is_empty() {
+    return false;
+  }
+  if !manifest.permissions.network.is_empty() || !manifest.permissions.auth_policies.is_empty() {
+    return false;
+  }
+  manifest.capabilities.len() == 1 && manifest.capabilities[0].id == "ocr.image@1"
 }
 
 /// Validate migrated payloads against signed schemas and return normalized prepared payloads.

@@ -14,8 +14,10 @@ pub mod import_export;
 pub mod import_validation;
 pub mod models;
 pub mod models_dev_catalog;
+pub mod native_workers;
 pub mod network_broker;
 pub mod ocr_services;
+pub mod plugin_models;
 pub mod plugin_package;
 pub mod plugin_schema;
 pub mod plugin_store;
@@ -38,6 +40,10 @@ mod google_cloud_runtime_tests;
 #[cfg(test)]
 mod google_translate_web_runtime_tests;
 #[cfg(test)]
+mod paddleocr_package_tests;
+#[cfg(test)]
+mod paddleocr_runtime_tests;
+#[cfg(test)]
 mod runtime_lifecycle_installed_tests;
 #[cfg(test)]
 mod runtime_lifecycle_preference_tests;
@@ -57,6 +63,7 @@ pub use endpoint_trust::EndpointTrustService;
 pub use import_export::ImportExportService;
 pub use models::ModelService;
 pub use ocr_services::OcrServiceService;
+pub use plugin_models::PluginModelService;
 pub use plugin_store::PluginPackageService;
 pub use provider_http::ProviderHttpService;
 pub use providers::ProviderService;

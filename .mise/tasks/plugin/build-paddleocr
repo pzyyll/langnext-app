@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# ABOUTME: Assemble the unsigned PaddleOCR package staging tree (no model bytes).
+# ABOUTME: Fail-closed until production worker + measured DLL inventory exist; never ships stubs.
+#MISE description="Assemble PaddleOCR package staging tree"
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
+STAGE="$ROOT/runtime-plugins/dist/staging/com.langnext.paddleocr-1.0.0"
+RUNTIME_DIR="$ROOT/runtime-plugins/paddleocr/dist/runtime"
+WORKER="$RUNTIME_DIR/worker.exe"
+
+# Production packaging gate: real worker + non-empty DLL inventory must already exist.
+# Protocol stubs and empty dependency lists are not shippable release artifacts.
+if [[ ! -f "$WORKER" ]]; then
+  echo "error: production worker missing at $WORKER" >&2
+  echo "error: run a measured plugin:build-paddleocr-worker with PaddleOCR SDK inventory first" >&2
+  exit 1
+fi
+# Fail immediately on known protocol-stub markers (binary or text payload).
+if grep -a -q "paddleocr-stub" "$WORKER" 2>/dev/null; then
+  echo "error: worker contains paddleocr-stub marker; production packaging rejects protocol stubs" >&2
+  exit 1
+fi
+if grep -a -q "Stub OCR text for protocol conformance" "$WORKER" 2>/dev/null; then
+  echo "error: worker contains protocol-stub source marker; production packaging rejects stubs" >&2
+  exit 1
+fi
+# Reject known protocol-stub markers if the binary is a tiny placeholder.
+WORKER_SIZE="$(wc -c < "$WORKER" | tr -d ' ')"
+if [[ "$WORKER_SIZE" -lt 65536 ]]; then
+  echo "error: worker.exe is too small ($WORKER_SIZE bytes) to be a production PaddleOCR payload" >&2
+  echo "error: measured DLL inventory and production link are required before packaging" >&2
+  exit 1
+fi
+if [[ ! -d "$RUNTIME_DIR" ]]; then
+  echo "error: runtime directory missing at $RUNTIME_DIR" >&2
+  exit 1
+fi
+DLL_COUNT="$(find "$RUNTIME_DIR" -maxdepth 1 -type f -iname '*.dll' | wc -l | tr -d ' ')"
+if [[ "$DLL_COUNT" -lt 1 ]]; then
+  echo "error: runtime directory has no measured DLL inventory under $RUNTIME_DIR" >&2
+  exit 1
+fi
+
+# Reject empty nativeDependencies / files in the source plugin.json (not a release artifact).
+if grep -Eq '"nativeDependencies"[[:space:]]*:[[:space:]]*\[\]' "$ROOT/runtime-plugins/paddleocr/plugin.json"; then
+  echo "error: plugin.json nativeDependencies is empty; finalize with measured digests first" >&2
+  exit 1
+fi
+if grep -Eq '"files"[[:space:]]*:[[:space:]]*\[\]' "$ROOT/runtime-plugins/paddleocr/plugin.json"; then
+  echo "error: plugin.json files index is empty; finalize with measured digests first" >&2
+  exit 1
+fi
+
+rm -rf "$STAGE"
+mkdir -p "$STAGE/runtime" "$STAGE/schemas" "$STAGE/licenses"
+cp "$ROOT/runtime-plugins/paddleocr/schemas/config.json" "$STAGE/schemas/"
+cp "$ROOT/runtime-plugins/paddleocr/licenses/NOTICE.txt" "$STAGE/licenses/"
+cp -R "$RUNTIME_DIR/." "$STAGE/runtime/"
+# plugin.json is finalized by the packaging/sign pipeline with measured digests.
+cp "$ROOT/runtime-plugins/paddleocr/plugin.json" "$STAGE/plugin.json"
+echo "staging tree: $STAGE"
+find "$STAGE" -type f | sort

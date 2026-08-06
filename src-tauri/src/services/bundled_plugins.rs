@@ -249,6 +249,7 @@ pub fn bundled() -> Result<Vec<BundledPluginRegistration>, StorageError> {
   registrations.push(google_cloud_registration()?);
   registrations.push(google_translate_web_registration()?);
   registrations.push(edge_tts_registration()?);
+  registrations.push(paddleocr_registration()?);
   validate_registrations(&registrations)?;
   Ok(registrations)
 }
@@ -1280,6 +1281,124 @@ fn google_web_capability_definition(
 // Edge TTS
 // ---------------------------------------------------------------------------
 
+fn paddleocr_registration() -> Result<BundledPluginRegistration, StorageError> {
+  use crate::domain::service_capability::OCR_IMAGE_CAPABILITY_ID;
+  use crate::domain::service_integration::PADDLEOCR_PLUGIN_ID;
+  let manifest = ServiceIntegrationManifest {
+    manifest_version: 1,
+    plugin_api_version: "1.0".into(),
+    id: PADDLEOCR_PLUGIN_ID.into(),
+    version: "1.0.0".into(),
+    display_name_key: "plugins.paddleocr.name".into(),
+    min_host_version: "0.1.0".into(),
+    config_schema_version: 1,
+    credential_slots: vec![],
+    endpoints: vec![],
+    capabilities: vec![IntegrationCapabilityDescriptor {
+      id: OCR_IMAGE_CAPABILITY_ID.into(),
+      preferences_schema_version: 1,
+      endpoint_aliases: vec![],
+    }],
+  };
+  let config_schema = PluginSchemaV1 {
+    version: 1,
+    fields: vec![],
+    groups: vec![],
+  };
+  let preference_schema = empty_preference_schema();
+  let capabilities = vec![BundledCapabilityDefinition {
+    descriptor: IntegrationCapabilityDescriptor {
+      id: OCR_IMAGE_CAPABILITY_ID.into(),
+      preferences_schema_version: 1,
+      endpoint_aliases: vec![],
+    },
+    preference_schema: preference_schema.clone(),
+    preference_adapter: Arc::new(EmptyPreferencesAdapter),
+    endpoint_authorities: vec![],
+  }];
+  Ok(BundledPluginRegistration {
+    manifest,
+    config_schema: config_schema.clone(),
+    config_adapter: Arc::new(PaddleOcrConfigAdapter),
+    credential_validators: HashMap::new(),
+    capabilities,
+    endpoint_policy: EndpointPolicy::default(),
+    auth_policy: None,
+    presentation: PluginPresentation {
+      display_name_key: "plugins.paddleocr.name".into(),
+      display_name_fallback: "PaddleOCR".into(),
+      icon: Some("paddleocr".into()),
+    },
+    handler_factory: Arc::new(|_deps, capability_id| match capability_id {
+      OCR_IMAGE_CAPABILITY_ID => Some(CapabilityHandler::OcrImage(Arc::new(PaddleOcrBundledPlaceholder))),
+      _ => None,
+    }),
+  })
+}
+
+struct PaddleOcrConfigAdapter;
+
+impl PluginConfigAdapter for PaddleOcrConfigAdapter {
+  fn config_schema(&self) -> &PluginSchemaV1 {
+    use std::sync::OnceLock;
+    static SCHEMA: OnceLock<PluginSchemaV1> = OnceLock::new();
+    SCHEMA.get_or_init(|| PluginSchemaV1 {
+      version: 1,
+      fields: vec![],
+      groups: vec![],
+    })
+  }
+
+  fn normalize_config(&self, config_json: &str) -> Result<String, StorageError> {
+    let value: Value = serde_json::from_str(config_json)
+      .map_err(|_| StorageError::Validation("config_json must be valid JSON".into()))?;
+    let resolver = HostOptionResolver::default();
+    let normalized = normalize_config(self.config_schema(), &value, &resolver)?;
+    serde_json::to_string(&normalized).map_err(StorageError::from)
+  }
+
+  fn config_ready(&self, config_json: &str) -> bool {
+    self.normalize_config(config_json).is_ok()
+  }
+
+  fn proxy_mode(&self, _config_json: &str) -> ProxyMode {
+    ProxyMode::Direct
+  }
+
+  fn instance_endpoint_origin(&self, _config_json: &str, _alias: &str) -> Result<Option<String>, StorageError> {
+    Ok(None)
+  }
+}
+
+/// Bundled-path placeholder: OCR is only available after vendor package pin + model ready.
+struct PaddleOcrBundledPlaceholder;
+
+impl crate::services::service_capabilities::OcrImageCapability for PaddleOcrBundledPlaceholder {
+  fn recognize(
+    &self,
+    _instance_id: uuid::Uuid,
+    _request: crate::domain::service_capability::OcrImageRequest,
+    _context: crate::domain::service_capability::ExecutionContext,
+  ) -> std::pin::Pin<
+    Box<
+      dyn std::future::Future<
+          Output = Result<
+            crate::domain::service_capability::OcrImageResponse,
+            crate::domain::service_capability::CapabilityError,
+          >,
+        > + Send
+        + '_,
+    >,
+  > {
+    Box::pin(async {
+      Err(crate::domain::service_capability::CapabilityError::new(
+        crate::domain::service_capability::CapabilityErrorCode::PluginUnavailable,
+        "PaddleOCR requires an activated vendor package and ready model",
+      ))
+    })
+  }
+}
+
 fn edge_tts_registration() -> Result<BundledPluginRegistration, StorageError> {
   let manifest = edge_tts_manifest();
   let config_schema = edge_tts_config_schema();
@@ -1601,11 +1720,12 @@ mod tests {
   #[test]
   fn bundled_registrations_validate() {
     let registrations = bundled().expect("bundled registrations must validate");
-    assert_eq!(registrations.len(), 3);
+    assert_eq!(registrations.len(), 4);
     let ids: Vec<&str> = registrations.iter().map(|r| r.manifest.id.as_str()).collect();
     assert!(ids.contains(&GOOGLE_CLOUD_PLUGIN_ID));
     assert!(ids.contains(&GOOGLE_TRANSLATE_WEB_PLUGIN_ID));
     assert!(ids.contains(&EDGE_TTS_PLUGIN_ID));
+    assert!(ids.contains(&crate::domain::service_integration::PADDLEOCR_PLUGIN_ID));
   }
 
   #[test]

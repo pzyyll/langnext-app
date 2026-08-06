@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# ABOUTME: Build the non-production native-worker conformance fixture binary.
+# ABOUTME: Output lands under runtime-plugins/conformance/native-worker/target for tests.
+#MISE description="Build native-worker conformance fixture"
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
+cd "$ROOT/runtime-plugins/conformance/native-worker"
+cargo build --release
+echo "built $(pwd)/target/release/native-worker-conformance${EXE_SUFFIX:-}"

@@ -44,6 +44,7 @@ export const integrationKeys = {
   detail: (id: string) => [...integrationKeys.all, "detail", id] as const,
   definitions: () => [...integrationKeys.all, "definitions"] as const,
   dependencies: (id: string) => [...integrationKeys.all, "dependencies", id] as const,
+  modelResources: (id: string) => [...integrationKeys.all, "model-resources", id] as const,
 };
 
 export const settingsKeys = {

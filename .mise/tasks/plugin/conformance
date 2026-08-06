@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ABOUTME: Run Wasm runtime and installed-lifecycle conformance suites with required tests.
 # ABOUTME: Fail-closed: missing required tests or zero tests is an error; capture suite exit without set -e.
-#MISE description="Run plugin conformance suite (arg: wasm|installed-lifecycle|all)"
+#MISE description="Run plugin conformance suite (arg: wasm|installed-lifecycle|native-worker|paddleocr|all)"
 set -uo pipefail
 
 MODE="${1:-all}"
@@ -53,6 +53,22 @@ REQUIRED_LIFECYCLE_TESTS=(
   "storage::migrations::tests::migrate_v16_to_v17_backfills_bundled_runtime_pins"
   "repositories::tests::runtime_instance_pin_backfill_and_constraints"
   "repositories::tests::runtime_instance_pin_package_approval_never_authorizes_execution"
+)
+
+REQUIRED_NATIVE_WORKER_TESTS=(
+  "services::native_workers::tests::native_worker_handshake_reaps_process"
+  "services::native_workers::tests::native_worker_timeout_kills_process_tree"
+  "services::plugin_models::tests::plugin_model_download_verifies_and_installs_atomically"
+)
+
+REQUIRED_PADDLEOCR_TESTS=(
+  "services::plugin_models::tests::plugin_model_status_reports_missing_without_side_effects"
+  "services::plugin_models::tests::plugin_model_download_verifies_and_installs_atomically"
+  "services::native_workers::tests::native_worker_handshake_reaps_process"
+  "services::native_workers::tests::native_worker_timeout_kills_process_tree"
+  "services::paddleocr_package_tests::paddleocr_package_vendor_runtime_directory_is_accepted"
+  "services::paddleocr_runtime_tests::paddleocr_runtime_ocr_returns_expected_text"
+  "services::paddleocr_runtime_tests::paddleocr_runtime_missing_model_does_not_spawn_worker"
 )
 
 REQUIRED_EDGE_TTS_TESTS=(
@@ -317,6 +333,27 @@ case "$MODE" in
     # Full install→migrate→Translate/Detect→approval→upgrade→rollback→uninstall suite.
     run_filter_suite "runtime_" "${REQUIRED_LIFECYCLE_TESTS[@]}"
     ;;
+  native-worker)
+    # Cargo filter is a single substring; run overlapping filters then require names across output.
+    run_filter_suite "native_worker" \
+      "services::native_workers::tests::native_worker_handshake_reaps_process" \
+      "services::native_workers::tests::native_worker_timeout_kills_process_tree"
+    run_filter_suite "plugin_model_download" \
+      "services::plugin_models::tests::plugin_model_download_verifies_and_installs_atomically"
+    ;;
+  paddleocr)
+    run_filter_suite "paddleocr_package" \
+      "services::paddleocr_package_tests::paddleocr_package_vendor_runtime_directory_is_accepted"
+    run_filter_suite "plugin_model" \
+      "services::plugin_models::tests::plugin_model_status_reports_missing_without_side_effects" \
+      "services::plugin_models::tests::plugin_model_download_verifies_and_installs_atomically"
+    run_filter_suite "native_worker" \
+      "services::native_workers::tests::native_worker_handshake_reaps_process" \
+      "services::native_workers::tests::native_worker_timeout_kills_process_tree"
+    run_filter_suite "paddleocr_runtime" \
+      "services::paddleocr_runtime_tests::paddleocr_runtime_ocr_returns_expected_text" \
+      "services::paddleocr_runtime_tests::paddleocr_runtime_missing_model_does_not_spawn_worker"
+    ;;
   all)
     run_filter_suite "wasm_runtime" "${REQUIRED_WASM_TESTS[@]}"
     run_filter_suite "runtime_" "${REQUIRED_LIFECYCLE_TESTS[@]}"
@@ -329,6 +366,18 @@ case "$MODE" in
     run_filter_suite "wasm_host_imports" "${REQUIRED_WASM_RESOURCE_FILTER_TESTS[@]}"
     run_filter_suite "network_handle" "${REQUIRED_NETWORK_HANDLE_FILTER_TESTS[@]}"
     run_filter_suite "network_broker" "${REQUIRED_NETWORK_BROKER_FILTER_TESTS[@]}"
+    run_filter_suite "native_worker" \
+      "services::native_workers::tests::native_worker_handshake_reaps_process" \
+      "services::native_workers::tests::native_worker_timeout_kills_process_tree"
+    run_filter_suite "plugin_model_download" \
+      "services::plugin_models::tests::plugin_model_download_verifies_and_installs_atomically"
+    run_filter_suite "paddleocr_package" \
+      "services::paddleocr_package_tests::paddleocr_package_vendor_runtime_directory_is_accepted"
+    run_filter_suite "plugin_model_status" \
+      "services::plugin_models::tests::plugin_model_status_reports_missing_without_side_effects"
+    run_filter_suite "paddleocr_runtime" \
+      "services::paddleocr_runtime_tests::paddleocr_runtime_ocr_returns_expected_text" \
+      "services::paddleocr_runtime_tests::paddleocr_runtime_missing_model_does_not_spawn_worker"
     ;;
   resources)
     run_filter_suite "blob_resources" "${REQUIRED_BLOB_FILTER_TESTS[@]}"
@@ -380,7 +429,7 @@ case "$MODE" in
     run_filter_suite "stream_resources" "${REQUIRED_STREAM_FILTER_TESTS[@]}"
     ;;
   *)
-    echo "usage: mise run plugin:conformance [wasm|llm|installed-lifecycle|all|google-cloud|google-cloud-translate|google-cloud-ocr|google-cloud-tts|edge-tts|resources]" >&2
+    echo "usage: mise run plugin:conformance [wasm|llm|installed-lifecycle|native-worker|paddleocr|all|google-cloud|google-cloud-translate|google-cloud-ocr|google-cloud-tts|edge-tts|resources]" >&2
     exit 1
     ;;
 esac

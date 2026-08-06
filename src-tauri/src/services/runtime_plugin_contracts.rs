@@ -186,6 +186,9 @@ pub fn validate_manifest(manifest: &PluginManifestV1) -> Result<ValidatedPluginM
   validate_permissions(&manifest.permissions)?;
   validate_ui(&manifest.ui, &file_index)?;
   validate_targets(&manifest.targets)?;
+  if manifest.runtime.kind == crate::domain::runtime_plugin::RuntimeKind::TrustedNativeWorker {
+    validate_native_worker_targets(&manifest.targets)?;
+  }
   if let Some(provider_runtime) = &manifest.provider_runtime {
     validate_provider_runtime(
       provider_runtime,
@@ -194,6 +197,7 @@ pub fn validate_manifest(manifest: &PluginManifestV1) -> Result<ValidatedPluginM
       &file_index,
     )?;
   }
+  validate_model_resources(manifest.model_resources.as_deref(), &file_index, manifest.runtime.kind)?;
 
   Ok(ValidatedPluginManifest {
     manifest: manifest.clone(),
@@ -490,11 +494,437 @@ fn validate_runtime(
         format!("runtime artifact {normalized} must have role runtime-artifact"),
       ));
     }
+    if runtime.kind == crate::domain::runtime_plugin::RuntimeKind::TrustedNativeWorker {
+      validate_native_worker_runtime(runtime, &normalized, file_index)?;
+    } else if runtime.native_protocol_version.is_some() || runtime.native_dependencies.is_some() {
+      return Err(ContractError::new(
+        ContractErrorCode::InvalidField,
+        format!("runtime {:?} must not declare native worker fields", runtime.kind),
+      ));
+    }
   } else if runtime.artifact.is_some() {
     return Err(ContractError::new(
       ContractErrorCode::InvalidField,
       format!("runtime {:?} must not declare an archive artifact", runtime.kind),
     ));
+  } else if runtime.native_protocol_version.is_some() || runtime.native_dependencies.is_some() {
+    return Err(ContractError::new(
+      ContractErrorCode::InvalidField,
+      format!("runtime {:?} must not declare native worker fields", runtime.kind),
+    ));
+  }
+  Ok(())
+}
+
+fn validate_native_worker_runtime(
+  runtime: &RuntimeDescriptor,
+  artifact_path: &str,
+  file_index: &HashMap<String, PluginFileEntry>,
+) -> Result<(), ContractError> {
+  use crate::domain::native_worker::{
+    NATIVE_DEPENDENCIES_MAX_COUNT, NATIVE_PROTOCOL_VERSION_V1, normalize_native_dependency_path,
+    normalize_native_worker_artifact_path,
+  };
+
+  normalize_native_worker_artifact_path(artifact_path)
+    .map_err(|e| ContractError::new(ContractErrorCode::InvalidField, format!("runtime.artifact: {e}")))?;
+
+  let protocol = runtime.native_protocol_version.ok_or_else(|| {
+    ContractError::new(
+      ContractErrorCode::InvalidField,
+      "trusted-native-worker requires runtime.nativeProtocolVersion",
+    )
+  })?;
+  if protocol != NATIVE_PROTOCOL_VERSION_V1 {
+    return Err(ContractError::new(
+      ContractErrorCode::InvalidField,
+      format!("unsupported nativeProtocolVersion {protocol} (expected {NATIVE_PROTOCOL_VERSION_V1})"),
+    ));
+  }
+
+  let deps = runtime.native_dependencies.as_ref().ok_or_else(|| {
+    ContractError::new(
+      ContractErrorCode::InvalidField,
+      "trusted-native-worker requires runtime.nativeDependencies",
+    )
+  })?;
+  if deps.is_empty() {
+    return Err(ContractError::new(
+      ContractErrorCode::InvalidField,
+      "runtime.nativeDependencies must not be empty",
+    ));
+  }
+  if deps.len() > NATIVE_DEPENDENCIES_MAX_COUNT {
+    return Err(ContractError::new(
+      ContractErrorCode::LimitExceeded,
+      format!("runtime.nativeDependencies exceeds {NATIVE_DEPENDENCIES_MAX_COUNT} entries"),
+    ));
+  }
+
+  let mut normalized_deps = Vec::with_capacity(deps.len());
+  let mut seen = std::collections::HashSet::new();
+  for dep in deps {
+    let normalized = normalize_native_dependency_path(dep)
+      .map_err(|e| ContractError::new(ContractErrorCode::InvalidField, format!("nativeDependencies: {e}")))?;
+    if !seen.insert(normalized.clone()) {
+      return Err(ContractError::new(
+        ContractErrorCode::DuplicateId,
+        format!("duplicate native dependency {normalized}"),
+      ));
+    }
+    let role = file_index.get(&normalized).map(|e| e.role).ok_or_else(|| {
+      ContractError::new(
+        ContractErrorCode::UndeclaredReference,
+        format!("native dependency {normalized} is not in the file index"),
+      )
+    })?;
+    if role != FileRole::RuntimeArtifact {
+      return Err(ContractError::new(
+        ContractErrorCode::ReferenceMismatch,
+        format!("native dependency {normalized} must have role runtime-artifact"),
+      ));
+    }
+    normalized_deps.push(normalized);
+  }
+
+  let mut sorted = normalized_deps.clone();
+  sorted.sort();
+  if sorted != normalized_deps {
+    return Err(ContractError::new(
+      ContractErrorCode::InvalidField,
+      "runtime.nativeDependencies must be unique and sorted",
+    ));
+  }
+
+  // Packaged runtime-artifact entries under runtime/ must equal nativeDependencies + worker.exe.
+  // Ancillary roles may never smuggle PE payloads (.exe/.dll) under license/schema/icon paths.
+  let mut packaged_runtime_dlls = Vec::new();
+  for (path, entry) in file_index {
+    let lower = path.to_ascii_lowercase();
+    match entry.role {
+      FileRole::RuntimeArtifact => {
+        if lower == artifact_path {
+          continue;
+        }
+        if lower.ends_with(".exe") {
+          return Err(ContractError::new(
+            ContractErrorCode::InvalidField,
+            format!("native package may declare only one executable; extra: {path}"),
+          ));
+        }
+        if lower.starts_with("runtime/") && lower.ends_with(".dll") {
+          packaged_runtime_dlls.push(lower);
+        } else {
+          return Err(ContractError::new(
+            ContractErrorCode::InvalidField,
+            format!("native package runtime-artifact path is not allowed: {path}"),
+          ));
+        }
+      }
+      FileRole::License => {
+        if !lower.starts_with("licenses/") {
+          return Err(ContractError::new(
+            ContractErrorCode::InvalidField,
+            format!("native package license path must be under licenses/: {path}"),
+          ));
+        }
+        reject_native_disguised_payload(path, &lower)?;
+        if !native_ancillary_license_allowed(&lower) {
+          return Err(ContractError::new(
+            ContractErrorCode::InvalidField,
+            format!("native package license ancillary type is not allowed: {path}"),
+          ));
+        }
+      }
+      FileRole::ConfigSchema | FileRole::PreferenceSchema => {
+        if !lower.starts_with("schemas/") {
+          return Err(ContractError::new(
+            ContractErrorCode::InvalidField,
+            format!("native package schema path must be under schemas/: {path}"),
+          ));
+        }
+        reject_native_disguised_payload(path, &lower)?;
+        if !lower.ends_with(".json") {
+          return Err(ContractError::new(
+            ContractErrorCode::InvalidField,
+            format!("native package schema ancillary type must be .json: {path}"),
+          ));
+        }
+      }
+      FileRole::Icon => {
+        if !lower.starts_with("assets/") {
+          return Err(ContractError::new(
+            ContractErrorCode::InvalidField,
+            format!("native package icon path must be under assets/: {path}"),
+          ));
+        }
+        reject_native_disguised_payload(path, &lower)?;
+        if !native_ancillary_icon_allowed(&lower) {
+          return Err(ContractError::new(
+            ContractErrorCode::InvalidField,
+            format!("native package icon ancillary type is not allowed: {path}"),
+          ));
+        }
+      }
+      FileRole::Locale | FileRole::PageAsset | FileRole::Other => {
+        return Err(ContractError::new(
+          ContractErrorCode::InvalidField,
+          format!(
+            "native package file role {:?} is not on the closed allowlist: {path}",
+            entry.role
+          ),
+        ));
+      }
+    }
+  }
+  packaged_runtime_dlls.sort();
+  if packaged_runtime_dlls != sorted {
+    return Err(ContractError::new(
+      ContractErrorCode::ReferenceMismatch,
+      "packaged runtime/*.dll entries must exactly match runtime.nativeDependencies",
+    ));
+  }
+
+  Ok(())
+}
+
+/// PE / native binary extensions that must never appear outside the runtime-artifact closure.
+fn reject_native_disguised_payload(path: &str, lower: &str) -> Result<(), ContractError> {
+  const DISGUISED_NATIVE_PAYLOAD_SUFFIXES: &[&str] =
+    &[".exe", ".dll", ".sys", ".scr", ".com", ".cpl", ".ocx", ".efi", ".drv"];
+  for suffix in DISGUISED_NATIVE_PAYLOAD_SUFFIXES {
+    if lower.ends_with(suffix) {
+      return Err(ContractError::new(
+        ContractErrorCode::InvalidField,
+        format!("native package rejects disguised payload entry {path}"),
+      ));
+    }
+  }
+  Ok(())
+}
+
+fn native_ancillary_license_allowed(lower: &str) -> bool {
+  lower.ends_with(".txt")
+    || lower.ends_with(".md")
+    || lower.ends_with(".html")
+    || lower.ends_with(".htm")
+    || lower.ends_with("notice")
+    || lower.ends_with("license")
+    || lower.ends_with("copying")
+}
+
+fn native_ancillary_icon_allowed(lower: &str) -> bool {
+  lower.ends_with(".png") || lower.ends_with(".svg") || lower.ends_with(".ico") || lower.ends_with(".webp")
+}
+
+/// Trusted-native-worker packages require exactly one windows/x86_64 target (no empty/any).
+fn validate_native_worker_targets(
+  targets: &[crate::domain::runtime_plugin::PackageTargetConstraint],
+) -> Result<(), ContractError> {
+  if targets.len() != 1 {
+    return Err(ContractError::new(
+      ContractErrorCode::InvalidField,
+      "trusted-native-worker requires exactly one windows/x86_64 target",
+    ));
+  }
+  let target = &targets[0];
+  if target.platform != "windows" || target.architecture != "x86_64" {
+    return Err(ContractError::new(
+      ContractErrorCode::InvalidField,
+      format!(
+        "trusted-native-worker target must be windows/x86_64, got {}/{}",
+        target.platform, target.architecture
+      ),
+    ));
+  }
+  Ok(())
+}
+
+fn validate_model_resources(
+  resources: Option<&[crate::domain::plugin_model::ModelResourceDescriptor]>,
+  file_index: &HashMap<String, PluginFileEntry>,
+  runtime_kind: crate::domain::runtime_plugin::RuntimeKind,
+) -> Result<(), ContractError> {
+  use crate::domain::plugin_model::{
+    MODEL_EXPANDED_MAX_BYTES, MODEL_RESOURCE_ARTIFACTS_MAX_COUNT, MODEL_RESOURCE_FILES_MAX_COUNT,
+    MODEL_RESOURCE_ID_MAX_LEN, MODEL_RESOURCES_MAX_COUNT, MODEL_TOTAL_DOWNLOAD_MAX_BYTES,
+  };
+  use crate::domain::runtime_plugin::RuntimeKind;
+
+  let Some(resources) = resources else {
+    return Ok(());
+  };
+  if resources.is_empty() {
+    return Err(ContractError::new(
+      ContractErrorCode::InvalidField,
+      "modelResources must not be empty when present",
+    ));
+  }
+  if resources.len() > MODEL_RESOURCES_MAX_COUNT {
+    return Err(ContractError::new(
+      ContractErrorCode::LimitExceeded,
+      format!("modelResources exceeds {MODEL_RESOURCES_MAX_COUNT} entries"),
+    ));
+  }
+  if runtime_kind != RuntimeKind::TrustedNativeWorker {
+    return Err(ContractError::new(
+      ContractErrorCode::InvalidField,
+      "modelResources are only valid for trusted-native-worker packages",
+    ));
+  }
+
+  let mut seen_ids = std::collections::HashSet::new();
+  for resource in resources {
+    if resource.id.is_empty() || resource.id.len() > MODEL_RESOURCE_ID_MAX_LEN {
+      return Err(ContractError::new(
+        ContractErrorCode::InvalidField,
+        "modelResources.id is invalid",
+      ));
+    }
+    if !seen_ids.insert(resource.id.clone()) {
+      return Err(ContractError::new(
+        ContractErrorCode::DuplicateId,
+        format!("duplicate model resource id {}", resource.id),
+      ));
+    }
+    if resource.version.is_empty() {
+      return Err(ContractError::new(
+        ContractErrorCode::InvalidField,
+        format!("model resource {} version is required", resource.id),
+      ));
+    }
+    if resource.model_api_version == 0 {
+      return Err(ContractError::new(
+        ContractErrorCode::InvalidField,
+        format!("model resource {} modelApiVersion must be >= 1", resource.id),
+      ));
+    }
+    if resource.total_download_bytes == 0 || resource.total_download_bytes > MODEL_TOTAL_DOWNLOAD_MAX_BYTES {
+      return Err(ContractError::new(
+        ContractErrorCode::LimitExceeded,
+        format!(
+          "model resource {} totalDownloadBytes exceeds {MODEL_TOTAL_DOWNLOAD_MAX_BYTES}",
+          resource.id
+        ),
+      ));
+    }
+    if resource.expanded_bytes == 0 || resource.expanded_bytes > MODEL_EXPANDED_MAX_BYTES {
+      return Err(ContractError::new(
+        ContractErrorCode::LimitExceeded,
+        format!(
+          "model resource {} expandedBytes exceeds {MODEL_EXPANDED_MAX_BYTES}",
+          resource.id
+        ),
+      ));
+    }
+    if resource.artifacts.is_empty() || resource.artifacts.len() > MODEL_RESOURCE_ARTIFACTS_MAX_COUNT {
+      return Err(ContractError::new(
+        ContractErrorCode::InvalidField,
+        format!("model resource {} artifacts count is invalid", resource.id),
+      ));
+    }
+    if resource.files.is_empty() || resource.files.len() > MODEL_RESOURCE_FILES_MAX_COUNT {
+      return Err(ContractError::new(
+        ContractErrorCode::InvalidField,
+        format!("model resource {} files count is invalid", resource.id),
+      ));
+    }
+
+    require_file_role(
+      file_index,
+      &resource.license_notice_path,
+      FileRole::License,
+      "modelResources.licenseNoticePath",
+    )?;
+
+    let mut artifact_bytes = 0u64;
+    for artifact in &resource.artifacts {
+      if !artifact.url.starts_with("https://") {
+        return Err(ContractError::new(
+          ContractErrorCode::InvalidField,
+          format!("model resource {} artifact URL must be https", resource.id),
+        ));
+      }
+      // Reject mutable query/fragment and non-pinned hosts later; reject http already done.
+      if artifact.url.contains('?') || artifact.url.contains('#') {
+        return Err(ContractError::new(
+          ContractErrorCode::InvalidField,
+          format!("model resource {} artifact URL must not be mutable", resource.id),
+        ));
+      }
+      if artifact.bytes == 0 {
+        return Err(ContractError::new(
+          ContractErrorCode::InvalidField,
+          format!("model resource {} artifact bytes must be > 0", resource.id),
+        ));
+      }
+      if artifact.sha256.len() != runtime_plugin::SHA256_HEX_LEN
+        || !artifact.sha256.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f'))
+      {
+        return Err(ContractError::new(
+          ContractErrorCode::InvalidDigest,
+          format!("model resource {} artifact has invalid sha256", resource.id),
+        ));
+      }
+      artifact_bytes = artifact_bytes.saturating_add(artifact.bytes);
+    }
+    if artifact_bytes != resource.total_download_bytes {
+      return Err(ContractError::new(
+        ContractErrorCode::InvalidField,
+        format!(
+          "model resource {} totalDownloadBytes must equal sum of artifact bytes",
+          resource.id
+        ),
+      ));
+    }
+
+    let mut expanded_sum = 0u64;
+    let mut seen_paths = std::collections::HashSet::new();
+    for file in &resource.files {
+      if file.path.is_empty() || file.path.contains('\\') || file.path.starts_with('/') || file.path.contains("..") {
+        return Err(ContractError::new(
+          ContractErrorCode::InvalidPath,
+          format!("model resource {} file path is invalid", resource.id),
+        ));
+      }
+      if !seen_paths.insert(file.path.clone()) {
+        return Err(ContractError::new(
+          ContractErrorCode::DuplicateId,
+          format!("model resource {} repeats file path {}", resource.id, file.path),
+        ));
+      }
+      if file.bytes == 0 {
+        return Err(ContractError::new(
+          ContractErrorCode::InvalidField,
+          format!("model resource {} file {} has zero bytes", resource.id, file.path),
+        ));
+      }
+      if file.sha256.len() != runtime_plugin::SHA256_HEX_LEN
+        || !file.sha256.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f'))
+      {
+        return Err(ContractError::new(
+          ContractErrorCode::InvalidDigest,
+          format!("model resource {} file {} has invalid sha256", resource.id, file.path),
+        ));
+      }
+      // Model files must never appear in the package file index.
+      if file_index.contains_key(&file.path) {
+        return Err(ContractError::new(
+          ContractErrorCode::InvalidField,
+          format!("model file {} must not be packaged as a package entry", file.path),
+        ));
+      }
+      expanded_sum = expanded_sum.saturating_add(file.bytes);
+    }
+    if expanded_sum != resource.expanded_bytes {
+      return Err(ContractError::new(
+        ContractErrorCode::InvalidField,
+        format!(
+          "model resource {} expandedBytes must equal sum of file bytes",
+          resource.id
+        ),
+      ));
+    }
   }
   Ok(())
 }
@@ -787,6 +1217,8 @@ mod tests {
       runtime: RuntimeDescriptor {
         kind: RuntimeKind::WasmComponent,
         artifact: Some("artifacts/plugin.wasm".into()),
+        native_protocol_version: None,
+        native_dependencies: None,
       },
       targets: vec![],
       files: vec![file("artifacts/plugin.wasm", FileRole::RuntimeArtifact, 1024)],
@@ -807,6 +1239,7 @@ mod tests {
         pages: vec![],
       },
       provider_runtime: None,
+      model_resources: None,
     }
   }
 
@@ -815,6 +1248,8 @@ mod tests {
     m.runtime = RuntimeDescriptor {
       kind: RuntimeKind::BundledRust,
       artifact: None,
+      native_protocol_version: None,
+      native_dependencies: None,
     };
     m.files = vec![];
     m

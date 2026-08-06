@@ -452,6 +452,8 @@ fn provider_runtime_manifest(
     runtime: RuntimeDescriptor {
       kind: RuntimeKind::WasmComponent,
       artifact: Some(runtime_artifact),
+      native_protocol_version: None,
+      native_dependencies: None,
     },
     targets: vec![],
     files,
@@ -465,6 +467,7 @@ fn provider_runtime_manifest(
     },
     ui: Default::default(),
     provider_runtime: Some(declaration),
+    model_resources: None,
   }
 }
 

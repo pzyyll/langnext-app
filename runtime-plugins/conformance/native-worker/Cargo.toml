@@ -1,0 +1,11 @@
+# ABOUTME: Non-production native worker fixture for protocol/crash/hang conformance.
+# ABOUTME: Built only by plugin:build-native-conformance; never shipped as a product package.
+[package]
+name = "langnext-native-worker-conformance"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "native-worker-conformance"
+path = "src/main.rs"

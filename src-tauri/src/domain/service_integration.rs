@@ -25,6 +25,8 @@ pub const GOOGLE_CLOUD_PLUGIN_ID: &str = "com.langnext.google-cloud";
 pub const GOOGLE_TRANSLATE_WEB_PLUGIN_ID: &str = "com.langnext.google-translate-web";
 /// Edge TTS bundled plugin id (OpenAI-compatible tts.wangwangit.com).
 pub const EDGE_TTS_PLUGIN_ID: &str = "com.langnext.edge-tts";
+/// First-party PaddleOCR host definition id (activates only via vendor trusted-native-worker pin).
+pub const PADDLEOCR_PLUGIN_ID: &str = "com.langnext.paddleocr";
 /// Google Cloud service-account credential slot.
 pub const GOOGLE_CLOUD_SERVICE_ACCOUNT_SLOT: &str = "service-account-json";
 /// Pinned Google OAuth token URI required in service-account JSON.

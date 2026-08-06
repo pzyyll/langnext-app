@@ -1581,12 +1581,21 @@ pub struct PluginFileEntry {
 /// Runtime artifact descriptor. `artifact` is required only for runtimes backed by an
 /// archive artifact (`WasmComponent`, `TrustedNativeWorker`); bundled/frontend runtimes
 /// carry no archive artifact.
+///
+/// Native-worker-only fields (`native_protocol_version`, `native_dependencies`) are optional
+/// for v1 serde compatibility; validators require them when `kind` is `TrustedNativeWorker`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RuntimeDescriptor {
   pub kind: RuntimeKind,
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub artifact: Option<String>,
+  /// Native framed-protocol version. Required for `TrustedNativeWorker`.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub native_protocol_version: Option<u32>,
+  /// Exact packaged DLL paths (`runtime/*.dll`), unique and sorted. Required for native workers.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub native_dependencies: Option<Vec<String>>,
 }
 
 /// Publisher identity (key id + fingerprint); never the key material itself.
@@ -1799,6 +1808,9 @@ pub struct PluginManifestV1 {
   /// it never grants execution authority.
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub provider_runtime: Option<ProviderRuntimeDeclaration>,
+  /// Optional signed model-resource descriptors (Phase 10). Metadata only; never model bytes.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub model_resources: Option<Vec<crate::domain::plugin_model::ModelResourceDescriptor>>,
 }
 
 /// Normalize `std::env::consts::OS` into a package platform token.

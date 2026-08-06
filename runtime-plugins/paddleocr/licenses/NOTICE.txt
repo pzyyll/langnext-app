@@ -1,0 +1,3 @@
+PaddleOCR and PaddlePaddle are licensed under Apache-2.0.
+Model weights are downloaded from official PaddleX URLs and are not bundled in this package.
+Review model redistribution terms before mirroring or redistributing weights.

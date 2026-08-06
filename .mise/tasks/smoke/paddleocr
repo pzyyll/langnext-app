@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+# ABOUTME: Launch a Phase 10 PaddleOCR smoke app with a vendor-signed smoke package and temporary trust.
+# ABOUTME: Enables the host model Download panel after auto-pin; protocol stub is not production OCR.
+#MISE description="Run PaddleOCR smoke app (arg: --preflight-only)"
+set -euo pipefail
+
+readonly PREFLIGHT_ONLY_FLAG="--preflight-only"
+readonly VENDOR_PUBLISHER_KEY_ID="com.langnext.vendor.keys.1"
+readonly ED25519_PUBLIC_KEY_HEX_LENGTH=64
+readonly PADDLEOCR_PACKAGE_RELATIVE_PATH="runtime-plugins/paddleocr/fixtures/packages/com.langnext.paddleocr-1.0.0.lnplugin"
+readonly VENDOR_PUBLIC_KEY_RELATIVE_PATH="runtime-plugins/conformance/fixtures/packages/keys/vendor-public-key.hex"
+
+if [[ "${1:-}" == "--" ]]; then
+  shift
+fi
+
+case "${1:-}" in
+  "") PREFLIGHT_ONLY=0 ;;
+  "$PREFLIGHT_ONLY_FLAG") PREFLIGHT_ONLY=1 ;;
+  *)
+    echo "usage: mise run smoke:paddleocr [--preflight-only]" >&2
+    exit 2
+    ;;
+esac
+
+if [[ $# -gt 1 ]]; then
+  echo "usage: mise run smoke:paddleocr [--preflight-only]" >&2
+  exit 2
+fi
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+PACKAGE_PATH="$ROOT_DIR/$PADDLEOCR_PACKAGE_RELATIVE_PATH"
+PUBLIC_KEY_PATH="$ROOT_DIR/$VENDOR_PUBLIC_KEY_RELATIVE_PATH"
+
+cd "$ROOT_DIR"
+
+echo "== stage 1: build/sign smoke package fixture"
+mise run plugin:build-paddleocr-smoke
+
+[[ -f "$PACKAGE_PATH" ]] || {
+  echo "error: PaddleOCR smoke package is missing: $PACKAGE_PATH" >&2
+  exit 1
+}
+[[ -f "$PUBLIC_KEY_PATH" ]] || {
+  echo "error: fixture vendor key is missing: $PUBLIC_KEY_PATH" >&2
+  exit 1
+}
+
+PUBLIC_KEY_HEX="$(tr -d '[:space:]' < "$PUBLIC_KEY_PATH")"
+if [[ ${#PUBLIC_KEY_HEX} -ne $ED25519_PUBLIC_KEY_HEX_LENGTH || ! "$PUBLIC_KEY_HEX" =~ ^[0-9a-f]+$ ]]; then
+  echo "error: fixture vendor key must be $ED25519_PUBLIC_KEY_HEX_LENGTH lowercase hexadecimal characters" >&2
+  exit 1
+fi
+
+mise run plugin:verify -- "$PACKAGE_PATH" --public-key-file "$PUBLIC_KEY_PATH"
+
+echo "== stage 2: focused package/model contracts"
+mise run test paddleocr_package -- --nocapture
+mise run test plugin_model_status -- --nocapture
+
+VENDOR_TRUST_DIR="$ROOT_DIR/runtime-plugins/dist/smoke-paddleocr-$$"
+rm -rf "$VENDOR_TRUST_DIR"
+mkdir -p "$VENDOR_TRUST_DIR"
+VENDOR_TRUST_JSON="$VENDOR_TRUST_DIR/vendor-trust.json"
+cleanup() {
+  rm -rf "$VENDOR_TRUST_DIR"
+}
+trap cleanup EXIT
+
+native_path() {
+  if command -v cygpath >/dev/null 2>&1; then
+    cygpath -w "$1"
+  else
+    printf '%s\n' "$1"
+  fi
+}
+
+echo ""
+echo "SMOKE PREFLIGHT PASS: smoke package verified; model status contracts green."
+echo "UI expectations after launch:"
+echo "  1. Remove any existing PaddleOCR instance that still shows runtimeKind=bundled-rust"
+echo "  2. Create a new PaddleOCR instance (auto-pins the smoke package)"
+echo "  3. Configuration page should show Models + Download for pp-ocrv6-medium"
+echo "  4. Status should be Degraded/model_missing until Download succeeds"
+echo "Limits:"
+echo "  - smoke package uses a protocol-stub worker, not production PaddleOCR"
+echo "  - real OCR accuracy remains blocked on LANGNEXT_PADDLE_ROOT + measured inventory"
+
+if [[ $PREFLIGHT_ONLY -eq 1 ]]; then
+  echo "ok: paddleocr smoke preflight passed"
+  exit 0
+fi
+
+printf '[\n  {\n    "keyId": "%s",\n    "publicKeyHex": "%s"\n  }\n]\n' \
+  "$VENDOR_PUBLISHER_KEY_ID" "$PUBLIC_KEY_HEX" >"$VENDOR_TRUST_JSON"
+export LANGNEXT_VENDOR_TRUST_JSON="$(native_path "$VENDOR_TRUST_JSON")"
+export LANGNEXT_BUNDLED_PADDLEOCR_PACKAGE="$(native_path "$PACKAGE_PATH")"
+
+echo "ok: launching Tauri with the PaddleOCR smoke package and temporary vendor trust"
+mise run tauri:dev
