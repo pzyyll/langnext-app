@@ -12,7 +12,6 @@
     "artifact": "runtime/worker.exe",
     "nativeProtocolVersion": 1,
     "nativeDependencies": [
-      "runtime/abseil_dll.dll",
       "runtime/common.dll",
       "runtime/libiomp5md.dll",
       "runtime/mkldnn.dll",
@@ -20,7 +19,8 @@
       "runtime/opencv_world470.dll",
       "runtime/paddle_inference.dll",
       "runtime/phi.dll",
-      "runtime/polyclipping.dll"
+      "runtime/polyclipping.dll",
+      "runtime/vcomp140.dll"
     ]
   },
   "targets": [
@@ -33,14 +33,14 @@
     {
       "path": "runtime/worker.exe",
       "role": "runtime-artifact",
-      "bytes": 1245184,
-      "sha256": "393b2ec8eff49ebb5c51edd6471da5fbf564aa6cc7887fd5feff9e37cbfceac8"
+      "bytes": 1298944,
+      "sha256": "d3e2c2122cd98f7a8f08239968010d4987245a691f87d2b57060630b3e2afff9"
     },
     {
-      "path": "runtime/abseil_dll.dll",
-      "role": "runtime-artifact",
-      "bytes": 1529344,
-      "sha256": "526e1315de171dfe71252edd5c656bf599a58b0594607dfaa5208083a9188bd7"
+      "path": "licenses/NOTICE.txt",
+      "role": "license",
+      "bytes": 663,
+      "sha256": "2ba220d1b31ce39dd53fadb149dcd9d02c72e95d1f112e41dff3c95977b5796b"
     },
     {
       "path": "runtime/common.dll",
@@ -87,20 +87,20 @@
     {
       "path": "runtime/polyclipping.dll",
       "role": "runtime-artifact",
-      "bytes": 523776,
-      "sha256": "0056765bf83e0b0ba0db95df6de0e0698eca62fe32fd99fcf30aa2b52ba7df23"
+      "bytes": 504832,
+      "sha256": "741b392a122cce332dbe37fb75882e586cadd1d0c17eee47494bf2e0c16d35dc"
+    },
+    {
+      "path": "runtime/vcomp140.dll",
+      "role": "runtime-artifact",
+      "bytes": 212920,
+      "sha256": "95d4ce4a6802d1e18b5e0e1722cc30ea72ca7e033f83828f05c0b7b993fe7cbf"
     },
     {
       "path": "schemas/config.json",
       "role": "config-schema",
       "bytes": 51,
       "sha256": "acceefffbdd72d4528e667e154fd32cb3a02de4a25483980c6221c775b77a914"
-    },
-    {
-      "path": "licenses/NOTICE.txt",
-      "role": "license",
-      "bytes": 229,
-      "sha256": "55de0446778dd58b92804a672a80bb2fbd147cd73ad59986fa04dcc1174ea4ab"
     }
   ],
   "capabilities": [

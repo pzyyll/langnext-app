@@ -1,238 +1,355 @@
 # Phase 11: Runtime Plugin Import, Export, and Recovery Implementation Plan
 
-**Goal:** Make runtime plugin configuration portable without exporting executable code, secrets, credential refs, permission trust, or rollback state.
+**Goal:** Complete format v8 configuration portability with an exact preview/apply contract, actionable runtime requirements, and no transfer of executable code, secrets, trust, grants, or activation authority.
 
-**Inputs:** Phase 4 minimum export format v7 plus Phases 5, 7, and 8 runtime identities.
+**Inputs:** Phase 4 runtime requirements, Phases 5–8 runtime packages, `docs/plans/2026-08-03-multi-interface-provider-runtime-plan.md`, the current format v8 implementation, and the Phase 11.5 activation-intent boundary.
 
 **Assumptions:**
 
-- Phase 4 already introduced the minimum export format v7 identity and missing-package behavior before any real runtime plugin release.
-- This phase completes v7 copy/merge/reapproval/recovery coverage without changing its runtime identity semantics.
-- Import never downloads, instantiates, migrates through, executes, grants authority to, or activates external packages.
-- Package approval, publisher trust, and instance execution grant sets are local and non-portable.
-- Existing v2–v6 normalization remains supported.
+- `EXPORT_FORMAT_VERSION` remains `8`; supported input versions remain v2–v8.
+- Existing Rust normalization, graph validation, transactional apply, credential journaling, runtime requirement persistence, and secret scanning are the baseline and are not rewritten.
+- Import remains useful when packages are missing, revoked, disabled, incompatible, or unavailable; these are actionable runtime states, not structural import failures.
+- Import never downloads, installs, verifies by execution, migrates through, grants, activates, or invokes plugin code.
+- Default package policies and activation intents introduced by Phase 11.5 are local trust state and are never exported.
+- Phase 11.5 must persist imported package-backed subjects as `import_requires_confirmation`; only local creation may use automatic activation recovery.
+- Export formats v2–v8 remain readable through Phase 12 and at least one subsequent stable release.
 
-**Architecture:** Export records exact runtime requirements and non-secret configuration/bindings. Import validates/persists structure independently from local package availability and leaves every external runtime inactive as `pending_activation` or `plugin_missing`. A distinct post-import lifecycle preview/confirmation may later migrate copied JSON, issue one instance/package execution grant-set revision with reviewed entries, and activate the exact locally installed/trusted package.
+**Architecture:** The Rust backend remains authoritative for parsing and sequential v2→v8 normalization. Export reads one SQLite snapshot and writes deterministic, secret-free runtime requirements. Import is split into load, backend preview, explicit user confirmation, and backend apply. Preview creates a bounded, expiring server-side session containing the normalized non-secret document, conflict mode, fixed Copy ID mapping, and hashed CAS baselines; the frontend receives only an opaque preview ID and sanitized summary. Apply submits only that ID, atomically claims the session, and rebuilds the same plan inside the write transaction. Package-backed rows persist inactive exact requirements, while later activation remains a separate lifecycle operation.
 
-**Tech Stack:** Existing Rust import/export/validation services, SQLite transactions, React configuration transfer UX, package/runtime services.
+**Tech Stack:** Rust 2024, SQLite/rusqlite, Tauri 2 IPC/events, React 19, Effect, TanStack Query, Base UI, Bun, mise.
 
 ---
 
-## Dependencies
+## Current Baseline to Preserve
 
-- Phase 4 minimum v7 identity/missing-package restore.
-- Phase 5 service runtime proof.
-- Phase 7 integration multi-capability identity.
-- Phase 8 provider runtime identity.
+The following behavior already exists and is guarded by current Rust tests:
+
+- `src-tauri/src/domain/import_export.rs` writes format v8 and accepts v2–v8.
+- v7 singular provider runtime identity normalizes to v8 adapter-keyed `runtimeBindings`.
+- Integrations export one exact runtime requirement; providers export ordered adapter-keyed requirements.
+- Export scans for forbidden secret/ref/token/grant fields.
+- `ImportExportService::import` rebuilds and applies one validated plan in a SQLite transaction.
+- Copy mode rewrites graph UUIDs; Merge mode uses credential ownership/CAS and journal cleanup.
+- Package-backed imported integrations/providers remain inactive with no execution grant revision.
+- Import apply emits provider/model/profile/integration/OCR/Speech/settings data-change events.
+
+Do not create TDD tasks to reimplement this baseline. Extend it only through the failing public behaviors below.
+
+## Out of Scope
+
+- Exporting package archives, signatures, publisher trust, package approvals, default policies, execution grants, rollback snapshots, activation intents, credentials, refs, tokens, cache, logs, history payloads, images, audio, or user request bodies.
+- Installing/downloading packages during preview or apply.
+- Automatically activating a locally available package after import.
+- Migrating imported config through guest/native code during import.
+- Changing format v8 or removing v2–v8 compatibility.
+- Implementing Phase 11.5 default authorization itself.
 
 ## File Map
 
-- Modify: `src-tauri/src/domain/import_export.rs` — v7 requirement DTOs.
-- Modify: `src-tauri/src/services/import_export.rs` — export runtime requirements.
-- Modify: `src-tauri/src/services/import_validation.rs` — v2–v7 normalization and unresolved package validation.
-- Modify: `src-tauri/src/repositories/integration_instances.rs`, `src-tauri/src/repositories/provider_instances.rs`, `src-tauri/src/repositories/translation_profiles.rs`, `src-tauri/src/repositories/ocr_services.rs`, `src-tauri/src/repositories/speech_services.rs`, `src-tauri/src/services/import_export.rs`, `src-tauri/src/services/import_validation.rs` — import apply.
-- Modify: `src/storage/types.ts`, `src/storage/client.ts` — v7 DTOs.
-- Modify: `src/features/settings/configurationTransfer.ts`, `src/features/settings/configurationTransfer.test.ts`, `src/features/settings/importAcceptance.test.ts`, `src/i18n/locales/en.ts`, `src/i18n/locales/zh-CN.ts` — missing package/reapproval presentation.
-- Test: `src-tauri/src/domain/import_export.rs`, `src-tauri/src/services/import_validation.rs`, `src-tauri/src/services/import_export.rs`, `src-tauri/src/services/tests.rs`, `src/features/settings/configurationTransfer.test.ts`, `src/features/settings/importAcceptance.test.ts`.
+- Modify: `src-tauri/src/domain/import_export.rs` — current-format comments plus v8 preview/runtime action DTOs with one opaque `previewId`.
+- Modify: `src-tauri/src/services/import_validation.rs` — derive per-subject runtime availability/actions and deterministic import plan identity.
+- Modify: `src-tauri/src/services/import_export.rs` — expose v8 preview data, own bounded preview sessions, and enforce preview/apply CAS inside the import transaction.
+- Modify: `src-tauri/src/cmds/import_export.rs` — accept the opaque `previewId` on apply without adding new commands.
+- Create: `src-tauri/src/services/fixtures/import/runtime-plugin-v8/` — committed v2–v8 compatibility and mixed-runtime fixtures.
+- Modify: `src-tauri/src/services/tests.rs`, `src-tauri/src/services/runtime_provider_tests.rs` — public service/runtime acceptance coverage.
+- Modify: `src/storage/types.ts` — v8 preview/action DTOs and opaque preview ID.
+- Modify: `src/features/settings/configurationTransfer.ts`, `src/features/settings/configurationTransfer.test.ts` — v8 envelope acceptance and split load/preview/apply Effect workflows.
+- Create: `src/features/settings/importPreviewPresentation.ts`, `src/features/settings/importPreviewPresentation.test.ts` — pure counts, runtime actions, and warning presentation.
+- Create: `src/features/settings/ConfigurationImportPreviewDialog.tsx` — Base UI Merge/Copy selection, preview, and confirmation.
+- Create: `src/features/settings/configurationImportPreviewState.ts`, `src/features/settings/configurationImportPreviewState.test.ts` — pure dialog state transitions covered by the existing Bun test stack.
+- Modify: `src/routes/settings.tsx` — replace immediate hard-coded Merge import with the preview dialog workflow.
+- Modify: `src/features/settings/importAcceptance.ts`, `src/features/settings/importAcceptance.test.ts` — post-apply invalidation and actionable warnings.
+- Modify: `src/i18n/locales/en.ts`, `src/i18n/locales/zh-CN.ts` — concise preview, inactive-runtime, package-action, and stale-preview copy.
+- Modify: `docs/plans/runtime-plugin-system/phase-11-5-default-package-activation.md` only if the final imported-intent handoff contract changes during implementation.
+
+## Seams
+
+- **Seam:** `parseConfigurationExportJson` — accepts v2–v8 envelopes, rejects unsupported/malformed input, and allows a backend-exported v8 document to re-enter the import workflow.
+- **Seam:** `export_configuration` — returns deterministic v8 runtime requirements without forbidden local authority or secret data.
+- **Seam:** `preview_configuration_import` — normalizes untrusted v2–v8 input and returns counts, authentication needs, exact runtime actions, and an opaque expiring preview ID without mutation or execution.
+- **Seam:** `import_configuration` — accepts only an opaque preview ID, consumes its host-owned normalized document/mode/fixed mapping/CAS plan, and applies after rebuilding inside the write transaction.
+- **Seam:** `prepareConfigurationImportFromFile` — loads one document, selects Merge/Copy, obtains preview, and does not apply before explicit confirmation.
+- **Seam:** `configurationImportPreviewState` / `ConfigurationImportPreviewDialog` — controls mode/load/preview/confirm/conflict transitions and presents graph counts, runtime actions, credential warnings, and inactive-after-import semantics.
+- **Seam:** post-import integration/provider runtime resolution — exact requirements remain inactive and require a separate lifecycle confirmation.
+- **Seam:** Phase 11.5 `recover_pending_default_runtime_activations` — never schedules imported `import_requires_confirmation` intents.
 
 ## Tasks
 
-### Task 1: Complete export format v7 runtime requirements
+### Task 1: Restore frontend format v8 round-trip
 
-**Outcome:** The Phase 4 v7 identity contract covers all service and LLM runtime records without containing code or local trust state.
+**Seam:** `parseConfigurationExportJson`
 
-**Files:**
-
-- Modify: `src-tauri/src/domain/import_export.rs`, `src/storage/types.ts`
-- Test: inline v7 serialization/secret-scan tests in `src-tauri/src/domain/import_export.rs` and `src-tauri/src/services/import_export.rs`
-
-**Steps:**
-
-- [ ] Keep `EXPORT_FORMAT_VERSION` at 7 and retain the Phase 4 runtime requirement field semantics.
-- [ ] Verify required plugin identity preserves the Phase 4 fields unchanged: plugin ID, semantic version, package digest, publisher key ID, mandatory publisher key fingerprint, plugin API version, config schema version, and required capability majors for both integrations and providers; do not add or reinterpret v7 fields here.
-- [ ] Add provider runtime requirements while preserving provider/model/profile UUID relationships.
-- [ ] Keep non-secret integration/provider config and capability preferences.
-- [ ] Explicitly exclude package artifacts, signatures, absolute paths, package approvals, execution grant sets/revisions, rollback snapshots, credential refs/secrets/tokens, cache, logs, history payloads, images, and audio.
-- [ ] Extend forbidden-key/content scanning and tests.
-
-**Validation:**
-
-- Run: `mise run test runtime_plugin_export_v7 -- --nocapture`
-- Expected: exact requirements serialize deterministically and forbidden data is absent.
-
-### Task 2: Harden v2–v6 import normalization
-
-**Outcome:** The Phase 4 compatibility path remains stable after service and provider runtime migrations.
+**Outcome:** A document produced by the current backend can be loaded by the frontend, while unsupported formats still fail before preview IPC.
 
 **Files:**
 
-- Create: `src-tauri/src/services/fixtures/import/runtime-plugin-v7/`
-- Modify: `src-tauri/src/services/import_validation.rs`
-- Test: v2–v7 compatibility fixtures in `src-tauri/src/services/fixtures/import/runtime-plugin-v7/`, `src-tauri/src/services/import_validation.rs`, `src-tauri/src/services/tests.rs`
+- Modify: `src/features/settings/configurationTransfer.ts`
+- Test: `src/features/settings/configurationTransfer.test.ts`
 
 **Steps:**
 
-- [ ] Keep the Phase 4 sequential v2→v3→…→v7 normalization unchanged.
-- [ ] Verify v6→v7 maps existing integrations to `BundledRust` and providers to `LegacyFrontendProvider` requirements.
-- [ ] Do not assign installed package identity based only on matching plugin ID/version.
-- [ ] Preserve unknown plugin/provider IDs and all domain bindings.
-- [ ] Reject unsupported future formats and malformed runtime requirements.
+- [ ] **Red:** Add a test that passes a minimal format v8 document through `parseConfigurationExportJson`; assert it is accepted unchanged. Confirm the current `[2..7]` frontend list fails.
+- [ ] **Green:** Add v8 to `SUPPORTED_CONFIGURATION_FORMAT_VERSIONS` and update stale comments to v2–v8/current-format wording.
+- [ ] **Red:** Feed the output shape returned by `exportConfigurationDocument` into the parse/load seam and assert self round-trip succeeds.
+- [ ] **Green:** Keep frontend checks envelope-only; backend normalization and graph/runtime validation remain authoritative.
+- [ ] Preserve rejection of missing/non-numeric `formatVersion`, unsupported future versions, non-object roots, and missing providers/models arrays.
 
 **Validation:**
 
-- Run: `mise run test import_format -- --nocapture`
-- Expected: v2–v7 fixtures normalize; no old export silently activates external code.
+- Run (red): `bun test src/features/settings/configurationTransfer.test.ts`
+- Expected: format v8 is rejected as unsupported.
+- Run (green): same command.
+- Expected: v2–v8 pass envelope checks; malformed/future formats fail.
 
-### Task 3: Import missing runtime requirements safely
+### Task 2: Preview exact runtime requirements and actions
 
-**Outcome:** Configuration can restore before required packages are installed.
+**Seam:** `preview_configuration_import`
+
+**Outcome:** Preview distinguishes structural validity from local runtime readiness and tells the user what each imported integration/provider binding will require after apply.
 
 **Files:**
 
-- Modify: `src-tauri/src/services/import_validation.rs`, `src-tauri/src/services/import_export.rs`, `src-tauri/src/repositories/integration_instances.rs`, `src-tauri/src/repositories/provider_instances.rs`, `src-tauri/src/repositories/translation_profiles.rs`, `src-tauri/src/repositories/ocr_services.rs`, `src-tauri/src/repositories/speech_services.rs`
-- Test: missing-package import tests in `src-tauri/src/services/import_validation.rs`, `src-tauri/src/services/import_export.rs`, `src-tauri/src/services/tests.rs`
+- Modify: `src-tauri/src/domain/import_export.rs`, `src-tauri/src/services/import_validation.rs`, `src-tauri/src/services/import_export.rs`, `src/storage/types.ts`
+- Test: inline validation tests and `src-tauri/src/services/tests.rs`
 
 **Steps:**
 
-- [ ] Validate package requirement syntax independently of local installation.
-- [ ] Create/import instances/providers/bindings with unresolved required identity and `plugin_missing`/runtime unavailable state.
-- [ ] Do not call package download/install/execute during preview or apply.
-- [ ] Keep dependencies visible and deletion/rebind/export possible.
-- [ ] When the exact digest becomes installed later, require local publisher/permission approval and explicit activation.
+- [ ] **Red:** Preview a mixed v8 document containing bundled, legacy, installed package-backed, exact digests absent from the local catalog, revoked publisher, disabled publisher, content-unavailable, and incompatible runtime requirements.
+- [ ] Assert each integration or provider adapter binding returns: subject kind/ID, display label, optional adapter ID, runtime kind, plugin/version/digest/publisher identity, local status, and required action.
+- [ ] **Green:** Add `ImportRuntimeRequirementPreview` entries to `ImportPreview`; derive them from exact imported requirements plus local catalog/publisher state without substituting by plugin ID/version.
+- [ ] Define deterministic status precedence after structural validation: absent exact digest → `missing`; otherwise revoked → disabled → content unavailable → incompatible → installed. Bundled/legacy requirements use their own statuses.
+- [ ] Define closed actions: bundled/legacy → `none`; missing/content unavailable → `install_exact_package`; revoked/disabled → `restore_publisher`; incompatible → `resolve_incompatibility`; installed → `activate_after_import`.
+- [ ] **Red:** Assert missing/revoked/incompatible requirements do not make an otherwise valid document invalid and do not mutate package/publisher state.
+- [ ] **Green:** Keep these as preview actions. Structural identity errors remain `validation_errors`; local availability remains actionable metadata.
+- [ ] Assert preview creates no package install operation, execution grant, rollback snapshot, runtime process, network request, or credential lookup.
 
 **Validation:**
 
-- Run: `mise run test runtime_plugin_import_missing -- --nocapture`
-- Expected: all rows/bindings restore; nothing executes; later exact package can be approved/activated.
+- Run (red): `mise run test import_runtime_requirement_preview -- --nocapture`
+- Expected: preview lacks per-subject runtime status/action DTOs.
+- Run (green): same command.
+- Expected: exact local states/actions are reported while preview remains non-mutating and non-executing.
 
-### Task 4: Define copy/merge credential behavior
+### Task 3: Bind apply to an expiring preview session
 
-**Outcome:** Import never binds credentials to a changed origin/auth/package without explicit confirmation.
+**Seam:** `preview_configuration_import`, `import_configuration`
+
+**Outcome:** Apply uses the exact Merge/Copy mode, Copy ID mapping, document identity, and local CAS baseline that the user previewed.
 
 **Files:**
 
-- Modify: `src-tauri/src/services/import_validation.rs`, `src-tauri/src/services/import_export.rs`, `src/features/settings/configurationTransfer.ts`
-- Test: copy/merge tests in `src-tauri/src/services/import_export.rs`, `src-tauri/src/services/tests.rs`, and `src/features/settings/configurationTransfer.test.ts`
+- Modify: `src-tauri/src/domain/import_export.rs`, `src-tauri/src/services/import_validation.rs`, `src-tauri/src/services/import_export.rs`, `src-tauri/src/cmds/import_export.rs`, `src/storage/types.ts`, `src/features/settings/configurationTransfer.ts`
+- Test: service transaction/session tests and frontend IPC argument tests
 
 **Steps:**
 
-- [ ] Continue omitting secrets from export/import.
-- [ ] In Copy mode create new instance/provider IDs and no credential bindings.
-- [ ] In Merge mode preserve a local credential binding only when instance identity, slot ID/kind, auth policy, approved effective origin, and package digest are unchanged and the user confirms.
-- [ ] Otherwise retain config as unconfigured and request credential replacement/reauthorization.
-- [ ] Never copy credential refs or execution grant-set revisions from import JSON.
+- [ ] **Red:** Preview a Copy document and immediately apply it without local changes; assert the same generated target IDs are used. This fails if apply calls the current random `new_id()` mapping again.
+- [ ] **Green:** Add a bounded in-memory preview session store to `ImportExportService`. Store an opaque preview ID, expiry, normalized non-secret document, conflict mode, fixed provider/model/profile/template/integration/OCR/Speech ID maps, default remaps, and hashed affected-row/credential ownership CAS baselines. Enforce existing document-size limits and a total bounded session budget.
+- [ ] Refactor plan building to accept a supplied Copy ID mapping; preview generates it once and apply reuses it.
+- [ ] **Red:** Preview, modify an affected local row or credential ownership baseline, then apply by preview ID; assert a normalized conflict and no partial write.
+- [ ] **Green:** Apply receives only `{ previewId }`, then atomically claims the matching session from `ready` to `in_flight` before credential recovery, vault access, journal cleanup, or DB mutation. Rebuild from the session-owned normalized document/mode/mapping inside the write transaction and compare current CAS baselines before mutation.
+- [ ] **Red:** Run two concurrent apply calls with one preview ID; assert exactly one claims it and the other fails before credential/vault/business mutation.
+- [ ] **Green:** Protect claim under the bounded session-store mutex, release the mutex before recovery/apply work, delete on success, and destroy the claimed session on every failure. Users re-preview after any failed apply; no session returns to `ready`.
+- [ ] **Red:** Apply with an expired, unknown, or reused preview ID; assert rejection before `recover_affected_owners` and no change to vault, credential journals, or business tables.
+- [ ] **Green:** Validate/claim the session before the existing credential preflight/recovery path. Application restart drops all sessions and requires re-preview.
+- [ ] Never place the normalized document, CAS evidence, fixed mappings, credential refs, secrets, or package trust in the frontend preview DTO or logs; the frontend receives only `previewId` and sanitized preview fields.
 
 **Validation:**
 
-- Run: `mise run test runtime_plugin_import_credentials -- --nocapture`
-- Expected: safe same-identity merge can retain local binding; every changed authority requires reconfiguration.
+- Run (red): `mise run test import_preview_session_cas -- --nocapture`
+- Expected: Copy preview/apply cannot preserve one random ID mapping and apply accepts no preview ID.
+- Run (green): same command.
+- Expected: one exact preview session applies once; stale/mismatched sessions fail atomically.
 
-### Task 5: Separate import persistence from migration and activation
+### Task 4: Split file loading, preview, and apply workflows
 
-**Outcome:** Import never instantiates plugin code or grants runtime authority; imported config/preferences become executable only through a later explicit lifecycle action.
+**Seam:** `prepareConfigurationImportFromFile`
+
+**Outcome:** Selecting a file never immediately imports it; after backend preview, the caller retains only the sanitized preview and opaque ID for explicit confirmation.
 
 **Files:**
 
-- Modify: `src-tauri/src/services/import_validation.rs`, `src-tauri/src/services/import_export.rs`, `src-tauri/src/services/runtime_lifecycle.rs`, `src-tauri/src/cmds/runtime_lifecycle.rs`
-- Test: `src-tauri/src/services/tests.rs`, inline tests in `src-tauri/src/services/import_validation.rs` and `src-tauri/src/services/runtime_lifecycle.rs`
+- Modify: `src/features/settings/configurationTransfer.ts`, `src/features/settings/configurationTransfer.test.ts`
+- Test: `src/features/settings/configurationTransfer.test.ts`
 
 **Steps:**
 
-- [ ] During import preview/apply, perform format/identity/bounds checks and host-owned schema validation only. Do not instantiate Wasm/native code, call plugin migration exports, create execution grant sets, or activate a runtime even when the exact package is already installed and package-approved.
-- [ ] Persist runtime-backed imported rows as disabled `pending_activation` or unresolved `plugin_missing`, retaining exact package/schema requirements and copied non-secret config/preferences for a later decision.
-- [ ] After import commit, expose a separate user-initiated lifecycle preview. That operation reloads local package/publisher state, may run Wasm migration against copied JSON, validates config/preferences/slot/capability compatibility, shows permission and credential changes, and remains non-mutating until explicit confirmation.
-- [ ] On explicit post-import confirmation, create one complete instance/package execution grant-set revision with reviewed capability/page entries and activate through the normal revision-checked lifecycle transaction; a package approval alone is insufficient.
-- [ ] If package is absent/unapproved or migration/validation fails, preserve imported data inactive without deleting bindings.
-- [ ] Do not import portable rollback snapshots; create local snapshots only on the later explicit activation/upgrade.
+- [ ] **Red:** Add an Effect workflow test proving file load + preview returns a prepared result and does not call `import_configuration`.
+- [ ] **Green:** Introduce `prepareConfigurationImportFromFile(mode)` returning the sanitized prepared preview with `previewId`; discard the frontend document after preview IPC completes and keep cancel/invalid-preview variants explicit.
+- [ ] **Red:** Confirm `applyPreparedConfigurationImport` sends only the opaque preview ID, then maps applied/not-applied/conflict/expired outcomes.
+- [ ] **Green:** Separate apply from preparation and preserve typed `IpcError | FsError` channels.
+- [ ] Do not log, persist to browser storage, or include the document in toast/error text.
 
 **Validation:**
 
-- Run: `mise run test runtime_plugin_import_migration -- --nocapture`
-- Run: `mise run test runtime_plugin_import_no_execution -- --nocapture`
-- Expected: import preview/apply never instantiate code or activate/grant authority; only a distinct confirmed lifecycle operation can migrate and activate valid local requirements, while invalid/unavailable requirements remain preserved/inactive.
+- Run (red): `bun test src/features/settings/configurationTransfer.test.ts`
+- Expected: the existing workflow previews and applies immediately.
+- Run (green): same command.
+- Expected: preparation is non-mutating and apply requires the prepared digest.
 
-### Task 6: Update configuration transfer UX
+### Task 5: Add Merge/Copy preview and confirmation UI
 
-**Outcome:** Preview clearly explains package availability, trust, permissions, and post-import actions.
+**Seam:** `configurationImportPreviewState`, `ConfigurationImportPreviewDialog`
+
+**Outcome:** Users choose Merge or Copy, inspect exact changes and runtime actions, and explicitly confirm before apply.
 
 **Files:**
 
-- Modify: `src/features/settings/configurationTransfer.ts`, `src/features/settings/configurationTransfer.test.ts`, `src/features/settings/importAcceptance.test.ts`, `src/i18n/locales/en.ts`, `src/i18n/locales/zh-CN.ts`
+- Create: `src/features/settings/ConfigurationImportPreviewDialog.tsx`, `src/features/settings/configurationImportPreviewState.ts`, `src/features/settings/configurationImportPreviewState.test.ts`, `src/features/settings/importPreviewPresentation.ts`, `src/features/settings/importPreviewPresentation.test.ts`
+- Modify: `src/routes/settings.tsx`, `src/i18n/locales/en.ts`, `src/i18n/locales/zh-CN.ts`
+- Test: `src/features/settings/configurationImportPreviewState.test.ts`, `src/features/settings/importPreviewPresentation.test.ts`, `src/features/settings/configurationTransfer.test.ts`
 
 **Steps:**
 
-- [ ] Show required plugin/version/digest/publisher/capabilities and local status: installed/approved/missing/revoked/incompatible.
-- [ ] Explain that import will not download code or trust publishers.
-- [ ] List instances/providers requiring package install, package approval, execution-grant-set approval, credential replacement, migration, or activation.
-- [ ] Keep import apply available for unresolved configurations when data validation succeeds; state that all external runtimes are imported inactive.
-- [ ] Link post-import actions to a distinct Plugins/Models activation preview/confirmation flow without embedding secrets.
+- [ ] **Red:** Add pure presentation tests for create/update/copy counts, authentication categories, runtime local statuses/actions, default-cleared warnings, and “external runtimes remain inactive” copy.
+- [ ] **Green:** Implement deterministic presentation helpers with no plugin-ID branches.
+- [ ] **Red:** Drive the pure dialog state through mode selection, load, preview success/error, apply, stale/expired conflict, retry, and cancel. Assert Apply is enabled only for a valid prepared preview and unavailable packages do not disable data import.
+- [ ] **Green:** Implement `configurationImportPreviewState` and make the Base UI RadioGroup/Dialog render and dispatch only through that state contract.
+- [ ] **Red:** Assert presentation includes mode, graph counts, exact package/publisher/digest labels, required actions, credential warnings, all bounded validation errors, and inactive-after-import copy.
+- [ ] **Green:** Replace the hard-coded `runImportConfigurationFromFile("merge")` route flow with the dialog, concise English/Chinese copy, and retry/re-preview behavior.
+- [ ] Manually smoke the rendered Base UI focus trap, keyboard selection, Cancel, and Apply wiring; the repository currently has no DOM component-test harness, so do not introduce one solely for this phase.
+- [ ] State explicitly: import does not install code, trust publishers, grant authority, reuse exported secrets, or activate runtimes.
 
 **Validation:**
 
-- Run: `bun test src/features/settings/configurationTransfer.test.ts src/features/settings/importAcceptance.test.ts`
-- Run: `mise run typecheck`
-- Expected: preview/action states and missing-package acceptance pass.
+- Run (red): `bun test src/features/settings/configurationImportPreviewState.test.ts src/features/settings/importPreviewPresentation.test.ts src/features/settings/configurationTransfer.test.ts`
+- Expected: no mode/preview confirmation UI contract exists.
+- Run (green): same command.
+- Expected: Merge/Copy and runtime actions are reviewed before apply.
 
-### Task 7: Add end-to-end backup/restore fixtures
+### Task 6: Refresh every imported domain after apply
 
-**Outcome:** Mixed Bundled/Wasm/legacy/runtime provider configurations restore deterministically.
+**Seam:** `invalidateAfterConfigurationImport`
+
+**Outcome:** Successful import refreshes every affected TanStack Query cache, including Speech.
 
 **Files:**
 
-- Modify: `src-tauri/src/services/fixtures/import/runtime-plugin-v7/`, `src-tauri/src/services/tests.rs`, `src-tauri/src/services/import_validation.rs`, `src-tauri/src/services/import_export.rs`, `src-tauri/src/services/runtime_lifecycle.rs`
-- Test: `src/features/settings/configurationTransfer.test.ts`, `src/features/settings/importAcceptance.test.ts`
+- Modify: `src/features/settings/importAcceptance.ts`
+- Test: `src/features/settings/importAcceptance.test.ts`
 
 **Steps:**
 
-- [ ] Add v7 fixtures containing Google Web, Edge, Google Cloud, runtime OpenAI Compatible, and missing package requirements.
-- [ ] Test Replace/Copy/Merge, absent packages, revoked publisher, wrong digest, failed post-import migration, credential reapproval, and proof that import itself never invokes or activates a runtime.
-- [ ] Assert exports before/after preserve user configuration/bindings while local trust/secret state remains local.
+- [ ] **Red:** Assert `IMPORT_INVALIDATION_KEYS` includes provider, model, profile, integration, OCR, Speech, and settings prefixes. The current helper omits `speechKeys.all`.
+- [ ] **Green:** Add the Speech query prefix and update the helper comment.
+- [ ] **Red:** Assert an applied result triggers every invalidation once, while cancelled/invalid/not-applied results trigger none through the route workflow seam.
+- [ ] **Green:** Keep invalidation after successful apply only; backend data-change events remain the second consistency path.
 
 **Validation:**
 
-- Run: `mise run test runtime_plugin_import -- --nocapture`
-- Run: `bun test src/features/settings`
-- Expected: all recovery scenarios pass with no import-time code execution/activation and no code/trust/secret transfer.
+- Run (red): `bun test src/features/settings/importAcceptance.test.ts`
+- Expected: Speech invalidation assertion fails.
+- Run (green): same command.
+- Expected: all imported domains refresh only after apply.
+
+## Acceptance Gates
+
+These gates preserve already implemented behavior. They are regression/characterization checks, not new red→green slices unless implementation exposes a concrete failure.
+
+### Format and graph compatibility
+
+- Commit mixed v8 and historical v2–v7 fixtures under `src-tauri/src/services/fixtures/import/runtime-plugin-v8/` for durable acceptance coverage.
+- Verify v2–v8 normalize to current v8, integration requirements stay explicit, and provider requirements remain adapter-keyed.
+- Verify current v8 export → frontend parse → preview → Copy apply → export preserves portable graph/runtime semantics after expected ID rewriting.
+- Preserve current Merge/Copy tests for credential cleanup, complete UUID remapping, runtime binding reconciliation, grant release, and transaction rollback.
+
+Run:
+
+```bash
+mise run test import_format -- --nocapture
+mise run test runtime_plugin_import -- --nocapture
+mise run test runtime_provider -- --nocapture
+```
+
+### No execution or authority transfer
+
+- Import exact installed Wasm and trusted-native-worker requirements with matching local defaults/publishers.
+- Through public list/runtime-resolution seams, verify exact requirements persist inactive, grant revisions remain absent, and execution resolves unavailable/pending.
+- Verify preview/apply starts no runtime process, guest/native migration, network dispatch, package install, grant creation, default policy, or rollback snapshot.
+
+Run:
+
+```bash
+mise run test runtime_plugin_import_no_execution -- --nocapture
+mise run test runtime_plugin_security -- --nocapture
+```
+
+### Phase 11.5 provenance handoff — blocked until Phase 11.5 Task 1/8
+
+This is a cross-phase completion gate, not a Phase 11 implementation task. When migration 0027 and `DefaultPackageActivationService` exist:
+
+- Import must atomically persist package-backed subject state plus `import_requires_confirmation` intent.
+- Failure between subject/runtime/intent writes must roll back all related rows.
+- Restart recovery with a matching authorized default must schedule zero imported subjects.
+- Only a separate post-import authority preview/confirmation may activate them.
+
+Run after Phase 11.5 Task 8:
+
+```bash
+mise run test default_package_activation_startup_recovery -- --nocapture
+```
+
+Expected: imported intents remain inactive before and after restart.
 
 ## Final Validation
 
 ```bash
-mise run test runtime_plugin_import -- --nocapture
 mise run test import_format -- --nocapture
-mise run test-frontend
+mise run test runtime_plugin_import -- --nocapture
+mise run test runtime_plugin_import_no_execution -- --nocapture
+mise run test runtime_provider -- --nocapture
+bun test src/features/settings/configurationTransfer.test.ts
+bun test src/features/settings/configurationImportPreviewState.test.ts
+bun test src/features/settings/importPreviewPresentation.test.ts
+bun test src/features/settings/importAcceptance.test.ts
+bun test src/query/dataChangeEventBindings.test.ts
 mise run typecheck
 mise run lint
 mise run format:check
 mise run build
 ```
 
-Expected: v2–v7 imports work; v7 preserves exact requirements while every external runtime remains inactive until a separate confirmed lifecycle operation, and code/trust/secrets remain local.
+Expected: v2–v8 normalize; current exports can be re-imported; preview and apply are exact-bound; Merge/Copy are explicit; missing/untrusted runtimes remain actionable but inactive; no code, secrets, trust, grants, or activation authority crosses the document boundary.
 
 ## Failure Behavior
 
-- Missing package — import preserved inactive references.
-- Wrong digest/version/publisher — do not substitute a different local package.
-- Missing package approval or instance execution grant — preserve inactive; import cannot create either authority.
-- Post-import migration/credential mismatch — preserve unconfigured inactive data and report action.
-- Unsupported future format — reject before DB mutation.
+- Invalid JSON/envelope/future format — reject before preview mutation.
+- Duplicate/broken graph or invalid runtime identity — preview invalid; apply unavailable.
+- Missing/revoked/disabled/incompatible package — data import remains available; exact requirement persists inactive with an action.
+- Preview unknown, expired, reused, wrong-mode, wrong-document, or stale against local CAS baselines — apply returns conflict before mutation; UI re-previews.
+- Credential owner busy or changed — apply fails atomically and retains recoverable journal state.
+- Copy/Merge graph failure — rollback all SQLite writes; do not partially clear credentials.
+- Runtime resolution after import — return unavailable/pending until a separate confirmed lifecycle action.
 
 ## Privacy and Security
 
-- Exports contain no executable code, package approval, execution grant, secret, ref, token, user content payload, image, or audio.
-- Import JSON never grants publisher trust, package approval, or runtime execution authority.
-- Local credential reuse is limited to unchanged authority identity.
+- Export and preview never contain credential refs, secrets, tokens, package approvals, execution grants, default policies, rollback snapshots, or activation intents.
+- Preview sessions keep the normalized non-secret document, fixed Copy mappings, and hashed local CAS baselines in bounded host memory; the frontend receives only an opaque ID and sanitized preview DTO.
+- Import never invokes Wasm/native code, starts workers, performs network requests, downloads packages, or grants authority.
+- Exact digest and publisher identity are retained; plugin ID/version matching never substitutes another package.
+- Configuration documents and validation payloads are never logged or embedded in toast text.
+- Phase 11.5 local default authorization cannot apply to imported data without a separate post-import confirmation.
 
 ## Rollout Notes
 
-- Keep reading v2–v6 for the documented compatibility window.
-- Start writing only v7 after all consumers understand runtime requirements.
+1. Ship frontend v8 acceptance first to restore self round-trip.
+2. Add preview runtime actions and preview-session CAS before exposing the new dialog.
+3. Enable Merge/Copy preview UI after backend DTOs are stable.
+4. Land mixed-runtime fixtures and no-execution acceptance tests before Phase 11 completion.
+5. Re-run the provenance handoff test when Phase 11.5 introduces activation intents.
+6. Preserve v2–v8 readers through Phase 12 and one subsequent stable release.
 
 ## Risks and Mitigations
 
-- Restore cannot fetch missing code — intentional fail-closed behavior with clear required digest/publisher UX.
-- Merge reuses unsafe credentials — strict equality on package/slot/auth/origin plus explicit confirmation.
-- Export schema grows — isolate runtime requirement records and retain deterministic validation.
+- Frontend/backend version drift — explicit v8 self-round-trip test at both seams.
+- User confirms one plan but applies another — apply accepts only the one-time preview ID; the host session owns mode, normalized document, Copy mapping, and CAS baselines.
+- Missing package blocks data recovery — separate structural validity from local runtime actions.
+- Import accidentally inherits local default authority — no import-time activation/grant and Phase 11.5 provenance isolation.
+- Copy preview/apply generates different IDs — preview session stores one fixed mapping and apply injects it into plan rebuilding.
+- Copy mode leaves dangling references — committed mixed-graph fixture and full ID-remap acceptance assertions.
+- Merge clears the wrong credential — hashed ownership baseline in plan CAS plus existing journal compensation.
+- Preview leaks local trust/credential details — bounded status/action DTOs; document digest, fixed mappings, and CAS evidence remain inside the host session.
 
 ## Open Questions
 
-None blocking Phase 11.
+None blocking implementation. Phase 11.5 owns activation-intent persistence; this phase owns the imported-inactive contract it must preserve.

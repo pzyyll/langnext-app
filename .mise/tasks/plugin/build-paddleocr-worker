@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ABOUTME: Build the production PaddleOCR worker into a runtime directory.
-# ABOUTME: Requires LANGNEXT_PADDLE_ROOT + OPENCV_DIR + PADDLEOCR_CPP_INFER; collects DLL inventory.
+# ABOUTME: Requires LANGNEXT_PADDLE_ROOT + OPENCV_DIR + PADDLEOCR_CPP_INFER; prefers VS2019/v142.
 #MISE description="Build PaddleOCR native worker runtime directory"
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
@@ -32,14 +32,29 @@ if [[ ! -x "$CMAKE_BIN" && ! -f "$CMAKE_BIN" ]]; then
   exit 1
 fi
 
+# Paddle Inference Windows package is built with VS2019 (MSVC 19.29 / v142).
+# Prefer that toolset to avoid CRT/STL ABI crashes in third_party static libs.
+VS2019_INSTANCE="C:/Program Files (x86)/Microsoft Visual Studio/2019/BuildTools"
+VS2019_CL="$VS2019_INSTANCE/VC/Tools/MSVC/14.29.30133/bin/Hostx64/x64/cl.exe"
+CMAKE_GENERATOR_ARGS=()
+if [[ -f "$VS2019_CL" ]]; then
+  CMAKE_GENERATOR_ARGS=(-G "Visual Studio 16 2019" -A x64 -DCMAKE_GENERATOR_INSTANCE="$VS2019_INSTANCE")
+  echo "using VS2019/v142 toolset at $VS2019_INSTANCE"
+else
+  CMAKE_GENERATOR_ARGS=(-G "Visual Studio 18 2026" -A x64)
+  echo "warning: VS2019/v142 not found; falling back to VS2026 (may crash at runtime)" >&2
+fi
+
 mkdir -p "$BUILD" "$OUT"
 "$CMAKE_BIN" -S "$ROOT/runtime-plugins/paddleocr/worker" -B "$BUILD" \
-  -G "Visual Studio 18 2026" -A x64 \
+  "${CMAKE_GENERATOR_ARGS[@]}" \
   -DLANGNEXT_PADDLE_ROOT="$LANGNEXT_PADDLE_ROOT" \
   -DOPENCV_DIR="$OPENCV_DIR" \
   -DPADDLEOCR_CPP_INFER="$PADDLEOCR_CPP_INFER" \
   -DWITH_MKL=ON \
-  -DWITH_GPU=OFF
+  -DWITH_GPU=OFF \
+  -DWITH_STATIC_LIB=ON \
+  -DCMAKE_POLICY_VERSION_MINIMUM=3.5
 "$CMAKE_BIN" --build "$BUILD" --config Release --parallel
 
 # Locate worker binary across multi-config generators.
@@ -70,10 +85,28 @@ copy_if_exists "$LANGNEXT_PADDLE_ROOT/third_party/install/mklml/lib/mklml.dll"
 copy_if_exists "$LANGNEXT_PADDLE_ROOT/third_party/install/mklml/lib/libiomp5md.dll"
 copy_if_exists "$LANGNEXT_PADDLE_ROOT/third_party/install/onednn/lib/mkldnn.dll"
 copy_if_exists "$OPENCV_DIR/x64/vc16/bin/opencv_world470.dll"
+copy_if_exists "/c/Windows/System32/vcomp140.dll"
 # Optional clipper/abseil DLLs from the build tree when shared.
-find "$BUILD" -name "polyclipping.dll" -o -name "abseil_dll.dll" 2>/dev/null | while read -r dll; do
+while IFS= read -r dll; do
+  [[ -n "$dll" ]] || continue
   cp "$dll" "$OUT/" || true
-done
+done < <(find "$BUILD" \( -name "polyclipping.dll" -o -name "abseil_dll.dll" \) 2>/dev/null || true)
+
+# Measured inventory note (bytes) for package limit gates.
+INVENTORY="$ROOT/runtime-plugins/paddleocr/dist/runtime-inventory.txt"
+{
+  echo "# Measured PaddleOCR runtime inventory $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  echo "# toolset: prefer VS2019/v142; enable_mkldnn=false for PP-OCRv6 PIR"
+  total=0
+  while IFS= read -r f; do
+    size=$(stat -c%s "$f" 2>/dev/null || wc -c <"$f")
+    total=$((total + size))
+    printf "%12s  %s\n" "$size" "$(basename "$f")"
+  done < <(find "$OUT" -type f | sort)
+  echo "TOTAL_BYTES=$total"
+} >"$INVENTORY"
 
 echo "runtime directory: $OUT"
 ls -la "$OUT"
+echo "inventory: $INVENTORY"
+cat "$INVENTORY"

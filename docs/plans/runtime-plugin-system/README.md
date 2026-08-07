@@ -92,29 +92,31 @@ Phase 2 + Phase 4 + Phase 6
   └─> Phase 10 Trusted native workers [conditional]
 
 Phase 4 + Phase 5 + Phase 7 + Phase 8
-  └─> Phase 11 Complete v7 import/export and recovery
+  └─> Phase 11 Complete v8 import/export and recovery
+         └─> Phase 11.5 Default package authorization + package-first creation
 
-Phases 5–8 + Phase 11 + one stable dual-stack release
+Phases 5–8 + Phase 11 + Phase 11.5 + one stable dual-stack release
   └─> Phase 12 Legacy retirement
 ```
 
 ## Phase Index
 
-| Phase | Document                                                              | Outcome                                                   | User value                      |
-| ----- | --------------------------------------------------------------------- | --------------------------------------------------------- | ------------------------------- |
-| 0     | [Security and contracts](phase-0-security-and-contracts.md)           | Host authority, ACL/CSP, manifest, WIT, schema, principal | Security baseline               |
-| 1     | [Schema control plane](phase-1-schema-control-plane.md)               | No shared plugin-ID UI/validation branches                | Dynamic bundled configuration   |
-| 2     | [Wasm runtime](phase-2-wasm-runtime.md)                               | Bounded synthetic Component execution                     | Runtime proof                   |
-| 3     | [Package lifecycle](phase-3-package-lifecycle.md)                     | Signed install, immutable store, approvals                | Installable packages            |
-| 4     | [Runtime lifecycle](phase-4-runtime-lifecycle.md)                     | Exact pin, CAS upgrade, migration, rollback               | Safe activation                 |
-| 5     | [Google Web plugin](phase-5-google-web-plugin.md)                     | First real Wasm translation plugin                        | Dynamic Translate/Detect        |
-| 6     | [Binary resources and Edge TTS](phase-6-binary-resources-edge-tts.md) | Blob/Stream data plane and brokered TTS                   | Dynamic Speech synthesis        |
-| 7     | [Google Cloud plugin](phase-7-google-cloud-plugin.md)                 | Translate, Detect, OCR, and TTS in one package            | Shared multi-capability account |
-| 8     | [LLM provider plugins](phase-8-llm-provider-plugins.md)               | Dynamic model listing/chat/stream providers               | Installable LLM providers       |
-| 9     | [Isolated plugin pages](phase-9-isolated-plugin-pages.md)             | Restricted custom workflows                               | Optional rich plugin UX         |
-| 10    | [Native workers](phase-10-native-workers.md)                          | Trusted out-of-process local engines                      | Local OCR/STT/model support     |
-| 11    | [Import/export and recovery](phase-11-import-export-recovery.md)      | Complete v7 copy/merge/reapproval and recovery semantics  | Reliable backup and restore     |
-| 12    | [Legacy retirement](phase-12-legacy-retirement.md)                    | Remove static branches and duplicate executors            | Architecture convergence        |
+| Phase | Document                                                               | Outcome                                                   | User value                      |
+| ----- | ---------------------------------------------------------------------- | --------------------------------------------------------- | ------------------------------- |
+| 0     | [Security and contracts](phase-0-security-and-contracts.md)            | Host authority, ACL/CSP, manifest, WIT, schema, principal | Security baseline               |
+| 1     | [Schema control plane](phase-1-schema-control-plane.md)                | No shared plugin-ID UI/validation branches                | Dynamic bundled configuration   |
+| 2     | [Wasm runtime](phase-2-wasm-runtime.md)                                | Bounded synthetic Component execution                     | Runtime proof                   |
+| 3     | [Package lifecycle](phase-3-package-lifecycle.md)                      | Signed install, immutable store, approvals                | Installable packages            |
+| 4     | [Runtime lifecycle](phase-4-runtime-lifecycle.md)                      | Exact pin, CAS upgrade, migration, rollback               | Safe activation                 |
+| 5     | [Google Web plugin](phase-5-google-web-plugin.md)                      | First real Wasm translation plugin                        | Dynamic Translate/Detect        |
+| 6     | [Binary resources and Edge TTS](phase-6-binary-resources-edge-tts.md)  | Blob/Stream data plane and brokered TTS                   | Dynamic Speech synthesis        |
+| 7     | [Google Cloud plugin](phase-7-google-cloud-plugin.md)                  | Translate, Detect, OCR, and TTS in one package            | Shared multi-capability account |
+| 8     | [LLM provider plugins](phase-8-llm-provider-plugins.md)                | Dynamic model listing/chat/stream providers               | Installable LLM providers       |
+| 9     | [Isolated plugin pages](phase-9-isolated-plugin-pages.md)              | Restricted custom workflows                               | Optional rich plugin UX         |
+| 10    | [Native workers](phase-10-native-workers.md)                           | Trusted out-of-process local engines                      | Local OCR/STT/model support     |
+| 11    | [Import/export and recovery](phase-11-import-export-recovery.md)       | Complete v8 preview/apply and recovery semantics          | Reliable backup and restore     |
+| 11.5  | [Default package activation](phase-11-5-default-package-activation.md) | Authorized defaults and package-first creation            | No manual runtime digest        |
+| 12    | [Legacy retirement](phase-12-legacy-retirement.md)                     | Remove static branches and duplicate executors            | Architecture convergence        |
 
 ## Delivery Rules
 
@@ -124,7 +126,7 @@ Phases 5–8 + Phase 11 + one stable dual-stack release
 - A permission-expanding upgrade requires a new explicit approval.
 - A capability major change requires a new domain compatibility decision; it is not a package-only migration.
 - Phase 9 and Phase 10 are optional and do not block service/LLM plugin delivery.
-- Phase 12 starts only after every migrated executor has survived one stable dual-stack release.
+- Phase 12 starts only after Phase 11.5 package-first creation is complete and every migrated executor has survived one stable dual-stack release.
 
 ## Program Validation
 

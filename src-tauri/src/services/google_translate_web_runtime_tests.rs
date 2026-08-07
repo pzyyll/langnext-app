@@ -2696,6 +2696,46 @@ fn google_web_new_instance_pins_default_wasm_package() {
 }
 
 #[test]
+fn google_web_new_instance_can_defer_default_package_pin() {
+  let (dir, db, packages, lifecycle, _caps, _transport) = setup();
+  let (pkg, digest) = build_google_web_package();
+  install_package(&packages, dir.path(), &pkg);
+
+  let vault: Arc<dyn crate::credentials::CredentialVault> =
+    Arc::new(crate::credentials::MemoryCredentialVault::default());
+  let tokens = Arc::new(TokenGrantService::new(Arc::new(
+    crate::services::google_service_account::GoogleServiceAccountExchanger::new(db.clone(), vault.clone()),
+  )));
+  let registry = Arc::new(ServiceIntegrationRegistry::bundled().unwrap());
+  let integrations =
+    ServiceIntegrationService::new(db.clone(), vault, registry, tokens).with_runtime_lifecycle(lifecycle.clone());
+
+  let created = integrations
+    .save_without_default_pin(crate::domain::service_integration::IntegrationInstanceWrite {
+      id: None,
+      plugin_id: PLUGIN_ID.into(),
+      display_name: "Deferred auto-pin".into(),
+      enabled: true,
+      config_json: r#"{"channel":"gtx"}"#.into(),
+      credentials: vec![],
+      expected_updated_at: None,
+      endpoint_trust_preview_id: None,
+      acknowledge_endpoint_trust: false,
+    })
+    .unwrap();
+
+  assert_eq!(created.runtime_kind, "bundled-rust");
+  assert!(created.package_digest.is_none());
+  assert!(created.execution_grant_set_revision.is_none());
+
+  lifecycle.pin_default_package_for_new_instance(created.id).unwrap();
+  let pinned = integrations.get_instance(created.id).unwrap();
+  assert_eq!(pinned.runtime_kind, "wasm-component");
+  assert_eq!(pinned.package_digest.as_deref(), Some(digest.as_str()));
+  assert!(pinned.execution_grant_set_revision.is_some());
+}
+
+#[test]
 fn google_web_new_instance_falls_back_to_bundled_when_no_default_package() {
   let (_dir, db, _packages, lifecycle, _caps, _transport) = setup();
   // No package installed -> no default -> new instance stays Bundled Rust (safe-fail).

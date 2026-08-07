@@ -55,6 +55,12 @@ enum RemoteValidationPersist {
   CredentialsChanged,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NewInstanceDefaultPin {
+  BeforeReturn,
+  Deferred,
+}
+
 #[derive(Clone)]
 pub struct ServiceIntegrationService {
   db: Database,
@@ -146,8 +152,26 @@ impl ServiceIntegrationService {
   }
 
   pub fn save(&self, input: IntegrationInstanceWrite) -> Result<IntegrationInstanceDto, StorageError> {
+    self.save_with_default_pin(input, NewInstanceDefaultPin::BeforeReturn)
+  }
+
+  /// Persist a new instance without synchronously verifying and pinning its default package.
+  /// The trusted host command uses this path, then runs the same fail-closed lifecycle pin in the
+  /// background so large native packages do not hold the create dialog open for several minutes.
+  pub fn save_without_default_pin(
+    &self,
+    input: IntegrationInstanceWrite,
+  ) -> Result<IntegrationInstanceDto, StorageError> {
+    self.save_with_default_pin(input, NewInstanceDefaultPin::Deferred)
+  }
+
+  fn save_with_default_pin(
+    &self,
+    input: IntegrationInstanceWrite,
+    default_pin: NewInstanceDefaultPin,
+  ) -> Result<IntegrationInstanceDto, StorageError> {
     match input.id {
-      None => self.create(input),
+      None => self.create(input, default_pin),
       Some(id) => self.update(id, input),
     }
   }
@@ -581,7 +605,11 @@ impl ServiceIntegrationService {
     }
   }
 
-  fn create(&self, input: IntegrationInstanceWrite) -> Result<IntegrationInstanceDto, StorageError> {
+  fn create(
+    &self,
+    input: IntegrationInstanceWrite,
+    default_pin: NewInstanceDefaultPin,
+  ) -> Result<IntegrationInstanceDto, StorageError> {
     let plugin_id = input.plugin_id.trim().to_string();
     validate_plugin_id(&plugin_id).map_err(StorageError::Validation)?;
     let registration = self
@@ -716,9 +744,11 @@ impl ServiceIntegrationService {
         // migrating existing instances. Safe-fail: any preview/apply failure leaves the instance
         // Bundled Rust, which remains a valid executor. Dynamic-origin (proxy) packages are never
         // auto-approved here; they require explicit migration with a third-party egress warning.
-        if let Some(lifecycle) = &self.runtime_lifecycle {
-          if let Err(err) = lifecycle.pin_default_package_for_new_instance(id) {
-            log::warn!("new_instance_default_pin_failed instance={id} error={err}");
+        if default_pin == NewInstanceDefaultPin::BeforeReturn {
+          if let Some(lifecycle) = &self.runtime_lifecycle {
+            if let Err(err) = lifecycle.pin_default_package_for_new_instance(id) {
+              log::warn!("new_instance_default_pin_failed instance={id} error={err}");
+            }
           }
         }
         self.get_instance(id)

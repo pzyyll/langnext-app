@@ -2,14 +2,14 @@
 
 **Goal:** Remove static plugin-ID branches, direct plugin transports, Bundled Rust service handlers, and legacy frontend provider executors only after runtime replacements have completed a stable dual-stack release.
 
-**Inputs:** Phases 5–8 and 11 plus production migration/rollback evidence.
+**Inputs:** Phases 5–8, 11, and 11.5 plus production migration/rollback evidence.
 
 **Assumptions:**
 
-- Every retired implementation has a signed runtime package and one stable release of explicit dual-stack operation.
-- Phase 9/10 are optional and do not block retirement unless included in release scope.
+- Every retired implementation has a signed runtime package, an authorized default package-first creation path from Phase 11.5, and one stable release of explicit dual-stack operation.
+- Phase 9/10 are optional and do not block retirement unless included in release scope; a Phase 10 native worker included in retirement scope must pass Phase 11.5 activation gates.
 - Unresolved/missing runtime rows remain supported data states.
-- Old export formats remain readable for the documented compatibility period.
+- Export formats v2–v8 remain readable through the Phase 12 release and at least one subsequent stable release; removing any adapter requires a separate reviewed compatibility plan and retained fixtures.
 
 **Architecture:** Retirement is a sequence of evidence-backed removals, not one rewrite. The host keeps typed capabilities, package/runtime/router/broker/schema infrastructure and deletes only duplicate concrete executors and compatibility branches after active-instance inventory reaches zero or users explicitly disable unresolved legacy rows.
 
@@ -21,6 +21,7 @@
 
 - Runtime replacements from Phases 5–8 stable for one release.
 - Phase 11 export/recovery available.
+- Phase 11.5 default authorization and package-first creation complete for every executor in retirement scope.
 
 ## File Map
 
@@ -29,7 +30,7 @@
 - Modify: `src-tauri/src/domain/service_integration.rs` — remove concrete config types/constants no longer needed by import compatibility.
 - Modify/delete: `src/features/providers/builtin/openaiCompatible.ts`, `src/features/providers/builtin/openaiCompatible.test.ts`, `src/features/providers/builtin/openaiResponses.ts`, `src/features/providers/builtin/openaiResponses.test.ts`, `src/features/providers/builtin/openaiShared.ts`, `src/features/providers/builtin/anthropic.ts`, `src/features/providers/builtin/anthropic.test.ts`, `src/features/providers/builtin/gemini.ts`, `src/features/providers/builtin/gemini.test.ts`, `src/features/providers/builtin/deepseek.ts`, `src/features/providers/builtin/deepseek.test.ts`, `src/features/providers/builtin/index.ts` — retire one protocol implementation at a time.
 - Modify/delete: `src/features/providers/executor.ts`, `src/features/providers/registry.ts`, `src/features/providers/types.ts` — remove final legacy frontend adapter/alias path.
-- Modify/delete: `src/features/plugins/GoogleCloudIntegrationForm.tsx`, `src/features/plugins/GoogleTranslateWebIntegrationForm.tsx`, `src/features/plugins/EdgeTtsIntegrationForm.tsx`, `src/features/plugins/integrationDraft.ts` — remove any retained typed-form compatibility.
+- Modify/delete: `src/features/plugins/IntegrationEditor.tsx`, `src/features/plugins/integrationDraft.ts`, `src/features/plugins/integrationDraft.test.ts` — remove retained typed-form/runtime compatibility after package-first creation covers the same behavior.
 - Create: `src-tauri/src/services/legacy_runtime_inventory.rs`, `src-tauri/src/cmds/legacy_runtime_inventory.rs` — retirement gate inventory.
 - Modify: `src-tauri/src/cmds/mod.rs`, `src-tauri/src/state.rs`, `src-tauri/src/lib.rs`, `src-tauri/build.rs`, `src-tauri/permissions/app-commands.toml`, `src-tauri/capabilities/trusted-app.json` — register inventory commands and keep AppManifest/ACL coverage exact.
 - Modify: `src-tauri/src/services/runtime_router.rs`, `src-tauri/src/services/runtime_lifecycle.rs`, `src-tauri/src/domain/import_export.rs`, `src-tauri/src/services/import_validation.rs` — inventory and unresolved compatibility.
@@ -51,7 +52,7 @@
 
 **Steps:**
 
-- [ ] Count instances/providers by runtime kind, concrete legacy executor, enabled state, dependency count, package replacement availability, and migration blockers.
+- [ ] Count instances/providers by runtime kind, concrete legacy executor, enabled state, dependency count, package replacement availability, default activation policy state, package-first creation readiness, pending/unavailable activation state, and migration blockers.
 - [ ] List unresolved legacy rows with actions: migrate, keep disabled for export/rebind, or delete explicitly.
 - [ ] Do not auto-migrate or delete during startup.
 - [ ] Block executor removal while an enabled active row still requires it.
@@ -71,13 +72,13 @@
 **Files:**
 
 - Modify/delete: `src-tauri/src/services/google_translate_web.rs`, `src-tauri/src/services/edge_tts.rs`, relevant registrations in `src-tauri/src/services/bundled_plugins.rs`
-- Preserve: runtime package fixtures and v2–v7 import compatibility tests
+- Preserve: runtime package fixtures and v2–v8 import compatibility tests
 
 **Steps:**
 
 - [ ] Verify zero enabled rows require each bundled executor.
 - [ ] Remove handler construction/registration and direct transport code.
-- [ ] Keep old config schema migration adapters only where v2–v7 import or unresolved-row display requires them.
+- [ ] Keep old config schema migration adapters wherever v2–v8 import or unresolved-row display requires them; removal is blocked through the documented compatibility window.
 - [ ] Convert disabled unresolved bundled rows to visible `plugin_missing` requirements without deleting bindings.
 - [ ] Remove rollback snapshots that reference retired code only after user/package migration policy permits.
 
@@ -140,7 +141,7 @@
 
 **Files:**
 
-- Modify/delete: `src-tauri/src/domain/service_integration.rs`, `src-tauri/src/services/bundled_plugins.rs`, `src-tauri/src/services/service_integration_registry.rs`, `src-tauri/src/services/service_integrations.rs`, `src/features/plugins/GoogleCloudIntegrationForm.tsx`, `src/features/plugins/GoogleTranslateWebIntegrationForm.tsx`, `src/features/plugins/EdgeTtsIntegrationForm.tsx`, `src/features/plugins/integrationDraft.ts`, `src/features/translate/translationEngineOptions.ts`, `src/features/ocr/ocrProviderOptions.ts`, `src/features/speech/speechProviderOptions.ts`
+- Modify/delete: `src-tauri/src/domain/service_integration.rs`, `src-tauri/src/services/bundled_plugins.rs`, `src-tauri/src/services/service_integration_registry.rs`, `src-tauri/src/services/service_integrations.rs`, `src/features/plugins/IntegrationEditor.tsx`, `src/features/plugins/integrationDraft.ts`, `src/features/plugins/integrationDraft.test.ts`, `src/features/translate/translationEngineOptions.ts`, `src/features/ocr/ocrProviderOptions.ts`, `src/features/speech/speechProviderOptions.ts`
 - Test: grep gates and synthetic installed-plugin fixtures
 
 **Steps:**
@@ -171,7 +172,7 @@
 
 - [ ] Keep unresolved rows readable, exportable, rebindable, disableable, and deletable.
 - [ ] Do not cascade-delete Profile/OCR/Speech/Provider dependencies.
-- [ ] Stop creating new legacy runtime rows.
+- [ ] Use the Phase 11.5 package-first creation gate to stop creating new legacy runtime rows; block creation with an actionable package/default authorization requirement when no eligible policy exists.
 - [ ] Continue reading older export formats through the committed compatibility window.
 - [ ] Document that application binary rollback across forward-only DB migrations is unsupported; rollback uses package/runtime switching in the current host.
 
@@ -217,6 +218,7 @@ Expected: all production plugin execution uses installed packages/runtime adapte
 ## Risks and Mitigations
 
 - Hidden legacy row loses execution — authoritative inventory and release blocker.
+- New configuration falls back to a retired executor — Phase 11.5 package-first creation is a mandatory per-executor gate.
 - Removing fixtures loses protocol confidence — port fixtures before code deletion.
 - Binary rollback impossible after DB migration — use runtime/package rollback and backups, not old app binaries.
 

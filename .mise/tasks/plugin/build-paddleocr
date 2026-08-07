@@ -55,7 +55,10 @@ rm -rf "$STAGE"
 mkdir -p "$STAGE/runtime" "$STAGE/schemas" "$STAGE/licenses"
 cp "$ROOT/runtime-plugins/paddleocr/schemas/config.json" "$STAGE/schemas/"
 cp "$ROOT/runtime-plugins/paddleocr/licenses/NOTICE.txt" "$STAGE/licenses/"
-cp -R "$RUNTIME_DIR/." "$STAGE/runtime/"
+# Ship only PE runtime artifacts (no logs/temp diagnostics).
+while IFS= read -r f; do
+  cp "$f" "$STAGE/runtime/"
+done < <(find "$RUNTIME_DIR" -maxdepth 1 -type f \( -iname "*.dll" -o -iname "*.exe" \) | sort)
 # plugin.json is finalized by the packaging/sign pipeline with measured digests.
 cp "$ROOT/runtime-plugins/paddleocr/plugin.json" "$STAGE/plugin.json"
 echo "staging tree: $STAGE"

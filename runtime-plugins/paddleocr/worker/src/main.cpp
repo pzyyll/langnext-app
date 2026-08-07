@@ -18,6 +18,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "src/pipelines/ocr/pipeline.h"
@@ -52,12 +53,11 @@ bool setup_protocol_stdio() {
     return false;
   }
   // Redirect CRT stdout/stderr so Paddle/cpp_infer logs never enter the protocol stream.
+  // Local log file only; protocol I/O uses the duplicated HANDLE pipes above.
   FILE* sink = nullptr;
-  freopen_s(&sink, "NUL", "w", stdout);
-  freopen_s(&sink, "NUL", "w", stderr);
-  // Keep C++ streams attached to the redirected CRT files.
+  freopen_s(&sink, "worker-runtime.log", "w", stdout);
+  freopen_s(&sink, "worker-runtime.log", "a", stderr);
   std::ios::sync_with_stdio(true);
-  // Force glog-style logs to stderr (now NUL) if any subsystem honors this.
   _putenv("GLOG_logtostderr=1");
   _putenv("GLOG_minloglevel=2");
   return true;
@@ -258,71 +258,42 @@ std::string normalize_path(std::string path) {
   return path;
 }
 
-std::string build_ocr_yaml(const std::string& model_root) {
-  const std::string root = normalize_path(model_root);
-  const std::string det = root + "/PP-OCRv6_medium_det_infer";
-  const std::string rec = root + "/PP-OCRv6_medium_rec_infer";
-  // Minimal OCR pipeline config: det + rec only (no doc preprocessor / textline ori).
-  std::ostringstream yaml;
-  yaml << "pipeline_name: OCR\n"
-       << "text_type: general\n"
-       << "use_doc_preprocessor: False\n"
-       << "use_doc_orientation_classify: False\n"
-       << "use_doc_unwarping: False\n"
-       << "use_textline_orientation: False\n"
-       << "SubModules:\n"
-       << "  TextDetection:\n"
-       << "    module_name: text_detection\n"
-       << "    model_name: PP-OCRv6_medium_det\n"
-       << "    model_dir: \"" << det << "\"\n"
-       << "    limit_side_len: 64\n"
-       << "    limit_type: min\n"
-       << "    max_side_limit: 4000\n"
-       << "    thresh: 0.3\n"
-       << "    box_thresh: 0.6\n"
-       << "    unclip_ratio: 1.5\n"
-       << "  TextRecognition:\n"
-       << "    module_name: text_recognition\n"
-       << "    model_name: PP-OCRv6_medium_rec\n"
-       << "    model_dir: \"" << rec << "\"\n"
-       << "    batch_size: 6\n"
-       << "    score_thresh: 0.0\n";
-  return yaml.str();
-}
-
 OCRPipelineParams make_params(const std::string& model_root) {
   OCRPipelineParams params;
-  params.use_doc_orientation_classify = false;
-  params.use_doc_unwarping = false;
-  params.use_textline_orientation = false;
-  params.enable_mkldnn = true;
+  // PP-OCRv6 PIR models hit UnimplementedError under onednn/mkldnn path
+  // (ConvertPirAttribute2RuntimeAttribute ArrayAttribute<DoubleAttribute>).
+  params.enable_mkldnn = false;
   params.cpu_threads = 4;
   params.thread_num = 1;
   params.device = std::string("cpu");
-  params.text_detection_model_name = std::string("PP-OCRv6_medium_det");
-  params.text_recognition_model_name = std::string("PP-OCRv6_medium_rec");
-  params.text_detection_model_dir = normalize_path(model_root) + "/PP-OCRv6_medium_det_infer";
-  params.text_recognition_model_dir = normalize_path(model_root) + "/PP-OCRv6_medium_rec_infer";
-  // Write a complete OCR pipeline YAML so we can disable optional models and pin det/rec dirs.
-  static std::string config_path;
-  {
-    char temp_dir[MAX_PATH];
-    char temp_file[MAX_PATH];
-    if (GetTempPathA(MAX_PATH, temp_dir) == 0 || GetTempFileNameA(temp_dir, "lncfg", 0, temp_file) == 0) {
-      throw std::runtime_error("failed to allocate ocr config path");
-    }
-    config_path = temp_file;
-    if (config_path.size() > 4) {
-      config_path.replace(config_path.size() - 4, 4, ".yaml");
-      DeleteFileA(temp_file);
-    }
-    std::ofstream out(config_path, std::ios::out | std::ios::trunc);
-    if (!out) {
-      throw std::runtime_error("failed to write ocr config yaml");
-    }
-    out << build_ocr_yaml(model_root);
-  }
-  params.paddlex_config = Utility::PaddleXConfigVariant(config_path);
+
+  // Use flattened key map constructor to avoid YAML LoadFile + OverrideConfig rewrite bugs.
+  const std::string root = normalize_path(model_root);
+  const std::string det = root + "/PP-OCRv6_medium_det_infer";
+  const std::string rec = root + "/PP-OCRv6_medium_rec_infer";
+  std::unordered_map<std::string, std::string> cfg{
+      {"pipeline_name", "OCR"},
+      {"text_type", "general"},
+      {"use_doc_preprocessor", "false"},
+      {"use_doc_orientation_classify", "false"},
+      {"use_doc_unwarping", "false"},
+      {"use_textline_orientation", "false"},
+      {"SubModules.TextDetection.module_name", "text_detection"},
+      {"SubModules.TextDetection.model_name", "PP-OCRv6_medium_det"},
+      {"SubModules.TextDetection.model_dir", det},
+      {"SubModules.TextDetection.limit_side_len", "64"},
+      {"SubModules.TextDetection.limit_type", "min"},
+      {"SubModules.TextDetection.max_side_limit", "4000"},
+      {"SubModules.TextDetection.thresh", "0.3"},
+      {"SubModules.TextDetection.box_thresh", "0.6"},
+      {"SubModules.TextDetection.unclip_ratio", "1.5"},
+      {"SubModules.TextRecognition.module_name", "text_recognition"},
+      {"SubModules.TextRecognition.model_name", "PP-OCRv6_medium_rec"},
+      {"SubModules.TextRecognition.model_dir", rec},
+      {"SubModules.TextRecognition.batch_size", "6"},
+      {"SubModules.TextRecognition.score_thresh", "0.0"},
+  };
+  params.paddlex_config = Utility::PaddleXConfigVariant(cfg);
   return params;
 }
 
