@@ -17,29 +17,163 @@ use crate::domain::runtime_provider::{
 };
 use crate::domain::speech_service::SpeechService;
 use crate::domain::time::{new_id, now_rfc3339};
-use crate::error::StorageError;
+use crate::error::{ImportPreviewConflictReason, StorageError};
 use crate::repositories::credential_operations::{self, CredentialOperation, OwnerKind};
 use crate::repositories::{
   app_credentials, app_settings, installed_plugin_versions, integration_instances, ocr_prompt_templates, ocr_services,
   provider_instances, provider_models, provider_runtime_bindings, speech_services, translation_profiles,
 };
-use crate::services::import_validation::{self, ValidatedImportPlan};
+use crate::services::import_validation::{self, ImportCopyIdMaps, ValidatedImportPlan};
 use crate::services::runtime_plugin_contracts::parse_manifest;
 use crate::services::runtime_providers::release_grant_after_removal;
 use crate::storage::Database;
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use uuid::Uuid;
+
+/// Import preview session lifetime (bounded host memory; restart drops all sessions).
+const IMPORT_PREVIEW_SESSION_TTL_SECS: u64 = 15 * 60;
+/// Maximum concurrent import preview sessions (bounded budget).
+const IMPORT_PREVIEW_SESSION_MAX: usize = 8;
+/// Per-document cap for a normalized preview document (serialized bytes).
+const IMPORT_PREVIEW_DOCUMENT_MAX_BYTES: usize = 8 * 1024 * 1024;
+/// Total serialized-document budget across all live preview sessions.
+const IMPORT_PREVIEW_TOTAL_BUDGET_BYTES: usize = 32 * 1024 * 1024;
+
+/// One claimed/previewable import plan owned by the host. Never crosses IPC: the frontend
+/// receives only the opaque `preview_id` and sanitized preview fields.
+#[derive(Clone)]
+pub struct ImportPreviewSession {
+  pub preview_id: String,
+  pub expires_at: Instant,
+  /// Normalized non-secret document; apply rebuilds the plan from this exact document.
+  pub document: ConfigurationExport,
+  pub mode: ImportConflictMode,
+  /// Fixed Copy-mode ID mapping generated once at preview.
+  pub copy_id_maps: ImportCopyIdMaps,
+  /// Hashed affected-row/credential-ownership CAS baseline from preview time.
+  pub cas_baseline: String,
+  /// Serialized document byte count for the bounded budget.
+  pub document_bytes: usize,
+  /// Atomic ready → in_flight claim state; a claimed session never returns to ready.
+  pub in_flight: bool,
+}
+
+/// Bounded expiring preview session store protected by the service mutex.
+#[derive(Default)]
+struct PreviewSessionStore {
+  sessions: HashMap<String, ImportPreviewSession>,
+  /// FIFO insert order for bounded eviction of the oldest ready session.
+  order: VecDeque<String>,
+  total_bytes: usize,
+}
+
+impl PreviewSessionStore {
+  fn insert_bounded(&mut self, session: ImportPreviewSession) -> Result<(), StorageError> {
+    self.prune_expired();
+    let mut oldest_evictable = None;
+    while self.sessions.len() >= IMPORT_PREVIEW_SESSION_MAX
+      || self.total_bytes + session.document_bytes > IMPORT_PREVIEW_TOTAL_BUDGET_BYTES
+    {
+      let oldest = match oldest_evictable.take() {
+        Some(id) => id,
+        None => self
+          .order
+          .iter()
+          .find(|id| self.sessions.get(*id).is_some_and(|s| !s.in_flight))
+          .cloned()
+          .ok_or_else(|| {
+            StorageError::Conflict("too many pending import previews; apply or re-preview later".into())
+          })?,
+      };
+      self.remove_internal(&oldest);
+      oldest_evictable = None;
+    }
+    self.total_bytes += session.document_bytes;
+    self.order.push_back(session.preview_id.clone());
+    self.sessions.insert(session.preview_id.clone(), session);
+    Ok(())
+  }
+
+  /// Atomically claim a session: ready → in_flight. Unknown, expired, and reused ids are
+  /// rejected before any credential recovery, vault access, or DB mutation.
+  fn claim(&mut self, preview_id: &str) -> Result<ImportPreviewSession, StorageError> {
+    // Detect the target session's expiry before pruning: `prune_expired` would otherwise
+    // delete it first and every expired id would be reported as unknown, which the
+    // frontend maps to a stale (not expired) retry state.
+    if let Some(session) = self.sessions.get(preview_id) {
+      if Instant::now() > session.expires_at {
+        self.remove_internal(preview_id);
+        return Err(StorageError::ImportPreviewConflict {
+          reason: ImportPreviewConflictReason::Expired,
+          message: "import preview session expired".into(),
+        });
+      }
+    }
+    self.prune_expired();
+    let Some(session) = self.sessions.get_mut(preview_id) else {
+      return Err(StorageError::ImportPreviewConflict {
+        reason: ImportPreviewConflictReason::Stale,
+        message: "import preview session is unknown".into(),
+      });
+    };
+    if session.in_flight {
+      return Err(StorageError::ImportPreviewConflict {
+        reason: ImportPreviewConflictReason::Stale,
+        message: "import preview session already claimed".into(),
+      });
+    }
+    session.in_flight = true;
+    Ok(session.clone())
+  }
+
+  fn remove_internal(&mut self, preview_id: &str) {
+    if let Some(session) = self.sessions.remove(preview_id) {
+      self.total_bytes = self.total_bytes.saturating_sub(session.document_bytes);
+    }
+    self.order.retain(|id| id != preview_id);
+  }
+
+  fn prune_expired(&mut self) {
+    let now = Instant::now();
+    let expired: Vec<String> = self
+      .sessions
+      .iter()
+      .filter(|(_, session)| now > session.expires_at)
+      .map(|(id, _)| id.clone())
+      .collect();
+    for id in expired {
+      self.remove_internal(&id);
+    }
+  }
+}
 
 #[derive(Clone)]
 pub struct ImportExportService {
   db: Database,
   vault: Arc<dyn CredentialVault>,
+  preview_sessions: Arc<Mutex<PreviewSessionStore>>,
+  preview_ttl: Duration,
 }
 
 impl ImportExportService {
   pub fn new(db: Database, vault: Arc<dyn CredentialVault>) -> Self {
-    Self { db, vault }
+    Self {
+      db,
+      vault,
+      preview_sessions: Arc::new(Mutex::new(PreviewSessionStore::default())),
+      preview_ttl: Duration::from_secs(IMPORT_PREVIEW_SESSION_TTL_SECS),
+    }
+  }
+
+  /// Test-only preview TTL override (expiry is normally 15 minutes).
+  #[cfg(test)]
+  pub fn with_preview_ttl_for_tests(self, ttl: Duration) -> Self {
+    Self {
+      preview_ttl: ttl,
+      ..self
+    }
   }
 
   pub fn export(&self) -> Result<ConfigurationExport, StorageError> {
@@ -169,14 +303,15 @@ impl ImportExportService {
     })
   }
 
-  /// Preview import from an untrusted JSON value (formatVersion parsed first, then normalized).
+  /// Preview import from an untrusted JSON value (formatVersion parsed first, then
+  /// normalized); creates a bounded expiring session for valid previews.
   pub fn preview_raw(
     &self,
     document: serde_json::Value,
     mode: ImportConflictMode,
   ) -> Result<ImportPreview, StorageError> {
     let normalized = parse_and_normalize_export_document(document).map_err(StorageError::Validation)?;
-    self.preview(&normalized, mode)
+    self.preview_with_session(&normalized, mode)
   }
 
   pub fn preview(
@@ -190,7 +325,52 @@ impl ImportExportService {
     })
   }
 
+  /// Preview with a bounded expiring host session: the normalized non-secret document, fixed
+  /// Copy ID mapping, and hashed CAS baseline stay in host memory; the preview DTO carries
+  /// only the opaque preview id plus sanitized preview fields. Invalid previews create no
+  /// session (apply is unavailable and `preview_id` stays empty).
+  pub fn preview_with_session(
+    &self,
+    document: &ConfigurationExport,
+    mode: ImportConflictMode,
+  ) -> Result<ImportPreview, StorageError> {
+    let (mut preview, copy_id_maps, cas_baseline) = self.db.read_snapshot(|conn| {
+      let plan = import_validation::build_validated_plan(conn, document, mode)?;
+      Ok((
+        plan.preview.clone(),
+        plan.copy_id_maps.clone(),
+        plan.cas_baseline.clone(),
+      ))
+    })?;
+    if !preview.valid {
+      return Ok(preview);
+    }
+    let document_bytes = serde_json::to_vec(document)?.len();
+    if document_bytes > IMPORT_PREVIEW_DOCUMENT_MAX_BYTES {
+      return Err(StorageError::Conflict("import preview document is too large".into()));
+    }
+    let preview_id = format!("cfgimp_{}", new_id().simple());
+    let session = ImportPreviewSession {
+      preview_id: preview_id.clone(),
+      expires_at: Instant::now() + self.preview_ttl,
+      document: document.clone(),
+      mode,
+      copy_id_maps,
+      cas_baseline,
+      document_bytes,
+      in_flight: false,
+    };
+    self
+      .preview_sessions
+      .lock()
+      .unwrap_or_else(|e| e.into_inner())
+      .insert_bounded(session)?;
+    preview.preview_id = preview_id;
+    Ok(preview)
+  }
+
   /// Import from an untrusted JSON value (formatVersion parsed first, then normalized).
+  /// Baseline path kept for internal callers; the public command uses preview sessions.
   pub fn import_raw(
     &self,
     document: serde_json::Value,
@@ -198,6 +378,65 @@ impl ImportExportService {
   ) -> Result<ImportResult, StorageError> {
     let normalized = parse_and_normalize_export_document(document).map_err(StorageError::Validation)?;
     self.import(normalized, mode)
+  }
+
+  /// Apply by opaque preview id only. Claims the matching session (ready → in_flight)
+  /// before credential recovery, vault access, journal cleanup, or DB mutation, then
+  /// rebuilds the exact previewed plan inside the write transaction and compares the CAS
+  /// baseline before writing. The claimed session is consumed on every outcome.
+  pub fn import_by_preview_id(&self, preview_id: &str) -> Result<ImportResult, StorageError> {
+    let session = self
+      .preview_sessions
+      .lock()
+      .unwrap_or_else(|e| e.into_inner())
+      .claim(preview_id)?;
+    let outcome = self.apply_preview_session(&session);
+    // No session ever returns to ready: delete on success, destroy on failure.
+    self
+      .preview_sessions
+      .lock()
+      .unwrap_or_else(|e| e.into_inner())
+      .remove_internal(preview_id);
+    outcome
+  }
+
+  fn apply_preview_session(&self, session: &ImportPreviewSession) -> Result<ImportResult, StorageError> {
+    // Recover affected owners before busy checks (after the claim; never before it).
+    self.recover_affected_owners(&session.document, session.mode)?;
+
+    let (preview, applied, cleanup_ops) = self.db.transaction(|uow| {
+      let conn = uow.conn();
+      let plan = import_validation::build_validated_plan_with_maps(
+        conn,
+        &session.document,
+        session.mode,
+        Some(&session.copy_id_maps),
+      )?;
+      if !plan.preview.valid {
+        return Ok((plan.preview, false, Vec::new()));
+      }
+      // CAS: the local state must still match what the user previewed.
+      if plan.cas_baseline != session.cas_baseline {
+        return Err(StorageError::ImportPreviewConflict {
+          reason: ImportPreviewConflictReason::Stale,
+          message: "local configuration changed after preview; re-preview before applying".into(),
+        });
+      }
+      // Busy check inside the write transaction against current journals.
+      self.ensure_no_credential_busy_on_conn(conn, &plan)?;
+
+      let cleanup_ops = self.apply_plan(conn, &plan)?;
+      Ok((plan.preview.clone(), true, cleanup_ops))
+    })?;
+
+    if applied {
+      for op in cleanup_ops {
+        // Failed cleanup retains the exact import-owned journal.
+        let _ = coordinator::finalize_operation(&self.db, self.vault.as_ref(), &op);
+      }
+    }
+
+    Ok(ImportResult { preview, applied })
   }
 
   pub fn import(&self, document: ConfigurationExport, mode: ImportConflictMode) -> Result<ImportResult, StorageError> {

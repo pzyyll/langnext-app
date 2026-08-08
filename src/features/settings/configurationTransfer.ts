@@ -2,8 +2,9 @@
 // ABOUTME: Dialogs live here (not in the route); never logs documents or secrets.
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
-import { Effect } from "effect";
+import { Effect, Either } from "effect";
 import { invokeEffect } from "../../storage/invokeEffect";
+import { isIpcError } from "../../storage/ipcError";
 import type { IpcError } from "../../storage/ipcError";
 import { runEffectAsPromise } from "../../storage/runStorage";
 import type { ConfigurationExport, ImportConflictMode, ImportPreview, ImportResult } from "../../storage/types";
@@ -16,20 +17,12 @@ export function exportConfigurationDocument(): Effect.Effect<ConfigurationExport
   return invokeEffect<ConfigurationExport>("export_configuration");
 }
 
-/** IPC: dry-run import validation and counts. */
+/** IPC: dry-run import validation and counts; returns the opaque expiring preview id. */
 export function previewConfigurationImportDocument(
   document: ConfigurationExport,
   mode: ImportConflictMode,
 ): Effect.Effect<ImportPreview, IpcError> {
   return invokeEffect<ImportPreview>("preview_configuration_import", { document, mode });
-}
-
-/** IPC: apply import after preview validation on the backend. */
-export function importConfigurationDocument(
-  document: ConfigurationExport,
-  mode: ImportConflictMode,
-): Effect.Effect<ImportResult, IpcError> {
-  return invokeEffect<ImportResult>("import_configuration", { document, mode });
 }
 
 /**
@@ -69,8 +62,8 @@ export type LoadConfigurationResult =
   | { readonly status: "loaded"; readonly document: ConfigurationExport }
   | { readonly status: "cancelled" };
 
-/** Supported configuration export format versions (backend normalizes to current). */
-export const SUPPORTED_CONFIGURATION_FORMAT_VERSIONS = [2, 3, 4, 5, 6, 7] as const;
+/** Supported configuration export format versions (backend normalizes v2–v7 to current v8). */
+export const SUPPORTED_CONFIGURATION_FORMAT_VERSIONS = [2, 3, 4, 5, 6, 7, 8] as const;
 
 /** Structural check for a configuration export document (not full schema validation). */
 export function parseConfigurationExportJson(raw: string): ConfigurationExport {
@@ -96,7 +89,7 @@ export function parseConfigurationExportJson(raw: string): ConfigurationExport {
   if (!Array.isArray(record.providers) || !Array.isArray(record.models)) {
     throw new FsError({ operation: "parse", message: "missing providers or models arrays" });
   }
-  // Backend accepts untrusted JSON Value and normalizes v2–v5 → v6; keep the envelope as-is.
+  // Backend accepts untrusted JSON Value and normalizes v2–v7 → v8; keep the envelope as-is.
   return parsed as ConfigurationExport;
 }
 
@@ -145,20 +138,20 @@ export function exportConfigurationToFile(): Effect.Effect<DialogSaveResult, Ipc
   });
 }
 
-export type ImportConfigurationFromFileResult =
-  | { readonly status: "applied"; readonly result: ImportResult }
-  | { readonly status: "not_applied"; readonly result: ImportResult }
-  | { readonly status: "cancelled" }
-  | { readonly status: "invalid"; readonly preview: ImportPreview };
+export type PrepareConfigurationImportResult =
+  | { readonly status: "prepared"; readonly preview: ImportPreview }
+  | { readonly status: "invalid"; readonly preview: ImportPreview }
+  | { readonly status: "cancelled" };
 
 /**
- * Full import pipeline: open dialog → parse → preview → import when valid.
- * Invalid preview does not call import. Cancel is a success variant.
- * Error channel is `IpcError | FsError`.
+ * Load one configuration file and obtain a backend preview without applying anything.
+ * Selecting a file never imports it: the frontend document is discarded after the preview
+ * IPC completes; only the sanitized preview and its opaque `previewId` are retained for
+ * explicit confirmation. Error channel is `IpcError | FsError`.
  */
-export function importConfigurationFromFile(
+export function prepareConfigurationImportFromFile(
   mode: ImportConflictMode,
-): Effect.Effect<ImportConfigurationFromFileResult, IpcError | FsError> {
+): Effect.Effect<PrepareConfigurationImportResult, IpcError | FsError> {
   return Effect.gen(function* () {
     const loaded = yield* loadConfigurationDocumentFromFile();
     if (loaded.status === "cancelled") {
@@ -169,12 +162,41 @@ export function importConfigurationFromFile(
     if (!preview.valid) {
       return { status: "invalid" as const, preview };
     }
+    return { status: "prepared" as const, preview };
+  });
+}
 
-    const result = yield* importConfigurationDocument(loaded.document, mode);
-    if (!result.applied) {
-      return { status: "not_applied" as const, result };
+export type ApplyConfigurationImportResult =
+  | { readonly status: "applied"; readonly result: ImportResult }
+  | { readonly status: "not_applied"; readonly result: ImportResult }
+  | { readonly status: "conflict"; readonly conflictKind: "stale" | "expired"; readonly message: string };
+
+/**
+ * Apply a previously prepared import by its opaque preview id only. The host session owns
+ * the normalized document, conflict mode, fixed Copy mapping, and CAS baseline.
+ * Conflict-code rejections (unknown/expired/reused/stale) map to a `conflict` result;
+ * other IPC failures stay on the error channel.
+ */
+export function applyPreparedConfigurationImport(
+  previewId: string,
+): Effect.Effect<ApplyConfigurationImportResult, IpcError> {
+  return Effect.gen(function* () {
+    const result = yield* Effect.either(invokeEffect<ImportResult>("import_configuration", { previewId }));
+    if (Either.isLeft(result)) {
+      const error = result.left;
+      if (isIpcError(error) && error.code === "conflict") {
+        // Exact closed check: only the typed wire reason decides stale vs expired.
+        // An absent/unknown reason falls back to stale for older backends.
+        const conflictKind = error.reason === "expired" ? "expired" : "stale";
+        return { status: "conflict" as const, conflictKind, message: error.message };
+      }
+      return yield* Effect.fail(error);
     }
-    return { status: "applied" as const, result };
+    const applied = result.right;
+    if (!applied.applied) {
+      return { status: "not_applied" as const, result: applied };
+    }
+    return { status: "applied" as const, result: applied };
   });
 }
 
@@ -183,7 +205,14 @@ export function runExportConfigurationToFile(): Promise<DialogSaveResult> {
   return runEffectAsPromise(exportConfigurationToFile());
 }
 
-/** Promise façade: import configuration from a user-chosen JSON file. */
-export function runImportConfigurationFromFile(mode: ImportConflictMode): Promise<ImportConfigurationFromFileResult> {
-  return runEffectAsPromise(importConfigurationFromFile(mode));
+/** Promise façade: load + preview one configuration file without applying. */
+export function runPrepareConfigurationImportFromFile(
+  mode: ImportConflictMode,
+): Promise<PrepareConfigurationImportResult> {
+  return runEffectAsPromise(prepareConfigurationImportFromFile(mode));
+}
+
+/** Promise façade: apply a prepared import by opaque preview id. */
+export function runApplyPreparedConfigurationImport(previewId: string): Promise<ApplyConfigurationImportResult> {
+  return runEffectAsPromise(applyPreparedConfigurationImport(previewId));
 }

@@ -13,12 +13,27 @@ describe("IpcError / isIpcError", () => {
 });
 
 describe("decodeIpcRejection", () => {
-  test("structured conflict keeps code and message", () => {
+  test("structured conflict keeps code, message, and reason", () => {
+    const err = decodeIpcRejection({ code: "conflict", reason: "expired", message: "session ended" });
+    expect(isIpcError(err)).toBe(true);
+    expect(err.code).toBe("conflict");
+    expect(err.message).toBe("session ended");
+    expect(err.reason).toBe("expired");
+    expect(ipcErrorIsConflict(err)).toBe(true);
+  });
+
+  test("reasonless structured conflict stays valid without a reason", () => {
     const err = decodeIpcRejection({ code: "conflict", message: "stale" });
     expect(isIpcError(err)).toBe(true);
     expect(err.code).toBe("conflict");
+    expect(err.reason).toBeUndefined();
+  });
+
+  test("non-string reason is dropped", () => {
+    const err = decodeIpcRejection({ code: "conflict", reason: 42, message: "stale" });
+    expect(err.code).toBe("conflict");
+    expect(err.reason).toBeUndefined();
     expect(err.message).toBe("stale");
-    expect(ipcErrorIsConflict(err)).toBe(true);
   });
 
   test("validation_failed preserves open wire code", () => {

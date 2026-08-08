@@ -2,6 +2,7 @@
 // ABOUTME: Preview and apply share one plan; apply revalidates inside the write transaction.
 use crate::domain::import_export::{
   ConfigurationExport, EXPORT_FORMAT_VERSION, ImportConflictMode, ImportPreview, ImportPreviewCounts,
+  ImportRuntimeLocalStatus, ImportRuntimeRequiredAction, ImportRuntimeRequirementPreview, ImportRuntimeSubjectKind,
   IntegrationInstanceExport, OcrPromptTemplateExport, OcrServiceExport, SpeechServiceExport,
 };
 use crate::domain::language_detection::LanguageDetectorConfig;
@@ -12,14 +13,12 @@ use crate::domain::ocr_service::{
 use crate::domain::provider::{
   CredentialKind, ModelsSyncStatus, ProviderExport, ProviderInstance, validate_adapter_id,
 };
+use crate::domain::runtime_lifecycle::RuntimeRequirementExport;
 use crate::domain::runtime_provider::ProviderRuntimeRequirementExport;
-use crate::domain::service_capability::{validate_ocr_image_preferences, validate_speech_synthesize_preferences};
+use crate::domain::service_capability::validate_ocr_image_preferences;
 use crate::domain::service_integration::{IntegrationHealthStatus, IntegrationInstance};
 use crate::domain::settings::{AppSettingsV1, GlobalProxyMode};
-use crate::domain::speech_service::{
-  GOOGLE_TTS_PREFERENCES_SCHEMA_VERSION, SPEECH_DISPLAY_NAME_MAX_LEN, SpeechService,
-  parse_speech_synthesize_preferences,
-};
+use crate::domain::speech_service::{SPEECH_DISPLAY_NAME_MAX_LEN, SpeechService};
 use crate::domain::time::{new_id, now_rfc3339};
 use crate::domain::translation_profile::{
   PromptTemplate, TranslationProfile, TranslationProfileEngine, TranslationProfilePromptTemplate,
@@ -27,9 +26,11 @@ use crate::domain::translation_profile::{
 };
 use crate::error::StorageError;
 use crate::repositories::{
-  integration_instances, ocr_services, provider_instances, provider_models, speech_services, translation_profiles,
+  app_settings, installed_plugin_versions, integration_instances, ocr_services, plugin_publishers, provider_instances,
+  provider_models, speech_services, translation_profiles,
 };
 use crate::services::providers::validate_provider_url;
+use crate::services::runtime_plugin_contracts::parse_manifest;
 use crate::services::service_integration_registry::ServiceIntegrationRegistry;
 use crate::services::settings::{
   validate_default_ocr_service, validate_default_profile, validate_default_speech_service, validate_settings_document,
@@ -39,6 +40,21 @@ use rusqlite::Connection;
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 use uuid::Uuid;
+
+/// Fixed Copy-mode ID remap owned by one preview session. Preview generates it once;
+/// apply rebuilds the plan with the same mapping so the user applies exactly what they
+/// previewed. Empty in Merge mode.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ImportCopyIdMaps {
+  pub provider_id_map: HashMap<Uuid, Uuid>,
+  pub model_id_map: HashMap<Uuid, Uuid>,
+  pub profile_id_map: HashMap<Uuid, Uuid>,
+  pub integration_id_map: HashMap<Uuid, Uuid>,
+  pub ocr_service_id_map: HashMap<Uuid, Uuid>,
+  pub speech_service_id_map: HashMap<Uuid, Uuid>,
+  pub template_id_map: HashMap<Uuid, Uuid>,
+  pub ocr_template_id_map: HashMap<Uuid, Uuid>,
+}
 
 /// Normalized, self-contained import plan ready for transactional apply.
 #[derive(Debug, Clone)]
@@ -69,13 +85,29 @@ pub struct ValidatedImportPlan {
   /// Expected local Baidu OCR secret key refs for merge CAS (service_id -> ref).
   pub expected_ocr_secret_key_refs: HashMap<Uuid, Option<String>>,
   pub expected_proxy_ref: Option<String>,
+  /// Fixed Copy-mode ID remap (empty in Merge mode). Preview stores it; apply reuses it.
+  pub copy_id_maps: ImportCopyIdMaps,
+  /// Hashed affected-row/credential-ownership CAS baseline at plan build time; apply
+  /// compares the rebuilt plan against this before any mutation.
+  pub cas_baseline: String,
 }
 
-/// Build a validated plan using local rows visible on `conn`.
+/// Build a validated plan using local rows visible on `conn` (fresh Copy ID mapping).
 pub fn build_validated_plan(
   conn: &Connection,
   document: &ConfigurationExport,
   mode: ImportConflictMode,
+) -> Result<ValidatedImportPlan, StorageError> {
+  build_validated_plan_with_maps(conn, document, mode, None)
+}
+
+/// Build a validated plan using local rows visible on `conn`. `copy_maps` supplies the fixed
+/// Copy-mode ID remap owned by a preview session; `None` generates a fresh mapping.
+pub fn build_validated_plan_with_maps(
+  conn: &Connection,
+  document: &ConfigurationExport,
+  mode: ImportConflictMode,
+  copy_maps: Option<&ImportCopyIdMaps>,
 ) -> Result<ValidatedImportPlan, StorageError> {
   let mut errors = Vec::new();
 
@@ -301,9 +333,22 @@ pub fn build_validated_plan(
   }
 
   // Speech services (capability-backed; secrets never present).
+  // Normalize preferences through the bound plugin adapter (Google TTS vs Edge TTS differ).
+  let mut normalized_speech_preferences: HashMap<Uuid, serde_json::Value> = HashMap::new();
   for service in &document.speech_services {
-    if let Err(e) = validate_import_speech_service(service, &doc_integration_ids, mode, &local_integrations) {
-      errors.push(format!("speech service {}: {e}", service.id));
+    match validate_import_speech_service(
+      service,
+      &document.integration_instances,
+      &doc_integration_ids,
+      mode,
+      &local_integrations,
+    ) {
+      Ok(preferences) => {
+        normalized_speech_preferences.insert(service.id, preferences);
+      }
+      Err(e) => {
+        errors.push(format!("speech service {}: {e}", service.id));
+      }
     }
   }
 
@@ -422,33 +467,55 @@ pub fn build_validated_plan(
       counts.ocr_services_copy = document.ocr_services.len() as u32;
       counts.speech_services_copy = document.speech_services.len() as u32;
       for p in &document.providers {
-        provider_id_map.insert(p.id, new_id());
+        let new_provider_id = copy_maps
+          .and_then(|maps| maps.provider_id_map.get(&p.id))
+          .copied()
+          .unwrap_or_else(new_id);
+        provider_id_map.insert(p.id, new_provider_id);
         if p.credential_kind != CredentialKind::None {
           requires_authentication.push(p.id);
         }
       }
       for m in &document.models {
-        model_id_map.insert(m.id, new_id());
+        let new_model_id = copy_maps
+          .and_then(|maps| maps.model_id_map.get(&m.id))
+          .copied()
+          .unwrap_or_else(new_id);
+        model_id_map.insert(m.id, new_model_id);
       }
       for p in &document.translation_profiles {
-        profile_id_map.insert(p.id, new_id());
+        let new_profile_id = copy_maps
+          .and_then(|maps| maps.profile_id_map.get(&p.id))
+          .copied()
+          .unwrap_or_else(new_id);
+        profile_id_map.insert(p.id, new_profile_id);
       }
       for i in &document.integration_instances {
-        let new_integration_id = new_id();
+        let new_integration_id = copy_maps
+          .and_then(|maps| maps.integration_id_map.get(&i.id))
+          .copied()
+          .unwrap_or_else(new_id);
         integration_id_map.insert(i.id, new_integration_id);
         if integration_plugin_requires_authentication(&i.plugin_id) {
           integration_requires_authentication.push(new_integration_id);
         }
       }
       for service in &document.ocr_services {
-        let new_ocr_id = new_id();
+        let new_ocr_id = copy_maps
+          .and_then(|maps| maps.ocr_service_id_map.get(&service.id))
+          .copied()
+          .unwrap_or_else(new_id);
         ocr_service_id_map.insert(service.id, new_ocr_id);
         if matches!(service.provider_type, OcrProviderType::Baidu) {
           ocr_requires_authentication.push(new_ocr_id);
         }
       }
       for service in &document.speech_services {
-        speech_service_id_map.insert(service.id, new_id());
+        let new_speech_id = copy_maps
+          .and_then(|maps| maps.speech_service_id_map.get(&service.id))
+          .copied()
+          .unwrap_or_else(new_id);
+        speech_service_id_map.insert(service.id, new_speech_id);
       }
       if let Some(old_default) = settings.default_profile_id {
         if let Some(new_id) = profile_id_map.get(&old_default) {
@@ -492,6 +559,9 @@ pub fn build_validated_plan(
     }
   }
 
+  let runtime_requirements =
+    derive_runtime_requirement_previews(conn, document, mode, &provider_id_map, &integration_id_map)?;
+
   let preview = ImportPreview {
     valid: errors.is_empty(),
     counts,
@@ -501,8 +571,11 @@ pub fn build_validated_plan(
     ocr_requires_authentication,
     proxy_requires_authentication,
     default_profile_cleared,
+    preview_id: String::new(),
+    runtime_requirements,
   };
 
+  // Invalid plans are never applied; no session owns them, so no CAS baseline is needed.
   if !preview.valid {
     return Ok(ValidatedImportPlan {
       mode,
@@ -523,7 +596,9 @@ pub fn build_validated_plan(
       expected_provider_refs: HashMap::new(),
       expected_ocr_api_key_refs: HashMap::new(),
       expected_ocr_secret_key_refs: HashMap::new(),
-      expected_proxy_ref: local_proxy_ref,
+      expected_proxy_ref: local_proxy_ref.clone(),
+      copy_id_maps: ImportCopyIdMaps::default(),
+      cas_baseline: String::new(),
     });
   }
 
@@ -659,7 +734,11 @@ pub fn build_validated_plan(
   let mut template_id_map: HashMap<Uuid, Uuid> = HashMap::new();
   if matches!(mode, ImportConflictMode::Copy) {
     for t in &document.profile_prompt_templates {
-      template_id_map.insert(t.id, new_id());
+      let new_template_id = copy_maps
+        .and_then(|maps| maps.template_id_map.get(&t.id))
+        .copied()
+        .unwrap_or_else(new_id);
+      template_id_map.insert(t.id, new_template_id);
     }
   }
 
@@ -807,7 +886,11 @@ pub fn build_validated_plan(
   let mut ocr_template_id_map: HashMap<Uuid, Uuid> = HashMap::new();
   if matches!(mode, ImportConflictMode::Copy) {
     for template in &document.ocr_prompt_templates {
-      ocr_template_id_map.insert(template.id, new_id());
+      let new_template_id = copy_maps
+        .and_then(|maps| maps.ocr_template_id_map.get(&template.id))
+        .copied()
+        .unwrap_or_else(new_id);
+      ocr_template_id_map.insert(template.id, new_template_id);
     }
   }
 
@@ -926,6 +1009,10 @@ pub fn build_validated_plan(
         .expect("speech integration map");
     }
 
+    let preferences = normalized_speech_preferences
+      .get(&exported.id)
+      .cloned()
+      .unwrap_or_else(|| exported.preferences.clone());
     planned_speech_services.push(SpeechService {
       id,
       display_name: exported.display_name.clone(),
@@ -934,7 +1021,7 @@ pub fn build_validated_plan(
       integration_instance_id,
       capability_id: exported.capability_id.clone(),
       preferences_schema_version: exported.preferences_schema_version,
-      preferences: exported.preferences.clone(),
+      preferences,
       created_at,
       updated_at: now.clone(),
     });
@@ -970,8 +1057,306 @@ pub fn build_validated_plan(
     expected_provider_refs,
     expected_ocr_api_key_refs,
     expected_ocr_secret_key_refs,
-    expected_proxy_ref: local_proxy_ref,
+    expected_proxy_ref: local_proxy_ref.clone(),
+    copy_id_maps: ImportCopyIdMaps {
+      provider_id_map,
+      model_id_map,
+      profile_id_map,
+      integration_id_map,
+      ocr_service_id_map,
+      speech_service_id_map,
+      template_id_map,
+      ocr_template_id_map,
+    },
+    cas_baseline: compute_plan_cas_baseline(
+      mode,
+      document,
+      &local_providers,
+      &local_models,
+      &local_profiles,
+      &local_integrations,
+      &local_ocr_services,
+      &local_speech_services,
+      &local_proxy_ref,
+      &app_settings::get_updated_at(conn)?,
+    ),
   })
+}
+
+/// Deterministic hashed CAS baseline of every local row and credential ownership the plan
+/// would touch. Merge mode covers affected subject rows; both modes cover the singleton
+/// `app_settings` row (the plan always rewrites it; Copy remaps default ids into it) and the
+/// global proxy binding the plan would clear. Apply rebuilds the plan and compares baselines
+/// before any mutation; a changed baseline means the user previewed a different local state
+/// and must re-preview.
+fn compute_plan_cas_baseline(
+  mode: ImportConflictMode,
+  document: &ConfigurationExport,
+  local_providers: &HashMap<Uuid, ProviderInstance>,
+  local_models: &HashMap<Uuid, ProviderModel>,
+  local_profiles: &HashMap<Uuid, TranslationProfile>,
+  local_integrations: &HashMap<Uuid, IntegrationInstance>,
+  local_ocr_services: &HashMap<Uuid, OcrService>,
+  local_speech_services: &HashMap<Uuid, SpeechService>,
+  local_proxy_ref: &Option<String>,
+  settings_updated_at: &str,
+) -> String {
+  // Affected-row identity baselines: (kind, id, updated_at), sorted for determinism.
+  let mut rows: Vec<(String, String, String)> = Vec::new();
+  if mode == ImportConflictMode::Merge {
+    for p in &document.providers {
+      if let Some(local) = local_providers.get(&p.id) {
+        rows.push(("provider".into(), p.id.to_string(), local.updated_at.clone()));
+      }
+    }
+    for m in &document.models {
+      if let Some(local) = local_models.get(&m.id) {
+        rows.push(("model".into(), m.id.to_string(), local.updated_at.clone()));
+      }
+    }
+    for profile in &document.translation_profiles {
+      if let Some(local) = local_profiles.get(&profile.id) {
+        rows.push(("profile".into(), profile.id.to_string(), local.updated_at.clone()));
+      }
+    }
+    for i in &document.integration_instances {
+      if let Some(local) = local_integrations.get(&i.id) {
+        rows.push(("integration".into(), i.id.to_string(), local.updated_at.clone()));
+      }
+    }
+    for s in &document.ocr_services {
+      if let Some(local) = local_ocr_services.get(&s.id) {
+        rows.push(("ocr".into(), s.id.to_string(), local.updated_at.clone()));
+      }
+    }
+    for s in &document.speech_services {
+      if let Some(local) = local_speech_services.get(&s.id) {
+        rows.push(("speech".into(), s.id.to_string(), local.updated_at.clone()));
+      }
+    }
+  }
+  // The plan always rewrites the singleton settings row (Copy remaps default ids into it).
+  rows.push(("settings".into(), "1".into(), settings_updated_at.into()));
+  rows.sort();
+  // Credential ownership baselines: the exact refs merge CAS expects before clearing.
+  let mut owners: Vec<(String, String, Option<String>)> = Vec::new();
+  if mode == ImportConflictMode::Merge {
+    for p in &document.providers {
+      if let Some(local) = local_providers.get(&p.id) {
+        owners.push(("provider".into(), p.id.to_string(), local.credential_ref.clone()));
+      }
+    }
+    for s in &document.ocr_services {
+      if let Some(local) = local_ocr_services.get(&s.id) {
+        owners.push(("ocr_api".into(), s.id.to_string(), local.api_key_ref.clone()));
+        owners.push(("ocr_secret".into(), s.id.to_string(), local.secret_key_ref.clone()));
+      }
+    }
+  }
+  // The plan clears the global proxy binding when the imported document configures a
+  // custom proxy and a local binding exists (both modes).
+  let clears_global_proxy = local_proxy_ref.is_some()
+    && (document.app_settings.network.proxy_mode == GlobalProxyMode::Custom
+      || document.app_settings.network.proxy_url.is_some());
+  if clears_global_proxy {
+    if let Some(reference) = local_proxy_ref {
+      owners.push(("proxy".into(), "global".into(), Some(reference.clone())));
+    }
+  }
+  owners.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)).then_with(|| a.2.cmp(&b.2)));
+  let canonical = serde_json::json!({ "rows": rows, "owners": owners });
+  crate::services::plugin_package::public_sha256_hex(canonical.to_string().as_bytes())
+}
+
+/// Derive exact per-subject runtime requirement preview entries from imported requirements
+/// plus local catalog/publisher state. This is actionable metadata, never a mutation: no
+/// package lookup substitutes another package by plugin ID/version, and structural identity
+/// errors stay in `validation_errors`.
+fn derive_runtime_requirement_previews(
+  conn: &Connection,
+  document: &ConfigurationExport,
+  mode: ImportConflictMode,
+  provider_id_map: &HashMap<Uuid, Uuid>,
+  integration_id_map: &HashMap<Uuid, Uuid>,
+) -> Result<Vec<ImportRuntimeRequirementPreview>, StorageError> {
+  let mut entries = Vec::new();
+  for integration in &document.integration_instances {
+    // Normalized v2–v8 documents always carry an explicit runtime; directly constructed
+    // legacy docs without one have no requirement to preview.
+    let Some(requirement) = integration.runtime.as_ref() else {
+      continue;
+    };
+    let final_id = match mode {
+      ImportConflictMode::Merge => integration.id,
+      ImportConflictMode::Copy => *integration_id_map.get(&integration.id).expect("integration map"),
+    };
+    let (local_status, required_action) = integration_runtime_status(conn, requirement)?;
+    entries.push(ImportRuntimeRequirementPreview {
+      subject_kind: ImportRuntimeSubjectKind::Integration,
+      subject_id: final_id,
+      display_label: integration.display_name.clone(),
+      adapter_id: None,
+      runtime_kind: requirement.runtime_kind.clone(),
+      plugin_id: Some(requirement.plugin_id.clone()),
+      plugin_version: Some(requirement.plugin_version.clone()),
+      package_digest: requirement.package_digest.clone(),
+      publisher_key_id: requirement.publisher_key_id.clone(),
+      publisher_key_fingerprint: requirement.publisher_key_fingerprint.clone(),
+      local_status,
+      required_action,
+    });
+  }
+  for provider in &document.providers {
+    let final_id = match mode {
+      ImportConflictMode::Merge => provider.id,
+      ImportConflictMode::Copy => *provider_id_map.get(&provider.id).expect("provider map"),
+    };
+    // Mirrors plan building: a provider without bindings owns one legacy requirement for
+    // its default API type; otherwise every adapter-keyed requirement is previewed.
+    let requirements = if provider.runtime_bindings.is_empty() {
+      let mut requirement = ProviderRuntimeRequirementExport::legacy();
+      requirement.adapter_id = Some(provider.adapter_id.clone());
+      vec![requirement]
+    } else {
+      provider.runtime_bindings.clone()
+    };
+    for requirement in requirements {
+      let (local_status, required_action) = provider_runtime_status(conn, &requirement)?;
+      entries.push(ImportRuntimeRequirementPreview {
+        subject_kind: ImportRuntimeSubjectKind::Provider,
+        subject_id: final_id,
+        display_label: provider.display_name.clone(),
+        adapter_id: requirement.adapter_id.clone(),
+        runtime_kind: requirement.runtime_kind.clone(),
+        plugin_id: requirement.plugin_id.clone(),
+        plugin_version: requirement.plugin_version.clone(),
+        package_digest: requirement.package_digest.clone(),
+        publisher_key_id: requirement.publisher_key_id.clone(),
+        publisher_key_fingerprint: requirement.publisher_key_fingerprint.clone(),
+        local_status,
+        required_action,
+      });
+    }
+  }
+  Ok(entries)
+}
+
+/// Deterministic status/action for one integration runtime requirement. Package-backed
+/// requirements use the exact digest + declared publisher identity against the local
+/// catalog; bundled/legacy kinds use their own closed statuses.
+fn integration_runtime_status(
+  conn: &Connection,
+  requirement: &RuntimeRequirementExport,
+) -> Result<(ImportRuntimeLocalStatus, ImportRuntimeRequiredAction), StorageError> {
+  match requirement.runtime_kind.as_str() {
+    "bundled-rust" => Ok((ImportRuntimeLocalStatus::Bundled, ImportRuntimeRequiredAction::None)),
+    "legacy-frontend-provider" => Ok((ImportRuntimeLocalStatus::Legacy, ImportRuntimeRequiredAction::None)),
+    "wasm-component" | "trusted-native-worker" => package_runtime_status(
+      conn,
+      &requirement.runtime_kind,
+      requirement.package_digest.as_deref(),
+      Some(&requirement.plugin_id),
+      Some(&requirement.plugin_version),
+      requirement.publisher_key_id.as_deref(),
+      requirement.publisher_key_fingerprint.as_deref(),
+      requirement.plugin_api_version.as_deref(),
+    ),
+    _ => Ok((
+      ImportRuntimeLocalStatus::Incompatible,
+      ImportRuntimeRequiredAction::ResolveIncompatibility,
+    )),
+  }
+}
+
+/// Deterministic status/action for one provider adapter-keyed runtime requirement.
+fn provider_runtime_status(
+  conn: &Connection,
+  requirement: &ProviderRuntimeRequirementExport,
+) -> Result<(ImportRuntimeLocalStatus, ImportRuntimeRequiredAction), StorageError> {
+  match requirement.runtime_kind.as_str() {
+    "legacy-frontend-provider" => Ok((ImportRuntimeLocalStatus::Legacy, ImportRuntimeRequiredAction::None)),
+    "wasm-component" => package_runtime_status(
+      conn,
+      &requirement.runtime_kind,
+      requirement.package_digest.as_deref(),
+      requirement.plugin_id.as_deref(),
+      requirement.plugin_version.as_deref(),
+      requirement.publisher_key_id.as_deref(),
+      requirement.publisher_key_fingerprint.as_deref(),
+      requirement.plugin_api_version.as_deref(),
+    ),
+    _ => Ok((
+      ImportRuntimeLocalStatus::Incompatible,
+      ImportRuntimeRequiredAction::ResolveIncompatibility,
+    )),
+  }
+}
+
+/// Local status precedence for an exact package-backed requirement: absent exact digest →
+/// missing; otherwise revoked → disabled → content unavailable → incompatible → installed.
+fn package_runtime_status(
+  conn: &Connection,
+  runtime_kind: &str,
+  digest: Option<&str>,
+  plugin_id: Option<&str>,
+  plugin_version: Option<&str>,
+  publisher_key_id: Option<&str>,
+  publisher_key_fingerprint: Option<&str>,
+  plugin_api_version: Option<&str>,
+) -> Result<(ImportRuntimeLocalStatus, ImportRuntimeRequiredAction), StorageError> {
+  let Some(digest) = digest else {
+    // Structurally invalid package-backed requirement (parse validation normally rejects
+    // it before preview); report it as an incompatibility, never as installed.
+    return Ok((
+      ImportRuntimeLocalStatus::Incompatible,
+      ImportRuntimeRequiredAction::ResolveIncompatibility,
+    ));
+  };
+  let Some(version) = installed_plugin_versions::get_optional(conn, digest)? else {
+    return Ok((
+      ImportRuntimeLocalStatus::Missing,
+      ImportRuntimeRequiredAction::InstallExactPackage,
+    ));
+  };
+  let publisher = plugin_publishers::get_optional(conn, &version.publisher_key_id)?;
+  if publisher.as_ref().is_some_and(|p| p.revoked) {
+    return Ok((
+      ImportRuntimeLocalStatus::Revoked,
+      ImportRuntimeRequiredAction::RestorePublisher,
+    ));
+  }
+  if publisher.as_ref().is_some_and(|p| !p.enabled) {
+    return Ok((
+      ImportRuntimeLocalStatus::Disabled,
+      ImportRuntimeRequiredAction::RestorePublisher,
+    ));
+  }
+  if !version.content_available {
+    return Ok((
+      ImportRuntimeLocalStatus::ContentUnavailable,
+      ImportRuntimeRequiredAction::InstallExactPackage,
+    ));
+  }
+  // Exact identity compatibility: the installed revision must match the requirement's
+  // declared identity; a plugin ID/version match on a different digest never substitutes.
+  let identity_mismatch = version.runtime_kind != runtime_kind
+    || plugin_id.is_some_and(|id| id != version.plugin_id)
+    || plugin_version.is_some_and(|v| v != version.version)
+    || publisher_key_id.is_some_and(|k| k != version.publisher_key_id)
+    || publisher_key_fingerprint.is_some_and(|f| f != version.publisher_fingerprint);
+  let manifest_compatible = parse_manifest(&version.manifest_json)
+    .map(|manifest| plugin_api_version.is_none_or(|api| api == manifest.plugin_api_version))
+    .unwrap_or(false);
+  if identity_mismatch || !manifest_compatible {
+    return Ok((
+      ImportRuntimeLocalStatus::Incompatible,
+      ImportRuntimeRequiredAction::ResolveIncompatibility,
+    ));
+  }
+  Ok((
+    ImportRuntimeLocalStatus::Installed,
+    ImportRuntimeRequiredAction::ActivateAfterImport,
+  ))
 }
 
 fn integration_from_export(
@@ -1547,10 +1932,11 @@ fn validate_import_ocr_service(
 
 fn validate_import_speech_service(
   service: &SpeechServiceExport,
+  document_integrations: &[IntegrationInstanceExport],
   doc_integration_ids: &HashSet<Uuid>,
   mode: ImportConflictMode,
   local_integrations: &HashMap<Uuid, IntegrationInstance>,
-) -> Result<(), StorageError> {
+) -> Result<serde_json::Value, StorageError> {
   let name = service.display_name.trim();
   if name.is_empty() {
     return Err(StorageError::Validation("display_name must not be empty".into()));
@@ -1578,19 +1964,75 @@ fn validate_import_speech_service(
       "capability_id must be a speech.synthesize@N capability".into(),
     ));
   }
-  if service.preferences_schema_version != GOOGLE_TTS_PREFERENCES_SCHEMA_VERSION {
-    return Err(StorageError::Validation(format!(
-      "unsupported Speech preferences schema version {}",
-      service.preferences_schema_version
-    )));
-  }
   if service.preferences.is_null() {
     return Err(StorageError::Validation("preferences are required".into()));
   }
-  // Reuse the save-path validator: known keys via typed parse + host bounds.
-  let typed = parse_speech_synthesize_preferences(&service.preferences).map_err(StorageError::Validation)?;
-  validate_speech_synthesize_preferences(&typed).map_err(|e| StorageError::Validation(e.message))?;
-  Ok(())
+  let plugin_id = resolve_import_speech_plugin_id(
+    service.integration_instance_id,
+    document_integrations,
+    mode,
+    local_integrations,
+  )?;
+  // Reuse the save-path preference adapter for the bound plugin (Google vs Edge schemas differ).
+  normalize_imported_speech_preferences(
+    &plugin_id,
+    capability_id,
+    service.preferences_schema_version,
+    &service.preferences,
+  )
+}
+
+fn resolve_import_speech_plugin_id(
+  integration_instance_id: Uuid,
+  document_integrations: &[IntegrationInstanceExport],
+  mode: ImportConflictMode,
+  local_integrations: &HashMap<Uuid, IntegrationInstance>,
+) -> Result<String, StorageError> {
+  if let Some(exported) = document_integrations
+    .iter()
+    .find(|integration| integration.id == integration_instance_id)
+  {
+    return Ok(exported.plugin_id.clone());
+  }
+  if mode == ImportConflictMode::Merge {
+    if let Some(local) = local_integrations.get(&integration_instance_id) {
+      return Ok(local.plugin_id.clone());
+    }
+  }
+  Err(StorageError::Validation(format!(
+    "speech service references missing integration {integration_instance_id}"
+  )))
+}
+
+/// Normalize/validate Speech preferences via the bound plugin's capability adapter.
+fn normalize_imported_speech_preferences(
+  plugin_id: &str,
+  capability_id: &str,
+  preferences_schema_version: i32,
+  preferences: &serde_json::Value,
+) -> Result<serde_json::Value, StorageError> {
+  match bundled_registry().and_then(|reg| reg.get_registration(plugin_id)) {
+    Some(registration) => {
+      let cap_def = registration.capability(capability_id).ok_or_else(|| {
+        StorageError::Validation(format!(
+          "capability {capability_id} is not declared on plugin {plugin_id}"
+        ))
+      })?;
+      if preferences_schema_version != cap_def.descriptor.preferences_schema_version as i32 {
+        return Err(StorageError::Validation(format!(
+          "unsupported Speech preferences schema version {preferences_schema_version}"
+        )));
+      }
+      cap_def.preference_adapter.normalize_preferences(preferences)
+    }
+    None => {
+      // Unknown plugins: structural only so portable documents remain loadable without a local definition.
+      if !preferences.is_object() {
+        return Err(StorageError::Validation("preferences must be an object".into()));
+      }
+      Ok(preferences.clone())
+    }
+  }
 }
 
 /// Ensure default profile/OCR/Speech exist after entities are written (connection-scoped).
@@ -1606,7 +2048,13 @@ mod tests {
   use crate::domain::import_export::EXPORT_FORMAT_VERSION;
   use crate::domain::model::ModelSource;
   use crate::domain::runtime_lifecycle::RuntimeRequirementExport;
-  use crate::domain::service_integration::{GOOGLE_CLOUD_PLUGIN_ID, GOOGLE_TRANSLATE_WEB_PLUGIN_ID};
+  use crate::domain::service_integration::{
+    EDGE_TTS_PLUGIN_ID, GOOGLE_CLOUD_PLUGIN_ID, GOOGLE_TRANSLATE_WEB_PLUGIN_ID,
+  };
+  use crate::domain::speech_service::{
+    EDGE_TTS_PREFERENCES_SCHEMA_VERSION, GOOGLE_TTS_PREFERENCES_SCHEMA_VERSION, default_edge_tts_preferences,
+    default_google_tts_preferences,
+  };
   use crate::domain::time::now_rfc3339;
   use crate::storage::Database;
 
@@ -2099,7 +2547,38 @@ mod tests {
       integration_instance_id,
       capability_id: "speech.synthesize@1".into(),
       preferences_schema_version: GOOGLE_TTS_PREFERENCES_SCHEMA_VERSION,
-      preferences: crate::domain::speech_service::default_google_tts_preferences(),
+      preferences: default_google_tts_preferences(),
+      created_at: now_rfc3339(),
+      updated_at: now_rfc3339(),
+    }
+  }
+
+  fn edge_export(id: Uuid) -> IntegrationInstanceExport {
+    IntegrationInstanceExport {
+      id,
+      plugin_id: EDGE_TTS_PLUGIN_ID.into(),
+      plugin_version: "1.0.0".into(),
+      display_name: "Edge TTS".into(),
+      enabled: true,
+      config_json: "{}".into(),
+      config_schema_version: 1,
+      health_status: "ready".into(),
+      runtime: None,
+      created_at: now_rfc3339(),
+      updated_at: now_rfc3339(),
+    }
+  }
+
+  fn edge_speech_export(id: Uuid, integration_instance_id: Uuid) -> SpeechServiceExport {
+    SpeechServiceExport {
+      id,
+      display_name: "Edge TTS".into(),
+      enabled: true,
+      sort_order: 0,
+      integration_instance_id,
+      capability_id: "speech.synthesize@1".into(),
+      preferences_schema_version: EDGE_TTS_PREFERENCES_SCHEMA_VERSION,
+      preferences: default_edge_tts_preferences(),
       created_at: now_rfc3339(),
       updated_at: now_rfc3339(),
     }
@@ -2138,6 +2617,59 @@ mod tests {
     assert_eq!(
       copy.settings.default_speech_service_id,
       Some(copy.speech_services[0].id)
+    );
+  }
+
+  #[test]
+  fn import_edge_tts_speech_accepts_speed_preferences() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::new(dir.path()).unwrap();
+    db.initialize().unwrap();
+    let edge_id = new_id();
+    let speech_id = new_id();
+    let mut doc = empty_doc();
+    doc.integration_instances = vec![edge_export(edge_id)];
+    doc.speech_services = vec![edge_speech_export(speech_id, edge_id)];
+    doc.app_settings.default_speech_service_id = Some(speech_id);
+
+    let plan = db
+      .read(|conn| build_validated_plan(conn, &doc, ImportConflictMode::Merge))
+      .unwrap();
+    assert!(plan.preview.valid, "errors: {:?}", plan.preview.validation_errors);
+    assert_eq!(plan.speech_services.len(), 1);
+    assert_eq!(plan.speech_services[0].preferences["speed"], serde_json::json!(1.0));
+    assert_eq!(
+      plan.speech_services[0].preferences["voice"],
+      serde_json::json!("zh-CN-XiaoxiaoNeural")
+    );
+  }
+
+  #[test]
+  fn import_google_tts_rejects_edge_speed_field() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::new(dir.path()).unwrap();
+    db.initialize().unwrap();
+    let cloud_id = new_id();
+    let speech_id = new_id();
+    let mut doc = empty_doc();
+    doc.integration_instances = vec![cloud_export(cloud_id)];
+    let mut service = speech_export(speech_id, cloud_id);
+    // Edge-only key on a Google-bound service must fail closed.
+    service.preferences = serde_json::json!({"speed": 1.0, "pitch": 0.0});
+    doc.speech_services = vec![service];
+
+    let plan = db
+      .read(|conn| build_validated_plan(conn, &doc, ImportConflictMode::Merge))
+      .unwrap();
+    assert!(!plan.preview.valid);
+    assert!(
+      plan
+        .preview
+        .validation_errors
+        .iter()
+        .any(|e| e.contains("speech service") && (e.contains("speed") || e.contains("unknown"))),
+      "errors: {:?}",
+      plan.preview.validation_errors
     );
   }
 

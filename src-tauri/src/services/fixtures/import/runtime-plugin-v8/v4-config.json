@@ -1,0 +1,137 @@
+{
+  "formatVersion": 4,
+  "exportedAt": "2026-08-01T00:00:00Z",
+  "providers": [
+    {
+      "id": "00000000-0000-7000-8000-000000000001",
+      "adapterId": "openai-compatible",
+      "displayName": "OpenAI Compatible",
+      "credentialKind": "api_key",
+      "enabled": true,
+      "proxyMode": "inherit",
+      "insecureHttpConfirmedAt": null,
+      "runtime": {
+        "runtimeKind": "wasm-component",
+        "packageDigest": "abababababababababababababababababababababababababababababababab",
+        "pluginId": "com.langnext.provider.openai-responses",
+        "pluginVersion": "1.0.0",
+        "publisherKeyId": "com.langnext.vendor.keys.1",
+        "publisherKeyFingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "pluginApiVersion": "1.0",
+        "legacyAliases": ["openai-compatible"],
+        "capabilities": ["llm.chat@1", "llm.models.list@1"]
+      },
+      "createdAt": "2026-08-01T00:00:00Z",
+      "updatedAt": "2026-08-01T00:00:00Z"
+    }
+  ],
+  "models": [
+    {
+      "id": "00000000-0000-7000-8000-000000000002",
+      "providerInstanceId": "00000000-0000-7000-8000-000000000001",
+      "modelKey": "gpt-4o-mini",
+      "source": "manual",
+      "remoteDisplayName": null,
+      "displayNameOverride": "GPT-4o mini",
+      "enabled": true,
+      "availability": "available",
+      "remoteMetadataJson": null,
+      "capabilityOverridesJson": null,
+      "adapterId": null,
+      "sourceAdapterId": null,
+      "lastSeenAt": null,
+      "createdAt": "2026-08-01T00:00:00Z",
+      "updatedAt": "2026-08-01T00:00:00Z"
+    }
+  ],
+  "translationProfiles": [
+    {
+      "id": "00000000-0000-7000-8000-000000000005",
+      "name": "Default",
+      "enabled": true,
+      "sourceLang": "zh",
+      "targetLang": "en",
+      "primaryLang": "zh",
+      "preferredTargetLang": "en",
+      "engine": {
+        "kind": "llm_model_chain",
+        "templateVersion": 1,
+        "defaultPromptTemplateId": "00000000-0000-7000-8000-000000000006",
+        "temperature": 0.2,
+        "maxOutputTokens": 1024,
+        "providerOptionsJson": {}
+      },
+      "createdAt": "2026-08-01T00:00:00Z",
+      "updatedAt": "2026-08-01T00:00:00Z"
+    }
+  ],
+  "profileModels": [
+    {
+      "translationProfileId": "00000000-0000-7000-8000-000000000005",
+      "providerModelId": "00000000-0000-7000-8000-000000000002",
+      "priority": 0
+    }
+  ],
+  "profilePromptTemplates": [
+    {
+      "id": "00000000-0000-7000-8000-000000000006",
+      "translationProfileId": "00000000-0000-7000-8000-000000000005",
+      "name": "Default",
+      "systemTemplate": "Translate carefully.",
+      "userTemplate": "{{text}}",
+      "sortOrder": 0
+    }
+  ],
+  "appSettings": {
+    "schemaVersion": 1,
+    "uiLanguage": "en",
+    "theme": null,
+    "defaultProfileId": "00000000-0000-7000-8000-000000000005",
+    "defaultOcrServiceId": null,
+    "defaultSpeechServiceId": null,
+    "translation": {
+      "autoDetectSource": true,
+      "preserveFormatting": true
+    },
+    "shortcuts": [
+      {
+        "id": "open-quick-translate",
+        "binding": "Ctrl+Shift+T",
+        "enabled": true
+      },
+      {
+        "id": "double-ctrl-c",
+        "binding": "Ctrl+C",
+        "enabled": true
+      },
+      {
+        "id": "region-screenshot",
+        "binding": "Ctrl+Shift+A",
+        "enabled": true
+      },
+      {
+        "id": "screenshot-ocr",
+        "binding": "Alt+S",
+        "enabled": true
+      }
+    ],
+    "network": {
+      "proxyMode": "system",
+      "proxyUrl": null
+    }
+  },
+  "integrationInstances": [
+    {
+      "id": "00000000-0000-7000-8000-000000000003",
+      "pluginId": "com.langnext.google-translate-web",
+      "pluginVersion": "1.0.0",
+      "displayName": "Google Web",
+      "enabled": true,
+      "configJson": "{\"channel\":\"gtx\"}",
+      "configSchemaVersion": 1,
+      "healthStatus": "ready",
+      "createdAt": "2026-08-01T00:00:00Z",
+      "updatedAt": "2026-08-01T00:00:00Z"
+    }
+  ]
+}

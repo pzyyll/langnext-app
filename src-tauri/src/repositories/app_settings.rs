@@ -26,6 +26,12 @@ pub fn get(conn: &Connection) -> Result<AppSettingsV1, StorageError> {
   Ok(settings)
 }
 
+/// Last-write timestamp of the singleton settings row; part of the import CAS baseline.
+pub fn get_updated_at(conn: &Connection) -> Result<String, StorageError> {
+  let updated_at: String = conn.query_row("SELECT updated_at FROM app_settings WHERE id = 1", [], |row| row.get(0))?;
+  Ok(updated_at)
+}
+
 pub fn update(conn: &Connection, settings: &AppSettingsV1) -> Result<(), StorageError> {
   if settings.schema_version != AppSettingsV1::SCHEMA_VERSION {
     return Err(StorageError::Validation(format!(

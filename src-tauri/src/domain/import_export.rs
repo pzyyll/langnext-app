@@ -284,6 +284,77 @@ pub struct ImportPreviewCounts {
   pub speech_services_copy: u32,
 }
 
+/// Import subject kinds that carry exact runtime requirements.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImportRuntimeSubjectKind {
+  Integration,
+  Provider,
+}
+
+/// Local availability of one exact imported runtime requirement. Determined by the exact
+/// digest and publisher identity only; plugin ID/version matching never substitutes another
+/// package. Bundled/legacy requirements use their own closed statuses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImportRuntimeLocalStatus {
+  /// bundled-rust integration requirement (runs inside the host).
+  Bundled,
+  /// legacy-frontend-provider requirement (host TypeScript adapter).
+  Legacy,
+  /// Exact digest absent from the local catalog.
+  Missing,
+  /// Exact digest installed under a revoked publisher.
+  Revoked,
+  /// Exact digest installed under a disabled publisher.
+  Disabled,
+  /// Exact digest installed but package content is not available locally.
+  ContentUnavailable,
+  /// Exact digest installed but its manifest identity is incompatible with the requirement.
+  Incompatible,
+  /// Exact digest installed, content available, publisher ok, manifest compatible.
+  Installed,
+}
+
+/// Closed required user action for one exact imported runtime requirement. Import itself
+/// never installs, trusts, grants, or activates anything.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImportRuntimeRequiredAction {
+  None,
+  InstallExactPackage,
+  RestorePublisher,
+  ResolveIncompatibility,
+  ActivateAfterImport,
+}
+
+/// One exact per-subject runtime requirement preview entry: subject identity, display
+/// label, optional adapter id, requirement identity, local status, and required action.
+/// Never carries secrets, refs, grants, package bytes, or activation authority.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportRuntimeRequirementPreview {
+  pub subject_kind: ImportRuntimeSubjectKind,
+  /// Final (post-import) subject id; Copy mode shows the remapped id.
+  pub subject_id: Uuid,
+  pub display_label: String,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub adapter_id: Option<String>,
+  pub runtime_kind: String,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub plugin_id: Option<String>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub plugin_version: Option<String>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub package_digest: Option<String>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub publisher_key_id: Option<String>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub publisher_key_fingerprint: Option<String>,
+  pub local_status: ImportRuntimeLocalStatus,
+  pub required_action: ImportRuntimeRequiredAction,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportPreview {
@@ -300,6 +371,13 @@ pub struct ImportPreview {
   pub ocr_requires_authentication: Vec<Uuid>,
   pub proxy_requires_authentication: bool,
   pub default_profile_cleared: bool,
+  /// Opaque bounded expiring preview session id; empty when no session exists (invalid
+  /// preview or direct internal preview). Apply accepts only this id.
+  #[serde(default)]
+  pub preview_id: String,
+  /// Exact per-subject runtime requirement local availability and required actions.
+  #[serde(default)]
+  pub runtime_requirements: Vec<ImportRuntimeRequirementPreview>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -33,12 +33,11 @@ mock.module("@tauri-apps/plugin-fs", () => ({
 const {
   exportConfigurationDocument,
   previewConfigurationImportDocument,
-  importConfigurationDocument,
+  applyPreparedConfigurationImport,
   parseConfigurationExportJson,
-  exportConfigurationToFile,
-  importConfigurationFromFile,
   runExportConfigurationToFile,
-  runImportConfigurationFromFile,
+  runPrepareConfigurationImportFromFile,
+  runApplyPreparedConfigurationImport,
 } = await import("./configurationTransfer");
 
 function sampleDocument(): ConfigurationExport {
@@ -90,6 +89,8 @@ function validPreview(): ImportPreview {
     integrationRequiresAuthentication: [],
     proxyRequiresAuthentication: false,
     defaultProfileCleared: false,
+    previewId: "cfgimp_test-1",
+    runtimeRequirements: [],
   };
 }
 
@@ -104,6 +105,21 @@ describe("parseConfigurationExportJson", () => {
       const doc = parseConfigurationExportJson(JSON.stringify({ ...sampleDocument(), formatVersion }));
       expect(doc.formatVersion).toBe(formatVersion);
     }
+  });
+
+  test("accepts current format v8 envelopes unchanged", () => {
+    const doc = parseConfigurationExportJson(JSON.stringify({ ...sampleDocument(), formatVersion: 8 }));
+    expect(doc.formatVersion).toBe(8);
+  });
+
+  test("v8 backend export reloads through the parse seam", async () => {
+    // The current backend exports format v8; the load seam must accept that exact shape so
+    // export → parse → preview round-trips without re-formatting.
+    const exported = { ...sampleDocument(), formatVersion: 8 };
+    invokeMock.mockResolvedValueOnce(exported);
+    const document = await Effect.runPromise(exportConfigurationDocument());
+    const reloaded = parseConfigurationExportJson(JSON.stringify(document));
+    expect(reloaded).toEqual(exported);
   });
 
   test("rejects unsupported formatVersion", () => {
@@ -154,15 +170,25 @@ describe("configuration IPC helpers", () => {
     }
   });
 
-  test("importConfigurationDocument forwards mode", async () => {
+  test("applyPreparedConfigurationImport sends only the opaque preview id", async () => {
     const result: ImportResult = { preview: validPreview(), applied: true };
     invokeMock.mockResolvedValueOnce(result);
-    const out = await Effect.runPromise(importConfigurationDocument(sampleDocument(), "copy"));
-    expect(out.applied).toBe(true);
-    expect(invokeMock).toHaveBeenCalledWith("import_configuration", {
-      document: sampleDocument(),
-      mode: "copy",
-    });
+    const out = await runApplyPreparedConfigurationImport("cfgimp_test-1");
+    expect(out.status).toBe("applied");
+    if (out.status === "applied") {
+      expect(out.result.applied).toBe(true);
+    }
+    expect(invokeMock).toHaveBeenCalledWith("import_configuration", { previewId: "cfgimp_test-1" });
+  });
+
+  test("applyPreparedConfigurationImport rejects non-conflict IPC errors", async () => {
+    invokeMock.mockRejectedValueOnce({ code: "validation_failed", message: "bad doc" });
+    const either = await Effect.runPromise(Effect.either(applyPreparedConfigurationImport("cfgimp_test-1")));
+    expect(either._tag).toBe("Left");
+    if (either._tag === "Left") {
+      expect(isIpcError(either.left)).toBe(true);
+      expect(either.left.code).toBe("validation_failed");
+    }
   });
 });
 
@@ -207,7 +233,7 @@ describe("exportConfigurationToFile", () => {
   });
 });
 
-describe("importConfigurationFromFile", () => {
+describe("prepareConfigurationImportFromFile", () => {
   beforeEach(() => {
     resetInvokeMock();
     invokeMock.mockImplementation(async () => undefined);
@@ -217,17 +243,31 @@ describe("importConfigurationFromFile", () => {
 
   test("dialog cancel returns cancelled without IPC", async () => {
     openMock.mockResolvedValueOnce(null);
-    const result = await runImportConfigurationFromFile("merge");
-    expect(result).toEqual({ status: "cancelled" });
+    const result = await runPrepareConfigurationImportFromFile("merge");
+    expect(result.status).toBe("cancelled");
     expect(invokeMock).not.toHaveBeenCalled();
   });
 
-  test("invalid preview does not call import", async () => {
+  test("load + preview returns a prepared preview without calling import_configuration", async () => {
+    openMock.mockResolvedValueOnce("/tmp/in.json");
+    readTextFileMock.mockResolvedValueOnce(JSON.stringify(sampleDocument()));
+    invokeMock.mockResolvedValueOnce(validPreview());
+    const result = await runPrepareConfigurationImportFromFile("merge");
+    expect(result.status).toBe("prepared");
+    if (result.status === "prepared") {
+      expect(result.preview.previewId).toBe("cfgimp_test-1");
+    }
+    // Preparation must never apply; only the backend preview command runs.
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+    expect(invokeMock.mock.calls[0]?.[0]).toBe("preview_configuration_import");
+  });
+
+  test("invalid preview maps to an explicit invalid variant", async () => {
     openMock.mockResolvedValueOnce("/tmp/in.json");
     readTextFileMock.mockResolvedValueOnce(JSON.stringify(sampleDocument()));
     const invalid = { ...validPreview(), valid: false, validationErrors: ["broken"] };
     invokeMock.mockResolvedValueOnce(invalid); // preview only
-    const result = await runImportConfigurationFromFile("merge");
+    const result = await runPrepareConfigurationImportFromFile("merge");
     expect(result.status).toBe("invalid");
     if (result.status === "invalid") {
       expect(result.preview.validationErrors).toContain("broken");
@@ -235,44 +275,76 @@ describe("importConfigurationFromFile", () => {
     expect(invokeMock).toHaveBeenCalledTimes(1);
     expect(invokeMock.mock.calls[0]?.[0]).toBe("preview_configuration_import");
   });
+});
 
-  test("valid preview then import success", async () => {
-    openMock.mockResolvedValueOnce("/tmp/in.json");
-    readTextFileMock.mockResolvedValueOnce(JSON.stringify(sampleDocument()));
-    invokeMock.mockResolvedValueOnce(validPreview()).mockResolvedValueOnce({
-      preview: validPreview(),
-      applied: true,
-    } satisfies ImportResult);
-    const result = await runImportConfigurationFromFile("merge");
-    expect(result.status).toBe("applied");
-    expect(invokeMock).toHaveBeenCalledTimes(2);
-    expect(invokeMock.mock.calls[1]?.[0]).toBe("import_configuration");
+describe("applyPreparedConfigurationImport", () => {
+  beforeEach(() => {
+    resetInvokeMock();
+    invokeMock.mockImplementation(async () => undefined);
   });
 
-  test("valid preview but applied false maps to not_applied", async () => {
-    openMock.mockResolvedValueOnce("/tmp/in.json");
-    readTextFileMock.mockResolvedValueOnce(JSON.stringify(sampleDocument()));
-    invokeMock.mockResolvedValueOnce(validPreview()).mockResolvedValueOnce({
-      preview: validPreview(),
-      applied: false,
-    } satisfies ImportResult);
-    const result = await runImportConfigurationFromFile("merge");
+  test("applied result maps to applied", async () => {
+    invokeMock.mockResolvedValueOnce({ preview: validPreview(), applied: true } satisfies ImportResult);
+    const result = await runApplyPreparedConfigurationImport("cfgimp_test-1");
+    expect(result.status).toBe("applied");
+  });
+
+  test("applied false maps to not_applied", async () => {
+    invokeMock.mockResolvedValueOnce({ preview: validPreview(), applied: false } satisfies ImportResult);
+    const result = await runApplyPreparedConfigurationImport("cfgimp_test-1");
     expect(result.status).toBe("not_applied");
   });
 
-  test("Effect either for full pipeline", async () => {
-    openMock.mockResolvedValueOnce(null);
-    const either = await Effect.runPromise(Effect.either(importConfigurationFromFile("merge")));
-    expect(either._tag).toBe("Right");
+  test("stale conflict maps to conflict with stale kind", async () => {
+    invokeMock.mockRejectedValueOnce({
+      code: "conflict",
+      reason: "stale",
+      message: "local state changed since preview; run the preview again",
+    });
+    const result = await runApplyPreparedConfigurationImport("cfgimp_test-1");
+    expect(result.status).toBe("conflict");
+    if (result.status === "conflict") {
+      expect(result.conflictKind).toBe("stale");
+    }
   });
 
-  test("export Effect either cancel path", async () => {
-    invokeMock.mockResolvedValueOnce(sampleDocument());
-    saveMock.mockResolvedValueOnce(null);
-    const either = await Effect.runPromise(Effect.either(exportConfigurationToFile()));
-    expect(either._tag).toBe("Right");
-    if (either._tag === "Right") {
-      expect(either.right.status).toBe("cancelled");
+  test("expired conflict maps to conflict with expired kind via typed reason", async () => {
+    // The prose intentionally avoids the old keyword: the reason field, not the
+    // message, must drive the retry state.
+    invokeMock.mockRejectedValueOnce({
+      code: "conflict",
+      reason: "expired",
+      message: "this preview session is no longer valid",
+    });
+    const result = await runApplyPreparedConfigurationImport("cfgimp_test-1");
+    expect(result.status).toBe("conflict");
+    if (result.status === "conflict") {
+      expect(result.conflictKind).toBe("expired");
+    }
+  });
+
+  test("conflict without reason falls back to stale", async () => {
+    invokeMock.mockRejectedValueOnce({
+      code: "conflict",
+      message: "some older backend wording",
+    });
+    const result = await runApplyPreparedConfigurationImport("cfgimp_test-1");
+    expect(result.status).toBe("conflict");
+    if (result.status === "conflict") {
+      expect(result.conflictKind).toBe("stale");
+    }
+  });
+
+  test("conflict with unknown reason falls back to stale", async () => {
+    invokeMock.mockRejectedValueOnce({
+      code: "conflict",
+      reason: "mystery",
+      message: "some other conflict wording",
+    });
+    const result = await runApplyPreparedConfigurationImport("cfgimp_test-1");
+    expect(result.status).toBe("conflict");
+    if (result.status === "conflict") {
+      expect(result.conflictKind).toBe("stale");
     }
   });
 });

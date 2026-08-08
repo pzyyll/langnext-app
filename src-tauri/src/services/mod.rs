@@ -34,6 +34,9 @@ pub mod runtime_router;
 mod runtime_provider_tests;
 
 #[cfg(test)]
+pub mod execution_dispatch_probe;
+
+#[cfg(test)]
 mod edge_tts_runtime_tests;
 #[cfg(test)]
 mod google_cloud_runtime_tests;

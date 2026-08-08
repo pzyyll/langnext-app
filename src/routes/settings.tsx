@@ -22,11 +22,8 @@ import {
 } from "../components/ui";
 import { useToast } from "../components/toast/useToast";
 import { applyImportedAppSettings } from "../features/settings/applyImportedAppSettings";
-import {
-  runExportConfigurationToFile,
-  runImportConfigurationFromFile,
-} from "../features/settings/configurationTransfer";
-import { importAuthWarningKind, invalidateAfterConfigurationImport } from "../features/settings/importAcceptance";
+import { runExportConfigurationToFile } from "../features/settings/configurationTransfer";
+import { ConfigurationImportPreviewDialog } from "../features/settings/ConfigurationImportPreviewDialog";
 import { getUserErrorMessage } from "../features/userErrorMessage";
 import { APP_LANGUAGES, type AppLanguage } from "../i18n/languages";
 import { useLanguage } from "../i18n/useLanguage";
@@ -40,11 +37,13 @@ import {
   SHORTCUT_OPEN_QUICK_TRANSLATE,
   SHORTCUT_REGION_SCREENSHOT,
   SHORTCUT_SCREENSHOT_OCR,
+  type ImportResult,
   type ShortcutDefinition,
 } from "../storage/types";
 import { useTheme } from "../theme/useTheme";
 import { type ThemeMode } from "../theme/theme";
 import { formatShortcutBinding, keyboardEventToBinding } from "./-shortcutBinding";
+import { runSettingsImportWorkflow } from "./-settingsImportWorkflow";
 
 export const Route = createFileRoute("/settings")({
   component: SettingsPage,
@@ -224,7 +223,8 @@ function BackupSettingsSection() {
   const { t } = useTranslation();
   const toast = useToast();
   const queryClient = useQueryClient();
-  const [busy, setBusy] = useState<"export" | "import" | null>(null);
+  const [busy, setBusy] = useState<"export" | null>(null);
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
 
   async function handleExport() {
     if (busy) {
@@ -247,61 +247,33 @@ function BackupSettingsSection() {
     }
   }
 
-  async function handleImport() {
-    if (busy) {
-      return;
-    }
-    setBusy("import");
-    try {
-      const result = await runImportConfigurationFromFile("merge");
-      if (result.status === "cancelled") {
-        return;
-      }
-      if (result.status === "invalid") {
-        const detail = result.preview.validationErrors[0] ?? t("settings.backup.importInvalid");
-        toast.error({
-          title: t("settings.backup.importInvalid"),
-          description: detail,
-        });
-        return;
-      }
-      if (result.status === "not_applied") {
-        toast.error({ title: t("settings.backup.importNotApplied") });
-        return;
-      }
-
-      // Activate imported app_settings in this process (DB write alone does not rebind UI/OS).
-      await applyImportedAppSettings();
-
-      // Local invalidate covers this webview immediately; QueryEventSync also invalidates
-      // provider/model/profile/integration prefixes from backend DATA_* events in every window.
-      invalidateAfterConfigurationImport(queryClient);
-
-      const authKind = importAuthWarningKind(result.result.preview);
-      if (authKind === "none") {
-        toast.success({ title: t("settings.backup.importSuccess") });
-      } else {
-        const description =
-          authKind === "integrations"
-            ? t("settings.backup.importNeedsIntegrationAuth")
-            : authKind === "ocr"
-              ? t("settings.backup.importNeedsOcrAuth")
-              : authKind === "mixed"
-                ? t("settings.backup.importNeedsAuthMixed")
-                : t("settings.backup.importNeedsAuth");
-        toast.success({
-          title: t("settings.backup.importSuccess"),
-          description,
-        });
-      }
-    } catch (err) {
-      toast.error({
-        title: t("settings.backup.importFailed"),
-        description: getUserErrorMessage(err, t("settings.backup.importFailed")),
-      });
-    } finally {
-      setBusy(null);
-    }
+  /** Post-apply acceptance: rebind, invalidate caches, toast (applied outcome only). */
+  async function handleImported(result: ImportResult) {
+    await runSettingsImportWorkflow(
+      { status: "applied", result },
+      {
+        applyImportedAppSettings,
+        queryClient,
+        notifySuccess: (kind) => {
+          if (kind === "none") {
+            toast.success({ title: t("settings.backup.importSuccess") });
+            return;
+          }
+          const description =
+            kind === "integrations"
+              ? t("settings.backup.importNeedsIntegrationAuth")
+              : kind === "ocr"
+                ? t("settings.backup.importNeedsOcrAuth")
+                : kind === "mixed"
+                  ? t("settings.backup.importNeedsAuthMixed")
+                  : t("settings.backup.importNeedsAuth");
+          toast.success({
+            title: t("settings.backup.importSuccess"),
+            description,
+          });
+        },
+      },
+    );
   }
 
   return (
@@ -325,13 +297,20 @@ function BackupSettingsSection() {
             className={outlineButtonClassName}
             disabled={busy != null}
             onClick={() => {
-              void handleImport();
+              setImportDialogOpen(true);
             }}
           >
-            {busy === "import" ? t("settings.backup.busyImport") : t("settings.backup.import")}
+            {t("settings.backup.import")}
           </Button>
         </div>
       </div>
+      <ConfigurationImportPreviewDialog
+        open={importDialogOpen}
+        onOpenChange={setImportDialogOpen}
+        onApplied={(result) => {
+          void handleImported(result);
+        }}
+      />
     </section>
   );
 }

@@ -1,7 +1,15 @@
 // ABOUTME: Focused tests for post-import invalidation keys and re-auth warning kinds.
 // ABOUTME: Covers provider, integration, OCR, proxy, and combined authentication requirements.
 import { describe, expect, test } from "bun:test";
-import { integrationKeys, modelKeys, ocrKeys, profileKeys, providerKeys, settingsKeys } from "../../query/keys";
+import {
+  integrationKeys,
+  modelKeys,
+  ocrKeys,
+  profileKeys,
+  providerKeys,
+  settingsKeys,
+  speechKeys,
+} from "../../query/keys";
 import type { ImportPreview } from "../../storage/types";
 import { IMPORT_INVALIDATION_KEYS, importAuthWarningKind, importRequiresAuthentication } from "./importAcceptance";
 
@@ -32,13 +40,14 @@ function preview(
 }
 
 describe("IMPORT_INVALIDATION_KEYS", () => {
-  test("includes provider, model, profile, integration, OCR, and settings prefixes", () => {
+  test("includes provider, model, profile, integration, OCR, Speech, and settings prefixes", () => {
     expect(IMPORT_INVALIDATION_KEYS).toEqual([
       providerKeys.all,
       modelKeys.all,
       profileKeys.all,
       integrationKeys.all,
       ocrKeys.all,
+      speechKeys.all,
       settingsKeys.all,
     ]);
   });

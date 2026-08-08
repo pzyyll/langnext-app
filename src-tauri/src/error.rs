@@ -15,6 +15,14 @@ pub enum StorageError {
   #[error("conflict: {0}")]
   Conflict(String),
 
+  /// Typed import-preview conflict: the frontend maps `reason` directly instead of
+  /// parsing message prose to derive the retry state.
+  #[error("import preview conflict ({reason:?}): {message}")]
+  ImportPreviewConflict {
+    reason: ImportPreviewConflictReason,
+    message: String,
+  },
+
   #[error("endpoint trust required: {0}")]
   EndpointTrustRequired(String),
 
@@ -61,12 +69,25 @@ pub enum StorageError {
   Internal(String),
 }
 
+/// Machine-readable reason for an import-preview conflict (Phase 11 fixes).
+/// `Stale` covers unknown, reused, already-claimed, and CAS-mismatched preview ids;
+/// `Expired` covers only TTL expiry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImportPreviewConflictReason {
+  Stale,
+  Expired,
+}
+
 /// Sanitized error returned to the WebView. Never includes secrets or SQL.
+/// `reason` is an optional typed machine-readable detail; it is absent for generic codes.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct IpcError {
   pub code: String,
   pub message: String,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub reason: Option<ImportPreviewConflictReason>,
 }
 
 impl IpcError {
@@ -74,6 +95,15 @@ impl IpcError {
     Self {
       code: code.into(),
       message: message.into(),
+      reason: None,
+    }
+  }
+
+  pub fn with_reason(code: impl Into<String>, message: impl Into<String>, reason: ImportPreviewConflictReason) -> Self {
+    Self {
+      code: code.into(),
+      message: message.into(),
+      reason: Some(reason),
     }
   }
 }
@@ -84,6 +114,7 @@ impl From<StorageError> for IpcError {
       StorageError::Validation(msg) => IpcError::new("validation_failed", msg),
       StorageError::NotFound(msg) => IpcError::new("not_found", msg),
       StorageError::Conflict(msg) => IpcError::new("conflict", msg),
+      StorageError::ImportPreviewConflict { reason, message } => IpcError::with_reason("conflict", message, reason),
       StorageError::EndpointTrustRequired(_) => IpcError::new(
         "endpoint_trust_required",
         "Review and acknowledge this endpoint before saving",

@@ -44,6 +44,13 @@ use crate::domain::plugin_resource::{
   LlmDelta, ResourceCreateParams, ResourceDirection, ResourceError, ResourceId, ResourceOwner,
 };
 use crate::services::stream_resources::{LlmReaderBridge, StreamFrame};
+
+/// Test-only observation immediately before a Wasm guest invocation (cfg(test) only).
+#[cfg(test)]
+fn record_wasm_guest_dispatch() {
+  use crate::services::execution_dispatch_probe::{ExecutionDispatchKind, record};
+  record(ExecutionDispatchKind::WasmGuest);
+}
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use image::ImageReader;
 use std::io::Cursor;
@@ -334,6 +341,8 @@ impl WasmRuntime {
     let wit_request = lm_export::ModelsListRequest {
       request_id: store.data().principal.request_id().as_str().to_string(),
     };
+    #[cfg(test)]
+    record_wasm_guest_dispatch();
     let call_result = run_with_interruption(
       deadline,
       cancel,
@@ -563,6 +572,8 @@ impl WasmRuntime {
       .await
       .map_err(map_instantiate_error)?;
     let guest = world.langnext_runtime_plugin_llm_chat();
+    #[cfg(test)]
+    record_wasm_guest_dispatch();
     let wit_request = lc_export::ChatRequest {
       request_id: store.data().principal.request_id().as_str().to_string(),
       model: request.model,
@@ -748,6 +759,8 @@ impl WasmRuntime {
       .map_err(map_instantiate_error)?;
     let guest = world.langnext_runtime_plugin_translate_text();
 
+    #[cfg(test)]
+    record_wasm_guest_dispatch();
     let wit_request = tt_export::TextRequest {
       request_id: store.data().principal.request_id().as_str().to_string(),
       text: request.text,
@@ -852,6 +865,8 @@ impl WasmRuntime {
       .await
       .map_err(map_instantiate_error)?;
     let guest = world.langnext_runtime_plugin_translate_detect();
+    #[cfg(test)]
+    record_wasm_guest_dispatch();
     let wit_request = td_export::DetectRequest {
       request_id: store.data().principal.request_id().as_str().to_string(),
       text: request.text,
@@ -971,6 +986,8 @@ impl WasmRuntime {
       .await
       .map_err(map_instantiate_error)?;
     let guest = world.langnext_runtime_plugin_ocr_image();
+    #[cfg(test)]
+    record_wasm_guest_dispatch();
     let wit_request = oi_export::ImageRequest {
       request_id: store.data().principal.request_id().as_str().to_string(),
       input: input_handle,
@@ -1076,6 +1093,8 @@ impl WasmRuntime {
       .await
       .map_err(map_instantiate_error)?;
     let guest = world.langnext_runtime_plugin_speech_synthesize();
+    #[cfg(test)]
+    record_wasm_guest_dispatch();
     let wit_request = ss_export::SynthesizeRequest {
       request_id: store.data().principal.request_id().as_str().to_string(),
       text: request.text,
@@ -1226,6 +1245,10 @@ impl WasmRuntime {
     let mut linker = wasmtime::component::Linker::new(self.engine.engine());
     migration::MigrationWorld::add_to_linker::<_, HasSelf<super::store::PluginHostState>>(&mut linker, |s| s)
       .map_err(map_instantiate_error)?;
+    #[cfg(test)]
+    crate::services::execution_dispatch_probe::record(
+      crate::services::execution_dispatch_probe::ExecutionDispatchKind::Migration,
+    );
     let world = migration::MigrationWorld::instantiate_async(&mut store, &component, &linker)
       .await
       .map_err(map_instantiate_error)?;

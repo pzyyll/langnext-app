@@ -1,5 +1,6 @@
 // ABOUTME: Configuration export/preview/import Tauri commands.
 // ABOUTME: Preview/import accept untrusted JSON values; formatVersion is validated first.
+// ABOUTME: Apply accepts only an opaque previewId; the host session owns document/mode/maps.
 use crate::cmds::runtime::run_blocking;
 use crate::domain::import_export::{ConfigurationExport, ImportConflictMode, ImportPreview, ImportResult};
 use crate::error::IpcError;
@@ -33,11 +34,13 @@ pub async fn preview_configuration_import(
 pub async fn import_configuration(
   app: AppHandle,
   state: State<'_, AppState>,
-  document: serde_json::Value,
-  mode: ImportConflictMode,
+  preview_id: String,
 ) -> Result<ImportResult, IpcError> {
   let service = state.import_export.clone();
-  let result = run_blocking("import_configuration", move || service.import_raw(document, mode)).await?;
+  let result = run_blocking("import_configuration", move || {
+    service.import_by_preview_id(&preview_id)
+  })
+  .await?;
   // Import may replace or merge providers, models, profiles, integrations, OCR, and Speech services.
   if result.applied {
     emit_data_changed(&app, PROVIDERS_CHANGED);

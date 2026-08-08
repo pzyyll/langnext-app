@@ -1,27 +1,31 @@
 // ABOUTME: Service validation, rollback, cache merge, and privacy tests.
 // ABOUTME: Uses in-memory CredentialVault under cfg(test) only.
 use crate::credentials::MemoryCredentialVault;
-use crate::domain::import_export::{ConfigurationExport, ImportConflictMode};
+use crate::domain::import_export::{ConfigurationExport, ImportConflictMode, IntegrationInstanceExport};
 use crate::domain::language_detection::LanguageDetectorConfig;
 use crate::domain::model::{Availability, ManualModelWrite, ModelConfigWrite, ModelSource, RemoteModelSyncItem};
 use crate::domain::provider::{
   AuthSchemeV1, BaseUrlSource, CredentialKind, CredentialUpdate, ProviderInstanceWrite, ProxyMode,
 };
+use crate::domain::runtime_lifecycle::RuntimeRequirementExport;
 use crate::domain::runtime_provider::{
   ProviderRuntimeBinding, ProviderRuntimeKind, ProviderRuntimeRequirementExport, ProviderRuntimeState,
 };
 use crate::domain::settings::{
   AppSettingsUpdate, AppSettingsV1, GlobalProxyMode, NetworkSettings, ProxyCredentialUpdate, TranslationPreferences,
 };
+use crate::domain::time::{new_id, now_rfc3339};
 use crate::domain::translation_profile::{
   LlmModelChainEngine, LlmModelChainEngineWrite, PromptTemplate, TranslationProfile, TranslationProfileEngine,
   TranslationProfileEngineWrite, TranslationProfileWrite,
 };
-use crate::error::StorageError;
+use crate::error::{ImportPreviewConflictReason, StorageError};
+use crate::repositories::integration_instances;
 use crate::repositories::provider_runtime_bindings::{self, ProviderRuntimeSnapshotScope, ProviderRuntimeSnapshotSet};
 use crate::services::{ImportExportService, ModelService, ProviderService, SettingsService, TranslationProfileService};
 use crate::storage::Database;
 use std::sync::Arc;
+use uuid::Uuid;
 
 fn block_on<F: std::future::Future>(future: F) -> F::Output {
   tauri::async_runtime::block_on(future)
@@ -3163,4 +3167,1305 @@ fn plugin_profile_blocks_integration_delete_with_in_use() {
     matches!(err, StorageError::InUse(_)),
     "expected in_use when profile references instance, got {err:?}"
   );
+}
+
+// ---------------------------------------------------------------------------
+// Phase 11 Task 2: exact runtime requirement preview (local status + action).
+// ---------------------------------------------------------------------------
+
+fn empty_doc() -> ConfigurationExport {
+  ConfigurationExport {
+    format_version: crate::domain::import_export::EXPORT_FORMAT_VERSION,
+    exported_at: now_rfc3339(),
+    providers: vec![],
+    models: vec![],
+    translation_profiles: vec![],
+    profile_models: vec![],
+    profile_prompt_templates: vec![],
+    integration_instances: vec![],
+    ocr_services: vec![],
+    ocr_prompt_templates: vec![],
+    speech_services: vec![],
+    app_settings: AppSettingsV1::default_document(),
+  }
+}
+
+fn web_export(id: Uuid, config_json: &str) -> IntegrationInstanceExport {
+  IntegrationInstanceExport {
+    id,
+    plugin_id: crate::domain::service_integration::GOOGLE_TRANSLATE_WEB_PLUGIN_ID.into(),
+    plugin_version: "1.0.0".into(),
+    display_name: "Web".into(),
+    enabled: true,
+    config_json: config_json.into(),
+    config_schema_version: 1,
+    health_status: "ready".into(),
+    runtime: Some(RuntimeRequirementExport {
+      plugin_id: crate::domain::service_integration::GOOGLE_TRANSLATE_WEB_PLUGIN_ID.into(),
+      plugin_version: "1.0.0".into(),
+      runtime_kind: "bundled-rust".into(),
+      package_digest: None,
+      publisher_key_id: None,
+      publisher_key_fingerprint: None,
+      plugin_api_version: None,
+      config_schema_version: 1,
+      required_capability_majors: vec![],
+      provider_runtime_kind: None,
+      provider_package_digest: None,
+    }),
+    created_at: now_rfc3339(),
+    updated_at: now_rfc3339(),
+  }
+}
+
+fn provider_export(
+  id: Uuid,
+  adapter_id: &str,
+  bindings: Vec<ProviderRuntimeRequirementExport>,
+) -> crate::domain::provider::ProviderExport {
+  crate::domain::provider::ProviderExport {
+    id,
+    adapter_id: adapter_id.into(),
+    display_name: "P".into(),
+    base_url: None,
+    base_url_source: None,
+    auth_scheme: None,
+    base_url_override: None,
+    credential_kind: crate::domain::provider::CredentialKind::ApiKey,
+    enabled: true,
+    proxy_mode: crate::domain::provider::ProxyMode::Inherit,
+    insecure_http_confirmed_at: None,
+    runtime: None,
+    runtime_bindings: bindings,
+    created_at: now_rfc3339(),
+    updated_at: now_rfc3339(),
+  }
+}
+
+fn declared_legacy(adapter_id: &str) -> ProviderRuntimeRequirementExport {
+  let mut requirement = ProviderRuntimeRequirementExport::legacy();
+  requirement.adapter_id = Some(adapter_id.into());
+  requirement
+}
+
+/// Insert one installed package revision plus an enabled user-approved publisher row.
+fn insert_installed_package(
+  db: &Database,
+  digest: &str,
+  plugin_id: &str,
+  plugin_version: &str,
+  runtime_kind: &str,
+  publisher_key_id: &str,
+  publisher_fingerprint: &str,
+  manifest_api_version: &str,
+  content_available: bool,
+) {
+  db.transaction(|uow| {
+    let conn = uow.conn();
+    conn
+      .execute(
+        "INSERT INTO plugin_publishers (
+          key_id, fingerprint, public_key_hex, source, enabled, revoked, created_at, updated_at
+        ) VALUES (?1, ?2, 'k', 'user_approved', 1, 0, 't0', 't0')
+        ON CONFLICT(key_id) DO NOTHING",
+        rusqlite::params![publisher_key_id, publisher_fingerprint],
+      )
+      .unwrap();
+    let manifest = serde_json::json!({
+      "manifestVersion": 1,
+      "pluginApiVersion": manifest_api_version,
+      "id": plugin_id,
+      "version": plugin_version,
+      "publisher": {
+        "keyId": publisher_key_id,
+        "keyFingerprint": publisher_fingerprint
+      },
+      "runtime": { "kind": runtime_kind }
+    });
+    conn
+      .execute(
+        "INSERT INTO installed_plugin_versions (
+          package_digest, plugin_id, version, publisher_key_id, publisher_fingerprint,
+          runtime_kind, manifest_json, permission_request_digest, content_available, installed_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'perm', ?8, 't0')",
+        rusqlite::params![
+          digest,
+          plugin_id,
+          plugin_version,
+          publisher_key_id,
+          publisher_fingerprint,
+          runtime_kind,
+          manifest.to_string(),
+          content_available as i32
+        ],
+      )
+      .unwrap();
+    Ok(())
+  })
+  .unwrap();
+}
+
+/// Insert or flip the enabled/revoked flags of one publisher row.
+fn set_publisher_flags(db: &Database, key_id: &str, fingerprint: &str, enabled: bool, revoked: bool) {
+  db.transaction(|uow| {
+    let conn = uow.conn();
+    conn
+      .execute(
+        "INSERT INTO plugin_publishers (
+          key_id, fingerprint, public_key_hex, source, enabled, revoked, created_at, updated_at
+        ) VALUES (?1, ?2, 'k', 'user_approved', ?3, ?4, 't0', 't0')
+        ON CONFLICT(key_id) DO UPDATE SET enabled = ?3, revoked = ?4",
+        rusqlite::params![key_id, fingerprint, enabled as i32, revoked as i32],
+      )
+      .unwrap();
+    Ok(())
+  })
+  .unwrap();
+}
+
+fn preview_wasm_binding(adapter_id: &str, digest: &str, plugin_id: &str) -> ProviderRuntimeRequirementExport {
+  ProviderRuntimeRequirementExport {
+    adapter_id: Some(adapter_id.into()),
+    runtime_kind: "wasm-component".into(),
+    package_digest: Some(digest.into()),
+    plugin_id: Some(plugin_id.into()),
+    plugin_version: Some("1.0.0".into()),
+    publisher_key_id: Some("com.langnext.test.keys.1".into()),
+    publisher_key_fingerprint: Some("f".repeat(64)),
+    plugin_api_version: Some("1.0".into()),
+    legacy_aliases: vec![adapter_id.into()],
+    capabilities: vec!["llm.chat@1".into()],
+  }
+}
+
+fn preview_wasm_integration(id: Uuid, digest: &str) -> IntegrationInstanceExport {
+  IntegrationInstanceExport {
+    id,
+    plugin_id: "com.langnext.wasm-service".into(),
+    plugin_version: "1.0.0".into(),
+    display_name: "Wasm Service".into(),
+    enabled: true,
+    config_json: "{}".into(),
+    config_schema_version: 1,
+    health_status: "ready".into(),
+    runtime: Some(RuntimeRequirementExport {
+      plugin_id: "com.langnext.wasm-service".into(),
+      plugin_version: "1.0.0".into(),
+      runtime_kind: "wasm-component".into(),
+      package_digest: Some(digest.into()),
+      publisher_key_id: Some("com.langnext.test.keys.1".into()),
+      publisher_key_fingerprint: Some("f".repeat(64)),
+      plugin_api_version: Some("1.0".into()),
+      config_schema_version: 1,
+      required_capability_majors: vec![],
+      provider_runtime_kind: None,
+      provider_package_digest: None,
+    }),
+    created_at: now_rfc3339(),
+    updated_at: now_rfc3339(),
+  }
+}
+
+/// Preview distinguishes structural validity from local runtime readiness: every exact
+/// adapter-keyed requirement returns subject identity, local status, and the closed
+/// required action — without substituting another package by plugin ID/version.
+#[test]
+fn import_runtime_requirement_preview_reports_exact_local_states_and_actions() {
+  use crate::domain::import_export::{ImportRuntimeLocalStatus, ImportRuntimeRequiredAction, ImportRuntimeSubjectKind};
+
+  let (_dir, db, _v, _providers, _models, _profiles, _settings, ie) = setup();
+
+  let installed_digest = "a".repeat(64);
+  let revoked_digest = "b".repeat(64);
+  let disabled_digest = "c".repeat(64);
+  let content_digest = "d".repeat(64);
+  let incompatible_digest = "e".repeat(64);
+  let missing_digest = "f".repeat(64);
+
+  // Installed revision whose manifest API version matches the requirement exactly.
+  insert_installed_package(
+    &db,
+    &installed_digest,
+    "com.langnext.provider.a",
+    "1.0.0",
+    "wasm-component",
+    "com.langnext.test.keys.1",
+    &"f".repeat(64),
+    "1.0",
+    true,
+  );
+  // Installed revision under a revoked publisher.
+  insert_installed_package(
+    &db,
+    &revoked_digest,
+    "com.langnext.provider.b",
+    "1.0.0",
+    "wasm-component",
+    "com.langnext.revoked.keys.1",
+    &"a".repeat(64),
+    "1.0",
+    true,
+  );
+  set_publisher_flags(&db, "com.langnext.revoked.keys.1", &"a".repeat(64), true, true);
+  // Installed revision under a disabled publisher.
+  insert_installed_package(
+    &db,
+    &disabled_digest,
+    "com.langnext.provider.c",
+    "1.0.0",
+    "wasm-component",
+    "com.langnext.disabled.keys.1",
+    &"b".repeat(64),
+    "1.0",
+    true,
+  );
+  set_publisher_flags(&db, "com.langnext.disabled.keys.1", &"b".repeat(64), false, false);
+  // Installed revision whose content is missing from the local store.
+  insert_installed_package(
+    &db,
+    &content_digest,
+    "com.langnext.provider.d",
+    "1.0.0",
+    "wasm-component",
+    "com.langnext.test.keys.1",
+    &"f".repeat(64),
+    "1.0",
+    false,
+  );
+  // Installed revision whose manifest API version is incompatible with the requirement.
+  insert_installed_package(
+    &db,
+    &incompatible_digest,
+    "com.langnext.provider.e",
+    "1.0.0",
+    "wasm-component",
+    "com.langnext.test.keys.1",
+    &"f".repeat(64),
+    "2.0",
+    true,
+  );
+
+  let provider_id = new_id();
+  let mut doc = empty_doc();
+  doc.providers = vec![provider_export(
+    provider_id,
+    "openai-compatible",
+    vec![
+      preview_wasm_binding("openai-compatible", &installed_digest, "com.langnext.provider.a"),
+      preview_wasm_binding("openai-responses", &missing_digest, "com.langnext.provider.f"),
+      preview_wasm_binding("anthropic", &revoked_digest, "com.langnext.provider.b"),
+      preview_wasm_binding("gemini", &disabled_digest, "com.langnext.provider.c"),
+      preview_wasm_binding("deepseek", &content_digest, "com.langnext.provider.d"),
+      preview_wasm_binding("openai-realtime", &incompatible_digest, "com.langnext.provider.e"),
+    ],
+  )];
+  doc.integration_instances = vec![
+    web_export(new_id(), r#"{"channel":"gtx"}"#),
+    preview_wasm_integration(new_id(), &missing_digest),
+  ];
+
+  let preview = ie.preview(&doc, ImportConflictMode::Merge).unwrap();
+  assert!(preview.valid, "errors: {:?}", preview.validation_errors);
+
+  let by_key = |kind: ImportRuntimeSubjectKind, subject_id: Uuid, adapter: Option<&str>| {
+    preview
+      .runtime_requirements
+      .iter()
+      .find(|entry| {
+        entry.subject_kind == kind && entry.subject_id == subject_id && entry.adapter_id.as_deref() == adapter
+      })
+      .unwrap_or_else(|| panic!("missing preview entry for {kind:?} {subject_id} {adapter:?}"))
+  };
+
+  // Provider default adapter: exact digest installed and compatible.
+  let installed = by_key(
+    ImportRuntimeSubjectKind::Provider,
+    provider_id,
+    Some("openai-compatible"),
+  );
+  assert_eq!(installed.display_label, "P");
+  assert_eq!(installed.runtime_kind, "wasm-component");
+  assert_eq!(installed.package_digest.as_deref(), Some(installed_digest.as_str()));
+  assert_eq!(installed.plugin_id.as_deref(), Some("com.langnext.provider.a"));
+  assert_eq!(installed.local_status, ImportRuntimeLocalStatus::Installed);
+  assert_eq!(
+    installed.required_action,
+    ImportRuntimeRequiredAction::ActivateAfterImport
+  );
+
+  let missing = by_key(
+    ImportRuntimeSubjectKind::Provider,
+    provider_id,
+    Some("openai-responses"),
+  );
+  assert_eq!(missing.local_status, ImportRuntimeLocalStatus::Missing);
+  assert_eq!(
+    missing.required_action,
+    ImportRuntimeRequiredAction::InstallExactPackage
+  );
+
+  let revoked = by_key(ImportRuntimeSubjectKind::Provider, provider_id, Some("anthropic"));
+  assert_eq!(revoked.local_status, ImportRuntimeLocalStatus::Revoked);
+  assert_eq!(revoked.required_action, ImportRuntimeRequiredAction::RestorePublisher);
+
+  let disabled = by_key(ImportRuntimeSubjectKind::Provider, provider_id, Some("gemini"));
+  assert_eq!(disabled.local_status, ImportRuntimeLocalStatus::Disabled);
+  assert_eq!(disabled.required_action, ImportRuntimeRequiredAction::RestorePublisher);
+
+  let content_unavailable = by_key(ImportRuntimeSubjectKind::Provider, provider_id, Some("deepseek"));
+  assert_eq!(
+    content_unavailable.local_status,
+    ImportRuntimeLocalStatus::ContentUnavailable
+  );
+  assert_eq!(
+    content_unavailable.required_action,
+    ImportRuntimeRequiredAction::InstallExactPackage
+  );
+
+  let incompatible = by_key(ImportRuntimeSubjectKind::Provider, provider_id, Some("openai-realtime"));
+  assert_eq!(incompatible.local_status, ImportRuntimeLocalStatus::Incompatible);
+  assert_eq!(
+    incompatible.required_action,
+    ImportRuntimeRequiredAction::ResolveIncompatibility
+  );
+
+  // Integrations: bundled-rust is a closed bundled status; package-backed uses catalog state.
+  let bundled = by_key(
+    ImportRuntimeSubjectKind::Integration,
+    doc.integration_instances[0].id,
+    None,
+  );
+  assert_eq!(bundled.local_status, ImportRuntimeLocalStatus::Bundled);
+  assert_eq!(bundled.required_action, ImportRuntimeRequiredAction::None);
+
+  let integration_missing = by_key(
+    ImportRuntimeSubjectKind::Integration,
+    doc.integration_instances[1].id,
+    None,
+  );
+  assert_eq!(integration_missing.local_status, ImportRuntimeLocalStatus::Missing);
+  assert_eq!(
+    integration_missing.required_action,
+    ImportRuntimeRequiredAction::InstallExactPackage
+  );
+}
+
+/// Missing/revoked/disabled/incompatible requirements are actionable preview metadata, not
+/// structural failures: the document stays valid and preview mutates nothing (no package
+/// install op, execution grant, rollback snapshot, runtime process, or credential change).
+#[test]
+fn import_runtime_requirement_preview_keeps_unavailable_runtimes_actionable_and_non_mutating() {
+  use crate::domain::import_export::{ImportRuntimeLocalStatus, ImportRuntimeRequiredAction};
+
+  let (_dir, db, _v, _providers, _models, _profiles, _settings, ie) = setup();
+
+  let missing_digest = "f".repeat(64);
+  let mut doc = empty_doc();
+  doc.providers = vec![provider_export(
+    new_id(),
+    "openai-compatible",
+    vec![preview_wasm_binding(
+      "openai-compatible",
+      &missing_digest,
+      "com.langnext.provider.f",
+    )],
+  )];
+
+  let count = |table: &str| -> i64 {
+    db.read(|conn| {
+      Ok(
+        conn
+          .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| row.get(0))
+          .unwrap(),
+      )
+    })
+    .unwrap()
+  };
+  let grants_before = count("execution_grant_sets");
+  let install_ops_before = count("plugin_install_operations");
+  let bindings_before = count("provider_runtime_bindings");
+  let publishers_before = count("plugin_publishers");
+
+  let preview = ie.preview(&doc, ImportConflictMode::Merge).unwrap();
+  assert!(
+    preview.valid,
+    "local runtime unavailability must not invalidate the document: {:?}",
+    preview.validation_errors
+  );
+  assert!(preview.validation_errors.is_empty());
+  let entry = &preview.runtime_requirements[0];
+  assert_eq!(entry.local_status, ImportRuntimeLocalStatus::Missing);
+  assert_eq!(entry.required_action, ImportRuntimeRequiredAction::InstallExactPackage);
+
+  assert_eq!(
+    count("execution_grant_sets"),
+    grants_before,
+    "no grant created by preview"
+  );
+  assert_eq!(
+    count("plugin_install_operations"),
+    install_ops_before,
+    "no install op created"
+  );
+  assert_eq!(
+    count("provider_runtime_bindings"),
+    bindings_before,
+    "no binding mutated"
+  );
+  assert_eq!(
+    count("plugin_publishers"),
+    publishers_before,
+    "no publisher state mutated"
+  );
+}
+
+/// Legacy provider requirements and bundled integrations report their own statuses and the
+/// `none` action never marks them as needing activation.
+#[test]
+fn import_runtime_requirement_preview_legacy_and_bundled_use_own_statuses() {
+  use crate::domain::import_export::{ImportRuntimeLocalStatus, ImportRuntimeRequiredAction, ImportRuntimeSubjectKind};
+
+  let (_d, _db, _v, _providers, _models, _profiles, _settings, ie) = setup();
+
+  let mut doc = empty_doc();
+  doc.providers = vec![provider_export(
+    new_id(),
+    "openai-compatible",
+    vec![declared_legacy("openai-compatible")],
+  )];
+  doc.integration_instances = vec![web_export(new_id(), r#"{"channel":"gtx"}"#)];
+
+  let preview = ie.preview(&doc, ImportConflictMode::Merge).unwrap();
+  assert!(preview.valid, "errors: {:?}", preview.validation_errors);
+  let provider_entry = preview
+    .runtime_requirements
+    .iter()
+    .find(|entry| entry.subject_kind == ImportRuntimeSubjectKind::Provider)
+    .expect("provider entry");
+  assert_eq!(provider_entry.local_status, ImportRuntimeLocalStatus::Legacy);
+  assert_eq!(provider_entry.required_action, ImportRuntimeRequiredAction::None);
+  let integration_entry = preview
+    .runtime_requirements
+    .iter()
+    .find(|entry| entry.subject_kind == ImportRuntimeSubjectKind::Integration)
+    .expect("integration entry");
+  assert_eq!(integration_entry.local_status, ImportRuntimeLocalStatus::Bundled);
+  assert_eq!(integration_entry.required_action, ImportRuntimeRequiredAction::None);
+}
+
+// ---------------------------------------------------------------------------
+// Phase 11 Task 3: expiring preview session binds apply to the previewed plan.
+// ---------------------------------------------------------------------------
+
+/// Copy preview/apply must use ONE fixed Copy ID mapping: the post-import IDs shown in the
+/// preview are the IDs apply writes. A fresh random mapping at apply would break this.
+#[test]
+fn import_preview_session_cas_copy_apply_uses_fixed_id_mapping() {
+  let (_dir, _db, _v, providers, _models, _profiles, _settings, ie) = setup();
+
+  let mut doc = empty_doc();
+  doc.providers = vec![provider_export(
+    new_id(),
+    "openai-compatible",
+    vec![declared_legacy("openai-compatible")],
+  )];
+  // Cloud integration: copy preview reports its remapped post-import id in
+  // integration_requires_authentication; apply must write exactly that id.
+  let cloud_id = new_id();
+  doc.integration_instances = vec![IntegrationInstanceExport {
+    id: cloud_id,
+    plugin_id: crate::domain::service_integration::GOOGLE_CLOUD_PLUGIN_ID.into(),
+    plugin_version: "1.0.0".into(),
+    display_name: "Cloud".into(),
+    enabled: true,
+    config_json: r#"{"project-id":"demo","location":"global","proxy-mode":"inherit"}"#.into(),
+    config_schema_version: 1,
+    health_status: "ready".into(),
+    runtime: None,
+    created_at: now_rfc3339(),
+    updated_at: now_rfc3339(),
+  }];
+
+  let preview = ie.preview_with_session(&doc, ImportConflictMode::Copy).unwrap();
+  assert!(preview.valid, "errors: {:?}", preview.validation_errors);
+  assert!(
+    !preview.preview_id.is_empty(),
+    "valid preview must return an opaque preview id"
+  );
+  assert_eq!(preview.counts.providers_copy, 1);
+  assert_eq!(preview.counts.integrations_copy, 1);
+  let expected_integration_id = preview.integration_requires_authentication[0];
+  assert_ne!(expected_integration_id, cloud_id, "copy preview shows the remapped id");
+
+  let result = ie.import_by_preview_id(&preview.preview_id).unwrap();
+  assert!(result.applied);
+
+  // The exact post-import id the user previewed is the row apply wrote.
+  let applied_integration = _db
+    .read(|conn| integration_instances::get(conn, expected_integration_id))
+    .unwrap();
+  assert_eq!(applied_integration.id, expected_integration_id);
+  assert_eq!(
+    applied_integration.plugin_id,
+    crate::domain::service_integration::GOOGLE_CLOUD_PLUGIN_ID
+  );
+  let rows = providers.list().unwrap();
+  assert_eq!(rows.len(), 1);
+}
+
+/// A local change to any affected row or credential ownership baseline after preview makes
+/// apply conflict atomically: no partial write, no row updated by the import.
+#[test]
+fn import_preview_session_cas_stale_local_row_conflicts_atomically() {
+  let (_dir, db, _v, providers, _models, _profiles, _settings, ie) = setup();
+
+  let provider = providers
+    .save(provider_write(CredentialKind::None, CredentialUpdate::Keep))
+    .unwrap();
+  let doc = ie.export().unwrap();
+  let preview = ie.preview_with_session(&doc, ImportConflictMode::Merge).unwrap();
+  assert!(preview.valid, "errors: {:?}", preview.validation_errors);
+  assert!(!preview.preview_id.is_empty());
+
+  // Local change after preview: rename the affected provider row.
+  let mut write = for_provider_update(
+    provider.id,
+    &provider.updated_at,
+    CredentialKind::None,
+    CredentialUpdate::Keep,
+  );
+  write.display_name = "Renamed".into();
+  providers.save(write).unwrap();
+
+  let err = ie.import_by_preview_id(&preview.preview_id).unwrap_err();
+  match err {
+    StorageError::ImportPreviewConflict {
+      reason: ImportPreviewConflictReason::Stale,
+      message,
+    } => {
+      assert!(
+        message.contains("re-preview"),
+        "stale CAS conflict must carry the re-preview guidance, got {message:?}"
+      );
+    }
+    other => panic!("stale CAS baseline must conflict with a stale reason, got {other:?}"),
+  }
+
+  // The claimed session is destroyed on failure: a second apply must fail too.
+  let second = ie.import_by_preview_id(&preview.preview_id).unwrap_err();
+  assert!(
+    matches!(
+      second,
+      StorageError::ImportPreviewConflict {
+        reason: ImportPreviewConflictReason::Stale,
+        ..
+      }
+    ),
+    "failed apply must destroy the session, got {second:?}"
+  );
+
+  // No partial write: the local row keeps the post-change state and nothing was imported.
+  let rows = providers.list().unwrap();
+  assert_eq!(rows.len(), 1, "no new provider written");
+  assert_eq!(
+    rows[0].id, provider.id,
+    "the single provider must still be the local one"
+  );
+  assert_eq!(
+    rows[0].display_name, "Renamed",
+    "import must not overwrite the local row"
+  );
+  let journal_ops: i64 = db
+    .read(|conn| {
+      Ok(
+        conn
+          .query_row("SELECT COUNT(*) FROM credential_operations", [], |row| row.get(0))
+          .unwrap(),
+      )
+    })
+    .unwrap();
+  assert_eq!(journal_ops, 0, "conflict must not touch credential journals");
+}
+
+/// Two concurrent applies of one preview id: exactly one claims the session; the other
+/// fails before credential recovery, vault access, or business mutation.
+#[test]
+fn import_preview_session_cas_concurrent_double_apply_claims_once() {
+  let (_dir, _db, _v, providers, _models, _profiles, _settings, ie) = setup();
+
+  let mut doc = empty_doc();
+  doc.providers = vec![provider_export(
+    new_id(),
+    "openai-compatible",
+    vec![declared_legacy("openai-compatible")],
+  )];
+  let preview = ie.preview_with_session(&doc, ImportConflictMode::Merge).unwrap();
+  assert!(preview.valid, "errors: {:?}", preview.validation_errors);
+
+  let service_a = ie.clone();
+  let service_b = ie.clone();
+  let preview_id_a = preview.preview_id.clone();
+  let preview_id_b = preview.preview_id.clone();
+  let handle_a = std::thread::spawn(move || service_a.import_by_preview_id(&preview_id_a));
+  let handle_b = std::thread::spawn(move || service_b.import_by_preview_id(&preview_id_b));
+  let result_a = handle_a.join().expect("thread a");
+  let result_b = handle_b.join().expect("thread b");
+
+  let ok_count = [result_a.is_ok(), result_b.is_ok()].iter().filter(|ok| **ok).count();
+  assert_eq!(ok_count, 1, "exactly one concurrent apply may claim the session");
+  let applied = result_a.or(result_b).expect("one apply must succeed");
+  assert!(applied.applied);
+
+  let rows = providers.list().unwrap();
+  assert_eq!(rows.len(), 1, "exactly one applied import");
+}
+
+/// Unknown, expired, and reused preview ids are rejected before any mutation: no provider
+/// row, no credential journal op, no business table change from the rejected applies.
+#[test]
+fn import_preview_session_cas_unknown_expired_reused_rejected_before_mutation() {
+  use std::time::Duration;
+
+  let (_dir, db, _v, providers, _models, _profiles, _settings, ie) = setup();
+
+  let mut doc = empty_doc();
+  doc.providers = vec![provider_export(
+    new_id(),
+    "openai-compatible",
+    vec![declared_legacy("openai-compatible")],
+  )];
+
+  // Unknown preview id.
+  let err = ie.import_by_preview_id("cfgimp_does-not-exist").unwrap_err();
+  assert!(
+    matches!(
+      err,
+      StorageError::ImportPreviewConflict {
+        reason: ImportPreviewConflictReason::Stale,
+        ..
+      }
+    ),
+    "unknown id must conflict as stale, got {err:?}"
+  );
+
+  // Expired preview id (1 ms TTL): claim rejects before recovery/apply.
+  let short_lived = ie.clone().with_preview_ttl_for_tests(Duration::from_millis(1));
+  let preview = short_lived
+    .preview_with_session(&doc, ImportConflictMode::Merge)
+    .unwrap();
+  assert!(preview.valid, "errors: {:?}", preview.validation_errors);
+  std::thread::sleep(Duration::from_millis(10));
+  let err = short_lived.import_by_preview_id(&preview.preview_id).unwrap_err();
+  assert!(
+    matches!(
+      err,
+      StorageError::ImportPreviewConflict {
+        reason: ImportPreviewConflictReason::Expired,
+        ..
+      }
+    ),
+    "expired id must conflict as expired, got {err:?}"
+  );
+
+  // Reused preview id: the first apply consumes the session permanently.
+  let preview = ie.preview_with_session(&doc, ImportConflictMode::Merge).unwrap();
+  let first = ie.import_by_preview_id(&preview.preview_id).unwrap();
+  assert!(first.applied);
+  let err = ie.import_by_preview_id(&preview.preview_id).unwrap_err();
+  assert!(
+    matches!(
+      err,
+      StorageError::ImportPreviewConflict {
+        reason: ImportPreviewConflictReason::Stale,
+        ..
+      }
+    ),
+    "reused id must conflict as stale, got {err:?}"
+  );
+
+  let rows = providers.list().unwrap();
+  assert_eq!(rows.len(), 1, "only the successful apply created a provider");
+  let journal_ops: i64 = db
+    .read(|conn| {
+      Ok(
+        conn
+          .query_row("SELECT COUNT(*) FROM credential_operations", [], |row| row.get(0))
+          .unwrap(),
+      )
+    })
+    .unwrap();
+  assert_eq!(journal_ops, 0, "rejections must not touch credential journals");
+}
+
+/// A local settings change after preview makes apply conflict: the plan rewrites the
+/// singleton `app_settings` row in both Merge and Copy modes, so that row must be part
+/// of the deterministic CAS baseline. Without it, apply silently overwrites settings the
+/// user changed after confirming the preview.
+#[test]
+fn import_preview_session_cas_stale_settings_conflicts() {
+  let (_dir, _db, _v, providers, _models, _profiles, settings, ie) = setup();
+
+  let provider = providers
+    .save(provider_write(CredentialKind::None, CredentialUpdate::Keep))
+    .unwrap();
+  let doc = ie.export().unwrap();
+  let preview = ie.preview_with_session(&doc, ImportConflictMode::Merge).unwrap();
+  assert!(preview.valid, "errors: {:?}", preview.validation_errors);
+  assert!(!preview.preview_id.is_empty());
+
+  // Local settings change after preview: theme toggle rewrites the app_settings row.
+  let mut local = AppSettingsV1::default_document();
+  local.theme = Some("dark".into());
+  settings
+    .update(AppSettingsUpdate {
+      settings: local,
+      proxy_credential: ProxyCredentialUpdate::Keep,
+    })
+    .unwrap();
+
+  let err = ie.import_by_preview_id(&preview.preview_id).unwrap_err();
+  assert!(
+    matches!(
+      err,
+      StorageError::ImportPreviewConflict {
+        reason: ImportPreviewConflictReason::Stale,
+        ..
+      }
+    ),
+    "stale settings baseline must conflict as stale, got {err:?}"
+  );
+
+  // No partial write: the local row keeps its state and nothing was imported.
+  let rows = providers.list().unwrap();
+  assert_eq!(rows.len(), 1, "no new provider written");
+  assert_eq!(rows[0].id, provider.id, "the single provider must be the local one");
+  let dto = settings.get().unwrap();
+  assert_eq!(
+    dto.settings.theme.as_deref(),
+    Some("dark"),
+    "settings keep the local value"
+  );
+}
+
+/// Copy mode has no fixed empty baseline: it still rewrites `app_settings` (default ids are
+/// remapped into it) and must conflict on a settings change after preview, while a change to
+/// an unrelated local subject row stays non-conflicting (Copy writes fresh IDs only).
+#[test]
+fn import_preview_session_cas_copy_baseline_covers_settings() {
+  let (_dir, _db, _v, providers, _models, _profiles, settings, ie) = setup();
+
+  let provider = providers
+    .save(provider_write(CredentialKind::None, CredentialUpdate::Keep))
+    .unwrap();
+  let doc = ie.export().unwrap();
+  let preview = ie.preview_with_session(&doc, ImportConflictMode::Copy).unwrap();
+  assert!(preview.valid, "errors: {:?}", preview.validation_errors);
+  assert!(!preview.preview_id.is_empty());
+
+  // Local settings change after preview → conflict (Copy rewrites app_settings too).
+  let mut local = AppSettingsV1::default_document();
+  local.theme = Some("dark".into());
+  settings
+    .update(AppSettingsUpdate {
+      settings: local,
+      proxy_credential: ProxyCredentialUpdate::Keep,
+    })
+    .unwrap();
+  let err = ie.import_by_preview_id(&preview.preview_id).unwrap_err();
+  assert!(
+    matches!(
+      err,
+      StorageError::ImportPreviewConflict {
+        reason: ImportPreviewConflictReason::Stale,
+        ..
+      }
+    ),
+    "stale settings baseline must conflict as stale in Copy mode, got {err:?}"
+  );
+
+  // Re-preview, then rename the local subject row: Copy writes fresh IDs, so the unrelated
+  // row change must NOT make apply conflict.
+  let preview = ie.preview_with_session(&doc, ImportConflictMode::Copy).unwrap();
+  assert!(preview.valid, "errors: {:?}", preview.validation_errors);
+  let mut write = for_provider_update(
+    provider.id,
+    &provider.updated_at,
+    CredentialKind::None,
+    CredentialUpdate::Keep,
+  );
+  write.display_name = "Renamed".into();
+  providers.save(write).unwrap();
+
+  let result = ie.import_by_preview_id(&preview.preview_id).unwrap();
+  assert!(
+    result.applied,
+    "unrelated local row change must not conflict Copy apply"
+  );
+  let rows = providers.list().unwrap();
+  assert_eq!(rows.len(), 2, "copy import adds a second provider row");
+  assert!(
+    rows.iter().any(|r| r.display_name == "Renamed"),
+    "the renamed local row must be untouched"
+  );
+}
+
+/// The claim error must distinguish expired preview ids from unknown ones: the frontend
+/// maps the typed conflict reason to the `expired` retry state, so `prune_expired` must
+/// not delete the target session before its expiry is reported.
+#[test]
+fn import_preview_session_cas_claim_reports_expired_not_unknown() {
+  use std::time::Duration;
+
+  let (_dir, _db, _v, _providers, _models, _profiles, _settings, ie) = setup();
+
+  let mut doc = empty_doc();
+  doc.providers = vec![provider_export(
+    new_id(),
+    "openai-compatible",
+    vec![declared_legacy("openai-compatible")],
+  )];
+
+  // Unknown preview id → typed stale reason on both the domain error and the IPC envelope.
+  let err = ie.import_by_preview_id("cfgimp_does-not-exist").unwrap_err();
+  match err {
+    StorageError::ImportPreviewConflict {
+      reason: ImportPreviewConflictReason::Stale,
+      message,
+    } => {
+      assert!(
+        message.contains("unknown"),
+        "unknown id must report unknown, got {message:?}"
+      );
+      let ipc = crate::error::IpcError::from(StorageError::ImportPreviewConflict {
+        reason: ImportPreviewConflictReason::Stale,
+        message: message.clone(),
+      });
+      assert_eq!(ipc.code, "conflict");
+      assert_eq!(ipc.reason, Some(ImportPreviewConflictReason::Stale));
+    }
+    other => panic!("unknown id must conflict, got {other:?}"),
+  }
+
+  // Expired preview id (1 ms TTL) → typed expired reason, not unknown.
+  let short_lived = ie.clone().with_preview_ttl_for_tests(Duration::from_millis(1));
+  let preview = short_lived
+    .preview_with_session(&doc, ImportConflictMode::Merge)
+    .unwrap();
+  assert!(preview.valid, "errors: {:?}", preview.validation_errors);
+  assert!(!preview.preview_id.is_empty());
+  std::thread::sleep(Duration::from_millis(10));
+  let err = short_lived.import_by_preview_id(&preview.preview_id).unwrap_err();
+  match err {
+    StorageError::ImportPreviewConflict {
+      reason: ImportPreviewConflictReason::Expired,
+      message,
+    } => {
+      assert!(
+        message.contains("expired"),
+        "expired id must report expired, got {message:?}"
+      );
+      let ipc = crate::error::IpcError::from(StorageError::ImportPreviewConflict {
+        reason: ImportPreviewConflictReason::Expired,
+        message: message.clone(),
+      });
+      assert_eq!(ipc.code, "conflict");
+      assert_eq!(ipc.reason, Some(ImportPreviewConflictReason::Expired));
+    }
+    other => panic!("expired id must conflict, got {other:?}"),
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 11 acceptance gates: committed v2–v8 fixtures + no-execution boundary.
+// ---------------------------------------------------------------------------
+
+/// Path helper for committed import fixtures under src/services/fixtures/import/.
+fn import_fixture_path(name: &str) -> std::path::PathBuf {
+  std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+    .join("src/services/fixtures/import/runtime-plugin-v8")
+    .join(name)
+}
+
+/// Acceptance gate: committed v2–v8 fixtures normalize to the current v8 format with the
+/// linked provider/model/profile/target/template graph intact; integrations normalize to
+/// explicit runtimes; provider requirements stay adapter-keyed per version shape.
+#[test]
+fn import_format_fixtures_v2_through_v8_normalize_to_current() {
+  use crate::domain::import_export::{EXPORT_FORMAT_VERSION, parse_and_normalize_export_document};
+
+  const PROVIDER_ID: &str = "00000000-0000-7000-8000-000000000001";
+  const MODEL_ID: &str = "00000000-0000-7000-8000-000000000002";
+  const GOOGLE_WEB_INTEGRATION_ID: &str = "00000000-0000-7000-8000-000000000003";
+  const CONFORMANCE_INTEGRATION_ID: &str = "00000000-0000-7000-8000-000000000004";
+  const PROFILE_ID: &str = "00000000-0000-7000-8000-000000000005";
+  const TEMPLATE_ID: &str = "00000000-0000-7000-8000-000000000006";
+  const OCR_SERVICE_ID: &str = "00000000-0000-7000-8000-000000000007";
+  const SPEECH_SERVICE_ID: &str = "00000000-0000-7000-8000-000000000009";
+  const WASM_DIGEST: &str = "abababababababababababababababababababababababababababababababab";
+
+  let load = |name: &str| {
+    let raw = std::fs::read_to_string(import_fixture_path(name)).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    parse_and_normalize_export_document(value).unwrap_or_else(|e| panic!("{name}: {e}"))
+  };
+
+  for version in [2_u32, 3, 4, 5, 6, 7] {
+    let doc = load(&format!("v{version}-config.json"));
+    assert_eq!(
+      doc.format_version, EXPORT_FORMAT_VERSION,
+      "v{version} must normalize to v8"
+    );
+
+    // Linked provider/model graph with fixed literal IDs.
+    assert_eq!(doc.providers.len(), 1, "v{version} keeps one provider");
+    assert_eq!(
+      doc.providers[0].id.to_string(),
+      PROVIDER_ID,
+      "v{version} preserves the provider id"
+    );
+    assert_eq!(doc.providers[0].display_name, "OpenAI Compatible");
+    assert_eq!(doc.models.len(), 1, "v{version} keeps one model");
+    assert_eq!(doc.models[0].id.to_string(), MODEL_ID);
+    assert_eq!(
+      doc.models[0].provider_instance_id.to_string(),
+      PROVIDER_ID,
+      "v{version} model stays linked to the provider"
+    );
+    assert_eq!(doc.models[0].model_key, "gpt-4o-mini");
+
+    // One profile with the prompt template as its LLM default.
+    assert_eq!(doc.translation_profiles.len(), 1, "v{version} keeps one profile");
+    let profile = &doc.translation_profiles[0];
+    assert_eq!(profile.id.to_string(), PROFILE_ID);
+    assert_eq!(profile.name, "Default");
+    assert_eq!(profile.source_lang.as_deref(), Some("zh"));
+    assert_eq!(profile.target_lang.as_deref(), Some("en"));
+    let engine = profile
+      .engine
+      .as_llm()
+      .expect("v{version} profile keeps its LLM engine");
+    assert_eq!(engine.template_version, 1);
+    assert_eq!(engine.default_prompt_template_id.to_string(), TEMPLATE_ID);
+    assert_eq!(engine.temperature, Some(0.2));
+
+    // One target linked to the model and one template owned by the profile.
+    assert_eq!(doc.profile_models.len(), 1, "v{version} keeps one target");
+    assert_eq!(doc.profile_models[0].translation_profile_id.to_string(), PROFILE_ID);
+    assert_eq!(doc.profile_models[0].provider_model_id.to_string(), MODEL_ID);
+    assert_eq!(doc.profile_prompt_templates.len(), 1, "v{version} keeps one template");
+    assert_eq!(doc.profile_prompt_templates[0].id.to_string(), TEMPLATE_ID);
+    assert_eq!(
+      doc.profile_prompt_templates[0].translation_profile_id.to_string(),
+      PROFILE_ID
+    );
+
+    // Provider runtime requirement: v2–v7 singular requirement becomes exactly one v8
+    // binding keyed by the provider default adapter (no model adapter overrides).
+    assert_eq!(
+      doc.providers[0].runtime_bindings.len(),
+      1,
+      "v{version} yields one adapter-keyed binding"
+    );
+    assert_eq!(
+      doc.providers[0].runtime_bindings[0].adapter_id.as_deref(),
+      Some("openai-compatible")
+    );
+    assert_eq!(doc.providers[0].runtime_bindings[0].runtime_kind, "wasm-component");
+    assert_eq!(
+      doc.providers[0].runtime_bindings[0].package_digest.as_deref(),
+      Some(WASM_DIGEST)
+    );
+
+    // Version-specific arrays survive normalization.
+    if version >= 5 {
+      assert_eq!(doc.ocr_services.len(), 1, "v{version} keeps the OCR service");
+      assert_eq!(doc.ocr_services[0].id.to_string(), OCR_SERVICE_ID);
+      assert_eq!(doc.ocr_prompt_templates.len(), 1, "v{version} keeps the OCR template");
+    }
+    if version >= 6 {
+      assert_eq!(doc.speech_services.len(), 1, "v{version} keeps the Speech service");
+      assert_eq!(doc.speech_services[0].id.to_string(), SPEECH_SERVICE_ID);
+    }
+
+    // Integrations normalize to explicit runtime requirements (v2/v3 predate integrations).
+    if version >= 4 && version <= 6 {
+      assert_eq!(doc.integration_instances.len(), 1, "v{version} keeps one integration");
+      assert!(doc.integration_instances.iter().all(|i| i.runtime.is_some()));
+      assert_eq!(doc.integration_instances[0].id.to_string(), GOOGLE_WEB_INTEGRATION_ID);
+      assert_eq!(
+        doc.integration_instances[0].runtime.as_ref().unwrap().runtime_kind,
+        "bundled-rust",
+        "v{version} bundled integration normalizes to bundled-rust"
+      );
+    } else if version <= 3 {
+      assert!(doc.integration_instances.is_empty(), "v{version} has no integrations");
+    }
+    if version >= 7 {
+      assert_eq!(doc.integration_instances.len(), 2, "v{version} keeps both integrations");
+      assert!(doc.integration_instances.iter().all(|i| i.runtime.is_some()));
+      assert_eq!(doc.integration_instances[0].id.to_string(), GOOGLE_WEB_INTEGRATION_ID);
+      assert_eq!(
+        doc.integration_instances[0].runtime.as_ref().unwrap().runtime_kind,
+        "bundled-rust",
+        "v{version} bundled integration stays explicit"
+      );
+      let wasm = doc
+        .integration_instances
+        .iter()
+        .find(|i| i.id.to_string() == CONFORMANCE_INTEGRATION_ID)
+        .expect("conformance integration");
+      assert_eq!(wasm.runtime.as_ref().unwrap().runtime_kind, "wasm-component");
+    }
+  }
+
+  // v8: the mixed fixture keeps the graph and both distinct adapter keys.
+  let doc = load("v8-mixed.json");
+  assert_eq!(doc.format_version, EXPORT_FORMAT_VERSION);
+  assert_eq!(doc.providers.len(), 1);
+  assert_eq!(doc.models.len(), 1);
+  assert_eq!(doc.translation_profiles.len(), 1);
+  assert_eq!(doc.profile_models.len(), 1);
+  assert_eq!(doc.profile_prompt_templates.len(), 1);
+  let bindings = &doc.providers[0].runtime_bindings;
+  assert_eq!(bindings.len(), 2, "v8 provider requirements stay adapter-keyed");
+  assert_eq!(bindings[0].adapter_id.as_deref(), Some("openai-compatible"));
+  assert_eq!(bindings[1].adapter_id.as_deref(), Some("openai-responses"));
+  assert_eq!(bindings[1].runtime_kind, "wasm-component");
+  // Integration runtime requirements remain explicit after normalization.
+  assert_eq!(doc.integration_instances.len(), 3);
+  assert!(doc.integration_instances.iter().all(|i| i.runtime.is_some()));
+  let wasm_integration = doc
+    .integration_instances
+    .iter()
+    .find(|i| i.plugin_id == "com.langnext.conformance")
+    .unwrap();
+  assert_eq!(
+    wasm_integration.runtime.as_ref().unwrap().runtime_kind,
+    "wasm-component"
+  );
+  let native_integration = doc
+    .integration_instances
+    .iter()
+    .find(|i| i.plugin_id == "com.langnext.ocr.native-conformance")
+    .unwrap();
+  assert_eq!(
+    native_integration.runtime.as_ref().unwrap().runtime_kind,
+    "trusted-native-worker"
+  );
+}
+
+/// Acceptance gate: current v8 export → parse → preview → Copy apply → export preserves
+/// portable graph/runtime semantics after the expected ID rewriting.
+#[test]
+fn runtime_plugin_import_fixture_v8_round_trip_preserves_runtime_semantics() {
+  use crate::domain::import_export::parse_and_normalize_export_document;
+  use crate::repositories::integration_instances as integration_repo;
+
+  let (_dir, db, _v, providers, _models, _profiles, _settings, ie) = setup();
+
+  let raw = std::fs::read_to_string(import_fixture_path("v8-mixed.json")).unwrap();
+  let value: serde_json::Value = serde_json::from_str(&raw).unwrap();
+  let doc = parse_and_normalize_export_document(value).unwrap();
+
+  // Preview through the session seam (what the frontend calls after parsing the envelope).
+  let preview = ie.preview_with_session(&doc, ImportConflictMode::Copy).unwrap();
+  assert!(preview.valid, "errors: {:?}", preview.validation_errors);
+  assert!(!preview.preview_id.is_empty());
+  assert_eq!(preview.counts.providers_copy, 1);
+  assert_eq!(preview.counts.integrations_copy, 3);
+  assert_eq!(
+    preview.runtime_requirements.len(),
+    5,
+    "2 provider bindings + 3 integration requirements"
+  );
+  assert!(
+    preview.runtime_requirements.iter().all(
+      |entry| entry.required_action != crate::domain::import_export::ImportRuntimeRequiredAction::ActivateAfterImport
+    ),
+    "no package is installed locally, so nothing is ready to activate"
+  );
+
+  let result = ie.import_by_preview_id(&preview.preview_id).unwrap();
+  assert!(result.applied);
+
+  // Copy mode: 1 provider + 2 integrations exist with remapped IDs.
+  let provider_rows = providers.list().unwrap();
+  assert_eq!(provider_rows.len(), 1);
+  let integration_count: i64 = db
+    .read(|conn| {
+      Ok(
+        conn
+          .query_row("SELECT COUNT(*) FROM integration_instances", [], |row| row.get(0))
+          .unwrap(),
+      )
+    })
+    .unwrap();
+  assert_eq!(integration_count, 3);
+
+  // Re-export preserves the exact adapter-keyed provider requirements and the explicit
+  // integration runtimes after ID rewriting.
+  let reexported = ie.export().unwrap();
+  let provider = &reexported.providers[0];
+  assert_eq!(provider.runtime_bindings.len(), 2);
+  assert_eq!(
+    provider.runtime_bindings[0].adapter_id.as_deref(),
+    Some("openai-compatible")
+  );
+  assert_eq!(
+    provider.runtime_bindings[1].adapter_id.as_deref(),
+    Some("openai-responses")
+  );
+  assert_eq!(
+    provider.runtime_bindings[1].package_digest.as_deref(),
+    Some("ab".repeat(32).as_str())
+  );
+  assert!(reexported.integration_instances.iter().all(|i| i.runtime.is_some()));
+
+  let imported_ids: Vec<uuid::Uuid> = db
+    .read(|conn| Ok(integration_repo::list(conn)?.into_iter().map(|i| i.id).collect()))
+    .unwrap();
+  assert_ne!(
+    imported_ids[0], doc.integration_instances[0].id,
+    "copy mode must rewrite integration IDs"
+  );
+}
+
+/// Acceptance gate: importing exact installed Wasm and trusted-native-worker requirements
+/// persists them inactive — no execution grant, no install op, no upgrade snapshot, no
+/// activation — and starts zero real dispatches (Wasm guest, native worker, migration,
+/// network) for both preview and apply. The probe scope is serialized process-wide and
+/// attributes dispatches to the arming thread; preview and apply run synchronously on that
+/// thread, so a zero snapshot covers every dispatch the import path can start. The public
+/// list seam reports unavailable/pending until a separate confirmed lifecycle action.
+#[test]
+fn runtime_plugin_import_no_execution_installed_requirement_stays_inactive() {
+  use crate::domain::import_export::parse_and_normalize_export_document;
+  use crate::domain::runtime_provider::{ProviderRuntimeKind, ProviderRuntimeState};
+  use crate::repositories::integration_instances as integration_repo;
+  use crate::repositories::provider_runtime_bindings;
+  use crate::services::execution_dispatch_probe::scope;
+
+  let (_dir, db, _v, providers, _models, _profiles, _settings, ie) = setup();
+
+  // The exact Wasm and trusted-native-worker digests from the fixture are installed locally
+  // with matching manifests/publishers — yet import must not activate or dispatch them.
+  insert_installed_package(
+    &db,
+    &"a".repeat(64),
+    "com.langnext.conformance",
+    "1.0.0",
+    "wasm-component",
+    "com.langnext.vendor.keys.1",
+    &"c".repeat(64),
+    "1.0",
+    true,
+  );
+  insert_installed_package(
+    &db,
+    &"d".repeat(64),
+    "com.langnext.ocr.native-conformance",
+    "1.0.0",
+    "trusted-native-worker",
+    "com.langnext.vendor.keys.2",
+    &"e".repeat(64),
+    "1.1",
+    true,
+  );
+
+  let raw = std::fs::read_to_string(import_fixture_path("v8-mixed.json")).unwrap();
+  let value: serde_json::Value = serde_json::from_str(&raw).unwrap();
+  let doc = parse_and_normalize_export_document(value).unwrap();
+
+  // One serialized scope spans both operations; it observes dispatches from any thread.
+  let probe = scope();
+  let preview = ie.preview_with_session(&doc, ImportConflictMode::Merge).unwrap();
+  assert!(preview.valid, "errors: {:?}", preview.validation_errors);
+  // Preview must start no runtime, migration, worker, or network dispatch.
+  probe.assert_zero();
+
+  // The installed Wasm and native integrations report ready-to-activate, not activated.
+  let conformance = preview
+    .runtime_requirements
+    .iter()
+    .find(|entry| entry.display_label == "Conformance Wasm")
+    .expect("conformance requirement previewed");
+  assert_eq!(
+    conformance.local_status,
+    crate::domain::import_export::ImportRuntimeLocalStatus::Installed
+  );
+  assert_eq!(
+    conformance.required_action,
+    crate::domain::import_export::ImportRuntimeRequiredAction::ActivateAfterImport
+  );
+  let native = preview
+    .runtime_requirements
+    .iter()
+    .find(|entry| entry.display_label == "Native OCR")
+    .expect("native requirement previewed");
+  assert_eq!(
+    native.local_status,
+    crate::domain::import_export::ImportRuntimeLocalStatus::Installed
+  );
+  assert_eq!(
+    native.required_action,
+    crate::domain::import_export::ImportRuntimeRequiredAction::ActivateAfterImport
+  );
+
+  let result = ie.import_by_preview_id(&preview.preview_id).unwrap();
+  assert!(result.applied);
+  // Apply must start no runtime, migration, worker, or network dispatch either.
+  probe.assert_zero();
+
+  // The exact requirements persist inactive: unavailable state, no grant revision.
+  let binding = db
+    .read(|conn| provider_runtime_bindings::get(conn, doc.providers[0].id, "openai-responses"))
+    .unwrap();
+  assert_eq!(binding.runtime_kind, ProviderRuntimeKind::WasmComponent);
+  assert_eq!(binding.package_digest.as_deref(), Some("ab".repeat(32).as_str()));
+  assert_eq!(binding.state, ProviderRuntimeState::Unavailable);
+  assert!(binding.grant_set_revision.is_none());
+
+  let wasm_integration = db
+    .read(|conn| integration_repo::get(conn, doc.integration_instances[1].id))
+    .unwrap();
+  assert_eq!(wasm_integration.runtime_kind, "wasm-component");
+  assert_eq!(wasm_integration.runtime_state, "unavailable");
+  assert!(wasm_integration.execution_grant_set_revision.is_none());
+
+  let native_integration = db
+    .read(|conn| integration_repo::get(conn, doc.integration_instances[2].id))
+    .unwrap();
+  assert_eq!(native_integration.runtime_kind, "trusted-native-worker");
+  assert_eq!(native_integration.runtime_state, "unavailable");
+  assert!(native_integration.execution_grant_set_revision.is_none());
+
+  // Public list seam: the provider binding reports unavailable (no execution resolution).
+  let provider_dto = providers
+    .list()
+    .unwrap()
+    .into_iter()
+    .find(|p| p.id == doc.providers[0].id)
+    .unwrap();
+  let binding_dto = provider_dto
+    .runtime_bindings
+    .iter()
+    .find(|b| b.adapter_id == "openai-responses")
+    .expect("binding DTO");
+  assert_eq!(binding_dto.state, ProviderRuntimeState::Unavailable);
+  assert_eq!(binding_dto.grant_set_revision, None);
+
+  // No execution authority, install op, or upgrade snapshot was created by preview/apply.
+  let count = |table: &str| -> i64 {
+    db.read(|conn| {
+      Ok(
+        conn
+          .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| row.get(0))
+          .unwrap(),
+      )
+    })
+    .unwrap()
+  };
+  assert_eq!(count("execution_grant_sets"), 0, "no execution grant");
+  assert_eq!(count("plugin_install_operations"), 0, "no package install op");
+  assert_eq!(count("plugin_upgrade_snapshots"), 0, "no rollback snapshot");
 }

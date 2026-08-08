@@ -767,6 +767,22 @@ mod wasm_executor {
   }
 
   #[tokio::test]
+  async fn execution_dispatch_probe_records_wasm_guest() {
+    use crate::services::execution_dispatch_probe::scope;
+    let _probe = scope();
+    let cancel = CancelToken::new();
+    let translated = run_conformance("success", None, cancel).await.unwrap();
+    assert_eq!(translated, "[hello]");
+    let counts = _probe.snapshot();
+    // The probe counts every thread while armed, so parallel tests may add dispatches;
+    // assert the expected category fired rather than an exact total.
+    assert!(
+      counts.wasm_guest >= 1,
+      "at least one real Wasm guest dispatch must be observed"
+    );
+  }
+
+  #[tokio::test]
   async fn broker_call_mode() {
     let cancel = CancelToken::new();
     let translated = run_conformance("broker-call", None, cancel).await.unwrap();

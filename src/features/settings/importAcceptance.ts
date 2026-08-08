@@ -1,7 +1,14 @@
-// ABOUTME: Pure helpers for post-import Query invalidation and re-auth warnings.
-// ABOUTME: Keeps settings route free of import acceptance branching logic.
-import type { QueryClient } from "@tanstack/react-query";
-import { integrationKeys, modelKeys, ocrKeys, profileKeys, providerKeys, settingsKeys } from "../../query/keys";
+// ABOUTME: Pure helpers for post-import Query invalidation keys and re-auth warnings.
+// ABOUTME: The route workflow seam owns gating; this module only defines the data.
+import {
+  integrationKeys,
+  modelKeys,
+  ocrKeys,
+  profileKeys,
+  providerKeys,
+  settingsKeys,
+  speechKeys,
+} from "../../query/keys";
 import type { ImportPreview } from "../../storage/types";
 
 /** Query prefixes that must refresh after a successful configuration import. */
@@ -11,15 +18,9 @@ export const IMPORT_INVALIDATION_KEYS = [
   profileKeys.all,
   integrationKeys.all,
   ocrKeys.all,
+  speechKeys.all,
   settingsKeys.all,
 ] as const;
-
-/** Invalidate provider/model/profile/integration/OCR Query prefixes after import. */
-export function invalidateAfterConfigurationImport(queryClient: QueryClient): void {
-  for (const queryKey of IMPORT_INVALIDATION_KEYS) {
-    void queryClient.invalidateQueries({ queryKey });
-  }
-}
 
 /** True when imported providers or integration instances need credential re-entry. */
 export function importRequiresAuthentication(

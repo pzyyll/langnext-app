@@ -1595,6 +1595,20 @@ fn runtime_migration_guest_renames_key_not_value() {
 }
 
 #[test]
+fn execution_dispatch_probe_records_migration() {
+  use crate::services::execution_dispatch_probe::scope;
+  let _probe = scope();
+  let runtime = WasmRuntime::new().unwrap();
+  let bytes = MIGRATION_WASM;
+  let input = br#"{"label":"label"}"#;
+  let out = tauri::async_runtime::block_on(runtime.execute_migrate_config(bytes, 1, 2, input.to_vec())).unwrap();
+  assert!(!out.is_empty());
+  let counts = _probe.snapshot();
+  assert_eq!(counts.migration, 1, "one real migration execution must be observed");
+  assert_eq!(counts.total(), 1, "no other dispatch category may fire");
+}
+
+#[test]
 fn runtime_post_compile_recheck_rejects_publisher_revoke() {
   let (dir, db, packages, lifecycle) = setup();
   let (pkg1, d1) = build_pkg("1.0.0", None);

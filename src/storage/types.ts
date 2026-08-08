@@ -1291,6 +1291,44 @@ export interface ImportPreviewCounts {
   speechServicesCopy?: number;
 }
 
+export type ImportRuntimeSubjectKind = "integration" | "provider";
+
+/** Local availability of one exact imported runtime requirement (Phase 11). */
+export type ImportRuntimeLocalStatus =
+  | "bundled"
+  | "legacy"
+  | "missing"
+  | "revoked"
+  | "disabled"
+  | "content_unavailable"
+  | "incompatible"
+  | "installed";
+
+/** Closed required user action for one exact imported runtime requirement. */
+export type ImportRuntimeRequiredAction =
+  | "none"
+  | "install_exact_package"
+  | "restore_publisher"
+  | "resolve_incompatibility"
+  | "activate_after_import";
+
+/** One exact per-subject runtime requirement preview entry (no secrets/refs/grants). */
+export interface ImportRuntimeRequirementPreview {
+  subjectKind: ImportRuntimeSubjectKind;
+  /** Final (post-import) subject id; Copy mode shows the remapped id. */
+  subjectId: string;
+  displayLabel: string;
+  adapterId?: string | null;
+  runtimeKind: string;
+  pluginId?: string | null;
+  pluginVersion?: string | null;
+  packageDigest?: string | null;
+  publisherKeyId?: string | null;
+  publisherKeyFingerprint?: string | null;
+  localStatus: ImportRuntimeLocalStatus;
+  requiredAction: ImportRuntimeRequiredAction;
+}
+
 export interface ImportPreview {
   valid: boolean;
   counts: ImportPreviewCounts;
@@ -1302,6 +1340,10 @@ export interface ImportPreview {
   ocrRequiresAuthentication?: string[];
   proxyRequiresAuthentication: boolean;
   defaultProfileCleared: boolean;
+  /** Opaque bounded expiring preview session id; empty when invalid or absent. */
+  previewId?: string;
+  /** Exact per-subject runtime requirement local availability and required actions. */
+  runtimeRequirements?: ImportRuntimeRequirementPreview[];
 }
 
 export interface ImportResult {
@@ -1309,9 +1351,12 @@ export interface ImportResult {
   applied: boolean;
 }
 
+/** Wire shape of a sanitized backend IPC rejection. `reason` is an optional typed
+ * machine-readable detail (e.g. import-preview conflict `stale` | `expired`). */
 export interface IpcError {
   code: string;
   message: string;
+  reason?: string;
 }
 
 /** Persisted outcome of a completed translate attempt. */

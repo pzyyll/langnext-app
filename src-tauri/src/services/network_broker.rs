@@ -137,6 +137,10 @@ impl NetworkBroker {
   /// Binary capabilities such as Edge TTS use this path; it never attempts UTF-8 decoding.
   pub async fn execute_bytes(&self, request: BrokerRequest) -> Result<BoundedHttpResponse, CapabilityError> {
     let (cancel, work) = self.prepare(request)?;
+    #[cfg(test)]
+    crate::services::execution_dispatch_probe::record(
+      crate::services::execution_dispatch_probe::ExecutionDispatchKind::Network,
+    );
     with_cancel(cancel.as_ref(), self.transport.request(work))
       .await
       .map_err(map_transport_error)
@@ -1047,6 +1051,51 @@ mod tests {
     assert!(prepared.url.as_str().starts_with("https://translation.googleapis.com/"));
     assert_eq!(prepared.destination_policy, DestinationPolicy::TrustedFixed);
     assert!(prepared.headers.contains_key("Authorization"));
+  }
+
+  #[tokio::test]
+  async fn execution_dispatch_probe_records_network() {
+    use crate::services::execution_dispatch_probe::scope;
+    let _probe = scope();
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::new(dir.path()).unwrap();
+    db.initialize().unwrap();
+    let id = seed_google_instance(&db);
+    let transport = Arc::new(CaptureTransport {
+      last: Mutex::new(None),
+      response: Mutex::new(Ok(text_response("{}"))),
+    });
+    let broker = broker_with(db, transport.clone());
+    let grant = make_grant(id).await;
+    let response = broker
+      .execute(BrokerRequest {
+        integration_instance_id: id,
+        capability_id: "translate.text@1".into(),
+        execution_principal: principal(id, "translate.text@1", "req-probe-1"),
+        endpoint_alias: "translate".into(),
+        method: ProviderHttpMethod::Post,
+        relative_path: "v3beta1/projects/demo/locations/global:translateText".into(),
+        query: vec![],
+        headers: HashMap::new(),
+        body: Some("{}".into()),
+        content_type: Some("application/json".into()),
+        auth: Some(grant),
+        request_id: "req-probe-1".into(),
+        cancel: None,
+        max_response_body_bytes: None,
+        max_request_body_bytes: None,
+        timeout: None,
+      })
+      .await
+      .unwrap();
+    assert_eq!(response.status, 200);
+    let counts = _probe.snapshot();
+    // The probe counts every thread while armed, so parallel tests may add dispatches;
+    // assert the expected category fired rather than an exact total.
+    assert!(
+      counts.network >= 1,
+      "at least one real raw transport call must be observed"
+    );
   }
 
   #[test]

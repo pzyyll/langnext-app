@@ -270,6 +270,10 @@ impl NativeWorkerManager {
         NativeWorkerErrorCode::WorkerTimeout.as_str().into(),
       ));
     }
+    #[cfg(test)]
+    crate::services::execution_dispatch_probe::record(
+      crate::services::execution_dispatch_probe::ExecutionDispatchKind::NativeWorker,
+    );
     let mut spawned = spawn_exact(&SpawnConfig {
       executable: request.worker_exe.clone(),
       work_dir,
@@ -863,6 +867,50 @@ fn main() {
       })
       .expect("native worker execute");
     assert_eq!(response.text, "hello-native");
+  }
+
+  #[test]
+  fn execution_dispatch_probe_records_native_worker() {
+    use crate::services::execution_dispatch_probe::scope;
+    let _probe = scope();
+    let dir = TempDir::new().unwrap();
+    let (model_root, model_files) = fixture_model(dir.path());
+    let exe = build_conformance_helper(dir.path());
+    let worker_sha256 = worker_sha(&exe);
+    let manager = NativeWorkerManager::new();
+    let png = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, b"\x89PNG\r\n");
+    let response = manager
+      .execute(NativeWorkerExecuteRequest {
+        worker_exe: exe,
+        worker_sha256,
+        runtime_dir: dir.path().to_path_buf(),
+        model_root,
+        model_files,
+        package_digest: "a".repeat(64),
+        runtime_set_digest: "b".repeat(64),
+        model_set_digest: "c".repeat(64),
+        model_api_version: 1,
+        runtime_dependencies: vec![],
+        ocr: OcrImageRequest {
+          png_base64: png,
+          preferences: crate::domain::service_capability::OcrImagePreferences {
+            operation: crate::domain::service_capability::OcrImageOperation::DocumentTextDetection,
+            language_hints: vec![],
+          },
+        },
+        cancel: None,
+        startup_phase_cap: None,
+        session_timeout: None,
+      })
+      .expect("native worker execute");
+    assert_eq!(response.text, "hello-native");
+    let counts = _probe.snapshot();
+    // The probe counts every thread while armed, so parallel tests may add dispatches;
+    // assert the expected category fired rather than an exact total.
+    assert!(
+      counts.native_worker >= 1,
+      "at least one real native worker spawn must be observed"
+    );
   }
 
   #[test]

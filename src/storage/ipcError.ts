@@ -19,10 +19,13 @@ export type IpcErrorCode =
 /**
  * Stable IPC failure used on the Effect error channel and Promise rejections.
  * `code` is open: non-empty wire codes outside the known list are preserved as-is.
+ * `reason` is an optional typed machine-readable detail (e.g. import-preview
+ * conflict `stale` | `expired`); it is never derived from message prose.
  */
 export class IpcError extends Data.TaggedError("IpcError")<{
   readonly code: IpcErrorCode | (string & {});
   readonly message: string;
+  readonly reason?: string;
 }> {}
 
 /** Type guard for decoded or rethrown `IpcError` instances. */
@@ -48,7 +51,8 @@ export function decodeIpcRejection(error: unknown): IpcError {
     const record = error as Record<string, unknown>;
     if (typeof record.code === "string" && record.code.trim()) {
       const message = typeof record.message === "string" ? record.message : "";
-      return new IpcError({ code: record.code, message });
+      const reason = typeof record.reason === "string" && record.reason.trim() ? record.reason : undefined;
+      return new IpcError({ code: record.code, message, reason });
     }
     // Preserve displayable messages when the wire shape omitted a usable code.
     if (typeof record.message === "string" && record.message.trim()) {

@@ -199,8 +199,11 @@ mod tests {
 
   #[test]
   fn registry_rejects_capability_without_broker_authority() {
-    let mut registrations = bundled().unwrap();
-    let mut edge = registrations.pop().unwrap();
+    let registrations = bundled().unwrap();
+    let mut edge = registrations
+      .into_iter()
+      .find(|registration| registration.manifest.id == EDGE_TTS_PLUGIN_ID)
+      .expect("edge tts registration");
     edge.capabilities[0].endpoint_authorities.clear();
 
     let mut registry = ServiceIntegrationRegistry::empty();
@@ -210,8 +213,11 @@ mod tests {
 
   #[test]
   fn registry_rejects_descriptor_that_widens_manifest_authority() {
-    let mut registrations = bundled().unwrap();
-    let mut edge = registrations.pop().unwrap();
+    let registrations = bundled().unwrap();
+    let mut edge = registrations
+      .into_iter()
+      .find(|registration| registration.manifest.id == EDGE_TTS_PLUGIN_ID)
+      .expect("edge tts registration");
     edge.capabilities[0]
       .descriptor
       .endpoint_aliases
