@@ -1,22 +1,36 @@
 // ABOUTME: Unit tests for the install-package Effect workflow Promise runners.
 // ABOUTME: Mocks dialog and IPC; asserts cancel, preview, approve, and discard sequencing.
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
 
 const openMock = mock(async (): Promise<string | null> => null);
 const invokeMock = mock(async (): Promise<unknown> => {
   throw new Error("invoke not stubbed");
 });
 
-mock.module("@tauri-apps/plugin-dialog", () => ({
-  open: openMock,
-}));
+let runApprovePluginPackage: typeof import("./installPluginPackageFlow").runApprovePluginPackage;
+let runDiscardPluginPackagePreview: typeof import("./installPluginPackageFlow").runDiscardPluginPackagePreview;
+let runSelectAndPreviewPluginPackage: typeof import("./installPluginPackageFlow").runSelectAndPreviewPluginPackage;
 
-mock.module("@tauri-apps/api/core", () => ({
-  invoke: invokeMock,
-}));
-
-const { runApprovePluginPackage, runDiscardPluginPackagePreview, runSelectAndPreviewPluginPackage } =
-  await import("./installPluginPackageFlow");
+beforeAll(async () => {
+  // Re-bind host seams. Keep the full core export surface so later suites can still import Channel.
+  mock.module("@tauri-apps/plugin-dialog", () => ({
+    open: openMock,
+  }));
+  mock.module("@tauri-apps/api/core", () => ({
+    invoke: invokeMock,
+    Channel: class Channel {},
+    Resource: class Resource {},
+    transformCallback: () => "",
+    convertFileSrc: (path: string) => path,
+    isTauri: () => false,
+    IS_TAURI: false,
+  }));
+  // Sibling suites may have replaced this module; cache-bust to load the real runners.
+  const flow = await import(`./installPluginPackageFlow?suite=${Date.now()}`);
+  runApprovePluginPackage = flow.runApprovePluginPackage;
+  runDiscardPluginPackagePreview = flow.runDiscardPluginPackagePreview;
+  runSelectAndPreviewPluginPackage = flow.runSelectAndPreviewPluginPackage;
+});
 
 describe("installPluginPackageFlow", () => {
   beforeEach(() => {
@@ -93,7 +107,6 @@ describe("installPluginPackageFlow", () => {
       previewId: "preview-1",
       acknowledgePermissions: true,
       approvePublisher: false,
-      setAsDefault: false,
     });
     expect(approved.approvalId).toBe("approval-1");
 

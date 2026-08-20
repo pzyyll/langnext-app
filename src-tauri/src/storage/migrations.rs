@@ -31,6 +31,10 @@ pub const MIGRATIONS: &[&str] = &[
   include_str!("../../migrations/0024_runtime_provider_bindings.sql"),
   include_str!("../../migrations/0025_provider_runtime_interface_bindings.sql"),
   include_str!("../../migrations/0026_plugin_model_resources.sql"),
+  include_str!("../../migrations/0027_default_package_activation_policies.sql"),
+  include_str!("../../migrations/0028_default_runtime_activation_claims.sql"),
+  include_str!("../../migrations/0029_default_runtime_authority_approvals.sql"),
+  include_str!("../../migrations/0030_disable_retired_legacy_runtimes.sql"),
 ];
 
 pub fn latest_version() -> i32 {
@@ -299,6 +303,174 @@ mod tests {
         .unwrap_or_else(|e| panic!("{table} missing: {e}"));
       assert_eq!(count, 0, "{table} should be empty");
     }
+    // v27 default package activation policy and intent tables exist and are empty.
+    for table in [
+      "plugin_default_activation_policies",
+      "default_runtime_activation_intents",
+    ] {
+      let count: i64 = conn
+        .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+        .unwrap_or_else(|e| panic!("{table} missing: {e}"));
+      assert_eq!(count, 0, "{table} should be empty");
+    }
+  }
+
+  /// Migration 0027 creates policy/intent tables without authorizing existing defaults.
+  #[test]
+  fn default_package_activation_migration_preserves_unauthorized_defaults() {
+    const PLUGIN_ID: &str = "com.example.translate";
+    const PACKAGE_DIGEST: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const PUBLISHER_KEY_ID: &str = "publisher-1";
+    const PUBLISHER_FINGERPRINT: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const PERMISSION_DIGEST: &str = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+    const TIMESTAMP: &str = "2026-08-07T00:00:00Z";
+
+    let mut conn = Connection::open_in_memory().unwrap();
+    migrate_with(&mut conn, &MIGRATIONS[..26]).unwrap();
+    assert_eq!(read_user_version(&conn).unwrap(), 26);
+
+    conn
+      .execute(
+        "INSERT INTO plugin_publishers (
+          key_id, fingerprint, public_key_hex, source, enabled, revoked, created_at, updated_at
+        ) VALUES (?1, ?2, 'pk', 'vendor', 1, 0, ?3, ?3)",
+        params![PUBLISHER_KEY_ID, PUBLISHER_FINGERPRINT, TIMESTAMP],
+      )
+      .unwrap();
+    conn
+      .execute(
+        "INSERT INTO installed_plugin_versions (
+          package_digest, plugin_id, version, publisher_key_id, publisher_fingerprint,
+          runtime_kind, manifest_json, permission_request_digest, content_available, installed_at
+        ) VALUES (?1, ?2, '1.0.0', ?3, ?4, 'wasm-component', '{}', ?5, 1, ?6)",
+        params![
+          PACKAGE_DIGEST,
+          PLUGIN_ID,
+          PUBLISHER_KEY_ID,
+          PUBLISHER_FINGERPRINT,
+          PERMISSION_DIGEST,
+          TIMESTAMP,
+        ],
+      )
+      .unwrap();
+    conn
+      .execute(
+        "INSERT INTO plugin_default_versions (plugin_id, package_digest, updated_at)
+         VALUES (?1, ?2, ?3)",
+        params![PLUGIN_ID, PACKAGE_DIGEST, TIMESTAMP],
+      )
+      .unwrap();
+
+    migrate(&mut conn).unwrap();
+    assert_eq!(read_user_version(&conn).unwrap(), latest_version());
+
+    let default_digest: String = conn
+      .query_row(
+        "SELECT package_digest FROM plugin_default_versions WHERE plugin_id = ?1",
+        params![PLUGIN_ID],
+        |row| row.get(0),
+      )
+      .unwrap();
+    assert_eq!(default_digest, PACKAGE_DIGEST);
+
+    let policy_count: i64 = conn
+      .query_row(
+        "SELECT COUNT(*) FROM plugin_default_activation_policies WHERE plugin_id = ?1",
+        params![PLUGIN_ID],
+        |row| row.get(0),
+      )
+      .unwrap();
+    assert_eq!(
+      policy_count, 0,
+      "existing defaults must remain unauthorized after migration"
+    );
+
+    let intent_count: i64 = conn
+      .query_row("SELECT COUNT(*) FROM default_runtime_activation_intents", [], |row| {
+        row.get(0)
+      })
+      .unwrap();
+    assert_eq!(intent_count, 0);
+  }
+
+  /// Migration 0029 adds exact additive authority approvals without secrets.
+  #[test]
+  fn default_runtime_authority_approval_migration() {
+    const PACKAGE_DIGEST: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const PUBLISHER_KEY_ID: &str = "publisher-1";
+    const PUBLISHER_FINGERPRINT: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const PERMISSION_DIGEST: &str = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+    const TIMESTAMP: &str = "2026-08-11T00:00:00Z";
+
+    let mut conn = Connection::open_in_memory().unwrap();
+    migrate_with(&mut conn, &MIGRATIONS[..28]).unwrap();
+    assert_eq!(read_user_version(&conn).unwrap(), 28);
+
+    conn
+      .execute(
+        "INSERT INTO plugin_publishers (
+          key_id, fingerprint, public_key_hex, source, enabled, revoked, created_at, updated_at
+        ) VALUES (?1, ?2, 'pk', 'vendor', 1, 0, ?3, ?3)",
+        params![PUBLISHER_KEY_ID, PUBLISHER_FINGERPRINT, TIMESTAMP],
+      )
+      .unwrap();
+    conn
+      .execute(
+        "INSERT INTO installed_plugin_versions (
+          package_digest, plugin_id, version, publisher_key_id, publisher_fingerprint,
+          runtime_kind, manifest_json, permission_request_digest, content_available, installed_at
+        ) VALUES (?1, 'com.example.translate', '1.0.0', ?2, ?3, 'wasm-component', '{}', ?4, 1, ?5)",
+        params![
+          PACKAGE_DIGEST,
+          PUBLISHER_KEY_ID,
+          PUBLISHER_FINGERPRINT,
+          PERMISSION_DIGEST,
+          TIMESTAMP,
+        ],
+      )
+      .unwrap();
+
+    migrate(&mut conn).unwrap();
+    assert_eq!(read_user_version(&conn).unwrap(), latest_version());
+
+    conn
+      .execute(
+        "INSERT INTO default_runtime_authority_approvals (
+          id, subject_kind, subject_id, package_digest, config_digest, subject_update_token,
+          policy_constraints_digest, approved_authority_json, approved_authority_digest,
+          created_at, updated_at
+        ) VALUES (?1, 'integration_instance', ?2, ?3, 'cfg', 'tok', 'policy', '{}', 'auth', ?4, ?4)",
+        params![
+          "approval-1",
+          "11111111-1111-1111-1111-111111111111",
+          PACKAGE_DIGEST,
+          TIMESTAMP
+        ],
+      )
+      .unwrap();
+
+    let columns: Vec<String> = {
+      let mut stmt = conn
+        .prepare("PRAGMA table_info(default_runtime_authority_approvals)")
+        .unwrap();
+      stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap()
+    };
+    for forbidden in ["secret", "credential", "token", "password", "api_key", "apiKey"] {
+      assert!(
+        !columns.iter().any(|c| c.eq_ignore_ascii_case(forbidden)),
+        "approval table must not store secret field {forbidden}"
+      );
+    }
+    let count: i64 = conn
+      .query_row("SELECT COUNT(*) FROM default_runtime_authority_approvals", [], |row| {
+        row.get(0)
+      })
+      .unwrap();
+    assert_eq!(count, 1);
   }
 
   #[test]
@@ -1276,5 +1448,130 @@ mod tests {
     assert_eq!(package_digest.as_deref(), Some(PACKAGE_DIGEST));
     assert!(grant_revision.is_none());
     assert_eq!(error_code.as_deref(), Some("plugin_unavailable"));
+  }
+
+  /// Migration 0030 is a registered checkpoint: it advances `user_version` to 30 but never
+  /// disables, deletes, or rewrites any row. Retirement stays inventory-driven.
+  #[test]
+  fn retirement_migration_preserves_active_rows() {
+    const PLUGIN_ID: &str = "com.langnext.google-translate-web";
+    const PROVIDER_ID: &str = "11111111-1111-4111-8111-111111111111";
+    const ENABLED_INSTANCE: &str = "inst-0";
+    const TIMESTAMP: &str = "2026-08-12T00:00:00Z";
+
+    let mut conn = Connection::open_in_memory().unwrap();
+    migrate_with(&mut conn, &MIGRATIONS[..29]).unwrap();
+    assert_eq!(read_user_version(&conn).unwrap(), 29);
+
+    // Enabled legacy Google Web, Edge TTS, Google Cloud, and PaddleOCR rows, plus an enabled
+    // provider with a legacy binding and one dependency row.
+    for (index, plugin) in [
+      "com.langnext.google-translate-web",
+      "com.langnext.edge-tts",
+      "com.langnext.google-cloud",
+      "com.langnext.paddleocr",
+    ]
+    .iter()
+    .enumerate()
+    {
+      conn
+        .execute(
+          "INSERT INTO integration_instances (
+            id, plugin_id, plugin_version, display_name, enabled,
+            config_json, config_schema_version, health_status,
+            last_validated_at, last_error_code, runtime_kind, package_digest,
+            execution_grant_set_revision, runtime_state, runtime_error_code,
+            runtime_error_message, runtime_requirement_json, created_at, updated_at
+          ) VALUES (?1, ?2, 'legacy', 'fixture', 1,
+            '{}', 1, 'ready',
+            NULL, NULL, 'bundled-rust', NULL,
+            NULL, 'active', NULL,
+            NULL, NULL, ?3, ?3)",
+          params![format!("inst-{index}"), plugin, TIMESTAMP],
+        )
+        .unwrap();
+    }
+    conn
+      .execute(
+        "INSERT INTO provider_instances (
+          id, adapter_id, display_name, base_url, base_url_source, auth_scheme_json,
+          credential_kind, credential_ref, enabled, proxy_mode, insecure_http_confirmed_at,
+          models_synced_at, models_sync_status, models_sync_error_code, created_at, updated_at, sort_order
+        ) VALUES (?1, 'openai-compatible', 'fixture', 'https://api.example.com/v1', 'plugin_default',
+          '{\"schemaVersion\":1,\"type\":\"none\"}', 'none', NULL, 1, 'inherit', NULL,
+          NULL, 'never', NULL, ?2, ?2, 0)",
+        params![PROVIDER_ID, TIMESTAMP],
+      )
+      .unwrap();
+    conn
+      .execute(
+        "INSERT INTO provider_runtime_bindings (
+          provider_id, adapter_id, runtime_kind, package_digest, grant_set_revision, state,
+          error_code, error_message, runtime_requirement_json, created_at, updated_at
+        ) VALUES (?1, 'openai-compatible', 'legacy-frontend-provider', NULL, NULL, 'active',
+          NULL, NULL, NULL, ?2, ?2)",
+        params![PROVIDER_ID, TIMESTAMP],
+      )
+      .unwrap();
+    conn
+      .execute(
+        "INSERT INTO speech_services (
+          id, display_name, enabled, sort_order, integration_instance_id, capability_id,
+          preferences_schema_version, preferences_json, created_at, updated_at
+        ) VALUES ('dep-1', 'dep', 1, 0, ?1, 'speech.synthesize@1', 1, '{}', ?2, ?2)",
+        params![ENABLED_INSTANCE, TIMESTAMP],
+      )
+      .unwrap();
+
+    migrate(&mut conn).unwrap();
+    assert_eq!(
+      read_user_version(&conn).unwrap(),
+      30,
+      "checkpoint advances the schema version"
+    );
+
+    let enabled_integrations: i64 = conn
+      .query_row(
+        "SELECT COUNT(*) FROM integration_instances WHERE enabled = 1 AND runtime_kind = 'bundled-rust'",
+        [],
+        |row| row.get(0),
+      )
+      .unwrap();
+    assert_eq!(
+      enabled_integrations, 4,
+      "every enabled legacy integration stays enabled"
+    );
+    let enabled_provider: i64 = conn
+      .query_row(
+        "SELECT COUNT(*) FROM provider_instances WHERE enabled = 1 AND id = ?1",
+        params![PROVIDER_ID],
+        |row| row.get(0),
+      )
+      .unwrap();
+    assert_eq!(enabled_provider, 1, "enabled legacy provider stays enabled");
+    let binding_count: i64 = conn
+      .query_row("SELECT COUNT(*) FROM provider_runtime_bindings", [], |row| row.get(0))
+      .unwrap();
+    assert_eq!(binding_count, 1, "legacy binding stays");
+    let dep_count: i64 = conn
+      .query_row("SELECT COUNT(*) FROM speech_services", [], |row| row.get(0))
+      .unwrap();
+    assert_eq!(dep_count, 1, "dependency row stays");
+    let integration_count: i64 = conn
+      .query_row("SELECT COUNT(*) FROM integration_instances", [], |row| row.get(0))
+      .unwrap();
+    assert_eq!(integration_count, 4, "no integration row is deleted");
+  }
+
+  /// Migration 0030 contains no executor allowlist: retirement scope cannot re-enter through SQL.
+  #[test]
+  fn retirement_migration_contains_no_executor_allowlist() {
+    let sql = MIGRATIONS[29];
+    assert!(!sql.contains("UPDATE"), "checkpoint must not update rows");
+    assert!(!sql.contains("DELETE"), "checkpoint must not delete rows");
+    assert!(
+      !sql.contains("paddleocr") && !sql.contains("google-translate") && !sql.contains("edge-tts"),
+      "checkpoint must not name executors"
+    );
   }
 }

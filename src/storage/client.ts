@@ -81,6 +81,13 @@ export async function deleteProviderInstance(id: string): Promise<void> {
   return runStorage(invokeEffect<void>("delete_provider_instance", { id }));
 }
 
+/** Retirement-only safe provider deletion; the backend refuses any dependent provider. */
+export async function deleteRetiredLegacyProvider(
+  input: import("./types").RetirementDeleteProviderInput,
+): Promise<void> {
+  return runStorage(invokeEffect<void>("delete_retired_legacy_provider", { input }));
+}
+
 export async function reorderProviderInstances(ids: string[]): Promise<void> {
   return runStorage(invokeEffect<void>("reorder_provider_instances", { ids }));
 }
@@ -414,11 +421,51 @@ export async function listInstalledPluginVersions(): Promise<InstalledPluginVers
   return runStorage(invokeEffect<InstalledPluginVersionDto[]>("list_installed_plugin_versions"));
 }
 
-export async function setDefaultPluginPackage(
-  pluginId: string,
+export async function previewDefaultPackageActivation(
   packageDigest: string,
+): Promise<import("./types").DefaultPackageActivationPreviewDto> {
+  return runStorage(
+    invokeEffect<import("./types").DefaultPackageActivationPreviewDto>("preview_default_package_activation", {
+      packageDigest,
+    }),
+  );
+}
+
+export async function authorizeDefaultPluginPackage(
+  input: import("./types").AuthorizeDefaultPluginPackageInput,
 ): Promise<PluginDefaultVersionDto> {
-  return runStorage(invokeEffect<PluginDefaultVersionDto>("set_default_plugin_package", { pluginId, packageDigest }));
+  return runStorage(invokeEffect<PluginDefaultVersionDto>("authorize_default_plugin_package", { input }));
+}
+
+export async function retryDefaultRuntimeActivation(
+  input: import("./types").RetryDefaultRuntimeActivationInput,
+): Promise<import("./types").DefaultRuntimeActivationIntentDto> {
+  return runStorage(
+    invokeEffect<import("./types").DefaultRuntimeActivationIntentDto>("retry_default_runtime_activation", {
+      input,
+    }),
+  );
+}
+
+export async function previewDefaultRuntimeAuthority(
+  input: import("./types").PreviewDefaultRuntimeAuthorityInput,
+): Promise<import("./types").DefaultRuntimeAuthorityPreviewDto> {
+  return runStorage(
+    invokeEffect<import("./types").DefaultRuntimeAuthorityPreviewDto>("preview_default_runtime_authority", {
+      input,
+    }),
+  );
+}
+
+export async function confirmDefaultRuntimeAuthority(
+  input: import("./types").ConfirmDefaultRuntimeAuthorityInput,
+): Promise<void> {
+  return runStorage(invokeEffect<void>("confirm_default_runtime_authority", { input }));
+}
+
+/** Read-only Phase 12 legacy runtime retirement inventory. */
+export async function listLegacyRuntimeInventory(): Promise<import("./types").LegacyRuntimeInventoryDto> {
+  return runStorage(invokeEffect<import("./types").LegacyRuntimeInventoryDto>("list_legacy_runtime_inventory"));
 }
 
 export async function listPluginPublishers(): Promise<PluginPublisherDto[]> {

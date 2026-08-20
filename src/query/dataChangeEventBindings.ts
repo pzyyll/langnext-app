@@ -42,8 +42,8 @@ export const DATA_CHANGE_EVENT_BINDINGS: readonly DataChangeEventBinding[] = [
   },
   {
     event: DATA_PROVIDERS_CHANGED,
-    // Provider enablement affects model availability in selectors.
-    invalidateKeys: [providerKeys.all, modelKeys.all],
+    // Provider enablement and package-first activation affect models and runtime package state.
+    invalidateKeys: [providerKeys.all, modelKeys.all, pluginPackageKeys.all, providerRuntimeKeys.all],
   },
   {
     event: DATA_MODELS_CHANGED,

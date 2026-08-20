@@ -3,6 +3,7 @@
 pub mod app_credentials;
 pub mod app_settings;
 pub mod credential_operations;
+pub mod default_package_activation_policies;
 pub mod installed_plugin_versions;
 pub mod integration_capability_health;
 pub mod integration_credential_bindings;

@@ -264,17 +264,21 @@ fn install_package(packages: &PluginPackageService, dir: &std::path::Path, bytes
   let src = dir.join(format!("{}.lnplugin", new_id()));
   std::fs::write(&src, bytes).unwrap();
   let preview = packages.preview_package(&src).unwrap();
-  packages
+  let result = packages
     .approve_package(ApprovePluginPackageInput {
       preview_id: preview.preview_id,
       approve_publisher: false,
       publisher_public_key_hex: None,
       acknowledge_permissions: true,
-      set_as_default: set_default,
     })
-    .unwrap()
-    .version
-    .package_digest
+    .unwrap();
+  let digest = result.version.package_digest;
+  if set_default {
+    packages
+      .set_default(&result.version.plugin_id, &digest)
+      .expect("test helper may set default only after install");
+  }
+  digest
 }
 
 fn seed_instance(db: &Database, plugin_id: &str, plugin_version: &str, config_json: &str, schema: u32) -> Uuid {

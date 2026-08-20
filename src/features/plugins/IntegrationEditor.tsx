@@ -66,6 +66,8 @@ import { isRuntimeUnresolved } from "./runtimeLifecyclePresentation";
 import { PluginModelResourcesPanel } from "./PluginModelResourcesPanel";
 import { RuntimeLifecyclePanel } from "./RuntimeLifecyclePanel";
 import { presentCapabilityHealthList } from "./capabilityHealthPresentation";
+import { DefaultRuntimeActivationStatus } from "./DefaultRuntimeActivationStatus";
+import { isIntegrationValidateDisabled } from "./defaultPackageActivationPresentation";
 
 export type IntegrationEditorProps = {
   integrationInstanceId: string;
@@ -327,6 +329,14 @@ export function IntegrationEditor({ integrationInstanceId }: IntegrationEditorPr
     validateMutation.isPending ||
     enabledMutation.isPending ||
     previewTrustMutation.isPending;
+  const validateDisabled = isIntegrationValidateDisabled({
+    pending,
+    dirty,
+    pluginMissing,
+    runtimeState: instance.runtimeState,
+    runtimeErrorCode: instance.runtimeErrorCode,
+    packageDigest: instance.packageDigest,
+  });
   const dependencies = depsQuery.data ?? [];
   const capabilityIds = definition.capabilities.map((capability) => capability.id);
   const capabilityHealth = presentCapabilityHealthList(capabilityIds, instance.capabilityHealth);
@@ -521,7 +531,7 @@ export function IntegrationEditor({ integrationInstanceId }: IntegrationEditorPr
             <Button
               type="button"
               className={outlineButtonClassName}
-              disabled={pending || dirty || pluginMissing}
+              disabled={validateDisabled}
               onClick={() => validateMutation.mutate()}
             >
               {t("plugins.validate")}
@@ -565,6 +575,16 @@ export function IntegrationEditor({ integrationInstanceId }: IntegrationEditorPr
                 required {instance.runtimeRequirement.packageDigest}
               </p>
             ) : null}
+            <DefaultRuntimeActivationStatus
+              subjectKind="integration_instance"
+              subjectId={instance.id}
+              runtimeState={instance.runtimeState}
+              runtimeErrorCode={instance.runtimeErrorCode}
+              retainedPackageDigest={instance.packageDigest}
+              onInvalidate={async () => {
+                await queryClient.invalidateQueries({ queryKey: integrationKeys.all });
+              }}
+            />
           </section>
 
           <RuntimeLifecyclePanel instance={instance} />

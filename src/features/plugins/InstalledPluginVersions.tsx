@@ -14,11 +14,15 @@ import {
   removePluginPublisher,
   revokePluginPublisher,
   restorePluginPublisher,
-  setDefaultPluginPackage,
   uninstallPluginVersion,
 } from "../../storage/client";
 import { getIpcErrorMessage } from "../../storage/errors";
 import type { InstalledPluginVersionDto, PluginPublisherDto } from "../../storage/types";
+import { DefaultPackageActivationDialog } from "./DefaultPackageActivationDialog";
+import {
+  canAuthorizeInstalledDefault,
+  presentDefaultPackageAuthorizationStatus,
+} from "./defaultPackageActivationPresentation";
 import { isPackageExecutionEnabled } from "./pluginPackagePresentation";
 
 export function InstalledPluginVersions() {
@@ -37,21 +41,7 @@ export function InstalledPluginVersions() {
   const [confirmRevokeKeyId, setConfirmRevokeKeyId] = useState<string | null>(null);
   const [confirmRestoreKeyId, setConfirmRestoreKeyId] = useState<string | null>(null);
   const [confirmRemoveKeyId, setConfirmRemoveKeyId] = useState<string | null>(null);
-
-  const setDefaultMutation = useMutation({
-    mutationFn: ({ pluginId, packageDigest }: { pluginId: string; packageDigest: string }) =>
-      setDefaultPluginPackage(pluginId, packageDigest),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: pluginPackageKeys.all });
-      toast.success({ title: t("plugins.packages.defaultUpdated") });
-    },
-    onError: (error) => {
-      toast.error({
-        title: t("plugins.packages.defaultFailed"),
-        description: getIpcErrorMessage(error, t("plugins.packages.defaultFailed")),
-      });
-    },
-  });
+  const [authorizePackageDigest, setAuthorizePackageDigest] = useState<string | null>(null);
 
   const uninstallMutation = useMutation({
     mutationFn: (packageDigest: string) => uninstallPluginVersion(packageDigest),
@@ -168,14 +158,9 @@ export function InstalledPluginVersions() {
               <InstalledVersionRow
                 key={version.packageDigest}
                 version={version}
-                defaultBusy={setDefaultMutation.isPending}
+                defaultBusy={authorizePackageDigest === version.packageDigest}
                 uninstallPending={pendingUninstallDigest === version.packageDigest}
-                onSetDefault={() =>
-                  setDefaultMutation.mutate({
-                    pluginId: version.pluginId,
-                    packageDigest: version.packageDigest,
-                  })
-                }
+                onSetDefault={() => setAuthorizePackageDigest(version.packageDigest)}
                 onUninstall={() => setConfirmUninstallDigest(version.packageDigest)}
               />
             ))}
@@ -205,6 +190,21 @@ export function InstalledPluginVersions() {
           </ul>
         )}
       </section>
+
+      <DefaultPackageActivationDialog
+        open={authorizePackageDigest !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setAuthorizePackageDigest(null);
+          }
+        }}
+        packageDigest={authorizePackageDigest}
+        onAuthorized={async () => {
+          await queryClient.invalidateQueries({ queryKey: pluginPackageKeys.all });
+          toast.success({ title: t("plugins.packages.defaultUpdated") });
+          setAuthorizePackageDigest(null);
+        }}
+      />
 
       <ConfirmDialog
         open={confirmUninstallDigest !== null}
@@ -331,6 +331,16 @@ function InstalledVersionRow({
 }: InstalledVersionRowProps) {
   const { t } = useTranslation();
   const executionEnabled = isPackageExecutionEnabled(version);
+  const authorization = presentDefaultPackageAuthorizationStatus(version.defaultAuthorizationStatus);
+  const canAuthorize = canAuthorizeInstalledDefault({
+    isDefault: version.isDefault,
+    contentAvailable: version.contentAvailable,
+    defaultAuthorizationStatus: version.defaultAuthorizationStatus,
+  });
+  const authorizeLabel =
+    version.isDefault && authorization.allowReauthorization
+      ? t("plugins.packages.reauthorizeDefault")
+      : t("plugins.packages.makeDefault");
 
   return (
     <li className="border border-line bg-surface p-3">
@@ -350,11 +360,17 @@ function InstalledVersionRow({
         </div>
         <div className="flex flex-wrap gap-1">
           {version.isDefault ? <Badge tone="accent">{t("plugins.packages.defaultBadge")}</Badge> : null}
+          {version.isDefault ? (
+            <Badge tone={authorization.tone === "success" ? "accent" : undefined}>{t(authorization.labelKey)}</Badge>
+          ) : null}
           {version.inUse ? <Badge>{t("plugins.packages.inUseBadge")}</Badge> : null}
           {!version.contentAvailable ? <Badge>{t("plugins.packages.contentMissing")}</Badge> : null}
           {!executionEnabled ? <Badge>{t("plugins.packages.notExecutable")}</Badge> : null}
         </div>
       </div>
+      {version.isDefault ? (
+        <p className="mb-2 text-body-tight text-neutral">{t(authorization.descriptionKey)}</p>
+      ) : null}
       <p className="mb-3 text-code-inline text-neutral">
         {version.runtimeKind}
         {version.capabilities.length > 0 ? ` · ${version.capabilities.join(", ")}` : ""}
@@ -363,10 +379,10 @@ function InstalledVersionRow({
         <Button
           type="button"
           className={outlineButtonClassName}
-          disabled={defaultBusy || version.isDefault || !version.contentAvailable}
+          disabled={defaultBusy || !canAuthorize}
           onClick={onSetDefault}
         >
-          {t("plugins.packages.makeDefault")}
+          {authorizeLabel}
         </Button>
         <Button
           type="button"

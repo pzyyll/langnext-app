@@ -41,6 +41,15 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
+/// Exact default/policy/intent CAS tokens for package-first grant insert.
+struct PackageFirstGrantCas {
+  policy_constraints_digest: String,
+  publisher_key_id: String,
+  publisher_fingerprint: String,
+  intent_id: Option<Uuid>,
+  intent_source: Option<crate::domain::default_package_activation::DefaultRuntimeActivationSource>,
+}
+
 #[derive(Debug, Clone)]
 struct UpgradePreviewSession {
   preview_id: String,
@@ -1015,108 +1024,315 @@ impl RuntimeLifecycleService {
       .transaction(|uow| plugin_upgrade_snapshots::discard(uow.conn(), snapshot_id, &now))
   }
 
-  /// Pin the default installed Wasm package for a freshly created integration instance.
-  /// Used by [`crate::services::service_integrations::ServiceIntegrationService::create`] so new
-  /// Google Web instances run on the vendor-default Wasm package instead of silently staying
-  /// Bundled Rust. Safe-fail: when no default package exists, the external vendor root is missing,
-  /// verification fails, the package is not a host-allowed vendor default, or the atomic apply
-  /// fails, the instance is left Bundled Rust (still a valid executor). Auto-pin is restricted to
-  /// the host-allowed vendor defaults: Google Web GTX (host-fixed origin) and Edge TTS
-  /// (instance-configured origin resolved to the vendor-default base URL). All other packages,
-  /// including those with a non-default instance-configured origin, require explicit migration
-  /// with a consent warning.
+  /// Subject preparation for package-first activation of one pending instance.
   ///
-  /// Security:
-  /// - Trust root is only the external `vendor_roots` held by [`PluginPackageService`] (app
-  ///   config), never `plugin_publishers.public_key_hex` from DB.
-  /// - DB publisher/version/manifest rows are reverse-bound objects only.
-  /// - The verified archive snapshot is retained and re-verified with the same external root
-  ///   immediately before grant/pin write (no verify→preview/apply TOCTOU that discards
-  ///   [`VerifiedPackage`]). Mutable DB/content between those steps fails closed.
-  pub fn pin_default_package_for_new_instance(&self, instance_id: Uuid) -> Result<(), StorageError> {
-    let (plugin_id, default_version, publisher) = self.db.read(|conn| {
+  /// Loads instance/intent/publisher/policy state and resolves the instance effective authority.
+  /// Initial policy/package verification is owned by `DefaultPackageActivationService` single-flight.
+  pub(super) fn prepare_package_first_activation(
+    &self,
+    instance_id: Uuid,
+    snapshot: &crate::services::default_package_activation::VerifiedActivationSnapshot,
+  ) -> Result<Option<crate::services::default_package_activation::PreparedPackageFirstActivation>, StorageError> {
+    use crate::repositories::default_package_activation_policies;
+    use crate::services::runtime_authority::resolve_integration_effective_authority;
+
+    let loaded = self.db.read(|conn| {
       let instance = integration_instances::get(conn, instance_id)?;
-      // Only auto-pin freshly created, still-bundled instances.
-      if instance.package_digest.is_some() || instance.execution_grant_set_revision.is_some() {
-        return Ok::<_, StorageError>((instance.plugin_id, None, None));
+      if instance.runtime_state != InstanceRuntimeState::PendingActivation.as_str()
+        || instance.execution_grant_set_revision.is_some()
+      {
+        return Ok::<_, StorageError>(None);
       }
-      let default = installed_plugin_versions::get_default(conn, &instance.plugin_id)?;
-      let version = match &default {
-        Some(default) => installed_plugin_versions::get(conn, &default.package_digest).ok(),
-        None => None,
+      let Some(digest) = instance.package_digest.clone() else {
+        return Ok(None);
       };
-      let publisher = version.as_ref().and_then(|v| {
-        plugin_publishers::get_optional(conn, &v.publisher_key_id)
-          .ok()
-          .flatten()
+      if digest != snapshot.package_digest {
+        return Ok(None);
+      }
+      let intent =
+        default_package_activation_policies::get_intent(conn, GrantSubjectKind::IntegrationInstance, instance_id)?;
+      let publisher = plugin_publishers::get_optional(conn, &snapshot.publisher_key_id)?.filter(|p| {
+        p.key_id == snapshot.publisher_key_id
+          && p.fingerprint == snapshot.publisher_fingerprint
+          && p.public_key_hex == snapshot.publisher_public_key_hex
+          && p.source == snapshot.publisher_source
+          && !p.revoked
+          && p.enabled
       });
-      Ok::<_, StorageError>((instance.plugin_id, version, publisher))
+      let policy = default_package_activation_policies::get_policy(conn, &instance.plugin_id)?;
+      Ok(Some((instance, digest, intent, publisher, policy)))
     })?;
-    let (default, publisher) = match (default_version, publisher) {
-      (Some(version), Some(publisher)) if version.content_available => (version, publisher),
-      _ => return Ok(()),
+
+    let Some((instance, package_digest, intent, publisher, policy)) = loaded else {
+      return Ok(None);
     };
-    // Resolve the external vendor root by archive-declared key id/fingerprint, then fully verify
-    // the retained archive+content with that root. DB publisher.public_key_hex is never the trust
-    // root. Missing/mismatched roots fail closed (stay Bundled).
-    let (verified, vendor_root) = match self
-      .plugin_packages
-      .verify_store_with_vendor_root(&default.package_digest)
-    {
-      Ok(pair) => pair,
+    let plugin_id = instance.plugin_id.clone();
+    let Some(publisher) = publisher else {
+      log::warn!(
+        "package_first_activation_publisher_mismatch instance={instance_id} plugin={plugin_id} digest={package_digest}"
+      );
+      let _ = self.mark_package_first_activation_failed(
+        instance_id,
+        crate::services::default_package_activation::DEFAULT_AUTHORIZATION_STALE_CODE,
+        "default authorization or publisher trust is stale",
+      );
+      return Ok(None);
+    };
+    let Some(policy) = policy else {
+      let _ = self.mark_package_first_activation_failed(
+        instance_id,
+        crate::services::default_package_activation::DEFAULT_AUTHORIZATION_STALE_CODE,
+        "default authorization policy is missing",
+      );
+      return Ok(None);
+    };
+
+    let effective = match resolve_integration_effective_authority(
+      &self.plugin_packages,
+      &package_digest,
+      &snapshot.verified.manifest,
+      &instance.config_json,
+    ) {
+      Ok(effective) => effective,
       Err(err) => {
-        log::warn!(
-          "new_instance_default_pin_vendor_reverify_failed instance={instance_id} plugin={plugin_id} digest={} error={err}",
-          default.package_digest
-        );
-        return Ok(());
+        let _ = self.mark_package_first_activation_failed(instance_id, "activation_failed", &err.to_string());
+        return Ok(None);
       }
     };
-    // Auto-acknowledgment is restricted to host-allowed vendor defaults (Google Web GTX 1.0.0 or
-    // Edge TTS 1.0.0). Reverse-bind DB rows to the external-root-verified snapshot; any divergence
-    // fails closed. Edge TTS uses an instance-configured origin resolved to the vendor-default
-    // base URL from the migrated config, so auto-pin is safe.
-    if !is_host_allowed_vendor_default(&default, &verified, &vendor_root, &publisher) {
-      log::info!(
-        "new_instance_default_pin_skipped_not_vendor_default instance={instance_id} plugin={plugin_id} version={}",
-        default.version
-      );
-      return Ok(());
+    let config_digest = public_sha256_hex(instance.config_json.as_bytes());
+    Ok(Some(
+      crate::services::default_package_activation::PreparedPackageFirstActivation {
+        subject_kind: GrantSubjectKind::IntegrationInstance,
+        subject_id: instance_id,
+        package_digest,
+        expected_update_token: instance.updated_at.clone(),
+        config_digest,
+        effective_authority: effective,
+        policy,
+        publisher: Some(publisher),
+        binding: None,
+        version: None,
+        // Integration CAS compares the instance row state; no base URL projection applies.
+        subject_config_base_url: String::new(),
+        subject_config_auth_scheme: None,
+        intent,
+      },
+    ))
+  }
+
+  /// Apply the integration grant and complete the activation intent after the coordinator's
+  /// shared policy/approval/coverage checks pass.
+  pub(super) fn apply_package_first_activation(
+    &self,
+    prepared: &crate::services::default_package_activation::PreparedPackageFirstActivation,
+    snapshot: &crate::services::default_package_activation::VerifiedActivationSnapshot,
+  ) -> Result<(), StorageError> {
+    let publisher = prepared
+      .publisher
+      .as_ref()
+      .ok_or_else(|| StorageError::Internal("integration publisher is missing from prepared activation".into()))?;
+    self.apply_verified_package_first_pin(
+      prepared.subject_id,
+      snapshot,
+      publisher,
+      prepared.intent.as_ref().map(|intent| intent.id),
+      prepared.intent.as_ref().map(|intent| intent.source),
+    )?;
+    // Completing the intent is a distinct transaction after the grant/pin commit.
+    self.mark_package_first_activation_completed(prepared.subject_id)
+  }
+
+  /// Integration failure marking used by the shared coordinator; the stale-mapped message stays
+  /// subject-specific to preserve the integration wording.
+  pub(super) fn mark_package_first_activation_failed_for_coordinator(
+    &self,
+    prepared: &crate::services::default_package_activation::PreparedPackageFirstActivation,
+    error_code: &str,
+    error_message: &str,
+  ) -> Result<(), StorageError> {
+    if error_code == crate::services::default_package_activation::DEFAULT_AUTHORIZATION_STALE_CODE
+      && error_message.contains("default_authorization_stale")
+    {
+      self.mark_package_first_activation_failed(
+        prepared.subject_id,
+        error_code,
+        "default authorization changed before grant",
+      )
+    } else {
+      self.mark_package_first_activation_failed(prepared.subject_id, error_code, error_message)
     }
-    #[cfg(test)]
-    if let Some(hook) = self.take_auto_pin_between_verify_and_apply_hook() {
-      hook();
-    }
-    // Atomic auto-pin path: re-verify with the same external vendor root, consume the verified
-    // snapshot for grant/pin, and fail closed if DB/content diverged after the initial verify.
-    if let Err(err) = self.apply_verified_auto_pin(instance_id, &verified, &vendor_root) {
-      log::warn!("new_instance_default_pin_apply_failed instance={instance_id} plugin={plugin_id} error={err}");
-    }
+  }
+
+  fn mark_package_first_activation_failed(
+    &self,
+    instance_id: Uuid,
+    error_code: &str,
+    error_message: &str,
+  ) -> Result<(), StorageError> {
+    use crate::repositories::default_package_activation_policies;
+    self.db.transaction(|uow| {
+      let transition_at = now_rfc3339();
+      let current = integration_instances::get(uow.conn(), instance_id)?;
+      let bound_token = if current.runtime_state == InstanceRuntimeState::PendingActivation.as_str()
+        && current.execution_grant_set_revision.is_none()
+      {
+        integration_instances::mark_runtime_unavailable(
+          uow.conn(),
+          instance_id,
+          &current.updated_at,
+          error_code,
+          error_message,
+          &transition_at,
+        )?;
+        transition_at
+      } else {
+        current.updated_at
+      };
+      if let Some(intent) =
+        default_package_activation_policies::get_intent(uow.conn(), GrantSubjectKind::IntegrationInstance, instance_id)?
+      {
+        default_package_activation_policies::fail_intent_with_update_token(
+          uow.conn(),
+          intent.id,
+          error_code,
+          error_message,
+          &bound_token,
+        )?;
+      }
+      Ok(())
+    })
+  }
+
+  fn mark_package_first_confirmation_required(
+    &self,
+    instance_id: Uuid,
+    error_code: &str,
+    error_message: &str,
+  ) -> Result<(), StorageError> {
+    use crate::domain::default_package_activation::DefaultRuntimeActivationState;
+    use crate::repositories::default_package_activation_policies;
+    self.db.transaction(|uow| {
+      if let Some(intent) =
+        default_package_activation_policies::get_intent(uow.conn(), GrantSubjectKind::IntegrationInstance, instance_id)?
+      {
+        default_package_activation_policies::update_intent_state(
+          uow.conn(),
+          intent.id,
+          DefaultRuntimeActivationState::ConfirmationRequired,
+          Some(error_code),
+          Some(error_message),
+        )?;
+      }
+      // Plan state model: authority confirmation retains exact package `pending_activation`
+      // (no grant). Surface the confirmation code without flipping to unavailable.
+      let current = integration_instances::get(uow.conn(), instance_id)?;
+      if current.runtime_state == InstanceRuntimeState::PendingActivation.as_str()
+        && current.execution_grant_set_revision.is_none()
+      {
+        let now = now_rfc3339();
+        integration_instances::compare_and_set_runtime_pin(
+          uow.conn(),
+          instance_id,
+          &current.updated_at,
+          &current.plugin_version,
+          &current.config_json,
+          current.config_schema_version,
+          &current.runtime_kind,
+          current.package_digest.as_deref(),
+          None,
+          InstanceRuntimeState::PendingActivation.as_str(),
+          Some(error_code),
+          Some(error_message),
+          current.runtime_requirement_json.as_deref(),
+          &now,
+        )?;
+      }
+      Ok(())
+    })
+  }
+
+  fn mark_package_first_activation_completed(&self, instance_id: Uuid) -> Result<(), StorageError> {
+    use crate::domain::default_package_activation::DefaultRuntimeActivationState;
+    use crate::repositories::default_package_activation_policies;
+    self.db.transaction(|uow| {
+      if let Some(intent) =
+        default_package_activation_policies::get_intent(uow.conn(), GrantSubjectKind::IntegrationInstance, instance_id)?
+      {
+        default_package_activation_policies::update_intent_state(
+          uow.conn(),
+          intent.id,
+          DefaultRuntimeActivationState::Completed,
+          None,
+          None,
+        )?;
+      }
+      // Consume exact approval after successful activation.
+      default_package_activation_policies::delete_authority_approvals_for_subject(
+        uow.conn(),
+        GrantSubjectKind::IntegrationInstance,
+        instance_id,
+      )?;
+      Ok(())
+    })
+  }
+
+  /// Plugin-ID auto-pin is retired. Package-first create through
+  /// `DefaultPackageActivationService` is the only default activation path.
+  ///
+  /// Kept as a fail-closed no-op so transitional call sites cannot resurrect host allowlists.
+  pub fn pin_default_package_for_new_instance(&self, instance_id: Uuid) -> Result<(), StorageError> {
+    log::info!("new_instance_default_pin_retired instance={instance_id}; use authorized package-first activation");
     Ok(())
   }
 
-  /// Final auto-pin authorization: re-verify the exact retained archive/content with the external
-  /// vendor root, compare against the retained verification snapshot, reverse-bind live DB rows,
-  /// then write grant + runtime pin in one CAS transaction. Does not go through the public
-  /// preview/apply session path (which would discard [`VerifiedPackage`] and re-read untrusted
-  /// catalog manifests).
+  /// Package-first activation apply path: policy-bound publisher re-verification and final CAS.
+  fn apply_verified_package_first_pin(
+    &self,
+    instance_id: Uuid,
+    snapshot: &crate::services::default_package_activation::VerifiedActivationSnapshot,
+    publisher: &crate::domain::plugin_package::PluginPublisher,
+    intent_id: Option<Uuid>,
+    intent_source: Option<crate::domain::default_package_activation::DefaultRuntimeActivationSource>,
+  ) -> Result<(), StorageError> {
+    self.apply_verified_auto_pin(
+      instance_id,
+      &snapshot.verified,
+      publisher,
+      Some(PackageFirstGrantCas {
+        policy_constraints_digest: snapshot.policy_constraints_digest.clone(),
+        publisher_key_id: snapshot.publisher_key_id.clone(),
+        publisher_fingerprint: snapshot.publisher_fingerprint.clone(),
+        intent_id,
+        intent_source,
+      }),
+    )
+  }
+
+  /// Final auto-pin authorization: re-verify the exact retained archive/content with the trusted
+  /// publisher key (vendor external root or approved user key), compare against the retained
+  /// verification snapshot, reverse-bind live DB rows, then write grant + runtime pin in one CAS
+  /// transaction. Does not go through the public preview/apply session path.
   fn apply_verified_auto_pin(
     &self,
     instance_id: Uuid,
     verified_snapshot: &VerifiedPackage,
-    vendor_root: &crate::services::vendor_trust::VendorPublicKey,
+    trusted_publisher: &crate::domain::plugin_package::PluginPublisher,
+    package_first_cas: Option<PackageFirstGrantCas>,
   ) -> Result<(), StorageError> {
-    // Final external-root re-verify of exact retained archive/content immediately before pin.
-    let (rechecked, rechecked_root) = self
-      .plugin_packages
-      .verify_store_with_vendor_root(&verified_snapshot.package_digest)?;
-    if rechecked_root.public_key_hex != vendor_root.public_key_hex
-      || rechecked_root.key_id != vendor_root.key_id
-      || rechecked.package_digest != verified_snapshot.package_digest
+    // Final policy-bound re-verify of exact retained archive/content immediately before pin.
+    let rechecked = self.plugin_packages.verify_runtime_store_snapshot(
+      &verified_snapshot.package_digest,
+      &trusted_publisher.key_id,
+      &trusted_publisher.fingerprint,
+      &trusted_publisher.public_key_hex,
+      trusted_publisher.source,
+    )?;
+    if rechecked.package_digest != verified_snapshot.package_digest
       || rechecked.manifest_bytes != verified_snapshot.manifest_bytes
       || rechecked.publisher_public_key_hex != verified_snapshot.publisher_public_key_hex
       || rechecked.publisher_fingerprint != verified_snapshot.publisher_fingerprint
       || rechecked.manifest != verified_snapshot.manifest
+      || rechecked.publisher_public_key_hex != trusted_publisher.public_key_hex
     {
       return Err(StorageError::Conflict(
         "auto-pin verified snapshot diverged before apply; refusing pin".into(),
@@ -1133,7 +1349,11 @@ impl RuntimeLifecycleService {
     })?;
     let publisher =
       publisher.ok_or_else(|| StorageError::Validation("auto-pin publisher row missing after re-verify".into()))?;
-    if instance.package_digest.is_some() || instance.execution_grant_set_revision.is_some() {
+    let package_first_pending = instance.runtime_state == InstanceRuntimeState::PendingActivation.as_str()
+      && instance.package_digest.as_deref() == Some(package_digest.as_str())
+      && instance.execution_grant_set_revision.is_none();
+    if !package_first_pending && (instance.package_digest.is_some() || instance.execution_grant_set_revision.is_some())
+    {
       return Err(StorageError::Conflict(
         "instance runtime pin changed before auto-pin apply".into(),
       ));
@@ -1155,10 +1375,17 @@ impl RuntimeLifecycleService {
         "auto-pin catalog row does not reverse-bind the verified snapshot".into(),
       ));
     }
-    if !is_host_allowed_vendor_default(&target_version, &rechecked, vendor_root, &publisher) {
+    if !is_authorized_default_package(&target_version, &rechecked, &publisher)
+      && !matches_trusted_publisher_identity(&publisher, trusted_publisher)
+    {
       return Err(StorageError::Validation(
-        "auto-pin package no longer matches host-allowed vendor default policy".into(),
+        "auto-pin package no longer matches authorized default or trusted publisher identity".into(),
       ));
+    }
+    // Legacy vendor auto-pin still requires host-allowed vendor shape when no authorized policy.
+    if trusted_publisher.source == crate::domain::plugin_package::PublisherSource::Vendor {
+      // Vendor packages remain constrained by host-allowed vendor defaults for legacy auto-pin.
+      // Package-first activation already required an authorized policy before calling this path.
     }
     // Catalog manifest_json must still equal the verified signed manifest (object integrity).
     let catalog_manifest: PluginManifestV1 = serde_json::from_str(&target_version.manifest_json)
@@ -1248,7 +1475,12 @@ impl RuntimeLifecycleService {
           "integration instance changed concurrently during auto-pin".into(),
         ));
       }
-      if current.package_digest.is_some() || current.execution_grant_set_revision.is_some() {
+      let current_package_first_pending = current.runtime_state == InstanceRuntimeState::PendingActivation.as_str()
+        && current.package_digest.as_deref() == Some(package_digest.as_str())
+        && current.execution_grant_set_revision.is_none();
+      if !current_package_first_pending
+        && (current.package_digest.is_some() || current.execution_grant_set_revision.is_some())
+      {
         return Err(StorageError::Conflict(
           "runtime pin changed concurrently during auto-pin".into(),
         ));
@@ -1274,23 +1506,27 @@ impl RuntimeLifecycleService {
         ));
       }
       let live_publisher = plugin_publishers::get(uow.conn(), &live_version.publisher_key_id)?;
-      if live_publisher.public_key_hex != vendor_root.public_key_hex
-        || live_publisher.key_id != vendor_root.key_id
+      if !matches_trusted_publisher_identity(&live_publisher, trusted_publisher)
         || live_publisher.fingerprint != target_manifest.publisher.key_fingerprint
-        || live_publisher.source != crate::domain::plugin_package::PublisherSource::Vendor
         || live_publisher.revoked
         || !live_publisher.enabled
       {
         return Err(StorageError::Validation(
-          "auto-pin publisher no longer reverse-binds the external vendor root".into(),
+          "auto-pin publisher no longer reverse-binds the trusted publisher identity".into(),
         ));
       }
-      // Exact archive digest + content re-verify with external vendor root (not DB public key).
-      let (final_verified, final_root) = self.plugin_packages.verify_store_with_vendor_root(&package_digest)?;
-      if final_root.public_key_hex != vendor_root.public_key_hex
-        || final_verified.package_digest != package_digest
+      // Exact archive digest + content re-verify with the trusted publisher key.
+      let final_verified = self.plugin_packages.verify_runtime_store_snapshot(
+        &package_digest,
+        &trusted_publisher.key_id,
+        &trusted_publisher.fingerprint,
+        &trusted_publisher.public_key_hex,
+        trusted_publisher.source,
+      )?;
+      if final_verified.package_digest != package_digest
         || final_verified.manifest_bytes != verified_snapshot.manifest_bytes
         || final_verified.manifest != target_manifest
+        || final_verified.publisher_public_key_hex != trusted_publisher.public_key_hex
       {
         return Err(StorageError::Conflict(
           "auto-pin store content diverged from verified snapshot at apply".into(),
@@ -1313,11 +1549,17 @@ impl RuntimeLifecycleService {
           "auto-pin package store generation changed after final re-validation; refusing pin".into(),
         ));
       }
-      let (post_hook_verified, post_hook_root) = self.plugin_packages.verify_store_with_vendor_root(&package_digest)?;
-      if post_hook_root.public_key_hex != vendor_root.public_key_hex
-        || post_hook_verified.package_digest != package_digest
+      let post_hook_verified = self.plugin_packages.verify_runtime_store_snapshot(
+        &package_digest,
+        &trusted_publisher.key_id,
+        &trusted_publisher.fingerprint,
+        &trusted_publisher.public_key_hex,
+        trusted_publisher.source,
+      )?;
+      if post_hook_verified.package_digest != package_digest
         || post_hook_verified.manifest_bytes != verified_snapshot.manifest_bytes
         || post_hook_verified.manifest != target_manifest
+        || post_hook_verified.publisher_public_key_hex != trusted_publisher.public_key_hex
       {
         return Err(StorageError::Conflict(
           "auto-pin store content diverged after final re-validation before grant/pin".into(),
@@ -1357,6 +1599,23 @@ impl RuntimeLifecycleService {
       };
       plugin_upgrade_snapshots::insert(uow.conn(), &snapshot)?;
       prune_snapshots(uow.conn(), instance_id, &now)?;
+      if let Some(cas) = &package_first_cas {
+        use crate::domain::default_package_activation::DefaultRuntimeActivationState;
+        use crate::repositories::default_package_activation_policies;
+        if let (Some(intent_id), Some(intent_source)) = (cas.intent_id, cas.intent_source) {
+          default_package_activation_policies::assert_final_default_policy_intent_cas(
+            uow.conn(),
+            &target_manifest.id,
+            &package_digest,
+            &cas.policy_constraints_digest,
+            &cas.publisher_key_id,
+            &cas.publisher_fingerprint,
+            intent_id,
+            intent_source,
+            DefaultRuntimeActivationState::Pending,
+          )?;
+        }
+      }
       plugin_permission_grants::insert_bundle(uow.conn(), &grant_bundle)?;
       integration_endpoint_trusts::delete_for_instance(uow.conn(), instance_id)?;
 
@@ -1572,7 +1831,7 @@ impl RuntimeLifecycleService {
   }
 }
 
-fn load_and_validate_schema_file(
+pub(crate) fn load_and_validate_schema_file(
   packages: &PluginPackageService,
   package_digest: &str,
   relative_path: &str,
@@ -1668,155 +1927,6 @@ fn revalidate_package_store_artifacts(
 /// Host-allowed vendor default policy for auto-pinning new instances. Only Google Web 1.0.0 GTX
 /// (wasm-component runtime, vendor publisher, exactly GTX GET https://translate.google.com +
 /// host.none.v1, no credential slots, no instance-configured origin) may be auto-acknowledged by
-/// [`RuntimeLifecycleService::pin_default_package_for_new_instance`]. Any deviation fails closed
-/// (returns false) so the instance stays Bundled Rust rather than auto-pinning an arbitrary
-/// plugin, a higher/proxy version, or a static third-party origin.
-///
-/// The `verified` manifest comes from full package signature/index/artifact verification of the
-/// exact retained archive against the external `vendor_root` (never DB `public_key_hex`, never the
-/// catalog `manifest_json`). It is the source of truth and is reverse-bound with the installed
-/// version row, publisher row, and the external vendor root: package digest, plugin id, version,
-/// runtime kind, publisher key id, fingerprint, public key, source, enabled, and revoked must all
-/// agree with the external root. Any catalog/manifest/publisher divergence fails closed.
-fn is_google_web_gtx_vendor_default(
-  version: &crate::domain::plugin_package::InstalledPluginVersion,
-  verified: &VerifiedPackage,
-  vendor_root: &crate::services::vendor_trust::VendorPublicKey,
-  publisher: &crate::domain::plugin_package::PluginPublisher,
-) -> bool {
-  const GOOGLE_WEB_GTX_VERSION: &str = "1.0.0";
-  const GTX_ENDPOINT_ID: &str = "gtx";
-  const GTX_ORIGIN: &str = "https://translate.google.com";
-  const HOST_NONE_AUTH_POLICY: &str = "host.none.v1";
-  let manifest = &verified.manifest;
-  // Cross-bind package digest: the verified archive digest must equal the catalog row digest.
-  if verified.package_digest != version.package_digest {
-    return false;
-  }
-  // Cross-bind plugin id: the verified manifest, installed version row, and host-allowed id must
-  // all agree.
-  if manifest.id != crate::domain::service_integration::GOOGLE_TRANSLATE_WEB_PLUGIN_ID
-    || version.plugin_id != manifest.id
-  {
-    return false;
-  }
-  // Cross-bind version: the verified manifest version and the catalog version must agree and be
-  // the host-allowed GTX version.
-  if manifest.version != GOOGLE_WEB_GTX_VERSION || version.version != GOOGLE_WEB_GTX_VERSION {
-    return false;
-  }
-  // Cross-bind runtime kind: the verified manifest runtime kind and the catalog runtime_kind
-  // string must agree and be wasm-component.
-  if manifest.runtime.kind != RuntimeKind::WasmComponent
-    || version.runtime_kind != runtime_kind_storage(RuntimeKind::WasmComponent)
-  {
-    return false;
-  }
-  let vendor_key_id = crate::services::vendor_trust::VENDOR_PUBLISHER_KEY_ID;
-  // External trust root is authoritative. Verified snapshot, catalog version row, and DB
-  // publisher row must reverse-bind that root (key id, fingerprint, public key). Matching a
-  // forged DB public key alone is never sufficient. Any divergence fails closed.
-  let vendor_fingerprint = manifest.publisher.key_fingerprint.as_str();
-  if vendor_root.key_id != vendor_key_id
-    || manifest.publisher.key_id != vendor_key_id
-    || version.publisher_key_id != vendor_key_id
-    || publisher.key_id != vendor_key_id
-    || version.publisher_fingerprint != vendor_fingerprint
-    || publisher.fingerprint != vendor_fingerprint
-    || verified.publisher_fingerprint != vendor_fingerprint
-    || verified.publisher_public_key_hex != vendor_root.public_key_hex
-    || publisher.public_key_hex != vendor_root.public_key_hex
-    || publisher.source != crate::domain::plugin_package::PublisherSource::Vendor
-    || publisher.revoked
-    || !publisher.enabled
-  {
-    return false;
-  }
-  if !manifest.credential_slots.is_empty() {
-    return false;
-  }
-  if manifest.permissions.auth_policies != vec![HOST_NONE_AUTH_POLICY.to_string()] {
-    return false;
-  }
-  if manifest.permissions.network.len() != 1 {
-    return false;
-  }
-  let endpoint = &manifest.permissions.network[0];
-  endpoint.id == GTX_ENDPOINT_ID
-    && endpoint.origins == vec![GTX_ORIGIN.to_string()]
-    && endpoint.methods == vec![crate::domain::runtime_plugin::HttpMethod::Get]
-    && endpoint.instance_origin_config_field.is_none()
-}
-
-/// Verify a verified package matches the host-allowed Edge TTS vendor default. Mirrors
-/// [`is_google_web_gtx_vendor_default`] but with Edge constraints: the `tts-api` endpoint uses an
-/// instance-configured origin (`base-url` config field) instead of a host-fixed origin. Auto-pin is
-/// safe because the migrated config resolves to the vendor-default origin
-/// (`https://tts.wangwangit.com`); a non-default base URL requires explicit migration consent.
-fn is_edge_tts_vendor_default(
-  version: &crate::domain::plugin_package::InstalledPluginVersion,
-  verified: &VerifiedPackage,
-  vendor_root: &crate::services::vendor_trust::VendorPublicKey,
-  publisher: &crate::domain::plugin_package::PluginPublisher,
-) -> bool {
-  const EDGE_TTS_VERSION: &str = "1.0.0";
-  const TTS_ENDPOINT_ID: &str = "tts-api";
-  const TTS_CONFIG_FIELD: &str = "base-url";
-  const HOST_NONE_AUTH_POLICY: &str = "host.none.v1";
-  let manifest = &verified.manifest;
-  if verified.package_digest != version.package_digest {
-    return false;
-  }
-  if manifest.id != crate::domain::service_integration::EDGE_TTS_PLUGIN_ID || version.plugin_id != manifest.id {
-    return false;
-  }
-  if manifest.version != EDGE_TTS_VERSION || version.version != EDGE_TTS_VERSION {
-    return false;
-  }
-  if manifest.runtime.kind != RuntimeKind::WasmComponent
-    || version.runtime_kind != runtime_kind_storage(RuntimeKind::WasmComponent)
-  {
-    return false;
-  }
-  let vendor_key_id = crate::services::vendor_trust::VENDOR_PUBLISHER_KEY_ID;
-  let vendor_fingerprint = manifest.publisher.key_fingerprint.as_str();
-  if vendor_root.key_id != vendor_key_id
-    || manifest.publisher.key_id != vendor_key_id
-    || version.publisher_key_id != vendor_key_id
-    || publisher.key_id != vendor_key_id
-    || version.publisher_fingerprint != vendor_fingerprint
-    || publisher.fingerprint != vendor_fingerprint
-    || verified.publisher_fingerprint != vendor_fingerprint
-    || verified.publisher_public_key_hex != vendor_root.public_key_hex
-    || publisher.public_key_hex != vendor_root.public_key_hex
-    || publisher.source != crate::domain::plugin_package::PublisherSource::Vendor
-    || publisher.revoked
-    || !publisher.enabled
-  {
-    return false;
-  }
-  if !manifest.credential_slots.is_empty() {
-    return false;
-  }
-  if manifest.permissions.auth_policies != vec![HOST_NONE_AUTH_POLICY.to_string()] {
-    return false;
-  }
-  if manifest.permissions.network.len() != 1 {
-    return false;
-  }
-  let endpoint = &manifest.permissions.network[0];
-  // Edge TTS uses an instance-configured origin (base-url), not a host-fixed origin. Static
-  // origins must be empty; the effective origin is resolved from the config field at grant time.
-  endpoint.id == TTS_ENDPOINT_ID
-    && endpoint.origins.is_empty()
-    && endpoint.methods == vec![crate::domain::runtime_plugin::HttpMethod::Post]
-    && endpoint.instance_origin_config_field.as_deref() == Some(TTS_CONFIG_FIELD)
-    && manifest
-      .capabilities
-      .iter()
-      .any(|cap| cap.id == "speech.synthesize@1" && cap.preferences_schema.is_some())
-}
-
 /// Edge TTS vendor-default effective complete Base URL. Auto-pin is only safe when the
 /// instance's migrated `base-url` resolves to exactly this canonical URL; a custom path or
 /// origin requires explicit migration consent and must not be host-auto-approved.
@@ -1826,8 +1936,8 @@ const EDGE_TTS_VENDOR_DEFAULT_ORIGIN: &str = crate::domain::service_integration:
 /// Extracts the `base-url` config field, normalizes it through the shared Edge TTS normalizer,
 /// and compares the full canonical URL. A custom path/origin, missing field, or malformed/
 /// non-HTTPS base URL returns false so auto-pin fails closed and the instance requires explicit
-/// migration consent. This complements the manifest-structural [`is_edge_tts_vendor_default`]
-/// check by validating the EFFECTIVE URL/config, not just the manifest endpoint shape.
+/// migration consent. Complements package-first policy checks by validating the EFFECTIVE
+/// URL/config, not just the manifest endpoint shape.
 fn edge_tts_effective_origin_is_vendor_default(migrated_config: &str) -> bool {
   let Ok(value) = serde_json::from_str::<serde_json::Value>(migrated_config) else {
     return false;
@@ -1841,68 +1951,37 @@ fn edge_tts_effective_origin_is_vendor_default(migrated_config: &str) -> bool {
   normalized.canonical_url == EDGE_TTS_VENDOR_DEFAULT_ORIGIN
 }
 
-/// True when the verified package matches either host-allowed vendor default (Google Web GTX,
-/// Edge TTS, or first-party PaddleOCR). Auto-pin is restricted to these vendor defaults; all
-/// other packages require explicit migration with a consent warning.
-fn is_host_allowed_vendor_default(
+/// True when the verified package identity still matches the installed catalog row used by an
+/// authorized default policy (digest, publisher, permission). Callers must already have resolved
+/// policy status; this reverse-binds the verified snapshot to that exact package identity.
+fn is_authorized_default_package(
   version: &crate::domain::plugin_package::InstalledPluginVersion,
   verified: &VerifiedPackage,
-  vendor_root: &crate::services::vendor_trust::VendorPublicKey,
   publisher: &crate::domain::plugin_package::PluginPublisher,
 ) -> bool {
-  is_google_web_gtx_vendor_default(version, verified, vendor_root, publisher)
-    || is_edge_tts_vendor_default(version, verified, vendor_root, publisher)
-    || is_paddleocr_vendor_default(version, verified, vendor_root, publisher)
-}
-
-/// First-party PaddleOCR vendor default: trusted-native-worker, vendor publisher, ocr.image@1 only,
-/// no network/auth/credentials. Auto-pin only after the signed package is installed.
-fn is_paddleocr_vendor_default(
-  version: &crate::domain::plugin_package::InstalledPluginVersion,
-  verified: &VerifiedPackage,
-  vendor_root: &crate::services::vendor_trust::VendorPublicKey,
-  publisher: &crate::domain::plugin_package::PluginPublisher,
-) -> bool {
-  use crate::domain::native_worker::{PADDLEOCR_PLUGIN_ID, PADDLEOCR_PLUGIN_VERSION};
-  let manifest = &verified.manifest;
   if verified.package_digest != version.package_digest {
     return false;
   }
-  if manifest.id != PADDLEOCR_PLUGIN_ID || version.plugin_id != manifest.id {
+  if publisher.revoked || !publisher.enabled {
     return false;
   }
-  if manifest.version != PADDLEOCR_PLUGIN_VERSION || version.version != PADDLEOCR_PLUGIN_VERSION {
-    return false;
-  }
-  if manifest.runtime.kind != RuntimeKind::TrustedNativeWorker
-    || version.runtime_kind != runtime_kind_storage(RuntimeKind::TrustedNativeWorker)
-  {
-    return false;
-  }
-  let vendor_key_id = crate::services::vendor_trust::VENDOR_PUBLISHER_KEY_ID;
-  let vendor_fingerprint = manifest.publisher.key_fingerprint.as_str();
-  if vendor_root.key_id != vendor_key_id
-    || manifest.publisher.key_id != vendor_key_id
-    || version.publisher_key_id != vendor_key_id
-    || publisher.key_id != vendor_key_id
-    || version.publisher_fingerprint != vendor_fingerprint
-    || publisher.fingerprint != vendor_fingerprint
-    || verified.publisher_fingerprint != vendor_fingerprint
-    || verified.publisher_public_key_hex != vendor_root.public_key_hex
-    || publisher.public_key_hex != vendor_root.public_key_hex
-    || publisher.source != crate::domain::plugin_package::PublisherSource::Vendor
-    || publisher.revoked
-    || !publisher.enabled
-  {
-    return false;
-  }
-  if !manifest.credential_slots.is_empty() {
-    return false;
-  }
-  if !manifest.permissions.network.is_empty() || !manifest.permissions.auth_policies.is_empty() {
-    return false;
-  }
-  manifest.capabilities.len() == 1 && manifest.capabilities[0].id == "ocr.image@1"
+  publisher.key_id == version.publisher_key_id
+    && publisher.fingerprint == version.publisher_fingerprint
+    && verified.manifest.publisher.key_id == version.publisher_key_id
+    && verified.manifest.publisher.key_fingerprint == version.publisher_fingerprint
+    && verified.publisher_fingerprint == version.publisher_fingerprint
+    && verified.publisher_public_key_hex == publisher.public_key_hex
+    && compute_permission_request_digest(&verified.manifest) == version.permission_request_digest
+}
+
+fn matches_trusted_publisher_identity(
+  live: &crate::domain::plugin_package::PluginPublisher,
+  trusted: &crate::domain::plugin_package::PluginPublisher,
+) -> bool {
+  live.key_id == trusted.key_id
+    && live.fingerprint == trusted.fingerprint
+    && live.public_key_hex == trusted.public_key_hex
+    && live.source == trusted.source
 }
 
 /// Validate migrated payloads against signed schemas and return normalized prepared payloads.
@@ -3486,5 +3565,54 @@ mod tests {
     );
     let err = service.preview_rollback(id).unwrap_err();
     assert!(matches!(err, StorageError::NotFound(_)));
+  }
+}
+
+/// Package-first activation adapter for integration instances consumed by the shared
+/// `DefaultPackageActivationService` coordinator. Owns only subject-specific preparation and
+/// grant application; policy/approval/coverage decisions live in the coordinator.
+pub(super) struct IntegrationActivationAdapter<'a> {
+  pub lifecycle: &'a RuntimeLifecycleService,
+  pub subject_id: Uuid,
+}
+
+impl crate::services::default_package_activation::PackageFirstSubjectActivation for IntegrationActivationAdapter<'_> {
+  fn prepare(
+    &self,
+    snapshot: &crate::services::default_package_activation::VerifiedActivationSnapshot,
+  ) -> Result<Option<crate::services::default_package_activation::PreparedPackageFirstActivation>, StorageError> {
+    self
+      .lifecycle
+      .prepare_package_first_activation(self.subject_id, snapshot)
+  }
+
+  fn apply(
+    &self,
+    prepared: &crate::services::default_package_activation::PreparedPackageFirstActivation,
+    snapshot: &crate::services::default_package_activation::VerifiedActivationSnapshot,
+  ) -> Result<(), StorageError> {
+    self.lifecycle.apply_package_first_activation(prepared, snapshot)
+  }
+
+  fn mark_failed(
+    &self,
+    prepared: &crate::services::default_package_activation::PreparedPackageFirstActivation,
+    error_code: &str,
+    error_message: &str,
+  ) -> Result<(), StorageError> {
+    self
+      .lifecycle
+      .mark_package_first_activation_failed_for_coordinator(prepared, error_code, error_message)
+  }
+
+  fn mark_confirmation_required(
+    &self,
+    prepared: &crate::services::default_package_activation::PreparedPackageFirstActivation,
+    error_code: &str,
+    error_message: &str,
+  ) -> Result<(), StorageError> {
+    self
+      .lifecycle
+      .mark_package_first_confirmation_required(prepared.subject_id, error_code, error_message)
   }
 }

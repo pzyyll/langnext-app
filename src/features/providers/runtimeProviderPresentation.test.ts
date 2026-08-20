@@ -98,6 +98,7 @@ describe("presentProviderRuntime", () => {
       runtimeKind: "legacy-frontend-provider",
       version: null,
       state: "active",
+      disableReadyActions: false,
       actions: { canPreview: true, canApply: false, canRollback: false },
     });
   });
@@ -127,6 +128,7 @@ describe("presentProviderRuntime", () => {
       runtimeKind: "wasm-component",
       version: "1.0.0",
       state: "active",
+      disableReadyActions: false,
       actions: { canPreview: false, canApply: false, canRollback: true },
     });
   });
@@ -144,6 +146,7 @@ describe("presentProviderRuntime", () => {
     });
     expect(view.labelKey).toBe("unavailableRuntime");
     expect(view.version).toBeNull();
+    expect(view.disableReadyActions).toBe(true);
     expect(view.actions).toEqual({ canPreview: false, canApply: false, canRollback: true });
   });
 
@@ -161,10 +164,11 @@ describe("presentProviderRuntime", () => {
     });
     expect(view.labelKey).toBe("unavailableRuntime");
     expect(view.state).toBe("unavailable");
+    expect(view.disableReadyActions).toBe(true);
     expect(view.actions).toEqual({ canPreview: false, canApply: false, canRollback: true });
   });
 
-  test("pending activation exposes an apply action", () => {
+  test("pending activation exposes an apply action and disables ready actions", () => {
     const view = presentProviderRuntime({
       provider: provider({
         runtime: binding({
@@ -177,6 +181,7 @@ describe("presentProviderRuntime", () => {
       catalogEntry: CATALOG_ENTRY,
     });
     expect(view.labelKey).toBe("pendingActivation");
+    expect(view.disableReadyActions).toBe(true);
     expect(view.actions).toEqual({ canPreview: false, canApply: true, canRollback: true });
   });
 });

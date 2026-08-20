@@ -727,17 +727,18 @@ fn install_package(packages: &PluginPackageService, dir: &std::path::Path, bytes
   let src = dir.join(format!("{}.lnplugin", new_id()));
   std::fs::write(&src, bytes).unwrap();
   let preview = packages.preview_package(&src).unwrap();
-  packages
+  let result = packages
     .approve_package(ApprovePluginPackageInput {
       preview_id: preview.preview_id,
       approve_publisher: false,
       publisher_public_key_hex: None,
       acknowledge_permissions: true,
-      set_as_default: true,
     })
-    .unwrap()
-    .version
-    .package_digest
+    .unwrap();
+  packages
+    .set_default(&result.version.plugin_id, &result.version.package_digest)
+    .expect("google-web fixture pins catalog default after install");
+  result.version.package_digest
 }
 
 fn seed_instance(db: &Database, config_json: &str) -> Uuid {
@@ -1205,9 +1206,11 @@ fn set_vendor_bootstrap_default_rejects_user_approved_same_id_version() {
       approve_publisher: true,
       publisher_public_key_hex: Some(user_pub_hex.clone()),
       acknowledge_permissions: true,
-      set_as_default: true,
     })
     .unwrap();
+  packages
+    .set_default(PLUGIN_ID, &user_digest)
+    .expect("test seeds user-approved default after install");
   let seeded = db
     .read(|conn| crate::repositories::installed_plugin_versions::get_default(conn, PLUGIN_ID))
     .unwrap()
@@ -1256,7 +1259,6 @@ fn runtime_router_rejects_rehashed_user_signed_static_origin_tamper() {
       approve_publisher: true,
       publisher_public_key_hex: Some(user_public_key_hex),
       acknowledge_permissions: true,
-      set_as_default: true,
     })
     .unwrap();
   assert_eq!(approved.version.package_digest, package_digest);
@@ -1487,18 +1489,21 @@ fn set_vendor_bootstrap_default_rejects_publisher_metadata_mismatch() {
 }
 
 #[test]
-fn pin_default_auto_pins_google_web_1_0_0_gtx_vendor_default() {
+fn pin_default_is_retired_noop_for_google_web_vendor_default() {
   let (dir, db, packages, lifecycle, _caps, _transport) = setup();
-  let (pkg, digest) = build_google_web_package();
+  let (pkg, _digest) = build_google_web_package();
   install_package(&packages, dir.path(), &pkg);
   let id = seed_instance(&db, r#"{"channel":"gtx"}"#);
   lifecycle.pin_default_package_for_new_instance(id).unwrap();
   let after = db.read(|conn| integration_instances::get(conn, id)).unwrap();
-  assert_eq!(after.runtime_kind, "wasm-component");
-  assert_eq!(after.package_digest.as_deref(), Some(digest.as_str()));
+  assert_eq!(
+    after.runtime_kind, "bundled-rust",
+    "plugin-id auto-pin is retired: the call is a fail-closed no-op"
+  );
+  assert!(after.package_digest.is_none(), "no pin may be applied");
   assert!(
-    after.execution_grant_set_revision.is_some(),
-    "vendor default must be auto-acknowledged"
+    after.execution_grant_set_revision.is_none(),
+    "no grant may be auto-acknowledged"
   );
 }
 
@@ -1550,21 +1555,20 @@ fn pin_default_skips_google_web_1_0_0_with_extra_endpoint_leaves_bundled_rust() 
   assert!(after.execution_grant_set_revision.is_none());
 }
 
-/// Run one auto-pin metadata-spoof scenario on a freshly seeded catalog. Each scenario gets its
-/// own setup + install + default so there is no cross-scenario state leakage. The positive
-/// control proves the untampered package auto-pins; after `tamper` the next instance must stay
-/// Bundled Rust (the re-verified archive manifest is the source of truth, not the catalog row).
+/// Run one retired auto-pin metadata-spoof scenario on a freshly seeded catalog. Each scenario
+/// gets its own setup + install + default so there is no cross-scenario state leakage. The pin
+/// call is a retired fail-closed no-op, so every instance stays Bundled Rust with no package.
 fn run_pin_default_spoof_scenario(label: &str, tamper: impl Fn(&Database, &str)) {
   let (dir, db, packages, lifecycle, _caps, _transport) = setup();
   let (pkg, digest) = build_google_web_package();
   install_package(&packages, dir.path(), &pkg);
-  // Positive control: the untampered vendor default auto-pins.
+  // Positive control: the untampered vendor default no longer auto-pins (retired no-op).
   let id_ok = seed_instance(&db, r#"{"channel":"gtx"}"#);
   lifecycle.pin_default_package_for_new_instance(id_ok).unwrap();
   let after_ok = db.read(|conn| integration_instances::get(conn, id_ok)).unwrap();
   assert_eq!(
-    after_ok.runtime_kind, "wasm-component",
-    "{label}: untampered default must auto-pin"
+    after_ok.runtime_kind, "bundled-rust",
+    "{label}: pin default is a retired no-op"
   );
   // Tamper the catalog/publisher metadata, then prove the next instance stays Bundled Rust.
   tamper(&db, &digest);
@@ -1994,68 +1998,63 @@ fn pin_default_fails_closed_when_content_replaced_between_verify_and_apply() {
 }
 
 #[test]
-fn pin_default_fails_closed_when_content_replaced_after_final_revalidate() {
-  // TOCTOU window the pre-apply hook cannot cover: after final vendor-root re-validation under the
-  // package-store generation lock and before grant/pin DB write, replace archive/content on disk.
-  // Must fail closed before commit (post-hook re-verify), with no grant and no wasm pin.
+fn pin_default_is_retired_noop_after_content_replacement_attempt() {
+  // Plugin-ID auto-pin is retired. The pin call is a fail-closed no-op: even a concurrent
+  // content/archive replacement attempt can never produce a wasm pin or grant.
   let (dir, db, packages, lifecycle, _caps, _transport) = setup();
   let (pkg, digest) = build_google_web_package();
   install_package(&packages, dir.path(), &pkg);
-  let content_file = packages.package_content_path(&digest).join("locales/en.json");
-  assert!(
-    content_file.is_file(),
-    "expected extracted locale for post-revalidate TOCTOU"
-  );
-  let hook_ran = Arc::new(AtomicBool::new(false));
-  let hook_ran_for_hook = hook_ran.clone();
-  let packages_for_hook = packages.clone();
-  let digest_for_hook = digest.clone();
-  lifecycle.set_auto_pin_after_final_revalidate_hook(Some(Box::new(move || {
-    hook_ran_for_hook.store(true, Ordering::SeqCst);
-    let path = packages_for_hook
-      .package_content_path(&digest_for_hook)
-      .join("locales/en.json");
-    let _ = std::fs::set_permissions(&path, {
-      let mut perms = std::fs::metadata(&path).unwrap().permissions();
-      perms.set_readonly(false);
-      perms
-    });
-    std::fs::write(&path, b"{\"tampered-after-final-revalidate\":true}").unwrap();
-    // Also attempt archive byte flip (clear readonly first).
-    let archive = packages_for_hook.package_archive_path(&digest_for_hook);
-    if archive.is_file() {
-      let _ = std::fs::set_permissions(&archive, {
-        let mut perms = std::fs::metadata(&archive).unwrap().permissions();
-        perms.set_readonly(false);
-        perms
-      });
-      if let Ok(mut bytes) = std::fs::read(&archive) {
-        if let Some(last) = bytes.last_mut() {
-          *last ^= 0xff;
-        }
-        let _ = std::fs::write(&archive, bytes);
-      }
-    }
-  })));
   let id = seed_instance(&db, r#"{"channel":"gtx"}"#);
   lifecycle.pin_default_package_for_new_instance(id).unwrap();
-  assert!(
-    hook_ran.load(Ordering::SeqCst),
-    "test hook must run after final revalidation before asserting the post-hook rejection path"
-  );
   let after = db.read(|conn| integration_instances::get(conn, id)).unwrap();
-  assert_eq!(
-    after.runtime_kind, "bundled-rust",
-    "post-hook revalidation must reject content/archive replacement before grant/pin"
-  );
-  assert!(
-    after.package_digest.is_none(),
-    "no wasm pin after post-revalidate TOCTOU"
-  );
+  assert_eq!(after.runtime_kind, "bundled-rust");
+  assert!(after.package_digest.is_none(), "no wasm pin after retired no-op");
   assert!(
     after.execution_grant_set_revision.is_none(),
-    "no grant after post-revalidate TOCTOU"
+    "no grant after retired no-op"
   );
+  let _ = digest;
+}
+
+/// Activate a real package-first Google Web instance for tamper tests (shared fixture).
+/// Authorizes the installed default, wires the integration lifecycle, creates the integration
+/// through `ServiceIntegrationService::save`, activates it, and returns the active instance id.
+fn activate_package_first_tamper_fixture(
+  db: &Database,
+  packages: &PluginPackageService,
+  lifecycle: &RuntimeLifecycleService,
+  digest: &str,
+  app_data_dir: &std::path::Path,
+) -> Uuid {
+  let activation =
+    authorize_installed_default(db, packages, app_data_dir, digest).with_integration_lifecycle(lifecycle.clone());
+  let integrations = package_first_integration_service(db, lifecycle, activation.clone());
+  let dto = integrations
+    .save(crate::domain::service_integration::IntegrationInstanceWrite {
+      id: None,
+      plugin_id: PLUGIN_ID.into(),
+      display_name: "Package-first tamper fixture".into(),
+      enabled: true,
+      config_json: r#"{"channel":"gtx"}"#.into(),
+      credentials: vec![],
+      expected_updated_at: None,
+      endpoint_trust_preview_id: None,
+      acknowledge_endpoint_trust: false,
+    })
+    .unwrap();
+  use crate::domain::runtime_lifecycle::GrantSubjectKind;
+  activation
+    .activate_pending_subject(GrantSubjectKind::IntegrationInstance, dto.id)
+    .expect("package-first activation");
+  let id = dto.id;
+  assert_eq!(
+    db.read(|conn| integration_instances::get(conn, id))
+      .unwrap()
+      .runtime_kind,
+    "wasm-component",
+    "test requires an active package-first pin"
+  );
+  id
 }
 
 #[test]
@@ -2063,15 +2062,7 @@ fn runtime_rejects_archive_replaced_after_auto_pin_before_execution() {
   let (dir, db, packages, lifecycle, caps, transport) = setup();
   let (pkg, digest) = build_google_web_package();
   install_package(&packages, dir.path(), &pkg);
-  let id = seed_instance(&db, r#"{"channel":"gtx"}"#);
-  lifecycle.pin_default_package_for_new_instance(id).unwrap();
-  assert_eq!(
-    db.read(|conn| integration_instances::get(conn, id))
-      .unwrap()
-      .runtime_kind,
-    "wasm-component",
-    "test requires a completed auto-pin commit"
-  );
+  let id = activate_package_first_tamper_fixture(&db, &packages, &lifecycle, &digest, dir.path());
 
   // The archive is a valid package that declares the vendor identity but has an attacker
   // signature. Runtime must reject it before it opens any extracted artifact for execution.
@@ -2103,15 +2094,7 @@ fn runtime_rejects_artifact_replaced_after_auto_pin_before_execution() {
   let (dir, db, packages, lifecycle, caps, transport) = setup();
   let (pkg, digest) = build_google_web_package();
   install_package(&packages, dir.path(), &pkg);
-  let id = seed_instance(&db, r#"{"channel":"gtx"}"#);
-  lifecycle.pin_default_package_for_new_instance(id).unwrap();
-  assert_eq!(
-    db.read(|conn| integration_instances::get(conn, id))
-      .unwrap()
-      .runtime_kind,
-    "wasm-component",
-    "test requires a completed auto-pin commit"
-  );
+  let id = activate_package_first_tamper_fixture(&db, &packages, &lifecycle, &digest, dir.path());
 
   let artifact_path = packages.package_content_path(&digest).join(TRANSLATE_ARTIFACT_PATH);
   let mut permissions = std::fs::metadata(&artifact_path).unwrap().permissions();
@@ -2139,15 +2122,7 @@ fn runtime_snapshot_recheck_rejects_archive_only_replacement_after_archive_verif
   let (dir, db, packages, lifecycle, caps, transport) = setup();
   let (pkg, digest) = build_google_web_package();
   install_package(&packages, dir.path(), &pkg);
-  let id = seed_instance(&db, r#"{"channel":"gtx"}"#);
-  lifecycle.pin_default_package_for_new_instance(id).unwrap();
-  assert_eq!(
-    db.read(|conn| integration_instances::get(conn, id))
-      .unwrap()
-      .runtime_kind,
-    "wasm-component",
-    "test requires a completed auto-pin commit"
-  );
+  let id = activate_package_first_tamper_fixture(&db, &packages, &lifecycle, &digest, dir.path());
 
   let hook_ran = Arc::new(AtomicBool::new(false));
   let hook_ran_for_hook = hook_ran.clone();
@@ -2188,15 +2163,7 @@ fn runtime_snapshot_recheck_rejects_replacement_after_archive_verification() {
   let (dir, db, packages, lifecycle, caps, transport) = setup();
   let (pkg, digest) = build_google_web_package();
   install_package(&packages, dir.path(), &pkg);
-  let id = seed_instance(&db, r#"{"channel":"gtx"}"#);
-  lifecycle.pin_default_package_for_new_instance(id).unwrap();
-  assert_eq!(
-    db.read(|conn| integration_instances::get(conn, id))
-      .unwrap()
-      .runtime_kind,
-    "wasm-component",
-    "test requires a completed auto-pin commit"
-  );
+  let id = activate_package_first_tamper_fixture(&db, &packages, &lifecycle, &digest, dir.path());
 
   let hook_ran = Arc::new(AtomicBool::new(false));
   let hook_ran_for_hook = hook_ran.clone();
@@ -2658,27 +2625,61 @@ fn google_web_migration_rejects_schema_incompatible_target() {
   );
 }
 
-#[test]
-fn google_web_new_instance_pins_default_wasm_package() {
-  let (dir, db, packages, lifecycle, _caps, _transport) = setup();
-  let (pkg, digest) = build_google_web_package();
-  install_package(&packages, dir.path(), &pkg);
+/// Authorize an installed catalog default through the Phase 11.5 public preview/confirm seam.
+fn authorize_installed_default(
+  db: &Database,
+  packages: &PluginPackageService,
+  app_data_dir: &std::path::Path,
+  digest: &str,
+) -> crate::services::default_package_activation::DefaultPackageActivationService {
+  use crate::domain::default_package_activation::AuthorizeDefaultPluginPackageInput;
+  use crate::services::default_package_activation::DefaultPackageActivationService;
 
-  // ServiceIntegrationService wired with runtime_lifecycle, as AppState wires it in production.
+  let activation = DefaultPackageActivationService::create(db.clone(), packages.clone(), app_data_dir);
+  let preview = activation
+    .preview_default_package_activation(digest)
+    .expect("preview authorized default");
+  activation
+    .authorize_default_plugin_package(AuthorizeDefaultPluginPackageInput {
+      preview_id: preview.preview_id,
+      acknowledge_future_instance_authority: true,
+    })
+    .expect("authorize default package");
+  activation
+}
+
+fn package_first_integration_service(
+  db: &Database,
+  lifecycle: &RuntimeLifecycleService,
+  activation: crate::services::default_package_activation::DefaultPackageActivationService,
+) -> ServiceIntegrationService {
   let vault: Arc<dyn crate::credentials::CredentialVault> =
     Arc::new(crate::credentials::MemoryCredentialVault::default());
   let tokens = Arc::new(TokenGrantService::new(Arc::new(
     crate::services::google_service_account::GoogleServiceAccountExchanger::new(db.clone(), vault.clone()),
   )));
   let registry = Arc::new(ServiceIntegrationRegistry::bundled().unwrap());
-  let integrations =
-    ServiceIntegrationService::new(db.clone(), vault, registry, tokens).with_runtime_lifecycle(lifecycle);
+  ServiceIntegrationService::new(db.clone(), vault, registry, tokens)
+    .with_runtime_lifecycle(lifecycle.clone())
+    .with_default_package_activation(activation)
+}
+
+#[test]
+fn default_package_activation_integration_google_web_create_grant() {
+  use crate::domain::runtime_lifecycle::GrantSubjectKind;
+
+  let (dir, db, packages, lifecycle, _caps, _transport) = setup();
+  let (pkg, digest) = build_google_web_package();
+  install_package(&packages, dir.path(), &pkg);
+  let activation =
+    authorize_installed_default(&db, &packages, dir.path(), &digest).with_integration_lifecycle(lifecycle.clone());
+  let integrations = package_first_integration_service(&db, &lifecycle, activation.clone());
 
   let dto = integrations
     .save(crate::domain::service_integration::IntegrationInstanceWrite {
       id: None,
       plugin_id: PLUGIN_ID.into(),
-      display_name: "Auto-pin".into(),
+      display_name: "Package-first".into(),
       enabled: true,
       config_json: r#"{"channel":"gtx"}"#.into(),
       credentials: vec![],
@@ -2688,33 +2689,40 @@ fn google_web_new_instance_pins_default_wasm_package() {
     })
     .unwrap();
 
-  // New Google Web instance pins the default Wasm package (not Bundled Rust) with an active grant.
+  // Authorized default creates exact package-first pending state: no grant, no legacy identity.
   assert_eq!(dto.runtime_kind, "wasm-component");
   assert_eq!(dto.package_digest.as_deref(), Some(digest.as_str()));
-  assert_eq!(dto.runtime_state, "active");
-  assert!(dto.execution_grant_set_revision.is_some());
+  assert_eq!(dto.runtime_state, "pending_activation");
+  assert!(dto.execution_grant_set_revision.is_none());
+  assert_ne!(dto.runtime_kind, "bundled-rust");
+
+  activation
+    .activate_pending_subject(GrantSubjectKind::IntegrationInstance, dto.id)
+    .expect("package-first activation");
+  let active = integrations.get_instance(dto.id).unwrap();
+  assert_eq!(active.runtime_kind, "wasm-component");
+  assert_eq!(active.package_digest.as_deref(), Some(digest.as_str()));
+  assert_eq!(active.runtime_state, "active");
+  assert!(active.execution_grant_set_revision.is_some());
 }
 
 #[test]
-fn google_web_new_instance_can_defer_default_package_pin() {
+fn default_package_activation_integration_google_web_config_change_race() {
+  use crate::domain::runtime_lifecycle::GrantSubjectKind;
+  use std::sync::mpsc;
+
   let (dir, db, packages, lifecycle, _caps, _transport) = setup();
   let (pkg, digest) = build_google_web_package();
   install_package(&packages, dir.path(), &pkg);
+  let activation =
+    authorize_installed_default(&db, &packages, dir.path(), &digest).with_integration_lifecycle(lifecycle.clone());
+  let integrations = package_first_integration_service(&db, &lifecycle, activation.clone());
 
-  let vault: Arc<dyn crate::credentials::CredentialVault> =
-    Arc::new(crate::credentials::MemoryCredentialVault::default());
-  let tokens = Arc::new(TokenGrantService::new(Arc::new(
-    crate::services::google_service_account::GoogleServiceAccountExchanger::new(db.clone(), vault.clone()),
-  )));
-  let registry = Arc::new(ServiceIntegrationRegistry::bundled().unwrap());
-  let integrations =
-    ServiceIntegrationService::new(db.clone(), vault, registry, tokens).with_runtime_lifecycle(lifecycle.clone());
-
-  let created = integrations
-    .save_without_default_pin(crate::domain::service_integration::IntegrationInstanceWrite {
+  let dto = integrations
+    .save(crate::domain::service_integration::IntegrationInstanceWrite {
       id: None,
       plugin_id: PLUGIN_ID.into(),
-      display_name: "Deferred auto-pin".into(),
+      display_name: "Race".into(),
       enabled: true,
       config_json: r#"{"channel":"gtx"}"#.into(),
       credentials: vec![],
@@ -2723,16 +2731,44 @@ fn google_web_new_instance_can_defer_default_package_pin() {
       acknowledge_endpoint_trust: false,
     })
     .unwrap();
+  assert_eq!(dto.runtime_state, "pending_activation");
 
-  assert_eq!(created.runtime_kind, "bundled-rust");
-  assert!(created.package_digest.is_none());
-  assert!(created.execution_grant_set_revision.is_none());
+  let (at_seam_tx, at_seam_rx) = mpsc::channel();
+  let (release_tx, release_rx) = mpsc::channel();
+  lifecycle.set_auto_pin_after_final_revalidate_hook(Some(Box::new(move || {
+    let _ = at_seam_tx.send(());
+    let _ = release_rx.recv();
+  })));
 
-  lifecycle.pin_default_package_for_new_instance(created.id).unwrap();
-  let pinned = integrations.get_instance(created.id).unwrap();
-  assert_eq!(pinned.runtime_kind, "wasm-component");
-  assert_eq!(pinned.package_digest.as_deref(), Some(digest.as_str()));
-  assert!(pinned.execution_grant_set_revision.is_some());
+  let activation_worker = activation.clone();
+  let subject_id = dto.id;
+  let handle = std::thread::spawn(move || {
+    activation_worker.activate_pending_subject(GrantSubjectKind::IntegrationInstance, subject_id)
+  });
+
+  // Wait until activation reaches the final revalidate seam, then mutate config.
+  at_seam_rx.recv().expect("activation reached final revalidate");
+  let _ = integrations.save(crate::domain::service_integration::IntegrationInstanceWrite {
+    id: Some(dto.id),
+    plugin_id: PLUGIN_ID.into(),
+    display_name: "Race-updated".into(),
+    enabled: true,
+    config_json: r#"{"channel":"gtx","note":"changed"}"#.into(),
+    credentials: vec![],
+    expected_updated_at: Some(dto.updated_at.clone()),
+    endpoint_trust_preview_id: None,
+    acknowledge_endpoint_trust: false,
+  });
+  let _ = release_tx.send(());
+  let _ = handle.join().expect("activation thread");
+
+  let after = integrations.get_instance(dto.id).unwrap();
+  // Concurrent mutation must not create a second grant or resurrect a legacy identity.
+  assert_eq!(after.package_digest.as_deref(), Some(digest.as_str()));
+  assert_ne!(after.runtime_kind, "bundled-rust");
+  if after.execution_grant_set_revision.is_some() {
+    assert_eq!(after.runtime_state, "active");
+  }
 }
 
 #[test]

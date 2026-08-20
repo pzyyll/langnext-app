@@ -120,7 +120,6 @@ function InstallPluginForm({ onClose, onPreviewIdChange }: InstallPluginFormProp
   const [error, setError] = useState<string | null>(null);
   const [ackPermissions, setAckPermissions] = useState(false);
   const [approvePublisher, setApprovePublisher] = useState(false);
-  const [setAsDefault, setSetAsDefault] = useState(true);
   const [publicKeyHex, setPublicKeyHex] = useState("");
   const publisherApprovalKeyHexValue = preview ? publisherApprovalKeyHex(preview, publicKeyHex) : "";
 
@@ -158,7 +157,6 @@ function InstallPluginForm({ onClose, onPreviewIdChange }: InstallPluginFormProp
         approvePublisher: requiresPublisherApproval(preview) ? approvePublisher : false,
         publisherPublicKeyHex:
           requiresPublisherApproval(preview) && approvePublisher ? publisherApprovalKeyHexValue || null : null,
-        setAsDefault,
       });
     },
     onSuccess: async () => {
@@ -315,19 +313,6 @@ function InstallPluginForm({ onClose, onPreviewIdChange }: InstallPluginFormProp
               ) : null}
             </div>
           ) : null}
-
-          <label className="flex items-start gap-2 text-body-tight text-on-surface">
-            <Checkbox.Root
-              checked={setAsDefault}
-              onCheckedChange={(checked) => setSetAsDefault(checked === true)}
-              className={checkboxClassName}
-            >
-              <Checkbox.Indicator className={checkboxIndicatorClassName}>
-                <IconMaterialSymbolsLightCheck className="size-3" aria-hidden />
-              </Checkbox.Indicator>
-            </Checkbox.Root>
-            <span>{t("plugins.packages.setAsDefault")}</span>
-          </label>
         </>
       )}
 

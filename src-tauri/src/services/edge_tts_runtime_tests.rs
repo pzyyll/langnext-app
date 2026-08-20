@@ -1078,31 +1078,25 @@ fn edge_tts_runtime_rejects_oversized_audio() {
   );
 }
 
-/// New Edge TTS instances auto-pin the verified vendor-default Wasm package (mirrors Google Web
-/// GTX auto-pin but with Edge constraints: instance-configured origin resolved to the
-/// vendor-default base URL).
+/// Plugin-ID auto-pin is retired: the call is a fail-closed no-op and never pins or grants.
 #[test]
-fn edge_tts_runtime_new_instance_auto_pins_default_package() {
+fn edge_tts_pin_default_is_retired_noop() {
   let (_dir, db, packages, lifecycle, _caps, _transport) = setup();
-  let import = packages
+  let _import = packages
     .bootstrap_bundled_package(EDGE_TTS_LNPLUGIN, true)
     .expect("bootstrap edge-tts package");
-  let digest = import.package_digest().to_string();
   let id = seed_instance(&db, "https://tts.wangwangit.com");
 
-  // Before auto-pin: bundled-rust, no package digest.
   let before = db.read(|conn| integration_instances::get(conn, id)).unwrap();
   assert_eq!(before.runtime_kind, "bundled-rust");
   assert!(before.package_digest.is_none());
 
   lifecycle.pin_default_package_for_new_instance(id).unwrap();
 
-  // After auto-pin: wasm-component, active, pinned to the vendor package.
   let after = db.read(|conn| integration_instances::get(conn, id)).unwrap();
-  assert_eq!(after.runtime_kind, "wasm-component");
-  assert_eq!(after.runtime_state, InstanceRuntimeState::Active.as_str());
-  assert_eq!(after.package_digest.as_deref(), Some(digest.as_str()));
-  assert!(after.execution_grant_set_revision.is_some());
+  assert_eq!(after.runtime_kind, "bundled-rust", "pin default is a retired no-op");
+  assert!(after.package_digest.is_none());
+  assert!(after.execution_grant_set_revision.is_none());
 }
 
 /// Migration/upgrade preserves the Speech service capability binding and default references.
@@ -1283,28 +1277,22 @@ fn edge_tts_runtime_auto_pin_rejects_custom_origin() {
   assert!(path_variant.package_digest.is_none());
 }
 
-/// Equivalent normalized default origin auto-pins: a trailing slash on the vendor-default URL
-/// normalizes to the same HTTPS origin, so auto-pin succeeds (consent not required).
+/// Pin-default is a retired no-op even for an equivalent normalized default origin: the call
+/// never pins or grants regardless of origin normalization.
 #[test]
-fn edge_tts_runtime_auto_pin_accepts_equivalent_normalized_default() {
+fn edge_tts_pin_default_retired_noop_for_equivalent_normalized_origin() {
   let (_dir, db, packages, lifecycle, _caps, _transport) = setup();
-  let import = packages
+  let _import = packages
     .bootstrap_bundled_package(EDGE_TTS_LNPLUGIN, true)
     .expect("bootstrap edge-tts package");
-  let digest = import.package_digest().to_string();
-  // Trailing slash normalizes to the vendor-default origin.
   let id = seed_instance(&db, "https://tts.wangwangit.com/");
 
   lifecycle.pin_default_package_for_new_instance(id).unwrap();
 
   let after = db.read(|conn| integration_instances::get(conn, id)).unwrap();
-  assert_eq!(
-    after.runtime_kind, "wasm-component",
-    "equivalent default origin must auto-pin"
-  );
-  assert_eq!(after.runtime_state, InstanceRuntimeState::Active.as_str());
-  assert_eq!(after.package_digest.as_deref(), Some(digest.as_str()));
-  assert!(after.execution_grant_set_revision.is_some());
+  assert_eq!(after.runtime_kind, "bundled-rust");
+  assert!(after.package_digest.is_none());
+  assert!(after.execution_grant_set_revision.is_none());
 }
 
 /// Auto-pin consent gate: a malformed/non-HTTPS base URL must not auto-pin. The effective
@@ -1325,4 +1313,167 @@ fn edge_tts_runtime_auto_pin_rejects_non_https_origin() {
   assert_eq!(after.runtime_kind, "bundled-rust", "non-https origin must not auto-pin");
   assert!(after.package_digest.is_none());
   assert!(after.execution_grant_set_revision.is_none());
+}
+
+/// Authorize an installed catalog default through the public preview/confirm seam.
+fn authorize_installed_default(
+  db: &Database,
+  packages: &PluginPackageService,
+  app_data_dir: &std::path::Path,
+  digest: &str,
+) -> crate::services::default_package_activation::DefaultPackageActivationService {
+  use crate::domain::default_package_activation::AuthorizeDefaultPluginPackageInput;
+  use crate::services::default_package_activation::DefaultPackageActivationService;
+
+  let activation = DefaultPackageActivationService::create(db.clone(), packages.clone(), app_data_dir);
+  let preview = activation
+    .preview_default_package_activation(digest)
+    .expect("preview authorized default");
+  activation
+    .authorize_default_plugin_package(AuthorizeDefaultPluginPackageInput {
+      preview_id: preview.preview_id,
+      acknowledge_future_instance_authority: true,
+    })
+    .expect("authorize default package");
+  activation
+}
+
+#[test]
+fn default_package_activation_integration_edge_tts_create_grant() {
+  use crate::domain::default_package_activation::{
+    ConfirmDefaultRuntimeAuthorityInput, PreviewDefaultRuntimeAuthorityInput,
+  };
+  use crate::domain::runtime_lifecycle::GrantSubjectKind;
+  use crate::domain::service_integration::EDGE_TTS_DEFAULT_BASE_URL;
+
+  let (dir, db, packages, lifecycle, _caps, _transport) = setup();
+  let import = packages
+    .bootstrap_bundled_package(EDGE_TTS_LNPLUGIN, true)
+    .expect("bootstrap edge-tts package");
+  let digest = import.package_digest().to_string();
+  let activation =
+    authorize_installed_default(&db, &packages, dir.path(), &digest).with_integration_lifecycle(lifecycle.clone());
+  let integrations = integration_service(&db, &lifecycle).with_default_package_activation(activation.clone());
+
+  let config_json = serialize_edge_tts_config(&crate::domain::service_integration::EdgeTtsConfigV1 {
+    base_url: EDGE_TTS_DEFAULT_BASE_URL.into(),
+  })
+  .unwrap();
+  let dto = integrations
+    .save(IntegrationInstanceWrite {
+      id: None,
+      plugin_id: EDGE_TTS_PLUGIN_ID.into(),
+      display_name: "Package-first Edge".into(),
+      enabled: true,
+      config_json,
+      credentials: vec![],
+      expected_updated_at: None,
+      endpoint_trust_preview_id: None,
+      acknowledge_endpoint_trust: false,
+    })
+    .unwrap();
+
+  assert_eq!(dto.runtime_kind, "wasm-component");
+  assert_eq!(dto.package_digest.as_deref(), Some(digest.as_str()));
+  assert_eq!(dto.runtime_state, "pending_activation");
+  assert!(dto.execution_grant_set_revision.is_none());
+
+  activation
+    .activate_pending_subject(GrantSubjectKind::IntegrationInstance, dto.id)
+    .expect("package-first activation");
+  let after_first = integrations.get_instance(dto.id).unwrap();
+  assert_eq!(after_first.package_digest.as_deref(), Some(digest.as_str()));
+  assert_ne!(after_first.runtime_kind, "bundled-rust");
+
+  // Instance-configured origin is never pre-authorized by the default policy; confirm additional
+  // authority through the subject-bound preview/confirm seam, then grant activates.
+  if after_first.execution_grant_set_revision.is_none() {
+    let preview = activation
+      .preview_default_runtime_authority(PreviewDefaultRuntimeAuthorityInput {
+        subject_kind: GrantSubjectKind::IntegrationInstance,
+        subject_id: dto.id,
+      })
+      .expect("authority preview for instance-configured origin");
+    activation
+      .confirm_default_runtime_authority(ConfirmDefaultRuntimeAuthorityInput {
+        preview_id: preview.preview_id,
+        acknowledge_additional_authority: true,
+      })
+      .expect("confirm additional authority");
+  }
+
+  let active = integrations.get_instance(dto.id).unwrap();
+  assert_eq!(active.runtime_kind, "wasm-component");
+  assert_eq!(active.package_digest.as_deref(), Some(digest.as_str()));
+  assert_eq!(active.runtime_state, "active");
+  assert!(active.execution_grant_set_revision.is_some());
+}
+
+#[test]
+fn default_package_activation_integration_edge_tts_disable_race() {
+  use crate::domain::runtime_lifecycle::GrantSubjectKind;
+  use crate::domain::service_integration::EDGE_TTS_DEFAULT_BASE_URL;
+  use std::sync::mpsc;
+
+  let (dir, db, packages, lifecycle, _caps, _transport) = setup();
+  let import = packages
+    .bootstrap_bundled_package(EDGE_TTS_LNPLUGIN, true)
+    .expect("bootstrap edge-tts package");
+  let digest = import.package_digest().to_string();
+  let activation =
+    authorize_installed_default(&db, &packages, dir.path(), &digest).with_integration_lifecycle(lifecycle.clone());
+  let integrations = integration_service(&db, &lifecycle).with_default_package_activation(activation.clone());
+
+  let config_json = serialize_edge_tts_config(&crate::domain::service_integration::EdgeTtsConfigV1 {
+    base_url: EDGE_TTS_DEFAULT_BASE_URL.into(),
+  })
+  .unwrap();
+  let dto = integrations
+    .save(IntegrationInstanceWrite {
+      id: None,
+      plugin_id: EDGE_TTS_PLUGIN_ID.into(),
+      display_name: "Race Edge".into(),
+      enabled: true,
+      config_json: config_json.clone(),
+      credentials: vec![],
+      expected_updated_at: None,
+      endpoint_trust_preview_id: None,
+      acknowledge_endpoint_trust: false,
+    })
+    .unwrap();
+
+  let (at_seam_tx, at_seam_rx) = mpsc::channel();
+  let (release_tx, release_rx) = mpsc::channel();
+  lifecycle.set_auto_pin_after_final_revalidate_hook(Some(Box::new(move || {
+    let _ = at_seam_tx.send(());
+    let _ = release_rx.recv();
+  })));
+
+  let activation_worker = activation.clone();
+  let subject_id = dto.id;
+  let handle = std::thread::spawn(move || {
+    activation_worker.activate_pending_subject(GrantSubjectKind::IntegrationInstance, subject_id)
+  });
+
+  // Edge TTS often exits before final revalidate when authority confirmation is required.
+  let raced = at_seam_rx.recv_timeout(std::time::Duration::from_secs(5)).is_ok();
+  if raced {
+    let _ = integrations.save(IntegrationInstanceWrite {
+      id: Some(dto.id),
+      plugin_id: EDGE_TTS_PLUGIN_ID.into(),
+      display_name: "Race Edge".into(),
+      enabled: false,
+      config_json,
+      credentials: vec![],
+      expected_updated_at: Some(dto.updated_at.clone()),
+      endpoint_trust_preview_id: None,
+      acknowledge_endpoint_trust: false,
+    });
+    let _ = release_tx.send(());
+  }
+  let _ = handle.join().expect("activation thread");
+
+  let after = integrations.get_instance(dto.id).unwrap();
+  assert_eq!(after.package_digest.as_deref(), Some(digest.as_str()));
+  assert_ne!(after.runtime_kind, "bundled-rust");
 }

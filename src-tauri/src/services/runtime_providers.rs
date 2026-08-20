@@ -1,6 +1,6 @@
 // ABOUTME: Provider runtime package catalog and adapter-keyed interface lifecycle services.
 // ABOUTME: Catalog visibility never grants execution; each binding owns one exact API type.
-use crate::domain::plugin_package::{InstalledPluginVersion, PublisherSource, compute_permission_request_digest};
+use crate::domain::plugin_package::{InstalledPluginVersion, compute_permission_request_digest};
 use crate::domain::provider::{BaseUrlSource, ProviderInstance, ProviderInstanceWrite, ProxyMode, validate_adapter_id};
 use crate::domain::runtime_lifecycle::{
   CapabilityGrantEntryRecord, ExecutionGrantSetBundle, ExecutionGrantSetRecord, GrantSubjectKind, PublisherIdentityDto,
@@ -30,7 +30,7 @@ use crate::repositories::{
   installed_plugin_versions, plugin_permission_grants, plugin_publishers, provider_instances, provider_runtime_bindings,
 };
 use crate::services::plugin_package::VerifiedPackage;
-use crate::services::plugin_store::{PluginPackageService, VerifiedVendorImport};
+use crate::services::plugin_store::PluginPackageService;
 use crate::services::runtime_plugin_contracts::{parse_manifest, validate_manifest};
 use crate::services::wasm_runtime::WasmRuntime;
 use crate::storage::Database;
@@ -253,24 +253,10 @@ struct ProviderInterfaceRollbackPreviewSession {
   expires_at: Instant,
 }
 
-/// Reviewed vendor default for newly created matching Providers (Task 12). Resolved once at
-/// startup from a verified vendor archive; the Provider create path binds it by exact digest,
-/// publisher identity, version, and legacy alias — never by an ID/version lookup alone.
+/// Pre-verified catalog default candidate for ONE new Provider create. Resolution is read-only
+/// and happens before the create transaction; the transaction inserts only the selected binding.
 #[derive(Debug, Clone)]
-pub struct ProviderVendorDefault {
-  pub package_digest: String,
-  pub plugin_id: String,
-  pub plugin_version: String,
-  pub publisher_key_id: String,
-  pub publisher_fingerprint: String,
-  pub legacy_aliases: Vec<String>,
-}
-
-/// Pre-verified vendor default candidate for ONE new Provider create. Resolution is read-only
-/// and happens before the create transaction; the transaction re-checks rows and applies the
-/// pin (or leaves the provider legacy without failing the create).
-#[derive(Debug, Clone)]
-pub(crate) struct PreparedProviderVendorDefault {
+pub(crate) struct PreparedProviderDefault {
   pub package_digest: String,
   pub plugin_id: String,
   pub plugin_version: String,
@@ -280,6 +266,25 @@ pub(crate) struct PreparedProviderVendorDefault {
   pub manifest: PluginManifestV1,
   pub declaration: ProviderRuntimeDeclaration,
 }
+
+/// Normalized block reason when an authorized candidate exists but cannot be applied.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DefaultActivationBlock {
+  pub code: String,
+  pub message: String,
+}
+
+/// Exact-policy provider default resolution for package-first create.
+#[derive(Debug, Clone)]
+pub(crate) enum ProviderDefaultResolution {
+  Applicable(PreparedProviderDefault),
+  NoApplicableDefault,
+  Blocked(DefaultActivationBlock),
+}
+
+pub(crate) const AMBIGUOUS_AUTHORIZED_DEFAULT_CODE: &str = "ambiguous_authorized_default";
+pub(crate) const STALE_AUTHORIZED_DEFAULT_CODE: &str = "stale_authorized_default";
+pub(crate) const AUTHORITY_EXPANSION_BLOCKED_CODE: &str = "authority_expansion_blocked";
 
 /// Provider runtime lifecycle: adapter-keyed preview/apply/rollback/detach against the
 /// validated catalog, with provider `updated_at` CAS, signed package re-verification,
@@ -295,9 +300,6 @@ pub struct ProviderRuntimeService {
   catalog: Arc<ProviderRuntimeCatalog>,
   attach_previews: Arc<Mutex<HashMap<String, ProviderInterfaceAttachPreviewSession>>>,
   rollback_previews: Arc<Mutex<HashMap<String, ProviderInterfaceRollbackPreviewSession>>>,
-  /// Reviewed vendor default for newly created matching Providers (Task 12); `None` until a
-  /// verified vendor archive resolves it at startup.
-  vendor_default: Arc<Mutex<Option<ProviderVendorDefault>>>,
 }
 
 impl ProviderRuntimeService {
@@ -310,7 +312,6 @@ impl ProviderRuntimeService {
       catalog,
       attach_previews: Arc::new(Mutex::new(HashMap::new())),
       rollback_previews: Arc::new(Mutex::new(HashMap::new())),
-      vendor_default: Arc::new(Mutex::new(None)),
     }
   }
 
@@ -319,144 +320,617 @@ impl ProviderRuntimeService {
     self.catalog.list()
   }
 
-  /// Resolve the reviewed vendor default for new matching Providers from ONE verified vendor
-  /// import (startup seam; Task 12). Re-verifies the exact retained archive with the external
-  /// vendor root, reverse-binds publisher/version identity, runs the catalog artifact-world
-  /// checks, and fails closed on alias ambiguity (another installed version claiming the same
-  /// plugin id/version with a different digest that also verifies under a vendor root). A
-  /// `None` import clears the default. Resolution failure never auto-binds anything.
-  pub fn set_vendor_default(&self, import: Option<&VerifiedVendorImport>) -> Result<(), StorageError> {
-    let mut guard = self.vendor_default.lock().unwrap_or_else(|e| e.into_inner());
-    let Some(import) = import else {
-      *guard = None;
-      return Ok(());
-    };
-    // Immutable package verification: the exact retained archive must verify under a
-    // configured external vendor root; DB publisher/version rows are never trust material.
-    let (verified, _root) = self.packages.verify_store_with_vendor_root(import.package_digest())?;
-    if verified.manifest.id != import.plugin_id()
-      || verified.manifest.version != import.version()
-      || verified.manifest.publisher.key_id != import.publisher_key_id()
-      || verified.manifest.publisher.key_fingerprint != import.publisher_fingerprint()
-    {
-      return Err(StorageError::Validation(
-        "vendor default import identity diverged from the verified archive".into(),
-      ));
-    }
-    // Alias-ambiguity: another installed version with the same plugin id+version that also
-    // verifies under a vendor root makes the default ambiguous; fail closed (never pick by
-    // an ID/version lookup alone).
-    let versions = self.db.read(|conn| installed_plugin_versions::list(conn))?;
-    for version in versions {
-      if version.plugin_id == import.plugin_id()
-        && version.version == import.version()
-        && version.package_digest != import.package_digest()
-        && self
-          .packages
-          .verify_store_with_vendor_root(&version.package_digest)
-          .is_ok()
-      {
-        *guard = None;
-        return Err(StorageError::Conflict(format!(
-          "vendor default is ambiguous: multiple verified vendor packages claim {} {}",
-          import.plugin_id(),
-          import.version()
-        )));
+  /// Subject preparation for package-first activation of one pending provider binding.
+  ///
+  /// Loads provider/binding/intent/version/policy state, validates the providerRuntime
+  /// declaration, and resolves the binding effective authority. Initial policy/package
+  /// verification is owned by `DefaultPackageActivationService` single-flight.
+  pub(super) fn prepare_package_first_activation(
+    &self,
+    provider_id: Uuid,
+    snapshot: &crate::services::default_package_activation::VerifiedActivationSnapshot,
+  ) -> Result<Option<crate::services::default_package_activation::PreparedPackageFirstActivation>, StorageError> {
+    use crate::domain::plugin_package::sha256_hex;
+    use crate::repositories::default_package_activation_policies;
+    use crate::services::runtime_authority::resolve_provider_effective_authority;
+
+    let loaded = self.db.read(|conn| {
+      let provider = provider_instances::get(conn, provider_id)?;
+      let binding = provider_runtime_bindings::get(conn, provider_id, &provider.adapter_id)?;
+      if binding.state != ProviderRuntimeState::PendingActivation || binding.grant_set_revision.is_some() {
+        return Ok::<_, StorageError>(None);
       }
-    }
-    // Full catalog verification (artifact world checks) of the exact installed version.
-    let version = self
-      .db
-      .read(|conn| installed_plugin_versions::get(conn, import.package_digest()))?;
-    let PackageVerification::ProviderRuntime(_verified, manifest, declaration) =
-      self.catalog.verify_package(&version)?
-    else {
-      return Err(StorageError::Validation(format!(
-        "installed vendor default {} is not a provider runtime package",
-        import.plugin_id()
-      )));
+      let Some(digest) = binding.package_digest.clone() else {
+        return Ok(None);
+      };
+      if digest != snapshot.package_digest {
+        return Ok(None);
+      }
+      let intent =
+        default_package_activation_policies::get_intent(conn, GrantSubjectKind::ProviderInstance, provider_id)?;
+      let Some(intent) = intent else {
+        return Ok(None);
+      };
+      if intent.package_digest != digest {
+        return Ok(Some((provider, binding, intent, None, None)));
+      }
+      let version = installed_plugin_versions::get(conn, &digest)?;
+      if !version.content_available || version.package_digest != snapshot.package_digest {
+        return Ok(Some((provider, binding, intent, None, None)));
+      }
+      let policy = default_package_activation_policies::get_policy(conn, &version.plugin_id)?;
+      Ok(Some((provider, binding, intent, Some(version), policy)))
+    })?;
+    let Some((provider, binding, intent, version, policy)) = loaded else {
+      return Ok(None);
     };
-    if manifest.id != import.plugin_id() || manifest.version != import.version() {
-      return Err(StorageError::Validation(
-        "vendor default manifest identity diverged from the verified import".into(),
+    let Some(version) = version else {
+      let _ = self.fail_pending_provider_activation(
+        provider_id,
+        &provider.adapter_id,
+        intent.id,
+        &binding,
+        crate::services::default_package_activation::DEFAULT_AUTHORIZATION_STALE_CODE,
+        "default authorization or publisher trust is stale",
+      );
+      return Ok(None);
+    };
+    let Some(policy) = policy else {
+      let _ = self.fail_pending_provider_activation(
+        provider_id,
+        &provider.adapter_id,
+        intent.id,
+        &binding,
+        crate::services::default_package_activation::DEFAULT_AUTHORIZATION_STALE_CODE,
+        "default authorization policy is missing",
+      );
+      return Ok(None);
+    };
+
+    let declaration = match snapshot.verified.manifest.provider_runtime.clone() {
+      Some(declaration) => declaration,
+      None => {
+        let _ = self.fail_pending_provider_activation(
+          provider_id,
+          &provider.adapter_id,
+          intent.id,
+          &binding,
+          "provider_runtime_missing",
+          "verified package has no providerRuntime declaration",
+        );
+        return Ok(None);
+      }
+    };
+
+    let capability_ids = declaration.capabilities.keys().cloned().collect::<Vec<_>>();
+    let effective = match resolve_provider_effective_authority(&provider.base_url, &capability_ids) {
+      Ok(effective) => effective,
+      Err(err) => {
+        let _ = self.fail_pending_provider_activation(
+          provider_id,
+          &provider.adapter_id,
+          intent.id,
+          &binding,
+          "activation_failed",
+          &err.to_string(),
+        );
+        return Ok(None);
+      }
+    };
+    let auth_scheme_json = match serde_json::to_string(&provider.auth_scheme) {
+      Ok(json) => json,
+      Err(err) => {
+        let _ = self.fail_pending_provider_activation(
+          provider_id,
+          &provider.adapter_id,
+          intent.id,
+          &binding,
+          "activation_failed",
+          &format!("serialize provider auth scheme: {err}"),
+        );
+        return Ok(None);
+      }
+    };
+    let config_digest = sha256_hex(format!("{}|{auth_scheme_json}", provider.base_url).as_bytes());
+    Ok(Some(
+      crate::services::default_package_activation::PreparedPackageFirstActivation {
+        subject_kind: GrantSubjectKind::ProviderInstance,
+        subject_id: provider_id,
+        package_digest: binding.package_digest.clone().expect("prepared package digest"),
+        expected_update_token: binding.updated_at.clone(),
+        config_digest,
+        effective_authority: effective,
+        policy,
+        publisher: None,
+        binding: Some(binding),
+        version: Some(version),
+        subject_config_base_url: provider.base_url.clone(),
+        subject_config_auth_scheme: Some(provider.auth_scheme),
+        intent: Some(intent),
+      },
+    ))
+  }
+
+  /// Apply the provider grant and complete the activation intent in one CAS transaction after
+  /// the coordinator's shared policy/approval/coverage checks pass.
+  pub(super) fn apply_package_first_activation(
+    &self,
+    prepared: &crate::services::default_package_activation::PreparedPackageFirstActivation,
+    snapshot: &crate::services::default_package_activation::VerifiedActivationSnapshot,
+  ) -> Result<(), StorageError> {
+    use crate::domain::default_package_activation::DefaultRuntimeActivationState;
+    use crate::repositories::default_package_activation_policies;
+
+    let provider_id = prepared.subject_id;
+    let Some(binding) = prepared.binding.clone() else {
+      return Err(StorageError::Internal(
+        "provider binding is missing from prepared activation".into(),
       ));
+    };
+    let Some(version) = prepared.version.clone() else {
+      return Err(StorageError::Internal(
+        "provider version is missing from prepared activation".into(),
+      ));
+    };
+    let Some(intent) = prepared.intent.clone() else {
+      return Err(StorageError::Internal(
+        "provider intent is missing from prepared activation".into(),
+      ));
+    };
+    let Some(declaration) = snapshot.verified.manifest.provider_runtime.clone() else {
+      return Err(StorageError::Internal(
+        "verified package has no providerRuntime declaration".into(),
+      ));
+    };
+    let live_provider = self.db.read(|conn| provider_instances::get(conn, provider_id))?;
+    let adapter_id = live_provider.adapter_id.clone();
+
+    // Final store revalidation remains outside shared single-flight and inside the CAS path.
+    // Hold the package-store lock across re-verification and grant transaction.
+    let _store_guard = self.packages.lock_store()?;
+    let rechecked = match self.packages.verify_runtime_store_snapshot(
+      &snapshot.package_digest,
+      &snapshot.publisher_key_id,
+      &snapshot.publisher_fingerprint,
+      &snapshot.publisher_public_key_hex,
+      snapshot.publisher_source,
+    ) {
+      Ok(verified) => verified,
+      Err(err) => {
+        log::warn!(
+          "provider_package_first_activation_reverify_failed provider={provider_id} digest={} error={err}",
+          snapshot.package_digest
+        );
+        let _ = self.fail_pending_provider_activation(
+          provider_id,
+          &adapter_id,
+          intent.id,
+          &binding,
+          "package_verification_failed",
+          &err.to_string(),
+        );
+        return Ok(());
+      }
+    };
+    if rechecked.package_digest != snapshot.package_digest
+      || rechecked.manifest_bytes != snapshot.verified.manifest_bytes
+      || rechecked.publisher_public_key_hex != snapshot.publisher_public_key_hex
+    {
+      let _ = self.fail_pending_provider_activation(
+        provider_id,
+        &adapter_id,
+        intent.id,
+        &binding,
+        crate::services::default_package_activation::DEFAULT_AUTHORIZATION_STALE_CODE,
+        "verified package snapshot diverged before provider grant insert",
+      );
+      return Ok(());
     }
-    *guard = Some(ProviderVendorDefault {
-      package_digest: import.package_digest().to_string(),
-      plugin_id: import.plugin_id().to_string(),
-      plugin_version: import.version().to_string(),
-      publisher_key_id: import.publisher_key_id().to_string(),
-      publisher_fingerprint: import.publisher_fingerprint().to_string(),
-      legacy_aliases: declaration.legacy_aliases.clone(),
+
+    let activate = self.db.transaction(|uow| {
+      let current = provider_runtime_bindings::get(uow.conn(), provider_id, &adapter_id)?;
+      if current.state != ProviderRuntimeState::PendingActivation
+        || current.package_digest.as_deref() != Some(snapshot.package_digest.as_str())
+        || current.grant_set_revision.is_some()
+        || current.updated_at != binding.updated_at
+      {
+        return Ok::<_, StorageError>(());
+      }
+      let live_provider = provider_instances::get(uow.conn(), provider_id)?;
+      if live_provider.base_url != prepared.subject_config_base_url
+        || prepared.subject_config_auth_scheme.as_ref() != Some(&live_provider.auth_scheme)
+      {
+        return Err(StorageError::Conflict(
+          "provider configuration changed before grant insert".into(),
+        ));
+      }
+      default_package_activation_policies::assert_final_default_policy_intent_cas(
+        uow.conn(),
+        &version.plugin_id,
+        &snapshot.package_digest,
+        &snapshot.policy_constraints_digest,
+        &snapshot.publisher_key_id,
+        &snapshot.publisher_fingerprint,
+        intent.id,
+        intent.source,
+        DefaultRuntimeActivationState::Pending,
+      )?;
+      let revision = plugin_permission_grants::next_revision_for_subject_package(
+        uow.conn(),
+        GrantSubjectKind::ProviderInstance,
+        provider_id,
+        &snapshot.package_digest,
+      )?;
+      let bundle = build_provider_grant_bundle(
+        provider_id,
+        &version,
+        &snapshot.verified.manifest,
+        &declaration,
+        revision,
+        &live_provider.base_url,
+      )?;
+      plugin_permission_grants::insert_bundle(uow.conn(), &bundle)?;
+      let active = ProviderRuntimeBinding {
+        provider_id,
+        adapter_id: adapter_id.clone(),
+        runtime_kind: ProviderRuntimeKind::WasmComponent,
+        package_digest: Some(snapshot.package_digest.clone()),
+        grant_set_revision: Some(revision),
+        state: ProviderRuntimeState::Active,
+        error_code: None,
+        error_message: None,
+        runtime_requirement_json: current.runtime_requirement_json.clone(),
+        created_at: current.created_at.clone(),
+        updated_at: now_rfc3339(),
+      };
+      provider_runtime_bindings::update(uow.conn(), &active)?;
+      default_package_activation_policies::update_intent_state(
+        uow.conn(),
+        intent.id,
+        DefaultRuntimeActivationState::Completed,
+        None,
+        None,
+      )?;
+      default_package_activation_policies::delete_authority_approvals_for_subject(
+        uow.conn(),
+        GrantSubjectKind::ProviderInstance,
+        provider_id,
+      )?;
+      Ok(())
     });
+
+    if let Err(err) = activate {
+      log::warn!("provider_package_first_activation_failed provider={provider_id} error={err}");
+      return Err(err);
+    }
     Ok(())
   }
 
-  /// Resolve the reviewed vendor default for a NEW Provider input: the adapter alias must
-  /// match a declared legacy alias AND the persisted connection requirements must match the
-  /// vendor default (plugin-default destination, inherited proxy, no insecure-HTTP
-  /// confirmation). Re-verifies the exact default archive with the vendor root and
-  /// reverse-binds publisher/version identity read-only. Any failure yields no candidate so
-  /// the Provider create stays legacy; it never fails the Provider CRUD operation.
-  pub(crate) fn vendor_default_candidate(
+  /// Provider failure marking used by the shared coordinator.
+  pub(super) fn mark_package_first_activation_failed_for_coordinator(
+    &self,
+    prepared: &crate::services::default_package_activation::PreparedPackageFirstActivation,
+    error_code: &str,
+    error_message: &str,
+  ) -> Result<(), StorageError> {
+    let Some(binding) = prepared.binding.as_ref() else {
+      return Ok(());
+    };
+    let Some(intent) = prepared.intent.as_ref() else {
+      return Ok(());
+    };
+    let adapter_id = binding.adapter_id.clone();
+    self.fail_pending_provider_activation(
+      prepared.subject_id,
+      &adapter_id,
+      intent.id,
+      binding,
+      error_code,
+      error_message,
+    )
+  }
+
+  /// Provider confirmation-required marking used by the shared coordinator.
+  pub(super) fn mark_package_first_confirmation_required_for_coordinator(
+    &self,
+    prepared: &crate::services::default_package_activation::PreparedPackageFirstActivation,
+    error_code: &str,
+    error_message: &str,
+  ) -> Result<(), StorageError> {
+    let Some(binding) = prepared.binding.as_ref() else {
+      return Ok(());
+    };
+    let Some(intent) = prepared.intent.as_ref() else {
+      return Ok(());
+    };
+    let adapter_id = binding.adapter_id.clone();
+    self.mark_provider_confirmation_required(
+      prepared.subject_id,
+      &adapter_id,
+      intent.id,
+      binding,
+      error_code,
+      error_message,
+    )
+  }
+
+  /// Fail a still-pending package-first provider activation in one transaction.
+  ///
+  /// Subject CAS and intent token binding share one transition timestamp so retry remains valid.
+  fn fail_pending_provider_activation(
+    &self,
+    provider_id: Uuid,
+    adapter_id: &str,
+    intent_id: Uuid,
+    binding: &ProviderRuntimeBinding,
+    error_code: &str,
+    error_message: &str,
+  ) -> Result<(), StorageError> {
+    use crate::repositories::{default_package_activation_policies, provider_runtime_bindings};
+
+    self.db.transaction(|uow| {
+      let transition_at = now_rfc3339();
+      let current = provider_runtime_bindings::get(uow.conn(), provider_id, adapter_id)?;
+      let bound_token = if current.state == ProviderRuntimeState::PendingActivation
+        && current.package_digest == binding.package_digest
+        && current.grant_set_revision.is_none()
+      {
+        let mut failed = current;
+        failed.state = ProviderRuntimeState::Unavailable;
+        failed.error_code = Some(error_code.into());
+        failed.error_message = Some(error_message.into());
+        failed.updated_at = transition_at.clone();
+        provider_runtime_bindings::update(uow.conn(), &failed)?;
+        transition_at
+      } else {
+        current.updated_at
+      };
+      default_package_activation_policies::fail_intent_with_update_token(
+        uow.conn(),
+        intent_id,
+        error_code,
+        error_message,
+        &bound_token,
+      )?;
+      Ok(())
+    })
+  }
+
+  /// Retain exact package requirement and request subject authority confirmation.
+  fn mark_provider_confirmation_required(
+    &self,
+    provider_id: Uuid,
+    adapter_id: &str,
+    intent_id: Uuid,
+    binding: &ProviderRuntimeBinding,
+    error_code: &str,
+    error_message: &str,
+  ) -> Result<(), StorageError> {
+    use crate::domain::default_package_activation::DefaultRuntimeActivationState;
+    use crate::repositories::{default_package_activation_policies, provider_runtime_bindings};
+
+    self.db.transaction(|uow| {
+      default_package_activation_policies::update_intent_state(
+        uow.conn(),
+        intent_id,
+        DefaultRuntimeActivationState::ConfirmationRequired,
+        Some(error_code),
+        Some(error_message),
+      )?;
+      let current = provider_runtime_bindings::get(uow.conn(), provider_id, adapter_id)?;
+      if current.state == ProviderRuntimeState::PendingActivation
+        && current.package_digest == binding.package_digest
+        && current.grant_set_revision.is_none()
+      {
+        // Keep pending_activation with confirmation error code; do not flip to unavailable.
+        let mut pending = current;
+        pending.state = ProviderRuntimeState::PendingActivation;
+        pending.error_code = Some(error_code.into());
+        pending.error_message = Some(error_message.into());
+        pending.updated_at = now_rfc3339();
+        provider_runtime_bindings::update(uow.conn(), &pending)?;
+      }
+      Ok(())
+    })
+  }
+
+  /// Resolve a catalog default for a NEW Provider input.
+  ///
+  /// Starts from catalog defaults (not only policy rows). Authorized ready defaults bind package-first
+  /// pending identity from catalog/policy only; full store re-verification runs during background
+  /// activation. Unauthorized/stale matching defaults retain an exact inactive package requirement.
+  /// Only genuine absence yields `NoApplicableDefault` (legacy dual-stack). Ambiguous or expanded
+  /// candidates block.
+  pub(crate) fn resolve_applicable_provider_default(
     &self,
     input: &ProviderInstanceWrite,
-  ) -> Result<Option<PreparedProviderVendorDefault>, StorageError> {
-    let guard = self.vendor_default.lock().unwrap_or_else(|e| e.into_inner());
-    let Some(default) = guard.as_ref() else {
-      return Ok(None);
-    };
-    if !default.legacy_aliases.iter().any(|alias| alias == &input.adapter_id) {
-      return Ok(None);
+  ) -> Result<ProviderDefaultResolution, StorageError> {
+    use crate::domain::default_package_activation::DefaultPackageAuthorizationStatus;
+    use crate::domain::runtime_plugin::PluginManifestV1;
+
+    // Connection requirements must match package-first defaults: plugin-default destination,
+    // inherited proxy, no insecure-HTTP confirmation. Mismatches are treated as no applicable
+    // default only when no authorized candidate exists for the adapter; an authorized candidate
+    // with expanded authority is blocked.
+    let connection_matches_default = input.base_url_source == BaseUrlSource::PluginDefault
+      && input.proxy_mode == ProxyMode::Inherit
+      && input.insecure_http_confirmed_at.is_none();
+
+    let catalog_defaults = self.db.read(installed_plugin_versions::list_defaults)?;
+    let mut ready: Vec<PreparedProviderDefault> = Vec::new();
+    let mut inactive: Vec<PreparedProviderDefault> = Vec::new();
+    let mut expansion_blocked: Option<DefaultActivationBlock> = None;
+
+    for default in catalog_defaults {
+      let status = self.db.read(|conn| {
+        crate::repositories::default_package_activation_policies::resolve_authorization_status(conn, &default.plugin_id)
+      })?;
+      if status == DefaultPackageAuthorizationStatus::Absent {
+        continue;
+      }
+      let Some(version) = self
+        .db
+        .read(|conn| installed_plugin_versions::get_optional(conn, &default.package_digest))?
+      else {
+        // Missing content for a catalog default matching this adapter is retained inactive below
+        // only when catalog metadata still declares the adapter; skip if row is gone entirely.
+        continue;
+      };
+      let catalog_manifest: PluginManifestV1 = match serde_json::from_str(&version.manifest_json) {
+        Ok(manifest) => manifest,
+        Err(_) => continue,
+      };
+      let Some(declaration) = catalog_manifest.provider_runtime.clone() else {
+        continue;
+      };
+      if !declaration
+        .legacy_aliases
+        .iter()
+        .any(|alias| alias == &input.adapter_id)
+      {
+        continue;
+      }
+
+      let policy = self
+        .db
+        .read(|conn| crate::repositories::default_package_activation_policies::get_policy(conn, &default.plugin_id))?;
+
+      if status == DefaultPackageAuthorizationStatus::Authorized {
+        if !connection_matches_default {
+          expansion_blocked = Some(DefaultActivationBlock {
+            code: AUTHORITY_EXPANSION_BLOCKED_CODE.into(),
+            message: format!(
+              "provider connection requirements expand beyond the authorized default for {}",
+              default.plugin_id
+            ),
+          });
+          continue;
+        }
+        let Some(policy) = policy else {
+          inactive.push(PreparedProviderDefault {
+            package_digest: default.package_digest.clone(),
+            plugin_id: default.plugin_id.clone(),
+            plugin_version: version.version.clone(),
+            publisher_key_id: version.publisher_key_id.clone(),
+            publisher_fingerprint: version.publisher_fingerprint.clone(),
+            version,
+            manifest: catalog_manifest,
+            declaration,
+          });
+          continue;
+        };
+        if !version.content_available {
+          inactive.push(PreparedProviderDefault {
+            package_digest: default.package_digest.clone(),
+            plugin_id: default.plugin_id.clone(),
+            plugin_version: version.version.clone(),
+            publisher_key_id: policy.publisher_key_id.clone(),
+            publisher_fingerprint: policy.publisher_fingerprint.clone(),
+            version,
+            manifest: catalog_manifest,
+            declaration,
+          });
+          continue;
+        }
+        let publisher = match self
+          .db
+          .read(|conn| plugin_publishers::get_optional(conn, &version.publisher_key_id))?
+        {
+          Some(publisher)
+            if !publisher.revoked
+              && publisher.enabled
+              && publisher.key_id == policy.publisher_key_id
+              && publisher.fingerprint == policy.publisher_fingerprint =>
+          {
+            publisher
+          }
+          _ => {
+            inactive.push(PreparedProviderDefault {
+              package_digest: default.package_digest.clone(),
+              plugin_id: default.plugin_id.clone(),
+              plugin_version: version.version.clone(),
+              publisher_key_id: policy.publisher_key_id.clone(),
+              publisher_fingerprint: policy.publisher_fingerprint.clone(),
+              version,
+              manifest: catalog_manifest,
+              declaration,
+            });
+            continue;
+          }
+        };
+        // Foreground create only binds catalog/policy identity. Full package re-verification
+        // and grant construction run in shared background activation for the pending subject.
+        if catalog_manifest.id != policy.plugin_id
+          || catalog_manifest.publisher.key_id != policy.publisher_key_id
+          || catalog_manifest.publisher.key_fingerprint != policy.publisher_fingerprint
+          || version.publisher_key_id != publisher.key_id
+          || version.publisher_fingerprint != publisher.fingerprint
+        {
+          inactive.push(PreparedProviderDefault {
+            package_digest: default.package_digest.clone(),
+            plugin_id: default.plugin_id.clone(),
+            plugin_version: version.version.clone(),
+            publisher_key_id: policy.publisher_key_id.clone(),
+            publisher_fingerprint: policy.publisher_fingerprint.clone(),
+            version,
+            manifest: catalog_manifest,
+            declaration,
+          });
+          continue;
+        }
+        if !declaration
+          .legacy_aliases
+          .iter()
+          .any(|alias| alias == &input.adapter_id)
+        {
+          continue;
+        }
+        ready.push(PreparedProviderDefault {
+          package_digest: policy.package_digest.clone(),
+          plugin_id: policy.plugin_id.clone(),
+          plugin_version: version.version.clone(),
+          publisher_key_id: policy.publisher_key_id.clone(),
+          publisher_fingerprint: policy.publisher_fingerprint.clone(),
+          version,
+          manifest: catalog_manifest,
+          declaration,
+        });
+        continue;
+      }
+
+      // Unauthorized or stale catalog default: retain exact inactive requirement via catalog metadata.
+      inactive.push(PreparedProviderDefault {
+        package_digest: default.package_digest.clone(),
+        plugin_id: default.plugin_id.clone(),
+        plugin_version: version.version.clone(),
+        publisher_key_id: version.publisher_key_id.clone(),
+        publisher_fingerprint: version.publisher_fingerprint.clone(),
+        version,
+        manifest: catalog_manifest,
+        declaration,
+      });
     }
-    if input.base_url_source != BaseUrlSource::PluginDefault
-      || input.proxy_mode != ProxyMode::Inherit
-      || input.insecure_http_confirmed_at.is_some()
-    {
-      return Ok(None);
+
+    match ready.len() {
+      0 => {
+        if let Some(block) = expansion_blocked {
+          return Ok(ProviderDefaultResolution::Blocked(block));
+        }
+        match inactive.len() {
+          0 => Ok(ProviderDefaultResolution::NoApplicableDefault),
+          1 => Ok(ProviderDefaultResolution::Applicable(inactive.remove(0))),
+          _ => Ok(ProviderDefaultResolution::Blocked(DefaultActivationBlock {
+            code: AMBIGUOUS_AUTHORIZED_DEFAULT_CODE.into(),
+            message: "multiple catalog defaults declare the same provider adapter".into(),
+          })),
+        }
+      }
+      1 => Ok(ProviderDefaultResolution::Applicable(ready.remove(0))),
+      _ => Ok(ProviderDefaultResolution::Blocked(DefaultActivationBlock {
+        code: AMBIGUOUS_AUTHORIZED_DEFAULT_CODE.into(),
+        message: "multiple authorized defaults declare the same provider adapter".into(),
+      })),
     }
-    // Immutable re-verification of the exact default archive with the external vendor root.
-    let (verified, _root) = self.packages.verify_store_with_vendor_root(&default.package_digest)?;
-    let version = self
-      .db
-      .read(|conn| installed_plugin_versions::get(conn, &default.package_digest))?;
-    let publisher = self
-      .db
-      .read(|conn| plugin_publishers::get_optional(conn, &version.publisher_key_id))?;
-    let Some(publisher) = publisher else {
-      return Ok(None);
-    };
-    if verified.manifest.id != default.plugin_id
-      || verified.manifest.version != default.plugin_version
-      || verified.manifest.publisher.key_id != default.publisher_key_id
-      || verified.manifest.publisher.key_fingerprint != default.publisher_fingerprint
-      || publisher.key_id != default.publisher_key_id
-      || publisher.fingerprint != default.publisher_fingerprint
-      || publisher.source != PublisherSource::Vendor
-      || !publisher.enabled
-      || publisher.revoked
-    {
-      return Ok(None);
-    }
-    let manifest: PluginManifestV1 = parse_manifest(&version.manifest_json)
-      .map_err(|e| StorageError::Validation(format!("installed manifest is invalid: {e}")))?;
-    let declaration = manifest
-      .provider_runtime
-      .clone()
-      .ok_or_else(|| StorageError::Validation("installed vendor default has no providerRuntime declaration".into()))?;
-    if manifest.id != default.plugin_id || manifest.version != default.plugin_version {
-      return Ok(None);
-    }
-    Ok(Some(PreparedProviderVendorDefault {
-      package_digest: default.package_digest.clone(),
-      plugin_id: default.plugin_id.clone(),
-      plugin_version: default.plugin_version.clone(),
-      publisher_key_id: default.publisher_key_id.clone(),
-      publisher_fingerprint: default.publisher_fingerprint.clone(),
-      version,
-      manifest,
-      declaration,
-    }))
   }
 
   /// Preview attaching or replacing ONE API type binding with an exact signed package. The
@@ -539,7 +1013,17 @@ impl ProviderRuntimeService {
           &input.package_digest,
         )
       })?;
-      let bundle = build_provider_grant_bundle(input.provider_id, &version, &manifest, &declaration, revision)?;
+      let provider_base_url = self
+        .db
+        .read(|conn| provider_instances::get(conn, input.provider_id).map(|provider| provider.base_url))?;
+      let bundle = build_provider_grant_bundle(
+        input.provider_id,
+        &version,
+        &manifest,
+        &declaration,
+        revision,
+        &provider_base_url,
+      )?;
       (Some(bundle), revision)
     };
 
@@ -1355,19 +1839,31 @@ pub(crate) fn release_provider_grant(
   )
 }
 
-/// Build the exact provider-scoped execution grant bundle (capabilities only; network/page
-/// authority for the broker lands with the host-authorized egress task).
+/// Build the exact provider-scoped execution grant bundle with provider-instance endpoint authority.
+///
+/// Network entries bind the normalized provider origin/base URL, closed auth policy, methods,
+/// response modes, and resource limits. Credentials and credential references never appear.
 fn build_provider_grant_bundle(
   provider_id: Uuid,
   version: &InstalledPluginVersion,
   manifest: &PluginManifestV1,
   declaration: &ProviderRuntimeDeclaration,
   revision: u64,
+  provider_base_url: &str,
 ) -> Result<ExecutionGrantSetBundle, StorageError> {
+  use crate::domain::plugin_resource::NetworkResponseBodyModes;
+  use crate::domain::runtime_lifecycle::NetworkGrantEntryRecord;
+  use crate::domain::runtime_plugin::{
+    AuthPolicyId, EndpointId, HOST_PROVIDER_INSTANCE_AUTH_POLICY_ID, HttpMethod, HttpsOrigin, NetworkGrantEntry,
+    NetworkOriginKind, NetworkResourceMode, PROVIDER_RUNTIME_ENDPOINT_ID, ResourceLimits,
+  };
+  use crate::services::runtime_router::http_method_as_str;
+
   let grant_id = new_id();
   let mut capabilities = Vec::new();
   let mut domain_caps = Vec::new();
-  for (capability_id, _artifact_path) in &declaration.capabilities {
+  let capability_ids: Vec<String> = declaration.capabilities.keys().cloned().collect();
+  for capability_id in &capability_ids {
     capabilities.push(CapabilityGrantEntryRecord {
       id: new_id(),
       grant_set_id: grant_id,
@@ -1375,6 +1871,60 @@ fn build_provider_grant_bundle(
     });
     domain_caps.push(CapabilityId::parse(capability_id).map_err(|e| StorageError::Validation(format!("{e:?}")))?);
   }
+
+  let effective =
+    crate::services::runtime_authority::resolve_provider_effective_authority(provider_base_url, &capability_ids)?;
+  let limits = ResourceLimits::default();
+  let mut network = Vec::new();
+  let mut domain_net = Vec::new();
+  for entry in &effective.network {
+    let capability_id =
+      CapabilityId::parse(&entry.capability_id).map_err(|e| StorageError::Validation(format!("{e:?}")))?;
+    let endpoint_id = EndpointId::parse(&entry.endpoint_id).map_err(StorageError::Validation)?;
+    let origin = HttpsOrigin::parse(&entry.origin).map_err(StorageError::Validation)?;
+    let auth = AuthPolicyId::parse(&entry.auth_policy).map_err(StorageError::Validation)?;
+    let method = match entry.method.as_str() {
+      "GET" | "Get" | "get" => HttpMethod::Get,
+      "POST" | "Post" | "post" => HttpMethod::Post,
+      other => {
+        return Err(StorageError::Validation(format!(
+          "unsupported provider grant method {other}"
+        )));
+      }
+    };
+    domain_net.push(NetworkGrantEntry::with_mode_origin_and_response_modes_and_base_url(
+      capability_id.clone(),
+      endpoint_id.clone(),
+      origin.clone(),
+      NetworkOriginKind::InstanceConfigured,
+      entry.base_url.clone(),
+      method,
+      auth.clone(),
+      NetworkResourceMode::Bounded,
+      limits,
+      NetworkResponseBodyModes::ALL,
+    ));
+    network.push(NetworkGrantEntryRecord {
+      id: new_id(),
+      grant_set_id: grant_id,
+      capability_id: capability_id.as_str().to_string(),
+      endpoint_id: endpoint_id.as_str().to_string(),
+      origin: origin.as_str().to_string(),
+      base_url: entry.base_url.clone(),
+      origin_kind: NetworkOriginKind::InstanceConfigured.as_str().into(),
+      method: http_method_as_str(method).into(),
+      auth_policy: auth.as_str().to_string(),
+      resource_mode: NetworkResourceMode::Bounded.as_str().into(),
+      max_request_bytes: limits.max_request_bytes(),
+      max_response_bytes: limits.max_response_bytes(),
+      max_stream_bytes: limits.max_stream_bytes(),
+      timeout_ms: limits.timeout_ms(),
+      response_body_modes: NetworkResponseBodyModes::ALL.as_canonical(),
+    });
+    let _ = PROVIDER_RUNTIME_ENDPOINT_ID;
+    let _ = HOST_PROVIDER_INSTANCE_AUTH_POLICY_ID;
+  }
+
   let identity = RuntimeIdentity::Package(PackageIdentity {
     package_digest: PackageDigest::parse(&version.package_digest)
       .map_err(|e| StorageError::Validation(format!("provider runtime package digest: {e}")))?,
@@ -1385,7 +1935,7 @@ fn build_provider_grant_bundle(
     PluginId::parse(&version.plugin_id).map_err(StorageError::Validation)?,
     SemVerVersion::parse(&version.version).map_err(StorageError::Validation)?,
     domain_caps,
-    vec![],
+    domain_net,
     vec![],
   )
   .map_err(|e| StorageError::Validation(e.to_string()))?;
@@ -1408,69 +1958,109 @@ fn build_provider_grant_bundle(
       approved_at: now_rfc3339(),
     },
     capabilities,
-    network: vec![],
+    network,
     pages: vec![],
   })
 }
 
-/// Apply the reviewed vendor default binding inside the Provider create transaction (Task 12):
-/// reverse-binds the installed version and publisher rows, creates the exact ProviderInstance
-/// grant bundle, and updates the freshly inserted legacy default binding to the active package
-/// identity. Any row divergence leaves the provider safely legacy (never fails the create);
-/// SQLite write failures propagate normally.
-pub(crate) fn apply_vendor_default_binding(
+/// Package-first binding for an applicable catalog default: exact package, no legacy fallback.
+///
+/// Authorized policies create `pending_activation` plus a local-creation intent.
+/// Applicable but unauthorized/stale/mismatched policies retain an inactive exact package
+/// requirement (`unavailable`) with no grant. Inserts the selected binding directly; callers must
+/// not write a provisional legacy row first.
+pub(crate) fn apply_package_first_pending_binding(
   conn: &rusqlite::Connection,
   provider: &ProviderInstance,
-  prepared: &PreparedProviderVendorDefault,
+  prepared: &PreparedProviderDefault,
   now: &str,
 ) -> Result<ProviderRuntimeBinding, StorageError> {
-  let legacy = || legacy_frontend_binding(provider.id, &provider.adapter_id, now);
-  let Some(version) = installed_plugin_versions::get_optional(conn, &prepared.package_digest)? else {
-    return Ok(legacy());
+  use crate::domain::default_package_activation::DefaultPackageAuthorizationStatus;
+  use crate::domain::runtime_provider::{ProviderRuntimeKind, ProviderRuntimeState};
+  use crate::repositories::default_package_activation_policies;
+
+  let requirement = crate::domain::runtime_lifecycle::RuntimeRequirementExport {
+    plugin_id: prepared.plugin_id.clone(),
+    plugin_version: prepared.plugin_version.clone(),
+    runtime_kind: "wasm-component".into(),
+    package_digest: Some(prepared.package_digest.clone()),
+    publisher_key_id: Some(prepared.publisher_key_id.clone()),
+    publisher_key_fingerprint: Some(prepared.publisher_fingerprint.clone()),
+    plugin_api_version: None,
+    config_schema_version: 1,
+    required_capability_majors: Vec::new(),
+    provider_runtime_kind: Some("wasm-component".into()),
+    provider_package_digest: Some(prepared.package_digest.clone()),
   };
-  if version.plugin_id != prepared.plugin_id || version.version != prepared.plugin_version || !version.content_available
-  {
-    return Ok(legacy());
+  let requirement_json = serde_json::to_string(&requirement)
+    .map_err(|e| StorageError::Internal(format!("serialize provider runtime requirement: {e}")))?;
+
+  let status = default_package_activation_policies::resolve_authorization_status(conn, &prepared.plugin_id)?;
+  let policy = default_package_activation_policies::get_policy(conn, &prepared.plugin_id)?;
+  let authorized = status == DefaultPackageAuthorizationStatus::Authorized
+    && policy
+      .as_ref()
+      .is_some_and(|policy| policy.package_digest == prepared.package_digest);
+
+  if authorized {
+    let binding = ProviderRuntimeBinding {
+      provider_id: provider.id,
+      adapter_id: provider.adapter_id.clone(),
+      runtime_kind: ProviderRuntimeKind::WasmComponent,
+      package_digest: Some(prepared.package_digest.clone()),
+      grant_set_revision: None,
+      state: ProviderRuntimeState::PendingActivation,
+      error_code: None,
+      error_message: None,
+      runtime_requirement_json: Some(requirement_json),
+      created_at: now.to_string(),
+      updated_at: now.to_string(),
+    };
+    provider_runtime_bindings::insert(conn, &binding)?;
+    crate::services::default_package_activation::DefaultPackageActivationService::insert_local_creation_intent_on_conn(
+      conn,
+      GrantSubjectKind::ProviderInstance,
+      provider.id,
+      &prepared.package_digest,
+      None,
+      Some(now),
+    )?;
+    return Ok(binding);
   }
-  let Some(publisher) = plugin_publishers::get_optional(conn, &version.publisher_key_id)? else {
-    return Ok(legacy());
+
+  // Applicable default exists but is not currently authorized: retain exact inactive requirement.
+  let (error_code, error_message) = match status {
+    DefaultPackageAuthorizationStatus::ConfirmationRequired => (
+      Some("confirmation_required".to_string()),
+      Some("instance authority exceeds the default activation policy".to_string()),
+    ),
+    DefaultPackageAuthorizationStatus::Stale => (
+      Some("default_policy_stale".to_string()),
+      Some("default package authorization is stale".to_string()),
+    ),
+    DefaultPackageAuthorizationStatus::Unauthorized => (
+      Some("default_policy_unauthorized".to_string()),
+      Some("catalog default requires authorization before package-first activation".to_string()),
+    ),
+    DefaultPackageAuthorizationStatus::Absent | DefaultPackageAuthorizationStatus::Authorized => (
+      Some("default_policy_mismatch".to_string()),
+      Some("applicable package default is not authorized for this provider".to_string()),
+    ),
   };
-  if publisher.key_id != prepared.publisher_key_id
-    || publisher.fingerprint != prepared.publisher_fingerprint
-    || publisher.source != PublisherSource::Vendor
-    || !publisher.enabled
-    || publisher.revoked
-  {
-    return Ok(legacy());
-  }
-  let revision = plugin_permission_grants::next_revision_for_subject_package(
-    conn,
-    GrantSubjectKind::ProviderInstance,
-    provider.id,
-    &prepared.package_digest,
-  )?;
-  let bundle = build_provider_grant_bundle(
-    provider.id,
-    &version,
-    &prepared.manifest,
-    &prepared.declaration,
-    revision,
-  )?;
-  plugin_permission_grants::insert_bundle(conn, &bundle)?;
   let binding = ProviderRuntimeBinding {
     provider_id: provider.id,
     adapter_id: provider.adapter_id.clone(),
     runtime_kind: ProviderRuntimeKind::WasmComponent,
     package_digest: Some(prepared.package_digest.clone()),
-    grant_set_revision: Some(revision),
-    state: ProviderRuntimeState::Active,
-    error_code: None,
-    error_message: None,
-    runtime_requirement_json: None,
+    grant_set_revision: None,
+    state: ProviderRuntimeState::Unavailable,
+    error_code,
+    error_message,
+    runtime_requirement_json: Some(requirement_json),
     created_at: now.to_string(),
     updated_at: now.to_string(),
   };
-  provider_runtime_bindings::update(conn, &binding)?;
+  provider_runtime_bindings::insert(conn, &binding)?;
   Ok(binding)
 }
 
@@ -1485,4 +2075,51 @@ fn format_rfc3339(instant: Instant) -> String {
   datetime
     .format(&time::format_description::well_known::Rfc3339)
     .unwrap_or_else(|_| "1970-01-01T00:00:00Z".into())
+}
+
+/// Package-first activation adapter for provider bindings consumed by the shared
+/// `DefaultPackageActivationService` coordinator. Owns only subject-specific preparation and
+/// grant application; policy/approval/coverage decisions live in the coordinator.
+pub(super) struct ProviderActivationAdapter<'a> {
+  pub runtime: &'a ProviderRuntimeService,
+  pub subject_id: Uuid,
+}
+
+impl crate::services::default_package_activation::PackageFirstSubjectActivation for ProviderActivationAdapter<'_> {
+  fn prepare(
+    &self,
+    snapshot: &crate::services::default_package_activation::VerifiedActivationSnapshot,
+  ) -> Result<Option<crate::services::default_package_activation::PreparedPackageFirstActivation>, StorageError> {
+    self.runtime.prepare_package_first_activation(self.subject_id, snapshot)
+  }
+
+  fn apply(
+    &self,
+    prepared: &crate::services::default_package_activation::PreparedPackageFirstActivation,
+    snapshot: &crate::services::default_package_activation::VerifiedActivationSnapshot,
+  ) -> Result<(), StorageError> {
+    self.runtime.apply_package_first_activation(prepared, snapshot)
+  }
+
+  fn mark_failed(
+    &self,
+    prepared: &crate::services::default_package_activation::PreparedPackageFirstActivation,
+    error_code: &str,
+    error_message: &str,
+  ) -> Result<(), StorageError> {
+    self
+      .runtime
+      .mark_package_first_activation_failed_for_coordinator(prepared, error_code, error_message)
+  }
+
+  fn mark_confirmation_required(
+    &self,
+    prepared: &crate::services::default_package_activation::PreparedPackageFirstActivation,
+    error_code: &str,
+    error_message: &str,
+  ) -> Result<(), StorageError> {
+    self
+      .runtime
+      .mark_package_first_confirmation_required_for_coordinator(prepared, error_code, error_message)
+  }
 }

@@ -59,6 +59,7 @@ import type {
 } from "../../storage/types";
 import { createRuntimeProviderActions } from "../providers/runtimeProviderActions";
 import { presentProviderRuntime } from "../providers/runtimeProviderPresentation";
+import { DefaultRuntimeActivationStatus } from "../plugins/DefaultRuntimeActivationStatus";
 import {
   listAttachableRuntimeInterfaces,
   presentProviderInterfaceBindings,
@@ -460,7 +461,13 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
   // edits cannot race results (backend still re-checks connection identity on sync).
   const connectionFormDisabled = savePending || syncPending || connectionTestPending;
 
-  const remoteActionsDisabled = connectionDirty || connectionTestPending || syncPending || savePending || modelsLoading;
+  const remoteActionsDisabled =
+    connectionDirty ||
+    connectionTestPending ||
+    syncPending ||
+    savePending ||
+    modelsLoading ||
+    runtimePresentation.disableReadyActions;
 
   const buildCredential = useCallback((): CredentialUpdate => {
     if (provider.credentialKind === "none") {
@@ -1442,6 +1449,19 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
           {runtimePresentation.labelKey === "legacy" && runtimeCatalog.length > 0 && !aliasMatchingCatalogEntry ? (
             <p className="text-xs text-neutral">{t("models.runtime.previewUnavailable")}</p>
           ) : null}
+
+          <DefaultRuntimeActivationStatus
+            subjectKind="provider_instance"
+            subjectId={provider.id}
+            runtimeState={provider.runtime.state}
+            runtimeErrorCode={provider.runtime.errorCode}
+            retainedPackageDigest={provider.runtime.packageDigest}
+            className="mt-4 space-y-2 border border-line bg-surface-2 p-3"
+            onInvalidate={async () => {
+              await queryClient.invalidateQueries({ queryKey: providerKeys.all });
+              await queryClient.invalidateQueries({ queryKey: providerRuntimeKeys.all });
+            }}
+          />
 
           {runtimePreview ? (
             <div className="border border-line bg-surface-2 p-4 text-body-tight text-on-surface">

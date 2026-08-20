@@ -16,6 +16,11 @@ class FakeChannel<T> {
 mock.module("@tauri-apps/api/core", () => ({
   invoke: invokeMock,
   Channel: FakeChannel,
+  Resource: class Resource {},
+  transformCallback: () => "",
+  convertFileSrc: (path: string) => path,
+  isTauri: () => false,
+  IS_TAURI: false,
 }));
 
 const { runCancelPluginModelDownload, runDownloadPluginModel, runListPluginModelResources } =

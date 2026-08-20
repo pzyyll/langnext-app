@@ -55,12 +55,6 @@ enum RemoteValidationPersist {
   CredentialsChanged,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum NewInstanceDefaultPin {
-  BeforeReturn,
-  Deferred,
-}
-
 #[derive(Clone)]
 pub struct ServiceIntegrationService {
   db: Database,
@@ -72,6 +66,10 @@ pub struct ServiceIntegrationService {
   endpoint_trust: Arc<EndpointTrustService>,
   /// When set, PaddleOCR first-model health uses the same vendor-root re-verify seam as RuntimeRouter.
   plugin_packages: Option<crate::services::plugin_store::PluginPackageService>,
+  /// Authorized default package policy for package-first creation (Phase 11.5).
+  default_package_activation: Option<crate::services::default_package_activation::DefaultPackageActivationService>,
+  /// Explicit retirement gate; production defaults to empty until Phase 12 enables a slice.
+  retirement_gate: crate::services::legacy_runtime_retirement::LegacyRuntimeRetirementGate,
 }
 
 impl ServiceIntegrationService {
@@ -90,6 +88,8 @@ impl ServiceIntegrationService {
       runtime_lifecycle: None,
       endpoint_trust: Arc::new(EndpointTrustService::new(db.clone(), registry.clone())),
       plugin_packages: None,
+      default_package_activation: None,
+      retirement_gate: crate::services::legacy_runtime_retirement::LegacyRuntimeRetirementGate::disabled(),
     }
   }
 
@@ -112,6 +112,24 @@ impl ServiceIntegrationService {
   /// Wire plugin package re-verification so native health uses the signed archive (not mutable DB JSON).
   pub fn with_plugin_packages(mut self, plugin_packages: crate::services::plugin_store::PluginPackageService) -> Self {
     self.plugin_packages = Some(plugin_packages);
+    self
+  }
+
+  /// Wire default package authorization for package-first create of new instances.
+  pub fn with_default_package_activation(
+    mut self,
+    default_package_activation: crate::services::default_package_activation::DefaultPackageActivationService,
+  ) -> Self {
+    self.default_package_activation = Some(default_package_activation);
+    self
+  }
+
+  /// Override the per-executor retirement gate (tests and Phase 12 enablement).
+  pub fn with_retirement_gate(
+    mut self,
+    retirement_gate: crate::services::legacy_runtime_retirement::LegacyRuntimeRetirementGate,
+  ) -> Self {
+    self.retirement_gate = retirement_gate;
     self
   }
 
@@ -152,26 +170,8 @@ impl ServiceIntegrationService {
   }
 
   pub fn save(&self, input: IntegrationInstanceWrite) -> Result<IntegrationInstanceDto, StorageError> {
-    self.save_with_default_pin(input, NewInstanceDefaultPin::BeforeReturn)
-  }
-
-  /// Persist a new instance without synchronously verifying and pinning its default package.
-  /// The trusted host command uses this path, then runs the same fail-closed lifecycle pin in the
-  /// background so large native packages do not hold the create dialog open for several minutes.
-  pub fn save_without_default_pin(
-    &self,
-    input: IntegrationInstanceWrite,
-  ) -> Result<IntegrationInstanceDto, StorageError> {
-    self.save_with_default_pin(input, NewInstanceDefaultPin::Deferred)
-  }
-
-  fn save_with_default_pin(
-    &self,
-    input: IntegrationInstanceWrite,
-    default_pin: NewInstanceDefaultPin,
-  ) -> Result<IntegrationInstanceDto, StorageError> {
     match input.id {
-      None => self.create(input, default_pin),
+      None => self.create(input),
       Some(id) => self.update(id, input),
     }
   }
@@ -605,11 +605,7 @@ impl ServiceIntegrationService {
     }
   }
 
-  fn create(
-    &self,
-    input: IntegrationInstanceWrite,
-    default_pin: NewInstanceDefaultPin,
-  ) -> Result<IntegrationInstanceDto, StorageError> {
+  fn create(&self, input: IntegrationInstanceWrite) -> Result<IntegrationInstanceDto, StorageError> {
     let plugin_id = input.plugin_id.trim().to_string();
     validate_plugin_id(&plugin_id).map_err(StorageError::Validation)?;
     let registration = self
@@ -666,10 +662,66 @@ impl ServiceIntegrationService {
     }
 
     let health = compute_local_health(&registration, &config_json, &slot_refs);
+    // Package-first create when a catalog default exists. Only genuine absence permits dual-stack
+    // bundled-rust. Unauthorized/stale defaults retain the exact package requirement inactive.
+    use crate::services::default_package_activation::PackageFirstCreateResolution;
+    let package_first = match &self.default_package_activation {
+      Some(svc) => svc.prepare_package_first_create(&manifest.id)?,
+      None => PackageFirstCreateResolution::NoDefault,
+    };
+    // When this executor is retired, reject create unless an authorized package-first path is ready.
+    self
+      .retirement_gate
+      .require_package_first_for_integration(&manifest.id, &package_first)?;
+    let (
+      runtime_kind,
+      package_digest,
+      runtime_state,
+      runtime_requirement_json,
+      plugin_version,
+      runtime_error_code,
+      runtime_error_message,
+      package_first_digest,
+      record_failed_intent,
+    ) = match &package_first {
+      PackageFirstCreateResolution::Ready(prepared) => (
+        prepared.runtime_kind.clone(),
+        Some(prepared.package_digest.clone()),
+        "pending_activation".to_string(),
+        Some(prepared.runtime_requirement_json.clone()),
+        prepared.plugin_version.clone(),
+        None,
+        None,
+        Some(prepared.package_digest.clone()),
+        None,
+      ),
+      PackageFirstCreateResolution::Blocked(blocked) => (
+        blocked.runtime_kind.clone(),
+        Some(blocked.package_digest.clone()),
+        "unavailable".to_string(),
+        Some(blocked.runtime_requirement_json.clone()),
+        blocked.plugin_version.clone(),
+        Some(blocked.reason.as_error_code().to_string()),
+        Some(blocked.reason.as_message().to_string()),
+        Some(blocked.package_digest.clone()),
+        Some((blocked.reason.as_error_code(), blocked.reason.as_message())),
+      ),
+      PackageFirstCreateResolution::NoDefault => (
+        "bundled-rust".to_string(),
+        None,
+        "active".to_string(),
+        None,
+        manifest.version.clone(),
+        None,
+        None,
+        None,
+        None,
+      ),
+    };
     let instance = IntegrationInstance {
       id,
       plugin_id: manifest.id.clone(),
-      plugin_version: manifest.version.clone(),
+      plugin_version,
       display_name,
       enabled: input.enabled,
       config_json,
@@ -677,13 +729,13 @@ impl ServiceIntegrationService {
       health_status: health,
       last_validated_at: None,
       last_error_code: None,
-      runtime_kind: "bundled-rust".into(),
-      package_digest: None,
+      runtime_kind: runtime_kind.clone(),
+      package_digest: package_digest.clone(),
       execution_grant_set_revision: None,
-      runtime_state: "active".into(),
-      runtime_error_code: None,
-      runtime_error_message: None,
-      runtime_requirement_json: None,
+      runtime_state,
+      runtime_error_code,
+      runtime_error_message,
+      runtime_requirement_json,
       created_at: now.clone(),
       updated_at: now.clone(),
     };
@@ -692,8 +744,8 @@ impl ServiceIntegrationService {
       id,
       &manifest.id,
       &manifest.version,
-      "bundled-rust",
-      None,
+      &runtime_kind,
+      package_digest.as_deref(),
       &instance.config_json,
       None,
       input.endpoint_trust_preview_id.as_deref(),
@@ -712,6 +764,25 @@ impl ServiceIntegrationService {
       integration_instances::insert(uow.conn(), &instance)?;
       if let Some(trust) = &endpoint_trust {
         integration_endpoint_trusts::upsert(uow.conn(), trust)?;
+      }
+      if let Some(digest) = &package_first_digest {
+        let intent = crate::services::default_package_activation::DefaultPackageActivationService::insert_local_creation_intent_on_conn(
+          uow.conn(),
+          crate::domain::runtime_lifecycle::GrantSubjectKind::IntegrationInstance,
+          id,
+          digest,
+          Some(&crate::domain::plugin_package::sha256_hex(instance.config_json.as_bytes())),
+          Some(&instance.updated_at),
+        )?;
+        if let Some((error_code, error_message)) = record_failed_intent {
+          crate::repositories::default_package_activation_policies::update_intent_state(
+            uow.conn(),
+            intent.id,
+            crate::domain::default_package_activation::DefaultRuntimeActivationState::Failed,
+            Some(error_code),
+            Some(error_message),
+          )?;
+        }
       }
       for slot in &manifest.credential_slots {
         let binding = crate::domain::service_integration::IntegrationCredentialBinding {
@@ -740,17 +811,9 @@ impl ServiceIntegrationService {
         for op in ops {
           let _ = coordinator::finalize_operation(&self.db, self.vault.as_ref(), &op);
         }
-        // Pin the default installed Wasm package for new instances (e.g. Google Web GTX) without
-        // migrating existing instances. Safe-fail: any preview/apply failure leaves the instance
-        // Bundled Rust, which remains a valid executor. Dynamic-origin (proxy) packages are never
-        // auto-approved here; they require explicit migration with a third-party egress warning.
-        if default_pin == NewInstanceDefaultPin::BeforeReturn {
-          if let Some(lifecycle) = &self.runtime_lifecycle {
-            if let Err(err) = lifecycle.pin_default_package_for_new_instance(id) {
-              log::warn!("new_instance_default_pin_failed instance={id} error={err}");
-            }
-          }
-        }
+        // Durable create returns pending package-first state immediately. Host command schedules
+        // background activation after the first change event so the response stays prompt.
+        let _ = package_first_digest;
         self.get_instance(id)
       }
       Err(e) => {

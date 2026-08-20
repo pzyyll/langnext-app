@@ -138,6 +138,8 @@ pub struct InstalledPluginVersionDto {
   pub permission_request_digest: String,
   pub content_available: bool,
   pub is_default: bool,
+  /// Authorization status of the catalog default for this plugin (not an executable grant).
+  pub default_authorization_status: crate::domain::default_package_activation::DefaultPackageAuthorizationStatus,
   pub in_use: bool,
   pub installed_at: String,
   pub capabilities: Vec<String>,
@@ -431,9 +433,6 @@ pub struct ApprovePluginPackageInput {
   pub publisher_public_key_hex: Option<String>,
   /// Required acknowledgement of requested network/auth permissions.
   pub acknowledge_permissions: bool,
-  /// Mark this version as the default for new instances of the plugin.
-  #[serde(default)]
-  pub set_as_default: bool,
 }
 
 /// Result of a successful package install approval.

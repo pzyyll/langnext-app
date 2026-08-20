@@ -4,7 +4,11 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@base-ui/react/button";
 import { Checkbox } from "@base-ui/react/checkbox";
+import { Collapsible } from "@base-ui/react/collapsible";
 import { Input } from "@base-ui/react/input";
+import { useTranslation } from "react-i18next";
+import IconMaterialSymbolsLightCheck from "~icons/material-symbols-light/check";
+import IconMaterialSymbolsLightExpandMore from "~icons/material-symbols-light/expand-more";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { useToast } from "../../components/toast/useToast";
 import { checkboxClassName, checkboxIndicatorClassName, outlineButtonClassName } from "../../components/ui";
@@ -24,6 +28,7 @@ import {
 } from "../../storage/client";
 import { getIpcErrorMessage } from "../../storage/errors";
 import type { IntegrationInstanceDto } from "../../storage/types";
+import { presentAdvancedRecoveryDigestVisibility } from "./defaultPackageActivationPresentation";
 import {
   formatPermissionDifference,
   formatPublisherIdentity,
@@ -49,6 +54,7 @@ function invalidateLifecycleQueries(queryClient: ReturnType<typeof useQueryClien
 }
 
 export function RuntimeLifecyclePanel({ instance }: RuntimeLifecyclePanelProps) {
+  const { t } = useTranslation();
   const toast = useToast();
   const queryClient = useQueryClient();
   const [targetDigest, setTargetDigest] = useState("");
@@ -57,7 +63,15 @@ export function RuntimeLifecyclePanel({ instance }: RuntimeLifecyclePanelProps) 
   const [rollbackEnabled, setRollbackEnabled] = useState(false);
   const [discardOpen, setDiscardOpen] = useState(false);
   const [permissionAck, setPermissionAck] = useState(false);
+  const [recoveryOpen, setRecoveryOpen] = useState(false);
+  const [chooseAnotherPackage, setChooseAnotherPackage] = useState(false);
   const digestReady = targetDigest.trim().length === 64;
+  const hasUsableDefault = Boolean(instance.packageDigest) && instance.runtimeState !== "unavailable";
+  const recoveryVisibility = presentAdvancedRecoveryDigestVisibility({
+    hasUsableDefault,
+    chooseAnotherPackage,
+    panelOpen: recoveryOpen,
+  });
 
   const upgradePreviewQuery = useQuery({
     ...runtimeUpgradePreviewOptions(instance.id, targetDigest.trim()),
@@ -213,54 +227,112 @@ export function RuntimeLifecyclePanel({ instance }: RuntimeLifecyclePanelProps) 
           Unresolved package. Install the required package, approve permissions, then activate.
         </p>
       ) : null}
-      <div className="flex flex-col gap-2">
-        <label className="text-body-tight text-neutral" htmlFor={`runtime-digest-${instance.id}`}>
-          Target package digest
-        </label>
-        <Input
-          id={`runtime-digest-${instance.id}`}
-          className="font-mono text-body-tight"
-          value={targetDigest}
-          disabled={pending}
-          maxLength={64}
-          onChange={(event) => setTargetDigest(event.currentTarget.value.trim().toLowerCase())}
-          placeholder="64-char hex"
-        />
-        <div className="flex flex-wrap gap-2">
-          <Button
-            type="button"
-            className={outlineButtonClassName}
-            disabled={pending || !digestReady}
-            onClick={() => {
-              setPermissionAck(false);
-              setUpgradeOpen(true);
-            }}
-          >
-            Preview upgrade
-          </Button>
-          <Button
-            type="button"
-            className={outlineButtonClassName}
-            disabled={pending}
-            onClick={() => {
-              setRollbackEnabled(true);
-              setRollbackOpen(true);
-            }}
-          >
-            Preview rollback
-          </Button>
-          {rollbackPreviewQuery.data ? (
+      <Collapsible.Root
+        open={recoveryOpen}
+        onOpenChange={(open) => {
+          setRecoveryOpen(open);
+          if (!open) {
+            setChooseAnotherPackage(false);
+            setTargetDigest("");
+            setPermissionAck(false);
+          }
+        }}
+      >
+        <Collapsible.Trigger
+          className={`
+            ${outlineButtonClassName}
+            inline-flex items-center gap-1
+          `}
+          aria-label={t("plugins.packages.defaultActivation.advancedRecovery.trigger")}
+        >
+          <IconMaterialSymbolsLightExpandMore
+            className={`
+              size-4 transition-transform
+              ${recoveryOpen ? "rotate-180" : ""}
+            `}
+            aria-hidden
+          />
+          {t("plugins.packages.defaultActivation.advancedRecovery.trigger")}
+        </Collapsible.Trigger>
+        <Collapsible.Panel className="mt-2 space-y-2 border border-line bg-surface-2 p-3">
+          <p className="text-body-tight text-neutral">
+            {t("plugins.packages.defaultActivation.advancedRecovery.description")}
+          </p>
+          {recoveryVisibility.showChooseAnotherPackage ? (
+            <label className="flex items-center gap-2 text-body-tight text-on-surface">
+              <Checkbox.Root
+                className={checkboxClassName}
+                checked={chooseAnotherPackage}
+                onCheckedChange={(checked) => {
+                  const next = checked === true;
+                  setChooseAnotherPackage(next);
+                  if (!next) {
+                    setTargetDigest("");
+                    setPermissionAck(false);
+                  }
+                }}
+              >
+                <Checkbox.Indicator className={checkboxIndicatorClassName}>
+                  <IconMaterialSymbolsLightCheck className="size-3.5" aria-hidden />
+                </Checkbox.Indicator>
+              </Checkbox.Root>
+              {t("plugins.packages.defaultActivation.advancedRecovery.chooseAnotherPackage")}
+            </label>
+          ) : null}
+          {recoveryVisibility.showDigestInput ? (
+            <div className="flex flex-col gap-2">
+              <label className="text-body-tight text-neutral" htmlFor={`runtime-digest-${instance.id}`}>
+                {t("plugins.packages.defaultActivation.advancedRecovery.digestLabel")}
+              </label>
+              <Input
+                id={`runtime-digest-${instance.id}`}
+                className="font-mono text-body-tight"
+                value={targetDigest}
+                disabled={pending}
+                maxLength={64}
+                onChange={(event) => setTargetDigest(event.currentTarget.value.trim().toLowerCase())}
+                placeholder="64-char hex"
+              />
+            </div>
+          ) : null}
+          <div className="flex flex-wrap gap-2">
+            {recoveryVisibility.showDigestInput ? (
+              <Button
+                type="button"
+                className={outlineButtonClassName}
+                disabled={pending || !digestReady}
+                onClick={() => {
+                  setPermissionAck(false);
+                  setUpgradeOpen(true);
+                }}
+              >
+                Preview upgrade
+              </Button>
+            ) : null}
             <Button
               type="button"
               className={outlineButtonClassName}
               disabled={pending}
-              onClick={() => setDiscardOpen(true)}
+              onClick={() => {
+                setRollbackEnabled(true);
+                setRollbackOpen(true);
+              }}
             >
-              Discard snapshot
+              Preview rollback
             </Button>
-          ) : null}
-        </div>
-      </div>
+            {rollbackPreviewQuery.data ? (
+              <Button
+                type="button"
+                className={outlineButtonClassName}
+                disabled={pending}
+                onClick={() => setDiscardOpen(true)}
+              >
+                Discard snapshot
+              </Button>
+            ) : null}
+          </div>
+        </Collapsible.Panel>
+      </Collapsible.Root>
 
       <ConfirmDialog
         open={upgradeOpen}

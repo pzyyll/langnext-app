@@ -7,7 +7,7 @@
 //! runtime lifecycle can bind a verified vendor package to the `speech.synthesize@1` capability.
 //! The actual Wasm adapter registration runs through [`crate::services::wasm_runtime::executor`]
 //! (`WasmSpeechSynthesizeAdapter`), and the vendor-default qualification lives in
-//! [`crate::services::runtime_lifecycle::is_edge_tts_vendor_default`].
+//! package-first default authorization and subject authority confirmation.
 //!
 //! ## Vendor package seeding (mirrors Google Web GTX)
 //!

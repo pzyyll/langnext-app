@@ -63,6 +63,25 @@ pub fn list_by_plugin(conn: &Connection, plugin_id: &str) -> Result<Vec<Integrat
   Ok(rows)
 }
 
+/// Whether an enabled, active integration row on this plugin still runs the given runtime.
+/// One indexed existence probe used to veto a stale startup release snapshot; never loads rows.
+pub fn exists_enabled_active_runtime_by_plugin(
+  conn: &Connection,
+  plugin_id: &str,
+  runtime_kind: &str,
+  runtime_state: &str,
+) -> Result<bool, StorageError> {
+  let exists: i64 = conn.query_row(
+    "SELECT EXISTS (
+        SELECT 1 FROM integration_instances
+        WHERE plugin_id = ?1 AND enabled = 1 AND runtime_kind = ?2 AND runtime_state = ?3
+      )",
+    params![plugin_id, runtime_kind, runtime_state],
+    |row| row.get(0),
+  )?;
+  Ok(exists != 0)
+}
+
 pub fn list_by_package_digest(
   conn: &Connection,
   package_digest: &str,

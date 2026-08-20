@@ -7,15 +7,14 @@ use crate::error::StorageError;
 use crate::services::bundled_plugins::HandlerDeps;
 use crate::services::google_service_account::GoogleServiceAccountExchanger;
 use crate::services::network_broker::NetworkBroker;
-use crate::services::plugin_store::VendorDefaultBindingMode;
 use crate::services::service_capabilities::ServiceCapabilityService;
 use crate::services::token_grant::TokenGrantService;
 use crate::services::wasm_runtime::WasmRuntime;
 use crate::services::{
-  EndpointTrustService, ImportExportService, ModelService, OcrServiceService, PluginModelService, PluginPackageService,
-  ProviderHttpService, ProviderService, RuntimeLifecycleService, RuntimeRouter, ServiceIntegrationRegistry,
-  ServiceIntegrationService, SettingsService, SpeechServiceService, TranslationHistoryService,
-  TranslationProfileService,
+  DefaultPackageActivationService, EndpointTrustService, ImportExportService, LegacyRuntimeInventoryService,
+  ModelService, OcrServiceService, PluginModelService, PluginPackageService, ProviderHttpService, ProviderService,
+  RuntimeLifecycleService, RuntimeRouter, ServiceIntegrationRegistry, ServiceIntegrationService, SettingsService,
+  SpeechServiceService, TranslationHistoryService, TranslationProfileService,
 };
 use crate::storage::Database;
 use std::path::PathBuf;
@@ -31,6 +30,8 @@ pub struct AppState {
   pub ocr_services: OcrServiceService,
   pub speech_services: SpeechServiceService,
   pub plugin_packages: PluginPackageService,
+  pub default_package_activation: DefaultPackageActivationService,
+  pub legacy_runtime_inventory: LegacyRuntimeInventoryService,
   pub plugin_models: PluginModelService,
   pub service_integrations: ServiceIntegrationService,
   pub endpoint_trust: Arc<EndpointTrustService>,
@@ -111,78 +112,26 @@ impl AppState {
     if let Err(err) = plugin_packages.recover_install_operations() {
       log::error!("plugin_package_recovery_failed error={err}");
     }
-    // Idempotently import the bundled vendor-signed Google Translate Web packages on first startup.
-    // Release CI places signed archives at resources/plugins/...; local dev has none (no-op).
-    // All archives are imported without setting a default; the default is then bound to the exact
-    // digest and verified publisher identity of the vendor Google Web 1.0.0 import (never an
-    // id+version lookup that could match a user-approved package sharing the same id/version). A
-    // failed/missing 1.0.0 import atomically clears any existing default so a wrong default (e.g.
-    // 1.1.0) is never retained. Existing instances are never migrated; only the catalog default
-    // for new instances is set.
+    // Idempotently import bundled vendor-signed archives on first startup. Release CI places signed
+    // archives at resources/plugins/...; local dev has none (no-op). Import alone never sets a
+    // catalog default or activation policy — only the audited policy resource can authorize one.
     let mut bundled_archives = locate_bundled_vendor_packages(resource_dir.as_deref());
     bundled_archives.sort();
-    let mut google_web_default_import: Option<crate::services::plugin_store::VerifiedVendorImport> = None;
-    let mut edge_tts_default_import: Option<crate::services::plugin_store::VerifiedVendorImport> = None;
-    let mut openai_compatible_default_import: Option<crate::services::plugin_store::VerifiedVendorImport> = None;
     for bundled in &bundled_archives {
       match std::fs::read(bundled) {
-        Ok(bytes) => match plugin_packages.bootstrap_bundled_package(&bytes, false) {
-          Ok(import) => {
-            if import.plugin_id() == crate::domain::service_integration::GOOGLE_TRANSLATE_WEB_PLUGIN_ID
-              && import.version() == GOOGLE_WEB_DEFAULT_VERSION
-            {
-              google_web_default_import = Some(import);
-            } else if import.plugin_id() == crate::domain::service_integration::EDGE_TTS_PLUGIN_ID
-              && import.version() == EDGE_TTS_DEFAULT_VERSION
-            {
-              edge_tts_default_import = Some(import);
-            } else if import.plugin_id() == OPENAI_COMPATIBLE_PLUGIN_ID
-              && import.version() == OPENAI_COMPATIBLE_DEFAULT_VERSION
-            {
-              // Keep the FIRST matching vendor archive; set_vendor_default fails closed on
-              // alias-ambiguity (a second verified digest claiming the same id/version).
-              if openai_compatible_default_import.is_none() {
-                openai_compatible_default_import = Some(import);
-              }
-            }
+        Ok(bytes) => {
+          if let Err(err) = plugin_packages.bootstrap_bundled_package(&bytes, false) {
+            log::error!(
+              "vendor_package_bootstrap_import_failed path={} error={err}",
+              bundled.display()
+            );
           }
-          Err(err) => log::error!(
-            "vendor_package_bootstrap_import_failed path={} error={err}",
-            bundled.display()
-          ),
-        },
+        }
         Err(err) => log::warn!(
           "vendor_package_bootstrap_read_failed path={} error={err}",
           bundled.display()
         ),
       }
-    }
-    // Bind the default to the exact vendor 1.0.0 verified import identity, or atomically clear any
-    // existing default when 1.0.0 is absent/unverified (fail closed; 1.1.0 is never accidentally
-    // promoted).
-    if let Err(err) = plugin_packages.set_vendor_bootstrap_default(
-      crate::domain::service_integration::GOOGLE_TRANSLATE_WEB_PLUGIN_ID,
-      GOOGLE_WEB_DEFAULT_VERSION,
-      google_web_default_import.as_ref(),
-      VendorDefaultBindingMode::ReplaceExisting,
-    ) {
-      log::warn!(
-        "google_web_default_bind_failed plugin={} version={} error={err}",
-        crate::domain::service_integration::GOOGLE_TRANSLATE_WEB_PLUGIN_ID,
-        GOOGLE_WEB_DEFAULT_VERSION
-      );
-    }
-    if let Err(err) = plugin_packages.set_vendor_bootstrap_default(
-      crate::domain::service_integration::EDGE_TTS_PLUGIN_ID,
-      EDGE_TTS_DEFAULT_VERSION,
-      edge_tts_default_import.as_ref(),
-      VendorDefaultBindingMode::ReplaceExisting,
-    ) {
-      log::warn!(
-        "edge_tts_default_bind_failed plugin={} version={} error={err}",
-        crate::domain::service_integration::EDGE_TTS_PLUGIN_ID,
-        EDGE_TTS_DEFAULT_VERSION
-      );
     }
     // Active staging/preview TTL sweep while the app is running (stoppable via Drop on process exit).
     let _staging_sweep = plugin_packages.start_staging_sweep();
@@ -190,11 +139,24 @@ impl AppState {
     // and Drop of StagingSweepHandle only signals stop; recovery already ran at startup.
     std::mem::forget(_staging_sweep);
     let endpoint_trust = Arc::new(EndpointTrustService::new(db.clone(), registry.clone()));
+    // Shared default-activation service for package-first create and IPC (Phase 11.5).
+    let mut default_package_activation =
+      DefaultPackageActivationService::create(db.clone(), plugin_packages.clone(), app_data_dir.clone());
+    if let Some(resource_dir) = resource_dir.as_ref() {
+      let bootstrap_path = resource_dir.join("plugins").join("default-activation-policies.json");
+      default_package_activation = default_package_activation.with_vendor_bootstrap_path(bootstrap_path);
+    }
+    if let Err(err) = default_package_activation.apply_vendor_bootstrap_policies() {
+      log::warn!("default_package_vendor_bootstrap_failed error={err}");
+    }
+    // Recovery is scheduled after subject activators are wired (see below). Count-only log here
+    // would miss eligible work; the post-wire path runs recovery without blocking setup.
     let service_integrations =
       ServiceIntegrationService::new(db.clone(), vault.clone(), registry.clone(), token_grants.clone())
         .with_endpoint_trust(endpoint_trust.clone())
         // Same vendor-root re-verify seam as RuntimeRouter for PaddleOCR first-model health.
-        .with_plugin_packages(plugin_packages.clone());
+        .with_plugin_packages(plugin_packages.clone())
+        .with_default_package_activation(default_package_activation.clone());
     let settings = SettingsService::new(db.clone(), vault.clone());
     let import_export = ImportExportService::new(db.clone(), vault.clone());
     let history = TranslationHistoryService::new(db.clone());
@@ -202,13 +164,71 @@ impl AppState {
     let device_state = Arc::new(DeviceStateManager::load(&app_data_dir)?);
     let request_sessions = Arc::new(RequestSessionRegistry::new());
     let wasm_runtime = Arc::new(WasmRuntime::new().map_err(|e| StorageError::Internal(e.to_string()))?);
+    let runtime_lifecycle = RuntimeLifecycleService::new(db.clone(), plugin_packages.clone(), registry.clone())
+      .with_runtime(wasm_runtime.clone(), token_grants.clone())
+      .with_vault(vault.clone());
+    let runtime_providers = crate::services::runtime_providers::ProviderRuntimeService::new(
+      db.clone(),
+      plugin_packages.clone(),
+      wasm_runtime.clone(),
+    );
+    // Production Phase 12 retirement policy: the ordered three-executor integration slice and
+    // the empty provider-adapter allowlist (stable-release evidence gates provider retirement).
+    let retirement_gate = crate::services::legacy_runtime_retirement::LegacyRuntimeRetirementGate::production();
+    let service_integrations = service_integrations.with_runtime_lifecycle(runtime_lifecycle.clone());
+    let service_integrations = service_integrations.with_retirement_gate(retirement_gate.clone());
+    let providers = ProviderService::new(db.clone(), vault.clone())
+      .with_runtime_defaults(Arc::new(runtime_providers.clone()))
+      .with_retirement_gate(retirement_gate.clone());
+    // Subject activators are wired after lifecycle/provider runtime exist so package-first
+    // activation can dispatch per subject without construction cycles.
+    default_package_activation = default_package_activation
+      .with_integration_lifecycle(runtime_lifecycle.clone())
+      .with_provider_runtime(runtime_providers.clone());
+    // Resume only local_creation pending/activating intents; imports stay confirmation-required.
+    match default_package_activation.list_recovery_eligible_intents() {
+      Ok(intents) if !intents.is_empty() => {
+        log::info!("default_package_activation_recovery_pending count={}", intents.len());
+        // Setup remains prompt: schedule recovery on the async runtime without awaiting.
+        let recovery = default_package_activation.clone();
+        let _recovery_task = tauri::async_runtime::spawn_blocking(move || {
+          if let Err(err) = recovery.recover_pending_default_runtime_activations() {
+            log::warn!("default_package_activation_recovery_failed error={err}");
+          }
+        });
+      }
+      Ok(_) => {}
+      Err(err) => log::warn!("default_package_activation_recovery_list_failed error={err}"),
+    }
+    // Read-only retirement inventory with the same production policy and the verified provider
+    // catalog. The startup snapshot derives release CANDIDATES: only fully ready slices may
+    // stop serving, but live SQLite blockers remain authoritative for execution availability —
+    // an enabled active legacy row keeps its bundled executor even if it appears after startup.
+    let legacy_runtime_inventory =
+      LegacyRuntimeInventoryService::create(db.clone(), default_package_activation.clone())
+        .with_retirement_gate(retirement_gate)
+        .with_provider_runtime(Arc::new(runtime_providers.clone()));
+    let release_gate = match legacy_runtime_inventory.list_inventory() {
+      Ok(report) => crate::services::legacy_runtime_retirement::LegacyRuntimeReleaseGate::with_released(
+        report
+          .entries
+          .iter()
+          .filter(|entry| entry.retirement_ready)
+          .map(|entry| entry.executor_id.clone()),
+      ),
+      Err(err) => {
+        log::warn!("legacy_runtime_release_gate_derivation_failed error={err}");
+        crate::services::legacy_runtime_retirement::LegacyRuntimeReleaseGate::empty()
+      }
+    };
     let runtime_router = RuntimeRouter::new(
       db.clone(),
       registry.clone(),
       capability_handlers.clone(),
       plugin_packages.clone(),
       wasm_runtime.clone(),
-    );
+    )
+    .with_release_gate(release_gate);
     // Capability dispatch always goes through the runtime router (no silent executor fallback).
     // Phase 5: Wasm guests (google-web) reach approved HTTPS origins through a bounded transport
     // via NetworkBrokerHandle. No credentials/cookies/auth headers are ever injected.
@@ -234,28 +254,6 @@ impl AppState {
       service_capabilities.clone(),
     );
     let speech_services = SpeechServiceService::new(db.clone(), registry.clone(), service_capabilities.clone());
-    let runtime_lifecycle = RuntimeLifecycleService::new(db.clone(), plugin_packages.clone(), registry.clone())
-      .with_runtime(wasm_runtime.clone(), token_grants.clone())
-      .with_vault(vault.clone());
-    let service_integrations = service_integrations.with_runtime_lifecycle(runtime_lifecycle.clone());
-    let runtime_providers = crate::services::runtime_providers::ProviderRuntimeService::new(
-      db.clone(),
-      plugin_packages.clone(),
-      wasm_runtime.clone(),
-    );
-    // Resolve the reviewed OpenAI Compatible vendor default for NEW matching Providers only.
-    // The default is bound by exact digest/publisher identity/version/alias in the Provider
-    // create transaction; pre-existing Providers stay legacy and nothing auto-upgrades at
-    // startup/install/edit/sync/failure. Failure to resolve leaves no default (safe).
-    if let Err(err) = runtime_providers.set_vendor_default(openai_compatible_default_import.as_ref()) {
-      log::warn!(
-        "openai_compatible_default_resolve_failed plugin={} version={} error={err}",
-        OPENAI_COMPATIBLE_PLUGIN_ID,
-        OPENAI_COMPATIBLE_DEFAULT_VERSION
-      );
-    }
-    let providers =
-      ProviderService::new(db.clone(), vault.clone()).with_runtime_defaults(Arc::new(runtime_providers.clone()));
     // Provider-runtime egress resolves ONLY the bound provider instance's persisted connection
     // (Base URL, proxy, host-only credential) after package/grant authorization; it never uses
     // the service-capability network broker or package-selected origins.
@@ -302,6 +300,8 @@ impl AppState {
       ocr_services,
       speech_services,
       plugin_packages,
+      default_package_activation,
+      legacy_runtime_inventory,
       plugin_models,
       service_integrations,
       endpoint_trust,
@@ -343,11 +343,6 @@ const BUNDLED_OPENAI_COMPATIBLE_PACKAGE_ENV: &str = "LANGNEXT_BUNDLED_OPENAI_COM
 const BUNDLED_PADDLEOCR_PACKAGE_ENV: &str = "LANGNEXT_BUNDLED_PADDLEOCR_PACKAGE";
 /// Vendor default version explicitly selected as the new-provider default after all bundled
 /// archives are imported. Must match the verified installed manifest version.
-const GOOGLE_WEB_DEFAULT_VERSION: &str = "1.0.0";
-const EDGE_TTS_DEFAULT_VERSION: &str = "1.0.0";
-const OPENAI_COMPATIBLE_DEFAULT_VERSION: &str = "1.0.0";
-/// Bundled OpenAI Compatible provider plugin id (Task 12 vendor default identity).
-const OPENAI_COMPATIBLE_PLUGIN_ID: &str = "com.langnext.provider.openai-compatible";
 /// Bundled/smoke PaddleOCR package filename prefix (Phase 10).
 const BUNDLED_PADDLEOCR_PACKAGE_PREFIX: &str = "com.langnext.paddleocr-";
 
@@ -403,4 +398,102 @@ fn locate_bundled_vendor_packages(resource_dir: Option<&std::path::Path>) -> Vec
     }
   }
   archives
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::domain::provider::{
+    AuthSchemeV1, BaseUrlSource, CredentialKind, CredentialUpdate, ProviderInstanceWrite, ProxyMode,
+  };
+  use crate::domain::runtime_provider::ProviderRuntimeKind;
+  use crate::domain::service_integration::{
+    GOOGLE_TRANSLATE_WEB_PLUGIN_ID, IntegrationInstanceWrite, PADDLEOCR_PLUGIN_ID,
+  };
+
+  fn integration_write(plugin_id: &str) -> IntegrationInstanceWrite {
+    IntegrationInstanceWrite {
+      id: None,
+      plugin_id: plugin_id.into(),
+      display_name: "production gate fixture".into(),
+      enabled: true,
+      // Google Web expects `channel`; PaddleOCR expects an empty config shape.
+      config_json: if plugin_id == GOOGLE_TRANSLATE_WEB_PLUGIN_ID {
+        r#"{"channel":"gtx"}"#.into()
+      } else {
+        "{}".into()
+      },
+      credentials: vec![],
+      expected_updated_at: None,
+      endpoint_trust_preview_id: None,
+      acknowledge_endpoint_trust: false,
+    }
+  }
+
+  fn provider_write() -> ProviderInstanceWrite {
+    ProviderInstanceWrite {
+      id: None,
+      adapter_id: "openai-compatible".into(),
+      display_name: "production gate provider".into(),
+      base_url: "https://api.openai.com/v1".into(),
+      base_url_source: BaseUrlSource::PluginDefault,
+      auth_scheme: AuthSchemeV1::none(),
+      credential_kind: CredentialKind::None,
+      credential: CredentialUpdate::Keep,
+      enabled: true,
+      proxy_mode: ProxyMode::Inherit,
+      insecure_http_confirmed_at: None,
+      expected_updated_at: None,
+    }
+  }
+
+  /// Production wiring rejects new in-scope legacy integration creation when no authorized
+  /// package-first path exists (Google Translate Web is the first slice of the ordered set).
+  #[test]
+  fn production_retirement_gate_blocks_in_scope_integration_create() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = AppState::initialize_for_tests(dir.path().to_path_buf()).unwrap();
+    let before = state.service_integrations.list_instances().unwrap().len();
+    let err = state
+      .service_integrations
+      .save(integration_write(GOOGLE_TRANSLATE_WEB_PLUGIN_ID))
+      .expect_err("production policy blocks in-scope legacy create without an authorized default");
+    assert!(err.to_string().contains("retired"), "got {err}");
+    assert_eq!(state.service_integrations.list_instances().unwrap().len(), before);
+  }
+
+  /// PaddleOCR is not in the production retirement scope and keeps its dual-stack create path.
+  #[test]
+  fn production_retirement_gate_keeps_paddleocr_dual_stack() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = AppState::initialize_for_tests(dir.path().to_path_buf()).unwrap();
+    let saved = state
+      .service_integrations
+      .save(integration_write(PADDLEOCR_PLUGIN_ID))
+      .expect("paddleocr legacy create stays dual-stack");
+    assert_eq!(
+      saved.runtime_kind, "bundled-rust",
+      "no package-first default in the fixture"
+    );
+    assert!(saved.package_digest.is_none());
+  }
+
+  /// The production provider adapter allowlist is empty until stable-release evidence names an
+  /// adapter: legacy provider create remains available.
+  #[test]
+  fn production_retirement_gate_keeps_provider_legacy_until_allowlist_evidence() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = AppState::initialize_for_tests(dir.path().to_path_buf()).unwrap();
+    let saved = state
+      .providers
+      .save(provider_write())
+      .expect("provider legacy create remains available with an empty allowlist");
+    assert!(
+      saved
+        .runtime_bindings
+        .iter()
+        .any(|binding| binding.runtime_kind == ProviderRuntimeKind::LegacyFrontendProvider),
+      "legacy frontend binding created"
+    );
+  }
 }

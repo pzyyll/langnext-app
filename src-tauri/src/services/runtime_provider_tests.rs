@@ -5091,7 +5091,6 @@ fn runtime_provider_vendor_default_applies_only_to_new_matching_provider() {
   use crate::domain::provider::{
     AuthSchemeV1, BaseUrlSource, CredentialKind, CredentialUpdate, ProviderInstanceWrite, ProxyMode,
   };
-  use crate::domain::runtime_lifecycle::GrantSubjectKind;
   use crate::domain::runtime_provider::{ProviderRuntimeKind, ProviderRuntimeState};
   use crate::services::providers::ProviderService;
   use std::sync::Arc;
@@ -5141,40 +5140,49 @@ fn runtime_provider_vendor_default_applies_only_to_new_matching_provider() {
     ProviderRuntimeKind::LegacyFrontendProvider
   );
 
-  // 2) Install the verified vendor fixture and resolve the reviewed default (exact identity).
+  // 2) Install the verified vendor fixture. Without an authorized policy, create stays legacy.
   let import = packages
     .bootstrap_bundled_package(OPENAI_COMPATIBLE_PACKAGE, false)
     .expect("vendor package bootstraps");
   let digest = import.package_digest().to_string();
-  runtime
-    .set_vendor_default(Some(&import))
-    .expect("vendor default resolves");
+  let unauthorized = providers
+    .save(openai_write())
+    .expect("matching provider without policy");
+  assert_eq!(
+    unauthorized.runtime.runtime_kind,
+    ProviderRuntimeKind::LegacyFrontendProvider,
+    "installed package without authorized default policy uses dual-stack legacy create"
+  );
 
-  // 3) A new matching Provider receives the exact default package/grant in the create path.
+  // 3) Authorize the exact default policy, then package-first create uses the retained digest.
+  let activation = crate::services::default_package_activation::DefaultPackageActivationService::create(
+    db.clone(),
+    packages.clone(),
+    _dir.path(),
+  );
+  let preview = activation
+    .preview_default_package_activation(&digest)
+    .expect("preview default activation");
+  activation
+    .authorize_default_plugin_package(
+      crate::domain::default_package_activation::AuthorizeDefaultPluginPackageInput {
+        preview_id: preview.preview_id,
+        acknowledge_future_instance_authority: true,
+      },
+    )
+    .expect("authorize default package");
+
   let matching = providers.save(openai_write()).expect("matching provider create");
   assert_eq!(matching.runtime.runtime_kind, ProviderRuntimeKind::WasmComponent);
-  assert_eq!(matching.runtime.state, ProviderRuntimeState::Active);
+  assert_eq!(matching.runtime.state, ProviderRuntimeState::PendingActivation);
   assert_eq!(
     matching.runtime.package_digest.as_deref(),
     Some(digest.as_str()),
     "exact vendor package digest"
   );
-  let grant_revision = matching.runtime.grant_set_revision.expect("grant revision");
-  assert_eq!(grant_revision, 1, "first grant revision for a brand-new provider");
-  let grant = db
-    .read(|conn| {
-      plugin_permission_grants::get_for_subject_package_revision(
-        conn,
-        GrantSubjectKind::ProviderInstance,
-        matching.id,
-        &digest,
-        grant_revision,
-      )
-    })
-    .expect("grant row exists");
-  assert_eq!(
-    grant.subject_id, matching.id,
-    "grant subject is exactly the new provider"
+  assert!(
+    matching.runtime.grant_set_revision.is_none(),
+    "package-first create retains exact digest without grant until activation"
   );
 
   // 4) A nonmatching adapter never receives the default.
@@ -5190,15 +5198,19 @@ fn runtime_provider_vendor_default_applies_only_to_new_matching_provider() {
     ProviderRuntimeKind::LegacyFrontendProvider
   );
 
-  // 5) A matching adapter with a custom persisted connection stays legacy.
-  let custom = providers
+  // 5) A matching adapter with a custom connection is blocked (never silently legacy).
+  let custom_err = providers
     .save(provider_write(
       "openai-compatible",
       BaseUrlSource::Custom,
       "https://relay.example.com/v1",
     ))
-    .expect("custom connection provider create");
-  assert_eq!(custom.runtime.runtime_kind, ProviderRuntimeKind::LegacyFrontendProvider);
+    .expect_err("custom connection against authorized default must block create");
+  let custom_msg = custom_err.to_string();
+  assert!(
+    custom_msg.contains("authority_expansion_blocked"),
+    "expected authority expansion block, got {custom_msg}"
+  );
 
   // 6) The pre-existing Provider is untouched by the default.
   let preexisting_after = providers.get(preexisting.id).expect("pre-existing provider");
@@ -5208,7 +5220,8 @@ fn runtime_provider_vendor_default_applies_only_to_new_matching_provider() {
     "pre-existing provider stays legacy"
   );
 
-  // 7) A revoked vendor publisher never yields a default: the create stays legacy.
+  // 7) Revoking the publisher clears the catalog default, so create falls back to dual-stack legacy
+  // with no package grant (revoke never leaves an executable package-first row).
   packages
     .revoke_publisher("com.langnext.vendor.keys.1")
     .expect("publisher revokes");
@@ -5217,6 +5230,7 @@ fn runtime_provider_vendor_default_applies_only_to_new_matching_provider() {
     revoked.runtime.runtime_kind,
     ProviderRuntimeKind::LegacyFrontendProvider
   );
+  assert!(revoked.runtime.grant_set_revision.is_none());
 
   // 8) An untrusted package (signed by a non-vendor key) cannot produce a vendor import, so
   // it can never become a default; the create stays legacy.
@@ -5291,9 +5305,22 @@ fn runtime_provider_vendor_default_applies_only_to_new_matching_provider() {
       "a second vendor digest claiming the same plugin id/version is rejected at install, so no ambiguous default can exist"
     );
     let runtime_ambiguous = ProviderRuntimeService::new(db_ambiguous.clone(), packages_ambiguous.clone(), wasm.clone());
-    runtime_ambiguous
-      .set_vendor_default(Some(&first))
-      .expect("the single verified vendor package resolves exactly");
+    let activation_ambiguous = crate::services::default_package_activation::DefaultPackageActivationService::create(
+      db_ambiguous.clone(),
+      packages_ambiguous.clone(),
+      dir.path(),
+    );
+    let preview = activation_ambiguous
+      .preview_default_package_activation(first.package_digest())
+      .expect("preview single vendor default");
+    activation_ambiguous
+      .authorize_default_plugin_package(
+        crate::domain::default_package_activation::AuthorizeDefaultPluginPackageInput {
+          preview_id: preview.preview_id,
+          acknowledge_future_instance_authority: true,
+        },
+      )
+      .expect("authorize single vendor default");
     let providers_ambiguous = ProviderService::new(db_ambiguous.clone(), Arc::new(MemoryCredentialVault::new()))
       .with_runtime_defaults(Arc::new(runtime_ambiguous));
     let created = providers_ambiguous.save(openai_write()).expect("provider create");
@@ -5317,6 +5344,272 @@ fn runtime_provider_vendor_default_applies_only_to_new_matching_provider() {
     "exactly one active package binding (the new matching provider)"
   );
   assert_eq!(wasm_bindings[0].provider_id, matching.id);
+}
+
+#[test]
+fn default_package_activation_provider_create_grant_and_drift_matrix() {
+  use crate::credentials::MemoryCredentialVault;
+  use crate::domain::default_package_activation::AuthorizeDefaultPluginPackageInput;
+  use crate::domain::provider::{
+    AuthSchemeV1, BaseUrlSource, CredentialKind, CredentialUpdate, ProviderInstanceWrite, ProxyMode,
+  };
+  use crate::domain::runtime_lifecycle::GrantSubjectKind;
+  use crate::domain::runtime_provider::{ProviderRuntimeKind, ProviderRuntimeState};
+  use crate::services::default_package_activation::DefaultPackageActivationService;
+  use crate::services::providers::ProviderService;
+  use std::sync::Arc;
+
+  fn openai_write(base_url_source: BaseUrlSource, base_url: &str) -> ProviderInstanceWrite {
+    ProviderInstanceWrite {
+      id: None,
+      adapter_id: "openai-compatible".into(),
+      display_name: "OpenAI".into(),
+      base_url: base_url.into(),
+      base_url_source,
+      auth_scheme: AuthSchemeV1::bearer(),
+      credential_kind: CredentialKind::ApiKey,
+      credential: CredentialUpdate::Keep,
+      enabled: true,
+      proxy_mode: ProxyMode::Inherit,
+      insecure_http_confirmed_at: None,
+      expected_updated_at: None,
+    }
+  }
+
+  let (dir, db, packages, wasm) = setup();
+  let vault = Arc::new(MemoryCredentialVault::new());
+  let runtime = ProviderRuntimeService::new(db.clone(), packages.clone(), wasm.clone());
+  let providers = ProviderService::new(db.clone(), vault.clone()).with_runtime_defaults(Arc::new(runtime.clone()));
+
+  let import = packages
+    .bootstrap_bundled_package(OPENAI_COMPATIBLE_PACKAGE, false)
+    .expect("vendor package bootstraps");
+  let digest = import.package_digest().to_string();
+  let activation = DefaultPackageActivationService::create(db.clone(), packages.clone(), dir.path())
+    .with_provider_runtime(runtime.clone());
+  let preview = activation
+    .preview_default_package_activation(&digest)
+    .expect("preview default");
+  activation
+    .authorize_default_plugin_package(AuthorizeDefaultPluginPackageInput {
+      preview_id: preview.preview_id,
+      acknowledge_future_instance_authority: true,
+    })
+    .expect("authorize default");
+
+  // Create package-first pending provider.
+  let created = providers
+    .save(openai_write(BaseUrlSource::PluginDefault, "https://api.openai.com/v1"))
+    .expect("package-first provider create");
+  assert_eq!(created.runtime.runtime_kind, ProviderRuntimeKind::WasmComponent);
+  assert_eq!(created.runtime.state, ProviderRuntimeState::PendingActivation);
+  assert_eq!(created.runtime.package_digest.as_deref(), Some(digest.as_str()));
+  assert!(created.runtime.grant_set_revision.is_none());
+
+  // Activate through the shared coordinator.
+  activation
+    .activate_pending_subject(GrantSubjectKind::ProviderInstance, created.id)
+    .expect("provider package-first activation");
+  let after = providers.get(created.id).expect("provider after activation");
+  assert_eq!(after.runtime.package_digest.as_deref(), Some(digest.as_str()));
+  assert_ne!(after.runtime.runtime_kind, ProviderRuntimeKind::LegacyFrontendProvider);
+  // Grant may require authority confirmation for provider endpoints; never create a second identity.
+  if after.runtime.grant_set_revision.is_some() {
+    assert_eq!(after.runtime.state, ProviderRuntimeState::Active);
+  }
+
+  // Drift matrix: custom endpoint against authorized default must block create without legacy row.
+  let blocked = providers
+    .save(openai_write(BaseUrlSource::Custom, "https://relay.example.com/v1"))
+    .expect_err("authority expansion must block");
+  assert!(
+    blocked.to_string().contains("authority_expansion_blocked") || blocked.to_string().contains("blocked"),
+    "got {blocked}"
+  );
+
+  // Alias mismatch stays dual-stack legacy until retirement gate is enabled.
+  let unrelated = providers
+    .save(ProviderInstanceWrite {
+      id: None,
+      adapter_id: "deepseek".into(),
+      display_name: "DeepSeek".into(),
+      base_url: "https://api.deepseek.com".into(),
+      base_url_source: BaseUrlSource::PluginDefault,
+      auth_scheme: AuthSchemeV1::bearer(),
+      credential_kind: CredentialKind::ApiKey,
+      credential: CredentialUpdate::Keep,
+      enabled: true,
+      proxy_mode: ProxyMode::Inherit,
+      insecure_http_confirmed_at: None,
+      expected_updated_at: None,
+    })
+    .expect("unrelated adapter may dual-stack");
+  assert_eq!(
+    unrelated.runtime.runtime_kind,
+    ProviderRuntimeKind::LegacyFrontendProvider
+  );
+
+  // Revoke clears the catalog default: create stays dual-stack legacy with no package grant.
+  packages
+    .revoke_publisher("com.langnext.vendor.keys.1")
+    .expect("revoke vendor publisher");
+  let revoked = providers
+    .save(openai_write(BaseUrlSource::PluginDefault, "https://api.openai.com/v1"))
+    .expect("create after revoke");
+  assert_eq!(
+    revoked.runtime.runtime_kind,
+    ProviderRuntimeKind::LegacyFrontendProvider
+  );
+  assert!(
+    revoked.runtime.grant_set_revision.is_none(),
+    "revoked publisher must not create an executable grant"
+  );
+}
+
+#[test]
+fn default_package_activation_provider_create_rejects_intermediate_legacy() {
+  use crate::credentials::MemoryCredentialVault;
+  use crate::domain::default_package_activation::AuthorizeDefaultPluginPackageInput;
+  use crate::domain::provider::{
+    AuthSchemeV1, BaseUrlSource, CredentialKind, CredentialUpdate, ProviderInstanceWrite, ProxyMode,
+  };
+  use crate::services::default_package_activation::DefaultPackageActivationService;
+  use crate::services::providers::ProviderService;
+  use std::sync::Arc;
+
+  let (dir, db, packages, wasm) = setup();
+  let vault = Arc::new(MemoryCredentialVault::new());
+  let runtime = ProviderRuntimeService::new(db.clone(), packages.clone(), wasm.clone());
+  let providers = ProviderService::new(db.clone(), vault.clone()).with_runtime_defaults(Arc::new(runtime.clone()));
+  let import = packages
+    .bootstrap_bundled_package(OPENAI_COMPATIBLE_PACKAGE, false)
+    .expect("vendor package bootstraps");
+  let digest = import.package_digest().to_string();
+  let activation = DefaultPackageActivationService::create(db.clone(), packages.clone(), dir.path());
+  let preview = activation
+    .preview_default_package_activation(&digest)
+    .expect("preview default");
+  activation
+    .authorize_default_plugin_package(AuthorizeDefaultPluginPackageInput {
+      preview_id: preview.preview_id,
+      acknowledge_future_instance_authority: true,
+    })
+    .expect("authorize default");
+
+  // Reject any insert of an intermediate legacy-frontend-provider row during package-first create.
+  db.write(|conn| {
+    conn
+      .execute_batch(
+        "CREATE TEMP TRIGGER reject_legacy_frontend_provider_insert
+         BEFORE INSERT ON provider_runtime_bindings
+         WHEN NEW.runtime_kind = 'legacy-frontend-provider'
+         BEGIN
+           SELECT RAISE(ABORT, 'legacy intermediate binding forbidden');
+         END;",
+      )
+      .map_err(|e| crate::error::StorageError::Internal(e.to_string()))?;
+    Ok(())
+  })
+  .unwrap();
+
+  let created = providers
+    .save(ProviderInstanceWrite {
+      id: None,
+      adapter_id: "openai-compatible".into(),
+      display_name: "Direct package-first".into(),
+      base_url: "https://api.openai.com/v1".into(),
+      base_url_source: BaseUrlSource::PluginDefault,
+      auth_scheme: AuthSchemeV1::bearer(),
+      credential_kind: CredentialKind::ApiKey,
+      credential: CredentialUpdate::Keep,
+      enabled: true,
+      proxy_mode: ProxyMode::Inherit,
+      insecure_http_confirmed_at: None,
+      expected_updated_at: None,
+    })
+    .expect("authorized package-first create must insert only the pending package binding");
+  assert_eq!(created.runtime.runtime_kind, ProviderRuntimeKind::WasmComponent);
+  assert_eq!(created.runtime.state, ProviderRuntimeState::PendingActivation);
+  assert_eq!(created.runtime.package_digest.as_deref(), Some(digest.as_str()));
+}
+
+#[test]
+fn default_package_activation_provider_create_rolls_back_on_intent_failure() {
+  use crate::credentials::MemoryCredentialVault;
+  use crate::domain::default_package_activation::AuthorizeDefaultPluginPackageInput;
+  use crate::domain::provider::{
+    AuthSchemeV1, BaseUrlSource, CredentialKind, CredentialUpdate, ProviderInstanceWrite, ProxyMode,
+  };
+  use crate::services::default_package_activation::DefaultPackageActivationService;
+  use crate::services::providers::ProviderService;
+  use std::sync::Arc;
+
+  let (dir, db, packages, wasm) = setup();
+  let vault = Arc::new(MemoryCredentialVault::new());
+  let runtime = ProviderRuntimeService::new(db.clone(), packages.clone(), wasm.clone());
+  let providers = ProviderService::new(db.clone(), vault.clone()).with_runtime_defaults(Arc::new(runtime.clone()));
+  let import = packages
+    .bootstrap_bundled_package(OPENAI_COMPATIBLE_PACKAGE, false)
+    .expect("vendor package bootstraps");
+  let digest = import.package_digest().to_string();
+  let activation = DefaultPackageActivationService::create(db.clone(), packages.clone(), dir.path());
+  let preview = activation
+    .preview_default_package_activation(&digest)
+    .expect("preview default");
+  activation
+    .authorize_default_plugin_package(AuthorizeDefaultPluginPackageInput {
+      preview_id: preview.preview_id,
+      acknowledge_future_instance_authority: true,
+    })
+    .expect("authorize default");
+
+  // Abort intent insertion mid-transaction via a temporary SQLite trigger.
+  db.write(|conn| {
+    conn
+      .execute_batch(
+        "CREATE TEMP TRIGGER abort_default_runtime_activation_intents
+         BEFORE INSERT ON default_runtime_activation_intents
+         BEGIN
+           SELECT RAISE(ABORT, 'injected intent failure');
+         END;",
+      )
+      .map_err(|e| crate::error::StorageError::Internal(e.to_string()))?;
+    Ok(())
+  })
+  .unwrap();
+
+  let before_providers = providers.list().unwrap().len();
+  let err = providers
+    .save(ProviderInstanceWrite {
+      id: None,
+      adapter_id: "openai-compatible".into(),
+      display_name: "Rollback".into(),
+      base_url: "https://api.openai.com/v1".into(),
+      base_url_source: BaseUrlSource::PluginDefault,
+      auth_scheme: AuthSchemeV1::bearer(),
+      credential_kind: CredentialKind::None,
+      credential: CredentialUpdate::Keep,
+      enabled: true,
+      proxy_mode: ProxyMode::Inherit,
+      insecure_http_confirmed_at: None,
+      expected_updated_at: None,
+    })
+    .expect_err("intent failure must roll back create");
+  assert!(!err.to_string().is_empty());
+  assert_eq!(providers.list().unwrap().len(), before_providers);
+  let bindings = db.read(|conn| provider_runtime_bindings::list(conn)).unwrap();
+  assert!(
+    bindings.iter().all(|b| b.provider_id.to_string().len() > 0),
+    "binding list remains consistent"
+  );
+
+  db.write(|conn| {
+    conn
+      .execute_batch("DROP TRIGGER IF EXISTS abort_default_runtime_activation_intents;")
+      .map_err(|e| crate::error::StorageError::Internal(e.to_string()))?;
+    Ok(())
+  })
+  .unwrap();
 }
 
 /// Phase 8 Task 20: the Gemini runtime package reproduces the current TypeScript provider
@@ -6971,32 +7264,54 @@ async fn runtime_provider_smoke_end_to_end() {
     .bootstrap_bundled_package(OPENAI_COMPATIBLE_PACKAGE, false)
     .expect("vendor fixture bootstraps");
   let product_digest = import.package_digest().to_string();
-  runtime
-    .set_vendor_default(Some(&import))
-    .expect("vendor default resolves");
+  let activation = crate::services::default_package_activation::DefaultPackageActivationService::create(
+    db.clone(),
+    packages.clone(),
+    _dir.path(),
+  )
+  .with_provider_runtime(runtime.clone());
+  let preview = activation
+    .preview_default_package_activation(&product_digest)
+    .expect("preview default");
+  activation
+    .authorize_default_plugin_package(
+      crate::domain::default_package_activation::AuthorizeDefaultPluginPackageInput {
+        preview_id: preview.preview_id,
+        acknowledge_future_instance_authority: true,
+      },
+    )
+    .expect("authorize default package");
   let matching = providers.save(provider_write()).expect("new matching provider create");
   assert_eq!(matching.runtime.runtime_kind, ProviderRuntimeKind::WasmComponent);
-  assert_eq!(matching.runtime.state, ProviderRuntimeState::Active);
+  assert_eq!(matching.runtime.state, ProviderRuntimeState::PendingActivation);
   assert_eq!(
     matching.runtime.package_digest.as_deref(),
     Some(product_digest.as_str())
   );
-  let grant = db
-    .read(|conn| {
-      plugin_permission_grants::get_for_subject_package_revision(
-        conn,
-        GrantSubjectKind::ProviderInstance,
-        matching.id,
-        &product_digest,
-        1,
-      )
-    })
-    .expect("new provider grant");
-  assert_eq!(
-    grant.subject_id, matching.id,
-    "grant subject is exactly the new provider"
-  );
-  println!("SMOKE ok: vendor default applies only to the new matching provider; pre-existing stays legacy");
+  activation
+    .activate_pending_subject(GrantSubjectKind::ProviderInstance, matching.id)
+    .expect("activate package-first provider");
+  let matching = providers.get(matching.id).expect("provider after activation");
+  // Activation may require subject authority confirmation; never create a second identity.
+  if matching.runtime.grant_set_revision.is_some() {
+    assert_eq!(matching.runtime.state, ProviderRuntimeState::Active);
+    let grant = db
+      .read(|conn| {
+        plugin_permission_grants::get_for_subject_package_revision(
+          conn,
+          GrantSubjectKind::ProviderInstance,
+          matching.id,
+          &product_digest,
+          matching.runtime.grant_set_revision.expect("grant revision"),
+        )
+      })
+      .expect("new provider grant");
+    assert_eq!(
+      grant.subject_id, matching.id,
+      "grant subject is exactly the new provider"
+    );
+  }
+  println!("SMOKE ok: authorized default applies only to the new matching provider; pre-existing stays legacy");
 
   // The host-owned credential is stored through the real Provider save path (create → enter
   // API key), exactly like the manual walkthrough; the runtime binding is untouched.

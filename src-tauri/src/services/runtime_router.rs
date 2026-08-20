@@ -121,6 +121,9 @@ pub struct RuntimeRouter {
   plugin_packages: PluginPackageService,
   #[allow(dead_code)]
   wasm_runtime: Arc<WasmRuntime>,
+  /// Phase 12 execution release gate: startup inventory identifies release CANDIDATES. Live
+  /// SQLite blockers stay authoritative, so an enabled active legacy row always vetoes denial.
+  release_gate: crate::services::legacy_runtime_retirement::LegacyRuntimeReleaseGate,
 }
 
 impl RuntimeRouter {
@@ -137,7 +140,20 @@ impl RuntimeRouter {
       bundled_handlers,
       plugin_packages,
       wasm_runtime,
+      release_gate: crate::services::legacy_runtime_retirement::LegacyRuntimeReleaseGate::empty(),
     }
+  }
+
+  /// Inject the execution release gate derived from the retirement inventory. A released
+  /// executor denies bundled resolution only while no enabled active legacy row requires it;
+  /// live SQLite state is rechecked before denial because the startup snapshot can be stale.
+  /// Production derives this from `LegacyRuntimeInventoryService::list_inventory`.
+  pub fn with_release_gate(
+    mut self,
+    release_gate: crate::services::legacy_runtime_retirement::LegacyRuntimeReleaseGate,
+  ) -> Self {
+    self.release_gate = release_gate;
+    self
   }
 
   /// Resolve one explicit executor for an instance capability. Reloads authoritative state.
@@ -176,6 +192,12 @@ impl RuntimeRouter {
   }
 
   fn resolve_bundled(&self, plugin_id: &str, capability_id: &str) -> Result<RuntimeAdapter, CapabilityError> {
+    if self.release_gate.is_executor_released(plugin_id) && !self.has_enabled_active_legacy_blocker(plugin_id) {
+      return Err(CapabilityError::new(
+        CapabilityErrorCode::PluginUnavailable,
+        format!("bundled executor {plugin_id} is retired; install and authorize the replacement package"),
+      ));
+    }
     if !self.definition_registry.contains(plugin_id) {
       return Err(CapabilityError::new(
         CapabilityErrorCode::PluginUnavailable,
@@ -194,6 +216,24 @@ impl RuntimeRouter {
         .with_capability_id(capability_id)
       })?;
     Ok(RuntimeAdapter::BundledRust { handler })
+  }
+
+  /// Live SQLite veto against a stale startup release snapshot. A released executor may only
+  /// stop serving when no enabled, active legacy row on this plugin still requires the bundled
+  /// runtime. If the authoritative check cannot be read, removal readiness is not proven, so
+  /// the executor stays available (one indexed EXISTS probe, never a full row load).
+  fn has_enabled_active_legacy_blocker(&self, plugin_id: &str) -> bool {
+    let runtime_kind = runtime_kind_storage(RuntimeKind::BundledRust);
+    let runtime_state = InstanceRuntimeState::Active.as_str();
+    match self.db.read(|conn| {
+      integration_instances::exists_enabled_active_runtime_by_plugin(conn, plugin_id, runtime_kind, runtime_state)
+    }) {
+      Ok(exists) => exists,
+      Err(err) => {
+        log::warn!("legacy_runtime_release_blocker_check_failed plugin_id={plugin_id} error={err}");
+        true
+      }
+    }
   }
 
   fn resolve_native(
@@ -1939,6 +1979,275 @@ mod tests {
     assert_eq!(grant.instance_id(), subject);
     assert_eq!(grant.revision().as_u64(), 1);
     assert_eq!(grant.authority_digest().as_str(), bundle.header.authority_digest);
+  }
+
+  #[test]
+  fn runtime_router_keeps_bundled_executor_while_enabled_legacy_rows_exist() {
+    use crate::domain::service_capability::CapabilityErrorCode;
+    use crate::domain::service_integration::{IntegrationHealthStatus, IntegrationInstance};
+    use crate::services::service_capabilities::ServiceCapabilityRegistry;
+    use crate::services::service_integration_registry::ServiceIntegrationRegistry;
+    use crate::services::wasm_runtime::WasmRuntime;
+    use std::sync::Arc;
+
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::new(dir.path()).unwrap();
+    db.initialize().unwrap();
+    let now = now_rfc3339();
+    let enabled_id = new_id();
+    let unrelated_id = new_id();
+    let enabled_plugin = crate::domain::service_integration::GOOGLE_TRANSLATE_WEB_PLUGIN_ID;
+    let unrelated_plugin = "com.unrelated.executor";
+    db.transaction(|uow| {
+      for (id, plugin_id) in [(enabled_id, enabled_plugin), (unrelated_id, unrelated_plugin)] {
+        crate::repositories::integration_instances::insert(
+          uow.conn(),
+          &IntegrationInstance {
+            id,
+            plugin_id: plugin_id.into(),
+            plugin_version: "legacy".into(),
+            display_name: "router fixture".into(),
+            enabled: true,
+            config_json: "{}".into(),
+            config_schema_version: 1,
+            health_status: IntegrationHealthStatus::Unconfigured,
+            last_validated_at: None,
+            last_error_code: None,
+            runtime_kind: "bundled-rust".into(),
+            package_digest: None,
+            execution_grant_set_revision: None,
+            runtime_state: "active".into(),
+            runtime_error_code: None,
+            runtime_error_message: None,
+            runtime_requirement_json: None,
+            created_at: now.clone(),
+            updated_at: now.clone(),
+          },
+        )?;
+      }
+      Ok::<_, crate::error::StorageError>(())
+    })
+    .expect("fixture");
+
+    let registry = Arc::new(ServiceIntegrationRegistry::empty());
+    let handlers = Arc::new(ServiceCapabilityRegistry::new());
+    let packages = crate::services::plugin_store::PluginPackageService::new(db.clone(), dir.path().to_path_buf());
+    let wasm = Arc::new(WasmRuntime::new().unwrap());
+    // Production shape: the release gate derives from the inventory snapshot. The enabled
+    // legacy row keeps the google-web slice unreleased, so bundled execution stays available
+    // (the empty test registry denies with "definition is missing", never the release message).
+    let activation = crate::services::default_package_activation::DefaultPackageActivationService::create(
+      db.clone(),
+      packages.clone(),
+      dir.path(),
+    );
+    let inventory =
+      crate::services::legacy_runtime_inventory::LegacyRuntimeInventoryService::create(db.clone(), activation)
+        .with_retirement_gate(
+          crate::services::legacy_runtime_retirement::LegacyRuntimeRetirementGate::with_executors(
+            [enabled_plugin],
+            std::iter::empty::<&str>(),
+          ),
+        );
+    let report = inventory.list_inventory().unwrap();
+    assert!(
+      report
+        .entries
+        .iter()
+        .find(|entry| entry.executor_id == enabled_plugin)
+        .is_some_and(|entry| !entry.retirement_ready),
+      "enabled legacy row must keep the slice unreleased"
+    );
+    let release_gate = crate::services::legacy_runtime_retirement::LegacyRuntimeReleaseGate::with_released(
+      report
+        .entries
+        .iter()
+        .filter(|entry| entry.retirement_ready)
+        .map(|entry| entry.executor_id.clone()),
+    );
+    let router = RuntimeRouter::new(db.clone(), registry, handlers, packages, wasm).with_release_gate(release_gate);
+
+    let err = match router.resolve(enabled_id, "translate.text@1") {
+      Ok(_) => panic!("empty registry must deny, but not with the release message"),
+      Err(err) => err,
+    };
+    assert_eq!(err.code, CapabilityErrorCode::PluginUnavailable);
+    assert!(
+      !err.message.contains("retired"),
+      "enabled legacy row must keep the bundled executor available: {}",
+      err.message
+    );
+  }
+
+  #[test]
+  fn runtime_router_keeps_released_bundled_executor_for_live_active_row() {
+    use crate::domain::service_capability::{
+      CapabilityErrorCode, ExecutionContext, TranslateTextRequest, TranslateTextResponse,
+    };
+    use crate::domain::service_integration::{IntegrationHealthStatus, IntegrationInstance};
+    use crate::services::service_capabilities::{ServiceCapabilityRegistry, TranslateTextCapability};
+    use crate::services::service_integration_registry::ServiceIntegrationRegistry;
+    use crate::services::wasm_runtime::WasmRuntime;
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::sync::Arc;
+
+    // Minimal handler: the fixture only asserts that resolution selects the bundled adapter.
+    struct NoopTranslate;
+    impl TranslateTextCapability for NoopTranslate {
+      fn translate(
+        &self,
+        _instance_id: Uuid,
+        _request: TranslateTextRequest,
+        _context: ExecutionContext,
+      ) -> Pin<Box<dyn Future<Output = Result<TranslateTextResponse, CapabilityError>> + Send + '_>> {
+        Box::pin(async move {
+          Err(CapabilityError::new(CapabilityErrorCode::PluginUnavailable, "not executed"))
+        })
+      }
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::new(dir.path()).unwrap();
+    db.initialize().unwrap();
+    let now = now_rfc3339();
+    let ready_plugin = crate::domain::service_integration::GOOGLE_TRANSLATE_WEB_PLUGIN_ID;
+    let empty_plugin = "com.langnext.released-empty";
+    let ready_id = new_id();
+    let disabled_id = new_id();
+    let pending_id = new_id();
+
+    // One builder for every bundled fixture row so shared fields never drift between copies.
+    let bundled_instance_fixture =
+      |id: Uuid, plugin_id: &str, enabled: bool, runtime_state: InstanceRuntimeState| IntegrationInstance {
+        id,
+        plugin_id: plugin_id.into(),
+        plugin_version: "legacy".into(),
+        display_name: "router fixture".into(),
+        enabled,
+        config_json: "{}".into(),
+        config_schema_version: 1,
+        health_status: IntegrationHealthStatus::Unconfigured,
+        last_validated_at: None,
+        last_error_code: None,
+        runtime_kind: runtime_kind_storage(RuntimeKind::BundledRust).into(),
+        package_digest: None,
+        execution_grant_set_revision: None,
+        runtime_state: runtime_state.as_str().into(),
+        runtime_error_code: None,
+        runtime_error_message: None,
+        runtime_requirement_json: None,
+        created_at: now.clone(),
+        updated_at: now.clone(),
+      };
+
+    // The router is constructed with the executor already in the release gate. Rows appear
+    // only afterwards: an enabled active legacy row must veto the stale startup snapshot.
+    let registry = Arc::new(ServiceIntegrationRegistry::bundled().unwrap());
+    let mut handlers = ServiceCapabilityRegistry::new();
+    handlers.register(
+      ready_plugin,
+      "translate.text@1",
+      CapabilityHandler::TranslateText(Arc::new(NoopTranslate)),
+    );
+    let handlers = Arc::new(handlers);
+    let packages = crate::services::plugin_store::PluginPackageService::new(db.clone(), dir.path().to_path_buf());
+    let wasm = Arc::new(WasmRuntime::new().unwrap());
+    let release_gate =
+      crate::services::legacy_runtime_retirement::LegacyRuntimeReleaseGate::with_released([ready_plugin, empty_plugin]);
+    let router = RuntimeRouter::new(db.clone(), registry, handlers, packages, wasm).with_release_gate(release_gate);
+
+    db.transaction(|uow| {
+      for (id, plugin_id, enabled, runtime_state) in [
+        (ready_id, ready_plugin, true, InstanceRuntimeState::Active),
+        (disabled_id, empty_plugin, false, InstanceRuntimeState::Active),
+        (pending_id, empty_plugin, true, InstanceRuntimeState::PendingActivation),
+      ] {
+        crate::repositories::integration_instances::insert(
+          uow.conn(),
+          &bundled_instance_fixture(id, plugin_id, enabled, runtime_state),
+        )?;
+      }
+      Ok::<_, crate::error::StorageError>(())
+    })
+    .expect("fixture");
+
+    // Direct resolution: the live enabled active row overrides the stale release snapshot.
+    assert!(
+      matches!(
+        router.resolve(ready_id, "translate.text@1"),
+        Ok(RuntimeAdapter::BundledRust { .. })
+      ),
+      "live active row must keep the bundled executor available"
+    );
+
+    // Snapshot resolution shares the same bundled path and must behave identically.
+    let pin = SnapshotRuntimeResolution {
+      instance_id: ready_id,
+      plugin_id: ready_plugin.into(),
+      runtime_kind: runtime_kind_storage(RuntimeKind::BundledRust).into(),
+      runtime_state: InstanceRuntimeState::Active.as_str().into(),
+      instance_updated_at: now.clone(),
+      instance_config_json: "{}".into(),
+      package_digest: None,
+      execution_grant_set_revision: None,
+      package_manifest_json: None,
+      package_content_available: false,
+      package_permission_request_digest: None,
+      package_plugin_id: None,
+      package_plugin_version: None,
+      publisher_key_id: None,
+      publisher_fingerprint: None,
+      publisher_public_key_hex: None,
+      publisher_source: None,
+      publisher_enabled: false,
+      publisher_revoked: false,
+      grant_bundle: None,
+    };
+    assert!(
+      matches!(
+        router.resolve_from_snapshot(&pin, "translate.text@1"),
+        Ok(RuntimeAdapter::BundledRust { .. })
+      ),
+      "live active row must keep the bundled executor available from snapshot"
+    );
+
+    // Rows that cannot run fail on their own state, never with the retired message.
+    let err = match router.resolve(disabled_id, "translate.text@1") {
+      Ok(_) => panic!("disabled row must deny"),
+      Err(err) => err,
+    };
+    assert!(!err.message.contains("retired"), "got {}", err.message);
+    let err = match router.resolve(pending_id, "translate.text@1") {
+      Ok(_) => panic!("pending row must deny"),
+      Err(err) => err,
+    };
+    assert!(!err.message.contains("retired"), "got {}", err.message);
+
+    // The live blocker check counts only enabled active bundled rows on the executor plugin.
+    assert!(router.has_enabled_active_legacy_blocker(ready_plugin));
+    assert!(
+      !router.has_enabled_active_legacy_blocker(empty_plugin),
+      "disabled and pending rows are not release blockers"
+    );
+
+    // Once an enabled active row appears on the released empty plugin, removal readiness is
+    // gone: resolution proceeds past the gate and fails only on the missing handler.
+    let empty_id = new_id();
+    db.transaction(|uow| {
+      crate::repositories::integration_instances::insert(
+        uow.conn(),
+        &bundled_instance_fixture(empty_id, empty_plugin, true, InstanceRuntimeState::Active),
+      )?;
+      Ok::<_, crate::error::StorageError>(())
+    })
+    .expect("fixture");
+    assert!(router.has_enabled_active_legacy_blocker(empty_plugin));
+    let err = match router.resolve(empty_id, "translate.text@1") {
+      Ok(_) => panic!("empty plugin has no bundled definition"),
+      Err(err) => err,
+    };
+    assert!(!err.message.contains("retired"), "got {}", err.message);
   }
 
   #[test]

@@ -61,7 +61,12 @@ describe("DATA_CHANGE_EVENT_BINDINGS", () => {
     const byEvent = new Map(DATA_CHANGE_EVENT_BINDINGS.map((b) => [b.event, b.invalidateKeys]));
 
     expect(byEvent.get(DATA_TRANSLATION_PROFILES_CHANGED)).toEqual([profileKeys.all]);
-    expect(byEvent.get(DATA_PROVIDERS_CHANGED)).toEqual([providerKeys.all, modelKeys.all]);
+    expect(byEvent.get(DATA_PROVIDERS_CHANGED)).toEqual([
+      providerKeys.all,
+      modelKeys.all,
+      pluginPackageKeys.all,
+      providerRuntimeKeys.all,
+    ]);
     expect(byEvent.get(DATA_MODELS_CHANGED)).toEqual([modelKeys.all]);
     expect(byEvent.get(DATA_TRANSLATION_HISTORY_CHANGED)).toEqual([historyKeys.all]);
     expect(byEvent.get(DATA_OCR_SERVICES_CHANGED)).toEqual([ocrKeys.all]);

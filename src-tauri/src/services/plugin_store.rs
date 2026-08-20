@@ -508,9 +508,14 @@ impl PluginPackageService {
         approve_publisher: false,
         publisher_public_key_hex: None,
         acknowledge_permissions: true,
-        set_as_default: set_default,
       })?;
-      self.reverify_vendor_import(&digest)
+      let import = self.reverify_vendor_import(&digest)?;
+      // Bootstrap may reaffirm a default only through the internal set_default path; public
+      // approve_package never mutates plugin_default_versions.
+      if set_default {
+        self.set_default(&import.plugin_id, &digest)?;
+      }
+      Ok(import)
     })();
     let _ = std::fs::remove_dir_all(&copy_dir);
     result
@@ -1515,10 +1520,6 @@ impl PluginPackageService {
         },
       )?;
 
-      if input.set_as_default {
-        // Temporarily allow default only after content is available; set after finalize.
-      }
-
       plugin_install_operations::mark_db_committed(uow.conn(), session.operation_id)?;
       Ok(revision)
     })?;
@@ -1530,11 +1531,8 @@ impl PluginPackageService {
 
     // Store FS mutation + post-rename re-verify under the host store generation lock so auto-pin
     // and concurrent uninstall/recover cannot race the install window. Lock order: store then DB.
-    let allow_default = input.set_as_default
-      && matches!(
-        publisher_decision,
-        PublisherDecision::TrustedVendor | PublisherDecision::UserApproved | PublisherDecision::AlreadyTrusted
-      );
+    // Public approve_package never mutates plugin_default_versions; default authorization is a
+    // separate preview/authorize workflow.
     {
       let _store_guard = self.lock_store()?;
       if let Err(err) = self.atomic_install_from_staging(&session.staging_dir, &verified.package_digest) {
@@ -1577,7 +1575,6 @@ impl PluginPackageService {
         return Err(StorageError::Internal("injected fault after post-rename verify".into()));
       }
 
-      // set_as_default rejected for revoked/disabled publishers (backend authority).
       self.db.transaction(|uow| {
         #[cfg(test)]
         if self.take_install_fault(InstallFaultPoint::FinalizationDbWrite) {
@@ -1585,15 +1582,6 @@ impl PluginPackageService {
         }
         plugin_install_operations::mark_finalized(uow.conn(), session.operation_id)?;
         installed_plugin_versions::set_content_available(uow.conn(), &verified.package_digest, true)?;
-        if allow_default {
-          let publisher = plugin_publishers::get(uow.conn(), &verified.manifest.publisher.key_id)?;
-          if publisher.revoked || !publisher.enabled {
-            return Err(StorageError::Validation(
-              "cannot set default: publisher is revoked or disabled".into(),
-            ));
-          }
-          installed_plugin_versions::set_default(uow.conn(), &verified.manifest.id, &verified.package_digest)?;
-        }
         Ok(())
       })?;
     }
@@ -1653,7 +1641,14 @@ impl PluginPackageService {
     Ok(out)
   }
 
-  pub fn set_default(&self, plugin_id: &str, package_digest: &str) -> Result<PluginDefaultVersion, StorageError> {
+  /// Catalog default pointer only. Public default mutation goes through
+  /// `DefaultPackageActivationService` preview/authorize; keep this crate-internal for
+  /// bootstrap and tests that already hold exact package identity.
+  pub(crate) fn set_default(
+    &self,
+    plugin_id: &str,
+    package_digest: &str,
+  ) -> Result<PluginDefaultVersion, StorageError> {
     // Revoked/disabled publisher cannot become default (backend authority).
     let version = self
       .db
@@ -2333,6 +2328,9 @@ impl PluginPackageService {
       .db
       .read(|conn| installed_plugin_versions::get_default(conn, &version.plugin_id))?
       .is_some_and(|d| d.package_digest == version.package_digest);
+    let default_authorization_status = self.db.read(|conn| {
+      crate::repositories::default_package_activation_policies::resolve_authorization_status(conn, &version.plugin_id)
+    })?;
     let users = self
       .db
       .read(|conn| installed_plugin_versions::count_integration_users(conn, &version.plugin_id, &version.version))?;
@@ -2373,6 +2371,7 @@ impl PluginPackageService {
       permission_request_digest: version.permission_request_digest.clone(),
       content_available: version.content_available,
       is_default,
+      default_authorization_status,
       in_use: !users.is_empty() || is_default,
       installed_at: version.installed_at.clone(),
       capabilities: manifest.capabilities.iter().map(|c| c.id.clone()).collect(),
@@ -2673,9 +2672,13 @@ mod tests {
         approve_publisher: false,
         publisher_public_key_hex: None,
         acknowledge_permissions: true,
-        set_as_default: set_default,
       })
       .unwrap();
+    if set_default {
+      service
+        .set_default(&result.version.plugin_id, &digest)
+        .expect("test helper may set default only after install");
+    }
     (digest, result)
   }
 
@@ -2730,10 +2733,17 @@ mod tests {
   #[test]
   fn preview_approve_list_default_uninstall() {
     let (dir, service) = setup();
-    let (digest, result) = install_valid(&service, dir.path(), true);
-    assert_eq!(result.version.package_digest, digest);
-    assert!(result.version.is_default);
-    assert!(result.version.content_available);
+    // approve_package never mutates defaults; the helper sets the catalog default afterwards.
+    let (digest, _result) = install_valid(&service, dir.path(), true);
+    let version = service
+      .list_versions()
+      .unwrap()
+      .into_iter()
+      .find(|version| version.package_digest == digest)
+      .expect("installed version listed");
+    assert_eq!(version.package_digest, digest);
+    assert!(version.is_default);
+    assert!(version.content_available);
     assert_eq!(service.list_versions().unwrap().len(), 1);
     assert!(service.store_package_dir(&digest).join("package.lnplugin").is_file());
     assert!(service.store_package_dir(&digest).join("content").is_dir());
@@ -2824,7 +2834,6 @@ mod tests {
         approve_publisher: false,
         publisher_public_key_hex: None,
         acknowledge_permissions: true,
-        set_as_default: false,
       })
       .unwrap();
     assert_eq!(result.version.package_digest, digest);
@@ -2914,7 +2923,6 @@ mod tests {
           approve_publisher: false,
           publisher_public_key_hex: None,
           acknowledge_permissions: true,
-          set_as_default: false,
         })
         .unwrap_err();
       assert!(matches!(err, StorageError::Internal(_)), "fault {fault:?}");
@@ -3100,7 +3108,6 @@ mod tests {
         approve_publisher: false,
         publisher_public_key_hex: None,
         acknowledge_permissions: true,
-        set_as_default: false,
       })
       .unwrap_err();
     assert!(matches!(err, StorageError::Capability { .. }));
@@ -3354,7 +3361,6 @@ mod tests {
         approve_publisher: true,
         publisher_public_key_hex: preview.resolved_publisher_public_key_hex.clone(),
         acknowledge_permissions: true,
-        set_as_default: false,
       })
       .unwrap();
     assert!(result.version.content_available);
@@ -3396,7 +3402,6 @@ mod tests {
         approve_publisher: true,
         publisher_public_key_hex: None,
         acknowledge_permissions: true,
-        set_as_default: false,
       })
       .unwrap_err();
     assert!(matches!(err, StorageError::Validation(_)));
@@ -3408,10 +3413,83 @@ mod tests {
         approve_publisher: true,
         publisher_public_key_hex: Some(public_hex),
         acknowledge_permissions: true,
-        set_as_default: false,
       })
       .unwrap();
     assert!(result.version.content_available);
+  }
+
+  #[test]
+  fn default_package_install_authorization_boundary_does_not_set_default() {
+    // Compatibility: a legacy client may still send setAsDefault:true. Serde ignores the unknown
+    // field after removal, and approve_package must never write a catalog default or policy.
+    let (dir, service) = setup();
+    let alt_key = SigningKey::from_bytes(&[33u8; 32]);
+    let public_hex = encode_lowercase_hex(&alt_key.verifying_key().to_bytes());
+    let public_bytes = alt_key.verifying_key().to_bytes().to_vec();
+    let fingerprint = sha256_hex(&alt_key.verifying_key().to_bytes());
+    let wasm = b"\0asm\x01\x00\x00\x00";
+    let mut manifest = sample_manifest(wasm);
+    manifest.publisher.key_id = "com.user.boundary.keys.1".into();
+    manifest.publisher.key_fingerprint = fingerprint;
+    let manifest_bytes = serde_json::to_vec(&manifest).unwrap();
+    let signature = alt_key.sign(&manifest_bytes).to_bytes().to_vec();
+    let mut cursor = std::io::Cursor::new(Vec::new());
+    {
+      let mut zip = zip::ZipWriter::new(&mut cursor);
+      let options = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+      zip.start_file(MANIFEST_FILE_PATH, options).unwrap();
+      zip.write_all(&manifest_bytes).unwrap();
+      zip.start_file("publisher.pub", options).unwrap();
+      zip.write_all(&public_bytes).unwrap();
+      zip.start_file("artifacts/plugin.wasm", options).unwrap();
+      zip.write_all(wasm).unwrap();
+      zip.start_file(SIGNATURE_FILE_PATH, options).unwrap();
+      zip.write_all(&signature).unwrap();
+      zip.finish().unwrap();
+    }
+    let pkg = cursor.into_inner();
+    let src = dir.path().join("user-boundary.lnplugin");
+    std::fs::write(&src, &pkg).unwrap();
+
+    let preview = service.preview_package(&src).unwrap();
+    assert!(preview.requires_publisher_approval);
+
+    let legacy_payload = serde_json::json!({
+      "previewId": preview.preview_id,
+      "approvePublisher": true,
+      "publisherPublicKeyHex": public_hex,
+      "acknowledgePermissions": true,
+      "setAsDefault": true,
+    });
+    let input: ApprovePluginPackageInput =
+      serde_json::from_value(legacy_payload).expect("legacy setAsDefault must deserialize as ignored field");
+    let result = service
+      .approve_package(input)
+      .expect("user-publisher install must succeed");
+
+    assert!(result.version.content_available);
+    assert!(
+      !result.version.is_default,
+      "public install approval must not set the catalog default"
+    );
+    let default_row = service
+      .db
+      .read(|conn| installed_plugin_versions::get_default(conn, &result.version.plugin_id))
+      .unwrap();
+    assert!(
+      default_row.is_none(),
+      "plugin_default_versions must stay empty after public install"
+    );
+    let policy = service
+      .db
+      .read(|conn| {
+        crate::repositories::default_package_activation_policies::get_policy(conn, &result.version.plugin_id)
+      })
+      .unwrap();
+    assert!(
+      policy.is_none(),
+      "install approval must not create a default activation policy"
+    );
   }
 
   #[test]

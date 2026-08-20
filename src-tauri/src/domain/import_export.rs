@@ -907,6 +907,15 @@ pub const FORBIDDEN_EXPORT_SECRET_KEYS: &[&str] = &[
   "audio_content",
   "mp3Bytes",
   "mp3_bytes",
+  // Default-package activation and subject authority approvals are local trust only.
+  "approvedAuthorityJson",
+  "approved_authority_json",
+  "approvedAuthorityDigest",
+  "approved_authority_digest",
+  "policyConstraintsDigest",
+  "policy_constraints_digest",
+  "claimToken",
+  "claim_token",
 ];
 
 /// Scan serialized export JSON text for forbidden secret/ref keys.

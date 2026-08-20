@@ -92,27 +92,31 @@ impl PluginHostState {
       .grant
       .grants_capability(&self.principal)
       .map_err(map_grant_error_to_broker)?;
-    // Provider-runtime principals carry NO network entries in their grant: origin authority is
-    // host-resolved from the bound provider instance, never package-selected. The fixed
-    // provider-instance endpoint is the only endpoint a provider-runtime request may use, and
-    // only for a package principal without grant network authority. The broker handle then
-    // resolves the exact provider binding before any vault lookup or transport.
-    if request.endpoint_id == crate::domain::runtime_plugin::PROVIDER_RUNTIME_ENDPOINT_ID {
-      if self.grant.network_entries().next().is_none() && self.principal.package_digest().is_some() {
+    // Provider-runtime endpoint: exact network entries bind origin/method/limits when present.
+    // Legacy empty-network grants still use the host-owned shape path for compatibility.
+    // The broker handle then resolves the exact provider binding before any vault lookup or transport.
+    if request.endpoint_id == crate::domain::runtime_plugin::PROVIDER_RUNTIME_ENDPOINT_ID
+      && self.grant.network_entries().next().is_none()
+    {
+      if self.principal.package_digest().is_some() {
         return self.authorize_provider_instance_fetch(request);
       }
       return Err(BrokerFetchError::NotApproved);
     }
-    // Find the network entry matching the principal's capability + requested endpoint.
+    // Find the network entry matching the principal's capability + requested endpoint + method.
+    // Provider grants store one row per method; matching only capability/endpoint would pick GET for POST.
+    let request_method_for_lookup = http_method_from_str(&request.method).ok_or(BrokerFetchError::MethodNotAllowed)?;
     let entry = self
       .grant
       .network_entries()
       .find(|entry| {
-        entry.capability_id() == self.principal.capability_id() && entry.endpoint_id().as_str() == request.endpoint_id
+        entry.capability_id() == self.principal.capability_id()
+          && entry.endpoint_id().as_str() == request.endpoint_id
+          && entry.method() == request_method_for_lookup
       })
       .ok_or(BrokerFetchError::NotApproved)?;
-    // Validate the request method against the grant entry's allowed method.
-    let request_method = http_method_from_str(&request.method).ok_or(BrokerFetchError::MethodNotAllowed)?;
+    // Method already matched in the entry lookup above.
+    let request_method = request_method_for_lookup;
     if entry.method() != request_method {
       return Err(BrokerFetchError::MethodNotAllowed);
     }

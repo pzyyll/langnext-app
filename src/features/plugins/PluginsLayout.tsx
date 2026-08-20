@@ -22,6 +22,7 @@ import { resolvePluginDisplayName, resolvePluginIcon, type PluginTextLookup } fr
 import { AddIntegrationDialog } from "./AddIntegrationDialog";
 import { InstallPluginDialog } from "./InstallPluginDialog";
 import { InstalledPluginVersions } from "./InstalledPluginVersions";
+import { LegacyRuntimeRetirementPanel } from "./LegacyRuntimeRetirementPanel";
 
 /** Footer grows with stacked package-management actions (no fixed single-row height). */
 const panelFooterClassName =
@@ -76,6 +77,7 @@ export function PluginsLayout() {
   const [addOpen, setAddOpen] = useState(false);
   const [installOpen, setInstallOpen] = useState(false);
   const [packagesOpen, setPackagesOpen] = useState(false);
+  const [retirementOpen, setRetirementOpen] = useState(false);
 
   useEffect(() => {
     if (loading || error || selectedId || instances.length === 0) {
@@ -165,6 +167,13 @@ export function PluginsLayout() {
           <Button type="button" className={newInstanceButtonClassName} onClick={() => setPackagesOpen((open) => !open)}>
             {packagesOpen ? t("plugins.packages.hideInstalled") : t("plugins.packages.showInstalled")}
           </Button>
+          <Button
+            type="button"
+            className={newInstanceButtonClassName}
+            onClick={() => setRetirementOpen((open) => !open)}
+          >
+            {retirementOpen ? t("plugins.retirement.hide") : t("plugins.retirement.show")}
+          </Button>
         </div>
       </aside>
 
@@ -178,6 +187,16 @@ export function PluginsLayout() {
           >
             <h2 className="mb-3 text-body-tight font-bold text-on-surface">{t("plugins.packages.installedTitle")}</h2>
             <InstalledPluginVersions />
+          </div>
+        ) : null}
+        {retirementOpen ? (
+          <div
+            className="
+              min-h-0 flex-1 overflow-y-auto border-b border-line p-4
+              lg:border-r lg:border-b-0
+            "
+          >
+            <LegacyRuntimeRetirementPanel />
           </div>
         ) : null}
         <Outlet />

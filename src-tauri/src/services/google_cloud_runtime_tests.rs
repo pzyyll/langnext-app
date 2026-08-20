@@ -3053,3 +3053,155 @@ fn google_cloud_runtime_package_digest_is_stable_and_contains_all_capabilities()
   );
   assert_eq!(fixture.package.package_digest, public_sha256_hex(PACKAGE_BYTES));
 }
+
+fn packages_set_and_authorize_default(fixture: &LifecycleFixture, digest: &str) {
+  use crate::domain::default_package_activation::AuthorizeDefaultPluginPackageInput;
+  use crate::services::default_package_activation::DefaultPackageActivationService;
+
+  fixture
+    .packages
+    .set_default(GOOGLE_CLOUD_PLUGIN_ID, digest)
+    .expect("set catalog default");
+  let activation = DefaultPackageActivationService::create(
+    fixture.db.clone(),
+    fixture.packages.clone(),
+    fixture.packages.app_data_dir(),
+  );
+  let preview = activation
+    .preview_default_package_activation(digest)
+    .expect("preview default");
+  activation
+    .authorize_default_plugin_package(AuthorizeDefaultPluginPackageInput {
+      preview_id: preview.preview_id,
+      acknowledge_future_instance_authority: true,
+    })
+    .expect("authorize default");
+}
+
+#[test]
+fn default_package_activation_integration_google_cloud_create_grant() {
+  use crate::domain::runtime_lifecycle::GrantSubjectKind;
+  use crate::services::default_package_activation::DefaultPackageActivationService;
+
+  let fixture = lifecycle_fixture();
+  let digest = fixture.package_digest.clone();
+  packages_set_and_authorize_default(&fixture, &digest);
+
+  let activation = DefaultPackageActivationService::create(
+    fixture.db.clone(),
+    fixture.packages.clone(),
+    fixture.packages.app_data_dir(),
+  )
+  .with_integration_lifecycle(fixture.lifecycle.clone());
+  let service = ServiceIntegrationService::new(
+    fixture.db.clone(),
+    fixture.vault.clone(),
+    fixture.registry.clone(),
+    fixture.tokens.clone(),
+  )
+  .with_runtime_lifecycle(fixture.lifecycle.clone())
+  .with_default_package_activation(activation.clone());
+
+  let dto = service
+    .save(IntegrationInstanceWrite {
+      id: None,
+      plugin_id: GOOGLE_CLOUD_PLUGIN_ID.into(),
+      display_name: "Package-first Google Cloud".into(),
+      enabled: true,
+      config_json: String::from_utf8(config()).unwrap(),
+      credentials: vec![],
+      expected_updated_at: None,
+      endpoint_trust_preview_id: None,
+      acknowledge_endpoint_trust: false,
+    })
+    .expect("package-first create");
+
+  assert_eq!(dto.runtime_kind, "wasm-component");
+  assert_eq!(dto.package_digest.as_deref(), Some(digest.as_str()));
+  assert_eq!(dto.runtime_state, "pending_activation");
+  assert!(dto.execution_grant_set_revision.is_none());
+
+  activation
+    .activate_pending_subject(GrantSubjectKind::IntegrationInstance, dto.id)
+    .expect("package-first activation");
+  let active = service.get_instance(dto.id).unwrap();
+  assert_eq!(active.package_digest.as_deref(), Some(digest.as_str()));
+  // Grant may require credentials for full activation; package identity must never fall back.
+  assert_ne!(active.runtime_kind, "bundled-rust");
+  if active.execution_grant_set_revision.is_some() {
+    assert_eq!(active.runtime_state, "active");
+  }
+}
+
+#[test]
+fn default_package_activation_integration_google_cloud_delete_race() {
+  use crate::domain::runtime_lifecycle::GrantSubjectKind;
+  use crate::error::StorageError;
+  use crate::services::default_package_activation::DefaultPackageActivationService;
+  use std::sync::mpsc;
+
+  let fixture = lifecycle_fixture();
+  let digest = fixture.package_digest.clone();
+  packages_set_and_authorize_default(&fixture, &digest);
+
+  let activation = DefaultPackageActivationService::create(
+    fixture.db.clone(),
+    fixture.packages.clone(),
+    fixture.packages.app_data_dir(),
+  )
+  .with_integration_lifecycle(fixture.lifecycle.clone());
+  let service = ServiceIntegrationService::new(
+    fixture.db.clone(),
+    fixture.vault.clone(),
+    fixture.registry.clone(),
+    fixture.tokens.clone(),
+  )
+  .with_runtime_lifecycle(fixture.lifecycle.clone())
+  .with_default_package_activation(activation.clone());
+
+  let dto = service
+    .save(IntegrationInstanceWrite {
+      id: None,
+      plugin_id: GOOGLE_CLOUD_PLUGIN_ID.into(),
+      display_name: "Race Google Cloud".into(),
+      enabled: true,
+      config_json: String::from_utf8(config()).unwrap(),
+      credentials: vec![],
+      expected_updated_at: None,
+      endpoint_trust_preview_id: None,
+      acknowledge_endpoint_trust: false,
+    })
+    .expect("package-first create");
+
+  let (at_seam_tx, at_seam_rx) = mpsc::channel();
+  let (release_tx, release_rx) = mpsc::channel();
+  fixture
+    .lifecycle
+    .set_auto_pin_after_final_revalidate_hook(Some(Box::new(move || {
+      let _ = at_seam_tx.send(());
+      let _ = release_rx.recv();
+    })));
+
+  let activation_worker = activation.clone();
+  let subject_id = dto.id;
+  let handle = std::thread::spawn(move || {
+    activation_worker.activate_pending_subject(GrantSubjectKind::IntegrationInstance, subject_id)
+  });
+
+  at_seam_rx.recv().expect("activation reached final revalidate");
+  // Delete during activation: must not resurrect.
+  let _ = service.delete(dto.id);
+  let _ = release_tx.send(());
+  let _ = handle.join().expect("activation thread");
+
+  let gone = fixture.db.read(|conn| match integration_instances::get(conn, dto.id) {
+    Ok(instance) => Ok(Some(instance)),
+    Err(StorageError::NotFound(_)) => Ok(None),
+    Err(err) => Err(err),
+  });
+  assert!(
+    matches!(gone, Ok(None)),
+    "deleted subject must not be resurrected by activation: {gone:?}"
+  );
+  let _ = digest;
+}

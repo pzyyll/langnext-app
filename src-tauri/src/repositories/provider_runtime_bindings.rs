@@ -165,6 +165,61 @@ pub fn update(conn: &Connection, binding: &ProviderRuntimeBinding) -> Result<(),
   Ok(())
 }
 
+/// Exact CAS for authority confirmation / package-first activation of a provider binding.
+///
+/// Matches provider ID, adapter ID, package digest, current state, no grant, and update token.
+/// Fails closed when any expected binding field has changed.
+pub fn compare_and_set_pending_activation(
+  conn: &Connection,
+  provider_id: Uuid,
+  adapter_id: &str,
+  expected_package_digest: &str,
+  expected_state: ProviderRuntimeState,
+  expected_updated_at: &str,
+  next: &ProviderRuntimeBinding,
+) -> Result<(), StorageError> {
+  let changed = conn
+    .execute(
+      "UPDATE provider_runtime_bindings SET
+        runtime_kind = ?3,
+        package_digest = ?4,
+        grant_set_revision = ?5,
+        state = ?6,
+        error_code = ?7,
+        error_message = ?8,
+        runtime_requirement_json = ?9,
+        updated_at = ?10
+       WHERE provider_id = ?1
+         AND adapter_id = ?2
+         AND package_digest = ?11
+         AND state = ?12
+         AND grant_set_revision IS NULL
+         AND updated_at = ?13",
+      params![
+        provider_id.to_string(),
+        adapter_id,
+        next.runtime_kind.as_str(),
+        next.package_digest,
+        next.grant_set_revision.map(|revision| revision as i64),
+        next.state.as_str(),
+        next.error_code,
+        next.error_message,
+        next.runtime_requirement_json,
+        next.updated_at,
+        expected_package_digest,
+        expected_state.as_str(),
+        expected_updated_at,
+      ],
+    )
+    .map_err(|e| StorageError::from_sqlite_constraint(e, "provider runtime binding CAS"))?;
+  if changed == 0 {
+    return Err(StorageError::Conflict(format!(
+      "provider runtime binding {provider_id} adapter {adapter_id} changed before activation CAS"
+    )));
+  }
+  Ok(())
+}
+
 /// Remove one adapter-keyed interface binding.
 pub fn delete(conn: &Connection, provider_id: Uuid, adapter_id: &str) -> Result<(), StorageError> {
   let changed = conn.execute(

@@ -18,6 +18,8 @@ export interface ProviderRuntimePresentation {
   /** Catalog package version for the bound package; null for legacy or missing entries. */
   version: string | null;
   state: ProviderRuntimeState;
+  /** True when Get Models, connection tests, and other ready-runtime actions must stay disabled. */
+  disableReadyActions: boolean;
   actions: {
     /** Preview an upgrade is possible only from a legacy binding with a matching catalog package. */
     canPreview: boolean;
@@ -46,6 +48,8 @@ export function presentProviderRuntime(input: {
       runtimeKind: "legacy-frontend-provider",
       version: null,
       state: binding.state,
+      // Legacy executor remains ready for connection/model actions until its retirement gate lands.
+      disableReadyActions: false,
       actions: { canPreview: catalogEntry != null, canApply: false, canRollback: false },
     };
   }
@@ -58,6 +62,7 @@ export function presentProviderRuntime(input: {
       runtimeKind: "wasm-component",
       version,
       state: binding.state,
+      disableReadyActions: true,
       actions: { canPreview: false, canApply: true, canRollback: true },
     };
   }
@@ -67,6 +72,8 @@ export function presentProviderRuntime(input: {
       runtimeKind: "wasm-component",
       version,
       state: binding.state,
+      // Missing catalog content keeps the binding non-ready even when state is still "active".
+      disableReadyActions: catalogEntry == null,
       actions: rollbackOnly,
     };
   }
@@ -75,6 +82,7 @@ export function presentProviderRuntime(input: {
     runtimeKind: "wasm-component",
     version,
     state: binding.state,
+    disableReadyActions: true,
     actions: rollbackOnly,
   };
 }

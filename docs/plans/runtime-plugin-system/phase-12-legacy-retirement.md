@@ -22,6 +22,7 @@
 - Runtime replacements from Phases 5–8 stable for one release.
 - Phase 11 export/recovery available.
 - Phase 11.5 default authorization and package-first creation complete for every executor in retirement scope.
+- Inventory must report authorized-default readiness, package-first create readiness, pending/unavailable activation counts, and last legacy-create capability before any executor retirement gate opens.
 
 ## File Map
 

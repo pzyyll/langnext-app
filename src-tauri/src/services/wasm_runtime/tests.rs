@@ -1183,7 +1183,9 @@ mod wasm_host_imports {
     let mut request = approved_request();
     request.method = "POST".into();
     let outcome = state.do_broker_fetch(request).await;
-    assert!(matches!(outcome.unwrap_err(), BrokerFetchError::MethodNotAllowed));
+    // Grant entries are keyed by capability/endpoint/method; a method mismatch is a lookup
+    // miss and denies with NotApproved (never executes and never leaks MethodNotAllowed).
+    assert!(matches!(outcome.unwrap_err(), BrokerFetchError::NotApproved));
   }
 
   #[tokio::test]

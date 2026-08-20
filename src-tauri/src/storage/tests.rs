@@ -13,6 +13,204 @@ fn temp_db() -> (tempfile::TempDir, Database) {
 }
 
 #[test]
+#[test]
+fn migration_0030_preserves_enabled_legacy_rows_and_dependencies() {
+  use crate::domain::provider::{AuthSchemeV1, BaseUrlSource, CredentialKind, ModelsSyncStatus, ProxyMode};
+  use crate::domain::runtime_provider::{ProviderRuntimeKind, ProviderRuntimeState, legacy_frontend_binding};
+  use crate::domain::service_integration::{
+    GOOGLE_TRANSLATE_WEB_PLUGIN_ID, IntegrationHealthStatus, IntegrationInstance,
+  };
+  use crate::domain::speech_service::SpeechService;
+  use crate::domain::time::{new_id, now_rfc3339};
+  use crate::repositories::{integration_instances, provider_instances, provider_runtime_bindings, speech_services};
+  use uuid::Uuid;
+
+  let (_dir, db) = temp_db();
+  let now = now_rfc3339();
+  let enabled_legacy = new_id();
+  let disabled_legacy = new_id();
+  let package_backed = new_id();
+  let unrelated_legacy = new_id();
+  let provider_legacy_binding = Uuid::now_v7();
+  let provider_wasm_only = Uuid::now_v7();
+  let provider_disabled_legacy = Uuid::now_v7();
+
+  db.transaction(|uow| {
+    let instance = |id: Uuid, plugin_id: &str, enabled: bool, runtime_kind: &str, digest: Option<&str>| {
+      integration_instances::insert(
+        uow.conn(),
+        &IntegrationInstance {
+          id,
+          plugin_id: plugin_id.into(),
+          plugin_version: "1.0.0".into(),
+          display_name: "fixture".into(),
+          enabled,
+          config_json: "{}".into(),
+          config_schema_version: 1,
+          health_status: IntegrationHealthStatus::Unconfigured,
+          last_validated_at: None,
+          last_error_code: None,
+          runtime_kind: runtime_kind.into(),
+          package_digest: digest.map(Into::into),
+          execution_grant_set_revision: digest.map(|_| 1),
+          runtime_state: "active".into(),
+          runtime_error_code: None,
+          runtime_error_message: None,
+          runtime_requirement_json: None,
+          created_at: now.clone(),
+          updated_at: now.clone(),
+        },
+      )
+    };
+    instance(
+      enabled_legacy,
+      GOOGLE_TRANSLATE_WEB_PLUGIN_ID,
+      true,
+      "bundled-rust",
+      None,
+    )?;
+    instance(
+      disabled_legacy,
+      GOOGLE_TRANSLATE_WEB_PLUGIN_ID,
+      false,
+      "bundled-rust",
+      None,
+    )?;
+    instance(
+      package_backed,
+      GOOGLE_TRANSLATE_WEB_PLUGIN_ID,
+      true,
+      "wasm-component",
+      Some("digest"),
+    )?;
+    instance(unrelated_legacy, "com.unrelated.executor", true, "bundled-rust", None)?;
+    speech_services::insert(
+      uow.conn(),
+      &SpeechService {
+        id: new_id(),
+        display_name: "dep on enabled legacy".into(),
+        enabled: true,
+        sort_order: 0,
+        integration_instance_id: enabled_legacy,
+        capability_id: "speech.synthesize@1".into(),
+        preferences_schema_version: 1,
+        preferences: serde_json::json!({}),
+        created_at: now.clone(),
+        updated_at: now.clone(),
+      },
+    )?;
+
+    let provider = |id: Uuid, enabled: bool| {
+      provider_instances::insert(
+        uow.conn(),
+        &crate::domain::provider::ProviderInstance {
+          id,
+          adapter_id: "openai-compatible".into(),
+          display_name: "fixture provider".into(),
+          base_url: "https://api.openai.com/v1".into(),
+          base_url_source: BaseUrlSource::PluginDefault,
+          auth_scheme: AuthSchemeV1::none(),
+          credential_kind: CredentialKind::None,
+          credential_ref: None,
+          enabled,
+          proxy_mode: ProxyMode::Inherit,
+          insecure_http_confirmed_at: None,
+          models_synced_at: None,
+          models_sync_status: ModelsSyncStatus::Never,
+          models_sync_error_code: None,
+          created_at: now.clone(),
+          updated_at: now.clone(),
+        },
+      )
+    };
+    provider(provider_legacy_binding, true)?;
+    provider(provider_wasm_only, true)?;
+    provider(provider_disabled_legacy, false)?;
+    provider_runtime_bindings::insert(
+      uow.conn(),
+      &legacy_frontend_binding(provider_legacy_binding, "openai-compatible", &now),
+    )?;
+    provider_runtime_bindings::insert(
+      uow.conn(),
+      &legacy_frontend_binding(provider_disabled_legacy, "openai-compatible", &now),
+    )?;
+    let wasm_binding = crate::domain::runtime_provider::ProviderRuntimeBinding {
+      provider_id: provider_wasm_only,
+      adapter_id: "openai-compatible".into(),
+      runtime_kind: ProviderRuntimeKind::WasmComponent,
+      package_digest: Some("digest".into()),
+      grant_set_revision: Some(1),
+      state: ProviderRuntimeState::Active,
+      error_code: None,
+      error_message: None,
+      runtime_requirement_json: None,
+      created_at: now.clone(),
+      updated_at: now.clone(),
+    };
+    provider_runtime_bindings::insert(uow.conn(), &wasm_binding)?;
+    Ok::<_, crate::error::StorageError>(())
+  })
+  .expect("fixture");
+
+  db.write(|conn| {
+    conn
+      .execute_batch(include_str!(
+        "../../migrations/0030_disable_retired_legacy_runtimes.sql"
+      ))
+      .map_err(crate::error::StorageError::from)
+  })
+  .expect("migration 0030 applies");
+
+  db.read(|conn| {
+    let is_enabled = |id: Uuid| -> bool {
+      let v: i64 = conn
+        .query_row(
+          "SELECT enabled FROM integration_instances WHERE id = ?1",
+          [id.to_string()],
+          |r| r.get(0),
+        )
+        .unwrap();
+      v != 0
+    };
+    assert!(is_enabled(enabled_legacy), "enabled legacy integration stays enabled");
+    assert!(
+      !is_enabled(disabled_legacy),
+      "disabled legacy integration stays disabled"
+    );
+    assert!(is_enabled(package_backed), "package-backed row must stay enabled");
+    assert!(is_enabled(unrelated_legacy), "unrelated bundled executor stays enabled");
+    let count = |table: &str| -> i64 {
+      conn
+        .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+        .unwrap()
+    };
+    assert_eq!(count("integration_instances"), 4, "no integration row is deleted");
+    assert_eq!(count("speech_services"), 1, "no dependency is deleted");
+    assert_eq!(count("provider_runtime_bindings"), 3, "no binding is deleted");
+    let provider_enabled = |id: Uuid| -> bool {
+      let v: i64 = conn
+        .query_row(
+          "SELECT enabled FROM provider_instances WHERE id = ?1",
+          [id.to_string()],
+          |r| r.get(0),
+        )
+        .unwrap();
+      v != 0
+    };
+    assert!(
+      provider_enabled(provider_legacy_binding),
+      "provider with legacy binding stays enabled"
+    );
+    assert!(provider_enabled(provider_wasm_only), "wasm-only provider stays enabled");
+    assert!(
+      !provider_enabled(provider_disabled_legacy),
+      "disabled provider stays disabled"
+    );
+    Ok(())
+  })
+  .unwrap();
+}
+
 fn fresh_creation_and_reopen_idempotent() {
   let dir = tempfile::tempdir().unwrap();
   let db = Database::new(dir.path()).unwrap();
@@ -36,7 +234,7 @@ fn user_version_is_latest() {
   let (_dir, db) = temp_db();
   db.read(|conn| {
     assert_eq!(read_user_version(conn).unwrap(), latest_version());
-    assert_eq!(latest_version(), 26);
+    assert_eq!(latest_version(), 30);
     Ok(())
   })
   .unwrap();
@@ -307,7 +505,7 @@ fn reject_corrupt_database_on_probe() {
 
 #[test]
 fn migrations_module_latest_version() {
-  assert_eq!(migrations::latest_version(), 26);
+  assert_eq!(migrations::latest_version(), 30);
 }
 
 #[test]
@@ -658,6 +856,29 @@ mod runtime_plugin_security {
       registered, reviewed,
       "permissions/app-commands.toml must review exactly the registered app commands"
     );
+  }
+
+  /// Default package mutation must use preview/authorize only; direct digest set is removed.
+  #[test]
+  fn runtime_plugin_security_default_package_mutation_requires_preview_authorize() {
+    let registered = generate_handler_commands();
+    let autogenerated = autogenerated_commands();
+    let permission_sets = custom_permission_sets();
+    let reviewed = reviewed_app_commands(&permission_sets);
+    for surface in [&registered, &autogenerated, &reviewed] {
+      assert!(
+        surface.contains("preview_default_package_activation"),
+        "preview_default_package_activation must remain on the trusted IPC surface"
+      );
+      assert!(
+        surface.contains("authorize_default_plugin_package"),
+        "authorize_default_plugin_package must remain on the trusted IPC surface"
+      );
+      assert!(
+        !surface.contains("set_default_plugin_package"),
+        "set_default_plugin_package must not remain on the trusted IPC surface"
+      );
+    }
   }
 
   #[test]

@@ -552,6 +552,20 @@ impl ImportExportService {
       } else {
         integration_instances::insert(conn, instance)?;
       }
+      // Package-backed imports stay confirmation-required and never auto-activate.
+      // Intent rows exact-bind package_digest, so only installed packages receive provenance.
+      if let Some(digest) = instance.package_digest.as_deref()
+        && crate::repositories::installed_plugin_versions::get_optional(conn, digest)?.is_some()
+      {
+        crate::services::default_package_activation::DefaultPackageActivationService::insert_import_requires_confirmation_intent_on_conn(
+          conn,
+          crate::domain::runtime_lifecycle::GrantSubjectKind::IntegrationInstance,
+          instance.id,
+          digest,
+          Some(&crate::domain::plugin_package::sha256_hex(instance.config_json.as_bytes())),
+          Some(&instance.updated_at),
+        )?;
+      }
     }
 
     // Providers
@@ -610,6 +624,18 @@ impl ImportExportService {
           .to_string();
         declared_adapters.insert(adapter_id.clone());
         upsert_provider_runtime_binding(conn, *provider_id, &adapter_id, requirement, &now)?;
+        if let Some(digest) = requirement.package_digest.as_deref()
+          && crate::repositories::installed_plugin_versions::get_optional(conn, digest)?.is_some()
+        {
+          crate::services::default_package_activation::DefaultPackageActivationService::insert_import_requires_confirmation_intent_on_conn(
+            conn,
+            crate::domain::runtime_lifecycle::GrantSubjectKind::ProviderInstance,
+            *provider_id,
+            digest,
+            None,
+            Some(&now),
+          )?;
+        }
       }
       // Collection reconciliation: removed adapters are deleted, and any pre-existing
       // identity the same adapter no longer carries (replaced package/revision) has its

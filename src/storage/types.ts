@@ -834,7 +834,154 @@ export interface ApprovePluginPackageInput {
   approvePublisher?: boolean;
   publisherPublicKeyHex?: string | null;
   acknowledgePermissions: boolean;
-  setAsDefault?: boolean;
+}
+
+/** Authorization status of a catalog default for package-first creation. */
+export type DefaultPackageAuthorizationStatus =
+  | "absent"
+  | "unauthorized"
+  | "authorized"
+  | "stale"
+  | "confirmation_required";
+
+export interface DefaultAuthorityNetworkEntryDto {
+  capabilityId: string;
+  endpointId: string;
+  origin: string;
+  /** Normalized base URL bound into the authority digest; never raw config secrets. */
+  baseUrl: string;
+  method: string;
+  authPolicy: string;
+  originKind: string;
+  /** Canonical response-body modes bound into the authority digest. */
+  responseBodyModes: string;
+  resourceLimits?: DefaultAuthorityResourceLimitsDto | null;
+}
+
+export interface DefaultAuthorityResourceLimitsDto {
+  maxRequestBytes: number;
+  maxResponseBytes: number;
+  maxStreamBytes: number;
+  timeoutMs: number;
+}
+
+export interface DefaultPackageActivationPreviewDto {
+  previewId: string;
+  pluginId: string;
+  packageDigest: string;
+  version: string;
+  publisherKeyId: string;
+  publisherFingerprint: string;
+  runtimeKind: string;
+  permissionRequestDigest: string;
+  capabilities: string[];
+  fixedNetworkAuthority: DefaultAuthorityNetworkEntryDto[];
+  dynamicAuthorityWarnings: string[];
+  authPolicies: string[];
+  resourceLimits?: DefaultAuthorityResourceLimitsDto | null;
+  requiresInstanceConfirmationForDynamicOrigins: boolean;
+  expiresAt: string;
+}
+
+export interface AuthorizeDefaultPluginPackageInput {
+  previewId: string;
+  acknowledgeFutureInstanceAuthority: boolean;
+}
+
+export interface RetryDefaultRuntimeActivationInput {
+  subjectKind: "integration_instance" | "provider_instance";
+  subjectId: string;
+}
+
+export interface PreviewDefaultRuntimeAuthorityInput {
+  subjectKind: "integration_instance" | "provider_instance";
+  subjectId: string;
+}
+
+export interface ConfirmDefaultRuntimeAuthorityInput {
+  previewId: string;
+  acknowledgeAdditionalAuthority: boolean;
+}
+
+export interface DefaultRuntimeAuthorityPreviewDto {
+  previewId: string;
+  subjectKind: "integration_instance" | "provider_instance";
+  subjectId: string;
+  packageDigest: string;
+  expectedUpdateToken: string;
+  configDigest: string;
+  additionalNetworkAuthority: DefaultAuthorityNetworkEntryDto[];
+  authPolicies: string[];
+  resourceLimits?: DefaultAuthorityResourceLimitsDto | null;
+  expiresAt: string;
+}
+
+export interface DefaultRuntimeActivationIntentDto {
+  id: string;
+  subjectKind: "integration_instance" | "provider_instance";
+  subjectId: string;
+  packageDigest: string;
+  source: "local_creation" | "import_requires_confirmation";
+  state: "pending" | "confirmation_required" | "activating" | "completed" | "failed" | "cancelled";
+  expectedConfigDigest?: string | null;
+  expectedUpdateToken?: string | null;
+  errorCode?: string | null;
+  errorMessage?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Read-only Phase 12 retirement inventory entry. */
+export interface LegacyRuntimeInventoryEntryDto {
+  executorId: string;
+  runtimeKind: string;
+  enabledLegacyRowCount: number;
+  disabledLegacyRowCount: number;
+  dependentRowCount: number;
+  replacementInstalledCount: number;
+  defaultPackageDigest?: string | null;
+  defaultAuthorizationStatus: string;
+  packageFirstCreateReady: boolean;
+  pendingActivationCount: number;
+  unavailableActivationCount: number;
+  legacyCreateStillPossible: boolean;
+  blockerCodes: string[];
+  retirementReady: boolean;
+  /** Row-level unresolved legacy identities and remediation action readiness. */
+  unresolvedRows: LegacyRuntimeUnresolvedRowDto[];
+}
+
+/** One unresolved legacy row with sanitized identity and action readiness. */
+export interface LegacyRuntimeUnresolvedRowDto {
+  subjectKind: "integration_instance" | "provider_binding";
+  subjectId: string;
+  /** Provider rows carry the binding adapter id; integration rows omit it. */
+  adapterId?: string | null;
+  displayName: string;
+  enabled: boolean;
+  /** Live dependent resources (profiles/OCR/speech for integrations; models for providers). */
+  dependencyCount: number;
+  /** CAS update token for enabled/disabled transitions; never a secret. */
+  updateToken: string;
+  /** Exact authorized replacement package digest when migration is possible. */
+  replacementPackageDigest?: string | null;
+  /** Migration requires an exact authorized replacement package for the executor. */
+  migrateAvailable: boolean;
+  /** Disable is meaningful only for currently enabled rows. */
+  disableAvailable: boolean;
+  /** Delete stays visible with dependencies; blocked rows report `dependencyCount`. */
+  deleteAvailable: boolean;
+}
+
+/** Retirement-only safe provider deletion input (CAS by the inventory binding token). */
+export interface RetirementDeleteProviderInput {
+  providerId: string;
+  adapterId: string;
+  updateToken: string;
+}
+
+export interface LegacyRuntimeInventoryDto {
+  entries: LegacyRuntimeInventoryEntryDto[];
 }
 
 export interface InstalledPluginVersionDto {
@@ -847,6 +994,8 @@ export interface InstalledPluginVersionDto {
   permissionRequestDigest: string;
   contentAvailable: boolean;
   isDefault: boolean;
+  /** Catalog default authorization; not an executable grant. */
+  defaultAuthorizationStatus: DefaultPackageAuthorizationStatus;
   inUse: boolean;
   installedAt: string;
   capabilities: string[];

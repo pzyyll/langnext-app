@@ -825,10 +825,12 @@ fn paddleocr_health_validate_db_manifest_divergence_uses_signed_first_model() {
       approve_publisher: false,
       publisher_public_key_hex: None,
       acknowledge_permissions: true,
-      set_as_default: true,
     })
     .expect("approve");
   let package_digest = approved.version.package_digest;
+  packages
+    .set_default(&approved.version.plugin_id, &package_digest)
+    .expect("paddleocr fixture pins catalog default after install");
 
   let now = now_rfc3339();
   let instance_id = Uuid::now_v7();
@@ -1042,4 +1044,288 @@ fn assert_paddleocr_health_publisher_gate(label: &str, mutate: impl FnOnce(&Data
     Some(crate::domain::plugin_model::PluginModelErrorCode::ModelMissing.as_str()),
     "{label}: stable model_missing code when publisher gate fails"
   );
+}
+
+/// Install a vendor-signed PaddleOCR package, authorize it as default, and return helpers.
+fn install_and_authorize_paddleocr_default(
+  dir: &TempDir,
+) -> (
+  Database,
+  crate::services::plugin_store::PluginPackageService,
+  crate::services::default_package_activation::DefaultPackageActivationService,
+  String,
+) {
+  use crate::domain::default_package_activation::AuthorizeDefaultPluginPackageInput;
+  use crate::domain::plugin_package::ApprovePluginPackageInput;
+  use crate::domain::runtime_plugin::{
+    CapabilityDeclaration, FileRole, PackageTargetConstraint, PermissionRequests, PluginFileEntry, PluginManifestV1,
+    PublisherDeclaration, RuntimeDescriptor, RuntimeKind,
+  };
+  use crate::services::default_package_activation::DefaultPackageActivationService;
+  use crate::services::plugin_package::test_support::build_signed_package_with_key;
+  use crate::services::plugin_store::PluginPackageService;
+  use crate::services::vendor_trust::test_vendor_fixture::{fixture_vendor_public_key, fixture_vendor_signing_key};
+
+  let db = test_db(dir.path());
+  let packages =
+    PluginPackageService::with_vendor_roots(db.clone(), dir.path().to_path_buf(), vec![fixture_vendor_public_key()]);
+  let model = paddleocr_medium_model_resource(LICENSE_NOTICE);
+  let manifest = PluginManifestV1 {
+    manifest_version: 1,
+    plugin_api_version: "1.0".into(),
+    id: PADDLEOCR_PLUGIN_ID.into(),
+    version: "1.0.0".into(),
+    publisher: PublisherDeclaration {
+      key_id: VENDOR_PUBLISHER_KEY_ID.into(),
+      key_fingerprint: test_vendor_fixture::fixture_vendor_fingerprint(),
+    },
+    runtime: RuntimeDescriptor {
+      kind: RuntimeKind::TrustedNativeWorker,
+      artifact: Some(crate::domain::native_worker::NATIVE_WORKER_ARTIFACT_PATH.into()),
+      native_protocol_version: Some(crate::domain::native_worker::NATIVE_PROTOCOL_VERSION_V1),
+      native_dependencies: Some(vec![DLL_A.into(), DLL_B.into()]),
+    },
+    targets: vec![PackageTargetConstraint {
+      platform: "windows".into(),
+      architecture: "x86_64".into(),
+    }],
+    files: vec![
+      PluginFileEntry {
+        path: crate::domain::native_worker::NATIVE_WORKER_ARTIFACT_PATH.into(),
+        role: FileRole::RuntimeArtifact,
+        bytes: WORKER_BYTES.len() as u64,
+        sha256: sha256_hex(WORKER_BYTES),
+      },
+      PluginFileEntry {
+        path: DLL_A.into(),
+        role: FileRole::RuntimeArtifact,
+        bytes: 1,
+        sha256: sha256_hex(b"a"),
+      },
+      PluginFileEntry {
+        path: DLL_B.into(),
+        role: FileRole::RuntimeArtifact,
+        bytes: 1,
+        sha256: sha256_hex(b"b"),
+      },
+      PluginFileEntry {
+        path: LICENSE_NOTICE.into(),
+        role: FileRole::License,
+        bytes: 1,
+        sha256: sha256_hex(b"n"),
+      },
+    ],
+    capabilities: vec![CapabilityDeclaration {
+      id: OCR_IMAGE_CAPABILITY_ID.into(),
+      preferences_schema: None,
+      artifact: None,
+    }],
+    configuration_schema: None,
+    config_schema_version: None,
+    credential_slots: vec![],
+    permissions: PermissionRequests {
+      network: vec![],
+      auth_policies: vec![],
+    },
+    ui: Default::default(),
+    provider_runtime: None,
+    model_resources: Some(vec![model]),
+  };
+  let files = vec![
+    (crate::domain::native_worker::NATIVE_WORKER_ARTIFACT_PATH, WORKER_BYTES),
+    (DLL_A, b"a".as_slice()),
+    (DLL_B, b"b".as_slice()),
+    (LICENSE_NOTICE, b"n".as_slice()),
+  ];
+  let archive = build_signed_package_with_key(&manifest, &files, &fixture_vendor_signing_key());
+  let package_path = dir.path().join("paddleocr-default.lnplugin");
+  std::fs::write(&package_path, &archive).unwrap();
+  let preview = packages.preview_package(&package_path).expect("preview");
+  let approved = packages
+    .approve_package(ApprovePluginPackageInput {
+      preview_id: preview.preview_id,
+      approve_publisher: false,
+      publisher_public_key_hex: None,
+      acknowledge_permissions: true,
+    })
+    .expect("approve");
+  let digest = approved.version.package_digest.clone();
+  packages
+    .set_default(PADDLEOCR_PLUGIN_ID, &digest)
+    .expect("set catalog default");
+  let activation = DefaultPackageActivationService::create(db.clone(), packages.clone(), dir.path());
+  let preview = activation
+    .preview_default_package_activation(&digest)
+    .expect("preview default activation");
+  activation
+    .authorize_default_plugin_package(AuthorizeDefaultPluginPackageInput {
+      preview_id: preview.preview_id,
+      acknowledge_future_instance_authority: true,
+    })
+    .expect("authorize default");
+  (db, packages, activation, digest)
+}
+
+#[test]
+fn default_package_activation_integration_paddleocr_create_grant() {
+  use crate::credentials::MemoryCredentialVault;
+  use crate::domain::runtime_lifecycle::GrantSubjectKind;
+  use crate::domain::service_integration::{IntegrationCapabilityDescriptor, ServiceIntegrationManifest};
+  use crate::services::runtime_lifecycle::RuntimeLifecycleService;
+  use crate::services::service_integration_registry::ServiceIntegrationRegistry;
+  use crate::services::service_integrations::ServiceIntegrationService;
+  use crate::services::token_grant::TokenGrantService;
+  use std::sync::Arc;
+
+  let dir = TempDir::new().unwrap();
+  let (db, packages, activation, digest) = install_and_authorize_paddleocr_default(&dir);
+
+  let mut registry = ServiceIntegrationRegistry::empty();
+  registry.register_test_manifest(ServiceIntegrationManifest {
+    manifest_version: 1,
+    plugin_api_version: "1.0".into(),
+    id: PADDLEOCR_PLUGIN_ID.into(),
+    version: "1.0.0".into(),
+    display_name_key: "paddleocr".into(),
+    min_host_version: "0.1.0".into(),
+    config_schema_version: 1,
+    credential_slots: vec![],
+    endpoints: vec![],
+    capabilities: vec![IntegrationCapabilityDescriptor {
+      id: OCR_IMAGE_CAPABILITY_ID.into(),
+      preferences_schema_version: 1,
+      endpoint_aliases: vec![],
+    }],
+  });
+  let registry = Arc::new(registry);
+  let lifecycle = RuntimeLifecycleService::new(db.clone(), packages.clone(), registry.clone());
+  let activation = activation.with_integration_lifecycle(lifecycle.clone());
+  let vault = Arc::new(MemoryCredentialVault::default());
+  let tokens = Arc::new(TokenGrantService::new(Arc::new(
+    crate::services::google_service_account::GoogleServiceAccountExchanger::new(db.clone(), vault.clone()),
+  )));
+  let service = ServiceIntegrationService::new(db, vault, registry, tokens)
+    .with_runtime_lifecycle(lifecycle)
+    .with_default_package_activation(activation.clone());
+
+  let dto = service
+    .save(crate::domain::service_integration::IntegrationInstanceWrite {
+      id: None,
+      plugin_id: PADDLEOCR_PLUGIN_ID.into(),
+      display_name: "Package-first PaddleOCR".into(),
+      enabled: true,
+      config_json: "{}".into(),
+      credentials: vec![],
+      expected_updated_at: None,
+      endpoint_trust_preview_id: None,
+      acknowledge_endpoint_trust: false,
+    })
+    .expect("package-first create");
+
+  assert_eq!(dto.runtime_kind, "trusted-native-worker");
+  assert_eq!(dto.package_digest.as_deref(), Some(digest.as_str()));
+  assert_eq!(dto.runtime_state, "pending_activation");
+  assert!(dto.execution_grant_set_revision.is_none());
+  assert_ne!(dto.runtime_kind, "bundled-rust");
+
+  activation
+    .activate_pending_subject(GrantSubjectKind::IntegrationInstance, dto.id)
+    .expect("package-first activation");
+  let after = service.get_instance(dto.id).unwrap();
+  assert_eq!(after.package_digest.as_deref(), Some(digest.as_str()));
+  assert_ne!(after.runtime_kind, "bundled-rust");
+  if after.execution_grant_set_revision.is_some() {
+    assert_eq!(after.runtime_state, "active");
+  }
+}
+
+#[test]
+fn default_package_activation_integration_paddleocr_upgrade_race() {
+  use crate::credentials::MemoryCredentialVault;
+  use crate::domain::runtime_lifecycle::GrantSubjectKind;
+  use crate::domain::service_integration::{IntegrationCapabilityDescriptor, ServiceIntegrationManifest};
+  use crate::services::runtime_lifecycle::RuntimeLifecycleService;
+  use crate::services::service_integration_registry::ServiceIntegrationRegistry;
+  use crate::services::service_integrations::ServiceIntegrationService;
+  use crate::services::token_grant::TokenGrantService;
+  use std::sync::{Arc, mpsc};
+
+  let dir = TempDir::new().unwrap();
+  let (db, packages, activation, digest) = install_and_authorize_paddleocr_default(&dir);
+
+  let mut registry = ServiceIntegrationRegistry::empty();
+  registry.register_test_manifest(ServiceIntegrationManifest {
+    manifest_version: 1,
+    plugin_api_version: "1.0".into(),
+    id: PADDLEOCR_PLUGIN_ID.into(),
+    version: "1.0.0".into(),
+    display_name_key: "paddleocr".into(),
+    min_host_version: "0.1.0".into(),
+    config_schema_version: 1,
+    credential_slots: vec![],
+    endpoints: vec![],
+    capabilities: vec![IntegrationCapabilityDescriptor {
+      id: OCR_IMAGE_CAPABILITY_ID.into(),
+      preferences_schema_version: 1,
+      endpoint_aliases: vec![],
+    }],
+  });
+  let registry = Arc::new(registry);
+  let lifecycle = RuntimeLifecycleService::new(db.clone(), packages.clone(), registry.clone());
+  let activation = activation.with_integration_lifecycle(lifecycle.clone());
+  let vault = Arc::new(MemoryCredentialVault::default());
+  let tokens = Arc::new(TokenGrantService::new(Arc::new(
+    crate::services::google_service_account::GoogleServiceAccountExchanger::new(db.clone(), vault.clone()),
+  )));
+  let service = ServiceIntegrationService::new(db, vault, registry, tokens)
+    .with_runtime_lifecycle(lifecycle.clone())
+    .with_default_package_activation(activation.clone());
+
+  let dto = service
+    .save(crate::domain::service_integration::IntegrationInstanceWrite {
+      id: None,
+      plugin_id: PADDLEOCR_PLUGIN_ID.into(),
+      display_name: "Race PaddleOCR".into(),
+      enabled: true,
+      config_json: "{}".into(),
+      credentials: vec![],
+      expected_updated_at: None,
+      endpoint_trust_preview_id: None,
+      acknowledge_endpoint_trust: false,
+    })
+    .expect("package-first create");
+
+  let (at_seam_tx, at_seam_rx) = mpsc::channel();
+  let (release_tx, release_rx) = mpsc::channel();
+  lifecycle.set_auto_pin_after_final_revalidate_hook(Some(Box::new(move || {
+    let _ = at_seam_tx.send(());
+    let _ = release_rx.recv();
+  })));
+
+  let activation_worker = activation.clone();
+  let subject_id = dto.id;
+  let handle = std::thread::spawn(move || {
+    activation_worker.activate_pending_subject(GrantSubjectKind::IntegrationInstance, subject_id)
+  });
+
+  let raced = at_seam_rx.recv_timeout(std::time::Duration::from_secs(5)).is_ok();
+  if raced {
+    let _ = service.save(crate::domain::service_integration::IntegrationInstanceWrite {
+      id: Some(dto.id),
+      plugin_id: PADDLEOCR_PLUGIN_ID.into(),
+      display_name: "Race PaddleOCR upgraded label".into(),
+      enabled: true,
+      config_json: r#"{"note":"upgrade-race"}"#.into(),
+      credentials: vec![],
+      expected_updated_at: Some(dto.updated_at.clone()),
+      endpoint_trust_preview_id: None,
+      acknowledge_endpoint_trust: false,
+    });
+    let _ = release_tx.send(());
+  }
+  let _ = handle.join().expect("activation thread");
+
+  let after = service.get_instance(dto.id).unwrap();
+  assert_eq!(after.package_digest.as_deref(), Some(digest.as_str()));
+  assert_ne!(after.runtime_kind, "bundled-rust");
 }

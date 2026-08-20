@@ -3,7 +3,7 @@
 use crate::cmds::runtime::run_blocking;
 use crate::domain::plugin_package::{
   ApprovePluginPackageInput, ApprovePluginPackageResult, ApproveUserPublisherInput, InstalledPluginVersionDto,
-  PluginDefaultVersion, PluginPackagePreviewDto, PluginPublisherDto, PluginVersionDependenciesDto,
+  PluginPackagePreviewDto, PluginPublisherDto, PluginVersionDependenciesDto,
 };
 use crate::error::IpcError;
 use crate::events::{PLUGIN_PACKAGES_CHANGED, emit_data_changed};
@@ -48,22 +48,6 @@ pub async fn list_installed_plugin_versions(
 ) -> Result<Vec<InstalledPluginVersionDto>, IpcError> {
   let services = state.plugin_packages.clone();
   run_blocking("list_installed_plugin_versions", move || services.list_versions()).await
-}
-
-#[tauri::command]
-pub async fn set_default_plugin_package(
-  app: AppHandle,
-  state: State<'_, AppState>,
-  plugin_id: String,
-  package_digest: String,
-) -> Result<PluginDefaultVersion, IpcError> {
-  let services = state.plugin_packages.clone();
-  let result = run_blocking("set_default_plugin_package", move || {
-    services.set_default(&plugin_id, &package_digest)
-  })
-  .await?;
-  emit_data_changed(&app, PLUGIN_PACKAGES_CHANGED);
-  Ok(result)
 }
 
 #[tauri::command]
@@ -207,7 +191,6 @@ mod plugin_package_commands_tests {
         approve_publisher: false,
         publisher_public_key_hex: None,
         acknowledge_permissions: true,
-        set_as_default: false,
       })
       .unwrap_err();
     assert!(matches!(err, crate::error::StorageError::Capability { .. }));
@@ -227,7 +210,6 @@ mod plugin_package_commands_tests {
         approve_publisher: false,
         publisher_public_key_hex: None,
         acknowledge_permissions: true,
-        set_as_default: false,
       })
       .unwrap_err();
     assert!(matches!(err, crate::error::StorageError::Capability { .. }));

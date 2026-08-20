@@ -1,7 +1,9 @@
 // ABOUTME: Sanitized Provider CRUD Tauri commands.
 // ABOUTME: Dispatches blocking storage work and maps failures to IpcError.
 use crate::cmds::runtime::run_blocking;
+use crate::domain::legacy_runtime_inventory::RetirementDeleteProviderInput;
 use crate::domain::provider::{ProviderInstanceDto, ProviderInstanceWrite};
+use crate::domain::runtime_provider::ProviderRuntimeState;
 use crate::error::IpcError;
 use crate::events::{PROVIDERS_CHANGED, TRANSLATION_PROFILES_CHANGED, emit_data_changed};
 use crate::state::AppState;
@@ -23,6 +25,21 @@ pub async fn save_provider_instance(
   let providers = state.providers.clone();
   let result = run_blocking("save_provider_instance", move || providers.save(input)).await?;
   emit_data_changed(&app, PROVIDERS_CHANGED);
+
+  // Package-first creates return durable pending state first; activation runs after the response.
+  let needs_activation = result
+    .runtime_bindings
+    .iter()
+    .any(|binding| binding.state == ProviderRuntimeState::PendingActivation && binding.package_digest.is_some());
+  if needs_activation {
+    crate::cmds::default_package_activation::schedule_default_runtime_activation(
+      app.clone(),
+      state.default_package_activation.clone(),
+      crate::domain::runtime_lifecycle::GrantSubjectKind::ProviderInstance,
+      result.id,
+    );
+  }
+
   Ok(result)
 }
 
@@ -45,6 +62,23 @@ pub async fn delete_provider_instance(app: AppHandle, state: State<'_, AppState>
   run_blocking("delete_provider_instance", move || providers.delete(id)).await?;
   emit_data_changed(&app, PROVIDERS_CHANGED);
   emit_data_changed(&app, TRANSLATION_PROFILES_CHANGED);
+  Ok(())
+}
+
+/// Retirement-only safe provider deletion. The inventory binding token is the CAS authority;
+/// the operation refuses when models, profile references, or unrelated bindings exist.
+#[tauri::command]
+pub async fn delete_retired_legacy_provider(
+  app: AppHandle,
+  state: State<'_, AppState>,
+  input: RetirementDeleteProviderInput,
+) -> Result<(), IpcError> {
+  let providers = state.providers.clone();
+  run_blocking("delete_retired_legacy_provider", move || {
+    providers.delete_retired_legacy_binding(input)
+  })
+  .await?;
+  emit_data_changed(&app, PROVIDERS_CHANGED);
   Ok(())
 }
 
