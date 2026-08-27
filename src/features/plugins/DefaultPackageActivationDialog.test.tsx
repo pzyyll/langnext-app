@@ -110,6 +110,30 @@ describe("DefaultPackageActivationDialog flow", () => {
     });
   });
 
+  test("unsigned default forwards a separate exact-risk acknowledgement", async () => {
+    invokeMock.mockImplementation(async (cmd: string, args: unknown) => {
+      expect(cmd).toBe("authorize_default_plugin_package");
+      expect(args).toEqual({
+        input: {
+          previewId: "unsigned-default-preview",
+          acknowledgeFutureInstanceAuthority: true,
+          acknowledgeUnsignedDefaultRisk: true,
+        },
+      });
+      return {
+        pluginId: "com.example.unsigned",
+        packageDigest: PACKAGE_DIGEST,
+        updatedAt: "2099-01-01T00:00:00Z",
+      };
+    });
+    const result = await runAuthorizeDefaultPluginPackage({
+      previewId: "unsigned-default-preview",
+      acknowledgeFutureInstanceAuthority: true,
+      acknowledgeUnsignedDefaultRisk: true,
+    });
+    expect(result.packageDigest).toBe(PACKAGE_DIGEST);
+  });
+
   test("authorize without acknowledgement is rejected by the client contract", async () => {
     invokeMock.mockImplementation(async (cmd: string) => {
       if (cmd === "authorize_default_plugin_package") {

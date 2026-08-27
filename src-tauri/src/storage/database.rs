@@ -244,8 +244,24 @@ impl Database {
   where
     F: FnOnce(&UnitOfWork<'_>) -> Result<T, StorageError>,
   {
+    self.transaction_with_behavior(rusqlite::TransactionBehavior::Deferred, f)
+  }
+
+  /// Write transaction that takes the reserved lock at BEGIN so concurrent claim workers wait
+  /// on the busy timeout instead of failing immediately.
+  pub fn transaction_immediate<T, F>(&self, f: F) -> Result<T, StorageError>
+  where
+    F: FnOnce(&UnitOfWork<'_>) -> Result<T, StorageError>,
+  {
+    self.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate, f)
+  }
+
+  fn transaction_with_behavior<T, F>(&self, behavior: rusqlite::TransactionBehavior, f: F) -> Result<T, StorageError>
+  where
+    F: FnOnce(&UnitOfWork<'_>) -> Result<T, StorageError>,
+  {
     let mut conn = self.open_runtime()?;
-    let tx = conn.transaction()?;
+    let tx = conn.transaction_with_behavior(behavior)?;
     let uow = UnitOfWork::new(tx);
     match f(&uow) {
       Ok(value) => {

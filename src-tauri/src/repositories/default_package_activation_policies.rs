@@ -14,11 +14,22 @@ use uuid::Uuid;
 
 fn map_policy(row: &Row<'_>) -> Result<DefaultPackageActivationPolicy, rusqlite::Error> {
   let policy_source: String = row.get("policy_source")?;
+  let publisher_key_id: Option<String> = row.get("publisher_key_id")?;
+  let publisher_fingerprint: Option<String> = row.get("publisher_fingerprint")?;
+  let signature_status: String = row.get("signature_status")?;
   Ok(DefaultPackageActivationPolicy {
     plugin_id: row.get("plugin_id")?,
     package_digest: row.get("package_digest")?,
-    publisher_key_id: row.get("publisher_key_id")?,
-    publisher_fingerprint: row.get("publisher_fingerprint")?,
+    publisher_key_id: publisher_key_id.unwrap_or_default(),
+    publisher_fingerprint: publisher_fingerprint.unwrap_or_default(),
+    signature_status: crate::domain::plugin_package::PackageSignatureStatus::parse(&signature_status).map_err(|e| {
+      rusqlite::Error::FromSqlConversionFailure(
+        0,
+        rusqlite::types::Type::Text,
+        Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
+      )
+    })?,
+    unsigned_default_risk_acknowledgement_version: row.get("unsigned_default_risk_acknowledgement_version")?,
     permission_request_digest: row.get("permission_request_digest")?,
     approved_authority_constraints_json: row.get("approved_authority_constraints_json")?,
     approved_authority_constraints_digest: row.get("approved_authority_constraints_digest")?,
@@ -121,14 +132,17 @@ pub fn upsert_policy(
   conn
     .execute(
       "INSERT INTO plugin_default_activation_policies (
-            plugin_id, package_digest, publisher_key_id, publisher_fingerprint,
+            plugin_id, package_digest, publisher_key_id, publisher_fingerprint, signature_status,
+            unsigned_default_risk_acknowledgement_version,
             permission_request_digest, approved_authority_constraints_json,
             approved_authority_constraints_digest, policy_source, created_at, updated_at
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
         ON CONFLICT(plugin_id) DO UPDATE SET
           package_digest = excluded.package_digest,
           publisher_key_id = excluded.publisher_key_id,
           publisher_fingerprint = excluded.publisher_fingerprint,
+          signature_status = excluded.signature_status,
+          unsigned_default_risk_acknowledgement_version = excluded.unsigned_default_risk_acknowledgement_version,
           permission_request_digest = excluded.permission_request_digest,
           approved_authority_constraints_json = excluded.approved_authority_constraints_json,
           approved_authority_constraints_digest = excluded.approved_authority_constraints_digest,
@@ -137,8 +151,18 @@ pub fn upsert_policy(
       params![
         policy.plugin_id,
         policy.package_digest,
-        policy.publisher_key_id,
-        policy.publisher_fingerprint,
+        if policy.signature_status == crate::domain::plugin_package::PackageSignatureStatus::Unsigned {
+          None
+        } else {
+          Some(policy.publisher_key_id.as_str())
+        },
+        if policy.signature_status == crate::domain::plugin_package::PackageSignatureStatus::Unsigned {
+          None
+        } else {
+          Some(policy.publisher_fingerprint.as_str())
+        },
+        policy.signature_status.as_str(),
+        policy.unsigned_default_risk_acknowledgement_version.clone(),
         policy.permission_request_digest,
         policy.approved_authority_constraints_json,
         policy.approved_authority_constraints_digest,
@@ -190,13 +214,32 @@ pub fn resolve_authorization_status(
   if !version.content_available
     || policy.package_digest != default.package_digest
     || policy.package_digest != version.package_digest
-    || policy.publisher_key_id != version.publisher_key_id
-    || policy.publisher_fingerprint != version.publisher_fingerprint
+    || policy.signature_status != version.signature_status
     || policy.permission_request_digest != version.permission_request_digest
   {
     return Ok(DefaultPackageAuthorizationStatus::Stale);
   }
-  // Current publisher trust participates in every policy decision; missing rows are stale.
+  if policy.signature_status == crate::domain::plugin_package::PackageSignatureStatus::Unsigned {
+    if policy.policy_source != DefaultActivationPolicySource::UserConfirmed
+      || policy.unsigned_default_risk_acknowledgement_version.as_deref()
+        != Some(crate::domain::plugin_package::UNSIGNED_DEFAULT_RISK_ACK_V1)
+    {
+      return Ok(DefaultPackageAuthorizationStatus::Stale);
+    }
+    let ack = crate::repositories::plugin_package_approvals::unsigned_risk_acknowledged_for_digest(
+      conn,
+      &policy.package_digest,
+    )?;
+    if !ack {
+      return Ok(DefaultPackageAuthorizationStatus::Stale);
+    }
+    return Ok(DefaultPackageAuthorizationStatus::Authorized);
+  }
+  if policy.publisher_key_id != version.publisher_key_id
+    || policy.publisher_fingerprint != version.publisher_fingerprint
+  {
+    return Ok(DefaultPackageAuthorizationStatus::Stale);
+  }
   let Some(publisher) = plugin_publishers::get_optional(conn, &policy.publisher_key_id)? else {
     return Ok(DefaultPackageAuthorizationStatus::Stale);
   };
@@ -723,6 +766,7 @@ mod tests {
         version: "1.0.0".into(),
         publisher_key_id: publisher_key_id.into(),
         publisher_fingerprint: fingerprint.into(),
+        signature_status: crate::domain::plugin_package::PackageSignatureStatus::Signed,
         runtime_kind: "wasm-component".into(),
         manifest_json: "{}".into(),
         permission_request_digest: permission_digest.into(),
@@ -779,6 +823,8 @@ mod tests {
           package_digest: digest.clone(),
           publisher_key_id: key_id.into(),
           publisher_fingerprint: fingerprint.clone(),
+          signature_status: crate::domain::plugin_package::PackageSignatureStatus::Signed,
+          unsigned_default_risk_acknowledgement_version: None,
           permission_request_digest: permission.clone(),
           approved_authority_constraints_json: r#"{"network":[]}"#.into(),
           approved_authority_constraints_digest: "e".repeat(SHA256_HEX_LEN),
@@ -818,6 +864,8 @@ mod tests {
           package_digest: digest.clone(),
           publisher_key_id: key_id.into(),
           publisher_fingerprint: fingerprint.clone(),
+          signature_status: crate::domain::plugin_package::PackageSignatureStatus::Signed,
+          unsigned_default_risk_acknowledgement_version: None,
           permission_request_digest: "f".repeat(SHA256_HEX_LEN),
           approved_authority_constraints_json: r#"{"network":[]}"#.into(),
           approved_authority_constraints_digest: "e".repeat(SHA256_HEX_LEN),
@@ -854,6 +902,8 @@ mod tests {
           package_digest: digest.clone(),
           publisher_key_id: key_id.into(),
           publisher_fingerprint: fingerprint.clone(),
+          signature_status: crate::domain::plugin_package::PackageSignatureStatus::Signed,
+          unsigned_default_risk_acknowledgement_version: None,
           permission_request_digest: permission.clone(),
           approved_authority_constraints_json: r#"{"network":[]}"#.into(),
           approved_authority_constraints_digest: "e".repeat(SHA256_HEX_LEN),
@@ -893,6 +943,8 @@ mod tests {
           package_digest: digest.clone(),
           publisher_key_id: key_id.into(),
           publisher_fingerprint: fingerprint.clone(),
+          signature_status: crate::domain::plugin_package::PackageSignatureStatus::Signed,
+          unsigned_default_risk_acknowledgement_version: None,
           permission_request_digest: permission.clone(),
           approved_authority_constraints_json: r#"{"network":[]}"#.into(),
           approved_authority_constraints_digest: "e".repeat(SHA256_HEX_LEN),
@@ -930,6 +982,8 @@ mod tests {
           package_digest: digest.clone(),
           publisher_key_id: key_id.into(),
           publisher_fingerprint: "f".repeat(SHA256_HEX_LEN),
+          signature_status: crate::domain::plugin_package::PackageSignatureStatus::Signed,
+          unsigned_default_risk_acknowledgement_version: None,
           permission_request_digest: permission.clone(),
           approved_authority_constraints_json: r#"{"network":[]}"#.into(),
           approved_authority_constraints_digest: "e".repeat(SHA256_HEX_LEN),
@@ -966,6 +1020,8 @@ mod tests {
           package_digest: digest.clone(),
           publisher_key_id: key_id.into(),
           publisher_fingerprint: fingerprint.clone(),
+          signature_status: crate::domain::plugin_package::PackageSignatureStatus::Signed,
+          unsigned_default_risk_acknowledgement_version: None,
           permission_request_digest: permission.clone(),
           approved_authority_constraints_json: r#"{"network":[]}"#.into(),
           approved_authority_constraints_digest: "e".repeat(SHA256_HEX_LEN),

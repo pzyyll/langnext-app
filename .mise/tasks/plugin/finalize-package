@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
-# ABOUTME: Canonical signed-archive finalization from an externally signed staging tree.
-# ABOUTME: Never reads private keys; requires a trusted public key to Ed25519-verify exact plugin.json bytes.
-#MISE description="Finalize a signed package (args: staging-dir output.lnplugin --public-key-hex|file)"
+# ABOUTME: Canonical archive finalization from a staging tree (signed or explicit unsigned).
+# ABOUTME: Never reads private keys; signed mode requires a trusted public key.
+#MISE description="Finalize a package (args: [--unsigned] staging-dir output.lnplugin [--public-key-hex|file])"
 set -euo pipefail
-
-if [[ $# -lt 3 ]]; then
-  echo "usage: mise run plugin:finalize-package -- <staging-dir> <output.lnplugin> --public-key-hex <hex>" >&2
-  echo "   or: mise run plugin:finalize-package -- <staging-dir> <output.lnplugin> --public-key-file <path>" >&2
-  exit 2
-fi
 
 if [[ "${1:-}" == "--" ]]; then
   shift
+fi
+
+if [[ $# -lt 2 ]]; then
+  echo "usage: mise run plugin:finalize-package -- <staging-dir> <output.lnplugin> --public-key-hex <hex>" >&2
+  echo "   or: mise run plugin:finalize-package -- <staging-dir> <output.lnplugin> --public-key-file <path>" >&2
+  echo "   or: mise run plugin:finalize-package -- --unsigned <staging-dir> <output.lnplugin>" >&2
+  exit 2
 fi
 
 cargo run --manifest-path src-tauri/Cargo.toml --bin plugin_tool --quiet -- finalize-package "$@"

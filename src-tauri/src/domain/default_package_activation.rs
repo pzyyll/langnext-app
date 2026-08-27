@@ -148,6 +148,10 @@ pub struct DefaultPackageActivationPolicy {
   pub package_digest: String,
   pub publisher_key_id: String,
   pub publisher_fingerprint: String,
+  #[serde(default)]
+  pub signature_status: crate::domain::plugin_package::PackageSignatureStatus,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub unsigned_default_risk_acknowledgement_version: Option<String>,
   pub permission_request_digest: String,
   pub approved_authority_constraints_json: String,
   pub approved_authority_constraints_digest: String,
@@ -207,6 +211,10 @@ pub struct DefaultPackageActivationPreviewDto {
   pub auth_policies: Vec<String>,
   pub resource_limits: Option<DefaultAuthorityResourceLimitsDto>,
   pub requires_instance_confirmation_for_dynamic_origins: bool,
+  #[serde(default)]
+  pub signature_status: crate::domain::plugin_package::PackageSignatureStatus,
+  #[serde(default)]
+  pub requires_unsigned_default_risk_acknowledgement: bool,
   pub expires_at: String,
 }
 
@@ -245,6 +253,8 @@ pub struct DefaultAuthorityResourceLimitsDto {
 pub struct AuthorizeDefaultPluginPackageInput {
   pub preview_id: String,
   pub acknowledge_future_instance_authority: bool,
+  #[serde(default)]
+  pub acknowledge_unsigned_default_risk: bool,
 }
 
 /// Input to preview additional subject authority beyond the default policy.

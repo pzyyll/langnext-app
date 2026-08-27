@@ -1,26 +1,14 @@
-// ABOUTME: Semantic provider executor contract shared by legacy and runtime adapters.
-// ABOUTME: Callers pass model/message/image semantics; wire/SSE/plugin details stay inside adapters.
-import { invokeEffect } from "../../storage/invokeEffect";
-import { runStorage } from "../../storage/runStorage";
-import type { ProviderInstanceDto, ProviderRuntimeCatalogEntryDto } from "../../storage/types";
-import { newClientRequestId } from "../translate/newClientRequestId";
-import { DEFAULT_DETECT_MAX_TOKENS } from "./errors";
-import { providerFetch, providerFetchStream } from "./providerFetch";
-import { requireProviderPlugin } from "./registry";
+// ABOUTME: Semantic provider executor contract shared by runtime adapters.
+// ABOUTME: Callers pass model/message/image semantics; wire/SSE/plugin details stay in packages.
 import { RuntimeProviderExecutor } from "./runtimeExecutor";
-import { SseEventDecoder, Utf8StreamDecoder } from "./sse";
-import type { StreamParseResult } from "./types";
-
-/** Maximum model-list pages the legacy adapter traverses before failing closed. */
-export const LEGACY_MODELS_MAX_PAGES = 100;
-/** Maximum aggregate models the legacy adapter collects before failing closed. */
-export const LEGACY_MODELS_MAX_TOTAL = 2000;
+import type { ProviderInstanceDto, ProviderRuntimeCatalogEntryDto } from "../../storage/types";
+import { DEFAULT_DETECT_MAX_TOKENS } from "./errors";
 
 /** Semantic chat operation; provider protocol details never reach executor callers. */
 export type ExecutorChatOperation = "translate" | "detect" | "ocr";
 
 /** Host-owned provider runtime executor kind (matches ProviderRuntimeKindDto). */
-export type ExecutorRuntimeKind = "legacy-frontend-provider" | "wasm-component";
+export type ExecutorRuntimeKind = "wasm-component";
 
 /** One complete bounded model descriptor (no provider wire fields). */
 export interface ExecutorModelsListItem {
@@ -55,7 +43,7 @@ export interface ExecutorUnaryChatResult {
 /** Ordered streaming callbacks: text is user-visible; errors are provider-reported. */
 export interface ExecutorStreamHandlers {
   onDelta: (text: string) => void;
-  /** Provider-reported stream error (e.g. a Responses `error` event); optional per adapter. */
+  /** Provider-reported stream error (e.g. a Responses `error` event); optional per package. */
   onProviderError?: (message: string) => void;
 }
 
@@ -101,7 +89,7 @@ export interface ExecutorChatContext {
 /**
  * Semantic provider executor contract: complete Models List, unary Chat, streaming Chat,
  * capability metadata, and best-effort cancellation. Callers pass model/message/image
- * semantics — never `ProviderWireRequest`, SSE events, or `ProviderPlugin` instances.
+ * semantics — never provider wire requests, SSE events, or plugin instances.
  */
 export interface ProviderExecutor {
   readonly kind: ExecutorRuntimeKind;
@@ -114,8 +102,8 @@ export interface ProviderExecutor {
 }
 
 /**
- * Active/non-active runtime binding that cannot execute (missing or revoked package or an
- * unavailable interface). Fail-closed before either transport; never replays through legacy.
+ * Missing/inactive provider runtime binding that cannot execute (package absent, revoked, or
+ * not yet active). Fail-closed before any transport; there is no legacy executor to replay.
  */
 export class ProviderRuntimeUnavailableError extends Error {
   readonly code = "plugin_unavailable" as const;
@@ -147,8 +135,8 @@ export interface HostDetectPolicy {
 /**
  * Persisted effective API type for one Provider/model pair: the explicit model override
  * wins, then the discovery source interface, then the Provider default API type. Every
- * executor/policy resolver and compatibility check derives from this single rule so a
- * synced model discovered on a non-default interface never falls back to the default type.
+ * executor/policy resolver derives from this single rule so a synced model discovered on a
+ * non-default interface never falls back to the default type.
  */
 export function resolveEffectiveAdapterId(input: {
   modelAdapterId: string | null;
@@ -159,10 +147,10 @@ export function resolveEffectiveAdapterId(input: {
 }
 
 /**
- * Resolve the host-owned detection policy from provider catalog metadata. Legacy
- * registrations expose the same data through `getDetectPolicy`; signed runtime manifests
- * declare bounded metadata the host validates and projects. The guest receives
- * already-selected Chat options, never workflow-policy authority.
+ * Resolve the host-owned detection policy from provider catalog metadata. Signed runtime
+ * manifests declare bounded metadata the host validates and projects; the guest receives
+ * already-selected Chat options, never workflow-policy authority. Without an active Wasm
+ * binding, the host applies the bounded default policy; there is no legacy plugin policy.
  */
 export function resolveHostDetectPolicy(input: {
   provider: Pick<ProviderInstanceDto, "adapterId" | "runtimeBindings">;
@@ -184,28 +172,22 @@ export function resolveHostDetectPolicy(input: {
     if (detection) {
       return { thinking: detection.thinking, maxTokens: detection.maxTokens };
     }
-    return { thinking: null, maxTokens: DEFAULT_DETECT_MAX_TOKENS };
   }
-  // Legacy registrations keep sourcing policy from the effective model API Type plugin.
-  const pluginId = effectiveAdapterId.trim();
-  const plugin = requireProviderPlugin(pluginId);
-  return plugin.getDetectPolicy({ modelKey: input.modelKey, baseUrl: input.baseUrl });
+  return { thinking: null, maxTokens: DEFAULT_DETECT_MAX_TOKENS };
 }
 
 /**
  * Effective-adapter resolver: selects the persisted executor for one Provider/model pair.
  * A matching active Wasm interface binding selects `RuntimeProviderExecutor`; a Wasm binding
- * that is unavailable/revoked/missing fails closed as `plugin_unavailable`; an unbound API
- * type (including the Provider default and any legacy override) keeps the existing legacy
- * executor with its endpoint/auth compatibility checks. A runtime failure never replays the
- * same request through legacy.
+ * that is unavailable/revoked/missing fails closed as `plugin_unavailable`. No legacy
+ * frontend executor exists, so an unbound API type is never silently executed.
  */
 export function resolveProviderExecutor(input: {
   provider: Pick<ProviderInstanceDto, "id" | "adapterId" | "runtimeBindings">;
   modelAdapterId: string | null;
   /** Discovery provenance of the persisted model; ignored when the override is set. */
   modelSourceAdapterId?: string | null;
-  /** Persisted model id; required for runtime Chat, ignored for legacy models. */
+  /** Persisted model id; required for runtime Chat. */
   modelId?: string | null;
   catalog: readonly ProviderRuntimeCatalogEntryDto[];
 }): ProviderExecutor {
@@ -216,214 +198,24 @@ export function resolveProviderExecutor(input: {
     providerAdapterId: provider.adapterId,
   });
   const binding = provider.runtimeBindings.find((candidate) => candidate.adapterId === effectiveAdapterId);
-  if (binding?.runtimeKind === "wasm-component") {
-    if (binding.state !== "active") {
-      throw new ProviderRuntimeUnavailableError(
-        `provider runtime binding for API type '${effectiveAdapterId}' is not active`,
-      );
-    }
-    const entry = catalog.find((candidate) => candidate.packageDigest === binding.packageDigest);
-    if (!entry) {
-      throw new ProviderRuntimeUnavailableError("provider runtime package is not in the catalog");
-    }
-    return new RuntimeProviderExecutor(
-      provider.id,
-      input.modelId ?? null,
-      effectiveAdapterId,
-      capabilitiesFromCatalogEntry(entry),
+  if (binding?.runtimeKind !== "wasm-component") {
+    throw new ProviderRuntimeUnavailableError(
+      `provider runtime binding for API type '${effectiveAdapterId}' does not exist; install and authorize a package`,
     );
   }
-  return new LegacyFrontendProviderExecutor(provider.id, effectiveAdapterId);
-}
-
-/**
- * Legacy frontend provider executor: composes the current TypeScript plugin registry,
- * `providerFetch`/`providerFetchStream`, and the SSE decoder. Retains the existing
- * malformed-response/error normalization behavior; every TypeScript `ProviderPlugin`
- * implementation stays unchanged behind this seam.
- */
-export class LegacyFrontendProviderExecutor implements ProviderExecutor {
-  readonly kind = "legacy-frontend-provider" as const;
-
-  constructor(
-    private readonly providerId: string,
-    private readonly pluginId: string,
-  ) {}
-
-  get capabilities(): ExecutorCapabilities {
-    const plugin = requireProviderPlugin(this.pluginId);
-    return { ...plugin.manifest.capabilities };
-  }
-
-  async modelsList(input: ExecutorModelsListInput = {}): Promise<ExecutorModelsListResult> {
-    const plugin = requireProviderPlugin(this.pluginId);
-    let continuation: string | null = null;
-    const seenCursors = new Set<string>();
-    const seenKeys = new Set<string>();
-    const models: ExecutorModelsListItem[] = [];
-    let pages = 0;
-    while (true) {
-      pages += 1;
-      if (pages > LEGACY_MODELS_MAX_PAGES) {
-        throw new ExecutorProtocolError("Model list exceeded page limit");
-      }
-      if (continuation) {
-        if (seenCursors.has(continuation)) {
-          throw new ExecutorProtocolError("Model list cursor repeated");
-        }
-        seenCursors.add(continuation);
-      }
-      const wire = plugin.buildModelListRequest({ continuation });
-      const response = await providerFetch({
-        requestId: input.requestId ?? newClientRequestId("mll"),
-        providerInstanceId: this.providerId,
-        wire,
-        signal: input.signal,
-      });
-      if (response.status < 200 || response.status >= 300) {
-        throw new ExecutorHttpStatusError(response.status);
-      }
-      const page = plugin.parseModelListPage(response);
-      for (const item of page.items) {
-        if (seenKeys.has(item.modelKey)) {
-          continue;
-        }
-        seenKeys.add(item.modelKey);
-        models.push({
-          modelKey: item.modelKey,
-          remoteDisplayName: item.remoteDisplayName ?? null,
-          remoteMetadataJson: item.remoteMetadataJson ?? null,
-        });
-        if (models.length > LEGACY_MODELS_MAX_TOTAL) {
-          throw new ExecutorProtocolError("Model list exceeded total model limit");
-        }
-      }
-      if (!page.continuation) {
-        break;
-      }
-      continuation = page.continuation;
-    }
-    return { models };
-  }
-
-  async chat(input: ExecutorChatInput & ExecutorChatContext): Promise<ExecutorUnaryChatResult> {
-    const plugin = requireProviderPlugin(this.pluginId);
-    const wire = plugin.buildChatRequest({
-      operation: input.operation,
-      stream: false,
-      modelKey: input.modelKey,
-      systemPrompt: input.systemPrompt,
-      userPrompt: input.userPrompt,
-      temperature: input.temperature,
-      maxTokens: input.maxTokens,
-      thinking: input.thinking,
-      imagePngBase64: input.imagePngBase64,
-    });
-    const response = await providerFetch({
-      requestId: input.requestId,
-      providerInstanceId: this.providerId,
-      wire,
-      signal: input.signal,
-    });
-    if (response.status < 200 || response.status >= 300) {
-      throw new ExecutorHttpStatusError(response.status);
-    }
-    return { text: plugin.parseChatResponse(response) };
-  }
-
-  async chatStream(input: ExecutorChatInput & ExecutorChatContext, handlers: ExecutorStreamHandlers): Promise<void> {
-    const plugin = requireProviderPlugin(this.pluginId);
-    const wire = plugin.buildChatRequest({
-      operation: input.operation,
-      stream: true,
-      modelKey: input.modelKey,
-      systemPrompt: input.systemPrompt,
-      userPrompt: input.userPrompt,
-      temperature: input.temperature,
-      maxTokens: input.maxTokens,
-      thinking: input.thinking,
-      imagePngBase64: input.imagePngBase64,
-    });
-    const utf8 = new Utf8StreamDecoder();
-    const sse = new SseEventDecoder();
-    let accumulated = "";
-    let httpStatus = 200;
-    let providerErrorMessage: string | null = null;
-
-    const applyStreamEvent = (parsed: StreamParseResult): void => {
-      if (parsed.kind === "delta") {
-        accumulated += parsed.text;
-        handlers.onDelta(parsed.text);
-        return;
-      }
-      if (parsed.kind === "error" && providerErrorMessage == null) {
-        providerErrorMessage = parsed.message;
-      }
-    };
-
-    await providerFetchStream(
-      {
-        requestId: input.requestId,
-        providerInstanceId: this.providerId,
-        wire,
-        signal: input.signal,
-      },
-      {
-        onStarted: (status) => {
-          httpStatus = status;
-        },
-        onChunk: (bytes) => {
-          if (httpStatus < 200 || httpStatus >= 300 || providerErrorMessage != null) {
-            return;
-          }
-          const text = utf8.push(bytes);
-          const events = sse.push(text);
-          for (const event of events) {
-            applyStreamEvent(plugin.parseStreamEvent(event));
-            if (providerErrorMessage != null) {
-              break;
-            }
-          }
-        },
-      },
+  if (binding.state !== "active") {
+    throw new ProviderRuntimeUnavailableError(
+      `provider runtime binding for API type '${effectiveAdapterId}' is not active`,
     );
-    if (providerErrorMessage == null) {
-      const tailText = utf8.finish();
-      if (tailText) {
-        for (const event of sse.push(tailText)) {
-          applyStreamEvent(plugin.parseStreamEvent(event));
-          if (providerErrorMessage != null) {
-            break;
-          }
-        }
-      }
-    }
-    if (providerErrorMessage == null) {
-      for (const event of sse.finish()) {
-        applyStreamEvent(plugin.parseStreamEvent(event));
-        if (providerErrorMessage != null) {
-          break;
-        }
-      }
-    }
-
-    if (httpStatus < 200 || httpStatus >= 300) {
-      throw new ExecutorHttpStatusError(httpStatus);
-    }
-    if (providerErrorMessage != null) {
-      handlers.onProviderError?.(providerErrorMessage);
-      return;
-    }
-    if (!accumulated.trim()) {
-      throw new ExecutorProtocolError("Empty stream content");
-    }
   }
-
-  async cancel(requestId: string): Promise<void> {
-    try {
-      await runStorage(invokeEffect<boolean>("cancel_provider_http", { requestId }));
-    } catch {
-      // Cancellation is best-effort and idempotent.
-    }
+  const entry = catalog.find((candidate) => candidate.packageDigest === binding.packageDigest);
+  if (!entry) {
+    throw new ProviderRuntimeUnavailableError("provider runtime package is not in the catalog");
   }
+  return new RuntimeProviderExecutor(
+    provider.id,
+    input.modelId ?? null,
+    effectiveAdapterId,
+    capabilitiesFromCatalogEntry(entry),
+  );
 }

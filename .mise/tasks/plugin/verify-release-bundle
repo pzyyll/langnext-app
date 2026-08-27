@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# ABOUTME: Verify a signed official plugin release resource set against public roots and exact policies.
+# ABOUTME: Never reads private keys; production public roots, archives, and policies must agree.
+#MISE description="Verify signed plugin release bundle (args: [resource-dir])"
+set -euo pipefail
+
+if [[ "${1:-}" == "--" ]]; then
+  shift
+fi
+
+RESOURCE_DIR="${1:-src-tauri/resources}"
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+cd "$ROOT_DIR"
+
+cargo run --manifest-path src-tauri/Cargo.toml --bin plugin_release_tool --quiet -- verify-bundle "$RESOURCE_DIR"

@@ -159,6 +159,16 @@ pub fn classify_endpoint_egress(
     return EndpointEgressPolicy::TrustedFixed;
   }
 
+  let is_baidu_ocr_fixed = plugin_id == crate::domain::service_integration::BAIDU_OCR_PLUGIN_ID
+    && normalized_origin == crate::domain::service_integration::BAIDU_OCR_ORIGIN
+    && matches!(
+      endpoint_alias,
+      "baidu-general-basic" | "baidu-accurate-basic" | "baidu-general" | "baidu-accurate"
+    );
+  if is_baidu_ocr_fixed && origin_kind == Some(NetworkOriginKind::HostFixed) {
+    return EndpointEgressPolicy::TrustedFixed;
+  }
+
   if is_edge_tts {
     if current_approval && (origin_kind.is_none() || origin_kind == Some(NetworkOriginKind::UserApprovedInstance)) {
       return EndpointEgressPolicy::UserApprovedCustom;

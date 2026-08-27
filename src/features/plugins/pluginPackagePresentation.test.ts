@@ -7,7 +7,10 @@ import {
   isUninstallDisabled,
   publisherApprovalKeyHex,
   publisherTrustLabelKey,
+  requiresNativeExecutionRiskAcknowledgement,
   requiresPublisherApproval,
+  requiresUnsignedRiskAcknowledgement,
+  installedSignatureLabelKey,
   shouldShowManualPublisherKeyInput,
   summarizeNetworkPermissions,
 } from "./pluginPackagePresentation";
@@ -28,6 +31,23 @@ describe("pluginPackagePresentation", () => {
     expect(publisherTrustLabelKey("unknown")).toContain("unknown");
     expect(publisherTrustLabelKey("revoked")).toContain("revoked");
     expect(publisherTrustLabelKey("disabled")).toContain("disabled");
+    expect(publisherTrustLabelKey("unsigned")).toContain("unsigned");
+  });
+
+  test("unsigned never maps to trusted publisher copy", () => {
+    expect(publisherTrustLabelKey("unsigned")).not.toContain("trusted");
+    expect(installedSignatureLabelKey({ signatureStatus: "unsigned" })).toContain("unsigned");
+    expect(installedSignatureLabelKey({ signatureStatus: "signed" })).toContain("signed");
+  });
+
+  test("unsigned and native risk flags are explicit", () => {
+    expect(requiresUnsignedRiskAcknowledgement({ requiresUnsignedRiskAcknowledgement: true })).toBe(true);
+    expect(requiresUnsignedRiskAcknowledgement({ signatureStatus: "unsigned" })).toBe(true);
+    expect(requiresUnsignedRiskAcknowledgement({ signatureStatus: "signed" })).toBe(false);
+    expect(requiresNativeExecutionRiskAcknowledgement({ requiresNativeExecutionRiskAcknowledgement: true })).toBe(true);
+    expect(requiresNativeExecutionRiskAcknowledgement({ requiresNativeExecutionRiskAcknowledgement: false })).toBe(
+      false,
+    );
   });
 
   test("uninstall disabled only when backend reports in_use", () => {
@@ -49,6 +69,7 @@ describe("pluginPackagePresentation", () => {
 
   test("package execution is enabled only for the supported Wasm runtime", () => {
     expect(isPackageExecutionEnabled({ runtimeKind: "wasm-component" })).toBe(true);
+    expect(isPackageExecutionEnabled({ runtimeKind: "trusted-native-worker" })).toBe(true);
     expect(isPackageExecutionEnabled({ runtimeKind: "bundled-rust" })).toBe(false);
     expect(isPackageExecutionEnabled({ runtimeKind: "unknown" })).toBe(false);
   });

@@ -116,7 +116,7 @@ impl DefaultPackageActivationService {
     let claim_token = new_id().to_string();
     let now = now_rfc3339();
     let lease_expires_at = unix_to_rfc3339(now_unix() + RECOVERY_CLAIM_LEASE_SECS);
-    let intents = self.db.transaction(|uow| {
+    let intents = self.db.transaction_immediate(|uow| {
       default_package_activation_policies::claim_recovery_eligible_intents(
         uow.conn(),
         &claim_token,

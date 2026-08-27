@@ -373,11 +373,11 @@ impl ProviderInstanceDto {
         ProviderRuntimeBindingDto::from(&ProviderRuntimeBinding {
           provider_id: value.id,
           adapter_id: value.adapter_id.clone(),
-          runtime_kind: crate::domain::runtime_provider::ProviderRuntimeKind::LegacyFrontendProvider,
+          runtime_kind: crate::domain::runtime_provider::ProviderRuntimeKind::WasmComponent,
           package_digest: None,
           grant_set_revision: None,
-          state: crate::domain::runtime_provider::ProviderRuntimeState::Active,
-          error_code: None,
+          state: crate::domain::runtime_provider::ProviderRuntimeState::Unavailable,
+          error_code: Some("no_runtime_binding".into()),
           error_message: None,
           runtime_requirement_json: None,
           created_at: value.created_at.clone(),
@@ -452,8 +452,7 @@ pub struct ProviderInstanceWrite {
 ///
 /// Deserialization accepts v2 documents (baseUrlOverride only) and normalizes via
 /// [`ProviderExport::normalize_transport`]. Current exports always set v3 fields. The optional
-/// `runtime` requirement preserves the exact Phase 8 provider runtime identity; older formats
-/// (and pre-Phase 8 v7 documents) normalize to legacy-frontend-provider on import.
+/// `runtime` requirement preserves the exact package-backed provider runtime identity.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderExport {
@@ -605,9 +604,9 @@ mod tests {
     let binding = ProviderRuntimeBinding {
       provider_id: Uuid::nil(),
       adapter_id: "openai-compatible".into(),
-      runtime_kind: ProviderRuntimeKind::LegacyFrontendProvider,
-      package_digest: None,
-      grant_set_revision: None,
+      runtime_kind: ProviderRuntimeKind::WasmComponent,
+      package_digest: Some("digest".into()),
+      grant_set_revision: Some(1),
       state: ProviderRuntimeState::Active,
       error_code: None,
       error_message: None,

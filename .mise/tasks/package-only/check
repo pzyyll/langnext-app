@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+# ABOUTME: Fail-closed production gates for unpublished package-only schema and identity.
+# ABOUTME: Rejects legacy runtime kinds, direct-Baidu OCR rows, dead IPC, and v2-v7 import ranges.
+#MISE description="Fail-closed package-only production source and schema gates"
+set -euo pipefail
+
+root="$(cd "$(dirname "$0")/../../.." && pwd)"
+cd "$root"
+
+fail=0
+hits=""
+
+record_hits() {
+  local label="$1"
+  local found="$2"
+  if [[ -n "${found}" ]]; then
+    echo "error: ${label}" >&2
+    echo "${found}" >&2
+    fail=1
+  fi
+}
+
+# Skip Rust matches that live in a trailing #[cfg(test)] module of a production file.
+filter_rust_test_modules() {
+  local file line_no
+  while IFS= read -r line; do
+    [[ -z "${line}" ]] && continue
+    file="${line%%:*}"
+    rest="${line#*:}"
+    line_no="${rest%%:*}"
+    if [[ "${file}" == *.rs ]]; then
+      test_start="$(rg -n --pcre2 '^#\[cfg\(test\)\]' "${file}" | head -1 | cut -d: -f1 || true)"
+      if [[ -n "${test_start}" && "${line_no}" -ge "${test_start}" ]]; then
+        continue
+      fi
+    fi
+    printf '%s\n' "${line}"
+  done
+}
+
+echo "checking deleted transitional migrations..."
+for leftover in \
+  src-tauri/migrations/0030_disable_retired_legacy_runtimes.sql \
+  src-tauri/migrations/0032_baidu_ocr_runtime_migration.sql \
+  src-tauri/migrations/0033_package_only_cleanup.sql
+do
+  if [[ -e "${leftover}" ]]; then
+    echo "error: deleted transitional migration still present: ${leftover}" >&2
+    fail=1
+  fi
+done
+
+registered="$(rg -n "0030_disable_retired_legacy_runtimes|0032_baidu_ocr_runtime_migration|0033_package_only_cleanup" src-tauri/src/storage/migrations.rs || true)"
+record_hits "MIGRATIONS still registers deleted transitional files" "${registered}"
+
+echo "checking migration SQL for forbidden legacy/direct values..."
+migration_hits="$(rg -n "bundled-rust|legacy-frontend-provider|baidu_action|ocr_api_key|ocr_secret_key|baidu_ocr_migration_" src-tauri/migrations || true)"
+record_hits "final-schema SQL contains forbidden direct/legacy values" "${migration_hits}"
+
+echo "checking orphan provider HTTP command file..."
+if [[ -e src-tauri/src/cmds/provider_http.rs ]]; then
+  echo "error: orphan command file still present: src-tauri/src/cmds/provider_http.rs" >&2
+  fail=1
+fi
+
+echo "checking production source for legacy runtime kinds..."
+kind_hits="$(rg -n "bundled-rust|legacy-frontend-provider" src src-tauri/src src-tauri/migrations \
+  --glob '!**/*test*' --glob '!**/tests.rs' --glob '!**/tests/**' --glob '!docs/plans/**' \
+  || true)"
+kind_hits="$(printf '%s\n' "${kind_hits}" | filter_rust_test_modules)"
+record_hits "production source still names bundled-rust or legacy-frontend-provider" "${kind_hits}"
+
+echo "checking production source for direct-Baidu OCR residue..."
+baidu_hits="$(rg -n "baidu_ocr_migration_(previews|intents|snapshots)|baidu_action|ocr_api_key|ocr_secret_key" \
+  src src-tauri/src src-tauri/migrations \
+  --glob '!**/*test*' --glob '!**/tests.rs' --glob '!**/tests/**' --glob '!docs/plans/**' \
+  || true)"
+baidu_hits="$(printf '%s\n' "${baidu_hits}" | filter_rust_test_modules)"
+record_hits "production source still names direct-Baidu OCR fields or migration tables" "${baidu_hits}"
+
+echo "checking removed provider HTTP command names..."
+http_hits="$(rg -n "provider_http_request|provider_http_stream|cancel_provider_http" src src-tauri || true)"
+record_hits "removed provider HTTP command names still present" "${http_hits}"
+
+echo "checking frontend/backend format version ranges..."
+version_hits="$(rg -n "SUPPORTED_CONFIGURATION_FORMAT_VERSIONS\\s*=\\s*\\[[^\\]]*2|normalize.*v2|v2.?v7" \
+  src src-tauri/src --glob '!**/*test*' --glob '!**/tests.rs' --glob '!**/tests/**' || true)"
+version_hits="$(printf '%s\n' "${version_hits}" | filter_rust_test_modules)"
+record_hits "production source still accepts or normalizes format versions 2-7" "${version_hits}"
+
+if [[ "${fail}" -ne 0 ]]; then
+  echo "package-only:check failed" >&2
+  exit 1
+fi
+
+echo "ok: package-only production gates passed"

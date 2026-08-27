@@ -1,7 +1,7 @@
 // ABOUTME: Repository behavior and referential-integrity tests.
 // ABOUTME: Exercises CRUD, uniqueness, rollback, and credential journal rules.
 use crate::domain::model::{Availability, ModelSource, ProviderModel};
-use crate::domain::ocr_service::{BaiduOcrAction, OcrPromptTemplate, OcrProviderType, OcrService};
+use crate::domain::ocr_service::{OcrPromptTemplate, OcrProviderType, OcrService};
 use crate::domain::plugin_package::{
   InstallOperationState, InstalledPluginVersion, PluginPackageApproval, PluginPublisher, PublisherDecision,
   PublisherSource,
@@ -433,29 +433,6 @@ fn credential_journal_one_active_per_owner() {
   .unwrap();
 }
 
-fn sample_baidu_ocr(id: Uuid, name: &str) -> OcrService {
-  let now = now_rfc3339();
-  OcrService {
-    id,
-    provider_type: OcrProviderType::Baidu,
-    display_name: name.into(),
-    enabled: true,
-    sort_order: 0,
-    baidu_action: Some(BaiduOcrAction::Accurate),
-    api_key_ref: None,
-    secret_key_ref: None,
-    provider_model_id: None,
-    temperature: None,
-    default_prompt_template_id: None,
-    integration_instance_id: None,
-    ocr_capability_id: None,
-    capability_preferences_version: None,
-    capability_preferences: None,
-    created_at: now.clone(),
-    updated_at: now,
-  }
-}
-
 fn sample_ai_ocr(id: Uuid, model_id: Uuid, default_template_id: Uuid, name: &str) -> OcrService {
   let now = now_rfc3339();
   OcrService {
@@ -464,9 +441,6 @@ fn sample_ai_ocr(id: Uuid, model_id: Uuid, default_template_id: Uuid, name: &str
     display_name: name.into(),
     enabled: true,
     sort_order: 0,
-    baidu_action: None,
-    api_key_ref: None,
-    secret_key_ref: None,
     provider_model_id: Some(model_id),
     temperature: Some(0.2),
     default_prompt_template_id: Some(default_template_id),
@@ -479,11 +453,32 @@ fn sample_ai_ocr(id: Uuid, model_id: Uuid, default_template_id: Uuid, name: &str
   }
 }
 
+fn sample_plugin_ocr(id: Uuid, instance_id: Uuid, capability_id: &str, name: &str) -> OcrService {
+  let now = now_rfc3339();
+  OcrService {
+    id,
+    provider_type: OcrProviderType::PluginCapability,
+    display_name: name.into(),
+    enabled: true,
+    sort_order: 0,
+    provider_model_id: None,
+    temperature: None,
+    default_prompt_template_id: None,
+    integration_instance_id: Some(instance_id),
+    ocr_capability_id: Some(capability_id.into()),
+    capability_preferences_version: Some(1),
+    capability_preferences: Some(serde_json::json!({})),
+    created_at: now.clone(),
+    updated_at: now,
+  }
+}
+
 #[test]
 fn ocr_service_crud_list_order_and_template_cascade() {
   let (_dir, db) = setup();
-  let baidu_a = new_id();
-  let baidu_b = new_id();
+  let plugin_a = new_id();
+  let plugin_b = new_id();
+  let instance_id = new_id();
   let ai_id = new_id();
   let provider_id = new_id();
   let model_id = new_id();
@@ -493,10 +488,40 @@ fn ocr_service_crud_list_order_and_template_cascade() {
   db.transaction(|uow| {
     provider_instances::insert(uow.conn(), &sample_provider(provider_id))?;
     provider_models::insert(uow.conn(), &sample_model(model_id, provider_id, "vision"))?;
+    integration_instances::insert(
+      uow.conn(),
+      &IntegrationInstance {
+        id: instance_id,
+        plugin_id: "com.langnext.google-cloud".into(),
+        plugin_version: "1.0.0".into(),
+        display_name: "Cloud".into(),
+        enabled: true,
+        config_json: "{}".into(),
+        config_schema_version: 1,
+        health_status: IntegrationHealthStatus::Ready,
+        last_validated_at: None,
+        last_error_code: None,
+        runtime_kind: "wasm-component".into(),
+        package_digest: Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into()),
+        execution_grant_set_revision: None,
+        runtime_state: "pending_activation".into(),
+        runtime_error_code: None,
+        runtime_error_message: None,
+        runtime_requirement_json: None,
+        created_at: now_rfc3339(),
+        updated_at: now_rfc3339(),
+      },
+    )?;
 
     // Insert order determines auto sort_order: 0, 1, 2.
-    ocr_services::insert(uow.conn(), &sample_baidu_ocr(baidu_a, "Baidu A"))?;
-    ocr_services::insert(uow.conn(), &sample_baidu_ocr(baidu_b, "Baidu B"))?;
+    ocr_services::insert(
+      uow.conn(),
+      &sample_plugin_ocr(plugin_a, instance_id, "ocr.image@1", "Cloud A"),
+    )?;
+    ocr_services::insert(
+      uow.conn(),
+      &sample_plugin_ocr(plugin_b, instance_id, "ocr.image@1", "Cloud B"),
+    )?;
     ocr_services::insert(uow.conn(), &sample_ai_ocr(ai_id, model_id, template_a, "AI OCR"))?;
 
     ocr_prompt_templates::replace_for_service(
@@ -524,9 +549,9 @@ fn ocr_service_crud_list_order_and_template_cascade() {
   db.read(|conn| {
     let list = ocr_services::list(conn)?;
     assert_eq!(list.len(), 3);
-    assert_eq!(list[0].id, baidu_a);
+    assert_eq!(list[0].id, plugin_a);
     assert_eq!(list[0].sort_order, 0);
-    assert_eq!(list[1].id, baidu_b);
+    assert_eq!(list[1].id, plugin_b);
     assert_eq!(list[1].sort_order, 1);
     assert_eq!(list[2].id, ai_id);
     assert_eq!(list[2].sort_order, 2);
@@ -552,21 +577,9 @@ fn ocr_service_crud_list_order_and_template_cascade() {
   db.transaction(|uow| {
     ocr_services::update_configuration_keep_credentials(
       uow.conn(),
-      baidu_a,
-      "Baidu A Renamed",
-      false,
-      Some(BaiduOcrAction::GeneralBasic),
-      None,
-      None,
-      None,
-      &now,
-    )?;
-    ocr_services::update_configuration_keep_credentials(
-      uow.conn(),
       ai_id,
       "AI OCR Renamed",
       true,
-      None,
       Some(model_id),
       Some(0.5),
       Some(template_c),
@@ -587,11 +600,6 @@ fn ocr_service_crud_list_order_and_template_cascade() {
   .unwrap();
 
   db.read(|conn| {
-    let baidu = ocr_services::get(conn, baidu_a)?;
-    assert_eq!(baidu.display_name, "Baidu A Renamed");
-    assert!(!baidu.enabled);
-    assert_eq!(baidu.baidu_action, Some(BaiduOcrAction::GeneralBasic));
-
     let ai = ocr_services::get(conn, ai_id)?;
     assert_eq!(ai.display_name, "AI OCR Renamed");
     assert_eq!(ai.temperature, Some(0.5));
@@ -621,16 +629,16 @@ fn ocr_service_crud_list_order_and_template_cascade() {
 
     let remaining = ocr_services::list(conn)?;
     assert_eq!(remaining.len(), 2);
-    assert_eq!(remaining[0].id, baidu_a);
-    assert_eq!(remaining[1].id, baidu_b);
+    assert_eq!(remaining[0].id, plugin_a);
+    assert_eq!(remaining[1].id, plugin_b);
     Ok(())
   })
   .unwrap();
 
-  // Delete remaining Baidu rows.
+  // Delete remaining plugin rows.
   db.transaction(|uow| {
-    ocr_services::delete(uow.conn(), baidu_a)?;
-    ocr_services::delete(uow.conn(), baidu_b)?;
+    ocr_services::delete(uow.conn(), plugin_a)?;
+    ocr_services::delete(uow.conn(), plugin_b)?;
     Ok(())
   })
   .unwrap();
@@ -842,10 +850,10 @@ fn integration_instance_crud_cas_and_slot_isolation() {
     health_status: IntegrationHealthStatus::Unconfigured,
     last_validated_at: None,
     last_error_code: None,
-    runtime_kind: "bundled-rust".into(),
-    package_digest: None,
+    runtime_kind: "wasm-component".into(),
+    package_digest: Some("a".repeat(64)),
     execution_grant_set_revision: None,
-    runtime_state: "active".into(),
+    runtime_state: "pending_activation".into(),
     runtime_error_code: None,
     runtime_error_message: None,
     runtime_requirement_json: None,
@@ -956,25 +964,6 @@ fn integration_instance_crud_cas_and_slot_isolation() {
       Some("integration/x/other-slot/op"),
     )?;
 
-    // OCR two owners remain independent on primary slot
-    let ocr_id = new_id().to_string();
-    credential_operations::insert_prepared(
-      uow.conn(),
-      new_id(),
-      credential_operations::OwnerKind::OcrApiKey,
-      &ocr_id,
-      None,
-      Some("ocr/a/api_key/op"),
-    )?;
-    credential_operations::insert_prepared(
-      uow.conn(),
-      new_id(),
-      credential_operations::OwnerKind::OcrSecretKey,
-      &ocr_id,
-      None,
-      Some("ocr/a/secret_key/op"),
-    )?;
-
     integration_credential_bindings::delete_for_instance(uow.conn(), id)?;
     integration_instances::delete(uow.conn(), id)?;
     Ok(())
@@ -1013,6 +1002,7 @@ fn installed_plugin_package_lifecycle_constraints() {
         version: "1.0.0".into(),
         publisher_key_id: key_id.into(),
         publisher_fingerprint: fingerprint.clone(),
+        signature_status: crate::domain::plugin_package::PackageSignatureStatus::Signed,
         runtime_kind: "wasm-component".into(),
         manifest_json: "{}".into(),
         permission_request_digest: "e".repeat(64),
@@ -1029,6 +1019,7 @@ fn installed_plugin_package_lifecycle_constraints() {
         version: "1.0.0".into(),
         publisher_key_id: key_id.into(),
         publisher_fingerprint: fingerprint.clone(),
+        signature_status: crate::domain::plugin_package::PackageSignatureStatus::Signed,
         runtime_kind: "wasm-component".into(),
         manifest_json: "{}".into(),
         permission_request_digest: "e".repeat(64),
@@ -1049,6 +1040,7 @@ fn installed_plugin_package_lifecycle_constraints() {
         publisher_decision: PublisherDecision::UserApproved,
         permission_request_digest: "e".repeat(64),
         approved_at: now.clone(),
+        native_execution_risk_acknowledged: false,
       },
     )?;
     assert_eq!(plugin_package_approvals::next_revision(uow.conn(), &digest)?, 2);
@@ -1099,10 +1091,10 @@ fn runtime_instance_pin_backfill_and_constraints() {
         health_status: IntegrationHealthStatus::Ready,
         last_validated_at: None,
         last_error_code: None,
-        runtime_kind: "bundled-rust".into(),
-        package_digest: None,
+        runtime_kind: "wasm-component".into(),
+        package_digest: Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into()),
         execution_grant_set_revision: None,
-        runtime_state: "active".into(),
+        runtime_state: "pending_activation".into(),
         runtime_error_code: None,
         runtime_error_message: None,
         runtime_requirement_json: None,
@@ -1111,8 +1103,8 @@ fn runtime_instance_pin_backfill_and_constraints() {
       },
     )?;
     let loaded = integration_instances::get(uow.conn(), id)?;
-    assert_eq!(loaded.runtime_kind, "bundled-rust");
-    assert!(loaded.package_digest.is_none());
+    assert_eq!(loaded.runtime_kind, "wasm-component");
+    assert_eq!(loaded.package_digest.as_deref(), Some("a".repeat(64).as_str()));
     assert!(loaded.execution_grant_set_revision.is_none());
 
     // Invalid wasm pin without package/grant is rejected by SQLite CHECK.
@@ -1170,6 +1162,7 @@ fn runtime_instance_pin_package_approval_never_authorizes_execution() {
         version: "1.0.0".into(),
         publisher_key_id: key_id.into(),
         publisher_fingerprint: fingerprint.clone(),
+        signature_status: crate::domain::plugin_package::PackageSignatureStatus::Signed,
         runtime_kind: "wasm-component".into(),
         manifest_json: "{}".into(),
         permission_request_digest: "e".repeat(64),
@@ -1187,6 +1180,7 @@ fn runtime_instance_pin_package_approval_never_authorizes_execution() {
         publisher_decision: PublisherDecision::UserApproved,
         permission_request_digest: "e".repeat(64),
         approved_at: now.clone(),
+        native_execution_risk_acknowledged: false,
       },
     )?;
     // Package approval id must never satisfy execution grant lookup.
@@ -1388,7 +1382,19 @@ fn provider_runtime_binding_repository_and_dto_join() {
       .is_err()
   );
 
-  let binding = crate::domain::runtime_provider::legacy_frontend_binding(provider_id, "openai-compatible", &now);
+  let binding = crate::domain::runtime_provider::ProviderRuntimeBinding {
+    provider_id,
+    adapter_id: "openai-compatible".into(),
+    runtime_kind: crate::domain::runtime_provider::ProviderRuntimeKind::WasmComponent,
+    package_digest: Some("digest".into()),
+    grant_set_revision: None,
+    state: crate::domain::runtime_provider::ProviderRuntimeState::Unavailable,
+    error_code: Some("no_runtime_binding".into()),
+    error_message: None,
+    runtime_requirement_json: None,
+    created_at: now.clone(),
+    updated_at: now.clone(),
+  };
   db.write(|conn| provider_runtime_bindings::insert(conn, &binding))
     .unwrap();
 
@@ -1408,8 +1414,8 @@ fn provider_runtime_binding_repository_and_dto_join() {
   assert_eq!(joined[0].adapter_id, "openai-compatible");
   let dto = crate::domain::provider::ProviderInstanceDto::from_provider_and_runtime(&provider, &joined);
   let json = serde_json::to_string(&dto).unwrap();
-  assert!(json.contains("\"runtimeKind\":\"legacy-frontend-provider\""));
-  assert!(json.contains("\"state\":\"active\""));
+  assert!(json.contains("\"runtimeKind\":\"wasm-component\""));
+  assert!(json.contains("\"state\":\"unavailable\""));
   assert!(json.contains("\"adapterId\":\"openai-compatible\""));
   assert!(!json.contains("credentialRef"));
   assert!(!json.contains("op-1"));
@@ -1420,7 +1426,7 @@ fn provider_runtime_binding_repository_and_dto_join() {
   let legacy_with_digest = ProviderRuntimeBinding {
     provider_id,
     adapter_id: "openai-compatible".into(),
-    runtime_kind: ProviderRuntimeKind::LegacyFrontendProvider,
+    runtime_kind: ProviderRuntimeKind::WasmComponent,
     package_digest: Some("a".repeat(64)),
     grant_set_revision: None,
     state: ProviderRuntimeState::Active,

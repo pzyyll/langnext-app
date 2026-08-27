@@ -300,18 +300,19 @@ A conceptual manifest:
 }
 ```
 
-The manifest requests permissions. It does not grant them. Installation produces a host-owned package approval that permits catalog availability but has no runtime authority. Runtime activation separately creates one execution grant-set revision bound to an instance and package; typed entries authorize exact capability/origin/method/auth/resource combinations and optional page/action/capability delegation. The exact `plugin.json` bytes are signed; its file index covers every other payload entry, including artifacts, schemas, locales, licenses, icons, and UI assets. `signatures/manifest.sig` is the only archive entry outside that index.
+The manifest requests permissions. It does not grant them. Installation produces a host-owned package approval that permits catalog availability but has no runtime authority. Runtime activation separately creates one execution grant-set revision bound to an instance and package. The file index covers every payload entry. Signed packages authenticate exact `plugin.json` bytes with `signatures/manifest.sig`. Explicitly unsigned packages omit that entry, establish no publisher identity, and require a local exact-digest risk acknowledgement. A present invalid signature always fails.
 
 ### Package installation lifecycle
 
 ```text
-final signed archive bytes -> SHA-256 package identity
+final archive bytes -> SHA-256 package identity
   -> bounded staging extraction
   -> reject traversal, symlinks, duplicates, and decompression abuse
   -> validate manifest and compatibility
-  -> require archive entries to equal manifest + signature + signed file index
   -> verify every indexed file digest/length/role
-  -> verify publisher signature over exact manifest bytes
+  -> classify signature presence before publisher lookup
+  -> verify a present signature; reject invalid signatures
+  -> require exact-digest unsigned risk acknowledgement when absent
   -> show requested permissions
   -> persist non-executable package approval
   -> atomically move to content-addressed directory
@@ -322,7 +323,9 @@ final signed archive bytes -> SHA-256 package identity
 Required properties:
 
 - first-party builds produce deterministic unsigned staging trees; an external release signer signs exact manifest bytes, then a keyless canonical finalizer writes the archive and computes its final SHA-256;
-- `package_digest` identifies the exact final signed archive bytes, not a pre-signing build;
+- `package_digest` identifies the exact final archive bytes, not a staging build;
+- unsigned approval does not authenticate manifest publisher claims and does not transfer through export/import;
+- vendor bootstrap remains signed-vendor-only;
 - same `plugin_id + version` with a different digest is rejected;
 - installed files are treated as immutable;
 - package approval and instance execution grant sets are distinct records; package approval can never satisfy broker/runtime authorization;
@@ -338,7 +341,7 @@ Required properties:
 - missing packages preserve instances and bindings as `plugin_missing`;
 - config migrations run against copied JSON in the sandbox and never execute SQL.
 
-A signature proves provenance and integrity, not safety. Publisher trust, key rotation, revocation, downgrade policy, and permission review are separate controls.
+A signature proves provenance and integrity, not safety. An unsigned package has integrity checks but no authenticated publisher. Publisher trust, key rotation, revocation, exact-digest unsigned acceptance, permission review, and execution grants remain separate controls.
 
 ## Capability contracts
 
@@ -433,7 +436,7 @@ Use only when a real local engine cannot target Wasm, for example a Python/C++ O
 
 The worker uses a versioned framed RPC protocol and the same logical capability contracts. The host owns lifecycle, handshake, cancellation, deadlines, frame limits, process-tree termination, health, and restart policy.
 
-A subprocess provides crash and address-space isolation. It is not automatically a permission sandbox. Without Windows AppContainer, macOS sandboxing, and Linux namespace/seccomp containment, native workers must be restricted to trusted publishers and must not be described as untrusted plugins.
+A subprocess provides crash and address-space isolation. It is not a permission sandbox. Native packages remain restricted by a closed plugin ID/version allowlist, runtime/model digests, handshake, module audit, timeout, cancellation, and process-tree cleanup. Vendor-signed native packages use vendor policy. Non-vendor signed or unsigned native packages also require a separate exact-digest execution-risk acknowledgement and must never be described as trusted or sandboxed.
 
 ### Runtime C: bundled Rust compatibility adapter
 

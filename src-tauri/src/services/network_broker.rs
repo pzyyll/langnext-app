@@ -688,14 +688,20 @@ mod tests {
   use crate::domain::endpoint_trust::EndpointTrustPreviewInput;
   use crate::domain::provider::ProxyMode;
   use crate::domain::provider_http::ProviderHttpStreamEvent;
+  use crate::domain::runtime_plugin::HttpMethod;
+  use crate::domain::runtime_plugin::{
+    CapabilityDeclaration, FileRole, NetworkEndpointRequest, PermissionRequests, PluginFileEntry, PluginManifestV1,
+    PublisherDeclaration, RuntimeDescriptor, RuntimeKind,
+  };
+  use crate::domain::service_integration::EDGE_TTS_DEFAULT_BASE_URL;
   use crate::domain::service_integration::{
-    EDGE_TTS_DEFAULT_BASE_URL, GOOGLE_CLOUD_DEFAULT_LOCATION, GOOGLE_CLOUD_PLUGIN_ID,
-    GOOGLE_CLOUD_SERVICE_ACCOUNT_SLOT, GoogleCloudConfigV1, IntegrationCredentialBinding, IntegrationHealthStatus,
-    IntegrationInstance,
+    GOOGLE_CLOUD_DEFAULT_LOCATION, GOOGLE_CLOUD_PLUGIN_ID, GOOGLE_CLOUD_SERVICE_ACCOUNT_SLOT, GoogleCloudConfigV1,
+    IntegrationCredentialBinding, IntegrationHealthStatus, IntegrationInstance,
   };
   use crate::domain::time::{new_id, now_rfc3339};
   use crate::repositories::{integration_credential_bindings, integration_endpoint_trusts};
   use crate::services::bounded_http::{ResolverBackedTestTransport, TestDnsLookupFn};
+  use crate::services::plugin_package::public_sha256_hex;
   use crate::services::token_grant::TokenGrant;
   use std::future::Future;
   use std::net::SocketAddr;
@@ -753,10 +759,10 @@ mod tests {
       health_status: IntegrationHealthStatus::Unvalidated,
       last_validated_at: None,
       last_error_code: None,
-      runtime_kind: "bundled-rust".into(),
-      package_digest: None,
+      runtime_kind: "wasm-component".into(),
+      package_digest: Some("a".repeat(64)),
       execution_grant_set_revision: None,
-      runtime_state: "active".into(),
+      runtime_state: "pending_activation".into(),
       runtime_error_code: None,
       runtime_error_message: None,
       runtime_requirement_json: None,
@@ -824,10 +830,10 @@ mod tests {
           health_status: IntegrationHealthStatus::Unvalidated,
           last_validated_at: None,
           last_error_code: None,
-          runtime_kind: "bundled-rust".into(),
-          package_digest: None,
+          runtime_kind: "wasm-component".into(),
+          package_digest: Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into()),
           execution_grant_set_revision: None,
-          runtime_state: "active".into(),
+          runtime_state: "pending_activation".into(),
           runtime_error_code: None,
           runtime_error_message: None,
           runtime_requirement_json: None,
@@ -864,11 +870,19 @@ mod tests {
 
   async fn make_grant(instance_id: Uuid) -> TokenGrant {
     use crate::services::token_grant::{
-      ExchangedToken, GOOGLE_OAUTH_AUDIENCE_POLICY_ID, GOOGLE_SERVICE_ACCOUNT_AUTH_DRIVER_ID, GoogleTokenExchanger,
-      TokenGrantRequest, TokenGrantService,
+      ExchangedToken, GOOGLE_OAUTH_AUDIENCE_POLICY_ID, GOOGLE_SERVICE_ACCOUNT_AUTH_DRIVER_ID, TokenExchanger,
+      TokenGrantRequest, TokenGrantService, TokenInjectionKind,
     };
     struct ImmediateExchanger;
-    impl GoogleTokenExchanger for ImmediateExchanger {
+    impl TokenExchanger for ImmediateExchanger {
+      fn driver_id(&self) -> &'static str {
+        GOOGLE_SERVICE_ACCOUNT_AUTH_DRIVER_ID
+      }
+
+      fn injection_kind(&self) -> TokenInjectionKind {
+        TokenInjectionKind::BearerHeader
+      }
+
       fn exchange(
         &self,
         _instance_id: Uuid,
@@ -885,7 +899,7 @@ mod tests {
         })
       }
     }
-    let service = TokenGrantService::new(Arc::new(ImmediateExchanger));
+    let service = TokenGrantService::new(vec![Arc::new(ImmediateExchanger)]).unwrap();
     service
       .acquire(
         TokenGrantRequest {
@@ -901,13 +915,350 @@ mod tests {
       .unwrap()
   }
 
+  const GOOGLE_CLOUD_TRANSLATE_WASM: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../runtime-plugins/google-cloud/translate/fixtures/langnext-google-cloud-translate.wasm"
+  ));
+  const GOOGLE_CLOUD_DETECT_WASM: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../runtime-plugins/google-cloud/detect/fixtures/langnext-google-cloud-detect.wasm"
+  ));
+  const GOOGLE_CLOUD_OCR_WASM: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../runtime-plugins/google-cloud/ocr/fixtures/langnext-google-cloud-ocr.wasm"
+  ));
+  const GOOGLE_CLOUD_TTS_WASM: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../runtime-plugins/google-cloud/tts/fixtures/langnext-google-cloud-tts.wasm"
+  ));
+  const EDGE_TTS_WASM: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../runtime-plugins/edge-tts/fixtures/langnext-edge-tts.wasm"
+  ));
+  const GOOGLE_CLOUD_CONFIG_SCHEMA: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../runtime-plugins/google-cloud/schemas/config.json"
+  ));
+  const GOOGLE_CLOUD_TRANSLATE_PREFS: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../runtime-plugins/google-cloud/schemas/translate-preferences.json"
+  ));
+  const GOOGLE_CLOUD_OCR_PREFS: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../runtime-plugins/google-cloud/schemas/ocr-preferences.json"
+  ));
+  const GOOGLE_CLOUD_SPEECH_PREFS: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../runtime-plugins/google-cloud/schemas/speech-preferences.json"
+  ));
+  const EDGE_TTS_CONFIG_SCHEMA: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../runtime-plugins/edge-tts/schemas/config.json"
+  ));
+  const EDGE_TTS_SPEECH_PREFS: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../runtime-plugins/edge-tts/schemas/speech-preferences.json"
+  ));
+
+  /// Build a vendor-signed google-cloud package carrying the exact broker authorities the
+  /// broker tests exercise. The committed production archive declares no path authority, so
+  /// the synthetic manifest is the package-derived source for this fixture.
+  fn synthetic_google_cloud_package() -> (Vec<u8>, String) {
+    use crate::domain::runtime_plugin::{
+      CapabilityPathAuthorityDecl, CredentialSlotDecl, CredentialSlotKindV1, DeclaredPathAuthority,
+    };
+    use crate::services::plugin_package::hash_archive_bytes;
+    use crate::services::plugin_package::test_support::build_signed_package_with_key;
+    use crate::services::vendor_trust::test_vendor_fixture::{fixture_vendor_fingerprint, fixture_vendor_signing_key};
+
+    let schema_bytes = GOOGLE_CLOUD_CONFIG_SCHEMA.as_bytes().to_vec();
+    let translate_prefs = GOOGLE_CLOUD_TRANSLATE_PREFS.as_bytes().to_vec();
+    let ocr_prefs = GOOGLE_CLOUD_OCR_PREFS.as_bytes().to_vec();
+    let speech_prefs = GOOGLE_CLOUD_SPEECH_PREFS.as_bytes().to_vec();
+    let files = vec![
+      plugin_file(
+        "translate/fixtures/langnext-google-cloud-translate.wasm",
+        FileRole::RuntimeArtifact,
+        GOOGLE_CLOUD_TRANSLATE_WASM,
+      ),
+      plugin_file(
+        "detect/fixtures/langnext-google-cloud-detect.wasm",
+        FileRole::RuntimeArtifact,
+        GOOGLE_CLOUD_DETECT_WASM,
+      ),
+      plugin_file(
+        "ocr/fixtures/langnext-google-cloud-ocr.wasm",
+        FileRole::RuntimeArtifact,
+        GOOGLE_CLOUD_OCR_WASM,
+      ),
+      plugin_file(
+        "tts/fixtures/langnext-google-cloud-tts.wasm",
+        FileRole::RuntimeArtifact,
+        GOOGLE_CLOUD_TTS_WASM,
+      ),
+      plugin_file("schemas/config.json", FileRole::ConfigSchema, &schema_bytes),
+      plugin_file(
+        "schemas/translate-preferences.json",
+        FileRole::PreferenceSchema,
+        &translate_prefs,
+      ),
+      plugin_file("schemas/ocr-preferences.json", FileRole::PreferenceSchema, &ocr_prefs),
+      plugin_file(
+        "schemas/speech-preferences.json",
+        FileRole::PreferenceSchema,
+        &speech_prefs,
+      ),
+    ];
+    let manifest = PluginManifestV1 {
+      manifest_version: 1,
+      plugin_api_version: "1.0".into(),
+      id: GOOGLE_CLOUD_PLUGIN_ID.into(),
+      version: "1.2.0".into(),
+      publisher: PublisherDeclaration {
+        key_id: crate::services::vendor_trust::VENDOR_PUBLISHER_KEY_ID.into(),
+        key_fingerprint: fixture_vendor_fingerprint(),
+      },
+      runtime: RuntimeDescriptor {
+        kind: RuntimeKind::WasmComponent,
+        artifact: Some("translate/fixtures/langnext-google-cloud-translate.wasm".into()),
+        native_protocol_version: None,
+        native_dependencies: None,
+      },
+      targets: vec![],
+      files,
+      capabilities: vec![
+        CapabilityDeclaration {
+          id: "translate.text@1".into(),
+          preferences_schema: Some("schemas/translate-preferences.json".into()),
+          artifact: Some("translate/fixtures/langnext-google-cloud-translate.wasm".into()),
+        },
+        CapabilityDeclaration {
+          id: "translate.detect@1".into(),
+          preferences_schema: Some("schemas/translate-preferences.json".into()),
+          artifact: Some("detect/fixtures/langnext-google-cloud-detect.wasm".into()),
+        },
+        CapabilityDeclaration {
+          id: "ocr.image@1".into(),
+          preferences_schema: Some("schemas/ocr-preferences.json".into()),
+          artifact: Some("ocr/fixtures/langnext-google-cloud-ocr.wasm".into()),
+        },
+        CapabilityDeclaration {
+          id: "speech.synthesize@1".into(),
+          preferences_schema: Some("schemas/speech-preferences.json".into()),
+          artifact: Some("tts/fixtures/langnext-google-cloud-tts.wasm".into()),
+        },
+      ],
+      configuration_schema: Some("schemas/config.json".into()),
+      config_schema_version: Some(1),
+      credential_slots: vec![CredentialSlotDecl {
+        id: GOOGLE_CLOUD_SERVICE_ACCOUNT_SLOT.into(),
+        kind: CredentialSlotKindV1::SecretJson,
+        required: true,
+      }],
+      permissions: PermissionRequests {
+        network: vec![
+          NetworkEndpointRequest {
+            id: "translate".into(),
+            origins: vec!["https://translation.googleapis.com".into()],
+            methods: vec![HttpMethod::Post],
+            instance_origin_config_field: None,
+          },
+          NetworkEndpointRequest {
+            id: "vision".into(),
+            origins: vec!["https://vision.googleapis.com".into()],
+            methods: vec![HttpMethod::Post],
+            instance_origin_config_field: None,
+          },
+          NetworkEndpointRequest {
+            id: "text-to-speech".into(),
+            origins: vec!["https://texttospeech.googleapis.com".into()],
+            methods: vec![HttpMethod::Post],
+            instance_origin_config_field: None,
+          },
+        ],
+        auth_policies: vec!["com.langnext.auth.google-service-account".into()],
+      },
+      ui: Default::default(),
+      path_authority: vec![
+        CapabilityPathAuthorityDecl {
+          capability_id: "translate.text@1".into(),
+          endpoint_id: "translate".into(),
+          method: HttpMethod::Post,
+          path: DeclaredPathAuthority::BoundedPrefixSuffix {
+            prefix: "v3beta1/projects/".into(),
+            suffix: ":translateText".into(),
+          },
+          allowed_query_names: vec![],
+          allowed_header_names: vec![],
+          auth_policy_id: Some("com.langnext.auth.google-service-account".into()),
+        },
+        CapabilityPathAuthorityDecl {
+          capability_id: "translate.detect@1".into(),
+          endpoint_id: "translate".into(),
+          method: HttpMethod::Post,
+          path: DeclaredPathAuthority::BoundedPrefixSuffix {
+            prefix: "v3beta1/projects/".into(),
+            suffix: ":detectLanguage".into(),
+          },
+          allowed_query_names: vec![],
+          allowed_header_names: vec![],
+          auth_policy_id: Some("com.langnext.auth.google-service-account".into()),
+        },
+        CapabilityPathAuthorityDecl {
+          capability_id: "ocr.image@1".into(),
+          endpoint_id: "vision".into(),
+          method: HttpMethod::Post,
+          path: DeclaredPathAuthority::Exact {
+            value: "v1/images:annotate".into(),
+          },
+          allowed_query_names: vec![],
+          allowed_header_names: vec![],
+          auth_policy_id: Some("com.langnext.auth.google-service-account".into()),
+        },
+        CapabilityPathAuthorityDecl {
+          capability_id: "speech.synthesize@1".into(),
+          endpoint_id: "text-to-speech".into(),
+          method: HttpMethod::Post,
+          path: DeclaredPathAuthority::Exact {
+            value: "v1/text:synthesize".into(),
+          },
+          allowed_query_names: vec![],
+          allowed_header_names: vec![],
+          auth_policy_id: Some("com.langnext.auth.google-service-account".into()),
+        },
+      ],
+      provider_runtime: None,
+      model_resources: None,
+    };
+    let payloads: Vec<(&str, &[u8])> = vec![
+      (
+        "translate/fixtures/langnext-google-cloud-translate.wasm",
+        GOOGLE_CLOUD_TRANSLATE_WASM,
+      ),
+      (
+        "detect/fixtures/langnext-google-cloud-detect.wasm",
+        GOOGLE_CLOUD_DETECT_WASM,
+      ),
+      ("ocr/fixtures/langnext-google-cloud-ocr.wasm", GOOGLE_CLOUD_OCR_WASM),
+      ("tts/fixtures/langnext-google-cloud-tts.wasm", GOOGLE_CLOUD_TTS_WASM),
+      ("schemas/config.json", &schema_bytes),
+      ("schemas/translate-preferences.json", &translate_prefs),
+      ("schemas/ocr-preferences.json", &ocr_prefs),
+      ("schemas/speech-preferences.json", &speech_prefs),
+    ];
+    let package = build_signed_package_with_key(&manifest, &payloads, &fixture_vendor_signing_key());
+    let digest = hash_archive_bytes(&package);
+    (package, digest)
+  }
+
+  /// Build a vendor-signed edge-tts package declaring the broker authority (Exact path,
+  /// accept header) with an instance-configured origin field, matching the broker fixtures.
+  fn synthetic_edge_tts_package() -> (Vec<u8>, String) {
+    use crate::domain::runtime_plugin::{CapabilityPathAuthorityDecl, DeclaredPathAuthority};
+    use crate::services::plugin_package::hash_archive_bytes;
+    use crate::services::plugin_package::test_support::build_signed_package_with_key;
+    use crate::services::vendor_trust::test_vendor_fixture::{fixture_vendor_fingerprint, fixture_vendor_signing_key};
+
+    let schema_bytes = EDGE_TTS_CONFIG_SCHEMA.as_bytes().to_vec();
+    let prefs_bytes = EDGE_TTS_SPEECH_PREFS.as_bytes().to_vec();
+    let files = vec![
+      plugin_file(
+        "fixtures/langnext-edge-tts.wasm",
+        FileRole::RuntimeArtifact,
+        EDGE_TTS_WASM,
+      ),
+      plugin_file("schemas/config.json", FileRole::ConfigSchema, &schema_bytes),
+      plugin_file(
+        "schemas/speech-preferences.json",
+        FileRole::PreferenceSchema,
+        &prefs_bytes,
+      ),
+    ];
+    let manifest = PluginManifestV1 {
+      manifest_version: 1,
+      plugin_api_version: "1.0".into(),
+      id: EDGE_TTS_PLUGIN_ID.into(),
+      version: "1.0.0".into(),
+      publisher: PublisherDeclaration {
+        key_id: crate::services::vendor_trust::VENDOR_PUBLISHER_KEY_ID.into(),
+        key_fingerprint: fixture_vendor_fingerprint(),
+      },
+      runtime: RuntimeDescriptor {
+        kind: RuntimeKind::WasmComponent,
+        artifact: Some("fixtures/langnext-edge-tts.wasm".into()),
+        native_protocol_version: None,
+        native_dependencies: None,
+      },
+      targets: vec![],
+      files,
+      capabilities: vec![CapabilityDeclaration {
+        id: "speech.synthesize@1".into(),
+        preferences_schema: Some("schemas/speech-preferences.json".into()),
+        artifact: Some("fixtures/langnext-edge-tts.wasm".into()),
+      }],
+      configuration_schema: Some("schemas/config.json".into()),
+      config_schema_version: Some(1),
+      credential_slots: vec![],
+      permissions: PermissionRequests {
+        network: vec![NetworkEndpointRequest {
+          id: EDGE_TTS_ENDPOINT_ALIAS.into(),
+          origins: vec![EDGE_TTS_DEFAULT_BASE_URL.into()],
+          methods: vec![HttpMethod::Post],
+          instance_origin_config_field: Some("base-url".into()),
+        }],
+        auth_policies: vec!["host.none.v1".into()],
+      },
+      ui: Default::default(),
+      path_authority: vec![CapabilityPathAuthorityDecl {
+        capability_id: "speech.synthesize@1".into(),
+        endpoint_id: EDGE_TTS_ENDPOINT_ALIAS.into(),
+        method: HttpMethod::Post,
+        path: DeclaredPathAuthority::Exact {
+          value: "v1/audio/speech".into(),
+        },
+        allowed_query_names: vec![],
+        allowed_header_names: vec!["accept".into()],
+        auth_policy_id: None,
+      }],
+      provider_runtime: None,
+      model_resources: None,
+    };
+    let payloads: Vec<(&str, &[u8])> = vec![
+      ("fixtures/langnext-edge-tts.wasm", EDGE_TTS_WASM),
+      ("schemas/config.json", &schema_bytes),
+      ("schemas/speech-preferences.json", &prefs_bytes),
+    ];
+    let package = build_signed_package_with_key(&manifest, &payloads, &fixture_vendor_signing_key());
+    let digest = hash_archive_bytes(&package);
+    (package, digest)
+  }
+
+  fn plugin_file(path: &str, role: FileRole, bytes: &[u8]) -> PluginFileEntry {
+    PluginFileEntry {
+      path: path.into(),
+      role,
+      bytes: bytes.len() as u64,
+      sha256: public_sha256_hex(bytes),
+    }
+  }
+
+  /// Install both synthetic packages and project their definitions (production startup path).
+  fn broker_registry(db: &Database) -> Arc<ServiceIntegrationRegistry> {
+    let packages = crate::services::test_support::vendor_packages(db.clone(), db.app_data_dir());
+    let (google, _) = synthetic_google_cloud_package();
+    let (edge, _) = synthetic_edge_tts_package();
+    crate::services::test_support::bootstrap_package(&packages, &google);
+    crate::services::test_support::bootstrap_package(&packages, &edge);
+    crate::services::test_support::registry_from_installed_packages(&packages)
+  }
+
   fn broker_with(db: Database, transport: Arc<dyn RawHttpTransport>) -> NetworkBroker {
-    let registry = Arc::new(ServiceIntegrationRegistry::bundled().unwrap());
+    let registry = broker_registry(&db);
     NetworkBroker::with_transport(db, registry, transport)
   }
 
   fn approve_edge_custom_endpoint(db: &Database, instance: &IntegrationInstance) {
-    let registry = Arc::new(ServiceIntegrationRegistry::bundled().unwrap());
+    let registry = broker_registry(db);
     let trust_service = EndpointTrustService::new(db.clone(), registry.clone());
     let normalized_config = registry
       .get_registration(EDGE_TTS_PLUGIN_ID)
@@ -916,12 +1267,15 @@ mod tests {
       .normalize_config(&instance.config_json)
       .unwrap();
     let preview = trust_service
-      .preview(EndpointTrustPreviewInput {
-        plugin_id: EDGE_TTS_PLUGIN_ID.into(),
-        instance_id: Some(instance.id),
-        config_json: instance.config_json.clone(),
-        expected_updated_at: Some(instance.updated_at.clone()),
-      })
+      .preview(
+        EndpointTrustPreviewInput {
+          plugin_id: EDGE_TTS_PLUGIN_ID.into(),
+          instance_id: Some(instance.id),
+          config_json: instance.config_json.clone(),
+          expected_updated_at: Some(instance.updated_at.clone()),
+        },
+        None,
+      )
       .unwrap();
     let trust = trust_service
       .consume_for_save(
@@ -1098,51 +1452,6 @@ mod tests {
     );
   }
 
-  #[test]
-  fn edge_tts_vendor_default_uses_trusted_fixed_destination() {
-    let registration = crate::services::bundled_plugins::bundled()
-      .unwrap()
-      .into_iter()
-      .find(|registration| registration.manifest.id == EDGE_TTS_PLUGIN_ID)
-      .expect("Edge TTS registration must exist");
-
-    let default_endpoint = resolve_endpoint_base(
-      &registration,
-      &registration.manifest,
-      &edge_tts_instance(EDGE_TTS_DEFAULT_BASE_URL),
-      EDGE_TTS_ENDPOINT_ALIAS,
-      false,
-    )
-    .unwrap();
-    assert_eq!(default_endpoint.destination_policy, DestinationPolicy::TrustedFixed);
-
-    let custom_endpoint = resolve_endpoint_base(
-      &registration,
-      &registration.manifest,
-      &edge_tts_instance("https://custom.example"),
-      EDGE_TTS_ENDPOINT_ALIAS,
-      true,
-    )
-    .unwrap();
-    assert_eq!(
-      custom_endpoint.destination_policy,
-      DestinationPolicy::UserApprovedCustom
-    );
-
-    let official_origin_custom_path = resolve_endpoint_base(
-      &registration,
-      &registration.manifest,
-      &edge_tts_instance("https://tts.wangwangit.com/api"),
-      EDGE_TTS_ENDPOINT_ALIAS,
-      false,
-    )
-    .unwrap_err();
-    assert_eq!(
-      official_origin_custom_path.code,
-      CapabilityErrorCode::EndpointTrustRequired
-    );
-  }
-
   #[tokio::test]
   async fn network_broker_blocks_unapproved_custom_endpoint_before_transport() {
     let dir = tempfile::tempdir().unwrap();
@@ -1168,7 +1477,7 @@ mod tests {
     let db = Database::new(dir.path()).unwrap();
     db.initialize().unwrap();
     let instance = seed_edge_instance(&db, "https://custom.example/api/");
-    let registry = Arc::new(ServiceIntegrationRegistry::bundled().unwrap());
+    let registry = broker_registry(&db);
     let trust_service = EndpointTrustService::new(db.clone(), registry.clone());
     let normalized_config = registry
       .get_registration(EDGE_TTS_PLUGIN_ID)
@@ -1177,12 +1486,15 @@ mod tests {
       .normalize_config(&instance.config_json)
       .unwrap();
     let preview = trust_service
-      .preview(EndpointTrustPreviewInput {
-        plugin_id: EDGE_TTS_PLUGIN_ID.into(),
-        instance_id: Some(instance.id),
-        config_json: instance.config_json.clone(),
-        expected_updated_at: Some(instance.updated_at.clone()),
-      })
+      .preview(
+        EndpointTrustPreviewInput {
+          plugin_id: EDGE_TTS_PLUGIN_ID.into(),
+          instance_id: Some(instance.id),
+          config_json: instance.config_json.clone(),
+          expected_updated_at: Some(instance.updated_at.clone()),
+        },
+        None,
+      )
       .unwrap();
     let trust = trust_service
       .consume_for_save(

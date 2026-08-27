@@ -30,7 +30,6 @@ const APP_COMMANDS: &[&str] = &[
   "save_provider_instance",
   "set_provider_enabled",
   "delete_provider_instance",
-  "delete_retired_legacy_provider",
   "reorder_provider_instances",
   "list_provider_models",
   "list_all_provider_models",
@@ -42,10 +41,6 @@ const APP_COMMANDS: &[&str] = &[
   "delete_provider_models",
   "apply_provider_model_sync",
   "apply_provider_model_sync_failure",
-  // Provider HTTP (brokered frontend provider transport)
-  "provider_http_request",
-  "provider_http_stream",
-  "cancel_provider_http",
   // Translation profiles and service translation
   "list_translation_profiles",
   "get_translation_profile",
@@ -77,7 +72,6 @@ const APP_COMMANDS: &[&str] = &[
   "preview_default_runtime_authority",
   "confirm_default_runtime_authority",
   "retry_default_runtime_activation",
-  "list_legacy_runtime_inventory",
   "list_plugin_publishers",
   "list_plugin_model_resources",
   "download_plugin_model",
@@ -96,8 +90,6 @@ const APP_COMMANDS: &[&str] = &[
   "discard_integration_runtime_snapshot",
   // Provider runtime catalog and lifecycle
   "list_runtime_provider_catalog",
-  "preview_provider_runtime_upgrade",
-  "apply_provider_runtime_upgrade",
   "preview_provider_runtime_rollback",
   "apply_provider_runtime_rollback",
   "preview_provider_runtime_interface_attach",

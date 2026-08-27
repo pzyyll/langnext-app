@@ -10,8 +10,20 @@ export function formatPackageDigestShort(digest: string, head = 8, tail = 6): st
   return `${digest.slice(0, head)}…${digest.slice(-tail)}`;
 }
 
+export type PackageTrustTranslationKey =
+  | "plugins.packages.trust.trustedVendor"
+  | "plugins.packages.trust.trustedUser"
+  | "plugins.packages.trust.unknown"
+  | "plugins.packages.trust.revoked"
+  | "plugins.packages.trust.disabled"
+  | "plugins.packages.trust.unsigned";
+
+export type PackageSignatureTranslationKey =
+  | "plugins.packages.signature.unsigned"
+  | "plugins.packages.signature.signed";
+
 /** Map publisher trust state to a short i18n key suffix under plugins.packages.trust.* */
-export function publisherTrustLabelKey(trust: PublisherTrustState): string {
+export function publisherTrustLabelKey(trust: PublisherTrustState): PackageTrustTranslationKey {
   switch (trust) {
     case "trusted_vendor":
       return "plugins.packages.trust.trustedVendor";
@@ -23,7 +35,37 @@ export function publisherTrustLabelKey(trust: PublisherTrustState): string {
       return "plugins.packages.trust.revoked";
     case "disabled":
       return "plugins.packages.trust.disabled";
+    case "unsigned":
+      return "plugins.packages.trust.unsigned";
   }
+}
+
+/** Whether preview requires the unsigned authenticity checkbox. */
+export function requiresUnsignedRiskAcknowledgement(
+  preview: Pick<PluginPackagePreviewDto, "requiresUnsignedRiskAcknowledgement" | "signatureStatus">,
+): boolean {
+  return preview.requiresUnsignedRiskAcknowledgement === true || preview.signatureStatus === "unsigned";
+}
+
+/** Whether preview requires the native process-risk checkbox. */
+export function requiresNativeExecutionRiskAcknowledgement(
+  preview: Pick<PluginPackagePreviewDto, "requiresNativeExecutionRiskAcknowledgement">,
+): boolean {
+  return preview.requiresNativeExecutionRiskAcknowledgement === true;
+}
+
+export function installedSignatureLabelKey(
+  version: Pick<InstalledPluginVersionDto, "signatureStatus">,
+): PackageSignatureTranslationKey {
+  return version.signatureStatus === "unsigned"
+    ? "plugins.packages.signature.unsigned"
+    : "plugins.packages.signature.signed";
+}
+
+export function installedNativeRiskVisible(
+  version: Pick<InstalledPluginVersionDto, "runtimeKind" | "nativeExecutionRiskAcknowledged">,
+): boolean {
+  return version.runtimeKind === "trusted-native-worker" && version.nativeExecutionRiskAcknowledged === true;
 }
 
 /** Whether uninstall should be disabled in the UI (backend `in_use` remains authoritative). */
@@ -69,5 +111,5 @@ export function summarizeNetworkPermissions(
 
 /** Whether the installed package runtime is supported by the host executor. */
 export function isPackageExecutionEnabled(version: Pick<InstalledPluginVersionDto, "runtimeKind">): boolean {
-  return version.runtimeKind === "wasm-component";
+  return version.runtimeKind === "wasm-component" || version.runtimeKind === "trusted-native-worker";
 }

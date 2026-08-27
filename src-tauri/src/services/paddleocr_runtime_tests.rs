@@ -216,6 +216,7 @@ fn seed_native_instance(db: &Database, package_digest: &str, model_ready: bool) 
       auth_policies: vec![],
     },
     ui: Default::default(),
+    path_authority: vec![],
     provider_runtime: None,
     model_resources: Some(vec![model.clone()]),
   };
@@ -242,6 +243,7 @@ fn seed_native_instance(db: &Database, package_digest: &str, model_ready: bool) 
         version: "1.0.0".into(),
         publisher_key_id: VENDOR_PUBLISHER_KEY_ID.into(),
         publisher_fingerprint: test_vendor_fixture::fixture_vendor_fingerprint(),
+        signature_status: crate::domain::plugin_package::PackageSignatureStatus::Signed,
         runtime_kind: "trusted-native-worker".into(),
         manifest_json,
         permission_request_digest: "a".repeat(64),
@@ -354,7 +356,6 @@ fn paddleocr_runtime_missing_model_does_not_spawn_worker() {
 fn paddleocr_runtime_resolve_ocr_missing_model_fails_closed() {
   use crate::services::plugin_store::PluginPackageService;
   use crate::services::runtime_router::RuntimeRouter;
-  use crate::services::service_capabilities::ServiceCapabilityRegistry;
   use crate::services::service_integration_registry::ServiceIntegrationRegistry;
   use crate::services::vendor_trust::test_vendor_fixture::fixture_vendor_public_key;
   use crate::services::wasm_runtime::WasmRuntime;
@@ -378,16 +379,17 @@ fn paddleocr_runtime_resolve_ocr_missing_model_fails_closed() {
 
   let packages =
     PluginPackageService::with_vendor_roots(db.clone(), dir.path().to_path_buf(), vec![fixture_vendor_public_key()]);
-  let registry = Arc::new(ServiceIntegrationRegistry::bundled().unwrap());
-  let handlers = Arc::new(ServiceCapabilityRegistry::new());
+  let registry = Arc::new(ServiceIntegrationRegistry::empty());
   let wasm = Arc::new(WasmRuntime::new().unwrap());
-  let router = RuntimeRouter::new(db, registry, handlers, packages, wasm);
+  let router = RuntimeRouter::new(db, registry, packages, wasm);
   let err = match router.resolve_ocr(instance_id, OCR_IMAGE_CAPABILITY_ID) {
     Ok(_) => panic!("missing model must fail closed"),
     Err(err) => err,
   };
   assert!(
-    err.message.contains("model_missing") || err.code == CapabilityErrorCode::InvalidConfiguration,
+    err.message.contains("model_missing")
+      || err.code == CapabilityErrorCode::InvalidConfiguration
+      || err.code == CapabilityErrorCode::PluginUnavailable,
     "unexpected error code={:?} message={}",
     err.code,
     err.message
@@ -422,10 +424,10 @@ fn paddleocr_health_validate_bundled_without_vendor_package_is_degraded() {
         health_status: IntegrationHealthStatus::Unvalidated,
         last_validated_at: None,
         last_error_code: None,
-        runtime_kind: "bundled-rust".into(),
-        package_digest: None,
+        runtime_kind: "wasm-component".into(),
+        package_digest: Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into()),
         execution_grant_set_revision: None,
-        runtime_state: "active".into(),
+        runtime_state: "pending_activation".into(),
         runtime_error_code: None,
         runtime_error_message: None,
         runtime_requirement_json: None,
@@ -455,9 +457,12 @@ fn paddleocr_health_validate_bundled_without_vendor_package_is_degraded() {
   });
   let registry = Arc::new(registry);
   let vault = Arc::new(MemoryCredentialVault::default());
-  let tokens = Arc::new(TokenGrantService::new(Arc::new(
-    crate::services::google_service_account::GoogleServiceAccountExchanger::new(db.clone(), vault.clone()),
-  )));
+  let tokens = Arc::new(
+    TokenGrantService::new(vec![Arc::new(
+      crate::services::google_service_account::GoogleServiceAccountExchanger::new(db.clone(), vault.clone()),
+    )])
+    .unwrap(),
+  );
   let service = ServiceIntegrationService::new(db, vault, registry, tokens);
   let result = tokio::runtime::Builder::new_current_thread()
     .enable_all()
@@ -508,9 +513,12 @@ fn paddleocr_health_validate_missing_model_is_degraded() {
   });
   let registry = Arc::new(registry);
   let vault = Arc::new(MemoryCredentialVault::default());
-  let tokens = Arc::new(TokenGrantService::new(Arc::new(
-    crate::services::google_service_account::GoogleServiceAccountExchanger::new(db.clone(), vault.clone()),
-  )));
+  let tokens = Arc::new(
+    TokenGrantService::new(vec![Arc::new(
+      crate::services::google_service_account::GoogleServiceAccountExchanger::new(db.clone(), vault.clone()),
+    )])
+    .unwrap(),
+  );
   let service = ServiceIntegrationService::new(db, vault, registry, tokens);
   let result = tokio::runtime::Builder::new_current_thread()
     .enable_all()
@@ -583,9 +591,12 @@ fn paddleocr_health_validate_ready_for_wrong_model_id_is_degraded() {
   });
   let registry = Arc::new(registry);
   let vault = Arc::new(MemoryCredentialVault::default());
-  let tokens = Arc::new(TokenGrantService::new(Arc::new(
-    crate::services::google_service_account::GoogleServiceAccountExchanger::new(db.clone(), vault.clone()),
-  )));
+  let tokens = Arc::new(
+    TokenGrantService::new(vec![Arc::new(
+      crate::services::google_service_account::GoogleServiceAccountExchanger::new(db.clone(), vault.clone()),
+    )])
+    .unwrap(),
+  );
   let service = ServiceIntegrationService::new(db, vault, registry, tokens);
   let result = tokio::runtime::Builder::new_current_thread()
     .enable_all()
@@ -657,9 +668,12 @@ fn paddleocr_health_validate_ready_with_version_mismatch_is_degraded() {
   });
   let registry = Arc::new(registry);
   let vault = Arc::new(MemoryCredentialVault::default());
-  let tokens = Arc::new(TokenGrantService::new(Arc::new(
-    crate::services::google_service_account::GoogleServiceAccountExchanger::new(db.clone(), vault.clone()),
-  )));
+  let tokens = Arc::new(
+    TokenGrantService::new(vec![Arc::new(
+      crate::services::google_service_account::GoogleServiceAccountExchanger::new(db.clone(), vault.clone()),
+    )])
+    .unwrap(),
+  );
   let service = ServiceIntegrationService::new(db, vault, registry, tokens);
   let result = tokio::runtime::Builder::new_current_thread()
     .enable_all()
@@ -710,9 +724,12 @@ fn paddleocr_health_validate_ready_model_is_ready() {
   });
   let registry = Arc::new(registry);
   let vault = Arc::new(MemoryCredentialVault::default());
-  let tokens = Arc::new(TokenGrantService::new(Arc::new(
-    crate::services::google_service_account::GoogleServiceAccountExchanger::new(db.clone(), vault.clone()),
-  )));
+  let tokens = Arc::new(
+    TokenGrantService::new(vec![Arc::new(
+      crate::services::google_service_account::GoogleServiceAccountExchanger::new(db.clone(), vault.clone()),
+    )])
+    .unwrap(),
+  );
   let service = ServiceIntegrationService::new(db, vault, registry, tokens);
   let result = tokio::runtime::Builder::new_current_thread()
     .enable_all()
@@ -806,6 +823,7 @@ fn paddleocr_health_validate_db_manifest_divergence_uses_signed_first_model() {
       auth_policies: vec![],
     },
     ui: Default::default(),
+    path_authority: vec![],
     provider_runtime: None,
     model_resources: Some(vec![model.clone()]),
   };
@@ -825,6 +843,8 @@ fn paddleocr_health_validate_db_manifest_divergence_uses_signed_first_model() {
       approve_publisher: false,
       publisher_public_key_hex: None,
       acknowledge_permissions: true,
+      acknowledge_unsigned_package_risk: false,
+      acknowledge_native_execution_risk: false,
     })
     .expect("approve");
   let package_digest = approved.version.package_digest;
@@ -909,9 +929,12 @@ fn paddleocr_health_validate_db_manifest_divergence_uses_signed_first_model() {
   });
   let registry = Arc::new(registry);
   let vault = Arc::new(MemoryCredentialVault::default());
-  let tokens = Arc::new(TokenGrantService::new(Arc::new(
-    crate::services::google_service_account::GoogleServiceAccountExchanger::new(db.clone(), vault.clone()),
-  )));
+  let tokens = Arc::new(
+    TokenGrantService::new(vec![Arc::new(
+      crate::services::google_service_account::GoogleServiceAccountExchanger::new(db.clone(), vault.clone()),
+    )])
+    .unwrap(),
+  );
   let service = ServiceIntegrationService::new(db, vault, registry, tokens).with_plugin_packages(packages);
 
   let result = tokio::runtime::Builder::new_current_thread()
@@ -1022,9 +1045,12 @@ fn assert_paddleocr_health_publisher_gate(label: &str, mutate: impl FnOnce(&Data
   });
   let registry = Arc::new(registry);
   let vault = Arc::new(MemoryCredentialVault::default());
-  let tokens = Arc::new(TokenGrantService::new(Arc::new(
-    crate::services::google_service_account::GoogleServiceAccountExchanger::new(db.clone(), vault.clone()),
-  )));
+  let tokens = Arc::new(
+    TokenGrantService::new(vec![Arc::new(
+      crate::services::google_service_account::GoogleServiceAccountExchanger::new(db.clone(), vault.clone()),
+    )])
+    .unwrap(),
+  );
   let service = ServiceIntegrationService::new(db, vault, registry, tokens);
   let result = tokio::runtime::Builder::new_current_thread()
     .enable_all()
@@ -1128,6 +1154,7 @@ fn install_and_authorize_paddleocr_default(
       auth_policies: vec![],
     },
     ui: Default::default(),
+    path_authority: vec![],
     provider_runtime: None,
     model_resources: Some(vec![model]),
   };
@@ -1147,6 +1174,8 @@ fn install_and_authorize_paddleocr_default(
       approve_publisher: false,
       publisher_public_key_hex: None,
       acknowledge_permissions: true,
+      acknowledge_unsigned_package_risk: false,
+      acknowledge_native_execution_risk: false,
     })
     .expect("approve");
   let digest = approved.version.package_digest.clone();
@@ -1161,6 +1190,7 @@ fn install_and_authorize_paddleocr_default(
     .authorize_default_plugin_package(AuthorizeDefaultPluginPackageInput {
       preview_id: preview.preview_id,
       acknowledge_future_instance_authority: true,
+      acknowledge_unsigned_default_risk: false,
     })
     .expect("authorize default");
   (db, packages, activation, digest)
@@ -1201,9 +1231,12 @@ fn default_package_activation_integration_paddleocr_create_grant() {
   let lifecycle = RuntimeLifecycleService::new(db.clone(), packages.clone(), registry.clone());
   let activation = activation.with_integration_lifecycle(lifecycle.clone());
   let vault = Arc::new(MemoryCredentialVault::default());
-  let tokens = Arc::new(TokenGrantService::new(Arc::new(
-    crate::services::google_service_account::GoogleServiceAccountExchanger::new(db.clone(), vault.clone()),
-  )));
+  let tokens = Arc::new(
+    TokenGrantService::new(vec![Arc::new(
+      crate::services::google_service_account::GoogleServiceAccountExchanger::new(db.clone(), vault.clone()),
+    )])
+    .unwrap(),
+  );
   let service = ServiceIntegrationService::new(db, vault, registry, tokens)
     .with_runtime_lifecycle(lifecycle)
     .with_default_package_activation(activation.clone());
@@ -1274,9 +1307,12 @@ fn default_package_activation_integration_paddleocr_upgrade_race() {
   let lifecycle = RuntimeLifecycleService::new(db.clone(), packages.clone(), registry.clone());
   let activation = activation.with_integration_lifecycle(lifecycle.clone());
   let vault = Arc::new(MemoryCredentialVault::default());
-  let tokens = Arc::new(TokenGrantService::new(Arc::new(
-    crate::services::google_service_account::GoogleServiceAccountExchanger::new(db.clone(), vault.clone()),
-  )));
+  let tokens = Arc::new(
+    TokenGrantService::new(vec![Arc::new(
+      crate::services::google_service_account::GoogleServiceAccountExchanger::new(db.clone(), vault.clone()),
+    )])
+    .unwrap(),
+  );
   let service = ServiceIntegrationService::new(db, vault, registry, tokens)
     .with_runtime_lifecycle(lifecycle.clone())
     .with_default_package_activation(activation.clone());

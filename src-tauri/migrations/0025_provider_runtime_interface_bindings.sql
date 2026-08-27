@@ -19,11 +19,8 @@ CREATE TABLE provider_runtime_bindings_new (
     provider_id                  TEXT NOT NULL,
     adapter_id                   TEXT NOT NULL,
     runtime_kind                 TEXT NOT NULL
-                                 CHECK (runtime_kind IN (
-                                   'legacy-frontend-provider',
-                                   'wasm-component'
-                                 )),
-    package_digest               TEXT,
+                                 CHECK (runtime_kind = 'wasm-component'),
+    package_digest               TEXT NOT NULL,
     grant_set_revision           INTEGER
                                  CHECK (
                                    grant_set_revision IS NULL OR grant_set_revision >= 1
@@ -37,7 +34,7 @@ CREATE TABLE provider_runtime_bindings_new (
     error_code                   TEXT,
     error_message                TEXT,
     -- Full export-format provider runtime requirement (publisher fingerprint, API,
-    -- capability majors, legacy alias). Used for unresolved import restore; never
+    -- capability majors, adapter alias). Used for unresolved import restore; never
     -- substitutes a different package identity.
     runtime_requirement_json     TEXT,
     created_at                   TEXT NOT NULL,
@@ -45,37 +42,15 @@ CREATE TABLE provider_runtime_bindings_new (
     PRIMARY KEY (provider_id, adapter_id),
     CHECK (adapter_id <> ''),
     CHECK (
-      (
-        runtime_kind = 'legacy-frontend-provider'
-        AND package_digest IS NULL
-        AND grant_set_revision IS NULL
-      )
-      OR (
-        -- Package pin: exact digest + grant revision while active; unavailable/pending
-        -- activation may retain an unresolved requirement without a grant.
-        runtime_kind = 'wasm-component'
-        AND package_digest IS NOT NULL
-        AND (
-          (state = 'active' AND grant_set_revision IS NOT NULL)
-          OR state IN ('unavailable', 'pending_activation')
-        )
+      runtime_kind = 'wasm-component'
+      AND (
+        (state = 'active' AND grant_set_revision IS NOT NULL)
+        OR state IN ('unavailable', 'pending_activation')
       )
     ),
     FOREIGN KEY (provider_id)
         REFERENCES provider_instances(id) ON DELETE CASCADE
 );
-
--- Legacy v24 providers keep one active legacy binding for the Provider default API type.
--- Missing non-default bindings mean legacy execution, never a synthetic Wasm binding.
-INSERT INTO provider_runtime_bindings_new (
-    provider_id, adapter_id, runtime_kind, package_digest, grant_set_revision, state,
-    error_code, error_message, runtime_requirement_json, created_at, updated_at
-)
-SELECT b.provider_id, p.adapter_id, 'legacy-frontend-provider', NULL, NULL, 'active',
-       NULL, NULL, NULL, b.created_at, b.updated_at
-FROM provider_runtime_bindings b
-JOIN provider_instances p ON p.id = b.provider_id
-WHERE b.runtime_kind = 'legacy-frontend-provider';
 
 -- Active Wasm rows ONLY for effective v24 API types that are actually present and verified
 -- as declared aliases in the installed signed manifest. Aliases of the same Provider/package
@@ -99,7 +74,7 @@ WHERE b.runtime_kind = 'wasm-component'
 -- Every other persisted default/override type on a Wasm-bound v24 provider (missing or
 -- unverifiable manifest, historical invalid default, or a pending/unavailable pin) becomes
 -- a sanitized per-type unavailable requirement requiring explicit review. The migration
--- never guesses an active route and never silently sends that model to legacy.
+-- never guesses an active route.
 INSERT INTO provider_runtime_bindings_new (
     provider_id, adapter_id, runtime_kind, package_digest, grant_set_revision, state,
     error_code, error_message, runtime_requirement_json, created_at, updated_at
@@ -140,10 +115,7 @@ CREATE TABLE provider_runtime_snapshot_sets (
     created_at              TEXT NOT NULL,
     discarded_at            TEXT,
     runtime_kind            TEXT NOT NULL
-                            CHECK (runtime_kind IN (
-                              'legacy-frontend-provider',
-                              'wasm-component'
-                            )),
+                            CHECK (runtime_kind = 'wasm-component'),
     package_digest          TEXT,
     grant_set_revision      INTEGER
                             CHECK (
@@ -173,10 +145,7 @@ CREATE TABLE provider_runtime_snapshot_bindings (
     provider_id             TEXT NOT NULL,
     adapter_id              TEXT NOT NULL,
     runtime_kind            TEXT NOT NULL
-                            CHECK (runtime_kind IN (
-                              'legacy-frontend-provider',
-                              'wasm-component'
-                            )),
+                            CHECK (runtime_kind = 'wasm-component'),
     package_digest          TEXT,
     grant_set_revision      INTEGER
                             CHECK (
@@ -203,7 +172,7 @@ CREATE TABLE provider_runtime_snapshot_bindings (
 CREATE INDEX idx_provider_runtime_snapshot_bindings_set
     ON provider_runtime_snapshot_bindings(snapshot_set_id);
 
--- Migrate every v24 snapshot as a Provider-scoped atomic set, preserving the historic ID.
+-- Migrate every v24 package snapshot as a Provider-scoped atomic set, preserving the historic ID.
 INSERT INTO provider_runtime_snapshot_sets (
     id, provider_id, scope, created_at, discarded_at, runtime_kind, package_digest,
     grant_set_revision, grant_set_id, plugin_id, plugin_version, publisher_key_id,
@@ -212,9 +181,9 @@ INSERT INTO provider_runtime_snapshot_sets (
 SELECT id, provider_id, 'provider', created_at, discarded_at, runtime_kind, package_digest,
        grant_set_revision, grant_set_id, plugin_id, plugin_version, publisher_key_id,
        publisher_fingerprint, plugin_api_version, capability_ids_json, updated_at
-FROM provider_runtime_snapshots;
+FROM provider_runtime_snapshots
+WHERE runtime_kind = 'wasm-component';
 
--- Legacy v24 snapshots restore no active interface bindings (they carry no children).
 -- Wasm v24 snapshots restore every positively evidenced alias row with the snapshot's exact
 -- package/grant identity; rows without positive alias evidence become unavailable children.
 INSERT INTO provider_runtime_snapshot_bindings (

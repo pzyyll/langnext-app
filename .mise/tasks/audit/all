@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# ABOUTME: Run JavaScript and Rust dependency audits and keep both reports.
+# ABOUTME: Always runs both ecosystems and exits non-zero if either auditor fails.
+#MISE description="Audit JavaScript and Rust dependencies"
+set -euo pipefail
+
+root="${MISE_PROJECT_ROOT:-$(cd "$(dirname "$0")/../../.." && pwd)}"
+cd "$root"
+
+set +e
+mise run audit:bun
+bun_status=$?
+mise run audit:cargo
+cargo_status=$?
+set -e
+
+if [[ "$bun_status" -ne 0 || "$cargo_status" -ne 0 ]]; then
+  echo "error: audit:all failed (bun=$bun_status cargo=$cargo_status)" >&2
+  exit 1
+fi

@@ -4,15 +4,16 @@ use crate::domain::plugin_package::{
   ED25519_PUBLIC_KEY_LEN, ED25519_SIGNATURE_LEN, PACKAGE_ARCHIVE_MAX_BYTES, PACKAGE_DECOMPRESSION_RATIO_MAX,
   PACKAGE_ENTRY_MAX_BYTES, PACKAGE_ENTRY_MAX_COUNT, PACKAGE_MANIFEST_MAX_BYTES, PACKAGE_PATH_MAX_DEPTH,
   PACKAGE_SCHEMA_MAX_BYTES, PACKAGE_SIGNATURE_MAX_BYTES, PACKAGE_TOTAL_DECOMPRESSED_MAX_BYTES,
-  PACKAGE_UI_ASSET_MAX_BYTES, PackageErrorCode, decode_lowercase_hex, encode_lowercase_hex, sha256_hex,
+  PACKAGE_UI_ASSET_MAX_BYTES, PackageErrorCode, PackageSignatureStatus, decode_lowercase_hex, encode_lowercase_hex,
+  sha256_hex,
 };
 use crate::domain::runtime_plugin::{
   FileRole, MANIFEST_FILE_PATH, PUBLISHER_PUBLIC_KEY_PATH, PluginFileEntry, PluginManifestV1, SIGNATURE_FILE_PATH,
   host_package_target, package_targets_compatible, validate_archive_entry_path,
 };
 use crate::services::runtime_plugin_contracts::{
-  ArchiveEntry, ContractError, ContractErrorCode, ValidatedPluginManifest, parse_manifest, validate_archive_shape,
-  validate_manifest, validate_manifest_host_targets,
+  ArchiveEntry, ContractError, ContractErrorCode, ValidatedPluginManifest, parse_manifest,
+  validate_archive_shape_with_signature, validate_manifest, validate_manifest_host_targets,
 };
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use sha2::{Digest, Sha256};
@@ -28,6 +29,7 @@ pub struct VerifiedPackage {
   pub package_digest: String,
   pub manifest_bytes: Vec<u8>,
   pub signature_bytes: Vec<u8>,
+  pub signature_status: PackageSignatureStatus,
   pub manifest: PluginManifestV1,
   pub validated: ValidatedPluginManifest,
   pub extracted_files: HashMap<String, Vec<u8>>,
@@ -230,14 +232,24 @@ fn normalize_entry_path(raw: &str) -> Result<String, PackageVerifyError> {
 /// [`verify_package_bytes`] with an explicit trusted public key (fail closed).
 pub fn inspect_package_bytes(archive_bytes: &[u8]) -> Result<VerifiedPackage, PackageVerifyError> {
   let inspected = parse_and_validate_package_bytes(archive_bytes)?;
-  // Signature must be the correct length, but crypto verification is deferred until a key is supplied.
-  if inspected.signature_bytes.len() != ED25519_SIGNATURE_LEN {
-    return Err(PackageVerifyError::new(
-      PackageErrorCode::SignatureInvalid,
-      format!("signature must be {ED25519_SIGNATURE_LEN} bytes"),
-    ));
+  match inspected.signature_status {
+    PackageSignatureStatus::Unsigned => {
+      if !inspected.signature_bytes.is_empty() {
+        return Err(PackageVerifyError::new(
+          PackageErrorCode::SignatureInvalid,
+          "unsigned packages must omit signatures/manifest.sig",
+        ));
+      }
+    }
+    PackageSignatureStatus::Signed => {
+      if inspected.signature_bytes.len() != ED25519_SIGNATURE_LEN {
+        return Err(PackageVerifyError::new(
+          PackageErrorCode::SignatureInvalid,
+          format!("signature must be {ED25519_SIGNATURE_LEN} bytes"),
+        ));
+      }
+    }
   }
-  // Keep auto-resolved key from publisher.pub when present.
   Ok(inspected)
 }
 
@@ -245,6 +257,8 @@ pub fn inspect_package_bytes(archive_bytes: &[u8]) -> Result<VerifiedPackage, Pa
 ///
 /// Always performs Ed25519 verification over the exact `plugin.json` bytes with the supplied
 /// public key. Missing/empty keys fail closed — there is no length-only accept path.
+/// Release bundle verification reuses this function with an external vendor public root and
+/// never reads private keys or seeds.
 pub fn verify_package_bytes(archive_bytes: &[u8], public_key_hex: &str) -> Result<VerifiedPackage, PackageVerifyError> {
   if public_key_hex.trim().is_empty() {
     return Err(PackageVerifyError::new(
@@ -253,6 +267,12 @@ pub fn verify_package_bytes(archive_bytes: &[u8], public_key_hex: &str) -> Resul
     ));
   }
   let mut verified = parse_and_validate_package_bytes(archive_bytes)?;
+  if verified.signature_status != PackageSignatureStatus::Signed || verified.signature_bytes.is_empty() {
+    return Err(PackageVerifyError::new(
+      PackageErrorCode::MissingSignature,
+      "signatures/manifest.sig missing",
+    ));
+  }
   verify_manifest_signature(&verified.manifest_bytes, &verified.signature_bytes, public_key_hex)?;
   let fingerprint = public_key_fingerprint(public_key_hex)?;
   if fingerprint != verified.manifest.publisher.key_fingerprint {
@@ -382,16 +402,19 @@ fn parse_and_validate_package_bytes(archive_bytes: &[u8]) -> Result<VerifiedPack
       format!("plugin.json exceeds {PACKAGE_MANIFEST_MAX_BYTES} bytes"),
     ));
   }
-  let signature_bytes = extracted
-    .get(SIGNATURE_FILE_PATH)
-    .cloned()
-    .ok_or_else(|| PackageVerifyError::new(PackageErrorCode::MissingSignature, "signatures/manifest.sig missing"))?;
-  if signature_bytes.len() as u64 > PACKAGE_SIGNATURE_MAX_BYTES {
+  let signature_present = extracted.contains_key(SIGNATURE_FILE_PATH);
+  let signature_bytes = extracted.get(SIGNATURE_FILE_PATH).cloned().unwrap_or_default();
+  if signature_present && signature_bytes.len() as u64 > PACKAGE_SIGNATURE_MAX_BYTES {
     return Err(PackageVerifyError::new(
       PackageErrorCode::SignatureInvalid,
       format!("signature exceeds {PACKAGE_SIGNATURE_MAX_BYTES} bytes"),
     ));
   }
+  let signature_status = if signature_present {
+    PackageSignatureStatus::Signed
+  } else {
+    PackageSignatureStatus::Unsigned
+  };
 
   let manifest = parse_manifest(
     std::str::from_utf8(&manifest_bytes)
@@ -408,7 +431,12 @@ fn parse_and_validate_package_bytes(archive_bytes: &[u8]) -> Result<VerifiedPack
       sha256: sha256_hex(bytes),
     })
     .collect();
-  validate_archive_shape(&manifest, &archive_entries).map_err(|err| {
+  validate_archive_shape_with_signature(
+    &manifest,
+    &archive_entries,
+    signature_status == PackageSignatureStatus::Signed,
+  )
+  .map_err(|err| {
     // Distinguish missing indexed vs undeclared vs case-fold duplicates.
     if err.message.contains("absent from the archive") {
       PackageVerifyError::new(PackageErrorCode::MissingIndexedFile, err.message)
@@ -456,6 +484,7 @@ fn parse_and_validate_package_bytes(archive_bytes: &[u8]) -> Result<VerifiedPack
     package_digest,
     manifest_bytes,
     signature_bytes,
+    signature_status,
     manifest: manifest.clone(),
     validated,
     extracted_files: extracted,
@@ -465,11 +494,10 @@ fn parse_and_validate_package_bytes(archive_bytes: &[u8]) -> Result<VerifiedPack
 }
 
 /// First-party native worker packages are limited to the host allowlist (PaddleOCR only).
-/// Publisher key id/fingerprint must reverse-bind the configured vendor root; user-approved
-/// publishers are never sufficient for trusted-native-worker packages.
+/// Authenticity is separate: vendor-signed packages reverse-bind the vendor root; non-vendor
+/// signed or unsigned allowlisted packages require exact-digest native-risk acknowledgement.
 fn validate_native_worker_package_authority(manifest: &PluginManifestV1) -> Result<(), String> {
   use crate::domain::native_worker::{PADDLEOCR_PLUGIN_ID, PADDLEOCR_PLUGIN_VERSION};
-  use crate::services::vendor_trust::VENDOR_PUBLISHER_KEY_ID;
 
   if manifest.id != PADDLEOCR_PLUGIN_ID {
     return Err(format!(
@@ -481,12 +509,6 @@ fn validate_native_worker_package_authority(manifest: &PluginManifestV1) -> Resu
     return Err(format!(
       "native worker version {} is not the allowlisted release",
       manifest.version
-    ));
-  }
-  if manifest.publisher.key_id != VENDOR_PUBLISHER_KEY_ID {
-    return Err(format!(
-      "native worker publisher key id {} is not the vendor root key",
-      manifest.publisher.key_id
     ));
   }
   if manifest.model_resources.as_ref().map(|r| r.is_empty()).unwrap_or(true) {
@@ -568,15 +590,6 @@ fn validate_package_semantics(
     RuntimeKind::TrustedNativeWorker => {
       validate_native_worker_package_authority(manifest)
         .map_err(|message| PackageVerifyError::new(PackageErrorCode::CompatibilityRejected, message))?;
-    }
-    RuntimeKind::BundledRust | RuntimeKind::LegacyFrontendProvider => {
-      return Err(PackageVerifyError::new(
-        PackageErrorCode::CompatibilityRejected,
-        format!(
-          "runtime kind {:?} is not installable as an external package",
-          manifest.runtime.kind
-        ),
-      ));
     }
   }
 
@@ -699,6 +712,37 @@ pub fn verify_store_content(
     ));
   }
   let verified = verify_package_bytes(&archive_bytes, public_key_hex)?;
+  if verified.package_digest != expected_package_digest {
+    return Err(PackageVerifyError::new(
+      PackageErrorCode::DigestMismatch,
+      "verified package digest does not match store key",
+    ));
+  }
+  verify_extracted_content_snapshot(&verified, content_dir)?;
+  Ok(verified)
+}
+
+/// Integrity-only store re-verify for unsigned packages. Never treats a present signature as unsigned.
+pub fn verify_store_content_integrity(
+  package_path: &Path,
+  content_dir: &Path,
+  expected_package_digest: &str,
+) -> Result<VerifiedPackage, PackageVerifyError> {
+  let archive_bytes = read_file_bounded(package_path, PACKAGE_ARCHIVE_MAX_BYTES)?;
+  let digest = hash_archive_bytes(&archive_bytes);
+  if digest != expected_package_digest {
+    return Err(PackageVerifyError::new(
+      PackageErrorCode::DigestMismatch,
+      format!("store package digest mismatch for {expected_package_digest}"),
+    ));
+  }
+  let verified = inspect_package_bytes(&archive_bytes)?;
+  if verified.signature_status != PackageSignatureStatus::Unsigned {
+    return Err(PackageVerifyError::new(
+      PackageErrorCode::SignatureInvalid,
+      "unsigned integrity verification cannot accept a signed archive",
+    ));
+  }
   if verified.package_digest != expected_package_digest {
     return Err(PackageVerifyError::new(
       PackageErrorCode::DigestMismatch,
@@ -917,6 +961,89 @@ pub fn finalize_package_from_staging(
   Ok(digest)
 }
 
+/// Build a canonical unsigned `.lnplugin` from a staging tree that omits `signatures/manifest.sig`.
+///
+/// Rejects a present signature file instead of stripping it. Does not read private keys.
+pub fn finalize_unsigned_package_from_staging(
+  staging_dir: &Path,
+  output_path: &Path,
+) -> Result<String, PackageVerifyError> {
+  let sig_path = staging_dir.join(SIGNATURE_FILE_PATH);
+  if sig_path.exists() {
+    return Err(PackageVerifyError::new(
+      PackageErrorCode::SignatureInvalid,
+      "unsigned finalization refuses a present signatures/manifest.sig",
+    ));
+  }
+  let manifest_path = staging_dir.join(MANIFEST_FILE_PATH);
+  let manifest_bytes = read_file_bounded(&manifest_path, PACKAGE_MANIFEST_MAX_BYTES)?;
+  let manifest = parse_manifest(
+    std::str::from_utf8(&manifest_bytes)
+      .map_err(|_| PackageVerifyError::new(PackageErrorCode::InvalidManifest, "plugin.json is not UTF-8"))?,
+  )?;
+  let validated = validate_manifest(&manifest)?;
+  let mut indexed: Vec<&PluginFileEntry> = manifest.files.iter().collect();
+  indexed.sort_by(|a, b| a.path.cmp(&b.path));
+  let mut extracted_for_semantics: HashMap<String, Vec<u8>> = HashMap::new();
+  extracted_for_semantics.insert(MANIFEST_FILE_PATH.to_string(), manifest_bytes.clone());
+  let mut indexed_entries: Vec<(String, Vec<u8>)> = Vec::with_capacity(indexed.len());
+  for file in &indexed {
+    let path = staging_dir.join(&file.path);
+    let bytes = read_file_bounded(&path, role_max_bytes(file.role))?;
+    if bytes.len() as u64 != file.bytes {
+      return Err(PackageVerifyError::new(
+        PackageErrorCode::DigestMismatch,
+        format!("staging file {} length mismatch", file.path),
+      ));
+    }
+    let digest = sha256_hex(&bytes);
+    if digest != file.sha256 {
+      return Err(PackageVerifyError::new(
+        PackageErrorCode::DigestMismatch,
+        format!("staging file {} digest mismatch", file.path),
+      ));
+    }
+    extracted_for_semantics.insert(file.path.clone(), bytes.clone());
+    indexed_entries.push((file.path.clone(), bytes));
+  }
+  validate_package_semantics(&manifest, &validated, &extracted_for_semantics)?;
+
+  let mut entries: Vec<(String, Vec<u8>)> = Vec::with_capacity(indexed_entries.len() + 2);
+  entries.push((MANIFEST_FILE_PATH.to_string(), manifest_bytes));
+  if let Some(pub_bytes) = staged_pub_bytes(staging_dir) {
+    entries.push((PUBLISHER_PUBLIC_KEY_PATH.to_string(), pub_bytes));
+  }
+  entries.extend(indexed_entries);
+
+  if let Some(parent) = output_path.parent() {
+    std::fs::create_dir_all(parent).map_err(|e| PackageVerifyError::new(PackageErrorCode::Internal, e.to_string()))?;
+  }
+  let out_file =
+    File::create(output_path).map_err(|e| PackageVerifyError::new(PackageErrorCode::Internal, e.to_string()))?;
+  let mut zip = zip::ZipWriter::new(out_file);
+  let options = zip::write::SimpleFileOptions::default()
+    .compression_method(zip::CompressionMethod::Deflated)
+    .unix_permissions(0o644);
+  for (name, bytes) in &entries {
+    zip
+      .start_file(name, options)
+      .map_err(|e| PackageVerifyError::new(PackageErrorCode::Internal, e.to_string()))?;
+    zip
+      .write_all(bytes)
+      .map_err(|e| PackageVerifyError::new(PackageErrorCode::Internal, e.to_string()))?;
+  }
+  zip
+    .finish()
+    .map_err(|e| PackageVerifyError::new(PackageErrorCode::Internal, e.to_string()))?;
+
+  let archive_bytes = read_file_bounded(output_path, PACKAGE_ARCHIVE_MAX_BYTES)?;
+  let digest = hash_archive_bytes(&archive_bytes);
+  let sha_path = PathBuf::from(format!("{}.sha256", output_path.display()));
+  std::fs::write(&sha_path, format!("{digest}\n"))
+    .map_err(|e| PackageVerifyError::new(PackageErrorCode::Internal, e.to_string()))?;
+  Ok(digest)
+}
+
 /// Read the optional publisher.pub from staging, returning raw 32 bytes if present and valid.
 fn staged_pub_bytes(staging_dir: &Path) -> Option<Vec<u8>> {
   let path = staging_dir.join(PUBLISHER_PUBLIC_KEY_PATH);
@@ -993,6 +1120,7 @@ pub mod test_support {
         auth_policies: vec![],
       },
       ui: Default::default(),
+      path_authority: vec![],
       provider_runtime: None,
       model_resources: None,
     }
@@ -1033,6 +1161,36 @@ pub mod test_support {
       zip.finish().unwrap();
     }
     cursor.into_inner()
+  }
+
+  pub fn build_unsigned_package(manifest: &PluginManifestV1, files: &[(&str, &[u8])]) -> Vec<u8> {
+    let manifest_bytes = serde_json::to_vec(manifest).expect("manifest json");
+    let mut cursor = std::io::Cursor::new(Vec::new());
+    {
+      let mut zip = zip::ZipWriter::new(&mut cursor);
+      let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated)
+        .unix_permissions(0o644);
+      zip.start_file(MANIFEST_FILE_PATH, options).unwrap();
+      zip.write_all(&manifest_bytes).unwrap();
+      let mut ordered: Vec<(&str, &[u8])> = files.to_vec();
+      ordered.sort_by(|a, b| a.0.cmp(b.0));
+      for (path, bytes) in ordered {
+        zip.start_file(path, options).unwrap();
+        zip.write_all(bytes).unwrap();
+      }
+      zip.finish().unwrap();
+    }
+    cursor.into_inner()
+  }
+
+  pub fn valid_unsigned_package() -> (Vec<u8>, String) {
+    let wasm = b"\0asm\x01\x00\x00\x00";
+    let mut manifest = sample_manifest(wasm);
+    manifest.id = "com.example.unsigned".into();
+    let bytes = build_unsigned_package(&manifest, &[("artifacts/plugin.wasm", wasm.as_slice())]);
+    let digest = hash_archive_bytes(&bytes);
+    (bytes, digest)
   }
 
   pub fn valid_signed_package() -> (Vec<u8>, String) {
@@ -1089,6 +1247,29 @@ mod tests {
     let inspected = inspect_package_bytes(&pkg).unwrap();
     assert_eq!(inspected.package_digest, digest);
     assert!(inspected.publisher_public_key_hex.is_empty());
+  }
+
+  #[test]
+  fn unsigned_finalize_produces_integrity_valid_archive_without_signature() {
+    let dir = tempfile::tempdir().unwrap();
+    let staging = dir.path().join("staging");
+    std::fs::create_dir_all(staging.join("artifacts")).unwrap();
+    let wasm = b"\0asm\x01\x00\x00\x00";
+    let manifest = sample_manifest(wasm);
+    std::fs::write(staging.join(MANIFEST_FILE_PATH), serde_json::to_vec(&manifest).unwrap()).unwrap();
+    std::fs::write(staging.join("artifacts/plugin.wasm"), wasm).unwrap();
+    let output = dir.path().join("unsigned.lnplugin");
+    let digest = finalize_unsigned_package_from_staging(&staging, &output).unwrap();
+    assert_eq!(digest.len(), SHA256_HEX_LEN);
+    let bytes = std::fs::read(&output).unwrap();
+    assert_eq!(hash_archive_bytes(&bytes), digest);
+    let inspected = inspect_package_bytes(&bytes).unwrap();
+    assert_eq!(inspected.signature_status, PackageSignatureStatus::Unsigned);
+    assert!(inspected.signature_bytes.is_empty());
+    assert_eq!(inspected.manifest.id, "com.example.translate");
+    assert!(!inspected.extracted_files.contains_key(SIGNATURE_FILE_PATH));
+    let err = verify_package_bytes(&bytes, &test_public_key_hex()).unwrap_err();
+    assert_eq!(err.code, PackageErrorCode::MissingSignature);
   }
 
   #[test]

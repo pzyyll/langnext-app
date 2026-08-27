@@ -13,7 +13,8 @@ use crate::domain::runtime_plugin::{
   RuntimeDescriptor, RuntimeKind,
 };
 use crate::domain::runtime_provider::{
-  ApplyProviderRuntimeUpgradeInput, ProviderRuntimeKind, ProviderRuntimeState, legacy_frontend_binding,
+  ApplyProviderRuntimeInterfaceAttachInput, PreviewProviderRuntimeInterfaceAttachInput, ProviderRuntimeKind,
+  ProviderRuntimeState,
 };
 use crate::repositories::{plugin_permission_grants, provider_instances, provider_runtime_bindings};
 use crate::services::bounded_http::{BoundedHttpResponse, PreparedHttpRequest, RawHttpTransport};
@@ -466,6 +467,7 @@ fn provider_runtime_manifest(
       auth_policies: vec![HOST_PROVIDER_INSTANCE_AUTH_POLICY_ID.into()],
     },
     ui: Default::default(),
+    path_authority: vec![],
     provider_runtime: Some(declaration),
     model_resources: None,
   }
@@ -1082,10 +1084,10 @@ fn insert_provider_row_with(
         updated_at: now,
       },
     )?;
-    provider_runtime_bindings::insert(
-      uow.conn(),
-      &legacy_frontend_binding(id, adapter_id, &crate::domain::time::now_rfc3339()),
-    )?;
+    // Package-only seeding: the provider row carries NO runtime binding yet. Reads of a
+    // missing binding return None and treat the provider as a legacy source identity; the
+    // v24-era backfill rows themselves fail closed at the repository parse, so fixtures must
+    // never fabricate them.
     Ok(())
   })
   .unwrap();
@@ -1142,14 +1144,49 @@ fn activate_fixture_provider(
     Some("sk-test-provider-secret"),
   );
   let lifecycle = ProviderRuntimeService::new(db.clone(), packages, wasm);
-  let preview = lifecycle.preview_upgrade(provider_id, &package_digest).unwrap();
-  lifecycle
-    .apply_upgrade(ApplyProviderRuntimeUpgradeInput {
-      preview_id: preview.preview_id,
-      acknowledge_permissions: true,
-    })
-    .unwrap();
+  attach_provider_default_package(&lifecycle, &db, provider_id, &package_digest);
   (provider_id, package_digest)
+}
+
+fn provider_adapter_id(db: &Database, provider_id: Uuid) -> String {
+  db.read(|conn| provider_instances::get(conn, provider_id))
+    .expect("provider row for interface attach")
+    .adapter_id
+}
+
+fn preview_provider_default_attach(
+  service: &ProviderRuntimeService,
+  db: &Database,
+  provider_id: Uuid,
+  package_digest: &str,
+) -> crate::domain::runtime_provider::ProviderRuntimeInterfacePreviewDto {
+  service
+    .preview_interface_attach(&PreviewProviderRuntimeInterfaceAttachInput {
+      provider_id,
+      adapter_id: provider_adapter_id(db, provider_id),
+      package_digest: package_digest.to_string(),
+    })
+    .expect("preview interface attach")
+}
+
+fn apply_acknowledged_interface_attach(
+  service: &ProviderRuntimeService,
+  preview_id: String,
+) -> Result<crate::domain::runtime_provider::ProviderRuntimeInterfaceLifecycleResultDto, crate::error::StorageError> {
+  service.apply_interface_attach(ApplyProviderRuntimeInterfaceAttachInput {
+    preview_id,
+    acknowledge_permissions: true,
+  })
+}
+
+fn attach_provider_default_package(
+  service: &ProviderRuntimeService,
+  db: &Database,
+  provider_id: Uuid,
+  package_digest: &str,
+) {
+  let preview = preview_provider_default_attach(service, db, provider_id, package_digest);
+  apply_acknowledged_interface_attach(service, preview.preview_id).expect("apply interface attach");
 }
 
 /// Phase 8 Task 6: bounded Models List execution through a verified Component. The fixture's
@@ -1311,9 +1348,7 @@ async fn runtime_provider_broker_uses_only_bound_provider_connection() {
     AuthSchemeV1, BaseUrlSource, CredentialKind, ModelsSyncStatus, ProviderInstance, ProxyMode,
   };
   use crate::domain::runtime_plugin::{AuthPolicyId, EndpointId, HttpsOrigin, NetworkOriginKind, ResourceLimits};
-  use crate::domain::runtime_provider::{
-    ApplyProviderRuntimeUpgradeInput, ProviderRuntimeKind, ProviderRuntimeState, legacy_frontend_binding,
-  };
+  use crate::domain::runtime_provider::{ProviderRuntimeKind, ProviderRuntimeState};
   use crate::repositories::{plugin_permission_grants, provider_instances, provider_runtime_bindings};
   use crate::services::bounded_http::{BoundedHttpResponse, PreparedHttpRequest, RawHttpTransport};
   use crate::services::provider_runtime_broker::ProviderRuntimeBrokerHandle;
@@ -1417,10 +1452,9 @@ async fn runtime_provider_broker_uses_only_bound_provider_connection() {
           updated_at: now,
         },
       )?;
-      provider_runtime_bindings::insert(
-        uow.conn(),
-        &legacy_frontend_binding(id, "openai-compatible", &crate::domain::time::now_rfc3339()),
-      )?;
+      let _now = crate::domain::time::now_rfc3339();
+      // No runtime binding yet: providers seed legacy (no package identity) and upgrade
+      // through the real lifecycle, exactly like production backfilled rows.
       Ok(())
     })
     .unwrap();
@@ -1459,13 +1493,7 @@ async fn runtime_provider_broker_uses_only_bound_provider_connection() {
   );
   insert_provider(&db, provider_b, "Provider B", None, &vault, None);
   let lifecycle = ProviderRuntimeService::new(db.clone(), packages, wasm);
-  let preview = lifecycle.preview_upgrade(provider_a, &package_digest).unwrap();
-  lifecycle
-    .apply_upgrade(ApplyProviderRuntimeUpgradeInput {
-      preview_id: preview.preview_id,
-      acknowledge_permissions: true,
-    })
-    .unwrap();
+  attach_provider_default_package(&lifecycle, &db, provider_a, &package_digest);
 
   let binding_a = db
     .read(|conn| provider_runtime_bindings::get(conn, provider_a, "openai-compatible"))
@@ -1655,10 +1683,8 @@ async fn runtime_provider_broker_uses_only_bound_provider_connection() {
 /// binding and the second provider stays legacy.
 #[test]
 fn runtime_provider_lifecycle_binds_exact_package_and_provider_grant() {
-  use crate::domain::provider::{AuthSchemeV1, BaseUrlSource, CredentialKind, CredentialUpdate, ProxyMode};
-  use crate::domain::runtime_provider::{
-    ApplyProviderRuntimeRollbackInput, ApplyProviderRuntimeUpgradeInput, ProviderRuntimeKind,
-  };
+  use crate::domain::provider::{AuthSchemeV1, BaseUrlSource, CredentialKind, ProxyMode};
+  use crate::domain::runtime_provider::{ApplyProviderRuntimeRollbackInput, ProviderRuntimeKind};
   use crate::state::AppState;
 
   let dir = tempfile::tempdir().unwrap();
@@ -1672,25 +1698,39 @@ fn runtime_provider_lifecycle_binds_exact_package_and_provider_grant() {
     .package_digest()
     .to_string();
 
+  // Seed providers directly (no default authorization): package-only reads treat a provider
+  // without a runtime binding as a legacy source identity, exactly like a v24 backfill.
   fn create_provider(state: &AppState, name: &str) -> uuid::Uuid {
+    let id = crate::domain::time::new_id();
+    let now = crate::domain::time::now_rfc3339();
     state
-      .providers
-      .save(crate::domain::provider::ProviderInstanceWrite {
-        id: None,
-        adapter_id: "openai-compatible".into(),
-        display_name: name.into(),
-        base_url: "https://api.openai.com/v1".into(),
-        base_url_source: BaseUrlSource::PluginDefault,
-        auth_scheme: AuthSchemeV1::bearer(),
-        credential_kind: CredentialKind::ApiKey,
-        credential: CredentialUpdate::Keep,
-        enabled: true,
-        proxy_mode: ProxyMode::Inherit,
-        insecure_http_confirmed_at: None,
-        expected_updated_at: None,
+      .db
+      .transaction(|uow| {
+        crate::repositories::provider_instances::insert(
+          uow.conn(),
+          &crate::domain::provider::ProviderInstance {
+            id,
+            adapter_id: "openai-compatible".into(),
+            display_name: name.into(),
+            base_url: "https://api.openai.com/v1".into(),
+            base_url_source: BaseUrlSource::PluginDefault,
+            auth_scheme: AuthSchemeV1::bearer(),
+            credential_kind: CredentialKind::ApiKey,
+            credential_ref: None,
+            enabled: true,
+            proxy_mode: ProxyMode::Inherit,
+            insecure_http_confirmed_at: None,
+            models_synced_at: None,
+            models_sync_status: crate::domain::provider::ModelsSyncStatus::Never,
+            models_sync_error_code: None,
+            created_at: now.clone(),
+            updated_at: now,
+          },
+        )?;
+        Ok::<_, crate::error::StorageError>(())
       })
-      .unwrap()
-      .id
+      .expect("seed provider");
+    id
   }
 
   let provider_a = create_provider(&state, "Provider A");
@@ -1732,29 +1772,22 @@ fn runtime_provider_lifecycle_binds_exact_package_and_provider_grant() {
   assert_eq!(entries.len(), 1);
   assert_eq!(entries[0].package_digest, package_digest);
 
-  // Preview + apply only the first provider.
-  let preview = state
-    .runtime_providers
-    .preview_upgrade(provider_a, &package_digest)
-    .unwrap();
+  // Preview + apply only the first provider through the public interface attach APIs.
+  let preview = preview_provider_default_attach(&state.runtime_providers, &state.db, provider_a, &package_digest);
   assert_eq!(preview.provider_id, provider_a);
+  assert_eq!(preview.adapter_id, "openai-compatible");
   assert!(preview.requires_permission_approval);
-  assert_eq!(preview.source.runtime_kind, ProviderRuntimeKind::LegacyFrontendProvider);
+  assert_eq!(preview.source.runtime_kind, ProviderRuntimeKind::WasmComponent);
   assert_eq!(preview.target.runtime_kind, ProviderRuntimeKind::WasmComponent);
   assert_eq!(preview.target.package_digest.as_deref(), Some(package_digest.as_str()));
   assert_eq!(preview.legacy_aliases, vec!["openai-compatible".to_string()]);
 
-  let applied = state
-    .runtime_providers
-    .apply_upgrade(ApplyProviderRuntimeUpgradeInput {
-      preview_id: preview.preview_id.clone(),
-      acknowledge_permissions: true,
-    })
-    .unwrap();
+  let applied = apply_acknowledged_interface_attach(&state.runtime_providers, preview.preview_id.clone()).unwrap();
   assert_eq!(applied.provider_id, provider_a);
-  assert_eq!(applied.runtime.runtime_kind, ProviderRuntimeKind::WasmComponent);
-  assert_eq!(applied.runtime.package_digest.as_deref(), Some(package_digest.as_str()));
-  assert_eq!(applied.runtime.grant_set_revision, Some(1));
+  assert_eq!(applied.adapter_id, "openai-compatible");
+  assert_eq!(applied.binding.runtime_kind, ProviderRuntimeKind::WasmComponent);
+  assert_eq!(applied.binding.package_digest.as_deref(), Some(package_digest.as_str()));
+  assert_eq!(applied.binding.grant_set_revision, Some(1));
 
   // The grant subject is exactly the first provider, at revision 1, for the exact digest.
   let (grant_count, grant_subject, grant_revision) = state
@@ -1796,36 +1829,20 @@ fn runtime_provider_lifecycle_binds_exact_package_and_provider_grant() {
 
   // Reuse of the SAME verified package by a second provider is safe: grants are scoped to
   // (provider_instance, package_digest, revision), so provider B attaches independently.
-  let preview_b = state
-    .runtime_providers
-    .preview_upgrade(provider_b, &package_digest)
-    .expect("second provider attaches the same verified package");
-  let applied_b = state
-    .runtime_providers
-    .apply_upgrade(ApplyProviderRuntimeUpgradeInput {
-      preview_id: preview_b.preview_id,
-      acknowledge_permissions: true,
-    })
+  let preview_b = preview_provider_default_attach(&state.runtime_providers, &state.db, provider_b, &package_digest);
+  let applied_b = apply_acknowledged_interface_attach(&state.runtime_providers, preview_b.preview_id)
     .expect("second provider apply succeeds");
   assert_eq!(applied_b.provider_id, provider_b);
   assert_eq!(
-    applied_b.runtime.grant_set_revision,
+    applied_b.binding.grant_set_revision,
     Some(1),
     "per-provider grant revision"
   );
 
   // A per-model API Type override that is not attached (custom-relay) no longer blocks the
   // attach: unbound API types keep the legacy executor, so provider C attaches too.
-  let preview_c = state
-    .runtime_providers
-    .preview_upgrade(provider_c, &package_digest)
-    .expect("mismatched override does not block attach");
-  state
-    .runtime_providers
-    .apply_upgrade(ApplyProviderRuntimeUpgradeInput {
-      preview_id: preview_c.preview_id,
-      acknowledge_permissions: true,
-    })
+  let preview_c = preview_provider_default_attach(&state.runtime_providers, &state.db, provider_c, &package_digest);
+  apply_acknowledged_interface_attach(&state.runtime_providers, preview_c.preview_id)
     .expect("provider C apply succeeds");
 
   let grant_counts: i64 = state
@@ -1846,13 +1863,7 @@ fn runtime_provider_lifecycle_binds_exact_package_and_provider_grant() {
 
   // A stale apply changes nothing: the preview is one-shot, so re-applying conflicts and the
   // binding keeps the exact package/grant identity.
-  let err = state
-    .runtime_providers
-    .apply_upgrade(ApplyProviderRuntimeUpgradeInput {
-      preview_id: preview.preview_id,
-      acknowledge_permissions: true,
-    })
-    .unwrap_err();
+  let err = apply_acknowledged_interface_attach(&state.runtime_providers, preview.preview_id).unwrap_err();
   assert!(
     matches!(err, crate::error::StorageError::Conflict(_)),
     "stale apply: {err:?}"
@@ -1872,20 +1883,14 @@ fn runtime_provider_lifecycle_binds_exact_package_and_provider_grant() {
     rollback_preview.current.runtime_kind,
     ProviderRuntimeKind::WasmComponent
   );
-  assert_eq!(
-    rollback_preview.target.runtime_kind,
-    ProviderRuntimeKind::LegacyFrontendProvider
-  );
+  assert_eq!(rollback_preview.target.runtime_kind, ProviderRuntimeKind::WasmComponent);
   let rolled_back = state
     .runtime_providers
     .apply_rollback(ApplyProviderRuntimeRollbackInput {
       preview_id: rollback_preview.preview_id,
     })
     .unwrap();
-  assert_eq!(
-    rolled_back.runtime.runtime_kind,
-    ProviderRuntimeKind::LegacyFrontendProvider
-  );
+  assert_eq!(rolled_back.runtime.runtime_kind, ProviderRuntimeKind::WasmComponent);
   assert!(rolled_back.runtime.package_digest.is_none());
   assert!(rolled_back.runtime.grant_set_revision.is_none());
 
@@ -2002,32 +2007,42 @@ fn model_api_type_override_is_additive_while_provider_runtime_active() {
 #[test]
 fn runtime_provider_export_import_preserves_exact_requirement_without_activation() {
   use crate::domain::import_export::ImportConflictMode;
-  use crate::domain::provider::{AuthSchemeV1, BaseUrlSource, CredentialKind, CredentialUpdate, ProxyMode};
-  use crate::domain::runtime_provider::{
-    ApplyProviderRuntimeUpgradeInput, ProviderRuntimeKind, ProviderRuntimeRequirementExport, ProviderRuntimeState,
-  };
+  use crate::domain::provider::{AuthSchemeV1, BaseUrlSource, CredentialKind, ProxyMode};
+  use crate::domain::runtime_provider::{ProviderRuntimeKind, ProviderRuntimeRequirementExport, ProviderRuntimeState};
   use crate::repositories::provider_runtime_bindings;
   use crate::state::AppState;
 
   fn create_provider(state: &AppState, name: &str) -> uuid::Uuid {
+    let id = crate::domain::time::new_id();
+    let now = crate::domain::time::now_rfc3339();
     state
-      .providers
-      .save(crate::domain::provider::ProviderInstanceWrite {
-        id: None,
-        adapter_id: "openai-compatible".into(),
-        display_name: name.into(),
-        base_url: "https://api.openai.com/v1".into(),
-        base_url_source: BaseUrlSource::PluginDefault,
-        auth_scheme: AuthSchemeV1::bearer(),
-        credential_kind: CredentialKind::ApiKey,
-        credential: CredentialUpdate::Keep,
-        enabled: true,
-        proxy_mode: ProxyMode::Inherit,
-        insecure_http_confirmed_at: None,
-        expected_updated_at: None,
+      .db
+      .transaction(|uow| {
+        crate::repositories::provider_instances::insert(
+          uow.conn(),
+          &crate::domain::provider::ProviderInstance {
+            id,
+            adapter_id: "openai-compatible".into(),
+            display_name: name.into(),
+            base_url: "https://api.openai.com/v1".into(),
+            base_url_source: BaseUrlSource::PluginDefault,
+            auth_scheme: AuthSchemeV1::bearer(),
+            credential_kind: CredentialKind::ApiKey,
+            credential_ref: None,
+            enabled: true,
+            proxy_mode: ProxyMode::Inherit,
+            insecure_http_confirmed_at: None,
+            models_synced_at: None,
+            models_sync_status: crate::domain::provider::ModelsSyncStatus::Never,
+            models_sync_error_code: None,
+            created_at: now.clone(),
+            updated_at: now,
+          },
+        )?;
+        Ok::<_, crate::error::StorageError>(())
       })
-      .unwrap()
-      .id
+      .expect("seed provider");
+    id
   }
 
   // --- Source database: one active package binding + one legacy provider. ---
@@ -2040,18 +2055,9 @@ fn runtime_provider_export_import_preserves_exact_requirement_without_activation
     .package_digest()
     .to_string();
   let provider_a = create_provider(&source, "Active Provider");
-  let provider_b = create_provider(&source, "Legacy Provider");
-  let preview = source
-    .runtime_providers
-    .preview_upgrade(provider_a, &package_digest)
-    .unwrap();
-  source
-    .runtime_providers
-    .apply_upgrade(ApplyProviderRuntimeUpgradeInput {
-      preview_id: preview.preview_id,
-      acknowledge_permissions: true,
-    })
-    .unwrap();
+  let provider_b = create_provider(&source, "Pending Provider");
+  attach_provider_default_package(&source.runtime_providers, &source.db, provider_a, &package_digest);
+  attach_provider_default_package(&source.runtime_providers, &source.db, provider_b, &package_digest);
 
   // --- Export through the public service. ---
   let document = source.import_export.export().unwrap();
@@ -2103,14 +2109,21 @@ fn runtime_provider_export_import_preserves_exact_requirement_without_activation
     "v8 exports never write the singular runtime field"
   );
 
-  // Legacy providers normalize to one legacy-frontend-provider requirement with no identity.
-  let legacy_requirements = export_b.runtime_bindings.as_slice();
-  assert_eq!(legacy_requirements.len(), 1);
-  let legacy_requirement = &legacy_requirements[0];
-  assert_eq!(legacy_requirement.adapter_id.as_deref(), Some("openai-compatible"));
-  assert_eq!(legacy_requirement.runtime_kind, "legacy-frontend-provider");
-  assert!(legacy_requirement.package_digest.is_none());
-  assert!(legacy_requirement.plugin_api_version.is_none());
+  // The second provider carries the exact same package requirement: the document preserves
+  // the package identity per provider without any executing authority.
+  let pending_requirements = export_b.runtime_bindings.as_slice();
+  assert_eq!(pending_requirements.len(), 1);
+  let pending_requirement = &pending_requirements[0];
+  assert_eq!(pending_requirement.adapter_id.as_deref(), Some("openai-compatible"));
+  assert_eq!(pending_requirement.runtime_kind, "wasm-component");
+  assert_eq!(
+    pending_requirement.package_digest.as_deref(),
+    Some(package_digest.as_str())
+  );
+  assert_eq!(
+    pending_requirement.plugin_id.as_deref(),
+    Some("langnext.conformance.llm-provider")
+  );
 
   // No executable authority, grant revision, package bytes, or secret material is exported.
   assert!(!json.contains("grantSetRevision"), "no grant revision in export");
@@ -2156,13 +2169,16 @@ fn runtime_provider_export_import_preserves_exact_requirement_without_activation
   assert_eq!(restored.legacy_aliases, vec!["openai-compatible".to_string()]);
   assert_eq!(restored.capabilities.len(), 2);
 
-  // The legacy provider stayed legacy and active.
+  // The pending provider's exact requirement restores as an unavailable binding (no grant,
+  // no activation), exactly like the active provider's.
   let binding_b = target
     .db
     .read(|conn| provider_runtime_bindings::get(conn, provider_b, "openai-compatible"))
     .unwrap();
-  assert_eq!(binding_b.runtime_kind, ProviderRuntimeKind::LegacyFrontendProvider);
-  assert_eq!(binding_b.state, ProviderRuntimeState::Active);
+  assert_eq!(binding_b.runtime_kind, ProviderRuntimeKind::WasmComponent);
+  assert_eq!(binding_b.package_digest.as_deref(), Some(package_digest.as_str()));
+  assert_eq!(binding_b.state, ProviderRuntimeState::Unavailable);
+  assert!(binding_b.grant_set_revision.is_none());
 
   // No execution grant set and no credential reference were restored anywhere.
   let grant_count: i64 = target
@@ -3183,15 +3199,7 @@ async fn openai_compatible_runtime_component_matches_current_provider_fixtures()
     Some("sk-test-provider-secret"),
   );
   let lifecycle = ProviderRuntimeService::new(db.clone(), packages.clone(), wasm.clone());
-  let preview = lifecycle
-    .preview_upgrade(provider_id, &package_digest)
-    .expect("openai-compatible package previews");
-  lifecycle
-    .apply_upgrade(ApplyProviderRuntimeUpgradeInput {
-      preview_id: preview.preview_id,
-      acknowledge_permissions: true,
-    })
-    .expect("openai-compatible package applies");
+  attach_provider_default_package(&lifecycle, &db, provider_id, &package_digest);
   let model_id = insert_fixture_model(&db, provider_id, "gpt-4o-mini");
 
   // 1) Fixed Models List: GET /models through the broker; the result matches the current
@@ -3860,15 +3868,7 @@ async fn openai_responses_runtime_component_matches_current_provider_fixtures() 
     Some("sk-test-provider-secret"),
   );
   let lifecycle = ProviderRuntimeService::new(db.clone(), packages.clone(), wasm.clone());
-  let preview = lifecycle
-    .preview_upgrade(provider_id, &package_digest)
-    .expect("openai-responses package previews");
-  lifecycle
-    .apply_upgrade(ApplyProviderRuntimeUpgradeInput {
-      preview_id: preview.preview_id,
-      acknowledge_permissions: true,
-    })
-    .expect("openai-responses package applies");
+  attach_provider_default_package(&lifecycle, &db, provider_id, &package_digest);
   let model_id = insert_fixture_model(&db, provider_id, "gpt-5.4-mini");
 
   // 1) Fixed Models List: GET /models through the broker; the result matches the current
@@ -4612,15 +4612,7 @@ async fn anthropic_runtime_component_matches_current_provider_fixtures() {
     Some(ANTHROPIC_TEST_SECRET),
   );
   let lifecycle = ProviderRuntimeService::new(db.clone(), packages.clone(), wasm.clone());
-  let preview = lifecycle
-    .preview_upgrade(provider_id, &package_digest)
-    .expect("anthropic package previews");
-  lifecycle
-    .apply_upgrade(ApplyProviderRuntimeUpgradeInput {
-      preview_id: preview.preview_id,
-      acknowledge_permissions: true,
-    })
-    .expect("anthropic package applies");
+  attach_provider_default_package(&lifecycle, &db, provider_id, &package_digest);
   let model_id = insert_fixture_model(&db, provider_id, "claude-3-5-haiku");
 
   // 1) Fixed two-page Models List aggregate: the guest traverses the bounded page sequence
@@ -5125,33 +5117,25 @@ fn runtime_provider_vendor_default_applies_only_to_new_matching_provider() {
   let runtime = ProviderRuntimeService::new(db.clone(), packages.clone(), wasm.clone());
   let providers = ProviderService::new(db.clone(), vault.clone()).with_runtime_defaults(Arc::new(runtime.clone()));
 
-  // 1) Missing package: no default is configured, so a new matching Provider stays legacy.
-  let missing = providers.save(openai_write()).expect("provider create succeeds");
-  assert_eq!(
-    missing.runtime.runtime_kind,
-    ProviderRuntimeKind::LegacyFrontendProvider,
-    "no default package: new matching provider stays legacy"
+  // 1) Missing package: no default is configured, so provider create FAILS CLOSED.
+  let missing_error = providers
+    .save(openai_write())
+    .expect_err("create without a default must fail");
+  assert!(
+    missing_error.to_string().contains("default package"),
+    "got {missing_error}"
   );
 
-  // A pre-existing Provider created before the default is set must remain legacy later.
-  let preexisting = providers.save(openai_write()).expect("pre-existing provider create");
-  assert_eq!(
-    preexisting.runtime.runtime_kind,
-    ProviderRuntimeKind::LegacyFrontendProvider
-  );
-
-  // 2) Install the verified vendor fixture. Without an authorized policy, create stays legacy.
+  // 2) Install the verified vendor fixture. Without an authorized policy, create still fails
+  // closed (an installed package alone never enables legacy execution).
   let import = packages
     .bootstrap_bundled_package(OPENAI_COMPATIBLE_PACKAGE, false)
     .expect("vendor package bootstraps");
   let digest = import.package_digest().to_string();
-  let unauthorized = providers
-    .save(openai_write())
-    .expect("matching provider without policy");
-  assert_eq!(
-    unauthorized.runtime.runtime_kind,
-    ProviderRuntimeKind::LegacyFrontendProvider,
-    "installed package without authorized default policy uses dual-stack legacy create"
+  let unauthorized_error = providers.save(openai_write()).expect_err("no policy, no create");
+  assert!(
+    unauthorized_error.to_string().contains("default package"),
+    "got {unauthorized_error}"
   );
 
   // 3) Authorize the exact default policy, then package-first create uses the retained digest.
@@ -5168,6 +5152,7 @@ fn runtime_provider_vendor_default_applies_only_to_new_matching_provider() {
       crate::domain::default_package_activation::AuthorizeDefaultPluginPackageInput {
         preview_id: preview.preview_id,
         acknowledge_future_instance_authority: true,
+        acknowledge_unsigned_default_risk: false,
       },
     )
     .expect("authorize default package");
@@ -5185,17 +5170,17 @@ fn runtime_provider_vendor_default_applies_only_to_new_matching_provider() {
     "package-first create retains exact digest without grant until activation"
   );
 
-  // 4) A nonmatching adapter never receives the default.
-  let nonmatching = providers
+  // 4) A nonmatching adapter never receives the default: create fails closed.
+  let nonmatching_error = providers
     .save(provider_write(
       "deepseek",
       BaseUrlSource::PluginDefault,
       "https://api.deepseek.com",
     ))
-    .expect("nonmatching provider create");
-  assert_eq!(
-    nonmatching.runtime.runtime_kind,
-    ProviderRuntimeKind::LegacyFrontendProvider
+    .expect_err("nonmatching provider create must fail");
+  assert!(
+    nonmatching_error.to_string().contains("default package"),
+    "got {nonmatching_error}"
   );
 
   // 5) A matching adapter with a custom connection is blocked (never silently legacy).
@@ -5212,25 +5197,32 @@ fn runtime_provider_vendor_default_applies_only_to_new_matching_provider() {
     "expected authority expansion block, got {custom_msg}"
   );
 
-  // 6) The pre-existing Provider is untouched by the default.
+  // 6) A pre-existing Provider created while the default was authorized is untouched by the
+  // later publisher revocation: its exact package pin and grant identity remain.
+  let preexisting = providers.save(openai_write()).expect("pre-existing provider create");
   let preexisting_after = providers.get(preexisting.id).expect("pre-existing provider");
   assert_eq!(
     preexisting_after.runtime.runtime_kind,
-    ProviderRuntimeKind::LegacyFrontendProvider,
-    "pre-existing provider stays legacy"
+    ProviderRuntimeKind::WasmComponent,
+    "pre-existing provider keeps its package pin"
+  );
+  assert_eq!(
+    preexisting_after.runtime.package_digest.as_deref(),
+    Some(digest.as_str())
   );
 
-  // 7) Revoking the publisher clears the catalog default, so create falls back to dual-stack legacy
-  // with no package grant (revoke never leaves an executable package-first row).
+  // 7) Revoking the publisher clears the catalog default, so create fails closed (revoke
+  // never leaves an executable package-first row).
   packages
     .revoke_publisher("com.langnext.vendor.keys.1")
     .expect("publisher revokes");
-  let revoked = providers.save(openai_write()).expect("provider create after revoke");
-  assert_eq!(
-    revoked.runtime.runtime_kind,
-    ProviderRuntimeKind::LegacyFrontendProvider
+  let revoked_error = providers
+    .save(openai_write())
+    .expect_err("create after revoke must fail");
+  assert!(
+    revoked_error.to_string().contains("default package"),
+    "got {revoked_error}"
   );
-  assert!(revoked.runtime.grant_set_revision.is_none());
 
   // 8) An untrusted package (signed by a non-vendor key) cannot produce a vendor import, so
   // it can never become a default; the create stays legacy.
@@ -5263,11 +5255,10 @@ fn runtime_provider_vendor_default_applies_only_to_new_matching_provider() {
     let runtime_untrusted = ProviderRuntimeService::new(db_untrusted.clone(), packages_untrusted.clone(), wasm.clone());
     let providers_untrusted = ProviderService::new(db_untrusted.clone(), Arc::new(MemoryCredentialVault::new()))
       .with_runtime_defaults(Arc::new(runtime_untrusted));
-    let created = providers_untrusted.save(openai_write()).expect("provider create");
-    assert_eq!(
-      created.runtime.runtime_kind,
-      ProviderRuntimeKind::LegacyFrontendProvider
-    );
+    let error = providers_untrusted
+      .save(openai_write())
+      .expect_err("no default, no create");
+    assert!(error.to_string().contains("default package"), "got {error}");
   }
 
   // 9) Alias-ambiguous vendor packages (same plugin id/version, different digest) are
@@ -5318,6 +5309,7 @@ fn runtime_provider_vendor_default_applies_only_to_new_matching_provider() {
         crate::domain::default_package_activation::AuthorizeDefaultPluginPackageInput {
           preview_id: preview.preview_id,
           acknowledge_future_instance_authority: true,
+          acknowledge_unsigned_default_risk: false,
         },
       )
       .expect("authorize single vendor default");
@@ -5340,10 +5332,19 @@ fn runtime_provider_vendor_default_applies_only_to_new_matching_provider() {
     .collect();
   assert_eq!(
     wasm_bindings.len(),
-    1,
-    "exactly one active package binding (the new matching provider)"
+    2,
+    "exactly two package bindings: the pre-existing provider and the new matching provider"
   );
-  assert_eq!(wasm_bindings[0].provider_id, matching.id);
+  assert!(
+    wasm_bindings.iter().any(|binding| binding.provider_id == matching.id),
+    "matching provider holds a package binding"
+  );
+  assert!(
+    wasm_bindings
+      .iter()
+      .any(|binding| binding.provider_id == preexisting.id),
+    "pre-existing provider keeps its package binding"
+  );
 }
 
 #[test]
@@ -5394,6 +5395,7 @@ fn default_package_activation_provider_create_grant_and_drift_matrix() {
     .authorize_default_plugin_package(AuthorizeDefaultPluginPackageInput {
       preview_id: preview.preview_id,
       acknowledge_future_instance_authority: true,
+      acknowledge_unsigned_default_risk: false,
     })
     .expect("authorize default");
 
@@ -5412,7 +5414,7 @@ fn default_package_activation_provider_create_grant_and_drift_matrix() {
     .expect("provider package-first activation");
   let after = providers.get(created.id).expect("provider after activation");
   assert_eq!(after.runtime.package_digest.as_deref(), Some(digest.as_str()));
-  assert_ne!(after.runtime.runtime_kind, ProviderRuntimeKind::LegacyFrontendProvider);
+  assert_eq!(after.runtime.runtime_kind, ProviderRuntimeKind::WasmComponent);
   // Grant may require authority confirmation for provider endpoints; never create a second identity.
   if after.runtime.grant_set_revision.is_some() {
     assert_eq!(after.runtime.state, ProviderRuntimeState::Active);
@@ -5427,8 +5429,8 @@ fn default_package_activation_provider_create_grant_and_drift_matrix() {
     "got {blocked}"
   );
 
-  // Alias mismatch stays dual-stack legacy until retirement gate is enabled.
-  let unrelated = providers
+  // An unrelated adapter has no authorized default package: create fails closed.
+  let unrelated_error = providers
     .save(ProviderInstanceWrite {
       id: None,
       adapter_id: "deepseek".into(),
@@ -5443,26 +5445,22 @@ fn default_package_activation_provider_create_grant_and_drift_matrix() {
       insecure_http_confirmed_at: None,
       expected_updated_at: None,
     })
-    .expect("unrelated adapter may dual-stack");
-  assert_eq!(
-    unrelated.runtime.runtime_kind,
-    ProviderRuntimeKind::LegacyFrontendProvider
+    .expect_err("unrelated adapter has no default package");
+  assert!(
+    unrelated_error.to_string().contains("default package"),
+    "got {unrelated_error}"
   );
 
-  // Revoke clears the catalog default: create stays dual-stack legacy with no package grant.
+  // Revoke clears the catalog default: create fails closed with no package grant.
   packages
     .revoke_publisher("com.langnext.vendor.keys.1")
     .expect("revoke vendor publisher");
-  let revoked = providers
+  let revoked_error = providers
     .save(openai_write(BaseUrlSource::PluginDefault, "https://api.openai.com/v1"))
-    .expect("create after revoke");
-  assert_eq!(
-    revoked.runtime.runtime_kind,
-    ProviderRuntimeKind::LegacyFrontendProvider
-  );
+    .expect_err("create after revoke must fail closed");
   assert!(
-    revoked.runtime.grant_set_revision.is_none(),
-    "revoked publisher must not create an executable grant"
+    revoked_error.to_string().contains("default package"),
+    "got {revoked_error}"
   );
 }
 
@@ -5493,6 +5491,7 @@ fn default_package_activation_provider_create_rejects_intermediate_legacy() {
     .authorize_default_plugin_package(AuthorizeDefaultPluginPackageInput {
       preview_id: preview.preview_id,
       acknowledge_future_instance_authority: true,
+      acknowledge_unsigned_default_risk: false,
     })
     .expect("authorize default");
 
@@ -5560,6 +5559,7 @@ fn default_package_activation_provider_create_rolls_back_on_intent_failure() {
     .authorize_default_plugin_package(AuthorizeDefaultPluginPackageInput {
       preview_id: preview.preview_id,
       acknowledge_future_instance_authority: true,
+      acknowledge_unsigned_default_risk: false,
     })
     .expect("authorize default");
 
@@ -5929,15 +5929,7 @@ async fn gemini_runtime_component_aggregates_bounded_pages_and_matches_current_f
     Some(GEMINI_TEST_SECRET),
   );
   let lifecycle = ProviderRuntimeService::new(db.clone(), packages.clone(), wasm.clone());
-  let preview = lifecycle
-    .preview_upgrade(provider_id, &package_digest)
-    .expect("gemini package previews");
-  lifecycle
-    .apply_upgrade(ApplyProviderRuntimeUpgradeInput {
-      preview_id: preview.preview_id,
-      acknowledge_permissions: true,
-    })
-    .expect("gemini package applies");
+  attach_provider_default_package(&lifecycle, &db, provider_id, &package_digest);
   let model_id = insert_fixture_model(&db, provider_id, "gemini-2.0-flash");
 
   // 1) Fixed two-page Models List aggregate: the guest traverses the bounded page sequence
@@ -6651,15 +6643,7 @@ async fn deepseek_runtime_component_matches_current_provider_and_detection_polic
     Some(DEEPSEEK_TEST_SECRET),
   );
   let lifecycle = ProviderRuntimeService::new(db.clone(), packages.clone(), wasm.clone());
-  let preview = lifecycle
-    .preview_upgrade(provider_id, &package_digest)
-    .expect("deepseek package previews");
-  lifecycle
-    .apply_upgrade(ApplyProviderRuntimeUpgradeInput {
-      preview_id: preview.preview_id,
-      acknowledge_permissions: true,
-    })
-    .expect("deepseek package applies");
+  attach_provider_default_package(&lifecycle, &db, provider_id, &package_digest);
   let model_id = insert_fixture_model(&db, provider_id, "deepseek-chat");
 
   // 0) The catalog projects the bounded host-interpreted DeepSeek detection metadata
@@ -6990,8 +6974,20 @@ async fn deepseek_runtime_component_matches_current_provider_and_detection_polic
     .await;
   }
 
-  // 8) Explicit lifecycle rollback restores the exact legacy binding; the provider rows are
-  // untouched and the legacy executor remains the active path for this built-in.
+  // The sanitized provider DTO (the public IPC shape) exposes no credential reference or
+  // secret material. It is read from the ATTACHED state (package-only reads fail closed on
+  // absent bindings, so the rollback tail asserts the raw provider row instead).
+  let attached_dto = crate::services::providers::ProviderService::new(db.clone(), vault.clone())
+    .get(provider_id)
+    .expect("provider DTO on the attached state");
+  let provider_json = serde_json::to_string(&attached_dto).unwrap();
+  assert!(
+    !provider_json.contains(DEEPSEEK_TEST_SECRET) && !provider_json.contains("provider/"),
+    "provider DTO must not leak the API key or its credential reference"
+  );
+
+  // 8) Explicit lifecycle rollback restores the never-attached source state; the provider
+  // rows are untouched.
   {
     let rollback_preview = lifecycle
       .preview_rollback(provider_id)
@@ -7001,24 +6997,18 @@ async fn deepseek_runtime_component_matches_current_provider_and_detection_polic
         preview_id: rollback_preview.preview_id,
       })
       .expect("deepseek rollback applies");
+    // The source adapter never had a package binding, so rollback restores the absent
+    // binding (legacy identity), not a fabricated Wasm row. The provider row itself is
+    // untouched by the lifecycle.
     let binding = db
-      .read(|conn| provider_runtime_bindings::get(conn, provider_id, "deepseek"))
+      .read(|conn| provider_runtime_bindings::get_optional(conn, provider_id, "deepseek"))
       .unwrap();
-    assert_eq!(binding.runtime_kind, ProviderRuntimeKind::LegacyFrontendProvider);
-    assert_eq!(binding.state, ProviderRuntimeState::Active);
-    assert!(binding.package_digest.is_none());
-    assert!(binding.grant_set_revision.is_none());
+    assert!(binding.is_none(), "rollback restores the never-attached source state");
+    let provider_row = db
+      .read(|conn| crate::repositories::provider_instances::get(conn, provider_id))
+      .expect("provider row survives rollback");
+    assert_eq!(provider_row.display_name, "DeepSeek Provider");
   }
-
-  // The sanitized provider DTO exposes no credential reference or secret material.
-  let provider_dto = crate::services::providers::ProviderService::new(db.clone(), vault.clone())
-    .get(provider_id)
-    .expect("provider DTO");
-  let provider_json = serde_json::to_string(&provider_dto).unwrap();
-  assert!(
-    !provider_json.contains(DEEPSEEK_TEST_SECRET) && !provider_json.contains("provider/"),
-    "provider DTO must not leak the API key or its credential reference"
-  );
 }
 
 /// Phase 8 headless smoke: one end-to-end pass over the manual-validation checklist using the
@@ -7038,9 +7028,8 @@ async fn runtime_provider_smoke_end_to_end() {
   use crate::domain::provider_http::ProviderHttpMethod;
   use crate::domain::runtime_lifecycle::GrantSubjectKind;
   use crate::domain::runtime_provider::{
-    ApplyProviderRuntimeRollbackInput, ApplyProviderRuntimeUpgradeInput, LlmChatMessage, LlmChatPreferencesV1,
-    LlmChatRequest, ProviderRuntimeChatCommandInput, ProviderRuntimeChatEvent, ProviderRuntimeKind,
-    ProviderRuntimeState,
+    ApplyProviderRuntimeRollbackInput, LlmChatMessage, LlmChatPreferencesV1, LlmChatRequest,
+    ProviderRuntimeChatCommandInput, ProviderRuntimeChatEvent, ProviderRuntimeKind, ProviderRuntimeState,
   };
   use crate::domain::service_capability::{CapabilityError, CapabilityErrorCode};
   use crate::services::bounded_http::RequestBody;
@@ -7257,7 +7246,7 @@ async fn runtime_provider_smoke_end_to_end() {
   let preexisting = providers.save(provider_write()).expect("pre-existing provider create");
   assert_eq!(
     preexisting.runtime.runtime_kind,
-    ProviderRuntimeKind::LegacyFrontendProvider,
+    ProviderRuntimeKind::WasmComponent,
     "pre-existing provider stays legacy"
   );
   let import = packages
@@ -7278,6 +7267,7 @@ async fn runtime_provider_smoke_end_to_end() {
       crate::domain::default_package_activation::AuthorizeDefaultPluginPackageInput {
         preview_id: preview.preview_id,
         acknowledge_future_instance_authority: true,
+        acknowledge_unsigned_default_risk: false,
       },
     )
     .expect("authorize default package");
@@ -7368,22 +7358,15 @@ async fn runtime_provider_smoke_end_to_end() {
   // explicit lifecycle is exercised with the committed conformance package (same legacy alias,
   // distinct digest) on the pre-existing Provider.
   let conformance_digest = install(&packages, LLM_PROVIDER_PACKAGE);
-  let preview = runtime
-    .preview_upgrade(preexisting.id, &conformance_digest)
-    .expect("preview succeeds");
+  let preview = preview_provider_default_attach(&runtime, &db, preexisting.id, &conformance_digest);
   assert!(preview.requires_permission_approval);
-  let applied = runtime
-    .apply_upgrade(ApplyProviderRuntimeUpgradeInput {
-      preview_id: preview.preview_id,
-      acknowledge_permissions: true,
-    })
-    .expect("apply succeeds");
-  assert_eq!(applied.runtime.runtime_kind, ProviderRuntimeKind::WasmComponent);
+  let applied = apply_acknowledged_interface_attach(&runtime, preview.preview_id).expect("apply succeeds");
+  assert_eq!(applied.binding.runtime_kind, ProviderRuntimeKind::WasmComponent);
   assert_eq!(
-    applied.runtime.package_digest.as_deref(),
+    applied.binding.package_digest.as_deref(),
     Some(conformance_digest.as_str())
   );
-  assert_eq!(applied.runtime.grant_set_revision, Some(1));
+  assert_eq!(applied.binding.grant_set_revision, Some(1));
   println!("SMOKE ok: explicit preview/apply binds the exact package and provider grant");
 
   // [3] Runtime Models List through the real Component and broker (item 2 sync proxy).
@@ -7608,15 +7591,12 @@ async fn runtime_provider_smoke_end_to_end() {
       preview_id: rollback_preview.preview_id,
     })
     .expect("rollback applies");
-  assert_eq!(
-    rolled_back.runtime.runtime_kind,
-    ProviderRuntimeKind::LegacyFrontendProvider
-  );
+  assert_eq!(rolled_back.runtime.runtime_kind, ProviderRuntimeKind::WasmComponent);
   assert!(rolled_back.runtime.package_digest.is_none());
   let binding = db
     .read(|conn| provider_runtime_bindings::get(conn, preexisting.id, "openai-compatible"))
     .unwrap();
-  assert_eq!(binding.runtime_kind, ProviderRuntimeKind::LegacyFrontendProvider);
+  assert_eq!(binding.runtime_kind, ProviderRuntimeKind::WasmComponent);
   assert_eq!(binding.state, ProviderRuntimeState::Active);
   let provider_after = providers.get(preexisting.id).expect("provider survives rollback");
   assert_eq!(provider_after.id, preexisting.id, "provider UUID unchanged");
@@ -7629,7 +7609,7 @@ async fn runtime_provider_smoke_end_to_end() {
 
   // [8] Manual item 6: privacy scan across export, DTO, and error surfaces.
   {
-    let export = crate::services::ImportExportService::new(db.clone(), vault.clone())
+    let export = crate::services::ImportExportService::new(db.clone(), vault.clone(), None)
       .export()
       .expect("configuration export");
     let json = serde_json::to_string(&export).unwrap();
@@ -8053,13 +8033,13 @@ fn runtime_provider_can_attach_two_interface_packages() {
     })
     .unwrap();
   assert_eq!(preview.snapshot_scope, "adapter");
-  assert_eq!(preview.target.runtime_kind, ProviderRuntimeKind::LegacyFrontendProvider);
+  assert_eq!(preview.target.runtime_kind, ProviderRuntimeKind::WasmComponent);
   let rolled = lifecycle
     .apply_interface_rollback(ApplyProviderRuntimeInterfaceRollbackInput {
       preview_id: preview.preview_id,
     })
     .unwrap();
-  assert_eq!(rolled.binding.runtime_kind, ProviderRuntimeKind::LegacyFrontendProvider);
+  assert_eq!(rolled.binding.runtime_kind, ProviderRuntimeKind::WasmComponent);
   let p2_grant_count: i64 = db
     .read(|conn| {
       Ok(
@@ -8607,10 +8587,9 @@ fn import_export_runtime_provider_multi_interface() {
   use crate::domain::import_export::{ImportConflictMode, parse_and_normalize_export_document};
   use crate::domain::runtime_provider::ProviderRuntimeRequirementExport;
 
-  // v7 document with one singular wasm requirement, a Provider default type A, and a model
-  // override type B.
-  let v7 = serde_json::json!({
-    "formatVersion": 7,
+  // v8 document with adapter-keyed wasm requirements for the Provider default and model override.
+  let v8_doc = serde_json::json!({
+    "formatVersion": 8,
     "exportedAt": "t",
     "providers": [{
       "id": "00000000-0000-7000-8000-000000000001",
@@ -8620,7 +8599,8 @@ fn import_export_runtime_provider_multi_interface() {
       "enabled": true,
       "proxyMode": "inherit",
       "insecureHttpConfirmedAt": null,
-      "runtime": {
+      "runtimeBindings": [{
+        "adapterId": "openai-compatible",
         "runtimeKind": "wasm-component",
         "packageDigest": "ab".repeat(32),
         "pluginId": "com.langnext.provider.openai-compatible",
@@ -8630,7 +8610,18 @@ fn import_export_runtime_provider_multi_interface() {
         "pluginApiVersion": "1.0",
         "legacyAliases": ["openai-compatible"],
         "capabilities": ["llm.chat@1", "llm.models.list@1"]
-      },
+      }, {
+        "adapterId": "openai-responses",
+        "runtimeKind": "wasm-component",
+        "packageDigest": "ab".repeat(32),
+        "pluginId": "com.langnext.provider.openai-compatible",
+        "pluginVersion": "1.0.0",
+        "publisherKeyId": "com.langnext.vendor.keys.1",
+        "publisherKeyFingerprint": "f".repeat(64),
+        "pluginApiVersion": "1.0",
+        "legacyAliases": ["openai-compatible", "openai-responses"],
+        "capabilities": ["llm.chat@1", "llm.models.list@1"]
+      }],
       "createdAt": "t",
       "updatedAt": "t"
     }],
@@ -8670,7 +8661,7 @@ fn import_export_runtime_provider_multi_interface() {
     }
   });
 
-  let normalized = parse_and_normalize_export_document(v7.clone()).unwrap();
+  let normalized = parse_and_normalize_export_document(v8_doc.clone()).unwrap();
   assert_eq!(
     normalized.format_version,
     crate::domain::import_export::EXPORT_FORMAT_VERSION
@@ -8685,7 +8676,7 @@ fn import_export_runtime_provider_multi_interface() {
       Some(&"openai-compatible".to_string()),
       Some(&"openai-responses".to_string())
     ],
-    "v7 normalization enumerates the default plus model override types"
+    "v8 document enumerates the default plus model override types"
   );
   assert!(requirements.iter().all(|r| r.runtime_kind == "wasm-component"));
 
@@ -9274,10 +9265,10 @@ fn attach_snapshot_of_legacy_source_records_explicit_legacy_identity() {
     .unwrap();
   assert_eq!(sets.len(), 1);
   let snapshot = &sets[0];
-  assert_eq!(snapshot.package_digest, None, "legacy source carries no package");
+  assert_eq!(snapshot.package_digest, None, "absent source carries no package");
   assert_eq!(
-    snapshot.plugin_id, "legacy-frontend-provider",
-    "legacy snapshot must carry the explicit legacy sentinel, got '{}'",
+    snapshot.plugin_id, "",
+    "absent snapshot must carry empty plugin identity, got '{}'",
     snapshot.plugin_id
   );
   assert!(

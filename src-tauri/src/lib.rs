@@ -1,8 +1,5 @@
 // ABOUTME: Tauri application library: registers plugins, windows, tray, and IPC commands.
 // ABOUTME: Initializes storage AppState before creating windows.
-// Public service/repository helpers are part of the storage surface; lib-only builds
-// do not always see IPC/test call sites as live uses, so dead_code is allowed here.
-#![allow(dead_code)]
 use tauri::{Manager, Runtime};
 
 mod cmds;
@@ -123,7 +120,6 @@ pub fn run() {
       cmds::providers::save_provider_instance,
       cmds::providers::set_provider_enabled,
       cmds::providers::delete_provider_instance,
-      cmds::providers::delete_retired_legacy_provider,
       cmds::providers::reorder_provider_instances,
       cmds::models::list_provider_models,
       cmds::models::list_all_provider_models,
@@ -135,9 +131,6 @@ pub fn run() {
       cmds::models::delete_provider_models,
       cmds::models::apply_provider_model_sync,
       cmds::models::apply_provider_model_sync_failure,
-      cmds::provider_http::provider_http_request,
-      cmds::provider_http::provider_http_stream,
-      cmds::provider_http::cancel_provider_http,
       cmds::translation_profiles::list_translation_profiles,
       cmds::translation_profiles::get_translation_profile,
       cmds::translation_profiles::save_translation_profile,
@@ -165,7 +158,6 @@ pub fn run() {
       cmds::default_package_activation::preview_default_runtime_authority,
       cmds::default_package_activation::confirm_default_runtime_authority,
       cmds::default_package_activation::retry_default_runtime_activation,
-      cmds::legacy_runtime_inventory::list_legacy_runtime_inventory,
       cmds::plugin_packages::list_plugin_publishers,
       cmds::plugin_models::list_plugin_model_resources,
       cmds::plugin_models::download_plugin_model,
@@ -182,8 +174,6 @@ pub fn run() {
       cmds::runtime_lifecycle::apply_integration_runtime_rollback,
       cmds::runtime_lifecycle::discard_integration_runtime_snapshot,
       cmds::runtime_providers::list_runtime_provider_catalog,
-      cmds::runtime_providers::preview_provider_runtime_upgrade,
-      cmds::runtime_providers::apply_provider_runtime_upgrade,
       cmds::runtime_providers::preview_provider_runtime_rollback,
       cmds::runtime_providers::apply_provider_runtime_rollback,
       cmds::runtime_providers::preview_provider_runtime_interface_attach,

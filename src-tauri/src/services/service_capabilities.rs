@@ -14,9 +14,6 @@ use crate::error::StorageError;
 use crate::repositories::integration_capability_health;
 use crate::repositories::integration_instances;
 use crate::repositories::{installed_plugin_versions, plugin_permission_grants, plugin_publishers};
-use crate::services::edge_tts::EdgeTtsCapabilities;
-use crate::services::google_cloud::GoogleCloudCapabilities;
-use crate::services::google_translate_web::GoogleTranslateWebCapabilities;
 use crate::services::runtime_router::{
   ResolvedDetect, ResolvedOcr, ResolvedTranslate, RuntimeRouter, SnapshotRuntimeResolution,
 };
@@ -26,20 +23,10 @@ use crate::services::wasm_runtime::{
   WasmDetectLanguageAdapter, WasmOcrImageAdapter, WasmRuntime, WasmSpeechSynthesizeAdapter, WasmTranslateTextAdapter,
 };
 use crate::storage::Database;
-use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use uuid::Uuid;
-
-/// Tagged capability handler kinds (closed set of host-recognized contracts).
-#[derive(Clone)]
-pub enum CapabilityHandler {
-  TranslateText(Arc<dyn TranslateTextCapability>),
-  DetectLanguage(Arc<dyn DetectLanguageCapability>),
-  OcrImage(Arc<dyn OcrImageCapability>),
-  SpeechSynthesize(Arc<dyn SpeechSynthesizeCapability>),
-}
 
 /// Typed translate-text capability contract.
 pub trait TranslateTextCapability: Send + Sync + 'static {
@@ -81,138 +68,51 @@ pub trait SpeechSynthesizeCapability: Send + Sync + 'static {
   ) -> Pin<Box<dyn Future<Output = Result<SpeechSynthesizeResponse, CapabilityError>> + Send + '_>>;
 }
 
-impl TranslateTextCapability for GoogleCloudCapabilities {
-  fn translate(
-    &self,
-    instance_id: Uuid,
-    request: TranslateTextRequest,
-    context: ExecutionContext,
-  ) -> Pin<Box<dyn Future<Output = Result<TranslateTextResponse, CapabilityError>> + Send + '_>> {
-    Box::pin(async move { self.translate_text(instance_id, request, context).await })
-  }
-}
-
-impl DetectLanguageCapability for GoogleCloudCapabilities {
-  fn detect(
-    &self,
-    instance_id: Uuid,
-    request: DetectLanguageRequest,
-    context: ExecutionContext,
-  ) -> Pin<Box<dyn Future<Output = Result<DetectLanguageResponse, CapabilityError>> + Send + '_>> {
-    Box::pin(async move { self.detect_language(instance_id, request, context).await })
-  }
-}
-
-impl OcrImageCapability for GoogleCloudCapabilities {
-  fn recognize(
-    &self,
-    instance_id: Uuid,
-    request: OcrImageRequest,
-    context: ExecutionContext,
-  ) -> Pin<Box<dyn Future<Output = Result<OcrImageResponse, CapabilityError>> + Send + '_>> {
-    Box::pin(async move { self.ocr_image(instance_id, request, context).await })
-  }
-}
-
-impl SpeechSynthesizeCapability for GoogleCloudCapabilities {
-  fn synthesize(
-    &self,
-    instance_id: Uuid,
-    request: SpeechSynthesizeRequest,
-    context: ExecutionContext,
-  ) -> Pin<Box<dyn Future<Output = Result<SpeechSynthesizeResponse, CapabilityError>> + Send + '_>> {
-    Box::pin(async move { self.synthesize_speech(instance_id, request, context).await })
-  }
-}
-
-impl SpeechSynthesizeCapability for EdgeTtsCapabilities {
-  fn synthesize(
-    &self,
-    instance_id: Uuid,
-    request: SpeechSynthesizeRequest,
-    context: ExecutionContext,
-  ) -> Pin<Box<dyn Future<Output = Result<SpeechSynthesizeResponse, CapabilityError>> + Send + '_>> {
-    Box::pin(async move { self.synthesize_speech(instance_id, request, context).await })
-  }
-}
-
-impl TranslateTextCapability for GoogleTranslateWebCapabilities {
-  fn translate(
-    &self,
-    instance_id: Uuid,
-    request: TranslateTextRequest,
-    context: ExecutionContext,
-  ) -> Pin<Box<dyn Future<Output = Result<TranslateTextResponse, CapabilityError>> + Send + '_>> {
-    Box::pin(async move { self.translate_text(instance_id, request, context).await })
-  }
-}
-
-impl DetectLanguageCapability for GoogleTranslateWebCapabilities {
-  fn detect(
-    &self,
-    instance_id: Uuid,
-    request: DetectLanguageRequest,
-    context: ExecutionContext,
-  ) -> Pin<Box<dyn Future<Output = Result<DetectLanguageResponse, CapabilityError>> + Send + '_>> {
-    Box::pin(async move { self.detect_language(instance_id, request, context).await })
-  }
-}
-
-/// Registry of capability handlers keyed by plugin_id + capability_id.
-#[derive(Clone, Default)]
-pub struct ServiceCapabilityRegistry {
-  handlers: HashMap<(String, String), CapabilityHandler>,
-}
-
-impl ServiceCapabilityRegistry {
-  pub fn new() -> Self {
-    Self {
-      handlers: HashMap::new(),
-    }
-  }
-
-  pub fn register(
-    &mut self,
-    plugin_id: impl Into<String>,
-    capability_id: impl Into<String>,
-    handler: CapabilityHandler,
-  ) {
-    self.handlers.insert((plugin_id.into(), capability_id.into()), handler);
-  }
-
-  pub fn get(&self, plugin_id: &str, capability_id: &str) -> Option<&CapabilityHandler> {
-    self.handlers.get(&(plugin_id.to_string(), capability_id.to_string()))
-  }
-}
-
-/// Resolves handlers for configured integration instances via the authoritative runtime router.
+/// Resolves capability adapters for configured integration instances via the runtime router.
 #[derive(Clone)]
 pub struct ServiceCapabilityService {
   db: Database,
   definition_registry: Arc<ServiceIntegrationRegistry>,
-  handlers: Arc<ServiceCapabilityRegistry>,
   /// Authoritative adapter selection. Always set in production; tests may use `with_router`.
   router: Option<RuntimeRouter>,
   wasm_runtime: Option<Arc<WasmRuntime>>,
   /// Factory for Wasm guest broker handles. Production wires `NetworkBrokerHandle` over the
-  /// bounded HTTP transport; defaults to `DeniedBroker` so legacy tests that never call the
-  /// broker are unaffected. Phase 5 google-web Wasm execution requires a real transport.
+  /// bounded HTTP transport; defaults to `DeniedBroker`. Phase 5 google-web Wasm execution
+  /// requires a real transport.
   broker_factory: Arc<dyn Fn() -> Box<dyn BrokerHandle> + Send + Sync>,
 }
 
+/// Deny-everything broker used as the default before `with_broker_factory` wires a transport.
+struct DeniedBroker;
+
+impl BrokerHandle for DeniedBroker {
+  fn fetch(
+    &self,
+    _principal: &crate::domain::runtime_plugin::PluginPrincipal,
+    _grant: &crate::domain::runtime_plugin::ExecutionGrantSet,
+    _request: BrokerFetchRequest,
+    _authorization: crate::services::wasm_runtime::host::BrokerAuthorization,
+    _cancel: &CancelToken,
+    _deadline: Option<std::time::Instant>,
+  ) -> std::pin::Pin<Box<dyn std::future::Future<Output = BrokerFetchOutcome> + Send + '_>> {
+    Box::pin(async { Err(BrokerFetchError::NotApproved) })
+  }
+}
+
+/// Default broker handle factory that denies every guest fetch; production replaces it via
+/// `with_broker_factory`.
+fn denied_broker_factory() -> Box<dyn BrokerHandle> {
+  Box::new(DeniedBroker) as Box<dyn BrokerHandle>
+}
+
 impl ServiceCapabilityService {
-  pub fn new(
-    db: Database,
-    definition_registry: Arc<ServiceIntegrationRegistry>,
-    handlers: Arc<ServiceCapabilityRegistry>,
-  ) -> Self {
+  pub fn new(db: Database, definition_registry: Arc<ServiceIntegrationRegistry>) -> Self {
     Self {
       db,
       definition_registry,
-      handlers,
       router: None,
       wasm_runtime: None,
-      broker_factory: Arc::new(|| Box::new(DeniedBroker) as Box<dyn BrokerHandle>),
+      broker_factory: Arc::new(denied_broker_factory),
     }
   }
 
@@ -394,24 +294,6 @@ impl ServiceCapabilityService {
     // External archive/artifact rehash finished; full authoritative recheck before use.
     self.recheck_invocation_snapshot(snapshot, ProfileCapabilityKind::Translate)?;
     match adapter {
-      crate::services::runtime_router::RuntimeAdapter::BundledRust {
-        handler: CapabilityHandler::TranslateText(h),
-      } => {
-        if snapshot.health_status != IntegrationHealthStatus::Ready.as_str() {
-          return Err(CapabilityError::new(
-            CapabilityErrorCode::InvalidConfiguration,
-            "integration instance is not ready",
-          ));
-        }
-        Ok(h)
-      }
-      crate::services::runtime_router::RuntimeAdapter::BundledRust { .. } => Err(
-        CapabilityError::new(
-          CapabilityErrorCode::PermissionDenied,
-          "capability handler type mismatch",
-        )
-        .with_capability_id(&snapshot.capability_id),
-      ),
       crate::services::runtime_router::RuntimeAdapter::WasmComponent {
         package_digest,
         artifact_digest,
@@ -464,10 +346,6 @@ impl ServiceCapabilityService {
   ) -> Result<Arc<dyn TranslateTextCapability>, CapabilityError> {
     if let Some(router) = &self.router {
       return match router.resolve_translate(instance_id, capability_id)? {
-        ResolvedTranslate::Bundled(h) => {
-          self.ensure_bundled_ready(instance_id)?;
-          Ok(h)
-        }
         ResolvedTranslate::Wasm {
           package_digest,
           artifact_digest,
@@ -505,17 +383,10 @@ impl ServiceCapabilityService {
         }
       };
     }
-    let handler = self.resolve_handler(instance_id, capability_id)?;
-    match handler {
-      CapabilityHandler::TranslateText(h) => Ok(h),
-      _ => Err(
-        CapabilityError::new(
-          CapabilityErrorCode::PermissionDenied,
-          "capability handler type mismatch",
-        )
-        .with_capability_id(capability_id),
-      ),
-    }
+    Err(CapabilityError::new(
+      CapabilityErrorCode::PluginUnavailable,
+      "runtime router is not configured; package-only builds require router-based resolution",
+    ))
   }
 
   /// Look up a detect handler after authoritative runtime resolution.
@@ -545,25 +416,6 @@ impl ServiceCapabilityService {
       .ok_or_else(|| CapabilityError::new(CapabilityErrorCode::Internal, "runtime router is not configured"))?;
     let adapter = router.resolve_from_snapshot(&snapshot.runtime_pin, &snapshot.capability_id)?;
     match adapter {
-      crate::services::runtime_router::RuntimeAdapter::BundledRust {
-        handler: CapabilityHandler::DetectLanguage(h),
-      } => {
-        self.recheck_invocation_snapshot(snapshot, ProfileCapabilityKind::Detect)?;
-        if snapshot.health_status != IntegrationHealthStatus::Ready.as_str() {
-          return Err(CapabilityError::new(
-            CapabilityErrorCode::InvalidConfiguration,
-            "integration instance is not ready",
-          ));
-        }
-        Ok(h)
-      }
-      crate::services::runtime_router::RuntimeAdapter::BundledRust { .. } => Err(
-        CapabilityError::new(
-          CapabilityErrorCode::PermissionDenied,
-          "capability handler type mismatch",
-        )
-        .with_capability_id(&snapshot.capability_id),
-      ),
       crate::services::runtime_router::RuntimeAdapter::WasmComponent {
         package_digest,
         artifact_digest,
@@ -616,10 +468,6 @@ impl ServiceCapabilityService {
   ) -> Result<Arc<dyn DetectLanguageCapability>, CapabilityError> {
     if let Some(router) = &self.router {
       return match router.resolve_detect(instance_id, capability_id)? {
-        ResolvedDetect::Bundled(h) => {
-          self.ensure_bundled_ready(instance_id)?;
-          Ok(h)
-        }
         ResolvedDetect::Wasm {
           package_digest,
           artifact_digest,
@@ -657,42 +505,12 @@ impl ServiceCapabilityService {
         }
       };
     }
-    let handler = self.resolve_handler(instance_id, capability_id)?;
-    match handler {
-      CapabilityHandler::DetectLanguage(h) => Ok(h),
-      _ => Err(
-        CapabilityError::new(
-          CapabilityErrorCode::PermissionDenied,
-          "capability handler type mismatch",
-        )
-        .with_capability_id(capability_id),
-      ),
-    }
+    Err(CapabilityError::new(
+      CapabilityErrorCode::PluginUnavailable,
+      "runtime router is not configured; package-only builds require router-based resolution",
+    ))
   }
 
-  fn ensure_bundled_ready(&self, instance_id: Uuid) -> Result<(), CapabilityError> {
-    let instance = self
-      .db
-      .read(|conn| integration_instances::get(conn, instance_id))
-      .map_err(|_| CapabilityError::new(CapabilityErrorCode::Internal, "failed to reload instance"))?;
-    match instance.health_status {
-      IntegrationHealthStatus::Ready => Ok(()),
-      IntegrationHealthStatus::Unconfigured => Err(CapabilityError::new(
-        CapabilityErrorCode::InvalidConfiguration,
-        "integration instance is unconfigured",
-      )),
-      IntegrationHealthStatus::Unvalidated => Err(CapabilityError::new(
-        CapabilityErrorCode::InvalidConfiguration,
-        "integration instance is not validated",
-      )),
-      IntegrationHealthStatus::Degraded => Err(CapabilityError::new(
-        CapabilityErrorCode::ProviderUnavailable,
-        "integration instance is degraded",
-      )),
-    }
-  }
-
-  /// Look up an OCR image handler after verifying instance/plugin/capability state.
   pub fn resolve_ocr(
     &self,
     instance_id: Uuid,
@@ -701,10 +519,6 @@ impl ServiceCapabilityService {
     if let Some(router) = &self.router {
       let resolved = router.resolve_ocr(instance_id, capability_id)?;
       return match resolved {
-        ResolvedOcr::Bundled(handler) => {
-          self.ensure_bundled_ready(instance_id)?;
-          Ok(handler)
-        }
         ResolvedOcr::Wasm {
           package_digest,
           artifact_digest,
@@ -726,7 +540,7 @@ impl ServiceCapabilityService {
             ResolvedOcr::Wasm {
               package_digest, grant, ..
             } => (package_digest, grant.revision().as_u64()),
-            ResolvedOcr::Bundled(_) | ResolvedOcr::Native { .. } => {
+            ResolvedOcr::Native { .. } => {
               return Err(CapabilityError::new(
                 CapabilityErrorCode::PluginUnavailable,
                 "runtime changed during OCR resolution",
@@ -780,17 +594,10 @@ impl ServiceCapabilityService {
         ))),
       };
     }
-    let handler = self.resolve_handler(instance_id, capability_id)?;
-    match handler {
-      CapabilityHandler::OcrImage(h) => Ok(h),
-      _ => Err(
-        CapabilityError::new(
-          CapabilityErrorCode::PermissionDenied,
-          "capability handler type mismatch",
-        )
-        .with_capability_id(capability_id),
-      ),
-    }
+    Err(CapabilityError::new(
+      CapabilityErrorCode::PluginUnavailable,
+      "runtime router is not configured; package-only builds require router-based resolution",
+    ))
   }
 
   /// Look up a speech synthesis handler after authoritative runtime resolution.
@@ -801,19 +608,6 @@ impl ServiceCapabilityService {
   ) -> Result<Arc<dyn SpeechSynthesizeCapability>, CapabilityError> {
     if let Some(router) = &self.router {
       return match router.resolve(instance_id, capability_id)? {
-        crate::services::runtime_router::RuntimeAdapter::BundledRust {
-          handler: CapabilityHandler::SpeechSynthesize(h),
-        } => {
-          self.ensure_bundled_ready(instance_id)?;
-          Ok(h)
-        }
-        crate::services::runtime_router::RuntimeAdapter::BundledRust { .. } => Err(
-          CapabilityError::new(
-            CapabilityErrorCode::PermissionDenied,
-            "capability handler type mismatch",
-          )
-          .with_capability_id(capability_id),
-        ),
         crate::services::runtime_router::RuntimeAdapter::WasmComponent {
           package_digest,
           artifact_digest,
@@ -843,12 +637,6 @@ impl ServiceCapabilityService {
               grant,
               ..
             } => (package_digest, artifact_digest, grant),
-            crate::services::runtime_router::RuntimeAdapter::BundledRust { .. } => {
-              return Err(CapabilityError::new(
-                CapabilityErrorCode::PluginUnavailable,
-                "runtime changed during speech resolution",
-              ));
-            }
             crate::services::runtime_router::RuntimeAdapter::TrustedNativeWorker { .. } => {
               return Err(CapabilityError::new(
                 CapabilityErrorCode::PluginUnavailable,
@@ -887,103 +675,12 @@ impl ServiceCapabilityService {
         )),
       };
     }
-    let handler = self.resolve_handler(instance_id, capability_id)?;
-    match handler {
-      CapabilityHandler::SpeechSynthesize(h) => Ok(h),
-      _ => Err(
-        CapabilityError::new(
-          CapabilityErrorCode::PermissionDenied,
-          "capability handler type mismatch",
-        )
-        .with_capability_id(capability_id),
-      ),
-    }
+    Err(CapabilityError::new(
+      CapabilityErrorCode::PluginUnavailable,
+      "runtime router is not configured; package-only builds require router-based resolution",
+    ))
   }
 
-  fn resolve_handler(&self, instance_id: Uuid, capability_id: &str) -> Result<CapabilityHandler, CapabilityError> {
-    let instance = self
-      .db
-      .read(|conn| integration_instances::get(conn, instance_id))
-      .map_err(|e| match e {
-        StorageError::NotFound(_) => CapabilityError::new(
-          CapabilityErrorCode::InvalidConfiguration,
-          "integration instance not found",
-        ),
-        _ => CapabilityError::new(CapabilityErrorCode::Internal, "failed to load integration instance"),
-      })?;
-
-    if !instance.enabled {
-      return Err(CapabilityError::new(
-        CapabilityErrorCode::PluginUnavailable,
-        "integration instance is disabled",
-      ));
-    }
-
-    if !self.definition_registry.contains(&instance.plugin_id) {
-      return Err(CapabilityError::new(
-        CapabilityErrorCode::PluginUnavailable,
-        "plugin definition is missing",
-      ));
-    }
-
-    let manifest = self
-      .definition_registry
-      .get(&instance.plugin_id)
-      .ok_or_else(|| CapabilityError::new(CapabilityErrorCode::PluginUnavailable, "plugin definition is missing"))?;
-
-    if !manifest.capabilities.iter().any(|c| c.id == capability_id) {
-      return Err(
-        CapabilityError::new(
-          CapabilityErrorCode::PermissionDenied,
-          "capability is not declared on this plugin",
-        )
-        .with_capability_id(capability_id),
-      );
-    }
-
-    // Execution requires a ready instance (unconfigured/unvalidated/degraded fail closed).
-    // Capability-specific IAM failures still surface as permission_denied from the provider call.
-    match instance.health_status {
-      IntegrationHealthStatus::Ready => {}
-      IntegrationHealthStatus::Unconfigured => {
-        return Err(CapabilityError::new(
-          CapabilityErrorCode::InvalidConfiguration,
-          "integration instance is unconfigured",
-        ));
-      }
-      IntegrationHealthStatus::Unvalidated => {
-        return Err(CapabilityError::new(
-          CapabilityErrorCode::InvalidConfiguration,
-          "integration instance is not validated",
-        ));
-      }
-      IntegrationHealthStatus::Degraded => {
-        return Err(CapabilityError::new(
-          CapabilityErrorCode::ProviderUnavailable,
-          "integration instance is degraded",
-        ));
-      }
-    }
-
-    self
-      .handlers
-      .get(&instance.plugin_id, capability_id)
-      .cloned()
-      .ok_or_else(|| {
-        CapabilityError::new(
-          CapabilityErrorCode::PluginUnavailable,
-          "capability handler is not registered",
-        )
-        .with_capability_id(capability_id)
-      })
-  }
-}
-
-/// Broker that denies every guest network call. Wasm adapters bind this factory at resolve time;
-/// a later phase can inject NetworkBroker-backed handles without changing adapter selection.
-struct DeniedBroker;
-
-impl BrokerHandle for DeniedBroker {
   fn fetch(
     &self,
     _principal: &crate::domain::runtime_plugin::PluginPrincipal,
@@ -1160,6 +857,7 @@ fn load_profile_invocation_snapshot_conn(
   let mut publisher_source = None;
   let mut publisher_enabled = false;
   let mut publisher_revoked = true;
+  let mut signature_status = None;
   let mut grant_bundle: Option<ExecutionGrantSetBundle> = None;
   if let (Some(digest), Some(rev)) = (
     instance.package_digest.as_deref(),
@@ -1178,34 +876,39 @@ fn load_profile_invocation_snapshot_conn(
     package_permission_request_digest = Some(version.permission_request_digest.clone());
     package_plugin_id = Some(version.plugin_id.clone());
     package_plugin_version = Some(version.version.clone());
-    publisher_key_id = Some(version.publisher_key_id.clone());
-    // Publisher lookup must succeed for package-backed pins; never default enabled=true.
-    let publisher = plugin_publishers::get(conn, &version.publisher_key_id).map_err(|e| match e {
-      StorageError::NotFound(_) => StorageError::PluginUnavailable(format!(
-        "publisher {} is missing for package {digest}",
-        version.publisher_key_id
-      )),
-      other => StorageError::PluginUnavailable(format!("publisher lookup failed for package {digest}: {other}")),
-    })?;
-    if publisher.fingerprint != version.publisher_fingerprint {
-      return Err(StorageError::PluginUnavailable(
-        "publisher fingerprint does not match installed package record".into(),
-      ));
-    }
-    if publisher.key_id != version.publisher_key_id {
-      return Err(StorageError::PluginUnavailable(
-        "publisher key id does not match installed package record".into(),
-      ));
-    }
-    publisher_fingerprint = Some(publisher.fingerprint);
-    publisher_public_key_hex = Some(publisher.public_key_hex);
-    publisher_source = Some(publisher.source);
-    publisher_enabled = publisher.enabled;
-    publisher_revoked = publisher.revoked;
-    if publisher.revoked || !publisher.enabled {
-      return Err(StorageError::PluginUnavailable(
-        "publisher trust is revoked or disabled".into(),
-      ));
+    signature_status = Some(version.signature_status);
+    if version.signature_status == crate::domain::plugin_package::PackageSignatureStatus::Unsigned {
+      publisher_enabled = true;
+      publisher_revoked = false;
+    } else {
+      publisher_key_id = Some(version.publisher_key_id.clone());
+      let publisher = plugin_publishers::get(conn, &version.publisher_key_id).map_err(|e| match e {
+        StorageError::NotFound(_) => StorageError::PluginUnavailable(format!(
+          "publisher {} is missing for package {digest}",
+          version.publisher_key_id
+        )),
+        other => StorageError::PluginUnavailable(format!("publisher lookup failed for package {digest}: {other}")),
+      })?;
+      if publisher.fingerprint != version.publisher_fingerprint {
+        return Err(StorageError::PluginUnavailable(
+          "publisher fingerprint does not match installed package record".into(),
+        ));
+      }
+      if publisher.key_id != version.publisher_key_id {
+        return Err(StorageError::PluginUnavailable(
+          "publisher key id does not match installed package record".into(),
+        ));
+      }
+      publisher_fingerprint = Some(publisher.fingerprint);
+      publisher_public_key_hex = Some(publisher.public_key_hex);
+      publisher_source = Some(publisher.source);
+      publisher_enabled = publisher.enabled;
+      publisher_revoked = publisher.revoked;
+      if publisher.revoked || !publisher.enabled {
+        return Err(StorageError::PluginUnavailable(
+          "publisher trust is revoked or disabled".into(),
+        ));
+      }
     }
     // Missing grant is package/authority failure, never profile NotFound.
     grant_bundle = Some(
@@ -1243,6 +946,7 @@ fn load_profile_invocation_snapshot_conn(
     publisher_source,
     publisher_enabled,
     publisher_revoked,
+    signature_status,
     grant_bundle,
   };
 
@@ -1274,11 +978,26 @@ mod tests {
   };
   use crate::domain::time::{new_id, now_rfc3339};
   use crate::services::google_cloud::{GOOGLE_DETECT_LANGUAGE_CAPABILITY_ID, GOOGLE_TRANSLATE_TEXT_CAPABILITY_ID};
-  use crate::services::network_broker::NetworkBroker;
-  use crate::services::token_grant::{ExchangedToken, GoogleTokenExchanger, TokenGrantService};
+  use crate::services::runtime_lifecycle::RuntimeLifecycleService;
+  use crate::services::runtime_router::RuntimeRouter;
+  use crate::services::token_grant::TokenGrantService;
+  use crate::services::wasm_runtime::WasmRuntime;
+  use std::path::Path;
+
+  use crate::services::token_grant::{
+    ExchangedToken, GOOGLE_SERVICE_ACCOUNT_AUTH_DRIVER_ID, TokenExchanger, TokenInjectionKind,
+  };
 
   struct StubExchanger;
-  impl GoogleTokenExchanger for StubExchanger {
+  impl TokenExchanger for StubExchanger {
+    fn driver_id(&self) -> &'static str {
+      GOOGLE_SERVICE_ACCOUNT_AUTH_DRIVER_ID
+    }
+
+    fn injection_kind(&self) -> TokenInjectionKind {
+      TokenInjectionKind::BearerHeader
+    }
+
     fn exchange(
       &self,
       _instance_id: Uuid,
@@ -1318,10 +1037,10 @@ mod tests {
           health_status: health,
           last_validated_at: None,
           last_error_code: None,
-          runtime_kind: "bundled-rust".into(),
-          package_digest: None,
+          runtime_kind: "wasm-component".into(),
+          package_digest: Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into()),
           execution_grant_set_revision: None,
-          runtime_state: "active".into(),
+          runtime_state: "pending_activation".into(),
           runtime_error_code: None,
           runtime_error_message: None,
           runtime_requirement_json: None,
@@ -1335,22 +1054,126 @@ mod tests {
     id
   }
 
-  fn service(db: Database) -> ServiceCapabilityService {
-    let defs = Arc::new(ServiceIntegrationRegistry::bundled().unwrap());
-    let network = Arc::new(NetworkBroker::new(db.clone(), defs.clone()));
-    let tokens = Arc::new(TokenGrantService::new(Arc::new(StubExchanger)));
-    let handlers = Arc::new(
-      crate::services::bundled_plugins::build_capability_registry(
-        crate::services::bundled_plugins::HandlerDeps {
-          db: db.clone(),
-          broker: network,
-          tokens,
-        },
-        &defs,
-      )
-      .unwrap(),
-    );
-    ServiceCapabilityService::new(db, defs, handlers)
+  const GOOGLE_CLOUD_PACKAGE: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../runtime-plugins/google-cloud/fixtures/com.langnext.google-cloud-1.2.0.lnplugin"
+  ));
+
+  struct Fixture {
+    _dir: tempfile::TempDir,
+    db: Database,
+    packages: crate::services::plugin_store::PluginPackageService,
+    lifecycle: crate::services::runtime_lifecycle::RuntimeLifecycleService,
+    vault: Arc<dyn crate::credentials::CredentialVault>,
+    caps: ServiceCapabilityService,
+    package_digest: String,
+    instance_id: Uuid,
+  }
+
+  impl Fixture {
+    /// Pin the seeded instance to the installed google-cloud package through the public
+    /// upgrade seam (preview + apply), writing the exact grant the router verifies.
+    fn activate_package(&self, instance_id: Uuid) {
+      let preview = self
+        .lifecycle
+        .preview_upgrade(instance_id, &self.package_digest)
+        .expect("upgrade preview");
+      self
+        .lifecycle
+        .apply_upgrade(crate::domain::runtime_lifecycle::ApplyRuntimeUpgradeInput {
+          preview_id: preview.preview_id,
+          acknowledge_permissions: true,
+        })
+        .expect("apply upgrade");
+    }
+  }
+
+  /// Real package store fixture: the committed signed google-cloud archive installs through
+  /// the genuine verification path and its definition is projected from the installed
+  /// package; dispatch resolves through the Wasm runtime router.
+  fn fixture(db: Database, dir: &Path) -> Fixture {
+    let packages = crate::services::test_support::vendor_packages(db.clone(), dir);
+    let package_digest = crate::services::test_support::bootstrap_package(&packages, GOOGLE_CLOUD_PACKAGE);
+    let registry = crate::services::test_support::registry_from_installed_packages(&packages);
+    let wasm = Arc::new(WasmRuntime::new().unwrap());
+    let tokens = Arc::new(TokenGrantService::new(vec![Arc::new(StubExchanger)]).unwrap());
+    let vault: Arc<dyn crate::credentials::CredentialVault> =
+      Arc::new(crate::credentials::MemoryCredentialVault::default());
+    let lifecycle = RuntimeLifecycleService::new(db.clone(), packages.clone(), registry.clone())
+      .with_runtime(wasm.clone(), tokens)
+      .with_vault(vault.clone());
+    let router = RuntimeRouter::new(db.clone(), registry.clone(), packages.clone(), wasm.clone());
+    let caps = ServiceCapabilityService::new(db.clone(), registry).with_router(router, wasm);
+    Fixture {
+      _dir: tempfile::tempdir().unwrap(),
+      db: db.clone(),
+      packages,
+      lifecycle,
+      vault,
+      caps,
+      package_digest,
+      instance_id: new_id(),
+    }
+  }
+
+  fn seed_fixture(fixture: &Fixture, enabled: bool, health: IntegrationHealthStatus) -> Uuid {
+    let id = new_id();
+    let now = now_rfc3339();
+    let config = GoogleCloudConfigV1 {
+      project_id: "demo".into(),
+      location: GOOGLE_CLOUD_DEFAULT_LOCATION.into(),
+      proxy_mode: ProxyMode::Direct,
+    };
+    // The google-cloud package requires a service-account credential; bind one so the upgrade
+    // seam verifies slot compatibility against the target package.
+    let vault = fixture.vault.clone();
+    let credential_ref = format!("integration/{id}/service-account-json");
+    vault
+      .set(&credential_ref, r#"{"client_email":"x","private_key":"y"}"#)
+      .unwrap();
+    fixture
+      .db
+      .transaction(|uow| {
+        integration_instances::insert(
+          uow.conn(),
+          &IntegrationInstance {
+            id,
+            plugin_id: GOOGLE_CLOUD_PLUGIN_ID.into(),
+            plugin_version: "1.2.0".into(),
+            display_name: "Test".into(),
+            enabled,
+            config_json: serde_json::to_string(&config).unwrap(),
+            config_schema_version: 1,
+            health_status: health,
+            last_validated_at: None,
+            last_error_code: None,
+            runtime_kind: "wasm-component".into(),
+            package_digest: Some("a".repeat(64)),
+            execution_grant_set_revision: None,
+            runtime_state: "pending_activation".into(),
+            runtime_error_code: None,
+            runtime_error_message: None,
+            runtime_requirement_json: None,
+            created_at: now.clone(),
+            updated_at: now.clone(),
+          },
+        )?;
+        crate::repositories::integration_credential_bindings::insert(
+          uow.conn(),
+          &crate::domain::service_integration::IntegrationCredentialBinding {
+            id: new_id(),
+            integration_instance_id: id,
+            slot_id: "service-account-json".into(),
+            credential_ref: Some(credential_ref),
+            credential_revision: 1,
+            created_at: now.clone(),
+            updated_at: now.clone(),
+          },
+        )?;
+        Ok::<_, crate::error::StorageError>(())
+      })
+      .unwrap();
+    id
   }
 
   #[test]
@@ -1358,9 +1181,12 @@ mod tests {
     let dir = tempfile::tempdir().unwrap();
     let db = Database::new(dir.path()).unwrap();
     db.initialize().unwrap();
-    let id = seed_instance(&db, false, IntegrationHealthStatus::Ready);
-    let svc = service(db);
-    let err = match svc.resolve_translate(id, GOOGLE_TRANSLATE_TEXT_CAPABILITY_ID, b"{}".to_vec()) {
+    let fixture = fixture(db, dir.path());
+    let id = seed_fixture(&fixture, false, IntegrationHealthStatus::Ready);
+    let err = match fixture
+      .caps
+      .resolve_translate(id, GOOGLE_TRANSLATE_TEXT_CAPABILITY_ID, b"{}".to_vec())
+    {
       Ok(_) => panic!("expected disabled rejection"),
       Err(e) => e,
     };
@@ -1372,10 +1198,18 @@ mod tests {
     let dir = tempfile::tempdir().unwrap();
     let db = Database::new(dir.path()).unwrap();
     db.initialize().unwrap();
-    let id = seed_instance(&db, true, IntegrationHealthStatus::Ready);
-    let svc = service(db);
-    let err = match svc.resolve_translate(id, "speech.audio@1", b"{}".to_vec()) {
+    let fixture = fixture(db, dir.path());
+    let id = seed_fixture(&fixture, true, IntegrationHealthStatus::Ready);
+    fixture.activate_package(id);
+    // The activated grant covers only manifest-declared capabilities; an undeclared id fails
+    // closed with PermissionDenied at the grant check.
+    let err = match fixture.caps.resolve_translate(id, "speech.audio@1", b"{}".to_vec()) {
       Ok(_) => panic!("expected missing capability rejection"),
+      Err(e) => e,
+    };
+    assert_eq!(err.code, CapabilityErrorCode::PermissionDenied);
+    let err = match fixture.caps.resolve_translate(id, "translate.text@2", b"{}".to_vec()) {
+      Ok(_) => panic!("expected wrong-major rejection"),
       Err(e) => e,
     };
     assert_eq!(err.code, CapabilityErrorCode::PermissionDenied);
@@ -1386,11 +1220,16 @@ mod tests {
     let dir = tempfile::tempdir().unwrap();
     let db = Database::new(dir.path()).unwrap();
     db.initialize().unwrap();
-    let id = seed_instance(&db, true, IntegrationHealthStatus::Ready);
-    let svc = service(db);
-    // detect capability registered as DetectLanguage; resolve_translate must fail closed.
-    let err = match svc.resolve_translate(id, GOOGLE_DETECT_LANGUAGE_CAPABILITY_ID, b"{}".to_vec()) {
-      Ok(_) => panic!("expected type mismatch"),
+    let fixture = fixture(db, dir.path());
+    let id = seed_fixture(&fixture, true, IntegrationHealthStatus::Ready);
+    fixture.activate_package(id);
+    // Capability dispatch type is owned by the caller; a capability outside the granted set
+    // resolving through the translate surface fails closed at the grant check.
+    let err = match fixture
+      .caps
+      .resolve_translate(id, "speech.synthesize@2", b"{}".to_vec())
+    {
+      Ok(_) => panic!("expected ungranted rejection"),
       Err(e) => e,
     };
     assert_eq!(err.code, CapabilityErrorCode::PermissionDenied);
@@ -1401,9 +1240,12 @@ mod tests {
     let dir = tempfile::tempdir().unwrap();
     let db = Database::new(dir.path()).unwrap();
     db.initialize().unwrap();
-    let id = seed_instance(&db, true, IntegrationHealthStatus::Unconfigured);
-    let svc = service(db);
-    let err = match svc.resolve_translate(id, GOOGLE_TRANSLATE_TEXT_CAPABILITY_ID, b"{}".to_vec()) {
+    let fixture = fixture(db, dir.path());
+    let id = seed_fixture(&fixture, true, IntegrationHealthStatus::Unconfigured);
+    let err = match fixture
+      .caps
+      .resolve_translate(id, GOOGLE_TRANSLATE_TEXT_CAPABILITY_ID, b"{}".to_vec())
+    {
       Ok(_) => panic!("expected unconfigured rejection"),
       Err(e) => e,
     };
@@ -1415,15 +1257,17 @@ mod tests {
     let dir = tempfile::tempdir().unwrap();
     let db = Database::new(dir.path()).unwrap();
     db.initialize().unwrap();
-    let unvalidated = seed_instance(&db, true, IntegrationHealthStatus::Unvalidated);
-    let degraded = seed_instance(&db, true, IntegrationHealthStatus::Degraded);
-    let svc = service(db);
-    let err = svc
+    let fixture = fixture(db, dir.path());
+    let unvalidated = seed_fixture(&fixture, true, IntegrationHealthStatus::Unvalidated);
+    let degraded = seed_fixture(&fixture, true, IntegrationHealthStatus::Degraded);
+    let err = fixture
+      .caps
       .resolve_ocr(unvalidated, OCR_IMAGE_CAPABILITY_ID)
       .err()
       .expect("unvalidated must fail");
     assert_eq!(err.code, CapabilityErrorCode::InvalidConfiguration);
-    let err = svc
+    let err = fixture
+      .caps
       .resolve_ocr(degraded, OCR_IMAGE_CAPABILITY_ID)
       .err()
       .expect("degraded must fail");
@@ -1435,15 +1279,18 @@ mod tests {
     let dir = tempfile::tempdir().unwrap();
     let db = Database::new(dir.path()).unwrap();
     db.initialize().unwrap();
-    let id = seed_instance(&db, true, IntegrationHealthStatus::Ready);
-    let svc = service(db);
+    let fixture = fixture(db, dir.path());
+    let id = seed_fixture(&fixture, true, IntegrationHealthStatus::Ready);
+    fixture.activate_package(id);
     assert!(
-      svc
+      fixture
+        .caps
         .resolve_translate(id, GOOGLE_TRANSLATE_TEXT_CAPABILITY_ID, b"{}".to_vec())
         .is_ok()
     );
     assert!(
-      svc
+      fixture
+        .caps
         .resolve_detect(id, GOOGLE_DETECT_LANGUAGE_CAPABILITY_ID, b"{}".to_vec())
         .is_ok()
     );
@@ -1454,12 +1301,13 @@ mod tests {
     let dir = tempfile::tempdir().unwrap();
     let db = Database::new(dir.path()).unwrap();
     db.initialize().unwrap();
-    let id = seed_instance(&db, true, IntegrationHealthStatus::Ready);
-    let svc = service(db);
-    assert!(svc.resolve_ocr(id, OCR_IMAGE_CAPABILITY_ID).is_ok());
-    // OCR handler must not resolve as translate.
-    let err = match svc.resolve_translate(id, OCR_IMAGE_CAPABILITY_ID, b"{}".to_vec()) {
-      Ok(_) => panic!("expected type mismatch for ocr as translate"),
+    let fixture = fixture(db, dir.path());
+    let id = seed_fixture(&fixture, true, IntegrationHealthStatus::Ready);
+    fixture.activate_package(id);
+    assert!(fixture.caps.resolve_ocr(id, OCR_IMAGE_CAPABILITY_ID).is_ok());
+    // A capability outside the granted package set must not resolve as translate.
+    let err = match fixture.caps.resolve_translate(id, "ocr.image@2", b"{}".to_vec()) {
+      Ok(_) => panic!("expected ungranted capability rejection"),
       Err(e) => e,
     };
     assert_eq!(err.code, CapabilityErrorCode::PermissionDenied);

@@ -10,9 +10,30 @@ use uuid::Uuid;
 
 // Auth-policy constants and grant-request validation live in the host-owned auth_policies module.
 pub use crate::services::auth_policies::{
+  BAIDU_CLIENT_CREDENTIALS_AUTH_DRIVER_ID, BAIDU_CLIENT_CREDENTIALS_AUTH_POLICY_ID, BAIDU_OAUTH_AUDIENCE_POLICY_ID,
   GOOGLE_CLOUD_TEXT_TO_SPEECH_SCOPE, GOOGLE_CLOUD_TRANSLATION_SCOPE, GOOGLE_CLOUD_VISION_SCOPE,
   GOOGLE_OAUTH_AUDIENCE_POLICY_ID, GOOGLE_SERVICE_ACCOUNT_AUTH_DRIVER_ID, GOOGLE_SERVICE_ACCOUNT_AUTH_POLICY_ID,
 };
+
+/// How a host-owned access token is injected after guest request validation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TokenInjectionKind {
+  BearerHeader,
+  QueryParameter { name: &'static str },
+}
+
+/// Closed host-owned token exchanger keyed by auth-driver ID.
+pub trait TokenExchanger: Send + Sync + 'static {
+  fn driver_id(&self) -> &'static str;
+  fn injection_kind(&self) -> TokenInjectionKind;
+  fn exchange(
+    &self,
+    instance_id: Uuid,
+    scopes: Vec<String>,
+    now_unix_secs: u64,
+    cancel: Option<CancelToken>,
+  ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ExchangedToken, CapabilityError>> + Send + '_>>;
+}
 /// Safety skew subtracted from token expiry before reuse.
 pub const TOKEN_EXPIRY_SAFETY_SKEW: Duration = Duration::from_secs(60);
 /// Max concurrent cached grants retained in process memory.
@@ -42,12 +63,22 @@ pub struct TokenGrant {
   /// Host-owned audience policy validated at issuance.
   audience_policy_id: String,
   scope_key: String,
+  /// Injection behavior carried by the issuing exchanger.
+  injection_kind: TokenInjectionKind,
 }
 
 impl TokenGrant {
   /// Apply Bearer auth into headers. Intended for network broker use only.
   pub(crate) fn apply_bearer_auth(&self, headers: &mut HashMap<String, String>) {
     headers.insert("Authorization".into(), format!("Bearer {}", self.access_token));
+  }
+
+  pub(crate) fn injection_kind(&self) -> TokenInjectionKind {
+    self.injection_kind
+  }
+
+  pub(crate) fn apply_query_parameter(&self, url: &mut url::Url, name: &str) {
+    url.query_pairs_mut().append_pair(name, &self.access_token);
   }
 
   pub fn instance_id(&self) -> Uuid {
@@ -84,6 +115,7 @@ impl fmt::Debug for TokenGrant {
       .field("auth_driver_id", &self.auth_driver_id)
       .field("audience_policy_id", &self.audience_policy_id)
       .field("scope_key", &self.scope_key)
+      .field("injection_kind", &self.injection_kind)
       .field("expired", &self.is_expired(Instant::now()))
       .finish_non_exhaustive()
   }
@@ -111,16 +143,11 @@ impl GrantClock for SystemGrantClock {
   }
 }
 
-/// Loads SA credentials and exchanges JWT assertions for access tokens.
-pub trait GoogleTokenExchanger: Send + Sync + 'static {
-  fn exchange(
-    &self,
-    instance_id: Uuid,
-    scopes: Vec<String>,
-    now_unix_secs: u64,
-    cancel: Option<CancelToken>,
-  ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ExchangedToken, CapabilityError>> + Send + '_>>;
-}
+/// Loads credentials and exchanges JWT assertions for access tokens.
+///
+/// Every concrete exchanger implements the closed [`TokenExchanger`] contract; there is no
+/// separate Google-only trait. The Google service-account exchanger reports
+/// `GOOGLE_SERVICE_ACCOUNT_AUTH_DRIVER_ID` and bearer-header injection.
 
 #[derive(Clone)]
 pub struct ExchangedToken {
@@ -143,6 +170,7 @@ struct CacheEntry {
   access_token: String,
   expires_at: Instant,
   credential_revision: i64,
+  injection_kind: TokenInjectionKind,
 }
 
 /// In-memory grant cache with per-instance eviction generations.
@@ -172,24 +200,42 @@ impl TokenCacheState {
 pub struct TokenGrantService {
   cache: Arc<Mutex<TokenCacheState>>,
   clock: Arc<dyn GrantClock>,
-  exchanger: Arc<dyn GoogleTokenExchanger>,
+  /// Closed exchanger registry keyed by validated auth-driver ID.
+  exchangers: HashMap<&'static str, Arc<dyn TokenExchanger>>,
 }
 
 impl TokenGrantService {
-  pub fn new(exchanger: Arc<dyn GoogleTokenExchanger>) -> Self {
-    Self {
-      cache: Arc::new(Mutex::new(TokenCacheState::new())),
-      clock: Arc::new(SystemGrantClock),
-      exchanger,
-    }
+  /// Build the closed exchanger registry. Every registered driver ID must be a known auth
+  /// driver; unknown or duplicate registrations fail closed during construction.
+  pub fn new(exchangers: Vec<Arc<dyn TokenExchanger>>) -> Result<Self, CapabilityError> {
+    Self::with_clock(exchangers, Arc::new(SystemGrantClock))
   }
 
-  pub fn with_clock(exchanger: Arc<dyn GoogleTokenExchanger>, clock: Arc<dyn GrantClock>) -> Self {
-    Self {
+  pub fn with_clock(
+    exchangers: Vec<Arc<dyn TokenExchanger>>,
+    clock: Arc<dyn GrantClock>,
+  ) -> Result<Self, CapabilityError> {
+    let mut registry = HashMap::new();
+    for exchanger in exchangers {
+      let driver_id = exchanger.driver_id();
+      if crate::services::auth_policies::find_driver(driver_id).is_none() {
+        return Err(CapabilityError::new(
+          CapabilityErrorCode::Internal,
+          format!("token exchanger driver {driver_id} is not a closed auth driver"),
+        ));
+      }
+      if registry.insert(driver_id, exchanger).is_some() {
+        return Err(CapabilityError::new(
+          CapabilityErrorCode::Internal,
+          format!("duplicate token exchanger driver {driver_id}"),
+        ));
+      }
+    }
+    Ok(Self {
       cache: Arc::new(Mutex::new(TokenCacheState::new())),
       clock,
-      exchanger,
-    }
+      exchangers: registry,
+    })
   }
 
   /// Acquire a grant; uses cache when revision+scopes still valid.
@@ -222,15 +268,28 @@ impl TokenGrantService {
       }
     }
 
-    let exchanged = self
-      .exchanger
-      .exchange(
-        request.instance_id,
-        request.scopes.clone(),
-        self.clock.now_unix_secs(),
-        cancel.cloned(),
-      )
-      .await?;
+    let exchanged = {
+      let exchanger = self.exchangers.get(request.auth_driver_id.as_str()).ok_or_else(|| {
+        CapabilityError::new(
+          CapabilityErrorCode::PermissionDenied,
+          format!(
+            "token exchanger for driver {} is not configured",
+            request.auth_driver_id
+          ),
+        )
+      })?;
+      let injection_kind = exchanger.injection_kind();
+      let exchanged = exchanger
+        .exchange(
+          request.instance_id,
+          request.scopes.clone(),
+          self.clock.now_unix_secs(),
+          cancel.cloned(),
+        )
+        .await?;
+      (exchanged, injection_kind)
+    };
+    let (exchanged, injection_kind) = exchanged;
 
     if exchanged.access_token.trim().is_empty() {
       return Err(CapabilityError::new(
@@ -256,6 +315,7 @@ impl TokenGrantService {
       auth_driver_id: request.auth_driver_id.clone(),
       audience_policy_id: request.audience_policy_id.clone(),
       scope_key: scope_key.clone(),
+      injection_kind,
     };
 
     {
@@ -308,6 +368,7 @@ impl TokenGrantService {
           access_token: exchanged.access_token,
           expires_at,
           credential_revision: exchanged.credential_revision,
+          injection_kind,
         },
       );
       state.latest_revision.insert(index_key, exchanged.credential_revision);
@@ -352,6 +413,7 @@ fn cached_grant_from_state(
     auth_driver_id: request.auth_driver_id.clone(),
     audience_policy_id: request.audience_policy_id.clone(),
     scope_key: scope_key.to_string(),
+    injection_kind: entry.injection_kind,
   })
 }
 
@@ -434,7 +496,15 @@ mod tests {
     }
   }
 
-  impl GoogleTokenExchanger for FakeExchanger {
+  impl TokenExchanger for FakeExchanger {
+    fn driver_id(&self) -> &'static str {
+      GOOGLE_SERVICE_ACCOUNT_AUTH_DRIVER_ID
+    }
+
+    fn injection_kind(&self) -> TokenInjectionKind {
+      TokenInjectionKind::BearerHeader
+    }
+
     fn exchange(
       &self,
       _instance_id: Uuid,
@@ -470,7 +540,15 @@ mod tests {
     token: String,
   }
 
-  impl GoogleTokenExchanger for BarrierExchanger {
+  impl TokenExchanger for BarrierExchanger {
+    fn driver_id(&self) -> &'static str {
+      GOOGLE_SERVICE_ACCOUNT_AUTH_DRIVER_ID
+    }
+
+    fn injection_kind(&self) -> TokenInjectionKind {
+      TokenInjectionKind::BearerHeader
+    }
+
     fn exchange(
       &self,
       _instance_id: Uuid,
@@ -510,11 +588,148 @@ mod tests {
     GOOGLE_CLOUD_TRANSLATION_SCOPE
   }
 
+  /// Fake Baidu-driver exchanger with query-parameter injection for registry dispatch tests.
+  struct FakeQueryExchanger {
+    calls: AtomicUsize,
+    token: String,
+  }
+
+  impl TokenExchanger for FakeQueryExchanger {
+    fn driver_id(&self) -> &'static str {
+      BAIDU_CLIENT_CREDENTIALS_AUTH_DRIVER_ID
+    }
+
+    fn injection_kind(&self) -> TokenInjectionKind {
+      TokenInjectionKind::QueryParameter {
+        name: crate::services::baidu_token_exchanger::BAIDU_ACCESS_TOKEN_QUERY_NAME,
+      }
+    }
+
+    fn exchange(
+      &self,
+      _instance_id: Uuid,
+      _scopes: Vec<String>,
+      _now_unix_secs: u64,
+      cancel: Option<CancelToken>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ExchangedToken, CapabilityError>> + Send + '_>> {
+      Box::pin(async move {
+        if let Some(token) = cancel.as_ref() {
+          if token.is_cancelled() {
+            return Err(CapabilityError::new(CapabilityErrorCode::Cancelled, "cancelled"));
+          }
+        }
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Ok(ExchangedToken {
+          access_token: self.token.clone(),
+          expires_in: 3600,
+          credential_revision: 7,
+        })
+      })
+    }
+  }
+
+  fn baidu_grant_request(instance_id: Uuid) -> TokenGrantRequest {
+    TokenGrantRequest {
+      instance_id,
+      capability_id: OCR_IMAGE_CAPABILITY_ID.into(),
+      auth_driver_id: BAIDU_CLIENT_CREDENTIALS_AUTH_DRIVER_ID.into(),
+      scopes: vec![],
+      audience_policy_id: BAIDU_OAUTH_AUDIENCE_POLICY_ID.into(),
+    }
+  }
+
+  #[tokio::test]
+  async fn token_grant_dispatches_by_registered_driver_and_carries_injection() {
+    let google = Arc::new(FakeExchanger::new(1, 3600, "tok-google"));
+    let baidu = Arc::new(FakeQueryExchanger {
+      calls: AtomicUsize::new(0),
+      token: "tok-baidu".into(),
+    });
+    let service = TokenGrantService::new(vec![google.clone(), baidu.clone()]).unwrap();
+    let id = Uuid::nil();
+
+    let google_grant = service
+      .acquire(grant_request(id, &[translation_scope()]), None)
+      .await
+      .unwrap();
+    assert_eq!(google.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(baidu.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(google_grant.injection_kind(), TokenInjectionKind::BearerHeader);
+
+    let baidu_grant = service.acquire(baidu_grant_request(id), None).await.unwrap();
+    assert_eq!(baidu.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(google.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+      baidu_grant.injection_kind(),
+      TokenInjectionKind::QueryParameter {
+        name: crate::services::baidu_token_exchanger::BAIDU_ACCESS_TOKEN_QUERY_NAME
+      }
+    );
+
+    // Cache hits preserve the issuing exchanger's injection behavior.
+    let baidu_cached = service.acquire(baidu_grant_request(id), None).await.unwrap();
+    assert_eq!(baidu.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+      baidu_cached.injection_kind(),
+      TokenInjectionKind::QueryParameter {
+        name: crate::services::baidu_token_exchanger::BAIDU_ACCESS_TOKEN_QUERY_NAME
+      }
+    );
+  }
+
+  #[test]
+  fn token_grant_registry_rejects_unknown_and_duplicate_drivers() {
+    struct UnknownDriver;
+    impl TokenExchanger for UnknownDriver {
+      fn driver_id(&self) -> &'static str {
+        "com.example.evil-driver"
+      }
+
+      fn injection_kind(&self) -> TokenInjectionKind {
+        TokenInjectionKind::BearerHeader
+      }
+
+      fn exchange(
+        &self,
+        _instance_id: Uuid,
+        _scopes: Vec<String>,
+        _now_unix_secs: u64,
+        _cancel: Option<CancelToken>,
+      ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ExchangedToken, CapabilityError>> + Send + '_>>
+      {
+        Box::pin(async move {
+          Ok(ExchangedToken {
+            access_token: "x".into(),
+            expires_in: 3600,
+            credential_revision: 1,
+          })
+        })
+      }
+    }
+
+    let err = match TokenGrantService::new(vec![Arc::new(UnknownDriver)]) {
+      Ok(_) => panic!("unknown driver must fail closed"),
+      Err(err) => err,
+    };
+    assert_eq!(err.code, CapabilityErrorCode::Internal);
+    assert!(err.message.contains("not a closed auth driver"));
+
+    let dup = match TokenGrantService::new(vec![
+      Arc::new(FakeExchanger::new(1, 3600, "a")),
+      Arc::new(FakeExchanger::new(2, 3600, "b")),
+    ]) {
+      Ok(_) => panic!("duplicate driver must fail closed"),
+      Err(err) => err,
+    };
+    assert_eq!(dup.code, CapabilityErrorCode::Internal);
+    assert!(dup.message.contains("duplicate"));
+  }
+
   #[tokio::test]
   async fn token_grant_cache_hit_avoids_second_exchange() {
     let exchanger = Arc::new(FakeExchanger::new(1, 3600, "tok-1"));
     let clock = Arc::new(FakeClock::new(1_700_000_000));
-    let service = TokenGrantService::with_clock(exchanger.clone(), clock);
+    let service = TokenGrantService::with_clock(vec![exchanger.clone()], clock).unwrap();
     let id = Uuid::nil();
     let g1 = service
       .acquire(grant_request(id, &[translation_scope()]), None)
@@ -532,7 +747,7 @@ mod tests {
   async fn token_grant_expiry_triggers_refresh() {
     let exchanger = Arc::new(FakeExchanger::new(1, 70, "tok-1"));
     let clock = Arc::new(FakeClock::new(1_700_000_000));
-    let service = TokenGrantService::with_clock(exchanger.clone(), clock.clone());
+    let service = TokenGrantService::with_clock(vec![exchanger.clone()], clock.clone()).unwrap();
     let id = Uuid::nil();
     service
       .acquire(grant_request(id, &[translation_scope()]), None)
@@ -550,7 +765,7 @@ mod tests {
   #[tokio::test]
   async fn token_grant_evict_instance_clears_cache() {
     let exchanger = Arc::new(FakeExchanger::new(2, 3600, "tok-1"));
-    let service = TokenGrantService::new(exchanger.clone());
+    let service = TokenGrantService::new(vec![exchanger.clone()]).unwrap();
     let id = Uuid::nil();
     service
       .acquire(grant_request(id, &[translation_scope()]), None)
@@ -567,7 +782,7 @@ mod tests {
   #[tokio::test]
   async fn token_grant_revision_invalidation_requires_reexchange() {
     let exchanger = Arc::new(FakeExchanger::new(1, 3600, "tok-rev1"));
-    let service = TokenGrantService::new(exchanger.clone());
+    let service = TokenGrantService::new(vec![exchanger.clone()]).unwrap();
     let id = Uuid::nil();
 
     let first = service
@@ -609,7 +824,7 @@ mod tests {
       revision: 1,
       token: "stale-tok".into(),
     });
-    let service = TokenGrantService::new(stale.clone());
+    let service = TokenGrantService::new(vec![stale.clone()]).unwrap();
     let id = Uuid::nil();
 
     let acquire = tokio::spawn({
@@ -631,7 +846,12 @@ mod tests {
     let service = TokenGrantService {
       cache: service.cache.clone(),
       clock: service.clock.clone(),
-      exchanger: fresh.clone(),
+      exchangers: {
+        let mut registry: std::collections::HashMap<&'static str, Arc<dyn TokenExchanger>> =
+          std::collections::HashMap::new();
+        registry.insert(GOOGLE_SERVICE_ACCOUNT_AUTH_DRIVER_ID, fresh.clone());
+        registry
+      },
     };
     let next = service
       .acquire(grant_request(id, &[translation_scope()]), None)
@@ -646,7 +866,7 @@ mod tests {
     // Scope separation still requires allow-listed scopes only; use detect vs translate
     // capability paths with the same allowed scope string ordered differently.
     let exchanger = Arc::new(FakeExchanger::new(1, 3600, "tok-1"));
-    let service = TokenGrantService::new(exchanger.clone());
+    let service = TokenGrantService::new(vec![exchanger.clone()]).unwrap();
     let id = Uuid::nil();
     service
       .acquire(grant_request(id, &[translation_scope()]), None)
@@ -675,7 +895,7 @@ mod tests {
   #[tokio::test]
   async fn token_grant_rejects_untrusted_driver_and_audience() {
     let exchanger = Arc::new(FakeExchanger::new(1, 3600, "tok-1"));
-    let service = TokenGrantService::new(exchanger);
+    let service = TokenGrantService::new(vec![exchanger]).unwrap();
     let mut req = grant_request(Uuid::nil(), &[translation_scope()]);
     req.auth_driver_id = "evil".into();
     let err = service.acquire(req, None).await.unwrap_err();
@@ -690,7 +910,7 @@ mod tests {
   #[tokio::test]
   async fn token_grant_rejects_cloud_platform_and_unknown_scopes() {
     let exchanger = Arc::new(FakeExchanger::new(1, 3600, "tok-1"));
-    let service = TokenGrantService::new(exchanger.clone());
+    let service = TokenGrantService::new(vec![exchanger.clone()]).unwrap();
     let id = Uuid::nil();
 
     let err = service
@@ -728,7 +948,7 @@ mod tests {
   #[tokio::test]
   async fn token_grant_cancellation_short_circuits() {
     let exchanger = Arc::new(FakeExchanger::new(1, 3600, "tok-1"));
-    let service = TokenGrantService::new(exchanger);
+    let service = TokenGrantService::new(vec![exchanger]).unwrap();
     let cancel = CancelToken::new();
     cancel.cancel();
     let err = service
@@ -749,6 +969,7 @@ mod tests {
       auth_driver_id: GOOGLE_SERVICE_ACCOUNT_AUTH_DRIVER_ID.into(),
       audience_policy_id: GOOGLE_OAUTH_AUDIENCE_POLICY_ID.into(),
       scope_key: "s".into(),
+      injection_kind: TokenInjectionKind::BearerHeader,
     };
     let rendered = format!("{grant:?}");
     assert!(!rendered.contains("super-secret-token"));
@@ -757,7 +978,7 @@ mod tests {
   #[tokio::test]
   async fn token_grant_ocr_accepts_vision_scope_only() {
     let exchanger = Arc::new(FakeExchanger::new(1, 3600, "tok-vision"));
-    let service = TokenGrantService::new(exchanger.clone());
+    let service = TokenGrantService::new(vec![exchanger.clone()]).unwrap();
     let id = Uuid::nil();
 
     let grant = service

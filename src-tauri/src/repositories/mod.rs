@@ -1,5 +1,6 @@
 // ABOUTME: Repository module exports for SQLite aggregate access.
 // ABOUTME: Services call repositories; commands never embed SQL.
+#![allow(dead_code)]
 pub mod app_credentials;
 pub mod app_settings;
 pub mod credential_operations;

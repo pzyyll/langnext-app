@@ -2,7 +2,6 @@
 // ABOUTME: Discovers capabilities and labels from sanitized registration metadata, never plugin-ID branches.
 import type { ComponentType, SVGProps } from "react";
 import type { IntegrationInstanceDto, OcrProviderType, ServiceIntegrationDefinitionDto } from "../../storage/types";
-import BaiduIcon from "~icons/svgs/baiducloud";
 import AiIcon from "~icons/ri/ai";
 import PluginIcon from "~icons/svgs/google-cloud";
 
@@ -13,13 +12,12 @@ type OcrProviderIcon = ComponentType<SVGProps<SVGSVGElement>>;
 
 export type OcrProviderOption = {
   id: OcrProviderType;
-  labelKey: "ocr.provider.baidu" | "ocr.provider.ai" | "ocr.provider.plugin";
+  labelKey: "ocr.provider.ai" | "ocr.provider.plugin";
   Icon: OcrProviderIcon;
 };
 
-/** Static built-in OCR providers (Baidu + AI). Integration options are built separately. */
+/** Static built-in OCR provider (AI). Integration options are built separately. */
 export const OCR_PROVIDER_OPTIONS: readonly OcrProviderOption[] = [
-  { id: "baidu", labelKey: "ocr.provider.baidu", Icon: BaiduIcon },
   { id: "ai", labelKey: "ocr.provider.ai", Icon: AiIcon },
 ] as const;
 
@@ -33,7 +31,7 @@ export function getOcrProviderOption(providerType: OcrProviderType): OcrProvider
   return OCR_PROVIDER_OPTION_BY_ID.get(providerType) ?? OCR_PROVIDER_OPTION_BY_ID.get("plugin_capability")!;
 }
 
-export type OcrProviderCreateOptionKind = "baidu" | "ai" | "plugin_capability";
+export type OcrProviderCreateOptionKind = "ai" | "plugin_capability";
 
 export type OcrProviderCreateOption = {
   /** Stable option id: `baidu`, `ai`, or `integration:<instanceId>`. */
@@ -49,7 +47,6 @@ export type OcrProviderCreateOption = {
 
 /** Localized copy for catalog labels; plugin names resolve from definition presentation metadata. */
 export type OcrProviderCreateOptionLabels = {
-  baiduLabel: string;
   aiLabel: string;
   /** `{{plugin}}` and `{{name}}` placeholders. */
   integrationLabel: string;
@@ -57,7 +54,6 @@ export type OcrProviderCreateOptionLabels = {
 };
 
 const DEFAULT_CREATE_LABELS: OcrProviderCreateOptionLabels = {
-  baiduLabel: "Baidu OCR",
   aiLabel: "AI OCR",
   integrationLabel: "{{plugin}} — {{name}}",
 };
@@ -97,7 +93,7 @@ function isOcrCapable(
   return ocrCapabilityIdForPlugin(instance.pluginId, definitionsById) != null;
 }
 
-/** Build deterministic create options: static providers first, then OCR-capable integrations. */
+/** Build deterministic create options: AI first, then OCR-capable integrations. */
 export function buildOcrProviderCreateOptions(input: {
   hasEnabledImageModel: boolean;
   modelsPending?: boolean;
@@ -109,16 +105,6 @@ export function buildOcrProviderCreateOptions(input: {
   const definitionsById = new Map(input.definitions.map((definition) => [definition.id, definition]));
   const modelsPending = input.modelsPending === true;
   const options: OcrProviderCreateOption[] = [
-    {
-      id: "baidu",
-      kind: "baidu",
-      label: labels.baiduLabel,
-      disabled: false,
-      integrationInstanceId: null,
-      ocrCapabilityId: null,
-      pluginId: null,
-      Icon: BaiduIcon,
-    },
     {
       id: "ai",
       kind: "ai",

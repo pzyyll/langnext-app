@@ -12,7 +12,7 @@ import IconMaterialSymbolsLightStopCircleOutline from "~icons/material-symbols-l
 import IconMaterialSymbolsLightVolumeUp from "~icons/material-symbols-light/volume-up";
 import IconPepiconsPrintEnter from "~icons/pepicons-print/enter";
 import { IconButton } from "../../components/IconButton";
-import { MarkdownOutput } from "../../components/markdown/MarkdownOutput";
+import { LazyMarkdownOutput } from "../../components/markdown/LazyMarkdownOutput";
 import { useToast } from "../../components/toast/useToast";
 import { SelectField } from "../../components/SelectField";
 import { TextAutosize, TextAutosizeContent } from "../../components/TextAutosize";
@@ -1475,7 +1475,12 @@ function TranslatePage() {
                   </p>
                 ) : outputText || isTranslating ? (
                   isMarkdownView && outputText ? (
-                    <MarkdownOutput text={outputText} isStreaming={streamOutputActive} />
+                    <LazyMarkdownOutput
+                      text={outputText}
+                      isStreaming={streamOutputActive}
+                      isLoading={isTranslating}
+                      loadingLabel={t("translate.translating")}
+                    />
                   ) : (
                     <TextLoading
                       text={outputText}

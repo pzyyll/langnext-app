@@ -1,6 +1,8 @@
 // ABOUTME: Application services enforcing business rules before repository writes.
 // ABOUTME: Commands call services; services own validation and credential orchestration.
+#![allow(dead_code)]
 pub mod auth_policies;
+pub mod baidu_token_exchanger;
 pub mod blob_resources;
 pub mod bounded_http;
 pub mod bundled_plugins;
@@ -13,15 +15,15 @@ pub mod google_service_account;
 pub mod google_translate_web;
 pub mod import_export;
 pub mod import_validation;
-pub mod legacy_runtime_inventory;
-pub mod legacy_runtime_retirement;
 pub mod models;
 pub mod models_dev_catalog;
 pub mod native_workers;
 pub mod network_broker;
 pub mod ocr_services;
+pub mod package_definition;
 pub mod plugin_models;
 pub mod plugin_package;
+pub mod plugin_release_bundle;
 pub mod plugin_schema;
 pub mod plugin_store;
 pub mod provider_http;
@@ -40,6 +42,8 @@ mod runtime_provider_tests;
 #[cfg(test)]
 pub mod execution_dispatch_probe;
 
+#[cfg(test)]
+mod baidu_ocr_runtime_tests;
 #[cfg(test)]
 mod edge_tts_runtime_tests;
 #[cfg(test)]
@@ -66,15 +70,16 @@ pub mod translation_profiles;
 pub mod vendor_trust;
 pub mod wasm_runtime;
 
+#[cfg(test)]
+pub(crate) mod test_support;
+
 pub use default_package_activation::DefaultPackageActivationService;
 pub use endpoint_trust::EndpointTrustService;
 pub use import_export::ImportExportService;
-pub use legacy_runtime_inventory::LegacyRuntimeInventoryService;
 pub use models::ModelService;
 pub use ocr_services::OcrServiceService;
 pub use plugin_models::PluginModelService;
 pub use plugin_store::PluginPackageService;
-pub use provider_http::ProviderHttpService;
 pub use providers::ProviderService;
 pub use runtime_lifecycle::RuntimeLifecycleService;
 pub use runtime_router::RuntimeRouter;

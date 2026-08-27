@@ -1,5 +1,5 @@
 -- ABOUTME: Instance runtime pins, grant-set authority entries, and upgrade rollback snapshots.
--- ABOUTME: Package approvals remain non-executable; only grant-set revisions authorize runtime.
+-- ABOUTME: Package-only pins require exact package identity; approvals remain non-executable.
 
 -- ---------------------------------------------------------------------------
 -- Extend execution_grant_sets with authority digest + plugin version.
@@ -118,7 +118,8 @@ CREATE INDEX idx_execution_grant_page_entries_grant
     ON execution_grant_page_entries(grant_set_id);
 
 -- ---------------------------------------------------------------------------
--- Pin every integration instance to one exact runtime identity.
+-- Pin every integration instance to one exact package runtime identity.
+-- Unpublished: pre-pin rows have no package identity and are not synthesized.
 -- ---------------------------------------------------------------------------
 CREATE TABLE integration_instances_new (
     id                              TEXT PRIMARY KEY,
@@ -140,12 +141,10 @@ CREATE TABLE integration_instances_new (
     last_error_code                 TEXT,
     runtime_kind                    TEXT NOT NULL
                                     CHECK (runtime_kind IN (
-                                      'bundled-rust',
                                       'wasm-component',
-                                      'legacy-frontend-provider',
                                       'trusted-native-worker'
                                     )),
-    package_digest                  TEXT,
+    package_digest                  TEXT NOT NULL,
     execution_grant_set_revision    INTEGER
                                     CHECK (
                                       execution_grant_set_revision IS NULL
@@ -165,50 +164,18 @@ CREATE TABLE integration_instances_new (
     created_at                      TEXT NOT NULL,
     updated_at                      TEXT NOT NULL,
     CHECK (
-      (
-        runtime_kind = 'bundled-rust'
-        AND package_digest IS NULL
-        AND execution_grant_set_revision IS NULL
-      )
-      OR (
-        -- Active package pin: exact digest + grant revision. Digest is soft-referenced so a
-        -- missing package can still preserve the unresolved requirement without FK failure.
-        runtime_kind IN ('wasm-component', 'trusted-native-worker')
-        AND package_digest IS NOT NULL
-        AND (
-          (
-            runtime_state = 'active'
-            AND execution_grant_set_revision IS NOT NULL
-          )
-          OR (
-            runtime_state IN ('unavailable', 'pending_activation')
-          )
+      runtime_kind IN ('wasm-component', 'trusted-native-worker')
+      AND (
+        (
+          runtime_state = 'active'
+          AND execution_grant_set_revision IS NOT NULL
         )
-      )
-      OR (
-        runtime_kind = 'legacy-frontend-provider'
+        OR (
+          runtime_state IN ('unavailable', 'pending_activation')
+        )
       )
     )
 );
-
-INSERT INTO integration_instances_new (
-    id, plugin_id, plugin_version, display_name, enabled,
-    config_json, config_schema_version, health_status,
-    last_validated_at, last_error_code,
-    runtime_kind, package_digest, execution_grant_set_revision,
-    runtime_state, runtime_error_code, runtime_error_message,
-    runtime_requirement_json,
-    created_at, updated_at
-)
-SELECT
-    id, plugin_id, plugin_version, display_name, enabled,
-    config_json, config_schema_version, health_status,
-    last_validated_at, last_error_code,
-    'bundled-rust', NULL, NULL,
-    'active', NULL, NULL,
-    NULL,
-    created_at, updated_at
-FROM integration_instances;
 
 DROP TABLE integration_instances;
 ALTER TABLE integration_instances_new RENAME TO integration_instances;

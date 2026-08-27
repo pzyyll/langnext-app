@@ -2,12 +2,10 @@
 // ABOUTME: Includes snap overlay and storage subsystem commands.
 pub mod default_package_activation;
 pub mod import_export;
-pub mod legacy_runtime_inventory;
 pub mod models;
 pub mod ocr_services;
 pub mod plugin_models;
 pub mod plugin_packages;
-pub mod provider_http;
 pub mod providers;
 pub mod runtime;
 pub mod runtime_lifecycle;

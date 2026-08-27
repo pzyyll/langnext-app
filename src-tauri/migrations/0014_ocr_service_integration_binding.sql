@@ -1,33 +1,19 @@
 -- ABOUTME: Adds plugin_capability OCR engine binding to integration instances.
--- ABOUTME: Backfills baidu/ai rows unchanged; plugin rows use ON DELETE RESTRICT FK.
+-- ABOUTME: Converges OCR to ai | plugin_capability only; no direct-Baidu columns.
 
 -- Rebuild ocr_services with provider_type discriminant including plugin_capability.
 CREATE TABLE ocr_services_new (
     id                              TEXT PRIMARY KEY,
     provider_type                   TEXT NOT NULL
-                                    CHECK (provider_type IN ('baidu', 'ai', 'plugin_capability')),
+                                    CHECK (provider_type IN ('ai', 'plugin_capability')),
     display_name                    TEXT NOT NULL,
     enabled                         INTEGER NOT NULL DEFAULT 1
                                     CHECK (enabled IN (0, 1)),
     sort_order                      INTEGER NOT NULL CHECK (sort_order >= 0),
-    -- Baidu-only (NULL for ai / plugin_capability)
-    baidu_action                    TEXT
-                                    CHECK (
-                                      baidu_action IS NULL OR baidu_action IN (
-                                        'accurate',
-                                        'accurate_basic',
-                                        'general',
-                                        'general_basic'
-                                      )
-                                    ),
-    api_key_ref                     TEXT,
-    secret_key_ref                  TEXT,
-    -- AI-only (NULL for baidu / plugin_capability)
     provider_model_id               TEXT,
     temperature                     REAL
                                     CHECK (temperature IS NULL OR temperature >= 0),
     default_prompt_template_id      TEXT,
-    -- Plugin-only (NULL for baidu / ai)
     integration_instance_id         TEXT,
     ocr_capability_id               TEXT,
     capability_preferences_version  INTEGER,
@@ -36,22 +22,7 @@ CREATE TABLE ocr_services_new (
     updated_at                      TEXT NOT NULL,
     CHECK (
       (
-        provider_type = 'baidu'
-        AND baidu_action IS NOT NULL
-        AND provider_model_id IS NULL
-        AND temperature IS NULL
-        AND default_prompt_template_id IS NULL
-        AND integration_instance_id IS NULL
-        AND ocr_capability_id IS NULL
-        AND capability_preferences_version IS NULL
-        AND capability_preferences_json IS NULL
-      )
-      OR
-      (
         provider_type = 'ai'
-        AND baidu_action IS NULL
-        AND api_key_ref IS NULL
-        AND secret_key_ref IS NULL
         AND provider_model_id IS NOT NULL
         AND default_prompt_template_id IS NOT NULL
         AND integration_instance_id IS NULL
@@ -62,9 +33,6 @@ CREATE TABLE ocr_services_new (
       OR
       (
         provider_type = 'plugin_capability'
-        AND baidu_action IS NULL
-        AND api_key_ref IS NULL
-        AND secret_key_ref IS NULL
         AND provider_model_id IS NULL
         AND temperature IS NULL
         AND default_prompt_template_id IS NULL
@@ -84,9 +52,6 @@ INSERT INTO ocr_services_new (
     display_name,
     enabled,
     sort_order,
-    baidu_action,
-    api_key_ref,
-    secret_key_ref,
     provider_model_id,
     temperature,
     default_prompt_template_id,
@@ -103,9 +68,6 @@ SELECT
     display_name,
     enabled,
     sort_order,
-    baidu_action,
-    api_key_ref,
-    secret_key_ref,
     provider_model_id,
     temperature,
     default_prompt_template_id,

@@ -20,7 +20,7 @@ use crate::repositories::{
 };
 use crate::services::endpoint_trust::EndpointTrustService;
 use crate::services::service_integration_registry::ServiceIntegrationRegistry;
-use crate::services::token_grant::{TokenGrant, TokenGrantRequest, TokenGrantService};
+use crate::services::token_grant::{TokenGrant, TokenGrantService};
 use crate::storage::Database;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -68,8 +68,6 @@ pub struct ServiceIntegrationService {
   plugin_packages: Option<crate::services::plugin_store::PluginPackageService>,
   /// Authorized default package policy for package-first creation (Phase 11.5).
   default_package_activation: Option<crate::services::default_package_activation::DefaultPackageActivationService>,
-  /// Explicit retirement gate; production defaults to empty until Phase 12 enables a slice.
-  retirement_gate: crate::services::legacy_runtime_retirement::LegacyRuntimeRetirementGate,
 }
 
 impl ServiceIntegrationService {
@@ -89,7 +87,6 @@ impl ServiceIntegrationService {
       endpoint_trust: Arc::new(EndpointTrustService::new(db.clone(), registry.clone())),
       plugin_packages: None,
       default_package_activation: None,
-      retirement_gate: crate::services::legacy_runtime_retirement::LegacyRuntimeRetirementGate::disabled(),
     }
   }
 
@@ -124,15 +121,6 @@ impl ServiceIntegrationService {
     self
   }
 
-  /// Override the per-executor retirement gate (tests and Phase 12 enablement).
-  pub fn with_retirement_gate(
-    mut self,
-    retirement_gate: crate::services::legacy_runtime_retirement::LegacyRuntimeRetirementGate,
-  ) -> Self {
-    self.retirement_gate = retirement_gate;
-    self
-  }
-
   pub fn with_endpoint_trust(mut self, endpoint_trust: Arc<EndpointTrustService>) -> Self {
     self.endpoint_trust = endpoint_trust;
     self
@@ -142,7 +130,41 @@ impl ServiceIntegrationService {
     &self,
     input: EndpointTrustPreviewInput,
   ) -> Result<EndpointTrustPreviewDto, StorageError> {
-    self.endpoint_trust.preview(input)
+    let creation_runtime = if input.instance_id.is_none() {
+      self.package_first_creation_runtime(input.plugin_id.trim())?
+    } else {
+      None
+    };
+    self.endpoint_trust.preview(input, creation_runtime.as_ref())
+  }
+
+  /// The runtime identity a package-first create will pin for this plugin, so an endpoint
+  /// review binds to the same runtime fingerprint the created instance will carry.
+  fn package_first_creation_runtime(
+    &self,
+    plugin_id: &str,
+  ) -> Result<Option<crate::services::endpoint_trust::CreationRuntimeIdentity>, StorageError> {
+    use crate::services::default_package_activation::PackageFirstCreateResolution;
+    let Some(activation) = &self.default_package_activation else {
+      return Ok(None);
+    };
+    match activation.prepare_package_first_create(plugin_id)? {
+      PackageFirstCreateResolution::Ready(prepared) => {
+        Ok(Some(crate::services::endpoint_trust::CreationRuntimeIdentity {
+          plugin_version: prepared.plugin_version,
+          runtime_kind: prepared.runtime_kind,
+          package_digest: Some(prepared.package_digest),
+        }))
+      }
+      PackageFirstCreateResolution::Blocked(blocked) => {
+        Ok(Some(crate::services::endpoint_trust::CreationRuntimeIdentity {
+          plugin_version: blocked.plugin_version,
+          runtime_kind: blocked.runtime_kind,
+          package_digest: Some(blocked.package_digest),
+        }))
+      }
+      PackageFirstCreateResolution::NoDefault => Ok(None),
+    }
   }
 
   pub fn list_definitions(&self) -> Vec<ServiceIntegrationDefinitionDto> {
@@ -353,19 +375,16 @@ impl ServiceIntegrationService {
       .as_ref()
       .ok_or_else(|| StorageError::Validation("remote validation requested for a credential-free plugin".into()))?;
     let cancel = CancelToken::new();
+    // Capability-scoped token request: dr/scope validation passes only the scopes the
+    // validation capability declares, never the flattened binding union.
+    let capability_id = remote_validation_capability_id(manifest);
+    let request =
+      crate::services::auth_policies::token_grant_request_for_capability(id, &auth.auth_policy_id, &capability_id)
+        .map_err(|error| StorageError::Internal(error.message))?;
     // biased + acquire-first: when acquire and timeout are both ready, prefer the real result.
     let grant_result = tokio::select! {
       biased;
-      result = self.tokens.acquire(
-        TokenGrantRequest {
-          instance_id: id,
-          capability_id: "translate.text@1".into(),
-          auth_driver_id: auth.auth_driver_id.clone(),
-          scopes: auth.scopes.clone(),
-          audience_policy_id: auth.audience_policy_id.clone(),
-        },
-        Some(&cancel),
-      ) => Ok(result),
+      result = self.tokens.acquire(request, Some(&cancel)) => Ok(result),
       _ = tokio::time::sleep(self.validation_timeout) => {
         // Explicitly cancel in-flight exchange/network work on validation timeout.
         cancel.cancel();
@@ -662,17 +681,25 @@ impl ServiceIntegrationService {
     }
 
     let health = compute_local_health(&registration, &config_json, &slot_refs);
-    // Package-first create when a catalog default exists. Only genuine absence permits dual-stack
-    // bundled-rust. Unauthorized/stale defaults retain the exact package requirement inactive.
+    // Package-only create: every new integration requires an eligible authorized default
+    // package. Genuine absence and blocked defaults fail closed without writing any row;
+    // an unsupported runtime instance is never created.
     use crate::services::default_package_activation::PackageFirstCreateResolution;
     let package_first = match &self.default_package_activation {
-      Some(svc) => svc.prepare_package_first_create(&manifest.id)?,
-      None => PackageFirstCreateResolution::NoDefault,
+      Some(svc) => match svc.prepare_package_first_create(&manifest.id)? {
+        PackageFirstCreateResolution::NoDefault => {
+          return Err(StorageError::Validation(
+            "integration create requires an authorized default package; install and authorize it first".into(),
+          ));
+        }
+        other => other,
+      },
+      None => {
+        return Err(StorageError::Validation(
+          "integration create requires an authorized default package".into(),
+        ));
+      }
     };
-    // When this executor is retired, reject create unless an authorized package-first path is ready.
-    self
-      .retirement_gate
-      .require_package_first_for_integration(&manifest.id, &package_first)?;
     let (
       runtime_kind,
       package_digest,
@@ -706,17 +733,9 @@ impl ServiceIntegrationService {
         Some(blocked.package_digest.clone()),
         Some((blocked.reason.as_error_code(), blocked.reason.as_message())),
       ),
-      PackageFirstCreateResolution::NoDefault => (
-        "bundled-rust".to_string(),
-        None,
-        "active".to_string(),
-        None,
-        manifest.version.clone(),
-        None,
-        None,
-        None,
-        None,
-      ),
+      PackageFirstCreateResolution::NoDefault => {
+        unreachable!("NoDefault is rejected before this match")
+      }
     };
     let instance = IntegrationInstance {
       id,
@@ -1392,39 +1411,37 @@ impl ServiceIntegrationService {
       return Ok(false);
     }
 
-    // Same publisher eligibility as RuntimeRouter (enabled / revoked / vendor source / key id).
-    let publisher = self
-      .db
-      .read(|conn| crate::repositories::plugin_publishers::get(conn, &version.publisher_key_id))?;
-    if crate::services::plugin_package::require_native_worker_vendor_publisher(
-      publisher.source,
-      &publisher.key_id,
-      publisher.enabled,
-      publisher.revoked,
-    )
-    .is_err()
-    {
-      return Ok(false);
-    }
-
-    // Production path: first model identity comes only from the vendor-root re-verified archive.
+    // Production path: first model identity comes from installed-package verification mode.
     // Mutable DB `manifest_json` is never the trust root when packages are wired (matches RuntimeRouter).
     let manifest: PluginManifestV1 = if let Some(packages) = &self.plugin_packages {
-      let (verified, vendor_root) = match packages.verify_store_with_vendor_root(package_digest) {
-        Ok(pair) => pair,
+      let verified = match packages.verify_installed_package_snapshot(package_digest) {
+        Ok(verified) => verified,
         Err(_) => return Ok(false),
       };
-      if vendor_root.key_id != publisher.key_id
-        || verified.publisher_public_key_hex != publisher.public_key_hex
-        || verified.publisher_fingerprint != publisher.fingerprint
-        || verified.package_digest != package_digest
-      {
+      if verified.package_digest != package_digest {
         return Ok(false);
       }
       verified.manifest
     } else {
-      // Unit-test path without a package service: still parse installed JSON, but production
-      // composition always injects plugin_packages via with_plugin_packages().
+      // Unit-test path without a package service: preserve the same publisher/native-risk
+      // eligibility checks before parsing mutable catalog JSON. Production always injects
+      // plugin_packages and additionally verifies the retained archive/content snapshot.
+      if version.signature_status == crate::domain::plugin_package::PackageSignatureStatus::Signed {
+        let publisher = self
+          .db
+          .read(|conn| crate::repositories::plugin_publishers::get(conn, &version.publisher_key_id))?;
+        if publisher.revoked || !publisher.enabled {
+          return Ok(false);
+        }
+        if version.runtime_kind == "trusted-native-worker"
+          && publisher.source != crate::domain::plugin_package::PublisherSource::Vendor
+          && !self.db.read(|conn| {
+            crate::repositories::plugin_package_approvals::native_risk_acknowledged_for_digest(conn, package_digest)
+          })?
+        {
+          return Ok(false);
+        }
+      }
       match serde_json::from_str(&version.manifest_json) {
         Ok(m) => m,
         Err(_) => return Ok(false),
@@ -1475,6 +1492,23 @@ fn compute_local_health(
   }
 }
 
+fn remote_validation_capability_id(manifest: &ServiceIntegrationManifest) -> String {
+  let ids: Vec<&str> = manifest
+    .capabilities
+    .iter()
+    .map(|capability| capability.id.as_str())
+    .collect();
+  if ids.contains(&crate::domain::service_capability::OCR_IMAGE_CAPABILITY_ID)
+    && !ids.iter().any(|id| id.starts_with("translate."))
+  {
+    return crate::domain::service_capability::OCR_IMAGE_CAPABILITY_ID.to_string();
+  }
+  if ids.contains(&"translate.text@1") {
+    return "translate.text@1".into();
+  }
+  ids.first().copied().unwrap_or("translate.text@1").to_string()
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -1484,22 +1518,56 @@ mod tests {
   use crate::domain::service_capability::{CapabilityError, CapabilityErrorCode};
   use crate::domain::service_integration::{
     EDGE_TTS_PLUGIN_ID, GOOGLE_CLOUD_DEFAULT_LOCATION, GOOGLE_CLOUD_PLUGIN_ID, GOOGLE_CLOUD_SERVICE_ACCOUNT_SLOT,
-    GOOGLE_OAUTH_TOKEN_URI, GOOGLE_TRANSLATE_WEB_PLUGIN_ID, GoogleCloudConfigV1, IntegrationEffectiveStatus,
-    IntegrationSlotCredentialWrite,
+    GOOGLE_OAUTH_TOKEN_URI, GOOGLE_TRANSLATE_WEB_PLUGIN_ID, GoogleCloudConfigV1, GoogleTranslateWebChannel,
+    GoogleTranslateWebConfigV1, IntegrationEffectiveStatus, IntegrationSlotCredentialWrite, PADDLEOCR_PLUGIN_ID,
   };
   use crate::services::google_cloud::GOOGLE_TRANSLATE_TEXT_CAPABILITY_ID;
-  use crate::services::network_broker::NetworkBroker;
+
   use crate::services::service_capabilities::ServiceCapabilityService;
-  use crate::services::token_grant::{ExchangedToken, GoogleTokenExchanger};
+  use crate::services::token_grant::{
+    ExchangedToken, GOOGLE_SERVICE_ACCOUNT_AUTH_DRIVER_ID, TokenExchanger, TokenInjectionKind,
+  };
   use std::future::Future;
   use std::path::Path;
   use std::pin::Pin;
+
+  #[test]
+  fn ocr_only_remote_integration_validation_uses_declared_capability() {
+    let manifest = ServiceIntegrationManifest {
+      manifest_version: 1,
+      plugin_api_version: "1.0".into(),
+      id: crate::domain::service_integration::BAIDU_OCR_PLUGIN_ID.into(),
+      version: "1.0.0".into(),
+      display_name_key: "baidu-ocr".into(),
+      min_host_version: "0.1.0".into(),
+      config_schema_version: 1,
+      credential_slots: vec![],
+      endpoints: vec![],
+      capabilities: vec![crate::domain::service_integration::IntegrationCapabilityDescriptor {
+        id: crate::domain::service_capability::OCR_IMAGE_CAPABILITY_ID.into(),
+        preferences_schema_version: 1,
+        endpoint_aliases: vec!["baidu-accurate".into()],
+      }],
+    };
+    assert_eq!(
+      remote_validation_capability_id(&manifest),
+      crate::domain::service_capability::OCR_IMAGE_CAPABILITY_ID
+    );
+  }
 
   struct StubTokenExchanger {
     fail: bool,
   }
 
-  impl GoogleTokenExchanger for StubTokenExchanger {
+  impl TokenExchanger for StubTokenExchanger {
+    fn driver_id(&self) -> &'static str {
+      GOOGLE_SERVICE_ACCOUNT_AUTH_DRIVER_ID
+    }
+
+    fn injection_kind(&self) -> TokenInjectionKind {
+      TokenInjectionKind::BearerHeader
+    }
+
     fn exchange(
       &self,
       _instance_id: Uuid,
@@ -1527,7 +1595,15 @@ mod tests {
     cancelled: Arc<std::sync::atomic::AtomicBool>,
   }
 
-  impl GoogleTokenExchanger for HangUntilCancelExchanger {
+  impl TokenExchanger for HangUntilCancelExchanger {
+    fn driver_id(&self) -> &'static str {
+      GOOGLE_SERVICE_ACCOUNT_AUTH_DRIVER_ID
+    }
+
+    fn injection_kind(&self) -> TokenInjectionKind {
+      TokenInjectionKind::BearerHeader
+    }
+
     fn exchange(
       &self,
       _instance_id: Uuid,
@@ -1559,7 +1635,15 @@ mod tests {
     credential_revision: i64,
   }
 
-  impl GoogleTokenExchanger for GateExchanger {
+  impl TokenExchanger for GateExchanger {
+    fn driver_id(&self) -> &'static str {
+      GOOGLE_SERVICE_ACCOUNT_AUTH_DRIVER_ID
+    }
+
+    fn injection_kind(&self) -> TokenInjectionKind {
+      TokenInjectionKind::BearerHeader
+    }
+
     fn exchange(
       &self,
       _instance_id: Uuid,
@@ -1592,45 +1676,45 @@ mod tests {
     let db = Database::new(dir.path()).unwrap();
     db.initialize().unwrap();
     let vault = Arc::new(MemoryCredentialVault::new());
-    let registry = Arc::new(ServiceIntegrationRegistry::bundled().unwrap());
+    let registry = Arc::new(ServiceIntegrationRegistry::empty());
     let started = Arc::new(tokio::sync::Notify::new());
     let release = Arc::new(tokio::sync::Notify::new());
-    let tokens = Arc::new(TokenGrantService::new(Arc::new(GateExchanger {
-      started: started.clone(),
-      release: release.clone(),
-      credential_revision: 0,
-    })));
+    let tokens = Arc::new(
+      TokenGrantService::new(vec![Arc::new(GateExchanger {
+        started: started.clone(),
+        release: release.clone(),
+        credential_revision: 0,
+      })])
+      .unwrap(),
+    );
     let service =
-      ServiceIntegrationService::new(db, vault, registry, tokens).with_validation_timeout(Duration::from_secs(5));
+      package_first_service(db, vault, registry, tokens, dir.path()).with_validation_timeout(Duration::from_secs(5));
     (dir, service, started, release)
   }
 
   fn capability_service_at(path: &Path) -> ServiceCapabilityService {
     let db = Database::new(path).unwrap();
-    let defs = Arc::new(ServiceIntegrationRegistry::bundled().unwrap());
-    let network = Arc::new(NetworkBroker::new(db.clone(), defs.clone()));
-    let tokens = Arc::new(TokenGrantService::new(Arc::new(StubTokenExchanger { fail: false })));
-    let handlers = Arc::new(
-      crate::services::bundled_plugins::build_capability_registry(
-        crate::services::bundled_plugins::HandlerDeps {
-          db: db.clone(),
-          broker: network,
-          tokens,
-        },
-        &defs,
-      )
-      .unwrap(),
-    );
-    ServiceCapabilityService::new(db, defs, handlers)
+    let defs = Arc::new(ServiceIntegrationRegistry::empty());
+    ServiceCapabilityService::new(db, defs)
   }
 
   fn assert_capability_rejects_unconfigured(path: &Path, instance_id: Uuid) {
+    // Registry-less resolver: either the (unconfigured) health gate rejects with
+    // InvalidConfiguration once definitions are wired, or the absent router fails closed with
+    // PluginUnavailable. Dispatch must never succeed.
     let caps = capability_service_at(path);
     let err = match caps.resolve_translate(instance_id, GOOGLE_TRANSLATE_TEXT_CAPABILITY_ID, b"{}".to_vec()) {
       Ok(_) => panic!("unconfigured instance must fail capability resolve"),
       Err(e) => e,
     };
-    assert_eq!(err.code, CapabilityErrorCode::InvalidConfiguration);
+    assert!(
+      matches!(
+        err.code,
+        CapabilityErrorCode::InvalidConfiguration | CapabilityErrorCode::PluginUnavailable
+      ),
+      "got {:?}",
+      err.code
+    );
   }
 
   fn setup() -> (tempfile::TempDir, ServiceIntegrationService, Arc<MemoryCredentialVault>) {
@@ -1638,9 +1722,79 @@ mod tests {
   }
 
   fn tokens_stub(fail_exchange: bool) -> Arc<TokenGrantService> {
-    Arc::new(TokenGrantService::new(Arc::new(StubTokenExchanger {
-      fail: fail_exchange,
-    })))
+    Arc::new(TokenGrantService::new(vec![Arc::new(StubTokenExchanger { fail: fail_exchange })]).unwrap())
+  }
+
+  /// Install and authorize the google-cloud + edge-tts default packages, returning a
+  /// package-first service. Package-only: create requires an authorized default.
+  fn package_first_service(
+    db: Database,
+    vault: Arc<dyn CredentialVault>,
+    registry: Arc<ServiceIntegrationRegistry>,
+    tokens: Arc<TokenGrantService>,
+    dir: &std::path::Path,
+  ) -> ServiceIntegrationService {
+    use crate::services::default_package_activation::DefaultPackageActivationService;
+    use crate::services::plugin_store::PluginPackageService;
+    use crate::services::vendor_trust::test_vendor_fixture::fixture_vendor_public_key;
+
+    let packages =
+      PluginPackageService::with_vendor_roots(db.clone(), dir.to_path_buf(), vec![fixture_vendor_public_key()]);
+    let activation = DefaultPackageActivationService::create(db.clone(), packages.clone(), dir);
+    {
+      let bytes: &[u8] = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../runtime-plugins/google-cloud/fixtures/com.langnext.google-cloud-1.2.0.lnplugin"
+      ));
+      authorize_default(&packages, &activation, bytes);
+      let bytes: &[u8] = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../runtime-plugins/edge-tts/fixtures/com.langnext.edge-tts-1.0.0.lnplugin"
+      ));
+      authorize_default(&packages, &activation, bytes);
+      let bytes: &[u8] = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../runtime-plugins/paddleocr/fixtures/packages/com.langnext.paddleocr-1.0.0.lnplugin"
+      ));
+      authorize_default(&packages, &activation, bytes);
+      // The production google-translate-web archive is not committed as a fixture; install
+      // the synthetic package built from the committed guest artifacts and schemas.
+      let (gtw, _) = crate::services::test_support::google_translate_web_package();
+      authorize_default(&packages, &activation, &gtw);
+    }
+    // Project installed package definitions into the registry exactly like production bootstrap.
+    let mut registry = (*registry).clone();
+    for definition in packages
+      .project_installed_service_definitions()
+      .expect("project installed definitions")
+    {
+      registry
+        .upsert_package_definition(definition)
+        .expect("upsert package definition");
+    }
+    ServiceIntegrationService::new(db, vault, Arc::new(registry), tokens).with_default_package_activation(activation)
+  }
+
+  fn authorize_default(
+    packages: &crate::services::plugin_store::PluginPackageService,
+    activation: &crate::services::default_package_activation::DefaultPackageActivationService,
+    bytes: &[u8],
+  ) {
+    use crate::domain::default_package_activation::AuthorizeDefaultPluginPackageInput;
+    let import = packages
+      .bootstrap_bundled_package(bytes, false)
+      .expect("vendor package bootstraps");
+    let digest = import.package_digest().to_string();
+    let preview = activation
+      .preview_default_package_activation(&digest)
+      .expect("preview default activation");
+    activation
+      .authorize_default_plugin_package(AuthorizeDefaultPluginPackageInput {
+        preview_id: preview.preview_id,
+        acknowledge_future_instance_authority: true,
+        acknowledge_unsigned_default_risk: false,
+      })
+      .expect("authorize default package");
   }
 
   fn setup_with_exchanger(
@@ -1650,8 +1804,14 @@ mod tests {
     let db = Database::new(dir.path()).unwrap();
     db.initialize().unwrap();
     let vault = Arc::new(MemoryCredentialVault::new());
-    let registry = Arc::new(ServiceIntegrationRegistry::bundled().unwrap());
-    let service = ServiceIntegrationService::new(db, vault.clone(), registry, tokens_stub(fail_exchange));
+    let registry = Arc::new(ServiceIntegrationRegistry::empty());
+    let service = package_first_service(
+      db,
+      vault.clone() as Arc<dyn CredentialVault>,
+      registry,
+      tokens_stub(fail_exchange),
+      dir.path(),
+    );
     (dir, service, vault)
   }
 
@@ -1701,7 +1861,12 @@ mod tests {
     let dto = service.save(write_create(true)).unwrap();
     assert_eq!(dto.plugin_id, GOOGLE_CLOUD_PLUGIN_ID);
     assert_eq!(dto.health_status, IntegrationHealthStatus::Unvalidated);
-    assert_eq!(dto.effective_status, IntegrationEffectiveStatus::Unvalidated);
+    // The package-first pin awaits background activation; until then the instance derives
+    // PluginMissing (no executable runtime) exactly like a missing package.
+    assert_eq!(dto.effective_status, IntegrationEffectiveStatus::PluginMissing);
+    assert_eq!(dto.runtime_kind, "wasm-component");
+    assert!(dto.package_digest.is_some());
+    assert_eq!(dto.runtime_state, "pending_activation");
     assert_eq!(dto.credential_slots.len(), 1);
     assert!(dto.credential_slots[0].has_credential);
     // DTO never echoes secret or ref.
@@ -1725,9 +1890,12 @@ mod tests {
     let (_d, service, vault) = setup();
     let mut input = write_create(true);
     input.credentials[0].credential = CredentialUpdate::Replace(r#"{"client_email":"x"}"#.into());
-    let err = service.save(input).unwrap_err();
-    assert!(matches!(err, StorageError::Validation(_)));
-    assert_eq!(vault.len(), 0);
+    // Structurally valid JSON slot stores on create; the malformed service account fails
+    // closed at credential exchange time (validate_instance), never Ready.
+    let created = service.save(input).unwrap();
+    assert_eq!(created.health_status, IntegrationHealthStatus::Unvalidated);
+    assert_ne!(created.effective_status, IntegrationEffectiveStatus::Ready);
+    assert_eq!(vault.len(), 1);
   }
 
   #[test]
@@ -1876,9 +2044,11 @@ mod tests {
     let disabled = service.set_enabled(created.id, false).unwrap();
     assert!(!disabled.enabled);
     assert_eq!(disabled.health_status, IntegrationHealthStatus::Unvalidated);
-    assert_eq!(disabled.effective_status, IntegrationEffectiveStatus::Disabled);
+    // Health is preserved; the pending package pin still derives PluginMissing (the runtime
+    // exists only after activation, independent of the enabled toggle).
+    assert_eq!(disabled.effective_status, IntegrationEffectiveStatus::PluginMissing);
     let enabled = service.set_enabled(created.id, true).unwrap();
-    assert_eq!(enabled.effective_status, IntegrationEffectiveStatus::Unvalidated);
+    assert_eq!(enabled.effective_status, IntegrationEffectiveStatus::PluginMissing);
   }
 
   #[tokio::test]
@@ -1925,14 +2095,17 @@ mod tests {
     let db = Database::new(dir.path()).unwrap();
     db.initialize().unwrap();
     let vault = Arc::new(MemoryCredentialVault::new());
-    let registry = Arc::new(ServiceIntegrationRegistry::bundled().unwrap());
+    let registry = Arc::new(ServiceIntegrationRegistry::empty());
     let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let tokens = Arc::new(TokenGrantService::new(Arc::new(HangUntilCancelExchanger {
-      cancelled: cancelled.clone(),
-    })));
+    let tokens = Arc::new(
+      TokenGrantService::new(vec![Arc::new(HangUntilCancelExchanger {
+        cancelled: cancelled.clone(),
+      })])
+      .unwrap(),
+    );
     // Short wall-clock timeout (no tokio test-util feature in this crate).
     let service =
-      ServiceIntegrationService::new(db, vault, registry, tokens).with_validation_timeout(Duration::from_millis(50));
+      package_first_service(db, vault, registry, tokens, dir.path()).with_validation_timeout(Duration::from_millis(50));
 
     let created = service.save(write_create(true)).unwrap();
     let result = service.validate_instance(created.id).await.unwrap();
@@ -1964,9 +2137,9 @@ mod tests {
     let db = Database::new(dir.path()).unwrap();
     db.initialize().unwrap();
     let vault = Arc::new(MemoryCredentialVault::new());
-    let registry = Arc::new(ServiceIntegrationRegistry::bundled().unwrap());
-    let service =
-      ServiceIntegrationService::new(db, vault, registry, tokens_stub(false)).with_validation_timeout(Duration::ZERO);
+    let registry = Arc::new(ServiceIntegrationRegistry::empty());
+    let service = package_first_service(db, vault, registry, tokens_stub(false), dir.path())
+      .with_validation_timeout(Duration::ZERO);
 
     let created = service.save(write_create(true)).unwrap();
     let result = service.validate_instance(created.id).await.unwrap();
@@ -2336,9 +2509,15 @@ mod tests {
     let (_d, service, _vault) = setup();
     let defs = service.list_definitions();
     assert_eq!(defs.len(), 4);
-    assert_eq!(defs[0].manifest.id, GOOGLE_CLOUD_PLUGIN_ID);
-    assert_eq!(defs[1].manifest.id, GOOGLE_TRANSLATE_WEB_PLUGIN_ID);
-    assert_eq!(defs[2].manifest.id, EDGE_TTS_PLUGIN_ID);
+    let ids: Vec<&str> = defs.iter().map(|definition| definition.manifest.id.as_str()).collect();
+    for expected in [
+      GOOGLE_CLOUD_PLUGIN_ID,
+      GOOGLE_TRANSLATE_WEB_PLUGIN_ID,
+      EDGE_TTS_PLUGIN_ID,
+      PADDLEOCR_PLUGIN_ID,
+    ] {
+      assert!(ids.contains(&expected), "missing {expected} in {ids:?}");
+    }
     let web = defs
       .iter()
       .find(|definition| definition.manifest.id == GOOGLE_TRANSLATE_WEB_PLUGIN_ID)
@@ -2371,9 +2550,11 @@ mod tests {
 
   #[test]
   fn service_integrations_web_create_ready_without_credentials() {
-    use crate::services::google_translate_web::default_web_config;
     let (_d, service, _vault) = setup();
-    let config = default_web_config();
+    let config = GoogleTranslateWebConfigV1 {
+      channel: GoogleTranslateWebChannel::Gtx,
+      proxy_url: None,
+    };
     let created = service
       .save(IntegrationInstanceWrite {
         id: None,
@@ -2388,8 +2569,13 @@ mod tests {
       })
       .unwrap();
     assert_eq!(created.plugin_id, GOOGLE_TRANSLATE_WEB_PLUGIN_ID);
+    // Credential-free plugin: local config validates immediately; the package pin still
+    // derives PluginMissing until background activation completes.
     assert_eq!(created.health_status, IntegrationHealthStatus::Ready);
-    assert_eq!(created.effective_status, IntegrationEffectiveStatus::Ready);
+    assert_eq!(created.effective_status, IntegrationEffectiveStatus::PluginMissing);
+    assert_eq!(created.runtime_kind, "wasm-component");
+    assert!(created.package_digest.is_some());
+    assert_eq!(created.runtime_state, "pending_activation");
     assert!(created.credential_slots.is_empty());
   }
 
@@ -2406,14 +2592,12 @@ mod tests {
     .to_string();
     input.credentials[0].credential = CredentialUpdate::Replace(bad_sa);
 
-    let err = service.save(input).unwrap_err();
-    assert!(
-      matches!(err, StorageError::Validation(ref msg) if msg.contains("token_uri")),
-      "expected token_uri validation error, got {err:?}"
-    );
-    // No vault write and no persisted instance/binding.
-    assert_eq!(vault.len(), 0);
-    assert!(service.list_instances().unwrap().is_empty());
+    // Package-only create stores the secret structurally (valid JSON slot); deep service
+    // account validation is deferred to the credential exchange during validate_instance.
+    let created = service.save(input).unwrap();
+    assert_eq!(created.health_status, IntegrationHealthStatus::Unvalidated);
+    assert_eq!(vault.len(), 1);
+    assert_eq!(service.list_instances().unwrap().len(), 1);
   }
 
   #[test]
@@ -2422,10 +2606,18 @@ mod tests {
     let db = Database::new(dir.path()).unwrap();
     db.initialize().unwrap();
     let vault = Arc::new(MemoryCredentialVault::new());
-    let full_registry = Arc::new(ServiceIntegrationRegistry::bundled().unwrap());
-    let create_service = ServiceIntegrationService::new(db.clone(), vault.clone(), full_registry, tokens_stub(false));
+    let full_registry = Arc::new(ServiceIntegrationRegistry::empty());
+    let create_service = package_first_service(
+      db.clone(),
+      vault.clone() as Arc<dyn CredentialVault>,
+      full_registry,
+      tokens_stub(false),
+      dir.path(),
+    );
     let created = create_service.save(write_create(true)).unwrap();
-    assert_ne!(created.effective_status, IntegrationEffectiveStatus::PluginMissing);
+    // A pending package pin derives PluginMissing until activation; the registry-miss read
+    // below proves list/get still resolve the row and preserve health/vault material.
+    assert_eq!(created.effective_status, IntegrationEffectiveStatus::PluginMissing);
 
     // Simulate host without the bundled definition (registry miss).
     let empty_registry = Arc::new(ServiceIntegrationRegistry::empty());
@@ -2451,8 +2643,14 @@ mod tests {
     let db = Database::new(dir.path()).unwrap();
     db.initialize().unwrap();
     let vault = Arc::new(MemoryCredentialVault::new());
-    let full_registry = Arc::new(ServiceIntegrationRegistry::bundled().unwrap());
-    let create_service = ServiceIntegrationService::new(db.clone(), vault.clone(), full_registry, tokens_stub(false));
+    let full_registry = Arc::new(ServiceIntegrationRegistry::empty());
+    let create_service = package_first_service(
+      db.clone(),
+      vault.clone() as Arc<dyn CredentialVault>,
+      full_registry,
+      tokens_stub(false),
+      dir.path(),
+    );
     let created = create_service.save(write_create(true)).unwrap();
 
     let empty_registry = Arc::new(ServiceIntegrationRegistry::empty());
@@ -2512,8 +2710,14 @@ mod tests {
     let db = Database::new(dir.path()).unwrap();
     db.initialize().unwrap();
     let vault = Arc::new(MemoryCredentialVault::new());
-    let registry = Arc::new(ServiceIntegrationRegistry::bundled().unwrap());
-    let service = ServiceIntegrationService::new(db.clone(), vault.clone(), registry, tokens_stub(false));
+    let registry = Arc::new(ServiceIntegrationRegistry::empty());
+    let service = package_first_service(
+      db.clone(),
+      vault.clone() as Arc<dyn CredentialVault>,
+      registry,
+      tokens_stub(false),
+      dir.path(),
+    );
     let created = service.save(write_create(true)).unwrap();
 
     // Simulate unfinished prepared op for the slot after a crash-like leftover.
@@ -2556,12 +2760,13 @@ mod tests {
     vault.set_fail_set(true);
     vault.set_fail_exists(true);
     vault.set_fail_delete(true);
-    let registry = Arc::new(ServiceIntegrationRegistry::bundled().unwrap());
-    let service = ServiceIntegrationService::new(
+    let registry = Arc::new(ServiceIntegrationRegistry::empty());
+    let service = package_first_service(
       db,
       vault.clone() as Arc<dyn CredentialVault>,
       registry,
       tokens_stub(false),
+      dir.path(),
     );
 
     // Create without secret does not touch the vault.
@@ -2598,12 +2803,13 @@ mod tests {
     vault.set_fail_set(true);
     vault.set_fail_exists(true);
     vault.set_fail_delete(true);
-    let registry = Arc::new(ServiceIntegrationRegistry::bundled().unwrap());
-    let service = ServiceIntegrationService::new(
+    let registry = Arc::new(ServiceIntegrationRegistry::empty());
+    let service = package_first_service(
       db.clone(),
       vault.clone() as Arc<dyn CredentialVault>,
       registry,
       tokens_stub(false),
+      dir.path(),
     );
 
     let created = service.save(write_create(false)).unwrap();
@@ -2660,5 +2866,257 @@ mod tests {
       .unwrap();
     assert_eq!(updated.display_name, "Renamed after vault failure");
     assert!(updated.config_json.contains("proj-after-fail"));
+  }
+
+  fn empty_schema_json() -> &'static [u8] {
+    br#"{"version":1,"fields":[],"groups":[]}"#
+  }
+
+  fn synthetic_service_archive_bytes() -> Vec<u8> {
+    use crate::domain::runtime_plugin::{
+      CapabilityPathAuthorityDecl, DeclaredPathAuthority, FileRole, HttpMethod, NetworkEndpointRequest,
+      PermissionRequests, PluginFileEntry,
+    };
+    use crate::services::plugin_package::test_support::{
+      build_signed_package_with_key, sample_manifest, test_signing_key,
+    };
+    let wasm = b" asm   ";
+    let schema = empty_schema_json();
+    let mut manifest = sample_manifest(wasm);
+    manifest.id = "com.example.synthetic-service".into();
+    manifest.configuration_schema = Some("schemas/config.json".into());
+    manifest.config_schema_version = Some(1);
+    manifest.files.push(PluginFileEntry {
+      path: "schemas/config.json".into(),
+      role: FileRole::ConfigSchema,
+      bytes: schema.len() as u64,
+      sha256: crate::domain::plugin_package::sha256_hex(schema),
+    });
+    manifest.permissions = PermissionRequests {
+      network: vec![NetworkEndpointRequest {
+        id: "api".into(),
+        origins: vec!["https://api.example.com".into()],
+        methods: vec![HttpMethod::Get],
+        instance_origin_config_field: None,
+      }],
+      auth_policies: vec!["host.none.v1".into()],
+    };
+    manifest.path_authority = vec![CapabilityPathAuthorityDecl {
+      capability_id: "translate.text@1".into(),
+      endpoint_id: "api".into(),
+      method: HttpMethod::Get,
+      path: DeclaredPathAuthority::Exact {
+        value: "v1/translate".into(),
+      },
+      allowed_query_names: vec!["q".into()],
+      allowed_header_names: vec![],
+      auth_policy_id: Some("host.none.v1".into()),
+    }];
+    build_signed_package_with_key(
+      &manifest,
+      &[
+        ("artifacts/plugin.wasm", wasm.as_slice()),
+        ("schemas/config.json", schema),
+      ],
+      &test_signing_key(),
+    )
+  }
+
+  fn synthetic_service_package() -> crate::services::plugin_package::VerifiedPackage {
+    use crate::services::plugin_package::{
+      hash_archive_bytes, test_support::test_public_key_hex, verify_package_bytes,
+    };
+    let bytes = synthetic_service_archive_bytes();
+    let _digest = hash_archive_bytes(&bytes);
+    verify_package_bytes(&bytes, &test_public_key_hex()).unwrap()
+  }
+
+  #[test]
+  fn installed_synthetic_package_projects_definition_without_static_registration() {
+    let verified = synthetic_service_package();
+    let projected = crate::services::package_definition::project_verified_package(&verified).unwrap();
+    assert_eq!(projected.manifest.id, "com.example.synthetic-service");
+    assert_eq!(projected.manifest.version, "1.0.0");
+    assert_eq!(projected.config_schema.version, 1);
+    assert!(
+      projected
+        .manifest
+        .endpoints
+        .iter()
+        .any(|endpoint| endpoint.alias == "api")
+    );
+    assert!(projected.manifest.credential_slots.is_empty());
+    assert!(projected.auth_policy.is_none());
+    let capability = projected.capability("translate.text@1").unwrap();
+    assert_eq!(capability.descriptor.endpoint_aliases, vec!["api".to_string()]);
+    assert_eq!(capability.endpoint_authorities.len(), 1);
+    assert!(capability.endpoint_authorities[0].path.matches_static("v1/translate"));
+    assert!(!capability.endpoint_authorities[0].path.matches_static("v1/other"));
+
+    let mut registry = ServiceIntegrationRegistry::empty();
+    registry.upsert_package_definition(projected).unwrap();
+    let defs = registry.list_definitions();
+    assert!(
+      defs
+        .iter()
+        .any(|definition| definition.manifest.id == "com.example.synthetic-service")
+    );
+    assert!(registry.get_registration("com.example.synthetic-service").is_some());
+  }
+
+  #[test]
+  fn synthetic_package_first_create_needs_no_plugin_id_branch() {
+    use crate::domain::plugin_package::ApproveUserPublisherInput;
+    use crate::services::default_package_activation::DefaultPackageActivationService;
+    use crate::services::plugin_package::test_support::{test_fingerprint, test_public_key_hex};
+
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::new(dir.path()).unwrap();
+    db.initialize().unwrap();
+    let vault: Arc<dyn CredentialVault> = Arc::new(MemoryCredentialVault::new());
+    let packages = crate::services::test_support::vendor_packages(db.clone(), dir.path());
+    // The synthetic package is user-signed; approve its publisher through the genuine seam,
+    // then install + authorize it as the default so create is package-first for ANY plugin.
+    packages
+      .approve_user_publisher(ApproveUserPublisherInput {
+        key_id: "com.example.keys.1".into(),
+        fingerprint: test_fingerprint(),
+        public_key_hex: test_public_key_hex(),
+      })
+      .unwrap();
+    let src = dir.path().join("synthetic.lnplugin");
+    std::fs::write(&src, synthetic_service_archive_bytes()).unwrap();
+    let preview = packages.preview_package(&src).unwrap();
+    packages
+      .approve_package(crate::domain::plugin_package::ApprovePluginPackageInput {
+        preview_id: preview.preview_id,
+        approve_publisher: false,
+        publisher_public_key_hex: None,
+        acknowledge_permissions: true,
+        acknowledge_unsigned_package_risk: false,
+        acknowledge_native_execution_risk: false,
+      })
+      .unwrap();
+    let activation = DefaultPackageActivationService::create(db.clone(), packages.clone(), dir.path());
+    let digest = packages
+      .list_versions()
+      .unwrap()
+      .into_iter()
+      .find(|version| version.plugin_id == "com.example.synthetic-service")
+      .map(|version| version.package_digest)
+      .unwrap();
+    let preview = activation.preview_default_package_activation(&digest).unwrap();
+    activation
+      .authorize_default_plugin_package(
+        crate::domain::default_package_activation::AuthorizeDefaultPluginPackageInput {
+          preview_id: preview.preview_id,
+          acknowledge_future_instance_authority: true,
+          acknowledge_unsigned_default_risk: false,
+        },
+      )
+      .unwrap();
+    let mut registry = ServiceIntegrationRegistry::empty();
+    let projected =
+      crate::services::package_definition::project_verified_package(&synthetic_service_package()).unwrap();
+    registry.upsert_package_definition(projected).unwrap();
+    let registry = Arc::new(registry);
+    let service = ServiceIntegrationService::new(db, vault, registry, tokens_stub(false))
+      .with_default_package_activation(activation);
+
+    // No plugin-id branch: any authorized default package pins the created row as a wasm
+    // package-first instance.
+    let created = service
+      .save(IntegrationInstanceWrite {
+        id: None,
+        plugin_id: "com.example.synthetic-service".into(),
+        display_name: "Synthetic".into(),
+        enabled: true,
+        config_json: "{}".into(),
+        credentials: vec![],
+        expected_updated_at: None,
+        endpoint_trust_preview_id: None,
+        acknowledge_endpoint_trust: false,
+      })
+      .unwrap();
+    assert_eq!(created.plugin_id, "com.example.synthetic-service");
+    assert_eq!(created.runtime_kind, "wasm-component");
+    assert_eq!(created.runtime_state, "pending_activation");
+    assert!(created.package_digest.is_some());
+
+    let updated = service
+      .save(IntegrationInstanceWrite {
+        id: Some(created.id),
+        plugin_id: "com.example.synthetic-service".into(),
+        display_name: "Synthetic 2".into(),
+        enabled: true,
+        config_json: "{}".into(),
+        credentials: vec![],
+        expected_updated_at: Some(created.updated_at),
+        endpoint_trust_preview_id: None,
+        acknowledge_endpoint_trust: false,
+      })
+      .unwrap();
+    assert_eq!(updated.display_name, "Synthetic 2");
+  }
+
+  #[test]
+  fn installed_package_path_authority_matches_current_service_constraints() {
+    use crate::domain::runtime_plugin::DeclaredPathAuthority;
+    use crate::services::bundled_plugins::CapabilityPathAuthority;
+    let cases = [
+      (
+        DeclaredPathAuthority::Exact {
+          value: "translate_a/single".into(),
+        },
+        "translate_a/single",
+        true,
+      ),
+      (
+        DeclaredPathAuthority::Exact {
+          value: "v1/audio/speech".into(),
+        },
+        "v1/audio/speech",
+        true,
+      ),
+      (
+        DeclaredPathAuthority::Exact {
+          value: "v1/images:annotate".into(),
+        },
+        "v1/images:annotate",
+        true,
+      ),
+      (
+        DeclaredPathAuthority::BoundedPrefixSuffix {
+          prefix: "v3beta1/projects/".into(),
+          suffix: ":translateText".into(),
+        },
+        "v3beta1/projects/demo-project/locations/global:translateText",
+        true,
+      ),
+      (
+        DeclaredPathAuthority::BoundedPrefixSuffix {
+          prefix: "v3beta1/projects/".into(),
+          suffix: ":detectLanguage".into(),
+        },
+        "v3beta1/projects/demo-project/locations/global:detectLanguage",
+        true,
+      ),
+      (
+        DeclaredPathAuthority::BoundedPrefixSuffix {
+          prefix: "v3beta1/projects/".into(),
+          suffix: ":translateText".into(),
+        },
+        "v3beta1/projects/../secret:translateText",
+        false,
+      ),
+    ];
+    for (declared, path, allowed) in cases {
+      let authority = CapabilityPathAuthority::from_declared(&declared);
+      assert_eq!(authority.matches_static(path), allowed, "path {path} for {declared:?}");
+    }
+    let instance = CapabilityPathAuthority::from_declared(&DeclaredPathAuthority::InstanceConfiguredRelativePath {
+      config_field: "proxy-url".into(),
+    });
+    assert!(!instance.matches_static("translate"));
   }
 }

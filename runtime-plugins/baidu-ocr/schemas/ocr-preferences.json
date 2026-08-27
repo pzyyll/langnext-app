@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "fields": [
+    {
+      "id": "operation",
+      "control": {
+        "kind": "enum",
+        "spec": {
+          "source": {
+            "type": "fixed",
+            "options": [
+              { "value": "general_basic", "labelFallback": "General Basic" },
+              { "value": "accurate_basic", "labelFallback": "Accurate Basic" },
+              { "value": "general", "labelFallback": "General" },
+              { "value": "accurate", "labelFallback": "Accurate" }
+            ]
+          },
+          "default": "accurate"
+        }
+      },
+      "labelFallback": "Action",
+      "requiredForReady": false
+    }
+  ],
+  "groups": []
+}

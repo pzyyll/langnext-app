@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "fields": [
+    {
+      "id": "api-key",
+      "control": { "kind": "credential-slot", "spec": { "slotId": "api-key" } },
+      "labelFallback": "API Key",
+      "requiredForReady": true
+    },
+    {
+      "id": "secret-key",
+      "control": { "kind": "credential-slot", "spec": { "slotId": "secret-key" } },
+      "labelFallback": "Secret Key",
+      "requiredForReady": true
+    }
+  ],
+  "groups": []
+}

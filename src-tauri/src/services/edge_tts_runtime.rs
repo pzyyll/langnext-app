@@ -32,7 +32,7 @@
 //! snapshots pre-migration preference rows and restores them on rollback (see
 //! `runtime_lifecycle_preference_tests`). Production speech synthesis executes Wasm + broker +
 //! Blob for pinned instances via [`crate::services::service_capabilities::ServiceCapabilityService::resolve_speech_synthesize`];
-//! the bundled `EdgeTtsCapabilities` in [`crate::services::edge_tts`] remains as rollback.
+//! there is no bundled fallback executor.
 
 // Re-export existing transport constants so runtime wiring has one import surface and the values
 // cannot drift between the bundled executor and the Wasm package contract.

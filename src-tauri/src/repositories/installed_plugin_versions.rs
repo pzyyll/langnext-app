@@ -1,18 +1,28 @@
 // ABOUTME: SQLite access for immutable installed plugin package versions and defaults.
 // ABOUTME: Content availability is tracked separately from instance bindings.
-use crate::domain::plugin_package::{InstalledPluginVersion, PluginDefaultVersion};
+use crate::domain::plugin_package::{InstalledPluginVersion, PackageSignatureStatus, PluginDefaultVersion};
 use crate::domain::time::now_rfc3339;
 use crate::error::StorageError;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
 fn map_version(row: &Row<'_>) -> Result<InstalledPluginVersion, rusqlite::Error> {
   let content_available: i64 = row.get("content_available")?;
+  let signature_status: String = row.get("signature_status")?;
+  let publisher_key_id: Option<String> = row.get("publisher_key_id")?;
+  let publisher_fingerprint: Option<String> = row.get("publisher_fingerprint")?;
   Ok(InstalledPluginVersion {
     package_digest: row.get("package_digest")?,
     plugin_id: row.get("plugin_id")?,
     version: row.get("version")?,
-    publisher_key_id: row.get("publisher_key_id")?,
-    publisher_fingerprint: row.get("publisher_fingerprint")?,
+    publisher_key_id: publisher_key_id.unwrap_or_default(),
+    publisher_fingerprint: publisher_fingerprint.unwrap_or_default(),
+    signature_status: PackageSignatureStatus::parse(&signature_status).map_err(|e| {
+      rusqlite::Error::FromSqlConversionFailure(
+        0,
+        rusqlite::types::Type::Text,
+        Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
+      )
+    })?,
     runtime_kind: row.get("runtime_kind")?,
     manifest_json: row.get("manifest_json")?,
     permission_request_digest: row.get("permission_request_digest")?,
@@ -94,14 +104,23 @@ pub fn insert(conn: &Connection, version: &InstalledPluginVersion) -> Result<(),
     .execute(
       "INSERT INTO installed_plugin_versions (
             package_digest, plugin_id, version, publisher_key_id, publisher_fingerprint,
-            runtime_kind, manifest_json, permission_request_digest, content_available, installed_at
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            signature_status, runtime_kind, manifest_json, permission_request_digest, content_available, installed_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
       params![
         version.package_digest,
         version.plugin_id,
         version.version,
-        version.publisher_key_id,
-        version.publisher_fingerprint,
+        if version.signature_status == PackageSignatureStatus::Unsigned {
+          None
+        } else {
+          Some(version.publisher_key_id.as_str())
+        },
+        if version.signature_status == PackageSignatureStatus::Unsigned {
+          None
+        } else {
+          Some(version.publisher_fingerprint.as_str())
+        },
+        version.signature_status.as_str(),
         version.runtime_kind,
         version.manifest_json,
         version.permission_request_digest,

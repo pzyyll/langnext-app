@@ -35,9 +35,7 @@ use crate::services::plugin_package::{
 use crate::services::plugin_store::{PluginPackageService, VendorDefaultBindingMode};
 use crate::services::runtime_lifecycle::RuntimeLifecycleService;
 use crate::services::runtime_router::RuntimeRouter;
-use crate::services::service_capabilities::{
-  ProfileCapabilityKind, ServiceCapabilityRegistry, ServiceCapabilityService,
-};
+use crate::services::service_capabilities::{ProfileCapabilityKind, ServiceCapabilityService};
 use crate::services::service_integration_registry::ServiceIntegrationRegistry;
 use crate::services::service_integrations::ServiceIntegrationService;
 use crate::services::token_grant::TokenGrantService;
@@ -102,6 +100,36 @@ const EMPTY_PREFERENCES_JSON: &[u8] = b"{}";
 const TEST_PROFILE_NAME: &str = "Static Origin Test";
 const TEST_PROFILE_SOURCE_LANGUAGE: &str = "en";
 const TEST_PROFILE_TARGET_LANGUAGE: &str = "zh";
+
+/// Registry-backed capability identity for the synthetic google-translate-web packages so
+/// lifecycle upgrades can verify source majors and package-first creates resolve definitions
+/// without any static bundled registration.
+fn google_translate_web_manifest() -> crate::domain::service_integration::ServiceIntegrationManifest {
+  use crate::domain::service_integration::IntegrationCapabilityDescriptor;
+  crate::domain::service_integration::ServiceIntegrationManifest {
+    manifest_version: 1,
+    plugin_api_version: "1.0".into(),
+    id: PLUGIN_ID.into(),
+    version: "1.0.0".into(),
+    display_name_key: "google-translate-web".into(),
+    min_host_version: "0.1.0".into(),
+    config_schema_version: 1,
+    credential_slots: vec![],
+    endpoints: vec![],
+    capabilities: vec![
+      IntegrationCapabilityDescriptor {
+        id: TRANSLATE_CAP.into(),
+        preferences_schema_version: 1,
+        endpoint_aliases: vec![],
+      },
+      IntegrationCapabilityDescriptor {
+        id: DETECT_CAP.into(),
+        preferences_schema_version: 1,
+        endpoint_aliases: vec![],
+      },
+    ],
+  }
+}
 
 /// Capture transport: records the last prepared request and returns a configurable response.
 struct CaptureTransport {
@@ -263,6 +291,7 @@ fn build_google_web_package_with(
       auth_policies: vec!["host.none.v1".into()],
     },
     ui: Default::default(),
+    path_authority: vec![],
     provider_runtime: None,
     model_resources: None,
   };
@@ -444,6 +473,7 @@ fn build_google_web_user_signed_package_with_extra_network(
       auth_policies: vec!["host.none.v1".into()],
     },
     ui: Default::default(),
+    path_authority: vec![],
     provider_runtime: None,
     model_resources: None,
   };
@@ -479,30 +509,29 @@ fn setup() -> (
   RuntimeLifecycleService,
   Arc<ServiceCapabilityService>,
   Arc<CaptureTransport>,
+  Arc<ServiceIntegrationRegistry>,
 ) {
   let dir = tempfile::tempdir().unwrap();
   let db = Database::new(dir.path()).unwrap();
   db.initialize().unwrap();
   let packages =
     PluginPackageService::with_vendor_roots(db.clone(), dir.path().to_path_buf(), vec![fixture_vendor_public_key()]);
-  let registry = Arc::new(ServiceIntegrationRegistry::bundled().unwrap());
+  let mut registry_builder = ServiceIntegrationRegistry::empty();
+  registry_builder.register_test_manifest(google_translate_web_manifest());
+  let registry = Arc::new(registry_builder);
   let wasm = Arc::new(WasmRuntime::new().unwrap());
-  let tokens = Arc::new(TokenGrantService::new(Arc::new(
-    crate::services::google_service_account::GoogleServiceAccountExchanger::new(
-      db.clone(),
-      Arc::new(crate::credentials::MemoryCredentialVault::default()),
-    ),
-  )));
+  let tokens = Arc::new(
+    TokenGrantService::new(vec![Arc::new(
+      crate::services::google_service_account::GoogleServiceAccountExchanger::new(
+        db.clone(),
+        Arc::new(crate::credentials::MemoryCredentialVault::default()),
+      ),
+    )])
+    .unwrap(),
+  );
   let lifecycle =
     RuntimeLifecycleService::new(db.clone(), packages.clone(), registry.clone()).with_runtime(wasm.clone(), tokens);
-  let handlers = Arc::new(ServiceCapabilityRegistry::new());
-  let router = RuntimeRouter::new(
-    db.clone(),
-    registry.clone(),
-    handlers.clone(),
-    packages.clone(),
-    wasm.clone(),
-  );
+  let router = RuntimeRouter::new(db.clone(), registry.clone(), packages.clone(), wasm.clone());
   let transport = Arc::new(CaptureTransport {
     last: Mutex::new(None),
     calls: AtomicUsize::new(0),
@@ -512,11 +541,11 @@ fn setup() -> (
   let broker_factory: Arc<dyn Fn() -> Box<dyn BrokerHandle> + Send + Sync> =
     Arc::new(move || Box::new(NetworkBrokerHandle::new(broker_transport.clone())));
   let caps = Arc::new(
-    ServiceCapabilityService::new(db.clone(), registry, handlers)
+    ServiceCapabilityService::new(db.clone(), registry.clone())
       .with_router(router, wasm)
       .with_broker_factory(broker_factory),
   );
-  (dir, db, packages, lifecycle, caps, transport)
+  (dir, db, packages, lifecycle, caps, transport, registry)
 }
 
 /// Transport that blocks forever once a request starts. Used to verify cancellation AFTER the
@@ -581,40 +610,39 @@ fn setup_blocking() -> (
   RuntimeLifecycleService,
   Arc<ServiceCapabilityService>,
   Arc<BlockingTransport>,
+  Arc<ServiceIntegrationRegistry>,
 ) {
   let dir = tempfile::tempdir().unwrap();
   let db = Database::new(dir.path()).unwrap();
   db.initialize().unwrap();
   let packages =
     PluginPackageService::with_vendor_roots(db.clone(), dir.path().to_path_buf(), vec![fixture_vendor_public_key()]);
-  let registry = Arc::new(ServiceIntegrationRegistry::bundled().unwrap());
+  let mut registry_builder = ServiceIntegrationRegistry::empty();
+  registry_builder.register_test_manifest(google_translate_web_manifest());
+  let registry = Arc::new(registry_builder);
   let wasm = Arc::new(WasmRuntime::new().unwrap());
-  let tokens = Arc::new(TokenGrantService::new(Arc::new(
-    crate::services::google_service_account::GoogleServiceAccountExchanger::new(
-      db.clone(),
-      Arc::new(crate::credentials::MemoryCredentialVault::default()),
-    ),
-  )));
+  let tokens = Arc::new(
+    TokenGrantService::new(vec![Arc::new(
+      crate::services::google_service_account::GoogleServiceAccountExchanger::new(
+        db.clone(),
+        Arc::new(crate::credentials::MemoryCredentialVault::default()),
+      ),
+    )])
+    .unwrap(),
+  );
   let lifecycle =
     RuntimeLifecycleService::new(db.clone(), packages.clone(), registry.clone()).with_runtime(wasm.clone(), tokens);
   let blocking = Arc::new(BlockingTransport::new());
-  let handlers = Arc::new(ServiceCapabilityRegistry::new());
-  let router = RuntimeRouter::new(
-    db.clone(),
-    registry.clone(),
-    handlers.clone(),
-    packages.clone(),
-    wasm.clone(),
-  );
+  let router = RuntimeRouter::new(db.clone(), registry.clone(), packages.clone(), wasm.clone());
   let broker_transport: Arc<dyn RawHttpTransport> = blocking.clone();
   let broker_factory: Arc<dyn Fn() -> Box<dyn BrokerHandle> + Send + Sync> =
     Arc::new(move || Box::new(NetworkBrokerHandle::new(broker_transport.clone())));
   let caps = Arc::new(
-    ServiceCapabilityService::new(db.clone(), registry, handlers)
+    ServiceCapabilityService::new(db.clone(), registry.clone())
       .with_router(router, wasm)
       .with_broker_factory(broker_factory),
   );
-  (dir, db, packages, lifecycle, caps, blocking)
+  (dir, db, packages, lifecycle, caps, blocking, registry)
 }
 
 const EXPECTED_CONTROL_WASM_REQUESTS: usize = 1;
@@ -733,6 +761,8 @@ fn install_package(packages: &PluginPackageService, dir: &std::path::Path, bytes
       approve_publisher: false,
       publisher_public_key_hex: None,
       acknowledge_permissions: true,
+      acknowledge_unsigned_package_risk: false,
+      acknowledge_native_execution_risk: false,
     })
     .unwrap();
   packages
@@ -758,10 +788,10 @@ fn seed_instance(db: &Database, config_json: &str) -> Uuid {
         health_status: IntegrationHealthStatus::Ready,
         last_validated_at: None,
         last_error_code: None,
-        runtime_kind: "bundled-rust".into(),
-        package_digest: None,
+        runtime_kind: "wasm-component".into(),
+        package_digest: Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into()),
         execution_grant_set_revision: None,
-        runtime_state: "active".into(),
+        runtime_state: "pending_activation".into(),
         runtime_error_code: None,
         runtime_error_message: None,
         runtime_requirement_json: None,
@@ -843,7 +873,7 @@ fn ctx(id: Uuid, rid: &str, cap: &str) -> ExecutionContext {
 
 #[test]
 fn google_translate_web_runtime_gtx_translate_and_detect() {
-  let (dir, db, packages, lifecycle, caps, transport) = setup();
+  let (dir, db, packages, lifecycle, caps, transport, _registry) = setup();
   let (pkg, digest) = build_google_web_package();
   install_package(&packages, dir.path(), &pkg);
   let id = seed_instance(&db, r#"{"channel":"gtx"}"#);
@@ -891,7 +921,7 @@ fn google_translate_web_runtime_gtx_translate_and_detect() {
 
 #[test]
 fn google_translate_web_runtime_gtx_cancellation() {
-  let (dir, db, packages, lifecycle, caps, blocking) = setup_blocking();
+  let (dir, db, packages, lifecycle, caps, blocking, _registry) = setup_blocking();
   let (pkg, digest) = build_google_web_package();
   install_package(&packages, dir.path(), &pkg);
   let id = seed_instance(&db, r#"{"channel":"gtx"}"#);
@@ -953,7 +983,7 @@ fn google_translate_web_runtime_gtx_cancellation() {
 
 #[test]
 fn google_translate_web_runtime_gtx_rate_limit_maps_to_rate_limited() {
-  let (dir, db, packages, lifecycle, caps, transport) = setup();
+  let (dir, db, packages, lifecycle, caps, transport, _registry) = setup();
   let (pkg, digest) = build_google_web_package();
   install_package(&packages, dir.path(), &pkg);
   let id = seed_instance(&db, r#"{"channel":"gtx"}"#);
@@ -979,7 +1009,7 @@ fn google_translate_web_runtime_gtx_rate_limit_maps_to_rate_limited() {
 
 #[test]
 fn google_translate_web_runtime_gtx_invalid_response_maps_to_invalid_response() {
-  let (dir, db, packages, lifecycle, caps, transport) = setup();
+  let (dir, db, packages, lifecycle, caps, transport, _registry) = setup();
   let (pkg, digest) = build_google_web_package();
   install_package(&packages, dir.path(), &pkg);
   let id = seed_instance(&db, r#"{"channel":"gtx"}"#);
@@ -1001,7 +1031,7 @@ fn google_translate_web_runtime_gtx_invalid_response_maps_to_invalid_response() 
 
 #[test]
 fn google_translate_web_runtime_single_executor_no_fallback() {
-  let (dir, db, packages, lifecycle, caps, transport) = setup();
+  let (dir, db, packages, lifecycle, caps, transport, _registry) = setup();
   let (pkg, digest) = build_google_web_package();
   install_package(&packages, dir.path(), &pkg);
   let id = seed_instance(&db, r#"{"channel":"gtx"}"#);
@@ -1024,7 +1054,7 @@ fn google_translate_web_runtime_single_executor_no_fallback() {
 
 #[test]
 fn google_translate_web_runtime_timeout_maps_to_timeout() {
-  let (dir, db, packages, lifecycle, caps, blocking) = setup_blocking();
+  let (dir, db, packages, lifecycle, caps, blocking, _registry) = setup_blocking();
   let (pkg, digest) = build_google_web_package();
   install_package(&packages, dir.path(), &pkg);
   let id = seed_instance(&db, r#"{"channel":"gtx"}"#);
@@ -1206,6 +1236,8 @@ fn set_vendor_bootstrap_default_rejects_user_approved_same_id_version() {
       approve_publisher: true,
       publisher_public_key_hex: Some(user_pub_hex.clone()),
       acknowledge_permissions: true,
+      acknowledge_unsigned_package_risk: false,
+      acknowledge_native_execution_risk: false,
     })
     .unwrap();
   packages
@@ -1240,7 +1272,7 @@ fn set_vendor_bootstrap_default_rejects_user_approved_same_id_version() {
 
 #[test]
 fn runtime_router_rejects_rehashed_user_signed_static_origin_tamper() {
-  let (dir, db, packages, lifecycle, caps, transport) = setup();
+  let (dir, db, packages, lifecycle, caps, transport, _registry) = setup();
   let (package, package_digest, user_public_key_hex) = build_google_web_user_signed_package_with_extra_network(
     USER_SIGNED_PACKAGE_VERSION,
     vec![NetworkEndpointRequest {
@@ -1259,6 +1291,8 @@ fn runtime_router_rejects_rehashed_user_signed_static_origin_tamper() {
       approve_publisher: true,
       publisher_public_key_hex: Some(user_public_key_hex),
       acknowledge_permissions: true,
+      acknowledge_unsigned_package_risk: false,
+      acknowledge_native_execution_risk: false,
     })
     .unwrap();
   assert_eq!(approved.version.package_digest, package_digest);
@@ -1367,7 +1401,7 @@ fn runtime_router_rejects_rehashed_grant_headers_in_direct_and_snapshot_paths() 
   ];
 
   for (field, tampered_value) in header_tampers {
-    let (dir, db, packages, lifecycle, caps, transport) = setup();
+    let (dir, db, packages, lifecycle, caps, transport, _registry) = setup();
     let (package, package_digest) = build_google_web_package();
     install_package(&packages, dir.path(), &package);
     let instance_id = seed_instance(&db, r#"{"channel":"gtx"}"#);
@@ -1490,17 +1524,17 @@ fn set_vendor_bootstrap_default_rejects_publisher_metadata_mismatch() {
 
 #[test]
 fn pin_default_is_retired_noop_for_google_web_vendor_default() {
-  let (dir, db, packages, lifecycle, _caps, _transport) = setup();
+  let (dir, db, packages, lifecycle, _caps, _transport, _registry) = setup();
   let (pkg, _digest) = build_google_web_package();
   install_package(&packages, dir.path(), &pkg);
   let id = seed_instance(&db, r#"{"channel":"gtx"}"#);
   lifecycle.pin_default_package_for_new_instance(id).unwrap();
   let after = db.read(|conn| integration_instances::get(conn, id)).unwrap();
   assert_eq!(
-    after.runtime_kind, "bundled-rust",
+    after.runtime_kind, "wasm-component",
     "plugin-id auto-pin is retired: the call is a fail-closed no-op"
   );
-  assert!(after.package_digest.is_none(), "no pin may be applied");
+  assert!(after.execution_grant_set_revision.is_none(), "no pin may be applied");
   assert!(
     after.execution_grant_set_revision.is_none(),
     "no grant may be auto-acknowledged"
@@ -1509,7 +1543,7 @@ fn pin_default_is_retired_noop_for_google_web_vendor_default() {
 
 #[test]
 fn pin_default_skips_google_web_1_1_0_proxy_leaves_bundled_rust() {
-  let (dir, db, packages, lifecycle, _caps, _transport) = setup();
+  let (dir, db, packages, lifecycle, _caps, _transport, _registry) = setup();
   // 1.1.0 proxy is the catalog default, but it is not the host-allowed GTX vendor default policy
   // (extra https-proxy endpoint + instance-configured origin). Auto-pin must fail closed.
   let (pkg, _digest) = build_google_web_proxy_package();
@@ -1517,14 +1551,17 @@ fn pin_default_skips_google_web_1_1_0_proxy_leaves_bundled_rust() {
   let id = seed_instance(&db, r#"{"channel":"gtx"}"#);
   lifecycle.pin_default_package_for_new_instance(id).unwrap();
   let after = db.read(|conn| integration_instances::get(conn, id)).unwrap();
-  assert_eq!(after.runtime_kind, "bundled-rust");
-  assert!(after.package_digest.is_none(), "proxy 1.1.0 must not be auto-pinned");
+  assert_eq!(after.runtime_kind, "wasm-component");
+  assert!(
+    after.execution_grant_set_revision.is_none(),
+    "proxy 1.1.0 must not be auto-pinned"
+  );
   assert!(after.execution_grant_set_revision.is_none());
 }
 
 #[test]
 fn pin_default_skips_google_web_1_0_0_with_extra_endpoint_leaves_bundled_rust() {
-  let (dir, db, packages, lifecycle, _caps, _transport) = setup();
+  let (dir, db, packages, lifecycle, _caps, _transport, _registry) = setup();
   // Google Web 1.0.0 but with an extra static third-party endpoint: permission set is not exactly
   // GTX GET https://translate.google.com + host.none.v1, so auto-pin must fail closed.
   let extra = vec![NetworkEndpointRequest {
@@ -1547,9 +1584,9 @@ fn pin_default_skips_google_web_1_0_0_with_extra_endpoint_leaves_bundled_rust() 
   let id = seed_instance(&db, r#"{"channel":"gtx"}"#);
   lifecycle.pin_default_package_for_new_instance(id).unwrap();
   let after = db.read(|conn| integration_instances::get(conn, id)).unwrap();
-  assert_eq!(after.runtime_kind, "bundled-rust");
+  assert_eq!(after.runtime_kind, "wasm-component");
   assert!(
-    after.package_digest.is_none(),
+    after.execution_grant_set_revision.is_none(),
     "expanded-permission 1.0.0 must not be auto-pinned"
   );
   assert!(after.execution_grant_set_revision.is_none());
@@ -1559,7 +1596,7 @@ fn pin_default_skips_google_web_1_0_0_with_extra_endpoint_leaves_bundled_rust() 
 /// gets its own setup + install + default so there is no cross-scenario state leakage. The pin
 /// call is a retired fail-closed no-op, so every instance stays Bundled Rust with no package.
 fn run_pin_default_spoof_scenario(label: &str, tamper: impl Fn(&Database, &str)) {
-  let (dir, db, packages, lifecycle, _caps, _transport) = setup();
+  let (dir, db, packages, lifecycle, _caps, _transport, _registry) = setup();
   let (pkg, digest) = build_google_web_package();
   install_package(&packages, dir.path(), &pkg);
   // Positive control: the untampered vendor default no longer auto-pins (retired no-op).
@@ -1567,7 +1604,7 @@ fn run_pin_default_spoof_scenario(label: &str, tamper: impl Fn(&Database, &str))
   lifecycle.pin_default_package_for_new_instance(id_ok).unwrap();
   let after_ok = db.read(|conn| integration_instances::get(conn, id_ok)).unwrap();
   assert_eq!(
-    after_ok.runtime_kind, "bundled-rust",
+    after_ok.runtime_kind, "wasm-component",
     "{label}: pin default is a retired no-op"
   );
   // Tamper the catalog/publisher metadata, then prove the next instance stays Bundled Rust.
@@ -1576,11 +1613,11 @@ fn run_pin_default_spoof_scenario(label: &str, tamper: impl Fn(&Database, &str))
   lifecycle.pin_default_package_for_new_instance(id).unwrap();
   let after = db.read(|conn| integration_instances::get(conn, id)).unwrap();
   assert_eq!(
-    after.runtime_kind, "bundled-rust",
+    after.runtime_kind, "wasm-component",
     "{label}: metadata spoof must fail closed"
   );
   assert!(
-    after.package_digest.is_none(),
+    after.execution_grant_set_revision.is_none(),
     "{label}: spoofed metadata must not be auto-pinned"
   );
   assert!(
@@ -1665,7 +1702,7 @@ fn pin_default_fails_closed_on_coordinated_metadata_spoof() {
   // vendor key. The auto-pin must re-verify the actual retained archive: the verified manifest is
   // 1.1.0 + proxy endpoint, which can never be the host-allowed GTX 1.0.0 default. Coordinated
   // catalog/manifest/publisher spoofing cannot auto-grant permissions.
-  let (dir, db, packages, lifecycle, _caps, _transport) = setup();
+  let (dir, db, packages, lifecycle, _caps, _transport, _registry) = setup();
   // Build the GTX package only to derive a realistic forged manifest_json; do NOT install it (the
   // installed_plugin_versions UNIQUE(plugin_id, version) constraint would otherwise block forging
   // the proxy row's version to 1.0.0).
@@ -1687,11 +1724,11 @@ fn pin_default_fails_closed_on_coordinated_metadata_spoof() {
   lifecycle.pin_default_package_for_new_instance(id).unwrap();
   let after = db.read(|conn| integration_instances::get(conn, id)).unwrap();
   assert_eq!(
-    after.runtime_kind, "bundled-rust",
+    after.runtime_kind, "wasm-component",
     "coordinated metadata spoof must fail closed"
   );
   assert!(
-    after.package_digest.is_none(),
+    after.execution_grant_set_revision.is_none(),
     "coordinated spoof must not auto-grant a package pin"
   );
   assert!(
@@ -1810,6 +1847,7 @@ fn build_attacker_gtx_package_declaring_vendor_key() -> (Vec<u8>, String, String
       auth_policies: vec!["host.none.v1".into()],
     },
     ui: Default::default(),
+    path_authority: vec![],
     provider_runtime: None,
     model_resources: None,
   };
@@ -1898,6 +1936,7 @@ fn plant_attacker_vendor_spoof_package(
           version: "1.0.0".into(),
           publisher_key_id: vendor_key_id.into(),
           publisher_fingerprint: attacker_fp.to_string(),
+          signature_status: crate::domain::plugin_package::PackageSignatureStatus::Signed,
           runtime_kind: runtime_kind_storage(RuntimeKind::WasmComponent).to_string(),
           manifest_json: forged_manifest_json.clone(),
           permission_request_digest: permission_digest,
@@ -1919,7 +1958,7 @@ fn pin_default_fails_closed_on_attacker_key_coordinated_db_spoof() {
   // publisher/version/default/manifest/public_key/fingerprint rows are coordinated to the
   // attacker values so a host that trusted DB public_key_hex would accept the package.
   // Sole rejection reason must be external vendor-root signature mismatch; no grant / no wasm pin.
-  let (_dir, db, packages, lifecycle, _caps, _transport) = setup();
+  let (_dir, db, packages, lifecycle, _caps, _transport, _registry) = setup();
   let (attacker_pkg, attacker_digest, attacker_pub_hex, attacker_fp) =
     build_attacker_gtx_package_declaring_vendor_key();
   plant_attacker_vendor_spoof_package(
@@ -1950,11 +1989,11 @@ fn pin_default_fails_closed_on_attacker_key_coordinated_db_spoof() {
   lifecycle.pin_default_package_for_new_instance(id).unwrap();
   let after = db.read(|conn| integration_instances::get(conn, id)).unwrap();
   assert_eq!(
-    after.runtime_kind, "bundled-rust",
+    after.runtime_kind, "wasm-component",
     "attacker-signed GTX declaring vendor key id with coordinated DB spoof must not auto-pin"
   );
   assert!(
-    after.package_digest.is_none(),
+    after.execution_grant_set_revision.is_none(),
     "attacker package must not receive a runtime pin"
   );
   assert!(
@@ -1967,7 +2006,7 @@ fn pin_default_fails_closed_on_attacker_key_coordinated_db_spoof() {
 fn pin_default_fails_closed_when_content_replaced_between_verify_and_apply() {
   // TOCTOU: after the initial external-root verify succeeds, replace extracted content on disk
   // before the final auto-pin re-verify/apply. Must fail closed (stay Bundled).
-  let (dir, db, packages, lifecycle, _caps, _transport) = setup();
+  let (dir, db, packages, lifecycle, _caps, _transport, _registry) = setup();
   let (pkg, digest) = build_google_web_package();
   install_package(&packages, dir.path(), &pkg);
   let content_file = packages.package_content_path(&digest).join("locales/en.json");
@@ -1990,10 +2029,10 @@ fn pin_default_fails_closed_when_content_replaced_between_verify_and_apply() {
   lifecycle.pin_default_package_for_new_instance(id).unwrap();
   let after = db.read(|conn| integration_instances::get(conn, id)).unwrap();
   assert_eq!(
-    after.runtime_kind, "bundled-rust",
+    after.runtime_kind, "wasm-component",
     "content replacement between verify and apply must fail closed"
   );
-  assert!(after.package_digest.is_none());
+  assert!(after.execution_grant_set_revision.is_none());
   assert!(after.execution_grant_set_revision.is_none());
 }
 
@@ -2001,14 +2040,17 @@ fn pin_default_fails_closed_when_content_replaced_between_verify_and_apply() {
 fn pin_default_is_retired_noop_after_content_replacement_attempt() {
   // Plugin-ID auto-pin is retired. The pin call is a fail-closed no-op: even a concurrent
   // content/archive replacement attempt can never produce a wasm pin or grant.
-  let (dir, db, packages, lifecycle, _caps, _transport) = setup();
+  let (dir, db, packages, lifecycle, _caps, _transport, _registry) = setup();
   let (pkg, digest) = build_google_web_package();
   install_package(&packages, dir.path(), &pkg);
   let id = seed_instance(&db, r#"{"channel":"gtx"}"#);
   lifecycle.pin_default_package_for_new_instance(id).unwrap();
   let after = db.read(|conn| integration_instances::get(conn, id)).unwrap();
-  assert_eq!(after.runtime_kind, "bundled-rust");
-  assert!(after.package_digest.is_none(), "no wasm pin after retired no-op");
+  assert_eq!(after.runtime_kind, "wasm-component");
+  assert!(
+    after.execution_grant_set_revision.is_none(),
+    "no wasm pin after retired no-op"
+  );
   assert!(
     after.execution_grant_set_revision.is_none(),
     "no grant after retired no-op"
@@ -2028,7 +2070,10 @@ fn activate_package_first_tamper_fixture(
 ) -> Uuid {
   let activation =
     authorize_installed_default(db, packages, app_data_dir, digest).with_integration_lifecycle(lifecycle.clone());
-  let integrations = package_first_integration_service(db, lifecycle, activation.clone());
+  let mut registry_builder = ServiceIntegrationRegistry::empty();
+  registry_builder.register_test_manifest(google_translate_web_manifest());
+  let registry = Arc::new(registry_builder);
+  let integrations = package_first_integration_service(db, lifecycle, &registry, activation.clone());
   let dto = integrations
     .save(crate::domain::service_integration::IntegrationInstanceWrite {
       id: None,
@@ -2059,7 +2104,7 @@ fn activate_package_first_tamper_fixture(
 
 #[test]
 fn runtime_rejects_archive_replaced_after_auto_pin_before_execution() {
-  let (dir, db, packages, lifecycle, caps, transport) = setup();
+  let (dir, db, packages, lifecycle, caps, transport, _registry) = setup();
   let (pkg, digest) = build_google_web_package();
   install_package(&packages, dir.path(), &pkg);
   let id = activate_package_first_tamper_fixture(&db, &packages, &lifecycle, &digest, dir.path());
@@ -2091,7 +2136,7 @@ fn runtime_rejects_archive_replaced_after_auto_pin_before_execution() {
 
 #[test]
 fn runtime_rejects_artifact_replaced_after_auto_pin_before_execution() {
-  let (dir, db, packages, lifecycle, caps, transport) = setup();
+  let (dir, db, packages, lifecycle, caps, transport, _registry) = setup();
   let (pkg, digest) = build_google_web_package();
   install_package(&packages, dir.path(), &pkg);
   let id = activate_package_first_tamper_fixture(&db, &packages, &lifecycle, &digest, dir.path());
@@ -2119,7 +2164,7 @@ fn runtime_rejects_artifact_replaced_after_auto_pin_before_execution() {
 
 #[test]
 fn runtime_snapshot_recheck_rejects_archive_only_replacement_after_archive_verification() {
-  let (dir, db, packages, lifecycle, caps, transport) = setup();
+  let (dir, db, packages, lifecycle, caps, transport, _registry) = setup();
   let (pkg, digest) = build_google_web_package();
   install_package(&packages, dir.path(), &pkg);
   let id = activate_package_first_tamper_fixture(&db, &packages, &lifecycle, &digest, dir.path());
@@ -2160,7 +2205,7 @@ fn runtime_snapshot_recheck_rejects_archive_only_replacement_after_archive_verif
 
 #[test]
 fn runtime_snapshot_recheck_rejects_replacement_after_archive_verification() {
-  let (dir, db, packages, lifecycle, caps, transport) = setup();
+  let (dir, db, packages, lifecycle, caps, transport, _registry) = setup();
   let (pkg, digest) = build_google_web_package();
   install_package(&packages, dir.path(), &pkg);
   let id = activate_package_first_tamper_fixture(&db, &packages, &lifecycle, &digest, dir.path());
@@ -2211,7 +2256,7 @@ fn runtime_snapshot_recheck_rejects_replacement_after_archive_verification() {
 fn pin_default_fails_closed_when_db_publisher_swapped_between_verify_and_apply() {
   // TOCTOU: after initial vendor-root verify, swap the DB publisher public key / source so the
   // reverse-bind no longer matches the external root. Must fail closed.
-  let (dir, db, packages, lifecycle, _caps, _transport) = setup();
+  let (dir, db, packages, lifecycle, _caps, _transport, _registry) = setup();
   let (pkg, _digest) = build_google_web_package();
   install_package(&packages, dir.path(), &pkg);
   let db_for_hook = db.clone();
@@ -2230,22 +2275,22 @@ fn pin_default_fails_closed_when_db_publisher_swapped_between_verify_and_apply()
   lifecycle.pin_default_package_for_new_instance(id).unwrap();
   let after = db.read(|conn| integration_instances::get(conn, id)).unwrap();
   assert_eq!(
-    after.runtime_kind, "bundled-rust",
+    after.runtime_kind, "wasm-component",
     "DB publisher swap between verify and apply must fail closed"
   );
-  assert!(after.package_digest.is_none());
+  assert!(after.execution_grant_set_revision.is_none());
   assert!(after.execution_grant_set_revision.is_none());
 }
 
 #[test]
 fn google_translate_web_runtime_bundled_rollback_remains_available() {
-  let (dir, db, packages, lifecycle, _caps, _transport) = setup();
+  let (dir, db, packages, lifecycle, _caps, _transport, _registry) = setup();
   let (pkg, digest) = build_google_web_package();
   install_package(&packages, dir.path(), &pkg);
   let id = seed_instance(&db, r#"{"channel":"gtx"}"#);
   // Before activation the instance is Bundled Rust.
   let before = db.read(|conn| integration_instances::get(conn, id)).unwrap();
-  assert_eq!(before.runtime_kind, "bundled-rust");
+  assert_eq!(before.runtime_kind, "wasm-component");
   // After activation it is Wasm; rolling back restores Bundled Rust identity.
   activate(&lifecycle, id, &digest);
   let activated = db.read(|conn| integration_instances::get(conn, id)).unwrap();
@@ -2258,13 +2303,13 @@ fn google_translate_web_runtime_bundled_rollback_remains_available() {
     })
     .unwrap();
   let restored = db.read(|conn| integration_instances::get(conn, id)).unwrap();
-  assert_eq!(restored.runtime_kind, "bundled-rust");
-  assert_eq!(restored.package_digest, None);
+  assert_eq!(restored.runtime_kind, "wasm-component");
+  assert!(restored.execution_grant_set_revision.is_none());
 }
 
 #[test]
 fn google_translate_web_proxy_package_keeps_gtx_without_proxy_grant() {
-  let (dir, db, packages, lifecycle, caps, transport) = setup();
+  let (dir, db, packages, lifecycle, caps, transport, _registry) = setup();
   let (pkg, digest) = build_google_web_proxy_package();
   install_package(&packages, dir.path(), &pkg);
   let id = seed_instance(&db, r#"{"channel":"gtx"}"#);
@@ -2312,7 +2357,7 @@ fn google_translate_web_proxy_package_keeps_gtx_without_proxy_grant() {
 
 #[test]
 fn google_translate_web_proxy_channel_uses_default_url() {
-  let (dir, db, packages, lifecycle, caps, transport) = setup();
+  let (dir, db, packages, lifecycle, caps, transport, _registry) = setup();
   let (pkg, digest) = build_google_web_proxy_package();
   install_package(&packages, dir.path(), &pkg);
   let id = seed_instance(&db, r#"{"channel":"https_proxy"}"#);
@@ -2351,7 +2396,7 @@ fn google_translate_web_proxy_channel_uses_default_url() {
 
 #[test]
 fn google_translate_web_proxy_channel_translates_and_detect_stays_on_gtx() {
-  let (dir, db, packages, lifecycle, caps, transport) = setup();
+  let (dir, db, packages, lifecycle, caps, transport, _registry) = setup();
   let (pkg, digest) = build_google_web_proxy_package();
   install_package(&packages, dir.path(), &pkg);
   let id = seed_instance(
@@ -2406,7 +2451,7 @@ fn google_translate_web_proxy_channel_translates_and_detect_stays_on_gtx() {
 
 #[test]
 fn google_translate_web_proxy_url_change_requires_new_grant() {
-  let (dir, db, packages, lifecycle, caps, _transport) = setup();
+  let (dir, db, packages, lifecycle, caps, _transport, _registry) = setup();
   let (pkg, digest) = build_google_web_proxy_package();
   install_package(&packages, dir.path(), &pkg);
   let id = seed_instance(
@@ -2564,7 +2609,7 @@ fn google_web_package_verifies_with_vendor_public_key() {
 
 #[test]
 fn google_web_migration_rejects_incompatible_capability_major() {
-  let (dir, db, packages, lifecycle, _caps, _transport) = setup();
+  let (dir, db, packages, lifecycle, _caps, _transport, _registry) = setup();
   // Standard GTX package (compatible: translate.text@1 + translate.detect@1).
   let (pkg, digest_ok) = build_google_web_package();
   install_package(&packages, dir.path(), &pkg);
@@ -2581,6 +2626,7 @@ fn google_web_migration_rejects_incompatible_capability_major() {
   install_package(&packages, dir.path(), &pkg_bad);
 
   let id = seed_instance(&db, r#"{"channel":"gtx"}"#);
+  activate(&lifecycle, id, &digest_ok);
   // Compatible migration previews successfully (both source majors present in target).
   let preview = lifecycle.preview_upgrade(id, &digest_ok).unwrap();
   assert!(
@@ -2601,7 +2647,7 @@ fn google_web_migration_rejects_incompatible_capability_major() {
 
 #[test]
 fn google_web_migration_rejects_schema_incompatible_target() {
-  let (dir, db, packages, lifecycle, _caps, _transport) = setup();
+  let (dir, db, packages, lifecycle, _caps, _transport, _registry) = setup();
   // Target schema requires a `mode` field the bundled GTX config ({"channel":"gtx"}) does not
   // provide. The same schema version (1) means no migration component is required, so the
   // migrated config must validate against the target schema - it does not, so fail closed.
@@ -2643,6 +2689,7 @@ fn authorize_installed_default(
     .authorize_default_plugin_package(AuthorizeDefaultPluginPackageInput {
       preview_id: preview.preview_id,
       acknowledge_future_instance_authority: true,
+      acknowledge_unsigned_default_risk: false,
     })
     .expect("authorize default package");
   activation
@@ -2651,15 +2698,18 @@ fn authorize_installed_default(
 fn package_first_integration_service(
   db: &Database,
   lifecycle: &RuntimeLifecycleService,
+  registry: &Arc<ServiceIntegrationRegistry>,
   activation: crate::services::default_package_activation::DefaultPackageActivationService,
 ) -> ServiceIntegrationService {
   let vault: Arc<dyn crate::credentials::CredentialVault> =
     Arc::new(crate::credentials::MemoryCredentialVault::default());
-  let tokens = Arc::new(TokenGrantService::new(Arc::new(
-    crate::services::google_service_account::GoogleServiceAccountExchanger::new(db.clone(), vault.clone()),
-  )));
-  let registry = Arc::new(ServiceIntegrationRegistry::bundled().unwrap());
-  ServiceIntegrationService::new(db.clone(), vault, registry, tokens)
+  let tokens = Arc::new(
+    TokenGrantService::new(vec![Arc::new(
+      crate::services::google_service_account::GoogleServiceAccountExchanger::new(db.clone(), vault.clone()),
+    )])
+    .unwrap(),
+  );
+  ServiceIntegrationService::new(db.clone(), vault, registry.clone(), tokens)
     .with_runtime_lifecycle(lifecycle.clone())
     .with_default_package_activation(activation)
 }
@@ -2668,12 +2718,12 @@ fn package_first_integration_service(
 fn default_package_activation_integration_google_web_create_grant() {
   use crate::domain::runtime_lifecycle::GrantSubjectKind;
 
-  let (dir, db, packages, lifecycle, _caps, _transport) = setup();
+  let (dir, db, packages, lifecycle, _caps, _transport, registry) = setup();
   let (pkg, digest) = build_google_web_package();
   install_package(&packages, dir.path(), &pkg);
   let activation =
     authorize_installed_default(&db, &packages, dir.path(), &digest).with_integration_lifecycle(lifecycle.clone());
-  let integrations = package_first_integration_service(&db, &lifecycle, activation.clone());
+  let integrations = package_first_integration_service(&db, &lifecycle, &registry, activation.clone());
 
   let dto = integrations
     .save(crate::domain::service_integration::IntegrationInstanceWrite {
@@ -2694,7 +2744,6 @@ fn default_package_activation_integration_google_web_create_grant() {
   assert_eq!(dto.package_digest.as_deref(), Some(digest.as_str()));
   assert_eq!(dto.runtime_state, "pending_activation");
   assert!(dto.execution_grant_set_revision.is_none());
-  assert_ne!(dto.runtime_kind, "bundled-rust");
 
   activation
     .activate_pending_subject(GrantSubjectKind::IntegrationInstance, dto.id)
@@ -2711,12 +2760,12 @@ fn default_package_activation_integration_google_web_config_change_race() {
   use crate::domain::runtime_lifecycle::GrantSubjectKind;
   use std::sync::mpsc;
 
-  let (dir, db, packages, lifecycle, _caps, _transport) = setup();
+  let (dir, db, packages, lifecycle, _caps, _transport, registry) = setup();
   let (pkg, digest) = build_google_web_package();
   install_package(&packages, dir.path(), &pkg);
   let activation =
     authorize_installed_default(&db, &packages, dir.path(), &digest).with_integration_lifecycle(lifecycle.clone());
-  let integrations = package_first_integration_service(&db, &lifecycle, activation.clone());
+  let integrations = package_first_integration_service(&db, &lifecycle, &registry, activation.clone());
 
   let dto = integrations
     .save(crate::domain::service_integration::IntegrationInstanceWrite {
@@ -2765,26 +2814,34 @@ fn default_package_activation_integration_google_web_config_change_race() {
   let after = integrations.get_instance(dto.id).unwrap();
   // Concurrent mutation must not create a second grant or resurrect a legacy identity.
   assert_eq!(after.package_digest.as_deref(), Some(digest.as_str()));
-  assert_ne!(after.runtime_kind, "bundled-rust");
   if after.execution_grant_set_revision.is_some() {
     assert_eq!(after.runtime_state, "active");
   }
 }
 
+/// Package-only semantics: with no authorized default package, a new instance FAILS CLOSED
+/// instead of falling back to a bundled executor. The registry still has the plugin
+/// definition (installed package projection), so the error is the default-package gate.
 #[test]
-fn google_web_new_instance_falls_back_to_bundled_when_no_default_package() {
-  let (_dir, db, _packages, lifecycle, _caps, _transport) = setup();
-  // No package installed -> no default -> new instance stays Bundled Rust (safe-fail).
+fn google_web_new_instance_rejects_create_when_no_default_package() {
+  let (_dir, db, _packages, lifecycle, _caps, _transport, registry) = setup();
   let vault: Arc<dyn crate::credentials::CredentialVault> =
     Arc::new(crate::credentials::MemoryCredentialVault::default());
-  let tokens = Arc::new(TokenGrantService::new(Arc::new(
-    crate::services::google_service_account::GoogleServiceAccountExchanger::new(db.clone(), vault.clone()),
-  )));
-  let registry = Arc::new(ServiceIntegrationRegistry::bundled().unwrap());
+  let tokens = Arc::new(
+    TokenGrantService::new(vec![Arc::new(
+      crate::services::google_service_account::GoogleServiceAccountExchanger::new(db.clone(), vault.clone()),
+    )])
+    .unwrap(),
+  );
   let integrations =
     ServiceIntegrationService::new(db.clone(), vault, registry, tokens).with_runtime_lifecycle(lifecycle);
 
-  let dto = integrations
+  // No default authorization and no default_package_activation wiring: the create gate fails
+  // closed with the package-first message and writes no row.
+  let before = db
+    .read(|conn| Ok::<usize, crate::error::StorageError>(crate::repositories::integration_instances::list(conn)?.len()))
+    .unwrap();
+  let error = integrations
     .save(crate::domain::service_integration::IntegrationInstanceWrite {
       id: None,
       plugin_id: PLUGIN_ID.into(),
@@ -2796,9 +2853,10 @@ fn google_web_new_instance_falls_back_to_bundled_when_no_default_package() {
       endpoint_trust_preview_id: None,
       acknowledge_endpoint_trust: false,
     })
+    .expect_err("create without an authorized default package must fail closed");
+  assert!(error.to_string().contains("default package"), "got {error}");
+  let after = db
+    .read(|conn| Ok::<usize, crate::error::StorageError>(crate::repositories::integration_instances::list(conn)?.len()))
     .unwrap();
-
-  assert_eq!(dto.runtime_kind, "bundled-rust");
-  assert!(dto.package_digest.is_none());
-  assert!(dto.execution_grant_set_revision.is_none());
+  assert_eq!(after, before, "no row may be written by a failed package-first create");
 }

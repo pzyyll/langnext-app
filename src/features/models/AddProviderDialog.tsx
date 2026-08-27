@@ -1,7 +1,7 @@
 // ABOUTME: Dialog for creating a real provider instance through Tauri IPC.
 // ABOUTME: Collects adapter, endpoint, credential policy, and initial enabled state.
 import { useMemo, useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { Button } from "@base-ui/react/button";
 import { Checkbox } from "@base-ui/react/checkbox";
 import { Dialog } from "@base-ui/react/dialog";
@@ -19,10 +19,16 @@ import {
 } from "../../components/ui";
 import { SelectField } from "../../components/SelectField";
 import { useToast } from "../../components/toast/useToast";
+import { providerRuntimeCatalogOptions } from "../../query/options";
 import { saveProviderInstance } from "../../storage/client";
 import { getIpcErrorMessage } from "../../storage/errors";
 import type { CredentialKind, CredentialUpdate, ProviderInstanceDto } from "../../storage/types";
-import { getDefaultBaseUrl, listAdapterOptions, resolveAuthScheme, resolveBaseUrlFields } from "./adapterOptions";
+import {
+  getDefaultBaseUrl,
+  listPackageAdapterOptions,
+  resolveAuthScheme,
+  resolveBaseUrlFields,
+} from "./adapterOptions";
 
 export type AddProviderDialogProps = {
   open: boolean;
@@ -72,10 +78,11 @@ type AddProviderFormProps = {
 function AddProviderForm({ onCreated }: AddProviderFormProps) {
   const { t } = useTranslation();
   const toast = useToast();
-  // Registered plugins are fixed at module load; options are stable for the dialog's lifetime.
-  const adapterOptions = useMemo(() => listAdapterOptions(), []);
+  // Package-only: adapter options come from the installed signed provider package catalog.
+  const catalogQuery = useQuery(providerRuntimeCatalogOptions());
+  const adapterOptions = useMemo(() => listPackageAdapterOptions(catalogQuery.data ?? []), [catalogQuery.data]);
   const [displayName, setDisplayName] = useState("");
-  const [adapterId, setAdapterId] = useState(adapterOptions[0]?.id ?? "openai-compatible");
+  const [adapterId, setAdapterId] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
   const [credentialKind, setCredentialKind] = useState<CredentialKind>("api_key");
   const [token, setToken] = useState("");
@@ -97,7 +104,14 @@ function AddProviderForm({ onCreated }: AddProviderFormProps) {
 
   const pending = createMutation.isPending;
   const defaultBaseUrl = getDefaultBaseUrl(adapterId);
-  const canSubmit = displayName.trim().length > 0 && !pending;
+  // Built-in availability is package-catalog readiness, independent of credential state.
+  // A failed or empty official catalog is an application readiness error presented BEFORE
+  // submission — never a generic create failure after the fact.
+  const catalogError = catalogQuery.isError
+    ? getIpcErrorMessage(catalogQuery.error, t("models.addChannel.catalogLoadFailed"))
+    : null;
+  const catalogEmpty = !catalogQuery.isLoading && !catalogQuery.isError && adapterOptions.length === 0;
+  const canSubmit = displayName.trim().length > 0 && adapterId.length > 0 && !pending && !catalogError && !catalogEmpty;
 
   function handleSubmit(event: React.SyntheticEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -241,6 +255,16 @@ function AddProviderForm({ onCreated }: AddProviderFormProps) {
         {t("models.channelEnabled")}
       </label>
 
+      {catalogError ? (
+        <p className="text-body-tight text-error" role="alert">
+          {catalogError}
+        </p>
+      ) : null}
+      {catalogEmpty ? (
+        <p className="text-body-tight text-error" role="alert">
+          {t("models.addChannel.catalogEmpty")}
+        </p>
+      ) : null}
       {error ? (
         <p className="text-body-tight text-error" role="alert">
           {error}

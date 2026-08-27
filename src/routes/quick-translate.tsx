@@ -26,7 +26,7 @@ import FlashAutoIcon from "~icons/material-symbols/flash-auto";
 import FlashAutoOutlineIcon from "~icons/material-symbols/flash-auto-outline";
 import RoundKeyboardArrowDownIcon from "~icons/ic/round-keyboard-double-arrow-down";
 import ChevronUpDownIcon from "~icons/mdi/chevron-up-down";
-import { MarkdownOutput } from "../components/markdown/MarkdownOutput";
+import { LazyMarkdownOutput } from "../components/markdown/LazyMarkdownOutput";
 import { TitleBar } from "../components/win/TitleBar";
 import { ComboboxField } from "../components/ComboboxField";
 import { SelectField } from "../components/SelectField";
@@ -1759,7 +1759,12 @@ function QuickTranslatePage() {
                           </p>
                         ) : result.text || result.isTranslating ? (
                           isMarkdownView && result.text ? (
-                            <MarkdownOutput text={result.text} isStreaming={Boolean(result.streamOutputActive)} />
+                            <LazyMarkdownOutput
+                              text={result.text}
+                              isStreaming={Boolean(result.streamOutputActive)}
+                              isLoading={result.isTranslating}
+                              loadingLabel={t("translate.translating")}
+                            />
                           ) : (
                             <TextLoading
                               text={result.text}

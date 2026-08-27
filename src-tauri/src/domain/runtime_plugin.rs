@@ -48,6 +48,14 @@ pub const PAGE_ID_MAX_LEN: usize = 64;
 pub const PAGE_ACTION_ID_MAX_LEN: usize = 64;
 pub const GRANT_NETWORK_MAX_ENTRIES: usize = 64;
 pub const GRANT_PAGE_MAX_ENTRIES: usize = 16;
+/// Maximum closed path-authority declarations on a service package.
+pub const PATH_AUTHORITY_MAX_COUNT: usize = 32;
+/// Maximum length of a declared relative path, prefix, or suffix.
+pub const DECLARED_RELATIVE_PATH_MAX_LEN: usize = 256;
+/// Maximum length of one Google-Cloud-style RPC path segment.
+pub const RPC_PATH_SEGMENT_MAX_LEN: usize = 128;
+/// Host auth-policy id meaning no token injection.
+pub const HOST_NONE_AUTH_POLICY_ID: &str = "host.none.v1";
 pub const GRANT_PAGE_MAX_ACTIONS: usize = 16;
 pub const ORIGINS_MAX_COUNT: usize = 8;
 pub const METHODS_MAX_COUNT: usize = 8;
@@ -141,24 +149,22 @@ pub fn capability_world(capability_id: &str) -> Option<&'static str> {
 
 /// Runtime executor kind bound to a plugin package/instance.
 ///
-/// `BundledRust` covers the current compiled-in handlers during the migration;
-/// `WasmComponent` is the default for external service plugins; `LegacyFrontendProvider`
-/// covers TypeScript LLM provider adapters pending runtime migration; `TrustedNativeWorker`
-/// is first-party only until OS-level containment exists (Phase 10).
+/// Package-only: `WasmComponent` is the default for external service plugins;
+/// `TrustedNativeWorker` is first-party only until OS-level containment exists (Phase 10).
+/// Legacy bundled/TypeScript-frontend kinds were removed with the unpublished
+/// package-only convergence and are rejected everywhere.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum RuntimeKind {
-  BundledRust,
   WasmComponent,
-  LegacyFrontendProvider,
   TrustedNativeWorker,
 }
 
 impl RuntimeKind {
   /// True when this kind is backed by an installable archive artifact that must be
-  /// declared in the signed file index.
+  /// declared in the signed file index. Package-only: every kind is package-backed.
   pub fn requires_archive_artifact(self) -> bool {
-    matches!(self, Self::WasmComponent | Self::TrustedNativeWorker)
+    true
   }
 }
 
@@ -723,9 +729,11 @@ impl HttpsOrigin {
   }
 }
 
-/// Runtime identity: either a compiled-in bundled handler (no package digest) or a signed
-/// installable package pinned to an exact SHA-256 digest. Bundled identities are not
-/// constrained by archive artifact rules; package identities are.
+/// Runtime identity bound to an execution principal.
+///
+/// `Bundled` is a package-less host-internal sentinel used for host migration execution and
+/// negative authorization tests. It is not an executable bundled service-plugin handler.
+/// Installable service-plugin execution must use `Package(PackageIdentity)`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeIdentity {
   Bundled,
@@ -1666,6 +1674,31 @@ pub struct NetworkEndpointRequest {
   pub instance_origin_config_field: Option<String>,
 }
 
+/// Closed relative-path authority form. Never regex, absolute URL, or guest-selected authority.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "form", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum DeclaredPathAuthority {
+  Exact { value: String },
+  BoundedPrefixSuffix { prefix: String, suffix: String },
+  InstanceConfiguredRelativePath { config_field: String },
+}
+
+/// One capability→endpoint→path authority declaration projected from a verified package.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CapabilityPathAuthorityDecl {
+  pub capability_id: String,
+  pub endpoint_id: String,
+  pub method: HttpMethod,
+  pub path: DeclaredPathAuthority,
+  #[serde(default, skip_serializing_if = "Vec::is_empty")]
+  pub allowed_query_names: Vec<String>,
+  #[serde(default, skip_serializing_if = "Vec::is_empty")]
+  pub allowed_header_names: Vec<String>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub auth_policy_id: Option<String>,
+}
+
 /// Optional custom page declaration. The host grants page/action authority separately
 /// through an instance-scoped execution grant-set entry (Phase 4).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1802,6 +1835,9 @@ pub struct PluginManifestV1 {
   pub credential_slots: Vec<CredentialSlotDecl>,
   #[serde(default)]
   pub permissions: PermissionRequests,
+  /// Closed capability/endpoint path authority. Empty preserves older packages.
+  #[serde(default, skip_serializing_if = "Vec::is_empty")]
+  pub path_authority: Vec<CapabilityPathAuthorityDecl>,
   #[serde(default)]
   pub ui: UiDeclaration,
   /// Optional provider runtime declaration (Phase 8). Requests capability/transport shape;
@@ -1936,6 +1972,72 @@ pub fn validate_kebab_strict(value: &str, max_len: usize, field: &str) -> Result
   }
   if value.starts_with('-') || value.ends_with('-') || value.contains("--") {
     return Err(format!("{field} must use single hyphens between alphanumeric segments"));
+  }
+  Ok(())
+}
+
+/// True when `relative_path` matches a bounded prefix/suffix with Google Cloud RPC segment rules.
+pub fn bounded_prefix_suffix_matches(prefix: &str, suffix: &str, relative_path: &str) -> bool {
+  if !relative_path.starts_with(prefix) || !relative_path.ends_with(suffix) {
+    return false;
+  }
+  let middle_end = relative_path.len().saturating_sub(suffix.len());
+  if middle_end < prefix.len() {
+    return false;
+  }
+  let middle = &relative_path[prefix.len()..middle_end];
+  if middle.is_empty() {
+    return false;
+  }
+  middle.split('/').all(rpc_path_segment_is_valid)
+}
+
+/// One RPC path segment: ASCII, no whitespace, slash, backslash, or `..`, length-bounded.
+pub fn rpc_path_segment_is_valid(segment: &str) -> bool {
+  validate_rpc_path_segment(segment).is_ok()
+}
+
+/// Validate one Google Cloud-style RPC path segment.
+pub fn validate_rpc_path_segment(segment: &str) -> Result<(), String> {
+  if segment.is_empty() {
+    return Err("RPC path segment must not be empty".into());
+  }
+  if segment.len() > RPC_PATH_SEGMENT_MAX_LEN {
+    return Err(format!(
+      "RPC path segment exceeds {RPC_PATH_SEGMENT_MAX_LEN} characters"
+    ));
+  }
+  if segment != segment.trim() {
+    return Err("RPC path segment must not have surrounding whitespace".into());
+  }
+  if !segment.is_ascii() {
+    return Err("RPC path segment must be ASCII".into());
+  }
+  if segment.contains('/') || segment.contains('\\') || segment.contains("..") || segment.contains(' ') {
+    return Err("RPC path segment contains invalid characters".into());
+  }
+  Ok(())
+}
+
+/// Validate a declared relative path/prefix/suffix: no scheme, traversal, or absolute form.
+pub fn validate_declared_relative_path(value: &str, field: &str) -> Result<(), String> {
+  if value.is_empty() {
+    return Err(format!("{field} is required"));
+  }
+  if value.len() > DECLARED_RELATIVE_PATH_MAX_LEN {
+    return Err(format!("{field} exceeds {DECLARED_RELATIVE_PATH_MAX_LEN} characters"));
+  }
+  if value != value.trim() {
+    return Err(format!("{field} must not have surrounding whitespace"));
+  }
+  if !value.is_ascii() {
+    return Err(format!("{field} must be ASCII"));
+  }
+  if value.starts_with('/') || value.starts_with('\\') || value.contains("://") {
+    return Err(format!("{field} must be a relative path without a scheme"));
+  }
+  if value.contains("..") || value.contains('\\') {
+    return Err(format!("{field} must not contain traversal or backslash"));
   }
   Ok(())
 }

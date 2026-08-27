@@ -38,12 +38,10 @@ impl InstanceRuntimeState {
   }
 }
 
-/// Parse a kebab-case runtime kind stored in SQLite.
+/// Parse a kebab-case runtime kind stored in SQLite. Package-only: rejects legacy kinds.
 pub fn parse_runtime_kind(value: &str) -> Result<RuntimeKind, String> {
   match value {
-    "bundled-rust" => Ok(RuntimeKind::BundledRust),
     "wasm-component" => Ok(RuntimeKind::WasmComponent),
-    "legacy-frontend-provider" => Ok(RuntimeKind::LegacyFrontendProvider),
     "trusted-native-worker" => Ok(RuntimeKind::TrustedNativeWorker),
     other => Err(format!("invalid runtime_kind: {other}")),
   }
@@ -71,17 +69,6 @@ pub struct InstanceRuntimeIdentity {
 }
 
 impl InstanceRuntimeIdentity {
-  pub fn bundled_active() -> Self {
-    Self {
-      runtime_kind: runtime_kind_as_str(RuntimeKind::BundledRust).to_string(),
-      package_digest: None,
-      execution_grant_set_revision: None,
-      runtime_state: InstanceRuntimeState::Active,
-      runtime_error_code: None,
-      runtime_error_message: None,
-    }
-  }
-
   pub fn wasm_active(package_digest: &str, grant_revision: GrantSetRevision) -> Result<Self, String> {
     let digest = PackageDigest::parse(package_digest)?;
     Ok(Self {
@@ -418,15 +405,7 @@ mod tests {
   use super::*;
 
   #[test]
-  fn bundled_identity_has_no_package_pin() {
-    let identity = InstanceRuntimeIdentity::bundled_active();
-    assert_eq!(identity.runtime_kind, "bundled-rust");
-    assert!(identity.package_digest.is_none());
-    assert!(identity.execution_grant_set_revision.is_none());
-  }
-
-  #[test]
-  fn wasm_identity_requires_digest_and_revision() {
+  fn wasm_identity_has_exact_package_pin() {
     let digest = "a".repeat(64);
     let identity = InstanceRuntimeIdentity::wasm_active(&digest, GrantSetRevision::INITIAL).unwrap();
     assert_eq!(identity.runtime_kind, "wasm-component");

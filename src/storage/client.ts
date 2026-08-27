@@ -34,7 +34,6 @@ import type {
   ApplyProviderRuntimeRollbackInput,
   ApplyProviderRuntimeInterfaceAttachInput,
   ApplyProviderRuntimeInterfaceRollbackInput,
-  ApplyProviderRuntimeUpgradeInput,
   PreviewProviderRuntimeInterfaceAttachInput,
   PreviewProviderRuntimeInterfaceRollbackInput,
   ProviderRuntimeCatalogEntryDto,
@@ -48,7 +47,6 @@ import type {
   ProviderRuntimeLifecycleResultDto,
   ProviderRuntimeRollbackPreviewDto,
   ProviderRuntimeSnapshotDto,
-  ProviderRuntimeUpgradePreviewDto,
   RegionScreenshotBackdrop,
   RegionScreenshotResult,
   RegionScreenshotSelection,
@@ -79,13 +77,6 @@ export async function setProviderEnabled(id: string, enabled: boolean): Promise<
 
 export async function deleteProviderInstance(id: string): Promise<void> {
   return runStorage(invokeEffect<void>("delete_provider_instance", { id }));
-}
-
-/** Retirement-only safe provider deletion; the backend refuses any dependent provider. */
-export async function deleteRetiredLegacyProvider(
-  input: import("./types").RetirementDeleteProviderInput,
-): Promise<void> {
-  return runStorage(invokeEffect<void>("delete_retired_legacy_provider", { input }));
 }
 
 export async function reorderProviderInstances(ids: string[]): Promise<void> {
@@ -251,24 +242,6 @@ export async function previewIntegrationRuntimeUpgrade(
 }
 export async function listRuntimeProviderCatalog(): Promise<ProviderRuntimeCatalogEntryDto[]> {
   return runStorage(invokeEffect<ProviderRuntimeCatalogEntryDto[]>("list_runtime_provider_catalog", {}));
-}
-
-export async function previewProviderRuntimeUpgrade(
-  providerId: string,
-  targetPackageDigest: string,
-): Promise<ProviderRuntimeUpgradePreviewDto> {
-  return runStorage(
-    invokeEffect<ProviderRuntimeUpgradePreviewDto>("preview_provider_runtime_upgrade", {
-      providerId,
-      targetPackageDigest,
-    }),
-  );
-}
-
-export async function applyProviderRuntimeUpgrade(
-  input: ApplyProviderRuntimeUpgradeInput,
-): Promise<ProviderRuntimeLifecycleResultDto> {
-  return runStorage(invokeEffect<ProviderRuntimeLifecycleResultDto>("apply_provider_runtime_upgrade", { input }));
 }
 
 export async function previewProviderRuntimeRollback(providerId: string): Promise<ProviderRuntimeRollbackPreviewDto> {
@@ -463,11 +436,7 @@ export async function confirmDefaultRuntimeAuthority(
   return runStorage(invokeEffect<void>("confirm_default_runtime_authority", { input }));
 }
 
-/** Read-only Phase 12 legacy runtime retirement inventory. */
-export async function listLegacyRuntimeInventory(): Promise<import("./types").LegacyRuntimeInventoryDto> {
-  return runStorage(invokeEffect<import("./types").LegacyRuntimeInventoryDto>("list_legacy_runtime_inventory"));
-}
-
+/** Read-only package version snapshots (rollback). */
 export async function listPluginPublishers(): Promise<PluginPublisherDto[]> {
   return runStorage(invokeEffect<PluginPublisherDto[]>("list_plugin_publishers"));
 }
@@ -511,10 +480,10 @@ export async function getPluginVersionDependencies(packageDigest: string): Promi
 }
 
 /**
- * Backend OCR recognition (`recognize_ocr`).
- * Dispatches Baidu native and plugin_capability (Vision); AI OCR stays on the frontend.
+ * Backend plugin-capability OCR recognition (`recognize_ocr`).
+ * Dispatches installed package capabilities (e.g. Vision); AI OCR stays on the frontend.
  */
-export async function recognizeBaiduOcr(input: OcrRecognizeInput): Promise<OcrRecognizeResult> {
+export async function recognizePluginOcr(input: OcrRecognizeInput): Promise<OcrRecognizeResult> {
   return runStorage(invokeEffect<OcrRecognizeResult>("recognize_ocr", { input }));
 }
 

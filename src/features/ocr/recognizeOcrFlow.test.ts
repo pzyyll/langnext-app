@@ -1,5 +1,5 @@
-// ABOUTME: Unit tests for three-way OCR recognition dispatch (baidu/plugin/ai).
-// ABOUTME: Mocks storage client; asserts native IPC for baidu+plugin and AI path isolation.
+// ABOUTME: Unit tests for OCR recognition dispatch (plugin capability / AI).
+// ABOUTME: Mocks storage client; asserts package IPC for plugin OCR and AI path isolation.
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import type { OcrServiceDto, ProviderInstanceDto, ProviderModelDto } from "../../storage/types";
 
@@ -12,9 +12,11 @@ const listAllProviderModelsMock = mock(async (): Promise<ProviderModelDto[]> => 
 const listProviderInstancesMock = mock(async (): Promise<ProviderInstanceDto[]> => []);
 const listRuntimeProviderCatalogMock = mock(async () => []);
 const runProviderRuntimeChatMock = mock(async () => null);
-const recognizeBaiduOcrMock = mock(async () => ({ text: "native", ocrServiceId: "svc" }));
+const recognizePluginOcrMock = mock(async () => ({ text: "native", ocrServiceId: "svc" }));
+const actualStorageClient = await import("../../storage/client");
 
 mock.module("../../storage/client", () => ({
+  ...actualStorageClient,
   getAppSettings: () => getAppSettingsMock(),
   getOcrService: (id: string) => getOcrServiceMock(id),
   listAllProviderModels: () => listAllProviderModelsMock(),
@@ -23,7 +25,7 @@ mock.module("../../storage/client", () => ({
   listRuntimeProviderModels: async () => ({ models: [] }),
   runProviderRuntimeChat: (input: unknown, onEvent?: unknown) => runProviderRuntimeChatMock(input, onEvent),
   cancelProviderRuntime: async () => false,
-  recognizeBaiduOcr: (input: unknown) => recognizeBaiduOcrMock(input),
+  recognizePluginOcr: (input: unknown) => recognizePluginOcrMock(input),
 }));
 
 const normalizeProviderErrorMock = mock((error: unknown) => ({
@@ -36,21 +38,6 @@ mock.module("../providers/errors", () => ({
   DEFAULT_DETECT_MAX_TOKENS: 256,
 }));
 
-const providerFetchMock = mock(async () => ({ status: 200, body: "{}" }));
-mock.module("../providers/providerFetch", () => ({
-  providerFetch: (input: unknown) => providerFetchMock(input),
-  providerFetchStream: async () => undefined,
-}));
-
-const requireProviderPluginMock = mock(() => {
-  throw new Error("plugin not expected");
-});
-const isModelApiTypeExecutableMock = mock(() => true);
-mock.module("../providers/registry", () => ({
-  requireProviderPlugin: (id: string) => requireProviderPluginMock(id),
-  isModelApiTypeExecutable: (input: unknown) => isModelApiTypeExecutableMock(input),
-}));
-
 mock.module("../translate/newClientRequestId", () => ({
   newClientRequestId: () => "ocr-req-1",
 }));
@@ -60,13 +47,10 @@ const { recognizeOcrFlow } = await import("./recognizeOcrFlow");
 function baseService(overrides: Partial<OcrServiceDto>): OcrServiceDto {
   return {
     id: "ocr-1",
-    providerType: "baidu",
+    providerType: "ai",
     displayName: "Service",
     enabled: true,
     sortOrder: 0,
-    baiduAction: "accurate",
-    hasApiKey: true,
-    hasSecretKey: true,
     providerModelId: null,
     temperature: null,
     defaultPromptTemplateId: null,
@@ -87,34 +71,12 @@ describe("recognizeOcrFlow", () => {
     getOcrServiceMock.mockReset();
     listAllProviderModelsMock.mockReset();
     listProviderInstancesMock.mockReset();
-    recognizeBaiduOcrMock.mockReset();
-    recognizeBaiduOcrMock.mockResolvedValue({ text: "native", ocrServiceId: "ocr-1" });
-    providerFetchMock.mockReset();
-    requireProviderPluginMock.mockReset();
-    requireProviderPluginMock.mockImplementation(() => {
-      throw new Error("plugin not expected");
-    });
+    recognizePluginOcrMock.mockReset();
+    recognizePluginOcrMock.mockResolvedValue({ text: "native", ocrServiceId: "ocr-1" });
   });
 
   test("rejects empty png payload", async () => {
     await expect(recognizeOcrFlow({ pngBase64: "  " })).rejects.toThrow("png_base64 must not be empty");
-  });
-
-  test("baidu services call native recognize_ocr IPC helper", async () => {
-    getOcrServiceMock.mockResolvedValueOnce(baseService({ providerType: "baidu", id: "baidu-1" }));
-    const result = await recognizeOcrFlow({ pngBase64: "abc", ocrServiceId: "baidu-1" });
-    expect(result).toEqual({ text: "native", ocrServiceId: "ocr-1" });
-    expect(recognizeBaiduOcrMock).toHaveBeenCalledTimes(1);
-    const baiduArgs = recognizeBaiduOcrMock.mock.calls[0]?.[0] as {
-      pngBase64: string;
-      ocrServiceId: string;
-      requestId?: string;
-    };
-    expect(baiduArgs.pngBase64).toBe("abc");
-    expect(baiduArgs.ocrServiceId).toBe("baidu-1");
-    expect(typeof baiduArgs.requestId).toBe("string");
-    expect(baiduArgs.requestId?.length).toBeGreaterThan(0);
-    expect(listAllProviderModelsMock).not.toHaveBeenCalled();
   });
 
   test("plugin_capability services also use native recognize_ocr IPC", async () => {
@@ -122,9 +84,6 @@ describe("recognizeOcrFlow", () => {
       baseService({
         providerType: "plugin_capability",
         id: "vision-1",
-        baiduAction: null,
-        hasApiKey: false,
-        hasSecretKey: false,
         integrationInstanceId: "int-1",
         ocrCapabilityId: "ocr.image@1",
         capabilityPreferencesVersion: 1,
@@ -132,7 +91,7 @@ describe("recognizeOcrFlow", () => {
       }),
     );
     await recognizeOcrFlow({ pngBase64: "xyz", ocrServiceId: "vision-1", requestId: "ocr-req-1" });
-    expect(recognizeBaiduOcrMock).toHaveBeenCalledWith({
+    expect(recognizePluginOcrMock).toHaveBeenCalledWith({
       pngBase64: "xyz",
       ocrServiceId: "vision-1",
       requestId: "ocr-req-1",
@@ -145,9 +104,6 @@ describe("recognizeOcrFlow", () => {
       baseService({
         providerType: "ai",
         id: "ai-1",
-        baiduAction: null,
-        hasApiKey: false,
-        hasSecretKey: false,
         providerModelId: "model-1",
         defaultPromptTemplateId: "tpl-1",
         promptTemplates: [
@@ -163,7 +119,7 @@ describe("recognizeOcrFlow", () => {
     listAllProviderModelsMock.mockResolvedValueOnce([]);
     listProviderInstancesMock.mockResolvedValueOnce([]);
     await expect(recognizeOcrFlow({ pngBase64: "img", ocrServiceId: "ai-1" })).rejects.toThrow();
-    expect(recognizeBaiduOcrMock).not.toHaveBeenCalled();
+    expect(recognizePluginOcrMock).not.toHaveBeenCalled();
     expect(listAllProviderModelsMock).toHaveBeenCalled();
   });
 });
@@ -287,7 +243,7 @@ describe("runtime_executor_ai_ocr_uses_host_blob_path_without_legacy_http", () =
 
     const result = await recognizeOcrFlow({ pngBase64: FIXED_PNG, ocrServiceId: "ai-1" });
     expect(result).toEqual({ text: "Hello OCR", ocrServiceId: "ai-1" });
-    expect(providerFetchMock).not.toHaveBeenCalled();
+    expect(runProviderRuntimeChatMock).toHaveBeenCalled();
     const request = chatInput?.request as {
       model: string;
       messages: Array<{ role: string; content: string }>;
@@ -303,7 +259,7 @@ describe("runtime_executor_ai_ocr_uses_host_blob_path_without_legacy_http", () =
     expect(request.images[0]?.length).toBeGreaterThan(0);
     expect(request.preferences).toEqual({ stream: false, temperature: 0.2, maxTokens: 32768, thinking: false });
     expect(chatInput?.providerModelId).toBe("model-1");
-    expect(recognizeBaiduOcrMock).not.toHaveBeenCalled();
+    expect(recognizePluginOcrMock).not.toHaveBeenCalled();
   });
 
   test("a synced OCR model without an override recognizes through its source interface", async () => {
@@ -356,8 +312,7 @@ describe("runtime_executor_ai_ocr_uses_host_blob_path_without_legacy_http", () =
 
     const result = await recognizeOcrFlow({ pngBase64: FIXED_PNG, ocrServiceId: "ai-1" });
     expect(result).toEqual({ text: "Hello OCR", ocrServiceId: "ai-1" });
-    expect(providerFetchMock).not.toHaveBeenCalled();
-    expect(requireProviderPluginMock).not.toHaveBeenCalled();
+    expect(runProviderRuntimeChatMock).toHaveBeenCalled();
   });
 
   test("runtime image/guest errors normalize without leaking PNG content and never retry legacy", async () => {
@@ -373,7 +328,7 @@ describe("runtime_executor_ai_ocr_uses_host_blob_path_without_legacy_http", () =
     );
     expect((rejection as Error).message).toBe("normalized");
     expect((rejection as Error).message).not.toContain(FIXED_PNG);
-    expect(providerFetchMock).not.toHaveBeenCalled();
+    expect(runProviderRuntimeChatMock).toHaveBeenCalled();
     expect(runProviderRuntimeChatMock).toHaveBeenCalledTimes(1);
   });
 });

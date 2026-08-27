@@ -1,7 +1,6 @@
 // ABOUTME: Sanitized Provider CRUD Tauri commands.
 // ABOUTME: Dispatches blocking storage work and maps failures to IpcError.
 use crate::cmds::runtime::run_blocking;
-use crate::domain::legacy_runtime_inventory::RetirementDeleteProviderInput;
 use crate::domain::provider::{ProviderInstanceDto, ProviderInstanceWrite};
 use crate::domain::runtime_provider::ProviderRuntimeState;
 use crate::error::IpcError;
@@ -62,23 +61,6 @@ pub async fn delete_provider_instance(app: AppHandle, state: State<'_, AppState>
   run_blocking("delete_provider_instance", move || providers.delete(id)).await?;
   emit_data_changed(&app, PROVIDERS_CHANGED);
   emit_data_changed(&app, TRANSLATION_PROFILES_CHANGED);
-  Ok(())
-}
-
-/// Retirement-only safe provider deletion. The inventory binding token is the CAS authority;
-/// the operation refuses when models, profile references, or unrelated bindings exist.
-#[tauri::command]
-pub async fn delete_retired_legacy_provider(
-  app: AppHandle,
-  state: State<'_, AppState>,
-  input: RetirementDeleteProviderInput,
-) -> Result<(), IpcError> {
-  let providers = state.providers.clone();
-  run_blocking("delete_retired_legacy_provider", move || {
-    providers.delete_retired_legacy_binding(input)
-  })
-  .await?;
-  emit_data_changed(&app, PROVIDERS_CHANGED);
   Ok(())
 }
 

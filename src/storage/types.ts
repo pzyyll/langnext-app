@@ -35,8 +35,8 @@ export type CredentialUpdate = { action: "keep" } | { action: "replace"; value: 
 
 export type ProxyCredentialUpdate = { action: "keep" } | { action: "replace"; value: string } | { action: "clear" };
 
-/** Host-owned provider runtime executor kind (Phase 8). */
-export type ProviderRuntimeKind = "legacy-frontend-provider" | "wasm-component";
+/** Host-owned provider runtime executor kind (Phase 8). Package-only: Wasm components only. */
+export type ProviderRuntimeKind = "wasm-component";
 
 /** Host-owned provider runtime binding state. */
 export type ProviderRuntimeState = "active" | "pending_activation" | "unavailable";
@@ -283,9 +283,7 @@ export interface PromptTemplate {
   userTemplate: string;
 }
 
-export type OcrProviderType = "baidu" | "ai" | "plugin_capability";
-
-export type BaiduOcrAction = "accurate" | "accurate_basic" | "general" | "general_basic";
+export type OcrProviderType = "ai" | "plugin_capability";
 
 /** Google Vision OCR operation for ocr.image@1 preferences v1. */
 export type OcrImageOperation = "document_text_detection" | "text_detection";
@@ -311,23 +309,19 @@ export interface OcrServiceDto {
   displayName: string;
   enabled: boolean;
   sortOrder: number;
-  /** Baidu only; null for ai / plugin. */
-  baiduAction: BaiduOcrAction | null;
-  hasApiKey: boolean;
-  hasSecretKey: boolean;
-  /** AI only; null for baidu / plugin. */
+  /** AI only; null for plugin. */
   providerModelId: string | null;
   temperature: number | null;
   defaultPromptTemplateId: string | null;
-  /** Empty for baidu / plugin. */
+  /** Empty for plugin. */
   promptTemplates: OcrPromptTemplate[];
-  /** Plugin only; null for baidu / ai. */
+  /** Plugin only; null for ai. */
   integrationInstanceId?: string | null;
-  /** Plugin only; null for baidu / ai. */
+  /** Plugin only; null for ai. */
   ocrCapabilityId?: string | null;
-  /** Plugin only; null for baidu / ai. */
+  /** Plugin only; null for ai. */
   capabilityPreferencesVersion?: number | null;
-  /** Plugin only; null for baidu / ai. */
+  /** Plugin only; null for ai. */
   capabilityPreferences?: OcrCapabilityPreferencesV1 | Record<string, unknown> | null;
   createdAt: string;
   updatedAt: string;
@@ -338,15 +332,11 @@ export interface OcrServiceWrite {
   providerType: OcrProviderType;
   displayName: string;
   enabled: boolean;
-  /** Baidu required on baidu writes. */
-  baiduAction?: BaiduOcrAction | null;
-  apiKey?: CredentialUpdate;
-  secretKey?: CredentialUpdate;
   /** AI required on ai writes. */
   providerModelId?: string | null;
   temperature?: number | null;
   defaultPromptTemplateId?: string | null;
-  /** Full ordered list; required for ai (≥1). Empty for baidu / plugin. */
+  /** Full ordered list; required for ai (≥1). Empty for plugin. */
   promptTemplates?: OcrPromptTemplate[];
   /** Plugin required on plugin writes. */
   integrationInstanceId?: string | null;
@@ -594,7 +584,7 @@ export interface RuntimeIdentityDto {
   runtimeErrorMessage?: string | null;
 }
 
-/** Exact runtime requirement carried in export format v7. */
+/** Exact runtime requirement carried in export format v8. */
 export interface RuntimeRequirementExport {
   pluginId: string;
   pluginVersion: string;
@@ -787,7 +777,9 @@ export interface IntegrationValidationResult {
 export type PublisherSource = "vendor" | "user_approved";
 
 /** Publisher trust state returned by package preview. */
-export type PublisherTrustState = "trusted_vendor" | "trusted_user" | "unknown" | "revoked" | "disabled";
+export type PublisherTrustState = "trusted_vendor" | "trusted_user" | "unknown" | "revoked" | "disabled" | "unsigned";
+
+export type PackageSignatureStatus = "signed" | "unsigned";
 
 export interface PluginPublisherDto {
   keyId: string;
@@ -814,7 +806,12 @@ export interface PluginPackagePreviewDto {
   publisherKeyId: string;
   publisherFingerprint: string;
   publisherTrust: PublisherTrustState;
+  claimedPublisherKeyId?: string;
+  claimedPublisherFingerprint?: string;
   requiresPublisherApproval: boolean;
+  signatureStatus?: PackageSignatureStatus;
+  requiresUnsignedRiskAcknowledgement?: boolean;
+  requiresNativeExecutionRiskAcknowledgement?: boolean;
   /** Auto-resolved when the package ships `publisher.pub`; forward as-is to approve. */
   resolvedPublisherPublicKeyHex?: string | null;
   runtimeKind: string;
@@ -834,6 +831,8 @@ export interface ApprovePluginPackageInput {
   approvePublisher?: boolean;
   publisherPublicKeyHex?: string | null;
   acknowledgePermissions: boolean;
+  acknowledgeUnsignedPackageRisk?: boolean;
+  acknowledgeNativeExecutionRisk?: boolean;
 }
 
 /** Authorization status of a catalog default for package-first creation. */
@@ -880,12 +879,15 @@ export interface DefaultPackageActivationPreviewDto {
   authPolicies: string[];
   resourceLimits?: DefaultAuthorityResourceLimitsDto | null;
   requiresInstanceConfirmationForDynamicOrigins: boolean;
+  signatureStatus?: PackageSignatureStatus;
+  requiresUnsignedDefaultRiskAcknowledgement?: boolean;
   expiresAt: string;
 }
 
 export interface AuthorizeDefaultPluginPackageInput {
   previewId: string;
   acknowledgeFutureInstanceAuthority: boolean;
+  acknowledgeUnsignedDefaultRisk?: boolean;
 }
 
 export interface RetryDefaultRuntimeActivationInput {
@@ -931,65 +933,16 @@ export interface DefaultRuntimeActivationIntentDto {
   updatedAt: string;
 }
 
-/** Read-only Phase 12 retirement inventory entry. */
-export interface LegacyRuntimeInventoryEntryDto {
-  executorId: string;
-  runtimeKind: string;
-  enabledLegacyRowCount: number;
-  disabledLegacyRowCount: number;
-  dependentRowCount: number;
-  replacementInstalledCount: number;
-  defaultPackageDigest?: string | null;
-  defaultAuthorizationStatus: string;
-  packageFirstCreateReady: boolean;
-  pendingActivationCount: number;
-  unavailableActivationCount: number;
-  legacyCreateStillPossible: boolean;
-  blockerCodes: string[];
-  retirementReady: boolean;
-  /** Row-level unresolved legacy identities and remediation action readiness. */
-  unresolvedRows: LegacyRuntimeUnresolvedRowDto[];
-}
-
-/** One unresolved legacy row with sanitized identity and action readiness. */
-export interface LegacyRuntimeUnresolvedRowDto {
-  subjectKind: "integration_instance" | "provider_binding";
-  subjectId: string;
-  /** Provider rows carry the binding adapter id; integration rows omit it. */
-  adapterId?: string | null;
-  displayName: string;
-  enabled: boolean;
-  /** Live dependent resources (profiles/OCR/speech for integrations; models for providers). */
-  dependencyCount: number;
-  /** CAS update token for enabled/disabled transitions; never a secret. */
-  updateToken: string;
-  /** Exact authorized replacement package digest when migration is possible. */
-  replacementPackageDigest?: string | null;
-  /** Migration requires an exact authorized replacement package for the executor. */
-  migrateAvailable: boolean;
-  /** Disable is meaningful only for currently enabled rows. */
-  disableAvailable: boolean;
-  /** Delete stays visible with dependencies; blocked rows report `dependencyCount`. */
-  deleteAvailable: boolean;
-}
-
-/** Retirement-only safe provider deletion input (CAS by the inventory binding token). */
-export interface RetirementDeleteProviderInput {
-  providerId: string;
-  adapterId: string;
-  updateToken: string;
-}
-
-export interface LegacyRuntimeInventoryDto {
-  entries: LegacyRuntimeInventoryEntryDto[];
-}
-
 export interface InstalledPluginVersionDto {
   packageDigest: string;
   pluginId: string;
   version: string;
   publisherKeyId: string;
   publisherFingerprint: string;
+  signatureStatus?: PackageSignatureStatus;
+  claimedPublisherKeyId?: string;
+  claimedPublisherFingerprint?: string;
+  nativeExecutionRiskAcknowledged?: boolean;
   runtimeKind: string;
   permissionRequestDigest: string;
   contentAvailable: boolean;
@@ -1308,7 +1261,7 @@ export interface AppSettingsUpdate {
 export interface ProviderRuntimeRequirementExport {
   /** Persisted effective API type this requirement names (v8+); older docs omit it. */
   adapterId?: string | null;
-  runtimeKind: "legacy-frontend-provider" | "wasm-component";
+  runtimeKind: "wasm-component";
   packageDigest?: string | null;
   pluginId?: string | null;
   pluginVersion?: string | null;
@@ -1326,13 +1279,11 @@ export interface ProviderExport {
   baseUrl?: string | null;
   baseUrlSource?: BaseUrlSource | null;
   authScheme?: AuthSchemeV1 | null;
-  /** Legacy v2 field accepted on import only. */
   baseUrlOverride?: string | null;
   credentialKind: CredentialKind;
   enabled: boolean;
   proxyMode: ProxyMode;
   insecureHttpConfirmedAt: string | null;
-  /** v7 singular requirement accepted on import; v8 exports never write it. */
   runtime?: ProviderRuntimeRequirementExport | null;
   /** Ordered adapter-keyed runtime interface requirements (export format v8). */
   runtimeBindings?: ProviderRuntimeRequirementExport[];
@@ -1350,7 +1301,7 @@ export interface IntegrationInstanceExport {
   configJson: string;
   configSchemaVersion: number;
   healthStatus: string;
-  /** Exact runtime requirement (export format v7+). */
+  /** Exact package-backed runtime requirement (export format v8). */
   runtime?: RuntimeRequirementExport | null;
   createdAt: string;
   updatedAt: string;
@@ -1363,7 +1314,6 @@ export interface OcrServiceExport {
   displayName: string;
   enabled: boolean;
   sortOrder: number;
-  baiduAction?: BaiduOcrAction | null;
   providerModelId?: string | null;
   temperature?: number | null;
   defaultPromptTemplateId?: string | null;
@@ -1485,8 +1435,6 @@ export interface ImportPreview {
   requiresAuthentication: string[];
   /** Integration instance IDs that need credential re-entry after import. */
   integrationRequiresAuthentication?: string[];
-  /** Baidu OCR service IDs that need API/secret re-entry after import. */
-  ocrRequiresAuthentication?: string[];
   proxyRequiresAuthentication: boolean;
   defaultProfileCleared: boolean;
   /** Opaque bounded expiring preview session id; empty when invalid or absent. */
@@ -1598,7 +1546,7 @@ const _providerDtoFixture = {
   modelsSyncErrorCode: null,
   runtime: {
     adapterId: "openai-compatible",
-    runtimeKind: "legacy-frontend-provider",
+    runtimeKind: "wasm-component",
     packageDigest: null,
     grantSetRevision: null,
     state: "active",
@@ -1609,7 +1557,7 @@ const _providerDtoFixture = {
   runtimeBindings: [
     {
       adapterId: "openai-compatible",
-      runtimeKind: "legacy-frontend-provider",
+      runtimeKind: "wasm-component",
       packageDigest: null,
       grantSetRevision: null,
       state: "active",
@@ -1780,24 +1728,6 @@ export interface ProviderRuntimeCatalogEntryDto {
   detection: ProviderRuntimeDetectionDto | null;
 }
 
-/** Upgrade preview returned by the runtime lifecycle (no secrets/package bytes/grants). */
-export interface ProviderRuntimeUpgradePreviewDto {
-  previewId: string;
-  providerId: string;
-  source: ProviderRuntimeBindingDto;
-  target: ProviderRuntimeBindingDto;
-  targetPluginVersion: string;
-  targetPublisher: { keyId: string; keyFingerprint: string };
-  legacyAliases: string[];
-  requiresPermissionApproval: boolean;
-  expiresAt: string;
-}
-
-export interface ApplyProviderRuntimeUpgradeInput {
-  previewId: string;
-  acknowledgePermissions: boolean;
-}
-
 /** Rollback preview showing the stored prior host-owned identity. */
 export interface ProviderRuntimeRollbackPreviewDto {
   previewId: string;
@@ -1812,7 +1742,7 @@ export interface ApplyProviderRuntimeRollbackInput {
   previewId: string;
 }
 
-/** Result of apply provider runtime upgrade/rollback. */
+/** Result of apply provider runtime rollback. */
 export interface ProviderRuntimeLifecycleResultDto {
   providerId: string;
   runtime: ProviderRuntimeBindingDto;

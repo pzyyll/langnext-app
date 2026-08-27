@@ -4,3 +4,7 @@
 *.wasm binary
 runtime-plugins/conformance/fixtures/packages/**/*.sig binary
 runtime-plugins/conformance/fixtures/packages/**/*.lnplugin binary
+
+# wasm_runtime cache module keeps CRLF in the index from an earlier migration; pin the worktree
+# and future commits to LF without a repository-wide EOL rule.
+src-tauri/src/services/wasm_runtime/cache.rs text eol=lf

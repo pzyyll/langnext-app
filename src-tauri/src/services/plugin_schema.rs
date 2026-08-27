@@ -751,6 +751,50 @@ fn is_empty_value(value: &Value) -> bool {
   }
 }
 
+/// HTTPS origin + relative path extracted from a host-validated instance URL.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NormalizedHttpsEndpointUrl {
+  pub origin: String,
+  pub relative_path: String,
+  pub canonical_url: String,
+}
+
+/// Normalize an instance-configured HTTPS URL. Rejects userinfo, fragments, and non-https schemes.
+pub fn normalize_https_endpoint_url(raw: &str) -> Result<NormalizedHttpsEndpointUrl, String> {
+  let trimmed = raw.trim();
+  if trimmed.is_empty() {
+    return Err("endpoint URL is required".into());
+  }
+  let parsed = url::Url::parse(trimmed).map_err(|err| format!("invalid endpoint URL: {err}"))?;
+  if parsed.scheme() != "https" {
+    return Err("endpoint URL must use https".into());
+  }
+  if !parsed.username().is_empty() || parsed.password().is_some() {
+    return Err("endpoint URL must not include userinfo".into());
+  }
+  if parsed.fragment().is_some() {
+    return Err("endpoint URL must not include a fragment".into());
+  }
+  if parsed.host_str().is_none() {
+    return Err("endpoint URL host is required".into());
+  }
+  let origin = parsed.origin().ascii_serialization();
+  let relative_path = parsed.path().trim_start_matches('/').to_string();
+  if relative_path.contains("..") {
+    return Err("endpoint URL path must not contain traversal".into());
+  }
+  let canonical_url = if relative_path.is_empty() {
+    origin.clone()
+  } else {
+    format!("{origin}/{relative_path}")
+  };
+  Ok(NormalizedHttpsEndpointUrl {
+    origin,
+    relative_path,
+    canonical_url,
+  })
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -799,13 +843,18 @@ mod tests {
         key_fingerprint: "0".repeat(64),
       },
       runtime: RuntimeDescriptor {
-        kind: RuntimeKind::BundledRust,
-        artifact: None,
+        kind: RuntimeKind::WasmComponent,
+        artifact: Some("artifacts/plugin.wasm".into()),
         native_protocol_version: None,
         native_dependencies: None,
       },
       targets: vec![],
-      files: vec![],
+      files: vec![crate::domain::runtime_plugin::PluginFileEntry {
+        path: "artifacts/plugin.wasm".into(),
+        role: crate::domain::runtime_plugin::FileRole::RuntimeArtifact,
+        bytes: 1024,
+        sha256: "0".repeat(64),
+      }],
       capabilities: vec![],
       configuration_schema: None,
       config_schema_version: None,
@@ -819,6 +868,7 @@ mod tests {
         .collect(),
       permissions: PermissionRequests::default(),
       ui: UiDeclaration::default(),
+      path_authority: vec![],
       provider_runtime: None,
       model_resources: None,
     }

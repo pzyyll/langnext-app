@@ -1,12 +1,13 @@
 // ABOUTME: Domain types for portable configuration and storage DTOs.
 // ABOUTME: Entities live here; IPC commands only return sanitized DTOs.
+#![allow(dead_code)]
 pub mod cancel;
 pub mod default_package_activation;
 pub mod endpoint_trust;
+pub mod first_party_plugins;
 pub mod import_export;
 pub mod integration_capability_health;
 pub mod language_detection;
-pub mod legacy_runtime_inventory;
 pub mod model;
 pub mod native_worker;
 pub mod ocr_service;

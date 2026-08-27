@@ -80,16 +80,19 @@ fn setup() -> (
   db.initialize().unwrap();
   let packages =
     PluginPackageService::with_vendor_roots(db.clone(), dir.path().to_path_buf(), vec![fixture_vendor_public_key()]);
-  let mut registry = ServiceIntegrationRegistry::bundled().unwrap();
+  let mut registry = ServiceIntegrationRegistry::empty();
   registry.register_test_manifest(conformance_manifest(PLUGIN_ID, TRANSLATE_CAP));
   let registry = Arc::new(registry);
   let wasm = Arc::new(WasmRuntime::new().unwrap());
-  let tokens = Arc::new(TokenGrantService::new(Arc::new(
-    crate::services::google_service_account::GoogleServiceAccountExchanger::new(
-      db.clone(),
-      Arc::new(crate::credentials::MemoryCredentialVault::default()),
-    ),
-  )));
+  let tokens = Arc::new(
+    TokenGrantService::new(vec![Arc::new(
+      crate::services::google_service_account::GoogleServiceAccountExchanger::new(
+        db.clone(),
+        Arc::new(crate::credentials::MemoryCredentialVault::default()),
+      ),
+    )])
+    .unwrap(),
+  );
   let lifecycle = RuntimeLifecycleService::new(db.clone(), packages.clone(), registry).with_runtime(wasm, tokens);
   (dir, db, packages, lifecycle)
 }
@@ -203,6 +206,7 @@ fn build_pkg(version: &str, extra: Option<&str>) -> (Vec<u8>, String) {
       auth_policies: vec!["host.none.v1".into()],
     },
     ui: Default::default(),
+    path_authority: vec![],
     provider_runtime: None,
     model_resources: None,
   };
@@ -242,6 +246,8 @@ fn install(packages: &PluginPackageService, dir: &std::path::Path, bytes: &[u8],
       approve_publisher: false,
       publisher_public_key_hex: None,
       acknowledge_permissions: true,
+      acknowledge_unsigned_package_risk: false,
+      acknowledge_native_execution_risk: false,
     })
     .unwrap();
   let digest = result.version.package_digest;
@@ -270,10 +276,10 @@ fn seed_instance(db: &Database) -> Uuid {
         health_status: IntegrationHealthStatus::Ready,
         last_validated_at: None,
         last_error_code: None,
-        runtime_kind: "bundled-rust".into(),
-        package_digest: None,
+        runtime_kind: "wasm-component".into(),
+        package_digest: Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into()),
         execution_grant_set_revision: None,
-        runtime_state: "active".into(),
+        runtime_state: "pending_activation".into(),
         runtime_error_code: None,
         runtime_error_message: None,
         runtime_requirement_json: None,
@@ -322,9 +328,6 @@ fn seed_prefs(db: &Database, instance_id: Uuid) -> (Uuid, Uuid, Uuid) {
         display_name: "Pref OCR".into(),
         enabled: true,
         sort_order: 0,
-        baidu_action: None,
-        api_key_ref: None,
-        secret_key_ref: None,
         provider_model_id: None,
         temperature: None,
         default_prompt_template_id: None,
@@ -905,18 +908,11 @@ fn runtime_invocation_recheck_rejects_publisher_revoke() {
   let (profile_id, _, _) = seed_prefs(&db, id);
   activate(&lifecycle, id, &d1);
   // Build capabilities with router like production.
-  let registry =
-    Arc::new(crate::services::service_integration_registry::ServiceIntegrationRegistry::bundled().unwrap());
-  let handlers = Arc::new(crate::services::service_capabilities::ServiceCapabilityRegistry::new());
+  let registry = Arc::new(crate::services::service_integration_registry::ServiceIntegrationRegistry::empty());
   let wasm = Arc::new(crate::services::wasm_runtime::WasmRuntime::new().unwrap());
-  let router = crate::services::runtime_router::RuntimeRouter::new(
-    db.clone(),
-    registry.clone(),
-    handlers.clone(),
-    packages.clone(),
-    wasm.clone(),
-  );
-  let caps = crate::services::service_capabilities::ServiceCapabilityService::new(db.clone(), registry, handlers)
+  let router =
+    crate::services::runtime_router::RuntimeRouter::new(db.clone(), registry.clone(), packages.clone(), wasm.clone());
+  let caps = crate::services::service_capabilities::ServiceCapabilityService::new(db.clone(), registry)
     .with_router(router, wasm);
   let snap = caps
     .load_profile_invocation_snapshot(
@@ -1202,17 +1198,11 @@ fn runtime_grant_canonical_bind_permission_digest_mismatch_fails_closed() {
   let id = seed_instance(&db);
   let (profile_id, _, _) = seed_prefs(&db, id);
   activate(&lifecycle, id, &d1);
-  let registry = Arc::new(ServiceIntegrationRegistry::bundled().unwrap());
-  let handlers = Arc::new(crate::services::service_capabilities::ServiceCapabilityRegistry::new());
+  let registry = Arc::new(ServiceIntegrationRegistry::empty());
   let wasm = Arc::new(WasmRuntime::new().unwrap());
-  let router = crate::services::runtime_router::RuntimeRouter::new(
-    db.clone(),
-    registry.clone(),
-    handlers.clone(),
-    packages.clone(),
-    wasm.clone(),
-  );
-  let caps = crate::services::service_capabilities::ServiceCapabilityService::new(db.clone(), registry, handlers)
+  let router =
+    crate::services::runtime_router::RuntimeRouter::new(db.clone(), registry.clone(), packages.clone(), wasm.clone());
+  let caps = crate::services::service_capabilities::ServiceCapabilityService::new(db.clone(), registry)
     .with_router(router, wasm);
   let snap = caps
     .load_profile_invocation_snapshot(
@@ -1263,17 +1253,11 @@ fn runtime_grant_canonical_bind_plugin_id_mismatch_fails_closed() {
   let id = seed_instance(&db);
   let (profile_id, _, _) = seed_prefs(&db, id);
   activate(&lifecycle, id, &d1);
-  let registry = Arc::new(ServiceIntegrationRegistry::bundled().unwrap());
-  let handlers = Arc::new(crate::services::service_capabilities::ServiceCapabilityRegistry::new());
+  let registry = Arc::new(ServiceIntegrationRegistry::empty());
   let wasm = Arc::new(WasmRuntime::new().unwrap());
-  let router = crate::services::runtime_router::RuntimeRouter::new(
-    db.clone(),
-    registry.clone(),
-    handlers.clone(),
-    packages.clone(),
-    wasm.clone(),
-  );
-  let caps = crate::services::service_capabilities::ServiceCapabilityService::new(db.clone(), registry, handlers)
+  let router =
+    crate::services::runtime_router::RuntimeRouter::new(db.clone(), registry.clone(), packages.clone(), wasm.clone());
+  let caps = crate::services::service_capabilities::ServiceCapabilityService::new(db.clone(), registry)
     .with_router(router, wasm);
   db.transaction(|uow| {
     uow.conn().execute(
@@ -1313,17 +1297,11 @@ fn runtime_recheck_matrix_profile_and_package_mutations() {
   let id = seed_instance(&db);
   let (profile_id, _, _) = seed_prefs(&db, id);
   activate(&lifecycle, id, &d1);
-  let registry = Arc::new(ServiceIntegrationRegistry::bundled().unwrap());
-  let handlers = Arc::new(crate::services::service_capabilities::ServiceCapabilityRegistry::new());
+  let registry = Arc::new(ServiceIntegrationRegistry::empty());
   let wasm = Arc::new(WasmRuntime::new().unwrap());
-  let router = crate::services::runtime_router::RuntimeRouter::new(
-    db.clone(),
-    registry.clone(),
-    handlers.clone(),
-    packages.clone(),
-    wasm.clone(),
-  );
-  let caps = crate::services::service_capabilities::ServiceCapabilityService::new(db.clone(), registry, handlers)
+  let router =
+    crate::services::runtime_router::RuntimeRouter::new(db.clone(), registry.clone(), packages.clone(), wasm.clone());
+  let caps = crate::services::service_capabilities::ServiceCapabilityService::new(db.clone(), registry)
     .with_router(router, wasm);
   let snap = caps
     .load_profile_invocation_snapshot(
@@ -1484,17 +1462,11 @@ fn runtime_missing_grant_maps_plugin_unavailable_via_formal_translate() {
     Ok(())
   })
   .unwrap();
-  let registry = Arc::new(ServiceIntegrationRegistry::bundled().unwrap());
-  let handlers = Arc::new(crate::services::service_capabilities::ServiceCapabilityRegistry::new());
+  let registry = Arc::new(ServiceIntegrationRegistry::empty());
   let wasm = Arc::new(WasmRuntime::new().unwrap());
-  let router = crate::services::runtime_router::RuntimeRouter::new(
-    db.clone(),
-    registry.clone(),
-    handlers.clone(),
-    packages.clone(),
-    wasm.clone(),
-  );
-  let caps = crate::services::service_capabilities::ServiceCapabilityService::new(db.clone(), registry, handlers)
+  let router =
+    crate::services::runtime_router::RuntimeRouter::new(db.clone(), registry.clone(), packages.clone(), wasm.clone());
+  let caps = crate::services::service_capabilities::ServiceCapabilityService::new(db.clone(), registry)
     .with_router(router, wasm);
   let sessions = crate::domain::cancel::RequestSessionRegistry::new();
   let result = tauri::async_runtime::block_on(crate::cmds::service_translation::run_translate_service_profile(
@@ -1620,8 +1592,7 @@ fn runtime_post_compile_recheck_rejects_publisher_revoke() {
   let id = seed_instance(&db);
   let (profile_id, _, _) = seed_prefs(&db, id);
   activate(&lifecycle, id, &d1);
-  let registry = Arc::new(ServiceIntegrationRegistry::bundled().unwrap());
-  let handlers = Arc::new(crate::services::service_capabilities::ServiceCapabilityRegistry::new());
+  let registry = Arc::new(ServiceIntegrationRegistry::empty());
   let wasm = Arc::new(WasmRuntime::new().unwrap());
   // During compile, revoke publisher so post-compile recheck fails and discards handler.
   let db_hook = db.clone();
@@ -1634,14 +1605,9 @@ fn runtime_post_compile_recheck_rejects_publisher_revoke() {
       Ok(())
     });
   });
-  let router = crate::services::runtime_router::RuntimeRouter::new(
-    db.clone(),
-    registry.clone(),
-    handlers.clone(),
-    packages.clone(),
-    wasm.clone(),
-  );
-  let caps = crate::services::service_capabilities::ServiceCapabilityService::new(db.clone(), registry, handlers)
+  let router =
+    crate::services::runtime_router::RuntimeRouter::new(db.clone(), registry.clone(), packages.clone(), wasm.clone());
+  let caps = crate::services::service_capabilities::ServiceCapabilityService::new(db.clone(), registry)
     .with_router(router, wasm);
   let snap = caps
     .load_profile_invocation_snapshot(
@@ -1673,8 +1639,7 @@ fn runtime_post_compile_recheck_rejects_grant_delete() {
   let id = seed_instance(&db);
   let (profile_id, _, _) = seed_prefs(&db, id);
   activate(&lifecycle, id, &d1);
-  let registry = Arc::new(ServiceIntegrationRegistry::bundled().unwrap());
-  let handlers = Arc::new(crate::services::service_capabilities::ServiceCapabilityRegistry::new());
+  let registry = Arc::new(ServiceIntegrationRegistry::empty());
   let wasm = Arc::new(WasmRuntime::new().unwrap());
   let db_hook = db.clone();
   let digest = d1.clone();
@@ -1697,14 +1662,9 @@ fn runtime_post_compile_recheck_rejects_grant_delete() {
       Ok(())
     });
   });
-  let router = crate::services::runtime_router::RuntimeRouter::new(
-    db.clone(),
-    registry.clone(),
-    handlers.clone(),
-    packages.clone(),
-    wasm.clone(),
-  );
-  let caps = crate::services::service_capabilities::ServiceCapabilityService::new(db.clone(), registry, handlers)
+  let router =
+    crate::services::runtime_router::RuntimeRouter::new(db.clone(), registry.clone(), packages.clone(), wasm.clone());
+  let caps = crate::services::service_capabilities::ServiceCapabilityService::new(db.clone(), registry)
     .with_router(router, wasm);
   let snap = caps
     .load_profile_invocation_snapshot(

@@ -21,7 +21,6 @@ import { useToast } from "../../components/toast/useToast";
 import { saveManualModel } from "../../storage/client";
 import { getIpcErrorMessage } from "../../storage/errors";
 import type { ProviderModelDto } from "../../storage/types";
-import { listAdapterOptions } from "./adapterOptions";
 
 export type AddManualModelDialogProps = {
   open: boolean;
@@ -80,7 +79,7 @@ function AddManualModelForm({ providerId, runtimeAdapterOptions = [], onCreated 
   const { t } = useTranslation();
   const toast = useToast();
   // Registered plugins are fixed at module load; options are stable for the dialog's lifetime.
-  const adapterOptions = useMemo(() => [...listAdapterOptions(), ...runtimeAdapterOptions], [runtimeAdapterOptions]);
+  const adapterOptions = useMemo(() => runtimeAdapterOptions, [runtimeAdapterOptions]);
   const [modelKey, setModelKey] = useState("");
   const [displayNameOverride, setDisplayNameOverride] = useState("");
   /** Empty string means inherit the channel API Type. */

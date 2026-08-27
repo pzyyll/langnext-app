@@ -42,6 +42,9 @@ runtime-plugins/deepseek/**/target
 # target auto-install. Directory name is literally `undefined/`; not application source.
 /undefined/
 
+# Generated dependency-audit reports. Do not commit advisory databases or trees.
+/.audit/
+
 # Agent
 .worktrees/
 .agents/*

@@ -45,7 +45,7 @@ pub async fn preview_integration_endpoint_trust(
 ) -> Result<EndpointTrustPreviewDto, IpcError> {
   let endpoint_trust = state.endpoint_trust.clone();
   run_blocking("preview_integration_endpoint_trust", move || {
-    endpoint_trust.preview(input)
+    endpoint_trust.preview(input, None)
   })
   .await
 }

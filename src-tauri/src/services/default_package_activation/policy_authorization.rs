@@ -17,27 +17,27 @@ impl DefaultPackageActivationService {
         "package {package_digest} content is unavailable"
       )));
     }
-    let publisher = self
-      .db
-      .read(|conn| plugin_publishers::get(conn, &version.publisher_key_id))?;
-    if publisher.revoked {
-      return Err(StorageError::Validation(
-        "cannot authorize default: publisher is revoked".into(),
-      ));
-    }
-    if !publisher.enabled {
-      return Err(StorageError::Validation(
-        "cannot authorize default: publisher is disabled".into(),
-      ));
-    }
+    let unsigned = version.signature_status == crate::domain::plugin_package::PackageSignatureStatus::Unsigned;
+    let (publisher_key_id, publisher_fingerprint) = if unsigned {
+      (String::new(), String::new())
+    } else {
+      let publisher = self
+        .db
+        .read(|conn| plugin_publishers::get(conn, &version.publisher_key_id))?;
+      if publisher.revoked {
+        return Err(StorageError::Validation(
+          "cannot authorize default: publisher is revoked".into(),
+        ));
+      }
+      if !publisher.enabled {
+        return Err(StorageError::Validation(
+          "cannot authorize default: publisher is disabled".into(),
+        ));
+      }
+      (publisher.key_id, publisher.fingerprint)
+    };
 
-    let verified = self.packages.verify_runtime_store_snapshot(
-      package_digest,
-      &publisher.key_id,
-      &publisher.fingerprint,
-      &publisher.public_key_hex,
-      publisher.source,
-    )?;
+    let verified = self.packages.verify_installed_package_snapshot(package_digest)?;
     if verified.package_digest != package_digest {
       return Err(StorageError::Validation(
         "re-verified package digest does not match the requested package".into(),
@@ -88,13 +88,14 @@ impl DefaultPackageActivationService {
           package_digest: package_digest.to_string(),
           plugin_id: version.plugin_id.clone(),
           version: version.version.clone(),
-          publisher_key_id: publisher.key_id.clone(),
-          publisher_fingerprint: publisher.fingerprint.clone(),
+          publisher_key_id: publisher_key_id.clone(),
+          publisher_fingerprint: publisher_fingerprint.clone(),
           permission_request_digest: permission_digest.clone(),
           runtime_kind: runtime_kind_storage(verified.manifest.runtime.kind).to_string(),
           constraints: constraints.clone(),
           constraints_digest: constraints_digest.clone(),
           expires_at_unix,
+          signature_status: version.signature_status,
         },
       );
     }
@@ -104,8 +105,8 @@ impl DefaultPackageActivationService {
       plugin_id: version.plugin_id,
       package_digest: package_digest.to_string(),
       version: version.version,
-      publisher_key_id: publisher.key_id,
-      publisher_fingerprint: publisher.fingerprint,
+      publisher_key_id,
+      publisher_fingerprint,
       runtime_kind: runtime_kind_storage(verified.manifest.runtime.kind).to_string(),
       permission_request_digest: permission_digest,
       capabilities: verified.manifest.capabilities.iter().map(|c| c.id.clone()).collect(),
@@ -121,6 +122,8 @@ impl DefaultPackageActivationService {
           timeout_ms: limits.timeout_ms,
         }),
       requires_instance_confirmation_for_dynamic_origins: !constraints.dynamic_origin_endpoint_ids.is_empty(),
+      signature_status: version.signature_status,
+      requires_unsigned_default_risk_acknowledgement: unsigned,
       expires_at,
     })
   }
@@ -150,34 +153,44 @@ impl DefaultPackageActivationService {
     if session.expires_at_unix < now_unix() {
       return Err(StorageError::Validation("default activation preview expired".into()));
     }
-
-    let publisher = self
-      .db
-      .read(|conn| plugin_publishers::get(conn, &session.publisher_key_id))?;
-    if publisher.revoked || !publisher.enabled {
+    let unsigned = session.signature_status == crate::domain::plugin_package::PackageSignatureStatus::Unsigned;
+    if unsigned && !input.acknowledge_unsigned_default_risk {
       return Err(StorageError::Validation(
-        "cannot authorize default: publisher is revoked or disabled".into(),
+        "unsigned default packages require acknowledge_unsigned_default_risk".into(),
       ));
     }
-    if publisher.fingerprint != session.publisher_fingerprint {
+    if !unsigned && input.acknowledge_unsigned_default_risk {
       return Err(StorageError::Validation(
-        "publisher fingerprint changed after preview".into(),
+        "unsigned default risk acknowledgement is invalid for signed packages".into(),
       ));
     }
 
-    // Final re-verification before mutation (TOCTOU).
-    let verified = self.packages.verify_runtime_store_snapshot(
-      &session.package_digest,
-      &publisher.key_id,
-      &publisher.fingerprint,
-      &publisher.public_key_hex,
-      publisher.source,
-    )?;
+    if !unsigned {
+      let publisher = self
+        .db
+        .read(|conn| plugin_publishers::get(conn, &session.publisher_key_id))?;
+      if publisher.revoked || !publisher.enabled {
+        return Err(StorageError::Validation(
+          "cannot authorize default: publisher is revoked or disabled".into(),
+        ));
+      }
+      if publisher.fingerprint != session.publisher_fingerprint {
+        return Err(StorageError::Validation(
+          "publisher fingerprint changed after preview".into(),
+        ));
+      }
+    }
+
+    let verified = self
+      .packages
+      .verify_installed_package_snapshot(&session.package_digest)?;
     if verified.package_digest != session.package_digest
       || verified.manifest.id != session.plugin_id
       || compute_permission_request_digest(&verified.manifest) != session.permission_request_digest
-      || verified.manifest.publisher.key_id != session.publisher_key_id
-      || verified.publisher_fingerprint != session.publisher_fingerprint
+      || verified.signature_status != session.signature_status
+      || (!unsigned
+        && (verified.manifest.publisher.key_id != session.publisher_key_id
+          || verified.publisher_fingerprint != session.publisher_fingerprint))
     {
       return Err(StorageError::Validation(
         "package identity changed after default activation preview".into(),
@@ -203,6 +216,12 @@ impl DefaultPackageActivationService {
           package_digest: session.package_digest.clone(),
           publisher_key_id: session.publisher_key_id.clone(),
           publisher_fingerprint: session.publisher_fingerprint.clone(),
+          signature_status: session.signature_status,
+          unsigned_default_risk_acknowledgement_version: if unsigned {
+            Some(crate::domain::plugin_package::UNSIGNED_DEFAULT_RISK_ACK_V1.to_string())
+          } else {
+            None
+          },
           permission_request_digest: session.permission_request_digest.clone(),
           approved_authority_constraints_json: constraints_json,
           approved_authority_constraints_digest: constraints_digest,
@@ -255,6 +274,27 @@ impl DefaultPackageActivationService {
           .db
           .read(|conn| installed_plugin_versions::get(conn, &policy.package_digest))?;
         if version.plugin_id != plugin_id || !version.content_available {
+          return self.blocked_package_first_from_digest(
+            plugin_id,
+            &policy.package_digest,
+            PackageFirstBlockReason::Stale,
+          );
+        }
+        let verified = match self.packages.verify_installed_package_snapshot(&policy.package_digest) {
+          Ok(verified) => verified,
+          Err(_) => {
+            return self.blocked_package_first_from_digest(
+              plugin_id,
+              &policy.package_digest,
+              PackageFirstBlockReason::Stale,
+            );
+          }
+        };
+        if verified.package_digest != policy.package_digest
+          || verified.manifest.id != plugin_id
+          || verified.signature_status != policy.signature_status
+          || compute_permission_request_digest(&verified.manifest) != policy.permission_request_digest
+        {
           return self.blocked_package_first_from_digest(
             plugin_id,
             &policy.package_digest,

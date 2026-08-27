@@ -96,10 +96,6 @@ function runtimeProvider(): ProviderInstanceDto {
   });
 }
 
-function legacyTransportCalls() {
-  return invokeMock.mock.calls.filter(([cmd]) => cmd === "provider_http_request" || cmd === "provider_http_stream");
-}
-
 afterEach(() => {
   resetInvokeMock();
 });
@@ -122,7 +118,6 @@ describe("runtime_executor_connection_uses_persisted_executor", () => {
     expect(result.ok).toBe(true);
     expect(result.modelCount).toBe(2);
     expect(result.providerUpdatedAt).toBe("t");
-    expect(legacyTransportCalls()).toHaveLength(0);
   });
 
   test("runtime provider connection failure maps to a bounded code without legacy HTTP", async () => {
@@ -136,7 +131,6 @@ describe("runtime_executor_connection_uses_persisted_executor", () => {
     expect(result.ok).toBe(false);
     expect(result.errorCode).toBe("network");
     expect(result.modelCount).toBeNull();
-    expect(legacyTransportCalls()).toHaveLength(0);
   });
 
   test("unavailable runtime binding surfaces a bounded connection error", async () => {

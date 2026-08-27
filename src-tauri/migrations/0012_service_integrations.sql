@@ -8,8 +8,6 @@ CREATE TABLE credential_operations_new (
                         CHECK (owner_kind IN (
                           'provider',
                           'global_proxy',
-                          'ocr_api_key',
-                          'ocr_secret_key',
                           'integration'
                         )),
     owner_id            TEXT NOT NULL,

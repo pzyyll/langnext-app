@@ -1,6 +1,6 @@
-# Phase 3: Signed Plugin Package Lifecycle Implementation Plan
+# Phase 3: Plugin Package Lifecycle Implementation Plan
 
-**Goal:** Support crash-safe local installation, approval, immutable storage, listing, default selection, and dependency-safe removal of signed `.lnplugin` packages without executing them.
+**Goal:** Support crash-safe local installation, approval, immutable storage, listing, default selection, and dependency-safe removal of signed or explicitly approved unsigned `.lnplugin` packages without executing them.
 
 **Inputs:** Phases 0–2 contracts/runtime and current SQLite migration/credential-journal patterns.
 
@@ -9,10 +9,10 @@
 - Phases 0, 1, and 2 are complete.
 - Package execution is disabled until Phase 4.
 - Package format is a bounded ZIP archive.
-- `package_digest` is lowercase hex SHA-256 of the exact final signed `.lnplugin` archive bytes; extracted payload digests are authenticated through the signed manifest file index. Repacking identical files intentionally creates a different package identity.
+- `package_digest` is lowercase hex SHA-256 of the exact final `.lnplugin` archive bytes. Signed packages authenticate the manifest file index. Unsigned packages retain the same complete index and integrity checks but establish no publisher identity. Repacking identical files creates a different package identity and requires a new unsigned acknowledgement.
 - Current dependency baselines are `zip 8.6.x`, `ed25519-dalek 3.0.x`, `semver 1.0.x`, and `hex 0.4.x`; exact patch versions are committed in `Cargo.lock`.
 
-**Architecture:** Rust previews archives in a bounded staging area, verifies exact archive/manifest bytes, the complete signed file index, signature, publisher trust, compatibility, and requested permissions, then atomically moves both the original archive and verified extracted content into a SHA-256-addressed store. Approval state and package metadata live in SQLite; code files are never mutable in place.
+**Architecture:** Rust previews archives in a bounded staging area and decides signature presence before publisher lookup. It verifies exact archive/manifest bytes, the complete file index, compatibility, and requested permissions. Signed packages also require a valid signature and publisher policy. Unsigned packages require an explicit warning acknowledgement bound to the final digest. A present invalid signature never downgrades to unsigned. Rust then atomically moves the archive and verified content into a SHA-256-addressed store.
 
 **Tech Stack:** Rust, zip, ed25519-dalek, SHA-256, SQLite/rusqlite, Tauri dialog IPC, React/Base UI, TanStack Query.
 
@@ -92,7 +92,7 @@
 - [ ] Reject absolute paths, `..`, Windows prefixes, alternate separators after normalization, symlinks, duplicate normalized paths, invalid UTF-8 paths, device names, and undeclared files.
 - [ ] Stream the exact archive bytes through SHA-256 before extraction; encode lowercase hex as `package_digest` and verify committed test vectors for empty/valid sample archives.
 - [ ] Read exact `plugin.json` bytes, parse `PluginManifestV1`, require archive entries to equal `plugin.json` + `signatures/manifest.sig` + the signed file index, and verify the length/digest/role of every indexed artifact, schema, locale, license, icon, and page asset.
-- [ ] Verify `signatures/manifest.sig` over the exact manifest bytes using the selected publisher key; reject missing indexed files, unindexed files, and any manifest/file-index mismatch before preview.
+- [ ] If `signatures/manifest.sig` is present, verify it over the exact manifest bytes with the selected publisher key. Reject malformed or invalid signatures. If it is absent, classify the package as unsigned and require exact-digest approval. In both modes, reject missing indexed files, unindexed files, and manifest/file-index mismatch before preview.
 - [ ] Reject same `plugin_id + version` with a different digest.
 - [ ] Validate host/plugin API, platform/architecture, runtime kind, schemas, capabilities, and permission requests before returning a preview.
 - [ ] Do not treat a valid signature as automatic publisher approval.
@@ -116,7 +116,7 @@
 
 - [ ] Use `app_data/plugins/staging/<operation-id>/`, `app_data/plugins/store/sha256/<digest>/package.lnplugin`, `app_data/plugins/store/sha256/<digest>/content/`, and `app_data/plugins/quarantine/`.
 - [ ] Copy the selected archive into a newly created same-filesystem staging operation as `package.lnplugin`, hash those exact stored bytes, then extract only into `content/`.
-- [ ] Perform parse, digest, signature, compatibility, and permission preview before DB commit.
+- [ ] Perform parse, digest, integrity, signature-status, compatibility, risk acknowledgement, and permission checks before DB commit.
 - [ ] After explicit approval, persist package-approval/install metadata, atomically rename the operation directory containing the original archive and extracted content, finalize the journal, then emit a catalog event.
 - [ ] Set installed files read-only where supported; Phase 4 rehashes `package.lnplugin` against `package_digest` and separately verifies the selected runtime artifact against its signed file-index length/digest/role before load.
 - [ ] Recover prepared/verified/db-committed operations at startup without executing code.
@@ -219,7 +219,10 @@ Expected: packages can be previewed/approved/installed/listed/defaulted/removed 
 
 ## Failure Behavior
 
-- Invalid/untrusted package — reject or quarantine; no catalog row.
+- Invalid signature, unacknowledged unsigned package, or untrusted signed package — reject or quarantine; no catalog row.
+- Unsigned package approval is local and exact-digest-bound. Export/import never transfers it.
+- Package approval never grants execution. Runtime still requires a subject-scoped execution grant.
+- Vendor bootstrap remains signed-vendor-only. Non-vendor native workers remain allowlisted and require a separate native-risk acknowledgement.
 - User declines requested-permission acknowledgement/publisher — delete staging and retain no package approval.
 - Crash after DB commit — startup recovery finalizes or marks missing content without execution.
 - In-use uninstall — return `in_use` with dependencies.

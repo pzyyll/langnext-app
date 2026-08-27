@@ -11,7 +11,16 @@ import {
   presentProviderRuntime,
   publisherLabel,
   shortPackageDigest,
+  type ProviderRuntimeStateLabelKey,
 } from "./runtimeProviderPresentation";
+
+function acceptPackageOnlyLabelKey(key: "activeRuntime" | "unavailableRuntime" | "pendingActivation"): void {
+  void key;
+}
+
+function assertPackageOnlyLabelKey(key: ProviderRuntimeStateLabelKey): void {
+  acceptPackageOnlyLabelKey(key);
+}
 
 const CATALOG_ENTRY = {
   pluginId: "langnext.conformance.llm-provider",
@@ -54,7 +63,7 @@ const CATALOG_ENTRY_C = {
 
 function binding(partial: Partial<ProviderRuntimeBindingDto>): ProviderRuntimeBindingDto {
   return {
-    runtimeKind: "legacy-frontend-provider",
+    runtimeKind: "wasm-component",
     packageDigest: null,
     grantSetRevision: null,
     state: "active",
@@ -88,28 +97,14 @@ function provider(partial: Partial<ProviderInstanceDto> & Pick<ProviderInstanceD
 }
 
 describe("presentProviderRuntime", () => {
-  test("legacy binding shows only the legacy label and a preview action", () => {
+  test("unavailable runtime binding without a package exposes no actions", () => {
     const view = presentProviderRuntime({
-      provider: provider({ runtime: binding({}) }),
-      catalogEntry: CATALOG_ENTRY,
-    });
-    expect(view).toEqual({
-      labelKey: "legacy",
-      runtimeKind: "legacy-frontend-provider",
-      version: null,
-      state: "active",
-      disableReadyActions: false,
-      actions: { canPreview: true, canApply: false, canRollback: false },
-    });
-  });
-
-  test("legacy binding without a matching catalog package exposes no actions", () => {
-    const view = presentProviderRuntime({
-      provider: provider({ runtime: binding({}) }),
+      provider: provider({ runtime: binding({ state: "unavailable" }) }),
       catalogEntry: null,
     });
-    expect(view.actions).toEqual({ canPreview: false, canApply: false, canRollback: false });
-    expect(view.labelKey).toBe("legacy");
+    expect(view.labelKey).toBe("unavailableRuntime");
+    assertPackageOnlyLabelKey(view.labelKey);
+    expect(view.actions).toEqual({ canApply: false, canRollback: false });
   });
 
   test("active wasm binding projects the catalog package version and rollback", () => {
@@ -129,8 +124,9 @@ describe("presentProviderRuntime", () => {
       version: "1.0.0",
       state: "active",
       disableReadyActions: false,
-      actions: { canPreview: false, canApply: false, canRollback: true },
+      actions: { canApply: false, canRollback: true },
     });
+    assertPackageOnlyLabelKey(view.labelKey);
   });
 
   test("active wasm binding without a catalog entry is presented as unavailable", () => {
@@ -145,12 +141,14 @@ describe("presentProviderRuntime", () => {
       catalogEntry: null,
     });
     expect(view.labelKey).toBe("unavailableRuntime");
+    assertPackageOnlyLabelKey(view.labelKey);
     expect(view.version).toBeNull();
     expect(view.disableReadyActions).toBe(true);
-    expect(view.actions).toEqual({ canPreview: false, canApply: false, canRollback: true });
+    // The active binding may still roll back to a retained package snapshot.
+    expect(view.actions).toEqual({ canApply: false, canRollback: true });
   });
 
-  test("unavailable runtime binding keeps the provider identity and offers rollback", () => {
+  test("unavailable runtime binding keeps the provider identity without actions", () => {
     const view = presentProviderRuntime({
       provider: provider({
         runtime: binding({
@@ -163,9 +161,10 @@ describe("presentProviderRuntime", () => {
       catalogEntry: CATALOG_ENTRY,
     });
     expect(view.labelKey).toBe("unavailableRuntime");
+    assertPackageOnlyLabelKey(view.labelKey);
     expect(view.state).toBe("unavailable");
     expect(view.disableReadyActions).toBe(true);
-    expect(view.actions).toEqual({ canPreview: false, canApply: false, canRollback: true });
+    expect(view.actions).toEqual({ canApply: false, canRollback: false });
   });
 
   test("pending activation exposes an apply action and disables ready actions", () => {
@@ -181,8 +180,9 @@ describe("presentProviderRuntime", () => {
       catalogEntry: CATALOG_ENTRY,
     });
     expect(view.labelKey).toBe("pendingActivation");
+    assertPackageOnlyLabelKey(view.labelKey);
     expect(view.disableReadyActions).toBe(true);
-    expect(view.actions).toEqual({ canPreview: false, canApply: true, canRollback: true });
+    expect(view.actions).toEqual({ canApply: true, canRollback: true });
   });
 });
 

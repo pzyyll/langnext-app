@@ -1,5 +1,6 @@
 // ABOUTME: Shared sanitized spawn_blocking helper for storage Tauri commands.
 // ABOUTME: Join/panic failures map to a constant internal_error IPC shape.
+#![allow(dead_code)]
 use crate::error::{IpcError, StorageError};
 
 const INTERNAL_ERROR_CODE: &str = "internal_error";

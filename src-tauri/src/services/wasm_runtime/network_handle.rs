@@ -7,7 +7,8 @@ use crate::domain::plugin_resource::{
 };
 use crate::domain::provider_http::{ProviderHttpMethod, ProviderHttpStreamEvent};
 use crate::domain::runtime_plugin::{ExecutionGrantSet, NetworkOriginKind, PluginPrincipal};
-use crate::services::auth_policies::GOOGLE_SERVICE_ACCOUNT_AUTH_POLICY_ID;
+use crate::services::auth_policies::{BAIDU_CLIENT_CREDENTIALS_AUTH_POLICY_ID, GOOGLE_SERVICE_ACCOUNT_AUTH_POLICY_ID};
+use crate::services::baidu_token_exchanger::guest_supplied_baidu_access_token;
 use crate::services::bounded_http::{
   BoundedHttpResponse, DestinationPolicy, PreparedHttpRequest, RawHttpTransport, RequestBody, build_endpoint,
   validate_external_destination, with_cancel,
@@ -16,6 +17,7 @@ use crate::services::stream_resources::{
   STREAM_PUMP_SHUTDOWN_TIMEOUT, StreamFrame, StreamResourceTable, sleep_until_deadline,
 };
 use crate::services::token_grant::TokenGrantService;
+use crate::services::token_grant::TokenInjectionKind;
 use crate::services::wasm_runtime::host::{
   BrokerAuthorization, BrokerFetchError, BrokerFetchOutcome, BrokerFetchRequest, BrokerFetchResponse, BrokerHandle,
   BrokerRequestBody, BrokerResponseBody,
@@ -85,6 +87,7 @@ impl BrokerHandle for NetworkBrokerHandle {
     Box::pin(async move {
       if authorization.auth_policy.as_str() != AUTH_POLICY_NONE_V1
         && authorization.auth_policy.as_str() != GOOGLE_SERVICE_ACCOUNT_AUTH_POLICY_ID
+        && authorization.auth_policy.as_str() != BAIDU_CLIENT_CREDENTIALS_AUTH_POLICY_ID
       {
         return Err(BrokerFetchError::NotApproved);
       }
@@ -104,12 +107,25 @@ impl BrokerHandle for NetworkBrokerHandle {
       if validate_external_destination(&url).is_err() {
         return Err(BrokerFetchError::Network("destination rejected by host policy".into()));
       }
-      let (body, content_type) = request_body_into_transport(&request.body);
+      let (body, mut content_type) = request_body_into_transport(&request.body);
+      if authorization.auth_policy.as_str() == BAIDU_CLIENT_CREDENTIALS_AUTH_POLICY_ID {
+        if !matches!(request.body, BrokerRequestBody::Blob { .. }) {
+          return Err(BrokerFetchError::NotApproved);
+        }
+        content_type = Some(crate::services::baidu_token_exchanger::BAIDU_OCR_FORM_CONTENT_TYPE.to_string());
+      }
       let mut headers = std::collections::HashMap::new();
       for (name, value) in &request.headers {
         headers.insert(name.clone(), value.clone());
       }
-      if authorization.auth_policy.as_str() == GOOGLE_SERVICE_ACCOUNT_AUTH_POLICY_ID {
+      if authorization.auth_policy.as_str() == GOOGLE_SERVICE_ACCOUNT_AUTH_POLICY_ID
+        || authorization.auth_policy.as_str() == BAIDU_CLIENT_CREDENTIALS_AUTH_POLICY_ID
+      {
+        if authorization.auth_policy.as_str() == BAIDU_CLIENT_CREDENTIALS_AUTH_POLICY_ID
+          && guest_supplied_baidu_access_token(&url)
+        {
+          return Err(BrokerFetchError::HeaderBlocked);
+        }
         let token_grants = token_grants.ok_or(BrokerFetchError::NotApproved)?;
         let grant_request = crate::services::auth_policies::token_grant_request_for_capability(
           principal.instance_id(),
@@ -121,7 +137,10 @@ impl BrokerHandle for NetworkBrokerHandle {
           .acquire(grant_request, Some(&cancel))
           .await
           .map_err(map_token_grant_error)?;
-        grant.apply_bearer_auth(&mut headers);
+        match grant.injection_kind() {
+          TokenInjectionKind::BearerHeader => grant.apply_bearer_auth(&mut headers),
+          TokenInjectionKind::QueryParameter { name } => grant.apply_query_parameter(&mut url, name),
+        }
       }
       let max_response_bytes = authorization.resource_limits.max_response_bytes();
       let timeout = std::time::Duration::from_millis(authorization.resource_limits.timeout_ms());
@@ -651,6 +670,9 @@ mod tests {
     PackageIdentity, PluginId, ResourceLimits, RuntimeIdentity, SemVerVersion,
   };
   use crate::services::bounded_http::{BoundedHttpResponse, ResolverBackedTestTransport, TestDnsLookupFn};
+  use crate::services::token_grant::{
+    ExchangedToken, GOOGLE_SERVICE_ACCOUNT_AUTH_DRIVER_ID, TokenExchanger, TokenInjectionKind,
+  };
   use std::collections::HashMap;
   use std::net::SocketAddr;
   use std::sync::{Arc, Mutex};
@@ -713,6 +735,108 @@ mod tests {
     }
   }
 
+  struct FixedGoogleExchanger;
+
+  impl TokenExchanger for FixedGoogleExchanger {
+    fn driver_id(&self) -> &'static str {
+      GOOGLE_SERVICE_ACCOUNT_AUTH_DRIVER_ID
+    }
+
+    fn injection_kind(&self) -> TokenInjectionKind {
+      TokenInjectionKind::BearerHeader
+    }
+    fn exchange(
+      &self,
+      _instance_id: Uuid,
+      _scopes: Vec<String>,
+      _now_unix_secs: u64,
+      _cancel: Option<CancelToken>,
+    ) -> Pin<
+      Box<dyn Future<Output = Result<ExchangedToken, crate::domain::service_capability::CapabilityError>> + Send + '_>,
+    > {
+      Box::pin(async {
+        Ok(ExchangedToken {
+          access_token: "unused-google-token".into(),
+          expires_in: 3600,
+          credential_revision: 1,
+        })
+      })
+    }
+  }
+
+  struct RecordingBaiduExchanger {
+    instances: Arc<Mutex<Vec<Uuid>>>,
+  }
+
+  impl TokenExchanger for RecordingBaiduExchanger {
+    fn driver_id(&self) -> &'static str {
+      crate::services::auth_policies::BAIDU_CLIENT_CREDENTIALS_AUTH_DRIVER_ID
+    }
+
+    fn injection_kind(&self) -> TokenInjectionKind {
+      TokenInjectionKind::QueryParameter {
+        name: crate::services::baidu_token_exchanger::BAIDU_ACCESS_TOKEN_QUERY_NAME,
+      }
+    }
+
+    fn exchange(
+      &self,
+      instance_id: Uuid,
+      scopes: Vec<String>,
+      _now_unix_secs: u64,
+      _cancel: Option<CancelToken>,
+    ) -> Pin<
+      Box<dyn Future<Output = Result<ExchangedToken, crate::domain::service_capability::CapabilityError>> + Send + '_>,
+    > {
+      self.instances.lock().unwrap().push(instance_id);
+      Box::pin(async move {
+        assert!(scopes.is_empty(), "Baidu client credentials do not use Google scopes");
+        Ok(ExchangedToken {
+          access_token: "host-only-access-token".into(),
+          expires_in: 3600,
+          credential_revision: 7,
+        })
+      })
+    }
+  }
+
+  fn baidu_principal(instance_id: Uuid) -> PluginPrincipal {
+    let grant = ExecutionGrantSet::initial(
+      instance_id,
+      RuntimeIdentity::Package(PackageIdentity {
+        package_digest: PackageDigest::parse("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")
+          .unwrap(),
+      }),
+      PluginId::parse(crate::domain::service_integration::BAIDU_OCR_PLUGIN_ID).unwrap(),
+      SemVerVersion::parse("1.0.0").unwrap(),
+      vec![CapabilityId::parse(crate::domain::service_capability::OCR_IMAGE_CAPABILITY_ID).unwrap()],
+      vec![],
+      vec![],
+    )
+    .unwrap();
+    grant
+      .principal_for_request(
+        crate::domain::service_capability::OCR_IMAGE_CAPABILITY_ID,
+        "baidu-ocr-request",
+      )
+      .unwrap()
+  }
+
+  fn baidu_authorization() -> BrokerAuthorization {
+    BrokerAuthorization {
+      endpoint_id: EndpointId::parse("baidu-accurate").unwrap(),
+      origin: HttpsOrigin::parse(crate::domain::service_integration::BAIDU_OCR_ORIGIN).unwrap(),
+      base_url: crate::domain::service_integration::BAIDU_OCR_ORIGIN.into(),
+      origin_kind: NetworkOriginKind::HostFixed,
+      auth_policy: AuthPolicyId::parse(BAIDU_CLIENT_CREDENTIALS_AUTH_POLICY_ID).unwrap(),
+      resource_limits: crate::services::runtime_authority::effective_resource_limits_for_capability(
+        crate::domain::service_capability::OCR_IMAGE_CAPABILITY_ID,
+      ),
+      response_body_modes: NetworkResponseBodyModes::JSON_ONLY,
+      selected_response_mode: NetworkResponseBodyMode::Json,
+    }
+  }
+
   fn edge_principal() -> PluginPrincipal {
     let grant = ExecutionGrantSet::initial(
       Uuid::nil(),
@@ -743,6 +867,149 @@ mod tests {
       response_body_modes: NetworkResponseBodyModes::JSON_ONLY,
       selected_response_mode: NetworkResponseBodyMode::Json,
     }
+  }
+
+  #[tokio::test]
+  async fn baidu_auth_policy_injects_access_token_without_guest_secret_access() {
+    const HTTP_OK: u16 = 200;
+    let instance_id = Uuid::now_v7();
+    let recorded_instances = Arc::new(Mutex::new(Vec::new()));
+    let baidu = Arc::new(RecordingBaiduExchanger {
+      instances: recorded_instances.clone(),
+    });
+    let token_grants = Arc::new(TokenGrantService::new(vec![Arc::new(FixedGoogleExchanger), baidu]).unwrap());
+    let transport = Arc::new(FixedTransport {
+      response: BoundedHttpResponse {
+        status: HTTP_OK,
+        headers: HashMap::from([("content-type".into(), "application/json".into())]),
+        body: br#"{"words_result":[]}"#.to_vec(),
+      },
+      last: Mutex::new(None),
+    });
+    let handle = NetworkBrokerHandle::new_with_token_grants(transport.clone(), token_grants);
+    let principal = baidu_principal(instance_id);
+    let irrelevant_grant = ExecutionGrantSet::initial(
+      instance_id,
+      RuntimeIdentity::Bundled,
+      PluginId::parse(crate::domain::service_integration::BAIDU_OCR_PLUGIN_ID).unwrap(),
+      SemVerVersion::parse("1.0.0").unwrap(),
+      vec![],
+      vec![],
+      vec![],
+    )
+    .unwrap();
+    let outcome = handle
+      .fetch(
+        &principal,
+        &irrelevant_grant,
+        BrokerFetchRequest {
+          endpoint_id: "baidu-accurate".into(),
+          relative_path: crate::services::baidu_token_exchanger::BAIDU_OCR_PATH_ACCURATE.into(),
+          method: "POST".into(),
+          headers: vec![("Accept".into(), "application/json".into())],
+          body: BrokerRequestBody::Blob {
+            bytes: b"image=fixture".to_vec(),
+            byte_len: b"image=fixture".len(),
+          },
+        },
+        baidu_authorization(),
+        &CancelToken::new(),
+        None,
+      )
+      .await
+      .expect("Baidu broker request succeeds");
+    assert_eq!(outcome.status, HTTP_OK);
+    assert_eq!(recorded_instances.lock().unwrap().as_slice(), &[instance_id]);
+    let prepared = transport.last.lock().unwrap().take().unwrap();
+    assert_eq!(
+      prepared.url.origin().ascii_serialization(),
+      crate::domain::service_integration::BAIDU_OCR_ORIGIN
+    );
+    assert_eq!(
+      prepared
+        .url
+        .query_pairs()
+        .find(|(name, _)| name == crate::services::baidu_token_exchanger::BAIDU_ACCESS_TOKEN_QUERY_NAME)
+        .map(|(_, value)| value.into_owned())
+        .as_deref(),
+      Some("host-only-access-token")
+    );
+    assert_eq!(
+      prepared.content_type.as_deref(),
+      Some(crate::services::baidu_token_exchanger::BAIDU_OCR_FORM_CONTENT_TYPE)
+    );
+    assert!(
+      prepared
+        .headers
+        .values()
+        .all(|value| !value.contains("host-only-access-token"))
+    );
+    assert!(prepared.body.as_bytes().is_some_and(|body| {
+      !body
+        .windows(b"access_token".len())
+        .any(|window| window == b"access_token")
+    }));
+  }
+
+  #[tokio::test]
+  async fn baidu_access_token_query_is_host_only() {
+    let recorded_instances = Arc::new(Mutex::new(Vec::new()));
+    let token_grants = Arc::new(
+      TokenGrantService::new(vec![
+        Arc::new(FixedGoogleExchanger),
+        Arc::new(RecordingBaiduExchanger {
+          instances: recorded_instances.clone(),
+        }),
+      ])
+      .unwrap(),
+    );
+    let transport = Arc::new(FixedTransport {
+      response: BoundedHttpResponse {
+        status: 200,
+        headers: HashMap::new(),
+        body: b"{}".to_vec(),
+      },
+      last: Mutex::new(None),
+    });
+    let handle = NetworkBrokerHandle::new_with_token_grants(transport.clone(), token_grants);
+    let instance_id = Uuid::now_v7();
+    let result = handle
+      .fetch(
+        &baidu_principal(instance_id),
+        &ExecutionGrantSet::initial(
+          instance_id,
+          RuntimeIdentity::Bundled,
+          PluginId::parse(crate::domain::service_integration::BAIDU_OCR_PLUGIN_ID).unwrap(),
+          SemVerVersion::parse("1.0.0").unwrap(),
+          vec![],
+          vec![],
+          vec![],
+        )
+        .unwrap(),
+        BrokerFetchRequest {
+          endpoint_id: "baidu-accurate".into(),
+          relative_path: format!(
+            "{}?access_token=guest-token",
+            crate::services::baidu_token_exchanger::BAIDU_OCR_PATH_ACCURATE
+          ),
+          method: "POST".into(),
+          headers: vec![],
+          body: BrokerRequestBody::Blob {
+            bytes: b"image=fixture".to_vec(),
+            byte_len: b"image=fixture".len(),
+          },
+        },
+        baidu_authorization(),
+        &CancelToken::new(),
+        None,
+      )
+      .await;
+    assert!(matches!(result, Err(BrokerFetchError::HeaderBlocked)));
+    assert!(
+      recorded_instances.lock().unwrap().is_empty(),
+      "reject before token exchange"
+    );
+    assert!(transport.last.lock().unwrap().is_none(), "reject before OCR transport");
   }
 
   async fn assert_approved_custom_dns_answer_reaches_unfiltered_handle(hostname: &'static str, synthetic_ip: [u8; 4]) {

@@ -1,0 +1,127 @@
+{
+  "manifestVersion": 1,
+  "pluginApiVersion": "1.0",
+  "id": "com.langnext.baidu-ocr",
+  "version": "1.0.0",
+  "publisher": {
+    "keyId": "com.langnext.vendor.keys.1",
+    "keyFingerprint": "405708c8009ed75e698b06d85aa7c5321e77c888fbc95b7b843d5abbe153a6d7"
+  },
+  "runtime": {
+    "kind": "wasm-component",
+    "artifact": "ocr/fixtures/langnext-baidu-ocr.wasm"
+  },
+  "targets": [],
+  "files": [
+    {
+      "path": "ocr/fixtures/langnext-baidu-ocr.wasm",
+      "role": "runtime-artifact",
+      "bytes": 58379,
+      "sha256": "5428fd88074b923b63183a89e3f42db886ff2710156b2daa6f64319eb284e144"
+    },
+    {
+      "path": "schemas/config.json",
+      "role": "config-schema",
+      "bytes": 426,
+      "sha256": "83d60127058777cabd7da3c72810943a125c31b932b00b8fef6d5adc0ef3dcf6"
+    },
+    {
+      "path": "schemas/ocr-preferences.json",
+      "role": "preference-schema",
+      "bytes": 662,
+      "sha256": "c3d3cfe47e03258c17669293e73c1c6090e24c215ffebbd89be94ab186c20445"
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "ocr.image@1",
+      "preferencesSchema": "schemas/ocr-preferences.json",
+      "artifact": "ocr/fixtures/langnext-baidu-ocr.wasm"
+    }
+  ],
+  "configurationSchema": "schemas/config.json",
+  "configSchemaVersion": 1,
+  "credentialSlots": [
+    {
+      "id": "api-key",
+      "kind": "secret-text",
+      "required": true
+    },
+    {
+      "id": "secret-key",
+      "kind": "secret-text",
+      "required": true
+    }
+  ],
+  "permissions": {
+    "network": [
+      {
+        "id": "baidu-general-basic",
+        "origins": ["https://aip.baidubce.com"],
+        "methods": ["POST"]
+      },
+      {
+        "id": "baidu-accurate-basic",
+        "origins": ["https://aip.baidubce.com"],
+        "methods": ["POST"]
+      },
+      {
+        "id": "baidu-general",
+        "origins": ["https://aip.baidubce.com"],
+        "methods": ["POST"]
+      },
+      {
+        "id": "baidu-accurate",
+        "origins": ["https://aip.baidubce.com"],
+        "methods": ["POST"]
+      }
+    ],
+    "authPolicies": ["com.langnext.auth.baidu-client-credentials"]
+  },
+  "pathAuthority": [
+    {
+      "capabilityId": "ocr.image@1",
+      "endpointId": "baidu-general-basic",
+      "method": "POST",
+      "path": {
+        "form": "exact",
+        "value": "rest/2.0/ocr/v1/general_basic"
+      },
+      "authPolicyId": "com.langnext.auth.baidu-client-credentials"
+    },
+    {
+      "capabilityId": "ocr.image@1",
+      "endpointId": "baidu-accurate-basic",
+      "method": "POST",
+      "path": {
+        "form": "exact",
+        "value": "rest/2.0/ocr/v1/accurate_basic"
+      },
+      "authPolicyId": "com.langnext.auth.baidu-client-credentials"
+    },
+    {
+      "capabilityId": "ocr.image@1",
+      "endpointId": "baidu-general",
+      "method": "POST",
+      "path": {
+        "form": "exact",
+        "value": "rest/2.0/ocr/v1/general"
+      },
+      "authPolicyId": "com.langnext.auth.baidu-client-credentials"
+    },
+    {
+      "capabilityId": "ocr.image@1",
+      "endpointId": "baidu-accurate",
+      "method": "POST",
+      "path": {
+        "form": "exact",
+        "value": "rest/2.0/ocr/v1/accurate"
+      },
+      "authPolicyId": "com.langnext.auth.baidu-client-credentials"
+    }
+  ],
+  "ui": {
+    "mode": "schema",
+    "pages": []
+  }
+}

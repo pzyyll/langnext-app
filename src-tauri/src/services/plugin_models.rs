@@ -170,31 +170,13 @@ impl PluginModelService {
         PluginModelErrorCode::StalePackage.as_str().into(),
       ));
     }
-    let publisher = self.db.read(|conn| {
-      crate::repositories::plugin_publishers::get(conn, &version.publisher_key_id).map_err(|err| match err {
-        StorageError::NotFound(_) => StorageError::Validation(PluginModelErrorCode::StalePackage.as_str().into()),
-        other => other,
-      })
-    })?;
-    crate::services::plugin_package::require_native_worker_vendor_publisher(
-      publisher.source,
-      &publisher.key_id,
-      publisher.enabled,
-      publisher.revoked,
-    )
-    .map_err(|message| StorageError::Validation(message))?;
-
     let manifest = if let Some(packages) = &self.plugin_packages {
-      let (verified, vendor_root) = packages
-        .verify_store_with_vendor_root(package_digest)
+      let verified = packages
+        .verify_installed_package_snapshot(package_digest)
         .map_err(|err| StorageError::Validation(format!("model descriptor re-verify failed: {err}")))?;
-      if vendor_root.key_id != publisher.key_id
-        || verified.publisher_public_key_hex != publisher.public_key_hex
-        || verified.publisher_fingerprint != publisher.fingerprint
-        || verified.package_digest != package_digest
-      {
+      if verified.package_digest != package_digest {
         return Err(StorageError::Validation(
-          "model descriptor no longer reverse-binds the external vendor root".into(),
+          "model descriptor package digest drifted".into(),
         ));
       }
       verified.manifest
@@ -1151,6 +1133,7 @@ mod tests {
         auth_policies: vec![],
       },
       ui: Default::default(),
+      path_authority: vec![],
       provider_runtime: None,
       model_resources: Some(vec![paddleocr_medium_model_resource(LICENSE_NOTICE)]),
     }
@@ -1184,6 +1167,7 @@ mod tests {
           version: "1.0.0".into(),
           publisher_key_id: VENDOR_PUBLISHER_KEY_ID.into(),
           publisher_fingerprint: test_vendor_fixture::fixture_vendor_fingerprint(),
+          signature_status: crate::domain::plugin_package::PackageSignatureStatus::Signed,
           runtime_kind: "trusted-native-worker".into(),
           manifest_json,
           permission_request_digest: "a".repeat(64),

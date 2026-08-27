@@ -104,11 +104,10 @@ describe("importAuthenticationCategories", () => {
       preview({
         requiresAuthentication: ["p1", "p2"],
         integrationRequiresAuthentication: ["i1"],
-        ocrRequiresAuthentication: ["o1"],
         proxyRequiresAuthentication: true,
       }),
     );
-    expect(categories).toEqual(["providers", "integrations", "ocr", "proxy"]);
+    expect(categories).toEqual(["providers", "integrations", "proxy"]);
   });
 
   test("reports only proxy for a proxy-only preview", () => {
@@ -117,7 +116,6 @@ describe("importAuthenticationCategories", () => {
         preview({
           requiresAuthentication: [],
           integrationRequiresAuthentication: [],
-          ocrRequiresAuthentication: [],
           proxyRequiresAuthentication: true,
         }),
       ),
@@ -141,7 +139,6 @@ describe("importAuthenticationCategoryLabelKey", () => {
   test("maps every category to a stable label key", () => {
     expect(importAuthenticationCategoryLabelKey("providers")).toBe("settings.backup.importAuthProviders");
     expect(importAuthenticationCategoryLabelKey("integrations")).toBe("settings.backup.importAuthIntegrations");
-    expect(importAuthenticationCategoryLabelKey("ocr")).toBe("settings.backup.importAuthOcr");
     expect(importAuthenticationCategoryLabelKey("proxy")).toBe("settings.backup.importAuthProxy");
   });
 });

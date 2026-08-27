@@ -125,6 +125,36 @@
     ],
     "authPolicies": ["com.langnext.auth.google-service-account"]
   },
+  "pathAuthority": [
+    {
+      "capabilityId": "translate.text@1",
+      "endpointId": "translate",
+      "method": "POST",
+      "path": { "form": "bounded-prefix-suffix", "prefix": "v3beta1/projects/", "suffix": ":translateText" },
+      "authPolicyId": "com.langnext.auth.google-service-account"
+    },
+    {
+      "capabilityId": "translate.detect@1",
+      "endpointId": "translate",
+      "method": "POST",
+      "path": { "form": "bounded-prefix-suffix", "prefix": "v3beta1/projects/", "suffix": ":detectLanguage" },
+      "authPolicyId": "com.langnext.auth.google-service-account"
+    },
+    {
+      "capabilityId": "ocr.image@1",
+      "endpointId": "vision",
+      "method": "POST",
+      "path": { "form": "exact", "value": "v1/images:annotate" },
+      "authPolicyId": "com.langnext.auth.google-service-account"
+    },
+    {
+      "capabilityId": "speech.synthesize@1",
+      "endpointId": "text-to-speech",
+      "method": "POST",
+      "path": { "form": "exact", "value": "v1/text:synthesize" },
+      "authPolicyId": "com.langnext.auth.google-service-account"
+    }
+  ],
   "ui": {
     "mode": "schema",
     "pages": []

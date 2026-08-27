@@ -108,7 +108,6 @@ function AddOcrServiceForm({ onCreated }: { onCreated: (service: OcrServiceDto) 
         instances,
         definitions,
         labels: {
-          baiduLabel: t("ocr.provider.baidu"),
           aiLabel: t("ocr.provider.ai"),
           integrationLabel: t("ocr.vision.integrationLabel"),
           resolvePluginLabel: (definition) => resolvePluginDisplayName(definition, (key, options) => t(key, options)),
@@ -195,18 +194,7 @@ function AddOcrServiceForm({ onCreated }: { onCreated: (service: OcrServiceDto) 
       createMutation.mutate(write);
       return;
     }
-    const write: OcrServiceWrite = {
-      id: null,
-      providerType: "baidu",
-      displayName: t("ocr.defaults.baiduName"),
-      enabled: true,
-      baiduAction: "accurate",
-      apiKey: { action: "keep" },
-      secretKey: { action: "keep" },
-      promptTemplates: [],
-    };
-    setError(null);
-    createMutation.mutate(write);
+    throw new Error("unknown OCR provider create option");
   }
 
   return (

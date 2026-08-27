@@ -1,7 +1,6 @@
 // ABOUTME: Model sync workflow executor-selection tests.
 // ABOUTME: Asserts complete-snapshot apply, dedupe, failure preservation, and version races.
 import { afterEach, describe, expect, test } from "bun:test";
-import { registerBuiltinProviderPlugins } from "../providers/builtin";
 import type {
   ProviderInstanceDto,
   ProviderModelDto,
@@ -12,7 +11,6 @@ import { installTauriInvokeMock, invokeMock, resetInvokeMock } from "../../test/
 import { syncProviderModelsFrontend } from "./providerModelSync";
 
 installTauriInvokeMock();
-registerBuiltinProviderPlugins();
 
 const PROVIDER_ID = "provider-1";
 const PACKAGE_DIGEST = "digest-1";
@@ -135,10 +133,6 @@ function syncResultFixture(partial: Partial<SyncModelsResult>): SyncModelsResult
   };
 }
 
-function legacyTransportCalls() {
-  return invokeMock.mock.calls.filter(([cmd]) => cmd === "provider_http_request" || cmd === "provider_http_stream");
-}
-
 afterEach(() => {
   resetInvokeMock();
 });
@@ -180,7 +174,6 @@ describe("runtime_executor_connection_and_sync_preserve_complete_snapshot_semant
     expect(payload.providerInstanceId).toBe(PROVIDER_ID);
     expect(payload.expectedUpdatedAt).toBe("t");
     expect(payload.remoteModels.map((m) => m.modelKey)).toEqual(["gpt-4o-mini", "gpt-4o"]);
-    expect(legacyTransportCalls()).toHaveLength(0);
   });
 
   test("runtime list failure preserves current model rows and provider identity", async () => {
@@ -200,7 +193,6 @@ describe("runtime_executor_connection_and_sync_preserve_complete_snapshot_semant
     expect(result.errorCode).toBe("network");
     expect(result.models).toEqual(models);
     expect(result.provider.id).toBe(PROVIDER_ID);
-    expect(legacyTransportCalls()).toHaveLength(0);
   });
 
   test("changed updatedAt returns connection_changed without persistence", async () => {
@@ -223,32 +215,5 @@ describe("runtime_executor_connection_and_sync_preserve_complete_snapshot_semant
     expect(result.errorCode).toBe("connection_changed");
     const failureCalls = invokeMock.mock.calls.filter(([cmd]) => cmd === "apply_provider_model_sync_failure");
     expect(failureCalls).toHaveLength(0);
-  });
-});
-
-describe("syncProviderModelsFrontend legacy behavior", () => {
-  test("legacy provider dedupes and merges one complete snapshot into the apply path", async () => {
-    const pageBody = JSON.stringify({ data: [{ id: "a" }, { id: "b" }, { id: "a" }] });
-    const applyArgs: Array<Record<string, unknown>> = [];
-    invokeMock.mockImplementation(async (cmd: string, args: Record<string, unknown>) => {
-      if (cmd === "provider_http_request") {
-        const wire = (args.input as { wire: { relativePath: string } }).wire;
-        if (wire.relativePath === "models") {
-          return { status: 200, headers: {}, body: pageBody };
-        }
-        throw new Error(`unexpected wire path ${wire.relativePath}`);
-      }
-      if (cmd === "apply_provider_model_sync") {
-        applyArgs.push(args);
-        return syncResultFixture({ ok: true, errorCode: null, message: "synced", models: [] });
-      }
-      throw new Error(`unexpected cmd ${cmd}`);
-    });
-
-    const legacy = provider({ id: PROVIDER_ID, adapterId: "openai-compatible" });
-    const result = await syncProviderModelsFrontend(legacy, [], []);
-    expect(result.ok).toBe(true);
-    const payload = applyArgs[0] as { remoteModels: Array<{ modelKey: string }> };
-    expect(payload.remoteModels.map((m) => m.modelKey)).toEqual(["a", "b"]);
   });
 });

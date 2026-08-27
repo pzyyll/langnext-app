@@ -155,7 +155,76 @@ describe("InstallPluginDialog", () => {
       acknowledgePermissions: true,
       approvePublisher: false,
       publisherPublicKeyHex: null,
+      acknowledgeUnsignedPackageRisk: false,
+      acknowledgeNativeExecutionRisk: false,
     });
     expect(Object.prototype.hasOwnProperty.call(input, "setAsDefault")).toBe(false);
+  });
+
+  test("unsigned_wasm_install_requires_visible_exact_digest_warning", async () => {
+    const user = userEvent.setup();
+    previewRunnerMock.mockResolvedValueOnce(
+      previewDto({
+        publisherTrust: "unsigned",
+        signatureStatus: "unsigned",
+        requiresUnsignedRiskAcknowledgement: true,
+        publisherKeyId: "",
+        claimedPublisherKeyId: "com.example.keys.1",
+      }),
+    );
+    renderDialog();
+    await user.click(await screen.findByRole("button", { name: "Choose package" }));
+    await screen.findByText(PACKAGE_DIGEST);
+    expect(screen.getByText("Unsigned")).toBeTruthy();
+    const install = screen.getByRole("button", { name: "Install package" });
+    expect(install).toHaveProperty("disabled", true);
+    await user.click(
+      screen.getByRole("checkbox", {
+        name: "I acknowledge the requested permissions. This approval is for installation only.",
+      }),
+    );
+    expect(install).toHaveProperty("disabled", true);
+    await user.click(
+      screen.getByRole("checkbox", {
+        name: "Publisher identity is not verified. I accept the risk for this exact digest only. The package is not trusted or sandboxed.",
+      }),
+    );
+    expect(install).toHaveProperty("disabled", false);
+  });
+
+  test("non_vendor_native_install_requires_system_code_warning", async () => {
+    const user = userEvent.setup();
+    previewRunnerMock.mockResolvedValueOnce(
+      previewDto({
+        publisherTrust: "unsigned",
+        signatureStatus: "unsigned",
+        runtimeKind: "trusted-native-worker",
+        requiresUnsignedRiskAcknowledgement: true,
+        requiresNativeExecutionRiskAcknowledgement: true,
+      }),
+    );
+    renderDialog();
+    await user.click(await screen.findByRole("button", { name: "Choose package" }));
+    expect(
+      screen.getByText("This native worker runs as a host process. Process isolation is not a permission sandbox."),
+    ).toBeTruthy();
+    const install = screen.getByRole("button", { name: "Install package" });
+    await user.click(
+      screen.getByRole("checkbox", {
+        name: "I acknowledge the requested permissions. This approval is for installation only.",
+      }),
+    );
+    await user.click(
+      screen.getByRole("checkbox", {
+        name: "Publisher identity is not verified. I accept the risk for this exact digest only. The package is not trusted or sandboxed.",
+      }),
+    );
+    expect(install).toHaveProperty("disabled", true);
+    await user.click(
+      screen.getByRole("checkbox", {
+        name: "This native worker runs as a host process. Process isolation is not a permission sandbox.",
+      }),
+    );
+    expect(install).toHaveProperty("disabled", false);
   });
 });

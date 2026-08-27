@@ -262,11 +262,9 @@ function BackupSettingsSection() {
           const description =
             kind === "integrations"
               ? t("settings.backup.importNeedsIntegrationAuth")
-              : kind === "ocr"
-                ? t("settings.backup.importNeedsOcrAuth")
-                : kind === "mixed"
-                  ? t("settings.backup.importNeedsAuthMixed")
-                  : t("settings.backup.importNeedsAuth");
+              : kind === "mixed"
+                ? t("settings.backup.importNeedsAuthMixed")
+                : t("settings.backup.importNeedsAuth");
           toast.success({
             title: t("settings.backup.importSuccess"),
             description,

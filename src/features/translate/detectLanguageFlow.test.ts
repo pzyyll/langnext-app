@@ -256,10 +256,6 @@ describe("runtime_executor_detection_uses_host_policy_and_supported_language_val
     } satisfies ProviderModelDto;
   }
 
-  function legacyTransportCalls() {
-    return invokeMock.mock.calls.filter(([cmd]) => cmd === "provider_http_request" || cmd === "provider_http_stream");
-  }
-
   test("runtime detection sends host-selected thinking/max-token policy and returns supported codes", async () => {
     let chatInput: Record<string, unknown> | null = null;
     invokeMock.mockImplementation(async (cmd: string, args: Record<string, unknown>) => {
@@ -287,7 +283,6 @@ describe("runtime_executor_detection_uses_host_policy_and_supported_language_val
     expect(request.messages[1]?.content).toMatch(/^[\s\S]{1,5000}$/);
     expect(request.preferences).toEqual({ stream: false, temperature: 0, maxTokens: 96, thinking: true });
     expect(chatInput?.providerModelId).toBe("m1");
-    expect(legacyTransportCalls()).toHaveLength(0);
   });
 
   test("a synced model without an override detects through its source interface, never the Provider default", async () => {
@@ -348,7 +343,6 @@ describe("runtime_executor_detection_uses_host_policy_and_supported_language_val
     expect(result.ok).toBe(true);
     expect(result.languageId).toBe("en");
     expect(chatInput?.providerModelId).toBe("m1");
-    expect(legacyTransportCalls()).toHaveLength(0);
   });
 
   test("unsupported language output is a soft invalid_response", async () => {
@@ -367,7 +361,6 @@ describe("runtime_executor_detection_uses_host_policy_and_supported_language_val
     expect(result.ok).toBe(false);
     expect(result.errorCode).toBe("invalid_response");
     expect(result.modelId).toBe("m1");
-    expect(legacyTransportCalls()).toHaveLength(0);
   });
 
   test("cancelled runtime detection soft-fails without starting legacy transport", async () => {
@@ -385,6 +378,5 @@ describe("runtime_executor_detection_uses_host_policy_and_supported_language_val
     });
     expect(result.ok).toBe(false);
     expect(result.errorCode).toBe("cancelled");
-    expect(legacyTransportCalls()).toHaveLength(0);
   });
 });

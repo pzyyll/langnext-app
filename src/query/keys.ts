@@ -73,9 +73,3 @@ export const providerRuntimeKeys = {
   catalog: () => [...providerRuntimeKeys.all, "catalog"] as const,
   snapshots: (providerInstanceId: string) => [...providerRuntimeKeys.all, "snapshots", providerInstanceId] as const,
 };
-
-/** Phase 12 legacy runtime retirement inventory (read-only; remediation mutates subjects). */
-export const retirementKeys = {
-  all: ["legacy-runtime-retirement"] as const,
-  inventory: () => [...retirementKeys.all, "inventory"] as const,
-};

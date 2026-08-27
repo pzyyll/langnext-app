@@ -60,16 +60,13 @@ export function importGraphCountSummaries(preview: Pick<ImportPreview, "counts">
 }
 
 /** Credential domains that need re-entry after import. */
-export type ImportAuthenticationCategory = "providers" | "integrations" | "ocr" | "proxy";
+export type ImportAuthenticationCategory = "providers" | "integrations" | "proxy";
 
 /** Ordered, deduplicated credential re-entry categories reported by the preview. */
 export function importAuthenticationCategories(
   preview: Pick<
     ImportPreview,
-    | "requiresAuthentication"
-    | "integrationRequiresAuthentication"
-    | "ocrRequiresAuthentication"
-    | "proxyRequiresAuthentication"
+    "requiresAuthentication" | "integrationRequiresAuthentication" | "proxyRequiresAuthentication"
   >,
 ): ImportAuthenticationCategory[] {
   const categories: ImportAuthenticationCategory[] = [];
@@ -78,9 +75,6 @@ export function importAuthenticationCategories(
   }
   if ((preview.integrationRequiresAuthentication ?? []).length > 0) {
     categories.push("integrations");
-  }
-  if ((preview.ocrRequiresAuthentication ?? []).length > 0) {
-    categories.push("ocr");
   }
   if (preview.proxyRequiresAuthentication) {
     categories.push("proxy");
@@ -95,7 +89,6 @@ export const IMPORT_AUTH_LEAD_IN_KEY = "settings.backup.previewAuthNote" as cons
 export const IMPORT_AUTH_CATEGORY_LABEL_KEYS = {
   providers: "settings.backup.importAuthProviders",
   integrations: "settings.backup.importAuthIntegrations",
-  ocr: "settings.backup.importAuthOcr",
   proxy: "settings.backup.importAuthProxy",
 } as const;
 

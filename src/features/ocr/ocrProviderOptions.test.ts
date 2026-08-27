@@ -1,10 +1,9 @@
 // ABOUTME: Unit tests for OCR create options and plugin rebind candidate helpers.
-// ABOUTME: Covers static Baidu/AI options and ocr.image@1 integration filtering.
+// ABOUTME: Covers the AI option and ocr.image@1 integration filtering (package-only).
 import { describe, expect, mock, test } from "bun:test";
 import type { IntegrationInstanceDto, ServiceIntegrationDefinitionDto } from "../../storage/types";
 
 // unplugin-icons virtual modules are unavailable under bun:test.
-mock.module("~icons/svgs/baiducloud", () => ({ default: () => null }));
 mock.module("~icons/ri/ai", () => ({ default: () => null }));
 mock.module("~icons/svgs/google-cloud", () => ({ default: () => null }));
 
@@ -57,8 +56,7 @@ const visionDefinition: ServiceIntegrationDefinitionDto = {
 };
 
 describe("getOcrProviderOption", () => {
-  test("returns static options for baidu and ai", () => {
-    expect(getOcrProviderOption("baidu").id).toBe("baidu");
+  test("returns the AI static option", () => {
     expect(getOcrProviderOption("ai").id).toBe("ai");
   });
 
@@ -68,7 +66,7 @@ describe("getOcrProviderOption", () => {
 });
 
 describe("buildOcrProviderCreateOptions", () => {
-  test("places baidu and ai first, then ready OCR integrations", () => {
+  test("places ai first, then ready OCR integrations", () => {
     const options = buildOcrProviderCreateOptions({
       hasEnabledImageModel: true,
       instances: [
@@ -77,9 +75,8 @@ describe("buildOcrProviderCreateOptions", () => {
       ],
       definitions: [visionDefinition],
     });
-    expect(options.map((option) => option.id)).toEqual(["baidu", "ai", "integration:int-a", "integration:int-b"]);
+    expect(options.map((option) => option.id)).toEqual(["ai", "integration:int-a", "integration:int-b"]);
     expect(options[0]?.disabled).toBe(false);
-    expect(options[1]?.disabled).toBe(false);
     expect(options.find((option) => option.id === "integration:int-a")?.disabled).toBe(true);
     expect(options.find((option) => option.id === "integration:int-b")?.disabled).toBe(false);
     expect(options.find((option) => option.id === "integration:int-b")?.ocrCapabilityId).toBe(OCR_IMAGE_CAPABILITY_ID);

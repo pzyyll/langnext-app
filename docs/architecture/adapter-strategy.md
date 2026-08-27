@@ -1,82 +1,80 @@
-# Provider Plugin + Native Transport Boundary
+# Package-Only Runtime Boundary
 
 ## Goal
 
-Frontend TypeScript Provider plugins own wire formats, response parsing, SSE
-interpretation, pagination, and detect/translate/OCR-AI policy. Rust retains
-credential storage, generic auth injection, bounded HTTP transport, proxy
-handling, cancellation, and persistence.
+Installed, verified `.lnplugin` packages are the only executable provider and
+service-integration implementations. Wasm components own protocol request and
+response logic. Rust owns package verification, schema projection, grants, host
+auth, endpoint trust, bounded transport, and table-driven authority checks.
+The frontend presents package state and invokes typed IPC. It does not implement
+provider wire protocols.
 
 ## Layout
 
 ```text
-src/features/providers/
-  types.ts              ProviderPlugin contract, wire/SSE types
-  registry.ts           registration + auth compatibility
-  providerFetch.ts      fetch-like facade over provider_http_* IPC
-  sse.ts                incremental UTF-8 + SSE decoder
-  errors.ts             generic HTTP/IPC error normalization
-  builtin/              OpenAI Compatible/Responses, Anthropic, Gemini, DeepSeek
-
-src/features/ocr/recognizeOcrFlow.ts   AI OCR via plugins; Baidu stays native
-
-src-tauri/src/
-  domain/provider_http.rs
-  services/provider_http.rs
-  cmds/provider_http.rs
+runtime-plugins/                 Signed package sources and fixtures
+src-tauri/resources/plugins/     Bundled .lnplugin archives
+src-tauri/src/services/
+  plugin_package.rs              Verify and install packages
+  package_definition.rs          Project manifest and schema
+  wasm_runtime/                  Execute the declared Wasm component
+  network_broker.rs              Host-approved network and auth
+  endpoint_trust.rs              Endpoint review and fail-closed create
+src/features/providers/          Package runtime presentation and IPC
+src/features/plugins/            Install, activate, and inspect packages
 ```
 
-There is **no** `src-tauri/src/adapters/` module. Provider wire formats are not
-implemented in Rust.
+The frontend does not own a plugin contract, SSE decoder, or unsigned relative
+wire facade. Provider, Google Web, Google Cloud, Edge TTS, and Baidu OCR
+protocol request and response logic belongs to package Wasm components.
+Baidu OCR uses the same package execution path as the other service
+integrations.
 
-## Plugin contract
+## Installed-package flow
 
-| Method                                                        | Responsibility                                              |
-| ------------------------------------------------------------- | ----------------------------------------------------------- |
-| `manifest`                                                    | id, label, default Base URL, credential kinds, capabilities |
-| `resolveAuthScheme`                                           | map `CredentialKind` → versioned `AuthSchemeV1`             |
-| `buildModelListRequest` / `parseModelListPage`                | model list wire + pagination                                |
-| `buildChatRequest` / `parseChatResponse` / `parseStreamEvent` | chat wire format                                            |
-| `getDetectPolicy`                                             | thinking toggle + max_tokens for language detection         |
+1. Verify the signed package archive and its file index.
+2. Project the manifest, config schema, capabilities, and closed host auth
+   policies into a host registration.
+3. Resolve an authorized package pin for the instance.
+4. Execute the declared Wasm component for the requested capability.
+5. Broker host-approved network and auth access. Guests cannot select an
+   arbitrary origin or auth policy.
 
-## Native transport
+Missing packages fail closed with `plugin_unavailable`. Create paths that
+have no resolved package runtime identity do not synthesize a Bundled Rust
+fallback.
 
-Authenticated Provider traffic uses `providerFetch` / `providerFetchStream`:
+## Host responsibilities
 
-1. Plugin builds an unsigned relative `ProviderWireRequest`.
-2. Rust resolves the provider Base URL, proxy mode, and vault secret.
-3. Rust injects auth (`none` / `bearer` / `header` / `query`) natively.
-4. Raw status/body or Channel byte chunks return to the frontend.
+Rust retains:
 
-Rules:
+- Package verification and publisher or default authorization
+- Schema projection into config adapters
+- Endpoint trust review and exact approval consumption
+- Grant construction and credential isolation
+- Host auth and token exchange
+- Bounded transport, cancellation, and persistence
+- Sanitized IPC that never carries secrets, package bytes, grants, or
+  credential references
 
-- Only relative paths are accepted; redirects are disabled.
-- Sensitive caller headers/query keys are rejected before secret lookup.
-- Secrets and credential references never cross IPC DTOs.
-- Stock `@tauri-apps/plugin-http` is optional for public/no-secret traffic only.
+## Frontend responsibilities
 
-## Auth scheme expansion
+The frontend retains:
 
-New auth mechanisms (SigV4, mTLS, OAuth refresh) require a native platform change
-to `AuthSchemeV1` and `ProviderHttpService`. Ordinary providers that use
-existing schemes need only a TypeScript plugin registration.
+- Package and runtime presentation
+- Configuration UI
+- User approvals
+- Invocation of typed IPC
 
-## Model API Type overrides
+It does not parse provider SSE, register TypeScript plugins, or implement
+detect, translate, or OCR wire formats.
 
-Executable only when auth schemes are compatible and either:
+## Security rules
 
-- provider `baseUrlSource=custom` (shared relay), or
-- override plugin id equals the provider plugin id.
-
-Otherwise execution fails closed with `provider_reconfiguration_required`.
-
-## Registration
-
-Built-ins register through `registerProviderPlugin` (same API future external
-plugins will use). Duplicate IDs fail at registration. Missing plugins remain
-visible in persisted DTOs but return `plugin_unavailable` at execution.
-
-## Residual native paths
-
-- **Baidu OCR** remains a native REST integration (not a Provider plugin).
-- **AI OCR** uses the same frontend plugin + `providerFetch` path as chat.
+- Secrets do not cross sanitized IPC DTOs.
+- Guests cannot select arbitrary origins or auth policies.
+- Authority checks match one complete rule row. Fields from different rows
+  never combine.
+- Authority validation runs before host auth or token exchange.
+- Missing packages fail closed. The host does not invent a Bundled Rust
+  identity.

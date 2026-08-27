@@ -1,6 +1,5 @@
 // ABOUTME: OCR service domain entities, write inputs, and sanitized DTOs.
 // ABOUTME: Vault refs and secrets never appear on IPC DTOs.
-use crate::domain::provider::CredentialUpdate;
 use crate::domain::service_capability::{OcrImageOperation, OcrImagePreferences};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -16,7 +15,6 @@ pub const GOOGLE_VISION_PREFERENCES_SCHEMA_VERSION: i32 = 1;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OcrProviderType {
-  Baidu,
   Ai,
   PluginCapability,
 }
@@ -24,7 +22,6 @@ pub enum OcrProviderType {
 impl OcrProviderType {
   pub fn as_str(self) -> &'static str {
     match self {
-      Self::Baidu => "baidu",
       Self::Ai => "ai",
       Self::PluginCapability => "plugin_capability",
     }
@@ -32,40 +29,9 @@ impl OcrProviderType {
 
   pub fn parse(value: &str) -> Result<Self, String> {
     match value {
-      "baidu" => Ok(Self::Baidu),
       "ai" => Ok(Self::Ai),
       "plugin_capability" => Ok(Self::PluginCapability),
       other => Err(format!("invalid ocr provider_type: {other}")),
-    }
-  }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum BaiduOcrAction {
-  Accurate,
-  AccurateBasic,
-  General,
-  GeneralBasic,
-}
-
-impl BaiduOcrAction {
-  pub fn as_str(self) -> &'static str {
-    match self {
-      Self::Accurate => "accurate",
-      Self::AccurateBasic => "accurate_basic",
-      Self::General => "general",
-      Self::GeneralBasic => "general_basic",
-    }
-  }
-
-  pub fn parse(value: &str) -> Result<Self, String> {
-    match value {
-      "accurate" => Ok(Self::Accurate),
-      "accurate_basic" => Ok(Self::AccurateBasic),
-      "general" => Ok(Self::General),
-      "general_basic" => Ok(Self::GeneralBasic),
-      other => Err(format!("invalid baidu_action: {other}")),
     }
   }
 }
@@ -91,9 +57,6 @@ pub struct OcrService {
   pub display_name: String,
   pub enabled: bool,
   pub sort_order: i32,
-  pub baidu_action: Option<BaiduOcrAction>,
-  pub api_key_ref: Option<String>,
-  pub secret_key_ref: Option<String>,
   pub provider_model_id: Option<Uuid>,
   pub temperature: Option<f64>,
   pub default_prompt_template_id: Option<Uuid>,
@@ -139,11 +102,7 @@ pub struct OcrServiceDto {
   pub display_name: String,
   pub enabled: bool,
   pub sort_order: i32,
-  /// Baidu only; null for ai / plugin.
-  pub baidu_action: Option<BaiduOcrAction>,
-  pub has_api_key: bool,
-  pub has_secret_key: bool,
-  /// AI only; null for baidu / plugin.
+  /// AI only; null for plugin.
   pub provider_model_id: Option<Uuid>,
   pub temperature: Option<f64>,
   pub default_prompt_template_id: Option<Uuid>,
@@ -173,9 +132,6 @@ impl OcrServiceDto {
       display_name: service.display_name.clone(),
       enabled: service.enabled,
       sort_order: service.sort_order,
-      baidu_action: service.baidu_action,
-      has_api_key: service.api_key_ref.is_some(),
-      has_secret_key: service.secret_key_ref.is_some(),
       provider_model_id: service.provider_model_id,
       temperature: service.temperature,
       default_prompt_template_id: service.default_prompt_template_id,
@@ -220,13 +176,6 @@ pub struct OcrServiceWrite {
   pub provider_type: OcrProviderType,
   pub display_name: String,
   pub enabled: bool,
-  /// Baidu required on baidu writes.
-  #[serde(default)]
-  pub baidu_action: Option<BaiduOcrAction>,
-  #[serde(default)]
-  pub api_key: CredentialUpdate,
-  #[serde(default)]
-  pub secret_key: CredentialUpdate,
   /// AI required on ai writes.
   #[serde(default)]
   pub provider_model_id: Option<Uuid>,
@@ -271,13 +220,10 @@ mod tests {
   fn dto_json_omits_vault_refs() {
     let service = OcrService {
       id: new_id(),
-      provider_type: OcrProviderType::Baidu,
-      display_name: "Baidu".into(),
+      provider_type: OcrProviderType::Ai,
+      display_name: "AI".into(),
       enabled: true,
       sort_order: 0,
-      baidu_action: Some(BaiduOcrAction::Accurate),
-      api_key_ref: Some("ocr/api/secret".into()),
-      secret_key_ref: Some("ocr/secret/secret".into()),
       provider_model_id: None,
       temperature: None,
       default_prompt_template_id: None,
@@ -290,20 +236,7 @@ mod tests {
     };
     let dto = OcrServiceDto::from_service(&service, vec![]);
     let json = serde_json::to_string(&dto).unwrap();
-    assert!(!json.contains("apiKeyRef"));
-    assert!(!json.contains("secretKeyRef"));
-    assert!(!json.contains("ocr/api/secret"));
-    assert!(json.contains("\"hasApiKey\":true"));
-    assert!(json.contains("\"hasSecretKey\":true"));
-    assert!(json.contains("\"baiduAction\":\"accurate\""));
-  }
-
-  #[test]
-  fn baidu_action_serde_snake_case() {
-    let value = serde_json::to_value(BaiduOcrAction::AccurateBasic).unwrap();
-    assert_eq!(value, serde_json::json!("accurate_basic"));
-    let parsed: BaiduOcrAction = serde_json::from_value(value).unwrap();
-    assert_eq!(parsed, BaiduOcrAction::AccurateBasic);
+    assert!(json.contains("\"providerType\":\"ai\""));
   }
 
   #[test]

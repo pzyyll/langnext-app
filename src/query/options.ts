@@ -20,7 +20,6 @@ import {
   getSpeechService,
   listProviderInstances,
   listProviderModels,
-  listLegacyRuntimeInventory,
   listProviderRuntimeSnapshots,
   listServiceIntegrationDefinitions,
   listTranslationHistory,
@@ -39,7 +38,6 @@ import {
   profileKeys,
   providerKeys,
   providerRuntimeKeys,
-  retirementKeys,
   runtimeLifecycleKeys,
   settingsKeys,
   speechKeys,
@@ -231,13 +229,5 @@ export function runtimeRollbackPreviewOptions(instanceId: string, enabled = fals
     queryKey: runtimeLifecycleKeys.rollbackPreview(instanceId),
     queryFn: () => previewIntegrationRuntimeRollback(instanceId),
     enabled: enabled && instanceId.length > 0,
-  });
-}
-
-/** Read-only Phase 12 retirement inventory; remediation actions invalidate subject keys. */
-export function legacyRuntimeRetirementInventoryOptions() {
-  return queryOptions({
-    queryKey: retirementKeys.inventory(),
-    queryFn: listLegacyRuntimeInventory,
   });
 }

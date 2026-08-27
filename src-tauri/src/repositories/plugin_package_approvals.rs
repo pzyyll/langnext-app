@@ -1,6 +1,8 @@
 // ABOUTME: SQLite access for non-executable plugin package installation approvals.
 // ABOUTME: Approvals never authorize runtime execution or grant-set lookups.
-use crate::domain::plugin_package::{PluginPackageApproval, PublisherDecision};
+use crate::domain::plugin_package::{
+  PackageSignatureStatus, PluginPackageApproval, PublisherDecision, risk_acknowledgement_version,
+};
 use crate::error::StorageError;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use uuid::Uuid;
@@ -9,13 +11,15 @@ fn map_row(row: &Row<'_>) -> Result<PluginPackageApproval, rusqlite::Error> {
   let id: String = row.get("id")?;
   let decision: String = row.get("publisher_decision")?;
   let revision: i64 = row.get("revision")?;
+  let publisher_key_id: Option<String> = row.get("publisher_key_id")?;
+  let native_ack: i64 = row.get("native_execution_risk_acknowledged")?;
   Ok(PluginPackageApproval {
     id: Uuid::parse_str(&id)
       .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?,
     package_digest: row.get("package_digest")?,
     revision: u64::try_from(revision)
       .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Integer, Box::new(e)))?,
-    publisher_key_id: row.get("publisher_key_id")?,
+    publisher_key_id: publisher_key_id.unwrap_or_default(),
     publisher_decision: PublisherDecision::parse(&decision).map_err(|e| {
       rusqlite::Error::FromSqlConversionFailure(
         0,
@@ -25,6 +29,7 @@ fn map_row(row: &Row<'_>) -> Result<PluginPackageApproval, rusqlite::Error> {
     })?,
     permission_request_digest: row.get("permission_request_digest")?,
     approved_at: row.get("approved_at")?,
+    native_execution_risk_acknowledged: native_ack != 0,
   })
 }
 
@@ -49,6 +54,70 @@ pub fn get(conn: &Connection, id: Uuid) -> Result<PluginPackageApproval, Storage
     )
     .optional()?
     .ok_or_else(|| StorageError::NotFound(format!("plugin package approval {id}")))
+}
+
+pub fn unsigned_risk_acknowledged_for_digest(conn: &Connection, package_digest: &str) -> Result<bool, StorageError> {
+  let row: Option<(i64, Option<String>)> = conn
+    .query_row(
+      "SELECT unsigned_risk_acknowledged, risk_acknowledgement_version FROM plugin_package_approvals
+       WHERE package_digest = ?1 AND signature_status = 'unsigned'
+       ORDER BY revision DESC LIMIT 1",
+      params![package_digest],
+      |row| Ok((row.get(0)?, row.get(1)?)),
+    )
+    .optional()?;
+  let Some((ack, version)) = row else {
+    return Ok(false);
+  };
+  Ok(
+    ack == 1
+      && matches!(
+        version.as_deref(),
+        Some(crate::domain::plugin_package::UNSIGNED_PLUGIN_RISK_ACK_V1)
+          | Some(crate::domain::plugin_package::UNSIGNED_NATIVE_PLUGIN_RISK_ACK_V1)
+      ),
+  )
+}
+
+pub fn native_risk_acknowledged_for_digest(conn: &Connection, package_digest: &str) -> Result<bool, StorageError> {
+  let row: Option<(i64, Option<String>)> = conn
+    .query_row(
+      "SELECT native_execution_risk_acknowledged, risk_acknowledgement_version FROM plugin_package_approvals
+       WHERE package_digest = ?1
+       ORDER BY revision DESC LIMIT 1",
+      params![package_digest],
+      |row| Ok((row.get(0)?, row.get(1)?)),
+    )
+    .optional()?;
+  let Some((ack, version)) = row else {
+    return Ok(false);
+  };
+  Ok(
+    ack == 1
+      && matches!(
+        version.as_deref(),
+        Some(crate::domain::plugin_package::NATIVE_PLUGIN_RISK_ACK_V1)
+          | Some(crate::domain::plugin_package::UNSIGNED_NATIVE_PLUGIN_RISK_ACK_V1)
+      ),
+  )
+}
+
+pub fn latest_risk_state(
+  conn: &Connection,
+  package_digest: &str,
+) -> Result<Option<(bool, bool, Option<String>)>, StorageError> {
+  Ok(
+    conn
+      .query_row(
+        "SELECT unsigned_risk_acknowledged, native_execution_risk_acknowledged, risk_acknowledgement_version
+         FROM plugin_package_approvals
+         WHERE package_digest = ?1
+         ORDER BY revision DESC LIMIT 1",
+        params![package_digest],
+        |row| Ok((row.get::<_, i64>(0)? != 0, row.get::<_, i64>(1)? != 0, row.get(2)?)),
+      )
+      .optional()?,
+  )
 }
 
 pub fn latest_for_package(
@@ -82,18 +151,33 @@ pub fn next_revision(conn: &Connection, package_digest: &str) -> Result<u64, Sto
 }
 
 pub fn insert(conn: &Connection, approval: &PluginPackageApproval) -> Result<(), StorageError> {
+  let unsigned = approval.publisher_decision == PublisherDecision::UnsignedExactDigest;
+  let native = approval.native_execution_risk_acknowledged;
   conn
     .execute(
       "INSERT INTO plugin_package_approvals (
             id, package_digest, revision, publisher_key_id, publisher_decision,
-            permission_request_digest, approved_at
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            signature_status, unsigned_risk_acknowledged, native_execution_risk_acknowledged,
+            risk_acknowledgement_version, permission_request_digest, approved_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
       params![
         approval.id.to_string(),
         approval.package_digest,
         approval.revision as i64,
-        approval.publisher_key_id,
+        if unsigned {
+          None
+        } else {
+          Some(approval.publisher_key_id.as_str())
+        },
         approval.publisher_decision.as_str(),
+        if unsigned {
+          PackageSignatureStatus::Unsigned.as_str()
+        } else {
+          PackageSignatureStatus::Signed.as_str()
+        },
+        i64::from(unsigned),
+        i64::from(native),
+        risk_acknowledgement_version(unsigned, native),
         approval.permission_request_digest,
         approval.approved_at,
       ],

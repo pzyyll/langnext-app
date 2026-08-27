@@ -19,18 +19,18 @@
 
 ## Finding Coverage
 
-| Finding | Resolution |
-| --- | --- |
-| `Keep Disabled` is not a direct label | Rename the DTO capability and UI copy to `Disable`; test the accessible button name and action. |
-| Repeated `isProvider` branches | Add one subject-kind operation map for migrate, disable, and delete. |
-| Rust `subject_kind: String` | Add a serde `LegacyRuntimeSubjectKind` enum that serializes to the existing snake-case tokens. |
-| Repeated package-first tamper fixture | Extract one fixture helper that returns the activated instance ID. |
-| Production retirement gate is disabled | Wire a production creation policy into integrations, providers, and inventory. Derive and wire a separate execution gate into the router. |
-| Migration disables active rows and is unregistered | Replace 0030 with a no-op checkpoint, register it, and prove enabled rows remain enabled. |
-| Provider delete cascades unrelated state | Add a retirement-only, fail-closed provider delete operation. It deletes a provider only when no models, profile references, or unrelated runtime bindings exist. |
-| Provider replacement digest is entry-wide and incompatible | Build provider inventory per adapter and select exactly one authorized default whose `providerRuntime.legacyAliases` contains that adapter. The panel must use the row digest. |
-| Provider retirement lacks zero-enabled and stable-release checks | Evaluate readiness per adapter. Keep the production provider retirement allowlist empty until stable-release evidence names an eligible adapter. |
-| PaddleOCR scope creep | Remove PaddleOCR from the production policy, retirement inventory, and migration scope. The no-op migration contains no executor list. |
+| Finding                                                          | Resolution                                                                                                                                                                     |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `Keep Disabled` is not a direct label                            | Rename the DTO capability and UI copy to `Disable`; test the accessible button name and action.                                                                                |
+| Repeated `isProvider` branches                                   | Add one subject-kind operation map for migrate, disable, and delete.                                                                                                           |
+| Rust `subject_kind: String`                                      | Add a serde `LegacyRuntimeSubjectKind` enum that serializes to the existing snake-case tokens.                                                                                 |
+| Repeated package-first tamper fixture                            | Extract one fixture helper that returns the activated instance ID.                                                                                                             |
+| Production retirement gate is disabled                           | Wire a production creation policy into integrations, providers, and inventory. Derive and wire a separate execution gate into the router.                                      |
+| Migration disables active rows and is unregistered               | Replace 0030 with a no-op checkpoint, register it, and prove enabled rows remain enabled.                                                                                      |
+| Provider delete cascades unrelated state                         | Add a retirement-only, fail-closed provider delete operation. It deletes a provider only when no models, profile references, or unrelated runtime bindings exist.              |
+| Provider replacement digest is entry-wide and incompatible       | Build provider inventory per adapter and select exactly one authorized default whose `providerRuntime.legacyAliases` contains that adapter. The panel must use the row digest. |
+| Provider retirement lacks zero-enabled and stable-release checks | Evaluate readiness per adapter. Keep the production provider retirement allowlist empty until stable-release evidence names an eligible adapter.                               |
+| PaddleOCR scope creep                                            | Remove PaddleOCR from the production policy, retirement inventory, and migration scope. The no-op migration contains no executor list.                                         |
 
 ## Explicit Out of Scope
 

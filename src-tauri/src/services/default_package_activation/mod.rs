@@ -39,9 +39,16 @@ pub const DEFAULT_ACTIVATION_PREVIEW_TTL_SECS: u64 = 10 * 60;
 /// Subject authority preview lifetime before the opaque preview ID expires.
 pub const DEFAULT_RUNTIME_AUTHORITY_PREVIEW_TTL_SECS: u64 = 10 * 60;
 
+/// One discovered official bundle archive identity (plugin id + exact package digest).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OfficialBundleIdentity {
+  pub plugin_id: String,
+  pub package_digest: String,
+}
+
 /// Canonical authority-constraint document sealed into a default activation policy.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ApprovedAuthorityConstraints {
   pub fixed_network: Vec<ApprovedFixedNetworkConstraint>,
   pub auth_policies: Vec<String>,
@@ -50,7 +57,7 @@ pub struct ApprovedAuthorityConstraints {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ApprovedFixedNetworkConstraint {
   pub endpoint_id: String,
   pub origin: String,
@@ -61,7 +68,7 @@ pub struct ApprovedFixedNetworkConstraint {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ApprovedResourceLimits {
   pub max_request_bytes: u64,
   pub max_response_bytes: u64,
@@ -71,7 +78,7 @@ pub struct ApprovedResourceLimits {
 
 /// One host-shipped vendor bootstrap policy entry (exact identities only).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct VendorBootstrapPolicyEntry {
   pub plugin_id: String,
   pub package_digest: String,
@@ -93,6 +100,7 @@ struct DefaultActivationPreviewSession {
   constraints: ApprovedAuthorityConstraints,
   constraints_digest: String,
   expires_at_unix: u64,
+  signature_status: crate::domain::plugin_package::PackageSignatureStatus,
 }
 
 struct RuntimeAuthorityPreviewSession {
@@ -202,6 +210,15 @@ struct InFlightVerification {
   waiters: Condvar,
 }
 
+/// Test-only observation of one in-flight generation: worker start and waiter joins.
+#[cfg(test)]
+#[derive(Debug, Default)]
+struct FlightJoinObservation {
+  generation: u64,
+  worker_started: bool,
+  joined_callers: usize,
+}
+
 /// Optional recovery claim ownership required for claim-bound subject activation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecoveryActivationContext {
@@ -283,6 +300,12 @@ pub struct DefaultPackageActivationService {
   flight_generation: Arc<Mutex<u64>>,
   /// Resource path used only by the vendor-bootstrap internal path.
   vendor_bootstrap_path: PathBuf,
+  /// Resolved official plugin resource directory. `None` means the caller opted out of official
+  /// resources; vendor bootstrap is then a no-op. Presence activates the startup readiness
+  /// invariant: a present official bundle must authorize every exact policy or fail startup.
+  official_plugins_dir: Option<PathBuf>,
+  /// Exact identities of the discovered official archives; applied defaults must match these.
+  official_bundle_identities: Vec<OfficialBundleIdentity>,
   integration_lifecycle: Option<crate::services::runtime_lifecycle::RuntimeLifecycleService>,
   provider_runtime: Option<crate::services::runtime_providers::ProviderRuntimeService>,
   /// Test-only observation of genuine verification calls for single-flight assertions.
@@ -294,6 +317,12 @@ pub struct DefaultPackageActivationService {
   /// Test-only one-shot panic trigger inside the genuine policy-bound verifier.
   #[cfg(test)]
   verification_panic_once: Arc<Mutex<bool>>,
+  /// Test-only join/start observation for deterministic same-digest overlap.
+  #[cfg(test)]
+  flight_join_state: Arc<Mutex<FlightJoinObservation>>,
+  /// Wakes tests waiting on `flight_join_state`.
+  #[cfg(test)]
+  flight_join_signal: Arc<Condvar>,
 }
 
 mod authority_confirmation;
@@ -301,6 +330,8 @@ mod policy_authorization;
 mod recovery;
 mod single_flight;
 mod vendor_bootstrap;
+
+pub use vendor_bootstrap::generate_vendor_bootstrap_policy_from_verified;
 
 #[cfg(test)]
 mod tests;
@@ -320,6 +351,8 @@ impl DefaultPackageActivationService {
         .join("resources")
         .join("plugins")
         .join("default-activation-policies.json"),
+      official_plugins_dir: None,
+      official_bundle_identities: Vec::new(),
       integration_lifecycle: None,
       provider_runtime: None,
       #[cfg(test)]
@@ -328,6 +361,10 @@ impl DefaultPackageActivationService {
       verification_block: Arc::new(Mutex::new(None)),
       #[cfg(test)]
       verification_panic_once: Arc::new(Mutex::new(false)),
+      #[cfg(test)]
+      flight_join_state: Arc::new(Mutex::new(FlightJoinObservation::default())),
+      #[cfg(test)]
+      flight_join_signal: Arc::new(Condvar::new()),
     }
   }
 
@@ -340,6 +377,20 @@ impl DefaultPackageActivationService {
   /// Override the vendor bootstrap resource path (tests and packaged resource injection).
   pub fn with_vendor_bootstrap_path(mut self, path: impl Into<PathBuf>) -> Self {
     self.vendor_bootstrap_path = path.into();
+    self
+  }
+
+  /// Activate the official resource-bundle readiness invariant. Official archives in
+  /// `plugins_dir` must authorize every one of `identities` and the policy resource beside them
+  /// must be complete; otherwise startup readiness fails instead of silently returning zero
+  /// defaults.
+  pub fn with_official_resource_bundle(
+    mut self,
+    plugins_dir: impl Into<PathBuf>,
+    identities: Vec<OfficialBundleIdentity>,
+  ) -> Self {
+    self.official_plugins_dir = Some(plugins_dir.into());
+    self.official_bundle_identities = identities;
     self
   }
 
@@ -694,7 +745,7 @@ pub(super) fn build_activation_intent(
 }
 
 /// Build approved authority constraints from a re-verified signed manifest only.
-pub(super) fn build_authority_constraints(manifest: &PluginManifestV1) -> ApprovedAuthorityConstraints {
+pub fn build_authority_constraints(manifest: &PluginManifestV1) -> ApprovedAuthorityConstraints {
   let capability_ids: Vec<String> = manifest.capabilities.iter().map(|c| c.id.clone()).collect();
   let mut fixed_network = Vec::new();
   let mut dynamic_origin_endpoint_ids = Vec::new();

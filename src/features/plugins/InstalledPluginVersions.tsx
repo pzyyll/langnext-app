@@ -23,7 +23,11 @@ import {
   canAuthorizeInstalledDefault,
   presentDefaultPackageAuthorizationStatus,
 } from "./defaultPackageActivationPresentation";
-import { isPackageExecutionEnabled } from "./pluginPackagePresentation";
+import {
+  installedNativeRiskVisible,
+  installedSignatureLabelKey,
+  isPackageExecutionEnabled,
+} from "./pluginPackagePresentation";
 
 export function InstalledPluginVersions() {
   const { t } = useTranslation();
@@ -352,10 +356,13 @@ function InstalledVersionRow({
           <p className="font-mono text-code-inline wrap-break-word text-neutral" title={version.packageDigest}>
             {version.packageDigest}
           </p>
-          <p className="font-mono text-code-inline wrap-break-word text-neutral" title={version.publisherFingerprint}>
-            {version.publisherKeyId}
+          <p
+            className="font-mono text-code-inline wrap-break-word text-neutral"
+            title={version.publisherFingerprint || version.claimedPublisherFingerprint}
+          >
+            {version.publisherKeyId || version.claimedPublisherKeyId || "—"}
             <br />
-            {version.publisherFingerprint}
+            {version.publisherFingerprint || version.claimedPublisherFingerprint || "—"}
           </p>
         </div>
         <div className="flex flex-wrap gap-1">
@@ -366,6 +373,8 @@ function InstalledVersionRow({
           {version.inUse ? <Badge>{t("plugins.packages.inUseBadge")}</Badge> : null}
           {!version.contentAvailable ? <Badge>{t("plugins.packages.contentMissing")}</Badge> : null}
           {!executionEnabled ? <Badge>{t("plugins.packages.notExecutable")}</Badge> : null}
+          <Badge>{t(installedSignatureLabelKey(version))}</Badge>
+          {installedNativeRiskVisible(version) ? <Badge>{t("plugins.packages.nativeRisk")}</Badge> : null}
         </div>
       </div>
       {version.isDefault ? (

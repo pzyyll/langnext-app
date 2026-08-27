@@ -65,6 +65,16 @@
     ],
     "authPolicies": ["host.none.v1"]
   },
+  "pathAuthority": [
+    {
+      "capabilityId": "speech.synthesize@1",
+      "endpointId": "tts-api",
+      "method": "POST",
+      "path": { "form": "exact", "value": "v1/audio/speech" },
+      "allowedHeaderNames": ["accept"],
+      "authPolicyId": "host.none.v1"
+    }
+  ],
   "ui": {
     "mode": "schema",
     "pages": []

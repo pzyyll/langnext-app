@@ -1,5 +1,5 @@
 // ABOUTME: Focused tests for post-import invalidation keys and re-auth warning kinds.
-// ABOUTME: Covers provider, integration, OCR, proxy, and combined authentication requirements.
+// ABOUTME: Covers provider, integration, proxy, and combined authentication requirements.
 import { describe, expect, test } from "bun:test";
 import {
   integrationKeys,
@@ -15,25 +15,12 @@ import { IMPORT_INVALIDATION_KEYS, importAuthWarningKind, importRequiresAuthenti
 
 function preview(
   overrides: Partial<
-    Pick<
-      ImportPreview,
-      | "requiresAuthentication"
-      | "integrationRequiresAuthentication"
-      | "ocrRequiresAuthentication"
-      | "proxyRequiresAuthentication"
-    >
+    Pick<ImportPreview, "requiresAuthentication" | "integrationRequiresAuthentication" | "proxyRequiresAuthentication">
   > = {},
-): Pick<
-  ImportPreview,
-  | "requiresAuthentication"
-  | "integrationRequiresAuthentication"
-  | "ocrRequiresAuthentication"
-  | "proxyRequiresAuthentication"
-> {
+): Pick<ImportPreview, "requiresAuthentication" | "integrationRequiresAuthentication" | "proxyRequiresAuthentication"> {
   return {
     requiresAuthentication: [],
     integrationRequiresAuthentication: [],
-    ocrRequiresAuthentication: [],
     proxyRequiresAuthentication: false,
     ...overrides,
   };
@@ -66,10 +53,6 @@ describe("importRequiresAuthentication", () => {
     expect(importRequiresAuthentication(preview({ integrationRequiresAuthentication: ["integration-1"] }))).toBe(true);
   });
 
-  test("is true for OCR auth requirements", () => {
-    expect(importRequiresAuthentication(preview({ ocrRequiresAuthentication: ["ocr-1"] }))).toBe(true);
-  });
-
   test("is true for proxy auth requirement", () => {
     expect(importRequiresAuthentication(preview({ proxyRequiresAuthentication: true }))).toBe(true);
   });
@@ -98,23 +81,11 @@ describe("importAuthWarningKind", () => {
     expect(importAuthWarningKind(preview({ integrationRequiresAuthentication: ["i1"] }))).toBe("integrations");
   });
 
-  test("returns ocr for Baidu OCR re-auth only", () => {
-    expect(importAuthWarningKind(preview({ ocrRequiresAuthentication: ["o1"] }))).toBe("ocr");
-  });
-
   test("returns mixed when multiple auth domains need re-auth", () => {
     expect(
       importAuthWarningKind(
         preview({
           requiresAuthentication: ["p1"],
-          integrationRequiresAuthentication: ["i1"],
-        }),
-      ),
-    ).toBe("mixed");
-    expect(
-      importAuthWarningKind(
-        preview({
-          ocrRequiresAuthentication: ["o1"],
           integrationRequiresAuthentication: ["i1"],
         }),
       ),

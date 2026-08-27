@@ -37,21 +37,22 @@ use crate::services::auth_policies::{
   GOOGLE_CLOUD_TEXT_TO_SPEECH_SCOPE, GOOGLE_CLOUD_TRANSLATION_SCOPE, GOOGLE_CLOUD_VISION_SCOPE,
 };
 use crate::services::bounded_http::{BoundedHttpResponse, PreparedHttpRequest, RawHttpTransport};
-use crate::services::bundled_plugins::{HandlerDeps, build_capability_registry};
 use crate::services::import_export::ImportExportService;
 use crate::services::ocr_services::OcrServiceService;
 use crate::services::plugin_package::{public_sha256_hex, verify_package_bytes};
 use crate::services::plugin_store::PluginPackageService;
 use crate::services::runtime_lifecycle::{RuntimeLifecycleService, UpgradeApplyFault};
 use crate::services::runtime_router::RuntimeRouter;
-use crate::services::service_capabilities::{CapabilityHandler, ServiceCapabilityRegistry, ServiceCapabilityService};
+use crate::services::service_capabilities::ServiceCapabilityService;
 use crate::services::service_capabilities::{
   DetectLanguageCapability, OcrImageCapability, SpeechSynthesizeCapability, TranslateTextCapability,
 };
 use crate::services::service_integration_registry::ServiceIntegrationRegistry;
 use crate::services::service_integrations::ServiceIntegrationService;
 use crate::services::speech_services::SpeechServiceService;
-use crate::services::token_grant::{ExchangedToken, GoogleTokenExchanger, TokenGrantService};
+use crate::services::token_grant::{
+  ExchangedToken, GOOGLE_SERVICE_ACCOUNT_AUTH_DRIVER_ID, TokenExchanger, TokenGrantService, TokenInjectionKind,
+};
 use crate::services::wasm_runtime::host::BrokerHandle;
 use crate::services::wasm_runtime::network_handle::NetworkBrokerHandle;
 use crate::services::wasm_runtime::{
@@ -174,7 +175,15 @@ impl FixtureExchanger {
   }
 }
 
-impl GoogleTokenExchanger for FixtureExchanger {
+impl TokenExchanger for FixtureExchanger {
+  fn driver_id(&self) -> &'static str {
+    GOOGLE_SERVICE_ACCOUNT_AUTH_DRIVER_ID
+  }
+
+  fn injection_kind(&self) -> TokenInjectionKind {
+    TokenInjectionKind::BearerHeader
+  }
+
   fn exchange(
     &self,
     _instance_id: Uuid,
@@ -204,7 +213,15 @@ impl GoogleTokenExchanger for FixtureExchanger {
 
 struct FailingExchanger;
 
-impl GoogleTokenExchanger for FailingExchanger {
+impl TokenExchanger for FailingExchanger {
+  fn driver_id(&self) -> &'static str {
+    GOOGLE_SERVICE_ACCOUNT_AUTH_DRIVER_ID
+  }
+
+  fn injection_kind(&self) -> TokenInjectionKind {
+    TokenInjectionKind::BearerHeader
+  }
+
   fn exchange(
     &self,
     _instance_id: Uuid,
@@ -285,7 +302,7 @@ fn installed_fixture() -> InstalledFixture {
   let package = verify_package_bytes(PACKAGE_BYTES, VENDOR_PUBLIC_KEY_HEX.trim()).expect("fixture package verifies");
   let runtime = Arc::new(WasmRuntime::new().expect("Wasmtime runtime"));
   let exchanger = Arc::new(FixtureExchanger::recording());
-  let tokens = Arc::new(TokenGrantService::new(exchanger.clone()));
+  let tokens = Arc::new(TokenGrantService::new(vec![exchanger.clone()]).unwrap());
   let transport = Arc::new(CaptureTransport {
     calls: AtomicUsize::new(0),
     last: Mutex::new(None),
@@ -482,39 +499,22 @@ fn lifecycle_fixture_from_package(package_bytes: &[u8]) -> LifecycleFixture {
   );
   let imported = packages.bootstrap_bundled_package(package_bytes, false).unwrap();
   let package_digest = imported.package_digest().to_string();
-  let registry = Arc::new(ServiceIntegrationRegistry::bundled().unwrap());
+  let registry = crate::services::test_support::registry_from_installed_packages(&packages);
   let wasm = Arc::new(WasmRuntime::new().unwrap());
   let exchanger = Arc::new(FixtureExchanger::recording());
-  let tokens = Arc::new(TokenGrantService::new(exchanger));
-  let network = Arc::new(crate::services::network_broker::NetworkBroker::new(
+  let tokens = Arc::new(TokenGrantService::new(vec![exchanger]).unwrap());
+  let _network = Arc::new(crate::services::network_broker::NetworkBroker::new(
     db.clone(),
     registry.clone(),
   ));
-  let handlers = Arc::new(
-    build_capability_registry(
-      HandlerDeps {
-        db: db.clone(),
-        broker: network,
-        tokens: tokens.clone(),
-      },
-      &registry,
-    )
-    .unwrap(),
-  );
-  let router = RuntimeRouter::new(
-    db.clone(),
-    registry.clone(),
-    handlers.clone(),
-    packages.clone(),
-    wasm.clone(),
-  );
+  let router = RuntimeRouter::new(db.clone(), registry.clone(), packages.clone(), wasm.clone());
   let transport = Arc::new(CaptureTransport {
     calls: AtomicUsize::new(0),
     last: Mutex::new(None),
     response: Mutex::new(json_response(200, TRANSLATE_SUCCESS_FIXTURE)),
   });
   let broker = broker_factory(transport.clone(), tokens.clone());
-  let capabilities = ServiceCapabilityService::new(db.clone(), registry.clone(), handlers)
+  let capabilities = ServiceCapabilityService::new(db.clone(), registry.clone())
     .with_router(router, wasm.clone())
     .with_broker_factory(broker);
   let vault: Arc<dyn CredentialVault> = Arc::new(MemoryCredentialVault::default());
@@ -535,10 +535,10 @@ fn lifecycle_fixture_from_package(package_bytes: &[u8]) -> LifecycleFixture {
         health_status: IntegrationHealthStatus::Ready,
         last_validated_at: Some(now.clone()),
         last_error_code: None,
-        runtime_kind: "bundled-rust".into(),
-        package_digest: None,
+        runtime_kind: "wasm-component".into(),
+        package_digest: Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into()),
         execution_grant_set_revision: None,
-        runtime_state: "active".into(),
+        runtime_state: "pending_activation".into(),
         runtime_error_code: None,
         runtime_error_message: None,
         runtime_requirement_json: None,
@@ -584,28 +584,14 @@ fn public_capabilities_with_transport(
   fixture: &LifecycleFixture,
   transport: Arc<dyn RawHttpTransport>,
 ) -> ServiceCapabilityService {
-  let handlers = Arc::new(
-    build_capability_registry(
-      HandlerDeps {
-        db: fixture.db.clone(),
-        broker: Arc::new(crate::services::network_broker::NetworkBroker::new(
-          fixture.db.clone(),
-          fixture.registry.clone(),
-        )),
-        tokens: fixture.tokens.clone(),
-      },
-      &fixture.registry,
-    )
-    .unwrap(),
-  );
+  let _ = &fixture.tokens;
   let router = RuntimeRouter::new(
     fixture.db.clone(),
     fixture.registry.clone(),
-    handlers.clone(),
     fixture.packages.clone(),
     fixture.wasm.clone(),
   );
-  ServiceCapabilityService::new(fixture.db.clone(), fixture.registry.clone(), handlers)
+  ServiceCapabilityService::new(fixture.db.clone(), fixture.registry.clone())
     .with_router(router, fixture.wasm.clone())
     .with_broker_factory(broker_factory(transport, fixture.tokens.clone()))
 }
@@ -662,9 +648,6 @@ fn insert_public_workflow_bindings(fixture: &LifecycleFixture) -> (Uuid, Uuid, U
           display_name: "Google Cloud public workflow OCR".into(),
           enabled: true,
           sort_order: 0,
-          baidu_action: None,
-          api_key_ref: None,
-          secret_key_ref: None,
           provider_model_id: None,
           temperature: None,
           default_prompt_template_id: None,
@@ -785,10 +768,10 @@ fn assert_public_ocr_failure(component_bytes: &[u8], expected_code: &str) {
         health_status: IntegrationHealthStatus::Ready,
         last_validated_at: None,
         last_error_code: None,
-        runtime_kind: "bundled-rust".into(),
-        package_digest: None,
+        runtime_kind: "wasm-component".into(),
+        package_digest: Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into()),
         execution_grant_set_revision: None,
-        runtime_state: "active".into(),
+        runtime_state: "pending_activation".into(),
         runtime_error_code: None,
         runtime_error_message: None,
         runtime_requirement_json: None,
@@ -805,9 +788,6 @@ fn assert_public_ocr_failure(component_bytes: &[u8], expected_code: &str) {
         display_name: "OCR failure fixture".into(),
         enabled: true,
         sort_order: 0,
-        baidu_action: None,
-        api_key_ref: None,
-        secret_key_ref: None,
         provider_model_id: None,
         temperature: None,
         default_prompt_template_id: None,
@@ -822,8 +802,7 @@ fn assert_public_ocr_failure(component_bytes: &[u8], expected_code: &str) {
     Ok::<_, crate::error::StorageError>(())
   })
   .unwrap();
-  let registry = Arc::new(ServiceIntegrationRegistry::bundled().unwrap());
-  let mut handlers = ServiceCapabilityRegistry::new();
+  let registry = Arc::new(ServiceIntegrationRegistry::empty());
   let digest = ComponentArtifactDigest::parse(&public_sha256_hex(component_bytes)).unwrap();
   let verified = Arc::new(
     fixture
@@ -831,7 +810,7 @@ fn assert_public_ocr_failure(component_bytes: &[u8], expected_code: &str) {
       .compile_component(&fixture.package_digest, &digest, component_bytes)
       .unwrap(),
   );
-  let adapter = WasmOcrImageAdapter::new(
+  let _adapter = WasmOcrImageAdapter::new(
     fixture.runtime.clone(),
     verified,
     grant_for(&fixture, instance_id, OCR_IMAGE_CAPABILITY_ID),
@@ -839,12 +818,7 @@ fn assert_public_ocr_failure(component_bytes: &[u8], expected_code: &str) {
     config(),
     broker_factory(fixture.transport.clone(), fixture.tokens.clone()),
   );
-  handlers.register(
-    GOOGLE_CLOUD_PLUGIN_ID,
-    OCR_IMAGE_CAPABILITY_ID,
-    CapabilityHandler::OcrImage(Arc::new(adapter)),
-  );
-  let capabilities = ServiceCapabilityService::new(db.clone(), registry.clone(), Arc::new(handlers));
+  let capabilities = ServiceCapabilityService::new(db.clone(), registry.clone());
   let vault: Arc<dyn CredentialVault> = Arc::new(MemoryCredentialVault::default());
   let services = OcrServiceService::new(db.clone(), vault, registry, capabilities);
   let service_id = db
@@ -869,7 +843,7 @@ fn assert_public_ocr_failure(component_bytes: &[u8], expected_code: &str) {
     (expected, actual) => panic!("expected {expected}, got {actual:?}"),
   }
   let instance = db.read(|conn| integration_instances::get(conn, instance_id)).unwrap();
-  assert_eq!(instance.runtime_kind, "bundled-rust");
+  assert_eq!(instance.runtime_kind, "wasm-component");
   assert!(instance.package_digest.is_none());
 }
 
@@ -936,8 +910,8 @@ fn assert_installed_ocr_failure(component_bytes: &[u8], expected_code: &str) {
     .db
     .read(|conn| integration_instances::get(conn, fixture.instance_id))
     .unwrap();
-  assert_eq!(restored.runtime_kind, "bundled-rust");
-  assert!(restored.package_digest.is_none());
+  assert_eq!(restored.runtime_kind, "wasm-component");
+  assert!(restored.execution_grant_set_revision.is_none());
   assert_eq!(
     fixture
       .db
@@ -1516,8 +1490,8 @@ fn google_cloud_runtime_complete_package_routes_all_capabilities_from_one_pin() 
     .db
     .read(|conn| integration_instances::get(conn, fixture.instance_id))
     .unwrap();
-  assert_eq!(before.runtime_kind, "bundled-rust");
-  assert!(before.package_digest.is_none());
+  assert_eq!(before.runtime_kind, "wasm-component");
+  assert!(before.execution_grant_set_revision.is_none());
   let preview = fixture
     .lifecycle
     .preview_upgrade(fixture.instance_id, &fixture.package_digest)
@@ -1626,7 +1600,7 @@ fn google_cloud_export_import_round_trip_preserves_exact_runtime_requirement() {
       acknowledge_permissions: true,
     })
     .unwrap();
-  let exporter = ImportExportService::new(fixture.db.clone(), fixture.vault.clone());
+  let exporter = ImportExportService::new(fixture.db.clone(), fixture.vault.clone(), None);
   let document = exporter.export().expect("export active Google Cloud runtime");
   let integration = document
     .integration_instances
@@ -1660,7 +1634,7 @@ fn google_cloud_export_import_round_trip_preserves_exact_runtime_requirement() {
   let clean_db = Database::new(clean_dir.path()).unwrap();
   clean_db.initialize().unwrap();
   let clean_vault: Arc<dyn CredentialVault> = Arc::new(MemoryCredentialVault::default());
-  let importer = ImportExportService::new(clean_db.clone(), clean_vault.clone());
+  let importer = ImportExportService::new(clean_db.clone(), clean_vault.clone(), None);
   let preview = importer
     .preview(&document, ImportConflictMode::Merge)
     .expect("preview exact runtime requirement");
@@ -1727,9 +1701,6 @@ fn google_cloud_dependency_protected_delete_preserves_instance_and_credentials()
           display_name: "Google OCR".into(),
           enabled: true,
           sort_order: 0,
-          baidu_action: None,
-          api_key_ref: None,
-          secret_key_ref: None,
           provider_model_id: None,
           temperature: None,
           default_prompt_template_id: None,
@@ -1763,8 +1734,8 @@ fn google_cloud_dependency_protected_delete_preserves_instance_and_credentials()
     .db
     .read(|conn| integration_credential_bindings::get(conn, fixture.instance_id, GOOGLE_CLOUD_SERVICE_ACCOUNT_SLOT))
     .unwrap();
-  let registry = Arc::new(ServiceIntegrationRegistry::bundled().unwrap());
-  let tokens = Arc::new(TokenGrantService::new(Arc::new(FixtureExchanger::recording())));
+  let registry = fixture.registry.clone();
+  let tokens = Arc::new(TokenGrantService::new(vec![Arc::new(FixtureExchanger::recording())]).unwrap());
   let service = ServiceIntegrationService::new(fixture.db.clone(), fixture.vault.clone(), registry, tokens);
   let error = service.delete(fixture.instance_id).unwrap_err();
   assert!(matches!(error, crate::error::StorageError::InUse(_)));
@@ -1870,7 +1841,7 @@ fn google_cloud_runtime_ocr_trap_and_limit_cleanup_preserve_rollback() {
     .db
     .read(|conn| integration_instances::get(conn, lifecycle.instance_id))
     .unwrap();
-  assert_eq!(restored.runtime_kind, "bundled-rust");
+  assert_eq!(restored.runtime_kind, "wasm-component");
   assert_installed_ocr_failure(OCR_TRAP_COMPONENT, "plugin_unavailable");
   assert_installed_ocr_failure(OCR_OVERSIZED_COMPONENT, "invalid_response");
 }
@@ -1912,7 +1883,7 @@ fn google_cloud_runtime_provider_attempt_provenance_distinguishes_no_attempt_can
 
   let token_fixture = installed_fixture();
   let token_instance_id = Uuid::now_v7();
-  let token = Arc::new(TokenGrantService::new(Arc::new(FailingExchanger)));
+  let token = Arc::new(TokenGrantService::new(vec![Arc::new(FailingExchanger)]).unwrap());
   let (token_component, _) = artifact(
     &token_fixture,
     "translate/fixtures/langnext-google-cloud-translate.wasm",
@@ -2499,8 +2470,8 @@ fn service_integration_remote_mutation_invalidates_capability_health() {
       .record_provider_result(fixture.instance_id, capability, &completed, true, None)
       .unwrap();
   }
-  let registry = Arc::new(ServiceIntegrationRegistry::bundled().unwrap());
-  let tokens = Arc::new(TokenGrantService::new(Arc::new(FixtureExchanger::recording())));
+  let registry = fixture.registry.clone();
+  let tokens = Arc::new(TokenGrantService::new(vec![Arc::new(FixtureExchanger::recording())]).unwrap());
   let service = ServiceIntegrationService::new(fixture.db.clone(), fixture.vault.clone(), registry, tokens);
   let current = fixture
     .db
@@ -2714,12 +2685,12 @@ fn google_cloud_runtime_authority_change_invalidates_capability_health_atomicall
     .lifecycle
     .preview_upgrade(fixture.instance_id, &fixture.package_digest)
     .unwrap();
-  let registry = Arc::new(ServiceIntegrationRegistry::bundled().unwrap());
+  let registry = fixture.registry.clone();
   let service = ServiceIntegrationService::new(
     fixture.db.clone(),
     fixture.vault.clone(),
     registry,
-    Arc::new(TokenGrantService::new(Arc::new(FixtureExchanger::recording()))),
+    Arc::new(TokenGrantService::new(vec![Arc::new(FixtureExchanger::recording())]).unwrap()),
   );
   let current = fixture
     .db
@@ -2855,7 +2826,7 @@ fn google_cloud_runtime_bundled_package_requires_explicit_atomic_transition_and_
     .db
     .read(|conn| integration_instances::get(conn, fixture.instance_id))
     .unwrap();
-  assert_eq!(before.runtime_kind, "bundled-rust");
+  assert_eq!(before.runtime_kind, "wasm-component");
   let preview = fixture
     .lifecycle
     .preview_upgrade(fixture.instance_id, &fixture.package_digest)
@@ -2883,8 +2854,8 @@ fn google_cloud_runtime_bundled_package_requires_explicit_atomic_transition_and_
     .db
     .read(|conn| integration_instances::get(conn, fixture.instance_id))
     .unwrap();
-  assert_eq!(restored.runtime_kind, "bundled-rust");
-  assert!(restored.package_digest.is_none());
+  assert_eq!(restored.runtime_kind, "wasm-component");
+  assert!(restored.execution_grant_set_revision.is_none());
   assert!(restored.execution_grant_set_revision.is_none());
   let profile = fixture
     .db
@@ -3074,6 +3045,7 @@ fn packages_set_and_authorize_default(fixture: &LifecycleFixture, digest: &str) 
     .authorize_default_plugin_package(AuthorizeDefaultPluginPackageInput {
       preview_id: preview.preview_id,
       acknowledge_future_instance_authority: true,
+      acknowledge_unsigned_default_risk: false,
     })
     .expect("authorize default");
 }

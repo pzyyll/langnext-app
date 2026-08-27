@@ -4,10 +4,11 @@
 #MISE description="Assert no WASI in host dependency tree or guest imports"
 set -euo pipefail
 
-EXPECTED_GUEST_IMPORT_TESTS=14
+EXPECTED_GUEST_IMPORT_TESTS=15
 EXPECTED_GUEST_IMPORT_TEST_NAMES=(
   "services::wasm_runtime::tests::wasm_guest_imports::translate_conformance_guest_imports_only_langnext"
   "services::wasm_runtime::tests::wasm_guest_imports::detect_conformance_guest_imports_only_langnext"
+  "services::wasm_runtime::tests::wasm_guest_imports::baidu_ocr_guest_imports_only_langnext"
   "services::wasm_runtime::tests::wasm_guest_imports::llm_models_conformance_guest_imports_only_langnext"
   "services::wasm_runtime::tests::wasm_guest_imports::llm_chat_conformance_guest_imports_only_langnext"
   "services::wasm_runtime::tests::wasm_guest_imports::llm_models_openai_compatible_guest_imports_only_langnext"
@@ -42,6 +43,7 @@ echo "ok: host dependency tree has no wasmtime-wasi"
 for guest_cargo in \
   runtime-plugins/conformance/wasm-component/Cargo.toml \
   runtime-plugins/conformance/wasm-detect-component/Cargo.toml \
+  runtime-plugins/baidu-ocr/ocr/Cargo.toml \
   runtime-plugins/conformance/wasm-llm-models-component/Cargo.toml \
   runtime-plugins/conformance/wasm-llm-chat-component/Cargo.toml \
   runtime-plugins/openai-compatible/models/Cargo.toml \

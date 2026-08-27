@@ -4,7 +4,7 @@ use super::*;
 use crate::domain::plugin_package::{ApprovePluginPackageInput, ApproveUserPublisherInput};
 use crate::domain::runtime_plugin::SHA256_HEX_LEN;
 use crate::services::plugin_package::test_support::{
-  sample_manifest, test_fingerprint, test_public_key_hex, valid_signed_package,
+  sample_manifest, test_fingerprint, test_public_key_hex, valid_signed_package, valid_unsigned_package,
 };
 use crate::services::plugin_store::PluginPackageService;
 use crate::services::vendor_trust::VENDOR_PUBLISHER_KEY_ID;
@@ -44,6 +44,8 @@ fn install_valid(packages: &PluginPackageService, dir: &Path, set_default: bool)
       approve_publisher: false,
       publisher_public_key_hex: None,
       acknowledge_permissions: true,
+      acknowledge_unsigned_package_risk: false,
+      acknowledge_native_execution_risk: false,
     })
     .unwrap();
   if set_default {
@@ -51,6 +53,24 @@ fn install_valid(packages: &PluginPackageService, dir: &Path, set_default: bool)
       .set_default(&result.version.plugin_id, &digest)
       .expect("test helper may set default only after install");
   }
+  digest
+}
+
+fn install_unsigned(packages: &PluginPackageService, dir: &Path) -> String {
+  let (package, digest) = valid_unsigned_package();
+  let source = dir.join("unsigned-default.lnplugin");
+  std::fs::write(&source, package).unwrap();
+  let preview = packages.preview_package(&source).unwrap();
+  packages
+    .approve_package(ApprovePluginPackageInput {
+      preview_id: preview.preview_id,
+      approve_publisher: false,
+      publisher_public_key_hex: None,
+      acknowledge_permissions: true,
+      acknowledge_unsigned_package_risk: true,
+      acknowledge_native_execution_risk: false,
+    })
+    .unwrap();
   digest
 }
 
@@ -70,9 +90,98 @@ fn install_second_version(packages: &PluginPackageService, dir: &Path) -> String
       approve_publisher: false,
       publisher_public_key_hex: None,
       acknowledge_permissions: true,
+      acknowledge_unsigned_package_risk: false,
+      acknowledge_native_execution_risk: false,
     })
     .unwrap();
   digest
+}
+
+#[test]
+fn unsigned_default_requires_second_exact_digest_acknowledgement() {
+  let (dir, packages, activation) = setup();
+  let digest = install_unsigned(&packages, dir.path());
+  let preview = activation.preview_default_package_activation(&digest).unwrap();
+  assert!(preview.requires_unsigned_default_risk_acknowledgement);
+  assert_eq!(
+    preview.signature_status,
+    crate::domain::plugin_package::PackageSignatureStatus::Unsigned
+  );
+  let error = activation
+    .authorize_default_plugin_package(AuthorizeDefaultPluginPackageInput {
+      preview_id: preview.preview_id,
+      acknowledge_future_instance_authority: true,
+      acknowledge_unsigned_default_risk: false,
+    })
+    .unwrap_err();
+  assert!(error.to_string().contains("unsigned"));
+  assert!(
+    !packages
+      .list_versions()
+      .unwrap()
+      .iter()
+      .any(|version| version.is_default)
+  );
+
+  let preview = activation.preview_default_package_activation(&digest).unwrap();
+  activation
+    .authorize_default_plugin_package(AuthorizeDefaultPluginPackageInput {
+      preview_id: preview.preview_id,
+      acknowledge_future_instance_authority: true,
+      acknowledge_unsigned_default_risk: true,
+    })
+    .unwrap();
+  assert!(
+    packages
+      .list_versions()
+      .unwrap()
+      .iter()
+      .any(|version| version.is_default && version.package_digest == digest)
+  );
+}
+
+#[test]
+fn unsigned_default_package_first_create_and_activation_reverify_integrity() {
+  let (dir, packages, activation) = setup();
+  let digest = install_unsigned(&packages, dir.path());
+  let preview = activation.preview_default_package_activation(&digest).unwrap();
+  activation
+    .authorize_default_plugin_package(AuthorizeDefaultPluginPackageInput {
+      preview_id: preview.preview_id,
+      acknowledge_future_instance_authority: true,
+      acknowledge_unsigned_default_risk: true,
+    })
+    .unwrap();
+  assert_eq!(
+    activation.authorization_status("com.example.unsigned").unwrap(),
+    DefaultPackageAuthorizationStatus::Authorized
+  );
+  let prepared = activation.prepare_package_first_create("com.example.unsigned").unwrap();
+  assert!(
+    matches!(prepared, PackageFirstCreateResolution::Ready(_)),
+    "{prepared:?}"
+  );
+  let archive = packages.package_archive_path(&digest);
+  #[cfg(windows)]
+  {
+    let mut permissions = std::fs::metadata(&archive).unwrap().permissions();
+    permissions.set_readonly(false);
+    std::fs::set_permissions(&archive, permissions).unwrap();
+  }
+  #[cfg(unix)]
+  {
+    use std::os::unix::fs::PermissionsExt;
+    const OWNER_READ_WRITE_MODE: u32 = 0o600;
+    std::fs::set_permissions(&archive, std::fs::Permissions::from_mode(OWNER_READ_WRITE_MODE)).unwrap();
+  }
+  let mut bytes = std::fs::read(&archive).unwrap();
+  let last = bytes.len() - 1;
+  bytes[last] ^= 0xff;
+  std::fs::write(archive, bytes).unwrap();
+  assert!(matches!(
+    activation.prepare_package_first_create("com.example.unsigned").unwrap(),
+    PackageFirstCreateResolution::Blocked(_)
+  ));
 }
 
 fn build_vendor_signed_package() -> (Vec<u8>, String) {
@@ -128,6 +237,7 @@ fn default_package_activation_authorization_preview_and_apply() {
   let missing_ack = activation.authorize_default_plugin_package(AuthorizeDefaultPluginPackageInput {
     preview_id: preview.preview_id.clone(),
     acknowledge_future_instance_authority: false,
+    acknowledge_unsigned_default_risk: false,
   });
   assert!(matches!(missing_ack, Err(StorageError::Validation(_))));
   assert_eq!(
@@ -142,6 +252,7 @@ fn default_package_activation_authorization_preview_and_apply() {
     .authorize_default_plugin_package(AuthorizeDefaultPluginPackageInput {
       preview_id: preview.preview_id,
       acknowledge_future_instance_authority: true,
+      acknowledge_unsigned_default_risk: false,
     })
     .unwrap();
   assert_eq!(authorized.package_digest, digest);
@@ -154,6 +265,7 @@ fn default_package_activation_authorization_preview_and_apply() {
   let missing = activation.authorize_default_plugin_package(AuthorizeDefaultPluginPackageInput {
     preview_id: new_id().to_string(),
     acknowledge_future_instance_authority: true,
+    acknowledge_unsigned_default_risk: false,
   });
   assert!(matches!(missing, Err(StorageError::NotFound(_))));
 }
@@ -168,6 +280,7 @@ fn default_package_activation_authorization_rejects_revoked_publisher() {
     .authorize_default_plugin_package(AuthorizeDefaultPluginPackageInput {
       preview_id: preview.preview_id,
       acknowledge_future_instance_authority: true,
+      acknowledge_unsigned_default_risk: false,
     })
     .unwrap_err();
   assert!(matches!(err, StorageError::Validation(_)));
@@ -186,6 +299,7 @@ fn default_package_policy_publisher_trust_blocks_package_first_prepare() {
     .authorize_default_plugin_package(AuthorizeDefaultPluginPackageInput {
       preview_id: preview.preview_id,
       acknowledge_future_instance_authority: true,
+      acknowledge_unsigned_default_risk: false,
     })
     .unwrap();
   assert!(matches!(
@@ -223,6 +337,8 @@ fn default_package_policy_resource_bootstrap_empty_creates_no_default() {
       approve_publisher: false,
       publisher_public_key_hex: None,
       acknowledge_permissions: true,
+      acknowledge_unsigned_package_risk: false,
+      acknowledge_native_execution_risk: false,
     })
     .unwrap();
   let empty_path = dir.path().join("default-activation-policies.json");
@@ -263,6 +379,8 @@ fn default_package_activation_authorization_vendor_bootstrap_exact_bind() {
       approve_publisher: false,
       publisher_public_key_hex: None,
       acknowledge_permissions: true,
+      acknowledge_unsigned_package_risk: false,
+      acknowledge_native_execution_risk: false,
     })
     .unwrap();
   let version = packages
@@ -386,6 +504,8 @@ fn default_package_activation_resource_limits_preview_and_policy_match_effective
       approve_publisher: false,
       publisher_public_key_hex: None,
       acknowledge_permissions: true,
+      acknowledge_unsigned_package_risk: false,
+      acknowledge_native_execution_risk: false,
     })
     .unwrap();
 
@@ -418,6 +538,7 @@ fn default_package_activation_resource_limits_preview_and_policy_match_effective
     .authorize_default_plugin_package(AuthorizeDefaultPluginPackageInput {
       preview_id: preview.preview_id,
       acknowledge_future_instance_authority: true,
+      acknowledge_unsigned_default_risk: false,
     })
     .unwrap();
   assert_eq!(authorized.package_digest, digest);
@@ -449,6 +570,7 @@ fn default_package_activation_integration_user_publisher_activates_policy_bound_
     .authorize_default_plugin_package(AuthorizeDefaultPluginPackageInput {
       preview_id: preview.preview_id,
       acknowledge_future_instance_authority: true,
+      acknowledge_unsigned_default_risk: false,
     })
     .unwrap();
   let snapshot = activation
@@ -509,6 +631,7 @@ fn default_package_activation_retry_integration_uses_retained_digest_only() {
     .authorize_default_plugin_package(AuthorizeDefaultPluginPackageInput {
       preview_id: preview.preview_id,
       acknowledge_future_instance_authority: true,
+      acknowledge_unsigned_default_risk: false,
     })
     .unwrap();
 
@@ -674,6 +797,8 @@ fn default_runtime_authority_confirmation_preview_is_subject_bound() {
       approve_publisher: false,
       publisher_public_key_hex: None,
       acknowledge_permissions: true,
+      acknowledge_unsigned_package_risk: false,
+      acknowledge_native_execution_risk: false,
     })
     .unwrap();
   // Authorize a stricter policy ceiling with no fixed network so package authority is additional.
@@ -697,6 +822,8 @@ fn default_runtime_authority_confirmation_preview_is_subject_bound() {
           package_digest: digest.clone(),
           publisher_key_id: "com.example.keys.1".into(),
           publisher_fingerprint: test_fingerprint(),
+          signature_status: crate::domain::plugin_package::PackageSignatureStatus::Signed,
+          unsigned_default_risk_acknowledgement_version: None,
           permission_request_digest: compute_permission_request_digest(&manifest),
           approved_authority_constraints_json: constraints_json,
           approved_authority_constraints_digest: constraints_digest,
@@ -771,10 +898,85 @@ fn default_runtime_authority_confirmation_preview_is_subject_bound() {
   assert!(matches!(missing_ack, Err(StorageError::Validation(_))));
 }
 
-#[test]
-fn default_package_activation_single_flight_same_digest() {
+/// Expected concurrent callers that must join one same-digest flight before the worker proceeds.
+const SAME_DIGEST_CONCURRENT_CALLERS: usize = 2;
+/// Parties on the worker-hold barrier: the genuine worker and the test harness.
+const SINGLE_FLIGHT_WORKER_HOLD_PARTIES: usize = 2;
+/// Bounded wait for single-flight resilience tests so a defect fails instead of hanging.
+const SINGLE_FLIGHT_TEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+fn run_same_digest_overlap(
+  activation: &DefaultPackageActivationService,
+  digest: &str,
+) -> (
+  Result<Arc<VerifiedActivationSnapshot>, StorageError>,
+  Result<Arc<VerifiedActivationSnapshot>, StorageError>,
+) {
+  use std::sync::{Arc as StdArc, Barrier};
   use std::thread;
 
+  let block = StdArc::new(Barrier::new(SINGLE_FLIGHT_WORKER_HOLD_PARTIES));
+  *activation.verification_block.lock().unwrap() = Some(block.clone());
+
+  let start = StdArc::new(Barrier::new(SAME_DIGEST_CONCURRENT_CALLERS));
+  let first_activation = activation.clone();
+  let second_activation = activation.clone();
+  let first_digest = digest.to_owned();
+  let second_digest = digest.to_owned();
+  let first_start = start.clone();
+  let second_start = start;
+
+  let first = thread::spawn(move || {
+    first_start.wait();
+    first_activation.verify_shared_package_snapshot(&first_digest)
+  });
+  let second = thread::spawn(move || {
+    second_start.wait();
+    second_activation.verify_shared_package_snapshot(&second_digest)
+  });
+
+  wait_for_same_generation_overlap(activation, SAME_DIGEST_CONCURRENT_CALLERS);
+  block.wait();
+  *activation.verification_block.lock().unwrap() = None;
+
+  (
+    first.join().expect("first verification thread"),
+    second.join().expect("second verification thread"),
+  )
+}
+
+fn wait_for_same_generation_overlap(activation: &DefaultPackageActivationService, expected_joiners: usize) {
+  use std::time::Instant;
+  let deadline = Instant::now() + SINGLE_FLIGHT_TEST_TIMEOUT;
+  let mut state = activation.flight_join_state.lock().unwrap_or_else(|e| e.into_inner());
+  loop {
+    if state.worker_started && state.joined_callers >= expected_joiners {
+      return;
+    }
+    let now = Instant::now();
+    if now >= deadline {
+      panic!(
+        "timed out waiting for worker start and {expected_joiners} joiners (worker_started={}, joined={})",
+        state.worker_started, state.joined_callers
+      );
+    }
+    let remaining = deadline.saturating_duration_since(now);
+    let (guard, wait_result) = match activation.flight_join_signal.wait_timeout(state, remaining) {
+      Ok(value) => value,
+      Err(poisoned) => poisoned.into_inner(),
+    };
+    state = guard;
+    if wait_result.timed_out() && !(state.worker_started && state.joined_callers >= expected_joiners) {
+      panic!(
+        "timed out waiting for worker start and {expected_joiners} joiners (worker_started={}, joined={})",
+        state.worker_started, state.joined_callers
+      );
+    }
+  }
+}
+
+#[test]
+fn default_package_activation_single_flight_same_digest() {
   let (dir, packages, activation) = setup();
   let digest = install_valid(&packages, dir.path(), false);
   let preview = activation.preview_default_package_activation(&digest).unwrap();
@@ -782,17 +984,13 @@ fn default_package_activation_single_flight_same_digest() {
     .authorize_default_plugin_package(AuthorizeDefaultPluginPackageInput {
       preview_id: preview.preview_id,
       acknowledge_future_instance_authority: true,
+      acknowledge_unsigned_default_risk: false,
     })
     .unwrap();
 
-  let a = activation.clone();
-  let b = activation.clone();
-  let digest_a = digest.clone();
-  let digest_b = digest.clone();
-  let handle_a = thread::spawn(move || a.verify_shared_package_snapshot(&digest_a));
-  let handle_b = thread::spawn(move || b.verify_shared_package_snapshot(&digest_b));
-  let snap_a = handle_a.join().unwrap().expect("leader verification");
-  let snap_b = handle_b.join().unwrap().expect("waiter verification");
+  let (first, second) = run_same_digest_overlap(&activation, &digest);
+  let snap_a = first.expect("leader verification");
+  let snap_b = second.expect("waiter verification");
   assert_eq!(snap_a.package_digest, digest);
   assert_eq!(snap_b.package_digest, digest);
   assert_eq!(snap_a.publisher_key_id, snap_b.publisher_key_id);
@@ -900,6 +1098,7 @@ fn default_package_activation_resource_limits_stale_preview_rejects_without_muta
     .authorize_default_plugin_package(AuthorizeDefaultPluginPackageInput {
       preview_id: preview.preview_id,
       acknowledge_future_instance_authority: true,
+      acknowledge_unsigned_default_risk: false,
     })
     .unwrap_err();
   assert!(matches!(err, StorageError::Validation(_)));
@@ -927,6 +1126,7 @@ fn default_package_activation_policy_bound_verification_rejects_default_drift() 
     .authorize_default_plugin_package(AuthorizeDefaultPluginPackageInput {
       preview_id: preview.preview_id,
       acknowledge_future_instance_authority: true,
+      acknowledge_unsigned_default_risk: false,
     })
     .unwrap();
   let digest_b = install_second_version(&packages, dir.path());
@@ -989,6 +1189,7 @@ fn default_package_activation_subject_dispatch_uses_retained_intent_digest() {
     .authorize_default_plugin_package(AuthorizeDefaultPluginPackageInput {
       preview_id: preview.preview_id,
       acknowledge_future_instance_authority: true,
+      acknowledge_unsigned_default_risk: false,
     })
     .unwrap();
   let digest_b = install_second_version(&packages, dir.path());
@@ -1039,7 +1240,7 @@ fn default_package_activation_subject_dispatch_uses_retained_intent_digest() {
     .set_default("com.example.translate", &digest_b)
     .expect("catalog default may move without rebinding subjects");
 
-  let registry = Arc::new(ServiceIntegrationRegistry::bundled().unwrap());
+  let registry = Arc::new(ServiceIntegrationRegistry::empty());
   let lifecycle = RuntimeLifecycleService::new(activation.db.clone(), packages.clone(), registry);
   let activation = activation.with_integration_lifecycle(lifecycle);
   activation
@@ -1060,9 +1261,6 @@ fn default_package_activation_subject_dispatch_uses_retained_intent_digest() {
   assert!(instance.execution_grant_set_revision.is_none());
 }
 
-/// Bounded wait for single-flight resilience tests so a defect fails instead of hanging.
-const SINGLE_FLIGHT_TEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
-
 #[test]
 fn default_package_activation_single_flight_different_digests_concurrent() {
   use std::thread;
@@ -1074,6 +1272,7 @@ fn default_package_activation_single_flight_different_digests_concurrent() {
     .authorize_default_plugin_package(AuthorizeDefaultPluginPackageInput {
       preview_id: preview_a.preview_id,
       acknowledge_future_instance_authority: true,
+      acknowledge_unsigned_default_risk: false,
     })
     .unwrap();
   // Second digest cannot share the first package's authorized default; authorize B separately
@@ -1086,6 +1285,7 @@ fn default_package_activation_single_flight_different_digests_concurrent() {
     .authorize_default_plugin_package(AuthorizeDefaultPluginPackageInput {
       preview_id: preview_b.preview_id,
       acknowledge_future_instance_authority: true,
+      acknowledge_unsigned_default_risk: false,
     })
     .unwrap();
 
@@ -1122,6 +1322,7 @@ fn default_package_activation_single_flight_cleanup_retry() {
     .authorize_default_plugin_package(AuthorizeDefaultPluginPackageInput {
       preview_id: preview.preview_id,
       acknowledge_future_instance_authority: true,
+      acknowledge_unsigned_default_risk: false,
     })
     .unwrap();
 
@@ -1137,19 +1338,12 @@ fn default_package_activation_single_flight_cleanup_retry() {
 
 #[test]
 fn default_package_activation_single_flight_verification_failure() {
-  use std::thread;
-
   let (dir, packages, activation) = setup();
   let digest = install_valid(&packages, dir.path(), false);
   // No authorization policy: every waiter receives the same normalized failure.
-  let a = activation.clone();
-  let b = activation.clone();
-  let digest_a = digest.clone();
-  let digest_b = digest.clone();
-  let handle_a = thread::spawn(move || a.verify_shared_package_snapshot(&digest_a));
-  let handle_b = thread::spawn(move || b.verify_shared_package_snapshot(&digest_b));
-  let err_a = handle_a.join().unwrap().expect_err("leader must fail");
-  let err_b = handle_b.join().unwrap().expect_err("waiter must fail");
+  let (first, second) = run_same_digest_overlap(&activation, &digest);
+  let err_a = first.expect_err("leader must fail");
+  let err_b = second.expect_err("waiter must fail");
   assert!(matches!(err_a, StorageError::Validation(_)));
   assert!(matches!(err_b, StorageError::Validation(_)));
   assert_eq!(err_a.to_string(), err_b.to_string());
@@ -1161,6 +1355,7 @@ fn default_package_activation_single_flight_verification_failure() {
     .authorize_default_plugin_package(AuthorizeDefaultPluginPackageInput {
       preview_id: preview.preview_id,
       acknowledge_future_instance_authority: true,
+      acknowledge_unsigned_default_risk: false,
     })
     .unwrap();
   let snap = activation.verify_shared_package_snapshot(&digest).unwrap();
@@ -1170,9 +1365,6 @@ fn default_package_activation_single_flight_verification_failure() {
 
 #[test]
 fn default_package_activation_single_flight_verification_panic() {
-  use std::sync::{Arc as StdArc, Barrier};
-  use std::thread;
-
   // Real panic injection inside the genuine policy-bound verifier: both waiters receive one
   // normalized panic result, and map cleanup allows a later successful verification.
   let (dir, packages, activation) = setup();
@@ -1182,30 +1374,14 @@ fn default_package_activation_single_flight_verification_panic() {
     .authorize_default_plugin_package(AuthorizeDefaultPluginPackageInput {
       preview_id: preview.preview_id,
       acknowledge_future_instance_authority: true,
+      acknowledge_unsigned_default_risk: false,
     })
     .unwrap();
 
   activation.arm_verification_panic_once();
-  let barrier = StdArc::new(Barrier::new(2));
-  let a = activation.clone();
-  let b = activation.clone();
-  let digest_a = digest.clone();
-  let digest_b = digest.clone();
-  let barrier_a = barrier.clone();
-  let barrier_b = barrier;
-  let handle_a = thread::spawn(move || {
-    barrier_a.wait();
-    a.verify_shared_package_snapshot(&digest_a)
-  });
-  let handle_b = thread::spawn(move || {
-    barrier_b.wait();
-    b.verify_shared_package_snapshot(&digest_b)
-  });
-  let err_a = handle_a.join().unwrap().expect_err("leader publishes panic result");
-  let err_b = handle_b
-    .join()
-    .unwrap()
-    .expect_err("waiter receives published panic result");
+  let (first, second) = run_same_digest_overlap(&activation, &digest);
+  let err_a = first.expect_err("leader publishes panic result");
+  let err_b = second.expect_err("waiter receives published panic result");
   assert!(matches!(err_a, StorageError::Validation(_)));
   assert_eq!(err_a.to_string(), err_b.to_string());
   assert!(
@@ -1241,6 +1417,7 @@ fn default_package_activation_single_flight_waiter_cancellation() {
     .authorize_default_plugin_package(AuthorizeDefaultPluginPackageInput {
       preview_id: preview.preview_id,
       acknowledge_future_instance_authority: true,
+      acknowledge_unsigned_default_risk: false,
     })
     .unwrap();
 
@@ -1270,9 +1447,8 @@ fn default_package_activation_single_flight_waiter_cancellation() {
   });
 
   start.wait();
-  // Wait until the independent worker has entered verification (hits the block barrier).
-  // Do not release it yet; cancel one waiter while the worker is blocked.
-  thread::sleep(std::time::Duration::from_millis(50));
+  // Wait until both waiters joined the same generation and the genuine worker is held.
+  wait_for_same_generation_overlap(&activation, SAME_DIGEST_CONCURRENT_CALLERS);
   cancel.cancel();
   let cancelled_err = cancelled_handle
     .join()
@@ -1326,6 +1502,8 @@ fn default_runtime_authority_confirmation_persists_exact_approval() {
       approve_publisher: false,
       publisher_public_key_hex: None,
       acknowledge_permissions: true,
+      acknowledge_unsigned_package_risk: false,
+      acknowledge_native_execution_risk: false,
     })
     .unwrap();
   packages.set_default("com.example.translate", &digest).unwrap();
@@ -1349,6 +1527,8 @@ fn default_runtime_authority_confirmation_persists_exact_approval() {
           package_digest: digest.clone(),
           publisher_key_id: "com.example.keys.1".into(),
           publisher_fingerprint: test_fingerprint(),
+          signature_status: crate::domain::plugin_package::PackageSignatureStatus::Signed,
+          unsigned_default_risk_acknowledgement_version: None,
           permission_request_digest: compute_permission_request_digest(&manifest),
           approved_authority_constraints_json: constraints_json,
           approved_authority_constraints_digest: constraints_digest.clone(),
@@ -1402,7 +1582,7 @@ fn default_runtime_authority_confirmation_persists_exact_approval() {
     )
     .unwrap();
 
-  let registry = Arc::new(ServiceIntegrationRegistry::bundled().unwrap());
+  let registry = Arc::new(ServiceIntegrationRegistry::empty());
   let lifecycle = RuntimeLifecycleService::new(activation.db.clone(), packages.clone(), registry);
   let activation = activation.with_integration_lifecycle(lifecycle);
 
@@ -1445,7 +1625,7 @@ fn default_runtime_authority_confirmation_persists_exact_approval() {
     .with_integration_lifecycle(RuntimeLifecycleService::new(
       activation.db.clone(),
       packages.clone(),
-      Arc::new(ServiceIntegrationRegistry::bundled().unwrap()),
+      Arc::new(ServiceIntegrationRegistry::empty()),
     ));
   let approval = reloaded
     .db
@@ -1506,6 +1686,8 @@ fn default_package_activation_integration_grant_rejects_unapproved_effective_ori
       approve_publisher: false,
       publisher_public_key_hex: None,
       acknowledge_permissions: true,
+      acknowledge_unsigned_package_risk: false,
+      acknowledge_native_execution_risk: false,
     })
     .unwrap();
   packages.set_default("com.example.translate", &digest).unwrap();
@@ -1528,6 +1710,8 @@ fn default_package_activation_integration_grant_rejects_unapproved_effective_ori
           package_digest: digest.clone(),
           publisher_key_id: "com.example.keys.1".into(),
           publisher_fingerprint: test_fingerprint(),
+          signature_status: crate::domain::plugin_package::PackageSignatureStatus::Signed,
+          unsigned_default_risk_acknowledgement_version: None,
           permission_request_digest: compute_permission_request_digest(&manifest),
           approved_authority_constraints_json: constraints_json,
           approved_authority_constraints_digest: constraints_digest,
@@ -1580,7 +1764,7 @@ fn default_package_activation_integration_grant_rejects_unapproved_effective_ori
     )
     .unwrap();
 
-  let registry = Arc::new(ServiceIntegrationRegistry::bundled().unwrap());
+  let registry = Arc::new(ServiceIntegrationRegistry::empty());
   let lifecycle = RuntimeLifecycleService::new(activation.db.clone(), packages.clone(), registry);
   let activation = activation.with_integration_lifecycle(lifecycle);
   activation
@@ -1635,6 +1819,8 @@ fn default_runtime_authority_confirmation_stale_config_rejects_without_mutation(
       approve_publisher: false,
       publisher_public_key_hex: None,
       acknowledge_permissions: true,
+      acknowledge_unsigned_package_risk: false,
+      acknowledge_native_execution_risk: false,
     })
     .unwrap();
   packages.set_default("com.example.translate", &digest).unwrap();
@@ -1657,6 +1843,8 @@ fn default_runtime_authority_confirmation_stale_config_rejects_without_mutation(
           package_digest: digest.clone(),
           publisher_key_id: "com.example.keys.1".into(),
           publisher_fingerprint: test_fingerprint(),
+          signature_status: crate::domain::plugin_package::PackageSignatureStatus::Signed,
+          unsigned_default_risk_acknowledgement_version: None,
           permission_request_digest: compute_permission_request_digest(&manifest),
           approved_authority_constraints_json: constraints_json,
           approved_authority_constraints_digest: constraints_digest,
@@ -1881,6 +2069,7 @@ fn default_package_activation_startup_recovery_reconciles_already_active_subject
     .authorize_default_plugin_package(AuthorizeDefaultPluginPackageInput {
       preview_id: preview.preview_id,
       acknowledge_future_instance_authority: true,
+      acknowledge_unsigned_default_risk: false,
     })
     .unwrap();
 
@@ -1978,6 +2167,8 @@ fn default_package_activation_single_flight_two_subjects_independent_grants() {
       approve_publisher: false,
       publisher_public_key_hex: None,
       acknowledge_permissions: true,
+      acknowledge_unsigned_package_risk: false,
+      acknowledge_native_execution_risk: false,
     })
     .unwrap();
   let preview = activation.preview_default_package_activation(&digest).unwrap();
@@ -1985,10 +2176,11 @@ fn default_package_activation_single_flight_two_subjects_independent_grants() {
     .authorize_default_plugin_package(AuthorizeDefaultPluginPackageInput {
       preview_id: preview.preview_id,
       acknowledge_future_instance_authority: true,
+      acknowledge_unsigned_default_risk: false,
     })
     .unwrap();
 
-  let registry = Arc::new(ServiceIntegrationRegistry::bundled().unwrap());
+  let registry = Arc::new(ServiceIntegrationRegistry::empty());
   let lifecycle = RuntimeLifecycleService::new(activation.db.clone(), packages.clone(), registry);
   let activation = activation.with_integration_lifecycle(lifecycle);
   let now = now_rfc3339();
@@ -2086,7 +2278,7 @@ fn default_package_activation_startup_recovery_two_workers_claim_partition() {
   let worker_a = activation.clone();
   let worker_b = activation.clone();
   let handle_a = std::thread::spawn(move || {
-    worker_a.db.transaction(|uow| {
+    worker_a.db.transaction_immediate(|uow| {
       default_package_activation_policies::claim_recovery_eligible_intents(
         uow.conn(),
         "worker-a",
@@ -2097,7 +2289,7 @@ fn default_package_activation_startup_recovery_two_workers_claim_partition() {
     })
   });
   let handle_b = std::thread::spawn(move || {
-    worker_b.db.transaction(|uow| {
+    worker_b.db.transaction_immediate(|uow| {
       default_package_activation_policies::claim_recovery_eligible_intents(
         uow.conn(),
         "worker-b",
@@ -2160,6 +2352,8 @@ fn default_runtime_authority_confirmation_auth_only_expansion() {
       approve_publisher: false,
       publisher_public_key_hex: None,
       acknowledge_permissions: true,
+      acknowledge_unsigned_package_risk: false,
+      acknowledge_native_execution_risk: false,
     })
     .unwrap();
   packages.set_default("com.example.translate", &digest).unwrap();
@@ -2179,6 +2373,8 @@ fn default_runtime_authority_confirmation_auth_only_expansion() {
           package_digest: digest.clone(),
           publisher_key_id: "com.example.keys.1".into(),
           publisher_fingerprint: test_fingerprint(),
+          signature_status: crate::domain::plugin_package::PackageSignatureStatus::Signed,
+          unsigned_default_risk_acknowledgement_version: None,
           permission_request_digest: compute_permission_request_digest(&manifest),
           approved_authority_constraints_json: constraints_json,
           approved_authority_constraints_digest: constraints_digest,
@@ -2232,7 +2428,7 @@ fn default_runtime_authority_confirmation_auth_only_expansion() {
     )
     .unwrap();
 
-  let registry = Arc::new(ServiceIntegrationRegistry::bundled().unwrap());
+  let registry = Arc::new(ServiceIntegrationRegistry::empty());
   let lifecycle = RuntimeLifecycleService::new(activation.db.clone(), packages.clone(), registry);
   let activation = activation.with_integration_lifecycle(lifecycle);
   activation

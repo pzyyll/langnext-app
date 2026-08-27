@@ -136,11 +136,11 @@ mod tests {
         unit.conn().execute(
           "INSERT INTO integration_instances (
              id, plugin_id, plugin_version, display_name, enabled, config_json,
-             config_schema_version, health_status, runtime_kind, runtime_state,
-             created_at, updated_at
+             config_schema_version, health_status, runtime_kind, package_digest,
+             runtime_state, created_at, updated_at
            ) VALUES (?1, 'com.example.plugin', '1.0.0', 'Test', 1, '{}', 1,
-                     'unconfigured', 'bundled-rust', 'active', ?2, ?2)",
-          rusqlite::params![instance_id.to_string(), trust.approved_at],
+                     'unconfigured', 'wasm-component', ?3, 'pending_activation', ?2, ?2)",
+          rusqlite::params![instance_id.to_string(), trust.approved_at, "a".repeat(64)],
         )?;
         upsert(unit.conn(), &trust)?;
         assert_eq!(count_for_instance(unit.conn(), instance_id)?, 1);

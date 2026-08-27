@@ -28,17 +28,14 @@ struct VendorPublicKeyFileEntry {
   public_key_hex: String,
 }
 
-/// Compile-time bundled vendor trust JSON. Ships empty so production never auto-trusts a test key.
-///
-/// Release process: replace `src-tauri/resources/vendor-trust/public-keys.json` with real public
-/// keys corresponding to offline-held vendor private keys before packaging. Private keys must
-/// never enter this repository, app resources, or CI artifacts.
+/// Compile-time bundled vendor trust JSON. Contains only public verification material.
+/// Private keys must never enter this repository, app resources, or CI artifacts.
 const BUNDLED_VENDOR_TRUST_JSON: &str = include_str!("../../resources/vendor-trust/public-keys.json");
 
 /// Load production vendor public keys from (in order):
 /// 1. `LANGNEXT_VENDOR_TRUST_JSON` env path when set
 /// 2. optional filesystem search paths (app resource dir, cargo resources)
-/// 3. compile-time bundled JSON (empty by default)
+/// 3. compile-time bundled JSON (non-empty production public roots)
 ///
 /// Invalid files fail closed (error). Empty valid files yield no trusted vendor roots.
 pub fn load_production_vendor_public_keys(search_roots: &[PathBuf]) -> Result<Vec<VendorPublicKey>, String> {
@@ -137,11 +134,32 @@ mod tests {
   use super::*;
 
   #[test]
-  fn bundled_vendor_trust_is_empty_by_default() {
+  fn bundled_vendor_trust_carries_real_production_root_only() {
     let keys = parse_vendor_public_keys_json(BUNDLED_VENDOR_TRUST_JSON, "bundled").unwrap();
+    // Gate A: the production trust file carries the real signing root. It must never be empty
+    // (that would break release verification) and must never contain the fixture test key.
     assert!(
-      keys.is_empty(),
-      "production bundle must not ship fabricated vendor roots; got {keys:?}"
+      !keys.is_empty(),
+      "production bundle must ship a real vendor root after Gate A"
+    );
+    assert!(
+      keys.iter().any(|k| k.key_id == VENDOR_PUBLISHER_KEY_ID),
+      "bundled trust must carry the production vendor key id"
+    );
+    for key in &keys {
+      assert!(
+        key.public_key_hex != test_vendor_fixture::fixture_vendor_public_key_hex(),
+        "production bundle must not ship the fixture test root; got {:?}",
+        key
+      );
+    }
+    let fetched = load_production_vendor_public_keys(&[cargo_resources_root()])
+      .expect("production vendor trust must load from the cargo resources root");
+    assert!(
+      fetched
+        .iter()
+        .all(|root| root.public_key_hex != test_vendor_fixture::fixture_vendor_public_key_hex()),
+      "loaded production roots must never be the fixture key"
     );
   }
 

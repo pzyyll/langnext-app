@@ -1,5 +1,6 @@
 // ABOUTME: Acknowledgement-gated default package authorization dialog.
 // ABOUTME: Shows exact publisher, digest, capabilities, and authority before authorize IPC.
+import { useState } from "react";
 import { Checkbox } from "@base-ui/react/checkbox";
 import { useTranslation } from "react-i18next";
 import IconMaterialSymbolsLightCheck from "~icons/material-symbols-light/check";
@@ -31,6 +32,7 @@ function DefaultPackageActivationDialogContent({
 }: DefaultPackageActivationDialogProps) {
   const { t } = useTranslation();
   const sessionKey = open && packageDigest ? packageDigest : "closed";
+  const [unsignedDefaultAck, setUnsignedDefaultAck] = useState(false);
   const { preview, loading, loadError, acknowledged, setAcknowledged, confirmDisabled, resetAcknowledgement } =
     useAcknowledgedPreviewDialog({
       active: Boolean(open && packageDigest),
@@ -119,6 +121,20 @@ function DefaultPackageActivationDialogContent({
             </Checkbox.Root>
             <span>{t("plugins.packages.defaultActivation.ackLabel")}</span>
           </label>
+          {preview.requiresUnsignedDefaultRiskAcknowledgement ? (
+            <label className="flex items-start gap-2 text-on-surface">
+              <Checkbox.Root
+                checked={unsignedDefaultAck}
+                onCheckedChange={(checked) => setUnsignedDefaultAck(checked === true)}
+                className={checkboxClassName}
+              >
+                <Checkbox.Indicator className={checkboxIndicatorClassName}>
+                  <IconMaterialSymbolsLightCheck className="size-3" aria-hidden />
+                </Checkbox.Indicator>
+              </Checkbox.Root>
+              <span>{t("plugins.packages.defaultActivation.ackUnsigned")}</span>
+            </label>
+          ) : null}
         </>
       ) : null}
     </div>
@@ -137,14 +153,17 @@ function DefaultPackageActivationDialogContent({
       description={description}
       confirmText={t("plugins.packages.defaultActivation.confirm")}
       pendingText={t("plugins.packages.defaultActivation.confirming")}
-      confirmDisabled={confirmDisabled}
+      confirmDisabled={
+        confirmDisabled || Boolean(preview?.requiresUnsignedDefaultRiskAcknowledgement && !unsignedDefaultAck)
+      }
       onConfirm={async () => {
-        if (!preview || !acknowledged) {
+        if (!preview || !acknowledged || (preview.requiresUnsignedDefaultRiskAcknowledgement && !unsignedDefaultAck)) {
           throw new Error(t("plugins.packages.defaultActivation.stale"));
         }
         await runAuthorizeDefaultPluginPackage({
           previewId: preview.previewId,
           acknowledgeFutureInstanceAuthority: true,
+          acknowledgeUnsignedDefaultRisk: Boolean(preview.requiresUnsignedDefaultRiskAcknowledgement),
         });
         await onAuthorized();
       }}

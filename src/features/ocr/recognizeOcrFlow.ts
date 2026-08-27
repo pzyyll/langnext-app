@@ -1,12 +1,12 @@
-// ABOUTME: Frontend OCR recognition: AI via provider plugins; Baidu + plugin via Rust IPC.
-// ABOUTME: Backend recognize_ocr dispatches Baidu native and plugin_capability (Vision).
+// ABOUTME: Frontend OCR recognition: AI via provider runtime packages; plugin OCR via Rust IPC.
+// ABOUTME: Plugin/OCR dispatch selects only package capabilities; no legacy executor is used.
 import {
   getAppSettings,
   getOcrService,
   listAllProviderModels,
   listProviderInstances,
   listRuntimeProviderCatalog,
-  recognizeBaiduOcr,
+  recognizePluginOcr,
 } from "../../storage/client";
 import type {
   OcrRecognizeInput,
@@ -17,8 +17,11 @@ import type {
   ProviderRuntimeCatalogEntryDto,
 } from "../../storage/types";
 import { normalizeProviderError } from "../providers/errors";
-import { resolveEffectiveAdapterId, resolveProviderExecutor } from "../providers/executor";
-import { isModelApiTypeExecutable, requireProviderPlugin } from "../providers/registry";
+import {
+  ProviderRuntimeUnavailableError,
+  resolveEffectiveAdapterId,
+  resolveProviderExecutor,
+} from "../providers/executor";
 import { newClientRequestId } from "../translate/newClientRequestId";
 
 const DEFAULT_AI_OCR_TEMPERATURE = 0.2;
@@ -48,15 +51,15 @@ async function resolveOcrService(ocrServiceId?: string | null): Promise<OcrServi
 }
 
 /**
- * Native/backend OCR path. Used for Baidu and plugin_capability (Vision).
- * IPC command is still named recognize_ocr; client helper keeps historical name.
+ * Backend plugin-capability OCR path. IPC command is named recognize_ocr; the client helper
+ * owns the invoke surface.
  */
-async function recognizeNativeOcr(
+async function recognizePluginOcrPath(
   service: OcrServiceDto,
   pngBase64: string,
   requestId?: string | null,
 ): Promise<OcrRecognizeResult> {
-  return recognizeBaiduOcr({
+  return recognizePluginOcr({
     pngBase64,
     ocrServiceId: service.id,
     requestId: requestId ?? newClientRequestId("ocr"),
@@ -93,29 +96,16 @@ async function recognizeAiOcr(
   if (!provider || !provider.enabled) {
     throw new Error("AI OCR provider is missing or disabled");
   }
-  // Unbound API types keep the existing model API Type / custom-relay compatibility rule;
-  // an active matching runtime binding enforces declared aliases inside the executor resolver.
+  // Package-only: the effective API type must have an active Wasm runtime binding. A missing
+  // or non-package binding fails closed; no legacy frontend provider transport is selected.
   const effectiveAdapterId = resolveEffectiveAdapterId({
     modelAdapterId: model.adapterId,
     modelSourceAdapterId: model.sourceAdapterId,
     providerAdapterId: provider.adapterId,
   });
   const binding = provider.runtimeBindings.find((candidate) => candidate.adapterId === effectiveAdapterId);
-  if (!binding || binding.runtimeKind === "legacy-frontend-provider") {
-    const pluginId = effectiveAdapterId.trim();
-    const plugin = requireProviderPlugin(pluginId);
-    const modelAuth = plugin.resolveAuthScheme(provider.credentialKind);
-    if (
-      !isModelApiTypeExecutable({
-        providerPluginId: provider.adapterId,
-        modelPluginId: pluginId,
-        providerAuthScheme: provider.authScheme,
-        modelAuthScheme: modelAuth,
-        baseUrlSource: provider.baseUrlSource,
-      })
-    ) {
-      throw new Error("AI OCR model API Type is incompatible with the provider endpoint");
-    }
+  if (!binding || binding.runtimeKind !== "wasm-component") {
+    throw new ProviderRuntimeUnavailableError("AI OCR model API Type has no active runtime package binding");
   }
 
   const executor = resolveProviderExecutor({
@@ -126,7 +116,7 @@ async function recognizeAiOcr(
     catalog: runtimeCatalog,
   });
   // The PNG travels only in semantic executor input; the runtime command converts it to
-  // the host-owned WIT image Blob, and legacy adapters encode it inside their wire body.
+  // the host-owned image Blob.
   const response = await executor.chat({
     operation: "ocr",
     stream: false,
@@ -148,8 +138,8 @@ async function recognizeAiOcr(
 
 /**
  * Recognize OCR text.
- * - baidu / plugin_capability → Rust `recognize_ocr` (native Baidu or Vision plugin)
- * - ai → frontend provider plugin multimodal chat
+ * - plugin_capability → Rust `recognize_ocr` (installed package capability)
+ * - ai → frontend provider package multimodal chat
  */
 export async function recognizeOcrFlow(input: OcrRecognizeInput): Promise<OcrRecognizeResult> {
   const pngBase64 = input.pngBase64.trim();
@@ -158,8 +148,8 @@ export async function recognizeOcrFlow(input: OcrRecognizeInput): Promise<OcrRec
   }
 
   const service = await resolveOcrService(input.ocrServiceId);
-  if (service.providerType === "baidu" || service.providerType === "plugin_capability") {
-    return recognizeNativeOcr(service, pngBase64, input.requestId);
+  if (service.providerType === "plugin_capability") {
+    return recognizePluginOcrPath(service, pngBase64, input.requestId);
   }
 
   try {

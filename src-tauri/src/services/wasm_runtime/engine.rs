@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 use wasmtime::{Cache, CacheConfig, Config, Engine, InstanceAllocationStrategy, OptLevel, PoolingAllocationConfig};
 
 /// Pinned Wasmtime runtime version. Cache identity and API conformance gate any upgrade.
-pub const WASMTIME_VERSION: &str = "47.0.2";
+pub const WASMTIME_VERSION: &str = "47.0.3";
 
 /// Maximum concurrently allocated component instances in the pooling allocator.
 pub const POOL_MAX_COMPONENT_INSTANCES: u32 = 32;

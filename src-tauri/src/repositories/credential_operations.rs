@@ -5,15 +5,13 @@ use crate::error::StorageError;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use uuid::Uuid;
 
-/// Default slot for legacy owners (provider, proxy, OCR keys).
+/// Default slot for owners without an integration slot.
 pub const PRIMARY_SLOT_ID: &str = "primary";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OwnerKind {
   Provider,
   GlobalProxy,
-  OcrApiKey,
-  OcrSecretKey,
   Integration,
 }
 
@@ -22,8 +20,6 @@ impl OwnerKind {
     match self {
       Self::Provider => "provider",
       Self::GlobalProxy => "global_proxy",
-      Self::OcrApiKey => "ocr_api_key",
-      Self::OcrSecretKey => "ocr_secret_key",
       Self::Integration => "integration",
     }
   }
@@ -32,8 +28,6 @@ impl OwnerKind {
     match value {
       "provider" => Ok(Self::Provider),
       "global_proxy" => Ok(Self::GlobalProxy),
-      "ocr_api_key" => Ok(Self::OcrApiKey),
-      "ocr_secret_key" => Ok(Self::OcrSecretKey),
       "integration" => Ok(Self::Integration),
       other => Err(StorageError::Internal(format!("unknown owner_kind: {other}"))),
     }

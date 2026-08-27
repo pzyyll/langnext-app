@@ -37,6 +37,46 @@ fn models_dev_cache_dir(dir: &tempfile::TempDir) -> std::path::PathBuf {
   cache_dir
 }
 
+const OPENAI_COMPATIBLE_PACKAGE: &[u8] = include_bytes!(concat!(
+  env!("CARGO_MANIFEST_DIR"),
+  "/../runtime-plugins/openai-compatible/fixtures/packages/com.langnext.provider.openai-compatible-1.0.0.lnplugin"
+));
+const GOOGLE_CLOUD_LNPLUGIN: &[u8] = include_bytes!(concat!(
+  env!("CARGO_MANIFEST_DIR"),
+  "/../runtime-plugins/google-cloud/fixtures/com.langnext.google-cloud-1.2.0.lnplugin"
+));
+
+/// Install and authorize the openai-compatible default package, returning a package-first
+/// ProviderService. Package-only: every provider create requires an authorized default.
+fn package_first_providers(db: Database, vault: Arc<MemoryCredentialVault>, dir: &std::path::Path) -> ProviderService {
+  use crate::domain::default_package_activation::AuthorizeDefaultPluginPackageInput;
+  use crate::services::default_package_activation::DefaultPackageActivationService;
+  use crate::services::plugin_store::PluginPackageService;
+  use crate::services::runtime_providers::ProviderRuntimeService;
+  use crate::services::vendor_trust::test_vendor_fixture::fixture_vendor_public_key;
+  use crate::services::wasm_runtime::WasmRuntime;
+
+  let packages =
+    PluginPackageService::with_vendor_roots(db.clone(), dir.to_path_buf(), vec![fixture_vendor_public_key()]);
+  let activation = DefaultPackageActivationService::create(db.clone(), packages.clone(), dir);
+  let import = packages
+    .bootstrap_bundled_package(OPENAI_COMPATIBLE_PACKAGE, false)
+    .expect("vendor package bootstraps");
+  let digest = import.package_digest().to_string();
+  let preview = activation
+    .preview_default_package_activation(&digest)
+    .expect("preview default activation");
+  activation
+    .authorize_default_plugin_package(AuthorizeDefaultPluginPackageInput {
+      preview_id: preview.preview_id,
+      acknowledge_future_instance_authority: true,
+      acknowledge_unsigned_default_risk: false,
+    })
+    .expect("authorize default package");
+  let runtime = ProviderRuntimeService::new(db.clone(), packages, Arc::new(WasmRuntime::new().unwrap()));
+  ProviderService::new(db, vault).with_runtime_defaults(Arc::new(runtime))
+}
+
 fn setup() -> (
   tempfile::TempDir,
   Database,
@@ -51,14 +91,19 @@ fn setup() -> (
   let db = Database::new(dir.path()).unwrap();
   db.initialize().unwrap();
   let vault = Arc::new(MemoryCredentialVault::new());
-  let providers = ProviderService::new(db.clone(), vault.clone());
+  let providers = package_first_providers(db.clone(), vault.clone(), dir.path());
   let models = ModelService::new(db.clone(), vault.clone(), models_dev_cache_dir(&dir));
-  let profiles = TranslationProfileService::new(
-    db.clone(),
-    Arc::new(crate::services::ServiceIntegrationRegistry::bundled().unwrap()),
-  );
+  // The committed google-cloud archive installs through the genuine package store and its
+  // definition is projected into the registry (production startup path), so plugin profile
+  // saves can validate capability declarations and normalize preferences.
+  let registry = {
+    let packages = crate::services::test_support::vendor_packages(db.clone(), dir.path());
+    crate::services::test_support::bootstrap_package(&packages, GOOGLE_CLOUD_LNPLUGIN);
+    crate::services::test_support::registry_from_installed_packages(&packages)
+  };
+  let profiles = TranslationProfileService::new(db.clone(), registry);
   let settings = SettingsService::new(db.clone(), vault.clone());
-  let import_export = ImportExportService::new(db.clone(), vault.clone());
+  let import_export = ImportExportService::new(db.clone(), vault.clone(), None);
   (dir, db, vault, providers, models, profiles, settings, import_export)
 }
 
@@ -72,7 +117,7 @@ fn provider_write(kind: CredentialKind, cred: CredentialUpdate) -> ProviderInsta
     adapter_id: "openai-compatible".into(),
     display_name: "OpenAI".into(),
     base_url: "https://api.openai.com/v1".into(),
-    base_url_source: BaseUrlSource::Custom,
+    base_url_source: BaseUrlSource::PluginDefault,
     auth_scheme,
     credential_kind: kind,
     credential: cred,
@@ -214,9 +259,20 @@ fn http_non_loopback_requires_confirmation() {
   let mut input = provider_write(CredentialKind::None, CredentialUpdate::Keep);
   input.base_url = "http://example.com/v1".into();
   input.base_url_source = BaseUrlSource::Custom;
-  assert!(providers.save(input.clone()).is_err());
+  // Package-first create gates every custom connection on additional runtime authority.
+  // The insecure-http confirmation alone never widens the authorized default.
+  let err = providers.save(input.clone()).unwrap_err();
+  assert!(
+    err.to_string().contains("authority")
+      || err.to_string().contains("default package")
+      || err.to_string().contains("insecure_http_confirmed_at"),
+    "got {err}"
+  );
   input.insecure_http_confirmed_at = Some("2026-07-10T00:00:00Z".into());
-  assert!(providers.save(input).is_ok());
+  assert!(
+    providers.save(input).is_err(),
+    "a custom connection still requires default-authority approval"
+  );
 }
 
 #[test]
@@ -225,7 +281,9 @@ fn loopback_http_ok_without_confirmation() {
   let mut input = provider_write(CredentialKind::None, CredentialUpdate::Keep);
   input.base_url = "http://127.0.0.1:8080/v1".into();
   input.base_url_source = BaseUrlSource::Custom;
-  assert!(providers.save(input).is_ok());
+  // Custom connections fail closed even for loopback hosts: only the exact authorized
+  // default connection is creatable package-first.
+  assert!(providers.save(input).is_err());
 }
 
 #[test]
@@ -1034,9 +1092,9 @@ fn import_merge_reconciles_runtime_bindings_to_document_set() {
       .execute(
         "INSERT INTO installed_plugin_versions (
           package_digest, plugin_id, version, publisher_key_id, publisher_fingerprint,
-          runtime_kind, manifest_json, permission_request_digest, content_available, installed_at
+          signature_status, runtime_kind, manifest_json, permission_request_digest, content_available, installed_at
         ) VALUES (?1, 'com.langnext.provider.openai-responses', '1.0.0', 'com.langnext.test.keys.1',
-          ?2, 'wasm-component', '{}', 'perm', 1, 't0')",
+          ?2, 'signed', 'wasm-component', '{}', 'perm', 1, 't0')",
         rusqlite::params![stale_digest, "f".repeat(64)],
       )
       .unwrap();
@@ -1106,7 +1164,7 @@ fn import_merge_reconciles_runtime_bindings_to_document_set() {
   let default = db
     .read(|conn| provider_runtime_bindings::get(conn, provider_id, "openai-compatible"))
     .unwrap();
-  assert_eq!(default.runtime_kind, ProviderRuntimeKind::LegacyFrontendProvider);
+  assert_eq!(default.runtime_kind, ProviderRuntimeKind::WasmComponent);
 }
 
 /// Insert an adapter-keyed wasm binding carrying an execution grant (simulating a package
@@ -1126,9 +1184,9 @@ fn insert_granted_wasm_binding(db: &Database, provider_id: uuid::Uuid, adapter_i
       .execute(
         "INSERT INTO installed_plugin_versions (
           package_digest, plugin_id, version, publisher_key_id, publisher_fingerprint,
-          runtime_kind, manifest_json, permission_request_digest, content_available, installed_at
+          signature_status, runtime_kind, manifest_json, permission_request_digest, content_available, installed_at
         ) VALUES (?1, 'com.langnext.provider.openai-responses', '1.0.0', 'com.langnext.test.keys.1',
-          ?2, 'wasm-component', '{}', 'perm', 1, 't0')",
+          ?2, 'signed', 'wasm-component', '{}', 'perm', 1, 't0')",
         rusqlite::params![digest, "f".repeat(64)],
       )
       .unwrap();
@@ -2041,10 +2099,9 @@ fn delete_all_models_keeps_provider_and_connection() {
     .save({
       let mut write = provider_write(CredentialKind::None, CredentialUpdate::Keep);
       write.display_name = "Keep Me".into();
-      write.base_url = "https://api.example.com/v1".into();
-
-      write.base_url_source = BaseUrlSource::Custom;
-
+      // Package-first create binds the exact authorized default connection.
+      write.base_url = "https://api.openai.com/v1".into();
+      write.base_url_source = BaseUrlSource::PluginDefault;
       write.auth_scheme = AuthSchemeV1::none();
       write
     })
@@ -2104,7 +2161,7 @@ fn delete_all_models_keeps_provider_and_connection() {
     .get(provider.id)
     .expect("provider must remain after model delete");
   assert_eq!(kept.display_name, "Keep Me");
-  assert_eq!(kept.base_url.as_str(), "https://api.example.com/v1");
+  assert_eq!(kept.base_url.as_str(), "https://api.openai.com/v1");
   assert!(providers.list().unwrap().iter().any(|row| row.id == provider.id));
   assert!(profiles.get(profile.profile.id).unwrap().targets.is_empty());
 }
@@ -2784,10 +2841,10 @@ fn plugin_profile_save_requires_ready_instance_and_rejects_engine_change() {
         health_status: IntegrationHealthStatus::Ready,
         last_validated_at: Some(now.clone()),
         last_error_code: None,
-        runtime_kind: "bundled-rust".into(),
-        package_digest: None,
+        runtime_kind: "wasm-component".into(),
+        package_digest: Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into()),
         execution_grant_set_revision: None,
-        runtime_state: "active".into(),
+        runtime_state: "pending_activation".into(),
         runtime_error_code: None,
         runtime_error_message: None,
         runtime_requirement_json: None,
@@ -2920,10 +2977,10 @@ fn plugin_profile_rebind_accepts_compatible_ready_instance() {
           health_status: IntegrationHealthStatus::Ready,
           last_validated_at: Some(now.clone()),
           last_error_code: None,
-          runtime_kind: "bundled-rust".into(),
-          package_digest: None,
+          runtime_kind: "wasm-component".into(),
+          package_digest: Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into()),
           execution_grant_set_revision: None,
-          runtime_state: "active".into(),
+          runtime_state: "pending_activation".into(),
           runtime_error_code: None,
           runtime_error_message: None,
           runtime_requirement_json: None,
@@ -3011,10 +3068,10 @@ fn plugin_profile_rebind_rejects_incompatible_capability_major() {
         health_status: IntegrationHealthStatus::Ready,
         last_validated_at: Some(now.clone()),
         last_error_code: None,
-        runtime_kind: "bundled-rust".into(),
-        package_digest: None,
+        runtime_kind: "wasm-component".into(),
+        package_digest: Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into()),
         execution_grant_set_revision: None,
-        runtime_state: "active".into(),
+        runtime_state: "pending_activation".into(),
         runtime_error_code: None,
         runtime_error_message: None,
         runtime_requirement_json: None,
@@ -3084,13 +3141,23 @@ fn plugin_profile_blocks_integration_delete_with_in_use() {
   use crate::services::google_cloud::{GOOGLE_DETECT_LANGUAGE_CAPABILITY_ID, GOOGLE_TRANSLATE_TEXT_CAPABILITY_ID};
   use crate::services::service_integration_registry::ServiceIntegrationRegistry;
   use crate::services::service_integrations::ServiceIntegrationService;
-  use crate::services::token_grant::{ExchangedToken, GoogleTokenExchanger, TokenGrantService};
+  use crate::services::token_grant::{
+    ExchangedToken, GOOGLE_SERVICE_ACCOUNT_AUTH_DRIVER_ID, TokenExchanger, TokenGrantService, TokenInjectionKind,
+  };
   use std::future::Future;
   use std::pin::Pin;
   use std::sync::Arc;
 
   struct NoopExchanger;
-  impl GoogleTokenExchanger for NoopExchanger {
+  impl TokenExchanger for NoopExchanger {
+    fn driver_id(&self) -> &'static str {
+      GOOGLE_SERVICE_ACCOUNT_AUTH_DRIVER_ID
+    }
+
+    fn injection_kind(&self) -> TokenInjectionKind {
+      TokenInjectionKind::BearerHeader
+    }
+
     fn exchange(
       &self,
       _instance_id: uuid::Uuid,
@@ -3103,8 +3170,8 @@ fn plugin_profile_blocks_integration_delete_with_in_use() {
   }
 
   let (_d, db, vault, _providers, _models, profiles, ..) = setup();
-  let registry = Arc::new(ServiceIntegrationRegistry::bundled().unwrap());
-  let tokens = Arc::new(TokenGrantService::new(Arc::new(NoopExchanger)));
+  let registry = Arc::new(ServiceIntegrationRegistry::empty());
+  let tokens = Arc::new(TokenGrantService::new(vec![Arc::new(NoopExchanger)]).unwrap());
   let integrations = ServiceIntegrationService::new(db.clone(), vault.clone(), registry, tokens);
 
   let now = crate::domain::time::now_rfc3339();
@@ -3128,10 +3195,10 @@ fn plugin_profile_blocks_integration_delete_with_in_use() {
         health_status: IntegrationHealthStatus::Ready,
         last_validated_at: Some(now.clone()),
         last_error_code: None,
-        runtime_kind: "bundled-rust".into(),
-        package_digest: None,
+        runtime_kind: "wasm-component".into(),
+        package_digest: Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into()),
         execution_grant_set_revision: None,
-        runtime_state: "active".into(),
+        runtime_state: "pending_activation".into(),
         runtime_error_code: None,
         runtime_error_message: None,
         runtime_requirement_json: None,
@@ -3190,7 +3257,7 @@ fn empty_doc() -> ConfigurationExport {
   }
 }
 
-fn web_export(id: Uuid, config_json: &str) -> IntegrationInstanceExport {
+fn web_export(id: Uuid, config_json: &str, digest: &str) -> IntegrationInstanceExport {
   IntegrationInstanceExport {
     id,
     plugin_id: crate::domain::service_integration::GOOGLE_TRANSLATE_WEB_PLUGIN_ID.into(),
@@ -3203,11 +3270,11 @@ fn web_export(id: Uuid, config_json: &str) -> IntegrationInstanceExport {
     runtime: Some(RuntimeRequirementExport {
       plugin_id: crate::domain::service_integration::GOOGLE_TRANSLATE_WEB_PLUGIN_ID.into(),
       plugin_version: "1.0.0".into(),
-      runtime_kind: "bundled-rust".into(),
-      package_digest: None,
-      publisher_key_id: None,
-      publisher_key_fingerprint: None,
-      plugin_api_version: None,
+      runtime_kind: "wasm-component".into(),
+      package_digest: Some(digest.into()),
+      publisher_key_id: Some("com.langnext.test.keys.1".into()),
+      publisher_key_fingerprint: Some("f".repeat(64)),
+      plugin_api_version: Some("1.0".into()),
       config_schema_version: 1,
       required_capability_majors: vec![],
       provider_runtime_kind: None,
@@ -3242,11 +3309,13 @@ fn provider_export(
   }
 }
 
-fn declared_legacy(adapter_id: &str) -> ProviderRuntimeRequirementExport {
-  let mut requirement = ProviderRuntimeRequirementExport::legacy();
-  requirement.adapter_id = Some(adapter_id.into());
+fn declared_wasm(adapter_id: &str, digest: &str) -> ProviderRuntimeRequirementExport {
+  let requirement = wasm_requirement(adapter_id, digest);
   requirement
 }
+
+/// 64-hex digest placeholder for provider requirement fixtures (parse-valid, never installed).
+const FIXTURE_PACKAGE_DIGEST: &str = "abababababababababababababababababababababababababababababababab";
 
 /// Insert one installed package revision plus an enabled user-approved publisher row.
 fn insert_installed_package(
@@ -3286,8 +3355,8 @@ fn insert_installed_package(
       .execute(
         "INSERT INTO installed_plugin_versions (
           package_digest, plugin_id, version, publisher_key_id, publisher_fingerprint,
-          runtime_kind, manifest_json, permission_request_digest, content_available, installed_at
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'perm', ?8, 't0')",
+          signature_status, runtime_kind, manifest_json, permission_request_digest, content_available, installed_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, 'signed', ?6, ?7, 'perm', ?8, 't0')",
         rusqlite::params![
           digest,
           plugin_id,
@@ -3460,7 +3529,7 @@ fn import_runtime_requirement_preview_reports_exact_local_states_and_actions() {
     ],
   )];
   doc.integration_instances = vec![
-    web_export(new_id(), r#"{"channel":"gtx"}"#),
+    web_export(new_id(), r#"{"channel":"gtx"}"#, &missing_digest),
     preview_wasm_integration(new_id(), &missing_digest),
   ];
 
@@ -3529,14 +3598,14 @@ fn import_runtime_requirement_preview_reports_exact_local_states_and_actions() {
     ImportRuntimeRequiredAction::ResolveIncompatibility
   );
 
-  // Integrations: bundled-rust is a closed bundled status; package-backed uses catalog state.
-  let bundled = by_key(
+  // Integrations: package-backed requirements use the same exact digest catalog states.
+  let web = by_key(
     ImportRuntimeSubjectKind::Integration,
     doc.integration_instances[0].id,
     None,
   );
-  assert_eq!(bundled.local_status, ImportRuntimeLocalStatus::Bundled);
-  assert_eq!(bundled.required_action, ImportRuntimeRequiredAction::None);
+  assert_eq!(web.local_status, ImportRuntimeLocalStatus::Missing);
+  assert_eq!(web.required_action, ImportRuntimeRequiredAction::InstallExactPackage);
 
   let integration_missing = by_key(
     ImportRuntimeSubjectKind::Integration,
@@ -3619,38 +3688,113 @@ fn import_runtime_requirement_preview_keeps_unavailable_runtimes_actionable_and_
   );
 }
 
-/// Legacy provider requirements and bundled integrations report their own statuses and the
-/// `none` action never marks them as needing activation.
+/// Retired runtime kinds make the import preview invalid: package-only documents must
+/// carry package-backed integration requirements and non-empty wasm provider
+/// `runtimeBindings`. Apply is unavailable on invalid previews.
 #[test]
-fn import_runtime_requirement_preview_legacy_and_bundled_use_own_statuses() {
-  use crate::domain::import_export::{ImportRuntimeLocalStatus, ImportRuntimeRequiredAction, ImportRuntimeSubjectKind};
+fn import_runtime_requirement_preview_rejects_legacy_identities() {
+  use crate::domain::import_export::ImportRuntimeSubjectKind;
 
   let (_d, _db, _v, _providers, _models, _profiles, _settings, ie) = setup();
 
-  let mut doc = empty_doc();
-  doc.providers = vec![provider_export(
+  // A bundled-rust integration requirement is structurally invalid.
+  let mut bundled_doc = empty_doc();
+  bundled_doc.providers = vec![provider_export(
     new_id(),
     "openai-compatible",
-    vec![declared_legacy("openai-compatible")],
+    vec![wasm_requirement("openai-compatible", FIXTURE_PACKAGE_DIGEST)],
   )];
-  doc.integration_instances = vec![web_export(new_id(), r#"{"channel":"gtx"}"#)];
+  bundled_doc.integration_instances = vec![IntegrationInstanceExport {
+    id: new_id(),
+    plugin_id: crate::domain::service_integration::GOOGLE_TRANSLATE_WEB_PLUGIN_ID.into(),
+    plugin_version: "1.0.0".into(),
+    display_name: "Web".into(),
+    enabled: true,
+    config_json: r#"{"channel":"gtx"}"#.into(),
+    config_schema_version: 1,
+    health_status: "ready".into(),
+    runtime: Some(RuntimeRequirementExport {
+      plugin_id: crate::domain::service_integration::GOOGLE_TRANSLATE_WEB_PLUGIN_ID.into(),
+      plugin_version: "1.0.0".into(),
+      runtime_kind: "bundled-rust".into(),
+      package_digest: None,
+      publisher_key_id: None,
+      publisher_key_fingerprint: None,
+      plugin_api_version: None,
+      config_schema_version: 1,
+      required_capability_majors: vec![],
+      provider_runtime_kind: None,
+      provider_package_digest: None,
+    }),
+    created_at: now_rfc3339(),
+    updated_at: now_rfc3339(),
+  }];
+  let preview = ie.preview(&bundled_doc, ImportConflictMode::Merge).unwrap();
+  assert!(
+    !preview.valid,
+    "bundled-rust integration must invalidate the preview: {:?}",
+    preview.validation_errors
+  );
+  assert!(
+    preview.validation_errors.iter().any(|e| e.contains("runtime")),
+    "errors: {:?}",
+    preview.validation_errors
+  );
 
-  let preview = ie.preview(&doc, ImportConflictMode::Merge).unwrap();
+  // A legacy-frontend-provider provider requirement is structurally invalid.
+  let mut legacy_doc = empty_doc();
+  let mut legacy_requirement = ProviderRuntimeRequirementExport {
+    adapter_id: Some("openai-compatible".into()),
+    runtime_kind: "legacy-frontend-provider".into(),
+    package_digest: None,
+    plugin_id: None,
+    plugin_version: None,
+    publisher_key_id: None,
+    publisher_key_fingerprint: None,
+    plugin_api_version: None,
+    legacy_aliases: vec![],
+    capabilities: vec![],
+  };
+  legacy_requirement.adapter_id = Some("openai-compatible".into());
+  legacy_doc.providers = vec![provider_export(new_id(), "openai-compatible", vec![legacy_requirement])];
+  let preview = ie.preview(&legacy_doc, ImportConflictMode::Merge).unwrap();
+  assert!(
+    !preview.valid,
+    "legacy provider requirement must invalidate the preview: {:?}",
+    preview.validation_errors
+  );
+
+  // A provider with empty runtimeBindings is structurally invalid (no legacy default).
+  let mut empty_doc2 = empty_doc();
+  empty_doc2.providers = vec![provider_export(new_id(), "openai-compatible", vec![])];
+  let preview = ie.preview(&empty_doc2, ImportConflictMode::Merge).unwrap();
+  assert!(
+    !preview.valid,
+    "empty runtimeBindings must invalidate the preview: {:?}",
+    preview.validation_errors
+  );
+  assert!(preview.preview_id.is_empty(), "invalid preview has no apply session");
+  assert!(
+    preview.runtime_requirements.is_empty(),
+    "no preview entries for invalid docs"
+  );
+
+  // Sanity: the same document with package-backed identities previews valid.
+  let mut ok_doc = empty_doc();
+  ok_doc.providers = vec![provider_export(
+    new_id(),
+    "openai-compatible",
+    vec![wasm_requirement("openai-compatible", FIXTURE_PACKAGE_DIGEST)],
+  )];
+  ok_doc.integration_instances = vec![web_export(new_id(), r#"{"channel":"gtx"}"#, FIXTURE_PACKAGE_DIGEST)];
+  let preview = ie.preview(&ok_doc, ImportConflictMode::Merge).unwrap();
   assert!(preview.valid, "errors: {:?}", preview.validation_errors);
-  let provider_entry = preview
-    .runtime_requirements
-    .iter()
-    .find(|entry| entry.subject_kind == ImportRuntimeSubjectKind::Provider)
-    .expect("provider entry");
-  assert_eq!(provider_entry.local_status, ImportRuntimeLocalStatus::Legacy);
-  assert_eq!(provider_entry.required_action, ImportRuntimeRequiredAction::None);
-  let integration_entry = preview
-    .runtime_requirements
-    .iter()
-    .find(|entry| entry.subject_kind == ImportRuntimeSubjectKind::Integration)
-    .expect("integration entry");
-  assert_eq!(integration_entry.local_status, ImportRuntimeLocalStatus::Bundled);
-  assert_eq!(integration_entry.required_action, ImportRuntimeRequiredAction::None);
+  assert!(
+    preview
+      .runtime_requirements
+      .iter()
+      .any(|entry| { entry.subject_kind == ImportRuntimeSubjectKind::Integration })
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -3667,7 +3811,7 @@ fn import_preview_session_cas_copy_apply_uses_fixed_id_mapping() {
   doc.providers = vec![provider_export(
     new_id(),
     "openai-compatible",
-    vec![declared_legacy("openai-compatible")],
+    vec![wasm_requirement("openai-compatible", FIXTURE_PACKAGE_DIGEST)],
   )];
   // Cloud integration: copy preview reports its remapped post-import id in
   // integration_requires_authentication; apply must write exactly that id.
@@ -3681,7 +3825,19 @@ fn import_preview_session_cas_copy_apply_uses_fixed_id_mapping() {
     config_json: r#"{"project-id":"demo","location":"global","proxy-mode":"inherit"}"#.into(),
     config_schema_version: 1,
     health_status: "ready".into(),
-    runtime: None,
+    runtime: Some(RuntimeRequirementExport {
+      plugin_id: crate::domain::service_integration::GOOGLE_CLOUD_PLUGIN_ID.into(),
+      plugin_version: "1.0.0".into(),
+      runtime_kind: "wasm-component".into(),
+      package_digest: Some(FIXTURE_PACKAGE_DIGEST.into()),
+      publisher_key_id: Some("com.langnext.test.keys.1".into()),
+      publisher_key_fingerprint: Some("f".repeat(64)),
+      plugin_api_version: Some("1.0".into()),
+      config_schema_version: 1,
+      required_capability_majors: vec![],
+      provider_runtime_kind: None,
+      provider_package_digest: None,
+    }),
     created_at: now_rfc3339(),
     updated_at: now_rfc3339(),
   }];
@@ -3797,7 +3953,7 @@ fn import_preview_session_cas_concurrent_double_apply_claims_once() {
   doc.providers = vec![provider_export(
     new_id(),
     "openai-compatible",
-    vec![declared_legacy("openai-compatible")],
+    vec![wasm_requirement("openai-compatible", FIXTURE_PACKAGE_DIGEST)],
   )];
   let preview = ie.preview_with_session(&doc, ImportConflictMode::Merge).unwrap();
   assert!(preview.valid, "errors: {:?}", preview.validation_errors);
@@ -3832,7 +3988,7 @@ fn import_preview_session_cas_unknown_expired_reused_rejected_before_mutation() 
   doc.providers = vec![provider_export(
     new_id(),
     "openai-compatible",
-    vec![declared_legacy("openai-compatible")],
+    vec![wasm_requirement("openai-compatible", FIXTURE_PACKAGE_DIGEST)],
   )];
 
   // Unknown preview id.
@@ -4022,7 +4178,7 @@ fn import_preview_session_cas_claim_reports_expired_not_unknown() {
   doc.providers = vec![provider_export(
     new_id(),
     "openai-compatible",
-    vec![declared_legacy("openai-compatible")],
+    vec![wasm_requirement("openai-compatible", FIXTURE_PACKAGE_DIGEST)],
   )];
 
   // Unknown preview id → typed stale reason on both the domain error and the IPC envelope.
@@ -4076,7 +4232,7 @@ fn import_preview_session_cas_claim_reports_expired_not_unknown() {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 11 acceptance gates: committed v2–v8 fixtures + no-execution boundary.
+// Package-only acceptance gates: committed v8 fixture + no-execution boundary.
 // ---------------------------------------------------------------------------
 
 /// Path helper for committed import fixtures under src/services/fixtures/import/.
@@ -4086,137 +4242,25 @@ fn import_fixture_path(name: &str) -> std::path::PathBuf {
     .join(name)
 }
 
-/// Acceptance gate: committed v2–v8 fixtures normalize to the current v8 format with the
-/// linked provider/model/profile/target/template graph intact; integrations normalize to
-/// explicit runtimes; provider requirements stay adapter-keyed per version shape.
+/// Acceptance gate: only the current v8 fixture parses; versions 2-7 fail closed.
 #[test]
-fn import_format_fixtures_v2_through_v8_normalize_to_current() {
+fn import_format_fixtures_v8_only() {
   use crate::domain::import_export::{EXPORT_FORMAT_VERSION, parse_and_normalize_export_document};
 
-  const PROVIDER_ID: &str = "00000000-0000-7000-8000-000000000001";
-  const MODEL_ID: &str = "00000000-0000-7000-8000-000000000002";
-  const GOOGLE_WEB_INTEGRATION_ID: &str = "00000000-0000-7000-8000-000000000003";
-  const CONFORMANCE_INTEGRATION_ID: &str = "00000000-0000-7000-8000-000000000004";
-  const PROFILE_ID: &str = "00000000-0000-7000-8000-000000000005";
-  const TEMPLATE_ID: &str = "00000000-0000-7000-8000-000000000006";
-  const OCR_SERVICE_ID: &str = "00000000-0000-7000-8000-000000000007";
-  const SPEECH_SERVICE_ID: &str = "00000000-0000-7000-8000-000000000009";
-  const WASM_DIGEST: &str = "abababababababababababababababababababababababababababababababab";
+  for version in [2_u32, 3, 4, 5, 6, 7] {
+    let value = serde_json::json!({ "formatVersion": version, "exportedAt": "t" });
+    let err = parse_and_normalize_export_document(value).unwrap_err();
+    assert!(
+      err.contains("unsupported formatVersion"),
+      "v{version} must fail closed, got {err}"
+    );
+  }
 
   let load = |name: &str| {
     let raw = std::fs::read_to_string(import_fixture_path(name)).unwrap();
     let value: serde_json::Value = serde_json::from_str(&raw).unwrap();
     parse_and_normalize_export_document(value).unwrap_or_else(|e| panic!("{name}: {e}"))
   };
-
-  for version in [2_u32, 3, 4, 5, 6, 7] {
-    let doc = load(&format!("v{version}-config.json"));
-    assert_eq!(
-      doc.format_version, EXPORT_FORMAT_VERSION,
-      "v{version} must normalize to v8"
-    );
-
-    // Linked provider/model graph with fixed literal IDs.
-    assert_eq!(doc.providers.len(), 1, "v{version} keeps one provider");
-    assert_eq!(
-      doc.providers[0].id.to_string(),
-      PROVIDER_ID,
-      "v{version} preserves the provider id"
-    );
-    assert_eq!(doc.providers[0].display_name, "OpenAI Compatible");
-    assert_eq!(doc.models.len(), 1, "v{version} keeps one model");
-    assert_eq!(doc.models[0].id.to_string(), MODEL_ID);
-    assert_eq!(
-      doc.models[0].provider_instance_id.to_string(),
-      PROVIDER_ID,
-      "v{version} model stays linked to the provider"
-    );
-    assert_eq!(doc.models[0].model_key, "gpt-4o-mini");
-
-    // One profile with the prompt template as its LLM default.
-    assert_eq!(doc.translation_profiles.len(), 1, "v{version} keeps one profile");
-    let profile = &doc.translation_profiles[0];
-    assert_eq!(profile.id.to_string(), PROFILE_ID);
-    assert_eq!(profile.name, "Default");
-    assert_eq!(profile.source_lang.as_deref(), Some("zh"));
-    assert_eq!(profile.target_lang.as_deref(), Some("en"));
-    let engine = profile
-      .engine
-      .as_llm()
-      .expect("v{version} profile keeps its LLM engine");
-    assert_eq!(engine.template_version, 1);
-    assert_eq!(engine.default_prompt_template_id.to_string(), TEMPLATE_ID);
-    assert_eq!(engine.temperature, Some(0.2));
-
-    // One target linked to the model and one template owned by the profile.
-    assert_eq!(doc.profile_models.len(), 1, "v{version} keeps one target");
-    assert_eq!(doc.profile_models[0].translation_profile_id.to_string(), PROFILE_ID);
-    assert_eq!(doc.profile_models[0].provider_model_id.to_string(), MODEL_ID);
-    assert_eq!(doc.profile_prompt_templates.len(), 1, "v{version} keeps one template");
-    assert_eq!(doc.profile_prompt_templates[0].id.to_string(), TEMPLATE_ID);
-    assert_eq!(
-      doc.profile_prompt_templates[0].translation_profile_id.to_string(),
-      PROFILE_ID
-    );
-
-    // Provider runtime requirement: v2–v7 singular requirement becomes exactly one v8
-    // binding keyed by the provider default adapter (no model adapter overrides).
-    assert_eq!(
-      doc.providers[0].runtime_bindings.len(),
-      1,
-      "v{version} yields one adapter-keyed binding"
-    );
-    assert_eq!(
-      doc.providers[0].runtime_bindings[0].adapter_id.as_deref(),
-      Some("openai-compatible")
-    );
-    assert_eq!(doc.providers[0].runtime_bindings[0].runtime_kind, "wasm-component");
-    assert_eq!(
-      doc.providers[0].runtime_bindings[0].package_digest.as_deref(),
-      Some(WASM_DIGEST)
-    );
-
-    // Version-specific arrays survive normalization.
-    if version >= 5 {
-      assert_eq!(doc.ocr_services.len(), 1, "v{version} keeps the OCR service");
-      assert_eq!(doc.ocr_services[0].id.to_string(), OCR_SERVICE_ID);
-      assert_eq!(doc.ocr_prompt_templates.len(), 1, "v{version} keeps the OCR template");
-    }
-    if version >= 6 {
-      assert_eq!(doc.speech_services.len(), 1, "v{version} keeps the Speech service");
-      assert_eq!(doc.speech_services[0].id.to_string(), SPEECH_SERVICE_ID);
-    }
-
-    // Integrations normalize to explicit runtime requirements (v2/v3 predate integrations).
-    if version >= 4 && version <= 6 {
-      assert_eq!(doc.integration_instances.len(), 1, "v{version} keeps one integration");
-      assert!(doc.integration_instances.iter().all(|i| i.runtime.is_some()));
-      assert_eq!(doc.integration_instances[0].id.to_string(), GOOGLE_WEB_INTEGRATION_ID);
-      assert_eq!(
-        doc.integration_instances[0].runtime.as_ref().unwrap().runtime_kind,
-        "bundled-rust",
-        "v{version} bundled integration normalizes to bundled-rust"
-      );
-    } else if version <= 3 {
-      assert!(doc.integration_instances.is_empty(), "v{version} has no integrations");
-    }
-    if version >= 7 {
-      assert_eq!(doc.integration_instances.len(), 2, "v{version} keeps both integrations");
-      assert!(doc.integration_instances.iter().all(|i| i.runtime.is_some()));
-      assert_eq!(doc.integration_instances[0].id.to_string(), GOOGLE_WEB_INTEGRATION_ID);
-      assert_eq!(
-        doc.integration_instances[0].runtime.as_ref().unwrap().runtime_kind,
-        "bundled-rust",
-        "v{version} bundled integration stays explicit"
-      );
-      let wasm = doc
-        .integration_instances
-        .iter()
-        .find(|i| i.id.to_string() == CONFORMANCE_INTEGRATION_ID)
-        .expect("conformance integration");
-      assert_eq!(wasm.runtime.as_ref().unwrap().runtime_kind, "wasm-component");
-    }
-  }
 
   // v8: the mixed fixture keeps the graph and both distinct adapter keys.
   let doc = load("v8-mixed.json");
@@ -4466,6 +4510,7 @@ fn runtime_plugin_import_no_execution_installed_requirement_stays_inactive() {
     .unwrap()
   };
   assert_eq!(count("execution_grant_sets"), 0, "no execution grant");
-  assert_eq!(count("plugin_install_operations"), 0, "no package install op");
+  // Exact-package requirements may plan inert pending install operations (the dispatch
+  // probe above proves nothing was downloaded, installed, or executed).
   assert_eq!(count("plugin_upgrade_snapshots"), 0, "no rollback snapshot");
 }

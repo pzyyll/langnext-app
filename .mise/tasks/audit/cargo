@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# ABOUTME: Run the mise-managed cargo-audit against the Tauri lockfile.
+# ABOUTME: Writes machine-readable output under .audit/ and preserves the auditor exit status.
+#MISE description="Audit Rust dependencies with cargo-audit"
+set -euo pipefail
+
+root="${MISE_PROJECT_ROOT:-$(cd "$(dirname "$0")/../../.." && pwd)}"
+cd "$root"
+
+mkdir -p .audit
+set +e
+cargo-audit audit --file src-tauri/Cargo.lock --json > .audit/cargo-audit.json 2> .audit/cargo-audit.stderr
+audit_status=$?
+set -e
+
+if [[ "$audit_status" -ne 0 ]]; then
+  set +e
+  bun scripts/cargo-audit-report.ts .audit/cargo-audit.json
+  report_status=$?
+  if [[ "$report_status" -ne 0 ]]; then
+    echo "error: cargo-audit-report failed with status $report_status" >&2
+  fi
+
+  package_specs=""
+  package_specs=$(bun -e 'import { listVulnerablePackageSpecs, parseAuditReport } from "./scripts/cargo-audit-report.ts";
+const raw = await Bun.file(".audit/cargo-audit.json").text();
+for (const spec of listVulnerablePackageSpecs(parseAuditReport(raw))) {
+  console.log(spec);
+}')
+  packages_status=$?
+  if [[ "$packages_status" -ne 0 ]]; then
+    echo "error: failed to list vulnerable package versions from .audit/cargo-audit.json" >&2
+    package_specs=""
+  fi
+
+  while IFS= read -r spec; do
+    if [[ -z "$spec" ]]; then
+      continue
+    fi
+    echo "Dependency path for $spec:"
+    cargo tree --manifest-path src-tauri/Cargo.toml --target all -i "$spec"
+    tree_status=$?
+    if [[ "$tree_status" -ne 0 ]]; then
+      echo "error: cargo tree --manifest-path src-tauri/Cargo.toml --target all -i $spec failed with status $tree_status" >&2
+    fi
+  done <<< "$package_specs"
+  set -e
+  echo "Full report: .audit/cargo-audit.json"
+fi
+
+exit "$audit_status"

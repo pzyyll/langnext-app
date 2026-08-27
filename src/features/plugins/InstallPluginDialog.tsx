@@ -29,6 +29,8 @@ import {
 } from "./installPluginPackageFlow";
 import {
   requiresPublisherApproval,
+  requiresUnsignedRiskAcknowledgement,
+  requiresNativeExecutionRiskAcknowledgement,
   shouldShowManualPublisherKeyInput,
   publisherApprovalKeyHex,
   summarizeNetworkPermissions,
@@ -41,7 +43,8 @@ function trustLabel(
       | "plugins.packages.trust.trustedUser"
       | "plugins.packages.trust.unknown"
       | "plugins.packages.trust.revoked"
-      | "plugins.packages.trust.disabled",
+      | "plugins.packages.trust.disabled"
+      | "plugins.packages.trust.unsigned",
   ) => string,
   trust: PublisherTrustState,
 ): string {
@@ -56,6 +59,8 @@ function trustLabel(
       return t("plugins.packages.trust.revoked");
     case "disabled":
       return t("plugins.packages.trust.disabled");
+    case "unsigned":
+      return t("plugins.packages.trust.unsigned");
   }
 }
 
@@ -119,6 +124,8 @@ function InstallPluginForm({ onClose, onPreviewIdChange }: InstallPluginFormProp
   const [preview, setPreview] = useState<PluginPackagePreviewDto | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [ackPermissions, setAckPermissions] = useState(false);
+  const [ackUnsigned, setAckUnsigned] = useState(false);
+  const [ackNative, setAckNative] = useState(false);
   const [approvePublisher, setApprovePublisher] = useState(false);
   const [publicKeyHex, setPublicKeyHex] = useState("");
   const publisherApprovalKeyHexValue = preview ? publisherApprovalKeyHex(preview, publicKeyHex) : "";
@@ -136,6 +143,8 @@ function InstallPluginForm({ onClose, onPreviewIdChange }: InstallPluginFormProp
       setPreview(result);
       setError(null);
       setAckPermissions(false);
+      setAckUnsigned(false);
+      setAckNative(false);
       setApprovePublisher(false);
       setPublicKeyHex("");
     },
@@ -157,6 +166,8 @@ function InstallPluginForm({ onClose, onPreviewIdChange }: InstallPluginFormProp
         approvePublisher: requiresPublisherApproval(preview) ? approvePublisher : false,
         publisherPublicKeyHex:
           requiresPublisherApproval(preview) && approvePublisher ? publisherApprovalKeyHexValue || null : null,
+        acknowledgeUnsignedPackageRisk: requiresUnsignedRiskAcknowledgement(preview) ? ackUnsigned : false,
+        acknowledgeNativeExecutionRisk: requiresNativeExecutionRiskAcknowledgement(preview) ? ackNative : false,
       });
     },
     onSuccess: async () => {
@@ -215,9 +226,12 @@ function InstallPluginForm({ onClose, onPreviewIdChange }: InstallPluginFormProp
             </dd>
             <dt className="text-neutral">{t("plugins.packages.publisher")}</dt>
             <dd className="text-on-surface">
-              <div>{preview.publisherKeyId}</div>
-              <div className="font-mono text-code-inline wrap-break-word" title={preview.publisherFingerprint}>
-                {preview.publisherFingerprint}
+              <div>{preview.publisherKeyId || preview.claimedPublisherKeyId || "—"}</div>
+              <div
+                className="font-mono text-code-inline wrap-break-word"
+                title={preview.publisherFingerprint || preview.claimedPublisherFingerprint}
+              >
+                {preview.publisherFingerprint || preview.claimedPublisherFingerprint || "—"}
               </div>
               <div className="text-neutral">{trustLabel(t, preview.publisherTrust)}</div>
             </dd>
@@ -280,6 +294,36 @@ function InstallPluginForm({ onClose, onPreviewIdChange }: InstallPluginFormProp
             <span>{t("plugins.packages.ackPermissions")}</span>
           </label>
 
+          {requiresUnsignedRiskAcknowledgement(preview) ? (
+            <label className="flex items-start gap-2 text-body-tight text-on-surface">
+              <Checkbox.Root
+                checked={ackUnsigned}
+                onCheckedChange={(checked) => setAckUnsigned(checked === true)}
+                className={checkboxClassName}
+              >
+                <Checkbox.Indicator className={checkboxIndicatorClassName}>
+                  <IconMaterialSymbolsLightCheck className="size-3" aria-hidden />
+                </Checkbox.Indicator>
+              </Checkbox.Root>
+              <span>{t("plugins.packages.ackUnsigned")}</span>
+            </label>
+          ) : null}
+
+          {requiresNativeExecutionRiskAcknowledgement(preview) ? (
+            <label className="flex items-start gap-2 text-body-tight text-on-surface">
+              <Checkbox.Root
+                checked={ackNative}
+                onCheckedChange={(checked) => setAckNative(checked === true)}
+                className={checkboxClassName}
+              >
+                <Checkbox.Indicator className={checkboxIndicatorClassName}>
+                  <IconMaterialSymbolsLightCheck className="size-3" aria-hidden />
+                </Checkbox.Indicator>
+              </Checkbox.Root>
+              <span>{t("plugins.packages.ackNative")}</span>
+            </label>
+          ) : null}
+
           {requiresPublisherApproval(preview) ? (
             <div className="flex flex-col gap-2">
               <label className="flex items-start gap-2 text-body-tight text-on-surface">
@@ -338,6 +382,8 @@ function InstallPluginForm({ onClose, onPreviewIdChange }: InstallPluginFormProp
             disabled={
               installMutation.isPending ||
               !ackPermissions ||
+              (requiresUnsignedRiskAcknowledgement(preview) && !ackUnsigned) ||
+              (requiresNativeExecutionRiskAcknowledgement(preview) && !ackNative) ||
               (requiresPublisherApproval(preview) && (!approvePublisher || publisherApprovalKeyHexValue.length === 0))
             }
             onClick={() => installMutation.mutate()}

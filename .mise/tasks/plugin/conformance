@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ABOUTME: Run Wasm runtime and installed-lifecycle conformance suites with required tests.
 # ABOUTME: Fail-closed: missing required tests or zero tests is an error; capture suite exit without set -e.
-#MISE description="Run plugin conformance suite (arg: wasm|installed-lifecycle|native-worker|paddleocr|all)"
+#MISE description="Run plugin conformance suite (arg: wasm|installed-lifecycle|native-worker|paddleocr|baidu-ocr|all)"
 set -uo pipefail
 
 MODE="${1:-all}"
@@ -34,7 +34,8 @@ REQUIRED_LIFECYCLE_TESTS=(
   "services::runtime_lifecycle_installed_tests::runtime_compatible_migration_translate_detect_upgrade_rollback_uninstall"
   "services::runtime_lifecycle_installed_tests::runtime_upgrade_apply_failure_injection_leaves_source_unchanged"
   "services::runtime_lifecycle_installed_tests::runtime_discard_snapshot_and_migration_trap_no_mutation"
-  "services::runtime_lifecycle_installed_tests::runtime_plugin_export_v7_missing_package_restores_unresolved_exact_requirement"
+  "services::runtime_lifecycle_installed_tests::runtime_plugin_export_v8_missing_package_restores_unresolved_exact_requirement"
+  "services::runtime_lifecycle_installed_tests::pin_default_skips_non_google_web_plugin_without_auto_activating"
   "services::runtime_lifecycle_installed_tests::runtime_rollback_stale_preview_and_missing_snapshot_fail_closed"
   "services::runtime_lifecycle_installed_tests::runtime_router_selects_wasm_adapter_for_active_pin"
   "services::runtime_lifecycle_preference_tests::runtime_preference_snapshot_is_pre_migration_and_rollback_restores_exact_json"
@@ -49,8 +50,8 @@ REQUIRED_LIFECYCLE_TESTS=(
   "services::runtime_lifecycle::tests::runtime_rollback_without_snapshot_fails_closed"
   "services::runtime_router::tests::runtime_router_bundle_round_trip_preserves_authority"
   "services::runtime_router::tests::runtime_router_cross_instance_grant_lookup_denied"
-  "domain::import_export::tests::runtime_plugin_export_v7_maps_legacy_integrations_to_bundled_rust"
-  "storage::migrations::tests::migrate_v16_to_v17_backfills_bundled_runtime_pins"
+  "domain::import_export::tests::parse_and_normalize_rejects_legacy_runtime_identities"
+  "storage::migrations::tests::migrate_v16_to_v17_does_not_synthesize_unpinned_runtime_instances"
   "repositories::tests::runtime_instance_pin_backfill_and_constraints"
   "repositories::tests::runtime_instance_pin_package_approval_never_authorizes_execution"
 )
@@ -59,6 +60,14 @@ REQUIRED_NATIVE_WORKER_TESTS=(
   "services::native_workers::tests::native_worker_handshake_reaps_process"
   "services::native_workers::tests::native_worker_timeout_kills_process_tree"
   "services::plugin_models::tests::plugin_model_download_verifies_and_installs_atomically"
+)
+
+REQUIRED_BAIDU_OCR_TESTS=(
+  "services::baidu_ocr_runtime_tests::baidu_ocr_runtime_component_matches_current_actions_and_errors"
+  "services::wasm_runtime::network_handle::tests::baidu_auth_policy_injects_access_token_without_guest_secret_access"
+  "services::wasm_runtime::network_handle::tests::baidu_access_token_query_is_host_only"
+  "services::wasm_runtime::tests::wasm_guest_imports::baidu_ocr_guest_imports_only_langnext"
+  "services::service_integrations::tests::ocr_only_remote_integration_validation_uses_declared_capability"
 )
 
 REQUIRED_PADDLEOCR_TESTS=(
@@ -82,11 +91,11 @@ REQUIRED_EDGE_TTS_TESTS=(
   "services::edge_tts_runtime_tests::edge_tts_runtime_accepts_audio_mpeg_with_parameters"
   "services::edge_tts_runtime_tests::edge_tts_runtime_rejects_missing_content_type"
   "services::edge_tts_runtime_tests::edge_tts_runtime_rejects_near_miss_mime"
-  "services::edge_tts_runtime_tests::edge_tts_runtime_new_instance_auto_pins_default_package"
+  "services::edge_tts_runtime_tests::default_package_activation_integration_edge_tts_create_grant"
   "services::edge_tts_runtime_tests::edge_tts_runtime_migration_preserves_speech_default_references"
   "services::edge_tts_runtime_tests::edge_tts_runtime_auto_pin_rejects_non_vendor_package"
   "services::edge_tts_runtime_tests::edge_tts_runtime_auto_pin_rejects_custom_origin"
-  "services::edge_tts_runtime_tests::edge_tts_runtime_auto_pin_accepts_equivalent_normalized_default"
+  "services::edge_tts_runtime_tests::edge_tts_pin_default_retired_noop_for_equivalent_normalized_origin"
   "services::edge_tts_runtime_tests::edge_tts_runtime_auto_pin_rejects_non_https_origin"
   # Executes the guest through router/executor/broker and compares captured transport output to
   # synthesize-request.json; a fixture-only parser test is not sufficient conformance coverage.
@@ -203,8 +212,8 @@ REQUIRED_GOOGLE_WEB_TESTS=(
   "services::google_translate_web_runtime_tests::google_web_package_verifies_with_vendor_public_key"
   "services::google_translate_web_runtime_tests::google_translate_web_proxy_channel_translates_and_detect_stays_on_gtx"
   "services::google_translate_web_runtime_tests::google_translate_web_proxy_url_change_requires_new_grant"
-  "services::google_translate_web_runtime_tests::google_web_new_instance_pins_default_wasm_package"
-  "services::google_translate_web_runtime_tests::google_web_new_instance_falls_back_to_bundled_when_no_default_package"
+  "services::google_translate_web_runtime_tests::default_package_activation_integration_google_web_create_grant"
+  "services::google_translate_web_runtime_tests::google_web_new_instance_rejects_create_when_no_default_package"
   "services::google_translate_web_runtime_tests::google_web_migration_rejects_incompatible_capability_major"
   "services::google_translate_web_runtime_tests::google_web_migration_rejects_schema_incompatible_target"
 )
@@ -282,7 +291,7 @@ run_filter_suite() {
 
   # Capture exit code without aborting under errexit (set +e around cargo).
   set +e
-  OUTPUT=$(cargo test --manifest-path src-tauri/Cargo.toml "$filter" -- --nocapture 2>&1)
+  OUTPUT=$(cargo test --manifest-path src-tauri/Cargo.toml "$filter" -- --nocapture --test-threads=1 2>&1)
   EXIT_CODE=$?
   set -e
   echo "$OUTPUT"
@@ -303,8 +312,12 @@ run_filter_suite() {
   fi
 
   for name in "${required[@]}"; do
-    if ! grep -Eq "test ${name} \\.\\.\\. ok" <<<"$OUTPUT"; then
-      echo "error: required conformance test missing or not ok: $name" >&2
+    if ! grep -Fq "test ${name} ..." <<<"$OUTPUT"; then
+      echo "error: required conformance test missing: $name" >&2
+      exit 1
+    fi
+    if grep -Fq "test ${name} ... ignored" <<<"$OUTPUT"; then
+      echo "error: required conformance test is ignored: $name" >&2
       exit 1
     fi
   done
@@ -340,6 +353,18 @@ case "$MODE" in
       "services::native_workers::tests::native_worker_timeout_kills_process_tree"
     run_filter_suite "plugin_model_download" \
       "services::plugin_models::tests::plugin_model_download_verifies_and_installs_atomically"
+    ;;
+  baidu-ocr)
+    cargo test --manifest-path runtime-plugins/baidu-ocr/protocol/Cargo.toml --locked -- --nocapture
+    run_filter_suite "baidu_ocr" \
+      "services::baidu_ocr_runtime_tests::baidu_ocr_runtime_component_matches_current_actions_and_errors" \
+      "services::wasm_runtime::tests::wasm_guest_imports::baidu_ocr_guest_imports_only_langnext"
+    run_filter_suite "baidu_auth_policy_injects_access_token_without_guest_secret_access" \
+      "services::wasm_runtime::network_handle::tests::baidu_auth_policy_injects_access_token_without_guest_secret_access"
+    run_filter_suite "baidu_access_token_query_is_host_only" \
+      "services::wasm_runtime::network_handle::tests::baidu_access_token_query_is_host_only"
+    run_filter_suite "ocr_only_remote_integration_validation_uses_declared_capability" \
+      "services::service_integrations::tests::ocr_only_remote_integration_validation_uses_declared_capability"
     ;;
   paddleocr)
     run_filter_suite "paddleocr_package" \
@@ -378,6 +403,16 @@ case "$MODE" in
     run_filter_suite "paddleocr_runtime" \
       "services::paddleocr_runtime_tests::paddleocr_runtime_ocr_returns_expected_text" \
       "services::paddleocr_runtime_tests::paddleocr_runtime_missing_model_does_not_spawn_worker"
+    cargo test --manifest-path runtime-plugins/baidu-ocr/protocol/Cargo.toml --locked -- --nocapture
+    run_filter_suite "baidu_ocr" \
+      "services::baidu_ocr_runtime_tests::baidu_ocr_runtime_component_matches_current_actions_and_errors" \
+      "services::wasm_runtime::tests::wasm_guest_imports::baidu_ocr_guest_imports_only_langnext"
+    run_filter_suite "baidu_auth_policy_injects_access_token_without_guest_secret_access" \
+      "services::wasm_runtime::network_handle::tests::baidu_auth_policy_injects_access_token_without_guest_secret_access"
+    run_filter_suite "baidu_access_token_query_is_host_only" \
+      "services::wasm_runtime::network_handle::tests::baidu_access_token_query_is_host_only"
+    run_filter_suite "ocr_only_remote_integration_validation_uses_declared_capability" \
+      "services::service_integrations::tests::ocr_only_remote_integration_validation_uses_declared_capability"
     ;;
   resources)
     run_filter_suite "blob_resources" "${REQUIRED_BLOB_FILTER_TESTS[@]}"
@@ -429,7 +464,7 @@ case "$MODE" in
     run_filter_suite "stream_resources" "${REQUIRED_STREAM_FILTER_TESTS[@]}"
     ;;
   *)
-    echo "usage: mise run plugin:conformance [wasm|llm|installed-lifecycle|native-worker|paddleocr|all|google-cloud|google-cloud-translate|google-cloud-ocr|google-cloud-tts|edge-tts|resources]" >&2
+    echo "usage: mise run plugin:conformance [wasm|llm|installed-lifecycle|native-worker|paddleocr|baidu-ocr|all|google-cloud|google-cloud-translate|google-cloud-ocr|google-cloud-tts|edge-tts|resources]" >&2
     exit 1
     ;;
 esac

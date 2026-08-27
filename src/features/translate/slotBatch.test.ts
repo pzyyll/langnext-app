@@ -1,5 +1,5 @@
 // ABOUTME: Tests for multi-slot cancel isolation and batch outcome shape.
-// ABOUTME: Mocks cancel_provider_http; stream starts use empty snapshots for early fail isolation.
+// ABOUTME: Mocks cancel_provider_runtime; stream starts use empty snapshots for early fail isolation.
 import { beforeEach, describe, expect, test } from "bun:test";
 import { Effect } from "effect";
 import type { TranslateInput } from "../../storage/types";
@@ -63,15 +63,14 @@ describe("cancelRequestIds", () => {
     invokeMock.mockImplementation(async () => undefined);
   });
 
-  test("calls both cancel transports for each id and swallows failures", async () => {
+  test("calls the provider-runtime cancel transport for each id and swallows failures", async () => {
     invokeMock.mockImplementation(async (cmd) => {
-      if (cmd === "cancel_provider_http") {
-        throw { code: "not_found", message: "gone" };
+      if (cmd !== "cancel_provider_runtime") {
+        throw new Error(`unexpected cmd ${cmd}`);
       }
       return false;
     });
     await runCancelRequestIds(["a", "b"]);
-    expect(invokeMock.mock.calls.some((c) => c[0] === "cancel_provider_http")).toBe(true);
     expect(invokeMock.mock.calls.some((c) => c[0] === "cancel_provider_runtime")).toBe(true);
     await Effect.runPromise(cancelRequestIds(["c"]));
   });

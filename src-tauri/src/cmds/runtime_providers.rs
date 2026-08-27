@@ -4,13 +4,13 @@ use crate::cmds::runtime::run_blocking;
 use crate::domain::cancel::RequestSessionRegistry;
 use crate::domain::runtime_provider::{
   ApplyProviderRuntimeInterfaceAttachInput, ApplyProviderRuntimeInterfaceRollbackInput,
-  ApplyProviderRuntimeRollbackInput, ApplyProviderRuntimeUpgradeInput, LlmChatCompleteResult, LlmChatResult,
-  LlmModelsListResult, PreviewProviderRuntimeInterfaceAttachInput, PreviewProviderRuntimeInterfaceRollbackInput,
+  ApplyProviderRuntimeRollbackInput, LlmChatCompleteResult, LlmChatResult, LlmModelsListResult,
+  PreviewProviderRuntimeInterfaceAttachInput, PreviewProviderRuntimeInterfaceRollbackInput,
   ProviderRuntimeCatalogEntryDto, ProviderRuntimeChatCommandInput, ProviderRuntimeChatEvent,
   ProviderRuntimeInterfaceDetachInput, ProviderRuntimeInterfaceDiscardSnapshotInput,
   ProviderRuntimeInterfaceLifecycleResultDto, ProviderRuntimeInterfacePreviewDto,
   ProviderRuntimeInterfaceRollbackPreviewDto, ProviderRuntimeLifecycleResultDto, ProviderRuntimeRollbackPreviewDto,
-  ProviderRuntimeSnapshotDto, ProviderRuntimeUpgradePreviewDto,
+  ProviderRuntimeSnapshotDto,
 };
 use crate::domain::service_capability::{CapabilityError, CapabilityErrorCode};
 use crate::error::IpcError;
@@ -27,31 +27,6 @@ pub async fn list_runtime_provider_catalog(
 ) -> Result<Vec<ProviderRuntimeCatalogEntryDto>, IpcError> {
   let services = state.runtime_providers.clone();
   run_blocking("list_runtime_provider_catalog", move || services.list_catalog()).await
-}
-
-#[tauri::command]
-pub async fn preview_provider_runtime_upgrade(
-  state: State<'_, AppState>,
-  provider_id: Uuid,
-  target_package_digest: String,
-) -> Result<ProviderRuntimeUpgradePreviewDto, IpcError> {
-  let services = state.runtime_providers.clone();
-  run_blocking("preview_provider_runtime_upgrade", move || {
-    services.preview_upgrade(provider_id, &target_package_digest)
-  })
-  .await
-}
-
-#[tauri::command]
-pub async fn apply_provider_runtime_upgrade(
-  app: AppHandle,
-  state: State<'_, AppState>,
-  input: ApplyProviderRuntimeUpgradeInput,
-) -> Result<ProviderRuntimeLifecycleResultDto, IpcError> {
-  let services = state.runtime_providers.clone();
-  let result = run_blocking("apply_provider_runtime_upgrade", move || services.apply_upgrade(input)).await?;
-  emit_data_changed(&app, PROVIDERS_CHANGED);
-  Ok(result)
 }
 
 #[tauri::command]

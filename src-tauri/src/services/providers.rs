@@ -6,12 +6,10 @@ use crate::domain::provider::{
   AuthSchemeV1, BaseUrlSource, CredentialKind, CredentialUpdate, ModelsSyncStatus, ProviderInstance,
   ProviderInstanceDto, ProviderInstanceWrite, ProxyMode, validate_adapter_id,
 };
-use crate::domain::runtime_provider::{ProviderRuntimeKind, legacy_frontend_binding};
 use crate::domain::time::{new_id, now_rfc3339};
 use crate::error::StorageError;
 use crate::repositories::credential_operations::{self, CredentialOperation, OwnerKind};
-use crate::repositories::provider_runtime_bindings;
-use crate::repositories::{provider_instances, provider_models, translation_profiles};
+use crate::repositories::{provider_instances, provider_models, provider_runtime_bindings, translation_profiles};
 use crate::services::runtime_providers::{
   PreparedProviderDefault, ProviderDefaultResolution, ProviderRuntimeService, apply_package_first_pending_binding,
 };
@@ -24,11 +22,9 @@ use uuid::Uuid;
 pub struct ProviderService {
   db: Database,
   vault: Arc<dyn CredentialVault>,
-  /// Reviewed vendor default wiring (Task 12): new matching Providers receive the default
-  /// package/grant in their create transaction; every other provider stays legacy.
+  /// Reviewed vendor default wiring: new matching Providers receive the default
+  /// package/grant in their create transaction; every provider is package-first.
   runtime_defaults: Option<Arc<ProviderRuntimeService>>,
-  /// Explicit retirement gate; production defaults to empty until Phase 12 enables a slice.
-  retirement_gate: crate::services::legacy_runtime_retirement::LegacyRuntimeRetirementGate,
 }
 
 /// Credential plan for create: optional ref name, secret material, and journal op id.
@@ -40,24 +36,13 @@ impl ProviderService {
       db,
       vault,
       runtime_defaults: None,
-      retirement_gate: crate::services::legacy_runtime_retirement::LegacyRuntimeRetirementGate::disabled(),
     }
   }
 
   /// Attach the provider runtime service so newly created matching Providers receive the
-  /// reviewed vendor default package/grant (Task 12). Resolution failures leave the provider
-  /// legacy and never fail the CRUD operation.
+  /// reviewed vendor default package/grant. Resolution failures fail closed.
   pub fn with_runtime_defaults(mut self, runtime: Arc<ProviderRuntimeService>) -> Self {
     self.runtime_defaults = Some(runtime);
-    self
-  }
-
-  /// Override the provider-legacy retirement gate (tests and Phase 12 enablement).
-  pub fn with_retirement_gate(
-    mut self,
-    retirement_gate: crate::services::legacy_runtime_retirement::LegacyRuntimeRetirementGate,
-  ) -> Self {
-    self.retirement_gate = retirement_gate;
     self
   }
 
@@ -93,38 +78,25 @@ impl ProviderService {
     let now = now_rfc3339();
     let (credential_ref, secret_to_store, op_id) = self.plan_create_credential(id, &input)?;
 
-    // Applicable catalog default for THIS new provider (adapter alias + connection requirements).
-    // Blocked aborts create with no provider/binding/intent. Only NoApplicableDefault permits legacy.
+    // Package-first create: every new provider requires an applicable authorized default
+    // package. No legacy frontend executor exists, so genuine absence and blocked defaults
+    // fail closed without writing a provider, binding, or intent row.
     let default: Option<PreparedProviderDefault> = match &self.runtime_defaults {
       Some(runtime) => match runtime.resolve_applicable_provider_default(&input)? {
         ProviderDefaultResolution::Applicable(prepared) => Some(prepared),
         ProviderDefaultResolution::NoApplicableDefault => {
-          // When this adapter's provider-legacy gate is enabled, reject create without a
-          // package-first path.
-          if self.retirement_gate.is_provider_legacy_retired(&input.adapter_id) {
-            return Err(StorageError::Validation(
-              "provider legacy create is retired; install and authorize a default package first".into(),
-            ));
-          }
-          None
+          return Err(StorageError::Validation(
+            "provider create requires an authorized default package; install and authorize it first".into(),
+          ));
         }
         ProviderDefaultResolution::Blocked(block) => {
-          if self.retirement_gate.is_provider_legacy_retired(&input.adapter_id) {
-            return Err(StorageError::Validation(format!(
-              "provider legacy create is retired; package-first create is blocked: {}",
-              block.code
-            )));
-          }
           return Err(StorageError::Validation(format!("{}: {}", block.code, block.message)));
         }
       },
       None => {
-        if self.retirement_gate.is_provider_legacy_retired(&input.adapter_id) {
-          return Err(StorageError::Validation(
-            "provider legacy create is retired; install and authorize a default package first".into(),
-          ));
-        }
-        None
+        return Err(StorageError::Validation(
+          "provider create requires an authorized default package".into(),
+        ));
       }
     };
 
@@ -284,7 +256,7 @@ impl ProviderService {
       }
       // The default API type may have changed: guarantee a binding row for the new adapter
       // while keeping any interface binding that was keyed to the old adapter.
-      ensure_default_binding(conn, id, &input.adapter_id, &now)?;
+      ensure_default_binding(conn, id, &existing.adapter_id, &input.adapter_id)?;
       let (provider, bindings) = provider_instances::get_with_runtime(conn, id)?;
       Ok(ProviderInstanceDto::from_provider_and_runtime(&provider, &bindings))
     })
@@ -349,7 +321,7 @@ impl ProviderService {
       // Single SQLite transaction after vault write: config + credential_ref + sync reset.
       provider_instances::update_configuration(conn, &provider)?;
       let op = credential_operations::mark_db_committed(conn, op_id)?;
-      ensure_default_binding(conn, existing.id, &input.adapter_id, &now)?;
+      ensure_default_binding(conn, existing.id, &provider.adapter_id, &input.adapter_id)?;
       Ok((provider, op))
     });
 
@@ -430,7 +402,7 @@ impl ProviderService {
 
       provider_instances::update_configuration(conn, &provider)?;
       let op = credential_operations::mark_db_committed(conn, op_id)?;
-      ensure_default_binding(conn, existing.id, &input.adapter_id, &now)?;
+      ensure_default_binding(conn, existing.id, &provider.adapter_id, &input.adapter_id)?;
       Ok((provider, op))
     });
 
@@ -503,125 +475,90 @@ impl ProviderService {
     Ok(())
   }
 
-  /// Retirement-only provider deletion: removes a provider only when it is disabled, has no
-  /// models or profile references, and owns exactly the one target legacy binding (CAS by the
-  /// inventory update token). Never calls the cascading `delete` path, so unrelated package
-  /// bindings, models, profiles, and credentials stay untouched. Fail-closed on any violation.
-  pub fn delete_retired_legacy_binding(
-    &self,
-    input: crate::domain::legacy_runtime_inventory::RetirementDeleteProviderInput,
-  ) -> Result<(), StorageError> {
-    let provider_id =
-      Uuid::parse_str(&input.provider_id).map_err(|_| StorageError::Validation("invalid provider id".into()))?;
-    coordinator::preflight_owner(
-      &self.db,
-      self.vault.as_ref(),
-      OwnerKind::Provider,
-      &provider_id.to_string(),
-    )?;
-
-    let existing = self.db.read(|conn| provider_instances::get(conn, provider_id))?;
-    if existing.enabled {
-      return Err(StorageError::Conflict(
-        "provider is enabled; disable it before retirement deletion".into(),
-      ));
-    }
-    let old_ref = existing.credential_ref.clone();
-    let op_id = new_id();
-
-    let cleanup_op: Option<CredentialOperation> = self.db.transaction(|uow| {
-      let binding = provider_runtime_bindings::get(uow.conn(), provider_id, &input.adapter_id)?;
-      if binding.runtime_kind != ProviderRuntimeKind::LegacyFrontendProvider {
-        return Err(StorageError::Conflict(format!(
-          "binding for adapter {} is not a legacy frontend binding",
-          input.adapter_id
-        )));
-      }
-      if binding.updated_at != input.update_token {
-        return Err(StorageError::Conflict(
-          "legacy binding changed since inventory; refresh and retry".into(),
-        ));
-      }
-      let model_count = provider_models::list_by_provider(uow.conn(), provider_id)?.len() as u64;
-      if model_count > 0 {
-        return Err(StorageError::Conflict(format!(
-          "provider has {model_count} models; retirement deletion refused"
-        )));
-      }
-      // Zero models implies zero profile targets and detection references. Only the target
-      // legacy binding may exist; the provider row delete cascades that binding.
-      let bindings = provider_runtime_bindings::list_by_provider(uow.conn(), provider_id)?;
-      if bindings.len() != 1 {
-        return Err(StorageError::Conflict(format!(
-          "provider has {} runtime bindings; retirement deletion refused",
-          bindings.len()
-        )));
-      }
-      if bindings[0].adapter_id != input.adapter_id {
-        return Err(StorageError::Conflict(
-          "provider owns unrelated runtime bindings; retirement deletion refused".into(),
-        ));
-      }
-      provider_instances::delete(uow.conn(), provider_id)?;
-      if old_ref.is_some() {
-        let op = credential_operations::insert_db_committed(
-          uow.conn(),
-          op_id,
-          OwnerKind::Provider,
-          &provider_id.to_string(),
-          old_ref.as_deref(),
-          None,
-        )?;
-        Ok(Some(op))
-      } else {
-        Ok(None)
-      }
-    })?;
-
-    if let Some(op) = cleanup_op {
-      let _ = coordinator::finalize_operation(&self.db, self.vault.as_ref(), &op);
-    }
-    Ok(())
-  }
-
   /// Startup recovery for unfinished credential operations.
   pub fn recover_credential_operations(db: &Database, vault: &dyn CredentialVault) -> coordinator::RecoveryReport {
     coordinator::recover_all(db, vault)
   }
 }
 
-/// Insert exactly one selected runtime binding for a new provider: the exact package-first
-/// pending binding when an applicable default is prepared, otherwise the dual-stack legacy
-/// frontend binding. Callers must not write a provisional row before calling this helper.
+/// Insert the exact package-first pending binding for a new provider. Package-only create
+/// never writes a legacy binding; callers must resolve an authorized default first.
 fn insert_selected_runtime_binding(
   conn: &rusqlite::Connection,
   provider: &ProviderInstance,
-  input: &ProviderInstanceWrite,
+  _input: &ProviderInstanceWrite,
   prepared_default: &Option<PreparedProviderDefault>,
   now: &str,
 ) -> Result<crate::domain::runtime_provider::ProviderRuntimeBinding, StorageError> {
   match prepared_default {
     Some(prepared) => apply_package_first_pending_binding(conn, provider, prepared, now),
-    None => {
-      let legacy = legacy_frontend_binding(provider.id, &input.adapter_id, now);
-      crate::repositories::provider_runtime_bindings::insert(conn, &legacy)?;
-      Ok(legacy)
-    }
+    None => Err(StorageError::Validation(
+      "provider create requires an authorized default package".into(),
+    )),
   }
 }
 
-/// Guarantee the Provider default API type owns a binding row after the persisted adapter
-/// changes. A missing row (e.g. after switching to a never-attached API type) receives an
-/// active legacy binding; existing interface bindings are never removed.
+/// Ensure the Provider default API type keeps whatever binding row exists after the persisted
+/// adapter changes. When the provider's default adapter changes, migrate the provider-default
+/// binding row (the one keyed to the previous default adapter) to the new adapter id so the
+/// (provider, default adapter) read invariant holds and its exact package identity moves with
+/// the provider's default interface. A provider with no binding yet stays unbound.
 fn ensure_default_binding(
   conn: &rusqlite::Connection,
   provider_id: Uuid,
-  adapter_id: &str,
-  now: &str,
+  old_adapter_id: &str,
+  new_adapter_id: &str,
 ) -> Result<(), StorageError> {
-  if provider_runtime_bindings::get_optional(conn, provider_id, adapter_id)?.is_none() {
-    let legacy = legacy_frontend_binding(provider_id, adapter_id, now);
-    provider_runtime_bindings::insert(conn, &legacy)?;
+  if old_adapter_id == new_adapter_id {
+    return Ok(());
+  }
+  let Some(mut migrated) = provider_runtime_bindings::get_optional(conn, provider_id, old_adapter_id)? else {
+    return Ok(());
+  };
+  migrated.adapter_id = new_adapter_id.to_string();
+  if let Some(raw) = migrated.runtime_requirement_json.as_deref() {
+    if let Ok(mut requirement) =
+      serde_json::from_str::<crate::domain::runtime_provider::ProviderRuntimeRequirementExport>(raw)
+    {
+      requirement.adapter_id = Some(new_adapter_id.to_string());
+      let json = serde_json::to_string(&requirement).expect("serialize migrated requirement");
+      if serde_json::from_str::<crate::domain::runtime_provider::ProviderRuntimeRequirementExport>(&json).is_ok() {
+        migrated.runtime_requirement_json = Some(json);
+      }
+    }
+  }
+  // Rename the binding row keyed to the old default adapter (the repository update matches
+  // on (provider_id, adapter_id), so the rename is a direct adapter-keyed UPDATE).
+  let changed = conn
+    .execute(
+      "UPDATE provider_runtime_bindings SET
+        adapter_id = ?3,
+        package_digest = ?4,
+        grant_set_revision = ?5,
+        state = ?6,
+        error_code = ?7,
+        error_message = ?8,
+        runtime_requirement_json = ?9,
+        updated_at = ?10
+       WHERE provider_id = ?1 AND adapter_id = ?2",
+      rusqlite::params![
+        provider_id.to_string(),
+        old_adapter_id,
+        migrated.adapter_id,
+        migrated.package_digest,
+        migrated.grant_set_revision.map(|revision| revision as i64),
+        migrated.state.as_str(),
+        migrated.error_code,
+        migrated.error_message,
+        migrated.runtime_requirement_json,
+        migrated.updated_at,
+      ],
+    )
+    .map_err(|error| crate::error::StorageError::Sqlite(error))?;
+  if changed == 0 {
+    return Err(crate::error::StorageError::NotFound(format!(
+      "provider runtime binding {provider_id} adapter {old_adapter_id}"
+    )));
   }
   Ok(())
 }
@@ -867,38 +804,16 @@ mod tests {
     (dir, db, packages, providers, activation)
   }
 
-  /// Both create branches (vault write and vault-free) must insert exactly one selected binding:
-  /// package-first pending when an authorized default applies, else the legacy frontend binding.
+  /// Package-only create: without an authorized default package the save fails closed; with
+  /// one, both branches (vault write and vault-free) insert exactly one package-first binding.
   #[test]
   fn create_inserts_exactly_one_selected_runtime_binding() {
     let (_dir, db, packages, providers, activation) = setup();
 
-    let legacy_cases: &[(&str, Option<&str>)] = &[("legacy-vault", Some("secret-legacy")), ("legacy-novault", None)];
-    for (case, secret) in legacy_cases {
-      let saved = providers.save(provider_write(*secret)).expect("legacy provider create");
-      assert_eq!(
-        saved.runtime_bindings.len(),
-        1,
-        "{case}: create must return exactly one selected binding"
-      );
-      let binding = &saved.runtime_bindings[0];
-      assert_eq!(
-        binding.runtime_kind,
-        ProviderRuntimeKind::LegacyFrontendProvider,
-        "{case}"
-      );
-      assert!(binding.package_digest.is_none(), "{case}");
-      assert_eq!(binding.state, ProviderRuntimeState::Active, "{case}");
-      let rows = db
-        .read(|conn| crate::repositories::provider_runtime_bindings::list_by_provider(conn, saved.id))
-        .unwrap();
-      assert_eq!(rows.len(), 1, "{case}: exactly one binding row persisted");
-      assert_eq!(
-        rows[0].runtime_kind,
-        ProviderRuntimeKind::LegacyFrontendProvider,
-        "{case}"
-      );
-    }
+    // No authorized default: every create is rejected; no provider or binding row is written.
+    let err = providers.save(provider_write(Some("secret"))).unwrap_err();
+    assert!(err.to_string().contains("default package"), "got {err}");
+    assert!(providers.list().unwrap().is_empty(), "no provider written");
 
     // Install and authorize the default package for the package-first cases.
     let import = packages
@@ -913,6 +828,7 @@ mod tests {
         crate::domain::default_package_activation::AuthorizeDefaultPluginPackageInput {
           preview_id: preview.preview_id,
           acknowledge_future_instance_authority: true,
+          acknowledge_unsigned_default_risk: false,
         },
       )
       .expect("authorize default package");
@@ -939,171 +855,5 @@ mod tests {
       assert_eq!(rows.len(), 1, "{case}: exactly one binding row persisted");
       assert_eq!(rows[0].runtime_kind, ProviderRuntimeKind::WasmComponent, "{case}");
     }
-  }
-  /// Retirement deletion is fail-closed: enabled providers and providers with models are
-  /// refused without any state change.
-  #[test]
-  fn retirement_delete_provider_refuses_enabled_or_dependent_provider() {
-    let (_dir, db, _packages, providers, _activation) = setup();
-    let saved = providers.save(provider_write(Some("secret"))).expect("create provider");
-    let token = saved.runtime_bindings[0].updated_at.clone();
-    let input = |token: &str| crate::domain::legacy_runtime_inventory::RetirementDeleteProviderInput {
-      provider_id: saved.id.to_string(),
-      adapter_id: "openai-compatible".into(),
-      update_token: token.into(),
-    };
-
-    // Enabled provider: refused before any check.
-    let err = providers.delete_retired_legacy_binding(input(&token)).unwrap_err();
-    assert!(err.to_string().contains("enabled"), "got {err}");
-    assert_eq!(providers.list().unwrap().len(), 1, "provider untouched");
-
-    providers.set_enabled(saved.id, false).unwrap();
-    // A model makes the provider dependent: refused, model and provider untouched.
-    let now = crate::domain::time::now_rfc3339();
-    db.transaction(|uow| {
-      use crate::domain::model::{Availability, ModelSource, ProviderModel};
-      crate::repositories::provider_models::insert(
-        uow.conn(),
-        &ProviderModel {
-          id: Uuid::now_v7(),
-          provider_instance_id: saved.id,
-          model_key: "gpt-4o".into(),
-          source: ModelSource::Remote,
-          remote_display_name: Some("GPT-4o".into()),
-          display_name_override: None,
-          enabled: true,
-          availability: Availability::Available,
-          remote_metadata_json: None,
-          capability_overrides_json: None,
-          adapter_id: None,
-          source_adapter_id: "openai-compatible".into(),
-          last_seen_at: None,
-          created_at: now.clone(),
-          updated_at: now.clone(),
-        },
-      )?;
-      Ok::<_, crate::error::StorageError>(())
-    })
-    .unwrap();
-    let err = providers.delete_retired_legacy_binding(input(&token)).unwrap_err();
-    assert!(err.to_string().contains("models"), "got {err}");
-    assert_eq!(providers.list().unwrap().len(), 1, "provider untouched");
-    assert_eq!(
-      db.read(|conn| crate::repositories::provider_models::list_by_provider(conn, saved.id))
-        .unwrap()
-        .len(),
-      1,
-      "model untouched"
-    );
-  }
-
-  /// A stale inventory token aborts before any credential or database change.
-  #[test]
-  fn retirement_delete_provider_stale_token_refuses_without_changes() {
-    let (_dir, db, _packages, providers, _activation) = setup();
-    let saved = providers.save(provider_write(None)).expect("create provider");
-    providers.set_enabled(saved.id, false).unwrap();
-    let err = providers
-      .delete_retired_legacy_binding(crate::domain::legacy_runtime_inventory::RetirementDeleteProviderInput {
-        provider_id: saved.id.to_string(),
-        adapter_id: "openai-compatible".into(),
-        update_token: "stale-token".into(),
-      })
-      .unwrap_err();
-    assert!(err.to_string().contains("changed"), "got {err}");
-    assert_eq!(providers.list().unwrap().len(), 1, "provider untouched");
-    assert_eq!(
-      db.read(|conn| crate::repositories::provider_runtime_bindings::list_by_provider(conn, saved.id))
-        .unwrap()
-        .len(),
-      1,
-      "binding untouched"
-    );
-  }
-
-  /// An unrelated package-backed binding keeps the whole provider undeletable.
-  #[test]
-  fn retirement_delete_provider_refuses_unrelated_runtime_binding() {
-    use crate::domain::runtime_provider::ProviderRuntimeBinding;
-    let (_dir, db, _packages, providers, _activation) = setup();
-    let saved = providers.save(provider_write(None)).expect("create provider");
-    providers.set_enabled(saved.id, false).unwrap();
-    let token = saved.runtime_bindings[0].updated_at.clone();
-    // Attach an unrelated package binding for another adapter.
-    let now = crate::domain::time::now_rfc3339();
-    db.transaction(|uow| {
-      crate::repositories::provider_runtime_bindings::insert(
-        uow.conn(),
-        &ProviderRuntimeBinding {
-          provider_id: saved.id,
-          adapter_id: "anthropic".into(),
-          runtime_kind: ProviderRuntimeKind::WasmComponent,
-          package_digest: Some("digest-wasm".into()),
-          grant_set_revision: Some(1),
-          state: ProviderRuntimeState::Active,
-          error_code: None,
-          error_message: None,
-          runtime_requirement_json: None,
-          created_at: now.clone(),
-          updated_at: now.clone(),
-        },
-      )?;
-      Ok::<_, crate::error::StorageError>(())
-    })
-    .unwrap();
-
-    let err = providers
-      .delete_retired_legacy_binding(crate::domain::legacy_runtime_inventory::RetirementDeleteProviderInput {
-        provider_id: saved.id.to_string(),
-        adapter_id: "openai-compatible".into(),
-        update_token: token,
-      })
-      .unwrap_err();
-    assert!(err.to_string().contains("bindings"), "got {err}");
-    assert_eq!(providers.list().unwrap().len(), 1, "provider untouched");
-    assert_eq!(
-      db.read(|conn| crate::repositories::provider_runtime_bindings::list_by_provider(conn, saved.id))
-        .unwrap()
-        .len(),
-      2,
-      "both bindings untouched"
-    );
-  }
-
-  /// A disabled, unused provider with exactly the one legacy binding is deleted with its
-  /// credential; nothing else changes.
-  #[test]
-  fn retirement_delete_provider_success_removes_isolated_disabled_provider() {
-    let (_dir, db, _packages, providers, _activation) = setup();
-    let saved = providers.save(provider_write(Some("secret"))).expect("create provider");
-    providers.set_enabled(saved.id, false).unwrap();
-    let token = saved.runtime_bindings[0].updated_at.clone();
-
-    providers
-      .delete_retired_legacy_binding(crate::domain::legacy_runtime_inventory::RetirementDeleteProviderInput {
-        provider_id: saved.id.to_string(),
-        adapter_id: "openai-compatible".into(),
-        update_token: token,
-      })
-      .expect("isolated disabled provider deletes");
-
-    assert!(providers.list().unwrap().is_empty(), "provider removed");
-    assert_eq!(
-      db.read(|conn| crate::repositories::provider_runtime_bindings::list_by_provider(conn, saved.id))
-        .unwrap()
-        .len(),
-      0,
-      "legacy binding cascade-removed"
-    );
-    // The credential journal finalized the vault slot; no provider-owned credential remains.
-    assert!(
-      providers
-        .list()
-        .unwrap()
-        .iter()
-        .all(|provider| provider.credential_kind == CredentialKind::None),
-      "no provider row keeps a credential reference"
-    );
   }
 }

@@ -52,6 +52,23 @@ impl DefaultPackageActivationService {
       }
     };
 
+    #[cfg(test)]
+    {
+      let mut observation = self
+        .flight_join_state
+        .lock()
+        .map_err(|_| StorageError::Internal("flight join observation lock poisoned".into()))?;
+      if observation.generation != flight.generation {
+        *observation = super::FlightJoinObservation {
+          generation: flight.generation,
+          worker_started: false,
+          joined_callers: 0,
+        };
+      }
+      observation.joined_callers = observation.joined_callers.saturating_add(1);
+      self.flight_join_signal.notify_all();
+    }
+
     if spawned_worker {
       // Caller-independent worker: first joiner never runs verification on its own stack.
       let worker_service = self.clone();
@@ -127,6 +144,14 @@ impl DefaultPackageActivationService {
     #[cfg(test)]
     {
       {
+        let mut observation = self
+          .flight_join_state
+          .lock()
+          .map_err(|_| StorageError::Internal("flight join observation lock poisoned".into()))?;
+        observation.worker_started = true;
+        self.flight_join_signal.notify_all();
+      }
+      {
         let mut count = self
           .verification_call_count
           .lock()
@@ -179,17 +204,23 @@ impl DefaultPackageActivationService {
       if status != DefaultPackageAuthorizationStatus::Authorized {
         return Err(StorageError::Validation(DEFAULT_AUTHORIZATION_STALE_CODE.into()));
       }
-      let publisher = plugin_publishers::get_optional(conn, &version.publisher_key_id)?
-        .ok_or_else(|| StorageError::Validation(DEFAULT_AUTHORIZATION_STALE_CODE.into()))?;
-      if publisher.revoked
-        || !publisher.enabled
-        || publisher.key_id != policy.publisher_key_id
-        || publisher.fingerprint != policy.publisher_fingerprint
-        || publisher.key_id != version.publisher_key_id
-        || publisher.fingerprint != version.publisher_fingerprint
-      {
-        return Err(StorageError::Validation(DEFAULT_AUTHORIZATION_STALE_CODE.into()));
-      }
+      let unsigned = version.signature_status == crate::domain::plugin_package::PackageSignatureStatus::Unsigned;
+      let publisher = if unsigned {
+        None
+      } else {
+        let publisher = plugin_publishers::get_optional(conn, &version.publisher_key_id)?
+          .ok_or_else(|| StorageError::Validation(DEFAULT_AUTHORIZATION_STALE_CODE.into()))?;
+        if publisher.revoked
+          || !publisher.enabled
+          || publisher.key_id != policy.publisher_key_id
+          || publisher.fingerprint != policy.publisher_fingerprint
+          || publisher.key_id != version.publisher_key_id
+          || publisher.fingerprint != version.publisher_fingerprint
+        {
+          return Err(StorageError::Validation(DEFAULT_AUTHORIZATION_STALE_CODE.into()));
+        }
+        Some(publisher)
+      };
       if policy.permission_request_digest != version.permission_request_digest {
         return Err(StorageError::Validation(DEFAULT_AUTHORIZATION_STALE_CODE.into()));
       }
@@ -197,33 +228,35 @@ impl DefaultPackageActivationService {
     })?;
 
     let store_generation = self.packages.store_generation();
-    let verified = self.packages.verify_runtime_store_snapshot(
-      package_digest,
-      &publisher.key_id,
-      &publisher.fingerprint,
-      &publisher.public_key_hex,
-      publisher.source,
-    )?;
+    let verified = self.packages.verify_installed_package_snapshot(package_digest)?;
     if verified.package_digest != package_digest
       || verified.package_digest != catalog_default_digest
       || verified.manifest.id != version.plugin_id
       || verified.manifest.version != version.version
-      || verified.manifest.publisher.key_id != policy.publisher_key_id
-      || verified.manifest.publisher.key_fingerprint != policy.publisher_fingerprint
-      || verified.publisher_fingerprint != policy.publisher_fingerprint
-      || verified.publisher_public_key_hex != publisher.public_key_hex
       || compute_permission_request_digest(&verified.manifest) != policy.permission_request_digest
     {
       return Err(StorageError::Validation(DEFAULT_AUTHORIZATION_STALE_CODE.into()));
+    }
+    if let Some(publisher) = publisher.as_ref() {
+      if verified.manifest.publisher.key_id != policy.publisher_key_id
+        || verified.manifest.publisher.key_fingerprint != policy.publisher_fingerprint
+        || verified.publisher_fingerprint != policy.publisher_fingerprint
+        || verified.publisher_public_key_hex != publisher.public_key_hex
+      {
+        return Err(StorageError::Validation(DEFAULT_AUTHORIZATION_STALE_CODE.into()));
+      }
     }
     Ok(VerifiedActivationSnapshot {
       package_digest: package_digest.to_string(),
       verified,
       policy_constraints_digest: policy.approved_authority_constraints_digest,
-      publisher_key_id: publisher.key_id,
-      publisher_fingerprint: publisher.fingerprint,
-      publisher_public_key_hex: publisher.public_key_hex,
-      publisher_source: publisher.source,
+      publisher_key_id: publisher.as_ref().map(|p| p.key_id.clone()).unwrap_or_default(),
+      publisher_fingerprint: publisher.as_ref().map(|p| p.fingerprint.clone()).unwrap_or_default(),
+      publisher_public_key_hex: publisher.as_ref().map(|p| p.public_key_hex.clone()).unwrap_or_default(),
+      publisher_source: publisher
+        .as_ref()
+        .map(|p| p.source)
+        .unwrap_or(crate::domain::plugin_package::PublisherSource::UserApproved),
       store_generation,
     })
   }

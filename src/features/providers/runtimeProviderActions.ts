@@ -1,18 +1,16 @@
 // ABOUTME: Provider runtime lifecycle action controller consumed by ProviderEditor.
-// ABOUTME: Preview/apply/rollback/detach IPC with cache invalidation only after successful mutation.
+// ABOUTME: Rollback, attach, replace, detach, and snapshot discard with cache invalidation after success.
 import type { QueryClient } from "@tanstack/react-query";
 import { modelKeys, providerKeys, providerRuntimeKeys } from "../../query/keys";
 import {
   applyProviderRuntimeInterfaceAttach,
   applyProviderRuntimeInterfaceRollback,
   applyProviderRuntimeRollback,
-  applyProviderRuntimeUpgrade,
   detachProviderRuntimeInterface,
   discardProviderRuntimeSnapshot,
   previewProviderRuntimeInterfaceAttach,
   previewProviderRuntimeInterfaceRollback,
   previewProviderRuntimeRollback,
-  previewProviderRuntimeUpgrade,
 } from "../../storage/client";
 import type {
   ApplyProviderRuntimeInterfaceAttachInput,
@@ -27,18 +25,13 @@ import type {
   ProviderRuntimeInterfaceRollbackPreviewDto,
   ProviderRuntimeLifecycleResultDto,
   ProviderRuntimeRollbackPreviewDto,
-  ProviderRuntimeUpgradePreviewDto,
 } from "../../storage/types";
 
 /** Public lifecycle actions; ProviderEditor is a thin consumer of this controller. */
 export interface RuntimeProviderActions {
-  previewUpgrade(input: { providerId: string; targetPackageDigest: string }): Promise<ProviderRuntimeUpgradePreviewDto>;
-  /** Applies one previewed upgrade; permission-expanding upgrades require acknowledgement. */
-  applyUpgrade(input: {
-    preview: ProviderRuntimeUpgradePreviewDto;
-    acknowledgePermissions: boolean;
-  }): Promise<ProviderRuntimeLifecycleResultDto>;
+  /** Preview restore of the retained prior package binding. */
   previewRollback(input: { providerId: string }): Promise<ProviderRuntimeRollbackPreviewDto>;
+  /** Apply restore of the retained prior package binding. */
   applyRollback(input: { preview: ProviderRuntimeRollbackPreviewDto }): Promise<ProviderRuntimeLifecycleResultDto>;
   /** Adapter-keyed interface lifecycle (multi-interface control plane). */
   previewInterfaceAttach(
@@ -55,7 +48,7 @@ export interface RuntimeProviderActions {
   ): Promise<ProviderRuntimeInterfaceLifecycleResultDto>;
   detachInterface(input: ProviderRuntimeInterfaceDetachInput): Promise<ProviderRuntimeInterfaceLifecycleResultDto>;
   discardSnapshot(input: ProviderRuntimeInterfaceDiscardSnapshotInput): Promise<void>;
-  /** Rollback is exposed only while the provider holds a package binding. */
+  /** Rollback restores the retained prior package binding and is exposed only for a Wasm package. */
   isRollbackAvailable(provider: Pick<ProviderInstanceDto, "runtime">): boolean;
 }
 
@@ -66,7 +59,7 @@ export interface RuntimeProviderActionsDeps {
 
 /**
  * Create the lifecycle controller. Provider and Provider-model caches are invalidated only
- * after a successful apply/rollback/detach mutation; failed or cancelled actions change
+ * after a successful rollback/attach/detach/discard mutation; failed or cancelled actions change
  * neither.
  */
 export function createRuntimeProviderActions(deps: RuntimeProviderActionsDeps): RuntimeProviderActions {
@@ -76,21 +69,6 @@ export function createRuntimeProviderActions(deps: RuntimeProviderActionsDeps): 
     // Attach/replace/detach/rollback/discard all mutate the rollback snapshot collection;
     // refresh it so the discard seam stays visible until the user cleans it up.
     void deps.queryClient.invalidateQueries({ queryKey: providerRuntimeKeys.all });
-  }
-
-  async function applyUpgrade(input: {
-    preview: ProviderRuntimeUpgradePreviewDto;
-    acknowledgePermissions: boolean;
-  }): Promise<ProviderRuntimeLifecycleResultDto> {
-    if (input.preview.requiresPermissionApproval && !input.acknowledgePermissions) {
-      throw new Error("provider runtime upgrade requires permission acknowledgement");
-    }
-    const result = await applyProviderRuntimeUpgrade({
-      previewId: input.preview.previewId,
-      acknowledgePermissions: input.acknowledgePermissions,
-    });
-    invalidateProviderAndModels();
-    return result;
   }
 
   async function applyRollback(input: {
@@ -118,8 +96,6 @@ export function createRuntimeProviderActions(deps: RuntimeProviderActionsDeps): 
   }
 
   return {
-    previewUpgrade: (input) => previewProviderRuntimeUpgrade(input.providerId, input.targetPackageDigest),
-    applyUpgrade,
     previewRollback: (input) => previewProviderRuntimeRollback(input.providerId),
     applyRollback,
     previewInterfaceAttach: (input) => previewProviderRuntimeInterfaceAttach(input),

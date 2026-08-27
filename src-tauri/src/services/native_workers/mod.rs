@@ -776,7 +776,7 @@ fn main() {
   let len = u32::from_be_bytes([header[6], header[7], header[8], header[9]]) as usize;
   let mut payload = vec![0u8; len];
   if len > 0 { stdin.read_exact(&mut payload).unwrap(); }
-  let mut ready = payload.clone();
+  let ready = payload.clone();
   // crude: change "protocolVersion" payload is JSON handshake; rewrite kind only by framing Ready.
   // For simplicity, re-emit the same JSON as Ready payload (tests use matching fields).
   let mut out = Vec::new();

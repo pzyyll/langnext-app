@@ -1,5 +1,5 @@
-// ABOUTME: Domain types for signed plugin package install, approval, and publisher trust.
-// ABOUTME: Package approval is catalog-only; execution grant sets are reserved for Phase 4.
+// ABOUTME: Domain types for signed and unsigned plugin package install, approval, and publisher trust.
+// ABOUTME: Package approval is catalog-only; execution grant sets stay instance-scoped.
 use crate::domain::runtime_plugin::{
   MEBIBYTE_BYTES, PackageDigest, PluginManifestV1, PublisherKeyFingerprint, PublisherKeyId, RuntimeKind,
 };
@@ -42,6 +42,49 @@ pub const ED25519_PUBLIC_KEY_LEN: usize = 32;
 pub const ED25519_SIGNATURE_LEN: usize = 64;
 /// Lowercase hex length of an Ed25519 public key.
 pub const ED25519_PUBLIC_KEY_HEX_LEN: usize = ED25519_PUBLIC_KEY_LEN * 2;
+
+/// Named unsigned/native/default risk acknowledgement contract versions.
+pub const UNSIGNED_PLUGIN_RISK_ACK_V1: &str = "UNSIGNED_PLUGIN_RISK_ACK_V1";
+pub const NATIVE_PLUGIN_RISK_ACK_V1: &str = "NATIVE_PLUGIN_RISK_ACK_V1";
+pub const UNSIGNED_DEFAULT_RISK_ACK_V1: &str = "UNSIGNED_DEFAULT_RISK_ACK_V1";
+/// Exact combined contract marker when both install warnings apply.
+pub const UNSIGNED_NATIVE_PLUGIN_RISK_ACK_V1: &str = "UNSIGNED_PLUGIN_RISK_ACK_V1+NATIVE_PLUGIN_RISK_ACK_V1";
+
+/// Canonical stored risk-acknowledgement version for the exact ack combination.
+pub fn risk_acknowledgement_version(unsigned: bool, native: bool) -> Option<String> {
+  match (unsigned, native) {
+    (true, true) => Some(UNSIGNED_NATIVE_PLUGIN_RISK_ACK_V1.to_string()),
+    (true, false) => Some(UNSIGNED_PLUGIN_RISK_ACK_V1.to_string()),
+    (false, true) => Some(NATIVE_PLUGIN_RISK_ACK_V1.to_string()),
+    (false, false) => None,
+  }
+}
+
+/// Whether an installed or previewed package carries a valid publisher signature.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PackageSignatureStatus {
+  #[default]
+  Signed,
+  Unsigned,
+}
+
+impl PackageSignatureStatus {
+  pub fn as_str(self) -> &'static str {
+    match self {
+      Self::Signed => "signed",
+      Self::Unsigned => "unsigned",
+    }
+  }
+
+  pub fn parse(value: &str) -> Result<Self, String> {
+    match value {
+      "signed" => Ok(Self::Signed),
+      "unsigned" => Ok(Self::Unsigned),
+      other => Err(format!("unknown signature status: {other}")),
+    }
+  }
+}
 
 /// How a publisher key entered the trust store.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -118,6 +161,7 @@ pub struct InstalledPluginVersion {
   pub version: String,
   pub publisher_key_id: String,
   pub publisher_fingerprint: String,
+  pub signature_status: PackageSignatureStatus,
   pub runtime_kind: String,
   pub manifest_json: String,
   pub permission_request_digest: String,
@@ -134,6 +178,15 @@ pub struct InstalledPluginVersionDto {
   pub version: String,
   pub publisher_key_id: String,
   pub publisher_fingerprint: String,
+  pub signature_status: PackageSignatureStatus,
+  /// Manifest publisher claim; untrusted display metadata for unsigned packages.
+  #[serde(default)]
+  pub claimed_publisher_key_id: String,
+  /// Manifest fingerprint claim; untrusted display metadata for unsigned packages.
+  #[serde(default)]
+  pub claimed_publisher_fingerprint: String,
+  #[serde(default)]
+  pub native_execution_risk_acknowledged: bool,
   pub runtime_kind: String,
   pub permission_request_digest: String,
   pub content_available: bool,
@@ -152,6 +205,7 @@ pub enum PublisherDecision {
   TrustedVendor,
   UserApproved,
   AlreadyTrusted,
+  UnsignedExactDigest,
 }
 
 impl PublisherDecision {
@@ -160,6 +214,7 @@ impl PublisherDecision {
       Self::TrustedVendor => "trusted_vendor",
       Self::UserApproved => "user_approved",
       Self::AlreadyTrusted => "already_trusted",
+      Self::UnsignedExactDigest => "unsigned_exact_digest",
     }
   }
 
@@ -168,6 +223,7 @@ impl PublisherDecision {
       "trusted_vendor" => Ok(Self::TrustedVendor),
       "user_approved" => Ok(Self::UserApproved),
       "already_trusted" => Ok(Self::AlreadyTrusted),
+      "unsigned_exact_digest" => Ok(Self::UnsignedExactDigest),
       other => Err(format!("unknown publisher decision: {other}")),
     }
   }
@@ -184,6 +240,8 @@ pub struct PluginPackageApproval {
   pub publisher_decision: PublisherDecision,
   pub permission_request_digest: String,
   pub approved_at: String,
+  #[serde(default)]
+  pub native_execution_risk_acknowledged: bool,
 }
 
 /// Crash-recovery journal states for a package install operation.
@@ -309,6 +367,7 @@ pub enum PublisherTrustState {
   Unknown,
   Revoked,
   Disabled,
+  Unsigned,
 }
 
 /// Stable package verification / install error codes.
@@ -401,8 +460,20 @@ pub struct PluginPackagePreviewDto {
   pub version: String,
   pub publisher_key_id: String,
   pub publisher_fingerprint: String,
+  /// Manifest publisher claim; untrusted for unsigned packages.
+  #[serde(default)]
+  pub claimed_publisher_key_id: String,
+  /// Manifest fingerprint claim; untrusted for unsigned packages.
+  #[serde(default)]
+  pub claimed_publisher_fingerprint: String,
   pub publisher_trust: PublisherTrustState,
   pub requires_publisher_approval: bool,
+  #[serde(default)]
+  pub signature_status: PackageSignatureStatus,
+  #[serde(default)]
+  pub requires_unsigned_risk_acknowledgement: bool,
+  #[serde(default)]
+  pub requires_native_execution_risk_acknowledgement: bool,
   /// Auto-resolved hex when the package ships a self-authenticating `publisher.pub`.
   /// The frontend must forward this value as-is in `ApprovePluginPackageInput.publisher_public_key_hex`
   /// so the user never types a hex string by hand.
@@ -433,6 +504,10 @@ pub struct ApprovePluginPackageInput {
   pub publisher_public_key_hex: Option<String>,
   /// Required acknowledgement of requested network/auth permissions.
   pub acknowledge_permissions: bool,
+  #[serde(default)]
+  pub acknowledge_unsigned_package_risk: bool,
+  #[serde(default)]
+  pub acknowledge_native_execution_risk: bool,
 }
 
 /// Result of a successful package install approval.
@@ -555,11 +630,10 @@ pub fn compute_permission_request_digest(manifest: &PluginManifestV1) -> String 
 }
 
 /// Runtime kind as a stable kebab-case string for SQLite storage.
+/// Package-only: legacy kinds are not representable.
 pub fn runtime_kind_storage(kind: RuntimeKind) -> &'static str {
   match kind {
-    RuntimeKind::BundledRust => "bundled-rust",
     RuntimeKind::WasmComponent => "wasm-component",
-    RuntimeKind::LegacyFrontendProvider => "legacy-frontend-provider",
     RuntimeKind::TrustedNativeWorker => "trusted-native-worker",
   }
 }
@@ -631,6 +705,7 @@ mod tests {
         auth_policies: vec![],
       },
       ui: Default::default(),
+      path_authority: vec![],
       provider_runtime: None,
       model_resources: None,
     }

@@ -1,1 +1,246 @@
-[]
+[
+  {
+    "pluginId": "com.langnext.google-translate-web",
+    "packageDigest": "9e6443ed14944363c37467bfa1082312be5d6dbbf9ae4ca2a78bffaec8ab70c8",
+    "publisherKeyId": "com.langnext.vendor.keys.1",
+    "publisherFingerprint": "405708c8009ed75e698b06d85aa7c5321e77c888fbc95b7b843d5abbe153a6d7",
+    "permissionRequestDigest": "d72a9dbadf0007fcf9c99e2fe794a2a848823c6b02937e439c881eca0f77d7c6",
+    "approvedAuthorityConstraints": {
+      "fixedNetwork": [
+        {
+          "endpointId": "gtx",
+          "origin": "https://translate.google.com",
+          "method": "GET",
+          "capabilityIds": ["translate.text@1", "translate.detect@1"],
+          "resourceLimits": {
+            "maxRequestBytes": 1048576,
+            "maxResponseBytes": 8388608,
+            "maxStreamBytes": 16777216,
+            "timeoutMs": 20000
+          }
+        }
+      ],
+      "authPolicies": ["host.none.v1"],
+      "dynamicOriginEndpointIds": [],
+      "resourceLimits": {
+        "maxRequestBytes": 1048576,
+        "maxResponseBytes": 8388608,
+        "maxStreamBytes": 16777216,
+        "timeoutMs": 20000
+      }
+    }
+  },
+  {
+    "pluginId": "com.langnext.edge-tts",
+    "packageDigest": "474ef4b497d8dfaedc599d288d62c5c73a28854e5f74b5dadbc933ec293203e6",
+    "publisherKeyId": "com.langnext.vendor.keys.1",
+    "publisherFingerprint": "405708c8009ed75e698b06d85aa7c5321e77c888fbc95b7b843d5abbe153a6d7",
+    "permissionRequestDigest": "89412047297645983f3bba226df2c842c37a896bd4183bed04eb0c03b8d4e76e",
+    "approvedAuthorityConstraints": {
+      "fixedNetwork": [],
+      "authPolicies": ["host.none.v1"],
+      "dynamicOriginEndpointIds": ["tts-api"],
+      "resourceLimits": null
+    }
+  },
+  {
+    "pluginId": "com.langnext.google-cloud",
+    "packageDigest": "7de43dc5f4571b46fbe8ae3adbd9733e1f7d9662b0e2ee9a1c6f882eedd5df30",
+    "publisherKeyId": "com.langnext.vendor.keys.1",
+    "publisherFingerprint": "405708c8009ed75e698b06d85aa7c5321e77c888fbc95b7b843d5abbe153a6d7",
+    "permissionRequestDigest": "22342e783e1f28009a139122b3e75842600b51a40df74837dc208559c0cd2d6f",
+    "approvedAuthorityConstraints": {
+      "fixedNetwork": [
+        {
+          "endpointId": "text-to-speech",
+          "origin": "https://texttospeech.googleapis.com",
+          "method": "POST",
+          "capabilityIds": ["translate.text@1", "translate.detect@1", "ocr.image@1", "speech.synthesize@1"],
+          "resourceLimits": {
+            "maxRequestBytes": 11250346,
+            "maxResponseBytes": 16842752,
+            "maxStreamBytes": 16777216,
+            "timeoutMs": 60000
+          }
+        },
+        {
+          "endpointId": "translate",
+          "origin": "https://translation.googleapis.com",
+          "method": "POST",
+          "capabilityIds": ["translate.text@1", "translate.detect@1", "ocr.image@1", "speech.synthesize@1"],
+          "resourceLimits": {
+            "maxRequestBytes": 11250346,
+            "maxResponseBytes": 16842752,
+            "maxStreamBytes": 16777216,
+            "timeoutMs": 60000
+          }
+        },
+        {
+          "endpointId": "vision",
+          "origin": "https://vision.googleapis.com",
+          "method": "POST",
+          "capabilityIds": ["translate.text@1", "translate.detect@1", "ocr.image@1", "speech.synthesize@1"],
+          "resourceLimits": {
+            "maxRequestBytes": 11250346,
+            "maxResponseBytes": 16842752,
+            "maxStreamBytes": 16777216,
+            "timeoutMs": 60000
+          }
+        }
+      ],
+      "authPolicies": ["com.langnext.auth.google-service-account"],
+      "dynamicOriginEndpointIds": [],
+      "resourceLimits": {
+        "maxRequestBytes": 11250346,
+        "maxResponseBytes": 16842752,
+        "maxStreamBytes": 16777216,
+        "timeoutMs": 60000
+      }
+    }
+  },
+  {
+    "pluginId": "com.langnext.provider.openai-compatible",
+    "packageDigest": "1429169a1c278d53a25d617f1041102578f809ea1e6a6356356358bc733cac66",
+    "publisherKeyId": "com.langnext.vendor.keys.1",
+    "publisherFingerprint": "405708c8009ed75e698b06d85aa7c5321e77c888fbc95b7b843d5abbe153a6d7",
+    "permissionRequestDigest": "d9ec3811f2a126face4dbd7d6421cac18179bed4b38faf4b3da3278c750d4ce7",
+    "approvedAuthorityConstraints": {
+      "fixedNetwork": [],
+      "authPolicies": ["host.provider-instance-auth.v1"],
+      "dynamicOriginEndpointIds": [],
+      "resourceLimits": null
+    }
+  },
+  {
+    "pluginId": "com.langnext.provider.openai-responses",
+    "packageDigest": "daca4ee62501aa21d1ca1629605c696ed5286075e33d079d5962a9e7d0f4a266",
+    "publisherKeyId": "com.langnext.vendor.keys.1",
+    "publisherFingerprint": "405708c8009ed75e698b06d85aa7c5321e77c888fbc95b7b843d5abbe153a6d7",
+    "permissionRequestDigest": "d9ec3811f2a126face4dbd7d6421cac18179bed4b38faf4b3da3278c750d4ce7",
+    "approvedAuthorityConstraints": {
+      "fixedNetwork": [],
+      "authPolicies": ["host.provider-instance-auth.v1"],
+      "dynamicOriginEndpointIds": [],
+      "resourceLimits": null
+    }
+  },
+  {
+    "pluginId": "com.langnext.provider.anthropic",
+    "packageDigest": "ee7a9d257c6664e5580a0b441d61e8ba80d17c9cc397f55edfd3a349ffb53328",
+    "publisherKeyId": "com.langnext.vendor.keys.1",
+    "publisherFingerprint": "405708c8009ed75e698b06d85aa7c5321e77c888fbc95b7b843d5abbe153a6d7",
+    "permissionRequestDigest": "d9ec3811f2a126face4dbd7d6421cac18179bed4b38faf4b3da3278c750d4ce7",
+    "approvedAuthorityConstraints": {
+      "fixedNetwork": [],
+      "authPolicies": ["host.provider-instance-auth.v1"],
+      "dynamicOriginEndpointIds": [],
+      "resourceLimits": null
+    }
+  },
+  {
+    "pluginId": "com.langnext.provider.gemini",
+    "packageDigest": "78e61daa841c32a408a8f83d16017e9892e07f618370ede4c01ff3ad5a885979",
+    "publisherKeyId": "com.langnext.vendor.keys.1",
+    "publisherFingerprint": "405708c8009ed75e698b06d85aa7c5321e77c888fbc95b7b843d5abbe153a6d7",
+    "permissionRequestDigest": "d9ec3811f2a126face4dbd7d6421cac18179bed4b38faf4b3da3278c750d4ce7",
+    "approvedAuthorityConstraints": {
+      "fixedNetwork": [],
+      "authPolicies": ["host.provider-instance-auth.v1"],
+      "dynamicOriginEndpointIds": [],
+      "resourceLimits": null
+    }
+  },
+  {
+    "pluginId": "com.langnext.provider.deepseek",
+    "packageDigest": "791adf7568379403f548d316361f774454427faf3d029b805a0241a6a0cd6a58",
+    "publisherKeyId": "com.langnext.vendor.keys.1",
+    "publisherFingerprint": "405708c8009ed75e698b06d85aa7c5321e77c888fbc95b7b843d5abbe153a6d7",
+    "permissionRequestDigest": "d9ec3811f2a126face4dbd7d6421cac18179bed4b38faf4b3da3278c750d4ce7",
+    "approvedAuthorityConstraints": {
+      "fixedNetwork": [],
+      "authPolicies": ["host.provider-instance-auth.v1"],
+      "dynamicOriginEndpointIds": [],
+      "resourceLimits": null
+    }
+  },
+  {
+    "pluginId": "com.langnext.paddleocr",
+    "packageDigest": "d4a908ebf7ffc0c933cea768732ca1fd902ba56549318f323ffc5a82f1f0e7a2",
+    "publisherKeyId": "com.langnext.vendor.keys.1",
+    "publisherFingerprint": "405708c8009ed75e698b06d85aa7c5321e77c888fbc95b7b843d5abbe153a6d7",
+    "permissionRequestDigest": "64de3a5732f30712f2b873e66acc66c83c2ad8ab251b4d162ec6bdffd2f6d03f",
+    "approvedAuthorityConstraints": {
+      "fixedNetwork": [],
+      "authPolicies": [],
+      "dynamicOriginEndpointIds": [],
+      "resourceLimits": null
+    }
+  },
+  {
+    "pluginId": "com.langnext.baidu-ocr",
+    "packageDigest": "a336cd3581015ce92f583b31798341473a60ed320ff5e19c570746e17a304cb6",
+    "publisherKeyId": "com.langnext.vendor.keys.1",
+    "publisherFingerprint": "405708c8009ed75e698b06d85aa7c5321e77c888fbc95b7b843d5abbe153a6d7",
+    "permissionRequestDigest": "28e6eca47d8357367b18f11da6d54d1eb0e1afe2c5966374b6bf4b2f6b9529bd",
+    "approvedAuthorityConstraints": {
+      "fixedNetwork": [
+        {
+          "endpointId": "baidu-accurate",
+          "origin": "https://aip.baidubce.com",
+          "method": "POST",
+          "capabilityIds": ["ocr.image@1"],
+          "resourceLimits": {
+            "maxRequestBytes": 11250346,
+            "maxResponseBytes": 8388608,
+            "maxStreamBytes": 16777216,
+            "timeoutMs": 20000
+          }
+        },
+        {
+          "endpointId": "baidu-accurate-basic",
+          "origin": "https://aip.baidubce.com",
+          "method": "POST",
+          "capabilityIds": ["ocr.image@1"],
+          "resourceLimits": {
+            "maxRequestBytes": 11250346,
+            "maxResponseBytes": 8388608,
+            "maxStreamBytes": 16777216,
+            "timeoutMs": 20000
+          }
+        },
+        {
+          "endpointId": "baidu-general",
+          "origin": "https://aip.baidubce.com",
+          "method": "POST",
+          "capabilityIds": ["ocr.image@1"],
+          "resourceLimits": {
+            "maxRequestBytes": 11250346,
+            "maxResponseBytes": 8388608,
+            "maxStreamBytes": 16777216,
+            "timeoutMs": 20000
+          }
+        },
+        {
+          "endpointId": "baidu-general-basic",
+          "origin": "https://aip.baidubce.com",
+          "method": "POST",
+          "capabilityIds": ["ocr.image@1"],
+          "resourceLimits": {
+            "maxRequestBytes": 11250346,
+            "maxResponseBytes": 8388608,
+            "maxStreamBytes": 16777216,
+            "timeoutMs": 20000
+          }
+        }
+      ],
+      "authPolicies": ["com.langnext.auth.baidu-client-credentials"],
+      "dynamicOriginEndpointIds": [],
+      "resourceLimits": {
+        "maxRequestBytes": 11250346,
+        "maxResponseBytes": 8388608,
+        "maxStreamBytes": 16777216,
+        "timeoutMs": 20000
+      }
+    }
+  }
+]

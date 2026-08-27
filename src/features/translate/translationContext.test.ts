@@ -1,12 +1,9 @@
 // ABOUTME: Translation execution-context resolution tests for interface provenance.
 // ABOUTME: Asserts effective API type = override → source interface → Provider default.
 import { describe, expect, test } from "bun:test";
-import { registerBuiltinProviderPlugins } from "../providers/builtin";
 import { RuntimeProviderExecutor } from "../providers/runtimeExecutor";
 import type { ProviderInstanceDto, ProviderModelDto, ProviderRuntimeCatalogEntryDto } from "../../storage/types";
 import { resolveTranslationContext } from "./translationContext";
-
-registerBuiltinProviderPlugins();
 
 const CATALOG_ENTRY = {
   pluginId: "com.langnext.provider.gemini",
@@ -115,7 +112,7 @@ describe("resolveTranslationContext effective API type", () => {
     expect(context.attempts[0]?.executor).toBeInstanceOf(RuntimeProviderExecutor);
   });
 
-  test("an explicit model override wins over the source interface", () => {
+  test("an explicit model override without a package binding fails closed", () => {
     const context = resolveTranslationContext(
       { modelId: "m1", sourceLang: "en", targetLang: "zh", text: "hello" },
       {
@@ -125,11 +122,7 @@ describe("resolveTranslationContext effective API type", () => {
         runtimeCatalog: [CATALOG_ENTRY],
       },
     );
-    expect(context.kind).toBe("llm");
-    if (context.kind !== "llm") {
-      throw new Error("expected llm context");
-    }
-    expect(context.attempts).toHaveLength(1);
-    expect(context.attempts[0]?.executor).not.toBeInstanceOf(RuntimeProviderExecutor);
+    // Package-only: an override API type without an active package binding is never executed.
+    expect(context.attempts).toHaveLength(0);
   });
 });

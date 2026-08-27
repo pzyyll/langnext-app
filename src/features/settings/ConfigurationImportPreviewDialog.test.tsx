@@ -422,7 +422,6 @@ describe("ConfigurationImportPreviewDialog apply flow", () => {
       preview: validPreview({
         requiresAuthentication: [],
         integrationRequiresAuthentication: [],
-        ocrRequiresAuthentication: [],
         proxyRequiresAuthentication: true,
       }),
     });
@@ -445,7 +444,6 @@ describe("ConfigurationImportPreviewDialog apply flow", () => {
       preview: validPreview({
         requiresAuthentication: ["p1"],
         integrationRequiresAuthentication: ["i1"],
-        ocrRequiresAuthentication: ["o1"],
         proxyRequiresAuthentication: true,
       }),
     });
@@ -455,7 +453,7 @@ describe("ConfigurationImportPreviewDialog apply flow", () => {
     expect(screen.getByText("Re-enter credentials after import:")).toBeVisible();
     expect(screen.getAllByText("Channels")).toHaveLength(1);
     expect(screen.getAllByText("Integrations")).toHaveLength(1);
-    expect(screen.getAllByText("OCR services")).toHaveLength(1);
     expect(screen.getAllByText("Proxy")).toHaveLength(1);
+    expect(screen.queryByText("OCR services")).not.toBeInTheDocument();
   });
 });

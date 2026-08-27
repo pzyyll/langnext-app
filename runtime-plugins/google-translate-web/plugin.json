@@ -75,6 +75,24 @@
     ],
     "authPolicies": ["host.none.v1"]
   },
+  "pathAuthority": [
+    {
+      "capabilityId": "translate.text@1",
+      "endpointId": "gtx",
+      "method": "GET",
+      "path": { "form": "exact", "value": "translate_a/single" },
+      "allowedQueryNames": ["client", "sl", "tl", "hl", "dt", "ie", "oe", "q"],
+      "authPolicyId": "host.none.v1"
+    },
+    {
+      "capabilityId": "translate.detect@1",
+      "endpointId": "gtx",
+      "method": "GET",
+      "path": { "form": "exact", "value": "translate_a/single" },
+      "allowedQueryNames": ["client", "sl", "tl", "hl", "dt", "ie", "oe", "q"],
+      "authPolicyId": "host.none.v1"
+    }
+  ],
   "ui": {
     "mode": "schema",
     "pages": []

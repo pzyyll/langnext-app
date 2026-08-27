@@ -3,26 +3,23 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// Runtime executor kind bound to a provider instance. `LegacyFrontendProvider` covers the
-/// current TypeScript adapters; `WasmComponent` is an exact signed two-world LLM package.
+/// Runtime executor kind bound to a provider instance. Package-only: every binding is an
+/// exact signed two-world LLM Wasm component; legacy frontend adapters do not exist.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProviderRuntimeKind {
-  LegacyFrontendProvider,
   WasmComponent,
 }
 
 impl ProviderRuntimeKind {
   pub fn as_str(self) -> &'static str {
     match self {
-      Self::LegacyFrontendProvider => "legacy-frontend-provider",
       Self::WasmComponent => "wasm-component",
     }
   }
 
   pub fn parse(value: &str) -> Result<Self, String> {
     match value {
-      "legacy-frontend-provider" => Ok(Self::LegacyFrontendProvider),
       "wasm-component" => Ok(Self::WasmComponent),
       other => Err(format!("invalid provider runtime kind: {other}")),
     }
@@ -67,7 +64,7 @@ pub struct ProviderRuntimeBinding {
   /// Persisted effective API type this binding owns (Provider default or model override).
   pub adapter_id: String,
   pub runtime_kind: ProviderRuntimeKind,
-  /// Exact signed package digest; always None for legacy bindings.
+  /// Exact signed package digest for the bound Wasm component.
   pub package_digest: Option<String>,
   /// Execution grant-set revision; required only when the package binding is active.
   pub grant_set_revision: Option<u64>,
@@ -115,24 +112,6 @@ impl From<&ProviderRuntimeBinding> for ProviderRuntimeBindingDto {
   }
 }
 
-/// Construct the active legacy binding every provider receives at create/migration time for
-/// its default API type.
-pub fn legacy_frontend_binding(provider_id: Uuid, adapter_id: &str, now: &str) -> ProviderRuntimeBinding {
-  ProviderRuntimeBinding {
-    provider_id,
-    adapter_id: adapter_id.to_string(),
-    runtime_kind: ProviderRuntimeKind::LegacyFrontendProvider,
-    package_digest: None,
-    grant_set_revision: None,
-    state: ProviderRuntimeState::Active,
-    error_code: None,
-    error_message: None,
-    runtime_requirement_json: None,
-    created_at: now.to_string(),
-    updated_at: now.to_string(),
-  }
-}
-
 /// One verified provider-runtime capability in the catalog: exact capability id, artifact
 /// path, and artifact digest. Visibility is never execution authority.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -165,30 +144,6 @@ pub struct ProviderRuntimeCatalogEntryDto {
   pub capabilities: Vec<ProviderRuntimeCatalogCapabilityDto>,
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub detection: Option<ProviderRuntimeDetectionDto>,
-}
-
-/// Upgrade preview returned to the frontend (no secrets, package bytes, or grant content).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ProviderRuntimeUpgradePreviewDto {
-  pub preview_id: String,
-  pub provider_id: Uuid,
-  pub source: ProviderRuntimeBindingDto,
-  pub target: ProviderRuntimeBindingDto,
-  pub target_plugin_version: String,
-  pub target_publisher: crate::domain::runtime_lifecycle::PublisherIdentityDto,
-  pub legacy_aliases: Vec<String>,
-  pub requires_permission_approval: bool,
-  pub expires_at: String,
-}
-
-/// Apply input bound to an opaque upgrade preview.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ApplyProviderRuntimeUpgradeInput {
-  pub preview_id: String,
-  #[serde(default)]
-  pub acknowledge_permissions: bool,
 }
 
 /// Rollback preview showing the stored prior host-owned identity.
@@ -525,41 +480,17 @@ pub struct ProviderRuntimeRequirementExport {
   pub capabilities: Vec<String>,
 }
 
-impl ProviderRuntimeRequirementExport {
-  /// Normalized legacy requirement for providers without a runtime package binding.
-  pub fn legacy() -> Self {
-    Self {
-      adapter_id: None,
-      runtime_kind: "legacy-frontend-provider".into(),
-      package_digest: None,
-      plugin_id: None,
-      plugin_version: None,
-      publisher_key_id: None,
-      publisher_key_fingerprint: None,
-      plugin_api_version: None,
-      legacy_aliases: Vec::new(),
-      capabilities: Vec::new(),
-    }
-  }
-
-  pub fn is_legacy(&self) -> bool {
-    self.runtime_kind == "legacy-frontend-provider"
-  }
-}
-
 #[cfg(test)]
 mod tests {
   use super::*;
 
   #[test]
   fn runtime_kind_and_state_round_trip() {
-    for kind in [
-      ProviderRuntimeKind::LegacyFrontendProvider,
-      ProviderRuntimeKind::WasmComponent,
-    ] {
+    for kind in [ProviderRuntimeKind::WasmComponent] {
       assert_eq!(ProviderRuntimeKind::parse(kind.as_str()).unwrap(), kind);
     }
     assert!(ProviderRuntimeKind::parse("bundled-rust").is_err());
+    assert!(ProviderRuntimeKind::parse("legacy-frontend-provider").is_err());
     for state in [
       ProviderRuntimeState::Active,
       ProviderRuntimeState::PendingActivation,
@@ -575,9 +506,9 @@ mod tests {
     let binding = ProviderRuntimeBinding {
       provider_id: Uuid::nil(),
       adapter_id: "openai-compatible".into(),
-      runtime_kind: ProviderRuntimeKind::LegacyFrontendProvider,
-      package_digest: None,
-      grant_set_revision: None,
+      runtime_kind: ProviderRuntimeKind::WasmComponent,
+      package_digest: Some("digest".into()),
+      grant_set_revision: Some(1),
       state: ProviderRuntimeState::Active,
       error_code: None,
       error_message: None,
@@ -588,10 +519,10 @@ mod tests {
     let dto = ProviderRuntimeBindingDto::from(&binding);
     let json = serde_json::to_string(&dto).unwrap();
     assert!(json.contains("\"adapterId\":\"openai-compatible\""));
-    assert!(json.contains("\"runtimeKind\":\"legacy-frontend-provider\""));
+    assert!(json.contains("\"runtimeKind\":\"wasm-component\""));
     assert!(json.contains("\"state\":\"active\""));
     assert!(!json.contains("runtimeRequirementJson"));
     assert!(!json.contains("credentialRef"));
-    assert!(!json.contains("packageDigest"));
+    assert!(json.contains("\"packageDigest\":\"digest\""));
   }
 }

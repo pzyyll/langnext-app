@@ -3,16 +3,16 @@
 use crate::domain::provider::validate_adapter_id;
 use crate::domain::runtime_plugin::{
   self, AUTH_POLICIES_MAX_COUNT, CAPABILITIES_MAX_COUNT, CREDENTIAL_SLOTS_MAX_COUNT, CapabilityDeclaration,
-  CapabilityId, CapabilityIdError, CredentialSlotDecl, EndpointId, FILE_MAX_BYTES, FILES_MAX_COUNT, FileRole,
-  HOST_PLUGIN_API_VERSION_MAJOR, HOST_PROVIDER_INSTANCE_AUTH_POLICY_ID, HttpsOrigin, MANIFEST_FILE_PATH,
-  MANIFEST_VERSION_V1, METHODS_MAX_COUNT, NETWORK_ENDPOINTS_MAX_COUNT, ORIGINS_MAX_COUNT, PACKAGE_TARGETS_MAX_COUNT,
-  PAGES_MAX_COUNT, PROVIDER_DETECTION_MAX_TOKENS_MAX, PROVIDER_RUNTIME_ALIAS_MAX_LEN,
-  PROVIDER_RUNTIME_ENDPOINT_FORM_PROVIDER_INSTANCE, PROVIDER_RUNTIME_LEGACY_ALIASES_MAX_COUNT,
-  PUBLISHER_PUBLIC_KEY_PATH, PageId, PermissionRequests, PluginApiVersion, PluginFileEntry, PluginId, PluginManifestV1,
-  ProviderRuntimeDeclaration, PublisherDeclaration, PublisherKeyFingerprint, PublisherKeyId, RuntimeDescriptor,
-  SIGNATURE_FILE_PATH, SemVerVersion, UiDeclaration, check_file_index_collisions, host_package_target,
-  package_targets_compatible, validate_archive_entry_path, validate_archive_path, validate_package_target_constraint,
-  validate_slot_id_strict,
+  CapabilityId, CapabilityIdError, CapabilityPathAuthorityDecl, CredentialSlotDecl, DeclaredPathAuthority, EndpointId,
+  FILE_MAX_BYTES, FILES_MAX_COUNT, FileRole, HOST_NONE_AUTH_POLICY_ID, HOST_PLUGIN_API_VERSION_MAJOR,
+  HOST_PROVIDER_INSTANCE_AUTH_POLICY_ID, HttpsOrigin, MANIFEST_FILE_PATH, MANIFEST_VERSION_V1, METHODS_MAX_COUNT,
+  NETWORK_ENDPOINTS_MAX_COUNT, ORIGINS_MAX_COUNT, PACKAGE_TARGETS_MAX_COUNT, PAGES_MAX_COUNT, PATH_AUTHORITY_MAX_COUNT,
+  PROVIDER_DETECTION_MAX_TOKENS_MAX, PROVIDER_RUNTIME_ALIAS_MAX_LEN, PROVIDER_RUNTIME_ENDPOINT_FORM_PROVIDER_INSTANCE,
+  PROVIDER_RUNTIME_LEGACY_ALIASES_MAX_COUNT, PUBLISHER_PUBLIC_KEY_PATH, PageId, PermissionRequests, PluginApiVersion,
+  PluginFileEntry, PluginId, PluginManifestV1, ProviderRuntimeDeclaration, PublisherDeclaration,
+  PublisherKeyFingerprint, PublisherKeyId, RuntimeDescriptor, SIGNATURE_FILE_PATH, SemVerVersion, UiDeclaration,
+  check_file_index_collisions, host_package_target, package_targets_compatible, validate_archive_entry_path,
+  validate_archive_path, validate_declared_relative_path, validate_package_target_constraint, validate_slot_id_strict,
 };
 // Re-export PermissionRequests for ValidatedPluginManifest public API consumers.
 use std::collections::HashMap;
@@ -184,6 +184,7 @@ pub fn validate_manifest(manifest: &PluginManifestV1) -> Result<ValidatedPluginM
 
   validate_credential_slots(&manifest.credential_slots)?;
   validate_permissions(&manifest.permissions)?;
+  validate_path_authority(manifest)?;
   validate_ui(&manifest.ui, &file_index)?;
   validate_targets(&manifest.targets)?;
   if manifest.runtime.kind == crate::domain::runtime_plugin::RuntimeKind::TrustedNativeWorker {
@@ -382,6 +383,15 @@ pub fn validate_manifest_host_targets(manifest: &PluginManifestV1) -> Result<(),
 /// file, and nothing else. Reserved entries can never be indexed. Every indexed file's byte
 /// length and SHA-256 digest must match the archive entry.
 pub fn validate_archive_shape(manifest: &PluginManifestV1, entries: &[ArchiveEntry]) -> Result<(), ContractError> {
+  validate_archive_shape_with_signature(manifest, entries, true)
+}
+
+/// Validate archive shape. Unsigned envelopes may omit `signatures/manifest.sig`.
+pub fn validate_archive_shape_with_signature(
+  manifest: &PluginManifestV1,
+  entries: &[ArchiveEntry],
+  signature_required: bool,
+) -> Result<(), ContractError> {
   validate_manifest(manifest)?;
   let mut archive: HashMap<String, &ArchiveEntry> = HashMap::new();
   let mut archive_paths = Vec::with_capacity(entries.len());
@@ -410,7 +420,7 @@ pub fn validate_archive_shape(manifest: &PluginManifestV1, entries: &[ArchiveEnt
       format!("archive is missing {MANIFEST_FILE_PATH}"),
     ));
   }
-  if !archive.contains_key(SIGNATURE_FILE_PATH) {
+  if signature_required && !archive.contains_key(SIGNATURE_FILE_PATH) {
     return Err(ContractError::new(
       ContractErrorCode::ArchiveMismatch,
       format!("archive is missing {SIGNATURE_FILE_PATH}"),
@@ -736,6 +746,105 @@ fn validate_native_worker_targets(
         target.platform, target.architecture
       ),
     ));
+  }
+  Ok(())
+}
+
+fn validate_path_authority(manifest: &PluginManifestV1) -> Result<(), ContractError> {
+  if manifest.path_authority.len() > PATH_AUTHORITY_MAX_COUNT {
+    return Err(ContractError::new(
+      ContractErrorCode::LimitExceeded,
+      format!("pathAuthority exceeds {PATH_AUTHORITY_MAX_COUNT} entries"),
+    ));
+  }
+  let capability_ids: std::collections::HashSet<&str> = manifest
+    .capabilities
+    .iter()
+    .map(|capability| capability.id.as_str())
+    .collect();
+  let mut seen = std::collections::HashSet::new();
+  for declaration in &manifest.path_authority {
+    validate_one_path_authority(declaration, manifest, &capability_ids)?;
+    let key = (
+      declaration.capability_id.clone(),
+      declaration.endpoint_id.clone(),
+      format!("{:?}", declaration.method),
+    );
+    if !seen.insert(key) {
+      return Err(ContractError::new(
+        ContractErrorCode::DuplicateId,
+        format!(
+          "duplicate path authority for {} {} {:?}",
+          declaration.capability_id, declaration.endpoint_id, declaration.method
+        ),
+      ));
+    }
+  }
+  Ok(())
+}
+
+fn validate_one_path_authority(
+  declaration: &CapabilityPathAuthorityDecl,
+  manifest: &PluginManifestV1,
+  capability_ids: &std::collections::HashSet<&str>,
+) -> Result<(), ContractError> {
+  if !capability_ids.contains(declaration.capability_id.as_str()) {
+    return Err(ContractError::new(
+      ContractErrorCode::UndeclaredReference,
+      format!("pathAuthority capability {} is not declared", declaration.capability_id),
+    ));
+  }
+  let endpoint = manifest
+    .permissions
+    .network
+    .iter()
+    .find(|endpoint| endpoint.id == declaration.endpoint_id)
+    .ok_or_else(|| {
+      ContractError::new(
+        ContractErrorCode::UndeclaredReference,
+        format!("pathAuthority endpoint {} is not declared", declaration.endpoint_id),
+      )
+    })?;
+  if !endpoint.methods.contains(&declaration.method) {
+    return Err(ContractError::new(
+      ContractErrorCode::InvalidField,
+      format!(
+        "pathAuthority method {:?} is not declared on endpoint {}",
+        declaration.method, declaration.endpoint_id
+      ),
+    ));
+  }
+  match &declaration.path {
+    DeclaredPathAuthority::Exact { value } => {
+      validate_declared_relative_path(value, "pathAuthority.exact")
+        .map_err(|message| ContractError::new(ContractErrorCode::InvalidPath, message))?;
+    }
+    DeclaredPathAuthority::BoundedPrefixSuffix { prefix, suffix } => {
+      validate_declared_relative_path(prefix, "pathAuthority.prefix")
+        .map_err(|message| ContractError::new(ContractErrorCode::InvalidPath, message))?;
+      validate_declared_relative_path(suffix, "pathAuthority.suffix")
+        .map_err(|message| ContractError::new(ContractErrorCode::InvalidPath, message))?;
+    }
+    DeclaredPathAuthority::InstanceConfiguredRelativePath { config_field } => {
+      runtime_plugin::validate_kebab_strict(config_field, 64, "pathAuthority.configField")
+        .map_err(|message| ContractError::new(ContractErrorCode::InvalidField, message))?;
+      if endpoint.instance_origin_config_field.as_deref() != Some(config_field.as_str())
+        && endpoint.instance_origin_config_field.is_some()
+      {
+        // Instance path may use a different field than origin (path vs origin URL).
+      }
+    }
+  }
+  if let Some(policy) = &declaration.auth_policy_id {
+    let allowed = policy == HOST_NONE_AUTH_POLICY_ID
+      || policy == HOST_PROVIDER_INSTANCE_AUTH_POLICY_ID
+      || manifest.permissions.auth_policies.iter().any(|item| item == policy);
+    if !allowed {
+      return Err(ContractError::new(
+        ContractErrorCode::UndeclaredReference,
+        format!("pathAuthority authPolicyId {policy} is not declared"),
+      ));
+    }
   }
   Ok(())
 }
@@ -1189,8 +1298,9 @@ fn require_file_role(
 mod tests {
   use super::*;
   use crate::domain::runtime_plugin::{
-    CredentialSlotKindV1, FileRole, HttpMethod, NetworkEndpointRequest, PackageDigest, PluginFileEntry,
-    PublisherDeclaration, RuntimeDescriptor, RuntimeKind, UiDeclaration, UiMode,
+    CapabilityPathAuthorityDecl, CredentialSlotKindV1, DeclaredPathAuthority, FileRole, HttpMethod,
+    NetworkEndpointRequest, PackageDigest, PluginFileEntry, PublisherDeclaration, RuntimeDescriptor, RuntimeKind,
+    UiDeclaration, UiMode,
   };
 
   const VALID_SHA: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -1238,19 +1348,15 @@ mod tests {
         mode: UiMode::Schema,
         pages: vec![],
       },
+      path_authority: vec![],
       provider_runtime: None,
       model_resources: None,
     }
   }
 
-  fn bundled_manifest() -> PluginManifestV1 {
+  fn invalid_manifest_without_artifact() -> PluginManifestV1 {
     let mut m = wasm_manifest();
-    m.runtime = RuntimeDescriptor {
-      kind: RuntimeKind::BundledRust,
-      artifact: None,
-      native_protocol_version: None,
-      native_dependencies: None,
-    };
+    m.runtime.artifact = None;
     m.files = vec![];
     m
   }
@@ -1285,19 +1391,60 @@ mod tests {
     validate_archive_shape(&manifest, &archive_for(&manifest)).expect("valid archive passes");
   }
 
-  #[test]
-  fn runtime_plugin_contracts_bundled_manifest_has_no_artifact_rule() {
-    let manifest = bundled_manifest();
-    validate_manifest(&manifest).expect("bundled manifest validates without an artifact");
-    // Bundled manifests are not backed by an archive; archive shape is not required.
-    assert!(manifest.runtime.artifact.is_none());
-    assert!(manifest.files.is_empty());
+  fn wasm_manifest_with_network() -> PluginManifestV1 {
+    let mut manifest = wasm_manifest();
+    manifest.permissions.network = vec![NetworkEndpointRequest {
+      id: "api".into(),
+      origins: vec!["https://api.example.com".into()],
+      methods: vec![HttpMethod::Get],
+      instance_origin_config_field: None,
+    }];
+    manifest
   }
 
   #[test]
-  fn runtime_plugin_contracts_bundled_rejects_artifact() {
-    let mut manifest = bundled_manifest();
-    manifest.runtime.artifact = Some("artifacts/x.wasm".into());
+  fn path_authority_rejects_absolute_traversal_and_undeclared_capability() {
+    let mut manifest = wasm_manifest_with_network();
+    manifest.path_authority = vec![CapabilityPathAuthorityDecl {
+      capability_id: "translate.text@1".into(),
+      endpoint_id: "api".into(),
+      method: HttpMethod::Get,
+      path: DeclaredPathAuthority::Exact {
+        value: "/absolute".into(),
+      },
+      allowed_query_names: vec![],
+      allowed_header_names: vec![],
+      auth_policy_id: None,
+    }];
+    let err = validate_manifest(&manifest).unwrap_err();
+    assert_eq!(err.code, ContractErrorCode::InvalidPath);
+
+    manifest.path_authority[0].path = DeclaredPathAuthority::Exact {
+      value: "foo/../bar".into(),
+    };
+    let err = validate_manifest(&manifest).unwrap_err();
+    assert_eq!(err.code, ContractErrorCode::InvalidPath);
+
+    manifest.path_authority[0].path = DeclaredPathAuthority::Exact {
+      value: "https://evil.example/x".into(),
+    };
+    let err = validate_manifest(&manifest).unwrap_err();
+    assert_eq!(err.code, ContractErrorCode::InvalidPath);
+
+    manifest.path_authority[0].path = DeclaredPathAuthority::Exact { value: "v1/ok".into() };
+    manifest.path_authority[0].capability_id = "ocr.image@1".into();
+    let err = validate_manifest(&manifest).unwrap_err();
+    assert_eq!(err.code, ContractErrorCode::UndeclaredReference);
+
+    manifest.path_authority[0].capability_id = "translate.text@1".into();
+    validate_manifest(&manifest).expect("exact relative path is valid");
+  }
+
+  #[test]
+  fn runtime_plugin_contracts_package_only_manifest_requires_artifact() {
+    // Package-only: every runtime kind is archive-backed; a manifest without the
+    // runtime artifact never validates.
+    let manifest = invalid_manifest_without_artifact();
     let err = validate_manifest(&manifest).unwrap_err();
     assert_eq!(err.code, ContractErrorCode::InvalidField);
   }

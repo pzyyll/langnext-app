@@ -1,5 +1,6 @@
 // ABOUTME: Runtime registration for global open-Quick-Translate, screenshot, OCR, and double Ctrl+C.
 // ABOUTME: Applies settings bindings, gates kmhook, and validates rebindable shortcuts.
+#![allow(dead_code)]
 use crate::consts::{
   DEFAULT_OPEN_QUICK_TRANSLATE_BINDING, DEFAULT_REGION_SCREENSHOT_BINDING, DEFAULT_SCREENSHOT_OCR_BINDING,
   SHORTCUT_DOUBLE_CTRL_C, SHORTCUT_OPEN_QUICK_TRANSLATE, SHORTCUT_REGION_SCREENSHOT, SHORTCUT_SCREENSHOT_OCR,

@@ -2,22 +2,56 @@
 // ABOUTME: Does not access the real OS credential store.
 use crate::credentials::coordinator;
 use crate::credentials::{CredentialVault, FailingCredentialVault, MemoryCredentialVault, provider_ref};
+use crate::domain::default_package_activation::AuthorizeDefaultPluginPackageInput;
 use crate::domain::provider::{
   AuthSchemeV1, BaseUrlSource, CredentialKind, CredentialUpdate, ProviderInstanceWrite, ProxyMode,
 };
 use crate::domain::time::new_id;
 use crate::error::StorageError;
 use crate::repositories::credential_operations::{self, OperationState, OwnerKind};
+use crate::services::default_package_activation::DefaultPackageActivationService;
+use crate::services::plugin_store::PluginPackageService;
 use crate::services::providers::ProviderService;
+use crate::services::runtime_providers::ProviderRuntimeService;
+use crate::services::vendor_trust::test_vendor_fixture::fixture_vendor_public_key;
+use crate::services::wasm_runtime::WasmRuntime;
 use crate::storage::Database;
 use std::sync::Arc;
+
+const OPENAI_COMPATIBLE_PACKAGE: &[u8] = include_bytes!(concat!(
+  env!("CARGO_MANIFEST_DIR"),
+  "/../runtime-plugins/openai-compatible/fixtures/packages/com.langnext.provider.openai-compatible-1.0.0.lnplugin"
+));
+
+/// Install and authorize the openai-compatible default package; package-only create requires it.
+fn package_first_providers(db: Database, vault: Arc<dyn CredentialVault>, dir: &std::path::Path) -> ProviderService {
+  let packages =
+    PluginPackageService::with_vendor_roots(db.clone(), dir.to_path_buf(), vec![fixture_vendor_public_key()]);
+  let activation = DefaultPackageActivationService::create(db.clone(), packages.clone(), dir);
+  let import = packages
+    .bootstrap_bundled_package(OPENAI_COMPATIBLE_PACKAGE, false)
+    .expect("vendor package bootstraps");
+  let digest = import.package_digest().to_string();
+  let preview = activation
+    .preview_default_package_activation(&digest)
+    .expect("preview default activation");
+  activation
+    .authorize_default_plugin_package(AuthorizeDefaultPluginPackageInput {
+      preview_id: preview.preview_id,
+      acknowledge_future_instance_authority: true,
+      acknowledge_unsigned_default_risk: false,
+    })
+    .expect("authorize default package");
+  let runtime = ProviderRuntimeService::new(db.clone(), packages, Arc::new(WasmRuntime::new().unwrap()));
+  ProviderService::new(db, vault).with_runtime_defaults(Arc::new(runtime))
+}
 
 fn setup() -> (tempfile::TempDir, Database, Arc<MemoryCredentialVault>, ProviderService) {
   let dir = tempfile::tempdir().unwrap();
   let db = Database::new(dir.path()).unwrap();
   db.initialize().unwrap();
   let vault = Arc::new(MemoryCredentialVault::new());
-  let providers = ProviderService::new(db.clone(), vault.clone());
+  let providers = package_first_providers(db.clone(), vault.clone(), dir.path());
   (dir, db, vault, providers)
 }
 
@@ -210,7 +244,7 @@ fn replace_cleanup_failure_retains_db_committed_journal() {
   let db = Database::new(dir.path()).unwrap();
   db.initialize().unwrap();
   let vault = Arc::new(FailingCredentialVault::new());
-  let providers = ProviderService::new(db.clone(), vault.clone());
+  let providers = package_first_providers(db.clone(), vault.clone(), dir.path());
 
   let dto = providers.save(write(Some("first"))).unwrap();
   assert!(dto.has_credential);
@@ -240,7 +274,7 @@ fn preflight_returns_unavailable_when_vault_unreachable() {
   let db = Database::new(dir.path()).unwrap();
   db.initialize().unwrap();
   let vault = Arc::new(FailingCredentialVault::new());
-  let providers = ProviderService::new(db.clone(), vault.clone());
+  let providers = package_first_providers(db.clone(), vault.clone(), dir.path());
 
   let dto = providers.save(write(Some("first"))).unwrap();
 
@@ -267,7 +301,7 @@ fn clear_cleanup_failure_retains_journal() {
   let db = Database::new(dir.path()).unwrap();
   db.initialize().unwrap();
   let vault = Arc::new(FailingCredentialVault::new());
-  let providers = ProviderService::new(db.clone(), vault.clone());
+  let providers = package_first_providers(db.clone(), vault.clone(), dir.path());
 
   let dto = providers.save(write(Some("secret"))).unwrap();
   vault.set_fail_delete(true);

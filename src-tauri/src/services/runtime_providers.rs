@@ -12,14 +12,13 @@ use crate::domain::runtime_plugin::{
 };
 use crate::domain::runtime_provider::{
   ApplyProviderRuntimeInterfaceAttachInput, ApplyProviderRuntimeInterfaceRollbackInput,
-  ApplyProviderRuntimeRollbackInput, ApplyProviderRuntimeUpgradeInput, PreviewProviderRuntimeInterfaceAttachInput,
+  ApplyProviderRuntimeRollbackInput, PreviewProviderRuntimeInterfaceAttachInput,
   PreviewProviderRuntimeInterfaceRollbackInput, ProviderRuntimeBinding, ProviderRuntimeBindingDto,
   ProviderRuntimeCatalogCapabilityDto, ProviderRuntimeCatalogEntryDto, ProviderRuntimeDetectionDto,
   ProviderRuntimeInterfaceDetachInput, ProviderRuntimeInterfaceDiscardSnapshotInput,
   ProviderRuntimeInterfaceLifecycleResultDto, ProviderRuntimeInterfacePreviewDto,
   ProviderRuntimeInterfaceRollbackPreviewDto, ProviderRuntimeKind, ProviderRuntimeLifecycleResultDto,
   ProviderRuntimeRollbackPreviewDto, ProviderRuntimeSnapshotDto, ProviderRuntimeState,
-  ProviderRuntimeUpgradePreviewDto, legacy_frontend_binding,
 };
 use crate::domain::time::{new_id, now_rfc3339};
 use crate::error::StorageError;
@@ -93,19 +92,9 @@ impl ProviderRuntimeCatalog {
     validate_manifest(&manifest)
       .map_err(|e| StorageError::Validation(format!("provider runtime package {}: {e}", manifest.id)))?;
 
-    // Resolve the trusted publisher row and re-verify the retained archive through the store.
-    let publisher = self
-      .db
-      .read(|conn| plugin_publishers::get(conn, &version.publisher_key_id))?;
     let verified = self
       .packages
-      .verify_runtime_store_snapshot(
-        &version.package_digest,
-        &publisher.key_id,
-        &publisher.fingerprint,
-        &publisher.public_key_hex,
-        publisher.source,
-      )
+      .verify_installed_package_snapshot(&version.package_digest)
       .map_err(|e| {
         StorageError::Validation(format!(
           "provider runtime package {} failed store verification: {e}",
@@ -166,9 +155,20 @@ impl ProviderRuntimeCatalog {
         Ok(PackageVerification::NotProviderRuntime) => continue,
         Err(err) => return Err(err),
       };
-      let publisher = self
-        .db
-        .read(|conn| plugin_publishers::get(conn, &version.publisher_key_id))?;
+      let publisher = if version.signature_status == crate::domain::plugin_package::PackageSignatureStatus::Signed {
+        let publisher = self
+          .db
+          .read(|conn| plugin_publishers::get(conn, &version.publisher_key_id))?;
+        PublisherIdentityDto {
+          key_id: publisher.key_id,
+          key_fingerprint: publisher.fingerprint,
+        }
+      } else {
+        PublisherIdentityDto {
+          key_id: String::new(),
+          key_fingerprint: String::new(),
+        }
+      };
       let mut capabilities = Vec::with_capacity(declaration.capabilities.len());
       for (capability_id, artifact_path) in &declaration.capabilities {
         let artifact_digest = manifest
@@ -194,10 +194,7 @@ impl ProviderRuntimeCatalog {
         plugin_id: manifest.id.clone(),
         version: manifest.version.clone(),
         package_digest: version.package_digest.clone(),
-        publisher: PublisherIdentityDto {
-          key_id: publisher.key_id.clone(),
-          key_fingerprint: publisher.fingerprint.clone(),
-        },
+        publisher,
         legacy_aliases: declaration.legacy_aliases.clone(),
         capabilities,
         detection: declaration
@@ -488,13 +485,10 @@ impl ProviderRuntimeService {
     // Final store revalidation remains outside shared single-flight and inside the CAS path.
     // Hold the package-store lock across re-verification and grant transaction.
     let _store_guard = self.packages.lock_store()?;
-    let rechecked = match self.packages.verify_runtime_store_snapshot(
-      &snapshot.package_digest,
-      &snapshot.publisher_key_id,
-      &snapshot.publisher_fingerprint,
-      &snapshot.publisher_public_key_hex,
-      snapshot.publisher_source,
-    ) {
+    let rechecked = match self
+      .packages
+      .verify_installed_package_snapshot(&snapshot.package_digest)
+    {
       Ok(verified) => verified,
       Err(err) => {
         log::warn!(
@@ -1027,12 +1021,23 @@ impl ProviderRuntimeService {
       (Some(bundle), revision)
     };
 
-    // Adapter-scoped identity-only snapshot of the current binding (or a synthesized legacy
-    // identity for a never-attached non-default adapter). The snapshot identity resolves
-    // from the SOURCE binding's digest — never the target package's identity.
-    let source = current
-      .clone()
-      .unwrap_or_else(|| legacy_frontend_binding(input.provider_id, &adapter_id, &now));
+    // Adapter-scoped identity-only snapshot of the current binding. A never-attached adapter
+    // snapshots an absent identity (no package digest) so rollback restores "no binding".
+    // The snapshot identity resolves from the SOURCE binding's digest — never the target
+    // package's identity.
+    let source = current.clone().unwrap_or_else(|| ProviderRuntimeBinding {
+      provider_id: input.provider_id,
+      adapter_id: adapter_id.clone(),
+      runtime_kind: ProviderRuntimeKind::WasmComponent,
+      package_digest: None,
+      grant_set_revision: None,
+      state: ProviderRuntimeState::Unavailable,
+      error_code: None,
+      error_message: None,
+      runtime_requirement_json: None,
+      created_at: now.clone(),
+      updated_at: now.clone(),
+    });
     let (source_plugin_id, source_plugin_version, source_publisher_key_id, source_publisher_fingerprint, source_api) =
       self.db.read(|conn| snapshot_source_identity(conn, &source))?;
     let snapshot_id = new_id();
@@ -1337,11 +1342,20 @@ impl ProviderRuntimeService {
           updated_at: child.updated_at.clone(),
         }
       } else {
-        ProviderRuntimeBindingDto::from(&legacy_frontend_binding(
-          input.provider_id,
-          &default_adapter,
-          &now_rfc3339(),
-        ))
+        // Package-only: the default API type without a snapshot child has no binding at all.
+        ProviderRuntimeBindingDto::from(&ProviderRuntimeBinding {
+          provider_id: input.provider_id,
+          adapter_id: default_adapter.clone(),
+          runtime_kind: ProviderRuntimeKind::WasmComponent,
+          package_digest: None,
+          grant_set_revision: None,
+          state: ProviderRuntimeState::Unavailable,
+          error_code: Some("no_runtime_binding".into()),
+          error_message: None,
+          runtime_requirement_json: None,
+          created_at: now_rfc3339(),
+          updated_at: now_rfc3339(),
+        })
       }
     };
     let current_dto = ProviderRuntimeBindingDto::from(&current);
@@ -1450,10 +1464,8 @@ impl ProviderRuntimeService {
           for child in &children {
             provider_runtime_bindings::insert(conn, &child_binding(child, &now))?;
           }
-          if !children.iter().any(|child| child.adapter_id == provider.adapter_id) {
-            let legacy = legacy_frontend_binding(session.provider_id, &provider.adapter_id, &now);
-            provider_runtime_bindings::insert(conn, &legacy)?;
-          }
+          // Package-only: no legacy fallback row exists for the default API type. A snapshot
+          // without the default adapter keeps the type unbound until the user attaches it.
           Ok((
             provider,
             provider_runtime_bindings::get(conn, session.provider_id, &session.adapter_id)?,
@@ -1555,17 +1567,22 @@ impl ProviderRuntimeService {
           updated_at: now.clone(),
         },
       )?;
-      if adapter_id == provider.adapter_id {
-        let legacy = legacy_frontend_binding(input.provider_id, &provider.adapter_id, &now);
-        provider_runtime_bindings::update(conn, &legacy)?;
-      } else {
-        provider_runtime_bindings::delete(conn, input.provider_id, &adapter_id)?;
-      }
+      // Package-only: detaching any API type removes its binding row; there is no legacy
+      // fallback row.
+      provider_runtime_bindings::delete(conn, input.provider_id, &adapter_id)?;
       release_grant_after_removal(conn, input.provider_id, &current)?;
-      let binding = if adapter_id == provider.adapter_id {
-        provider_runtime_bindings::get(conn, input.provider_id, &adapter_id)?
-      } else {
-        legacy_frontend_binding(input.provider_id, &adapter_id, &now)
+      let binding = ProviderRuntimeBinding {
+        provider_id: input.provider_id,
+        adapter_id: adapter_id.clone(),
+        runtime_kind: ProviderRuntimeKind::WasmComponent,
+        package_digest: None,
+        grant_set_revision: None,
+        state: ProviderRuntimeState::Unavailable,
+        error_code: Some("no_runtime_binding".into()),
+        error_message: None,
+        runtime_requirement_json: None,
+        created_at: now.clone(),
+        updated_at: now.clone(),
       };
       Ok((provider, binding))
     })?;
@@ -1636,51 +1653,6 @@ impl ProviderRuntimeService {
     })
   }
 
-  /// Compatibility wrapper (legacy command): preview upgrading the Provider default API type
-  /// binding to an exact signed package. New callers should use `preview_interface_attach`.
-  pub fn preview_upgrade(
-    &self,
-    provider_id: Uuid,
-    target_package_digest: &str,
-  ) -> Result<ProviderRuntimeUpgradePreviewDto, StorageError> {
-    let adapter_id = self
-      .db
-      .read(|conn| provider_instances::get(conn, provider_id))?
-      .adapter_id;
-    let preview = self.preview_interface_attach(&PreviewProviderRuntimeInterfaceAttachInput {
-      provider_id,
-      adapter_id: adapter_id.clone(),
-      package_digest: target_package_digest.to_string(),
-    })?;
-    Ok(ProviderRuntimeUpgradePreviewDto {
-      preview_id: preview.preview_id,
-      provider_id: preview.provider_id,
-      source: preview.source,
-      target: preview.target,
-      target_plugin_version: preview.target_plugin_version,
-      target_publisher: preview.target_publisher,
-      legacy_aliases: preview.legacy_aliases,
-      requires_permission_approval: preview.requires_permission_approval,
-      expires_at: preview.expires_at,
-    })
-  }
-
-  /// Compatibility wrapper (legacy command): apply one previewed default-API-type attach.
-  pub fn apply_upgrade(
-    &self,
-    input: ApplyProviderRuntimeUpgradeInput,
-  ) -> Result<ProviderRuntimeLifecycleResultDto, StorageError> {
-    let result = self.apply_interface_attach(ApplyProviderRuntimeInterfaceAttachInput {
-      preview_id: input.preview_id,
-      acknowledge_permissions: input.acknowledge_permissions,
-    })?;
-    Ok(ProviderRuntimeLifecycleResultDto {
-      provider_id: result.provider_id,
-      runtime: result.binding,
-      updated_at: result.updated_at,
-    })
-  }
-
   /// Compatibility wrapper (legacy command): preview rolling the Provider default API type
   /// binding back.
   pub fn preview_rollback(&self, provider_id: Uuid) -> Result<ProviderRuntimeRollbackPreviewDto, StorageError> {
@@ -1737,8 +1709,9 @@ fn snapshot_source_identity(
   conn: &rusqlite::Connection,
   source: &ProviderRuntimeBinding,
 ) -> Result<(String, String, Option<String>, Option<String>, Option<String>), StorageError> {
-  let Some(digest) = source.package_digest.as_deref() else {
-    return Ok(("legacy-frontend-provider".to_string(), String::new(), None, None, None));
+  let Some(digest) = source.package_digest.as_deref().filter(|value| !value.is_empty()) else {
+    // Absent/unresolved source: snapshot empty identity so rollback restores no binding.
+    return Ok((String::new(), String::new(), None, None, None));
   };
   let version = installed_plugin_versions::get_optional(conn, digest)?.ok_or_else(|| {
     StorageError::Internal(format!(
@@ -1761,22 +1734,16 @@ fn snapshot_source_identity(
   ))
 }
 
-/// Restore ONE adapter binding from a snapshot child: the Provider default API type always
-/// materializes a legacy row; a non-default adapter without a package identity returns to
-/// missing (legacy execution) rather than keeping a synthetic row.
+/// Restore ONE adapter binding from a snapshot child. A child without a package identity
+/// (never-attached adapter) restores to "no binding": the row is removed.
 fn restore_adapter_binding(
   conn: &rusqlite::Connection,
   provider: &ProviderInstance,
   child: &ProviderRuntimeSnapshotBinding,
   now: &str,
 ) -> Result<(), StorageError> {
-  if child.runtime_kind == ProviderRuntimeKind::LegacyFrontendProvider || child.package_digest.is_none() {
-    if child.adapter_id == provider.adapter_id {
-      let legacy = legacy_frontend_binding(provider.id, &provider.adapter_id, now);
-      provider_runtime_bindings::update(conn, &legacy)?;
-    } else {
-      let _ = provider_runtime_bindings::delete(conn, provider.id, &child.adapter_id);
-    }
+  if child.package_digest.is_none() {
+    let _ = provider_runtime_bindings::delete(conn, provider.id, &child.adapter_id);
     return Ok(());
   }
   let binding = child_binding(child, now);
@@ -1979,18 +1946,17 @@ pub(crate) fn apply_package_first_pending_binding(
   use crate::domain::runtime_provider::{ProviderRuntimeKind, ProviderRuntimeState};
   use crate::repositories::default_package_activation_policies;
 
-  let requirement = crate::domain::runtime_lifecycle::RuntimeRequirementExport {
-    plugin_id: prepared.plugin_id.clone(),
-    plugin_version: prepared.plugin_version.clone(),
+  let requirement = crate::domain::runtime_provider::ProviderRuntimeRequirementExport {
+    adapter_id: Some(provider.adapter_id.clone()),
     runtime_kind: "wasm-component".into(),
     package_digest: Some(prepared.package_digest.clone()),
+    plugin_id: Some(prepared.plugin_id.clone()),
+    plugin_version: Some(prepared.plugin_version.clone()),
     publisher_key_id: Some(prepared.publisher_key_id.clone()),
     publisher_key_fingerprint: Some(prepared.publisher_fingerprint.clone()),
     plugin_api_version: None,
-    config_schema_version: 1,
-    required_capability_majors: Vec::new(),
-    provider_runtime_kind: Some("wasm-component".into()),
-    provider_package_digest: Some(prepared.package_digest.clone()),
+    legacy_aliases: vec![provider.adapter_id.clone()],
+    capabilities: REQUIRED_LLM_CAPABILITIES.iter().cloned().map(str::to_string).collect(),
   };
   let requirement_json = serde_json::to_string(&requirement)
     .map_err(|e| StorageError::Internal(format!("serialize provider runtime requirement: {e}")))?;

@@ -1,10 +1,8 @@
 // ABOUTME: Runtime provider executor contract tests over Tauri runtime IPC.
 // ABOUTME: Asserts per-interface executor selection, no legacy fallback, and model-identity chat.
 import { afterEach, describe, expect, test } from "bun:test";
-import { registerBuiltinProviderPlugins } from "./builtin";
 import { installTauriInvokeMock, invokeMock, resetInvokeMock } from "../../test/tauriInvokeMock";
 import {
-  LegacyFrontendProviderExecutor,
   ProviderRuntimeUnavailableError,
   resolveHostDetectPolicy,
   resolveProviderExecutor,
@@ -15,7 +13,6 @@ import { RuntimeProviderExecutor } from "./runtimeExecutor";
 import type { ProviderInstanceDto, ProviderRuntimeCatalogEntryDto } from "../../storage/types";
 
 installTauriInvokeMock();
-registerBuiltinProviderPlugins();
 
 const PROVIDER_ID = "provider-1";
 const MODEL_ID = "model-1";
@@ -203,16 +200,12 @@ const CATALOG_ENTRY_SRC = {
   detection: { maxTokens: 96, thinking: true },
 } satisfies ProviderRuntimeCatalogEntryDto;
 
-function legacyCalls() {
-  return invokeMock.mock.calls.filter(([cmd]) => cmd === "provider_http_request" || cmd === "provider_http_stream");
-}
-
 afterEach(() => {
   resetInvokeMock();
 });
 
 describe("runtime_executor_selects_executor_per_interface", () => {
-  test("three models on one Provider: interface A and B use runtime executors with model identity; unbound legacy type uses the legacy executor", async () => {
+  test("three models on one Provider: interface A and B use runtime executors with model identity; an unbound API type fails closed", async () => {
     const runtimeCommands: string[] = [];
     const chatInputs: Array<Record<string, unknown>> = [];
     const listInputs: Array<Record<string, unknown>> = [];
@@ -226,13 +219,6 @@ describe("runtime_executor_selects_executor_per_interface", () => {
         runtimeCommands.push(cmd);
         chatInputs.push((args.input ?? {}) as Record<string, unknown>);
         return { role: "assistant", content: "ok" };
-      }
-      if (cmd === "provider_http_request") {
-        return {
-          status: 200,
-          headers: {},
-          body: JSON.stringify({ content: [{ type: "text", text: "legacy" }] }),
-        };
       }
       throw new Error(`unexpected cmd ${cmd}`);
     });
@@ -254,14 +240,14 @@ describe("runtime_executor_selects_executor_per_interface", () => {
       catalog: [CATALOG_ENTRY, CATALOG_ENTRY_B],
     });
     expect(modelB).toBeInstanceOf(RuntimeProviderExecutor);
-    // Unbound legacy API type (no binding row at all) keeps the legacy executor; no mismatch
-    // error is thrown merely because another runtime interface is attached.
-    const modelC = resolveProviderExecutor({
-      provider: dual,
-      modelAdapterId: "anthropic",
-      catalog: [CATALOG_ENTRY, CATALOG_ENTRY_B],
-    });
-    expect(modelC).toBeInstanceOf(LegacyFrontendProviderExecutor);
+    // Unbound API type fails closed: there is no legacy executor to select.
+    expect(() =>
+      resolveProviderExecutor({
+        provider: dual,
+        modelAdapterId: "anthropic",
+        catalog: [CATALOG_ENTRY, CATALOG_ENTRY_B],
+      }),
+    ).toThrow(ProviderRuntimeUnavailableError);
 
     const listA = await modelA.modelsList({ requestId: "r-ma" });
     expect(listA.models).toEqual([
@@ -282,10 +268,7 @@ describe("runtime_executor_selects_executor_per_interface", () => {
     expect(chatB.text).toBe("ok");
     expect(chatInputs[1]?.providerModelId).toBe("model-2");
 
-    const chatC = await modelC.chat({ ...CHAT_INPUT, modelKey: "claude-3-5-sonnet", requestId: "r-cc" });
-    expect(chatC.text).toBe("legacy");
     expect(runtimeCommands.filter((cmd) => cmd === "provider_runtime_chat")).toHaveLength(2);
-    expect(legacyCalls()).toHaveLength(1);
   });
 
   test("a synced model without an override resolves through its source interface, not the Provider default", async () => {
@@ -311,26 +294,27 @@ describe("runtime_executor_selects_executor_per_interface", () => {
     const result = await executor.chat({ ...CHAT_INPUT, modelKey: "gemini-2.0-flash", requestId: "r-src-1" });
     expect(result.text).toBe("ok");
     expect(runtimeCommands).toHaveLength(1);
-    expect(legacyCalls()).toHaveLength(0);
   });
 
-  test("an explicit model override wins over the source interface and over the Provider default", () => {
-    // Override names an unbound type: the effective API type is the override, so legacy runs.
-    const overridden = resolveProviderExecutor({
-      provider: sourceInterfaceProvider(),
-      modelAdapterId: "openai-responses",
-      modelSourceAdapterId: "gemini",
-      catalog: [CATALOG_ENTRY, CATALOG_ENTRY_SRC],
-    });
-    expect(overridden).toBeInstanceOf(LegacyFrontendProviderExecutor);
-    // Override names the default type even when the source interface is runtime-bound.
-    const explicitDefault = resolveProviderExecutor({
-      provider: sourceInterfaceProvider(),
-      modelAdapterId: "openai-compatible",
-      modelSourceAdapterId: "gemini",
-      catalog: [CATALOG_ENTRY, CATALOG_ENTRY_SRC],
-    });
-    expect(explicitDefault).toBeInstanceOf(LegacyFrontendProviderExecutor);
+  test("an explicit model override without a package binding fails closed", () => {
+    // Override names an unbound type: the effective API type is the override, so it fails.
+    expect(() =>
+      resolveProviderExecutor({
+        provider: sourceInterfaceProvider(),
+        modelAdapterId: "openai-responses",
+        modelSourceAdapterId: "gemini",
+        catalog: [CATALOG_ENTRY, CATALOG_ENTRY_SRC],
+      }),
+    ).toThrow(ProviderRuntimeUnavailableError);
+    // Override names the default type, which has no package binding either.
+    expect(() =>
+      resolveProviderExecutor({
+        provider: sourceInterfaceProvider(),
+        modelAdapterId: "openai-compatible",
+        modelSourceAdapterId: "gemini",
+        catalog: [CATALOG_ENTRY, CATALOG_ENTRY_SRC],
+      }),
+    ).toThrow(ProviderRuntimeUnavailableError);
   });
 
   test("host detect policy resolves through the model source interface when no override exists", () => {
@@ -418,7 +402,6 @@ describe("runtime_executor_selects_executor_per_interface", () => {
 
     expect(calls).toEqual(["cancel_provider_runtime", "cancel_provider_runtime"]);
     expect(invokeMock.mock.calls.filter(([cmd]) => cmd === "provider_runtime_chat")).toHaveLength(0);
-    expect(legacyCalls()).toHaveLength(0);
   });
 
   test("runtime chat failure after start uses runtime IPC only and never retries legacy transport", async () => {
@@ -449,7 +432,6 @@ describe("runtime_executor_selects_executor_per_interface", () => {
       message: "upstream failed",
       retryable: true,
     });
-    expect(legacyCalls()).toHaveLength(0);
   });
 
   test("detect chat reaches runtime IPC with host-selected preferences and the persisted model id", async () => {
@@ -493,33 +475,74 @@ describe("runtime_executor_selects_executor_per_interface", () => {
     expect(chatInput?.requestId).toBe("r-d1");
   });
 
-  test("post-rollback legacy provider resumes the valid custom-relay executor path", async () => {
-    invokeMock.mockImplementation(async (cmd: string) => {
-      if (cmd === "provider_http_request") {
-        return {
-          status: 200,
-          headers: {},
-          body: JSON.stringify({ candidates: [{ content: { parts: [{ text: "hello" }, { text: " world" }] } }] }),
-        };
+  test("runtime chat failure after start uses runtime IPC only and never retries legacy transport", async () => {
+    const deltas: string[] = [];
+    invokeMock.mockImplementation(async (cmd: string, args: Record<string, unknown>) => {
+      if (cmd === "provider_runtime_chat") {
+        const onEvent = (args.onEvent as { onmessage: (event: unknown) => void }).onmessage;
+        onEvent({ event: "text", text: "wo" });
+        throw { code: "network", message: "upstream failed" };
       }
       throw new Error(`unexpected cmd ${cmd}`);
     });
-    const rolledBack = provider({ id: PROVIDER_ID, adapterId: "openai-compatible" });
     const executor = resolveProviderExecutor({
-      provider: rolledBack,
-      modelAdapterId: "gemini",
+      provider: dualRuntimeProvider(),
+      modelAdapterId: null,
+      modelId: MODEL_ID,
       catalog: [CATALOG_ENTRY, CATALOG_ENTRY_B],
     });
-    expect(executor).toBeInstanceOf(LegacyFrontendProviderExecutor);
-    const result = await executor.chat({ ...CHAT_INPUT, modelKey: "gemini-2.0-flash", requestId: "r-l1" });
-    expect(result.text).toBe("hello world");
-    const httpCalls = invokeMock.mock.calls.filter(([cmd]) => cmd === "provider_http_request");
-    expect(httpCalls).toHaveLength(1);
-    const callArgs = (httpCalls[0]?.[1] ?? {}) as {
-      input: { providerInstanceId: string; wire: { relativePath: string } };
+    const rejection = await executor
+      .chatStream({ ...CHAT_INPUT, stream: true, requestId: "r-s2" }, { onDelta: (text) => deltas.push(text) })
+      .then(
+        () => null,
+        (error: unknown) => error,
+      );
+    expect(deltas).toEqual(["wo"]);
+    expect(normalizeProviderError(rejection)).toEqual({
+      code: "network",
+      message: "upstream failed",
+      retryable: true,
+    });
+  });
+
+  test("detect chat reaches runtime IPC with host-selected preferences and the persisted model id", async () => {
+    let chatInput: Record<string, unknown> | null = null;
+    invokeMock.mockImplementation(async (cmd: string, args: Record<string, unknown>) => {
+      if (cmd === "provider_runtime_chat") {
+        chatInput = args.input as Record<string, unknown>;
+        return { role: "assistant", content: "en" };
+      }
+      throw new Error(`unexpected cmd ${cmd}`);
+    });
+    const executor = resolveProviderExecutor({
+      provider: dualRuntimeProvider(),
+      modelAdapterId: null,
+      modelId: MODEL_ID,
+      catalog: [CATALOG_ENTRY, CATALOG_ENTRY_B],
+    });
+    const result = await executor.chat({
+      ...CHAT_INPUT,
+      operation: "detect",
+      temperature: 0,
+      maxTokens: 256,
+      thinking: true,
+      requestId: "r-d1",
+    });
+    expect(result).toEqual({ text: "en" });
+    const request = chatInput?.request as {
+      model: string;
+      messages: Array<{ role: string; content: string }>;
+      images: number[][];
+      preferences: { stream: boolean; temperature: number; maxTokens: number; thinking: boolean };
     };
-    expect(callArgs.input.providerInstanceId).toBe(PROVIDER_ID);
-    expect(callArgs.input.wire.relativePath).toContain(":generateContent");
-    expect(invokeMock.mock.calls.filter(([cmd]) => cmd === "provider_runtime_chat")).toHaveLength(0);
+    expect(request.model).toBe("gpt-4o-mini");
+    expect(request.messages).toEqual([
+      { role: "system", content: "sys" },
+      { role: "user", content: "hello" },
+    ]);
+    expect(request.images).toEqual([]);
+    expect(request.preferences).toEqual({ stream: false, temperature: 0, maxTokens: 256, thinking: true });
+    expect(chatInput?.providerModelId).toBe(MODEL_ID);
+    expect(chatInput?.requestId).toBe("r-d1");
   });
 });

@@ -412,6 +412,10 @@ pub enum OcrImageOperation {
   TextDetection,
   #[default]
   DocumentTextDetection,
+  GeneralBasic,
+  AccurateBasic,
+  General,
+  Accurate,
 }
 
 impl OcrImageOperation {
@@ -419,6 +423,10 @@ impl OcrImageOperation {
     match self {
       Self::TextDetection => "text_detection",
       Self::DocumentTextDetection => "document_text_detection",
+      Self::GeneralBasic => "general_basic",
+      Self::AccurateBasic => "accurate_basic",
+      Self::General => "general",
+      Self::Accurate => "accurate",
     }
   }
 
@@ -427,6 +435,7 @@ impl OcrImageOperation {
     match self {
       Self::TextDetection => "TEXT_DETECTION",
       Self::DocumentTextDetection => "DOCUMENT_TEXT_DETECTION",
+      Self::GeneralBasic | Self::AccurateBasic | Self::General | Self::Accurate => "TEXT_DETECTION",
     }
   }
 }

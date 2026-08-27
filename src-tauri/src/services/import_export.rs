@@ -7,13 +7,12 @@ use crate::domain::import_export::{
   IntegrationInstanceExport, OcrPromptTemplateExport, OcrServiceExport, SpeechServiceExport,
   export_json_contains_forbidden_secret_keys, parse_and_normalize_export_document,
 };
-// EXPORT_FORMAT_VERSION is also used by validate_v7_runtime_records.
+// EXPORT_FORMAT_VERSION is also used by validate_current_format_runtime_records.
 use crate::domain::ocr_service::{OcrPromptTemplate, OcrProviderType, OcrService};
 use crate::domain::provider::ProviderExport;
 use crate::domain::runtime_plugin::PluginManifestV1;
 use crate::domain::runtime_provider::{
   ProviderRuntimeBinding, ProviderRuntimeKind, ProviderRuntimeRequirementExport, ProviderRuntimeState,
-  legacy_frontend_binding,
 };
 use crate::domain::speech_service::SpeechService;
 use crate::domain::time::{new_id, now_rfc3339};
@@ -26,6 +25,7 @@ use crate::repositories::{
 use crate::services::import_validation::{self, ImportCopyIdMaps, ValidatedImportPlan};
 use crate::services::runtime_plugin_contracts::parse_manifest;
 use crate::services::runtime_providers::release_grant_after_removal;
+use crate::services::service_integration_registry::ServiceIntegrationRegistry;
 use crate::storage::Database;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
@@ -153,15 +153,19 @@ impl PreviewSessionStore {
 pub struct ImportExportService {
   db: Database,
   vault: Arc<dyn CredentialVault>,
+  /// Installed-package definition catalog for import plan validation; `None` keeps plans
+  /// structurally lenient when no package store is wired.
+  registry: Option<Arc<ServiceIntegrationRegistry>>,
   preview_sessions: Arc<Mutex<PreviewSessionStore>>,
   preview_ttl: Duration,
 }
 
 impl ImportExportService {
-  pub fn new(db: Database, vault: Arc<dyn CredentialVault>) -> Self {
+  pub fn new(db: Database, vault: Arc<dyn CredentialVault>, registry: Option<Arc<ServiceIntegrationRegistry>>) -> Self {
     Self {
       db,
       vault,
+      registry,
       preview_sessions: Arc::new(Mutex::new(PreviewSessionStore::default())),
       preview_ttl: Duration::from_secs(IMPORT_PREVIEW_SESSION_TTL_SECS),
     }
@@ -320,7 +324,7 @@ impl ImportExportService {
     mode: ImportConflictMode,
   ) -> Result<ImportPreview, StorageError> {
     self.db.read_snapshot(|conn| {
-      let plan = import_validation::build_validated_plan(conn, document, mode)?;
+      let plan = import_validation::build_validated_plan(conn, document, mode, self.registry.as_deref())?;
       Ok(plan.preview)
     })
   }
@@ -335,7 +339,7 @@ impl ImportExportService {
     mode: ImportConflictMode,
   ) -> Result<ImportPreview, StorageError> {
     let (mut preview, copy_id_maps, cas_baseline) = self.db.read_snapshot(|conn| {
-      let plan = import_validation::build_validated_plan(conn, document, mode)?;
+      let plan = import_validation::build_validated_plan(conn, document, mode, self.registry.as_deref())?;
       Ok((
         plan.preview.clone(),
         plan.copy_id_maps.clone(),
@@ -411,6 +415,7 @@ impl ImportExportService {
         &session.document,
         session.mode,
         Some(&session.copy_id_maps),
+        self.registry.as_deref(),
       )?;
       if !plan.preview.valid {
         return Ok((plan.preview, false, Vec::new()));
@@ -445,7 +450,7 @@ impl ImportExportService {
 
     let (preview, applied, cleanup_ops) = self.db.transaction(|uow| {
       let conn = uow.conn();
-      let plan = import_validation::build_validated_plan(conn, &document, mode)?;
+      let plan = import_validation::build_validated_plan(conn, &document, mode, self.registry.as_deref())?;
       if !plan.preview.valid {
         return Ok((plan.preview, false, Vec::new()));
       }
@@ -478,20 +483,7 @@ impl ImportExportService {
         coordinator::preflight_owner(&self.db, self.vault.as_ref(), OwnerKind::Provider, &p.id.to_string())?;
       }
       for service in &document.ocr_services {
-        if service.provider_type == OcrProviderType::Baidu {
-          coordinator::preflight_owner(
-            &self.db,
-            self.vault.as_ref(),
-            OwnerKind::OcrApiKey,
-            &service.id.to_string(),
-          )?;
-          coordinator::preflight_owner(
-            &self.db,
-            self.vault.as_ref(),
-            OwnerKind::OcrSecretKey,
-            &service.id.to_string(),
-          )?;
-        }
+        let _ = service;
       }
     }
     Ok(())
@@ -512,13 +504,7 @@ impl ImportExportService {
         }
       }
       for service in &plan.ocr_services {
-        if service.provider_type == OcrProviderType::Baidu {
-          if credential_operations::get_for_owner(conn, OwnerKind::OcrApiKey, &service.id.to_string())?.is_some()
-            || credential_operations::get_for_owner(conn, OwnerKind::OcrSecretKey, &service.id.to_string())?.is_some()
-          {
-            return Err(StorageError::CredentialBusy);
-          }
-        }
+        let _ = service;
       }
     }
     Ok(())
@@ -718,45 +704,14 @@ impl ImportExportService {
         .map(|(_, template)| template)
         .collect();
       if ocr_services::get(conn, service.id).is_ok() {
-        // Merge: clear Baidu credentials, then rewrite configuration fields.
-        let expected_api = plan.expected_ocr_api_key_refs.get(&service.id).cloned().unwrap_or(None);
-        let expected_secret = plan
-          .expected_ocr_secret_key_refs
-          .get(&service.id)
-          .cloned()
-          .unwrap_or(None);
-        if let Some(old_ref) = expected_api.clone() {
-          let op = credential_operations::insert_db_committed(
-            conn,
-            new_id(),
-            OwnerKind::OcrApiKey,
-            &service.id.to_string(),
-            Some(&old_ref),
-            None,
-          )?;
-          ocr_services::compare_and_set_api_key_ref(conn, service.id, Some(&old_ref), None, &service.updated_at)?;
-          cleanup_ops.push(op);
-        }
-        if let Some(old_ref) = expected_secret.clone() {
-          let op = credential_operations::insert_db_committed(
-            conn,
-            new_id(),
-            OwnerKind::OcrSecretKey,
-            &service.id.to_string(),
-            Some(&old_ref),
-            None,
-          )?;
-          ocr_services::compare_and_set_secret_key_ref(conn, service.id, Some(&old_ref), None, &service.updated_at)?;
-          cleanup_ops.push(op);
-        }
+        // Merge: rewrite configuration fields. Direct-Baidu credentials are unsupported.
         match service.provider_type {
-          OcrProviderType::Baidu | OcrProviderType::Ai => {
+          OcrProviderType::Ai => {
             ocr_services::update_configuration_keep_credentials(
               conn,
               service.id,
               &service.display_name,
               service.enabled,
-              service.baidu_action,
               service.provider_model_id,
               service.temperature,
               service.default_prompt_template_id,
@@ -846,9 +801,9 @@ impl ImportExportService {
   }
 }
 
-/// Build the exact non-secret provider runtime requirement for export. Legacy bindings
-/// normalize to `legacy-frontend-provider`; package bindings preserve exact identity from the
-/// installed manifest (or from the persisted unresolved requirement when the package is absent).
+/// Build the exact non-secret provider runtime requirement for export. Package bindings
+/// preserve exact identity from the installed manifest (or from the persisted unresolved
+/// requirement when the package is absent).
 fn provider_runtime_requirement(
   conn: &rusqlite::Connection,
   binding: &ProviderRuntimeBinding,
@@ -859,15 +814,13 @@ fn provider_runtime_requirement(
 }
 
 /// Build the exact non-secret provider runtime requirement identity for export from one
-/// adapter-keyed binding. Legacy bindings normalize to `legacy-frontend-provider`; package
-/// bindings preserve exact identity from the installed manifest (or from the persisted
-/// unresolved requirement when the package is absent).
+/// adapter-keyed binding. Package bindings preserve exact identity from the installed manifest
+/// (or from the persisted unresolved requirement when the package is absent).
 fn provider_runtime_requirement_identity(
   conn: &rusqlite::Connection,
   binding: &ProviderRuntimeBinding,
 ) -> Result<ProviderRuntimeRequirementExport, StorageError> {
   match binding.runtime_kind {
-    ProviderRuntimeKind::LegacyFrontendProvider => Ok(ProviderRuntimeRequirementExport::legacy()),
     ProviderRuntimeKind::WasmComponent => {
       // Preserve the exact previously imported/restored requirement when the package is absent.
       if let Some(raw) = binding.runtime_requirement_json.as_deref() {
@@ -877,7 +830,7 @@ fn provider_runtime_requirement_identity(
             binding.provider_id
           ))
         })?;
-        if !parsed.is_legacy() && parsed.package_digest.as_deref() == binding.package_digest.as_deref() {
+        if parsed.package_digest.as_deref() == binding.package_digest.as_deref() {
           return Ok(parsed);
         }
       }
@@ -919,7 +872,7 @@ fn provider_runtime_requirement_identity(
 /// requirements are restored as `unavailable` metadata: no download, instantiation, migration,
 /// grant, default bind, or activation happens during import (recovery is an explicit lifecycle
 /// action). A missing `adapter_id` falls back to the Provider default API type (resolved by
-/// the caller).
+/// the caller). Only package-backed requirements reach this path.
 fn upsert_provider_runtime_binding(
   conn: &rusqlite::Connection,
   provider_id: Uuid,
@@ -932,22 +885,18 @@ fn upsert_provider_runtime_binding(
     .as_ref()
     .map(|binding| binding.created_at.clone())
     .unwrap_or_else(|| now.to_string());
-  let mut binding = if requirement.is_legacy() {
-    legacy_frontend_binding(provider_id, adapter_id, now)
-  } else {
-    ProviderRuntimeBinding {
-      provider_id,
-      adapter_id: adapter_id.to_string(),
-      runtime_kind: ProviderRuntimeKind::WasmComponent,
-      package_digest: requirement.package_digest.clone(),
-      grant_set_revision: None,
-      state: ProviderRuntimeState::Unavailable,
-      error_code: Some("plugin_unavailable".into()),
-      error_message: Some("provider runtime package is not installed or approved".into()),
-      runtime_requirement_json: Some(serde_json::to_string(requirement).map_err(StorageError::from)?),
-      created_at: created_at.clone(),
-      updated_at: now.to_string(),
-    }
+  let mut binding = ProviderRuntimeBinding {
+    provider_id,
+    adapter_id: adapter_id.to_string(),
+    runtime_kind: ProviderRuntimeKind::WasmComponent,
+    package_digest: requirement.package_digest.clone(),
+    grant_set_revision: None,
+    state: ProviderRuntimeState::Unavailable,
+    error_code: Some("plugin_unavailable".into()),
+    error_message: Some("provider runtime package is not installed or approved".into()),
+    runtime_requirement_json: Some(serde_json::to_string(requirement).map_err(StorageError::from)?),
+    created_at: created_at.clone(),
+    updated_at: now.to_string(),
   };
   binding.created_at = created_at;
   match existing {
@@ -1023,24 +972,21 @@ fn validate_export_requirement_for_instance(
         ));
       }
     }
-    "bundled-rust" => {
-      if req.package_digest.is_some() {
-        return Err(StorageError::Validation(
-          "bundled-rust runtime requirement must not carry a package digest".into(),
-        ));
-      }
+    other => {
+      return Err(StorageError::Validation(format!(
+        "unsupported runtime kind for export: {other}"
+      )));
     }
-    _ => {}
   }
   Ok(req)
 }
 
 /// Strict current-format (v8) document validation used on import parse (after sequential
 /// normalization): integration runtime records plus adapter-keyed provider runtime bindings.
-pub fn validate_v7_runtime_records(doc: &ConfigurationExport) -> Result<(), StorageError> {
+pub fn validate_current_format_runtime_records(doc: &ConfigurationExport) -> Result<(), StorageError> {
   if doc.format_version != EXPORT_FORMAT_VERSION {
     return Err(StorageError::Validation(format!(
-      "validate_v7_runtime_records expects formatVersion {EXPORT_FORMAT_VERSION}"
+      "validate_current_format_runtime_records expects formatVersion {EXPORT_FORMAT_VERSION}"
     )));
   }
   crate::domain::import_export::validate_current_format_runtime_records(doc).map_err(StorageError::Validation)
@@ -1050,25 +996,12 @@ fn rebuild_export_requirement_from_pin(
   conn: &rusqlite::Connection,
   instance: &crate::domain::service_integration::IntegrationInstance,
 ) -> Result<crate::domain::runtime_lifecycle::RuntimeRequirementExport, StorageError> {
-  if instance.runtime_kind == "bundled-rust" || instance.package_digest.is_none() {
-    return Ok(crate::domain::runtime_lifecycle::RuntimeRequirementExport {
-      plugin_id: instance.plugin_id.clone(),
-      plugin_version: instance.plugin_version.clone(),
-      runtime_kind: instance.runtime_kind.clone(),
-      package_digest: None,
-      publisher_key_id: None,
-      publisher_key_fingerprint: None,
-      plugin_api_version: None,
-      config_schema_version: instance.config_schema_version,
-      required_capability_majors: Vec::new(),
-      provider_runtime_kind: None,
-      provider_package_digest: None,
-    });
-  }
-  let digest = instance
-    .package_digest
-    .as_deref()
-    .ok_or_else(|| StorageError::Validation("package-backed pin missing digest".into()))?;
+  let digest = instance.package_digest.as_deref().ok_or_else(|| {
+    StorageError::Validation(format!(
+      "integration {} package pin is missing its package digest",
+      instance.id
+    ))
+  })?;
   let version = crate::repositories::installed_plugin_versions::get_optional(conn, digest)?.ok_or_else(|| {
     StorageError::PluginUnavailable(format!(
       "cannot rebuild export requirement; package {digest} is not installed"
@@ -1103,7 +1036,6 @@ fn ocr_service_to_export(service: OcrService) -> OcrServiceExport {
     display_name: service.display_name,
     enabled: service.enabled,
     sort_order: service.sort_order,
-    baidu_action: service.baidu_action,
     provider_model_id: service.provider_model_id,
     temperature: service.temperature,
     default_prompt_template_id: service.default_prompt_template_id,

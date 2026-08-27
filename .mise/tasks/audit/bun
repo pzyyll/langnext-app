@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# ABOUTME: Run Bun advisory audit and capture the resolved JavaScript dependency tree.
+# ABOUTME: Writes reports under .audit/ and preserves the bun audit exit status.
+#MISE description="Audit JavaScript dependencies with bun audit"
+set -euo pipefail
+
+root="${MISE_PROJECT_ROOT:-$(cd "$(dirname "$0")/../../.." && pwd)}"
+cd "$root"
+
+mkdir -p .audit
+set +e
+bun audit --json > .audit/bun-audit.json
+audit_status=$?
+set -e
+bun pm ls --all > .audit/bun-dependency-tree.txt
+exit "$audit_status"

@@ -1,5 +1,6 @@
 // ABOUTME: Content-addressed plugin package store with staging, quarantine, and crash recovery.
 // ABOUTME: Installs verified archives immutably; never executes package code.
+use crate::domain::first_party_plugins::is_first_party_plugin_id;
 use crate::domain::plugin_package::{
   ApprovePluginPackageInput, ApprovePluginPackageResult, ApproveUserPublisherInput, InstallOperationState,
   InstalledPluginVersion, InstalledPluginVersionDto, PACKAGE_ARCHIVE_MAX_BYTES, PACKAGE_PREVIEW_TTL_SECS,
@@ -16,7 +17,8 @@ use crate::repositories::{
 };
 use crate::services::plugin_package::{
   PackageVerifyError, VerifiedPackage, hash_file, inspect_package_bytes, public_key_fingerprint, read_file_bounded,
-  set_readonly, verify_extracted_content_snapshot, verify_package_bytes, verify_store_content, write_extracted_content,
+  set_readonly, verify_extracted_content_snapshot, verify_package_bytes, verify_store_content,
+  verify_store_content_integrity, write_extracted_content,
 };
 use crate::services::vendor_trust::{self, VendorPublicKey, cargo_resources_root};
 use crate::storage::Database;
@@ -33,6 +35,8 @@ pub const STAGING_SWEEP_INTERVAL_SECS: u64 = 30;
 
 /// Canonical vendor key id constant (public roots only; never a fabricated production private seed).
 pub use crate::services::vendor_trust::VENDOR_PUBLISHER_KEY_ID;
+
+pub use crate::domain::first_party_plugins::FIRST_PARTY_PLUGIN_IDS as RESERVED_FIRST_PARTY_WASM_PLUGIN_IDS;
 
 /// Test-only install fault points injected into the real approve/install chain.
 #[cfg(test)]
@@ -187,7 +191,7 @@ impl VerifiedVendorImport {
 }
 
 impl PluginPackageService {
-  /// Production constructor: loads vendor public keys from fail-closed resource/env paths (empty default).
+  /// Production constructor: loads vendor public keys from fail-closed resource/env paths.
   pub fn new(db: Database, app_data_dir: PathBuf) -> Self {
     let roots = vendor_trust::load_production_vendor_public_keys(&[cargo_resources_root()]).unwrap_or_else(|err| {
       log::error!("vendor_trust_load_failed error={err}; continuing with empty vendor roots");
@@ -408,6 +412,73 @@ impl PluginPackageService {
     Ok(verified)
   }
 
+  /// Revalidate an installed package using its persisted signature status.
+  pub fn verify_installed_package_snapshot(&self, package_digest: &str) -> Result<VerifiedPackage, StorageError> {
+    let version = self
+      .db
+      .read(|conn| installed_plugin_versions::get(conn, package_digest))?;
+    if !version.content_available {
+      return Err(StorageError::PluginUnavailable(format!(
+        "package {package_digest} content is unavailable"
+      )));
+    }
+    if version.signature_status == crate::domain::plugin_package::PackageSignatureStatus::Unsigned {
+      let acknowledged = self
+        .db
+        .read(|conn| plugin_package_approvals::unsigned_risk_acknowledged_for_digest(conn, package_digest))?;
+      if !acknowledged {
+        return Err(StorageError::Validation(
+          "unsigned package is not acknowledged for the exact digest".into(),
+        ));
+      }
+      let verified = verify_store_content_integrity(
+        &self.package_archive_path(package_digest),
+        &self.package_content_path(package_digest),
+        package_digest,
+      )
+      .map_err(StorageError::from)?;
+      if verified.manifest.runtime.kind == crate::domain::runtime_plugin::RuntimeKind::TrustedNativeWorker {
+        let native_ack = self
+          .db
+          .read(|conn| plugin_package_approvals::native_risk_acknowledged_for_digest(conn, package_digest))?;
+        if !native_ack {
+          return Err(StorageError::Validation(
+            "non-vendor native package is not acknowledged for the exact digest".into(),
+          ));
+        }
+      }
+      return Ok(verified);
+    }
+    let publisher = self
+      .db
+      .read(|conn| plugin_publishers::get(conn, &version.publisher_key_id))?;
+    if publisher.revoked || !publisher.enabled {
+      return Err(StorageError::Validation(
+        "installed package publisher is revoked or disabled".into(),
+      ));
+    }
+    let verified = self.verify_runtime_store_snapshot(
+      package_digest,
+      &publisher.key_id,
+      &publisher.fingerprint,
+      &publisher.public_key_hex,
+      publisher.source,
+    )?;
+    if verified.manifest.runtime.kind == crate::domain::runtime_plugin::RuntimeKind::TrustedNativeWorker
+      && publisher.source != PublisherSource::Vendor
+    {
+      let native_ack = self
+        .db
+        .read(|conn| plugin_package_approvals::native_risk_acknowledged_for_digest(conn, package_digest))?;
+      if !native_ack {
+        return Err(StorageError::Validation(
+          "non-vendor native package is not acknowledged for the exact digest".into(),
+        ));
+      }
+    }
+    Ok(verified)
+  }
+
   /// Verify archive bytes and compare the store tree to that same immutable archive snapshot.
   fn verify_store_snapshot_from_archive_bytes(
     &self,
@@ -480,6 +551,11 @@ impl PluginPackageService {
     set_default: bool,
   ) -> Result<VerifiedVendorImport, StorageError> {
     let inspected = inspect_package_bytes(archive_bytes).map_err(StorageError::from)?;
+    if inspected.signature_status != crate::domain::plugin_package::PackageSignatureStatus::Signed {
+      return Err(StorageError::Validation(
+        "vendor bootstrap rejects unsigned packages".into(),
+      ));
+    }
     let digest = inspected.package_digest.clone();
     let already = self
       .db
@@ -508,6 +584,8 @@ impl PluginPackageService {
         approve_publisher: false,
         publisher_public_key_hex: None,
         acknowledge_permissions: true,
+        acknowledge_unsigned_package_risk: false,
+        acknowledge_native_execution_risk: false,
       })?;
       let import = self.reverify_vendor_import(&digest)?;
       // Bootstrap may reaffirm a default only through the internal set_default path; public
@@ -536,6 +614,38 @@ impl PluginPackageService {
       publisher_fingerprint: verified.manifest.publisher.key_fingerprint.clone(),
       publisher_public_key_hex: verified.publisher_public_key_hex.clone(),
     })
+  }
+
+  /// Project installed service packages into catalog definitions. Failures skip that package.
+  ///
+  /// Signed packages and acknowledged unsigned packages both enter the catalog through the same
+  /// installed-snapshot seam (`verify_installed_package_snapshot`). Unsigned packages therefore
+  /// need no publisher row and never pass signature-based verification; they project only with an
+  /// exact-digest unsigned risk acknowledgement plus native risk acknowledgement when applicable.
+  pub fn project_installed_service_definitions(
+    &self,
+  ) -> Result<Vec<crate::services::bundled_plugins::BundledPluginRegistration>, StorageError> {
+    let versions = self.list_versions()?;
+    let mut out = Vec::new();
+    for version in versions {
+      if !version.content_available {
+        continue;
+      }
+      match self.verify_installed_package_snapshot(&version.package_digest) {
+        Ok(verified) => match crate::services::package_definition::project_verified_package(&verified) {
+          Ok(definition) => out.push(definition),
+          Err(err) => log::warn!(
+            "package_definition_projection_failed plugin={} error={err}",
+            version.plugin_id
+          ),
+        },
+        Err(err) => log::warn!(
+          "package_definition_verify_failed plugin={} error={err}",
+          version.plugin_id
+        ),
+      }
+    }
+    Ok(out)
   }
 
   /// Start a stoppable background sweep for preview TTL and orphan staging cleanup.
@@ -625,6 +735,18 @@ impl PluginPackageService {
     let content_dir = self.store_package_dir(&version.package_digest).join("content");
     if !package_path.is_file() || !content_dir.is_dir() {
       return false;
+    }
+    if version.signature_status == crate::domain::plugin_package::PackageSignatureStatus::Unsigned {
+      let Ok(ack) = self
+        .db
+        .read(|conn| plugin_package_approvals::unsigned_risk_acknowledged_for_digest(conn, &version.package_digest))
+      else {
+        return false;
+      };
+      if !ack {
+        return false;
+      }
+      return verify_store_content_integrity(&package_path, &content_dir, &version.package_digest).is_ok();
     }
     let Ok(publisher) = self
       .db
@@ -854,6 +976,17 @@ impl PluginPackageService {
           let version = self
             .db
             .read(|conn| installed_plugin_versions::get_optional(conn, digest))?;
+          let unsigned_row = version
+            .as_ref()
+            .is_some_and(|v| v.signature_status == crate::domain::plugin_package::PackageSignatureStatus::Unsigned);
+          let unsigned_ack = if unsigned_row {
+            self
+              .db
+              .read(|conn| plugin_package_approvals::unsigned_risk_acknowledged_for_digest(conn, digest))
+              .unwrap_or(false)
+          } else {
+            false
+          };
           let publisher_key = version.as_ref().and_then(|v| {
             self
               .db
@@ -864,9 +997,13 @@ impl PluginPackageService {
           });
 
           if dest.join("package.lnplugin").is_file() {
-            let content_ok = publisher_key
-              .as_ref()
-              .is_some_and(|key| self.verify_dest_against_digest(&dest, digest, key).is_ok());
+            let content_ok = if unsigned_row {
+              unsigned_ack && self.verify_dest_integrity(&dest, digest).is_ok()
+            } else {
+              publisher_key
+                .as_ref()
+                .is_some_and(|key| self.verify_dest_against_digest(&dest, digest, key).is_ok())
+            };
             self.remove_path(&staging)?;
             if content_ok {
               self.db.transaction(|uow| {
@@ -889,7 +1026,37 @@ impl PluginPackageService {
               })?;
             }
           } else if staging.join("package.lnplugin").is_file() {
-            if let Some(key) = publisher_key.as_deref() {
+            if unsigned_row {
+              if unsigned_ack && self.verify_staging_integrity(&staging, digest).is_ok() {
+                self.atomic_install_from_staging(&staging, digest)?;
+                if self
+                  .verify_dest_integrity(&self.store_package_dir(digest), digest)
+                  .is_ok()
+                {
+                  self.db.transaction(|uow| {
+                    plugin_install_operations::mark_finalized(uow.conn(), op.id)?;
+                    installed_plugin_versions::set_content_available(uow.conn(), digest, true)?;
+                    Ok(())
+                  })?;
+                } else {
+                  self.quarantine_path(&self.store_package_dir(digest), "post_rename_unverified")?;
+                  self.bump_store_generation();
+                  self.db.transaction(|uow| {
+                    installed_plugin_versions::set_content_available(uow.conn(), digest, false)?;
+                    plugin_install_operations::mark_failed(uow.conn(), op.id, "content_unverified")?;
+                    Ok(())
+                  })?;
+                }
+              } else {
+                self.quarantine_path(&staging, "staging_unverified")?;
+                self.bump_store_generation();
+                self.db.transaction(|uow| {
+                  installed_plugin_versions::set_content_available(uow.conn(), digest, false)?;
+                  plugin_install_operations::mark_failed(uow.conn(), op.id, "content_unverified")?;
+                  Ok(())
+                })?;
+              }
+            } else if let Some(key) = publisher_key.as_deref() {
               match self.verify_staging_complete(&staging, digest, key) {
                 Ok(()) => {
                   self.atomic_install_from_staging(&staging, digest)?;
@@ -972,6 +1139,18 @@ impl PluginPackageService {
     )
     .map(|_| ())
     .map_err(StorageError::from)
+  }
+
+  fn verify_dest_integrity(&self, dest: &Path, digest: &str) -> Result<(), StorageError> {
+    verify_store_content_integrity(&dest.join("package.lnplugin"), &dest.join("content"), digest)
+      .map(|_| ())
+      .map_err(StorageError::from)
+  }
+
+  fn verify_staging_integrity(&self, staging: &Path, digest: &str) -> Result<(), StorageError> {
+    verify_store_content_integrity(&staging.join("package.lnplugin"), &staging.join("content"), digest)
+      .map(|_| ())
+      .map_err(StorageError::from)
   }
 
   fn expire_stale_previews(&self) -> Result<(), StorageError> {
@@ -1095,11 +1274,24 @@ impl PluginPackageService {
       ));
     }
 
-    // Structural inspection first (signature length + manifest/index/semantics).
+    // Structural inspection first. Signature presence is decided before publisher lookup.
     let structural = match inspect_package_bytes(&staged_bytes) {
       Ok(v) => v,
       Err(err) => return Err(fail_preview(self, err.code.as_str(), err.into())),
     };
+    if structural.signature_status == crate::domain::plugin_package::PackageSignatureStatus::Unsigned
+      && structural.manifest.runtime.kind == crate::domain::runtime_plugin::RuntimeKind::WasmComponent
+      && is_first_party_plugin_id(structural.manifest.id.as_str())
+    {
+      return Err(fail_preview(
+        self,
+        PackageErrorCode::CompatibilityRejected.as_str(),
+        StorageError::Validation(format!(
+          "unsigned wasm packages cannot claim reserved first-party id {}",
+          structural.manifest.id
+        )),
+      ));
+    }
 
     // Reject same plugin_id+version with different digest.
     if let Some(existing) = self.db.read(|conn| {
@@ -1117,58 +1309,69 @@ impl PluginPackageService {
       }
     }
 
-    let publisher_row = self
-      .db
-      .read(|conn| plugin_publishers::get_optional(conn, &structural.manifest.publisher.key_id))?;
+    let unsigned_preview =
+      structural.signature_status == crate::domain::plugin_package::PackageSignatureStatus::Unsigned;
+    let is_native = structural.manifest.runtime.kind == crate::domain::runtime_plugin::RuntimeKind::TrustedNativeWorker;
+    let publisher_row = if unsigned_preview {
+      None
+    } else {
+      self
+        .db
+        .read(|conn| plugin_publishers::get_optional(conn, &structural.manifest.publisher.key_id))?
+    };
 
     // Also resolve by fingerprint for vendor seed mismatches on key_id.
     let publisher_by_fp = self
       .db
       .read(|conn| plugin_publishers::get_by_fingerprint(conn, &structural.manifest.publisher.key_fingerprint))?;
 
-    let (publisher_trust, requires_publisher_approval, public_key_hex) = match publisher_row.or(publisher_by_fp) {
-      Some(p) if p.revoked => {
-        return Err(fail_preview(
-          self,
-          PackageErrorCode::PublisherRevoked.as_str(),
-          PackageVerifyError::new(
-            PackageErrorCode::PublisherRevoked,
-            format!("publisher {} is revoked", p.key_id),
-          )
-          .into(),
-        ));
-      }
-      Some(p) if !p.enabled => {
-        return Err(fail_preview(
-          self,
-          PackageErrorCode::PublisherDisabled.as_str(),
-          PackageVerifyError::new(
-            PackageErrorCode::PublisherDisabled,
-            format!("publisher {} is disabled", p.key_id),
-          )
-          .into(),
-        ));
-      }
-      Some(p) => {
-        let trust = match p.source {
-          PublisherSource::Vendor => PublisherTrustState::TrustedVendor,
-          PublisherSource::UserApproved => PublisherTrustState::TrustedUser,
-        };
-        (trust, false, Some(p.public_key_hex))
-      }
-      None => {
-        // Unknown publisher: if the package provided a self-authenticating publisher.pub,
-        // the key is already resolved; full verification can happen immediately.
-        let trust_state = if structural.publisher_public_key_hex.is_empty() {
-          (PublisherTrustState::Unknown, true, None)
-        } else {
-          (
-            PublisherTrustState::Unknown,
-            true,
-            Some(structural.publisher_public_key_hex.clone()),
-          )
-        };
-        trust_state
+    let (publisher_trust, requires_publisher_approval, public_key_hex) = if unsigned_preview {
+      (PublisherTrustState::Unsigned, false, None)
+    } else {
+      match publisher_row.or(publisher_by_fp) {
+        Some(p) if p.revoked => {
+          return Err(fail_preview(
+            self,
+            PackageErrorCode::PublisherRevoked.as_str(),
+            PackageVerifyError::new(
+              PackageErrorCode::PublisherRevoked,
+              format!("publisher {} is revoked", p.key_id),
+            )
+            .into(),
+          ));
+        }
+        Some(p) if !p.enabled => {
+          return Err(fail_preview(
+            self,
+            PackageErrorCode::PublisherDisabled.as_str(),
+            PackageVerifyError::new(
+              PackageErrorCode::PublisherDisabled,
+              format!("publisher {} is disabled", p.key_id),
+            )
+            .into(),
+          ));
+        }
+        Some(p) => {
+          let trust = match p.source {
+            PublisherSource::Vendor => PublisherTrustState::TrustedVendor,
+            PublisherSource::UserApproved => PublisherTrustState::TrustedUser,
+          };
+          (trust, false, Some(p.public_key_hex))
+        }
+        None => {
+          // Unknown publisher: if the package provided a self-authenticating publisher.pub,
+          // the key is already resolved; full verification can happen immediately.
+          let trust_state = if structural.publisher_public_key_hex.is_empty() {
+            (PublisherTrustState::Unknown, true, None)
+          } else {
+            (
+              PublisherTrustState::Unknown,
+              true,
+              Some(structural.publisher_public_key_hex.clone()),
+            )
+          };
+          trust_state
+        }
       }
     };
 
@@ -1223,6 +1426,9 @@ impl PluginPackageService {
     if requires_publisher_approval {
       warnings.push("Publisher is not trusted. Approving installs a user publisher key.".into());
     }
+    if unsigned_preview {
+      warnings.push("Publisher identity is not verified. Acknowledgement binds only this exact digest.".into());
+    }
     if !verified.manifest.permissions.network.is_empty() || !verified.manifest.permissions.auth_policies.is_empty() {
       warnings.push(
         "Package requests network/auth permissions. Approval is catalog-only; instance execution grant sets are created later per instance.".into(),
@@ -1239,10 +1445,24 @@ impl PluginPackageService {
       package_digest: verified.package_digest.clone(),
       plugin_id: verified.manifest.id.clone(),
       version: verified.manifest.version.clone(),
-      publisher_key_id: verified.manifest.publisher.key_id.clone(),
-      publisher_fingerprint: verified.manifest.publisher.key_fingerprint.clone(),
+      publisher_key_id: if unsigned_preview {
+        String::new()
+      } else {
+        verified.manifest.publisher.key_id.clone()
+      },
+      publisher_fingerprint: if unsigned_preview {
+        String::new()
+      } else {
+        verified.manifest.publisher.key_fingerprint.clone()
+      },
+      claimed_publisher_key_id: verified.manifest.publisher.key_id.clone(),
+      claimed_publisher_fingerprint: verified.manifest.publisher.key_fingerprint.clone(),
       publisher_trust,
       requires_publisher_approval,
+      signature_status: verified.signature_status,
+      requires_unsigned_risk_acknowledgement: unsigned_preview,
+      requires_native_execution_risk_acknowledgement: is_native
+        && (unsigned_preview || publisher_trust != PublisherTrustState::TrustedVendor),
       resolved_publisher_public_key_hex: if requires_publisher_approval && !verified.publisher_public_key_hex.is_empty()
       {
         Some(verified.publisher_public_key_hex.clone())
@@ -1355,6 +1575,42 @@ impl PluginPackageService {
       return Err(PackageVerifyError::new(PackageErrorCode::DigestMismatch, "digest changed").into());
     }
 
+    let is_native =
+      session.verified.manifest.runtime.kind == crate::domain::runtime_plugin::RuntimeKind::TrustedNativeWorker;
+    let unsigned = session.verified.signature_status == crate::domain::plugin_package::PackageSignatureStatus::Unsigned;
+    let vendor_native = is_native
+      && session.publisher_trust == PublisherTrustState::TrustedVendor
+      && self
+        .resolve_vendor_root(
+          &session.verified.manifest.publisher.key_id,
+          Some(session.verified.manifest.publisher.key_fingerprint.as_str()),
+        )
+        .is_ok();
+    let requires_native_ack = is_native && !vendor_native;
+    if !unsigned && input.acknowledge_unsigned_package_risk {
+      return Err(StorageError::Validation(
+        "unsigned risk acknowledgement is invalid for signed packages".into(),
+      ));
+    }
+    if !requires_native_ack && input.acknowledge_native_execution_risk {
+      return Err(StorageError::Validation(
+        "native execution risk acknowledgement is invalid for this package".into(),
+      ));
+    }
+    if unsigned && !input.acknowledge_unsigned_package_risk {
+      self.quarantine_path(&session.staging_dir, "unsigned_risk_not_acknowledged")?;
+      self.fail_operation(session.operation_id, "unsigned_risk_not_acknowledged")?;
+      return Err(StorageError::Validation(
+        "unsigned packages require acknowledge_unsigned_package_risk".into(),
+      ));
+    }
+    if requires_native_ack && !input.acknowledge_native_execution_risk {
+      self.quarantine_path(&session.staging_dir, "native_risk_not_acknowledged")?;
+      self.fail_operation(session.operation_id, "native_risk_not_acknowledged")?;
+      return Err(StorageError::Validation(
+        "non-vendor native packages require acknowledge_native_execution_risk".into(),
+      ));
+    }
     if session.requires_publisher_approval && !input.approve_publisher {
       self.quarantine_path(&session.staging_dir, "publisher_not_approved")?;
       self.fail_operation(session.operation_id, "publisher_not_approved")?;
@@ -1375,6 +1631,7 @@ impl PluginPackageService {
       input.approve_publisher,
       &input.publisher_public_key_hex,
     ) {
+      (PublisherTrustState::Unsigned, _, _, _) => (PublisherDecision::UnsignedExactDigest, String::new(), false),
       (PublisherTrustState::TrustedVendor, Some(p), _, _) => {
         (PublisherDecision::TrustedVendor, p.public_key_hex, false)
       }
@@ -1408,24 +1665,44 @@ impl PluginPackageService {
 
     // Full signature verification with trusted key before DB commit (always fail closed).
     let staged_bytes = read_file_bounded(&staged_package, PACKAGE_ARCHIVE_MAX_BYTES).map_err(StorageError::from)?;
-    let verified = match verify_package_bytes(&staged_bytes, &public_key_hex) {
-      Ok(v) => v,
-      Err(err) => {
-        self.quarantine_path(&session.staging_dir, err.code.as_str())?;
-        self.fail_operation(session.operation_id, err.code.as_str())?;
-        return Err(err.into());
+    let verified = if publisher_decision == PublisherDecision::UnsignedExactDigest {
+      match inspect_package_bytes(&staged_bytes) {
+        Ok(v) if v.signature_status == crate::domain::plugin_package::PackageSignatureStatus::Unsigned => v,
+        Ok(_) => {
+          self.quarantine_path(&session.staging_dir, PackageErrorCode::SignatureInvalid.as_str())?;
+          self.fail_operation(session.operation_id, PackageErrorCode::SignatureInvalid.as_str())?;
+          return Err(
+            PackageVerifyError::new(
+              PackageErrorCode::SignatureInvalid,
+              "unsigned approval cannot install a signed archive",
+            )
+            .into(),
+          );
+        }
+        Err(err) => {
+          self.quarantine_path(&session.staging_dir, err.code.as_str())?;
+          self.fail_operation(session.operation_id, err.code.as_str())?;
+          return Err(err.into());
+        }
+      }
+    } else {
+      match verify_package_bytes(&staged_bytes, &public_key_hex) {
+        Ok(v) => v,
+        Err(err) => {
+          self.quarantine_path(&session.staging_dir, err.code.as_str())?;
+          self.fail_operation(session.operation_id, err.code.as_str())?;
+          return Err(err.into());
+        }
       }
     };
 
-    // Trusted-native-worker packages are vendor-only: reject user-approved publishers even when
-    // the package id/version match the host allowlist and the key was explicitly approved.
-    if verified.manifest.runtime.kind == crate::domain::runtime_plugin::RuntimeKind::TrustedNativeWorker {
-      let source = match publisher_decision {
-        PublisherDecision::TrustedVendor => PublisherSource::Vendor,
-        _ => PublisherSource::UserApproved,
-      };
+    // Vendor-signed native still reverse-binds the external vendor root. Non-vendor native
+    // (unsigned or user-signed) stays on the host allowlist plus exact-digest native-risk ack.
+    if verified.manifest.runtime.kind == crate::domain::runtime_plugin::RuntimeKind::TrustedNativeWorker
+      && publisher_decision == PublisherDecision::TrustedVendor
+    {
       if let Err(message) = crate::services::plugin_package::require_native_worker_vendor_publisher(
-        source,
+        PublisherSource::Vendor,
         &verified.manifest.publisher.key_id,
         true,
         false,
@@ -1434,7 +1711,6 @@ impl PluginPackageService {
         self.fail_operation(session.operation_id, PackageErrorCode::CompatibilityRejected.as_str())?;
         return Err(StorageError::Validation(message));
       }
-      // Must reverse-bind a configured external vendor root (not merely a TrustedVendor DB row).
       if self
         .resolve_vendor_root(
           &verified.manifest.publisher.key_id,
@@ -1445,7 +1721,7 @@ impl PluginPackageService {
         self.quarantine_path(&session.staging_dir, PackageErrorCode::CompatibilityRejected.as_str())?;
         self.fail_operation(session.operation_id, PackageErrorCode::CompatibilityRejected.as_str())?;
         return Err(StorageError::Validation(
-          "trusted-native-worker packages require a configured external vendor root".into(),
+          "vendor-signed native packages require a configured external vendor root".into(),
         ));
       }
     }
@@ -1480,12 +1756,14 @@ impl PluginPackageService {
           },
         )?;
       }
-      let publisher = plugin_publishers::get(uow.conn(), &verified.manifest.publisher.key_id)?;
-      if publisher.revoked {
-        return Err(PackageVerifyError::new(PackageErrorCode::PublisherRevoked, "publisher revoked").into());
-      }
-      if !publisher.enabled {
-        return Err(PackageVerifyError::new(PackageErrorCode::PublisherDisabled, "publisher disabled").into());
+      if publisher_decision != PublisherDecision::UnsignedExactDigest {
+        let publisher = plugin_publishers::get(uow.conn(), &verified.manifest.publisher.key_id)?;
+        if publisher.revoked {
+          return Err(PackageVerifyError::new(PackageErrorCode::PublisherRevoked, "publisher revoked").into());
+        }
+        if !publisher.enabled {
+          return Err(PackageVerifyError::new(PackageErrorCode::PublisherDisabled, "publisher disabled").into());
+        }
       }
 
       if installed_plugin_versions::get_optional(uow.conn(), &verified.package_digest)?.is_none() {
@@ -1497,6 +1775,7 @@ impl PluginPackageService {
             version: verified.manifest.version.clone(),
             publisher_key_id: verified.manifest.publisher.key_id.clone(),
             publisher_fingerprint: verified.manifest.publisher.key_fingerprint.clone(),
+            signature_status: verified.signature_status,
             runtime_kind: runtime_kind_storage(verified.manifest.runtime.kind).to_string(),
             manifest_json: manifest_json.clone(),
             permission_request_digest: permission_request_digest.clone(),
@@ -1517,6 +1796,7 @@ impl PluginPackageService {
           publisher_decision,
           permission_request_digest: permission_request_digest.clone(),
           approved_at: installed_at.clone(),
+          native_execution_risk_acknowledged: requires_native_ack,
         },
       )?;
 
@@ -1552,11 +1832,19 @@ impl PluginPackageService {
       }
 
       // Never mark content_available without full archive+index re-verification after rename.
-      if let Err(err) = self.verify_dest_against_digest(
-        &self.store_package_dir(&verified.package_digest),
-        &verified.package_digest,
-        &public_key_hex,
-      ) {
+      let post_verify = if unsigned {
+        self.verify_dest_integrity(
+          &self.store_package_dir(&verified.package_digest),
+          &verified.package_digest,
+        )
+      } else {
+        self.verify_dest_against_digest(
+          &self.store_package_dir(&verified.package_digest),
+          &verified.package_digest,
+          &public_key_hex,
+        )
+      };
+      if let Err(err) = post_verify {
         self.quarantine_path(
           &self.store_package_dir(&verified.package_digest),
           "post_install_unverified",
@@ -2358,15 +2646,24 @@ impl PluginPackageService {
         credential_slots: vec![],
         permissions: Default::default(),
         ui: Default::default(),
+        path_authority: vec![],
         provider_runtime: None,
         model_resources: None,
       });
+    let native_ack = self
+      .db
+      .read(|conn| plugin_package_approvals::native_risk_acknowledged_for_digest(conn, &version.package_digest))
+      .unwrap_or(false);
     Ok(InstalledPluginVersionDto {
       package_digest: version.package_digest.clone(),
       plugin_id: version.plugin_id.clone(),
       version: version.version.clone(),
       publisher_key_id: version.publisher_key_id.clone(),
       publisher_fingerprint: version.publisher_fingerprint.clone(),
+      signature_status: version.signature_status,
+      claimed_publisher_key_id: manifest.publisher.key_id.clone(),
+      claimed_publisher_fingerprint: manifest.publisher.key_fingerprint.clone(),
+      native_execution_risk_acknowledged: native_ack,
       runtime_kind: version.runtime_kind.clone(),
       permission_request_digest: version.permission_request_digest.clone(),
       content_available: version.content_available,
@@ -2604,7 +2901,11 @@ mod tests {
     HttpMethod, MANIFEST_FILE_PATH, NetworkEndpointRequest, PermissionRequests, SIGNATURE_FILE_PATH,
   };
   use crate::services::plugin_package::test_support::{
-    sample_manifest, test_fingerprint, test_public_key_hex, valid_signed_package,
+    build_signed_package_with_key, build_unsigned_package, sample_manifest, test_fingerprint, test_public_key_hex,
+    test_signing_key, valid_signed_package, valid_unsigned_package,
+  };
+  use crate::services::plugin_release_bundle::{
+    ReleaseBundleErrorCode, generate_bootstrap_policy_entry, verify_release_bundle,
   };
   use crate::services::vendor_trust::test_vendor_fixture::{
     fixture_vendor_fingerprint, fixture_vendor_public_key, fixture_vendor_public_key_hex, fixture_vendor_signing_key,
@@ -2621,7 +2922,7 @@ mod tests {
     let dir = tempfile::tempdir().unwrap();
     let db = Database::new(dir.path()).unwrap();
     db.initialize().unwrap();
-    // Production constructor has empty vendor roots; inject fixture vendor key for tests only.
+    // Tests inject fixture vendor keys; production roots stay in release resources.
     let service =
       PluginPackageService::with_vendor_roots(db, dir.path().to_path_buf(), vec![fixture_vendor_public_key()]);
     let publishers = service.list_publishers().unwrap();
@@ -2672,6 +2973,8 @@ mod tests {
         approve_publisher: false,
         publisher_public_key_hex: None,
         acknowledge_permissions: true,
+        acknowledge_unsigned_package_risk: false,
+        acknowledge_native_execution_risk: false,
       })
       .unwrap();
     if set_default {
@@ -2718,15 +3021,24 @@ mod tests {
   }
 
   #[test]
-  fn production_constructor_does_not_seed_fabricated_vendor_root() {
+  fn production_constructor_seeds_real_vendor_root_only() {
     let (dir, service) = setup_without_vendor();
     assert!(service.list_publishers().unwrap().is_empty());
     let db2 = Database::new(dir.path().join("prod")).unwrap();
     db2.initialize().unwrap();
     let prod = PluginPackageService::new(db2, dir.path().join("prod"));
+    let publishers = prod.list_publishers().unwrap();
     assert!(
-      prod.list_publishers().unwrap().is_empty(),
-      "default production load must not trust fabricated vendor keys"
+      !publishers.is_empty(),
+      "production load must seed the real vendor root after Gate A"
+    );
+    assert!(
+      publishers.iter().all(|p| p.fingerprint != fixture_vendor_fingerprint()),
+      "production load must never trust the fabricated fixture key"
+    );
+    assert!(
+      publishers.iter().all(|p| p.key_id == VENDOR_PUBLISHER_KEY_ID),
+      "production load must seed only the official vendor root"
     );
   }
 
@@ -2834,6 +3146,8 @@ mod tests {
         approve_publisher: false,
         publisher_public_key_hex: None,
         acknowledge_permissions: true,
+        acknowledge_unsigned_package_risk: false,
+        acknowledge_native_execution_risk: false,
       })
       .unwrap();
     assert_eq!(result.version.package_digest, digest);
@@ -2923,6 +3237,8 @@ mod tests {
           approve_publisher: false,
           publisher_public_key_hex: None,
           acknowledge_permissions: true,
+          acknowledge_unsigned_package_risk: false,
+          acknowledge_native_execution_risk: false,
         })
         .unwrap_err();
       assert!(matches!(err, StorageError::Internal(_)), "fault {fault:?}");
@@ -3108,6 +3424,8 @@ mod tests {
         approve_publisher: false,
         publisher_public_key_hex: None,
         acknowledge_permissions: true,
+        acknowledge_unsigned_package_risk: false,
+        acknowledge_native_execution_risk: false,
       })
       .unwrap_err();
     assert!(matches!(err, StorageError::Capability { .. }));
@@ -3361,6 +3679,8 @@ mod tests {
         approve_publisher: true,
         publisher_public_key_hex: preview.resolved_publisher_public_key_hex.clone(),
         acknowledge_permissions: true,
+        acknowledge_unsigned_package_risk: false,
+        acknowledge_native_execution_risk: false,
       })
       .unwrap();
     assert!(result.version.content_available);
@@ -3402,6 +3722,8 @@ mod tests {
         approve_publisher: true,
         publisher_public_key_hex: None,
         acknowledge_permissions: true,
+        acknowledge_unsigned_package_risk: false,
+        acknowledge_native_execution_risk: false,
       })
       .unwrap_err();
     assert!(matches!(err, StorageError::Validation(_)));
@@ -3413,6 +3735,8 @@ mod tests {
         approve_publisher: true,
         publisher_public_key_hex: Some(public_hex),
         acknowledge_permissions: true,
+        acknowledge_unsigned_package_risk: false,
+        acknowledge_native_execution_risk: false,
       })
       .unwrap();
     assert!(result.version.content_available);
@@ -3613,5 +3937,787 @@ mod tests {
     let (digest, _) = install_valid(&service, dir.path(), true);
     let err = service.uninstall_version(&digest).unwrap_err();
     assert!(matches!(err, StorageError::InUse(_)));
+  }
+
+  #[test]
+  fn unsigned_wasm_reserved_first_party_ids_include_baidu_ocr() {
+    assert!(RESERVED_FIRST_PARTY_WASM_PLUGIN_IDS.contains(&"com.langnext.baidu-ocr"));
+    let (_dir, service) = setup();
+    let wasm = b"\0asm\x01\x00\x00\x00";
+    let mut manifest = sample_manifest(wasm);
+    manifest.id = "com.langnext.baidu-ocr".into();
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("artifacts")).unwrap();
+    std::fs::write(
+      dir.path().join(MANIFEST_FILE_PATH),
+      serde_json::to_vec(&manifest).unwrap(),
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("artifacts/plugin.wasm"), wasm).unwrap();
+    let output = dir.path().join("baidu-unsigned.lnplugin");
+    crate::services::plugin_package::finalize_unsigned_package_from_staging(dir.path(), &output).unwrap();
+    let err = service.preview_package(&output).unwrap_err();
+    assert!(err.to_string().contains("reserved") || err.to_string().contains("baidu-ocr"));
+  }
+
+  const EMPTY_PERMISSION_REQUEST_DIGEST: &str = "64de3a5732f30712f2b873e66acc66c83c2ad8ab251b4d162ec6bdffd2f6d03f";
+
+  fn official_vendor_package(plugin_id: &str, version: &str) -> (Vec<u8>, String) {
+    let wasm = b"\0asm\x01\x00\x00\x00";
+    let mut manifest = sample_manifest(wasm);
+    manifest.id = plugin_id.to_string();
+    manifest.version = version.to_string();
+    manifest.publisher.key_id = VENDOR_PUBLISHER_KEY_ID.into();
+    manifest.publisher.key_fingerprint = fixture_vendor_fingerprint();
+    let bytes = build_signed_package_with_key(
+      &manifest,
+      &[("artifacts/plugin.wasm", wasm.as_slice())],
+      &fixture_vendor_signing_key(),
+    );
+    let digest = crate::services::plugin_package::hash_archive_bytes(&bytes);
+    (bytes, digest)
+  }
+
+  fn write_vendor_trust(dir: &Path, public_key_hex: &str) {
+    let trust_dir = dir.join("vendor-trust");
+    std::fs::create_dir_all(&trust_dir).unwrap();
+    let json = serde_json::json!([{
+      "keyId": VENDOR_PUBLISHER_KEY_ID,
+      "publicKeyHex": public_key_hex,
+    }]);
+    std::fs::write(
+      trust_dir.join("public-keys.json"),
+      serde_json::to_vec_pretty(&json).unwrap(),
+    )
+    .unwrap();
+  }
+
+  fn write_complete_official_bundle(dir: &Path) -> Vec<(String, String, String)> {
+    write_vendor_trust(dir, &fixture_vendor_public_key_hex());
+    let plugins = dir.join("plugins");
+    std::fs::create_dir_all(&plugins).unwrap();
+    let mut identities = Vec::new();
+    let mut policies = Vec::new();
+    for spec in crate::services::plugin_release_bundle::REQUIRED_OFFICIAL_RELEASE_PACKAGES {
+      let (bytes, digest) = official_vendor_package(spec.plugin_id, spec.expected_version);
+      let archive_name = format!("{}-{}.lnplugin", spec.plugin_id, spec.expected_version);
+      std::fs::write(plugins.join(&archive_name), &bytes).unwrap();
+      let entry = generate_bootstrap_policy_entry(&bytes, &fixture_vendor_public_key_hex()).unwrap();
+      identities.push((spec.plugin_id.to_string(), spec.expected_version.to_string(), digest));
+      policies.push(entry);
+    }
+    std::fs::write(
+      plugins.join("default-activation-policies.json"),
+      serde_json::to_vec_pretty(&policies).unwrap(),
+    )
+    .unwrap();
+    identities
+  }
+
+  #[test]
+  fn release_bundle_rejects_missing_package_policy_or_root() {
+    // A resource dir with no vendor trust root fails closed with a stable code.
+    let empty = tempfile::tempdir().unwrap();
+    let empty_err = verify_release_bundle(empty.path()).expect_err("empty resource dir must fail");
+    assert_eq!(empty_err.code, ReleaseBundleErrorCode::MissingRoot);
+
+    // Gate A: the production resources carry the signed release bundle. When the official
+    // archives are present (local Gate A inputs), the bundle must verify as complete.
+    let has_release_archives = {
+      let plugins = crate::services::vendor_trust::cargo_resources_root().join("plugins");
+      plugins.join("com.langnext.edge-tts-1.0.0.lnplugin").is_file()
+    };
+    if has_release_archives {
+      let production = crate::services::vendor_trust::cargo_resources_root();
+      let report = verify_release_bundle(&production).expect("production resources must verify after Gate A completes");
+      let ids: std::collections::HashSet<&str> = report.packages.iter().map(|p| p.plugin_id.as_str()).collect();
+      for spec in crate::services::plugin_release_bundle::REQUIRED_OFFICIAL_RELEASE_PACKAGES {
+        assert!(
+          ids.contains(spec.plugin_id),
+          "release bundle missing {}@{}",
+          spec.plugin_id,
+          spec.expected_version
+        );
+      }
+    }
+
+    let complete = tempfile::tempdir().unwrap();
+    let identities = write_complete_official_bundle(complete.path());
+    let report = verify_release_bundle(complete.path()).expect("complete fixture must pass");
+    assert_eq!(report.packages.len(), identities.len());
+    for (plugin_id, version, digest) in &identities {
+      let found = report
+        .packages
+        .iter()
+        .find(|pkg| pkg.plugin_id == *plugin_id && pkg.version == *version)
+        .expect("required package listed");
+      assert_eq!(found.package_digest, *digest);
+      assert_eq!(found.status, "ok");
+    }
+
+    let missing_package = tempfile::tempdir().unwrap();
+    write_complete_official_bundle(missing_package.path());
+    std::fs::remove_file(
+      missing_package
+        .path()
+        .join("plugins")
+        .join("com.langnext.paddleocr-1.0.0.lnplugin"),
+    )
+    .unwrap();
+    let err = verify_release_bundle(missing_package.path()).unwrap_err();
+    assert_eq!(err.code, ReleaseBundleErrorCode::MissingPackage);
+    assert!(err.message.contains("com.langnext.paddleocr"), "{err:?}");
+
+    let missing_root = tempfile::tempdir().unwrap();
+    write_complete_official_bundle(missing_root.path());
+    std::fs::write(missing_root.path().join("vendor-trust").join("public-keys.json"), b"[]").unwrap();
+    let err = verify_release_bundle(missing_root.path()).unwrap_err();
+    assert_eq!(err.code, ReleaseBundleErrorCode::MissingRoot);
+
+    let missing_policy = tempfile::tempdir().unwrap();
+    write_complete_official_bundle(missing_policy.path());
+    std::fs::write(
+      missing_policy
+        .path()
+        .join("plugins")
+        .join("default-activation-policies.json"),
+      b"[]",
+    )
+    .unwrap();
+    let err = verify_release_bundle(missing_policy.path()).unwrap_err();
+    assert_eq!(err.code, ReleaseBundleErrorCode::MissingPolicy);
+
+    let stale_policy = tempfile::tempdir().unwrap();
+    write_complete_official_bundle(stale_policy.path());
+    let policy_path = stale_policy
+      .path()
+      .join("plugins")
+      .join("default-activation-policies.json");
+    let mut policies: Vec<crate::services::default_package_activation::VendorBootstrapPolicyEntry> =
+      serde_json::from_slice(&std::fs::read(&policy_path).unwrap()).unwrap();
+    policies[0].permission_request_digest = "ab".repeat(32);
+    std::fs::write(&policy_path, serde_json::to_vec_pretty(&policies).unwrap()).unwrap();
+    let err = verify_release_bundle(stale_policy.path()).unwrap_err();
+    assert_eq!(err.code, ReleaseBundleErrorCode::StalePolicy);
+
+    let duplicate_version = tempfile::tempdir().unwrap();
+    write_complete_official_bundle(duplicate_version.path());
+    let (dup_bytes, _) = official_vendor_package("com.langnext.google-translate-web", "1.0.0");
+    std::fs::write(
+      duplicate_version
+        .path()
+        .join("plugins")
+        .join("com.langnext.google-translate-web-1.0.0-dup.lnplugin"),
+      dup_bytes,
+    )
+    .unwrap();
+    let err = verify_release_bundle(duplicate_version.path()).unwrap_err();
+    assert_eq!(err.code, ReleaseBundleErrorCode::DuplicateVersion);
+
+    let wrong_publisher = tempfile::tempdir().unwrap();
+    write_complete_official_bundle(wrong_publisher.path());
+    let wasm = b"\0asm\x01\x00\x00\x00";
+    let mut manifest = sample_manifest(wasm);
+    manifest.id = "com.langnext.edge-tts".into();
+    manifest.version = "1.0.0".into();
+    let user_pkg = build_signed_package_with_key(
+      &manifest,
+      &[("artifacts/plugin.wasm", wasm.as_slice())],
+      &test_signing_key(),
+    );
+    std::fs::write(
+      wrong_publisher
+        .path()
+        .join("plugins")
+        .join("com.langnext.edge-tts-1.0.0.lnplugin"),
+      user_pkg,
+    )
+    .unwrap();
+    let err = verify_release_bundle(wrong_publisher.path()).unwrap_err();
+    assert_eq!(err.code, ReleaseBundleErrorCode::WrongPublisher);
+
+    let wrong_digest = tempfile::tempdir().unwrap();
+    write_complete_official_bundle(wrong_digest.path());
+    let policy_path = wrong_digest
+      .path()
+      .join("plugins")
+      .join("default-activation-policies.json");
+    let mut policies: Vec<crate::services::default_package_activation::VendorBootstrapPolicyEntry> =
+      serde_json::from_slice(&std::fs::read(&policy_path).unwrap()).unwrap();
+    policies[0].package_digest = "cd".repeat(32);
+    std::fs::write(&policy_path, serde_json::to_vec_pretty(&policies).unwrap()).unwrap();
+    let err = verify_release_bundle(wrong_digest.path()).unwrap_err();
+    assert_eq!(err.code, ReleaseBundleErrorCode::WrongDigest);
+  }
+
+  #[test]
+  fn release_bundle_rejects_additional_stale_version() {
+    // One required plugin with the expected archive plus a stale version must fail as
+    // DuplicateVersion: exactly one archive per plugin id is required.
+    let stale_extra = tempfile::tempdir().unwrap();
+    write_complete_official_bundle(stale_extra.path());
+    let (stale_bytes, _) = official_vendor_package("com.langnext.google-translate-web", "0.9.0");
+    std::fs::write(
+      stale_extra
+        .path()
+        .join("plugins")
+        .join("com.langnext.google-translate-web-0.9.0.lnplugin"),
+      stale_bytes,
+    )
+    .unwrap();
+    let err = verify_release_bundle(stale_extra.path()).unwrap_err();
+    assert_eq!(err.code, ReleaseBundleErrorCode::DuplicateVersion);
+
+    // A sole stale archive replaces the expected one: WrongVersion with no policy read.
+    let stale_only = tempfile::tempdir().unwrap();
+    write_complete_official_bundle(stale_only.path());
+    std::fs::remove_file(
+      stale_only
+        .path()
+        .join("plugins")
+        .join("com.langnext.google-translate-web-1.0.0.lnplugin"),
+    )
+    .unwrap();
+    let (stale_bytes, _) = official_vendor_package("com.langnext.google-translate-web", "0.9.0");
+    std::fs::write(
+      stale_only
+        .path()
+        .join("plugins")
+        .join("com.langnext.google-translate-web-0.9.0.lnplugin"),
+      stale_bytes,
+    )
+    .unwrap();
+    let err = verify_release_bundle(stale_only.path()).unwrap_err();
+    assert_eq!(err.code, ReleaseBundleErrorCode::WrongVersion);
+    assert!(err.message.contains("0.9.0"));
+
+    // The passing report lists exactly one entry per required official package.
+    let complete = tempfile::tempdir().unwrap();
+    let identities = write_complete_official_bundle(complete.path());
+    let report = verify_release_bundle(complete.path()).unwrap();
+    assert_eq!(
+      report.packages.len(),
+      crate::services::plugin_release_bundle::REQUIRED_OFFICIAL_RELEASE_PACKAGES.len()
+    );
+    assert_eq!(report.packages.len(), identities.len());
+    let ids: std::collections::HashSet<String> = report.packages.iter().map(|pkg| pkg.plugin_id.clone()).collect();
+    assert_eq!(
+      ids.len(),
+      identities.len(),
+      "no plugin id may repeat in a passing report"
+    );
+  }
+
+  #[test]
+  fn bootstrap_policy_generator_emits_exact_verified_identity() {
+    let wasm = b"\0asm\x01\x00\x00\x00";
+    let mut manifest = sample_manifest(wasm);
+    manifest.id = "com.langnext.google-translate-web".into();
+    manifest.publisher.key_id = VENDOR_PUBLISHER_KEY_ID.into();
+    manifest.publisher.key_fingerprint = fixture_vendor_fingerprint();
+    let bytes = build_signed_package_with_key(
+      &manifest,
+      &[("artifacts/plugin.wasm", wasm.as_slice())],
+      &fixture_vendor_signing_key(),
+    );
+    let independent_digest = {
+      use sha2::{Digest, Sha256};
+      encode_lowercase_hex(&Sha256::digest(&bytes))
+    };
+    let independent_fingerprint = {
+      use sha2::{Digest, Sha256};
+      let pub_bytes =
+        crate::domain::plugin_package::decode_lowercase_hex::<32>(&fixture_vendor_public_key_hex(), "vendor pub")
+          .unwrap();
+      encode_lowercase_hex(&Sha256::digest(pub_bytes))
+    };
+
+    let entry = generate_bootstrap_policy_entry(&bytes, &fixture_vendor_public_key_hex()).unwrap();
+    assert_eq!(entry.plugin_id, "com.langnext.google-translate-web");
+    assert_eq!(entry.package_digest, independent_digest);
+    assert_eq!(entry.publisher_key_id, VENDOR_PUBLISHER_KEY_ID);
+    assert_eq!(entry.publisher_fingerprint, independent_fingerprint);
+    assert_eq!(entry.permission_request_digest, EMPTY_PERMISSION_REQUEST_DIGEST);
+    assert_eq!(
+      entry.approved_authority_constraints,
+      crate::services::default_package_activation::ApprovedAuthorityConstraints {
+        fixed_network: vec![],
+        auth_policies: vec![],
+        dynamic_origin_endpoint_ids: vec![],
+        resource_limits: None,
+      }
+    );
+  }
+  fn write_unsigned_archive(dir: &Path, bytes: &[u8]) -> std::path::PathBuf {
+    let src = dir.join("unsigned.lnplugin");
+    std::fs::write(&src, bytes).unwrap();
+    src
+  }
+
+  #[test]
+  fn unsigned_wasm_preview_reports_unverified_publisher_and_exact_digest_risk() {
+    let (dir, service) = setup();
+    let (pkg, digest) = valid_unsigned_package();
+    let src = write_unsigned_archive(dir.path(), &pkg);
+    let preview = service.preview_package(&src).unwrap();
+    assert_eq!(preview.package_digest, digest);
+    assert_eq!(
+      preview.signature_status,
+      crate::domain::plugin_package::PackageSignatureStatus::Unsigned
+    );
+    assert_eq!(preview.publisher_trust, PublisherTrustState::Unsigned);
+    assert!(!preview.requires_publisher_approval);
+    assert!(preview.requires_unsigned_risk_acknowledgement);
+    assert!(!preview.requires_native_execution_risk_acknowledgement);
+    assert!(preview.publisher_key_id.is_empty());
+    assert!(!preview.claimed_publisher_key_id.is_empty());
+    assert!(preview.warnings.iter().any(|w| w.contains("not verified")));
+
+    let wasm = b"\0asm\x01\x00\x00\x00";
+    let mut manifest = sample_manifest(wasm);
+    manifest.publisher.key_id = VENDOR_PUBLISHER_KEY_ID.into();
+    let unsigned_vendor_claim = build_unsigned_package(&manifest, &[("artifacts/plugin.wasm", wasm.as_slice())]);
+    let claimed_src = dir.path().join("claimed.lnplugin");
+    std::fs::write(&claimed_src, unsigned_vendor_claim).unwrap();
+    let claimed_preview = service.preview_package(&claimed_src).unwrap();
+    assert_eq!(claimed_preview.publisher_trust, PublisherTrustState::Unsigned);
+    assert_eq!(claimed_preview.claimed_publisher_key_id, VENDOR_PUBLISHER_KEY_ID);
+    assert!(claimed_preview.publisher_key_id.is_empty());
+
+    let invalid = {
+      let manifest_bytes = serde_json::to_vec(&sample_manifest(wasm)).unwrap();
+      let mut cursor = std::io::Cursor::new(Vec::new());
+      {
+        let mut zip = zip::ZipWriter::new(&mut cursor);
+        let options = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        zip.start_file(MANIFEST_FILE_PATH, options).unwrap();
+        zip.write_all(&manifest_bytes).unwrap();
+        zip.start_file("artifacts/plugin.wasm", options).unwrap();
+        zip.write_all(wasm).unwrap();
+        zip.start_file(SIGNATURE_FILE_PATH, options).unwrap();
+        zip.write_all(&[0u8; 64]).unwrap();
+        zip.finish().unwrap();
+      }
+      cursor.into_inner()
+    };
+    let invalid_src = dir.path().join("invalid.lnplugin");
+    std::fs::write(&invalid_src, invalid).unwrap();
+    let err = service.preview_package(&invalid_src).unwrap_err();
+    assert!(err.to_string().to_lowercase().contains("signature") || format!("{err:?}").contains("SignatureInvalid"));
+  }
+
+  #[test]
+  fn unsigned_wasm_approve_requires_backend_risk_acknowledgement() {
+    let (dir, service) = setup();
+    let (pkg, digest) = valid_unsigned_package();
+    let src = dir.path().join("unsigned.lnplugin");
+    std::fs::write(&src, &pkg).unwrap();
+    let publisher_count_before = service.list_publishers().unwrap().len();
+
+    let preview = service.preview_package(&src).unwrap();
+    let err = service
+      .approve_package(ApprovePluginPackageInput {
+        preview_id: preview.preview_id.clone(),
+        approve_publisher: false,
+        publisher_public_key_hex: None,
+        acknowledge_permissions: false,
+        acknowledge_unsigned_package_risk: true,
+        acknowledge_native_execution_risk: false,
+      })
+      .unwrap_err();
+    assert!(err.to_string().contains("permissions"));
+
+    let preview = service.preview_package(&src).unwrap();
+    let err = service
+      .approve_package(ApprovePluginPackageInput {
+        preview_id: preview.preview_id,
+        approve_publisher: false,
+        publisher_public_key_hex: None,
+        acknowledge_permissions: true,
+        acknowledge_unsigned_package_risk: false,
+        acknowledge_native_execution_risk: false,
+      })
+      .unwrap_err();
+    assert!(err.to_string().contains("acknowledge_unsigned_package_risk"));
+
+    let preview = service.preview_package(&src).unwrap();
+    let err = service
+      .approve_package(ApprovePluginPackageInput {
+        preview_id: preview.preview_id,
+        approve_publisher: false,
+        publisher_public_key_hex: None,
+        acknowledge_permissions: true,
+        acknowledge_unsigned_package_risk: true,
+        acknowledge_native_execution_risk: true,
+      })
+      .unwrap_err();
+    assert!(err.to_string().contains("native"));
+
+    let preview = service.preview_package(&src).unwrap();
+    let installed = service
+      .approve_package(ApprovePluginPackageInput {
+        preview_id: preview.preview_id,
+        approve_publisher: false,
+        publisher_public_key_hex: None,
+        acknowledge_permissions: true,
+        acknowledge_unsigned_package_risk: true,
+        acknowledge_native_execution_risk: false,
+      })
+      .unwrap();
+    assert_eq!(installed.version.package_digest, digest);
+    assert_eq!(
+      installed.version.signature_status,
+      crate::domain::plugin_package::PackageSignatureStatus::Unsigned
+    );
+    assert!(installed.version.publisher_key_id.is_empty());
+    assert!(service.verify_installed_package_snapshot(&digest).is_ok());
+    assert_eq!(
+      service.list_publishers().unwrap().len(),
+      publisher_count_before,
+      "unsigned manifest claims must not create or mutate publisher trust rows"
+    );
+  }
+
+  #[test]
+  fn unsigned_wasm_execution_requires_package_ack_and_subject_grant() {
+    let (dir, service) = setup();
+    let (package, digest) = valid_unsigned_package();
+    let source = write_unsigned_archive(dir.path(), &package);
+    let preview = service.preview_package(&source).unwrap();
+    let installed = service
+      .approve_package(ApprovePluginPackageInput {
+        preview_id: preview.preview_id,
+        approve_publisher: false,
+        publisher_public_key_hex: None,
+        acknowledge_permissions: true,
+        acknowledge_unsigned_package_risk: true,
+        acknowledge_native_execution_risk: false,
+      })
+      .unwrap();
+    assert!(service.verify_installed_package_snapshot(&digest).is_ok());
+    let approval_id = Uuid::parse_str(&installed.approval_id).unwrap();
+    assert!(
+      service
+        .db
+        .read(|conn| plugin_package_approvals::get_execution_grant_set(conn, approval_id))
+        .unwrap()
+        .is_none(),
+      "package acknowledgement must not become a subject execution grant"
+    );
+    service
+      .db
+      .transaction(|uow| plugin_package_approvals::delete_for_package(uow.conn(), &digest))
+      .unwrap();
+    assert!(service.verify_installed_package_snapshot(&digest).is_err());
+  }
+
+  #[test]
+  fn unsigned_install_recovery_revalidates_status_digest_and_acknowledgement() {
+    let (dir, service) = setup();
+    let (package, digest) = valid_unsigned_package();
+    let source = write_unsigned_archive(dir.path(), &package);
+    let preview = service.preview_package(&source).unwrap();
+    service
+      .approve_package(ApprovePluginPackageInput {
+        preview_id: preview.preview_id,
+        approve_publisher: false,
+        publisher_public_key_hex: None,
+        acknowledge_permissions: true,
+        acknowledge_unsigned_package_risk: true,
+        acknowledge_native_execution_risk: false,
+      })
+      .unwrap();
+
+    let operation_id = new_id();
+    let staging = service.staging_root().join(operation_id.to_string());
+    std::fs::create_dir_all(service.staging_root()).unwrap();
+    std::fs::rename(service.store_package_dir(&digest), &staging).unwrap();
+    service
+      .db
+      .transaction(|uow| {
+        installed_plugin_versions::set_content_available(uow.conn(), &digest, false)?;
+        plugin_install_operations::insert_prepared(uow.conn(), operation_id, &staging.to_string_lossy())?;
+        plugin_install_operations::mark_verified(uow.conn(), operation_id, &digest)?;
+        plugin_install_operations::mark_db_committed(uow.conn(), operation_id)?;
+        Ok(())
+      })
+      .unwrap();
+    service.recover_install_operations().unwrap();
+    assert!(service.verify_installed_package_snapshot(&digest).is_ok());
+
+    let second_operation_id = new_id();
+    let second_staging = service.staging_root().join(second_operation_id.to_string());
+    std::fs::rename(service.store_package_dir(&digest), &second_staging).unwrap();
+    service
+      .db
+      .transaction(|uow| {
+        installed_plugin_versions::set_content_available(uow.conn(), &digest, false)?;
+        plugin_package_approvals::delete_for_package(uow.conn(), &digest)?;
+        plugin_install_operations::insert_prepared(uow.conn(), second_operation_id, &second_staging.to_string_lossy())?;
+        plugin_install_operations::mark_verified(uow.conn(), second_operation_id, &digest)?;
+        plugin_install_operations::mark_db_committed(uow.conn(), second_operation_id)?;
+        Ok(())
+      })
+      .unwrap();
+    service.recover_install_operations().unwrap();
+    let version = service
+      .db
+      .read(|conn| installed_plugin_versions::get(conn, &digest))
+      .unwrap();
+    assert!(
+      !version.content_available,
+      "recovery must not infer unsigned acknowledgement"
+    );
+    assert!(service.verify_installed_package_snapshot(&digest).is_err());
+  }
+
+  #[test]
+  fn signed_install_behavior_remains_signature_and_publisher_bound() {
+    let (dir, service) = setup();
+    let (pkg, digest) = valid_signed_package();
+    let src = dir.path().join("signed.lnplugin");
+    std::fs::write(&src, &pkg).unwrap();
+    let preview = service.preview_package(&src).unwrap();
+    assert_eq!(
+      preview.signature_status,
+      crate::domain::plugin_package::PackageSignatureStatus::Signed
+    );
+    assert!(!preview.requires_unsigned_risk_acknowledgement);
+    let err = service
+      .approve_package(ApprovePluginPackageInput {
+        preview_id: preview.preview_id.clone(),
+        approve_publisher: false,
+        publisher_public_key_hex: None,
+        acknowledge_permissions: true,
+        acknowledge_unsigned_package_risk: true,
+        acknowledge_native_execution_risk: false,
+      })
+      .unwrap_err();
+    assert!(err.to_string().contains("unsigned"));
+    let preview = service.preview_package(&src).unwrap();
+    let installed = service
+      .approve_package(ApprovePluginPackageInput {
+        preview_id: preview.preview_id,
+        approve_publisher: false,
+        publisher_public_key_hex: None,
+        acknowledge_permissions: true,
+        acknowledge_unsigned_package_risk: false,
+        acknowledge_native_execution_risk: false,
+      })
+      .unwrap();
+    assert_eq!(installed.version.package_digest, digest);
+    assert_eq!(
+      installed.version.signature_status,
+      crate::domain::plugin_package::PackageSignatureStatus::Signed
+    );
+  }
+
+  #[test]
+  fn vendor_bootstrap_rejects_unsigned_exact_digest_package() {
+    let (_dir, service) = setup();
+    let (pkg, _) = valid_unsigned_package();
+    let err = service.bootstrap_bundled_package(&pkg, true).unwrap_err();
+    assert!(err.to_string().contains("unsigned"));
+    assert!(service.list_versions().unwrap().is_empty());
+  }
+
+  #[test]
+  fn unsigned_wasm_reserved_first_party_ids_are_rejected() {
+    let (_dir, service) = setup();
+    let wasm = b"\0asm\x01\x00\x00\x00";
+    for id in RESERVED_FIRST_PARTY_WASM_PLUGIN_IDS {
+      let mut manifest = sample_manifest(wasm);
+      manifest.id = (*id).into();
+      let pkg = build_unsigned_package(&manifest, &[("artifacts/plugin.wasm", wasm.as_slice())]);
+      let src_dir = tempfile::tempdir().unwrap();
+      let src = src_dir.path().join("pkg.lnplugin");
+      std::fs::write(&src, pkg).unwrap();
+      let err = service.preview_package(&src).unwrap_err();
+      assert!(
+        err.to_string().contains("reserved") || err.to_string().contains(id),
+        "id {id} err={err}"
+      );
+    }
+    let mut manifest = sample_manifest(wasm);
+    manifest.id = "com.example.third-party".into();
+    let pkg = build_unsigned_package(&manifest, &[("artifacts/plugin.wasm", wasm.as_slice())]);
+    let src_dir = tempfile::tempdir().unwrap();
+    let src = src_dir.path().join("ok.lnplugin");
+    std::fs::write(&src, pkg).unwrap();
+    let preview = service.preview_package(&src).unwrap();
+    assert_eq!(preview.plugin_id, "com.example.third-party");
+  }
+
+  #[test]
+  fn project_installed_service_definitions_projects_acknowledged_unsigned_package() {
+    let (dir, service) = setup();
+    let publisher_count_before = service.list_publishers().unwrap().len();
+    let (pkg, digest) = valid_unsigned_package();
+    let src = write_unsigned_archive(dir.path(), &pkg);
+    let preview = service.preview_package(&src).unwrap();
+    service
+      .approve_package(ApprovePluginPackageInput {
+        preview_id: preview.preview_id,
+        approve_publisher: false,
+        publisher_public_key_hex: None,
+        acknowledge_permissions: true,
+        acknowledge_unsigned_package_risk: true,
+        acknowledge_native_execution_risk: false,
+      })
+      .unwrap();
+    assert!(service.verify_installed_package_snapshot(&digest).is_ok());
+    let definitions = service.project_installed_service_definitions().unwrap();
+    assert!(
+      definitions
+        .iter()
+        .any(|definition| definition.manifest.id == "com.example.unsigned"),
+      "acknowledged unsigned package must project into the service catalog"
+    );
+    assert_eq!(
+      service.list_publishers().unwrap().len(),
+      publisher_count_before,
+      "unsigned projection must not fabricate publisher rows"
+    );
+
+    // Removing the exact-digest unsigned approval makes projection skip the package.
+    service
+      .db
+      .transaction(|uow| plugin_package_approvals::delete_for_package(uow.conn(), &digest))
+      .unwrap();
+    let definitions = service.project_installed_service_definitions().unwrap();
+    assert!(
+      !definitions
+        .iter()
+        .any(|definition| definition.manifest.id == "com.example.unsigned"),
+      "unsigned package without exact-digest approval must not project"
+    );
+  }
+
+  #[test]
+  fn project_installed_service_definitions_skips_tampered_unsigned_package() {
+    let (dir, service) = setup();
+    let (pkg, digest) = valid_unsigned_package();
+    let src = write_unsigned_archive(dir.path(), &pkg);
+    let preview = service.preview_package(&src).unwrap();
+    service
+      .approve_package(ApprovePluginPackageInput {
+        preview_id: preview.preview_id,
+        approve_publisher: false,
+        publisher_public_key_hex: None,
+        acknowledge_permissions: true,
+        acknowledge_unsigned_package_risk: true,
+        acknowledge_native_execution_risk: false,
+      })
+      .unwrap();
+    assert!(service.verify_installed_package_snapshot(&digest).is_ok());
+
+    let archive = service.store_package_dir(&digest).join("package.lnplugin");
+    let archive_path = archive.clone();
+    #[cfg(windows)]
+    {
+      let mut permissions = std::fs::metadata(&archive_path).unwrap().permissions();
+      permissions.set_readonly(false);
+      std::fs::set_permissions(&archive_path, permissions).unwrap();
+    }
+    #[cfg(unix)]
+    {
+      use std::os::unix::fs::PermissionsExt;
+      const OWNER_READ_WRITE_MODE: u32 = 0o600;
+      std::fs::set_permissions(&archive_path, std::fs::Permissions::from_mode(OWNER_READ_WRITE_MODE)).unwrap();
+    }
+    let bytes = std::fs::read(&archive).unwrap();
+    let mut tampered = bytes.clone();
+    let last = tampered.len() - 1;
+    tampered[last] ^= 0x01;
+    std::fs::write(&archive, &tampered).unwrap();
+    assert!(service.verify_installed_package_snapshot(&digest).is_err());
+    let definitions = service.project_installed_service_definitions().unwrap();
+    assert!(
+      !definitions
+        .iter()
+        .any(|definition| definition.manifest.id == "com.example.unsigned"),
+      "tampered unsigned package must not project"
+    );
+
+    let content = service.store_package_dir(&digest).join("content/artifacts/plugin.wasm");
+    std::fs::write(&archive, &bytes).unwrap();
+    #[cfg(windows)]
+    {
+      let mut permissions = std::fs::metadata(&content).unwrap().permissions();
+      permissions.set_readonly(false);
+      std::fs::set_permissions(&content, permissions).unwrap();
+    }
+    std::fs::write(&content, b"\0asm\x01\x00\x00\x00-tampered").unwrap();
+    assert!(service.verify_installed_package_snapshot(&digest).is_err());
+    let definitions = service.project_installed_service_definitions().unwrap();
+    assert!(
+      !definitions
+        .iter()
+        .any(|definition| definition.manifest.id == "com.example.unsigned"),
+      "tampered extracted content must not project"
+    );
+  }
+
+  #[test]
+  fn project_installed_service_definitions_supports_unsigned_package_first_default() {
+    use crate::domain::default_package_activation::AuthorizeDefaultPluginPackageInput;
+    use crate::services::default_package_activation::DefaultPackageActivationService;
+    let (dir, service) = setup();
+    let activation = DefaultPackageActivationService::create(service.db.clone(), service.clone(), dir.path());
+    let (pkg, digest) = valid_unsigned_package();
+    let src = write_unsigned_archive(dir.path(), &pkg);
+    let preview = service.preview_package(&src).unwrap();
+    service
+      .approve_package(ApprovePluginPackageInput {
+        preview_id: preview.preview_id,
+        approve_publisher: false,
+        publisher_public_key_hex: None,
+        acknowledge_permissions: true,
+        acknowledge_unsigned_package_risk: true,
+        acknowledge_native_execution_risk: false,
+      })
+      .unwrap();
+
+    // User-confirmed default activation still requires the unsigned default-risk
+    // acknowledgement; the projected definition only becomes a default after it.
+    let default_preview = activation.preview_default_package_activation(&digest).unwrap();
+    assert!(default_preview.requires_unsigned_default_risk_acknowledgement);
+    let err = activation
+      .authorize_default_plugin_package(AuthorizeDefaultPluginPackageInput {
+        preview_id: default_preview.preview_id.clone(),
+        acknowledge_future_instance_authority: false,
+        acknowledge_unsigned_default_risk: true,
+      })
+      .unwrap_err();
+    assert!(err.to_string().contains("future-instance authority"));
+    let default_preview = activation.preview_default_package_activation(&digest).unwrap();
+    let err = activation
+      .authorize_default_plugin_package(AuthorizeDefaultPluginPackageInput {
+        preview_id: default_preview.preview_id,
+        acknowledge_future_instance_authority: true,
+        acknowledge_unsigned_default_risk: false,
+      })
+      .unwrap_err();
+    assert!(err.to_string().contains("unsigned"));
+    let default_preview = activation.preview_default_package_activation(&digest).unwrap();
+    activation
+      .authorize_default_plugin_package(AuthorizeDefaultPluginPackageInput {
+        preview_id: default_preview.preview_id,
+        acknowledge_future_instance_authority: true,
+        acknowledge_unsigned_default_risk: true,
+      })
+      .unwrap();
+    assert_eq!(
+      activation.authorization_status("com.example.unsigned").unwrap(),
+      crate::domain::default_package_activation::DefaultPackageAuthorizationStatus::Authorized
+    );
+
+    let definitions = service.project_installed_service_definitions().unwrap();
+    assert!(
+      definitions
+        .iter()
+        .any(|definition| definition.manifest.id == "com.example.unsigned"),
+      "unsigned package-first default must still project through the installed snapshot"
+    );
   }
 }

@@ -1,5 +1,6 @@
 // ABOUTME: Always-on-top Quick Translate secondary window builder.
 // ABOUTME: Cursor-follow show, click-outside hide, clipboard paste, and source-text delivery.
+#![allow(dead_code)]
 
 use crate::consts;
 use serde::Serialize;

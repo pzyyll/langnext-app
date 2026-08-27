@@ -23,7 +23,7 @@ import { useToast } from "../../components/toast/useToast";
 import { updateModelConfig } from "../../storage/client";
 import { getIpcErrorMessage } from "../../storage/errors";
 import type { CapabilityOverridesV1, ProviderModelDto } from "../../storage/types";
-import { getAdapterLabel, listAdapterOptions } from "./adapterOptions";
+import { getAdapterLabel } from "./adapterOptions";
 import { resolveInheritApiTypeLabelKey } from "./modelApiTypeDisplay";
 
 const TOKEN_MIN = 1;
@@ -107,7 +107,7 @@ function EditModelConfigForm({ model, runtimeAdapterOptions = [], onSaved }: Edi
   const toast = useToast();
   const initial = useMemo(() => formStateFromModel(model), [model]);
   // Registered plugins are fixed at module load; options are stable for the dialog's lifetime.
-  const adapterOptions = useMemo(() => [...listAdapterOptions(), ...runtimeAdapterOptions], [runtimeAdapterOptions]);
+  const adapterOptions = useMemo(() => runtimeAdapterOptions, [runtimeAdapterOptions]);
 
   const [displayNameOverride, setDisplayNameOverride] = useState(initial.displayNameOverride);
   const [adapterId, setAdapterId] = useState(initial.adapterId);

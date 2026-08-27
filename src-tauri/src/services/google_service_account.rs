@@ -15,7 +15,9 @@ use crate::services::bounded_http::{
   DestinationPolicy, PreparedHttpRequest, RawHttpTransport, RequestBody, ReqwestRawHttpTransport, build_endpoint,
   with_cancel,
 };
-use crate::services::token_grant::{ExchangedToken, GoogleTokenExchanger};
+use crate::services::token_grant::{
+  ExchangedToken, GOOGLE_SERVICE_ACCOUNT_AUTH_DRIVER_ID, TokenExchanger, TokenInjectionKind,
+};
 use crate::storage::Database;
 use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use serde::{Deserialize, Serialize};
@@ -130,7 +132,15 @@ impl GoogleServiceAccountExchanger {
   }
 }
 
-impl GoogleTokenExchanger for GoogleServiceAccountExchanger {
+impl TokenExchanger for GoogleServiceAccountExchanger {
+  fn driver_id(&self) -> &'static str {
+    GOOGLE_SERVICE_ACCOUNT_AUTH_DRIVER_ID
+  }
+
+  fn injection_kind(&self) -> TokenInjectionKind {
+    TokenInjectionKind::BearerHeader
+  }
+
   fn exchange(
     &self,
     instance_id: Uuid,
@@ -434,6 +444,26 @@ NjalgaoygklqOixtOd+LT7/9IC4O07nG9mbTV1bK7vLryUr4YNMBJJ99vfogwLBW
 F91NhBYyyc/NJWl83dBkI/I=
 -----END PRIVATE KEY-----";
 
+  // Matching public key for the fixed RSA test key (not a real secret).
+  const TEST_PUBLIC_KEY: &str = "-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqqzgYifAXCunn0bDsAJZ
+B1fXSR1yV3PJFcxlQy1DgIL9j5wvZQ8lE4Wbl2fA+Z6J4IMfdXMiyzN9Ynrdqpry
+EzChtMgP2kw3RJn0WsMLt9Pg+BD9o0VXketUIFbI7BEL7KeWf7ffzTvlpLVKNwBV
+W3TOoIYdR1iATJuNbjwRAV1ten2h+k4HlsixFijbwUxP/EhM3tAd8dc7OC7aZorA
+J2sfL3JeQrHc9aospMMHRQFytMtZ76yY1bajL/Kr7qyxkgXXcV8l1rp9G2y9XDUW
+wYpspdC1gfpSNSUuy2gNoy2dZAom5aHWmGvuKfLsiONnVqix8fg4z2AP8unbjbUM
+CQIDAQAB
+-----END PUBLIC KEY-----";
+
+  #[derive(Debug, serde::Deserialize)]
+  struct TestDecodedClaims {
+    iss: String,
+    scope: String,
+    aud: String,
+    exp: u64,
+    iat: u64,
+  }
+
   fn valid_sa_json() -> String {
     serde_json::json!({
       "type": "service_account",
@@ -495,6 +525,37 @@ F91NhBYyyc/NJWl83dBkI/I=
     assert!(!format!("{err:?}").contains(&jwt));
   }
 
+  #[test]
+  fn google_service_account_signs_verified_rs256_assertion() {
+    let account = parse_service_account_json(&valid_sa_json()).unwrap();
+    let now = 1_700_000_000u64;
+    let scopes = vec![
+      "https://www.googleapis.com/auth/cloud-translation".to_string(),
+      "https://www.googleapis.com/auth/cloud-platform".to_string(),
+    ];
+    let jwt = sign_service_account_jwt(&account, &scopes, now).unwrap();
+
+    let header = jsonwebtoken::decode_header(&jwt).unwrap();
+    assert_eq!(header.alg, Algorithm::RS256);
+
+    // Signature verifies against the fixed matching RSA public key.
+    let public_key = jsonwebtoken::DecodingKey::from_rsa_pem(TEST_PUBLIC_KEY.as_bytes()).unwrap();
+    let mut validation = jsonwebtoken::Validation::new(Algorithm::RS256);
+    validation.validate_exp = false;
+    validation.validate_aud = false;
+    validation.required_spec_claims = std::collections::HashSet::new();
+    let token = jsonwebtoken::decode::<TestDecodedClaims>(&jwt, &public_key, &validation).unwrap();
+
+    assert_eq!(token.claims.iss, "bot@example.iam.gserviceaccount.com");
+    assert_eq!(
+      token.claims.scope,
+      "https://www.googleapis.com/auth/cloud-translation https://www.googleapis.com/auth/cloud-platform"
+    );
+    assert_eq!(token.claims.aud, GOOGLE_OAUTH_TOKEN_URI);
+    assert_eq!(token.claims.iat, now);
+    assert_eq!(token.claims.exp, now + GOOGLE_JWT_ASSERTION_LIFETIME_SECS);
+  }
+
   struct ScriptedTransport {
     responses: Mutex<Vec<Result<BoundedHttpResponse, StorageError>>>,
     last_body: Mutex<Option<String>>,
@@ -537,7 +598,20 @@ F91NhBYyyc/NJWl83dBkI/I=
   }
 
   fn seed_instance(db: &Database, vault: &MemoryCredentialVault, sa_json: &str) -> Uuid {
-    let registry = ServiceIntegrationRegistry::bundled().unwrap();
+    let manifest = crate::domain::service_integration::ServiceIntegrationManifest {
+      manifest_version: 1,
+      plugin_api_version: "1.0".into(),
+      id: GOOGLE_CLOUD_PLUGIN_ID.into(),
+      version: "1.2.0".into(),
+      display_name_key: "google-cloud".into(),
+      min_host_version: "0.1.0".into(),
+      config_schema_version: 1,
+      credential_slots: vec![],
+      endpoints: vec![],
+      capabilities: vec![],
+    };
+    let mut registry = ServiceIntegrationRegistry::empty();
+    registry.register_test_manifest(manifest);
     let manifest = registry.get(GOOGLE_CLOUD_PLUGIN_ID).unwrap();
     let id = new_id();
     let now = now_rfc3339();
@@ -563,10 +637,10 @@ F91NhBYyyc/NJWl83dBkI/I=
           health_status: IntegrationHealthStatus::Unvalidated,
           last_validated_at: None,
           last_error_code: None,
-          runtime_kind: "bundled-rust".into(),
-          package_digest: None,
+          runtime_kind: "wasm-component".into(),
+          package_digest: Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into()),
           execution_grant_set_revision: None,
-          runtime_state: "active".into(),
+          runtime_state: "pending_activation".into(),
           runtime_error_code: None,
           runtime_error_message: None,
           runtime_requirement_json: None,
@@ -641,7 +715,7 @@ F91NhBYyyc/NJWl83dBkI/I=
       vault,
       transport.clone(),
     ));
-    let service = TokenGrantService::new(exchanger);
+    let service = TokenGrantService::new(vec![exchanger]).unwrap();
     let grant = service
       .acquire(
         TokenGrantRequest {

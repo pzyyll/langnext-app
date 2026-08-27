@@ -42,7 +42,7 @@ const {
 
 function sampleDocument(): ConfigurationExport {
   return {
-    formatVersion: 7,
+    formatVersion: 8,
     exportedAt: "2026-01-01T00:00:00Z",
     providers: [],
     models: [],
@@ -97,13 +97,14 @@ function validPreview(): ImportPreview {
 describe("parseConfigurationExportJson", () => {
   test("accepts a minimal valid document shape", () => {
     const doc = parseConfigurationExportJson(JSON.stringify(sampleDocument()));
-    expect(doc.formatVersion).toBe(7);
+    expect(doc.formatVersion).toBe(8);
   });
 
-  test("accepts supported legacy formatVersion 2–6 envelopes", () => {
-    for (const formatVersion of [2, 3, 4, 5, 6]) {
-      const doc = parseConfigurationExportJson(JSON.stringify({ ...sampleDocument(), formatVersion }));
-      expect(doc.formatVersion).toBe(formatVersion);
+  test("rejects unsupported formatVersion 2–7 envelopes", () => {
+    for (const formatVersion of [2, 3, 4, 5, 6, 7]) {
+      expect(() => parseConfigurationExportJson(JSON.stringify({ ...sampleDocument(), formatVersion }))).toThrow(
+        /unsupported formatVersion/,
+      );
     }
   });
 

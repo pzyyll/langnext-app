@@ -1,1 +1,6 @@
-[]
+[
+  {
+    "keyId": "com.langnext.vendor.keys.1",
+    "publicKeyHex": "0ba418867ab037e1147a17abb9591abf89aa664d08da14dfb94265657d752acd"
+  }
+]

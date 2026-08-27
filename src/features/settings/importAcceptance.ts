@@ -22,51 +22,29 @@ export const IMPORT_INVALIDATION_KEYS = [
   settingsKeys.all,
 ] as const;
 
+type ImportAuthPreview = Pick<
+  ImportPreview,
+  "requiresAuthentication" | "integrationRequiresAuthentication" | "proxyRequiresAuthentication"
+>;
+
 /** True when imported providers or integration instances need credential re-entry. */
-export function importRequiresAuthentication(
-  preview: Pick<
-    ImportPreview,
-    | "requiresAuthentication"
-    | "integrationRequiresAuthentication"
-    | "ocrRequiresAuthentication"
-    | "proxyRequiresAuthentication"
-  >,
-): boolean {
+export function importRequiresAuthentication(preview: ImportAuthPreview): boolean {
   const integrationNeedsAuth = (preview.integrationRequiresAuthentication ?? []).length > 0;
-  const ocrNeedsAuth = (preview.ocrRequiresAuthentication ?? []).length > 0;
-  return (
-    preview.requiresAuthentication.length > 0 ||
-    integrationNeedsAuth ||
-    ocrNeedsAuth ||
-    preview.proxyRequiresAuthentication
-  );
+  return preview.requiresAuthentication.length > 0 || integrationNeedsAuth || preview.proxyRequiresAuthentication;
 }
 
 /**
  * Choose the safe re-auth toast description after import.
  * Prefer the integration-specific copy when only integrations need credentials.
  */
-export function importAuthWarningKind(
-  preview: Pick<
-    ImportPreview,
-    | "requiresAuthentication"
-    | "integrationRequiresAuthentication"
-    | "ocrRequiresAuthentication"
-    | "proxyRequiresAuthentication"
-  >,
-): "none" | "providers" | "integrations" | "ocr" | "mixed" {
+export function importAuthWarningKind(preview: ImportAuthPreview): "none" | "providers" | "integrations" | "mixed" {
   const providersNeedAuth = preview.requiresAuthentication.length > 0 || preview.proxyRequiresAuthentication;
   const integrationsNeedAuth = (preview.integrationRequiresAuthentication ?? []).length > 0;
-  const ocrNeedsAuth = (preview.ocrRequiresAuthentication ?? []).length > 0;
-  const kindCount = [providersNeedAuth, integrationsNeedAuth, ocrNeedsAuth].filter(Boolean).length;
-  if (kindCount > 1) {
+  if (providersNeedAuth && integrationsNeedAuth) {
     return "mixed";
   }
   if (integrationsNeedAuth) {
     return "integrations";
-  }
-  if (ocrNeedsAuth) {
-    return "ocr";
   }
   if (providersNeedAuth) {
     return "providers";

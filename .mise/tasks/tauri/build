@@ -7,5 +7,9 @@ set -euo pipefail
 root="$(cd "$(dirname "$0")/../../.." && pwd)"
 cd "$root"
 
+# Gate A is mandatory for every packaged build. Do not add a skip flag: packaging fails closed
+# unless release-owned public roots, signed archives, and exact policies verify.
+mise run plugin:verify-release-bundle
+
 tauri build "$@"
 node scripts/package-portable.js

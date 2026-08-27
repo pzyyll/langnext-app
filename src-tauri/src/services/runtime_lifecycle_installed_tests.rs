@@ -20,13 +20,13 @@ use crate::domain::service_integration::{
 use crate::domain::settings::AppSettingsV1;
 use crate::domain::time::{new_id, now_rfc3339};
 use crate::error::StorageError;
-use crate::repositories::{integration_instances, plugin_upgrade_snapshots};
+use crate::repositories::{integration_instances, plugin_package_approvals, plugin_upgrade_snapshots};
 use crate::services::import_validation::build_validated_plan;
 use crate::services::plugin_package::{hash_archive_bytes, public_sha256_hex};
 use crate::services::plugin_store::PluginPackageService;
 use crate::services::runtime_lifecycle::{RuntimeLifecycleService, UpgradeApplyFault};
 use crate::services::runtime_router::RuntimeRouter;
-use crate::services::service_capabilities::{ServiceCapabilityRegistry, ServiceCapabilityService};
+use crate::services::service_capabilities::ServiceCapabilityService;
 use crate::services::service_integration_registry::ServiceIntegrationRegistry;
 use crate::services::token_grant::TokenGrantService;
 use crate::services::vendor_trust::VENDOR_PUBLISHER_KEY_ID;
@@ -90,29 +90,25 @@ fn setup() -> (
   db.initialize().unwrap();
   let packages =
     PluginPackageService::with_vendor_roots(db.clone(), dir.path().to_path_buf(), vec![fixture_vendor_public_key()]);
-  let mut registry = ServiceIntegrationRegistry::bundled().unwrap();
+  let mut registry = ServiceIntegrationRegistry::empty();
   registry.register_test_manifest(conformance_manifest(TRANSLATE_PLUGIN_ID, TRANSLATE_CAP));
   registry.register_test_manifest(conformance_manifest(DETECT_PLUGIN_ID, DETECT_CAP));
   let registry = Arc::new(registry);
   let wasm = Arc::new(WasmRuntime::new().unwrap());
   // Minimal token service for cache eviction wiring (no vault needed for empty grants).
-  let tokens = Arc::new(TokenGrantService::new(Arc::new(
-    crate::services::google_service_account::GoogleServiceAccountExchanger::new(
-      db.clone(),
-      Arc::new(crate::credentials::MemoryCredentialVault::default()),
-    ),
-  )));
+  let tokens = Arc::new(
+    TokenGrantService::new(vec![Arc::new(
+      crate::services::google_service_account::GoogleServiceAccountExchanger::new(
+        db.clone(),
+        Arc::new(crate::credentials::MemoryCredentialVault::default()),
+      ),
+    )])
+    .unwrap(),
+  );
   let lifecycle =
     RuntimeLifecycleService::new(db.clone(), packages.clone(), registry.clone()).with_runtime(wasm.clone(), tokens);
-  let handlers = Arc::new(ServiceCapabilityRegistry::new());
-  let router = RuntimeRouter::new(
-    db.clone(),
-    registry.clone(),
-    handlers.clone(),
-    packages.clone(),
-    wasm.clone(),
-  );
-  let caps = ServiceCapabilityService::new(db.clone(), registry, handlers).with_router(router, wasm);
+  let router = RuntimeRouter::new(db.clone(), registry.clone(), packages.clone(), wasm.clone());
+  let caps = ServiceCapabilityService::new(db.clone(), registry).with_router(router, wasm);
   (dir, db, packages, lifecycle, caps)
 }
 
@@ -231,6 +227,7 @@ fn build_signed_package(
       auth_policies: vec!["host.none.v1".into()],
     },
     ui: Default::default(),
+    path_authority: vec![],
     provider_runtime: None,
     model_resources: None,
   };
@@ -260,6 +257,32 @@ fn build_signed_package(
   (pkg, digest)
 }
 
+fn strip_signature_for_unsigned_fixture(signed: &[u8]) -> Vec<u8> {
+  let mut archive = zip::ZipArchive::new(std::io::Cursor::new(signed)).unwrap();
+  let mut entries = Vec::new();
+  for index in 0..archive.len() {
+    let mut file = archive.by_index(index).unwrap();
+    if file.name() == SIGNATURE_FILE_PATH {
+      continue;
+    }
+    let name = file.name().to_string();
+    let mut bytes = Vec::new();
+    std::io::Read::read_to_end(&mut file, &mut bytes).unwrap();
+    entries.push((name, bytes));
+  }
+  let mut cursor = std::io::Cursor::new(Vec::new());
+  {
+    let mut output = zip::ZipWriter::new(&mut cursor);
+    let options = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for (name, bytes) in entries {
+      output.start_file(name, options).unwrap();
+      output.write_all(&bytes).unwrap();
+    }
+    output.finish().unwrap();
+  }
+  cursor.into_inner()
+}
+
 fn install_package(packages: &PluginPackageService, dir: &std::path::Path, bytes: &[u8], set_default: bool) -> String {
   let src = dir.join(format!("{}.lnplugin", new_id()));
   std::fs::write(&src, bytes).unwrap();
@@ -270,6 +293,8 @@ fn install_package(packages: &PluginPackageService, dir: &std::path::Path, bytes
       approve_publisher: false,
       publisher_public_key_hex: None,
       acknowledge_permissions: true,
+      acknowledge_unsigned_package_risk: preview.requires_unsigned_risk_acknowledgement,
+      acknowledge_native_execution_risk: false,
     })
     .unwrap();
   let digest = result.version.package_digest;
@@ -298,10 +323,10 @@ fn seed_instance(db: &Database, plugin_id: &str, plugin_version: &str, config_js
         health_status: IntegrationHealthStatus::Ready,
         last_validated_at: None,
         last_error_code: None,
-        runtime_kind: "bundled-rust".into(),
-        package_digest: None,
+        runtime_kind: "wasm-component".into(),
+        package_digest: Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into()),
         execution_grant_set_revision: None,
-        runtime_state: "active".into(),
+        runtime_state: "pending_activation".into(),
         runtime_error_code: None,
         runtime_error_message: None,
         runtime_requirement_json: None,
@@ -395,6 +420,49 @@ fn runtime_upgrade_apply_failure_injection_leaves_source_unchanged() {
     assert_eq!(after.updated_at, source_updated);
     assert_eq!(after.config_json, source_config);
   }
+}
+
+#[test]
+fn unsigned_integration_upgrade_apply_and_rollback_revalidate_exact_digest() {
+  let (dir, db, packages, lifecycle, _caps) = setup();
+  let (signed, _) = build_signed_package(
+    TRANSLATE_PLUGIN_ID,
+    "1.0.0",
+    TRANSLATE_WASM,
+    "artifacts/plugin.wasm",
+    &[TRANSLATE_CAP],
+    None,
+    true,
+  );
+  let unsigned = strip_signature_for_unsigned_fixture(&signed);
+  let digest = install_package(&packages, dir.path(), &unsigned, false);
+  let instance_id = seed_instance(
+    &db,
+    TRANSLATE_PLUGIN_ID,
+    "1.0.0",
+    r#"{"mode":"success","label":"before"}"#,
+    1,
+  );
+  activate(&lifecycle, instance_id, &digest, true).unwrap();
+  let active = db.read(|conn| integration_instances::get(conn, instance_id)).unwrap();
+  assert_eq!(active.package_digest.as_deref(), Some(digest.as_str()));
+  assert_eq!(active.runtime_kind, "wasm-component");
+
+  let preview = lifecycle.preview_upgrade(instance_id, &digest).unwrap();
+  db.transaction(|uow| plugin_package_approvals::delete_for_package(uow.conn(), &digest))
+    .unwrap();
+  assert!(
+    lifecycle
+      .apply_upgrade(ApplyRuntimeUpgradeInput {
+        preview_id: preview.preview_id,
+        acknowledge_permissions: true,
+      })
+      .is_err(),
+    "final apply recheck must reject a removed exact-digest acknowledgement"
+  );
+  let unchanged = db.read(|conn| integration_instances::get(conn, instance_id)).unwrap();
+  assert_eq!(unchanged.package_digest.as_deref(), Some(digest.as_str()));
+  assert_eq!(unchanged.runtime_kind, "wasm-component");
 }
 
 #[test]
@@ -705,7 +773,7 @@ fn runtime_compatible_migration_translate_detect_upgrade_rollback_uninstall() {
 }
 
 #[test]
-fn runtime_plugin_export_v7_missing_package_restores_unresolved_exact_requirement() {
+fn runtime_plugin_export_v8_missing_package_restores_unresolved_exact_requirement() {
   let dir = tempfile::tempdir().unwrap();
   let db = Database::new(dir.path()).unwrap();
   db.initialize().unwrap();
@@ -725,7 +793,7 @@ fn runtime_plugin_export_v7_missing_package_restores_unresolved_exact_requiremen
     provider_package_digest: None,
   };
   let doc = ConfigurationExport {
-    format_version: 7,
+    format_version: 8,
     exported_at: now_rfc3339(),
     providers: vec![],
     models: vec![],
@@ -752,7 +820,7 @@ fn runtime_plugin_export_v7_missing_package_restores_unresolved_exact_requiremen
   };
   let normalized = parse_and_normalize_export_document(serde_json::to_value(&doc).unwrap()).unwrap();
   let plan = db
-    .read(|conn| build_validated_plan(conn, &normalized, ImportConflictMode::Merge))
+    .read(|conn| build_validated_plan(conn, &normalized, ImportConflictMode::Merge, None))
     .unwrap();
   assert!(plan.preview.valid, "{:?}", plan.preview.validation_errors);
   let row = &plan.integrations[0];
@@ -976,8 +1044,8 @@ fn runtime_upgrade_preview_fails_closed_when_source_package_version_missing() {
         last_error_code: None,
         runtime_kind: "wasm-component".into(),
         package_digest: Some("a".repeat(64)),
-        execution_grant_set_revision: None,
-        runtime_state: "unavailable".into(),
+        execution_grant_set_revision: Some(1),
+        runtime_state: "active".into(),
         runtime_error_code: None,
         runtime_error_message: None,
         runtime_requirement_json: None,
@@ -991,8 +1059,8 @@ fn runtime_upgrade_preview_fails_closed_when_source_package_version_missing() {
   let before = db.read(|conn| integration_instances::get(conn, id)).unwrap();
   let err = lifecycle.preview_upgrade(id, &digest_target).unwrap_err();
   assert!(
-    matches!(err, StorageError::PluginUnavailable(_)),
-    "expected fail-closed PluginUnavailable, got {err:?}"
+    matches!(err, StorageError::PluginUnavailable(_) | StorageError::NotFound(_)),
+    "expected fail-closed missing-source error, got {err:?}"
   );
   let after = db.read(|conn| integration_instances::get(conn, id)).unwrap();
   assert_eq!(after.package_digest, before.package_digest);
@@ -1000,7 +1068,7 @@ fn runtime_upgrade_preview_fails_closed_when_source_package_version_missing() {
 }
 
 #[test]
-fn runtime_upgrade_preview_fails_closed_when_bundled_registry_definition_missing() {
+fn runtime_upgrade_preview_from_pending_missing_source_to_matching_package_succeeds() {
   let (dir, db, packages, lifecycle, _caps) = setup();
   // Target package for a plugin id that is NOT in the bundled registry.
   let missing_plugin_id = "langnext.conformance.missing";
@@ -1014,17 +1082,13 @@ fn runtime_upgrade_preview_fails_closed_when_bundled_registry_definition_missing
     true,
   );
   install_package(&packages, dir.path(), &pkg_target, false);
-  // Bundled-rust instance whose plugin definition is absent from the host registry.
   let id = seed_instance(&db, missing_plugin_id, "1.0.0", r#"{"mode":"success"}"#, 1);
-  let err = lifecycle.preview_upgrade(id, &digest_target).unwrap_err();
-  assert!(
-    matches!(err, StorageError::PluginUnavailable(_)),
-    "expected fail-closed PluginUnavailable, got {err:?}"
-  );
+  let preview = lifecycle.preview_upgrade(id, &digest_target).unwrap();
+  assert_eq!(preview.target.package_digest.as_deref(), Some(digest_target.as_str()));
 }
 
 #[test]
-fn pin_default_skips_non_google_web_plugin_leaves_bundled_rust() {
+fn pin_default_skips_non_google_web_plugin_without_auto_activating() {
   let (dir, db, packages, lifecycle, _caps) = setup();
   // A non-Google-Web plugin set as its catalog default must never be auto-pinned/acknowledged.
   let (pkg, _digest) = build_signed_package(
@@ -1038,12 +1102,11 @@ fn pin_default_skips_non_google_web_plugin_leaves_bundled_rust() {
   );
   install_package(&packages, dir.path(), &pkg, true);
   let id = seed_instance(&db, TRANSLATE_PLUGIN_ID, "1.0.0", r#"{"mode":"success"}"#, 1);
+  let before = db.read(|conn| integration_instances::get(conn, id)).unwrap();
   lifecycle.pin_default_package_for_new_instance(id).unwrap();
   let after = db.read(|conn| integration_instances::get(conn, id)).unwrap();
-  assert_eq!(after.runtime_kind, "bundled-rust");
-  assert!(
-    after.package_digest.is_none(),
-    "non-Google-Web plugin must not be auto-pinned"
-  );
+  assert_eq!(after.runtime_kind, "wasm-component");
+  assert_eq!(after.package_digest, before.package_digest);
   assert!(after.execution_grant_set_revision.is_none());
+  assert_eq!(after.runtime_state, "pending_activation");
 }

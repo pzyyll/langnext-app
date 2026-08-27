@@ -166,7 +166,7 @@ mod tests {
       &package_a(),
       &artifact_a(),
       "1.0",
-      "47.0.2",
+      "47.0.3",
       42,
       "x86_64-unknown-windows",
     );
@@ -174,7 +174,7 @@ mod tests {
       &package_a(),
       &artifact_a(),
       "1.0",
-      "47.0.2",
+      "47.0.3",
       42,
       "x86_64-unknown-windows",
     );
@@ -188,7 +188,7 @@ mod tests {
       &package_a(),
       &artifact_a(),
       "1.0",
-      "47.0.2",
+      "47.0.3",
       42,
       "x86_64-unknown-windows",
     );
@@ -196,40 +196,6 @@ mod tests {
       base,
       component_cache_identity(
         &package_b(),
-        &artifact_a(),
-        "1.0",
-        "47.0.2",
-        42,
-        "x86_64-unknown-windows"
-      )
-    );
-    assert_ne!(
-      base,
-      component_cache_identity(
-        &package_a(),
-        &artifact_b(),
-        "1.0",
-        "47.0.2",
-        42,
-        "x86_64-unknown-windows"
-      ),
-      "same package with a different artifact digest must isolate cache entries"
-    );
-    assert_ne!(
-      base,
-      component_cache_identity(
-        &package_a(),
-        &artifact_a(),
-        "2.0",
-        "47.0.2",
-        42,
-        "x86_64-unknown-windows"
-      )
-    );
-    assert_ne!(
-      base,
-      component_cache_identity(
-        &package_a(),
         &artifact_a(),
         "1.0",
         "47.0.3",
@@ -241,16 +207,50 @@ mod tests {
       base,
       component_cache_identity(
         &package_a(),
+        &artifact_b(),
+        "1.0",
+        "47.0.3",
+        42,
+        "x86_64-unknown-windows"
+      ),
+      "same package with a different artifact digest must isolate cache entries"
+    );
+    assert_ne!(
+      base,
+      component_cache_identity(
+        &package_a(),
+        &artifact_a(),
+        "2.0",
+        "47.0.3",
+        42,
+        "x86_64-unknown-windows"
+      )
+    );
+    assert_ne!(
+      base,
+      component_cache_identity(
+        &package_a(),
         &artifact_a(),
         "1.0",
-        "47.0.2",
+        "47.0.4",
+        42,
+        "x86_64-unknown-windows"
+      )
+    );
+    assert_ne!(
+      base,
+      component_cache_identity(
+        &package_a(),
+        &artifact_a(),
+        "1.0",
+        "47.0.3",
         43,
         "x86_64-unknown-windows"
       )
     );
     assert_ne!(
       base,
-      component_cache_identity(&package_a(), &artifact_a(), "1.0", "47.0.2", 42, "aarch64-apple-darwin")
+      component_cache_identity(&package_a(), &artifact_a(), "1.0", "47.0.3", 42, "aarch64-apple-darwin")
     );
   }
 
@@ -261,7 +261,7 @@ mod tests {
       &package_a(),
       &artifact_a(),
       "1.0",
-      "47.0.2",
+      "47.0.3",
       1,
       "x86_64-unknown-windows",
     );
@@ -278,7 +278,7 @@ mod tests {
       &package_a(),
       &artifact_a(),
       "1.0",
-      "47.0.2",
+      "47.0.3",
       1,
       "x86_64-unknown-windows",
     );
@@ -286,7 +286,7 @@ mod tests {
       &package_b(),
       &artifact_a(),
       "1.0",
-      "47.0.2",
+      "47.0.3",
       1,
       "x86_64-unknown-windows",
     );
@@ -294,7 +294,7 @@ mod tests {
       &PackageDigest::parse("2222222222222222222222222222222222222222222222222222222222222222").unwrap(),
       &artifact_a(),
       "1.0",
-      "47.0.2",
+      "47.0.3",
       1,
       "x86_64-unknown-windows",
     );
@@ -317,7 +317,7 @@ mod tests {
       &package_a(),
       &artifact_a(),
       "1.0",
-      "47.0.2",
+      "47.0.3",
       1,
       "x86_64-unknown-windows",
     );

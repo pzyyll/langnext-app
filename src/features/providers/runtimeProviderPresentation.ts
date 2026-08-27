@@ -9,31 +9,29 @@ import type {
 } from "../../storage/types";
 
 /** Short localized status label keys; the UI resolves these through i18n. */
-export type ProviderRuntimeStateLabelKey = "legacy" | "activeRuntime" | "unavailableRuntime" | "pendingActivation";
+export type ProviderRuntimeStateLabelKey = "activeRuntime" | "unavailableRuntime" | "pendingActivation";
 
 /** Sanitized runtime presentation: never package bytes, grants, snapshots, or secret material. */
 export interface ProviderRuntimePresentation {
   labelKey: ProviderRuntimeStateLabelKey;
   runtimeKind: ProviderRuntimeKind;
-  /** Catalog package version for the bound package; null for legacy or missing entries. */
+  /** Catalog package version for the bound package; null when package metadata is missing. */
   version: string | null;
   state: ProviderRuntimeState;
   /** True when Get Models, connection tests, and other ready-runtime actions must stay disabled. */
   disableReadyActions: boolean;
   actions: {
-    /** Preview an upgrade is possible only from a legacy binding with a matching catalog package. */
-    canPreview: boolean;
     /** A pending activation can be applied. */
     canApply: boolean;
-    /** A package binding can be rolled back to the legacy executor. */
+    /** A package binding can be rolled back to a retained prior package version. */
     canRollback: boolean;
   };
 }
 
 /**
  * Map one provider's sanitized runtime binding to a safe status view.
- * `catalogEntry` must be the catalog entry matching the binding's package digest
- * (or a matching-alias candidate for legacy bindings); the mapper never resolves it.
+ * `catalogEntry` must be the catalog entry matching the binding's package digest.
+ * A missing catalog entry is missing package metadata; the mapper never resolves it.
  */
 export function presentProviderRuntime(input: {
   provider: Pick<ProviderInstanceDto, "adapterId" | "runtime">;
@@ -42,20 +40,8 @@ export function presentProviderRuntime(input: {
   const { provider, catalogEntry } = input;
   const binding = provider.runtime;
 
-  if (binding.runtimeKind === "legacy-frontend-provider") {
-    return {
-      labelKey: "legacy",
-      runtimeKind: "legacy-frontend-provider",
-      version: null,
-      state: binding.state,
-      // Legacy executor remains ready for connection/model actions until its retirement gate lands.
-      disableReadyActions: false,
-      actions: { canPreview: catalogEntry != null, canApply: false, canRollback: false },
-    };
-  }
-
   const version = catalogEntry?.version ?? null;
-  const rollbackOnly = { canPreview: false, canApply: false, canRollback: true } as const;
+  const rollbackOnly = { canApply: false, canRollback: true } as const;
   if (binding.state === "pending_activation") {
     return {
       labelKey: "pendingActivation",
@@ -63,7 +49,7 @@ export function presentProviderRuntime(input: {
       version,
       state: binding.state,
       disableReadyActions: true,
-      actions: { canPreview: false, canApply: true, canRollback: true },
+      actions: { canApply: true, canRollback: true },
     };
   }
   if (binding.state === "active") {
@@ -83,14 +69,14 @@ export function presentProviderRuntime(input: {
     version,
     state: binding.state,
     disableReadyActions: true,
-    actions: rollbackOnly,
+    actions: { canApply: false, canRollback: false },
   };
 }
 
 /** Per-interface presentation for the multi-interface runtime section. */
 export interface ProviderInterfaceBindingPresentation {
   binding: ProviderRuntimeBindingDto;
-  /** Catalog entry matching the binding's package digest; null when missing/legacy. */
+  /** Catalog entry matching the binding's package digest; null when package metadata is missing. */
   catalogEntry: ProviderRuntimeCatalogEntryDto | null;
   labelKey: ProviderRuntimeStateLabelKey;
   version: string | null;
@@ -103,7 +89,7 @@ export interface ProviderInterfaceBindingPresentation {
 
 /**
  * Project every adapter-keyed interface binding of one Provider. A partially available
- * Provider stays visible: one unavailable interface never hides another active/legacy type.
+ * Provider stays visible: one unavailable interface never hides another active type.
  */
 export function presentProviderInterfaceBindings(
   provider: Pick<ProviderInstanceDto, "adapterId" | "runtimeBindings">,
@@ -118,12 +104,7 @@ export function presentProviderInterfaceBindings(
     return {
       binding,
       catalogEntry,
-      labelKey:
-        binding.runtimeKind === "legacy-frontend-provider"
-          ? "legacy"
-          : wasmActive
-            ? "activeRuntime"
-            : "unavailableRuntime",
+      labelKey: wasmActive ? "activeRuntime" : "unavailableRuntime",
       version: catalogEntry?.version ?? null,
       actions: {
         canRollback: wasmActive,

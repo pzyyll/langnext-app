@@ -1,7 +1,9 @@
 // ABOUTME: Offline CLI for finalizing, verifying, and signing `.lnplugin` packages.
 // ABOUTME: Never reads private keys; sign-staging accepts a developer seed hex and places manifest.sig.
 use ed25519_dalek::{Signer, SigningKey};
-use langnext_app_lib::services::plugin_package::{finalize_package_from_staging, verify_package_file};
+use langnext_app_lib::services::plugin_package::{
+  finalize_package_from_staging, finalize_unsigned_package_from_staging, verify_package_file,
+};
 use std::env;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -29,28 +31,67 @@ fn main() -> ExitCode {
 fn print_usage() {
   eprintln!("usage:");
   eprintln!("  plugin_tool derive-public-key <64-char-hex-seed>");
+  eprintln!("  plugin_tool derive-public-key --seed-file <path>");
   eprintln!("  plugin_tool sign-staging <staging-dir> <64-char-hex-seed>");
+  eprintln!("  plugin_tool sign-staging <staging-dir> --seed-file <path>");
   eprintln!("  plugin_tool verify <package.lnplugin> --public-key-hex <hex>");
   eprintln!("  plugin_tool verify <package.lnplugin> --public-key-file <path>");
   eprintln!("  plugin_tool finalize-package <staging-dir> <output.lnplugin> --public-key-hex <hex>");
   eprintln!("  plugin_tool finalize-package <staging-dir> <output.lnplugin> --public-key-file <path>");
+  eprintln!("  plugin_tool finalize-package --unsigned <staging-dir> <output.lnplugin>");
+}
+
+/// Read the Ed25519 signing seed from argv (dev) or from a file path via `--seed-file <path>`.
+/// `--seed-file` keeps the seed bytes out of the command line, process listings, and shell history.
+/// The seed value is never printed, logged, or written to any repo file from this function.
+fn take_seed(args: &mut Vec<String>) -> Result<String, ExitCode> {
+  if args.is_empty() {
+    eprintln!("error: sign-staging requires <64-char-hex-seed> or --seed-file <path> for the signing key");
+    return Err(ExitCode::from(2));
+  }
+  let token = args.remove(0);
+  if token != "--seed-file" {
+    return Ok(token.trim().to_ascii_lowercase());
+  }
+  if args.is_empty() {
+    eprintln!("error: --seed-file requires a path");
+    return Err(ExitCode::from(2));
+  }
+  let path = PathBuf::from(args.remove(0));
+  let seed_hex = match std::fs::read_to_string(&path) {
+    Ok(contents) => contents.trim().to_ascii_lowercase(),
+    Err(err) => {
+      eprintln!("error: failed to read seed file {}: {err}", path.display());
+      return Err(ExitCode::from(1));
+    }
+  };
+  if seed_hex.len() != 64 || !seed_hex.chars().all(|c| c.is_ascii_hexdigit()) {
+    eprintln!(
+      "error: seed file must contain 64 lowercase hex chars (32 bytes), got length {}",
+      seed_hex.len()
+    );
+    return Err(ExitCode::from(2));
+  }
+  // Return without ever printing the seed bytes.
+  Ok(seed_hex)
 }
 
 fn cmd_sign_staging(mut args: Vec<String>) -> ExitCode {
-  if args.len() < 2 {
-    eprintln!("error: sign-staging requires <staging-dir> <64-char-hex-seed>");
-    return ExitCode::from(2);
-  }
-  let staging = PathBuf::from(args.remove(0));
-  let seed_hex = args.remove(0).trim().to_ascii_lowercase();
-
-  if seed_hex.len() != 64 || !seed_hex.chars().all(|c| c.is_ascii_hexdigit()) {
-    eprintln!(
-      "error: seed must be 64 lowercase hex chars (32 bytes), got length {}",
-      seed_hex.len()
-    );
-    return ExitCode::from(2);
-  }
+  let staging = match args.first() {
+    Some(first) if first.starts_with('-') => {
+      eprintln!("error: sign-staging requires <staging-dir> first");
+      return ExitCode::from(2);
+    }
+    Some(_) => PathBuf::from(args.remove(0)),
+    None => {
+      eprintln!("error: sign-staging requires <staging-dir> and a seed, or --seed-file <path>");
+      return ExitCode::from(2);
+    }
+  };
+  let seed_hex = match take_seed(&mut args) {
+    Ok(seed) => seed,
+    Err(code) => return code,
+  };
   if !args.is_empty() {
     eprintln!("error: unexpected arguments: {}", args.join(" "));
     return ExitCode::from(2);
@@ -122,10 +163,17 @@ fn hex_nibble(b: u8) -> Result<u8, String> {
 
 fn cmd_derive_public_key(mut args: Vec<String>) -> ExitCode {
   if args.is_empty() {
-    eprintln!("error: derive-public-key requires <64-char-hex-seed>");
+    eprintln!("error: derive-public-key requires <64-char-hex-seed> or --seed-file <path>");
     return ExitCode::from(2);
   }
-  let seed_hex = args.remove(0).trim().to_ascii_lowercase();
+  let seed_hex = match take_seed(&mut args) {
+    Ok(seed) => seed,
+    Err(code) => return code,
+  };
+  if !args.is_empty() {
+    eprintln!("error: unexpected arguments: {}", args.join(" "));
+    return ExitCode::from(2);
+  }
   if seed_hex.len() != 64 || !seed_hex.chars().all(|c| c.is_ascii_hexdigit()) {
     eprintln!("error: seed must be 64 lowercase hex chars (32 bytes)");
     return ExitCode::from(2);
@@ -184,6 +232,32 @@ fn cmd_verify(mut args: Vec<String>) -> ExitCode {
 }
 
 fn cmd_finalize(mut args: Vec<String>) -> ExitCode {
+  let unsigned = args.iter().any(|arg| arg == "--unsigned");
+  if unsigned {
+    args.retain(|arg| arg != "--unsigned");
+    if args.len() < 2 {
+      eprintln!("error: unsigned finalize-package requires <staging-dir> <output.lnplugin>");
+      return ExitCode::from(2);
+    }
+    let staging = PathBuf::from(args.remove(0));
+    let output = PathBuf::from(args.remove(0));
+    if !args.is_empty() {
+      eprintln!("error: unexpected arguments: {}", args.join(" "));
+      return ExitCode::from(2);
+    }
+    return match finalize_unsigned_package_from_staging(&staging, &output) {
+      Ok(digest) => {
+        println!("ok digest={digest}");
+        println!("archive={}", output.display());
+        println!("sha256_file={}.sha256", output.display());
+        ExitCode::SUCCESS
+      }
+      Err(err) => {
+        eprintln!("error code={} message={}", err.code.as_str(), err.message);
+        ExitCode::from(1)
+      }
+    };
+  }
   if args.len() < 2 {
     eprintln!("error: finalize-package requires <staging-dir> <output.lnplugin> and a public key");
     return ExitCode::from(2);

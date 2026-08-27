@@ -1,0 +1,351 @@
+#!/usr/bin/env bash
+# ABOUTME: Production frontend bundle conformance for Markdown/Shiki assets.
+# ABOUTME: Fails on Vite warnings, oversized chunks, and static Markdown imports.
+#MISE description="Build frontend and assert allowlisted Markdown/Shiki chunks"
+set -euo pipefail
+
+root="${MISE_PROJECT_ROOT:-$(cd "$(dirname "$0")/../../.." && pwd)}"
+cd "$root"
+
+ALLOWED_LANGUAGE_IDS=(javascript typescript json markdown python rust bash sql)
+ALLOWED_THEME_IDS=(github-light github-dark)
+FORBIDDEN_SUBSTRINGS=(emacs-lisp bundledLanguages @streamdown/code)
+MARKDOWN_OUTPUT_MODULE="src/components/markdown/MarkdownOutput.tsx"
+TRANSLATE_ROUTE_MODULE="src/routes/translate/index.tsx"
+QUICK_TRANSLATE_ROUTE_MODULE="src/routes/quick-translate.tsx"
+MANIFEST_PATH="dist/.vite/manifest.json"
+ASSETS_DIR="dist/assets"
+MAX_MARKDOWN_RELATED_ASSET_BYTES=$((450 * 1024))
+MAX_ANY_ASSET_BYTES=$((500 * 1024))
+
+# Create one writable OS temporary directory through Bun. `mktemp` emits POSIX-style paths that
+# native Bun cannot open on Windows (ENOENT), so the temp location is OS-native and
+# slash-normalized for Bash interoperability.
+temp_dir="$(bun -e 'import { mkdtempSync } from "node:fs"; import { tmpdir } from "node:os"; import { join, normalize } from "node:path"; const dir = normalize(mkdtempSync(join(tmpdir(), "langnext-frontend-bundle-"))).replaceAll("\\", "/"); console.log(dir);')"
+build_log="$temp_dir/build.log"
+inspector="$temp_dir/inspector.mjs"
+
+cleanup() {
+  rm -rf -- "$temp_dir"
+}
+trap cleanup EXIT
+
+# Probe the temp directory through the same runtime that later reads the log and inspector.
+probe_file="$temp_dir/probe.tmp"
+if ! bun -e 'import { writeFileSync, rmSync, existsSync } from "node:fs"; const p = process.argv[1] ?? ""; writeFileSync(p, "ok"); const ok = existsSync(p); rmSync(p); if (!ok) process.exit(1);' "$probe_file"; then
+  echo "error: temp directory is not writable: $temp_dir" >&2
+  exit 1
+fi
+
+set +e
+set -o pipefail
+mise run build 2>&1 | tee "$build_log"
+build_status=${PIPESTATUS[0]}
+set -e
+
+set +e
+bun scripts/frontend-bundle-diagnostics.ts "$build_log"
+diagnostic_status=$?
+set -e
+
+if [[ "$build_status" -ne 0 ]]; then
+  echo "error: production frontend build failed with status $build_status" >&2
+  exit "$build_status"
+fi
+if [[ "$diagnostic_status" -ne 0 ]]; then
+  echo "error: production build emitted a Vite/Rolldown warning" >&2
+  exit 1
+fi
+
+if [[ ! -d "$ASSETS_DIR" ]]; then
+  echo "error: missing $ASSETS_DIR after production build" >&2
+  exit 1
+fi
+
+if [[ ! -f "$MANIFEST_PATH" ]]; then
+  echo "error: missing $MANIFEST_PATH; enable build.manifest in vite.config.ts" >&2
+  exit 1
+fi
+
+ALLOWED_LANGUAGES="$(IFS=,; echo "${ALLOWED_LANGUAGE_IDS[*]}")"
+ALLOWED_THEMES="$(IFS=,; echo "${ALLOWED_THEME_IDS[*]}")"
+FORBIDDEN_SUBSTRINGS_CSV="$(IFS=,; echo "${FORBIDDEN_SUBSTRINGS[*]}")"
+export ASSETS_DIR MANIFEST_PATH ALLOWED_LANGUAGES ALLOWED_THEMES
+export FORBIDDEN_SUBSTRINGS="$FORBIDDEN_SUBSTRINGS_CSV"
+export MARKDOWN_OUTPUT_MODULE TRANSLATE_ROUTE_MODULE QUICK_TRANSLATE_ROUTE_MODULE
+export MAX_MARKDOWN_RELATED_ASSET_BYTES MAX_ANY_ASSET_BYTES
+
+cat > "$inspector" <<'EOF'
+const fs = require("node:fs");
+const path = require("node:path");
+
+const assetsDir = process.env.ASSETS_DIR;
+const manifestPath = process.env.MANIFEST_PATH;
+const allowedLanguages = new Set((process.env.ALLOWED_LANGUAGES ?? "").split(",").filter(Boolean));
+const allowedThemes = new Set((process.env.ALLOWED_THEMES ?? "").split(",").filter(Boolean));
+const forbiddenSubstrings = (process.env.FORBIDDEN_SUBSTRINGS ?? "").split(",").filter(Boolean);
+const markdownOutputModule = process.env.MARKDOWN_OUTPUT_MODULE;
+const translateRouteModule = process.env.TRANSLATE_ROUTE_MODULE;
+const quickTranslateRouteModule = process.env.QUICK_TRANSLATE_ROUTE_MODULE;
+const maxMarkdownRelatedAssetBytes = Number(process.env.MAX_MARKDOWN_RELATED_ASSET_BYTES);
+const maxAnyAssetBytes = Number(process.env.MAX_ANY_ASSET_BYTES);
+const distRoot = path.dirname(assetsDir);
+const langPathPattern = /@shikijs\/langs\/(?:dist\/)?([A-Za-z0-9_-]+)\.mjs/g;
+const themePathPattern = /@shikijs\/themes\/(?:dist\/)?([A-Za-z0-9_-]+)\.mjs/g;
+
+function fail(message) {
+  console.error(`error: ${message}`);
+  process.exit(1);
+}
+
+function collectFiles(dir) {
+  return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const fullPath = path.join(dir, entry.name);
+    return entry.isDirectory() ? collectFiles(fullPath) : [fullPath];
+  });
+}
+
+const assetFiles = collectFiles(assetsDir);
+
+for (const filePath of assetFiles) {
+  if (!filePath.endsWith(".js")) {
+    continue;
+  }
+  const size = fs.statSync(filePath).size;
+  if (size > maxAnyAssetBytes) {
+    fail(`${path.basename(filePath)} exceeds the ${maxAnyAssetBytes}-byte limit (${size})`);
+  }
+}
+
+const manifestRaw = fs.readFileSync(manifestPath, "utf8");
+const manifest = JSON.parse(manifestRaw);
+const assetPathTexts = assetFiles.map((filePath) => filePath.replaceAll("\\", "/"));
+
+for (const needle of forbiddenSubstrings) {
+  for (const text of [manifestRaw, ...assetPathTexts]) {
+    if (text.includes(needle)) {
+      fail(`forbidden bundle token ${needle} is present in an asset or module path`);
+    }
+  }
+}
+const contentForbidden = forbiddenSubstrings.filter((needle) => needle !== "emacs-lisp");
+
+const scannedTexts = [
+  manifestRaw,
+  ...assetFiles.map((filePath) => `${path.basename(filePath)}\n${fs.readFileSync(filePath, "utf8")}`),
+];
+
+for (const needle of contentForbidden) {
+  for (const text of scannedTexts) {
+    if (text.includes(needle)) {
+      fail(`forbidden bundle token ${needle} is present in production assets or the Vite manifest`);
+    }
+  }
+}
+
+const foundLanguages = new Set();
+const foundThemes = new Set();
+for (const text of scannedTexts) {
+  for (const match of text.matchAll(langPathPattern)) {
+    foundLanguages.add(match[1]);
+  }
+  for (const match of text.matchAll(themePathPattern)) {
+    foundThemes.add(match[1]);
+  }
+}
+
+for (const language of foundLanguages) {
+  if (!allowedLanguages.has(language)) {
+    fail(`emitted grammar ${language} is outside the Markdown language allowlist`);
+  }
+}
+for (const theme of foundThemes) {
+  if (!allowedThemes.has(theme)) {
+    fail(`emitted theme ${theme} is outside the Markdown theme allowlist`);
+  }
+}
+
+function normalize(id) {
+  return id.replaceAll("\\", "/");
+}
+function sourcePathOf(value) {
+  return normalize(value).split("?")[0];
+}
+function manifestKeyForSource(sourcePath) {
+  if (manifest[sourcePath]) {
+    return sourcePath;
+  }
+  return Object.keys(manifest).find((key) => {
+    const entry = manifest[key];
+    return sourcePathOf(key) === sourcePath || sourcePathOf(entry?.src ?? "") === sourcePath;
+  }) ?? null;
+}
+function resolveChunkKey(ref) {
+  if (!ref) {
+    return null;
+  }
+  if (manifest[ref]) {
+    return ref;
+  }
+  return Object.keys(manifest).find((key) => manifest[key]?.file === ref) ?? null;
+}
+function staticClosure(startKey) {
+  const seen = new Set();
+  const stack = [startKey];
+  while (stack.length > 0) {
+    const key = stack.pop();
+    if (!key || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    for (const imported of manifest[key]?.imports ?? []) {
+      stack.push(resolveChunkKey(imported));
+    }
+  }
+  return seen;
+}
+function recursiveClosure(startKey) {
+  const seen = new Set();
+  const stack = [startKey];
+  while (stack.length > 0) {
+    const key = stack.pop();
+    if (!key || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    const entry = manifest[key];
+    if (!entry) {
+      continue;
+    }
+    for (const imported of entry.imports ?? []) {
+      stack.push(resolveChunkKey(imported));
+    }
+    for (const dep of entry.dynamicImports ?? []) {
+      stack.push(resolveChunkKey(dep));
+    }
+  }
+  return seen;
+}
+function dynamicImportsFrom(keys) {
+  const dynamic = new Set();
+  for (const key of keys) {
+    for (const dep of manifest[key]?.dynamicImports ?? []) {
+      dynamic.add(dep);
+    }
+  }
+  return dynamic;
+}
+
+const markdownKey = manifestKeyForSource(markdownOutputModule);
+const translateKey = manifestKeyForSource(translateRouteModule);
+const quickTranslateKey = manifestKeyForSource(quickTranslateRouteModule);
+
+if (!markdownKey) {
+  fail(`Vite manifest does not include ${markdownOutputModule}`);
+}
+if (!translateKey) {
+  fail(`Vite manifest does not include ${translateRouteModule}`);
+}
+if (!quickTranslateKey) {
+  fail(`Vite manifest does not include ${quickTranslateRouteModule}`);
+}
+
+// The Markdown runtime must stay lazy: every chunk in MarkdownOutput's recursive static+dynamic
+// closure stays under the Markdown-related size bound, so no route statically receives it.
+const mdClosure = recursiveClosure(markdownKey);
+for (const key of mdClosure) {
+  const file = manifest[key]?.file;
+  if (!file || !file.endsWith(".js")) {
+    continue;
+  }
+  const size = fs.statSync(path.join(distRoot, file)).size;
+  if (size > maxMarkdownRelatedAssetBytes) {
+    fail(`${file} is in the Markdown closure and exceeds ${maxMarkdownRelatedAssetBytes} bytes (${size})`);
+  }
+}
+
+const markdownFile = manifest[markdownKey].file;
+const translateClosure = staticClosure(translateKey);
+const quickClosure = staticClosure(quickTranslateKey);
+
+if ([...translateClosure].includes(markdownKey)) {
+  fail(`${translateRouteModule} statically includes ${markdownOutputModule}`);
+}
+if ([...quickClosure].includes(markdownKey)) {
+  fail(`${quickTranslateRouteModule} statically includes ${markdownOutputModule}`);
+}
+
+function reachesMarkdown(dynamicKeys) {
+  return [...dynamicKeys].some((dep) => {
+    const normalized = normalize(dep);
+    return dep === markdownKey
+      || normalized.endsWith(markdownOutputModule)
+      || manifest[dep]?.src === markdownOutputModule
+      || manifest[dep]?.file === markdownFile;
+  });
+}
+
+if (!reachesMarkdown(dynamicImportsFrom(translateClosure))) {
+  fail(`${translateRouteModule} does not dynamically import ${markdownOutputModule}`);
+}
+if (!reachesMarkdown(dynamicImportsFrom(quickClosure))) {
+  fail(`${quickTranslateRouteModule} does not dynamically import ${markdownOutputModule}`);
+}
+
+// Named async splitting groups emitted by Vite/Rolldown codeSplitting.
+const streamdownChunks = assetFiles
+  .map((filePath) => path.basename(filePath))
+  .filter((name) => name.startsWith("streamdown-"));
+const shikiCoreChunks = assetFiles
+  .map((filePath) => path.basename(filePath))
+  .filter((name) => name.startsWith("shiki-core-"));
+
+if (streamdownChunks.length === 0) {
+  fail("no async streamdown chunk was emitted");
+}
+if (shikiCoreChunks.length === 0) {
+  fail("no async shiki-core chunk was emitted");
+}
+
+for (const routeClosure of [translateClosure, quickClosure]) {
+  for (const key of routeClosure) {
+    const file = manifest[key]?.file;
+    if (!file) {
+      continue;
+    }
+    const name = path.basename(file);
+    if (name.startsWith("streamdown-") || name.startsWith("shiki-core-")) {
+      fail(`${name} is statically included by a translation route`);
+    }
+  }
+}
+
+// Every allowlisted grammar and theme stays an independent dynamic entry of MarkdownOutput.
+const markdownDynamic = new Set(manifest[markdownKey]?.dynamicImports ?? []);
+for (const language of allowedLanguages) {
+  const key = `node_modules/@shikijs/langs/dist/${language}.mjs`;
+  if (!manifest[key]) {
+    fail(`grammar ${language} is not an independent bundle entry`);
+  }
+  if (!markdownDynamic.has(key)) {
+    fail(`grammar ${language} is not lazily imported by ${markdownOutputModule}`);
+  }
+}
+for (const theme of allowedThemes) {
+  const key = `node_modules/@shikijs/themes/dist/${theme}.mjs`;
+  if (!manifest[key]) {
+    fail(`theme ${theme} is not an independent bundle entry`);
+  }
+  if (!markdownDynamic.has(key)) {
+    fail(`theme ${theme} is not lazily imported by ${markdownOutputModule}`);
+  }
+}
+
+console.log("ok: no Vite plugin warning diagnostics");
+console.log(`ok: no chunk exceeds ${maxAnyAssetBytes} bytes`);
+console.log(`ok: allowlisted languages only (${[...foundLanguages].join(", ") || "none referenced"})`);
+console.log("ok: MarkdownOutput is a dynamic import from both translation routes");
+console.log("ok: Markdown runtime closure stays within bounded async chunks");
+EOF
+
+bun "$inspector"

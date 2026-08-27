@@ -13,7 +13,7 @@ Desktop app starter built with **Tauri 2** and a modern React frontend.
 | IPC / workflows | Effect 3.x (typed invoke + multi-step) |
 | Components      | Base UI                                |
 | Styling         | Tailwind CSS v4 (Base UI outline)      |
-| Tooling         | ESLint + Prettier                      |
+| Tooling         | ESLint + oxfmt                         |
 | Build           | Vite 8 + TypeScript                    |
 | Runtime         | mise (node, bun, rust, tasks)          |
 | Packages        | bun                                    |
@@ -59,8 +59,8 @@ All commands go through mise (no `package.json` scripts):
 | `mise run typecheck`     | TypeScript check only                 |
 | `mise run preview`       | Preview production frontend build     |
 | `mise run lint`          | Run ESLint                            |
-| `mise run format`        | Format with Prettier + rustfmt        |
-| `mise run format:check`  | Check Prettier + rustfmt formatting   |
+| `mise run format`        | Format with oxfmt + rustfmt           |
+| `mise run format:check`  | Check oxfmt + rustfmt formatting      |
 | `mise run test`          | Run Rust unit/integration tests       |
 | `mise run test-frontend` | Run frontend behavioral tests (Bun)   |
 | `mise run tauri:dev`     | Run the Tauri desktop app             |

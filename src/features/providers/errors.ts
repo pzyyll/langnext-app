@@ -1,9 +1,8 @@
 // ABOUTME: Generic HTTP/IPC/provider error normalization for frontend workflows.
-// ABOUTME: Provider JSON error extraction stays inside each plugin.
+// ABOUTME: Provider JSON error extraction stays inside each runtime package.
 import { IpcError, isIpcError } from "../../storage/ipcError";
 import type { ModelsSyncErrorCode } from "../../storage/types";
 import { ExecutorHttpStatusError, ExecutorProtocolError, ProviderRuntimeUnavailableError } from "./executor";
-import { ProviderProtocolError } from "./types";
 
 export type ProviderWorkflowErrorCode =
   | ModelsSyncErrorCode
@@ -50,7 +49,7 @@ export function isRetryableCode(code: ProviderWorkflowErrorCode): boolean {
 }
 
 export function normalizeProviderError(error: unknown): NormalizedProviderError {
-  if (error instanceof ProviderProtocolError || error instanceof ExecutorProtocolError) {
+  if (error instanceof ExecutorProtocolError) {
     return {
       code: "invalid_response",
       message: error.message,

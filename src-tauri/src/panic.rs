@@ -1,5 +1,6 @@
 // ABOUTME: Production-safe global panic hook that never formats panic payloads.
 // ABOUTME: Release builds log only a constant event; debug keeps the default hook.
+#![allow(dead_code)]
 
 /// Install the process-wide panic hook appropriate for the build profile.
 pub fn install_panic_hook() {

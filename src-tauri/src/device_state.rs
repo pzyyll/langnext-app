@@ -1,5 +1,6 @@
 // ABOUTME: Atomic versioned JSON reads/writes for machine-specific device state.
 // ABOUTME: Window geometry lives here; never exported and safe to delete.
+#![allow(dead_code)]
 use crate::consts::DEVICE_STATE_FILENAME;
 use crate::domain::time::now_filename_utc;
 use crate::error::StorageError;

@@ -270,15 +270,17 @@ impl ProviderRuntimeRouter {
         "package runtime kind is not wasm-component",
       ));
     }
-    let publisher = self
-      .db
-      .read(|conn| plugin_publishers::get(conn, &version.publisher_key_id))
-      .map_err(map_storage_to_capability)?;
-    if publisher.revoked || !publisher.enabled {
-      return Err(CapabilityError::new(
-        CapabilityErrorCode::PermissionDenied,
-        "publisher trust is revoked or disabled",
-      ));
+    if version.signature_status == crate::domain::plugin_package::PackageSignatureStatus::Signed {
+      let publisher = self
+        .db
+        .read(|conn| plugin_publishers::get(conn, &version.publisher_key_id))
+        .map_err(map_storage_to_capability)?;
+      if publisher.revoked || !publisher.enabled {
+        return Err(CapabilityError::new(
+          CapabilityErrorCode::PermissionDenied,
+          "publisher trust is revoked or disabled",
+        ));
+      }
     }
 
     let bundle = self
@@ -321,7 +323,7 @@ impl ProviderRuntimeRouter {
     // External package verification (store snapshot + signed manifest) happens before the
     // compiled artifact is trusted; then the exact adapter-keyed binding is re-checked so a
     // concurrent lifecycle change can never execute with stale authority.
-    let verified = self.verify_and_compile_artifact(&version, &publisher, capability_id, &package_digest)?;
+    let verified = self.verify_and_compile_artifact(&version, capability_id, &package_digest)?;
     let rechecked = self
       .db
       .read(|conn| provider_runtime_bindings::get(conn, provider_id, adapter_id))
@@ -359,19 +361,12 @@ impl ProviderRuntimeRouter {
   fn verify_and_compile_artifact(
     &self,
     version: &InstalledPluginVersion,
-    publisher: &crate::domain::plugin_package::PluginPublisher,
     capability_id: &str,
     package_digest: &str,
   ) -> Result<VerifiedComponent, CapabilityError> {
     let verified = self
       .packages
-      .verify_runtime_store_snapshot(
-        package_digest,
-        &publisher.key_id,
-        &publisher.fingerprint,
-        &publisher.public_key_hex,
-        publisher.source,
-      )
+      .verify_installed_package_snapshot(package_digest)
       .map_err(|err| {
         CapabilityError::new(
           CapabilityErrorCode::PluginUnavailable,
@@ -387,7 +382,7 @@ impl ProviderRuntimeRouter {
     if verified.manifest != manifest {
       return Err(CapabilityError::new(
         CapabilityErrorCode::PluginUnavailable,
-        "signed package manifest differs from the installed package record",
+        "verified package manifest differs from the installed package record",
       ));
     }
     let artifact_path = manifest

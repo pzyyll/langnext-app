@@ -13,8 +13,15 @@
       "runtimeBindings": [
         {
           "adapterId": "openai-compatible",
-          "runtimeKind": "legacy-frontend-provider",
-          "legacyAliases": []
+          "runtimeKind": "wasm-component",
+          "packageDigest": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+          "pluginId": "com.langnext.provider.openai-compatible",
+          "pluginVersion": "1.0.0",
+          "publisherKeyId": "com.langnext.vendor.keys.1",
+          "publisherKeyFingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "pluginApiVersion": "1.0",
+          "legacyAliases": ["openai-compatible"],
+          "capabilities": ["llm.chat@1", "llm.models.list@1"]
         },
         {
           "adapterId": "openai-responses",
@@ -103,9 +110,13 @@
       "runtime": {
         "pluginId": "com.langnext.google-translate-web",
         "pluginVersion": "1.0.0",
-        "runtimeKind": "bundled-rust",
+        "runtimeKind": "wasm-component",
+        "packageDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "publisherKeyId": "com.langnext.vendor.keys.1",
+        "publisherKeyFingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "pluginApiVersion": "1.0",
         "configSchemaVersion": 1,
-        "requiredCapabilityMajors": []
+        "requiredCapabilityMajors": ["translate.text@1"]
       },
       "createdAt": "2026-08-01T00:00:00Z",
       "updatedAt": "2026-08-01T00:00:00Z"

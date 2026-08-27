@@ -191,6 +191,8 @@ mod plugin_package_commands_tests {
         approve_publisher: false,
         publisher_public_key_hex: None,
         acknowledge_permissions: true,
+        acknowledge_unsigned_package_risk: false,
+        acknowledge_native_execution_risk: false,
       })
       .unwrap_err();
     assert!(matches!(err, crate::error::StorageError::Capability { .. }));
@@ -210,6 +212,8 @@ mod plugin_package_commands_tests {
         approve_publisher: false,
         publisher_public_key_hex: None,
         acknowledge_permissions: true,
+        acknowledge_unsigned_package_risk: false,
+        acknowledge_native_execution_risk: false,
       })
       .unwrap_err();
     assert!(matches!(err, crate::error::StorageError::Capability { .. }));

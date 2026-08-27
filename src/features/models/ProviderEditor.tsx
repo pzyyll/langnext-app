@@ -55,7 +55,6 @@ import type {
   ProviderRuntimeInterfaceRollbackPreviewDto,
   ProviderRuntimeRollbackPreviewDto,
   ProviderRuntimeSnapshotDto,
-  ProviderRuntimeUpgradePreviewDto,
 } from "../../storage/types";
 import { createRuntimeProviderActions } from "../providers/runtimeProviderActions";
 import { presentProviderRuntime } from "../providers/runtimeProviderPresentation";
@@ -66,8 +65,13 @@ import {
   publisherLabel,
   shortPackageDigest,
 } from "../providers/runtimeProviderPresentation";
-import { listRuntimeAdapterOptions } from "./adapterOptions";
-import { getDefaultBaseUrl, listAdapterOptions, resolveAuthScheme, resolveBaseUrlFields } from "./adapterOptions";
+import {
+  getDefaultBaseUrl,
+  listPackageAdapterOptions,
+  listRuntimeAdapterOptions,
+  resolveAuthScheme,
+  resolveBaseUrlFields,
+} from "./adapterOptions";
 import { AddManualModelDialog } from "./AddManualModelDialog";
 import { EditModelConfigDialog } from "./EditModelConfigDialog";
 import { useModelsContext } from "./ModelsContext";
@@ -111,7 +115,6 @@ function formatSyncTimestamp(iso: string | null): string | null {
 
 /** i18n key suffix for each sanitized runtime status label. */
 const RUNTIME_STATUS_LABEL_KEYS = {
-  legacy: "statusLegacy",
   activeRuntime: "statusActive",
   unavailableRuntime: "statusUnavailable",
   pendingActivation: "statusPendingActivation",
@@ -215,9 +218,6 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
    */
   const [dismissedConflictUpdatedAt, setDismissedConflictUpdatedAt] = useState<string | null>(null);
 
-  // Registered plugins are fixed at module load; options are stable for the editor's lifetime.
-  const adapterOptions = useMemo(() => listAdapterOptions(), []);
-
   const [savePending, setSavePending] = useState(false);
   const [, setSaveError] = useState<string | null>(null);
   const [, setSaveSuccess] = useState(false);
@@ -261,10 +261,8 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
   const [syncPending, setSyncPending] = useState(false);
 
   const [runtimeActionPending, setRuntimeActionPending] = useState(false);
-  const [runtimePreview, setRuntimePreview] = useState<ProviderRuntimeUpgradePreviewDto | null>(null);
   const [runtimeRollbackPreview, setRuntimeRollbackPreview] = useState<ProviderRuntimeRollbackPreviewDto | null>(null);
   const [permissionsAcknowledged, setPermissionsAcknowledged] = useState(false);
-  const [runtimeApplyConfirmOpen, setRuntimeApplyConfirmOpen] = useState(false);
   const [runtimeRollbackConfirmOpen, setRuntimeRollbackConfirmOpen] = useState(false);
   const [interfacePreview, setInterfacePreview] = useState<ProviderRuntimeInterfacePreviewDto | null>(null);
   const [interfacePreviewAdapter, setInterfacePreviewAdapter] = useState<string | null>(null);
@@ -339,6 +337,7 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
   // Sanitized provider runtime lifecycle: catalog-backed status and explicit actions.
   const runtimeCatalogQuery = useQuery(providerRuntimeCatalogOptions());
   const runtimeCatalog = useMemo(() => runtimeCatalogQuery.data ?? [], [runtimeCatalogQuery.data]);
+  const adapterOptions = useMemo(() => listPackageAdapterOptions(runtimeCatalog), [runtimeCatalog]);
   // Undiscarded rollback snapshots (attach/replace/detach cleanup seam).
   const snapshotsQuery = useQuery(providerRuntimeSnapshotsOptions(providerId));
   const runtimeSnapshots = useMemo(() => snapshotsQuery.data ?? [], [snapshotsQuery.data]);
@@ -346,17 +345,13 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
     () => runtimeCatalog.find((entry) => entry.packageDigest === provider.runtime.packageDigest) ?? null,
     [provider.runtime.packageDigest, runtimeCatalog],
   );
-  const aliasMatchingCatalogEntry = useMemo(
-    () => runtimeCatalog.find((entry) => entry.legacyAliases.includes(provider.adapterId)) ?? null,
-    [provider.adapterId, runtimeCatalog],
-  );
   const runtimePresentation = useMemo(
     () =>
       presentProviderRuntime({
         provider,
-        catalogEntry: provider.runtime.runtimeKind === "wasm-component" ? boundCatalogEntry : aliasMatchingCatalogEntry,
+        catalogEntry: boundCatalogEntry,
       }),
-    [aliasMatchingCatalogEntry, boundCatalogEntry, provider],
+    [boundCatalogEntry, provider],
   );
   const runtimeActions = useMemo(() => createRuntimeProviderActions({ queryClient }), [queryClient]);
   const runtimeRollbackAvailable = runtimeActions.isRollbackAvailable(provider);
@@ -433,7 +428,6 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
     setToken("");
     setCredentialAction("keep");
     setInsecureHttpAcknowledged(false);
-    setRuntimePreview(null);
     setRuntimeRollbackPreview(null);
     setPermissionsAcknowledged(false);
   }
@@ -715,44 +709,6 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
       toast.error({ title: t("models.toast.syncFailed"), description: message });
     } finally {
       setSyncPending(false);
-    }
-  }
-
-  async function handlePreviewRuntimePackage() {
-    if (runtimeActionPending || !aliasMatchingCatalogEntry) {
-      return;
-    }
-    setRuntimeActionPending(true);
-    try {
-      const preview = await runtimeActions.previewUpgrade({
-        providerId,
-        targetPackageDigest: aliasMatchingCatalogEntry.packageDigest,
-      });
-      setRuntimePreview(preview);
-      setPermissionsAcknowledged(false);
-    } catch (error: unknown) {
-      const message = getIpcErrorMessage(error, t("models.runtime.previewFailed"));
-      toast.error({ title: t("models.runtime.previewFailed"), description: message });
-    } finally {
-      setRuntimeActionPending(false);
-    }
-  }
-
-  async function handleApplyRuntimePackage() {
-    if (runtimeActionPending || !runtimePreview) {
-      return;
-    }
-    setRuntimeActionPending(true);
-    try {
-      await runtimeActions.applyUpgrade({ preview: runtimePreview, acknowledgePermissions: permissionsAcknowledged });
-      setRuntimePreview(null);
-      setPermissionsAcknowledged(false);
-      toast.success({ title: t("models.runtime.applySuccess") });
-    } catch (error: unknown) {
-      const message = getIpcErrorMessage(error, t("models.runtime.applyFailed"));
-      toast.error({ title: t("models.runtime.applyFailed"), description: message });
-    } finally {
-      setRuntimeActionPending(false);
     }
   }
 
@@ -1415,20 +1371,6 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-3">
-              {runtimePresentation.actions.canPreview && aliasMatchingCatalogEntry ? (
-                <Button
-                  type="button"
-                  className={outlineButtonClassName}
-                  disabled={runtimeActionPending}
-                  focusableWhenDisabled
-                  aria-busy={runtimeActionPending}
-                  onClick={() => {
-                    void handlePreviewRuntimePackage();
-                  }}
-                >
-                  {runtimeActionPending ? t("models.runtime.previewing") : t("models.runtime.preview")}
-                </Button>
-              ) : null}
               {runtimeRollbackAvailable ? (
                 <Button
                   type="button"
@@ -1446,10 +1388,6 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
             </div>
           </div>
 
-          {runtimePresentation.labelKey === "legacy" && runtimeCatalog.length > 0 && !aliasMatchingCatalogEntry ? (
-            <p className="text-xs text-neutral">{t("models.runtime.previewUnavailable")}</p>
-          ) : null}
-
           <DefaultRuntimeActivationStatus
             subjectKind="provider_instance"
             subjectId={provider.id}
@@ -1462,66 +1400,6 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
               await queryClient.invalidateQueries({ queryKey: providerRuntimeKeys.all });
             }}
           />
-
-          {runtimePreview ? (
-            <div className="border border-line bg-surface-2 p-4 text-body-tight text-on-surface">
-              <p className="font-medium">{t("models.runtime.previewTitle")}</p>
-              <p className="mt-1 text-neutral">
-                {t("models.runtime.from")}: {runtimePreview.source.runtimeKind} → {t("models.runtime.to")}:{" "}
-                {runtimePreview.target.runtimeKind} · {runtimePreview.targetPluginVersion}
-              </p>
-              <p className="mt-1 text-neutral">
-                {t("models.runtime.aliasNote", { aliases: runtimePreview.legacyAliases.join(", ") })}
-              </p>
-              {runtimePreview.requiresPermissionApproval ? (
-                <label className="mt-3 flex items-start gap-2">
-                  <Checkbox.Root
-                    className={`
-                      ${checkboxClassName}
-                      mt-0.5
-                    `}
-                    checked={permissionsAcknowledged}
-                    onCheckedChange={setPermissionsAcknowledged}
-                    disabled={runtimeActionPending}
-                  >
-                    <Checkbox.Indicator className={checkboxIndicatorClassName}>
-                      <IconMaterialSymbolsLightCheck className="size-3" aria-hidden />
-                    </Checkbox.Indicator>
-                  </Checkbox.Root>
-                  <span>
-                    <span className="block">{t("models.runtime.permissionNotice")}</span>
-                    <span className="block text-neutral">{t("models.runtime.acknowledge")}</span>
-                  </span>
-                </label>
-              ) : null}
-              <div className="mt-3 flex flex-wrap gap-2">
-                <Button
-                  type="button"
-                  className={primaryButtonClassName}
-                  disabled={
-                    runtimeActionPending || (runtimePreview.requiresPermissionApproval && !permissionsAcknowledged)
-                  }
-                  focusableWhenDisabled
-                  onClick={() => {
-                    setRuntimeApplyConfirmOpen(true);
-                  }}
-                >
-                  {t("models.runtime.apply")}
-                </Button>
-                <Button
-                  type="button"
-                  className={outlineButtonClassName}
-                  disabled={runtimeActionPending}
-                  onClick={() => {
-                    setRuntimePreview(null);
-                    setPermissionsAcknowledged(false);
-                  }}
-                >
-                  {t("models.runtime.cancelPreview")}
-                </Button>
-              </div>
-            </div>
-          ) : null}
 
           {/* Adapter-keyed interface bindings: each API type is independently attached,
               rolled back, or detached; a partially available Provider keeps every other
@@ -1932,18 +1810,6 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
           if (deleteConfirm === "models") {
             await handleDeleteModels();
           }
-        }}
-      />
-
-      <ConfirmDialog
-        open={runtimeApplyConfirmOpen}
-        onOpenChange={setRuntimeApplyConfirmOpen}
-        title={t("models.runtime.applyConfirmTitle")}
-        description={t("models.runtime.applyConfirmDesc")}
-        confirmText={t("models.runtime.apply")}
-        pendingText={t("models.runtime.applying")}
-        onConfirm={async () => {
-          await handleApplyRuntimePackage();
         }}
       />
 

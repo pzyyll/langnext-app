@@ -7,7 +7,8 @@ use crate::domain::cancel::CancelToken;
 use crate::domain::runtime_plugin::{
   AuthPolicyId, CAPABILITY_MAJOR_V1, CAPABILITY_SPECS, CAPABILITY_V1_COUNT, CapabilityId, ComponentArtifactDigest,
   EndpointId, ExecutionGrantSet, FileRole, HOST_PLUGIN_API_VERSION_MAJOR, HttpMethod, HttpsOrigin, NetworkGrantEntry,
-  PackageDigest, PackageIdentity, PluginId, PluginPrincipal, ResourceLimits, RuntimeIdentity, SemVerVersion,
+  PackageDigest, PackageIdentity, PluginId, PluginManifestV1, PluginPrincipal, ResourceLimits, RuntimeIdentity,
+  SemVerVersion,
 };
 use crate::domain::service_capability::{
   CapabilityError, CapabilityErrorCode, DetectLanguageRequest, ExecutionContext, TranslateTextRequest,
@@ -52,6 +53,11 @@ const LLM_CHAT_WASM: &[u8] = include_bytes!(concat!(
   env!("CARGO_MANIFEST_DIR"),
   "/../runtime-plugins/conformance/llm-provider/fixtures/llm-chat.wasm"
 ));
+/// Baidu OCR production-shaped development Component used for exact no-WASI import inspection.
+const BAIDU_OCR_WASM: &[u8] = include_bytes!(concat!(
+  env!("CARGO_MANIFEST_DIR"),
+  "/../runtime-plugins/baidu-ocr/ocr/fixtures/langnext-baidu-ocr.wasm"
+));
 
 /// Synthetic package-archive digest for the translate conformance package. Distinct from the
 /// Component artifact digest: package digest is the signed `.lnplugin` archive identity.
@@ -62,14 +68,8 @@ const CONFORMANCE_DETECT_PACKAGE_DIGEST_HEX: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbb
 const CONFORMANCE_ARTIFACT_DIGEST_HEX: &str = "0552022658d9cdd88cfd277cca46344a086e6f48da648cae16571a3d7e45a892";
 /// Committed Component artifact digest for the detect fixture (file-index sha256).
 const CONFORMANCE_DETECT_ARTIFACT_DIGEST_HEX: &str = "11f70810a2e25add888be750ee019d9f98311b4bcb682a780b3419d130ed37d0";
-/// Conformance plugin ids declared in committed plugin.json manifests.
-const CONFORMANCE_PLUGIN_ID: &str = "langnext.conformance";
-const CONFORMANCE_DETECT_PLUGIN_ID: &str = "langnext.conformance.detect";
-const CONFORMANCE_PLUGIN_VERSION: &str = "0.1.0";
 const CONFORMANCE_ORIGIN: &str = "https://conformance.example";
 const CONFORMANCE_AUTH_POLICY: &str = "host.none.v1";
-const CONFORMANCE_CAPABILITY_TEXT: &str = "translate.text@1";
-const CONFORMANCE_CAPABILITY_DETECT: &str = "translate.detect@1";
 /// Oversized table element count used by the oversized-table rejection fixture.
 const OVERSIZED_TABLE_ELEMENTS: u32 = 20_000;
 /// Minimum linear-memory pages used by the oversized-memory rejection fixture (2049 * 64KiB > 128MiB).
@@ -102,6 +102,71 @@ const UNDECLARED_IMPORT_WAT: &str = include_str!(concat!(
   "/../runtime-plugins/conformance/wasm-component/tests/fixtures/undeclared-import.wat"
 ));
 
+fn conformance_translate_manifest() -> &'static PluginManifestV1 {
+  static MANIFEST: OnceLock<PluginManifestV1> = OnceLock::new();
+  MANIFEST.get_or_init(|| parse_manifest(CONFORMANCE_PLUGIN_JSON).expect("translate plugin.json parses"))
+}
+
+fn conformance_detect_manifest() -> &'static PluginManifestV1 {
+  static MANIFEST: OnceLock<PluginManifestV1> = OnceLock::new();
+  MANIFEST.get_or_init(|| parse_manifest(CONFORMANCE_DETECT_PLUGIN_JSON).expect("detect plugin.json parses"))
+}
+
+fn conformance_fixture_capability_id(manifest: &PluginManifestV1) -> &str {
+  manifest
+    .capabilities
+    .first()
+    .map(|capability| capability.id.as_str())
+    .expect("conformance fixture declares a capability")
+}
+
+fn conformance_plugin_id() -> &'static str {
+  conformance_translate_manifest().id.as_str()
+}
+
+fn conformance_detect_plugin_id() -> &'static str {
+  conformance_detect_manifest().id.as_str()
+}
+
+fn conformance_plugin_version() -> &'static str {
+  conformance_translate_manifest().version.as_str()
+}
+
+fn conformance_detect_plugin_version() -> &'static str {
+  conformance_detect_manifest().version.as_str()
+}
+
+fn conformance_translate_capability_id() -> &'static str {
+  conformance_fixture_capability_id(conformance_translate_manifest())
+}
+
+fn conformance_detect_capability_id() -> &'static str {
+  conformance_fixture_capability_id(conformance_detect_manifest())
+}
+
+#[test]
+fn conformance_fixture_identity_comes_from_committed_manifests() {
+  let translate = parse_manifest(CONFORMANCE_PLUGIN_JSON).expect("translate plugin.json parses");
+  let detect = parse_manifest(CONFORMANCE_DETECT_PLUGIN_JSON).expect("detect plugin.json parses");
+  assert_eq!(conformance_plugin_id(), translate.id.as_str());
+  assert_eq!(conformance_plugin_version(), translate.version.as_str());
+  assert_eq!(
+    conformance_translate_capability_id(),
+    conformance_fixture_capability_id(&translate)
+  );
+  assert_eq!(conformance_detect_plugin_id(), detect.id.as_str());
+  assert_eq!(conformance_detect_plugin_version(), detect.version.as_str());
+  assert_eq!(
+    conformance_detect_capability_id(),
+    conformance_fixture_capability_id(&detect)
+  );
+  assert_eq!(conformance_plugin_id(), conformance_translate_manifest().id.as_str());
+  assert_eq!(
+    conformance_detect_plugin_id(),
+    conformance_detect_manifest().id.as_str()
+  );
+}
+
 fn conformance_package_digest() -> PackageDigest {
   PackageDigest::parse(CONFORMANCE_PACKAGE_DIGEST_HEX).unwrap()
 }
@@ -131,8 +196,8 @@ fn package_identity(digest: PackageDigest) -> RuntimeIdentity {
 /// Identity is `RuntimeIdentity::Package` with the translate package digest.
 fn conformance_principal_grant() -> (PluginPrincipal, ExecutionGrantSet) {
   conformance_principal_grant_for(
-    CONFORMANCE_CAPABILITY_TEXT,
-    CONFORMANCE_PLUGIN_ID,
+    conformance_translate_capability_id(),
+    conformance_plugin_id(),
     conformance_package_digest(),
     true,
   )
@@ -142,15 +207,20 @@ fn conformance_principal_grant() -> (PluginPrincipal, ExecutionGrantSet) {
 /// and plugin id; text uses the translate package. Network endpoints are included only for the
 /// translate capability (declared in plugin.json).
 fn conformance_principal_grant_for_capability(capability_id: &str) -> (PluginPrincipal, ExecutionGrantSet) {
-  if capability_id == CONFORMANCE_CAPABILITY_DETECT {
+  if capability_id == conformance_detect_capability_id() {
     conformance_principal_grant_for(
-      CONFORMANCE_CAPABILITY_DETECT,
-      CONFORMANCE_DETECT_PLUGIN_ID,
+      conformance_detect_capability_id(),
+      conformance_detect_plugin_id(),
       conformance_detect_package_digest(),
       false,
     )
   } else {
-    conformance_principal_grant_for(capability_id, CONFORMANCE_PLUGIN_ID, conformance_package_digest(), true)
+    conformance_principal_grant_for(
+      capability_id,
+      conformance_plugin_id(),
+      conformance_package_digest(),
+      true,
+    )
   }
 }
 
@@ -195,7 +265,12 @@ fn conformance_principal_grant_for(
     Uuid::nil(),
     package_identity(package_digest),
     PluginId::parse(plugin_id).unwrap(),
-    SemVerVersion::parse(CONFORMANCE_PLUGIN_VERSION).unwrap(),
+    SemVerVersion::parse(if plugin_id == conformance_detect_plugin_id() {
+      conformance_detect_plugin_version()
+    } else {
+      conformance_plugin_version()
+    })
+    .unwrap(),
     vec![cap],
     network,
     vec![],
@@ -211,15 +286,15 @@ fn conformance_principal_grant_for(
 fn grant_from_validated_translate_manifest() -> ExecutionGrantSet {
   let parsed = parse_manifest(CONFORMANCE_PLUGIN_JSON).expect("translate plugin.json parses");
   let validated = validate_manifest(&parsed).expect("translate plugin.json validates");
-  assert_eq!(validated.id(), CONFORMANCE_PLUGIN_ID);
-  assert_eq!(validated.version(), CONFORMANCE_PLUGIN_VERSION);
+  assert_eq!(validated.id(), conformance_plugin_id());
+  assert_eq!(validated.version(), conformance_plugin_version());
   let caps: Vec<CapabilityId> = validated
     .capabilities()
     .iter()
     .map(|c| CapabilityId::parse(&c.id).expect("capability id"))
     .collect();
   assert_eq!(caps.len(), 1);
-  assert_eq!(caps[0].as_str(), CONFORMANCE_CAPABILITY_TEXT);
+  assert_eq!(caps[0].as_str(), conformance_translate_capability_id());
   let runtime_artifact = validated
     .files()
     .iter()
@@ -267,13 +342,13 @@ fn grant_from_validated_translate_manifest() -> ExecutionGrantSet {
 fn grant_from_validated_detect_manifest() -> ExecutionGrantSet {
   let parsed = parse_manifest(CONFORMANCE_DETECT_PLUGIN_JSON).expect("detect plugin.json parses");
   let validated = validate_manifest(&parsed).expect("detect plugin.json validates");
-  assert_eq!(validated.id(), CONFORMANCE_DETECT_PLUGIN_ID);
+  assert_eq!(validated.id(), conformance_detect_plugin_id());
   let caps: Vec<CapabilityId> = validated
     .capabilities()
     .iter()
     .map(|c| CapabilityId::parse(&c.id).expect("capability id"))
     .collect();
-  assert_eq!(caps[0].as_str(), CONFORMANCE_CAPABILITY_DETECT);
+  assert_eq!(caps[0].as_str(), conformance_detect_capability_id());
   let runtime_artifact = validated
     .files()
     .iter()
@@ -695,21 +770,21 @@ mod wasm_executor {
   #[test]
   fn translate_and_detect_manifest_grant_closed_loop() {
     let grant = grant_from_validated_translate_manifest();
-    assert_eq!(grant.plugin_id().as_str(), CONFORMANCE_PLUGIN_ID);
+    assert_eq!(grant.plugin_id().as_str(), conformance_plugin_id());
     let endpoints: Vec<&str> = grant.network_entries().map(|e| e.endpoint_id().as_str()).collect();
     assert!(endpoints.contains(&"approved"));
     assert!(endpoints.contains(&"slow"));
     assert!(endpoints.contains(&"wait-cancel"));
     assert!(!endpoints.contains(&"denied"));
     let principal = grant
-      .principal_for_request(CONFORMANCE_CAPABILITY_TEXT, "req-manifest")
+      .principal_for_request(conformance_translate_capability_id(), "req-manifest")
       .unwrap();
     assert_eq!(
       principal.package_digest().unwrap().as_str(),
       conformance_package_digest().as_str()
     );
     let detect_grant = grant_from_validated_detect_manifest();
-    assert_eq!(detect_grant.plugin_id().as_str(), CONFORMANCE_DETECT_PLUGIN_ID);
+    assert_eq!(detect_grant.plugin_id().as_str(), conformance_detect_plugin_id());
     assert_eq!(detect_grant.network_entries().count(), 0);
   }
 
@@ -725,7 +800,7 @@ mod wasm_executor {
       let config = serde_json::to_vec(&entry["config"]).unwrap();
       let runtime = WasmRuntime::new().unwrap();
       let verified = compile_detect(&runtime);
-      let (principal, grant) = conformance_principal_grant_for_capability(CONFORMANCE_CAPABILITY_DETECT);
+      let (principal, grant) = conformance_principal_grant_for_capability(conformance_detect_capability_id());
       let cancel = CancelToken::new();
       let outcome = runtime
         .execute_translate_detect(
@@ -860,7 +935,7 @@ mod wasm_executor {
       runtime.clone(),
       verified,
       grant,
-      CONFORMANCE_CAPABILITY_TEXT,
+      conformance_translate_capability_id(),
       config,
       vec![],
       broker_factory,
@@ -870,8 +945,8 @@ mod wasm_executor {
       cancel: CancelToken::new(),
       deadline: None,
       integration_instance_id: Uuid::nil(),
-      plugin_id: CONFORMANCE_PLUGIN_ID.into(),
-      capability_id: CONFORMANCE_CAPABILITY_TEXT.into(),
+      plugin_id: conformance_plugin_id().into(),
+      capability_id: conformance_translate_capability_id().into(),
       provider_attempt: crate::domain::service_capability::ProviderAttemptTracker::new(),
     };
     let request = translate_request();
@@ -903,7 +978,7 @@ mod wasm_executor {
       runtime,
       verified,
       grant,
-      CONFORMANCE_CAPABILITY_TEXT,
+      conformance_translate_capability_id(),
       b"{}".to_vec(),
       vec![],
       broker_factory,
@@ -914,8 +989,8 @@ mod wasm_executor {
       cancel: CancelToken::new(),
       deadline: None,
       integration_instance_id: Uuid::nil(),
-      plugin_id: CONFORMANCE_PLUGIN_ID.into(),
-      capability_id: CONFORMANCE_CAPABILITY_TEXT.into(),
+      plugin_id: conformance_plugin_id().into(),
+      capability_id: conformance_translate_capability_id().into(),
       provider_attempt: crate::domain::service_capability::ProviderAttemptTracker::new(),
     };
     let err = TranslateTextCapability::translate(&adapter, Uuid::now_v7(), translate_request(), context)
@@ -939,7 +1014,7 @@ mod wasm_executor {
       runtime,
       verified,
       grant,
-      CONFORMANCE_CAPABILITY_TEXT,
+      conformance_translate_capability_id(),
       b"{}".to_vec(),
       vec![],
       broker_factory,
@@ -950,7 +1025,7 @@ mod wasm_executor {
       deadline: None,
       integration_instance_id: Uuid::nil(),
       plugin_id: "other.plugin".into(),
-      capability_id: CONFORMANCE_CAPABILITY_TEXT.into(),
+      capability_id: conformance_translate_capability_id().into(),
       provider_attempt: crate::domain::service_capability::ProviderAttemptTracker::new(),
     };
     let err = TranslateTextCapability::translate(&adapter, Uuid::nil(), translate_request(), context)
@@ -974,7 +1049,7 @@ mod wasm_executor {
       runtime,
       verified,
       grant,
-      CONFORMANCE_CAPABILITY_TEXT,
+      conformance_translate_capability_id(),
       b"{}".to_vec(),
       vec![],
       broker_factory,
@@ -984,8 +1059,8 @@ mod wasm_executor {
       cancel: CancelToken::new(),
       deadline: None,
       integration_instance_id: Uuid::nil(),
-      plugin_id: CONFORMANCE_PLUGIN_ID.into(),
-      capability_id: CONFORMANCE_CAPABILITY_DETECT.into(),
+      plugin_id: conformance_plugin_id().into(),
+      capability_id: conformance_detect_capability_id().into(),
       provider_attempt: crate::domain::service_capability::ProviderAttemptTracker::new(),
     };
     let err = TranslateTextCapability::translate(&adapter, Uuid::nil(), translate_request(), context)
@@ -998,7 +1073,7 @@ mod wasm_executor {
   async fn detect_world_success() {
     let runtime = WasmRuntime::new().unwrap();
     let verified = compile_detect(&runtime);
-    let (principal, grant) = conformance_principal_grant_for_capability(CONFORMANCE_CAPABILITY_DETECT);
+    let (principal, grant) = conformance_principal_grant_for_capability(conformance_detect_capability_id());
     let cancel = CancelToken::new();
     let config = b"{\"mode\":\"success\"}".to_vec();
     let request = DetectLanguageRequest { text: "hello".into() };
@@ -1024,7 +1099,7 @@ mod wasm_executor {
   async fn detect_world_failure_mode() {
     let runtime = WasmRuntime::new().unwrap();
     let verified = compile_detect(&runtime);
-    let (principal, grant) = conformance_principal_grant_for_capability(CONFORMANCE_CAPABILITY_DETECT);
+    let (principal, grant) = conformance_principal_grant_for_capability(conformance_detect_capability_id());
     let cancel = CancelToken::new();
     let config = b"{\"mode\":\"failure\"}".to_vec();
     let request = DetectLanguageRequest { text: "hello".into() };
@@ -1049,7 +1124,7 @@ mod wasm_executor {
   async fn detect_world_invalid_confidence_rejected() {
     let runtime = WasmRuntime::new().unwrap();
     let verified = compile_detect(&runtime);
-    let (principal, grant) = conformance_principal_grant_for_capability(CONFORMANCE_CAPABILITY_DETECT);
+    let (principal, grant) = conformance_principal_grant_for_capability(conformance_detect_capability_id());
     let cancel = CancelToken::new();
     let config = b"{\"mode\":\"invalid-confidence\"}".to_vec();
     let request = DetectLanguageRequest { text: "hello".into() };
@@ -1074,7 +1149,7 @@ mod wasm_executor {
   async fn detect_through_capability_trait_and_context_request_id() {
     let runtime = Arc::new(WasmRuntime::new().unwrap());
     let verified = Arc::new(compile_detect(&runtime));
-    let (_principal, grant) = conformance_principal_grant_for_capability(CONFORMANCE_CAPABILITY_DETECT);
+    let (_principal, grant) = conformance_principal_grant_for_capability(conformance_detect_capability_id());
     let captured = Arc::new(Mutex::new(Vec::<String>::new()));
     let captured_clone = captured.clone();
     let broker_factory: Arc<dyn Fn() -> Box<dyn BrokerHandle> + Send + Sync> = Arc::new(move || {
@@ -1087,7 +1162,7 @@ mod wasm_executor {
       runtime,
       verified,
       grant.clone(),
-      CONFORMANCE_CAPABILITY_DETECT,
+      conformance_detect_capability_id(),
       b"{\"mode\":\"success\"}".to_vec(),
       vec![],
       broker_factory,
@@ -1098,13 +1173,13 @@ mod wasm_executor {
       cancel: CancelToken::new(),
       deadline: None,
       integration_instance_id: Uuid::nil(),
-      plugin_id: CONFORMANCE_DETECT_PLUGIN_ID.into(),
-      capability_id: CONFORMANCE_CAPABILITY_DETECT.into(),
+      plugin_id: conformance_detect_plugin_id().into(),
+      capability_id: conformance_detect_capability_id().into(),
       provider_attempt: crate::domain::service_capability::ProviderAttemptTracker::new(),
     };
     // Direct principal-factory proof: context request_id enters a fresh principal (not inferred
     // from a successful detect call alone).
-    let principal = principal_from_context(&grant, CONFORMANCE_CAPABILITY_DETECT, Uuid::nil(), &context)
+    let principal = principal_from_context(&grant, conformance_detect_capability_id(), Uuid::nil(), &context)
       .expect("principal_from_context must accept matching detect context");
     assert_eq!(principal.request_id().as_str(), context_request_id);
     assert_eq!(
@@ -1191,7 +1266,8 @@ mod wasm_host_imports {
   #[tokio::test]
   async fn wrong_capability_denied() {
     let cancel = CancelToken::new();
-    let (detect_principal, _detect_grant) = conformance_principal_grant_for_capability(CONFORMANCE_CAPABILITY_DETECT);
+    let (detect_principal, _detect_grant) =
+      conformance_principal_grant_for_capability(conformance_detect_capability_id());
     let (_text_principal, text_grant) = conformance_principal_grant();
     let mut state = host_state(detect_principal, text_grant, cancel);
     let outcome = state.do_broker_fetch(approved_request()).await;
@@ -1205,11 +1281,11 @@ mod wasm_host_imports {
     let other_grant = ExecutionGrantSet::initial(
       Uuid::now_v7(),
       package_identity(conformance_package_digest()),
-      PluginId::parse(CONFORMANCE_PLUGIN_ID).unwrap(),
-      SemVerVersion::parse(CONFORMANCE_PLUGIN_VERSION).unwrap(),
-      vec![CapabilityId::parse(CONFORMANCE_CAPABILITY_TEXT).unwrap()],
+      PluginId::parse(conformance_plugin_id()).unwrap(),
+      SemVerVersion::parse(conformance_plugin_version()).unwrap(),
+      vec![CapabilityId::parse(conformance_translate_capability_id()).unwrap()],
       vec![NetworkGrantEntry::new(
-        CapabilityId::parse(CONFORMANCE_CAPABILITY_TEXT).unwrap(),
+        CapabilityId::parse(conformance_translate_capability_id()).unwrap(),
         EndpointId::parse("approved").unwrap(),
         HttpsOrigin::parse(CONFORMANCE_ORIGIN).unwrap(),
         HttpMethod::Get,
@@ -1465,13 +1541,13 @@ mod wasm_host_imports {
 
   #[tokio::test]
   async fn max_request_bytes_over_limit_rejected() {
-    let cap = CapabilityId::parse(CONFORMANCE_CAPABILITY_TEXT).unwrap();
+    let cap = CapabilityId::parse(conformance_translate_capability_id()).unwrap();
     let tiny_limits = ResourceLimits::new(8, 1024, 1024, 1000).unwrap();
     let grant = ExecutionGrantSet::initial(
       Uuid::nil(),
       package_identity(conformance_package_digest()),
-      PluginId::parse(CONFORMANCE_PLUGIN_ID).unwrap(),
-      SemVerVersion::parse(CONFORMANCE_PLUGIN_VERSION).unwrap(),
+      PluginId::parse(conformance_plugin_id()).unwrap(),
+      SemVerVersion::parse(conformance_plugin_version()).unwrap(),
       vec![cap.clone()],
       vec![NetworkGrantEntry::new(
         cap,
@@ -1485,7 +1561,7 @@ mod wasm_host_imports {
     )
     .unwrap();
     let principal = grant
-      .principal_for_request(CONFORMANCE_CAPABILITY_TEXT, "req-limit")
+      .principal_for_request(conformance_translate_capability_id(), "req-limit")
       .unwrap();
     let mut state = host_state(principal, grant, CancelToken::new());
     let mut request = approved_request();
@@ -1507,11 +1583,11 @@ mod wasm_host_imports {
       RuntimeIdentity::Package(PackageIdentity {
         package_digest: PackageDigest::parse(CONFORMANCE_PACKAGE_DIGEST_HEX).unwrap(),
       }),
-      PluginId::parse(CONFORMANCE_PLUGIN_ID).unwrap(),
-      SemVerVersion::parse(CONFORMANCE_PLUGIN_VERSION).unwrap(),
-      vec![CapabilityId::parse(CONFORMANCE_CAPABILITY_TEXT).unwrap()],
+      PluginId::parse(conformance_plugin_id()).unwrap(),
+      SemVerVersion::parse(conformance_plugin_version()).unwrap(),
+      vec![CapabilityId::parse(conformance_translate_capability_id()).unwrap()],
       vec![NetworkGrantEntry::with_mode_origin_and_response_modes(
-        CapabilityId::parse(CONFORMANCE_CAPABILITY_TEXT).unwrap(),
+        CapabilityId::parse(conformance_translate_capability_id()).unwrap(),
         EndpointId::parse("approved").unwrap(),
         HttpsOrigin::parse(CONFORMANCE_ORIGIN).unwrap(),
         crate::domain::runtime_plugin::NetworkOriginKind::InstanceConfigured,
@@ -1525,7 +1601,7 @@ mod wasm_host_imports {
     )
     .unwrap();
     let principal = grant
-      .principal_for_request(CONFORMANCE_CAPABILITY_TEXT, "req-bytes")
+      .principal_for_request(conformance_translate_capability_id(), "req-bytes")
       .unwrap();
     let broker = Box::new(StaticResponseBroker {
       response: Ok(BrokerFetchResponse {
@@ -2037,8 +2113,8 @@ mod wasm_limits {
     let runtime = WasmRuntime::new().unwrap();
     let verified = compile_conformance(&runtime);
     let (principal, grant) = conformance_principal_grant_for(
-      CONFORMANCE_CAPABILITY_TEXT,
-      CONFORMANCE_PLUGIN_ID,
+      conformance_translate_capability_id(),
+      conformance_plugin_id(),
       PackageDigest::parse(&"c".repeat(64)).unwrap(),
       true,
     );
@@ -2089,19 +2165,19 @@ mod wasm_limits {
   async fn bundled_principal_without_package_digest_rejected() {
     let runtime = WasmRuntime::new().unwrap();
     let verified = compile_conformance(&runtime);
-    let cap = CapabilityId::parse(CONFORMANCE_CAPABILITY_TEXT).unwrap();
+    let cap = CapabilityId::parse(conformance_translate_capability_id()).unwrap();
     let grant = ExecutionGrantSet::initial(
       Uuid::nil(),
       RuntimeIdentity::Bundled,
-      PluginId::parse(CONFORMANCE_PLUGIN_ID).unwrap(),
-      SemVerVersion::parse(CONFORMANCE_PLUGIN_VERSION).unwrap(),
+      PluginId::parse(conformance_plugin_id()).unwrap(),
+      SemVerVersion::parse(conformance_plugin_version()).unwrap(),
       vec![cap],
       vec![],
       vec![],
     )
     .unwrap();
     let principal = grant
-      .principal_for_request(CONFORMANCE_CAPABILITY_TEXT, "req-bundled")
+      .principal_for_request(conformance_translate_capability_id(), "req-bundled")
       .unwrap();
     assert!(principal.package_digest().is_none());
     let cancel = CancelToken::new();
@@ -2209,6 +2285,29 @@ mod wasm_guest_imports {
         "detect guest must not import WASI, found: {name}"
       );
     }
+  }
+
+  #[test]
+  fn baidu_ocr_guest_imports_only_langnext() {
+    let runtime = WasmRuntime::new().unwrap();
+    let package_digest = synthetic_package_digest(0xba);
+    let artifact_digest = artifact_digest_of(BAIDU_OCR_WASM);
+    let verified = runtime
+      .compile_component(&package_digest, &artifact_digest, BAIDU_OCR_WASM)
+      .expect("Baidu OCR component compiles");
+    let engine = runtime.engine().engine();
+    let mut has_common = false;
+    let mut has_host = false;
+    for (name, _extern) in verified.component().component_type().imports(engine) {
+      assert!(!name.starts_with("wasi:"), "Baidu OCR guest imports WASI: {name}");
+      assert!(
+        name.starts_with("langnext:runtime-plugin/"),
+        "Baidu OCR guest imports non-LangNext interface: {name}"
+      );
+      has_common |= name.starts_with("langnext:runtime-plugin/common");
+      has_host |= name.starts_with("langnext:runtime-plugin/host");
+    }
+    assert!(has_common && has_host, "Baidu OCR guest must import common and host");
   }
 
   /// Phase 8: the llm-models-world conformance Component imports only langnext interfaces

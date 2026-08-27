@@ -1,7 +1,6 @@
 // ABOUTME: Resolve translation execution context from Query-backed DTOs.
 // ABOUTME: Branches LLM model-chain vs plugin service-integration execution.
 import type {
-  AuthSchemeV1,
   IntegrationInstanceDto,
   ProviderInstanceDto,
   ProviderModelDto,
@@ -9,14 +8,7 @@ import type {
   TranslateInput,
   TranslationProfileDto,
 } from "../../storage/types";
-import {
-  ProviderRuntimeUnavailableError,
-  resolveEffectiveAdapterId,
-  resolveProviderExecutor,
-  type ProviderExecutor,
-} from "../providers/executor";
-import { isModelApiTypeExecutable, requireProviderPlugin } from "../providers/registry";
-import { PluginUnavailableError } from "../providers/registry";
+import { ProviderRuntimeUnavailableError, resolveProviderExecutor, type ProviderExecutor } from "../providers/executor";
 import { buildDefaultTranslateSystemPrompt, renderPromptTemplate } from "./promptTemplate";
 
 const DEFAULT_TRANSLATE_MAX_TOKENS = 32768;
@@ -224,18 +216,13 @@ function resolveLlmContext(
     if (!provider || !provider.enabled) {
       continue;
     }
-    const pluginId = resolveEffectiveAdapterId({
-      modelAdapterId: model.adapterId,
-      modelSourceAdapterId: model.sourceAdapterId,
-      providerAdapterId: provider.adapterId,
-    });
     const modelMax =
       model.capabilityOverridesJson?.defaultOutputTokens ?? model.capabilityOverridesJson?.maxOutputTokens ?? null;
     const maxTokens = profileMaxTokens ?? modelMax ?? DEFAULT_TRANSLATE_MAX_TOKENS;
 
-    // Additive executor selection: a matching active interface binding selects the runtime
-    // executor; an unavailable/revoked runtime interface fails closed and skips only that
-    // model; an unbound API type keeps the existing legacy plugin compatibility rule.
+    // Package-only executor selection: a matching active interface binding selects the runtime
+    // executor; an unavailable/revoked/missing interface fails closed and skips only that
+    // model. There is no legacy plugin compatibility rule.
     try {
       const executor = resolveProviderExecutor({
         provider,
@@ -244,25 +231,6 @@ function resolveLlmContext(
         modelId: model.id,
         catalog: snapshots.runtimeCatalog ?? [],
       });
-      if (executor.kind === "legacy-frontend-provider") {
-        // Legacy binding: keep the existing plugin availability and custom-relay rule.
-        const plugin = requireProviderPlugin(pluginId);
-        const providerPlugin = requireProviderPlugin(provider.adapterId);
-        const modelAuth = plugin.resolveAuthScheme(provider.credentialKind);
-        const providerAuth = provider.authScheme as AuthSchemeV1;
-        if (
-          !isModelApiTypeExecutable({
-            providerPluginId: provider.adapterId,
-            modelPluginId: pluginId,
-            providerAuthScheme: providerAuth,
-            modelAuthScheme: modelAuth,
-            baseUrlSource: provider.baseUrlSource,
-          })
-        ) {
-          continue;
-        }
-        void providerPlugin;
-      }
       attempts.push({
         modelId: model.id,
         modelKey: model.modelKey,
@@ -275,7 +243,7 @@ function resolveLlmContext(
         executor,
       });
     } catch (error) {
-      if (error instanceof ProviderRuntimeUnavailableError || error instanceof PluginUnavailableError) {
+      if (error instanceof ProviderRuntimeUnavailableError) {
         continue;
       }
       throw error;

@@ -43,6 +43,16 @@ struct EdgeEndpointCandidate {
   configuration_fingerprint: String,
 }
 
+/// Runtime identity a package-first create will pin for the instance, used to bind a
+/// create-time endpoint review so the consumed runtime fingerprint matches the created pin.
+/// `None` means no resolution exists and the create fails at the default-package gate.
+#[derive(Debug, Clone)]
+pub struct CreationRuntimeIdentity {
+  pub plugin_version: String,
+  pub runtime_kind: String,
+  pub package_digest: Option<String>,
+}
+
 /// Endpoint trust service shared by preview IPC, integration save, and runtime policy checks.
 #[derive(Clone)]
 pub struct EndpointTrustService {
@@ -61,7 +71,11 @@ impl EndpointTrustService {
   }
 
   /// Create an expiring host preview without mutating configuration or approval rows.
-  pub fn preview(&self, input: EndpointTrustPreviewInput) -> Result<EndpointTrustPreviewDto, StorageError> {
+  pub fn preview(
+    &self,
+    input: EndpointTrustPreviewInput,
+    creation_runtime: Option<&CreationRuntimeIdentity>,
+  ) -> Result<EndpointTrustPreviewDto, StorageError> {
     self.expire_previews();
     let plugin_id = input.plugin_id.trim().to_string();
     if plugin_id != EDGE_TTS_PLUGIN_ID {
@@ -107,14 +121,22 @@ impl EndpointTrustService {
             "expected_updated_at is only valid for an existing instance".into(),
           ));
         }
-        (
-          None,
-          Some(new_id()),
-          registration.manifest.version.clone(),
-          "bundled-rust".to_string(),
-          None,
-          None,
-        )
+        // Bind the review to the runtime identity the package-first create will pin, so the
+        // consumed fingerprint matches the created wasm binding. Without a resolution the
+        // create fails at the default-package gate and the preview is never consumed.
+        let (plugin_version, runtime_kind, package_digest) = match creation_runtime {
+          Some(identity) => (
+            identity.plugin_version.clone(),
+            identity.runtime_kind.clone(),
+            identity.package_digest.clone(),
+          ),
+          None => {
+            return Err(StorageError::PluginUnavailable(format!(
+              "default package is unavailable for {plugin_id}"
+            )));
+          }
+        };
+        (None, Some(new_id()), plugin_version, runtime_kind, package_digest, None)
       };
 
     let runtime_fingerprint = runtime_identity_fingerprint(RuntimeIdentityFingerprintInput {
@@ -455,6 +477,11 @@ pub fn classify_for_execution(
 #[cfg(test)]
 mod tests {
   use super::*;
+  const EDGE_TTS_LNPLUGIN: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../runtime-plugins/edge-tts/fixtures/com.langnext.edge-tts-1.0.0.lnplugin"
+  ));
+
   use crate::domain::endpoint_trust::EndpointTrustPreviewInput;
   use crate::domain::service_integration::{
     EDGE_TTS_PLUGIN_ID, EdgeTtsConfigV1, IntegrationHealthStatus, IntegrationInstance,
@@ -462,11 +489,15 @@ mod tests {
   use crate::domain::time::{new_id, now_rfc3339};
   use crate::repositories::integration_endpoint_trusts;
 
-  fn setup() -> (tempfile::TempDir, EndpointTrustService, Database, Uuid) {
+  fn setup() -> (tempfile::TempDir, EndpointTrustService, Database, Uuid, String) {
     let directory = tempfile::tempdir().unwrap();
     let database = Database::new(directory.path()).unwrap();
     database.initialize().unwrap();
-    let registry = Arc::new(ServiceIntegrationRegistry::bundled().unwrap());
+    // The committed signed edge-tts archive installs through the genuine package store and
+    // its definition is projected from the installed package (production startup path).
+    let packages = crate::services::test_support::vendor_packages(database.clone(), directory.path());
+    let package_digest = crate::services::test_support::bootstrap_package(&packages, EDGE_TTS_LNPLUGIN);
+    let registry = crate::services::test_support::registry_from_installed_packages(&packages);
     let service = EndpointTrustService::new(database.clone(), registry);
     let instance_id = new_id();
     let now = now_rfc3339();
@@ -488,9 +519,9 @@ mod tests {
             health_status: IntegrationHealthStatus::Ready,
             last_validated_at: None,
             last_error_code: None,
-            runtime_kind: "bundled-rust".into(),
-            package_digest: None,
-            execution_grant_set_revision: None,
+            runtime_kind: "wasm-component".into(),
+            package_digest: Some(package_digest.clone()),
+            execution_grant_set_revision: Some(1),
             runtime_state: "active".into(),
             runtime_error_code: None,
             runtime_error_message: None,
@@ -502,23 +533,56 @@ mod tests {
         Ok(())
       })
       .unwrap();
-    (directory, service, database, instance_id)
+    (directory, service, database, instance_id, package_digest)
+  }
+
+  fn wasm_creation_identity(package_digest: &str) -> CreationRuntimeIdentity {
+    CreationRuntimeIdentity {
+      plugin_version: "1.0.0".into(),
+      runtime_kind: "wasm-component".into(),
+      package_digest: Some(package_digest.to_string()),
+    }
+  }
+
+  fn consume_edge_tts_for_save(
+    service: &EndpointTrustService,
+    instance_id: Uuid,
+    package_digest: &str,
+    normalized_config: &str,
+    expected_updated_at: Option<&str>,
+    preview_id: Option<&str>,
+    acknowledgement: bool,
+  ) -> Result<Option<IntegrationEndpointTrust>, StorageError> {
+    service.consume_for_save(
+      instance_id,
+      EDGE_TTS_PLUGIN_ID,
+      "1.0.0",
+      "wasm-component",
+      Some(package_digest),
+      normalized_config,
+      expected_updated_at,
+      preview_id,
+      acknowledgement,
+    )
   }
 
   #[test]
   fn preview_is_sanitized_and_non_mutating() {
-    let (_directory, service, database, instance_id) = setup();
+    let (_directory, service, database, instance_id, _digest) = setup();
     let preview = service
-      .preview(EndpointTrustPreviewInput {
-        plugin_id: EDGE_TTS_PLUGIN_ID.into(),
-        instance_id: Some(instance_id),
-        config_json: r#"{"base-url":"https://custom.example/api/"}"#.into(),
-        expected_updated_at: Some(
-          database
-            .read(|conn| Ok(crate::repositories::integration_instances::get(conn, instance_id)?.updated_at))
-            .unwrap(),
-        ),
-      })
+      .preview(
+        EndpointTrustPreviewInput {
+          plugin_id: EDGE_TTS_PLUGIN_ID.into(),
+          instance_id: Some(instance_id),
+          config_json: r#"{"base-url":"https://custom.example/api/"}"#.into(),
+          expected_updated_at: Some(
+            database
+              .read(|conn| Ok(crate::repositories::integration_instances::get(conn, instance_id)?.updated_at))
+              .unwrap(),
+          ),
+        },
+        None,
+      )
       .unwrap();
     assert_eq!(preview.origin, "https://custom.example/api");
     assert_eq!(preview.method, ENDPOINT_TRUST_METHOD);
@@ -534,7 +598,7 @@ mod tests {
 
   #[test]
   fn preview_rejects_invalid_url_shapes() {
-    let (_directory, service, database, instance_id) = setup();
+    let (_directory, service, database, instance_id, _digest) = setup();
     let updated_at = database
       .read(|conn| Ok(crate::repositories::integration_instances::get(conn, instance_id)?.updated_at))
       .unwrap();
@@ -546,150 +610,174 @@ mod tests {
       "https://custom.example?token=secret",
       "https://custom.example/#fragment",
     ] {
-      let result = service.preview(EndpointTrustPreviewInput {
-        plugin_id: EDGE_TTS_PLUGIN_ID.into(),
-        instance_id: Some(instance_id),
-        config_json: serde_json::json!({"base-url": base_url}).to_string(),
-        expected_updated_at: Some(updated_at.clone()),
-      });
+      let result = service.preview(
+        EndpointTrustPreviewInput {
+          plugin_id: EDGE_TTS_PLUGIN_ID.into(),
+          instance_id: Some(instance_id),
+          config_json: serde_json::json!({"base-url": base_url}).to_string(),
+          expected_updated_at: Some(updated_at.clone()),
+        },
+        None,
+      );
       assert!(result.is_err(), "{base_url} must be rejected");
     }
   }
 
   #[test]
   fn stale_revision_and_missing_preview_fail_closed() {
-    let (_directory, service, _database, instance_id) = setup();
+    let (_directory, service, _database, instance_id, digest) = setup();
     let error = service
-      .preview(EndpointTrustPreviewInput {
-        plugin_id: EDGE_TTS_PLUGIN_ID.into(),
-        instance_id: Some(instance_id),
-        config_json: r#"{"base-url":"https://custom.example"}"#.into(),
-        expected_updated_at: Some("stale".into()),
-      })
-      .unwrap_err();
-    assert!(matches!(error, StorageError::Conflict(_)));
-    let error = service
-      .consume_for_save(
-        instance_id,
-        EDGE_TTS_PLUGIN_ID,
-        "1.0.0",
-        "bundled-rust",
+      .preview(
+        EndpointTrustPreviewInput {
+          plugin_id: EDGE_TTS_PLUGIN_ID.into(),
+          instance_id: Some(instance_id),
+          config_json: r#"{"base-url":"https://custom.example"}"#.into(),
+          expected_updated_at: Some("stale".into()),
+        },
         None,
-        r#"{"base-url":"https://custom.example"}"#,
-        Some("t"),
-        Some("missing"),
-        true,
       )
       .unwrap_err();
+    assert!(matches!(error, StorageError::Conflict(_)));
+    let error = consume_edge_tts_for_save(
+      &service,
+      instance_id,
+      &digest,
+      r#"{"base-url":"https://custom.example"}"#,
+      Some("t"),
+      Some("missing"),
+      true,
+    )
+    .unwrap_err();
     assert!(matches!(error, StorageError::EndpointTrustStale(_)));
   }
 
   #[test]
+  fn create_preview_without_resolved_package_fails_closed() {
+    let (_directory, service, database, instance_id, _digest) = setup();
+    let error = service
+      .preview(
+        EndpointTrustPreviewInput {
+          plugin_id: EDGE_TTS_PLUGIN_ID.into(),
+          instance_id: None,
+          config_json: r#"{"base-url":"https://custom.example"}"#.into(),
+          expected_updated_at: None,
+        },
+        None,
+      )
+      .unwrap_err();
+    match error {
+      StorageError::PluginUnavailable(message) => {
+        assert!(message.contains(EDGE_TTS_PLUGIN_ID));
+        assert!(message.contains("default package"));
+      }
+      other => panic!("expected PluginUnavailable, got {other:?}"),
+    }
+    assert_eq!(
+      database
+        .read(|conn| integration_endpoint_trusts::count_for_instance(conn, instance_id))
+        .unwrap(),
+      0
+    );
+  }
+
+  #[test]
   fn create_preview_is_bound_and_rollback_does_not_consume_it() {
-    let (_directory, service, _database, _instance_id) = setup();
+    let (_directory, service, _database, _instance_id, digest) = setup();
+    let identity = wasm_creation_identity(&digest);
     let preview = service
-      .preview(EndpointTrustPreviewInput {
-        plugin_id: EDGE_TTS_PLUGIN_ID.into(),
-        instance_id: None,
-        config_json: r#"{"base-url":"https://custom.example"}"#.into(),
-        expected_updated_at: None,
-      })
+      .preview(
+        EndpointTrustPreviewInput {
+          plugin_id: EDGE_TTS_PLUGIN_ID.into(),
+          instance_id: None,
+          config_json: r#"{"base-url":"https://custom.example"}"#.into(),
+          expected_updated_at: None,
+        },
+        Some(&identity),
+      )
       .unwrap();
     let reserved_id = service
       .reserved_create_instance_id(Some(&preview.preview_id))
       .unwrap()
       .expect("create preview must reserve an instance id");
     let wrong_id = new_id();
-    let error = service
-      .consume_for_save(
-        wrong_id,
-        EDGE_TTS_PLUGIN_ID,
-        "1.0.0",
-        "bundled-rust",
-        None,
-        r#"{"base-url":"https://custom.example"}"#,
-        None,
-        Some(&preview.preview_id),
-        true,
-      )
-      .unwrap_err();
+    let error = consume_edge_tts_for_save(
+      &service,
+      wrong_id,
+      &digest,
+      r#"{"base-url":"https://custom.example"}"#,
+      None,
+      Some(&preview.preview_id),
+      true,
+    )
+    .unwrap_err();
     assert!(matches!(error, StorageError::EndpointTrustStale(_)));
-    let trust = service
-      .consume_for_save(
-        reserved_id,
-        EDGE_TTS_PLUGIN_ID,
-        "1.0.0",
-        "bundled-rust",
-        None,
-        r#"{"base-url":"https://custom.example"}"#,
-        None,
-        Some(&preview.preview_id),
-        true,
-      )
-      .unwrap()
-      .expect("reserved create preview should be consumable");
+    let trust = consume_edge_tts_for_save(
+      &service,
+      reserved_id,
+      &digest,
+      r#"{"base-url":"https://custom.example"}"#,
+      None,
+      Some(&preview.preview_id),
+      true,
+    )
+    .unwrap()
+    .expect("reserved create preview should be consumable");
     service.rollback_preview_consumption(Some(&preview.preview_id));
     assert!(
-      service
-        .consume_for_save(
-          reserved_id,
-          EDGE_TTS_PLUGIN_ID,
-          "1.0.0",
-          "bundled-rust",
-          None,
-          r#"{"base-url":"https://custom.example"}"#,
-          None,
-          Some(&preview.preview_id),
-          true,
-        )
-        .is_ok()
-    );
-    service.commit_preview_consumption(Some(&preview.preview_id));
-    let error = service
-      .consume_for_save(
+      consume_edge_tts_for_save(
+        &service,
         reserved_id,
-        EDGE_TTS_PLUGIN_ID,
-        "1.0.0",
-        "bundled-rust",
-        None,
+        &digest,
         r#"{"base-url":"https://custom.example"}"#,
         None,
         Some(&preview.preview_id),
         true,
       )
-      .unwrap_err();
+      .is_ok()
+    );
+    service.commit_preview_consumption(Some(&preview.preview_id));
+    let error = consume_edge_tts_for_save(
+      &service,
+      reserved_id,
+      &digest,
+      r#"{"base-url":"https://custom.example"}"#,
+      None,
+      Some(&preview.preview_id),
+      true,
+    )
+    .unwrap_err();
     assert!(matches!(error, StorageError::EndpointTrustStale(_)));
     let _ = trust;
   }
 
   #[test]
   fn expired_preview_is_not_consumable() {
-    let (_directory, service, database, instance_id) = setup();
+    let (_directory, service, database, instance_id, digest) = setup();
     let updated_at = database
       .read(|conn| Ok(crate::repositories::integration_instances::get(conn, instance_id)?.updated_at))
       .unwrap();
     let preview = service
-      .preview(EndpointTrustPreviewInput {
-        plugin_id: EDGE_TTS_PLUGIN_ID.into(),
-        instance_id: Some(instance_id),
-        config_json: r#"{"base-url":"https://custom.example"}"#.into(),
-        expected_updated_at: Some(updated_at.clone()),
-      })
+      .preview(
+        EndpointTrustPreviewInput {
+          plugin_id: EDGE_TTS_PLUGIN_ID.into(),
+          instance_id: Some(instance_id),
+          config_json: r#"{"base-url":"https://custom.example"}"#.into(),
+          expected_updated_at: Some(updated_at.clone()),
+        },
+        None,
+      )
       .unwrap();
     service.expire_preview_for_test(&preview.preview_id);
-    let error = service
-      .consume_for_save(
-        instance_id,
-        EDGE_TTS_PLUGIN_ID,
-        "1.0.0",
-        "bundled-rust",
-        None,
-        r#"{"base-url":"https://custom.example"}"#,
-        Some(&updated_at),
-        Some(&preview.preview_id),
-        true,
-      )
-      .unwrap_err();
+    let error = consume_edge_tts_for_save(
+      &service,
+      instance_id,
+      &digest,
+      r#"{"base-url":"https://custom.example"}"#,
+      Some(&updated_at),
+      Some(&preview.preview_id),
+      true,
+    )
+    .unwrap_err();
     assert!(matches!(error, StorageError::EndpointTrustStale(_)));
   }
 }

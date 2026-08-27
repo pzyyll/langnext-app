@@ -1,5 +1,6 @@
 // ABOUTME: Ordered embedded SQL migration runner using PRAGMA user_version.
 // ABOUTME: Migrations apply inside one transaction; SQL must stay transaction-compatible.
+#![allow(dead_code)]
 use crate::error::StorageError;
 use rusqlite::Connection;
 
@@ -34,7 +35,7 @@ pub const MIGRATIONS: &[&str] = &[
   include_str!("../../migrations/0027_default_package_activation_policies.sql"),
   include_str!("../../migrations/0028_default_runtime_activation_claims.sql"),
   include_str!("../../migrations/0029_default_runtime_authority_approvals.sql"),
-  include_str!("../../migrations/0030_disable_retired_legacy_runtimes.sql"),
+  include_str!("../../migrations/0031_unsigned_plugin_packages.sql"),
 ];
 
 pub fn latest_version() -> i32 {
@@ -313,6 +314,107 @@ mod tests {
         .unwrap_or_else(|e| panic!("{table} missing: {e}"));
       assert_eq!(count, 0, "{table} should be empty");
     }
+    // Package-only schema: no direct-Baidu orchestration objects or columns.
+    for table in [
+      "baidu_ocr_migration_previews",
+      "baidu_ocr_migration_intents",
+      "baidu_ocr_migration_snapshots",
+    ] {
+      assert!(
+        conn
+          .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |_r| Ok(0))
+          .is_err(),
+        "{table} must not exist in the unpublished package-only schema"
+      );
+    }
+    for column in ["baidu_action", "api_key_ref", "secret_key_ref"] {
+      let present: i64 = conn
+        .query_row(
+          "SELECT COUNT(*) FROM pragma_table_info('ocr_services') WHERE name = ?1",
+          params![column],
+          |r| r.get(0),
+        )
+        .unwrap();
+      assert_eq!(present, 0, "ocr_services.{column} must not exist");
+    }
+    let ocr_sql: String = conn
+      .query_row(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ocr_services'",
+        [],
+        |r| r.get(0),
+      )
+      .unwrap();
+    assert!(ocr_sql.contains("'ai'"));
+    assert!(ocr_sql.contains("'plugin_capability'"));
+    assert!(!ocr_sql.contains("'baidu'"));
+    let integration_sql: String = conn
+      .query_row(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'integration_instances'",
+        [],
+        |r| r.get(0),
+      )
+      .unwrap();
+    assert!(integration_sql.contains("wasm-component"));
+    assert!(integration_sql.contains("trusted-native-worker"));
+    assert!(!integration_sql.contains("bundled-rust"));
+    assert!(!integration_sql.contains("legacy-frontend-provider"));
+    let provider_sql: String = conn
+      .query_row(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'provider_runtime_bindings'",
+        [],
+        |r| r.get(0),
+      )
+      .unwrap();
+    assert!(provider_sql.contains("wasm-component"));
+    assert!(!provider_sql.contains("legacy-frontend-provider"));
+    let journal_sql: String = conn
+      .query_row(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'credential_operations'",
+        [],
+        |r| r.get(0),
+      )
+      .unwrap();
+    assert!(journal_sql.contains("'integration'"));
+    assert!(!journal_sql.contains("ocr_api_key"));
+    assert!(!journal_sql.contains("ocr_secret_key"));
+    assert!(
+      conn
+        .execute(
+          "INSERT INTO integration_instances (
+            id, plugin_id, plugin_version, display_name, enabled,
+            config_json, config_schema_version, health_status,
+            runtime_kind, package_digest, execution_grant_set_revision,
+            runtime_state, created_at, updated_at
+          ) VALUES (
+            'bad-missing-digest', 'com.example.x', '1.0.0', 'Bad', 1,
+            '{}', 1, 'ready',
+            'wasm-component', NULL, 1,
+            'active', 't', 't'
+          )",
+          [],
+        )
+        .is_err(),
+      "package pin without digest must fail"
+    );
+    assert!(
+      conn
+        .execute(
+          "INSERT INTO integration_instances (
+            id, plugin_id, plugin_version, display_name, enabled,
+            config_json, config_schema_version, health_status,
+            runtime_kind, package_digest, execution_grant_set_revision,
+            runtime_state, created_at, updated_at
+          ) VALUES (
+            'bad-legacy-kind', 'com.example.x', '1.0.0', 'Bad', 1,
+            '{}', 1, 'ready',
+            'bundled-rust', NULL, NULL,
+            'active', 't', 't'
+          )",
+          [],
+        )
+        .is_err(),
+      "unsupported runtime kind must fail"
+    );
   }
 
   /// Migration 0027 creates policy/intent tables without authorizing existing defaults.
@@ -474,7 +576,7 @@ mod tests {
   }
 
   #[test]
-  fn migrate_v16_to_v17_backfills_bundled_runtime_pins() {
+  fn migrate_v16_to_v17_does_not_synthesize_unpinned_runtime_instances() {
     let mut conn = Connection::open_in_memory().unwrap();
     migrate_with(&mut conn, &MIGRATIONS[..16]).unwrap();
     assert_eq!(read_user_version(&conn).unwrap(), 16);
@@ -496,18 +598,17 @@ mod tests {
     migrate(&mut conn).unwrap();
     assert_eq!(read_user_version(&conn).unwrap(), latest_version());
 
-    let (runtime_kind, package_digest, grant_rev, runtime_state): (String, Option<String>, Option<i64>, String) = conn
+    let count: i64 = conn
       .query_row(
-        "SELECT runtime_kind, package_digest, execution_grant_set_revision, runtime_state
-           FROM integration_instances WHERE id = 'inst-1'",
+        "SELECT COUNT(*) FROM integration_instances WHERE id = 'inst-1'",
         [],
-        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        |r| r.get(0),
       )
       .unwrap();
-    assert_eq!(runtime_kind, "bundled-rust");
-    assert!(package_digest.is_none());
-    assert!(grant_rev.is_none());
-    assert_eq!(runtime_state, "active");
+    assert_eq!(
+      count, 0,
+      "unpinned v16 instances must not receive a synthesized package identity"
+    );
   }
 
   #[test]
@@ -771,21 +872,19 @@ mod tests {
       .execute(
         "INSERT INTO ocr_services (
           id, provider_type, display_name, enabled, sort_order,
-          baidu_action, api_key_ref, secret_key_ref,
           provider_model_id, temperature, default_prompt_template_id,
           created_at, updated_at
         ) VALUES (
-          'ocr-baidu-1', 'baidu', 'Baidu OCR', 1, 0,
-          'accurate', 'ocr/api', 'ocr/secret',
-          NULL, NULL, NULL,
+          'ocr-ai-1', 'ai', 'AI OCR', 1, 0,
+          '22222222-2222-4222-8222-222222222222', 0.2, 'template-1',
           't0', 't1'
         )",
         [],
       )
       .unwrap();
 
-    migrate(&mut conn).unwrap();
-    assert_eq!(read_user_version(&conn).unwrap(), latest_version());
+    migrate_with(&mut conn, &MIGRATIONS[..14]).unwrap();
+    assert_eq!(read_user_version(&conn).unwrap(), 14);
 
     let has_integration_col: i64 = conn
       .query_row(
@@ -799,8 +898,7 @@ mod tests {
     let (
       provider_type,
       display_name,
-      baidu_action,
-      api_key_ref,
+      provider_model_id,
       integration_instance_id,
       ocr_capability_id,
       capability_preferences_version,
@@ -811,15 +909,14 @@ mod tests {
       Option<String>,
       Option<String>,
       Option<String>,
-      Option<String>,
       Option<i64>,
       Option<String>,
     ) = conn
       .query_row(
-        "SELECT provider_type, display_name, baidu_action, api_key_ref,
+        "SELECT provider_type, display_name, provider_model_id,
                 integration_instance_id, ocr_capability_id,
                 capability_preferences_version, capability_preferences_json
-         FROM ocr_services WHERE id = 'ocr-baidu-1'",
+         FROM ocr_services WHERE id = 'ocr-ai-1'",
         [],
         |r| {
           Ok((
@@ -830,16 +927,17 @@ mod tests {
             r.get(4)?,
             r.get(5)?,
             r.get(6)?,
-            r.get(7)?,
           ))
         },
       )
       .unwrap();
 
-    assert_eq!(provider_type, "baidu");
-    assert_eq!(display_name, "Baidu OCR");
-    assert_eq!(baidu_action.as_deref(), Some("accurate"));
-    assert_eq!(api_key_ref.as_deref(), Some("ocr/api"));
+    assert_eq!(provider_type, "ai");
+    assert_eq!(display_name, "AI OCR");
+    assert_eq!(
+      provider_model_id.as_deref(),
+      Some("22222222-2222-4222-8222-222222222222")
+    );
     assert!(integration_instance_id.is_none());
     assert!(ocr_capability_id.is_none());
     assert!(capability_preferences_version.is_none());
@@ -937,16 +1035,17 @@ mod tests {
 
   /// Phase 8 provider runtime bindings: a v23 database with a provider, model, profile,
   /// prompt template, profile target, credential reference, and sync state migrates without
-  /// rewriting any provider-owned row, backfills one active legacy binding per provider, and
-  /// exposes a sanitized DTO that never carries the credential reference.
+  /// rewriting any provider-owned row or synthesizing a runtime binding. An explicit package
+  /// pin then exposes a sanitized DTO that never carries the credential reference.
   #[test]
-  fn runtime_provider_binding_backfill_preserves_provider_rows() {
+  fn runtime_provider_migration_preserves_provider_rows_without_synthesized_bindings() {
     const PROVIDER_ID: &str = "11111111-1111-4111-8111-111111111111";
     const PROVIDER_UUID: &str = "11111111-1111-4111-8111-111111111111";
     const MODEL_ID: &str = "22222222-2222-4222-8222-222222222222";
     const PROFILE_ID: &str = "33333333-3333-4333-8333-333333333333";
     const TEMPLATE_ID: &str = "44444444-4444-4444-8444-444444444444";
     const CREDENTIAL_REF: &str = "provider/11111111-1111-4111-8111-111111111111/op-1";
+    const PACKAGE_DIGEST: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
     let mut conn = Connection::open_in_memory().unwrap();
     migrate_with(&mut conn, &MIGRATIONS[..23]).unwrap();
@@ -1189,53 +1288,48 @@ mod tests {
     assert_eq!(target_model_id, MODEL_ID);
     assert_eq!(priority, 0);
 
-    // Every provider received exactly one active legacy binding with no package/grant pin.
+    // Unpublished package-only: v23 providers keep their rows and do not receive a
+    // synthesized runtime binding.
     let binding_count: i64 = conn
       .query_row("SELECT COUNT(*) FROM provider_runtime_bindings", [], |r| r.get(0))
       .unwrap();
-    assert_eq!(binding_count, 1);
-    let (runtime_kind, package_digest, grant_revision, state, error_code, error_message, requirement_json): (
-      String,
-      Option<String>,
-      Option<i64>,
-      String,
-      Option<String>,
-      Option<String>,
-      Option<String>,
-    ) = conn
+    assert_eq!(binding_count, 0);
+    let listed = provider_runtime_bindings::list_by_provider(&conn, Uuid::parse_str(PROVIDER_UUID).unwrap()).unwrap();
+    assert!(listed.is_empty());
+
+    // The exact credential reference survives byte-equivalent (v23 column values preserved).
+    let (id, credential_ref): (String, Option<String>) = conn
       .query_row(
-        "SELECT runtime_kind, package_digest, grant_set_revision, state, error_code, error_message,
-                runtime_requirement_json
-           FROM provider_runtime_bindings WHERE provider_id = ?1",
+        "SELECT id, credential_ref FROM provider_instances WHERE id = ?1",
         params![PROVIDER_ID],
-        |r| {
-          Ok((
-            r.get(0)?,
-            r.get(1)?,
-            r.get(2)?,
-            r.get(3)?,
-            r.get(4)?,
-            r.get(5)?,
-            r.get(6)?,
-          ))
-        },
+        |r| Ok((r.get(0)?, r.get(1)?)),
       )
       .unwrap();
-    assert_eq!(runtime_kind, "legacy-frontend-provider");
-    assert!(package_digest.is_none());
-    assert!(grant_revision.is_none());
-    assert_eq!(state, "active");
-    assert!(error_code.is_none());
-    assert!(error_message.is_none());
-    assert!(requirement_json.is_none());
+    assert_eq!(id, PROVIDER_ID);
+    assert_eq!(credential_ref.as_deref(), Some(CREDENTIAL_REF));
 
-    // The sanitized DTO carries only runtime identity: no credential reference anywhere.
+    // An explicit package pin is readable; the sanitized DTO never carries the credential reference.
+    conn
+      .execute(
+        "INSERT INTO provider_runtime_bindings (
+            provider_id, adapter_id, runtime_kind, package_digest, grant_set_revision, state,
+            error_code, error_message, runtime_requirement_json, created_at, updated_at
+         ) VALUES (?1, 'openai-compatible', 'wasm-component', ?2, 1, 'active', NULL, NULL, ?3, 't', 't')",
+        params![
+          PROVIDER_ID,
+          PACKAGE_DIGEST,
+          r#"{"adapterId":"openai-compatible","runtimeKind":"wasm-component","packageDigest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","pluginId":"com.langnext.provider.openai-compatible","pluginVersion":"1.0.0","publisherKeyId":"com.langnext.vendor.keys.1","publisherKeyFingerprint":"f1","pluginApiVersion":"1.0","legacyAliases":["openai-compatible"],"capabilities":[]}"#,
+        ],
+      )
+      .unwrap();
     let provider = provider_instances::get(&conn, Uuid::parse_str(PROVIDER_UUID).unwrap()).unwrap();
     let bindings = provider_runtime_bindings::list_by_provider(&conn, Uuid::parse_str(PROVIDER_UUID).unwrap()).unwrap();
     let dto = ProviderInstanceDto::from_provider_and_runtime(&provider, &bindings);
     let json = serde_json::to_string(&dto).unwrap();
-    assert!(json.contains("\"runtimeKind\":\"legacy-frontend-provider\""));
+    assert!(json.contains("\"runtimeKind\":\"wasm-component\""));
+    assert!(json.contains("\"adapterId\":\"openai-compatible\""));
     assert!(json.contains("\"state\":\"active\""));
+    assert!(json.contains("\"packageDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\""));
     assert!(!json.contains("credentialRef"));
     assert!(!json.contains("credential_ref"));
     assert!(!json.contains("provider/11111111"));
@@ -1448,130 +1542,5 @@ mod tests {
     assert_eq!(package_digest.as_deref(), Some(PACKAGE_DIGEST));
     assert!(grant_revision.is_none());
     assert_eq!(error_code.as_deref(), Some("plugin_unavailable"));
-  }
-
-  /// Migration 0030 is a registered checkpoint: it advances `user_version` to 30 but never
-  /// disables, deletes, or rewrites any row. Retirement stays inventory-driven.
-  #[test]
-  fn retirement_migration_preserves_active_rows() {
-    const PLUGIN_ID: &str = "com.langnext.google-translate-web";
-    const PROVIDER_ID: &str = "11111111-1111-4111-8111-111111111111";
-    const ENABLED_INSTANCE: &str = "inst-0";
-    const TIMESTAMP: &str = "2026-08-12T00:00:00Z";
-
-    let mut conn = Connection::open_in_memory().unwrap();
-    migrate_with(&mut conn, &MIGRATIONS[..29]).unwrap();
-    assert_eq!(read_user_version(&conn).unwrap(), 29);
-
-    // Enabled legacy Google Web, Edge TTS, Google Cloud, and PaddleOCR rows, plus an enabled
-    // provider with a legacy binding and one dependency row.
-    for (index, plugin) in [
-      "com.langnext.google-translate-web",
-      "com.langnext.edge-tts",
-      "com.langnext.google-cloud",
-      "com.langnext.paddleocr",
-    ]
-    .iter()
-    .enumerate()
-    {
-      conn
-        .execute(
-          "INSERT INTO integration_instances (
-            id, plugin_id, plugin_version, display_name, enabled,
-            config_json, config_schema_version, health_status,
-            last_validated_at, last_error_code, runtime_kind, package_digest,
-            execution_grant_set_revision, runtime_state, runtime_error_code,
-            runtime_error_message, runtime_requirement_json, created_at, updated_at
-          ) VALUES (?1, ?2, 'legacy', 'fixture', 1,
-            '{}', 1, 'ready',
-            NULL, NULL, 'bundled-rust', NULL,
-            NULL, 'active', NULL,
-            NULL, NULL, ?3, ?3)",
-          params![format!("inst-{index}"), plugin, TIMESTAMP],
-        )
-        .unwrap();
-    }
-    conn
-      .execute(
-        "INSERT INTO provider_instances (
-          id, adapter_id, display_name, base_url, base_url_source, auth_scheme_json,
-          credential_kind, credential_ref, enabled, proxy_mode, insecure_http_confirmed_at,
-          models_synced_at, models_sync_status, models_sync_error_code, created_at, updated_at, sort_order
-        ) VALUES (?1, 'openai-compatible', 'fixture', 'https://api.example.com/v1', 'plugin_default',
-          '{\"schemaVersion\":1,\"type\":\"none\"}', 'none', NULL, 1, 'inherit', NULL,
-          NULL, 'never', NULL, ?2, ?2, 0)",
-        params![PROVIDER_ID, TIMESTAMP],
-      )
-      .unwrap();
-    conn
-      .execute(
-        "INSERT INTO provider_runtime_bindings (
-          provider_id, adapter_id, runtime_kind, package_digest, grant_set_revision, state,
-          error_code, error_message, runtime_requirement_json, created_at, updated_at
-        ) VALUES (?1, 'openai-compatible', 'legacy-frontend-provider', NULL, NULL, 'active',
-          NULL, NULL, NULL, ?2, ?2)",
-        params![PROVIDER_ID, TIMESTAMP],
-      )
-      .unwrap();
-    conn
-      .execute(
-        "INSERT INTO speech_services (
-          id, display_name, enabled, sort_order, integration_instance_id, capability_id,
-          preferences_schema_version, preferences_json, created_at, updated_at
-        ) VALUES ('dep-1', 'dep', 1, 0, ?1, 'speech.synthesize@1', 1, '{}', ?2, ?2)",
-        params![ENABLED_INSTANCE, TIMESTAMP],
-      )
-      .unwrap();
-
-    migrate(&mut conn).unwrap();
-    assert_eq!(
-      read_user_version(&conn).unwrap(),
-      30,
-      "checkpoint advances the schema version"
-    );
-
-    let enabled_integrations: i64 = conn
-      .query_row(
-        "SELECT COUNT(*) FROM integration_instances WHERE enabled = 1 AND runtime_kind = 'bundled-rust'",
-        [],
-        |row| row.get(0),
-      )
-      .unwrap();
-    assert_eq!(
-      enabled_integrations, 4,
-      "every enabled legacy integration stays enabled"
-    );
-    let enabled_provider: i64 = conn
-      .query_row(
-        "SELECT COUNT(*) FROM provider_instances WHERE enabled = 1 AND id = ?1",
-        params![PROVIDER_ID],
-        |row| row.get(0),
-      )
-      .unwrap();
-    assert_eq!(enabled_provider, 1, "enabled legacy provider stays enabled");
-    let binding_count: i64 = conn
-      .query_row("SELECT COUNT(*) FROM provider_runtime_bindings", [], |row| row.get(0))
-      .unwrap();
-    assert_eq!(binding_count, 1, "legacy binding stays");
-    let dep_count: i64 = conn
-      .query_row("SELECT COUNT(*) FROM speech_services", [], |row| row.get(0))
-      .unwrap();
-    assert_eq!(dep_count, 1, "dependency row stays");
-    let integration_count: i64 = conn
-      .query_row("SELECT COUNT(*) FROM integration_instances", [], |row| row.get(0))
-      .unwrap();
-    assert_eq!(integration_count, 4, "no integration row is deleted");
-  }
-
-  /// Migration 0030 contains no executor allowlist: retirement scope cannot re-enter through SQL.
-  #[test]
-  fn retirement_migration_contains_no_executor_allowlist() {
-    let sql = MIGRATIONS[29];
-    assert!(!sql.contains("UPDATE"), "checkpoint must not update rows");
-    assert!(!sql.contains("DELETE"), "checkpoint must not delete rows");
-    assert!(
-      !sql.contains("paddleocr") && !sql.contains("google-translate") && !sql.contains("edge-tts"),
-      "checkpoint must not name executors"
-    );
   }
 }

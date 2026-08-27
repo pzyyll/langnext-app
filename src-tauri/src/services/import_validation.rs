@@ -38,7 +38,6 @@ use crate::services::settings::{
 use crate::services::translation_profiles::{validate_profile_language_preferences, validate_prompt_templates};
 use rusqlite::Connection;
 use std::collections::{HashMap, HashSet};
-use std::sync::OnceLock;
 use uuid::Uuid;
 
 /// Fixed Copy-mode ID remap owned by one preview session. Preview generates it once;
@@ -80,10 +79,6 @@ pub struct ValidatedImportPlan {
   pub clear_global_proxy: bool,
   /// Expected local credential refs for merge ownership CAS (provider_id -> ref).
   pub expected_provider_refs: HashMap<Uuid, Option<String>>,
-  /// Expected local Baidu OCR api key refs for merge CAS (service_id -> ref).
-  pub expected_ocr_api_key_refs: HashMap<Uuid, Option<String>>,
-  /// Expected local Baidu OCR secret key refs for merge CAS (service_id -> ref).
-  pub expected_ocr_secret_key_refs: HashMap<Uuid, Option<String>>,
   pub expected_proxy_ref: Option<String>,
   /// Fixed Copy-mode ID remap (empty in Merge mode). Preview stores it; apply reuses it.
   pub copy_id_maps: ImportCopyIdMaps,
@@ -97,23 +92,32 @@ pub fn build_validated_plan(
   conn: &Connection,
   document: &ConfigurationExport,
   mode: ImportConflictMode,
+  registry: Option<&ServiceIntegrationRegistry>,
 ) -> Result<ValidatedImportPlan, StorageError> {
-  build_validated_plan_with_maps(conn, document, mode, None)
+  build_validated_plan_with_maps(conn, document, mode, None, registry)
 }
 
 /// Build a validated plan using local rows visible on `conn`. `copy_maps` supplies the fixed
-/// Copy-mode ID remap owned by a preview session; `None` generates a fresh mapping.
+/// Copy-mode ID remap owned by a preview session; `None` generates a fresh mapping. `registry`
+/// is the installed-package definition catalog; without it, plans stay structurally lenient.
 pub fn build_validated_plan_with_maps(
   conn: &Connection,
   document: &ConfigurationExport,
   mode: ImportConflictMode,
   copy_maps: Option<&ImportCopyIdMaps>,
+  registry: Option<&ServiceIntegrationRegistry>,
 ) -> Result<ValidatedImportPlan, StorageError> {
   let mut errors = Vec::new();
 
   // Documents reaching this path are already normalized to the current format version.
   if document.format_version != EXPORT_FORMAT_VERSION {
     errors.push(format!("unsupported formatVersion {}", document.format_version));
+  }
+  // Package-only runtime records: integration requirements must be package-backed and every
+  // provider must carry a non-empty wasm `runtimeBindings` set with its default adapter.
+  // Legacy bundled/TypeScript identities make the preview invalid and block apply.
+  if let Err(e) = crate::domain::import_export::validate_current_format_runtime_records(document) {
+    errors.push(format!("runtime records: {e}"));
   }
 
   // Reject duplicate identities before maps silently overwrite.
@@ -233,7 +237,7 @@ pub fn build_validated_plan_with_maps(
     if i.display_name.trim().is_empty() {
       errors.push(format!("integration {}: display_name must not be empty", i.id));
     }
-    match normalize_imported_integration_config(&i.plugin_id, &i.config_json) {
+    match normalize_imported_integration_config(&i.plugin_id, &i.config_json, registry) {
       Ok(config_json) => {
         normalized_integration_configs.insert(i.id, config_json);
       }
@@ -342,6 +346,7 @@ pub fn build_validated_plan_with_maps(
       &doc_integration_ids,
       mode,
       &local_integrations,
+      registry,
     ) {
       Ok(preferences) => {
         normalized_speech_preferences.insert(service.id, preferences);
@@ -371,7 +376,6 @@ pub fn build_validated_plan_with_maps(
   let mut counts = ImportPreviewCounts::default();
   let mut requires_authentication = Vec::new();
   let mut integration_requires_authentication = Vec::new();
-  let mut ocr_requires_authentication = Vec::new();
 
   match mode {
     ImportConflictMode::Merge => {
@@ -406,7 +410,7 @@ pub fn build_validated_plan_with_maps(
           counts.integrations_create += 1;
         }
         // Only credential-bearing plugins require re-auth after secret-free import.
-        if integration_plugin_requires_authentication(&i.plugin_id) {
+        if integration_plugin_requires_authentication(&i.plugin_id, registry) {
           integration_requires_authentication.push(i.id);
         }
       }
@@ -415,9 +419,6 @@ pub fn build_validated_plan_with_maps(
           counts.ocr_services_update += 1;
         } else {
           counts.ocr_services_create += 1;
-        }
-        if matches!(service.provider_type, OcrProviderType::Baidu) {
-          ocr_requires_authentication.push(service.id);
         }
       }
       for service in &document.speech_services {
@@ -496,7 +497,7 @@ pub fn build_validated_plan_with_maps(
           .copied()
           .unwrap_or_else(new_id);
         integration_id_map.insert(i.id, new_integration_id);
-        if integration_plugin_requires_authentication(&i.plugin_id) {
+        if integration_plugin_requires_authentication(&i.plugin_id, registry) {
           integration_requires_authentication.push(new_integration_id);
         }
       }
@@ -506,9 +507,7 @@ pub fn build_validated_plan_with_maps(
           .copied()
           .unwrap_or_else(new_id);
         ocr_service_id_map.insert(service.id, new_ocr_id);
-        if matches!(service.provider_type, OcrProviderType::Baidu) {
-          ocr_requires_authentication.push(new_ocr_id);
-        }
+        let _ = new_ocr_id;
       }
       for service in &document.speech_services {
         let new_speech_id = copy_maps
@@ -568,7 +567,6 @@ pub fn build_validated_plan_with_maps(
     validation_errors: errors.clone(),
     requires_authentication,
     integration_requires_authentication,
-    ocr_requires_authentication,
     proxy_requires_authentication,
     default_profile_cleared,
     preview_id: String::new(),
@@ -594,8 +592,6 @@ pub fn build_validated_plan_with_maps(
       provider_cleanup_ids: vec![],
       clear_global_proxy: false,
       expected_provider_refs: HashMap::new(),
-      expected_ocr_api_key_refs: HashMap::new(),
-      expected_ocr_secret_key_refs: HashMap::new(),
       expected_proxy_ref: local_proxy_ref.clone(),
       copy_id_maps: ImportCopyIdMaps::default(),
       cas_baseline: String::new(),
@@ -650,19 +646,21 @@ pub fn build_validated_plan_with_maps(
       updated_at: now.clone(),
     });
     // Carry the exact non-secret adapter-keyed runtime requirements keyed by the final
-    // provider id (remapped in Copy mode). A provider without any requirement keeps one
-    // legacy requirement for its default API type so every imported provider owns its
-    // default binding identity. Package requirements restore as unavailable metadata only.
-    let requirements = if p.runtime_bindings.is_empty() {
-      vec![ProviderRuntimeRequirementExport::legacy()]
-    } else {
-      let mut requirements = Vec::with_capacity(p.runtime_bindings.len());
-      for requirement in &p.runtime_bindings {
-        validate_provider_runtime_requirement(requirement)?;
+    // provider id (remapped in Copy mode). Package-only: every provider must carry a
+    // non-empty `runtimeBindings` set; legacy default synthesis does not exist. Package
+    // requirements restore as unavailable metadata only. Empty bindings were already
+    // recorded as a validation error; the provider simply carries no requirement rows.
+    if p.runtime_bindings.is_empty() {
+      continue;
+    }
+    let mut requirements = Vec::with_capacity(p.runtime_bindings.len());
+    for requirement in &p.runtime_bindings {
+      if let Err(e) = validate_provider_runtime_requirement(requirement) {
+        errors.push(format!("provider {}: {e}", p.id));
+      } else {
         requirements.push(requirement.clone());
       }
-      requirements
-    };
+    }
     provider_runtime_requirements.insert(id, requirements);
   }
 
@@ -879,6 +877,7 @@ pub fn build_validated_plan_with_maps(
       created_at,
       now.clone(),
       config_json,
+      registry,
     ));
   }
 
@@ -896,19 +895,12 @@ pub fn build_validated_plan_with_maps(
 
   let mut planned_ocr_services = Vec::new();
   let mut planned_ocr_templates = Vec::new();
-  let mut expected_ocr_api_key_refs = HashMap::new();
-  let mut expected_ocr_secret_key_refs = HashMap::new();
-
   for exported in &document.ocr_services {
     let (id, created_at) = match mode {
       ImportConflictMode::Merge => {
         if let Some(local) = local_ocr_services.get(&exported.id) {
-          expected_ocr_api_key_refs.insert(exported.id, local.api_key_ref.clone());
-          expected_ocr_secret_key_refs.insert(exported.id, local.secret_key_ref.clone());
           (exported.id, local.created_at.clone())
         } else {
-          expected_ocr_api_key_refs.insert(exported.id, None);
-          expected_ocr_secret_key_refs.insert(exported.id, None);
           (exported.id, exported.created_at.clone())
         }
       }
@@ -939,9 +931,6 @@ pub fn build_validated_plan_with_maps(
       display_name: exported.display_name.clone(),
       enabled: exported.enabled,
       sort_order: exported.sort_order,
-      baidu_action: exported.baidu_action,
-      api_key_ref: None,
-      secret_key_ref: None,
       provider_model_id,
       temperature: exported.temperature,
       default_prompt_template_id,
@@ -1055,8 +1044,6 @@ pub fn build_validated_plan_with_maps(
     provider_cleanup_ids,
     clear_global_proxy,
     expected_provider_refs,
-    expected_ocr_api_key_refs,
-    expected_ocr_secret_key_refs,
     expected_proxy_ref: local_proxy_ref.clone(),
     copy_id_maps: ImportCopyIdMaps {
       provider_id_map,
@@ -1146,11 +1133,8 @@ fn compute_plan_cas_baseline(
         owners.push(("provider".into(), p.id.to_string(), local.credential_ref.clone()));
       }
     }
-    for s in &document.ocr_services {
-      if let Some(local) = local_ocr_services.get(&s.id) {
-        owners.push(("ocr_api".into(), s.id.to_string(), local.api_key_ref.clone()));
-        owners.push(("ocr_secret".into(), s.id.to_string(), local.secret_key_ref.clone()));
-      }
+    for _s in &document.ocr_services {
+      // Plugin/AI OCR services own no host credentials; nothing to clear.
     }
   }
   // The plan clears the global proxy binding when the imported document configures a
@@ -1211,15 +1195,13 @@ fn derive_runtime_requirement_previews(
       ImportConflictMode::Merge => provider.id,
       ImportConflictMode::Copy => *provider_id_map.get(&provider.id).expect("provider map"),
     };
-    // Mirrors plan building: a provider without bindings owns one legacy requirement for
-    // its default API type; otherwise every adapter-keyed requirement is previewed.
-    let requirements = if provider.runtime_bindings.is_empty() {
-      let mut requirement = ProviderRuntimeRequirementExport::legacy();
-      requirement.adapter_id = Some(provider.adapter_id.clone());
-      vec![requirement]
-    } else {
-      provider.runtime_bindings.clone()
-    };
+    // Mirrors plan building: every adapter-keyed requirement of a package-only provider is
+    // previewed; providers without bindings are structurally invalid (already recorded in the
+    // validation errors) and preview no entries for them.
+    if provider.runtime_bindings.is_empty() {
+      continue;
+    }
+    let requirements = provider.runtime_bindings.clone();
     for requirement in requirements {
       let (local_status, required_action) = provider_runtime_status(conn, &requirement)?;
       entries.push(ImportRuntimeRequirementPreview {
@@ -1243,14 +1225,12 @@ fn derive_runtime_requirement_previews(
 
 /// Deterministic status/action for one integration runtime requirement. Package-backed
 /// requirements use the exact digest + declared publisher identity against the local
-/// catalog; bundled/legacy kinds use their own closed statuses.
+/// catalog; legacy bundled/TypeScript kinds are incompatible and never import.
 fn integration_runtime_status(
   conn: &Connection,
   requirement: &RuntimeRequirementExport,
 ) -> Result<(ImportRuntimeLocalStatus, ImportRuntimeRequiredAction), StorageError> {
   match requirement.runtime_kind.as_str() {
-    "bundled-rust" => Ok((ImportRuntimeLocalStatus::Bundled, ImportRuntimeRequiredAction::None)),
-    "legacy-frontend-provider" => Ok((ImportRuntimeLocalStatus::Legacy, ImportRuntimeRequiredAction::None)),
     "wasm-component" | "trusted-native-worker" => package_runtime_status(
       conn,
       &requirement.runtime_kind,
@@ -1269,12 +1249,12 @@ fn integration_runtime_status(
 }
 
 /// Deterministic status/action for one provider adapter-keyed runtime requirement.
+/// Package-only: only `wasm-component` is a valid provider runtime kind.
 fn provider_runtime_status(
   conn: &Connection,
   requirement: &ProviderRuntimeRequirementExport,
 ) -> Result<(ImportRuntimeLocalStatus, ImportRuntimeRequiredAction), StorageError> {
   match requirement.runtime_kind.as_str() {
-    "legacy-frontend-provider" => Ok((ImportRuntimeLocalStatus::Legacy, ImportRuntimeRequiredAction::None)),
     "wasm-component" => package_runtime_status(
       conn,
       &requirement.runtime_kind,
@@ -1365,18 +1345,23 @@ fn integration_from_export(
   created_at: String,
   updated_at: String,
   config_json: String,
+  registry: Option<&ServiceIntegrationRegistry>,
 ) -> IntegrationInstance {
   // Credential-bearing plugins stay unconfigured until re-auth.
   // Zero-secret Web instances with complete validated config are Ready and executable.
-  let health_status = imported_integration_health(&exported.plugin_id, &config_json, exported.config_schema_version);
+  let health_status = imported_integration_health(
+    &exported.plugin_id,
+    &config_json,
+    exported.config_schema_version,
+    registry,
+  );
   // Preserve exact runtime requirements. Never invent digests, never download packages, never
   // issue grants or activate. Package-backed imports stay unresolved until local install +
   // trust + permission approval + explicit activation.
-  // v7 requires an explicit runtime record. Missing runtime is only legal on pre-v7 documents
-  // after sequential normalization (which synthesizes bundled-rust). Never activate missing
-  // package-backed pins as bundled.
+  // Package-only: the current format requires an explicit package-backed runtime record;
+  // never activate missing package-backed pins as bundled.
   let Some(req) = exported.runtime.as_ref() else {
-    // Fail closed: a normalized plan must always carry runtime after v6→v7.
+    // Fail closed: a validated plan must always carry a package-backed runtime.
     return IntegrationInstance {
       id,
       plugin_id: exported.plugin_id.clone(),
@@ -1388,7 +1373,7 @@ fn integration_from_export(
       health_status: IntegrationHealthStatus::Unconfigured,
       last_validated_at: None,
       last_error_code: Some("invalid_runtime".into()),
-      runtime_kind: "bundled-rust".into(),
+      runtime_kind: "wasm-component".into(),
       package_digest: None,
       execution_grant_set_revision: None,
       runtime_state: "unavailable".into(),
@@ -1411,7 +1396,7 @@ fn integration_from_export(
       health_status: IntegrationHealthStatus::Unconfigured,
       last_validated_at: None,
       last_error_code: Some("invalid_runtime".into()),
-      runtime_kind: "bundled-rust".into(),
+      runtime_kind: "wasm-component".into(),
       package_digest: None,
       execution_grant_set_revision: None,
       runtime_state: "unavailable".into(),
@@ -1490,24 +1475,6 @@ fn integration_from_export(
         )
       }
     }
-    Ok(crate::domain::runtime_plugin::RuntimeKind::LegacyFrontendProvider) => (
-      req.runtime_kind.clone(),
-      None,
-      None,
-      "pending_activation".to_string(),
-      None,
-      None,
-      requirement_json,
-    ),
-    Ok(crate::domain::runtime_plugin::RuntimeKind::BundledRust) => (
-      req.runtime_kind.clone(),
-      None,
-      None,
-      "active".to_string(),
-      None,
-      None,
-      requirement_json,
-    ),
     Err(_) => (
       // Unknown runtimeKind must never import as active.
       req.runtime_kind.clone(),
@@ -1543,25 +1510,24 @@ fn integration_from_export(
   }
 }
 
-fn bundled_registry() -> Option<&'static ServiceIntegrationRegistry> {
-  static REGISTRY: OnceLock<Option<ServiceIntegrationRegistry>> = OnceLock::new();
-  REGISTRY
-    .get_or_init(|| ServiceIntegrationRegistry::bundled().ok())
-    .as_ref()
-}
-
 /// True when the plugin requires remote auth (token grant) before becoming Ready.
-fn integration_plugin_requires_authentication(plugin_id: &str) -> bool {
-  match bundled_registry().and_then(|reg| reg.get_registration(plugin_id)) {
-    Some(registration) => registration.requires_remote_auth(),
-    // Unknown plugins: fail closed and require re-auth rather than claiming zero-secret readiness.
-    None => true,
-  }
+fn integration_plugin_requires_authentication(plugin_id: &str, registry: Option<&ServiceIntegrationRegistry>) -> bool {
+  // Package-only: registrations come only from installed packages. Known zero-secret plugins
+  // stay auth-free; unknown plugins fail closed and require re-auth rather than claiming
+  // readiness.
+  registry
+    .and_then(|reg| reg.get_registration(plugin_id))
+    .map(|registration| registration.requires_remote_auth())
+    .unwrap_or(true)
 }
 
 /// Normalize/validate plugin config for import via the registration's config adapter.
-fn normalize_imported_integration_config(plugin_id: &str, config_json: &str) -> Result<String, StorageError> {
-  match bundled_registry().and_then(|reg| reg.get_registration(plugin_id)) {
+fn normalize_imported_integration_config(
+  plugin_id: &str,
+  config_json: &str,
+  registry: Option<&ServiceIntegrationRegistry>,
+) -> Result<String, StorageError> {
+  match registry.and_then(|reg| reg.get_registration(plugin_id)) {
     Some(registration) => registration.config_adapter.normalize_config(config_json),
     None => {
       // Unknown plugins: accept JSON objects as structural config.
@@ -1579,8 +1545,9 @@ fn imported_integration_health(
   plugin_id: &str,
   config_json: &str,
   config_schema_version: u32,
+  registry: Option<&ServiceIntegrationRegistry>,
 ) -> IntegrationHealthStatus {
-  match bundled_registry().and_then(|reg| reg.get_registration(plugin_id)) {
+  match registry.and_then(|reg| reg.get_registration(plugin_id)) {
     Some(registration) => {
       // Unsupported schema version: retain data but mark unconfigured (read-only unresolved).
       if registration.config_schema.version != config_schema_version {
@@ -1818,29 +1785,6 @@ fn validate_import_ocr_service(
     return Err(StorageError::Validation("display_name must not be empty".into()));
   }
   match service.provider_type {
-    OcrProviderType::Baidu => {
-      if service.baidu_action.is_none() {
-        return Err(StorageError::Validation(
-          "baidu_action is required for baidu OCR".into(),
-        ));
-      }
-      if service.provider_model_id.is_some()
-        || service.default_prompt_template_id.is_some()
-        || service.integration_instance_id.is_some()
-        || service.ocr_capability_id.is_some()
-        || service.capability_preferences_version.is_some()
-        || service.capability_preferences.is_some()
-      {
-        return Err(StorageError::Validation(
-          "baidu OCR must not include ai/plugin fields".into(),
-        ));
-      }
-      if !templates.is_empty() {
-        return Err(StorageError::Validation(
-          "baidu OCR must not include prompt templates".into(),
-        ));
-      }
-    }
     OcrProviderType::Ai => {
       let model_id = service
         .provider_model_id
@@ -1863,8 +1807,7 @@ fn validate_import_ocr_service(
           "default_prompt_template_id must reference an OCR prompt template".into(),
         ));
       }
-      if service.baidu_action.is_some()
-        || service.integration_instance_id.is_some()
+      if service.integration_instance_id.is_some()
         || service.ocr_capability_id.is_some()
         || service.capability_preferences_version.is_some()
         || service.capability_preferences.is_some()
@@ -1912,13 +1855,8 @@ fn validate_import_ocr_service(
       // Reuse the save-path validator: known keys via typed parse, operation enum, hint bounds.
       let typed = parse_ocr_image_preferences(prefs).map_err(StorageError::Validation)?;
       validate_ocr_image_preferences(&typed).map_err(|e| StorageError::Validation(e.message))?;
-      if service.baidu_action.is_some()
-        || service.provider_model_id.is_some()
-        || service.default_prompt_template_id.is_some()
-      {
-        return Err(StorageError::Validation(
-          "plugin OCR must not include baidu/ai fields".into(),
-        ));
+      if service.provider_model_id.is_some() || service.default_prompt_template_id.is_some() {
+        return Err(StorageError::Validation("plugin OCR must not include ai fields".into()));
       }
       if !templates.is_empty() {
         return Err(StorageError::Validation(
@@ -1936,6 +1874,7 @@ fn validate_import_speech_service(
   doc_integration_ids: &HashSet<Uuid>,
   mode: ImportConflictMode,
   local_integrations: &HashMap<Uuid, IntegrationInstance>,
+  registry: Option<&ServiceIntegrationRegistry>,
 ) -> Result<serde_json::Value, StorageError> {
   let name = service.display_name.trim();
   if name.is_empty() {
@@ -1979,6 +1918,7 @@ fn validate_import_speech_service(
     capability_id,
     service.preferences_schema_version,
     &service.preferences,
+    registry,
   )
 }
 
@@ -2010,8 +1950,9 @@ fn normalize_imported_speech_preferences(
   capability_id: &str,
   preferences_schema_version: i32,
   preferences: &serde_json::Value,
+  registry: Option<&ServiceIntegrationRegistry>,
 ) -> Result<serde_json::Value, StorageError> {
-  match bundled_registry().and_then(|reg| reg.get_registration(plugin_id)) {
+  match registry.and_then(|reg| reg.get_registration(plugin_id)) {
     Some(registration) => {
       let cap_def = registration.capability(capability_id).ok_or_else(|| {
         StorageError::Validation(format!(
@@ -2045,6 +1986,40 @@ pub fn validate_plan_default_profile(conn: &Connection, settings: &AppSettingsV1
 #[cfg(test)]
 mod tests {
   use super::*;
+  use std::sync::Arc;
+  const EDGE_TTS_LNPLUGIN: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../runtime-plugins/edge-tts/fixtures/com.langnext.edge-tts-1.0.0.lnplugin"
+  ));
+  const GOOGLE_CLOUD_LNPLUGIN: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../runtime-plugins/google-cloud/fixtures/com.langnext.google-cloud-1.2.0.lnplugin"
+  ));
+
+  /// Install the committed edge-tts/google-cloud archives plus the synthetic google-translate-web
+  /// package and project their definitions (production startup path).
+  fn import_registry(db: &Database) -> Arc<ServiceIntegrationRegistry> {
+    let packages = crate::services::test_support::vendor_packages(db.clone(), db.app_data_dir());
+    crate::services::test_support::bootstrap_package(&packages, EDGE_TTS_LNPLUGIN);
+    crate::services::test_support::bootstrap_package(&packages, GOOGLE_CLOUD_LNPLUGIN);
+    let (gtw, _) = crate::services::test_support::google_translate_web_package();
+    crate::services::test_support::bootstrap_package(&packages, &gtw);
+    crate::services::test_support::registry_from_installed_packages(&packages)
+  }
+
+  /// Build a validated plan against the installed-package definition catalog.
+  fn validated_plan(
+    db: &Database,
+    doc: &ConfigurationExport,
+    mode: ImportConflictMode,
+  ) -> Result<ValidatedImportPlan, StorageError> {
+    let registry = import_registry(db);
+    db.read(|conn| build_validated_plan(conn, doc, mode, Some(registry.as_ref())))
+  }
+
+  /// 64-hex digest placeholder for provider requirement fixtures (parse-valid, never installed).
+  const FIXTURE_PACKAGE_DIGEST: &str = "abababababababababababababababababababababababababababababababab";
+
   use crate::domain::import_export::EXPORT_FORMAT_VERSION;
   use crate::domain::model::ModelSource;
   use crate::domain::runtime_lifecycle::RuntimeRequirementExport;
@@ -2075,6 +2050,8 @@ mod tests {
     }
   }
 
+  /// Package-backed Web integration export. The exact digest is parse-valid but never
+  /// installed, so previews report Missing; apply writes an unavailable pin.
   fn web_export(id: Uuid, config_json: &str) -> IntegrationInstanceExport {
     IntegrationInstanceExport {
       id,
@@ -2088,11 +2065,11 @@ mod tests {
       runtime: Some(RuntimeRequirementExport {
         plugin_id: GOOGLE_TRANSLATE_WEB_PLUGIN_ID.into(),
         plugin_version: "1.0.0".into(),
-        runtime_kind: "bundled-rust".into(),
-        package_digest: None,
-        publisher_key_id: None,
-        publisher_key_fingerprint: None,
-        plugin_api_version: None,
+        runtime_kind: "wasm-component".into(),
+        package_digest: Some(FIXTURE_PACKAGE_DIGEST.into()),
+        publisher_key_id: Some("com.langnext.test.keys.1".into()),
+        publisher_key_fingerprint: Some("f".repeat(64)),
+        plugin_api_version: Some("1.0".into()),
         config_schema_version: 1,
         required_capability_majors: vec![],
         provider_runtime_kind: None,
@@ -2113,7 +2090,19 @@ mod tests {
       config_json: r#"{"project-id":"demo","location":"global","proxy-mode":"inherit"}"#.into(),
       config_schema_version: 1,
       health_status: "ready".into(),
-      runtime: None,
+      runtime: Some(RuntimeRequirementExport {
+        plugin_id: GOOGLE_CLOUD_PLUGIN_ID.into(),
+        plugin_version: "1.0.0".into(),
+        runtime_kind: "wasm-component".into(),
+        package_digest: Some(FIXTURE_PACKAGE_DIGEST.into()),
+        publisher_key_id: Some("com.langnext.test.keys.1".into()),
+        publisher_key_fingerprint: Some("f".repeat(64)),
+        plugin_api_version: Some("1.0".into()),
+        config_schema_version: 1,
+        required_capability_majors: vec![],
+        provider_runtime_kind: None,
+        provider_package_digest: None,
+      }),
       created_at: now_rfc3339(),
       updated_at: now_rfc3339(),
     }
@@ -2128,9 +2117,7 @@ mod tests {
     let mut doc = empty_doc();
     doc.integration_instances = vec![web_export(web_id, r#"{"channel":"gtx"}"#)];
 
-    let plan = db
-      .read(|conn| build_validated_plan(conn, &doc, ImportConflictMode::Merge))
-      .unwrap();
+    let plan = validated_plan(&db, &doc, ImportConflictMode::Merge).unwrap();
     assert!(plan.preview.valid, "errors: {:?}", plan.preview.validation_errors);
     assert!(plan.preview.integration_requires_authentication.is_empty());
     assert_eq!(plan.integrations.len(), 1);
@@ -2151,9 +2138,7 @@ mod tests {
       r#"{"channel":"https_proxy","proxy-url":"http://insecure.example/t"}"#,
     )];
 
-    let plan = db
-      .read(|conn| build_validated_plan(conn, &doc, ImportConflictMode::Merge))
-      .unwrap();
+    let plan = validated_plan(&db, &doc, ImportConflictMode::Merge).unwrap();
     assert!(!plan.preview.valid);
     assert!(plan.preview.validation_errors.iter().any(|e| e.contains("https")));
     assert!(plan.integrations.is_empty());
@@ -2168,9 +2153,7 @@ mod tests {
     let mut doc = empty_doc();
     doc.integration_instances = vec![cloud_export(cloud_id)];
 
-    let plan = db
-      .read(|conn| build_validated_plan(conn, &doc, ImportConflictMode::Merge))
-      .unwrap();
+    let plan = validated_plan(&db, &doc, ImportConflictMode::Merge).unwrap();
     assert!(plan.preview.valid, "errors: {:?}", plan.preview.validation_errors);
     assert_eq!(plan.preview.integration_requires_authentication, vec![cloud_id]);
     assert_eq!(
@@ -2205,9 +2188,7 @@ mod tests {
       },
     ];
 
-    let plan = db
-      .read(|conn| build_validated_plan(conn, &doc, ImportConflictMode::Merge))
-      .unwrap();
+    let plan = validated_plan(&db, &doc, ImportConflictMode::Merge).unwrap();
     assert!(!plan.preview.valid);
     assert!(plan.preview.validation_errors.iter().any(|e| e.contains("projectId")));
     assert!(
@@ -2231,9 +2212,7 @@ mod tests {
       r#"{"channel":"https_proxy","proxy-url":"https://googlet.deno.dev/translate?foo=1"}"#,
     )];
 
-    let plan = db
-      .read(|conn| build_validated_plan(conn, &doc, ImportConflictMode::Merge))
-      .unwrap();
+    let plan = validated_plan(&db, &doc, ImportConflictMode::Merge).unwrap();
     assert!(plan.preview.valid, "errors: {:?}", plan.preview.validation_errors);
     assert!(plan.preview.integration_requires_authentication.is_empty());
     assert_eq!(plan.integrations[0].health_status, IntegrationHealthStatus::Ready);
@@ -2247,12 +2226,22 @@ mod tests {
 
   #[test]
   fn auth_requirement_is_registry_aware() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::new(dir.path()).unwrap();
+    db.initialize().unwrap();
+    let registry = import_registry(&db);
+    let registry = Some(registry.as_ref());
     assert!(!integration_plugin_requires_authentication(
-      GOOGLE_TRANSLATE_WEB_PLUGIN_ID
+      GOOGLE_TRANSLATE_WEB_PLUGIN_ID,
+      registry
     ));
-    assert!(integration_plugin_requires_authentication(GOOGLE_CLOUD_PLUGIN_ID));
     assert!(integration_plugin_requires_authentication(
-      "com.langnext.unknown-plugin"
+      GOOGLE_CLOUD_PLUGIN_ID,
+      registry
+    ));
+    assert!(integration_plugin_requires_authentication(
+      "com.langnext.unknown-plugin",
+      registry
     ));
   }
 
@@ -2280,10 +2269,20 @@ mod tests {
     }
   }
 
-  fn declared_legacy(adapter_id: &str) -> ProviderRuntimeRequirementExport {
-    let mut requirement = ProviderRuntimeRequirementExport::legacy();
-    requirement.adapter_id = Some(adapter_id.into());
-    requirement
+  /// Package-backed declared adapter requirement (parse-valid digest, never installed).
+  fn declared_wasm(adapter_id: &str) -> ProviderRuntimeRequirementExport {
+    ProviderRuntimeRequirementExport {
+      adapter_id: Some(adapter_id.into()),
+      runtime_kind: "wasm-component".into(),
+      package_digest: Some(FIXTURE_PACKAGE_DIGEST.into()),
+      plugin_id: Some("com.langnext.provider.openai-responses".into()),
+      plugin_version: Some("1.0.0".into()),
+      publisher_key_id: Some("com.langnext.test.keys.1".into()),
+      publisher_key_fingerprint: Some("f".repeat(64)),
+      plugin_api_version: Some("1.0".into()),
+      legacy_aliases: vec![adapter_id.into()],
+      capabilities: vec!["llm.chat@1".into(), "llm.models.list@1".into()],
+    }
   }
 
   fn model_export(
@@ -2324,16 +2323,11 @@ mod tests {
     doc.providers = vec![provider_export(
       provider_id,
       "openai-compatible",
-      vec![
-        declared_legacy("openai-compatible"),
-        declared_legacy("openai-responses"),
-      ],
+      vec![declared_wasm("openai-compatible"), declared_wasm("openai-responses")],
     )];
     doc.models = vec![model_export(model_id, provider_id, ModelSource::Remote, "")];
 
-    let plan = db
-      .read(|conn| build_validated_plan(conn, &doc, ImportConflictMode::Merge))
-      .unwrap();
+    let plan = validated_plan(&db, &doc, ImportConflictMode::Merge).unwrap();
     assert!(plan.preview.valid, "errors: {:?}", plan.preview.validation_errors);
     assert_eq!(plan.models.len(), 1);
     assert_eq!(plan.models[0].id, model_id, "model identity must be preserved");
@@ -2360,10 +2354,7 @@ mod tests {
     doc.providers = vec![provider_export(
       provider_id,
       "openai-compatible",
-      vec![
-        declared_legacy("openai-compatible"),
-        declared_legacy("openai-responses"),
-      ],
+      vec![declared_wasm("openai-compatible"), declared_wasm("openai-responses")],
     )];
     doc.models = vec![model_export(
       model_id,
@@ -2372,9 +2363,7 @@ mod tests {
       "openai-responses",
     )];
 
-    let plan = db
-      .read(|conn| build_validated_plan(conn, &doc, ImportConflictMode::Merge))
-      .unwrap();
+    let plan = validated_plan(&db, &doc, ImportConflictMode::Merge).unwrap();
     assert!(plan.preview.valid, "errors: {:?}", plan.preview.validation_errors);
     assert_eq!(plan.models[0].source_adapter_id, "openai-responses");
     assert_eq!(plan.models[0].id, model_id);
@@ -2394,13 +2383,11 @@ mod tests {
     doc.providers = vec![provider_export(
       provider_id,
       "openai-compatible",
-      vec![declared_legacy("openai-compatible")],
+      vec![declared_wasm("openai-compatible")],
     )];
     doc.models = vec![model_export(new_id(), provider_id, ModelSource::Remote, "gemini")];
 
-    let plan = db
-      .read(|conn| build_validated_plan(conn, &doc, ImportConflictMode::Merge))
-      .unwrap();
+    let plan = validated_plan(&db, &doc, ImportConflictMode::Merge).unwrap();
     assert!(!plan.preview.valid);
     assert!(
       plan
@@ -2427,13 +2414,11 @@ mod tests {
       doc.providers = vec![provider_export(
         provider_id,
         "openai-compatible",
-        vec![declared_legacy("openai-compatible")],
+        vec![declared_wasm("openai-compatible")],
       )];
       doc.models = vec![model_export(new_id(), provider_id, source, "openai-compatible")];
 
-      let plan = db
-        .read(|conn| build_validated_plan(conn, &doc, ImportConflictMode::Merge))
-        .unwrap();
+      let plan = validated_plan(&db, &doc, ImportConflictMode::Merge).unwrap();
       assert!(!plan.preview.valid, "{source:?} with source must be rejected");
       assert!(
         plan
@@ -2461,10 +2446,7 @@ mod tests {
     doc.providers = vec![provider_export(
       provider_id,
       "openai-compatible",
-      vec![
-        declared_legacy("openai-compatible"),
-        declared_legacy("openai-responses"),
-      ],
+      vec![declared_wasm("openai-compatible"), declared_wasm("openai-responses")],
     )];
     doc.models = vec![model_export(
       model_id,
@@ -2473,9 +2455,7 @@ mod tests {
       "  openai-responses  ",
     )];
 
-    let plan = db
-      .read(|conn| build_validated_plan(conn, &doc, ImportConflictMode::Merge))
-      .unwrap();
+    let plan = validated_plan(&db, &doc, ImportConflictMode::Merge).unwrap();
     assert!(plan.preview.valid, "errors: {:?}", plan.preview.validation_errors);
     assert_eq!(
       plan.models[0].source_adapter_id, "openai-responses",
@@ -2496,13 +2476,11 @@ mod tests {
       doc.providers = vec![provider_export(
         provider_id,
         "openai-compatible",
-        vec![declared_legacy("openai-compatible")],
+        vec![declared_wasm("openai-compatible")],
       )];
       doc.models = vec![model_export(new_id(), provider_id, source, "   ")];
 
-      let plan = db
-        .read(|conn| build_validated_plan(conn, &doc, ImportConflictMode::Merge))
-        .unwrap();
+      let plan = validated_plan(&db, &doc, ImportConflictMode::Merge).unwrap();
       assert!(plan.preview.valid, "{source:?}: {:?}", plan.preview.validation_errors);
       assert_eq!(
         plan.models[0].source_adapter_id, "",
@@ -2524,13 +2502,11 @@ mod tests {
     doc.providers = vec![provider_export(
       provider_id,
       "openai-compatible",
-      vec![declared_legacy("openai-compatible")],
+      vec![declared_wasm("openai-compatible")],
     )];
     doc.models = vec![model_export(model_id, provider_id, ModelSource::Remote, "   ")];
 
-    let plan = db
-      .read(|conn| build_validated_plan(conn, &doc, ImportConflictMode::Merge))
-      .unwrap();
+    let plan = validated_plan(&db, &doc, ImportConflictMode::Merge).unwrap();
     assert!(plan.preview.valid, "errors: {:?}", plan.preview.validation_errors);
     assert_eq!(
       plan.models[0].source_adapter_id, "openai-compatible",
@@ -2563,7 +2539,19 @@ mod tests {
       config_json: "{}".into(),
       config_schema_version: 1,
       health_status: "ready".into(),
-      runtime: None,
+      runtime: Some(RuntimeRequirementExport {
+        plugin_id: EDGE_TTS_PLUGIN_ID.into(),
+        plugin_version: "1.0.0".into(),
+        runtime_kind: "wasm-component".into(),
+        package_digest: Some(FIXTURE_PACKAGE_DIGEST.into()),
+        publisher_key_id: Some("com.langnext.test.keys.1".into()),
+        publisher_key_fingerprint: Some("f".repeat(64)),
+        plugin_api_version: Some("1.0".into()),
+        config_schema_version: 1,
+        required_capability_majors: vec![],
+        provider_runtime_kind: None,
+        provider_package_digest: None,
+      }),
       created_at: now_rfc3339(),
       updated_at: now_rfc3339(),
     }
@@ -2596,9 +2584,7 @@ mod tests {
     doc.speech_services = vec![speech_export(speech_id, cloud_id)];
     doc.app_settings.default_speech_service_id = Some(speech_id);
 
-    let merge = db
-      .read(|conn| build_validated_plan(conn, &doc, ImportConflictMode::Merge))
-      .unwrap();
+    let merge = validated_plan(&db, &doc, ImportConflictMode::Merge).unwrap();
     assert!(merge.preview.valid, "errors: {:?}", merge.preview.validation_errors);
     assert_eq!(merge.preview.counts.speech_services_create, 1);
     assert_eq!(merge.speech_services.len(), 1);
@@ -2606,9 +2592,7 @@ mod tests {
     assert_eq!(merge.speech_services[0].integration_instance_id, cloud_id);
     assert_eq!(merge.settings.default_speech_service_id, Some(speech_id));
 
-    let copy = db
-      .read(|conn| build_validated_plan(conn, &doc, ImportConflictMode::Copy))
-      .unwrap();
+    let copy = validated_plan(&db, &doc, ImportConflictMode::Copy).unwrap();
     assert!(copy.preview.valid, "errors: {:?}", copy.preview.validation_errors);
     assert_eq!(copy.preview.counts.speech_services_copy, 1);
     assert_eq!(copy.speech_services.len(), 1);
@@ -2632,9 +2616,7 @@ mod tests {
     doc.speech_services = vec![edge_speech_export(speech_id, edge_id)];
     doc.app_settings.default_speech_service_id = Some(speech_id);
 
-    let plan = db
-      .read(|conn| build_validated_plan(conn, &doc, ImportConflictMode::Merge))
-      .unwrap();
+    let plan = validated_plan(&db, &doc, ImportConflictMode::Merge).unwrap();
     assert!(plan.preview.valid, "errors: {:?}", plan.preview.validation_errors);
     assert_eq!(plan.speech_services.len(), 1);
     assert_eq!(plan.speech_services[0].preferences["speed"], serde_json::json!(1.0));
@@ -2658,9 +2640,7 @@ mod tests {
     service.preferences = serde_json::json!({"speed": 1.0, "pitch": 0.0});
     doc.speech_services = vec![service];
 
-    let plan = db
-      .read(|conn| build_validated_plan(conn, &doc, ImportConflictMode::Merge))
-      .unwrap();
+    let plan = validated_plan(&db, &doc, ImportConflictMode::Merge).unwrap();
     assert!(!plan.preview.valid);
     assert!(
       plan
@@ -2686,9 +2666,7 @@ mod tests {
     service.preferences = serde_json::json!({"speakingRate": 99.0, "pitch": 0.0});
     doc.speech_services = vec![service];
 
-    let plan = db
-      .read(|conn| build_validated_plan(conn, &doc, ImportConflictMode::Merge))
-      .unwrap();
+    let plan = validated_plan(&db, &doc, ImportConflictMode::Merge).unwrap();
     assert!(!plan.preview.valid);
     assert!(
       plan
@@ -2700,9 +2678,7 @@ mod tests {
 
     let mut missing = empty_doc();
     missing.speech_services = vec![speech_export(new_id(), new_id())];
-    let plan = db
-      .read(|conn| build_validated_plan(conn, &missing, ImportConflictMode::Merge))
-      .unwrap();
+    let plan = validated_plan(&db, &missing, ImportConflictMode::Merge).unwrap();
     assert!(!plan.preview.valid);
     assert!(
       plan
@@ -2720,9 +2696,7 @@ mod tests {
     db.initialize().unwrap();
     let mut doc = empty_doc();
     doc.app_settings.default_speech_service_id = Some(new_id());
-    let plan = db
-      .read(|conn| build_validated_plan(conn, &doc, ImportConflictMode::Merge))
-      .unwrap();
+    let plan = validated_plan(&db, &doc, ImportConflictMode::Merge).unwrap();
     assert!(!plan.preview.valid);
     assert!(
       plan

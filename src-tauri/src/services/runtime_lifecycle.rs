@@ -253,35 +253,25 @@ impl RuntimeLifecycleService {
       ));
     }
 
-    let publisher = self
-      .db
-      .read(|conn| plugin_publishers::get(conn, &target_version.publisher_key_id))?;
-    if publisher.revoked || !publisher.enabled {
-      return Err(StorageError::Validation(
-        "target package publisher is revoked or disabled".into(),
-      ));
-    }
-
     let target_manifest: PluginManifestV1 = serde_json::from_str(&target_version.manifest_json)
       .map_err(|e| StorageError::Validation(format!("invalid target manifest: {e}")))?;
-    crate::services::auth_policies::validate_google_cloud_manifest_authority(&target_manifest, publisher.source)
-      .map_err(StorageError::Validation)?;
-    match target_manifest.runtime.kind {
-      RuntimeKind::WasmComponent => {}
-      RuntimeKind::TrustedNativeWorker => {
-        crate::services::plugin_package::require_native_worker_vendor_publisher(
-          publisher.source,
-          &publisher.key_id,
-          publisher.enabled,
-          publisher.revoked,
-        )
-        .map_err(StorageError::Validation)?;
-      }
-      _ => {
+    self
+      .plugin_packages
+      .verify_installed_package_snapshot(&target_version.package_digest)?;
+    if target_version.signature_status == crate::domain::plugin_package::PackageSignatureStatus::Signed {
+      let publisher = self
+        .db
+        .read(|conn| plugin_publishers::get(conn, &target_version.publisher_key_id))?;
+      if publisher.revoked || !publisher.enabled {
         return Err(StorageError::Validation(
-          "upgrades target Wasm Component or trusted-native-worker packages only".into(),
+          "target package publisher is revoked or disabled".into(),
         ));
       }
+      crate::services::auth_policies::validate_google_cloud_manifest_authority(&target_manifest, publisher.source)
+        .map_err(StorageError::Validation)?;
+    }
+    match target_manifest.runtime.kind {
+      RuntimeKind::WasmComponent | RuntimeKind::TrustedNativeWorker => {}
     }
 
     // Capability name+major compatibility: the target must declare every capability major the
@@ -380,7 +370,13 @@ impl RuntimeLifecycleService {
     };
 
     let capability_compatibility = capability_compatibility(source_grant.as_ref(), &target_manifest);
-    let credential_slots = credential_slot_compatibility(&instance, &target_manifest, &self.db, self.vault.as_deref())?;
+    let credential_slots = credential_slot_compatibility(
+      &instance,
+      &target_manifest,
+      &self.registry,
+      &self.db,
+      self.vault.as_deref(),
+    )?;
     // kind_mismatch is fail-closed at preview. required_missing is returned for UI binding and
     // rechecked on apply (no secrets in DTO).
     if credential_slots.iter().any(|s| s.status == "kind_mismatch") {
@@ -568,6 +564,9 @@ impl RuntimeLifecycleService {
       return Err(StorageError::Conflict("migrated config digest mismatch".into()));
     }
 
+    let verified_apply_snapshot = self
+      .plugin_packages
+      .verify_installed_package_snapshot(&session.target_package_digest)?;
     let now = now_rfc3339();
     let result = self.db.transaction(|uow| {
       #[cfg(test)]
@@ -576,6 +575,13 @@ impl RuntimeLifecycleService {
       }
       // Re-validate target package/content/publisher/manifest/archive/artifact after preview.
       let target_manifest = revalidate_target_package_for_apply(uow.conn(), &session.target_package_digest)?;
+      if verified_apply_snapshot.package_digest != session.target_package_digest
+        || verified_apply_snapshot.manifest != target_manifest
+      {
+        return Err(StorageError::Conflict(
+          "verified package snapshot diverged before runtime apply".into(),
+        ));
+      }
       revalidate_package_store_artifacts(&self.plugin_packages, &session.target_package_digest, &target_manifest)?;
       if session.grant_bundle.header.package_digest != session.target_package_digest {
         return Err(StorageError::Conflict("grant bundle package digest mismatch".into()));
@@ -588,7 +594,13 @@ impl RuntimeLifecycleService {
       }
       // Required credentials must be bound before apply (collected via vault/journal UI).
       let current = integration_instances::get(uow.conn(), session.instance_id)?;
-      let slots = credential_slot_compatibility_conn(uow.conn(), &current, &target_manifest, self.vault.as_deref())?;
+      let slots = credential_slot_compatibility_conn(
+        uow.conn(),
+        &current,
+        &target_manifest,
+        &self.registry,
+        self.vault.as_deref(),
+      )?;
       if slots
         .iter()
         .any(|s| s.status == "required_missing" || s.status == "kind_mismatch")
@@ -772,12 +784,13 @@ impl RuntimeLifecycleService {
         .read(|conn| installed_plugin_versions::get_optional(conn, digest))?;
       match version {
         Some(v) if v.content_available => {}
+        Some(_) if snapshot.execution_grant_set_revision.is_none() => {}
         Some(_) => {
           return Err(StorageError::PluginUnavailable(
             "rollback target package content is unavailable".into(),
           ));
         }
-        None if snapshot.runtime_kind == runtime_kind_storage(RuntimeKind::BundledRust) => {}
+        None if snapshot.execution_grant_set_revision.is_none() => {}
         None => {
           return Err(StorageError::PluginUnavailable(
             "rollback target package is not installed".into(),
@@ -862,6 +875,18 @@ impl RuntimeLifecycleService {
       return Err(StorageError::Conflict("rollback preview expired".into()));
     }
 
+    let rollback_source_snapshot = self
+      .db
+      .read(|conn| plugin_upgrade_snapshots::get(conn, session.snapshot_id))?;
+    let rollback_verified_snapshot = if rollback_source_snapshot.execution_grant_set_revision.is_some() {
+      rollback_source_snapshot
+        .package_digest
+        .as_deref()
+        .map(|digest| self.plugin_packages.verify_installed_package_snapshot(digest))
+        .transpose()?
+    } else {
+      None
+    };
     let now = now_rfc3339();
     let result = self.db.transaction(|uow| {
       let current = integration_instances::get(uow.conn(), session.instance_id)?;
@@ -884,11 +909,27 @@ impl RuntimeLifecycleService {
       assert_snapshot_dependency_ids_match(&session.ocr_preferences, &snapshot.ocr_preferences)?;
       assert_snapshot_dependency_ids_match(&session.speech_preferences, &snapshot.speech_preferences)?;
 
-      // Rollback target package/content/publisher/grant must be available; never restore an active pin to a missing package.
-      if let Some(digest) = snapshot.package_digest.as_deref() {
+      // Active package pins must revalidate content/grants. Unresolved pins restore identity only.
+      if snapshot.execution_grant_set_revision.is_some()
+        && let Some(digest) = snapshot.package_digest.as_deref()
+      {
         let target_manifest = revalidate_target_package_for_apply(uow.conn(), digest)?;
+        let verified = rollback_verified_snapshot
+          .as_ref()
+          .ok_or_else(|| StorageError::Conflict("rollback package verification snapshot is missing".into()))?;
+        if verified.package_digest != digest || verified.manifest != target_manifest {
+          return Err(StorageError::Conflict(
+            "verified package snapshot diverged before runtime rollback".into(),
+          ));
+        }
         revalidate_package_store_artifacts(&self.plugin_packages, digest, &target_manifest)?;
-        let slots = credential_slot_compatibility_conn(uow.conn(), &current, &target_manifest, self.vault.as_deref())?;
+        let slots = credential_slot_compatibility_conn(
+          uow.conn(),
+          &current,
+          &target_manifest,
+          &self.registry,
+          self.vault.as_deref(),
+        )?;
         if slots
           .iter()
           .any(|s| s.status == "kind_mismatch" || s.status == "required_missing")
@@ -973,7 +1014,11 @@ impl RuntimeLifecycleService {
         &snapshot.runtime_kind,
         snapshot.package_digest.as_deref(),
         snapshot.execution_grant_set_revision,
-        InstanceRuntimeState::Active.as_str(),
+        if snapshot.execution_grant_set_revision.is_some() {
+          InstanceRuntimeState::Active.as_str()
+        } else {
+          InstanceRuntimeState::PendingActivation.as_str()
+        },
         None,
         None,
         requirement_json.as_deref(),
@@ -1067,7 +1112,9 @@ impl RuntimeLifecycleService {
       return Ok(None);
     };
     let plugin_id = instance.plugin_id.clone();
-    let Some(publisher) = publisher else {
+    let unsigned =
+      snapshot.verified.signature_status == crate::domain::plugin_package::PackageSignatureStatus::Unsigned;
+    if !unsigned && publisher.is_none() {
       log::warn!(
         "package_first_activation_publisher_mismatch instance={instance_id} plugin={plugin_id} digest={package_digest}"
       );
@@ -1077,7 +1124,7 @@ impl RuntimeLifecycleService {
         "default authorization or publisher trust is stale",
       );
       return Ok(None);
-    };
+    }
     let Some(policy) = policy else {
       let _ = self.mark_package_first_activation_failed(
         instance_id,
@@ -1109,7 +1156,7 @@ impl RuntimeLifecycleService {
         config_digest,
         effective_authority: effective,
         policy,
-        publisher: Some(publisher),
+        publisher,
         binding: None,
         version: None,
         // Integration CAS compares the instance row state; no base URL projection applies.
@@ -1127,10 +1174,17 @@ impl RuntimeLifecycleService {
     prepared: &crate::services::default_package_activation::PreparedPackageFirstActivation,
     snapshot: &crate::services::default_package_activation::VerifiedActivationSnapshot,
   ) -> Result<(), StorageError> {
-    let publisher = prepared
-      .publisher
-      .as_ref()
-      .ok_or_else(|| StorageError::Internal("integration publisher is missing from prepared activation".into()))?;
+    let unsigned_placeholder = crate::domain::plugin_package::PluginPublisher {
+      key_id: String::new(),
+      fingerprint: String::new(),
+      public_key_hex: String::new(),
+      source: crate::domain::plugin_package::PublisherSource::UserApproved,
+      enabled: true,
+      revoked: false,
+      created_at: String::new(),
+      updated_at: String::new(),
+    };
+    let publisher = prepared.publisher.as_ref().unwrap_or(&unsigned_placeholder);
     self.apply_verified_package_first_pin(
       prepared.subject_id,
       snapshot,
@@ -1320,19 +1374,17 @@ impl RuntimeLifecycleService {
     package_first_cas: Option<PackageFirstGrantCas>,
   ) -> Result<(), StorageError> {
     // Final policy-bound re-verify of exact retained archive/content immediately before pin.
-    let rechecked = self.plugin_packages.verify_runtime_store_snapshot(
-      &verified_snapshot.package_digest,
-      &trusted_publisher.key_id,
-      &trusted_publisher.fingerprint,
-      &trusted_publisher.public_key_hex,
-      trusted_publisher.source,
-    )?;
+    let rechecked = self
+      .plugin_packages
+      .verify_installed_package_snapshot(&verified_snapshot.package_digest)?;
+    let unsigned = rechecked.signature_status == crate::domain::plugin_package::PackageSignatureStatus::Unsigned;
     if rechecked.package_digest != verified_snapshot.package_digest
       || rechecked.manifest_bytes != verified_snapshot.manifest_bytes
-      || rechecked.publisher_public_key_hex != verified_snapshot.publisher_public_key_hex
-      || rechecked.publisher_fingerprint != verified_snapshot.publisher_fingerprint
       || rechecked.manifest != verified_snapshot.manifest
-      || rechecked.publisher_public_key_hex != trusted_publisher.public_key_hex
+      || (!unsigned
+        && (rechecked.publisher_public_key_hex != verified_snapshot.publisher_public_key_hex
+          || rechecked.publisher_fingerprint != verified_snapshot.publisher_fingerprint
+          || rechecked.publisher_public_key_hex != trusted_publisher.public_key_hex))
     {
       return Err(StorageError::Conflict(
         "auto-pin verified snapshot diverged before apply; refusing pin".into(),
@@ -1505,28 +1557,25 @@ impl RuntimeLifecycleService {
           "auto-pin catalog manifest diverged inside apply transaction".into(),
         ));
       }
-      let live_publisher = plugin_publishers::get(uow.conn(), &live_version.publisher_key_id)?;
-      if !matches_trusted_publisher_identity(&live_publisher, trusted_publisher)
-        || live_publisher.fingerprint != target_manifest.publisher.key_fingerprint
-        || live_publisher.revoked
-        || !live_publisher.enabled
-      {
-        return Err(StorageError::Validation(
-          "auto-pin publisher no longer reverse-binds the trusted publisher identity".into(),
-        ));
+      if !unsigned {
+        let live_publisher = plugin_publishers::get(uow.conn(), &live_version.publisher_key_id)?;
+        if !matches_trusted_publisher_identity(&live_publisher, trusted_publisher)
+          || live_publisher.fingerprint != target_manifest.publisher.key_fingerprint
+          || live_publisher.revoked
+          || !live_publisher.enabled
+        {
+          return Err(StorageError::Validation(
+            "auto-pin publisher no longer reverse-binds the trusted publisher identity".into(),
+          ));
+        }
       }
-      // Exact archive digest + content re-verify with the trusted publisher key.
-      let final_verified = self.plugin_packages.verify_runtime_store_snapshot(
-        &package_digest,
-        &trusted_publisher.key_id,
-        &trusted_publisher.fingerprint,
-        &trusted_publisher.public_key_hex,
-        trusted_publisher.source,
-      )?;
+      let final_verified = self
+        .plugin_packages
+        .verify_installed_package_snapshot(&package_digest)?;
       if final_verified.package_digest != package_digest
         || final_verified.manifest_bytes != verified_snapshot.manifest_bytes
         || final_verified.manifest != target_manifest
-        || final_verified.publisher_public_key_hex != trusted_publisher.public_key_hex
+        || (!unsigned && final_verified.publisher_public_key_hex != trusted_publisher.public_key_hex)
       {
         return Err(StorageError::Conflict(
           "auto-pin store content diverged from verified snapshot at apply".into(),
@@ -1549,17 +1598,13 @@ impl RuntimeLifecycleService {
           "auto-pin package store generation changed after final re-validation; refusing pin".into(),
         ));
       }
-      let post_hook_verified = self.plugin_packages.verify_runtime_store_snapshot(
-        &package_digest,
-        &trusted_publisher.key_id,
-        &trusted_publisher.fingerprint,
-        &trusted_publisher.public_key_hex,
-        trusted_publisher.source,
-      )?;
+      let post_hook_verified = self
+        .plugin_packages
+        .verify_installed_package_snapshot(&package_digest)?;
       if post_hook_verified.package_digest != package_digest
         || post_hook_verified.manifest_bytes != verified_snapshot.manifest_bytes
         || post_hook_verified.manifest != target_manifest
-        || post_hook_verified.publisher_public_key_hex != trusted_publisher.public_key_hex
+        || (!unsigned && post_hook_verified.publisher_public_key_hex != trusted_publisher.public_key_hex)
       {
         return Err(StorageError::Conflict(
           "auto-pin store content diverged after final re-validation before grant/pin".into(),
@@ -1654,30 +1699,30 @@ impl RuntimeLifecycleService {
   }
 
   fn source_capability_majors(&self, instance: &IntegrationInstance) -> Result<HashSet<String>, StorageError> {
-    if let Some(digest) = instance.package_digest.as_deref() {
-      // Source is pinned to a package: its installed version + manifest must be present so the
-      // target can be proven to preserve every source capability major. A missing version row
-      // means the pin cannot be audited - fail closed rather than offering a vacuous upgrade.
-      return self.db.read(|conn| {
-        let version = installed_plugin_versions::get_optional(conn, digest)?.ok_or_else(|| {
-          StorageError::PluginUnavailable(
-            "source package is pinned but its installed version is missing; cannot verify capability majors".into(),
-          )
-        })?;
+    let digest = instance
+      .package_digest
+      .as_deref()
+      .ok_or_else(|| StorageError::Validation("package-backed instance is missing its package digest".into()))?;
+    self.db.read(|conn| {
+      if let Some(version) = installed_plugin_versions::get_optional(conn, digest)? {
         let manifest: PluginManifestV1 = serde_json::from_str(&version.manifest_json)
           .map_err(|e| StorageError::Validation(format!("invalid source manifest: {e}")))?;
-        Ok(manifest.capabilities.into_iter().map(|c| c.id).collect::<HashSet<_>>())
-      });
-    }
-    // Bundled-rust source: the host registry must define the plugin. A missing definition means
-    // the bundled executor identity cannot be verified - fail closed rather than returning an
-    // empty set that would let any target pass the capability-major check.
-    let manifest = self.registry.get(&instance.plugin_id).ok_or_else(|| {
-      StorageError::PluginUnavailable(
-        "bundled plugin definition is missing from the registry; cannot verify capability majors".into(),
-      )
-    })?;
-    Ok(manifest.capabilities.iter().map(|c| c.id.clone()).collect())
+        return Ok(manifest.capabilities.into_iter().map(|c| c.id).collect::<HashSet<_>>());
+      }
+      // Unresolved pin: keep declared majors from the stored requirement when present.
+      // Active pins must have an installed source; pending/unavailable may upgrade from absence.
+      if instance.runtime_state == InstanceRuntimeState::Active.as_str() {
+        return Err(StorageError::PluginUnavailable(
+          "source package is pinned but its installed version is missing; cannot verify capability majors".into(),
+        ));
+      }
+      if let Some(raw) = instance.runtime_requirement_json.as_deref() {
+        let req: crate::domain::runtime_lifecycle::RuntimeRequirementExport = serde_json::from_str(raw)
+          .map_err(|e| StorageError::Validation(format!("invalid stored runtime requirement: {e}")))?;
+        return Ok(req.required_capability_majors.into_iter().collect());
+      }
+      Ok(HashSet::new())
+    })
   }
 
   fn expire_previews(&self) {
@@ -1871,16 +1916,18 @@ fn revalidate_target_package_for_apply(
       "target package content became unavailable after preview".into(),
     ));
   }
-  let publisher = plugin_publishers::get(conn, &version.publisher_key_id)?;
-  if publisher.revoked || !publisher.enabled {
-    return Err(StorageError::Validation(
-      "target package publisher is revoked or disabled".into(),
-    ));
-  }
-  if publisher.fingerprint != version.publisher_fingerprint {
-    return Err(StorageError::Validation(
-      "target package publisher fingerprint mismatch".into(),
-    ));
+  if version.signature_status == crate::domain::plugin_package::PackageSignatureStatus::Signed {
+    let publisher = plugin_publishers::get(conn, &version.publisher_key_id)?;
+    if publisher.revoked || !publisher.enabled {
+      return Err(StorageError::Validation(
+        "target package publisher is revoked or disabled".into(),
+      ));
+    }
+    if publisher.fingerprint != version.publisher_fingerprint {
+      return Err(StorageError::Validation(
+        "target package publisher fingerprint mismatch".into(),
+      ));
+    }
   }
   let manifest: PluginManifestV1 = serde_json::from_str(&version.manifest_json)
     .map_err(|e| StorageError::Validation(format!("invalid target manifest: {e}")))?;
@@ -2417,7 +2464,17 @@ pub(crate) fn origin_kind_for_verified_network_endpoint_with_approval(
         | ("text-to-speech", Some("https://texttospeech.googleapis.com"))
         | ("text_to_speech", Some("https://texttospeech.googleapis.com"))
     );
-  if is_google_web_gtx || is_google_cloud_fixed {
+  let is_baidu_ocr_fixed = manifest.id == crate::domain::service_integration::BAIDU_OCR_PLUGIN_ID
+    && endpoint.origins.len() == 1
+    && endpoint
+      .origins
+      .first()
+      .is_some_and(|origin| origin == crate::domain::service_integration::BAIDU_OCR_ORIGIN)
+    && matches!(
+      endpoint.id.as_str(),
+      "baidu-general-basic" | "baidu-accurate-basic" | "baidu-general" | "baidu-accurate"
+    );
+  if is_google_web_gtx || is_google_cloud_fixed || is_baidu_ocr_fixed {
     NetworkOriginKind::HostFixed
   } else {
     NetworkOriginKind::InstanceConfigured
@@ -2446,7 +2503,7 @@ fn build_grant_bundle_for_target(
   })
 }
 
-fn build_grant_bundle_for_target_on_conn(
+pub(crate) fn build_grant_bundle_for_target_on_conn(
   conn: &rusqlite::Connection,
   packages: &PluginPackageService,
   instance: &IntegrationInstance,
@@ -2880,16 +2937,18 @@ fn load_installed_manifest(
 fn credential_slot_compatibility(
   instance: &IntegrationInstance,
   target: &PluginManifestV1,
+  registry: &ServiceIntegrationRegistry,
   db: &Database,
   vault: Option<&dyn crate::credentials::CredentialVault>,
 ) -> Result<Vec<CredentialSlotCompatibilityDto>, StorageError> {
-  db.read(|conn| credential_slot_compatibility_conn(conn, instance, target, vault))
+  db.read(|conn| credential_slot_compatibility_conn(conn, instance, target, registry, vault))
 }
 
 fn credential_slot_compatibility_conn(
   conn: &rusqlite::Connection,
   instance: &IntegrationInstance,
   target: &PluginManifestV1,
+  registry: &ServiceIntegrationRegistry,
   vault: Option<&dyn crate::credentials::CredentialVault>,
 ) -> Result<Vec<CredentialSlotCompatibilityDto>, StorageError> {
   let bindings = integration_credential_bindings::list_for_instance(conn, instance.id)?;
@@ -2929,19 +2988,21 @@ fn credential_slot_compatibility_conn(
         .collect(),
       None => std::collections::HashMap::new(),
     }
-  } else if let Ok(registry) = ServiceIntegrationRegistry::bundled() {
+  } else {
+    // Pre-package legacy rows have no bundled executor definitions; the installed package
+    // definition for the plugin is the only source of slot kinds. Unknown definitions fail
+    // closed (required present credentials become kind_mismatch instead of guessing).
     registry
-      .get(&instance.plugin_id)
-      .map(|manifest| {
-        manifest
+      .get_registration(&instance.plugin_id)
+      .map(|definition| {
+        definition
+          .manifest
           .credential_slots
           .iter()
           .map(|s| (s.id.clone(), s.kind.as_str().to_string()))
           .collect()
       })
       .unwrap_or_default()
-  } else {
-    std::collections::HashMap::new()
   };
   Ok(
     target
@@ -2954,7 +3015,7 @@ fn credential_slot_compatibility_conn(
           match source_kinds.get(&slot.id) {
             Some(source_kind) if source_kind != kind => "kind_mismatch",
             Some(_) => "compatible",
-            None if slot.required => "kind_mismatch",
+            None if slot.required && !source_kinds.is_empty() => "kind_mismatch",
             None => "compatible",
           }
         } else if slot.required {
@@ -3308,9 +3369,10 @@ fn build_runtime_requirement(
   manifest: &PluginManifestV1,
   config_schema_version: u32,
 ) -> Result<RuntimeRequirementExport, StorageError> {
-  if version.publisher_key_id.trim().is_empty() || version.publisher_fingerprint.trim().is_empty() {
+  let signed = version.signature_status == crate::domain::plugin_package::PackageSignatureStatus::Signed;
+  if signed && (version.publisher_key_id.trim().is_empty() || version.publisher_fingerprint.trim().is_empty()) {
     return Err(StorageError::Validation(
-      "installed package is missing publisher identity required for export".into(),
+      "signed installed package is missing publisher identity required for export".into(),
     ));
   }
   if version.package_digest.trim().is_empty() {
@@ -3324,8 +3386,8 @@ fn build_runtime_requirement(
     plugin_version: version.version.clone(),
     runtime_kind: runtime_kind_storage(RuntimeKind::WasmComponent).into(),
     package_digest: Some(version.package_digest.clone()),
-    publisher_key_id: Some(version.publisher_key_id.clone()),
-    publisher_key_fingerprint: Some(version.publisher_fingerprint.clone()),
+    publisher_key_id: signed.then(|| version.publisher_key_id.clone()),
+    publisher_key_fingerprint: signed.then(|| version.publisher_fingerprint.clone()),
     plugin_api_version: Some(manifest.plugin_api_version.clone()),
     config_schema_version,
     required_capability_majors: majors,
@@ -3501,10 +3563,10 @@ mod tests {
           health_status: IntegrationHealthStatus::Ready,
           last_validated_at: None,
           last_error_code: None,
-          runtime_kind: "bundled-rust".into(),
-          package_digest: None,
+          runtime_kind: "wasm-component".into(),
+          package_digest: Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into()),
           execution_grant_set_revision: None,
-          runtime_state: "active".into(),
+          runtime_state: "pending_activation".into(),
           runtime_error_code: None,
           runtime_error_message: None,
           runtime_requirement_json: None,
@@ -3527,7 +3589,7 @@ mod tests {
     let service = RuntimeLifecycleService::new(
       db.clone(),
       PluginPackageService::new(db, dir.path().to_path_buf()),
-      Arc::new(ServiceIntegrationRegistry::bundled().unwrap()),
+      Arc::new(ServiceIntegrationRegistry::empty()),
     );
     let err = service.preview_upgrade(id, &"a".repeat(64)).unwrap_err();
     assert!(matches!(err, StorageError::NotFound(_)));
@@ -3541,7 +3603,7 @@ mod tests {
     let service = RuntimeLifecycleService::new(
       db.clone(),
       PluginPackageService::new(db, dir.path().to_path_buf()),
-      Arc::new(ServiceIntegrationRegistry::bundled().unwrap()),
+      Arc::new(ServiceIntegrationRegistry::empty()),
     );
     let err = service
       .apply_upgrade(ApplyRuntimeUpgradeInput {
@@ -3561,7 +3623,7 @@ mod tests {
     let service = RuntimeLifecycleService::new(
       db.clone(),
       PluginPackageService::new(db, dir.path().to_path_buf()),
-      Arc::new(ServiceIntegrationRegistry::bundled().unwrap()),
+      Arc::new(ServiceIntegrationRegistry::empty()),
     );
     let err = service.preview_rollback(id).unwrap_err();
     assert!(matches!(err, StorageError::NotFound(_)));

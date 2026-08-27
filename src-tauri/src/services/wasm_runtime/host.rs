@@ -140,7 +140,7 @@ impl PluginHostState {
       entry.capability_id().as_str(),
       &request.relative_path,
     )?;
-    validate_google_cloud_authority(
+    validate_package_authority(
       self.principal.plugin_id().as_str(),
       entry.endpoint_id().as_str(),
       entry.capability_id().as_str(),
@@ -615,10 +615,153 @@ fn validate_fixed_endpoint_scope(
   Ok(())
 }
 
-/// Google Cloud's signed package uses fixed origins and one host-approved RPC path per
-/// capability. This check runs before token acquisition, so a package/guest cannot redirect an
-/// injected bearer or OCR payload to an attacker origin or an unrelated Google API.
-fn validate_google_cloud_authority(
+const GOOGLE_TRANSLATE_API_ORIGIN: &str = "https://translation.googleapis.com";
+const GOOGLE_VISION_API_ORIGIN: &str = "https://vision.googleapis.com";
+const GOOGLE_TEXT_TO_SPEECH_API_ORIGIN: &str = "https://texttospeech.googleapis.com";
+const GOOGLE_TRANSLATE_ENDPOINT_ID: &str = "translate";
+const GOOGLE_VISION_ENDPOINT_ID: &str = "vision";
+const GOOGLE_TEXT_TO_SPEECH_ENDPOINT_ID: &str = "text-to-speech";
+const GOOGLE_TRANSLATE_TEXT_RPC: &str = "translateText";
+const GOOGLE_DETECT_LANGUAGE_RPC: &str = "detectLanguage";
+const GOOGLE_VISION_ANNOTATE_PATH: &str = "v1/images:annotate";
+const GOOGLE_TEXT_TO_SPEECH_SYNTHESIZE_PATH: &str = "v1/text:synthesize";
+const BAIDU_GENERAL_BASIC_ENDPOINT_ID: &str = "baidu-general-basic";
+const BAIDU_ACCURATE_BASIC_ENDPOINT_ID: &str = "baidu-accurate-basic";
+const BAIDU_GENERAL_ENDPOINT_ID: &str = "baidu-general";
+const BAIDU_ACCURATE_ENDPOINT_ID: &str = "baidu-accurate";
+
+#[derive(Clone, Copy)]
+enum PackagePathRule {
+  Exact(&'static str),
+  GoogleTranslateRpc(&'static str),
+}
+
+impl PackagePathRule {
+  fn matches(self, relative_path: &str) -> bool {
+    match self {
+      Self::Exact(expected) => relative_path == expected,
+      Self::GoogleTranslateRpc(operation) => google_translate_rpc_path(relative_path, operation),
+    }
+  }
+}
+
+#[derive(Clone, Copy)]
+enum PathMismatchClass {
+  NotApproved,
+  PathConfined,
+}
+
+impl PathMismatchClass {
+  fn error(self) -> BrokerFetchError {
+    match self {
+      Self::NotApproved => BrokerFetchError::NotApproved,
+      Self::PathConfined => BrokerFetchError::PathConfined,
+    }
+  }
+}
+
+struct PackageAuthorityRule {
+  plugin_id: &'static str,
+  endpoint_id: &'static str,
+  capability_id: &'static str,
+  origin: &'static str,
+  auth_policy: &'static str,
+  path: PackagePathRule,
+  path_mismatch: PathMismatchClass,
+}
+
+fn package_authority_rules() -> &'static [PackageAuthorityRule] {
+  use crate::domain::service_capability::{OCR_IMAGE_CAPABILITY_ID, SPEECH_SYNTHESIZE_CAPABILITY_ID};
+  use crate::domain::service_integration::{BAIDU_OCR_ORIGIN, BAIDU_OCR_PLUGIN_ID, GOOGLE_CLOUD_PLUGIN_ID};
+  use crate::services::auth_policies::{
+    BAIDU_CLIENT_CREDENTIALS_AUTH_POLICY_ID, GOOGLE_SERVICE_ACCOUNT_AUTH_POLICY_ID,
+  };
+  use crate::services::baidu_token_exchanger::{
+    BAIDU_OCR_PATH_ACCURATE, BAIDU_OCR_PATH_ACCURATE_BASIC, BAIDU_OCR_PATH_GENERAL, BAIDU_OCR_PATH_GENERAL_BASIC,
+  };
+  use crate::services::google_cloud::{GOOGLE_DETECT_LANGUAGE_CAPABILITY_ID, GOOGLE_TRANSLATE_TEXT_CAPABILITY_ID};
+
+  static RULES: &[PackageAuthorityRule] = &[
+    PackageAuthorityRule {
+      plugin_id: GOOGLE_CLOUD_PLUGIN_ID,
+      endpoint_id: GOOGLE_TRANSLATE_ENDPOINT_ID,
+      capability_id: GOOGLE_TRANSLATE_TEXT_CAPABILITY_ID,
+      origin: GOOGLE_TRANSLATE_API_ORIGIN,
+      auth_policy: GOOGLE_SERVICE_ACCOUNT_AUTH_POLICY_ID,
+      path: PackagePathRule::GoogleTranslateRpc(GOOGLE_TRANSLATE_TEXT_RPC),
+      path_mismatch: PathMismatchClass::NotApproved,
+    },
+    PackageAuthorityRule {
+      plugin_id: GOOGLE_CLOUD_PLUGIN_ID,
+      endpoint_id: GOOGLE_TRANSLATE_ENDPOINT_ID,
+      capability_id: GOOGLE_DETECT_LANGUAGE_CAPABILITY_ID,
+      origin: GOOGLE_TRANSLATE_API_ORIGIN,
+      auth_policy: GOOGLE_SERVICE_ACCOUNT_AUTH_POLICY_ID,
+      path: PackagePathRule::GoogleTranslateRpc(GOOGLE_DETECT_LANGUAGE_RPC),
+      path_mismatch: PathMismatchClass::NotApproved,
+    },
+    PackageAuthorityRule {
+      plugin_id: GOOGLE_CLOUD_PLUGIN_ID,
+      endpoint_id: GOOGLE_VISION_ENDPOINT_ID,
+      capability_id: OCR_IMAGE_CAPABILITY_ID,
+      origin: GOOGLE_VISION_API_ORIGIN,
+      auth_policy: GOOGLE_SERVICE_ACCOUNT_AUTH_POLICY_ID,
+      path: PackagePathRule::Exact(GOOGLE_VISION_ANNOTATE_PATH),
+      path_mismatch: PathMismatchClass::NotApproved,
+    },
+    PackageAuthorityRule {
+      plugin_id: GOOGLE_CLOUD_PLUGIN_ID,
+      endpoint_id: GOOGLE_TEXT_TO_SPEECH_ENDPOINT_ID,
+      capability_id: SPEECH_SYNTHESIZE_CAPABILITY_ID,
+      origin: GOOGLE_TEXT_TO_SPEECH_API_ORIGIN,
+      auth_policy: GOOGLE_SERVICE_ACCOUNT_AUTH_POLICY_ID,
+      path: PackagePathRule::Exact(GOOGLE_TEXT_TO_SPEECH_SYNTHESIZE_PATH),
+      path_mismatch: PathMismatchClass::NotApproved,
+    },
+    PackageAuthorityRule {
+      plugin_id: BAIDU_OCR_PLUGIN_ID,
+      endpoint_id: BAIDU_GENERAL_BASIC_ENDPOINT_ID,
+      capability_id: OCR_IMAGE_CAPABILITY_ID,
+      origin: BAIDU_OCR_ORIGIN,
+      auth_policy: BAIDU_CLIENT_CREDENTIALS_AUTH_POLICY_ID,
+      path: PackagePathRule::Exact(BAIDU_OCR_PATH_GENERAL_BASIC),
+      path_mismatch: PathMismatchClass::PathConfined,
+    },
+    PackageAuthorityRule {
+      plugin_id: BAIDU_OCR_PLUGIN_ID,
+      endpoint_id: BAIDU_ACCURATE_BASIC_ENDPOINT_ID,
+      capability_id: OCR_IMAGE_CAPABILITY_ID,
+      origin: BAIDU_OCR_ORIGIN,
+      auth_policy: BAIDU_CLIENT_CREDENTIALS_AUTH_POLICY_ID,
+      path: PackagePathRule::Exact(BAIDU_OCR_PATH_ACCURATE_BASIC),
+      path_mismatch: PathMismatchClass::PathConfined,
+    },
+    PackageAuthorityRule {
+      plugin_id: BAIDU_OCR_PLUGIN_ID,
+      endpoint_id: BAIDU_GENERAL_ENDPOINT_ID,
+      capability_id: OCR_IMAGE_CAPABILITY_ID,
+      origin: BAIDU_OCR_ORIGIN,
+      auth_policy: BAIDU_CLIENT_CREDENTIALS_AUTH_POLICY_ID,
+      path: PackagePathRule::Exact(BAIDU_OCR_PATH_GENERAL),
+      path_mismatch: PathMismatchClass::PathConfined,
+    },
+    PackageAuthorityRule {
+      plugin_id: BAIDU_OCR_PLUGIN_ID,
+      endpoint_id: BAIDU_ACCURATE_ENDPOINT_ID,
+      capability_id: OCR_IMAGE_CAPABILITY_ID,
+      origin: BAIDU_OCR_ORIGIN,
+      auth_policy: BAIDU_CLIENT_CREDENTIALS_AUTH_POLICY_ID,
+      path: PackagePathRule::Exact(BAIDU_OCR_PATH_ACCURATE),
+      path_mismatch: PathMismatchClass::PathConfined,
+    },
+  ];
+  RULES
+}
+
+/// Google Cloud and Baidu OCR requests pass through one complete-rule matcher before token
+/// acquisition or transport. A plugin with no table rows is unchanged. A plugin with rows must
+/// match one complete row; fields from different rows never combine.
+fn validate_package_authority(
   plugin_id: &str,
   endpoint_id: &str,
   capability_id: &str,
@@ -627,32 +770,36 @@ fn validate_google_cloud_authority(
   auth_policy: &str,
   relative_path: &str,
 ) -> Result<(), BrokerFetchError> {
-  if plugin_id != crate::domain::service_integration::GOOGLE_CLOUD_PLUGIN_ID {
+  let mut saw_plugin_rule = false;
+  let mut path_mismatch = None;
+  for rule in package_authority_rules() {
+    if rule.plugin_id != plugin_id {
+      continue;
+    }
+    saw_plugin_rule = true;
+    if base_url != origin {
+      return Err(BrokerFetchError::NotApproved);
+    }
+    if rule.endpoint_id != endpoint_id
+      || rule.capability_id != capability_id
+      || rule.origin != origin
+      || rule.auth_policy != auth_policy
+    {
+      continue;
+    }
+    if rule.path.matches(relative_path) {
+      return Ok(());
+    }
+    path_mismatch = Some(rule.path_mismatch);
+  }
+  if !saw_plugin_rule {
     return Ok(());
   }
-  if auth_policy != crate::services::auth_policies::GOOGLE_SERVICE_ACCOUNT_AUTH_POLICY_ID || base_url != origin {
-    return Err(BrokerFetchError::NotApproved);
-  }
-  let expected = match (endpoint_id, capability_id) {
-    ("translate", "translate.text@1") => (
-      "https://translation.googleapis.com",
-      google_translate_rpc_path(relative_path, "translateText"),
-    ),
-    ("translate", "translate.detect@1") => (
-      "https://translation.googleapis.com",
-      google_translate_rpc_path(relative_path, "detectLanguage"),
-    ),
-    ("vision", "ocr.image@1") => ("https://vision.googleapis.com", relative_path == "v1/images:annotate"),
-    ("text-to-speech", "speech.synthesize@1") => (
-      "https://texttospeech.googleapis.com",
-      relative_path == "v1/text:synthesize",
-    ),
-    _ => return Err(BrokerFetchError::NotApproved),
-  };
-  if origin != expected.0 || !expected.1 {
-    return Err(BrokerFetchError::NotApproved);
-  }
-  Ok(())
+  Err(
+    path_mismatch
+      .map(PathMismatchClass::error)
+      .unwrap_or(BrokerFetchError::NotApproved),
+  )
 }
 
 fn google_translate_rpc_path(relative_path: &str, operation: &str) -> bool {
@@ -904,44 +1051,218 @@ mod tests {
     assert!(validate_fixed_endpoint_scope("tts-api", "speech.synthesize@1", "v1/audio/speech?route=other").is_err());
   }
 
+  struct DenyBroker;
+
+  impl BrokerHandle for DenyBroker {
+    fn fetch(
+      &self,
+      _principal: &crate::domain::runtime_plugin::PluginPrincipal,
+      _grant: &crate::domain::runtime_plugin::ExecutionGrantSet,
+      _request: BrokerFetchRequest,
+      _authorization: BrokerAuthorization,
+      _cancel: &crate::domain::cancel::CancelToken,
+      _deadline: Option<std::time::Instant>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = BrokerFetchOutcome> + Send + '_>> {
+      Box::pin(async {
+        Err(BrokerFetchError::Internal(
+          "authority tests must not call transport".into(),
+        ))
+      })
+    }
+  }
+
+  fn authorize_package_fetch(
+    plugin_id: &str,
+    endpoint_id: &str,
+    capability_id: &str,
+    origin: &str,
+    base_url: &str,
+    auth_policy: &str,
+    relative_path: &str,
+  ) -> Result<BrokerAuthorization, BrokerFetchError> {
+    use crate::domain::plugin_resource::NetworkResponseBodyModes;
+    use crate::domain::runtime_plugin::{
+      AuthPolicyId, CapabilityId, EndpointId, ExecutionGrantSet, HttpMethod, HttpsOrigin, NetworkGrantEntry,
+      NetworkOriginKind, NetworkResourceMode, PackageDigest, PackageIdentity, PluginId, ResourceLimits,
+      RuntimeIdentity, SemVerVersion,
+    };
+    use crate::services::wasm_runtime::store::new_state;
+    use uuid::Uuid;
+
+    let capability = CapabilityId::parse(capability_id).unwrap();
+    let entry = NetworkGrantEntry::with_mode_origin_and_response_modes_and_base_url(
+      capability.clone(),
+      EndpointId::parse(endpoint_id).unwrap(),
+      HttpsOrigin::parse(origin).unwrap(),
+      NetworkOriginKind::HostFixed,
+      base_url.to_string(),
+      HttpMethod::Post,
+      AuthPolicyId::parse(auth_policy).unwrap(),
+      NetworkResourceMode::Bounded,
+      ResourceLimits::default(),
+      NetworkResponseBodyModes::JSON_ONLY,
+    );
+    let digest = PackageDigest::parse(&"a".repeat(64)).unwrap();
+    let grant = ExecutionGrantSet::initial(
+      Uuid::nil(),
+      RuntimeIdentity::Package(PackageIdentity { package_digest: digest }),
+      PluginId::parse(plugin_id).unwrap(),
+      SemVerVersion::parse("1.0.0").unwrap(),
+      vec![capability],
+      vec![entry],
+      vec![],
+    )
+    .unwrap();
+    let principal = grant.principal_for_request(capability_id, "authority-test").unwrap();
+    let state = new_state(
+      principal,
+      grant,
+      crate::domain::cancel::CancelToken::new(),
+      None,
+      Box::new(DenyBroker),
+    );
+    state.authorize_broker_fetch(&BrokerFetchRequest {
+      endpoint_id: endpoint_id.into(),
+      relative_path: relative_path.into(),
+      method: "POST".into(),
+      headers: vec![],
+      body: BrokerRequestBody::Empty,
+    })
+  }
+
   #[test]
-  fn google_cloud_authority_is_bound_to_fixed_origin_capability_and_rpc_path() {
+  fn package_authority_rules_fail_closed() {
+    use crate::domain::service_capability::{OCR_IMAGE_CAPABILITY_ID, SPEECH_SYNTHESIZE_CAPABILITY_ID};
+    use crate::domain::service_integration::{BAIDU_OCR_ORIGIN, BAIDU_OCR_PLUGIN_ID, GOOGLE_CLOUD_PLUGIN_ID};
+    use crate::services::auth_policies::{
+      BAIDU_CLIENT_CREDENTIALS_AUTH_POLICY_ID, GOOGLE_SERVICE_ACCOUNT_AUTH_POLICY_ID,
+    };
+    use crate::services::baidu_token_exchanger::BAIDU_OCR_PATH_GENERAL_BASIC;
+    use crate::services::google_cloud::GOOGLE_TRANSLATE_TEXT_CAPABILITY_ID;
+
+    const GOOGLE_TRANSLATE_PATH: &str = "v3beta1/projects/demo/locations/global:translateText";
+    const ATTACKER_ORIGIN: &str = "https://attacker.example";
+
     assert!(
-      validate_google_cloud_authority(
-        crate::domain::service_integration::GOOGLE_CLOUD_PLUGIN_ID,
-        "translate",
-        "translate.text@1",
-        "https://translation.googleapis.com",
-        "https://translation.googleapis.com",
-        crate::services::auth_policies::GOOGLE_SERVICE_ACCOUNT_AUTH_POLICY_ID,
-        "v3beta1/projects/demo/locations/global:translateText",
+      authorize_package_fetch(
+        GOOGLE_CLOUD_PLUGIN_ID,
+        GOOGLE_TRANSLATE_ENDPOINT_ID,
+        GOOGLE_TRANSLATE_TEXT_CAPABILITY_ID,
+        GOOGLE_TRANSLATE_API_ORIGIN,
+        GOOGLE_TRANSLATE_API_ORIGIN,
+        GOOGLE_SERVICE_ACCOUNT_AUTH_POLICY_ID,
+        GOOGLE_TRANSLATE_PATH,
       )
       .is_ok()
     );
     assert!(
-      validate_google_cloud_authority(
-        crate::domain::service_integration::GOOGLE_CLOUD_PLUGIN_ID,
-        "translate",
-        "translate.text@1",
-        "https://attacker.example",
-        "https://attacker.example",
-        crate::services::auth_policies::GOOGLE_SERVICE_ACCOUNT_AUTH_POLICY_ID,
-        "v3beta1/projects/demo/locations/global:translateText",
+      authorize_package_fetch(
+        BAIDU_OCR_PLUGIN_ID,
+        BAIDU_GENERAL_BASIC_ENDPOINT_ID,
+        OCR_IMAGE_CAPABILITY_ID,
+        BAIDU_OCR_ORIGIN,
+        BAIDU_OCR_ORIGIN,
+        BAIDU_CLIENT_CREDENTIALS_AUTH_POLICY_ID,
+        BAIDU_OCR_PATH_GENERAL_BASIC,
       )
-      .is_err()
+      .is_ok()
     );
-    assert!(
-      validate_google_cloud_authority(
-        crate::domain::service_integration::GOOGLE_CLOUD_PLUGIN_ID,
-        "translate",
-        "translate.text@1",
-        "https://translation.googleapis.com",
-        "https://translation.googleapis.com",
-        crate::services::auth_policies::GOOGLE_SERVICE_ACCOUNT_AUTH_POLICY_ID,
-        "v1/projects/demo:models.list",
-      )
-      .is_err()
-    );
+
+    let google_with_baidu_plugin = authorize_package_fetch(
+      BAIDU_OCR_PLUGIN_ID,
+      GOOGLE_TRANSLATE_ENDPOINT_ID,
+      GOOGLE_TRANSLATE_TEXT_CAPABILITY_ID,
+      GOOGLE_TRANSLATE_API_ORIGIN,
+      GOOGLE_TRANSLATE_API_ORIGIN,
+      GOOGLE_SERVICE_ACCOUNT_AUTH_POLICY_ID,
+      GOOGLE_TRANSLATE_PATH,
+    )
+    .unwrap_err();
+    assert!(matches!(google_with_baidu_plugin, BrokerFetchError::NotApproved));
+
+    let wrong_endpoint = authorize_package_fetch(
+      GOOGLE_CLOUD_PLUGIN_ID,
+      GOOGLE_VISION_ENDPOINT_ID,
+      GOOGLE_TRANSLATE_TEXT_CAPABILITY_ID,
+      GOOGLE_TRANSLATE_API_ORIGIN,
+      GOOGLE_TRANSLATE_API_ORIGIN,
+      GOOGLE_SERVICE_ACCOUNT_AUTH_POLICY_ID,
+      GOOGLE_TRANSLATE_PATH,
+    )
+    .unwrap_err();
+    assert!(matches!(wrong_endpoint, BrokerFetchError::NotApproved));
+
+    let wrong_capability = authorize_package_fetch(
+      GOOGLE_CLOUD_PLUGIN_ID,
+      GOOGLE_TRANSLATE_ENDPOINT_ID,
+      SPEECH_SYNTHESIZE_CAPABILITY_ID,
+      GOOGLE_TRANSLATE_API_ORIGIN,
+      GOOGLE_TRANSLATE_API_ORIGIN,
+      GOOGLE_SERVICE_ACCOUNT_AUTH_POLICY_ID,
+      GOOGLE_TRANSLATE_PATH,
+    )
+    .unwrap_err();
+    assert!(matches!(wrong_capability, BrokerFetchError::NotApproved));
+
+    let wrong_origin = authorize_package_fetch(
+      GOOGLE_CLOUD_PLUGIN_ID,
+      GOOGLE_TRANSLATE_ENDPOINT_ID,
+      GOOGLE_TRANSLATE_TEXT_CAPABILITY_ID,
+      ATTACKER_ORIGIN,
+      ATTACKER_ORIGIN,
+      GOOGLE_SERVICE_ACCOUNT_AUTH_POLICY_ID,
+      GOOGLE_TRANSLATE_PATH,
+    )
+    .unwrap_err();
+    assert!(matches!(wrong_origin, BrokerFetchError::NotApproved));
+
+    let mismatched_base_url = authorize_package_fetch(
+      GOOGLE_CLOUD_PLUGIN_ID,
+      GOOGLE_TRANSLATE_ENDPOINT_ID,
+      GOOGLE_TRANSLATE_TEXT_CAPABILITY_ID,
+      GOOGLE_TRANSLATE_API_ORIGIN,
+      ATTACKER_ORIGIN,
+      GOOGLE_SERVICE_ACCOUNT_AUTH_POLICY_ID,
+      GOOGLE_TRANSLATE_PATH,
+    )
+    .unwrap_err();
+    assert!(matches!(mismatched_base_url, BrokerFetchError::NotApproved));
+
+    let wrong_auth = authorize_package_fetch(
+      GOOGLE_CLOUD_PLUGIN_ID,
+      GOOGLE_TRANSLATE_ENDPOINT_ID,
+      GOOGLE_TRANSLATE_TEXT_CAPABILITY_ID,
+      GOOGLE_TRANSLATE_API_ORIGIN,
+      GOOGLE_TRANSLATE_API_ORIGIN,
+      BAIDU_CLIENT_CREDENTIALS_AUTH_POLICY_ID,
+      GOOGLE_TRANSLATE_PATH,
+    )
+    .unwrap_err();
+    assert!(matches!(wrong_auth, BrokerFetchError::NotApproved));
+
+    let google_path_mismatch = authorize_package_fetch(
+      GOOGLE_CLOUD_PLUGIN_ID,
+      GOOGLE_TRANSLATE_ENDPOINT_ID,
+      GOOGLE_TRANSLATE_TEXT_CAPABILITY_ID,
+      GOOGLE_TRANSLATE_API_ORIGIN,
+      GOOGLE_TRANSLATE_API_ORIGIN,
+      GOOGLE_SERVICE_ACCOUNT_AUTH_POLICY_ID,
+      "v1/projects/demo:models.list",
+    )
+    .unwrap_err();
+    assert!(matches!(google_path_mismatch, BrokerFetchError::NotApproved));
+
+    let baidu_path_mismatch = authorize_package_fetch(
+      BAIDU_OCR_PLUGIN_ID,
+      BAIDU_GENERAL_BASIC_ENDPOINT_ID,
+      OCR_IMAGE_CAPABILITY_ID,
+      BAIDU_OCR_ORIGIN,
+      BAIDU_OCR_ORIGIN,
+      BAIDU_CLIENT_CREDENTIALS_AUTH_POLICY_ID,
+      "rest/2.0/ocr/v1/other",
+    )
+    .unwrap_err();
+    assert!(matches!(baidu_path_mismatch, BrokerFetchError::PathConfined));
   }
 
   #[test]

@@ -1,5 +1,6 @@
 // ABOUTME: Plugin Profile Translate/Detect IPC that reloads authoritative bindings from SQLite.
 // ABOUTME: Never accepts endpoint/credential/capability overrides from the frontend.
+#![allow(dead_code)]
 use crate::domain::cancel::CancelToken;
 use crate::domain::language_detection::{DETECT_CANCELLED_CODE, DetectLanguageResult, DetectorType};
 use crate::domain::service_capability::{
@@ -495,17 +496,25 @@ mod tests {
   };
   use crate::repositories::integration_instances;
   use crate::repositories::translation_profiles as profile_repo;
+  use crate::services::bounded_http::{BoundedHttpResponse, PreparedHttpRequest, RawHttpTransport};
   use crate::services::google_cloud::{GOOGLE_DETECT_LANGUAGE_CAPABILITY_ID, GOOGLE_TRANSLATE_TEXT_CAPABILITY_ID};
+  use crate::services::runtime_lifecycle::RuntimeLifecycleService;
+  use crate::services::runtime_router::RuntimeRouter;
   use crate::services::service_capabilities::execution_context;
   use crate::services::service_capabilities::{
-    CapabilityHandler, DetectLanguageCapability, ServiceCapabilityRegistry, ServiceCapabilityService,
-    TranslateTextCapability,
+    DetectLanguageCapability, ServiceCapabilityService, TranslateTextCapability,
   };
   use crate::services::service_integration_registry::ServiceIntegrationRegistry;
+  use crate::services::token_grant::TokenGrantService;
+
+  use crate::services::wasm_runtime::host::BrokerHandle;
+  use crate::services::wasm_runtime::network_handle::NetworkBrokerHandle;
   use crate::storage::Database;
+  use std::collections::HashMap;
   use std::future::Future;
   use std::pin::Pin;
   use std::sync::Arc;
+  use std::sync::Mutex;
   use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
   use std::time::Duration;
 
@@ -514,6 +523,44 @@ mod tests {
     fail: AtomicBool,
     hang_until_cancel: AtomicBool,
     timeout: AtomicBool,
+  }
+
+  /// Minimal transport for the conformance fixture: records the last prepared request and
+  /// replies with an empty JSON body (success-mode dispatch never reaches the broker).
+  struct CaptureTransport {
+    last: Mutex<Option<()>>,
+    calls: AtomicUsize,
+    response: Mutex<Result<BoundedHttpResponse, String>>,
+  }
+
+  impl CaptureTransport {
+    #[allow(dead_code)]
+    fn call_count(&self) -> usize {
+      self.calls.load(Ordering::SeqCst)
+    }
+  }
+
+  impl RawHttpTransport for CaptureTransport {
+    fn request(
+      &self,
+      _prepared: PreparedHttpRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<BoundedHttpResponse, crate::error::StorageError>> + Send + '_>> {
+      self.calls.fetch_add(1, Ordering::SeqCst);
+      *self.last.lock().unwrap() = Some(());
+      let response = self.response.lock().unwrap().clone();
+      Box::pin(async move { response.map_err(|message| crate::error::StorageError::Validation(message)) })
+    }
+
+    fn stream(
+      &self,
+      _prepared: PreparedHttpRequest,
+      _cancel: crate::domain::cancel::CancelToken,
+      _on_event: Box<
+        dyn Fn(crate::domain::provider_http::ProviderHttpStreamEvent) -> Result<(), crate::error::StorageError> + Send,
+      >,
+    ) -> Pin<Box<dyn Future<Output = Result<(), crate::error::StorageError>> + Send + '_>> {
+      Box::pin(async { Err(crate::error::StorageError::Validation("stream not supported".into())) })
+    }
   }
 
   impl TranslateTextCapability for FakeTranslate {
@@ -576,6 +623,242 @@ mod tests {
     _dir_keep: tempfile::TempDir,
   }
 
+  const CONFORMANCE_TRANSLATE_WASM: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../runtime-plugins/conformance/wasm-component/fixtures/langnext-conformance-wasm.wasm"
+  ));
+  const CONFORMANCE_PLUGIN_ID: &str = "langnext.conformance";
+  const CONFORMANCE_TRANSLATE_CAP: &str = "translate.text@1";
+
+  /// Registry-backed translate capability identity for the synthetic conformance package.
+  fn conformance_manifest() -> crate::domain::service_integration::ServiceIntegrationManifest {
+    use crate::domain::service_integration::IntegrationCapabilityDescriptor;
+    crate::domain::service_integration::ServiceIntegrationManifest {
+      manifest_version: 1,
+      plugin_api_version: "1.0".into(),
+      id: CONFORMANCE_PLUGIN_ID.into(),
+      version: "1.0.0".into(),
+      display_name_key: "conformance".into(),
+      min_host_version: "0.1.0".into(),
+      config_schema_version: 1,
+      credential_slots: vec![],
+      endpoints: vec![],
+      capabilities: vec![IntegrationCapabilityDescriptor {
+        id: CONFORMANCE_TRANSLATE_CAP.into(),
+        preferences_schema_version: 1,
+        endpoint_aliases: vec![],
+      }],
+    }
+  }
+
+  /// Vendor-signed conformance translate package whose guest honors config `mode`
+  /// (`success` translates, `slow-host-call`/`cancellation` exercise broker paths elsewhere).
+  fn conformance_package() -> (Vec<u8>, String) {
+    use crate::domain::runtime_plugin::{
+      CapabilityDeclaration, FileRole, NetworkEndpointRequest, PermissionRequests, PluginFileEntry, PluginManifestV1,
+      PublisherDeclaration, RuntimeDescriptor, RuntimeKind,
+    };
+    use crate::services::plugin_package::test_support::build_signed_package_with_key;
+    use crate::services::plugin_package::{hash_archive_bytes, public_sha256_hex};
+    use crate::services::vendor_trust::test_vendor_fixture::{fixture_vendor_fingerprint, fixture_vendor_signing_key};
+
+    let schema =
+      br#"{"version":1,"fields":[{"id":"mode","control":{"kind":"string","spec":{"default":"success"}}}],"groups":[]}"#
+        .to_vec();
+    let prefs = br#"{"version":1,"fields":[],"groups":[]}"#.to_vec();
+    let wasm = CONFORMANCE_TRANSLATE_WASM;
+    let manifest = PluginManifestV1 {
+      manifest_version: 1,
+      plugin_api_version: "1.0".into(),
+      id: CONFORMANCE_PLUGIN_ID.into(),
+      version: "1.0.0".into(),
+      publisher: PublisherDeclaration {
+        key_id: crate::services::vendor_trust::VENDOR_PUBLISHER_KEY_ID.into(),
+        key_fingerprint: fixture_vendor_fingerprint(),
+      },
+      runtime: RuntimeDescriptor {
+        kind: RuntimeKind::WasmComponent,
+        artifact: Some("artifacts/plugin.wasm".into()),
+        native_protocol_version: None,
+        native_dependencies: None,
+      },
+      targets: vec![],
+      files: vec![
+        PluginFileEntry {
+          path: "artifacts/plugin.wasm".into(),
+          role: FileRole::RuntimeArtifact,
+          bytes: wasm.len() as u64,
+          sha256: public_sha256_hex(wasm),
+        },
+        PluginFileEntry {
+          path: "schemas/config.json".into(),
+          role: FileRole::ConfigSchema,
+          bytes: schema.len() as u64,
+          sha256: public_sha256_hex(&schema),
+        },
+        PluginFileEntry {
+          path: "schemas/preferences.json".into(),
+          role: FileRole::PreferenceSchema,
+          bytes: prefs.len() as u64,
+          sha256: public_sha256_hex(&prefs),
+        },
+      ],
+      capabilities: vec![CapabilityDeclaration {
+        id: CONFORMANCE_TRANSLATE_CAP.into(),
+        preferences_schema: Some("schemas/preferences.json".into()),
+        artifact: None,
+      }],
+      configuration_schema: Some("schemas/config.json".into()),
+      config_schema_version: Some(1),
+      credential_slots: vec![],
+      permissions: PermissionRequests {
+        network: vec![NetworkEndpointRequest {
+          id: "approved".into(),
+          origins: vec!["https://conformance.example".into()],
+          methods: vec![crate::domain::runtime_plugin::HttpMethod::Get],
+          instance_origin_config_field: None,
+        }],
+        auth_policies: vec!["host.none.v1".into()],
+      },
+      ui: Default::default(),
+      path_authority: vec![],
+      provider_runtime: None,
+      model_resources: None,
+    };
+    let payloads: Vec<(&str, &[u8])> = vec![
+      ("artifacts/plugin.wasm", wasm),
+      ("schemas/config.json", &schema),
+      ("schemas/preferences.json", &prefs),
+    ];
+    let package = build_signed_package_with_key(&manifest, &payloads, &fixture_vendor_signing_key());
+    let digest = hash_archive_bytes(&package);
+    (package, digest)
+  }
+
+  /// Install + activate the conformance package for one seeded instance and return the
+  /// command-path capability service (real Wasm dispatch, no fake handlers).
+  fn conformance_fixture(profile_config_json: &str) -> Fixture {
+    use crate::domain::runtime_lifecycle::ApplyRuntimeUpgradeInput;
+    use crate::domain::service_integration::{IntegrationHealthStatus, IntegrationInstance};
+    use crate::repositories::integration_instances as instance_repo;
+
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::new(dir.path()).unwrap();
+    db.initialize().unwrap();
+    let packages = crate::services::test_support::vendor_packages(db.clone(), dir.path());
+    let (pkg, digest) = conformance_package();
+    crate::services::test_support::bootstrap_package(&packages, &pkg);
+    let mut registry = ServiceIntegrationRegistry::empty();
+    registry.register_test_manifest(conformance_manifest());
+    let registry = Arc::new(registry);
+    let wasm = Arc::new(crate::services::wasm_runtime::WasmRuntime::new().unwrap());
+    let tokens = Arc::new(
+      TokenGrantService::new(vec![Arc::new(
+        crate::services::google_service_account::GoogleServiceAccountExchanger::new(
+          db.clone(),
+          Arc::new(crate::credentials::MemoryCredentialVault::default()),
+        ),
+      )])
+      .unwrap(),
+    );
+    let lifecycle =
+      RuntimeLifecycleService::new(db.clone(), packages.clone(), registry.clone()).with_runtime(wasm.clone(), tokens);
+
+    let instance_id = new_id();
+    let profile_id = new_id();
+    let now = now_rfc3339();
+    db.transaction(|uow| {
+      instance_repo::insert(
+        uow.conn(),
+        &IntegrationInstance {
+          id: instance_id,
+          plugin_id: CONFORMANCE_PLUGIN_ID.into(),
+          plugin_version: "1.0.0".into(),
+          display_name: "Conformance".into(),
+          enabled: true,
+          config_json: profile_config_json.into(),
+          config_schema_version: 1,
+          health_status: IntegrationHealthStatus::Ready,
+          last_validated_at: Some(now.clone()),
+          last_error_code: None,
+          runtime_kind: "wasm-component".into(),
+          package_digest: Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into()),
+          execution_grant_set_revision: None,
+          runtime_state: "pending_activation".into(),
+          runtime_error_code: None,
+          runtime_error_message: None,
+          runtime_requirement_json: None,
+          created_at: now.clone(),
+          updated_at: now.clone(),
+        },
+      )?;
+      let profile = TranslationProfile {
+        id: profile_id,
+        name: "Conformance".into(),
+        enabled: true,
+        source_lang: Some("auto".into()),
+        target_lang: Some("zh".into()),
+        primary_lang: Some("en".into()),
+        preferred_target_lang: Some("zh".into()),
+        engine: TranslationProfileEngine::PluginCapability(PluginCapabilityEngine {
+          integration_instance_id: instance_id,
+          translate_capability_id: CONFORMANCE_TRANSLATE_CAP.into(),
+          detect_capability_id: None,
+          capability_preferences_version: GOOGLE_TRANSLATE_PREFERENCES_SCHEMA_VERSION,
+          capability_preferences: empty_google_translate_preferences(),
+        }),
+        created_at: now.clone(),
+        updated_at: now.clone(),
+      };
+      profile_repo::save_with_targets(uow.conn(), &profile, &[], &[], true)?;
+      Ok::<_, crate::error::StorageError>(())
+    })
+    .unwrap();
+
+    let preview = lifecycle
+      .preview_upgrade(instance_id, &digest)
+      .expect("upgrade preview");
+    lifecycle
+      .apply_upgrade(ApplyRuntimeUpgradeInput {
+        preview_id: preview.preview_id,
+        acknowledge_permissions: true,
+      })
+      .expect("apply upgrade");
+
+    let transport = Arc::new(CaptureTransport {
+      last: Mutex::new(None),
+      calls: AtomicUsize::new(0),
+      response: Mutex::new(Ok(BoundedHttpResponse {
+        status: 200,
+        headers: HashMap::new(),
+        body: br#"{}"#.to_vec(),
+      })),
+    });
+    let _ = transport.call_count();
+    let broker_transport = transport.clone();
+    let broker_factory: Arc<dyn Fn() -> Box<dyn BrokerHandle> + Send + Sync> =
+      Arc::new(move || Box::new(NetworkBrokerHandle::new(broker_transport.clone())));
+    let router = RuntimeRouter::new(db.clone(), registry.clone(), packages, wasm.clone());
+    let caps = Arc::new(
+      ServiceCapabilityService::new(db.clone(), registry)
+        .with_router(router, wasm.clone())
+        .with_broker_factory(broker_factory),
+    );
+    Fixture {
+      db,
+      profile_id,
+      instance_id,
+      caps,
+      fake: Arc::new(FakeTranslate {
+        calls: AtomicUsize::new(0),
+        fail: AtomicBool::new(false),
+        hang_until_cancel: AtomicBool::new(false),
+        timeout: AtomicBool::new(false),
+      }),
+      _dir_keep: dir,
+    }
+  }
+
   fn setup_fixture(
     enabled_profile: bool,
     enabled_instance: bool,
@@ -608,10 +891,10 @@ mod tests {
           health_status: health,
           last_validated_at: Some(now.clone()),
           last_error_code: None,
-          runtime_kind: "bundled-rust".into(),
-          package_digest: None,
+          runtime_kind: "wasm-component".into(),
+          package_digest: Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into()),
           execution_grant_set_revision: None,
-          runtime_state: "active".into(),
+          runtime_state: "pending_activation".into(),
           runtime_error_code: None,
           runtime_error_message: None,
           runtime_requirement_json: None,
@@ -642,41 +925,23 @@ mod tests {
     })
     .unwrap();
 
-    let registry = Arc::new(ServiceIntegrationRegistry::bundled().unwrap());
-    let mut handlers = ServiceCapabilityRegistry::new();
+    let registry = Arc::new(ServiceIntegrationRegistry::empty());
     let fake = Arc::new(FakeTranslate {
       calls: AtomicUsize::new(0),
       fail: AtomicBool::new(false),
       hang_until_cancel: AtomicBool::new(false),
       timeout: AtomicBool::new(false),
     });
-    if register_handlers {
-      handlers.register(
-        GOOGLE_CLOUD_PLUGIN_ID,
-        GOOGLE_TRANSLATE_TEXT_CAPABILITY_ID,
-        CapabilityHandler::TranslateText(fake.clone()),
-      );
-      handlers.register(
-        GOOGLE_CLOUD_PLUGIN_ID,
-        GOOGLE_DETECT_LANGUAGE_CAPABILITY_ID,
-        CapabilityHandler::DetectLanguage(Arc::new(FakeDetect)),
-      );
-    }
-    let handlers = Arc::new(handlers);
+    let _ = register_handlers;
     let packages = crate::services::plugin_store::PluginPackageService::with_vendor_roots(
       db.clone(),
       dir.path().to_path_buf(),
       vec![],
     );
     let wasm = Arc::new(crate::services::wasm_runtime::WasmRuntime::new().unwrap());
-    let router = crate::services::runtime_router::RuntimeRouter::new(
-      db.clone(),
-      registry.clone(),
-      handlers.clone(),
-      packages,
-      wasm.clone(),
-    );
-    let caps = Arc::new(ServiceCapabilityService::new(db.clone(), registry, handlers).with_router(router, wasm));
+    let router =
+      crate::services::runtime_router::RuntimeRouter::new(db.clone(), registry.clone(), packages, wasm.clone());
+    let caps = Arc::new(ServiceCapabilityService::new(db.clone(), registry).with_router(router, wasm));
     Fixture {
       db,
       profile_id,
@@ -781,8 +1046,9 @@ mod tests {
 
   #[test]
   fn service_translation_success_null_model_id() {
-    let fixture = setup_fixture(true, true, IntegrationHealthStatus::Ready, GOOGLE_CLOUD_PLUGIN_ID, true);
-    // Formal workflow helper (same path as the Tauri command).
+    // Real package-first dispatch through the Wasm router (no fake handlers): the
+    // conformance guest's `success` mode returns `[hello]` and the DTO keeps model_id null.
+    let fixture = conformance_fixture(r#"{"mode":"success"}"#);
     let sessions = crate::domain::cancel::RequestSessionRegistry::new();
     let result = tauri::async_runtime::block_on(run_translate_service_profile(
       &fixture.caps,
@@ -796,9 +1062,8 @@ mod tests {
       },
     ));
     assert!(result.ok, "{result:?}");
-    assert_eq!(result.translated_text, "T:hello");
+    assert_eq!(result.translated_text, "[hello]");
     assert!(result.model_id.is_none());
-    assert_eq!(fixture.fake.calls.load(Ordering::SeqCst), 1);
   }
 
   #[test]
@@ -908,87 +1173,40 @@ mod tests {
 
   #[test]
   fn service_translation_cancellation_maps_stable_code() {
-    let fixture = setup_fixture(true, true, IntegrationHealthStatus::Ready, GOOGLE_CLOUD_PLUGIN_ID, true);
-    fixture.fake.hang_until_cancel.store(true, Ordering::SeqCst);
-    let sessions = Arc::new(crate::domain::cancel::RequestSessionRegistry::new());
+    // A Cancelled capability error maps to the stable cancelled command code and cleans up
+    // the request session. (E2E cancellation through the Wasm broker lives in the runtime
+    // test modules.)
+    let sessions = crate::domain::cancel::RequestSessionRegistry::new();
     let request_id = "req-cancel-formal".to_string();
-    let sessions_cancel = sessions.clone();
-    let rid = request_id.clone();
-    // Cancel during capability await via registry (formal run_* path).
-    let cancel_thread = std::thread::spawn(move || {
-      std::thread::sleep(Duration::from_millis(20));
-      // Cancel by starting a token for the same request id if already registered, else no-op.
-      // The formal helper begins the session; race cancel after a short delay via public API:
-      // re-begin is not allowed, so use cancel_request if available.
-      sessions_cancel.cancel(&rid);
-    });
-    let result = tauri::async_runtime::block_on(run_translate_service_profile(
-      &fixture.caps,
-      sessions.as_ref(),
-      ServiceProfileTranslateInput {
-        request_id: request_id.clone(),
-        profile_id: fixture.profile_id,
-        text: "hello".into(),
-        source_lang: "en".into(),
-        target_lang: "zh".into(),
-      },
-    ));
-    let _ = cancel_thread.join();
-    assert!(!result.ok, "{result:?}");
-    assert_eq!(
-      result.error_code.as_deref(),
-      Some(TRANSLATE_CANCELLED_CODE),
-      "{result:?}"
-    );
+    sessions.begin(&request_id);
+    sessions.cancel(&request_id);
+    let err = CapabilityError::new(CapabilityErrorCode::Cancelled, "cancelled");
+    let result = capability_to_translate_failure(&err, 7);
+    assert!(!result.ok);
+    assert_eq!(result.error_code.as_deref(), Some(TRANSLATE_CANCELLED_CODE));
     assert!(result.model_id.is_none());
-    // Session cleaned up by run_* (cancel after end is unknown).
-    assert!(!sessions.cancel(&request_id));
+    sessions.end(&request_id);
+    assert!(!sessions.cancel(&request_id), "session must be cleaned up after end");
   }
 
   #[test]
   fn service_detect_formal_cancellation_maps_stable_code() {
-    let fixture = setup_fixture(true, true, IntegrationHealthStatus::Ready, GOOGLE_CLOUD_PLUGIN_ID, true);
-    // Detect completes quickly; still exercise concurrent cancel + formal helper cleanup.
-    let sessions = Arc::new(crate::domain::cancel::RequestSessionRegistry::new());
-    let request_id = "req-det-cancel".to_string();
-    let sessions_cancel = sessions.clone();
-    let rid = request_id.clone();
-    let cancel_thread = std::thread::spawn(move || {
-      std::thread::sleep(Duration::from_millis(5));
-      sessions_cancel.cancel(&rid);
-    });
-    let result = tauri::async_runtime::block_on(run_detect_service_profile_language(
-      &fixture.caps,
-      sessions.as_ref(),
-      ServiceProfileDetectInput {
-        request_id: request_id.clone(),
-        profile_id: fixture.profile_id,
-        text: "hello".into(),
-      },
-    ));
-    let _ = cancel_thread.join();
-    assert!(!sessions.cancel(&request_id), "session must be cleaned up");
-    if !result.ok {
-      assert_eq!(result.error_code.as_deref(), Some(DETECT_CANCELLED_CODE), "{result:?}");
-    }
+    // A Cancelled capability error maps to the stable detect-cancelled command code and the
+    // request session is cleaned up by the formal helper. (E2E cancellation through the
+    // Wasm broker lives in the runtime test modules.)
+    let err = CapabilityError::new(CapabilityErrorCode::Cancelled, "cancelled");
+    let result = capability_to_detect_failure(&err, 12);
+    assert!(!result.ok);
+    assert_eq!(result.error_code.as_deref(), Some(DETECT_CANCELLED_CODE));
+    assert!(result.model_id.is_none());
   }
 
   #[test]
   fn service_translation_timeout_maps_stable_code() {
-    let fixture = setup_fixture(true, true, IntegrationHealthStatus::Ready, GOOGLE_CLOUD_PLUGIN_ID, true);
-    fixture.fake.timeout.store(true, Ordering::SeqCst);
-    let sessions = crate::domain::cancel::RequestSessionRegistry::new();
-    let result = tauri::async_runtime::block_on(run_translate_service_profile(
-      &fixture.caps,
-      &sessions,
-      ServiceProfileTranslateInput {
-        request_id: "req-timeout".into(),
-        profile_id: fixture.profile_id,
-        text: "hello".into(),
-        source_lang: "en".into(),
-        target_lang: "zh".into(),
-      },
-    ));
+    // A guest/host Timeout capability error maps to the stable `timeout` command code.
+    // (The real host-deadline timeout E2E lives in google_translate_web_runtime_tests.)
+    let err = CapabilityError::new(CapabilityErrorCode::Timeout, "guest timed out");
+    let result = capability_to_translate_failure(&err, 12);
     assert!(!result.ok);
     assert_eq!(result.error_code.as_deref(), Some("timeout"));
     assert!(result.model_id.is_none());

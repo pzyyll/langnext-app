@@ -1,5 +1,5 @@
-// ABOUTME: OCR service editor preserving Baidu/AI flows and rendering plugin preferences from schemas.
-// ABOUTME: Keeps credentials write-only and rebuilds plugin preference drafts on compatible rebinds.
+// ABOUTME: OCR service editor rendering AI and plugin-preference OCR services.
+// ABOUTME: Credentials stay write-only; plugin preference drafts rebuild on compatible rebinds.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
@@ -33,8 +33,6 @@ import {
 import { deleteOcrService, saveOcrService } from "../../storage/client";
 import { getIpcErrorMessage } from "../../storage/errors";
 import type {
-  BaiduOcrAction,
-  CredentialUpdate,
   IntegrationInstanceDto,
   OcrPromptTemplate,
   OcrServiceDto,
@@ -42,7 +40,6 @@ import type {
   ServiceIntegrationDefinitionDto,
 } from "../../storage/types";
 import { AiOcrForm } from "./AiOcrForm";
-import { BaiduOcrForm, type CredentialAction } from "./BaiduOcrForm";
 import { PluginOcrForm } from "./PluginOcrForm";
 import { OCR_IMAGE_CAPABILITY_ID } from "./ocrProviderOptions";
 import { preferenceSchemaForBinding } from "../plugins/schema/capabilitySchema";
@@ -64,11 +61,6 @@ const saveButtonClassName = [primaryButtonClassName, "relative"].join(" ");
 
 type OcrDraft = {
   enabled: boolean;
-  baiduAction: BaiduOcrAction;
-  apiKey: string;
-  secretKey: string;
-  apiKeyAction: CredentialAction;
-  secretKeyAction: CredentialAction;
   providerModelId: string;
   temperature: string;
   defaultPromptTemplateId: string;
@@ -92,11 +84,6 @@ function parseOptionalTemperature(raw: string): number | null | "invalid" {
   return Number.isFinite(value) && value >= 0 ? value : "invalid";
 }
 
-function toCredentialUpdate(action: CredentialAction, value: string): CredentialUpdate {
-  if (action === "clear") return { action: "clear" };
-  return action === "replace" && value.trim() ? { action: "replace", value: value.trim() } : { action: "keep" };
-}
-
 function draftFromDto(
   service: OcrServiceDto,
   instances: readonly IntegrationInstanceDto[],
@@ -112,11 +99,6 @@ function draftFromDto(
     binding?.descriptor.preferencesSchemaVersion ?? service.capabilityPreferencesVersion ?? 1;
   return {
     enabled: service.enabled,
-    baiduAction: service.baiduAction ?? "accurate",
-    apiKey: "",
-    secretKey: "",
-    apiKeyAction: "keep",
-    secretKeyAction: "keep",
     providerModelId: service.providerModelId ?? "",
     temperature: service.temperature != null ? String(service.temperature) : "",
     defaultPromptTemplateId: service.defaultPromptTemplateId ?? service.promptTemplates[0]?.id ?? "",
@@ -141,11 +123,6 @@ function isDraftFieldsClean(
   const baseline = draftFromDto(service, instances, definitions);
   if (
     draft.enabled !== baseline.enabled ||
-    draft.baiduAction !== baseline.baiduAction ||
-    draft.apiKeyAction !== "keep" ||
-    draft.secretKeyAction !== "keep" ||
-    Boolean(draft.apiKey.trim()) ||
-    Boolean(draft.secretKey.trim()) ||
     draft.providerModelId !== baseline.providerModelId ||
     draft.temperature !== baseline.temperature ||
     draft.defaultPromptTemplateId !== baseline.defaultPromptTemplateId ||
@@ -168,19 +145,6 @@ function isDraftFieldsClean(
 
 /** Persist a rename without altering provider-specific values or opaque plugin preference data. */
 function renameWrite(service: OcrServiceDto, displayName: string): OcrServiceWrite {
-  if (service.providerType === "baidu") {
-    return {
-      id: service.id,
-      providerType: "baidu",
-      displayName,
-      enabled: service.enabled,
-      baiduAction: service.baiduAction ?? "accurate",
-      apiKey: { action: "keep" },
-      secretKey: { action: "keep" },
-      promptTemplates: [],
-      expectedUpdatedAt: service.updatedAt,
-    };
-  }
   if (service.providerType === "plugin_capability") {
     return {
       id: service.id,
@@ -362,19 +326,7 @@ function OcrServiceEditorLoaded({ service }: { service: OcrServiceDto }) {
   async function handleSave() {
     if (savePending || !isDirty) return;
     let write: OcrServiceWrite;
-    if (service.providerType === "baidu") {
-      write = {
-        id: service.id,
-        providerType: "baidu",
-        displayName: service.displayName,
-        enabled: draft.enabled,
-        baiduAction: draft.baiduAction,
-        apiKey: toCredentialUpdate(draft.apiKeyAction, draft.apiKey),
-        secretKey: toCredentialUpdate(draft.secretKeyAction, draft.secretKey),
-        promptTemplates: [],
-        expectedUpdatedAt: draft.expectedUpdatedAt,
-      };
-    } else if (service.providerType === "plugin_capability") {
+    if (service.providerType === "plugin_capability") {
       const binding = preferenceSchemaForBinding(
         instances,
         definitions,
@@ -613,23 +565,7 @@ function OcrServiceEditorLoaded({ service }: { service: OcrServiceDto }) {
           </>
         }
       >
-        {service.providerType === "baidu" ? (
-          <BaiduOcrForm
-            apiKey={draft.apiKey}
-            secretKey={draft.secretKey}
-            apiKeyAction={draft.apiKeyAction}
-            secretKeyAction={draft.secretKeyAction}
-            hasApiKey={service.hasApiKey}
-            hasSecretKey={service.hasSecretKey}
-            baiduAction={draft.baiduAction}
-            disabled={formDisabled}
-            onApiKeyChange={(apiKey) => updateDraft({ apiKey })}
-            onSecretKeyChange={(secretKey) => updateDraft({ secretKey })}
-            onApiKeyActionChange={(apiKeyAction) => updateDraft({ apiKeyAction })}
-            onSecretKeyActionChange={(secretKeyAction) => updateDraft({ secretKeyAction })}
-            onBaiduActionChange={(baiduAction) => updateDraft({ baiduAction })}
-          />
-        ) : service.providerType === "plugin_capability" ? (
+        {service.providerType === "plugin_capability" ? (
           <PluginOcrForm
             integrationInstanceId={draft.integrationInstanceId}
             ocrCapabilityId={draft.ocrCapabilityId}

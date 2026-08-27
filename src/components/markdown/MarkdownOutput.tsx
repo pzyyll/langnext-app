@@ -1,15 +1,15 @@
 // ABOUTME: Streaming-safe Markdown renderer for translation output panes.
-// ABOUTME: Wraps Streamdown + Shiki code plugin; raw text stays the copy source.
-import { createCodePlugin } from "@streamdown/code";
+// ABOUTME: Wraps Streamdown with an allowlisted Shiki highlighter; raw text stays the copy source.
 import { Streamdown } from "streamdown";
 import { cn } from "../../lib/cn";
+import { createMarkdownCodeHighlighter } from "./-codeHighlighter";
 
 /** Shiki dual theme: light / dark (pairs with data-theme via Tailwind dark:). */
 const CODE_SHIKI_THEME = ["github-light", "github-dark"] as const;
 
 /** Stable plugin map so Streamdown does not remount on every parent render. */
 const MARKDOWN_PLUGINS = {
-  code: createCodePlugin({ themes: [...CODE_SHIKI_THEME] }),
+  code: createMarkdownCodeHighlighter(),
 } as const;
 
 export type MarkdownOutputProps = {
@@ -23,7 +23,7 @@ export type MarkdownOutputProps = {
 /**
  * Render translation markdown with incomplete-block handling for stream chunks.
  * Does not append scramble glyphs — those would pollute the markdown parse.
- * Fenced code uses Shiki via `@streamdown/code` (languages lazy-loaded).
+ * Fenced code uses the project Shiki highlighter (allowlisted languages only).
  */
 export function MarkdownOutput({ text, isStreaming = false, className }: MarkdownOutputProps) {
   if (!text) {

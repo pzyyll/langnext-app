@@ -52,7 +52,7 @@ function toLlmChatRequest(input: ExecutorChatInput): LlmChatRequest {
  * Runtime provider executor over the typed Tauri commands/channels from Phase 8 Tasks 1–8.
  * Model enumeration consumes the guest's bounded aggregate list for ONE selected API type;
  * unary/streaming Chat resolves the exact binding server-side from the persisted model id.
- * A runtime error never retries the same request through `LegacyFrontendProviderExecutor`.
+ * A runtime error is never replayed through another transport.
  */
 export class RuntimeProviderExecutor implements ProviderExecutor {
   readonly kind = "wasm-component" as const;

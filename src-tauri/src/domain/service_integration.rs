@@ -19,14 +19,11 @@ pub const PLUGIN_ID_MAX_LEN: usize = 128;
 pub const CAPABILITY_ID_MAX_LEN: usize = 128;
 /// Maximum credential slot id length.
 pub const SLOT_ID_MAX_LEN: usize = 64;
-/// Google Cloud bundled plugin id.
-pub const GOOGLE_CLOUD_PLUGIN_ID: &str = "com.langnext.google-cloud";
-/// Google Web (GTX / HTTPS proxy) bundled plugin id.
-pub const GOOGLE_TRANSLATE_WEB_PLUGIN_ID: &str = "com.langnext.google-translate-web";
-/// Edge TTS bundled plugin id (OpenAI-compatible tts.wangwangit.com).
-pub const EDGE_TTS_PLUGIN_ID: &str = "com.langnext.edge-tts";
-/// First-party PaddleOCR host definition id (activates only via vendor trusted-native-worker pin).
-pub const PADDLEOCR_PLUGIN_ID: &str = "com.langnext.paddleocr";
+pub use crate::domain::first_party_plugins::{
+  BAIDU_OCR_PLUGIN_ID, EDGE_TTS_PLUGIN_ID, GOOGLE_CLOUD_PLUGIN_ID, GOOGLE_TRANSLATE_WEB_PLUGIN_ID, PADDLEOCR_PLUGIN_ID,
+};
+/// Fixed Baidu OCR API origin used by the official package.
+pub const BAIDU_OCR_ORIGIN: &str = "https://aip.baidubce.com";
 /// Google Cloud service-account credential slot.
 pub const GOOGLE_CLOUD_SERVICE_ACCOUNT_SLOT: &str = "service-account-json";
 /// Pinned Google OAuth token URI required in service-account JSON.
@@ -105,12 +102,14 @@ impl IntegrationEffectiveStatus {
 #[serde(rename_all = "snake_case")]
 pub enum CredentialSlotKind {
   SecretJson,
+  SecretText,
 }
 
 impl CredentialSlotKind {
   pub fn as_str(self) -> &'static str {
     match self {
       Self::SecretJson => "secret_json",
+      Self::SecretText => "secret_text",
     }
   }
 }
@@ -201,7 +200,7 @@ pub struct IntegrationInstance {
   pub health_status: IntegrationHealthStatus,
   pub last_validated_at: Option<String>,
   pub last_error_code: Option<String>,
-  /// Stable kebab-case runtime kind (`bundled-rust`, `wasm-component`, ...).
+  /// Stable kebab-case runtime kind (`wasm-component`).
   pub runtime_kind: String,
   /// Exact installed package digest when runtime is package-backed.
   pub package_digest: Option<String>,
@@ -215,20 +214,6 @@ pub struct IntegrationInstance {
   pub runtime_requirement_json: Option<String>,
   pub created_at: String,
   pub updated_at: String,
-}
-
-impl IntegrationInstance {
-  /// Default bundled-rust pin used by existing create/import paths until activation.
-  pub fn with_bundled_runtime(mut self) -> Self {
-    self.runtime_kind = "bundled-rust".into();
-    self.package_digest = None;
-    self.execution_grant_set_revision = None;
-    self.runtime_state = "active".into();
-    self.runtime_error_code = None;
-    self.runtime_error_message = None;
-    self.runtime_requirement_json = None;
-    self
-  }
 }
 
 /// Internal credential binding row (opaque vault ref stays internal).
