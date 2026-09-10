@@ -283,9 +283,12 @@ describe("ConfigurationImportPreviewDialog apply flow", () => {
           subjectId: "00000000-0000-7000-8000-000000000001",
           displayLabel: "OpenAI Compatible",
           adapterId: "openai-compatible",
-          runtimeKind: "legacy-frontend-provider",
-          localStatus: "legacy",
-          requiredAction: "none",
+          runtimeKind: "wasm-component",
+          pluginId: "com.langnext.provider.openai-compatible",
+          pluginVersion: "1.0.0",
+          packageDigest: "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          localStatus: "digest_mismatch",
+          requiredAction: "resolve_digest_mismatch",
         },
         {
           subjectKind: "provider",
@@ -296,8 +299,6 @@ describe("ConfigurationImportPreviewDialog apply flow", () => {
           pluginId: "com.langnext.provider.openai-responses",
           pluginVersion: "1.0.0",
           packageDigest: "abababababababababababababababababababababababababababababababab",
-          publisherKeyId: "com.langnext.vendor.keys.1",
-          publisherKeyFingerprint: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
           localStatus: "installed",
           requiredAction: "activate_after_import",
         },
@@ -305,11 +306,12 @@ describe("ConfigurationImportPreviewDialog apply flow", () => {
           subjectKind: "integration",
           subjectId: "00000000-0000-7000-8000-000000000002",
           displayLabel: "Google Web",
-          runtimeKind: "bundled-rust",
+          runtimeKind: "wasm-component",
           pluginId: "com.langnext.google-translate-web",
           pluginVersion: "1.0.0",
-          localStatus: "bundled",
-          requiredAction: "none",
+          packageDigest: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          localStatus: "missing",
+          requiredAction: "install_exact_package",
         },
         {
           subjectKind: "integration",
@@ -319,8 +321,6 @@ describe("ConfigurationImportPreviewDialog apply flow", () => {
           pluginId: "com.langnext.conformance",
           pluginVersion: "1.0.0",
           packageDigest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-          publisherKeyId: "com.langnext.vendor.keys.1",
-          publisherKeyFingerprint: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
           localStatus: "installed",
           requiredAction: "activate_after_import",
         },
@@ -349,13 +349,16 @@ describe("ConfigurationImportPreviewDialog apply flow", () => {
     expect(screen.getByText("com.langnext.provider.openai-responses")).toBeVisible();
     expect(screen.getAllByText("com.langnext.google-translate-web").length).toBeGreaterThan(0);
     expect(screen.getAllByText("1.0.0").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("com.langnext.vendor.keys.1").length).toBeGreaterThan(0);
     expect(screen.getByText("abababababababababababababababababababababababababababababababab")).toBeVisible();
     expect(
-      screen.getAllByText("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc").length,
+      screen.getAllByText("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee").length,
     ).toBeGreaterThan(0);
     expect(screen.getAllByText("Installed").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Activate after import").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Different content").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Replace with the exact content").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Content not installed").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Install exact content").length).toBeGreaterThan(0);
     // The truncated prefix/suffix form must never appear.
     expect(screen.queryByText(/^abababababab…ababab$/)).not.toBeInTheDocument();
   });

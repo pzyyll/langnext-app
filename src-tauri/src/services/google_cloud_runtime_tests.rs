@@ -7,6 +7,7 @@ use crate::domain::cancel::CancelToken;
 use crate::domain::import_export::ImportConflictMode;
 use crate::domain::integration_capability_health::{CapabilityHealthRecord, CapabilityHealthStatus};
 use crate::domain::ocr_service::{OcrProviderType, OcrRecognizeInput, OcrService};
+use crate::domain::plugin_catalog::sha256_hex;
 use crate::domain::plugin_resource::NetworkResponseBodyModes;
 use crate::domain::provider_http::ProviderHttpStreamEvent;
 use crate::domain::runtime_lifecycle::{ExecutionGrantSetBundle, GrantSubjectKind};
@@ -39,8 +40,7 @@ use crate::services::auth_policies::{
 use crate::services::bounded_http::{BoundedHttpResponse, PreparedHttpRequest, RawHttpTransport};
 use crate::services::import_export::ImportExportService;
 use crate::services::ocr_services::OcrServiceService;
-use crate::services::plugin_package::{public_sha256_hex, verify_package_bytes};
-use crate::services::plugin_store::PluginPackageService;
+use crate::services::plugin_catalog::PluginCatalog;
 use crate::services::runtime_lifecycle::{RuntimeLifecycleService, UpgradeApplyFault};
 use crate::services::runtime_router::RuntimeRouter;
 use crate::services::service_capabilities::ServiceCapabilityService;
@@ -50,6 +50,9 @@ use crate::services::service_capabilities::{
 use crate::services::service_integration_registry::ServiceIntegrationRegistry;
 use crate::services::service_integrations::ServiceIntegrationService;
 use crate::services::speech_services::SpeechServiceService;
+use crate::services::test_support::{
+  GOOGLE_CLOUD_ARCHIVE, catalog_with_builtins, fixture_digest, registry_from_catalog,
+};
 use crate::services::token_grant::{
   ExchangedToken, GOOGLE_SERVICE_ACCOUNT_AUTH_DRIVER_ID, TokenExchanger, TokenGrantService, TokenInjectionKind,
 };
@@ -59,24 +62,14 @@ use crate::services::wasm_runtime::{
   WasmDetectLanguageAdapter, WasmOcrImageAdapter, WasmRuntime, WasmSpeechSynthesizeAdapter, WasmTranslateTextAdapter,
 };
 use crate::storage::Database;
-use ed25519_dalek::Signer;
 use std::collections::HashMap;
 use std::future::Future;
-use std::io::Write;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::sync::Notify;
 use uuid::Uuid;
 
-const PACKAGE_BYTES: &[u8] = include_bytes!(concat!(
-  env!("CARGO_MANIFEST_DIR"),
-  "/../runtime-plugins/google-cloud/fixtures/com.langnext.google-cloud-1.2.0.lnplugin"
-));
-const VENDOR_PUBLIC_KEY_HEX: &str = include_str!(concat!(
-  env!("CARGO_MANIFEST_DIR"),
-  "/../runtime-plugins/conformance/fixtures/packages/keys/vendor-public-key.hex"
-));
 const TRANSLATE_REQUEST_FIXTURE: &str = include_str!(concat!(
   env!("CARGO_MANIFEST_DIR"),
   "/../runtime-plugins/google-cloud/tests/fixtures/translate/request.json"
@@ -290,16 +283,24 @@ impl RawHttpTransport for FailingTransport {
 }
 
 struct InstalledFixture {
+  /// Keeps the catalog app data directory (and its immutable snapshot) alive.
+  _dir: tempfile::TempDir,
   package_digest: PackageDigest,
   runtime: Arc<WasmRuntime>,
   tokens: Arc<TokenGrantService>,
   exchanger: Arc<FixtureExchanger>,
   transport: Arc<CaptureTransport>,
-  package: crate::services::plugin_package::VerifiedPackage,
+  package: crate::services::plugin_loader::LoadedPlugin,
 }
 
 fn installed_fixture() -> InstalledFixture {
-  let package = verify_package_bytes(PACKAGE_BYTES, VENDOR_PUBLIC_KEY_HEX.trim()).expect("fixture package verifies");
+  let dir = tempfile::tempdir().unwrap();
+  let db = Database::new(dir.path()).unwrap();
+  db.initialize().unwrap();
+  let catalog = catalog_with_builtins(db, dir.path(), &[GOOGLE_CLOUD_ARCHIVE]);
+  let package = catalog
+    .resolve_default(GOOGLE_CLOUD_PLUGIN_ID)
+    .expect("google-cloud content is in the catalog");
   let runtime = Arc::new(WasmRuntime::new().expect("Wasmtime runtime"));
   let exchanger = Arc::new(FixtureExchanger::recording());
   let tokens = Arc::new(TokenGrantService::new(vec![exchanger.clone()]).unwrap());
@@ -309,7 +310,8 @@ fn installed_fixture() -> InstalledFixture {
     response: Mutex::new(json_response(200, r#"{}"#)),
   });
   InstalledFixture {
-    package_digest: PackageDigest::parse(&package.package_digest).unwrap(),
+    _dir: dir,
+    package_digest: PackageDigest::parse(&package.descriptor.content_digest).unwrap(),
     runtime,
     tokens,
     exchanger,
@@ -340,8 +342,12 @@ fn artifact(
     .files
     .iter()
     .find(|entry| entry.path == path)
-    .expect("artifact in signed index");
-  let bytes = fixture.package.extracted_files.get(path).expect("artifact bytes");
+    .expect("artifact in the catalog index");
+  let bytes = fixture
+    .package
+    .read_snapshot_file(path)
+    .unwrap_or_else(|e| panic!("read artifact {path}: {e}"));
+  let bytes = bytes.as_slice();
   let artifact_digest = ComponentArtifactDigest::parse(&entry.sha256).unwrap();
   let verified = fixture
     .runtime
@@ -472,7 +478,7 @@ fn broker_factory(
 struct LifecycleFixture {
   _dir: tempfile::TempDir,
   db: Database,
-  packages: PluginPackageService,
+  catalog: Arc<PluginCatalog>,
   lifecycle: RuntimeLifecycleService,
   capabilities: ServiceCapabilityService,
   registry: Arc<ServiceIntegrationRegistry>,
@@ -485,21 +491,36 @@ struct LifecycleFixture {
 }
 
 fn lifecycle_fixture() -> LifecycleFixture {
-  lifecycle_fixture_from_package(PACKAGE_BYTES)
+  lifecycle_fixture_with_variant(None)
 }
 
-fn lifecycle_fixture_from_package(package_bytes: &[u8]) -> LifecycleFixture {
+/// Lifecycle fixture over the committed google-cloud archive plus one optional hand-built
+/// variant manifest (used by the OCR trap/oversized cleanup tests).
+fn lifecycle_fixture_with_variant(
+  variant: Option<(crate::domain::runtime_plugin::PluginManifestV1, Vec<(String, Vec<u8>)>)>,
+) -> LifecycleFixture {
   let dir = tempfile::tempdir().unwrap();
   let db = Database::new(dir.path()).unwrap();
   db.initialize().unwrap();
-  let packages = PluginPackageService::with_vendor_roots(
-    db.clone(),
-    dir.path().to_path_buf(),
-    vec![crate::services::vendor_trust::test_vendor_fixture::fixture_vendor_public_key()],
-  );
-  let imported = packages.bootstrap_bundled_package(package_bytes, false).unwrap();
-  let package_digest = imported.package_digest().to_string();
-  let registry = crate::services::test_support::registry_from_installed_packages(&packages);
+  let catalog = match &variant {
+    Some((manifest, payloads)) => crate::services::test_support::catalog_with_manifest_fixtures(
+      db.clone(),
+      dir.path(),
+      &[],
+      std::slice::from_ref(&(manifest.clone(), payloads.clone())),
+    ),
+    None => catalog_with_builtins(db.clone(), dir.path(), &[GOOGLE_CLOUD_ARCHIVE]),
+  };
+  let package_digest = match &variant {
+    Some((manifest, _)) => catalog
+      .find_plugin_version(&manifest.id, &manifest.version)
+      .expect("variant content is in the catalog")
+      .descriptor
+      .content_digest
+      .clone(),
+    None => fixture_digest(&catalog, GOOGLE_CLOUD_PLUGIN_ID),
+  };
+  let registry = registry_from_catalog(&catalog);
   let wasm = Arc::new(WasmRuntime::new().unwrap());
   let exchanger = Arc::new(FixtureExchanger::recording());
   let tokens = Arc::new(TokenGrantService::new(vec![exchanger]).unwrap());
@@ -507,7 +528,7 @@ fn lifecycle_fixture_from_package(package_bytes: &[u8]) -> LifecycleFixture {
     db.clone(),
     registry.clone(),
   ));
-  let router = RuntimeRouter::new(db.clone(), registry.clone(), packages.clone(), wasm.clone());
+  let router = RuntimeRouter::new(db.clone(), registry.clone(), catalog.clone(), wasm.clone());
   let transport = Arc::new(CaptureTransport {
     calls: AtomicUsize::new(0),
     last: Mutex::new(None),
@@ -515,6 +536,7 @@ fn lifecycle_fixture_from_package(package_bytes: &[u8]) -> LifecycleFixture {
   });
   let broker = broker_factory(transport.clone(), tokens.clone());
   let capabilities = ServiceCapabilityService::new(db.clone(), registry.clone())
+    .with_catalog(catalog.clone())
     .with_router(router, wasm.clone())
     .with_broker_factory(broker);
   let vault: Arc<dyn CredentialVault> = Arc::new(MemoryCredentialVault::default());
@@ -561,13 +583,13 @@ fn lifecycle_fixture_from_package(package_bytes: &[u8]) -> LifecycleFixture {
     Ok::<_, crate::error::StorageError>(())
   })
   .unwrap();
-  let lifecycle = RuntimeLifecycleService::new(db.clone(), packages.clone(), registry.clone())
+  let lifecycle = RuntimeLifecycleService::new(db.clone(), catalog.clone(), registry.clone())
     .with_runtime(wasm.clone(), tokens.clone())
     .with_vault(vault.clone());
   LifecycleFixture {
     _dir: dir,
     db,
-    packages,
+    catalog,
     lifecycle,
     capabilities,
     registry,
@@ -588,10 +610,11 @@ fn public_capabilities_with_transport(
   let router = RuntimeRouter::new(
     fixture.db.clone(),
     fixture.registry.clone(),
-    fixture.packages.clone(),
+    fixture.catalog.clone(),
     fixture.wasm.clone(),
   );
   ServiceCapabilityService::new(fixture.db.clone(), fixture.registry.clone())
+    .with_catalog(fixture.catalog.clone())
     .with_router(router, fixture.wasm.clone())
     .with_broker_factory(broker_factory(transport, fixture.tokens.clone()))
 }
@@ -680,7 +703,12 @@ fn insert_public_workflow_bindings(fixture: &LifecycleFixture) -> (Uuid, Uuid, U
   (profile_id, ocr_id, speech_id)
 }
 
-fn signed_google_cloud_ocr_failure_package(base: &InstalledFixture, component_bytes: &[u8]) -> Vec<u8> {
+/// Build a catalog variant of the committed google-cloud content whose OCR artifact is the
+/// given failure component. Everything else stays byte-identical.
+fn google_cloud_ocr_variant(
+  base: &InstalledFixture,
+  component_bytes: &[u8],
+) -> (crate::domain::runtime_plugin::PluginManifestV1, Vec<(String, Vec<u8>)>) {
   let artifact_path = "ocr/fixtures/langnext-google-cloud-ocr.wasm";
   let mut manifest = base.package.manifest.clone();
   let artifact_entry = manifest
@@ -689,7 +717,7 @@ fn signed_google_cloud_ocr_failure_package(base: &InstalledFixture, component_by
     .find(|entry| entry.path == artifact_path)
     .expect("OCR artifact manifest entry");
   artifact_entry.bytes = component_bytes.len() as u64;
-  artifact_entry.sha256 = public_sha256_hex(component_bytes);
+  artifact_entry.sha256 = sha256_hex(component_bytes);
 
   let mut payloads: Vec<(String, Vec<u8>)> = manifest
     .files
@@ -699,10 +727,8 @@ fn signed_google_cloud_ocr_failure_package(base: &InstalledFixture, component_by
         entry.path.clone(),
         base
           .package
-          .extracted_files
-          .get(&entry.path)
-          .expect("indexed Google Cloud payload")
-          .clone(),
+          .read_snapshot_file(&entry.path)
+          .unwrap_or_else(|e| panic!("read {}: {e}", entry.path)),
       )
     })
     .collect();
@@ -712,39 +738,7 @@ fn signed_google_cloud_ocr_failure_package(base: &InstalledFixture, component_by
     .expect("OCR artifact payload");
   ocr_payload.1 = component_bytes.to_vec();
   payloads.sort_by(|left, right| left.0.cmp(&right.0));
-
-  let manifest_bytes = serde_json::to_vec(&manifest).expect("failure package manifest JSON");
-  let signature = crate::services::vendor_trust::test_vendor_fixture::fixture_vendor_signing_key()
-    .sign(&manifest_bytes)
-    .to_bytes();
-  let publisher_bytes = crate::domain::plugin_package::decode_lowercase_hex::<32>(
-    VENDOR_PUBLIC_KEY_HEX.trim(),
-    "fixture vendor public key",
-  )
-  .expect("fixture vendor key");
-  let mut cursor = std::io::Cursor::new(Vec::new());
-  {
-    let mut zip = zip::ZipWriter::new(&mut cursor);
-    let options = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
-    zip
-      .start_file(crate::domain::runtime_plugin::MANIFEST_FILE_PATH, options)
-      .expect("failure package manifest entry");
-    zip.write_all(&manifest_bytes).expect("failure package manifest");
-    zip
-      .start_file(crate::domain::runtime_plugin::PUBLISHER_PUBLIC_KEY_PATH, options)
-      .expect("failure package publisher entry");
-    zip.write_all(&publisher_bytes).expect("failure package publisher");
-    for (path, bytes) in payloads {
-      zip.start_file(path, options).expect("failure package payload entry");
-      zip.write_all(&bytes).expect("failure package payload");
-    }
-    zip
-      .start_file(crate::domain::runtime_plugin::SIGNATURE_FILE_PATH, options)
-      .expect("failure package signature entry");
-    zip.write_all(&signature).expect("failure package signature");
-    zip.finish().expect("failure package archive");
-  }
-  cursor.into_inner()
+  (manifest, payloads)
 }
 
 fn assert_public_ocr_failure(component_bytes: &[u8], expected_code: &str) {
@@ -803,7 +797,7 @@ fn assert_public_ocr_failure(component_bytes: &[u8], expected_code: &str) {
   })
   .unwrap();
   let registry = Arc::new(ServiceIntegrationRegistry::empty());
-  let digest = ComponentArtifactDigest::parse(&public_sha256_hex(component_bytes)).unwrap();
+  let digest = ComponentArtifactDigest::parse(&sha256_hex(component_bytes)).unwrap();
   let verified = Arc::new(
     fixture
       .runtime
@@ -849,8 +843,8 @@ fn assert_public_ocr_failure(component_bytes: &[u8], expected_code: &str) {
 
 fn assert_installed_ocr_failure(component_bytes: &[u8], expected_code: &str) {
   let base = installed_fixture();
-  let package = signed_google_cloud_ocr_failure_package(&base, component_bytes);
-  let fixture = lifecycle_fixture_from_package(&package);
+  let variant = google_cloud_ocr_variant(&base, component_bytes);
+  let fixture = lifecycle_fixture_with_variant(Some(variant));
   let cleanup_probe = Arc::new(std::sync::atomic::AtomicBool::new(false));
   fixture.wasm.set_cleanup_probe(cleanup_probe.clone());
   let (_profile_id, ocr_service_id, _speech_service_id) = insert_public_workflow_bindings(&fixture);
@@ -1619,11 +1613,6 @@ fn google_cloud_export_import_round_trip_preserves_exact_runtime_requirement() {
   assert_eq!(runtime.plugin_version, "1.2.0");
   assert_eq!(runtime.runtime_kind, "wasm-component");
   assert_eq!(runtime.package_digest.as_deref(), Some(fixture.package_digest.as_str()));
-  assert_eq!(runtime.publisher_key_id.as_deref(), Some("com.langnext.vendor.keys.1"));
-  assert_eq!(
-    runtime.publisher_key_fingerprint.as_deref(),
-    Some(crate::services::vendor_trust::test_vendor_fixture::fixture_vendor_fingerprint().as_str())
-  );
   assert_eq!(runtime.plugin_api_version.as_deref(), Some("1.0"));
   assert_eq!(runtime.config_schema_version, 1);
   assert_eq!(runtime.required_capability_majors, expected_capability_majors);
@@ -1653,10 +1642,9 @@ fn google_cloud_export_import_round_trip_preserves_exact_runtime_requirement() {
     Some(expected_runtime_json.as_str())
   );
   assert_eq!(restored.runtime_kind, "wasm-component");
-  assert_eq!(
-    restored.package_digest.as_deref(),
-    Some(fixture.package_digest.as_str())
-  );
+  // Import never installs content: the exact digest stays in the runtime requirement and the
+  // instance keeps no pin until the user installs that digest.
+  assert!(restored.package_digest.is_none());
   assert!(restored.execution_grant_set_revision.is_none());
   assert_eq!(restored.runtime_state, "unavailable");
   assert!(!clean_vault.exists("fixture-service-account").unwrap());
@@ -1768,7 +1756,7 @@ fn google_cloud_runtime_ocr_trap_and_limit_cleanup_preserve_rollback() {
   let instance_id = Uuid::now_v7();
   let input = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, INPUT_PNG);
   let make_handler = |component_bytes: &[u8]| {
-    let digest = ComponentArtifactDigest::parse(&public_sha256_hex(component_bytes)).unwrap();
+    let digest = ComponentArtifactDigest::parse(&sha256_hex(component_bytes)).unwrap();
     let verified = Arc::new(
       fixture
         .runtime
@@ -2726,7 +2714,7 @@ fn google_cloud_runtime_authority_change_invalidates_capability_health_atomicall
     .preview_upgrade(fixture.instance_id, &"0".repeat(64))
     .unwrap_err();
   assert!(
-    matches!(preview_error, crate::error::StorageError::NotFound(_)),
+    matches!(preview_error, crate::error::StorageError::PluginUnavailable(_)),
     "{preview_error:?}"
   );
   assert_source_authority_preserved(&fixture, &before);
@@ -3022,158 +3010,11 @@ fn google_cloud_runtime_package_digest_is_stable_and_contains_all_capabilities()
       "speech.synthesize@1"
     ]
   );
-  assert_eq!(fixture.package.package_digest, public_sha256_hex(PACKAGE_BYTES));
-}
-
-fn packages_set_and_authorize_default(fixture: &LifecycleFixture, digest: &str) {
-  use crate::domain::default_package_activation::AuthorizeDefaultPluginPackageInput;
-  use crate::services::default_package_activation::DefaultPackageActivationService;
-
-  fixture
-    .packages
-    .set_default(GOOGLE_CLOUD_PLUGIN_ID, digest)
-    .expect("set catalog default");
-  let activation = DefaultPackageActivationService::create(
-    fixture.db.clone(),
-    fixture.packages.clone(),
-    fixture.packages.app_data_dir(),
+  assert_eq!(fixture.package.descriptor.content_digest.len(), 64);
+  // Same content loads to the same immutable digest in an independent catalog.
+  let second = installed_fixture();
+  assert_eq!(
+    fixture.package.descriptor.content_digest,
+    second.package.descriptor.content_digest
   );
-  let preview = activation
-    .preview_default_package_activation(digest)
-    .expect("preview default");
-  activation
-    .authorize_default_plugin_package(AuthorizeDefaultPluginPackageInput {
-      preview_id: preview.preview_id,
-      acknowledge_future_instance_authority: true,
-      acknowledge_unsigned_default_risk: false,
-    })
-    .expect("authorize default");
-}
-
-#[test]
-fn default_package_activation_integration_google_cloud_create_grant() {
-  use crate::domain::runtime_lifecycle::GrantSubjectKind;
-  use crate::services::default_package_activation::DefaultPackageActivationService;
-
-  let fixture = lifecycle_fixture();
-  let digest = fixture.package_digest.clone();
-  packages_set_and_authorize_default(&fixture, &digest);
-
-  let activation = DefaultPackageActivationService::create(
-    fixture.db.clone(),
-    fixture.packages.clone(),
-    fixture.packages.app_data_dir(),
-  )
-  .with_integration_lifecycle(fixture.lifecycle.clone());
-  let service = ServiceIntegrationService::new(
-    fixture.db.clone(),
-    fixture.vault.clone(),
-    fixture.registry.clone(),
-    fixture.tokens.clone(),
-  )
-  .with_runtime_lifecycle(fixture.lifecycle.clone())
-  .with_default_package_activation(activation.clone());
-
-  let dto = service
-    .save(IntegrationInstanceWrite {
-      id: None,
-      plugin_id: GOOGLE_CLOUD_PLUGIN_ID.into(),
-      display_name: "Package-first Google Cloud".into(),
-      enabled: true,
-      config_json: String::from_utf8(config()).unwrap(),
-      credentials: vec![],
-      expected_updated_at: None,
-      endpoint_trust_preview_id: None,
-      acknowledge_endpoint_trust: false,
-    })
-    .expect("package-first create");
-
-  assert_eq!(dto.runtime_kind, "wasm-component");
-  assert_eq!(dto.package_digest.as_deref(), Some(digest.as_str()));
-  assert_eq!(dto.runtime_state, "pending_activation");
-  assert!(dto.execution_grant_set_revision.is_none());
-
-  activation
-    .activate_pending_subject(GrantSubjectKind::IntegrationInstance, dto.id)
-    .expect("package-first activation");
-  let active = service.get_instance(dto.id).unwrap();
-  assert_eq!(active.package_digest.as_deref(), Some(digest.as_str()));
-  // Grant may require credentials for full activation; package identity must never fall back.
-  assert_ne!(active.runtime_kind, "bundled-rust");
-  if active.execution_grant_set_revision.is_some() {
-    assert_eq!(active.runtime_state, "active");
-  }
-}
-
-#[test]
-fn default_package_activation_integration_google_cloud_delete_race() {
-  use crate::domain::runtime_lifecycle::GrantSubjectKind;
-  use crate::error::StorageError;
-  use crate::services::default_package_activation::DefaultPackageActivationService;
-  use std::sync::mpsc;
-
-  let fixture = lifecycle_fixture();
-  let digest = fixture.package_digest.clone();
-  packages_set_and_authorize_default(&fixture, &digest);
-
-  let activation = DefaultPackageActivationService::create(
-    fixture.db.clone(),
-    fixture.packages.clone(),
-    fixture.packages.app_data_dir(),
-  )
-  .with_integration_lifecycle(fixture.lifecycle.clone());
-  let service = ServiceIntegrationService::new(
-    fixture.db.clone(),
-    fixture.vault.clone(),
-    fixture.registry.clone(),
-    fixture.tokens.clone(),
-  )
-  .with_runtime_lifecycle(fixture.lifecycle.clone())
-  .with_default_package_activation(activation.clone());
-
-  let dto = service
-    .save(IntegrationInstanceWrite {
-      id: None,
-      plugin_id: GOOGLE_CLOUD_PLUGIN_ID.into(),
-      display_name: "Race Google Cloud".into(),
-      enabled: true,
-      config_json: String::from_utf8(config()).unwrap(),
-      credentials: vec![],
-      expected_updated_at: None,
-      endpoint_trust_preview_id: None,
-      acknowledge_endpoint_trust: false,
-    })
-    .expect("package-first create");
-
-  let (at_seam_tx, at_seam_rx) = mpsc::channel();
-  let (release_tx, release_rx) = mpsc::channel();
-  fixture
-    .lifecycle
-    .set_auto_pin_after_final_revalidate_hook(Some(Box::new(move || {
-      let _ = at_seam_tx.send(());
-      let _ = release_rx.recv();
-    })));
-
-  let activation_worker = activation.clone();
-  let subject_id = dto.id;
-  let handle = std::thread::spawn(move || {
-    activation_worker.activate_pending_subject(GrantSubjectKind::IntegrationInstance, subject_id)
-  });
-
-  at_seam_rx.recv().expect("activation reached final revalidate");
-  // Delete during activation: must not resurrect.
-  let _ = service.delete(dto.id);
-  let _ = release_tx.send(());
-  let _ = handle.join().expect("activation thread");
-
-  let gone = fixture.db.read(|conn| match integration_instances::get(conn, dto.id) {
-    Ok(instance) => Ok(Some(instance)),
-    Err(StorageError::NotFound(_)) => Ok(None),
-    Err(err) => Err(err),
-  });
-  assert!(
-    matches!(gone, Ok(None)),
-    "deleted subject must not be resurrected by activation: {gone:?}"
-  );
-  let _ = digest;
 }

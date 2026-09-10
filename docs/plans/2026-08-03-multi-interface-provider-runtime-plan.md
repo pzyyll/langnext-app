@@ -1,5 +1,7 @@
 # Multi-Interface Provider Runtime Implementation Plan
 
+> **Superseded (2026-08-24):** plugin-level signing, publisher trust, vendor bootstrap, and default-activation orchestration were removed. See `docs/architecture/plugin-catalog.md`.
+
 **Goal:** Allow one Provider to use multiple explicitly approved runtime-plugin API types while preserving existing legacy API types and host-owned transport, authentication, cancellation, fallback, history, and privacy boundaries.
 
 **Inputs:**

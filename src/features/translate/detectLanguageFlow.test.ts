@@ -52,7 +52,9 @@ function integration(): IntegrationInstanceDto {
     effectiveStatus: "ready",
     lastValidatedAt: "t",
     lastErrorCode: null,
-    runtimeKind: "bundled-rust",
+    runtimeKind: "wasm-component",
+    packageDigest: "a".repeat(64),
+    executionGrantSetRevision: 1,
     runtimeState: "active",
     createdAt: "t",
     updatedAt: "t",
@@ -186,7 +188,6 @@ describe("runtime_executor_detection_uses_host_policy_and_supported_language_val
     pluginId: "langnext.conformance.llm-provider",
     version: "1.0.0",
     packageDigest: "digest-1",
-    publisher: { keyId: "key-1", keyFingerprint: "fp-1" },
     legacyAliases: ["openai-compatible"],
     capabilities: [
       { capabilityId: "llm.models.list@1", artifactPath: "fixtures/llm-models.wasm", artifactDigest: "a" },
@@ -294,30 +295,20 @@ describe("runtime_executor_detection_uses_host_policy_and_supported_language_val
       }
       throw new Error(`unexpected cmd ${cmd}`);
     });
-    // Provider default API type stays legacy; the gemini interface is runtime-bound and the
-    // synced model carries only discovery provenance (no explicit override).
+    // The Provider default API type has no package binding; the gemini interface is
+    // runtime-bound and the synced model carries only discovery provenance (no explicit override).
     const provider = {
       ...runtimeProvider(),
       runtime: {
-        runtimeKind: "legacy-frontend-provider" as const,
+        runtimeKind: "wasm-component" as const,
         packageDigest: null,
         grantSetRevision: null,
-        state: "active",
-        errorCode: null,
+        state: "unavailable",
+        errorCode: "no_runtime_binding",
         errorMessage: null,
         updatedAt: "t",
       },
       runtimeBindings: [
-        {
-          adapterId: "openai-compatible",
-          runtimeKind: "legacy-frontend-provider",
-          packageDigest: null,
-          grantSetRevision: null,
-          state: "active",
-          errorCode: null,
-          errorMessage: null,
-          updatedAt: "t",
-        },
         {
           adapterId: "gemini",
           runtimeKind: "wasm-component",

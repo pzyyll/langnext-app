@@ -1,5 +1,7 @@
 # Phase 7: Google Cloud Multi-Capability Runtime Plugin Implementation Plan
 
+> **Superseded (2026-08-24):** plugin-level signing, publisher trust, vendor bootstrap, and default-activation orchestration were removed. See `docs/architecture/plugin-catalog.md`.
+
 **Goal:** Migrate Google Cloud Translate, Detect, Vision OCR, and Text-to-Speech into one installable Wasm package while retaining host-owned service-account OAuth, per-capability health, and atomic per-instance rollback.
 
 **Inputs:** Phases 5–6, `docs/analysis/google-cloud-plugin-architecture.md`, the current bundled implementation in `src-tauri/src/services/google_cloud.rs`, and the implemented runtime/package patterns in `runtime-plugins/google-translate-web/` and `runtime-plugins/edge-tts/`.

@@ -25,18 +25,25 @@ pub async fn save_provider_instance(
   let result = run_blocking("save_provider_instance", move || providers.save(input)).await?;
   emit_data_changed(&app, PROVIDERS_CHANGED);
 
-  // Package-first creates return durable pending state first; activation runs after the response.
-  let needs_activation = result
+  // The catalog default is the only default authority: activate pending bindings now.
+  let pending: Vec<String> = result
     .runtime_bindings
     .iter()
-    .any(|binding| binding.state == ProviderRuntimeState::PendingActivation && binding.package_digest.is_some());
-  if needs_activation {
-    crate::cmds::default_package_activation::schedule_default_runtime_activation(
-      app.clone(),
-      state.default_package_activation.clone(),
-      crate::domain::runtime_lifecycle::GrantSubjectKind::ProviderInstance,
-      result.id,
-    );
+    .filter(|binding| binding.state == ProviderRuntimeState::PendingActivation && binding.package_digest.is_some())
+    .map(|binding| binding.adapter_id.clone())
+    .collect();
+  if !pending.is_empty() {
+    let runtime = state.runtime_providers.clone();
+    let provider_id = result.id;
+    let activated = run_blocking("activate_provider_runtime_defaults", move || {
+      for adapter_id in &pending {
+        runtime.activate_with_catalog_default(provider_id, adapter_id)?;
+      }
+      Ok(())
+    })
+    .await?;
+    let _ = activated;
+    emit_data_changed(&app, PROVIDERS_CHANGED);
   }
 
   Ok(result)

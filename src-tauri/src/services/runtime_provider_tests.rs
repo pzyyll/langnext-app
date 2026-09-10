@@ -1,16 +1,17 @@
-// ABOUTME: Provider runtime fixture package, catalog, and lifecycle integration tests.
-// ABOUTME: Real verifier/SQLite/Wasm runtime; fixture trust only; no credentials or network.
+// ABOUTME: Provider runtime catalog fixture, catalog, and lifecycle integration tests.
+// ABOUTME: Real source catalog/SQLite/Wasm runtime; fixture content only; no credentials or network.
 #![cfg(test)]
 
 use crate::domain::cancel::CancelToken;
+use crate::domain::plugin_catalog::sha256_hex;
 use crate::domain::provider::{
   AuthSchemeV1, BaseUrlSource, CredentialKind, ModelsSyncStatus, ProviderInstance, ProxyMode,
 };
 use crate::domain::runtime_plugin::{
   CapabilityDeclaration, FileRole, HOST_PROVIDER_INSTANCE_AUTH_POLICY_ID,
   PROVIDER_RUNTIME_ENDPOINT_FORM_PROVIDER_INSTANCE, PermissionRequests, PluginFileEntry, PluginManifestV1,
-  ProviderRuntimeDeclaration, ProviderRuntimeDetectionDecl, ProviderRuntimeEndpointDecl, PublisherDeclaration,
-  RuntimeDescriptor, RuntimeKind,
+  ProviderRuntimeDeclaration, ProviderRuntimeDetectionDecl, ProviderRuntimeEndpointDecl, RuntimeDescriptor,
+  RuntimeKind,
 };
 use crate::domain::runtime_provider::{
   ApplyProviderRuntimeInterfaceAttachInput, PreviewProviderRuntimeInterfaceAttachInput, ProviderRuntimeKind,
@@ -18,11 +19,14 @@ use crate::domain::runtime_provider::{
 };
 use crate::repositories::{plugin_permission_grants, provider_instances, provider_runtime_bindings};
 use crate::services::bounded_http::{BoundedHttpResponse, PreparedHttpRequest, RawHttpTransport};
-use crate::services::plugin_package::test_support;
-use crate::services::plugin_store::PluginPackageService;
+use crate::services::plugin_catalog::PluginCatalog;
 use crate::services::provider_runtime_router::ProviderRuntimeBrokerContext;
 use crate::services::runtime_providers::{ProviderRuntimeCatalog, ProviderRuntimeService};
-use crate::services::vendor_trust::test_vendor_fixture;
+use crate::services::test_support::{
+  OPENAI_COMPATIBLE_ARCHIVE, OPENAI_COMPATIBLE_PLUGIN_ID, add_builtin_fixture, builtin_archive_bytes,
+  catalog_with_builtins, catalog_with_manifest_fixtures, fixture_digest, install_user_archive, user_store,
+  wasm_runtime, write_manifest_fixture_dir,
+};
 use crate::services::wasm_runtime::WasmRuntime;
 use crate::storage::Database;
 use std::collections::BTreeMap;
@@ -31,11 +35,6 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use uuid::Uuid;
 
-/// Committed dev-signed two-world provider runtime fixture package (Task 2).
-const LLM_PROVIDER_PACKAGE: &[u8] = include_bytes!(concat!(
-  env!("CARGO_MANIFEST_DIR"),
-  "/../runtime-plugins/conformance/fixtures/packages/llm-provider-valid.lnplugin"
-));
 /// Committed llm-models-world conformance Component artifact.
 const LLM_MODELS_COMPONENT: &[u8] = include_bytes!(concat!(
   env!("CARGO_MANIFEST_DIR"),
@@ -52,11 +51,6 @@ const TRANSLATE_WORLD_COMPONENT: &[u8] = include_bytes!(concat!(
   "/../runtime-plugins/conformance/wasm-component/fixtures/langnext-conformance-wasm.wasm"
 ));
 
-/// Committed dev-signed OpenAI Compatible provider runtime package fixture (Task 11).
-const OPENAI_COMPATIBLE_PACKAGE: &[u8] = include_bytes!(concat!(
-  env!("CARGO_MANIFEST_DIR"),
-  "/../runtime-plugins/openai-compatible/fixtures/packages/com.langnext.provider.openai-compatible-1.0.0.lnplugin"
-));
 /// Committed llm-models-world OpenAI Compatible Component artifact.
 const OPENAI_COMPATIBLE_MODELS_COMPONENT: &[u8] = include_bytes!(concat!(
   env!("CARGO_MANIFEST_DIR"),
@@ -68,11 +62,9 @@ const OPENAI_COMPATIBLE_CHAT_COMPONENT: &[u8] = include_bytes!(concat!(
   "/../runtime-plugins/openai-compatible/fixtures/llm-chat.wasm"
 ));
 
-/// Committed dev-signed OpenAI Responses provider runtime package fixture (Task 18).
-const OPENAI_RESPONSES_PACKAGE: &[u8] = include_bytes!(concat!(
-  env!("CARGO_MANIFEST_DIR"),
-  "/../runtime-plugins/openai-responses/fixtures/packages/com.langnext.provider.openai-responses-1.0.0.lnplugin"
-));
+/// Committed built-in archive stem and plugin id for the OpenAI Responses provider package.
+const OPENAI_RESPONSES_ARCHIVE: &str = "com.langnext.provider.openai-responses-1.0.0";
+const OPENAI_RESPONSES_PLUGIN_ID: &str = "com.langnext.provider.openai-responses";
 /// Committed llm-models-world OpenAI Responses Component artifact.
 const OPENAI_RESPONSES_MODELS_COMPONENT: &[u8] = include_bytes!(concat!(
   env!("CARGO_MANIFEST_DIR"),
@@ -84,11 +76,9 @@ const OPENAI_RESPONSES_CHAT_COMPONENT: &[u8] = include_bytes!(concat!(
   "/../runtime-plugins/openai-responses/fixtures/llm-chat.wasm"
 ));
 
-/// Committed dev-signed Anthropic provider runtime package fixture (Task 19).
-const ANTHROPIC_PACKAGE: &[u8] = include_bytes!(concat!(
-  env!("CARGO_MANIFEST_DIR"),
-  "/../runtime-plugins/anthropic/fixtures/packages/com.langnext.provider.anthropic-1.0.0.lnplugin"
-));
+/// Committed built-in archive stem and plugin id for the Anthropic provider package.
+const ANTHROPIC_ARCHIVE: &str = "com.langnext.provider.anthropic-1.0.0";
+const ANTHROPIC_PLUGIN_ID: &str = "com.langnext.provider.anthropic";
 /// Committed llm-models-world Anthropic Component artifact.
 const ANTHROPIC_MODELS_COMPONENT: &[u8] = include_bytes!(concat!(
   env!("CARGO_MANIFEST_DIR"),
@@ -210,11 +200,9 @@ const ANTHROPIC_MALFORMED_BODY: &str = include_str!(concat!(
   "/../runtime-plugins/anthropic/tests/fixtures/malformed.txt"
 ));
 
-/// Committed dev-signed Gemini provider runtime package fixture (Task 20).
-const GEMINI_PACKAGE: &[u8] = include_bytes!(concat!(
-  env!("CARGO_MANIFEST_DIR"),
-  "/../runtime-plugins/gemini/fixtures/packages/com.langnext.provider.gemini-1.0.0.lnplugin"
-));
+/// Committed built-in archive stem and plugin id for the Gemini provider package.
+const GEMINI_ARCHIVE: &str = "com.langnext.provider.gemini-1.0.0";
+const GEMINI_PLUGIN_ID: &str = "com.langnext.provider.gemini";
 /// Committed llm-models-world Gemini Component artifact.
 const GEMINI_MODELS_COMPONENT: &[u8] = include_bytes!(concat!(
   env!("CARGO_MANIFEST_DIR"),
@@ -279,11 +267,9 @@ const GEMINI_MALFORMED_BODY: &str = include_str!(concat!(
   "/../runtime-plugins/gemini/tests/fixtures/malformed.txt"
 ));
 
-/// Committed dev-signed DeepSeek provider runtime package fixture (Task 21).
-const DEEPSEEK_PACKAGE: &[u8] = include_bytes!(concat!(
-  env!("CARGO_MANIFEST_DIR"),
-  "/../runtime-plugins/deepseek/fixtures/packages/com.langnext.provider.deepseek-1.0.0.lnplugin"
-));
+/// Committed built-in archive stem and plugin id for the DeepSeek provider package.
+const DEEPSEEK_ARCHIVE: &str = "com.langnext.provider.deepseek-1.0.0";
+const DEEPSEEK_PLUGIN_ID: &str = "com.langnext.provider.deepseek";
 /// Committed llm-models-world DeepSeek Component artifact.
 const DEEPSEEK_MODELS_COMPONENT: &[u8] = include_bytes!(concat!(
   env!("CARGO_MANIFEST_DIR"),
@@ -343,71 +329,7 @@ const FOREIGN_IMPORT_WAT: &str = include_str!(concat!(
 const MODELS_ARTIFACT: &str = "fixtures/llm-models.wasm";
 const CHAT_ARTIFACT: &str = "fixtures/llm-chat.wasm";
 
-fn sha256_hex(bytes: &[u8]) -> String {
-  use sha2::{Digest, Sha256};
-  let mut hasher = Sha256::new();
-  hasher.update(bytes);
-  hasher.finalize().iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
-/// Build a vendor-signed provider-runtime package (dev fixture key).
-fn vendor_signed_package(manifest: &PluginManifestV1, files: &[(&str, &[u8])]) -> Vec<u8> {
-  test_support::build_signed_package_with_key(manifest, files, &test_vendor_fixture::fixture_vendor_signing_key())
-}
-
-/// Build a vendor-signed package from raw manifest JSON bytes (unknown-field cases cannot
-/// deserialize into `PluginManifestV1`, so the raw signed bytes must reach the verifier).
-fn vendor_signed_package_raw(manifest_json: &[u8], files: &[(&str, &[u8])]) -> Vec<u8> {
-  use ed25519_dalek::Signer;
-  use std::io::Write;
-  let signature = test_vendor_fixture::fixture_vendor_signing_key()
-    .sign(manifest_json)
-    .to_bytes()
-    .to_vec();
-  let mut cursor = std::io::Cursor::new(Vec::new());
-  {
-    let mut zip = zip::ZipWriter::new(&mut cursor);
-    let options = zip::write::SimpleFileOptions::default()
-      .compression_method(zip::CompressionMethod::Deflated)
-      .unix_permissions(0o644);
-    zip
-      .start_file(crate::domain::runtime_plugin::MANIFEST_FILE_PATH, options)
-      .unwrap();
-    zip.write_all(manifest_json).unwrap();
-    let mut ordered: Vec<(&str, &[u8])> = files.to_vec();
-    ordered.sort_by(|a, b| a.0.cmp(b.0));
-    for (path, bytes) in ordered {
-      zip.start_file(path, options).unwrap();
-      zip.write_all(bytes).unwrap();
-    }
-    zip
-      .start_file(crate::domain::runtime_plugin::SIGNATURE_FILE_PATH, options)
-      .unwrap();
-    zip.write_all(&signature).unwrap();
-    zip.finish().unwrap();
-  }
-  cursor.into_inner()
-}
-
-/// Compute the signed file index for the two LLM artifact files.
-fn llm_file_entries() -> Vec<PluginFileEntry> {
-  vec![
-    PluginFileEntry {
-      path: MODELS_ARTIFACT.into(),
-      role: FileRole::RuntimeArtifact,
-      bytes: LLM_MODELS_COMPONENT.len() as u64,
-      sha256: sha256_hex(LLM_MODELS_COMPONENT),
-    },
-    PluginFileEntry {
-      path: CHAT_ARTIFACT.into(),
-      role: FileRole::RuntimeArtifact,
-      bytes: LLM_CHAT_COMPONENT.len() as u64,
-      sha256: sha256_hex(LLM_CHAT_COMPONENT),
-    },
-  ]
-}
-
-/// File entries computed over arbitrary artifact bytes (table-case packages).
+/// File entries computed over arbitrary artifact bytes (table-case catalog).
 fn file_entries(artifacts: &[(&str, &[u8])]) -> Vec<PluginFileEntry> {
   artifacts
     .iter()
@@ -446,10 +368,6 @@ fn provider_runtime_manifest(
     plugin_api_version: "1.0".into(),
     id: "langnext.conformance.llm-provider".into(),
     version: "1.0.0".into(),
-    publisher: PublisherDeclaration {
-      key_id: crate::services::vendor_trust::VENDOR_PUBLISHER_KEY_ID.into(),
-      key_fingerprint: test_vendor_fixture::fixture_vendor_fingerprint(),
-    },
     runtime: RuntimeDescriptor {
       kind: RuntimeKind::WasmComponent,
       artifact: Some(runtime_artifact),
@@ -505,34 +423,8 @@ fn openai_compatible_manifest(artifacts: &[(&str, &[u8])]) -> PluginManifestV1 {
   manifest
 }
 
-/// OpenAI Responses package manifest (Task 18): the production plugin id/version with the
-/// same two-artifact capability map and closed provider-instance declaration.
-fn openai_responses_manifest(artifacts: &[(&str, &[u8])]) -> PluginManifestV1 {
-  let mut manifest = provider_runtime_manifest(
-    valid_declaration(),
-    &[("llm.models.list@1", MODELS_ARTIFACT), ("llm.chat@1", CHAT_ARTIFACT)],
-    artifacts,
-  );
-  manifest.id = "com.langnext.provider.openai-responses".into();
-  manifest.version = "1.0.0".into();
-  manifest
-}
-
-/// Anthropic package manifest (Task 19): the production plugin id/version with the same
-/// two-artifact capability map and closed provider-instance declaration.
-fn anthropic_manifest(artifacts: &[(&str, &[u8])]) -> PluginManifestV1 {
-  let mut manifest = provider_runtime_manifest(
-    valid_declaration(),
-    &[("llm.models.list@1", MODELS_ARTIFACT), ("llm.chat@1", CHAT_ARTIFACT)],
-    artifacts,
-  );
-  manifest.id = "com.langnext.provider.anthropic".into();
-  manifest.version = "1.0.0".into();
-  manifest
-}
-
-/// Gemini package manifest (Task 20): the production plugin id/version, the gemini legacy
-/// alias, and the host-interpreted detection defaults (DEFAULT_DETECT_MAX_TOKENS = 256).
+/// Gemini package manifest: the production plugin id/version, the gemini legacy alias, and the
+/// host-interpreted detection defaults (DEFAULT_DETECT_MAX_TOKENS = 256).
 fn gemini_manifest(artifacts: &[(&str, &[u8])]) -> PluginManifestV1 {
   let mut manifest = provider_runtime_manifest(
     valid_declaration(),
@@ -568,60 +460,113 @@ fn deepseek_manifest(artifacts: &[(&str, &[u8])]) -> PluginManifestV1 {
   manifest
 }
 
-/// Fresh plugin store with the vendor fixture root, plus a Wasm runtime.
-fn setup() -> (tempfile::TempDir, Database, PluginPackageService, Arc<WasmRuntime>) {
+/// Fresh empty catalog over a private app data directory, plus a real Wasm runtime.
+fn setup() -> (tempfile::TempDir, Database, Arc<PluginCatalog>, Arc<WasmRuntime>) {
   let dir = tempfile::tempdir().unwrap();
   let db = Database::new(dir.path()).unwrap();
   db.initialize().unwrap();
-  let packages = PluginPackageService::with_vendor_roots(
-    db.clone(),
-    dir.path().to_path_buf(),
-    vec![test_vendor_fixture::fixture_vendor_public_key()],
+  let catalog = catalog_with_builtins(db.clone(), dir.path(), &[]);
+  (dir, db, catalog, wasm_runtime())
+}
+
+/// Plugin id of the hand-built conformance LLM provider fixture.
+const CONFORMANCE_LLM_PLUGIN_ID: &str = "langnext.conformance.llm-provider";
+
+/// Hand-built conformance LLM provider manifest plus its indexed payloads.
+fn conformance_llm_fixture() -> (PluginManifestV1, Vec<(String, Vec<u8>)>) {
+  let manifest = provider_runtime_manifest(
+    valid_declaration(),
+    &[("llm.models.list@1", MODELS_ARTIFACT), ("llm.chat@1", CHAT_ARTIFACT)],
+    &[
+      (MODELS_ARTIFACT, LLM_MODELS_COMPONENT),
+      (CHAT_ARTIFACT, LLM_CHAT_COMPONENT),
+    ],
   );
-  let wasm = Arc::new(WasmRuntime::new().unwrap());
-  (dir, db, packages, wasm)
+  let payloads = vec![
+    (MODELS_ARTIFACT.to_string(), LLM_MODELS_COMPONENT.to_vec()),
+    (CHAT_ARTIFACT.to_string(), LLM_CHAT_COMPONENT.to_vec()),
+  ];
+  (manifest, payloads)
 }
 
-/// Install package bytes through the real verifier (vendor root), returning the verified digest.
-fn install(packages: &PluginPackageService, bytes: &[u8]) -> String {
-  let imported = packages.bootstrap_bundled_package(bytes, false).unwrap();
-  imported.package_digest().to_string()
+/// Catalog fixture request for [`install`]: the exact content the removed signed-package
+/// fixtures expressed, now loaded by the source-based catalog.
+enum FixtureSource<'a> {
+  /// Hand-built two-world conformance LLM provider package.
+  Conformance,
+  /// Committed built-in archive stem plus its plugin id.
+  Committed(&'static str, &'static str),
+  /// Hand-built manifest plus its indexed payloads, materialized as a built-in fixture.
+  Manifest(&'a PluginManifestV1, &'a [(&'a str, &'a [u8])]),
 }
 
-/// Extract the underlying message from a bootstrap failure (Capability errors carry the
-/// contract message outside `Display`).
-fn error_message(err: crate::error::StorageError) -> String {
-  match err {
-    crate::error::StorageError::Capability { message, .. } => message,
-    other => other.to_string(),
+/// Materialize one fixture package as built-in content and return its content digest.
+fn install(catalog: &PluginCatalog, source: FixtureSource<'_>) -> String {
+  match source {
+    FixtureSource::Conformance => {
+      let (manifest, payloads) = conformance_llm_fixture();
+      add_builtin_fixture(catalog, &manifest, &payloads)
+    }
+    FixtureSource::Committed(archive_name, plugin_id) => {
+      let built_in_dir = catalog
+        .config()
+        .built_in_dir
+        .clone()
+        .expect("fixture catalog has a built-in directory");
+      std::fs::create_dir_all(&built_in_dir).unwrap();
+      std::fs::write(
+        built_in_dir.join(format!("{archive_name}.lnplugin")),
+        builtin_archive_bytes(archive_name),
+      )
+      .unwrap();
+      catalog
+        .refresh()
+        .expect("catalog refreshes after committed archive add");
+      fixture_digest(catalog, plugin_id)
+    }
+    FixtureSource::Manifest(manifest, payloads) => {
+      let payloads: Vec<(String, Vec<u8>)> = payloads
+        .iter()
+        .map(|(path, bytes)| ((*path).to_string(), bytes.to_vec()))
+        .collect();
+      add_builtin_fixture(catalog, manifest, &payloads)
+    }
   }
+}
+
+/// Materialize one manifest fixture as an unsigned `.lnplugin` archive for user installs.
+fn write_fixture_archive(
+  root: &std::path::Path,
+  manifest: &PluginManifestV1,
+  payloads: &[(String, Vec<u8>)],
+  file_stem: &str,
+) -> std::path::PathBuf {
+  let source = write_manifest_fixture_dir(root, manifest, payloads);
+  let archive = root.join(format!("{file_stem}.lnplugin"));
+  crate::services::plugin_loader::pack_directory_to_archive(&source, &archive).expect("fixture archive packs");
+  archive
 }
 
 #[test]
 fn provider_runtime_fixture_package_verifies_and_projects_catalog() {
-  let (_dir, db, packages, wasm) = setup();
-  let digest = install(&packages, LLM_PROVIDER_PACKAGE);
-  assert!(!digest.is_empty());
+  let (fixture_manifest, fixture_payloads) = conformance_llm_fixture();
+  let dir = tempfile::tempdir().unwrap();
+  let db = Database::new(dir.path()).unwrap();
+  db.initialize().unwrap();
+  let catalog = catalog_with_manifest_fixtures(db.clone(), dir.path(), &[], &[(fixture_manifest, fixture_payloads)]);
+  let digest = fixture_digest(&catalog, CONFORMANCE_LLM_PLUGIN_ID);
 
-  let catalog = ProviderRuntimeCatalog::new(db, packages, wasm);
-  let entries = catalog.list().unwrap();
+  let provider_catalog = ProviderRuntimeCatalog::new(db.clone(), catalog.clone(), wasm_runtime());
+  let entries = provider_catalog.list().unwrap();
   assert_eq!(
     entries.len(),
     1,
     "only the one valid provider package projects catalog metadata"
   );
   let entry = &entries[0];
-  assert_eq!(entry.plugin_id, "langnext.conformance.llm-provider");
+  assert_eq!(entry.plugin_id, CONFORMANCE_LLM_PLUGIN_ID);
   assert_eq!(entry.version, "1.0.0");
   assert_eq!(entry.package_digest, digest);
-  assert_eq!(
-    entry.publisher.key_id,
-    crate::services::vendor_trust::VENDOR_PUBLISHER_KEY_ID
-  );
-  assert_eq!(
-    entry.publisher.key_fingerprint,
-    test_vendor_fixture::fixture_vendor_fingerprint()
-  );
   // Fixed bounded legacy alias projection.
   assert_eq!(entry.legacy_aliases, vec!["openai-compatible".to_string()]);
   // Exact capability/artifact identity with distinct artifact digests.
@@ -646,10 +591,56 @@ fn provider_runtime_fixture_package_verifies_and_projects_catalog() {
   assert_eq!(detection.max_tokens, 256);
   assert!(!detection.thinking);
 
-  // --- Fail-closed table cases. Every malformed/ambiguous/WASI case must be rejected by the
-  // real verifier (install) or the catalog projection (world/import checks). ---
-  fn manifest_bytes(m: &PluginManifestV1) -> Vec<u8> {
-    serde_json::to_vec(m).unwrap()
+  // --- Fail-closed table cases. Malformed/ambiguous declarations are rejected by the real
+  // catalog loader (contract validation); wrong-world/foreign-import content loads but the
+  // provider catalog projection must fail closed. ---
+  fn fixture_load_errors(catalog: &PluginCatalog, manifest: &PluginManifestV1, payloads: &[(&str, &[u8])]) -> String {
+    let built_in_dir = catalog
+      .config()
+      .built_in_dir
+      .clone()
+      .expect("fixture catalog has a built-in directory");
+    let payloads: Vec<(String, Vec<u8>)> = payloads
+      .iter()
+      .map(|(path, bytes)| ((*path).to_string(), bytes.to_vec()))
+      .collect();
+    write_manifest_fixture_dir(&built_in_dir, manifest, &payloads);
+    catalog.refresh().expect("catalog refresh records load errors");
+    catalog
+      .errors()
+      .iter()
+      .map(|error| error.message.to_lowercase())
+      .collect::<Vec<_>>()
+      .join(" | ")
+  }
+
+  fn raw_fixture_load_errors(
+    catalog: &PluginCatalog,
+    plugin_id: &str,
+    version: &str,
+    manifest_json: &[u8],
+    payloads: &[(&str, &[u8])],
+  ) -> String {
+    let built_in_dir = catalog
+      .config()
+      .built_in_dir
+      .clone()
+      .expect("fixture catalog has a built-in directory");
+    let fixture_dir = built_in_dir.join(format!("{}-{version}", plugin_id.replace('.', "_")));
+    std::fs::create_dir_all(&fixture_dir).unwrap();
+    std::fs::write(fixture_dir.join("plugin.json"), manifest_json).unwrap();
+    for (path, bytes) in payloads {
+      let target = fixture_dir.join(path);
+      std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+      std::fs::write(target, bytes).unwrap();
+    }
+    catalog.refresh().expect("catalog refresh records load errors");
+    catalog
+      .errors()
+      .iter()
+      .map(|error| error.message.to_lowercase())
+      .collect::<Vec<_>>()
+      .join(" | ")
   }
 
   // Case: missing Models List artifact in the providerRuntime declaration.
@@ -661,12 +652,10 @@ fn provider_runtime_fixture_package_verifies_and_projects_catalog() {
       &[("llm.chat@1", CHAT_ARTIFACT)],
       &[(CHAT_ARTIFACT, LLM_CHAT_COMPONENT)],
     );
-    let package = vendor_signed_package(&manifest, &[(CHAT_ARTIFACT, LLM_CHAT_COMPONENT)]);
-    let (_dir, _db, packages, _wasm) = setup();
-    let err = error_message(packages.bootstrap_bundled_package(&package, false).unwrap_err());
-    let msg = err.to_lowercase();
+    let (_dir, _db, catalog, _wasm) = setup();
+    let msg = fixture_load_errors(&catalog, &manifest, &[(CHAT_ARTIFACT, LLM_CHAT_COMPONENT)]);
     assert!(
-      msg.contains("providerruntime") || msg.contains("llm.models.list"),
+      msg.contains("providerruntime") && msg.contains("llm.models.list"),
       "missing models case: {msg}"
     );
   }
@@ -680,12 +669,10 @@ fn provider_runtime_fixture_package_verifies_and_projects_catalog() {
       &[("llm.models.list@1", MODELS_ARTIFACT)],
       &[(MODELS_ARTIFACT, LLM_MODELS_COMPONENT)],
     );
-    let package = vendor_signed_package(&manifest, &[(MODELS_ARTIFACT, LLM_MODELS_COMPONENT)]);
-    let (_dir, _db, packages, _wasm) = setup();
-    let err = error_message(packages.bootstrap_bundled_package(&package, false).unwrap_err());
-    let msg = err.to_lowercase();
+    let (_dir, _db, catalog, _wasm) = setup();
+    let msg = fixture_load_errors(&catalog, &manifest, &[(MODELS_ARTIFACT, LLM_MODELS_COMPONENT)]);
     assert!(
-      msg.contains("providerruntime") || msg.contains("llm.chat@1"),
+      msg.contains("providerruntime") && msg.contains("llm.chat@1"),
       "missing chat case: {msg}"
     );
   }
@@ -702,16 +689,15 @@ fn provider_runtime_fixture_package_verifies_and_projects_catalog() {
         (CHAT_ARTIFACT, LLM_CHAT_COMPONENT),
       ],
     );
-    let package = vendor_signed_package(
+    let (_dir, _db, catalog, _wasm) = setup();
+    let msg = fixture_load_errors(
+      &catalog,
       &manifest,
       &[
         (MODELS_ARTIFACT, LLM_MODELS_COMPONENT),
         (CHAT_ARTIFACT, LLM_CHAT_COMPONENT),
       ],
     );
-    let (_dir, _db, packages, _wasm) = setup();
-    let err = error_message(packages.bootstrap_bundled_package(&package, false).unwrap_err());
-    let msg = err.to_lowercase();
     assert!(msg.contains("alias"), "duplicate alias case: {msg}");
   }
 
@@ -724,14 +710,9 @@ fn provider_runtime_fixture_package_verifies_and_projects_catalog() {
       &[("llm.models.list@1", MODELS_ARTIFACT), ("llm.chat@1", MODELS_ARTIFACT)],
       &[(MODELS_ARTIFACT, LLM_MODELS_COMPONENT)],
     );
-    let package = vendor_signed_package(&manifest, &[(MODELS_ARTIFACT, LLM_MODELS_COMPONENT)]);
-    let (_dir, _db, packages, _wasm) = setup();
-    let err = error_message(packages.bootstrap_bundled_package(&package, false).unwrap_err());
-    let msg = err.to_lowercase();
-    assert!(
-      msg.contains("artifact") || msg.contains("distinct"),
-      "shared artifact case: {msg}"
-    );
+    let (_dir, _db, catalog, _wasm) = setup();
+    let msg = fixture_load_errors(&catalog, &manifest, &[(MODELS_ARTIFACT, LLM_MODELS_COMPONENT)]);
+    assert!(msg.contains("distinct"), "shared artifact case: {msg}");
   }
 
   // Case: unknown providerRuntime field is rejected at parse (deny-unknown).
@@ -739,12 +720,8 @@ fn provider_runtime_fixture_package_verifies_and_projects_catalog() {
     let json = serde_json::to_vec(&serde_json::json!({
       "manifestVersion": 1,
       "pluginApiVersion": "1.0",
-      "id": "langnext.conformance.llm-provider",
+      "id": CONFORMANCE_LLM_PLUGIN_ID,
       "version": "1.0.0",
-      "publisher": {
-        "keyId": crate::services::vendor_trust::VENDOR_PUBLISHER_KEY_ID,
-        "keyFingerprint": test_vendor_fixture::fixture_vendor_fingerprint()
-      },
       "runtime": { "kind": "wasm-component", "artifact": MODELS_ARTIFACT },
       "files": file_entries(&[(MODELS_ARTIFACT, LLM_MODELS_COMPONENT), (CHAT_ARTIFACT, LLM_CHAT_COMPONENT)]),
       "capabilities": [
@@ -765,16 +742,17 @@ fn provider_runtime_fixture_package_verifies_and_projects_catalog() {
       }
     }))
     .unwrap();
-    let package = vendor_signed_package_raw(
+    let (_dir, _db, catalog, _wasm) = setup();
+    let msg = raw_fixture_load_errors(
+      &catalog,
+      CONFORMANCE_LLM_PLUGIN_ID,
+      "1.0.0",
       &json,
       &[
         (MODELS_ARTIFACT, LLM_MODELS_COMPONENT),
         (CHAT_ARTIFACT, LLM_CHAT_COMPONENT),
       ],
     );
-    let (_dir, _db, packages, _wasm) = setup();
-    let err = error_message(packages.bootstrap_bundled_package(&package, false).unwrap_err());
-    let msg = err.to_lowercase();
     assert!(
       msg.contains("unknown field") || msg.contains("providerruntime"),
       "unknown field case: {msg}"
@@ -796,23 +774,19 @@ fn provider_runtime_fixture_package_verifies_and_projects_catalog() {
         (CHAT_ARTIFACT, LLM_CHAT_COMPONENT),
       ],
     );
-    let package = vendor_signed_package(
+    let (_dir, _db, catalog, _wasm) = setup();
+    let msg = fixture_load_errors(
+      &catalog,
       &manifest,
       &[
         (MODELS_ARTIFACT, LLM_MODELS_COMPONENT),
         (CHAT_ARTIFACT, LLM_CHAT_COMPONENT),
       ],
     );
-    let (_dir, _db, packages, _wasm) = setup();
-    let err = error_message(packages.bootstrap_bundled_package(&package, false).unwrap_err());
-    let msg = err.to_lowercase();
-    assert!(
-      msg.contains("detection") || msg.contains("max_tokens"),
-      "detection case: {msg}"
-    );
+    assert!(msg.contains("detection"), "detection case: {msg}");
   }
 
-  // Case: incorrect provider-instance authority — wrong endpoint form.
+  // Case: incorrect provider-instance authority - wrong endpoint form.
   {
     let mut decl = valid_declaration();
     decl.endpoint = ProviderRuntimeEndpointDecl {
@@ -827,23 +801,19 @@ fn provider_runtime_fixture_package_verifies_and_projects_catalog() {
         (CHAT_ARTIFACT, LLM_CHAT_COMPONENT),
       ],
     );
-    let package = vendor_signed_package(
+    let (_dir, _db, catalog, _wasm) = setup();
+    let msg = fixture_load_errors(
+      &catalog,
       &manifest,
       &[
         (MODELS_ARTIFACT, LLM_MODELS_COMPONENT),
         (CHAT_ARTIFACT, LLM_CHAT_COMPONENT),
       ],
     );
-    let (_dir, _db, packages, _wasm) = setup();
-    let err = error_message(packages.bootstrap_bundled_package(&package, false).unwrap_err());
-    let msg = err.to_lowercase();
-    assert!(
-      msg.contains("endpoint") || msg.contains("provider-instance"),
-      "endpoint form case: {msg}"
-    );
+    assert!(msg.contains("provider-instance"), "endpoint form case: {msg}");
   }
 
-  // Case: incorrect provider-instance authority — wrong auth policy.
+  // Case: incorrect provider-instance authority - wrong auth policy.
   {
     let mut decl = valid_declaration();
     decl.endpoint = ProviderRuntimeEndpointDecl {
@@ -858,24 +828,23 @@ fn provider_runtime_fixture_package_verifies_and_projects_catalog() {
         (CHAT_ARTIFACT, LLM_CHAT_COMPONENT),
       ],
     );
-    let package = vendor_signed_package(
+    let (_dir, _db, catalog, _wasm) = setup();
+    let msg = fixture_load_errors(
+      &catalog,
       &manifest,
       &[
         (MODELS_ARTIFACT, LLM_MODELS_COMPONENT),
         (CHAT_ARTIFACT, LLM_CHAT_COMPONENT),
       ],
     );
-    let (_dir, _db, packages, _wasm) = setup();
-    let err = error_message(packages.bootstrap_bundled_package(&package, false).unwrap_err());
-    let msg = err.to_lowercase();
     assert!(
-      msg.contains("auth") || msg.contains("provider-instance-auth"),
+      msg.contains("authpolicy") && msg.contains("provider-instance-auth"),
       "auth policy case: {msg}"
     );
   }
 
-  // Case: an artifact instantiating the wrong WIT world passes install (shape is valid) but
-  // the catalog projection must fail closed.
+  // Case: an artifact instantiating the wrong WIT world passes catalog loading (shape is
+  // valid) but the provider catalog projection must fail closed.
   {
     let wrong_world = provider_runtime_manifest(
       valid_declaration(),
@@ -885,17 +854,18 @@ fn provider_runtime_fixture_package_verifies_and_projects_catalog() {
         (CHAT_ARTIFACT, LLM_CHAT_COMPONENT),
       ],
     );
-    let package = vendor_signed_package(
-      &wrong_world,
-      &[
-        (MODELS_ARTIFACT, TRANSLATE_WORLD_COMPONENT),
-        (CHAT_ARTIFACT, LLM_CHAT_COMPONENT),
-      ],
+    let (_dir, db, catalog, wasm) = setup();
+    install(
+      &catalog,
+      FixtureSource::Manifest(
+        &wrong_world,
+        &[
+          (MODELS_ARTIFACT, TRANSLATE_WORLD_COMPONENT),
+          (CHAT_ARTIFACT, LLM_CHAT_COMPONENT),
+        ],
+      ),
     );
-    let (_dir, db, packages, wasm) = setup();
-    install(&packages, &package);
-    let catalog = ProviderRuntimeCatalog::new(db, packages, wasm);
-    let err = catalog.list().unwrap_err();
+    let err = ProviderRuntimeCatalog::new(db, catalog, wasm).list().unwrap_err();
     let msg = err.to_string().to_lowercase();
     assert!(
       msg.contains("llm-models") || msg.contains("world"),
@@ -903,7 +873,7 @@ fn provider_runtime_fixture_package_verifies_and_projects_catalog() {
     );
   }
 
-  // Case: a guest importing anything other than langnext:runtime-plugin fails catalog projection.
+  // Case: a guest importing anything other than langnext:runtime-plugin fails the projection.
   {
     let foreign_import = wat::parse_str(FOREIGN_IMPORT_WAT).unwrap();
     let foreign_manifest = provider_runtime_manifest(
@@ -914,17 +884,18 @@ fn provider_runtime_fixture_package_verifies_and_projects_catalog() {
         (CHAT_ARTIFACT, LLM_CHAT_COMPONENT),
       ],
     );
-    let package = vendor_signed_package(
-      &foreign_manifest,
-      &[
-        (MODELS_ARTIFACT, foreign_import.as_slice()),
-        (CHAT_ARTIFACT, LLM_CHAT_COMPONENT),
-      ],
+    let (_dir, db, catalog, wasm) = setup();
+    install(
+      &catalog,
+      FixtureSource::Manifest(
+        &foreign_manifest,
+        &[
+          (MODELS_ARTIFACT, foreign_import.as_slice()),
+          (CHAT_ARTIFACT, LLM_CHAT_COMPONENT),
+        ],
+      ),
     );
-    let (_dir, db, packages, wasm) = setup();
-    install(&packages, &package);
-    let catalog = ProviderRuntimeCatalog::new(db, packages, wasm);
-    let err = catalog.list().unwrap_err();
+    let err = ProviderRuntimeCatalog::new(db, catalog, wasm).list().unwrap_err();
     let msg = err.to_string().to_lowercase();
     assert!(
       msg.contains("import") || msg.contains("langnext"),
@@ -932,12 +903,11 @@ fn provider_runtime_fixture_package_verifies_and_projects_catalog() {
     );
   }
 
-  // Catalog visibility is not execution authority: the fixture's bindings are still legacy
-  // and no provider row references the package digest.
-  let (_dir, db, packages, wasm) = setup();
-  install(&packages, LLM_PROVIDER_PACKAGE);
-  let catalog = ProviderRuntimeCatalog::new(db.clone(), packages, wasm);
-  let entries = catalog.list().unwrap();
+  // Catalog visibility is not execution authority: no provider binding row references the
+  // fixture package digest.
+  let (_dir, db, catalog, wasm) = setup();
+  install(&catalog, FixtureSource::Conformance);
+  let entries = ProviderRuntimeCatalog::new(db.clone(), catalog, wasm).list().unwrap();
   assert_eq!(entries.len(), 1);
   let bindings = db
     .read(|conn| crate::repositories::provider_runtime_bindings::list(conn))
@@ -953,42 +923,35 @@ fn provider_runtime_fixture_package_verifies_and_projects_catalog() {
 /// behavior cannot change when error wording changes.
 #[test]
 fn provider_runtime_catalog_skips_regular_packages_without_declaration() {
-  let (_dir, db, packages, wasm) = setup();
-  let digest = install(&packages, LLM_PROVIDER_PACKAGE);
-
   // The same two-artifact shape as the fixture package but WITHOUT the providerRuntime
-  // declaration: a regular wasm-component plugin that must install and verify normally.
-  let mut regular = provider_runtime_manifest(
-    valid_declaration(),
-    &[("llm.models.list@1", MODELS_ARTIFACT), ("llm.chat@1", CHAT_ARTIFACT)],
-    &[
-      (MODELS_ARTIFACT, LLM_MODELS_COMPONENT),
-      (CHAT_ARTIFACT, LLM_CHAT_COMPONENT),
-    ],
-  );
+  // declaration: a regular wasm-component plugin that must load and verify normally.
+  let (mut regular, regular_payloads) = conformance_llm_fixture();
   regular.provider_runtime = None;
   regular.permissions = PermissionRequests {
     network: vec![],
     auth_policies: vec![],
   };
   regular.id = "langnext.conformance.regular-plugin".into();
-  let package = vendor_signed_package(
-    &regular,
-    &[
-      (MODELS_ARTIFACT, LLM_MODELS_COMPONENT),
-      (CHAT_ARTIFACT, LLM_CHAT_COMPONENT),
-    ],
-  );
-  install(&packages, &package);
+  let (conformance, conformance_payloads) = conformance_llm_fixture();
 
-  let catalog = ProviderRuntimeCatalog::new(db, packages, wasm);
-  let entries = catalog.list().unwrap();
+  let dir = tempfile::tempdir().unwrap();
+  let db = Database::new(dir.path()).unwrap();
+  db.initialize().unwrap();
+  let catalog = catalog_with_manifest_fixtures(
+    db.clone(),
+    dir.path(),
+    &[],
+    &[(conformance, conformance_payloads), (regular, regular_payloads)],
+  );
+  let digest = fixture_digest(&catalog, CONFORMANCE_LLM_PLUGIN_ID);
+
+  let entries = ProviderRuntimeCatalog::new(db, catalog, wasm_runtime()).list().unwrap();
   assert_eq!(
     entries.len(),
     1,
     "regular package without a providerRuntime declaration is skipped, not an error"
   );
-  assert_eq!(entries[0].plugin_id, "langnext.conformance.llm-provider");
+  assert_eq!(entries[0].plugin_id, CONFORMANCE_LLM_PLUGIN_ID);
   assert_eq!(entries[0].package_digest, digest);
 }
 
@@ -1022,8 +985,8 @@ impl RawHttpTransport for RecordingTransport {
   }
 }
 
-/// Insert one provider row with its active legacy binding; stores `secret` under
-/// `credential_ref` when both are supplied.
+/// Insert one provider row with no runtime binding; stores `secret` under `credential_ref` when
+/// both are supplied.
 fn insert_provider_row(
   db: &Database,
   id: Uuid,
@@ -1045,8 +1008,8 @@ fn insert_provider_row(
   );
 }
 
-/// Insert a provider row with an explicit adapter/connection/auth shape plus its legacy
-/// frontend binding (mirrors the migration backfill for fixture setup).
+/// Insert a provider row with an explicit adapter/connection/auth shape (no runtime binding:
+/// a missing binding is an unbound API type).
 fn insert_provider_row_with(
   db: &Database,
   id: Uuid,
@@ -1085,9 +1048,8 @@ fn insert_provider_row_with(
       },
     )?;
     // Package-only seeding: the provider row carries NO runtime binding yet. Reads of a
-    // missing binding return None and treat the provider as a legacy source identity; the
-    // v24-era backfill rows themselves fail closed at the repository parse, so fixtures must
-    // never fabricate them.
+    // missing binding return None: every API type of this provider is unbound until an
+    // explicit catalog attach or catalog-default activation.
     Ok(())
   })
   .unwrap();
@@ -1128,12 +1090,12 @@ fn insert_fixture_model(db: &Database, provider_id: Uuid, model_key: &str) -> Uu
 /// lifecycle; returns `(provider_id, package_digest)`.
 fn activate_fixture_provider(
   db: &Database,
-  packages: PluginPackageService,
+  catalog: Arc<PluginCatalog>,
   wasm: Arc<WasmRuntime>,
   name: &str,
   vault: &dyn crate::credentials::CredentialVault,
 ) -> (Uuid, String) {
-  let package_digest = install(&packages, LLM_PROVIDER_PACKAGE);
+  let package_digest = install(&catalog, FixtureSource::Conformance);
   let provider_id = crate::domain::time::new_id();
   insert_provider_row(
     db,
@@ -1143,7 +1105,7 @@ fn activate_fixture_provider(
     vault,
     Some("sk-test-provider-secret"),
   );
-  let lifecycle = ProviderRuntimeService::new(db.clone(), packages, wasm);
+  let lifecycle = ProviderRuntimeService::new(db.clone(), catalog, wasm);
   attach_provider_default_package(&lifecycle, &db, provider_id, &package_digest);
   (provider_id, package_digest)
 }
@@ -1208,7 +1170,7 @@ async fn runtime_provider_models_list_executes_verified_component() {
     {"id":"gpt-4-turbo","label":"GPT-4 Turbo"}
   ]}"#;
 
-  let (_dir, db, packages, wasm) = setup();
+  let (_dir, db, catalog, wasm) = setup();
   let vault = Arc::new(MemoryCredentialVault::new());
   let requests = Arc::new(Mutex::new(Vec::<PreparedHttpRequest>::new()));
   let transport = Arc::new(RecordingTransport {
@@ -1221,7 +1183,7 @@ async fn runtime_provider_models_list_executes_verified_component() {
   });
 
   let (provider_id, package_digest) =
-    activate_fixture_provider(&db, packages.clone(), wasm.clone(), "Models Provider", vault.as_ref());
+    activate_fixture_provider(&db, catalog.clone(), wasm.clone(), "Models Provider", vault.as_ref());
 
   let broker_factory: Arc<
     dyn Fn(ProviderRuntimeBrokerContext) -> Box<dyn crate::services::wasm_runtime::host::BrokerHandle> + Send + Sync,
@@ -1238,7 +1200,7 @@ async fn runtime_provider_models_list_executes_verified_component() {
       ))
     }
   });
-  let router = ProviderRuntimeRouter::new(db.clone(), packages, wasm, broker_factory);
+  let router = ProviderRuntimeRouter::new(db.clone(), catalog, wasm, broker_factory);
 
   // Fixed model IDs/labels through the real binding/grant/broker path.
   let result = router
@@ -1453,15 +1415,15 @@ async fn runtime_provider_broker_uses_only_bound_provider_connection() {
         },
       )?;
       let _now = crate::domain::time::now_rfc3339();
-      // No runtime binding yet: providers seed legacy (no package identity) and upgrade
-      // through the real lifecycle, exactly like production backfilled rows.
+      // No runtime binding yet: providers seed unbound and upgrade through the real
+      // lifecycle, exactly like a pre-catalog provider row.
       Ok(())
     })
     .unwrap();
   }
 
-  let (_dir, db, packages, wasm) = setup();
-  let package_digest = install(&packages, LLM_PROVIDER_PACKAGE);
+  let (_dir, db, catalog, wasm) = setup();
+  let package_digest = install(&catalog, FixtureSource::Conformance);
 
   let reads = Arc::new(AtomicUsize::new(0));
   let vault = Arc::new(CountingVault {
@@ -1479,7 +1441,7 @@ async fn runtime_provider_broker_uses_only_bound_provider_connection() {
   });
 
   // Two real provider rows. Provider A receives the active package binding + ProviderInstance
-  // grant through the real lifecycle; provider B stays legacy (no package/grant identity).
+  // grant through the real lifecycle; provider B stays unbound (no package/grant identity).
   let provider_a = crate::domain::time::new_id();
   let provider_b = crate::domain::time::new_id();
   let ref_a = format!("provider/{provider_a}/key");
@@ -1492,7 +1454,7 @@ async fn runtime_provider_broker_uses_only_bound_provider_connection() {
     Some(SECRET_A),
   );
   insert_provider(&db, provider_b, "Provider B", None, &vault, None);
-  let lifecycle = ProviderRuntimeService::new(db.clone(), packages, wasm);
+  let lifecycle = ProviderRuntimeService::new(db.clone(), catalog, wasm);
   attach_provider_default_package(&lifecycle, &db, provider_a, &package_digest);
 
   let binding_a = db
@@ -1677,29 +1639,32 @@ async fn runtime_provider_broker_uses_only_bound_provider_connection() {
 
 /// Phase 8 provider runtime lifecycle: preview/apply/rollback through the public runtime-provider
 /// command contracts (the five methods the Tauri commands wrap) backed by a real AppState,
-/// SQLite database, package verifier, and fixture archive. One provider moves atomically to the
-/// exact signed package + ProviderInstance grant; reuse by a second provider, a mismatched
-/// per-model API Type override, and stale applies fail closed; rollback restores the legacy
-/// binding and the second provider stays legacy.
+/// SQLite database, source catalog, and fixture package. One provider moves atomically to the
+/// exact package + ProviderInstance grant; reuse by a second provider, a mismatched per-model
+/// API Type override, and stale applies fail closed; rollback restores the unbound identity and
+/// the second provider keeps its own binding.
 #[test]
 fn runtime_provider_lifecycle_binds_exact_package_and_provider_grant() {
   use crate::domain::provider::{AuthSchemeV1, BaseUrlSource, CredentialKind, ProxyMode};
   use crate::domain::runtime_provider::{ApplyProviderRuntimeRollbackInput, ProviderRuntimeKind};
   use crate::state::AppState;
 
+  // The committed conformance fixture is discovered as built-in content through the real
+  // startup path (resource directory), exactly like a shipped archive.
   let dir = tempfile::tempdir().unwrap();
-  let state = AppState::initialize_for_tests(dir.path().to_path_buf()).unwrap();
+  let resources = tempfile::tempdir().unwrap();
+  let (fixture_manifest, fixture_payloads) = conformance_llm_fixture();
+  write_manifest_fixture_dir(
+    &resources.path().join("resources").join("plugins"),
+    &fixture_manifest,
+    &fixture_payloads,
+  );
+  let state =
+    AppState::initialize_for_tests_with_resources(dir.path().to_path_buf(), resources.path().to_path_buf()).unwrap();
+  let package_digest = fixture_digest(&state.catalog, CONFORMANCE_LLM_PLUGIN_ID);
 
-  // Install the two-world fixture through the real package verifier (vendor root).
-  let package_digest = state
-    .plugin_packages
-    .bootstrap_bundled_package(LLM_PROVIDER_PACKAGE, false)
-    .unwrap()
-    .package_digest()
-    .to_string();
-
-  // Seed providers directly (no default authorization): package-only reads treat a provider
-  // without a runtime binding as a legacy source identity, exactly like a v24 backfill.
+  // Seed providers directly (no catalog-default create): package-only reads treat a provider
+  // without a runtime binding as unbound, exactly like a pre-catalog provider row.
   fn create_provider(state: &AppState, name: &str) -> uuid::Uuid {
     let id = crate::domain::time::new_id();
     let now = crate::domain::time::now_rfc3339();
@@ -1840,7 +1805,7 @@ fn runtime_provider_lifecycle_binds_exact_package_and_provider_grant() {
   );
 
   // A per-model API Type override that is not attached (custom-relay) no longer blocks the
-  // attach: unbound API types keep the legacy executor, so provider C attaches too.
+  // attach: unbound API types simply stay unbound, so provider C attaches too.
   let preview_c = preview_provider_default_attach(&state.runtime_providers, &state.db, provider_c, &package_digest);
   apply_acknowledged_interface_attach(&state.runtime_providers, preview_c.preview_id)
     .expect("provider C apply succeeds");
@@ -1876,7 +1841,7 @@ fn runtime_provider_lifecycle_binds_exact_package_and_provider_grant() {
   assert_eq!(binding.package_digest.as_deref(), Some(package_digest.as_str()));
   assert_eq!(binding.grant_set_revision, Some(1));
 
-  // Rollback restores the exact legacy binding for provider A.
+  // Rollback restores the pre-attach unbound identity for provider A.
   let rollback_preview = state.runtime_providers.preview_rollback(provider_a).unwrap();
   assert_eq!(rollback_preview.provider_id, provider_a);
   assert_eq!(
@@ -1922,19 +1887,19 @@ fn runtime_provider_lifecycle_binds_exact_package_and_provider_grant() {
 }
 
 /// Phase 8 multi-interface: per-model API Type overrides are no longer globally rejected.
-/// An override names the effective route; the additive executor resolver routes attached
-/// types through the runtime executor and unbound types through the legacy executor. Save,
-/// update, and clear keep working regardless of the provider's attached interfaces.
+/// An override names the effective route; routing is decided at execution time (an attached
+/// type resolves to its exact binding, an unbound type fails closed). Save, update, and clear
+/// keep working regardless of the provider's attached interfaces.
 #[test]
 fn model_api_type_override_is_additive_while_provider_runtime_active() {
   use crate::credentials::MemoryCredentialVault;
   use crate::domain::model::{ManualModelWrite, ModelConfigWrite};
   use crate::services::ModelService;
 
-  let (_dir, db, packages, wasm) = setup();
+  let (_dir, db, catalog, wasm) = setup();
   let vault = Arc::new(MemoryCredentialVault::new());
   let (provider_id, _package_digest) =
-    activate_fixture_provider(&db, packages, wasm, "Override Provider", vault.as_ref());
+    activate_fixture_provider(&db, catalog, wasm, "Override Provider", vault.as_ref());
   let models = ModelService::new(db.clone(), vault.clone(), std::env::temp_dir());
 
   // Create a manual model while the provider runtime binding is active.
@@ -1951,7 +1916,7 @@ fn model_api_type_override_is_additive_while_provider_runtime_active() {
     .unwrap();
 
   // An unbound custom-relay override persists: routing is decided by the executor resolver
-  // (unbound API types stay legacy), not by a save-time global rejection.
+  // (unbound API types are simply unbound), not by a save-time global rejection.
   models.set_adapter_id(model.id, Some("gemini".into())).unwrap();
   assert_eq!(
     models.list_by_provider(provider_id).unwrap()[0].adapter_id.as_deref(),
@@ -2000,10 +1965,10 @@ fn model_api_type_override_is_additive_while_provider_runtime_active() {
   assert_eq!(created.adapter_id.as_deref(), Some("anthropic"));
 }
 
-/// Phase 8 provider runtime recovery: an active package binding round-trips through the public
-/// configuration document as an exact but unavailable requirement — no package bytes, grants,
-/// credential references, or activation authority survive the export/import boundary. Legacy
-/// providers normalize to legacy-frontend-provider; older formats keep normalizing.
+/// Phase 8 provider runtime recovery: an attached package binding round-trips through the
+/// public configuration document as an exact but unavailable requirement — no package bytes,
+/// grants, credential references, or activation authority survive the export/import boundary.
+/// Older formats keep normalizing.
 #[test]
 fn runtime_provider_export_import_preserves_exact_requirement_without_activation() {
   use crate::domain::import_export::ImportConflictMode;
@@ -2045,15 +2010,20 @@ fn runtime_provider_export_import_preserves_exact_requirement_without_activation
     id
   }
 
-  // --- Source database: one active package binding + one legacy provider. ---
+  // --- Source database: one user-installed package bound to one provider. ---
   let source_dir = tempfile::tempdir().unwrap();
+  let archive_dir = tempfile::tempdir().unwrap();
   let source = AppState::initialize_for_tests(source_dir.path().to_path_buf()).unwrap();
-  let package_digest = source
-    .plugin_packages
-    .bootstrap_bundled_package(LLM_PROVIDER_PACKAGE, false)
-    .unwrap()
-    .package_digest()
-    .to_string();
+  let (fixture_manifest, fixture_payloads) = conformance_llm_fixture();
+  let archive = write_fixture_archive(
+    archive_dir.path(),
+    &fixture_manifest,
+    &fixture_payloads,
+    CONFORMANCE_LLM_PLUGIN_ID,
+  );
+  install_user_archive(&source.user_plugins, &archive);
+  source.catalog.refresh().expect("catalog refreshes after user install");
+  let package_digest = fixture_digest(&source.catalog, CONFORMANCE_LLM_PLUGIN_ID);
   let provider_a = create_provider(&source, "Active Provider");
   let provider_b = create_provider(&source, "Pending Provider");
   attach_provider_default_package(&source.runtime_providers, &source.db, provider_a, &package_digest);
@@ -2074,7 +2044,8 @@ fn runtime_provider_export_import_preserves_exact_requirement_without_activation
     .expect("provider B exported");
 
   // Exact non-secret adapter-keyed runtime requirement (v8 runtimeBindings): digest,
-  // publisher identity/fingerprint, plugin API version, legacy aliases, and capability ids.
+  // plugin API version, legacy aliases, and capability ids. Source-based content carries no
+  // publisher key identity, so both publisher fields are absent.
   let requirements = export_a.runtime_bindings.as_slice();
   assert_eq!(
     requirements.len(),
@@ -2090,14 +2061,6 @@ fn runtime_provider_export_import_preserves_exact_requirement_without_activation
     Some("langnext.conformance.llm-provider")
   );
   assert_eq!(requirement.plugin_version.as_deref(), Some("1.0.0"));
-  assert_eq!(
-    requirement.publisher_key_id.as_deref(),
-    Some(crate::services::vendor_trust::VENDOR_PUBLISHER_KEY_ID)
-  );
-  assert_eq!(
-    requirement.publisher_key_fingerprint.as_deref(),
-    Some(test_vendor_fixture::fixture_vendor_fingerprint()).as_deref()
-  );
   assert_eq!(requirement.plugin_api_version.as_deref(), Some("1.0"));
   assert_eq!(requirement.legacy_aliases, vec!["openai-compatible".to_string()]);
   assert_eq!(
@@ -2156,7 +2119,8 @@ fn runtime_provider_export_import_preserves_exact_requirement_without_activation
   assert_eq!(binding_a.package_digest.as_deref(), Some(package_digest.as_str()));
   assert_eq!(binding_a.state, ProviderRuntimeState::Unavailable);
   assert!(binding_a.grant_set_revision.is_none(), "no grant revision restored");
-  assert_eq!(binding_a.error_code.as_deref(), Some("plugin_unavailable"));
+  // No local content resolves the digest, so the binding stays unresolved with a closed reason.
+  assert_eq!(binding_a.error_code.as_deref(), Some("plugin_missing"));
   let restored: ProviderRuntimeRequirementExport = serde_json::from_str(
     binding_a
       .runtime_requirement_json
@@ -2304,7 +2268,7 @@ async fn runtime_provider_chat_complete_uses_host_mode_and_releases_all_resource
 
   async fn run_chat_case(
     db: &Database,
-    packages: PluginPackageService,
+    catalog: Arc<PluginCatalog>,
     wasm: Arc<WasmRuntime>,
     provider_model_id: uuid::Uuid,
     vault: Arc<MemoryCredentialVault>,
@@ -2326,7 +2290,7 @@ async fn runtime_provider_chat_complete_uses_host_mode_and_releases_all_resource
         ))
       }
     });
-    let router = ProviderRuntimeRouter::new(db.clone(), packages, wasm, broker_factory);
+    let router = ProviderRuntimeRouter::new(db.clone(), catalog, wasm, broker_factory);
     let request = LlmChatRequest {
       model: "gpt-4o".into(),
       messages: vec![LlmChatMessage {
@@ -2376,10 +2340,10 @@ async fn runtime_provider_chat_complete_uses_host_mode_and_releases_all_resource
     outcome
   }
 
-  let (_dir, db, packages, wasm) = setup();
+  let (_dir, db, catalog, wasm) = setup();
   let vault = Arc::new(MemoryCredentialVault::new());
   let (provider_id, _package_digest) =
-    activate_fixture_provider(&db, packages.clone(), wasm.clone(), "Chat Provider", vault.as_ref());
+    activate_fixture_provider(&db, catalog.clone(), wasm.clone(), "Chat Provider", vault.as_ref());
   let model_id = insert_fixture_model(&db, provider_id, "gpt-4o");
 
   // Cleanup probes: every complete/error path must release the input Blob and both retained
@@ -2398,7 +2362,7 @@ async fn runtime_provider_chat_complete_uses_host_mode_and_releases_all_resource
     streams_probe.store(false, Ordering::SeqCst);
     let complete = run_chat_case(
       &db,
-      packages.clone(),
+      catalog.clone(),
       wasm.clone(),
       model_id,
       vault.clone(),
@@ -2451,7 +2415,7 @@ async fn runtime_provider_chat_complete_uses_host_mode_and_releases_all_resource
     streams_probe.store(false, Ordering::SeqCst);
     let _ = run_chat_case(
       &db,
-      packages.clone(),
+      catalog.clone(),
       wasm.clone(),
       model_id,
       vault.clone(),
@@ -2477,7 +2441,7 @@ async fn runtime_provider_chat_complete_uses_host_mode_and_releases_all_resource
     streams_probe.store(false, Ordering::SeqCst);
     let _ = run_chat_case(
       &db,
-      packages.clone(),
+      catalog.clone(),
       wasm.clone(),
       model_id,
       vault.clone(),
@@ -2504,7 +2468,7 @@ async fn runtime_provider_chat_complete_uses_host_mode_and_releases_all_resource
     streams_probe.store(false, Ordering::SeqCst);
     let _ = run_chat_case(
       &db,
-      packages.clone(),
+      catalog.clone(),
       wasm.clone(),
       model_id,
       vault.clone(),
@@ -2523,7 +2487,7 @@ async fn runtime_provider_chat_complete_uses_host_mode_and_releases_all_resource
   }
 
   // 5) Unexpected streaming result under a non-stream preference: a stable invalid response,
-  // no legacy executor, no transport request.
+  // no executor, no transport request.
   {
     let requests = Arc::new(Mutex::new(Vec::<PreparedHttpRequest>::new()));
     let transport = recording_transport(requests.clone(), CHAT_FIXTURE_RESPONSE);
@@ -2531,7 +2495,7 @@ async fn runtime_provider_chat_complete_uses_host_mode_and_releases_all_resource
     streams_probe.store(false, Ordering::SeqCst);
     let _ = run_chat_case(
       &db,
-      packages.clone(),
+      catalog.clone(),
       wasm.clone(),
       model_id,
       vault.clone(),
@@ -2560,8 +2524,8 @@ async fn runtime_provider_chat_complete_uses_host_mode_and_releases_all_resource
 /// contract. Table cases cover ordered text/reasoning/tool/complete frames with exactly one
 /// terminal transition, an oversized single delta, oversized cumulative output, and
 /// cancellation through the public runtime cancellation command contract. Every path cleans
-/// both stream endpoints and the request store, makes no second provider request, and never
-/// calls the legacy frontend executor.
+/// both stream endpoints and the request store, makes no second provider request, and
+/// resolves only the exact persisted binding.
 #[tokio::test]
 async fn runtime_provider_streamed_chat_orders_deltas_and_cleans_on_cancel() {
   use crate::cmds::runtime_providers::{cancel_runtime_request, run_provider_runtime_chat};
@@ -2668,7 +2632,7 @@ async fn runtime_provider_streamed_chat_orders_deltas_and_cleans_on_cancel() {
 
   async fn run_stream_case(
     db: &Database,
-    packages: PluginPackageService,
+    catalog: Arc<PluginCatalog>,
     wasm: Arc<WasmRuntime>,
     provider_model_id: uuid::Uuid,
     vault: Arc<MemoryCredentialVault>,
@@ -2690,7 +2654,7 @@ async fn runtime_provider_streamed_chat_orders_deltas_and_cleans_on_cancel() {
         ))
       }
     });
-    let router = ProviderRuntimeRouter::new(db.clone(), packages, wasm, broker_factory);
+    let router = ProviderRuntimeRouter::new(db.clone(), catalog, wasm, broker_factory);
     let sessions = RequestSessionRegistry::new();
     let input = ProviderRuntimeChatCommandInput {
       request_id: format!("chat-stream-req-{mode}"),
@@ -2712,11 +2676,11 @@ async fn runtime_provider_streamed_chat_orders_deltas_and_cleans_on_cancel() {
     .map(|_| LlmChatResult::Streaming)
   }
 
-  let (_dir, db, packages, wasm) = setup();
+  let (_dir, db, catalog, wasm) = setup();
   let vault = Arc::new(MemoryCredentialVault::new());
   let (provider_id, _package_digest) = activate_fixture_provider(
     &db,
-    packages.clone(),
+    catalog.clone(),
     wasm.clone(),
     "Streaming Chat Provider",
     vault.as_ref(),
@@ -2738,7 +2702,7 @@ async fn runtime_provider_streamed_chat_orders_deltas_and_cleans_on_cancel() {
     streams_probe.store(false, Ordering::SeqCst);
     let result = run_stream_case(
       &db,
-      packages.clone(),
+      catalog.clone(),
       wasm.clone(),
       model_id,
       vault.clone(),
@@ -2798,7 +2762,7 @@ async fn runtime_provider_streamed_chat_orders_deltas_and_cleans_on_cancel() {
     streams_probe.store(false, Ordering::SeqCst);
     let outcome = run_stream_case(
       &db,
-      packages.clone(),
+      catalog.clone(),
       wasm.clone(),
       model_id,
       vault.clone(),
@@ -2840,7 +2804,7 @@ async fn runtime_provider_streamed_chat_orders_deltas_and_cleans_on_cancel() {
     streams_probe.store(false, Ordering::SeqCst);
     let outcome = run_stream_case(
       &db,
-      packages.clone(),
+      catalog.clone(),
       wasm.clone(),
       model_id,
       vault.clone(),
@@ -2870,8 +2834,8 @@ async fn runtime_provider_streamed_chat_orders_deltas_and_cleans_on_cancel() {
 
   // 4) Cancellation through the public runtime cancellation command contract: the guest is
   // blocked in its broker call when the session cancels; the stream stops, both endpoints and
-  // the request store are cleaned, no second provider request is made, and the legacy
-  // frontend executor is never invoked.
+  // the request store are cleaned, no second provider request is made, and only the exact
+  // persisted binding is resolved.
   {
     let requests = Arc::new(Mutex::new(Vec::<PreparedHttpRequest>::new()));
     let transport = Arc::new(ParkingTransport {
@@ -2890,7 +2854,7 @@ async fn runtime_provider_streamed_chat_orders_deltas_and_cleans_on_cancel() {
         ))
       }
     });
-    let router = ProviderRuntimeRouter::new(db.clone(), packages.clone(), wasm.clone(), broker_factory);
+    let router = ProviderRuntimeRouter::new(db.clone(), catalog.clone(), wasm.clone(), broker_factory);
     let sessions = Arc::new(RequestSessionRegistry::new());
     let request_id = "chat-stream-req-block";
     let events = Arc::new(Mutex::new(Vec::<ProviderRuntimeChatEvent>::new()));
@@ -2953,7 +2917,7 @@ async fn runtime_provider_streamed_chat_orders_deltas_and_cleans_on_cancel() {
     assert_eq!(
       requests.lock().expect("requests poisoned").len(),
       1,
-      "no second provider request and no legacy replay after cancellation"
+      "no second provider request after cancellation"
     );
     assert!(
       events.lock().expect("events poisoned").is_empty(),
@@ -2968,7 +2932,7 @@ async fn runtime_provider_streamed_chat_orders_deltas_and_cleans_on_cancel() {
 }
 
 /// Phase 8 Task 11: the OpenAI Compatible runtime package reproduces the current TypeScript
-/// provider fixtures through the generic runtime host. A dev-signed two-world package executes
+/// provider fixtures through the generic runtime host. A two-world catalog package executes
 /// through a real provider binding/router/broker path: fixed Models List request/result, unary
 /// Chat request/result, split streaming text deltas, image Blob usage (base64 data URL only in
 /// the provider wire body), and sanitized malformed/provider-error cases. The expected request
@@ -3129,7 +3093,7 @@ async fn openai_compatible_runtime_component_matches_current_provider_fixtures()
 
   async fn run_chat_case(
     db: &Database,
-    packages: PluginPackageService,
+    catalog: Arc<PluginCatalog>,
     wasm: Arc<WasmRuntime>,
     provider_model_id: uuid::Uuid,
     vault: Arc<MemoryCredentialVault>,
@@ -3151,7 +3115,7 @@ async fn openai_compatible_runtime_component_matches_current_provider_fixtures()
         ))
       }
     });
-    let router = ProviderRuntimeRouter::new(db.clone(), packages, wasm, broker_factory);
+    let router = ProviderRuntimeRouter::new(db.clone(), catalog, wasm, broker_factory);
     let outcome = router
       .chat(
         provider_model_id,
@@ -3186,9 +3150,12 @@ async fn openai_compatible_runtime_component_matches_current_provider_fixtures()
     outcome
   }
 
-  let (_dir, db, packages, wasm) = setup();
+  let (_dir, db, catalog, wasm) = setup();
   let vault = Arc::new(MemoryCredentialVault::new());
-  let package_digest = install(&packages, OPENAI_COMPATIBLE_PACKAGE);
+  let package_digest = install(
+    &catalog,
+    FixtureSource::Committed(OPENAI_COMPATIBLE_ARCHIVE, OPENAI_COMPATIBLE_PLUGIN_ID),
+  );
   let provider_id = crate::domain::time::new_id();
   insert_provider_row(
     &db,
@@ -3198,7 +3165,7 @@ async fn openai_compatible_runtime_component_matches_current_provider_fixtures()
     vault.as_ref(),
     Some("sk-test-provider-secret"),
   );
-  let lifecycle = ProviderRuntimeService::new(db.clone(), packages.clone(), wasm.clone());
+  let lifecycle = ProviderRuntimeService::new(db.clone(), catalog.clone(), wasm.clone());
   attach_provider_default_package(&lifecycle, &db, provider_id, &package_digest);
   let model_id = insert_fixture_model(&db, provider_id, "gpt-4o-mini");
 
@@ -3225,7 +3192,7 @@ async fn openai_compatible_runtime_component_matches_current_provider_fixtures()
         ))
       }
     });
-    let router = ProviderRuntimeRouter::new(db.clone(), packages.clone(), wasm.clone(), broker_factory);
+    let router = ProviderRuntimeRouter::new(db.clone(), catalog.clone(), wasm.clone(), broker_factory);
     let result = router
       .list_models(
         provider_id,
@@ -3282,7 +3249,7 @@ async fn openai_compatible_runtime_component_matches_current_provider_fixtures()
         ))
       }
     });
-    let router = ProviderRuntimeRouter::new(db.clone(), packages.clone(), wasm.clone(), broker_factory);
+    let router = ProviderRuntimeRouter::new(db.clone(), catalog.clone(), wasm.clone(), broker_factory);
     let err = router
       .list_models(
         provider_id,
@@ -3320,7 +3287,7 @@ async fn openai_compatible_runtime_component_matches_current_provider_fixtures()
     );
     let complete = run_chat_case(
       &db,
-      packages.clone(),
+      catalog.clone(),
       wasm.clone(),
       model_id,
       vault.clone(),
@@ -3371,7 +3338,7 @@ async fn openai_compatible_runtime_component_matches_current_provider_fixtures()
     request.images = vec![FIXED_PNG.to_vec()];
     let complete = run_chat_case(
       &db,
-      packages.clone(),
+      catalog.clone(),
       wasm.clone(),
       model_id,
       vault.clone(),
@@ -3426,7 +3393,7 @@ async fn openai_compatible_runtime_component_matches_current_provider_fixtures()
         ))
       }
     });
-    let router = ProviderRuntimeRouter::new(db.clone(), packages.clone(), wasm.clone(), broker_factory);
+    let router = ProviderRuntimeRouter::new(db.clone(), catalog.clone(), wasm.clone(), broker_factory);
     let sessions = RequestSessionRegistry::new();
     let events = Arc::new(Mutex::new(Vec::<ProviderRuntimeChatEvent>::new()));
     let sink = events.clone();
@@ -3490,7 +3457,7 @@ async fn openai_compatible_runtime_component_matches_current_provider_fixtures()
     );
     let _ = run_chat_case(
       &db,
-      packages.clone(),
+      catalog.clone(),
       wasm.clone(),
       model_id,
       vault.clone(),
@@ -3515,7 +3482,7 @@ async fn openai_compatible_runtime_component_matches_current_provider_fixtures()
     );
     let _ = run_chat_case(
       &db,
-      packages.clone(),
+      catalog.clone(),
       wasm.clone(),
       model_id,
       vault.clone(),
@@ -3532,7 +3499,7 @@ async fn openai_compatible_runtime_component_matches_current_provider_fixtures()
     let transport = recording_transport(requests.clone(), 200, "application/json", r#"{"choices":[]}"#);
     let _ = run_chat_case(
       &db,
-      packages.clone(),
+      catalog.clone(),
       wasm.clone(),
       model_id,
       vault.clone(),
@@ -3553,7 +3520,7 @@ async fn openai_compatible_runtime_component_matches_current_provider_fixtures()
     );
     let _ = run_chat_case(
       &db,
-      packages.clone(),
+      catalog.clone(),
       wasm.clone(),
       model_id,
       vault.clone(),
@@ -3586,7 +3553,7 @@ async fn openai_compatible_runtime_component_matches_current_provider_fixtures()
         ))
       }
     });
-    let router = ProviderRuntimeRouter::new(db.clone(), packages.clone(), wasm.clone(), broker_factory);
+    let router = ProviderRuntimeRouter::new(db.clone(), catalog.clone(), wasm.clone(), broker_factory);
     let sessions = RequestSessionRegistry::new();
     let events = Arc::new(Mutex::new(Vec::<ProviderRuntimeChatEvent>::new()));
     let sink = events.clone();
@@ -3633,7 +3600,7 @@ async fn openai_compatible_runtime_component_matches_current_provider_fixtures()
 }
 
 /// Phase 8 Task 18: the OpenAI Responses runtime package reproduces the current TypeScript
-/// Responses API fixtures through the generic runtime host. A dev-signed two-world package
+/// Responses API fixtures through the generic runtime host. A two-world catalog package
 /// executes through a real provider binding/router/broker path: fixed Models List
 /// request/result, unary /responses request/result, typed event-stream deltas (with lifecycle
 /// ignore and truncated-payload tolerance), image Blob usage (base64 data URL only in the
@@ -3795,7 +3762,7 @@ async fn openai_responses_runtime_component_matches_current_provider_fixtures() 
 
   async fn run_chat_case(
     db: &Database,
-    packages: PluginPackageService,
+    catalog: Arc<PluginCatalog>,
     wasm: Arc<WasmRuntime>,
     provider_model_id: uuid::Uuid,
     vault: Arc<MemoryCredentialVault>,
@@ -3817,7 +3784,7 @@ async fn openai_responses_runtime_component_matches_current_provider_fixtures() 
         ))
       }
     });
-    let router = ProviderRuntimeRouter::new(db.clone(), packages, wasm, broker_factory);
+    let router = ProviderRuntimeRouter::new(db.clone(), catalog, wasm, broker_factory);
     let outcome = router
       .chat(
         provider_model_id,
@@ -3852,9 +3819,12 @@ async fn openai_responses_runtime_component_matches_current_provider_fixtures() 
     outcome
   }
 
-  let (_dir, db, packages, wasm) = setup();
+  let (_dir, db, catalog, wasm) = setup();
   let vault = Arc::new(MemoryCredentialVault::new());
-  let package_digest = install(&packages, OPENAI_RESPONSES_PACKAGE);
+  let package_digest = install(
+    &catalog,
+    FixtureSource::Committed(OPENAI_RESPONSES_ARCHIVE, OPENAI_RESPONSES_PLUGIN_ID),
+  );
   let provider_id = crate::domain::time::new_id();
   insert_provider_row_with(
     &db,
@@ -3867,7 +3837,7 @@ async fn openai_responses_runtime_component_matches_current_provider_fixtures() 
     vault.as_ref(),
     Some("sk-test-provider-secret"),
   );
-  let lifecycle = ProviderRuntimeService::new(db.clone(), packages.clone(), wasm.clone());
+  let lifecycle = ProviderRuntimeService::new(db.clone(), catalog.clone(), wasm.clone());
   attach_provider_default_package(&lifecycle, &db, provider_id, &package_digest);
   let model_id = insert_fixture_model(&db, provider_id, "gpt-5.4-mini");
 
@@ -3894,7 +3864,7 @@ async fn openai_responses_runtime_component_matches_current_provider_fixtures() 
         ))
       }
     });
-    let router = ProviderRuntimeRouter::new(db.clone(), packages.clone(), wasm.clone(), broker_factory);
+    let router = ProviderRuntimeRouter::new(db.clone(), catalog.clone(), wasm.clone(), broker_factory);
     let result = router
       .list_models(
         provider_id,
@@ -3951,7 +3921,7 @@ async fn openai_responses_runtime_component_matches_current_provider_fixtures() 
         ))
       }
     });
-    let router = ProviderRuntimeRouter::new(db.clone(), packages.clone(), wasm.clone(), broker_factory);
+    let router = ProviderRuntimeRouter::new(db.clone(), catalog.clone(), wasm.clone(), broker_factory);
     let err = router
       .list_models(
         provider_id,
@@ -3989,7 +3959,7 @@ async fn openai_responses_runtime_component_matches_current_provider_fixtures() 
     );
     let complete = run_chat_case(
       &db,
-      packages.clone(),
+      catalog.clone(),
       wasm.clone(),
       model_id,
       vault.clone(),
@@ -4040,7 +4010,7 @@ async fn openai_responses_runtime_component_matches_current_provider_fixtures() 
     request.images = vec![FIXED_PNG.to_vec()];
     let complete = run_chat_case(
       &db,
-      packages.clone(),
+      catalog.clone(),
       wasm.clone(),
       model_id,
       vault.clone(),
@@ -4096,7 +4066,7 @@ async fn openai_responses_runtime_component_matches_current_provider_fixtures() 
         ))
       }
     });
-    let router = ProviderRuntimeRouter::new(db.clone(), packages.clone(), wasm.clone(), broker_factory);
+    let router = ProviderRuntimeRouter::new(db.clone(), catalog.clone(), wasm.clone(), broker_factory);
     let sessions = RequestSessionRegistry::new();
     let events = Arc::new(Mutex::new(Vec::<ProviderRuntimeChatEvent>::new()));
     let sink = events.clone();
@@ -4160,7 +4130,7 @@ async fn openai_responses_runtime_component_matches_current_provider_fixtures() 
     );
     let _ = run_chat_case(
       &db,
-      packages.clone(),
+      catalog.clone(),
       wasm.clone(),
       model_id,
       vault.clone(),
@@ -4185,7 +4155,7 @@ async fn openai_responses_runtime_component_matches_current_provider_fixtures() 
     );
     let _ = run_chat_case(
       &db,
-      packages.clone(),
+      catalog.clone(),
       wasm.clone(),
       model_id,
       vault.clone(),
@@ -4202,7 +4172,7 @@ async fn openai_responses_runtime_component_matches_current_provider_fixtures() 
     let transport = recording_transport(requests.clone(), 200, "application/json", r#"{"output":"nope"}"#);
     let _ = run_chat_case(
       &db,
-      packages.clone(),
+      catalog.clone(),
       wasm.clone(),
       model_id,
       vault.clone(),
@@ -4223,7 +4193,7 @@ async fn openai_responses_runtime_component_matches_current_provider_fixtures() 
     );
     let _ = run_chat_case(
       &db,
-      packages.clone(),
+      catalog.clone(),
       wasm.clone(),
       model_id,
       vault.clone(),
@@ -4256,7 +4226,7 @@ async fn openai_responses_runtime_component_matches_current_provider_fixtures() 
         ))
       }
     });
-    let router = ProviderRuntimeRouter::new(db.clone(), packages.clone(), wasm.clone(), broker_factory);
+    let router = ProviderRuntimeRouter::new(db.clone(), catalog.clone(), wasm.clone(), broker_factory);
     let sessions = RequestSessionRegistry::new();
     let events = Arc::new(Mutex::new(Vec::<ProviderRuntimeChatEvent>::new()));
     let sink = events.clone();
@@ -4303,7 +4273,7 @@ async fn openai_responses_runtime_component_matches_current_provider_fixtures() 
 }
 
 /// Phase 8 Task 19: the Anthropic runtime package reproduces the current TypeScript Messages
-/// API fixtures through the generic runtime host. A dev-signed two-world package executes
+/// API fixtures through the generic runtime host. A two-world catalog package executes
 /// through a real provider binding/router/broker path: fixed two-page Models List aggregation
 /// (bounded internal page traversal with no partial result on failure), unary /v1/messages
 /// request/result, typed stream deltas, image Blob usage, and sanitized malformed/provider
@@ -4349,7 +4319,7 @@ async fn anthropic_runtime_component_matches_current_provider_fixtures() {
   );
 
   // The API key and its credential reference must never enter guest data: the committed
-  // fixture literals, the signed package bytes, and the compiled guest artifacts are scanned.
+  // fixture literals, the package archive bytes, and the compiled guest artifacts are scanned.
   for fixture in [
     ANTHROPIC_MODELS_PAGE_1_FIXTURE,
     ANTHROPIC_MODELS_PAGE_2_FIXTURE,
@@ -4366,7 +4336,11 @@ async fn anthropic_runtime_component_matches_current_provider_fixtures() {
       "fixture literals must never carry the API key or a credential reference"
     );
   }
-  for guest_bytes in [ANTHROPIC_MODELS_COMPONENT, ANTHROPIC_CHAT_COMPONENT, ANTHROPIC_PACKAGE] {
+  for guest_bytes in [
+    ANTHROPIC_MODELS_COMPONENT,
+    ANTHROPIC_CHAT_COMPONENT,
+    builtin_archive_bytes(ANTHROPIC_ARCHIVE).as_slice(),
+  ] {
     assert!(
       !guest_bytes
         .windows(ANTHROPIC_TEST_SECRET.len())
@@ -4535,7 +4509,7 @@ async fn anthropic_runtime_component_matches_current_provider_fixtures() {
 
   async fn run_chat_case(
     db: &Database,
-    packages: PluginPackageService,
+    catalog: Arc<PluginCatalog>,
     wasm: Arc<WasmRuntime>,
     provider_model_id: uuid::Uuid,
     vault: Arc<MemoryCredentialVault>,
@@ -4557,7 +4531,7 @@ async fn anthropic_runtime_component_matches_current_provider_fixtures() {
         ))
       }
     });
-    let router = ProviderRuntimeRouter::new(db.clone(), packages, wasm, broker_factory);
+    let router = ProviderRuntimeRouter::new(db.clone(), catalog, wasm, broker_factory);
     let outcome = router
       .chat(
         provider_model_id,
@@ -4596,9 +4570,12 @@ async fn anthropic_runtime_component_matches_current_provider_fixtures() {
     outcome
   }
 
-  let (_dir, db, packages, wasm) = setup();
+  let (_dir, db, catalog, wasm) = setup();
   let vault = Arc::new(MemoryCredentialVault::new());
-  let package_digest = install(&packages, ANTHROPIC_PACKAGE);
+  let package_digest = install(
+    &catalog,
+    FixtureSource::Committed(ANTHROPIC_ARCHIVE, ANTHROPIC_PLUGIN_ID),
+  );
   let provider_id = crate::domain::time::new_id();
   insert_provider_row_with(
     &db,
@@ -4611,7 +4588,7 @@ async fn anthropic_runtime_component_matches_current_provider_fixtures() {
     vault.as_ref(),
     Some(ANTHROPIC_TEST_SECRET),
   );
-  let lifecycle = ProviderRuntimeService::new(db.clone(), packages.clone(), wasm.clone());
+  let lifecycle = ProviderRuntimeService::new(db.clone(), catalog.clone(), wasm.clone());
   attach_provider_default_package(&lifecycle, &db, provider_id, &package_digest);
   let model_id = insert_fixture_model(&db, provider_id, "claude-3-5-haiku");
 
@@ -4637,7 +4614,7 @@ async fn anthropic_runtime_component_matches_current_provider_fixtures() {
         ))
       }
     });
-    let router = ProviderRuntimeRouter::new(db.clone(), packages.clone(), wasm.clone(), broker_factory);
+    let router = ProviderRuntimeRouter::new(db.clone(), catalog.clone(), wasm.clone(), broker_factory);
     let result = router
       .list_models(
         provider_id,
@@ -4708,7 +4685,7 @@ async fn anthropic_runtime_component_matches_current_provider_fixtures() {
         ))
       }
     });
-    let router = ProviderRuntimeRouter::new(db.clone(), packages.clone(), wasm.clone(), broker_factory);
+    let router = ProviderRuntimeRouter::new(db.clone(), catalog.clone(), wasm.clone(), broker_factory);
     let err = router
       .list_models(
         provider_id,
@@ -4750,7 +4727,7 @@ async fn anthropic_runtime_component_matches_current_provider_fixtures() {
     );
     let complete = run_chat_case(
       &db,
-      packages.clone(),
+      catalog.clone(),
       wasm.clone(),
       model_id,
       vault.clone(),
@@ -4808,7 +4785,7 @@ async fn anthropic_runtime_component_matches_current_provider_fixtures() {
     request.images = vec![FIXED_PNG.to_vec()];
     let complete = run_chat_case(
       &db,
-      packages.clone(),
+      catalog.clone(),
       wasm.clone(),
       model_id,
       vault.clone(),
@@ -4863,7 +4840,7 @@ async fn anthropic_runtime_component_matches_current_provider_fixtures() {
         ))
       }
     });
-    let router = ProviderRuntimeRouter::new(db.clone(), packages.clone(), wasm.clone(), broker_factory);
+    let router = ProviderRuntimeRouter::new(db.clone(), catalog.clone(), wasm.clone(), broker_factory);
     let sessions = RequestSessionRegistry::new();
     let events = Arc::new(Mutex::new(Vec::<ProviderRuntimeChatEvent>::new()));
     let sink = events.clone();
@@ -4922,7 +4899,7 @@ async fn anthropic_runtime_component_matches_current_provider_fixtures() {
     let transport = recording_transport(requests.clone(), 200, "application/json", ANTHROPIC_MALFORMED_BODY);
     let _ = run_chat_case(
       &db,
-      packages.clone(),
+      catalog.clone(),
       wasm.clone(),
       model_id,
       vault.clone(),
@@ -4942,7 +4919,7 @@ async fn anthropic_runtime_component_matches_current_provider_fixtures() {
     let transport = recording_transport(requests.clone(), 429, "application/json", ANTHROPIC_RATE_LIMITED_BODY);
     let _ = run_chat_case(
       &db,
-      packages.clone(),
+      catalog.clone(),
       wasm.clone(),
       model_id,
       vault.clone(),
@@ -4959,7 +4936,7 @@ async fn anthropic_runtime_component_matches_current_provider_fixtures() {
     let transport = recording_transport(requests.clone(), 200, "application/json", r#"{"content":"nope"}"#);
     let _ = run_chat_case(
       &db,
-      packages.clone(),
+      catalog.clone(),
       wasm.clone(),
       model_id,
       vault.clone(),
@@ -4980,7 +4957,7 @@ async fn anthropic_runtime_component_matches_current_provider_fixtures() {
     );
     let _ = run_chat_case(
       &db,
-      packages.clone(),
+      catalog.clone(),
       wasm.clone(),
       model_id,
       vault.clone(),
@@ -5013,7 +4990,7 @@ async fn anthropic_runtime_component_matches_current_provider_fixtures() {
         ))
       }
     });
-    let router = ProviderRuntimeRouter::new(db.clone(), packages.clone(), wasm.clone(), broker_factory);
+    let router = ProviderRuntimeRouter::new(db.clone(), catalog.clone(), wasm.clone(), broker_factory);
     let sessions = RequestSessionRegistry::new();
     let events = Arc::new(Mutex::new(Vec::<ProviderRuntimeChatEvent>::new()));
     let sink = events.clone();
@@ -5070,548 +5047,6 @@ async fn anthropic_runtime_component_matches_current_provider_fixtures() {
   );
 }
 
-/// Phase 8 Task 12: a reviewed vendor OpenAI Compatible package becomes the default only for
-/// newly created matching Providers. The default is resolved once from the verified vendor
-/// archive (exact digest, publisher identity, version, legacy alias); the Provider create
-/// path binds it only when the new Provider's adapter alias and persisted connection
-/// requirements match. Pre-existing, mismatching, untrusted, revoked, alias-ambiguous, and
-/// missing packages stay safely legacy; no startup/install/edit/sync/failure path
-/// auto-upgrades anything.
-#[test]
-fn runtime_provider_vendor_default_applies_only_to_new_matching_provider() {
-  use crate::credentials::MemoryCredentialVault;
-  use crate::domain::provider::{
-    AuthSchemeV1, BaseUrlSource, CredentialKind, CredentialUpdate, ProviderInstanceWrite, ProxyMode,
-  };
-  use crate::domain::runtime_provider::{ProviderRuntimeKind, ProviderRuntimeState};
-  use crate::services::providers::ProviderService;
-  use std::sync::Arc;
-
-  fn provider_write(adapter_id: &str, base_url_source: BaseUrlSource, base_url: &str) -> ProviderInstanceWrite {
-    ProviderInstanceWrite {
-      id: None,
-      adapter_id: adapter_id.into(),
-      display_name: format!("{adapter_id} provider"),
-      base_url: base_url.into(),
-      base_url_source,
-      auth_scheme: AuthSchemeV1::bearer(),
-      credential_kind: CredentialKind::ApiKey,
-      credential: CredentialUpdate::Keep,
-      enabled: true,
-      proxy_mode: ProxyMode::Inherit,
-      insecure_http_confirmed_at: None,
-      expected_updated_at: None,
-    }
-  }
-
-  fn openai_write() -> ProviderInstanceWrite {
-    provider_write(
-      "openai-compatible",
-      BaseUrlSource::PluginDefault,
-      "https://api.openai.com/v1",
-    )
-  }
-
-  let (_dir, db, packages, wasm) = setup();
-  let vault = Arc::new(MemoryCredentialVault::new());
-  let runtime = ProviderRuntimeService::new(db.clone(), packages.clone(), wasm.clone());
-  let providers = ProviderService::new(db.clone(), vault.clone()).with_runtime_defaults(Arc::new(runtime.clone()));
-
-  // 1) Missing package: no default is configured, so provider create FAILS CLOSED.
-  let missing_error = providers
-    .save(openai_write())
-    .expect_err("create without a default must fail");
-  assert!(
-    missing_error.to_string().contains("default package"),
-    "got {missing_error}"
-  );
-
-  // 2) Install the verified vendor fixture. Without an authorized policy, create still fails
-  // closed (an installed package alone never enables legacy execution).
-  let import = packages
-    .bootstrap_bundled_package(OPENAI_COMPATIBLE_PACKAGE, false)
-    .expect("vendor package bootstraps");
-  let digest = import.package_digest().to_string();
-  let unauthorized_error = providers.save(openai_write()).expect_err("no policy, no create");
-  assert!(
-    unauthorized_error.to_string().contains("default package"),
-    "got {unauthorized_error}"
-  );
-
-  // 3) Authorize the exact default policy, then package-first create uses the retained digest.
-  let activation = crate::services::default_package_activation::DefaultPackageActivationService::create(
-    db.clone(),
-    packages.clone(),
-    _dir.path(),
-  );
-  let preview = activation
-    .preview_default_package_activation(&digest)
-    .expect("preview default activation");
-  activation
-    .authorize_default_plugin_package(
-      crate::domain::default_package_activation::AuthorizeDefaultPluginPackageInput {
-        preview_id: preview.preview_id,
-        acknowledge_future_instance_authority: true,
-        acknowledge_unsigned_default_risk: false,
-      },
-    )
-    .expect("authorize default package");
-
-  let matching = providers.save(openai_write()).expect("matching provider create");
-  assert_eq!(matching.runtime.runtime_kind, ProviderRuntimeKind::WasmComponent);
-  assert_eq!(matching.runtime.state, ProviderRuntimeState::PendingActivation);
-  assert_eq!(
-    matching.runtime.package_digest.as_deref(),
-    Some(digest.as_str()),
-    "exact vendor package digest"
-  );
-  assert!(
-    matching.runtime.grant_set_revision.is_none(),
-    "package-first create retains exact digest without grant until activation"
-  );
-
-  // 4) A nonmatching adapter never receives the default: create fails closed.
-  let nonmatching_error = providers
-    .save(provider_write(
-      "deepseek",
-      BaseUrlSource::PluginDefault,
-      "https://api.deepseek.com",
-    ))
-    .expect_err("nonmatching provider create must fail");
-  assert!(
-    nonmatching_error.to_string().contains("default package"),
-    "got {nonmatching_error}"
-  );
-
-  // 5) A matching adapter with a custom connection is blocked (never silently legacy).
-  let custom_err = providers
-    .save(provider_write(
-      "openai-compatible",
-      BaseUrlSource::Custom,
-      "https://relay.example.com/v1",
-    ))
-    .expect_err("custom connection against authorized default must block create");
-  let custom_msg = custom_err.to_string();
-  assert!(
-    custom_msg.contains("authority_expansion_blocked"),
-    "expected authority expansion block, got {custom_msg}"
-  );
-
-  // 6) A pre-existing Provider created while the default was authorized is untouched by the
-  // later publisher revocation: its exact package pin and grant identity remain.
-  let preexisting = providers.save(openai_write()).expect("pre-existing provider create");
-  let preexisting_after = providers.get(preexisting.id).expect("pre-existing provider");
-  assert_eq!(
-    preexisting_after.runtime.runtime_kind,
-    ProviderRuntimeKind::WasmComponent,
-    "pre-existing provider keeps its package pin"
-  );
-  assert_eq!(
-    preexisting_after.runtime.package_digest.as_deref(),
-    Some(digest.as_str())
-  );
-
-  // 7) Revoking the publisher clears the catalog default, so create fails closed (revoke
-  // never leaves an executable package-first row).
-  packages
-    .revoke_publisher("com.langnext.vendor.keys.1")
-    .expect("publisher revokes");
-  let revoked_error = providers
-    .save(openai_write())
-    .expect_err("create after revoke must fail");
-  assert!(
-    revoked_error.to_string().contains("default package"),
-    "got {revoked_error}"
-  );
-
-  // 8) An untrusted package (signed by a non-vendor key) cannot produce a vendor import, so
-  // it can never become a default; the create stays legacy.
-  {
-    let dir = tempfile::tempdir().unwrap();
-    let db_untrusted = Database::new(dir.path()).unwrap();
-    db_untrusted.initialize().unwrap();
-    let packages_untrusted = PluginPackageService::with_vendor_roots(
-      db_untrusted.clone(),
-      dir.path().to_path_buf(),
-      vec![test_vendor_fixture::fixture_vendor_public_key()],
-    );
-    let user_sk = ed25519_dalek::SigningKey::from_bytes(&[9u8; 32]);
-    let user_manifest = openai_compatible_manifest(&[
-      (MODELS_ARTIFACT, LLM_MODELS_COMPONENT),
-      (CHAT_ARTIFACT, LLM_CHAT_COMPONENT),
-    ]);
-    let user_pkg = test_support::build_signed_package_with_key(
-      &user_manifest,
-      &[
-        (MODELS_ARTIFACT, LLM_MODELS_COMPONENT),
-        (CHAT_ARTIFACT, LLM_CHAT_COMPONENT),
-      ],
-      &user_sk,
-    );
-    assert!(
-      packages_untrusted.bootstrap_bundled_package(&user_pkg, false).is_err(),
-      "a non-vendor signed package cannot produce a vendor import"
-    );
-    let runtime_untrusted = ProviderRuntimeService::new(db_untrusted.clone(), packages_untrusted.clone(), wasm.clone());
-    let providers_untrusted = ProviderService::new(db_untrusted.clone(), Arc::new(MemoryCredentialVault::new()))
-      .with_runtime_defaults(Arc::new(runtime_untrusted));
-    let error = providers_untrusted
-      .save(openai_write())
-      .expect_err("no default, no create");
-    assert!(error.to_string().contains("default package"), "got {error}");
-  }
-
-  // 9) Alias-ambiguous vendor packages (same plugin id/version, different digest) are
-  // rejected by the install path itself, so an ambiguous default can never exist; the single
-  // verified vendor package remains the exact default and the create binds it.
-  {
-    let dir = tempfile::tempdir().unwrap();
-    let db_ambiguous = Database::new(dir.path()).unwrap();
-    db_ambiguous.initialize().unwrap();
-    let packages_ambiguous = PluginPackageService::with_vendor_roots(
-      db_ambiguous.clone(),
-      dir.path().to_path_buf(),
-      vec![test_vendor_fixture::fixture_vendor_public_key()],
-    );
-    let first = packages_ambiguous
-      .bootstrap_bundled_package(OPENAI_COMPATIBLE_PACKAGE, false)
-      .expect("first vendor package bootstraps");
-    // A second fully vendor-signed package with the SAME plugin id/version but different
-    // artifact bytes (the conformance LLM components are valid worlds for both capabilities).
-    let second_manifest = openai_compatible_manifest(&[
-      (MODELS_ARTIFACT, LLM_MODELS_COMPONENT),
-      (CHAT_ARTIFACT, LLM_CHAT_COMPONENT),
-    ]);
-    let second_bytes = vendor_signed_package(
-      &second_manifest,
-      &[
-        (MODELS_ARTIFACT, LLM_MODELS_COMPONENT),
-        (CHAT_ARTIFACT, LLM_CHAT_COMPONENT),
-      ],
-    );
-    assert!(
-      packages_ambiguous
-        .bootstrap_bundled_package(&second_bytes, false)
-        .is_err(),
-      "a second vendor digest claiming the same plugin id/version is rejected at install, so no ambiguous default can exist"
-    );
-    let runtime_ambiguous = ProviderRuntimeService::new(db_ambiguous.clone(), packages_ambiguous.clone(), wasm.clone());
-    let activation_ambiguous = crate::services::default_package_activation::DefaultPackageActivationService::create(
-      db_ambiguous.clone(),
-      packages_ambiguous.clone(),
-      dir.path(),
-    );
-    let preview = activation_ambiguous
-      .preview_default_package_activation(first.package_digest())
-      .expect("preview single vendor default");
-    activation_ambiguous
-      .authorize_default_plugin_package(
-        crate::domain::default_package_activation::AuthorizeDefaultPluginPackageInput {
-          preview_id: preview.preview_id,
-          acknowledge_future_instance_authority: true,
-          acknowledge_unsigned_default_risk: false,
-        },
-      )
-      .expect("authorize single vendor default");
-    let providers_ambiguous = ProviderService::new(db_ambiguous.clone(), Arc::new(MemoryCredentialVault::new()))
-      .with_runtime_defaults(Arc::new(runtime_ambiguous));
-    let created = providers_ambiguous.save(openai_write()).expect("provider create");
-    assert_eq!(created.runtime.runtime_kind, ProviderRuntimeKind::WasmComponent);
-    assert_eq!(
-      created.runtime.package_digest.as_deref(),
-      Some(first.package_digest()),
-      "the exact vendor digest is bound"
-    );
-  }
-
-  // The matching provider's binding is the only non-legacy binding in the database.
-  let bindings = db.read(|conn| provider_runtime_bindings::list(conn)).unwrap();
-  let wasm_bindings: Vec<_> = bindings
-    .iter()
-    .filter(|binding| binding.runtime_kind == ProviderRuntimeKind::WasmComponent)
-    .collect();
-  assert_eq!(
-    wasm_bindings.len(),
-    2,
-    "exactly two package bindings: the pre-existing provider and the new matching provider"
-  );
-  assert!(
-    wasm_bindings.iter().any(|binding| binding.provider_id == matching.id),
-    "matching provider holds a package binding"
-  );
-  assert!(
-    wasm_bindings
-      .iter()
-      .any(|binding| binding.provider_id == preexisting.id),
-    "pre-existing provider keeps its package binding"
-  );
-}
-
-#[test]
-fn default_package_activation_provider_create_grant_and_drift_matrix() {
-  use crate::credentials::MemoryCredentialVault;
-  use crate::domain::default_package_activation::AuthorizeDefaultPluginPackageInput;
-  use crate::domain::provider::{
-    AuthSchemeV1, BaseUrlSource, CredentialKind, CredentialUpdate, ProviderInstanceWrite, ProxyMode,
-  };
-  use crate::domain::runtime_lifecycle::GrantSubjectKind;
-  use crate::domain::runtime_provider::{ProviderRuntimeKind, ProviderRuntimeState};
-  use crate::services::default_package_activation::DefaultPackageActivationService;
-  use crate::services::providers::ProviderService;
-  use std::sync::Arc;
-
-  fn openai_write(base_url_source: BaseUrlSource, base_url: &str) -> ProviderInstanceWrite {
-    ProviderInstanceWrite {
-      id: None,
-      adapter_id: "openai-compatible".into(),
-      display_name: "OpenAI".into(),
-      base_url: base_url.into(),
-      base_url_source,
-      auth_scheme: AuthSchemeV1::bearer(),
-      credential_kind: CredentialKind::ApiKey,
-      credential: CredentialUpdate::Keep,
-      enabled: true,
-      proxy_mode: ProxyMode::Inherit,
-      insecure_http_confirmed_at: None,
-      expected_updated_at: None,
-    }
-  }
-
-  let (dir, db, packages, wasm) = setup();
-  let vault = Arc::new(MemoryCredentialVault::new());
-  let runtime = ProviderRuntimeService::new(db.clone(), packages.clone(), wasm.clone());
-  let providers = ProviderService::new(db.clone(), vault.clone()).with_runtime_defaults(Arc::new(runtime.clone()));
-
-  let import = packages
-    .bootstrap_bundled_package(OPENAI_COMPATIBLE_PACKAGE, false)
-    .expect("vendor package bootstraps");
-  let digest = import.package_digest().to_string();
-  let activation = DefaultPackageActivationService::create(db.clone(), packages.clone(), dir.path())
-    .with_provider_runtime(runtime.clone());
-  let preview = activation
-    .preview_default_package_activation(&digest)
-    .expect("preview default");
-  activation
-    .authorize_default_plugin_package(AuthorizeDefaultPluginPackageInput {
-      preview_id: preview.preview_id,
-      acknowledge_future_instance_authority: true,
-      acknowledge_unsigned_default_risk: false,
-    })
-    .expect("authorize default");
-
-  // Create package-first pending provider.
-  let created = providers
-    .save(openai_write(BaseUrlSource::PluginDefault, "https://api.openai.com/v1"))
-    .expect("package-first provider create");
-  assert_eq!(created.runtime.runtime_kind, ProviderRuntimeKind::WasmComponent);
-  assert_eq!(created.runtime.state, ProviderRuntimeState::PendingActivation);
-  assert_eq!(created.runtime.package_digest.as_deref(), Some(digest.as_str()));
-  assert!(created.runtime.grant_set_revision.is_none());
-
-  // Activate through the shared coordinator.
-  activation
-    .activate_pending_subject(GrantSubjectKind::ProviderInstance, created.id)
-    .expect("provider package-first activation");
-  let after = providers.get(created.id).expect("provider after activation");
-  assert_eq!(after.runtime.package_digest.as_deref(), Some(digest.as_str()));
-  assert_eq!(after.runtime.runtime_kind, ProviderRuntimeKind::WasmComponent);
-  // Grant may require authority confirmation for provider endpoints; never create a second identity.
-  if after.runtime.grant_set_revision.is_some() {
-    assert_eq!(after.runtime.state, ProviderRuntimeState::Active);
-  }
-
-  // Drift matrix: custom endpoint against authorized default must block create without legacy row.
-  let blocked = providers
-    .save(openai_write(BaseUrlSource::Custom, "https://relay.example.com/v1"))
-    .expect_err("authority expansion must block");
-  assert!(
-    blocked.to_string().contains("authority_expansion_blocked") || blocked.to_string().contains("blocked"),
-    "got {blocked}"
-  );
-
-  // An unrelated adapter has no authorized default package: create fails closed.
-  let unrelated_error = providers
-    .save(ProviderInstanceWrite {
-      id: None,
-      adapter_id: "deepseek".into(),
-      display_name: "DeepSeek".into(),
-      base_url: "https://api.deepseek.com".into(),
-      base_url_source: BaseUrlSource::PluginDefault,
-      auth_scheme: AuthSchemeV1::bearer(),
-      credential_kind: CredentialKind::ApiKey,
-      credential: CredentialUpdate::Keep,
-      enabled: true,
-      proxy_mode: ProxyMode::Inherit,
-      insecure_http_confirmed_at: None,
-      expected_updated_at: None,
-    })
-    .expect_err("unrelated adapter has no default package");
-  assert!(
-    unrelated_error.to_string().contains("default package"),
-    "got {unrelated_error}"
-  );
-
-  // Revoke clears the catalog default: create fails closed with no package grant.
-  packages
-    .revoke_publisher("com.langnext.vendor.keys.1")
-    .expect("revoke vendor publisher");
-  let revoked_error = providers
-    .save(openai_write(BaseUrlSource::PluginDefault, "https://api.openai.com/v1"))
-    .expect_err("create after revoke must fail closed");
-  assert!(
-    revoked_error.to_string().contains("default package"),
-    "got {revoked_error}"
-  );
-}
-
-#[test]
-fn default_package_activation_provider_create_rejects_intermediate_legacy() {
-  use crate::credentials::MemoryCredentialVault;
-  use crate::domain::default_package_activation::AuthorizeDefaultPluginPackageInput;
-  use crate::domain::provider::{
-    AuthSchemeV1, BaseUrlSource, CredentialKind, CredentialUpdate, ProviderInstanceWrite, ProxyMode,
-  };
-  use crate::services::default_package_activation::DefaultPackageActivationService;
-  use crate::services::providers::ProviderService;
-  use std::sync::Arc;
-
-  let (dir, db, packages, wasm) = setup();
-  let vault = Arc::new(MemoryCredentialVault::new());
-  let runtime = ProviderRuntimeService::new(db.clone(), packages.clone(), wasm.clone());
-  let providers = ProviderService::new(db.clone(), vault.clone()).with_runtime_defaults(Arc::new(runtime.clone()));
-  let import = packages
-    .bootstrap_bundled_package(OPENAI_COMPATIBLE_PACKAGE, false)
-    .expect("vendor package bootstraps");
-  let digest = import.package_digest().to_string();
-  let activation = DefaultPackageActivationService::create(db.clone(), packages.clone(), dir.path());
-  let preview = activation
-    .preview_default_package_activation(&digest)
-    .expect("preview default");
-  activation
-    .authorize_default_plugin_package(AuthorizeDefaultPluginPackageInput {
-      preview_id: preview.preview_id,
-      acknowledge_future_instance_authority: true,
-      acknowledge_unsigned_default_risk: false,
-    })
-    .expect("authorize default");
-
-  // Reject any insert of an intermediate legacy-frontend-provider row during package-first create.
-  db.write(|conn| {
-    conn
-      .execute_batch(
-        "CREATE TEMP TRIGGER reject_legacy_frontend_provider_insert
-         BEFORE INSERT ON provider_runtime_bindings
-         WHEN NEW.runtime_kind = 'legacy-frontend-provider'
-         BEGIN
-           SELECT RAISE(ABORT, 'legacy intermediate binding forbidden');
-         END;",
-      )
-      .map_err(|e| crate::error::StorageError::Internal(e.to_string()))?;
-    Ok(())
-  })
-  .unwrap();
-
-  let created = providers
-    .save(ProviderInstanceWrite {
-      id: None,
-      adapter_id: "openai-compatible".into(),
-      display_name: "Direct package-first".into(),
-      base_url: "https://api.openai.com/v1".into(),
-      base_url_source: BaseUrlSource::PluginDefault,
-      auth_scheme: AuthSchemeV1::bearer(),
-      credential_kind: CredentialKind::ApiKey,
-      credential: CredentialUpdate::Keep,
-      enabled: true,
-      proxy_mode: ProxyMode::Inherit,
-      insecure_http_confirmed_at: None,
-      expected_updated_at: None,
-    })
-    .expect("authorized package-first create must insert only the pending package binding");
-  assert_eq!(created.runtime.runtime_kind, ProviderRuntimeKind::WasmComponent);
-  assert_eq!(created.runtime.state, ProviderRuntimeState::PendingActivation);
-  assert_eq!(created.runtime.package_digest.as_deref(), Some(digest.as_str()));
-}
-
-#[test]
-fn default_package_activation_provider_create_rolls_back_on_intent_failure() {
-  use crate::credentials::MemoryCredentialVault;
-  use crate::domain::default_package_activation::AuthorizeDefaultPluginPackageInput;
-  use crate::domain::provider::{
-    AuthSchemeV1, BaseUrlSource, CredentialKind, CredentialUpdate, ProviderInstanceWrite, ProxyMode,
-  };
-  use crate::services::default_package_activation::DefaultPackageActivationService;
-  use crate::services::providers::ProviderService;
-  use std::sync::Arc;
-
-  let (dir, db, packages, wasm) = setup();
-  let vault = Arc::new(MemoryCredentialVault::new());
-  let runtime = ProviderRuntimeService::new(db.clone(), packages.clone(), wasm.clone());
-  let providers = ProviderService::new(db.clone(), vault.clone()).with_runtime_defaults(Arc::new(runtime.clone()));
-  let import = packages
-    .bootstrap_bundled_package(OPENAI_COMPATIBLE_PACKAGE, false)
-    .expect("vendor package bootstraps");
-  let digest = import.package_digest().to_string();
-  let activation = DefaultPackageActivationService::create(db.clone(), packages.clone(), dir.path());
-  let preview = activation
-    .preview_default_package_activation(&digest)
-    .expect("preview default");
-  activation
-    .authorize_default_plugin_package(AuthorizeDefaultPluginPackageInput {
-      preview_id: preview.preview_id,
-      acknowledge_future_instance_authority: true,
-      acknowledge_unsigned_default_risk: false,
-    })
-    .expect("authorize default");
-
-  // Abort intent insertion mid-transaction via a temporary SQLite trigger.
-  db.write(|conn| {
-    conn
-      .execute_batch(
-        "CREATE TEMP TRIGGER abort_default_runtime_activation_intents
-         BEFORE INSERT ON default_runtime_activation_intents
-         BEGIN
-           SELECT RAISE(ABORT, 'injected intent failure');
-         END;",
-      )
-      .map_err(|e| crate::error::StorageError::Internal(e.to_string()))?;
-    Ok(())
-  })
-  .unwrap();
-
-  let before_providers = providers.list().unwrap().len();
-  let err = providers
-    .save(ProviderInstanceWrite {
-      id: None,
-      adapter_id: "openai-compatible".into(),
-      display_name: "Rollback".into(),
-      base_url: "https://api.openai.com/v1".into(),
-      base_url_source: BaseUrlSource::PluginDefault,
-      auth_scheme: AuthSchemeV1::bearer(),
-      credential_kind: CredentialKind::None,
-      credential: CredentialUpdate::Keep,
-      enabled: true,
-      proxy_mode: ProxyMode::Inherit,
-      insecure_http_confirmed_at: None,
-      expected_updated_at: None,
-    })
-    .expect_err("intent failure must roll back create");
-  assert!(!err.to_string().is_empty());
-  assert_eq!(providers.list().unwrap().len(), before_providers);
-  let bindings = db.read(|conn| provider_runtime_bindings::list(conn)).unwrap();
-  assert!(
-    bindings.iter().all(|b| b.provider_id.to_string().len() > 0),
-    "binding list remains consistent"
-  );
-
-  db.write(|conn| {
-    conn
-      .execute_batch("DROP TRIGGER IF EXISTS abort_default_runtime_activation_intents;")
-      .map_err(|e| crate::error::StorageError::Internal(e.to_string()))?;
-    Ok(())
-  })
-  .unwrap();
-}
-
 /// Phase 8 Task 20: the Gemini runtime package reproduces the current TypeScript provider
 /// fixtures through the generic runtime host. The Models guest keeps bounded page traversal
 /// (pageToken) entirely inside itself with named maximum page/item/total and repeated-token
@@ -5658,7 +5093,7 @@ async fn gemini_runtime_component_aggregates_bounded_pages_and_matches_current_f
   );
 
   // The query key and its credential reference must never enter guest data: the committed
-  // fixture literals, the signed package bytes, and the compiled guest artifacts are scanned.
+  // fixture literals, the package archive bytes, and the compiled guest artifacts are scanned.
   for fixture in [
     GEMINI_MODELS_PAGE_1_FIXTURE,
     GEMINI_MODELS_PAGE_2_FIXTURE,
@@ -5678,7 +5113,11 @@ async fn gemini_runtime_component_aggregates_bounded_pages_and_matches_current_f
       "fixture literals must never carry the query key or a credential reference"
     );
   }
-  for guest_bytes in [GEMINI_MODELS_COMPONENT, GEMINI_CHAT_COMPONENT, GEMINI_PACKAGE] {
+  for guest_bytes in [
+    GEMINI_MODELS_COMPONENT,
+    GEMINI_CHAT_COMPONENT,
+    builtin_archive_bytes(GEMINI_ARCHIVE).as_slice(),
+  ] {
     assert!(
       !guest_bytes
         .windows(GEMINI_TEST_SECRET.len())
@@ -5865,7 +5304,7 @@ async fn gemini_runtime_component_aggregates_bounded_pages_and_matches_current_f
 
   async fn run_chat_case(
     db: &Database,
-    packages: PluginPackageService,
+    catalog: Arc<PluginCatalog>,
     wasm: Arc<WasmRuntime>,
     provider_model_id: uuid::Uuid,
     vault: Arc<MemoryCredentialVault>,
@@ -5874,7 +5313,7 @@ async fn gemini_runtime_component_aggregates_bounded_pages_and_matches_current_f
     request: LlmChatRequest,
     expected_error: Option<CapabilityErrorCode>,
   ) -> Result<crate::domain::runtime_provider::LlmChatCompleteResult, CapabilityError> {
-    let router = ProviderRuntimeRouter::new(db.clone(), packages, wasm, broker_factory_for(db, vault, transport));
+    let router = ProviderRuntimeRouter::new(db.clone(), catalog, wasm, broker_factory_for(db, vault, transport));
     let outcome = router
       .chat(
         provider_model_id,
@@ -5913,9 +5352,9 @@ async fn gemini_runtime_component_aggregates_bounded_pages_and_matches_current_f
     outcome
   }
 
-  let (_dir, db, packages, wasm) = setup();
+  let (_dir, db, catalog, wasm) = setup();
   let vault = Arc::new(MemoryCredentialVault::new());
-  let package_digest = install(&packages, GEMINI_PACKAGE);
+  let package_digest = install(&catalog, FixtureSource::Committed(GEMINI_ARCHIVE, GEMINI_PLUGIN_ID));
   let provider_id = crate::domain::time::new_id();
   insert_provider_row_with(
     &db,
@@ -5928,7 +5367,7 @@ async fn gemini_runtime_component_aggregates_bounded_pages_and_matches_current_f
     vault.as_ref(),
     Some(GEMINI_TEST_SECRET),
   );
-  let lifecycle = ProviderRuntimeService::new(db.clone(), packages.clone(), wasm.clone());
+  let lifecycle = ProviderRuntimeService::new(db.clone(), catalog.clone(), wasm.clone());
   attach_provider_default_package(&lifecycle, &db, provider_id, &package_digest);
   let model_id = insert_fixture_model(&db, provider_id, "gemini-2.0-flash");
 
@@ -5944,7 +5383,7 @@ async fn gemini_runtime_component_aggregates_bounded_pages_and_matches_current_f
     });
     let router = ProviderRuntimeRouter::new(
       db.clone(),
-      packages.clone(),
+      catalog.clone(),
       wasm.clone(),
       broker_factory_for(&db, vault.clone(), transport),
     );
@@ -6001,7 +5440,7 @@ async fn gemini_runtime_component_aggregates_bounded_pages_and_matches_current_f
     });
     let router = ProviderRuntimeRouter::new(
       db.clone(),
-      packages.clone(),
+      catalog.clone(),
       wasm.clone(),
       broker_factory_for(&db, vault.clone(), transport),
     );
@@ -6050,7 +5489,7 @@ async fn gemini_runtime_component_aggregates_bounded_pages_and_matches_current_f
     });
     let router = ProviderRuntimeRouter::new(
       db.clone(),
-      packages.clone(),
+      catalog.clone(),
       wasm.clone(),
       broker_factory_for(&db, vault.clone(), transport),
     );
@@ -6090,7 +5529,7 @@ async fn gemini_runtime_component_aggregates_bounded_pages_and_matches_current_f
     let transport = recording_transport(requests.clone(), 200, "application/json", GEMINI_CHAT_COMPLETE_FIXTURE);
     let complete = run_chat_case(
       &db,
-      packages.clone(),
+      catalog.clone(),
       wasm.clone(),
       model_id,
       vault.clone(),
@@ -6140,7 +5579,7 @@ async fn gemini_runtime_component_aggregates_bounded_pages_and_matches_current_f
     request.images = vec![FIXED_PNG.to_vec()];
     let complete = run_chat_case(
       &db,
-      packages.clone(),
+      catalog.clone(),
       wasm.clone(),
       model_id,
       vault.clone(),
@@ -6184,7 +5623,7 @@ async fn gemini_runtime_component_aggregates_bounded_pages_and_matches_current_f
     });
     let router = ProviderRuntimeRouter::new(
       db.clone(),
-      packages.clone(),
+      catalog.clone(),
       wasm.clone(),
       broker_factory_for(&db, vault.clone(), transport),
     );
@@ -6250,7 +5689,7 @@ async fn gemini_runtime_component_aggregates_bounded_pages_and_matches_current_f
     let transport = recording_transport(requests.clone(), 200, "application/json", GEMINI_MALFORMED_BODY);
     let _ = run_chat_case(
       &db,
-      packages.clone(),
+      catalog.clone(),
       wasm.clone(),
       model_id,
       vault.clone(),
@@ -6270,7 +5709,7 @@ async fn gemini_runtime_component_aggregates_bounded_pages_and_matches_current_f
     let transport = recording_transport(requests.clone(), 429, "application/json", GEMINI_RATE_LIMITED_BODY);
     let _ = run_chat_case(
       &db,
-      packages.clone(),
+      catalog.clone(),
       wasm.clone(),
       model_id,
       vault.clone(),
@@ -6287,7 +5726,7 @@ async fn gemini_runtime_component_aggregates_bounded_pages_and_matches_current_f
     let transport = recording_transport(requests.clone(), 200, "application/json", r#"{"candidates":[]}"#);
     let _ = run_chat_case(
       &db,
-      packages.clone(),
+      catalog.clone(),
       wasm.clone(),
       model_id,
       vault.clone(),
@@ -6306,7 +5745,7 @@ async fn gemini_runtime_component_aggregates_bounded_pages_and_matches_current_f
     });
     let router = ProviderRuntimeRouter::new(
       db.clone(),
-      packages.clone(),
+      catalog.clone(),
       wasm.clone(),
       broker_factory_for(&db, vault.clone(), transport),
     );
@@ -6412,7 +5851,7 @@ async fn deepseek_runtime_component_matches_current_provider_and_detection_polic
   );
 
   // The bearer secret and its credential reference must never enter guest data: the
-  // committed fixture literals, the signed package bytes, and the compiled guests are scanned.
+  // committed fixture literals, the package archive bytes, and the compiled guests are scanned.
   for fixture in [
     DEEPSEEK_MODELS_FIXTURE,
     DEEPSEEK_CHAT_COMPLETE_FIXTURE,
@@ -6429,7 +5868,11 @@ async fn deepseek_runtime_component_matches_current_provider_and_detection_polic
       "fixture literals must never carry the API key or a credential reference"
     );
   }
-  for guest_bytes in [DEEPSEEK_MODELS_COMPONENT, DEEPSEEK_CHAT_COMPONENT, DEEPSEEK_PACKAGE] {
+  for guest_bytes in [
+    DEEPSEEK_MODELS_COMPONENT,
+    DEEPSEEK_CHAT_COMPONENT,
+    builtin_archive_bytes(DEEPSEEK_ARCHIVE).as_slice(),
+  ] {
     assert!(
       !guest_bytes
         .windows(DEEPSEEK_TEST_SECRET.len())
@@ -6579,7 +6022,7 @@ async fn deepseek_runtime_component_matches_current_provider_and_detection_polic
 
   async fn run_chat_case(
     db: &Database,
-    packages: PluginPackageService,
+    catalog: Arc<PluginCatalog>,
     wasm: Arc<WasmRuntime>,
     provider_model_id: uuid::Uuid,
     vault: Arc<MemoryCredentialVault>,
@@ -6588,7 +6031,7 @@ async fn deepseek_runtime_component_matches_current_provider_and_detection_polic
     request: LlmChatRequest,
     expected_error: Option<CapabilityErrorCode>,
   ) -> Result<crate::domain::runtime_provider::LlmChatCompleteResult, CapabilityError> {
-    let router = ProviderRuntimeRouter::new(db.clone(), packages, wasm, broker_factory_for(db, vault, transport));
+    let router = ProviderRuntimeRouter::new(db.clone(), catalog, wasm, broker_factory_for(db, vault, transport));
     let outcome = router
       .chat(
         provider_model_id,
@@ -6627,9 +6070,9 @@ async fn deepseek_runtime_component_matches_current_provider_and_detection_polic
     outcome
   }
 
-  let (_dir, db, packages, wasm) = setup();
+  let (_dir, db, catalog, wasm) = setup();
   let vault = Arc::new(MemoryCredentialVault::new());
-  let package_digest = install(&packages, DEEPSEEK_PACKAGE);
+  let package_digest = install(&catalog, FixtureSource::Committed(DEEPSEEK_ARCHIVE, DEEPSEEK_PLUGIN_ID));
   let provider_id = crate::domain::time::new_id();
   insert_provider_row_with(
     &db,
@@ -6642,14 +6085,14 @@ async fn deepseek_runtime_component_matches_current_provider_and_detection_polic
     vault.as_ref(),
     Some(DEEPSEEK_TEST_SECRET),
   );
-  let lifecycle = ProviderRuntimeService::new(db.clone(), packages.clone(), wasm.clone());
+  let lifecycle = ProviderRuntimeService::new(db.clone(), catalog.clone(), wasm.clone());
   attach_provider_default_package(&lifecycle, &db, provider_id, &package_digest);
   let model_id = insert_fixture_model(&db, provider_id, "deepseek-chat");
 
   // 0) The catalog projects the bounded host-interpreted DeepSeek detection metadata
   // (thinking disabled with the raised 2048-token budget) — never guest workflow authority.
   {
-    let catalog = ProviderRuntimeCatalog::new(db.clone(), packages.clone(), wasm.clone());
+    let catalog = ProviderRuntimeCatalog::new(db.clone(), catalog.clone(), wasm.clone());
     let entries = catalog.list().unwrap();
     let entry = entries
       .iter()
@@ -6667,7 +6110,7 @@ async fn deepseek_runtime_component_matches_current_provider_and_detection_polic
     let transport = recording_transport(requests.clone(), 200, "application/json", DEEPSEEK_MODELS_FIXTURE);
     let router = ProviderRuntimeRouter::new(
       db.clone(),
-      packages.clone(),
+      catalog.clone(),
       wasm.clone(),
       broker_factory_for(&db, vault.clone(), transport),
     );
@@ -6717,7 +6160,7 @@ async fn deepseek_runtime_component_matches_current_provider_and_detection_polic
     );
     let complete = run_chat_case(
       &db,
-      packages.clone(),
+      catalog.clone(),
       wasm.clone(),
       model_id,
       vault.clone(),
@@ -6776,7 +6219,7 @@ async fn deepseek_runtime_component_matches_current_provider_and_detection_polic
     request.preferences.max_tokens = None;
     let _ = run_chat_case(
       &db,
-      packages.clone(),
+      catalog.clone(),
       wasm.clone(),
       model_id,
       vault.clone(),
@@ -6815,7 +6258,7 @@ async fn deepseek_runtime_component_matches_current_provider_and_detection_polic
     });
     let router = ProviderRuntimeRouter::new(
       db.clone(),
-      packages.clone(),
+      catalog.clone(),
       wasm.clone(),
       broker_factory_for(&db, vault.clone(), transport),
     );
@@ -6885,7 +6328,7 @@ async fn deepseek_runtime_component_matches_current_provider_and_detection_polic
     request.images = vec![FIXED_PNG.to_vec()];
     let complete = run_chat_case(
       &db,
-      packages.clone(),
+      catalog.clone(),
       wasm.clone(),
       model_id,
       vault.clone(),
@@ -6925,7 +6368,7 @@ async fn deepseek_runtime_component_matches_current_provider_and_detection_polic
     let transport = recording_transport(requests.clone(), 200, "application/json", DEEPSEEK_MALFORMED_BODY);
     let _ = run_chat_case(
       &db,
-      packages.clone(),
+      catalog.clone(),
       wasm.clone(),
       model_id,
       vault.clone(),
@@ -6945,7 +6388,7 @@ async fn deepseek_runtime_component_matches_current_provider_and_detection_polic
     let transport = recording_transport(requests.clone(), 429, "application/json", DEEPSEEK_RATE_LIMITED_BODY);
     let _ = run_chat_case(
       &db,
-      packages.clone(),
+      catalog.clone(),
       wasm.clone(),
       model_id,
       vault.clone(),
@@ -6962,7 +6405,7 @@ async fn deepseek_runtime_component_matches_current_provider_and_detection_polic
     let transport = recording_transport(requests.clone(), 200, "application/json", r#"{"choices":[]}"#);
     let _ = run_chat_case(
       &db,
-      packages.clone(),
+      catalog.clone(),
       wasm.clone(),
       model_id,
       vault.clone(),
@@ -6998,7 +6441,7 @@ async fn deepseek_runtime_component_matches_current_provider_and_detection_polic
       })
       .expect("deepseek rollback applies");
     // The source adapter never had a package binding, so rollback restores the absent
-    // binding (legacy identity), not a fabricated Wasm row. The provider row itself is
+    // binding (absent identity), not a fabricated Wasm row. The provider row itself is
     // untouched by the lifecycle.
     let binding = db
       .read(|conn| provider_runtime_bindings::get_optional(conn, provider_id, "deepseek"))
@@ -7012,7 +6455,7 @@ async fn deepseek_runtime_component_matches_current_provider_and_detection_polic
 }
 
 /// Phase 8 headless smoke: one end-to-end pass over the manual-validation checklist using the
-/// real dev-signed OpenAI Compatible product package and a capture transport. Gated by
+/// real committed OpenAI Compatible product package and a capture transport. Gated by
 /// `RUN_RUNTIME_PROVIDER_SMOKE=1` (see `.mise/tasks/smoke/runtime-providers`). Live
 /// provider-account steps (real network, UI fallback reset, manual log inspection) are never
 /// replaced by fixtures; this test proves every fixture-backed path in one sequence.
@@ -7215,7 +6658,7 @@ async fn runtime_provider_smoke_end_to_end() {
 
   fn make_router(
     db: &Database,
-    packages: PluginPackageService,
+    catalog: Arc<PluginCatalog>,
     wasm: Arc<WasmRuntime>,
     vault: Arc<MemoryCredentialVault>,
     transport: Arc<dyn RawHttpTransport>,
@@ -7233,44 +6676,23 @@ async fn runtime_provider_smoke_end_to_end() {
         ))
       }
     });
-    ProviderRuntimeRouter::new(db.clone(), packages, wasm, broker_factory)
+    ProviderRuntimeRouter::new(db.clone(), catalog, wasm, broker_factory)
   }
 
-  let (_dir, db, packages, wasm) = setup();
+  let (_dir, db, catalog, wasm) = setup();
   let vault = Arc::new(MemoryCredentialVault::new());
-  let runtime = ProviderRuntimeService::new(db.clone(), packages.clone(), wasm.clone());
+  let runtime = ProviderRuntimeService::new(db.clone(), catalog.clone(), wasm.clone());
   let providers = ProviderService::new(db.clone(), vault.clone()).with_runtime_defaults(Arc::new(runtime.clone()));
 
-  // [1] Manual item 1: a matching Provider created before the reviewed default resolves stays
-  // legacy; a new matching Provider receives the exact default package/grant.
-  let preexisting = providers.save(provider_write()).expect("pre-existing provider create");
-  assert_eq!(
-    preexisting.runtime.runtime_kind,
-    ProviderRuntimeKind::WasmComponent,
-    "pre-existing provider stays legacy"
+  // [1] Manual item 1: the catalog default binds a newly created matching Provider with the
+  // exact digest (pending activation, no grant); an existing provider row is never re-pointed
+  // by a catalog default change.
+  let product_digest = install(
+    &catalog,
+    FixtureSource::Committed(OPENAI_COMPATIBLE_ARCHIVE, OPENAI_COMPATIBLE_PLUGIN_ID),
   );
-  let import = packages
-    .bootstrap_bundled_package(OPENAI_COMPATIBLE_PACKAGE, false)
-    .expect("vendor fixture bootstraps");
-  let product_digest = import.package_digest().to_string();
-  let activation = crate::services::default_package_activation::DefaultPackageActivationService::create(
-    db.clone(),
-    packages.clone(),
-    _dir.path(),
-  )
-  .with_provider_runtime(runtime.clone());
-  let preview = activation
-    .preview_default_package_activation(&product_digest)
-    .expect("preview default");
-  activation
-    .authorize_default_plugin_package(
-      crate::domain::default_package_activation::AuthorizeDefaultPluginPackageInput {
-        preview_id: preview.preview_id,
-        acknowledge_future_instance_authority: true,
-        acknowledge_unsigned_default_risk: false,
-      },
-    )
-    .expect("authorize default package");
+  let preexisting_id = crate::domain::time::new_id();
+  insert_provider_row(&db, preexisting_id, "Pre-existing Provider", None, vault.as_ref(), None);
   let matching = providers.save(provider_write()).expect("new matching provider create");
   assert_eq!(matching.runtime.runtime_kind, ProviderRuntimeKind::WasmComponent);
   assert_eq!(matching.runtime.state, ProviderRuntimeState::PendingActivation);
@@ -7278,30 +6700,37 @@ async fn runtime_provider_smoke_end_to_end() {
     matching.runtime.package_digest.as_deref(),
     Some(product_digest.as_str())
   );
-  activation
-    .activate_pending_subject(GrantSubjectKind::ProviderInstance, matching.id)
-    .expect("activate package-first provider");
+  assert!(
+    matching.runtime.grant_set_revision.is_none(),
+    "catalog-default create retains the exact digest without a grant until activation"
+  );
+  runtime
+    .activate_with_catalog_default(matching.id, "openai-compatible")
+    .expect("activate catalog-default provider");
   let matching = providers.get(matching.id).expect("provider after activation");
-  // Activation may require subject authority confirmation; never create a second identity.
-  if matching.runtime.grant_set_revision.is_some() {
-    assert_eq!(matching.runtime.state, ProviderRuntimeState::Active);
-    let grant = db
-      .read(|conn| {
-        plugin_permission_grants::get_for_subject_package_revision(
-          conn,
-          GrantSubjectKind::ProviderInstance,
-          matching.id,
-          &product_digest,
-          matching.runtime.grant_set_revision.expect("grant revision"),
-        )
-      })
-      .expect("new provider grant");
-    assert_eq!(
-      grant.subject_id, matching.id,
-      "grant subject is exactly the new provider"
-    );
-  }
-  println!("SMOKE ok: authorized default applies only to the new matching provider; pre-existing stays legacy");
+  assert_eq!(matching.runtime.state, ProviderRuntimeState::Active);
+  let grant = db
+    .read(|conn| {
+      plugin_permission_grants::get_for_subject_package_revision(
+        conn,
+        GrantSubjectKind::ProviderInstance,
+        matching.id,
+        &product_digest,
+        matching.runtime.grant_set_revision.expect("grant revision"),
+      )
+    })
+    .expect("new provider grant");
+  assert_eq!(
+    grant.subject_id, matching.id,
+    "grant subject is exactly the new provider"
+  );
+  assert!(
+    db.read(|conn| provider_runtime_bindings::get_optional(conn, preexisting_id, "openai-compatible"))
+      .unwrap()
+      .is_none(),
+    "an existing provider is never re-pointed by a catalog default"
+  );
+  println!("SMOKE ok: catalog default binds only the new matching provider; existing rows are untouched");
 
   // The host-owned credential is stored through the real Provider save path (create → enter
   // API key), exactly like the manual walkthrough; the runtime binding is untouched.
@@ -7333,7 +6762,7 @@ async fn runtime_provider_smoke_end_to_end() {
       uow.conn(),
       &crate::domain::model::ProviderModel {
         id: fixed_model_id,
-        provider_instance_id: preexisting.id,
+        provider_instance_id: preexisting_id,
         model_key: "smoke-model".into(),
         source: crate::domain::model::ModelSource::Manual,
         remote_display_name: None,
@@ -7355,10 +6784,18 @@ async fn runtime_provider_smoke_end_to_end() {
 
   // [2] Manual item 2: explicit preview + acknowledged apply on an existing Provider. The
   // product package is already active on `matching` (one package binds one provider), so the
-  // explicit lifecycle is exercised with the committed conformance package (same legacy alias,
-  // distinct digest) on the pre-existing Provider.
-  let conformance_digest = install(&packages, LLM_PROVIDER_PACKAGE);
-  let preview = preview_provider_default_attach(&runtime, &db, preexisting.id, &conformance_digest);
+  // explicit lifecycle is exercised with the conformance package (same legacy alias, distinct
+  // digest) installed as user content on the pre-existing Provider.
+  let (conformance_manifest, conformance_payloads) = conformance_llm_fixture();
+  let conformance_archive = write_fixture_archive(
+    _dir.path(),
+    &conformance_manifest,
+    &conformance_payloads,
+    "conformance-llm-provider",
+  );
+  let conformance_digest = install_user_archive(&user_store(db.clone(), _dir.path()), &conformance_archive);
+  catalog.refresh().expect("catalog refreshes after user install");
+  let preview = preview_provider_default_attach(&runtime, &db, preexisting_id, &conformance_digest);
   assert!(preview.requires_permission_approval);
   let applied = apply_acknowledged_interface_attach(&runtime, preview.preview_id).expect("apply succeeds");
   assert_eq!(applied.binding.runtime_kind, ProviderRuntimeKind::WasmComponent);
@@ -7378,7 +6815,7 @@ async fn runtime_provider_smoke_end_to_end() {
       "application/json",
       OPENAI_COMPATIBLE_MODELS_FIXTURE,
     );
-    let router = make_router(&db, packages.clone(), wasm.clone(), vault.clone(), transport);
+    let router = make_router(&db, catalog.clone(), wasm.clone(), vault.clone(), transport);
     let result = router
       .list_models(
         matching.id,
@@ -7421,7 +6858,7 @@ async fn runtime_provider_smoke_end_to_end() {
     let mut request = unary_request();
     request.messages[1].content = SMOKE_PROMPT.into();
     request.images = vec![FIXED_PNG.to_vec()];
-    let router = make_router(&db, packages.clone(), wasm.clone(), vault.clone(), transport);
+    let router = make_router(&db, catalog.clone(), wasm.clone(), vault.clone(), transport);
     let complete = router
       .chat(
         model_id,
@@ -7476,7 +6913,7 @@ async fn runtime_provider_smoke_end_to_end() {
       requests: requests.clone(),
       sse: OPENAI_COMPATIBLE_CHAT_STREAM_SSE,
     });
-    let router = make_router(&db, packages.clone(), wasm.clone(), vault.clone(), transport);
+    let router = make_router(&db, catalog.clone(), wasm.clone(), vault.clone(), transport);
     let sessions = Arc::new(RequestSessionRegistry::new());
     let events = Arc::new(Mutex::new(Vec::<ProviderRuntimeChatEvent>::new()));
     let sink = events.clone();
@@ -7517,7 +6954,7 @@ async fn runtime_provider_smoke_end_to_end() {
     let transport = Arc::new(ParkingTransport {
       requests: requests.clone(),
     });
-    let router = make_router(&db, packages.clone(), wasm.clone(), vault.clone(), transport);
+    let router = make_router(&db, catalog.clone(), wasm.clone(), vault.clone(), transport);
     let sessions = Arc::new(RequestSessionRegistry::new());
     let request_id = "smoke-chat-stream-block";
     let sessions_for_task = sessions.clone();
@@ -7577,37 +7014,7 @@ async fn runtime_provider_smoke_end_to_end() {
     println!("SMOKE ok: cancellation stops guest/broker work with no second request");
   }
 
-  // [7] Manual item 5: rollback restores the exact legacy binding; provider/model IDs unchanged.
-  // A default-bound Provider has no explicit lifecycle snapshot (the reviewed default is not a
-  // user action), so rollback is not offered there; the explicitly migrated Provider rolls back
-  // atomically to legacy.
-  assert!(
-    runtime.preview_rollback(matching.id).is_err(),
-    "default-bound provider has no rollback snapshot"
-  );
-  let rollback_preview = runtime.preview_rollback(preexisting.id).expect("rollback preview");
-  let rolled_back = runtime
-    .apply_rollback(ApplyProviderRuntimeRollbackInput {
-      preview_id: rollback_preview.preview_id,
-    })
-    .expect("rollback applies");
-  assert_eq!(rolled_back.runtime.runtime_kind, ProviderRuntimeKind::WasmComponent);
-  assert!(rolled_back.runtime.package_digest.is_none());
-  let binding = db
-    .read(|conn| provider_runtime_bindings::get(conn, preexisting.id, "openai-compatible"))
-    .unwrap();
-  assert_eq!(binding.runtime_kind, ProviderRuntimeKind::WasmComponent);
-  assert_eq!(binding.state, ProviderRuntimeState::Active);
-  let provider_after = providers.get(preexisting.id).expect("provider survives rollback");
-  assert_eq!(provider_after.id, preexisting.id, "provider UUID unchanged");
-  let model_after = db
-    .read(|conn| crate::repositories::provider_models::get(conn, fixed_model_id))
-    .unwrap();
-  assert_eq!(model_after.id, fixed_model_id, "model UUID unchanged");
-  assert_eq!(model_after.provider_instance_id, preexisting.id);
-  println!("SMOKE ok: rollback restores legacy identity without changing provider/model UUIDs");
-
-  // [8] Manual item 6: privacy scan across export, DTO, and error surfaces.
+  // [7] Manual item 6: privacy scan across export, DTO, and error surfaces.
   {
     let export = crate::services::ImportExportService::new(db.clone(), vault.clone(), None)
       .export()
@@ -7623,7 +7030,10 @@ async fn runtime_provider_smoke_end_to_end() {
     ] {
       assert!(!json.contains(forbidden), "export leaks {forbidden:?}");
     }
-    let provider_json = serde_json::to_string(&provider_after).unwrap();
+    let provider_dto = crate::services::providers::ProviderService::new(db.clone(), vault.clone())
+      .get(matching.id)
+      .expect("provider DTO");
+    let provider_json = serde_json::to_string(&provider_dto).unwrap();
     for forbidden in ["credentialRef", "provider/", SMOKE_SECRET, SMOKE_PROMPT] {
       assert!(!provider_json.contains(forbidden), "provider DTO leaks {forbidden:?}");
     }
@@ -7635,7 +7045,7 @@ async fn runtime_provider_smoke_end_to_end() {
       "application/json",
       OPENAI_COMPATIBLE_MALFORMED_BODY,
     );
-    let router = make_router(&db, packages.clone(), wasm.clone(), vault.clone(), transport);
+    let router = make_router(&db, catalog.clone(), wasm.clone(), vault.clone(), transport);
     let mut request = stream_request();
     request.messages[1].content = SMOKE_PROMPT.into();
     let outcome = router
@@ -7665,19 +7075,52 @@ async fn runtime_provider_smoke_end_to_end() {
     println!("SMOKE ok: export, DTO, and error surfaces expose no credential, reference, prompt, or image");
   }
 
+  // [8] Manual item 5: rollback restores the pre-attach identity; provider/model IDs unchanged.
+  // A catalog-default Provider has no explicit lifecycle snapshot (the default is not a user
+  // action), so rollback is not offered there; the explicitly attached Provider rolls back
+  // atomically to "no binding".
+  assert!(
+    runtime.preview_rollback(matching.id).is_err(),
+    "catalog-default provider has no rollback snapshot"
+  );
+  let rollback_preview = runtime.preview_rollback(preexisting_id).expect("rollback preview");
+  let rolled_back = runtime
+    .apply_rollback(ApplyProviderRuntimeRollbackInput {
+      preview_id: rollback_preview.preview_id,
+    })
+    .expect("rollback applies");
+  assert_eq!(rolled_back.runtime.runtime_kind, ProviderRuntimeKind::WasmComponent);
+  assert!(rolled_back.runtime.package_digest.is_none());
+  assert!(
+    db.read(|conn| provider_runtime_bindings::get_optional(conn, preexisting_id, "openai-compatible"))
+      .unwrap()
+      .is_none(),
+    "rollback removes the binding row for a never-attached API type"
+  );
+  let provider_after = db
+    .read(|conn| provider_instances::get(conn, preexisting_id))
+    .expect("provider survives rollback");
+  assert_eq!(provider_after.id, preexisting_id, "provider UUID unchanged");
+  let model_after = db
+    .read(|conn| crate::repositories::provider_models::get(conn, fixed_model_id))
+    .unwrap();
+  assert_eq!(model_after.id, fixed_model_id, "model UUID unchanged");
+  assert_eq!(model_after.provider_instance_id, preexisting_id);
+  println!("SMOKE ok: rollback restores the pre-attach identity without changing provider/model UUIDs");
+
   println!(
     "SMOKE PASS: runtime-provider headless walkthrough completed (default/lifecycle/models/chat/stream/cancel/rollback/privacy)"
   );
 }
 
-/// Phase 8 multi-interface: one Provider approves TWO distinct API types from TWO signed
+/// Phase 8 multi-interface: one Provider approves TWO distinct API types from TWO catalog
 /// packages, plus a second declared alias of the first package. Each binding is an
 /// independent adapter-keyed row; aliases of the same Provider/package share the exact grant
 /// revision while different packages hold separate grants. Rejection cases (undeclared
 /// adapter, already-attached API type, missing acknowledgement, stale preview CAS) are
 /// atomic. Detach keeps a shared grant while another alias is active and releases it only
 /// after the final reference (active row or undiscarded snapshot) disappears; package
-/// uninstall stays denied while any active binding or undiscarded snapshot references it.
+/// removal stays denied while any active binding or undiscarded snapshot references it.
 #[test]
 fn runtime_provider_can_attach_two_interface_packages() {
   use crate::credentials::MemoryCredentialVault;
@@ -7688,11 +7131,11 @@ fn runtime_provider_can_attach_two_interface_packages() {
     ProviderRuntimeState,
   };
 
-  let (_dir, db, packages, wasm) = setup();
+  let (_dir, db, catalog, wasm) = setup();
   let vault = Arc::new(MemoryCredentialVault::new());
 
-  // Package P1 declares two aliases (openai-compatible + openai-responses); package P2 is
-  // the gemini vendor package. Both are installed through the real verifier.
+  // Package P1 declares two aliases (openai-compatible + openai-responses) and is installed
+  // as user content; package P2 is the gemini built-in fixture package.
   let mut p1_manifest = provider_runtime_manifest(
     valid_declaration(),
     &[("llm.models.list@1", MODELS_ARTIFACT), ("llm.chat@1", CHAT_ARTIFACT)],
@@ -7701,29 +7144,30 @@ fn runtime_provider_can_attach_two_interface_packages() {
       (CHAT_ARTIFACT, LLM_CHAT_COMPONENT),
     ],
   );
-  p1_manifest.id = "com.langnext.provider.openai-compatible".into();
+  p1_manifest.id = "com.example.provider.openai-multi-alias".into();
   p1_manifest.version = "1.0.0".into();
   if let Some(declaration) = p1_manifest.provider_runtime.as_mut() {
     declaration.legacy_aliases = vec!["openai-compatible".into(), "openai-responses".into()];
   }
-  let p1_digest = install(
-    &packages,
-    &vendor_signed_package(
-      &p1_manifest,
-      &[
-        (MODELS_ARTIFACT, LLM_MODELS_COMPONENT),
-        (CHAT_ARTIFACT, LLM_CHAT_COMPONENT),
-      ],
-    ),
+  let p1_archive = write_fixture_archive(
+    _dir.path(),
+    &p1_manifest,
+    &[
+      (MODELS_ARTIFACT.to_string(), LLM_MODELS_COMPONENT.to_vec()),
+      (CHAT_ARTIFACT.to_string(), LLM_CHAT_COMPONENT.to_vec()),
+    ],
+    "openai-compatible-user",
   );
+  let p1_digest = install_user_archive(&user_store(db.clone(), _dir.path()), &p1_archive);
+  catalog.refresh().expect("catalog refreshes after user install");
 
   let gemini = gemini_manifest(&[
     (MODELS_ARTIFACT, LLM_MODELS_COMPONENT),
     (CHAT_ARTIFACT, LLM_CHAT_COMPONENT),
   ]);
   let p2_digest = install(
-    &packages,
-    &vendor_signed_package(
+    &catalog,
+    FixtureSource::Manifest(
       &gemini,
       &[
         (MODELS_ARTIFACT, LLM_MODELS_COMPONENT),
@@ -7738,7 +7182,7 @@ fn runtime_provider_can_attach_two_interface_packages() {
   for (id, name) in [(provider_a, "Provider A"), (provider_b, "Provider B")] {
     insert_provider_row(&db, id, name, None, vault.as_ref(), None);
   }
-  let lifecycle = ProviderRuntimeService::new(db.clone(), packages.clone(), wasm);
+  let lifecycle = ProviderRuntimeService::new(db.clone(), catalog.clone(), wasm);
 
   // --- Attach both interfaces to provider A. ---
   let attach = |provider_id: Uuid, adapter_id: &str, digest: &str| {
@@ -7801,7 +7245,7 @@ fn runtime_provider_can_attach_two_interface_packages() {
     .unwrap();
   assert_eq!(grant_count, 2, "one exact grant per active Provider/package");
 
-  // --- The same two packages attach to a second Provider with separate grants. ---
+  // --- The same two catalog packages attach to a second Provider with separate grants. ---
   let attached_b = attach(provider_b, "gemini", &p2_digest);
   assert_eq!(attached_b.binding.grant_set_revision, Some(1));
   let b_grant_subjects: Vec<String> = db
@@ -7953,11 +7397,13 @@ fn runtime_provider_can_attach_two_interface_packages() {
     "shared P1 grant survives while the openai-compatible alias stays active"
   );
 
-  // Package uninstall is denied while any active binding or undiscarded snapshot references it.
-  let err = packages.uninstall_version(&p1_digest).unwrap_err();
+  // Package removal is denied while any active binding or undiscarded snapshot references it.
+  let err = user_store(db.clone(), _dir.path())
+    .remove_user_archive(&p1_digest)
+    .unwrap_err();
   assert!(
     matches!(err, crate::error::StorageError::InUse(_)),
-    "uninstall while bound: {err:?}"
+    "remove while bound: {err:?}"
   );
 
   // --- Detach the final alias: the grant is retained by the undiscarded snapshot. ---
@@ -8083,7 +7529,7 @@ async fn runtime_provider_routes_by_persisted_model_interface() {
   use std::collections::HashMap;
   use std::pin::Pin;
 
-  let (_dir, db, packages, wasm) = setup();
+  let (_dir, db, catalog, wasm) = setup();
   let vault = Arc::new(MemoryCredentialVault::new());
 
   let mut p1_manifest = provider_runtime_manifest(
@@ -8096,8 +7542,8 @@ async fn runtime_provider_routes_by_persisted_model_interface() {
   );
   p1_manifest.id = "com.langnext.provider.openai-compatible".into();
   let p1_digest = install(
-    &packages,
-    &vendor_signed_package(
+    &catalog,
+    FixtureSource::Manifest(
       &p1_manifest,
       &[
         (MODELS_ARTIFACT, LLM_MODELS_COMPONENT),
@@ -8110,8 +7556,8 @@ async fn runtime_provider_routes_by_persisted_model_interface() {
     (CHAT_ARTIFACT, LLM_CHAT_COMPONENT),
   ]);
   let p2_digest = install(
-    &packages,
-    &vendor_signed_package(
+    &catalog,
+    FixtureSource::Manifest(
       &gemini,
       &[
         (MODELS_ARTIFACT, LLM_MODELS_COMPONENT),
@@ -8131,7 +7577,7 @@ async fn runtime_provider_routes_by_persisted_model_interface() {
     Some("sk-test-provider-secret"),
   );
   insert_provider_row(&db, provider_b, "Provider B", None, vault.as_ref(), None);
-  let lifecycle = ProviderRuntimeService::new(db.clone(), packages.clone(), wasm.clone());
+  let lifecycle = ProviderRuntimeService::new(db.clone(), catalog.clone(), wasm.clone());
   for (provider_id, adapter_id, digest) in [
     (provider_a, "openai-compatible", p1_digest.clone()),
     (provider_a, "gemini", p2_digest.clone()),
@@ -8244,7 +7690,7 @@ async fn runtime_provider_routes_by_persisted_model_interface() {
       ))
     }
   });
-  let router = ProviderRuntimeRouter::new(db.clone(), packages.clone(), wasm.clone(), broker_factory);
+  let router = ProviderRuntimeRouter::new(db.clone(), catalog.clone(), wasm.clone(), broker_factory);
 
   // Models List per API type resolves the matching binding.
   router
@@ -8393,11 +7839,10 @@ fn runtime_provider_multi_interface_model_sync() {
   };
   use crate::services::ModelService;
 
-  let (_dir, db, packages, wasm) = setup();
+  let (_dir, db, catalog, wasm) = setup();
   let vault = Arc::new(MemoryCredentialVault::new());
-  let (provider_id, _) =
-    activate_fixture_provider(&db, packages.clone(), wasm.clone(), "Sync Provider", vault.as_ref());
-  let lifecycle = ProviderRuntimeService::new(db.clone(), packages.clone(), wasm.clone());
+  let (provider_id, _) = activate_fixture_provider(&db, catalog.clone(), wasm.clone(), "Sync Provider", vault.as_ref());
+  let lifecycle = ProviderRuntimeService::new(db.clone(), catalog.clone(), wasm.clone());
 
   // Attach a second interface (gemini) so the Provider owns two active API types.
   let gemini = gemini_manifest(&[
@@ -8405,8 +7850,8 @@ fn runtime_provider_multi_interface_model_sync() {
     (CHAT_ARTIFACT, LLM_CHAT_COMPONENT),
   ]);
   let p2_digest = install(
-    &packages,
-    &vendor_signed_package(
+    &catalog,
+    FixtureSource::Manifest(
       &gemini,
       &[
         (MODELS_ARTIFACT, LLM_MODELS_COMPONENT),
@@ -8581,7 +8026,7 @@ fn runtime_provider_multi_interface_model_sync() {
 /// Phase 8 multi-interface configuration: a v7 singular requirement normalizes to adapter-keyed
 /// v8 requirements (Provider default + model overrides) and imports as unavailable identities;
 /// v8 documents with two runtime interface requirements preserve both API types; exported
-/// documents never carry packages, grants, snapshots, paths, or secrets.
+/// documents never carry catalog, grants, snapshots, paths, or secrets.
 #[test]
 fn import_export_runtime_provider_multi_interface() {
   use crate::domain::import_export::{ImportConflictMode, parse_and_normalize_export_document};
@@ -8605,8 +8050,6 @@ fn import_export_runtime_provider_multi_interface() {
         "packageDigest": "ab".repeat(32),
         "pluginId": "com.langnext.provider.openai-compatible",
         "pluginVersion": "1.0.0",
-        "publisherKeyId": "com.langnext.vendor.keys.1",
-        "publisherKeyFingerprint": "f".repeat(64),
         "pluginApiVersion": "1.0",
         "legacyAliases": ["openai-compatible"],
         "capabilities": ["llm.chat@1", "llm.models.list@1"]
@@ -8616,8 +8059,6 @@ fn import_export_runtime_provider_multi_interface() {
         "packageDigest": "ab".repeat(32),
         "pluginId": "com.langnext.provider.openai-compatible",
         "pluginVersion": "1.0.0",
-        "publisherKeyId": "com.langnext.vendor.keys.1",
-        "publisherKeyFingerprint": "f".repeat(64),
         "pluginApiVersion": "1.0",
         "legacyAliases": ["openai-compatible", "openai-responses"],
         "capabilities": ["llm.chat@1", "llm.models.list@1"]
@@ -8709,7 +8150,10 @@ fn import_export_runtime_provider_multi_interface() {
     .read(|conn| provider_runtime_bindings::get(conn, provider_id, "openai-compatible"))
     .unwrap();
   assert_eq!(binding_a.state, ProviderRuntimeState::Unavailable);
-  assert_eq!(binding_a.error_code.as_deref(), Some("plugin_unavailable"));
+  // The exact required digest is recorded, but no local content resolves it: unresolved.
+  assert_eq!(binding_a.package_digest.as_deref(), Some("ab".repeat(32).as_str()));
+  assert_eq!(binding_a.error_code.as_deref(), Some("plugin_missing"));
+  assert!(binding_a.grant_set_revision.is_none());
   let binding_b = state
     .db
     .read(|conn| provider_runtime_bindings::get(conn, provider_id, "openai-responses"))
@@ -8743,13 +8187,13 @@ fn detach_rejects_stale_binding_after_replace() {
     ProviderRuntimeInterfaceDetachInput,
   };
 
-  let (_dir, db, packages, wasm) = setup();
+  let (_dir, db, catalog, wasm) = setup();
   let vault = Arc::new(MemoryCredentialVault::new());
   let provider_id = crate::domain::time::new_id();
   insert_provider_row(&db, provider_id, "P", None, vault.as_ref(), None);
-  let lifecycle = ProviderRuntimeService::new(db.clone(), packages.clone(), wasm);
+  let lifecycle = ProviderRuntimeService::new(db.clone(), catalog.clone(), wasm);
 
-  // Two distinct signed packages that BOTH declare the openai-compatible alias.
+  // Two distinct catalog packages that BOTH declare the openai-compatible alias.
   let mut p1_manifest = provider_runtime_manifest(
     valid_declaration(),
     &[("llm.models.list@1", MODELS_ARTIFACT), ("llm.chat@1", CHAT_ARTIFACT)],
@@ -8761,8 +8205,8 @@ fn detach_rejects_stale_binding_after_replace() {
   p1_manifest.id = "com.langnext.provider.openai-compatible".into();
   p1_manifest.version = "1.0.0".into();
   let p1_digest = install(
-    &packages,
-    &vendor_signed_package(
+    &catalog,
+    FixtureSource::Manifest(
       &p1_manifest,
       &[
         (MODELS_ARTIFACT, LLM_MODELS_COMPONENT),
@@ -8781,8 +8225,8 @@ fn detach_rejects_stale_binding_after_replace() {
   p2_manifest.id = "com.langnext.provider.openai-v2".into();
   p2_manifest.version = "1.0.0".into();
   let p2_digest = install(
-    &packages,
-    &vendor_signed_package(
+    &catalog,
+    FixtureSource::Manifest(
       &p2_manifest,
       &[
         (MODELS_ARTIFACT, LLM_MODELS_COMPONENT),
@@ -8854,7 +8298,7 @@ fn detach_rejects_stale_binding_after_replace() {
 /// Provider-scoped rollback (migrated v24 snapshot set) atomically replaces EVERY binding of
 /// the Provider. Every replaced binding's package/revision grant must be released when no
 /// restored binding or undiscarded snapshot still references it — an orphan grant would block
-/// package uninstall forever.
+/// package removal forever.
 #[test]
 fn provider_scoped_rollback_releases_grants_of_all_replaced_bindings() {
   use crate::credentials::MemoryCredentialVault;
@@ -8867,11 +8311,11 @@ fn provider_scoped_rollback_releases_grants_of_all_replaced_bindings() {
     ProviderRuntimeSnapshotBinding, ProviderRuntimeSnapshotScope, ProviderRuntimeSnapshotSet,
   };
 
-  let (_dir, db, packages, wasm) = setup();
+  let (_dir, db, catalog, wasm) = setup();
   let vault = Arc::new(MemoryCredentialVault::new());
   let provider_id = crate::domain::time::new_id();
   insert_provider_row(&db, provider_id, "P", None, vault.as_ref(), None);
-  let lifecycle = ProviderRuntimeService::new(db.clone(), packages.clone(), wasm);
+  let lifecycle = ProviderRuntimeService::new(db.clone(), catalog.clone(), wasm);
 
   let mut p1_manifest = provider_runtime_manifest(
     valid_declaration(),
@@ -8884,8 +8328,8 @@ fn provider_scoped_rollback_releases_grants_of_all_replaced_bindings() {
   p1_manifest.id = "com.langnext.provider.openai-compatible".into();
   p1_manifest.version = "1.0.0".into();
   let p1_digest = install(
-    &packages,
-    &vendor_signed_package(
+    &catalog,
+    FixtureSource::Manifest(
       &p1_manifest,
       &[
         (MODELS_ARTIFACT, LLM_MODELS_COMPONENT),
@@ -8893,20 +8337,23 @@ fn provider_scoped_rollback_releases_grants_of_all_replaced_bindings() {
       ],
     ),
   );
-  let gemini = gemini_manifest(&[
+  let mut gemini = gemini_manifest(&[
     (MODELS_ARTIFACT, LLM_MODELS_COMPONENT),
     (CHAT_ARTIFACT, LLM_CHAT_COMPONENT),
   ]);
-  let p2_digest = install(
-    &packages,
-    &vendor_signed_package(
-      &gemini,
-      &[
-        (MODELS_ARTIFACT, LLM_MODELS_COMPONENT),
-        (CHAT_ARTIFACT, LLM_CHAT_COMPONENT),
-      ],
-    ),
+  // User content may not claim a reserved first-party id.
+  gemini.id = "com.example.provider.gemini".into();
+  let gemini_archive = write_fixture_archive(
+    _dir.path(),
+    &gemini,
+    &[
+      (MODELS_ARTIFACT.to_string(), LLM_MODELS_COMPONENT.to_vec()),
+      (CHAT_ARTIFACT.to_string(), LLM_CHAT_COMPONENT.to_vec()),
+    ],
+    "gemini-user",
   );
+  let p2_digest = install_user_archive(&user_store(db.clone(), _dir.path()), &gemini_archive);
+  catalog.refresh().expect("catalog refreshes after user install");
 
   let attach = |adapter_id: &str, digest: &str| {
     let preview = lifecycle
@@ -8966,8 +8413,6 @@ fn provider_scoped_rollback_releases_grants_of_all_replaced_bindings() {
         grant_set_id: None,
         plugin_id: p1_manifest.id.clone(),
         plugin_version: p1_manifest.version.clone(),
-        publisher_key_id: Some(crate::services::vendor_trust::VENDOR_PUBLISHER_KEY_ID.into()),
-        publisher_fingerprint: Some(test_vendor_fixture::fixture_vendor_fingerprint()),
         plugin_api_version: Some(p1_manifest.plugin_api_version.clone()),
         capability_ids_json: "[]".into(),
         updated_at: now.clone(),
@@ -9035,10 +8480,10 @@ fn provider_scoped_rollback_releases_grants_of_all_replaced_bindings() {
     "replaced gemini binding must not leave an orphan grant behind"
   );
 
-  // No orphan grant means the replaced package can be uninstalled immediately.
-  packages
-    .uninstall_version(&p2_digest)
-    .unwrap_or_else(|e| panic!("uninstall of replaced package must succeed, got {e:?}"));
+  // No orphan grant means the replaced package can be removed immediately.
+  user_store(db.clone(), _dir.path())
+    .remove_user_archive(&p2_digest)
+    .unwrap_or_else(|e| panic!("removal of replaced package must succeed, got {e:?}"));
 
   // The restored default binding keeps its package and grant.
   let restored = db
@@ -9063,11 +8508,11 @@ fn provider_scoped_rollback_rejects_adapter_missing_from_snapshot() {
     ProviderRuntimeSnapshotBinding, ProviderRuntimeSnapshotScope, ProviderRuntimeSnapshotSet,
   };
 
-  let (_dir, db, packages, wasm) = setup();
+  let (_dir, db, catalog, wasm) = setup();
   let vault = Arc::new(MemoryCredentialVault::new());
   let provider_id = crate::domain::time::new_id();
   insert_provider_row(&db, provider_id, "P", None, vault.as_ref(), None);
-  let lifecycle = ProviderRuntimeService::new(db.clone(), packages.clone(), wasm);
+  let lifecycle = ProviderRuntimeService::new(db.clone(), catalog.clone(), wasm);
 
   let mut p1_manifest = provider_runtime_manifest(
     valid_declaration(),
@@ -9080,8 +8525,8 @@ fn provider_scoped_rollback_rejects_adapter_missing_from_snapshot() {
   p1_manifest.id = "com.langnext.provider.openai-compatible".into();
   p1_manifest.version = "1.0.0".into();
   let p1_digest = install(
-    &packages,
-    &vendor_signed_package(
+    &catalog,
+    FixtureSource::Manifest(
       &p1_manifest,
       &[
         (MODELS_ARTIFACT, LLM_MODELS_COMPONENT),
@@ -9090,8 +8535,8 @@ fn provider_scoped_rollback_rejects_adapter_missing_from_snapshot() {
     ),
   );
   let p2_digest = install(
-    &packages,
-    &vendor_signed_package(
+    &catalog,
+    FixtureSource::Manifest(
       &gemini_manifest(&[
         (MODELS_ARTIFACT, LLM_MODELS_COMPONENT),
         (CHAT_ARTIFACT, LLM_CHAT_COMPONENT),
@@ -9157,8 +8602,6 @@ fn provider_scoped_rollback_rejects_adapter_missing_from_snapshot() {
         grant_set_id: None,
         plugin_id: p1_manifest.id.clone(),
         plugin_version: p1_manifest.version.clone(),
-        publisher_key_id: Some(crate::services::vendor_trust::VENDOR_PUBLISHER_KEY_ID.into()),
-        publisher_fingerprint: Some(test_vendor_fixture::fixture_vendor_fingerprint()),
         plugin_api_version: Some(p1_manifest.plugin_api_version.clone()),
         capability_ids_json: "[]".into(),
         updated_at: now.clone(),
@@ -9216,28 +8659,28 @@ fn provider_scoped_rollback_rejects_adapter_missing_from_snapshot() {
 }
 
 /// Rollback snapshot identity is the SOURCE binding's exact package identity. An attach onto
-/// a never-attached legacy adapter must record the explicit legacy sentinel identity, never
-/// the target package's identity.
+/// a never-attached adapter must record the absent identity, never the target package's
+/// identity.
 #[test]
-fn attach_snapshot_of_legacy_source_records_explicit_legacy_identity() {
+fn attach_snapshot_of_unbound_source_records_absent_identity() {
   use crate::credentials::MemoryCredentialVault;
   use crate::domain::runtime_provider::{
     ApplyProviderRuntimeInterfaceAttachInput, PreviewProviderRuntimeInterfaceAttachInput,
   };
 
-  let (_dir, db, packages, wasm) = setup();
+  let (_dir, db, catalog, wasm) = setup();
   let vault = Arc::new(MemoryCredentialVault::new());
   let provider_id = crate::domain::time::new_id();
   insert_provider_row(&db, provider_id, "P", None, vault.as_ref(), None);
-  let lifecycle = ProviderRuntimeService::new(db.clone(), packages.clone(), wasm);
+  let lifecycle = ProviderRuntimeService::new(db.clone(), catalog.clone(), wasm);
 
   let openai = openai_compatible_manifest(&[
     (MODELS_ARTIFACT, LLM_MODELS_COMPONENT),
     (CHAT_ARTIFACT, LLM_CHAT_COMPONENT),
   ]);
   let digest = install(
-    &packages,
-    &vendor_signed_package(
+    &catalog,
+    FixtureSource::Manifest(
       &openai,
       &[
         (MODELS_ARTIFACT, LLM_MODELS_COMPONENT),
@@ -9273,15 +8716,13 @@ fn attach_snapshot_of_legacy_source_records_explicit_legacy_identity() {
   );
   assert!(
     snapshot.plugin_version.is_empty(),
-    "legacy snapshot must carry an empty plugin version"
+    "never-attached snapshot must carry an empty plugin version"
   );
-  assert!(snapshot.publisher_key_id.is_none());
-  assert!(snapshot.publisher_fingerprint.is_none());
   assert!(snapshot.plugin_api_version.is_none());
 }
 
 /// A replace attach snapshots the SOURCE binding; the snapshot identity must resolve from the
-/// source package digest (plugin/version/publisher/API), never from the target package.
+/// source package digest (plugin/version/API), never from the target package.
 #[test]
 fn replace_attach_snapshot_resolves_source_package_identity() {
   use crate::credentials::MemoryCredentialVault;
@@ -9289,11 +8730,11 @@ fn replace_attach_snapshot_resolves_source_package_identity() {
     ApplyProviderRuntimeInterfaceAttachInput, PreviewProviderRuntimeInterfaceAttachInput,
   };
 
-  let (_dir, db, packages, wasm) = setup();
+  let (_dir, db, catalog, wasm) = setup();
   let vault = Arc::new(MemoryCredentialVault::new());
   let provider_id = crate::domain::time::new_id();
   insert_provider_row(&db, provider_id, "P", None, vault.as_ref(), None);
-  let lifecycle = ProviderRuntimeService::new(db.clone(), packages.clone(), wasm);
+  let lifecycle = ProviderRuntimeService::new(db.clone(), catalog.clone(), wasm);
 
   let mut p1_manifest = provider_runtime_manifest(
     valid_declaration(),
@@ -9306,8 +8747,8 @@ fn replace_attach_snapshot_resolves_source_package_identity() {
   p1_manifest.id = "com.langnext.provider.openai-compatible".into();
   p1_manifest.version = "1.0.0".into();
   let p1_digest = install(
-    &packages,
-    &vendor_signed_package(
+    &catalog,
+    FixtureSource::Manifest(
       &p1_manifest,
       &[
         (MODELS_ARTIFACT, LLM_MODELS_COMPONENT),
@@ -9326,8 +8767,8 @@ fn replace_attach_snapshot_resolves_source_package_identity() {
   p2_manifest.id = "com.langnext.provider.openai-v2".into();
   p2_manifest.version = "2.0.0".into();
   let p2_digest = install(
-    &packages,
-    &vendor_signed_package(
+    &catalog,
+    FixtureSource::Manifest(
       &p2_manifest,
       &[
         (MODELS_ARTIFACT, LLM_MODELS_COMPONENT),
@@ -9367,14 +8808,6 @@ fn replace_attach_snapshot_resolves_source_package_identity() {
     replace_snapshot.plugin_id
   );
   assert_eq!(replace_snapshot.plugin_version, p1_manifest.version);
-  assert_eq!(
-    replace_snapshot.publisher_key_id.as_deref(),
-    Some(crate::services::vendor_trust::VENDOR_PUBLISHER_KEY_ID)
-  );
-  assert_eq!(
-    replace_snapshot.publisher_fingerprint.as_deref(),
-    Some(test_vendor_fixture::fixture_vendor_fingerprint().as_str())
-  );
   assert_eq!(replace_snapshot.plugin_api_version.as_deref(), Some("1.0"));
   assert_ne!(replace_snapshot.plugin_id, p2_manifest.id, "never the target identity");
 }
@@ -9389,19 +8822,19 @@ fn detach_snapshot_records_exact_package_identity_not_digest() {
     ProviderRuntimeInterfaceDetachInput,
   };
 
-  let (_dir, db, packages, wasm) = setup();
+  let (_dir, db, catalog, wasm) = setup();
   let vault = Arc::new(MemoryCredentialVault::new());
   let provider_id = crate::domain::time::new_id();
   insert_provider_row(&db, provider_id, "P", None, vault.as_ref(), None);
-  let lifecycle = ProviderRuntimeService::new(db.clone(), packages.clone(), wasm);
+  let lifecycle = ProviderRuntimeService::new(db.clone(), catalog.clone(), wasm);
 
   let openai = openai_compatible_manifest(&[
     (MODELS_ARTIFACT, LLM_MODELS_COMPONENT),
     (CHAT_ARTIFACT, LLM_CHAT_COMPONENT),
   ]);
   let digest = install(
-    &packages,
-    &vendor_signed_package(
+    &catalog,
+    FixtureSource::Manifest(
       &openai,
       &[
         (MODELS_ARTIFACT, LLM_MODELS_COMPONENT),
@@ -9453,16 +8886,12 @@ fn detach_snapshot_records_exact_package_identity_not_digest() {
     "the digest must never be stored as plugin_id"
   );
   assert_eq!(detach_snapshot.plugin_version, openai.version);
-  assert_eq!(
-    detach_snapshot.publisher_key_id.as_deref(),
-    Some(crate::services::vendor_trust::VENDOR_PUBLISHER_KEY_ID)
-  );
   assert_eq!(detach_snapshot.plugin_api_version.as_deref(), Some("1.0"));
 }
 
 /// Detach snapshots must have a frontend-reachable cleanup seam: the provider snapshot list
 /// exposes the detach snapshot as a sanitized DTO, and discarding it releases the retained
-/// grant so the package can be uninstalled. Rollback stays possible until the discard.
+/// grant so the package can be removed. Rollback stays possible until the discard.
 #[test]
 fn detach_snapshot_is_listable_and_discard_releases_grant_for_uninstall() {
   use crate::credentials::MemoryCredentialVault;
@@ -9471,26 +8900,29 @@ fn detach_snapshot_is_listable_and_discard_releases_grant_for_uninstall() {
     ProviderRuntimeInterfaceDetachInput, ProviderRuntimeInterfaceDiscardSnapshotInput,
   };
 
-  let (_dir, db, packages, wasm) = setup();
+  let (_dir, db, catalog, wasm) = setup();
   let vault = Arc::new(MemoryCredentialVault::new());
   let provider_id = crate::domain::time::new_id();
   insert_provider_row(&db, provider_id, "P", None, vault.as_ref(), None);
-  let lifecycle = ProviderRuntimeService::new(db.clone(), packages.clone(), wasm);
+  let lifecycle = ProviderRuntimeService::new(db.clone(), catalog.clone(), wasm);
 
-  let openai = openai_compatible_manifest(&[
+  let mut openai = openai_compatible_manifest(&[
     (MODELS_ARTIFACT, LLM_MODELS_COMPONENT),
     (CHAT_ARTIFACT, LLM_CHAT_COMPONENT),
   ]);
-  let digest = install(
-    &packages,
-    &vendor_signed_package(
-      &openai,
-      &[
-        (MODELS_ARTIFACT, LLM_MODELS_COMPONENT),
-        (CHAT_ARTIFACT, LLM_CHAT_COMPONENT),
-      ],
-    ),
+  // User content may not claim a reserved first-party id.
+  openai.id = "com.example.provider.openai-compatible".into();
+  let openai_archive = write_fixture_archive(
+    _dir.path(),
+    &openai,
+    &[
+      (MODELS_ARTIFACT.to_string(), LLM_MODELS_COMPONENT.to_vec()),
+      (CHAT_ARTIFACT.to_string(), LLM_CHAT_COMPONENT.to_vec()),
+    ],
+    "openai-compatible-user",
   );
+  let digest = install_user_archive(&user_store(db.clone(), _dir.path()), &openai_archive);
+  catalog.refresh().expect("catalog refreshes after user install");
 
   let preview = lifecycle
     .preview_interface_attach(&PreviewProviderRuntimeInterfaceAttachInput {
@@ -9531,7 +8963,7 @@ fn detach_snapshot_is_listable_and_discard_releases_grant_for_uninstall() {
   assert_eq!(detach_snapshot.plugin_version, openai.version);
   assert_eq!(detach_snapshot.adapter_ids, vec!["openai-compatible".to_string()]);
 
-  // Discarding every snapshot releases the retained grant; the package uninstalls.
+  // Discarding every snapshot releases the retained grant; the package is removable.
   for snapshot in &snapshots {
     lifecycle
       .discard_interface_snapshot(&ProviderRuntimeInterfaceDiscardSnapshotInput {
@@ -9557,7 +8989,7 @@ fn detach_snapshot_is_listable_and_discard_releases_grant_for_uninstall() {
     })
     .unwrap();
   assert_eq!(grant_count, 0, "final discard must release the retained grant");
-  packages
-    .uninstall_version(&digest)
-    .unwrap_or_else(|e| panic!("uninstall after discard must succeed, got {e:?}"));
+  user_store(db.clone(), _dir.path())
+    .remove_user_archive(&digest)
+    .unwrap_or_else(|e| panic!("removal after discard must succeed, got {e:?}"));
 }

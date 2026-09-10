@@ -28,13 +28,12 @@ import {
 } from "../../storage/client";
 import { getIpcErrorMessage } from "../../storage/errors";
 import type { IntegrationInstanceDto } from "../../storage/types";
-import { presentAdvancedRecoveryDigestVisibility } from "./defaultPackageActivationPresentation";
 import {
   formatPermissionDifference,
-  formatPublisherIdentity,
   formatRuntimeIdentity,
   hasThirdPartyEgressChange,
   isRuntimeUnresolved,
+  presentAdvancedRecoveryDigestVisibility,
   upgradeApprovalDetailsReady,
   upgradeRequiresAcknowledgement,
 } from "./runtimeLifecyclePresentation";
@@ -172,10 +171,6 @@ export function RuntimeLifecyclePanel({ instance }: RuntimeLifecyclePanelProps) 
       </p>
       {upgradePreviewQuery.data ? (
         <div className="space-y-1 text-body-tight text-on-surface">
-          <p>
-            Publisher: {formatPublisherIdentity(upgradePreviewQuery.data.sourcePublisher)} →{" "}
-            {formatPublisherIdentity(upgradePreviewQuery.data.targetPublisher)}
-          </p>
           {hasThirdPartyEgressChange(upgradePreviewQuery.data) ? (
             <p className="text-error" role="alert">
               Third-party data egress: this upgrade sends your translated text to a third-party proxy server (the
@@ -202,7 +197,7 @@ export function RuntimeLifecyclePanel({ instance }: RuntimeLifecyclePanelProps) 
           >
             <Checkbox.Indicator className={checkboxIndicatorClassName}>✓</Checkbox.Indicator>
           </Checkbox.Root>
-          I reviewed permission and publisher changes
+          I reviewed the permission changes
         </label>
       ) : null}
       {needsAck && !detailsReady ? (
@@ -243,7 +238,7 @@ export function RuntimeLifecyclePanel({ instance }: RuntimeLifecyclePanelProps) 
             ${outlineButtonClassName}
             inline-flex items-center gap-1
           `}
-          aria-label={t("plugins.packages.defaultActivation.advancedRecovery.trigger")}
+          aria-label={t("plugins.packages.advancedRecovery.trigger")}
         >
           <IconMaterialSymbolsLightExpandMore
             className={`
@@ -252,12 +247,10 @@ export function RuntimeLifecyclePanel({ instance }: RuntimeLifecyclePanelProps) 
             `}
             aria-hidden
           />
-          {t("plugins.packages.defaultActivation.advancedRecovery.trigger")}
+          {t("plugins.packages.advancedRecovery.trigger")}
         </Collapsible.Trigger>
         <Collapsible.Panel className="mt-2 space-y-2 border border-line bg-surface-2 p-3">
-          <p className="text-body-tight text-neutral">
-            {t("plugins.packages.defaultActivation.advancedRecovery.description")}
-          </p>
+          <p className="text-body-tight text-neutral">{t("plugins.packages.advancedRecovery.description")}</p>
           {recoveryVisibility.showChooseAnotherPackage ? (
             <label className="flex items-center gap-2 text-body-tight text-on-surface">
               <Checkbox.Root
@@ -276,13 +269,13 @@ export function RuntimeLifecyclePanel({ instance }: RuntimeLifecyclePanelProps) 
                   <IconMaterialSymbolsLightCheck className="size-3.5" aria-hidden />
                 </Checkbox.Indicator>
               </Checkbox.Root>
-              {t("plugins.packages.defaultActivation.advancedRecovery.chooseAnotherPackage")}
+              {t("plugins.packages.advancedRecovery.chooseAnotherPackage")}
             </label>
           ) : null}
           {recoveryVisibility.showDigestInput ? (
             <div className="flex flex-col gap-2">
               <label className="text-body-tight text-neutral" htmlFor={`runtime-digest-${instance.id}`}>
-                {t("plugins.packages.defaultActivation.advancedRecovery.digestLabel")}
+                {t("plugins.packages.advancedRecovery.digestLabel")}
               </label>
               <Input
                 id={`runtime-digest-${instance.id}`}

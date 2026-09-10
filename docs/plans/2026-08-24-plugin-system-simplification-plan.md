@@ -66,11 +66,11 @@ Instance create ─> selected catalog digest ─> config/credential binding ─>
 
 ## Target Trust Model
 
-| Source | Availability | Runtime | Install approval | Default behavior | Privileged Host auth |
-|---|---|---|---|---|---|
-| Built-in | All builds | Wasm / allowlisted Native | None | Automatic | Allowed by closed Host policy |
-| Development | Debug only | Wasm | None; explicit debug opt-in | Optional debug override | Denied unless an explicit debug-only policy permits it |
-| User | All builds | Wasm only | One permission confirmation per content digest | Explicit user selection | Denied for built-in-only auth drivers |
+| Source      | Availability | Runtime                   | Install approval                               | Default behavior        | Privileged Host auth                                   |
+| ----------- | ------------ | ------------------------- | ---------------------------------------------- | ----------------------- | ------------------------------------------------------ |
+| Built-in    | All builds   | Wasm / allowlisted Native | None                                           | Automatic               | Allowed by closed Host policy                          |
+| Development | Debug only   | Wasm                      | None; explicit debug opt-in                    | Optional debug override | Denied unless an explicit debug-only policy permits it |
+| User        | All builds   | Wasm only                 | One permission confirmation per content digest | Explicit user selection | Denied for built-in-only auth drivers                  |
 
 ## File Map
 
@@ -206,12 +206,12 @@ Instance create ─> selected catalog digest ─> config/credential binding ─>
 
 **Steps:**
 
-- [ ] **Red:** Add `directory_and_archive_with_identical_content_share_digest` through both loader methods.
-- [ ] **Red:** Add directory tests for symlink, traversal-equivalent path, undeclared file, missing indexed file, oversized file/count, mutable-file race, and malformed manifest.
-- [ ] **Green:** Add `PluginSource::{BuiltIn, Development, User}` and `PluginContentKind::{Directory, Archive}`.
-- [ ] **Green:** Remove publisher fields from the manifest. Define a canonical content digest over normalized sorted relative paths and file bytes.
-- [ ] **Green:** Materialize both inputs into a temporary snapshot, validate, then atomically publish under `<app-data>/plugin-cache/<digest>/`. Runtime never executes the source directory directly.
-- [ ] Re-stat/re-hash source files after copy to detect mutation during materialization.
+- [x] **Red:** Add `directory_and_archive_with_identical_content_share_digest` through both loader methods.
+- [x] **Red:** Add directory tests for symlink, traversal-equivalent path, undeclared file, missing indexed file, oversized file/count, mutable-file race, and malformed manifest.
+- [x] **Green:** Add `PluginSource::{BuiltIn, Development, User}` and `PluginContentKind::{Directory, Archive}`.
+- [x] **Green:** Remove publisher fields from the manifest. Define a canonical content digest over normalized sorted relative paths and file bytes.
+- [x] **Green:** Materialize both inputs into a temporary snapshot, validate, then atomically publish under `<app-data>/plugin-cache/<digest>/`. Runtime never executes the source directory directly.
+- [x] Re-stat/re-hash source files after copy to detect mutation during materialization.
 
 **Validation:**
 
@@ -237,11 +237,11 @@ Instance create ─> selected catalog digest ─> config/credential binding ─>
 
 **Steps:**
 
-- [ ] **Red:** Add `catalog_refresh_discovers_builtin_development_and_user_sources` in a debug test context.
-- [ ] **Red:** Add `release_catalog_ignores_development_source`, `user_plugin_cannot_claim_first_party_id`, and `invalid_user_plugin_does_not_hide_builtins`.
-- [ ] **Green:** Discover built-ins from the resolved app resource directory, user archives from `<app-data>/plugins`, and development directories only from an explicit debug environment/config path.
-- [ ] **Green:** Enforce source precedence and duplicate rules. A different digest at the same source/id/version is a catalog conflict; built-in remains available.
-- [ ] Return descriptors and per-entry errors in one catalog snapshot.
+- [x] **Red:** Add `catalog_refresh_discovers_builtin_development_and_user_sources` in a debug test context.
+- [x] **Red:** Add `release_catalog_ignores_development_source`, `user_plugin_cannot_claim_first_party_id`, and `invalid_user_plugin_does_not_hide_builtins`.
+- [x] **Green:** Discover built-ins from the resolved app resource directory, user archives from `<app-data>/plugins`, and development directories only from an explicit debug environment/config path.
+- [x] **Green:** Enforce source precedence and duplicate rules. A different digest at the same source/id/version is a catalog conflict; built-in remains available.
+- [x] Return descriptors and per-entry errors in one catalog snapshot.
 
 **Validation:**
 
@@ -264,11 +264,11 @@ Instance create ─> selected catalog digest ─> config/credential binding ─>
 
 **Steps:**
 
-- [ ] **Red:** Add `builtin_is_default_without_database_policy`.
-- [ ] **Red:** Add `user_default_override_changes_new_instances_only` and `missing_override_falls_back_to_builtin`.
-- [ ] **Green:** Store only `plugin_id + digest + updated_at` for an explicit user override.
-- [ ] Built-in fallback is deterministic. Existing instance/provider pins never change during refresh or default selection.
-- [ ] Remove default activation policy/intent/claim/authority orchestration from runtime lifecycle.
+- [x] **Red:** Add `builtin_is_default_without_database_policy`.
+- [x] **Red:** Add `user_default_override_changes_new_instances_only` and `missing_override_falls_back_to_builtin`.
+- [x] **Green:** Store only `plugin_id + digest + updated_at` for an explicit user override.
+- [x] Built-in fallback is deterministic. Existing instance/provider pins never change during refresh or default selection.
+- [x] Remove default activation policy/intent/claim/authority orchestration from runtime lifecycle.
 
 **Validation:**
 
@@ -291,11 +291,11 @@ Instance create ─> selected catalog digest ─> config/credential binding ─>
 
 **Steps:**
 
-- [ ] **Red:** Add `user_wasm_install_requires_matching_digest_and_permission_confirmation` through public commands.
-- [ ] **Red:** Add `user_native_install_is_rejected`, `changed_archive_after_preview_is_rejected`, and `same_id_version_different_digest_is_conflict`.
-- [ ] **Green:** Preview returns source, content digest, runtime, capabilities, network/auth requests, file summary, and validation errors.
-- [ ] **Green:** Confirm accepts the opaque preview ID/content digest and atomically copies the archive to the user plugin directory.
-- [ ] Remove public-key, signature, publisher, and risk-version fields from DTOs and UI.
+- [x] **Red:** Add `user_wasm_install_requires_matching_digest_and_permission_confirmation` through public commands.
+- [x] **Red:** Add `user_native_install_is_rejected`, `changed_archive_after_preview_is_rejected`, and `same_id_version_different_digest_is_conflict`.
+- [x] **Green:** Preview returns source, content digest, runtime, capabilities, network/auth requests, file summary, and validation errors.
+- [x] **Green:** Confirm accepts the opaque preview ID/content digest and atomically copies the archive to the user plugin directory.
+- [x] Remove public-key, signature, publisher, and risk-version fields from DTOs and UI.
 
 **Validation:**
 
@@ -318,10 +318,10 @@ Instance create ─> selected catalog digest ─> config/credential binding ─>
 
 **Steps:**
 
-- [ ] **Red:** Add user/development Native rejection at catalog and router seams.
-- [ ] **Red:** Add user package rejection for Google/Baidu Host auth drivers.
-- [ ] **Green:** Replace publisher-source checks with `PluginSource::BuiltIn`; retain first-party Native ID/version allowlist and module/model audit.
-- [ ] Preserve network/path/capability/grant checks for all Wasm sources.
+- [x] **Red:** Add user/development Native rejection at catalog and router seams.
+- [x] **Red:** Add user package rejection for Google/Baidu Host auth drivers.
+- [x] **Green:** Replace publisher-source checks with `PluginSource::BuiltIn`; retain first-party Native ID/version allowlist and module/model audit.
+- [x] Preserve network/path/capability/grant checks for all Wasm sources.
 
 **Validation:**
 
@@ -340,11 +340,11 @@ Instance create ─> selected catalog digest ─> config/credential binding ─>
 
 **Steps:**
 
-- [ ] **Red:** Add `fresh_plugin_schema_contains_no_publisher_signature_or_activation_tables`.
-- [ ] Assert retained tables support exact pins, user archive records, explicit defaults, grants, health, endpoint trust, provider bindings, and model resources.
-- [ ] **Green:** Rewrite plugin-related migrations and remove 0027–0029/0031 from the sequence. Keep the migration list contiguous.
-- [ ] Delete publisher/approval/activation repositories and update all foreign keys.
-- [ ] Reset the development database after the schema compiles and tests pass.
+- [x] **Red:** Add `fresh_plugin_schema_contains_no_publisher_signature_or_activation_tables`.
+- [x] Assert retained tables support exact pins, user archive records, explicit defaults, grants, health, endpoint trust, provider bindings, and model resources.
+- [x] **Green:** Rewrite plugin-related migrations and remove 0027–0029/0031 from the sequence. Keep the migration list contiguous.
+- [x] Delete publisher/approval/activation repositories and update all foreign keys.
+- [x] Reset the development database after the schema compiles and tests pass.
 
 **Validation:**
 
@@ -365,10 +365,10 @@ Instance create ─> selected catalog digest ─> config/credential binding ─>
 
 **Steps:**
 
-- [ ] **Red:** Add `startup_loads_builtins_without_trust_root_or_activation_policy`.
-- [ ] **Green:** Remove signing/default service construction and commands.
-- [ ] Keep command/build/permission/capability lists exact.
-- [ ] Startup log reports source counts, valid/invalid entries, and defaults without sensitive paths or contents.
+- [x] **Red:** Add `startup_loads_builtins_without_trust_root_or_activation_policy`.
+- [x] **Green:** Remove signing/default service construction and commands.
+- [x] Keep command/build/permission/capability lists exact.
+- [x] Startup log reports source counts, valid/invalid entries, and defaults without sensitive paths or contents.
 
 **Validation:**
 
@@ -386,9 +386,9 @@ Instance create ─> selected catalog digest ─> config/credential binding ─>
 
 **Steps:**
 
-- [ ] **Red:** Re-run/adapt traversal, zip-bomb, no-WASI, permission expansion, endpoint/path, credential secrecy, token injection, cancellation, timeout, memory/fuel, stream/blob, and native process cleanup tests using source-based descriptors.
-- [ ] **Green:** Replace publisher inputs with source/digest inputs only. Do not remove broker/grant checks.
-- [ ] Ensure directory reload creates a new immutable digest; running instances continue using their pinned snapshot.
+- [x] **Red:** Re-run/adapt traversal, zip-bomb, no-WASI, permission expansion, endpoint/path, credential secrecy, token injection, cancellation, timeout, memory/fuel, stream/blob, and native process cleanup tests using source-based descriptors.
+- [x] **Green:** Replace publisher inputs with source/digest inputs only. Do not remove broker/grant checks.
+- [x] Ensure directory reload creates a new immutable digest; running instances continue using their pinned snapshot.
 
 **Validation:**
 
@@ -406,10 +406,10 @@ Instance create ─> selected catalog digest ─> config/credential binding ─>
 
 **Steps:**
 
-- [ ] **Red:** Add package-present, package-missing, digest-mismatch, built-in, and user-Wasm import cases.
-- [ ] **Green:** Export plugin ID, version, digest, runtime, and required capabilities only.
-- [ ] Import never installs archives, changes defaults, restores install approval, or authorizes grants.
-- [ ] Remove old publisher/signature fields and old fixtures.
+- [x] **Red:** Add package-present, package-missing, digest-mismatch, built-in, and user-Wasm import cases.
+- [x] **Green:** Export plugin ID, version, digest, runtime, and required capabilities only.
+- [x] Import never installs archives, changes defaults, restores install approval, or authorizes grants.
+- [x] Remove old publisher/signature fields and old fixtures.
 
 **Validation:**
 
@@ -428,10 +428,10 @@ Instance create ─> selected catalog digest ─> config/credential binding ─>
 
 **Steps:**
 
-- [ ] **Red:** Add Built-in, Development, and User presentation tests.
-- [ ] **Red:** Add tests that Remove exists only for User, Reload only for Development, and Native User install is unavailable.
-- [ ] **Green:** Remove signature/publisher/default-activation dialogs and DTOs.
-- [ ] Keep accessible permission review for user archives.
+- [x] **Red:** Add Built-in, Development, and User presentation tests.
+- [x] **Red:** Add tests that Remove exists only for User, Reload only for Development, and Native User install is unavailable.
+- [x] **Green:** Remove signature/publisher/default-activation dialogs and DTOs.
+- [x] Keep accessible permission review for user archives.
 
 **Validation:**
 
@@ -449,10 +449,10 @@ Instance create ─> selected catalog digest ─> config/credential binding ─>
 
 **Steps:**
 
-- [ ] **Red:** Add task-level fixtures proving directory/archive equivalence and built-in validation.
-- [ ] **Green:** Remove signing/key tasks and release verifier.
-- [ ] `tauri:build` validates built-in structure, source identity, Native rules, indexed files, and no-WASI where applicable.
-- [ ] Update every built-in manifest and package fixture.
+- [x] **Red:** Add task-level fixtures proving directory/archive equivalence and built-in validation.
+- [x] **Green:** Remove signing/key tasks and release verifier.
+- [x] `tauri:build` validates built-in structure, source identity, Native rules, indexed files, and no-WASI where applicable.
+- [x] Update every built-in manifest and package fixture.
 
 **Validation:**
 
@@ -470,9 +470,9 @@ Instance create ─> selected catalog digest ─> config/credential binding ─>
 
 **Steps:**
 
-- [ ] Add grep gates for `plugin_publishers`, `publisher_fingerprint`, `signature_status`, `vendor_bootstrap`, `DefaultPackageActivation`, `default_runtime_activation`, `authority_approvals`, and risk-acknowledgement symbols in production code.
-- [ ] Permit historical plan references only where marked superseded.
-- [ ] Document the loss of user-package authenticity and the retained runtime safety boundary.
+- [x] Add grep gates for `plugin_publishers`, `publisher_fingerprint`, `signature_status`, `vendor_bootstrap`, `DefaultPackageActivation`, `default_runtime_activation`, `authority_approvals`, and risk-acknowledgement symbols in production code.
+- [x] Permit historical plan references only where marked superseded.
+- [x] Document the loss of user-package authenticity and the retained runtime safety boundary.
 
 **Validation:**
 

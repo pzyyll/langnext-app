@@ -23,23 +23,36 @@ EXPECTED_GUEST_IMPORT_TEST_NAMES=(
   "services::wasm_runtime::tests::wasm_guest_imports::llm_chat_deepseek_guest_imports_only_langnext"
 )
 
-# Check 1: cargo tree must succeed. Capture the full output ONCE so a grep miss cannot trigger a
-# pipefail/SIGPIPE, then inspect the captured string.
-TREE_OUTPUT=$(cargo tree --manifest-path src-tauri/Cargo.toml --depth 999 2>&1) || {
+# Captured command output goes to files, never to a here-string or an early-closing pipe.
+# A `grep -q` reading a here-string or a `head -1` closing a pipe raises SIGPIPE under
+# `set -o pipefail`, which made this task hang on Git Bash. Files live under `target/`
+# because mise overrides TMP/TEMP, so `/tmp` writes are not readable in the same shell.
+root="$(cd "$(dirname "$0")/../../.." && pwd)"
+mkdir -p "${root}/target"
+work_dir="$(mktemp -d "${root}/target/plugin-check-no-wasi.XXXXXX")"
+trap 'rm -rf "${work_dir}"' EXIT
+
+tree_output_file="${work_dir}/cargo-tree.txt"
+test_output_file="${work_dir}/wasm-guest-imports.txt"
+
+# Check 1: cargo tree must succeed. Capture the full output once so a grep miss cannot
+# trigger a pipefail/SIGPIPE, then inspect the captured file.
+if ! cargo tree --manifest-path "${root}/src-tauri/Cargo.toml" --depth 999 >"${tree_output_file}" 2>&1; then
   echo "error: cargo tree failed; cannot verify dependency tree" >&2
-  echo "$TREE_OUTPUT" | tail -5 >&2
+  tail -5 "${tree_output_file}" >&2
   exit 1
-}
+fi
 
 # Check 2: the captured host dependency tree must not contain wasmtime-wasi.
-if grep -q 'wasmtime-wasi' <<<"$TREE_OUTPUT"; then
+if grep -q 'wasmtime-wasi' "${tree_output_file}"; then
   echo "error: wasmtime-wasi is present in the host dependency tree" >&2
-  grep 'wasmtime-wasi' <<<"$TREE_OUTPUT" >&2 || true
+  grep 'wasmtime-wasi' "${tree_output_file}" >&2 || true
   exit 1
 fi
 echo "ok: host dependency tree has no wasmtime-wasi"
 
 # Check 3: all conformance guest Cargo.toml files must not depend on wasi or wasmtime-wasi.
+cd "${root}"
 for guest_cargo in \
   runtime-plugins/conformance/wasm-component/Cargo.toml \
   runtime-plugins/conformance/wasm-detect-component/Cargo.toml \
@@ -70,21 +83,21 @@ echo "ok: guest Cargo.toml files declare no WASI dependencies"
 
 # Check 4: run guest-import inspection tests and require the exact expected set/count.
 # Zero tests succeeding is a hard failure (fail-closed).
-TEST_OUTPUT=$(cargo test --manifest-path src-tauri/Cargo.toml wasm_guest_imports -- --nocapture 2>&1) || {
+if ! cargo test --manifest-path "${root}/src-tauri/Cargo.toml" wasm_guest_imports -- --nocapture >"${test_output_file}" 2>&1; then
   echo "error: guest component import inspection failed" >&2
-  echo "$TEST_OUTPUT" >&2
+  cat "${test_output_file}" >&2
   exit 1
-}
-echo "$TEST_OUTPUT"
+fi
+cat "${test_output_file}"
 
-PASSED_COUNT=$(echo "$TEST_OUTPUT" | grep -E '^test result: ok\.' | head -1 | awk '{print $4}')
-if [[ -z "${PASSED_COUNT:-}" || "$PASSED_COUNT" -lt "$EXPECTED_GUEST_IMPORT_TESTS" ]]; then
+PASSED_COUNT="$(awk '/^test result: ok\./ { print $4; exit }' "${test_output_file}")"
+if [[ -z "${PASSED_COUNT:-}" || "${PASSED_COUNT}" -lt "$EXPECTED_GUEST_IMPORT_TESTS" ]]; then
   echo "error: wasm_guest_imports ran ${PASSED_COUNT:-0} tests; expected at least $EXPECTED_GUEST_IMPORT_TESTS (fail-closed)" >&2
   exit 1
 fi
 
 for name in "${EXPECTED_GUEST_IMPORT_TEST_NAMES[@]}"; do
-  if ! grep -Eq "test ${name} \\.\\.\\. ok" <<<"$TEST_OUTPUT"; then
+  if ! grep -Eq "test ${name} \.\.\. ok" "${test_output_file}"; then
     echo "error: required wasm_guest_imports test missing or failed: $name" >&2
     exit 1
   fi

@@ -477,10 +477,6 @@ pub fn classify_for_execution(
 #[cfg(test)]
 mod tests {
   use super::*;
-  const EDGE_TTS_LNPLUGIN: &[u8] = include_bytes!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../runtime-plugins/edge-tts/fixtures/com.langnext.edge-tts-1.0.0.lnplugin"
-  ));
 
   use crate::domain::endpoint_trust::EndpointTrustPreviewInput;
   use crate::domain::service_integration::{
@@ -493,11 +489,15 @@ mod tests {
     let directory = tempfile::tempdir().unwrap();
     let database = Database::new(directory.path()).unwrap();
     database.initialize().unwrap();
-    // The committed signed edge-tts archive installs through the genuine package store and
-    // its definition is projected from the installed package (production startup path).
-    let packages = crate::services::test_support::vendor_packages(database.clone(), directory.path());
-    let package_digest = crate::services::test_support::bootstrap_package(&packages, EDGE_TTS_LNPLUGIN);
-    let registry = crate::services::test_support::registry_from_installed_packages(&packages);
+    // The committed edge-tts archive loads through the genuine catalog and its definition is
+    // projected from the immutable snapshot (production startup path).
+    let catalog = crate::services::test_support::catalog_with_builtins(
+      database.clone(),
+      directory.path(),
+      &[crate::services::test_support::EDGE_TTS_ARCHIVE],
+    );
+    let package_digest = crate::services::test_support::fixture_digest(&catalog, EDGE_TTS_PLUGIN_ID);
+    let registry = crate::services::test_support::registry_from_catalog(&catalog);
     let service = EndpointTrustService::new(database.clone(), registry);
     let instance_id = new_id();
     let now = now_rfc3339();

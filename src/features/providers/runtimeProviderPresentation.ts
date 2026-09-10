@@ -120,24 +120,16 @@ export interface AttachableRuntimeInterface {
   packageDigest: string;
   pluginId: string;
   version: string;
-  /** Signed publisher identity; shown so same-adapter candidates stay distinguishable. */
-  publisher: { keyId: string; keyFingerprint: string };
   /** True when the adapter is already bound to a different package and this is a replace. */
   isReplace: boolean;
 }
 
-/** Digest prefix length for compact package/publisher identity display. */
+/** Digest prefix length for compact content identity display. */
 const DIGEST_SHORT_LENGTH = 8;
 
 /** Stable short digest prefix; unchanged when already short. */
 export function shortPackageDigest(packageDigest: string): string {
   return packageDigest.length > DIGEST_SHORT_LENGTH ? packageDigest.slice(0, DIGEST_SHORT_LENGTH) : packageDigest;
-}
-
-/** Human-readable publisher identity: the key id when present, else the fingerprint prefix. */
-export function publisherLabel(publisher: { keyId: string; keyFingerprint: string }): string {
-  const keyId = publisher.keyId.trim();
-  return keyId ? keyId : shortPackageDigest(publisher.keyFingerprint);
 }
 
 /**
@@ -166,7 +158,6 @@ export function listAttachableRuntimeInterfaces(
           packageDigest: entry.packageDigest,
           pluginId: entry.pluginId,
           version: entry.version,
-          publisher: entry.publisher,
           isReplace: true,
         });
         continue;
@@ -176,7 +167,6 @@ export function listAttachableRuntimeInterfaces(
         packageDigest: entry.packageDigest,
         pluginId: entry.pluginId,
         version: entry.version,
-        publisher: entry.publisher,
         isReplace: false,
       });
     }

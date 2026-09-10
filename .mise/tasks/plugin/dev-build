@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# ABOUTME: Rebuild one development plugin directory so a debug app can reload it.
+# ABOUTME: Debug-only source loading; never signs, never touches built-in resources.
+#MISE description="Build one development plugin directory for debug reload (args: [--] <plugin-dir>)"
+set -euo pipefail
+
+if [[ "${1:-}" == "--" ]]; then
+  shift
+fi
+
+if [[ $# -ne 1 ]]; then
+  echo "usage: mise run plugin:dev-build -- <plugin-dir>" >&2
+  echo "note: the app reads development content only from LANGNEXT_PLUGIN_DEV_DIR in a debug build." >&2
+  exit 2
+fi
+
+root="$(cd "$(dirname "$0")/../../.." && pwd)"
+cd "$root"
+
+plugin_arg="$1"
+if [[ ! -d "$plugin_arg" ]]; then
+  echo "error: plugin directory not found: $plugin_arg" >&2
+  exit 1
+fi
+plugin_dir="$(cd "$plugin_arg" && pwd)"
+
+manifest="$plugin_dir/plugin.json"
+if [[ ! -f "$manifest" ]]; then
+  echo "error: development plugin directory has no plugin.json: $plugin_dir" >&2
+  exit 1
+fi
+
+# --- Pinned guest toolchain check ---
+expected_cargo_component="0.21.1"
+cargo_component_version="$(cargo component --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
+if [[ -z "$cargo_component_version" ]]; then
+  echo "error: cargo-component not found; expected $expected_cargo_component (mise pins it)" >&2
+  exit 1
+fi
+if [[ "$cargo_component_version" != "$expected_cargo_component" ]]; then
+  echo "error: cargo-component version $cargo_component_version != pinned $expected_cargo_component" >&2
+  exit 1
+fi
+echo "ok: cargo-component $cargo_component_version (pinned)"
+
+# --- Build every declared Wasm component into the plugin directory ---
+# The manifest is the only source of truth: each declared runtime/capability artifact is a
+# Wasm component built from the Cargo workspace next to it.
+if [[ ! -f "$plugin_dir/Cargo.toml" ]]; then
+  echo "error: development plugin directory has no Cargo.toml: $plugin_dir" >&2
+  exit 1
+fi
+
+cargo component build \
+  --manifest-path "$plugin_dir/Cargo.toml" \
+  --target wasm32-unknown-unknown \
+  --release \
+  --locked
+
+artifacts="$(bun -e '
+const fs = require("fs");
+const path = require("path");
+const dir = process.argv[1];
+const manifest = JSON.parse(fs.readFileSync(path.join(dir, "plugin.json"), "utf8"));
+const paths = new Set();
+if (manifest.runtime && manifest.runtime.artifact) paths.add(manifest.runtime.artifact);
+for (const capability of manifest.capabilities || []) {
+  if (capability.artifact) paths.add(capability.artifact);
+}
+if (paths.size === 0) {
+  console.error("error: manifest declares no runtime or capability artifact");
+  process.exit(1);
+}
+for (const relative of paths) console.log(relative);
+' "$plugin_dir")"
+
+while IFS= read -r artifact; do
+  [[ -z "$artifact" ]] && continue
+  if [[ ! -f "$plugin_dir/$artifact" ]]; then
+    echo "error: declared artifact is missing after the build: $artifact" >&2
+    exit 1
+  fi
+  echo "ok: artifact present $artifact"
+done <<<"$artifacts"
+
+# --- Structural validation: the reloaded directory must satisfy the catalog contract ---
+cargo run --manifest-path src-tauri/Cargo.toml --bin plugin_tool --quiet -- verify-structure "$plugin_dir"
+
+echo "ok: development plugin rebuilt at $plugin_dir"
+echo "    reload it in the app: Plugins -> catalog -> Reload (debug builds only)."

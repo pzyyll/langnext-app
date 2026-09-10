@@ -2,20 +2,23 @@
 
 ## Goal
 
-Installed, verified `.lnplugin` packages are the only executable provider and
-service-integration implementations. Wasm components own protocol request and
-response logic. Rust owns package verification, schema projection, grants, host
-auth, endpoint trust, bounded transport, and table-driven authority checks.
-The frontend presents package state and invokes typed IPC. It does not implement
-provider wire protocols.
+Installed, validated `.lnplugin` content is the only executable provider and
+service-integration implementation. Content identity is the exact content
+digest. Wasm components own protocol request and response logic. Rust owns
+content validation, schema projection, grants, host auth, endpoint trust,
+bounded transport, and table-driven authority checks. The frontend presents
+catalog state and invokes typed IPC. It does not implement provider wire
+protocols.
+
+Shipped source, digest, and trust rules: `docs/architecture/plugin-catalog.md`.
 
 ## Layout
 
 ```text
-runtime-plugins/                 Signed package sources and fixtures
+runtime-plugins/                 Plugin content sources and fixtures
 src-tauri/resources/plugins/     Bundled .lnplugin archives
 src-tauri/src/services/
-  plugin_package.rs              Verify and install packages
+  plugin_loader.rs               Validate content and publish snapshots
   package_definition.rs          Project manifest and schema
   wasm_runtime/                  Execute the declared Wasm component
   network_broker.rs              Host-approved network and auth
@@ -32,7 +35,8 @@ integrations.
 
 ## Installed-package flow
 
-1. Verify the signed package archive and its file index.
+1. Validate the directory or archive structure and its file index against the
+   manifest, then compute the content digest.
 2. Project the manifest, config schema, capabilities, and closed host auth
    policies into a host registration.
 3. Resolve an authorized package pin for the instance.
@@ -48,7 +52,7 @@ fallback.
 
 Rust retains:
 
-- Package verification and publisher or default authorization
+- Content validation, digest identity, and source-based authorization
 - Schema projection into config adapters
 - Endpoint trust review and exact approval consumption
 - Grant construction and credential isolation

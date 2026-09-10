@@ -1,5 +1,7 @@
 # Implementation Plan
 
+> **Superseded (2026-08-24):** plugin-level signing, publisher trust, vendor bootstrap, and default-activation orchestration were removed. See `docs/architecture/plugin-catalog.md`.
+
 **Goal:** Close or objectively verify all 11 package-only full-review findings, remove actionable Vite plugin-timing and oversized-chunk warnings without blanket suppression, and preserve package-only runtime behavior.
 
 **Inputs:** The supplied standards/spec review, current worktree files, Vite 8.1 configuration, Rolldown `checks.pluginTimings` and `output.codeSplitting` documentation, TanStack Router automatic code-splitting documentation, and the package-only old-version compatibility exemption.

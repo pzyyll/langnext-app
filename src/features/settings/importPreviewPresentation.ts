@@ -113,8 +113,6 @@ export const IMPORT_RUNTIME_DETAIL_LABELS = {
   pluginId: "settings.backup.runtimeDetailPluginId",
   pluginVersion: "settings.backup.runtimeDetailPluginVersion",
   packageDigest: "settings.backup.runtimeDetailPackageDigest",
-  publisherKeyId: "settings.backup.runtimeDetailPublisherKeyId",
-  publisherFingerprint: "settings.backup.runtimeDetailPublisherFingerprint",
   status: "settings.backup.runtimeDetailStatus",
   action: "settings.backup.runtimeDetailAction",
 } as const;
@@ -164,20 +162,6 @@ export function importRuntimeDetailRows(entry: ImportRuntimeRequirementPreview):
       valueIsLabelKey: false,
     });
   }
-  if (entry.publisherKeyId) {
-    rows.push({
-      labelKey: IMPORT_RUNTIME_DETAIL_LABELS.publisherKeyId,
-      value: entry.publisherKeyId,
-      valueIsLabelKey: false,
-    });
-  }
-  if (entry.publisherKeyFingerprint) {
-    rows.push({
-      labelKey: IMPORT_RUNTIME_DETAIL_LABELS.publisherFingerprint,
-      value: entry.publisherKeyFingerprint,
-      valueIsLabelKey: false,
-    });
-  }
   rows.push({
     labelKey: IMPORT_RUNTIME_DETAIL_LABELS.status,
     value: importRuntimeStatusLabelKey(entry.localStatus),
@@ -194,18 +178,10 @@ export function importRuntimeDetailRows(entry: ImportRuntimeRequirementPreview):
 /** Stable i18n key for one runtime local status. */
 export function importRuntimeStatusLabelKey(status: ImportRuntimeLocalStatus) {
   switch (status) {
-    case "bundled":
-      return "settings.backup.runtimeStatusBundled";
-    case "legacy":
-      return "settings.backup.runtimeStatusLegacy";
     case "missing":
       return "settings.backup.runtimeStatusMissing";
-    case "revoked":
-      return "settings.backup.runtimeStatusRevoked";
-    case "disabled":
-      return "settings.backup.runtimeStatusDisabled";
-    case "content_unavailable":
-      return "settings.backup.runtimeStatusContentUnavailable";
+    case "digest_mismatch":
+      return "settings.backup.runtimeStatusDigestMismatch";
     case "incompatible":
       return "settings.backup.runtimeStatusIncompatible";
     case "installed":
@@ -216,12 +192,10 @@ export function importRuntimeStatusLabelKey(status: ImportRuntimeLocalStatus) {
 /** Stable i18n key for one required runtime action. */
 export function importRuntimeActionLabelKey(action: ImportRuntimeRequiredAction) {
   switch (action) {
-    case "none":
-      return "settings.backup.runtimeActionNone";
     case "install_exact_package":
       return "settings.backup.runtimeActionInstallExactPackage";
-    case "restore_publisher":
-      return "settings.backup.runtimeActionRestorePublisher";
+    case "resolve_digest_mismatch":
+      return "settings.backup.runtimeActionResolveDigestMismatch";
     case "resolve_incompatibility":
       return "settings.backup.runtimeActionResolveIncompatibility";
     case "activate_after_import":
@@ -231,9 +205,8 @@ export function importRuntimeActionLabelKey(action: ImportRuntimeRequiredAction)
 
 /** Closed display order for runtime action groups. */
 export const IMPORT_RUNTIME_ACTION_ORDER: readonly ImportRuntimeRequiredAction[] = [
-  "none",
   "install_exact_package",
-  "restore_publisher",
+  "resolve_digest_mismatch",
   "resolve_incompatibility",
   "activate_after_import",
 ];
@@ -262,11 +235,14 @@ export function groupImportRuntimeRequirements(
   }));
 }
 
-/** True when any requirement is package-backed and needs a post-import action. */
+/**
+ * True when any imported requirement still needs a user action. Content that is already present
+ * locally still needs the explicit activation step, so `activate_after_import` counts.
+ */
 export function importHasPackageBackedRuntimes(
   entries: readonly ImportRuntimeRequirementPreview[] | undefined,
 ): boolean {
-  return (entries ?? []).some((entry) => entry.requiredAction !== "none");
+  return (entries ?? []).length > 0;
 }
 
 /** Stable i18n key stating external runtimes remain inactive after import. */

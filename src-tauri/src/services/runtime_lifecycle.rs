@@ -4,15 +4,16 @@ use crate::domain::endpoint_trust::{
   EDGE_TTS_TRUST_ENDPOINT_ALIAS, RuntimeIdentityFingerprintInput, configuration_fingerprint,
   runtime_identity_fingerprint,
 };
-use crate::domain::plugin_package::compute_permission_request_digest;
+use crate::domain::plugin_catalog::compute_permission_request_digest;
+use crate::domain::plugin_catalog::sha256_hex as public_sha256_hex;
 use crate::domain::plugin_package::runtime_kind_storage;
 use crate::domain::runtime_lifecycle::{
   ApplyRuntimeRollbackInput, ApplyRuntimeUpgradeInput, CapabilityCompatibilityDto, CapabilityGrantEntryRecord,
   CredentialSlotCompatibilityDto, ExecutionGrantSetBundle, ExecutionGrantSetRecord, GrantSubjectKind,
   InstanceRuntimeState, MAX_ROLLBACK_SNAPSHOTS_PER_INSTANCE, NetworkGrantEntryRecord, PageGrantEntryRecord,
-  PermissionDifferenceDto, PluginUpgradeSnapshot, PreferenceSnapshotRow, PublisherIdentityDto,
-  RUNTIME_PREVIEW_TTL_SECS, RuntimeIdentityDto, RuntimeLifecycleResultDto, RuntimeRequirementExport,
-  RuntimeRollbackPreviewDto, RuntimeUpgradePreviewDto, SchemaMigrationDto, runtime_kind_as_str,
+  PermissionDifferenceDto, PluginUpgradeSnapshot, PreferenceSnapshotRow, RUNTIME_PREVIEW_TTL_SECS, RuntimeIdentityDto,
+  RuntimeLifecycleResultDto, RuntimeRequirementExport, RuntimeRollbackPreviewDto, RuntimeUpgradePreviewDto,
+  SchemaMigrationDto, runtime_kind_as_str,
 };
 use crate::domain::runtime_plugin::{
   AuthPolicyId, CapabilityId, EndpointId, ExecutionGrantSet, FileRole, GrantSetRevision, HttpsOrigin,
@@ -27,12 +28,10 @@ use crate::domain::service_integration::{
 use crate::domain::time::{new_id, now_rfc3339};
 use crate::error::StorageError;
 use crate::repositories::{
-  installed_plugin_versions, integration_capability_health, integration_credential_bindings,
-  integration_endpoint_trusts, integration_instances, plugin_permission_grants, plugin_publishers,
-  plugin_upgrade_snapshots,
+  integration_capability_health, integration_credential_bindings, integration_endpoint_trusts, integration_instances,
+  plugin_permission_grants, plugin_upgrade_snapshots,
 };
-use crate::services::plugin_package::{VerifiedPackage, public_sha256_hex};
-use crate::services::plugin_store::PluginPackageService;
+use crate::services::plugin_catalog::{PinnedContent, PluginCatalog, resolve_pinned_content};
 use crate::services::runtime_router::{http_method_as_str, parse_http_method};
 use crate::services::service_integration_registry::ServiceIntegrationRegistry;
 use crate::storage::Database;
@@ -42,14 +41,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 /// Exact default/policy/intent CAS tokens for package-first grant insert.
-struct PackageFirstGrantCas {
-  policy_constraints_digest: String,
-  publisher_key_id: String,
-  publisher_fingerprint: String,
-  intent_id: Option<Uuid>,
-  intent_source: Option<crate::domain::default_package_activation::DefaultRuntimeActivationSource>,
-}
-
 #[derive(Debug, Clone)]
 struct UpgradePreviewSession {
   preview_id: String,
@@ -66,7 +57,7 @@ struct UpgradePreviewSession {
   migrated_config_digest: String,
   grant_bundle: ExecutionGrantSetBundle,
   requires_permission_approval: bool,
-  requires_publisher_reapproval: bool,
+
   /// Pre-migration rows snapshotted for rollback (byte-exact non-secret state).
   source_translation_preferences: Vec<PreferenceSnapshotRow>,
   source_ocr_preferences: Vec<PreferenceSnapshotRow>,
@@ -107,7 +98,7 @@ pub enum UpgradeApplyFault {
 #[derive(Clone)]
 pub struct RuntimeLifecycleService {
   db: Database,
-  plugin_packages: PluginPackageService,
+  catalog: std::sync::Arc<PluginCatalog>,
   registry: Arc<ServiceIntegrationRegistry>,
   wasm_runtime: Option<Arc<crate::services::wasm_runtime::WasmRuntime>>,
   token_grants: Option<Arc<crate::services::token_grant::TokenGrantService>>,
@@ -116,22 +107,13 @@ pub struct RuntimeLifecycleService {
   rollback_previews: Arc<Mutex<std::collections::HashMap<String, RollbackPreviewSession>>>,
   #[cfg(test)]
   apply_fault: Arc<Mutex<Option<UpgradeApplyFault>>>,
-  /// Test-only hook fired after the initial vendor-root verify and before the final auto-pin
-  /// re-verify/apply, so TOCTOU replacement of DB/content can be proven fail-closed.
-  #[cfg(test)]
-  auto_pin_between_verify_and_apply: Arc<Mutex<Option<Box<dyn FnOnce() + Send>>>>,
-  /// Test-only hook fired after the final store re-validation under the package-store generation
-  /// lock and before DB grant/pin write. Raw archive/content replacement here must fail closed
-  /// before commit (the earlier between-verify-and-apply hook is not sufficient for this window).
-  #[cfg(test)]
-  auto_pin_after_final_revalidate: Arc<Mutex<Option<Box<dyn FnOnce() + Send>>>>,
 }
 
 impl RuntimeLifecycleService {
-  pub fn new(db: Database, plugin_packages: PluginPackageService, registry: Arc<ServiceIntegrationRegistry>) -> Self {
+  pub fn new(db: Database, catalog: std::sync::Arc<PluginCatalog>, registry: Arc<ServiceIntegrationRegistry>) -> Self {
     Self {
       db,
-      plugin_packages,
+      catalog,
       registry,
       wasm_runtime: None,
       token_grants: None,
@@ -140,10 +122,6 @@ impl RuntimeLifecycleService {
       rollback_previews: Arc::new(Mutex::new(std::collections::HashMap::new())),
       #[cfg(test)]
       apply_fault: Arc::new(Mutex::new(None)),
-      #[cfg(test)]
-      auto_pin_between_verify_and_apply: Arc::new(Mutex::new(None)),
-      #[cfg(test)]
-      auto_pin_after_final_revalidate: Arc::new(Mutex::new(None)),
     }
   }
 
@@ -180,44 +158,6 @@ impl RuntimeLifecycleService {
     }
   }
 
-  /// Test-only: run a one-shot hook after the initial vendor-root verify and before final auto-pin
-  /// re-verify/apply (TOCTOU injection).
-  #[cfg(test)]
-  pub fn set_auto_pin_between_verify_and_apply_hook(&self, hook: Option<Box<dyn FnOnce() + Send>>) {
-    *self
-      .auto_pin_between_verify_and_apply
-      .lock()
-      .unwrap_or_else(|e| e.into_inner()) = hook;
-  }
-
-  #[cfg(test)]
-  fn take_auto_pin_between_verify_and_apply_hook(&self) -> Option<Box<dyn FnOnce() + Send>> {
-    self
-      .auto_pin_between_verify_and_apply
-      .lock()
-      .unwrap_or_else(|e| e.into_inner())
-      .take()
-  }
-
-  /// Test-only: run a one-shot hook after final store re-validation (under the store generation
-  /// lock) and before grant/pin DB write.
-  #[cfg(test)]
-  pub fn set_auto_pin_after_final_revalidate_hook(&self, hook: Option<Box<dyn FnOnce() + Send>>) {
-    *self
-      .auto_pin_after_final_revalidate
-      .lock()
-      .unwrap_or_else(|e| e.into_inner()) = hook;
-  }
-
-  #[cfg(test)]
-  fn take_auto_pin_after_final_revalidate_hook(&self) -> Option<Box<dyn FnOnce() + Send>> {
-    self
-      .auto_pin_after_final_revalidate
-      .lock()
-      .unwrap_or_else(|e| e.into_inner())
-      .take()
-  }
-
   pub fn preview_upgrade(
     &self,
     instance_id: Uuid,
@@ -226,9 +166,11 @@ impl RuntimeLifecycleService {
     self.expire_previews();
     let package_digest = PackageDigest::parse(target_package_digest).map_err(StorageError::Validation)?;
 
-    let (instance, target_version, source_grant) = self.db.read(|conn| {
+    let (instance, target, source_grant) = self.db.read(|conn| {
       let instance = integration_instances::get(conn, instance_id)?;
-      let target = installed_plugin_versions::get(conn, package_digest.as_str())?;
+      let target = resolve_pinned_content(Some(&self.catalog), conn, package_digest.as_str())?.ok_or_else(|| {
+        StorageError::PluginUnavailable(format!("target package {} is not available", package_digest.as_str()))
+      })?;
       let source_grant = match (&instance.package_digest, instance.execution_grant_set_revision) {
         (Some(digest), Some(rev)) => Some(plugin_permission_grants::get_bundle_for_subject_package_revision(
           conn,
@@ -242,34 +184,15 @@ impl RuntimeLifecycleService {
       Ok((instance, target, source_grant))
     })?;
 
-    if !target_version.content_available {
-      return Err(StorageError::PluginUnavailable(
-        "target package content is unavailable".into(),
-      ));
-    }
-    if target_version.plugin_id != instance.plugin_id {
+    if target.plugin_id != instance.plugin_id {
       return Err(StorageError::Validation(
         "target package plugin id does not match the instance".into(),
       ));
     }
 
-    let target_manifest: PluginManifestV1 = serde_json::from_str(&target_version.manifest_json)
-      .map_err(|e| StorageError::Validation(format!("invalid target manifest: {e}")))?;
-    self
-      .plugin_packages
-      .verify_installed_package_snapshot(&target_version.package_digest)?;
-    if target_version.signature_status == crate::domain::plugin_package::PackageSignatureStatus::Signed {
-      let publisher = self
-        .db
-        .read(|conn| plugin_publishers::get(conn, &target_version.publisher_key_id))?;
-      if publisher.revoked || !publisher.enabled {
-        return Err(StorageError::Validation(
-          "target package publisher is revoked or disabled".into(),
-        ));
-      }
-      crate::services::auth_policies::validate_google_cloud_manifest_authority(&target_manifest, publisher.source)
-        .map_err(StorageError::Validation)?;
-    }
+    let target_manifest: PluginManifestV1 = target.manifest.clone();
+    crate::services::auth_policies::validate_google_cloud_manifest_authority(&target_manifest, target.source)
+      .map_err(StorageError::Validation)?;
     match target_manifest.runtime.kind {
       RuntimeKind::WasmComponent | RuntimeKind::TrustedNativeWorker => {}
     }
@@ -278,7 +201,7 @@ impl RuntimeLifecycleService {
     // instance currently exposes (bundled definition or source package). A drop or major change
     // would sever existing profile/dependency bindings, so fail closed at preview rather than
     // offering a migration that cannot preserve them. Schema compatibility is enforced below by
-    // the migration component + signed-schema validation of the migrated config/preferences.
+    // the migration component + package-schema validation of the migrated config/preferences.
     let source_caps = self.source_capability_majors(&instance)?;
     let target_caps: HashSet<String> = target_manifest.capabilities.iter().map(|c| c.id.clone()).collect();
     for capability_id in &source_caps {
@@ -289,7 +212,7 @@ impl RuntimeLifecycleService {
       }
     }
 
-    // Schema revisions come from signed manifest declaration / schema files — never package semver major.
+    // Schema revisions come from the manifest declaration / schema files — never package semver major.
     let source_schema = instance.config_schema_version;
     let target_schema = self.resolve_config_schema_version(package_digest.as_str(), &target_manifest, source_schema)?;
     let migration_bytes = self.load_verified_migration_component_bytes(package_digest.as_str(), &target_manifest)?;
@@ -310,7 +233,7 @@ impl RuntimeLifecycleService {
     // Validate + normalize migrated payloads; prepared session stores normalized output only.
     let (migrated_config, migrated_translation, migrated_ocr, migrated_speech) =
       validate_and_normalize_migrated_payloads(
-        &self.plugin_packages,
+        &self.catalog,
         package_digest.as_str(),
         &target_manifest,
         &migrated_config,
@@ -332,22 +255,17 @@ impl RuntimeLifecycleService {
 
     let grant_bundle = build_grant_bundle_for_target(
       &self.db,
-      &self.plugin_packages,
+      &self.catalog,
       &instance,
       &migrated_config,
-      &target_version,
-      &target_manifest,
+      &target,
       source_grant.as_ref(),
     )?;
     let source_permission_digest = source_grant
       .as_ref()
       .map(|g| g.header.permission_request_digest.clone())
       .unwrap_or_default();
-    let target_permission_digest = if target_version.permission_request_digest.is_empty() {
-      compute_permission_request_digest(&target_manifest)
-    } else {
-      target_version.permission_request_digest.clone()
-    };
+    let target_permission_digest = compute_permission_request_digest(&target_manifest);
     let permission_differences = diff_permissions(
       source_grant.as_ref(),
       &target_manifest,
@@ -356,18 +274,6 @@ impl RuntimeLifecycleService {
       &target_permission_digest,
     );
     let requires_permission_approval = !permission_differences.is_empty();
-
-    let source_publisher = instance.package_digest.as_ref().and_then(|digest| {
-      self
-        .db
-        .read(|conn| installed_plugin_versions::get_optional(conn, digest))
-        .ok()
-        .flatten()
-    });
-    let requires_publisher_reapproval = match &source_publisher {
-      Some(src) => src.publisher_key_id != target_version.publisher_key_id,
-      None => false,
-    };
 
     let capability_compatibility = capability_compatibility(source_grant.as_ref(), &target_manifest);
     let credential_slots = credential_slot_compatibility(
@@ -384,14 +290,6 @@ impl RuntimeLifecycleService {
         "credential slot kind is incompatible with the target package".into(),
       ));
     }
-    let source_publisher_dto = source_publisher.as_ref().map(|src| PublisherIdentityDto {
-      key_id: src.publisher_key_id.clone(),
-      key_fingerprint: src.publisher_fingerprint.clone(),
-    });
-    let target_publisher_dto = PublisherIdentityDto {
-      key_id: target_version.publisher_key_id.clone(),
-      key_fingerprint: target_version.publisher_fingerprint.clone(),
-    };
     let preview_id = format!("rup_{}", new_id().simple());
     let dto = RuntimeUpgradePreviewDto {
       preview_id: preview_id.clone(),
@@ -406,11 +304,8 @@ impl RuntimeLifecycleService {
         runtime_error_message: None,
       },
       source_plugin_version: instance.plugin_version.clone(),
-      target_plugin_version: target_version.version.clone(),
-      source_publisher: source_publisher_dto,
-      target_publisher: target_publisher_dto,
+      target_plugin_version: target.version.clone(),
       requires_permission_approval,
-      requires_publisher_reapproval,
       capability_compatibility,
       schema_migrations,
       credential_slots,
@@ -425,14 +320,13 @@ impl RuntimeLifecycleService {
       source_package_digest: instance.package_digest.clone(),
       source_grant_revision: instance.execution_grant_set_revision,
       target_package_digest: package_digest.as_str().to_string(),
-      target_plugin_version: target_version.version.clone(),
+      target_plugin_version: target.version.clone(),
       target_runtime_kind: runtime_kind_storage(target_manifest.runtime.kind).to_string(),
       target_config_json: migrated_config,
       target_config_schema_version: target_schema,
       migrated_config_digest,
       grant_bundle,
       requires_permission_approval,
-      requires_publisher_reapproval,
       source_translation_preferences: source_translation,
       source_ocr_preferences: source_ocr,
       source_speech_preferences: source_speech,
@@ -473,31 +367,23 @@ impl RuntimeLifecycleService {
       .package_digest
       .as_deref()
       .ok_or_else(|| StorageError::Conflict("active Edge TTS package digest is missing".into()))?;
-    let target_version = installed_plugin_versions::get(conn, package_digest)?;
-    if target_version.plugin_id != instance.plugin_id || target_version.version != instance.plugin_version {
+    let target = resolve_pinned_content(Some(&self.catalog), conn, package_digest)?
+      .ok_or_else(|| StorageError::PluginUnavailable("active Edge TTS package is not available".into()))?;
+    if target.plugin_id != instance.plugin_id || target.version != instance.plugin_version {
       return Err(StorageError::Conflict(
         "active Edge TTS package identity does not match the instance".into(),
       ));
     }
-    let target_manifest: PluginManifestV1 = serde_json::from_str(&target_version.manifest_json)
-      .map_err(|error| StorageError::Validation(format!("invalid active Edge TTS manifest: {error}")))?;
-    let grant_bundle = build_grant_bundle_for_target_on_conn(
-      conn,
-      &self.plugin_packages,
-      &instance,
-      &instance.config_json,
-      &target_version,
-      &target_manifest,
-      None,
-    )?;
-    let requirement = build_runtime_requirement(&target_version, &target_manifest, instance.config_schema_version)?;
+    let grant_bundle =
+      build_grant_bundle_for_target_on_conn(conn, &self.catalog, &instance, &instance.config_json, &target, None)?;
+    let requirement = build_runtime_requirement(&target, instance.config_schema_version)?;
     let requirement_json = serde_json::to_string(&requirement)?;
     plugin_permission_grants::insert_bundle(conn, &grant_bundle)?;
     integration_instances::compare_and_set_runtime_pin(
       conn,
       instance_id,
       &instance.updated_at,
-      &target_version.version,
+      &target.version,
       &instance.config_json,
       instance.config_schema_version,
       runtime_kind_storage(RuntimeKind::WasmComponent),
@@ -531,7 +417,7 @@ impl RuntimeLifecycleService {
       return Ok(());
     };
     let preview = self.preview_upgrade(instance_id, &package_digest)?;
-    if (preview.requires_permission_approval || preview.requires_publisher_reapproval) && !acknowledge_permissions {
+    if preview.requires_permission_approval && !acknowledge_permissions {
       return Err(StorageError::Conflict(
         "active runtime grant refresh requires explicit permission acknowledgement".into(),
       ));
@@ -554,19 +440,16 @@ impl RuntimeLifecycleService {
     if Instant::now() > session.expires_at {
       return Err(StorageError::Conflict("upgrade preview expired".into()));
     }
-    if (session.requires_permission_approval || session.requires_publisher_reapproval) && !input.acknowledge_permissions
-    {
+    if session.requires_permission_approval && !input.acknowledge_permissions {
       return Err(StorageError::Validation(
-        "permission or publisher change requires acknowledgePermissions".into(),
+        "permission change requires acknowledgePermissions".into(),
       ));
     }
     if public_sha256_hex(session.target_config_json.as_bytes()) != session.migrated_config_digest {
       return Err(StorageError::Conflict("migrated config digest mismatch".into()));
     }
 
-    let verified_apply_snapshot = self
-      .plugin_packages
-      .verify_installed_package_snapshot(&session.target_package_digest)?;
+    let verified_apply_snapshot = self.catalog.snapshot(&session.target_package_digest)?;
     let now = now_rfc3339();
     let result = self.db.transaction(|uow| {
       #[cfg(test)]
@@ -574,15 +457,16 @@ impl RuntimeLifecycleService {
         return Err(StorageError::Internal("injected fault: before snapshot".into()));
       }
       // Re-validate target package/content/publisher/manifest/archive/artifact after preview.
-      let target_manifest = revalidate_target_package_for_apply(uow.conn(), &session.target_package_digest)?;
-      if verified_apply_snapshot.package_digest != session.target_package_digest
+      let target_manifest =
+        revalidate_target_package_for_apply(&self.catalog, uow.conn(), &session.target_package_digest)?;
+      if verified_apply_snapshot.descriptor.content_digest != session.target_package_digest
         || verified_apply_snapshot.manifest != target_manifest
       {
         return Err(StorageError::Conflict(
-          "verified package snapshot diverged before runtime apply".into(),
+          "catalog snapshot diverged before runtime apply".into(),
         ));
       }
-      revalidate_package_store_artifacts(&self.plugin_packages, &session.target_package_digest, &target_manifest)?;
+      revalidate_package_store_artifacts(&self.catalog, &session.target_package_digest, &target_manifest)?;
       if session.grant_bundle.header.package_digest != session.target_package_digest {
         return Err(StorageError::Conflict("grant bundle package digest mismatch".into()));
       }
@@ -704,11 +588,9 @@ impl RuntimeLifecycleService {
       }
 
       let requirement_json = {
-        let target_version = installed_plugin_versions::get(uow.conn(), &session.target_package_digest)?;
-        let target_manifest: PluginManifestV1 = serde_json::from_str(&target_version.manifest_json)
-          .map_err(|e| StorageError::Validation(format!("invalid target manifest: {e}")))?;
+        let target = self.catalog.snapshot(&session.target_package_digest)?;
         let requirement =
-          build_runtime_requirement(&target_version, &target_manifest, session.target_config_schema_version)?;
+          build_runtime_requirement(&pinned_from_loaded(&target), session.target_config_schema_version)?;
         serde_json::to_string(&requirement)?
       };
       integration_instances::compare_and_set_runtime_pin(
@@ -779,23 +661,11 @@ impl RuntimeLifecycleService {
     })?;
 
     if let Some(digest) = &snapshot.package_digest {
-      let version = self
-        .db
-        .read(|conn| installed_plugin_versions::get_optional(conn, digest))?;
-      match version {
-        Some(v) if v.content_available => {}
-        Some(_) if snapshot.execution_grant_set_revision.is_none() => {}
-        Some(_) => {
-          return Err(StorageError::PluginUnavailable(
-            "rollback target package content is unavailable".into(),
-          ));
-        }
-        None if snapshot.execution_grant_set_revision.is_none() => {}
-        None => {
-          return Err(StorageError::PluginUnavailable(
-            "rollback target package is not installed".into(),
-          ));
-        }
+      let available = self.catalog.snapshot_optional(digest).is_some();
+      if !available && snapshot.execution_grant_set_revision.is_some() {
+        return Err(StorageError::PluginUnavailable(
+          "rollback target package is not available".into(),
+        ));
       }
     }
     // Live grant may be missing when we will restore from grant_snapshot_json on apply.
@@ -882,7 +752,7 @@ impl RuntimeLifecycleService {
       rollback_source_snapshot
         .package_digest
         .as_deref()
-        .map(|digest| self.plugin_packages.verify_installed_package_snapshot(digest))
+        .map(|digest| self.catalog.snapshot(digest))
         .transpose()?
     } else {
       None
@@ -913,16 +783,16 @@ impl RuntimeLifecycleService {
       if snapshot.execution_grant_set_revision.is_some()
         && let Some(digest) = snapshot.package_digest.as_deref()
       {
-        let target_manifest = revalidate_target_package_for_apply(uow.conn(), digest)?;
+        let target_manifest = revalidate_target_package_for_apply(&self.catalog, uow.conn(), digest)?;
         let verified = rollback_verified_snapshot
           .as_ref()
           .ok_or_else(|| StorageError::Conflict("rollback package verification snapshot is missing".into()))?;
-        if verified.package_digest != digest || verified.manifest != target_manifest {
+        if verified.descriptor.content_digest != digest || verified.manifest != target_manifest {
           return Err(StorageError::Conflict(
             "verified package snapshot diverged before runtime rollback".into(),
           ));
         }
-        revalidate_package_store_artifacts(&self.plugin_packages, digest, &target_manifest)?;
+        revalidate_package_store_artifacts(&self.catalog, digest, &target_manifest)?;
         let slots = credential_slot_compatibility_conn(
           uow.conn(),
           &current,
@@ -987,17 +857,12 @@ impl RuntimeLifecycleService {
 
       let requirement_json = match snapshot.package_digest.as_deref() {
         Some(digest) => {
-          let version = installed_plugin_versions::get_optional(uow.conn(), digest)?;
-          match version {
-            Some(version) => {
-              let manifest: PluginManifestV1 = serde_json::from_str(&version.manifest_json)
-                .map_err(|e| StorageError::Validation(format!("invalid rollback target manifest: {e}")))?;
-              Some(serde_json::to_string(&build_runtime_requirement(
-                &version,
-                &manifest,
-                snapshot.config_schema_version,
-              )?)?)
-            }
+          let target = resolve_pinned_content(Some(&self.catalog), uow.conn(), digest)?;
+          match target {
+            Some(target) => Some(serde_json::to_string(&build_runtime_requirement(
+              &target,
+              snapshot.config_schema_version,
+            )?)?),
             None => current.runtime_requirement_json.clone(),
           }
         }
@@ -1069,612 +934,73 @@ impl RuntimeLifecycleService {
       .transaction(|uow| plugin_upgrade_snapshots::discard(uow.conn(), snapshot_id, &now))
   }
 
-  /// Subject preparation for package-first activation of one pending instance.
+  /// Pin the resolved catalog default for a new instance and build its execution grant.
   ///
-  /// Loads instance/intent/publisher/policy state and resolves the instance effective authority.
-  /// Initial policy/package verification is owned by `DefaultPackageActivationService` single-flight.
-  pub(super) fn prepare_package_first_activation(
-    &self,
-    instance_id: Uuid,
-    snapshot: &crate::services::default_package_activation::VerifiedActivationSnapshot,
-  ) -> Result<Option<crate::services::default_package_activation::PreparedPackageFirstActivation>, StorageError> {
-    use crate::repositories::default_package_activation_policies;
-    use crate::services::runtime_authority::resolve_integration_effective_authority;
-
-    let loaded = self.db.read(|conn| {
+  /// This is the only default authority: built-in content is the automatic fallback and an
+  /// explicit user override is one digest. Existing instance pins are never changed here.
+  pub fn activate_with_catalog_default(&self, instance_id: Uuid) -> Result<(), StorageError> {
+    let (instance, target) = self.db.read(|conn| {
       let instance = integration_instances::get(conn, instance_id)?;
-      if instance.runtime_state != InstanceRuntimeState::PendingActivation.as_str()
-        || instance.execution_grant_set_revision.is_some()
-      {
-        return Ok::<_, StorageError>(None);
+      if !instance.enabled {
+        return Err(StorageError::Validation("integration instance is disabled".into()));
       }
-      let Some(digest) = instance.package_digest.clone() else {
-        return Ok(None);
-      };
-      if digest != snapshot.package_digest {
-        return Ok(None);
-      }
-      let intent =
-        default_package_activation_policies::get_intent(conn, GrantSubjectKind::IntegrationInstance, instance_id)?;
-      let publisher = plugin_publishers::get_optional(conn, &snapshot.publisher_key_id)?.filter(|p| {
-        p.key_id == snapshot.publisher_key_id
-          && p.fingerprint == snapshot.publisher_fingerprint
-          && p.public_key_hex == snapshot.publisher_public_key_hex
-          && p.source == snapshot.publisher_source
-          && !p.revoked
-          && p.enabled
-      });
-      let policy = default_package_activation_policies::get_policy(conn, &instance.plugin_id)?;
-      Ok(Some((instance, digest, intent, publisher, policy)))
+      let target = self.catalog.resolve_default(&instance.plugin_id).ok_or_else(|| {
+        StorageError::PluginUnavailable(format!("no plugin content available for {}", instance.plugin_id))
+      })?;
+      Ok((instance, target))
     })?;
-
-    let Some((instance, package_digest, intent, publisher, policy)) = loaded else {
-      return Ok(None);
-    };
-    let plugin_id = instance.plugin_id.clone();
-    let unsigned =
-      snapshot.verified.signature_status == crate::domain::plugin_package::PackageSignatureStatus::Unsigned;
-    if !unsigned && publisher.is_none() {
-      log::warn!(
-        "package_first_activation_publisher_mismatch instance={instance_id} plugin={plugin_id} digest={package_digest}"
-      );
-      let _ = self.mark_package_first_activation_failed(
-        instance_id,
-        crate::services::default_package_activation::DEFAULT_AUTHORIZATION_STALE_CODE,
-        "default authorization or publisher trust is stale",
-      );
-      return Ok(None);
-    }
-    let Some(policy) = policy else {
-      let _ = self.mark_package_first_activation_failed(
-        instance_id,
-        crate::services::default_package_activation::DEFAULT_AUTHORIZATION_STALE_CODE,
-        "default authorization policy is missing",
-      );
-      return Ok(None);
-    };
-
-    let effective = match resolve_integration_effective_authority(
-      &self.plugin_packages,
-      &package_digest,
-      &snapshot.verified.manifest,
-      &instance.config_json,
-    ) {
-      Ok(effective) => effective,
-      Err(err) => {
-        let _ = self.mark_package_first_activation_failed(instance_id, "activation_failed", &err.to_string());
-        return Ok(None);
-      }
-    };
-    let config_digest = public_sha256_hex(instance.config_json.as_bytes());
-    Ok(Some(
-      crate::services::default_package_activation::PreparedPackageFirstActivation {
-        subject_kind: GrantSubjectKind::IntegrationInstance,
-        subject_id: instance_id,
-        package_digest,
-        expected_update_token: instance.updated_at.clone(),
-        config_digest,
-        effective_authority: effective,
-        policy,
-        publisher,
-        binding: None,
-        version: None,
-        // Integration CAS compares the instance row state; no base URL projection applies.
-        subject_config_base_url: String::new(),
-        subject_config_auth_scheme: None,
-        intent,
-      },
-    ))
-  }
-
-  /// Apply the integration grant and complete the activation intent after the coordinator's
-  /// shared policy/approval/coverage checks pass.
-  pub(super) fn apply_package_first_activation(
-    &self,
-    prepared: &crate::services::default_package_activation::PreparedPackageFirstActivation,
-    snapshot: &crate::services::default_package_activation::VerifiedActivationSnapshot,
-  ) -> Result<(), StorageError> {
-    let unsigned_placeholder = crate::domain::plugin_package::PluginPublisher {
-      key_id: String::new(),
-      fingerprint: String::new(),
-      public_key_hex: String::new(),
-      source: crate::domain::plugin_package::PublisherSource::UserApproved,
-      enabled: true,
-      revoked: false,
-      created_at: String::new(),
-      updated_at: String::new(),
-    };
-    let publisher = prepared.publisher.as_ref().unwrap_or(&unsigned_placeholder);
-    self.apply_verified_package_first_pin(
-      prepared.subject_id,
-      snapshot,
-      publisher,
-      prepared.intent.as_ref().map(|intent| intent.id),
-      prepared.intent.as_ref().map(|intent| intent.source),
-    )?;
-    // Completing the intent is a distinct transaction after the grant/pin commit.
-    self.mark_package_first_activation_completed(prepared.subject_id)
-  }
-
-  /// Integration failure marking used by the shared coordinator; the stale-mapped message stays
-  /// subject-specific to preserve the integration wording.
-  pub(super) fn mark_package_first_activation_failed_for_coordinator(
-    &self,
-    prepared: &crate::services::default_package_activation::PreparedPackageFirstActivation,
-    error_code: &str,
-    error_message: &str,
-  ) -> Result<(), StorageError> {
-    if error_code == crate::services::default_package_activation::DEFAULT_AUTHORIZATION_STALE_CODE
-      && error_message.contains("default_authorization_stale")
+    if instance.execution_grant_set_revision.is_some()
+      && instance.runtime_state == InstanceRuntimeState::Active.as_str()
     {
-      self.mark_package_first_activation_failed(
-        prepared.subject_id,
-        error_code,
-        "default authorization changed before grant",
-      )
-    } else {
-      self.mark_package_first_activation_failed(prepared.subject_id, error_code, error_message)
+      return Ok(());
     }
-  }
-
-  fn mark_package_first_activation_failed(
-    &self,
-    instance_id: Uuid,
-    error_code: &str,
-    error_message: &str,
-  ) -> Result<(), StorageError> {
-    use crate::repositories::default_package_activation_policies;
-    self.db.transaction(|uow| {
-      let transition_at = now_rfc3339();
-      let current = integration_instances::get(uow.conn(), instance_id)?;
-      let bound_token = if current.runtime_state == InstanceRuntimeState::PendingActivation.as_str()
-        && current.execution_grant_set_revision.is_none()
-      {
-        integration_instances::mark_runtime_unavailable(
-          uow.conn(),
-          instance_id,
-          &current.updated_at,
-          error_code,
-          error_message,
-          &transition_at,
-        )?;
-        transition_at
-      } else {
-        current.updated_at
-      };
-      if let Some(intent) =
-        default_package_activation_policies::get_intent(uow.conn(), GrantSubjectKind::IntegrationInstance, instance_id)?
-      {
-        default_package_activation_policies::fail_intent_with_update_token(
-          uow.conn(),
-          intent.id,
-          error_code,
-          error_message,
-          &bound_token,
-        )?;
-      }
-      Ok(())
-    })
-  }
-
-  fn mark_package_first_confirmation_required(
-    &self,
-    instance_id: Uuid,
-    error_code: &str,
-    error_message: &str,
-  ) -> Result<(), StorageError> {
-    use crate::domain::default_package_activation::DefaultRuntimeActivationState;
-    use crate::repositories::default_package_activation_policies;
-    self.db.transaction(|uow| {
-      if let Some(intent) =
-        default_package_activation_policies::get_intent(uow.conn(), GrantSubjectKind::IntegrationInstance, instance_id)?
-      {
-        default_package_activation_policies::update_intent_state(
-          uow.conn(),
-          intent.id,
-          DefaultRuntimeActivationState::ConfirmationRequired,
-          Some(error_code),
-          Some(error_message),
-        )?;
-      }
-      // Plan state model: authority confirmation retains exact package `pending_activation`
-      // (no grant). Surface the confirmation code without flipping to unavailable.
-      let current = integration_instances::get(uow.conn(), instance_id)?;
-      if current.runtime_state == InstanceRuntimeState::PendingActivation.as_str()
-        && current.execution_grant_set_revision.is_none()
-      {
-        let now = now_rfc3339();
-        integration_instances::compare_and_set_runtime_pin(
-          uow.conn(),
-          instance_id,
-          &current.updated_at,
-          &current.plugin_version,
-          &current.config_json,
-          current.config_schema_version,
-          &current.runtime_kind,
-          current.package_digest.as_deref(),
-          None,
-          InstanceRuntimeState::PendingActivation.as_str(),
-          Some(error_code),
-          Some(error_message),
-          current.runtime_requirement_json.as_deref(),
-          &now,
-        )?;
-      }
-      Ok(())
-    })
-  }
-
-  fn mark_package_first_activation_completed(&self, instance_id: Uuid) -> Result<(), StorageError> {
-    use crate::domain::default_package_activation::DefaultRuntimeActivationState;
-    use crate::repositories::default_package_activation_policies;
-    self.db.transaction(|uow| {
-      if let Some(intent) =
-        default_package_activation_policies::get_intent(uow.conn(), GrantSubjectKind::IntegrationInstance, instance_id)?
-      {
-        default_package_activation_policies::update_intent_state(
-          uow.conn(),
-          intent.id,
-          DefaultRuntimeActivationState::Completed,
-          None,
-          None,
-        )?;
-      }
-      // Consume exact approval after successful activation.
-      default_package_activation_policies::delete_authority_approvals_for_subject(
-        uow.conn(),
-        GrantSubjectKind::IntegrationInstance,
-        instance_id,
-      )?;
-      Ok(())
-    })
-  }
-
-  /// Plugin-ID auto-pin is retired. Package-first create through
-  /// `DefaultPackageActivationService` is the only default activation path.
-  ///
-  /// Kept as a fail-closed no-op so transitional call sites cannot resurrect host allowlists.
-  pub fn pin_default_package_for_new_instance(&self, instance_id: Uuid) -> Result<(), StorageError> {
-    log::info!("new_instance_default_pin_retired instance={instance_id}; use authorized package-first activation");
-    Ok(())
-  }
-
-  /// Package-first activation apply path: policy-bound publisher re-verification and final CAS.
-  fn apply_verified_package_first_pin(
-    &self,
-    instance_id: Uuid,
-    snapshot: &crate::services::default_package_activation::VerifiedActivationSnapshot,
-    publisher: &crate::domain::plugin_package::PluginPublisher,
-    intent_id: Option<Uuid>,
-    intent_source: Option<crate::domain::default_package_activation::DefaultRuntimeActivationSource>,
-  ) -> Result<(), StorageError> {
-    self.apply_verified_auto_pin(
-      instance_id,
-      &snapshot.verified,
-      publisher,
-      Some(PackageFirstGrantCas {
-        policy_constraints_digest: snapshot.policy_constraints_digest.clone(),
-        publisher_key_id: snapshot.publisher_key_id.clone(),
-        publisher_fingerprint: snapshot.publisher_fingerprint.clone(),
-        intent_id,
-        intent_source,
-      }),
-    )
-  }
-
-  /// Final auto-pin authorization: re-verify the exact retained archive/content with the trusted
-  /// publisher key (vendor external root or approved user key), compare against the retained
-  /// verification snapshot, reverse-bind live DB rows, then write grant + runtime pin in one CAS
-  /// transaction. Does not go through the public preview/apply session path.
-  fn apply_verified_auto_pin(
-    &self,
-    instance_id: Uuid,
-    verified_snapshot: &VerifiedPackage,
-    trusted_publisher: &crate::domain::plugin_package::PluginPublisher,
-    package_first_cas: Option<PackageFirstGrantCas>,
-  ) -> Result<(), StorageError> {
-    // Final policy-bound re-verify of exact retained archive/content immediately before pin.
-    let rechecked = self
-      .plugin_packages
-      .verify_installed_package_snapshot(&verified_snapshot.package_digest)?;
-    let unsigned = rechecked.signature_status == crate::domain::plugin_package::PackageSignatureStatus::Unsigned;
-    if rechecked.package_digest != verified_snapshot.package_digest
-      || rechecked.manifest_bytes != verified_snapshot.manifest_bytes
-      || rechecked.manifest != verified_snapshot.manifest
-      || (!unsigned
-        && (rechecked.publisher_public_key_hex != verified_snapshot.publisher_public_key_hex
-          || rechecked.publisher_fingerprint != verified_snapshot.publisher_fingerprint
-          || rechecked.publisher_public_key_hex != trusted_publisher.public_key_hex))
-    {
-      return Err(StorageError::Conflict(
-        "auto-pin verified snapshot diverged before apply; refusing pin".into(),
-      ));
-    }
-    let package_digest = rechecked.package_digest.clone();
-    let target_manifest = rechecked.manifest.clone();
-
-    let (instance, target_version, publisher) = self.db.read(|conn| {
-      let instance = integration_instances::get(conn, instance_id)?;
-      let target_version = installed_plugin_versions::get(conn, &package_digest)?;
-      let publisher = plugin_publishers::get_optional(conn, &target_version.publisher_key_id)?;
-      Ok((instance, target_version, publisher))
-    })?;
-    let publisher =
-      publisher.ok_or_else(|| StorageError::Validation("auto-pin publisher row missing after re-verify".into()))?;
-    let package_first_pending = instance.runtime_state == InstanceRuntimeState::PendingActivation.as_str()
-      && instance.package_digest.as_deref() == Some(package_digest.as_str())
-      && instance.execution_grant_set_revision.is_none();
-    if !package_first_pending && (instance.package_digest.is_some() || instance.execution_grant_set_revision.is_some())
-    {
-      return Err(StorageError::Conflict(
-        "instance runtime pin changed before auto-pin apply".into(),
-      ));
-    }
-    if !target_version.content_available {
-      return Err(StorageError::PluginUnavailable(
-        "auto-pin target content became unavailable".into(),
-      ));
-    }
-    // Reverse-bind live catalog rows to the external-root-verified snapshot (DB is object only).
-    if target_version.package_digest != package_digest
-      || target_version.plugin_id != target_manifest.id
-      || target_version.version != target_manifest.version
-      || target_version.publisher_key_id != target_manifest.publisher.key_id
-      || target_version.publisher_fingerprint != target_manifest.publisher.key_fingerprint
-      || target_version.plugin_id != instance.plugin_id
-    {
-      return Err(StorageError::Validation(
-        "auto-pin catalog row does not reverse-bind the verified snapshot".into(),
-      ));
-    }
-    if !is_authorized_default_package(&target_version, &rechecked, &publisher)
-      && !matches_trusted_publisher_identity(&publisher, trusted_publisher)
-    {
-      return Err(StorageError::Validation(
-        "auto-pin package no longer matches authorized default or trusted publisher identity".into(),
-      ));
-    }
-    // Legacy vendor auto-pin still requires host-allowed vendor shape when no authorized policy.
-    if trusted_publisher.source == crate::domain::plugin_package::PublisherSource::Vendor {
-      // Vendor packages remain constrained by host-allowed vendor defaults for legacy auto-pin.
-      // Package-first activation already required an authorized policy before calling this path.
-    }
-    // Catalog manifest_json must still equal the verified signed manifest (object integrity).
-    let catalog_manifest: PluginManifestV1 = serde_json::from_str(&target_version.manifest_json)
-      .map_err(|e| StorageError::Validation(format!("invalid catalog manifest: {e}")))?;
-    if catalog_manifest != target_manifest {
-      return Err(StorageError::Validation(
-        "auto-pin catalog manifest diverged from verified snapshot".into(),
-      ));
-    }
-    let expected_permission = compute_permission_request_digest(&target_manifest);
-    if target_version.permission_request_digest != expected_permission {
-      return Err(StorageError::Validation(
-        "auto-pin permission request digest diverged from verified manifest".into(),
-      ));
-    }
-
-    let source_schema = instance.config_schema_version;
-    let target_schema = self.resolve_config_schema_version(package_digest.as_str(), &target_manifest, source_schema)?;
-    let migration_bytes = self.load_verified_migration_component_bytes(package_digest.as_str(), &target_manifest)?;
-    let (source_translation, source_ocr, source_speech) =
-      self.db.read(|conn| collect_preference_snapshots(conn, instance_id))?;
-    let (migrated_config, migrated_translation, migrated_ocr, migrated_speech, _schema_migrations) = self
-      .run_target_migrations_from_rows(
-        &instance.config_json,
-        source_schema,
-        target_schema,
-        migration_bytes.as_deref(),
-        source_translation.clone(),
-        source_ocr.clone(),
-        source_speech.clone(),
-      )?;
-    validate_json_object(&migrated_config, "migrated config")?;
-    let (migrated_config, migrated_translation, migrated_ocr, migrated_speech) =
-      validate_and_normalize_migrated_payloads(
-        &self.plugin_packages,
-        package_digest.as_str(),
-        &target_manifest,
-        &migrated_config,
-        migrated_translation,
-        migrated_ocr,
-        migrated_speech,
-      )?;
-    // Auto-pin consent gate: Edge TTS uses an instance-configured origin (`base-url`), so the
-    // manifest-structural check alone is insufficient. Auto-pin is only safe when the EFFECTIVE
-    // origin resolved from the migrated config equals the exact vendor default. Any custom
-    // origin must go through explicit permission preview/approval and must not be host-auto-
-    // approved. Google Web GTX uses a host-fixed origin (no instance config), so this gate only
-    // applies to Edge TTS.
-    if target_manifest.id == crate::domain::service_integration::EDGE_TTS_PLUGIN_ID
-      && !edge_tts_effective_origin_is_vendor_default(&migrated_config)
-    {
-      return Err(StorageError::Conflict(
-        "auto-pin requires Edge TTS effective origin to equal the vendor default; a custom base-url needs explicit migration consent".into(),
-      ));
-    }
-    let migrated_config_digest = public_sha256_hex(migrated_config.as_bytes());
     let grant_bundle = build_grant_bundle_for_target(
       &self.db,
-      &self.plugin_packages,
+      &self.catalog,
       &instance,
-      &migrated_config,
-      &target_version,
-      &target_manifest,
+      &instance.config_json,
+      &PinnedContent {
+        content_digest: target.descriptor.content_digest.clone(),
+        plugin_id: target.descriptor.plugin_id.clone(),
+        version: target.descriptor.version.clone(),
+        manifest_json: target.manifest_json.clone(),
+        manifest: target.manifest.clone(),
+        runtime_kind: target.descriptor.runtime_kind,
+        source: target.descriptor.source,
+      },
       None,
     )?;
-    if grant_bundle.header.package_digest != package_digest
-      || grant_bundle.header.permission_request_digest != expected_permission
-    {
-      return Err(StorageError::Conflict(
-        "auto-pin grant bundle does not bind the verified package".into(),
-      ));
-    }
-
-    let expected_updated_at = instance.updated_at.clone();
-    let target_plugin_version = target_version.version.clone();
+    let requirement = build_runtime_requirement(
+      &PinnedContent {
+        content_digest: target.descriptor.content_digest.clone(),
+        plugin_id: target.descriptor.plugin_id.clone(),
+        version: target.descriptor.version.clone(),
+        manifest_json: target.manifest_json.clone(),
+        manifest: target.manifest.clone(),
+        runtime_kind: target.descriptor.runtime_kind,
+        source: target.descriptor.source,
+      },
+      instance.config_schema_version,
+    )?;
+    let requirement_json = serde_json::to_string(&requirement)?;
     let now = now_rfc3339();
-    // Hold the host package-store generation lock across final re-validation → grant/pin commit so
-    // install/uninstall/recover cannot replace archive/content in this window (lock order: store → DB).
-    let _store_guard = self.plugin_packages.lock_store()?;
-    let generation_at_final_revalidate = self.plugin_packages.store_generation();
     self.db.transaction(|uow| {
-      // Inside the final transaction: reverse-bind DB again and re-verify store with the external
-      // vendor root so concurrent catalog/content replacement cannot race the pin write.
       let current = integration_instances::get(uow.conn(), instance_id)?;
-      if current.updated_at != expected_updated_at {
+      if current.updated_at != instance.updated_at {
         return Err(StorageError::Conflict(
-          "integration instance changed concurrently during auto-pin".into(),
+          "integration instance changed before default activation".into(),
         ));
-      }
-      let current_package_first_pending = current.runtime_state == InstanceRuntimeState::PendingActivation.as_str()
-        && current.package_digest.as_deref() == Some(package_digest.as_str())
-        && current.execution_grant_set_revision.is_none();
-      if !current_package_first_pending
-        && (current.package_digest.is_some() || current.execution_grant_set_revision.is_some())
-      {
-        return Err(StorageError::Conflict(
-          "runtime pin changed concurrently during auto-pin".into(),
-        ));
-      }
-      let live_version = installed_plugin_versions::get(uow.conn(), &package_digest)?;
-      if !live_version.content_available
-        || live_version.package_digest != package_digest
-        || live_version.plugin_id != target_manifest.id
-        || live_version.version != target_manifest.version
-        || live_version.publisher_key_id != target_manifest.publisher.key_id
-        || live_version.publisher_fingerprint != target_manifest.publisher.key_fingerprint
-        || live_version.permission_request_digest != expected_permission
-      {
-        return Err(StorageError::Validation(
-          "auto-pin target catalog diverged inside apply transaction".into(),
-        ));
-      }
-      let live_manifest: PluginManifestV1 = serde_json::from_str(&live_version.manifest_json)
-        .map_err(|e| StorageError::Validation(format!("invalid target manifest: {e}")))?;
-      if live_manifest != target_manifest {
-        return Err(StorageError::Validation(
-          "auto-pin catalog manifest diverged inside apply transaction".into(),
-        ));
-      }
-      if !unsigned {
-        let live_publisher = plugin_publishers::get(uow.conn(), &live_version.publisher_key_id)?;
-        if !matches_trusted_publisher_identity(&live_publisher, trusted_publisher)
-          || live_publisher.fingerprint != target_manifest.publisher.key_fingerprint
-          || live_publisher.revoked
-          || !live_publisher.enabled
-        {
-          return Err(StorageError::Validation(
-            "auto-pin publisher no longer reverse-binds the trusted publisher identity".into(),
-          ));
-        }
-      }
-      let final_verified = self
-        .plugin_packages
-        .verify_installed_package_snapshot(&package_digest)?;
-      if final_verified.package_digest != package_digest
-        || final_verified.manifest_bytes != verified_snapshot.manifest_bytes
-        || final_verified.manifest != target_manifest
-        || (!unsigned && final_verified.publisher_public_key_hex != trusted_publisher.public_key_hex)
-      {
-        return Err(StorageError::Conflict(
-          "auto-pin store content diverged from verified snapshot at apply".into(),
-        ));
-      }
-      revalidate_package_store_artifacts(&self.plugin_packages, &package_digest, &target_manifest)?;
-
-      // After final re-validation and before grant/pin write: optional TOCTOU injection point.
-      // Coordinated store mutations block on the held store lock; raw FS replacement fails the
-      // post-hook re-verify / generation reverse-bind below (fail closed, no grant/pin).
-      #[cfg(test)]
-      if let Some(hook) = self.take_auto_pin_after_final_revalidate_hook() {
-        hook();
-      }
-
-      // Fail closed if a coordinated mutation bumped generation while we held the lock incorrectly,
-      // or if raw archive/content was replaced after the final re-validation above.
-      if self.plugin_packages.store_generation() != generation_at_final_revalidate {
-        return Err(StorageError::Conflict(
-          "auto-pin package store generation changed after final re-validation; refusing pin".into(),
-        ));
-      }
-      let post_hook_verified = self
-        .plugin_packages
-        .verify_installed_package_snapshot(&package_digest)?;
-      if post_hook_verified.package_digest != package_digest
-        || post_hook_verified.manifest_bytes != verified_snapshot.manifest_bytes
-        || post_hook_verified.manifest != target_manifest
-        || (!unsigned && post_hook_verified.publisher_public_key_hex != trusted_publisher.public_key_hex)
-      {
-        return Err(StorageError::Conflict(
-          "auto-pin store content diverged after final re-validation before grant/pin".into(),
-        ));
-      }
-      revalidate_package_store_artifacts(&self.plugin_packages, &package_digest, &target_manifest)?;
-
-      if public_sha256_hex(migrated_config.as_bytes()) != migrated_config_digest {
-        return Err(StorageError::Conflict("migrated config digest mismatch".into()));
-      }
-
-      verify_preference_cas(uow.conn(), &source_translation, instance_id)?;
-      verify_preference_cas(uow.conn(), &source_ocr, instance_id)?;
-      verify_preference_cas(uow.conn(), &source_speech, instance_id)?;
-      let (live_translation, live_ocr, live_speech) = collect_preference_snapshots(uow.conn(), instance_id)?;
-      assert_dependency_sets_bidirectional(&live_translation, &source_translation)?;
-      assert_dependency_sets_bidirectional(&live_ocr, &source_ocr)?;
-      assert_dependency_sets_bidirectional(&live_speech, &source_speech)?;
-
-      // Snapshot holds pre-migration non-secret state only (bundled source has no grant).
-      let snapshot = PluginUpgradeSnapshot {
-        id: new_id(),
-        integration_instance_id: instance_id,
-        created_at: now.clone(),
-        discarded_at: None,
-        runtime_kind: current.runtime_kind.clone(),
-        package_digest: current.package_digest.clone(),
-        execution_grant_set_id: None,
-        execution_grant_set_revision: current.execution_grant_set_revision,
-        plugin_version: current.plugin_version.clone(),
-        config_json: current.config_json.clone(),
-        config_schema_version: current.config_schema_version,
-        grant_snapshot_json: None,
-        translation_preferences: source_translation.clone(),
-        ocr_preferences: source_ocr.clone(),
-        speech_preferences: source_speech.clone(),
-      };
-      plugin_upgrade_snapshots::insert(uow.conn(), &snapshot)?;
-      prune_snapshots(uow.conn(), instance_id, &now)?;
-      if let Some(cas) = &package_first_cas {
-        use crate::domain::default_package_activation::DefaultRuntimeActivationState;
-        use crate::repositories::default_package_activation_policies;
-        if let (Some(intent_id), Some(intent_source)) = (cas.intent_id, cas.intent_source) {
-          default_package_activation_policies::assert_final_default_policy_intent_cas(
-            uow.conn(),
-            &target_manifest.id,
-            &package_digest,
-            &cas.policy_constraints_digest,
-            &cas.publisher_key_id,
-            &cas.publisher_fingerprint,
-            intent_id,
-            intent_source,
-            DefaultRuntimeActivationState::Pending,
-          )?;
-        }
       }
       plugin_permission_grants::insert_bundle(uow.conn(), &grant_bundle)?;
-      integration_endpoint_trusts::delete_for_instance(uow.conn(), instance_id)?;
-
-      let requirement = build_runtime_requirement(&live_version, &target_manifest, target_schema)?;
-      let requirement_json = serde_json::to_string(&requirement)?;
       integration_instances::compare_and_set_runtime_pin(
         uow.conn(),
         instance_id,
-        &expected_updated_at,
-        &target_plugin_version,
-        &migrated_config,
-        target_schema,
-        runtime_kind_storage(target_manifest.runtime.kind),
-        Some(&package_digest),
+        &current.updated_at,
+        &target.descriptor.version,
+        &current.config_json,
+        current.config_schema_version,
+        runtime_kind_storage(target.descriptor.runtime_kind),
+        Some(&target.descriptor.content_digest),
         Some(grant_bundle.header.revision),
         InstanceRuntimeState::Active.as_str(),
         None,
@@ -1682,32 +1008,30 @@ impl RuntimeLifecycleService {
         Some(&requirement_json),
         &now,
       )?;
-      write_preference_rows(
-        uow.conn(),
-        &migrated_translation,
-        &migrated_ocr,
-        &migrated_speech,
-        &now,
-        false,
-        instance_id,
-      )?;
       Ok(())
     })?;
-    drop(_store_guard);
-    self.evict_runtime_caches(instance_id, None, Some(package_digest.as_str()));
+    self.evict_runtime_caches(
+      instance_id,
+      instance.package_digest.as_deref(),
+      Some(&target.descriptor.content_digest),
+    );
     Ok(())
   }
-
   fn source_capability_majors(&self, instance: &IntegrationInstance) -> Result<HashSet<String>, StorageError> {
     let digest = instance
       .package_digest
       .as_deref()
       .ok_or_else(|| StorageError::Validation("package-backed instance is missing its package digest".into()))?;
     self.db.read(|conn| {
-      if let Some(version) = installed_plugin_versions::get_optional(conn, digest)? {
-        let manifest: PluginManifestV1 = serde_json::from_str(&version.manifest_json)
-          .map_err(|e| StorageError::Validation(format!("invalid source manifest: {e}")))?;
-        return Ok(manifest.capabilities.into_iter().map(|c| c.id).collect::<HashSet<_>>());
+      if let Some(content) = resolve_pinned_content(Some(&self.catalog), conn, digest)? {
+        return Ok(
+          content
+            .manifest
+            .capabilities
+            .into_iter()
+            .map(|c| c.id)
+            .collect::<HashSet<_>>(),
+        );
       }
       // Unresolved pin: keep declared majors from the stored requirement when present.
       // Active pins must have an installed source; pending/unavailable may upgrade from absence.
@@ -1739,7 +1063,7 @@ impl RuntimeLifecycleService {
       .retain(|_, session| session.expires_at > now);
   }
 
-  /// Load migration artifact only after archive rehash + signed file-index path/role/length/SHA256 checks.
+  /// Load migration artifact only after archive rehash + manifest file-index path/role/length/SHA256 checks.
   fn load_verified_migration_component_bytes(
     &self,
     package_digest: &str,
@@ -1749,40 +1073,26 @@ impl RuntimeLifecycleService {
     let Some(file_entry) = manifest.files.iter().find(|f| f.path == MIGRATION_PATH) else {
       return Ok(None);
     };
-    // Rehash retained package archive exact bytes (same helper path as RuntimeRouter).
-    let package_path = self.plugin_packages.package_archive_path(package_digest);
-    let archive_digest = crate::services::plugin_package::hash_file(&package_path)
-      .map_err(|e| StorageError::PluginUnavailable(format!("failed to rehash package archive: {}", e.message)))?;
-    if archive_digest != package_digest {
-      return Err(StorageError::PluginUnavailable(
-        "package archive digest mismatch before migration".into(),
-      ));
-    }
-    let abs = self
-      .plugin_packages
-      .package_content_path(package_digest)
-      .join(MIGRATION_PATH);
-    if !abs.is_file() {
-      return Err(StorageError::Validation(
-        "migration component is listed in the signed index but missing on disk".into(),
-      ));
-    }
-    let bytes = std::fs::read(&abs).map_err(|e| StorageError::Internal(e.to_string()))?;
+    // Read only from the immutable digest-addressed snapshot, never a mutable source path.
+    let loaded = self.catalog.snapshot(package_digest)?;
+    let bytes = loaded
+      .read_snapshot_file(MIGRATION_PATH)
+      .map_err(|_| StorageError::Validation("migration component is missing from the snapshot".into()))?;
     if bytes.len() as u64 != file_entry.bytes {
       return Err(StorageError::Validation(
-        "migration component length does not match signed file index".into(),
+        "migration component length does not match the file index".into(),
       ));
     }
     let digest = public_sha256_hex(&bytes);
     if digest != file_entry.sha256 {
       return Err(StorageError::Validation(
-        "migration component digest does not match signed file index".into(),
+        "migration component digest does not match the file index".into(),
       ));
     }
     Ok(Some(bytes))
   }
 
-  /// Resolve target config schema revision from the signed manifest declaration and validate schema files.
+  /// Resolve target config schema revision from the manifest declaration and validate schema files.
   /// Never forges revision from package semver major. Undeclared revision preserves `source_schema`.
   fn resolve_config_schema_version(
     &self,
@@ -1792,7 +1102,7 @@ impl RuntimeLifecycleService {
   ) -> Result<u32, StorageError> {
     if let Some(rel) = manifest.configuration_schema.as_deref() {
       // Dialect validation only (PluginSchemaV1.version is always SCHEMA_VERSION_V1).
-      let _ = load_and_validate_schema_file(&self.plugin_packages, package_digest, rel, manifest)?;
+      let _ = load_and_validate_schema_file(&self.catalog, package_digest, rel, manifest)?;
     }
     match manifest.config_schema_version {
       Some(v) if v >= 1 => Ok(v),
@@ -1877,26 +1187,27 @@ impl RuntimeLifecycleService {
 }
 
 pub(crate) fn load_and_validate_schema_file(
-  packages: &PluginPackageService,
+  catalog: &PluginCatalog,
   package_digest: &str,
   relative_path: &str,
   manifest: &PluginManifestV1,
 ) -> Result<crate::domain::plugin_schema::PluginSchemaV1, StorageError> {
-  let file_entry = manifest.files.iter().find(|f| f.path == relative_path).ok_or_else(|| {
-    StorageError::Validation(format!(
-      "schema path {relative_path} is not present in the signed file index"
-    ))
-  })?;
-  let abs = packages.package_content_path(package_digest).join(relative_path);
-  let bytes = std::fs::read(&abs).map_err(|e| StorageError::Validation(format!("schema file missing: {e}")))?;
+  let file_entry =
+    manifest.files.iter().find(|f| f.path == relative_path).ok_or_else(|| {
+      StorageError::Validation(format!("schema path {relative_path} is not present in the file index"))
+    })?;
+  let loaded = catalog.snapshot(package_digest)?;
+  let bytes = loaded
+    .read_snapshot_file(relative_path)
+    .map_err(|_| StorageError::Validation(format!("schema file missing: {relative_path}")))?;
   if bytes.len() as u64 != file_entry.bytes {
     return Err(StorageError::Validation(
-      "schema file length does not match signed file index".into(),
+      "schema file length does not match the file index".into(),
     ));
   }
   if public_sha256_hex(&bytes) != file_entry.sha256 {
     return Err(StorageError::Validation(
-      "schema file digest does not match signed file index".into(),
+      "schema file digest does not match the file index".into(),
     ));
   }
   let schema: crate::domain::plugin_schema::PluginSchemaV1 =
@@ -1907,51 +1218,24 @@ pub(crate) fn load_and_validate_schema_file(
 }
 
 fn revalidate_target_package_for_apply(
+  catalog: &PluginCatalog,
   conn: &rusqlite::Connection,
   package_digest: &str,
 ) -> Result<PluginManifestV1, StorageError> {
-  let version = installed_plugin_versions::get(conn, package_digest)?;
-  if !version.content_available {
-    return Err(StorageError::PluginUnavailable(
-      "target package content became unavailable after preview".into(),
-    ));
-  }
-  if version.signature_status == crate::domain::plugin_package::PackageSignatureStatus::Signed {
-    let publisher = plugin_publishers::get(conn, &version.publisher_key_id)?;
-    if publisher.revoked || !publisher.enabled {
-      return Err(StorageError::Validation(
-        "target package publisher is revoked or disabled".into(),
-      ));
-    }
-    if publisher.fingerprint != version.publisher_fingerprint {
-      return Err(StorageError::Validation(
-        "target package publisher fingerprint mismatch".into(),
-      ));
-    }
-  }
-  let manifest: PluginManifestV1 = serde_json::from_str(&version.manifest_json)
-    .map_err(|e| StorageError::Validation(format!("invalid target manifest: {e}")))?;
-  // Permission digest always recomputed and compared to catalog + must match for apply.
-  let expected_permission = compute_permission_request_digest(&manifest);
-  if version.permission_request_digest != expected_permission {
-    return Err(StorageError::Validation(
-      "target package permission request digest diverged from manifest; re-preview required".into(),
-    ));
-  }
-  Ok(manifest)
+  let content = resolve_pinned_content(Some(catalog), conn, package_digest)?
+    .ok_or_else(|| StorageError::PluginUnavailable("target package content became unavailable after preview".into()))?;
+  Ok(content.manifest)
 }
 
 fn revalidate_package_store_artifacts(
-  packages: &PluginPackageService,
+  catalog: &PluginCatalog,
   package_digest: &str,
   manifest: &PluginManifestV1,
 ) -> Result<(), StorageError> {
-  let archive = packages.package_archive_path(package_digest);
-  let archive_digest = crate::services::plugin_package::hash_file(&archive)
-    .map_err(|e| StorageError::PluginUnavailable(format!("failed to rehash package archive: {}", e.message)))?;
-  if archive_digest != package_digest {
+  let loaded = catalog.snapshot(package_digest)?;
+  if loaded.manifest != *manifest {
     return Err(StorageError::PluginUnavailable(
-      "package archive digest mismatch at apply; re-preview required".into(),
+      "catalog manifest diverged from the pinned content at apply; re-preview required".into(),
     ));
   }
   if let Some(artifact_rel) = manifest.runtime.artifact.as_deref() {
@@ -1959,9 +1243,10 @@ fn revalidate_package_store_artifacts(
       .files
       .iter()
       .find(|f| f.path == artifact_rel && f.role == FileRole::RuntimeArtifact)
-      .ok_or_else(|| StorageError::Validation("runtime artifact missing from signed index".into()))?;
-    let abs = packages.package_content_path(package_digest).join(artifact_rel);
-    let bytes = std::fs::read(&abs).map_err(|e| StorageError::PluginUnavailable(e.to_string()))?;
+      .ok_or_else(|| StorageError::Validation("runtime artifact missing from the file index".into()))?;
+    let bytes = loaded
+      .read_snapshot_file(artifact_rel)
+      .map_err(|_| StorageError::PluginUnavailable("runtime artifact missing from snapshot".into()))?;
     if bytes.len() as u64 != entry.bytes || public_sha256_hex(&bytes) != entry.sha256 {
       return Err(StorageError::PluginUnavailable(
         "runtime artifact length/digest mismatch at apply; re-preview required".into(),
@@ -1971,71 +1256,11 @@ fn revalidate_package_store_artifacts(
   Ok(())
 }
 
-/// Host-allowed vendor default policy for auto-pinning new instances. Only Google Web 1.0.0 GTX
-/// (wasm-component runtime, vendor publisher, exactly GTX GET https://translate.google.com +
-/// host.none.v1, no credential slots, no instance-configured origin) may be auto-acknowledged by
-/// Edge TTS vendor-default effective complete Base URL. Auto-pin is only safe when the
-/// instance's migrated `base-url` resolves to exactly this canonical URL; a custom path or
-/// origin requires explicit migration consent and must not be host-auto-approved.
-const EDGE_TTS_VENDOR_DEFAULT_ORIGIN: &str = crate::domain::service_integration::EDGE_TTS_DEFAULT_BASE_URL;
-
-/// True when the migrated Edge TTS config resolves to the vendor-default complete Base URL.
-/// Extracts the `base-url` config field, normalizes it through the shared Edge TTS normalizer,
-/// and compares the full canonical URL. A custom path/origin, missing field, or malformed/
-/// non-HTTPS base URL returns false so auto-pin fails closed and the instance requires explicit
-/// migration consent. Complements package-first policy checks by validating the EFFECTIVE
-/// URL/config, not just the manifest endpoint shape.
-fn edge_tts_effective_origin_is_vendor_default(migrated_config: &str) -> bool {
-  let Ok(value) = serde_json::from_str::<serde_json::Value>(migrated_config) else {
-    return false;
-  };
-  let Some(raw) = value.get("base-url").and_then(|v| v.as_str()) else {
-    return false;
-  };
-  let Ok(normalized) = crate::services::edge_tts::normalize_edge_tts_base_url(raw) else {
-    return false;
-  };
-  normalized.canonical_url == EDGE_TTS_VENDOR_DEFAULT_ORIGIN
-}
-
-/// True when the verified package identity still matches the installed catalog row used by an
-/// authorized default policy (digest, publisher, permission). Callers must already have resolved
-/// policy status; this reverse-binds the verified snapshot to that exact package identity.
-fn is_authorized_default_package(
-  version: &crate::domain::plugin_package::InstalledPluginVersion,
-  verified: &VerifiedPackage,
-  publisher: &crate::domain::plugin_package::PluginPublisher,
-) -> bool {
-  if verified.package_digest != version.package_digest {
-    return false;
-  }
-  if publisher.revoked || !publisher.enabled {
-    return false;
-  }
-  publisher.key_id == version.publisher_key_id
-    && publisher.fingerprint == version.publisher_fingerprint
-    && verified.manifest.publisher.key_id == version.publisher_key_id
-    && verified.manifest.publisher.key_fingerprint == version.publisher_fingerprint
-    && verified.publisher_fingerprint == version.publisher_fingerprint
-    && verified.publisher_public_key_hex == publisher.public_key_hex
-    && compute_permission_request_digest(&verified.manifest) == version.permission_request_digest
-}
-
-fn matches_trusted_publisher_identity(
-  live: &crate::domain::plugin_package::PluginPublisher,
-  trusted: &crate::domain::plugin_package::PluginPublisher,
-) -> bool {
-  live.key_id == trusted.key_id
-    && live.fingerprint == trusted.fingerprint
-    && live.public_key_hex == trusted.public_key_hex
-    && live.source == trusted.source
-}
-
-/// Validate migrated payloads against signed schemas and return normalized prepared payloads.
+/// Validate migrated payloads against package schemas and return normalized prepared payloads.
 /// Always run real `normalize_config` for declared schemas (empty and non-empty fields).
 /// Preference rows are validated against the exact bound capability id schema — never a prefix match.
 fn validate_and_normalize_migrated_payloads(
-  packages: &PluginPackageService,
+  catalog: &PluginCatalog,
   package_digest: &str,
   manifest: &PluginManifestV1,
   migrated_config: &str,
@@ -2056,7 +1281,7 @@ fn validate_and_normalize_migrated_payloads(
   let host = HostOptionResolver::supported_languages(supported_languages().iter().map(|s| s.to_string()));
 
   let config_out = if let Some(rel) = manifest.configuration_schema.as_deref() {
-    let schema = load_and_validate_schema_file(packages, package_digest, rel, manifest)?;
+    let schema = load_and_validate_schema_file(catalog, package_digest, rel, manifest)?;
     let value: serde_json::Value = serde_json::from_str(migrated_config)
       .map_err(|e| StorageError::Validation(format!("migrated config is not valid JSON: {e}")))?;
     if !value.is_object() {
@@ -2096,7 +1321,7 @@ fn validate_and_normalize_migrated_payloads(
           cap.id, row.kind
         )));
       };
-      let schema = load_and_validate_schema_file(packages, package_digest, rel, manifest)?;
+      let schema = load_and_validate_schema_file(catalog, package_digest, rel, manifest)?;
       let value: serde_json::Value = serde_json::from_str(&row.preferences_json)
         .map_err(|e| StorageError::Validation(format!("{} preferences are not valid JSON: {e}", row.kind)))?;
       if !value.is_object() {
@@ -2483,33 +1708,23 @@ pub(crate) fn origin_kind_for_verified_network_endpoint_with_approval(
 
 fn build_grant_bundle_for_target(
   db: &Database,
-  packages: &PluginPackageService,
+  catalog: &PluginCatalog,
   instance: &IntegrationInstance,
   target_config_json: &str,
-  target_version: &crate::domain::plugin_package::InstalledPluginVersion,
-  target_manifest: &PluginManifestV1,
+  target: &PinnedContent,
   source_grant: Option<&ExecutionGrantSetBundle>,
 ) -> Result<ExecutionGrantSetBundle, StorageError> {
   db.read(|conn| {
-    build_grant_bundle_for_target_on_conn(
-      conn,
-      packages,
-      instance,
-      target_config_json,
-      target_version,
-      target_manifest,
-      source_grant,
-    )
+    build_grant_bundle_for_target_on_conn(conn, catalog, instance, target_config_json, target, source_grant)
   })
 }
 
 pub(crate) fn build_grant_bundle_for_target_on_conn(
   conn: &rusqlite::Connection,
-  packages: &PluginPackageService,
+  catalog: &PluginCatalog,
   instance: &IntegrationInstance,
   target_config_json: &str,
-  target_version: &crate::domain::plugin_package::InstalledPluginVersion,
-  target_manifest: &PluginManifestV1,
+  target: &PinnedContent,
   source_grant: Option<&ExecutionGrantSetBundle>,
 ) -> Result<ExecutionGrantSetBundle, StorageError> {
   if let Some(source) = source_grant {
@@ -2524,7 +1739,7 @@ pub(crate) fn build_grant_bundle_for_target_on_conn(
     conn,
     GrantSubjectKind::IntegrationInstance,
     instance.id,
-    &target_version.package_digest,
+    &target.content_digest,
   )?;
   let _ = GrantSetRevision::new(revision).map_err(StorageError::Validation)?;
   let grant_id = new_id();
@@ -2532,7 +1747,7 @@ pub(crate) fn build_grant_bundle_for_target_on_conn(
 
   let mut capabilities = Vec::new();
   let mut domain_caps = Vec::new();
-  for cap in &target_manifest.capabilities {
+  for cap in &target.manifest.capabilities {
     let capability_id = CapabilityId::parse(&cap.id).map_err(|e| StorageError::Validation(format!("{e:?}")))?;
     domain_caps.push(capability_id.clone());
     capabilities.push(CapabilityGrantEntryRecord {
@@ -2542,15 +1757,15 @@ pub(crate) fn build_grant_bundle_for_target_on_conn(
     });
   }
 
-  let auth_policies = if target_manifest.permissions.auth_policies.is_empty() {
+  let auth_policies = if target.manifest.permissions.auth_policies.is_empty() {
     vec!["host.none.v1".to_string()]
   } else {
-    target_manifest.permissions.auth_policies.clone()
+    target.manifest.permissions.auth_policies.clone()
   };
 
   let mut network = Vec::new();
   let mut domain_net = Vec::new();
-  // Resolve instance-configured endpoint origins from the normalized target config so signed
+  // Resolve instance-configured endpoint origins from the normalized target config so package
   // schema defaults participate in permission preview. A dynamic field hidden by its schema
   // visibility condition is inactive and receives no grant.
   let target_config_value: serde_json::Value = serde_json::from_str(target_config_json)
@@ -2558,33 +1773,34 @@ pub(crate) fn build_grant_bundle_for_target_on_conn(
   let target_configuration_fingerprint =
     configuration_fingerprint(target_config_json).map_err(StorageError::Validation)?;
   let target_runtime_identity_fingerprint = runtime_identity_fingerprint(RuntimeIdentityFingerprintInput {
-    plugin_id: &target_version.plugin_id,
-    plugin_version: &target_version.version,
+    plugin_id: &target.plugin_id,
+    plugin_version: &target.version,
     runtime_kind: runtime_kind_storage(RuntimeKind::WasmComponent),
-    package_digest: Some(&target_version.package_digest),
+    package_digest: Some(&target.content_digest),
   });
-  let target_config_schema = if target_manifest
+  let target_config_schema = if target
+    .manifest
     .permissions
     .network
     .iter()
     .any(|endpoint| endpoint.instance_origin_config_field.is_some())
   {
-    let schema_path = target_manifest.configuration_schema.as_deref().ok_or_else(|| {
+    let schema_path = target.manifest.configuration_schema.as_deref().ok_or_else(|| {
       StorageError::Validation("instance-configured network origin requires a configuration schema".into())
     })?;
     Some(load_and_validate_schema_file(
-      packages,
-      &target_version.package_digest,
+      catalog,
+      &target.content_digest,
       schema_path,
-      target_manifest,
+      &target.manifest,
     )?)
   } else {
     None
   };
-  for cap in &target_manifest.capabilities {
+  for cap in &target.manifest.capabilities {
     let capability_id = CapabilityId::parse(&cap.id).map_err(|e| StorageError::Validation(format!("{e:?}")))?;
-    for endpoint in &target_manifest.permissions.network {
-      if !google_cloud_capability_uses_endpoint(&target_manifest.id, &cap.id, &endpoint.id) {
+    for endpoint in &target.manifest.permissions.network {
+      if !google_cloud_capability_uses_endpoint(&target.manifest.id, &cap.id, &endpoint.id) {
         continue;
       }
       let endpoint_id = EndpointId::parse(&endpoint.id).map_err(StorageError::Validation)?;
@@ -2641,7 +1857,7 @@ pub(crate) fn build_grant_bundle_for_target_on_conn(
       };
       for (origin_value, base_url) in &effective_origins {
         let origin = HttpsOrigin::parse(origin_value).map_err(StorageError::Validation)?;
-        let current_approval = if target_manifest.id == crate::domain::service_integration::EDGE_TTS_PLUGIN_ID
+        let current_approval = if target.manifest.id == crate::domain::service_integration::EDGE_TTS_PLUGIN_ID
           && endpoint.id == EDGE_TTS_TRUST_ENDPOINT_ALIAS
           && endpoint.instance_origin_config_field.as_deref() == Some("base-url")
           && base_url.as_str() != crate::domain::service_integration::EDGE_TTS_DEFAULT_BASE_URL
@@ -2649,8 +1865,8 @@ pub(crate) fn build_grant_bundle_for_target_on_conn(
           integration_endpoint_trusts::get_exact(
             conn,
             instance.id,
-            &target_version.plugin_id,
-            &target_version.version,
+            &target.plugin_id,
+            &target.version,
             EDGE_TTS_TRUST_ENDPOINT_ALIAS,
             base_url,
             &target_configuration_fingerprint,
@@ -2661,7 +1877,7 @@ pub(crate) fn build_grant_bundle_for_target_on_conn(
           false
         };
         let origin_kind =
-          origin_kind_for_verified_network_endpoint_with_approval(target_manifest, endpoint, current_approval);
+          origin_kind_for_verified_network_endpoint_with_approval(&target.manifest, endpoint, current_approval);
         for method in &endpoint.methods {
           for policy in &auth_policies {
             let auth = AuthPolicyId::parse(policy).map_err(StorageError::Validation)?;
@@ -2734,14 +1950,14 @@ pub(crate) fn build_grant_bundle_for_target_on_conn(
   let domain_pages: Vec<PageGrantEntry> = Vec::new();
 
   let identity = RuntimeIdentity::Package(PackageIdentity {
-    package_digest: PackageDigest::parse(&target_version.package_digest).map_err(StorageError::Validation)?,
+    package_digest: PackageDigest::parse(&target.content_digest).map_err(StorageError::Validation)?,
   });
   let validated = if revision == 1 {
     ExecutionGrantSet::initial(
       instance.id,
       identity,
-      PluginId::parse(&target_version.plugin_id).map_err(StorageError::Validation)?,
-      SemVerVersion::parse(&target_version.version).map_err(StorageError::Validation)?,
+      PluginId::parse(&target.plugin_id).map_err(StorageError::Validation)?,
+      SemVerVersion::parse(&target.version).map_err(StorageError::Validation)?,
       domain_caps.clone(),
       domain_net.clone(),
       domain_pages.clone(),
@@ -2751,8 +1967,8 @@ pub(crate) fn build_grant_bundle_for_target_on_conn(
     let base = ExecutionGrantSet::initial(
       instance.id,
       identity.clone(),
-      PluginId::parse(&target_version.plugin_id).map_err(StorageError::Validation)?,
-      SemVerVersion::parse(&target_version.version).map_err(StorageError::Validation)?,
+      PluginId::parse(&target.plugin_id).map_err(StorageError::Validation)?,
+      SemVerVersion::parse(&target.version).map_err(StorageError::Validation)?,
       domain_caps.clone(),
       domain_net.clone(),
       domain_pages.clone(),
@@ -2762,8 +1978,8 @@ pub(crate) fn build_grant_bundle_for_target_on_conn(
     ExecutionGrantSet::restore_validated(
       instance.id,
       identity,
-      PluginId::parse(&target_version.plugin_id).map_err(StorageError::Validation)?,
-      SemVerVersion::parse(&target_version.version).map_err(StorageError::Validation)?,
+      PluginId::parse(&target.plugin_id).map_err(StorageError::Validation)?,
+      SemVerVersion::parse(&target.version).map_err(StorageError::Validation)?,
       GrantSetRevision::new(revision).map_err(StorageError::Validation)?,
       domain_caps.clone(),
       domain_net.clone(),
@@ -2775,11 +1991,7 @@ pub(crate) fn build_grant_bundle_for_target_on_conn(
   let authority_digest = validated.authority_digest().as_str().to_string();
   let _ = parse_http_method;
 
-  let permission_request_digest = if target_version.permission_request_digest.is_empty() {
-    compute_permission_request_digest(target_manifest)
-  } else {
-    target_version.permission_request_digest.clone()
-  };
+  let permission_request_digest = compute_permission_request_digest(&target.manifest);
 
   Ok(ExecutionGrantSetBundle {
     header: ExecutionGrantSetRecord {
@@ -2787,9 +1999,9 @@ pub(crate) fn build_grant_bundle_for_target_on_conn(
       revision,
       subject_kind: GrantSubjectKind::IntegrationInstance,
       subject_id: instance.id,
-      plugin_id: target_version.plugin_id.clone(),
-      plugin_version: target_version.version.clone(),
-      package_digest: target_version.package_digest.clone(),
+      plugin_id: target.plugin_id.clone(),
+      plugin_version: target.version.clone(),
+      package_digest: target.content_digest.clone(),
       permission_request_digest,
       authority_digest,
       approved_at: now,
@@ -2926,12 +2138,7 @@ fn load_installed_manifest(
   conn: &rusqlite::Connection,
   package_digest: &str,
 ) -> Result<Option<PluginManifestV1>, StorageError> {
-  let Some(version) = installed_plugin_versions::get_optional(conn, package_digest)? else {
-    return Ok(None);
-  };
-  let manifest = serde_json::from_str(&version.manifest_json)
-    .map_err(|e| StorageError::Validation(format!("invalid installed package manifest: {e}")))?;
-  Ok(Some(manifest))
+  Ok(resolve_pinned_content(None, conn, package_digest)?.map(|content| content.manifest))
 }
 
 fn credential_slot_compatibility(
@@ -3239,10 +2446,8 @@ fn restore_grant_from_snapshot(
       ));
     }
     let expected_permission = compute_permission_request_digest(&manifest);
-    let installed = installed_plugin_versions::get(conn, &bundle.header.package_digest)?;
     if !bundle.header.permission_request_digest.is_empty()
       && bundle.header.permission_request_digest != expected_permission
-      && bundle.header.permission_request_digest != installed.permission_request_digest
     {
       return Err(StorageError::Validation(
         "grant snapshot permission request digest does not match package".into(),
@@ -3364,35 +2569,37 @@ fn canonical_bundles_equal(a: &ExecutionGrantSetBundle, b: &ExecutionGrantSetBun
   a_pages == b_pages
 }
 
+/// Project one immutable snapshot into the pinned content identity used by grant builders.
+pub(crate) fn pinned_from_loaded(loaded: &crate::services::plugin_loader::LoadedPlugin) -> PinnedContent {
+  PinnedContent {
+    content_digest: loaded.descriptor.content_digest.clone(),
+    plugin_id: loaded.descriptor.plugin_id.clone(),
+    version: loaded.descriptor.version.clone(),
+    manifest_json: loaded.manifest_json.clone(),
+    manifest: loaded.manifest.clone(),
+    runtime_kind: loaded.descriptor.runtime_kind,
+    source: loaded.descriptor.source,
+  }
+}
+
 fn build_runtime_requirement(
-  version: &crate::domain::plugin_package::InstalledPluginVersion,
-  manifest: &PluginManifestV1,
+  content: &PinnedContent,
   config_schema_version: u32,
 ) -> Result<RuntimeRequirementExport, StorageError> {
-  let signed = version.signature_status == crate::domain::plugin_package::PackageSignatureStatus::Signed;
-  if signed && (version.publisher_key_id.trim().is_empty() || version.publisher_fingerprint.trim().is_empty()) {
-    return Err(StorageError::Validation(
-      "signed installed package is missing publisher identity required for export".into(),
-    ));
-  }
-  if version.package_digest.trim().is_empty() {
+  if content.content_digest.trim().is_empty() {
     return Err(StorageError::Validation(
       "installed package is missing package digest required for export".into(),
     ));
   }
-  let majors: Vec<String> = manifest.capabilities.iter().map(|c| c.id.clone()).collect();
+  let majors: Vec<String> = content.manifest.capabilities.iter().map(|c| c.id.clone()).collect();
   Ok(RuntimeRequirementExport {
-    plugin_id: version.plugin_id.clone(),
-    plugin_version: version.version.clone(),
-    runtime_kind: runtime_kind_storage(RuntimeKind::WasmComponent).into(),
-    package_digest: Some(version.package_digest.clone()),
-    publisher_key_id: signed.then(|| version.publisher_key_id.clone()),
-    publisher_key_fingerprint: signed.then(|| version.publisher_fingerprint.clone()),
-    plugin_api_version: Some(manifest.plugin_api_version.clone()),
+    plugin_id: content.plugin_id.clone(),
+    plugin_version: content.version.clone(),
+    runtime_kind: runtime_kind_storage(content.runtime_kind).into(),
+    package_digest: Some(content.content_digest.clone()),
+    plugin_api_version: Some(content.manifest.plugin_api_version.clone()),
     config_schema_version,
     required_capability_majors: majors,
-    provider_runtime_kind: None,
-    provider_package_digest: None,
   })
 }
 
@@ -3544,6 +2751,7 @@ mod tests {
   use super::*;
   use crate::domain::service_integration::{IntegrationHealthStatus, IntegrationInstance};
   use crate::domain::time::now_rfc3339;
+  use crate::services::test_support::catalog_with_builtins;
   use crate::storage::Database;
 
   fn seed_bundled_instance(db: &Database) -> Uuid {
@@ -3586,13 +2794,11 @@ mod tests {
     let db = Database::new(dir.path()).unwrap();
     db.initialize().unwrap();
     let id = seed_bundled_instance(&db);
-    let service = RuntimeLifecycleService::new(
-      db.clone(),
-      PluginPackageService::new(db, dir.path().to_path_buf()),
-      Arc::new(ServiceIntegrationRegistry::empty()),
-    );
+    let catalog = catalog_with_builtins(db.clone(), dir.path(), &[]);
+    let service = RuntimeLifecycleService::new(db, catalog, Arc::new(ServiceIntegrationRegistry::empty()));
     let err = service.preview_upgrade(id, &"a".repeat(64)).unwrap_err();
-    assert!(matches!(err, StorageError::NotFound(_)));
+    // A missing snapshot keeps the instance identity and reports the package as unavailable.
+    assert!(matches!(err, StorageError::PluginUnavailable(_)));
   }
 
   #[test]
@@ -3600,11 +2806,8 @@ mod tests {
     let dir = tempfile::tempdir().unwrap();
     let db = Database::new(dir.path()).unwrap();
     db.initialize().unwrap();
-    let service = RuntimeLifecycleService::new(
-      db.clone(),
-      PluginPackageService::new(db, dir.path().to_path_buf()),
-      Arc::new(ServiceIntegrationRegistry::empty()),
-    );
+    let catalog = catalog_with_builtins(db.clone(), dir.path(), &[]);
+    let service = RuntimeLifecycleService::new(db, catalog, Arc::new(ServiceIntegrationRegistry::empty()));
     let err = service
       .apply_upgrade(ApplyRuntimeUpgradeInput {
         preview_id: "rup_missing".into(),
@@ -3620,61 +2823,9 @@ mod tests {
     let db = Database::new(dir.path()).unwrap();
     db.initialize().unwrap();
     let id = seed_bundled_instance(&db);
-    let service = RuntimeLifecycleService::new(
-      db.clone(),
-      PluginPackageService::new(db, dir.path().to_path_buf()),
-      Arc::new(ServiceIntegrationRegistry::empty()),
-    );
+    let catalog = catalog_with_builtins(db.clone(), dir.path(), &[]);
+    let service = RuntimeLifecycleService::new(db, catalog, Arc::new(ServiceIntegrationRegistry::empty()));
     let err = service.preview_rollback(id).unwrap_err();
     assert!(matches!(err, StorageError::NotFound(_)));
-  }
-}
-
-/// Package-first activation adapter for integration instances consumed by the shared
-/// `DefaultPackageActivationService` coordinator. Owns only subject-specific preparation and
-/// grant application; policy/approval/coverage decisions live in the coordinator.
-pub(super) struct IntegrationActivationAdapter<'a> {
-  pub lifecycle: &'a RuntimeLifecycleService,
-  pub subject_id: Uuid,
-}
-
-impl crate::services::default_package_activation::PackageFirstSubjectActivation for IntegrationActivationAdapter<'_> {
-  fn prepare(
-    &self,
-    snapshot: &crate::services::default_package_activation::VerifiedActivationSnapshot,
-  ) -> Result<Option<crate::services::default_package_activation::PreparedPackageFirstActivation>, StorageError> {
-    self
-      .lifecycle
-      .prepare_package_first_activation(self.subject_id, snapshot)
-  }
-
-  fn apply(
-    &self,
-    prepared: &crate::services::default_package_activation::PreparedPackageFirstActivation,
-    snapshot: &crate::services::default_package_activation::VerifiedActivationSnapshot,
-  ) -> Result<(), StorageError> {
-    self.lifecycle.apply_package_first_activation(prepared, snapshot)
-  }
-
-  fn mark_failed(
-    &self,
-    prepared: &crate::services::default_package_activation::PreparedPackageFirstActivation,
-    error_code: &str,
-    error_message: &str,
-  ) -> Result<(), StorageError> {
-    self
-      .lifecycle
-      .mark_package_first_activation_failed_for_coordinator(prepared, error_code, error_message)
-  }
-
-  fn mark_confirmation_required(
-    &self,
-    prepared: &crate::services::default_package_activation::PreparedPackageFirstActivation,
-    error_code: &str,
-    error_message: &str,
-  ) -> Result<(), StorageError> {
-    self
-      .lifecycle
-      .mark_package_first_confirmation_required(prepared.subject_id, error_code, error_message)
   }
 }

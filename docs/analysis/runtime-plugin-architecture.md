@@ -21,7 +21,7 @@ The recommended target is a hybrid runtime:
 2. **Trusted native worker plugins** are an optional later runtime for local OCR, STT, or model engines that cannot target Wasm.
 3. **Host-rendered schema UI** is the default configuration experience.
 4. **Custom plugin pages** run in a separately permissioned WebView, never as imported React code in the main application realm.
-5. **All authority remains host-owned**: credentials, network destinations, auth injection, files, logs, resource limits, installation approval, and configuration persistence.
+5. **All authority remains host-owned**: credentials, network destinations, auth injection, files, logs, resource limits, content review, and configuration persistence.
 6. **The catalog is unified before the execution stacks are unified**. Existing TypeScript LLM providers and Rust service integrations can temporarily share one catalog while retaining separate adapters.
 
 The first runtime tracer bullet should be `com.langnext.google-translate-web`. It is credential-free, already exposes `translate.text@1` and `translate.detect@1`, and uses bounded HTTP. It validates package installation, Wasm execution, brokered egress, dynamic discovery, schema configuration, and rollback without mixing in OAuth, binary audio, or LLM streaming.
@@ -97,6 +97,8 @@ The frontend can discover existing capability implementations when creating doma
 Discovery currently stops at option creation. Editors, labels, icons, validation, and preference shapes still branch on known plugin IDs.
 
 ## Coupling inventory
+
+> **Superseded (2026-08-24):** `RuntimeKind::BundledRust`, the TypeScript frontend provider path, `ServiceIntegrationRegistry::bundled()`, and every bundled-Rust fallback were retired. The shipped model is the source-based catalog with `wasm-component` and built-in-only `trusted-native-worker`. See `docs/architecture/plugin-catalog.md`.
 
 ### Rust coupling
 
@@ -193,12 +195,12 @@ Plugin labels and icons are partly inferred from plugin IDs. `displayNameKey` ex
 ### Layer model
 
 ```text
-Plugin Package
-  -> immutable, signed/versioned artifacts and manifest
+Plugin Content
+  -> immutable content digest over one directory or archive
 
-Installed Plugin Version
-  -> verified package digest + non-executable package approval
-  -> optional default-for-new-instances marker (never an execution override)
+Catalog Entry
+  -> digest-addressed snapshot + source (built-in, development, or user)
+  -> optional default-for-new-instances digest (never an execution override)
 
 Plugin Definition
   -> sanitized catalog metadata derived from an installed version
@@ -239,7 +241,6 @@ locales/
   en.json
   zh-CN.json
 licenses/*
-signatures/manifest.sig
 ```
 
 A conceptual manifest:
@@ -250,7 +251,6 @@ A conceptual manifest:
   "pluginApiVersion": "1.0",
   "id": "com.example.translate",
   "version": "1.2.0",
-  "publisher": "example",
   "runtime": {
     "kind": "wasm-component",
     "artifact": "artifacts/plugin.wasm"
@@ -300,35 +300,34 @@ A conceptual manifest:
 }
 ```
 
-The manifest requests permissions. It does not grant them. Installation produces a host-owned package approval that permits catalog availability but has no runtime authority. Runtime activation separately creates one execution grant-set revision bound to an instance and package. The file index covers every payload entry. Signed packages authenticate exact `plugin.json` bytes with `signatures/manifest.sig`. Explicitly unsigned packages omit that entry, establish no publisher identity, and require a local exact-digest risk acknowledgement. A present invalid signature always fails.
+Shipped source, digest, and trust rules: `docs/architecture/plugin-catalog.md`.
+
+The manifest requests permissions. It does not grant them. Every content set has one immutable content digest over normalized sorted relative paths and file bytes; the manifest is part of that preimage. A user archive install is one permission review for one exact content digest, and it has no authenticated publisher identity. Runtime activation separately creates one execution grant-set revision bound to an instance and content digest. The file index covers every payload entry.
 
 ### Package installation lifecycle
 
 ```text
-final archive bytes -> SHA-256 package identity
-  -> bounded staging extraction
+content bytes (directory or archive) -> canonical content digest
+  -> bounded staging collection
   -> reject traversal, symlinks, duplicates, and decompression abuse
   -> validate manifest and compatibility
   -> verify every indexed file digest/length/role
-  -> classify signature presence before publisher lookup
-  -> verify a present signature; reject invalid signatures
-  -> require exact-digest unsigned risk acknowledgement when absent
+  -> materialize an immutable digest-addressed snapshot
   -> show requested permissions
-  -> persist non-executable package approval
-  -> atomically move to content-addressed directory
-  -> optionally set the version as the default for newly created instances
+  -> require one permission confirmation for the exact digest (user archives)
+  -> atomically move the archive into the user plugin directory
+  -> optionally store the digest as the user default for its plugin id
   -> publish catalog change event
 ```
 
 Required properties:
 
-- first-party builds produce deterministic unsigned staging trees; an external release signer signs exact manifest bytes, then a keyless canonical finalizer writes the archive and computes its final SHA-256;
-- `package_digest` identifies the exact final archive bytes, not a staging build;
-- unsigned approval does not authenticate manifest publisher claims and does not transfer through export/import;
-- vendor bootstrap remains signed-vendor-only;
-- same `plugin_id + version` with a different digest is rejected;
-- installed files are treated as immutable;
-- package approval and instance execution grant sets are distinct records; package approval can never satisfy broker/runtime authorization;
+- built-in archives are packed deterministically from a validated directory, and the release build validates every built-in structurally (`mise run plugin:check-builtins`);
+- the content digest identifies the exact content bytes of a directory or archive, not a staging build;
+- installation does not authenticate publisher claims and does not transfer through export/import;
+- same `plugin_id + version` with a different digest inside one source is a catalog conflict;
+- materialized snapshot files are treated as immutable;
+- a user install review and an instance execution grant set are distinct records; a user install review can never satisfy broker/runtime authorization;
 - plugin instances atomically pin one exact installed version/digest and one grant-set revision; mixed per-capability executors cannot exist inside one instance;
 - grant-set child entries independently constrain capability network/auth/resource authority and optional page/action authority;
 - a catalog default affects only newly created instances and never redirects an existing instance;
@@ -341,7 +340,7 @@ Required properties:
 - missing packages preserve instances and bindings as `plugin_missing`;
 - config migrations run against copied JSON in the sandbox and never execute SQL.
 
-A signature proves provenance and integrity, not safety. An unsigned package has integrity checks but no authenticated publisher. Publisher trust, key rotation, revocation, exact-digest unsigned acceptance, permission review, and execution grants remain separate controls.
+A content digest proves integrity. It does not prove authorship, provenance, or safety. A user package has integrity checks but no authenticated publisher. Permission review, endpoint trust, execution grants, and the runtime sandbox remain separate controls.
 
 ## Capability contracts
 
@@ -436,9 +435,11 @@ Use only when a real local engine cannot target Wasm, for example a Python/C++ O
 
 The worker uses a versioned framed RPC protocol and the same logical capability contracts. The host owns lifecycle, handshake, cancellation, deadlines, frame limits, process-tree termination, health, and restart policy.
 
-A subprocess provides crash and address-space isolation. It is not a permission sandbox. Native packages remain restricted by a closed plugin ID/version allowlist, runtime/model digests, handshake, module audit, timeout, cancellation, and process-tree cleanup. Vendor-signed native packages use vendor policy. Non-vendor signed or unsigned native packages also require a separate exact-digest execution-risk acknowledgement and must never be described as trusted or sandboxed.
+A subprocess provides crash and address-space isolation. It is not a permission sandbox. Native workers are built-in content only. They remain restricted by a closed first-party plugin ID/version allowlist, exact digest equality with the pinned snapshot, runtime and model digests, handshake, module audit, timeouts, cancellation, and process-tree cleanup. Never describe a native worker as sandboxed.
 
 ### Runtime C: bundled Rust compatibility adapter
+
+> **Superseded (2026-08-24):** `RuntimeKind::BundledRust`, the TypeScript frontend provider path, `ServiceIntegrationRegistry::bundled()`, and every bundled-Rust fallback were retired. The shipped model is the source-based catalog with `wasm-component` and built-in-only `trusted-native-worker`. See `docs/architecture/plugin-catalog.md`.
 
 Keep current handlers temporarily behind the same runtime router:
 
@@ -471,7 +472,7 @@ A guest requests an approved endpoint alias and relative path. It never supplies
 
 The broker enforces:
 
-- package installation approval is ignored for execution authorization;
+- an install review is ignored for execution authorization;
 - endpoint permission approved for the exact instance/package/capability grant;
 - capability-to-endpoint association;
 - allowed methods;
@@ -604,10 +605,10 @@ PluginCatalogEntry
 
 The catalog may contain:
 
-- legacy TypeScript LLM providers;
-- bundled Rust integrations;
 - installed Wasm plugins;
 - trusted native workers.
+
+The pre-migration kinds (legacy TypeScript LLM providers, bundled Rust integrations) no longer exist.
 
 Execution remains behind adapters until migrated:
 
@@ -644,17 +645,17 @@ The host validates that the selected installed package declares the page and tha
 
 ## Security truth table
 
-| Mechanism                         | Provides                                  | Does not provide                                          |
-| --------------------------------- | ----------------------------------------- | --------------------------------------------------------- |
-| Tauri plugin crate                | Reusable compile-time Rust/JS integration | Runtime marketplace or sandbox                            |
-| Tauri capability                  | WebView-to-Core IPC authorization         | Restrictions on Rust, Wasm host code, or native processes |
-| Wasm without WASI                 | No ambient WASI APIs                      | Automatic CPU, memory, or host-import safety              |
-| Wasmtime limits                   | Bounded guest execution                   | Protection from unsafe or overpowered host imports        |
-| Separate WebView                  | Separate page identity and IPC grant      | Guaranteed separate OS process on every platform          |
-| HTML iframe sandbox               | Browser-level document restrictions       | A Tauri ACL principal by itself                           |
-| Native subprocess                 | Crash/address-space isolation             | OS permission sandbox by default                          |
-| Package signature                 | Integrity and publisher provenance        | Trustworthiness or absence of malicious behavior          |
-| AssemblyLoadContext in STranslate | Dependency loading and unload boundary    | Security isolation from the host OS/process               |
+| Mechanism                         | Provides                                    | Does not provide                                                 |
+| --------------------------------- | ------------------------------------------- | ---------------------------------------------------------------- |
+| Tauri plugin crate                | Reusable compile-time Rust/JS integration   | Runtime marketplace or sandbox                                   |
+| Tauri capability                  | WebView-to-Core IPC authorization           | Restrictions on Rust, Wasm host code, or native processes        |
+| Wasm without WASI                 | No ambient WASI APIs                        | Automatic CPU, memory, or host-import safety                     |
+| Wasmtime limits                   | Bounded guest execution                     | Protection from unsafe or overpowered host imports               |
+| Separate WebView                  | Separate page identity and IPC grant        | Guaranteed separate OS process on every platform                 |
+| HTML iframe sandbox               | Browser-level document restrictions         | A Tauri ACL principal by itself                                  |
+| Native subprocess                 | Crash/address-space isolation               | OS permission sandbox by default                                 |
+| Content digest                    | Exact content identity and change detection | Publisher identity, authorship, or absence of malicious behavior |
+| AssemblyLoadContext in STranslate | Dependency loading and unload boundary      | Security isolation from the host OS/process                      |
 
 ## Lessons from the reference applications
 
@@ -692,7 +693,7 @@ Deliverables:
 - package manifest and compatibility rules;
 - WIT capability majors;
 - limited UI schema dialect;
-- non-executable package request/approval model plus separately instance-scoped atomic execution grant sets with capability/page entries;
+- declared permission requests plus separately instance-scoped atomic execution grant sets with capability/page entries;
 - app command ACL plan;
 - CSP and asset-scope baseline;
 - conformance test contract.
@@ -721,17 +722,17 @@ Exit criteria:
 
 ### Phase 2: package store and lifecycle
 
-Implement local manual installation of signed packages, content-addressed storage, permissions, version pinning, activation, rollback, and dependency-safe uninstall. Execution may remain disabled for external packages until the runtime is ready.
+Implement local manual installation of user Wasm archives, content-addressed snapshots, permission review, version pinning, activation, rollback, and dependency-safe uninstall. Execution may remain disabled for user content until the runtime is ready.
 
 Exit criteria:
 
-- corrupted, traversing, unsigned, incompatible, or permission-expanding packages fail closed;
+- corrupted, traversing, structurally invalid, incompatible, or permission-expanding content fails closed;
 - installation and recovery are crash-safe;
 - missing packages preserve instances and bindings.
 
 ### Phase 3: Wasm runtime tracer bullet
 
-First run a synthetic conformance Component that exercises only typed imports, limits, traps, cancellation, and denied permissions. Then port `com.langnext.google-translate-web` to a Wasm Component while retaining the bundled Rust implementation as an explicit per-instance fallback. Start with the pinned GTX origin; add the configurable HTTPS proxy only after dynamic-origin approval is tested.
+First run a synthetic conformance Component that exercises only typed imports, limits, traps, cancellation, and denied permissions. Then port `com.langnext.google-translate-web` to a Wasm Component. (The "retaining the bundled Rust implementation as an explicit per-instance fallback" clause of this recommendation is superseded: the bundled handler was deleted, and rollback now works through digest-pinned package snapshots.) Start with the pinned GTX origin; add the configurable HTTPS proxy only after dynamic-origin approval is tested.
 
 Exit criteria:
 
@@ -792,7 +793,7 @@ Exit criteria:
 
 ### Phase 9: trusted native workers
 
-Add only for a concrete local OCR/STT/model engine that cannot target Wasm. Define whether OS-level containment is required before accepting any third-party publisher.
+Add only for a concrete local OCR/STT/model engine that cannot target Wasm. Native execution stays built-in only until OS-level containment exists.
 
 ### Phase 10: import, export, and recovery compatibility
 
@@ -800,9 +801,9 @@ Upgrade the configuration format so backups describe required runtime identity w
 
 Required behavior:
 
-- export plugin ID, semantic version, package digest, publisher identity, config schema version, and capability major requirements;
-- do not export package artifacts, secrets, credential refs, or trusted approval state;
-- imported runtime requirements require local installation, package approval, and instance-scoped execution-grant approval again;
+- export plugin ID, semantic version, exact content digest, runtime kind, plugin API version, config schema version, and capability major requirements;
+- do not export content bytes, secrets, credential refs, or install review state;
+- imported runtime requirements require the exact content digest locally and an instance-scoped execution grant again;
 - absent packages restore instances and bindings as `plugin_missing` without downloading or executing code;
 - import preview/apply never instantiate, migrate through, execute, grant authority to, or activate plugin code; it persists external runtimes inactive;
 - a distinct confirmed post-import lifecycle operation validates/migrates copied config and preferences against the exact installed version before activation;
@@ -816,15 +817,15 @@ Deliver the first slice as four consecutive tracer bullets:
 
 1. **Security baseline:** application-command ACL, CSP, asset/navigation policy, plugin principal, WIT, and schema dialect.
 2. **Synthetic runtime:** one conformance Component proves limits, denied imports, broker authorization, traps, and cancellation without package installation complexity.
-3. **Package lifecycle:** content-addressed local installation, publisher approval, version pinning, and rollback using the synthetic Component.
-4. **Real service:** Google Translate Web GTX through host-rendered schema UI, followed separately by configurable HTTPS proxy approval and rollback to the bundled Rust handler.
+3. **Package lifecycle:** content-addressed local installation, one permission review per digest, version pinning, and rollback using the synthetic Component.
+4. **Real service:** Google Translate Web GTX through host-rendered schema UI, followed separately by configurable HTTPS proxy approval and rollback through digest-pinned package snapshots.
 
 Together these prove bounded runtime execution, installation, dynamic capability discovery, dynamic configuration, and reversibility without making one integration milestone carry every new subsystem at once.
 
 ## Decisions required before implementation
 
-1. **Distribution scope:** local signed package installation only, or a marketplace in the first release? Recommendation: local installation only.
-2. **Publisher trust:** vendor-only keys, user-approved keys, or both? Recommendation: vendor keys plus an explicit advanced user approval path.
+1. **Distribution scope:** local user-archive installation only, or a marketplace in the first release? Recommendation: local installation only.
+2. **User package review:** one permission review per exact content digest, or an additional publisher check? Recommendation: one permission review per exact digest, because user packages have no authenticated publisher identity.
 3. **Native trust:** first-party only, or cross-platform OS containment before third-party native plugins? Recommendation: first-party only until containment exists.
 4. **Custom UI timing:** schema-only first, or custom pages in the first runtime release? Recommendation: schema-only first.
 5. **LLM timing:** catalog consolidation now or after the first service Wasm plugin? Recommendation: after Google Translate Web proves the runtime.
@@ -852,7 +853,7 @@ Preserve the current definition/instance/binding model, capability IDs, typed re
 
 The target should be described precisely:
 
-> LangNext plugins are signed, version-pinned packages that declare known capabilities and permission requests. Untrusted service plugins execute as bounded Wasm Components with no ambient WASI access. The host owns all credentials, network authorization, persistence, and resource handles. Configuration is schema-rendered by default; optional custom pages run in separately permissioned WebViews. Native workers are trusted and out of process, not assumed sandboxed.
+> LangNext plugin content comes from built-in resources, a debug development directory, or user Wasm archives. Every content set has an immutable digest identity; built-in authenticity comes from the application installer, and user archives have no authenticated publisher. Content executes as bounded Wasm Components with no ambient WASI access, or as a built-in allowlisted native worker in a separate process. The host owns all credentials, network authorization, persistence, and resource handles. Configuration is schema-rendered by default; optional custom pages run in separately permissioned WebViews.
 
 That architecture provides genuine dynamic extensibility without moving secrets or full OS authority into third-party code.
 

@@ -95,6 +95,18 @@ mise.toml               Toolchain versions
 .mise/tasks/            File-based project tasks
 ```
 
+## Plugins
+
+Runtime plugin content comes from three sources. Every content set gets an immutable digest identity.
+
+| Source      | Location                       | Notes                                           |
+| ----------- | ------------------------------ | ----------------------------------------------- |
+| Built-in    | `src-tauri/resources/plugins/` | Ships with the app and is the automatic default |
+| Development | `LANGNEXT_PLUGIN_DEV_DIR`      | Debug builds only                               |
+| User        | `<app-data>/plugins`           | Wasm archives with one permission review        |
+
+Built-in authenticity comes from the application installer and the protected resource location. User archives are untrusted content; the app reviews their permissions for one exact content digest. See the [plugin catalog architecture](docs/architecture/plugin-catalog.md).
+
 ## Notes
 
 - Routes live in `src/routes`. TanStack Router generates `src/routeTree.gen.ts` during Vite startup.

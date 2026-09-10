@@ -15,7 +15,7 @@ use crate::services::bundled_plugins::{
   PluginPresentation,
 };
 use crate::services::network_broker::{BROKER_MAX_RESPONSE_BODY_BYTES, BROKER_REQUEST_BODY_MAX_BYTES};
-use crate::services::plugin_package::VerifiedPackage;
+use crate::services::plugin_loader::LoadedPlugin;
 use crate::services::plugin_schema::{
   HostOptionResolver, check_config_readiness, normalize_config, normalize_https_endpoint_url, parse_schema,
   validate_schema,
@@ -48,18 +48,22 @@ impl SchemaConfigAdapter {
   }
 }
 
-/// Edge TTS instance-origin field id projected from the signed package schema.
+/// Edge TTS instance-origin field id projected from the package config schema.
 const EDGE_TTS_BASE_URL_CONFIG_FIELD: &str = "base-url";
 
-fn normalize_instance_endpoint_field(field_id: &str, raw: &str) -> Result<String, StorageError> {
+/// Normalize one instance-configured endpoint URL field into `(origin, canonical base URL)`.
+fn normalize_instance_endpoint_field(field_id: &str, raw: &str) -> Result<(String, String), StorageError> {
   if field_id == EDGE_TTS_BASE_URL_CONFIG_FIELD {
-    crate::services::edge_tts::normalize_edge_tts_base_url(raw)
-      .map_err(StorageError::Validation)
-      .map(|normalized| normalized.canonical_url)
+    let normalized = crate::services::edge_tts::normalize_edge_tts_base_url(raw).map_err(StorageError::Validation)?;
+    let origin = url::Url::parse(&normalized.canonical_url)
+      .map_err(|error| StorageError::Validation(format!("invalid base URL: {error}")))?
+      .origin()
+      .ascii_serialization();
+    Ok((origin, normalized.canonical_url))
   } else {
     normalize_https_endpoint_url(raw)
       .map_err(StorageError::Validation)
-      .map(|normalized| normalized.canonical_url)
+      .map(|normalized| (normalized.origin, normalized.canonical_url))
   }
 }
 
@@ -78,7 +82,9 @@ impl PluginConfigAdapter for SchemaConfigAdapter {
         if raw.trim().is_empty() {
           continue;
         }
-        let canonical_url = normalize_instance_endpoint_field(field, raw)?;
+        // The persisted config keeps the canonical URL (origin + path); resolution decides
+        // separately whether the guest request path appends to it or supplies it.
+        let (_, canonical_url) = normalize_instance_endpoint_field(field, raw)?;
         if let Some(object) = normalized.as_object_mut() {
           object.insert(field.clone(), Value::String(canonical_url));
         }
@@ -114,8 +120,17 @@ impl PluginConfigAdapter for SchemaConfigAdapter {
     let Some(raw) = value.get(field).and_then(Value::as_str).filter(|item| !item.is_empty()) else {
       return Ok(None);
     };
-    let canonical_url = normalize_instance_endpoint_field(field, raw)?;
-    Ok(Some(canonical_url))
+    let (origin, canonical_url) = normalize_instance_endpoint_field(field, raw)?;
+    // An alias that also declares an `InstanceConfiguredRelativePath` authority receives that
+    // configured path as the guest request path, so the resolved base must be the origin only —
+    // otherwise the path would be appended twice. An alias without one (for example Edge TTS
+    // `base-url`) supplies a complete base URL that the fixed request path appends to.
+    let base = if self.path_fields.contains_key(alias) {
+      origin
+    } else {
+      canonical_url
+    };
+    Ok(Some(base))
   }
 
   fn instance_endpoint_relative_path(&self, config_json: &str, alias: &str) -> Result<Option<String>, StorageError> {
@@ -213,23 +228,25 @@ fn map_slot_kind(kind: crate::domain::runtime_plugin::CredentialSlotKindV1) -> C
   }
 }
 
-fn load_schema(extracted: &HashMap<String, Vec<u8>>, path: Option<&str>) -> Result<PluginSchemaV1, StorageError> {
+fn load_schema(loaded: &LoadedPlugin, path: Option<&str>) -> Result<PluginSchemaV1, StorageError> {
   let Some(path) = path else {
     return Ok(empty_schema());
   };
-  let bytes = extracted
-    .get(path)
-    .ok_or_else(|| StorageError::Validation(format!("package schema {path} is missing from the verified snapshot")))?;
-  let json = std::str::from_utf8(bytes).map_err(|_| StorageError::Validation(format!("schema {path} is not UTF-8")))?;
+  let bytes = loaded
+    .read_snapshot_file(path)
+    .map_err(|_| StorageError::Validation(format!("package schema {path} is missing from the snapshot")))?;
+  let json =
+    std::str::from_utf8(&bytes).map_err(|_| StorageError::Validation(format!("schema {path} is not UTF-8")))?;
   let schema = parse_schema(json)?;
   validate_schema(&schema)?;
   Ok(schema)
 }
 
-fn presentation_from_package(extracted: &HashMap<String, Vec<u8>>, manifest: &PluginManifestV1) -> PluginPresentation {
-  let fallback = extracted
-    .get("locales/en.json")
-    .and_then(|bytes| serde_json::from_slice::<Value>(bytes).ok())
+fn presentation_from_package(loaded: &LoadedPlugin, manifest: &PluginManifestV1) -> PluginPresentation {
+  let fallback = loaded
+    .read_snapshot_file("locales/en.json")
+    .ok()
+    .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
     .and_then(|value| value.get("name").and_then(Value::as_str).map(str::to_string))
     .unwrap_or_else(|| manifest.id.clone());
   PluginPresentation {
@@ -266,13 +283,25 @@ fn host_auth_binding(manifest: &PluginManifestV1) -> Result<Option<AuthPolicyBin
   Ok(None)
 }
 
-/// Project a verified installed package into a catalog definition. Missing schemas fail closed.
-pub fn project_verified_package(verified: &VerifiedPackage) -> Result<BundledPluginRegistration, StorageError> {
+/// Project one immutable catalog snapshot into a definition. Missing schemas fail closed.
+pub fn project_loaded_plugin(loaded: &LoadedPlugin) -> Result<BundledPluginRegistration, StorageError> {
+  let verified = loaded;
   validate_manifest(&verified.manifest).map_err(|err| StorageError::Validation(err.to_string()))?;
-  let config_schema = load_schema(
-    &verified.extracted_files,
-    verified.manifest.configuration_schema.as_deref(),
-  )?;
+  // Defense in depth: privileged host auth bindings require built-in content even if a
+  // caller constructed a LoadedPlugin through another path.
+  if !verified.descriptor.source.allows_privileged_host_auth()
+    && let Some(policy) = verified
+      .manifest
+      .permissions
+      .auth_policies
+      .iter()
+      .find(|policy| auth_policies::is_privileged_host_auth_policy(policy))
+  {
+    return Err(StorageError::Validation(format!(
+      "privileged host auth policy {policy} requires built-in plugin content"
+    )));
+  }
+  let config_schema = load_schema(verified, verified.manifest.configuration_schema.as_deref())?;
   let mut origin_fields = HashMap::new();
   for endpoint in &verified.manifest.permissions.network {
     if let Some(field) = &endpoint.instance_origin_config_field {
@@ -307,7 +336,7 @@ pub fn project_verified_package(verified: &VerifiedPackage) -> Result<BundledPlu
 
   let mut capabilities = Vec::new();
   for capability in &verified.manifest.capabilities {
-    let preference_schema = load_schema(&verified.extracted_files, capability.preferences_schema.as_deref())?;
+    let preference_schema = load_schema(verified, capability.preferences_schema.as_deref())?;
     let preference_adapter: Arc<dyn CapabilityPreferencesAdapter> =
       Arc::new(SchemaPreferencesAdapter::new(preference_schema.clone()));
     let endpoint_aliases: Vec<String> = verified
@@ -409,13 +438,15 @@ pub fn project_verified_package(verified: &VerifiedPackage) -> Result<BundledPlu
       allow_instance_endpoints,
     },
     auth_policy,
-    presentation: presentation_from_package(&verified.extracted_files, &verified.manifest),
+    presentation: presentation_from_package(verified, &verified.manifest),
   })
 }
 
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::services::test_support::{BAIDU_OCR_ARCHIVE, SyntheticPlugin, catalog_with_synthetic};
+  use crate::storage::Database;
 
   fn adapter_for_origin_field(field_id: &str) -> SchemaConfigAdapter {
     let schema = parse_schema(&format!(
@@ -463,11 +494,16 @@ mod tests {
     assert_eq!(origin.as_deref(), Some("https://proxy.example/translate/"));
   }
 
-  fn baidu_verified_package() -> VerifiedPackage {
-    use crate::services::plugin_package::verify_package_bytes;
-    use crate::services::vendor_trust::test_vendor_fixture::fixture_vendor_public_key_hex;
-    let (bytes, _) = crate::services::test_support::baidu_ocr_package();
-    verify_package_bytes(&bytes, &fixture_vendor_public_key_hex()).expect("baidu fixture verifies")
+  /// Keeps the temporary catalog alive: snapshots live under the app data directory.
+  fn baidu_loaded_plugin() -> (tempfile::TempDir, LoadedPlugin) {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::new(dir.path()).unwrap();
+    db.initialize().unwrap();
+    let catalog = catalog_with_synthetic(db, dir.path(), &[BAIDU_OCR_ARCHIVE], &[]);
+    let loaded = catalog
+      .resolve_default("com.langnext.baidu-ocr")
+      .expect("baidu built-in archive is in the catalog");
+    (dir, loaded)
   }
 
   /// The real-shaped Baidu package projects its host-owned client-credentials auth binding
@@ -475,8 +511,8 @@ mod tests {
   /// fixed endpoints/path authority before any instance credentials exist.
   #[test]
   fn baidu_definition_projection_preserves_host_auth_slots_and_ocr_authority() {
-    let verified = baidu_verified_package();
-    let registration = project_verified_package(&verified).expect("baidu fixture projects");
+    let (_dir, verified) = baidu_loaded_plugin();
+    let registration = project_loaded_plugin(&verified).expect("baidu fixture projects");
     let binding = registration.auth_policy.as_ref().expect("baidu auth binding");
     assert_eq!(
       binding.auth_driver_id,
@@ -540,29 +576,26 @@ mod tests {
     }
   }
 
-  /// An unknown auth policy in a signed package fails closed during projection; the host policy
+  /// An unknown auth policy in a catalog entry fails closed during projection; the host policy
   /// registry is the only authority for auth bindings.
   #[test]
   fn unknown_auth_policy_projection_fails_closed() {
-    use crate::services::plugin_package::test_support::{build_signed_package_with_key, sample_manifest};
-    use crate::services::plugin_package::verify_package_bytes;
-    use crate::services::vendor_trust::test_vendor_fixture::{
-      fixture_vendor_public_key_hex, fixture_vendor_signing_key,
-    };
-
-    let wasm = b"\0asm\x01\x00\x00\x00";
-    let mut manifest = sample_manifest(wasm);
-    manifest.publisher.key_id = crate::services::vendor_trust::VENDOR_PUBLISHER_KEY_ID.into();
-    manifest.publisher.key_fingerprint =
-      crate::services::vendor_trust::test_vendor_fixture::fixture_vendor_fingerprint();
-    manifest.permissions.auth_policies = vec!["com.example.auth.unknown".into()];
-    let bytes = build_signed_package_with_key(
-      &manifest,
-      &[("artifacts/plugin.wasm", wasm.as_slice())],
-      &fixture_vendor_signing_key(),
-    );
-    let verified = verify_package_bytes(&bytes, &fixture_vendor_public_key_hex()).expect("package verifies");
-    match project_verified_package(&verified) {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::new(dir.path()).unwrap();
+    db.initialize().unwrap();
+    let plugin = SyntheticPlugin::new(
+      "com.example.unknown-auth",
+      "1.0.0",
+      "artifacts/plugin.wasm",
+      b"\x00asm\x00\x00\x00",
+    )
+    .with_capability("translate.text@1")
+    .with_auth_policy("com.example.auth.unknown");
+    let catalog = catalog_with_synthetic(db, dir.path(), &[], std::slice::from_ref(&plugin));
+    let loaded = catalog
+      .resolve_default("com.example.unknown-auth")
+      .expect("synthetic plugin loads");
+    match project_loaded_plugin(&loaded) {
       Err(err) => {
         assert!(err.to_string().contains("not a closed host policy"), "got {err}");
       }

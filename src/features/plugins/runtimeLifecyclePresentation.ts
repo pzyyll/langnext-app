@@ -3,7 +3,6 @@
 import type {
   IntegrationInstanceDto,
   PermissionDifferenceDto,
-  PublisherIdentityDto,
   RuntimeIdentityDto,
   RuntimeUpgradePreviewDto,
 } from "../../storage/types";
@@ -34,15 +33,6 @@ export function formatRuntimeIdentity(identity: RuntimeIdentityDto): string {
   return identity.runtimeKind;
 }
 
-/** Compact publisher identity for upgrade approval (key id + short fingerprint). */
-export function formatPublisherIdentity(publisher: PublisherIdentityDto | null | undefined): string {
-  if (!publisher) {
-    return "unknown publisher";
-  }
-  const fp = publisher.keyFingerprint.slice(0, 12);
-  return `${publisher.keyId} (${fp}…)`;
-}
-
 /** Structured permission difference line for the upgrade approval list. */
 export function formatPermissionDifference(diff: PermissionDifferenceDto): string {
   const parts = [diff.summary];
@@ -66,9 +56,6 @@ export function upgradeApprovalDetailsReady(preview: RuntimeUpgradePreviewDto): 
   if (!upgradeRequiresAcknowledgement(preview)) {
     return true;
   }
-  if (!preview.targetPublisher?.keyId || !preview.targetPublisher.keyFingerprint) {
-    return false;
-  }
   if (preview.requiresPermissionApproval && preview.permissionDifferences.length === 0) {
     return false;
   }
@@ -77,7 +64,7 @@ export function upgradeApprovalDetailsReady(preview: RuntimeUpgradePreviewDto): 
 
 /** Whether upgrade preview requires an explicit permission acknowledgement. */
 export function upgradeRequiresAcknowledgement(preview: RuntimeUpgradePreviewDto): boolean {
-  return preview.requiresPermissionApproval || preview.requiresPublisherReapproval;
+  return preview.requiresPermissionApproval;
 }
 
 /**
@@ -103,4 +90,43 @@ export function acknowledgePermissionsForApply(preview: RuntimeUpgradePreviewDto
     return false;
   }
   return userAcknowledged;
+}
+
+/** Whether Validate is disabled: pending edits or an unresolved runtime pin block it. */
+export function isIntegrationValidateDisabled(input: {
+  pending: boolean;
+  dirty: boolean;
+  pluginMissing: boolean;
+  runtimeState?: string | null;
+  runtimeErrorCode?: string | null;
+  packageDigest?: string | null;
+}): boolean {
+  if (input.pending || input.dirty || input.pluginMissing) {
+    return true;
+  }
+  if (!input.packageDigest) {
+    return true;
+  }
+  return input.runtimeState !== "active";
+}
+
+/**
+ * Which advanced upgrade controls the panel shows. A pinned digest never needs manual entry;
+ * the digest input is recovery only.
+ */
+export function presentAdvancedRecoveryDigestVisibility(input: {
+  hasUsableDefault: boolean;
+  chooseAnotherPackage: boolean;
+  panelOpen: boolean;
+}): { showDigestInput: boolean; showChooseAnotherPackage: boolean } {
+  if (!input.panelOpen) {
+    return { showDigestInput: false, showChooseAnotherPackage: false };
+  }
+  if (!input.hasUsableDefault) {
+    return { showDigestInput: true, showChooseAnotherPackage: false };
+  }
+  return {
+    showDigestInput: input.chooseAnotherPackage,
+    showChooseAnotherPackage: true,
+  };
 }

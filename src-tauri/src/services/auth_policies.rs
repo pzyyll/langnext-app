@@ -1,6 +1,6 @@
 // ABOUTME: Host-owned auth-policy registry and drivers for service-integration token grants.
 // ABOUTME: A manifest never carries executable auth logic; drivers live here and bind by host id.
-use crate::domain::plugin_package::PublisherSource;
+use crate::domain::plugin_catalog::PluginSource;
 use crate::domain::runtime_plugin::{HttpMethod, PluginManifestV1, RuntimeKind};
 use crate::domain::service_capability::{
   CapabilityError, CapabilityErrorCode, OCR_IMAGE_CAPABILITY_ID, SPEECH_SYNTHESIZE_CAPABILITY_ID,
@@ -10,7 +10,7 @@ use crate::services::google_cloud::{GOOGLE_DETECT_LANGUAGE_CAPABILITY_ID, GOOGLE
 use crate::services::token_grant::TokenGrantRequest;
 
 /// Host-defined auth policy/driver id for the Google service-account OAuth2 exchange.
-/// Signed runtime packages use this id in their manifest; the audience remains host-derived.
+/// Package manifests use this id; the audience remains host-derived.
 pub const GOOGLE_SERVICE_ACCOUNT_AUTH_DRIVER_ID: &str = "com.langnext.auth.google-service-account";
 pub const GOOGLE_SERVICE_ACCOUNT_AUTH_POLICY_ID: &str = GOOGLE_SERVICE_ACCOUNT_AUTH_DRIVER_ID;
 /// Host-defined audience policy id for the Google OAuth2 token endpoint.
@@ -58,6 +58,13 @@ const BAIDU_CLIENT_CREDENTIALS_POLICY: AuthPolicyDriver = AuthPolicyDriver {
   audience_policy_id: BAIDU_OAUTH_AUDIENCE_POLICY_ID,
   capability_scopes: &[(OCR_IMAGE_CAPABILITY_ID, BAIDU_OCR_SCOPES)],
 };
+
+/// Privileged host auth policies that inject host-owned credentials into a request. Only
+/// built-in content may request them: a user or development plugin must never receive a
+/// host-minted token for a credential it does not own.
+pub fn is_privileged_host_auth_policy(auth_policy_id: &str) -> bool {
+  auth_policy_id == GOOGLE_SERVICE_ACCOUNT_AUTH_POLICY_ID || auth_policy_id == BAIDU_CLIENT_CREDENTIALS_AUTH_POLICY_ID
+}
 
 /// Look up the registered auth policy by auth driver id. Unknown drivers fail closed.
 pub fn find_driver(auth_driver_id: &str) -> Option<&'static AuthPolicyDriver> {
@@ -191,16 +198,16 @@ fn allowed_scopes_for_capability<'a>(
 /// Derive a least-privilege token request from the trusted Google auth policy and capability.
 /// Callers cannot provide an audience or scope set of their choosing.
 /// Validate the fixed Google Cloud package authority before a package can receive bearer auth.
-/// User-approved packages cannot claim the first-party Google plugin id and redirect its token.
+/// Non-built-in packages cannot claim the first-party Google plugin id and redirect its token.
 pub fn validate_google_cloud_manifest_authority(
   manifest: &PluginManifestV1,
-  publisher_source: PublisherSource,
+  source: PluginSource,
 ) -> Result<(), String> {
   if manifest.id != crate::domain::service_integration::GOOGLE_CLOUD_PLUGIN_ID {
     return Ok(());
   }
-  if publisher_source != PublisherSource::Vendor {
-    return Err("Google Cloud runtime requires a vendor publisher".into());
+  if !source.allows_privileged_host_auth() {
+    return Err("Google Cloud runtime requires built-in plugin content".into());
   }
   if manifest.version != "1.2.0" || manifest.runtime.kind != RuntimeKind::WasmComponent {
     return Err("Google Cloud runtime identity is incompatible".into());

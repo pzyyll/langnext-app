@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ABOUTME: Deterministically build the Edge TTS Wasm Component and stage an unsigned plugin tree.
-# ABOUTME: Never signs; release CI injects signatures/manifest.sig externally via plugin:sign-staging.
-#MISE description="Build edge-tts staging tree (unsigned; release CI signs externally)"
+# ABOUTME: Never signs: the archive carries payload files and plugin.json only.
+#MISE description="Build edge-tts staging tree (unsigned archive; pack with plugin:pack)"
 set -euo pipefail
 
 # --- Pinned guest toolchain check ---
@@ -30,20 +30,6 @@ CRATE_NAME="langnext_edge_tts"
 FIXTURE="$PLUGIN_DIR/fixtures/langnext-edge-tts.wasm"
 FIXTURE_SHA="$FIXTURE.sha256"
 
-# Vendor public key (public material only). Default to the dev/fixture vendor key so local builds
-# produce a verifiable staging tree; release CI overrides with the real offline vendor public key.
-PUBLIC_KEY_HEX="${LANGNEXT_VENDOR_PUBLIC_KEY_HEX:-}"
-if [[ -z "$PUBLIC_KEY_HEX" ]]; then
-  DEFAULT_KEY_FILE="$ROOT_DIR/runtime-plugins/conformance/fixtures/packages/keys/vendor-public-key.hex"
-  if [[ -f "$DEFAULT_KEY_FILE" ]]; then
-    PUBLIC_KEY_HEX="$(tr -d '[:space:]' < "$DEFAULT_KEY_FILE")"
-  fi
-fi
-if [[ -z "$PUBLIC_KEY_HEX" ]]; then
-  echo "error: vendor public key required (set LANGNEXT_VENDOR_PUBLIC_KEY_HEX or keep the dev fixture key)" >&2
-  exit 1
-fi
-echo "ok: vendor public key ${PUBLIC_KEY_HEX:0:12}... (fingerprint computed below)"
 
 # --- Generate Cargo.lock on first build so --locked is stable afterwards ---
 if [[ ! -f "$PLUGIN_DIR/Cargo.lock" ]]; then
@@ -88,32 +74,18 @@ fi
 
 # --- Assemble the deterministic staging tree ---
 rm -rf "$STAGING"
-mkdir -p "$STAGING/fixtures" "$STAGING/schemas" "$STAGING/locales" "$STAGING/signatures"
+mkdir -p "$STAGING/fixtures" "$STAGING/schemas" "$STAGING/locales"
 cp "$FIXTURE" "$STAGING/fixtures/langnext-edge-tts.wasm"
 cp "$PLUGIN_DIR/schemas/config.json" "$STAGING/schemas/config.json"
 cp "$PLUGIN_DIR/schemas/speech-preferences.json" "$STAGING/schemas/speech-preferences.json"
 cp "$PLUGIN_DIR/locales/en.json" "$STAGING/locales/en.json"
 cp "$PLUGIN_DIR/locales/zh-CN.json" "$STAGING/locales/zh-CN.json"
 
-# --- Generate publisher.pub from the vendor public key (32 raw bytes) ---
-bun -e '
-const fs = require("fs");
-const path = require("path");
-const staging = process.argv[1];
-const publicKeyHex = process.argv[2];
-const pubBytes = Buffer.from(publicKeyHex, "hex");
-if (pubBytes.length !== 32) {
-  console.error("error: public key must be 32 bytes (64 hex chars)");
-  process.exit(1);
-}
-fs.writeFileSync(path.join(staging, "publisher.pub"), pubBytes);
-console.log("ok: publisher.pub written");
-' "$STAGING" "$PUBLIC_KEY_HEX"
 
 # --- Generate plugin.json with real file digests from the committed template ---
 # Reads the committed template (structure source of truth), computes each file entry's bytes/sha256
-# from the staged artifacts, verifies the publisher fingerprint, and writes both staging/plugin.json
-# and the committed plugin.json so the repo stays in sync with the built artifact.
+# from the staged artifacts and writes both staging/plugin.json and the committed plugin.json so
+# the repo stays in sync with the built artifact.
 TEMPLATE="$PLUGIN_DIR/plugin.json"
 bun -e '
 const fs = require("fs");
@@ -121,14 +93,7 @@ const crypto = require("crypto");
 const path = require("path");
 const staging = process.argv[1];
 const templatePath = process.argv[2];
-const publicKeyHex = process.argv[3];
-const pluginDir = process.argv[4];
-const publicKeyBytes = Buffer.from(publicKeyHex, "hex");
-if (publicKeyBytes.length !== 32) {
-  console.error("error: vendor public key must be 32 bytes (64 hex chars)");
-  process.exit(1);
-}
-const expectedFingerprint = crypto.createHash("sha256").update(publicKeyBytes).digest("hex");
+const pluginDir = process.argv[3];
 const manifest = JSON.parse(fs.readFileSync(templatePath, "utf8"));
 const failures = [];
 const push = (m) => failures.push(m);
@@ -137,8 +102,6 @@ if (manifest.pluginApiVersion !== "1.0") push("pluginApiVersion must be 1.0");
 if (manifest.id !== "com.langnext.edge-tts") push("id must be com.langnext.edge-tts");
 if (manifest.version !== "1.0.0") push("version must be 1.0.0");
 if (manifest.runtime.kind !== "wasm-component") push("runtime.kind must be wasm-component");
-if (manifest.publisher.keyId !== "com.langnext.vendor.keys.1") push("publisher.keyId must be com.langnext.vendor.keys.1");
-if (manifest.publisher.keyFingerprint !== expectedFingerprint) push("publisher.keyFingerprint must match the vendor public key");
 if (manifest.configSchemaVersion !== 1) push("configSchemaVersion must be 1");
 if (!Array.isArray(manifest.files) || manifest.files.length === 0) push("files must be a non-empty array");
 // Exact path -> role expected map for the Edge TTS single-component package.
@@ -156,7 +119,7 @@ for (const entry of manifest.files) {
   manifestPaths.add(entry.path);
   const expectedRole = EXPECTED_PATH_ROLES[entry.path];
   if (expectedRole === undefined) {
-    push("unexpected file path in signed index: " + entry.path);
+    push("unexpected file path in file index: " + entry.path);
   } else if (expectedRole !== entry.role) {
     push("file " + entry.path + " role mismatch: expected " + expectedRole + " got " + entry.role);
   }
@@ -171,9 +134,9 @@ for (const entry of manifest.files) {
   entry.sha256 = crypto.createHash("sha256").update(bytes).digest("hex");
 }
 for (const p of expectedPaths) {
-  if (!manifestPaths.has(p)) push("expected file path missing from signed index: " + p);
+  if (!manifestPaths.has(p)) push("expected file path missing from file index: " + p);
 }
-if (manifest.runtime.artifact && !manifestPaths.has(manifest.runtime.artifact)) push("runtime artifact missing from signed file index");
+if (manifest.runtime.artifact && !manifestPaths.has(manifest.runtime.artifact)) push("runtime artifact missing from file index");
 if (manifest.configurationSchema !== "schemas/config.json") push("configurationSchema must be schemas/config.json");
 // Permissions: one POST endpoint alias tts-api with instance-configured base-url origin.
 const net = manifest.permissions && manifest.permissions.network;
@@ -190,13 +153,12 @@ if (!cap || cap.id !== "speech.synthesize@1" || cap.preferencesSchema !== "schem
   push("capabilities[0] must be speech.synthesize@1 with preferencesSchema and artifact");
 }
 // Bidirectional payload path set: staging payload (excluding package structure) must equal the index.
-const SKIP_FILES = new Set(["plugin.json", "publisher.pub"]);
+const SKIP_FILES = new Set(["plugin.json"]);
 const stagingPayloadPaths = new Set();
 const walk = (dir, rel) => {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const relPath = rel ? rel + "/" + entry.name : entry.name;
     if (entry.isDirectory()) {
-      if (entry.name === "signatures") continue;
       walk(path.join(dir, entry.name), relPath);
     } else if (!SKIP_FILES.has(entry.name)) {
       stagingPayloadPaths.add(relPath);
@@ -205,10 +167,10 @@ const walk = (dir, rel) => {
 };
 walk(staging, "");
 for (const p of manifestPaths) {
-  if (!stagingPayloadPaths.has(p)) push("signed file index path missing from staging payload: " + p);
+  if (!stagingPayloadPaths.has(p)) push("file index path missing from staging payload: " + p);
 }
 for (const p of stagingPayloadPaths) {
-  if (!manifestPaths.has(p)) push("staging payload path missing from signed file index: " + p);
+  if (!manifestPaths.has(p)) push("staging payload path missing from file index: " + p);
 }
 if (failures.length > 0) {
   console.error("error: plugin.json generation failed");
@@ -219,13 +181,11 @@ const serialized = JSON.stringify(manifest, null, 2) + "\n";
 fs.writeFileSync(path.join(staging, "plugin.json"), serialized);
 // Keep the committed template in sync with real digests so the repo reflects the built artifact.
 fs.writeFileSync(path.join(pluginDir, "plugin.json"), serialized);
-console.log("ok: plugin.json generated (files=" + manifest.files.length + " payload=" + stagingPayloadPaths.size + " fingerprint=" + expectedFingerprint.slice(0, 12) + "...)");
-' "$STAGING" "$TEMPLATE" "$PUBLIC_KEY_HEX" "$PLUGIN_DIR"
+console.log("ok: plugin.json generated (files=" + manifest.files.length + " payload=" + stagingPayloadPaths.size +")");
+' "$STAGING" "$TEMPLATE" "$PLUGIN_DIR"
 
 # Reformat both generated manifests with the project oxfmt so they pass format:check.
 oxfmt --write "$STAGING/plugin.json" "$PLUGIN_DIR/plugin.json" >/dev/null
 
 echo "ok: edge-tts staging tree built at $STAGING"
-echo "    next (release CI only): sign the staging plugin.json with the offline vendor key,"
-echo "    inject signatures/manifest.sig, then run:"
-echo "    mise run plugin:finalize-package -- $STAGING runtime-plugins/dist/com.langnext.edge-tts-1.0.0.lnplugin --public-key-hex <vendor-public-key>"
+echo "    next: mise run plugin:pack -- $STAGING runtime-plugins/dist/com.langnext.edge-tts-1.0.0.lnplugin"

@@ -1,5 +1,7 @@
 # Implementation Plan
 
+> **Superseded (2026-08-24):** plugin-level signing, publisher trust, vendor bootstrap, and default-activation orchestration were removed. See `docs/architecture/plugin-catalog.md`.
+
 **Goal:** Make all 10 official built-in plugins installed, registered, and authorized as exact defaults on every startup, while requiring user credentials only when a plugin executes an authenticated capability.
 
 **Inputs:** User requirement: “所有内置的插件开机即用，而不是各种卡检查”; current startup log and database diagnosis on 2026-08-24; `docs/plans/2026-08-21-package-only-migration-plan.md`; `docs/plans/2026-08-21-unsigned-plugin-install-plan.md`.

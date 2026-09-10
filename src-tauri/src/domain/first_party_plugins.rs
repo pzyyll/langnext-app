@@ -22,7 +22,7 @@ pub const PADDLEOCR_PLUGIN_ID: &str = "com.langnext.paddleocr";
 /// Baidu OCR first-party package id.
 pub const BAIDU_OCR_PLUGIN_ID: &str = "com.langnext.baidu-ocr";
 
-/// Canonical first-party package IDs. Unsigned packages cannot claim any member.
+/// Canonical first-party package IDs. Non-built-in content cannot claim any member.
 pub const FIRST_PARTY_PLUGIN_IDS: &[&str] = &[
   GOOGLE_TRANSLATE_WEB_PLUGIN_ID,
   EDGE_TTS_PLUGIN_ID,

@@ -1,5 +1,7 @@
 # Implementation Plan
 
+> **Superseded (2026-08-24):** plugin-level signing, publisher trust, vendor bootstrap, and default-activation orchestration were removed. See `docs/architecture/plugin-catalog.md`.
+
 **Goal:** Close all eight review findings and make the migration consistently package-only, with no Bundled Rust fallback or legacy executor semantics.
 
 **Inputs:** The supplied Standards and Spec review, plus repository evidence from the cited files, existing unit tests, runtime integration tests, and `AGENTS.md`.

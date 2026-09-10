@@ -1,5 +1,7 @@
 # Phase 11: Runtime Plugin Import, Export, and Recovery Implementation Plan
 
+> **Superseded (2026-08-24):** plugin-level signing, publisher trust, vendor bootstrap, and default-activation orchestration were removed. See `docs/architecture/plugin-catalog.md`.
+
 **Goal:** Complete format v8 configuration portability with an exact preview/apply contract, actionable runtime requirements, and no transfer of executable code, secrets, trust, grants, or activation authority.
 
 **Inputs:** Phase 4 runtime requirements, Phases 5–8 runtime packages, `docs/plans/2026-08-03-multi-interface-provider-runtime-plan.md`, the current format v8 implementation, and the Phase 11.5 activation-intent boundary.

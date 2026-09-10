@@ -20,19 +20,14 @@ pub const CAPABILITY_V1_COUNT: usize = 7;
 /// Current host plugin API version string.
 pub const HOST_PLUGIN_API_VERSION_CURRENT: &str = "1.0";
 /// Canonical manifest entry path inside a `.lnplugin` archive.
+/// It is the only reserved entry: the source-based catalog has no plugin signature or
+/// publisher key file.
 pub const MANIFEST_FILE_PATH: &str = "plugin.json";
-/// Canonical signature entry path; the only unsigned archive entry.
-pub const SIGNATURE_FILE_PATH: &str = "signatures/manifest.sig";
-/// Optional self-authenticating publisher public key (32 bytes raw Ed25519).
-/// When present, the host auto-resolves the key by verifying sha256(pub) matches the signed
-/// manifest's publisher key fingerprint. Not a member of the signed file index.
-pub const PUBLISHER_PUBLIC_KEY_PATH: &str = "publisher.pub";
 
 /// Byte size used to express binary resource limits.
 pub const MEBIBYTE_BYTES: u64 = 1024 * 1024;
 /// SHA-256 digest length in lowercase hex characters (32 bytes).
 pub const SHA256_HEX_LEN: usize = 64;
-pub const PUBLISHER_KEY_ID_MAX_LEN: usize = 64;
 pub const REQUEST_ID_MAX_LEN: usize = 128;
 pub const PLUGIN_ID_MAX_LEN: usize = 128;
 pub const FILE_PATH_MAX_LEN: usize = 512;
@@ -162,13 +157,13 @@ pub enum RuntimeKind {
 
 impl RuntimeKind {
   /// True when this kind is backed by an installable archive artifact that must be
-  /// declared in the signed file index. Package-only: every kind is package-backed.
+  /// declared in the manifest file index. Package-only: every kind is package-backed.
   pub fn requires_archive_artifact(self) -> bool {
     true
   }
 }
 
-/// Lowercase hex SHA-256 digest of the exact final signed `.lnplugin` archive bytes.
+/// Lowercase hex SHA-256 digest of the exact final `.lnplugin` archive bytes.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PackageDigest(String);
 
@@ -196,7 +191,7 @@ impl PackageDigest {
 
 /// Lowercase hex SHA-256 digest of a runtime Component artifact file (the package file-index
 /// entry with role `runtime-artifact`). Distinct from [`PackageDigest`]: the package digest
-/// covers the final signed `.lnplugin` archive bytes, while this digest covers only the
+/// covers the final `.lnplugin` archive bytes, while this digest covers only the
 /// Component file bytes that the host compiles and executes. Never use one as the other.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ComponentArtifactDigest(String);
@@ -216,49 +211,6 @@ impl ComponentArtifactDigest {
     }
     if !is_lowercase_hex(value) {
       return Err("component artifact digest must be lowercase hex (0-9a-f)".into());
-    }
-    Ok(Self(value.to_string()))
-  }
-
-  pub fn as_str(&self) -> &str {
-    &self.0
-  }
-}
-
-/// Publisher verification key identifier (bounded reverse-domain ASCII, not key material).
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct PublisherKeyId(String);
-
-impl PublisherKeyId {
-  pub fn parse(value: &str) -> Result<Self, String> {
-    validate_reverse_domain_strict(value, PUBLISHER_KEY_ID_MAX_LEN, "publisher key id")?;
-    Ok(Self(value.to_string()))
-  }
-
-  pub fn as_str(&self) -> &str {
-    &self.0
-  }
-}
-
-/// Lowercase hex SHA-256 fingerprint of a publisher verification key.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct PublisherKeyFingerprint(String);
-
-impl PublisherKeyFingerprint {
-  pub fn parse(value: &str) -> Result<Self, String> {
-    if value.is_empty() {
-      return Err("publisher key fingerprint is required".into());
-    }
-    if value.len() != SHA256_HEX_LEN {
-      return Err(format!(
-        "publisher key fingerprint must be {SHA256_HEX_LEN} hex characters"
-      ));
-    }
-    if value != value.trim() {
-      return Err("publisher key fingerprint must not have surrounding whitespace".into());
-    }
-    if !is_lowercase_hex(value) {
-      return Err("publisher key fingerprint must be lowercase hex (0-9a-f)".into());
     }
     Ok(Self(value.to_string()))
   }
@@ -626,8 +578,8 @@ impl RequestId {
 }
 
 /// Validated canonical network endpoint alias (manifest-declared, referenced by grants).
-/// Endpoint aliases such as `gtx` and `translate-api` are host-resolved identifiers, not
-/// publisher namespaces; auth policy IDs remain reverse-domain identifiers.
+/// Endpoint aliases such as `gtx` and `translate-api` are host-resolved identifiers;
+/// auth policy IDs remain reverse-domain identifiers.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct EndpointId(String);
 
@@ -740,7 +692,7 @@ pub enum RuntimeIdentity {
   Package(PackageIdentity),
 }
 
-/// Signed installable package identity.
+/// Installable package identity.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PackageIdentity {
   pub package_digest: PackageDigest,
@@ -1561,8 +1513,8 @@ impl PageGrantEntry {
   }
 }
 
-/// Role of an indexed archive file. The signature covers `plugin.json` whose file index
-/// transitively authenticates every entry except `signatures/manifest.sig`.
+/// Role of an indexed archive file. The manifest file index declares every archive member
+/// (except `plugin.json` itself) with its byte length and SHA-256 digest.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum FileRole {
@@ -1606,17 +1558,9 @@ pub struct RuntimeDescriptor {
   pub native_dependencies: Option<Vec<String>>,
 }
 
-/// Publisher identity (key id + fingerprint); never the key material itself.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct PublisherDeclaration {
-  pub key_id: String,
-  pub key_fingerprint: String,
-}
-
 /// Capability declaration: a closed-set `capability@major` id and optional preferences
 /// schema reference. `artifact` optionally pins a per-capability runtime artifact (path into
-/// the signed file index) so one package can ship multiple Wasm components, one per world.
+/// the indexed file set) so one package can ship multiple Wasm components, one per world.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CapabilityDeclaration {
@@ -1749,7 +1693,7 @@ impl Default for UiDeclaration {
   }
 }
 
-/// Platform/architecture install constraint carried in the signed package manifest.
+/// Platform/architecture install constraint carried in the package manifest.
 ///
 /// Empty `targets` (default) means the package is accepted on any host. Non-empty lists require
 /// the host to match at least one constraint (`platform`/`architecture` may be `any`).
@@ -1795,7 +1739,7 @@ pub struct ProviderRuntimeDetectionDecl {
   pub thinking: bool,
 }
 
-/// Optional signed `providerRuntime` manifest declaration (deny-unknown). Declares bounded
+/// Optional `providerRuntime` manifest declaration (deny-unknown). Declares bounded
 /// legacy aliases, exactly the two frozen LLM capabilities with distinct indexed artifact
 /// paths, the closed provider-instance endpoint/auth form, and optional detection defaults.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1809,7 +1753,8 @@ pub struct ProviderRuntimeDeclaration {
   pub detection: Option<ProviderRuntimeDetectionDecl>,
 }
 
-/// Plugin manifest v1: the signed payload shape (signature verification is Phase 3).
+/// Plugin manifest v1: the only accepted payload shape. There is no plugin-level publisher
+/// or signature declaration: built-in authenticity comes from the application installer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PluginManifestV1 {
@@ -1817,7 +1762,6 @@ pub struct PluginManifestV1 {
   pub plugin_api_version: String,
   pub id: String,
   pub version: String,
-  pub publisher: PublisherDeclaration,
   pub runtime: RuntimeDescriptor,
   /// Optional host target constraints. Empty preserves backward compatibility (any host).
   #[serde(default)]
@@ -1844,7 +1788,7 @@ pub struct PluginManifestV1 {
   /// it never grants execution authority.
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub provider_runtime: Option<ProviderRuntimeDeclaration>,
-  /// Optional signed model-resource descriptors (Phase 10). Metadata only; never model bytes.
+  /// Optional model-resource descriptors (Phase 10). Metadata only; never model bytes.
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub model_resources: Option<Vec<crate::domain::plugin_model::ModelResourceDescriptor>>,
 }
@@ -2062,15 +2006,15 @@ const WINDOWS_DEVICE_NAMES: &[&str] = &[
 
 /// Validate an archive file path strictly. Rejects surrounding whitespace, control
 /// characters, backslashes, `:` (Windows drive), absolute paths, traversal/empty segments,
-/// Windows trailing dot/space/device-name segments, and the reserved archive entries
-/// (`plugin.json`, `signatures/manifest.sig`) plus their case-folded forms and directory
-/// prefixes. Returns the canonical path unchanged. Used for the signed file INDEX.
+/// Windows trailing dot/space/device-name segments, and the reserved manifest entry
+/// (`plugin.json`) plus its case-folded forms and directory prefixes. Returns the canonical
+/// path unchanged. Used for the file INDEX.
 pub fn validate_archive_path(value: &str) -> Result<String, String> {
   validate_archive_path_impl(value, false)
 }
 
 /// Validate an archive ENTRY path. Same as `validate_archive_path` but permits the reserved
-/// archive entries because they are required members of the archive payload.
+/// manifest entry because it is a required member of the archive payload.
 pub fn validate_archive_entry_path(value: &str) -> Result<String, String> {
   validate_archive_path_impl(value, true)
 }
@@ -2104,30 +2048,21 @@ fn validate_archive_path_impl(value: &str, allow_reserved: bool) -> Result<Strin
     return Err("file path must be relative".into());
   }
   let lower = value.to_ascii_lowercase();
-  let has_reserved_prefix = lower.starts_with(&format!("{MANIFEST_FILE_PATH}/"))
-    || lower.starts_with(&format!("{SIGNATURE_FILE_PATH}/"))
-    || lower.starts_with(&format!("{PUBLISHER_PUBLIC_KEY_PATH}/"));
+  let has_reserved_prefix = lower.starts_with(&format!("{MANIFEST_FILE_PATH}/"));
   if has_reserved_prefix {
     return Err(format!(
       "file path {value} uses a reserved archive entry as a directory prefix"
     ));
   }
-  if lower == MANIFEST_FILE_PATH || lower == SIGNATURE_FILE_PATH || lower == PUBLISHER_PUBLIC_KEY_PATH {
+  if lower == MANIFEST_FILE_PATH {
     if !allow_reserved {
       return Err(format!(
         "file path {value} is a reserved archive entry (case-insensitive) and cannot be indexed"
       ));
     }
-    let canonical = if lower == MANIFEST_FILE_PATH {
-      MANIFEST_FILE_PATH
-    } else if lower == SIGNATURE_FILE_PATH {
-      SIGNATURE_FILE_PATH
-    } else {
-      PUBLISHER_PUBLIC_KEY_PATH
-    };
-    if value != canonical {
+    if value != MANIFEST_FILE_PATH {
       return Err(format!(
-        "reserved archive entry must use canonical spelling {canonical}"
+        "reserved archive entry must use canonical spelling {MANIFEST_FILE_PATH}"
       ));
     }
   }
@@ -2219,6 +2154,41 @@ mod tests {
       CapabilityId::parse(" translate.text@1").unwrap_err(),
       CapabilityIdError::InvalidSyntax(_)
     ));
+  }
+
+  #[test]
+  fn manifest_rejects_publisher_block() {
+    // The source-based catalog has no publisher identity: a manifest carrying a publisher
+    // block must fail closed instead of being silently tolerated.
+    let json = r#"{
+      "manifestVersion": 1,
+      "pluginApiVersion": "1.0",
+      "id": "com.example.translate",
+      "version": "1.0.0",
+      "publisher": { "keyId": "com.example.keys.1", "keyFingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
+      "runtime": { "kind": "wasm-component", "artifact": "artifacts/plugin.wasm" },
+      "files": [],
+      "capabilities": [],
+      "permissions": { "network": [], "authPolicies": [] },
+      "ui": { "mode": "schema" }
+    }"#;
+    let err = serde_json::from_str::<PluginManifestV1>(json).unwrap_err();
+    assert!(
+      err.to_string().contains("publisher"),
+      "error must name the removed publisher field: {err}"
+    );
+  }
+
+  #[test]
+  fn reserved_archive_entries_are_only_the_manifest() {
+    // No plugin-level signature or publisher key entry exists any more.
+    assert!(validate_archive_path(MANIFEST_FILE_PATH).is_err());
+    assert_eq!(
+      validate_archive_entry_path(MANIFEST_FILE_PATH).unwrap(),
+      MANIFEST_FILE_PATH
+    );
+    assert!(validate_archive_path("publisher.pub").is_ok());
+    assert!(validate_archive_path("signatures/manifest.sig").is_ok());
   }
 
   #[test]
@@ -2575,7 +2545,6 @@ mod tests {
     for bad in [
       "plugin.json",
       "PLUGIN.JSON",
-      "signatures/manifest.sig",
       "plugin.json/inner",
       "artifacts/\twasm",
       " artifacts/x",
@@ -2598,9 +2567,9 @@ mod tests {
     ] {
       assert!(validate_archive_path(bad).is_err(), "should reject {bad}");
     }
-    // Reserved entries are allowed for archive entries.
+    // The manifest entry is the only reserved path, and only for archive entries.
     assert!(validate_archive_entry_path("plugin.json").is_ok());
-    assert!(validate_archive_entry_path("signatures/manifest.sig").is_ok());
+    assert!(validate_archive_entry_path("publisher.pub").is_ok());
   }
 
   #[test]

@@ -1,8 +1,7 @@
 // ABOUTME: Immutable provider binding/package/grant resolution for LLM runtime calls.
-// ABOUTME: Re-verifies the signed package before every execution; never falls back to legacy.
+// ABOUTME: Re-verifies the package content before every execution; never falls back to legacy.
 use crate::domain::cancel::CancelToken;
 use crate::domain::model::resolve_model_effective_adapter;
-use crate::domain::plugin_package::{InstalledPluginVersion, runtime_kind_storage};
 use crate::domain::runtime_lifecycle::GrantSubjectKind;
 use crate::domain::runtime_plugin::{
   ComponentArtifactDigest, ExecutionGrantSet, FileRole, PackageDigest, PluginManifestV1, RuntimeKind,
@@ -13,11 +12,9 @@ use crate::domain::runtime_provider::{
 };
 use crate::domain::service_capability::{CapabilityError, CapabilityErrorCode};
 use crate::error::StorageError;
-use crate::repositories::{
-  installed_plugin_versions, plugin_permission_grants, plugin_publishers, provider_instances, provider_models,
-  provider_runtime_bindings,
-};
-use crate::services::plugin_store::PluginPackageService;
+use crate::repositories::{plugin_permission_grants, provider_instances, provider_models, provider_runtime_bindings};
+use crate::services::plugin_catalog::PluginCatalog;
+use crate::services::plugin_loader::LoadedPlugin;
 use crate::services::runtime_router::bundle_to_execution_grant_set;
 use crate::services::wasm_runtime::host::BrokerHandle;
 use crate::services::wasm_runtime::{VerifiedComponent, WasmRuntime};
@@ -38,15 +35,15 @@ pub struct ProviderRuntimeBrokerContext {
   pub grant_revision: u64,
 }
 
-/// Immutable provider runtime resolution for LLM calls: binding, signed package, and
+/// Immutable provider runtime resolution for LLM calls: binding, package content, and
 /// `ProviderInstance` grant are re-resolved and re-verified before EVERY execution. The broker
 /// factory receives a host-only `ProviderRuntimeBrokerContext` and produces a host-authorized
-/// provider-instance broker per request. There is no fallback: a missing/revoked binding is a
-/// stable error, never a legacy replay.
+/// provider-instance broker per request. There is no fallback: a missing/unavailable binding is
+/// a stable error, never a legacy replay.
 #[derive(Clone)]
 pub struct ProviderRuntimeRouter {
   db: Database,
-  packages: PluginPackageService,
+  catalog: Arc<PluginCatalog>,
   wasm: Arc<WasmRuntime>,
   broker_factory: Arc<dyn Fn(ProviderRuntimeBrokerContext) -> Box<dyn BrokerHandle> + Send + Sync>,
 }
@@ -63,13 +60,13 @@ struct ResolvedExecution {
 impl ProviderRuntimeRouter {
   pub fn new(
     db: Database,
-    packages: PluginPackageService,
+    catalog: Arc<PluginCatalog>,
     wasm: Arc<WasmRuntime>,
     broker_factory: Arc<dyn Fn(ProviderRuntimeBrokerContext) -> Box<dyn BrokerHandle> + Send + Sync>,
   ) -> Self {
     Self {
       db,
-      packages,
+      catalog,
       wasm,
       broker_factory,
     }
@@ -254,33 +251,14 @@ impl ProviderRuntimeRouter {
     })?;
 
     let version = self
-      .db
-      .read(|conn| installed_plugin_versions::get_optional(conn, &package_digest))
-      .map_err(map_storage_to_capability)?
-      .ok_or_else(|| CapabilityError::new(CapabilityErrorCode::PluginUnavailable, "installed package is missing"))?;
-    if !version.content_available {
-      return Err(CapabilityError::new(
-        CapabilityErrorCode::PluginUnavailable,
-        "installed package content is unavailable",
-      ));
-    }
-    if version.runtime_kind != runtime_kind_storage(RuntimeKind::WasmComponent) {
+      .catalog
+      .snapshot(&package_digest)
+      .map_err(map_storage_to_capability)?;
+    if version.descriptor.runtime_kind != RuntimeKind::WasmComponent {
       return Err(CapabilityError::new(
         CapabilityErrorCode::InvalidConfiguration,
         "package runtime kind is not wasm-component",
       ));
-    }
-    if version.signature_status == crate::domain::plugin_package::PackageSignatureStatus::Signed {
-      let publisher = self
-        .db
-        .read(|conn| plugin_publishers::get(conn, &version.publisher_key_id))
-        .map_err(map_storage_to_capability)?;
-      if publisher.revoked || !publisher.enabled {
-        return Err(CapabilityError::new(
-          CapabilityErrorCode::PermissionDenied,
-          "publisher trust is revoked or disabled",
-        ));
-      }
     }
 
     let bundle = self
@@ -320,7 +298,7 @@ impl ProviderRuntimeRouter {
       ));
     }
 
-    // External package verification (store snapshot + signed manifest) happens before the
+    // External package verification (catalog snapshot + manifest) happens before the
     // compiled artifact is trusted; then the exact adapter-keyed binding is re-checked so a
     // concurrent lifecycle change can never execute with stale authority.
     let verified = self.verify_and_compile_artifact(&version, capability_id, &package_digest)?;
@@ -357,34 +335,14 @@ impl ProviderRuntimeRouter {
     })
   }
 
-  /// Re-verify the signed package through the real store and compile the capability's artifact.
+  /// Re-verify the package through the real catalog and compile the capability's artifact.
   fn verify_and_compile_artifact(
     &self,
-    version: &InstalledPluginVersion,
+    version: &LoadedPlugin,
     capability_id: &str,
     package_digest: &str,
   ) -> Result<VerifiedComponent, CapabilityError> {
-    let verified = self
-      .packages
-      .verify_installed_package_snapshot(package_digest)
-      .map_err(|err| {
-        CapabilityError::new(
-          CapabilityErrorCode::PluginUnavailable,
-          format!("runtime package snapshot verification failed: {err}"),
-        )
-      })?;
-    let manifest: PluginManifestV1 = serde_json::from_str(&version.manifest_json).map_err(|err| {
-      CapabilityError::new(
-        CapabilityErrorCode::InvalidConfiguration,
-        format!("invalid installed manifest: {err}"),
-      )
-    })?;
-    if verified.manifest != manifest {
-      return Err(CapabilityError::new(
-        CapabilityErrorCode::PluginUnavailable,
-        "verified package manifest differs from the installed package record",
-      ));
-    }
+    let manifest: PluginManifestV1 = version.manifest.clone();
     let artifact_path = manifest
       .capabilities
       .iter()
@@ -396,7 +354,7 @@ impl ProviderRuntimeRouter {
           format!("capability {capability_id} is not mapped to an artifact"),
         )
       })?;
-    let file_entry = verified
+    let file_entry = version
       .manifest
       .files
       .iter()
@@ -404,13 +362,13 @@ impl ProviderRuntimeRouter {
       .ok_or_else(|| {
         CapabilityError::new(
           CapabilityErrorCode::PluginUnavailable,
-          "runtime artifact is missing from the signed file index",
+          "runtime artifact is missing from the manifest file index",
         )
       })?;
-    let artifact_bytes = verified.extracted_files.get(artifact_path).cloned().ok_or_else(|| {
+    let artifact_bytes = version.read_snapshot_file(artifact_path).map_err(|_| {
       CapabilityError::new(
         CapabilityErrorCode::PluginUnavailable,
-        "runtime artifact is missing from the verified archive snapshot",
+        "runtime artifact is missing from the immutable snapshot",
       )
     })?;
     if artifact_bytes.len() as u64 != file_entry.bytes {

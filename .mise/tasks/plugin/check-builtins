@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# ABOUTME: Structurally validate every shipped built-in plugin directory or archive.
+# ABOUTME: Fail-closed: manifest, indexed files, path safety, size bounds, and Native source rules.
+#MISE description="Validate all built-in plugin content structurally"
+set -euo pipefail
+
+root="$(cd "$(dirname "$0")/../../.." && pwd)"
+cd "$root"
+
+plugin_dir="src-tauri/resources/plugins"
+if [[ ! -d "${plugin_dir}" ]]; then
+  echo "error: built-in plugin directory is missing: ${plugin_dir}" >&2
+  exit 1
+fi
+
+inputs=()
+while IFS= read -r -d '' entry; do
+  inputs+=("${entry}")
+done < <(find "${plugin_dir}" -mindepth 1 -maxdepth 1 \( -name '*.lnplugin' -o -type d \) -print0 | sort -z)
+
+if [[ ${#inputs[@]} -eq 0 ]]; then
+  echo "error: no built-in plugin content found under ${plugin_dir}" >&2
+  exit 1
+fi
+
+echo "validating ${#inputs[@]} built-in plugin source(s)..."
+cargo run --manifest-path src-tauri/Cargo.toml --bin plugin_tool --quiet -- verify-structure "${inputs[@]}"
+
+echo "ok: built-in plugin structure validated (${#inputs[@]} source(s))"

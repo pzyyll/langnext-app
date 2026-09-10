@@ -1,5 +1,7 @@
 # Phase 3: Plugin Package Lifecycle Implementation Plan
 
+> **Superseded (2026-08-24):** plugin-level signing, publisher trust, vendor bootstrap, and default-activation orchestration were removed. See `docs/architecture/plugin-catalog.md`.
+
 **Goal:** Support crash-safe local installation, approval, immutable storage, listing, default selection, and dependency-safe removal of signed or explicitly approved unsigned `.lnplugin` packages without executing them.
 
 **Inputs:** Phases 0–2 contracts/runtime and current SQLite migration/credential-journal patterns.

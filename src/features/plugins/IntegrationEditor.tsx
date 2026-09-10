@@ -62,12 +62,10 @@ import {
   isIntegrationDraftClean,
   type IntegrationSchemaDraft,
 } from "./integrationDraft";
-import { isRuntimeUnresolved } from "./runtimeLifecyclePresentation";
+import { isIntegrationValidateDisabled, isRuntimeUnresolved } from "./runtimeLifecyclePresentation";
 import { PluginModelResourcesPanel } from "./PluginModelResourcesPanel";
 import { RuntimeLifecyclePanel } from "./RuntimeLifecyclePanel";
 import { presentCapabilityHealthList } from "./capabilityHealthPresentation";
-import { DefaultRuntimeActivationStatus } from "./DefaultRuntimeActivationStatus";
-import { isIntegrationValidateDisabled } from "./defaultPackageActivationPresentation";
 
 export type IntegrationEditorProps = {
   integrationInstanceId: string;
@@ -575,16 +573,6 @@ export function IntegrationEditor({ integrationInstanceId }: IntegrationEditorPr
                 required {instance.runtimeRequirement.packageDigest}
               </p>
             ) : null}
-            <DefaultRuntimeActivationStatus
-              subjectKind="integration_instance"
-              subjectId={instance.id}
-              runtimeState={instance.runtimeState}
-              runtimeErrorCode={instance.runtimeErrorCode}
-              retainedPackageDigest={instance.packageDigest}
-              onInvalidate={async () => {
-                await queryClient.invalidateQueries({ queryKey: integrationKeys.all });
-              }}
-            />
           </section>
 
           <RuntimeLifecyclePanel instance={instance} />

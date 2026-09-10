@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# ABOUTME: Build a vendor-signed PaddleOCR smoke fixture package for UI/lifecycle smoke only.
+# ABOUTME: Build an unsigned PaddleOCR smoke fixture package for UI/lifecycle smoke only.
 # ABOUTME: Uses a protocol-stub runtime payload; never treat this package as a production release.
-#MISE description="Build signed PaddleOCR smoke fixture package (protocol stub; not production)"
+#MISE description="Build PaddleOCR smoke fixture package (protocol stub; not production)"
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
@@ -12,24 +12,11 @@ STAGING_ROOT="$ROOT_DIR/runtime-plugins/dist/staging"
 STAGING="$STAGING_ROOT/com.langnext.paddleocr-1.0.0-smoke"
 OUT_DIR="$PLUGIN_DIR/fixtures/packages"
 OUT_PACKAGE="$OUT_DIR/com.langnext.paddleocr-1.0.0.lnplugin"
-PUBLIC_KEY_FILE="$ROOT_DIR/runtime-plugins/conformance/fixtures/packages/keys/vendor-public-key.hex"
-VENDOR_SEED="0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a"
-VENDOR_KEY_ID="com.langnext.vendor.keys.1"
 WORKER_PATH="runtime/worker.exe"
 DLL_A_PATH="runtime/paddle_inference.dll"
 DLL_B_PATH="runtime/opencv_world.dll"
 LICENSE_PATH="licenses/NOTICE.txt"
 SCHEMA_PATH="schemas/config.json"
-
-if [[ ! -f "$PUBLIC_KEY_FILE" ]]; then
-  echo "error: vendor public key fixture missing: $PUBLIC_KEY_FILE" >&2
-  exit 1
-fi
-PUBLIC_KEY_HEX="$(tr -d '[:space:]' < "$PUBLIC_KEY_FILE")"
-if [[ ${#PUBLIC_KEY_HEX} -ne 64 || ! "$PUBLIC_KEY_HEX" =~ ^[0-9a-f]+$ ]]; then
-  echo "error: vendor public key must be 64 lowercase hex characters" >&2
-  exit 1
-fi
 
 sha256_file() {
   if command -v sha256sum >/dev/null 2>&1; then
@@ -38,8 +25,6 @@ sha256_file() {
     shasum -a 256 "$1" | awk '{print $1}'
   fi
 }
-
-FINGERPRINT="$(printf '%s' "$PUBLIC_KEY_HEX" | python -c 'import sys,hashlib,binascii; print(hashlib.sha256(binascii.unhexlify(sys.stdin.read().strip())).hexdigest())')"
 
 rm -rf "$STAGING"
 mkdir -p "$STAGING/runtime" "$STAGING/licenses" "$STAGING/schemas" "$OUT_DIR"
@@ -57,7 +42,7 @@ if [[ ! -f "$CONFORMANCE_EXE" ]]; then
   exit 1
 fi
 cp "$CONFORMANCE_EXE" "$STAGING/$WORKER_PATH"
-# Placeholder dependency files satisfy the signed runtime inventory; the fixture worker does not load them.
+# Placeholder dependency files satisfy the runtime inventory; the fixture worker does not load them.
 printf 'smoke-paddle-inference-dll\n' >"$STAGING/$DLL_A_PATH"
 printf 'smoke-opencv-world-dll\n' >"$STAGING/$DLL_B_PATH"
 cp "$PLUGIN_DIR/licenses/NOTICE.txt" "$STAGING/$LICENSE_PATH"
@@ -81,10 +66,6 @@ cat >"$STAGING/plugin.json" <<EOF
   "pluginApiVersion": "1.0",
   "id": "com.langnext.paddleocr",
   "version": "1.0.0",
-  "publisher": {
-    "keyId": "$VENDOR_KEY_ID",
-    "keyFingerprint": "$FINGERPRINT"
-  },
   "runtime": {
     "kind": "trusted-native-worker",
     "artifact": "$WORKER_PATH",
@@ -197,9 +178,7 @@ cat >"$STAGING/plugin.json" <<EOF
 }
 EOF
 
-mise run plugin:sign-staging -- "$STAGING" "$VENDOR_SEED"
-mise run plugin:finalize-package -- "$STAGING" "$OUT_PACKAGE" --public-key-hex "$PUBLIC_KEY_HEX"
-mise run plugin:verify -- "$OUT_PACKAGE" --public-key-hex "$PUBLIC_KEY_HEX"
+mise run plugin:pack -- "$STAGING" "$OUT_PACKAGE"
 
 echo "ok: paddleocr smoke package written to $OUT_PACKAGE"
 echo "note: protocol-stub runtime only; not a production release artifact"

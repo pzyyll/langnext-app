@@ -22,11 +22,6 @@ path = "src/bin/plugin_tool.rs"
 # Offline package finalize/verify helper; not the Tauri desktop entrypoint.
 
 [[bin]]
-name = "plugin_release_tool"
-path = "src/bin/plugin_release_tool.rs"
-# Offline release-bundle verifier and bootstrap-policy generator; never reads private keys.
-
-[[bin]]
 name = "native_hash_helper"
 path = "src/bin/native_hash_helper.rs"
 # Exec-only SHA-256 helper for Unix native-worker identity hashing (FD-based exec target).

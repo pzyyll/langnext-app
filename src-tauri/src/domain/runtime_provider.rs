@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// Runtime executor kind bound to a provider instance. Package-only: every binding is an
-/// exact signed two-world LLM Wasm component; legacy frontend adapters do not exist.
+/// exact two-world LLM Wasm component; legacy frontend adapters do not exist.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProviderRuntimeKind {
@@ -64,7 +64,7 @@ pub struct ProviderRuntimeBinding {
   /// Persisted effective API type this binding owns (Provider default or model override).
   pub adapter_id: String,
   pub runtime_kind: ProviderRuntimeKind,
-  /// Exact signed package digest for the bound Wasm component.
+  /// Exact content digest for the bound Wasm component.
   pub package_digest: Option<String>,
   /// Execution grant-set revision; required only when the package binding is active.
   pub grant_set_revision: Option<u64>,
@@ -139,7 +139,6 @@ pub struct ProviderRuntimeCatalogEntryDto {
   pub plugin_id: String,
   pub version: String,
   pub package_digest: String,
-  pub publisher: crate::domain::runtime_lifecycle::PublisherIdentityDto,
   pub legacy_aliases: Vec<String>,
   pub capabilities: Vec<ProviderRuntimeCatalogCapabilityDto>,
   #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -174,7 +173,7 @@ pub struct ProviderRuntimeLifecycleResultDto {
   pub updated_at: String,
 }
 
-/// Preview input for attaching/replacing ONE API type with an exact signed package.
+/// Preview input for attaching/replacing ONE API type with exact package content.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PreviewProviderRuntimeInterfaceAttachInput {
@@ -203,7 +202,6 @@ pub struct ProviderRuntimeInterfacePreviewDto {
   pub source: ProviderRuntimeBindingDto,
   pub target: ProviderRuntimeBindingDto,
   pub target_plugin_version: String,
-  pub target_publisher: crate::domain::runtime_lifecycle::PublisherIdentityDto,
   pub legacy_aliases: Vec<String>,
   pub requires_permission_approval: bool,
   pub expires_at: String,
@@ -451,9 +449,9 @@ pub enum ProviderRuntimeChatEvent {
 }
 
 /// Non-secret provider runtime requirement carried in configuration exports. Preserves the
-/// exact package identity (digest, publisher, API version, legacy aliases, capabilities) but
-/// never serializes an execution grant, grant revision, package bytes, credential reference,
-/// or any activation authority.
+/// exact content identity (digest, API version, legacy aliases, capabilities) but never
+/// serializes an execution grant, grant revision, package bytes, credential reference,
+/// publisher identity, or any activation authority.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProviderRuntimeRequirementExport {
@@ -468,10 +466,6 @@ pub struct ProviderRuntimeRequirementExport {
   pub plugin_id: Option<String>,
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub plugin_version: Option<String>,
-  #[serde(default, skip_serializing_if = "Option::is_none")]
-  pub publisher_key_id: Option<String>,
-  #[serde(default, skip_serializing_if = "Option::is_none")]
-  pub publisher_key_fingerprint: Option<String>,
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub plugin_api_version: Option<String>,
   #[serde(default, skip_serializing_if = "Vec::is_empty")]

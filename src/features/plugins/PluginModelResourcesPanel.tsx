@@ -1,5 +1,5 @@
 // ABOUTME: Host-owned model resource status, Download/Cancel actions, and bounded progress UI.
-// ABOUTME: Renders generically from signed model descriptors; no plugin-ID branching.
+// ABOUTME: Renders generically from package model descriptors; no plugin-ID branching.
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@base-ui/react/button";

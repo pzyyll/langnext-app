@@ -1,65 +1,48 @@
-# ABOUTME: Positive and negative `.lnplugin` fixtures for Phase 3 package verification.
-# ABOUTME: Test private keys live only under `keys/` and are never bundled as trust roots.
+# ABOUTME: Structural `.lnplugin` fixtures accepted and rejected by the source-based catalog.
+# ABOUTME: No signing key, signature, or publisher material is stored or required.
 
-Regenerate (from `src-tauri`):
+Every fixture is a committed archive loaded through `PluginLoader::load_archive` by
+`src-tauri/src/services/conformance_package_fixtures.rs`. That test pins the expected outcome
+for each file, so a change to archive validation that silently widens acceptance fails the
+suite. There is no generator and no key material: fixtures are hand-maintained artifacts.
+
+Regenerate the whole set after an intentional format change:
 
 ```bash
-GENERATE_PLUGIN_FIXTURES=1 cargo test --lib generate_conformance_package_fixtures -- --nocapture
+mise run plugin:check-builtins          # shipped built-in archives
+cargo test --lib conformance_package_fixtures -- --nocapture
 ```
 
-Offline verify / finalize require an explicit trusted public key:
+## Accepted
 
-```bash
-mise run plugin:verify -- runtime-plugins/conformance/fixtures/packages/signed-valid.lnplugin \
-  --public-key-file runtime-plugins/conformance/fixtures/packages/keys/vendor-public-key.hex
+| Fixture                        | Notes                                                              |
+| ------------------------------ | ------------------------------------------------------------------ |
+| `valid-archive.lnplugin`       | Minimal Wasm package: `plugin.json` plus one indexed artifact      |
+| `llm-provider-valid.lnplugin`  | Provider package with two indexed Wasm artifacts and capabilities  |
+| `permission-expanding.lnplugin` | Declares a network permission; declarations are not authority      |
 
-mise run plugin:verify -- runtime-plugins/conformance/fixtures/packages/user-signed.lnplugin \
-  --public-key-file runtime-plugins/conformance/fixtures/packages/keys/test-public-key.hex
+## Rejected (stable error codes)
 
-mise run plugin:finalize-package -- \
-  runtime-plugins/conformance/fixtures/packages/staging/signed-valid \
-  /tmp/out.lnplugin \
-  --public-key-file runtime-plugins/conformance/fixtures/packages/keys/vendor-public-key.hex
-```
+| Fixture                          | Expected code             |
+| -------------------------------- | ------------------------- |
+| `legacy-signature-entry.lnplugin` | `undeclared_file`        |
+| `legacy-publisher-key.lnplugin`   | `undeclared_file`        |
+| `traversal.lnplugin`              | `path_invalid`           |
+| `symlink.lnplugin`                | `symlink_rejected`       |
+| `duplicate-path.lnplugin`         | `duplicate_path`         |
+| `undeclared-file.lnplugin`        | `undeclared_file`        |
+| `missing-indexed-file.lnplugin`   | `undeclared_file`        |
+| `locale-tamper.lnplugin`          | `digest_mismatch`        |
+| `incompatible.lnplugin`           | `compatibility_rejected` |
+| `target-incompatible.lnplugin`    | `compatibility_rejected` |
+| `oversized-entry.lnplugin`        | `entry_too_large`        |
+| `zip-bomb.lnplugin`               | `zip_bomb`               |
 
-`staging/signed-valid` is the exact source tree for `signed-valid.lnplugin`. The formal
-finalizer must reproduce the committed archive byte-for-byte (same `plugin.json` bytes,
-signature, and public key).
+`legacy-signature-entry.lnplugin` and `legacy-publisher-key.lnplugin` carry the removed
+`signatures/manifest.sig` and `publisher.pub` entries. Both must fail closed as undeclared
+files: the catalog has no plugin-level trust envelope, and a legacy archive is rejected rather
+than tolerated.
 
-## Positive
-
-| Fixture | Notes |
-| --- | --- |
-| `signed-valid.lnplugin` | Fixture vendor key id (`com.langnext.vendor.keys.1`); finalizer output of `staging/signed-valid` |
-| `user-signed.lnplugin` | User key id (`com.example.keys.1`), valid index/signature |
-| `permission-expanding.lnplugin` | Valid package that requests network permissions |
-| `staging/signed-valid/` | Deterministic staging tree for `plugin:finalize-package` |
-
-## Negative (stable error codes)
-
-| Fixture | Expected code |
-| --- | --- |
-| `unsigned.lnplugin` | `missing_signature` |
-| `bad-signature.lnplugin` | `signature_invalid` |
-| `traversal.lnplugin` | `path_invalid` |
-| `symlink.lnplugin` | `symlink_rejected` |
-| `duplicate-path.lnplugin` | `duplicate_path` |
-| `undeclared-file.lnplugin` | `undeclared_file` |
-| `missing-indexed-file.lnplugin` | `missing_indexed_file` |
-| `locale-tamper.lnplugin` | `digest_mismatch` |
-| `incompatible.lnplugin` | `compatibility_rejected` |
-| `target-incompatible.lnplugin` | `compatibility_rejected` |
-| `oversized-entry.lnplugin` | `entry_too_large` |
-| `zip-bomb.lnplugin` | `zip_bomb` |
-
-## Keys
-
-Public only in fixture trust material (never production roots):
-
-- `keys/test-signing-key.hex` — unit-test seed (all `09` bytes); fixtures only, never bundled
-- `keys/test-public-key.hex` — matching user-fixture public key
-- `keys/vendor-public-key.hex` — fixture vendor public key (seed `[0x0a; 32]` for tests only)
-
-Never ship private keys in app resources or production vendor trust roots.
-Production vendor public keys are loaded from `src-tauri/resources/vendor-trust/public-keys.json`
-(empty by default) or `LANGNEXT_VENDOR_TRUST_JSON`.
+Never add key material, signature files, or publisher declarations to this directory.
+Built-in authenticity comes from the signed application installer and the protected
+`src-tauri/resources/plugins/` location.

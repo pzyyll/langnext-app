@@ -6,9 +6,7 @@ pub mod baidu_token_exchanger;
 pub mod blob_resources;
 pub mod bounded_http;
 pub mod bundled_plugins;
-pub mod default_package_activation;
 pub mod edge_tts;
-pub mod edge_tts_runtime;
 pub mod endpoint_trust;
 pub mod google_cloud;
 pub mod google_service_account;
@@ -21,9 +19,9 @@ pub mod native_workers;
 pub mod network_broker;
 pub mod ocr_services;
 pub mod package_definition;
+pub mod plugin_catalog;
+pub mod plugin_loader;
 pub mod plugin_models;
-pub mod plugin_package;
-pub mod plugin_release_bundle;
 pub mod plugin_schema;
 pub mod plugin_store;
 pub mod provider_http;
@@ -67,19 +65,18 @@ pub mod stream_resources;
 pub mod token_grant;
 pub mod translation_history;
 pub mod translation_profiles;
-pub mod vendor_trust;
 pub mod wasm_runtime;
 
 #[cfg(test)]
 pub(crate) mod test_support;
 
-pub use default_package_activation::DefaultPackageActivationService;
 pub use endpoint_trust::EndpointTrustService;
 pub use import_export::ImportExportService;
 pub use models::ModelService;
 pub use ocr_services::OcrServiceService;
+pub use plugin_catalog::{PluginCatalog, PluginCatalogConfig};
 pub use plugin_models::PluginModelService;
-pub use plugin_store::PluginPackageService;
+pub use plugin_store::UserPluginStore;
 pub use providers::ProviderService;
 pub use runtime_lifecycle::RuntimeLifecycleService;
 pub use runtime_router::RuntimeRouter;
@@ -89,6 +86,9 @@ pub use settings::SettingsService;
 pub use speech_services::SpeechServiceService;
 pub use translation_history::TranslationHistoryService;
 pub use translation_profiles::TranslationProfileService;
+
+#[cfg(test)]
+mod conformance_package_fixtures;
 
 #[cfg(test)]
 mod tests;

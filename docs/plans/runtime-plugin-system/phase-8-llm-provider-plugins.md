@@ -1,5 +1,7 @@
 # Phase 8: Runtime LLM Provider Plugins Implementation Plan
 
+> **Superseded (2026-08-24):** plugin-level signing, publisher trust, vendor bootstrap, and default-activation orchestration were removed. See `docs/architecture/plugin-catalog.md`.
+
 **Goal:** Make LLM model-list and chat providers installable runtime plugins while preserving host-owned provider identity, transport/authentication, Translation/Detect/OCR workflow policy, fallback, cancellation, and history semantics.
 
 **Inputs:**

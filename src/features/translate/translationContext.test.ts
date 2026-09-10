@@ -9,7 +9,6 @@ const CATALOG_ENTRY = {
   pluginId: "com.langnext.provider.gemini",
   version: "1.0.0",
   packageDigest: "digest-2",
-  publisher: { keyId: "key-2", keyFingerprint: "fp-2" },
   legacyAliases: ["gemini"],
   capabilities: [
     { capabilityId: "llm.models.list@1", artifactPath: "fixtures/llm-models.wasm", artifactDigest: "c" },
@@ -18,7 +17,7 @@ const CATALOG_ENTRY = {
   detection: null,
 } satisfies ProviderRuntimeCatalogEntryDto;
 
-/** Provider whose default API type is legacy while the gemini interface is runtime-bound. */
+/** Provider whose default API type has no package binding while the gemini interface is runtime-bound. */
 function sourceInterfaceProvider(): ProviderInstanceDto {
   return {
     id: "p1",
@@ -37,25 +36,15 @@ function sourceInterfaceProvider(): ProviderInstanceDto {
     modelsSyncErrorCode: null,
     runtime: {
       adapterId: "openai-compatible",
-      runtimeKind: "legacy-frontend-provider",
+      runtimeKind: "wasm-component",
       packageDigest: null,
       grantSetRevision: null,
-      state: "active",
-      errorCode: null,
+      state: "unavailable",
+      errorCode: "no_runtime_binding",
       errorMessage: null,
       updatedAt: "t",
     },
     runtimeBindings: [
-      {
-        adapterId: "openai-compatible",
-        runtimeKind: "legacy-frontend-provider",
-        packageDigest: null,
-        grantSetRevision: null,
-        state: "active",
-        errorCode: null,
-        errorMessage: null,
-        updatedAt: "t",
-      },
       {
         adapterId: "gemini",
         runtimeKind: "wasm-component",

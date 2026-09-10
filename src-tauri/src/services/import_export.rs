@@ -10,7 +10,6 @@ use crate::domain::import_export::{
 // EXPORT_FORMAT_VERSION is also used by validate_current_format_runtime_records.
 use crate::domain::ocr_service::{OcrPromptTemplate, OcrProviderType, OcrService};
 use crate::domain::provider::ProviderExport;
-use crate::domain::runtime_plugin::PluginManifestV1;
 use crate::domain::runtime_provider::{
   ProviderRuntimeBinding, ProviderRuntimeKind, ProviderRuntimeRequirementExport, ProviderRuntimeState,
 };
@@ -19,11 +18,10 @@ use crate::domain::time::{new_id, now_rfc3339};
 use crate::error::{ImportPreviewConflictReason, StorageError};
 use crate::repositories::credential_operations::{self, CredentialOperation, OwnerKind};
 use crate::repositories::{
-  app_credentials, app_settings, installed_plugin_versions, integration_instances, ocr_prompt_templates, ocr_services,
-  provider_instances, provider_models, provider_runtime_bindings, speech_services, translation_profiles,
+  app_credentials, app_settings, integration_instances, ocr_prompt_templates, ocr_services, provider_instances,
+  provider_models, provider_runtime_bindings, speech_services, translation_profiles,
 };
 use crate::services::import_validation::{self, ImportCopyIdMaps, ValidatedImportPlan};
-use crate::services::runtime_plugin_contracts::parse_manifest;
 use crate::services::runtime_providers::release_grant_after_removal;
 use crate::services::service_integration_registry::ServiceIntegrationRegistry;
 use crate::storage::Database;
@@ -156,6 +154,8 @@ pub struct ImportExportService {
   /// Installed-package definition catalog for import plan validation; `None` keeps plans
   /// structurally lenient when no package store is wired.
   registry: Option<Arc<ServiceIntegrationRegistry>>,
+  /// Immutable plugin content catalog for exact content requirements.
+  catalog: Option<Arc<crate::services::plugin_catalog::PluginCatalog>>,
   preview_sessions: Arc<Mutex<PreviewSessionStore>>,
   preview_ttl: Duration,
 }
@@ -166,9 +166,16 @@ impl ImportExportService {
       db,
       vault,
       registry,
+      catalog: None,
       preview_sessions: Arc::new(Mutex::new(PreviewSessionStore::default())),
       preview_ttl: Duration::from_secs(IMPORT_PREVIEW_SESSION_TTL_SECS),
     }
+  }
+
+  /// Wire the immutable plugin catalog so exact content requirements resolve built-ins too.
+  pub fn with_catalog(mut self, catalog: Arc<crate::services::plugin_catalog::PluginCatalog>) -> Self {
+    self.catalog = Some(catalog);
+    self
   }
 
   /// Test-only preview TTL override (expiry is normally 15 minutes).
@@ -199,7 +206,7 @@ impl ImportExportService {
           let mut export = ProviderExport::from(provider);
           let mut requirements = bindings
             .iter()
-            .map(|binding| provider_runtime_requirement(conn, binding))
+            .map(|binding| provider_runtime_requirement(self.catalog.as_deref(), conn, binding))
             .collect::<Result<Vec<_>, StorageError>>()?;
           requirements.sort_by(|a, b| {
             a.adapter_id
@@ -239,7 +246,7 @@ impl ImportExportService {
               })?;
             validate_export_requirement_for_instance(&i, parsed)?
           }
-          None => rebuild_export_requirement_from_pin(conn, &i)?,
+          None => rebuild_export_requirement_from_pin(self.catalog.as_deref(), conn, &i)?,
         };
         let runtime = validate_export_requirement_for_instance(&i, runtime)?;
         integration_exports.push(IntegrationInstanceExport {
@@ -324,7 +331,13 @@ impl ImportExportService {
     mode: ImportConflictMode,
   ) -> Result<ImportPreview, StorageError> {
     self.db.read_snapshot(|conn| {
-      let plan = import_validation::build_validated_plan(conn, document, mode, self.registry.as_deref())?;
+      let plan = import_validation::build_validated_plan(
+        conn,
+        document,
+        mode,
+        self.registry.as_deref(),
+        self.catalog.as_deref(),
+      )?;
       Ok(plan.preview)
     })
   }
@@ -339,7 +352,13 @@ impl ImportExportService {
     mode: ImportConflictMode,
   ) -> Result<ImportPreview, StorageError> {
     let (mut preview, copy_id_maps, cas_baseline) = self.db.read_snapshot(|conn| {
-      let plan = import_validation::build_validated_plan(conn, document, mode, self.registry.as_deref())?;
+      let plan = import_validation::build_validated_plan(
+        conn,
+        document,
+        mode,
+        self.registry.as_deref(),
+        self.catalog.as_deref(),
+      )?;
       Ok((
         plan.preview.clone(),
         plan.copy_id_maps.clone(),
@@ -416,6 +435,7 @@ impl ImportExportService {
         session.mode,
         Some(&session.copy_id_maps),
         self.registry.as_deref(),
+        self.catalog.as_deref(),
       )?;
       if !plan.preview.valid {
         return Ok((plan.preview, false, Vec::new()));
@@ -450,7 +470,13 @@ impl ImportExportService {
 
     let (preview, applied, cleanup_ops) = self.db.transaction(|uow| {
       let conn = uow.conn();
-      let plan = import_validation::build_validated_plan(conn, &document, mode, self.registry.as_deref())?;
+      let plan = import_validation::build_validated_plan(
+        conn,
+        &document,
+        mode,
+        self.registry.as_deref(),
+        self.catalog.as_deref(),
+      )?;
       if !plan.preview.valid {
         return Ok((plan.preview, false, Vec::new()));
       }
@@ -538,20 +564,6 @@ impl ImportExportService {
       } else {
         integration_instances::insert(conn, instance)?;
       }
-      // Package-backed imports stay confirmation-required and never auto-activate.
-      // Intent rows exact-bind package_digest, so only installed packages receive provenance.
-      if let Some(digest) = instance.package_digest.as_deref()
-        && crate::repositories::installed_plugin_versions::get_optional(conn, digest)?.is_some()
-      {
-        crate::services::default_package_activation::DefaultPackageActivationService::insert_import_requires_confirmation_intent_on_conn(
-          conn,
-          crate::domain::runtime_lifecycle::GrantSubjectKind::IntegrationInstance,
-          instance.id,
-          digest,
-          Some(&crate::domain::plugin_package::sha256_hex(instance.config_json.as_bytes())),
-          Some(&instance.updated_at),
-        )?;
-      }
     }
 
     // Providers
@@ -609,19 +621,14 @@ impl ImportExportService {
           .unwrap_or(&default_adapter)
           .to_string();
         declared_adapters.insert(adapter_id.clone());
-        upsert_provider_runtime_binding(conn, *provider_id, &adapter_id, requirement, &now)?;
-        if let Some(digest) = requirement.package_digest.as_deref()
-          && crate::repositories::installed_plugin_versions::get_optional(conn, digest)?.is_some()
-        {
-          crate::services::default_package_activation::DefaultPackageActivationService::insert_import_requires_confirmation_intent_on_conn(
-            conn,
-            crate::domain::runtime_lifecycle::GrantSubjectKind::ProviderInstance,
-            *provider_id,
-            digest,
-            None,
-            Some(&now),
-          )?;
-        }
+        upsert_provider_runtime_binding(
+          conn,
+          self.catalog.as_deref(),
+          *provider_id,
+          &adapter_id,
+          requirement,
+          &now,
+        )?;
       }
       // Collection reconciliation: removed adapters are deleted, and any pre-existing
       // identity the same adapter no longer carries (replaced package/revision) has its
@@ -801,14 +808,59 @@ impl ImportExportService {
   }
 }
 
+/// Exact content identity of one pinned digest for export.
+struct PinnedContentIdentity {
+  content_digest: String,
+  plugin_id: String,
+  plugin_version: String,
+  runtime_kind: crate::domain::runtime_plugin::RuntimeKind,
+  manifest: crate::domain::runtime_plugin::PluginManifestV1,
+}
+
+/// Resolve one pinned digest to its exact content identity for export.
+///
+/// Catalog snapshots are the primary source, so built-in content (the normal provider/instance
+/// attach path) exports exactly like user archives. A digest that is only recorded in
+/// `plugin_user_archives` (an unresolved import wait) is still exported from its stored manifest.
+fn pinned_content_identity(
+  catalog: Option<&crate::services::plugin_catalog::PluginCatalog>,
+  conn: &rusqlite::Connection,
+  digest: &str,
+) -> Result<Option<PinnedContentIdentity>, StorageError> {
+  if let Some(catalog) = catalog
+    && let Some(loaded) = catalog.snapshot_optional(digest)
+  {
+    return Ok(Some(PinnedContentIdentity {
+      content_digest: loaded.descriptor.content_digest.clone(),
+      plugin_id: loaded.descriptor.plugin_id.clone(),
+      plugin_version: loaded.descriptor.version.clone(),
+      runtime_kind: loaded.descriptor.runtime_kind,
+      manifest: loaded.manifest.clone(),
+    }));
+  }
+  let Some(archive) = crate::repositories::plugin_catalog::get_user_archive(conn, digest)? else {
+    return Ok(None);
+  };
+  let manifest: crate::domain::runtime_plugin::PluginManifestV1 = serde_json::from_str(&archive.manifest_json)
+    .map_err(|e| StorageError::Validation(format!("invalid installed package manifest: {e}")))?;
+  Ok(Some(PinnedContentIdentity {
+    content_digest: archive.content_digest,
+    plugin_id: archive.plugin_id,
+    plugin_version: archive.version,
+    runtime_kind: archive.runtime_kind,
+    manifest,
+  }))
+}
+
 /// Build the exact non-secret provider runtime requirement for export. Package bindings
 /// preserve exact identity from the installed manifest (or from the persisted unresolved
 /// requirement when the package is absent).
 fn provider_runtime_requirement(
+  catalog: Option<&crate::services::plugin_catalog::PluginCatalog>,
   conn: &rusqlite::Connection,
   binding: &ProviderRuntimeBinding,
 ) -> Result<ProviderRuntimeRequirementExport, StorageError> {
-  let mut requirement = provider_runtime_requirement_identity(conn, binding)?;
+  let mut requirement = provider_runtime_requirement_identity(catalog, conn, binding)?;
   requirement.adapter_id = Some(binding.adapter_id.clone());
   Ok(requirement)
 }
@@ -817,6 +869,7 @@ fn provider_runtime_requirement(
 /// adapter-keyed binding. Package bindings preserve exact identity from the installed manifest
 /// (or from the persisted unresolved requirement when the package is absent).
 fn provider_runtime_requirement_identity(
+  catalog: Option<&crate::services::plugin_catalog::PluginCatalog>,
   conn: &rusqlite::Connection,
   binding: &ProviderRuntimeBinding,
 ) -> Result<ProviderRuntimeRequirementExport, StorageError> {
@@ -840,10 +893,10 @@ fn provider_runtime_requirement_identity(
           binding.provider_id
         ))
       })?;
-      let version = installed_plugin_versions::get(conn, digest)?;
-      let manifest: PluginManifestV1 = parse_manifest(&version.manifest_json).map_err(|e| {
-        StorageError::Validation(format!("provider runtime package {} manifest: {e}", version.plugin_id))
+      let identity = pinned_content_identity(catalog, conn, digest)?.ok_or_else(|| {
+        StorageError::PluginUnavailable(format!("provider runtime package {digest} is not installed"))
       })?;
+      let manifest = identity.manifest.clone();
       let declaration = manifest.provider_runtime.as_ref().ok_or_else(|| {
         StorageError::Validation(format!(
           "provider runtime package {} has no providerRuntime declaration",
@@ -856,10 +909,8 @@ fn provider_runtime_requirement_identity(
         adapter_id: None,
         runtime_kind: "wasm-component".into(),
         package_digest: Some(digest.to_string()),
-        plugin_id: Some(version.plugin_id),
-        plugin_version: Some(version.version),
-        publisher_key_id: Some(version.publisher_key_id),
-        publisher_key_fingerprint: Some(version.publisher_fingerprint),
+        plugin_id: Some(identity.plugin_id),
+        plugin_version: Some(identity.plugin_version),
         plugin_api_version: Some(manifest.plugin_api_version),
         legacy_aliases: declaration.legacy_aliases.clone(),
         capabilities,
@@ -875,6 +926,7 @@ fn provider_runtime_requirement_identity(
 /// the caller). Only package-backed requirements reach this path.
 fn upsert_provider_runtime_binding(
   conn: &rusqlite::Connection,
+  catalog: Option<&crate::services::plugin_catalog::PluginCatalog>,
   provider_id: Uuid,
   adapter_id: &str,
   requirement: &ProviderRuntimeRequirementExport,
@@ -885,15 +937,34 @@ fn upsert_provider_runtime_binding(
     .as_ref()
     .map(|binding| binding.created_at.clone())
     .unwrap_or_else(|| now.to_string());
+  // Import never grants and never installs. Exact content that is already present locally is
+  // recorded as `pending_activation` and waits for the user's explicit activation; absent
+  // content stays unavailable with a closed reason. The binding always records the exact
+  // required digest; the state and error code carry resolution.
+  let (state, error_code, error_message) = match requirement.package_digest.as_deref() {
+    Some(digest) if import_validation::local_content_available(conn, catalog, digest)? => {
+      (ProviderRuntimeState::PendingActivation, None, None)
+    }
+    Some(_) => (
+      ProviderRuntimeState::Unavailable,
+      Some("plugin_missing".into()),
+      Some("provider runtime package is not installed locally".into()),
+    ),
+    None => (
+      ProviderRuntimeState::Unavailable,
+      Some("invalid_runtime".into()),
+      Some("provider runtime requirement is missing its package digest".into()),
+    ),
+  };
   let mut binding = ProviderRuntimeBinding {
     provider_id,
     adapter_id: adapter_id.to_string(),
     runtime_kind: ProviderRuntimeKind::WasmComponent,
     package_digest: requirement.package_digest.clone(),
     grant_set_revision: None,
-    state: ProviderRuntimeState::Unavailable,
-    error_code: Some("plugin_unavailable".into()),
-    error_message: Some("provider runtime package is not installed or approved".into()),
+    state,
+    error_code,
+    error_message,
     runtime_requirement_json: Some(serde_json::to_string(requirement).map_err(StorageError::from)?),
     created_at: created_at.clone(),
     updated_at: now.to_string(),
@@ -951,19 +1022,13 @@ fn validate_export_requirement_for_instance(
           "package-backed runtime requirement missing package digest".into(),
         ));
       }
-      if req.package_digest.as_deref() != instance.package_digest.as_deref() {
+      // An unresolved imported requirement stores the exact digest with no local pin
+      // (`package_digest` NULL). A pin, when present, must match the requirement exactly.
+      if let Some(pin) = instance.package_digest.as_deref()
+        && req.package_digest.as_deref() != Some(pin)
+      {
         return Err(StorageError::Validation(
           "runtime requirement package digest does not match instance pin".into(),
-        ));
-      }
-      if !non_empty(req.publisher_key_id.as_deref()) {
-        return Err(StorageError::Validation(
-          "package-backed runtime requirement missing publisher key id".into(),
-        ));
-      }
-      if !non_empty(req.publisher_key_fingerprint.as_deref()) {
-        return Err(StorageError::Validation(
-          "package-backed runtime requirement missing publisher fingerprint".into(),
         ));
       }
       if !non_empty(req.plugin_api_version.as_deref()) {
@@ -993,6 +1058,7 @@ pub fn validate_current_format_runtime_records(doc: &ConfigurationExport) -> Res
 }
 
 fn rebuild_export_requirement_from_pin(
+  catalog: Option<&crate::services::plugin_catalog::PluginCatalog>,
   conn: &rusqlite::Connection,
   instance: &crate::domain::service_integration::IntegrationInstance,
 ) -> Result<crate::domain::runtime_lifecycle::RuntimeRequirementExport, StorageError> {
@@ -1002,30 +1068,21 @@ fn rebuild_export_requirement_from_pin(
       instance.id
     ))
   })?;
-  let version = crate::repositories::installed_plugin_versions::get_optional(conn, digest)?.ok_or_else(|| {
+  let identity = pinned_content_identity(catalog, conn, digest)?.ok_or_else(|| {
     StorageError::PluginUnavailable(format!(
       "cannot rebuild export requirement; package {digest} is not installed"
     ))
   })?;
-  let manifest: crate::domain::runtime_plugin::PluginManifestV1 = serde_json::from_str(&version.manifest_json)
-    .map_err(|e| StorageError::Validation(format!("invalid installed package manifest: {e}")))?;
-  if version.publisher_key_id.trim().is_empty() || version.publisher_fingerprint.trim().is_empty() {
-    return Err(StorageError::Validation(
-      "installed package missing publisher identity for export".into(),
-    ));
-  }
+  let version = identity;
+  let manifest = version.manifest.clone();
   Ok(crate::domain::runtime_lifecycle::RuntimeRequirementExport {
     plugin_id: version.plugin_id,
-    plugin_version: version.version,
-    runtime_kind: version.runtime_kind,
-    package_digest: Some(version.package_digest),
-    publisher_key_id: Some(version.publisher_key_id),
-    publisher_key_fingerprint: Some(version.publisher_fingerprint),
+    plugin_version: version.plugin_version,
+    runtime_kind: crate::domain::runtime_lifecycle::runtime_kind_as_str(version.runtime_kind).to_string(),
+    package_digest: Some(version.content_digest),
     plugin_api_version: Some(manifest.plugin_api_version),
     config_schema_version: instance.config_schema_version,
     required_capability_majors: manifest.capabilities.into_iter().map(|c| c.id).collect(),
-    provider_runtime_kind: None,
-    provider_package_digest: None,
   })
 }
 

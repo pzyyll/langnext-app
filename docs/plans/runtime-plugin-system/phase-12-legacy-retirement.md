@@ -1,5 +1,7 @@
 # Phase 12: Legacy Plugin Executor Retirement Implementation Plan
 
+> **Superseded (2026-08-24):** plugin-level signing, publisher trust, vendor bootstrap, and default-activation orchestration were removed. See `docs/architecture/plugin-catalog.md`.
+
 **Status: superseded.** The unpublished package-only decision retired Bundled Rust, legacy frontend providers, and export formats 2-7 without a dual-stack compatibility window. Do not follow the dual-stack, v2-v8, or legacy-executor instructions below. They are historical.
 
 **Goal (historical):** Remove static plugin-ID branches, direct plugin transports, Bundled Rust service handlers, and legacy frontend provider executors only after runtime replacements have completed a stable dual-stack release.

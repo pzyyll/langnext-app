@@ -31,9 +31,9 @@ function provider(
     modelsSyncStatus: "never",
     modelsSyncErrorCode: null,
     runtime: {
-      runtimeKind: "legacy-frontend-provider",
-      packageDigest: null,
-      grantSetRevision: null,
+      runtimeKind: "wasm-component",
+      packageDigest: "digest-1",
+      grantSetRevision: 1,
       state: "active",
       errorCode: null,
       errorMessage: null,
@@ -81,7 +81,7 @@ const LLM_CATALOG_ENTRY = {
   pluginId: "langnext.conformance.llm-provider",
   version: "1.0.0",
   packageDigest: "digest-1",
-  publisher: { keyId: "key-1", keyFingerprint: "fp-1" },
+
   legacyAliases: ["openai-compatible"],
   capabilities: [
     { capabilityId: "llm.models.list@1", artifactPath: "fixtures/llm-models.wasm", artifactDigest: "a" },
@@ -127,7 +127,9 @@ function integration(partial: Partial<IntegrationInstanceDto> = {}): Integration
     effectiveStatus: "ready",
     lastValidatedAt: "t",
     lastErrorCode: null,
-    runtimeKind: "bundled-rust",
+    runtimeKind: "wasm-component",
+    packageDigest: "a".repeat(64),
+    executionGrantSetRevision: 1,
     runtimeState: "active",
     createdAt: "t",
     updatedAt: "t",
@@ -589,7 +591,7 @@ describe("runtime_executor_translation_preserves_host_fallback_reset_cancel_and_
     pluginId: "langnext.conformance.llm-provider",
     version: "1.0.0",
     packageDigest: "digest-1",
-    publisher: { keyId: "key-1", keyFingerprint: "fp-1" },
+
     legacyAliases: ["openai-compatible"],
     capabilities: [
       { capabilityId: "llm.models.list@1", artifactPath: "fixtures/llm-models.wasm", artifactDigest: "a" },

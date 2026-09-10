@@ -1,5 +1,7 @@
 # Phase 4: Runtime Pin, Upgrade, and Rollback Implementation Plan
 
+> **Superseded (2026-08-24):** plugin-level signing, publisher trust, vendor bootstrap, and default-activation orchestration were removed. See `docs/architecture/plugin-catalog.md`.
+
 **Goal:** Connect installed packages to integration instances and Wasm execution with exact digest/grant pinning, transactional migrations, explicit activation, and reversible rollback.
 
 **Inputs:** Phases 1–3.

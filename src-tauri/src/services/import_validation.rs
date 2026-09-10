@@ -26,8 +26,8 @@ use crate::domain::translation_profile::{
 };
 use crate::error::StorageError;
 use crate::repositories::{
-  app_settings, installed_plugin_versions, integration_instances, ocr_services, plugin_publishers, provider_instances,
-  provider_models, speech_services, translation_profiles,
+  app_settings, integration_instances, ocr_services, provider_instances, provider_models, speech_services,
+  translation_profiles,
 };
 use crate::services::providers::validate_provider_url;
 use crate::services::runtime_plugin_contracts::parse_manifest;
@@ -93,19 +93,22 @@ pub fn build_validated_plan(
   document: &ConfigurationExport,
   mode: ImportConflictMode,
   registry: Option<&ServiceIntegrationRegistry>,
+  catalog: Option<&crate::services::plugin_catalog::PluginCatalog>,
 ) -> Result<ValidatedImportPlan, StorageError> {
-  build_validated_plan_with_maps(conn, document, mode, None, registry)
+  build_validated_plan_with_maps(conn, document, mode, None, registry, catalog)
 }
 
 /// Build a validated plan using local rows visible on `conn`. `copy_maps` supplies the fixed
 /// Copy-mode ID remap owned by a preview session; `None` generates a fresh mapping. `registry`
 /// is the installed-package definition catalog; without it, plans stay structurally lenient.
+/// `catalog` is the immutable content catalog used to resolve exact runtime requirements.
 pub fn build_validated_plan_with_maps(
   conn: &Connection,
   document: &ConfigurationExport,
   mode: ImportConflictMode,
   copy_maps: Option<&ImportCopyIdMaps>,
   registry: Option<&ServiceIntegrationRegistry>,
+  catalog: Option<&crate::services::plugin_catalog::PluginCatalog>,
 ) -> Result<ValidatedImportPlan, StorageError> {
   let mut errors = Vec::new();
 
@@ -559,7 +562,7 @@ pub fn build_validated_plan_with_maps(
   }
 
   let runtime_requirements =
-    derive_runtime_requirement_previews(conn, document, mode, &provider_id_map, &integration_id_map)?;
+    derive_runtime_requirement_previews(conn, catalog, document, mode, &provider_id_map, &integration_id_map)?;
 
   let preview = ImportPreview {
     valid: errors.is_empty(),
@@ -872,12 +875,14 @@ pub fn build_validated_plan_with_maps(
       .cloned()
       .unwrap_or_else(|| exported.config_json.clone());
     integrations.push(integration_from_export(
+      conn,
       exported,
       id,
       created_at,
       now.clone(),
       config_json,
       registry,
+      catalog,
     ));
   }
 
@@ -1149,15 +1154,16 @@ fn compute_plan_cas_baseline(
   }
   owners.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)).then_with(|| a.2.cmp(&b.2)));
   let canonical = serde_json::json!({ "rows": rows, "owners": owners });
-  crate::services::plugin_package::public_sha256_hex(canonical.to_string().as_bytes())
+  crate::domain::plugin_catalog::sha256_hex(canonical.to_string().as_bytes())
 }
 
 /// Derive exact per-subject runtime requirement preview entries from imported requirements
-/// plus local catalog/publisher state. This is actionable metadata, never a mutation: no
+/// plus local catalog state. This is actionable metadata, never a mutation: no
 /// package lookup substitutes another package by plugin ID/version, and structural identity
 /// errors stay in `validation_errors`.
 fn derive_runtime_requirement_previews(
   conn: &Connection,
+  catalog: Option<&crate::services::plugin_catalog::PluginCatalog>,
   document: &ConfigurationExport,
   mode: ImportConflictMode,
   provider_id_map: &HashMap<Uuid, Uuid>,
@@ -1174,7 +1180,7 @@ fn derive_runtime_requirement_previews(
       ImportConflictMode::Merge => integration.id,
       ImportConflictMode::Copy => *integration_id_map.get(&integration.id).expect("integration map"),
     };
-    let (local_status, required_action) = integration_runtime_status(conn, requirement)?;
+    let (local_status, required_action) = integration_runtime_status(conn, catalog, requirement)?;
     entries.push(ImportRuntimeRequirementPreview {
       subject_kind: ImportRuntimeSubjectKind::Integration,
       subject_id: final_id,
@@ -1184,8 +1190,6 @@ fn derive_runtime_requirement_previews(
       plugin_id: Some(requirement.plugin_id.clone()),
       plugin_version: Some(requirement.plugin_version.clone()),
       package_digest: requirement.package_digest.clone(),
-      publisher_key_id: requirement.publisher_key_id.clone(),
-      publisher_key_fingerprint: requirement.publisher_key_fingerprint.clone(),
       local_status,
       required_action,
     });
@@ -1203,7 +1207,7 @@ fn derive_runtime_requirement_previews(
     }
     let requirements = provider.runtime_bindings.clone();
     for requirement in requirements {
-      let (local_status, required_action) = provider_runtime_status(conn, &requirement)?;
+      let (local_status, required_action) = provider_runtime_status(conn, catalog, &requirement)?;
       entries.push(ImportRuntimeRequirementPreview {
         subject_kind: ImportRuntimeSubjectKind::Provider,
         subject_id: final_id,
@@ -1213,8 +1217,6 @@ fn derive_runtime_requirement_previews(
         plugin_id: requirement.plugin_id.clone(),
         plugin_version: requirement.plugin_version.clone(),
         package_digest: requirement.package_digest.clone(),
-        publisher_key_id: requirement.publisher_key_id.clone(),
-        publisher_key_fingerprint: requirement.publisher_key_fingerprint.clone(),
         local_status,
         required_action,
       });
@@ -1224,21 +1226,21 @@ fn derive_runtime_requirement_previews(
 }
 
 /// Deterministic status/action for one integration runtime requirement. Package-backed
-/// requirements use the exact digest + declared publisher identity against the local
-/// catalog; legacy bundled/TypeScript kinds are incompatible and never import.
+/// requirements resolve their exact digest against the local catalog and recorded user
+/// archives; unknown runtime kinds are incompatible and never import.
 fn integration_runtime_status(
   conn: &Connection,
+  catalog: Option<&crate::services::plugin_catalog::PluginCatalog>,
   requirement: &RuntimeRequirementExport,
 ) -> Result<(ImportRuntimeLocalStatus, ImportRuntimeRequiredAction), StorageError> {
   match requirement.runtime_kind.as_str() {
     "wasm-component" | "trusted-native-worker" => package_runtime_status(
       conn,
+      catalog,
       &requirement.runtime_kind,
       requirement.package_digest.as_deref(),
       Some(&requirement.plugin_id),
       Some(&requirement.plugin_version),
-      requirement.publisher_key_id.as_deref(),
-      requirement.publisher_key_fingerprint.as_deref(),
       requirement.plugin_api_version.as_deref(),
     ),
     _ => Ok((
@@ -1252,17 +1254,17 @@ fn integration_runtime_status(
 /// Package-only: only `wasm-component` is a valid provider runtime kind.
 fn provider_runtime_status(
   conn: &Connection,
+  catalog: Option<&crate::services::plugin_catalog::PluginCatalog>,
   requirement: &ProviderRuntimeRequirementExport,
 ) -> Result<(ImportRuntimeLocalStatus, ImportRuntimeRequiredAction), StorageError> {
   match requirement.runtime_kind.as_str() {
     "wasm-component" => package_runtime_status(
       conn,
+      catalog,
       &requirement.runtime_kind,
       requirement.package_digest.as_deref(),
       requirement.plugin_id.as_deref(),
       requirement.plugin_version.as_deref(),
-      requirement.publisher_key_id.as_deref(),
-      requirement.publisher_key_fingerprint.as_deref(),
       requirement.plugin_api_version.as_deref(),
     ),
     _ => Ok((
@@ -1272,16 +1274,81 @@ fn provider_runtime_status(
   }
 }
 
-/// Local status precedence for an exact package-backed requirement: absent exact digest →
-/// missing; otherwise revoked → disabled → content unavailable → incompatible → installed.
+/// Local content resolved for one exact requirement: the identity a locally available
+/// revision declares, plus its manifest JSON.
+struct LocalContentIdentity {
+  runtime_kind: crate::domain::runtime_plugin::RuntimeKind,
+  plugin_id: String,
+  plugin_version: String,
+  manifest_json: String,
+}
+
+/// Resolve one exact content digest against local content. The immutable catalog owns
+/// built-in, development, and user archives; the recorded user-archive row covers a digest
+/// pinned by an unresolved import whose file is not part of the current catalog snapshot.
+fn local_content_identity(
+  conn: &Connection,
+  catalog: Option<&crate::services::plugin_catalog::PluginCatalog>,
+  digest: &str,
+) -> Result<Option<LocalContentIdentity>, StorageError> {
+  if let Some(catalog) = catalog
+    && let Some(loaded) = catalog.snapshot_optional(digest)
+  {
+    return Ok(Some(LocalContentIdentity {
+      runtime_kind: loaded.descriptor.runtime_kind,
+      plugin_id: loaded.descriptor.plugin_id.clone(),
+      plugin_version: loaded.descriptor.version.clone(),
+      manifest_json: loaded.manifest_json.clone(),
+    }));
+  }
+  let Some(archive) = crate::repositories::plugin_catalog::get_user_archive(conn, digest)? else {
+    return Ok(None);
+  };
+  Ok(Some(LocalContentIdentity {
+    runtime_kind: archive.runtime_kind,
+    plugin_id: archive.plugin_id,
+    plugin_version: archive.version,
+    manifest_json: archive.manifest_json,
+  }))
+}
+
+/// True when the exact content digest resolves to local content (catalog snapshot or a
+/// recorded user archive). Single owner of the "content is present" rule for import.
+pub fn local_content_available(
+  conn: &Connection,
+  catalog: Option<&crate::services::plugin_catalog::PluginCatalog>,
+  digest: &str,
+) -> Result<bool, StorageError> {
+  Ok(local_content_identity(conn, catalog, digest)?.is_some())
+}
+
+/// True when local content declares the same plugin id/version as the requirement while the
+/// requirement's exact digest is absent: a digest mismatch, never a substitution.
+fn local_identity_conflicts(
+  conn: &Connection,
+  catalog: Option<&crate::services::plugin_catalog::PluginCatalog>,
+  plugin_id: &str,
+  plugin_version: &str,
+) -> Result<bool, StorageError> {
+  if let Some(catalog) = catalog
+    && catalog.find_plugin_version(plugin_id, plugin_version).is_some()
+  {
+    return Ok(true);
+  }
+  Ok(
+    crate::repositories::plugin_catalog::get_user_archive_by_plugin_version(conn, plugin_id, plugin_version)?.is_some(),
+  )
+}
+
+/// Local status for an exact content requirement: exact digest resolution first, then a local
+/// claim on the same plugin id/version, then missing.
 fn package_runtime_status(
   conn: &Connection,
+  catalog: Option<&crate::services::plugin_catalog::PluginCatalog>,
   runtime_kind: &str,
   digest: Option<&str>,
   plugin_id: Option<&str>,
   plugin_version: Option<&str>,
-  publisher_key_id: Option<&str>,
-  publisher_key_fingerprint: Option<&str>,
   plugin_api_version: Option<&str>,
 ) -> Result<(ImportRuntimeLocalStatus, ImportRuntimeRequiredAction), StorageError> {
   let Some(digest) = digest else {
@@ -1292,39 +1359,30 @@ fn package_runtime_status(
       ImportRuntimeRequiredAction::ResolveIncompatibility,
     ));
   };
-  let Some(version) = installed_plugin_versions::get_optional(conn, digest)? else {
-    return Ok((
-      ImportRuntimeLocalStatus::Missing,
-      ImportRuntimeRequiredAction::InstallExactPackage,
-    ));
+  let Some(content) = local_content_identity(conn, catalog, digest)? else {
+    let conflicts = match (plugin_id, plugin_version) {
+      (Some(id), Some(version)) => local_identity_conflicts(conn, catalog, id, version)?,
+      _ => false,
+    };
+    return Ok(if conflicts {
+      (
+        ImportRuntimeLocalStatus::DigestMismatch,
+        ImportRuntimeRequiredAction::ResolveDigestMismatch,
+      )
+    } else {
+      (
+        ImportRuntimeLocalStatus::Missing,
+        ImportRuntimeRequiredAction::InstallExactPackage,
+      )
+    });
   };
-  let publisher = plugin_publishers::get_optional(conn, &version.publisher_key_id)?;
-  if publisher.as_ref().is_some_and(|p| p.revoked) {
-    return Ok((
-      ImportRuntimeLocalStatus::Revoked,
-      ImportRuntimeRequiredAction::RestorePublisher,
-    ));
-  }
-  if publisher.as_ref().is_some_and(|p| !p.enabled) {
-    return Ok((
-      ImportRuntimeLocalStatus::Disabled,
-      ImportRuntimeRequiredAction::RestorePublisher,
-    ));
-  }
-  if !version.content_available {
-    return Ok((
-      ImportRuntimeLocalStatus::ContentUnavailable,
-      ImportRuntimeRequiredAction::InstallExactPackage,
-    ));
-  }
-  // Exact identity compatibility: the installed revision must match the requirement's
-  // declared identity; a plugin ID/version match on a different digest never substitutes.
-  let identity_mismatch = version.runtime_kind != runtime_kind
-    || plugin_id.is_some_and(|id| id != version.plugin_id)
-    || plugin_version.is_some_and(|v| v != version.version)
-    || publisher_key_id.is_some_and(|k| k != version.publisher_key_id)
-    || publisher_key_fingerprint.is_some_and(|f| f != version.publisher_fingerprint);
-  let manifest_compatible = parse_manifest(&version.manifest_json)
+
+  // Exact identity compatibility: the local revision at this exact digest must match the
+  // requirement's declared identity.
+  let identity_mismatch = runtime_kind != crate::domain::runtime_lifecycle::runtime_kind_as_str(content.runtime_kind)
+    || plugin_id.is_some_and(|id| id != content.plugin_id)
+    || plugin_version.is_some_and(|v| v != content.plugin_version);
+  let manifest_compatible = parse_manifest(&content.manifest_json)
     .map(|manifest| plugin_api_version.is_none_or(|api| api == manifest.plugin_api_version))
     .unwrap_or(false);
   if identity_mismatch || !manifest_compatible {
@@ -1340,12 +1398,14 @@ fn package_runtime_status(
 }
 
 fn integration_from_export(
+  conn: &Connection,
   exported: &IntegrationInstanceExport,
   id: Uuid,
   created_at: String,
   updated_at: String,
   config_json: String,
   registry: Option<&ServiceIntegrationRegistry>,
+  catalog: Option<&crate::services::plugin_catalog::PluginCatalog>,
 ) -> IntegrationInstance {
   // Credential-bearing plugins stay unconfigured until re-auth.
   // Zero-secret Web instances with complete validated config are Ready and executable.
@@ -1357,9 +1417,9 @@ fn integration_from_export(
   );
   // Preserve exact runtime requirements. Never invent digests, never download packages, never
   // issue grants or activate. Package-backed imports stay unresolved until local install +
-  // trust + permission approval + explicit activation.
+  // permission approval + explicit activation.
   // Package-only: the current format requires an explicit package-backed runtime record;
-  // never activate missing package-backed pins as bundled.
+  // never treat a missing package-backed pin as built-in content.
   let Some(req) = exported.runtime.as_ref() else {
     // Fail closed: a validated plan must always carry a package-backed runtime.
     return IntegrationInstance {
@@ -1416,34 +1476,18 @@ fn integration_from_export(
     runtime_kind,
     package_digest,
     execution_grant_set_revision,
-    runtime_state,
-    runtime_error_code,
-    runtime_error_message,
+    (runtime_state, runtime_error_code, runtime_error_message),
     runtime_requirement_json,
   ) = match parsed_kind {
     Ok(crate::domain::runtime_plugin::RuntimeKind::WasmComponent)
     | Ok(crate::domain::runtime_plugin::RuntimeKind::TrustedNativeWorker) => {
-      use crate::domain::runtime_plugin::{PackageDigest, PluginApiVersion, PublisherKeyFingerprint, PublisherKeyId};
+      use crate::domain::runtime_plugin::{PackageDigest, PluginApiVersion};
       // Empty-only trim; parsers get the raw wire string so whitespace fails closed.
       let digest_ok = req.package_digest.as_deref().and_then(|d| {
         if d.trim().is_empty() {
           None
         } else {
           PackageDigest::parse(d).ok()
-        }
-      });
-      let key_ok = req.publisher_key_id.as_deref().and_then(|k| {
-        if k.trim().is_empty() {
-          None
-        } else {
-          PublisherKeyId::parse(k).ok()
-        }
-      });
-      let fp_ok = req.publisher_key_fingerprint.as_deref().and_then(|f| {
-        if f.trim().is_empty() {
-          None
-        } else {
-          PublisherKeyFingerprint::parse(f).ok()
         }
       });
       let api_ok = req.plugin_api_version.as_deref().and_then(|a| {
@@ -1453,26 +1497,31 @@ fn integration_from_export(
           PluginApiVersion::parse(a).ok()
         }
       });
-      if digest_ok.is_none() || key_ok.is_none() || fp_ok.is_none() || api_ok.is_none() {
-        (
+      match (digest_ok, api_ok) {
+        (Some(digest), Some(_)) => {
+          // Grant is issued only on explicit activation; a present, compatible digest is
+          // pinned as `pending_activation`, absent content stays unresolved.
+          let (pin, state, code, message) =
+            resolve_imported_runtime_pin(conn, catalog, &req.runtime_kind, digest.as_str());
+          (
+            req.runtime_kind.clone(),
+            pin,
+            None,
+            (state, code, message),
+            requirement_json,
+          )
+        }
+        _ => (
           req.runtime_kind.clone(),
           None,
           None,
-          "unavailable".to_string(),
-          Some("invalid_runtime".to_string()),
-          Some("package-backed runtime requirement is incomplete or invalid".to_string()),
+          (
+            "unavailable".to_string(),
+            Some("invalid_runtime".to_string()),
+            Some("package-backed runtime requirement is incomplete or invalid".to_string()),
+          ),
           requirement_json,
-        )
-      } else {
-        (
-          req.runtime_kind.clone(),
-          digest_ok.map(|d| d.as_str().to_string()),
-          None, // grant issued only on explicit activation
-          "unavailable".to_string(),
-          Some("plugin_missing".to_string()),
-          Some("required package is not installed or not activated".to_string()),
-          requirement_json,
-        )
+        ),
       }
     }
     Err(_) => (
@@ -1480,9 +1529,11 @@ fn integration_from_export(
       req.runtime_kind.clone(),
       None,
       None,
-      "unavailable".to_string(),
-      Some("invalid_runtime".to_string()),
-      Some("unknown runtimeKind".to_string()),
+      (
+        "unavailable".to_string(),
+        Some("invalid_runtime".to_string()),
+        Some("unknown runtimeKind".to_string()),
+      ),
       requirement_json,
     ),
   };
@@ -1507,6 +1558,54 @@ fn integration_from_export(
     runtime_requirement_json,
     created_at,
     updated_at,
+  }
+}
+
+/// Runtime pin written for one exact requirement, resolved against local content.
+///
+/// Import never grants and never installs. Content that is already present locally is recorded
+/// as an exact `pending_activation` pin so the instance shows what it will run and waits for the
+/// user's explicit activation. Absent content stays unresolved (`package_digest` NULL,
+/// `unavailable`) with a closed, sanitized reason; a locally present digest whose identity
+/// contradicts the requirement is reported as incompatible and never pinned.
+fn resolve_imported_runtime_pin(
+  conn: &Connection,
+  catalog: Option<&crate::services::plugin_catalog::PluginCatalog>,
+  runtime_kind: &str,
+  digest: &str,
+) -> (Option<String>, String, Option<String>, Option<String>) {
+  let unavailable = |code: &str, message: &str| {
+    (
+      None,
+      crate::domain::runtime_lifecycle::InstanceRuntimeState::Unavailable
+        .as_str()
+        .to_string(),
+      Some(code.to_string()),
+      Some(message.to_string()),
+    )
+  };
+  match local_content_identity(conn, catalog, digest) {
+    Err(_) => unavailable("plugin_unavailable", "local content could not be resolved"),
+    Ok(None) => unavailable("plugin_missing", "required package is not installed locally"),
+    Ok(Some(content)) => {
+      let identity_matches =
+        runtime_kind == crate::domain::runtime_lifecycle::runtime_kind_as_str(content.runtime_kind);
+      if identity_matches {
+        (
+          Some(digest.to_string()),
+          crate::domain::runtime_lifecycle::InstanceRuntimeState::PendingActivation
+            .as_str()
+            .to_string(),
+          None,
+          None,
+        )
+      } else {
+        unavailable(
+          "plugin_incompatible",
+          "local package runtime kind does not match the requirement",
+        )
+      }
+    }
   }
 }
 
@@ -1987,24 +2086,20 @@ pub fn validate_plan_default_profile(conn: &Connection, settings: &AppSettingsV1
 mod tests {
   use super::*;
   use std::sync::Arc;
-  const EDGE_TTS_LNPLUGIN: &[u8] = include_bytes!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../runtime-plugins/edge-tts/fixtures/com.langnext.edge-tts-1.0.0.lnplugin"
-  ));
-  const GOOGLE_CLOUD_LNPLUGIN: &[u8] = include_bytes!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../runtime-plugins/google-cloud/fixtures/com.langnext.google-cloud-1.2.0.lnplugin"
-  ));
 
-  /// Install the committed edge-tts/google-cloud archives plus the synthetic google-translate-web
-  /// package and project their definitions (production startup path).
+  /// Load the committed edge-tts/google-cloud archives plus the synthetic google-translate-web
+  /// fixture into a catalog and project their definitions (production startup path).
   fn import_registry(db: &Database) -> Arc<ServiceIntegrationRegistry> {
-    let packages = crate::services::test_support::vendor_packages(db.clone(), db.app_data_dir());
-    crate::services::test_support::bootstrap_package(&packages, EDGE_TTS_LNPLUGIN);
-    crate::services::test_support::bootstrap_package(&packages, GOOGLE_CLOUD_LNPLUGIN);
-    let (gtw, _) = crate::services::test_support::google_translate_web_package();
-    crate::services::test_support::bootstrap_package(&packages, &gtw);
-    crate::services::test_support::registry_from_installed_packages(&packages)
+    let catalog = crate::services::test_support::catalog_with_manifest_fixtures(
+      db.clone(),
+      db.app_data_dir(),
+      &[
+        crate::services::test_support::EDGE_TTS_ARCHIVE,
+        crate::services::test_support::GOOGLE_CLOUD_ARCHIVE,
+      ],
+      &[crate::services::test_support::google_translate_web_fixture()],
+    );
+    crate::services::test_support::registry_from_catalog(&catalog)
   }
 
   /// Build a validated plan against the installed-package definition catalog.
@@ -2014,7 +2109,7 @@ mod tests {
     mode: ImportConflictMode,
   ) -> Result<ValidatedImportPlan, StorageError> {
     let registry = import_registry(db);
-    db.read(|conn| build_validated_plan(conn, doc, mode, Some(registry.as_ref())))
+    db.read(|conn| build_validated_plan(conn, doc, mode, Some(registry.as_ref()), None))
   }
 
   /// 64-hex digest placeholder for provider requirement fixtures (parse-valid, never installed).
@@ -2067,13 +2162,9 @@ mod tests {
         plugin_version: "1.0.0".into(),
         runtime_kind: "wasm-component".into(),
         package_digest: Some(FIXTURE_PACKAGE_DIGEST.into()),
-        publisher_key_id: Some("com.langnext.test.keys.1".into()),
-        publisher_key_fingerprint: Some("f".repeat(64)),
         plugin_api_version: Some("1.0".into()),
         config_schema_version: 1,
         required_capability_majors: vec![],
-        provider_runtime_kind: None,
-        provider_package_digest: None,
       }),
       created_at: now_rfc3339(),
       updated_at: now_rfc3339(),
@@ -2095,13 +2186,9 @@ mod tests {
         plugin_version: "1.0.0".into(),
         runtime_kind: "wasm-component".into(),
         package_digest: Some(FIXTURE_PACKAGE_DIGEST.into()),
-        publisher_key_id: Some("com.langnext.test.keys.1".into()),
-        publisher_key_fingerprint: Some("f".repeat(64)),
         plugin_api_version: Some("1.0".into()),
         config_schema_version: 1,
         required_capability_majors: vec![],
-        provider_runtime_kind: None,
-        provider_package_digest: None,
       }),
       created_at: now_rfc3339(),
       updated_at: now_rfc3339(),
@@ -2277,8 +2364,6 @@ mod tests {
       package_digest: Some(FIXTURE_PACKAGE_DIGEST.into()),
       plugin_id: Some("com.langnext.provider.openai-responses".into()),
       plugin_version: Some("1.0.0".into()),
-      publisher_key_id: Some("com.langnext.test.keys.1".into()),
-      publisher_key_fingerprint: Some("f".repeat(64)),
       plugin_api_version: Some("1.0".into()),
       legacy_aliases: vec![adapter_id.into()],
       capabilities: vec!["llm.chat@1".into(), "llm.models.list@1".into()],
@@ -2544,13 +2629,9 @@ mod tests {
         plugin_version: "1.0.0".into(),
         runtime_kind: "wasm-component".into(),
         package_digest: Some(FIXTURE_PACKAGE_DIGEST.into()),
-        publisher_key_id: Some("com.langnext.test.keys.1".into()),
-        publisher_key_fingerprint: Some("f".repeat(64)),
         plugin_api_version: Some("1.0".into()),
         config_schema_version: 1,
         required_capability_majors: vec![],
-        provider_runtime_kind: None,
-        provider_package_digest: None,
       }),
       created_at: now_rfc3339(),
       updated_at: now_rfc3339(),

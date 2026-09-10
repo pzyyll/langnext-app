@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# ABOUTME: Refresh the committed Baidu OCR Component and dev-only signed package fixture.
-# ABOUTME: Uses the public test seed only; output is conformance evidence, never production evidence.
+# ABOUTME: Refresh the committed Baidu OCR Component and dev-only package fixture.
+# ABOUTME: Output is dev conformance evidence, never production evidence.
 #MISE description="Refresh Baidu OCR dev-only fixture with the public test key"
 set -euo pipefail
 
@@ -9,10 +9,6 @@ PLUGIN_DIR="$ROOT_DIR/runtime-plugins/baidu-ocr"
 STAGING="$ROOT_DIR/runtime-plugins/dist/staging/com.langnext.baidu-ocr-1.0.0"
 FIXTURE_DIR="$PLUGIN_DIR/fixtures/dev"
 PACKAGE="$FIXTURE_DIR/com.langnext.baidu-ocr-1.0.0.dev.lnplugin"
-FIXTURE_SEED="0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a"
-PUBLIC_KEY_FILE="$ROOT_DIR/runtime-plugins/conformance/fixtures/packages/keys/vendor-public-key.hex"
-PRODUCTION_FINGERPRINT="405708c8009ed75e698b06d85aa7c5321e77c888fbc95b7b843d5abbe153a6d7"
-FIXTURE_FINGERPRINT="506ef1879d748ce0713b0dd01da32ad2a4b1ce97b5a852ff18800c1e52982376"
 
 cargo component build --manifest-path "$PLUGIN_DIR/ocr/Cargo.toml" --target wasm32-unknown-unknown --release --locked
 mkdir -p "$PLUGIN_DIR/ocr/fixtures" "$FIXTURE_DIR"
@@ -39,38 +35,7 @@ oxfmt "$PLUGIN_DIR/plugin.json"
 
 mise run plugin:build-baidu-ocr
 
-# Rewrite only the staged manifest and publisher.pub to the public test identity.
-# The source manifest stays production-bound; the fixture fingerprint never
-# propagates back into runtime-plugins/baidu-ocr/plugin.json.
-source_fingerprint="$(bun -e '
-const fs = require("fs");
-const manifest = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-process.stdout.write(manifest.publisher.keyFingerprint);
-' "$PLUGIN_DIR/plugin.json")"
-if [[ "$source_fingerprint" != "$PRODUCTION_FINGERPRINT" ]]; then
-  echo "error: source plugin.json fingerprint $source_fingerprint is not the production fingerprint" >&2
-  exit 1
-fi
-fixture_public_key_hex="$(tr -d '[:space:]' < "$PUBLIC_KEY_FILE")"
-fixture_fingerprint="$(echo -n "$fixture_public_key_hex" | xxd -r -p | sha256sum | awk '{print $1}')"
-if [[ "$fixture_fingerprint" != "$FIXTURE_FINGERPRINT" ]]; then
-  echo "error: fixture public key fingerprint $fixture_fingerprint != expected $FIXTURE_FINGERPRINT" >&2
-  exit 1
-fi
-bun -e '
-const fs = require("fs");
-const path = require("path");
-const staging = process.argv[1];
-const manifestPath = path.join(staging, "plugin.json");
-const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-manifest.publisher.keyFingerprint = process.argv[2];
-fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
-' "$STAGING" "$FIXTURE_FINGERPRINT"
-echo -n "$fixture_public_key_hex" | xxd -r -p > "$STAGING/publisher.pub"
-
-mise run plugin:sign-staging -- "$STAGING" "$FIXTURE_SEED"
-mise run plugin:finalize-package -- "$STAGING" "$PACKAGE" --public-key-file "$PUBLIC_KEY_FILE"
-mise run plugin:verify -- "$PACKAGE" --public-key-file "$PUBLIC_KEY_FILE"
+mise run plugin:pack -- "$STAGING" "$PACKAGE"
 sha256sum "$PACKAGE" > "$PACKAGE.sha256"
 echo "DEV TEST FIXTURE ONLY" > "$FIXTURE_DIR/NOT-PRODUCTION.txt"
 echo "ok: refreshed Baidu OCR dev fixture; it is not production release evidence"

@@ -168,7 +168,7 @@ pub struct NativeWorkerExecuteRequest {
   pub runtime_set_digest: String,
   pub model_set_digest: String,
   pub model_api_version: u32,
-  /// Declared runtime DLL relative paths with pinned SHA-256 digests (from signed file index).
+  /// Declared runtime DLL relative paths with pinned SHA-256 digests (from the package file index).
   pub runtime_dependencies: Vec<(String, String)>,
   pub ocr: OcrImageRequest,
   /// Optional cancel token observed during blocking execute.

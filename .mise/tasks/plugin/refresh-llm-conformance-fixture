@@ -1,13 +1,11 @@
 #!/usr/bin/env bash
-# ABOUTME: Refresh the dev-signed two-world LLM provider conformance fixture package: rebuild
-# ABOUTME: both Components, re-verify the bindings patch, sign/finalize/verify (dev key only).
-#MISE description="Refresh the signed llm-provider conformance fixture package"
+# ABOUTME: Refresh the two-world LLM provider conformance fixture package: rebuild
+# ABOUTME: both Components, re-verify the bindings patch, then pack the archive (unsigned).
+#MISE description="Refresh the llm-provider conformance fixture package"
 set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 cd "$ROOT_DIR"
 
-FIXTURE_SEED="0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a"
-PUBLIC_KEY_FILE="$ROOT_DIR/runtime-plugins/conformance/fixtures/packages/keys/vendor-public-key.hex"
 STAGING="$ROOT_DIR/runtime-plugins/dist/staging/langnext.conformance.llm-provider-1.0.0"
 PACKAGE="$ROOT_DIR/runtime-plugins/conformance/fixtures/packages/llm-provider-valid.lnplugin"
 PACKAGE_DIR="$ROOT_DIR/runtime-plugins/conformance/llm-provider"
@@ -47,23 +45,13 @@ bun -e '
 # 4) Verify the committed fixtures now match the rebuild (digests, plugin.json, bindings patch).
 mise run plugin:build-conformance
 
-# 5) Deterministic staging tree: fixture artifacts + committed plugin.json + dev publisher key.
+# 5) Deterministic staging tree: fixture artifacts + committed plugin.json.
 rm -rf "$STAGING"
-mkdir -p "$STAGING/fixtures" "$STAGING/signatures"
+mkdir -p "$STAGING/fixtures"
 cp "$PACKAGE_DIR/fixtures/llm-models.wasm" "$PACKAGE_DIR/fixtures/llm-models.wasm.sha256" "$STAGING/fixtures/"
 cp "$PACKAGE_DIR/fixtures/llm-chat.wasm" "$PACKAGE_DIR/fixtures/llm-chat.wasm.sha256" "$STAGING/fixtures/"
 cp "$PACKAGE_DIR/plugin.json" "$STAGING/plugin.json"
-PUBLIC_KEY_HEX="$(tr -d '[:space:]' < "$PUBLIC_KEY_FILE")"
-bun -e '
-  const fs = require("fs");
-  const [staging, hex] = process.argv.slice(1);
-  const key = Buffer.from(hex, "hex");
-  if (key.length !== 32) throw new Error("vendor key must be 32 bytes");
-  fs.writeFileSync(staging + "/publisher.pub", key);
-' "$STAGING" "$PUBLIC_KEY_HEX"
 
-mise run plugin:sign-staging -- "$STAGING" "$FIXTURE_SEED"
-mise run plugin:finalize-package -- "$STAGING" "$PACKAGE" --public-key-file "$PUBLIC_KEY_FILE"
-mise run plugin:verify -- "$PACKAGE" --public-key-file "$PUBLIC_KEY_FILE"
+mise run plugin:pack -- "$STAGING" "$PACKAGE"
 sha256sum "$PACKAGE" | awk '{print $1}' > "$PACKAGE.sha256"
-echo "ok: refreshed and verified llm-provider conformance fixture package"
+echo "ok: refreshed llm-provider conformance fixture package (unsigned)"

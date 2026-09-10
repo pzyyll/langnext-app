@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ABOUTME: Deterministically build the Baidu OCR Component and unsigned release staging tree.
-# ABOUTME: This task never signs and never reads a private key; release signing stays external.
+# ABOUTME: No signing input exists; plugin:pack turns the staging tree into an unsigned archive.
 #MISE description="Build Baidu OCR no-WASI Component and unsigned staging tree"
 set -euo pipefail
 
@@ -8,10 +8,6 @@ EXPECTED_CARGO_COMPONENT="0.21.1"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 PLUGIN_DIR="$ROOT_DIR/runtime-plugins/baidu-ocr"
 STAGING="$ROOT_DIR/runtime-plugins/dist/staging/com.langnext.baidu-ocr-1.0.0"
-PUBLIC_KEY_FILE="$ROOT_DIR/runtime-plugins/conformance/fixtures/packages/keys/vendor-public-key.hex"
-VENDOR_TRUST_FILE="$ROOT_DIR/src-tauri/resources/vendor-trust/public-keys.json"
-VENDOR_KEY_ID="com.langnext.vendor.keys.1"
-PRODUCTION_FINGERPRINT="405708c8009ed75e698b06d85aa7c5321e77c888fbc95b7b843d5abbe153a6d7"
 COMPONENT="$PLUGIN_DIR/ocr/target/wasm32-unknown-unknown/release/langnext_baidu_ocr.wasm"
 FIXTURE="$PLUGIN_DIR/ocr/fixtures/langnext-baidu-ocr.wasm"
 
@@ -41,38 +37,6 @@ cp "$FIXTURE" "$STAGING/ocr/fixtures/langnext-baidu-ocr.wasm"
 cp "$PLUGIN_DIR/schemas/config.json" "$STAGING/schemas/config.json"
 cp "$PLUGIN_DIR/schemas/ocr-preferences.json" "$STAGING/schemas/ocr-preferences.json"
 
-# Production staging binds to the production public root only. Fixture keys are never staging evidence.
-production_public_key_hex="$(bun -e '
-const fs = require("fs");
-const roots = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-const root = roots.find((r) => r.keyId === process.argv[2]);
-if (!root) {
-  console.error("error: vendor root " + process.argv[2] + " not found in " + process.argv[1]);
-  process.exit(1);
-}
-if (!/^[0-9a-f]{64}$/.test(root.publicKeyHex)) {
-  console.error("error: vendor root public key is not 64 lowercase hex chars");
-  process.exit(1);
-}
-process.stdout.write(root.publicKeyHex);
-' "$VENDOR_TRUST_FILE" "$VENDOR_KEY_ID")"
-echo -n "$production_public_key_hex" | xxd -r -p > "$STAGING/publisher.pub"
-
-manifest_fingerprint="$(bun -e '
-const fs = require("fs");
-const manifest = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-process.stdout.write(manifest.publisher.keyFingerprint);
-' "$STAGING/plugin.json")"
-staged_fingerprint="$(sha256sum "$STAGING/publisher.pub" | awk '{print $1}')"
-if [[ "$staged_fingerprint" != "$manifest_fingerprint" ]]; then
-  echo "error: publisher.pub fingerprint $staged_fingerprint != manifest fingerprint $manifest_fingerprint" >&2
-  exit 1
-fi
-if [[ "$staged_fingerprint" != "$PRODUCTION_FINGERPRINT" ]]; then
-  echo "error: staging fingerprint $staged_fingerprint is not the production root fingerprint $PRODUCTION_FINGERPRINT" >&2
-  exit 1
-fi
-
 bun -e '
 const fs = require("fs");
 const crypto = require("crypto");
@@ -90,4 +54,4 @@ for (const file of manifest.files) {
 ' "$STAGING"
 
 echo "ok: unsigned Baidu OCR staging tree at $STAGING"
-echo "release signing must inject signatures/manifest.sig offline before signed finalization"
+echo "note: archives are unsigned; mise run plugin:pack produces them"

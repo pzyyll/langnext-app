@@ -58,11 +58,9 @@ import type {
 } from "../../storage/types";
 import { createRuntimeProviderActions } from "../providers/runtimeProviderActions";
 import { presentProviderRuntime } from "../providers/runtimeProviderPresentation";
-import { DefaultRuntimeActivationStatus } from "../plugins/DefaultRuntimeActivationStatus";
 import {
   listAttachableRuntimeInterfaces,
   presentProviderInterfaceBindings,
-  publisherLabel,
   shortPackageDigest,
 } from "../providers/runtimeProviderPresentation";
 import {
@@ -363,7 +361,7 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
     () => listAttachableRuntimeInterfaces(provider, runtimeCatalog),
     [provider, runtimeCatalog],
   );
-  // Signed identity of the previewed target package; plugin id lives on the catalog entry.
+  // Content identity of the previewed target package; plugin id lives on the catalog entry.
   const interfacePreviewTargetEntry = useMemo(
     () =>
       interfacePreview
@@ -1388,19 +1386,6 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
             </div>
           </div>
 
-          <DefaultRuntimeActivationStatus
-            subjectKind="provider_instance"
-            subjectId={provider.id}
-            runtimeState={provider.runtime.state}
-            runtimeErrorCode={provider.runtime.errorCode}
-            retainedPackageDigest={provider.runtime.packageDigest}
-            className="mt-4 space-y-2 border border-line bg-surface-2 p-3"
-            onInvalidate={async () => {
-              await queryClient.invalidateQueries({ queryKey: providerKeys.all });
-              await queryClient.invalidateQueries({ queryKey: providerRuntimeKeys.all });
-            }}
-          />
-
           {/* Adapter-keyed interface bindings: each API type is independently attached,
               rolled back, or detached; a partially available Provider keeps every other
               interface usable. */}
@@ -1487,10 +1472,6 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
                             })}
                       </Button>
                       <p className="truncate text-xs text-neutral">
-                        {t("models.runtime.packagePublisher", {
-                          publisher: publisherLabel(candidate.publisher),
-                        })}
-                        {" · "}
                         {t("models.runtime.packageDigest", {
                           digest: shortPackageDigest(candidate.packageDigest),
                         })}
@@ -1550,19 +1531,13 @@ function ProviderEditorLoaded({ provider }: ProviderEditorLoadedProps) {
                   {interfacePreviewTargetEntry?.pluginId ?? interfacePreview.adapterId}{" "}
                   {t("models.runtime.version", { version: interfacePreview.targetPluginVersion })}
                 </p>
-                <p className="mt-1 text-neutral">
-                  {t("models.runtime.packagePublisher", {
-                    publisher: publisherLabel(interfacePreview.targetPublisher),
-                  })}
-                  {interfacePreview.target.packageDigest ? (
-                    <>
-                      {" · "}
-                      {t("models.runtime.packageDigest", {
-                        digest: shortPackageDigest(interfacePreview.target.packageDigest),
-                      })}
-                    </>
-                  ) : null}
-                </p>
+                {interfacePreview.target.packageDigest ? (
+                  <p className="mt-1 text-neutral">
+                    {t("models.runtime.packageDigest", {
+                      digest: shortPackageDigest(interfacePreview.target.packageDigest),
+                    })}
+                  </p>
+                ) : null}
                 {interfacePreview.requiresPermissionApproval ? (
                   <label className="mt-3 flex items-start gap-2">
                     <Checkbox.Root

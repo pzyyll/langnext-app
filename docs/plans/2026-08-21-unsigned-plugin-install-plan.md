@@ -1,5 +1,7 @@
 # Implementation Plan
 
+> **Superseded (2026-08-24):** plugin-level signing, publisher trust, vendor bootstrap, and default-activation orchestration were removed. See `docs/architecture/plugin-catalog.md`.
+
 **Goal:** Allow users to package, preview, install, activate, and execute unsigned Wasm Component and allowlisted trusted-native-worker plugins after explicit risk confirmation bound to the exact package digest.
 
 **Inputs:** Mr. Julian's requirements from 2026-08-21; `docs/plans/runtime-plugin-system/README.md`; Phase 3 package lifecycle; Phase 4 runtime lifecycle; Phase 11.5 default package activation; current package, runtime, and install UI code.

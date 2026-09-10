@@ -221,7 +221,7 @@ function resolveLlmContext(
     const maxTokens = profileMaxTokens ?? modelMax ?? DEFAULT_TRANSLATE_MAX_TOKENS;
 
     // Package-only executor selection: a matching active interface binding selects the runtime
-    // executor; an unavailable/revoked/missing interface fails closed and skips only that
+    // executor; an unavailable/missing interface fails closed and skips only that
     // model. There is no legacy plugin compatibility rule.
     try {
       const executor = resolveProviderExecutor({

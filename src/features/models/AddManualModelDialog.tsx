@@ -27,7 +27,7 @@ export type AddManualModelDialogProps = {
   providerId: string;
   onOpenChange: (open: boolean) => void;
   onCreated: (model: ProviderModelDto) => void;
-  /** Attached runtime interface API types (labeled from signed catalog metadata). */
+  /** Attached runtime interface API types (labeled from catalog metadata). */
   runtimeAdapterOptions?: readonly import("./adapterOptions").AdapterOption[];
 };
 

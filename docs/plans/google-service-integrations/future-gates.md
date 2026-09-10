@@ -90,7 +90,9 @@ Recommended runtime: Wasmtime + WebAssembly Component Model/WIT.
 
 Required before implementation:
 
-- signed package format and trusted publisher policy;
+- plugin-level signing and a trusted publisher policy were removed (2026-08-24); the shipped
+  model is source-based content with an exact digest per archive. See
+  `docs/architecture/plugin-catalog.md`;
 - manifest/plugin API/capability version negotiation;
 - WIT world per typed capability;
 - no direct filesystem/network/vault/process access;

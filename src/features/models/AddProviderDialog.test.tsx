@@ -44,7 +44,6 @@ function officialCatalogEntry(): ProviderRuntimeCatalogEntryDto {
     pluginId: "com.langnext.provider.openai-compatible",
     version: "1.0.0",
     packageDigest: "a".repeat(64),
-    publisher: { keyId: "com.langnext.vendor.keys.1", keyFingerprint: "b".repeat(64) },
     legacyAliases: ["openai-compatible"],
     capabilities: [
       { capabilityId: "llm.models.list@1", artifactPath: "artifacts/models-list.wasm", artifactDigest: "c".repeat(64) },

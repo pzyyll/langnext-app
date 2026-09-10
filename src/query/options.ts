@@ -5,16 +5,14 @@ import {
   getAppSettings,
   getIntegrationInstance,
   getOcrService,
-  getPluginVersionDependencies,
   getTranslationHistory,
   getTranslationProfile,
   listAllProviderModels,
-  listInstalledPluginVersions,
   listIntegrationInstanceDependencies,
   listIntegrationInstances,
   listOcrServices,
+  listPluginCatalog,
   listPluginModelResources,
-  listPluginPublishers,
   listRuntimeProviderCatalog,
   listSpeechServices,
   getSpeechService,
@@ -192,25 +190,10 @@ export function appSettingsOptions() {
   });
 }
 
-export function installedPluginVersionListOptions() {
+export function pluginCatalogOptions() {
   return queryOptions({
-    queryKey: pluginPackageKeys.versions(),
-    queryFn: listInstalledPluginVersions,
-  });
-}
-
-export function pluginPublisherListOptions() {
-  return queryOptions({
-    queryKey: pluginPackageKeys.publishers(),
-    queryFn: listPluginPublishers,
-  });
-}
-
-export function pluginVersionDependencyOptions(packageDigest: string) {
-  return queryOptions({
-    queryKey: pluginPackageKeys.dependencies(packageDigest),
-    queryFn: () => getPluginVersionDependencies(packageDigest),
-    enabled: packageDigest.length > 0,
+    queryKey: pluginPackageKeys.catalog(),
+    queryFn: listPluginCatalog,
   });
 }
 

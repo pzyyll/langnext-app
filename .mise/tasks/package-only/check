@@ -50,11 +50,11 @@ do
   fi
 done
 
-registered="$(rg -n "0030_disable_retired_legacy_runtimes|0032_baidu_ocr_runtime_migration|0033_package_only_cleanup" src-tauri/src/storage/migrations.rs || true)"
+registered="$(rg -n --text "0030_disable_retired_legacy_runtimes|0032_baidu_ocr_runtime_migration|0033_package_only_cleanup" src-tauri/src/storage/migrations.rs || true)"
 record_hits "MIGRATIONS still registers deleted transitional files" "${registered}"
 
 echo "checking migration SQL for forbidden legacy/direct values..."
-migration_hits="$(rg -n "bundled-rust|legacy-frontend-provider|baidu_action|ocr_api_key|ocr_secret_key|baidu_ocr_migration_" src-tauri/migrations || true)"
+migration_hits="$(rg -n --text "bundled-rust|legacy-frontend-provider|baidu_action|ocr_api_key|ocr_secret_key|baidu_ocr_migration_" src-tauri/migrations || true)"
 record_hits "final-schema SQL contains forbidden direct/legacy values" "${migration_hits}"
 
 echo "checking orphan provider HTTP command file..."
@@ -64,14 +64,14 @@ if [[ -e src-tauri/src/cmds/provider_http.rs ]]; then
 fi
 
 echo "checking production source for legacy runtime kinds..."
-kind_hits="$(rg -n "bundled-rust|legacy-frontend-provider" src src-tauri/src src-tauri/migrations \
+kind_hits="$(rg -n --text "bundled-rust|legacy-frontend-provider" src src-tauri/src src-tauri/migrations \
   --glob '!**/*test*' --glob '!**/tests.rs' --glob '!**/tests/**' --glob '!docs/plans/**' \
   || true)"
 kind_hits="$(printf '%s\n' "${kind_hits}" | filter_rust_test_modules)"
 record_hits "production source still names bundled-rust or legacy-frontend-provider" "${kind_hits}"
 
 echo "checking production source for direct-Baidu OCR residue..."
-baidu_hits="$(rg -n "baidu_ocr_migration_(previews|intents|snapshots)|baidu_action|ocr_api_key|ocr_secret_key" \
+baidu_hits="$(rg -n --text "baidu_ocr_migration_(previews|intents|snapshots)|baidu_action|ocr_api_key|ocr_secret_key" \
   src src-tauri/src src-tauri/migrations \
   --glob '!**/*test*' --glob '!**/tests.rs' --glob '!**/tests/**' --glob '!docs/plans/**' \
   || true)"
@@ -79,14 +79,41 @@ baidu_hits="$(printf '%s\n' "${baidu_hits}" | filter_rust_test_modules)"
 record_hits "production source still names direct-Baidu OCR fields or migration tables" "${baidu_hits}"
 
 echo "checking removed provider HTTP command names..."
-http_hits="$(rg -n "provider_http_request|provider_http_stream|cancel_provider_http" src src-tauri || true)"
+http_hits="$(rg -n --text "provider_http_request|provider_http_stream|cancel_provider_http" src src-tauri || true)"
 record_hits "removed provider HTTP command names still present" "${http_hits}"
 
 echo "checking frontend/backend format version ranges..."
-version_hits="$(rg -n "SUPPORTED_CONFIGURATION_FORMAT_VERSIONS\\s*=\\s*\\[[^\\]]*2|normalize.*v2|v2.?v7" \
+version_hits="$(rg -n --text "SUPPORTED_CONFIGURATION_FORMAT_VERSIONS\\s*=\\s*\\[[^\\]]*2|normalize.*v2|v2.?v7" \
   src src-tauri/src --glob '!**/*test*' --glob '!**/tests.rs' --glob '!**/tests/**' || true)"
 version_hits="$(printf '%s\n' "${version_hits}" | filter_rust_test_modules)"
 record_hits "production source still accepts or normalizes format versions 2-7" "${version_hits}"
+
+echo "checking production source for removed plugin trust and activation symbols..."
+trust_pattern='plugin_publishers|plugin_package_approvals|publisher_fingerprint|publisher_key_id|publisherKeyId|publisherKeyFingerprint|publisher\.pub|SIGNATURE_FILE_PATH|PUBLISHER_PUBLIC_KEY_PATH|signatures/manifest\.sig|signature_status|signatureStatus|vendor_trust|vendorTrust|vendor bootstrap|LANGNEXT_BUNDLED|LANGNEXT_VENDOR_TRUST_JSON|vendor_bootstrap|vendorBootstrap|generate-bootstrap-policy|default-activation-policies|default_activation_policies|DefaultPackageActivation|defaultPackageActivation|default_runtime_activation|defaultRuntimeActivation|authority_approvals|authorityApprovals|authority confirmation|risk_acknowledgement|riskAcknowledgement|unsigned_risk|plugin_release_tool|installed_plugin_versions|plugin_install_operations|plugin_uninstall_operations'
+# Documentation may name a removed symbol only to state that it is gone; production code and
+# scripts may not reference it at all. This file declares the pattern, so it excludes itself.
+# `--text` keeps ripgrep scanning source files that embed raw control bytes in Wasm test
+# fixtures; without it ripgrep silently skips the whole file as binary.
+trust_hits="$(rg -n --text "${trust_pattern}" src src-tauri/src .mise/tasks scripts 2>/dev/null   --glob '!**/*test*' --glob '!**/tests.rs' --glob '!**/tests/**'   --glob '!.mise/tasks/package-only/check'   || true)"
+trust_hits="$(printf '%s
+' "${trust_hits}" | filter_rust_test_modules)"
+record_hits "production source still names a removed plugin trust or activation symbol" "${trust_hits}"
+
+echo "checking shipped resources for removed trust material..."
+for leftover in   src-tauri/resources/vendor-trust   src-tauri/resources/plugins/default-activation-policies.json
+do
+  if [[ -e "${leftover}" ]]; then
+    echo "error: removed trust resource still present: ${leftover}" >&2
+    fail=1
+  fi
+done
+
+echo "checking shipped plugin content for removed trust entries..."
+archive_hits="$(rg -l "publisher\.pub|signatures/manifest\.sig|LANGNEXT_VENDOR" src-tauri/resources runtime-plugins   --glob '!**/*.md' 2>/dev/null || true)"
+record_hits "shipped plugin content still contains publisher/signature material" "${archive_hits}"
+
+trust_files="$(find src-tauri/resources -type f \( -name 'publisher.pub' -o -name 'manifest.sig' \) -print 2>/dev/null || true)"
+record_hits "shipped application resources contain a plugin trust file" "${trust_files}"
 
 if [[ "${fail}" -ne 0 ]]; then
   echo "package-only:check failed" >&2

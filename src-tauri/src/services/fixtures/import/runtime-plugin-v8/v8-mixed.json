@@ -17,8 +17,6 @@
           "packageDigest": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
           "pluginId": "com.langnext.provider.openai-compatible",
           "pluginVersion": "1.0.0",
-          "publisherKeyId": "com.langnext.vendor.keys.1",
-          "publisherKeyFingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
           "pluginApiVersion": "1.0",
           "legacyAliases": ["openai-compatible"],
           "capabilities": ["llm.chat@1", "llm.models.list@1"]
@@ -29,8 +27,6 @@
           "packageDigest": "abababababababababababababababababababababababababababababababab",
           "pluginId": "com.langnext.provider.openai-responses",
           "pluginVersion": "1.0.0",
-          "publisherKeyId": "com.langnext.vendor.keys.1",
-          "publisherKeyFingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
           "pluginApiVersion": "1.0",
           "legacyAliases": ["openai-responses"],
           "capabilities": ["llm.chat@1", "llm.models.list@1"]
@@ -112,8 +108,6 @@
         "pluginVersion": "1.0.0",
         "runtimeKind": "wasm-component",
         "packageDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "publisherKeyId": "com.langnext.vendor.keys.1",
-        "publisherKeyFingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
         "pluginApiVersion": "1.0",
         "configSchemaVersion": 1,
         "requiredCapabilityMajors": ["translate.text@1"]
@@ -135,8 +129,6 @@
         "pluginVersion": "1.0.0",
         "runtimeKind": "wasm-component",
         "packageDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "publisherKeyId": "com.langnext.vendor.keys.1",
-        "publisherKeyFingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
         "pluginApiVersion": "1.0",
         "configSchemaVersion": 1,
         "requiredCapabilityMajors": ["translate.text@1"]
@@ -158,8 +150,6 @@
         "pluginVersion": "1.0.0",
         "runtimeKind": "trusted-native-worker",
         "packageDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-        "publisherKeyId": "com.langnext.vendor.keys.2",
-        "publisherKeyFingerprint": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
         "pluginApiVersion": "1.1",
         "configSchemaVersion": 2,
         "requiredCapabilityMajors": ["ocr.image@1"]

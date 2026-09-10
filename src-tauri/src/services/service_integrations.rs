@@ -64,10 +64,8 @@ pub struct ServiceIntegrationService {
   validation_timeout: Duration,
   runtime_lifecycle: Option<crate::services::runtime_lifecycle::RuntimeLifecycleService>,
   endpoint_trust: Arc<EndpointTrustService>,
-  /// When set, PaddleOCR first-model health uses the same vendor-root re-verify seam as RuntimeRouter.
-  plugin_packages: Option<crate::services::plugin_store::PluginPackageService>,
-  /// Authorized default package policy for package-first creation (Phase 11.5).
-  default_package_activation: Option<crate::services::default_package_activation::DefaultPackageActivationService>,
+  /// Immutable plugin content catalog. Health and create resolve exact pinned content here.
+  catalog: Option<std::sync::Arc<crate::services::plugin_catalog::PluginCatalog>>,
 }
 
 impl ServiceIntegrationService {
@@ -85,8 +83,7 @@ impl ServiceIntegrationService {
       validation_timeout: INTEGRATION_VALIDATION_TIMEOUT,
       runtime_lifecycle: None,
       endpoint_trust: Arc::new(EndpointTrustService::new(db.clone(), registry.clone())),
-      plugin_packages: None,
-      default_package_activation: None,
+      catalog: None,
     }
   }
 
@@ -106,18 +103,9 @@ impl ServiceIntegrationService {
     self
   }
 
-  /// Wire plugin package re-verification so native health uses the signed archive (not mutable DB JSON).
-  pub fn with_plugin_packages(mut self, plugin_packages: crate::services::plugin_store::PluginPackageService) -> Self {
-    self.plugin_packages = Some(plugin_packages);
-    self
-  }
-
-  /// Wire default package authorization for package-first create of new instances.
-  pub fn with_default_package_activation(
-    mut self,
-    default_package_activation: crate::services::default_package_activation::DefaultPackageActivationService,
-  ) -> Self {
-    self.default_package_activation = Some(default_package_activation);
+  /// Wire the immutable plugin catalog so native health and create resolve exact content.
+  pub fn with_catalog(mut self, catalog: std::sync::Arc<crate::services::plugin_catalog::PluginCatalog>) -> Self {
+    self.catalog = Some(catalog);
     self
   }
 
@@ -144,27 +132,19 @@ impl ServiceIntegrationService {
     &self,
     plugin_id: &str,
   ) -> Result<Option<crate::services::endpoint_trust::CreationRuntimeIdentity>, StorageError> {
-    use crate::services::default_package_activation::PackageFirstCreateResolution;
-    let Some(activation) = &self.default_package_activation else {
+    let Some(catalog) = &self.catalog else {
       return Ok(None);
     };
-    match activation.prepare_package_first_create(plugin_id)? {
-      PackageFirstCreateResolution::Ready(prepared) => {
-        Ok(Some(crate::services::endpoint_trust::CreationRuntimeIdentity {
-          plugin_version: prepared.plugin_version,
-          runtime_kind: prepared.runtime_kind,
-          package_digest: Some(prepared.package_digest),
-        }))
-      }
-      PackageFirstCreateResolution::Blocked(blocked) => {
-        Ok(Some(crate::services::endpoint_trust::CreationRuntimeIdentity {
-          plugin_version: blocked.plugin_version,
-          runtime_kind: blocked.runtime_kind,
-          package_digest: Some(blocked.package_digest),
-        }))
-      }
-      PackageFirstCreateResolution::NoDefault => Ok(None),
-    }
+    Ok(
+      catalog
+        .resolve_default(plugin_id)
+        .map(|loaded| crate::services::endpoint_trust::CreationRuntimeIdentity {
+          plugin_version: loaded.descriptor.version.clone(),
+          runtime_kind: crate::domain::runtime_lifecycle::runtime_kind_as_str(loaded.descriptor.runtime_kind)
+            .to_string(),
+          package_digest: Some(loaded.descriptor.content_digest.clone()),
+        }),
+    )
   }
 
   pub fn list_definitions(&self) -> Vec<ServiceIntegrationDefinitionDto> {
@@ -313,7 +293,7 @@ impl ServiceIntegrationService {
     }
 
     // Credential-free integrations are ready from local config alone - no token grant.
-    // PaddleOCR / trusted-native-worker requires an activated vendor package + ready model.
+    // PaddleOCR / trusted-native-worker requires an activated built-in package + ready model.
     if !registration.requires_remote_auth() {
       if is_paddleocr_native_health_gate(&instance) {
         let package_digest = instance.package_digest.as_deref().filter(|d| !d.is_empty());
@@ -330,11 +310,11 @@ impl ServiceIntegrationService {
             health_status: refreshed.health_status,
             effective_status: refreshed.effective_status,
             remote_checked: false,
-            message: Some("PaddleOCR requires an activated vendor package and a ready model before it can run.".into()),
+            message: Some("PaddleOCR requires an activated package and a ready model before it can run.".into()),
           });
         }
         // Authoritative readiness matches RuntimeRouter: first model resource from the
-        // vendor-root re-verified archive (not mutable DB manifest_json) must be Ready.
+        // catalog snapshot (not mutable DB manifest_json) must be Ready.
         let digest = package_digest.expect("activated native has package digest");
         let model_ready = self.paddleocr_first_model_ready(digest)?;
         if !model_ready {
@@ -681,62 +661,35 @@ impl ServiceIntegrationService {
     }
 
     let health = compute_local_health(&registration, &config_json, &slot_refs);
-    // Package-only create: every new integration requires an eligible authorized default
-    // package. Genuine absence and blocked defaults fail closed without writing any row;
-    // an unsupported runtime instance is never created.
-    use crate::services::default_package_activation::PackageFirstCreateResolution;
-    let package_first = match &self.default_package_activation {
-      Some(svc) => match svc.prepare_package_first_create(&manifest.id)? {
-        PackageFirstCreateResolution::NoDefault => {
-          return Err(StorageError::Validation(
-            "integration create requires an authorized default package; install and authorize it first".into(),
-          ));
-        }
-        other => other,
-      },
-      None => {
-        return Err(StorageError::Validation(
-          "integration create requires an authorized default package".into(),
-        ));
-      }
+    // Package-only create: the catalog default for this plugin supplies the exact content
+    // identity. A missing default fails closed without writing any row.
+    let loaded = self
+      .catalog
+      .as_ref()
+      .and_then(|catalog| catalog.resolve_default(&manifest.id))
+      .ok_or_else(|| {
+        StorageError::Validation("integration create requires an installed plugin package for this plugin".into())
+      })?;
+    let runtime_kind =
+      crate::domain::runtime_lifecycle::runtime_kind_as_str(loaded.descriptor.runtime_kind).to_string();
+    let package_digest = Some(loaded.descriptor.content_digest.clone());
+    let plugin_version = loaded.descriptor.version.clone();
+    let runtime_requirement = crate::domain::runtime_lifecycle::RuntimeRequirementExport {
+      plugin_id: loaded.descriptor.plugin_id.clone(),
+      plugin_version: loaded.descriptor.version.clone(),
+      runtime_kind: runtime_kind.clone(),
+      package_digest: package_digest.clone(),
+      plugin_api_version: Some(loaded.manifest.plugin_api_version.clone()),
+      config_schema_version: manifest.config_schema_version,
+      required_capability_majors: loaded.manifest.capabilities.iter().map(|c| c.id.clone()).collect(),
     };
-    let (
-      runtime_kind,
-      package_digest,
-      runtime_state,
-      runtime_requirement_json,
-      plugin_version,
-      runtime_error_code,
-      runtime_error_message,
-      package_first_digest,
-      record_failed_intent,
-    ) = match &package_first {
-      PackageFirstCreateResolution::Ready(prepared) => (
-        prepared.runtime_kind.clone(),
-        Some(prepared.package_digest.clone()),
-        "pending_activation".to_string(),
-        Some(prepared.runtime_requirement_json.clone()),
-        prepared.plugin_version.clone(),
-        None,
-        None,
-        Some(prepared.package_digest.clone()),
-        None,
-      ),
-      PackageFirstCreateResolution::Blocked(blocked) => (
-        blocked.runtime_kind.clone(),
-        Some(blocked.package_digest.clone()),
-        "unavailable".to_string(),
-        Some(blocked.runtime_requirement_json.clone()),
-        blocked.plugin_version.clone(),
-        Some(blocked.reason.as_error_code().to_string()),
-        Some(blocked.reason.as_message().to_string()),
-        Some(blocked.package_digest.clone()),
-        Some((blocked.reason.as_error_code(), blocked.reason.as_message())),
-      ),
-      PackageFirstCreateResolution::NoDefault => {
-        unreachable!("NoDefault is rejected before this match")
-      }
-    };
+    let runtime_requirement_json = Some(
+      serde_json::to_string(&runtime_requirement)
+        .map_err(|e| StorageError::Internal(format!("serialize runtime requirement: {e}")))?,
+    );
+    let runtime_state = "pending_activation".to_string();
+    let runtime_error_code = None;
+    let runtime_error_message = None;
     let instance = IntegrationInstance {
       id,
       plugin_id: manifest.id.clone(),
@@ -784,25 +737,6 @@ impl ServiceIntegrationService {
       if let Some(trust) = &endpoint_trust {
         integration_endpoint_trusts::upsert(uow.conn(), trust)?;
       }
-      if let Some(digest) = &package_first_digest {
-        let intent = crate::services::default_package_activation::DefaultPackageActivationService::insert_local_creation_intent_on_conn(
-          uow.conn(),
-          crate::domain::runtime_lifecycle::GrantSubjectKind::IntegrationInstance,
-          id,
-          digest,
-          Some(&crate::domain::plugin_package::sha256_hex(instance.config_json.as_bytes())),
-          Some(&instance.updated_at),
-        )?;
-        if let Some((error_code, error_message)) = record_failed_intent {
-          crate::repositories::default_package_activation_policies::update_intent_state(
-            uow.conn(),
-            intent.id,
-            crate::domain::default_package_activation::DefaultRuntimeActivationState::Failed,
-            Some(error_code),
-            Some(error_message),
-          )?;
-        }
-      }
       for slot in &manifest.credential_slots {
         let binding = crate::domain::service_integration::IntegrationCredentialBinding {
           id: new_id(),
@@ -830,9 +764,12 @@ impl ServiceIntegrationService {
         for op in ops {
           let _ = coordinator::finalize_operation(&self.db, self.vault.as_ref(), &op);
         }
-        // Durable create returns pending package-first state immediately. Host command schedules
-        // background activation after the first change event so the response stays prompt.
-        let _ = package_first_digest;
+        // The catalog default is the only default authority: activate the new instance now.
+        if let Some(lifecycle) = &self.runtime_lifecycle {
+          if let Err(error) = lifecycle.activate_with_catalog_default(id) {
+            log::warn!("integration_default_activation_failed instance={id} error={error}");
+          }
+        }
         self.get_instance(id)
       }
       Err(e) => {
@@ -1207,11 +1144,9 @@ impl ServiceIntegrationService {
       if instance.runtime_kind == "wasm-component" || instance.runtime_kind == "trusted-native-worker" {
         match instance.package_digest.as_deref() {
           Some(digest) if instance.runtime_state == "active" && instance.execution_grant_set_revision.is_some() => self
-            .db
-            .read(|conn| crate::repositories::installed_plugin_versions::get_optional(conn, digest))
-            .ok()
-            .flatten()
-            .map(|v| v.content_available)
+            .catalog
+            .as_ref()
+            .map(|catalog| catalog.has_snapshot(digest))
             .unwrap_or(false),
           _ => false,
         }
@@ -1388,65 +1323,31 @@ fn grant_matches_credential_snapshot(grant: &TokenGrant, snapshot: &[RequiredCre
   snapshot.iter().all(|entry| entry.credential_revision == grant_revision)
 }
 
-/// PaddleOCR health stays Degraded until a vendor package is activated and the model is ready.
+/// PaddleOCR health stays Degraded until a package is activated and the model is ready.
 fn is_paddleocr_native_health_gate(instance: &crate::domain::service_integration::IntegrationInstance) -> bool {
   instance.plugin_id == crate::domain::service_integration::PADDLEOCR_PLUGIN_ID
     || instance.runtime_kind == "trusted-native-worker"
 }
 
 impl ServiceIntegrationService {
-  /// Ready only when the **signed** package's first model resource is Ready at the exact
-  /// id/version/model_api_version — same vendor-root re-verify seam as RuntimeRouter.
+  /// Ready only when the package's first model resource is Ready at the exact
+  /// id/version/model_api_version — same catalog snapshot seam as RuntimeRouter.
   fn paddleocr_first_model_ready(&self, package_digest: &str) -> Result<bool, StorageError> {
     use crate::domain::plugin_model::PluginModelResourceStatus;
     use crate::domain::runtime_plugin::PluginManifestV1;
 
-    let version = self
-      .db
-      .read(|conn| crate::repositories::installed_plugin_versions::get_optional(conn, package_digest))?;
-    let Some(version) = version else {
+    let Some(catalog) = &self.catalog else {
       return Ok(false);
     };
-    if !version.content_available {
+    let Some(loaded) = catalog.snapshot_optional(package_digest) else {
+      return Ok(false);
+    };
+    if !loaded.descriptor.source.allows_native()
+      && loaded.descriptor.runtime_kind == crate::domain::runtime_plugin::RuntimeKind::TrustedNativeWorker
+    {
       return Ok(false);
     }
-
-    // Production path: first model identity comes from installed-package verification mode.
-    // Mutable DB `manifest_json` is never the trust root when packages are wired (matches RuntimeRouter).
-    let manifest: PluginManifestV1 = if let Some(packages) = &self.plugin_packages {
-      let verified = match packages.verify_installed_package_snapshot(package_digest) {
-        Ok(verified) => verified,
-        Err(_) => return Ok(false),
-      };
-      if verified.package_digest != package_digest {
-        return Ok(false);
-      }
-      verified.manifest
-    } else {
-      // Unit-test path without a package service: preserve the same publisher/native-risk
-      // eligibility checks before parsing mutable catalog JSON. Production always injects
-      // plugin_packages and additionally verifies the retained archive/content snapshot.
-      if version.signature_status == crate::domain::plugin_package::PackageSignatureStatus::Signed {
-        let publisher = self
-          .db
-          .read(|conn| crate::repositories::plugin_publishers::get(conn, &version.publisher_key_id))?;
-        if publisher.revoked || !publisher.enabled {
-          return Ok(false);
-        }
-        if version.runtime_kind == "trusted-native-worker"
-          && publisher.source != crate::domain::plugin_package::PublisherSource::Vendor
-          && !self.db.read(|conn| {
-            crate::repositories::plugin_package_approvals::native_risk_acknowledged_for_digest(conn, package_digest)
-          })?
-        {
-          return Ok(false);
-        }
-      }
-      match serde_json::from_str(&version.manifest_json) {
-        Ok(m) => m,
-        Err(_) => return Ok(false),
-      }
-    };
+    let manifest: PluginManifestV1 = loaded.manifest.clone();
 
     let Some(first) = manifest.model_resources.as_ref().and_then(|list| list.first()) else {
       return Ok(false);
@@ -1480,7 +1381,7 @@ fn compute_local_health(
   if !config_ok || !credentials_ok {
     IntegrationHealthStatus::Unconfigured
   } else if registration.manifest.id == crate::domain::service_integration::PADDLEOCR_PLUGIN_ID {
-    // PaddleOCR is credential-free but still requires vendor package pin + model download.
+    // PaddleOCR is credential-free but still requires a package pin + model download.
     // Keep create-time health out of Ready until validate_instance confirms readiness.
     IntegrationHealthStatus::Unvalidated
   } else if !registration.requires_remote_auth() {
@@ -1725,76 +1626,27 @@ mod tests {
     Arc::new(TokenGrantService::new(vec![Arc::new(StubTokenExchanger { fail: fail_exchange })]).unwrap())
   }
 
-  /// Install and authorize the google-cloud + edge-tts default packages, returning a
-  /// package-first service. Package-only: create requires an authorized default.
+  /// Catalog-backed service over the committed built-ins plus the synthetic google-translate-web
+  /// fixture. Package-first create resolves the catalog default for the plugin id.
   fn package_first_service(
     db: Database,
     vault: Arc<dyn CredentialVault>,
-    registry: Arc<ServiceIntegrationRegistry>,
+    _registry: Arc<ServiceIntegrationRegistry>,
     tokens: Arc<TokenGrantService>,
     dir: &std::path::Path,
   ) -> ServiceIntegrationService {
-    use crate::services::default_package_activation::DefaultPackageActivationService;
-    use crate::services::plugin_store::PluginPackageService;
-    use crate::services::vendor_trust::test_vendor_fixture::fixture_vendor_public_key;
-
-    let packages =
-      PluginPackageService::with_vendor_roots(db.clone(), dir.to_path_buf(), vec![fixture_vendor_public_key()]);
-    let activation = DefaultPackageActivationService::create(db.clone(), packages.clone(), dir);
-    {
-      let bytes: &[u8] = include_bytes!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../runtime-plugins/google-cloud/fixtures/com.langnext.google-cloud-1.2.0.lnplugin"
-      ));
-      authorize_default(&packages, &activation, bytes);
-      let bytes: &[u8] = include_bytes!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../runtime-plugins/edge-tts/fixtures/com.langnext.edge-tts-1.0.0.lnplugin"
-      ));
-      authorize_default(&packages, &activation, bytes);
-      let bytes: &[u8] = include_bytes!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../runtime-plugins/paddleocr/fixtures/packages/com.langnext.paddleocr-1.0.0.lnplugin"
-      ));
-      authorize_default(&packages, &activation, bytes);
-      // The production google-translate-web archive is not committed as a fixture; install
-      // the synthetic package built from the committed guest artifacts and schemas.
-      let (gtw, _) = crate::services::test_support::google_translate_web_package();
-      authorize_default(&packages, &activation, &gtw);
-    }
-    // Project installed package definitions into the registry exactly like production bootstrap.
-    let mut registry = (*registry).clone();
-    for definition in packages
-      .project_installed_service_definitions()
-      .expect("project installed definitions")
-    {
-      registry
-        .upsert_package_definition(definition)
-        .expect("upsert package definition");
-    }
-    ServiceIntegrationService::new(db, vault, Arc::new(registry), tokens).with_default_package_activation(activation)
-  }
-
-  fn authorize_default(
-    packages: &crate::services::plugin_store::PluginPackageService,
-    activation: &crate::services::default_package_activation::DefaultPackageActivationService,
-    bytes: &[u8],
-  ) {
-    use crate::domain::default_package_activation::AuthorizeDefaultPluginPackageInput;
-    let import = packages
-      .bootstrap_bundled_package(bytes, false)
-      .expect("vendor package bootstraps");
-    let digest = import.package_digest().to_string();
-    let preview = activation
-      .preview_default_package_activation(&digest)
-      .expect("preview default activation");
-    activation
-      .authorize_default_plugin_package(AuthorizeDefaultPluginPackageInput {
-        preview_id: preview.preview_id,
-        acknowledge_future_instance_authority: true,
-        acknowledge_unsigned_default_risk: false,
-      })
-      .expect("authorize default package");
+    let catalog = crate::services::test_support::catalog_with_manifest_fixtures(
+      db.clone(),
+      dir,
+      &[
+        crate::services::test_support::GOOGLE_CLOUD_ARCHIVE,
+        crate::services::test_support::EDGE_TTS_ARCHIVE,
+        crate::services::test_support::PADDLEOCR_ARCHIVE,
+      ],
+      &[crate::services::test_support::google_translate_web_fixture()],
+    );
+    let registry = crate::services::test_support::registry_from_catalog(&catalog);
+    ServiceIntegrationService::new(db, vault, registry, tokens).with_catalog(catalog)
   }
 
   fn setup_with_exchanger(
@@ -2872,36 +2724,21 @@ mod tests {
     br#"{"version":1,"fields":[],"groups":[]}"#
   }
 
-  fn synthetic_service_archive_bytes() -> Vec<u8> {
-    use crate::domain::runtime_plugin::{
-      CapabilityPathAuthorityDecl, DeclaredPathAuthority, FileRole, HttpMethod, NetworkEndpointRequest,
-      PermissionRequests, PluginFileEntry,
-    };
-    use crate::services::plugin_package::test_support::{
-      build_signed_package_with_key, sample_manifest, test_signing_key,
-    };
-    let wasm = b" asm   ";
-    let schema = empty_schema_json();
-    let mut manifest = sample_manifest(wasm);
-    manifest.id = "com.example.synthetic-service".into();
-    manifest.configuration_schema = Some("schemas/config.json".into());
-    manifest.config_schema_version = Some(1);
-    manifest.files.push(PluginFileEntry {
-      path: "schemas/config.json".into(),
-      role: FileRole::ConfigSchema,
-      bytes: schema.len() as u64,
-      sha256: crate::domain::plugin_package::sha256_hex(schema),
-    });
-    manifest.permissions = PermissionRequests {
-      network: vec![NetworkEndpointRequest {
-        id: "api".into(),
-        origins: vec!["https://api.example.com".into()],
-        methods: vec![HttpMethod::Get],
-        instance_origin_config_field: None,
-      }],
-      auth_policies: vec!["host.none.v1".into()],
-    };
-    manifest.path_authority = vec![CapabilityPathAuthorityDecl {
+  /// Synthetic plugin content used to prove definitions and create paths carry no
+  /// plugin-id branches.
+  fn synthetic_service_plugin() -> crate::services::test_support::SyntheticPlugin {
+    use crate::domain::runtime_plugin::{CapabilityPathAuthorityDecl, DeclaredPathAuthority, HttpMethod};
+    crate::services::test_support::SyntheticPlugin::new(
+      "com.example.synthetic-service",
+      "1.0.0",
+      "artifacts/plugin.wasm",
+      b"\0asm\x01\0\0\0",
+    )
+    .with_config_schema(std::str::from_utf8(empty_schema_json()).unwrap(), 1)
+    .with_capability("translate.text@1")
+    .with_network_endpoint("api", &["https://api.example.com"], &[HttpMethod::Get])
+    .with_auth_policy("host.none.v1")
+    .with_path_authority(CapabilityPathAuthorityDecl {
       capability_id: "translate.text@1".into(),
       endpoint_id: "api".into(),
       method: HttpMethod::Get,
@@ -2911,30 +2748,20 @@ mod tests {
       allowed_query_names: vec!["q".into()],
       allowed_header_names: vec![],
       auth_policy_id: Some("host.none.v1".into()),
-    }];
-    build_signed_package_with_key(
-      &manifest,
-      &[
-        ("artifacts/plugin.wasm", wasm.as_slice()),
-        ("schemas/config.json", schema),
-      ],
-      &test_signing_key(),
-    )
-  }
-
-  fn synthetic_service_package() -> crate::services::plugin_package::VerifiedPackage {
-    use crate::services::plugin_package::{
-      hash_archive_bytes, test_support::test_public_key_hex, verify_package_bytes,
-    };
-    let bytes = synthetic_service_archive_bytes();
-    let _digest = hash_archive_bytes(&bytes);
-    verify_package_bytes(&bytes, &test_public_key_hex()).unwrap()
+    })
   }
 
   #[test]
   fn installed_synthetic_package_projects_definition_without_static_registration() {
-    let verified = synthetic_service_package();
-    let projected = crate::services::package_definition::project_verified_package(&verified).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::new(dir.path()).unwrap();
+    db.initialize().unwrap();
+    let catalog =
+      crate::services::test_support::catalog_with_synthetic(db, dir.path(), &[], &[synthetic_service_plugin()]);
+    let loaded = catalog
+      .resolve_default("com.example.synthetic-service")
+      .expect("synthetic fixture is in the catalog");
+    let projected = crate::services::package_definition::project_loaded_plugin(&loaded).unwrap();
     assert_eq!(projected.manifest.id, "com.example.synthetic-service");
     assert_eq!(projected.manifest.version, "1.0.0");
     assert_eq!(projected.config_schema.version, 1);
@@ -2966,65 +2793,17 @@ mod tests {
 
   #[test]
   fn synthetic_package_first_create_needs_no_plugin_id_branch() {
-    use crate::domain::plugin_package::ApproveUserPublisherInput;
-    use crate::services::default_package_activation::DefaultPackageActivationService;
-    use crate::services::plugin_package::test_support::{test_fingerprint, test_public_key_hex};
-
     let dir = tempfile::tempdir().unwrap();
     let db = Database::new(dir.path()).unwrap();
     db.initialize().unwrap();
     let vault: Arc<dyn CredentialVault> = Arc::new(MemoryCredentialVault::new());
-    let packages = crate::services::test_support::vendor_packages(db.clone(), dir.path());
-    // The synthetic package is user-signed; approve its publisher through the genuine seam,
-    // then install + authorize it as the default so create is package-first for ANY plugin.
-    packages
-      .approve_user_publisher(ApproveUserPublisherInput {
-        key_id: "com.example.keys.1".into(),
-        fingerprint: test_fingerprint(),
-        public_key_hex: test_public_key_hex(),
-      })
-      .unwrap();
-    let src = dir.path().join("synthetic.lnplugin");
-    std::fs::write(&src, synthetic_service_archive_bytes()).unwrap();
-    let preview = packages.preview_package(&src).unwrap();
-    packages
-      .approve_package(crate::domain::plugin_package::ApprovePluginPackageInput {
-        preview_id: preview.preview_id,
-        approve_publisher: false,
-        publisher_public_key_hex: None,
-        acknowledge_permissions: true,
-        acknowledge_unsigned_package_risk: false,
-        acknowledge_native_execution_risk: false,
-      })
-      .unwrap();
-    let activation = DefaultPackageActivationService::create(db.clone(), packages.clone(), dir.path());
-    let digest = packages
-      .list_versions()
-      .unwrap()
-      .into_iter()
-      .find(|version| version.plugin_id == "com.example.synthetic-service")
-      .map(|version| version.package_digest)
-      .unwrap();
-    let preview = activation.preview_default_package_activation(&digest).unwrap();
-    activation
-      .authorize_default_plugin_package(
-        crate::domain::default_package_activation::AuthorizeDefaultPluginPackageInput {
-          preview_id: preview.preview_id,
-          acknowledge_future_instance_authority: true,
-          acknowledge_unsigned_default_risk: false,
-        },
-      )
-      .unwrap();
-    let mut registry = ServiceIntegrationRegistry::empty();
-    let projected =
-      crate::services::package_definition::project_verified_package(&synthetic_service_package()).unwrap();
-    registry.upsert_package_definition(projected).unwrap();
-    let registry = Arc::new(registry);
-    let service = ServiceIntegrationService::new(db, vault, registry, tokens_stub(false))
-      .with_default_package_activation(activation);
+    let catalog =
+      crate::services::test_support::catalog_with_synthetic(db.clone(), dir.path(), &[], &[synthetic_service_plugin()]);
+    let registry = crate::services::test_support::registry_from_catalog(&catalog);
+    let service = ServiceIntegrationService::new(db, vault, registry, tokens_stub(false)).with_catalog(catalog);
 
-    // No plugin-id branch: any authorized default package pins the created row as a wasm
-    // package-first instance.
+    // No plugin-id branch: the catalog default pins the created row as a wasm package-first
+    // instance.
     let created = service
       .save(IntegrationInstanceWrite {
         id: None,

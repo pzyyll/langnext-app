@@ -1,5 +1,5 @@
 // ABOUTME: Native worker runtime descriptors, protocol frame constants, and stable errors.
-// ABOUTME: Process isolation only; first-party vendor-signed workers are not a permission sandbox.
+// ABOUTME: Process isolation only; first-party built-in workers are not a permission sandbox.
 use serde::{Deserialize, Serialize};
 
 /// Native protocol version required by the host for Phase 10 workers.
@@ -22,8 +22,14 @@ pub const NATIVE_WORKER_OCR_TIMEOUT_MS: u64 = 30_000;
 pub const PADDLEOCR_PLUGIN_ID: &str = "com.langnext.paddleocr";
 /// First-party PaddleOCR package version for the initial release slice.
 pub const PADDLEOCR_PLUGIN_VERSION: &str = "1.0.0";
-/// Canonical worker executable path inside the signed package runtime directory.
+/// Canonical worker executable path inside the package runtime directory.
 pub const NATIVE_WORKER_ARTIFACT_PATH: &str = "runtime/worker.exe";
+
+/// Closed host allowlist for trusted native workers. Native execution is first-party only
+/// until OS-level containment exists, so both the plugin id and the exact version must match.
+pub fn is_allowlisted_native_worker(plugin_id: &str, version: &str) -> bool {
+  plugin_id == PADDLEOCR_PLUGIN_ID && version == PADDLEOCR_PLUGIN_VERSION
+}
 /// Independently authored golden OCR text for host routing / protocol fixtures.
 /// Not a claim about production PaddleOCR model accuracy (blocked without SDK inventory).
 pub const PADDLEOCR_OCR_GOLDEN_TEXT: &str = "LANGNEXT OCR GOLDEN V1";

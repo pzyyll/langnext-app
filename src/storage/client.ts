@@ -3,16 +3,14 @@
 import type {
   AppSettingsDto,
   AppSettingsUpdate,
-  ApprovePluginPackageInput,
-  ApprovePluginPackageResult,
-  ApproveUserPublisherInput,
   EndpointTrustPreviewDto,
   EndpointTrustPreviewInput,
   IntegrationDependencyDto,
   IntegrationInstanceDto,
   IntegrationInstanceWrite,
   IntegrationValidationResult,
-  InstalledPluginVersionDto,
+  InstallUserPackageInput,
+  InstallUserPackageResult,
   LlmChatCompleteResult,
   LlmModelsListResult,
   ManualModelWrite,
@@ -21,10 +19,8 @@ import type {
   OcrRecognizeResult,
   OcrServiceDto,
   OcrServiceWrite,
-  PluginDefaultVersionDto,
-  PluginPackagePreviewDto,
-  PluginPublisherDto,
-  PluginVersionDependenciesDto,
+  PluginCatalogDefaultDto,
+  PluginCatalogSnapshotDto,
   SpeechServiceDto,
   SpeechServiceWrite,
   SpeechSynthesizeInput,
@@ -285,7 +281,7 @@ export async function cancelProviderRuntime(requestId: string): Promise<boolean>
   return runStorage(invokeEffect<boolean>("cancel_provider_runtime", { requestId }));
 }
 
-/** Preview attaching/replacing ONE API type binding with an exact signed package. */
+/** Preview attaching/replacing ONE API type binding with an exact package. */
 export async function previewProviderRuntimeInterfaceAttach(
   input: PreviewProviderRuntimeInterfaceAttachInput,
 ): Promise<ProviderRuntimeInterfacePreviewDto> {
@@ -376,69 +372,44 @@ export async function discardIntegrationRuntimeSnapshot(snapshotId: string): Pro
   return runStorage(invokeEffect<void>("discard_integration_runtime_snapshot", { snapshotId }));
 }
 
-/** Preview a local `.lnplugin` path. Rust owns file reading and verification. */
-export async function previewPluginPackage(path: string): Promise<PluginPackagePreviewDto> {
-  return runStorage(invokeEffect<PluginPackagePreviewDto>("preview_plugin_package", { path }));
+/** Preview a local `.lnplugin` archive. Rust owns file reading and validation. */
+export async function previewUserPluginPackage(path: string): Promise<import("./types").UserPackagePreviewDto> {
+  return runStorage(invokeEffect<import("./types").UserPackagePreviewDto>("preview_user_plugin_package", { path }));
 }
 
-/** Approve and install a previously previewed package by opaque preview id. */
-export async function approvePluginPackage(input: ApprovePluginPackageInput): Promise<ApprovePluginPackageResult> {
-  return runStorage(invokeEffect<ApprovePluginPackageResult>("approve_plugin_package", { input }));
+/** Install exactly the previewed archive. Fails closed on content-digest drift. */
+export async function installUserPluginPackage(input: InstallUserPackageInput): Promise<InstallUserPackageResult> {
+  return runStorage(invokeEffect<InstallUserPackageResult>("install_user_plugin_package", { input }));
 }
 
-export async function discardPluginPackagePreview(previewId: string): Promise<void> {
-  return runStorage(invokeEffect<void>("discard_plugin_package_preview", { previewId }));
+export async function discardUserPluginPackagePreview(previewId: string): Promise<void> {
+  return runStorage(invokeEffect<void>("discard_user_plugin_package_preview", { previewId }));
 }
 
-export async function listInstalledPluginVersions(): Promise<InstalledPluginVersionDto[]> {
-  return runStorage(invokeEffect<InstalledPluginVersionDto[]>("list_installed_plugin_versions"));
+/** Catalog snapshot: entries, isolated per-entry errors, and resolved defaults. */
+export async function listPluginCatalog(): Promise<PluginCatalogSnapshotDto> {
+  return runStorage(invokeEffect<PluginCatalogSnapshotDto>("list_plugin_catalog"));
 }
 
-export async function previewDefaultPackageActivation(
-  packageDigest: string,
-): Promise<import("./types").DefaultPackageActivationPreviewDto> {
-  return runStorage(
-    invokeEffect<import("./types").DefaultPackageActivationPreviewDto>("preview_default_package_activation", {
-      packageDigest,
-    }),
-  );
+export async function refreshPluginCatalog(): Promise<PluginCatalogSnapshotDto> {
+  return runStorage(invokeEffect<PluginCatalogSnapshotDto>("refresh_plugin_catalog"));
 }
 
-export async function authorizeDefaultPluginPackage(
-  input: import("./types").AuthorizeDefaultPluginPackageInput,
-): Promise<PluginDefaultVersionDto> {
-  return runStorage(invokeEffect<PluginDefaultVersionDto>("authorize_default_plugin_package", { input }));
+/** Pin one catalog digest as the explicit user default for new instances. */
+export async function setPluginCatalogDefault(
+  pluginId: string,
+  contentDigest: string,
+): Promise<PluginCatalogDefaultDto> {
+  return runStorage(invokeEffect<PluginCatalogDefaultDto>("set_plugin_catalog_default", { pluginId, contentDigest }));
 }
 
-export async function retryDefaultRuntimeActivation(
-  input: import("./types").RetryDefaultRuntimeActivationInput,
-): Promise<import("./types").DefaultRuntimeActivationIntentDto> {
-  return runStorage(
-    invokeEffect<import("./types").DefaultRuntimeActivationIntentDto>("retry_default_runtime_activation", {
-      input,
-    }),
-  );
+export async function clearPluginCatalogDefault(pluginId: string): Promise<void> {
+  return runStorage(invokeEffect<void>("clear_plugin_catalog_default", { pluginId }));
 }
 
-export async function previewDefaultRuntimeAuthority(
-  input: import("./types").PreviewDefaultRuntimeAuthorityInput,
-): Promise<import("./types").DefaultRuntimeAuthorityPreviewDto> {
-  return runStorage(
-    invokeEffect<import("./types").DefaultRuntimeAuthorityPreviewDto>("preview_default_runtime_authority", {
-      input,
-    }),
-  );
-}
-
-export async function confirmDefaultRuntimeAuthority(
-  input: import("./types").ConfirmDefaultRuntimeAuthorityInput,
-): Promise<void> {
-  return runStorage(invokeEffect<void>("confirm_default_runtime_authority", { input }));
-}
-
-/** Read-only package version snapshots (rollback). */
-export async function listPluginPublishers(): Promise<PluginPublisherDto[]> {
-  return runStorage(invokeEffect<PluginPublisherDto[]>("list_plugin_publishers"));
+/** Remove one installed user archive. Refused while a pin or grant references it. */
+export async function removeUserPluginPackage(contentDigest: string): Promise<void> {
+  return runStorage(invokeEffect<void>("remove_user_plugin_package", { contentDigest }));
 }
 
 export async function listPluginModelResources(
@@ -453,30 +424,6 @@ export async function cancelPluginModelDownload(
   input: import("./types").CancelPluginModelDownloadInput,
 ): Promise<void> {
   return runStorage(invokeEffect<void>("cancel_plugin_model_download", { input }));
-}
-
-export async function approveUserPluginPublisher(input: ApproveUserPublisherInput): Promise<PluginPublisherDto> {
-  return runStorage(invokeEffect<PluginPublisherDto>("approve_user_plugin_publisher", { input }));
-}
-
-export async function revokePluginPublisher(keyId: string): Promise<PluginPublisherDto> {
-  return runStorage(invokeEffect<PluginPublisherDto>("revoke_plugin_publisher", { keyId }));
-}
-
-export async function restorePluginPublisher(keyId: string): Promise<PluginPublisherDto> {
-  return runStorage(invokeEffect<PluginPublisherDto>("restore_plugin_publisher", { keyId }));
-}
-
-export async function removePluginPublisher(keyId: string): Promise<void> {
-  return runStorage(invokeEffect<void>("remove_plugin_publisher", { keyId }));
-}
-
-export async function uninstallPluginVersion(packageDigest: string): Promise<void> {
-  return runStorage(invokeEffect<void>("uninstall_plugin_version", { packageDigest }));
-}
-
-export async function getPluginVersionDependencies(packageDigest: string): Promise<PluginVersionDependenciesDto> {
-  return runStorage(invokeEffect<PluginVersionDependenciesDto>("get_plugin_version_dependencies", { packageDigest }));
 }
 
 /**

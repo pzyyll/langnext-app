@@ -78,7 +78,7 @@ type AddProviderFormProps = {
 function AddProviderForm({ onCreated }: AddProviderFormProps) {
   const { t } = useTranslation();
   const toast = useToast();
-  // Package-only: adapter options come from the installed signed provider package catalog.
+  // Package-only: adapter options come from the installed provider package catalog.
   const catalogQuery = useQuery(providerRuntimeCatalogOptions());
   const adapterOptions = useMemo(() => listPackageAdapterOptions(catalogQuery.data ?? []), [catalogQuery.data]);
   const [displayName, setDisplayName] = useState("");

@@ -13,7 +13,8 @@ use crate::domain::time::now_rfc3339;
 use crate::error::StorageError;
 use crate::repositories::integration_capability_health;
 use crate::repositories::integration_instances;
-use crate::repositories::{installed_plugin_versions, plugin_permission_grants, plugin_publishers};
+use crate::repositories::plugin_permission_grants;
+use crate::services::plugin_catalog::{PluginCatalog, resolve_pinned_content};
 use crate::services::runtime_router::{
   ResolvedDetect, ResolvedOcr, ResolvedTranslate, RuntimeRouter, SnapshotRuntimeResolution,
 };
@@ -80,6 +81,8 @@ pub struct ServiceCapabilityService {
   /// bounded HTTP transport; defaults to `DeniedBroker`. Phase 5 google-web Wasm execution
   /// requires a real transport.
   broker_factory: Arc<dyn Fn() -> Box<dyn BrokerHandle> + Send + Sync>,
+  /// Immutable plugin content catalog. Pins resolve through it; never through mutable files.
+  catalog: Option<Arc<PluginCatalog>>,
 }
 
 /// Deny-everything broker used as the default before `with_broker_factory` wires a transport.
@@ -113,10 +116,17 @@ impl ServiceCapabilityService {
       router: None,
       wasm_runtime: None,
       broker_factory: Arc::new(denied_broker_factory),
+      catalog: None,
     }
   }
 
   /// Attach the runtime router and shared Wasm runtime (Phase 4 production wiring).
+  /// Wire the immutable plugin content catalog for pinned content resolution.
+  pub fn with_catalog(mut self, catalog: Arc<PluginCatalog>) -> Self {
+    self.catalog = Some(catalog);
+    self
+  }
+
   pub fn with_router(mut self, router: RuntimeRouter, wasm_runtime: Arc<WasmRuntime>) -> Self {
     self.router = Some(router);
     self.wasm_runtime = Some(wasm_runtime);
@@ -189,7 +199,7 @@ impl ServiceCapabilityService {
   }
 
   /// One SQLite-authoritative snapshot for a profile capability invocation.
-  /// Uses `read_snapshot` so pin/grant/package/publisher/config/prefs share one committed view.
+  /// Uses `read_snapshot` so pin/grant/package/config/prefs share one committed view.
   pub fn load_profile_invocation_snapshot(
     &self,
     profile_id: Uuid,
@@ -197,7 +207,9 @@ impl ServiceCapabilityService {
   ) -> Result<ProfileInvocationSnapshot, ProfileSnapshotLoadError> {
     self
       .db
-      .read_snapshot(|conn| load_profile_invocation_snapshot_conn(conn, profile_id, capability_kind))
+      .read_snapshot(|conn| {
+        load_profile_invocation_snapshot_conn(conn, profile_id, capability_kind, self.catalog.as_deref())
+      })
       .map_err(ProfileSnapshotLoadError::from_storage)
   }
 
@@ -228,7 +240,7 @@ impl ServiceCapabilityService {
     self.resolve_translate_with_config(instance_id, capability_id, preferences_json, config_json)
   }
 
-  /// Full authoritative recheck after external FS rehash: profile + pin + package + publisher + grant + prefs.
+  /// Full authoritative recheck after external FS rehash: profile + pin + package + grant + prefs.
   pub fn recheck_invocation_snapshot(
     &self,
     snapshot: &ProfileInvocationSnapshot,
@@ -266,16 +278,11 @@ impl ServiceCapabilityService {
       || a.package_content_available != b.package_content_available
       || a.package_permission_request_digest != b.package_permission_request_digest
       || a.package_manifest_json != b.package_manifest_json
-      || a.publisher_key_id != b.publisher_key_id
-      || a.publisher_fingerprint != b.publisher_fingerprint
-      || a.publisher_public_key_hex != b.publisher_public_key_hex
-      || a.publisher_source != b.publisher_source
-      || a.publisher_enabled != b.publisher_enabled
-      || a.publisher_revoked != b.publisher_revoked
+      || a.plugin_source != b.plugin_source
     {
       return Err(CapabilityError::new(
         CapabilityErrorCode::PluginUnavailable,
-        "package or publisher authority changed concurrently during invocation",
+        "package authority changed concurrently during invocation",
       ));
     }
     Ok(())
@@ -812,6 +819,7 @@ fn load_profile_invocation_snapshot_conn(
   conn: &rusqlite::Connection,
   profile_id: Uuid,
   capability_kind: ProfileCapabilityKind,
+  catalog: Option<&PluginCatalog>,
 ) -> Result<ProfileInvocationSnapshot, StorageError> {
   use crate::repositories::translation_profiles;
   let dto = translation_profiles::get(conn, profile_id)?;
@@ -844,72 +852,35 @@ fn load_profile_invocation_snapshot_conn(
     return Err(StorageError::Validation("integration instance is not ready".into()));
   }
 
-  // Capture package + publisher + grant authority in the same snapshot transaction.
-  // Package-backed pins fail closed on missing package/publisher/fingerprint mismatch.
+  // Capture content identity and grant authority in the same snapshot transaction.
+  // Package-backed pins fail closed when the exact digest is absent from the catalog.
   let mut package_manifest_json = None;
   let mut package_content_available = false;
   let mut package_permission_request_digest = None;
   let mut package_plugin_id = None;
   let mut package_plugin_version = None;
-  let mut publisher_key_id = None;
-  let mut publisher_fingerprint = None;
-  let mut publisher_public_key_hex = None;
-  let mut publisher_source = None;
-  let mut publisher_enabled = false;
-  let mut publisher_revoked = true;
-  let mut signature_status = None;
+  let mut plugin_source = None;
   let mut grant_bundle: Option<ExecutionGrantSetBundle> = None;
   if let (Some(digest), Some(rev)) = (
     instance.package_digest.as_deref(),
     instance.execution_grant_set_revision,
   ) {
-    let version = installed_plugin_versions::get_optional(conn, digest)?.ok_or_else(|| {
+    let content = resolve_pinned_content(catalog, conn, digest)?.ok_or_else(|| {
       StorageError::PluginUnavailable(format!("installed package {digest} is missing for active pin"))
     })?;
-    if version.plugin_id != instance.plugin_id {
+    if content.plugin_id != instance.plugin_id {
       return Err(StorageError::PluginUnavailable(
         "package plugin id does not match instance pin".into(),
       ));
     }
-    package_manifest_json = Some(version.manifest_json.clone());
-    package_content_available = version.content_available;
-    package_permission_request_digest = Some(version.permission_request_digest.clone());
-    package_plugin_id = Some(version.plugin_id.clone());
-    package_plugin_version = Some(version.version.clone());
-    signature_status = Some(version.signature_status);
-    if version.signature_status == crate::domain::plugin_package::PackageSignatureStatus::Unsigned {
-      publisher_enabled = true;
-      publisher_revoked = false;
-    } else {
-      publisher_key_id = Some(version.publisher_key_id.clone());
-      let publisher = plugin_publishers::get(conn, &version.publisher_key_id).map_err(|e| match e {
-        StorageError::NotFound(_) => StorageError::PluginUnavailable(format!(
-          "publisher {} is missing for package {digest}",
-          version.publisher_key_id
-        )),
-        other => StorageError::PluginUnavailable(format!("publisher lookup failed for package {digest}: {other}")),
-      })?;
-      if publisher.fingerprint != version.publisher_fingerprint {
-        return Err(StorageError::PluginUnavailable(
-          "publisher fingerprint does not match installed package record".into(),
-        ));
-      }
-      if publisher.key_id != version.publisher_key_id {
-        return Err(StorageError::PluginUnavailable(
-          "publisher key id does not match installed package record".into(),
-        ));
-      }
-      publisher_fingerprint = Some(publisher.fingerprint);
-      publisher_public_key_hex = Some(publisher.public_key_hex);
-      publisher_source = Some(publisher.source);
-      publisher_enabled = publisher.enabled;
-      publisher_revoked = publisher.revoked;
-      if publisher.revoked || !publisher.enabled {
-        return Err(StorageError::PluginUnavailable(
-          "publisher trust is revoked or disabled".into(),
-        ));
-      }
-    }
+    package_permission_request_digest = Some(crate::domain::plugin_catalog::compute_permission_request_digest(
+      &content.manifest,
+    ));
+    package_manifest_json = Some(content.manifest_json.clone());
+    package_content_available = true;
+    package_plugin_id = Some(content.plugin_id.clone());
+    package_plugin_version = Some(content.version.clone());
+    plugin_source = Some(content.source);
     // Missing grant is package/authority failure, never profile NotFound.
     grant_bundle = Some(
       plugin_permission_grants::get_bundle_for_subject_package_revision(
@@ -940,13 +911,7 @@ fn load_profile_invocation_snapshot_conn(
     package_permission_request_digest,
     package_plugin_id,
     package_plugin_version,
-    publisher_key_id,
-    publisher_fingerprint,
-    publisher_public_key_hex,
-    publisher_source,
-    publisher_enabled,
-    publisher_revoked,
-    signature_status,
+    plugin_source,
     grant_bundle,
   };
 
@@ -1054,15 +1019,10 @@ mod tests {
     id
   }
 
-  const GOOGLE_CLOUD_PACKAGE: &[u8] = include_bytes!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../runtime-plugins/google-cloud/fixtures/com.langnext.google-cloud-1.2.0.lnplugin"
-  ));
-
   struct Fixture {
     _dir: tempfile::TempDir,
     db: Database,
-    packages: crate::services::plugin_store::PluginPackageService,
+    catalog: Arc<crate::services::plugin_catalog::PluginCatalog>,
     lifecycle: crate::services::runtime_lifecycle::RuntimeLifecycleService,
     vault: Arc<dyn crate::credentials::CredentialVault>,
     caps: ServiceCapabilityService,
@@ -1088,26 +1048,32 @@ mod tests {
     }
   }
 
-  /// Real package store fixture: the committed signed google-cloud archive installs through
-  /// the genuine verification path and its definition is projected from the installed
-  /// package; dispatch resolves through the Wasm runtime router.
+  /// Real catalog fixture: the committed google-cloud archive loads through the genuine
+  /// catalog and its definition is projected from the immutable snapshot; dispatch resolves
+  /// through the Wasm runtime router.
   fn fixture(db: Database, dir: &Path) -> Fixture {
-    let packages = crate::services::test_support::vendor_packages(db.clone(), dir);
-    let package_digest = crate::services::test_support::bootstrap_package(&packages, GOOGLE_CLOUD_PACKAGE);
-    let registry = crate::services::test_support::registry_from_installed_packages(&packages);
+    let catalog = crate::services::test_support::catalog_with_builtins(
+      db.clone(),
+      dir,
+      &[crate::services::test_support::GOOGLE_CLOUD_ARCHIVE],
+    );
+    let package_digest = crate::services::test_support::fixture_digest(&catalog, GOOGLE_CLOUD_PLUGIN_ID);
+    let registry = crate::services::test_support::registry_from_catalog(&catalog);
     let wasm = Arc::new(WasmRuntime::new().unwrap());
     let tokens = Arc::new(TokenGrantService::new(vec![Arc::new(StubExchanger)]).unwrap());
     let vault: Arc<dyn crate::credentials::CredentialVault> =
       Arc::new(crate::credentials::MemoryCredentialVault::default());
-    let lifecycle = RuntimeLifecycleService::new(db.clone(), packages.clone(), registry.clone())
+    let lifecycle = RuntimeLifecycleService::new(db.clone(), catalog.clone(), registry.clone())
       .with_runtime(wasm.clone(), tokens)
       .with_vault(vault.clone());
-    let router = RuntimeRouter::new(db.clone(), registry.clone(), packages.clone(), wasm.clone());
-    let caps = ServiceCapabilityService::new(db.clone(), registry).with_router(router, wasm);
+    let router = RuntimeRouter::new(db.clone(), registry.clone(), catalog.clone(), wasm.clone());
+    let caps = ServiceCapabilityService::new(db.clone(), registry)
+      .with_catalog(catalog.clone())
+      .with_router(router, wasm);
     Fixture {
       _dir: tempfile::tempdir().unwrap(),
       db: db.clone(),
-      packages,
+      catalog,
       lifecycle,
       vault,
       caps,

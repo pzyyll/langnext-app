@@ -8,7 +8,7 @@ use crate::error::StorageError;
 use crate::services::bundled_plugins::{BundledPluginRegistration, validate_registrations};
 use std::collections::HashMap;
 
-/// In-memory catalog of package-projected definitions. Installed signed packages are the only
+/// In-memory catalog of package-projected definitions. Installed packages are the only
 /// source of service definitions; legacy compatibility registrations do not exist.
 #[derive(Clone)]
 pub struct ServiceIntegrationRegistry {
@@ -18,7 +18,7 @@ pub struct ServiceIntegrationRegistry {
 
 impl ServiceIntegrationRegistry {
   /// Build the production catalog. Package definitions are upserted from installed packages
-  /// after vendor bootstrap; the initial catalog is empty.
+  /// during catalog refresh; the initial catalog is empty.
   pub fn empty() -> Self {
     Self {
       package_order: Vec::new(),

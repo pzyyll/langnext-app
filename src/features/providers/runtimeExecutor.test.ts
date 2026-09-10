@@ -36,7 +36,6 @@ const CATALOG_ENTRY = {
   pluginId: "langnext.conformance.llm-provider",
   version: "1.0.0",
   packageDigest: PACKAGE_DIGEST,
-  publisher: { keyId: "key-1", keyFingerprint: "fp-1" },
   legacyAliases: ["openai-compatible"],
   capabilities: [
     { capabilityId: "llm.models.list@1", artifactPath: "fixtures/llm-models.wasm", artifactDigest: "a" },
@@ -45,12 +44,11 @@ const CATALOG_ENTRY = {
   detection: null,
 } satisfies ProviderRuntimeCatalogEntryDto;
 
-/** Second signed package claiming the gemini alias (runtime-only, absent from the TS registry). */
+/** Second package claiming the gemini alias (runtime-only, absent from the TS registry). */
 const CATALOG_ENTRY_B = {
   pluginId: "com.langnext.provider.gemini",
   version: "1.0.0",
   packageDigest: PACKAGE_DIGEST_B,
-  publisher: { keyId: "key-2", keyFingerprint: "fp-2" },
   legacyAliases: ["gemini"],
   capabilities: [
     { capabilityId: "llm.models.list@1", artifactPath: "fixtures/llm-models.wasm", artifactDigest: "c" },
@@ -77,9 +75,9 @@ function provider(
     modelsSyncErrorCode: null,
     runtime: {
       adapterId: "openai-compatible",
-      runtimeKind: "legacy-frontend-provider",
-      packageDigest: null,
-      grantSetRevision: null,
+      runtimeKind: "wasm-component",
+      packageDigest: PACKAGE_DIGEST,
+      grantSetRevision: 1,
       state: "active",
       errorCode: null,
       errorMessage: null,
@@ -88,9 +86,9 @@ function provider(
     runtimeBindings: [
       {
         adapterId: "openai-compatible",
-        runtimeKind: "legacy-frontend-provider",
-        packageDigest: null,
-        grantSetRevision: null,
+        runtimeKind: "wasm-component",
+        packageDigest: PACKAGE_DIGEST,
+        grantSetRevision: 1,
         state: "active",
         errorCode: null,
         errorMessage: null,
@@ -164,22 +162,22 @@ function partiallyUnavailableProvider(): ProviderInstanceDto {
   };
 }
 
-/** One Provider whose DEFAULT API type is legacy while the gemini interface is runtime-bound. */
+/** One Provider whose default API type has no package binding while the gemini interface is runtime-bound. */
 function sourceInterfaceProvider(): ProviderInstanceDto {
   return provider({
     id: PROVIDER_ID,
     adapterId: "openai-compatible",
+    runtime: {
+      adapterId: "openai-compatible",
+      runtimeKind: "wasm-component",
+      packageDigest: null,
+      grantSetRevision: null,
+      state: "unavailable",
+      errorCode: "no_runtime_binding",
+      errorMessage: null,
+      updatedAt: "t",
+    },
     runtimeBindings: [
-      {
-        adapterId: "openai-compatible",
-        runtimeKind: "legacy-frontend-provider",
-        packageDigest: null,
-        grantSetRevision: null,
-        state: "active",
-        errorCode: null,
-        errorMessage: null,
-        updatedAt: "t",
-      },
       {
         adapterId: "gemini",
         runtimeKind: "wasm-component",

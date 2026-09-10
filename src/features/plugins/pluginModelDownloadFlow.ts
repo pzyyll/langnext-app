@@ -23,7 +23,7 @@ export type DownloadPluginModelHandlers = {
 
 /**
  * Explicit model download with Tauri Channel progress.
- * Host resolves URL/digests/caps from the signed package; input is only instanceId + modelId.
+ * Host resolves URL/digests/caps from the package content; input is only instanceId + modelId.
  */
 export function downloadPluginModelEffect(
   input: DownloadPluginModelInput,

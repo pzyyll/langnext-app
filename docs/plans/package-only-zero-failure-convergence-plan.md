@@ -1,5 +1,7 @@
 # Implementation Plan
 
+> **Superseded (2026-08-24):** plugin-level signing, publisher trust, vendor bootstrap, and default-activation orchestration were removed. See `docs/architecture/plugin-catalog.md`.
+
 **Goal:** Finish the unpublished package-only migration so every supported path uses exact package identity, every unsupported legacy path fails closed, and all tests, builds, conformance checks, format checks, and compiler warning gates pass with zero warnings.
 
 **Inputs:** The package-only failure review supplied by Mr. Julian, the current `package-only-migration` worktree, `AGENTS.md`, the `writing-plans` skill, and the current repository tasks and source files inspected for this plan.
@@ -97,6 +99,8 @@
 - `src-tauri/capabilities/trusted-app.json` — no direct command list change is expected; validate that the grouped permission remains correct.
 - `src-tauri/src/services/mod.rs` — remove only modules made unused by supported-path convergence.
 
+> **Superseded (2026-08-24):** plugin-level signing, publisher trust, vendor bootstrap, and default-activation orchestration were removed. See `docs/architecture/plugin-catalog.md`.
+
 ### Modify: first-party and release security
 
 - `src-tauri/src/services/plugin_store.rs` — use canonical first-party membership; correct stale empty-root comments; keep test roots isolated.
@@ -106,6 +110,8 @@
 - `src-tauri/resources/plugins/default-activation-policies.json` — validate only; regenerate only through the existing public verification tool if signed archive bytes changed.
 - `.mise/tasks/plugin/verify-release-bundle` — remove the stale “current empty production resources” comment; keep fail-closed verification.
 - `.mise/tasks/tauri/build` — remove the stale “resources are intentionally empty” comment; keep mandatory release-bundle verification.
+
+> **Superseded (2026-08-24):** plugin-level signing, publisher trust, vendor bootstrap, and default-activation orchestration were removed. See `docs/architecture/plugin-catalog.md`.
 
 ### Modify: conformance and activation stability
 
@@ -217,6 +223,8 @@ The supplied requirements pre-confirm these public seams. The implementer must n
 - Expected: all migration tests pass; fresh schema contains no transitional objects.
 - Run: `mise run test repositories::tests -- --nocapture`
 - Expected: package-only constraints and repository behavior pass.
+
+> **Superseded (2026-08-24):** plugin-level signing, publisher trust, vendor bootstrap, and default-activation orchestration were removed. See `docs/architecture/plugin-catalog.md`.
 
 ### Task 3: Establish one first-party package identity owner
 
@@ -496,6 +504,8 @@ The supplied requirements pre-confirm these public seams. The implementer must n
 - Run: `mise run test baidu_ocr -- --nocapture`
 - Expected: package runtime, auth injection, host-only token, guest import, and integration capability tests pass.
 
+> **Superseded (2026-08-24):** plugin-level signing, publisher trust, vendor bootstrap, and default-activation orchestration were removed. See `docs/architecture/plugin-catalog.md`.
+
 ### Task 11: Reproduce and fix activation concurrency failures
 
 **Seam:** `activate_pending_subject`, `recover_pending_default_runtime_activations`, intent claim CAS, grant insertion, and subject pin CAS.
@@ -536,6 +546,8 @@ The supplied requirements pre-confirm these public seams. The implementer must n
 - Expected: every intent is claimed exactly once with no overlap.
 - Run: `for i in {1..100}; do mise run test import_preview_session_cas_concurrent_double_apply_claims_once -- --nocapture --test-threads=1 || exit 1; done`
 - Expected: one apply winner and one stable conflict on every run.
+
+> **Superseded (2026-08-24):** plugin-level signing, publisher trust, vendor bootstrap, and default-activation orchestration were removed. See `docs/architecture/plugin-catalog.md`.
 
 ### Task 12: Correct production trust and release documentation without changing trust material
 

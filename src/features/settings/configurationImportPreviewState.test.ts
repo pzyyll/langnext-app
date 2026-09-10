@@ -195,8 +195,6 @@ describe("configurationImportPreviewState", () => {
             pluginId: "com.langnext.provider.test",
             pluginVersion: "1.0.0",
             packageDigest: "a".repeat(64),
-            publisherKeyId: "com.langnext.keys.1",
-            publisherKeyFingerprint: "f".repeat(64),
             localStatus: "missing",
             requiredAction: "install_exact_package",
           },

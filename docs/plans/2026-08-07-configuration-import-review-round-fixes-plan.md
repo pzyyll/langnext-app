@@ -1,5 +1,7 @@
 # Implementation Plan
 
+> **Superseded (2026-08-24):** plugin-level signing, publisher trust, vendor bootstrap, and default-activation orchestration were removed. See `docs/architecture/plugin-catalog.md`.
+
 **Goal:** Fix all four remaining configuration-import review findings so the preview presents complete validation and credential information, the no-execution probe observes cross-thread dispatches under a serialization lock, and DOM setup stays local to the focused component tests.
 
 **Inputs:** The provided Standards review (`None`), the four Spec findings, `docs/plans/runtime-plugin-system/phase-11-import-export-recovery.md`, `docs/plans/2026-08-07-configuration-import-review-fixes-plan.md`, and the current repository implementation.

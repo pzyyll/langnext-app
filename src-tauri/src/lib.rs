@@ -6,7 +6,7 @@ mod cmds;
 mod consts;
 mod credentials;
 mod device_state;
-mod domain;
+pub mod domain;
 mod error;
 mod events;
 mod logging;
@@ -149,25 +149,17 @@ pub fn run() {
       cmds::speech_services::delete_speech_service,
       cmds::speech_services::synthesize_speech,
       cmds::speech_services::cancel_speech_synthesis,
-      cmds::plugin_packages::preview_plugin_package,
-      cmds::plugin_packages::approve_plugin_package,
-      cmds::plugin_packages::discard_plugin_package_preview,
-      cmds::plugin_packages::list_installed_plugin_versions,
-      cmds::default_package_activation::preview_default_package_activation,
-      cmds::default_package_activation::authorize_default_plugin_package,
-      cmds::default_package_activation::preview_default_runtime_authority,
-      cmds::default_package_activation::confirm_default_runtime_authority,
-      cmds::default_package_activation::retry_default_runtime_activation,
-      cmds::plugin_packages::list_plugin_publishers,
+      cmds::plugin_packages::preview_user_plugin_package,
+      cmds::plugin_packages::install_user_plugin_package,
+      cmds::plugin_packages::discard_user_plugin_package_preview,
+      cmds::plugin_packages::list_plugin_catalog,
+      cmds::plugin_packages::refresh_plugin_catalog,
+      cmds::plugin_packages::set_plugin_catalog_default,
+      cmds::plugin_packages::clear_plugin_catalog_default,
+      cmds::plugin_packages::remove_user_plugin_package,
       cmds::plugin_models::list_plugin_model_resources,
       cmds::plugin_models::download_plugin_model,
       cmds::plugin_models::cancel_plugin_model_download,
-      cmds::plugin_packages::approve_user_plugin_publisher,
-      cmds::plugin_packages::revoke_plugin_publisher,
-      cmds::plugin_packages::restore_plugin_publisher,
-      cmds::plugin_packages::remove_plugin_publisher,
-      cmds::plugin_packages::uninstall_plugin_version,
-      cmds::plugin_packages::get_plugin_version_dependencies,
       cmds::runtime_lifecycle::preview_integration_runtime_upgrade,
       cmds::runtime_lifecycle::apply_integration_runtime_upgrade,
       cmds::runtime_lifecycle::preview_integration_runtime_rollback,

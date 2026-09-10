@@ -1,5 +1,7 @@
 # Phase 6: Binary Resources and Edge TTS Runtime Plugin Implementation Plan
 
+> **Superseded (2026-08-24):** plugin-level signing, publisher trust, vendor bootstrap, and default-activation orchestration were removed. See `docs/architecture/plugin-catalog.md`.
+
 **Goal:** Add host-owned bounded Blob/Stream resources and migrate Edge TTS to a brokered Wasm plugin, eliminating its direct `reqwest` production path.
 
 **Inputs:** Phase 5 runtime plugin and existing Speech synthesis/playback contracts.

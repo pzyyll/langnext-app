@@ -3,10 +3,6 @@
   "pluginApiVersion": "1.0",
   "id": "com.langnext.baidu-ocr",
   "version": "1.0.0",
-  "publisher": {
-    "keyId": "com.langnext.vendor.keys.1",
-    "keyFingerprint": "405708c8009ed75e698b06d85aa7c5321e77c888fbc95b7b843d5abbe153a6d7"
-  },
   "runtime": {
     "kind": "wasm-component",
     "artifact": "ocr/fixtures/langnext-baidu-ocr.wasm"

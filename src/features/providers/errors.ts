@@ -62,7 +62,7 @@ export function normalizeProviderError(error: unknown): NormalizedProviderError 
     return { code, message: error.message, retryable: isRetryableCode(code) };
   }
   if (error instanceof ProviderRuntimeUnavailableError) {
-    // Missing/revoked runtime binding: bounded and never retried through legacy transport.
+    // Missing/unavailable runtime binding: bounded and never retried through legacy transport.
     return { code: "plugin_unavailable", message: error.message, retryable: false };
   }
   if (isIpcError(error)) {

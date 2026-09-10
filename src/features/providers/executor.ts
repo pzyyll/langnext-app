@@ -102,8 +102,8 @@ export interface ProviderExecutor {
 }
 
 /**
- * Missing/inactive provider runtime binding that cannot execute (package absent, revoked, or
- * not yet active). Fail-closed before any transport; there is no legacy executor to replay.
+ * Missing/inactive provider runtime binding that cannot execute (package absent, unavailable,
+ * or not yet active). Fail-closed before any transport; there is no legacy executor to replay.
  */
 export class ProviderRuntimeUnavailableError extends Error {
   readonly code = "plugin_unavailable" as const;
@@ -147,8 +147,8 @@ export function resolveEffectiveAdapterId(input: {
 }
 
 /**
- * Resolve the host-owned detection policy from provider catalog metadata. Signed runtime
- * manifests declare bounded metadata the host validates and projects; the guest receives
+ * Resolve the host-owned detection policy from provider catalog metadata. Runtime manifests
+ * declare bounded metadata the host validates and projects; the guest receives
  * already-selected Chat options, never workflow-policy authority. Without an active Wasm
  * binding, the host applies the bounded default policy; there is no legacy plugin policy.
  */
@@ -179,7 +179,7 @@ export function resolveHostDetectPolicy(input: {
 /**
  * Effective-adapter resolver: selects the persisted executor for one Provider/model pair.
  * A matching active Wasm interface binding selects `RuntimeProviderExecutor`; a Wasm binding
- * that is unavailable/revoked/missing fails closed as `plugin_unavailable`. No legacy
+ * that is unavailable/missing fails closed as `plugin_unavailable`. No legacy
  * frontend executor exists, so an unbound API type is never silently executed.
  */
 export function resolveProviderExecutor(input: {

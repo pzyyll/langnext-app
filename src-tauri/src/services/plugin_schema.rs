@@ -830,18 +830,14 @@ mod tests {
 
   fn manifest_with_slots(slots: &[(&str, bool)]) -> crate::domain::runtime_plugin::PluginManifestV1 {
     use crate::domain::runtime_plugin::{
-      CredentialSlotDecl, CredentialSlotKindV1, PermissionRequests, PluginManifestV1, PublisherDeclaration,
-      RuntimeDescriptor, RuntimeKind, UiDeclaration,
+      CredentialSlotDecl, CredentialSlotKindV1, PermissionRequests, PluginManifestV1, RuntimeDescriptor, RuntimeKind,
+      UiDeclaration,
     };
     PluginManifestV1 {
       manifest_version: 1,
       plugin_api_version: "1.0".into(),
       id: "com.example.t".into(),
       version: "1.0.0".into(),
-      publisher: PublisherDeclaration {
-        key_id: "vendor.example".into(),
-        key_fingerprint: "0".repeat(64),
-      },
       runtime: RuntimeDescriptor {
         kind: RuntimeKind::WasmComponent,
         artifact: Some("artifacts/plugin.wasm".into()),

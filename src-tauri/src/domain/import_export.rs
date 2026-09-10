@@ -169,23 +169,21 @@ pub enum ImportRuntimeSubjectKind {
   Provider,
 }
 
-/// Local availability of one exact imported runtime requirement. Determined by the exact
-/// digest and publisher identity only; plugin ID/version matching never substitutes another
-/// package. Package-only: legacy bundled/TypeScript requirements never import.
+/// Local availability of one exact imported content requirement, resolved against the
+/// immutable plugin catalog (built-in, development, and user content) plus recorded user
+/// archives. The exact digest is the only identity: plugin ID/version matching never
+/// substitutes another package. Package-only: legacy bundled/TypeScript requirements never
+/// import.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ImportRuntimeLocalStatus {
-  /// Exact digest absent from the local catalog.
+  /// Exact digest absent locally with no local content claiming its plugin id/version.
   Missing,
-  /// Exact digest installed under a revoked publisher.
-  Revoked,
-  /// Exact digest installed under a disabled publisher.
-  Disabled,
-  /// Exact digest installed but package content is not available locally.
-  ContentUnavailable,
-  /// Exact digest installed but its manifest identity is incompatible with the requirement.
+  /// Local content claims the same plugin id/version at a different digest.
+  DigestMismatch,
+  /// Exact digest present but its manifest identity contradicts the requirement.
   Incompatible,
-  /// Exact digest installed, content available, publisher ok, manifest compatible.
+  /// Exact digest present, content available, manifest compatible.
   Installed,
 }
 
@@ -194,16 +192,16 @@ pub enum ImportRuntimeLocalStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ImportRuntimeRequiredAction {
-  None,
   InstallExactPackage,
-  RestorePublisher,
+  ResolveDigestMismatch,
   ResolveIncompatibility,
   ActivateAfterImport,
 }
 
 /// One exact per-subject runtime requirement preview entry: subject identity, display
 /// label, optional adapter id, requirement identity, local status, and required action.
-/// Never carries secrets, refs, grants, package bytes, or activation authority.
+/// Never carries secrets, refs, grants, package bytes, publisher identity, or activation
+/// authority.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportRuntimeRequirementPreview {
@@ -220,10 +218,6 @@ pub struct ImportRuntimeRequirementPreview {
   pub plugin_version: Option<String>,
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub package_digest: Option<String>,
-  #[serde(default, skip_serializing_if = "Option::is_none")]
-  pub publisher_key_id: Option<String>,
-  #[serde(default, skip_serializing_if = "Option::is_none")]
-  pub publisher_key_fingerprint: Option<String>,
   pub local_status: ImportRuntimeLocalStatus,
   pub required_action: ImportRuntimeRequiredAction,
 }
@@ -342,34 +336,6 @@ fn validate_current_format_integration_runtime_records(doc: &ConfigurationExport
         }
         crate::domain::runtime_plugin::PackageDigest::parse(digest)
           .map_err(|e| format!("v8 integration {} has invalid packageDigest: {e}", row.id))?;
-        let key_id = req.publisher_key_id.as_deref().ok_or_else(|| {
-          format!(
-            "v8 integration {} package-backed runtime is missing mandatory fields",
-            row.id
-          )
-        })?;
-        if key_id.trim().is_empty() {
-          return Err(format!(
-            "v8 integration {} package-backed runtime is missing mandatory fields",
-            row.id
-          ));
-        }
-        crate::domain::runtime_plugin::PublisherKeyId::parse(key_id)
-          .map_err(|e| format!("v8 integration {} has invalid publisherKeyId: {e}", row.id))?;
-        let fingerprint = req.publisher_key_fingerprint.as_deref().ok_or_else(|| {
-          format!(
-            "v8 integration {} package-backed runtime is missing mandatory fields",
-            row.id
-          )
-        })?;
-        if fingerprint.trim().is_empty() {
-          return Err(format!(
-            "v8 integration {} package-backed runtime is missing mandatory fields",
-            row.id
-          ));
-        }
-        crate::domain::runtime_plugin::PublisherKeyFingerprint::parse(fingerprint)
-          .map_err(|e| format!("v8 integration {} has invalid publisherKeyFingerprint: {e}", row.id))?;
         let api = req.plugin_api_version.as_deref().ok_or_else(|| {
           format!(
             "v8 integration {} package-backed runtime is missing mandatory fields",
@@ -451,8 +417,7 @@ pub fn validate_provider_runtime_requirement(
 ) -> Result<(), String> {
   use crate::domain::provider::validate_adapter_id;
   use crate::domain::runtime_plugin::{
-    CapabilityId, PROVIDER_RUNTIME_LEGACY_ALIASES_MAX_COUNT, PackageDigest, PluginApiVersion, PluginId,
-    PublisherKeyFingerprint, PublisherKeyId, SemVerVersion,
+    CapabilityId, PROVIDER_RUNTIME_LEGACY_ALIASES_MAX_COUNT, PackageDigest, PluginApiVersion, PluginId, SemVerVersion,
   };
   if let Some(adapter) = requirement.adapter_id.as_deref() {
     validate_adapter_id(adapter).map_err(|e| format!("provider runtime adapterId: {e}"))?;
@@ -473,18 +438,6 @@ pub fn validate_provider_runtime_requirement(
         .plugin_version
         .as_deref()
         .map(|value| SemVerVersion::parse(value).map_err(|e| format!("provider runtime pluginVersion: {e}")))
-        .transpose()?;
-      requirement
-        .publisher_key_id
-        .as_deref()
-        .map(|value| PublisherKeyId::parse(value).map_err(|e| format!("provider runtime publisherKeyId: {e}")))
-        .transpose()?;
-      requirement
-        .publisher_key_fingerprint
-        .as_deref()
-        .map(|value| {
-          PublisherKeyFingerprint::parse(value).map_err(|e| format!("provider runtime publisherKeyFingerprint: {e}"))
-        })
         .transpose()?;
       requirement
         .plugin_api_version
@@ -532,7 +485,7 @@ pub const FORBIDDEN_EXPORT_SECRET_KEYS: &[&str] = &[
   "audio_content",
   "mp3Bytes",
   "mp3_bytes",
-  // Default-package activation and subject authority approvals are local trust only.
+  // Removed authority-approval artifacts stay local-only and must never appear in a document.
   "approvedAuthorityJson",
   "approved_authority_json",
   "approvedAuthorityDigest",
@@ -813,8 +766,10 @@ mod tests {
     );
   }
 
+  /// A package-backed requirement carries content identity only: plugin id, version, exact
+  /// digest, runtime kind, API version, and required capability majors.
   #[test]
-  fn v8_package_backed_missing_fingerprint_fails_closed() {
+  fn v8_package_backed_requirement_parses_without_publisher_metadata() {
     let value = serde_json::json!({
       "formatVersion": EXPORT_FORMAT_VERSION,
       "exportedAt": "t",
@@ -837,7 +792,6 @@ mod tests {
           "pluginVersion": "1.0.0",
           "runtimeKind": "wasm-component",
           "packageDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-          "publisherKeyId": "com.example.keys.1",
           "pluginApiVersion": "1.0",
           "configSchemaVersion": 1,
           "requiredCapabilityMajors": ["translate.text@1"]
@@ -850,142 +804,70 @@ mod tests {
       "speechServices": [],
       "appSettings": AppSettingsV1::default_document(),
     });
-    let err = parse_and_normalize_export_document(value).unwrap_err();
-    assert!(
-      err.contains("mandatory fields") || err.contains("fingerprint"),
-      "expected package-backed mandatory field error, got {err}"
-    );
+    let parsed = parse_and_normalize_export_document(value).expect("content identity alone satisfies a v8 requirement");
+    let runtime = parsed.integration_instances[0]
+      .runtime
+      .as_ref()
+      .expect("package-backed runtime preserved");
+    assert_eq!(runtime.package_digest.as_deref(), Some("a".repeat(64).as_str()));
+    assert_eq!(runtime.plugin_id, "langnext.conformance");
+    assert_eq!(runtime.plugin_api_version.as_deref(), Some("1.0"));
+    assert_eq!(runtime.required_capability_majors, vec!["translate.text@1".to_string()]);
   }
 
+  /// Removed publisher/signature/activation fields are rejected, never silently ignored.
+  /// There is no compatibility path for an older document that still carries them.
   #[test]
-  fn v8_unknown_runtime_kind_fails_closed() {
-    let value = serde_json::json!({
-      "formatVersion": EXPORT_FORMAT_VERSION,
-      "exportedAt": "t",
-      "providers": [],
-      "models": [],
-      "translationProfiles": [],
-      "profileModels": [],
-      "profilePromptTemplates": [],
-      "integrationInstances": [{
-        "id": "00000000-0000-0000-0000-000000000099",
-        "pluginId": "com.example.x",
-        "pluginVersion": "1.0.0",
-        "displayName": "X",
-        "enabled": true,
-        "configJson": "{}",
-        "configSchemaVersion": 1,
-        "healthStatus": "ready",
-        "runtime": {
-          "pluginId": "com.example.x",
-          "pluginVersion": "1.0.0",
-          "runtimeKind": "not-a-real-kind",
-          "configSchemaVersion": 1,
-          "requiredCapabilityMajors": []
-        },
-        "createdAt": "t",
-        "updatedAt": "t"
-      }],
-      "ocrServices": [],
-      "ocrPromptTemplates": [],
-      "speechServices": [],
-      "appSettings": AppSettingsV1::default_document(),
-    });
-    let err = parse_and_normalize_export_document(value).unwrap_err();
-    assert!(
-      err.contains("invalid runtimeKind") || err.contains("runtimeKind"),
-      "expected unknown runtimeKind error, got {err}"
-    );
-  }
-
-  #[test]
-  fn v8_invalid_package_digest_fails_closed() {
-    let doc = serde_json::json!({
-      "formatVersion": EXPORT_FORMAT_VERSION,
-      "exportedAt": "t",
-      "providers": [],
-      "models": [],
-      "translationProfiles": [],
-      "profileModels": [],
-      "profilePromptTemplates": [],
-      "integrationInstances": [{
-        "id": "00000000-0000-0000-0000-000000000001",
+  fn v8_unknown_and_removed_fields_fail_closed() {
+    for (key, value) in [
+      ("publisherKeyId", serde_json::json!("com.example.keys.1")),
+      ("publisherKeyFingerprint", serde_json::json!("a".repeat(64))),
+      ("signatureStatus", serde_json::json!("verified")),
+      ("providerRuntimeKind", serde_json::json!("wasm-component")),
+      ("providerPackageDigest", serde_json::json!("a".repeat(64))),
+    ] {
+      let mut runtime = serde_json::json!({
         "pluginId": "langnext.conformance",
         "pluginVersion": "1.0.0",
-        "displayName": "x",
-        "enabled": true,
-        "configJson": "{}",
+        "runtimeKind": "wasm-component",
+        "packageDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "pluginApiVersion": "1.0",
         "configSchemaVersion": 1,
-        "healthStatus": "ready",
-        "runtime": {
+        "requiredCapabilityMajors": ["translate.text@1"]
+      });
+      runtime[key] = value;
+      let doc = serde_json::json!({
+        "formatVersion": EXPORT_FORMAT_VERSION,
+        "exportedAt": "t",
+        "providers": [],
+        "models": [],
+        "translationProfiles": [],
+        "profileModels": [],
+        "profilePromptTemplates": [],
+        "integrationInstances": [{
+          "id": "00000000-0000-0000-0000-000000000002",
           "pluginId": "langnext.conformance",
           "pluginVersion": "1.0.0",
-          "runtimeKind": "wasm-component",
-          "packageDigest": "not-hex",
-          "publisherKeyId": "langnext.vendor.test",
-          "publisherKeyFingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-          "pluginApiVersion": "1.0",
+          "displayName": "x",
+          "enabled": true,
+          "configJson": "{}",
           "configSchemaVersion": 1,
-          "requiredCapabilityMajors": ["translate.text@1"]
-        },
-        "createdAt": "t",
-        "updatedAt": "t"
-      }],
-      "ocrServices": [],
-      "ocrPromptTemplates": [],
-      "speechServices": [],
-      "appSettings": AppSettingsV1::default_document(),
-    });
-    let err = parse_and_normalize_export_document(doc).unwrap_err();
-    assert!(
-      err.contains("packageDigest") || err.contains("package digest"),
-      "expected package digest error, got {err}"
-    );
-  }
-
-  #[test]
-  fn v8_invalid_publisher_key_id_fails_closed() {
-    let doc = serde_json::json!({
-      "formatVersion": EXPORT_FORMAT_VERSION,
-      "exportedAt": "t",
-      "providers": [],
-      "models": [],
-      "translationProfiles": [],
-      "profileModels": [],
-      "profilePromptTemplates": [],
-      "integrationInstances": [{
-        "id": "00000000-0000-0000-0000-000000000002",
-        "pluginId": "langnext.conformance",
-        "pluginVersion": "1.0.0",
-        "displayName": "x",
-        "enabled": true,
-        "configJson": "{}",
-        "configSchemaVersion": 1,
-        "healthStatus": "ready",
-        "runtime": {
-          "pluginId": "langnext.conformance",
-          "pluginVersion": "1.0.0",
-          "runtimeKind": "wasm-component",
-          "packageDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-          "publisherKeyId": "BAD KEY",
-          "publisherKeyFingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-          "pluginApiVersion": "1.0",
-          "configSchemaVersion": 1,
-          "requiredCapabilityMajors": ["translate.text@1"]
-        },
-        "createdAt": "t",
-        "updatedAt": "t"
-      }],
-      "ocrServices": [],
-      "ocrPromptTemplates": [],
-      "speechServices": [],
-      "appSettings": AppSettingsV1::default_document(),
-    });
-    let err = parse_and_normalize_export_document(doc).unwrap_err();
-    assert!(
-      err.contains("publisherKeyId") || err.contains("publisher key id"),
-      "expected publisher key id error, got {err}"
-    );
+          "healthStatus": "ready",
+          "runtime": runtime,
+          "createdAt": "t",
+          "updatedAt": "t"
+        }],
+        "ocrServices": [],
+        "ocrPromptTemplates": [],
+        "speechServices": [],
+        "appSettings": AppSettingsV1::default_document(),
+      });
+      let err = parse_and_normalize_export_document(doc).expect_err(&format!("removed field {key} must fail closed"));
+      assert!(
+        err.contains(key),
+        "expected an unknown-field error naming {key}, got {err}"
+      );
+    }
   }
 
   #[test]
@@ -1012,8 +894,6 @@ mod tests {
           "pluginVersion": "1.0.0",
           "runtimeKind": "wasm-component",
           "packageDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-          "publisherKeyId": "langnext.vendor.test",
-          "publisherKeyFingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "pluginApiVersion": "1.0",
           "configSchemaVersion": 1,
           "requiredCapabilityMajors": ["not-a-capability"]
@@ -1041,8 +921,6 @@ mod tests {
       "packageDigest": "ab".repeat(32),
       "pluginId": "com.langnext.provider.openai-compatible",
       "pluginVersion": "1.0.0",
-      "publisherKeyId": "com.langnext.vendor.keys.1",
-      "publisherKeyFingerprint": "f".repeat(64),
       "pluginApiVersion": "1.0",
       "legacyAliases": [adapter_id],
       "capabilities": ["llm.chat@1", "llm.models.list@1"]
@@ -1148,8 +1026,6 @@ mod tests {
           "pluginVersion": "1.0.0",
           "runtimeKind": "wasm-component",
           "packageDigest": padded,
-          "publisherKeyId": "langnext.vendor.test",
-          "publisherKeyFingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "pluginApiVersion": "1.0",
           "configSchemaVersion": 1,
           "requiredCapabilityMajors": ["translate.text@1"]

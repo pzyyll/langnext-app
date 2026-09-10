@@ -1,5 +1,7 @@
 # Phase 10: PaddleOCR Native Worker and Model Delivery Implementation Plan
 
+> **Superseded (2026-08-24):** plugin-level signing, publisher trust, vendor bootstrap, and default-activation orchestration were removed. See `docs/architecture/plugin-catalog.md`.
+
 **Goal:** Deliver first-party local OCR through a trusted out-of-process PaddleOCR worker whose signed plugin package contains no model bytes, while the host-owned plugin configuration page lets the user explicitly download and verify the required PaddleOCR model bundle.
 
 **Inputs:** Phases 2, 4, and 6; the runtime plugin architecture; the accepted Windows runtime payload of signed `worker.exe` + required DLLs; and the requirement that model download begin only from a button on the plugin configuration page.

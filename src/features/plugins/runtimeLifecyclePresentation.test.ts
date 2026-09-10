@@ -4,7 +4,6 @@ import { describe, expect, test } from "bun:test";
 import {
   acknowledgePermissionsForApply,
   formatPermissionDifference,
-  formatPublisherIdentity,
   formatRuntimeIdentity,
   hasThirdPartyEgressChange,
   isRuntimeUnresolved,
@@ -13,17 +12,14 @@ import {
 } from "./runtimeLifecyclePresentation";
 import type { RuntimeUpgradePreviewDto } from "../../storage/types";
 
-const targetPublisher = {
-  keyId: "com.example.keys.1",
-  keyFingerprint: "f".repeat(64),
-};
-
 function basePreview(overrides: Partial<RuntimeUpgradePreviewDto> = {}): RuntimeUpgradePreviewDto {
   return {
     previewId: "rup_1",
     instanceId: "i",
     source: {
-      runtimeKind: "bundled-rust",
+      runtimeKind: "wasm-component",
+      packageDigest: "b".repeat(64),
+      executionGrantSetRevision: 1,
       runtimeState: "active",
     },
     target: {
@@ -34,9 +30,7 @@ function basePreview(overrides: Partial<RuntimeUpgradePreviewDto> = {}): Runtime
     },
     sourcePluginVersion: "1.0.0",
     targetPluginVersion: "1.1.0",
-    targetPublisher,
     requiresPermissionApproval: false,
-    requiresPublisherReapproval: false,
     capabilityCompatibility: [],
     schemaMigrations: [],
     credentialSlots: [],
@@ -83,8 +77,7 @@ describe("runtimeLifecyclePresentation", () => {
     expect(label).toContain("r2");
   });
 
-  test("formats publisher and structured permission differences", () => {
-    expect(formatPublisherIdentity(targetPublisher)).toContain("com.example.keys.1");
+  test("formats structured permission differences", () => {
     expect(
       formatPermissionDifference({
         kind: "network_endpoint_added",
@@ -97,11 +90,10 @@ describe("runtimeLifecyclePresentation", () => {
     ).toContain("origin=https://conformance.example");
   });
 
-  test("upgradeRequiresAcknowledgement tracks permission and publisher flags", () => {
+  test("upgradeRequiresAcknowledgement tracks the permission flag", () => {
     const base = basePreview();
     expect(upgradeRequiresAcknowledgement(base)).toBe(false);
     expect(upgradeRequiresAcknowledgement({ ...base, requiresPermissionApproval: true })).toBe(true);
-    expect(upgradeRequiresAcknowledgement({ ...base, requiresPublisherReapproval: true })).toBe(true);
   });
 
   test("acknowledgePermissionsForApply never auto-signs expansions", () => {

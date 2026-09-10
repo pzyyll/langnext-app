@@ -64,8 +64,6 @@ function requirement(overrides: Partial<ImportRuntimeRequirementPreview> = {}): 
     pluginId: "com.langnext.provider.test",
     pluginVersion: "1.0.0",
     packageDigest: "a".repeat(64),
-    publisherKeyId: "com.langnext.keys.1",
-    publisherKeyFingerprint: "f".repeat(64),
     localStatus: "installed",
     requiredAction: "activate_after_import",
     ...overrides,
@@ -159,8 +157,6 @@ describe("importRuntimeDetailRows", () => {
     expect(byLabel.get("settings.backup.runtimeDetailPluginId")?.value).toBe("com.langnext.provider.test");
     expect(byLabel.get("settings.backup.runtimeDetailPluginVersion")?.value).toBe("1.0.0");
     expect(byLabel.get("settings.backup.runtimeDetailPackageDigest")?.value).toBe("a".repeat(64));
-    expect(byLabel.get("settings.backup.runtimeDetailPublisherKeyId")?.value).toBe("com.langnext.keys.1");
-    expect(byLabel.get("settings.backup.runtimeDetailPublisherFingerprint")?.value).toBe("f".repeat(64));
     expect(byLabel.get("settings.backup.runtimeDetailStatus")).toEqual({
       labelKey: "settings.backup.runtimeDetailStatus",
       value: "settings.backup.runtimeStatusInstalled",
@@ -171,15 +167,13 @@ describe("importRuntimeDetailRows", () => {
     );
   });
 
-  test("omits absent adapter, plugin, and publisher fields", () => {
+  test("omits absent adapter, plugin, and content fields", () => {
     const rows = importRuntimeDetailRows(
       requirement({
         adapterId: null,
         pluginId: null,
         pluginVersion: null,
         packageDigest: null,
-        publisherKeyId: null,
-        publisherKeyFingerprint: null,
       }),
     );
     const labels = rows.map((row) => row.labelKey);
@@ -187,8 +181,6 @@ describe("importRuntimeDetailRows", () => {
     expect(labels).not.toContain("settings.backup.runtimeDetailPluginId");
     expect(labels).not.toContain("settings.backup.runtimeDetailPluginVersion");
     expect(labels).not.toContain("settings.backup.runtimeDetailPackageDigest");
-    expect(labels).not.toContain("settings.backup.runtimeDetailPublisherKeyId");
-    expect(labels).not.toContain("settings.backup.runtimeDetailPublisherFingerprint");
     expect(labels).toContain("settings.backup.runtimeDetailRuntime");
     expect(labels).toContain("settings.backup.runtimeDetailStatus");
     expect(labels).toContain("settings.backup.runtimeDetailAction");
@@ -199,23 +191,14 @@ describe("importRuntimeDetailRows", () => {
     const rows = importRuntimeDetailRows(entry);
     const digest = rows.find((row) => row.labelKey === "settings.backup.runtimeDetailPackageDigest");
     expect(digest?.value).toBe(entry.packageDigest);
-    const fingerprint = rows.find((row) => row.labelKey === "settings.backup.runtimeDetailPublisherFingerprint");
-    expect(fingerprint?.value).toBe(entry.publisherKeyFingerprint);
+    const pluginId = rows.find((row) => row.labelKey === "settings.backup.runtimeDetailPluginId");
+    expect(pluginId?.value).toBe(entry.pluginId);
   });
 });
 
 describe("runtime status/action label keys", () => {
   test("maps every closed local status to a stable label key", () => {
-    const statuses: ImportRuntimeLocalStatus[] = [
-      "bundled",
-      "legacy",
-      "missing",
-      "revoked",
-      "disabled",
-      "content_unavailable",
-      "incompatible",
-      "installed",
-    ];
+    const statuses: ImportRuntimeLocalStatus[] = ["missing", "digest_mismatch", "incompatible", "installed"];
     for (const status of statuses) {
       expect(importRuntimeStatusLabelKey(status)).toStartWith("settings.backup.runtimeStatus");
     }
@@ -223,9 +206,8 @@ describe("runtime status/action label keys", () => {
 
   test("maps every closed action to a stable label key", () => {
     const actions: ImportRuntimeRequiredAction[] = [
-      "none",
       "install_exact_package",
-      "restore_publisher",
+      "resolve_digest_mismatch",
       "resolve_incompatibility",
       "activate_after_import",
     ];
@@ -240,11 +222,15 @@ describe("groupImportRuntimeRequirements", () => {
     const groups = groupImportRuntimeRequirements([
       requirement({ displayLabel: "A", requiredAction: "install_exact_package" }),
       requirement({ displayLabel: "B", requiredAction: "activate_after_import" }),
-      requirement({ displayLabel: "C", requiredAction: "none" }),
+      requirement({ displayLabel: "C", requiredAction: "resolve_digest_mismatch" }),
       requirement({ displayLabel: "D", requiredAction: "install_exact_package" }),
     ]);
     // Only actions with entries appear, in the closed display order.
-    expect(groups.map((g) => g.action)).toEqual(["none", "install_exact_package", "activate_after_import"]);
+    expect(groups.map((g) => g.action)).toEqual([
+      "install_exact_package",
+      "resolve_digest_mismatch",
+      "activate_after_import",
+    ]);
     const install = groups.find((g) => g.action === "install_exact_package");
     expect(install?.items.map((i) => i.displayLabel)).toEqual(["A", "D"]);
   });
@@ -255,17 +241,17 @@ describe("groupImportRuntimeRequirements", () => {
 });
 
 describe("importHasPackageBackedRuntimes", () => {
-  test("is true when any requirement needs an action beyond none", () => {
+  test("is true when a requirement needs the exact content installed", () => {
     expect(importHasPackageBackedRuntimes([requirement({ requiredAction: "install_exact_package" })])).toBe(true);
   });
 
-  test("is false when every requirement is bundled/legacy", () => {
-    expect(
-      importHasPackageBackedRuntimes([
-        requirement({ localStatus: "bundled", requiredAction: "none" }),
-        requirement({ localStatus: "legacy", requiredAction: "none" }),
-      ]),
-    ).toBe(false);
+  test("is true when present content still needs explicit activation", () => {
+    expect(importHasPackageBackedRuntimes([requirement({ requiredAction: "activate_after_import" })])).toBe(true);
+  });
+
+  test("is false without any runtime requirement", () => {
+    expect(importHasPackageBackedRuntimes([])).toBe(false);
+    expect(importHasPackageBackedRuntimes(undefined)).toBe(false);
   });
 });
 

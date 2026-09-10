@@ -1,6 +1,5 @@
 // ABOUTME: IPC command handlers registered with the Tauri invoke system.
 // ABOUTME: Includes snap overlay and storage subsystem commands.
-pub mod default_package_activation;
 pub mod import_export;
 pub mod models;
 pub mod ocr_services;

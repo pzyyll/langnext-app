@@ -1,5 +1,7 @@
 # Implementation Plan
 
+> **Superseded (2026-08-24):** plugin-level signing, publisher trust, vendor bootstrap, and default-activation orchestration were removed. See `docs/architecture/plugin-catalog.md`.
+
 **Goal:** Every concrete Google, Edge, LLM provider, PaddleOCR, and Baidu protocol executes only through installed signed runtime packages. Bundled Rust, legacy frontend provider, and direct vendor REST executors are removed; no dual-stack window or release evidence is required because the app has never shipped.
 
 **Inputs:** Current `HEAD` (`68c64f7`); `docs/plans/runtime-plugin-system/README.md`; `docs/plans/runtime-plugin-system/phase-11-5-default-package-activation.md`; `docs/plans/runtime-plugin-system/phase-12-legacy-retirement.md`; `docs/plans/2026-08-21-unsigned-plugin-install-plan.md`; current production code and resources inspected on 2026-08-21.

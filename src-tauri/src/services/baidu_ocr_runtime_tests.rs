@@ -3,6 +3,7 @@
 #![cfg(test)]
 
 use crate::domain::cancel::CancelToken;
+use crate::domain::plugin_catalog::sha256_hex;
 use crate::domain::plugin_resource::NetworkResponseBodyModes;
 use crate::domain::runtime_plugin::{
   AuthPolicyId, CapabilityId, ComponentArtifactDigest, ExecutionGrantSet, HttpMethod, HttpsOrigin, NetworkGrantEntry,
@@ -12,7 +13,6 @@ use crate::domain::service_capability::{
   CapabilityErrorCode, ExecutionContext, OCR_IMAGE_CAPABILITY_ID, OcrImageOperation, OcrImagePreferences,
   OcrImageRequest, ProviderAttemptTracker,
 };
-use crate::services::plugin_package::public_sha256_hex;
 use crate::services::service_capabilities::OcrImageCapability;
 use crate::services::wasm_runtime::host::{
   BrokerAuthorization, BrokerFetchOutcome, BrokerFetchRequest, BrokerFetchResponse, BrokerHandle, BrokerRequestBody,
@@ -93,7 +93,7 @@ impl BrokerHandle for CaptureBroker {
 fn create_adapter(response: &[u8]) -> (WasmOcrImageAdapter, Arc<Mutex<Vec<BrokerFetchRequest>>>, Uuid) {
   let runtime = Arc::new(WasmRuntime::new().unwrap());
   let package_digest = PackageDigest::parse(PACKAGE_DIGEST_HEX).unwrap();
-  let artifact_digest = ComponentArtifactDigest::parse(&public_sha256_hex(BAIDU_COMPONENT)).unwrap();
+  let artifact_digest = ComponentArtifactDigest::parse(&sha256_hex(BAIDU_COMPONENT)).unwrap();
   let verified = Arc::new(
     runtime
       .compile_component(&package_digest, &artifact_digest, BAIDU_COMPONENT)

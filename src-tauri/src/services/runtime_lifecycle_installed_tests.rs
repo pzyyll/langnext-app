@@ -6,37 +6,25 @@ use crate::domain::cancel::CancelToken;
 use crate::domain::import_export::{
   ConfigurationExport, ImportConflictMode, IntegrationInstanceExport, parse_and_normalize_export_document,
 };
-use crate::domain::plugin_package::ApprovePluginPackageInput;
 use crate::domain::runtime_lifecycle::{
   ApplyRuntimeRollbackInput, ApplyRuntimeUpgradeInput, InstanceRuntimeState, RuntimeRequirementExport,
 };
-use crate::domain::runtime_plugin::{
-  FileRole, MANIFEST_FILE_PATH, PluginManifestV1, RuntimeDescriptor, RuntimeKind, SIGNATURE_FILE_PATH,
-};
+use crate::domain::runtime_plugin::{FileRole, HttpMethod};
 use crate::domain::service_capability::{DetectLanguageRequest, ExecutionContext, TranslateTextRequest};
-use crate::domain::service_integration::{
-  IntegrationCapabilityDescriptor, IntegrationHealthStatus, IntegrationInstance, ServiceIntegrationManifest,
-};
+use crate::domain::service_integration::{IntegrationHealthStatus, IntegrationInstance};
 use crate::domain::settings::AppSettingsV1;
 use crate::domain::time::{new_id, now_rfc3339};
 use crate::error::StorageError;
-use crate::repositories::{integration_instances, plugin_package_approvals, plugin_upgrade_snapshots};
+use crate::repositories::{integration_instances, plugin_upgrade_snapshots};
 use crate::services::import_validation::build_validated_plan;
-use crate::services::plugin_package::{hash_archive_bytes, public_sha256_hex};
-use crate::services::plugin_store::PluginPackageService;
+use crate::services::plugin_catalog::PluginCatalog;
 use crate::services::runtime_lifecycle::{RuntimeLifecycleService, UpgradeApplyFault};
 use crate::services::runtime_router::RuntimeRouter;
 use crate::services::service_capabilities::ServiceCapabilityService;
-use crate::services::service_integration_registry::ServiceIntegrationRegistry;
-use crate::services::token_grant::TokenGrantService;
-use crate::services::vendor_trust::VENDOR_PUBLISHER_KEY_ID;
-use crate::services::vendor_trust::test_vendor_fixture::{
-  fixture_vendor_fingerprint, fixture_vendor_public_key, fixture_vendor_signing_key,
+use crate::services::test_support::{
+  SyntheticPlugin, catalog_with_synthetic, registry_from_catalog, token_service, user_store, wasm_runtime,
 };
-use crate::services::wasm_runtime::WasmRuntime;
 use crate::storage::Database;
-use ed25519_dalek::Signer;
-use std::io::Write;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -57,62 +45,57 @@ const DETECT_PLUGIN_ID: &str = "langnext.conformance.detect";
 const TRANSLATE_CAP: &str = "translate.text@1";
 const DETECT_CAP: &str = "translate.detect@1";
 
-/// Minimal registry-backed manifest for a synthetic conformance plugin so bundled->Wasm upgrades
-/// have a verifiable source capability identity (the source major must be preserved by the target).
-fn conformance_manifest(plugin_id: &str, capability_id: &str) -> ServiceIntegrationManifest {
-  ServiceIntegrationManifest {
-    manifest_version: 1,
-    plugin_api_version: "1.0".into(),
-    id: plugin_id.into(),
-    version: "1.0.0".into(),
-    display_name_key: "conformance".into(),
-    min_host_version: "0.1.0".into(),
-    config_schema_version: 1,
-    credential_slots: vec![],
-    endpoints: vec![],
-    capabilities: vec![IntegrationCapabilityDescriptor {
-      id: capability_id.into(),
-      preferences_schema_version: 1,
-      endpoint_aliases: vec![],
-    }],
-  }
-}
-
 fn setup() -> (
   tempfile::TempDir,
   Database,
-  PluginPackageService,
+  Arc<PluginCatalog>,
   RuntimeLifecycleService,
   ServiceCapabilityService,
 ) {
   let dir = tempfile::tempdir().unwrap();
   let db = Database::new(dir.path()).unwrap();
   db.initialize().unwrap();
-  let packages =
-    PluginPackageService::with_vendor_roots(db.clone(), dir.path().to_path_buf(), vec![fixture_vendor_public_key()]);
-  let mut registry = ServiceIntegrationRegistry::empty();
-  registry.register_test_manifest(conformance_manifest(TRANSLATE_PLUGIN_ID, TRANSLATE_CAP));
-  registry.register_test_manifest(conformance_manifest(DETECT_PLUGIN_ID, DETECT_CAP));
-  let registry = Arc::new(registry);
-  let wasm = Arc::new(WasmRuntime::new().unwrap());
-  // Minimal token service for cache eviction wiring (no vault needed for empty grants).
-  let tokens = Arc::new(
-    TokenGrantService::new(vec![Arc::new(
-      crate::services::google_service_account::GoogleServiceAccountExchanger::new(
-        db.clone(),
-        Arc::new(crate::credentials::MemoryCredentialVault::default()),
+  // Both conformance plugins are built-in catalog content at their base version.
+  let catalog = catalog_with_synthetic(
+    db.clone(),
+    dir.path(),
+    &[],
+    &[
+      conformance_fixture(
+        TRANSLATE_PLUGIN_ID,
+        "1.0.0",
+        TRANSLATE_WASM,
+        "artifacts/plugin.wasm",
+        &[TRANSLATE_CAP],
+        None,
+        true,
       ),
-    )])
-    .unwrap(),
+      conformance_fixture(
+        DETECT_PLUGIN_ID,
+        "1.0.0",
+        DETECT_WASM,
+        "artifacts/detect.wasm",
+        &[DETECT_CAP],
+        None,
+        false,
+      ),
+    ],
   );
+  let registry = registry_from_catalog(&catalog);
+  let wasm = wasm_runtime();
+  let tokens = token_service(&db, Arc::new(crate::credentials::MemoryCredentialVault::default()));
   let lifecycle =
-    RuntimeLifecycleService::new(db.clone(), packages.clone(), registry.clone()).with_runtime(wasm.clone(), tokens);
-  let router = RuntimeRouter::new(db.clone(), registry.clone(), packages.clone(), wasm.clone());
-  let caps = ServiceCapabilityService::new(db.clone(), registry).with_router(router, wasm);
-  (dir, db, packages, lifecycle, caps)
+    RuntimeLifecycleService::new(db.clone(), catalog.clone(), registry.clone()).with_runtime(wasm.clone(), tokens);
+  let router = RuntimeRouter::new(db.clone(), registry.clone(), catalog.clone(), wasm.clone());
+  let caps = ServiceCapabilityService::new(db.clone(), registry)
+    .with_catalog(catalog.clone())
+    .with_router(router, wasm);
+  (dir, db, catalog, lifecycle, caps)
 }
 
-fn build_signed_package(
+/// Build one conformance catalog fixture: runtime artifact, schemas, capability, endpoint
+/// authority, and an optional migration component.
+fn conformance_fixture(
   plugin_id: &str,
   version: &str,
   runtime_wasm: &[u8],
@@ -120,21 +103,7 @@ fn build_signed_package(
   capabilities: &[&str],
   extra_endpoint: Option<&str>,
   include_migration: bool,
-) -> (Vec<u8>, String) {
-  let mut network = vec![crate::domain::runtime_plugin::NetworkEndpointRequest {
-    id: "approved".into(),
-    origins: vec!["https://conformance.example".into()],
-    methods: vec![crate::domain::runtime_plugin::HttpMethod::Get],
-    instance_origin_config_field: None,
-  }];
-  if let Some(id) = extra_endpoint {
-    network.push(crate::domain::runtime_plugin::NetworkEndpointRequest {
-      id: id.into(),
-      origins: vec!["https://conformance.example".into()],
-      methods: vec![crate::domain::runtime_plugin::HttpMethod::Get],
-      instance_origin_config_field: None,
-    });
-  }
+) -> SyntheticPlugin {
   // Fixture declares host config_schema_version on the manifest (not package semver, not dialect).
   let config_schema_version: u32 = version
     .split('.')
@@ -143,167 +112,35 @@ fn build_signed_package(
     .filter(|v| *v > 0)
     .unwrap_or(1);
   // PluginSchemaV1.version is the dialect (always 1); migration revision lives on the manifest.
-  // Real fields so normalize_config is always exercised for empty/non-empty payloads.
   let schema_json = if config_schema_version >= 2 {
     r#"{"version":1,"fields":[{"id":"mode","control":{"kind":"string","spec":{}}},{"id":"title","control":{"kind":"string","spec":{}}}],"groups":[]}"#
   } else {
     r#"{"version":1,"fields":[{"id":"mode","control":{"kind":"string","spec":{}}},{"id":"label","control":{"kind":"string","spec":{}}}],"groups":[]}"#
   };
-  let schema_bytes = schema_json.as_bytes().to_vec();
   let prefs_json = if config_schema_version >= 2 {
     r#"{"version":1,"fields":[{"id":"title","control":{"kind":"string","spec":{}}},{"id":"language","control":{"kind":"string","spec":{}}},{"id":"confidence","control":{"kind":"number","spec":{"min":0,"max":1}}}],"groups":[]}"#
   } else {
     r#"{"version":1,"fields":[{"id":"label","control":{"kind":"string","spec":{}}},{"id":"language","control":{"kind":"string","spec":{}}},{"id":"confidence","control":{"kind":"number","spec":{"min":0,"max":1}}}],"groups":[]}"#
   };
-  let prefs_bytes = prefs_json.as_bytes().to_vec();
-  let files = vec![
-    crate::domain::runtime_plugin::PluginFileEntry {
-      path: runtime_path.into(),
-      role: FileRole::RuntimeArtifact,
-      bytes: runtime_wasm.len() as u64,
-      sha256: public_sha256_hex(runtime_wasm),
-    },
-    crate::domain::runtime_plugin::PluginFileEntry {
-      path: "schemas/config.json".into(),
-      role: FileRole::ConfigSchema,
-      bytes: schema_bytes.len() as u64,
-      sha256: public_sha256_hex(&schema_bytes),
-    },
-    crate::domain::runtime_plugin::PluginFileEntry {
-      path: "schemas/preferences.json".into(),
-      role: FileRole::PreferenceSchema,
-      bytes: prefs_bytes.len() as u64,
-      sha256: public_sha256_hex(&prefs_bytes),
-    },
-  ];
-  let zip_owned: Vec<(String, Vec<u8>)> = vec![
-    ("schemas/config.json".into(), schema_bytes),
-    ("schemas/preferences.json".into(), prefs_bytes),
-  ];
-  let mut zip_files: Vec<(&str, &[u8])> = vec![(runtime_path, runtime_wasm)];
+  let mut plugin = SyntheticPlugin::new(plugin_id, version, runtime_path, runtime_wasm)
+    .with_config_schema(schema_json, config_schema_version)
+    .with_network_endpoint("approved", &["https://conformance.example"], &[HttpMethod::Get])
+    .with_auth_policy("host.none.v1");
+  if let Some(id) = extra_endpoint {
+    plugin = plugin.with_network_endpoint(id, &["https://conformance.example"], &[HttpMethod::Get]);
+  }
+  for capability in capabilities {
+    plugin = plugin.with_capability_and_preferences(capability, prefs_json);
+  }
   if include_migration {
-    // files is immutable after build; push via rebuild below if needed.
+    plugin = plugin.add_file("artifacts/migration.wasm", FileRole::Other, MIGRATION_WASM);
   }
-  let mut files = files;
-  if include_migration {
-    files.push(crate::domain::runtime_plugin::PluginFileEntry {
-      path: "artifacts/migration.wasm".into(),
-      role: FileRole::Other,
-      bytes: MIGRATION_WASM.len() as u64,
-      sha256: public_sha256_hex(MIGRATION_WASM),
-    });
-    zip_files.push(("artifacts/migration.wasm", MIGRATION_WASM));
-  }
-  let manifest = PluginManifestV1 {
-    manifest_version: 1,
-    plugin_api_version: "1.0".into(),
-    id: plugin_id.into(),
-    version: version.into(),
-    publisher: crate::domain::runtime_plugin::PublisherDeclaration {
-      key_id: VENDOR_PUBLISHER_KEY_ID.into(),
-      key_fingerprint: fixture_vendor_fingerprint(),
-    },
-    runtime: RuntimeDescriptor {
-      kind: RuntimeKind::WasmComponent,
-      artifact: Some(runtime_path.into()),
-      native_protocol_version: None,
-      native_dependencies: None,
-    },
-    targets: vec![],
-    files,
-    capabilities: capabilities
-      .iter()
-      .map(|id| crate::domain::runtime_plugin::CapabilityDeclaration {
-        id: (*id).into(),
-        preferences_schema: Some("schemas/preferences.json".into()),
-        artifact: None,
-      })
-      .collect(),
-    configuration_schema: Some("schemas/config.json".into()),
-    config_schema_version: Some(config_schema_version),
-    credential_slots: vec![],
-    permissions: crate::domain::runtime_plugin::PermissionRequests {
-      network,
-      auth_policies: vec!["host.none.v1".into()],
-    },
-    ui: Default::default(),
-    path_authority: vec![],
-    provider_runtime: None,
-    model_resources: None,
-  };
-  let sk = fixture_vendor_signing_key();
-  let manifest_bytes = serde_json::to_vec(&manifest).unwrap();
-  let signature = sk.sign(&manifest_bytes).to_bytes().to_vec();
-  let mut cursor = std::io::Cursor::new(Vec::new());
-  {
-    let mut zip = zip::ZipWriter::new(&mut cursor);
-    let options = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
-    zip.start_file(MANIFEST_FILE_PATH, options).unwrap();
-    zip.write_all(&manifest_bytes).unwrap();
-    for (path, bytes) in zip_files {
-      zip.start_file(path, options).unwrap();
-      zip.write_all(bytes).unwrap();
-    }
-    for (path, bytes) in &zip_owned {
-      zip.start_file(path.as_str(), options).unwrap();
-      zip.write_all(bytes).unwrap();
-    }
-    zip.start_file(SIGNATURE_FILE_PATH, options).unwrap();
-    zip.write_all(&signature).unwrap();
-    zip.finish().unwrap();
-  }
-  let pkg = cursor.into_inner();
-  let digest = hash_archive_bytes(&pkg);
-  (pkg, digest)
+  plugin
 }
 
-fn strip_signature_for_unsigned_fixture(signed: &[u8]) -> Vec<u8> {
-  let mut archive = zip::ZipArchive::new(std::io::Cursor::new(signed)).unwrap();
-  let mut entries = Vec::new();
-  for index in 0..archive.len() {
-    let mut file = archive.by_index(index).unwrap();
-    if file.name() == SIGNATURE_FILE_PATH {
-      continue;
-    }
-    let name = file.name().to_string();
-    let mut bytes = Vec::new();
-    std::io::Read::read_to_end(&mut file, &mut bytes).unwrap();
-    entries.push((name, bytes));
-  }
-  let mut cursor = std::io::Cursor::new(Vec::new());
-  {
-    let mut output = zip::ZipWriter::new(&mut cursor);
-    let options = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
-    for (name, bytes) in entries {
-      output.start_file(name, options).unwrap();
-      output.write_all(&bytes).unwrap();
-    }
-    output.finish().unwrap();
-  }
-  cursor.into_inner()
-}
-
-fn install_package(packages: &PluginPackageService, dir: &std::path::Path, bytes: &[u8], set_default: bool) -> String {
-  let src = dir.join(format!("{}.lnplugin", new_id()));
-  std::fs::write(&src, bytes).unwrap();
-  let preview = packages.preview_package(&src).unwrap();
-  let result = packages
-    .approve_package(ApprovePluginPackageInput {
-      preview_id: preview.preview_id,
-      approve_publisher: false,
-      publisher_public_key_hex: None,
-      acknowledge_permissions: true,
-      acknowledge_unsigned_package_risk: preview.requires_unsigned_risk_acknowledgement,
-      acknowledge_native_execution_risk: false,
-    })
-    .unwrap();
-  let digest = result.version.package_digest;
-  if set_default {
-    packages
-      .set_default(&result.version.plugin_id, &digest)
-      .expect("test helper may set default only after install");
-  }
-  digest
+/// Publish one fixture as built-in catalog content and return its content digest.
+fn publish_fixture(catalog: &PluginCatalog, plugin: &SyntheticPlugin) -> String {
+  plugin.publish(catalog)
 }
 
 fn seed_instance(db: &Database, plugin_id: &str, plugin_version: &str, config_json: &str, schema: u32) -> Uuid {
@@ -364,8 +201,8 @@ fn block_on<T>(fut: impl std::future::Future<Output = T>) -> T {
 
 #[test]
 fn runtime_upgrade_apply_failure_injection_leaves_source_unchanged() {
-  let (dir, db, packages, lifecycle, _caps) = setup();
-  let (pkg_a, digest_a) = build_signed_package(
+  let (_dir, db, catalog, lifecycle, _caps) = setup();
+  let pkg_a = conformance_fixture(
     TRANSLATE_PLUGIN_ID,
     "1.0.0",
     TRANSLATE_WASM,
@@ -374,7 +211,7 @@ fn runtime_upgrade_apply_failure_injection_leaves_source_unchanged() {
     None,
     true,
   );
-  let (pkg_b, digest_b) = build_signed_package(
+  let pkg_b = conformance_fixture(
     TRANSLATE_PLUGIN_ID,
     "2.0.0",
     TRANSLATE_WASM,
@@ -383,8 +220,8 @@ fn runtime_upgrade_apply_failure_injection_leaves_source_unchanged() {
     Some("slow"),
     true,
   );
-  install_package(&packages, dir.path(), &pkg_a, true);
-  install_package(&packages, dir.path(), &pkg_b, false);
+  let digest_a = publish_fixture(&catalog, &pkg_a);
+  let digest_b = publish_fixture(&catalog, &pkg_b);
   let id = seed_instance(
     &db,
     TRANSLATE_PLUGIN_ID,
@@ -424,8 +261,8 @@ fn runtime_upgrade_apply_failure_injection_leaves_source_unchanged() {
 
 #[test]
 fn unsigned_integration_upgrade_apply_and_rollback_revalidate_exact_digest() {
-  let (dir, db, packages, lifecycle, _caps) = setup();
-  let (signed, _) = build_signed_package(
+  let (_dir, db, catalog, lifecycle, _caps) = setup();
+  let fixture = conformance_fixture(
     TRANSLATE_PLUGIN_ID,
     "1.0.0",
     TRANSLATE_WASM,
@@ -434,8 +271,7 @@ fn unsigned_integration_upgrade_apply_and_rollback_revalidate_exact_digest() {
     None,
     true,
   );
-  let unsigned = strip_signature_for_unsigned_fixture(&signed);
-  let digest = install_package(&packages, dir.path(), &unsigned, false);
+  let digest = publish_fixture(&catalog, &fixture);
   let instance_id = seed_instance(
     &db,
     TRANSLATE_PLUGIN_ID,
@@ -449,8 +285,14 @@ fn unsigned_integration_upgrade_apply_and_rollback_revalidate_exact_digest() {
   assert_eq!(active.runtime_kind, "wasm-component");
 
   let preview = lifecycle.preview_upgrade(instance_id, &digest).unwrap();
-  db.transaction(|uow| plugin_package_approvals::delete_for_package(uow.conn(), &digest))
-    .unwrap();
+  // Content is immutable and digest-addressed: a snapshot that disappears from the catalog
+  // cannot be re-applied, and the active pin stays on the original digest.
+  let snapshot_dir = catalog
+    .snapshot(&digest)
+    .expect("pinned snapshot resolves")
+    .snapshot_dir;
+  assert!(snapshot_dir.is_dir());
+  std::fs::remove_dir_all(&snapshot_dir).unwrap();
   assert!(
     lifecycle
       .apply_upgrade(ApplyRuntimeUpgradeInput {
@@ -458,7 +300,7 @@ fn unsigned_integration_upgrade_apply_and_rollback_revalidate_exact_digest() {
         acknowledge_permissions: true,
       })
       .is_err(),
-    "final apply recheck must reject a removed exact-digest acknowledgement"
+    "final apply recheck must reject a snapshot that is no longer available"
   );
   let unchanged = db.read(|conn| integration_instances::get(conn, instance_id)).unwrap();
   assert_eq!(unchanged.package_digest.as_deref(), Some(digest.as_str()));
@@ -467,9 +309,9 @@ fn unsigned_integration_upgrade_apply_and_rollback_revalidate_exact_digest() {
 
 #[test]
 fn runtime_compatible_migration_translate_detect_upgrade_rollback_uninstall() {
-  let (dir, db, packages, lifecycle, caps) = setup();
+  let (_dir, db, catalog, lifecycle, caps) = setup();
   // Translate lifecycle packages: v1 → v2 (compatible migration + expanded permission).
-  let (pkg_v1, digest_v1) = build_signed_package(
+  let pkg_v1 = conformance_fixture(
     TRANSLATE_PLUGIN_ID,
     "1.0.0",
     TRANSLATE_WASM,
@@ -478,7 +320,7 @@ fn runtime_compatible_migration_translate_detect_upgrade_rollback_uninstall() {
     None,
     true,
   );
-  let (pkg_v2, digest_v2) = build_signed_package(
+  let pkg_v2 = conformance_fixture(
     TRANSLATE_PLUGIN_ID,
     "2.0.0",
     TRANSLATE_WASM,
@@ -487,7 +329,7 @@ fn runtime_compatible_migration_translate_detect_upgrade_rollback_uninstall() {
     Some("slow"),
     true,
   );
-  let (pkg_bad, digest_bad) = build_signed_package(
+  let pkg_bad = conformance_fixture(
     TRANSLATE_PLUGIN_ID,
     "9.0.0",
     TRANSLATE_WASM,
@@ -497,7 +339,7 @@ fn runtime_compatible_migration_translate_detect_upgrade_rollback_uninstall() {
     true,
   );
   // Detect package for typed Detect through the same router.
-  let (pkg_detect, digest_detect) = build_signed_package(
+  let pkg_detect = conformance_fixture(
     DETECT_PLUGIN_ID,
     "1.0.0",
     DETECT_WASM,
@@ -506,10 +348,10 @@ fn runtime_compatible_migration_translate_detect_upgrade_rollback_uninstall() {
     None,
     false,
   );
-  install_package(&packages, dir.path(), &pkg_v1, true);
-  install_package(&packages, dir.path(), &pkg_v2, false);
-  install_package(&packages, dir.path(), &pkg_bad, false);
-  install_package(&packages, dir.path(), &pkg_detect, true);
+  let digest_v1 = publish_fixture(&catalog, &pkg_v1);
+  let digest_v2 = publish_fixture(&catalog, &pkg_v2);
+  let digest_bad = publish_fixture(&catalog, &pkg_bad);
+  let digest_detect = publish_fixture(&catalog, &pkg_detect);
 
   let translate_id = seed_instance(
     &db,
@@ -767,9 +609,26 @@ fn runtime_compatible_migration_translate_detect_upgrade_rollback_uninstall() {
   assert_eq!(restored.config_json, before.config_json);
   assert_eq!(restored.config_schema_version, before.config_schema_version);
 
-  // Dependency-safe uninstall while pinned.
-  let err = packages.uninstall_version(&digest_v1).unwrap_err();
-  assert!(matches!(err, StorageError::InUse(_)));
+  // Dependency-safe removal: a user archive pinned by an instance cannot be removed.
+  let store = user_store(db.clone(), _dir.path());
+  let user_plugin_id = "com.example.user-conformance";
+  let user_archive = conformance_fixture(
+    user_plugin_id,
+    "1.0.0",
+    TRANSLATE_WASM,
+    "artifacts/plugin.wasm",
+    &[TRANSLATE_CAP],
+    None,
+    true,
+  )
+  .archive_in(_dir.path(), "user-conformance");
+  let user_digest = crate::services::test_support::install_user_archive(&store, &user_archive);
+  // The public install command refreshes the catalog after the store write.
+  catalog.refresh().expect("catalog refresh after user install");
+  let user_instance = seed_instance(&db, user_plugin_id, "1.0.0", r#"{"mode":"success"}"#, 1);
+  activate(&lifecycle, user_instance, &user_digest, true).unwrap();
+  let err = store.remove_user_archive(&user_digest).unwrap_err();
+  assert!(matches!(err, StorageError::InUse(_)), "{err:?}");
 }
 
 #[test]
@@ -784,13 +643,9 @@ fn runtime_plugin_export_v8_missing_package_restores_unresolved_exact_requiremen
     plugin_version: "1.0.0".into(),
     runtime_kind: "wasm-component".into(),
     package_digest: Some(digest.clone()),
-    publisher_key_id: Some(VENDOR_PUBLISHER_KEY_ID.into()),
-    publisher_key_fingerprint: Some(fixture_vendor_fingerprint()),
     plugin_api_version: Some("1.0".into()),
     config_schema_version: 1,
     required_capability_majors: vec![TRANSLATE_CAP.into()],
-    provider_runtime_kind: None,
-    provider_package_digest: None,
   };
   let doc = ConfigurationExport {
     format_version: 8,
@@ -820,24 +675,25 @@ fn runtime_plugin_export_v8_missing_package_restores_unresolved_exact_requiremen
   };
   let normalized = parse_and_normalize_export_document(serde_json::to_value(&doc).unwrap()).unwrap();
   let plan = db
-    .read(|conn| build_validated_plan(conn, &normalized, ImportConflictMode::Merge, None))
+    .read(|conn| build_validated_plan(conn, &normalized, ImportConflictMode::Merge, None, None))
     .unwrap();
   assert!(plan.preview.valid, "{:?}", plan.preview.validation_errors);
   let row = &plan.integrations[0];
   assert_eq!(row.runtime_kind, "wasm-component");
-  assert_eq!(row.package_digest.as_deref(), Some(digest.as_str()));
+  // Import never installs content: no pin is written, the exact digest stays in the requirement.
+  assert!(row.package_digest.is_none());
   assert!(row.execution_grant_set_revision.is_none());
   assert_eq!(row.runtime_state, "unavailable");
-  let stored: RuntimeRequirementExport =
+  let requirement: RuntimeRequirementExport =
     serde_json::from_str(row.runtime_requirement_json.as_deref().unwrap()).unwrap();
-  assert_eq!(stored.publisher_key_fingerprint, req.publisher_key_fingerprint);
-  assert_eq!(stored.required_capability_majors, req.required_capability_majors);
+  assert_eq!(requirement.package_digest.as_deref(), Some(digest.as_str()));
+  assert_eq!(requirement.required_capability_majors, req.required_capability_majors);
 }
 
 #[test]
 fn runtime_rollback_stale_preview_and_missing_snapshot_fail_closed() {
-  let (dir, db, packages, lifecycle, _) = setup();
-  let (pkg_a, digest_a) = build_signed_package(
+  let (_dir, db, catalog, lifecycle, _) = setup();
+  let pkg_a = conformance_fixture(
     TRANSLATE_PLUGIN_ID,
     "1.0.0",
     TRANSLATE_WASM,
@@ -846,7 +702,7 @@ fn runtime_rollback_stale_preview_and_missing_snapshot_fail_closed() {
     None,
     true,
   );
-  let (pkg_b, digest_b) = build_signed_package(
+  let pkg_b = conformance_fixture(
     TRANSLATE_PLUGIN_ID,
     "2.0.0",
     TRANSLATE_WASM,
@@ -855,8 +711,8 @@ fn runtime_rollback_stale_preview_and_missing_snapshot_fail_closed() {
     Some("slow"),
     true,
   );
-  install_package(&packages, dir.path(), &pkg_a, true);
-  install_package(&packages, dir.path(), &pkg_b, false);
+  let digest_a = publish_fixture(&catalog, &pkg_a);
+  let digest_b = publish_fixture(&catalog, &pkg_b);
   let id = seed_instance(&db, TRANSLATE_PLUGIN_ID, "1.0.0", r#"{"mode":"success"}"#, 1);
   activate(&lifecycle, id, &digest_a, true).unwrap();
   let preview = lifecycle.preview_upgrade(id, &digest_b).unwrap();
@@ -890,8 +746,8 @@ fn runtime_rollback_stale_preview_and_missing_snapshot_fail_closed() {
 
 #[test]
 fn runtime_router_selects_wasm_adapter_for_active_pin() {
-  let (dir, db, packages, lifecycle, caps) = setup();
-  let (pkg_a, digest_a) = build_signed_package(
+  let (_dir, db, catalog, lifecycle, caps) = setup();
+  let pkg_a = conformance_fixture(
     TRANSLATE_PLUGIN_ID,
     "1.0.0",
     TRANSLATE_WASM,
@@ -900,7 +756,7 @@ fn runtime_router_selects_wasm_adapter_for_active_pin() {
     None,
     true,
   );
-  install_package(&packages, dir.path(), &pkg_a, true);
+  let digest_a = publish_fixture(&catalog, &pkg_a);
   let id = seed_instance(&db, TRANSLATE_PLUGIN_ID, "1.0.0", r#"{"mode":"success"}"#, 1);
   activate(&lifecycle, id, &digest_a, true).unwrap();
   let _ = caps.resolve_translate(id, TRANSLATE_CAP, b"{}".to_vec()).unwrap();
@@ -936,8 +792,8 @@ fn runtime_router_selects_wasm_adapter_for_active_pin() {
 
 #[test]
 fn runtime_discard_snapshot_and_migration_trap_no_mutation() {
-  let (dir, db, packages, lifecycle, _) = setup();
-  let (pkg_a, digest_a) = build_signed_package(
+  let (_dir, db, catalog, lifecycle, _) = setup();
+  let pkg_a = conformance_fixture(
     TRANSLATE_PLUGIN_ID,
     "1.0.0",
     TRANSLATE_WASM,
@@ -946,7 +802,7 @@ fn runtime_discard_snapshot_and_migration_trap_no_mutation() {
     None,
     true,
   );
-  let (pkg_b, digest_b) = build_signed_package(
+  let pkg_b = conformance_fixture(
     TRANSLATE_PLUGIN_ID,
     "2.0.0",
     TRANSLATE_WASM,
@@ -955,8 +811,8 @@ fn runtime_discard_snapshot_and_migration_trap_no_mutation() {
     Some("slow"),
     true,
   );
-  install_package(&packages, dir.path(), &pkg_a, true);
-  install_package(&packages, dir.path(), &pkg_b, false);
+  let digest_a = publish_fixture(&catalog, &pkg_a);
+  let digest_b = publish_fixture(&catalog, &pkg_b);
   let id = seed_instance(&db, TRANSLATE_PLUGIN_ID, "1.0.0", r#"{"mode":"success"}"#, 1);
   activate(&lifecycle, id, &digest_a, true).unwrap();
   let preview = lifecycle.preview_upgrade(id, &digest_b).unwrap();
@@ -1012,9 +868,9 @@ fn runtime_discard_snapshot_and_migration_trap_no_mutation() {
 
 #[test]
 fn runtime_upgrade_preview_fails_closed_when_source_package_version_missing() {
-  let (dir, db, packages, lifecycle, _caps) = setup();
+  let (_dir, db, catalog, lifecycle, _caps) = setup();
   // Real target package (the upgrade candidate).
-  let (pkg_target, digest_target) = build_signed_package(
+  let pkg_target = conformance_fixture(
     TRANSLATE_PLUGIN_ID,
     "2.0.0",
     TRANSLATE_WASM,
@@ -1023,7 +879,7 @@ fn runtime_upgrade_preview_fails_closed_when_source_package_version_missing() {
     None,
     true,
   );
-  install_package(&packages, dir.path(), &pkg_target, false);
+  let digest_target = publish_fixture(&catalog, &pkg_target);
   // Instance pinned to a digest whose installed version row is missing (corruption / uninstall).
   // source_capability_majors must fail closed instead of returning an empty set.
   let id = new_id();
@@ -1069,10 +925,10 @@ fn runtime_upgrade_preview_fails_closed_when_source_package_version_missing() {
 
 #[test]
 fn runtime_upgrade_preview_from_pending_missing_source_to_matching_package_succeeds() {
-  let (dir, db, packages, lifecycle, _caps) = setup();
+  let (_dir, db, catalog, lifecycle, _caps) = setup();
   // Target package for a plugin id that is NOT in the bundled registry.
   let missing_plugin_id = "langnext.conformance.missing";
-  let (pkg_target, digest_target) = build_signed_package(
+  let pkg_target = conformance_fixture(
     missing_plugin_id,
     "2.0.0",
     TRANSLATE_WASM,
@@ -1081,32 +937,8 @@ fn runtime_upgrade_preview_from_pending_missing_source_to_matching_package_succe
     None,
     true,
   );
-  install_package(&packages, dir.path(), &pkg_target, false);
+  let digest_target = publish_fixture(&catalog, &pkg_target);
   let id = seed_instance(&db, missing_plugin_id, "1.0.0", r#"{"mode":"success"}"#, 1);
   let preview = lifecycle.preview_upgrade(id, &digest_target).unwrap();
   assert_eq!(preview.target.package_digest.as_deref(), Some(digest_target.as_str()));
-}
-
-#[test]
-fn pin_default_skips_non_google_web_plugin_without_auto_activating() {
-  let (dir, db, packages, lifecycle, _caps) = setup();
-  // A non-Google-Web plugin set as its catalog default must never be auto-pinned/acknowledged.
-  let (pkg, _digest) = build_signed_package(
-    TRANSLATE_PLUGIN_ID,
-    "1.0.0",
-    TRANSLATE_WASM,
-    "artifacts/plugin.wasm",
-    &[TRANSLATE_CAP],
-    None,
-    true,
-  );
-  install_package(&packages, dir.path(), &pkg, true);
-  let id = seed_instance(&db, TRANSLATE_PLUGIN_ID, "1.0.0", r#"{"mode":"success"}"#, 1);
-  let before = db.read(|conn| integration_instances::get(conn, id)).unwrap();
-  lifecycle.pin_default_package_for_new_instance(id).unwrap();
-  let after = db.read(|conn| integration_instances::get(conn, id)).unwrap();
-  assert_eq!(after.runtime_kind, "wasm-component");
-  assert_eq!(after.package_digest, before.package_digest);
-  assert!(after.execution_grant_set_revision.is_none());
-  assert_eq!(after.runtime_state, "pending_activation");
 }

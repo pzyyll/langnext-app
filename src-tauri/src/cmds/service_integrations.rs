@@ -60,16 +60,7 @@ pub async fn save_integration_instance(
   let result = run_blocking("save_integration_instance", move || services.save(input)).await?;
   emit_data_changed(&app, SERVICE_INTEGRATIONS_CHANGED);
 
-  // Package-first creates return durable pending state first; activation runs after the response.
-  if result.runtime_state == "pending_activation" && result.package_digest.is_some() {
-    crate::cmds::default_package_activation::schedule_default_runtime_activation(
-      app.clone(),
-      state.default_package_activation.clone(),
-      crate::domain::runtime_lifecycle::GrantSubjectKind::IntegrationInstance,
-      result.id,
-    );
-  }
-
+  // The catalog default is the only default authority; save() already activated the instance.
   Ok(result)
 }
 
@@ -125,14 +116,7 @@ pub async fn validate_integration_instance(
 #[cfg(test)]
 mod tests {
   #[test]
-  fn package_first_activation_is_scheduled_after_durable_create() {
-    // save_integration_instance schedules default activation then emits subject + package channels.
-    assert_eq!(
-      crate::cmds::default_package_activation::subject_data_change_event(
-        crate::domain::runtime_lifecycle::GrantSubjectKind::IntegrationInstance,
-      ),
-      crate::events::SERVICE_INTEGRATIONS_CHANGED
-    );
+  fn catalog_default_activation_uses_subject_change_channel() {
     assert_eq!(
       crate::events::SERVICE_INTEGRATIONS_CHANGED,
       "data://service-integrations-changed"

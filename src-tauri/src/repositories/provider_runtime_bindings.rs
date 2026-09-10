@@ -165,7 +165,7 @@ pub fn update(conn: &Connection, binding: &ProviderRuntimeBinding) -> Result<(),
   Ok(())
 }
 
-/// Exact CAS for authority confirmation / package-first activation of a provider binding.
+/// Exact CAS for package-first activation of a provider binding.
 ///
 /// Matches provider ID, adapter ID, package digest, current state, no grant, and update token.
 /// Fails closed when any expected binding field has changed.
@@ -282,8 +282,6 @@ pub struct ProviderRuntimeSnapshotSet {
   pub grant_set_id: Option<Uuid>,
   pub plugin_id: String,
   pub plugin_version: String,
-  pub publisher_key_id: Option<String>,
-  pub publisher_fingerprint: Option<String>,
   pub plugin_api_version: Option<String>,
   pub capability_ids_json: String,
   pub updated_at: String,
@@ -364,8 +362,6 @@ fn map_snapshot_set_row(row: &Row<'_>) -> Result<ProviderRuntimeSnapshotSet, rus
       .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?,
     plugin_id: row.get("plugin_id")?,
     plugin_version: row.get("plugin_version")?,
-    publisher_key_id: row.get("publisher_key_id")?,
-    publisher_fingerprint: row.get("publisher_fingerprint")?,
     plugin_api_version: row.get("plugin_api_version")?,
     capability_ids_json: row.get("capability_ids_json")?,
     updated_at: row.get("updated_at")?,
@@ -413,9 +409,8 @@ pub fn insert_snapshot_set(conn: &Connection, set: &ProviderRuntimeSnapshotSet) 
       "INSERT INTO provider_runtime_snapshot_sets (
         id, provider_id, scope, created_at, discarded_at, runtime_kind, package_digest,
         grant_set_revision, grant_set_id, plugin_id, plugin_version,
-        publisher_key_id, publisher_fingerprint, plugin_api_version,
-        capability_ids_json, updated_at
-      ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
+        plugin_api_version, capability_ids_json, updated_at
+      ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
       params![
         set.id.to_string(),
         set.provider_id.to_string(),
@@ -428,8 +423,6 @@ pub fn insert_snapshot_set(conn: &Connection, set: &ProviderRuntimeSnapshotSet) 
         set.grant_set_id.map(|id| id.to_string()),
         set.plugin_id,
         set.plugin_version,
-        set.publisher_key_id,
-        set.publisher_fingerprint,
         set.plugin_api_version,
         set.capability_ids_json,
         set.updated_at,

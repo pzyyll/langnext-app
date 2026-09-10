@@ -484,6 +484,7 @@ fn resolve_error_to_detect(err: ResolveError, latency_ms: u64, token: &CancelTok
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::domain::runtime_plugin::PluginManifestV1;
   use crate::domain::service_capability::{DetectLanguageResponse, TranslateTextResponse};
   use crate::domain::service_integration::{
     GOOGLE_CLOUD_DEFAULT_LOCATION, GOOGLE_CLOUD_PLUGIN_ID, GoogleCloudConfigV1, IntegrationHealthStatus,
@@ -630,37 +631,14 @@ mod tests {
   const CONFORMANCE_PLUGIN_ID: &str = "langnext.conformance";
   const CONFORMANCE_TRANSLATE_CAP: &str = "translate.text@1";
 
-  /// Registry-backed translate capability identity for the synthetic conformance package.
-  fn conformance_manifest() -> crate::domain::service_integration::ServiceIntegrationManifest {
-    use crate::domain::service_integration::IntegrationCapabilityDescriptor;
-    crate::domain::service_integration::ServiceIntegrationManifest {
-      manifest_version: 1,
-      plugin_api_version: "1.0".into(),
-      id: CONFORMANCE_PLUGIN_ID.into(),
-      version: "1.0.0".into(),
-      display_name_key: "conformance".into(),
-      min_host_version: "0.1.0".into(),
-      config_schema_version: 1,
-      credential_slots: vec![],
-      endpoints: vec![],
-      capabilities: vec![IntegrationCapabilityDescriptor {
-        id: CONFORMANCE_TRANSLATE_CAP.into(),
-        preferences_schema_version: 1,
-        endpoint_aliases: vec![],
-      }],
-    }
-  }
-
-  /// Vendor-signed conformance translate package whose guest honors config `mode`
+  /// Conformance translate catalog fixture whose guest honors config `mode`
   /// (`success` translates, `slow-host-call`/`cancellation` exercise broker paths elsewhere).
-  fn conformance_package() -> (Vec<u8>, String) {
+  fn conformance_package() -> (PluginManifestV1, Vec<(String, Vec<u8>)>) {
+    use crate::domain::plugin_catalog::sha256_hex;
     use crate::domain::runtime_plugin::{
       CapabilityDeclaration, FileRole, NetworkEndpointRequest, PermissionRequests, PluginFileEntry, PluginManifestV1,
-      PublisherDeclaration, RuntimeDescriptor, RuntimeKind,
+      RuntimeDescriptor, RuntimeKind,
     };
-    use crate::services::plugin_package::test_support::build_signed_package_with_key;
-    use crate::services::plugin_package::{hash_archive_bytes, public_sha256_hex};
-    use crate::services::vendor_trust::test_vendor_fixture::{fixture_vendor_fingerprint, fixture_vendor_signing_key};
 
     let schema =
       br#"{"version":1,"fields":[{"id":"mode","control":{"kind":"string","spec":{"default":"success"}}}],"groups":[]}"#
@@ -672,10 +650,6 @@ mod tests {
       plugin_api_version: "1.0".into(),
       id: CONFORMANCE_PLUGIN_ID.into(),
       version: "1.0.0".into(),
-      publisher: PublisherDeclaration {
-        key_id: crate::services::vendor_trust::VENDOR_PUBLISHER_KEY_ID.into(),
-        key_fingerprint: fixture_vendor_fingerprint(),
-      },
       runtime: RuntimeDescriptor {
         kind: RuntimeKind::WasmComponent,
         artifact: Some("artifacts/plugin.wasm".into()),
@@ -688,19 +662,19 @@ mod tests {
           path: "artifacts/plugin.wasm".into(),
           role: FileRole::RuntimeArtifact,
           bytes: wasm.len() as u64,
-          sha256: public_sha256_hex(wasm),
+          sha256: sha256_hex(wasm),
         },
         PluginFileEntry {
           path: "schemas/config.json".into(),
           role: FileRole::ConfigSchema,
           bytes: schema.len() as u64,
-          sha256: public_sha256_hex(&schema),
+          sha256: sha256_hex(&schema),
         },
         PluginFileEntry {
           path: "schemas/preferences.json".into(),
           role: FileRole::PreferenceSchema,
           bytes: prefs.len() as u64,
-          sha256: public_sha256_hex(&prefs),
+          sha256: sha256_hex(&prefs),
         },
       ],
       capabilities: vec![CapabilityDeclaration {
@@ -725,14 +699,12 @@ mod tests {
       provider_runtime: None,
       model_resources: None,
     };
-    let payloads: Vec<(&str, &[u8])> = vec![
-      ("artifacts/plugin.wasm", wasm),
-      ("schemas/config.json", &schema),
-      ("schemas/preferences.json", &prefs),
+    let payloads = vec![
+      ("artifacts/plugin.wasm".to_string(), wasm.to_vec()),
+      ("schemas/config.json".to_string(), schema.clone()),
+      ("schemas/preferences.json".to_string(), prefs.clone()),
     ];
-    let package = build_signed_package_with_key(&manifest, &payloads, &fixture_vendor_signing_key());
-    let digest = hash_archive_bytes(&package);
-    (package, digest)
+    (manifest, payloads)
   }
 
   /// Install + activate the conformance package for one seeded instance and return the
@@ -745,12 +717,14 @@ mod tests {
     let dir = tempfile::tempdir().unwrap();
     let db = Database::new(dir.path()).unwrap();
     db.initialize().unwrap();
-    let packages = crate::services::test_support::vendor_packages(db.clone(), dir.path());
-    let (pkg, digest) = conformance_package();
-    crate::services::test_support::bootstrap_package(&packages, &pkg);
-    let mut registry = ServiceIntegrationRegistry::empty();
-    registry.register_test_manifest(conformance_manifest());
-    let registry = Arc::new(registry);
+    let catalog = crate::services::test_support::catalog_with_manifest_fixtures(
+      db.clone(),
+      dir.path(),
+      &[],
+      &[conformance_package()],
+    );
+    let digest = crate::services::test_support::fixture_digest(&catalog, CONFORMANCE_PLUGIN_ID);
+    let registry = crate::services::test_support::registry_from_catalog(&catalog);
     let wasm = Arc::new(crate::services::wasm_runtime::WasmRuntime::new().unwrap());
     let tokens = Arc::new(
       TokenGrantService::new(vec![Arc::new(
@@ -762,7 +736,7 @@ mod tests {
       .unwrap(),
     );
     let lifecycle =
-      RuntimeLifecycleService::new(db.clone(), packages.clone(), registry.clone()).with_runtime(wasm.clone(), tokens);
+      RuntimeLifecycleService::new(db.clone(), catalog.clone(), registry.clone()).with_runtime(wasm.clone(), tokens);
 
     let instance_id = new_id();
     let profile_id = new_id();
@@ -838,9 +812,10 @@ mod tests {
     let broker_transport = transport.clone();
     let broker_factory: Arc<dyn Fn() -> Box<dyn BrokerHandle> + Send + Sync> =
       Arc::new(move || Box::new(NetworkBrokerHandle::new(broker_transport.clone())));
-    let router = RuntimeRouter::new(db.clone(), registry.clone(), packages, wasm.clone());
+    let router = RuntimeRouter::new(db.clone(), registry.clone(), catalog.clone(), wasm.clone());
     let caps = Arc::new(
       ServiceCapabilityService::new(db.clone(), registry)
+        .with_catalog(catalog)
         .with_router(router, wasm.clone())
         .with_broker_factory(broker_factory),
     );
@@ -933,15 +908,15 @@ mod tests {
       timeout: AtomicBool::new(false),
     });
     let _ = register_handlers;
-    let packages = crate::services::plugin_store::PluginPackageService::with_vendor_roots(
-      db.clone(),
-      dir.path().to_path_buf(),
-      vec![],
-    );
+    let catalog = crate::services::test_support::catalog_with_builtins(db.clone(), dir.path(), &[]);
     let wasm = Arc::new(crate::services::wasm_runtime::WasmRuntime::new().unwrap());
     let router =
-      crate::services::runtime_router::RuntimeRouter::new(db.clone(), registry.clone(), packages, wasm.clone());
-    let caps = Arc::new(ServiceCapabilityService::new(db.clone(), registry).with_router(router, wasm));
+      crate::services::runtime_router::RuntimeRouter::new(db.clone(), registry.clone(), catalog.clone(), wasm.clone());
+    let caps = Arc::new(
+      ServiceCapabilityService::new(db.clone(), registry)
+        .with_catalog(catalog)
+        .with_router(router, wasm),
+    );
     Fixture {
       db,
       profile_id,

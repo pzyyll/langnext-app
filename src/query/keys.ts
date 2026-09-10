@@ -52,11 +52,10 @@ export const settingsKeys = {
   detail: () => [...settingsKeys.all, "detail"] as const,
 };
 
+/** Source-based plugin catalog snapshot; one entry per immutable content digest. */
 export const pluginPackageKeys = {
   all: ["plugin-packages"] as const,
-  versions: () => [...pluginPackageKeys.all, "versions"] as const,
-  publishers: () => [...pluginPackageKeys.all, "publishers"] as const,
-  dependencies: (packageDigest: string) => [...pluginPackageKeys.all, "dependencies", packageDigest] as const,
+  catalog: () => [...pluginPackageKeys.all, "catalog"] as const,
 };
 
 /** Runtime upgrade/rollback previews are ephemeral; mutations invalidate integration + package keys. */

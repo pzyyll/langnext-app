@@ -1,5 +1,5 @@
 // ABOUTME: Trusted-app IPC for plugin model resource status, download, and cancel.
-// ABOUTME: Download URLs/digests stay host-resolved from the signed package only.
+// ABOUTME: Download URLs/digests stay host-resolved from the package content only.
 use crate::cmds::runtime::run_blocking;
 use crate::domain::plugin_model::{
   CancelPluginModelDownloadInput, DownloadPluginModelInput, PluginModelDownloadProgress, PluginModelResourceDto,

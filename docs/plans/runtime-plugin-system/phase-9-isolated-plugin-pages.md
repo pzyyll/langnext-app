@@ -1,5 +1,7 @@
 # Phase 9: Isolated Plugin Pages Implementation Plan
 
+> **Superseded (2026-08-24):** plugin-level signing, publisher trust, vendor bootstrap, and default-activation orchestration were removed. See `docs/architecture/plugin-catalog.md`.
+
 **Goal:** Allow approved plugins to expose optional custom workflows in separately permissioned WebViews without importing plugin JavaScript into the main React realm.
 
 **Inputs:** Phases 0, 3, and 4 plus Tauri 2.11.5 capability, CSP, navigation, asset/protocol, and multi-window documentation.

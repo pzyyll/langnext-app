@@ -1,5 +1,5 @@
 // ABOUTME: Adapter option and transport identity derivation for provider/model UI.
-// ABOUTME: Installed signed package catalog metadata is the only adapter definition source.
+// ABOUTME: Installed package catalog metadata is the only adapter definition source.
 import type { AuthSchemeV1, BaseUrlSource, CredentialKind, ProviderRuntimeCatalogEntryDto } from "../../storage/types";
 
 export type AdapterOption = {
@@ -9,7 +9,7 @@ export type AdapterOption = {
 };
 
 /**
- * Adapter options derived from installed provider packages (package-only). Each signed
+ * Adapter options derived from installed provider packages (package-only). Each
  * catalog entry declares the adapter aliases (`legacy_aliases`) its verified manifest owns;
  * an alias with no installed package is never presented as a create option.
  */
@@ -37,7 +37,7 @@ export function listPackageAdapterOptions(
 
 /**
  * Adapter options for attached runtime interface bindings (multi-interface). Runtime-only
- * API types are labeled from the verified signed catalog metadata; an uninstalled or
+ * API types are labeled from the verified catalog metadata; an uninstalled or
  * inactive binding is never presented as an option here.
  */
 export function listRuntimeAdapterOptions(

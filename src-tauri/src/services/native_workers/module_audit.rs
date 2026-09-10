@@ -1,5 +1,5 @@
 // ABOUTME: Host-side module identity audit for native worker processes.
-// ABOUTME: Non-system modules must match locked signed runtime files; system modules stay under System32/API-set.
+// ABOUTME: Non-system modules must match locked package runtime files; system modules stay under System32/API-set.
 use crate::domain::native_worker::{NativeWorkerErrorCode, is_windows_system_or_api_set_module};
 use crate::domain::plugin_package::encode_lowercase_hex;
 use sha2::{Digest, Sha256};
@@ -36,7 +36,7 @@ pub struct LockedDirectory {
   _lock: std::fs::File,
 }
 
-/// Signed runtime set locked for one worker session.
+/// Package runtime set locked for one worker session.
 #[derive(Debug)]
 pub struct LockedRuntimeSet {
   pub runtime_dir: LockedDirectory,
@@ -57,7 +57,7 @@ pub struct LockedModelSet {
 }
 
 /// Open runtime files without following reparse points and without write/delete sharing.
-/// `worker_expected_sha` binds the executable identity to the signed package index.
+/// `worker_expected_sha` binds the executable identity to the package file index.
 pub fn lock_runtime_set(
   runtime_dir: &Path,
   worker_rel: &str,

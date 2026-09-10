@@ -71,7 +71,7 @@ rm -rf "$OUT"
 mkdir -p "$OUT"
 cp "$WORKER_SRC" "$OUT/worker.exe"
 
-# Copy runtime DLLs next to worker.exe for the signed package inventory.
+# Copy runtime DLLs next to worker.exe for the package file inventory.
 copy_if_exists() {
   local src="$1"
   if [[ -f "$src" ]]; then

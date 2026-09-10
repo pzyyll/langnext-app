@@ -1,5 +1,7 @@
 # Phase 0: Runtime Plugin Security and Contracts Implementation Plan
 
+> **Superseded (2026-08-24):** plugin-level signing, publisher trust, vendor bootstrap, and default-activation orchestration were removed. See `docs/architecture/plugin-catalog.md`.
+
 **Goal:** Establish the host authority, Tauri security baseline, package identity, permission, WIT, and schema contracts required before any runtime plugin code can execute.
 
 **Inputs:** `docs/analysis/runtime-plugin-architecture.md` and `docs/plans/runtime-plugin-system/README.md`.

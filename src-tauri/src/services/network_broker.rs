@@ -686,12 +686,13 @@ fn map_transport_error(err: StorageError) -> CapabilityError {
 mod tests {
   use super::*;
   use crate::domain::endpoint_trust::EndpointTrustPreviewInput;
+  use crate::domain::plugin_catalog::sha256_hex;
   use crate::domain::provider::ProxyMode;
   use crate::domain::provider_http::ProviderHttpStreamEvent;
   use crate::domain::runtime_plugin::HttpMethod;
   use crate::domain::runtime_plugin::{
     CapabilityDeclaration, FileRole, NetworkEndpointRequest, PermissionRequests, PluginFileEntry, PluginManifestV1,
-    PublisherDeclaration, RuntimeDescriptor, RuntimeKind,
+    RuntimeDescriptor, RuntimeKind,
   };
   use crate::domain::service_integration::EDGE_TTS_DEFAULT_BASE_URL;
   use crate::domain::service_integration::{
@@ -701,7 +702,7 @@ mod tests {
   use crate::domain::time::{new_id, now_rfc3339};
   use crate::repositories::{integration_credential_bindings, integration_endpoint_trusts};
   use crate::services::bounded_http::{ResolverBackedTestTransport, TestDnsLookupFn};
-  use crate::services::plugin_package::public_sha256_hex;
+  use crate::services::test_support::{catalog_with_manifest_fixtures, registry_from_catalog};
   use crate::services::token_grant::TokenGrant;
   use std::future::Future;
   use std::net::SocketAddr;
@@ -960,16 +961,13 @@ mod tests {
     "/../runtime-plugins/edge-tts/schemas/speech-preferences.json"
   ));
 
-  /// Build a vendor-signed google-cloud package carrying the exact broker authorities the
-  /// broker tests exercise. The committed production archive declares no path authority, so
-  /// the synthetic manifest is the package-derived source for this fixture.
-  fn synthetic_google_cloud_package() -> (Vec<u8>, String) {
+  /// Build a google-cloud catalog fixture carrying the exact broker authorities the broker
+  /// tests exercise. The committed production archive declares no path authority, so the
+  /// synthetic manifest is the package-derived source for this fixture.
+  fn synthetic_google_cloud_package() -> (PluginManifestV1, Vec<(String, Vec<u8>)>) {
     use crate::domain::runtime_plugin::{
       CapabilityPathAuthorityDecl, CredentialSlotDecl, CredentialSlotKindV1, DeclaredPathAuthority,
     };
-    use crate::services::plugin_package::hash_archive_bytes;
-    use crate::services::plugin_package::test_support::build_signed_package_with_key;
-    use crate::services::vendor_trust::test_vendor_fixture::{fixture_vendor_fingerprint, fixture_vendor_signing_key};
 
     let schema_bytes = GOOGLE_CLOUD_CONFIG_SCHEMA.as_bytes().to_vec();
     let translate_prefs = GOOGLE_CLOUD_TRANSLATE_PREFS.as_bytes().to_vec();
@@ -1014,10 +1012,6 @@ mod tests {
       plugin_api_version: "1.0".into(),
       id: GOOGLE_CLOUD_PLUGIN_ID.into(),
       version: "1.2.0".into(),
-      publisher: PublisherDeclaration {
-        key_id: crate::services::vendor_trust::VENDOR_PUBLISHER_KEY_ID.into(),
-        key_fingerprint: fixture_vendor_fingerprint(),
-      },
       runtime: RuntimeDescriptor {
         kind: RuntimeKind::WasmComponent,
         artifact: Some("translate/fixtures/langnext-google-cloud-translate.wasm".into()),
@@ -1146,18 +1140,17 @@ mod tests {
       ("schemas/ocr-preferences.json", &ocr_prefs),
       ("schemas/speech-preferences.json", &speech_prefs),
     ];
-    let package = build_signed_package_with_key(&manifest, &payloads, &fixture_vendor_signing_key());
-    let digest = hash_archive_bytes(&package);
-    (package, digest)
+    let payloads = payloads
+      .into_iter()
+      .map(|(path, bytes)| (path.to_string(), bytes.to_vec()))
+      .collect();
+    (manifest, payloads)
   }
 
-  /// Build a vendor-signed edge-tts package declaring the broker authority (Exact path,
-  /// accept header) with an instance-configured origin field, matching the broker fixtures.
-  fn synthetic_edge_tts_package() -> (Vec<u8>, String) {
+  /// Build an edge-tts catalog fixture declaring the broker authority (Exact path, accept
+  /// header) with an instance-configured origin field, matching the broker fixtures.
+  fn synthetic_edge_tts_package() -> (PluginManifestV1, Vec<(String, Vec<u8>)>) {
     use crate::domain::runtime_plugin::{CapabilityPathAuthorityDecl, DeclaredPathAuthority};
-    use crate::services::plugin_package::hash_archive_bytes;
-    use crate::services::plugin_package::test_support::build_signed_package_with_key;
-    use crate::services::vendor_trust::test_vendor_fixture::{fixture_vendor_fingerprint, fixture_vendor_signing_key};
 
     let schema_bytes = EDGE_TTS_CONFIG_SCHEMA.as_bytes().to_vec();
     let prefs_bytes = EDGE_TTS_SPEECH_PREFS.as_bytes().to_vec();
@@ -1179,10 +1172,6 @@ mod tests {
       plugin_api_version: "1.0".into(),
       id: EDGE_TTS_PLUGIN_ID.into(),
       version: "1.0.0".into(),
-      publisher: PublisherDeclaration {
-        key_id: crate::services::vendor_trust::VENDOR_PUBLISHER_KEY_ID.into(),
-        key_fingerprint: fixture_vendor_fingerprint(),
-      },
       runtime: RuntimeDescriptor {
         kind: RuntimeKind::WasmComponent,
         artifact: Some("fixtures/langnext-edge-tts.wasm".into()),
@@ -1228,9 +1217,11 @@ mod tests {
       ("schemas/config.json", &schema_bytes),
       ("schemas/speech-preferences.json", &prefs_bytes),
     ];
-    let package = build_signed_package_with_key(&manifest, &payloads, &fixture_vendor_signing_key());
-    let digest = hash_archive_bytes(&package);
-    (package, digest)
+    let payloads = payloads
+      .into_iter()
+      .map(|(path, bytes)| (path.to_string(), bytes.to_vec()))
+      .collect();
+    (manifest, payloads)
   }
 
   fn plugin_file(path: &str, role: FileRole, bytes: &[u8]) -> PluginFileEntry {
@@ -1238,18 +1229,19 @@ mod tests {
       path: path.into(),
       role,
       bytes: bytes.len() as u64,
-      sha256: public_sha256_hex(bytes),
+      sha256: sha256_hex(bytes),
     }
   }
 
-  /// Install both synthetic packages and project their definitions (production startup path).
+  /// Load both synthetic fixtures into a catalog and project their definitions.
   fn broker_registry(db: &Database) -> Arc<ServiceIntegrationRegistry> {
-    let packages = crate::services::test_support::vendor_packages(db.clone(), db.app_data_dir());
-    let (google, _) = synthetic_google_cloud_package();
-    let (edge, _) = synthetic_edge_tts_package();
-    crate::services::test_support::bootstrap_package(&packages, &google);
-    crate::services::test_support::bootstrap_package(&packages, &edge);
-    crate::services::test_support::registry_from_installed_packages(&packages)
+    let catalog = catalog_with_manifest_fixtures(
+      db.clone(),
+      db.app_data_dir(),
+      &[],
+      &[synthetic_google_cloud_package(), synthetic_edge_tts_package()],
+    );
+    registry_from_catalog(&catalog)
   }
 
   fn broker_with(db: Database, transport: Arc<dyn RawHttpTransport>) -> NetworkBroker {

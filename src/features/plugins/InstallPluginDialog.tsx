@@ -1,11 +1,10 @@
-// ABOUTME: Local `.lnplugin` selection, permission review, and install approval dialog.
-// ABOUTME: Uses feature Effect runners for dialog→preview→approve/discard; Rust owns verification.
+// ABOUTME: User `.lnplugin` selection, permission review, and one exact-digest install confirmation.
+// ABOUTME: Uses feature Effect runners for dialog→inspect→install/discard; Rust owns validation.
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Dialog } from "@base-ui/react/dialog";
 import { Button } from "@base-ui/react/button";
 import { Checkbox } from "@base-ui/react/checkbox";
-import { Input } from "@base-ui/react/input";
 import { useTranslation } from "react-i18next";
 import IconMaterialSymbolsLightCheck from "~icons/material-symbols-light/check";
 import {
@@ -13,56 +12,25 @@ import {
   checkboxIndicatorClassName,
   dialogBackdropClassName,
   dialogPopupClassName,
-  inputClassName,
   outlineButtonClassName,
   primaryButtonClassName,
 } from "../../components/ui";
 import { useToast } from "../../components/toast/useToast";
 import { pluginPackageKeys } from "../../query/keys";
 import { getIpcErrorMessage } from "../../storage/errors";
-import type { PluginPackagePreviewDto, PublisherTrustState } from "../../storage/types";
+import type { UserPackagePreviewDto } from "../../storage/types";
 import { getUserErrorMessage } from "../userErrorMessage";
 import {
-  runApprovePluginPackage,
-  runDiscardPluginPackagePreview,
-  runSelectAndPreviewPluginPackage,
+  runDiscardUserPluginPackagePreview,
+  runInstallUserPluginPackage,
+  runSelectAndPreviewUserPluginPackage,
 } from "./installPluginPackageFlow";
 import {
-  requiresPublisherApproval,
-  requiresUnsignedRiskAcknowledgement,
-  requiresNativeExecutionRiskAcknowledgement,
-  shouldShowManualPublisherKeyInput,
-  publisherApprovalKeyHex,
+  confirmationDigest,
+  isUserInstallableRuntime,
+  summarizeArchiveFiles,
   summarizeNetworkPermissions,
 } from "./pluginPackagePresentation";
-
-function trustLabel(
-  t: (
-    key:
-      | "plugins.packages.trust.trustedVendor"
-      | "plugins.packages.trust.trustedUser"
-      | "plugins.packages.trust.unknown"
-      | "plugins.packages.trust.revoked"
-      | "plugins.packages.trust.disabled"
-      | "plugins.packages.trust.unsigned",
-  ) => string,
-  trust: PublisherTrustState,
-): string {
-  switch (trust) {
-    case "trusted_vendor":
-      return t("plugins.packages.trust.trustedVendor");
-    case "trusted_user":
-      return t("plugins.packages.trust.trustedUser");
-    case "unknown":
-      return t("plugins.packages.trust.unknown");
-    case "revoked":
-      return t("plugins.packages.trust.revoked");
-    case "disabled":
-      return t("plugins.packages.trust.disabled");
-    case "unsigned":
-      return t("plugins.packages.trust.unsigned");
-  }
-}
 
 export type InstallPluginDialogProps = {
   open: boolean;
@@ -80,8 +48,8 @@ export function InstallPluginDialog({ open, onOpenChange }: InstallPluginDialogP
         if (!next && previewIdRef.current) {
           const previewId = previewIdRef.current;
           previewIdRef.current = null;
-          void runDiscardPluginPackagePreview(previewId).catch(() => {
-            // Best-effort cleanup on Esc/backdrop close; backend also TTL-sweeps.
+          void runDiscardUserPluginPackagePreview(previewId).catch(() => {
+            // Best-effort cleanup on Esc/backdrop close; the backend also expires previews.
           });
         }
         onOpenChange(next);
@@ -121,21 +89,16 @@ function InstallPluginForm({ onClose, onPreviewIdChange }: InstallPluginFormProp
   const { t } = useTranslation();
   const toast = useToast();
   const queryClient = useQueryClient();
-  const [preview, setPreview] = useState<PluginPackagePreviewDto | null>(null);
+  const [preview, setPreview] = useState<UserPackagePreviewDto | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [ackPermissions, setAckPermissions] = useState(false);
-  const [ackUnsigned, setAckUnsigned] = useState(false);
-  const [ackNative, setAckNative] = useState(false);
-  const [approvePublisher, setApprovePublisher] = useState(false);
-  const [publicKeyHex, setPublicKeyHex] = useState("");
-  const publisherApprovalKeyHexValue = preview ? publisherApprovalKeyHex(preview, publicKeyHex) : "";
 
   useEffect(() => {
     onPreviewIdChange(preview?.previewId ?? null);
   }, [preview, onPreviewIdChange]);
 
   const previewMutation = useMutation({
-    mutationFn: () => runSelectAndPreviewPluginPackage(),
+    mutationFn: () => runSelectAndPreviewUserPluginPackage(),
     onSuccess: (result) => {
       if (!result) {
         return;
@@ -143,10 +106,6 @@ function InstallPluginForm({ onClose, onPreviewIdChange }: InstallPluginFormProp
       setPreview(result);
       setError(null);
       setAckPermissions(false);
-      setAckUnsigned(false);
-      setAckNative(false);
-      setApprovePublisher(false);
-      setPublicKeyHex("");
     },
     onError: (mutationError) => {
       const message = getUserErrorMessage(mutationError, t("plugins.packages.previewFailed"));
@@ -160,14 +119,10 @@ function InstallPluginForm({ onClose, onPreviewIdChange }: InstallPluginFormProp
       if (!preview) {
         throw new Error("missing preview");
       }
-      return runApprovePluginPackage({
+      return runInstallUserPluginPackage({
         previewId: preview.previewId,
+        contentDigest: confirmationDigest(preview),
         acknowledgePermissions: ackPermissions,
-        approvePublisher: requiresPublisherApproval(preview) ? approvePublisher : false,
-        publisherPublicKeyHex:
-          requiresPublisherApproval(preview) && approvePublisher ? publisherApprovalKeyHexValue || null : null,
-        acknowledgeUnsignedPackageRisk: requiresUnsignedRiskAcknowledgement(preview) ? ackUnsigned : false,
-        acknowledgeNativeExecutionRisk: requiresNativeExecutionRiskAcknowledgement(preview) ? ackNative : false,
       });
     },
     onSuccess: async () => {
@@ -187,7 +142,7 @@ function InstallPluginForm({ onClose, onPreviewIdChange }: InstallPluginFormProp
   const discardMutation = useMutation({
     mutationFn: async () => {
       if (preview) {
-        await runDiscardPluginPackagePreview(preview.previewId);
+        await runDiscardUserPluginPackagePreview(preview.previewId);
       }
     },
     onSettled: () => {
@@ -198,6 +153,7 @@ function InstallPluginForm({ onClose, onPreviewIdChange }: InstallPluginFormProp
   });
 
   const network = preview ? summarizeNetworkPermissions(preview.network) : [];
+  const installable = preview ? isUserInstallableRuntime(preview.runtimeKind) : false;
 
   return (
     <div className="mt-4 flex flex-col gap-4">
@@ -215,28 +171,20 @@ function InstallPluginForm({ onClose, onPreviewIdChange }: InstallPluginFormProp
         </>
       ) : (
         <>
+          <p className="text-body-tight text-neutral">{t("plugins.packages.userContentWarning")}</p>
           <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-body-tight">
             <dt className="text-neutral">{t("plugins.packages.pluginId")}</dt>
             <dd className="font-mono text-on-surface">{preview.pluginId}</dd>
             <dt className="text-neutral">{t("plugins.packages.version")}</dt>
             <dd className="text-on-surface">{preview.version}</dd>
             <dt className="text-neutral">{t("plugins.packages.digest")}</dt>
-            <dd className="font-mono wrap-break-word text-on-surface" title={preview.packageDigest}>
-              {preview.packageDigest}
-            </dd>
-            <dt className="text-neutral">{t("plugins.packages.publisher")}</dt>
-            <dd className="text-on-surface">
-              <div>{preview.publisherKeyId || preview.claimedPublisherKeyId || "—"}</div>
-              <div
-                className="font-mono text-code-inline wrap-break-word"
-                title={preview.publisherFingerprint || preview.claimedPublisherFingerprint}
-              >
-                {preview.publisherFingerprint || preview.claimedPublisherFingerprint || "—"}
-              </div>
-              <div className="text-neutral">{trustLabel(t, preview.publisherTrust)}</div>
+            <dd className="font-mono wrap-break-word text-on-surface" title={preview.contentDigest}>
+              {preview.contentDigest}
             </dd>
             <dt className="text-neutral">{t("plugins.packages.runtime")}</dt>
             <dd className="text-on-surface">{preview.runtimeKind}</dd>
+            <dt className="text-neutral">{t("plugins.packages.files")}</dt>
+            <dd className="text-on-surface">{summarizeArchiveFiles(preview)}</dd>
             <dt className="text-neutral">{t("plugins.packages.capabilities")}</dt>
             <dd className="text-on-surface">{preview.capabilities.join(", ") || "—"}</dd>
           </dl>
@@ -257,6 +205,12 @@ function InstallPluginForm({ onClose, onPreviewIdChange }: InstallPluginFormProp
           {preview.authPolicies.length > 0 ? (
             <p className="text-body-tight text-neutral">
               {t("plugins.packages.authPolicies")}: {preview.authPolicies.join(", ")}
+            </p>
+          ) : null}
+
+          {preview.credentialSlots.length > 0 ? (
+            <p className="text-body-tight text-neutral">
+              {t("plugins.packages.credentialSlots")}: {preview.credentialSlots.join(", ")}
             </p>
           ) : null}
 
@@ -293,70 +247,6 @@ function InstallPluginForm({ onClose, onPreviewIdChange }: InstallPluginFormProp
             </Checkbox.Root>
             <span>{t("plugins.packages.ackPermissions")}</span>
           </label>
-
-          {requiresUnsignedRiskAcknowledgement(preview) ? (
-            <label className="flex items-start gap-2 text-body-tight text-on-surface">
-              <Checkbox.Root
-                checked={ackUnsigned}
-                onCheckedChange={(checked) => setAckUnsigned(checked === true)}
-                className={checkboxClassName}
-              >
-                <Checkbox.Indicator className={checkboxIndicatorClassName}>
-                  <IconMaterialSymbolsLightCheck className="size-3" aria-hidden />
-                </Checkbox.Indicator>
-              </Checkbox.Root>
-              <span>{t("plugins.packages.ackUnsigned")}</span>
-            </label>
-          ) : null}
-
-          {requiresNativeExecutionRiskAcknowledgement(preview) ? (
-            <label className="flex items-start gap-2 text-body-tight text-on-surface">
-              <Checkbox.Root
-                checked={ackNative}
-                onCheckedChange={(checked) => setAckNative(checked === true)}
-                className={checkboxClassName}
-              >
-                <Checkbox.Indicator className={checkboxIndicatorClassName}>
-                  <IconMaterialSymbolsLightCheck className="size-3" aria-hidden />
-                </Checkbox.Indicator>
-              </Checkbox.Root>
-              <span>{t("plugins.packages.ackNative")}</span>
-            </label>
-          ) : null}
-
-          {requiresPublisherApproval(preview) ? (
-            <div className="flex flex-col gap-2">
-              <label className="flex items-start gap-2 text-body-tight text-on-surface">
-                <Checkbox.Root
-                  checked={approvePublisher}
-                  onCheckedChange={(checked) => setApprovePublisher(checked === true)}
-                  className={checkboxClassName}
-                >
-                  <Checkbox.Indicator className={checkboxIndicatorClassName}>
-                    <IconMaterialSymbolsLightCheck className="size-3" aria-hidden />
-                  </Checkbox.Indicator>
-                </Checkbox.Root>
-                <span>{t("plugins.packages.approvePublisher")}</span>
-              </label>
-              {approvePublisher && shouldShowManualPublisherKeyInput(preview) ? (
-                <label className="flex flex-col gap-1 text-body-tight text-on-surface">
-                  <span>{t("plugins.packages.publicKeyLabel")}</span>
-                  <Input
-                    className={`
-                      ${inputClassName}
-                      font-mono text-code-inline
-                    `}
-                    placeholder={t("plugins.packages.publicKeyPlaceholder")}
-                    value={publicKeyHex}
-                    onChange={(event) => setPublicKeyHex(event.target.value)}
-                    spellCheck={false}
-                    autoComplete="off"
-                    aria-required
-                  />
-                </label>
-              ) : null}
-            </div>
-          ) : null}
         </>
       )}
 
@@ -379,13 +269,7 @@ function InstallPluginForm({ onClose, onPreviewIdChange }: InstallPluginFormProp
           <Button
             type="button"
             className={primaryButtonClassName}
-            disabled={
-              installMutation.isPending ||
-              !ackPermissions ||
-              (requiresUnsignedRiskAcknowledgement(preview) && !ackUnsigned) ||
-              (requiresNativeExecutionRiskAcknowledgement(preview) && !ackNative) ||
-              (requiresPublisherApproval(preview) && (!approvePublisher || publisherApprovalKeyHexValue.length === 0))
-            }
+            disabled={installMutation.isPending || !ackPermissions || !installable}
             onClick={() => installMutation.mutate()}
           >
             {installMutation.isPending ? t("plugins.packages.installing") : t("plugins.packages.install")}

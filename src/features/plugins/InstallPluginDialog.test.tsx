@@ -1,5 +1,5 @@
-// ABOUTME: Install dialog tests prove public approval cannot request a default mutation.
-// ABOUTME: Uses Happy DOM + Testing Library; mocks package flow runners at the boundary.
+// ABOUTME: Install dialog tests prove user archives need one permission confirmation per digest.
+// ABOUTME: Uses Happy DOM + Testing Library; mocks the catalog flow runners at the boundary.
 await import("../../test/registerDom");
 const { resetDom } = await import("../../test/registerDom");
 await import("../../test/jestDom");
@@ -9,23 +9,23 @@ import { afterEach, beforeAll, beforeEach, describe, expect, mock, test } from "
 import { useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { initI18n } from "../../i18n";
-import type { ApprovePluginPackageInput, PluginPackagePreviewDto } from "../../storage/types";
+import type { InstallUserPackageInput, UserPackagePreviewDto } from "../../storage/types";
 
-const previewRunnerMock = mock(async (): Promise<PluginPackagePreviewDto | null> => {
+const previewRunnerMock = mock(async (): Promise<UserPackagePreviewDto | null> => {
   throw new Error("preview runner not stubbed");
 });
-const approveRunnerMock = mock(async (input: ApprovePluginPackageInput) => {
+const installRunnerMock = mock(async (input: InstallUserPackageInput) => {
   void input;
-  throw new Error("approve runner not stubbed");
+  throw new Error("install runner not stubbed");
 });
 const discardRunnerMock = mock(async (previewId: string) => {
   void previewId;
 });
 
 mock.module("./installPluginPackageFlow", () => ({
-  runSelectAndPreviewPluginPackage: () => previewRunnerMock(),
-  runApprovePluginPackage: (input: ApprovePluginPackageInput) => approveRunnerMock(input),
-  runDiscardPluginPackagePreview: (previewId: string) => discardRunnerMock(previewId),
+  runSelectAndPreviewUserPluginPackage: () => previewRunnerMock(),
+  runInstallUserPluginPackage: (input: InstallUserPackageInput) => installRunnerMock(input),
+  runDiscardUserPluginPackagePreview: (previewId: string) => discardRunnerMock(previewId),
 }));
 
 mock.module("~icons/material-symbols-light/check", () => ({
@@ -50,28 +50,49 @@ mock.module("~icons/material-symbols-light/close", () => ({
 const { InstallPluginDialog } = await import("./InstallPluginDialog");
 const { ToastProvider } = await import("../../components/toast/ToastProvider");
 
-const PACKAGE_DIGEST = "a".repeat(64);
+const CONTENT_DIGEST = "a".repeat(64);
 
-function previewDto(overrides: Partial<PluginPackagePreviewDto> = {}): PluginPackagePreviewDto {
+function previewDto(overrides: Partial<UserPackagePreviewDto> = {}): UserPackagePreviewDto {
   return {
     previewId: "preview-install-1",
-    packageDigest: PACKAGE_DIGEST,
+    contentDigest: CONTENT_DIGEST,
     pluginId: "com.example.translate",
     version: "1.0.0",
-    publisherKeyId: "com.example.keys.1",
-    publisherFingerprint: "b".repeat(64),
-    publisherTrust: "trusted_user",
-    requiresPublisherApproval: false,
     runtimeKind: "wasm-component",
     capabilities: ["translate.text@1"],
     configurationSchema: null,
     network: [],
     authPolicies: [],
-    permissionRequestDigest: "c".repeat(64),
+    credentialSlots: [],
+    fileCount: 3,
+    totalBytes: 2048,
     permissionDifferences: [],
-    warnings: [],
+    warnings: ["user plugin content has no authenticated publisher identity"],
     expiresAt: "2099-01-01T00:00:00Z",
     ...overrides,
+  };
+}
+
+function installedEntry() {
+  return {
+    pluginId: "com.example.translate",
+    version: "1.0.0",
+    source: "user" as const,
+    contentKind: "archive" as const,
+    contentDigest: CONTENT_DIGEST,
+    runtimeKind: "wasm-component",
+    pluginApiVersion: "1.0",
+    capabilities: ["translate.text@1"],
+    configurationSchema: null,
+    network: [],
+    authPolicies: [],
+    credentialSlots: [],
+    fileCount: 3,
+    totalBytes: 2048,
+    isDefault: false,
+    inUse: false,
+    removable: true,
+    reloadable: false,
   };
 }
 
@@ -100,7 +121,7 @@ describe("InstallPluginDialog", () => {
   beforeEach(() => {
     resetDom();
     previewRunnerMock.mockReset();
-    approveRunnerMock.mockReset();
+    installRunnerMock.mockReset();
     discardRunnerMock.mockReset();
   });
 
@@ -108,123 +129,71 @@ describe("InstallPluginDialog", () => {
     cleanup();
   });
 
-  test("completing install never sends setAsDefault and has no default control", async () => {
+  test("install confirms the exact content digest with one acknowledgement", async () => {
     const user = userEvent.setup();
     previewRunnerMock.mockResolvedValueOnce(previewDto());
-    approveRunnerMock.mockResolvedValueOnce({
-      version: {
-        packageDigest: PACKAGE_DIGEST,
-        pluginId: "com.example.translate",
-        version: "1.0.0",
-        publisherKeyId: "com.example.keys.1",
-        publisherFingerprint: "b".repeat(64),
-        runtimeKind: "wasm-component",
-        permissionRequestDigest: "c".repeat(64),
-        contentAvailable: true,
-        isDefault: false,
-        inUse: false,
-        installedAt: "2099-01-01T00:00:00Z",
-        capabilities: [],
-        defaultAuthorizationStatus: "absent",
-      },
-      approvalId: "approval-1",
-      approvalRevision: 1,
-    });
+    installRunnerMock.mockResolvedValueOnce({ entry: installedEntry() });
 
     renderDialog();
 
-    await user.click(await screen.findByRole("button", { name: "Choose package" }));
-    await screen.findByText(PACKAGE_DIGEST);
+    await user.click(await screen.findByRole("button", { name: "Choose archive" }));
+    await screen.findByText(CONTENT_DIGEST);
 
-    expect(screen.queryByText("Set as default for new configurations (existing configs stay pinned)")).toBeNull();
-    expect(screen.queryByLabelText(/set as default/i)).toBeNull();
+    expect(screen.getAllByText(/no authenticated publisher identity/).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/Set as default/i)).toBeNull();
 
+    const install = screen.getByRole("button", { name: "Install" });
+    expect(install).toHaveProperty("disabled", true);
     await user.click(
       screen.getByRole("checkbox", {
-        name: "I acknowledge the requested permissions. This approval is for installation only.",
+        name: "I reviewed the requested permissions for this exact content digest.",
       }),
     );
-    await user.click(screen.getByRole("button", { name: "Install package" }));
+    expect(install).toHaveProperty("disabled", false);
+    await user.click(install);
 
     await waitFor(() => {
-      expect(approveRunnerMock).toHaveBeenCalledTimes(1);
+      expect(installRunnerMock).toHaveBeenCalledTimes(1);
     });
-    const input = approveRunnerMock.mock.calls[0]?.[0] as ApprovePluginPackageInput;
+    const input = installRunnerMock.mock.calls[0]?.[0] as InstallUserPackageInput;
     expect(input).toEqual({
       previewId: "preview-install-1",
+      contentDigest: CONTENT_DIGEST,
       acknowledgePermissions: true,
-      approvePublisher: false,
-      publisherPublicKeyHex: null,
-      acknowledgeUnsignedPackageRisk: false,
-      acknowledgeNativeExecutionRisk: false,
     });
     expect(Object.prototype.hasOwnProperty.call(input, "setAsDefault")).toBe(false);
   });
 
-  test("unsigned_wasm_install_requires_visible_exact_digest_warning", async () => {
+  test("native user content is not installable", async () => {
     const user = userEvent.setup();
-    previewRunnerMock.mockResolvedValueOnce(
-      previewDto({
-        publisherTrust: "unsigned",
-        signatureStatus: "unsigned",
-        requiresUnsignedRiskAcknowledgement: true,
-        publisherKeyId: "",
-        claimedPublisherKeyId: "com.example.keys.1",
-      }),
-    );
+    previewRunnerMock.mockResolvedValueOnce(previewDto({ runtimeKind: "trusted-native-worker" }));
     renderDialog();
-    await user.click(await screen.findByRole("button", { name: "Choose package" }));
-    await screen.findByText(PACKAGE_DIGEST);
-    expect(screen.getByText("Unsigned")).toBeTruthy();
-    const install = screen.getByRole("button", { name: "Install package" });
-    expect(install).toHaveProperty("disabled", true);
+    await user.click(await screen.findByRole("button", { name: "Choose archive" }));
+    await screen.findByText(CONTENT_DIGEST);
     await user.click(
       screen.getByRole("checkbox", {
-        name: "I acknowledge the requested permissions. This approval is for installation only.",
+        name: "I reviewed the requested permissions for this exact content digest.",
       }),
     );
+    const install = screen.getByRole("button", { name: "Install" });
     expect(install).toHaveProperty("disabled", true);
-    await user.click(
-      screen.getByRole("checkbox", {
-        name: "Publisher identity is not verified. I accept the risk for this exact digest only. The package is not trusted or sandboxed.",
-      }),
-    );
-    expect(install).toHaveProperty("disabled", false);
+    expect(installRunnerMock).not.toHaveBeenCalled();
   });
 
-  test("non_vendor_native_install_requires_system_code_warning", async () => {
+  test("permission changes and warnings are shown before install", async () => {
     const user = userEvent.setup();
     previewRunnerMock.mockResolvedValueOnce(
       previewDto({
-        publisherTrust: "unsigned",
-        signatureStatus: "unsigned",
-        runtimeKind: "trusted-native-worker",
-        requiresUnsignedRiskAcknowledgement: true,
-        requiresNativeExecutionRiskAcknowledgement: true,
+        permissionDifferences: ["network endpoint proxy"],
+        network: [{ id: "proxy", origins: [], methods: ["GET"] }],
+        credentialSlots: ["api-key"],
       }),
     );
     renderDialog();
-    await user.click(await screen.findByRole("button", { name: "Choose package" }));
-    expect(
-      screen.getByText("This native worker runs as a host process. Process isolation is not a permission sandbox."),
-    ).toBeTruthy();
-    const install = screen.getByRole("button", { name: "Install package" });
-    await user.click(
-      screen.getByRole("checkbox", {
-        name: "I acknowledge the requested permissions. This approval is for installation only.",
-      }),
-    );
-    await user.click(
-      screen.getByRole("checkbox", {
-        name: "Publisher identity is not verified. I accept the risk for this exact digest only. The package is not trusted or sandboxed.",
-      }),
-    );
-    expect(install).toHaveProperty("disabled", true);
-    await user.click(
-      screen.getByRole("checkbox", {
-        name: "This native worker runs as a host process. Process isolation is not a permission sandbox.",
-      }),
-    );
-    expect(install).toHaveProperty("disabled", false);
+    await user.click(await screen.findByRole("button", { name: "Choose archive" }));
+    await screen.findByText(CONTENT_DIGEST);
+    expect(screen.getByText("network endpoint proxy")).toBeTruthy();
+    expect(screen.getByText(/instance-configured origin/)).toBeTruthy();
+    expect(screen.getByText(/api-key/)).toBeTruthy();
   });
 });

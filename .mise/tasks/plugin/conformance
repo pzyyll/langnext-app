@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ABOUTME: Run Wasm runtime and installed-lifecycle conformance suites with required tests.
 # ABOUTME: Fail-closed: missing required tests or zero tests is an error; capture suite exit without set -e.
-#MISE description="Run plugin conformance suite (arg: wasm|installed-lifecycle|native-worker|paddleocr|baidu-ocr|all)"
+#MISE description="Run plugin conformance suite (arg: wasm|llm|catalog|fixtures|import-export|installed-lifecycle|native-worker|paddleocr|baidu-ocr|edge-tts|google-web|google-cloud|resources|all)"
 set -uo pipefail
 
 MODE="${1:-all}"
@@ -35,7 +35,6 @@ REQUIRED_LIFECYCLE_TESTS=(
   "services::runtime_lifecycle_installed_tests::runtime_upgrade_apply_failure_injection_leaves_source_unchanged"
   "services::runtime_lifecycle_installed_tests::runtime_discard_snapshot_and_migration_trap_no_mutation"
   "services::runtime_lifecycle_installed_tests::runtime_plugin_export_v8_missing_package_restores_unresolved_exact_requirement"
-  "services::runtime_lifecycle_installed_tests::pin_default_skips_non_google_web_plugin_without_auto_activating"
   "services::runtime_lifecycle_installed_tests::runtime_rollback_stale_preview_and_missing_snapshot_fail_closed"
   "services::runtime_lifecycle_installed_tests::runtime_router_selects_wasm_adapter_for_active_pin"
   "services::runtime_lifecycle_preference_tests::runtime_preference_snapshot_is_pre_migration_and_rollback_restores_exact_json"
@@ -44,16 +43,118 @@ REQUIRED_LIFECYCLE_TESTS=(
   "services::runtime_lifecycle_preference_tests::runtime_preference_byte_exact_whitespace_preserved_in_snapshot"
   "services::runtime_lifecycle_preference_tests::runtime_rollback_foreign_or_stale_dependency_fails_closed"
   "services::runtime_lifecycle_preference_tests::runtime_grant_snapshot_tamper_matrix_fails_closed"
-  "services::runtime_lifecycle_preference_tests::runtime_uninstall_blocks_pin_grant_snapshot_dependencies_and_preserves_files"
+  "services::runtime_lifecycle_preference_tests::runtime_removal_blocks_pin_grant_snapshot_dependencies_and_preserves_files"
   "services::runtime_lifecycle::tests::runtime_upgrade_preview_missing_package_fails_closed"
   "services::runtime_lifecycle::tests::runtime_upgrade_apply_unknown_preview_is_conflict"
   "services::runtime_lifecycle::tests::runtime_rollback_without_snapshot_fails_closed"
   "services::runtime_router::tests::runtime_router_bundle_round_trip_preserves_authority"
   "services::runtime_router::tests::runtime_router_cross_instance_grant_lookup_denied"
   "domain::import_export::tests::parse_and_normalize_rejects_legacy_runtime_identities"
-  "storage::migrations::tests::migrate_v16_to_v17_does_not_synthesize_unpinned_runtime_instances"
   "repositories::tests::runtime_instance_pin_backfill_and_constraints"
-  "repositories::tests::runtime_instance_pin_package_approval_never_authorizes_execution"
+  "repositories::tests::runtime_instance_grant_authority_is_exact_and_subject_scoped"
+)
+
+# Fresh-schema and repository conformance for the simple catalog schema. One list per cargo
+# filter so every required name is verified against that filter's real output.
+REQUIRED_SCHEMA_MIGRATION_TESTS=(
+  "storage::migrations::tests::fresh_plugin_schema_contains_no_publisher_signature_or_activation_tables"
+  "storage::migrations::tests::migrate_empty_database_to_latest"
+)
+REQUIRED_SCHEMA_REPOSITORY_TESTS=(
+  "repositories::plugin_catalog::tests::user_archive_round_trip_and_unique_file_name"
+  "repositories::plugin_catalog::tests::default_override_is_upserted_and_cleared_by_digest"
+  "repositories::tests::runtime_instance_pin_backfill_and_constraints"
+  "repositories::tests::runtime_instance_grant_authority_is_exact_and_subject_scoped"
+)
+
+# Source-based catalog conformance: content identity, source rules, snapshot immutability,
+# user archive install/remove, and privileged Host auth restriction. Each list is paired with
+# a cargo filter that runs exactly those tests, so every required name is verified against
+# real output (fail-closed).
+REQUIRED_CATALOG_DOMAIN_TESTS=(
+  "domain::plugin_catalog::tests::content_digest_distinguishes_path_byte_partitions"
+  "domain::plugin_catalog::tests::descriptor_carries_no_publisher_or_signature_field"
+  "domain::plugin_catalog::tests::source_rules_restrict_native_and_privileged_auth_to_builtin"
+)
+# Manifest domain contract: no plugin-level publisher or signature declaration exists, and the
+# manifest entry is the only reserved archive path.
+REQUIRED_CATALOG_MANIFEST_TESTS=(
+  "domain::runtime_plugin::tests::manifest_rejects_publisher_block"
+  "domain::runtime_plugin::tests::reserved_archive_entries_are_only_the_manifest"
+)
+# Archive shape contract: a leftover trust entry is an undeclared file, and no signature member
+# is required.
+REQUIRED_ARCHIVE_CONTRACT_TESTS=(
+  "services::runtime_plugin_contracts::tests::runtime_plugin_contracts_archive_rejects_legacy_trust_entries"
+  "services::runtime_plugin_contracts::tests::runtime_plugin_contracts_archive_needs_no_signature_entry"
+)
+REQUIRED_CATALOG_LOADER_TESTS=(
+  "services::plugin_loader::tests::directory_and_archive_with_identical_content_share_digest"
+  "services::plugin_loader::tests::path_traversal_equivalent_archive_entry_is_rejected"
+  "services::plugin_loader::tests::directory_symlink_is_rejected"
+  "services::plugin_loader::tests::undeclared_directory_file_is_rejected"
+  "services::plugin_loader::tests::missing_indexed_file_is_rejected"
+  "services::plugin_loader::tests::oversized_archive_entry_is_rejected"
+  "services::plugin_loader::tests::malformed_manifest_is_rejected"
+  "services::plugin_loader::tests::legacy_trust_entries_are_rejected_as_undeclared"
+  "services::plugin_loader::tests::real_builtin_archive_carries_no_trust_entries"
+  "services::plugin_loader::tests::archive_source_mutation_is_rejected"
+  "services::plugin_loader::tests::user_and_development_sources_may_not_declare_native"
+)
+REQUIRED_CATALOG_CATALOG_TESTS=(
+  "services::plugin_catalog::tests::catalog_refresh_discovers_builtin_development_and_user_sources"
+  "services::plugin_catalog::tests::release_catalog_ignores_development_source"
+  "services::plugin_catalog::tests::user_plugin_cannot_claim_first_party_id"
+  "services::plugin_catalog::tests::native_content_outside_builtin_is_rejected"
+  "services::plugin_catalog::tests::invalid_user_plugin_does_not_hide_builtins"
+  "services::plugin_catalog::tests::builtin_is_default_without_database_policy"
+  "services::plugin_catalog::tests::user_default_override_changes_new_instances_only"
+  "services::plugin_catalog::tests::missing_override_falls_back_to_builtin"
+  "services::plugin_catalog::tests::refresh_publishes_a_new_digest_and_never_substitutes_old_pinned_content"
+  "services::plugin_catalog::tests::user_archive_digest_drift_is_isolated"
+)
+REQUIRED_CATALOG_COMMAND_TESTS=(
+  "cmds::plugin_packages::tests::user_wasm_install_requires_matching_digest_and_permission_confirmation"
+  "cmds::plugin_packages::tests::same_id_version_different_digest_is_conflict"
+  "cmds::plugin_packages::tests::user_native_install_is_rejected"
+  "cmds::plugin_packages::tests::user_first_party_id_is_rejected"
+  "cmds::plugin_packages::tests::user_privileged_host_auth_is_rejected"
+  "cmds::plugin_packages::tests::remove_user_archive_is_refused_while_pinned"
+  "cmds::plugin_packages::tests::catalog_default_override_is_one_explicit_digest"
+)
+REQUIRED_CATALOG_DEFINITION_TESTS=(
+  "services::package_definition::tests::unknown_auth_policy_projection_fails_closed"
+  "services::package_definition::tests::baidu_definition_projection_preserves_host_auth_slots_and_ocr_authority"
+)
+REQUIRED_CATALOG_NATIVE_TESTS=(
+  "services::paddleocr_package_tests::paddleocr_package_rejects_non_allowlisted_native_plugin_id"
+  "services::paddleocr_package_tests::paddleocr_package_rejects_non_allowlisted_native_version"
+)
+
+# Import/export content-requirement conformance: exports carry plugin id, version, exact
+# content digest, runtime kind, and capability majors only; a preview resolves built-in and user
+# content, reports missing and digest-mismatch content exactly, and import never installs,
+# changes a default, or writes a grant.
+REQUIRED_IMPORT_EXPORT_TESTS=(
+  "domain::import_export::tests::v8_package_backed_requirement_parses_without_publisher_metadata"
+  "domain::import_export::tests::v8_unknown_and_removed_fields_fail_closed"
+  "services::tests::import_runtime_requirement_preview_resolves_builtin_and_user_content"
+  "services::tests::import_apply_never_installs_changes_defaults_or_grants"
+  "services::tests::import_runtime_requirement_preview_reports_exact_local_states_and_actions"
+  "services::tests::import_runtime_requirement_preview_keeps_unavailable_runtimes_actionable_and_non_mutating"
+  "services::runtime_provider_tests::import_export_runtime_provider_multi_interface"
+)
+
+# Export identity for built-in content: the exported requirement carries the exact catalog
+# digest for a built-in provider binding.
+REQUIRED_EXPORT_IDENTITY_TESTS=(
+  "services::tests::export_preserves_builtin_provider_binding_identity"
+)
+
+# Committed archive fixtures: each accepted/rejected `.lnplugin` keeps its pinned outcome.
+REQUIRED_CONFORMANCE_FIXTURE_TESTS=(
+  "services::conformance_package_fixtures::committed_archive_fixtures_keep_their_expected_outcome"
+  "services::conformance_package_fixtures::fixture_directory_has_no_trust_material"
 )
 
 REQUIRED_NATIVE_WORKER_TESTS=(
@@ -75,7 +176,7 @@ REQUIRED_PADDLEOCR_TESTS=(
   "services::plugin_models::tests::plugin_model_download_verifies_and_installs_atomically"
   "services::native_workers::tests::native_worker_handshake_reaps_process"
   "services::native_workers::tests::native_worker_timeout_kills_process_tree"
-  "services::paddleocr_package_tests::paddleocr_package_vendor_runtime_directory_is_accepted"
+  "services::paddleocr_package_tests::paddleocr_package_runtime_directory_is_accepted"
   "services::paddleocr_runtime_tests::paddleocr_runtime_ocr_returns_expected_text"
   "services::paddleocr_runtime_tests::paddleocr_runtime_missing_model_does_not_spawn_worker"
 )
@@ -91,12 +192,7 @@ REQUIRED_EDGE_TTS_TESTS=(
   "services::edge_tts_runtime_tests::edge_tts_runtime_accepts_audio_mpeg_with_parameters"
   "services::edge_tts_runtime_tests::edge_tts_runtime_rejects_missing_content_type"
   "services::edge_tts_runtime_tests::edge_tts_runtime_rejects_near_miss_mime"
-  "services::edge_tts_runtime_tests::default_package_activation_integration_edge_tts_create_grant"
   "services::edge_tts_runtime_tests::edge_tts_runtime_migration_preserves_speech_default_references"
-  "services::edge_tts_runtime_tests::edge_tts_runtime_auto_pin_rejects_non_vendor_package"
-  "services::edge_tts_runtime_tests::edge_tts_runtime_auto_pin_rejects_custom_origin"
-  "services::edge_tts_runtime_tests::edge_tts_pin_default_retired_noop_for_equivalent_normalized_origin"
-  "services::edge_tts_runtime_tests::edge_tts_runtime_auto_pin_rejects_non_https_origin"
   # Executes the guest through router/executor/broker and compares captured transport output to
   # synthesize-request.json; a fixture-only parser test is not sufficient conformance coverage.
   "services::edge_tts_runtime_tests::edge_tts_runtime_request_fixture_matches_guest_contract"
@@ -207,22 +303,17 @@ REQUIRED_GOOGLE_WEB_TESTS=(
   "services::google_translate_web_runtime_tests::google_translate_web_runtime_single_executor_no_fallback"
   "services::google_translate_web_runtime_tests::google_translate_web_runtime_timeout_maps_to_timeout"
   "services::google_translate_web_runtime_tests::google_translate_web_runtime_bundled_rollback_remains_available"
-  "services::google_translate_web_runtime_tests::vendor_package_bootstrap_is_idempotent_and_sets_default"
-  "services::google_translate_web_runtime_tests::vendor_bootstrap_imports_proxy_version_without_changing_default"
-  "services::google_translate_web_runtime_tests::google_web_package_verifies_with_vendor_public_key"
   "services::google_translate_web_runtime_tests::google_translate_web_proxy_channel_translates_and_detect_stays_on_gtx"
   "services::google_translate_web_runtime_tests::google_translate_web_proxy_url_change_requires_new_grant"
-  "services::google_translate_web_runtime_tests::default_package_activation_integration_google_web_create_grant"
   "services::google_translate_web_runtime_tests::google_web_new_instance_rejects_create_when_no_default_package"
   "services::google_translate_web_runtime_tests::google_web_migration_rejects_incompatible_capability_major"
   "services::google_translate_web_runtime_tests::google_web_migration_rejects_schema_incompatible_target"
 )
 
 # Phase 8 LLM provider runtime conformance: the named fixture/catalog/lifecycle tests are
-# required by exact name; Tasks 6-8 add real-component execution tests to this list. Every
-# built-in LLM provider (OpenAI Compatible, OpenAI Responses, Anthropic, Gemini, DeepSeek)
-# must register its required real-component test here; an omitted provider fails the
-# aggregate suite (fail-closed).
+# required by exact name. Every built-in LLM provider (OpenAI Compatible, OpenAI Responses,
+# Anthropic, Gemini, DeepSeek) must register its required real-component test here; an omitted
+# provider fails the aggregate suite (fail-closed).
 REQUIRED_LLM_GENERIC_TESTS=(
   "services::runtime_provider_tests::provider_runtime_fixture_package_verifies_and_projects_catalog"
   "services::runtime_provider_tests::runtime_provider_lifecycle_binds_exact_package_and_provider_grant"
@@ -264,8 +355,8 @@ if [[   ${#REQUIRED_LLM_OPENAI_COMPATIBLE_TESTS[@]} -eq 0 ||   ${#REQUIRED_LLM_O
 fi
 
 # Both LLM conformance Components must import only langnext:runtime-plugin interfaces, and
-# the Task 11/18/19 production OpenAI Compatible, OpenAI Responses, and Anthropic artifacts
-# must pass the same exact import audit.
+# the production OpenAI Compatible, OpenAI Responses, and Anthropic artifacts must pass the
+# same exact import audit.
 REQUIRED_LLM_GUEST_IMPORT_TESTS=(
   "services::wasm_runtime::tests::wasm_guest_imports::llm_models_conformance_guest_imports_only_langnext"
   "services::wasm_runtime::tests::wasm_guest_imports::llm_chat_conformance_guest_imports_only_langnext"
@@ -343,8 +434,10 @@ case "$MODE" in
     run_filter_suite "wasm_guest_imports" "${REQUIRED_LLM_GUEST_IMPORT_TESTS[@]}"
     ;;
   installed-lifecycle)
-    # Full install→migrate→Translate/Detect→approval→upgrade→rollback→uninstall suite.
+    # Full install→migrate→Translate/Detect→approval→upgrade→rollback→removal suite.
     run_filter_suite "runtime_" "${REQUIRED_LIFECYCLE_TESTS[@]}"
+    run_filter_suite "repositories" "${REQUIRED_SCHEMA_REPOSITORY_TESTS[@]}"
+    run_filter_suite "storage::migrations" "${REQUIRED_SCHEMA_MIGRATION_TESTS[@]}"
     ;;
   native-worker)
     # Cargo filter is a single substring; run overlapping filters then require names across output.
@@ -368,7 +461,7 @@ case "$MODE" in
     ;;
   paddleocr)
     run_filter_suite "paddleocr_package" \
-      "services::paddleocr_package_tests::paddleocr_package_vendor_runtime_directory_is_accepted"
+      "services::paddleocr_package_tests::paddleocr_package_runtime_directory_is_accepted"
     run_filter_suite "plugin_model" \
       "services::plugin_models::tests::plugin_model_status_reports_missing_without_side_effects" \
       "services::plugin_models::tests::plugin_model_download_verifies_and_installs_atomically"
@@ -380,8 +473,21 @@ case "$MODE" in
       "services::paddleocr_runtime_tests::paddleocr_runtime_missing_model_does_not_spawn_worker"
     ;;
   all)
+    run_filter_suite "domain::plugin_catalog" "${REQUIRED_CATALOG_DOMAIN_TESTS[@]}"
+    run_filter_suite "domain::runtime_plugin::tests" "${REQUIRED_CATALOG_MANIFEST_TESTS[@]}"
+    run_filter_suite "runtime_plugin_contracts" "${REQUIRED_ARCHIVE_CONTRACT_TESTS[@]}"
+    run_filter_suite "plugin_loader" "${REQUIRED_CATALOG_LOADER_TESTS[@]}"
+    run_filter_suite "plugin_catalog" "${REQUIRED_CATALOG_CATALOG_TESTS[@]}"
+    run_filter_suite "plugin_packages::tests" "${REQUIRED_CATALOG_COMMAND_TESTS[@]}"
+    run_filter_suite "package_definition" "${REQUIRED_CATALOG_DEFINITION_TESTS[@]}"
+    run_filter_suite "paddleocr_package" "${REQUIRED_CATALOG_NATIVE_TESTS[@]}"
+    run_filter_suite "conformance_package_fixtures" "${REQUIRED_CONFORMANCE_FIXTURE_TESTS[@]}"
+    run_filter_suite "import" "${REQUIRED_IMPORT_EXPORT_TESTS[@]}"
+    run_filter_suite "export_preserves_builtin_provider_binding_identity" "${REQUIRED_EXPORT_IDENTITY_TESTS[@]}"
     run_filter_suite "wasm_runtime" "${REQUIRED_WASM_TESTS[@]}"
     run_filter_suite "runtime_" "${REQUIRED_LIFECYCLE_TESTS[@]}"
+    run_filter_suite "repositories" "${REQUIRED_SCHEMA_REPOSITORY_TESTS[@]}"
+    run_filter_suite "storage::migrations" "${REQUIRED_SCHEMA_MIGRATION_TESTS[@]}"
     run_filter_suite "runtime_provider_tests" "${REQUIRED_LLM_TESTS[@]}"
     run_filter_suite "google_translate_web_runtime" "${REQUIRED_GOOGLE_WEB_TESTS[@]}"
     run_filter_suite "google_cloud_runtime_tests" "${REQUIRED_GOOGLE_CLOUD_TESTS[@]}"
@@ -397,7 +503,7 @@ case "$MODE" in
     run_filter_suite "plugin_model_download" \
       "services::plugin_models::tests::plugin_model_download_verifies_and_installs_atomically"
     run_filter_suite "paddleocr_package" \
-      "services::paddleocr_package_tests::paddleocr_package_vendor_runtime_directory_is_accepted"
+      "services::paddleocr_package_tests::paddleocr_package_runtime_directory_is_accepted"
     run_filter_suite "plugin_model_status" \
       "services::plugin_models::tests::plugin_model_status_reports_missing_without_side_effects"
     run_filter_suite "paddleocr_runtime" \
@@ -413,6 +519,26 @@ case "$MODE" in
       "services::wasm_runtime::network_handle::tests::baidu_access_token_query_is_host_only"
     run_filter_suite "ocr_only_remote_integration_validation_uses_declared_capability" \
       "services::service_integrations::tests::ocr_only_remote_integration_validation_uses_declared_capability"
+    ;;
+  catalog)
+    run_filter_suite "domain::plugin_catalog" "${REQUIRED_CATALOG_DOMAIN_TESTS[@]}"
+    run_filter_suite "domain::runtime_plugin::tests" "${REQUIRED_CATALOG_MANIFEST_TESTS[@]}"
+    run_filter_suite "runtime_plugin_contracts" "${REQUIRED_ARCHIVE_CONTRACT_TESTS[@]}"
+    run_filter_suite "plugin_loader" "${REQUIRED_CATALOG_LOADER_TESTS[@]}"
+    run_filter_suite "plugin_catalog" "${REQUIRED_CATALOG_CATALOG_TESTS[@]}"
+    run_filter_suite "plugin_packages::tests" "${REQUIRED_CATALOG_COMMAND_TESTS[@]}"
+    run_filter_suite "package_definition" "${REQUIRED_CATALOG_DEFINITION_TESTS[@]}"
+    run_filter_suite "paddleocr_package" "${REQUIRED_CATALOG_NATIVE_TESTS[@]}"
+    run_filter_suite "conformance_package_fixtures" "${REQUIRED_CONFORMANCE_FIXTURE_TESTS[@]}"
+    run_filter_suite "import" "${REQUIRED_IMPORT_EXPORT_TESTS[@]}"
+    run_filter_suite "export_preserves_builtin_provider_binding_identity" "${REQUIRED_EXPORT_IDENTITY_TESTS[@]}"
+    ;;
+  import-export)
+    run_filter_suite "import" "${REQUIRED_IMPORT_EXPORT_TESTS[@]}"
+    run_filter_suite "export_preserves_builtin_provider_binding_identity" "${REQUIRED_EXPORT_IDENTITY_TESTS[@]}"
+    ;;
+  fixtures)
+    run_filter_suite "conformance_package_fixtures" "${REQUIRED_CONFORMANCE_FIXTURE_TESTS[@]}"
     ;;
   resources)
     run_filter_suite "blob_resources" "${REQUIRED_BLOB_FILTER_TESTS[@]}"
@@ -464,7 +590,7 @@ case "$MODE" in
     run_filter_suite "stream_resources" "${REQUIRED_STREAM_FILTER_TESTS[@]}"
     ;;
   *)
-    echo "usage: mise run plugin:conformance [wasm|llm|installed-lifecycle|native-worker|paddleocr|baidu-ocr|all|google-cloud|google-cloud-translate|google-cloud-ocr|google-cloud-tts|edge-tts|resources]" >&2
+    echo "usage: mise run plugin:conformance [wasm|llm|installed-lifecycle|native-worker|paddleocr|baidu-ocr|catalog|fixtures|import-export|all|google-cloud|google-cloud-translate|google-cloud-ocr|google-cloud-tts|edge-tts|resources]" >&2
     exit 1
     ;;
 esac

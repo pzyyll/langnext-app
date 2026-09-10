@@ -18,15 +18,15 @@ use crate::domain::time::{new_id, now_rfc3339};
 use crate::repositories::{integration_endpoint_trusts, integration_instances, plugin_permission_grants};
 use crate::services::bounded_http::{BoundedHttpResponse, PreparedHttpRequest, RawHttpTransport};
 use crate::services::edge_tts::{EDGE_TTS_SYNTHESIZE_PATH, normalize_edge_tts_base_url, serialize_edge_tts_config};
-use crate::services::plugin_store::PluginPackageService;
+use crate::services::plugin_catalog::PluginCatalog;
 use crate::services::runtime_lifecycle::RuntimeLifecycleService;
 use crate::services::runtime_router::RuntimeRouter;
 use crate::services::service_capabilities::ServiceCapabilityService;
 use crate::services::service_integration_registry::ServiceIntegrationRegistry;
 use crate::services::service_integrations::ServiceIntegrationService;
-use crate::services::token_grant::TokenGrantService;
-use crate::services::vendor_trust::test_vendor_fixture::fixture_vendor_public_key;
-use crate::services::wasm_runtime::WasmRuntime;
+use crate::services::test_support::{
+  EDGE_TTS_ARCHIVE, catalog_with_builtins, fixture_digest, registry_from_catalog, token_service, wasm_runtime,
+};
 use crate::services::wasm_runtime::host::BrokerHandle;
 use crate::services::wasm_runtime::network_handle::NetworkBrokerHandle;
 use crate::storage::Database;
@@ -36,11 +36,6 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
-
-const EDGE_TTS_LNPLUGIN: &[u8] = include_bytes!(concat!(
-  env!("CARGO_MANIFEST_DIR"),
-  "/../runtime-plugins/edge-tts/fixtures/com.langnext.edge-tts-1.0.0.lnplugin"
-));
 
 struct CaptureTransport {
   last: Mutex<Option<PreparedHttpRequest>>,
@@ -78,7 +73,7 @@ impl RawHttpTransport for CaptureTransport {
 fn setup() -> (
   tempfile::TempDir,
   Database,
-  PluginPackageService,
+  Arc<PluginCatalog>,
   RuntimeLifecycleService,
   Arc<ServiceCapabilityService>,
   Arc<CaptureTransport>,
@@ -87,27 +82,15 @@ fn setup() -> (
   let dir = tempfile::tempdir().unwrap();
   let db = Database::new(dir.path()).unwrap();
   db.initialize().unwrap();
-  let packages =
-    PluginPackageService::with_vendor_roots(db.clone(), dir.path().to_path_buf(), vec![fixture_vendor_public_key()]);
-  // The committed signed edge-tts archive installs through the genuine package store; the
-  // registry projects its definition from the installed package (production startup path).
-  packages
-    .bootstrap_bundled_package(EDGE_TTS_LNPLUGIN, true)
-    .expect("bootstrap edge-tts package");
-  let registry = crate::services::test_support::registry_from_installed_packages(&packages);
-  let wasm = Arc::new(WasmRuntime::new().unwrap());
-  let tokens = Arc::new(
-    TokenGrantService::new(vec![Arc::new(
-      crate::services::google_service_account::GoogleServiceAccountExchanger::new(
-        db.clone(),
-        Arc::new(crate::credentials::MemoryCredentialVault::default()),
-      ),
-    )])
-    .unwrap(),
-  );
+  // The committed edge-tts archive loads through the genuine catalog and its definition is
+  // projected from the immutable snapshot (production startup path).
+  let catalog = catalog_with_builtins(db.clone(), dir.path(), &[EDGE_TTS_ARCHIVE]);
+  let registry = registry_from_catalog(&catalog);
+  let wasm = wasm_runtime();
+  let tokens = token_service(&db, Arc::new(crate::credentials::MemoryCredentialVault::default()));
   let lifecycle =
-    RuntimeLifecycleService::new(db.clone(), packages.clone(), registry.clone()).with_runtime(wasm.clone(), tokens);
-  let router = RuntimeRouter::new(db.clone(), registry.clone(), packages.clone(), wasm.clone());
+    RuntimeLifecycleService::new(db.clone(), catalog.clone(), registry.clone()).with_runtime(wasm.clone(), tokens);
+  let router = RuntimeRouter::new(db.clone(), registry.clone(), catalog.clone(), wasm.clone());
   let transport = Arc::new(CaptureTransport {
     last: Mutex::new(None),
     calls: AtomicUsize::new(0),
@@ -125,29 +108,26 @@ fn setup() -> (
       .with_router(router, wasm)
       .with_broker_factory(broker_factory),
   );
-  (dir, db, packages, lifecycle, caps, transport, registry)
+  (dir, db, catalog, lifecycle, caps, transport, registry)
 }
 
 fn integration_service_without_lifecycle(
   db: &Database,
+  catalog: &Arc<PluginCatalog>,
   registry: &Arc<ServiceIntegrationRegistry>,
 ) -> ServiceIntegrationService {
   let vault = Arc::new(crate::credentials::MemoryCredentialVault::default());
-  let tokens = Arc::new(
-    TokenGrantService::new(vec![Arc::new(
-      crate::services::google_service_account::GoogleServiceAccountExchanger::new(db.clone(), vault.clone()),
-    )])
-    .unwrap(),
-  );
-  ServiceIntegrationService::new(db.clone(), vault, registry.clone(), tokens)
+  let tokens = token_service(db, vault.clone());
+  ServiceIntegrationService::new(db.clone(), vault, registry.clone(), tokens).with_catalog(catalog.clone())
 }
 
 fn integration_service(
   db: &Database,
+  catalog: &Arc<PluginCatalog>,
   lifecycle: &RuntimeLifecycleService,
   registry: &Arc<ServiceIntegrationRegistry>,
 ) -> ServiceIntegrationService {
-  integration_service_without_lifecycle(db, registry).with_runtime_lifecycle(lifecycle.clone())
+  integration_service_without_lifecycle(db, catalog, registry).with_runtime_lifecycle(lifecycle.clone())
 }
 
 fn seed_instance(db: &Database, base_url: &str) -> Uuid {
@@ -233,11 +213,8 @@ fn activate(lifecycle: &RuntimeLifecycleService, instance_id: Uuid, digest: &str
 }
 
 fn run_approved_wasm_synthesis(base_url: &str, request_id: &str) -> PreparedHttpRequest {
-  let (_dir, db, packages, lifecycle, caps, transport, _registry) = setup();
-  let import = packages
-    .bootstrap_bundled_package(EDGE_TTS_LNPLUGIN, true)
-    .expect("bootstrap edge-tts package");
-  let digest = import.package_digest().to_string();
+  let (_dir, db, catalog, lifecycle, caps, transport, _registry) = setup();
+  let digest = fixture_digest(&catalog, EDGE_TTS_PLUGIN_ID);
   let id = seed_instance(&db, base_url);
   approve_target_custom_endpoint(&db, id, &digest);
   activate(&lifecycle, id, &digest);
@@ -286,11 +263,8 @@ fn ctx(id: Uuid, rid: &str) -> ExecutionContext {
 
 #[test]
 fn edge_tts_runtime_synthesize_returns_binary_audio_via_blob() {
-  let (_dir, db, packages, lifecycle, caps, transport, _registry) = setup();
-  let import = packages
-    .bootstrap_bundled_package(EDGE_TTS_LNPLUGIN, true)
-    .expect("bootstrap edge-tts package");
-  let digest = import.package_digest().to_string();
+  let (_dir, db, catalog, lifecycle, caps, transport, _registry) = setup();
+  let digest = fixture_digest(&catalog, EDGE_TTS_PLUGIN_ID);
   let id = seed_instance(&db, "https://tts.wangwangit.com");
   activate(&lifecycle, id, &digest);
 
@@ -333,11 +307,8 @@ fn edge_tts_runtime_synthesize_returns_binary_audio_via_blob() {
 
 #[test]
 fn edge_tts_runtime_approved_custom_origin_uses_user_approved_policy() {
-  let (_dir, db, packages, lifecycle, caps, transport, _registry) = setup();
-  let import = packages
-    .bootstrap_bundled_package(EDGE_TTS_LNPLUGIN, true)
-    .expect("bootstrap edge-tts package");
-  let digest = import.package_digest().to_string();
+  let (_dir, db, catalog, lifecycle, caps, transport, _registry) = setup();
+  let digest = fixture_digest(&catalog, EDGE_TTS_PLUGIN_ID);
   let id = seed_instance(&db, "https://edge.example/api");
   approve_target_custom_endpoint(&db, id, &digest);
   activate(&lifecycle, id, &digest);
@@ -400,14 +371,9 @@ fn edge_tts_runtime_approved_private_dns_result_uses_user_approved_policy() {
 
 #[test]
 fn edge_tts_runtime_reconfirmation_resigns_user_approved_provenance_after_lifecycle_change() {
-  let (dir, db, packages, lifecycle, caps, transport, registry) = setup();
-  let import = packages
-    .bootstrap_bundled_package(EDGE_TTS_LNPLUGIN, true)
-    .expect("bootstrap edge-tts package");
-  let digest = import.package_digest().to_string();
-  let activation =
-    authorize_installed_default(&db, &packages, dir.path(), &digest).with_integration_lifecycle(lifecycle.clone());
-  let service = integration_service(&db, &lifecycle, &registry).with_default_package_activation(activation);
+  let (_dir, db, catalog, lifecycle, caps, transport, registry) = setup();
+  let digest = fixture_digest(&catalog, EDGE_TTS_PLUGIN_ID);
+  let service = integration_service(&db, &catalog, &lifecycle, &registry);
   let custom_config = r#"{"base-url":"https://edge.example/api"}"#;
   let create = IntegrationInstanceWrite {
     id: None,
@@ -445,17 +411,14 @@ fn edge_tts_runtime_reconfirmation_resigns_user_approved_provenance_after_lifecy
   // A lifecycle identity change (package version upgrade) revokes the approval bound to the
   // original pin and leaves the active Wasm grant fail-closed until the user reviews the same
   // base URL under the new runtime identity.
-  let (package_v2, digest_v2) = edge_tts_v2_package();
-  packages
-    .bootstrap_bundled_package(&package_v2, false)
-    .expect("bootstrap edge-tts 1.0.1");
+  let (manifest_v2, payloads_v2) = edge_tts_v2_fixture(&catalog);
+  let digest_v2 = crate::services::test_support::add_builtin_fixture(&catalog, &manifest_v2, &payloads_v2);
   activate(&lifecycle, created.id, &digest_v2);
   let activated = service.get_instance(created.id).expect("activated instance");
   assert_ne!(activated.package_digest.as_deref(), Some(digest.as_str()));
-  assert_ne!(
-    activated.execution_grant_set_revision,
-    created.execution_grant_set_revision
-  );
+  assert_eq!(activated.package_digest.as_deref(), Some(digest_v2.as_str()));
+  // Grant revisions are scoped to one package digest, so the new pin carries its own grant.
+  assert!(activated.execution_grant_set_revision.is_some());
   assert_eq!(
     activated.endpoint_trust_status,
     crate::domain::endpoint_trust::EndpointTrustStatus::ReviewRequired
@@ -521,7 +484,7 @@ fn edge_tts_runtime_reconfirmation_resigns_user_approved_provenance_after_lifecy
         resigned.execution_grant_set_revision.unwrap(),
       )
     })
-    .expect("re-signed grant");
+    .expect("re-issued grant");
   let entry = bundle
     .network
     .iter()
@@ -533,7 +496,7 @@ fn edge_tts_runtime_reconfirmation_resigns_user_approved_provenance_after_lifecy
 
   let reconfirmed_handler = caps
     .resolve_speech_synthesize(created.id, SPEECH_SYNTHESIZE_CAPABILITY_ID)
-    .expect("resolve re-signed Wasm speech");
+    .expect("resolve re-issued Wasm speech");
   let wasm_response = block_on(reconfirmed_handler.synthesize(
     created.id,
     SpeechSynthesizeRequest {
@@ -565,14 +528,11 @@ fn edge_tts_runtime_reconfirmation_resigns_user_approved_provenance_after_lifecy
 
 #[test]
 fn edge_tts_runtime_reconfirmation_failure_does_not_report_trusted() {
-  let (_dir, db, packages, lifecycle, _caps, _transport, registry) = setup();
-  let import = packages
-    .bootstrap_bundled_package(EDGE_TTS_LNPLUGIN, true)
-    .expect("bootstrap edge-tts package");
-  let digest = import.package_digest().to_string();
+  let (_dir, db, catalog, lifecycle, _caps, _transport, registry) = setup();
+  let digest = fixture_digest(&catalog, EDGE_TTS_PLUGIN_ID);
   let id = seed_instance(&db, "https://edge.example/api");
   activate(&lifecycle, id, &digest);
-  let service = integration_service_without_lifecycle(&db, &registry);
+  let service = integration_service_without_lifecycle(&db, &catalog, &registry);
   let current = service.get_instance(id).expect("active instance");
   let preview = service
     .preview_endpoint_trust(EndpointTrustPreviewInput {
@@ -609,11 +569,8 @@ fn edge_tts_runtime_reconfirmation_failure_does_not_report_trusted() {
 
 #[test]
 fn edge_tts_runtime_unapproved_custom_origin_returns_endpoint_trust_required() {
-  let (_dir, db, packages, lifecycle, caps, transport, _registry) = setup();
-  let import = packages
-    .bootstrap_bundled_package(EDGE_TTS_LNPLUGIN, true)
-    .expect("bootstrap edge-tts package");
-  let digest = import.package_digest().to_string();
+  let (_dir, db, catalog, lifecycle, caps, transport, _registry) = setup();
+  let digest = fixture_digest(&catalog, EDGE_TTS_PLUGIN_ID);
   let id = seed_instance(&db, "https://edge.example/api");
   activate(&lifecycle, id, &digest);
 
@@ -644,11 +601,8 @@ fn edge_tts_runtime_unapproved_custom_origin_returns_endpoint_trust_required() {
 
 #[test]
 fn edge_tts_runtime_bundled_rollback_remains_available() {
-  let (_dir, db, packages, lifecycle, _caps, _transport, _registry) = setup();
-  let import = packages
-    .bootstrap_bundled_package(EDGE_TTS_LNPLUGIN, true)
-    .expect("bootstrap");
-  let digest = import.package_digest().to_string();
+  let (_dir, db, catalog, lifecycle, _caps, _transport, _registry) = setup();
+  let digest = fixture_digest(&catalog, EDGE_TTS_PLUGIN_ID);
   let id = seed_instance(&db, "https://edge.example");
   let before = db.read(|conn| integration_instances::get(conn, id)).unwrap();
   assert_eq!(before.runtime_kind, "wasm-component");
@@ -665,11 +619,8 @@ fn edge_tts_runtime_bundled_rollback_remains_available() {
 /// returns the output blob.
 #[test]
 fn edge_tts_runtime_rejects_wrong_content_type() {
-  let (_dir, db, packages, lifecycle, caps, transport, _registry) = setup();
-  let import = packages
-    .bootstrap_bundled_package(EDGE_TTS_LNPLUGIN, true)
-    .expect("bootstrap edge-tts package");
-  let digest = import.package_digest().to_string();
+  let (_dir, db, catalog, lifecycle, caps, transport, _registry) = setup();
+  let digest = fixture_digest(&catalog, EDGE_TTS_PLUGIN_ID);
   let id = seed_instance(&db, "https://tts.wangwangit.com");
   activate(&lifecycle, id, &digest);
 
@@ -711,11 +662,8 @@ fn edge_tts_runtime_rejects_wrong_content_type() {
 /// must be accepted.
 #[test]
 fn edge_tts_runtime_accepts_audio_mpeg_with_parameters() {
-  let (_dir, db, packages, lifecycle, caps, transport, _registry) = setup();
-  let import = packages
-    .bootstrap_bundled_package(EDGE_TTS_LNPLUGIN, true)
-    .expect("bootstrap edge-tts package");
-  let digest = import.package_digest().to_string();
+  let (_dir, db, catalog, lifecycle, caps, transport, _registry) = setup();
+  let digest = fixture_digest(&catalog, EDGE_TTS_PLUGIN_ID);
   let id = seed_instance(&db, "https://tts.wangwangit.com");
   activate(&lifecycle, id, &digest);
 
@@ -751,11 +699,8 @@ fn edge_tts_runtime_accepts_audio_mpeg_with_parameters() {
 /// contract requires an audio/mpeg content type, and a missing header cannot be accepted as MP3.
 #[test]
 fn edge_tts_runtime_rejects_missing_content_type() {
-  let (_dir, db, packages, lifecycle, caps, transport, _registry) = setup();
-  let import = packages
-    .bootstrap_bundled_package(EDGE_TTS_LNPLUGIN, true)
-    .expect("bootstrap edge-tts package");
-  let digest = import.package_digest().to_string();
+  let (_dir, db, catalog, lifecycle, caps, transport, _registry) = setup();
+  let digest = fixture_digest(&catalog, EDGE_TTS_PLUGIN_ID);
   let id = seed_instance(&db, "https://tts.wangwangit.com");
   activate(&lifecycle, id, &digest);
 
@@ -794,11 +739,8 @@ fn edge_tts_runtime_rejects_missing_content_type() {
 /// the exact `audio/mpeg` type/subtype (with allowed parameters) is accepted.
 #[test]
 fn edge_tts_runtime_rejects_near_miss_mime() {
-  let (_dir, db, packages, lifecycle, caps, transport, _registry) = setup();
-  let import = packages
-    .bootstrap_bundled_package(EDGE_TTS_LNPLUGIN, true)
-    .expect("bootstrap edge-tts package");
-  let digest = import.package_digest().to_string();
+  let (_dir, db, catalog, lifecycle, caps, transport, _registry) = setup();
+  let digest = fixture_digest(&catalog, EDGE_TTS_PLUGIN_ID);
   let id = seed_instance(&db, "https://tts.wangwangit.com");
   activate(&lifecycle, id, &digest);
 
@@ -868,12 +810,10 @@ fn edge_tts_runtime_request_fixture_matches_guest_contract() {
   let style = expected["style"].as_str().expect("fixture style string");
   let host_pitch: f64 = pitch.parse().expect("fixture pitch must convert to host preference");
 
-  let (_dir, db, packages, lifecycle, caps, transport, _registry) = setup();
-  let import = packages
-    .bootstrap_bundled_package(EDGE_TTS_LNPLUGIN, true)
-    .expect("bootstrap edge-tts package");
+  let (_dir, db, catalog, lifecycle, caps, transport, _registry) = setup();
+  let digest = fixture_digest(&catalog, EDGE_TTS_PLUGIN_ID);
   let id = seed_instance(&db, FIXTURE_BASE_URL);
-  activate(&lifecycle, id, &import.package_digest().to_string());
+  activate(&lifecycle, id, &digest);
 
   let handler = caps
     .resolve_speech_synthesize(id, SPEECH_SYNTHESIZE_CAPABILITY_ID)
@@ -924,11 +864,8 @@ fn edge_tts_runtime_request_fixture_matches_guest_contract() {
 /// carrying it must map to `InvalidRequest` (the guest maps HTTP 400 to invalid-request).
 #[test]
 fn edge_tts_runtime_error_400_fixture_maps_to_invalid_request() {
-  let (_dir, db, packages, lifecycle, caps, transport, _registry) = setup();
-  let import = packages
-    .bootstrap_bundled_package(EDGE_TTS_LNPLUGIN, true)
-    .expect("bootstrap edge-tts package");
-  let digest = import.package_digest().to_string();
+  let (_dir, db, catalog, lifecycle, caps, transport, _registry) = setup();
+  let digest = fixture_digest(&catalog, EDGE_TTS_PLUGIN_ID);
   let id = seed_instance(&db, "https://tts.wangwangit.com");
   activate(&lifecycle, id, &digest);
 
@@ -972,11 +909,8 @@ fn edge_tts_runtime_error_400_fixture_maps_to_invalid_request() {
 /// carrying it must map to `RateLimited`.
 #[test]
 fn edge_tts_runtime_error_429_fixture_maps_to_rate_limited() {
-  let (_dir, db, packages, lifecycle, caps, transport, _registry) = setup();
-  let import = packages
-    .bootstrap_bundled_package(EDGE_TTS_LNPLUGIN, true)
-    .expect("bootstrap edge-tts package");
-  let digest = import.package_digest().to_string();
+  let (_dir, db, catalog, lifecycle, caps, transport, _registry) = setup();
+  let digest = fixture_digest(&catalog, EDGE_TTS_PLUGIN_ID);
   let id = seed_instance(&db, "https://tts.wangwangit.com");
   activate(&lifecycle, id, &digest);
 
@@ -1021,11 +955,8 @@ fn edge_tts_runtime_error_429_fixture_maps_to_rate_limited() {
 #[test]
 fn edge_tts_runtime_rejects_oversized_audio() {
   use crate::domain::service_capability::SPEECH_AUDIO_MAX_BYTES;
-  let (_dir, db, packages, lifecycle, caps, transport, _registry) = setup();
-  let import = packages
-    .bootstrap_bundled_package(EDGE_TTS_LNPLUGIN, true)
-    .expect("bootstrap edge-tts package");
-  let digest = import.package_digest().to_string();
+  let (_dir, db, catalog, lifecycle, caps, transport, _registry) = setup();
+  let digest = fixture_digest(&catalog, EDGE_TTS_PLUGIN_ID);
   let id = seed_instance(&db, "https://tts.wangwangit.com");
   activate(&lifecycle, id, &digest);
 
@@ -1062,27 +993,6 @@ fn edge_tts_runtime_rejects_oversized_audio() {
   );
 }
 
-/// Plugin-ID auto-pin is retired: the call is a fail-closed no-op and never pins or grants.
-#[test]
-fn edge_tts_pin_default_is_retired_noop() {
-  let (_dir, db, packages, lifecycle, _caps, _transport, _registry) = setup();
-  let _import = packages
-    .bootstrap_bundled_package(EDGE_TTS_LNPLUGIN, true)
-    .expect("bootstrap edge-tts package");
-  let id = seed_instance(&db, "https://tts.wangwangit.com");
-
-  let before = db.read(|conn| integration_instances::get(conn, id)).unwrap();
-  assert_eq!(before.runtime_kind, "wasm-component");
-  assert!(before.execution_grant_set_revision.is_none());
-
-  lifecycle.pin_default_package_for_new_instance(id).unwrap();
-
-  let after = db.read(|conn| integration_instances::get(conn, id)).unwrap();
-  assert_eq!(after.runtime_kind, "wasm-component", "pin default is a retired no-op");
-  assert_eq!(after.package_digest, before.package_digest);
-  assert!(after.execution_grant_set_revision.is_none());
-}
-
 /// Migration/upgrade preserves the Speech service capability binding and default references.
 /// The lifecycle snapshots pre-migration state and restores it on rollback. This test seeds a
 /// real Speech service bound to the Edge TTS instance plus a default selection and preferences,
@@ -1093,11 +1003,8 @@ fn edge_tts_runtime_migration_preserves_speech_default_references() {
   use crate::domain::speech_service::{EDGE_TTS_PREFERENCES_SCHEMA_VERSION, SpeechService};
   use crate::repositories::{app_settings, speech_services};
 
-  let (_dir, db, packages, lifecycle, caps, _transport, _registry) = setup();
-  let import = packages
-    .bootstrap_bundled_package(EDGE_TTS_LNPLUGIN, true)
-    .expect("bootstrap edge-tts package");
-  let digest = import.package_digest().to_string();
+  let (_dir, db, catalog, lifecycle, caps, _transport, _registry) = setup();
+  let digest = fixture_digest(&catalog, EDGE_TTS_PLUGIN_ID);
   let id = seed_instance(&db, "https://tts.wangwangit.com");
 
   // Seed a real Speech service bound to this Edge TTS instance with concrete preferences.
@@ -1161,316 +1068,27 @@ fn edge_tts_runtime_migration_preserves_speech_default_references() {
   // Package pin remains; speech references already asserted after migration.
 }
 
-/// Edge TTS vendor-default qualification rejects a package with a non-default plugin id, proving
-/// the auto-pin cross-bind is real (not a blanket accept).
-#[test]
-fn edge_tts_runtime_auto_pin_rejects_non_vendor_package() {
-  let (_dir, db, packages, lifecycle, _caps, _transport, _registry) = setup();
-  // Install the real Edge TTS package but do NOT set it as default for a different plugin id.
-  let _import = packages
-    .bootstrap_bundled_package(EDGE_TTS_LNPLUGIN, true)
-    .expect("bootstrap edge-tts package");
-  // Create an instance with a different plugin id (not Edge TTS) -> auto-pin must skip it.
-  let id = new_id();
-  let now = now_rfc3339();
-  db.transaction(|uow| {
-    integration_instances::insert(
-      uow.conn(),
-      &IntegrationInstance {
-        id,
-        plugin_id: "com.langnext.other-tts".into(),
-        plugin_version: "1.0.0".into(),
-        display_name: "Other TTS".into(),
-        enabled: true,
-        config_json: "{}".into(),
-        config_schema_version: 1,
-        health_status: IntegrationHealthStatus::Ready,
-        last_validated_at: None,
-        last_error_code: None,
-        runtime_kind: "wasm-component".into(),
-        package_digest: Some("a".repeat(64)),
-        execution_grant_set_revision: None,
-        runtime_state: InstanceRuntimeState::PendingActivation.as_str().into(),
-        runtime_error_code: None,
-        runtime_error_message: None,
-        runtime_requirement_json: None,
-        created_at: now.clone(),
-        updated_at: now,
-      },
-    )?;
-    Ok(())
-  })
-  .unwrap();
-
-  lifecycle.pin_default_package_for_new_instance(id).unwrap();
-  // Auto-pin must skip: the instance has no default package for its plugin id.
-  let after = db.read(|conn| integration_instances::get(conn, id)).unwrap();
-  assert_eq!(after.runtime_kind, "wasm-component");
-  assert!(after.execution_grant_set_revision.is_none());
-}
-
-/// Auto-pin consent gate: a custom HTTPS base URL must NOT be host-auto-approved. The manifest
-/// matches the real Edge TTS vendor package, but the EFFECTIVE origin (`https://evil.example`)
-/// differs from the vendor default, so auto-pin fails closed and the instance stays Bundled Rust
-/// with no grant. The user must go through explicit permission preview/approval instead.
-#[test]
-fn edge_tts_runtime_auto_pin_rejects_custom_origin() {
-  let (_dir, db, packages, lifecycle, _caps, _transport, _registry) = setup();
-  let import = packages
-    .bootstrap_bundled_package(EDGE_TTS_LNPLUGIN, true)
-    .expect("bootstrap edge-tts package");
-  let digest = import.package_digest().to_string();
-  let id = seed_instance(&db, "https://evil.example/api");
-
-  lifecycle.pin_default_package_for_new_instance(id).unwrap();
-
-  // Auto-pin must fail closed: custom origin is not the vendor default.
-  let after = db.read(|conn| integration_instances::get(conn, id)).unwrap();
-  assert_eq!(after.runtime_kind, "wasm-component", "custom origin must not auto-pin");
-  assert!(
-    after.execution_grant_set_revision.is_none(),
-    "no grant for custom origin"
-  );
-  assert!(after.execution_grant_set_revision.is_none());
-  let _ = digest; // vendor package exists but must not be auto-pinned for a custom origin.
-
-  let official_origin_custom_path = seed_instance(&db, "https://tts.wangwangit.com/api");
-  lifecycle
-    .pin_default_package_for_new_instance(official_origin_custom_path)
-    .unwrap();
-  let path_variant = db
-    .read(|conn| integration_instances::get(conn, official_origin_custom_path))
-    .unwrap();
-  assert_eq!(path_variant.runtime_kind, "wasm-component");
-  assert!(path_variant.execution_grant_set_revision.is_none());
-}
-
-/// Pin-default is a retired no-op even for an equivalent normalized default origin: the call
-/// never pins or grants regardless of origin normalization.
-#[test]
-fn edge_tts_pin_default_retired_noop_for_equivalent_normalized_origin() {
-  let (_dir, db, packages, lifecycle, _caps, _transport, _registry) = setup();
-  let _import = packages
-    .bootstrap_bundled_package(EDGE_TTS_LNPLUGIN, true)
-    .expect("bootstrap edge-tts package");
-  let id = seed_instance(&db, "https://tts.wangwangit.com/");
-
-  lifecycle.pin_default_package_for_new_instance(id).unwrap();
-
-  let after = db.read(|conn| integration_instances::get(conn, id)).unwrap();
-  assert_eq!(after.runtime_kind, "wasm-component");
-  assert!(after.execution_grant_set_revision.is_none());
-  assert!(after.execution_grant_set_revision.is_none());
-}
-
-/// Auto-pin consent gate: a malformed/non-HTTPS base URL must not auto-pin. The effective
-/// origin cannot be normalized to HTTPS, so auto-pin fails closed.
-#[test]
-fn edge_tts_runtime_auto_pin_rejects_non_https_origin() {
-  let (_dir, db, packages, lifecycle, _caps, _transport, _registry) = setup();
-  let _import = packages
-    .bootstrap_bundled_package(EDGE_TTS_LNPLUGIN, true)
-    .expect("bootstrap edge-tts package");
-  // Non-HTTPS base URL: normalize_edge_tts_base_url rejects it, so the effective origin check
-  // fails closed. seed_instance stores the raw value; the auto-pin gate normalizes at apply time.
-  let id = seed_instance(&db, "http://tts.wangwangit.com");
-
-  lifecycle.pin_default_package_for_new_instance(id).unwrap();
-
-  let after = db.read(|conn| integration_instances::get(conn, id)).unwrap();
-  assert_eq!(
-    after.runtime_kind, "wasm-component",
-    "non-https origin must not auto-pin"
-  );
-  assert!(after.execution_grant_set_revision.is_none());
-  assert!(after.execution_grant_set_revision.is_none());
-}
-
-/// Rebuild the committed edge-tts archive with a bumped version and the same vendor signature,
-/// producing a different runtime identity for the installed package (approval revocation path).
-fn edge_tts_v2_package() -> (Vec<u8>, String) {
-  use crate::services::plugin_package::test_support::build_signed_package_with_key;
-  use crate::services::plugin_package::{hash_archive_bytes, verify_package_bytes};
-  use crate::services::vendor_trust::test_vendor_fixture::{fixture_vendor_public_key_hex, fixture_vendor_signing_key};
-  let verified = verify_package_bytes(EDGE_TTS_LNPLUGIN, &fixture_vendor_public_key_hex()).expect("fixture verifies");
-  let mut manifest = verified.manifest.clone();
+/// Rebuild the committed edge-tts content with a bumped version, producing a different runtime
+/// identity for the catalog entry (approval revocation path).
+fn edge_tts_v2_fixture(
+  catalog: &PluginCatalog,
+) -> (crate::domain::runtime_plugin::PluginManifestV1, Vec<(String, Vec<u8>)>) {
+  let loaded = catalog
+    .resolve_default(EDGE_TTS_PLUGIN_ID)
+    .expect("edge-tts content is in the catalog");
+  let mut manifest = loaded.manifest.clone();
   manifest.version = "1.0.1".into();
-  let files: Vec<(&str, &[u8])> = verified
-    .extracted_files
+  let payloads = manifest
+    .files
     .iter()
-    .filter(|(path, _)| {
-      path.as_str() != crate::domain::runtime_plugin::MANIFEST_FILE_PATH
-        && path.as_str() != crate::domain::runtime_plugin::SIGNATURE_FILE_PATH
+    .map(|file| {
+      (
+        file.path.clone(),
+        loaded
+          .read_snapshot_file(&file.path)
+          .unwrap_or_else(|e| panic!("read {}: {e}", file.path)),
+      )
     })
-    .map(|(path, bytes)| (path.as_str(), bytes.as_slice()))
     .collect();
-  let package = build_signed_package_with_key(&manifest, &files, &fixture_vendor_signing_key());
-  let digest = hash_archive_bytes(&package);
-  (package, digest)
-}
-
-/// Authorize an installed catalog default through the public preview/confirm seam.
-fn authorize_installed_default(
-  db: &Database,
-  packages: &PluginPackageService,
-  app_data_dir: &std::path::Path,
-  digest: &str,
-) -> crate::services::default_package_activation::DefaultPackageActivationService {
-  use crate::domain::default_package_activation::AuthorizeDefaultPluginPackageInput;
-  use crate::services::default_package_activation::DefaultPackageActivationService;
-
-  let activation = DefaultPackageActivationService::create(db.clone(), packages.clone(), app_data_dir);
-  let preview = activation
-    .preview_default_package_activation(digest)
-    .expect("preview authorized default");
-  activation
-    .authorize_default_plugin_package(AuthorizeDefaultPluginPackageInput {
-      preview_id: preview.preview_id,
-      acknowledge_future_instance_authority: true,
-      acknowledge_unsigned_default_risk: false,
-    })
-    .expect("authorize default package");
-  activation
-}
-
-#[test]
-fn default_package_activation_integration_edge_tts_create_grant() {
-  use crate::domain::default_package_activation::{
-    ConfirmDefaultRuntimeAuthorityInput, PreviewDefaultRuntimeAuthorityInput,
-  };
-  use crate::domain::runtime_lifecycle::GrantSubjectKind;
-  use crate::domain::service_integration::EDGE_TTS_DEFAULT_BASE_URL;
-
-  let (dir, db, packages, lifecycle, _caps, _transport, registry) = setup();
-  let import = packages
-    .bootstrap_bundled_package(EDGE_TTS_LNPLUGIN, true)
-    .expect("bootstrap edge-tts package");
-  let digest = import.package_digest().to_string();
-  let activation =
-    authorize_installed_default(&db, &packages, dir.path(), &digest).with_integration_lifecycle(lifecycle.clone());
-  let integrations =
-    integration_service(&db, &lifecycle, &registry).with_default_package_activation(activation.clone());
-
-  let config_json = serialize_edge_tts_config(&crate::domain::service_integration::EdgeTtsConfigV1 {
-    base_url: EDGE_TTS_DEFAULT_BASE_URL.into(),
-  })
-  .unwrap();
-  let dto = integrations
-    .save(IntegrationInstanceWrite {
-      id: None,
-      plugin_id: EDGE_TTS_PLUGIN_ID.into(),
-      display_name: "Package-first Edge".into(),
-      enabled: true,
-      config_json,
-      credentials: vec![],
-      expected_updated_at: None,
-      endpoint_trust_preview_id: None,
-      acknowledge_endpoint_trust: false,
-    })
-    .unwrap();
-
-  assert_eq!(dto.runtime_kind, "wasm-component");
-  assert_eq!(dto.package_digest.as_deref(), Some(digest.as_str()));
-  assert_eq!(dto.runtime_state, "pending_activation");
-  assert!(dto.execution_grant_set_revision.is_none());
-
-  activation
-    .activate_pending_subject(GrantSubjectKind::IntegrationInstance, dto.id)
-    .expect("package-first activation");
-  let after_first = integrations.get_instance(dto.id).unwrap();
-  assert_eq!(after_first.package_digest.as_deref(), Some(digest.as_str()));
-  assert_ne!(after_first.runtime_kind, "bundled-rust");
-
-  // Instance-configured origin is never pre-authorized by the default policy; confirm additional
-  // authority through the subject-bound preview/confirm seam, then grant activates.
-  if after_first.execution_grant_set_revision.is_none() {
-    let preview = activation
-      .preview_default_runtime_authority(PreviewDefaultRuntimeAuthorityInput {
-        subject_kind: GrantSubjectKind::IntegrationInstance,
-        subject_id: dto.id,
-      })
-      .expect("authority preview for instance-configured origin");
-    activation
-      .confirm_default_runtime_authority(ConfirmDefaultRuntimeAuthorityInput {
-        preview_id: preview.preview_id,
-        acknowledge_additional_authority: true,
-      })
-      .expect("confirm additional authority");
-  }
-
-  let active = integrations.get_instance(dto.id).unwrap();
-  assert_eq!(active.runtime_kind, "wasm-component");
-  assert_eq!(active.package_digest.as_deref(), Some(digest.as_str()));
-  assert_eq!(active.runtime_state, "active");
-  assert!(active.execution_grant_set_revision.is_some());
-}
-
-#[test]
-fn default_package_activation_integration_edge_tts_disable_race() {
-  use crate::domain::runtime_lifecycle::GrantSubjectKind;
-  use crate::domain::service_integration::EDGE_TTS_DEFAULT_BASE_URL;
-  use std::sync::mpsc;
-
-  let (dir, db, packages, lifecycle, _caps, _transport, registry) = setup();
-  let import = packages
-    .bootstrap_bundled_package(EDGE_TTS_LNPLUGIN, true)
-    .expect("bootstrap edge-tts package");
-  let digest = import.package_digest().to_string();
-  let activation =
-    authorize_installed_default(&db, &packages, dir.path(), &digest).with_integration_lifecycle(lifecycle.clone());
-  let integrations =
-    integration_service(&db, &lifecycle, &registry).with_default_package_activation(activation.clone());
-
-  let config_json = serialize_edge_tts_config(&crate::domain::service_integration::EdgeTtsConfigV1 {
-    base_url: EDGE_TTS_DEFAULT_BASE_URL.into(),
-  })
-  .unwrap();
-  let dto = integrations
-    .save(IntegrationInstanceWrite {
-      id: None,
-      plugin_id: EDGE_TTS_PLUGIN_ID.into(),
-      display_name: "Race Edge".into(),
-      enabled: true,
-      config_json: config_json.clone(),
-      credentials: vec![],
-      expected_updated_at: None,
-      endpoint_trust_preview_id: None,
-      acknowledge_endpoint_trust: false,
-    })
-    .unwrap();
-
-  let (at_seam_tx, at_seam_rx) = mpsc::channel();
-  let (release_tx, release_rx) = mpsc::channel();
-  lifecycle.set_auto_pin_after_final_revalidate_hook(Some(Box::new(move || {
-    let _ = at_seam_tx.send(());
-    let _ = release_rx.recv();
-  })));
-
-  let activation_worker = activation.clone();
-  let subject_id = dto.id;
-  let handle = std::thread::spawn(move || {
-    activation_worker.activate_pending_subject(GrantSubjectKind::IntegrationInstance, subject_id)
-  });
-
-  // Edge TTS often exits before final revalidate when authority confirmation is required.
-  let raced = at_seam_rx.recv_timeout(std::time::Duration::from_secs(5)).is_ok();
-  if raced {
-    let _ = integrations.save(IntegrationInstanceWrite {
-      id: Some(dto.id),
-      plugin_id: EDGE_TTS_PLUGIN_ID.into(),
-      display_name: "Race Edge".into(),
-      enabled: false,
-      config_json,
-      credentials: vec![],
-      expected_updated_at: Some(dto.updated_at.clone()),
-      endpoint_trust_preview_id: None,
-      acknowledge_endpoint_trust: false,
-    });
-    let _ = release_tx.send(());
-  }
-  let _ = handle.join().expect("activation thread");
-
-  let after = integrations.get_instance(dto.id).unwrap();
-  assert_eq!(after.package_digest.as_deref(), Some(digest.as_str()));
-  assert_ne!(after.runtime_kind, "bundled-rust");
+  (manifest, payloads)
 }

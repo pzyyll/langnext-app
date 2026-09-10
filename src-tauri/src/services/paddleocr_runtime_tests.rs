@@ -1,30 +1,32 @@
-// ABOUTME: Host OCR routing tests for PaddleOCR native workers (model readiness + golden text).
-// ABOUTME: Uses a protocol fixture worker; production Paddle SDK/model inventory remains blocked.
+// ABOUTME: Host OCR routing tests for PaddleOCR built-in native workers (model readiness + golden text).
+// ABOUTME: Uses a protocol fixture worker and catalog snapshots; no publisher or activation state.
 #![cfg(test)]
 
-use crate::domain::native_worker::{PADDLEOCR_OCR_GOLDEN_TEXT, PADDLEOCR_PLUGIN_ID};
-use crate::domain::plugin_model::{PluginModelResourceStatus, paddleocr_medium_model_resource};
-use crate::domain::plugin_package::{InstalledPluginVersion, sha256_hex};
-use crate::domain::runtime_plugin::{
-  CapabilityDeclaration, FileRole, PackageTargetConstraint, PermissionRequests, PluginFileEntry, PluginManifestV1,
-  PublisherDeclaration, RuntimeDescriptor, RuntimeKind,
+use crate::credentials::MemoryCredentialVault;
+use crate::domain::native_worker::{
+  NATIVE_PROTOCOL_VERSION_V1, NATIVE_WORKER_ARTIFACT_PATH, PADDLEOCR_OCR_GOLDEN_TEXT, PADDLEOCR_PLUGIN_ID,
 };
+use crate::domain::plugin_catalog::PluginSource;
+use crate::domain::plugin_model::{PluginModelResourceStatus, paddleocr_medium_model_resource};
+use crate::domain::runtime_plugin::{FileRole, PackageTargetConstraint, RuntimeDescriptor, RuntimeKind};
 use crate::domain::service_capability::{
   CapabilityErrorCode, OCR_IMAGE_CAPABILITY_ID, OcrImageOperation, OcrImagePreferences, OcrImageRequest,
 };
 use crate::domain::service_integration::{IntegrationHealthStatus, IntegrationInstance};
 use crate::domain::time::now_rfc3339;
-use crate::repositories::{
-  installed_plugin_versions, integration_instances, plugin_model_resources, plugin_publishers,
-};
+use crate::repositories::{integration_instances, plugin_model_resources};
 use crate::services::native_workers::{NativeWorkerExecuteRequest, NativeWorkerManager};
-use crate::services::vendor_trust::{VENDOR_PUBLISHER_KEY_ID, test_vendor_fixture};
+use crate::services::plugin_catalog::PluginCatalog;
+use crate::services::runtime_router::RuntimeRouter;
+use crate::services::service_integrations::ServiceIntegrationService;
+use crate::services::test_support::{
+  SyntheticPlugin, catalog_with_synthetic, fixture_digest, registry_from_catalog, token_service, wasm_runtime,
+};
 use crate::storage::Database;
 use base64::Engine;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use tempfile::TempDir;
 use uuid::Uuid;
 
@@ -32,6 +34,7 @@ const LICENSE_NOTICE: &str = "licenses/NOTICE.txt";
 const WORKER_BYTES: &[u8] = b"MZ-worker-placeholder";
 const DLL_A: &str = "runtime/opencv_world.dll";
 const DLL_B: &str = "runtime/paddle_inference.dll";
+const PLUGIN_VERSION: &str = "1.0.0";
 
 /// Committed golden PNG fixture (host routing only; not a Paddle accuracy claim).
 const GOLDEN_PNG: &[u8] = include_bytes!("../../../runtime-plugins/paddleocr/fixtures/ocr-golden/image.png");
@@ -124,8 +127,8 @@ fn paddleocr_runtime_ocr_returns_expected_text() {
   let marker = b"ready";
   std::fs::write(model_root.join("marker"), marker).unwrap();
   let exe = build_golden_helper(dir.path());
-  let worker_sha256 = crate::domain::plugin_package::sha256_hex(&std::fs::read(&exe).unwrap());
-  let model_files = vec![("marker".to_string(), crate::domain::plugin_package::sha256_hex(marker))];
+  let worker_sha256 = crate::domain::plugin_catalog::sha256_hex(&std::fs::read(&exe).unwrap());
+  let model_files = vec![("marker".to_string(), crate::domain::plugin_catalog::sha256_hex(marker))];
   let png_b64 = base64::engine::general_purpose::STANDARD.encode(GOLDEN_PNG);
   let manager = NativeWorkerManager::new();
   let response = manager
@@ -155,114 +158,102 @@ fn paddleocr_runtime_ocr_returns_expected_text() {
   assert_eq!(response.text, PADDLEOCR_OCR_GOLDEN_TEXT);
 }
 
-fn seed_native_instance(db: &Database, package_digest: &str, model_ready: bool) -> Uuid {
+/// Synthetic built-in PaddleOCR native package plus one active instance pinned to its digest.
+struct NativeFixture {
+  _dir: TempDir,
+  db: Database,
+  catalog: Arc<PluginCatalog>,
+  digest: String,
+  instance_id: Uuid,
+}
+
+impl NativeFixture {
+  fn router(&self) -> RuntimeRouter {
+    RuntimeRouter::new(
+      self.db.clone(),
+      registry_from_catalog(&self.catalog),
+      self.catalog.clone(),
+      wasm_runtime(),
+    )
+  }
+
+  fn integration_service(&self) -> ServiceIntegrationService {
+    let registry = registry_from_catalog(&self.catalog);
+    let vault = Arc::new(MemoryCredentialVault::default());
+    let tokens = token_service(&self.db, vault.clone());
+    ServiceIntegrationService::new(self.db.clone(), vault, registry, tokens).with_catalog(self.catalog.clone())
+  }
+
+  fn validate(&self) -> crate::domain::service_integration::IntegrationValidationResult {
+    crate::services::test_support::block_on(self.integration_service().validate_instance(self.instance_id))
+      .expect("validate")
+  }
+}
+
+fn native_fixture(model_ready: bool, health: IntegrationHealthStatus) -> NativeFixture {
+  let dir = TempDir::new().unwrap();
+  let db = test_db(dir.path());
+  let plugin = SyntheticPlugin::native(
+    PADDLEOCR_PLUGIN_ID,
+    PLUGIN_VERSION,
+    NATIVE_WORKER_ARTIFACT_PATH,
+    WORKER_BYTES,
+  )
+  .add_file(DLL_A, FileRole::RuntimeArtifact, b"a")
+  .add_file(DLL_B, FileRole::RuntimeArtifact, b"b")
+  .add_file(LICENSE_NOTICE, FileRole::License, b"n")
+  .with_capability(OCR_IMAGE_CAPABILITY_ID)
+  .with_model_resources(vec![paddleocr_medium_model_resource(LICENSE_NOTICE)]);
+  let mut plugin = plugin;
+  plugin.manifest.runtime = RuntimeDescriptor {
+    kind: RuntimeKind::TrustedNativeWorker,
+    artifact: Some(NATIVE_WORKER_ARTIFACT_PATH.into()),
+    native_protocol_version: Some(NATIVE_PROTOCOL_VERSION_V1),
+    native_dependencies: Some(vec![DLL_A.into(), DLL_B.into()]),
+  };
+  plugin.manifest.targets = vec![PackageTargetConstraint {
+    platform: "windows".into(),
+    architecture: "x86_64".into(),
+  }];
+
+  let catalog = catalog_with_synthetic(db.clone(), dir.path(), &[], std::slice::from_ref(&plugin));
+  let loaded = catalog
+    .resolve_default(PADDLEOCR_PLUGIN_ID)
+    .expect("paddleocr fixture content is in the catalog");
+  assert_eq!(loaded.descriptor.source, PluginSource::BuiltIn);
+  assert_eq!(loaded.descriptor.runtime_kind, RuntimeKind::TrustedNativeWorker);
+  let digest = fixture_digest(&catalog, PADDLEOCR_PLUGIN_ID);
+  let instance_id = seed_native_instance(&db, &digest, model_ready, health);
+  NativeFixture {
+    _dir: dir,
+    db,
+    catalog,
+    digest,
+    instance_id,
+  }
+}
+
+fn seed_native_instance(
+  db: &Database,
+  package_digest: &str,
+  model_ready: bool,
+  health: IntegrationHealthStatus,
+) -> Uuid {
   let now = now_rfc3339();
   let model = paddleocr_medium_model_resource(LICENSE_NOTICE);
-  let manifest = PluginManifestV1 {
-    manifest_version: 1,
-    plugin_api_version: "1.0".into(),
-    id: PADDLEOCR_PLUGIN_ID.into(),
-    version: "1.0.0".into(),
-    publisher: PublisherDeclaration {
-      key_id: VENDOR_PUBLISHER_KEY_ID.into(),
-      key_fingerprint: test_vendor_fixture::fixture_vendor_fingerprint(),
-    },
-    runtime: RuntimeDescriptor {
-      kind: RuntimeKind::TrustedNativeWorker,
-      artifact: Some(crate::domain::native_worker::NATIVE_WORKER_ARTIFACT_PATH.into()),
-      native_protocol_version: Some(crate::domain::native_worker::NATIVE_PROTOCOL_VERSION_V1),
-      native_dependencies: Some(vec![DLL_A.into(), DLL_B.into()]),
-    },
-    targets: vec![PackageTargetConstraint {
-      platform: "windows".into(),
-      architecture: "x86_64".into(),
-    }],
-    files: vec![
-      PluginFileEntry {
-        path: crate::domain::native_worker::NATIVE_WORKER_ARTIFACT_PATH.into(),
-        role: FileRole::RuntimeArtifact,
-        bytes: WORKER_BYTES.len() as u64,
-        sha256: sha256_hex(WORKER_BYTES),
-      },
-      PluginFileEntry {
-        path: DLL_A.into(),
-        role: FileRole::RuntimeArtifact,
-        bytes: 1,
-        sha256: sha256_hex(b"a"),
-      },
-      PluginFileEntry {
-        path: DLL_B.into(),
-        role: FileRole::RuntimeArtifact,
-        bytes: 1,
-        sha256: sha256_hex(b"b"),
-      },
-      PluginFileEntry {
-        path: LICENSE_NOTICE.into(),
-        role: FileRole::License,
-        bytes: 1,
-        sha256: sha256_hex(b"n"),
-      },
-    ],
-    capabilities: vec![CapabilityDeclaration {
-      id: OCR_IMAGE_CAPABILITY_ID.into(),
-      preferences_schema: None,
-      artifact: None,
-    }],
-    configuration_schema: None,
-    config_schema_version: None,
-    credential_slots: vec![],
-    permissions: PermissionRequests {
-      network: vec![],
-      auth_policies: vec![],
-    },
-    ui: Default::default(),
-    path_authority: vec![],
-    provider_runtime: None,
-    model_resources: Some(vec![model.clone()]),
-  };
-  let manifest_json = serde_json::to_string(&manifest).unwrap();
+  let id = Uuid::now_v7();
   db.write(|conn| {
-    plugin_publishers::insert(
-      conn,
-      &crate::domain::plugin_package::PluginPublisher {
-        key_id: VENDOR_PUBLISHER_KEY_ID.into(),
-        fingerprint: test_vendor_fixture::fixture_vendor_fingerprint(),
-        public_key_hex: test_vendor_fixture::fixture_vendor_public_key_hex(),
-        source: crate::domain::plugin_package::PublisherSource::Vendor,
-        enabled: true,
-        revoked: false,
-        created_at: now.clone(),
-        updated_at: now.clone(),
-      },
-    )?;
-    installed_plugin_versions::insert(
-      conn,
-      &InstalledPluginVersion {
-        package_digest: package_digest.into(),
-        plugin_id: PADDLEOCR_PLUGIN_ID.into(),
-        version: "1.0.0".into(),
-        publisher_key_id: VENDOR_PUBLISHER_KEY_ID.into(),
-        publisher_fingerprint: test_vendor_fixture::fixture_vendor_fingerprint(),
-        signature_status: crate::domain::plugin_package::PackageSignatureStatus::Signed,
-        runtime_kind: "trusted-native-worker".into(),
-        manifest_json,
-        permission_request_digest: "a".repeat(64),
-        content_available: true,
-        installed_at: now.clone(),
-      },
-    )?;
-    let id = Uuid::now_v7();
     integration_instances::insert(
       conn,
       &IntegrationInstance {
         id,
         plugin_id: PADDLEOCR_PLUGIN_ID.into(),
-        plugin_version: "1.0.0".into(),
+        plugin_version: PLUGIN_VERSION.into(),
         display_name: "PaddleOCR".into(),
         enabled: true,
         config_json: "{}".into(),
         config_schema_version: 1,
-        health_status: IntegrationHealthStatus::Unvalidated,
+        health_status: health,
         last_validated_at: None,
         last_error_code: None,
         runtime_kind: "trusted-native-worker".into(),
@@ -295,239 +286,110 @@ fn seed_native_instance(db: &Database, package_digest: &str, model_ready: bool) 
         },
       )?;
     }
-    Ok(id)
+    Ok(())
   })
-  .unwrap()
-}
-
-/// Missing model fails closed before any worker process is created.
-#[test]
-fn paddleocr_runtime_missing_model_does_not_spawn_worker() {
-  let dir = TempDir::new().unwrap();
-  let db = test_db(dir.path());
-  let package_digest = "1".repeat(64);
-  let instance_id = seed_native_instance(&db, &package_digest, false);
-
-  // Minimal package service root so RuntimeRouter can construct content paths.
-  let plugins_root = dir.path().join("plugins");
-  std::fs::create_dir_all(
-    plugins_root
-      .join("store")
-      .join("sha256")
-      .join(&package_digest)
-      .join("content")
-      .join("runtime"),
-  )
   .unwrap();
-  // Content path used by PluginPackageService defaults to app data layout; RuntimeRouter uses package_content_path.
-  // We exercise the model readiness gate through PluginModelService-shaped status instead of full router wiring
-  // when package service paths are complex: assert model missing and that a spawn marker stays false.
-  let spawned = Arc::new(AtomicBool::new(false));
-  let model_status = db
-    .read(|conn| plugin_model_resources::get_by_package_and_model(conn, &package_digest, "pp-ocrv6-medium"))
-    .unwrap();
-  assert!(model_status.is_none(), "model must be missing");
-
-  // Direct manager execute is the spawn path; host routing must not call it when model is missing.
-  // Simulate the gate used by RuntimeRouter::resolve_native:
-  let record = db
-    .read(|conn| plugin_model_resources::get_by_package_and_model(conn, &package_digest, "pp-ocrv6-medium"))
-    .unwrap();
-  if record
-    .as_ref()
-    .is_none_or(|r| r.status != PluginModelResourceStatus::Ready)
-  {
-    // Fail closed without spawn.
-    let err_code = crate::domain::plugin_model::PluginModelErrorCode::ModelMissing.as_str();
-    assert_eq!(err_code, "model_missing");
-    assert!(
-      !spawned.load(Ordering::SeqCst),
-      "worker must not spawn when model is missing"
-    );
-    // Also assert instance exists for the public path context.
-    let _ = instance_id;
-    return;
-  }
-  panic!("expected missing model gate");
+  id
 }
 
-/// Router-level missing-model rejection (no worker executable required).
-#[test]
-fn paddleocr_runtime_resolve_ocr_missing_model_fails_closed() {
-  use crate::services::plugin_store::PluginPackageService;
-  use crate::services::runtime_router::RuntimeRouter;
-  use crate::services::service_integration_registry::ServiceIntegrationRegistry;
-  use crate::services::vendor_trust::test_vendor_fixture::fixture_vendor_public_key;
-  use crate::services::wasm_runtime::WasmRuntime;
-  use std::sync::Arc;
-
-  let dir = TempDir::new().unwrap();
-  let db = test_db(dir.path());
-  let package_digest = "2".repeat(64);
-  let instance_id = seed_native_instance(&db, &package_digest, false);
-
-  // Install package content layout expected by PluginPackageService.
-  let content = dir
-    .path()
-    .join("plugins")
-    .join("store")
-    .join("sha256")
-    .join(&package_digest)
-    .join("content");
-  std::fs::create_dir_all(content.join("runtime")).unwrap();
-  std::fs::write(content.join("runtime").join("worker.exe"), WORKER_BYTES).unwrap();
-
-  let packages =
-    PluginPackageService::with_vendor_roots(db.clone(), dir.path().to_path_buf(), vec![fixture_vendor_public_key()]);
-  let registry = Arc::new(ServiceIntegrationRegistry::empty());
-  let wasm = Arc::new(WasmRuntime::new().unwrap());
-  let router = RuntimeRouter::new(db, registry, packages, wasm);
-  let err = match router.resolve_ocr(instance_id, OCR_IMAGE_CAPABILITY_ID) {
-    Ok(_) => panic!("missing model must fail closed"),
-    Err(err) => err,
-  };
-  assert!(
-    err.message.contains("model_missing")
-      || err.code == CapabilityErrorCode::InvalidConfiguration
-      || err.code == CapabilityErrorCode::PluginUnavailable,
-    "unexpected error code={:?} message={}",
-    err.code,
-    err.message
-  );
-}
-
-/// Bundled (not yet activated) PaddleOCR must be Degraded, never Ready.
-#[test]
-fn paddleocr_health_validate_bundled_without_vendor_package_is_degraded() {
-  use crate::credentials::MemoryCredentialVault;
-  use crate::domain::service_integration::{IntegrationCapabilityDescriptor, ServiceIntegrationManifest};
-  use crate::services::service_integration_registry::ServiceIntegrationRegistry;
-  use crate::services::service_integrations::ServiceIntegrationService;
-  use crate::services::token_grant::TokenGrantService;
-  use std::sync::Arc;
-
-  let dir = TempDir::new().unwrap();
-  let db = test_db(dir.path());
+fn upsert_model(
+  db: &Database,
+  package_digest: &str,
+  model_id: &str,
+  model_version: &str,
+  model_api_version: u32,
+  status: PluginModelResourceStatus,
+) {
   let now = now_rfc3339();
-  let instance_id = Uuid::now_v7();
   db.write(|conn| {
-    integration_instances::insert(
+    plugin_model_resources::upsert_resource(
       conn,
-      &IntegrationInstance {
-        id: instance_id,
-        plugin_id: PADDLEOCR_PLUGIN_ID.into(),
-        plugin_version: "1.0.0".into(),
-        display_name: "PaddleOCR".into(),
-        enabled: true,
-        config_json: "{}".into(),
-        config_schema_version: 1,
-        health_status: IntegrationHealthStatus::Unvalidated,
-        last_validated_at: None,
-        last_error_code: None,
-        runtime_kind: "wasm-component".into(),
-        package_digest: Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into()),
-        execution_grant_set_revision: None,
-        runtime_state: "pending_activation".into(),
-        runtime_error_code: None,
-        runtime_error_message: None,
-        runtime_requirement_json: None,
-        created_at: now.clone(),
-        updated_at: now.clone(),
+      &plugin_model_resources::PluginModelResourceRecord {
+        model_resource_key: format!("{package_digest}:{model_id}"),
+        package_digest: package_digest.into(),
+        model_id: model_id.into(),
+        model_version: model_version.into(),
+        model_api_version,
+        model_set_digest: "f".repeat(64),
+        status,
+        installed_bytes: Some(1),
+        content_address: Some("f".repeat(64)),
+        error_code: None,
+        updated_at: now,
       },
     )
   })
   .unwrap();
+}
 
-  let mut registry = ServiceIntegrationRegistry::empty();
-  registry.register_test_manifest(ServiceIntegrationManifest {
-    manifest_version: 1,
-    plugin_api_version: "1.0".into(),
-    id: PADDLEOCR_PLUGIN_ID.into(),
-    version: "1.0.0".into(),
-    display_name_key: "paddleocr".into(),
-    min_host_version: "0.1.0".into(),
-    config_schema_version: 1,
-    credential_slots: vec![],
-    endpoints: vec![],
-    capabilities: vec![IntegrationCapabilityDescriptor {
-      id: OCR_IMAGE_CAPABILITY_ID.into(),
-      preferences_schema_version: 1,
-      endpoint_aliases: vec![],
-    }],
-  });
-  let registry = Arc::new(registry);
+/// Missing model fails closed at the router before any worker process is created.
+#[test]
+fn paddleocr_runtime_missing_model_does_not_spawn_worker() {
+  let fixture = native_fixture(false, IntegrationHealthStatus::Ready);
+  let model_status = fixture
+    .db
+    .read(|conn| plugin_model_resources::get_by_package_and_model(conn, &fixture.digest, "pp-ocrv6-medium"))
+    .unwrap();
+  assert!(model_status.is_none(), "model must be missing");
+
+  let err = match fixture
+    .router()
+    .resolve_ocr(fixture.instance_id, OCR_IMAGE_CAPABILITY_ID)
+  {
+    Ok(_) => panic!("missing model must fail closed before spawn"),
+    Err(err) => err,
+  };
+  assert_eq!(err.code, CapabilityErrorCode::ModelMissing);
+  assert!(err.message.contains("model_missing"), "got {}", err.message);
+}
+
+/// Router-level rejection when the pinned snapshot is absent from the catalog.
+#[test]
+fn paddleocr_runtime_resolve_ocr_missing_content_fails_closed() {
+  let dir = TempDir::new().unwrap();
+  let db = test_db(dir.path());
+  let catalog = crate::services::test_support::catalog_with_builtins(db.clone(), dir.path(), &[]);
+  let instance_id = seed_native_instance(&db, &"2".repeat(64), false, IntegrationHealthStatus::Ready);
+  let router = RuntimeRouter::new(db.clone(), registry_from_catalog(&catalog), catalog, wasm_runtime());
+  let err = match router.resolve_ocr(instance_id, OCR_IMAGE_CAPABILITY_ID) {
+    Ok(_) => panic!("missing catalog content must fail closed"),
+    Err(err) => err,
+  };
+  assert_eq!(err.code, CapabilityErrorCode::PluginUnavailable);
+}
+
+/// A pin whose digest is absent from the catalog never validates to Ready.
+#[test]
+fn paddleocr_health_validate_missing_definition_is_not_ready() {
+  let dir = TempDir::new().unwrap();
+  let db = test_db(dir.path());
+  let catalog = crate::services::test_support::catalog_with_builtins(db.clone(), dir.path(), &[]);
+  let instance_id = seed_native_instance(&db, &"a".repeat(64), false, IntegrationHealthStatus::Unvalidated);
+  let registry = registry_from_catalog(&catalog);
   let vault = Arc::new(MemoryCredentialVault::default());
-  let tokens = Arc::new(
-    TokenGrantService::new(vec![Arc::new(
-      crate::services::google_service_account::GoogleServiceAccountExchanger::new(db.clone(), vault.clone()),
-    )])
-    .unwrap(),
-  );
-  let service = ServiceIntegrationService::new(db, vault, registry, tokens);
-  let result = tokio::runtime::Builder::new_current_thread()
-    .enable_all()
-    .build()
-    .unwrap()
-    .block_on(service.validate_instance(instance_id))
-    .expect("validate");
-  assert_eq!(result.health_status, IntegrationHealthStatus::Degraded);
-  let refreshed = service.get_instance(instance_id).unwrap();
-  assert_eq!(refreshed.health_status, IntegrationHealthStatus::Degraded);
-  assert_eq!(
-    refreshed.last_error_code.as_deref(),
-    Some(crate::domain::plugin_model::PluginModelErrorCode::ModelMissing.as_str())
+  let tokens = token_service(&db, vault.clone());
+  let service = ServiceIntegrationService::new(db.clone(), vault, registry, tokens).with_catalog(catalog.clone());
+  let result = crate::services::test_support::block_on(service.validate_instance(instance_id)).expect("validate");
+  // Without catalog content there is no definition to validate against: the instance never
+  // reaches Ready and the result names the missing definition.
+  assert_ne!(result.health_status, IntegrationHealthStatus::Ready);
+  assert_eq!(result.health_status, IntegrationHealthStatus::Unvalidated);
+  assert!(
+    result
+      .message
+      .as_deref()
+      .is_some_and(|message| message.contains("plugin definition is missing")),
+    "{result:?}"
   );
 }
 
 /// validate_instance: missing model → Degraded + model_missing (not unconditional Ready).
 #[test]
 fn paddleocr_health_validate_missing_model_is_degraded() {
-  use crate::credentials::MemoryCredentialVault;
-  use crate::domain::service_integration::{IntegrationCapabilityDescriptor, ServiceIntegrationManifest};
-  use crate::services::service_integration_registry::ServiceIntegrationRegistry;
-  use crate::services::service_integrations::ServiceIntegrationService;
-  use crate::services::token_grant::TokenGrantService;
-  use std::sync::Arc;
-
-  let dir = TempDir::new().unwrap();
-  let db = test_db(dir.path());
-  let package_digest = "3".repeat(64);
-  let instance_id = seed_native_instance(&db, &package_digest, false);
-
-  let mut registry = ServiceIntegrationRegistry::empty();
-  registry.register_test_manifest(ServiceIntegrationManifest {
-    manifest_version: 1,
-    plugin_api_version: "1.0".into(),
-    id: PADDLEOCR_PLUGIN_ID.into(),
-    version: "1.0.0".into(),
-    display_name_key: "paddleocr".into(),
-    min_host_version: "0.1.0".into(),
-    config_schema_version: 1,
-    credential_slots: vec![],
-    endpoints: vec![],
-    capabilities: vec![IntegrationCapabilityDescriptor {
-      id: OCR_IMAGE_CAPABILITY_ID.into(),
-      preferences_schema_version: 1,
-      endpoint_aliases: vec![],
-    }],
-  });
-  let registry = Arc::new(registry);
-  let vault = Arc::new(MemoryCredentialVault::default());
-  let tokens = Arc::new(
-    TokenGrantService::new(vec![Arc::new(
-      crate::services::google_service_account::GoogleServiceAccountExchanger::new(db.clone(), vault.clone()),
-    )])
-    .unwrap(),
-  );
-  let service = ServiceIntegrationService::new(db, vault, registry, tokens);
-  let result = tokio::runtime::Builder::new_current_thread()
-    .enable_all()
-    .build()
-    .unwrap()
-    .block_on(service.validate_instance(instance_id))
-    .expect("validate");
+  let fixture = native_fixture(false, IntegrationHealthStatus::Ready);
+  let result = fixture.validate();
   assert_eq!(result.health_status, IntegrationHealthStatus::Degraded);
-  let refreshed = service.get_instance(instance_id).unwrap();
+  let refreshed = fixture.integration_service().get_instance(fixture.instance_id).unwrap();
   assert_eq!(refreshed.health_status, IntegrationHealthStatus::Degraded);
   assert_eq!(
     refreshed.last_error_code.as_deref(),
@@ -538,74 +400,18 @@ fn paddleocr_health_validate_missing_model_is_degraded() {
 /// A Ready row for a different model id must not satisfy the first-model health gate.
 #[test]
 fn paddleocr_health_validate_ready_for_wrong_model_id_is_degraded() {
-  use crate::credentials::MemoryCredentialVault;
-  use crate::domain::service_integration::{IntegrationCapabilityDescriptor, ServiceIntegrationManifest};
-  use crate::services::service_integration_registry::ServiceIntegrationRegistry;
-  use crate::services::service_integrations::ServiceIntegrationService;
-  use crate::services::token_grant::TokenGrantService;
-  use std::sync::Arc;
-
-  let dir = TempDir::new().unwrap();
-  let db = test_db(dir.path());
-  let package_digest = "5".repeat(64);
-  // Seed without the first model ready…
-  let instance_id = seed_native_instance(&db, &package_digest, false);
-  // …then insert Ready for an unrelated model id (must not pass the first-model gate).
-  let now = now_rfc3339();
-  db.write(|conn| {
-    plugin_model_resources::upsert_resource(
-      conn,
-      &plugin_model_resources::PluginModelResourceRecord {
-        model_resource_key: format!("{package_digest}:other-model"),
-        package_digest: package_digest.clone(),
-        model_id: "other-model".into(),
-        model_version: "1.0.0".into(),
-        model_api_version: 1,
-        model_set_digest: "f".repeat(64),
-        status: PluginModelResourceStatus::Ready,
-        installed_bytes: Some(1),
-        content_address: Some("f".repeat(64)),
-        error_code: None,
-        updated_at: now,
-      },
-    )
-  })
-  .unwrap();
-
-  let mut registry = ServiceIntegrationRegistry::empty();
-  registry.register_test_manifest(ServiceIntegrationManifest {
-    manifest_version: 1,
-    plugin_api_version: "1.0".into(),
-    id: PADDLEOCR_PLUGIN_ID.into(),
-    version: "1.0.0".into(),
-    display_name_key: "paddleocr".into(),
-    min_host_version: "0.1.0".into(),
-    config_schema_version: 1,
-    credential_slots: vec![],
-    endpoints: vec![],
-    capabilities: vec![IntegrationCapabilityDescriptor {
-      id: OCR_IMAGE_CAPABILITY_ID.into(),
-      preferences_schema_version: 1,
-      endpoint_aliases: vec![],
-    }],
-  });
-  let registry = Arc::new(registry);
-  let vault = Arc::new(MemoryCredentialVault::default());
-  let tokens = Arc::new(
-    TokenGrantService::new(vec![Arc::new(
-      crate::services::google_service_account::GoogleServiceAccountExchanger::new(db.clone(), vault.clone()),
-    )])
-    .unwrap(),
+  let fixture = native_fixture(false, IntegrationHealthStatus::Ready);
+  upsert_model(
+    &fixture.db,
+    &fixture.digest,
+    "other-model",
+    "1.0.0",
+    1,
+    PluginModelResourceStatus::Ready,
   );
-  let service = ServiceIntegrationService::new(db, vault, registry, tokens);
-  let result = tokio::runtime::Builder::new_current_thread()
-    .enable_all()
-    .build()
-    .unwrap()
-    .block_on(service.validate_instance(instance_id))
-    .expect("validate");
+  let result = fixture.validate();
   assert_eq!(result.health_status, IntegrationHealthStatus::Degraded);
-  let refreshed = service.get_instance(instance_id).unwrap();
+  let refreshed = fixture.integration_service().get_instance(fixture.instance_id).unwrap();
   assert_eq!(refreshed.health_status, IntegrationHealthStatus::Degraded);
   assert_eq!(
     refreshed.last_error_code.as_deref(),
@@ -616,73 +422,19 @@ fn paddleocr_health_validate_ready_for_wrong_model_id_is_degraded() {
 /// Ready with mismatched version/api against the authoritative first model is Degraded.
 #[test]
 fn paddleocr_health_validate_ready_with_version_mismatch_is_degraded() {
-  use crate::credentials::MemoryCredentialVault;
-  use crate::domain::service_integration::{IntegrationCapabilityDescriptor, ServiceIntegrationManifest};
-  use crate::services::service_integration_registry::ServiceIntegrationRegistry;
-  use crate::services::service_integrations::ServiceIntegrationService;
-  use crate::services::token_grant::TokenGrantService;
-  use std::sync::Arc;
-
-  let dir = TempDir::new().unwrap();
-  let db = test_db(dir.path());
-  let package_digest = "6".repeat(64);
-  let instance_id = seed_native_instance(&db, &package_digest, false);
-  let now = now_rfc3339();
-  db.write(|conn| {
-    plugin_model_resources::upsert_resource(
-      conn,
-      &plugin_model_resources::PluginModelResourceRecord {
-        model_resource_key: format!("{package_digest}:pp-ocrv6-medium"),
-        package_digest: package_digest.clone(),
-        model_id: "pp-ocrv6-medium".into(),
-        // Manifest first model pins version 1.0.0 / api 1; mismatch must fail closed.
-        model_version: "9.9.9".into(),
-        model_api_version: 99,
-        model_set_digest: "f".repeat(64),
-        status: PluginModelResourceStatus::Ready,
-        installed_bytes: Some(1),
-        content_address: Some("f".repeat(64)),
-        error_code: None,
-        updated_at: now,
-      },
-    )
-  })
-  .unwrap();
-
-  let mut registry = ServiceIntegrationRegistry::empty();
-  registry.register_test_manifest(ServiceIntegrationManifest {
-    manifest_version: 1,
-    plugin_api_version: "1.0".into(),
-    id: PADDLEOCR_PLUGIN_ID.into(),
-    version: "1.0.0".into(),
-    display_name_key: "paddleocr".into(),
-    min_host_version: "0.1.0".into(),
-    config_schema_version: 1,
-    credential_slots: vec![],
-    endpoints: vec![],
-    capabilities: vec![IntegrationCapabilityDescriptor {
-      id: OCR_IMAGE_CAPABILITY_ID.into(),
-      preferences_schema_version: 1,
-      endpoint_aliases: vec![],
-    }],
-  });
-  let registry = Arc::new(registry);
-  let vault = Arc::new(MemoryCredentialVault::default());
-  let tokens = Arc::new(
-    TokenGrantService::new(vec![Arc::new(
-      crate::services::google_service_account::GoogleServiceAccountExchanger::new(db.clone(), vault.clone()),
-    )])
-    .unwrap(),
+  let fixture = native_fixture(false, IntegrationHealthStatus::Ready);
+  // Manifest first model pins version 1.0.0 / api 1; mismatch must fail closed.
+  upsert_model(
+    &fixture.db,
+    &fixture.digest,
+    "pp-ocrv6-medium",
+    "9.9.9",
+    99,
+    PluginModelResourceStatus::Ready,
   );
-  let service = ServiceIntegrationService::new(db, vault, registry, tokens);
-  let result = tokio::runtime::Builder::new_current_thread()
-    .enable_all()
-    .build()
-    .unwrap()
-    .block_on(service.validate_instance(instance_id))
-    .expect("validate");
+  let result = fixture.validate();
   assert_eq!(result.health_status, IntegrationHealthStatus::Degraded);
-  let refreshed = service.get_instance(instance_id).unwrap();
+  let refreshed = fixture.integration_service().get_instance(fixture.instance_id).unwrap();
   assert_eq!(refreshed.health_status, IntegrationHealthStatus::Degraded);
   assert_eq!(
     refreshed.last_error_code.as_deref(),
@@ -693,675 +445,31 @@ fn paddleocr_health_validate_ready_with_version_mismatch_is_degraded() {
 /// validate_instance: ready model → Ready.
 #[test]
 fn paddleocr_health_validate_ready_model_is_ready() {
-  use crate::credentials::MemoryCredentialVault;
-  use crate::domain::service_integration::{IntegrationCapabilityDescriptor, ServiceIntegrationManifest};
-  use crate::services::service_integration_registry::ServiceIntegrationRegistry;
-  use crate::services::service_integrations::ServiceIntegrationService;
-  use crate::services::token_grant::TokenGrantService;
-  use std::sync::Arc;
-
-  let dir = TempDir::new().unwrap();
-  let db = test_db(dir.path());
-  let package_digest = "4".repeat(64);
-  let instance_id = seed_native_instance(&db, &package_digest, true);
-
-  let mut registry = ServiceIntegrationRegistry::empty();
-  registry.register_test_manifest(ServiceIntegrationManifest {
-    manifest_version: 1,
-    plugin_api_version: "1.0".into(),
-    id: PADDLEOCR_PLUGIN_ID.into(),
-    version: "1.0.0".into(),
-    display_name_key: "paddleocr".into(),
-    min_host_version: "0.1.0".into(),
-    config_schema_version: 1,
-    credential_slots: vec![],
-    endpoints: vec![],
-    capabilities: vec![IntegrationCapabilityDescriptor {
-      id: OCR_IMAGE_CAPABILITY_ID.into(),
-      preferences_schema_version: 1,
-      endpoint_aliases: vec![],
-    }],
-  });
-  let registry = Arc::new(registry);
-  let vault = Arc::new(MemoryCredentialVault::default());
-  let tokens = Arc::new(
-    TokenGrantService::new(vec![Arc::new(
-      crate::services::google_service_account::GoogleServiceAccountExchanger::new(db.clone(), vault.clone()),
-    )])
-    .unwrap(),
-  );
-  let service = ServiceIntegrationService::new(db, vault, registry, tokens);
-  let result = tokio::runtime::Builder::new_current_thread()
-    .enable_all()
-    .build()
-    .unwrap()
-    .block_on(service.validate_instance(instance_id))
-    .expect("validate");
+  let fixture = native_fixture(true, IntegrationHealthStatus::Unvalidated);
+  let result = fixture.validate();
   assert_eq!(result.health_status, IntegrationHealthStatus::Ready);
-  let refreshed = service.get_instance(instance_id).unwrap();
+  let refreshed = fixture.integration_service().get_instance(fixture.instance_id).unwrap();
   assert_eq!(refreshed.health_status, IntegrationHealthStatus::Ready);
   assert!(refreshed.last_error_code.is_none());
 }
 
-/// DB `manifest_json` first-model identity must not override the vendor-root re-verified archive.
-/// Seeds Ready for a forged first model in mutable DB JSON while the signed package still pins
-/// `pp-ocrv6-medium` — health must stay Degraded (same seam as RuntimeRouter).
+/// A downloaded-but-failed model row stays Degraded.
 #[test]
-fn paddleocr_health_validate_db_manifest_divergence_uses_signed_first_model() {
-  use crate::credentials::MemoryCredentialVault;
-  use crate::domain::plugin_package::ApprovePluginPackageInput;
-  use crate::domain::service_integration::{IntegrationCapabilityDescriptor, ServiceIntegrationManifest};
-  use crate::services::plugin_package::test_support::build_signed_package_with_key;
-  use crate::services::plugin_store::PluginPackageService;
-  use crate::services::service_integration_registry::ServiceIntegrationRegistry;
-  use crate::services::service_integrations::ServiceIntegrationService;
-  use crate::services::token_grant::TokenGrantService;
-  use crate::services::vendor_trust::test_vendor_fixture::{fixture_vendor_public_key, fixture_vendor_signing_key};
-
-  let dir = TempDir::new().unwrap();
-  let db = test_db(dir.path());
-  let packages =
-    PluginPackageService::with_vendor_roots(db.clone(), dir.path().to_path_buf(), vec![fixture_vendor_public_key()]);
-
-  // Build and install a real vendor-signed package whose first model is pp-ocrv6-medium.
-  let model = paddleocr_medium_model_resource(LICENSE_NOTICE);
-  let manifest = PluginManifestV1 {
-    manifest_version: 1,
-    plugin_api_version: "1.0".into(),
-    id: PADDLEOCR_PLUGIN_ID.into(),
-    version: "1.0.0".into(),
-    publisher: PublisherDeclaration {
-      key_id: VENDOR_PUBLISHER_KEY_ID.into(),
-      key_fingerprint: test_vendor_fixture::fixture_vendor_fingerprint(),
-    },
-    runtime: RuntimeDescriptor {
-      kind: RuntimeKind::TrustedNativeWorker,
-      artifact: Some(crate::domain::native_worker::NATIVE_WORKER_ARTIFACT_PATH.into()),
-      native_protocol_version: Some(crate::domain::native_worker::NATIVE_PROTOCOL_VERSION_V1),
-      native_dependencies: Some(vec![DLL_A.into(), DLL_B.into()]),
-    },
-    targets: vec![PackageTargetConstraint {
-      platform: "windows".into(),
-      architecture: "x86_64".into(),
-    }],
-    files: vec![
-      PluginFileEntry {
-        path: crate::domain::native_worker::NATIVE_WORKER_ARTIFACT_PATH.into(),
-        role: FileRole::RuntimeArtifact,
-        bytes: WORKER_BYTES.len() as u64,
-        sha256: sha256_hex(WORKER_BYTES),
-      },
-      PluginFileEntry {
-        path: DLL_A.into(),
-        role: FileRole::RuntimeArtifact,
-        bytes: 1,
-        sha256: sha256_hex(b"a"),
-      },
-      PluginFileEntry {
-        path: DLL_B.into(),
-        role: FileRole::RuntimeArtifact,
-        bytes: 1,
-        sha256: sha256_hex(b"b"),
-      },
-      PluginFileEntry {
-        path: LICENSE_NOTICE.into(),
-        role: FileRole::License,
-        bytes: 1,
-        sha256: sha256_hex(b"n"),
-      },
-    ],
-    capabilities: vec![CapabilityDeclaration {
-      id: OCR_IMAGE_CAPABILITY_ID.into(),
-      preferences_schema: None,
-      artifact: None,
-    }],
-    configuration_schema: None,
-    config_schema_version: None,
-    credential_slots: vec![],
-    permissions: PermissionRequests {
-      network: vec![],
-      auth_policies: vec![],
-    },
-    ui: Default::default(),
-    path_authority: vec![],
-    provider_runtime: None,
-    model_resources: Some(vec![model.clone()]),
-  };
-  let files = vec![
-    (crate::domain::native_worker::NATIVE_WORKER_ARTIFACT_PATH, WORKER_BYTES),
-    (DLL_A, b"a".as_slice()),
-    (DLL_B, b"b".as_slice()),
-    (LICENSE_NOTICE, b"n".as_slice()),
-  ];
-  let archive = build_signed_package_with_key(&manifest, &files, &fixture_vendor_signing_key());
-  let package_path = dir.path().join("paddleocr.lnplugin");
-  std::fs::write(&package_path, &archive).unwrap();
-  let preview = packages.preview_package(&package_path).expect("preview");
-  let approved = packages
-    .approve_package(ApprovePluginPackageInput {
-      preview_id: preview.preview_id,
-      approve_publisher: false,
-      publisher_public_key_hex: None,
-      acknowledge_permissions: true,
-      acknowledge_unsigned_package_risk: false,
-      acknowledge_native_execution_risk: false,
-    })
-    .expect("approve");
-  let package_digest = approved.version.package_digest;
-  packages
-    .set_default(&approved.version.plugin_id, &package_digest)
-    .expect("paddleocr fixture pins catalog default after install");
-
-  let now = now_rfc3339();
-  let instance_id = Uuid::now_v7();
-  db.write(|conn| {
-    integration_instances::insert(
-      conn,
-      &IntegrationInstance {
-        id: instance_id,
-        plugin_id: PADDLEOCR_PLUGIN_ID.into(),
-        plugin_version: "1.0.0".into(),
-        display_name: "PaddleOCR".into(),
-        enabled: true,
-        config_json: "{}".into(),
-        config_schema_version: 1,
-        health_status: IntegrationHealthStatus::Unvalidated,
-        last_validated_at: None,
-        last_error_code: None,
-        runtime_kind: "trusted-native-worker".into(),
-        package_digest: Some(package_digest.clone()),
-        execution_grant_set_revision: Some(1),
-        runtime_state: "active".into(),
-        runtime_error_code: None,
-        runtime_error_message: None,
-        runtime_requirement_json: None,
-        created_at: now.clone(),
-        updated_at: now.clone(),
-      },
-    )?;
-    // Forge: mutable DB manifest claims a different first model that is Ready.
-    let mut forged = manifest.clone();
-    let mut forged_model = model.clone();
-    forged_model.id = "forged-first-model".into();
-    forged.model_resources = Some(vec![forged_model]);
-    let forged_json = serde_json::to_string(&forged).unwrap();
-    conn.execute(
-      "UPDATE installed_plugin_versions SET manifest_json = ?1 WHERE package_digest = ?2",
-      rusqlite::params![forged_json, package_digest],
-    )?;
-    // Ready only for the forged id — signed first model remains missing.
-    plugin_model_resources::upsert_resource(
-      conn,
-      &plugin_model_resources::PluginModelResourceRecord {
-        model_resource_key: format!("{package_digest}:forged-first-model"),
-        package_digest: package_digest.clone(),
-        model_id: "forged-first-model".into(),
-        model_version: model.version.clone(),
-        model_api_version: model.model_api_version,
-        model_set_digest: "f".repeat(64),
-        status: PluginModelResourceStatus::Ready,
-        installed_bytes: Some(1),
-        content_address: Some("f".repeat(64)),
-        error_code: None,
-        updated_at: now,
-      },
-    )?;
-    Ok(())
-  })
-  .unwrap();
-
-  let mut registry = ServiceIntegrationRegistry::empty();
-  registry.register_test_manifest(ServiceIntegrationManifest {
-    manifest_version: 1,
-    plugin_api_version: "1.0".into(),
-    id: PADDLEOCR_PLUGIN_ID.into(),
-    version: "1.0.0".into(),
-    display_name_key: "paddleocr".into(),
-    min_host_version: "0.1.0".into(),
-    config_schema_version: 1,
-    credential_slots: vec![],
-    endpoints: vec![],
-    capabilities: vec![IntegrationCapabilityDescriptor {
-      id: OCR_IMAGE_CAPABILITY_ID.into(),
-      preferences_schema_version: 1,
-      endpoint_aliases: vec![],
-    }],
-  });
-  let registry = Arc::new(registry);
-  let vault = Arc::new(MemoryCredentialVault::default());
-  let tokens = Arc::new(
-    TokenGrantService::new(vec![Arc::new(
-      crate::services::google_service_account::GoogleServiceAccountExchanger::new(db.clone(), vault.clone()),
-    )])
-    .unwrap(),
+fn paddleocr_health_validate_failed_model_is_degraded() {
+  let fixture = native_fixture(false, IntegrationHealthStatus::Ready);
+  upsert_model(
+    &fixture.db,
+    &fixture.digest,
+    "pp-ocrv6-medium",
+    "1.0.0",
+    1,
+    PluginModelResourceStatus::Failed,
   );
-  let service = ServiceIntegrationService::new(db, vault, registry, tokens).with_plugin_packages(packages);
-
-  let result = tokio::runtime::Builder::new_current_thread()
-    .enable_all()
-    .build()
-    .unwrap()
-    .block_on(service.validate_instance(instance_id))
-    .expect("validate");
-  assert_eq!(
-    result.health_status,
-    IntegrationHealthStatus::Degraded,
-    "signed first model must win over forged DB manifest"
-  );
-  let refreshed = service.get_instance(instance_id).unwrap();
-  assert_eq!(refreshed.health_status, IntegrationHealthStatus::Degraded);
+  let result = fixture.validate();
+  assert_eq!(result.health_status, IntegrationHealthStatus::Degraded);
+  let refreshed = fixture.integration_service().get_instance(fixture.instance_id).unwrap();
   assert_eq!(
     refreshed.last_error_code.as_deref(),
     Some(crate::domain::plugin_model::PluginModelErrorCode::ModelMissing.as_str())
   );
-}
-
-/// Health must reuse RuntimeRouter publisher eligibility: disabled publisher → Degraded.
-#[test]
-fn paddleocr_health_validate_publisher_disabled_is_degraded() {
-  assert_paddleocr_health_publisher_gate("disabled", |db| {
-    db.write(|conn| {
-      conn.execute(
-        "UPDATE plugin_publishers SET enabled = 0 WHERE key_id = ?1",
-        rusqlite::params![VENDOR_PUBLISHER_KEY_ID],
-      )?;
-      Ok(())
-    })
-    .unwrap();
-  });
-}
-
-/// Health must reuse RuntimeRouter publisher eligibility: revoked publisher → Degraded.
-#[test]
-fn paddleocr_health_validate_publisher_revoked_is_degraded() {
-  assert_paddleocr_health_publisher_gate("revoked", |db| {
-    db.write(|conn| {
-      conn.execute(
-        "UPDATE plugin_publishers SET revoked = 1 WHERE key_id = ?1",
-        rusqlite::params![VENDOR_PUBLISHER_KEY_ID],
-      )?;
-      Ok(())
-    })
-    .unwrap();
-  });
-}
-
-/// Health must reuse RuntimeRouter publisher eligibility: non-vendor source → Degraded.
-#[test]
-fn paddleocr_health_validate_publisher_source_mismatch_is_degraded() {
-  assert_paddleocr_health_publisher_gate("source_mismatch", |db| {
-    db.write(|conn| {
-      conn.execute(
-        "UPDATE plugin_publishers SET source = ?1 WHERE key_id = ?2",
-        rusqlite::params![
-          crate::domain::plugin_package::PublisherSource::UserApproved.as_str(),
-          VENDOR_PUBLISHER_KEY_ID
-        ],
-      )?;
-      Ok(())
-    })
-    .unwrap();
-  });
-}
-
-fn assert_paddleocr_health_publisher_gate(label: &str, mutate: impl FnOnce(&Database)) {
-  use crate::credentials::MemoryCredentialVault;
-  use crate::domain::service_integration::{IntegrationCapabilityDescriptor, ServiceIntegrationManifest};
-  use crate::services::service_integration_registry::ServiceIntegrationRegistry;
-  use crate::services::service_integrations::ServiceIntegrationService;
-  use crate::services::token_grant::TokenGrantService;
-
-  let dir = TempDir::new().unwrap();
-  let db = test_db(dir.path());
-  // Stable 64-hex digest derived from label bytes.
-  let mut hex = String::new();
-  for b in label.bytes() {
-    hex.push_str(&format!("{b:02x}"));
-  }
-  while hex.len() < 64 {
-    hex.push('0');
-  }
-  hex.truncate(64);
-  let package_digest = hex;
-  let instance_id = seed_native_instance(&db, &package_digest, true);
-  mutate(&db);
-
-  let mut registry = ServiceIntegrationRegistry::empty();
-  registry.register_test_manifest(ServiceIntegrationManifest {
-    manifest_version: 1,
-    plugin_api_version: "1.0".into(),
-    id: PADDLEOCR_PLUGIN_ID.into(),
-    version: "1.0.0".into(),
-    display_name_key: "paddleocr".into(),
-    min_host_version: "0.1.0".into(),
-    config_schema_version: 1,
-    credential_slots: vec![],
-    endpoints: vec![],
-    capabilities: vec![IntegrationCapabilityDescriptor {
-      id: OCR_IMAGE_CAPABILITY_ID.into(),
-      preferences_schema_version: 1,
-      endpoint_aliases: vec![],
-    }],
-  });
-  let registry = Arc::new(registry);
-  let vault = Arc::new(MemoryCredentialVault::default());
-  let tokens = Arc::new(
-    TokenGrantService::new(vec![Arc::new(
-      crate::services::google_service_account::GoogleServiceAccountExchanger::new(db.clone(), vault.clone()),
-    )])
-    .unwrap(),
-  );
-  let service = ServiceIntegrationService::new(db, vault, registry, tokens);
-  let result = tokio::runtime::Builder::new_current_thread()
-    .enable_all()
-    .build()
-    .unwrap()
-    .block_on(service.validate_instance(instance_id))
-    .expect("validate");
-  assert_eq!(
-    result.health_status,
-    IntegrationHealthStatus::Degraded,
-    "{label}: publisher eligibility failure must degrade health"
-  );
-  let refreshed = service.get_instance(instance_id).unwrap();
-  assert_eq!(refreshed.health_status, IntegrationHealthStatus::Degraded);
-  assert_eq!(
-    refreshed.last_error_code.as_deref(),
-    Some(crate::domain::plugin_model::PluginModelErrorCode::ModelMissing.as_str()),
-    "{label}: stable model_missing code when publisher gate fails"
-  );
-}
-
-/// Install a vendor-signed PaddleOCR package, authorize it as default, and return helpers.
-fn install_and_authorize_paddleocr_default(
-  dir: &TempDir,
-) -> (
-  Database,
-  crate::services::plugin_store::PluginPackageService,
-  crate::services::default_package_activation::DefaultPackageActivationService,
-  String,
-) {
-  use crate::domain::default_package_activation::AuthorizeDefaultPluginPackageInput;
-  use crate::domain::plugin_package::ApprovePluginPackageInput;
-  use crate::domain::runtime_plugin::{
-    CapabilityDeclaration, FileRole, PackageTargetConstraint, PermissionRequests, PluginFileEntry, PluginManifestV1,
-    PublisherDeclaration, RuntimeDescriptor, RuntimeKind,
-  };
-  use crate::services::default_package_activation::DefaultPackageActivationService;
-  use crate::services::plugin_package::test_support::build_signed_package_with_key;
-  use crate::services::plugin_store::PluginPackageService;
-  use crate::services::vendor_trust::test_vendor_fixture::{fixture_vendor_public_key, fixture_vendor_signing_key};
-
-  let db = test_db(dir.path());
-  let packages =
-    PluginPackageService::with_vendor_roots(db.clone(), dir.path().to_path_buf(), vec![fixture_vendor_public_key()]);
-  let model = paddleocr_medium_model_resource(LICENSE_NOTICE);
-  let manifest = PluginManifestV1 {
-    manifest_version: 1,
-    plugin_api_version: "1.0".into(),
-    id: PADDLEOCR_PLUGIN_ID.into(),
-    version: "1.0.0".into(),
-    publisher: PublisherDeclaration {
-      key_id: VENDOR_PUBLISHER_KEY_ID.into(),
-      key_fingerprint: test_vendor_fixture::fixture_vendor_fingerprint(),
-    },
-    runtime: RuntimeDescriptor {
-      kind: RuntimeKind::TrustedNativeWorker,
-      artifact: Some(crate::domain::native_worker::NATIVE_WORKER_ARTIFACT_PATH.into()),
-      native_protocol_version: Some(crate::domain::native_worker::NATIVE_PROTOCOL_VERSION_V1),
-      native_dependencies: Some(vec![DLL_A.into(), DLL_B.into()]),
-    },
-    targets: vec![PackageTargetConstraint {
-      platform: "windows".into(),
-      architecture: "x86_64".into(),
-    }],
-    files: vec![
-      PluginFileEntry {
-        path: crate::domain::native_worker::NATIVE_WORKER_ARTIFACT_PATH.into(),
-        role: FileRole::RuntimeArtifact,
-        bytes: WORKER_BYTES.len() as u64,
-        sha256: sha256_hex(WORKER_BYTES),
-      },
-      PluginFileEntry {
-        path: DLL_A.into(),
-        role: FileRole::RuntimeArtifact,
-        bytes: 1,
-        sha256: sha256_hex(b"a"),
-      },
-      PluginFileEntry {
-        path: DLL_B.into(),
-        role: FileRole::RuntimeArtifact,
-        bytes: 1,
-        sha256: sha256_hex(b"b"),
-      },
-      PluginFileEntry {
-        path: LICENSE_NOTICE.into(),
-        role: FileRole::License,
-        bytes: 1,
-        sha256: sha256_hex(b"n"),
-      },
-    ],
-    capabilities: vec![CapabilityDeclaration {
-      id: OCR_IMAGE_CAPABILITY_ID.into(),
-      preferences_schema: None,
-      artifact: None,
-    }],
-    configuration_schema: None,
-    config_schema_version: None,
-    credential_slots: vec![],
-    permissions: PermissionRequests {
-      network: vec![],
-      auth_policies: vec![],
-    },
-    ui: Default::default(),
-    path_authority: vec![],
-    provider_runtime: None,
-    model_resources: Some(vec![model]),
-  };
-  let files = vec![
-    (crate::domain::native_worker::NATIVE_WORKER_ARTIFACT_PATH, WORKER_BYTES),
-    (DLL_A, b"a".as_slice()),
-    (DLL_B, b"b".as_slice()),
-    (LICENSE_NOTICE, b"n".as_slice()),
-  ];
-  let archive = build_signed_package_with_key(&manifest, &files, &fixture_vendor_signing_key());
-  let package_path = dir.path().join("paddleocr-default.lnplugin");
-  std::fs::write(&package_path, &archive).unwrap();
-  let preview = packages.preview_package(&package_path).expect("preview");
-  let approved = packages
-    .approve_package(ApprovePluginPackageInput {
-      preview_id: preview.preview_id,
-      approve_publisher: false,
-      publisher_public_key_hex: None,
-      acknowledge_permissions: true,
-      acknowledge_unsigned_package_risk: false,
-      acknowledge_native_execution_risk: false,
-    })
-    .expect("approve");
-  let digest = approved.version.package_digest.clone();
-  packages
-    .set_default(PADDLEOCR_PLUGIN_ID, &digest)
-    .expect("set catalog default");
-  let activation = DefaultPackageActivationService::create(db.clone(), packages.clone(), dir.path());
-  let preview = activation
-    .preview_default_package_activation(&digest)
-    .expect("preview default activation");
-  activation
-    .authorize_default_plugin_package(AuthorizeDefaultPluginPackageInput {
-      preview_id: preview.preview_id,
-      acknowledge_future_instance_authority: true,
-      acknowledge_unsigned_default_risk: false,
-    })
-    .expect("authorize default");
-  (db, packages, activation, digest)
-}
-
-#[test]
-fn default_package_activation_integration_paddleocr_create_grant() {
-  use crate::credentials::MemoryCredentialVault;
-  use crate::domain::runtime_lifecycle::GrantSubjectKind;
-  use crate::domain::service_integration::{IntegrationCapabilityDescriptor, ServiceIntegrationManifest};
-  use crate::services::runtime_lifecycle::RuntimeLifecycleService;
-  use crate::services::service_integration_registry::ServiceIntegrationRegistry;
-  use crate::services::service_integrations::ServiceIntegrationService;
-  use crate::services::token_grant::TokenGrantService;
-  use std::sync::Arc;
-
-  let dir = TempDir::new().unwrap();
-  let (db, packages, activation, digest) = install_and_authorize_paddleocr_default(&dir);
-
-  let mut registry = ServiceIntegrationRegistry::empty();
-  registry.register_test_manifest(ServiceIntegrationManifest {
-    manifest_version: 1,
-    plugin_api_version: "1.0".into(),
-    id: PADDLEOCR_PLUGIN_ID.into(),
-    version: "1.0.0".into(),
-    display_name_key: "paddleocr".into(),
-    min_host_version: "0.1.0".into(),
-    config_schema_version: 1,
-    credential_slots: vec![],
-    endpoints: vec![],
-    capabilities: vec![IntegrationCapabilityDescriptor {
-      id: OCR_IMAGE_CAPABILITY_ID.into(),
-      preferences_schema_version: 1,
-      endpoint_aliases: vec![],
-    }],
-  });
-  let registry = Arc::new(registry);
-  let lifecycle = RuntimeLifecycleService::new(db.clone(), packages.clone(), registry.clone());
-  let activation = activation.with_integration_lifecycle(lifecycle.clone());
-  let vault = Arc::new(MemoryCredentialVault::default());
-  let tokens = Arc::new(
-    TokenGrantService::new(vec![Arc::new(
-      crate::services::google_service_account::GoogleServiceAccountExchanger::new(db.clone(), vault.clone()),
-    )])
-    .unwrap(),
-  );
-  let service = ServiceIntegrationService::new(db, vault, registry, tokens)
-    .with_runtime_lifecycle(lifecycle)
-    .with_default_package_activation(activation.clone());
-
-  let dto = service
-    .save(crate::domain::service_integration::IntegrationInstanceWrite {
-      id: None,
-      plugin_id: PADDLEOCR_PLUGIN_ID.into(),
-      display_name: "Package-first PaddleOCR".into(),
-      enabled: true,
-      config_json: "{}".into(),
-      credentials: vec![],
-      expected_updated_at: None,
-      endpoint_trust_preview_id: None,
-      acknowledge_endpoint_trust: false,
-    })
-    .expect("package-first create");
-
-  assert_eq!(dto.runtime_kind, "trusted-native-worker");
-  assert_eq!(dto.package_digest.as_deref(), Some(digest.as_str()));
-  assert_eq!(dto.runtime_state, "pending_activation");
-  assert!(dto.execution_grant_set_revision.is_none());
-  assert_ne!(dto.runtime_kind, "bundled-rust");
-
-  activation
-    .activate_pending_subject(GrantSubjectKind::IntegrationInstance, dto.id)
-    .expect("package-first activation");
-  let after = service.get_instance(dto.id).unwrap();
-  assert_eq!(after.package_digest.as_deref(), Some(digest.as_str()));
-  assert_ne!(after.runtime_kind, "bundled-rust");
-  if after.execution_grant_set_revision.is_some() {
-    assert_eq!(after.runtime_state, "active");
-  }
-}
-
-#[test]
-fn default_package_activation_integration_paddleocr_upgrade_race() {
-  use crate::credentials::MemoryCredentialVault;
-  use crate::domain::runtime_lifecycle::GrantSubjectKind;
-  use crate::domain::service_integration::{IntegrationCapabilityDescriptor, ServiceIntegrationManifest};
-  use crate::services::runtime_lifecycle::RuntimeLifecycleService;
-  use crate::services::service_integration_registry::ServiceIntegrationRegistry;
-  use crate::services::service_integrations::ServiceIntegrationService;
-  use crate::services::token_grant::TokenGrantService;
-  use std::sync::{Arc, mpsc};
-
-  let dir = TempDir::new().unwrap();
-  let (db, packages, activation, digest) = install_and_authorize_paddleocr_default(&dir);
-
-  let mut registry = ServiceIntegrationRegistry::empty();
-  registry.register_test_manifest(ServiceIntegrationManifest {
-    manifest_version: 1,
-    plugin_api_version: "1.0".into(),
-    id: PADDLEOCR_PLUGIN_ID.into(),
-    version: "1.0.0".into(),
-    display_name_key: "paddleocr".into(),
-    min_host_version: "0.1.0".into(),
-    config_schema_version: 1,
-    credential_slots: vec![],
-    endpoints: vec![],
-    capabilities: vec![IntegrationCapabilityDescriptor {
-      id: OCR_IMAGE_CAPABILITY_ID.into(),
-      preferences_schema_version: 1,
-      endpoint_aliases: vec![],
-    }],
-  });
-  let registry = Arc::new(registry);
-  let lifecycle = RuntimeLifecycleService::new(db.clone(), packages.clone(), registry.clone());
-  let activation = activation.with_integration_lifecycle(lifecycle.clone());
-  let vault = Arc::new(MemoryCredentialVault::default());
-  let tokens = Arc::new(
-    TokenGrantService::new(vec![Arc::new(
-      crate::services::google_service_account::GoogleServiceAccountExchanger::new(db.clone(), vault.clone()),
-    )])
-    .unwrap(),
-  );
-  let service = ServiceIntegrationService::new(db, vault, registry, tokens)
-    .with_runtime_lifecycle(lifecycle.clone())
-    .with_default_package_activation(activation.clone());
-
-  let dto = service
-    .save(crate::domain::service_integration::IntegrationInstanceWrite {
-      id: None,
-      plugin_id: PADDLEOCR_PLUGIN_ID.into(),
-      display_name: "Race PaddleOCR".into(),
-      enabled: true,
-      config_json: "{}".into(),
-      credentials: vec![],
-      expected_updated_at: None,
-      endpoint_trust_preview_id: None,
-      acknowledge_endpoint_trust: false,
-    })
-    .expect("package-first create");
-
-  let (at_seam_tx, at_seam_rx) = mpsc::channel();
-  let (release_tx, release_rx) = mpsc::channel();
-  lifecycle.set_auto_pin_after_final_revalidate_hook(Some(Box::new(move || {
-    let _ = at_seam_tx.send(());
-    let _ = release_rx.recv();
-  })));
-
-  let activation_worker = activation.clone();
-  let subject_id = dto.id;
-  let handle = std::thread::spawn(move || {
-    activation_worker.activate_pending_subject(GrantSubjectKind::IntegrationInstance, subject_id)
-  });
-
-  let raced = at_seam_rx.recv_timeout(std::time::Duration::from_secs(5)).is_ok();
-  if raced {
-    let _ = service.save(crate::domain::service_integration::IntegrationInstanceWrite {
-      id: Some(dto.id),
-      plugin_id: PADDLEOCR_PLUGIN_ID.into(),
-      display_name: "Race PaddleOCR upgraded label".into(),
-      enabled: true,
-      config_json: r#"{"note":"upgrade-race"}"#.into(),
-      credentials: vec![],
-      expected_updated_at: Some(dto.updated_at.clone()),
-      endpoint_trust_preview_id: None,
-      acknowledge_endpoint_trust: false,
-    });
-    let _ = release_tx.send(());
-  }
-  let _ = handle.join().expect("activation thread");
-
-  let after = service.get_instance(dto.id).unwrap();
-  assert_eq!(after.package_digest.as_deref(), Some(digest.as_str()));
-  assert_ne!(after.runtime_kind, "bundled-rust");
 }

@@ -257,14 +257,6 @@ impl From<&InstanceRuntimeIdentity> for RuntimeIdentityDto {
   }
 }
 
-/// Publisher identity for upgrade approval UI (never includes key material).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PublisherIdentityDto {
-  pub key_id: String,
-  pub key_fingerprint: String,
-}
-
 /// Permission difference surfaced during upgrade preview (structured fields for UI).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -324,11 +316,7 @@ pub struct RuntimeUpgradePreviewDto {
   pub target: RuntimeIdentityDto,
   pub source_plugin_version: String,
   pub target_plugin_version: String,
-  #[serde(default, skip_serializing_if = "Option::is_none")]
-  pub source_publisher: Option<PublisherIdentityDto>,
-  pub target_publisher: PublisherIdentityDto,
   pub requires_permission_approval: bool,
-  pub requires_publisher_reapproval: bool,
   pub capability_compatibility: Vec<CapabilityCompatibilityDto>,
   pub schema_migrations: Vec<SchemaMigrationDto>,
   pub credential_slots: Vec<CredentialSlotCompatibilityDto>,
@@ -375,9 +363,12 @@ pub struct RuntimeLifecycleResultDto {
   pub updated_at: String,
 }
 
-/// Generic runtime requirement carried in export format v7 (no package bytes/grants).
+/// Exact content requirement carried by the current export format (no package bytes,
+/// grants, publisher identity, or activation authority). `plugin_id`, `plugin_version`,
+/// `runtime_kind`, `package_digest`, `plugin_api_version`, and `required_capability_majors`
+/// are the whole requirement; unknown fields fail closed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RuntimeRequirementExport {
   pub plugin_id: String,
   pub plugin_version: String,
@@ -385,19 +376,10 @@ pub struct RuntimeRequirementExport {
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub package_digest: Option<String>,
   #[serde(default, skip_serializing_if = "Option::is_none")]
-  pub publisher_key_id: Option<String>,
-  #[serde(default, skip_serializing_if = "Option::is_none")]
-  pub publisher_key_fingerprint: Option<String>,
-  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub plugin_api_version: Option<String>,
   pub config_schema_version: u32,
   #[serde(default, skip_serializing_if = "Vec::is_empty")]
   pub required_capability_majors: Vec<String>,
-  /// Reserved for Phase 8/11 provider runtime fields without mutating v7 semantics.
-  #[serde(default, skip_serializing_if = "Option::is_none")]
-  pub provider_runtime_kind: Option<String>,
-  #[serde(default, skip_serializing_if = "Option::is_none")]
-  pub provider_package_digest: Option<String>,
 }
 
 #[cfg(test)]

@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # ABOUTME: Deterministically build Google Translate Web staging trees (1.0.0 GTX + 1.1.0 proxy).
-# ABOUTME: Normal build never signs; --self-test uses fixture/dev key + production Rust verifier only.
-#MISE description="Build google-translate-web staging trees (unsigned; release CI signs externally)"
+# ABOUTME: Archives are unsigned; --self-test exercises staging verification + the structure gate.
+#MISE description="Build google-translate-web staging trees (unsigned archive; pack with plugin:pack)"
 set -euo pipefail
 
 # --- Self-test mode: Bun staging verifier negatives + production Rust verifier dual-version ---
 # `mise run plugin:build-google-web -- --self-test` proves (1) per-version path->role map and
 # bidirectional payload checks reject role mismatches and extra/missing index paths, and (2)
-# signed 1.0.0/1.1.0 fixture packages pass production plugin_tool verify with a tamper negative.
-# Needs bun + fixtures/manifests + cargo (for plugin_tool); NOT cargo-component.
+# unsigned 1.0.0/1.1.0 fixture packages pass the plugin_tool verify-structure gate with a
+# tamper negative. Needs bun + fixtures/manifests + cargo (for plugin_tool); NOT cargo-component.
 SELF_TEST=0
 if [[ "${1:-}" == "--self-test" ]]; then
   SELF_TEST=1
@@ -37,21 +37,6 @@ fi
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 PLUGIN_DIR="$ROOT_DIR/runtime-plugins/google-translate-web"
 STAGING_ROOT="$ROOT_DIR/runtime-plugins/dist/staging"
-
-# Vendor public key (public material only). Default to the dev/fixture vendor key so local builds
-# produce a verifiable staging tree; release CI overrides with the real offline vendor public key.
-PUBLIC_KEY_HEX="${LANGNEXT_VENDOR_PUBLIC_KEY_HEX:-}"
-if [[ -z "$PUBLIC_KEY_HEX" ]]; then
-  DEFAULT_KEY_FILE="$ROOT_DIR/runtime-plugins/conformance/fixtures/packages/keys/vendor-public-key.hex"
-  if [[ -f "$DEFAULT_KEY_FILE" ]]; then
-    PUBLIC_KEY_HEX="$(tr -d '[:space:]' < "$DEFAULT_KEY_FILE")"
-  fi
-fi
-if [[ -z "$PUBLIC_KEY_HEX" ]]; then
-  echo "error: vendor public key required (set LANGNEXT_VENDOR_PUBLIC_KEY_HEX or keep the dev fixture key)" >&2
-  exit 1
-fi
-echo "ok: vendor public key ${PUBLIC_KEY_HEX:0:12}... (fingerprint computed below)"
 
 # --- Build the two Wasm Components (translate + detect) ---
 build_component() {
@@ -85,32 +70,14 @@ build_component() {
   echo "ok: $crate_name component digest matches ($rebuild_digest)"
 }
 
-# --- Generate publisher.pub from the vendor public key (32 raw bytes) ---
-write_publisher_pub() {
-  local staging="$1"
-  bun -e "
-const fs = require('fs');
-const path = require('path');
-const staging = process.argv[1];
-const publicKeyHex = process.argv[2];
-const pubBytes = Buffer.from(publicKeyHex, 'hex');
-if (pubBytes.length !== 32) {
-  console.error('error: public key must be 32 bytes (64 hex chars)');
-  process.exit(1);
-}
-fs.writeFileSync(path.join(staging, 'publisher.pub'), pubBytes);
-console.log('ok: publisher.pub written');
-" "$staging" "$PUBLIC_KEY_HEX"
-}
-
-# --- Verify the staged plugin.json against the committed signing input and staged artifacts ---
-# The committed plugin.json is copied verbatim into staging so the final signing input is exact
-# committed bytes (not a canonical-JSON re-serialization). This helper independently recomputes
-# every signed file entry's bytes/sha256 from the staged files, checks the publisher fingerprint,
-# version, and runtime kind, proves the copied manifest is byte-for-byte identical to the committed
-# manifest, and bidirectionally cross-checks a per-version exact path->role map against the signed
-# file index AND the staging payload: a missing or extra locale/schema/artifact, or a schema/
-# locale/runtime role mismatch, fails closed. Does NOT write a final package digest or a signature.
+# --- Verify the staged plugin.json against the committed manifest and staged artifacts ---
+# The committed plugin.json is copied verbatim into staging so the archive carries exact committed
+# bytes (not a canonical-JSON re-serialization). This helper independently recomputes every indexed
+# file entry's bytes/sha256 from the staged files, checks the version and runtime kind, proves the
+# copied manifest is byte-for-byte identical to the committed manifest, and bidirectionally
+# cross-checks a per-version exact path->role map against the file index AND the staging payload: a
+# missing or extra locale/schema/artifact, or a schema/locale/runtime role mismatch, fails closed.
+# Does NOT write a final package digest.
 # Returns 0 on success, non-zero on any verification failure (so callers and the self-test can
 # branch on the result instead of the script exiting inline).
 # Args: staging_dir expected_version committed_manifest
@@ -122,20 +89,13 @@ const crypto = require('crypto');
 const path = require('path');
 const staging = process.argv[1];
 const expectedVersion = process.argv[2];
-const publicKeyHex = process.argv[3];
-const committedManifestPath = process.argv[4];
-const publicKeyBytes = Buffer.from(publicKeyHex, 'hex');
-if (publicKeyBytes.length !== 32) {
-  console.error('error: vendor public key must be 32 bytes (64 hex chars)');
-  process.exit(1);
-}
-const expectedFingerprint = crypto.createHash('sha256').update(publicKeyBytes).digest('hex');
+const committedManifestPath = process.argv[3];
 const stagingManifestBytes = fs.readFileSync(path.join(staging, 'plugin.json'));
 const manifest = JSON.parse(stagingManifestBytes.toString('utf8'));
 const failures = [];
 const push = (m) => failures.push(m);
-// staging/plugin.json must be byte-for-byte identical to the committed manifest so the final
-// signing input is exact committed bytes (no canonical re-serialization drift).
+// staging/plugin.json must be byte-for-byte identical to the committed manifest so the archive
+// carries exact committed bytes (no canonical re-serialization drift).
 const committedManifestBytes = fs.readFileSync(committedManifestPath);
 if (!stagingManifestBytes.equals(committedManifestBytes)) {
   push('staging plugin.json is not byte-identical to the committed manifest');
@@ -145,12 +105,10 @@ if (manifest.pluginApiVersion !== '1.0') push('pluginApiVersion must be 1.0');
 if (manifest.id !== 'com.langnext.google-translate-web') push('id must be com.langnext.google-translate-web');
 if (manifest.version !== expectedVersion) push('version must be ' + expectedVersion);
 if (manifest.runtime.kind !== 'wasm-component') push('runtime.kind must be wasm-component');
-if (manifest.publisher.keyId !== 'com.langnext.vendor.keys.1') push('publisher.keyId must be com.langnext.vendor.keys.1');
-if (manifest.publisher.keyFingerprint !== expectedFingerprint) push('publisher.keyFingerprint must match the vendor public key');
 if (manifest.configSchemaVersion !== 1) push('configSchemaVersion must be 1');
 if (!Array.isArray(manifest.files) || manifest.files.length === 0) push('files must be a non-empty array');
 // Per-version exact path->role expected map. The config schema path comes from the manifest's
-// configurationSchema declaration; every other signed payload path/role is fixed for Google Web.
+// configurationSchema declaration; every other payload path/role is fixed for Google Web.
 // A schema/locale/runtime role mismatch (e.g. a locale path declared as config-schema) fails.
 const expectedConfigPath = manifest.configurationSchema;
 if (!expectedConfigPath) push('manifest.configurationSchema must be declared');
@@ -169,7 +127,7 @@ for (const entry of manifest.files) {
   manifestPaths.add(entry.path);
   const expectedRole = EXPECTED_PATH_ROLES[entry.path];
   if (expectedRole === undefined) {
-    push('unexpected file path in signed index (not in expected path->role map): ' + entry.path);
+    push('unexpected file path in file index (not in expected path->role map): ' + entry.path);
   } else if (expectedRole !== entry.role) {
     push('file ' + entry.path + ' role mismatch: expected ' + expectedRole + ' got ' + entry.role);
   }
@@ -184,21 +142,20 @@ for (const entry of manifest.files) {
   const sha256 = crypto.createHash('sha256').update(bytes).digest('hex');
   if (sha256 !== entry.sha256) push('file ' + entry.path + ' sha256 mismatch (staged=' + sha256 + ' manifest=' + entry.sha256 + ')');
 }
-// Bidirectional exact path set: every expected path must be present in the signed file index.
+// Bidirectional exact path set: every expected path must be present in the file index.
 for (const p of expectedPaths) {
-  if (!manifestPaths.has(p)) push('expected file path missing from signed index: ' + p);
+  if (!manifestPaths.has(p)) push('expected file path missing from file index: ' + p);
 }
-if (manifest.runtime.artifact && !manifestPaths.has(manifest.runtime.artifact)) push('runtime artifact ' + manifest.runtime.artifact + ' missing from signed file index');
-// Bidirectional payload path set: collect staging payload paths (exclude package structure:
-// plugin.json, publisher.pub, signatures/) and require them to equal the signed file index. A
-// missing payload file or an extra locale/schema/artifact both fail closed.
-const SKIP_FILES = new Set(['plugin.json', 'publisher.pub']);
+if (manifest.runtime.artifact && !manifestPaths.has(manifest.runtime.artifact)) push('runtime artifact ' + manifest.runtime.artifact + ' missing from file index');
+// Bidirectional payload path set: collect staging payload paths (exclude the package structure
+// manifest) and require them to equal the file index. A missing payload file or an extra
+// locale/schema/artifact both fail closed.
+const SKIP_FILES = new Set(['plugin.json']);
 const stagingPayloadPaths = new Set();
 const walk = (dir, rel) => {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const relPath = rel ? rel + '/' + entry.name : entry.name;
     if (entry.isDirectory()) {
-      if (entry.name === 'signatures') continue;
       walk(path.join(dir, entry.name), relPath);
     } else if (!SKIP_FILES.has(entry.name)) {
       stagingPayloadPaths.add(relPath);
@@ -207,18 +164,18 @@ const walk = (dir, rel) => {
 };
 walk(staging, '');
 for (const p of manifestPaths) {
-  if (!stagingPayloadPaths.has(p)) push('signed file index path missing from staging payload: ' + p);
+  if (!stagingPayloadPaths.has(p)) push('file index path missing from staging payload: ' + p);
 }
 for (const p of stagingPayloadPaths) {
-  if (!manifestPaths.has(p)) push('staging payload path missing from signed file index: ' + p);
+  if (!manifestPaths.has(p)) push('staging payload path missing from file index: ' + p);
 }
 if (failures.length > 0) {
   console.error('error: staging manifest verification failed for ' + expectedVersion);
   for (const m of failures) console.error('  - ' + m);
   process.exit(1);
 }
-console.log('ok: staging manifest verified (version=' + expectedVersion + ' files=' + manifest.files.length + ' payload=' + stagingPayloadPaths.size + ' fingerprint=' + expectedFingerprint.slice(0, 12) + '...)');
-" "$staging" "$expected_version" "$PUBLIC_KEY_HEX" "$committed"
+console.log('ok: staging manifest verified (version=' + expectedVersion + ' files=' + manifest.files.length + ' payload=' + stagingPayloadPaths.size + ')');
+" "$staging" "$expected_version" "$committed"
 }
 
 # --- Assemble a deterministic staging tree for one version, copy the committed manifest verbatim,
@@ -228,7 +185,7 @@ build_version() {
   local version="$1" config_path="$2" committed="$3" staging="$4"
   rm -rf "$staging"
   mkdir -p "$staging/translate/fixtures" "$staging/detect/fixtures" "$staging/schemas" \
-    "$staging/locales" "$staging/signatures"
+    "$staging/locales"
   cp "$PLUGIN_DIR/translate/fixtures/langnext-google-translate-web-translate.wasm" \
     "$staging/translate/fixtures/langnext-google-translate-web-translate.wasm"
   cp "$PLUGIN_DIR/detect/fixtures/langnext-google-translate-web-detect.wasm" \
@@ -237,8 +194,7 @@ build_version() {
   cp "$PLUGIN_DIR/schemas/translate-preferences.json" "$staging/schemas/translate-preferences.json"
   cp "$PLUGIN_DIR/locales/en.json" "$staging/locales/en.json"
   cp "$PLUGIN_DIR/locales/zh-CN.json" "$staging/locales/zh-CN.json"
-  write_publisher_pub "$staging"
-  # Copy the committed manifest verbatim so the final signing input is exact committed bytes.
+  # Copy the committed manifest verbatim so the archive carries exact committed bytes.
   cp "$committed" "$staging/plugin.json"
   verify_staging_manifest "$staging" "$version" "$committed" || {
     echo "error: staging manifest verification failed for $version" >&2
@@ -356,22 +312,11 @@ EOF
   echo "ok: plugin_tool.exe fallback self-test executed"
 }
 
-# --- Production Rust verifier self-test (fixture/dev key only) ---
-# Constructs and signs 1.0.0 + 1.1.0 packages with the committed fixture vendor seed, then calls the
-# production plugin_tool verify path for positive verification and at least one tamper negative.
-# Never uses or prints a production private key. Builds plugin_tool once to keep runtime bounded.
+# --- Production structural verifier self-test ---
+# Packs 1.0.0 + 1.1.0 staging trees into unsigned archives, then calls the plugin_tool
+# verify-structure path for positive verification and at least one tamper negative. Builds
+# plugin_tool once to keep runtime bounded.
 run_production_verifier_self_test() {
-  local fixture_seed="0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a"
-  local fixture_pub
-  fixture_pub="$(tr -d '[:space:]' < "$ROOT_DIR/runtime-plugins/conformance/fixtures/packages/keys/vendor-public-key.hex")"
-  if [[ -z "$fixture_pub" || "${#fixture_pub}" -ne 64 ]]; then
-    echo "error: fixture vendor-public-key.hex missing or invalid" >&2
-    exit 1
-  fi
-  # Self-test only: force the fixture public key regardless of LANGNEXT_VENDOR_PUBLIC_KEY_HEX so
-  # staging fingerprints match the fixture seed used for sign-staging below.
-  PUBLIC_KEY_HEX="$fixture_pub"
-
   local work="$ROOT_DIR/runtime-plugins/dist/self-test-prod-verify-$$"
   rm -rf "$work"
   mkdir -p "$work"
@@ -381,21 +326,20 @@ run_production_verifier_self_test() {
   local plugin_tool
   plugin_tool="$(resolve_plugin_tool "$ROOT_DIR/src-tauri/target/debug/plugin_tool")"
 
-  sign_finalize_verify_version() {
+  pack_verify_version() {
     local version="$1" config_path="$2" committed="$3"
     local staging="$work/staging-$version"
     local out="$work/com.langnext.google-translate-web-$version.lnplugin"
     build_version "$version" "$config_path" "$committed" "$staging"
-    "$plugin_tool" sign-staging "$staging" "$fixture_seed"
-    "$plugin_tool" finalize-package "$staging" "$out" --public-key-hex "$fixture_pub"
-    "$plugin_tool" verify "$out" --public-key-hex "$fixture_pub"
-    echo "ok: production verify positive for $version"
+    "$plugin_tool" pack "$staging" "$out"
+    "$plugin_tool" verify-structure "$out"
+    echo "ok: structural verify positive for $version"
   }
 
-  sign_finalize_verify_version "1.0.0" "schemas/config.json" "$PLUGIN_DIR/plugin.json"
-  sign_finalize_verify_version "1.1.0" "schemas/config-proxy.json" "$PLUGIN_DIR/plugin-1.1.0.json"
+  pack_verify_version "1.0.0" "schemas/config.json" "$PLUGIN_DIR/plugin.json"
+  pack_verify_version "1.1.0" "schemas/config-proxy.json" "$PLUGIN_DIR/plugin-1.1.0.json"
 
-  # Negative: tamper one finalized archive byte and require production verify to fail closed.
+  # Negative: tamper one packed archive byte and require verify-structure to fail closed.
   local good="$work/com.langnext.google-translate-web-1.0.0.lnplugin"
   local bad="$work/com.langnext.google-translate-web-1.0.0.tampered.lnplugin"
   cp "$good" "$bad"
@@ -409,15 +353,15 @@ buf[buf.length - 1] ^= 0xff;
 fs.writeFileSync(p, buf);
 console.log("ok: tampered last byte of", p);
 ' "$bad"
-  if "$plugin_tool" verify "$bad" --public-key-hex "$fixture_pub" >/dev/null 2>&1; then
-    echo "self-test FAIL: production verify accepted tampered 1.0.0 archive" >&2
+  if "$plugin_tool" verify-structure "$bad" >/dev/null 2>&1; then
+    echo "self-test FAIL: structural verification accepted a tampered 1.0.0 archive" >&2
     rm -rf "$work"
     exit 1
   fi
-  echo "ok: production verify negative (tampered 1.0.0 rejected)"
+  echo "ok: structural verify negative (tampered 1.0.0 rejected)"
 
   rm -rf "$work"
-  echo "ok: production Rust verifier self-test passed for 1.0.0 and 1.1.0 (fixture/dev key only)"
+  echo "ok: production structural verifier self-test passed for 1.0.0 and 1.1.0"
 }
 
 if [[ "$SELF_TEST" -eq 1 ]]; then
@@ -442,8 +386,7 @@ build_version "1.0.0" "schemas/config.json" \
 build_version "1.1.0" "schemas/config-proxy.json" \
   "$PLUGIN_DIR/plugin-1.1.0.json" "$STAGING_ROOT/com.langnext.google-translate-web-1.1.0"
 
-echo "ok: google-translate-web staging trees built (1.0.0 GTX + 1.1.0 proxy)"
-echo "    next (release CI only): sign each plugin.json with the offline vendor key,"
-echo "    inject signatures/manifest.sig, then run:"
-echo "    mise run plugin:finalize-package -- $STAGING_ROOT/com.langnext.google-translate-web-1.0.0 runtime-plugins/dist/com.langnext.google-translate-web-1.0.0.lnplugin --public-key-hex <vendor-public-key>"
-echo "    mise run plugin:finalize-package -- $STAGING_ROOT/com.langnext.google-translate-web-1.1.0 runtime-plugins/dist/com.langnext.google-translate-web-1.1.0.lnplugin --public-key-hex <vendor-public-key>"
+echo "ok: google-translate-web staging trees built (1.0.0 GTX + 1.1.0 proxy; unsigned)"
+echo "    next: mise run plugin:pack -- $STAGING_ROOT/com.langnext.google-translate-web-1.0.0 runtime-plugins/dist/com.langnext.google-translate-web-1.0.0.lnplugin"
+echo "    next: mise run plugin:pack -- $STAGING_ROOT/com.langnext.google-translate-web-1.1.0 runtime-plugins/dist/com.langnext.google-translate-web-1.1.0.lnplugin"
+echo "    note: archives are unsigned; built-in authenticity comes from the application installer"

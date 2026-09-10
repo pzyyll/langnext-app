@@ -1,5 +1,7 @@
 # Phase 11.5: Default Package Authorization and Package-First Creation Implementation Plan
 
+> **Superseded (2026-08-24):** plugin-level signing, publisher trust, vendor bootstrap, and default-activation orchestration were removed. See `docs/architecture/plugin-catalog.md`.
+
 **Goal:** Make an authorized default package automatically activate for future integration and provider instances without manual digest entry or creation of new legacy runtime rows.
 
 **Inputs:** Phase 4 runtime lifecycle, Phases 5–8 and 10 runtime packages, Phase 11 recovery semantics, the default-package UX findings from 2026-08-07, and Phase 12 retirement gates.

@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# ABOUTME: Pack one validated plugin directory into a deterministic unsigned .lnplugin archive.
+# ABOUTME: No key, publisher, signature, or release-policy input exists.
+#MISE description="Pack a plugin directory into an unsigned .lnplugin archive"
+set -euo pipefail
+
+if [[ "${1:-}" == "--" ]]; then
+  shift
+fi
+
+if [[ $# -ne 2 ]]; then
+  echo "usage: mise run plugin:pack -- <plugin-dir> <output.lnplugin>" >&2
+  echo "note: archives are unsigned; built-in authenticity comes from the application installer." >&2
+  exit 2
+fi
+
+input="$1"
+output="$2"
+
+if [[ ! -d "$input" ]]; then
+  echo "error: plugin directory not found: $input" >&2
+  exit 1
+fi
+if [[ -e "$output" && ! -f "$output" ]]; then
+  echo "error: output exists and is not a file: $output" >&2
+  exit 1
+fi
+
+cargo run --manifest-path src-tauri/Cargo.toml --bin plugin_tool --quiet -- pack "$input" "$output"
+
+echo "ok: packed $input -> $output"

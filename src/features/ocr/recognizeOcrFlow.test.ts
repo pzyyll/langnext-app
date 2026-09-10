@@ -132,7 +132,6 @@ describe("runtime_executor_ai_ocr_uses_host_blob_path_without_legacy_http", () =
     pluginId: "langnext.conformance.llm-provider",
     version: "1.0.0",
     packageDigest: "digest-1",
-    publisher: { keyId: "key-1", keyFingerprint: "fp-1" },
     legacyAliases: ["openai-compatible"],
     capabilities: [
       { capabilityId: "llm.models.list@1", artifactPath: "fixtures/llm-models.wasm", artifactDigest: "a" },
@@ -269,30 +268,20 @@ describe("runtime_executor_ai_ocr_uses_host_blob_path_without_legacy_http", () =
     });
     getOcrServiceMock.mockResolvedValueOnce(aiService());
     listAllProviderModelsMock.mockResolvedValueOnce([{ ...aiModel(), sourceAdapterId: "gemini" }]);
-    // Provider default API type stays legacy; the gemini interface is runtime-bound.
+    // The Provider default API type has no package binding; the gemini interface is runtime-bound.
     listProviderInstancesMock.mockResolvedValueOnce([
       {
         ...runtimeProvider(),
         runtime: {
-          runtimeKind: "legacy-frontend-provider",
+          runtimeKind: "wasm-component",
           packageDigest: null,
           grantSetRevision: null,
-          state: "active",
-          errorCode: null,
+          state: "unavailable",
+          errorCode: "no_runtime_binding",
           errorMessage: null,
           updatedAt: "t",
         },
         runtimeBindings: [
-          {
-            adapterId: "openai-compatible",
-            runtimeKind: "legacy-frontend-provider",
-            packageDigest: null,
-            grantSetRevision: null,
-            state: "active",
-            errorCode: null,
-            errorMessage: null,
-            updatedAt: "t",
-          },
           {
             adapterId: "gemini",
             runtimeKind: "wasm-component",

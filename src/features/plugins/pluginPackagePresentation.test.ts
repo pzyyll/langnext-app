@@ -1,17 +1,18 @@
-// ABOUTME: Unit tests for plugin package presentation helpers.
-// ABOUTME: Covers digest formatting, trust keys, uninstall gating, and permission summaries.
+// ABOUTME: Unit tests for catalog presentation helpers.
+// ABOUTME: Covers digest formatting, source labels, removal gating, and permission summaries.
 import { describe, expect, test } from "bun:test";
 import {
+  confirmationDigest,
+  formatContentSize,
   formatPackageDigestShort,
   isPackageExecutionEnabled,
-  isUninstallDisabled,
-  publisherApprovalKeyHex,
-  publisherTrustLabelKey,
-  requiresNativeExecutionRiskAcknowledgement,
-  requiresPublisherApproval,
-  requiresUnsignedRiskAcknowledgement,
-  installedSignatureLabelKey,
-  shouldShowManualPublisherKeyInput,
+  isReloadableEntry,
+  isRemovableEntry,
+  isTrustedSource,
+  isUserInstallableRuntime,
+  pluginSourceLabelKey,
+  requiresUserContentWarning,
+  summarizeArchiveFiles,
   summarizeNetworkPermissions,
 } from "./pluginPackagePresentation";
 
@@ -25,39 +26,45 @@ describe("pluginPackagePresentation", () => {
     expect(formatPackageDigestShort(digest)).toBe(`${"a".repeat(8)}…${"a".repeat(6)}`);
   });
 
-  test("publisherTrustLabelKey covers every trust state", () => {
-    expect(publisherTrustLabelKey("trusted_vendor")).toContain("trustedVendor");
-    expect(publisherTrustLabelKey("trusted_user")).toContain("trustedUser");
-    expect(publisherTrustLabelKey("unknown")).toContain("unknown");
-    expect(publisherTrustLabelKey("revoked")).toContain("revoked");
-    expect(publisherTrustLabelKey("disabled")).toContain("disabled");
-    expect(publisherTrustLabelKey("unsigned")).toContain("unsigned");
+  test("pluginSourceLabelKey covers every catalog source", () => {
+    expect(pluginSourceLabelKey("built_in")).toContain("builtIn");
+    expect(pluginSourceLabelKey("development")).toContain("development");
+    expect(pluginSourceLabelKey("user")).toContain("user");
   });
 
-  test("unsigned never maps to trusted publisher copy", () => {
-    expect(publisherTrustLabelKey("unsigned")).not.toContain("trusted");
-    expect(installedSignatureLabelKey({ signatureStatus: "unsigned" })).toContain("unsigned");
-    expect(installedSignatureLabelKey({ signatureStatus: "signed" })).toContain("signed");
+  test("only built-in content is trusted by location", () => {
+    expect(isTrustedSource("built_in")).toBe(true);
+    expect(isTrustedSource("development")).toBe(false);
+    expect(isTrustedSource("user")).toBe(false);
   });
 
-  test("unsigned and native risk flags are explicit", () => {
-    expect(requiresUnsignedRiskAcknowledgement({ requiresUnsignedRiskAcknowledgement: true })).toBe(true);
-    expect(requiresUnsignedRiskAcknowledgement({ signatureStatus: "unsigned" })).toBe(true);
-    expect(requiresUnsignedRiskAcknowledgement({ signatureStatus: "signed" })).toBe(false);
-    expect(requiresNativeExecutionRiskAcknowledgement({ requiresNativeExecutionRiskAcknowledgement: true })).toBe(true);
-    expect(requiresNativeExecutionRiskAcknowledgement({ requiresNativeExecutionRiskAcknowledgement: false })).toBe(
-      false,
-    );
+  test("user content always shows the unknown-publisher warning", () => {
+    expect(requiresUserContentWarning({ source: "user" })).toBe(true);
+    expect(requiresUserContentWarning({ source: "development" })).toBe(false);
+    expect(requiresUserContentWarning({ source: "built_in" })).toBe(false);
   });
 
-  test("uninstall disabled only when backend reports in_use", () => {
-    expect(isUninstallDisabled({ inUse: true })).toBe(true);
-    expect(isUninstallDisabled({ inUse: false })).toBe(false);
+  test("only Wasm archives are user-installable", () => {
+    expect(isUserInstallableRuntime("wasm-component")).toBe(true);
+    expect(isUserInstallableRuntime("trusted-native-worker")).toBe(false);
   });
 
-  test("requiresPublisherApproval mirrors preview flag", () => {
-    expect(requiresPublisherApproval({ requiresPublisherApproval: true })).toBe(true);
-    expect(requiresPublisherApproval({ requiresPublisherApproval: false })).toBe(false);
+  test("package execution is enabled only for supported runtimes", () => {
+    expect(isPackageExecutionEnabled({ runtimeKind: "wasm-component" })).toBe(true);
+    expect(isPackageExecutionEnabled({ runtimeKind: "trusted-native-worker" })).toBe(true);
+    expect(isPackageExecutionEnabled({ runtimeKind: "bundled-rust" })).toBe(false);
+    expect(isPackageExecutionEnabled({ runtimeKind: "unknown" })).toBe(false);
+  });
+
+  test("removal requires removable content that is not in use", () => {
+    expect(isRemovableEntry({ removable: true, inUse: false })).toBe(true);
+    expect(isRemovableEntry({ removable: true, inUse: true })).toBe(false);
+    expect(isRemovableEntry({ removable: false, inUse: false })).toBe(false);
+  });
+
+  test("reload is limited to reloadable content", () => {
+    expect(isReloadableEntry({ reloadable: true })).toBe(true);
+    expect(isReloadableEntry({ reloadable: false })).toBe(false);
   });
 
   test("summarizeNetworkPermissions formats methods and origins", () => {
@@ -67,27 +74,22 @@ describe("pluginPackagePresentation", () => {
     expect(summary).toEqual([{ id: "api", summary: "POST, GET → https://api.example.com" }]);
   });
 
-  test("package execution is enabled only for the supported Wasm runtime", () => {
-    expect(isPackageExecutionEnabled({ runtimeKind: "wasm-component" })).toBe(true);
-    expect(isPackageExecutionEnabled({ runtimeKind: "trusted-native-worker" })).toBe(true);
-    expect(isPackageExecutionEnabled({ runtimeKind: "bundled-rust" })).toBe(false);
-    expect(isPackageExecutionEnabled({ runtimeKind: "unknown" })).toBe(false);
+  test("summarizeNetworkPermissions names instance-configured origins", () => {
+    const summary = summarizeNetworkPermissions([{ id: "proxy", origins: [], methods: ["GET"] }]);
+    expect(summary).toEqual([{ id: "proxy", summary: "GET → instance-configured origin" }]);
   });
 
-  test("publisherApprovalKeyHex forwards the resolved publisher.pub key as-is", () => {
-    const resolved = { resolvedPublisherPublicKeyHex: "ab".repeat(32) };
-    expect(publisherApprovalKeyHex(resolved, "ignored manual input")).toBe("ab".repeat(32));
+  test("formatContentSize scales units", () => {
+    expect(formatContentSize(512)).toBe("512 B");
+    expect(formatContentSize(2048)).toBe("2 KiB");
+    expect(formatContentSize(1024 * 1024 * 3)).toBe("3 MiB");
   });
 
-  test("publisherApprovalKeyHex falls back to trimmed manual input when no resolved key", () => {
-    const noResolved = { resolvedPublisherPublicKeyHex: null };
-    expect(publisherApprovalKeyHex(noResolved, "  deadbeef  ")).toBe("deadbeef");
-    expect(publisherApprovalKeyHex(noResolved, "")).toBe("");
+  test("summarizeArchiveFiles joins count and size", () => {
+    expect(summarizeArchiveFiles({ fileCount: 3, totalBytes: 2048 })).toBe("3 files · 2 KiB");
   });
 
-  test("shouldShowManualPublisherKeyInput hides input when publisher.pub is resolved", () => {
-    expect(shouldShowManualPublisherKeyInput({ resolvedPublisherPublicKeyHex: "ab".repeat(32) })).toBe(false);
-    expect(shouldShowManualPublisherKeyInput({ resolvedPublisherPublicKeyHex: null })).toBe(true);
-    expect(shouldShowManualPublisherKeyInput({ resolvedPublisherPublicKeyHex: undefined })).toBe(true);
+  test("confirmationDigest is the preview content digest", () => {
+    expect(confirmationDigest({ contentDigest: "a".repeat(64) })).toBe("a".repeat(64));
   });
 });

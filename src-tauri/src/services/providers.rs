@@ -22,7 +22,7 @@ use uuid::Uuid;
 pub struct ProviderService {
   db: Database,
   vault: Arc<dyn CredentialVault>,
-  /// Reviewed vendor default wiring: new matching Providers receive the default
+  /// Reviewed catalog default wiring: new matching Providers receive the resolved default
   /// package/grant in their create transaction; every provider is package-first.
   runtime_defaults: Option<Arc<ProviderRuntimeService>>,
 }
@@ -40,7 +40,7 @@ impl ProviderService {
   }
 
   /// Attach the provider runtime service so newly created matching Providers receive the
-  /// reviewed vendor default package/grant. Resolution failures fail closed.
+  /// reviewed catalog default package/grant. Resolution failures fail closed.
   pub fn with_runtime_defaults(mut self, runtime: Arc<ProviderRuntimeService>) -> Self {
     self.runtime_defaults = Some(runtime);
     self
@@ -78,15 +78,15 @@ impl ProviderService {
     let now = now_rfc3339();
     let (credential_ref, secret_to_store, op_id) = self.plan_create_credential(id, &input)?;
 
-    // Package-first create: every new provider requires an applicable authorized default
-    // package. No legacy frontend executor exists, so genuine absence and blocked defaults
-    // fail closed without writing a provider, binding, or intent row.
+    // Package-first create: every new provider requires an applicable catalog default package.
+    // No legacy frontend executor exists, so genuine absence and blocked defaults fail closed
+    // without writing a provider or binding row.
     let default: Option<PreparedProviderDefault> = match &self.runtime_defaults {
       Some(runtime) => match runtime.resolve_applicable_provider_default(&input)? {
         ProviderDefaultResolution::Applicable(prepared) => Some(prepared),
         ProviderDefaultResolution::NoApplicableDefault => {
           return Err(StorageError::Validation(
-            "provider create requires an authorized default package; install and authorize it first".into(),
+            "provider create requires a catalog default package; install it first".into(),
           ));
         }
         ProviderDefaultResolution::Blocked(block) => {
@@ -95,7 +95,7 @@ impl ProviderService {
       },
       None => {
         return Err(StorageError::Validation(
-          "provider create requires an authorized default package".into(),
+          "provider create requires a catalog default package".into(),
         ));
       }
     };
@@ -482,7 +482,7 @@ impl ProviderService {
 }
 
 /// Insert the exact package-first pending binding for a new provider. Package-only create
-/// never writes a legacy binding; callers must resolve an authorized default first.
+/// never writes a legacy binding; callers must resolve a catalog default first.
 fn insert_selected_runtime_binding(
   conn: &rusqlite::Connection,
   provider: &ProviderInstance,
@@ -493,7 +493,7 @@ fn insert_selected_runtime_binding(
   match prepared_default {
     Some(prepared) => apply_package_first_pending_binding(conn, provider, prepared, now),
     None => Err(StorageError::Validation(
-      "provider create requires an authorized default package".into(),
+      "provider create requires a catalog default package".into(),
     )),
   }
 }
@@ -748,15 +748,11 @@ mod tests {
     AuthSchemeV1, BaseUrlSource, CredentialKind, CredentialUpdate, ProviderInstanceWrite, ProxyMode,
   };
   use crate::domain::runtime_provider::{ProviderRuntimeKind, ProviderRuntimeState};
-  use crate::services::plugin_store::PluginPackageService;
+  use crate::services::plugin_catalog::PluginCatalog;
   use crate::services::runtime_providers::ProviderRuntimeService;
-  use crate::services::wasm_runtime::WasmRuntime;
-
-  /// Committed dev-signed OpenAI Compatible provider runtime package fixture.
-  const OPENAI_COMPATIBLE_PACKAGE: &[u8] = include_bytes!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../runtime-plugins/openai-compatible/fixtures/packages/com.langnext.provider.openai-compatible-1.0.0.lnplugin"
-  ));
+  use crate::services::test_support::{
+    OPENAI_COMPATIBLE_ARCHIVE, OPENAI_COMPATIBLE_PLUGIN_ID, catalog_with_builtins, fixture_digest, wasm_runtime,
+  };
 
   fn provider_write(credential_secret: Option<&str>) -> ProviderInstanceWrite {
     ProviderInstanceWrite {
@@ -778,61 +774,28 @@ mod tests {
     }
   }
 
-  fn setup() -> (
-    tempfile::TempDir,
-    Database,
-    PluginPackageService,
-    ProviderService,
-    crate::services::default_package_activation::DefaultPackageActivationService,
-  ) {
+  fn setup(archive_names: &[&str]) -> (tempfile::TempDir, Database, Arc<PluginCatalog>, ProviderService) {
     let dir = tempfile::tempdir().unwrap();
     let db = Database::new(dir.path()).unwrap();
     db.initialize().unwrap();
-    let packages = PluginPackageService::with_vendor_roots(
-      db.clone(),
-      dir.path().to_path_buf(),
-      vec![crate::services::vendor_trust::test_vendor_fixture::fixture_vendor_public_key()],
-    );
-    let activation = crate::services::default_package_activation::DefaultPackageActivationService::create(
-      db.clone(),
-      packages.clone(),
-      dir.path(),
-    );
-    let runtime = ProviderRuntimeService::new(db.clone(), packages.clone(), Arc::new(WasmRuntime::new().unwrap()));
+    let catalog = catalog_with_builtins(db.clone(), dir.path(), archive_names);
+    let runtime = ProviderRuntimeService::new(db.clone(), catalog.clone(), wasm_runtime());
     let providers =
       ProviderService::new(db.clone(), Arc::new(MemoryCredentialVault::new())).with_runtime_defaults(Arc::new(runtime));
-    (dir, db, packages, providers, activation)
+    (dir, db, catalog, providers)
   }
 
-  /// Package-only create: without an authorized default package the save fails closed; with
-  /// one, both branches (vault write and vault-free) insert exactly one package-first binding.
+  /// Catalog-default create: without a catalog default the save fails closed; with one, both
+  /// branches (vault write and vault-free) insert exactly one package-first binding.
   #[test]
   fn create_inserts_exactly_one_selected_runtime_binding() {
-    let (_dir, db, packages, providers, activation) = setup();
+    let (_empty_dir, _empty_db, _empty_catalog, empty_providers) = setup(&[]);
+    let err = empty_providers.save(provider_write(Some("secret"))).unwrap_err();
+    assert!(err.to_string().contains("catalog default package"), "got {err}");
+    assert!(empty_providers.list().unwrap().is_empty(), "no provider written");
 
-    // No authorized default: every create is rejected; no provider or binding row is written.
-    let err = providers.save(provider_write(Some("secret"))).unwrap_err();
-    assert!(err.to_string().contains("default package"), "got {err}");
-    assert!(providers.list().unwrap().is_empty(), "no provider written");
-
-    // Install and authorize the default package for the package-first cases.
-    let import = packages
-      .bootstrap_bundled_package(OPENAI_COMPATIBLE_PACKAGE, false)
-      .expect("vendor package bootstraps");
-    let digest = import.package_digest().to_string();
-    let preview = activation
-      .preview_default_package_activation(&digest)
-      .expect("preview default activation");
-    activation
-      .authorize_default_plugin_package(
-        crate::domain::default_package_activation::AuthorizeDefaultPluginPackageInput {
-          preview_id: preview.preview_id,
-          acknowledge_future_instance_authority: true,
-          acknowledge_unsigned_default_risk: false,
-        },
-      )
-      .expect("authorize default package");
-
+    let (_dir, db, catalog, providers) = setup(&[OPENAI_COMPATIBLE_ARCHIVE]);
+    let digest = fixture_digest(&catalog, OPENAI_COMPATIBLE_PLUGIN_ID);
     let package_cases: &[(&str, Option<&str>)] =
       &[("package-vault", Some("secret-package")), ("package-novault", None)];
     for (case, secret) in package_cases {

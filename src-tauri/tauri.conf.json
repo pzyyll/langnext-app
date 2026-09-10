@@ -49,6 +49,6 @@
       "icons/icon.icns",
       "icons/black-bg/icon.ico"
     ],
-    "resources": ["resources/vendor-trust/public-keys.json", "resources/plugins/"]
+    "resources": ["resources/plugins/"]
   }
 }

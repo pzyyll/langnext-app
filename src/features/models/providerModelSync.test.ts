@@ -19,7 +19,6 @@ const CATALOG_ENTRY = {
   pluginId: "langnext.conformance.llm-provider",
   version: "1.0.0",
   packageDigest: PACKAGE_DIGEST,
-  publisher: { keyId: "key-1", keyFingerprint: "fp-1" },
   legacyAliases: ["openai-compatible"],
   capabilities: [
     { capabilityId: "llm.models.list@1", artifactPath: "fixtures/llm-models.wasm", artifactDigest: "a" },
@@ -46,9 +45,9 @@ function provider(
     modelsSyncErrorCode: null,
     runtime: {
       adapterId: "openai-compatible",
-      runtimeKind: "legacy-frontend-provider",
-      packageDigest: null,
-      grantSetRevision: null,
+      runtimeKind: "wasm-component",
+      packageDigest: PACKAGE_DIGEST,
+      grantSetRevision: 1,
       state: "active",
       errorCode: null,
       errorMessage: null,
@@ -57,9 +56,9 @@ function provider(
     runtimeBindings: [
       {
         adapterId: "openai-compatible",
-        runtimeKind: "legacy-frontend-provider",
-        packageDigest: null,
-        grantSetRevision: null,
+        runtimeKind: "wasm-component",
+        packageDigest: PACKAGE_DIGEST,
+        grantSetRevision: 1,
         state: "active",
         errorCode: null,
         errorMessage: null,

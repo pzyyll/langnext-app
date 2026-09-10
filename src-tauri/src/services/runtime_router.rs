@@ -4,7 +4,7 @@ use crate::domain::endpoint_trust::{
   EDGE_TTS_TRUST_ENDPOINT_ALIAS, RuntimeIdentityFingerprintInput, configuration_fingerprint,
   runtime_identity_fingerprint,
 };
-use crate::domain::plugin_package::{PublisherSource, runtime_kind_storage};
+use crate::domain::plugin_catalog::{PluginSource, compute_permission_request_digest};
 use crate::domain::runtime_lifecycle::{
   ExecutionGrantSetBundle, GrantSubjectKind, InstanceRuntimeState, parse_runtime_kind,
 };
@@ -16,11 +16,8 @@ use crate::domain::runtime_plugin::{
 };
 use crate::domain::service_capability::{CapabilityError, CapabilityErrorCode};
 use crate::error::StorageError;
-use crate::repositories::{
-  installed_plugin_versions, integration_endpoint_trusts, integration_instances, plugin_permission_grants,
-  plugin_publishers,
-};
-use crate::services::plugin_store::PluginPackageService;
+use crate::repositories::{integration_endpoint_trusts, integration_instances, plugin_permission_grants};
+use crate::services::plugin_catalog::PluginCatalog;
 use crate::services::service_integration_registry::ServiceIntegrationRegistry;
 use crate::services::wasm_runtime::WasmRuntime;
 use crate::storage::Database;
@@ -43,7 +40,7 @@ pub enum RuntimeAdapter {
     package_digest: PackageDigest,
     content_dir: std::path::PathBuf,
     worker_exe: std::path::PathBuf,
-    /// Signed digest of worker.exe from the re-verified package index.
+    /// Pinned digest of worker.exe from the re-verified package index.
     worker_sha256: String,
     model_root: std::path::PathBuf,
     model_set_digest: String,
@@ -97,13 +94,8 @@ pub struct SnapshotRuntimeResolution {
   pub package_permission_request_digest: Option<String>,
   pub package_plugin_id: Option<String>,
   pub package_plugin_version: Option<String>,
-  pub publisher_key_id: Option<String>,
-  pub publisher_fingerprint: Option<String>,
-  pub publisher_public_key_hex: Option<String>,
-  pub publisher_source: Option<PublisherSource>,
-  pub publisher_enabled: bool,
-  pub publisher_revoked: bool,
-  pub signature_status: Option<crate::domain::plugin_package::PackageSignatureStatus>,
+  /// Catalog source of the pinned content. Built-in content alone may run a native worker.
+  pub plugin_source: Option<PluginSource>,
   pub grant_bundle: Option<ExecutionGrantSetBundle>,
 }
 
@@ -112,7 +104,7 @@ pub struct SnapshotRuntimeResolution {
 pub struct RuntimeRouter {
   db: Database,
   definition_registry: Arc<ServiceIntegrationRegistry>,
-  plugin_packages: PluginPackageService,
+  catalog: Arc<PluginCatalog>,
   #[allow(dead_code)]
   wasm_runtime: Arc<WasmRuntime>,
 }
@@ -121,13 +113,13 @@ impl RuntimeRouter {
   pub fn new(
     db: Database,
     definition_registry: Arc<ServiceIntegrationRegistry>,
-    plugin_packages: PluginPackageService,
+    catalog: Arc<PluginCatalog>,
     wasm_runtime: Arc<WasmRuntime>,
   ) -> Self {
     Self {
       db,
       definition_registry,
-      plugin_packages,
+      catalog,
       wasm_runtime,
     }
   }
@@ -213,36 +205,27 @@ impl RuntimeRouter {
         "native runtime pin is missing grant-set revision",
       )
     })?;
-    let version = self
-      .db
-      .read(|conn| installed_plugin_versions::get_optional(conn, package_digest))
-      .map_err(|e| map_storage_capability(e, "failed to load installed package"))?
-      .ok_or_else(|| CapabilityError::new(CapabilityErrorCode::PluginUnavailable, "installed package is missing"))?;
-    if !version.content_available {
-      return Err(CapabilityError::new(
+    let verified = self.catalog.snapshot(package_digest).map_err(|_| {
+      CapabilityError::new(
         CapabilityErrorCode::PluginUnavailable,
-        "installed package content is unavailable",
-      ));
-    }
-    let verified = self
-      .plugin_packages
-      .verify_installed_package_snapshot(package_digest)
-      .map_err(|_| {
-        CapabilityError::new(
-          CapabilityErrorCode::PluginUnavailable,
-          "native package re-verify failed",
-        )
-      })?;
-    if verified.package_digest != package_digest {
+        "native package content is unavailable",
+      )
+    })?;
+    if verified.descriptor.content_digest != package_digest {
       return Err(CapabilityError::new(
         CapabilityErrorCode::PermissionDenied,
         "native package digest drifted",
       ));
     }
+    if !verified.descriptor.source.allows_native() {
+      return Err(CapabilityError::new(
+        CapabilityErrorCode::PermissionDenied,
+        "native worker content must be built-in",
+      ));
+    }
 
     // Catalog manifest is only used to discover the declared model id for readiness gating.
-    // Worker/DLL/model identity still requires vendor-root re-verify before spawn below.
-    let catalog_manifest: PluginManifestV1 = serde_json::from_str(&version.manifest_json).map_err(|_| {
+    let catalog_manifest: PluginManifestV1 = serde_json::from_str(&verified.manifest_json).map_err(|_| {
       CapabilityError::new(
         CapabilityErrorCode::InvalidConfiguration,
         "installed manifest is invalid",
@@ -309,7 +292,7 @@ impl RuntimeRouter {
     })?;
     // Host-private model store is a sibling of plugins/ under the shared app-data root.
     let model_root = self
-      .plugin_packages
+      .catalog
       .app_data_dir()
       .join("plugin-models")
       .join("store")
@@ -320,7 +303,7 @@ impl RuntimeRouter {
         crate::domain::plugin_model::PluginModelErrorCode::ModelMissing.as_str(),
       ));
     }
-    let content_dir = self.plugin_packages.package_content_path(package_digest);
+    let content_dir = verified.snapshot_dir.clone();
     let worker_rel = manifest
       .runtime
       .artifact
@@ -350,7 +333,7 @@ impl RuntimeRouter {
     let worker_sha256 = worker_sha256.ok_or_else(|| {
       CapabilityError::new(
         CapabilityErrorCode::PluginUnavailable,
-        "native worker executable digest is missing from the signed index",
+        "native worker executable digest is missing from the package index",
       )
     })?;
     let runtime_set_digest = crate::services::native_workers::runtime_set_digest(&runtime_files);
@@ -451,53 +434,30 @@ impl RuntimeRouter {
       )
     })?;
 
-    let version = self
-      .db
-      .read(|conn| installed_plugin_versions::get_optional(conn, package_digest))
-      .map_err(|e| map_storage_capability(e, "failed to load installed package"))?
-      .ok_or_else(|| CapabilityError::new(CapabilityErrorCode::PluginUnavailable, "installed package is missing"))?;
-
-    if !version.content_available {
-      return Err(CapabilityError::new(
+    let version = self.catalog.snapshot(package_digest).map_err(|_| {
+      CapabilityError::new(
         CapabilityErrorCode::PluginUnavailable,
         "installed package content is unavailable",
-      ));
-    }
-    if version.plugin_id != instance.plugin_id {
+      )
+    })?;
+
+    if version.descriptor.plugin_id != instance.plugin_id {
       return Err(CapabilityError::new(
         CapabilityErrorCode::PermissionDenied,
         "package plugin id does not match instance",
       ));
     }
-    if version.runtime_kind != runtime_kind_storage(RuntimeKind::WasmComponent) {
+    if version.descriptor.runtime_kind != RuntimeKind::WasmComponent {
       return Err(CapabilityError::new(
         CapabilityErrorCode::InvalidConfiguration,
         "package runtime kind is not wasm-component",
       ));
     }
-
-    if version.signature_status == crate::domain::plugin_package::PackageSignatureStatus::Signed {
-      let publisher = self
-        .db
-        .read(|conn| crate::repositories::plugin_publishers::get(conn, &version.publisher_key_id))
-        .map_err(|e| map_storage_capability(e, "failed to load publisher"))?;
-      if publisher.revoked || !publisher.enabled {
-        return Err(CapabilityError::new(
-          CapabilityErrorCode::PermissionDenied,
-          "publisher trust is revoked or disabled",
-        ));
-      }
-      crate::services::auth_policies::validate_google_cloud_manifest_authority(
-        &serde_json::from_str::<PluginManifestV1>(&version.manifest_json).map_err(|e| {
-          CapabilityError::new(
-            CapabilityErrorCode::InvalidConfiguration,
-            format!("invalid installed manifest: {e}"),
-          )
-        })?,
-        publisher.source,
-      )
-      .map_err(|message| CapabilityError::new(CapabilityErrorCode::PermissionDenied, message))?;
-    }
+    crate::services::auth_policies::validate_google_cloud_manifest_authority(
+      &version.manifest,
+      version.descriptor.source,
+    )
+    .map_err(|message| CapabilityError::new(CapabilityErrorCode::PermissionDenied, message))?;
 
     let bundle = self
       .db
@@ -534,30 +494,25 @@ impl RuntimeRouter {
       );
     }
 
-    let manifest: PluginManifestV1 = serde_json::from_str(&version.manifest_json).map_err(|e| {
-      CapabilityError::new(
-        CapabilityErrorCode::InvalidConfiguration,
-        format!("invalid installed manifest: {e}"),
-      )
-    })?;
+    let manifest: PluginManifestV1 = version.manifest.clone();
     let (artifact_digest, artifact_bytes) =
       self.load_verified_installed_wasm_artifact(package_digest, &manifest, capability_id)?;
-    // The archive check above proves this catalog manifest is the signed package manifest.
-    // A database authority digest is not a signature, so bind grant children and headers only
-    // after that proof, exactly as the immutable snapshot path does.
+    // The immutable snapshot check above binds grant children and headers to the exact
+    // manifest and content digest that the catalog published for this pin.
+    let permission_request_digest = crate::domain::plugin_catalog::compute_permission_request_digest(&manifest);
     let bind = GrantCanonicalBind {
       subject_id: instance.id,
       plugin_id: &instance.plugin_id,
-      package_plugin_id: &version.plugin_id,
-      package_plugin_version: &version.version,
-      package_permission_request_digest: &version.permission_request_digest,
+      package_plugin_id: &version.descriptor.plugin_id,
+      package_plugin_version: &version.descriptor.version,
+      package_permission_request_digest: &permission_request_digest,
     };
     verify_grant_canonical_bind(&bind, &bundle, &manifest, package_digest, grant_revision, capability_id)?;
     validate_instance_configured_origins(
       &self.db,
       instance.id,
       &instance.plugin_id,
-      &version.version,
+      &version.descriptor.version,
       &instance.runtime_kind,
       package_digest,
       &instance.config_json,
@@ -617,36 +572,21 @@ impl RuntimeRouter {
         let mut package_manifest_json = None;
         let mut package_plugin_id = None;
         let mut package_plugin_version = None;
-        let mut publisher_key_id = None;
-        let mut publisher_fingerprint = None;
-        let mut publisher_public_key_hex = None;
-        let mut publisher_source = None;
-        let mut publisher_enabled = false;
-        let mut publisher_revoked = true;
-        let mut signature_status = None;
+        let mut plugin_source = None;
         let mut grant_bundle = None;
         if let (Some(digest), Some(rev)) = (
           instance.package_digest.as_deref(),
           instance.execution_grant_set_revision,
         ) {
-          let version = installed_plugin_versions::get(conn, digest)?;
-          package_content_available = version.content_available;
-          package_permission_request_digest = Some(version.permission_request_digest.clone());
-          package_manifest_json = Some(version.manifest_json.clone());
-          package_plugin_id = Some(version.plugin_id.clone());
-          package_plugin_version = Some(version.version.clone());
-          signature_status = Some(version.signature_status);
-          if version.signature_status == crate::domain::plugin_package::PackageSignatureStatus::Unsigned {
-            publisher_enabled = true;
-            publisher_revoked = false;
-          } else {
-            let publisher = plugin_publishers::get(conn, &version.publisher_key_id)?;
-            publisher_key_id = Some(publisher.key_id.clone());
-            publisher_fingerprint = Some(publisher.fingerprint.clone());
-            publisher_public_key_hex = Some(publisher.public_key_hex.clone());
-            publisher_source = Some(publisher.source);
-            publisher_enabled = publisher.enabled;
-            publisher_revoked = publisher.revoked;
+          if let Some(loaded) = self.catalog.snapshot_optional(digest) {
+            package_content_available = true;
+            package_permission_request_digest = Some(crate::domain::plugin_catalog::compute_permission_request_digest(
+              &loaded.manifest,
+            ));
+            package_manifest_json = Some(loaded.manifest_json.clone());
+            package_plugin_id = Some(loaded.descriptor.plugin_id.clone());
+            package_plugin_version = Some(loaded.descriptor.version.clone());
+            plugin_source = Some(loaded.descriptor.source);
           }
           grant_bundle = Some(plugin_permission_grants::get_bundle_for_subject_package_revision(
             conn,
@@ -673,13 +613,7 @@ impl RuntimeRouter {
             package_permission_request_digest,
             package_plugin_id,
             package_plugin_version,
-            publisher_key_id,
-            publisher_fingerprint,
-            publisher_public_key_hex,
-            publisher_source,
-            publisher_enabled,
-            publisher_revoked,
-            signature_status,
+            plugin_source,
             grant_bundle,
           },
         ))
@@ -706,17 +640,12 @@ impl RuntimeRouter {
         || live_pkg.package_manifest_json != pin.package_manifest_json
         || live_pkg.package_plugin_id != pin.package_plugin_id
         || live_pkg.package_plugin_version != pin.package_plugin_version
-        || live_pkg.publisher_key_id != pin.publisher_key_id
-        || live_pkg.publisher_fingerprint != pin.publisher_fingerprint
-        || live_pkg.publisher_public_key_hex != pin.publisher_public_key_hex
-        || live_pkg.publisher_source != pin.publisher_source
-        || live_pkg.publisher_enabled != pin.publisher_enabled
-        || live_pkg.publisher_revoked != pin.publisher_revoked
+        || live_pkg.plugin_source != pin.plugin_source
         || !canonical_grant_bundles_equal(live_pkg.grant_bundle.as_ref(), pin.grant_bundle.as_ref())
       {
         return Err(CapabilityError::new(
           CapabilityErrorCode::PluginUnavailable,
-          "package, publisher, or grant authority changed concurrently during invocation",
+          "package source or grant authority changed concurrently during invocation",
         ));
       }
     }
@@ -744,14 +673,6 @@ impl RuntimeRouter {
       return Err(CapabilityError::new(
         CapabilityErrorCode::PluginUnavailable,
         "installed package content is unavailable",
-      ));
-    }
-    let unsigned_snapshot =
-      pin.signature_status == Some(crate::domain::plugin_package::PackageSignatureStatus::Unsigned);
-    if !unsigned_snapshot && (pin.publisher_revoked || !pin.publisher_enabled) {
-      return Err(CapabilityError::new(
-        CapabilityErrorCode::PermissionDenied,
-        "publisher trust is revoked or disabled",
       ));
     }
     let bundle = pin.grant_bundle.as_ref().ok_or_else(|| {
@@ -793,16 +714,14 @@ impl RuntimeRouter {
         format!("invalid installed manifest: {e}"),
       )
     })?;
-    if !unsigned_snapshot {
-      let snapshot_publisher_source = pin.publisher_source.ok_or_else(|| {
-        CapabilityError::new(
-          CapabilityErrorCode::PluginUnavailable,
-          "publisher source is missing from invocation snapshot",
-        )
-      })?;
-      crate::services::auth_policies::validate_google_cloud_manifest_authority(&manifest, snapshot_publisher_source)
-        .map_err(|message| CapabilityError::new(CapabilityErrorCode::PermissionDenied, message))?;
-    }
+    let plugin_source = pin.plugin_source.ok_or_else(|| {
+      CapabilityError::new(
+        CapabilityErrorCode::PluginUnavailable,
+        "plugin source is missing from invocation snapshot",
+      )
+    })?;
+    crate::services::auth_policies::validate_google_cloud_manifest_authority(&manifest, plugin_source)
+      .map_err(|message| CapabilityError::new(CapabilityErrorCode::PermissionDenied, message))?;
     if manifest.id != pin.plugin_id {
       return Err(CapabilityError::new(
         CapabilityErrorCode::PermissionDenied,
@@ -811,7 +730,7 @@ impl RuntimeRouter {
     }
     let (artifact_digest, artifact_bytes) =
       self.load_verified_installed_wasm_artifact(package_digest, &manifest, capability_id)?;
-    // The archive check above proves this snapshot manifest is the signed package manifest.
+    // The archive check above proves this snapshot manifest is the package manifest.
     // A database authority digest is not a signature, so bind grant children and headers only
     // after that proof, exactly as the direct resolver path does.
     let bind = GrantCanonicalBind {
@@ -874,19 +793,16 @@ impl RuntimeRouter {
     expected_manifest: &PluginManifestV1,
     capability_id: &str,
   ) -> Result<(ComponentArtifactDigest, Arc<Vec<u8>>), CapabilityError> {
-    let verified = self
-      .plugin_packages
-      .verify_installed_package_snapshot(package_digest)
-      .map_err(|err| {
-        CapabilityError::new(
-          CapabilityErrorCode::PluginUnavailable,
-          format!("runtime package snapshot verification failed: {err}"),
-        )
-      })?;
+    let verified = self.catalog.snapshot(package_digest).map_err(|err| {
+      CapabilityError::new(
+        CapabilityErrorCode::PluginUnavailable,
+        format!("runtime package snapshot lookup failed: {err}"),
+      )
+    })?;
     if verified.manifest != *expected_manifest {
       return Err(CapabilityError::new(
         CapabilityErrorCode::PluginUnavailable,
-        "signed package manifest differs from the installed package record",
+        "catalog manifest differs from the pinned package record",
       ));
     }
     let artifact_path = artifact_path_for_capability(&verified.manifest, capability_id)?;
@@ -898,13 +814,13 @@ impl RuntimeRouter {
       .ok_or_else(|| {
         CapabilityError::new(
           CapabilityErrorCode::PluginUnavailable,
-          "runtime artifact is missing from the signed file index",
+          "runtime artifact is missing from the manifest file index",
         )
       })?;
-    let artifact_bytes = verified.extracted_files.get(artifact_path).cloned().ok_or_else(|| {
+    let artifact_bytes = verified.read_snapshot_file(artifact_path).map_err(|_| {
       CapabilityError::new(
         CapabilityErrorCode::PluginUnavailable,
-        "runtime artifact is missing from the verified archive snapshot",
+        "runtime artifact is missing from the immutable snapshot",
       )
     })?;
     if artifact_bytes.len() as u64 != file_entry.bytes {
@@ -1333,7 +1249,7 @@ struct GrantCanonicalBind<'a> {
   package_permission_request_digest: &'a str,
 }
 
-/// Fail closed when a direct or snapshot grant is not a canonical bind of the signed package + pin.
+/// Fail closed when a direct or snapshot grant is not a canonical bind of the package + pin.
 fn verify_grant_canonical_bind(
   bind: &GrantCanonicalBind<'_>,
   bundle: &ExecutionGrantSetBundle,
@@ -1342,7 +1258,6 @@ fn verify_grant_canonical_bind(
   grant_revision: u64,
   capability_id: &str,
 ) -> Result<(), CapabilityError> {
-  use crate::domain::plugin_package::compute_permission_request_digest;
   use crate::domain::runtime_lifecycle::GrantSubjectKind;
 
   if bundle.header.subject_kind != GrantSubjectKind::IntegrationInstance {
@@ -1366,7 +1281,7 @@ fn verify_grant_canonical_bind(
   if manifest.id != bind.package_plugin_id {
     return Err(CapabilityError::new(
       CapabilityErrorCode::PermissionDenied,
-      "signed manifest plugin_id does not match installed package",
+      "manifest plugin_id does not match installed package",
     ));
   }
   if bundle.header.plugin_id != bind.package_plugin_id {
@@ -1378,7 +1293,7 @@ fn verify_grant_canonical_bind(
   if manifest.version != bind.package_plugin_version {
     return Err(CapabilityError::new(
       CapabilityErrorCode::PermissionDenied,
-      "signed manifest plugin_version does not match installed package",
+      "manifest plugin_version does not match installed package",
     ));
   }
   if bundle.header.plugin_version != bind.package_plugin_version {
@@ -1403,13 +1318,13 @@ fn verify_grant_canonical_bind(
   if bundle.header.permission_request_digest != expected_permission {
     return Err(CapabilityError::new(
       CapabilityErrorCode::PermissionDenied,
-      "grant permission_request_digest does not match signed manifest",
+      "grant permission_request_digest does not match manifest",
     ));
   }
   if bind.package_permission_request_digest != expected_permission {
     return Err(CapabilityError::new(
       CapabilityErrorCode::PermissionDenied,
-      "installed package permission_request_digest does not match signed manifest",
+      "installed package permission_request_digest does not match manifest",
     ));
   }
   if bundle.header.permission_request_digest != bind.package_permission_request_digest {
@@ -1456,7 +1371,7 @@ fn verify_grant_canonical_bind(
 
 /// Reject network authority that does not exactly match the verified package manifest and fixed
 /// host policy. An authority digest detects incidental corruption but never substitutes for this
-/// signed-manifest bind before a Wasm handle sees the grant.
+/// manifest bind before a Wasm handle sees the grant.
 fn validate_manifest_bound_network_origin_kinds(
   manifest: &PluginManifestV1,
   bundle: &ExecutionGrantSetBundle,
@@ -1722,10 +1637,6 @@ mod tests {
       plugin_api_version: "1.0".into(),
       id: "langnext.conformance".into(),
       version: "0.1.0".into(),
-      publisher: crate::domain::runtime_plugin::PublisherDeclaration {
-        key_id: "test.publisher".into(),
-        key_fingerprint: "a".repeat(64),
-      },
       runtime: crate::domain::runtime_plugin::RuntimeDescriptor {
         kind: RuntimeKind::WasmComponent,
         artifact: Some("artifacts/plugin.wasm".into()),
@@ -1863,32 +1774,9 @@ mod tests {
     let db = Database::new(dir.path()).unwrap();
     db.initialize().unwrap();
 
-    // Need an installed package row for FK.
+    // Grant sets are keyed by exact content digest; no package table is required.
     let digest = "c".repeat(64);
-    let now = now_rfc3339();
     db.transaction(|uow| {
-      crate::repositories::plugin_publishers::upsert_vendor(
-        uow.conn(),
-        "langnext.conformance",
-        &"d".repeat(64),
-        &"ab".repeat(32),
-      )?;
-      crate::repositories::installed_plugin_versions::insert(
-        uow.conn(),
-        &crate::domain::plugin_package::InstalledPluginVersion {
-          package_digest: digest.clone(),
-          plugin_id: "langnext.conformance".into(),
-          version: "0.1.0".into(),
-          publisher_key_id: "langnext.conformance".into(),
-          publisher_fingerprint: "d".repeat(64),
-          signature_status: crate::domain::plugin_package::PackageSignatureStatus::Signed,
-          runtime_kind: "wasm-component".into(),
-          manifest_json: "{}".into(),
-          permission_request_digest: "e".repeat(64),
-          content_available: true,
-          installed_at: now.clone(),
-        },
-      )?;
       let subject_a = new_id();
       let subject_b = new_id();
       let mut bundle = sample_bundle(subject_a, &digest);

@@ -3,10 +3,6 @@
   "pluginApiVersion": "1.0",
   "id": "langnext.conformance.detect",
   "version": "0.1.0",
-  "publisher": {
-    "keyId": "langnext.conformance",
-    "keyFingerprint": "0000000000000000000000000000000000000000000000000000000000000000"
-  },
   "runtime": {
     "kind": "wasm-component",
     "artifact": "fixtures/langnext-conformance-detect-wasm.wasm"

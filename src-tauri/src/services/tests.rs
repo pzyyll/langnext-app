@@ -37,43 +37,17 @@ fn models_dev_cache_dir(dir: &tempfile::TempDir) -> std::path::PathBuf {
   cache_dir
 }
 
-const OPENAI_COMPATIBLE_PACKAGE: &[u8] = include_bytes!(concat!(
-  env!("CARGO_MANIFEST_DIR"),
-  "/../runtime-plugins/openai-compatible/fixtures/packages/com.langnext.provider.openai-compatible-1.0.0.lnplugin"
-));
-const GOOGLE_CLOUD_LNPLUGIN: &[u8] = include_bytes!(concat!(
-  env!("CARGO_MANIFEST_DIR"),
-  "/../runtime-plugins/google-cloud/fixtures/com.langnext.google-cloud-1.2.0.lnplugin"
-));
-
-/// Install and authorize the openai-compatible default package, returning a package-first
-/// ProviderService. Package-only: every provider create requires an authorized default.
+/// Catalog-backed provider service. Every provider create resolves the catalog default for
+/// the openai-compatible provider package.
 fn package_first_providers(db: Database, vault: Arc<MemoryCredentialVault>, dir: &std::path::Path) -> ProviderService {
-  use crate::domain::default_package_activation::AuthorizeDefaultPluginPackageInput;
-  use crate::services::default_package_activation::DefaultPackageActivationService;
-  use crate::services::plugin_store::PluginPackageService;
   use crate::services::runtime_providers::ProviderRuntimeService;
-  use crate::services::vendor_trust::test_vendor_fixture::fixture_vendor_public_key;
-  use crate::services::wasm_runtime::WasmRuntime;
 
-  let packages =
-    PluginPackageService::with_vendor_roots(db.clone(), dir.to_path_buf(), vec![fixture_vendor_public_key()]);
-  let activation = DefaultPackageActivationService::create(db.clone(), packages.clone(), dir);
-  let import = packages
-    .bootstrap_bundled_package(OPENAI_COMPATIBLE_PACKAGE, false)
-    .expect("vendor package bootstraps");
-  let digest = import.package_digest().to_string();
-  let preview = activation
-    .preview_default_package_activation(&digest)
-    .expect("preview default activation");
-  activation
-    .authorize_default_plugin_package(AuthorizeDefaultPluginPackageInput {
-      preview_id: preview.preview_id,
-      acknowledge_future_instance_authority: true,
-      acknowledge_unsigned_default_risk: false,
-    })
-    .expect("authorize default package");
-  let runtime = ProviderRuntimeService::new(db.clone(), packages, Arc::new(WasmRuntime::new().unwrap()));
+  let catalog = crate::services::test_support::catalog_with_builtins(
+    db.clone(),
+    dir,
+    &[crate::services::test_support::OPENAI_COMPATIBLE_ARCHIVE],
+  );
+  let runtime = ProviderRuntimeService::new(db.clone(), catalog, crate::services::test_support::wasm_runtime());
   ProviderService::new(db, vault).with_runtime_defaults(Arc::new(runtime))
 }
 
@@ -97,9 +71,12 @@ fn setup() -> (
   // definition is projected into the registry (production startup path), so plugin profile
   // saves can validate capability declarations and normalize preferences.
   let registry = {
-    let packages = crate::services::test_support::vendor_packages(db.clone(), dir.path());
-    crate::services::test_support::bootstrap_package(&packages, GOOGLE_CLOUD_LNPLUGIN);
-    crate::services::test_support::registry_from_installed_packages(&packages)
+    let catalog = crate::services::test_support::catalog_with_builtins(
+      db.clone(),
+      dir.path(),
+      &[crate::services::test_support::GOOGLE_CLOUD_ARCHIVE],
+    );
+    crate::services::test_support::registry_from_catalog(&catalog)
   };
   let profiles = TranslationProfileService::new(db.clone(), registry);
   let settings = SettingsService::new(db.clone(), vault.clone());
@@ -139,6 +116,68 @@ fn for_provider_update(
   write.id = Some(id);
   write.expected_updated_at = Some(expected_updated_at.to_string());
   write
+}
+
+/// Export resolves a provider binding that points at built-in catalog content. The attach path
+/// persists no requirement JSON, so export must consult catalog snapshots instead of only the
+/// user-archive table.
+#[test]
+fn export_preserves_builtin_provider_binding_identity() {
+  use crate::domain::runtime_provider::{ProviderRuntimeKind, ProviderRuntimeState};
+
+  let (_dir, db, vault, providers, _models, _profiles, _settings, _ie) = setup();
+  let provider = providers
+    .save(provider_write(CredentialKind::None, CredentialUpdate::Keep))
+    .unwrap();
+
+  let catalog = crate::services::test_support::catalog_with_builtins(
+    db.clone(),
+    _dir.path(),
+    &[crate::services::test_support::OPENAI_COMPATIBLE_ARCHIVE],
+  );
+  let digest =
+    crate::services::test_support::fixture_digest(&catalog, crate::services::test_support::OPENAI_COMPATIBLE_PLUGIN_ID);
+
+  // Exactly what apply_interface_attach persists for a built-in package: no requirement JSON.
+  db.write(|conn| {
+    provider_runtime_bindings::insert(
+      conn,
+      &ProviderRuntimeBinding {
+        provider_id: provider.id,
+        adapter_id: "openai-responses".into(),
+        runtime_kind: ProviderRuntimeKind::WasmComponent,
+        package_digest: Some(digest.clone()),
+        grant_set_revision: Some(1),
+        state: ProviderRuntimeState::Active,
+        error_code: None,
+        error_message: None,
+        runtime_requirement_json: None,
+        created_at: "t0".into(),
+        updated_at: "t0".into(),
+      },
+    )
+  })
+  .unwrap();
+
+  let service = ImportExportService::new(db.clone(), vault.clone(), None).with_catalog(catalog);
+  let document = service.export().expect("built-in bound provider exports");
+  let exported = document
+    .providers
+    .iter()
+    .find(|candidate| candidate.id == provider.id)
+    .expect("provider exported");
+  let requirement = exported
+    .runtime_bindings
+    .iter()
+    .find(|candidate| candidate.adapter_id.as_deref() == Some("openai-responses"))
+    .expect("adapter-keyed requirement exported");
+  assert_eq!(requirement.package_digest.as_deref(), Some(digest.as_str()));
+  assert_eq!(
+    requirement.plugin_id.as_deref(),
+    Some(crate::services::test_support::OPENAI_COMPATIBLE_PLUGIN_ID)
+  );
+  assert_eq!(requirement.runtime_kind, "wasm-component");
+  assert!(!requirement.capabilities.is_empty());
 }
 
 #[test]
@@ -1080,24 +1119,6 @@ fn import_merge_reconciles_runtime_bindings_to_document_set() {
   let stale_digest = "a".repeat(64);
   db.transaction(|uow| {
     let conn = uow.conn();
-    conn
-      .execute(
-        "INSERT INTO plugin_publishers (
-          key_id, fingerprint, public_key_hex, source, enabled, revoked, created_at, updated_at
-        ) VALUES ('com.langnext.test.keys.1', ?1, 'k', 'user_approved', 1, 0, 't0', 't0')",
-        rusqlite::params!["f".repeat(64)],
-      )
-      .unwrap();
-    conn
-      .execute(
-        "INSERT INTO installed_plugin_versions (
-          package_digest, plugin_id, version, publisher_key_id, publisher_fingerprint,
-          signature_status, runtime_kind, manifest_json, permission_request_digest, content_available, installed_at
-        ) VALUES (?1, 'com.langnext.provider.openai-responses', '1.0.0', 'com.langnext.test.keys.1',
-          ?2, 'signed', 'wasm-component', '{}', 'perm', 1, 't0')",
-        rusqlite::params![stale_digest, "f".repeat(64)],
-      )
-      .unwrap();
     provider_runtime_bindings::insert(
       conn,
       &ProviderRuntimeBinding {
@@ -1172,24 +1193,6 @@ fn import_merge_reconciles_runtime_bindings_to_document_set() {
 fn insert_granted_wasm_binding(db: &Database, provider_id: uuid::Uuid, adapter_id: &str, digest: &str) {
   db.transaction(|uow| {
     let conn = uow.conn();
-    conn
-      .execute(
-        "INSERT INTO plugin_publishers (
-          key_id, fingerprint, public_key_hex, source, enabled, revoked, created_at, updated_at
-        ) VALUES ('com.langnext.test.keys.1', ?1, 'k', 'user_approved', 1, 0, 't0', 't0')",
-        rusqlite::params!["f".repeat(64)],
-      )
-      .unwrap();
-    conn
-      .execute(
-        "INSERT INTO installed_plugin_versions (
-          package_digest, plugin_id, version, publisher_key_id, publisher_fingerprint,
-          signature_status, runtime_kind, manifest_json, permission_request_digest, content_available, installed_at
-        ) VALUES (?1, 'com.langnext.provider.openai-responses', '1.0.0', 'com.langnext.test.keys.1',
-          ?2, 'signed', 'wasm-component', '{}', 'perm', 1, 't0')",
-        rusqlite::params![digest, "f".repeat(64)],
-      )
-      .unwrap();
     provider_runtime_bindings::insert(
       conn,
       &ProviderRuntimeBinding {
@@ -1251,8 +1254,6 @@ fn wasm_requirement(adapter_id: &str, digest: &str) -> ProviderRuntimeRequiremen
     package_digest: Some(digest.into()),
     plugin_id: Some("com.langnext.provider.openai-responses".into()),
     plugin_version: Some("1.0.0".into()),
-    publisher_key_id: Some("com.langnext.test.keys.1".into()),
-    publisher_key_fingerprint: Some("f".repeat(64)),
     plugin_api_version: Some("1.0".into()),
     legacy_aliases: vec![adapter_id.into()],
     capabilities: vec!["llm.chat@1".into(), "llm.models.list@1".into()],
@@ -1362,8 +1363,6 @@ fn import_merge_keeps_replaced_binding_grant_referenced_by_snapshot() {
         grant_set_id: None,
         plugin_id: "com.langnext.provider.openai-responses".into(),
         plugin_version: "1.0.0".into(),
-        publisher_key_id: None,
-        publisher_fingerprint: None,
         plugin_api_version: None,
         capability_ids_json: "[]".into(),
         updated_at: "t0".into(),
@@ -3272,13 +3271,9 @@ fn web_export(id: Uuid, config_json: &str, digest: &str) -> IntegrationInstanceE
       plugin_version: "1.0.0".into(),
       runtime_kind: "wasm-component".into(),
       package_digest: Some(digest.into()),
-      publisher_key_id: Some("com.langnext.test.keys.1".into()),
-      publisher_key_fingerprint: Some("f".repeat(64)),
       plugin_api_version: Some("1.0".into()),
       config_schema_version: 1,
       required_capability_majors: vec![],
-      provider_runtime_kind: None,
-      provider_package_digest: None,
     }),
     created_at: now_rfc3339(),
     updated_at: now_rfc3339(),
@@ -3317,77 +3312,36 @@ fn declared_wasm(adapter_id: &str, digest: &str) -> ProviderRuntimeRequirementEx
 /// 64-hex digest placeholder for provider requirement fixtures (parse-valid, never installed).
 const FIXTURE_PACKAGE_DIGEST: &str = "abababababababababababababababababababababababababababababababab";
 
-/// Insert one installed package revision plus an enabled user-approved publisher row.
-fn insert_installed_package(
+/// Insert one user archive record: the only local content the import preview can resolve.
+fn insert_user_archive_record(
   db: &Database,
   digest: &str,
   plugin_id: &str,
   plugin_version: &str,
   runtime_kind: &str,
-  publisher_key_id: &str,
-  publisher_fingerprint: &str,
   manifest_api_version: &str,
-  content_available: bool,
 ) {
-  db.transaction(|uow| {
-    let conn = uow.conn();
-    conn
-      .execute(
-        "INSERT INTO plugin_publishers (
-          key_id, fingerprint, public_key_hex, source, enabled, revoked, created_at, updated_at
-        ) VALUES (?1, ?2, 'k', 'user_approved', 1, 0, 't0', 't0')
-        ON CONFLICT(key_id) DO NOTHING",
-        rusqlite::params![publisher_key_id, publisher_fingerprint],
-      )
-      .unwrap();
-    let manifest = serde_json::json!({
-      "manifestVersion": 1,
-      "pluginApiVersion": manifest_api_version,
-      "id": plugin_id,
-      "version": plugin_version,
-      "publisher": {
-        "keyId": publisher_key_id,
-        "keyFingerprint": publisher_fingerprint
+  let manifest = serde_json::json!({
+    "manifestVersion": 1,
+    "pluginApiVersion": manifest_api_version,
+    "id": plugin_id,
+    "version": plugin_version,
+    "runtime": { "kind": runtime_kind }
+  });
+  db.write(|conn| {
+    crate::repositories::plugin_catalog::insert_user_archive(
+      conn,
+      &crate::domain::plugin_catalog::UserPluginArchive {
+        content_digest: digest.into(),
+        plugin_id: plugin_id.into(),
+        version: plugin_version.into(),
+        runtime_kind: crate::domain::runtime_plugin::RuntimeKind::WasmComponent,
+        manifest_json: manifest.to_string(),
+        permission_request_digest: "perm".into(),
+        file_name: format!("{plugin_id}-{plugin_version}.lnplugin"),
+        installed_at: "t0".into(),
       },
-      "runtime": { "kind": runtime_kind }
-    });
-    conn
-      .execute(
-        "INSERT INTO installed_plugin_versions (
-          package_digest, plugin_id, version, publisher_key_id, publisher_fingerprint,
-          signature_status, runtime_kind, manifest_json, permission_request_digest, content_available, installed_at
-        ) VALUES (?1, ?2, ?3, ?4, ?5, 'signed', ?6, ?7, 'perm', ?8, 't0')",
-        rusqlite::params![
-          digest,
-          plugin_id,
-          plugin_version,
-          publisher_key_id,
-          publisher_fingerprint,
-          runtime_kind,
-          manifest.to_string(),
-          content_available as i32
-        ],
-      )
-      .unwrap();
-    Ok(())
-  })
-  .unwrap();
-}
-
-/// Insert or flip the enabled/revoked flags of one publisher row.
-fn set_publisher_flags(db: &Database, key_id: &str, fingerprint: &str, enabled: bool, revoked: bool) {
-  db.transaction(|uow| {
-    let conn = uow.conn();
-    conn
-      .execute(
-        "INSERT INTO plugin_publishers (
-          key_id, fingerprint, public_key_hex, source, enabled, revoked, created_at, updated_at
-        ) VALUES (?1, ?2, 'k', 'user_approved', ?3, ?4, 't0', 't0')
-        ON CONFLICT(key_id) DO UPDATE SET enabled = ?3, revoked = ?4",
-        rusqlite::params![key_id, fingerprint, enabled as i32, revoked as i32],
-      )
-      .unwrap();
-    Ok(())
+    )
   })
   .unwrap();
 }
@@ -3399,8 +3353,6 @@ fn preview_wasm_binding(adapter_id: &str, digest: &str, plugin_id: &str) -> Prov
     package_digest: Some(digest.into()),
     plugin_id: Some(plugin_id.into()),
     plugin_version: Some("1.0.0".into()),
-    publisher_key_id: Some("com.langnext.test.keys.1".into()),
-    publisher_key_fingerprint: Some("f".repeat(64)),
     plugin_api_version: Some("1.0".into()),
     legacy_aliases: vec![adapter_id.into()],
     capabilities: vec!["llm.chat@1".into()],
@@ -3422,13 +3374,9 @@ fn preview_wasm_integration(id: Uuid, digest: &str) -> IntegrationInstanceExport
       plugin_version: "1.0.0".into(),
       runtime_kind: "wasm-component".into(),
       package_digest: Some(digest.into()),
-      publisher_key_id: Some("com.langnext.test.keys.1".into()),
-      publisher_key_fingerprint: Some("f".repeat(64)),
       plugin_api_version: Some("1.0".into()),
       config_schema_version: 1,
       required_capability_majors: vec![],
-      provider_runtime_kind: None,
-      provider_package_digest: None,
     }),
     created_at: now_rfc3339(),
     updated_at: now_rfc3339(),
@@ -3438,6 +3386,184 @@ fn preview_wasm_integration(id: Uuid, digest: &str) -> IntegrationInstanceExport
 /// Preview distinguishes structural validity from local runtime readiness: every exact
 /// adapter-keyed requirement returns subject identity, local status, and the closed
 /// required action — without substituting another package by plugin ID/version.
+/// Preview distinguishes structural validity from local runtime readiness: every exact
+/// adapter-keyed requirement returns subject identity, local status, and the closed
+/// required action — without substituting another package by plugin ID/version.
+///
+/// Local content is resolved against the immutable plugin catalog first (so built-in content
+/// is present) and against recorded user archives second. The exact digest is the only
+/// identity: a locally present plugin id/version at a different digest is a digest mismatch,
+/// never a substitute.
+#[test]
+fn import_runtime_requirement_preview_resolves_builtin_and_user_content() {
+  use crate::domain::import_export::{ImportRuntimeLocalStatus, ImportRuntimeRequiredAction};
+
+  let dir = tempfile::tempdir().unwrap();
+  let db = Database::new(dir.path()).unwrap();
+  db.initialize().unwrap();
+  let vault = Arc::new(MemoryCredentialVault::new());
+  let catalog = crate::services::test_support::catalog_with_builtins(
+    db.clone(),
+    dir.path(),
+    &[crate::services::test_support::GOOGLE_TRANSLATE_WEB_ARCHIVE],
+  );
+  let ie = ImportExportService::new(db.clone(), vault, None).with_catalog(catalog.clone());
+
+  let builtin = catalog
+    .find_plugin_version(crate::services::test_support::GOOGLE_TRANSLATE_WEB_PLUGIN_ID, "1.0.0")
+    .expect("the committed built-in archive is resolvable");
+  let builtin_digest = builtin.descriptor.content_digest.clone();
+
+  let user_digest = "a".repeat(64);
+  insert_user_archive_record(
+    &db,
+    &user_digest,
+    "com.langnext.wasm-service",
+    "1.0.0",
+    "wasm-component",
+    "1.0",
+  );
+  let missing_digest = "f".repeat(64);
+  // Same plugin id/version as the built-in, different content: a digest mismatch, not a
+  // reason to fall back to the built-in digest.
+  let mismatched_digest = "b".repeat(64);
+
+  let mut doc = empty_doc();
+  let builtin_instance = new_id();
+  let builtin_export = web_export(builtin_instance, "{}", &builtin_digest);
+  let mut missing_export = preview_wasm_integration(new_id(), &missing_digest);
+  // No local content claims this identity: the requirement is installable, not a mismatch.
+  missing_export.plugin_id = "com.langnext.absent-service".into();
+  missing_export.runtime.as_mut().unwrap().plugin_id = "com.langnext.absent-service".into();
+  doc.integration_instances = vec![
+    builtin_export,
+    preview_wasm_integration(new_id(), &user_digest),
+    missing_export,
+    preview_wasm_integration(new_id(), &mismatched_digest),
+  ];
+  // The mismatched requirement must claim the built-in identity at another digest.
+  {
+    let mismatched = doc.integration_instances.last_mut().unwrap();
+    mismatched.plugin_id = crate::services::test_support::GOOGLE_TRANSLATE_WEB_PLUGIN_ID.into();
+    let requirement = mismatched.runtime.as_mut().unwrap();
+    requirement.plugin_id = crate::services::test_support::GOOGLE_TRANSLATE_WEB_PLUGIN_ID.into();
+  }
+
+  let preview = ie.preview(&doc, ImportConflictMode::Merge).unwrap();
+  assert!(preview.valid, "errors: {:?}", preview.validation_errors);
+  let by_digest: std::collections::HashMap<&str, &crate::domain::import_export::ImportRuntimeRequirementPreview> =
+    preview
+      .runtime_requirements
+      .iter()
+      .map(|entry| (entry.package_digest.as_deref().unwrap_or_default(), entry))
+      .collect();
+
+  // Built-in content is present: the exact digest resolves, so the requirement is installed
+  // and only the explicit activation step remains.
+  let builtin_entry = by_digest[builtin_digest.as_str()];
+  assert_eq!(builtin_entry.local_status, ImportRuntimeLocalStatus::Installed);
+  assert_eq!(
+    builtin_entry.required_action,
+    ImportRuntimeRequiredAction::ActivateAfterImport
+  );
+  assert_eq!(builtin_entry.subject_id, builtin_instance);
+
+  // User archive content is present in the same way.
+  let user_entry = by_digest[user_digest.as_str()];
+  assert_eq!(user_entry.local_status, ImportRuntimeLocalStatus::Installed);
+  assert_eq!(
+    user_entry.required_action,
+    ImportRuntimeRequiredAction::ActivateAfterImport
+  );
+
+  // Absent content with no local claim on the identity stays installable.
+  let missing_entry = by_digest[missing_digest.as_str()];
+  assert_eq!(missing_entry.local_status, ImportRuntimeLocalStatus::Missing);
+  assert_eq!(
+    missing_entry.required_action,
+    ImportRuntimeRequiredAction::InstallExactPackage
+  );
+
+  // A locally present identity at a different digest is reported as a mismatch.
+  let mismatched_entry = by_digest[mismatched_digest.as_str()];
+  assert_eq!(mismatched_entry.local_status, ImportRuntimeLocalStatus::DigestMismatch);
+  assert_eq!(
+    mismatched_entry.required_action,
+    ImportRuntimeRequiredAction::ResolveDigestMismatch
+  );
+}
+
+/// Import is never a mutation of content, defaults, or authority: applying a document whose
+/// content is already present records the requirement and leaves installation, catalog
+/// defaults, and execution grants untouched.
+#[test]
+fn import_apply_never_installs_changes_defaults_or_grants() {
+  let dir = tempfile::tempdir().unwrap();
+  let db = Database::new(dir.path()).unwrap();
+  db.initialize().unwrap();
+  let vault = Arc::new(MemoryCredentialVault::new());
+  let catalog = crate::services::test_support::catalog_with_builtins(
+    db.clone(),
+    dir.path(),
+    &[crate::services::test_support::GOOGLE_TRANSLATE_WEB_ARCHIVE],
+  );
+  let ie = ImportExportService::new(db.clone(), vault, None).with_catalog(catalog.clone());
+
+  let digest = catalog
+    .find_plugin_version(crate::services::test_support::GOOGLE_TRANSLATE_WEB_PLUGIN_ID, "1.0.0")
+    .expect("built-in archive resolves")
+    .descriptor
+    .content_digest
+    .clone();
+
+  let count = |table: &str| -> i64 {
+    db.read(|conn| {
+      Ok(
+        conn
+          .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| row.get(0))
+          .unwrap(),
+      )
+    })
+    .unwrap()
+  };
+  let user_dir = dir.path().join(crate::domain::plugin_catalog::USER_PLUGIN_DIR_NAME);
+  let user_files_before = if user_dir.is_dir() {
+    std::fs::read_dir(&user_dir).unwrap().count()
+  } else {
+    0
+  };
+  let grants_before = count("execution_grant_sets");
+  let defaults_before = count("plugin_default_overrides");
+
+  let instance_id = new_id();
+  let mut doc = empty_doc();
+  doc.integration_instances = vec![web_export(instance_id, "{}", &digest)];
+  let preview = ie.preview_with_session(&doc, ImportConflictMode::Merge).unwrap();
+  assert!(preview.valid, "errors: {:?}", preview.validation_errors);
+  ie.import_by_preview_id(&preview.preview_id).unwrap();
+
+  assert_eq!(count("execution_grant_sets"), grants_before, "import never grants");
+  assert_eq!(
+    count("plugin_default_overrides"),
+    defaults_before,
+    "import never changes a catalog default"
+  );
+  let user_files_after = if user_dir.is_dir() {
+    std::fs::read_dir(&user_dir).unwrap().count()
+  } else {
+    0
+  };
+  assert_eq!(user_files_after, user_files_before, "import never installs content");
+
+  // The imported instance records the exact digest and waits for explicit activation.
+  let instance = db
+    .read(|conn| crate::repositories::integration_instances::get(conn, instance_id))
+    .unwrap();
+  assert_eq!(instance.package_digest.as_deref(), Some(digest.as_str()));
+  assert_eq!(instance.runtime_state, "pending_activation");
+  assert_eq!(instance.execution_grant_set_revision, None);
+}
+
 #[test]
 fn import_runtime_requirement_preview_reports_exact_local_states_and_actions() {
   use crate::domain::import_export::{ImportRuntimeLocalStatus, ImportRuntimeRequiredAction, ImportRuntimeSubjectKind};
@@ -3445,73 +3571,36 @@ fn import_runtime_requirement_preview_reports_exact_local_states_and_actions() {
   let (_dir, db, _v, _providers, _models, _profiles, _settings, ie) = setup();
 
   let installed_digest = "a".repeat(64);
-  let revoked_digest = "b".repeat(64);
-  let disabled_digest = "c".repeat(64);
-  let content_digest = "d".repeat(64);
   let incompatible_digest = "e".repeat(64);
+  let identity_mismatch_digest = "b".repeat(64);
   let missing_digest = "f".repeat(64);
 
-  // Installed revision whose manifest API version matches the requirement exactly.
-  insert_installed_package(
+  // Local user content whose manifest API version matches the requirement exactly.
+  insert_user_archive_record(
     &db,
     &installed_digest,
     "com.langnext.provider.a",
     "1.0.0",
     "wasm-component",
-    "com.langnext.test.keys.1",
-    &"f".repeat(64),
     "1.0",
-    true,
   );
-  // Installed revision under a revoked publisher.
-  insert_installed_package(
-    &db,
-    &revoked_digest,
-    "com.langnext.provider.b",
-    "1.0.0",
-    "wasm-component",
-    "com.langnext.revoked.keys.1",
-    &"a".repeat(64),
-    "1.0",
-    true,
-  );
-  set_publisher_flags(&db, "com.langnext.revoked.keys.1", &"a".repeat(64), true, true);
-  // Installed revision under a disabled publisher.
-  insert_installed_package(
-    &db,
-    &disabled_digest,
-    "com.langnext.provider.c",
-    "1.0.0",
-    "wasm-component",
-    "com.langnext.disabled.keys.1",
-    &"b".repeat(64),
-    "1.0",
-    true,
-  );
-  set_publisher_flags(&db, "com.langnext.disabled.keys.1", &"b".repeat(64), false, false);
-  // Installed revision whose content is missing from the local store.
-  insert_installed_package(
-    &db,
-    &content_digest,
-    "com.langnext.provider.d",
-    "1.0.0",
-    "wasm-component",
-    "com.langnext.test.keys.1",
-    &"f".repeat(64),
-    "1.0",
-    false,
-  );
-  // Installed revision whose manifest API version is incompatible with the requirement.
-  insert_installed_package(
+  // Local content whose manifest API version is incompatible with the requirement.
+  insert_user_archive_record(
     &db,
     &incompatible_digest,
     "com.langnext.provider.e",
     "1.0.0",
     "wasm-component",
-    "com.langnext.test.keys.1",
-    &"f".repeat(64),
     "2.0",
-    true,
+  );
+  // Local content at the same digest but a different plugin identity.
+  insert_user_archive_record(
+    &db,
+    &identity_mismatch_digest,
+    "com.langnext.provider.other",
+    "1.0.0",
+    "wasm-component",
+    "1.0",
   );
 
   let provider_id = new_id();
@@ -3522,106 +3611,42 @@ fn import_runtime_requirement_preview_reports_exact_local_states_and_actions() {
     vec![
       preview_wasm_binding("openai-compatible", &installed_digest, "com.langnext.provider.a"),
       preview_wasm_binding("openai-responses", &missing_digest, "com.langnext.provider.f"),
-      preview_wasm_binding("anthropic", &revoked_digest, "com.langnext.provider.b"),
-      preview_wasm_binding("gemini", &disabled_digest, "com.langnext.provider.c"),
-      preview_wasm_binding("deepseek", &content_digest, "com.langnext.provider.d"),
-      preview_wasm_binding("openai-realtime", &incompatible_digest, "com.langnext.provider.e"),
+      preview_wasm_binding("anthropic", &incompatible_digest, "com.langnext.provider.e"),
+      preview_wasm_binding("gemini", &identity_mismatch_digest, "com.langnext.provider.b"),
     ],
   )];
-  doc.integration_instances = vec![
-    web_export(new_id(), r#"{"channel":"gtx"}"#, &missing_digest),
-    preview_wasm_integration(new_id(), &missing_digest),
-  ];
-
   let preview = ie.preview(&doc, ImportConflictMode::Merge).unwrap();
   assert!(preview.valid, "errors: {:?}", preview.validation_errors);
-
-  let by_key = |kind: ImportRuntimeSubjectKind, subject_id: Uuid, adapter: Option<&str>| {
+  let by_digest: std::collections::HashMap<&str, &crate::domain::import_export::ImportRuntimeRequirementPreview> =
     preview
       .runtime_requirements
       .iter()
-      .find(|entry| {
-        entry.subject_kind == kind && entry.subject_id == subject_id && entry.adapter_id.as_deref() == adapter
-      })
-      .unwrap_or_else(|| panic!("missing preview entry for {kind:?} {subject_id} {adapter:?}"))
-  };
-
-  // Provider default adapter: exact digest installed and compatible.
-  let installed = by_key(
-    ImportRuntimeSubjectKind::Provider,
-    provider_id,
-    Some("openai-compatible"),
-  );
-  assert_eq!(installed.display_label, "P");
-  assert_eq!(installed.runtime_kind, "wasm-component");
-  assert_eq!(installed.package_digest.as_deref(), Some(installed_digest.as_str()));
-  assert_eq!(installed.plugin_id.as_deref(), Some("com.langnext.provider.a"));
+      .map(|entry| (entry.package_digest.as_deref().unwrap_or_default(), entry))
+      .collect();
+  let installed = by_digest[installed_digest.as_str()];
   assert_eq!(installed.local_status, ImportRuntimeLocalStatus::Installed);
   assert_eq!(
     installed.required_action,
     ImportRuntimeRequiredAction::ActivateAfterImport
   );
-
-  let missing = by_key(
-    ImportRuntimeSubjectKind::Provider,
-    provider_id,
-    Some("openai-responses"),
-  );
+  assert_eq!(installed.subject_kind, ImportRuntimeSubjectKind::Provider);
+  assert_eq!(installed.subject_id, provider_id);
+  let missing = by_digest[missing_digest.as_str()];
   assert_eq!(missing.local_status, ImportRuntimeLocalStatus::Missing);
   assert_eq!(
     missing.required_action,
     ImportRuntimeRequiredAction::InstallExactPackage
   );
-
-  let revoked = by_key(ImportRuntimeSubjectKind::Provider, provider_id, Some("anthropic"));
-  assert_eq!(revoked.local_status, ImportRuntimeLocalStatus::Revoked);
-  assert_eq!(revoked.required_action, ImportRuntimeRequiredAction::RestorePublisher);
-
-  let disabled = by_key(ImportRuntimeSubjectKind::Provider, provider_id, Some("gemini"));
-  assert_eq!(disabled.local_status, ImportRuntimeLocalStatus::Disabled);
-  assert_eq!(disabled.required_action, ImportRuntimeRequiredAction::RestorePublisher);
-
-  let content_unavailable = by_key(ImportRuntimeSubjectKind::Provider, provider_id, Some("deepseek"));
-  assert_eq!(
-    content_unavailable.local_status,
-    ImportRuntimeLocalStatus::ContentUnavailable
-  );
-  assert_eq!(
-    content_unavailable.required_action,
-    ImportRuntimeRequiredAction::InstallExactPackage
-  );
-
-  let incompatible = by_key(ImportRuntimeSubjectKind::Provider, provider_id, Some("openai-realtime"));
+  let incompatible = by_digest[incompatible_digest.as_str()];
   assert_eq!(incompatible.local_status, ImportRuntimeLocalStatus::Incompatible);
   assert_eq!(
     incompatible.required_action,
     ImportRuntimeRequiredAction::ResolveIncompatibility
   );
-
-  // Integrations: package-backed requirements use the same exact digest catalog states.
-  let web = by_key(
-    ImportRuntimeSubjectKind::Integration,
-    doc.integration_instances[0].id,
-    None,
-  );
-  assert_eq!(web.local_status, ImportRuntimeLocalStatus::Missing);
-  assert_eq!(web.required_action, ImportRuntimeRequiredAction::InstallExactPackage);
-
-  let integration_missing = by_key(
-    ImportRuntimeSubjectKind::Integration,
-    doc.integration_instances[1].id,
-    None,
-  );
-  assert_eq!(integration_missing.local_status, ImportRuntimeLocalStatus::Missing);
-  assert_eq!(
-    integration_missing.required_action,
-    ImportRuntimeRequiredAction::InstallExactPackage
-  );
+  let identity_mismatch = by_digest[identity_mismatch_digest.as_str()];
+  assert_eq!(identity_mismatch.local_status, ImportRuntimeLocalStatus::Incompatible);
 }
 
-/// Missing/revoked/disabled/incompatible requirements are actionable preview metadata, not
-/// structural failures: the document stays valid and preview mutates nothing (no package
-/// install op, execution grant, rollback snapshot, runtime process, or credential change).
 #[test]
 fn import_runtime_requirement_preview_keeps_unavailable_runtimes_actionable_and_non_mutating() {
   use crate::domain::import_export::{ImportRuntimeLocalStatus, ImportRuntimeRequiredAction};
@@ -3651,9 +3676,7 @@ fn import_runtime_requirement_preview_keeps_unavailable_runtimes_actionable_and_
     .unwrap()
   };
   let grants_before = count("execution_grant_sets");
-  let install_ops_before = count("plugin_install_operations");
   let bindings_before = count("provider_runtime_bindings");
-  let publishers_before = count("plugin_publishers");
 
   let preview = ie.preview(&doc, ImportConflictMode::Merge).unwrap();
   assert!(
@@ -3672,19 +3695,9 @@ fn import_runtime_requirement_preview_keeps_unavailable_runtimes_actionable_and_
     "no grant created by preview"
   );
   assert_eq!(
-    count("plugin_install_operations"),
-    install_ops_before,
-    "no install op created"
-  );
-  assert_eq!(
     count("provider_runtime_bindings"),
     bindings_before,
     "no binding mutated"
-  );
-  assert_eq!(
-    count("plugin_publishers"),
-    publishers_before,
-    "no publisher state mutated"
   );
 }
 
@@ -3718,13 +3731,9 @@ fn import_runtime_requirement_preview_rejects_legacy_identities() {
       plugin_version: "1.0.0".into(),
       runtime_kind: "bundled-rust".into(),
       package_digest: None,
-      publisher_key_id: None,
-      publisher_key_fingerprint: None,
       plugin_api_version: None,
       config_schema_version: 1,
       required_capability_majors: vec![],
-      provider_runtime_kind: None,
-      provider_package_digest: None,
     }),
     created_at: now_rfc3339(),
     updated_at: now_rfc3339(),
@@ -3749,8 +3758,6 @@ fn import_runtime_requirement_preview_rejects_legacy_identities() {
     package_digest: None,
     plugin_id: None,
     plugin_version: None,
-    publisher_key_id: None,
-    publisher_key_fingerprint: None,
     plugin_api_version: None,
     legacy_aliases: vec![],
     capabilities: vec![],
@@ -3830,13 +3837,9 @@ fn import_preview_session_cas_copy_apply_uses_fixed_id_mapping() {
       plugin_version: "1.0.0".into(),
       runtime_kind: "wasm-component".into(),
       package_digest: Some(FIXTURE_PACKAGE_DIGEST.into()),
-      publisher_key_id: Some("com.langnext.test.keys.1".into()),
-      publisher_key_fingerprint: Some("f".repeat(64)),
       plugin_api_version: Some("1.0".into()),
       config_schema_version: 1,
       required_capability_majors: vec![],
-      provider_runtime_kind: None,
-      provider_package_digest: None,
     }),
     created_at: now_rfc3339(),
     updated_at: now_rfc3339(),
@@ -4376,8 +4379,8 @@ fn runtime_plugin_import_fixture_v8_round_trip_preserves_runtime_semantics() {
 
 /// Acceptance gate: importing exact installed Wasm and trusted-native-worker requirements
 /// persists them inactive — no execution grant, no install op, no upgrade snapshot, no
-/// activation — and starts zero real dispatches (Wasm guest, native worker, migration,
-/// network) for both preview and apply. The probe scope is serialized process-wide and
+/// activation beyond the exact pin — and starts zero real dispatches (Wasm guest, native
+/// worker, migration, network) for both preview and apply. The probe scope is serialized process-wide and
 /// attributes dispatches to the arming thread; preview and apply run synchronously on that
 /// thread, so a zero snapshot covers every dispatch the import path can start. The public
 /// list seam reports unavailable/pending until a separate confirmed lifecycle action.
@@ -4391,29 +4394,15 @@ fn runtime_plugin_import_no_execution_installed_requirement_stays_inactive() {
 
   let (_dir, db, _v, providers, _models, _profiles, _settings, ie) = setup();
 
-  // The exact Wasm and trusted-native-worker digests from the fixture are installed locally
-  // with matching manifests/publishers — yet import must not activate or dispatch them.
-  insert_installed_package(
+  // Local user content that matches the fixture requirements exactly — yet import must not
+  // activate or dispatch it.
+  insert_user_archive_record(
     &db,
     &"a".repeat(64),
     "com.langnext.conformance",
     "1.0.0",
     "wasm-component",
-    "com.langnext.vendor.keys.1",
-    &"c".repeat(64),
     "1.0",
-    true,
-  );
-  insert_installed_package(
-    &db,
-    &"d".repeat(64),
-    "com.langnext.ocr.native-conformance",
-    "1.0.0",
-    "trusted-native-worker",
-    "com.langnext.vendor.keys.2",
-    &"e".repeat(64),
-    "1.1",
-    true,
   );
 
   let raw = std::fs::read_to_string(import_fixture_path("v8-mixed.json")).unwrap();
@@ -4446,13 +4435,15 @@ fn runtime_plugin_import_no_execution_installed_requirement_stays_inactive() {
     .iter()
     .find(|entry| entry.display_label == "Native OCR")
     .expect("native requirement previewed");
+  // User archives are Wasm-only, so a synthetic native identity can never be locally
+  // installed: the requirement stays unresolved and must never activate during import.
   assert_eq!(
     native.local_status,
-    crate::domain::import_export::ImportRuntimeLocalStatus::Installed
+    crate::domain::import_export::ImportRuntimeLocalStatus::Missing
   );
   assert_eq!(
     native.required_action,
-    crate::domain::import_export::ImportRuntimeRequiredAction::ActivateAfterImport
+    crate::domain::import_export::ImportRuntimeRequiredAction::InstallExactPackage
   );
 
   let result = ie.import_by_preview_id(&preview.preview_id).unwrap();
@@ -4460,7 +4451,9 @@ fn runtime_plugin_import_no_execution_installed_requirement_stays_inactive() {
   // Apply must start no runtime, migration, worker, or network dispatch either.
   probe.assert_zero();
 
-  // The exact requirements persist inactive: unavailable state, no grant revision.
+  // The exact requirements persist inactive. Content that is already present locally records
+  // its exact pin as `pending_activation`; absent content stays `unavailable`. Neither path
+  // writes a grant revision, so import never authorizes execution.
   let binding = db
     .read(|conn| provider_runtime_bindings::get(conn, doc.providers[0].id, "openai-responses"))
     .unwrap();
@@ -4473,7 +4466,7 @@ fn runtime_plugin_import_no_execution_installed_requirement_stays_inactive() {
     .read(|conn| integration_repo::get(conn, doc.integration_instances[1].id))
     .unwrap();
   assert_eq!(wasm_integration.runtime_kind, "wasm-component");
-  assert_eq!(wasm_integration.runtime_state, "unavailable");
+  assert_eq!(wasm_integration.runtime_state, "pending_activation");
   assert!(wasm_integration.execution_grant_set_revision.is_none());
 
   let native_integration = db

@@ -8,9 +8,8 @@ use crate::domain::runtime_plugin::{
   HOST_PROVIDER_INSTANCE_AUTH_POLICY_ID, HttpsOrigin, MANIFEST_FILE_PATH, MANIFEST_VERSION_V1, METHODS_MAX_COUNT,
   NETWORK_ENDPOINTS_MAX_COUNT, ORIGINS_MAX_COUNT, PACKAGE_TARGETS_MAX_COUNT, PAGES_MAX_COUNT, PATH_AUTHORITY_MAX_COUNT,
   PROVIDER_DETECTION_MAX_TOKENS_MAX, PROVIDER_RUNTIME_ALIAS_MAX_LEN, PROVIDER_RUNTIME_ENDPOINT_FORM_PROVIDER_INSTANCE,
-  PROVIDER_RUNTIME_LEGACY_ALIASES_MAX_COUNT, PUBLISHER_PUBLIC_KEY_PATH, PageId, PermissionRequests, PluginApiVersion,
-  PluginFileEntry, PluginId, PluginManifestV1, ProviderRuntimeDeclaration, PublisherDeclaration,
-  PublisherKeyFingerprint, PublisherKeyId, RuntimeDescriptor, SIGNATURE_FILE_PATH, SemVerVersion, UiDeclaration,
+  PROVIDER_RUNTIME_LEGACY_ALIASES_MAX_COUNT, PageId, PermissionRequests, PluginApiVersion, PluginFileEntry, PluginId,
+  PluginManifestV1, ProviderRuntimeDeclaration, RuntimeDescriptor, SemVerVersion, UiDeclaration,
   check_file_index_collisions, host_package_target, package_targets_compatible, validate_archive_entry_path,
   validate_archive_path, validate_declared_relative_path, validate_package_target_constraint, validate_slot_id_strict,
 };
@@ -57,7 +56,7 @@ impl std::fmt::Display for ContractError {
 
 impl std::error::Error for ContractError {}
 
-/// One archive payload entry used for signed-payload-shape validation.
+/// One archive payload entry used for archive-payload-shape validation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArchiveEntry {
   pub path: String,
@@ -112,7 +111,7 @@ impl ValidatedPluginManifest {
     &self.manifest.runtime
   }
 
-  /// Signed file-index entries from the validated manifest.
+  /// Manifest file-index entries from the validated manifest.
   pub fn files(&self) -> &[PluginFileEntry] {
     &self.manifest.files
   }
@@ -138,9 +137,9 @@ pub fn parse_manifest(json: &str) -> Result<PluginManifestV1, ContractError> {
 
 /// Validate manifest structure, bounds, references, and host compatibility.
 ///
-/// Signature verification is deferred to Phase 3; this validates only the signed payload
-/// shape. Artifact rules are separated by runtime kind: bundled/frontend runtimes carry no
-/// archive artifact; wasm/native runtimes must reference a `RuntimeArtifact` file entry.
+/// The manifest is the only accepted payload shape: there is no plugin-level signature or
+/// publisher declaration to verify. Every runtime kind is package-backed, so wasm and native
+/// runtimes must reference a `RuntimeArtifact` file entry.
 pub fn validate_manifest(manifest: &PluginManifestV1) -> Result<ValidatedPluginManifest, ContractError> {
   if manifest.manifest_version != MANIFEST_VERSION_V1 {
     return Err(ContractError::new(
@@ -167,7 +166,6 @@ pub fn validate_manifest(manifest: &PluginManifestV1) -> Result<ValidatedPluginM
   PluginId::parse(&manifest.id).map_err(|e| ContractError::new(ContractErrorCode::InvalidField, format!("id: {e}")))?;
   SemVerVersion::parse(&manifest.version)
     .map_err(|e| ContractError::new(ContractErrorCode::InvalidField, format!("version: {e}")))?;
-  validate_publisher(&manifest.publisher)?;
 
   let file_index = build_file_index(&manifest.files)?;
   validate_runtime(&manifest.runtime, &file_index)?;
@@ -206,7 +204,7 @@ pub fn validate_manifest(manifest: &PluginManifestV1) -> Result<ValidatedPluginM
 }
 
 /// Validate closed-set platform/architecture target constraints (shape only).
-/// Validate the optional signed `providerRuntime` declaration (Phase 8).
+/// Validate the optional `providerRuntime` declaration (Phase 8).
 ///
 /// The declaration requests capability/transport shape only; it never grants execution
 /// authority. Rules: bounded unique legacy aliases; exactly the two frozen LLM capabilities
@@ -377,21 +375,12 @@ pub fn validate_manifest_host_targets(manifest: &PluginManifestV1) -> Result<(),
   Ok(())
 }
 
-/// Validate that the archive payload matches the signed file index shape exactly.
+/// Validate that the archive payload matches the manifest file index exactly.
 ///
-/// The archive must contain `plugin.json`, `signatures/manifest.sig`, and every indexed
-/// file, and nothing else. Reserved entries can never be indexed. Every indexed file's byte
-/// length and SHA-256 digest must match the archive entry.
+/// The archive must contain `plugin.json` and every indexed file, and nothing else. The
+/// manifest entry can never be indexed. Every indexed file's byte length and SHA-256 digest
+/// must match the archive entry.
 pub fn validate_archive_shape(manifest: &PluginManifestV1, entries: &[ArchiveEntry]) -> Result<(), ContractError> {
-  validate_archive_shape_with_signature(manifest, entries, true)
-}
-
-/// Validate archive shape. Unsigned envelopes may omit `signatures/manifest.sig`.
-pub fn validate_archive_shape_with_signature(
-  manifest: &PluginManifestV1,
-  entries: &[ArchiveEntry],
-  signature_required: bool,
-) -> Result<(), ContractError> {
   validate_manifest(manifest)?;
   let mut archive: HashMap<String, &ArchiveEntry> = HashMap::new();
   let mut archive_paths = Vec::with_capacity(entries.len());
@@ -418,12 +407,6 @@ pub fn validate_archive_shape_with_signature(
     return Err(ContractError::new(
       ContractErrorCode::ArchiveMismatch,
       format!("archive is missing {MANIFEST_FILE_PATH}"),
-    ));
-  }
-  if signature_required && !archive.contains_key(SIGNATURE_FILE_PATH) {
-    return Err(ContractError::new(
-      ContractErrorCode::ArchiveMismatch,
-      format!("archive is missing {SIGNATURE_FILE_PATH}"),
     ));
   }
 
@@ -453,7 +436,7 @@ pub fn validate_archive_shape_with_signature(
 
   let indexed: std::collections::HashSet<&str> = manifest.files.iter().map(|f| f.path.as_str()).collect();
   for path in archive.keys() {
-    if path == MANIFEST_FILE_PATH || path == SIGNATURE_FILE_PATH || path == PUBLISHER_PUBLIC_KEY_PATH {
+    if path == MANIFEST_FILE_PATH {
       continue;
     }
     if !indexed.contains(path.as_str()) {
@@ -464,18 +447,6 @@ pub fn validate_archive_shape_with_signature(
     }
   }
 
-  Ok(())
-}
-
-fn validate_publisher(publisher: &PublisherDeclaration) -> Result<(), ContractError> {
-  PublisherKeyId::parse(&publisher.key_id)
-    .map_err(|e| ContractError::new(ContractErrorCode::InvalidField, format!("publisher.keyId: {e}")))?;
-  PublisherKeyFingerprint::parse(&publisher.key_fingerprint).map_err(|e| {
-    ContractError::new(
-      ContractErrorCode::InvalidField,
-      format!("publisher.keyFingerprint: {e}"),
-    )
-  })?;
   Ok(())
 }
 
@@ -1299,8 +1270,7 @@ mod tests {
   use super::*;
   use crate::domain::runtime_plugin::{
     CapabilityPathAuthorityDecl, CredentialSlotKindV1, DeclaredPathAuthority, FileRole, HttpMethod,
-    NetworkEndpointRequest, PackageDigest, PluginFileEntry, PublisherDeclaration, RuntimeDescriptor, RuntimeKind,
-    UiDeclaration, UiMode,
+    NetworkEndpointRequest, PackageDigest, PluginFileEntry, RuntimeDescriptor, RuntimeKind, UiDeclaration, UiMode,
   };
 
   const VALID_SHA: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -1320,10 +1290,6 @@ mod tests {
       plugin_api_version: "1.0".into(),
       id: "com.example.translate".into(),
       version: "1.2.0".into(),
-      publisher: PublisherDeclaration {
-        key_id: "vendor.example".into(),
-        key_fingerprint: VALID_SHA.into(),
-      },
       runtime: RuntimeDescriptor {
         kind: RuntimeKind::WasmComponent,
         artifact: Some("artifacts/plugin.wasm".into()),
@@ -1362,18 +1328,11 @@ mod tests {
   }
 
   fn archive_for(manifest: &PluginManifestV1) -> Vec<ArchiveEntry> {
-    let mut entries = vec![
-      ArchiveEntry {
-        path: MANIFEST_FILE_PATH.into(),
-        bytes: 512,
-        sha256: VALID_SHA.into(),
-      },
-      ArchiveEntry {
-        path: SIGNATURE_FILE_PATH.into(),
-        bytes: 64,
-        sha256: VALID_SHA.into(),
-      },
-    ];
+    let mut entries = vec![ArchiveEntry {
+      path: MANIFEST_FILE_PATH.into(),
+      bytes: 512,
+      sha256: VALID_SHA.into(),
+    }];
     for f in &manifest.files {
       entries.push(ArchiveEntry {
         path: f.path.clone(),
@@ -1690,7 +1649,6 @@ mod tests {
       "pluginApiVersion": "1.0",
       "id": "com.example.translate",
       "version": "1.0.0",
-      "publisher": { "keyId": "k.id", "keyFingerprint": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" },
       "runtime": { "kind": "wasm-component", "artifact": "artifacts/plugin.wasm" },
       "files": [],
       "bogusField": true
@@ -1709,12 +1667,36 @@ mod tests {
   }
 
   #[test]
-  fn runtime_plugin_contracts_archive_rejects_missing_signature() {
+  fn runtime_plugin_contracts_archive_rejects_legacy_trust_entries() {
+    // `signatures/manifest.sig` and `publisher.pub` are no longer archive members. A legacy
+    // archive that still carries them must fail closed as an undeclared file.
     let manifest = wasm_manifest();
-    let mut entries = archive_for(&manifest);
-    entries.retain(|e| e.path != SIGNATURE_FILE_PATH);
-    let err = validate_archive_shape(&manifest, &entries).unwrap_err();
-    assert_eq!(err.code, ContractErrorCode::ArchiveMismatch);
+    for legacy in ["signatures/manifest.sig", "publisher.pub"] {
+      let mut entries = archive_for(&manifest);
+      entries.push(ArchiveEntry {
+        path: legacy.into(),
+        bytes: 64,
+        sha256: VALID_SHA.into(),
+      });
+      let err = validate_archive_shape(&manifest, &entries).unwrap_err();
+      assert_eq!(err.code, ContractErrorCode::ArchiveMismatch, "legacy entry {legacy}");
+      assert!(
+        err.message.contains("not in the file index"),
+        "legacy entry {legacy} must be reported as unindexed: {}",
+        err.message
+      );
+    }
+  }
+
+  #[test]
+  fn runtime_plugin_contracts_archive_needs_no_signature_entry() {
+    let manifest = wasm_manifest();
+    let entries = archive_for(&manifest);
+    assert!(
+      !entries.iter().any(|e| e.path == "signatures/manifest.sig"),
+      "the shared archive fixture must not model a signature entry"
+    );
+    validate_archive_shape(&manifest, &entries).expect("an unsigned archive is the only shape");
   }
 
   #[test]
@@ -1806,9 +1788,6 @@ mod tests {
   fn runtime_plugin_contracts_newtypes_validate() {
     assert!(PackageDigest::parse("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef").is_ok());
     assert!(PackageDigest::parse("XYZ").is_err());
-    assert!(PublisherKeyId::parse("vendor.example").is_ok());
-    assert!(PublisherKeyId::parse("Bad Case").is_err());
-    assert!(PublisherKeyFingerprint::parse("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef").is_ok());
     assert!(runtime_plugin::GrantSetRevision::new(0).is_err());
     assert!(runtime_plugin::GrantSetRevision::new(1).is_ok());
     assert!(runtime_plugin::RequestId::parse(" req ").is_err());

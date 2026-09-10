@@ -113,18 +113,11 @@ describe("integrationKeys", () => {
 });
 
 describe("pluginPackageKeys", () => {
-  test("versions, publishers, and dependencies share pluginPackageKeys.all prefix", () => {
-    const versions = pluginPackageKeys.versions();
-    const publishers = pluginPackageKeys.publishers();
-    const dependencies = pluginPackageKeys.dependencies("abc");
+  test("catalog shares the pluginPackageKeys.all prefix", () => {
+    const catalog = pluginPackageKeys.catalog();
 
-    expect(versions[0]).toBe(pluginPackageKeys.all[0]);
-    expect(publishers[0]).toBe(pluginPackageKeys.all[0]);
-    expect(dependencies[0]).toBe(pluginPackageKeys.all[0]);
-
-    expect(versions).toEqual(["plugin-packages", "versions"]);
-    expect(publishers).toEqual(["plugin-packages", "publishers"]);
-    expect(dependencies).toEqual(["plugin-packages", "dependencies", "abc"]);
+    expect(catalog[0]).toBe(pluginPackageKeys.all[0]);
+    expect(catalog).toEqual(["plugin-packages", "catalog"]);
   });
 });
 

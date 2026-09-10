@@ -1,15 +1,18 @@
-// ABOUTME: Package preview/install seam tests for the signed PaddleOCR native worker contract.
-// ABOUTME: Covers vendor runtime-directory acceptance and adversarial model/runtime rejections.
+// ABOUTME: Catalog loader contract tests for the PaddleOCR trusted native worker package.
+// ABOUTME: Covers built-in runtime-directory acceptance and adversarial model/runtime rejections.
+#![cfg(test)]
+
 use crate::domain::native_worker::{
   NATIVE_PROTOCOL_VERSION_V1, NATIVE_WORKER_ARTIFACT_PATH, PADDLEOCR_PLUGIN_ID, PADDLEOCR_PLUGIN_VERSION,
+  is_allowlisted_native_worker,
 };
+use crate::domain::plugin_catalog::{PluginLoadErrorCode, PluginSource};
 use crate::domain::plugin_model::paddleocr_medium_model_resource;
-use crate::domain::plugin_package::{PublisherSource, sha256_hex};
-use crate::domain::runtime_plugin::{FileRole, PluginFileEntry, RuntimeKind};
-use crate::services::plugin_package::test_support::build_signed_package_with_key;
-use crate::services::plugin_package::{hash_archive_bytes, verify_package_bytes};
-use crate::services::runtime_plugin_contracts::{parse_manifest, validate_manifest};
-use crate::services::vendor_trust::{VENDOR_PUBLISHER_KEY_ID, test_vendor_fixture};
+use crate::domain::plugin_package::sha256_hex;
+use crate::domain::runtime_plugin::{FileRole, PluginFileEntry, PluginManifestV1, RuntimeKind};
+use crate::services::plugin_loader::{LoadedPlugin, PluginLoadError, PluginLoader};
+use crate::services::runtime_plugin_contracts::parse_manifest;
+use std::path::{Path, PathBuf};
 
 const LICENSE_NOTICE: &str = "licenses/NOTICE.txt";
 const LICENSE_TEXT: &[u8] = b"PaddleOCR Apache-2.0 notice placeholder for package contract tests.\n";
@@ -28,7 +31,7 @@ fn file_entry(path: &str, role: FileRole, bytes: &[u8]) -> PluginFileEntry {
   }
 }
 
-/// Valid vendor-signed PaddleOCR package manifest JSON with native protocol + modelResources.
+/// Valid PaddleOCR manifest JSON with native protocol + modelResources, as shipped content.
 fn paddleocr_manifest_json() -> String {
   let model = paddleocr_medium_model_resource(LICENSE_NOTICE);
   let model_json = serde_json::to_string(&model).expect("model resource json");
@@ -36,17 +39,12 @@ fn paddleocr_manifest_json() -> String {
   let dll_a_sha = sha256_hex(DLL_A_BYTES);
   let dll_b_sha = sha256_hex(DLL_B_BYTES);
   let license_sha = sha256_hex(LICENSE_TEXT);
-  let fingerprint = test_vendor_fixture::fixture_vendor_fingerprint();
   format!(
     r#"{{
       "manifestVersion": 1,
       "pluginApiVersion": "1.0",
       "id": "{PADDLEOCR_PLUGIN_ID}",
       "version": "{PADDLEOCR_PLUGIN_VERSION}",
-      "publisher": {{
-        "keyId": "{VENDOR_PUBLISHER_KEY_ID}",
-        "keyFingerprint": "{fingerprint}"
-      }},
       "runtime": {{
         "kind": "trusted-native-worker",
         "artifact": "{NATIVE_WORKER_ARTIFACT_PATH}",
@@ -103,33 +101,67 @@ fn paddleocr_package_files() -> Vec<(&'static str, &'static [u8])> {
   ]
 }
 
-/// First contract scenario: valid vendor PaddleOCR runtime directory with modelResources is accepted.
+/// Materialize one manifest plus payloads as a built-in plugin directory.
+fn write_plugin_dir(root: &Path, manifest: &PluginManifestV1, payloads: &[(&str, &[u8])]) -> PathBuf {
+  let dir = root.join("plugin");
+  std::fs::create_dir_all(&dir).unwrap();
+  std::fs::write(
+    dir.join("plugin.json"),
+    serde_json::to_vec(manifest).expect("manifest serializes"),
+  )
+  .unwrap();
+  for (path, bytes) in payloads {
+    let target = dir.join(path);
+    std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+    std::fs::write(target, bytes).unwrap();
+  }
+  dir
+}
+
+/// Loaded fixture that keeps its app data directory alive (snapshots live there).
+#[derive(Debug)]
+struct LoadedFixture {
+  _root: tempfile::TempDir,
+  loaded: LoadedPlugin,
+}
+
+/// Load one manifest through the real built-in catalog loader (production ingestion path).
+fn load_builtin(manifest: &PluginManifestV1, payloads: &[(&str, &[u8])]) -> Result<LoadedFixture, PluginLoadError> {
+  let root = tempfile::tempdir().unwrap();
+  let dir = write_plugin_dir(root.path(), manifest, payloads);
+  let loader = PluginLoader::new(root.path().join("cache"));
+  let loaded = loader.load_directory(PluginSource::BuiltIn, &dir)?;
+  Ok(LoadedFixture { _root: root, loaded })
+}
+
+fn parse_valid_paddleocr_manifest() -> PluginManifestV1 {
+  parse_manifest(&paddleocr_manifest_json()).expect("valid paddleocr manifest")
+}
+
+/// First contract scenario: valid built-in PaddleOCR runtime directory with modelResources loads.
 #[test]
-fn paddleocr_package_vendor_runtime_directory_is_accepted() {
-  let json = paddleocr_manifest_json();
-  // parse_manifest uses deny_unknown_fields; nativeProtocolVersion/modelResources must be known.
-  let manifest = parse_manifest(&json)
-    .unwrap_or_else(|err| panic!("paddleocr manifest must parse with native + model descriptors; got {err:?}"));
-  validate_manifest(&manifest).unwrap_or_else(|err| panic!("paddleocr manifest must validate; got {err:?}"));
-
-  let archive = build_signed_package_with_key(
-    &manifest,
-    &paddleocr_package_files(),
-    &test_vendor_fixture::fixture_vendor_signing_key(),
+fn paddleocr_package_runtime_directory_is_accepted() {
+  let manifest = parse_valid_paddleocr_manifest();
+  assert!(is_allowlisted_native_worker(&manifest.id, &manifest.version));
+  let fixture = load_builtin(&manifest, &paddleocr_package_files())
+    .unwrap_or_else(|err| panic!("built-in paddleocr package must load; got {err:?}"));
+  let loaded = &fixture.loaded;
+  assert_eq!(loaded.descriptor.plugin_id, PADDLEOCR_PLUGIN_ID);
+  assert_eq!(loaded.descriptor.runtime_kind, RuntimeKind::TrustedNativeWorker);
+  assert_eq!(loaded.descriptor.source, PluginSource::BuiltIn);
+  assert!(loaded.descriptor.native_allowed());
+  assert_eq!(loaded.descriptor.content_digest.len(), 64);
+  assert!(
+    loaded.snapshot_dir.is_dir(),
+    "content is published as an immutable snapshot"
   );
-  let verified = verify_package_bytes(&archive, &test_vendor_fixture::fixture_vendor_public_key_hex())
-    .unwrap_or_else(|err| panic!("vendor paddleocr package must verify; got {err:?}"));
-  assert_eq!(verified.manifest.id, PADDLEOCR_PLUGIN_ID);
-  assert_eq!(verified.manifest.runtime.kind, RuntimeKind::TrustedNativeWorker);
 
-  // Round-trip through JSON to assert native + model descriptors without hard-coding field access
-  // until the domain types land (keeps this test compilable as a RED proof).
-  let round_trip = serde_json::to_value(&verified.manifest).expect("manifest serialize");
+  let round_trip = serde_json::to_value(&loaded.manifest).expect("manifest serialize");
   let runtime = round_trip.get("runtime").expect("runtime");
   assert_eq!(
     runtime.get("nativeProtocolVersion").and_then(|v| v.as_u64()),
     Some(NATIVE_PROTOCOL_VERSION_V1 as u64),
-    "nativeProtocolVersion must round-trip on the verified manifest"
+    "nativeProtocolVersion must round-trip on the loaded manifest"
   );
   let deps = runtime
     .get("nativeDependencies")
@@ -154,14 +186,7 @@ fn paddleocr_package_vendor_runtime_directory_is_accepted() {
     models[0].get("files").and_then(|v| v.as_array()).map(|a| a.len()),
     Some(6)
   );
-  assert_eq!(hash_archive_bytes(&archive), verified.package_digest);
-  assert_eq!(verified.manifest.publisher.key_id, VENDOR_PUBLISHER_KEY_ID);
-  let _ = PublisherSource::Vendor;
   let _ = file_entry;
-}
-
-fn parse_valid_paddleocr_manifest() -> crate::domain::runtime_plugin::PluginManifestV1 {
-  parse_manifest(&paddleocr_manifest_json()).expect("valid paddleocr manifest")
 }
 
 #[test]
@@ -174,9 +199,7 @@ fn paddleocr_package_rejects_model_bytes_payload() {
     .push(file_entry(model_path, FileRole::Other, model_bytes));
   let mut files = paddleocr_package_files();
   files.push((model_path, model_bytes.as_slice()));
-  let archive = build_signed_package_with_key(&manifest, &files, &test_vendor_fixture::fixture_vendor_signing_key());
-  let err = verify_package_bytes(&archive, &test_vendor_fixture::fixture_vendor_public_key_hex())
-    .expect_err("model bytes must be rejected");
+  let err = load_builtin(&manifest, &files).expect_err("model bytes must be rejected");
   assert!(
     err.message.contains("prohibited")
       || err.message.contains("model")
@@ -198,13 +221,12 @@ fn paddleocr_package_rejects_undeclared_runtime_dll() {
   // nativeDependencies intentionally omits extra.dll
   let mut files = paddleocr_package_files();
   files.push((extra, extra_bytes.as_slice()));
-  let err = validate_manifest(&manifest).expect_err("undeclared DLL must fail validation");
+  let err = load_builtin(&manifest, &files).expect_err("undeclared DLL must fail validation");
   assert!(
     err.message.contains("nativeDependencies") || err.message.contains("exactly match"),
     "unexpected: {}",
     err.message
   );
-  let _ = files;
 }
 
 #[test]
@@ -214,7 +236,7 @@ fn paddleocr_package_rejects_declared_dependency_missing_from_index() {
   let deps = manifest.runtime.native_dependencies.as_mut().unwrap();
   deps.push("runtime/missing.dll".into());
   deps.sort();
-  let err = validate_manifest(&manifest).expect_err("missing declared dependency must fail");
+  let err = load_builtin(&manifest, &paddleocr_package_files()).expect_err("missing declared dependency must fail");
   assert!(
     err.message.contains("not in the file index") || err.message.contains("missing"),
     "unexpected: {}",
@@ -230,7 +252,9 @@ fn paddleocr_package_rejects_second_executable() {
   manifest
     .files
     .push(file_entry(extra_exe, FileRole::RuntimeArtifact, extra_bytes));
-  let err = validate_manifest(&manifest).expect_err("second executable must fail");
+  let mut files = paddleocr_package_files();
+  files.push((extra_exe, extra_bytes.as_slice()));
+  let err = load_builtin(&manifest, &files).expect_err("second executable must fail");
   assert!(
     err.message.contains("one executable") || err.message.contains("executable"),
     "unexpected: {}",
@@ -243,7 +267,7 @@ fn paddleocr_package_rejects_http_model_url() {
   let mut manifest = parse_valid_paddleocr_manifest();
   let resource = manifest.model_resources.as_mut().unwrap().first_mut().unwrap();
   resource.artifacts[0].url = resource.artifacts[0].url.replacen("https://", "http://", 1);
-  let err = validate_manifest(&manifest).expect_err("http model URL must fail");
+  let err = load_builtin(&manifest, &paddleocr_package_files()).expect_err("http model URL must fail");
   assert!(err.message.contains("https"), "unexpected: {}", err.message);
 }
 
@@ -251,18 +275,21 @@ fn paddleocr_package_rejects_http_model_url() {
 fn paddleocr_package_rejects_non_allowlisted_native_plugin_id() {
   let mut manifest = parse_valid_paddleocr_manifest();
   manifest.id = "com.example.native-ocr".into();
-  let archive = build_signed_package_with_key(
-    &manifest,
-    &paddleocr_package_files(),
-    &test_vendor_fixture::fixture_vendor_signing_key(),
-  );
-  let err = verify_package_bytes(&archive, &test_vendor_fixture::fixture_vendor_public_key_hex())
-    .expect_err("non-allowlisted native plugin must fail");
+  let err = load_builtin(&manifest, &paddleocr_package_files()).expect_err("non-allowlisted native plugin must fail");
+  assert_eq!(err.code, PluginLoadErrorCode::NativeNotAllowlisted);
   assert!(
     err.message.contains("allowlist") || err.message.contains("native worker"),
     "unexpected: {}",
     err.message
   );
+}
+
+#[test]
+fn paddleocr_package_rejects_non_allowlisted_native_version() {
+  let mut manifest = parse_valid_paddleocr_manifest();
+  manifest.version = "9.9.9".into();
+  let err = load_builtin(&manifest, &paddleocr_package_files()).expect_err("non-allowlisted native version must fail");
+  assert_eq!(err.code, PluginLoadErrorCode::NativeNotAllowlisted);
 }
 
 #[test]
@@ -273,9 +300,7 @@ fn paddleocr_package_rejects_python_script_payload() {
   manifest.files.push(file_entry(script, FileRole::Other, script_bytes));
   let mut files = paddleocr_package_files();
   files.push((script, script_bytes.as_slice()));
-  let archive = build_signed_package_with_key(&manifest, &files, &test_vendor_fixture::fixture_vendor_signing_key());
-  let err = verify_package_bytes(&archive, &test_vendor_fixture::fixture_vendor_public_key_hex())
-    .expect_err("python payload must fail");
+  let err = load_builtin(&manifest, &files).expect_err("python payload must fail");
   assert!(
     err.message.contains("prohibited") || err.message.contains("closed allowlist") || err.message.contains("Other"),
     "unexpected: {}",
@@ -289,7 +314,9 @@ fn paddleocr_package_rejects_disguised_exe_under_license_role() {
   let helper = "licenses/notice.exe";
   let helper_bytes = b"MZ-helper";
   manifest.files.push(file_entry(helper, FileRole::License, helper_bytes));
-  let err = validate_manifest(&manifest).expect_err("disguised exe under license must fail");
+  let mut files = paddleocr_package_files();
+  files.push((helper, helper_bytes.as_slice()));
+  let err = load_builtin(&manifest, &files).expect_err("disguised exe under license must fail");
   assert!(
     err.message.contains("disguised payload") || err.message.contains("prohibited"),
     "unexpected: {}",
@@ -305,7 +332,9 @@ fn paddleocr_package_rejects_disguised_dll_under_schema_role() {
   manifest
     .files
     .push(file_entry(helper, FileRole::ConfigSchema, helper_bytes));
-  let err = validate_manifest(&manifest).expect_err("disguised dll under schema must fail");
+  let mut files = paddleocr_package_files();
+  files.push((helper, helper_bytes.as_slice()));
+  let err = load_builtin(&manifest, &files).expect_err("disguised dll under schema must fail");
   assert!(
     err.message.contains("disguised payload") || err.message.contains("ancillary") || err.message.contains(".json"),
     "unexpected: {}",
@@ -319,7 +348,9 @@ fn paddleocr_package_rejects_non_closed_role_and_empty_targets() {
   let helper = "assets/helper.exe";
   let helper_bytes = b"MZ-helper";
   manifest.files.push(file_entry(helper, FileRole::Other, helper_bytes));
-  let err = validate_manifest(&manifest).expect_err("FileRole::Other must fail closed-set");
+  let mut files = paddleocr_package_files();
+  files.push((helper, helper_bytes.as_slice()));
+  let err = load_builtin(&manifest, &files).expect_err("FileRole::Other must fail closed-set");
   assert!(
     err.message.contains("closed allowlist") || err.message.contains("not on the closed"),
     "unexpected: {}",
@@ -328,33 +359,9 @@ fn paddleocr_package_rejects_non_closed_role_and_empty_targets() {
 
   let mut empty_targets = parse_valid_paddleocr_manifest();
   empty_targets.targets.clear();
-  let err = validate_manifest(&empty_targets).expect_err("empty targets must fail");
+  let err = load_builtin(&empty_targets, &paddleocr_package_files()).expect_err("empty targets must fail");
   assert!(
     err.message.contains("exactly one windows/x86_64") || err.message.contains("windows/x86_64"),
-    "unexpected: {}",
-    err.message
-  );
-}
-
-#[test]
-fn paddleocr_package_rejects_user_approved_publisher_key_id() {
-  let mut manifest = parse_valid_paddleocr_manifest();
-  manifest.publisher.key_id = "user-approved-key".into();
-  let archive = build_signed_package_with_key(
-    &manifest,
-    &paddleocr_package_files(),
-    &test_vendor_fixture::fixture_vendor_signing_key(),
-  );
-  // Signature may fail first if key material diverges; either path is fail-closed for non-vendor.
-  let err = verify_package_bytes(&archive, &test_vendor_fixture::fixture_vendor_public_key_hex())
-    .expect_err("non-vendor publisher key id must fail");
-  assert!(
-    err.message.contains("vendor")
-      || err.message.contains("allowlist")
-      || err.message.contains("signature")
-      || err.message.contains("fingerprint")
-      || err.message.contains("key id")
-      || err.message.contains("reverse-domain"),
     "unexpected: {}",
     err.message
   );

@@ -48,7 +48,7 @@ export type EditModelConfigDialogProps = {
   model: ProviderModelDto | null;
   onOpenChange: (open: boolean) => void;
   onSaved: (model: ProviderModelDto) => void;
-  /** Attached runtime interface API types (labeled from signed catalog metadata). */
+  /** Attached runtime interface API types (labeled from catalog metadata). */
   runtimeAdapterOptions?: readonly import("./adapterOptions").AdapterOption[];
 };
 

@@ -1,5 +1,7 @@
 # Implementation Plan
 
+> **Superseded (2026-08-24):** plugin-level signing, publisher trust, vendor bootstrap, and default-activation orchestration were removed. See `docs/architecture/plugin-catalog.md`.
+
 **Goal:** Fix all remaining configuration-import review findings across accessibility, apply-state safety, conflict typing, preview presentation, route acceptance, historical normalization, and no-execution guarantees.
 
 **Inputs:** The provided Standards review (4 findings), Spec review (5 findings), the current repository implementation, the vendored Base UI 1.6 documentation, and the Phase 11 acceptance tests and fixtures.

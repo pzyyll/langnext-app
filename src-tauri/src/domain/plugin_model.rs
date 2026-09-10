@@ -1,4 +1,4 @@
-// ABOUTME: Signed model-resource descriptors, status DTOs, and stable model errors.
+// ABOUTME: Model-resource descriptors, status DTOs, and stable model errors.
 // ABOUTME: Model bytes stay host-managed product resources, never plugin package contents.
 use serde::{Deserialize, Serialize};
 
@@ -63,7 +63,7 @@ pub struct ModelFileDescriptor {
   pub sha256: String,
 }
 
-/// Signed top-level model resource declaration. Package contains metadata only, never model bytes.
+/// Top-level model resource declaration. The package contains metadata only, never model bytes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ModelResourceDescriptor {
@@ -125,7 +125,7 @@ pub struct PluginModelResourceDto {
   pub error_code: Option<String>,
 }
 
-/// Explicit download input: host resolves URL/digests/caps from the signed package.
+/// Explicit download input: host resolves URL/digests/caps from the package content.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DownloadPluginModelInput {

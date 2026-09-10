@@ -14,7 +14,6 @@ const CATALOG_ENTRY: ProviderRuntimeCatalogEntryDto = {
   version: "1.0.0",
   runtimeKind: "wasm-component",
   legacyAliases: ["openai"],
-  publisher: { keyId: "pub-1", keyFingerprint: "fp-1" },
   contentAvailable: true,
 };
 
@@ -22,9 +21,9 @@ function binding(overrides: Partial<ProviderRuntimeBindingDto> = {}): ProviderRu
   return {
     providerId: "provider-1",
     adapterId: "openai",
-    runtimeKind: "legacy-frontend-provider",
-    packageDigest: null,
-    grantSetRevision: null,
+    runtimeKind: "wasm-component",
+    packageDigest: "digest-1",
+    grantSetRevision: 1,
     state: "active",
     errorCode: null,
     errorMessage: null,
@@ -134,13 +133,13 @@ describe("ProviderEditor Get Models readiness gating", () => {
     ).toBe(false);
   });
 
-  test("enables Get Models for legacy-ready bindings", () => {
+  test("disables Get Models when the binding's package is absent from the catalog", () => {
     expect(
       remoteActionsDisabled({
         ...readyBase,
-        runtime: binding({}),
-        catalogEntry: CATALOG_ENTRY,
+        runtime: binding(),
+        catalogEntry: null,
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 });

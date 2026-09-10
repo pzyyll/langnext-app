@@ -590,13 +590,9 @@ export interface RuntimeRequirementExport {
   pluginVersion: string;
   runtimeKind: string;
   packageDigest?: string | null;
-  publisherKeyId?: string | null;
-  publisherKeyFingerprint?: string | null;
   pluginApiVersion?: string | null;
   configSchemaVersion: number;
   requiredCapabilityMajors?: string[];
-  providerRuntimeKind?: string | null;
-  providerPackageDigest?: string | null;
 }
 
 /** Sanitized integration instance — never includes secrets or vault refs. */
@@ -627,11 +623,6 @@ export interface IntegrationInstanceDto {
   credentialSlots: CredentialSlotStatusDto[];
   createdAt: string;
   updatedAt: string;
-}
-
-export interface PublisherIdentityDto {
-  keyId: string;
-  keyFingerprint: string;
 }
 
 export interface PermissionDifferenceDto {
@@ -672,10 +663,7 @@ export interface RuntimeUpgradePreviewDto {
   target: RuntimeIdentityDto;
   sourcePluginVersion: string;
   targetPluginVersion: string;
-  sourcePublisher?: PublisherIdentityDto | null;
-  targetPublisher: PublisherIdentityDto;
   requiresPermissionApproval: boolean;
-  requiresPublisherReapproval: boolean;
   capabilityCompatibility: CapabilityCompatibilityDto[];
   schemaMigrations: SchemaMigrationDto[];
   credentialSlots: CredentialSlotCompatibilityDto[];
@@ -773,23 +761,43 @@ export interface IntegrationValidationResult {
   message: string | null;
 }
 
-/** Publisher key source for installed plugin packages. */
-export type PublisherSource = "vendor" | "user_approved";
+/** Catalog source of one plugin content entry. */
+export type PluginSource = "built_in" | "development" | "user";
 
-/** Publisher trust state returned by package preview. */
-export type PublisherTrustState = "trusted_vendor" | "trusted_user" | "unknown" | "revoked" | "disabled" | "unsigned";
+/** How one catalog entry was ingested. Both forms share one content digest identity. */
+export type PluginContentKind = "directory" | "archive";
 
-export type PackageSignatureStatus = "signed" | "unsigned";
-
-export interface PluginPublisherDto {
-  keyId: string;
-  fingerprint: string;
-  source: PublisherSource;
-  enabled: boolean;
-  revoked: boolean;
-  createdAt: string;
-  updatedAt: string;
-}
+/** Stable catalog load/validation error codes. */
+export type PluginLoadErrorCode =
+  | "content_too_large"
+  | "entry_count_exceeded"
+  | "entry_too_large"
+  | "total_size_exceeded"
+  | "path_invalid"
+  | "path_too_deep"
+  | "duplicate_path"
+  | "symlink_rejected"
+  | "zip_bomb"
+  | "invalid_utf8_path"
+  | "missing_manifest"
+  | "manifest_too_large"
+  | "invalid_manifest"
+  | "undeclared_file"
+  | "missing_indexed_file"
+  | "source_mutated"
+  | "compatibility_rejected"
+  | "native_source_rejected"
+  | "native_not_allowlisted"
+  | "first_party_id_rejected"
+  | "preview_expired"
+  | "preview_not_found"
+  | "digest_mismatch"
+  | "version_conflict"
+  | "content_missing"
+  | "in_use"
+  | "not_removable"
+  | "permission_not_acknowledged"
+  | "internal";
 
 export interface PackageNetworkPermissionDto {
   id: string;
@@ -797,173 +805,82 @@ export interface PackageNetworkPermissionDto {
   methods: string[];
 }
 
-/** Sanitized package preview; opaque ID only (no absolute paths or archive bytes). */
-export interface PluginPackagePreviewDto {
-  previewId: string;
-  packageDigest: string;
+/** Sanitized immutable identity of one catalog entry. */
+export interface PluginDescriptorDto {
   pluginId: string;
   version: string;
-  publisherKeyId: string;
-  publisherFingerprint: string;
-  publisherTrust: PublisherTrustState;
-  claimedPublisherKeyId?: string;
-  claimedPublisherFingerprint?: string;
-  requiresPublisherApproval: boolean;
-  signatureStatus?: PackageSignatureStatus;
-  requiresUnsignedRiskAcknowledgement?: boolean;
-  requiresNativeExecutionRiskAcknowledgement?: boolean;
-  /** Auto-resolved when the package ships `publisher.pub`; forward as-is to approve. */
-  resolvedPublisherPublicKeyHex?: string | null;
+  source: PluginSource;
+  contentKind: PluginContentKind;
+  contentDigest: string;
+  runtimeKind: string;
+  pluginApiVersion: string;
+  capabilities: string[];
+  configurationSchema: string | null;
+  network: PackageNetworkPermissionDto[];
+  authPolicies: string[];
+  credentialSlots: string[];
+  fileCount: number;
+  totalBytes: number;
+}
+
+/** One catalog entry plus its default/in-use state. */
+export interface PluginCatalogEntryDto extends PluginDescriptorDto {
+  isDefault: boolean;
+  inUse: boolean;
+  removable: boolean;
+  reloadable: boolean;
+}
+
+/** Sanitized per-entry catalog error. Never carries absolute paths or content bytes. */
+export interface CatalogEntryErrorDto {
+  code: PluginLoadErrorCode;
+  source: PluginSource;
+  pluginId: string;
+  relativePath: string;
+  message: string;
+}
+
+export interface PluginCatalogSnapshotDto {
+  entries: PluginCatalogEntryDto[];
+  errors: CatalogEntryErrorDto[];
+}
+
+/** Sanitized permission review returned before a user archive install. */
+export interface UserPackagePreviewDto {
+  previewId: string;
+  contentDigest: string;
+  pluginId: string;
+  version: string;
   runtimeKind: string;
   capabilities: string[];
   configurationSchema: string | null;
   network: PackageNetworkPermissionDto[];
   authPolicies: string[];
-  permissionRequestDigest: string;
-  /** Permission deltas vs currently installed version of the same plugin (if any). */
+  credentialSlots: string[];
+  fileCount: number;
+  totalBytes: number;
+  /** Permission deltas against the newest installed version of the same plugin. */
   permissionDifferences: string[];
   warnings: string[];
   expiresAt: string;
 }
 
-export interface ApprovePluginPackageInput {
+/** Confirm exactly the previewed content. Install fails closed on digest drift. */
+export interface InstallUserPackageInput {
   previewId: string;
-  approvePublisher?: boolean;
-  publisherPublicKeyHex?: string | null;
+  contentDigest: string;
   acknowledgePermissions: boolean;
-  acknowledgeUnsignedPackageRisk?: boolean;
-  acknowledgeNativeExecutionRisk?: boolean;
 }
 
-/** Authorization status of a catalog default for package-first creation. */
-export type DefaultPackageAuthorizationStatus =
-  | "absent"
-  | "unauthorized"
-  | "authorized"
-  | "stale"
-  | "confirmation_required";
-
-export interface DefaultAuthorityNetworkEntryDto {
-  capabilityId: string;
-  endpointId: string;
-  origin: string;
-  /** Normalized base URL bound into the authority digest; never raw config secrets. */
-  baseUrl: string;
-  method: string;
-  authPolicy: string;
-  originKind: string;
-  /** Canonical response-body modes bound into the authority digest. */
-  responseBodyModes: string;
-  resourceLimits?: DefaultAuthorityResourceLimitsDto | null;
+export interface InstallUserPackageResult {
+  entry: PluginCatalogEntryDto;
 }
 
-export interface DefaultAuthorityResourceLimitsDto {
-  maxRequestBytes: number;
-  maxResponseBytes: number;
-  maxStreamBytes: number;
-  timeoutMs: number;
-}
-
-export interface DefaultPackageActivationPreviewDto {
-  previewId: string;
+/** Stored explicit user default override. Built-ins need no row. */
+export interface PluginCatalogDefaultDto {
   pluginId: string;
-  packageDigest: string;
-  version: string;
-  publisherKeyId: string;
-  publisherFingerprint: string;
-  runtimeKind: string;
-  permissionRequestDigest: string;
-  capabilities: string[];
-  fixedNetworkAuthority: DefaultAuthorityNetworkEntryDto[];
-  dynamicAuthorityWarnings: string[];
-  authPolicies: string[];
-  resourceLimits?: DefaultAuthorityResourceLimitsDto | null;
-  requiresInstanceConfirmationForDynamicOrigins: boolean;
-  signatureStatus?: PackageSignatureStatus;
-  requiresUnsignedDefaultRiskAcknowledgement?: boolean;
-  expiresAt: string;
-}
-
-export interface AuthorizeDefaultPluginPackageInput {
-  previewId: string;
-  acknowledgeFutureInstanceAuthority: boolean;
-  acknowledgeUnsignedDefaultRisk?: boolean;
-}
-
-export interface RetryDefaultRuntimeActivationInput {
-  subjectKind: "integration_instance" | "provider_instance";
-  subjectId: string;
-}
-
-export interface PreviewDefaultRuntimeAuthorityInput {
-  subjectKind: "integration_instance" | "provider_instance";
-  subjectId: string;
-}
-
-export interface ConfirmDefaultRuntimeAuthorityInput {
-  previewId: string;
-  acknowledgeAdditionalAuthority: boolean;
-}
-
-export interface DefaultRuntimeAuthorityPreviewDto {
-  previewId: string;
-  subjectKind: "integration_instance" | "provider_instance";
-  subjectId: string;
-  packageDigest: string;
-  expectedUpdateToken: string;
-  configDigest: string;
-  additionalNetworkAuthority: DefaultAuthorityNetworkEntryDto[];
-  authPolicies: string[];
-  resourceLimits?: DefaultAuthorityResourceLimitsDto | null;
-  expiresAt: string;
-}
-
-export interface DefaultRuntimeActivationIntentDto {
-  id: string;
-  subjectKind: "integration_instance" | "provider_instance";
-  subjectId: string;
-  packageDigest: string;
-  source: "local_creation" | "import_requires_confirmation";
-  state: "pending" | "confirmation_required" | "activating" | "completed" | "failed" | "cancelled";
-  expectedConfigDigest?: string | null;
-  expectedUpdateToken?: string | null;
-  errorCode?: string | null;
-  errorMessage?: string | null;
-  createdAt: string;
+  contentDigest: string;
   updatedAt: string;
-}
-
-export interface InstalledPluginVersionDto {
-  packageDigest: string;
-  pluginId: string;
-  version: string;
-  publisherKeyId: string;
-  publisherFingerprint: string;
-  signatureStatus?: PackageSignatureStatus;
-  claimedPublisherKeyId?: string;
-  claimedPublisherFingerprint?: string;
-  nativeExecutionRiskAcknowledged?: boolean;
-  runtimeKind: string;
-  permissionRequestDigest: string;
-  contentAvailable: boolean;
-  isDefault: boolean;
-  /** Catalog default authorization; not an executable grant. */
-  defaultAuthorizationStatus: DefaultPackageAuthorizationStatus;
-  inUse: boolean;
-  installedAt: string;
-  capabilities: string[];
-}
-
-export interface ApprovePluginPackageResult {
-  version: InstalledPluginVersionDto;
-  approvalId: string;
-  approvalRevision: number;
-}
-
-export interface ApproveUserPublisherInput {
-  keyId: string;
-  fingerprint: string;
-  publicKeyHex: string;
 }
 
 /** Sanitized model resource readiness for host-owned configuration pages. */
@@ -1007,18 +924,6 @@ export interface PluginModelDownloadProgress {
   bytesDownloaded: number;
   totalBytes: number;
   phase: PluginModelDownloadPhase;
-}
-
-export interface PluginDefaultVersionDto {
-  pluginId: string;
-  packageDigest: string;
-  updatedAt: string;
-}
-
-export interface PluginVersionDependenciesDto {
-  packageDigest: string;
-  integrationInstanceIds: string[];
-  isDefault: boolean;
 }
 
 /** Google Cloud non-secret config (schema v1). */
@@ -1265,8 +1170,6 @@ export interface ProviderRuntimeRequirementExport {
   packageDigest?: string | null;
   pluginId?: string | null;
   pluginVersion?: string | null;
-  publisherKeyId?: string | null;
-  publisherKeyFingerprint?: string | null;
   pluginApiVersion?: string | null;
   legacyAliases?: string[];
   capabilities?: string[];
@@ -1393,21 +1296,12 @@ export interface ImportPreviewCounts {
 export type ImportRuntimeSubjectKind = "integration" | "provider";
 
 /** Local availability of one exact imported runtime requirement (Phase 11). */
-export type ImportRuntimeLocalStatus =
-  | "bundled"
-  | "legacy"
-  | "missing"
-  | "revoked"
-  | "disabled"
-  | "content_unavailable"
-  | "incompatible"
-  | "installed";
+export type ImportRuntimeLocalStatus = "missing" | "digest_mismatch" | "incompatible" | "installed";
 
 /** Closed required user action for one exact imported runtime requirement. */
 export type ImportRuntimeRequiredAction =
-  | "none"
   | "install_exact_package"
-  | "restore_publisher"
+  | "resolve_digest_mismatch"
   | "resolve_incompatibility"
   | "activate_after_import";
 
@@ -1422,8 +1316,6 @@ export interface ImportRuntimeRequirementPreview {
   pluginId?: string | null;
   pluginVersion?: string | null;
   packageDigest?: string | null;
-  publisherKeyId?: string | null;
-  publisherKeyFingerprint?: string | null;
   localStatus: ImportRuntimeLocalStatus;
   requiredAction: ImportRuntimeRequiredAction;
 }
@@ -1722,7 +1614,6 @@ export interface ProviderRuntimeCatalogEntryDto {
   pluginId: string;
   version: string;
   packageDigest: string;
-  publisher: { keyId: string; keyFingerprint: string };
   legacyAliases: string[];
   capabilities: ProviderRuntimeCatalogCapabilityDto[];
   detection: ProviderRuntimeDetectionDto | null;
@@ -1757,7 +1648,6 @@ export interface ProviderRuntimeInterfacePreviewDto {
   source: ProviderRuntimeBindingDto;
   target: ProviderRuntimeBindingDto;
   targetPluginVersion: string;
-  targetPublisher: { keyId: string; keyFingerprint: string };
   legacyAliases: string[];
   requiresPermissionApproval: boolean;
   expiresAt: string;

@@ -965,16 +965,25 @@ fn main() {{
     use std::ptr;
 
     const HANDLE_FLAG_INHERIT: u32 = 0x0000_0001;
+    const GENERIC_READ: u32 = 0x8000_0000;
+    const FILE_SHARE_READ: u32 = 0x0000_0001;
+    const FILE_SHARE_WRITE: u32 = 0x0000_0002;
+    const OPEN_EXISTING: u32 = 3;
+    const FILE_ATTRIBUTE_NORMAL: u32 = 0x0000_0080;
 
     #[link(name = "kernel32")]
     unsafe extern "system" {
-      fn CreateEventW(
+      fn CreateFileW(
+        file_name: *const u16,
+        desired_access: u32,
+        share_mode: u32,
         attributes: *mut std::ffi::c_void,
-        manual_reset: i32,
-        initial_state: i32,
-        name: *const u16,
+        creation_disposition: u32,
+        flags_and_attributes: u32,
+        template_file: *mut std::ffi::c_void,
       ) -> *mut std::ffi::c_void;
-      fn SetHandleInformation(handle: *mut std::ffi::c_void, mask: u32, flags: u32) -> i32;
+      fn SetHandleInformation(handle: *mut core::ffi::c_void, mask: u32, flags: u32) -> i32;
+      fn GetLastError() -> u32;
     }
 
     #[repr(C)]
@@ -984,49 +993,37 @@ fn main() {{
       inherit: i32,
     }
 
-    let dir = TempDir::new().unwrap();
-    // Child receives the sentinel handle value as a decimal arg and probes GetHandleInformation.
-    // Exit 0 = handle NOT inherited (invalid in child). Exit 1 = inherited (leak).
-    let src = dir.path().join("sentinel_probe.rs");
-    let exe = dir.path().join("sentinel_probe.exe");
-    std::fs::write(
-      &src,
-      r#"
-use std::env;
-fn main() {
-  let raw: usize = env::args().nth(1).expect("handle arg").parse().expect("parse");
-  #[link(name = "kernel32")]
-  unsafe extern "system" {
-    fn GetHandleInformation(handle: *mut core::ffi::c_void, flags: *mut u32) -> i32;
-    fn GetLastError() -> u32;
-  }
-  let mut flags = 0u32;
-  let ok = unsafe { GetHandleInformation(raw as *mut _, &mut flags) };
-  if ok == 0 {
-    // ERROR_INVALID_HANDLE (6) means the value is not open in this process — not inherited.
-    let err = unsafe { GetLastError() };
-    if err == 6 {
-      std::process::exit(0);
+    fn wide(value: &str) -> Vec<u16> {
+      value.encode_utf16().chain(std::iter::once(0)).collect()
     }
-    std::process::exit(2);
-  }
-  // Handle is valid in the child — inheritance leak.
-  std::process::exit(1);
-}
-"#,
-    )
-    .unwrap();
-    let status = Command::new("rustc").arg(&src).arg("-o").arg(&exe).status().unwrap();
-    assert!(status.success(), "compile sentinel_probe");
 
-    // Inheritable sentinel event that must NOT appear in the worker.
+    let dir = TempDir::new().unwrap();
+
+    // Inheritable sentinel file handle that must NOT appear in the worker. Identity is proven by
+    // resolving the handle back to the sentinel path in the child, so a same-numbered handle for
+    // an unrelated object is never reported as an inheritance leak.
+    let sentinel_path = dir.path().join("sentinel.txt");
+    std::fs::write(&sentinel_path, b"sentinel").unwrap();
     let mut sa = SecurityAttributes {
       length: std::mem::size_of::<SecurityAttributes>() as u32,
       descriptor: ptr::null_mut(),
       inherit: 1,
     };
-    let sentinel_raw = unsafe { CreateEventW(&mut sa as *mut _ as *mut std::ffi::c_void, 1, 0, ptr::null()) };
-    assert!(!sentinel_raw.is_null(), "CreateEventW sentinel");
+    let sentinel_wide = wide(&sentinel_path.to_string_lossy());
+    let sentinel_raw = unsafe {
+      CreateFileW(
+        sentinel_wide.as_ptr(),
+        GENERIC_READ,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        &mut sa as *mut _ as *mut std::ffi::c_void,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL,
+        ptr::null_mut(),
+      )
+    };
+    assert!(sentinel_raw as isize != -1, "CreateFileW sentinel failed: {}", unsafe {
+      GetLastError()
+    });
     let set = unsafe { SetHandleInformation(sentinel_raw, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) };
     assert!(set != 0, "SetHandleInformation inherit");
     let sentinel = unsafe { OwnedHandle::from_raw_handle(sentinel_raw) };
@@ -1034,9 +1031,8 @@ fn main() {
 
     let model = dir.path().join("model");
     std::fs::create_dir_all(&model).unwrap();
-    // Probe binary ignores model/nonce args; we pass the sentinel value as extra_args[0].
-    // spawn_exact always prefixes --model-root/--process-nonce, so the probe reads args().nth(1)
-    // incorrectly. Use a dedicated probe that scans all args for a --sentinel= prefix instead.
+    // `spawn_exact` always prefixes --model-root/--process-nonce, so the probe scans every arg
+    // for the --sentinel= and --sentinel-path= prefixes instead of relying on a position.
     let src2 = dir.path().join("sentinel_probe2.rs");
     let exe2 = dir.path().join("sentinel_probe2.exe");
     std::fs::write(
@@ -1045,16 +1041,22 @@ fn main() {
 use std::env;
 fn main() {
   let mut raw: Option<usize> = None;
+  let mut path: Option<String> = None;
   for arg in env::args().skip(1) {
     if let Some(v) = arg.strip_prefix("--sentinel=") {
       raw = Some(v.parse().expect("parse sentinel"));
     }
+    if let Some(v) = arg.strip_prefix("--sentinel-path=") {
+      path = Some(v.to_string());
+    }
   }
   let raw = raw.expect("--sentinel=");
+  let path = path.expect("--sentinel-path=");
   #[link(name = "kernel32")]
   unsafe extern "system" {
     fn GetHandleInformation(handle: *mut core::ffi::c_void, flags: *mut u32) -> i32;
     fn GetLastError() -> u32;
+    fn GetFinalPathNameByHandleW(handle: *mut core::ffi::c_void, buf: *mut u16, len: u32, flags: u32) -> u32;
   }
   let mut flags = 0u32;
   let ok = unsafe { GetHandleInformation(raw as *mut _, &mut flags) };
@@ -1063,7 +1065,17 @@ fn main() {
     // 6 = ERROR_INVALID_HANDLE → not inherited.
     std::process::exit(if err == 6 { 0 } else { 2 });
   }
-  std::process::exit(1);
+  // A valid handle value can belong to an unrelated object in this process (handle values are
+  // reused across the process lifetime). Resolve the handle to its path and compare it with the
+  // sentinel file before reporting a leak.
+  let mut buf = vec![0u16; 1024];
+  let written = unsafe { GetFinalPathNameByHandleW(raw as *mut _, buf.as_mut_ptr(), buf.len() as u32, 0) };
+  if written == 0 || written as usize >= buf.len() {
+    std::process::exit(0);
+  }
+  let resolved = String::from_utf16_lossy(&buf[..written as usize]).to_ascii_lowercase();
+  let expected = path.to_ascii_lowercase();
+  std::process::exit(if resolved.ends_with(&expected) { 1 } else { 0 });
 }
 "#,
     )
@@ -1076,7 +1088,10 @@ fn main() {
       work_dir: dir.path().to_path_buf(),
       model_root: model,
       process_nonce: "nonce".into(),
-      extra_args: vec![format!("--sentinel={sentinel_value}")],
+      extra_args: vec![
+        format!("--sentinel={sentinel_value}"),
+        format!("--sentinel-path={}", sentinel_path.display()),
+      ],
     })
     .expect("spawn with sentinel present in parent");
 
@@ -1103,7 +1118,5 @@ fn main() {
       status.success(),
       "worker must not inherit sentinel handle; exit={status:?} (0=not inherited, 1=leaked)"
     );
-    // silence unused first probe fixture
-    let _ = exe;
   }
 }

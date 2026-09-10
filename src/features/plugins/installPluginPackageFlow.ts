@@ -1,15 +1,11 @@
-// ABOUTME: Effect workflow for local `.lnplugin` dialog selection, preview, approve, and discard.
+// ABOUTME: Effect workflow for user `.lnplugin` selection, permission preview, and exact-digest install.
 // ABOUTME: Routes/components call Promise runners; Query remains the DTO cache only.
 import { open } from "@tauri-apps/plugin-dialog";
 import { Effect } from "effect";
 import { invokeEffect } from "../../storage/invokeEffect";
 import type { IpcError } from "../../storage/ipcError";
 import { runEffectAsPromise } from "../../storage/runStorage";
-import type {
-  ApprovePluginPackageInput,
-  ApprovePluginPackageResult,
-  PluginPackagePreviewDto,
-} from "../../storage/types";
+import type { InstallUserPackageInput, InstallUserPackageResult, UserPackagePreviewDto } from "../../storage/types";
 import { FsError, toFsError } from "../fsError";
 
 export type SelectPluginPackageResult =
@@ -33,46 +29,46 @@ export function selectPluginPackageFile(): Effect.Effect<SelectPluginPackageResu
   });
 }
 
-/** IPC: preview a local package path (Rust owns reading and verification). */
-export function previewPluginPackageEffect(path: string): Effect.Effect<PluginPackagePreviewDto, IpcError> {
-  return invokeEffect<PluginPackagePreviewDto>("preview_plugin_package", { path });
+/** IPC: inspect a local user archive path (Rust owns reading and validation). */
+export function previewUserPluginPackageEffect(path: string): Effect.Effect<UserPackagePreviewDto, IpcError> {
+  return invokeEffect<UserPackagePreviewDto>("preview_user_plugin_package", { path });
 }
 
-/** IPC: approve/install by opaque preview id. */
-export function approvePluginPackageEffect(
-  input: ApprovePluginPackageInput,
-): Effect.Effect<ApprovePluginPackageResult, IpcError> {
-  return invokeEffect<ApprovePluginPackageResult>("approve_plugin_package", { input });
+/** IPC: install the previewed archive by opaque preview ID plus the exact content digest. */
+export function installUserPluginPackageEffect(
+  input: InstallUserPackageInput,
+): Effect.Effect<InstallUserPackageResult, IpcError> {
+  return invokeEffect<InstallUserPackageResult>("install_user_plugin_package", { input });
 }
 
-/** IPC: discard a preview and clean staging. */
-export function discardPluginPackagePreviewEffect(previewId: string): Effect.Effect<void, IpcError> {
-  return invokeEffect<void>("discard_plugin_package_preview", { previewId });
+/** IPC: discard a preview without installing. */
+export function discardUserPluginPackagePreviewEffect(previewId: string): Effect.Effect<void, IpcError> {
+  return invokeEffect<void>("discard_user_plugin_package_preview", { previewId });
 }
 
 /**
- * Dialog → preview composition: open file picker, then preview if selected.
+ * Dialog → preview composition: open file picker, then inspect if selected.
  * Cancel returns null without IPC. Dialog failures are `FsError`; preview failures are `IpcError`.
  */
-export function selectAndPreviewPluginPackage(): Effect.Effect<PluginPackagePreviewDto | null, FsError | IpcError> {
+export function selectAndPreviewUserPluginPackage(): Effect.Effect<UserPackagePreviewDto | null, FsError | IpcError> {
   return Effect.gen(function* () {
     const selected = yield* selectPluginPackageFile();
     if (selected.status === "cancelled") {
       return null;
     }
-    return yield* previewPluginPackageEffect(selected.path);
+    return yield* previewUserPluginPackageEffect(selected.path);
   });
 }
 
 /** Promise runner for routes/components (Query-friendly). */
-export async function runSelectAndPreviewPluginPackage(): Promise<PluginPackagePreviewDto | null> {
-  return runEffectAsPromise(selectAndPreviewPluginPackage());
+export async function runSelectAndPreviewUserPluginPackage(): Promise<UserPackagePreviewDto | null> {
+  return runEffectAsPromise(selectAndPreviewUserPluginPackage());
 }
 
-export async function runApprovePluginPackage(input: ApprovePluginPackageInput): Promise<ApprovePluginPackageResult> {
-  return runEffectAsPromise(approvePluginPackageEffect(input));
+export async function runInstallUserPluginPackage(input: InstallUserPackageInput): Promise<InstallUserPackageResult> {
+  return runEffectAsPromise(installUserPluginPackageEffect(input));
 }
 
-export async function runDiscardPluginPackagePreview(previewId: string): Promise<void> {
-  return runEffectAsPromise(discardPluginPackagePreviewEffect(previewId));
+export async function runDiscardUserPluginPackagePreview(previewId: string): Promise<void> {
+  return runEffectAsPromise(discardUserPluginPackagePreviewEffect(previewId));
 }

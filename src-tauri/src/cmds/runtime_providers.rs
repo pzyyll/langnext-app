@@ -64,7 +64,7 @@ fn capability_to_ipc(error: CapabilityError) -> IpcError {
 
 /// Execute `llm.models.list@1` for one provider API type through the persisted interface
 /// binding. The request session is registered for `cancel_provider_runtime` and removed exactly
-/// once on every terminal path. A missing/revoked binding is a stable error; the legacy
+/// once on every terminal path. A missing/unavailable binding is a stable error; the legacy
 /// executor is never invoked.
 #[tauri::command]
 pub async fn provider_runtime_models_list(
@@ -116,7 +116,7 @@ pub async fn run_provider_runtime_models_list(
 /// Execute `llm.chat@1` through the persisted runtime binding: unary completion for
 /// `stream = false`, typed `ProviderRuntimeChatEvent` deltas over the per-request `Channel`
 /// for `stream = true`. The request session is removed exactly once on every terminal path
-/// and a missing/revoked binding is a stable error; the legacy executor is never invoked.
+/// and a missing/unavailable binding is a stable error; the legacy executor is never invoked.
 #[tauri::command]
 pub async fn provider_runtime_chat(
   state: State<'_, AppState>,
@@ -206,7 +206,7 @@ pub fn cancel_runtime_request(sessions: &RequestSessionRegistry, request_id: &st
   sessions.cancel(&request_id)
 }
 
-/// Preview attaching/replacing ONE API type binding with an exact signed package.
+/// Preview attaching/replacing ONE API type binding with exact package content.
 #[tauri::command]
 pub async fn preview_provider_runtime_interface_attach(
   state: State<'_, AppState>,

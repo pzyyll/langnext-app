@@ -1,18 +1,14 @@
-// ABOUTME: Validates and updates the signed file index for the Google Cloud staging tree.
+// ABOUTME: Validates and updates the file index for the Google Cloud staging tree.
 // ABOUTME: Keeps manifest payload paths, roles, bytes, and SHA-256 digests closed and deterministic.
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 
-const [stagingRoot, pluginDir, updateFlag, publicKeyHex] = process.argv.slice(2);
-if (!stagingRoot || !pluginDir || !publicKeyHex) {
-  throw new Error("usage: build-google-cloud-manifest.js <staging> <plugin-dir> <update:0|1> <public-key-hex>");
+const [stagingRoot, pluginDir, updateFlag] = process.argv.slice(2);
+if (!stagingRoot || !pluginDir) {
+  throw new Error("usage: build-google-cloud-manifest.js <staging> <plugin-dir> <update:0|1>");
 }
 const update = updateFlag === "1";
-const publicKey = Buffer.from(publicKeyHex, "hex");
-if (publicKey.length !== 32) {
-  throw new Error("vendor public key must be 32 bytes");
-}
 
 const manifestPath = path.join(pluginDir, "plugin.json");
 const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
@@ -37,16 +33,9 @@ if (
 ) {
   throw new Error("Google Cloud manifest identity/schema mismatch");
 }
-if (manifest.publisher?.keyId !== "com.langnext.vendor.keys.1") {
-  throw new Error("unexpected publisher key id");
-}
-const fingerprint = crypto.createHash("sha256").update(publicKey).digest("hex");
-if (manifest.publisher.keyFingerprint !== fingerprint) {
-  throw new Error("manifest publisher fingerprint does not match trust root");
-}
 const entries = new Map((manifest.files ?? []).map((entry) => [entry.path, entry]));
 if (entries.size !== expected.size || manifest.files.length !== expected.size) {
-  throw new Error("signed file index must contain exactly the required payload files");
+  throw new Error("file index must contain exactly the required payload files");
 }
 for (const [relativePath, expectedRole] of expected) {
   const entry = entries.get(relativePath);

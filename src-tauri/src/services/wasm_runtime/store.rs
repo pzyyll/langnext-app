@@ -32,7 +32,7 @@ pub const STORE_DEFAULT_EPOCH_YIELD_DELTA: u64 = 1;
 /// of fuel/epoch interruption for infinite-loop detection.
 pub const EPOCH_TICK_INTERVAL: Duration = Duration::from_millis(10);
 /// Hard upper bound on a single broker import's wall-clock duration, even when no explicit
-/// deadline is set. This matches the signed Google TTS 60-second provider grant while the
+/// deadline is set. This matches the declared Google TTS 60-second provider grant while the
 /// no-deadline default below keeps ordinary imports at 20 seconds.
 pub const BROKER_IMPORT_MAX_TIMEOUT: Duration = Duration::from_secs(60);
 /// Default per-import timeout when no explicit request deadline is set. Shorter than

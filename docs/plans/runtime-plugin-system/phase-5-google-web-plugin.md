@@ -1,5 +1,7 @@
 # Phase 5: Google Translate Web Runtime Plugin Implementation Plan
 
+> **Superseded (2026-08-24):** plugin-level signing, publisher trust, vendor bootstrap, and default-activation orchestration were removed. See `docs/architecture/plugin-catalog.md`.
+
 **Goal:** Deliver the first real installable Wasm plugin using Google Translate Web Translate/Detect while preserving explicit Bundled Rust rollback.
 
 **Inputs:** Phases 1–4 and current `google_translate_web.rs` behavior/tests.

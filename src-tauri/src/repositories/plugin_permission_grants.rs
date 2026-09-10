@@ -358,20 +358,3 @@ pub fn count_for_package(conn: &Connection, package_digest: &str) -> Result<i64,
     |row| row.get(0),
   )?)
 }
-
-/// Reject package-approval IDs used as grant-set lookups.
-pub fn reject_if_package_approval_id(conn: &Connection, id: Uuid) -> Result<(), StorageError> {
-  let is_approval: Option<i64> = conn
-    .query_row(
-      "SELECT 1 FROM plugin_package_approvals WHERE id = ?1",
-      params![id.to_string()],
-      |row| row.get(0),
-    )
-    .optional()?;
-  if is_approval.is_some() {
-    return Err(StorageError::Validation(
-      "package approval cannot authorize runtime execution".into(),
-    ));
-  }
-  Ok(())
-}

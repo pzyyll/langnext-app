@@ -1,5 +1,5 @@
 // ABOUTME: Host-owned plugin model resource status, bounded download, verify, and atomic install.
-// ABOUTME: URLs/digests/caps come only from the signed package; frontend never supplies them.
+// ABOUTME: URLs/digests/caps come only from the package content; frontend never supplies them.
 use crate::domain::plugin_model::{
   CancelPluginModelDownloadInput, DownloadPluginModelInput, MODEL_DOWNLOAD_CONNECT_TIMEOUT_MS,
   MODEL_DOWNLOAD_OVERALL_TIMEOUT_MS, MODEL_DOWNLOAD_READ_TIMEOUT_MS, ModelResourceDescriptor, PluginModelDownloadPhase,
@@ -9,7 +9,7 @@ use crate::domain::plugin_package::sha256_hex;
 use crate::domain::runtime_plugin::RuntimeKind;
 use crate::domain::time::now_rfc3339;
 use crate::error::StorageError;
-use crate::repositories::{installed_plugin_versions, integration_instances, plugin_model_resources};
+use crate::repositories::{integration_instances, plugin_model_resources};
 use crate::storage::Database;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -28,12 +28,17 @@ struct DownloadRegistry {
 pub struct PluginModelService {
   db: Database,
   app_data_dir: PathBuf,
-  /// When present, descriptors are resolved only from a vendor-root re-verified package archive.
-  plugin_packages: Option<crate::services::plugin_store::PluginPackageService>,
+  /// When present, descriptors are resolved only from the verified catalog snapshot.
+  catalog: Option<std::sync::Arc<crate::services::plugin_catalog::PluginCatalog>>,
   downloads: Arc<Mutex<DownloadRegistry>>,
   /// Optional test override: map URL → body bytes (deterministic HTTP fixture).
   #[cfg(test)]
   test_http_bodies: Arc<Mutex<HashMap<String, Vec<u8>>>>,
+  /// Optional test override: map a declared https artifact URL to a local transport URL so the
+  /// real client path (redirect rejection, stalled-body timeouts) is exercised without ever
+  /// publishing a non-https manifest.
+  #[cfg(test)]
+  test_url_rewrites: Arc<Mutex<HashMap<String, String>>>,
   /// Optional test override for overall / per-read budgets (production uses named constants).
   #[cfg(test)]
   test_timeouts: Arc<Mutex<Option<ModelDownloadTestTimeouts>>>,
@@ -53,31 +58,44 @@ impl PluginModelService {
     Self {
       db,
       app_data_dir,
-      plugin_packages: None,
+      catalog: None,
       downloads: Arc::new(Mutex::new(DownloadRegistry::default())),
       #[cfg(test)]
       test_http_bodies: Arc::new(Mutex::new(HashMap::new())),
+      #[cfg(test)]
+      test_url_rewrites: Arc::new(Mutex::new(HashMap::new())),
       #[cfg(test)]
       test_timeouts: Arc::new(Mutex::new(None)),
     }
   }
 
-  /// Production constructor: model descriptors come only from vendor-root re-verified packages.
-  pub fn with_packages(
+  /// Production constructor: model descriptors come only from immutable catalog snapshots.
+  pub fn with_catalog(
     db: Database,
     app_data_dir: PathBuf,
-    plugin_packages: crate::services::plugin_store::PluginPackageService,
+    catalog: std::sync::Arc<crate::services::plugin_catalog::PluginCatalog>,
   ) -> Self {
     Self {
       db,
       app_data_dir,
-      plugin_packages: Some(plugin_packages),
+      catalog: Some(catalog),
       downloads: Arc::new(Mutex::new(DownloadRegistry::default())),
       #[cfg(test)]
       test_http_bodies: Arc::new(Mutex::new(HashMap::new())),
       #[cfg(test)]
+      test_url_rewrites: Arc::new(Mutex::new(HashMap::new())),
+      #[cfg(test)]
       test_timeouts: Arc::new(Mutex::new(None)),
     }
+  }
+
+  #[cfg(test)]
+  pub fn set_test_url_rewrite(&self, declared_url: &str, actual_url: &str) {
+    self
+      .test_url_rewrites
+      .lock()
+      .expect("test url rewrite lock")
+      .insert(declared_url.to_string(), actual_url.to_string());
   }
 
   #[cfg(test)]
@@ -156,37 +174,40 @@ impl PluginModelService {
     Ok(out)
   }
 
-  /// Resolve model resource descriptors from a vendor-root re-verified package when available.
-  /// Mutable DB `manifest_json` is never trusted when a package service is configured.
+  /// Resolve model resource descriptors from the catalog snapshot when available.
+  /// Mutable DB `manifest_json` is never trusted when the catalog is configured.
   fn resolve_model_resources(&self, package_digest: &str) -> Result<Vec<ModelResourceDescriptor>, StorageError> {
     let version = self.db.read(|conn| {
-      installed_plugin_versions::get(conn, package_digest).map_err(|err| match err {
-        StorageError::NotFound(_) => StorageError::Validation(PluginModelErrorCode::StalePackage.as_str().into()),
-        other => other,
-      })
+      crate::services::plugin_catalog::resolve_pinned_content(self.catalog.as_deref(), conn, package_digest).map_err(
+        |err| match err {
+          StorageError::NotFound(_) => StorageError::Validation(PluginModelErrorCode::StalePackage.as_str().into()),
+          other => other,
+        },
+      )
     })?;
-    if !version.content_available {
+    let Some(version) = version else {
       return Err(StorageError::Validation(
         PluginModelErrorCode::StalePackage.as_str().into(),
       ));
-    }
-    let manifest = if let Some(packages) = &self.plugin_packages {
+    };
+    let _ = &version;
+    let manifest = if let Some(packages) = &self.catalog {
       let verified = packages
-        .verify_installed_package_snapshot(package_digest)
-        .map_err(|err| StorageError::Validation(format!("model descriptor re-verify failed: {err}")))?;
-      if verified.package_digest != package_digest {
+        .snapshot(package_digest)
+        .map_err(|err| StorageError::Validation(format!("model descriptor lookup failed: {err}")))?;
+      if verified.descriptor.content_digest != package_digest {
         return Err(StorageError::Validation(
           "model descriptor package digest drifted".into(),
         ));
       }
       verified.manifest
     } else {
-      // Unit-test / recovery path without a package service: still require vendor publisher,
-      // but production composition always injects plugin_packages via with_packages().
+      // Unit-test recovery path without the catalog: parse the stored manifest. Production
+      // composition always injects the catalog.
       #[cfg(not(test))]
       {
         return Err(StorageError::Validation(
-          "model descriptor resolution requires vendor package re-verification".into(),
+          "model descriptor resolution requires the plugin catalog".into(),
         ));
       }
       #[cfg(test)]
@@ -228,7 +249,7 @@ impl PluginModelService {
     })
   }
 
-  /// Explicit download of one signed model resource. Progress is reported through the callback.
+  /// Explicit download of one model resource. Progress is reported through the callback.
   pub fn download_model<F>(
     &self,
     input: DownloadPluginModelInput,
@@ -618,6 +639,16 @@ impl PluginModelService {
       .map_err(|_| PluginModelErrorCode::ModelFailed)?;
 
     let client = build_model_download_async_client(connect_timeout).map_err(|_| PluginModelErrorCode::ModelFailed)?;
+    #[cfg(test)]
+    let url = {
+      let rewritten = self
+        .test_url_rewrites
+        .lock()
+        .expect("test url rewrite lock")
+        .get(url)
+        .cloned();
+      rewritten.unwrap_or_else(|| url.to_string())
+    };
     let url_owned = url.to_string();
     let operation_id_owned = operation_id.to_string();
     let expected_sha = expected_sha256.to_string();
@@ -1048,15 +1079,17 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), std::io::Error> {
 mod tests {
   use super::*;
   use crate::domain::native_worker::{NATIVE_PROTOCOL_VERSION_V1, NATIVE_WORKER_ARTIFACT_PATH, PADDLEOCR_PLUGIN_ID};
+  use crate::domain::plugin_catalog::sha256_hex;
   use crate::domain::plugin_model::paddleocr_medium_model_resource;
-  use crate::domain::plugin_package::{InstalledPluginVersion, sha256_hex};
   use crate::domain::runtime_plugin::{
     CapabilityDeclaration, FileRole, PackageTargetConstraint, PermissionRequests, PluginFileEntry, PluginManifestV1,
-    PublisherDeclaration, RuntimeDescriptor, RuntimeKind,
+    RuntimeDescriptor, RuntimeKind,
   };
   use crate::domain::service_integration::{IntegrationHealthStatus, IntegrationInstance};
-  use crate::services::vendor_trust::{VENDOR_PUBLISHER_KEY_ID, test_vendor_fixture};
+  use crate::services::plugin_catalog::PluginCatalog;
+  use crate::services::test_support::{add_builtin_fixture, catalog_with_manifest_fixtures, fixture_digest};
   use crate::storage::Database;
+  use std::sync::Arc;
   use tempfile::TempDir;
 
   const LICENSE_NOTICE: &str = "licenses/NOTICE.txt";
@@ -1080,10 +1113,6 @@ mod tests {
       plugin_api_version: "1.0".into(),
       id: PADDLEOCR_PLUGIN_ID.into(),
       version: "1.0.0".into(),
-      publisher: PublisherDeclaration {
-        key_id: VENDOR_PUBLISHER_KEY_ID.into(),
-        key_fingerprint: test_vendor_fixture::fixture_vendor_fingerprint(),
-      },
       runtime: RuntimeDescriptor {
         kind: RuntimeKind::TrustedNativeWorker,
         artifact: Some(NATIVE_WORKER_ARTIFACT_PATH.into()),
@@ -1139,42 +1168,19 @@ mod tests {
     }
   }
 
+  /// Indexed payloads for the synthetic PaddleOCR manifest.
+  fn paddleocr_payloads() -> Vec<(String, Vec<u8>)> {
+    vec![
+      (NATIVE_WORKER_ARTIFACT_PATH.to_string(), WORKER_BYTES.to_vec()),
+      (DLL_A.to_string(), DLL_A_BYTES.to_vec()),
+      (DLL_B.to_string(), DLL_B_BYTES.to_vec()),
+      (LICENSE_NOTICE.to_string(), LICENSE_TEXT.to_vec()),
+    ]
+  }
+
   fn seed_paddleocr_instance(db: &Database, package_digest: &str) -> Uuid {
-    use crate::domain::plugin_package::{PluginPublisher, PublisherSource};
-    use crate::repositories::plugin_publishers;
-    let manifest = paddleocr_manifest();
-    let manifest_json = serde_json::to_string(&manifest).unwrap();
     let now = now_rfc3339();
     db.write(|conn| {
-      plugin_publishers::insert(
-        conn,
-        &PluginPublisher {
-          key_id: VENDOR_PUBLISHER_KEY_ID.into(),
-          fingerprint: test_vendor_fixture::fixture_vendor_fingerprint(),
-          public_key_hex: test_vendor_fixture::fixture_vendor_public_key_hex(),
-          source: PublisherSource::Vendor,
-          enabled: true,
-          revoked: false,
-          created_at: now.clone(),
-          updated_at: now.clone(),
-        },
-      )?;
-      installed_plugin_versions::insert(
-        conn,
-        &InstalledPluginVersion {
-          package_digest: package_digest.into(),
-          plugin_id: PADDLEOCR_PLUGIN_ID.into(),
-          version: "1.0.0".into(),
-          publisher_key_id: VENDOR_PUBLISHER_KEY_ID.into(),
-          publisher_fingerprint: test_vendor_fixture::fixture_vendor_fingerprint(),
-          signature_status: crate::domain::plugin_package::PackageSignatureStatus::Signed,
-          runtime_kind: "trusted-native-worker".into(),
-          manifest_json,
-          permission_request_digest: "a".repeat(64),
-          content_available: true,
-          installed_at: now.clone(),
-        },
-      )?;
       let id = Uuid::now_v7();
       integration_instances::insert(
         conn,
@@ -1209,9 +1215,15 @@ mod tests {
   fn plugin_model_status_reports_missing_without_side_effects() {
     let dir = TempDir::new().unwrap();
     let db = test_db(dir.path());
-    let package_digest = "b".repeat(64);
+    let catalog = catalog_with_manifest_fixtures(
+      db.clone(),
+      dir.path(),
+      &[],
+      &[(paddleocr_manifest(), paddleocr_payloads())],
+    );
+    let package_digest = fixture_digest(&catalog, PADDLEOCR_PLUGIN_ID);
     let instance_id = seed_paddleocr_instance(&db, &package_digest);
-    let service = PluginModelService::new(db, dir.path().to_path_buf());
+    let service = PluginModelService::with_catalog(db, dir.path().to_path_buf(), catalog.clone());
 
     let list = service
       .list_for_instance(&instance_id.to_string())
@@ -1282,6 +1294,8 @@ mod tests {
 
   struct MiniModelFixture {
     service: PluginModelService,
+    catalog: Arc<PluginCatalog>,
+    db: Database,
     instance_id: Uuid,
     package_digest: String,
     det_url: String,
@@ -1291,14 +1305,51 @@ mod tests {
     _dir: TempDir,
   }
 
+  /// Publish one manifest variant as built-in catalog content and re-pin the fixture instance.
+  /// The same plugin id/version directory is replaced, so the catalog keeps one entry.
+  fn publish_mini_model(fixture: &MiniModelFixture, manifest: &PluginManifestV1) -> String {
+    let digest = add_builtin_fixture(&fixture.catalog, manifest, &paddleocr_payloads());
+    fixture
+      .db
+      .write(|conn| {
+        conn.execute(
+          "UPDATE integration_instances SET package_digest = ?1 WHERE id = ?2",
+          rusqlite::params![digest, fixture.instance_id.to_string()],
+        )?;
+        Ok(())
+      })
+      .unwrap();
+    digest
+  }
+
   fn install_mini_model_manifest(
-    service: &PluginModelService,
-    package_digest: &str,
+    fixture: &MiniModelFixture,
     det_tar: &[u8],
     rec_tar: &[u8],
     det_files: &[(&str, &[u8])],
     rec_files: &[(&str, &[u8])],
   ) -> (String, String) {
+    let manifest = mini_model_manifest(det_tar, rec_tar, det_files, rec_files, |_| {});
+    let model = manifest
+      .model_resources
+      .as_ref()
+      .expect("mini model resources")
+      .first()
+      .expect("first model resource");
+    let det_url = model.artifacts[0].url.clone();
+    let rec_url = model.artifacts[1].url.clone();
+    publish_mini_model(fixture, &manifest);
+    (det_url, rec_url)
+  }
+
+  /// Build one mini-model manifest variant over the base PaddleOCR content.
+  fn mini_model_manifest(
+    det_tar: &[u8],
+    rec_tar: &[u8],
+    det_files: &[(&str, &[u8])],
+    rec_files: &[(&str, &[u8])],
+    customize: impl FnOnce(&mut crate::domain::plugin_model::ModelResourceDescriptor),
+  ) -> PluginManifestV1 {
     let mut manifest = paddleocr_manifest();
     let mut model = paddleocr_medium_model_resource(LICENSE_NOTICE);
     model.artifacts[0].bytes = det_tar.len() as u64;
@@ -1325,39 +1376,38 @@ mod tests {
     model.files = files;
     model.total_download_bytes = model.artifacts.iter().map(|a| a.bytes).sum();
     model.expanded_bytes = model.files.iter().map(|f| f.bytes).sum();
-    let det_url = model.artifacts[0].url.clone();
-    let rec_url = model.artifacts[1].url.clone();
+    customize(&mut model);
     manifest.model_resources = Some(vec![model]);
-    let manifest_json = serde_json::to_string(&manifest).unwrap();
-    service
-      .db
-      .write(|conn| {
-        conn.execute(
-          "UPDATE installed_plugin_versions SET manifest_json = ?1 WHERE package_digest = ?2",
-          rusqlite::params![manifest_json, package_digest],
-        )?;
-        Ok(())
-      })
-      .unwrap();
-    (det_url, rec_url)
+    manifest
   }
 
   fn mini_model_fixture() -> MiniModelFixture {
     let dir = TempDir::new().unwrap();
     let db = test_db(dir.path());
-    let package_digest = "c".repeat(64);
-    let instance_id = seed_paddleocr_instance(&db, &package_digest);
-    let service = PluginModelService::new(db, dir.path().to_path_buf());
     let det_files = [(DET_PATH, DET_BYTES)];
     let rec_files = [(REC_PATH, REC_BYTES)];
     let det_tar = build_tar_with_files(&det_files);
     let rec_tar = build_tar_with_files(&rec_files);
-    let (det_url, rec_url) =
-      install_mini_model_manifest(&service, &package_digest, &det_tar, &rec_tar, &det_files, &rec_files);
+    let manifest = mini_model_manifest(&det_tar, &rec_tar, &det_files, &rec_files, |_| {});
+    let catalog =
+      catalog_with_manifest_fixtures(db.clone(), dir.path(), &[], &[(manifest.clone(), paddleocr_payloads())]);
+    let package_digest = fixture_digest(&catalog, PADDLEOCR_PLUGIN_ID);
+    let instance_id = seed_paddleocr_instance(&db, &package_digest);
+    let service = PluginModelService::with_catalog(db.clone(), dir.path().to_path_buf(), catalog.clone());
+    let model = manifest
+      .model_resources
+      .as_ref()
+      .expect("mini model resources")
+      .first()
+      .expect("first model resource");
+    let det_url = model.artifacts[0].url.clone();
+    let rec_url = model.artifacts[1].url.clone();
     service.set_test_http_body(&det_url, det_tar.clone());
     service.set_test_http_body(&rec_url, rec_tar.clone());
     MiniModelFixture {
       service,
+      catalog,
+      db,
       instance_id,
       package_digest,
       det_url,
@@ -1476,11 +1526,9 @@ mod tests {
       }
     });
 
-    let dir = TempDir::new().unwrap();
-    let db = test_db(dir.path());
-    let package_digest = "d".repeat(64);
-    let instance_id = seed_paddleocr_instance(&db, &package_digest);
-    let service = PluginModelService::new(db, dir.path().to_path_buf());
+    let fixture = mini_model_fixture();
+    let instance_id = fixture.instance_id;
+    let service = fixture.service.clone();
     let det_files = [(DET_PATH, DET_BYTES)];
     let rec_files = [(REC_PATH, REC_BYTES)];
     let det_tar = build_tar_with_files(&det_files);
@@ -1488,9 +1536,10 @@ mod tests {
     let redirect_url = format!("http://{addr}/det.tar");
     let mut manifest = paddleocr_manifest();
     let mut model = paddleocr_medium_model_resource(LICENSE_NOTICE);
-    // Signed package metadata still pins HTTPS in production; this unit fixture rewrites the
-    // installed manifest URL to a local redirect responder to prove the transport rejects 3xx.
-    model.artifacts[0].url = redirect_url;
+    // Catalog metadata keeps the production https URL; the test-only transport rewrite sends
+    // that request to a local redirect responder to prove the transport rejects 3xx.
+    model.artifacts[0].url = "https://models.example/det-redirect.tar".into();
+    service.set_test_url_rewrite(&model.artifacts[0].url, &redirect_url);
     model.artifacts[0].bytes = det_tar.len() as u64;
     model.artifacts[0].sha256 = sha256_hex(&det_tar);
     model.artifacts[1].bytes = rec_tar.len() as u64;
@@ -1513,17 +1562,7 @@ mod tests {
     model.expanded_bytes = model.files.iter().map(|f| f.bytes).sum();
     let rec_url = model.artifacts[1].url.clone();
     manifest.model_resources = Some(vec![model]);
-    let manifest_json = serde_json::to_string(&manifest).unwrap();
-    service
-      .db
-      .write(|conn| {
-        conn.execute(
-          "UPDATE installed_plugin_versions SET manifest_json = ?1 WHERE package_digest = ?2",
-          rusqlite::params![manifest_json, package_digest],
-        )?;
-        Ok(())
-      })
-      .unwrap();
+    publish_mini_model(&fixture, &manifest);
     // Do not inject a test body for the redirect URL so the real HTTP client path is exercised.
     service.set_test_http_body(&rec_url, rec_tar);
 
@@ -1583,8 +1622,7 @@ mod tests {
     let rec_files = [(REC_PATH, REC_BYTES)];
     let rec_tar = build_tar_with_files(&rec_files);
     let (det_url, rec_url) = install_mini_model_manifest(
-      &fixture.service,
-      &fixture.package_digest,
+      &fixture,
       &evil,
       &rec_tar,
       // Descriptor allowlist still uses the legitimate path; archive contains only escape path.
@@ -1615,14 +1653,8 @@ mod tests {
     let evil = build_tar_with_symlink(DET_PATH, "/tmp/evil");
     let rec_files = [(REC_PATH, REC_BYTES)];
     let rec_tar = build_tar_with_files(&rec_files);
-    let (det_url, rec_url) = install_mini_model_manifest(
-      &fixture.service,
-      &fixture.package_digest,
-      &evil,
-      &rec_tar,
-      &[(DET_PATH, DET_BYTES)],
-      &rec_files,
-    );
+    let (det_url, rec_url) =
+      install_mini_model_manifest(&fixture, &evil, &rec_tar, &[(DET_PATH, DET_BYTES)], &rec_files);
     fixture.service.set_test_http_body(&det_url, evil);
     fixture.service.set_test_http_body(&rec_url, rec_tar);
     let err = fixture
@@ -1650,14 +1682,8 @@ mod tests {
     ]);
     let rec_files = [(REC_PATH, REC_BYTES)];
     let rec_tar = build_tar_with_files(&rec_files);
-    let (det_url, rec_url) = install_mini_model_manifest(
-      &fixture.service,
-      &fixture.package_digest,
-      &evil,
-      &rec_tar,
-      &[(DET_PATH, DET_BYTES)],
-      &rec_files,
-    );
+    let (det_url, rec_url) =
+      install_mini_model_manifest(&fixture, &evil, &rec_tar, &[(DET_PATH, DET_BYTES)], &rec_files);
     fixture.service.set_test_http_body(&det_url, evil);
     fixture.service.set_test_http_body(&rec_url, rec_tar);
     let err = fixture
@@ -1682,14 +1708,8 @@ mod tests {
     let evil = build_tar_with_files(&[(DET_PATH, DET_BYTES), (DET_PATH, DET_BYTES)]);
     let rec_files = [(REC_PATH, REC_BYTES)];
     let rec_tar = build_tar_with_files(&rec_files);
-    let (det_url, rec_url) = install_mini_model_manifest(
-      &fixture.service,
-      &fixture.package_digest,
-      &evil,
-      &rec_tar,
-      &[(DET_PATH, DET_BYTES)],
-      &rec_files,
-    );
+    let (det_url, rec_url) =
+      install_mini_model_manifest(&fixture, &evil, &rec_tar, &[(DET_PATH, DET_BYTES)], &rec_files);
     fixture.service.set_test_http_body(&det_url, evil);
     fixture.service.set_test_http_body(&rec_url, rec_tar);
     let err = fixture
@@ -1714,14 +1734,8 @@ mod tests {
     let evil = build_tar_with_mode(DET_PATH, DET_BYTES, 0o755);
     let rec_files = [(REC_PATH, REC_BYTES)];
     let rec_tar = build_tar_with_files(&rec_files);
-    let (det_url, rec_url) = install_mini_model_manifest(
-      &fixture.service,
-      &fixture.package_digest,
-      &evil,
-      &rec_tar,
-      &[(DET_PATH, DET_BYTES)],
-      &rec_files,
-    );
+    let (det_url, rec_url) =
+      install_mini_model_manifest(&fixture, &evil, &rec_tar, &[(DET_PATH, DET_BYTES)], &rec_files);
     fixture.service.set_test_http_body(&det_url, evil);
     fixture.service.set_test_http_body(&rec_url, rec_tar);
     let err = fixture
@@ -1742,63 +1756,30 @@ mod tests {
 
   #[test]
   fn plugin_model_download_rejects_expanded_size_overflow() {
-    let fixture = mini_model_fixture();
-    // Declare expanded_bytes smaller than actual file sizes so verification fails closed.
+    // A manifest that declares fewer expanded bytes than its own file set is rejected at
+    // catalog ingestion, so no download can ever run against an under-declared budget.
     let det_files = [(DET_PATH, DET_BYTES)];
     let rec_files = [(REC_PATH, REC_BYTES)];
     let det_tar = build_tar_with_files(&det_files);
     let rec_tar = build_tar_with_files(&rec_files);
-    let mut manifest = paddleocr_manifest();
-    let mut model = paddleocr_medium_model_resource(LICENSE_NOTICE);
-    model.artifacts[0].bytes = det_tar.len() as u64;
-    model.artifacts[0].sha256 = sha256_hex(&det_tar);
-    model.artifacts[1].bytes = rec_tar.len() as u64;
-    model.artifacts[1].sha256 = sha256_hex(&rec_tar);
-    model.files = vec![
-      crate::domain::plugin_model::ModelFileDescriptor {
-        path: DET_PATH.into(),
-        role: crate::domain::plugin_model::ModelFileRole::Detection,
-        bytes: DET_BYTES.len() as u64,
-        sha256: sha256_hex(DET_BYTES),
-      },
-      crate::domain::plugin_model::ModelFileDescriptor {
-        path: REC_PATH.into(),
-        role: crate::domain::plugin_model::ModelFileRole::Recognition,
-        bytes: REC_BYTES.len() as u64,
-        sha256: sha256_hex(REC_BYTES),
-      },
-    ];
-    model.total_download_bytes = model.artifacts.iter().map(|a| a.bytes).sum();
-    model.expanded_bytes = 1; // intentional underflow vs real expanded total
-    let det_url = model.artifacts[0].url.clone();
-    let rec_url = model.artifacts[1].url.clone();
-    manifest.model_resources = Some(vec![model]);
-    let manifest_json = serde_json::to_string(&manifest).unwrap();
-    fixture
-      .service
-      .db
-      .write(|conn| {
-        conn.execute(
-          "UPDATE installed_plugin_versions SET manifest_json = ?1 WHERE package_digest = ?2",
-          rusqlite::params![manifest_json, fixture.package_digest],
-        )?;
-        Ok(())
-      })
-      .unwrap();
-    fixture.service.set_test_http_body(&det_url, det_tar);
-    fixture.service.set_test_http_body(&rec_url, rec_tar);
-    let err = fixture
-      .service
-      .download_model(
-        DownloadPluginModelInput {
-          instance_id: fixture.instance_id.to_string(),
-          model_id: "pp-ocrv6-medium".into(),
-        },
-        |_| {},
-      )
-      .expect_err("expanded size overflow");
+    let manifest = mini_model_manifest(&det_tar, &rec_tar, &det_files, &rec_files, |model| {
+      model.expanded_bytes = 1; // intentional underflow vs real expanded total
+    });
+    let root = TempDir::new().unwrap();
+    let plugin_dir = root.path().join("plugin");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    std::fs::write(plugin_dir.join("plugin.json"), serde_json::to_vec(&manifest).unwrap()).unwrap();
+    for (path, bytes) in paddleocr_payloads() {
+      let target = plugin_dir.join(&path);
+      std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+      std::fs::write(target, bytes).unwrap();
+    }
+    let loader = crate::services::plugin_loader::PluginLoader::new(root.path().join("cache"));
+    let err = loader
+      .load_directory(crate::domain::plugin_catalog::PluginSource::BuiltIn, &plugin_dir)
+      .expect_err("under-declared expanded bytes must fail catalog ingestion");
     assert!(
-      download_err_code(&err).contains("size_exceeded"),
+      err.message.contains("expandedBytes must equal sum of file bytes"),
       "unexpected err: {err:?}"
     );
   }
@@ -1896,9 +1877,8 @@ mod tests {
 
   #[test]
   fn plugin_model_status_unknown_instance_fails_closed() {
-    let dir = TempDir::new().unwrap();
-    let db = test_db(dir.path());
-    let service = PluginModelService::new(db, dir.path().to_path_buf());
+    let fixture = mini_model_fixture();
+    let service = fixture.service.clone();
     let err = service
       .list_for_instance(&Uuid::now_v7().to_string())
       .expect_err("unknown instance");
@@ -1937,8 +1917,7 @@ mod tests {
     let evil = build_tar_with_hard_link(DET_PATH, "/tmp/evil");
     let rec_tar = fixture.rec_tar.clone();
     let (det_url, rec_url) = install_mini_model_manifest(
-      &fixture.service,
-      &fixture.package_digest,
+      &fixture,
       &evil,
       &rec_tar,
       &[(DET_PATH, DET_BYTES)],
@@ -2414,17 +2393,16 @@ mod tests {
       }
     });
 
-    let dir = TempDir::new().unwrap();
-    let db = test_db(dir.path());
-    let package_digest = "e".repeat(64);
-    let instance_id = seed_paddleocr_instance(&db, &package_digest);
-    let service = PluginModelService::new(db, dir.path().to_path_buf());
+    let fixture = mini_model_fixture();
+    let instance_id = fixture.instance_id;
+    let service = fixture.service.clone();
     service.set_test_timeouts(Duration::from_secs(10), Duration::from_secs(10), Duration::from_secs(2));
 
     let stall_url = format!("http://{addr}/det-stall.tar");
     let mut manifest = paddleocr_manifest();
     let mut model = paddleocr_medium_model_resource(LICENSE_NOTICE);
-    model.artifacts[0].url = stall_url;
+    model.artifacts[0].url = "https://models.example/det-stall.tar".into();
+    service.set_test_url_rewrite(&model.artifacts[0].url, &stall_url);
     model.artifacts[0].bytes = 1_048_576;
     model.artifacts[0].sha256 = "a".repeat(64);
     model.artifacts[1].bytes = 1;
@@ -2438,17 +2416,7 @@ mod tests {
     model.total_download_bytes = model.artifacts.iter().map(|a| a.bytes).sum();
     model.expanded_bytes = 1;
     manifest.model_resources = Some(vec![model]);
-    let manifest_json = serde_json::to_string(&manifest).unwrap();
-    service
-      .db
-      .write(|conn| {
-        conn.execute(
-          "UPDATE installed_plugin_versions SET manifest_json = ?1 WHERE package_digest = ?2",
-          rusqlite::params![manifest_json, package_digest],
-        )?;
-        Ok(())
-      })
-      .unwrap();
+    publish_mini_model(&fixture, &manifest);
 
     let service_for_cancel = service.clone();
     let instance_for_cancel = instance_id;
@@ -2523,7 +2491,7 @@ mod tests {
       "status after cancel must not stay downloading/ready, got {:?}",
       listed[0].status
     );
-    let staging_root = dir.path().join("plugin-models").join("staging");
+    let staging_root = fixture._dir.path().join("plugin-models").join("staging");
     if staging_root.exists() {
       let leftover = std::fs::read_dir(&staging_root)
         .map(|rd| rd.filter_map(|e| e.ok()).count())
@@ -2567,11 +2535,9 @@ mod tests {
       }
     });
 
-    let dir = TempDir::new().unwrap();
-    let db = test_db(dir.path());
-    let package_digest = "f".repeat(64);
-    let instance_id = seed_paddleocr_instance(&db, &package_digest);
-    let service = PluginModelService::new(db, dir.path().to_path_buf());
+    let fixture = mini_model_fixture();
+    let instance_id = fixture.instance_id;
+    let service = fixture.service.clone();
     // Overall shorter than read: production stream must bound by overall, not hang on read.
     service.set_test_timeouts(
       Duration::from_millis(400),
@@ -2582,7 +2548,8 @@ mod tests {
     let stall_url = format!("http://{addr}/det-overall.tar");
     let mut manifest = paddleocr_manifest();
     let mut model = paddleocr_medium_model_resource(LICENSE_NOTICE);
-    model.artifacts[0].url = stall_url;
+    model.artifacts[0].url = "https://models.example/det-overall.tar".into();
+    service.set_test_url_rewrite(&model.artifacts[0].url, &stall_url);
     model.artifacts[0].bytes = 1_048_576;
     model.artifacts[0].sha256 = "b".repeat(64);
     model.artifacts[1].bytes = 1;
@@ -2596,17 +2563,7 @@ mod tests {
     model.total_download_bytes = model.artifacts.iter().map(|a| a.bytes).sum();
     model.expanded_bytes = 1;
     manifest.model_resources = Some(vec![model]);
-    let manifest_json = serde_json::to_string(&manifest).unwrap();
-    service
-      .db
-      .write(|conn| {
-        conn.execute(
-          "UPDATE installed_plugin_versions SET manifest_json = ?1 WHERE package_digest = ?2",
-          rusqlite::params![manifest_json, package_digest],
-        )?;
-        Ok(())
-      })
-      .unwrap();
+    publish_mini_model(&fixture, &manifest);
 
     let started = Instant::now();
     let err = service
@@ -2651,7 +2608,7 @@ mod tests {
       "status after overall must not stay downloading/ready, got {:?}",
       listed[0].status
     );
-    let staging_root = dir.path().join("plugin-models").join("staging");
+    let staging_root = fixture._dir.path().join("plugin-models").join("staging");
     if staging_root.exists() {
       let leftover = std::fs::read_dir(&staging_root)
         .map(|rd| rd.filter_map(|e| e.ok()).count())
