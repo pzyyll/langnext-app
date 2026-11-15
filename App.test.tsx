@@ -23,6 +23,47 @@ test("opens Home by default and switches between sidebar destinations", async ()
   expect(app.count("id:home-page")).toBe(1);
 });
 
+test("opens About from the app menu and closes it with OK", async () => {
+  const app = await open("./App.tsx", viewport);
+  expect(app.shows("id:about-dialog")).toBe(false);
+  expect(app.shows("role:menuitem[About]")).toBe(false);
+
+  await app.press("role:button[App menu]");
+  await app.waitFor("role:menuitem[About]");
+  await app.press("role:menuitem[About]");
+  await app.waitFor("role:dialog[About My Translator]");
+  expect(app.shows("role:menuitem[About]")).toBe(false);
+  expect(app.texts()).toContain("My Translator");
+  expect(app.texts()).toContain("Version 0.1.0");
+
+  await app.press("role:button[OK]");
+  await app.waitUntil(() => !app.shows("id:about-dialog"));
+  expect(app.shows("id:home-page")).toBe(true);
+});
+
+test("dismisses the app menu and can reopen About after Escape", async () => {
+  const app = await open("./App.tsx", {
+    ...viewport,
+    width: 720,
+    height: 520,
+    colorScheme: "dark",
+    reducedMotion: true,
+  });
+  await app.press("role:button[App menu]");
+  await app.keyboard.press("escape");
+  await app.waitUntil(() => !app.shows("role:menuitem[About]"));
+  expect(app.shows("id:about-dialog")).toBe(false);
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await app.press("role:button[App menu]");
+    await app.press("role:menuitem[About]");
+    await app.waitFor("id:about-dialog");
+    await app.keyboard.press("escape");
+    await app.waitUntil(() => !app.shows("id:about-dialog"));
+  }
+  expect(app.shows("id:home-page")).toBe(true);
+});
+
 test("does not switch sidebar destinations with removed keyboard shortcuts", async () => {
   const app = await open("./App.tsx", viewport);
   for (const shortcut of ["mod+,", "mod+1"]) {

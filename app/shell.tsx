@@ -1,6 +1,7 @@
-import { signal, Text, View } from "nsh";
+import { signal, View } from "nsh";
 import { titleBar, Tray, Window } from "nsh/desktop";
 import trayIcon from "../assets/logos/tray.svg";
+import { AppMenu } from "../components/app-menu";
 import { PageSurface } from "../components/page-surface";
 import { Sidebar, type SidebarPage } from "../components/sidebar";
 import { HomePage } from "../features/home/page";
@@ -39,11 +40,13 @@ export function AppShell() {
         class="flex-row items-center border-b border-sidebar-border bg-sidebar"
         style={{
           height: Math.max(TITLE_BAR_HEIGHT, titleBar().height),
-          paddingLeft: Math.max(20, titleBar().left + 12),
+          paddingLeft: titleBar().left,
           paddingRight: titleBar().right + 16,
         }}
       >
-        <Text class="text-sm font-medium text-sidebar-foreground">My Translator</Text>
+        <View class="w-13 shrink-0 items-center">
+          <AppMenu />
+        </View>
       </View>
       <View class="flex-1 flex-row">
         <Sidebar
