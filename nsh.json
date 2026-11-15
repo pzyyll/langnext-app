@@ -1,0 +1,27 @@
+{
+  "name": "My Translator",
+  "id": "com.dev.mytranslator",
+  "version": "0.1.0",
+  "build": 1,
+  "rust": ".",
+  "theme": "theme.json",
+  "tailwind": {
+    "radius": { "sidebar": 10 }
+  },
+  "appearance": "system",
+  "window": {
+    "title": "My Translator",
+    "defaultSize": {
+      "width": 1040,
+      "height": 720
+    },
+    "minSize": {
+      "width": 720,
+      "height": 520
+    },
+    "titleBar": {
+      "style": "hidden",
+      "height": 42
+    }
+  }
+}

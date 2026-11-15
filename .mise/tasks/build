@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+#MISE description="Build the release bundle."
+set -euo pipefail
+
+nsh build . --release "$@"

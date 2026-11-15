@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+#MISE description="Run all project checks."
+set -euo pipefail
+
+mise run format-check
+mise run lint
+mise run check
+mise run test
+mise run build

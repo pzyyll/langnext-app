@@ -1,0 +1,11 @@
+{
+  "name": "my-translator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "oxfmt": "0.78.0",
+    "oxlint": "1.93.0"
+  },
+  "packageManager": "pnpm@12.18.0"
+}

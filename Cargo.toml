@@ -1,0 +1,10 @@
+[package]
+name = "my-translator"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+nsh-core = "=0.5.1"

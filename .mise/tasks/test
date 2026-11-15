@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+#MISE description="Run Rust and headless UI tests."
+set -euo pipefail
+
+nsh test . "$@"

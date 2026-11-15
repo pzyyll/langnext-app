@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+#MISE description="Check Rust and TypeScript."
+set -euo pipefail
+
+nsh check . "$@"

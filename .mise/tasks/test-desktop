@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+#MISE description="Run the UI tests on the current desktop."
+set -euo pipefail
+
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) target=windows ;;
+  Darwin) target=macos ;;
+  Linux) target=linux ;;
+  *) echo "Unsupported desktop platform" >&2; exit 1 ;;
+esac
+nsh test . --target "$target" "$@"

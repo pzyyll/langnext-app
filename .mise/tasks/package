@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+#MISE description="Package the desktop application."
+set -euo pipefail
+
+nsh package . "$@"

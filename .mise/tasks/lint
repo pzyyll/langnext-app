@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+#MISE description="Lint TypeScript and Rust."
+set -euo pipefail
+
+pnpm exec oxlint .
+cargo clippy --all-targets -- -D warnings

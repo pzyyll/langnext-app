@@ -1,0 +1,287 @@
+# Native Shell
+
+> Native Shell is a Rust-first native UI framework: build one app for iOS, Android, macOS, Windows, Linux and the web, with each platform’s own UI and interaction.
+
+Apps are written in Rust (compiled to native code) or TSX (run by QuickJS, and by the browser's JavaScript engine on the web), or both, on one native Rust runtime; the toolchain is the single `nsh` binary (`nsh init my-app --template rust|ts`, `nsh run my-app`, `nsh package my-app --target <target>`). Every page below is also served as Markdown at its URL plus `.md`.
+
+## Docs
+
+- [Introduction](https://nsh.dev/docs.md): What Native Shell is: a Rust-first native UI framework for iOS, Android, macOS, Windows, Linux and the web, with each platform's own UI and interaction.
+- [Goals and design principles](https://nsh.dev/docs/goals.md): Native Shell's goals: native views and interaction, app-owned design, shared components, and Rust and TSX on one engine.
+- [Comparing approaches](https://nsh.dev/docs/comparison.md): How Native Shell compares with React Native, Flutter, Qt, GPUI and Slint, with Electron and Tauri, and with web views and server-driven UI for UI delivered after release.
+- [Installation](https://nsh.dev/docs/installation.md): Get the NSH command, from a prebuilt distribution or a source checkout, and the tools each platform needs - iOS, Android, macOS, Windows and Linux.
+- [Getting started](https://nsh.dev/docs/getting-started.md): Create an app in Rust or TSX with nsh init, run it on iOS, Android, macOS, Windows, Linux or the web, host TSX modules in your app and ship them as signed packages, or package the app on its own.
+- [Project structure](https://nsh.dev/docs/project-structure.md): The files of an NSH app in Rust or TSX, every key of nsh.json, the TypeScript setup in .nsh/types, assets, and how modules and packages are imported.
+- [Building with Rust](https://nsh.dev/docs/rust.md): Write a Native Shell app entirely in Rust, with no QuickJS on any platform, or in Rust with TSX screens on top: when to choose which, and how the two share components and modules.
+- [CLI](https://nsh.dev/docs/cli.md): Every NSH subcommand and flag - init, build, test, check, dev, run, package, and the signing commands keygen, certify, publish, verify, symbolicate and revoke.
+- [Platform overview](https://nsh.dev/docs/platforms.md): Where NSH runs: iOS, Android, macOS, Windows, Linux, GPUI, the terminal and the web, each with its own backend; how to run, package and embed a Rust or TSX app on each, and what each needs.
+- [iOS](https://nsh.dev/docs/ios.md): Run Rust and TSX NSH apps on iOS with UIKit views, in the simulator or on devices, package them as .app and .ipa, and embed them in an existing iOS app with AppView or NativeShell.xcframework's NshAppView.
+- [Android](https://nsh.dev/docs/android.md): Run Rust and TSX NSH apps on Android with Android views, on an emulator or a device, package them as an .apk, and embed them in an existing Android app with nsh.aar and NshView.
+- [macOS](https://nsh.dev/docs/macos.md): Run Rust and TSX NSH apps on macOS in AppKit windows, package them as .app bundles, embed them in a Mac app with AppView, and what differs on macOS.
+- [Windows](https://nsh.dev/docs/windows.md): Run Rust and TSX NSH apps on Windows in Win32 windows drawn with Direct2D, package them, embed them in a Win32 app with AppView, and what differs on Windows.
+- [Linux](https://nsh.dev/docs/linux.md): Run Rust and TSX NSH apps on Linux in GTK 4 windows, package them, embed them in a GTK app with AppView, and what differs on Linux.
+- [GPUI](https://nsh.dev/docs/gpui.md): Embed Rust and TSX NSH apps in a GPUI or GPUI Kit app with AppView, drawn by GPUI on macOS, Windows and Linux, try TSX apps in the GPUI development host, and what the GPUI backend does differently.
+- [Web](https://nsh.dev/docs/web.md): Build web apps in Rust or TSX with Native Shell components rendered as HTML and CSS, develop in the browser, and publish to any static host or CDN.
+- [TUI](https://nsh.dev/docs/tui.md): Run Rust and TSX NSH apps in a terminal: the Cell layout, keyboard and mouse input, the terminal's colors, how components and popups look on the grid, detecting the terminal in app code, testing, and embedding AppView in a ratatui app.
+- [Building a platform](https://nsh.dev/docs/platform-extensions.md): Bring Native Shell apps to a platform of your own: the engine, mount batches, text and input a backend implements, the nsh command line's external targets, and the WeChat Mini Program platform as a worked example.
+- [Platform-specific code](https://nsh.dev/docs/platform-specific.md): Writing one app for phones, desktops and browsers - platform-only props in ios={{}} / android={{}} / macos={{}} / desktop={{}} / web={{}}, the nsh/mobile and nsh/desktop modules, platform.os and platform.select, and platform Tailwind variants.
+- [Native Components](https://nsh.dev/docs/native-components.md): Use views of the host app (maps, players, any UIView or Android View) inside an NSH app, with props, events, commands and sizing.
+- [Packaging](https://nsh.dev/docs/packaging.md): Build installable Rust and TSX apps with nsh package for iOS devices, the iOS simulator, Android, macOS, Windows, Linux and the web, with app metadata, icons and signing.
+- [Signed Packages](https://nsh.dev/docs/signed-packages.md): Ship app code that host apps download and verify: keys, certificates, nsh publish, signing again, verification, revocation and rollback protection.
+- [App Updates](https://nsh.dev/docs/app-updates.md): Let a packaged app update itself: from GitHub Releases or your own host, with signed manifests and verified downloads.
+- [OTA Updates](https://nsh.dev/docs/ota-updates.md): Deliver a packaged app's TSX as a signed package, to iOS and Android too, without a new app build: keys, releases from CI, the in-app flow, trial runs and rollback.
+- [Sandbox and Capabilities](https://nsh.dev/docs/sandbox-and-capabilities.md): The limits every NSH app runs under (memory, time, nodes), the language hardening of release builds, and capabilities declared in nsh.json and granted by host apps.
+- [Backward Compatibility](https://nsh.dev/docs/compatibility.md): How Native Shell keeps apps running across releases: what a compatible release promises, the record in nsh-compat that holds every change to it, the release flow, and how to add, rename or change an API.
+- [Design Guides](https://nsh.dev/docs/design-guides.md): Product and interaction design guidance for apps built with Native Shell: hierarchy, color and tokens, spacing, density, components, interaction states, overlays, motion, data-heavy views, interface copy, and platform fit.
+- [Coding Guides](https://nsh.dev/docs/coding-guides.md): Architecture and coding conventions for maintainable Native Shell apps and component libraries, in Rust and TSX.
+- [JSX and components](https://nsh.dev/docs/jsx-and-components.md): How NSH describes UI in Rust and in TSX - elements, components, props, children, control flow, refs and spreads - and how the JSX compiler and Rust's builders make the same native elements.
+- [Reactivity](https://nsh.dev/docs/reactivity.md): Signals, computed values, effects, resources, batch, untracked, cleanup and context in Rust and TSX - how NSH updates exactly what changed, and the mistakes to avoid.
+- [Styling](https://nsh.dev/docs/styling.md): Typed style methods in Rust and the style prop in TSX - flexbox, grid and CSS effects - colors, borders, corners, shadows, gradients, filters, transforms and transitions, with platform differences.
+- [Tailwind](https://nsh.dev/docs/tailwind.md): Tailwind CSS classes resolved natively in TSX and their typed equivalents in Rust - class and classList, variants for pressed states, dark mode and breakpoints, the theme in nsh.json, and the build-time class check.
+- [Layout](https://nsh.dev/docs/layout.md): Flexbox with a column default, CSS grid, sizes and percentages, aspect ratio, absolute positioning, measuring with onLayout, responsive layouts and right-to-left, in Rust and TSX.
+- [Text](https://nsh.dev/docs/text.md): Showing text with the text element in Rust and TSX - nested spans and links, inline views, fonts and decorations, truncation, system text size, selection and onTextLayout.
+- [Images and assets](https://nsh.dev/docs/images-and-assets.md): Showing images in Rust and TSX - the app's assets and @2x files, SVG images, remote URLs, resize modes, placeholders, blur, tint, load events, and reading an image's size or prefetching it.
+- [Fonts](https://nsh.dev/docs/fonts.md): The system font and generic families, fallback lists, shipping .ttf, .otf, .woff and .woff2 files from a Rust crate's assets or TSX imports, registering fonts while the app runs, families with several weights and italics, and fonts in typed styles and Tailwind classes.
+- [Touch and gestures](https://nsh.dev/docs/touch-and-gestures.md): Presses and press feedback, hit areas, pointer events, raw touches, the responder system, PanResponder, and native pan, pinch and rotation gestures.
+- [Scrolling](https://nsh.dev/docs/scrolling.md): Scroll views in Rust and TSX - paging and snapping, zooming, pull to refresh, scroll events, scroll-linked effects with scrollValue, the keyboard in scroll views, and scrolling from code.
+- [Lists](https://nsh.dev/docs/lists.md): Long and endless lists in Rust and TSX - recycling, row identity, columns, sticky headers, inverted chat lists, horizontal lists, lists in a page, loading more, viewability and scrolling to an item.
+- [Navigation](https://nsh.dev/docs/navigation.md): Native navigation stacks with createNavStack, NavStack and NavPage, headers on every platform, keeping the user on a page with popOnBack, dialogs, and the Android back button.
+- [Forms and the keyboard](https://nsh.dev/docs/forms-and-keyboard.md): Text input with the input element - controlled and uncontrolled values, keyboard types, the return key, focus, selection, growing multiline inputs - and keeping content clear of the software keyboard.
+- [Animation](https://nsh.dev/docs/animation.md): Motions (ready-made entrances, exits, attention seekers and loops, or your own keyframes), style transitions and keyframe animations, animated values with timing, spring, decay and keyframes, interpolation, composite animations, easing, layout animations, and what runs on the UI thread, in Rust and TSX.
+- [Canvas](https://nsh.dev/docs/canvas.md): Drawing on a canvas in Rust and TSX - the 2D operations, paths and SVG path data, gradients, text, images, redrawing from signals, and animating drawings with animated values.
+- [Web view and video](https://nsh.dev/docs/web-view-and-video.md): Showing web pages with WebView and playing video with Video - sources, messaging between the page and the app, navigation, playback control, refs and capabilities.
+- [Networking](https://nsh.dev/docs/networking.md): HTTP with fetch - JSON, headers, uploads with FormData, streaming responses and request bodies, cancelling with AbortController, errors, and the network capabilities an app declares.
+- [Device and environment](https://nsh.dev/docs/device-and-environment.md): Reading the window size, color scheme, font scale, safe areas, the platform, pixel density and layout direction, and reacting when they change.
+- [I18n](https://nsh.dev/docs/i18n.md): Translating an app into every language its users speak, switching languages at run time, and formatting numbers and dates for each one.
+- [Accessibility](https://nsh.dev/docs/accessibility.md): Making apps work with VoiceOver and TalkBack - labels, roles, states, values, custom actions, grouping and hiding, announcements and focus, text size, and reduced motion.
+- [Dev Server and Debugging](https://nsh.dev/docs/dev-server-and-debugging.md): Run Rust and TSX apps with nsh run and nsh dev, connect simulators, emulators and devices, and use rebuilds, hot module replacement, logs, the error overlay and source-mapped stacks.
+- [Testing](https://nsh.dev/docs/testing-and-trace.md): Test apps headless, in Rust with cargo test and nsh_testing or in TypeScript with nsh test - open the app, press, type, scroll and wait like a user, stub the network and storage - and read the native view operations and timings --trace prints; testID for UI tests.
+- [Performance](https://nsh.dev/docs/performance.md): How NSH keeps apps fast (Rust apps, a native runtime, batched crossings, native animations, virtualized lists), what that means for your code, and how to measure headless and on screen.
+- [Performance report](https://nsh.dev/docs/performance-report.md): Measured numbers of NSH apps - commit and frame costs from NSH's baselines, and the gallery's frame rate, CPU and memory page by page on Linux, macOS, Windows and iOS - with how to reproduce them.
+- [Architecture](https://nsh.dev/docs/architecture.md): How an NSH app runs: the build pipeline, the engine and main threads, the path from a signal change to native views, the native reactive graph, text layout and the crates.
+
+## Elements
+
+- [Elements](https://nsh.dev/elements.md): The primitives and base components every NSH app is built from, in Rust and TSX, and the props, events and ref methods they all share.
+- [View](https://nsh.dev/elements/view.md): The basic container element: layout, backgrounds, borders, shadows, press handling and gestures.
+- [Text](https://nsh.dev/elements/text.md): The element that draws text: nested spans, links, line limits, font scaling, inline views and text layout events.
+- [Image](https://nsh.dev/elements/image.md): The element that shows a bundled or remote image, with placeholders, blur, fades, tinting and load events.
+- [Scroll](https://nsh.dev/elements/scroll.md): The native scroll view: vertical and horizontal scrolling, paging and snapping, pull to refresh, zooming and scroll events.
+- [List](https://nsh.dev/elements/list.md): The virtualized, recycling list: rows, columns, sticky headers, inverted chat lists, viewability and scrolling to items.
+- [Canvas](https://nsh.dev/elements/canvas.md): The Canvas element: custom drawing with a 2D context, replayed natively.
+- [Shader](https://nsh.dev/elements/shader.md): The Shader element: a view whose box a GPU program written in WGSL draws, under its children.
+- [WebView](https://nsh.dev/elements/web-view.md): The WebView element: web pages and inline HTML inside an app, with messaging both ways.
+- [Video](https://nsh.dev/elements/video.md): The Video element: native video playback with your own or the system's controls.
+- [Overlay](https://nsh.dev/elements/overlay.md): The Overlay element: content shown on top of the screen whatever clips its parent, laid out as a fixed box or placed against an anchor that it follows, with presses outside and Escape reported.
+- [Safe area](https://nsh.dev/elements/safe-area.md): The safe-area-inset environment variables and the safeArea and safeAreaInsets accessors: content kept clear of the notch, the status bar, the home indicator and headers.
+- [Keyboard](https://nsh.dev/elements/keyboard.md): The keyboard-inset-height environment variable, Keyboard.dismiss and the keyboard's height: content kept above the software keyboard, moving with it.
+- [Text selection](https://nsh.dev/elements/text-selection.md): Selectable views: one selection across the texts inside a view, across views, Text elements and TextViews, as a web page's texts select.
+- [If / Each](https://nsh.dev/elements/control-flow.md): Control flow: If renders a branch by a condition, Each renders a keyed row per item of a list, in Rust and TSX.
+- [Accordion](https://nsh.dev/elements/accordion.md): Accordion and its parts: stacked sections that expand and collapse under their headings, one at a time or several, opened by the app's value, revealed by a springing height on request, with every look the app's.
+- [AlertDialog](https://nsh.dev/elements/alert-dialog.md): AlertDialog: the platform's own alert or action sheet, shown natively and answered with the action the user chose.
+- [Avatar](https://nsh.dev/elements/avatar.md): The Avatar and AvatarGroup components: a person's picture, or a fallback while it loads, when it fails and when there is none, with the loading state run natively; and a row of avatars that shows the first few and stands for the rest.
+- [Button](https://nsh.dev/elements/button.md): The Button component: a press target that owns presses, the disabled and selected states and its role for screen readers, styled by the app.
+- [Calendar](https://nsh.dev/elements/calendar.md): The Calendar component: a date or a range of dates picked from months of days, with month and year views and the keyboard, styled by the app.
+- [Carousel](https://nsh.dev/elements/carousel.md): Carousel and its parts: slides shown one place at a time, moved by swiping, the wheel and the touchpad on the platform's own scrolling, by previous and next controls, a pagination and the keyboard, around the ends seamlessly. The carousel owns which slide shows, snapping, looping, the keys and accessibility; the look and every label are the app's.
+- [Checkbox](https://nsh.dev/elements/checkbox.md): The Checkbox component: a checked, unchecked or indeterminate control that owns presses, keyboard activation, the disabled state and its role and value for screen readers, with an indicator the app styles and marks.
+- [Collapsible](https://nsh.dev/elements/collapsible.md): The Collapsible component: a region whose content expands and collapses, shown after its children while the app has it open, revealed by a springing height on request, with the trigger and every look the app's.
+- [ColorPicker](https://nsh.dev/elements/color-picker.md): The ColorPicker component and its parts: a color picked on a saturation and brightness area, on sliders of any channel of RGB, HSL, HSB or OKLCH and of the alpha, typed in any CSS form, chosen from swatches or picked on the screen with an eyedropper, with WAI-ARIA's keys and adjustable elements for screen readers, laid out and styled by the app.
+- [Combobox](https://nsh.dev/elements/combobox.md): The Combobox component: one value or several chosen from a list of items filtered by typing into its input, a popup under the field on desktops and a sheet on phones, styled by the app.
+- [Command](https://nsh.dev/elements/command.md): Command: a command palette, a search field over the app's commands filtered as the user types: a Cmd+K palette in a dialog, an inline command menu, a search the app answers. Virtualized, keyboard first, a list box for screen readers. The look of every part is the app's.
+- [DataTable](https://nsh.dev/elements/data-table.md): The DataTable component: a table of rows and columns that scrolls both ways over any number of either, with fixed, resizable, movable and sortable columns, row, column and cell selection, rows the app serves a page at a time, group labels, keyboard navigation and cells the app draws.
+- [DatePicker](https://nsh.dev/elements/date-picker.md): The DatePicker component: a date, a range of dates or a date and time picked from a calendar in a popup at its trigger on desktops and a sheet on phones, styled by the app.
+- [Dialog](https://nsh.dev/elements/dialog.md): The Dialog component: a modal surface over everything else, for full-screen flows, sheets and dialogs the app styles.
+- [DiffView](https://nsh.dev/elements/diff-view.md): The DiffView component: the changes between two texts or of a patch, side by side or unified, with the words changed within lines highlighted, unchanged lines collapsed into separators that expand, syntax highlighting, soft wrap, per-change actions, selectable code, line selection and review annotations.
+- [Dock](https://nsh.dev/elements/dock.md): DockArea: a dockable workspace of splits, tab groups and docks on the left, right and bottom edges, whose layout is data the app owns. The area owns tab drags and drops, resizing, docks, zoom and the lock, keeps each panel's content as it moves, and adapts to phones; the look and the panels' content are the app's.
+- [Editor](https://nsh.dev/elements/editor.md): The Editor component: a code editor with syntax highlighting, line numbers, several carets, folding, soft wrap, find and replace, diagnostics and decorations, and the keys of code editors.
+- [EmojiPicker](https://nsh.dev/elements/emoji-picker.md): EmojiPicker: a search field over every emoji, in groups, as a composer's emoji button or a message's reactions have it. Unicode's emoji with English names from CLDR, the app's names in its language, skin tones, recent emoji first, a virtualized grid, keyboard first, a list box for screen readers. The look of every part is the app's.
+- [HoverCard](https://nsh.dev/elements/hover-card.md): The HoverCard component: a preview of what its trigger points at, shown while the pointer rests on the trigger, styled by the app.
+- [Input](https://nsh.dev/elements/input.md): The native text field: controlled and uncontrolled text, keyboards, autofill, selection, multiline inputs and focus.
+- [Link](https://nsh.dev/elements/link.md): The Link component: content that goes somewhere when pressed, a page, a site or a route of the app, with presses, keyboard activation, the disabled state and the link role for screen readers, styled by the app.
+- [Menu](https://nsh.dev/elements/menu.md): Menu and ContextMenu with MenuItem, MenuSeparator and Submenu: a popup with cascading submenus on desktops, a sheet with submenus in place on phones, styled by the app.
+- [NavStack](https://nsh.dev/elements/nav-stack.md): Native navigation stacks: NavStack, NavPage and createNavStack, pushing and popping pages, header slots, leaving a page and how each platform shows a stack.
+- [NumberInput](https://nsh.dev/elements/number-input.md): The NumberInput component: a number typed in a field or stepped with buttons, the arrow keys and screen readers, kept to its step's decimals and to min and max, with a field, buttons and a controls column the app styles.
+- [OtpInput](https://nsh.dev/elements/otp-input.md): The OtpInput component: a fixed-length numeric one-time code typed, pasted or autofilled into one native field, shown in cells, groups and a caret the app styles.
+- [Pagination](https://nsh.dev/elements/pagination.md): The Pagination component: the pages of a set to move among, with the pages around the current one, ellipses, Previous and Next, a compact pager, the keyboard and the current page for screen readers, styled by the app.
+- [Plot](https://nsh.dev/elements/plot.md): The Plot component of nsh/base/plot, its marks Line, Area, Bar, Rule, Dot, Cell, Grid, Pie, Arc, RadialLine, RadialGrid, Sankey and Treemap, its PlotAxis and PlotLabel: charts drawn natively from the app's rows, with the scales of the axes and their labels, texts at data points, the row, cell or slice under the pointer, motion and no look of their own.
+- [Popover](https://nsh.dev/elements/popover.md): The Popover component: content anchored to a trigger, on top of everything, that the trigger, a press outside, Escape and back close, styled by the app.
+- [Progress](https://nsh.dev/elements/progress.md): The Progress component: a linear progress bar that owns its role, range and value for screen readers and the indicator's width by the value, with a track and an indicator the app styles.
+- [Radio](https://nsh.dev/elements/radio.md): Radio and RadioGroup: a set of options the user picks exactly one of. Each radio owns presses, keyboard activation, the disabled state and its role and checked state for screen readers; the group is the set; the look and the value are the app's.
+- [Resizable](https://nsh.dev/elements/resizable.md): ResizablePanelGroup and ResizablePanel: panels side by side or stacked, with a handle between each two that the user drags to share the room. The group owns the drag, the panels' limits, the resize cursor and the handles' role for screen readers; the sizes, the handles' look and the panels' content are the app's.
+- [RichEditor](https://nsh.dev/elements/rich-editor.md): The rich text editor of nsh/base: documents defined by the app's schema, commands, plugins, history, keymaps, input rules and Markdown, after ProseMirror's architecture, with its state in Rust.
+- [Scrollbar](https://nsh.dev/elements/scrollbar.md): The Scrollbar component: a scroll bar of the app's own look for every scroll view and list (a theme set once) or for one, placed where the app wants it, whose thumb follows the content and whose drags and presses scroll it, shown while scrolling, on hover or always, fading in and out by the app's timing.
+- [Select](https://nsh.dev/elements/select.md): The Select component: one value chosen from a list of items, a popup at its trigger on desktops and a sheet on phones, with the keyboard, typeahead, search and sections, styled by the app.
+- [Sheet](https://nsh.dev/elements/sheet.md): The Sheet component: a panel at an edge of the screen over a backdrop, closed by the backdrop, Escape and back, styled by the app.
+- [Slider](https://nsh.dev/elements/slider.md): The Slider component: a value, or a range of two, picked along a track, with presses and drags on touch screens and with a mouse, WAI-ARIA's slider keys and a value for screen readers on each thumb, and a track, an indicator, a range and thumbs the app styles.
+- [Switch](https://nsh.dev/elements/switch.md): The Switch component: an on / off control that owns presses, keyboard activation, the disabled state and its role and value for screen readers, with a track and a thumb the app styles.
+- [Table](https://nsh.dev/elements/table.md): The Table component and its parts: a table of the app's own rows and cells that screen readers know as a table, with the look the app gives each part.
+- [Tabs](https://nsh.dev/elements/tabs.md): Tab and Tabs: the tabs of a tab list and the list. Each tab owns presses, keyboard activation, the disabled state and its role and selected state for screen readers; the list is the set, with an indicator that follows the selected tab natively; the look, the value and the content each tab shows are the app's.
+- [Terminal](https://nsh.dev/elements/terminal.md): The Terminal component: a program's output drawn with the platform's own text, the keys the user types sent back, on every platform; the emulator replaceable by the app.
+- [TextView](https://nsh.dev/elements/text-view.md): The TextView component: Markdown, HTML or a document of blocks shown with native text and views, styled part by part, for AI chat replies, articles and help pages.
+- [TimeField](https://nsh.dev/elements/time-field.md): The TimeField component: a time of day edited segment by segment, hours, minutes and seconds, with the keyboard or a phone's number pad, styled by the app.
+- [Toast](https://nsh.dev/elements/toast.md): Toast, ToastStack and ToastManager: unstyled toasts as gpui-base's, a semantic root with a transition status, a stack that lays toasts out as layers, and their headless lifecycle.
+- [Toggle](https://nsh.dev/elements/toggle.md): Toggle and ToggleGroup: a button that is on or off, and a toolbar of them. Each toggle owns presses, keyboard activation, the disabled state and its role and pressed state for screen readers; the group is a toolbar with one stop of the keyboard focus; the look and which toggles are pressed are the app's.
+- [Toolbar](https://nsh.dev/elements/toolbar.md): Toolbar, ToolbarGroup and ToolbarSeparator: a bar of buttons, toggles and links that is one stop of the keyboard focus, whose arrow keys move along it, with named groups and separators. The look and the state of each control are the app's.
+- [Tooltip](https://nsh.dev/elements/tooltip.md): The Tooltip component: a hint about the element it is in, shown on the desktops when the pointer rests on it, styled by the app.
+- [Tree](https://nsh.dev/elements/tree.md): Tree: items that hold items, expanded and collapsed, one of them selected: a project's files, a settings sidebar, an outline. Virtualized, one stop of the keyboard focus, a tree for screen readers. The look of every row is the app's.
+
+## API
+
+- [Modules](https://nsh.dev/modules.md): The modules an NSH app imports, what each one exports, and how they are organized.
+- [nsh](https://nsh.dev/modules/nsh.md): The core module: signals, effects, context, mount, design tokens, animation, the environment, gestures, the clipboard, storage, the host channel, keyboard shortcuts, accessibility and the element and style types.
+- [List](https://nsh.dev/modules/nsh-list.md): List, a virtualized and recycling list on a native scroll view, with all its props, events and ref methods.
+- [Image](https://nsh.dev/modules/nsh-image.md): Image: the image element, plus Image.getSize and Image.prefetch for image information and loading ahead.
+- [Canvas](https://nsh.dev/modules/nsh-canvas.md): Canvas, the 2D drawing context, Path2D and gradients, with the parts of HTML Canvas 2D that NSH supports.
+- [WebView](https://nsh.dev/modules/nsh-webview.md): WebView, a native web page view (WKWebView, android.webkit.WebView), with its props, events and ref methods.
+- [Video](https://nsh.dev/modules/nsh-video.md): Video, a native video player (AVPlayer, MediaPlayer), with its props, events and ref methods.
+- [nsh/base](https://nsh.dev/modules/nsh-base.md): Unstyled base components for an app's UI: buttons, links, avatars, carousels, checkboxes, radios, switches, tabs, toggles, toolbars, trees, selects, comboboxes, command palettes, emoji pickers, calendars, date pickers, time fields, resizable panels, dockable workspaces, Markdown and HTML documents, a code editor, diffs, text inputs, navigation stacks and dialogs, system alert dialogs and the status bar of pages and dialogs.
+- [nsh/mobile](https://nsh.dev/modules/nsh-mobile.md): What iOS and Android have: TabBar, the system's tab bar, Haptics, InputAccessoryView on iOS, BackHandler on Android, and isAvailable.
+- [nsh/desktop](https://nsh.dev/modules/nsh-desktop.md): Desktop-only APIs: the app's windows (the main window and windows of its own, their kinds, attributes, state and events), the displays, a title bar of the app's own, the application menu, context menus, the tray and global shortcuts.
+- [nsh/i18n](https://nsh.dev/modules/nsh-i18n.md): The app's translations, read from its locales/ files in rust-i18n's formats, and the language it shows: t, setLocale, availableLocales.
+- [nsh/web](https://nsh.dev/modules/nsh-web.md): The page around an app on the web: Head, the document's title, description and metadata for search engines and link previews.
+- [nsh/updater](https://nsh.dev/modules/nsh-updater.md): A packaged app updates itself: check the source nsh.json names, download the archive with progress, replace the app and restart, or run a newer signed package of its code.
+- [Standard modules](https://nsh.dev/modules/standard-modules.md): Eleven Node-shaped standard modules: pinned LLRT utilities and capability-checked files, processes and networking.
+- [Global APIs](https://nsh.dev/modules/globals.md): The globals every NSH app has without an import — fetch, streams, URL, encoding, Blob and FormData, events and abort signals, Intl, timers and console — implemented natively in Rust.
+- [Style reference](https://nsh.dev/modules/style-reference.md): Every style key NSH accepts, grouped by LayoutStyle, ViewStyle, TextStyle, InputStyle and ImageStyle, with its type and meaning.
+- [Tailwind reference](https://nsh.dev/modules/tailwind-reference.md): Every Tailwind utility and variant NSH resolves natively, the arbitrary value syntax, and how to extend the theme in nsh.json.
+
+## 文档（中文）
+
+- [简介](https://nsh.dev/zh-CN/docs.md): Native Shell 是什么：Rust First 的全平台 Native UI 框架，覆盖 iOS、Android、macOS、Windows、Linux 和 Web，每个平台使用系统自己的界面与交互。
+- [目标与设计原则](https://nsh.dev/zh-CN/docs/goals.md): Native Shell 的目标：原生视图与交互、应用自主设计、共享组件，以及共用同一引擎的 Rust 与 TSX。
+- [方案对比](https://nsh.dev/zh-CN/docs/comparison.md): Native Shell 与 React Native、Flutter、Qt、GPUI、Slint 的比较，与 Electron、Tauri 的比较，以及与 WebView、服务端驱动 UI 等发布后下发界面方案的比较。
+- [安装](https://nsh.dev/zh-CN/docs/installation.md): 从预构建的发行包或源码仓库获取 NSH 命令，以及每个平台（iOS、Android、macOS、Windows 和 Linux）所需的工具。
+- [快速开始](https://nsh.dev/zh-CN/docs/getting-started.md): 用 nsh init 以 Rust 或 TSX 创建应用，在 iOS、Android、macOS、Windows、Linux 或 Web 上运行；把 TSX 模块承载到你的应用里并以签名包下发，或者把应用单独打包。
+- [项目结构](https://nsh.dev/zh-CN/docs/project-structure.md): 用 Rust 或 TSX 编写的 NSH 应用包含的文件、nsh.json 的每个键、.nsh/types 中的 TypeScript 配置、资源，以及模块和包的导入方式。
+- [用 Rust 开发](https://nsh.dev/zh-CN/docs/rust.md): 完全用 Rust 编写 Native Shell 应用，在所有平台上都不带 QuickJS；或者在 Rust 之上用 TSX 编写页面：如何选择，以及两者如何共享组件和模块。
+- [命令行](https://nsh.dev/zh-CN/docs/cli.md): NSH 的全部子命令与参数：init、build、test、dev、run、package，以及签名相关的 keygen、certify、publish、verify、symbolicate 和 revoke。
+- [平台概览](https://nsh.dev/zh-CN/docs/platforms.md): NSH 在哪些平台上运行：iOS、Android、macOS、Windows、Linux、GPUI、终端和 Web，每个平台都有自己的后端；在各平台上如何运行、打包和嵌入 Rust 或 TSX 应用，以及各自需要什么。
+- [iOS](https://nsh.dev/zh-CN/docs/ios.md): 在 iOS 上用 UIKit 视图运行 Rust 和 TSX 编写的 NSH 应用（模拟器或真机），打包成 .app 和 .ipa，并通过 AppView 或 NativeShell.xcframework 的 NshAppView 嵌入现有 iOS 应用。
+- [Android](https://nsh.dev/zh-CN/docs/android.md): 在 Android 上用 Android 视图运行 Rust 和 TSX 编写的 NSH 应用（模拟器或真机），打包成 .apk，并通过 nsh.aar 和 NshView 嵌入现有 Android 应用。
+- [macOS](https://nsh.dev/zh-CN/docs/macos.md): 在 macOS 上用 AppKit 窗口运行 Rust 和 TSX 编写的 NSH 应用、打包为 .app、用 AppView 嵌入 Mac 应用，以及 macOS 上的差异。
+- [Windows](https://nsh.dev/zh-CN/docs/windows.md): 在 Windows 上用 Direct2D 绘制的 Win32 窗口运行 Rust 和 TSX 编写的 NSH 应用、打包应用、用 AppView 嵌入 Win32 应用，以及 Windows 上的差异。
+- [Linux](https://nsh.dev/zh-CN/docs/linux.md): 在 Linux 上用 GTK 4 窗口运行 Rust 和 TSX 编写的 NSH 应用、打包应用、用 AppView 嵌入 GTK 应用，以及 Linux 上的差异。
+- [GPUI](https://nsh.dev/zh-CN/docs/gpui.md): 用 AppView 把 Rust 和 TSX 编写的 NSH 应用嵌入 GPUI 或 GPUI Kit 应用，在 macOS、Windows 和 Linux 上由 GPUI 绘制，在 GPUI 开发宿主中试用 TSX 应用，以及 GPUI 后端的不同之处。
+- [Web](https://nsh.dev/zh-CN/docs/web.md): 用 Rust 或 TSX 和 Native Shell 组件构建 HTML 和 CSS 界面，在浏览器里开发 Web 应用，并发布到任意静态托管服务或 CDN。
+- [TUI](https://nsh.dev/zh-CN/docs/tui.md): 在终端里运行 Rust 和 TSX 编写的 NSH 应用：Cell 布局、键盘与鼠标输入、终端的颜色、组件和弹出层在字符网格上的样子、在应用代码中识别终端、测试，以及在 ratatui 应用中嵌入 AppView。
+- [构建平台](https://nsh.dev/zh-CN/docs/platform-extensions.md): 把 Native Shell 应用带到你自己的平台：后端要实现的引擎、挂载批次、文本与输入，nsh 命令行的外部 target，以及作为完整案例的微信小程序平台。
+- [平台特定代码](https://nsh.dev/zh-CN/docs/platform-specific.md): 为手机、桌面和浏览器编写同一个应用：ios={{}} / android={{}} / macos={{}} / desktop={{}} / web={{}} 中的平台专属属性，nsh/mobile 与 nsh/desktop 模块，platform.os 与 platform.select，以及平台相关的 Tailwind 变体。
+- [原生组件](https://nsh.dev/zh-CN/docs/native-components.md): 在 NSH 应用中使用宿主应用的视图（地图、播放器、任意 UIView 或 Android View），支持 props、事件、命令和尺寸上报。
+- [打包](https://nsh.dev/zh-CN/docs/packaging.md): 用 nsh package 为 iOS 真机、iOS 模拟器、Android、macOS、Windows、Linux 和 Web 构建可安装的 Rust 和 TSX 应用，包括应用元数据、图标和签名。
+- [签名包](https://nsh.dev/zh-CN/docs/signed-packages.md): 发布由宿主应用下载并验证的应用代码：密钥、证书、nsh publish、重新签名、验证、吊销与回滚保护。
+- [应用更新](https://nsh.dev/zh-CN/docs/app-updates.md): 让打包后的应用自我更新：从 GitHub Releases 或自己的服务器，清单签名，下载校验。
+- [OTA 更新](https://nsh.dev/zh-CN/docs/ota-updates.md): 把打包应用的 TSX 作为签名包下发，iOS 和 Android 也适用，无需构建新应用：密钥、从 CI 发布、应用内流程、试运行与回滚。
+- [沙箱与能力](https://nsh.dev/zh-CN/docs/sandbox-and-capabilities.md): 每个 NSH 应用运行时受到的限制（内存、时间、节点），release 构建的语言加固，以及在 nsh.json 中声明、由宿主应用授予的能力。
+- [向下兼容](https://nsh.dev/zh-CN/docs/compatibility.md): Native Shell 如何让应用跨版本持续运行：兼容版本的承诺、nsh-compat 中约束每次改动的记录、发版流程，以及如何新增、重命名或修改 API。
+- [设计指南](https://nsh.dev/zh-CN/docs/design-guides.md): 面向 Native Shell 应用的产品、视觉与交互设计规范：层级、颜色与 token、间距、密度、组件、交互状态、浮层、动效、数据密集界面、界面用词与平台适配。
+- [编码指南](https://nsh.dev/zh-CN/docs/coding-guides.md): 构建可维护的 Native Shell 应用与组件库的架构、代码风格与命名规范，均附 Rust 与 TSX 示例。
+- [JSX 与组件](https://nsh.dev/zh-CN/docs/jsx-and-components.md): NSH 如何用 Rust 和 TSX 描述界面：元素、组件、props、children、控制流、ref 和展开，以及 JSX 编译器和 Rust 的构建方法如何生成同样的原生元素。
+- [响应式](https://nsh.dev/zh-CN/docs/reactivity.md): Rust 与 TSX 中的 signal、computed、effect、resource、batch、untracked、cleanup 和 context：NSH 如何只更新真正变化的部分，以及需要避开的常见错误。
+- [样式](https://nsh.dev/zh-CN/docs/styling.md): Rust 中的类型化样式方法与 TSX 中的 style 属性：flexbox、grid 和 CSS 效果，包括颜色、边框、圆角、阴影、渐变、滤镜、变换和过渡，以及各平台的差异。
+- [Tailwind](https://nsh.dev/zh-CN/docs/tailwind.md): TSX 中以原生方式解析的 Tailwind CSS 类及其在 Rust 中的类型化写法：class 与 classList，按下状态、深色模式和断点等变体，nsh.json 中的主题，以及构建时的类名检查。
+- [布局](https://nsh.dev/zh-CN/docs/layout.md): 默认纵向排列的 Flexbox、CSS 网格、尺寸与百分比、宽高比、绝对定位、用 onLayout 测量、响应式布局以及从右到左布局，用 Rust 和 TSX 编写。
+- [文字](https://nsh.dev/zh-CN/docs/text.md): 用 Rust 和 TSX 的 text 元素显示文字：嵌套 span 与链接、行内视图、字体与装饰线、截断、系统字号、选择以及 onTextLayout。
+- [图片与资源](https://nsh.dev/zh-CN/docs/images-and-assets.md): 用 Rust 和 TSX 显示图片：应用的资源与 @2x 文件、SVG 图片、远程 URL、缩放模式、占位图、模糊、着色、加载事件，以及读取图片尺寸和预取图片。
+- [字体](https://nsh.dev/zh-CN/docs/fonts.md): 系统字体与通用字体族、回退列表、从 Rust crate 的资源或 TSX 导入发布 .ttf、.otf、.woff 和 .woff2 文件、在应用运行时注册字体、含多个字重和斜体的字体族，以及在类型化样式和 Tailwind 类中使用字体。
+- [触摸与手势](https://nsh.dev/zh-CN/docs/touch-and-gestures.md): 按压与按压反馈、点击区域、pointerEvents、原始触摸事件、手势响应者系统、PanResponder，以及原生的拖动、捏合与旋转手势。
+- [滚动](https://nsh.dev/zh-CN/docs/scrolling.md): Rust 和 TSX 中的滚动视图：分页与吸附、缩放、下拉刷新、滚动事件、用 scrollValue 实现滚动联动效果、滚动视图中的键盘，以及从代码滚动。
+- [列表](https://nsh.dev/zh-CN/docs/lists.md): 用 Rust 和 TSX 渲染长列表和无限列表：复用、行标识、多列、吸顶标题、倒置的聊天列表、横向列表、页面中的列表、加载更多、可见性，以及滚动到指定条目。
+- [导航](https://nsh.dev/zh-CN/docs/navigation.md): 用 createNavStack、NavStack 和 NavPage 构建原生导航栈，各平台的标题栏，用 popOnBack 把用户留在当前页面，对话框，以及 Android 返回键。
+- [表单与键盘](https://nsh.dev/zh-CN/docs/forms-and-keyboard.md): 用 input 元素输入文本：受控与非受控的值、键盘类型、回车键、焦点、选区、自动增高的多行输入框，以及让内容避开软键盘。
+- [动画](https://nsh.dev/zh-CN/docs/animation.md): 动效（现成的入场、退场、吸引注意和循环动效，或你自己的关键帧），样式过渡与关键帧动画，动画值的 timing、spring、decay 和关键帧，插值，组合动画，缓动，布局动画，以及哪些部分运行在 UI 线程上，用 Rust 和 TSX 编写。
+- [画布](https://nsh.dev/zh-CN/docs/canvas.md): 用 Rust 和 TSX 在画布上绘图：2D 操作、路径与 SVG 路径数据、渐变、文字、图片、根据 signal 重绘，以及用动画值驱动绘制动画。
+- [网页视图与视频](https://nsh.dev/zh-CN/docs/web-view-and-video.md): 用 WebView 显示网页、用 Video 播放视频：来源、页面与应用之间的消息、导航、播放控制、ref 以及能力声明。
+- [网络](https://nsh.dev/zh-CN/docs/networking.md): 用 fetch 发起 HTTP 请求：JSON、请求头、用 FormData 上传、流式响应与请求体、用 AbortController 取消、错误处理，以及应用声明的网络能力。
+- [设备与环境](https://nsh.dev/zh-CN/docs/device-and-environment.md): 读取窗口尺寸、配色方案、字体缩放、安全区域、平台、像素密度和布局方向，并在它们变化时作出响应。
+- [I18n](https://nsh.dev/zh-CN/docs/i18n.md): 把应用翻译成用户使用的每一种语言，在运行时切换语言，并按每种语言格式化数字和日期。
+- [无障碍](https://nsh.dev/zh-CN/docs/accessibility.md): 让应用配合 VoiceOver 和 TalkBack 使用：标签、角色、状态、值、自定义操作、分组与隐藏、播报与焦点、文字大小以及减少动态效果。
+- [开发服务器与调试](https://nsh.dev/zh-CN/docs/dev-server-and-debugging.md): 用 nsh run 和 nsh dev 运行 Rust 和 TSX 应用，连接模拟器、Android 模拟器和真机，并使用重新构建、模块热替换、日志、错误浮层和经 source map 映射的调用栈。
+- [测试](https://nsh.dev/zh-CN/docs/testing-and-trace.md): 无界面测试应用：用 Rust 配合 cargo test 和 nsh_testing，或用 TypeScript 配合 nsh test：像用户一样打开应用、点击、输入、滚动和等待，模拟网络和存储；读懂 --trace 打印的原生视图操作和耗时；以及用于 UI 测试的 testID。
+- [性能](https://nsh.dev/zh-CN/docs/performance.md): NSH 如何让应用保持高速（Rust 应用、原生运行时、批量跨线程、原生动画、虚拟化列表），这对你的代码意味着什么，以及如何在无界面环境和屏幕上测量。
+- [性能报告](https://nsh.dev/zh-CN/docs/performance-report.md): NSH 应用的实测数据：NSH 基线中的提交与帧开销，以及 gallery 在 Linux、macOS、Windows 和 iOS 上逐页的帧率、CPU 和内存，并附复现方法。
+- [架构](https://nsh.dev/zh-CN/docs/architecture.md): NSH 应用是如何运行的：构建流程、引擎线程与主线程、从 signal 变化到原生视图的路径、原生响应式图、文本布局以及各个 crate。
+
+## 元素（中文）
+
+- [元素](https://nsh.dev/zh-CN/elements.md): 构成每个 NSH 应用的原语和基础组件，附 Rust 与 TSX 示例，以及它们共有的属性、事件和 ref 方法。
+- [View](https://nsh.dev/zh-CN/elements/view.md): 最基础的容器元素：布局、背景、边框、阴影、按压处理和手势。
+- [Text](https://nsh.dev/zh-CN/elements/text.md): 绘制文本的元素：嵌套片段、链接、行数限制、字体缩放、行内视图和文本布局事件。
+- [Image](https://nsh.dev/zh-CN/elements/image.md): 显示打包资源或远程图片的元素，支持占位图、模糊、淡入、着色和加载事件。
+- [Scroll](https://nsh.dev/zh-CN/elements/scroll.md): 原生滚动视图：纵向和横向滚动、分页与吸附、下拉刷新、缩放以及滚动事件。
+- [List](https://nsh.dev/zh-CN/elements/list.md): 虚拟化、可复用单元格的列表：行、多列、吸顶标题、倒序聊天列表、可见性回调和滚动到指定项。
+- [Canvas](https://nsh.dev/zh-CN/elements/canvas.md): Canvas 元素：用 2D 上下文自定义绘制，并在原生侧回放。
+- [Shader](https://nsh.dev/zh-CN/elements/shader.md): Shader 元素：由 WGSL 编写的 GPU 程序绘制其区域的视图，绘制在子元素之下。
+- [WebView](https://nsh.dev/zh-CN/elements/web-view.md): WebView 元素：在应用中显示网页和内联 HTML，并支持双向通信。
+- [Video](https://nsh.dev/zh-CN/elements/video.md): Video 元素：原生视频播放，可使用自定义控件或系统控件。
+- [Overlay](https://nsh.dev/zh-CN/elements/overlay.md): Overlay 元素：显示在屏幕最上层的内容，不受父元素裁剪，可以作为固定定位的盒子布局，也可以相对锚点放置并跟随锚点，同时报告外部按压和 Escape。
+- [安全区](https://nsh.dev/zh-CN/elements/safe-area.md): safe-area-inset 环境变量以及 safeArea 和 safeAreaInsets 访问器：让内容避开刘海、状态栏、主屏幕指示条和标题栏。
+- [键盘](https://nsh.dev/zh-CN/elements/keyboard.md): keyboard-inset-height 环境变量、Keyboard.dismiss 和键盘高度：让内容保持在软键盘之上，并随键盘移动。
+- [文字选择](https://nsh.dev/zh-CN/elements/text-selection.md): 可选择的视图：在视图内的文字之间、跨越视图、Text 元素和 TextView 的同一个选区，就像网页中的文字一样选择。
+- [If / Each](https://nsh.dev/zh-CN/elements/control-flow.md): 控制流：If 按条件渲染一个分支，Each 为列表的每一项渲染一个带 key 的行，附 Rust 与 TSX 示例。
+- [Accordion](https://nsh.dev/zh-CN/elements/accordion.md): Accordion 及其部件：在各自标题下展开和收起的一组分区，一次一个或同时多个，由应用的值决定哪些展开，可按需以弹簧高度展开，全部外观由应用决定。
+- [AlertDialog](https://nsh.dev/zh-CN/elements/alert-dialog.md): AlertDialog：平台自己的警告框或操作表，在原生侧显示，并以用户选择的操作作为结果。
+- [Avatar](https://nsh.dev/zh-CN/elements/avatar.md): Avatar 与 AvatarGroup 组件：显示一个人的头像，图片加载中、加载失败或没有图片时显示后备内容，加载状态在原生侧处理；以及只显示前几个头像、用溢出部分代表其余人的一排头像。
+- [Button](https://nsh.dev/zh-CN/elements/button.md): Button 组件：一个负责按压、禁用和选中状态以及屏幕阅读器角色的按压目标，样式由应用决定。
+- [Calendar](https://nsh.dev/zh-CN/elements/calendar.md): Calendar 组件：从按周排列的月份中选出一个日期或一段日期，带月份和年份视图与键盘操作，样式由应用决定。
+- [Carousel](https://nsh.dev/zh-CN/elements/carousel.md): Carousel 及其部件：一次显示一个位置的幻灯片，可通过平台原生滚动的滑动、滚轮和触控板，以及上一张 / 下一张控件、分页和键盘来切换，在两端无缝循环。轮播负责显示哪张幻灯片、吸附、循环、按键和无障碍；外观和所有文字都属于应用。
+- [Checkbox](https://nsh.dev/zh-CN/elements/checkbox.md): Checkbox 组件：一个勾选、未勾选或半选的控件，负责按压、键盘激活、禁用状态以及屏幕阅读器的角色和值，指示器及其中的标记由应用设置样式。
+- [Collapsible](https://nsh.dev/zh-CN/elements/collapsible.md): Collapsible 组件：内容可展开和收起的区域，应用让它展开时内容显示在子元素之后，可按需以弹簧高度展开，触发控件和全部外观都由应用决定。
+- [ColorPicker](https://nsh.dev/zh-CN/elements/color-picker.md): ColorPicker 组件及其部件：在饱和度与明度区域上、在 RGB、HSL、HSB 或 OKLCH 任一通道及透明度的滑块上选取颜色，以任意 CSS 形式输入、从色板中挑选，或用吸管在屏幕上取色；支持 WAI-ARIA 按键，对屏幕阅读器是可调节元素；布局和样式由应用决定。
+- [Combobox](https://nsh.dev/zh-CN/elements/combobox.md): Combobox 组件：在输入框中输入以筛选一组条目，从中选出一个或多个值，桌面上是输入框下方的弹出层，手机上是 sheet，样式由应用决定。
+- [Command](https://nsh.dev/zh-CN/elements/command.md): Command：命令面板，在应用的命令之上放一个搜索框，用户输入时即时过滤：对话框里的 Cmd+K 面板、页面里的命令菜单、由应用给出结果的搜索。虚拟化渲染，以键盘为先，对屏幕阅读器是一个列表框。每个部件的外观都属于应用。
+- [DataTable](https://nsh.dev/zh-CN/elements/data-table.md): DataTable 组件：向两个方向滚动、行数和列数不限的表格，列可以固定、调整宽度、移动和排序，支持按行、列、单元格选择，行由应用分页提供，带分组标签、键盘导航和由应用绘制的单元格。
+- [DatePicker](https://nsh.dev/zh-CN/elements/date-picker.md): DatePicker 组件：从弹出的日历中选出一个日期、一段日期或一个日期和时间，桌面上是触发元素处的弹出层，手机上是 sheet，样式由应用决定。
+- [Dialog](https://nsh.dev/zh-CN/elements/dialog.md): Dialog 组件：在所有内容之上的模态界面，用于全屏流程、sheet 和由应用设定样式的对话框。
+- [DiffView](https://nsh.dev/zh-CN/elements/diff-view.md): DiffView 组件：两段文本之间或一个补丁中的改动，并排或合并显示，高亮行内改动的单词，未改动的行折叠成可以展开的分隔行，带语法高亮、自动换行、针对每处改动的操作、可选择的代码、行选择和评审批注。
+- [Dock](https://nsh.dev/zh-CN/elements/dock.md): DockArea：由分栏、标签组以及左、右、下三条边上的停靠区组成的可停靠工作区，布局是应用持有的数据。区域负责标签页的拖放、调整大小、停靠区、放大和锁定，面板移动时保留它的内容，并适配手机；外观和面板的内容都属于应用。
+- [Editor](https://nsh.dev/zh-CN/elements/editor.md): Editor 组件：代码编辑器，带语法高亮、行号、多光标、折叠、软换行、查找与替换、诊断和装饰，以及代码编辑器的按键。
+- [EmojiPicker](https://nsh.dev/zh-CN/elements/emoji-picker.md): EmojiPicker：表情选择面板，在全部表情之上放一个搜索框，按分组排列，就像消息输入框的表情按钮或消息的表情回应那样。内置 Unicode 表情和来自 CLDR 的英文名称，可加入应用语言的名称，支持肤色、最近使用的表情排在最前，虚拟化网格，以键盘为先，对屏幕阅读器是一个列表框。每个部件的外观都属于应用。
+- [HoverCard](https://nsh.dev/zh-CN/elements/hover-card.md): HoverCard 组件：预览触发元素所指向的内容，在指针停留在触发元素上时显示，样式由应用决定。
+- [Input](https://nsh.dev/zh-CN/elements/input.md): 原生文本输入框：受控与非受控文本、键盘、自动填充、选区、多行输入和焦点。
+- [Link](https://nsh.dev/zh-CN/elements/link.md): Link 组件：按下后前往某处的内容（页面、网站或应用内的路由），负责按压、键盘激活、禁用状态以及屏幕阅读器的链接角色，样式由应用决定。
+- [Menu](https://nsh.dev/zh-CN/elements/menu.md): Menu 和 ContextMenu，配合 MenuItem、MenuSeparator 和 Submenu：桌面上是带级联子菜单的弹出层，手机上是就地展开子菜单的 sheet，样式由应用决定。
+- [NavStack](https://nsh.dev/zh-CN/elements/nav-stack.md): 原生导航栈：NavStack、NavPage 与 createNavStack，页面的推入与弹出、标题栏插槽、离开页面，以及各平台如何呈现导航栈。
+- [NumberInput](https://nsh.dev/zh-CN/elements/number-input.md): NumberInput 组件：在输入框里输入、或用按钮、方向键和屏幕阅读器步进的数字，保留步长的小数位并止于 min 和 max；输入框、按钮和按钮列由应用设置样式。
+- [OtpInput](https://nsh.dev/zh-CN/elements/otp-input.md): OtpInput 组件：定长的数字一次性验证码，输入、粘贴或由系统自动填充到一个原生输入框中，显示在由应用设置样式的格子、分组和光标里。
+- [Pagination](https://nsh.dev/zh-CN/elements/pagination.md): Pagination 组件：在一组内容的各页之间移动，显示当前页附近的页码、省略号、上一页和下一页，提供紧凑的翻页器、键盘操作，并让屏幕阅读器知道当前页，样式由应用决定。
+- [Plot](https://nsh.dev/zh-CN/elements/plot.md): nsh/base/plot 的 Plot 组件、它的图形 Line、Area、Bar、Rule、Dot、Cell、Grid、Pie、Arc、RadialLine、RadialGrid、Sankey 和 Treemap，以及 PlotAxis 和 PlotLabel：根据应用的数据行原生绘制图表，负责坐标轴的比例尺和标签、数据点上的文字、指针下的数据行、格子或扇区和动效，没有自己的外观。
+- [Popover](https://nsh.dev/zh-CN/elements/popover.md): Popover 组件：锚定在触发元素上、显示在一切之上的内容，触发元素、外部按压、Escape 和返回键都会关闭它，样式由应用决定。
+- [Progress](https://nsh.dev/zh-CN/elements/progress.md): Progress 组件：线性进度条，负责屏幕阅读器读到的角色、范围和数值，以及指示条随数值变化的宽度，轨道和指示条由应用设置样式。
+- [Radio](https://nsh.dev/zh-CN/elements/radio.md): Radio 与 RadioGroup：一组选项，用户从中恰好选一个。每个单选框负责按压、键盘激活、禁用状态以及屏幕阅读器的角色和勾选状态；分组就是这组选项；外观和值都属于应用。
+- [Resizable](https://nsh.dev/zh-CN/elements/resizable.md): ResizablePanelGroup 与 ResizablePanel：并排或上下排列的面板，每两个面板之间有一个手柄，用户拖动它来分配空间。分组负责拖动、面板的尺寸限制、调整大小的光标以及手柄面向屏幕阅读器的角色；尺寸、手柄的外观和面板的内容都属于应用。
+- [RichEditor](https://nsh.dev/zh-CN/elements/rich-editor.md): nsh/base 的富文本编辑器：由应用的 schema 定义的文档、命令、插件、历史、键位、输入规则和 Markdown，按 ProseMirror 的架构构建，状态在 Rust 中。
+- [Scrollbar](https://nsh.dev/zh-CN/elements/scrollbar.md): Scrollbar 组件：为所有滚动视图和列表（设置一次主题）或单个滚动视图提供应用自己外观的滚动条，也可放在应用想放的位置；滑块跟随内容，拖动和按压会滚动内容，可在滚动时、悬停时或始终显示，按应用给的时长淡入淡出。
+- [Select](https://nsh.dev/zh-CN/elements/select.md): Select 组件：从一组条目中选出一个值，桌面上是触发元素处的弹出层，手机上是 sheet，支持键盘、输入跳转、搜索和分组，样式由应用决定。
+- [Sheet](https://nsh.dev/zh-CN/elements/sheet.md): Sheet 组件：位于屏幕一侧边缘、覆盖在背景层之上的面板，点击背景层、Escape 和返回键会关闭它，样式由应用决定。
+- [Slider](https://nsh.dev/zh-CN/elements/slider.md): Slider 组件：沿轨道选取一个值或两个值组成的范围；支持触摸屏和鼠标的按压与拖动、WAI-ARIA 的滑块按键，每个滑块向屏幕阅读器报告自己的数值；轨道、指示条、范围和滑块由应用设置样式。
+- [Switch](https://nsh.dev/zh-CN/elements/switch.md): Switch 组件：一个开 / 关控件，负责按压、键盘激活、禁用状态以及屏幕阅读器的角色和值，轨道和滑块由应用设置样式。
+- [Table](https://nsh.dev/zh-CN/elements/table.md): Table 组件及其部件：由应用自己写出行和单元格的表格，屏幕阅读器将它识别为表格，每个部件的外观由应用决定。
+- [Tabs](https://nsh.dev/zh-CN/elements/tabs.md): Tab 与 Tabs：标签列表中的标签页，以及这个列表。每个标签页负责按压、键盘激活、禁用状态以及屏幕阅读器的角色和选中状态；列表就是这一组，带一个原生跟随选中标签页的指示器；外观、值以及每个标签页显示的内容都属于应用。
+- [Terminal](https://nsh.dev/zh-CN/elements/terminal.md): Terminal 组件：用平台自己的文字引擎绘制程序输出，把用户的按键发回程序，所有平台可用；应用可以替换终端模拟器。
+- [TextView](https://nsh.dev/zh-CN/elements/text-view.md): TextView 组件：用原生文本和视图显示 Markdown、HTML 或由文档块组成的文档，按部件设定样式，适用于 AI 聊天回复、文章和帮助页面。
+- [TimeField](https://nsh.dev/zh-CN/elements/time-field.md): TimeField 组件：逐段编辑一天中的时间，时、分、秒，使用键盘或手机的数字键盘，样式由应用决定。
+- [Toast](https://nsh.dev/zh-CN/elements/toast.md): Toast、ToastStack 和 ToastManager：与 gpui-base 一致的无样式 toast，带过渡状态的语义根、把 toast 排成层叠的栈，以及无界面的生命周期。
+- [Toggle](https://nsh.dev/zh-CN/elements/toggle.md): Toggle 与 ToggleGroup：一个处于开或关的按钮，以及由它们组成的工具栏。每个开关按钮负责按压、键盘激活、禁用状态以及屏幕阅读器的角色和按下状态；这一组是一个工具栏，在键盘焦点里只占一站；外观以及哪些按钮按下都属于应用。
+- [Toolbar](https://nsh.dev/zh-CN/elements/toolbar.md): Toolbar、ToolbarGroup 与 ToolbarSeparator：由按钮、开关按钮和链接组成的一栏，在键盘焦点里只占一站，方向键沿着它移动，带有命名的分组和分隔线。外观以及每个控件的状态都属于应用。
+- [Tooltip](https://nsh.dev/zh-CN/elements/tooltip.md): Tooltip 组件：关于它所在元素的提示，在桌面上指针停留时出现，样式由应用决定。
+- [Tree](https://nsh.dev/zh-CN/elements/tree.md): Tree：包含子项目的项目，可以展开和收起，其中一个被选中：项目的文件、设置侧边栏、文档大纲。虚拟化渲染，在键盘焦点里只占一站，对屏幕阅读器是一棵树。每一行的外观都属于应用。
+
+## API（中文）
+
+- [模块](https://nsh.dev/zh-CN/modules.md): NSH 应用可以导入的模块、各模块导出的内容以及它们的组织方式。
+- [nsh](https://nsh.dev/zh-CN/modules/nsh.md): 核心模块：signal、effect、context、mount、设计令牌、动画、环境、手势、剪贴板、存储、宿主通道、键盘快捷键、无障碍，以及元素和样式的类型。
+- [List](https://nsh.dev/zh-CN/modules/nsh-list.md): List：基于原生滚动视图、虚拟化并复用单元格的列表，以及它的全部属性、事件和 ref 方法。
+- [Image](https://nsh.dev/zh-CN/modules/nsh-image.md): Image：显示图片的元素，以及用于获取图片信息和预加载的 Image.getSize 与 Image.prefetch。
+- [Canvas](https://nsh.dev/zh-CN/modules/nsh-canvas.md): Canvas、2D 绘图上下文、Path2D 与渐变，以及 NSH 支持的 HTML Canvas 2D 子集。
+- [WebView](https://nsh.dev/zh-CN/modules/nsh-webview.md): WebView：原生网页视图（WKWebView、android.webkit.WebView），以及它的属性、事件和 ref 方法。
+- [Video](https://nsh.dev/zh-CN/modules/nsh-video.md): Video：原生视频播放器（AVPlayer、MediaPlayer），以及它的属性、事件和 ref 方法。
+- [nsh/base](https://nsh.dev/zh-CN/modules/nsh-base.md): 应用界面的无样式基础组件：按钮、链接、头像、轮播、复选框、单选框、开关、标签页、开关按钮、工具栏、树、选择框、组合框、命令面板、表情选择面板、日历、日期选择器、时间输入框、可调整大小的面板、可停靠的工作区、Markdown 与 HTML 文档、代码编辑器、diff、文本输入框、导航栈与对话框、系统警告对话框，以及页面和对话框的状态栏。
+- [nsh/mobile](https://nsh.dev/zh-CN/modules/nsh-mobile.md): iOS 和 Android 的 API：系统标签栏 TabBar、触感反馈 Haptics、iOS 的 InputAccessoryView、Android 的 BackHandler，以及 isAvailable。
+- [nsh/desktop](https://nsh.dev/zh-CN/modules/nsh-desktop.md): 桌面专有 API：应用的窗口（主窗口和应用自己的窗口，它们的种类、属性、状态和事件）、显示器、自定义标题栏、应用菜单、右键菜单、托盘和全局快捷键。
+- [nsh/i18n](https://nsh.dev/zh-CN/modules/nsh-i18n.md): 应用的翻译（从 locales/ 中按 rust-i18n 格式读取的文件）和应用显示的语言：t、setLocale、availableLocales。
+- [nsh/web](https://nsh.dev/zh-CN/modules/nsh-web.md): Web 上应用所在页面的 API：Head（文档的标题、描述和元数据，供搜索引擎和链接预览使用）。
+- [nsh/updater](https://nsh.dev/zh-CN/modules/nsh-updater.md): 打包后的应用自我更新：向 nsh.json 指定的来源检查新版本，带进度下载压缩包，替换应用并重启，或运行代码的新签名包。
+- [标准模块](https://nsh.dev/zh-CN/modules/standard-modules.md): 十一个 Node 风格的标准模块：固定版本的 LLRT 工具模块，以及经能力检查的文件、进程和网络。
+- [全局 API](https://nsh.dev/zh-CN/modules/globals.md): 每个 NSH 应用无需 import 就能使用的全局对象——fetch、流、URL、文本编码、Blob 与 FormData、事件与中止信号、Intl、定时器和 console——都用 Rust 原生实现。
+- [样式参考](https://nsh.dev/zh-CN/modules/style-reference.md): NSH 支持的全部样式属性，按 LayoutStyle、ViewStyle、TextStyle、InputStyle 和 ImageStyle 分组，列出类型与含义。
+- [Tailwind 参考](https://nsh.dev/zh-CN/modules/tailwind-reference.md): NSH 原生解析的全部 Tailwind 工具类与变体、任意值语法，以及如何在 nsh.json 中扩展主题。
