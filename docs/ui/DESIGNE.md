@@ -117,6 +117,21 @@ target; mobile and TUI are outside this change.
 - Platforms and content: Windows only. Larger text, right-to-left layout, and other
   platforms remain manual checks. About has no loading, error, or editable state.
 
+## App icon and tray
+
+The taskbar, the window, and Explorer draw the app icon from `nsh.json` `icon`:
+`assets/logos/icon.png`, the rounded tile from `assets/logos/icon-rounded.svg`
+rendered at 1024 px. That key takes a raster, not an SVG: the tool reads it with
+its image decoder. The tile is part of the icon, not a background: the mark is
+black, and a transparent icon would disappear on a dark taskbar.
+
+The tray draws `assets/logos/icon.svg`, the mark without the tile. NSH paints
+an SVG tray icon through its alpha in the taskbar's or menu bar's text colour, so
+the rounded tile would collapse into a solid square; the bare mark stays readable
+in light and dark. Its menu holds one item, `Exit`; a primary press brings the
+main window back.
+
+
 ## Theme Colors
 ```css
 :root {

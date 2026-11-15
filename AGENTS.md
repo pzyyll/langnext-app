@@ -31,6 +31,7 @@ All project commands are in `.mise/tasks/`.
 | `mise run lint`                        | Run oxlint and Rust Clippy.                          |
 | `mise run format`                      | Format source and configuration files.               |
 | `mise run format-check`                | Check formatting without changes.                    |
+| `mise run icons`                       | Render `assets/logos/icon.png` from its SVG source.  |
 | `mise run test`                        | Run Rust tests and headless NSH tests.               |
 | `mise run test-desktop`                | Run the UI tests in desktop windows.                 |
 | `mise run verify`                      | Run formatting, lint, type checks, tests, and build. |

@@ -1,6 +1,6 @@
 import { appInfo, Image, signal, Text, token, View } from "nsh";
 import { Button, Dialog, Menu, MenuItem } from "nsh/base";
-import appIcon from "../assets/logos/icon128.svg";
+import appIcon from "../assets/logos/icon.svg";
 import { motion } from "./motion";
 
 interface AboutDialogProps {

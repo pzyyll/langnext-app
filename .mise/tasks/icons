@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+#MISE description="Render the app icon PNG from assets/logos/icon-rounded.svg."
+set -euo pipefail
+
+# NSH reads `nsh.json` `icon` with its image decoder, so that key takes a square
+# raster, not an SVG. At package time NSH embeds the PNG in the runner and writes
+# `nsh/icon.ico` (16, 20, 24, 32, 40, 48, 64 and 256 px frames) beside the
+# bundle, which is what the window, the taskbar and Explorer draw: this task never
+# writes a `.ico` of its own. The tray is a separate one-colour SVG the app hands
+# NSH through `Tray.set`, so it is used as-is and is not generated here.
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "$root"
+
+# Relative paths keep ImageMagick's Windows build, which does not read the
+# POSIX paths a shell prints for the drive, off the path translation.
+source_svg=assets/logos/icon-rounded.svg
+tray_svg=assets/logos/icon.svg
+icon_png=assets/logos/icon.png
+size=1024
+
+fail() {
+  echo "icons: $*" >&2
+  exit 1
+}
+
+# mise publishes an ImageMagick shim even when the installed build does not
+# expose `magick`, so probe the binary instead of trusting `command -v`.
+magick_bin() {
+  local dir candidate
+  if command -v magick >/dev/null 2>&1 && magick -version >/dev/null 2>&1; then
+    command -v magick
+    return 0
+  fi
+  dir="$(mise where imagemagick 2>/dev/null || true)"
+  if [ -n "$dir" ]; then
+    for candidate in "$dir/magick.exe" "$dir/magick"; do
+      if [ -x "$candidate" ] && "$candidate" -version >/dev/null 2>&1; then
+        printf '%s\n' "$candidate"
+        return 0
+      fi
+    done
+  fi
+  echo "icons: ImageMagick is not installed; run 'mise use -g imagemagick'." >&2
+  return 1
+}
+
+if [ ! -f "$source_svg" ]; then
+  fail "missing $source_svg"
+fi
+magick="$(magick_bin)"
+
+"$magick" -background none "$source_svg" -resize "${size}x${size}" -alpha on \
+  -type TrueColorAlpha "PNG32:$icon_png"
+
+dims="$("$magick" identify -format "%wx%h" "$icon_png")"
+if [ "$dims" != "${size}x${size}" ]; then
+  fail "rendered $dims, expected ${size}x${size}"
+fi
+
+# The white tile is part of the icon: the mark is black, so a transparent icon
+# disappears on a dark taskbar and a squared tile breaks the rounding.
+centre="$("$magick" identify -format "%[fx:p{$((size / 2)),$((size / 2))}.a]" "$icon_png")"
+corner="$("$magick" identify -format "%[fx:p{0,0}.a]" "$icon_png")"
+coverage="$("$magick" identify -format "%[fx:mean.a]" "$icon_png")"
+
+awk -v a="$centre" 'BEGIN { exit !(a > 0.99) }' ||
+  fail "the tile is transparent at its centre; the app icon needs the opaque white tile"
+awk -v a="$corner" 'BEGIN { exit !(a < 0.01) }' ||
+  fail "the corners are opaque; the rounded tile lost its rounding"
+awk -v a="$coverage" 'BEGIN { exit !(a > 0.9) }' ||
+  fail "the tile covers only $coverage of the square; check the source SVG"
+
+if [ ! -f "$tray_svg" ]; then
+  echo "icons: warning: missing $tray_svg, the tray icon the app sets at run time" >&2
+fi
+
+bytes="$(wc -c <"$icon_png" | tr -d ' ')"
+echo "icons: wrote $icon_png (${size}x${size}, ${bytes} bytes)"
+echo "icons: NSH embeds it and writes nsh/icon.ico at package time; no .ico is committed."

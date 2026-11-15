@@ -81,7 +81,7 @@ theme.json                   Semantic theme tokens
 tsconfig.json                NSH TypeScript configuration
 Cargo.toml                   Native extension crate
 app/
-  shell.tsx                  Windows and application lifecycle
+  shell.tsx                  Windows, the system tray, and application lifecycle
   store.ts                   State that must be shared across windows
 features/
   providers/                 Provider and model management
@@ -140,6 +140,22 @@ Application root
 
 Do not confuse these windows with independently embedded app surfaces, which have
 separate engines and module state.
+
+## System tray and app icon
+
+The shell installs the tray once, for the app's lifetime. A primary press brings
+the main window back, and the menu holds one item, `Exit`, which uses NSH's native
+`quit` role so it follows the platform's own quit path. The tray owns no state and
+shows no app data, so it stays with the window lifecycle in `app/shell.tsx` rather
+than in a feature.
+
+`nsh.json` `icon` names a square PNG, not an SVG: NSH reads it with its image
+decoder, embeds it in the packaged executable and writes `nsh/icon.ico` beside the
+bundle, which is what the window, the taskbar, and Explorer draw. Keep the white
+tile (`assets/logos/icon.png`): the mark is black, so a transparent icon disappears
+on a dark taskbar. The tray's glyph is a separate one-colour SVG
+(`assets/logos/icon.svg`), which NSH paints through its alpha in the taskbar's
+or menu bar's text colour.
 
 Select `popup` or `panel` after checking focus and closing behavior. A popup closes
 on blur by default. A panel does not activate the application by default. An
@@ -203,6 +219,10 @@ Complete these checks before treating the architecture as proven:
    third-party SDK compatibility before using an SDK in place of protocol adapters.
 5. Check both light and dark appearances. Record which target platforms were tested
    and which remain unverified.
+6. Check the tray on every supported platform. On Windows with NSH 0.5.1 the icon
+   shows in a TSX-only run but not in this project's mixed build, in the development
+   host and in the packaged runner alike; a minimal app and a minimal `nsh.json`
+   reproduce it, so the generated mixed host is what to check after an NSH update.
 
 Use `nsh check` and `nsh test` for TS application checks, and `cargo test` for native
 extension tests when those parts exist. Headless tests do not prove global hooks,
