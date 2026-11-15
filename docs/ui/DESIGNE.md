@@ -67,7 +67,7 @@ their existing behavior and appearance.
 
 ## App menu and About
 
-The title bar uses `assets/logos/icon.svg` as a compact menu button. The rest of
+The title bar uses `assets/logos/icon128.svg` as a compact menu button. The rest of
 its surface still drags the window. A `w-13` lane centers the button on the
 sidebar's icon axis. The lane starts after `titleBar().left` to clear system
 window controls. The menu contains one action, `About`.
@@ -120,15 +120,15 @@ target; mobile and TUI are outside this change.
 ## App icon and tray
 
 The taskbar, the window, and Explorer draw the app icon from `nsh.json` `icon`:
-`assets/logos/icon-bg.png`, the brush mark on a white 1024 px rounded tile. The
-tile is part of the icon, not a background: the mark is black, and a transparent
-icon would disappear on a dark taskbar.
+`assets/logos/icon.png`, the rounded tile from `assets/logos/icon128-rounded.svg`
+rendered at 1024 px. That key takes a raster, not an SVG: the tool reads it with
+its image decoder. The tile is part of the icon, not a background: the mark is
+black, and a transparent icon would disappear on a dark taskbar.
 
-The tray draws `assets/logos/tray.svg`, a one-colour icon-park-outline glyph
-(`translate`), never the brand mark. Panels draw the tray at 16 to 24 pixels,
-where the brush strokes collapse into a blob, and NSH paints an SVG tray icon in
-the taskbar's or menu bar's text colour, so the glyph stays visible in light and
-dark appearances. Its menu holds one item, `Exit`; a primary press brings the
+The tray draws `assets/logos/icon128.svg`, the mark without the tile. NSH paints
+an SVG tray icon through its alpha in the taskbar's or menu bar's text colour, so
+the rounded tile would collapse into a solid square; the bare mark stays readable
+in light and dark. Its menu holds one item, `Exit`; a primary press brings the
 main window back.
 
 

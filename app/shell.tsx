@@ -1,6 +1,6 @@
 import { signal, View } from "nsh";
 import { titleBar, Tray, Window } from "nsh/desktop";
-import trayIcon from "../assets/logos/tray.svg";
+import trayIcon from "../assets/logos/icon128.svg";
 import { AppMenu } from "../components/app-menu";
 import { PageSurface } from "../components/page-surface";
 import { Sidebar, type SidebarPage } from "../components/sidebar";

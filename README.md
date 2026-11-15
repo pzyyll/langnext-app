@@ -52,8 +52,8 @@ aligned. pnpm provides development tools only; it is not the app runtime.
 
 - `App.tsx`: Load settings and mount the application once.
 - `app/`: Application shell, navigation, and the system tray.
-- `assets/logos/`: App icon assets: the `icon-bg.png` tile NSH embeds and
-  packages, and the `tray.svg` glyph the system tray draws.
+- `assets/logos/`: App icon assets: the `icon.png` tile NSH packages and the
+  `icon128.svg` glyph the system tray draws.
 - `components/`: Styled controls built on NSH base components.
 - `features/settings/`: Appearance state and settings screen.
 - `theme.json`: Semantic light and dark tokens from the design system.

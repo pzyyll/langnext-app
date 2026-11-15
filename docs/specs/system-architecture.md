@@ -149,11 +149,13 @@ the main window back, and the menu holds one item, `Exit`, which uses NSH's nati
 shows no app data, so it stays with the window lifecycle in `app/shell.tsx` rather
 than in a feature.
 
-`nsh.json` `icon` names a square PNG: NSH embeds it in the packaged executable and
-writes `nsh/icon.ico` beside the bundle, which is what the window, the taskbar, and
-Explorer draw. Keep the white tile (`assets/logos/icon-bg.png`): the mark is black,
-so a transparent icon disappears on a dark taskbar. The tray's glyph is a separate
-one-colour SVG, which NSH paints in the taskbar's or menu bar's text colour.
+`nsh.json` `icon` names a square PNG, not an SVG: NSH reads it with its image
+decoder, embeds it in the packaged executable and writes `nsh/icon.ico` beside the
+bundle, which is what the window, the taskbar, and Explorer draw. Keep the white
+tile (`assets/logos/icon.png`): the mark is black, so a transparent icon disappears
+on a dark taskbar. The tray's glyph is a separate one-colour SVG
+(`assets/logos/icon128.svg`), which NSH paints through its alpha in the taskbar's
+or menu bar's text colour.
 
 Select `popup` or `panel` after checking focus and closing behavior. A popup closes
 on blur by default. A panel does not activate the application by default. An
