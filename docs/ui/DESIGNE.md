@@ -65,6 +65,58 @@ their existing behavior and appearance.
 - Platforms and content: Windows only. Large text, other desktop platforms, and
   right-to-left layout remain manual checks. Mobile and TUI are outside scope.
 
+## App menu and About
+
+The title bar uses `assets/logos/icon.svg` as a compact menu button. The rest of
+its surface still drags the window. A `w-13` lane centers the button on the
+sidebar's icon axis. The lane starts after `titleBar().left` to clear system
+window controls. The menu contains one action, `About`.
+`AppMenu` owns the menu and dialog state. It opens the dialog after the menu's
+exit completes, so the two surfaces do not overlap.
+
+The centered About dialog shows the app logo, name, and version from `appInfo()`.
+It does not show an unverified release date or copyright. Its footer has one
+`OK` button. Escape and a backdrop press also close it. Native `Menu` and `Dialog`
+components own keyboard navigation, dismissal, and focus. Controls have accessible
+names and visible focus styles. Windows view focus still needs platform checks.
+
+### Motion inventory
+
+| Change | Tool and tokens | Reduced motion |
+| --- | --- | --- |
+| Menu trigger, About item, and OK hover or press | Native color transition; `navigationFeedback`, 150 ms, ease-out; press deepens the fill | Instant |
+| Menu opens or closes | Native popup transition; `popup`, 150 ms, ease-out; opacity and a 4-point slide from the trigger | Instant |
+| About opens or closes | Native dialog `fade` animation; `aboutDialog` | Native reduced-motion behavior |
+| Glyphs, labels, selection, layout, gestures, loading, live content | None. About shows static build metadata. | No change |
+
+The popup and dialog use theme surfaces, foregrounds, and borders. `overlay`
+is a black scrim at 40% opacity in both themes. Sizes, text, spacing, and radii
+use the existing utility scales. The monochrome logo takes the surface's foreground
+tint so that it stays visible in dark mode. Windows desktop is the validation
+target; mobile and TUI are outside this change.
+
+### Validation
+
+- Radius, typography, spacing, alignment, and color: reviewed in Windows screenshots
+  in light at 1040 × 720 and dark at 720 × 520. No clipping found. The logo now
+  uses a theme tint; the black source was not legible in dark mode.
+- Hover and pressed: state classes use the existing feedback tokens. Pointer
+  activation passes. The settled menu was checked after hover; held presses and
+  pointer cancellation were not reviewed.
+- Shared components and standards: `AppMenu` contains styled native controls.
+  The shell only composes it. Menu-open state stays visible on the trigger.
+- Other states: accessible role/name selectors, menu cancellation, OK, Escape,
+  and reopening pass headless and Windows tests. Backdrop dismissal is configured
+  natively but not verified: the test press targets the covered backdrop center.
+- Motion and sound: menu-to-dialog sequencing and native dialog entry were checked
+  in Windows. Reduced-motion behavior passes tests. No sound is used. Frame-by-frame
+  motion was not reviewed.
+- Accessibility and keyboard: Windows Tab + Enter did not open the menu. NSH 0.5.1
+  declares view focus for macOS and Web only. Full keyboard completion and focus
+  restoration remain blocked by that platform limitation. Narrator was not tested.
+- Platforms and content: Windows only. Larger text, right-to-left layout, and other
+  platforms remain manual checks. About has no loading, error, or editable state.
+
 ## Theme Colors
 ```css
 :root {
