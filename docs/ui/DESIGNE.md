@@ -20,6 +20,13 @@ view focus. `mod+1` opens Home and `mod+,` opens Settings on all desktop targets
 The tooltip shows each shortcut. NSH 0.5.1 declares view Tab focus for macOS and
 Web; do not assume Windows has the same support.
 
+Each item is styled by one token pair, `sidebar-accent` on `sidebar-accent-foreground`:
+a lighter wash on hover, the full wash while pressed, and the same wash held for the
+current destination. Those states belong to the button's own variants (`hover:`,
+`active:`, `selected:`, `group-selected:`), never to a class picked in JavaScript:
+an element keeps the class it was created with, so only a state variant restyles it
+when `selected` changes.
+
 Home contains a static translation example, not a connected translation service.
 It uses the existing text scale, spacing, surfaces, and semantic theme colors.
 The page owns scrolling. Its content uses one shared leading edge and wraps at

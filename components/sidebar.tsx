@@ -24,13 +24,16 @@ interface SidebarItemProps {
 }
 
 function SidebarItem(props: SidebarItemProps) {
+  // One token pair carries every state: a sidebar-accent wash, lighter on hover,
+  // full while pressed, and held for the current destination. The states belong
+  // to the button, so `selected` restyles it without rebuilding the item.
   return (
     <Button
       testID={`nav-${props.destination}`}
       accessibilityLabel={props.label}
       selected={props.selected}
       onPress={() => props.onPress()}
-      class={`size-9 items-center justify-center rounded-sidebar focus-visible:ring-2 focus-visible:ring-sidebar-ring ${motion.navigationFeedback} ${props.selected ? "bg-sidebar-primary hover:bg-sidebar-primary/90 active:bg-sidebar-primary/80" : "hover:bg-muted active:bg-sidebar-accent"}`}
+      class={`group size-9 items-center justify-center rounded-sidebar focus-visible:ring-2 focus-visible:ring-sidebar-ring ${motion.navigationFeedback} hover:bg-sidebar-accent/70 active:bg-sidebar-accent selected:bg-sidebar-accent selected:hover:bg-sidebar-accent`}
       tooltip={
         <Tooltip
           testID={`${props.destination}-tooltip`}
@@ -65,9 +68,7 @@ export function Sidebar(props: SidebarProps) {
         selected={props.page === "home"}
         onPress={() => props.onSelectHome()}
       >
-        <Text
-          class={`text-lg font-semibold ${props.page === "home" ? "text-sidebar-primary-foreground" : "text-sidebar-foreground"}`}
-        >
+        <Text class="text-lg font-semibold text-sidebar-foreground group-selected:text-sidebar-accent-foreground">
           M
         </Text>
       </SidebarItem>
@@ -83,7 +84,7 @@ export function Sidebar(props: SidebarProps) {
           class="size-5"
           style={{
             tintColor: token(
-              props.page === "settings" ? "sidebar-primary-foreground" : "sidebar-foreground",
+              props.page === "settings" ? "sidebar-accent-foreground" : "sidebar-foreground",
             ),
           }}
         />
