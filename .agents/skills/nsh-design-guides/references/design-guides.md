@@ -112,7 +112,6 @@ semantics, tokens and state across them, and adapt interaction, presentation and
 
 **Desktop and Web: one family.** macOS, Windows, Linux and the web in the desktop idiom share interaction, design
 and sizes; the web is not a separate design.
-
 - Pointer and keyboard first: hover on everything pressable, visible focus, keyboard shortcuts for frequent commands,
   context menus, tooltips for icon-only controls, text selection where content is read.
 - Compact controls: about 24–32pt tall (32 the default), icons 14–16pt, rows 28–36pt, dense tables and toolbars.
@@ -122,7 +121,6 @@ and sizes; the web is not a separate design.
 
 **Mobile: iOS and Android conventions.** Mac Catalyst counts as mobile. Follow each platform's interaction design and
 control sizes rather than shrinking the desktop.
-
 - Touch targets at least 44 × 44pt on iOS and 48 × 48dp on Android, even when the drawn control is smaller; controls
   and rows usually 44–56pt tall; body text at least 16pt.
 - Navigation as the platform does it: a stack with a back gesture and back button, a tab bar for top-level sections,
@@ -134,7 +132,6 @@ control sizes rather than shrinking the desktop.
 
 **TUI: keyboard and cells.** In a terminal (`platform.idiom === "terminal"`) design for the keyboard and the
 character grid.
-
 - Every action has a key; Tab and arrows move focus visibly; Enter activates, Escape goes back; show the keys that
   matter in a footer or help line.
 - Layout snaps to whole cells: no fractional spacing, no radii or shadows that cannot render; boxes drawn with line
@@ -165,18 +162,18 @@ Applications build their components on `nsh/base`, in TSX or in the app's Rust c
 
 Do not copy these web assumptions blindly:
 
-| Web habit                                       | NSH default                                                                                                             |
-| ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| Pointing-hand cursor on every button            | Default cursor; pointing hand (`cursor-pointer`) for links                                                              |
-| Page navigation as the main structure           | Persistent windows, panes, sidebars, tabs, and menus on the desktops; a `NavStack` with the system's back on phones     |
-| Browser focus and scrolling as a fallback       | Explicit focus ownership and region-owned scrolling (`Scroll`, `List`)                                                  |
-| Mobile-first single column                      | One column on phones, a resizable shell with a defined minimum window size on the desktops                              |
-| Hover-revealed critical actions                 | Keyboard-, touch- and pointer-reachable actions that do not depend on hover                                             |
-| A row of hover-only icon buttons                | A visible primary action plus `Menu` or `ContextMenu` for secondary commands                                            |
-| Link-styled text for application commands       | A `Button` in the app's default, outline, or ghost style; link styling only for URLs, web resources, or email addresses |
-| Large touch density everywhere                  | Touch-sized targets on touch screens; medium density with a pointer, compact only where information work benefits       |
-| A drawn header and alert card on every platform | The system's header and `AlertDialog` on iOS and Android; the page's `header` slot on the desktops and the web          |
-| CSS overrides across descendants                | The app's components, their parts, and the theme's tokens                                                               |
+| Web habit | NSH default |
+| --- | --- |
+| Pointing-hand cursor on every button | Default cursor; pointing hand (`cursor-pointer`) for links |
+| Page navigation as the main structure | Persistent windows, panes, sidebars, tabs, and menus on the desktops; a `NavStack` with the system's back on phones |
+| Browser focus and scrolling as a fallback | Explicit focus ownership and region-owned scrolling (`Scroll`, `List`) |
+| Mobile-first single column | One column on phones, a resizable shell with a defined minimum window size on the desktops |
+| Hover-revealed critical actions | Keyboard-, touch- and pointer-reachable actions that do not depend on hover |
+| A row of hover-only icon buttons | A visible primary action plus `Menu` or `ContextMenu` for secondary commands |
+| Link-styled text for application commands | A `Button` in the app's default, outline, or ghost style; link styling only for URLs, web resources, or email addresses |
+| Large touch density everywhere | Touch-sized targets on touch screens; medium density with a pointer, compact only where information work benefits |
+| A drawn header and alert card on every platform | The system's header and `AlertDialog` on iOS and Android; the page's `header` slot on the desktops and the web |
+| CSS overrides across descendants | The app's components, their parts, and the theme's tokens |
 
 ## Start from the task
 
@@ -325,15 +322,15 @@ own components or theme tokens (`p-(--gap-card)`) and uses it consistently.
 
 Spacing expresses relationship. Choose a gap from the semantic scale by asking what the two things mean to each other:
 
-| Relationship                   | Typical class | Current scale | Examples                                |
-| ------------------------------ | ------------- | ------------- | --------------------------------------- |
-| Optical correction             | `gap-0.5`     | 2 pt          | icon baseline, compact separator        |
-| Parts of one control           | `gap-1`       | 4 pt          | menu icon/label, title/description      |
-| Closely related controls       | `gap-2`       | 8 pt          | button icon/label, dialog actions       |
-| One content group              | `gap-3`       | 12 pt         | notification columns, compact form rows |
-| Separate groups in one section | `gap-4`       | 16 pt         | panel padding, form groups              |
-| Separate sections              | `gap-6`       | 24 pt         | major blocks in a page or inspector     |
-| Major region boundary          | `gap-8`       | 32 pt         | empty-state breathing room, page bands  |
+| Relationship | Typical class | Current scale | Examples |
+| --- | --- | --- | --- |
+| Optical correction | `gap-0.5` | 2 pt | icon baseline, compact separator |
+| Parts of one control | `gap-1` | 4 pt | menu icon/label, title/description |
+| Closely related controls | `gap-2` | 8 pt | button icon/label, dialog actions |
+| One content group | `gap-3` | 12 pt | notification columns, compact form rows |
+| Separate groups in one section | `gap-4` | 16 pt | panel padding, form groups |
+| Separate sections | `gap-6` | 24 pt | major blocks in a page or inspector |
+| Major region boundary | `gap-8` | 32 pt | empty-state breathing room, page bands |
 
 These values describe the default scale, not literals to repeat. Use the spacing classes and typed methods (`gap-2`,
 `.gap_2()`, `p-4`, `.p_4()`) or the theme's tokens. A product-owned scale should preserve the ordering and
@@ -601,11 +598,7 @@ fn setting_switch(label: &'static str, on: Signal<bool>) -> impl IntoElement {
 import { Text } from "nsh";
 import { Switch } from "nsh/base";
 
-function SettingSwitch(props: {
-  label: string;
-  on: boolean;
-  onChange: (e: { checked: boolean }) => void;
-}) {
+function SettingSwitch(props: { label: string; on: boolean; onChange: (e: { checked: boolean }) => void }) {
   return (
     <Switch
       checked={props.on}
@@ -656,11 +649,7 @@ fn mark(selected: usize, total: usize) -> &'static str {
 import { Text } from "nsh";
 import { Checkbox } from "nsh/base";
 
-function SelectAll(props: {
-  selected: number;
-  total: number;
-  onChange: (e: { checked: boolean }) => void;
-}) {
+function SelectAll(props: { selected: number; total: number; onChange: (e: { checked: boolean }) => void }) {
   return (
     <Checkbox
       checked={props.selected === props.total}
@@ -752,16 +741,10 @@ import { Button } from "nsh/base";
 function FormActions(props: { onCancel: () => void; onCreate: () => void }) {
   return (
     <View class="flex-row justify-end gap-2">
-      <Button
-        onPress={props.onCancel}
-        class="rounded-(--radius) border border-border px-4 py-2 active:bg-muted"
-      >
+      <Button onPress={props.onCancel} class="rounded-(--radius) border border-border px-4 py-2 active:bg-muted">
         <Text class="text-foreground">Cancel</Text>
       </Button>
-      <Button
-        onPress={props.onCreate}
-        class="rounded-(--radius) bg-primary px-4 py-2 active:bg-primary/90"
-      >
+      <Button onPress={props.onCreate} class="rounded-(--radius) bg-primary px-4 py-2 active:bg-primary/90">
         <Text class="text-primary-foreground">Create</Text>
       </Button>
     </View>
@@ -820,17 +803,17 @@ visible or whose consequences require it.
 
 Every interactive control should be designed for:
 
-| State              | NSH                     | Design requirement                                             |
-| ------------------ | ----------------------- | -------------------------------------------------------------- |
-| Rest               |                         | Clear affordance without visual noise                          |
-| Hover              | `hover:`                | Subtle pointer feedback, never the only cue                    |
-| Pressed            | `active:`               | Immediate press feedback, styled by the app                    |
-| Open / pressed     | the popup's `open`      | Persistent feedback while an attached popup is open            |
-| Focus visible      | `focus-visible:`        | High-contrast keyboard focus ring                              |
-| Selected / checked | `selected:`, `checked:` | Persistent state distinct from hover                           |
-| Disabled           | `disabled:`             | Lower emphasis and no misleading hover/pressed response        |
-| Loading            |                         | Preserve context, prevent duplicate action, explain long waits |
-| Error              |                         | State what happened and how to recover                         |
+| State | NSH | Design requirement |
+| --- | --- | --- |
+| Rest | | Clear affordance without visual noise |
+| Hover | `hover:` | Subtle pointer feedback, never the only cue |
+| Pressed | `active:` | Immediate press feedback, styled by the app |
+| Open / pressed | the popup's `open` | Persistent feedback while an attached popup is open |
+| Focus visible | `focus-visible:` | High-contrast keyboard focus ring |
+| Selected / checked | `selected:`, `checked:` | Persistent state distinct from hover |
+| Disabled | `disabled:` | Lower emphasis and no misleading hover/pressed response |
+| Loading | | Preserve context, prevent duplicate action, explain long waits |
+| Error | | State what happened and how to recover |
 
 Bind commands that should work from the keyboard with [`keymap`](../modules/nsh.md#keymap) on the desktops and
 the web. Match familiar platform shortcuts (`"mod+k"` is Command on macOS, Control elsewhere), expose shortcuts in
@@ -980,24 +963,15 @@ function MoreMenu(props: { onRename: () => void; onDuplicate: () => void; onDele
       popupClass={popup}
       backdropClass="bg-black/50"
       trigger={
-        <View
-          accessibilityLabel="More actions"
-          class="size-11 items-center justify-center rounded-full active:bg-muted"
-        >
+        <View accessibilityLabel="More actions" class="size-11 items-center justify-center rounded-full active:bg-muted">
           <Text class="text-foreground">⋯</Text>
         </View>
       }
     >
-      <MenuItem onSelect={props.onRename} class={item}>
-        <Text class="text-foreground">Rename…</Text>
-      </MenuItem>
-      <MenuItem onSelect={props.onDuplicate} class={item}>
-        <Text class="text-foreground">Duplicate</Text>
-      </MenuItem>
+      <MenuItem onSelect={props.onRename} class={item}><Text class="text-foreground">Rename…</Text></MenuItem>
+      <MenuItem onSelect={props.onDuplicate} class={item}><Text class="text-foreground">Duplicate</Text></MenuItem>
       <MenuSeparator class="my-1 h-px bg-border" />
-      <MenuItem onSelect={props.onDelete} class={item}>
-        <Text class="text-foreground">Delete…</Text>
-      </MenuItem>
+      <MenuItem onSelect={props.onDelete} class={item}><Text class="text-foreground">Delete…</Text></MenuItem>
     </Menu>
   );
 }
@@ -1056,14 +1030,14 @@ Choose the smallest surface that fits the decision:
 
 Each takes the form its device expects, from one structure the app styles (`popupClass`, `backdropClass`):
 
-|               | Desktops                                        | Phones and tablets                                            |
-| ------------- | ----------------------------------------------- | ------------------------------------------------------------- |
-| `Tooltip`     | after the pointer rests on the element          | only when the app opens it                                    |
-| `Popover`     | anchored; a press outside closes it and goes on | anchored; a press outside only closes it                      |
-| `Menu`        | a popup at the trigger, cascading submenus      | a sheet at the bottom; a submenu takes the place of its items |
-| `ContextMenu` | the secondary button, at the pointer            | a held finger opens the sheet                                 |
-| `Sheet`       | an edge panel over a backdrop                   | the same                                                      |
-| `AlertDialog` | an alert in the platform's dialog style         | the system's alert or action sheet                            |
+| | Desktops | Phones and tablets |
+| --- | --- | --- |
+| `Tooltip` | after the pointer rests on the element | only when the app opens it |
+| `Popover` | anchored; a press outside closes it and goes on | anchored; a press outside only closes it |
+| `Menu` | a popup at the trigger, cascading submenus | a sheet at the bottom; a submenu takes the place of its items |
+| `ContextMenu` | the secondary button, at the pointer | a held finger opens the sheet |
+| `Sheet` | an edge panel over a backdrop | the same |
+| `AlertDialog` | an alert in the platform's dialog style | the system's alert or action sheet |
 
 A tooltip supplies missing meaning; it does not restate an obvious action. Reserve it for an unfamiliar symbol,
 ambiguous scope, or a useful shortcut that is otherwise hidden. Repeated, recognizable commands such as Copy and
@@ -1097,17 +1071,17 @@ never a default animation added to every component.
 
 ### Choose the tool by what changes
 
-| What changes                                                   | Tool                                                                                                          | Example                                                        |
-| -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
-| A state style: hover, press, selected, open, disabled, a color | Transitions: `transition` / `duration-*` / `ease-*` classes, `transition_*()` in Rust                         | A row's hover wash, a button pressing to 0.97                  |
-| A view appears or leaves                                       | A motion (`createMotion({ enter })`, `motion().entering(..)`), or a popup's `*StartingStyle` / `*EndingStyle` | A dialog rising 10pt, a menu growing out of its trigger        |
-| Items arrive together                                          | Motions with a capped, index-based delay, or `Animated.stagger`                                               | A list's rows coming in as a wave                              |
-| One element moves between places                               | An animated value with `timing`                                                                               | A tab or sidebar selection sliding to the chosen item          |
-| The user throws, drags or releases                             | `spring` / `decay` with the gesture's velocity                                                                | A sheet snapping open, a card returning to rest                |
-| A small playful acknowledgement                                | `spring` with low damping, or keyframes that overshoot                                                        | A like's heart popping                                         |
-| Frames change because the layout changed                       | `LayoutAnimation` before that one update                                                                      | A sidebar collapsing at a breakpoint, an item removed          |
-| Something is live or continuous                                | A `Shader` with uniforms (animated values, `nsh.time`)                                                        | Playing bars, an audio-reactive glow, a loading shimmer        |
-| The value follows a scroll offset or pointer                   | Animated values bound to it (`interpolate`, arithmetic)                                                       | A sticky header folding, a selection following a scrolled list |
+| What changes | Tool | Example |
+|---|---|---|
+| A state style: hover, press, selected, open, disabled, a color | Transitions: `transition` / `duration-*` / `ease-*` classes, `transition_*()` in Rust | A row's hover wash, a button pressing to 0.97 |
+| A view appears or leaves | A motion (`createMotion({ enter })`, `motion().entering(..)`), or a popup's `*StartingStyle` / `*EndingStyle` | A dialog rising 10pt, a menu growing out of its trigger |
+| Items arrive together | Motions with a capped, index-based delay, or `Animated.stagger` | A list's rows coming in as a wave |
+| One element moves between places | An animated value with `timing` | A tab or sidebar selection sliding to the chosen item |
+| The user throws, drags or releases | `spring` / `decay` with the gesture's velocity | A sheet snapping open, a card returning to rest |
+| A small playful acknowledgement | `spring` with low damping, or keyframes that overshoot | A like's heart popping |
+| Frames change because the layout changed | `LayoutAnimation` before that one update | A sidebar collapsing at a breakpoint, an item removed |
+| Something is live or continuous | A `Shader` with uniforms (animated values, `nsh.time`) | Playing bars, an audio-reactive glow, a loading shimmer |
+| The value follows a scroll offset or pointer | Animated values bound to it (`interpolate`, arithmetic) | A sticky header folding, a selection following a scrolled list |
 
 Pick the lightest tool that says the change: a transition before a motion, a motion before an animated value, an
 animated value before a shader. See [Animation](./animation.md) for the APIs and
@@ -1141,18 +1115,18 @@ to replace. A line may say "no motion" with a reason (a value that updates many 
 
 A chat screen, as an example:
 
-| Change                       | Motion                                                                |
-| ---------------------------- | --------------------------------------------------------------------- |
-| Send button pressed          | Scale 0.95, `fast`, soft settle                                       |
-| Send ↔ Stop while streaming  | Glyph swap (shrink and fade out, grow in), `base`                     |
-| User message sent            | Rises 8pt and fades in from the composer, `slow`, ease-out            |
-| Reply streaming              | Caret or thinking mark breathing; paused when idle                    |
-| Reply finished               | Actions (copy, retry) fade in under it, `fast`                        |
-| Current conversation changes | One selection background slides to it, `base`, ease-in-out            |
-| Sidebar collapses            | `LayoutAnimation` for that update, `base`                             |
-| Conversation menu opens      | Grows from the trigger's corner, slides 8pt, `slow`; leaves in `base` |
-| A conversation opens         | Its messages cross-fade in; the list keeps the reader's position      |
-| Reduced motion               | All of the above instant; the caret rests                             |
+| Change | Motion |
+|---|---|
+| Send button pressed | Scale 0.95, `fast`, soft settle |
+| Send ↔ Stop while streaming | Glyph swap (shrink and fade out, grow in), `base` |
+| User message sent | Rises 8pt and fades in from the composer, `slow`, ease-out |
+| Reply streaming | Caret or thinking mark breathing; paused when idle |
+| Reply finished | Actions (copy, retry) fade in under it, `fast` |
+| Current conversation changes | One selection background slides to it, `base`, ease-in-out |
+| Sidebar collapses | `LayoutAnimation` for that update, `base` |
+| Conversation menu opens | Grows from the trigger's corner, slides 8pt, `slow`; leaves in `base` |
+| A conversation opens | Its messages cross-fade in; the list keeps the reader's position |
+| Reduced motion | All of the above instant; the caret rests |
 
 ### Define motion tokens once
 
@@ -1160,16 +1134,16 @@ Like color and spacing, motion comes from the app's tokens, not from numbers wri
 below are a starting point, and an app's character (calm, playful, dense) may tune them. Define one small
 set and use it everywhere (as Tailwind classes and as the options of motions and animations):
 
-| Token     | Typical value                                                                                                                  | For                                                                      |
-| --------- | ------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------ |
-| `instant` | 120ms                                                                                                                          | A hover wash, a color change                                             |
-| `fast`    | 180ms                                                                                                                          | A press, a control's state                                               |
-| `base`    | 240ms                                                                                                                          | Moving into place: a selection sliding, an icon swapping, a menu leaving |
-| `slow`    | 360ms                                                                                                                          | Reveals: a menu or dialog opening, a pop                                 |
-| `slower`  | 500ms                                                                                                                          | Unhurried entrances: a list's wave                                       |
-| Easings   | ease-out entering, ease-in-out between two places, ease-in leaving; a soft settle `cubic-bezier(0.22, 1, 0.36, 1)` for presses |                                                                          |
-| Distances | 4 / 8 / 16pt                                                                                                                   | A label rising / a popup sliding / items entering                        |
-| Scales    | press 0.95–0.97, enter 0.9–0.97                                                                                                |                                                                          |
+| Token | Typical value | For |
+|---|---|---|
+| `instant` | 120ms | A hover wash, a color change |
+| `fast` | 180ms | A press, a control's state |
+| `base` | 240ms | Moving into place: a selection sliding, an icon swapping, a menu leaving |
+| `slow` | 360ms | Reveals: a menu or dialog opening, a pop |
+| `slower` | 500ms | Unhurried entrances: a list's wave |
+| Easings | ease-out entering, ease-in-out between two places, ease-in leaving; a soft settle `cubic-bezier(0.22, 1, 0.36, 1)` for presses | |
+| Distances | 4 / 8 / 16pt | A label rising / a popup sliding / items entering |
+| Scales | press 0.95–0.97, enter 0.9–0.97 | |
 
 Keep durations short (most under 300ms; desktop pointer feedback under 200ms). Leaving is faster than entering.
 Springs are for things the user throws or that should feel physical; time-based curves are for everything else.
@@ -1195,10 +1169,7 @@ view()
 ```
 
 ```tsx tabs
-<View
-  onPress={open}
-  class="transition-transform duration-150 active:scale-[0.97] motion-reduce:active:scale-100"
-/>
+<View onPress={open} class="transition-transform duration-150 active:scale-[0.97] motion-reduce:active:scale-100" />
 ```
 
 ### Surfaces, lists and navigation
@@ -1403,12 +1374,12 @@ dialog title or body.
 
 Use the most specific concise result as the confirmation label when possible:
 
-| Context                                        | Weak                              | Prefer            |
-| ---------------------------------------------- | --------------------------------- | ----------------- |
-| Delete dialog                                  | `Yes`, `Sure`, `Confirm deletion` | `Delete`          |
-| Unsaved changes                                | `Confirm`, `Yes`                  | `Discard changes` |
-| Pure acknowledgement                           | `Confirm operation`               | `OK` or `Done`    |
-| Complex consent whose result has no clear verb | `Yes`                             | `Confirm`         |
+| Context | Weak | Prefer |
+| --- | --- | --- |
+| Delete dialog | `Yes`, `Sure`, `Confirm deletion` | `Delete` |
+| Unsaved changes | `Confirm`, `Yes` | `Discard changes` |
+| Pure acknowledgement | `Confirm operation` | `OK` or `Done` |
+| Complex consent whose result has no clear verb | `Yes` | `Confirm` |
 
 `Confirm` is a useful fallback when the surrounding dialog fully names a complex commitment and no shorter result verb
 is accurate. It should not replace a clear command. `Sure` is conversational rather than a stable English command and
@@ -1498,7 +1469,7 @@ import { NavPage } from "nsh/base";
 
 <NavPage title="Inbox" header={<PageHeader title="Inbox" />}>
   <Inbox />
-</NavPage>;
+</NavPage>
 ```
 
 ## Guidance for AI-generated interfaces
@@ -1570,17 +1541,15 @@ not particular numbers: the same guide serves every app's style. Run it on every
 report each group as passed or as what was fixed. A group not checked is not passed.
 
 **Radius**
-
 - [ ] Every radius comes from the theme's scale (`rounded-(--radius)`, the app's named tokens, `rounded-sm` …
-      `rounded-2xl`); no one-off values.
+  `rounded-2xl`); no one-off values.
 - [ ] The scale has a clear order: the largest surfaces (a composer, a card, a sheet) softest, controls next, small
-      parts (badges, icons, checkboxes) tightest; small buttons do not become pills.
+  parts (badges, icons, checkboxes) tightest; small buttons do not become pills.
 - [ ] Nested shapes are concentric: inner radius ≈ outer radius − gap.
 - [ ] `rounded-full` only on intentional circles and pills; no rectangle has a radius near half its height by accident.
 - [ ] Children, selection fills and scrolled content stay inside the rounded corners.
 
 **Typography**
-
 - [ ] Every size is a step of the type scale (`text-xs` … `text-xl` and the app's display sizes); no literal font sizes.
 - [ ] Hierarchy uses at most three or four sizes and two weights per screen; bold and color stay scarce.
 - [ ] The UI font for interface text, monospace only for code, identifiers, shortcuts and aligned numbers.
@@ -1588,97 +1557,85 @@ report each group as passed or as what was fixed. A group not checked is not pas
 - [ ] Long text truncates or wraps on purpose; it works at a larger text size.
 
 **Spacing and gaps**
-
 - [ ] Every gap and padding is a step of the spacing scale; no literal points except audited exceptions.
 - [ ] Gaps grow with the distance of the relationship: parts of a control < related controls < one group < groups in
-      a section < sections. Equal gaps mean equal relationships.
+  a section < sections. Equal gaps mean equal relationships.
 - [ ] Padding belongs to the component, gaps to the parent; no doubled insets.
 - [ ] Peers share alignment spines; repeated rows keep their columns; leading and trailing written as start / end.
 
 **Alignment**
-
 - [ ] Each surface has a few named spines (leading and trailing content edges, a baseline or center line per band,
-      fixed lanes); every element at one level sits on one of them.
+  fixed lanes); every element at one level sits on one of them.
 - [ ] Sibling regions (header, toolbar, rows, empty state, footer) share one content inset; nested levels return
-      exactly to the parent spine.
+  exactly to the parent spine.
 - [ ] Repeated rows keep fixed lanes for icon, label, metadata, numbers and trailing actions; a missing icon or badge
-      does not move the rest (icons centered in a fixed slot).
+  does not move the rest (icons centered in a fixed slot).
 - [ ] Mixed text sizes in a row align by baseline; icons and text by center line; numbers end-aligned with
-      `tabular-nums`.
+  `tabular-nums`.
 - [ ] Equal edges and gaps are equal to the rendered pixel at the window sizes, text sizes and scales checked; a
-      difference is fixed at its shared owner, never with a literal offset.
+  difference is fixed at its shared owner, never with a literal offset.
 - [ ] Indentation only for real hierarchy; `justify-between` only when both sides own opposite edges.
 - [ ] Hairlines drawn once by the boundary's owner; scrollbars at the scrolling region's trailing edge.
 
 **Color and surfaces**
-
 - [ ] Every color is a theme token; no raw hex, RGB or palette classes in presentation code.
 - [ ] One primary action per surface; strong color, badges and alerts scarce.
 - [ ] Popups share one surface treatment; shadows only on what floats; base regions separated by background and hairlines.
 - [ ] Light and dark are balanced; no leftover colors of an earlier palette.
 
 **Hover**
-
 - [ ] Every pressable element on desktop and web answers hover; nothing that cannot be pressed reacts to it.
 - [ ] Hover is a quiet wash (a `muted` / `accent` background, a slightly stronger border or text), weaker than
-      selected and pressed, the same treatment for every control of one kind.
+  selected and pressed, the same treatment for every control of one kind.
 - [ ] Hover does not change size, weight, padding or layout, and does not move neighbors; it does not reveal the
-      only way to reach an action (it is also in a menu or keyboard).
+  only way to reach an action (it is also in a menu or keyboard).
 - [ ] It comes in fast (`instant`, ease-out) and leaves without lag; it is absent on touch (no stuck hover after a tap).
 - [ ] Rows: the wash fills the row's full hit area, inside the list's radius, and does not double with selection.
 
 **Pressed**
-
 - [ ] Every pressable element has a pressed state the app styles (`active:` / `activeStyle`), visible within the
-      frame of the touch or click, stronger than hover.
+  frame of the touch or click, stronger than hover.
 - [ ] Buttons scale slightly (0.97, icon buttons 0.95) and/or deepen their wash on the soft settle; rows and list
-      items deepen their background instead of scaling.
+  items deepen their background instead of scaling.
 - [ ] The pressed state covers the whole hit area, keeps the label readable, and does not shift layout.
 - [ ] Releasing outside cancels without firing; a control owning a menu stays visibly open until the menu closes.
 - [ ] Disabled controls show neither hover nor pressed.
 
 **The `ui` layer**
-
 - [ ] The app has a `ui` module with the core set, shown in every variant, size and state on one page.
 - [ ] Feature code uses only `ui` components and layout primitives: no controls imported from `nsh/base`, no colors,
-      radii, paddings or font sizes, no controls hand-built from pressable views.
+  radii, paddings or font sizes, no controls hand-built from pressable views.
 - [ ] Every new look or behavior a feature needed was added to `ui` as a variant, size or component.
 
 **Component standards**
-
 - [ ] Each styled control takes one `size` that sets its height, padding, text, icon and radius together; heights
-      and paddings match across buttons, inputs, selects and toolbars of one size.
+  and paddings match across buttons, inputs, selects and toolbars of one size.
 - [ ] State colors come from per-variant tokens (normal, hover, active); selected and menu-open share one style.
 - [ ] Popups share one surface; focus rings sit outside the border with room to show.
 
 **Other states**
-
 - [ ] Focus-visible rings on every keyboard-reachable control, outside the clip; selected, disabled and loading
-      distinct from each other and from hover.
+  distinct from each other and from hover.
 - [ ] Icon-only buttons are square, the same size within a group, and have an accessibility label.
 - [ ] One icon family, one stroke weight, sizes from the scale.
 
 **Motion and sound**
-
 - [ ] The screen's motion inventory exists and every line was verified in the running app ("Motion inventory").
 - [ ] Durations and easings come from the app's motion tokens; nothing moves without a reason; reduced motion checked.
 - [ ] Sound only if the app calls for it, at completed changes, quiet, and the screen works silent.
 
 **Accessibility and keyboard (blocking)**
-
 - [ ] The main task completes with the keyboard alone: Tab order follows the screen, arrows within groups, Enter /
-      Space activate, Escape closes; focus visible and returned after overlays.
+  Space activate, Escape closes; focus visible and returned after overlays.
 - [ ] Every control has a role and name (icon-only included), states exposed; checked with a screen reader on one
-      target.
+  target.
 - [ ] Nothing relies on color, motion or sound alone; contrast holds in light and dark.
 
 **Platforms**
-
 - [ ] Desktop and web share one design; mobile follows iOS / Android sizes and navigation (44pt / 48dp targets,
-      sheets, back); TUI works by keyboard on whole cells in 16 colors.
+  sheets, back); TUI works by keyboard on whole cells in 16 colors.
 
 **Platforms and states of content**
-
 - [ ] Empty, loading, error and long-content states designed, not left blank.
 - [ ] Checked at the minimum window size or a phone width, at a larger text size, and on each target platform.
 
