@@ -5,7 +5,8 @@
   "type": "module",
   "devDependencies": {
     "oxfmt": "0.78.0",
-    "oxlint": "1.93.0"
+    "oxlint": "1.93.0",
+    "typescript-language-server": "^6.1.0"
   },
   "packageManager": "pnpm@12.18.0"
 }

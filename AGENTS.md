@@ -9,6 +9,10 @@ My Translator is a desktop application built with:
 
 Design docs: `@docs/ui/DESIGNE.md`
 
+- Icons:
+  - [icon-park-outline](https://icon-sets.iconify.design/icon-park-outline/)
+  - [icon-park-solid](https://icon-sets.iconify.design/icon-park-solid)
+
 ### Styling
 
 - Style controls and layout with `class` and Tailwind utilities first (`w-full`, `p-8`, `gap-7`, `text-sm`).

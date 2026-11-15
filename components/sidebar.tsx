@@ -1,18 +1,39 @@
-import { Image, keymap, Text, token, View, type JSX } from "nsh";
+import { Image, Text, token, View, type ImageAsset, type JSX } from "nsh";
 import { Button, Tooltip } from "nsh/base";
-import settingsIcon from "../assets/icons/settings.svg";
+import cubeOutlineIcon from "../assets/icons/cube-outline.svg";
+import cubeSolidIcon from "../assets/icons/cube-solid.svg";
+import settingsOutlineIcon from "../assets/icons/setting-outline.svg";
+import settingsSolidIcon from "../assets/icons/setting-solid.svg";
 import { motion } from "./motion";
 
-/** Keyboard navigation shared by the shell and the sidebar hints. */
-export const SIDEBAR_SHORTCUTS = { home: "mod+1", settings: "mod+," };
-
 /** The destinations shown in the sidebar. */
-export type SidebarPage = keyof typeof SIDEBAR_SHORTCUTS;
+export type SidebarPage = "home" | "models" | "settings";
 
 interface SidebarProps {
   page: SidebarPage;
   onSelectHome: () => void;
+  onSelectModels: () => void;
   onSelectSettings: () => void;
+}
+
+interface NavIconProps {
+  outline: ImageAsset;
+  solid: ImageAsset;
+  selected: boolean;
+}
+
+/** Draws the outline asset normally and the solid one for the current
+ * destination. Both are one-color drawings, so the tint carries the state. */
+function NavIcon(props: NavIconProps) {
+  return (
+    <Image
+      src={props.selected ? props.solid : props.outline}
+      class="size-5"
+      style={{
+        tintColor: token(props.selected ? "sidebar-accent-foreground" : "sidebar-foreground"),
+      }}
+    />
+  );
 }
 
 interface SidebarItemProps {
@@ -33,19 +54,16 @@ function SidebarItem(props: SidebarItemProps) {
       accessibilityLabel={props.label}
       selected={props.selected}
       onPress={() => props.onPress()}
-      class={`group size-9 items-center justify-center rounded-sidebar focus-visible:ring-2 focus-visible:ring-sidebar-ring ${motion.navigationFeedback} hover:bg-sidebar-accent/70 active:bg-sidebar-accent selected:bg-sidebar-accent selected:hover:bg-sidebar-accent`}
+      class={`group size-9 items-center justify-center rounded-sidebar focus-visible:ring-2 focus-visible:ring-sidebar-ring ${motion.navigationFeedback} hover:bg-sidebar-accent/70 active:bg-sidebar-border selected:bg-sidebar-accent selected:hover:bg-sidebar-accent`}
       tooltip={
         <Tooltip
           testID={`${props.destination}-tooltip`}
           placement="right"
-          class={`flex-row items-center gap-3 rounded-xl border border-border bg-sidebar-primary px-3 py-2 ${motion.tooltip}`}
+          class={`flex-row h-8 items-center rounded-xl border border-border bg-sidebar-primary px-3 py-2 ${motion.tooltip}`}
           startingClass="opacity-0"
           endingClass="opacity-0"
         >
           <Text class="text-xs text-sidebar-primary-foreground">{props.label}</Text>
-          <Text class="text-xs text-sidebar-primary-foreground">
-            {keymap.label(SIDEBAR_SHORTCUTS[props.destination])}
-          </Text>
         </Tooltip>
       }
     >
@@ -60,18 +78,32 @@ export function Sidebar(props: SidebarProps) {
       testID="sidebar"
       role="navigation"
       accessibilityLabel="Main navigation"
-      class="w-14 items-center border-r border-sidebar-border bg-sidebar py-3"
+      class="w-13 items-center border-r border-sidebar-border bg-sidebar py-3"
     >
-      <SidebarItem
-        destination="home"
-        label="Home"
-        selected={props.page === "home"}
-        onPress={() => props.onSelectHome()}
-      >
-        <Text class="text-lg font-semibold text-sidebar-foreground group-selected:text-sidebar-accent-foreground">
-          M
-        </Text>
-      </SidebarItem>
+      <View class="items-center gap-1">
+        <SidebarItem
+          destination="home"
+          label="Home"
+          selected={props.page === "home"}
+          onPress={() => props.onSelectHome()}
+        >
+          <Text class="text-lg font-semibold text-sidebar-foreground group-selected:text-sidebar-accent-foreground">
+            M
+          </Text>
+        </SidebarItem>
+        <SidebarItem
+          destination="models"
+          label="Models"
+          selected={props.page === "models"}
+          onPress={() => props.onSelectModels()}
+        >
+          <NavIcon
+            outline={cubeOutlineIcon}
+            solid={cubeSolidIcon}
+            selected={props.page === "models"}
+          />
+        </SidebarItem>
+      </View>
       <View class="flex-1" />
       <SidebarItem
         destination="settings"
@@ -79,14 +111,10 @@ export function Sidebar(props: SidebarProps) {
         selected={props.page === "settings"}
         onPress={() => props.onSelectSettings()}
       >
-        <Image
-          src={settingsIcon}
-          class="size-5"
-          style={{
-            tintColor: token(
-              props.page === "settings" ? "sidebar-accent-foreground" : "sidebar-foreground",
-            ),
-          }}
+        <NavIcon
+          outline={settingsOutlineIcon}
+          solid={settingsSolidIcon}
+          selected={props.page === "settings"}
         />
       </SidebarItem>
     </View>

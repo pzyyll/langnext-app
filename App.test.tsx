@@ -23,14 +23,20 @@ test("opens Home by default and switches between sidebar destinations", async ()
   expect(app.count("id:home-page")).toBe(1);
 });
 
-test("switches sidebar destinations with keyboard shortcuts", async () => {
+test("does not switch sidebar destinations with removed keyboard shortcuts", async () => {
   const app = await open("./App.tsx", viewport);
-  await app.keyboard.press("mod+,");
-  expect(app.texts()).toContain("Appearance");
-  expect(app.shows("id:home-page")).toBe(false);
-  await app.keyboard.press("mod+1");
-  expect(app.shows("id:home-page")).toBe(true);
-  expect(app.texts()).not.toContain("Appearance");
+  for (const shortcut of ["mod+,", "mod+1"]) {
+    await app.keyboard.press(shortcut);
+    expect(app.shows("id:home-page")).toBe(true);
+    expect(app.texts()).not.toContain("Appearance");
+  }
+
+  await app.press("id:nav-settings");
+  for (const shortcut of ["mod+,", "mod+1"]) {
+    await app.keyboard.press(shortcut);
+    expect(app.texts()).toContain("Appearance");
+    expect(app.shows("id:home-page")).toBe(false);
+  }
 });
 
 test("switches pages at the minimum window size with reduced motion", async () => {
@@ -55,6 +61,18 @@ test("opens settings from the sidebar", async () => {
   expect(app.texts()).toContain("Following system · light");
 });
 
+test("opens the models page from the sidebar", async () => {
+  const app = await open("./App.tsx", viewport);
+  await app.press("id:nav-models");
+  expect(app.shows("id:models-page")).toBe(true);
+  expect(app.shows("id:home-page")).toBe(false);
+  expect(app.texts()).toContain("Models");
+
+  await app.press("id:nav-home");
+  expect(app.shows("id:home-page")).toBe(true);
+  expect(app.shows("id:models-page")).toBe(false);
+});
+
 test("shows the sidebar tooltip on hover", async () => {
   const app = await open("./App.tsx", viewport);
   await app.press("id:nav-settings");
@@ -62,6 +80,7 @@ test("shows the sidebar tooltip on hover", async () => {
   await app.hover("id:nav-settings");
   await app.waitFor("id:settings-tooltip");
   expect(app.texts().filter((text) => text === "Settings")).toHaveLength(2);
+  expect(app.texts().some((text) => text.includes("Ctrl"))).toBe(false);
   await app.hover("id:theme-light");
   await app.waitUntil(() => !app.shows("id:settings-tooltip"));
 });

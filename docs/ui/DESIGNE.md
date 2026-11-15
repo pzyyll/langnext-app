@@ -13,12 +13,14 @@ sizes and colors belong in classes; a value with no class-scale step gets an arb
 
 ## Home navigation
 
-The desktop shell opens Home by default. The M button opens Home. The bottom
-button opens Settings. The shell owns the current page. Both buttons expose their
-selected state. Native buttons provide keyboard activation where NSH supports
-view focus. `mod+1` opens Home and `mod+,` opens Settings on all desktop targets.
-The tooltip shows each shortcut. NSH 0.5.1 declares view Tab focus for macOS and
-Web; do not assume Windows has the same support.
+The desktop shell opens Home by default. The sidebar groups destinations by
+position: the M and Models buttons sit at the top, the Settings button at the
+bottom. The shell owns the current page. Every button exposes its selected state.
+Icon destinations draw their outline asset normally and their solid asset while
+current, tinted by the item's foreground token. Native buttons provide keyboard
+activation where NSH supports view focus. Each tooltip shows only the
+destination name. NSH 0.5.1 declares view Tab focus for macOS and Web; do not
+assume Windows has the same support.
 
 Each item is styled by one token pair, `sidebar-accent` on `sidebar-accent-foreground`:
 a lighter wash on hover, the full wash while pressed, and the same wash held for the
@@ -49,7 +51,7 @@ their existing behavior and appearance.
 
 - Radius, typography, spacing, alignment, and theme colors: reviewed in Windows
   screenshots, in light and dark, at 1040 × 720 and 720 × 520. No clipping found.
-- Hover and selection: reviewed both destinations and their tooltip shortcuts.
+- Hover and selection: reviewed both destinations and their tooltips.
   Selected controls keep a readable foreground during hover.
 - Pressed state: uses a stronger fill. Pointer cancellation was not tested.
 - Shared components and standards: both destinations use `SidebarItem`. Both
@@ -58,8 +60,8 @@ their existing behavior and appearance.
   disabled controls, loading, error, or dynamic content.
 - Motion: page entry, selection feedback, and tooltips run natively. Reduced-motion
   navigation passes tests. Frame-by-frame motion was not reviewed. No sound is used.
-- Accessibility and keyboard: role/name selectors and both shortcuts pass Windows
-  tests. Screen-reader behavior and Tab focus were not verified.
+- Accessibility: role/name selectors pass Windows tests. Screen-reader behavior
+  and Tab focus were not verified.
 - Platforms and content: Windows only. Large text, other desktop platforms, and
   right-to-left layout remain manual checks. Mobile and TUI are outside scope.
 
