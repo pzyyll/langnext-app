@@ -1,6 +1,7 @@
 {
   "name": "My Translator",
   "id": "com.dev.mytranslator",
+  "icon": "assets/logos/icon-bg.png",
   "singleInstance": true,
   "version": "0.1.0",
   "build": 1,

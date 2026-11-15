@@ -65,6 +65,20 @@ their existing behavior and appearance.
 - Platforms and content: Windows only. Large text, other desktop platforms, and
   right-to-left layout remain manual checks. Mobile and TUI are outside scope.
 
+## App icon and tray
+
+The taskbar, the window, and Explorer draw the app icon from `nsh.json` `icon`:
+`assets/logos/icon-bg.png`, the brush mark on a white 1024 px rounded tile. The
+tile is part of the icon, not a background: the mark is black, and a transparent
+icon would disappear on a dark taskbar.
+
+The tray draws `assets/logos/tray.svg`, a one-colour icon-park-outline glyph
+(`translate`), never the brand mark. Panels draw the tray at 16 to 24 pixels,
+where the brush strokes collapse into a blob, and NSH paints an SVG tray icon in
+the taskbar's or menu bar's text colour, so the glyph stays visible in light and
+dark appearances. Its menu holds one item, `Exit`; a primary press brings the
+main window back.
+
 ## Theme Colors
 ```css
 :root {
