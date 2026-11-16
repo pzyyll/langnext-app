@@ -144,8 +144,9 @@ separate engines and module state.
 ## System tray and app icon
 
 The shell installs the tray once, for the app's lifetime. A primary press brings
-the main window back, and the menu holds one item, `Exit`, which uses NSH's native
-`quit` role so it follows the platform's own quit path. The tray owns no state and
+the main window back, and the menu holds one item, `Exit`, which calls
+`Application.quit`. It does not use the `quit` role, so the item does not bind
+the platform quit key (Alt+F4 on Windows). The tray owns no state and
 shows no app data, so it stays with the window lifecycle in `app/shell.tsx` rather
 than in a feature.
 
