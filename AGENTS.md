@@ -40,3 +40,9 @@ All project commands are in `.mise/tasks/`.
 | `mise run test-desktop`                | Run the UI tests in desktop windows.                 |
 | `mise run verify`                      | Run formatting, lint, type checks, tests, and build. |
 | `mise run package -- --target windows` | Package the app for Windows.                         |
+
+## Commits
+
+- After each completed task that changed files, commit the task's changes; leave every commit local and push only when the user explicitly asks.
+- Write Conventional Commit messages (`<type>[scope]: <description>`). A `feat`, `fix` or `perf` type, a `!` breaking marker, a `BREAKING CHANGE` footer, or any other version keyword needs the user's approval before you commit; wait for it and never choose such a message on your own.
+- `docs`, `test`, `chore`, `refactor`, `style`, `ci` and `build` are release-neutral and need no approval.
