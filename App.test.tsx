@@ -2,25 +2,21 @@ import { expect, open, test } from "nsh/test";
 
 const viewport = { width: 1040, height: 720, platform: "windows" as const };
 
-test("opens Home by default and switches between sidebar destinations", async () => {
+test("opens Models by default and switches between sidebar destinations", async () => {
   const app = await open("./App.tsx", viewport);
-  expect(app.shows("id:home-page")).toBe(true);
-  expect(app.texts()).toContain("Translation example");
+  expect(app.shows("id:models-page")).toBe(true);
   expect(app.texts()).not.toContain("Appearance");
-  const selected = app.spanStyle("id:nav-home >> text:M").color;
 
   await app.press("role:button[Settings]");
-  expect(app.shows("id:home-page")).toBe(false);
+  expect(app.shows("id:models-page")).toBe(false);
   expect(app.texts()).toContain("Appearance");
-  expect(app.spanStyle("id:nav-home >> text:M").color).not.toBe(selected);
 
-  await app.press("role:button[Home]");
-  expect(app.shows("id:home-page")).toBe(true);
+  await app.press("role:button[Models]");
+  expect(app.shows("id:models-page")).toBe(true);
   expect(app.texts()).not.toContain("Appearance");
-  expect(app.spanStyle("id:nav-home >> text:M").color).toBe(selected);
 
-  await app.press("role:button[Home]");
-  expect(app.count("id:home-page")).toBe(1);
+  await app.press("role:button[Models]");
+  expect(app.count("id:models-page")).toBe(1);
 });
 
 test("opens About from the app menu and closes it with OK", async () => {
@@ -38,7 +34,7 @@ test("opens About from the app menu and closes it with OK", async () => {
 
   await app.press("role:button[OK]");
   await app.waitUntil(() => !app.shows("id:about-dialog"));
-  expect(app.shows("id:home-page")).toBe(true);
+  expect(app.shows("id:models-page")).toBe(true);
 });
 
 test("dismisses the app menu and can reopen About after Escape", async () => {
@@ -61,14 +57,14 @@ test("dismisses the app menu and can reopen About after Escape", async () => {
     await app.keyboard.press("escape");
     await app.waitUntil(() => !app.shows("id:about-dialog"));
   }
-  expect(app.shows("id:home-page")).toBe(true);
+  expect(app.shows("id:models-page")).toBe(true);
 });
 
 test("does not switch sidebar destinations with removed keyboard shortcuts", async () => {
   const app = await open("./App.tsx", viewport);
   for (const shortcut of ["mod+,", "mod+1"]) {
     await app.keyboard.press(shortcut);
-    expect(app.shows("id:home-page")).toBe(true);
+    expect(app.shows("id:models-page")).toBe(true);
     expect(app.texts()).not.toContain("Appearance");
   }
 
@@ -76,7 +72,7 @@ test("does not switch sidebar destinations with removed keyboard shortcuts", asy
   for (const shortcut of ["mod+,", "mod+1"]) {
     await app.keyboard.press(shortcut);
     expect(app.texts()).toContain("Appearance");
-    expect(app.shows("id:home-page")).toBe(false);
+    expect(app.shows("id:models-page")).toBe(false);
   }
 });
 
@@ -87,11 +83,11 @@ test("switches pages at the minimum window size with reduced motion", async () =
     height: 520,
     reducedMotion: true,
   });
-  expect(app.shows("id:home-page")).toBe(true);
+  expect(app.shows("id:models-page")).toBe(true);
   await app.press("id:nav-settings");
   expect(app.texts()).toContain("Appearance");
-  await app.press("id:nav-home");
-  expect(app.texts()).toContain("Translation example");
+  await app.press("id:nav-models");
+  expect(app.shows("id:models-page")).toBe(true);
 });
 
 test("opens settings from the sidebar", async () => {
@@ -103,14 +99,13 @@ test("opens settings from the sidebar", async () => {
 
 test("opens the models page from the sidebar", async () => {
   const app = await open("./App.tsx", viewport);
+  await app.press("id:nav-settings");
+  expect(app.shows("id:models-page")).toBe(false);
+
   await app.press("id:nav-models");
   expect(app.shows("id:models-page")).toBe(true);
-  expect(app.shows("id:home-page")).toBe(false);
   expect(app.texts()).toContain("Models");
-
-  await app.press("id:nav-home");
-  expect(app.shows("id:home-page")).toBe(true);
-  expect(app.shows("id:models-page")).toBe(false);
+  expect(app.texts()).not.toContain("Appearance");
 });
 
 test("shows the sidebar tooltip on hover", async () => {
@@ -130,8 +125,8 @@ test("switches themes and keeps the selected preference", async () => {
   await app.press("id:nav-settings");
   await app.press("id:theme-dark");
   expect(app.storage()["settings.appearance"]).toBe("dark");
-  await app.press("id:nav-home");
-  expect(app.shows("id:home-page")).toBe(true);
+  await app.press("id:nav-models");
+  expect(app.shows("id:models-page")).toBe(true);
   await app.press("id:nav-settings");
   expect(app.storage()["settings.appearance"]).toBe("dark");
   const dark = app.spanStyle("text:Settings").color;
@@ -160,7 +155,7 @@ test("restores the saved appearance before showing settings", async () => {
   const light = await open("./App.tsx", { ...viewport, colorScheme: "light" });
   await light.press("id:nav-settings");
 
-  expect(app.shows("id:home-page")).toBe(true);
+  expect(app.shows("id:models-page")).toBe(true);
   await app.press("id:nav-settings");
   expect(app.spanStyle("text:Settings").color).not.toBe(light.spanStyle("text:Settings").color);
 });

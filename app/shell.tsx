@@ -4,7 +4,6 @@ import trayIcon from "../assets/logos/icon.svg";
 import { AppMenu } from "../components/app-menu";
 import { PageSurface } from "../components/layout/page-surface";
 import { Sidebar, type SidebarPage } from "../components/sidebar";
-import { HomePage } from "../features/home/page";
 import { ModelsPage } from "../features/models/page";
 import { SettingsPage } from "../features/settings/page";
 
@@ -27,17 +26,16 @@ function installTray() {
 export function AppShell() {
   installTray();
 
-  const page = signal<SidebarPage>("home");
-  const selectHome = () => page.set("home");
+  const page = signal<SidebarPage>("models");
   const selectModels = () => page.set("models");
   const selectSettings = () => page.set("settings");
 
   return (
-    <View class="flex-1 bg-background">
+    <View class="flex-1 bg-sidebar">
       <View
         testID="title-bar"
         desktop={{ windowDrag: true }}
-        class="flex-row items-center border-b border-sidebar-border bg-sidebar"
+        class="flex-row items-center bg-sidebar"
         style={{
           height: Math.max(TITLE_BAR_HEIGHT, titleBar().height),
           paddingLeft: titleBar().left,
@@ -49,17 +47,7 @@ export function AppShell() {
         </View>
       </View>
       <View class="flex-1 flex-row">
-        <Sidebar
-          page={page()}
-          onSelectHome={selectHome}
-          onSelectModels={selectModels}
-          onSelectSettings={selectSettings}
-        />
-        <If when={page() === "home"}>
-          <PageSurface testID="home-page">
-            <HomePage />
-          </PageSurface>
-        </If>
+        <Sidebar page={page()} onSelectModels={selectModels} onSelectSettings={selectSettings} />
         <If when={page() === "models"}>
           <PageSurface testID="models-page">
             <ModelsPage />

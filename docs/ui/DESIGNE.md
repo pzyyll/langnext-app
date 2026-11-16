@@ -2,6 +2,12 @@
 
 ## Page layout
 
+The shell's chrome is one band: the `sidebar` fill runs behind the title bar and the sidebar, and no border
+separates them from the work area. The work area is a `background` panel on that band. Its start-start corner
+(top-left in a left-to-right layout) is `rounded-2xl` and the panel clips its content, so the curve shows the chrome
+behind it; its other edges stay flush with the window, where a radius would only cut into the frame. A separator line
+would restate the fill difference, so neither side draws one.
+
 One container serves every sidebar destination: `PageSurface`
 (`components/layout/page-surface.tsx`) owns the work area's scrolling and its
 content column. The column is `class="mx-auto w-full max-w-4xl gap-8 p-8"`: it fills the window up to a
@@ -14,10 +20,10 @@ metrics (`titleBar()` in the shell's title bar) and theme colors (`token()` in t
 sizes and colors belong in classes; a value with no class-scale step gets an arbitrary class
 (`max-w-[824px]`), not a `style`.
 
-## Home navigation
+## Sidebar navigation
 
-The desktop shell opens Home by default. The sidebar groups destinations by
-position: the M and Models buttons sit at the top, the Settings button at the
+The desktop shell opens Models by default. The sidebar groups destinations by
+position: the Models button sits at the top, the Settings button at the
 bottom. The shell owns the current page. Every button exposes its selected state.
 Icon destinations draw their outline asset normally and their solid asset while
 current, tinted by the item's foreground token. Native buttons provide keyboard
@@ -32,10 +38,10 @@ current destination. Those states belong to the button's own variants (`hover:`,
 an element keeps the class it was created with, so only a state variant restyles it
 when `selected` changes.
 
-Home contains a static translation example, not a connected translation service.
-It uses the existing text scale, spacing, surfaces, and semantic theme colors.
+Models is a title placeholder until the model list is built. It uses the
+existing text scale, spacing, surfaces, and semantic theme colors.
 `PageSurface` owns scrolling, the shared leading edge and the centred column;
-the Home page supplies only its sections, which wrap at the minimum window width.
+each page supplies only its sections, which wrap at the minimum window width.
 
 ### Motion inventory
 
@@ -43,9 +49,9 @@ the Home page supplies only its sections, which wrap at the minimum window width
 | --- | --- | --- |
 | Navigation hover and press | Native color transition; `navigationFeedback`, 150 ms, ease-out; press deepens the fill | Instant |
 | Current destination | Selected fill follows the current page with the same transition. No sliding marker: the two destinations sit at opposite ends of the sidebar. | Instant |
-| Home or Settings enters | Native opacity motion; `pageEnter`, 200 ms, ease-out. No directional slide between sibling pages. | Instant |
+| Models or Settings enters | Native opacity motion; `pageEnter`, 200 ms, ease-out. No directional slide between sibling pages. | Instant |
 | Navigation tooltip opens or closes | Native opacity transition; `navigationFeedback`, 150 ms, ease-out | Instant |
-| Labels, user-controlled layout, gestures, loading, live content | None. Home is static example content. | No change |
+| Labels, user-controlled layout, gestures, loading, live content | None. Both pages show static content. | No change |
 
 Motion tokens are defined in `components/motion.ts`. Settings controls retain
 their existing behavior and appearance.
@@ -54,16 +60,20 @@ their existing behavior and appearance.
 
 - Radius, typography, spacing, alignment, and theme colors: reviewed in Windows
   screenshots, in light and dark, at 1440 × 900, 1040 × 720 and 720 × 520. The
-  content column stays centred at every width, keeps one leading edge on Home,
-  Models and Settings, and clips nothing at the minimum window.
-- Shared container: the same `PageSurface` renders all three destinations, so a
+  content column stays centred at every width, keeps one leading edge on Models
+  and Settings, and clips nothing at the minimum window.
+- Shell chrome: reviewed in Windows screenshots at 1040 × 720 in light and dark. The
+  title bar and sidebar draw one band with no separator, and the work area's rounded
+  start-start corner shows that band through the curve. The corner is faint in light
+  (`sidebar` is 0.985 against `background` 1) and clear in dark (0.205 against 0.145).
+- Shared container: the same `PageSurface` renders both destinations, so a
   page cannot drift from the others in width, padding or scrolling.
 - Hover and selection: reviewed both destinations and their tooltips.
   Selected controls keep a readable foreground during hover.
 - Pressed state: uses a stronger fill. Pointer cancellation was not tested.
 - Shared components and standards: both destinations use `SidebarItem`. Both
   pages use `PageSurface`. Existing Settings controls remain unchanged.
-- Other states: selection and tooltip dismissal pass native tests. Home has no
+- Other states: selection and tooltip dismissal pass native tests. Models has no
   disabled controls, loading, error, or dynamic content.
 - Motion: page entry, selection feedback, and tooltips run natively. Reduced-motion
   navigation passes tests. Frame-by-frame motion was not reviewed. No sound is used.

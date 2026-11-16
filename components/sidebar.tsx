@@ -7,11 +7,10 @@ import settingsSolidIcon from "../assets/icons/setting-solid.svg";
 import { motion } from "./motion";
 
 /** The destinations shown in the sidebar. */
-export type SidebarPage = "home" | "models" | "settings";
+export type SidebarPage = "models" | "settings";
 
 interface SidebarProps {
   page: SidebarPage;
-  onSelectHome: () => void;
   onSelectModels: () => void;
   onSelectSettings: () => void;
 }
@@ -78,19 +77,9 @@ export function Sidebar(props: SidebarProps) {
       testID="sidebar"
       role="navigation"
       accessibilityLabel="Main navigation"
-      class="w-13 items-center border-r border-sidebar-border bg-sidebar py-3"
+      class="w-13 items-center bg-sidebar py-3"
     >
       <View class="items-center gap-1">
-        <SidebarItem
-          destination="home"
-          label="Home"
-          selected={props.page === "home"}
-          onPress={() => props.onSelectHome()}
-        >
-          <Text class="text-lg font-semibold text-sidebar-foreground group-selected:text-sidebar-accent-foreground">
-            M
-          </Text>
-        </SidebarItem>
         <SidebarItem
           destination="models"
           label="Models"
