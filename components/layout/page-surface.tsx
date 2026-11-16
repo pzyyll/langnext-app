@@ -18,11 +18,11 @@ export function PageSurface(props: PageSurfaceProps) {
 
   return (
     <View
-      class="min-w-0 flex-1 overflow-hidden rounded-ss-2xl bg-background"
+      class="min-w-0 flex-1 overflow-hidden rounded-xl bg-background"
       style={entrance.style}
     >
       <Scroll testID={props.testID} class="min-w-0 flex-1">
-        <View class="mx-auto w-full max-w-4xl gap-8 p-8">{props.children}</View>
+        <View class="mx-auto w-full max-w-5xl gap-8 p-8">{props.children}</View>
       </Scroll>
     </View>
   );

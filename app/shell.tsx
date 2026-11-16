@@ -36,7 +36,7 @@ export function AppShell() {
   const selectSettings = () => page.set("settings");
 
   return (
-    <View class="flex-1 bg-sidebar" classList={{ "bg-sidebar/70": transparency() }}>
+    <View class="flex-1 bg-sidebar" classList={{ "bg-sidebar/80": transparency() }}>
       <View
         testID="title-bar"
         desktop={{ windowDrag: true }}

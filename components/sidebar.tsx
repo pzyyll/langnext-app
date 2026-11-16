@@ -53,7 +53,7 @@ function SidebarItem(props: SidebarItemProps) {
       accessibilityLabel={props.label}
       selected={props.selected}
       onPress={() => props.onPress()}
-      class={`group size-9 items-center justify-center rounded-sidebar focus-visible:ring-2 focus-visible:ring-sidebar-ring ${motion.navigationFeedback} hover:bg-sidebar-accent/70 active:bg-sidebar-border selected:bg-sidebar-accent selected:hover:bg-sidebar-accent`}
+      class={`group size-9 items-center justify-center rounded-sidebar focus-visible:ring-2 focus-visible:ring-sidebar-ring ${motion.navigationFeedback} hover:bg-sidebar-foreground/10 active:bg-sidebar-foreground/20 selected:bg-sidebar-foreground/10 selected:hover:bg-sidebar-foreground/10`}
       tooltip={
         <Tooltip
           testID={`${props.destination}-tooltip`}

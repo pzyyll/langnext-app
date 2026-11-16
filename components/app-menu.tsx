@@ -79,7 +79,7 @@ export function AppMenu() {
             testID="app-menu-trigger"
             accessibilityLabel="App menu"
             selected={menuOpen()}
-            class={`size-8 items-center justify-center rounded-lg hover:bg-sidebar-accent/70 active:bg-sidebar-border selected:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring ${motion.navigationFeedback}`}
+            class={`size-8 items-center justify-center rounded-lg hover:bg-sidebar-accent-foreground/10 active:bg-sidebar-accent-foreground/20 selected:bg-sidebar-accent-foreground/10 focus-visible:ring-2 focus-visible:ring-sidebar-ring ${motion.navigationFeedback}`}
           >
             <Image
               src={appIcon}
