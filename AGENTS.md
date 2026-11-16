@@ -44,5 +44,5 @@ All project commands are in `.mise/tasks/`.
 ## Commits
 
 - After each completed task that changed files, commit the task's changes; leave every commit local and push only when the user explicitly asks.
-- Write Conventional Commit messages (`<type>[scope]: <description>`). A `feat`, `fix` or `perf` type, a `!` breaking marker, a `BREAKING CHANGE` footer, or any other version keyword needs the user's approval before you commit; wait for it and never choose such a message on your own.
-- `docs`, `test`, `chore`, `refactor`, `style`, `ci` and `build` are release-neutral and need no approval.
+- Write Conventional Commit messages (`<type>[scope]: <description>`). Only a major release needs the user's approval before you commit: a `!` breaking marker, a `BREAKING CHANGE` footer, or any other message that declares a major version. Wait for the answer; never choose a major-version message on your own.
+- Minor and patch releases (`feat`, `fix`, `perf`) and release-neutral types (`docs`, `test`, `chore`, `refactor`, `style`, `ci`, `build`) commit without asking.
