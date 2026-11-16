@@ -2,9 +2,12 @@
 
 ## Page layout
 
-Every page owns scrolling: its root is `Scroll class="min-w-0 flex-1"`. Its content is one column with a
-shared leading edge: `class="w-full max-w-4xl gap-8 p-8"`. A page does not set its own content width or
-padding, so switching destinations never moves the leading edge.
+One container serves every sidebar destination: `PageSurface`
+(`components/layout/page-surface.tsx`) owns the work area's scrolling and its
+content column. The column is `class="mx-auto w-full max-w-4xl gap-8 p-8"`: it fills the window up to a
+reading width and stays centred, so a wide window spends its surplus on the margins instead of stretching
+every line to the window edge. A page renders only its sections and never sets its own width, padding,
+scrolling or leading edge, so every destination shares one layout and switching between them moves nothing.
 
 `class` carries static layout and appearance. `style` is for values computed at run time only: platform
 metrics (`titleBar()` in the shell's title bar) and theme colors (`token()` in the sidebar). Static spacing,
@@ -31,8 +34,8 @@ when `selected` changes.
 
 Home contains a static translation example, not a connected translation service.
 It uses the existing text scale, spacing, surfaces, and semantic theme colors.
-The page owns scrolling. Its content uses one shared leading edge and wraps at
-the minimum window width.
+`PageSurface` owns scrolling, the shared leading edge and the centred column;
+the Home page supplies only its sections, which wrap at the minimum window width.
 
 ### Motion inventory
 
@@ -50,7 +53,11 @@ their existing behavior and appearance.
 ### Validation
 
 - Radius, typography, spacing, alignment, and theme colors: reviewed in Windows
-  screenshots, in light and dark, at 1040 × 720 and 720 × 520. No clipping found.
+  screenshots, in light and dark, at 1440 × 900, 1040 × 720 and 720 × 520. The
+  content column stays centred at every width, keeps one leading edge on Home,
+  Models and Settings, and clips nothing at the minimum window.
+- Shared container: the same `PageSurface` renders all three destinations, so a
+  page cannot drift from the others in width, padding or scrolling.
 - Hover and selection: reviewed both destinations and their tooltips.
   Selected controls keep a readable foreground during hover.
 - Pressed state: uses a stronger fill. Pointer cancellation was not tested.

@@ -99,7 +99,6 @@ test("opens settings from the sidebar", async () => {
   await app.press("id:nav-settings");
   expect(app.texts()).toContain("Settings");
   expect(app.texts()).toContain("Appearance");
-  expect(app.texts()).toContain("Following system · light");
 });
 
 test("opens the models page from the sidebar", async () => {
@@ -130,28 +129,25 @@ test("switches themes and keeps the selected preference", async () => {
   const app = await open("./App.tsx", viewport);
   await app.press("id:nav-settings");
   await app.press("id:theme-dark");
-  expect(app.texts()).toContain("Dark theme");
   expect(app.storage()["settings.appearance"]).toBe("dark");
   await app.press("id:nav-home");
   expect(app.shows("id:home-page")).toBe(true);
   await app.press("id:nav-settings");
-  expect(app.texts()).toContain("Dark theme");
+  expect(app.storage()["settings.appearance"]).toBe("dark");
   const dark = app.spanStyle("text:Settings").color;
 
   await app.setColorScheme("light");
   expect(app.spanStyle("text:Settings").color).toBe(dark);
 
   await app.press("id:theme-light");
-  expect(app.texts()).toContain("Light theme");
   expect(app.spanStyle("text:Settings").color).not.toBe(dark);
   expect(app.storage()["settings.appearance"]).toBe("light");
 
   await app.press("id:theme-system");
   await app.setColorScheme("dark");
-  expect(app.texts()).toContain("Following system · dark");
   expect(app.spanStyle("text:Settings").color).toBe(dark);
   await app.setColorScheme("light");
-  expect(app.texts()).toContain("Following system · light");
+  expect(app.spanStyle("text:Settings").color).not.toBe(dark);
   expect(app.storage()["settings.appearance"]).toBe("system");
 });
 
@@ -161,17 +157,23 @@ test("restores the saved appearance before showing settings", async () => {
     colorScheme: "light",
     storage: { "settings.appearance": "dark" },
   });
+  const light = await open("./App.tsx", { ...viewport, colorScheme: "light" });
+  await light.press("id:nav-settings");
+
   expect(app.shows("id:home-page")).toBe(true);
   await app.press("id:nav-settings");
-  expect(app.texts()).toContain("Dark theme");
+  expect(app.spanStyle("text:Settings").color).not.toBe(light.spanStyle("text:Settings").color);
 });
 
 test("uses the system appearance when the saved value is invalid", async () => {
+  const dark = await open("./App.tsx", { ...viewport, colorScheme: "dark" });
+  await dark.press("id:nav-settings");
+
   const app = await open("./App.tsx", {
     ...viewport,
     colorScheme: "dark",
     storage: { "settings.appearance": "invalid" },
   });
   await app.press("id:nav-settings");
-  expect(app.texts()).toContain("Following system · dark");
+  expect(app.spanStyle("text:Settings").color).toBe(dark.spanStyle("text:Settings").color);
 });

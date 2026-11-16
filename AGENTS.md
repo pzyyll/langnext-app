@@ -13,6 +13,10 @@ Design docs: `@docs/ui/DESIGNE.md`
   - [icon-park-outline](https://icon-sets.iconify.design/icon-park-outline/)
   - [icon-park-solid](https://icon-sets.iconify.design/icon-park-solid)
 
+### Interface copy
+
+- Keep the interface bare: page titles, section headings and control labels carry the meaning. Add a line only when it changes a decision (scope, consequence, or recovery); remove subtitles, taglines and option descriptions that only explain what the heading or label already makes obvious.
+
 ### Styling
 
 - Style controls and layout with `class` and Tailwind utilities first (`w-full`, `p-8`, `gap-7`, `text-sm`).

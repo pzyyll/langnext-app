@@ -2,7 +2,7 @@ import { signal, View } from "nsh";
 import { titleBar, Tray, Window } from "nsh/desktop";
 import trayIcon from "../assets/logos/icon.svg";
 import { AppMenu } from "../components/app-menu";
-import { PageSurface } from "../components/page-surface";
+import { PageSurface } from "../components/layout/page-surface";
 import { Sidebar, type SidebarPage } from "../components/sidebar";
 import { HomePage } from "../features/home/page";
 import { ModelsPage } from "../features/models/page";
@@ -56,12 +56,12 @@ export function AppShell() {
           onSelectSettings={selectSettings}
         />
         <If when={page() === "home"}>
-          <PageSurface>
+          <PageSurface testID="home-page">
             <HomePage />
           </PageSurface>
         </If>
         <If when={page() === "models"}>
-          <PageSurface>
+          <PageSurface testID="models-page">
             <ModelsPage />
           </PageSurface>
         </If>
