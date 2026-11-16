@@ -1,11 +1,12 @@
-import { signal, View } from "nsh";
-import { titleBar, Tray, Window } from "nsh/desktop";
+import { effect, signal, View } from "nsh";
+import { currentWindow, titleBar, Tray, Window } from "nsh/desktop";
 import trayIcon from "../assets/logos/icon.svg";
 import { AppMenu } from "../components/app-menu";
 import { PageSurface } from "../components/layout/page-surface";
 import { Sidebar, type SidebarPage } from "../components/sidebar";
 import { ModelsPage } from "../features/models/page";
 import { SettingsPage } from "../features/settings/page";
+import { transparency } from "../features/settings/transparency";
 
 /** The app bar's height, which the platform centers the system's window
  * controls in: the same value as `window.titleBar.height` in nsh.json. */
@@ -26,12 +27,15 @@ function installTray() {
 export function AppShell() {
   installTray();
 
+  const win = currentWindow();
+  effect(() => win.set({ backdrop: transparency() ? "popover" : "none" }));
+
   const page = signal<SidebarPage>("models");
   const selectModels = () => page.set("models");
   const selectSettings = () => page.set("settings");
 
   return (
-    <View class="flex-1 bg-sidebar/70">
+    <View class="flex-1 bg-sidebar" classList={{ "bg-sidebar/70": transparency() }}>
       <View
         testID="title-bar"
         desktop={{ windowDrag: true }}

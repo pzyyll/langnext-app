@@ -3,7 +3,8 @@
 ## Page layout
 
 The title bar and sidebar share one glass surface. `nsh.json` enables the native `popover` backdrop
-(Acrylic on Windows 11). The shell's root draws `bg-sidebar/70` once over that material. The title bar and sidebar
+(Acrylic on Windows 11). With transparency enabled, the shell's root draws `bg-sidebar/70` once over that material.
+With it disabled, the root draws opaque `bg-sidebar` and the window uses no backdrop. The title bar and sidebar
 draw no background of their own, so their tints do not stack. Icons and text stay fully opaque. The native
 material depends on the operating system. Leave `transparent` unset: NSH 0.5.1 treats a transparent Windows
 window as frameless, which removes the existing system window buttons. A backdrop alone enables composition.
@@ -112,6 +113,56 @@ their existing behavior and appearance.
   navigation passed desktop tests. Frame-by-frame animation was not reviewed.
 - Accessibility and platforms: role/name selectors and minimum-size navigation passed Windows tests.
   Full keyboard use, screen readers, larger text, other platforms, and right-to-left layout remain unverified.
+
+## Transparency setting
+
+Appearance contains a `Transparent title bar and sidebar` switch. It is on by default, which preserves the
+existing appearance. The setting is stored as `settings.transparency` (`"true"` or `"false"`) and loaded before
+mounting the shell. Missing or invalid values use the default. A save failure keeps the session's choice and
+shows an error near the switch, as the theme setting does.
+
+`features/settings/transparency.ts` owns the preference. `AppShell` owns the native window effect: it sets
+`backdrop` to `popover` or `none` and uses `classList` to change the shared chrome fill. The work area stays opaque.
+The launch backdrop in `nsh.json` remains set so a built Windows window allocates composition before it opens;
+turning the setting off does not prevent turning it on again. No restart is required. The Windows development
+preview limit described above still applies.
+
+`components/ui/switch.tsx` styles NSH's native switch behavior. Its label is also its accessible name. The label
+sits at the leading edge and the track at the trailing edge. Pressing either toggles the setting. Theme tokens
+supply the row, track, thumb, hover, pressed, and focus colors. Existing page geometry stays unchanged.
+
+### Motion inventory
+
+| Change | Tool and tokens | Reduced motion |
+| --- | --- | --- |
+| Switch hover and press | Native color transition; `navigationFeedback`, 150 ms, ease-out; press deepens the row wash | Instant |
+| Switch checked state | Track color transition; `navigationFeedback`. Thumb translation; `switchThumb`, 150 ms, ease-out | Instant |
+| Chrome transparency | Native window backdrop changes immediately; the shared fill follows the preference | Instant |
+| Save error appears | No animation; the message states that the choice is only saved for this session | No change |
+| Pages, navigation, menus, dialogs | Existing inventories above; no changes | Existing behavior |
+| Gestures, loading indicators, continuous content, sound | None for this setting | No change |
+
+### Validation
+
+- Checks: `mise run verify` passed, including all 14 headless tests. All 14 Windows desktop tests passed.
+  New tests cover switching, saved choices, reopening, theme and page changes, invalid values, minimum size,
+  and reduced motion.
+- Native effect: the built bundle switched DWM's backdrop from Acrylic (3) to none (1) and back in the same
+  window. Composition remained enabled. Closing with transparency off, reopening, and enabling it again passed.
+- Color and surfaces: over a blue background, light chrome changed from RGB `222,231,249` on to `250,250,250`
+  off. Dark chrome changed from `34,48,74` on to `23,23,23` off. The content area stayed `255,255,255` in light
+  and `10,10,10` in dark. Window buttons remained visible.
+- Radius, typography, spacing, and alignment: light and dark screenshots were reviewed at the default and
+  minimum window sizes. The label, track, thumb, and card fit without clipping. Existing token and scale classes
+  supply their colors and geometry.
+- Hover and pressed: the full row's hover wash was reviewed. Presses on the row toggled the setting in native
+  tests and in the built app. Pressed styles are defined; held presses and pointer cancellation were not reviewed.
+- Shared controls and states: the reusable switch owns its row and part styles. Checked and unchecked thumb
+  positions were reviewed in both themes. Role/name selectors passed. Storage failure messages were not forced.
+- Motion and sound: switch positions, track changes, page navigation, overlays, and reduced-motion switching
+  passed native checks. Animation timing was not measured frame by frame. No new sound or continuous motion.
+- Accessibility and platforms: Windows only. The framework's Windows Tab-focus limit remains; full keyboard use,
+  screen readers, larger text, right-to-left layout, and other platforms were not verified.
 
 ## App menu and About
 

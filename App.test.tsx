@@ -1,6 +1,8 @@
 import { expect, open, test } from "nsh/test";
 
 const viewport = { width: 1040, height: 720, platform: "windows" as const };
+const transparencySwitch = "role:switch[Transparent title bar and sidebar]";
+const transparencyKey = "settings.transparency";
 
 test("opens Models by default and switches between sidebar destinations", async () => {
   const app = await open("./App.tsx", viewport);
@@ -158,6 +160,53 @@ test("restores the saved appearance before showing settings", async () => {
   expect(app.shows("id:models-page")).toBe(true);
   await app.press("id:nav-settings");
   expect(app.spanStyle("text:Settings").color).not.toBe(light.spanStyle("text:Settings").color);
+});
+
+test("toggles transparency and keeps the choice across pages and theme changes", async () => {
+  const app = await open("./App.tsx", viewport);
+  await app.press("id:nav-settings");
+  expect(app.shows(transparencySwitch)).toBe(true);
+
+  await app.press(transparencySwitch);
+  expect(app.storage()[transparencyKey]).toBe("false");
+  await app.press("id:theme-dark");
+  expect(app.storage()[transparencyKey]).toBe("false");
+  await app.press("id:nav-models");
+  await app.press("id:nav-settings");
+
+  await app.press(transparencySwitch);
+  expect(app.storage()[transparencyKey]).toBe("true");
+  expect(app.storage()["settings.appearance"]).toBe("dark");
+
+  const reopened = await open("./App.tsx", { ...viewport, storage: app.storage() });
+  await reopened.press("id:nav-settings");
+  await reopened.press(transparencySwitch);
+  expect(reopened.storage()[transparencyKey]).toBe("false");
+});
+
+test("restores disabled transparency at the minimum size with reduced motion", async () => {
+  const app = await open("./App.tsx", {
+    ...viewport,
+    width: 720,
+    height: 520,
+    reducedMotion: true,
+    storage: { [transparencyKey]: "false" },
+  });
+  await app.press("id:nav-settings");
+  await app.press(transparencySwitch);
+  expect(app.storage()[transparencyKey]).toBe("true");
+  await app.press(transparencySwitch);
+  expect(app.storage()[transparencyKey]).toBe("false");
+});
+
+test("enables transparency when the saved value is invalid", async () => {
+  const app = await open("./App.tsx", {
+    ...viewport,
+    storage: { [transparencyKey]: "invalid" },
+  });
+  await app.press("id:nav-settings");
+  await app.press(transparencySwitch);
+  expect(app.storage()[transparencyKey]).toBe("false");
 });
 
 test("uses the system appearance when the saved value is invalid", async () => {

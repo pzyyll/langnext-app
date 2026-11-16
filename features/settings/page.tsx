@@ -1,6 +1,8 @@
 import { Text, View } from "nsh";
 import { Radio, RadioGroup } from "nsh/base";
+import { Switch } from "../../components/ui/switch";
 import { appearance, appearanceError, selectAppearance, type Appearance } from "./appearance";
+import { selectTransparency, transparency, transparencyError } from "./transparency";
 
 interface ThemeOptionProps {
   value: Appearance;
@@ -40,6 +42,16 @@ export function SettingsPage() {
         <If when={appearanceError() !== null}>
           <Text role="alert" class="text-sm text-destructive">
             {appearanceError()}
+          </Text>
+        </If>
+        <Switch
+          label="Transparent title bar and sidebar"
+          checked={transparency()}
+          onChange={(checked) => void selectTransparency(checked)}
+        />
+        <If when={transparencyError() !== null}>
+          <Text role="alert" class="text-sm text-destructive">
+            {transparencyError()}
           </Text>
         </If>
       </View>
