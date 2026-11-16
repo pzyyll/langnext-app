@@ -2,11 +2,16 @@
 
 ## Page layout
 
-The shell's chrome is one band: the `sidebar` fill runs behind the title bar and the sidebar, and no border
-separates them from the work area. The work area is a `background` panel on that band. Its start-start corner
-(top-left in a left-to-right layout) is `rounded-2xl` and the panel clips its content, so the curve shows the chrome
-behind it; its other edges stay flush with the window, where a radius would only cut into the frame. A separator line
-would restate the fill difference, so neither side draws one.
+The title bar and sidebar share one glass surface. `nsh.json` enables the native `popover` backdrop
+(Acrylic on Windows 11). The shell's root draws `bg-sidebar/70` once over that material. The title bar and sidebar
+draw no background of their own, so their tints do not stack. Icons and text stay fully opaque. The native
+material depends on the operating system. Leave `transparent` unset: NSH 0.5.1 treats a transparent Windows
+window as frameless, which removes the existing system window buttons. A backdrop alone enables composition.
+
+The work area keeps its opaque `bg-background` fill. Its start-start corner (top-left in a left-to-right layout)
+is `rounded-2xl` and the panel clips its content, so the curve shows the glass surface behind it. Its other edges
+stay flush with the window, where a radius would only cut into the frame. No border separates the work area
+from the chrome. Layout, hit targets, and the existing motion inventory stay unchanged.
 
 One container serves every sidebar destination: `PageSurface`
 (`components/layout/page-surface.tsx`) owns the work area's scrolling and its
@@ -56,7 +61,7 @@ each page supplies only its sections, which wrap at the minimum window width.
 Motion tokens are defined in `components/motion.ts`. Settings controls retain
 their existing behavior and appearance.
 
-### Validation
+### Validation before glass
 
 - Radius, typography, spacing, alignment, and theme colors: reviewed in Windows
   screenshots, in light and dark, at 1440 × 900, 1040 × 720 and 720 × 520. The
@@ -81,6 +86,32 @@ their existing behavior and appearance.
   and Tab focus were not verified.
 - Platforms and content: Windows only. Large text, other desktop platforms, and
   right-to-left layout remain manual checks. Mobile and TUI are outside scope.
+
+### Glass validation
+
+- Checks: `mise run verify` passed. All 11 headless tests and the final 11 Windows desktop tests passed.
+  Two earlier desktop runs missed different navigation or menu actions. The baseline and final full run passed;
+  the cause was not confirmed. Test code did not change.
+- Native material: the built bundle ran in the Windows 11 host at 150% display scale. DWM reported Acrylic
+  (backdrop type 3) with composition enabled. The native window buttons remained visible.
+- Preview limit: the NSH 0.5.1 Windows hot-reload host reported Acrylic but had composition disabled.
+  `mise run dev` therefore does not show the complete glass effect. Verify the built bundle instead:
+  run `mise run build`, then `./target/debug/nsh-app-my-translator-windows-host.exe --bundle .nsh/out/bundle.nshc`
+  after a desktop test has built that host. The native test host uses the same development path; its passing
+  tests prove behavior, not the system material.
+- Color and surfaces: light and dark screenshots were reviewed with the window focused over blue and red
+  backgrounds. Chrome colors changed with the background; the work area's sampled RGB stayed at
+  `255,255,255` in light and `10,10,10` in dark. An unfocused window used the system's solid material fallback.
+- Radius, typography, spacing, and alignment: reviewed in light and dark. The shared band, work area's rounded
+  corner, icon alignment, and content layout remained intact. No geometry or text styles changed.
+- Hover and other states: sidebar hover, tooltip dismissal, selection, theme changes, and About passed desktop
+  tests. Pressed styles did not change; held presses and pointer cancellation were not reviewed.
+- Shared components and standards: no new controls or variants. The shell owns one tint; `PageSurface` still
+  owns the opaque work area. All colors come from existing tokens.
+- Motion and sound: no new motion or sound. Page changes, menu dismissal, About reopening, and reduced-motion
+  navigation passed desktop tests. Frame-by-frame animation was not reviewed.
+- Accessibility and platforms: role/name selectors and minimum-size navigation passed Windows tests.
+  Full keyboard use, screen readers, larger text, other platforms, and right-to-left layout remain unverified.
 
 ## App menu and About
 

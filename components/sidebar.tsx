@@ -77,7 +77,7 @@ export function Sidebar(props: SidebarProps) {
       testID="sidebar"
       role="navigation"
       accessibilityLabel="Main navigation"
-      class="w-13 items-center bg-sidebar py-3"
+      class="w-13 items-center py-3"
     >
       <View class="items-center gap-1">
         <SidebarItem

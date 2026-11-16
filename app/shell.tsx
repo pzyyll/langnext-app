@@ -31,11 +31,11 @@ export function AppShell() {
   const selectSettings = () => page.set("settings");
 
   return (
-    <View class="flex-1 bg-sidebar">
+    <View class="flex-1 bg-sidebar/70">
       <View
         testID="title-bar"
         desktop={{ windowDrag: true }}
-        class="flex-row items-center bg-sidebar"
+        class="flex-row items-center"
         style={{
           height: Math.max(TITLE_BAR_HEIGHT, titleBar().height),
           paddingLeft: titleBar().left,
