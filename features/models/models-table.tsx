@@ -20,8 +20,6 @@ import {
 } from "../../components/ui/table";
 import { toast } from "../../components/ui/toast";
 import { buildTooltip } from "../../components/ui/tooltip";
-import { ADAPTER_SPECS } from "../../services/protocols/adapters";
-import type { AdapterId } from "../../services/protocols/types";
 import {
   formatModelApiTypeDisplay,
   formatSyncTimestamp,
@@ -30,11 +28,6 @@ import {
   resolveEffectiveDisplayName,
 } from "./model-helpers";
 import type { CapabilityFlags, ModelsEnabledFilter, ProviderChannel, ProviderModel } from "./types";
-
-const PROTOCOL_ITEMS: SelectItem[] = ADAPTER_SPECS.map((spec) => ({
-  value: spec.id,
-  title: spec.label,
-}));
 
 const filterItems = (): SelectItem[] => [
   { value: "all", title: t("models.filter.all") },
@@ -78,11 +71,8 @@ interface ModelsTableProps {
   channel: ProviderChannel;
   models: ProviderModel[];
   enabledFilter: ModelsEnabledFilter;
-  isDirty: boolean;
-  syncAdapterId: AdapterId;
   testing: boolean;
   syncing: boolean;
-  onSyncAdapterChange: (adapterId: AdapterId) => void;
   onGetModels: () => void;
   onEnabledFilterChange: (filter: ModelsEnabledFilter) => void;
   onAddModel: () => void;
@@ -217,19 +207,6 @@ export function ModelsTable(props: ModelsTableProps) {
           </View>
 
           <View class="flex-row flex-wrap items-center gap-2">
-            <Select
-              testID="sync-protocol-select"
-              size="sm"
-              prefix={t("models.connection.protocolPrefix")}
-              tooltip={t("models.connection.protocol")}
-              accessibilityLabel={t("models.connection.protocol")}
-              items={PROTOCOL_ITEMS}
-              value={props.syncAdapterId}
-              onChange={(v) => {
-                if (v) props.onSyncAdapterChange(v as AdapterId);
-              }}
-              triggerClass="max-w-72"
-            />
             <Button
               testID="get-models-button"
               variant="outline"
@@ -237,7 +214,7 @@ export function ModelsTable(props: ModelsTableProps) {
               label={
                 props.syncing ? t("models.connection.fetching") : t("models.connection.getModels")
               }
-              disabled={props.syncing || props.testing || props.isDirty}
+              disabled={props.syncing || props.testing}
               onPress={() => props.onGetModels()}
             />
           </View>

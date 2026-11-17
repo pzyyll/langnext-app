@@ -535,3 +535,134 @@ test("provider channels: DeepSeek model allows Messages override without Gemini"
   expect(app.shows("id:model-row-deepseek-reasoner >> text:Default (OpenAI Responses)")).toBe(true);
   expect(app.shows("id:model-row-deepseek-chat >> text:Anthropic Messages")).toBe(true);
 });
+
+test("provider channels: draft discovery uses current proxy inputs", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { "settings.language": "en" },
+    network: {
+      "GET https://proxy.example.com/custom-prefix/models": {
+        status: 200,
+        body: {
+          data: [{ id: "gpt-4.1-mini", display_name: "GPT-4.1 Mini" }],
+        },
+      },
+    },
+  });
+
+  await startDraftFromEmptyState(app, "openai");
+  await app.press("id:connection-adapter-select");
+  await app.waitFor("role:option[OpenAI Chat Completions]");
+  await app.press("role:option[OpenAI Chat Completions]");
+
+  await app.clear("id:connection-url-input");
+  await app.type("id:connection-url-input", "https://proxy.example.com/custom-prefix/");
+  await app.type("id:connection-token-input", "sk-draft-proxy-key");
+
+  await app.press("id:get-models-button");
+  await app.waitFor("id:model-row-gpt-4.1-mini");
+
+  expect(app.requests()).toHaveLength(1);
+  expect(app.requests()[0]!.url).toBe("https://proxy.example.com/custom-prefix/models");
+  expect(app.requests()[0]!.headers.authorization).toBe("Bearer sk-draft-proxy-key");
+  expect(app.shows("id:model-row-gpt-4.1-mini >> text:Default (OpenAI Chat Completions)")).toBe(
+    true,
+  );
+  expect(app.storage()[PROVIDERS_STORAGE_KEY]).toBeUndefined();
+  expect(app.storage()[MODELS_STORAGE_KEY]).toBeUndefined();
+});
+
+test("provider channels: dirty saved editor tests and fetches with keep, replace, and clear credentials", async () => {
+  const channel = makeChannel({
+    id: "ch-dirty-saved",
+    presetId: "openai",
+    displayName: "Dirty Saved",
+    adapterId: "openai-compatible",
+    baseUrl: "https://api.openai.com/v1",
+    hasCredential: true,
+  });
+
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: makeSeedStorage({
+      channels: [channel],
+      credentials: { [channel.id]: "sk-saved-secret" },
+    }),
+    network: {
+      "GET https://proxy.example.com/v1/models": {
+        status: 200,
+        body: { data: [{ id: "gpt-4.1-mini" }] },
+      },
+    },
+  });
+
+  await app.press("id:connection-adapter-select");
+  await app.waitFor("role:option[OpenAI Responses]");
+  await app.press("role:option[OpenAI Responses]");
+  await app.clear("id:connection-url-input");
+  await app.type("id:connection-url-input", "https://proxy.example.com/v1");
+
+  await app.press("id:test-connection-button");
+  await app.waitUntil(() => app.requests().length === 1);
+  expect(app.requests()[0]!.url).toBe("https://proxy.example.com/v1/models");
+  expect(app.requests()[0]!.headers.authorization).toBe("Bearer sk-saved-secret");
+
+  await app.type("id:connection-token-input", "sk-replacement-secret");
+  await app.press("id:test-connection-button");
+  await app.waitUntil(() => app.requests().length === 2);
+  expect(app.requests()[1]!.headers.authorization).toBe("Bearer sk-replacement-secret");
+
+  await app.press("id:clear-token-button");
+  await app.press("id:get-models-button");
+  await app.waitFor("id:model-row-gpt-4.1-mini");
+  expect(app.requests()).toHaveLength(3);
+  expect(app.requests()[2]!.headers.authorization).toBeUndefined();
+
+  const stored = JSON.parse(app.storage()[PROVIDERS_STORAGE_KEY]!) as Array<{
+    baseUrl: string | null;
+  }>;
+  expect(stored[0]!.baseUrl).toBe("https://api.openai.com/v1");
+});
+
+test("provider channels: Custom without URL saves locally but rejects network actions", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { "settings.language": "en" },
+  });
+
+  await startDraftFromEmptyState(app, "custom");
+  expect(app.value("id:connection-url-input")).toBe("");
+
+  await app.press("id:test-connection-button");
+  await app.waitUntil(() =>
+    app.texts().some((t) => t.includes("Base URL is required before testing or fetching models.")),
+  );
+  expect(app.requests()).toHaveLength(0);
+
+  await app.press("id:get-models-button");
+  await app.waitUntil(() =>
+    app
+      .texts()
+      .some((t) =>
+        t.includes("Sync error: Base URL is required before testing or fetching models."),
+      ),
+  );
+  expect(app.requests()).toHaveLength(0);
+
+  await app.press("id:save-channel-button");
+  await app.waitUntil(() => app.storage()[PROVIDERS_STORAGE_KEY] !== undefined);
+  expect(app.requests()).toHaveLength(0);
+
+  const reopened = await open(APP_ENTRY, {
+    ...viewport,
+    storage: app.storage(),
+  });
+  expect(reopened.value("id:connection-url-input")).toBe("");
+  await reopened.press("id:test-connection-button");
+  await reopened.waitUntil(() =>
+    reopened
+      .texts()
+      .some((t) => t.includes("Base URL is required before testing or fetching models.")),
+  );
+  expect(reopened.requests()).toHaveLength(0);
+});

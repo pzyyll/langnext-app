@@ -109,3 +109,16 @@ export interface SyncModelsResult {
   updatedCount: number;
   missingCount: number;
 }
+
+export type ConnectionCredentialInput =
+  | { mode: "inline"; value: string | null }
+  | { mode: "saved"; channelId: string; update: CredentialUpdate };
+
+/** Immutable connection snapshot captured from the current editor inputs. */
+export interface ConnectionSnapshot {
+  presetId: ProviderPresetId;
+  adapterId: AdapterId;
+  baseUrl: string | null;
+  allowInsecureHttp: boolean;
+  credentialInput: ConnectionCredentialInput;
+}

@@ -182,8 +182,8 @@ test("supports inline rename, channel toggle, dirty guard, cancel/save, and toke
   expect(app.enabled("id:test-connection-button")).toBe(true);
   await app.type("id:connection-url-input", "https://proxy.example.com/v1");
   expect(app.texts()).toContain("Unsaved");
-  expect(app.enabled("id:test-connection-button")).toBe(false);
-  expect(app.enabled("id:get-models-button")).toBe(false);
+  expect(app.enabled("id:test-connection-button")).toBe(true);
+  expect(app.enabled("id:get-models-button")).toBe(true);
 
   await app.press("id:cancel-channel-button");
   expect(app.value("id:connection-url-input")).toBe("");
@@ -224,9 +224,14 @@ test("reorders channels and deletes a channel with its models and credentials", 
 });
 
 test("tests connection and syncs remote models while preserving overrides and manual entries", async () => {
+  const channels = sampleChannels().map((ch) =>
+    ch.id === "ch-openai"
+      ? { ...ch, presetId: "custom" as const, baseUrl: "https://api.openai.com/v1" }
+      : ch,
+  );
   const app = await open(APP_ENTRY, {
     ...viewport,
-    storage: seededStorage(),
+    storage: seededStorage(channels),
     network: {
       "GET https://api.openai.com/v1/models": {
         status: 200,
@@ -280,17 +285,28 @@ test("tests connection and syncs remote models while preserving overrides and ma
   expect(legacy?.syncStatus).toBe("missing");
   expect(manual?.origin).toBe("manual");
 
-  await app.press("id:sync-protocol-select");
+  await app.press("id:connection-adapter-select");
   await app.waitFor("role:option[Anthropic Messages]");
   await app.press("role:option[Anthropic Messages]");
+  await app.clear("id:connection-url-input");
+  await app.type("id:connection-url-input", "https://api.anthropic.com");
   await app.press("id:get-models-button");
   await app.waitUntil(() => app.shows("id:model-row-claude-sonnet-4-20250514"));
 
   const antRequests = app.requests().filter((r) => r.url.includes("anthropic.com/v1/models"));
   expect(antRequests.length).toBe(2);
   expect(antRequests[0]!.headers["anthropic-version"]).toBe("2023-06-01");
-  expect(app.texts()).toContain("Default (OpenAI Chat Completions)");
+  expect(antRequests[0]!.headers["x-api-key"]).toBe("sk-openai-secret");
+  expect(
+    app.shows("id:model-row-claude-sonnet-4-20250514 >> text:Default (OpenAI Chat Completions)"),
+  ).toBe(true);
   expect(app.texts()).not.toContain("Source: Anthropic Messages");
+
+  await app.press("id:save-channel-button");
+  await app.waitUntil(() => !app.shows("id:save-channel-button"));
+  expect(
+    app.shows("id:model-row-claude-sonnet-4-20250514 >> text:Default (Anthropic Messages)"),
+  ).toBe(true);
 });
 
 test("records normalized sync errors without losing existing models", async () => {

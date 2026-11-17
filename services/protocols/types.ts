@@ -1,3 +1,5 @@
+import type { ProviderPresetId } from "./presets";
+
 /** Built-in provider wire protocol identifiers. */
 export type AdapterId = "openai-compatible" | "openai-responses" | "anthropic" | "gemini";
 
@@ -47,9 +49,20 @@ export class ProviderProtocolError extends Error {
 }
 
 export interface AdapterRequestParams {
+  presetId: ProviderPresetId;
   adapterId: AdapterId;
   baseUrl: string | null;
   credential: string | null;
   signal?: AbortSignal;
   timeoutMs?: number;
+}
+
+export type RequestOperation =
+  | { kind: "catalog"; queryExtras?: Record<string, string> }
+  | { kind: "model"; modelId: string };
+
+export interface ResolvedRequestTarget {
+  method: "GET" | "POST";
+  url: string;
+  headers: Record<string, string>;
 }

@@ -1,11 +1,12 @@
 import { batch, signal, Storage } from "nsh";
 import { t } from "nsh/i18n";
 import { listRemoteModels, testAdapterConnection } from "../../services/protocols/adapters";
-import { isProtocolAllowedForPreset } from "../../services/protocols/presets";
-import type { AdapterId } from "../../services/protocols/types";
+import { getProviderPreset, isProtocolAllowedForPreset } from "../../services/protocols/presets";
+import type { AdapterRequestParams, DiscoveredRemoteModel } from "../../services/protocols/types";
 import { inspectBaseUrl } from "./connection";
 import type {
   CapabilityFlags,
+  ConnectionSnapshot,
   CreateManualModelInput,
   ModelsEnabledFilter,
   ProviderChannel,
@@ -395,36 +396,72 @@ export async function deleteChannel(id: string): Promise<void> {
   });
 }
 
-export async function testChannelConnection(
-  providerId: string,
-  adapterIdOverride?: AdapterId,
+async function resolveConnectionRequestParams(
+  snapshot: ConnectionSnapshot,
+  action: "test" | "fetch",
   abortSignal?: AbortSignal,
-): Promise<{ modelCount: number }> {
-  const channel = channelsSignal().find((ch) => ch.id === providerId);
-  if (!channel) {
-    throw new Error(t("models.error.channelGone"));
+): Promise<AdapterRequestParams> {
+  if (!isProtocolAllowedForPreset(snapshot.presetId, snapshot.adapterId)) {
+    throw new Error(t("models.error.unsupportedProtocol"));
   }
 
-  const urlCheck = inspectBaseUrl(channel.baseUrl ?? "");
+  const urlCheck = inspectBaseUrl(snapshot.baseUrl ?? "");
   if (!urlCheck.ok) {
     throw new Error(urlCheck.error ?? t("models.error.invalidBaseUrl"));
   }
-  if (urlCheck.isInsecureHttp && !channel.insecureHttpConfirmedAt) {
-    throw new Error(t("models.error.confirmInsecureTest"));
+  if (!urlCheck.normalizedBaseUrl && !getProviderPreset(snapshot.presetId).defaultBaseUrl) {
+    throw new Error(t("models.error.baseUrlRequired"));
+  }
+  if (urlCheck.isInsecureHttp && !snapshot.allowInsecureHttp) {
+    throw new Error(
+      action === "test"
+        ? t("models.error.confirmInsecureTest")
+        : t("models.error.confirmInsecureFetch"),
+    );
   }
 
-  const secret = await readSecret(channel.id);
-  return testAdapterConnection({
-    adapterId: adapterIdOverride ?? channel.adapterId,
+  let credential: string | null = null;
+  if (snapshot.credentialInput.mode === "inline") {
+    credential = snapshot.credentialInput.value?.trim() || null;
+  } else {
+    const update = snapshot.credentialInput.update;
+    if (update.mode === "keep") {
+      credential = await readSecret(snapshot.credentialInput.channelId);
+    } else if (update.mode === "replace") {
+      credential = update.value.trim() || null;
+    } else {
+      credential = null;
+    }
+  }
+
+  return {
+    presetId: snapshot.presetId,
+    adapterId: snapshot.adapterId,
     baseUrl: urlCheck.normalizedBaseUrl,
-    credential: secret,
+    credential,
     signal: abortSignal,
-  });
+  };
+}
+
+export async function testConnectionSnapshot(
+  snapshot: ConnectionSnapshot,
+  abortSignal?: AbortSignal,
+): Promise<{ modelCount: number }> {
+  const params = await resolveConnectionRequestParams(snapshot, "test", abortSignal);
+  return testAdapterConnection(params);
+}
+
+export async function discoverModelsSnapshot(
+  snapshot: ConnectionSnapshot,
+  abortSignal?: AbortSignal,
+): Promise<DiscoveredRemoteModel[]> {
+  const params = await resolveConnectionRequestParams(snapshot, "fetch", abortSignal);
+  return listRemoteModels(params);
 }
 
 export async function syncChannelModels(
   providerId: string,
-  syncAdapterId: AdapterId,
+  snapshot: ConnectionSnapshot,
   abortSignal?: AbortSignal,
 ): Promise<SyncModelsResult> {
   const channel = channelsSignal().find((ch) => ch.id === providerId);
@@ -432,24 +469,12 @@ export async function syncChannelModels(
     throw new Error(t("models.error.channelGone"));
   }
 
-  const urlCheck = inspectBaseUrl(channel.baseUrl ?? "");
-  if (!urlCheck.ok) {
-    throw new Error(urlCheck.error ?? t("models.error.invalidBaseUrl"));
-  }
-  if (urlCheck.isInsecureHttp && !channel.insecureHttpConfirmedAt) {
-    throw new Error(t("models.error.confirmInsecureFetch"));
-  }
-
-  const secret = await readSecret(channel.id);
+  const params = await resolveConnectionRequestParams(snapshot, "fetch", abortSignal);
+  const syncAdapterId = params.adapterId;
 
   let discovered;
   try {
-    discovered = await listRemoteModels({
-      adapterId: syncAdapterId,
-      baseUrl: urlCheck.normalizedBaseUrl,
-      credential: secret,
-      signal: abortSignal,
-    });
+    discovered = await listRemoteModels(params);
   } catch (error) {
     const message = error instanceof Error ? error.message : t("models.error.fetchModels");
     if ((error as { kind?: string } | null)?.kind !== "cancelled") {

@@ -96,9 +96,6 @@ models:
     testing: Testing…
     getModels: Get models
     fetching: Fetching…
-    protocol: Sync protocol
-    protocolPrefix: Protocol
-    dirtyHint: Save connection changes before testing or syncing.
     connected: Connected (%{count} models reachable)
     connectedOne: Connected (%{count} model reachable)
     synced: Synced %{count} models (%{added} added)
@@ -165,6 +162,7 @@ models:
     displayNameRequired: Display name is required.
     unsupportedProtocol: Selected API protocol is not supported by this provider.
     invalidBaseUrl: Invalid base URL.
+    baseUrlRequired: Base URL is required before testing or fetching models.
     baseUrlInvalid: Enter a valid http:// or https:// base URL.
     baseUrlScheme: Base URL must start with https:// or http://.
     baseUrlHost: Base URL must include a host name.

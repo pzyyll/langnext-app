@@ -1,4 +1,5 @@
 import { t } from "nsh/i18n";
+import { resolveRequestTarget } from "./routing";
 import {
   ProviderProtocolError,
   type AdapterId,
@@ -47,11 +48,6 @@ export function getAdapterDefaultBaseUrl(adapterId: AdapterId): string {
   return getAdapterSpec(adapterId).defaultBaseUrl;
 }
 
-function normalizeRootUrl(baseUrl: string | null, adapterId: AdapterId): string {
-  const raw = baseUrl?.trim() || getAdapterDefaultBaseUrl(adapterId);
-  return raw.replace(/\/+$/, "");
-}
-
 function inferCapabilitiesFromId(modelId: string): DiscoveredRemoteModel["capabilities"] {
   const lower = modelId.toLowerCase();
   const isVision =
@@ -86,52 +82,6 @@ function inferCapabilitiesFromId(modelId: string): DiscoveredRemoteModel["capabi
     image: isVision,
     pdf: isGeminiOrClaudePdf,
     video: isVideo,
-  };
-}
-
-/**
- * Builds the models endpoint for an adapter.
- *
- * The adapter owns how the token travels on the wire: OpenAI-style APIs expect
- * `Authorization: Bearer`, Anthropic expects `x-api-key`, Gemini expects a `key`
- * query parameter. A missing token means the endpoint needs no authentication.
- */
-function createHeadersAndEndpoint(
-  params: AdapterRequestParams,
-  queryExtras: Record<string, string> = {},
-): { url: string; headers: Record<string, string> } {
-  const root = normalizeRootUrl(params.baseUrl, params.adapterId);
-  const headers: Record<string, string> = {
-    Accept: "application/json",
-  };
-  const query = new URLSearchParams(queryExtras);
-  const token = params.credential?.trim() || null;
-
-  let path: string;
-  if (params.adapterId === "anthropic") {
-    const base = root.replace(/\/v1$/, "");
-    path = `${base}/v1/models`;
-    headers["anthropic-version"] = "2023-06-01";
-    if (token) {
-      headers["x-api-key"] = token;
-    }
-  } else if (params.adapterId === "gemini") {
-    const base = root.replace(/\/v1beta$/, "").replace(/\/v1$/, "");
-    path = `${base}/v1beta/models`;
-    if (token) {
-      query.set("key", token);
-    }
-  } else {
-    path = `${root}/models`;
-    if (token) {
-      headers.Authorization = `Bearer ${token}`;
-    }
-  }
-
-  const qs = query.toString();
-  return {
-    url: qs.length > 0 ? `${path}?${qs}` : path,
-    headers,
   };
 }
 
@@ -289,12 +239,12 @@ export async function listRemoteModels(
   const timeoutMs = params.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const deduped = new Map<string, DiscoveredRemoteModel>();
 
-  if (params.adapterId === "anthropic") {
+  if (params.presetId !== "deepseek" && params.adapterId === "anthropic") {
     let afterId: string | null = null;
     for (let page = 0; page < MAX_PAGES; page++) {
-      const extras: Record<string, string> = {};
-      if (afterId) extras.after_id = afterId;
-      const { url, headers } = createHeadersAndEndpoint(params, extras);
+      const queryExtras: Record<string, string> = {};
+      if (afterId) queryExtras.after_id = afterId;
+      const { url, headers } = resolveRequestTarget(params, { kind: "catalog", queryExtras });
       const payload = await fetchJsonPage(url, headers, params.signal, timeoutMs);
       for (const item of parseOpenAIPage(payload)) {
         if (!deduped.has(item.modelKey)) deduped.set(item.modelKey, item);
@@ -310,9 +260,9 @@ export async function listRemoteModels(
   if (params.adapterId === "gemini") {
     let pageToken: string | null = null;
     for (let page = 0; page < MAX_PAGES; page++) {
-      const extras: Record<string, string> = {};
-      if (pageToken) extras.pageToken = pageToken;
-      const { url, headers } = createHeadersAndEndpoint(params, extras);
+      const queryExtras: Record<string, string> = {};
+      if (pageToken) queryExtras.pageToken = pageToken;
+      const { url, headers } = resolveRequestTarget(params, { kind: "catalog", queryExtras });
       const payload = await fetchJsonPage(url, headers, params.signal, timeoutMs);
       const parsed = parseGeminiPage(payload);
       for (const item of parsed.models) {
@@ -324,7 +274,7 @@ export async function listRemoteModels(
     return Array.from(deduped.values());
   }
 
-  const { url, headers } = createHeadersAndEndpoint(params);
+  const { url, headers } = resolveRequestTarget(params, { kind: "catalog" });
   const payload = await fetchJsonPage(url, headers, params.signal, timeoutMs);
   for (const item of parseOpenAIPage(payload)) {
     if (!deduped.has(item.modelKey)) deduped.set(item.modelKey, item);

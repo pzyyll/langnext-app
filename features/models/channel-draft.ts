@@ -6,9 +6,9 @@ import {
   isProtocolAllowedForPreset,
   type ProviderPresetId,
 } from "../../services/protocols/presets";
-import type { AdapterId } from "../../services/protocols/types";
+import type { AdapterId, DiscoveredRemoteModel } from "../../services/protocols/types";
 import { inspectBaseUrl } from "./connection";
-import type { CapabilityOverrides, ProviderModel } from "./types";
+import type { CapabilityOverrides, ProviderModel, SyncModelsResult } from "./types";
 
 export interface AddModelDraftInput {
   modelKey: string;
@@ -43,6 +43,13 @@ export interface ChannelDraft {
   enabled: () => boolean;
   setEnabled: (value: boolean) => void;
   models: () => ProviderModel[];
+  modelsLastSyncedAt: () => string | null;
+  modelsLastSyncError: () => string | null;
+  setSyncError: (message: string | null) => void;
+  applyDiscoveredModels: (
+    discovered: DiscoveredRemoteModel[],
+    sourceAdapterId: AdapterId,
+  ) => SyncModelsResult;
   addManualModel: (input: AddModelDraftInput) => ProviderModel;
   updateModel: (input: UpdateModelDraftInput) => ProviderModel;
   setModelEnabled: (modelId: string, enabled: boolean) => void;
@@ -60,6 +67,8 @@ export function createChannelDraft(presetId: ProviderPresetId): ChannelDraft {
   const allowInsecureHttp = signal(false);
   const enabled = signal(true);
   const models = signal<ProviderModel[]>([]);
+  const modelsLastSyncedAt = signal<string | null>(null);
+  const modelsLastSyncError = signal<string | null>(null);
 
   return {
     id,
@@ -82,6 +91,83 @@ export function createChannelDraft(presetId: ProviderPresetId): ChannelDraft {
     enabled: () => enabled(),
     setEnabled: (value) => enabled.set(value),
     models: () => models(),
+    modelsLastSyncedAt: () => modelsLastSyncedAt(),
+    modelsLastSyncError: () => modelsLastSyncError(),
+    setSyncError: (message) => modelsLastSyncError.set(message),
+    applyDiscoveredModels: (discovered, sourceAdapterId) => {
+      const timestamp = new Date().toISOString();
+      const existing = models();
+      const existingByKey = new Map(existing.map((m) => [m.modelKey, m]));
+      const seenKeys = new Set<string>();
+      const next: ProviderModel[] = [];
+      let addedCount = 0;
+      let updatedCount = 0;
+
+      for (const remote of discovered) {
+        seenKeys.add(remote.modelKey);
+        const prev = existingByKey.get(remote.modelKey);
+        if (prev) {
+          updatedCount += 1;
+          next.push({
+            ...prev,
+            sourceAdapterId,
+            displayName: remote.displayName ?? prev.displayName,
+            capabilities: remote.capabilities,
+            contextLimit: prev.contextLimit ?? remote.contextLimit,
+            maxTokens: prev.maxTokens ?? remote.maxTokens,
+            syncStatus: "active",
+            lastSeenAt: timestamp,
+            updatedAt: timestamp,
+          });
+        } else {
+          addedCount += 1;
+          next.push({
+            id: crypto.randomUUID(),
+            providerId: id,
+            modelKey: remote.modelKey,
+            sourceAdapterId,
+            origin: "remote",
+            syncStatus: "active",
+            enabled: false,
+            displayName: remote.displayName,
+            displayNameOverride: null,
+            apiTypeOverride: null,
+            capabilities: remote.capabilities,
+            capabilitiesOverride: null,
+            contextLimit: remote.contextLimit,
+            maxTokens: remote.maxTokens,
+            lastSeenAt: timestamp,
+            createdAt: timestamp,
+            updatedAt: timestamp,
+          });
+        }
+      }
+
+      let missingCount = 0;
+      for (const prev of existing) {
+        if (seenKeys.has(prev.modelKey)) continue;
+        if (prev.origin === "manual") {
+          next.push(prev);
+        } else {
+          missingCount += 1;
+          next.push({
+            ...prev,
+            syncStatus: "missing",
+            updatedAt: timestamp,
+          });
+        }
+      }
+
+      models.set(next);
+      modelsLastSyncedAt.set(timestamp);
+      modelsLastSyncError.set(null);
+      return {
+        discoveredCount: discovered.length,
+        addedCount,
+        updatedCount,
+        missingCount,
+      };
+    },
     addManualModel: (input) => {
       const modelKey = input.modelKey.trim();
       if (!modelKey) {

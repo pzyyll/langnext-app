@@ -10,7 +10,7 @@ import { Input } from "../../components/ui/input";
 import { Select, type SelectItem } from "../../components/ui/select";
 import { Switch } from "../../components/ui/switch";
 import { toast } from "../../components/ui/toast";
-import { getAdapterDefaultBaseUrl, getAdapterLabel } from "../../services/protocols/adapters";
+import { getAdapterLabel } from "../../services/protocols/adapters";
 import { getProviderPreset, getProviderPresetLabel } from "../../services/protocols/presets";
 import type { AdapterId } from "../../services/protocols/types";
 import { AddModelDialog, type AddModelSubmission } from "./add-model-dialog";
@@ -23,17 +23,19 @@ import {
   createManualModel,
   deleteChannel,
   deleteModelsBulk,
+  discoverModelsSnapshot,
   renameChannel,
   RevisionConflictError,
   saveChannelDraft,
   setModelEnabled,
   syncChannelModels,
-  testChannelConnection,
+  testConnectionSnapshot,
   toggleChannelEnabled,
   updateChannel,
   updateModelConfig,
 } from "./store";
 import type {
+  ConnectionSnapshot,
   CredentialUpdate,
   ModelsEnabledFilter,
   ProviderChannel,
@@ -85,9 +87,6 @@ export function ProviderEditor(props: ProviderEditorProps) {
   const saveError = signal<string | null>(null);
   const conflictDetected = signal(false);
 
-  const syncAdapterId = signal<AdapterId>(
-    props.mode === "saved" ? props.channel.adapterId : props.draft.adapterId(),
-  );
   const testing = signal(false);
   const syncing = signal(false);
   const connectionMessage = signal<{ ok: boolean; text: string } | null>(null);
@@ -176,7 +175,6 @@ export function ProviderEditor(props: ProviderEditorProps) {
         abortInFlight();
         testing.set(false);
         syncing.set(false);
-        syncAdapterId.set(d.adapterId());
         connectionMessage.set(null);
         nameError.set(null);
         saveError.set(null);
@@ -192,7 +190,6 @@ export function ProviderEditor(props: ProviderEditorProps) {
       abortInFlight();
       testing.set(false);
       syncing.set(false);
-      syncAdapterId.set(ch.adapterId);
       connectionMessage.set(null);
       loadFromChannel(ch);
       return;
@@ -308,8 +305,6 @@ export function ProviderEditor(props: ProviderEditorProps) {
       credentialUpdate = { mode: "replace", value: savedCredential().trim() };
     }
 
-    const previousAdapterId = props.channel.adapterId;
-
     try {
       const updated = await updateChannel({
         id: props.channel.id,
@@ -322,9 +317,6 @@ export function ProviderEditor(props: ProviderEditorProps) {
         allowInsecureHttp: savedAllowInsecureHttp(),
       });
       syncedRevision = updated.revision;
-      if (syncAdapterId() === previousAdapterId) {
-        syncAdapterId.set(updated.adapterId);
-      }
       connectionMessage.set(null);
       loadFromChannel(updated);
       toast.success(t("models.channel.saved"));
@@ -338,18 +330,50 @@ export function ProviderEditor(props: ProviderEditorProps) {
     }
   };
 
+  const buildConnectionSnapshot = (): ConnectionSnapshot => {
+    if (props.mode === "draft") {
+      const d = props.draft;
+      return {
+        presetId: d.presetId,
+        adapterId: d.adapterId(),
+        baseUrl: d.baseUrl(),
+        allowInsecureHttp: d.allowInsecureHttp(),
+        credentialInput: {
+          mode: "inline",
+          value: d.credential(),
+        },
+      };
+    }
+
+    let update: CredentialUpdate = { mode: "keep" };
+    if (credentialMode() === "clear") {
+      update = { mode: "clear" };
+    } else if (credentialMode() === "replace") {
+      update = { mode: "replace", value: savedCredential() };
+    }
+
+    return {
+      presetId: props.channel.presetId,
+      adapterId: savedAdapterId(),
+      baseUrl: savedBaseUrl(),
+      allowInsecureHttp: savedAllowInsecureHttp(),
+      credentialInput: {
+        mode: "saved",
+        channelId: props.channel.id,
+        update,
+      },
+    };
+  };
+
   const handleTest = async () => {
-    if (props.mode !== "saved" || testing() || syncing() || isSavedDirty()) return;
+    if (testing() || syncing()) return;
+    const snapshot = buildConnectionSnapshot();
     abortInFlight();
     activeController = new AbortController();
     testing.set(true);
     connectionMessage.set(null);
     try {
-      const result = await testChannelConnection(
-        props.channel.id,
-        props.channel.adapterId,
-        activeController.signal,
-      );
+      const result = await testConnectionSnapshot(snapshot, activeController.signal);
       const text =
         result.modelCount === 1
           ? t("models.connection.connectedOne", { count: result.modelCount })
@@ -369,26 +393,42 @@ export function ProviderEditor(props: ProviderEditorProps) {
   };
 
   const handleGetModels = async () => {
-    if (props.mode !== "saved" || syncing() || testing() || isSavedDirty()) return;
+    if (syncing() || testing()) return;
+    const snapshot = buildConnectionSnapshot();
     abortInFlight();
     activeController = new AbortController();
     syncing.set(true);
     connectionMessage.set(null);
     try {
-      const summary = await syncChannelModels(
-        props.channel.id,
-        syncAdapterId(),
-        activeController.signal,
-      );
-      toast.success(
-        t("models.connection.synced", {
-          count: summary.discoveredCount,
-          added: summary.addedCount,
-        }),
-      );
+      if (props.mode === "draft") {
+        const discovered = await discoverModelsSnapshot(snapshot, activeController.signal);
+        const summary = props.draft.applyDiscoveredModels(discovered, snapshot.adapterId);
+        toast.success(
+          t("models.connection.synced", {
+            count: summary.discoveredCount,
+            added: summary.addedCount,
+          }),
+        );
+      } else {
+        const summary = await syncChannelModels(
+          props.channel.id,
+          snapshot,
+          activeController.signal,
+        );
+        toast.success(
+          t("models.connection.synced", {
+            count: summary.discoveredCount,
+            added: summary.addedCount,
+          }),
+        );
+      }
     } catch (error) {
+      const message = error instanceof Error ? error.message : t("models.error.fetchModels");
       if ((error as { kind?: string } | null)?.kind !== "cancelled") {
-        toast.error(error instanceof Error ? error.message : t("models.error.fetchModels"));
+        if (props.mode === "draft") {
+          props.draft.setSyncError(message);
+        }
+        toast.error(message);
       }
     } finally {
       syncing.set(false);
@@ -454,9 +494,7 @@ export function ProviderEditor(props: ProviderEditorProps) {
   };
 
   const urlPlaceholder = () =>
-    currentPreset().defaultBaseUrl ??
-    getAdapterDefaultBaseUrl(currentAdapterId()) ??
-    t("models.connection.baseUrlPlaceholder");
+    currentPreset().defaultBaseUrl ?? t("models.connection.baseUrlPlaceholder");
 
   const tableChannelView = (): ProviderChannel => {
     if (props.mode === "saved") return props.channel;
@@ -472,8 +510,8 @@ export function ProviderEditor(props: ProviderEditorProps) {
       sortOrder: 0,
       revision: 0,
       insecureHttpConfirmedAt: null,
-      modelsLastSyncedAt: null,
-      modelsLastSyncError: null,
+      modelsLastSyncedAt: d.modelsLastSyncedAt(),
+      modelsLastSyncError: d.modelsLastSyncError(),
       createdAt: "",
       updatedAt: "",
     };
@@ -699,7 +737,7 @@ export function ProviderEditor(props: ProviderEditorProps) {
                   variant="outline"
                   size="sm"
                   label={testing() ? t("models.connection.testing") : t("models.connection.test")}
-                  disabled={testing() || syncing() || isDraftMode() || isSavedDirty()}
+                  disabled={testing() || syncing()}
                   onPress={() => void handleTest()}
                 />
               </View>
@@ -847,10 +885,7 @@ export function ProviderEditor(props: ProviderEditorProps) {
                 {saveError()}
               </Text>
             </If>
-            <If when={!isDraftMode() && isSavedDirty()}>
-              <Text class="text-xs text-warning">{t("models.connection.dirtyHint")}</Text>
-            </If>
-            <If when={!isDraftMode() && !isSavedDirty() && connectionMessage() !== null}>
+            <If when={connectionMessage() !== null}>
               <If when={connectionMessage()}>
                 {(msg) => (
                   <Text class={msg().ok ? "text-xs text-success" : "text-xs text-destructive"}>
@@ -866,11 +901,8 @@ export function ProviderEditor(props: ProviderEditorProps) {
               channel={tableChannelView()}
               models={props.mode === "draft" ? props.draft.models() : props.models}
               enabledFilter={props.enabledFilter}
-              isDirty={isDraftMode() || isSavedDirty()}
-              syncAdapterId={syncAdapterId()}
               testing={testing()}
               syncing={syncing()}
-              onSyncAdapterChange={(adapterId) => syncAdapterId.set(adapterId)}
               onGetModels={() => void handleGetModels()}
               onEnabledFilterChange={(f) => props.onEnabledFilterChange(f)}
               onAddModel={() => addModelOpen.set(true)}
