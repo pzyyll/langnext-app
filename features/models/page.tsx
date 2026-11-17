@@ -7,7 +7,7 @@ import type { ProviderTypeId } from "../../modules/ai/contracts/channel";
 import { AddChannelDialog } from "./add-channel-dialog";
 import { createChannelDraft, type ChannelDraft } from "./channel-draft";
 import { ChannelsRail } from "./channels-rail";
-import { ProviderEditor } from "./provider-editor";
+import { ChannelEditor } from "./editor/channel-editor";
 import {
   loadModelsState,
   modelsStore,
@@ -179,7 +179,7 @@ export function ModelsPage(props: ModelsPageProps) {
               // Native inputs and editor state belong to one channel, not the shared detail pane.
               <Each of={[channel()]} key={(item) => item.id}>
                 {(activeChannel) => (
-                  <ProviderEditor
+                  <ChannelEditor
                     mode="saved"
                     channel={activeChannel()}
                     models={modelsStore.modelsForSelectedChannel()}
@@ -193,7 +193,7 @@ export function ModelsPage(props: ModelsPageProps) {
         }
       >
         {(activeDraft) => (
-          <ProviderEditor
+          <ChannelEditor
             mode="draft"
             draft={activeDraft()}
             enabledFilter={modelsStore.enabledFilter()}

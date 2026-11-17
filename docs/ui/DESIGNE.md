@@ -358,6 +358,31 @@ nesting scroll views.
   existing hover, press, popup, dialog, and avatar transitions remain the only
   motion.
 
+### Editor controller and unsupported records
+
+- **Controller ownership**: `ChannelEditor` calls
+  `createChannelEditorController(props)` once per owner. The controller owns
+  current form values, request fingerprints, abort controllers, connection
+  snapshots, saves, revision conflicts, partial-save reporting, and model
+  actions; it returns accessors and actions, never module-global signals. The
+  view holds only the JSX. `ModelsPage` keeps the channel-ID `Each` key, the one
+  draft, discard confirmation, focus restoration, and leave guards, so a channel
+  switch disposes the old editor and same-channel revisions do not remount it.
+- **Unsupported stored modules**: A stored provider, channel-default protocol, or
+  model override this build lacks stays visible. The common shell keeps the
+  channel name, a neutral mark, the models card, and `Delete Channel`; a
+  localized `role="alert"` banner states that the configuration is unavailable.
+  Missing Settings are not mounted and unknown records are never converted to
+  Custom or deleted. A known provider shows a selector for an unsupported
+  default even when it is normally fixed, and model dialogs include an
+  unsupported stored override so it can be replaced. `Test` and `Get models`
+  stay disabled until the channel default is usable; an unknown model override
+  blocks only that model's save. Discovery-source metadata is harmless.
+- **Preserved lifetimes**: Request fingerprints still drop stale responses,
+  channel switching still aborts in-flight work, and first-save, saved
+  connection, and saved model write scopes plus `PartialDraftSaveError` recovery
+  are unchanged.
+
 ### Motion inventory
 
 | Change | Tool and tokens | Reduced motion |
@@ -383,6 +408,14 @@ nesting scroll views.
 - **Keyboard, reduced motion, and accessibility**: Verified on Windows (`--target windows`) that `<Input>` auto-focus moves cleanly into draft `Display Name` and dialog primary fields, `Return` submits dialog inputs, `Escape` dismisses `AddModelDialog` and `EditModelDialog` even while inputs hold focus, focus restores to triggers after dialog dismissal (with `ViewRef.focus()` `Tab`/Space button activation noted by NSH 0.5.1 as `(macOS, the web)`), and `reducedMotion: true` passes functionally without blocking dialog/toast state transitions. All interactive buttons, icon triggers, switches, checkboxes, and dialogs expose localized `accessibilityLabel` strings via `t()`. Frame-by-frame motion timing and interactive Windows Narrator screen-reader speech remain manual verification items in an interactive Windows desktop session (`UIAutomationClient` inspection against the non-interactive CLI session's detached `nsh dev` host exposed no interactive desktop UIA subtree from the automation context).
 - **Provider picker Avatar validation**: Verified `components/ui/avatar.tsx` (wrapping `nsh/base`'s `Avatar`) in `AddChannelDialog` via `mise run verify` (78/78 headless tests passed), `nsh test features/models/channels.test.tsx --target windows` (36/36 Windows desktop tests passed), and Windows desktop PNG screenshots in Light (`zh-CN`, rest & hover at `1040 × 720` and compact `720 × 520`) and Dark (`en`, rest & hover at `1040 × 720`). Confirmed circular `rounded-full` `bg-muted` clipping, centered `foreground`-tinted SVG marks, contrast in both themes, decorative `accessibilityLabel=""` (0 labeled `role:image` nodes, 5 accessible preset buttons), and hover washes. Held press state, remote `src` image loading fade, and screen-reader speech remain unverified in this pass.
 
+- **Editor controller and unsupported records**: `ai workspace:` cases (unknown
+  provider stays visible with deletion and zero requests; an unknown default
+  protocol is corrected and restores the fixed display; an unknown model override
+  keeps records and blocks only that save; an unknown discovery source never
+  blocks) passed with the four named channel-switch/stale-response regressions,
+  the full `features/models` suites, `ai settings:`, `ai registry:`, and
+  `ai setup:`. `mise run check` and `mise run build` passed with no missing
+  export.
 - **Module-owned settings extraction**: `ai registry:` presentation cases
   (registration, duplicates, missing runtime provider), `ai setup:` (one ordered
   built-in set after two initializer calls), and `ai settings:` (a distinct

@@ -185,7 +185,7 @@ export function EditModelDialog(props: EditModelDialogProps) {
               <Select
                 testID="edit-model-api-select"
                 accessibilityLabel={t("models.column.apiType")}
-                items={getModelApiTypeItems(props.presetId)}
+                items={getModelApiTypeItems(props.presetId, props.model?.apiTypeOverride ?? null)}
                 value={apiTypeOverride()}
                 onChange={(v) => {
                   if (v) apiTypeOverride.set(v);

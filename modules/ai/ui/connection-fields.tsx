@@ -14,13 +14,23 @@ import { getProtocolLabel } from "./labels";
  * the common editor.
  */
 export function ConnectionFields(props: ProviderSettingsProps) {
-  const protocolItems = (): SelectItem[] =>
-    props.provider.allowedProtocolIds.map((id) => ({
+  const currentProtocolSupported = () =>
+    props.provider.allowedProtocolIds.includes(props.protocolId);
+
+  const protocolItems = (): SelectItem[] => {
+    const items: SelectItem[] = props.provider.allowedProtocolIds.map((id) => ({
       value: id,
       title: getProtocolLabel(id),
     }));
+    if (!currentProtocolSupported()) {
+      // Keep an unsupported stored value visible so the user can replace it.
+      items.unshift({ value: props.protocolId, title: getProtocolLabel(props.protocolId) });
+    }
+    return items;
+  };
 
-  const hasFixedApiType = () => props.provider.allowedProtocolIds.length <= 1;
+  const hasFixedApiType = () =>
+    currentProtocolSupported() && props.provider.allowedProtocolIds.length <= 1;
 
   const urlPlaceholder = () =>
     props.provider.defaultBaseUrl ?? t("models.connection.baseUrlPlaceholder");

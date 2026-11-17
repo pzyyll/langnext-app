@@ -18,15 +18,25 @@ export function getProtocolLabel(protocolId: ProtocolId): string {
 /** Builds the ordered API selector choices for manual model add and edit dialogs. */
 export function getModelApiTypeItems(
   presetId: ProviderTypeId,
+  currentValue?: string | null,
 ): Array<{ value: string; title: string }> {
   const provider = aiRegistry.getProvider(presetId);
-  return [
+  const items = [
     { value: MODEL_DEFAULT_API_VALUE, title: t("models.model.useChannelDefault") },
     ...provider.allowedProtocolIds.map((id) => ({
       value: id,
       title: getProtocolLabel(id),
     })),
   ];
+  if (
+    currentValue &&
+    currentValue !== MODEL_DEFAULT_API_VALUE &&
+    !provider.allowedProtocolIds.includes(currentValue)
+  ) {
+    // Keep an unsupported stored override visible so the user can replace it.
+    items.push({ value: currentValue, title: getProtocolLabel(currentValue) });
+  }
+  return items;
 }
 
 /** Resolves the label shown for a model in tables and summaries. */

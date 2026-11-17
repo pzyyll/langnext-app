@@ -2042,3 +2042,139 @@ test("provider channels: a manual model inherits cached models.dev facts", async
   // The catalog provides discovery facts only, never a user override.
   expect(app.requests()).toHaveLength(0);
 });
+
+test("ai workspace: unknown provider remains visible without requests", async () => {
+  const ghost = makeChannel({
+    id: "ch-ghost",
+    presetId: "example:missing",
+    displayName: "Legacy Proxy",
+    adapterId: "openai-compatible",
+  });
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: makeSeedStorage({
+      channels: [ghost],
+      models: [makeModel({ providerId: "ch-ghost", modelKey: "legacy-model" })],
+      credentials: { [ghost.id]: "sk-ghost" },
+    }),
+  });
+
+  await app.waitFor("id:channel-item-ch-ghost");
+  expect(app.texts()).toContain("Legacy Proxy");
+  await app.waitFor("id:unsupported-configuration-alert");
+  expect(app.texts()).toContain(
+    "This channel uses a provider or API protocol that is not available in this build.",
+  );
+  expect(app.requests()).toHaveLength(0);
+
+  const stored = JSON.parse(app.storage()["models.v2.providers"]!) as ProviderChannel[];
+  expect(stored).toEqual([ghost]);
+
+  await app.press("id:delete-channel-button");
+  await app.waitFor("id:delete-channel-dialog");
+  await app.press("role:button[Delete]");
+  await app.waitUntil(() => !app.shows("id:delete-channel-dialog"));
+
+  const remaining = JSON.parse(app.storage()["models.v2.providers"]!) as ProviderChannel[];
+  expect(remaining).toEqual([]);
+  expect(app.requests()).toHaveLength(0);
+});
+
+test("ai workspace: unknown default protocol is corrected with a registered choice", async () => {
+  const legacy = makeChannel({
+    id: "ch-legacy",
+    presetId: "anthropic",
+    displayName: "Legacy Claude",
+    adapterId: "example:missing",
+    baseUrl: "https://api.anthropic.com",
+  });
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: makeSeedStorage({
+      channels: [legacy],
+      credentials: { [legacy.id]: "sk-ant-legacy" },
+    }),
+  });
+
+  await app.waitFor("id:unsupported-configuration-alert");
+  expect(app.shows("id:connection-adapter-select")).toBe(true);
+  expect(app.shows("id:connection-fixed-api-type")).toBe(false);
+  expect(app.enabled("id:test-connection-button")).toBe(false);
+  expect(app.enabled("id:get-models-button")).toBe(false);
+
+  await app.press("id:connection-adapter-select");
+  await app.waitFor("role:option[Anthropic Messages]");
+  await app.press("role:option[Anthropic Messages]");
+  await app.waitUntil(() => !app.shows("id:unsupported-configuration-alert"));
+
+  expect(app.shows("id:connection-adapter-select")).toBe(false);
+  expect(app.shows("id:connection-fixed-api-type")).toBe(true);
+  expect(app.enabled("id:test-connection-button")).toBe(true);
+  expect(app.enabled("id:get-models-button")).toBe(true);
+  expect(app.requests()).toHaveLength(0);
+});
+
+test("ai workspace: unknown model override keeps records and blocks only that save", async () => {
+  const channel = makeChannel();
+  const broken = makeModel({
+    id: "m-broken",
+    providerId: channel.id,
+    modelKey: "gpt-4o",
+    apiTypeOverride: "example:missing",
+    enabled: true,
+  });
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: makeSeedStorage({
+      channels: [channel],
+      models: [broken],
+      credentials: { [channel.id]: "sk-openai" },
+    }),
+  });
+
+  await app.waitFor("id:unsupported-configuration-alert");
+  expect(app.texts()).toContain(
+    "This channel uses a provider or API protocol that is not available in this build.",
+  );
+  // The channel catalog and connection test still work for a known provider.
+  expect(app.enabled("id:get-models-button")).toBe(true);
+  expect(app.enabled("id:test-connection-button")).toBe(true);
+
+  const modelsBefore = app.storage()["models.v2.items"];
+  await app.press("id:configure-model-gpt-4o");
+  await app.waitFor("id:edit-model-dialog");
+  await app.press("id:edit-model-api-select");
+  await app.waitFor("role:option[example:missing]");
+  await app.press("role:option[example:missing]");
+  await app.press("id:confirm-edit-model");
+  await app.waitUntil(() =>
+    app.texts().includes("Selected API protocol is not supported by this provider."),
+  );
+
+  expect(app.storage()["models.v2.items"]).toBe(modelsBefore);
+  expect(app.requests()).toHaveLength(0);
+});
+
+test("ai workspace: unknown discovery source never blocks operations", async () => {
+  const channel = makeChannel();
+  const model = makeModel({
+    id: "m-legacy-source",
+    providerId: channel.id,
+    modelKey: "gpt-4o",
+    sourceAdapterId: "example:missing-source",
+    enabled: true,
+  });
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: makeSeedStorage({
+      channels: [channel],
+      models: [model],
+      credentials: { [channel.id]: "sk-openai" },
+    }),
+  });
+
+  await app.waitFor("id:model-row-gpt-4o");
+  expect(app.shows("id:unsupported-configuration-alert")).toBe(false);
+  expect(app.enabled("id:get-models-button")).toBe(true);
+  expect(app.texts()).toContain("Default (OpenAI Responses)");
+});

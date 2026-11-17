@@ -1,35 +1,21 @@
-import {
-  cleanup,
-  effect,
-  type InputRef,
-  Scroll,
-  setAccessibilityFocus,
-  signal,
-  Text,
-  View,
-  windowSize,
-} from "nsh";
+import { cleanup, effect, type InputRef, setAccessibilityFocus, signal, windowSize } from "nsh";
 import { t } from "nsh/i18n";
-import { Badge } from "../../components/ui/badge";
-import { Button } from "../../components/ui/button";
-import { Card, SectionHeading } from "../../components/ui/card";
-import { ConfirmDialog } from "../../components/ui/dialog";
-import { Icon } from "../../components/ui/icon";
-import { Input } from "../../components/ui/input";
-import { Switch } from "../../components/ui/switch";
-import { toast } from "../../components/ui/toast";
-import type { ProtocolId } from "../../modules/ai/contracts/protocol";
-import { aiClient } from "../../modules/ai/runtime/client";
-import { aiRegistry } from "../../modules/ai/runtime/registry";
-import type { ProviderCredentialMode } from "../../modules/ai/ui/contracts";
-import { FormField } from "../../modules/ai/ui/form-field";
-import { ProviderMark } from "../../modules/ai/ui/provider-mark";
-import { providerSettingsRegistry } from "../../modules/ai/ui/registry";
-import { AddModelDialog, type AddModelSubmission } from "./add-model-dialog";
-import type { ChannelDraft } from "./channel-draft";
-import { inspectBaseUrl, isInsecureHttpConfirmed, resolveConfirmedInsecureUrl } from "./connection";
-import { EditModelDialog, type EditModelSubmission } from "./edit-model-dialog";
-import { ModelsTable } from "./models-table";
+import { toast } from "../../../components/ui/toast";
+import type { ProtocolId } from "../../../modules/ai/contracts/protocol";
+import type { ProviderDefinition } from "../../../modules/ai/contracts/provider";
+import { aiClient } from "../../../modules/ai/runtime/client";
+import { aiRegistry } from "../../../modules/ai/runtime/registry";
+import type { ProviderCredentialMode } from "../../../modules/ai/ui/contracts";
+import { getProviderTypeLabel } from "../../../modules/ai/ui/labels";
+import { providerSettingsRegistry } from "../../../modules/ai/ui/registry";
+import type { AddModelSubmission } from "../add-model-dialog";
+import type { EditModelSubmission } from "../edit-model-dialog";
+import type { ChannelDraft } from "../channel-draft";
+import {
+  inspectBaseUrl,
+  isInsecureHttpConfirmed,
+  resolveConfirmedInsecureUrl,
+} from "../connection";
 import {
   createManualModel,
   deleteChannel,
@@ -45,19 +31,18 @@ import {
   toggleChannelEnabled,
   updateChannel,
   updateModelConfig,
-} from "./store";
+} from "../store";
 import type {
   ConnectionSnapshot,
   CredentialUpdate,
   ModelsEnabledFilter,
   ProviderChannel,
   ProviderModel,
-} from "./types";
-import { ProviderSettingsHost } from "./editor/provider-settings";
+} from "../types";
 
 type CredentialDraftMode = "keep" | "replace" | "clear";
 
-type ProviderEditorProps =
+export type ChannelEditorProps =
   | {
       mode: "draft";
       draft: ChannelDraft;
@@ -76,8 +61,12 @@ type ProviderEditorProps =
       onEnabledFilterChange: (filter: ModelsEnabledFilter) => void;
     };
 
-/** Right detail pane for configuring a new channel draft or an existing provider channel. */
-export function ProviderEditor(props: ProviderEditorProps) {
+/**
+ * Owns one editor owner's connection state, request lifetimes, saves, and model
+ * actions. `ChannelEditor` calls it once so NSH cleanup belongs to that owner;
+ * there are no module-global editor signals.
+ */
+export function createChannelEditorController(props: ChannelEditorProps) {
   const isDraftMode = () => props.mode === "draft";
 
   const savedAdapterId = signal<ProtocolId>(
@@ -206,9 +195,46 @@ export function ProviderEditor(props: ProviderEditorProps) {
 
   const currentPresetId = () =>
     props.mode === "draft" ? props.draft.presetId : props.channel.presetId;
-  const currentProvider = () => aiRegistry.getProvider(currentPresetId());
-  const providerLabel = () => t(currentProvider().labelKey);
+  const savedProviderDefinition = (): ProviderDefinition | null => {
+    if (props.mode !== "saved") return null;
+    try {
+      return aiRegistry.getProvider(props.channel.presetId);
+    } catch {
+      return null;
+    }
+  };
+  const providerDefinition = (): ProviderDefinition | null =>
+    props.mode === "draft"
+      ? aiRegistry.getProvider(props.draft.presetId)
+      : savedProviderDefinition();
+  const providerLabel = () => getProviderTypeLabel(currentPresetId()) ?? currentPresetId();
   const providerPresentation = () => providerSettingsRegistry.find(currentPresetId());
+  const isProtocolSupported = (provider: ProviderDefinition, protocolId: ProtocolId) => {
+    if (!provider.allowedProtocolIds.includes(protocolId)) return false;
+    try {
+      aiRegistry.getProtocol(protocolId);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const providerSupported = () => providerDefinition() !== null;
+  const connectionBlocked = () => {
+    const provider = providerDefinition();
+    if (!provider) return true;
+    return !isProtocolSupported(provider, currentAdapterId());
+  };
+  const unsupportedModels = () => {
+    const provider = providerDefinition();
+    if (!provider) return [];
+    const models = props.mode === "draft" ? props.draft.models() : props.models;
+    return models.filter(
+      (model) =>
+        model.apiTypeOverride !== null && !isProtocolSupported(provider, model.apiTypeOverride),
+    );
+  };
+  const hasUnsupportedConfiguration = () =>
+    !providerSupported() || connectionBlocked() || unsupportedModels().length > 0;
   const currentDisplayName = () =>
     props.mode === "draft" ? props.draft.displayName() : props.channel.displayName;
   const currentEnabled = () =>
@@ -545,7 +571,7 @@ export function ProviderEditor(props: ProviderEditorProps) {
   };
 
   const handleTest = async () => {
-    if (testing() || syncing()) return;
+    if (testing() || syncing() || connectionBlocked()) return;
     const snapshot = buildConnectionSnapshot();
     const request = startConnectionRequest();
     testing.set(true);
@@ -575,7 +601,7 @@ export function ProviderEditor(props: ProviderEditorProps) {
   };
 
   const handleGetModels = async () => {
-    if (syncing() || testing()) return;
+    if (syncing() || testing() || connectionBlocked()) return;
     const snapshot = buildConnectionSnapshot();
     const request = startConnectionRequest();
     syncing.set(true);
@@ -696,324 +722,77 @@ export function ProviderEditor(props: ProviderEditorProps) {
 
   const compactLayout = () => windowSize().width < 860;
 
-  return (
-    <View testID="provider-editor" class="min-w-0 flex-1 bg-background">
-      <View
-        class={`h-12 shrink-0 flex-row items-center justify-between gap-3 border-b border-border ${compactLayout() ? "px-4" : "px-6"}`}
-      >
-        <View class="min-w-0 flex-1 flex-row items-center gap-2">
-          <If when={providerPresentation() !== null}>
-            <ProviderMark icon={providerPresentation()!.icon} class="size-4 shrink-0" />
-          </If>
-          <If
-            when={!isDraftMode() && renaming()}
-            else={
-              <>
-                <Text role="header" class="truncate text-base font-semibold text-foreground">
-                  {currentDisplayName().trim() || providerLabel()}
-                </Text>
-                <If when={isDraftMode()}>
-                  <Badge label={t("models.channel.unsaved")} tone="warning" />
-                </If>
-                <If when={!isDraftMode()}>
-                  <Button
-                    testID="rename-channel-button"
-                    size="icon-sm"
-                    variant="ghost"
-                    tooltip={t("models.channel.rename")}
-                    accessibilityLabel={t("models.channel.renameLabel")}
-                    onPress={startRename}
-                  >
-                    <Icon name="edit" tone="muted-foreground" class="size-3.5" />
-                  </Button>
-                </If>
-              </>
-            }
-          >
-            <View class="min-w-0 flex-1 flex-row items-center gap-1.5">
-              <Input
-                testID="rename-channel-input"
-                size="sm"
-                autoFocus
-                accessibilityLabel={t("models.channel.nameLabel")}
-                value={renameDraft()}
-                onChange={(v) => renameDraft.set(v)}
-                onSubmit={() => void submitRename()}
-                onKeyPress={(key) => {
-                  if (key === "Escape") renaming.set(false);
-                }}
-                class="min-w-0 max-w-52 flex-1"
-              />
-              <Button
-                testID="confirm-rename-channel"
-                variant="primary"
-                size="sm"
-                label={renameSaving() ? t("common.saving") : t("common.save")}
-                disabled={renameDraft().trim().length === 0 || renameSaving()}
-                onPress={() => void submitRename()}
-              />
-              <Button
-                variant="outline"
-                size="sm"
-                label={t("common.cancel")}
-                disabled={renameSaving()}
-                onPress={() => renaming.set(false)}
-              />
-            </View>
-          </If>
-        </View>
+  const reloadFromChannel = () => {
+    if (props.mode !== "saved") return;
+    syncedRevision = props.channel.revision;
+    loadFromChannel(props.channel);
+  };
 
-        <View class="shrink-0 flex-row items-center gap-2.5">
-          <Switch
-            testID="channel-enabled-switch"
-            label={t("models.channel.enabled")}
-            variant="inline"
-            accessibilityLabel={t("models.channel.enabledLabel")}
-            checked={currentEnabled()}
-            onChange={(checked) => void handleToggleChannelEnabled(checked)}
-          />
-          <View class="h-4 w-px bg-border" />
-          <If
-            when={isDraftMode()}
-            else={
-              <Button
-                testID="delete-channel-button"
-                variant="destructive-ghost"
-                size="icon-sm"
-                tooltip={t("models.channel.delete")}
-                accessibilityLabel={t("models.channel.delete")}
-                disabled={deletingChannel()}
-                onPress={() => deleteDialogOpen.set(true)}
-              >
-                <Icon name="delete" tone="muted-foreground" class="size-3.5" />
-              </Button>
-            }
-          >
-            <View class="flex-row items-center gap-2">
-              <Button
-                testID="cancel-channel-button"
-                variant="ghost"
-                size="sm"
-                label={t("common.cancel")}
-                disabled={saving()}
-                onPress={() => {
-                  if (props.mode === "draft") props.onCancelDraft();
-                }}
-              />
-              <Button
-                testID="save-channel-button"
-                variant="primary"
-                size="sm"
-                label={saving() ? t("common.saving") : t("common.save")}
-                disabled={saving()}
-                onPress={() => void handleSaveDraft()}
-              />
-            </View>
-          </If>
-        </View>
-      </View>
+  const setDraftNameInput = (node: InputRef | null) => {
+    draftNameInputRef = node;
+  };
 
-      <If when={!isDraftMode() && conflictDetected()}>
-        <View
-          class={`flex-row items-center justify-between gap-3 border-b border-border bg-warning/15 py-2.5 ${compactLayout() ? "px-4" : "px-6"}`}
-        >
-          <Text class="text-xs font-medium text-warning">{t("models.channel.conflict")}</Text>
-          <Button
-            size="sm"
-            variant="outline"
-            label={t("common.reload")}
-            onPress={() => {
-              if (props.mode === "saved") {
-                syncedRevision = props.channel.revision;
-                loadFromChannel(props.channel);
-              }
-            }}
-          />
-        </View>
-      </If>
-
-      <Scroll class="min-h-0 flex-1">
-        <View
-          class={
-            compactLayout()
-              ? "mx-auto w-full max-w-4xl gap-4 p-4"
-              : "mx-auto w-full max-w-4xl gap-5 p-5"
-          }
-        >
-          <If when={isDraftMode()}>
-            <Card testID="draft-channel-card" class={compactLayout() ? "gap-3.5 p-4" : "gap-4 p-5"}>
-              <View class={compactLayout() ? "gap-3.5" : "flex-row items-start gap-4"}>
-                <FormField
-                  label={t("models.channel.provider")}
-                  class={compactLayout() ? undefined : "w-56 shrink-0"}
-                >
-                  <View class="h-9 flex-row items-center gap-2 rounded-lg border border-border bg-muted px-3">
-                    <If when={providerPresentation() !== null}>
-                      <ProviderMark icon={providerPresentation()!.icon} class="size-4 shrink-0" />
-                    </If>
-                    <Text class="truncate text-sm font-medium text-foreground">
-                      {providerLabel()}
-                    </Text>
-                  </View>
-                </FormField>
-
-                <FormField
-                  label={t("common.displayName")}
-                  error={nameError()}
-                  class={compactLayout() ? undefined : "min-w-0 flex-1"}
-                >
-                  <Input
-                    testID="channel-name-input"
-                    ref={(node) => {
-                      draftNameInputRef = node;
-                    }}
-                    autoFocus
-                    accessibilityLabel={t("common.displayName")}
-                    placeholder={t("models.channel.displayNamePlaceholder")}
-                    value={currentDisplayName()}
-                    onChange={(v) => {
-                      if (props.mode === "draft") {
-                        props.draft.setDisplayName(v);
-                        nameError.set(null);
-                        saveError.set(null);
-                      }
-                    }}
-                  />
-                </FormField>
-              </View>
-            </Card>
-          </If>
-
-          <Card testID="connection-card" class={compactLayout() ? "gap-3.5 p-4" : "gap-4 p-5"}>
-            <View class="min-h-8 flex-row flex-wrap items-center justify-between gap-2">
-              <View class="flex-row items-center gap-2">
-                <SectionHeading title={t("models.connection.heading")} />
-                <If when={!isDraftMode() && isSavedDirty()}>
-                  <Badge label={t("models.channel.unsaved")} tone="warning" />
-                </If>
-              </View>
-
-              <View class="flex-row flex-wrap items-center gap-2">
-                <If when={!isDraftMode() && isSavedDirty()}>
-                  <Button
-                    testID="cancel-channel-button"
-                    variant="ghost"
-                    size="sm"
-                    label={t("common.cancel")}
-                    disabled={saving()}
-                    onPress={() => {
-                      if (props.mode === "saved") {
-                        connectionMessage.set(null);
-                        loadFromChannel(props.channel);
-                      }
-                    }}
-                  />
-                  <Button
-                    testID="save-channel-button"
-                    variant="primary"
-                    size="sm"
-                    label={saving() ? t("common.saving") : t("common.save")}
-                    disabled={saving() || !canSaveSaved()}
-                    onPress={() => void handleSaveSaved()}
-                  />
-                </If>
-                <Button
-                  testID="test-connection-button"
-                  variant="outline"
-                  size="sm"
-                  label={testing() ? t("models.connection.testing") : t("models.connection.test")}
-                  disabled={testing() || syncing()}
-                  onPress={() => void handleTest()}
-                />
-              </View>
-            </View>
-
-            <ProviderSettingsHost
-              providerTypeId={currentPresetId()}
-              mode={isDraftMode() ? "draft" : "saved"}
-              protocolId={currentAdapterId()}
-              baseUrl={currentBaseUrl()}
-              credential={currentCredential()}
-              hasSavedCredential={props.mode === "saved" && props.channel.hasCredential}
-              credentialMode={isDraftMode() ? "keep" : credentialMode()}
-              urlError={urlCheck().error}
-              isInsecureHttp={urlCheck().isInsecureHttp}
-              allowInsecureHttp={currentAllowInsecureHttp()}
-              compact={compactLayout()}
-              disabled={saving()}
-              onProtocolChange={handleProtocolChange}
-              onBaseUrlChange={handleBaseUrlChange}
-              onCredentialChange={handleCredentialChange}
-              onCredentialModeChange={handleCredentialModeChange}
-              onInsecureHttpChange={handleInsecureHttpChange}
-            />
-
-            <If when={saveError() !== null}>
-              <Text role="alert" class="text-xs text-destructive">
-                {saveError()}
-              </Text>
-            </If>
-            <If when={connectionMessage() !== null}>
-              <If when={connectionMessage()}>
-                {(msg) => (
-                  <Text class={msg().ok ? "text-xs text-success" : "text-xs text-destructive"}>
-                    {msg().text}
-                  </Text>
-                )}
-              </If>
-            </If>
-          </Card>
-
-          <Card testID="models-card" class={compactLayout() ? "gap-3.5 p-4" : "gap-4 p-5"}>
-            <ModelsTable
-              channel={tableChannelView()}
-              models={props.mode === "draft" ? props.draft.models() : props.models}
-              enabledFilter={props.enabledFilter}
-              testing={testing()}
-              syncing={syncing()}
-              onGetModels={() => void handleGetModels()}
-              onEnabledFilterChange={(f) => props.onEnabledFilterChange(f)}
-              onAddModel={() => addModelOpen.set(true)}
-              onConfigureModel={(model) => editingModel.set(model)}
-              onToggleModelEnabled={handleToggleModelEnabled}
-              onDeleteModels={handleDeleteModels}
-            />
-          </Card>
-        </View>
-      </Scroll>
-
-      <AddModelDialog
-        open={addModelOpen()}
-        presetId={currentPresetId()}
-        onOpenChange={(open) => addModelOpen.set(open)}
-        onSubmit={handleAddModelSubmit}
-      />
-
-      <EditModelDialog
-        open={editingModel() !== null}
-        presetId={currentPresetId()}
-        model={editingModel()}
-        onOpenChange={(open) => {
-          if (!open) editingModel.set(null);
-        }}
-        onSubmit={handleEditModelSubmit}
-      />
-
-      <If when={props.mode === "saved"}>
-        <ConfirmDialog
-          testID="delete-channel-dialog"
-          open={deleteDialogOpen()}
-          onOpenChange={(open) => deleteDialogOpen.set(open)}
-          title={t("models.channel.delete")}
-          description={t("models.channel.deleteDescription", {
-            name: props.mode === "saved" ? props.channel.displayName : "",
-          })}
-          confirmLabel={t("common.delete")}
-          confirmVariant="destructive"
-          busy={deletingChannel()}
-          onConfirm={() => void handleConfirmDeleteChannel()}
-        />
-      </If>
-    </View>
-  );
+  return {
+    isDraftMode,
+    currentPresetId,
+    providerLabel,
+    providerPresentation,
+    providerSupported,
+    currentDisplayName,
+    currentEnabled,
+    currentAdapterId,
+    currentBaseUrl,
+    currentCredential,
+    currentAllowInsecureHttp,
+    urlCheck,
+    isSavedDirty,
+    canSaveSaved,
+    compactLayout,
+    tableChannelView,
+    hasUnsupportedConfiguration,
+    connectionBlocked,
+    saving,
+    testing,
+    syncing,
+    conflictDetected,
+    renameSaving,
+    deletingChannel,
+    credentialMode,
+    renaming: () => renaming(),
+    setRenaming: (value: boolean) => renaming.set(value),
+    renameDraft: () => renameDraft(),
+    setRenameDraft: (value: string) => renameDraft.set(value),
+    nameError: () => nameError(),
+    setNameError: (value: string | null) => nameError.set(value),
+    saveError: () => saveError(),
+    setSaveError: (value: string | null) => saveError.set(value),
+    connectionMessage: () => connectionMessage(),
+    setConnectionMessage: (value: { ok: boolean; text: string } | null) =>
+      connectionMessage.set(value),
+    addModelOpen: () => addModelOpen(),
+    setAddModelOpen: (value: boolean) => addModelOpen.set(value),
+    editingModel: () => editingModel(),
+    setEditingModel: (value: ProviderModel | null) => editingModel.set(value),
+    deleteDialogOpen: () => deleteDialogOpen(),
+    setDeleteDialogOpen: (value: boolean) => deleteDialogOpen.set(value),
+    startRename,
+    submitRename,
+    handleToggleChannelEnabled,
+    handleSaveDraft,
+    handleSaveSaved,
+    handleTest,
+    handleGetModels,
+    handleConfirmDeleteChannel,
+    handleAddModelSubmit,
+    handleEditModelSubmit,
+    handleToggleModelEnabled,
+    handleDeleteModels,
+    handleProtocolChange,
+    handleBaseUrlChange,
+    handleCredentialChange,
+    handleCredentialModeChange,
+    handleInsecureHttpChange,
+    reloadFromChannel,
+    setDraftNameInput,
+  };
 }

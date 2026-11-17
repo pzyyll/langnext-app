@@ -73,6 +73,10 @@ interface ModelsTableProps {
   enabledFilter: ModelsEnabledFilter;
   testing: boolean;
   syncing: boolean;
+  /** The channel's provider is unavailable: hide actions no registered module can serve. */
+  disabled?: boolean;
+  /** The current channel protocol is unusable, so remote actions wait for a correction. */
+  connectionBlocked?: boolean;
   onGetModels: () => void;
   onEnabledFilterChange: (filter: ModelsEnabledFilter) => void;
   onAddModel: () => void;
@@ -214,7 +218,7 @@ export function ModelsTable(props: ModelsTableProps) {
               label={
                 props.syncing ? t("models.connection.fetching") : t("models.connection.getModels")
               }
-              disabled={props.syncing || props.testing}
+              disabled={props.syncing || props.testing || props.connectionBlocked || props.disabled}
               onPress={() => props.onGetModels()}
             />
           </View>
@@ -249,6 +253,7 @@ export function ModelsTable(props: ModelsTableProps) {
             variant="outline"
             size="sm"
             accessibilityLabel={t("models.model.add")}
+            disabled={props.disabled}
             onPress={() => props.onAddModel()}
           >
             <Icon name="plus" tone="foreground" class="size-3.5" />
@@ -434,6 +439,7 @@ export function ModelsTable(props: ModelsTableProps) {
                           accessibilityLabel={t("models.model.configureLabel", {
                             name: displayName(),
                           })}
+                          disabled={props.disabled}
                           onPress={() => props.onConfigureModel(model())}
                         >
                           <Icon name="edit" tone="muted-foreground" class="size-3.5" />
@@ -445,6 +451,7 @@ export function ModelsTable(props: ModelsTableProps) {
                             name: displayName(),
                           })}
                           checked={model().enabled}
+                          disabled={props.disabled}
                           onChange={(checked) => void handleToggleEnabled(model(), checked)}
                         />
                       </TableCell>
