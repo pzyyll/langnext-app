@@ -50,9 +50,7 @@ models:
   title: 模型
   channel:
     provider: 服务商
-    displayName: 显示名称
     displayNamePlaceholder: 例如 OpenAI Main
-    enabledSwitch: 启用渠道
     enabled: 启用
     enabledLabel: 渠道启用状态
     rename: 重命名
@@ -75,7 +73,7 @@ models:
     title: 渠道
     empty: 尚未配置渠道
     loading: 加载中…
-    on: 启用
+    itemLabel: "%{name}（%{status}）"
     moveUp: 上移 %{name}
     moveDown: 下移 %{name}
   preset:
@@ -174,8 +172,6 @@ models:
     confirmInsecureFormSave: 请先确认非本机主机使用未加密的 http:// 再保存。
     confirmInsecureTest: 请先确认未加密的 http:// 再测试此主机。
     confirmInsecureFetch: 请先确认未加密的 http:// 再获取模型。
-    addChannel: 无法添加渠道。
-    addModel: 无法添加模型。
     modelIdRequired: 模型 ID 为必填项。
     positiveInteger: "%{label} 必须是正整数。"
     positive: "%{label} 必须大于 0。"
@@ -203,6 +199,7 @@ protocol:
     cancelled: 请求已取消。
     timeout: 联系服务商时请求超时。
     network: 网络错误：%{detail}
+    networkDefault: 网络请求失败。
     auth: 身份验证失败（HTTP %{status}）。请检查此渠道的 API 密钥。
     rateLimited: 服务商限流（HTTP %{status}）。请稍后重试。
     server: 服务商返回服务器错误（HTTP %{status}）。

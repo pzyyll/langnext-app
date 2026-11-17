@@ -299,6 +299,7 @@ export function ProviderEditor(props: ProviderEditorProps) {
     try {
       const updated = await toggleChannelEnabled(props.channel.id, enabled);
       syncedRevision = updated.revision;
+      conflictDetected.set(false);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t("models.error.channelStatus"));
     }
@@ -318,6 +319,7 @@ export function ProviderEditor(props: ProviderEditorProps) {
     try {
       const updated = await renameChannel(props.channel.id, nextName);
       syncedRevision = updated.revision;
+      conflictDetected.set(false);
       renaming.set(false);
       toast.success(t("models.channel.renamed", { name: updated.displayName }));
     } catch (error) {
@@ -353,6 +355,8 @@ export function ProviderEditor(props: ProviderEditorProps) {
     const draftModels = draft.models();
     const lastSyncedAt = draft.modelsLastSyncedAt();
     const lastSyncError = draft.modelsLastSyncError();
+    const clearStaleCredential =
+      draft.hadPersistedCredential() && draft.credential().trim().length === 0;
 
     saving.set(true);
     try {
@@ -369,8 +373,13 @@ export function ProviderEditor(props: ProviderEditorProps) {
         modelsLastSyncedAt: lastSyncedAt,
         modelsLastSyncError: lastSyncError,
         persistedScopes: draft.persistedScopes(),
+        clearStaleCredential,
       });
-      draft.markPersistedScopes({ channel: true, models: true });
+      draft.markPersistedScopes({
+        channel: true,
+        credential: !clearStaleCredential && draft.credential().trim().length > 0,
+        models: true,
+      });
       toast.success(t("models.channel.added", { name: saved.displayName }));
       props.onDraftSaved(saved);
     } catch (error) {

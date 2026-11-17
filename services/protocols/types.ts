@@ -3,13 +3,6 @@ import type { ProviderPresetId } from "./presets";
 /** Built-in provider wire protocol identifiers. */
 export type AdapterId = "openai-compatible" | "openai-responses" | "anthropic" | "gemini";
 
-/** Descriptor for a supported provider protocol adapter. */
-export interface AdapterSpec {
-  id: AdapterId;
-  label: string;
-  defaultBaseUrl: string;
-}
-
 /** Normalized remote model entry returned by a protocol adapter. */
 export interface DiscoveredRemoteModel {
   modelKey: string;

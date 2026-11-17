@@ -69,6 +69,7 @@ test("inspectBaseUrl flags non-loopback http and rejects invalid URLs", () => {
     error: null,
   });
 
+  expect(inspectBaseUrl("http://127.example.com/v1").isInsecureHttp).toBe(true);
   expect(inspectBaseUrl("ftp://example.com").ok).toBe(false);
   expect(inspectBaseUrl("not-a-url").ok).toBe(false);
 });

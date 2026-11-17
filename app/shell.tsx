@@ -64,6 +64,7 @@ export function AppShell() {
         testID="title-bar"
         desktop={{ windowDrag: true }}
         class="flex-row items-center"
+        // Runtime platform titleBar() insets determine height and horizontal clearance.
         style={{
           height: Math.max(TITLE_BAR_HEIGHT, titleBar().height),
           paddingLeft: titleBar().left,

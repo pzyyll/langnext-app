@@ -63,6 +63,7 @@ export interface ChannelDraft {
   setModelEnabled: (modelId: string, enabled: boolean) => void;
   deleteModels: (modelIds: string[]) => number;
   persistedScopes: () => PersistedDraftScopes;
+  hadPersistedCredential: () => boolean;
   markPersistedScopes: (scopes: Partial<PersistedDraftScopes>) => void;
   dispose: () => void;
 }
@@ -72,6 +73,7 @@ export function createChannelDraft(presetId: ProviderPresetId): ChannelDraft {
   const preset = getProviderPreset(presetId);
   const id = crypto.randomUUID();
   let disposed = false;
+  let hadCredentialWrite = false;
   const persisted = signal<PersistedDraftScopes>({
     channel: false,
     credential: false,
@@ -188,8 +190,14 @@ export function createChannelDraft(presetId: ProviderPresetId): ChannelDraft {
       return prev.length - next.length;
     },
     persistedScopes: () => persisted(),
+    hadPersistedCredential: () => hadCredentialWrite,
     markPersistedScopes: (scopes) => {
       if (disposed) return;
+      if (scopes.credential) {
+        hadCredentialWrite = true;
+      } else if (scopes.credential === false) {
+        hadCredentialWrite = false;
+      }
       persisted.set({ ...persisted(), ...scopes });
     },
     dispose: () => {

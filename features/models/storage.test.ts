@@ -243,3 +243,34 @@ test("provider storage: delayed duplicate Save disables resubmission without dup
   expect(models).toHaveLength(1);
   expect(providerWriteCount).toBe(1);
 });
+
+test("provider storage: clearing key before channel retry removes orphaned credential", async () => {
+  let rejectProviderWrite = true;
+  const mock = createStorageMock({ "settings.language": "en" }, (key) => {
+    if (key === PROVIDERS_STORAGE_KEY && rejectProviderWrite) {
+      rejectProviderWrite = false;
+      throw new Error("ERR_NSH_QUOTA_EXCEEDED");
+    }
+  });
+
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: mock.backing,
+    modules: mock.modules,
+  });
+
+  await prepareOpenAIDraftWithModel(app, "OpenAI Clear Secret", "sk-orphan", "m-clear");
+
+  await app.press("id:save-channel-button");
+  await app.waitUntil(() => app.texts().some((t) => t.includes("API key was saved")));
+
+  // User clears the API key before retrying Save.
+  await app.clear("id:connection-token-input");
+  await app.press("id:save-channel-button");
+  await app.waitUntil(() => !app.shows("id:cancel-channel-button"));
+
+  const channels = JSON.parse(mock.backing[PROVIDERS_STORAGE_KEY]!) as ProviderChannel[];
+  expect(channels).toHaveLength(1);
+  expect(channels[0]!.hasCredential).toBe(false);
+  expect(mock.backing[`${CREDENTIAL_KEY_PREFIX}${channels[0]!.id}`]).toBeUndefined();
+});

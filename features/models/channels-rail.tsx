@@ -35,7 +35,7 @@ export function ChannelsRail(props: ChannelsRailProps) {
         </Text>
         <Button
           testID="add-channel-button"
-          ref={props.addButtonRef}
+          ref={(node) => props.addButtonRef?.(node)}
           variant="ghost"
           size="icon-sm"
           tooltip={t("models.channel.add")}
@@ -84,11 +84,12 @@ export function ChannelsRail(props: ChannelsRailProps) {
                               variant="ghost"
                               size="row"
                               selected={isSelected()}
-                              accessibilityLabel={
-                                channel().enabled
-                                  ? `${channel().displayName} (${t("models.channel.enabled")})`
-                                  : `${channel().displayName} (${t("models.filter.disabled")})`
-                              }
+                              accessibilityLabel={t("models.channels.itemLabel", {
+                                name: channel().displayName,
+                                status: channel().enabled
+                                  ? t("models.channel.enabled")
+                                  : t("models.filter.disabled"),
+                              })}
                               onPress={() => props.onSelect(channel().id)}
                               class="min-w-0 flex-1 hover:bg-transparent active:bg-transparent"
                             >

@@ -7,11 +7,12 @@ export interface ConnectionUrlCheck {
   error: string | null;
 }
 
+const LOOPBACK_IPV4_PATTERN = /^127(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
+
 function isLoopbackHost(hostname: string): boolean {
   const host = hostname.trim().toLowerCase();
   if (host === "localhost" || host === "::1" || host === "[::1]") return true;
-  if (host === "127.0.0.1" || host.startsWith("127.")) return true;
-  return false;
+  return LOOPBACK_IPV4_PATTERN.test(host);
 }
 
 /** Validates an optional base URL and flags non-loopback `http://` endpoints. */

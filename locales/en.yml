@@ -50,9 +50,7 @@ models:
   title: Models
   channel:
     provider: Provider
-    displayName: Display Name
     displayNamePlaceholder: e.g. OpenAI Main
-    enabledSwitch: Channel enabled
     enabled: Enabled
     enabledLabel: Channel enabled
     rename: Rename
@@ -75,7 +73,7 @@ models:
     title: Channels
     empty: No channels configured
     loading: Loading…
-    on: "ON"
+    itemLabel: "%{name} (%{status})"
     moveUp: Move %{name} up
     moveDown: Move %{name} down
   preset:
@@ -174,8 +172,6 @@ models:
     confirmInsecureFormSave: Confirm using unencrypted http:// for non-local hosts before saving.
     confirmInsecureTest: Confirm using unencrypted http:// before testing this host.
     confirmInsecureFetch: Confirm using unencrypted http:// before fetching models.
-    addChannel: Could not add channel.
-    addModel: Could not add model.
     modelIdRequired: Model ID is required.
     positiveInteger: "%{label} must be a positive whole number."
     positive: "%{label} must be greater than 0."
@@ -203,6 +199,7 @@ protocol:
     cancelled: Request cancelled.
     timeout: Request timed out while contacting provider.
     network: "Network error: %{detail}"
+    networkDefault: Network request failed.
     auth: Authentication failed (HTTP %{status}). Check the API key for this channel.
     rateLimited: Rate limited by provider (HTTP %{status}). Try again shortly.
     server: Provider returned server error (HTTP %{status}).

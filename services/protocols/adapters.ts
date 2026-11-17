@@ -4,48 +4,21 @@ import {
   ProviderProtocolError,
   type AdapterId,
   type AdapterRequestParams,
-  type AdapterSpec,
   type DiscoveredRemoteModel,
 } from "./types";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const MAX_PAGES = 10;
 
-export const ADAPTER_SPECS: readonly AdapterSpec[] = [
-  {
-    id: "openai-compatible",
-    label: "OpenAI Chat Completions",
-    defaultBaseUrl: "https://api.openai.com/v1",
-  },
-  {
-    id: "openai-responses",
-    label: "OpenAI Responses",
-    defaultBaseUrl: "https://api.openai.com/v1",
-  },
-  {
-    id: "anthropic",
-    label: "Anthropic Messages",
-    defaultBaseUrl: "https://api.anthropic.com",
-  },
-  {
-    id: "gemini",
-    label: "Gemini API",
-    defaultBaseUrl: "https://generativelanguage.googleapis.com",
-  },
-];
-
-const ADAPTER_MAP = new Map<AdapterId, AdapterSpec>(ADAPTER_SPECS.map((spec) => [spec.id, spec]));
-
-export function getAdapterSpec(adapterId: AdapterId): AdapterSpec {
-  return ADAPTER_MAP.get(adapterId) ?? ADAPTER_SPECS[0]!;
-}
+const ADAPTER_LABELS: Record<AdapterId, string> = {
+  "openai-compatible": "OpenAI Chat Completions",
+  "openai-responses": "OpenAI Responses",
+  anthropic: "Anthropic Messages",
+  gemini: "Gemini API",
+};
 
 export function getAdapterLabel(adapterId: AdapterId): string {
-  return ADAPTER_MAP.get(adapterId)?.label ?? adapterId;
-}
-
-export function getAdapterDefaultBaseUrl(adapterId: AdapterId): string {
-  return getAdapterSpec(adapterId).defaultBaseUrl;
+  return ADAPTER_LABELS[adapterId] ?? adapterId;
 }
 
 function inferCapabilitiesFromId(modelId: string): DiscoveredRemoteModel["capabilities"] {
@@ -125,9 +98,12 @@ async function fetchJsonPage(
       headers,
       signal: controller.signal,
     });
-    response = externalCancelPromise
-      ? await Promise.race([fetchPromise, externalCancelPromise])
-      : await fetchPromise;
+    if (externalCancelPromise) {
+      fetchPromise.catch(() => {});
+      response = await Promise.race([fetchPromise, externalCancelPromise]);
+    } else {
+      response = await fetchPromise;
+    }
   } catch (err) {
     if (timedOut) {
       throw new ProviderProtocolError("timeout", t("protocol.error.timeout"));
@@ -138,7 +114,7 @@ async function fetchJsonPage(
     if (externalSignal?.aborted) {
       throw new ProviderProtocolError("cancelled", t("protocol.error.cancelled"));
     }
-    const detail = err instanceof Error ? err.message : "Network request failed.";
+    const detail = err instanceof Error ? err.message : t("protocol.error.networkDefault");
     throw new ProviderProtocolError("network", t("protocol.error.network", { detail }));
   } finally {
     clearTimeout(timer);

@@ -237,6 +237,9 @@ export async function saveChannelDraft(input: SaveChannelDraftInput): Promise<Pr
           savedChannel,
         );
       }
+    } else if (tokenValue === null && input.clearStaleCredential) {
+      await writeSecret(input.id, null);
+      credentialPersisted = false;
     }
 
     const timestamp = nowIso();
@@ -247,7 +250,12 @@ export async function saveChannelDraft(input: SaveChannelDraftInput): Promise<Pr
           displayName,
           adapterId: input.adapterId,
           baseUrl: urlCheck.normalizedBaseUrl,
-          hasCredential: tokenValue !== null ? true : alreadySaved.hasCredential,
+          hasCredential:
+            tokenValue !== null
+              ? true
+              : input.clearStaleCredential
+                ? false
+                : alreadySaved.hasCredential,
           enabled: input.enabled,
           insecureHttpConfirmedAt: urlCheck.isInsecureHttp
             ? (alreadySaved.insecureHttpConfirmedAt ?? timestamp)
@@ -282,7 +290,10 @@ export async function saveChannelDraft(input: SaveChannelDraftInput): Promise<Pr
       alreadySaved.adapterId !== input.adapterId ||
       alreadySaved.baseUrl !== urlCheck.normalizedBaseUrl ||
       alreadySaved.enabled !== input.enabled ||
-      alreadySaved.hasCredential !== channelRecord.hasCredential;
+      alreadySaved.hasCredential !== channelRecord.hasCredential ||
+      (alreadySaved.insecureHttpConfirmedAt !== null) !== urlCheck.isInsecureHttp ||
+      alreadySaved.modelsLastSyncedAt !== channelRecord.modelsLastSyncedAt ||
+      alreadySaved.modelsLastSyncError !== channelRecord.modelsLastSyncError;
 
     const nextChannels = alreadySaved
       ? existing.map((ch) => (ch.id === alreadySaved.id ? channelRecord : ch))
@@ -553,9 +564,11 @@ async function resolveConnectionRequestParams(
   if (snapshot.credentialInput.mode === "inline") {
     credential = snapshot.credentialInput.value?.trim() || null;
   } else {
-    const update = snapshot.credentialInput.update;
+    const { channelId, update } = snapshot.credentialInput;
     if (update.mode === "keep") {
-      credential = await readSecret(snapshot.credentialInput.channelId);
+      const targetChannel = channelsSignal().find((item) => item.id === channelId);
+      credential =
+        targetChannel && !targetChannel.hasCredential ? null : await readSecret(channelId);
     } else if (update.mode === "replace") {
       credential = update.value.trim() || null;
     } else {

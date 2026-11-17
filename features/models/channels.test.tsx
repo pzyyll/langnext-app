@@ -1761,3 +1761,35 @@ test("provider channels: compact 720x520 layout supports reduced motion draft fl
   await app.waitUntil(() => !app.shows("id:cancel-channel-button"));
   expect(app.shows("id:model-row-gpt-compact")).toBe(true);
 });
+
+test("provider channels: toggling or renaming with dirty Connection shows no conflict banner", async () => {
+  const openai = makeChannel({
+    id: "ch-openai",
+    presetId: "openai",
+    displayName: "OpenAI Main",
+    baseUrl: "https://api.openai.com/v1",
+  });
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: makeSeedStorage({
+      channels: [openai],
+      credentials: { [openai.id]: "sk-oai" },
+    }),
+  });
+
+  await app.clear("id:connection-url-input");
+  await app.type("id:connection-url-input", "https://proxy.example.com/v1");
+  expect(app.texts()).toContain("Unsaved");
+
+  await app.press("id:channel-enabled-switch");
+  await app.press("id:rename-channel-button");
+  await app.waitFor("id:rename-channel-input");
+  await app.clear("id:rename-channel-input");
+  await app.type("id:rename-channel-input", "OpenAI Updated");
+  await app.press("id:confirm-rename-channel");
+  await app.waitUntil(() => !app.shows("id:rename-channel-input"));
+
+  expect(app.texts()).toContain("OpenAI Updated");
+  expect(app.texts().some((t) => t.includes("Channel updated elsewhere"))).toBe(false);
+  expect(app.value("id:connection-url-input")).toBe("https://proxy.example.com/v1");
+});

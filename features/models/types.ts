@@ -83,6 +83,7 @@ export interface SaveChannelDraftInput {
   modelsLastSyncedAt?: string | null;
   modelsLastSyncError?: string | null;
   persistedScopes?: Partial<PersistedDraftScopes>;
+  clearStaleCredential?: boolean;
 }
 
 export interface UpdateChannelInput {
