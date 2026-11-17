@@ -1,4 +1,4 @@
-import { Scroll, Text, View, windowSize } from "nsh";
+import { Scroll, Text, View, type ViewRef, windowSize } from "nsh";
 import { t } from "nsh/i18n";
 import { motion } from "../../components/motion";
 import { Badge } from "../../components/ui/badge";
@@ -16,6 +16,8 @@ interface ChannelsRailProps {
   onMove: (id: string, direction: "up" | "down") => void;
   onAdd: () => void;
   onRetry: () => void;
+  addButtonRef?: (node: ViewRef) => void;
+  onChannelItemRef?: (id: string, node: ViewRef) => void;
 }
 
 /** Left master list of configured provider channels with selection and reordering. */
@@ -33,6 +35,7 @@ export function ChannelsRail(props: ChannelsRailProps) {
         </Text>
         <Button
           testID="add-channel-button"
+          ref={props.addButtonRef}
           variant="ghost"
           size="icon-sm"
           tooltip={t("models.channel.add")}
@@ -75,6 +78,9 @@ export function ChannelsRail(props: ChannelsRailProps) {
                           >
                             <Button
                               testID={`channel-item-${channel().id}`}
+                              ref={(node) => {
+                                props.onChannelItemRef?.(channel().id, node);
+                              }}
                               variant="ghost"
                               size="row"
                               selected={isSelected()}

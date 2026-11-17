@@ -1,4 +1,4 @@
-import { Text, type JSX } from "nsh";
+import { Text, type JSX, type ViewRef } from "nsh";
 import { Button as BaseButton } from "nsh/base";
 import { motion } from "../motion";
 import { buildTooltip } from "./tooltip";
@@ -21,6 +21,7 @@ interface ButtonProps {
   accessibilityLabel?: string;
   tooltip?: string;
   testID?: string;
+  ref?: (node: ViewRef) => void;
   disabled?: boolean;
   selected?: boolean;
   class?: string;
@@ -86,6 +87,7 @@ export function Button(props: ButtonProps) {
   return (
     <BaseButton
       testID={props.testID}
+      ref={(node) => props.ref?.(node)}
       accessibilityLabel={props.accessibilityLabel ?? props.label}
       disabled={props.disabled}
       selected={props.selected}

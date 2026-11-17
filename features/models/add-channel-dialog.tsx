@@ -1,4 +1,4 @@
-import { Text, View } from "nsh";
+import { setAccessibilityFocus, Text, View, type ViewRef } from "nsh";
 import { t } from "nsh/i18n";
 import { Button } from "../../components/ui/button";
 import { AppDialog } from "../../components/ui/dialog";
@@ -9,15 +9,26 @@ interface AddChannelDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSelect: (presetId: ProviderPresetId) => void;
+  onClose?: () => void;
 }
 
 /** Modal picker for choosing a provider preset before configuring the channel draft. */
 export function AddChannelDialog(props: AddChannelDialogProps) {
+  let firstCardNode: ViewRef | null = null;
+  const firstPresetId = PROVIDER_PRESETS[0]?.id;
+
   return (
     <AppDialog
       testID="add-channel-dialog"
       open={props.open}
       onOpenChange={props.onOpenChange}
+      onOpen={() => {
+        if (firstCardNode) {
+          firstCardNode.focus();
+          setAccessibilityFocus(firstCardNode);
+        }
+      }}
+      onClose={() => props.onClose?.()}
       title={t("models.channel.add")}
       size="md"
       footer={
@@ -34,6 +45,11 @@ export function AddChannelDialog(props: AddChannelDialogProps) {
           {(preset) => (
             <Button
               testID={`provider-preset-${preset().id}`}
+              ref={(node) => {
+                if (preset().id === firstPresetId) {
+                  firstCardNode = node;
+                }
+              }}
               variant="outline"
               size="card"
               accessibilityLabel={t(preset().labelKey)}

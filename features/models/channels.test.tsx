@@ -1613,3 +1613,151 @@ test("provider channels: keep, replace, and clear preserve credential isolation 
   expect(reopenedClear.storage()[credentialStorageKey(created.id)]).toBeUndefined();
   expect(reopenedClear.shows("id:clear-token-button")).toBe(false);
 });
+
+test("provider channels: keyboard completes the provider draft flow", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { "settings.language": "en" },
+  });
+
+  // Escape dismisses picker without creating a draft.
+  await app.press("id:empty-add-channel-button");
+  await app.waitFor("id:add-channel-dialog");
+  await app.keyboard.press("escape");
+  await app.waitUntil(() => !app.shows("id:add-channel-dialog"));
+  expect(app.shows("id:draft-channel-card")).toBe(false);
+
+  // Reopen picker, choose OpenAI, and verify draft mounts cleanly.
+  await app.press("id:empty-add-channel-button");
+  await app.waitFor("id:add-channel-dialog");
+  await app.press("id:provider-preset-openai");
+  await app.waitUntil(() => !app.shows("id:add-channel-dialog"));
+  await app.waitFor("id:draft-channel-card");
+
+  // Inside AddModelDialog, Escape/back cancels cleanly and Return submits from input.
+  await app.press("id:add-model-button");
+  await app.waitFor("id:add-model-dialog");
+  await app.keyboard.press("escape");
+  await app.waitUntil(() => !app.shows("id:add-model-dialog"));
+
+  await app.press("id:add-model-button");
+  await app.waitFor("id:add-model-dialog");
+  await app.type("id:add-model-key-input", "aborted-via-back");
+  await app.back();
+  await app.waitUntil(() => !app.shows("id:add-model-dialog"));
+  expect(app.shows("id:model-row-aborted-via-back")).toBe(false);
+
+  await app.press("id:add-model-button");
+  await app.waitFor("id:add-model-dialog");
+  await app.type("id:add-model-key-input", "kbd-m1");
+  await app.submit("id:add-model-key-input");
+  await app.waitUntil(() => !app.shows("id:add-model-dialog"));
+  await app.waitFor("id:model-row-kbd-m1");
+
+  // Inside EditModelDialog, Escape/back cancels cleanly and Return submits from input.
+  await app.press("id:configure-model-kbd-m1");
+  await app.waitFor("id:edit-model-dialog");
+  await app.type("id:edit-model-name-input", "Aborted Edit");
+  await app.back();
+  await app.waitUntil(() => !app.shows("id:edit-model-dialog"));
+  expect(app.texts()).not.toContain("Aborted Edit");
+
+  await app.press("id:configure-model-kbd-m1");
+  await app.waitFor("id:edit-model-dialog");
+  await app.type("id:edit-model-name-input", "Keyboard Model");
+  await app.submit("id:edit-model-name-input");
+  await app.waitUntil(() => !app.shows("id:edit-model-dialog"));
+  expect(app.texts()).toContain("Keyboard Model");
+
+  // Back on discard confirmation preserves the draft and restores draft input focus.
+  await app.press("id:cancel-channel-button");
+  await app.waitFor("id:discard-draft-dialog");
+  await app.back();
+  await app.waitUntil(() => !app.shows("id:discard-draft-dialog"));
+  expect(app.shows("id:draft-channel-card")).toBe(true);
+  expect(app.shows("id:model-row-kbd-m1")).toBe(true);
+
+  await app.press("id:save-channel-button");
+  await app.waitUntil(() => !app.shows("id:cancel-channel-button"));
+  expect(app.shows("id:model-row-kbd-m1")).toBe(true);
+  expect(app.texts()).toContain("Keyboard Model");
+});
+
+test("provider channels: renders zh-CN localization without missing keys", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { "settings.language": "zh-CN" },
+  });
+
+  expect(app.texts()).toContain("添加渠道");
+  await app.press("id:empty-add-channel-button");
+  await app.waitFor("id:add-channel-dialog");
+  expect(app.texts()).toContain("Google Gemini");
+  expect(app.texts()).toContain("自定义");
+
+  await app.press("id:provider-preset-deepseek");
+  await app.waitUntil(() => !app.shows("id:add-channel-dialog"));
+  await app.waitFor("id:draft-channel-card");
+
+  const draftTexts = app.texts();
+  expect(draftTexts).toContain("未保存");
+  expect(draftTexts).toContain("服务商");
+  expect(draftTexts).toContain("显示名称");
+  expect(draftTexts).toContain("保存");
+  expect(draftTexts).toContain("取消");
+  expect(draftTexts.some((text) => text.startsWith("models.") || text.startsWith("common."))).toBe(
+    false,
+  );
+
+  // Trigger validation & add model & discard dialog in zh-CN.
+  await app.clear("id:channel-name-input");
+  await app.press("id:save-channel-button");
+  await app.waitUntil(() => app.texts().some((text) => text.includes("显示名称为必填项")));
+  await app.type("id:channel-name-input", "DeepSeek 中文");
+
+  await app.press("id:add-model-button");
+  await app.waitFor("id:add-model-dialog");
+  await app.type("id:add-model-key-input", "deepseek-chat");
+  await app.press("id:confirm-add-model");
+  await app.waitUntil(() => !app.shows("id:add-model-dialog"));
+  expect(app.shows("id:model-row-deepseek-chat >> text:默认（OpenAI Chat Completions）")).toBe(
+    true,
+  );
+
+  await app.press("id:cancel-channel-button");
+  await app.waitFor("id:discard-draft-dialog");
+  const discardTexts = app.texts();
+  expect(discardTexts).toContain("放弃草稿");
+  expect(discardTexts).toContain("放弃");
+  expect(discardTexts.some((text) => text.startsWith("models."))).toBe(false);
+
+  await app.press("id:discard-draft-dialog >> role:button[放弃]");
+  await app.waitUntil(() => !app.shows("id:discard-draft-dialog"));
+  expect(app.shows("id:empty-add-channel-button")).toBe(true);
+});
+
+test("provider channels: compact 720x520 layout supports reduced motion draft flow", async () => {
+  const app = await open(APP_ENTRY, {
+    width: 720,
+    height: 520,
+    platform: "windows" as const,
+    reducedMotion: true,
+    storage: { "settings.language": "en" },
+  });
+
+  await app.press("id:empty-add-channel-button");
+  await app.waitFor("id:add-channel-dialog");
+  await app.press("id:provider-preset-openai");
+  await app.waitUntil(() => !app.shows("id:add-channel-dialog"));
+  await app.waitFor("id:draft-channel-card");
+
+  await app.press("id:add-model-button");
+  await app.waitFor("id:add-model-dialog");
+  await app.type("id:add-model-key-input", "gpt-compact");
+  await app.press("id:confirm-add-model");
+  await app.waitUntil(() => !app.shows("id:add-model-dialog"));
+
+  await app.press("id:save-channel-button");
+  await app.waitUntil(() => !app.shows("id:cancel-channel-button"));
+  expect(app.shows("id:model-row-gpt-compact")).toBe(true);
+});

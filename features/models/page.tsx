@@ -1,4 +1,4 @@
-import { cleanup, signal, Text, View } from "nsh";
+import { cleanup, setAccessibilityFocus, signal, Text, View, type ViewRef } from "nsh";
 import { t } from "nsh/i18n";
 import { Button } from "../../components/ui/button";
 import { ConfirmDialog } from "../../components/ui/dialog";
@@ -22,12 +22,28 @@ interface ModelsPageProps {
   onRegisterLeaveGuard?: (guard: NavigationLeaveGuard) => () => void;
 }
 
+function focusTarget(node: ViewRef | null) {
+  if (!node) return;
+  node.focus();
+  setAccessibilityFocus(node);
+}
+
 /** Models workspace using a Channels master rail and Provider detail editor. */
 export function ModelsPage(props: ModelsPageProps) {
   const addChannelOpen = signal(false);
   const draft = signal<ChannelDraft | null>(null);
-  const pendingDiscardAction = signal<{ run: () => void } | null>(null);
+  const pendingDiscardAction = signal<{ run: () => void; onDiscardFocus?: () => void } | null>(
+    null,
+  );
   let abortDraftWork: (() => void) | null = null;
+  let focusDraftName: (() => void) | null = null;
+  let emptyAddNode: ViewRef | null = null;
+  let railAddNode: ViewRef | null = null;
+  let discardCancelNode: ViewRef | null = null;
+  let pickerReturnTarget: (() => ViewRef | null) | null = null;
+  let pendingPostDiscardFocus: (() => void) | null = null;
+  let discardedJustConfirmed = false;
+  const channelNodes = new Map<string, ViewRef>();
 
   if (props.onRegisterLeaveGuard) {
     const unregister = props.onRegisterLeaveGuard((proceed) => {
@@ -49,16 +65,27 @@ export function ModelsPage(props: ModelsPageProps) {
     };
   };
 
-  const guardDraftLeave = (action: () => void) => {
+  const registerDraftFocus = (focus: () => void) => {
+    focusDraftName = focus;
+    return () => {
+      if (focusDraftName === focus) {
+        focusDraftName = null;
+      }
+    };
+  };
+
+  const guardDraftLeave = (action: () => void, onDiscardFocus?: () => void) => {
     if (draft() === null) {
       action();
       return;
     }
-    pendingDiscardAction.set({ run: action });
+    pendingDiscardAction.set({ run: action, onDiscardFocus });
   };
 
   const confirmDiscardDraft = () => {
     const pending = pendingDiscardAction();
+    discardedJustConfirmed = true;
+    pendingPostDiscardFocus = pending?.onDiscardFocus ?? null;
     pendingDiscardAction.set(null);
     abortDraftWork?.();
     draft()?.dispose();
@@ -67,21 +94,37 @@ export function ModelsPage(props: ModelsPageProps) {
   };
 
   const handleSelectPreset = (presetId: ProviderPresetId) => {
+    pickerReturnTarget = null;
     pendingDiscardAction.set(null);
     draft.set(createChannelDraft(presetId));
     addChannelOpen.set(false);
   };
 
   const handleSelectChannel = (id: string) => {
-    guardDraftLeave(() => selectChannel(id));
+    guardDraftLeave(
+      () => selectChannel(id),
+      () => focusTarget(channelNodes.get(id) ?? railAddNode),
+    );
   };
 
   const handleCancelDraft = () => {
-    guardDraftLeave(() => {});
+    guardDraftLeave(
+      () => {},
+      () => {
+        const selectedId = modelsStore.selectedChannelId();
+        focusTarget(
+          (selectedId ? channelNodes.get(selectedId) : null) ?? emptyAddNode ?? railAddNode,
+        );
+      },
+    );
   };
 
-  const handleOpenAddChannel = () => {
-    guardDraftLeave(() => addChannelOpen.set(true));
+  const handleOpenAddChannel = (source: "rail" | "empty") => {
+    const getTrigger = () => (source === "empty" ? emptyAddNode : railAddNode);
+    guardDraftLeave(() => {
+      pickerReturnTarget = getTrigger;
+      addChannelOpen.set(true);
+    });
   };
 
   return (
@@ -93,8 +136,14 @@ export function ModelsPage(props: ModelsPageProps) {
         error={modelsStore.channelsError()}
         onSelect={handleSelectChannel}
         onMove={(id, dir) => void moveChannel(id, dir)}
-        onAdd={handleOpenAddChannel}
+        onAdd={() => handleOpenAddChannel("rail")}
         onRetry={() => void loadModelsState()}
+        addButtonRef={(node) => {
+          railAddNode = node;
+        }}
+        onChannelItemRef={(id, node) => {
+          channelNodes.set(id, node);
+        }}
       />
 
       <If
@@ -110,10 +159,13 @@ export function ModelsPage(props: ModelsPageProps) {
                 </Text>
                 <Button
                   testID="empty-add-channel-button"
+                  ref={(node) => {
+                    emptyAddNode = node;
+                  }}
                   variant="primary"
                   size="md"
                   accessibilityLabel={t("models.channel.add")}
-                  onPress={handleOpenAddChannel}
+                  onPress={() => handleOpenAddChannel("empty")}
                 >
                   <Icon name="plus" tone="primary-foreground" class="size-4" />
                   <Text class="text-sm font-medium text-primary-foreground">
@@ -148,6 +200,7 @@ export function ModelsPage(props: ModelsPageProps) {
             }}
             onCancelDraft={handleCancelDraft}
             onRegisterAbort={registerDraftAbort}
+            onRegisterDraftFocus={registerDraftFocus}
           />
         )}
       </If>
@@ -156,6 +209,15 @@ export function ModelsPage(props: ModelsPageProps) {
         open={addChannelOpen()}
         onOpenChange={(open) => addChannelOpen.set(open)}
         onSelect={handleSelectPreset}
+        onClose={() => {
+          if (pickerReturnTarget && draft() === null) {
+            const target = pickerReturnTarget();
+            pickerReturnTarget = null;
+            focusTarget(target);
+          } else {
+            pickerReturnTarget = null;
+          }
+        }}
       />
 
       <ConfirmDialog
@@ -164,6 +226,25 @@ export function ModelsPage(props: ModelsPageProps) {
         title={t("models.draft.discardTitle")}
         description={t("models.draft.discardDescription")}
         confirmLabel={t("models.draft.discardConfirm")}
+        cancelRef={(node) => {
+          discardCancelNode = node;
+        }}
+        onOpen={() => {
+          discardedJustConfirmed = false;
+          focusTarget(discardCancelNode);
+        }}
+        onClose={() => {
+          if (discardedJustConfirmed) {
+            discardedJustConfirmed = false;
+            const fn = pendingPostDiscardFocus;
+            pendingPostDiscardFocus = null;
+            fn?.();
+            return;
+          }
+          if (draft() !== null) {
+            focusDraftName?.();
+          }
+        }}
         onOpenChange={(open) => {
           if (!open) pendingDiscardAction.set(null);
         }}

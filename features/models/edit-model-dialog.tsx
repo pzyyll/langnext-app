@@ -124,6 +124,12 @@ export function EditModelDialog(props: EditModelDialogProps) {
     }
   };
 
+  const handleInputKeyPress = (key: string) => {
+    if (key === "Escape" && !submitting()) {
+      props.onOpenChange(false);
+    }
+  };
+
   return (
     <AppDialog
       testID="edit-model-dialog"
@@ -167,8 +173,11 @@ export function EditModelDialog(props: EditModelDialogProps) {
                 testID="edit-model-name-input"
                 accessibilityLabel={t("common.displayName")}
                 placeholder={model().displayName ?? model().modelKey}
+                autoFocus
                 value={displayNameOverride()}
                 onChange={(v) => displayNameOverride.set(v)}
+                onSubmit={() => void handleSave()}
+                onKeyPress={handleInputKeyPress}
               />
             </FormField>
 
@@ -221,6 +230,8 @@ export function EditModelDialog(props: EditModelDialogProps) {
                   placeholder={t("common.optional")}
                   value={contextLimit()}
                   onChange={(v) => contextLimit.set(v)}
+                  onSubmit={() => void handleSave()}
+                  onKeyPress={handleInputKeyPress}
                 />
               </FormField>
               <FormField label={t("models.model.maxTokens")} class="min-w-0 flex-1">
@@ -230,6 +241,8 @@ export function EditModelDialog(props: EditModelDialogProps) {
                   placeholder={t("common.optional")}
                   value={maxTokens()}
                   onChange={(v) => maxTokens.set(v)}
+                  onSubmit={() => void handleSave()}
+                  onKeyPress={handleInputKeyPress}
                 />
               </FormField>
             </View>

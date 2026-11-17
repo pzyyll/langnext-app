@@ -1,4 +1,4 @@
-import { Scroll, Text, View, type JSX } from "nsh";
+import { Scroll, Text, View, type JSX, type ViewRef } from "nsh";
 import { Dialog as BaseDialog } from "nsh/base";
 import { t } from "nsh/i18n";
 import { motion } from "../motion";
@@ -15,6 +15,8 @@ interface AppDialogProps {
   testID?: string;
   closeOnEscape?: boolean;
   closeOnBackdropPress?: boolean;
+  onOpen?: () => void;
+  onClose?: () => void;
   onOpenChange: (open: boolean) => void;
   footer?: JSX.Element;
   children?: JSX.Element;
@@ -36,6 +38,8 @@ export function AppDialog(props: AppDialogProps) {
       role={props.role ?? "dialog"}
       open={props.open}
       onOpenChange={({ open }) => props.onOpenChange(open)}
+      onOpen={() => props.onOpen?.()}
+      onClose={() => props.onClose?.()}
       animation={motion.dialogAnimation}
       closeOnEscape={props.closeOnEscape ?? true}
       closeOnBackdropPress={props.closeOnBackdropPress ?? true}
@@ -73,6 +77,9 @@ interface ConfirmDialogProps {
   confirmVariant?: ButtonVariant;
   busy?: boolean;
   testID?: string;
+  cancelRef?: (node: ViewRef) => void;
+  onOpen?: () => void;
+  onClose?: () => void;
   onConfirm: () => void;
   onOpenChange: (open: boolean) => void;
 }
@@ -86,6 +93,8 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
       onOpenChange={(open) => {
         if (!props.busy) props.onOpenChange(open);
       }}
+      onOpen={props.onOpen}
+      onClose={props.onClose}
       title={props.title}
       description={props.description}
       role="alertdialog"
@@ -95,6 +104,7 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
       footer={
         <>
           <Button
+            ref={(node) => props.cancelRef?.(node)}
             variant="outline"
             size="sm"
             label={props.cancelLabel ?? t("common.cancel")}

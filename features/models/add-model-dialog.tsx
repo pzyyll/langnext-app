@@ -71,6 +71,12 @@ export function AddModelDialog(props: AddModelDialogProps) {
     }
   };
 
+  const handleInputKeyPress = (key: string) => {
+    if (key === "Escape" && !submitting()) {
+      props.onOpenChange(false);
+    }
+  };
+
   return (
     <AppDialog
       testID="add-model-dialog"
@@ -110,6 +116,8 @@ export function AddModelDialog(props: AddModelDialogProps) {
           autoFocus
           value={modelKey()}
           onChange={(v) => modelKey.set(v)}
+          onSubmit={() => void handleSubmit()}
+          onKeyPress={handleInputKeyPress}
         />
       </FormField>
 
@@ -120,6 +128,8 @@ export function AddModelDialog(props: AddModelDialogProps) {
           placeholder={t("common.optional")}
           value={displayName()}
           onChange={(v) => displayName.set(v)}
+          onSubmit={() => void handleSubmit()}
+          onKeyPress={handleInputKeyPress}
         />
       </FormField>
 

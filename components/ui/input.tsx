@@ -1,4 +1,4 @@
-import { View } from "nsh";
+import { View, type InputRef } from "nsh";
 import { Input as BaseInput } from "nsh/base";
 import { t } from "nsh/i18n";
 import { motion } from "../motion";
@@ -9,6 +9,7 @@ export type InputSize = "sm" | "md";
 
 interface InputProps {
   testID?: string;
+  ref?: (node: InputRef) => void;
   value?: string;
   placeholder?: string;
   accessibilityLabel?: string;
@@ -42,6 +43,7 @@ export function Input(props: InputProps) {
       </If>
       <BaseInput
         testID={props.testID}
+        ref={(node) => props.ref?.(node)}
         value={props.value}
         placeholder={props.placeholder}
         accessibilityLabel={props.accessibilityLabel}

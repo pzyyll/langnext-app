@@ -1,4 +1,14 @@
-import { cleanup, effect, signal, Scroll, Text, View, windowSize } from "nsh";
+import {
+  cleanup,
+  effect,
+  type InputRef,
+  Scroll,
+  setAccessibilityFocus,
+  signal,
+  Text,
+  View,
+  windowSize,
+} from "nsh";
 import { t } from "nsh/i18n";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -54,6 +64,7 @@ type ProviderEditorProps =
       onDraftSaved: (channel: ProviderChannel) => void;
       onCancelDraft: () => void;
       onRegisterAbort?: (abort: () => void) => () => void;
+      onRegisterDraftFocus?: (focus: () => void) => () => void;
     }
   | {
       mode: "saved";
@@ -100,6 +111,7 @@ export function ProviderEditor(props: ProviderEditorProps) {
   const deletingChannel = signal(false);
 
   let activeController: AbortController | null = null;
+  let draftNameInputRef: InputRef | null = null;
   let activeRequestSeq = 0;
   let syncedMode: "draft" | "saved" | "" = "";
   let syncedId = "";
@@ -141,9 +153,23 @@ export function ProviderEditor(props: ProviderEditorProps) {
 
   cleanup(() => invalidateInFlight());
 
+  const focusDraftNameInput = () => {
+    if (draftNameInputRef) {
+      draftNameInputRef.focus();
+      setAccessibilityFocus(draftNameInputRef);
+    }
+  };
+
   effect(() => {
     if (props.mode === "draft" && props.onRegisterAbort) {
       return props.onRegisterAbort(invalidateInFlight);
+    }
+    return undefined;
+  });
+
+  effect(() => {
+    if (props.mode === "draft" && props.onRegisterDraftFocus) {
+      return props.onRegisterDraftFocus(focusDraftNameInput);
     }
     return undefined;
   });
@@ -230,6 +256,7 @@ export function ProviderEditor(props: ProviderEditorProps) {
         nameError.set(null);
         saveError.set(null);
         conflictDetected.set(false);
+        focusDraftNameInput();
       }
       return;
     }
@@ -774,6 +801,10 @@ export function ProviderEditor(props: ProviderEditorProps) {
                 >
                   <Input
                     testID="channel-name-input"
+                    ref={(node) => {
+                      draftNameInputRef = node;
+                    }}
+                    autoFocus
                     accessibilityLabel={t("common.displayName")}
                     placeholder={t("models.channel.displayNamePlaceholder")}
                     value={currentDisplayName()}
