@@ -193,6 +193,16 @@ export async function saveChannelDraft(input: SaveChannelDraftInput): Promise<Pr
       return alreadySaved;
     }
 
+    const inputModels = input.models ?? [];
+    for (const model of inputModels) {
+      if (
+        model.apiTypeOverride !== null &&
+        !isProtocolAllowedForPreset(input.presetId, model.apiTypeOverride)
+      ) {
+        throw new Error(t("models.error.unsupportedProtocol"));
+      }
+    }
+
     const tokenValue = input.credential?.trim() || null;
     const timestamp = nowIso();
     const maxSortOrder = existing.reduce((max, ch) => Math.max(max, ch.sortOrder), -1);
@@ -208,20 +218,41 @@ export async function saveChannelDraft(input: SaveChannelDraftInput): Promise<Pr
       sortOrder: maxSortOrder + 1,
       revision: 1,
       insecureHttpConfirmedAt: urlCheck.isInsecureHttp ? timestamp : null,
-      modelsLastSyncedAt: null,
-      modelsLastSyncError: null,
+      modelsLastSyncedAt: input.modelsLastSyncedAt ?? null,
+      modelsLastSyncError: input.modelsLastSyncError ?? null,
       createdAt: timestamp,
       updatedAt: timestamp,
     };
+
+    const existingModels = modelsSignal();
+    const existingIds = new Set(existingModels.map((m) => m.id));
+    const seenKeys = new Set<string>();
+    const appendedModels: ProviderModel[] = [];
+    for (const model of inputModels) {
+      if (existingIds.has(model.id) || seenKeys.has(model.modelKey)) continue;
+      seenKeys.add(model.modelKey);
+      appendedModels.push({
+        ...model,
+        providerId: created.id,
+      });
+    }
+    const nextModels =
+      appendedModels.length > 0 ? [...existingModels, ...appendedModels] : existingModels;
 
     const nextChannels = sortChannels([...existing, created]);
     if (tokenValue !== null) {
       await writeSecret(created.id, tokenValue);
     }
     await persistProviders(nextChannels);
+    if (appendedModels.length > 0) {
+      await persistModels(nextModels);
+    }
 
     batch(() => {
       channelsSignal.set(nextChannels);
+      if (appendedModels.length > 0) {
+        modelsSignal.set(nextModels);
+      }
       selectedIdSignal.set(created.id);
     });
     return created;

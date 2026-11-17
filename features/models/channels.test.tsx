@@ -844,3 +844,144 @@ test("provider channels: resync tracks missing, manual, duplicate IDs, and faile
   expect(persisted.find((m) => m.modelKey === "legacy-ds")?.syncStatus).toBe("missing");
   expect(persisted.find((m) => m.modelKey === "manual-custom")?.syncStatus).toBe("active");
 });
+
+test("provider channels: saves manual and fetched draft models locally", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { "settings.language": "en" },
+    network: {
+      "GET https://proxy.example.com/ds/models": {
+        status: 200,
+        body: {
+          data: [{ id: "deepseek-chat", display_name: "DeepSeek Chat" }],
+        },
+      },
+      "GET https://bad.example.com/ds/models": {
+        status: 401,
+        body: { error: { message: "Invalid API key" } },
+      },
+    },
+  });
+
+  await startDraftFromEmptyState(app, "deepseek");
+
+  await app.clear("id:channel-name-input");
+  await app.type("id:channel-name-input", "DeepSeek Draft");
+
+  await app.press("id:connection-adapter-select");
+  await app.waitFor("role:option[OpenAI Responses]");
+  await app.press("role:option[OpenAI Responses]");
+
+  await app.clear("id:connection-url-input");
+  await app.type("id:connection-url-input", "https://proxy.example.com/ds");
+  await app.type("id:connection-token-input", "sk-ds-draft");
+
+  // Fetch remote model into the draft.
+  await app.press("id:get-models-button");
+  await app.waitFor("id:model-row-deepseek-chat");
+
+  // Add a manual model that does not exist remotely.
+  await app.press("id:add-model-button");
+  await app.waitFor("id:add-model-dialog");
+  await app.type("id:add-model-key-input", "does-not-exist-v9");
+  await app.type("id:add-model-name-input", "Local Nonexistent");
+  await app.press("id:add-model-api-select");
+  await app.waitFor("role:option[Anthropic Messages]");
+  await app.press("role:option[Anthropic Messages]");
+  await app.press("id:confirm-add-model");
+  await app.waitUntil(() => !app.shows("id:add-model-dialog"));
+  await app.waitFor("id:model-row-does-not-exist-v9");
+
+  // Trigger a 401 catalog error before saving.
+  await app.clear("id:connection-url-input");
+  await app.type("id:connection-url-input", "https://bad.example.com/ds");
+  await app.press("id:get-models-button");
+  await app.waitUntil(() =>
+    app.texts().some((t) => t.includes("Authentication failed (HTTP 401)")),
+  );
+
+  const requestsBeforeSave = app.requests().length;
+  await app.press("id:save-channel-button");
+  await app.waitUntil(() => !app.shows("id:cancel-channel-button"));
+
+  expect(app.requests()).toHaveLength(requestsBeforeSave);
+
+  // Saved channel transition retains connection inputs, and cancelling Connection edits
+  // does not roll back model edits.
+  expect(app.value("id:connection-url-input")).toBe("https://bad.example.com/ds");
+  await app.clear("id:connection-url-input");
+  await app.type("id:connection-url-input", "https://changed.example.com");
+  await app.press("id:toggle-model-deepseek-chat");
+  await app.waitUntil(() =>
+    JSON.parse(app.storage()[MODELS_STORAGE_KEY]!).some(
+      (m: ProviderModel) => m.modelKey === "deepseek-chat" && m.enabled,
+    ),
+  );
+  await app.press("role:button[Cancel]");
+  expect(app.value("id:connection-url-input")).toBe("https://bad.example.com/ds");
+
+  const reopened = await open(APP_ENTRY, {
+    ...viewport,
+    storage: app.storage(),
+  });
+  await reopened.waitFor("id:model-row-does-not-exist-v9");
+
+  expect(reopened.requests()).toHaveLength(0);
+  expect(reopened.texts()).toContain("DeepSeek Draft");
+  expect(reopened.texts()).toContain("OpenAI Responses");
+  expect(reopened.value("id:connection-url-input")).toBe("https://bad.example.com/ds");
+  expect(reopened.shows("id:model-row-does-not-exist-v9 >> text:Local Nonexistent")).toBe(true);
+  expect(reopened.shows("id:model-row-does-not-exist-v9 >> text:Anthropic Messages")).toBe(true);
+  expect(reopened.shows("id:model-row-deepseek-chat")).toBe(true);
+
+  const persisted = JSON.parse(reopened.storage()[MODELS_STORAGE_KEY]!) as ProviderModel[];
+  expect(persisted).toHaveLength(2);
+  expect(persisted.find((m) => m.modelKey === "deepseek-chat")?.enabled).toBe(true);
+  expect(persisted.find((m) => m.modelKey === "does-not-exist-v9")?.enabled).toBe(true);
+});
+
+test("provider channels: saves draft offline with empty key after network failure", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { "settings.language": "en" },
+    network: {
+      "GET https://unreachable.example.com/v1/models": {
+        status: 503,
+        body: { error: { message: "Service unavailable" } },
+      },
+    },
+  });
+
+  await startDraftFromEmptyState(app, "custom");
+  await app.clear("id:channel-name-input");
+  await app.type("id:channel-name-input", "Local Custom");
+  await app.type("id:connection-url-input", "https://unreachable.example.com/v1");
+
+  await app.press("id:test-connection-button");
+  await app.waitUntil(() => app.requests().length === 1);
+
+  await app.press("id:add-model-button");
+  await app.waitFor("id:add-model-dialog");
+  await app.type("id:add-model-key-input", "local-gguf");
+  await app.press("id:confirm-add-model");
+  await app.waitUntil(() => !app.shows("id:add-model-dialog"));
+
+  await app.press("id:save-channel-button");
+  await app.waitUntil(() => !app.shows("id:cancel-channel-button"));
+
+  expect(app.requests()).toHaveLength(1);
+  expect(app.shows("id:model-row-local-gguf")).toBe(true);
+
+  const reopened = await open(APP_ENTRY, {
+    ...viewport,
+    storage: app.storage(),
+  });
+  await reopened.waitFor("id:model-row-local-gguf");
+  expect(reopened.requests()).toHaveLength(0);
+  expect(reopened.texts()).toContain("Local Custom");
+  expect(
+    reopened.storage()[
+      `${CREDENTIAL_KEY_PREFIX}${JSON.parse(reopened.storage()[PROVIDERS_STORAGE_KEY]!)[0].id}`
+    ],
+  ).toBeUndefined();
+});

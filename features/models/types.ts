@@ -73,6 +73,9 @@ export interface SaveChannelDraftInput {
   credential: string | null;
   enabled: boolean;
   allowInsecureHttp: boolean;
+  models?: ProviderModel[];
+  modelsLastSyncedAt?: string | null;
+  modelsLastSyncError?: string | null;
 }
 
 export interface UpdateChannelInput {

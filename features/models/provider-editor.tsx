@@ -97,6 +97,7 @@ export function ProviderEditor(props: ProviderEditorProps) {
   const deletingChannel = signal(false);
 
   let activeController: AbortController | null = null;
+  let syncedMode: "draft" | "saved" | "" = "";
   let syncedId = "";
   let syncedRevision = -1;
 
@@ -169,7 +170,8 @@ export function ProviderEditor(props: ProviderEditorProps) {
   effect(() => {
     if (props.mode === "draft") {
       const d = props.draft;
-      if (d.id !== syncedId) {
+      if (syncedMode !== "draft" || d.id !== syncedId) {
+        syncedMode = "draft";
         syncedId = d.id;
         syncedRevision = -1;
         abortInFlight();
@@ -184,7 +186,8 @@ export function ProviderEditor(props: ProviderEditorProps) {
     }
 
     const ch = props.channel;
-    if (ch.id !== syncedId) {
+    if (syncedMode !== "saved" || ch.id !== syncedId) {
+      syncedMode = "saved";
       syncedId = ch.id;
       syncedRevision = ch.revision;
       abortInFlight();
@@ -283,6 +286,9 @@ export function ProviderEditor(props: ProviderEditorProps) {
         credential: draft.credential(),
         enabled: draft.enabled(),
         allowInsecureHttp: draft.allowInsecureHttp(),
+        models: draft.models(),
+        modelsLastSyncedAt: draft.modelsLastSyncedAt(),
+        modelsLastSyncError: draft.modelsLastSyncError(),
       });
       toast.success(t("models.channel.added", { name: saved.displayName }));
       props.onDraftSaved(saved);
