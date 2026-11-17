@@ -293,7 +293,9 @@ nesting scroll views.
   `EditModelDialog`, and `ConfirmDialog` share `AboutDialog`'s `rounded-2xl
   border border-border bg-background` frame, padded header/body, and `bg-muted`
   footer bar over `bg-overlay`. Non-blocking status notices appear in a top-level
-  `ToastStack` anchored at `bottom-4` centered inside an `Overlay`.
+  `ToastStack` anchored at `bottom-4` centered inside an `inset-x-0 bottom-4
+  pointer-events-none` `Overlay` (with `pointer-events-auto` preserved on each
+  toast's Dismiss button).
 - **Reusable controls**: UI primitives (`Button`, `Input`, `Checkbox`, `Select`,
   `Switch`, `Badge`, `Card`, `Dialog`, `Icon`, `ToastProvider`) live under
   `components/ui/`. Copy stays bare: helper text appears only where scope,
@@ -336,10 +338,13 @@ nesting scroll views.
 
 ### Validation
 
-- **Checks**: Automated unit/logic checks, headless UI suite, Windows desktop UI suite (`nsh test --target windows`), clippy/oxlint, format check, and release bundle check verified after final UI edits.
-- **Screenshots and layout**: Reviewed Windows desktop screenshots in light and dark modes at default (`1040 × 720`) and minimum (`720 × 520`) window sizes, including empty state, populated channels rail, connection and models cards, table rows, toast stack, and modal dialogs (`EditModelDialog`).
-- **Adjustments made from visual review**: Widened the Channels rail to `w-56` on normal desktop widths (`w-48` under `860` points) and scoped reorder arrows to the selected channel row so names avoid early truncation; tightened `< 860` card/editor padding (`p-4`) and folded `API Type` into the model subtitle at narrow widths so `Get models` and model rows fit cleanly at `720 × 520`; moved `ToastStack` to `bottom-16 right-4` so transient notifications stay clear above the editor action footer.
-- **Hover, pressed, and motion**: Hover washes, disabled states, active scaling, dialog fade, switches, and checkboxes pass functional desktop checks; frame-by-frame motion timing and screen-reader behavior remain manual checks.
+- **Checks**: Automated unit/logic/storage checks (`logic.test.ts`, `storage.test.ts`), headless UI suites (`channels.test.tsx`, `models.test.tsx`), Windows desktop UI suites (`nsh test features/models/channels.test.tsx --target windows`, `nsh test features/models/models.test.tsx --target windows`), clippy/oxlint, format check, and release bundle check verified after final UI edits. (`App.test.tsx` leaves `"settings.language"` unset and follows the host OS locale, so under a Simplified Chinese Windows locale 15/16 shell label assertions read `"设置"`/`"外观"`/`"模型"` rather than English.)
+- **Screenshots and layout**: Visually inspected Windows desktop PNG screenshots across Light and Dark themes, English and Simplified Chinese (`zh-CN`), default (`1040 × 720`, rendered `1560 × 1080` at 1.5x scaling) and minimum compact (`720 × 520` via `app.setViewport`, rendered `1080 × 823` with `reducedMotion: true`) viewports covering:
+  - `AddChannelDialog` provider picker grid (empty and compact windows),
+  - Right-pane drafts for selectable-API (`OpenAI`, `DeepSeek`), fixed-API (`Google Gemini`), non-loopback `http://` warning checkbox state, sync error inline + toast (`HTTP 503`), and synced model rows,
+  - `Discard Draft` (`ConfirmDialog`) in `en` and `zh-CN`, and `AddModelDialog` / `EditModelDialog` in compact `720 × 520`.
+- **Adjustments made from visual and hit-test review**: Widened the Channels rail to `w-56` on normal desktop widths (`w-48` under `860` points) and scoped reorder arrows to the selected channel row so names avoid early truncation; tightened `< 860` card/editor padding (`p-4`) and folded `API Type` into the model subtitle at narrow widths so `Get models` and model rows wrap and fit cleanly at `720 × 520`; updated `ToastViewport` (`components/ui/toast.tsx`) to `inset-x-0 bottom-4 items-center pointer-events-none` on `Overlay` and `pointer-events-none` on `ToastStack`/`Toast` with `pointer-events-auto` on the Dismiss button so bottom-centered toasts never block clicks on underlying navigation or table checkboxes on Windows.
+- **Keyboard, reduced motion, and accessibility**: Verified on Windows (`--target windows`) that `<Input>` auto-focus moves cleanly into draft `Display Name` and dialog primary fields, `Return` submits dialog inputs, `Escape` dismisses `AddModelDialog` and `EditModelDialog` even while inputs hold focus, focus restores to triggers after dialog dismissal (with `ViewRef.focus()` `Tab`/Space button activation noted by NSH 0.5.1 as `(macOS, the web)`), and `reducedMotion: true` passes functionally without blocking dialog/toast state transitions. All interactive buttons, icon triggers, switches, checkboxes, and dialogs expose localized `accessibilityLabel` strings via `t()`. Frame-by-frame motion timing and interactive Windows Narrator screen-reader speech remain manual verification items in an interactive Windows desktop session (`UIAutomationClient` inspection against the non-interactive CLI session's detached `nsh dev` host exposed no interactive desktop UIA subtree from the automation context).
 
 ## Theme Colors
 ```css
