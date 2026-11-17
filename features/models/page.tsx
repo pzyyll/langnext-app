@@ -61,6 +61,7 @@ export function ModelsPage(props: ModelsPageProps) {
     const pending = pendingDiscardAction();
     pendingDiscardAction.set(null);
     abortDraftWork?.();
+    draft()?.dispose();
     draft.set(null);
     pending?.run();
   };
@@ -142,6 +143,7 @@ export function ModelsPage(props: ModelsPageProps) {
             onEnabledFilterChange={(filter) => void setEnabledFilter(filter)}
             onDraftSaved={() => {
               pendingDiscardAction.set(null);
+              draft()?.dispose();
               draft.set(null);
             }}
             onCancelDraft={handleCancelDraft}

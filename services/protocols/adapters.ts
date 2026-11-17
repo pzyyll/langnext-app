@@ -93,8 +93,19 @@ async function fetchJsonPage(
 ): Promise<Record<string, unknown>> {
   const controller = new AbortController();
   let timedOut = false;
+  let triggerExternalCancel: (() => void) | null = null;
 
-  const onExternalAbort = () => controller.abort();
+  const externalCancelPromise = externalSignal
+    ? new Promise<never>((_, reject) => {
+        triggerExternalCancel = () =>
+          reject(new ProviderProtocolError("cancelled", t("protocol.error.cancelled")));
+      })
+    : null;
+
+  const onExternalAbort = () => {
+    controller.abort();
+    triggerExternalCancel?.();
+  };
   if (externalSignal) {
     if (externalSignal.aborted) {
       throw new ProviderProtocolError("cancelled", t("protocol.error.cancelled"));
@@ -109,14 +120,20 @@ async function fetchJsonPage(
 
   let response: Response;
   try {
-    response = await fetch(url, {
+    const fetchPromise = fetch(url, {
       method: "GET",
       headers,
       signal: controller.signal,
     });
+    response = externalCancelPromise
+      ? await Promise.race([fetchPromise, externalCancelPromise])
+      : await fetchPromise;
   } catch (err) {
     if (timedOut) {
       throw new ProviderProtocolError("timeout", t("protocol.error.timeout"));
+    }
+    if (err instanceof ProviderProtocolError && err.kind === "cancelled") {
+      throw err;
     }
     if (externalSignal?.aborted) {
       throw new ProviderProtocolError("cancelled", t("protocol.error.cancelled"));
@@ -126,6 +143,10 @@ async function fetchJsonPage(
   } finally {
     clearTimeout(timer);
     externalSignal?.removeEventListener("abort", onExternalAbort);
+  }
+
+  if (externalSignal?.aborted) {
+    throw new ProviderProtocolError("cancelled", t("protocol.error.cancelled"));
   }
 
   if (!response.ok) {

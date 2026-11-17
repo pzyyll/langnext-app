@@ -57,12 +57,14 @@ export interface ChannelDraft {
   updateModel: (input: UpdateModelDraftInput) => ProviderModel;
   setModelEnabled: (modelId: string, enabled: boolean) => void;
   deleteModels: (modelIds: string[]) => number;
+  dispose: () => void;
 }
 
 /** Allocates a fresh in-memory channel draft prefilled from the chosen preset. */
 export function createChannelDraft(presetId: ProviderPresetId): ChannelDraft {
   const preset = getProviderPreset(presetId);
   const id = crypto.randomUUID();
+  let disposed = false;
   const displayName = signal(getProviderPresetLabel(presetId));
   const adapterId = signal<AdapterId>(preset.defaultAdapterId);
   const baseUrl = signal(preset.defaultBaseUrl ?? "");
@@ -96,8 +98,14 @@ export function createChannelDraft(presetId: ProviderPresetId): ChannelDraft {
     models: () => models(),
     modelsLastSyncedAt: () => modelsLastSyncedAt(),
     modelsLastSyncError: () => modelsLastSyncError(),
-    setSyncError: (message) => modelsLastSyncError.set(message),
+    setSyncError: (message) => {
+      if (disposed) return;
+      modelsLastSyncError.set(message);
+    },
     applyDiscoveredModels: (discovered, sourceAdapterId) => {
+      if (disposed) {
+        return { discoveredCount: 0, addedCount: 0, updatedCount: 0, missingCount: 0 };
+      }
       const timestamp = new Date().toISOString();
       const result = mergeDiscoveredCatalog({
         existingChannelModels: models(),
@@ -159,6 +167,9 @@ export function createChannelDraft(presetId: ProviderPresetId): ChannelDraft {
       const next = prev.filter((m) => !idSet.has(m.id));
       models.set(next);
       return prev.length - next.length;
+    },
+    dispose: () => {
+      disposed = true;
     },
   };
 }

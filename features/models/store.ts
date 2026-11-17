@@ -2,7 +2,11 @@ import { batch, signal, Storage } from "nsh";
 import { t } from "nsh/i18n";
 import { listRemoteModels, testAdapterConnection } from "../../services/protocols/adapters";
 import { getProviderPreset, isProtocolAllowedForPreset } from "../../services/protocols/presets";
-import type { AdapterRequestParams, DiscoveredRemoteModel } from "../../services/protocols/types";
+import {
+  ProviderProtocolError,
+  type AdapterRequestParams,
+  type DiscoveredRemoteModel,
+} from "../../services/protocols/types";
 import { inspectBaseUrl } from "./connection";
 import {
   applyModelConfigUpdate,
@@ -508,8 +512,10 @@ export async function syncChannelModels(
     discovered = await listRemoteModels(params);
   } catch (error) {
     const message = error instanceof Error ? error.message : t("models.error.fetchModels");
-    if ((error as { kind?: string } | null)?.kind !== "cancelled") {
+    if (!abortSignal?.aborted && (error as { kind?: string } | null)?.kind !== "cancelled") {
       await withWriteLock(async () => {
+        const exists = channelsSignal().some((ch) => ch.id === providerId);
+        if (!exists || abortSignal?.aborted) return;
         const currentChannels = channelsSignal().map((ch) =>
           ch.id === providerId ? { ...ch, modelsLastSyncError: message, updatedAt: nowIso() } : ch,
         );
@@ -520,7 +526,18 @@ export async function syncChannelModels(
     throw error;
   }
 
+  if (abortSignal?.aborted) {
+    throw new ProviderProtocolError("cancelled", t("protocol.error.cancelled"));
+  }
+
   return withWriteLock(async () => {
+    if (abortSignal?.aborted) {
+      throw new ProviderProtocolError("cancelled", t("protocol.error.cancelled"));
+    }
+    const targetExists = channelsSignal().some((ch) => ch.id === providerId);
+    if (!targetExists) {
+      throw new Error(t("models.error.channelGone"));
+    }
     const timestamp = nowIso();
     const allModels = modelsSignal();
     const otherModels = allModels.filter((m) => m.providerId !== providerId);

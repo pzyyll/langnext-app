@@ -1,4 +1,4 @@
-import { expect, open, test } from "nsh/test";
+import { expect, open, type StubResponse, test } from "nsh/test";
 import { CREDENTIAL_KEY_PREFIX, MODELS_STORAGE_KEY, PROVIDERS_STORAGE_KEY } from "./store";
 import type { ProviderModel } from "./types";
 import {
@@ -1208,4 +1208,193 @@ test("provider channels: starting another draft confirms discarding active draft
   expect(app.shows("id:model-row-first-draft-model")).toBe(false);
   expect(app.texts()).not.toContain("First Draft");
   expect(JSON.stringify(app.storage())).toBe(storageBefore);
+});
+
+test("provider channels: stale catalog cannot populate a replacement draft", async () => {
+  const pendingResolvers: Array<(response: StubResponse) => void> = [];
+
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { "settings.language": "en" },
+    network: {
+      "GET https://api.openai.com/v1/models": () =>
+        new Promise<StubResponse>((resolve) => {
+          pendingResolvers.push(resolve);
+        }),
+    },
+  });
+
+  await startDraftFromEmptyState(app, "openai");
+  await app.type("id:connection-token-input", "sk-openai-dummy");
+  const firstFetch = app.press("id:get-models-button");
+  await app.waitUntil(() => app.requests().length === 1);
+
+  // Mid-request input edits invalidate the pending catalog immediately so user can keep working.
+  await app.clear("id:connection-url-input");
+  await app.type("id:connection-url-input", "https://proxy.example.com/v1");
+  await app.waitUntil(() => app.enabled("id:get-models-button"));
+
+  // Switch back to the delayed route to also verify discard -> replacement draft isolation.
+  await app.clear("id:connection-url-input");
+  await app.type("id:connection-url-input", "https://api.openai.com/v1");
+  const secondFetch = app.press("id:get-models-button");
+  await app.waitUntil(() => app.requests().length === 2);
+
+  await app.press("id:cancel-channel-button");
+  await app.waitFor("id:discard-draft-dialog");
+  await app.press("id:discard-draft-dialog >> role:button[Discard]");
+  await app.waitUntil(() => !app.shows("id:discard-draft-dialog"));
+
+  await startDraftFromEmptyState(app, "anthropic");
+
+  for (const resolve of pendingResolvers) {
+    resolve({
+      status: 200,
+      body: { data: [{ id: "stale-gpt-model", display_name: "Stale GPT" }] },
+    });
+  }
+  await Promise.all([firstFetch, secondFetch]);
+  await app.wait(50);
+
+  expect(app.shows("id:model-row-stale-gpt-model")).toBe(false);
+  expect(app.texts()).not.toContain("Stale GPT");
+  expect(app.value("id:channel-name-input")).toBe("Anthropic");
+  expect(app.value("id:connection-url-input")).toBe("https://api.anthropic.com");
+});
+
+test("provider channels: switching saved channels and editing connection mid-request drop stale responses", async () => {
+  const pendingResolvers: Array<(response: StubResponse) => void> = [];
+  const openai = makeChannel({
+    id: "ch-openai",
+    presetId: "openai",
+    displayName: "OpenAI Main",
+    adapterId: "openai-responses",
+    baseUrl: "https://api.openai.com/v1",
+  });
+  const anthropic = makeChannel({
+    id: "ch-anthropic",
+    presetId: "anthropic",
+    displayName: "Anthropic Main",
+    adapterId: "anthropic",
+    baseUrl: "https://api.anthropic.com",
+  });
+  const existingModel = makeModel({
+    id: "m-oai-keep",
+    providerId: openai.id,
+    modelKey: "gpt-4.1",
+    sourceAdapterId: "openai-responses",
+    enabled: true,
+    displayName: "GPT-4.1",
+  });
+
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: makeSeedStorage({
+      channels: [openai, anthropic],
+      models: [existingModel],
+      credentials: { [openai.id]: "sk-oai", [anthropic.id]: "sk-ant" },
+    }),
+    network: {
+      "GET https://api.openai.com/v1/models": () =>
+        new Promise<StubResponse>((resolve) => {
+          pendingResolvers.push(resolve);
+        }),
+    },
+  });
+
+  // Changing API type or API key mid-request invalidates the in-flight request.
+  const firstFetch = app.press("id:get-models-button");
+  await app.waitUntil(() => app.requests().length === 1);
+  await app.press("id:connection-adapter-select");
+  await app.waitFor("role:option[OpenAI Chat Completions]");
+  await app.press("role:option[OpenAI Chat Completions]");
+  await app.waitUntil(() => app.enabled("id:get-models-button"));
+
+  const secondFetch = app.press("id:get-models-button");
+  await app.waitUntil(() => app.requests().length === 2);
+  await app.type("id:connection-token-input", "sk-replacement");
+  await app.waitUntil(() => app.enabled("id:get-models-button"));
+
+  // Resolve the first two stale responses with errors/models: neither should apply.
+  pendingResolvers[0]?.({ status: 401, body: { error: { message: "Stale 401" } } });
+  pendingResolvers[1]?.({ status: 200, body: { data: [{ id: "stale-mid-edit" }] } });
+  await Promise.all([firstFetch, secondFetch]);
+  await app.wait(50);
+  expect(app.shows("id:model-row-stale-mid-edit")).toBe(false);
+  expect(app.texts().some((t) => t.includes("HTTP 401"))).toBe(false);
+
+  // Switch saved channels while a request is pending; delayed response must not affect either channel.
+  const thirdFetch = app.press("id:get-models-button");
+  await app.waitUntil(() => app.requests().length === 3);
+  await app.press("id:channel-item-ch-anthropic");
+  await app.waitUntil(() => app.value("id:connection-url-input") === "https://api.anthropic.com");
+
+  pendingResolvers[2]?.({
+    status: 200,
+    body: { data: [{ id: "stale-after-switch" }] },
+  });
+  await thirdFetch;
+  await app.wait(50);
+
+  expect(app.shows("id:model-row-stale-after-switch")).toBe(false);
+  await app.press("id:channel-item-ch-openai");
+  await app.waitFor("id:model-row-gpt-4.1");
+  expect(app.shows("id:model-row-stale-after-switch")).toBe(false);
+  expect(JSON.parse(app.storage()[MODELS_STORAGE_KEY]!) as ProviderModel[]).toHaveLength(1);
+});
+
+test("provider channels: saving during a pending fetch keeps visible models and lets saved channel fetch again", async () => {
+  let callCount = 0;
+  let resolveFirst!: (response: StubResponse) => void;
+
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { "settings.language": "en" },
+    network: {
+      "GET https://api.openai.com/v1/models": () => {
+        callCount += 1;
+        if (callCount === 1) {
+          return new Promise<StubResponse>((resolve) => {
+            resolveFirst = resolve;
+          });
+        }
+        return {
+          status: 200,
+          body: { data: [{ id: "fresh-after-save", display_name: "Fresh After Save" }] },
+        };
+      },
+    },
+  });
+
+  await startDraftFromEmptyState(app, "openai");
+  await app.type("id:connection-token-input", "sk-oai-draft");
+
+  await app.press("id:add-model-button");
+  await app.waitFor("id:add-model-dialog");
+  await app.type("id:add-model-key-input", "manual-visible");
+  await app.press("id:confirm-add-model");
+  await app.waitUntil(() => !app.shows("id:add-model-dialog"));
+
+  // Start slow fetch, then press Save before it resolves.
+  const draftFetch = app.press("id:get-models-button");
+  await app.waitUntil(() => app.requests().length === 1);
+
+  await app.press("id:save-channel-button");
+  await app.waitUntil(() => !app.shows("id:cancel-channel-button"));
+
+  // Late settlement of draft-owned fetch does not leak into the saved channel.
+  resolveFirst({
+    status: 200,
+    body: { data: [{ id: "stale-after-save", display_name: "Stale After Save" }] },
+  });
+  await draftFetch;
+  await app.wait(50);
+
+  expect(app.shows("id:model-row-manual-visible")).toBe(true);
+  expect(app.shows("id:model-row-stale-after-save")).toBe(false);
+
+  // Saved channel is unblocked and can run a fresh fetch.
+  await app.press("id:get-models-button");
+  await app.waitFor("id:model-row-fresh-after-save");
+  expect(app.shows("id:model-row-stale-after-save")).toBe(false);
 });

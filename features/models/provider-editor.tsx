@@ -98,24 +98,63 @@ export function ProviderEditor(props: ProviderEditorProps) {
   const deletingChannel = signal(false);
 
   let activeController: AbortController | null = null;
+  let activeRequestSeq = 0;
   let syncedMode: "draft" | "saved" | "" = "";
   let syncedId = "";
   let syncedRevision = -1;
+  let lastConnectionFingerprint = "";
 
-  const abortInFlight = () => {
+  const currentOwnerId = () =>
+    props.mode === "draft" ? `draft:${props.draft.id}` : `saved:${props.channel.id}`;
+
+  const connectionFingerprint = () =>
+    props.mode === "draft"
+      ? JSON.stringify([
+          "draft",
+          props.draft.id,
+          props.draft.adapterId(),
+          props.draft.baseUrl(),
+          props.draft.credential(),
+          props.draft.allowInsecureHttp(),
+        ])
+      : JSON.stringify([
+          "saved",
+          props.channel.id,
+          savedAdapterId(),
+          savedBaseUrl(),
+          credentialMode(),
+          savedCredential(),
+          savedAllowInsecureHttp(),
+        ]);
+
+  const invalidateInFlight = () => {
+    activeRequestSeq += 1;
     if (activeController) {
       activeController.abort();
       activeController = null;
     }
+    testing.set(false);
+    syncing.set(false);
   };
 
-  cleanup(() => abortInFlight());
+  cleanup(() => invalidateInFlight());
 
   effect(() => {
     if (props.mode === "draft" && props.onRegisterAbort) {
-      return props.onRegisterAbort(abortInFlight);
+      return props.onRegisterAbort(invalidateInFlight);
     }
     return undefined;
+  });
+
+  effect(() => {
+    const fingerprint = connectionFingerprint();
+    if (fingerprint !== lastConnectionFingerprint) {
+      const initialized = lastConnectionFingerprint !== "";
+      lastConnectionFingerprint = fingerprint;
+      if (initialized) {
+        invalidateInFlight();
+      }
+    }
   });
 
   const loadFromChannel = (ch: ProviderChannel) => {
@@ -182,9 +221,7 @@ export function ProviderEditor(props: ProviderEditorProps) {
         syncedMode = "draft";
         syncedId = d.id;
         syncedRevision = -1;
-        abortInFlight();
-        testing.set(false);
-        syncing.set(false);
+        invalidateInFlight();
         connectionMessage.set(null);
         nameError.set(null);
         saveError.set(null);
@@ -198,9 +235,7 @@ export function ProviderEditor(props: ProviderEditorProps) {
       syncedMode = "saved";
       syncedId = ch.id;
       syncedRevision = ch.revision;
-      abortInFlight();
-      testing.set(false);
-      syncing.set(false);
+      invalidateInFlight();
       connectionMessage.set(null);
       loadFromChannel(ch);
       return;
@@ -283,6 +318,11 @@ export function ProviderEditor(props: ProviderEditorProps) {
       return;
     }
 
+    invalidateInFlight();
+    const draftModels = draft.models();
+    const lastSyncedAt = draft.modelsLastSyncedAt();
+    const lastSyncError = draft.modelsLastSyncError();
+
     saving.set(true);
     try {
       const saved = await saveChannelDraft({
@@ -294,9 +334,9 @@ export function ProviderEditor(props: ProviderEditorProps) {
         credential: draft.credential(),
         enabled: draft.enabled(),
         allowInsecureHttp: draft.allowInsecureHttp(),
-        models: draft.models(),
-        modelsLastSyncedAt: draft.modelsLastSyncedAt(),
-        modelsLastSyncError: draft.modelsLastSyncError(),
+        models: draftModels,
+        modelsLastSyncedAt: lastSyncedAt,
+        modelsLastSyncError: lastSyncError,
       });
       toast.success(t("models.channel.added", { name: saved.displayName }));
       props.onDraftSaved(saved);
@@ -379,15 +419,38 @@ export function ProviderEditor(props: ProviderEditorProps) {
     };
   };
 
+  const startConnectionRequest = () => {
+    invalidateInFlight();
+    const controller = new AbortController();
+    activeController = controller;
+    const reqSeq = activeRequestSeq;
+    const reqOwner = currentOwnerId();
+    const reqFingerprint = connectionFingerprint();
+    return {
+      signal: controller.signal,
+      isCurrent: () =>
+        reqSeq === activeRequestSeq &&
+        currentOwnerId() === reqOwner &&
+        connectionFingerprint() === reqFingerprint &&
+        !controller.signal.aborted,
+      isLatestSeq: () => reqSeq === activeRequestSeq,
+      releaseController: () => {
+        if (activeController === controller) {
+          activeController = null;
+        }
+      },
+    };
+  };
+
   const handleTest = async () => {
     if (testing() || syncing()) return;
     const snapshot = buildConnectionSnapshot();
-    abortInFlight();
-    activeController = new AbortController();
+    const request = startConnectionRequest();
     testing.set(true);
     connectionMessage.set(null);
     try {
-      const result = await testConnectionSnapshot(snapshot, activeController.signal);
+      const result = await testConnectionSnapshot(snapshot, request.signal);
+      if (!request.isCurrent()) return;
       const text =
         result.modelCount === 1
           ? t("models.connection.connectedOne", { count: result.modelCount })
@@ -395,27 +458,30 @@ export function ProviderEditor(props: ProviderEditorProps) {
       connectionMessage.set({ ok: true, text });
       toast.success(text);
     } catch (error) {
+      if (!request.isCurrent()) return;
       const text = error instanceof Error ? error.message : t("models.error.connectionTest");
       if ((error as { kind?: string } | null)?.kind !== "cancelled") {
         connectionMessage.set({ ok: false, text });
         toast.error(text);
       }
     } finally {
-      testing.set(false);
-      activeController = null;
+      if (request.isLatestSeq()) {
+        testing.set(false);
+        request.releaseController();
+      }
     }
   };
 
   const handleGetModels = async () => {
     if (syncing() || testing()) return;
     const snapshot = buildConnectionSnapshot();
-    abortInFlight();
-    activeController = new AbortController();
+    const request = startConnectionRequest();
     syncing.set(true);
     connectionMessage.set(null);
     try {
       if (props.mode === "draft") {
-        const discovered = await discoverModelsSnapshot(snapshot, activeController.signal);
+        const discovered = await discoverModelsSnapshot(snapshot, request.signal);
+        if (!request.isCurrent()) return;
         const summary = props.draft.applyDiscoveredModels(discovered, snapshot.adapterId);
         toast.success(
           t("models.connection.synced", {
@@ -424,11 +490,8 @@ export function ProviderEditor(props: ProviderEditorProps) {
           }),
         );
       } else {
-        const summary = await syncChannelModels(
-          props.channel.id,
-          snapshot,
-          activeController.signal,
-        );
+        const summary = await syncChannelModels(props.channel.id, snapshot, request.signal);
+        if (!request.isCurrent()) return;
         toast.success(
           t("models.connection.synced", {
             count: summary.discoveredCount,
@@ -437,6 +500,7 @@ export function ProviderEditor(props: ProviderEditorProps) {
         );
       }
     } catch (error) {
+      if (!request.isCurrent()) return;
       const message = error instanceof Error ? error.message : t("models.error.fetchModels");
       if ((error as { kind?: string } | null)?.kind !== "cancelled") {
         if (props.mode === "draft") {
@@ -445,8 +509,10 @@ export function ProviderEditor(props: ProviderEditorProps) {
         toast.error(message);
       }
     } finally {
-      syncing.set(false);
-      activeController = null;
+      if (request.isLatestSeq()) {
+        syncing.set(false);
+        request.releaseController();
+      }
     }
   };
 
