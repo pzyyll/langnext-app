@@ -17,6 +17,7 @@ import type {
   ConnectionSnapshot,
   CreateManualModelInput,
   ModelsEnabledFilter,
+  PersistedDraftScopes,
   ProviderChannel,
   ProviderModel,
   SaveChannelDraftInput,
@@ -38,6 +39,22 @@ export class RevisionConflictError extends Error {
   constructor() {
     super(t("models.error.revisionConflict"));
     this.name = "RevisionConflictError";
+  }
+}
+
+export class PartialDraftSaveError extends Error {
+  readonly persisted: PersistedDraftScopes;
+  readonly savedChannel: ProviderChannel | null;
+
+  constructor(
+    message: string,
+    persisted: PersistedDraftScopes,
+    savedChannel: ProviderChannel | null,
+  ) {
+    super(message);
+    this.name = "PartialDraftSaveError";
+    this.persisted = persisted;
+    this.savedChannel = savedChannel;
   }
 }
 
@@ -190,13 +207,6 @@ export async function saveChannelDraft(input: SaveChannelDraftInput): Promise<Pr
       throw new Error(t("models.error.confirmInsecureSave"));
     }
 
-    const existing = channelsSignal();
-    const alreadySaved = existing.find((ch) => ch.id === input.id);
-    if (alreadySaved) {
-      selectedIdSignal.set(alreadySaved.id);
-      return alreadySaved;
-    }
-
     const inputModels = input.models ?? [];
     for (const model of inputModels) {
       if (
@@ -207,59 +217,143 @@ export async function saveChannelDraft(input: SaveChannelDraftInput): Promise<Pr
       }
     }
 
+    const existing = channelsSignal();
+    const alreadySaved = existing.find((ch) => ch.id === input.id) ?? null;
     const tokenValue = input.credential?.trim() || null;
+
+    let channelPersisted = alreadySaved !== null || Boolean(input.persistedScopes?.channel);
+    let credentialPersisted = Boolean(input.persistedScopes?.credential);
+    let savedChannel: ProviderChannel | null = alreadySaved;
+
+    if (tokenValue !== null && !credentialPersisted) {
+      try {
+        await writeSecret(input.id, tokenValue);
+        credentialPersisted = true;
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : t("models.error.saveChannel");
+        throw new PartialDraftSaveError(
+          t("models.error.savePartialCredentialFailed", { detail }),
+          { channel: channelPersisted, credential: credentialPersisted, models: false },
+          savedChannel,
+        );
+      }
+    }
+
     const timestamp = nowIso();
     const maxSortOrder = existing.reduce((max, ch) => Math.max(max, ch.sortOrder), -1);
+    const channelRecord: ProviderChannel = alreadySaved
+      ? {
+          ...alreadySaved,
+          displayName,
+          adapterId: input.adapterId,
+          baseUrl: urlCheck.normalizedBaseUrl,
+          hasCredential: tokenValue !== null ? true : alreadySaved.hasCredential,
+          enabled: input.enabled,
+          insecureHttpConfirmedAt: urlCheck.isInsecureHttp
+            ? (alreadySaved.insecureHttpConfirmedAt ?? timestamp)
+            : null,
+          modelsLastSyncedAt: input.modelsLastSyncedAt ?? alreadySaved.modelsLastSyncedAt,
+          modelsLastSyncError:
+            input.modelsLastSyncError !== undefined
+              ? input.modelsLastSyncError
+              : alreadySaved.modelsLastSyncError,
+          updatedAt: timestamp,
+        }
+      : {
+          id: input.id,
+          presetId: input.presetId,
+          displayName,
+          adapterId: input.adapterId,
+          baseUrl: urlCheck.normalizedBaseUrl,
+          hasCredential: tokenValue !== null,
+          enabled: input.enabled,
+          sortOrder: maxSortOrder + 1,
+          revision: 1,
+          insecureHttpConfirmedAt: urlCheck.isInsecureHttp ? timestamp : null,
+          modelsLastSyncedAt: input.modelsLastSyncedAt ?? null,
+          modelsLastSyncError: input.modelsLastSyncError ?? null,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        };
 
-    const created: ProviderChannel = {
-      id: input.id,
-      presetId: input.presetId,
-      displayName,
-      adapterId: input.adapterId,
-      baseUrl: urlCheck.normalizedBaseUrl,
-      hasCredential: tokenValue !== null,
-      enabled: input.enabled,
-      sortOrder: maxSortOrder + 1,
-      revision: 1,
-      insecureHttpConfirmedAt: urlCheck.isInsecureHttp ? timestamp : null,
-      modelsLastSyncedAt: input.modelsLastSyncedAt ?? null,
-      modelsLastSyncError: input.modelsLastSyncError ?? null,
-      createdAt: timestamp,
-      updatedAt: timestamp,
-    };
+    const channelNeedsWrite =
+      alreadySaved === null ||
+      alreadySaved.displayName !== displayName ||
+      alreadySaved.adapterId !== input.adapterId ||
+      alreadySaved.baseUrl !== urlCheck.normalizedBaseUrl ||
+      alreadySaved.enabled !== input.enabled ||
+      alreadySaved.hasCredential !== channelRecord.hasCredential;
+
+    const nextChannels = alreadySaved
+      ? existing.map((ch) => (ch.id === alreadySaved.id ? channelRecord : ch))
+      : sortChannels([...existing, channelRecord]);
+
+    try {
+      if (channelNeedsWrite) {
+        await persistProviders(nextChannels);
+      }
+      channelPersisted = true;
+      savedChannel = channelRecord;
+      if (channelNeedsWrite) {
+        channelsSignal.set(nextChannels);
+      }
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : t("models.error.saveChannel");
+      const message = credentialPersisted
+        ? t("models.error.savePartialChannelWithCredential", { detail })
+        : t("models.error.saveChannel");
+      throw new PartialDraftSaveError(
+        message,
+        { channel: channelPersisted, credential: credentialPersisted, models: false },
+        savedChannel,
+      );
+    }
 
     const existingModels = modelsSignal();
     const existingIds = new Set(existingModels.map((m) => m.id));
+    const existingChannelKeys = new Set(
+      existingModels.filter((m) => m.providerId === channelRecord.id).map((m) => m.modelKey),
+    );
     const seenKeys = new Set<string>();
     const appendedModels: ProviderModel[] = [];
     for (const model of inputModels) {
-      if (existingIds.has(model.id) || seenKeys.has(model.modelKey)) continue;
+      if (
+        existingIds.has(model.id) ||
+        existingChannelKeys.has(model.modelKey) ||
+        seenKeys.has(model.modelKey)
+      ) {
+        continue;
+      }
       seenKeys.add(model.modelKey);
       appendedModels.push({
         ...model,
-        providerId: created.id,
+        providerId: channelRecord.id,
       });
     }
     const nextModels =
       appendedModels.length > 0 ? [...existingModels, ...appendedModels] : existingModels;
 
-    const nextChannels = sortChannels([...existing, created]);
-    if (tokenValue !== null) {
-      await writeSecret(created.id, tokenValue);
-    }
-    await persistProviders(nextChannels);
     if (appendedModels.length > 0) {
-      await persistModels(nextModels);
+      try {
+        await persistModels(nextModels);
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : t("models.error.saveChannel");
+        selectedIdSignal.set(channelRecord.id);
+        throw new PartialDraftSaveError(
+          t("models.error.savePartialModelsFailed", { detail }),
+          { channel: true, credential: credentialPersisted, models: false },
+          savedChannel,
+        );
+      }
     }
 
     batch(() => {
-      channelsSignal.set(nextChannels);
       if (appendedModels.length > 0) {
         modelsSignal.set(nextModels);
       }
-      selectedIdSignal.set(created.id);
+      selectedIdSignal.set(channelRecord.id);
     });
-    return created;
+    return channelRecord;
   });
 }
 

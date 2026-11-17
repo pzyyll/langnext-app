@@ -8,4 +8,8 @@ case "$(uname -s)" in
   Linux) target=linux ;;
   *) echo "Unsupported desktop platform" >&2; exit 1 ;;
 esac
-nsh test . --target "$target" "$@"
+
+shopt -s globstar nullglob
+for file in *.test.tsx features/**/*.test.tsx; do
+  nsh test "$file" --target "$target" "$@"
+done

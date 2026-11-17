@@ -64,6 +64,12 @@ export interface ProviderModel {
   updatedAt: string;
 }
 
+export interface PersistedDraftScopes {
+  channel: boolean;
+  credential: boolean;
+  models: boolean;
+}
+
 export interface SaveChannelDraftInput {
   id: string;
   presetId: ProviderPresetId;
@@ -76,6 +82,7 @@ export interface SaveChannelDraftInput {
   models?: ProviderModel[];
   modelsLastSyncedAt?: string | null;
   modelsLastSyncError?: string | null;
+  persistedScopes?: Partial<PersistedDraftScopes>;
 }
 
 export interface UpdateChannelInput {

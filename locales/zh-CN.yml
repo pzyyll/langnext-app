@@ -194,6 +194,9 @@ models:
     renameChannel: 无法重命名渠道。
     deleteChannel: 无法删除渠道。
     saveChannel: 无法保存渠道。
+    savePartialCredentialFailed: "无法保存 API 密钥，渠道设置和模型尚未保存（%{detail}）。"
+    savePartialChannelWithCredential: "API 密钥已保存，但渠道设置和模型未能保存（%{detail}）。"
+    savePartialModelsFailed: "渠道设置已保存，但模型列表未能保存。可重试保存，或取消以放弃未保存的模型（%{detail}）。"
     channelStatus: 无法更新渠道状态。
 protocol:
   error:

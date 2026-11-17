@@ -194,6 +194,9 @@ models:
     renameChannel: Could not rename channel.
     deleteChannel: Could not delete channel.
     saveChannel: Could not save channel.
+    savePartialCredentialFailed: "Could not save the API key; channel settings and models remain unsaved (%{detail})."
+    savePartialChannelWithCredential: "API key was saved, but channel settings and models could not be saved (%{detail})."
+    savePartialModelsFailed: "Channel settings were saved, but the models could not be saved. Retry Save or Cancel to discard unsaved models (%{detail})."
     channelStatus: Could not update channel status.
 protocol:
   error:

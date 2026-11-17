@@ -11,7 +11,12 @@ import {
   createManualProviderModel,
   mergeDiscoveredCatalog,
 } from "./model-collection";
-import type { CapabilityOverrides, ProviderModel, SyncModelsResult } from "./types";
+import type {
+  CapabilityOverrides,
+  PersistedDraftScopes,
+  ProviderModel,
+  SyncModelsResult,
+} from "./types";
 
 export interface AddModelDraftInput {
   modelKey: string;
@@ -57,6 +62,8 @@ export interface ChannelDraft {
   updateModel: (input: UpdateModelDraftInput) => ProviderModel;
   setModelEnabled: (modelId: string, enabled: boolean) => void;
   deleteModels: (modelIds: string[]) => number;
+  persistedScopes: () => PersistedDraftScopes;
+  markPersistedScopes: (scopes: Partial<PersistedDraftScopes>) => void;
   dispose: () => void;
 }
 
@@ -65,6 +72,11 @@ export function createChannelDraft(presetId: ProviderPresetId): ChannelDraft {
   const preset = getProviderPreset(presetId);
   const id = crypto.randomUUID();
   let disposed = false;
+  const persisted = signal<PersistedDraftScopes>({
+    channel: false,
+    credential: false,
+    models: false,
+  });
   const displayName = signal(getProviderPresetLabel(presetId));
   const adapterId = signal<AdapterId>(preset.defaultAdapterId);
   const baseUrl = signal(preset.defaultBaseUrl ?? "");
@@ -90,7 +102,12 @@ export function createChannelDraft(presetId: ProviderPresetId): ChannelDraft {
       }
     },
     credential: () => credential(),
-    setCredential: (value) => credential.set(value),
+    setCredential: (value) => {
+      credential.set(value);
+      if (persisted().credential) {
+        persisted.set({ ...persisted(), credential: false });
+      }
+    },
     allowInsecureHttp: () => allowInsecureHttp(),
     setAllowInsecureHttp: (value) => allowInsecureHttp.set(value),
     enabled: () => enabled(),
@@ -167,6 +184,11 @@ export function createChannelDraft(presetId: ProviderPresetId): ChannelDraft {
       const next = prev.filter((m) => !idSet.has(m.id));
       models.set(next);
       return prev.length - next.length;
+    },
+    persistedScopes: () => persisted(),
+    markPersistedScopes: (scopes) => {
+      if (disposed) return;
+      persisted.set({ ...persisted(), ...scopes });
     },
     dispose: () => {
       disposed = true;

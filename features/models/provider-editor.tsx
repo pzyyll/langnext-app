@@ -24,6 +24,7 @@ import {
   deleteChannel,
   deleteModelsBulk,
   discoverModelsSnapshot,
+  PartialDraftSaveError,
   renameChannel,
   RevisionConflictError,
   saveChannelDraft,
@@ -337,11 +338,18 @@ export function ProviderEditor(props: ProviderEditorProps) {
         models: draftModels,
         modelsLastSyncedAt: lastSyncedAt,
         modelsLastSyncError: lastSyncError,
+        persistedScopes: draft.persistedScopes(),
       });
+      draft.markPersistedScopes({ channel: true, models: true });
       toast.success(t("models.channel.added", { name: saved.displayName }));
       props.onDraftSaved(saved);
     } catch (error) {
-      saveError.set(error instanceof Error ? error.message : t("models.error.saveChannel"));
+      if (error instanceof PartialDraftSaveError) {
+        draft.markPersistedScopes(error.persisted);
+      }
+      const message = error instanceof Error ? error.message : t("models.error.saveChannel");
+      saveError.set(message);
+      toast.error(message);
     } finally {
       saving.set(false);
     }
