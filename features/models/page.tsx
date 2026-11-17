@@ -176,13 +176,18 @@ export function ModelsPage(props: ModelsPageProps) {
             }
           >
             {(channel) => (
-              <ProviderEditor
-                mode="saved"
-                channel={channel()}
-                models={modelsStore.modelsForSelectedChannel()}
-                enabledFilter={modelsStore.enabledFilter()}
-                onEnabledFilterChange={(filter) => void setEnabledFilter(filter)}
-              />
+              // Native inputs and editor state belong to one channel, not the shared detail pane.
+              <Each of={[channel()]} key={(item) => item.id}>
+                {(activeChannel) => (
+                  <ProviderEditor
+                    mode="saved"
+                    channel={activeChannel()}
+                    models={modelsStore.modelsForSelectedChannel()}
+                    enabledFilter={modelsStore.enabledFilter()}
+                    onEnabledFilterChange={(filter) => void setEnabledFilter(filter)}
+                  />
+                )}
+              </Each>
             )}
           </If>
         }

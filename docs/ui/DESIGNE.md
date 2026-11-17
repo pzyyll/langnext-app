@@ -282,7 +282,9 @@ nesting scroll views.
   rename, enabled `Switch`, hairline divider, and quiet destructive-hover delete
   trigger), followed by scrollable `Connection` and `Models` cards
   (`rounded-xl border border-border bg-card`, `p-5` on normal and `p-4` on narrow
-  viewports).
+  viewports). The saved editor is keyed by channel ID. A channel switch disposes
+  the old editor and its native controls. Updates to the same channel keep the
+  editor and its pending connection edits.
 - **Connection card**: Groups `API Type` and `Base URL` on one row on desktop
   (`>= 860` points) and `API Key` below, placing `Test`, inline `Unsaved` badge,
   and contextual `Cancel` / `Save` actions directly in the `Connection` header so
@@ -336,6 +338,7 @@ nesting scroll views.
 | Switch and Checkbox state | Native track/box transition (`navigationFeedback`) + thumb slide (`switchThumb`, 150 ms, ease-out) | Instant |
 | Select popup, Tooltip, Provider picker, and Discard confirmation | Native popup/tooltip transitions (`popup`, `tooltip`, 150 ms) and dialog fade (`dialogAnimation` / `aboutDialog`) | Instant |
 | Avatar icon fallback and image load | Provider picker preset icons render statically inside `Avatar` fallback (no transition); `Avatar` image loads use native opacity transition (`avatarImage`, 150 ms, ease-out) | Instant |
+| Saved channel changes | Replace the detail editor immediately, with no cross-fade: connection fields must show only the selected channel. Keep the existing rail selection feedback. | Instant |
 | Draft entry and leave/discard transitions | Picker closes via `dialogAnimation` and immediately reveals right-pane draft with focus on `Display Name`; discard confirmation opens via `dialogAnimation` and keeps or clears draft immediately on decision | Instant |
 | Toast notifications | Native `ToastStack` / `Toast` slide & fade (`toast` motion tokens, auto-hide 3.5 s, swipe-to-dismiss) | Instant fade/no slide |
 | Connection dirty actions, remote test/sync, model list updates, search/filter updates | `Cancel` / `Save` and model row updates apply immediately; spinner/status labels swap immediately (`Test…` / `Fetching…` / `Saving…`) | No change |
@@ -350,6 +353,20 @@ nesting scroll views.
 - **Adjustments made from visual and hit-test review**: Widened the Channels rail to `w-56` on normal desktop widths (`w-48` under `860` points) and scoped reorder arrows to the selected channel row so names avoid early truncation; tightened `< 860` card/editor padding (`p-4`) and folded `API Type` into the model subtitle at narrow widths so `Get models` and model rows wrap and fit cleanly at `720 × 520`; updated `ToastViewport` (`components/ui/toast.tsx`) to `inset-x-0 bottom-4 items-center pointer-events-none` on `Overlay` and `pointer-events-none` on `ToastStack`/`Toast` with `pointer-events-auto` on the Dismiss button so bottom-centered toasts never block clicks on underlying navigation or table checkboxes on Windows.
 - **Keyboard, reduced motion, and accessibility**: Verified on Windows (`--target windows`) that `<Input>` auto-focus moves cleanly into draft `Display Name` and dialog primary fields, `Return` submits dialog inputs, `Escape` dismisses `AddModelDialog` and `EditModelDialog` even while inputs hold focus, focus restores to triggers after dialog dismissal (with `ViewRef.focus()` `Tab`/Space button activation noted by NSH 0.5.1 as `(macOS, the web)`), and `reducedMotion: true` passes functionally without blocking dialog/toast state transitions. All interactive buttons, icon triggers, switches, checkboxes, and dialogs expose localized `accessibilityLabel` strings via `t()`. Frame-by-frame motion timing and interactive Windows Narrator screen-reader speech remain manual verification items in an interactive Windows desktop session (`UIAutomationClient` inspection against the non-interactive CLI session's detached `nsh dev` host exposed no interactive desktop UIA subtree from the automation context).
 - **Provider picker Avatar validation**: Verified `components/ui/avatar.tsx` (wrapping `nsh/base`'s `Avatar`) in `AddChannelDialog` via `mise run verify` (78/78 headless tests passed), `nsh test features/models/channels.test.tsx --target windows` (36/36 Windows desktop tests passed), and Windows desktop PNG screenshots in Light (`zh-CN`, rest & hover at `1040 × 720` and compact `720 × 520`) and Dark (`en`, rest & hover at `1040 × 720`). Confirmed circular `rounded-full` `bg-muted` clipping, centered `foreground`-tinted SVG marks, contrast in both themes, decorative `accessibilityLabel=""` (0 labeled `role:image` nodes, 5 accessible preset buttons), and hover washes. Held press state, remote `src` image loading fade, and screen-reader speech remain unverified in this pass.
+
+### Channel-switch validation
+
+- `mise run verify` passed: formatting, lint, type checks, 94 headless tests,
+  and the release bundle. Windows runs passed all 41 channel tests, 7 model
+  tests, and 2 temporary visual checks.
+- Windows screenshots in light and dark, at `1040 × 720` and `720 × 520`,
+  show one URL value and one credential placeholder after repeated switches
+  with unsaved inputs. Radius, typography, spacing, alignment, and color stay
+  consistent with the existing controls. The dark checks use reduced motion.
+- Selection and the immediate detail swap passed. Connection fields, model
+  rows, search reset, credential read-only state, and same-channel edit retention
+  passed. Hover and pressed styles are unchanged; held presses, frame-by-frame
+  motion, and screen-reader speech were not checked in this pass.
 
 ## Theme Colors
 ```css

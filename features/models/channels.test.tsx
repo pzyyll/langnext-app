@@ -86,6 +86,101 @@ test("provider channels: rail subtitle shows the provider, not the API type", as
   expect(app.shows("id:channel-item-ch-deepseek >> text:Anthropic Messages")).toBe(false);
 });
 
+test("provider channels: repeated saved channel switches isolate connection fields and models", async () => {
+  const openai = makeChannel();
+  const deepseek = makeChannel({
+    id: "ch-deepseek",
+    presetId: "deepseek",
+    displayName: "DeepSeek Main",
+    adapterId: "openai-compatible",
+    baseUrl: "https://api.deepseek.com",
+    hasCredential: false,
+    sortOrder: 1,
+  });
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: makeSeedStorage({
+      channels: [openai, deepseek],
+      models: [
+        makeModel({ modelKey: "gpt-4o" }),
+        makeModel({
+          id: "m-deepseek",
+          providerId: deepseek.id,
+          modelKey: "deepseek-chat",
+          sourceAdapterId: "openai-compatible",
+        }),
+      ],
+      credentials: { [openai.id]: "sk-openai" },
+    }),
+  });
+  await app.waitFor("id:model-row-gpt-4o");
+  const storageBefore = app.storage();
+
+  for (const channel of [deepseek, openai, deepseek, openai]) {
+    // Leave unsaved input and search state in the editor that is about to go away.
+    await app.clear("id:connection-url-input");
+    await app.type("id:connection-url-input", "https://unsaved.example.com/v1");
+    await app.type("id:connection-token-input", "sk-unsaved");
+    await app.type("id:models-search-input", "no-match");
+    await app.press(`id:channel-item-${channel.id}`);
+    await app.waitUntil(() => app.value("id:connection-url-input") === channel.baseUrl);
+
+    expect(app.count("id:provider-editor")).toBe(1);
+    expect(app.count("id:connection-card")).toBe(1);
+    expect(app.count("id:models-card")).toBe(1);
+    expect(app.count("id:connection-url-input")).toBe(1);
+    expect(app.count("id:connection-token-input")).toBe(1);
+    expect(app.value("id:connection-token-input")).toBe("");
+    expect(app.value("id:models-search-input")).toBe("");
+    expect(app.shows("id:save-channel-button")).toBe(false);
+    expect(app.shows("id:model-row-gpt-4o")).toBe(channel.id === openai.id);
+    expect(app.shows("id:model-row-deepseek-chat")).toBe(channel.id === deepseek.id);
+    expect(app.shows("id:provider-editor >> text:OpenAI Responses")).toBe(channel.id === openai.id);
+    expect(app.shows("id:provider-editor >> text:OpenAI Chat Completions")).toBe(
+      channel.id === deepseek.id,
+    );
+    expect(app.shows("text:Stored token retained (type to replace)")).toBe(channel.hasCredential);
+    expect(app.shows("text:Paste API key")).toBe(!channel.hasCredential);
+  }
+
+  // A cleared credential must not leave the next channel's field read-only.
+  await app.press("id:clear-token-button");
+  expect(app.enabled("id:connection-token-input")).toBe(false);
+  await app.press(`id:channel-item-${deepseek.id}`);
+  expect(app.enabled("id:connection-token-input")).toBe(true);
+  expect(app.storage()).toEqual(storageBefore);
+  expect(app.requests()).toHaveLength(0);
+});
+
+test("provider channels: same-channel updates retain pending connection edits", async () => {
+  const channel = makeChannel();
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: makeSeedStorage({
+      channels: [channel],
+      models: [makeModel()],
+      credentials: { [channel.id]: "sk-openai" },
+    }),
+  });
+  await app.waitFor("id:model-row-gpt-4o");
+  await app.clear("id:connection-url-input");
+  await app.type("id:connection-url-input", "https://unsaved.example.com/v1");
+  await app.type("id:connection-token-input", "sk-replacement");
+  await app.type("id:models-search-input", "gpt");
+
+  await app.press("id:channel-enabled-switch");
+  await app.waitUntil(() => JSON.parse(app.storage()[PROVIDERS_STORAGE_KEY]!)[0].enabled === false);
+
+  expect(app.count("id:provider-editor")).toBe(1);
+  expect(app.value("id:connection-url-input")).toBe("https://unsaved.example.com/v1");
+  expect(app.value("id:connection-token-input")).toBe("sk-replacement");
+  expect(app.value("id:models-search-input")).toBe("gpt");
+  expect(app.shows("id:save-channel-button")).toBe(true);
+  expect(app.shows("id:model-row-gpt-4o")).toBe(true);
+  expect(app.storage()[credentialStorageKey(channel.id)]).toBe("sk-openai");
+  expect(app.requests()).toHaveLength(0);
+});
+
 test("provider channels: Gemini has one fixed default API", async () => {
   const app = await open(APP_ENTRY, {
     ...viewport,
