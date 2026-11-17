@@ -297,6 +297,17 @@ test("tests connection and syncs remote models while preserving overrides and ma
   expect(antRequests.length).toBe(2);
   expect(antRequests[0]!.headers["anthropic-version"]).toBe("2023-06-01");
   expect(antRequests[0]!.headers["x-api-key"]).toBe("sk-openai-secret");
+  expect(app.count("id:model-row-gpt-4o")).toBe(1);
+  expect(app.shows("id:model-row-gpt-4o >> text:Custom GPT-4o")).toBe(true);
+
+  const modelsAfterResync = JSON.parse(app.storage()[MODELS_STORAGE_KEY]!) as ProviderModel[];
+  const keptAfterResync = modelsAfterResync.filter((m) => m.modelKey === "gpt-4o");
+  expect(keptAfterResync).toHaveLength(1);
+  expect(keptAfterResync[0]!.id).toBe(kept?.id);
+  expect(keptAfterResync[0]!.displayNameOverride).toBe("Custom GPT-4o");
+  expect(keptAfterResync[0]!.capabilitiesOverride?.pdf).toBe(true);
+  expect(keptAfterResync[0]!.enabled).toBe(true);
+
   expect(
     app.shows("id:model-row-claude-sonnet-4-20250514 >> text:Default (OpenAI Chat Completions)"),
   ).toBe(true);

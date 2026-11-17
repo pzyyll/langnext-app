@@ -1,4 +1,5 @@
 import { expect, test } from "nsh/test";
+import { createChannelDraft } from "./channel-draft";
 import { inspectBaseUrl } from "./connection";
 import {
   formatModelApiTypeDisplay,
@@ -135,4 +136,93 @@ test("provider channels: clearing override restores dynamic channel default inhe
   expect(formatModelApiTypeDisplay(cleared, "openai-compatible")).toBe(
     "Default (OpenAI Chat Completions)",
   );
+});
+
+test("provider channels: draft catalog merge deduplicates by model ID and preserves edits", () => {
+  const draft = createChannelDraft("deepseek");
+  const baseCapabilities = { text: true, image: false, pdf: false, video: false };
+
+  draft.addManualModel({
+    modelKey: "manual-local",
+    displayNameOverride: "Local",
+    apiTypeOverride: null,
+    enabled: true,
+  });
+
+  draft.applyDiscoveredModels(
+    [
+      {
+        modelKey: "deepseek-chat",
+        displayName: "DeepSeek Chat",
+        capabilities: baseCapabilities,
+        contextLimit: 64_000,
+        maxTokens: 4096,
+      },
+      {
+        modelKey: "legacy-ds",
+        displayName: "Legacy DS",
+        capabilities: baseCapabilities,
+        contextLimit: null,
+        maxTokens: null,
+      },
+    ],
+    "openai-compatible",
+  );
+
+  const chatModel = draft.models().find((m) => m.modelKey === "deepseek-chat")!;
+  draft.setModelEnabled(chatModel.id, true);
+  draft.updateModel({
+    id: chatModel.id,
+    displayNameOverride: "Custom DS",
+    apiTypeOverride: "anthropic",
+    capabilitiesOverride: { pdf: true },
+    contextLimit: 128_000,
+    maxTokens: 8192,
+  });
+
+  expect(() =>
+    draft.addManualModel({
+      modelKey: "deepseek-chat",
+      displayNameOverride: null,
+      apiTypeOverride: "openai-responses",
+      enabled: false,
+    }),
+  ).toThrow();
+
+  const resyncSummary = draft.applyDiscoveredModels(
+    [
+      {
+        modelKey: "deepseek-chat",
+        displayName: "DeepSeek V4",
+        capabilities: baseCapabilities,
+        contextLimit: 64_000,
+        maxTokens: 4096,
+      },
+      {
+        modelKey: "deepseek-reasoner",
+        displayName: "DeepSeek R1",
+        capabilities: baseCapabilities,
+        contextLimit: null,
+        maxTokens: null,
+      },
+    ],
+    "openai-responses",
+  );
+
+  expect(resyncSummary).toEqual({
+    discoveredCount: 2,
+    addedCount: 1,
+    updatedCount: 1,
+    missingCount: 1,
+  });
+  expect(draft.models().filter((m) => m.modelKey === "deepseek-chat")).toHaveLength(1);
+
+  const keptChat = draft.models().find((m) => m.modelKey === "deepseek-chat")!;
+  expect(keptChat.id).toBe(chatModel.id);
+  expect(keptChat.enabled).toBe(true);
+  expect(keptChat.displayNameOverride).toBe("Custom DS");
+  expect(keptChat.apiTypeOverride).toBe("anthropic");
+  expect(keptChat.contextLimit).toBe(128_000);
+  expect(draft.models().find((m) => m.modelKey === "legacy-ds")?.syncStatus).toBe("missing");
+  expect(draft.models().find((m) => m.modelKey === "manual-local")?.syncStatus).toBe("active");
 });

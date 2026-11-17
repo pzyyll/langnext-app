@@ -4,8 +4,12 @@ import { listRemoteModels, testAdapterConnection } from "../../services/protocol
 import { getProviderPreset, isProtocolAllowedForPreset } from "../../services/protocols/presets";
 import type { AdapterRequestParams, DiscoveredRemoteModel } from "../../services/protocols/types";
 import { inspectBaseUrl } from "./connection";
+import {
+  applyModelConfigUpdate,
+  createManualProviderModel,
+  mergeDiscoveredCatalog,
+} from "./model-collection";
 import type {
-  CapabilityFlags,
   ConnectionSnapshot,
   CreateManualModelInput,
   ModelsEnabledFilter,
@@ -53,10 +57,6 @@ function withWriteLock<T>(task: () => Promise<T>): Promise<T> {
 
 function nowIso(): string {
   return new Date().toISOString();
-}
-
-function defaultCapabilities(): CapabilityFlags {
-  return { text: true, image: false, pdf: false, video: false };
 }
 
 function isEnabledFilter(value: string | null): value is ModelsEnabledFilter {
@@ -492,78 +492,17 @@ export async function syncChannelModels(
   return withWriteLock(async () => {
     const timestamp = nowIso();
     const allModels = modelsSignal();
-    const otherModels = allModels.filter(
-      (m) => !(m.providerId === providerId && m.sourceAdapterId === syncAdapterId),
-    );
-    const targetModels = allModels.filter(
-      (m) => m.providerId === providerId && m.sourceAdapterId === syncAdapterId,
-    );
+    const otherModels = allModels.filter((m) => m.providerId !== providerId);
+    const channelModels = allModels.filter((m) => m.providerId === providerId);
+    const merged = mergeDiscoveredCatalog({
+      existingChannelModels: channelModels,
+      providerId,
+      sourceAdapterId: syncAdapterId,
+      discovered,
+      timestamp,
+    });
 
-    const existingByKey = new Map<string, ProviderModel>();
-    for (const model of targetModels) {
-      existingByKey.set(model.modelKey, model);
-    }
-
-    const seenKeys = new Set<string>();
-    const mergedTargetModels: ProviderModel[] = [];
-    let addedCount = 0;
-    let updatedCount = 0;
-
-    for (const remote of discovered) {
-      seenKeys.add(remote.modelKey);
-      const prev = existingByKey.get(remote.modelKey);
-      if (prev) {
-        updatedCount += 1;
-        mergedTargetModels.push({
-          ...prev,
-          displayName: remote.displayName ?? prev.displayName,
-          capabilities: remote.capabilities,
-          contextLimit: prev.contextLimit ?? remote.contextLimit,
-          maxTokens: prev.maxTokens ?? remote.maxTokens,
-          syncStatus: "active",
-          lastSeenAt: timestamp,
-          updatedAt: timestamp,
-        });
-      } else {
-        addedCount += 1;
-        mergedTargetModels.push({
-          id: crypto.randomUUID(),
-          providerId,
-          modelKey: remote.modelKey,
-          sourceAdapterId: syncAdapterId,
-          origin: "remote",
-          syncStatus: "active",
-          enabled: false,
-          displayName: remote.displayName,
-          displayNameOverride: null,
-          apiTypeOverride: null,
-          capabilities: remote.capabilities,
-          capabilitiesOverride: null,
-          contextLimit: remote.contextLimit,
-          maxTokens: remote.maxTokens,
-          lastSeenAt: timestamp,
-          createdAt: timestamp,
-          updatedAt: timestamp,
-        });
-      }
-    }
-
-    let missingCount = 0;
-    for (const prev of targetModels) {
-      if (seenKeys.has(prev.modelKey)) continue;
-      if (prev.origin === "manual") {
-        mergedTargetModels.push(prev);
-      } else {
-        missingCount += 1;
-        mergedTargetModels.push({
-          ...prev,
-          syncStatus: "missing",
-          updatedAt: timestamp,
-        });
-      }
-    }
-
-    const nextAllModels = [...otherModels, ...mergedTargetModels];
+    const nextAllModels = [...otherModels, ...merged.models];
     const nextChannels = channelsSignal().map((ch) =>
       ch.id === providerId
         ? {
@@ -582,12 +521,7 @@ export async function syncChannelModels(
       channelsSignal.set(nextChannels);
     });
 
-    return {
-      discoveredCount: discovered.length,
-      addedCount,
-      updatedCount,
-      missingCount,
-    };
+    return merged.summary;
   });
 }
 
@@ -604,55 +538,28 @@ export async function setModelEnabled(modelId: string, enabled: boolean): Promis
 
 export async function createManualModel(input: CreateManualModelInput): Promise<ProviderModel> {
   return withWriteLock(async () => {
-    const modelKey = input.modelKey.trim();
-    if (!modelKey) {
-      throw new Error(t("models.error.modelIdRequired"));
-    }
-
     const channel = channelsSignal().find((ch) => ch.id === input.providerId);
     if (!channel) {
       throw new Error(t("models.error.channelGone"));
     }
-    if (
-      input.apiTypeOverride !== null &&
-      !isProtocolAllowedForPreset(channel.presetId, input.apiTypeOverride)
-    ) {
-      throw new Error(t("models.error.unsupportedProtocol"));
-    }
 
-    const sourceAdapterId = input.apiTypeOverride ?? channel.adapterId;
-    const duplicate = modelsSignal().some(
-      (m) =>
-        m.providerId === input.providerId &&
-        m.modelKey === modelKey &&
-        m.sourceAdapterId === sourceAdapterId,
+    const existing = modelsSignal();
+    const channelModels = existing.filter((m) => m.providerId === input.providerId);
+    const created = createManualProviderModel(
+      channelModels,
+      {
+        providerId: input.providerId,
+        presetId: channel.presetId,
+        defaultAdapterId: channel.adapterId,
+        modelKey: input.modelKey,
+        displayNameOverride: input.displayNameOverride ?? null,
+        apiTypeOverride: input.apiTypeOverride,
+        enabled: input.enabled,
+      },
+      nowIso(),
     );
-    if (duplicate) {
-      throw new Error(t("models.error.modelDuplicate", { key: modelKey }));
-    }
 
-    const timestamp = nowIso();
-    const created: ProviderModel = {
-      id: crypto.randomUUID(),
-      providerId: input.providerId,
-      modelKey,
-      sourceAdapterId,
-      origin: "manual",
-      syncStatus: "active",
-      enabled: input.enabled,
-      displayName: null,
-      displayNameOverride: input.displayNameOverride?.trim() || null,
-      apiTypeOverride: input.apiTypeOverride,
-      capabilities: defaultCapabilities(),
-      capabilitiesOverride: null,
-      contextLimit: null,
-      maxTokens: null,
-      lastSeenAt: null,
-      createdAt: timestamp,
-      updatedAt: timestamp,
-    };
-
-    const nextModels = [...modelsSignal(), created];
+    const nextModels = [...existing, created];
     await persistModels(nextModels);
     modelsSignal.set(nextModels);
     return created;
@@ -667,25 +574,23 @@ export async function updateModelConfig(input: UpdateModelConfigInput): Promise<
       throw new Error(t("models.error.modelGone"));
     }
     const channel = channelsSignal().find((ch) => ch.id === target.providerId);
-    if (
-      input.apiTypeOverride !== null &&
-      channel &&
-      !isProtocolAllowedForPreset(channel.presetId, input.apiTypeOverride)
-    ) {
-      throw new Error(t("models.error.unsupportedProtocol"));
+    if (!channel) {
+      throw new Error(t("models.error.channelGone"));
     }
 
-    const updated: ProviderModel = {
-      ...target,
-      displayNameOverride: input.displayNameOverride?.trim() || null,
-      apiTypeOverride: input.apiTypeOverride,
-      capabilitiesOverride: input.capabilitiesOverride,
-      contextLimit: input.contextLimit,
-      maxTokens: input.maxTokens,
-      updatedAt: nowIso(),
-    };
-
-    const nextModels = existing.map((m) => (m.id === input.id ? updated : m));
+    const { updated, nextModels } = applyModelConfigUpdate(
+      existing,
+      {
+        id: input.id,
+        presetId: channel.presetId,
+        displayNameOverride: input.displayNameOverride ?? null,
+        apiTypeOverride: input.apiTypeOverride,
+        capabilitiesOverride: input.capabilitiesOverride,
+        contextLimit: input.contextLimit,
+        maxTokens: input.maxTokens,
+      },
+      nowIso(),
+    );
     await persistModels(nextModels);
     modelsSignal.set(nextModels);
     return updated;

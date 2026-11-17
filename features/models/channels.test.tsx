@@ -1,5 +1,6 @@
 import { expect, open, test } from "nsh/test";
 import { CREDENTIAL_KEY_PREFIX, MODELS_STORAGE_KEY, PROVIDERS_STORAGE_KEY } from "./store";
+import type { ProviderModel } from "./types";
 import {
   makeChannel,
   makeModel,
@@ -665,4 +666,181 @@ test("provider channels: Custom without URL saves locally but rejects network ac
       .some((t) => t.includes("Base URL is required before testing or fetching models.")),
   );
   expect(reopened.requests()).toHaveLength(0);
+});
+
+test("provider channels: resync preserves one configured model per ID", async () => {
+  const deepseek = makeChannel({
+    id: "ch-deepseek",
+    presetId: "deepseek",
+    displayName: "DeepSeek",
+    adapterId: "openai-compatible",
+    baseUrl: "https://api.deepseek.com",
+  });
+
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: makeSeedStorage({
+      channels: [deepseek],
+      credentials: { [deepseek.id]: "sk-ds-dummy" },
+    }),
+    network: {
+      "GET https://api.deepseek.com/models": {
+        status: 200,
+        body: { data: [{ id: "deepseek-chat", display_name: "DeepSeek Chat" }] },
+      },
+      "GET https://proxy.example.com/ds/models": {
+        status: 200,
+        body: { data: [{ id: "deepseek-chat", display_name: "DeepSeek V4" }] },
+      },
+    },
+  });
+
+  await app.press("id:get-models-button");
+  await app.waitFor("id:model-row-deepseek-chat");
+
+  await app.press("id:toggle-model-deepseek-chat");
+  await app.press("id:configure-model-deepseek-chat");
+  await app.waitFor("id:edit-model-dialog");
+  await app.type("id:edit-model-name-input", "DeepSeek Primary");
+  await app.press("id:edit-model-api-select");
+  await app.waitFor("role:option[Anthropic Messages]");
+  await app.press("role:option[Anthropic Messages]");
+  await app.type("id:edit-model-context-input", "128000");
+  await app.type("id:edit-model-max-tokens-input", "8192");
+  await app.press("id:confirm-edit-model");
+  await app.waitUntil(() => !app.shows("id:edit-model-dialog"));
+
+  await app.press("id:connection-adapter-select");
+  await app.waitFor("role:option[OpenAI Responses]");
+  await app.press("role:option[OpenAI Responses]");
+  await app.clear("id:connection-url-input");
+  await app.type("id:connection-url-input", "https://proxy.example.com/ds");
+
+  await app.press("id:get-models-button");
+  await app.waitUntil(() => app.requests().length === 2);
+
+  expect(app.count("id:model-row-deepseek-chat")).toBe(1);
+  expect(app.texts()).toContain("DeepSeek Primary");
+  expect(app.shows("id:model-row-deepseek-chat >> text:Anthropic Messages")).toBe(true);
+  expect(app.texts()).toContain("128K ctx");
+  expect(app.texts()).toContain("8192 out");
+
+  await app.press("id:models-filter-select");
+  await app.waitFor("role:option[Enabled]");
+  await app.press("role:option[Enabled]");
+  expect(app.count("id:model-row-deepseek-chat")).toBe(1);
+});
+
+test("provider channels: resync tracks missing, manual, duplicate IDs, and failed syncs across reopen", async () => {
+  const deepseek = makeChannel({
+    id: "ch-deepseek",
+    presetId: "deepseek",
+    displayName: "DeepSeek",
+    adapterId: "openai-compatible",
+    baseUrl: "https://api.deepseek.com",
+  });
+  const seededChat = makeModel({
+    id: "m-ds-chat",
+    providerId: deepseek.id,
+    modelKey: "deepseek-chat",
+    sourceAdapterId: "openai-compatible",
+    origin: "remote",
+    syncStatus: "active",
+    enabled: true,
+    displayName: "DeepSeek Chat",
+  });
+  const seededLegacy = makeModel({
+    id: "m-ds-legacy",
+    providerId: deepseek.id,
+    modelKey: "legacy-ds",
+    sourceAdapterId: "openai-compatible",
+    origin: "remote",
+    syncStatus: "active",
+    enabled: false,
+    displayName: "Legacy DS",
+  });
+  const seededManual = makeModel({
+    id: "m-ds-manual",
+    providerId: deepseek.id,
+    modelKey: "manual-custom",
+    sourceAdapterId: "openai-compatible",
+    origin: "manual",
+    syncStatus: "active",
+    enabled: true,
+    displayNameOverride: "Manual Custom",
+  });
+
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: makeSeedStorage({
+      channels: [deepseek],
+      models: [seededChat, seededLegacy, seededManual],
+      credentials: { [deepseek.id]: "sk-ds-dummy" },
+    }),
+    network: {
+      "GET https://api.deepseek.com/models": {
+        status: 200,
+        body: {
+          data: [
+            { id: "deepseek-chat", display_name: "DeepSeek Chat" },
+            { id: "deepseek-reasoner", display_name: "DeepSeek Reasoner" },
+          ],
+        },
+      },
+      "GET https://fail.deepseek.example.com/models": {
+        status: 500,
+        body: { error: { message: "Upstream catalog unavailable" } },
+      },
+    },
+  });
+
+  await app.press("id:get-models-button");
+  await app.waitFor("id:model-row-deepseek-reasoner");
+
+  expect(app.shows("id:model-row-legacy-ds >> text:Missing")).toBe(true);
+  expect(app.shows("id:model-row-manual-custom")).toBe(true);
+  expect(app.shows("id:model-row-manual-custom >> text:Missing")).toBe(false);
+
+  // Adding a manual duplicate ID under a different API override is rejected.
+  await app.press("id:add-model-button");
+  await app.waitFor("id:add-model-dialog");
+  await app.type("id:add-model-key-input", "deepseek-chat");
+  await app.press("id:add-model-api-select");
+  await app.waitFor("role:option[Anthropic Messages]");
+  await app.press("role:option[Anthropic Messages]");
+  await app.press("id:confirm-add-model");
+  await app.waitUntil(() =>
+    app.texts().some((t) => t.includes('Model "deepseek-chat" already exists in this channel.')),
+  );
+  expect(app.shows("id:add-model-dialog")).toBe(true);
+  expect(app.count("id:model-row-deepseek-chat")).toBe(1);
+  await app.press("id:add-model-dialog >> role:button[Cancel]");
+  await app.waitUntil(() => !app.shows("id:add-model-dialog"));
+
+  // A failed fetch preserves the current model list.
+  await app.clear("id:connection-url-input");
+  await app.type("id:connection-url-input", "https://fail.deepseek.example.com");
+  await app.press("id:get-models-button");
+  await app.waitUntil(() =>
+    app.texts().some((t) => t.includes("Provider returned server error (HTTP 500)")),
+  );
+
+  const reopened = await open(APP_ENTRY, {
+    ...viewport,
+    storage: app.storage(),
+  });
+  await reopened.waitFor("id:model-row-deepseek-reasoner");
+
+  expect(reopened.count("id:model-row-deepseek-chat")).toBe(1);
+  expect(reopened.shows("id:model-row-legacy-ds >> text:Missing")).toBe(true);
+  expect(reopened.shows("id:model-row-manual-custom")).toBe(true);
+  expect(reopened.shows("id:model-row-manual-custom >> text:Missing")).toBe(false);
+
+  const persisted = JSON.parse(reopened.storage()[MODELS_STORAGE_KEY]!) as ProviderModel[];
+  expect(persisted).toHaveLength(4);
+  expect(persisted.find((m) => m.modelKey === "deepseek-chat")?.id).toBe("m-ds-chat");
+  expect(persisted.find((m) => m.modelKey === "deepseek-chat")?.enabled).toBe(true);
+  expect(persisted.find((m) => m.modelKey === "deepseek-reasoner")?.enabled).toBe(false);
+  expect(persisted.find((m) => m.modelKey === "legacy-ds")?.syncStatus).toBe("missing");
+  expect(persisted.find((m) => m.modelKey === "manual-custom")?.syncStatus).toBe("active");
 });

@@ -1,13 +1,16 @@
 import { signal } from "nsh";
-import { t } from "nsh/i18n";
 import {
   getProviderPreset,
   getProviderPresetLabel,
-  isProtocolAllowedForPreset,
   type ProviderPresetId,
 } from "../../services/protocols/presets";
 import type { AdapterId, DiscoveredRemoteModel } from "../../services/protocols/types";
 import { inspectBaseUrl } from "./connection";
+import {
+  applyModelConfigUpdate,
+  createManualProviderModel,
+  mergeDiscoveredCatalog,
+} from "./model-collection";
 import type { CapabilityOverrides, ProviderModel, SyncModelsResult } from "./types";
 
 export interface AddModelDraftInput {
@@ -96,137 +99,50 @@ export function createChannelDraft(presetId: ProviderPresetId): ChannelDraft {
     setSyncError: (message) => modelsLastSyncError.set(message),
     applyDiscoveredModels: (discovered, sourceAdapterId) => {
       const timestamp = new Date().toISOString();
-      const existing = models();
-      const existingByKey = new Map(existing.map((m) => [m.modelKey, m]));
-      const seenKeys = new Set<string>();
-      const next: ProviderModel[] = [];
-      let addedCount = 0;
-      let updatedCount = 0;
-
-      for (const remote of discovered) {
-        seenKeys.add(remote.modelKey);
-        const prev = existingByKey.get(remote.modelKey);
-        if (prev) {
-          updatedCount += 1;
-          next.push({
-            ...prev,
-            sourceAdapterId,
-            displayName: remote.displayName ?? prev.displayName,
-            capabilities: remote.capabilities,
-            contextLimit: prev.contextLimit ?? remote.contextLimit,
-            maxTokens: prev.maxTokens ?? remote.maxTokens,
-            syncStatus: "active",
-            lastSeenAt: timestamp,
-            updatedAt: timestamp,
-          });
-        } else {
-          addedCount += 1;
-          next.push({
-            id: crypto.randomUUID(),
-            providerId: id,
-            modelKey: remote.modelKey,
-            sourceAdapterId,
-            origin: "remote",
-            syncStatus: "active",
-            enabled: false,
-            displayName: remote.displayName,
-            displayNameOverride: null,
-            apiTypeOverride: null,
-            capabilities: remote.capabilities,
-            capabilitiesOverride: null,
-            contextLimit: remote.contextLimit,
-            maxTokens: remote.maxTokens,
-            lastSeenAt: timestamp,
-            createdAt: timestamp,
-            updatedAt: timestamp,
-          });
-        }
-      }
-
-      let missingCount = 0;
-      for (const prev of existing) {
-        if (seenKeys.has(prev.modelKey)) continue;
-        if (prev.origin === "manual") {
-          next.push(prev);
-        } else {
-          missingCount += 1;
-          next.push({
-            ...prev,
-            syncStatus: "missing",
-            updatedAt: timestamp,
-          });
-        }
-      }
-
-      models.set(next);
+      const result = mergeDiscoveredCatalog({
+        existingChannelModels: models(),
+        providerId: id,
+        sourceAdapterId,
+        discovered,
+        timestamp,
+      });
+      models.set(result.models);
       modelsLastSyncedAt.set(timestamp);
       modelsLastSyncError.set(null);
-      return {
-        discoveredCount: discovered.length,
-        addedCount,
-        updatedCount,
-        missingCount,
-      };
+      return result.summary;
     },
     addManualModel: (input) => {
-      const modelKey = input.modelKey.trim();
-      if (!modelKey) {
-        throw new Error(t("models.error.modelIdRequired"));
-      }
-      if (
-        input.apiTypeOverride !== null &&
-        !isProtocolAllowedForPreset(presetId, input.apiTypeOverride)
-      ) {
-        throw new Error(t("models.error.unsupportedProtocol"));
-      }
-      if (models().some((m) => m.modelKey === modelKey)) {
-        throw new Error(t("models.error.modelDuplicate", { key: modelKey }));
-      }
-      const timestamp = new Date().toISOString();
-      const created: ProviderModel = {
-        id: crypto.randomUUID(),
-        providerId: id,
-        modelKey,
-        sourceAdapterId: input.apiTypeOverride ?? adapterId(),
-        origin: "manual",
-        syncStatus: "active",
-        enabled: input.enabled,
-        displayName: null,
-        displayNameOverride: input.displayNameOverride?.trim() || null,
-        apiTypeOverride: input.apiTypeOverride,
-        capabilities: { text: true, image: false, pdf: false, video: false },
-        capabilitiesOverride: null,
-        contextLimit: null,
-        maxTokens: null,
-        lastSeenAt: null,
-        createdAt: timestamp,
-        updatedAt: timestamp,
-      };
+      const created = createManualProviderModel(
+        models(),
+        {
+          providerId: id,
+          presetId,
+          defaultAdapterId: adapterId(),
+          modelKey: input.modelKey,
+          displayNameOverride: input.displayNameOverride,
+          apiTypeOverride: input.apiTypeOverride,
+          enabled: input.enabled,
+        },
+        new Date().toISOString(),
+      );
       models.set([...models(), created]);
       return created;
     },
     updateModel: (input) => {
-      const existing = models();
-      const target = existing.find((m) => m.id === input.id);
-      if (!target) {
-        throw new Error(t("models.error.modelGone"));
-      }
-      if (
-        input.apiTypeOverride !== null &&
-        !isProtocolAllowedForPreset(presetId, input.apiTypeOverride)
-      ) {
-        throw new Error(t("models.error.unsupportedProtocol"));
-      }
-      const updated: ProviderModel = {
-        ...target,
-        displayNameOverride: input.displayNameOverride?.trim() || null,
-        apiTypeOverride: input.apiTypeOverride,
-        capabilitiesOverride: input.capabilitiesOverride,
-        contextLimit: input.contextLimit,
-        maxTokens: input.maxTokens,
-        updatedAt: new Date().toISOString(),
-      };
-      models.set(existing.map((m) => (m.id === input.id ? updated : m)));
+      const { updated, nextModels } = applyModelConfigUpdate(
+        models(),
+        {
+          id: input.id,
+          presetId,
+          displayNameOverride: input.displayNameOverride,
+          apiTypeOverride: input.apiTypeOverride,
+          capabilitiesOverride: input.capabilitiesOverride,
+          contextLimit: input.contextLimit,
+          maxTokens: input.maxTokens,
+        },
+        new Date().toISOString(),
+      );
+      models.set(nextModels);
       return updated;
     },
     setModelEnabled: (modelId, nextEnabled) => {
