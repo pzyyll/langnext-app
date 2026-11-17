@@ -6,7 +6,7 @@ import { AppMenu } from "../components/app-menu";
 import { PageSurface } from "../components/layout/page-surface";
 import { Sidebar, type SidebarPage } from "../components/sidebar";
 import { ToastViewport } from "../components/ui/toast";
-import { ModelsPage } from "../features/models/page";
+import { ModelsPage, type NavigationLeaveGuard } from "../features/models/page";
 import { SettingsPage } from "../features/settings/page";
 import { transparency } from "../features/settings/transparency";
 
@@ -35,8 +35,28 @@ export function AppShell() {
   effect(() => win.set({ backdrop: transparency() ? "popover" : "none" }));
 
   const page = signal<SidebarPage>("models");
-  const selectModels = () => page.set("models");
-  const selectSettings = () => page.set("settings");
+  let activeLeaveGuard: NavigationLeaveGuard | null = null;
+
+  const registerLeaveGuard = (guard: NavigationLeaveGuard) => {
+    activeLeaveGuard = guard;
+    return () => {
+      if (activeLeaveGuard === guard) {
+        activeLeaveGuard = null;
+      }
+    };
+  };
+
+  const navigateTo = (nextPage: SidebarPage) => {
+    if (page() === nextPage) return;
+    const proceed = () => page.set(nextPage);
+    if (activeLeaveGuard && !activeLeaveGuard(proceed)) {
+      return;
+    }
+    proceed();
+  };
+
+  const selectModels = () => navigateTo("models");
+  const selectSettings = () => navigateTo("settings");
 
   return (
     <View class="flex-1 bg-sidebar" classList={{ "bg-sidebar/80": transparency() }}>
@@ -58,7 +78,7 @@ export function AppShell() {
         <Sidebar page={page()} onSelectModels={selectModels} onSelectSettings={selectSettings} />
         <If when={page() === "models"}>
           <PageSurface testID="models-page" layout="split">
-            <ModelsPage />
+            <ModelsPage onRegisterLeaveGuard={registerLeaveGuard} />
           </PageSurface>
         </If>
         <If when={page() === "settings"}>

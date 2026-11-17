@@ -1,4 +1,4 @@
-import { signal, Text, View } from "nsh";
+import { cleanup, signal, Text, View } from "nsh";
 import { t } from "nsh/i18n";
 import { Button } from "../../components/ui/button";
 import { ConfirmDialog } from "../../components/ui/dialog";
@@ -16,12 +16,29 @@ import {
   setEnabledFilter,
 } from "./store";
 
+export type NavigationLeaveGuard = (proceed: () => void) => boolean;
+
+interface ModelsPageProps {
+  onRegisterLeaveGuard?: (guard: NavigationLeaveGuard) => () => void;
+}
+
 /** Models workspace using a Channels master rail and Provider detail editor. */
-export function ModelsPage() {
+export function ModelsPage(props: ModelsPageProps) {
   const addChannelOpen = signal(false);
   const draft = signal<ChannelDraft | null>(null);
   const pendingDiscardAction = signal<{ run: () => void } | null>(null);
   let abortDraftWork: (() => void) | null = null;
+
+  if (props.onRegisterLeaveGuard) {
+    const unregister = props.onRegisterLeaveGuard((proceed) => {
+      if (draft() === null) {
+        return true;
+      }
+      pendingDiscardAction.set({ run: proceed });
+      return false;
+    });
+    cleanup(unregister);
+  }
 
   const registerDraftAbort = (abort: () => void) => {
     abortDraftWork = abort;
@@ -62,6 +79,10 @@ export function ModelsPage() {
     guardDraftLeave(() => {});
   };
 
+  const handleOpenAddChannel = () => {
+    guardDraftLeave(() => addChannelOpen.set(true));
+  };
+
   return (
     <>
       <ChannelsRail
@@ -71,7 +92,7 @@ export function ModelsPage() {
         error={modelsStore.channelsError()}
         onSelect={handleSelectChannel}
         onMove={(id, dir) => void moveChannel(id, dir)}
-        onAdd={() => addChannelOpen.set(true)}
+        onAdd={handleOpenAddChannel}
         onRetry={() => void loadModelsState()}
       />
 
@@ -91,7 +112,7 @@ export function ModelsPage() {
                   variant="primary"
                   size="md"
                   accessibilityLabel={t("models.channel.add")}
-                  onPress={() => addChannelOpen.set(true)}
+                  onPress={handleOpenAddChannel}
                 >
                   <Icon name="plus" tone="primary-foreground" class="size-4" />
                   <Text class="text-sm font-medium text-primary-foreground">

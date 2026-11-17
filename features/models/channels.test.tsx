@@ -1109,3 +1109,103 @@ test("provider channels: draft Cancel returns to previous channel or empty state
   expect(emptyApp.texts()).not.toContain("Empty Draft");
   expect(JSON.stringify(emptyApp.storage())).toBe(emptyStorageBefore);
 });
+
+test("provider channels: leaving Models waits for discard confirmation", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { "settings.language": "en" },
+  });
+
+  await startDraftFromEmptyState(app, "openai");
+  await app.clear("id:channel-name-input");
+  await app.type("id:channel-name-input", "Draft Before Nav");
+  await app.press("id:add-model-button");
+  await app.waitFor("id:add-model-dialog");
+  await app.type("id:add-model-key-input", "draft-guard-model");
+  await app.press("id:confirm-add-model");
+  await app.waitUntil(() => !app.shows("id:add-model-dialog"));
+
+  // Cancelling a model dialog does not trigger the page-level discard guard.
+  await app.press("id:add-model-button");
+  await app.waitFor("id:add-model-dialog");
+  await app.type("id:add-model-key-input", "cancelled-model");
+  await app.press("id:add-model-dialog >> role:button[Cancel]");
+  await app.waitUntil(() => !app.shows("id:add-model-dialog"));
+  expect(app.shows("id:discard-draft-dialog")).toBe(false);
+  expect(app.shows("id:model-row-draft-guard-model")).toBe(true);
+
+  const storageBefore = JSON.stringify(app.storage());
+
+  // Trying to leave Models keeps Models mounted behind the discard dialog.
+  await app.press("id:nav-settings");
+  await app.waitFor("id:discard-draft-dialog");
+  expect(app.shows("id:models-page")).toBe(true);
+
+  await app.press("id:discard-draft-dialog >> role:button[Cancel]");
+  await app.waitUntil(() => !app.shows("id:discard-draft-dialog"));
+  expect(app.shows("id:models-page")).toBe(true);
+  expect(app.value("id:channel-name-input")).toBe("Draft Before Nav");
+  expect(app.shows("id:model-row-draft-guard-model")).toBe(true);
+
+  await app.press("id:nav-settings");
+  await app.waitFor("id:discard-draft-dialog");
+  await app.press("id:discard-draft-dialog >> role:button[Discard]");
+  await app.waitUntil(() => !app.shows("id:discard-draft-dialog"));
+
+  await app.waitUntil(() => !app.shows("id:models-page"));
+  expect(app.texts()).not.toContain("Draft Before Nav");
+  expect(JSON.stringify(app.storage())).toBe(storageBefore);
+
+  // Returning to Models shows clean state with no active leave guard blocking exit.
+  await app.press("id:nav-models");
+  await app.waitFor("id:models-page");
+  expect(app.shows("id:empty-add-channel-button")).toBe(true);
+
+  await app.press("id:nav-settings");
+  await app.waitUntil(() => !app.shows("id:models-page"));
+  expect(app.shows("id:discard-draft-dialog")).toBe(false);
+});
+
+test("provider channels: starting another draft confirms discarding active draft", async () => {
+  const openai = makeChannel({ id: "ch-openai", presetId: "openai", displayName: "OpenAI Main" });
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: makeSeedStorage({
+      channels: [openai],
+      credentials: { [openai.id]: "sk-oai" },
+    }),
+  });
+
+  await startDraftFromRail(app, "deepseek");
+  await app.clear("id:channel-name-input");
+  await app.type("id:channel-name-input", "First Draft");
+  await app.press("id:add-model-button");
+  await app.waitFor("id:add-model-dialog");
+  await app.type("id:add-model-key-input", "first-draft-model");
+  await app.press("id:confirm-add-model");
+  await app.waitUntil(() => !app.shows("id:add-model-dialog"));
+
+  const storageBefore = JSON.stringify(app.storage());
+
+  await app.press("id:add-channel-button");
+  await app.waitFor("id:discard-draft-dialog");
+  await app.press("id:discard-draft-dialog >> role:button[Cancel]");
+  await app.waitUntil(() => !app.shows("id:discard-draft-dialog"));
+
+  expect(app.shows("id:add-channel-dialog")).toBe(false);
+  expect(app.value("id:channel-name-input")).toBe("First Draft");
+  expect(app.shows("id:model-row-first-draft-model")).toBe(true);
+
+  await app.press("id:add-channel-button");
+  await app.waitFor("id:discard-draft-dialog");
+  await app.press("id:discard-draft-dialog >> role:button[Discard]");
+  await app.waitUntil(() => !app.shows("id:discard-draft-dialog"));
+  await app.waitFor("id:add-channel-dialog");
+
+  await app.press("id:provider-preset-anthropic");
+  await app.waitUntil(() => !app.shows("id:add-channel-dialog"));
+  expect(app.value("id:channel-name-input")).toBe("Anthropic");
+  expect(app.shows("id:model-row-first-draft-model")).toBe(false);
+  expect(app.texts()).not.toContain("First Draft");
+  expect(JSON.stringify(app.storage())).toBe(storageBefore);
+});
