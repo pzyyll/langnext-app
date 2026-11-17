@@ -281,7 +281,8 @@ test("tests connection and syncs remote models while preserving overrides and ma
   const antRequests = app.requests().filter((r) => r.url.includes("anthropic.com/v1/models"));
   expect(antRequests.length).toBe(2);
   expect(antRequests[0]!.headers["anthropic-version"]).toBe("2023-06-01");
-  expect(app.texts()).toContain("Source: Anthropic Messages");
+  expect(app.texts()).toContain("Default (OpenAI Chat Completions)");
+  expect(app.texts()).not.toContain("Source: Anthropic Messages");
 });
 
 test("records normalized sync errors without losing existing models", async () => {

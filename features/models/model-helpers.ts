@@ -23,18 +23,24 @@ export function resolveEffectiveCapabilities(model: ProviderModel): CapabilityFl
   };
 }
 
+/** Resolves the effective API protocol for a model from its override or channel default. */
+export function resolveEffectiveApiType(
+  model: Pick<ProviderModel, "apiTypeOverride">,
+  channelDefaultAdapterId: AdapterId,
+): AdapterId {
+  return model.apiTypeOverride ?? channelDefaultAdapterId;
+}
+
 /** Formats the API Type column relative to the owning channel adapter. */
 export function formatModelApiTypeDisplay(
   model: ProviderModel,
   providerAdapterId: AdapterId,
 ): string {
+  const effectiveApi = resolveEffectiveApiType(model, providerAdapterId);
   if (model.apiTypeOverride) {
-    return getAdapterLabel(model.apiTypeOverride);
+    return getAdapterLabel(effectiveApi);
   }
-  if (model.sourceAdapterId !== providerAdapterId) {
-    return t("models.api.source", { name: getAdapterLabel(model.sourceAdapterId) });
-  }
-  return t("models.api.default");
+  return t("models.api.default", { name: getAdapterLabel(effectiveApi) });
 }
 
 /** Formats an optional token count cleanly (e.g. `128K`, `1M`, `8192`). */

@@ -144,7 +144,7 @@ models:
     empty: No models yet
     noMatch: No matching models
   api:
-    default: Default
+    default: "Default (%{name})"
     source: "Source: %{name}"
   action:
     select: Select
