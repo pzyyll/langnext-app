@@ -8,7 +8,7 @@ import { Switch } from "../../components/ui/switch";
 import { toast } from "../../components/ui/toast";
 import type { ProviderTypeId } from "../../modules/ai/contracts/channel";
 import type { ProtocolId } from "../../modules/ai/contracts/protocol";
-import { FormField } from "./form-field";
+import { FormField } from "../../modules/ai/ui/form-field";
 import { getModelApiTypeItems, MODEL_DEFAULT_API_VALUE } from "./model-helpers";
 
 export interface AddModelSubmission {

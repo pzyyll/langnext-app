@@ -1,5 +1,6 @@
 import { expect, test } from "nsh/test";
 import { aiRegistry } from "../modules/ai/runtime/registry";
+import { providerSettingsRegistry } from "../modules/ai/ui/registry";
 import { initializeAiModules } from "./ai-setup";
 
 test("ai setup: initializing twice keeps one ordered built-in set", () => {
@@ -19,6 +20,9 @@ test("ai setup: initializing twice keeps one ordered built-in set", () => {
     "deepseek",
     "custom",
   ]);
+  expect(
+    providerSettingsRegistry.list().map((presentation) => presentation.providerTypeId),
+  ).toEqual(["openai", "gemini", "anthropic", "deepseek", "custom"]);
   expect(aiRegistry.getProvider("deepseek").catalogProtocolId).toBe("openai-compatible");
   expect(aiRegistry.getProvider("gemini").labelKey).toBe("models.preset.gemini");
 });

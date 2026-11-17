@@ -13,23 +13,22 @@ import { t } from "nsh/i18n";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Card, SectionHeading } from "../../components/ui/card";
-import { Checkbox } from "../../components/ui/checkbox";
 import { ConfirmDialog } from "../../components/ui/dialog";
 import { Icon } from "../../components/ui/icon";
 import { Input } from "../../components/ui/input";
-import { Select, type SelectItem } from "../../components/ui/select";
 import { Switch } from "../../components/ui/switch";
 import { toast } from "../../components/ui/toast";
 import type { ProtocolId } from "../../modules/ai/contracts/protocol";
 import { aiClient } from "../../modules/ai/runtime/client";
 import { aiRegistry } from "../../modules/ai/runtime/registry";
-import { getProviderPreset } from "../../services/protocols/presets";
+import type { ProviderCredentialMode } from "../../modules/ai/ui/contracts";
+import { FormField } from "../../modules/ai/ui/form-field";
+import { ProviderMark } from "../../modules/ai/ui/provider-mark";
+import { providerSettingsRegistry } from "../../modules/ai/ui/registry";
 import { AddModelDialog, type AddModelSubmission } from "./add-model-dialog";
 import type { ChannelDraft } from "./channel-draft";
 import { inspectBaseUrl, isInsecureHttpConfirmed, resolveConfirmedInsecureUrl } from "./connection";
 import { EditModelDialog, type EditModelSubmission } from "./edit-model-dialog";
-import { FormField } from "./form-field";
-import { getProtocolLabel } from "./model-helpers";
 import { ModelsTable } from "./models-table";
 import {
   createManualModel,
@@ -54,6 +53,7 @@ import type {
   ProviderChannel,
   ProviderModel,
 } from "./types";
+import { ProviderSettingsHost } from "./editor/provider-settings";
 
 type CredentialDraftMode = "keep" | "replace" | "clear";
 
@@ -208,14 +208,7 @@ export function ProviderEditor(props: ProviderEditorProps) {
     props.mode === "draft" ? props.draft.presetId : props.channel.presetId;
   const currentProvider = () => aiRegistry.getProvider(currentPresetId());
   const providerLabel = () => t(currentProvider().labelKey);
-  // Provider marks arrive with presentations; the shared preset icons stay until then.
-  const providerIcon = () => getProviderPreset(currentPresetId()).icon;
-  const allowedAdapterItems = (): SelectItem[] =>
-    currentProvider().allowedProtocolIds.map((id) => ({
-      value: id,
-      title: getProtocolLabel(id),
-    }));
-  const hasFixedApiType = () => currentProvider().allowedProtocolIds.length <= 1;
+  const providerPresentation = () => providerSettingsRegistry.find(currentPresetId());
   const currentDisplayName = () =>
     props.mode === "draft" ? props.draft.displayName() : props.channel.displayName;
   const currentEnabled = () =>
@@ -227,6 +220,63 @@ export function ProviderEditor(props: ProviderEditorProps) {
     props.mode === "draft" ? props.draft.credential() : savedCredential();
   const currentAllowInsecureHttp = () =>
     props.mode === "draft" ? props.draft.allowInsecureHttp() : savedAllowInsecureHttp();
+
+  const handleProtocolChange = (next: ProtocolId) => {
+    if (props.mode === "draft") {
+      props.draft.setAdapterId(next);
+    } else {
+      savedAdapterId.set(next);
+    }
+    connectionMessage.set(null);
+  };
+
+  const handleBaseUrlChange = (value: string) => {
+    if (props.mode === "draft") {
+      props.draft.setBaseUrl(value);
+    } else {
+      savedBaseUrl.set(value);
+      if (!isInsecureHttpConfirmed(value, savedConfirmedInsecureUrl())) {
+        savedConfirmedInsecureUrl.set(null);
+      }
+    }
+    saveError.set(null);
+    connectionMessage.set(null);
+  };
+
+  const handleCredentialChange = (value: string) => {
+    if (props.mode === "draft") {
+      props.draft.setCredential(value);
+    } else {
+      savedCredential.set(value);
+      if (value.length > 0) {
+        credentialMode.set("replace");
+      } else if (credentialMode() === "replace") {
+        credentialMode.set("keep");
+      }
+    }
+    connectionMessage.set(null);
+  };
+
+  const handleCredentialModeChange = (mode: ProviderCredentialMode) => {
+    if (mode === "clear") {
+      credentialMode.set("clear");
+    } else if (mode === "keep") {
+      credentialMode.set("keep");
+    } else {
+      return;
+    }
+    savedCredential.set("");
+    connectionMessage.set(null);
+  };
+
+  const handleInsecureHttpChange = (checked: boolean) => {
+    if (props.mode === "draft") {
+      props.draft.setAllowInsecureHttp(checked);
+    } else {
+      savedConfirmedInsecureUrl.set(resolveConfirmedInsecureUrl(savedBaseUrl(), checked));
+    }
+    saveError.set(null);
+  };
 
   const urlCheck = () => inspectBaseUrl(currentBaseUrl());
 
@@ -623,17 +673,6 @@ export function ProviderEditor(props: ProviderEditorProps) {
     return deleteModelsBulk(props.channel.id, modelIds);
   };
 
-  const tokenPlaceholder = () => {
-    if (props.mode === "saved") {
-      if (credentialMode() === "clear") return t("models.connection.tokenWillClear");
-      if (props.channel.hasCredential) return t("models.connection.tokenRetained");
-    }
-    return t("models.connection.apiKeyPlaceholder");
-  };
-
-  const urlPlaceholder = () =>
-    currentProvider().defaultBaseUrl ?? t("models.connection.baseUrlPlaceholder");
-
   const tableChannelView = (): ProviderChannel => {
     if (props.mode === "saved") return props.channel;
     const d = props.draft;
@@ -663,7 +702,9 @@ export function ProviderEditor(props: ProviderEditorProps) {
         class={`h-12 shrink-0 flex-row items-center justify-between gap-3 border-b border-border ${compactLayout() ? "px-4" : "px-6"}`}
       >
         <View class="min-w-0 flex-1 flex-row items-center gap-2">
-          <Icon name={providerIcon()} tone="foreground" class="size-4 shrink-0" />
+          <If when={providerPresentation() !== null}>
+            <ProviderMark icon={providerPresentation()!.icon} class="size-4 shrink-0" />
+          </If>
           <If
             when={!isDraftMode() && renaming()}
             else={
@@ -807,7 +848,9 @@ export function ProviderEditor(props: ProviderEditorProps) {
                   class={compactLayout() ? undefined : "w-56 shrink-0"}
                 >
                   <View class="h-9 flex-row items-center gap-2 rounded-lg border border-border bg-muted px-3">
-                    <Icon name={providerIcon()} tone="foreground" class="size-4 shrink-0" />
+                    <If when={providerPresentation() !== null}>
+                      <ProviderMark icon={providerPresentation()!.icon} class="size-4 shrink-0" />
+                    </If>
                     <Text class="truncate text-sm font-medium text-foreground">
                       {providerLabel()}
                     </Text>
@@ -885,144 +928,25 @@ export function ProviderEditor(props: ProviderEditorProps) {
               </View>
             </View>
 
-            <View class={compactLayout() ? "gap-3.5" : "flex-row items-start gap-4"}>
-              <FormField
-                label={t("models.connection.apiType")}
-                class={compactLayout() ? undefined : "w-56 shrink-0"}
-              >
-                <If
-                  when={hasFixedApiType()}
-                  else={
-                    <Select
-                      testID="connection-adapter-select"
-                      accessibilityLabel={t("models.connection.apiType")}
-                      items={allowedAdapterItems()}
-                      value={currentAdapterId()}
-                      onChange={(v) => {
-                        if (!v) return;
-                        const next = v as ProtocolId;
-                        if (props.mode === "draft") {
-                          props.draft.setAdapterId(next);
-                        } else {
-                          savedAdapterId.set(next);
-                        }
-                        connectionMessage.set(null);
-                      }}
-                    />
-                  }
-                >
-                  <View
-                    testID="connection-fixed-api-type"
-                    class="h-9 flex-row items-center rounded-lg border border-border bg-muted px-3"
-                  >
-                    <Text class="truncate text-sm text-foreground">
-                      {getProtocolLabel(currentAdapterId())}
-                    </Text>
-                  </View>
-                </If>
-              </FormField>
-
-              <FormField
-                label={t("models.connection.baseUrl")}
-                error={urlCheck().error}
-                class={compactLayout() ? undefined : "min-w-0 flex-1"}
-              >
-                <Input
-                  testID="connection-url-input"
-                  accessibilityLabel={t("models.connection.baseUrl")}
-                  placeholder={urlPlaceholder()}
-                  value={currentBaseUrl()}
-                  onChange={(v) => {
-                    if (props.mode === "draft") {
-                      props.draft.setBaseUrl(v);
-                    } else {
-                      savedBaseUrl.set(v);
-                      if (!isInsecureHttpConfirmed(v, savedConfirmedInsecureUrl())) {
-                        savedConfirmedInsecureUrl.set(null);
-                      }
-                    }
-                    saveError.set(null);
-                    connectionMessage.set(null);
-                  }}
-                />
-              </FormField>
-            </View>
-
-            <If when={urlCheck().isInsecureHttp}>
-              <Checkbox
-                testID="connection-insecure-checkbox"
-                checked={currentAllowInsecureHttp()}
-                onChange={(checked) => {
-                  if (props.mode === "draft") {
-                    props.draft.setAllowInsecureHttp(checked);
-                  } else {
-                    savedConfirmedInsecureUrl.set(
-                      resolveConfirmedInsecureUrl(savedBaseUrl(), checked),
-                    );
-                  }
-                  saveError.set(null);
-                }}
-                label={t("models.connection.insecureHttp")}
-              />
-            </If>
-
-            <FormField
-              label={t("models.connection.apiKey")}
-              labelAction={
-                <If when={props.mode === "saved" && props.channel.hasCredential}>
-                  <If
-                    when={credentialMode() === "clear"}
-                    else={
-                      <Button
-                        testID="clear-token-button"
-                        size="xs"
-                        variant="ghost"
-                        label={t("models.connection.resetToken")}
-                        onPress={() => {
-                          credentialMode.set("clear");
-                          savedCredential.set("");
-                          connectionMessage.set(null);
-                        }}
-                      />
-                    }
-                  >
-                    <Button
-                      testID="keep-token-button"
-                      size="xs"
-                      variant="ghost"
-                      label={t("models.connection.keepToken")}
-                      onPress={() => {
-                        credentialMode.set("keep");
-                        savedCredential.set("");
-                        connectionMessage.set(null);
-                      }}
-                    />
-                  </If>
-                </If>
-              }
-            >
-              <Input
-                testID="connection-token-input"
-                accessibilityLabel={t("models.connection.apiKey")}
-                masked
-                readonly={!isDraftMode() && credentialMode() === "clear"}
-                placeholder={tokenPlaceholder()}
-                value={currentCredential()}
-                onChange={(v) => {
-                  if (props.mode === "draft") {
-                    props.draft.setCredential(v);
-                  } else {
-                    savedCredential.set(v);
-                    if (v.length > 0) {
-                      credentialMode.set("replace");
-                    } else if (credentialMode() === "replace") {
-                      credentialMode.set("keep");
-                    }
-                  }
-                  connectionMessage.set(null);
-                }}
-              />
-            </FormField>
+            <ProviderSettingsHost
+              providerTypeId={currentPresetId()}
+              mode={isDraftMode() ? "draft" : "saved"}
+              protocolId={currentAdapterId()}
+              baseUrl={currentBaseUrl()}
+              credential={currentCredential()}
+              hasSavedCredential={props.mode === "saved" && props.channel.hasCredential}
+              credentialMode={isDraftMode() ? "keep" : credentialMode()}
+              urlError={urlCheck().error}
+              isInsecureHttp={urlCheck().isInsecureHttp}
+              allowInsecureHttp={currentAllowInsecureHttp()}
+              compact={compactLayout()}
+              disabled={saving()}
+              onProtocolChange={handleProtocolChange}
+              onBaseUrlChange={handleBaseUrlChange}
+              onCredentialChange={handleCredentialChange}
+              onCredentialModeChange={handleCredentialModeChange}
+              onInsecureHttpChange={handleInsecureHttpChange}
+            />
 
             <If when={saveError() !== null}>
               <Text role="alert" class="text-xs text-destructive">

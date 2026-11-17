@@ -329,6 +329,35 @@ nesting scroll views.
   MIT License); brand marks remain trademarks of their respective owners for
   provider identification only. `Custom` reuses `cube-outline.svg`.
 
+### Module-owned provider settings
+
+- **Controlled boundary**: `ProviderEditor` owns every connection value. It
+  mounts the selected provider's registered `Settings` component through
+  `ProviderSettingsHost` with the current protocol, URL, credential draft,
+  saved-credential presence and edit mode (`keep`, `replace`, `clear`),
+  URL/insecure-HTTP state, and compact/disabled flags plus change callbacks. The
+  contribution renders fields and reports edits; it keeps no second draft,
+  reads no saved secret, and never touches Storage or the Store.
+- **Ownership split**: `ConnectionFields` holds only the protocol selector (or
+  its fixed value), `Base URL`, the insecure `http://` consent checkbox, and
+  `API Key` with its keep/clear actions. The editor keeps the `Connection`
+  header, `Test`, inline `Unsaved`, contextual `Cancel` / `Save`, request
+  status, the draft identity card, and the models card. Field test IDs, labels,
+  placeholders, credential masking, and fixed-versus-selectable API behavior are
+  unchanged.
+- **Provider marks**: Presentations contribute the existing monochrome SVGs.
+  `ProviderMark` renders them with the same `foreground` tint and decorative
+  accessibility behavior inside `Avatar`'s fallback slot (picker), the rail
+  subtitle, the editor header, and the draft identity card. The global
+  `IconName` union no longer needs provider brands.
+- **Unchanged interaction and motion inventory**: Adding a provider requires no
+  page or editor branch. Focus entry into the draft `Display Name`, focus
+  return after picker/discard dismissal, same-channel edit retention,
+  channel-switch disposal, keyboard names, and reduced-motion behavior stay as
+  recorded below. No new transition is added for provider switching; the
+  existing hover, press, popup, dialog, and avatar transitions remain the only
+  motion.
+
 ### Motion inventory
 
 | Change | Tool and tokens | Reduced motion |
@@ -353,6 +382,14 @@ nesting scroll views.
 - **Adjustments made from visual and hit-test review**: Widened the Channels rail to `w-56` on normal desktop widths (`w-48` under `860` points) and scoped reorder arrows to the selected channel row so names avoid early truncation; tightened `< 860` card/editor padding (`p-4`) and folded `API Type` into the model subtitle at narrow widths so `Get models` and model rows wrap and fit cleanly at `720 × 520`; updated `ToastViewport` (`components/ui/toast.tsx`) to `inset-x-0 bottom-4 items-center pointer-events-none` on `Overlay` and `pointer-events-none` on `ToastStack`/`Toast` with `pointer-events-auto` on the Dismiss button so bottom-centered toasts never block clicks on underlying navigation or table checkboxes on Windows.
 - **Keyboard, reduced motion, and accessibility**: Verified on Windows (`--target windows`) that `<Input>` auto-focus moves cleanly into draft `Display Name` and dialog primary fields, `Return` submits dialog inputs, `Escape` dismisses `AddModelDialog` and `EditModelDialog` even while inputs hold focus, focus restores to triggers after dialog dismissal (with `ViewRef.focus()` `Tab`/Space button activation noted by NSH 0.5.1 as `(macOS, the web)`), and `reducedMotion: true` passes functionally without blocking dialog/toast state transitions. All interactive buttons, icon triggers, switches, checkboxes, and dialogs expose localized `accessibilityLabel` strings via `t()`. Frame-by-frame motion timing and interactive Windows Narrator screen-reader speech remain manual verification items in an interactive Windows desktop session (`UIAutomationClient` inspection against the non-interactive CLI session's detached `nsh dev` host exposed no interactive desktop UIA subtree from the automation context).
 - **Provider picker Avatar validation**: Verified `components/ui/avatar.tsx` (wrapping `nsh/base`'s `Avatar`) in `AddChannelDialog` via `mise run verify` (78/78 headless tests passed), `nsh test features/models/channels.test.tsx --target windows` (36/36 Windows desktop tests passed), and Windows desktop PNG screenshots in Light (`zh-CN`, rest & hover at `1040 × 720` and compact `720 × 520`) and Dark (`en`, rest & hover at `1040 × 720`). Confirmed circular `rounded-full` `bg-muted` clipping, centered `foreground`-tinted SVG marks, contrast in both themes, decorative `accessibilityLabel=""` (0 labeled `role:image` nodes, 5 accessible preset buttons), and hover washes. Held press state, remote `src` image loading fade, and screen-reader speech remain unverified in this pass.
+
+- **Module-owned settings extraction**: `ai registry:` presentation cases
+  (registration, duplicates, missing runtime provider), `ai setup:` (one ordered
+  built-in set after two initializer calls), and `ai settings:` (a distinct
+  registered component renders; edits stay with the host) passed.
+  `provider channels:`, `features/models/models.test.tsx`, and `App.test.tsx`
+  stayed green through the extraction, and `mise run build` emitted 25 assets
+  with no unknown-class or missing-export warning.
 
 ### Channel-switch validation
 

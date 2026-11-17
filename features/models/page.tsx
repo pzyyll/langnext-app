@@ -3,7 +3,7 @@ import { t } from "nsh/i18n";
 import { Button } from "../../components/ui/button";
 import { ConfirmDialog } from "../../components/ui/dialog";
 import { Icon } from "../../components/ui/icon";
-import type { ProviderPresetId } from "../../services/protocols/presets";
+import type { ProviderTypeId } from "../../modules/ai/contracts/channel";
 import { AddChannelDialog } from "./add-channel-dialog";
 import { createChannelDraft, type ChannelDraft } from "./channel-draft";
 import { ChannelsRail } from "./channels-rail";
@@ -93,10 +93,10 @@ export function ModelsPage(props: ModelsPageProps) {
     pending?.run();
   };
 
-  const handleSelectPreset = (presetId: ProviderPresetId) => {
+  const handleSelectPreset = (providerTypeId: ProviderTypeId) => {
     pickerReturnTarget = null;
     pendingDiscardAction.set(null);
-    draft.set(createChannelDraft(presetId));
+    draft.set(createChannelDraft(providerTypeId));
     addChannelOpen.set(false);
   };
 

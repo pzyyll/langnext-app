@@ -4,7 +4,9 @@ import { motion } from "../../components/motion";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Icon } from "../../components/ui/icon";
-import { getProviderPreset, getProviderPresetLabel } from "../../services/protocols/presets";
+import { getProviderTypeLabel } from "../../modules/ai/ui/labels";
+import { ProviderMark } from "../../modules/ai/ui/provider-mark";
+import { providerSettingsRegistry } from "../../modules/ai/ui/registry";
 import type { ProviderChannel } from "./types";
 
 interface ChannelsRailProps {
@@ -23,6 +25,8 @@ interface ChannelsRailProps {
 /** Left master list of configured provider channels with selection and reordering. */
 export function ChannelsRail(props: ChannelsRailProps) {
   const railWidthClass = () => (windowSize().width < 860 ? "w-48" : "w-60");
+  const providerLabel = (presetId: string) => getProviderTypeLabel(presetId) ?? presetId;
+  const providerMark = (presetId: string) => providerSettingsRegistry.find(presetId);
 
   return (
     <View
@@ -86,7 +90,7 @@ export function ChannelsRail(props: ChannelsRailProps) {
                               selected={isSelected()}
                               accessibilityLabel={t("models.channels.itemLabel", {
                                 name: channel().displayName,
-                                provider: getProviderPresetLabel(channel().presetId),
+                                provider: providerLabel(channel().presetId),
                                 status: channel().enabled
                                   ? t("models.channel.enabled")
                                   : t("models.filter.disabled"),
@@ -127,13 +131,14 @@ export function ChannelsRail(props: ChannelsRailProps) {
                                   </If>
                                 </View>
                                 <View class="flex-row items-center gap-1">
-                                  <Icon
-                                    name={getProviderPreset(channel().presetId).icon}
-                                    tone="muted-foreground"
-                                    class="size-3 shrink-0"
-                                  />
+                                  <If when={providerMark(channel().presetId) !== null}>
+                                    <ProviderMark
+                                      icon={providerMark(channel().presetId)!.icon}
+                                      class="size-3 shrink-0"
+                                    />
+                                  </If>
                                   <Text class="min-w-0 truncate text-xs text-muted-foreground">
-                                    {getProviderPresetLabel(channel().presetId)}
+                                    {providerLabel(channel().presetId)}
                                   </Text>
                                 </View>
                               </View>
