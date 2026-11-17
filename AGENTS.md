@@ -5,6 +5,10 @@ My Translator is a desktop application built with:
 - UI Framework `NSH`: For more information, see `@docs/llms.txt`
 - mise toolchain
 
+## Harness
+
+- **Project is currently in the Demo stage, so there’s no need to consider compatibility with old data or formats when iterating on requirements. Assume all updates are breaking changes by default; just focus on fully implementing the requirements.**
+
 ## UI/UX
 
 Design docs: `@docs/ui/DESIGNE.md`
