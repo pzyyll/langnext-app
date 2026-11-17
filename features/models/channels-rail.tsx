@@ -7,7 +7,7 @@ import { Icon } from "../../components/ui/icon";
 import { getProviderTypeLabel } from "../../modules/ai/ui/labels";
 import { ProviderMark } from "../../modules/ai/ui/provider-mark";
 import { providerSettingsRegistry } from "../../modules/ai/ui/registry";
-import type { ProviderChannel } from "./types";
+import type { ProviderChannel } from "../../modules/ai/contracts/channel";
 
 interface ChannelsRailProps {
   channels: ProviderChannel[];

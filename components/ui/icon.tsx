@@ -1,6 +1,5 @@
 import { Image, token, type ImageAsset } from "nsh";
 import alertCircleIcon from "../../assets/icons/alert-circle.svg";
-import anthropicIcon from "../../assets/icons/anthropic.svg";
 import arrowDownIcon from "../../assets/icons/arrow-down.svg";
 import arrowUpIcon from "../../assets/icons/arrow-up.svg";
 import checkCircleIcon from "../../assets/icons/check-circle.svg";
@@ -8,14 +7,11 @@ import checkIcon from "../../assets/icons/check.svg";
 import chevronDownIcon from "../../assets/icons/chevron-down.svg";
 import closeIcon from "../../assets/icons/close.svg";
 import cubeOutlineIcon from "../../assets/icons/cube-outline.svg";
-import deepseekIcon from "../../assets/icons/deepseek.svg";
 import deleteIcon from "../../assets/icons/delete.svg";
 import editIcon from "../../assets/icons/edit.svg";
 import filePdfIcon from "../../assets/icons/file-pdf.svg";
 import fileTextIcon from "../../assets/icons/file-text.svg";
-import geminiIcon from "../../assets/icons/gemini.svg";
 import minusIcon from "../../assets/icons/minus.svg";
-import openaiIcon from "../../assets/icons/openai.svg";
 import picIcon from "../../assets/icons/pic.svg";
 import plusIcon from "../../assets/icons/plus.svg";
 import searchIcon from "../../assets/icons/search.svg";
@@ -23,7 +19,6 @@ import videoIcon from "../../assets/icons/video.svg";
 
 const ICONS = {
   "alert-circle": alertCircleIcon,
-  anthropic: anthropicIcon,
   "arrow-down": arrowDownIcon,
   "arrow-up": arrowUpIcon,
   check: checkIcon,
@@ -31,14 +26,11 @@ const ICONS = {
   "chevron-down": chevronDownIcon,
   close: closeIcon,
   "cube-outline": cubeOutlineIcon,
-  deepseek: deepseekIcon,
   delete: deleteIcon,
   edit: editIcon,
   "file-pdf": filePdfIcon,
   "file-text": fileTextIcon,
-  gemini: geminiIcon,
   minus: minusIcon,
-  openai: openaiIcon,
   pic: picIcon,
   plus: plusIcon,
   search: searchIcon,

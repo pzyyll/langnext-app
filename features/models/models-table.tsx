@@ -27,7 +27,9 @@ import {
   resolveEffectiveCapabilities,
   resolveEffectiveDisplayName,
 } from "./model-helpers";
-import type { CapabilityFlags, ModelsEnabledFilter, ProviderChannel, ProviderModel } from "./types";
+import type { CapabilityFlags, ProviderModel } from "../../modules/ai/contracts/model";
+import type { ProviderChannel } from "../../modules/ai/contracts/channel";
+import type { ModelsEnabledFilter } from "./types";
 
 const filterItems = (): SelectItem[] => [
   { value: "all", title: t("models.filter.all") },

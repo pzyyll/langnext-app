@@ -1,6 +1,7 @@
 import { expect, open, test } from "nsh/test";
 import { CREDENTIAL_KEY_PREFIX, MODELS_STORAGE_KEY, PROVIDERS_STORAGE_KEY } from "./store";
-import type { ProviderChannel, ProviderModel } from "./types";
+import type { ProviderChannel } from "../../modules/ai/contracts/channel";
+import type { ProviderModel } from "../../modules/ai/contracts/model";
 
 const APP_ENTRY = "../../App.tsx";
 const viewport = { width: 1040, height: 720, platform: "windows" as const };

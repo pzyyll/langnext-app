@@ -35,10 +35,10 @@ import {
 import type {
   ConnectionSnapshot,
   CredentialUpdate,
-  ModelsEnabledFilter,
   ProviderChannel,
-  ProviderModel,
-} from "../types";
+} from "../../../modules/ai/contracts/channel";
+import type { ProviderModel } from "../../../modules/ai/contracts/model";
+import type { ModelsEnabledFilter } from "../types";
 
 type CredentialDraftMode = "keep" | "replace" | "clear";
 

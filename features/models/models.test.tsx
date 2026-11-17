@@ -1,7 +1,8 @@
 import { expect, open, test } from "nsh/test";
 import { emptyCatalogCache } from "./__tests__/fixtures";
 import { credentialStorageKey, MODELS_STORAGE_KEY, PROVIDERS_STORAGE_KEY } from "./store";
-import type { ProviderChannel, ProviderModel } from "./types";
+import type { ProviderChannel } from "../../modules/ai/contracts/channel";
+import type { ProviderModel } from "../../modules/ai/contracts/model";
 
 const APP_ENTRY = "../../App.tsx";
 

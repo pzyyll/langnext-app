@@ -9,7 +9,7 @@ import {
   resolveEffectiveCapabilities,
   resolveEffectiveDisplayName,
 } from "./model-helpers";
-import type { ProviderModel } from "./types";
+import type { ProviderModel } from "../../modules/ai/contracts/model";
 
 initializeAiModules();
 

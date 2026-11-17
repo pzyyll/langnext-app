@@ -5,7 +5,8 @@ import {
   MODELS_STORAGE_KEY,
   PROVIDERS_STORAGE_KEY,
 } from "./store";
-import type { ProviderChannel, ProviderModel } from "./types";
+import type { ProviderChannel } from "../../modules/ai/contracts/channel";
+import type { ProviderModel } from "../../modules/ai/contracts/model";
 import {
   catalogCache,
   emptyCatalogCache,

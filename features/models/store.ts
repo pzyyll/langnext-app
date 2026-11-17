@@ -10,15 +10,13 @@ import {
   createManualProviderModel,
   mergeDiscoveredCatalog,
 } from "./model-collection";
+import type { ConnectionSnapshot, ProviderChannel } from "../../modules/ai/contracts/channel";
+import type { ProviderModel, SyncModelsResult } from "../../modules/ai/contracts/model";
 import type {
-  ConnectionSnapshot,
   CreateManualModelInput,
   ModelsEnabledFilter,
   PersistedDraftScopes,
-  ProviderChannel,
-  ProviderModel,
   SaveChannelDraftInput,
-  SyncModelsResult,
   UpdateChannelInput,
   UpdateModelConfigInput,
 } from "./types";

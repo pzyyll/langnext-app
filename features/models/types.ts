@@ -6,24 +6,6 @@ import type {
 } from "../../modules/ai/contracts/model";
 import type { ProtocolId } from "../../modules/ai/contracts/protocol";
 
-export type {
-  ConnectionCredentialInput,
-  ConnectionSnapshot,
-  CredentialUpdate,
-  ProviderChannel,
-  ProviderTypeId,
-} from "../../modules/ai/contracts/channel";
-export type {
-  CapabilityFlags,
-  CapabilityOverrides,
-  ModelFacts,
-  ProviderModel,
-  ProviderModelOrigin,
-  ProviderModelSyncStatus,
-  SyncModelsResult,
-} from "../../modules/ai/contracts/model";
-export type { ProtocolId } from "../../modules/ai/contracts/protocol";
-
 export type ModelsEnabledFilter = "all" | "enabled" | "disabled";
 
 export interface PersistedDraftScopes {

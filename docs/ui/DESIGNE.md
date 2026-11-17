@@ -424,6 +424,38 @@ nesting scroll views.
   stayed green through the extraction, and `mise run build` emitted 25 assets
   with no unknown-class or missing-export warning.
 
+### Module migration validation
+
+- `mise run verify` passed formatting, lint, type checks, the Rust crate,
+  the full headless test set, and the release bundle after the old
+  `services/protocols/` path was deleted; `git grep` found no
+  `services/protocols` import in `App.tsx`, `app`, `features`, `components`,
+  or `modules`, and no runtime/protocol import of AI UI, presentations, or
+  features, and no contract import of implementations or NSH.
+- Contribution review: adding a provider now needs a definition, a presentation,
+  locale entries for any new copy, and explicit `app/ai-setup.ts` registration.
+  No union, existing protocol implementation, page branch, catalog-provider map,
+  or global brand enum changes; the `ai registry:` / `ai settings:` tests are the
+  extension evidence.
+- Preserved behavior: `provider routing:` assertions now run through the real
+  client and registered built-ins; `provider channels:` (45), `models` (7),
+  `storage` (6), `App` (16), `ai client:` (20), `ai protocol:` (10),
+  `ai settings:` (2), `ai setup:` (1), and `ai registry:` (11) cases passed.
+- Windows desktop runs passed `channels.test.tsx` (45), `models.test.tsx` (7),
+  and `provider-settings.test.tsx` (2). Captured and reviewed screenshots of:
+  the provider picker (light `1040 × 720`), an Anthropic draft with its fixed
+  API type (light `1040 × 720`), an OpenAI saved channel with a dirty URL and
+  the API selector open (light `1040 × 720`), an unknown-provider channel with
+  the unsupported-configuration banner (dark `720 × 520`, reduced motion), and
+  an unsupported model-override save error in `EditModelDialog` (light
+  `1040 × 720`). Radius, typography, spacing, alignment, color, hover styling,
+  masked credentials, and the existing motion inventory are unchanged; no new
+  transition was added for provider switching.
+- Outstanding: screen-reader speech (Windows Narrator), held-press states, and
+  frame-by-frame motion timing were not verified in this automated session.
+  The extraction adds no new controls, copy, or motion, so these remain the
+  pre-existing manual checks.
+
 ### Channel-switch validation
 
 - `mise run verify` passed: formatting, lint, type checks, 94 headless tests,

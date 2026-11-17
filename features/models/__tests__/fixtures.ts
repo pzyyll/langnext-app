@@ -1,8 +1,9 @@
 import type { App } from "nsh/test";
 import { CATALOG_CACHE_KEY } from "../../../services/models-dev/catalog";
-import type { ProviderPresetId } from "../../../services/protocols/presets";
+import type { ProviderTypeId } from "../../../modules/ai/contracts/channel";
 import { credentialStorageKey, MODELS_STORAGE_KEY, PROVIDERS_STORAGE_KEY } from "../store";
-import type { ProviderChannel, ProviderModel } from "../types";
+import type { ProviderChannel } from "../../../modules/ai/contracts/channel";
+import type { ProviderModel } from "../../../modules/ai/contracts/model";
 
 export function makeChannel(overrides: Partial<ProviderChannel> = {}): ProviderChannel {
   return {
@@ -84,10 +85,7 @@ export function makeSeedStorage(options: {
   return storage;
 }
 
-export async function startDraftFromEmptyState(
-  app: App,
-  presetId: ProviderPresetId,
-): Promise<void> {
+export async function startDraftFromEmptyState(app: App, presetId: ProviderTypeId): Promise<void> {
   await app.press("id:empty-add-channel-button");
   await app.waitFor("id:add-channel-dialog");
   await app.press(`id:provider-preset-${presetId}`);
@@ -95,7 +93,7 @@ export async function startDraftFromEmptyState(
   await app.waitFor("id:provider-editor");
 }
 
-export async function startDraftFromRail(app: App, presetId: ProviderPresetId): Promise<void> {
+export async function startDraftFromRail(app: App, presetId: ProviderTypeId): Promise<void> {
   await app.press("id:add-channel-button");
   await app.waitFor("id:add-channel-dialog");
   await app.press(`id:provider-preset-${presetId}`);

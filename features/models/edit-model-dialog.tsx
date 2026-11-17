@@ -14,7 +14,7 @@ import {
   MODEL_DEFAULT_API_VALUE,
   resolveEffectiveCapabilities,
 } from "./model-helpers";
-import type { CapabilityOverrides, ProviderModel } from "./types";
+import type { CapabilityOverrides, ProviderModel } from "../../modules/ai/contracts/model";
 
 export interface EditModelSubmission {
   id: string;
