@@ -1,3 +1,4 @@
+import { t } from "nsh/i18n";
 import { getAdapterLabel } from "../../services/protocols/adapters";
 import type { AdapterId } from "../../services/protocols/types";
 import type { CapabilityFlags, ProviderModel } from "./types";
@@ -31,9 +32,9 @@ export function formatModelApiTypeDisplay(
     return getAdapterLabel(model.apiTypeOverride);
   }
   if (model.sourceAdapterId !== providerAdapterId) {
-    return `Source: ${getAdapterLabel(model.sourceAdapterId)}`;
+    return t("models.api.source", { name: getAdapterLabel(model.sourceAdapterId) });
   }
-  return "Default";
+  return t("models.api.default");
 }
 
 /** Formats an optional token count cleanly (e.g. `128K`, `1M`, `8192`). */

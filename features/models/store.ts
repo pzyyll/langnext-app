@@ -1,4 +1,5 @@
 import { batch, signal, Storage } from "nsh";
+import { t } from "nsh/i18n";
 import { listRemoteModels, testAdapterConnection } from "../../services/protocols/adapters";
 import type { AdapterId } from "../../services/protocols/types";
 import { inspectBaseUrl } from "./connection";
@@ -24,7 +25,7 @@ function credentialKey(providerId: string): string {
 
 export class RevisionConflictError extends Error {
   constructor() {
-    super("This channel changed elsewhere. Reload to inspect the latest settings.");
+    super(t("models.error.revisionConflict"));
     this.name = "RevisionConflictError";
   }
 }
@@ -146,7 +147,7 @@ export async function loadModelsState(): Promise<void> {
   } catch (error) {
     batch(() => {
       loadingSignal.set(false);
-      errorSignal.set(error instanceof Error ? error.message : "Could not load model channels.");
+      errorSignal.set(error instanceof Error ? error.message : t("models.error.loadChannels"));
     });
   }
 }
@@ -168,15 +169,15 @@ export async function createChannel(input: CreateChannelInput): Promise<Provider
   return withWriteLock(async () => {
     const displayName = input.displayName.trim();
     if (!displayName) {
-      throw new Error("Display name is required.");
+      throw new Error(t("models.error.displayNameRequired"));
     }
 
     const urlCheck = inspectBaseUrl(input.baseUrl ?? "");
     if (!urlCheck.ok) {
-      throw new Error(urlCheck.error ?? "Invalid base URL.");
+      throw new Error(urlCheck.error ?? t("models.error.invalidBaseUrl"));
     }
     if (urlCheck.isInsecureHttp && !input.allowInsecureHttp) {
-      throw new Error("Confirm using unencrypted http:// for non-local hosts before saving.");
+      throw new Error(t("models.error.confirmInsecureFormSave"));
     }
 
     const tokenValue = input.credential?.trim() || null;
@@ -217,7 +218,7 @@ export async function updateChannel(input: UpdateChannelInput): Promise<Provider
     const existing = channelsSignal();
     const index = existing.findIndex((ch) => ch.id === input.id);
     if (index === -1) {
-      throw new Error("Selected channel no longer exists.");
+      throw new Error(t("models.error.channelGone"));
     }
     const current = existing[index]!;
     if (current.revision !== input.expectedRevision) {
@@ -226,15 +227,15 @@ export async function updateChannel(input: UpdateChannelInput): Promise<Provider
 
     const displayName = input.displayName.trim();
     if (!displayName) {
-      throw new Error("Display name is required.");
+      throw new Error(t("models.error.displayNameRequired"));
     }
 
     const urlCheck = inspectBaseUrl(input.baseUrl ?? "");
     if (!urlCheck.ok) {
-      throw new Error(urlCheck.error ?? "Invalid base URL.");
+      throw new Error(urlCheck.error ?? t("models.error.invalidBaseUrl"));
     }
     if (urlCheck.isInsecureHttp && !input.allowInsecureHttp) {
-      throw new Error("Confirm using unencrypted http:// for non-local hosts before saving.");
+      throw new Error(t("models.error.confirmInsecureFormSave"));
     }
 
     const timestamp = nowIso();
@@ -246,7 +247,7 @@ export async function updateChannel(input: UpdateChannelInput): Promise<Provider
     } else if (input.credentialUpdate.mode === "replace") {
       const nextSecret = input.credentialUpdate.value.trim();
       if (!nextSecret) {
-        throw new Error("Enter a new API token or choose Reset token to clear it.");
+        throw new Error(t("models.error.tokenRequired"));
       }
       await writeSecret(current.id, nextSecret);
       hasCredential = true;
@@ -285,7 +286,7 @@ export async function toggleChannelEnabled(id: string, enabled: boolean): Promis
     const existing = channelsSignal();
     const current = existing.find((ch) => ch.id === id);
     if (!current) {
-      throw new Error("Selected channel no longer exists.");
+      throw new Error(t("models.error.channelGone"));
     }
     const updated: ProviderChannel = {
       ...current,
@@ -304,12 +305,12 @@ export async function renameChannel(id: string, nextName: string): Promise<Provi
   return withWriteLock(async () => {
     const trimmed = nextName.trim();
     if (!trimmed) {
-      throw new Error("Channel name cannot be empty.");
+      throw new Error(t("models.error.channelNameEmpty"));
     }
     const existing = channelsSignal();
     const current = existing.find((ch) => ch.id === id);
     if (!current) {
-      throw new Error("Selected channel no longer exists.");
+      throw new Error(t("models.error.channelGone"));
     }
     if (current.displayName === trimmed) {
       return current;
@@ -384,15 +385,15 @@ export async function testChannelConnection(
 ): Promise<{ modelCount: number }> {
   const channel = channelsSignal().find((ch) => ch.id === providerId);
   if (!channel) {
-    throw new Error("Selected channel no longer exists.");
+    throw new Error(t("models.error.channelGone"));
   }
 
   const urlCheck = inspectBaseUrl(channel.baseUrl ?? "");
   if (!urlCheck.ok) {
-    throw new Error(urlCheck.error ?? "Invalid base URL.");
+    throw new Error(urlCheck.error ?? t("models.error.invalidBaseUrl"));
   }
   if (urlCheck.isInsecureHttp && !channel.insecureHttpConfirmedAt) {
-    throw new Error("Confirm using unencrypted http:// before testing this host.");
+    throw new Error(t("models.error.confirmInsecureTest"));
   }
 
   const secret = await readSecret(channel.id);
@@ -411,15 +412,15 @@ export async function syncChannelModels(
 ): Promise<SyncModelsResult> {
   const channel = channelsSignal().find((ch) => ch.id === providerId);
   if (!channel) {
-    throw new Error("Selected channel no longer exists.");
+    throw new Error(t("models.error.channelGone"));
   }
 
   const urlCheck = inspectBaseUrl(channel.baseUrl ?? "");
   if (!urlCheck.ok) {
-    throw new Error(urlCheck.error ?? "Invalid base URL.");
+    throw new Error(urlCheck.error ?? t("models.error.invalidBaseUrl"));
   }
   if (urlCheck.isInsecureHttp && !channel.insecureHttpConfirmedAt) {
-    throw new Error("Confirm using unencrypted http:// before fetching models.");
+    throw new Error(t("models.error.confirmInsecureFetch"));
   }
 
   const secret = await readSecret(channel.id);
@@ -433,7 +434,7 @@ export async function syncChannelModels(
       signal: abortSignal,
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to fetch models.";
+    const message = error instanceof Error ? error.message : t("models.error.fetchModels");
     if ((error as { kind?: string } | null)?.kind !== "cancelled") {
       await withWriteLock(async () => {
         const currentChannels = channelsSignal().map((ch) =>
@@ -563,12 +564,12 @@ export async function createManualModel(input: CreateManualModelInput): Promise<
   return withWriteLock(async () => {
     const modelKey = input.modelKey.trim();
     if (!modelKey) {
-      throw new Error("Model ID is required.");
+      throw new Error(t("models.error.modelIdRequired"));
     }
 
     const channel = channelsSignal().find((ch) => ch.id === input.providerId);
     if (!channel) {
-      throw new Error("Selected channel no longer exists.");
+      throw new Error(t("models.error.channelGone"));
     }
 
     const sourceAdapterId = input.apiTypeOverride ?? channel.adapterId;
@@ -579,7 +580,7 @@ export async function createManualModel(input: CreateManualModelInput): Promise<
         m.sourceAdapterId === sourceAdapterId,
     );
     if (duplicate) {
-      throw new Error(`Model "${modelKey}" already exists in this channel.`);
+      throw new Error(t("models.error.modelDuplicate", { key: modelKey }));
     }
 
     const timestamp = nowIso();
@@ -615,7 +616,7 @@ export async function updateModelConfig(input: UpdateModelConfigInput): Promise<
     const existing = modelsSignal();
     const target = existing.find((m) => m.id === input.id);
     if (!target) {
-      throw new Error("Model record no longer exists.");
+      throw new Error(t("models.error.modelGone"));
     }
 
     const updated: ProviderModel = {

@@ -209,6 +209,40 @@ test("enables transparency when the saved value is invalid", async () => {
   expect(app.storage()[transparencyKey]).toBe("false");
 });
 
+test("follows the user's language until one is picked", async () => {
+  const app = await open("./App.tsx", { ...viewport, locale: "zh-CN" });
+  await app.press("id:nav-settings");
+  expect(app.texts()).toContain("设置");
+  expect(app.texts()).toContain("外观");
+  expect(app.texts()).toContain("语言");
+});
+
+test("switches the interface language and keeps the choice", async () => {
+  const app = await open("./App.tsx", viewport);
+  await app.press("id:nav-settings");
+  expect(app.texts()).toContain("Settings");
+
+  await app.press("id:language-zh-CN");
+  expect(app.storage()["settings.language"]).toBe("zh-CN");
+  expect(app.texts()).toContain("设置");
+  expect(app.texts()).not.toContain("Settings");
+
+  await app.press("id:nav-models");
+  expect(app.texts()).toContain("模型");
+
+  const reopened = await open("./App.tsx", { ...viewport, storage: app.storage() });
+  expect(reopened.shows("id:models-page")).toBe(true);
+  expect(reopened.texts()).toContain("模型");
+
+  await reopened.press("id:nav-settings");
+  expect(reopened.texts()).toContain("语言");
+
+  await reopened.press("id:language-en");
+  expect(reopened.storage()["settings.language"]).toBe("en");
+  expect(reopened.texts()).toContain("Settings");
+  expect(reopened.texts()).not.toContain("设置");
+});
+
 test("uses the system appearance when the saved value is invalid", async () => {
   const dark = await open("./App.tsx", { ...viewport, colorScheme: "dark" });
   await dark.press("id:nav-settings");

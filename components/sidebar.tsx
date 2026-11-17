@@ -1,5 +1,6 @@
 import { Image, Text, token, View, type ImageAsset, type JSX } from "nsh";
 import { Button, Tooltip } from "nsh/base";
+import { t } from "nsh/i18n";
 import cubeOutlineIcon from "../assets/icons/cube-outline.svg";
 import cubeSolidIcon from "../assets/icons/cube-solid.svg";
 import settingsOutlineIcon from "../assets/icons/setting-outline.svg";
@@ -76,13 +77,13 @@ export function Sidebar(props: SidebarProps) {
     <View
       testID="sidebar"
       role="navigation"
-      accessibilityLabel="Main navigation"
+      accessibilityLabel={t("nav.label")}
       class="w-13 items-center py-3"
     >
       <View class="items-center gap-1">
         <SidebarItem
           destination="models"
-          label="Models"
+          label={t("nav.models")}
           selected={props.page === "models"}
           onPress={() => props.onSelectModels()}
         >
@@ -96,7 +97,7 @@ export function Sidebar(props: SidebarProps) {
       <View class="flex-1" />
       <SidebarItem
         destination="settings"
-        label="Settings"
+        label={t("nav.settings")}
         selected={props.page === "settings"}
         onPress={() => props.onSelectSettings()}
       >

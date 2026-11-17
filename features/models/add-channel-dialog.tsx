@@ -1,4 +1,5 @@
 import { effect, signal, Text } from "nsh";
+import { t } from "nsh/i18n";
 import { Button } from "../../components/ui/button";
 import { Checkbox } from "../../components/ui/checkbox";
 import { AppDialog } from "../../components/ui/dialog";
@@ -56,17 +57,17 @@ export function AddChannelDialog(props: AddChannelDialogProps) {
     if (submitting()) return;
     const trimmedName = displayName().trim();
     if (!trimmedName) {
-      submitError.set("Display name is required.");
+      submitError.set(t("models.error.displayNameRequired"));
       return;
     }
 
     const check = urlCheck();
     if (!check.ok) {
-      submitError.set(check.error ?? "Invalid base URL.");
+      submitError.set(check.error ?? t("models.error.invalidBaseUrl"));
       return;
     }
     if (check.isInsecureHttp && !allowInsecureHttp()) {
-      submitError.set("Confirm unencrypted http:// before saving this channel.");
+      submitError.set(t("models.error.confirmInsecureSave"));
       return;
     }
 
@@ -81,10 +82,10 @@ export function AddChannelDialog(props: AddChannelDialogProps) {
         enabled: enabled(),
         allowInsecureHttp: allowInsecureHttp(),
       });
-      toast.success(`Added channel ${created.displayName}`);
+      toast.success(t("models.channel.added", { name: created.displayName }));
       props.onOpenChange(false);
     } catch (error) {
-      submitError.set(error instanceof Error ? error.message : "Could not add channel.");
+      submitError.set(error instanceof Error ? error.message : t("models.error.addChannel"));
     } finally {
       submitting.set(false);
     }
@@ -97,7 +98,7 @@ export function AddChannelDialog(props: AddChannelDialogProps) {
       onOpenChange={(open) => {
         if (!submitting()) props.onOpenChange(open);
       }}
-      title="Add Channel"
+      title={t("models.channel.add")}
       size="md"
       closeOnEscape={!submitting()}
       closeOnBackdropPress={!submitting()}
@@ -106,7 +107,7 @@ export function AddChannelDialog(props: AddChannelDialogProps) {
           <Button
             variant="outline"
             size="sm"
-            label="Cancel"
+            label={t("common.cancel")}
             disabled={submitting()}
             onPress={() => props.onOpenChange(false)}
           />
@@ -114,38 +115,38 @@ export function AddChannelDialog(props: AddChannelDialogProps) {
             testID="confirm-add-channel"
             variant="primary"
             size="sm"
-            label={submitting() ? "Adding…" : "Add Channel"}
+            label={submitting() ? t("common.adding") : t("models.channel.add")}
             disabled={submitting()}
             onPress={() => void handleSubmit()}
           />
         </>
       }
     >
-      <FormField label="Display Name">
+      <FormField label={t("common.displayName")}>
         <Input
           testID="add-channel-name-input"
-          accessibilityLabel="Display Name"
-          placeholder="e.g. OpenAI Main"
+          accessibilityLabel={t("common.displayName")}
+          placeholder={t("models.channel.displayNamePlaceholder")}
           autoFocus
           value={displayName()}
           onChange={(v) => displayName.set(v)}
         />
       </FormField>
 
-      <FormField label="API Type">
+      <FormField label={t("models.connection.apiType")}>
         <Select
           testID="add-channel-adapter-select"
-          accessibilityLabel="API Type"
+          accessibilityLabel={t("models.connection.apiType")}
           items={ADAPTER_ITEMS}
           value={adapterId()}
           onChange={handleAdapterChange}
         />
       </FormField>
 
-      <FormField label="Base URL" error={urlCheck().error}>
+      <FormField label={t("models.connection.baseUrl")} error={urlCheck().error}>
         <Input
           testID="add-channel-url-input"
-          accessibilityLabel="Base URL"
+          accessibilityLabel={t("models.connection.baseUrl")}
           placeholder={getAdapterDefaultBaseUrl(adapterId())}
           value={baseUrl()}
           onChange={(v) => {
@@ -162,16 +163,16 @@ export function AddChannelDialog(props: AddChannelDialogProps) {
           testID="add-channel-insecure-checkbox"
           checked={allowInsecureHttp()}
           onChange={(checked) => allowInsecureHttp.set(checked)}
-          label="Allow unencrypted http:// for non-local host"
+          label={t("models.connection.insecureHttp")}
         />
       </If>
 
-      <FormField label="API Key">
+      <FormField label={t("models.connection.apiKey")}>
         <Input
           testID="add-channel-token-input"
-          accessibilityLabel="API Key"
+          accessibilityLabel={t("models.connection.apiKey")}
           masked
-          placeholder="Paste API key"
+          placeholder={t("models.connection.apiKeyPlaceholder")}
           value={credential()}
           onChange={(v) => credential.set(v)}
         />
@@ -179,7 +180,7 @@ export function AddChannelDialog(props: AddChannelDialogProps) {
 
       <Switch
         testID="add-channel-enabled-switch"
-        label="Channel enabled"
+        label={t("models.channel.enabledSwitch")}
         variant="row"
         checked={enabled()}
         onChange={(checked) => enabled.set(checked)}

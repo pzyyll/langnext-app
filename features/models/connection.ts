@@ -1,3 +1,5 @@
+import { t } from "nsh/i18n";
+
 export interface ConnectionUrlCheck {
   ok: boolean;
   normalizedBaseUrl: string | null;
@@ -32,7 +34,7 @@ export function inspectBaseUrl(rawValue: string): ConnectionUrlCheck {
       ok: false,
       normalizedBaseUrl: null,
       isInsecureHttp: false,
-      error: "Enter a valid http:// or https:// base URL.",
+      error: t("models.error.baseUrlInvalid"),
     };
   }
 
@@ -41,7 +43,7 @@ export function inspectBaseUrl(rawValue: string): ConnectionUrlCheck {
       ok: false,
       normalizedBaseUrl: null,
       isInsecureHttp: false,
-      error: "Base URL must start with https:// or http://.",
+      error: t("models.error.baseUrlScheme"),
     };
   }
 
@@ -50,7 +52,7 @@ export function inspectBaseUrl(rawValue: string): ConnectionUrlCheck {
       ok: false,
       normalizedBaseUrl: null,
       isInsecureHttp: false,
-      error: "Base URL must include a host name.",
+      error: t("models.error.baseUrlHost"),
     };
   }
 

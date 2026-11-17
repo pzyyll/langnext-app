@@ -1,5 +1,6 @@
 import { cleanup, Overlay, signal, Text, View } from "nsh";
 import { Toast as BaseToast, ToastManager, ToastStack, type ToastEntry } from "nsh/base";
+import { t } from "nsh/i18n";
 import { motion } from "../motion";
 import { Button } from "./button";
 import { Icon } from "./icon";
@@ -137,7 +138,7 @@ export function ToastViewport() {
                   <Button
                     size="icon-sm"
                     variant="ghost"
-                    accessibilityLabel="Dismiss"
+                    accessibilityLabel={t("common.dismiss")}
                     onPress={() => toast.dismiss(entry().id)}
                     class="shrink-0"
                   >

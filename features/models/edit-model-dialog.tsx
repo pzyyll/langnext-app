@@ -1,4 +1,5 @@
 import { effect, signal, Text, View } from "nsh";
+import { t } from "nsh/i18n";
 import { Button } from "../../components/ui/button";
 import { Checkbox } from "../../components/ui/checkbox";
 import { AppDialog } from "../../components/ui/dialog";
@@ -14,8 +15,8 @@ import type { ProviderModel } from "./types";
 
 const DEFAULT_ADAPTER_VALUE = "__default__";
 
-const API_TYPE_ITEMS: SelectItem[] = [
-  { value: DEFAULT_ADAPTER_VALUE, title: "Default (Source)" },
+const API_TYPE_ITEMS = (): SelectItem[] => [
+  { value: DEFAULT_ADAPTER_VALUE, title: t("models.model.apiTypeDefaultSource") },
   ...ADAPTER_SPECS.map((spec) => ({ value: spec.id, title: spec.label })),
 ];
 
@@ -35,11 +36,11 @@ function parseOptionalPositiveInt(
   const trimmed = raw.trim();
   if (!trimmed) return { value: null, error: null };
   if (!/^\d+$/.test(trimmed)) {
-    return { value: null, error: `${label} must be a positive whole number.` };
+    return { value: null, error: t("models.error.positiveInteger", { label }) };
   }
   const num = Number(trimmed);
   if (!Number.isSafeInteger(num) || num <= 0) {
-    return { value: null, error: `${label} must be greater than 0.` };
+    return { value: null, error: t("models.error.positive", { label }) };
   }
   return { value: num, error: null };
 }
@@ -78,13 +79,13 @@ export function EditModelDialog(props: EditModelDialogProps) {
     const model = props.model;
     if (!model || submitting()) return;
 
-    const ctxParsed = parseOptionalPositiveInt(contextLimit(), "Context Limit");
+    const ctxParsed = parseOptionalPositiveInt(contextLimit(), t("models.model.contextLimit"));
     if (ctxParsed.error) {
       submitError.set(ctxParsed.error);
       return;
     }
 
-    const maxParsed = parseOptionalPositiveInt(maxTokens(), "Max Tokens");
+    const maxParsed = parseOptionalPositiveInt(maxTokens(), t("models.model.maxTokens"));
     if (maxParsed.error) {
       submitError.set(maxParsed.error);
       return;
@@ -107,10 +108,10 @@ export function EditModelDialog(props: EditModelDialogProps) {
         contextLimit: ctxParsed.value,
         maxTokens: maxParsed.value,
       });
-      toast.success(`Updated ${model.modelKey}`);
+      toast.success(t("models.model.updated", { key: model.modelKey }));
       props.onOpenChange(false);
     } catch (error) {
-      submitError.set(error instanceof Error ? error.message : "Could not save model settings.");
+      submitError.set(error instanceof Error ? error.message : t("models.error.saveModel"));
     } finally {
       submitting.set(false);
     }
@@ -123,7 +124,7 @@ export function EditModelDialog(props: EditModelDialogProps) {
       onOpenChange={(open) => {
         if (!submitting()) props.onOpenChange(open);
       }}
-      title="Configure Model"
+      title={t("models.model.configure")}
       size="md"
       closeOnEscape={!submitting()}
       closeOnBackdropPress={!submitting()}
@@ -132,7 +133,7 @@ export function EditModelDialog(props: EditModelDialogProps) {
           <Button
             variant="outline"
             size="sm"
-            label="Cancel"
+            label={t("common.cancel")}
             disabled={submitting()}
             onPress={() => props.onOpenChange(false)}
           />
@@ -140,7 +141,7 @@ export function EditModelDialog(props: EditModelDialogProps) {
             testID="confirm-edit-model"
             variant="primary"
             size="sm"
-            label={submitting() ? "Saving…" : "Save"}
+            label={submitting() ? t("common.saving") : t("common.save")}
             disabled={submitting()}
             onPress={() => void handleSave()}
           />
@@ -154,21 +155,21 @@ export function EditModelDialog(props: EditModelDialogProps) {
               <Text class="text-xs font-medium text-muted-foreground">{model().modelKey}</Text>
             </View>
 
-            <FormField label="Display Name">
+            <FormField label={t("common.displayName")}>
               <Input
                 testID="edit-model-name-input"
-                accessibilityLabel="Display Name"
+                accessibilityLabel={t("common.displayName")}
                 placeholder={model().displayName ?? model().modelKey}
                 value={displayNameOverride()}
                 onChange={(v) => displayNameOverride.set(v)}
               />
             </FormField>
 
-            <FormField label="API Type">
+            <FormField label={t("models.connection.apiType")}>
               <Select
                 testID="edit-model-api-select"
-                accessibilityLabel="API Type"
-                items={API_TYPE_ITEMS}
+                accessibilityLabel={t("models.connection.apiType")}
+                items={API_TYPE_ITEMS()}
                 value={apiTypeOverride()}
                 onChange={(v) => {
                   if (v) apiTypeOverride.set(v);
@@ -176,29 +177,29 @@ export function EditModelDialog(props: EditModelDialogProps) {
               />
             </FormField>
 
-            <FormField label="Capabilities">
+            <FormField label={t("models.model.capabilities")}>
               <View class="flex-row flex-wrap gap-4 pt-1">
                 <Checkbox
                   testID="edit-model-cap-text"
-                  label="Text"
+                  label={t("models.capability.text")}
                   checked={capText()}
                   onChange={(checked) => capText.set(checked)}
                 />
                 <Checkbox
                   testID="edit-model-cap-image"
-                  label="Image"
+                  label={t("models.capability.image")}
                   checked={capImage()}
                   onChange={(checked) => capImage.set(checked)}
                 />
                 <Checkbox
                   testID="edit-model-cap-pdf"
-                  label="PDF"
+                  label={t("models.capability.pdf")}
                   checked={capPdf()}
                   onChange={(checked) => capPdf.set(checked)}
                 />
                 <Checkbox
                   testID="edit-model-cap-video"
-                  label="Video"
+                  label={t("models.capability.video")}
                   checked={capVideo()}
                   onChange={(checked) => capVideo.set(checked)}
                 />
@@ -206,20 +207,20 @@ export function EditModelDialog(props: EditModelDialogProps) {
             </FormField>
 
             <View class="flex-row gap-3">
-              <FormField label="Context Limit" class="min-w-0 flex-1">
+              <FormField label={t("models.model.contextLimit")} class="min-w-0 flex-1">
                 <Input
                   testID="edit-model-context-input"
-                  accessibilityLabel="Context Limit"
-                  placeholder="Optional"
+                  accessibilityLabel={t("models.model.contextLimit")}
+                  placeholder={t("common.optional")}
                   value={contextLimit()}
                   onChange={(v) => contextLimit.set(v)}
                 />
               </FormField>
-              <FormField label="Max Tokens" class="min-w-0 flex-1">
+              <FormField label={t("models.model.maxTokens")} class="min-w-0 flex-1">
                 <Input
                   testID="edit-model-max-tokens-input"
-                  accessibilityLabel="Max Tokens"
-                  placeholder="Optional"
+                  accessibilityLabel={t("models.model.maxTokens")}
+                  placeholder={t("common.optional")}
                   value={maxTokens()}
                   onChange={(v) => maxTokens.set(v)}
                 />

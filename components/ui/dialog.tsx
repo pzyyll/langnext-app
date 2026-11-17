@@ -1,5 +1,6 @@
 import { Scroll, Text, View, type JSX } from "nsh";
 import { Dialog as BaseDialog } from "nsh/base";
+import { t } from "nsh/i18n";
 import { motion } from "../motion";
 import { Button, type ButtonVariant } from "./button";
 
@@ -96,14 +97,14 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
           <Button
             variant="outline"
             size="sm"
-            label={props.cancelLabel ?? "Cancel"}
+            label={props.cancelLabel ?? t("common.cancel")}
             disabled={props.busy}
             onPress={() => props.onOpenChange(false)}
           />
           <Button
             variant={props.confirmVariant ?? "destructive"}
             size="sm"
-            label={props.confirmLabel ?? "Confirm"}
+            label={props.confirmLabel ?? t("common.confirm")}
             disabled={props.busy}
             onPress={() => props.onConfirm()}
           />

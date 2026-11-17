@@ -1,3 +1,4 @@
+import { t } from "nsh/i18n";
 import {
   ProviderProtocolError,
   type AdapterId,
@@ -151,7 +152,7 @@ async function fetchJsonPage(
   const onExternalAbort = () => controller.abort();
   if (externalSignal) {
     if (externalSignal.aborted) {
-      throw new ProviderProtocolError("cancelled", "Request cancelled.");
+      throw new ProviderProtocolError("cancelled", t("protocol.error.cancelled"));
     }
     externalSignal.addEventListener("abort", onExternalAbort, { once: true });
   }
@@ -170,13 +171,13 @@ async function fetchJsonPage(
     });
   } catch (err) {
     if (timedOut) {
-      throw new ProviderProtocolError("timeout", "Request timed out while contacting provider.");
+      throw new ProviderProtocolError("timeout", t("protocol.error.timeout"));
     }
     if (externalSignal?.aborted) {
-      throw new ProviderProtocolError("cancelled", "Request cancelled.");
+      throw new ProviderProtocolError("cancelled", t("protocol.error.cancelled"));
     }
     const detail = err instanceof Error ? err.message : "Network request failed.";
-    throw new ProviderProtocolError("network", `Network error: ${detail}`);
+    throw new ProviderProtocolError("network", t("protocol.error.network", { detail }));
   } finally {
     clearTimeout(timer);
     externalSignal?.removeEventListener("abort", onExternalAbort);
@@ -185,29 +186,21 @@ async function fetchJsonPage(
   if (!response.ok) {
     const status = response.status;
     if (status === 401 || status === 403) {
-      throw new ProviderProtocolError(
-        "auth",
-        `Authentication failed (HTTP ${status}). Check the API key for this channel.`,
-        status,
-      );
+      throw new ProviderProtocolError("auth", t("protocol.error.auth", { status }), status);
     }
     if (status === 429) {
       throw new ProviderProtocolError(
         "rate_limited",
-        "Rate limited by provider (HTTP 429). Try again shortly.",
+        t("protocol.error.rateLimited", { status }),
         status,
       );
     }
     if (status >= 500) {
-      throw new ProviderProtocolError(
-        "server",
-        `Provider returned server error (HTTP ${status}).`,
-        status,
-      );
+      throw new ProviderProtocolError("server", t("protocol.error.server", { status }), status);
     }
     throw new ProviderProtocolError(
       "invalid_request",
-      `Request rejected by provider (HTTP ${status}).`,
+      t("protocol.error.rejected", { status }),
       status,
     );
   }
@@ -216,17 +209,11 @@ async function fetchJsonPage(
   try {
     parsed = await response.json();
   } catch {
-    throw new ProviderProtocolError(
-      "invalid_response",
-      "Provider returned an unreadable JSON payload.",
-    );
+    throw new ProviderProtocolError("invalid_response", t("protocol.error.unreadable"));
   }
 
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new ProviderProtocolError(
-      "invalid_response",
-      "Provider returned an unexpected response shape.",
-    );
+    throw new ProviderProtocolError("invalid_response", t("protocol.error.unexpectedShape"));
   }
 
   return parsed as Record<string, unknown>;
@@ -240,10 +227,7 @@ function normalizePositiveInt(value: unknown): number | null {
 
 function parseOpenAIPage(payload: Record<string, unknown>): DiscoveredRemoteModel[] {
   if (!Array.isArray(payload.data)) {
-    throw new ProviderProtocolError(
-      "invalid_response",
-      "Expected a models array in provider response.",
-    );
+    throw new ProviderProtocolError("invalid_response", t("protocol.error.missingModels"));
   }
 
   const out: DiscoveredRemoteModel[] = [];
@@ -272,10 +256,7 @@ function parseGeminiPage(payload: Record<string, unknown>): {
   nextPageToken: string | null;
 } {
   if (!Array.isArray(payload.models)) {
-    throw new ProviderProtocolError(
-      "invalid_response",
-      "Expected a Gemini models list in provider response.",
-    );
+    throw new ProviderProtocolError("invalid_response", t("protocol.error.missingGeminiModels"));
   }
 
   const models: DiscoveredRemoteModel[] = [];

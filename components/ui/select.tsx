@@ -1,5 +1,6 @@
 import { Text, View } from "nsh";
 import { Select as BaseSelect, type SelectItem } from "nsh/base";
+import { t } from "nsh/i18n";
 import { motion } from "../motion";
 import { Icon } from "./icon";
 
@@ -65,7 +66,7 @@ export function Select(props: SelectProps) {
                 : "min-w-0 flex-1 truncate text-sm text-muted-foreground"
             }
           >
-            {selectedTitle() ?? props.placeholder ?? "Select…"}
+            {selectedTitle() ?? props.placeholder ?? t("common.selectPlaceholder")}
           </Text>
           <Icon name="chevron-down" tone="muted-foreground" class="size-3.5 shrink-0" />
         </View>

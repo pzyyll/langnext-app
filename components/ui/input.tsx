@@ -1,5 +1,6 @@
 import { View } from "nsh";
 import { Input as BaseInput } from "nsh/base";
+import { t } from "nsh/i18n";
 import { motion } from "../motion";
 import { Button } from "./button";
 import { Icon, type IconName } from "./icon";
@@ -57,7 +58,7 @@ export function Input(props: InputProps) {
         <Button
           size="icon-sm"
           variant="ghost"
-          accessibilityLabel={props.clearLabel ?? "Clear input"}
+          accessibilityLabel={props.clearLabel ?? t("common.clearInput")}
           onPress={() => props.onClear?.()}
           class="ml-1 shrink-0"
         >

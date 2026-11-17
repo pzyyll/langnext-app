@@ -1,4 +1,5 @@
 import { Scroll, Text, View, windowSize } from "nsh";
+import { t } from "nsh/i18n";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Icon } from "../../components/ui/icon";
@@ -29,7 +30,7 @@ export function ChannelsRail(props: ChannelsRailProps) {
           role="header"
           class="text-xs font-semibold uppercase tracking-wider text-muted-foreground"
         >
-          Channels
+          {t("models.channels.title")}
         </Text>
       </View>
 
@@ -44,7 +45,9 @@ export function ChannelsRail(props: ChannelsRailProps) {
                   when={props.channels.length > 0}
                   else={
                     <View class="p-4">
-                      <Text class="text-xs text-muted-foreground">No channels configured</Text>
+                      <Text class="text-xs text-muted-foreground">
+                        {t("models.channels.empty")}
+                      </Text>
                     </View>
                   }
                 >
@@ -79,7 +82,7 @@ export function ChannelsRail(props: ChannelsRailProps) {
                                 {channel().displayName}
                               </Text>
                               <If when={channel().enabled}>
-                                <Badge label="ON" tone="success" />
+                                <Badge label={t("models.channels.on")} tone="success" />
                               </If>
                             </Button>
 
@@ -88,7 +91,9 @@ export function ChannelsRail(props: ChannelsRailProps) {
                                 <Button
                                   size="icon-sm"
                                   variant="ghost"
-                                  accessibilityLabel={`Move ${channel().displayName} up`}
+                                  accessibilityLabel={t("models.channels.moveUp", {
+                                    name: channel().displayName,
+                                  })}
                                   disabled={index() === 0}
                                   onPress={() => props.onMove(channel().id, "up")}
                                   class="size-6"
@@ -98,7 +103,9 @@ export function ChannelsRail(props: ChannelsRailProps) {
                                 <Button
                                   size="icon-sm"
                                   variant="ghost"
-                                  accessibilityLabel={`Move ${channel().displayName} down`}
+                                  accessibilityLabel={t("models.channels.moveDown", {
+                                    name: channel().displayName,
+                                  })}
                                   disabled={index() === props.channels.length - 1}
                                   onPress={() => props.onMove(channel().id, "down")}
                                   class="size-6"
@@ -119,13 +126,18 @@ export function ChannelsRail(props: ChannelsRailProps) {
                 <Text role="alert" class="text-xs text-destructive">
                   {props.error}
                 </Text>
-                <Button size="sm" variant="outline" label="Retry" onPress={() => props.onRetry()} />
+                <Button
+                  size="sm"
+                  variant="outline"
+                  label={t("common.retry")}
+                  onPress={() => props.onRetry()}
+                />
               </View>
             </If>
           }
         >
           <View class="p-4">
-            <Text class="text-xs text-muted-foreground">Loading…</Text>
+            <Text class="text-xs text-muted-foreground">{t("models.channels.loading")}</Text>
           </View>
         </If>
       </Scroll>
@@ -135,12 +147,12 @@ export function ChannelsRail(props: ChannelsRailProps) {
           testID="add-channel-button"
           variant="outline"
           size="sm"
-          accessibilityLabel="Add Channel"
+          accessibilityLabel={t("models.channel.add")}
           onPress={() => props.onAdd()}
           class="w-full"
         >
           <Icon name="plus" tone="foreground" class="size-3.5" />
-          <Text class="text-sm font-medium text-foreground">Add Channel</Text>
+          <Text class="text-sm font-medium text-foreground">{t("models.channel.add")}</Text>
         </Button>
       </View>
     </View>

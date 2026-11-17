@@ -1,5 +1,6 @@
 import { effect, signal, View } from "nsh";
 import { Application, currentWindow, titleBar, Tray, Window } from "nsh/desktop";
+import { t } from "nsh/i18n";
 import trayIcon from "../assets/logos/icon.svg";
 import { AppMenu } from "../components/app-menu";
 import { PageSurface } from "../components/layout/page-surface";
@@ -16,18 +17,19 @@ const TITLE_BAR_HEIGHT = 42;
 /** Puts the app in the system tray: a primary press brings the window back,
  * and the menu's Exit quits it. Exit calls `Application.quit` and does not use
  * the `quit` role, which would also bind Alt+F4. The tray belongs to the shell,
- * so it lives as long as the app does. */
+ * so it lives as long as the app does. It is rebuilt when the language changes,
+ * so its menu follows the app. */
 function installTray() {
   Tray.set({
     icon: trayIcon,
     tooltip: "My Translator",
     onClick: () => Window.get("main")?.focus(),
-    menu: [{ label: "Exit", onSelect: () => Application.quit() }],
+    menu: [{ label: t("tray.exit"), onSelect: () => Application.quit() }],
   });
 }
 
 export function AppShell() {
-  installTray();
+  effect(() => installTray());
 
   const win = currentWindow();
   effect(() => win.set({ backdrop: transparency() ? "popover" : "none" }));

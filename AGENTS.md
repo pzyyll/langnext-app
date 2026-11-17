@@ -17,6 +17,11 @@ Design docs: `@docs/ui/DESIGNE.md`
 
 - Keep the interface bare: page titles, section headings and control labels carry the meaning. Add a line only when it changes a decision (scope, consequence, or recovery); remove subtitles, taglines and option descriptions that only explain what the heading or label already makes obvious.
 
+### Localization
+
+- Every string the user reads comes from `t()` in `nsh/i18n`, never from a literal in a component: labels, placeholders, accessibility labels and error messages. Add the key to both `locales/en.yml` and `locales/zh-CN.yml`.
+- `features/settings/language.ts` owns the interface language: `system` follows the user's language, `en` and `zh-CN` override it, and the choice persists under `settings.language`.
+
 ### Styling
 
 - Style controls and layout with `class` and Tailwind utilities first (`w-full`, `p-8`, `gap-7`, `text-sm`).

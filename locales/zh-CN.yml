@@ -1,0 +1,199 @@
+app:
+  menu:
+    label: 应用菜单
+    about: 关于
+  about:
+    title: 关于 My Translator
+    label: 关于 My Translator
+    logo: My Translator 图标
+    version: 版本 %{version}
+tray:
+  exit: 退出
+nav:
+  label: 主导航
+  models: 模型
+  settings: 设置
+common:
+  ok: 确定
+  cancel: 取消
+  confirm: 确认
+  save: 保存
+  saving: 保存中…
+  delete: 删除
+  retry: 重试
+  reload: 重新加载
+  done: 完成
+  optional: 可选
+  adding: 添加中…
+  displayName: 显示名称
+  clearInput: 清除输入
+  selectPlaceholder: 请选择…
+  dismiss: 关闭
+settings:
+  title: 设置
+  appearance:
+    title: 外观
+    light: 浅色
+    dark: 深色
+    system: 跟随系统
+    error: 无法保存外观设置。本次选择将在关闭应用前生效。
+  transparency:
+    label: 透明标题栏与侧边栏
+    error: 无法保存透明度设置。本次选择将在关闭应用前生效。
+  language:
+    title: 语言
+    system: 跟随系统
+    en: English
+    "zh-CN": 简体中文
+    error: 无法保存语言设置。本次选择将在关闭应用前生效。
+models:
+  title: 模型
+  channel:
+    displayName: 显示名称
+    displayNamePlaceholder: 例如 OpenAI Main
+    enabledSwitch: 启用渠道
+    enabled: 启用
+    enabledLabel: 渠道启用状态
+    rename: 重命名
+    renameLabel: 重命名渠道
+    nameLabel: 渠道名称
+    add: 添加渠道
+    added: 已添加渠道 %{name}
+    saved: 渠道已保存
+    renamed: 渠道已重命名为 %{name}
+    deleted: 已删除渠道 %{name}
+    delete: 删除渠道
+    deleteDescription: 删除渠道“%{name}”及其所有模型？
+    unsaved: 未保存
+    conflict: 渠道已在其他位置更新。重新加载可应用最新的已保存配置。
+  channels:
+    title: 渠道
+    empty: 尚未配置渠道
+    loading: 加载中…
+    on: 启用
+    moveUp: 上移 %{name}
+    moveDown: 下移 %{name}
+  connection:
+    heading: 连接
+    apiType: 接口类型
+    baseUrl: 基础 URL
+    apiKey: API 密钥
+    apiKeyPlaceholder: 粘贴 API 密钥
+    insecureHttp: 允许非本机主机使用未加密的 http://
+    resetToken: 重置令牌
+    keepToken: 保留已存令牌
+    tokenWillClear: 保存后将清除已存令牌
+    tokenRetained: 已保留已存令牌（输入可替换）
+    test: 测试
+    testing: 测试中…
+    getModels: 获取模型
+    fetching: 获取中…
+    protocol: 同步协议
+    dirtyHint: 请先保存连接更改，再测试或同步。
+    connected: 已连接（可访问 %{count} 个模型）
+    connectedOne: 已连接（可访问 %{count} 个模型）
+    synced: 已同步 %{count} 个模型（新增 %{added} 个）
+    syncedAt: 同步于 %{time}
+    neverSynced: 从未同步
+    syncError: 同步错误：%{error}
+  search:
+    placeholder: 筛选模型…
+    label: 搜索模型
+    clear: 清除模型搜索
+  filter:
+    label: 按状态筛选模型
+    all: 全部
+    enabled: 已启用
+    disabled: 已停用
+  column:
+    model: 模型
+    apiType: 接口类型
+    capabilities: 能力
+    enabled: 启用
+  capability:
+    text: 文本
+    image: 图像
+    pdf: PDF
+    video: 视频
+  badge:
+    missing: 缺失
+    manual: 手动
+  token:
+    context: "%{value} 上下文"
+    max: "%{value} 输出"
+  model:
+    add: 添加模型
+    added: 已添加模型 %{key}
+    id: 模型 ID
+    idPlaceholder: 例如 gpt-4.1-mini
+    configure: 配置模型
+    configured: 配置
+    apiTypeDefaultChannel: 默认（渠道）
+    apiTypeDefaultSource: 默认（来源）
+    capabilities: 能力
+    contextLimit: 上下文上限
+    maxTokens: 最大令牌数
+    updated: 已更新 %{key}
+    listLabel: 渠道模型
+    select: 选择 %{name}
+    selectAll: 选择所有可见模型
+    configureLabel: 配置 %{name}
+    enableLabel: 启用 %{name}
+    empty: 尚无模型
+    noMatch: 没有匹配的模型
+  api:
+    default: 默认
+    source: 来源：%{name}
+  action:
+    select: 选择
+    deleteSelected: 删除（%{count}）
+  delete:
+    modelsTitle: 删除模型
+    modelsDescription: 从 %{channel} 删除 %{count} 个所选模型？
+    modelsDescriptionOne: 从 %{channel} 删除 %{count} 个所选模型？
+    modelsDone: 已删除 %{count} 个模型
+    modelsDoneOne: 已删除 %{count} 个模型
+  error:
+    displayNameRequired: 显示名称为必填项。
+    invalidBaseUrl: 基础 URL 无效。
+    baseUrlInvalid: 请输入有效的 http:// 或 https:// 基础 URL。
+    baseUrlScheme: 基础 URL 必须以 https:// 或 http:// 开头。
+    baseUrlHost: 基础 URL 必须包含主机名。
+    confirmInsecureSave: 请先确认未加密的 http:// 再保存此渠道。
+    confirmInsecureFormSave: 请先确认非本机主机使用未加密的 http:// 再保存。
+    confirmInsecureTest: 请先确认未加密的 http:// 再测试此主机。
+    confirmInsecureFetch: 请先确认未加密的 http:// 再获取模型。
+    addChannel: 无法添加渠道。
+    addModel: 无法添加模型。
+    modelIdRequired: 模型 ID 为必填项。
+    positiveInteger: "%{label} 必须是正整数。"
+    positive: "%{label} 必须大于 0。"
+    saveModel: 无法保存模型设置。
+    loadChannels: 无法加载模型渠道。
+    revisionConflict: 此渠道已在其他位置更改。重新加载可查看最新的设置。
+    channelGone: 所选渠道已不存在。
+    modelDuplicate: 此渠道中已存在模型“%{key}”。
+    modelGone: 模型记录已不存在。
+    tokenRequired: 请输入新的 API 令牌，或选择重置令牌将其清除。
+    channelNameEmpty: 渠道名称不能为空。
+    fetchModels: 无法获取模型。
+    connectionTest: 连接测试失败。
+    updateModelState: 无法更新模型状态。
+    deleteModels: 无法删除所选模型。
+    renameChannel: 无法重命名渠道。
+    deleteChannel: 无法删除渠道。
+    saveChannel: 无法保存渠道。
+    channelStatus: 无法更新渠道状态。
+protocol:
+  error:
+    cancelled: 请求已取消。
+    timeout: 联系服务商时请求超时。
+    network: 网络错误：%{detail}
+    auth: 身份验证失败（HTTP %{status}）。请检查此渠道的 API 密钥。
+    rateLimited: 服务商限流（HTTP %{status}）。请稍后重试。
+    server: 服务商返回服务器错误（HTTP %{status}）。
+    rejected: 服务商拒绝了请求（HTTP %{status}）。
+    unreadable: 服务商返回了无法解析的 JSON 数据。
+    unexpectedShape: 服务商返回了意外的响应结构。
+    missingModels: 服务商响应中缺少 models 数组。
+    missingGeminiModels: 服务商响应中缺少 Gemini 模型列表。

@@ -164,6 +164,31 @@ supply the row, track, thumb, hover, pressed, and focus colors. Existing page ge
 - Accessibility and platforms: Windows only. The framework's Windows Tab-focus limit remains; full keyboard use,
   screen readers, larger text, right-to-left layout, and other platforms were not verified.
 
+## Language and localization
+
+Every string the user reads comes from `t()` in `nsh/i18n`. Translations live in `locales/en.yml` and
+`locales/zh-CN.yml`; the build carries them, and a key a language lacks falls back to English.
+
+`features/settings/language.ts` owns the preference: `system` follows the user's own language, `en` and
+`zh-CN` override it. It is stored as `settings.language` and loaded before mounting the shell; a missing or
+invalid value follows the system. A save failure keeps the session's choice and shows an error near the
+control, as the appearance setting does.
+
+Settings shows Language as a second card with its own radio group, using the same card and choice styles as
+Appearance. Each language name stays in its own language (`English`, `简体中文`), so a reader who cannot read
+the current interface language still finds theirs. The tray menu is rebuilt when the language changes, so its
+Exit item follows the app. Messages already on screen keep the text they were created with; later actions use
+the new language.
+
+### Validation
+
+- Checks: `mise run verify` passed, including all 26 headless tests. Two tests cover the system language and a
+  chosen language that survives a reopen.
+- Coverage: the Models workspace, its dialogs, Settings, the sidebar, the app menu, and About render without a
+  missing-key marker in Chinese at 1040 × 720. English keeps every existing test assertion.
+- Not verified: Chinese screenshots in light and dark, desktop windows, longer text in other languages, screen
+  readers, and right-to-left layout.
+
 ## App menu and About
 
 The title bar uses `assets/logos/icon.svg` as a compact menu button. The rest of

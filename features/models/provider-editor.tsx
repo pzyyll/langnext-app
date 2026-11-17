@@ -1,4 +1,5 @@
 import { effect, signal, Scroll, Text, View, windowSize } from "nsh";
+import { t } from "nsh/i18n";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Card, SectionHeading } from "../../components/ui/card";
@@ -136,7 +137,7 @@ export function ProviderEditor(props: ProviderEditorProps) {
       const updated = await toggleChannelEnabled(props.channel.id, enabled);
       syncedRevision = updated.revision;
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not update channel status.");
+      toast.error(error instanceof Error ? error.message : t("models.error.channelStatus"));
     }
   };
 
@@ -153,9 +154,9 @@ export function ProviderEditor(props: ProviderEditorProps) {
       const updated = await renameChannel(props.channel.id, nextName);
       syncedRevision = updated.revision;
       renaming.set(false);
-      toast.success(`Renamed channel to ${updated.displayName}`);
+      toast.success(t("models.channel.renamed", { name: updated.displayName }));
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not rename channel.");
+      toast.error(error instanceof Error ? error.message : t("models.error.renameChannel"));
     } finally {
       renameSaving.set(false);
     }
@@ -186,12 +187,12 @@ export function ProviderEditor(props: ProviderEditorProps) {
       });
       syncedRevision = updated.revision;
       loadFromChannel(updated);
-      toast.success("Channel saved");
+      toast.success(t("models.channel.saved"));
     } catch (error) {
       if (error instanceof RevisionConflictError) {
         conflictDetected.set(true);
       }
-      saveError.set(error instanceof Error ? error.message : "Could not save channel.");
+      saveError.set(error instanceof Error ? error.message : t("models.error.saveChannel"));
     } finally {
       saving.set(false);
     }
@@ -204,18 +205,18 @@ export function ProviderEditor(props: ProviderEditorProps) {
     try {
       await deleteChannel(props.channel.id);
       deleteDialogOpen.set(false);
-      toast.success(`Deleted channel ${name}`);
+      toast.success(t("models.channel.deleted", { name }));
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not delete channel.");
+      toast.error(error instanceof Error ? error.message : t("models.error.deleteChannel"));
     } finally {
       deletingChannel.set(false);
     }
   };
 
   const tokenPlaceholder = () => {
-    if (credentialMode() === "clear") return "Stored token will be cleared on Save";
-    if (props.channel.hasCredential) return "Stored token retained (type to replace)";
-    return "Paste API key";
+    if (credentialMode() === "clear") return t("models.connection.tokenWillClear");
+    if (props.channel.hasCredential) return t("models.connection.tokenRetained");
+    return t("models.connection.apiKeyPlaceholder");
   };
 
   const compactLayout = () => windowSize().width < 860;
@@ -235,8 +236,8 @@ export function ProviderEditor(props: ProviderEditorProps) {
                   testID="rename-channel-button"
                   size="icon-sm"
                   variant="ghost"
-                  tooltip="Rename"
-                  accessibilityLabel="Rename channel"
+                  tooltip={t("models.channel.rename")}
+                  accessibilityLabel={t("models.channel.renameLabel")}
                   onPress={startRename}
                 >
                   <Icon name="edit" tone="muted-foreground" class="size-3.5" />
@@ -250,7 +251,7 @@ export function ProviderEditor(props: ProviderEditorProps) {
                 testID="rename-channel-input"
                 size="sm"
                 autoFocus
-                accessibilityLabel="Channel Name"
+                accessibilityLabel={t("models.channel.nameLabel")}
                 value={renameDraft()}
                 onChange={(v) => renameDraft.set(v)}
                 onSubmit={() => void submitRename()}
@@ -263,14 +264,14 @@ export function ProviderEditor(props: ProviderEditorProps) {
                 testID="confirm-rename-channel"
                 variant="primary"
                 size="sm"
-                label={renameSaving() ? "Saving…" : "Save"}
+                label={renameSaving() ? t("common.saving") : t("common.save")}
                 disabled={renameDraft().trim().length === 0 || renameSaving()}
                 onPress={() => void submitRename()}
               />
               <Button
                 variant="outline"
                 size="sm"
-                label="Cancel"
+                label={t("common.cancel")}
                 disabled={renameSaving()}
                 onPress={() => renaming.set(false)}
               />
@@ -280,9 +281,9 @@ export function ProviderEditor(props: ProviderEditorProps) {
 
         <Switch
           testID="channel-enabled-switch"
-          label="Enabled"
+          label={t("models.channel.enabled")}
           variant="inline"
-          accessibilityLabel="Channel enabled"
+          accessibilityLabel={t("models.channel.enabledLabel")}
           checked={props.channel.enabled}
           onChange={(checked) => void handleToggleChannelEnabled(checked)}
         />
@@ -290,13 +291,11 @@ export function ProviderEditor(props: ProviderEditorProps) {
 
       <If when={conflictDetected()}>
         <View class="flex-row items-center justify-between gap-3 border-b border-border bg-warning/15 px-6 py-2.5">
-          <Text class="text-xs font-medium text-warning">
-            Channel updated elsewhere. Reload to apply latest saved configuration.
-          </Text>
+          <Text class="text-xs font-medium text-warning">{t("models.channel.conflict")}</Text>
           <Button
             size="sm"
             variant="outline"
-            label="Reload"
+            label={t("common.reload")}
             onPress={() => {
               syncedRevision = props.channel.revision;
               loadFromChannel(props.channel);
@@ -314,12 +313,12 @@ export function ProviderEditor(props: ProviderEditorProps) {
           }
         >
           <Card testID="connection-card" class={compactLayout() ? "p-4" : undefined}>
-            <SectionHeading title="Connection" />
+            <SectionHeading title={t("models.connection.heading")} />
 
-            <FormField label="API Type">
+            <FormField label={t("models.connection.apiType")}>
               <Select
                 testID="connection-adapter-select"
-                accessibilityLabel="API Type"
+                accessibilityLabel={t("models.connection.apiType")}
                 items={ADAPTER_ITEMS}
                 value={draftAdapterId()}
                 onChange={(v) => {
@@ -328,10 +327,10 @@ export function ProviderEditor(props: ProviderEditorProps) {
               />
             </FormField>
 
-            <FormField label="Base URL" error={urlCheck().error}>
+            <FormField label={t("models.connection.baseUrl")} error={urlCheck().error}>
               <Input
                 testID="connection-url-input"
-                accessibilityLabel="Base URL"
+                accessibilityLabel={t("models.connection.baseUrl")}
                 placeholder={getAdapterDefaultBaseUrl(draftAdapterId())}
                 value={draftBaseUrl()}
                 onChange={(v) => {
@@ -348,13 +347,15 @@ export function ProviderEditor(props: ProviderEditorProps) {
                 testID="connection-insecure-checkbox"
                 checked={draftAllowInsecureHttp()}
                 onChange={(checked) => draftAllowInsecureHttp.set(checked)}
-                label="Allow unencrypted http:// for non-local host"
+                label={t("models.connection.insecureHttp")}
               />
             </If>
 
             <View class="gap-1.5">
               <View class="flex-row items-center justify-between">
-                <Text class="text-xs font-medium text-foreground">API Key</Text>
+                <Text class="text-xs font-medium text-foreground">
+                  {t("models.connection.apiKey")}
+                </Text>
                 <If when={props.channel.hasCredential}>
                   <If
                     when={credentialMode() === "clear"}
@@ -363,7 +364,7 @@ export function ProviderEditor(props: ProviderEditorProps) {
                         testID="clear-token-button"
                         size="sm"
                         variant="ghost"
-                        label="Reset token"
+                        label={t("models.connection.resetToken")}
                         onPress={() => {
                           credentialMode.set("clear");
                           draftCredential.set("");
@@ -375,7 +376,7 @@ export function ProviderEditor(props: ProviderEditorProps) {
                       testID="keep-token-button"
                       size="sm"
                       variant="ghost"
-                      label="Keep stored token"
+                      label={t("models.connection.keepToken")}
                       onPress={() => {
                         credentialMode.set("keep");
                         draftCredential.set("");
@@ -386,7 +387,7 @@ export function ProviderEditor(props: ProviderEditorProps) {
               </View>
               <Input
                 testID="connection-token-input"
-                accessibilityLabel="API Key"
+                accessibilityLabel={t("models.connection.apiKey")}
                 masked
                 readonly={credentialMode() === "clear"}
                 placeholder={tokenPlaceholder()}
@@ -428,20 +429,20 @@ export function ProviderEditor(props: ProviderEditorProps) {
           testID="delete-channel-button"
           variant="destructive-outline"
           size="sm"
-          label="Delete Channel"
+          label={t("models.channel.delete")}
           disabled={deletingChannel()}
           onPress={() => deleteDialogOpen.set(true)}
         />
 
         <View class="flex-row items-center gap-2">
           <If when={isDirty()}>
-            <Badge label="Unsaved" tone="warning" />
+            <Badge label={t("models.channel.unsaved")} tone="warning" />
           </If>
           <Button
             testID="cancel-channel-button"
             variant="outline"
             size="sm"
-            label="Cancel"
+            label={t("common.cancel")}
             disabled={!isDirty() || saving()}
             onPress={() => loadFromChannel(props.channel)}
           />
@@ -449,7 +450,7 @@ export function ProviderEditor(props: ProviderEditorProps) {
             testID="save-channel-button"
             variant="primary"
             size="sm"
-            label={saving() ? "Saving…" : "Save"}
+            label={saving() ? t("common.saving") : t("common.save")}
             disabled={!isDirty() || saving() || !canSave()}
             onPress={() => void handleSave()}
           />
@@ -474,9 +475,11 @@ export function ProviderEditor(props: ProviderEditorProps) {
         testID="delete-channel-dialog"
         open={deleteDialogOpen()}
         onOpenChange={(open) => deleteDialogOpen.set(open)}
-        title="Delete Channel"
-        description={`Delete channel "${props.channel.displayName}" and all of its models?`}
-        confirmLabel="Delete"
+        title={t("models.channel.delete")}
+        description={t("models.channel.deleteDescription", {
+          name: props.channel.displayName,
+        })}
+        confirmLabel={t("common.delete")}
         confirmVariant="destructive"
         busy={deletingChannel()}
         onConfirm={() => void handleConfirmDeleteChannel()}

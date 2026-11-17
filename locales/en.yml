@@ -1,0 +1,199 @@
+app:
+  menu:
+    label: App menu
+    about: About
+  about:
+    title: About My Translator
+    label: About My Translator
+    logo: My Translator logo
+    version: Version %{version}
+tray:
+  exit: Exit
+nav:
+  label: Main navigation
+  models: Models
+  settings: Settings
+common:
+  ok: OK
+  cancel: Cancel
+  confirm: Confirm
+  save: Save
+  saving: Saving…
+  delete: Delete
+  retry: Retry
+  reload: Reload
+  done: Done
+  optional: Optional
+  adding: Adding…
+  displayName: Display Name
+  clearInput: Clear input
+  selectPlaceholder: Select…
+  dismiss: Dismiss
+settings:
+  title: Settings
+  appearance:
+    title: Appearance
+    light: Light
+    dark: Dark
+    system: System
+    error: Could not save appearance. Your choice will apply until you close the app.
+  transparency:
+    label: Transparent title bar and sidebar
+    error: Could not save transparency. Your choice will apply until you close the app.
+  language:
+    title: Language
+    system: System
+    en: English
+    "zh-CN": 简体中文
+    error: Could not save language. Your choice will apply until you close the app.
+models:
+  title: Models
+  channel:
+    displayName: Display Name
+    displayNamePlaceholder: e.g. OpenAI Main
+    enabledSwitch: Channel enabled
+    enabled: Enabled
+    enabledLabel: Channel enabled
+    rename: Rename
+    renameLabel: Rename channel
+    nameLabel: Channel Name
+    add: Add Channel
+    added: Added channel %{name}
+    saved: Channel saved
+    renamed: Renamed channel to %{name}
+    deleted: Deleted channel %{name}
+    delete: Delete Channel
+    deleteDescription: 'Delete channel "%{name}" and all of its models?'
+    unsaved: Unsaved
+    conflict: Channel updated elsewhere. Reload to apply latest saved configuration.
+  channels:
+    title: Channels
+    empty: No channels configured
+    loading: Loading…
+    on: "ON"
+    moveUp: Move %{name} up
+    moveDown: Move %{name} down
+  connection:
+    heading: Connection
+    apiType: API Type
+    baseUrl: Base URL
+    apiKey: API Key
+    apiKeyPlaceholder: Paste API key
+    insecureHttp: Allow unencrypted http:// for non-local host
+    resetToken: Reset token
+    keepToken: Keep stored token
+    tokenWillClear: Stored token will be cleared on Save
+    tokenRetained: Stored token retained (type to replace)
+    test: Test
+    testing: Testing…
+    getModels: Get models
+    fetching: Fetching…
+    protocol: Sync protocol
+    dirtyHint: Save connection changes before testing or syncing.
+    connected: Connected (%{count} models reachable)
+    connectedOne: Connected (%{count} model reachable)
+    synced: Synced %{count} models (%{added} added)
+    syncedAt: "Synced: %{time}"
+    neverSynced: Never synced
+    syncError: "Sync error: %{error}"
+  search:
+    placeholder: Filter models…
+    label: Search models
+    clear: Clear model search
+  filter:
+    label: Filter models by status
+    all: All
+    enabled: Enabled
+    disabled: Disabled
+  column:
+    model: Model
+    apiType: API Type
+    capabilities: Capabilities
+    enabled: Enabled
+  capability:
+    text: Text
+    image: Image
+    pdf: PDF
+    video: Video
+  badge:
+    missing: Missing
+    manual: Manual
+  token:
+    context: "%{value} ctx"
+    max: "%{value} out"
+  model:
+    add: Add Model
+    added: Added model %{key}
+    id: Model ID
+    idPlaceholder: e.g. gpt-4.1-mini
+    configure: Configure Model
+    configured: Configure
+    apiTypeDefaultChannel: Default (Channel)
+    apiTypeDefaultSource: Default (Source)
+    capabilities: Capabilities
+    contextLimit: Context Limit
+    maxTokens: Max Tokens
+    updated: Updated %{key}
+    listLabel: Channel models
+    select: Select %{name}
+    selectAll: Select all visible models
+    configureLabel: Configure %{name}
+    enableLabel: Enable %{name}
+    empty: No models yet
+    noMatch: No matching models
+  api:
+    default: Default
+    source: "Source: %{name}"
+  action:
+    select: Select
+    deleteSelected: Delete (%{count})
+  delete:
+    modelsTitle: Delete Models
+    modelsDescription: Delete %{count} selected models from %{channel}?
+    modelsDescriptionOne: Delete %{count} selected model from %{channel}?
+    modelsDone: Deleted %{count} models
+    modelsDoneOne: Deleted %{count} model
+  error:
+    displayNameRequired: Display name is required.
+    invalidBaseUrl: Invalid base URL.
+    baseUrlInvalid: Enter a valid http:// or https:// base URL.
+    baseUrlScheme: Base URL must start with https:// or http://.
+    baseUrlHost: Base URL must include a host name.
+    confirmInsecureSave: Confirm unencrypted http:// before saving this channel.
+    confirmInsecureFormSave: Confirm using unencrypted http:// for non-local hosts before saving.
+    confirmInsecureTest: Confirm using unencrypted http:// before testing this host.
+    confirmInsecureFetch: Confirm using unencrypted http:// before fetching models.
+    addChannel: Could not add channel.
+    addModel: Could not add model.
+    modelIdRequired: Model ID is required.
+    positiveInteger: "%{label} must be a positive whole number."
+    positive: "%{label} must be greater than 0."
+    saveModel: Could not save model settings.
+    loadChannels: Could not load model channels.
+    revisionConflict: This channel changed elsewhere. Reload to inspect the latest settings.
+    channelGone: Selected channel no longer exists.
+    modelDuplicate: 'Model "%{key}" already exists in this channel.'
+    modelGone: Model record no longer exists.
+    tokenRequired: Enter a new API token or choose Reset token to clear it.
+    channelNameEmpty: Channel name cannot be empty.
+    fetchModels: Failed to fetch models.
+    connectionTest: Connection test failed.
+    updateModelState: Could not update model state.
+    deleteModels: Could not delete selected models.
+    renameChannel: Could not rename channel.
+    deleteChannel: Could not delete channel.
+    saveChannel: Could not save channel.
+    channelStatus: Could not update channel status.
+protocol:
+  error:
+    cancelled: Request cancelled.
+    timeout: Request timed out while contacting provider.
+    network: "Network error: %{detail}"
+    auth: Authentication failed (HTTP %{status}). Check the API key for this channel.
+    rateLimited: Rate limited by provider (HTTP %{status}). Try again shortly.
+    server: Provider returned server error (HTTP %{status}).
+    rejected: Request rejected by provider (HTTP %{status}).
+    unreadable: Provider returned an unreadable JSON payload.
+    unexpectedShape: Provider returned an unexpected response shape.
+    missingModels: Expected a models array in provider response.
+    missingGeminiModels: Expected a Gemini models list in provider response.

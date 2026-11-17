@@ -1,5 +1,6 @@
 import { appInfo, Image, signal, Text, token, View } from "nsh";
 import { Button, Dialog, Menu, MenuItem } from "nsh/base";
+import { t } from "nsh/i18n";
 import appIcon from "../assets/logos/icon.svg";
 import { motion } from "./motion";
 
@@ -14,7 +15,7 @@ function AboutDialog(props: AboutDialogProps) {
   return (
     <Dialog
       testID="about-dialog"
-      accessibilityLabel="About My Translator"
+      accessibilityLabel={t("app.about.label")}
       open={props.open}
       onOpenChange={({ open }) => props.onOpenChange(open)}
       animation={motion.aboutDialog}
@@ -24,28 +25,30 @@ function AboutDialog(props: AboutDialogProps) {
       class="m-auto w-96 max-w-full overflow-hidden rounded-2xl border border-border bg-background"
     >
       <View class="border-b border-border px-5 py-3">
-        <Text class="text-sm font-medium text-foreground">About My Translator</Text>
+        <Text class="text-sm font-medium text-foreground">{t("app.about.title")}</Text>
       </View>
       <View class="items-center gap-5 p-8">
         <Image
           src={appIcon}
           class="size-20"
-          accessibilityLabel="My Translator logo"
+          accessibilityLabel={t("app.about.logo")}
           // Runtime theme tint keeps the monochrome logo visible in both appearances.
           style={{ tintColor: token("foreground") }}
         />
         <Text class="text-xl font-semibold text-foreground">{info.name}</Text>
         <If when={info.version !== null}>
-          <Text class="text-sm text-muted-foreground">Version {info.version}</Text>
+          <Text class="text-sm text-muted-foreground">
+            {t("app.about.version", { version: info.version })}
+          </Text>
         </If>
       </View>
       <View class="flex-row justify-end border-t border-border bg-muted px-5 py-3">
         <Button
-          accessibilityLabel="OK"
+          accessibilityLabel={t("common.ok")}
           onPress={() => props.onOpenChange(false)}
           class={`h-8 min-w-20 items-center justify-center rounded-lg border border-input bg-background px-4 hover:bg-accent active:bg-border focus-visible:ring-2 focus-visible:ring-ring ${motion.navigationFeedback}`}
         >
-          <Text class="text-sm text-foreground">OK</Text>
+          <Text class="text-sm text-foreground">{t("common.ok")}</Text>
         </Button>
       </View>
     </Dialog>
@@ -77,7 +80,7 @@ export function AppMenu() {
         trigger={
           <Button
             testID="app-menu-trigger"
-            accessibilityLabel="App menu"
+            accessibilityLabel={t("app.menu.label")}
             selected={menuOpen()}
             class={`size-8 items-center justify-center rounded-lg hover:bg-sidebar-accent-foreground/10 active:bg-sidebar-accent-foreground/20 selected:bg-sidebar-accent-foreground/10 focus-visible:ring-2 focus-visible:ring-sidebar-ring ${motion.navigationFeedback}`}
           >
@@ -92,13 +95,13 @@ export function AppMenu() {
         }
       >
         <MenuItem
-          accessibilityLabel="About"
+          accessibilityLabel={t("app.menu.about")}
           onSelect={() => {
             aboutPending = true;
           }}
           class={`h-8 justify-center rounded-lg px-3 hover:bg-accent focus:bg-accent active:bg-border ${motion.navigationFeedback}`}
         >
-          <Text class="text-sm text-popover-foreground">About</Text>
+          <Text class="text-sm text-popover-foreground">{t("app.menu.about")}</Text>
         </MenuItem>
       </Menu>
       <AboutDialog open={aboutOpen()} onOpenChange={(open) => aboutOpen.set(open)} />

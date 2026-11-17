@@ -1,4 +1,5 @@
 import { signal, Text, View } from "nsh";
+import { t } from "nsh/i18n";
 import { Button } from "../../components/ui/button";
 import { Icon } from "../../components/ui/icon";
 import { AddChannelDialog } from "./add-channel-dialog";
@@ -34,17 +35,19 @@ export function ModelsPage() {
         else={
           <View class="min-w-0 flex-1 items-center justify-center gap-4 p-8">
             <Text role="header" class="text-2xl font-semibold text-foreground">
-              Models
+              {t("models.title")}
             </Text>
             <Button
               testID="empty-add-channel-button"
               variant="primary"
               size="md"
-              accessibilityLabel="Add Channel"
+              accessibilityLabel={t("models.channel.add")}
               onPress={() => addChannelOpen.set(true)}
             >
               <Icon name="plus" tone="primary-foreground" class="size-4" />
-              <Text class="text-sm font-medium text-primary-foreground">Add Channel</Text>
+              <Text class="text-sm font-medium text-primary-foreground">
+                {t("models.channel.add")}
+              </Text>
             </Button>
           </View>
         }

@@ -1,4 +1,5 @@
 import { setColorScheme, signal, Storage } from "nsh";
+import { t } from "nsh/i18n";
 
 export type Appearance = "light" | "dark" | "system";
 
@@ -31,6 +32,6 @@ export async function selectAppearance(value: Appearance) {
   try {
     await Storage.setItem(APPEARANCE_STORAGE_KEY, value);
   } catch {
-    saveError.set("Could not save appearance. Your choice will apply until you close the app.");
+    saveError.set(t("settings.appearance.error"));
   }
 }

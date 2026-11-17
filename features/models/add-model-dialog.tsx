@@ -1,4 +1,5 @@
 import { effect, signal, Text } from "nsh";
+import { t } from "nsh/i18n";
 import { Button } from "../../components/ui/button";
 import { AppDialog } from "../../components/ui/dialog";
 import { Input } from "../../components/ui/input";
@@ -12,8 +13,8 @@ import { createManualModel } from "./store";
 
 const DEFAULT_ADAPTER_VALUE = "__default__";
 
-const API_TYPE_ITEMS: SelectItem[] = [
-  { value: DEFAULT_ADAPTER_VALUE, title: "Default (Channel)" },
+const API_TYPE_ITEMS = (): SelectItem[] => [
+  { value: DEFAULT_ADAPTER_VALUE, title: t("models.model.apiTypeDefaultChannel") },
   ...ADAPTER_SPECS.map((spec) => ({ value: spec.id, title: spec.label })),
 ];
 
@@ -47,7 +48,7 @@ export function AddModelDialog(props: AddModelDialogProps) {
     if (submitting()) return;
     const key = modelKey().trim();
     if (!key) {
-      submitError.set("Model ID is required.");
+      submitError.set(t("models.error.modelIdRequired"));
       return;
     }
 
@@ -61,10 +62,10 @@ export function AddModelDialog(props: AddModelDialogProps) {
         apiTypeOverride: apiType() === DEFAULT_ADAPTER_VALUE ? null : (apiType() as AdapterId),
         enabled: enabled(),
       });
-      toast.success(`Added model ${key}`);
+      toast.success(t("models.model.added", { key }));
       props.onOpenChange(false);
     } catch (error) {
-      submitError.set(error instanceof Error ? error.message : "Could not add model.");
+      submitError.set(error instanceof Error ? error.message : t("models.error.addModel"));
     } finally {
       submitting.set(false);
     }
@@ -77,7 +78,7 @@ export function AddModelDialog(props: AddModelDialogProps) {
       onOpenChange={(open) => {
         if (!submitting()) props.onOpenChange(open);
       }}
-      title="Add Model"
+      title={t("models.model.add")}
       size="sm"
       closeOnEscape={!submitting()}
       closeOnBackdropPress={!submitting()}
@@ -86,7 +87,7 @@ export function AddModelDialog(props: AddModelDialogProps) {
           <Button
             variant="outline"
             size="sm"
-            label="Cancel"
+            label={t("common.cancel")}
             disabled={submitting()}
             onPress={() => props.onOpenChange(false)}
           />
@@ -94,39 +95,39 @@ export function AddModelDialog(props: AddModelDialogProps) {
             testID="confirm-add-model"
             variant="primary"
             size="sm"
-            label={submitting() ? "Adding…" : "Add Model"}
+            label={submitting() ? t("common.adding") : t("models.model.add")}
             disabled={submitting()}
             onPress={() => void handleSubmit()}
           />
         </>
       }
     >
-      <FormField label="Model ID">
+      <FormField label={t("models.model.id")}>
         <Input
           testID="add-model-key-input"
-          accessibilityLabel="Model ID"
-          placeholder="e.g. gpt-4.1-mini"
+          accessibilityLabel={t("models.model.id")}
+          placeholder={t("models.model.idPlaceholder")}
           autoFocus
           value={modelKey()}
           onChange={(v) => modelKey.set(v)}
         />
       </FormField>
 
-      <FormField label="Display Name">
+      <FormField label={t("common.displayName")}>
         <Input
           testID="add-model-name-input"
-          accessibilityLabel="Display Name"
-          placeholder="Optional"
+          accessibilityLabel={t("common.displayName")}
+          placeholder={t("common.optional")}
           value={displayName()}
           onChange={(v) => displayName.set(v)}
         />
       </FormField>
 
-      <FormField label="API Type">
+      <FormField label={t("models.connection.apiType")}>
         <Select
           testID="add-model-api-select"
-          accessibilityLabel="API Type"
-          items={API_TYPE_ITEMS}
+          accessibilityLabel={t("models.connection.apiType")}
+          items={API_TYPE_ITEMS()}
           value={apiType()}
           onChange={(v) => {
             if (v) apiType.set(v);
@@ -136,7 +137,7 @@ export function AddModelDialog(props: AddModelDialogProps) {
 
       <Switch
         testID="add-model-enabled-switch"
-        label="Enabled"
+        label={t("models.channel.enabled")}
         variant="row"
         checked={enabled()}
         onChange={(checked) => enabled.set(checked)}

@@ -1,4 +1,5 @@
 import { signal, Storage } from "nsh";
+import { t } from "nsh/i18n";
 
 const TRANSPARENCY_STORAGE_KEY = "settings.transparency";
 const preference = signal(true);
@@ -22,6 +23,6 @@ export async function selectTransparency(value: boolean) {
   try {
     await Storage.setItem(TRANSPARENCY_STORAGE_KEY, String(value));
   } catch {
-    saveError.set("Could not save transparency. Your choice will apply until you close the app.");
+    saveError.set(t("settings.transparency.error"));
   }
 }
