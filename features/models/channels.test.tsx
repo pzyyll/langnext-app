@@ -52,6 +52,37 @@ test("provider channels: saves an empty OpenAI draft offline", async () => {
   expect(reopened.requests()).toHaveLength(0);
 });
 
+test("provider channels: rail subtitle shows the provider, not the API type", async () => {
+  const openai = makeChannel({
+    id: "ch-openai",
+    presetId: "openai",
+    displayName: "Work",
+    adapterId: "openai-compatible",
+  });
+  const deepseek = makeChannel({
+    id: "ch-deepseek",
+    presetId: "deepseek",
+    displayName: "Proxied",
+    adapterId: "anthropic",
+    enabled: false,
+    sortOrder: 1,
+  });
+
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: makeSeedStorage({
+      channels: [openai, deepseek],
+      credentials: { [openai.id]: "sk-oai", [deepseek.id]: "sk-ds" },
+    }),
+  });
+
+  await app.waitFor("id:channels-rail");
+  expect(app.shows("id:channel-item-ch-openai >> text:OpenAI")).toBe(true);
+  expect(app.shows("id:channel-item-ch-deepseek >> text:DeepSeek")).toBe(true);
+  expect(app.shows("id:channel-item-ch-openai >> text:OpenAI Chat Completions")).toBe(false);
+  expect(app.shows("id:channel-item-ch-deepseek >> text:Anthropic Messages")).toBe(false);
+});
+
 test("provider channels: Gemini has one fixed default API", async () => {
   const app = await open(APP_ENTRY, {
     ...viewport,

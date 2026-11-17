@@ -73,7 +73,7 @@ models:
     title: Channels
     empty: No channels configured
     loading: Loading…
-    itemLabel: "%{name} (%{status})"
+    itemLabel: "%{name} (%{provider}, %{status})"
     moveUp: Move %{name} up
     moveDown: Move %{name} down
   preset:

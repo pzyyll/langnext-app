@@ -273,9 +273,11 @@ nesting scroll views.
   column with a `Channels` header and `+` icon trigger, followed by a full-height
   scrollable channel list. Each channel row keeps a fixed leading status lane
   (`check-circle` when enabled, muted `minus` when disabled, paired with text and
-  accessible state) plus a two-line name and protocol subtitle. Selection highlights
-  the row surface (`border-border bg-accent`), and reorder arrows appear only on
-  the selected row when multiple channels exist, keeping the status column fixed.
+  accessible state) plus a two-line display name and a provider mark + name
+  subtitle (`OpenAI`, `Google Gemini`, `Anthropic`, `DeepSeek`, or `Custom`).
+  Selection highlights the row surface (`border-border bg-accent`), and reorder
+  arrows appear only on the selected row when multiple channels exist, keeping
+  the status column fixed.
 - **Detail pane**: Displays the selected channel's `h-12` header (title, inline
   rename, enabled `Switch`, hairline divider, and quiet destructive-hover delete
   trigger), followed by scrollable `Connection` and `Models` cards

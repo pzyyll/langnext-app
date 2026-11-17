@@ -4,7 +4,7 @@ import { motion } from "../../components/motion";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Icon } from "../../components/ui/icon";
-import { getAdapterLabel } from "../../services/protocols/adapters";
+import { getProviderPreset, getProviderPresetLabel } from "../../services/protocols/presets";
 import type { ProviderChannel } from "./types";
 
 interface ChannelsRailProps {
@@ -86,6 +86,7 @@ export function ChannelsRail(props: ChannelsRailProps) {
                               selected={isSelected()}
                               accessibilityLabel={t("models.channels.itemLabel", {
                                 name: channel().displayName,
+                                provider: getProviderPresetLabel(channel().presetId),
                                 status: channel().enabled
                                   ? t("models.channel.enabled")
                                   : t("models.filter.disabled"),
@@ -125,9 +126,16 @@ export function ChannelsRail(props: ChannelsRailProps) {
                                     <Badge label={t("models.filter.disabled")} tone="neutral" />
                                   </If>
                                 </View>
-                                <Text class="truncate text-xs text-muted-foreground">
-                                  {getAdapterLabel(channel().adapterId)}
-                                </Text>
+                                <View class="flex-row items-center gap-1">
+                                  <Icon
+                                    name={getProviderPreset(channel().presetId).icon}
+                                    tone="muted-foreground"
+                                    class="size-3 shrink-0"
+                                  />
+                                  <Text class="min-w-0 truncate text-xs text-muted-foreground">
+                                    {getProviderPresetLabel(channel().presetId)}
+                                  </Text>
+                                </View>
                               </View>
                             </Button>
 

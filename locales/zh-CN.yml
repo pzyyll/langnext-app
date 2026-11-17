@@ -73,7 +73,7 @@ models:
     title: 渠道
     empty: 尚未配置渠道
     loading: 加载中…
-    itemLabel: "%{name}（%{status}）"
+    itemLabel: "%{name}（%{provider}，%{status}）"
     moveUp: 上移 %{name}
     moveDown: 下移 %{name}
   preset:
