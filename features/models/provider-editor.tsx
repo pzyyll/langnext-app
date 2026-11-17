@@ -20,15 +20,16 @@ import { Input } from "../../components/ui/input";
 import { Select, type SelectItem } from "../../components/ui/select";
 import { Switch } from "../../components/ui/switch";
 import { toast } from "../../components/ui/toast";
-import { getAdapterLabel } from "../../services/protocols/adapters";
-import { getProviderPreset, getProviderPresetLabel } from "../../services/protocols/presets";
-import type { AdapterId } from "../../services/protocols/types";
+import type { ProtocolId } from "../../modules/ai/contracts/protocol";
+import { aiClient } from "../../modules/ai/runtime/client";
+import { aiRegistry } from "../../modules/ai/runtime/registry";
+import { getProviderPreset } from "../../services/protocols/presets";
 import { AddModelDialog, type AddModelSubmission } from "./add-model-dialog";
 import type { ChannelDraft } from "./channel-draft";
 import { inspectBaseUrl, isInsecureHttpConfirmed, resolveConfirmedInsecureUrl } from "./connection";
 import { EditModelDialog, type EditModelSubmission } from "./edit-model-dialog";
 import { FormField } from "./form-field";
-import { resolveModelFacts } from "./model-facts";
+import { getProtocolLabel } from "./model-helpers";
 import { ModelsTable } from "./models-table";
 import {
   createManualModel,
@@ -79,7 +80,7 @@ type ProviderEditorProps =
 export function ProviderEditor(props: ProviderEditorProps) {
   const isDraftMode = () => props.mode === "draft";
 
-  const savedAdapterId = signal<AdapterId>(
+  const savedAdapterId = signal<ProtocolId>(
     props.mode === "saved" ? props.channel.adapterId : props.draft.adapterId(),
   );
   const savedBaseUrl = signal(props.mode === "saved" ? (props.channel.baseUrl ?? "") : "");
@@ -205,13 +206,16 @@ export function ProviderEditor(props: ProviderEditorProps) {
 
   const currentPresetId = () =>
     props.mode === "draft" ? props.draft.presetId : props.channel.presetId;
-  const currentPreset = () => getProviderPreset(currentPresetId());
+  const currentProvider = () => aiRegistry.getProvider(currentPresetId());
+  const providerLabel = () => t(currentProvider().labelKey);
+  // Provider marks arrive with presentations; the shared preset icons stay until then.
+  const providerIcon = () => getProviderPreset(currentPresetId()).icon;
   const allowedAdapterItems = (): SelectItem[] =>
-    currentPreset().allowedAdapterIds.map((id) => ({
+    currentProvider().allowedProtocolIds.map((id) => ({
       value: id,
-      title: getAdapterLabel(id),
+      title: getProtocolLabel(id),
     }));
-  const hasFixedApiType = () => currentPreset().allowedAdapterIds.length <= 1;
+  const hasFixedApiType = () => currentProvider().allowedProtocolIds.length <= 1;
   const currentDisplayName = () =>
     props.mode === "draft" ? props.draft.displayName() : props.channel.displayName;
   const currentEnabled = () =>
@@ -581,7 +585,10 @@ export function ProviderEditor(props: ProviderEditorProps) {
 
   const handleAddModelSubmit = async (input: AddModelSubmission) => {
     const presetId = props.mode === "draft" ? props.draft.presetId : props.channel.presetId;
-    const facts = await resolveModelFacts(presetId, input.modelKey);
+    const facts = await aiClient.resolveModelFacts({
+      providerTypeId: presetId,
+      modelKey: input.modelKey,
+    });
     if (props.mode === "draft") {
       props.draft.addManualModel({ ...input, facts });
       return;
@@ -625,7 +632,7 @@ export function ProviderEditor(props: ProviderEditorProps) {
   };
 
   const urlPlaceholder = () =>
-    currentPreset().defaultBaseUrl ?? t("models.connection.baseUrlPlaceholder");
+    currentProvider().defaultBaseUrl ?? t("models.connection.baseUrlPlaceholder");
 
   const tableChannelView = (): ProviderChannel => {
     if (props.mode === "saved") return props.channel;
@@ -633,7 +640,7 @@ export function ProviderEditor(props: ProviderEditorProps) {
     return {
       id: d.id,
       presetId: d.presetId,
-      displayName: d.displayName().trim() || getProviderPresetLabel(d.presetId),
+      displayName: d.displayName().trim() || t(aiRegistry.getProvider(d.presetId).labelKey),
       adapterId: d.adapterId(),
       baseUrl: inspectBaseUrl(d.baseUrl()).normalizedBaseUrl,
       hasCredential: d.credential().trim().length > 0,
@@ -656,13 +663,13 @@ export function ProviderEditor(props: ProviderEditorProps) {
         class={`h-12 shrink-0 flex-row items-center justify-between gap-3 border-b border-border ${compactLayout() ? "px-4" : "px-6"}`}
       >
         <View class="min-w-0 flex-1 flex-row items-center gap-2">
-          <Icon name={currentPreset().icon} tone="foreground" class="size-4 shrink-0" />
+          <Icon name={providerIcon()} tone="foreground" class="size-4 shrink-0" />
           <If
             when={!isDraftMode() && renaming()}
             else={
               <>
                 <Text role="header" class="truncate text-base font-semibold text-foreground">
-                  {currentDisplayName().trim() || getProviderPresetLabel(currentPresetId())}
+                  {currentDisplayName().trim() || providerLabel()}
                 </Text>
                 <If when={isDraftMode()}>
                   <Badge label={t("models.channel.unsaved")} tone="warning" />
@@ -800,9 +807,9 @@ export function ProviderEditor(props: ProviderEditorProps) {
                   class={compactLayout() ? undefined : "w-56 shrink-0"}
                 >
                   <View class="h-9 flex-row items-center gap-2 rounded-lg border border-border bg-muted px-3">
-                    <Icon name={currentPreset().icon} tone="foreground" class="size-4 shrink-0" />
+                    <Icon name={providerIcon()} tone="foreground" class="size-4 shrink-0" />
                     <Text class="truncate text-sm font-medium text-foreground">
-                      {getProviderPresetLabel(currentPresetId())}
+                      {providerLabel()}
                     </Text>
                   </View>
                 </FormField>
@@ -893,7 +900,7 @@ export function ProviderEditor(props: ProviderEditorProps) {
                       value={currentAdapterId()}
                       onChange={(v) => {
                         if (!v) return;
-                        const next = v as AdapterId;
+                        const next = v as ProtocolId;
                         if (props.mode === "draft") {
                           props.draft.setAdapterId(next);
                         } else {
@@ -909,7 +916,7 @@ export function ProviderEditor(props: ProviderEditorProps) {
                     class="h-9 flex-row items-center rounded-lg border border-border bg-muted px-3"
                   >
                     <Text class="truncate text-sm text-foreground">
-                      {getAdapterLabel(currentAdapterId())}
+                      {getProtocolLabel(currentAdapterId())}
                     </Text>
                   </View>
                 </If>

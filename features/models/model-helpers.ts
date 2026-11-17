@@ -1,21 +1,30 @@
 import { t } from "nsh/i18n";
-import { getAdapterLabel } from "../../services/protocols/adapters";
-import { getProviderPreset, type ProviderPresetId } from "../../services/protocols/presets";
-import type { AdapterId } from "../../services/protocols/types";
-import type { CapabilityFlags, ProviderModel } from "./types";
+import type { ProviderTypeId } from "../../modules/ai/contracts/channel";
+import type { CapabilityFlags, ProviderModel } from "../../modules/ai/contracts/model";
+import type { ProtocolId } from "../../modules/ai/contracts/protocol";
+import { aiRegistry } from "../../modules/ai/runtime/registry";
 
 export const MODEL_DEFAULT_API_VALUE = "__default__";
 
+/** Resolves a translated protocol label, tolerating a reference this build lacks. */
+export function getProtocolLabel(protocolId: ProtocolId): string {
+  try {
+    return t(aiRegistry.getProtocol(protocolId).labelKey);
+  } catch {
+    return protocolId;
+  }
+}
+
 /** Builds the ordered API selector choices for manual model add and edit dialogs. */
 export function getModelApiTypeItems(
-  presetId: ProviderPresetId,
+  presetId: ProviderTypeId,
 ): Array<{ value: string; title: string }> {
-  const preset = getProviderPreset(presetId);
+  const provider = aiRegistry.getProvider(presetId);
   return [
     { value: MODEL_DEFAULT_API_VALUE, title: t("models.model.useChannelDefault") },
-    ...preset.allowedAdapterIds.map((id) => ({
+    ...provider.allowedProtocolIds.map((id) => ({
       value: id,
-      title: getAdapterLabel(id),
+      title: getProtocolLabel(id),
     })),
   ];
 }
@@ -43,21 +52,21 @@ export function resolveEffectiveCapabilities(model: ProviderModel): CapabilityFl
 /** Resolves the effective API protocol for a model from its override or channel default. */
 export function resolveEffectiveApiType(
   model: Pick<ProviderModel, "apiTypeOverride">,
-  channelDefaultAdapterId: AdapterId,
-): AdapterId {
+  channelDefaultAdapterId: ProtocolId,
+): ProtocolId {
   return model.apiTypeOverride ?? channelDefaultAdapterId;
 }
 
 /** Formats the API Type column relative to the owning channel adapter. */
 export function formatModelApiTypeDisplay(
   model: ProviderModel,
-  providerAdapterId: AdapterId,
+  providerAdapterId: ProtocolId,
 ): string {
   const effectiveApi = resolveEffectiveApiType(model, providerAdapterId);
   if (model.apiTypeOverride) {
-    return getAdapterLabel(effectiveApi);
+    return getProtocolLabel(effectiveApi);
   }
-  return t("models.api.default", { name: getAdapterLabel(effectiveApi) });
+  return t("models.api.default", { name: getProtocolLabel(effectiveApi) });
 }
 
 /** Formats an optional token count cleanly (e.g. `128K`, `1M`, `8192`). */

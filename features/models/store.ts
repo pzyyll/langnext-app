@@ -1,15 +1,10 @@
 import { batch, signal, Storage } from "nsh";
 import { t } from "nsh/i18n";
-import { loadCatalog } from "../../services/models-dev/catalog";
-import { listRemoteModels, testAdapterConnection } from "../../services/protocols/adapters";
-import { getProviderPreset, isProtocolAllowedForPreset } from "../../services/protocols/presets";
-import {
-  ProviderProtocolError,
-  type AdapterRequestParams,
-  type DiscoveredRemoteModel,
-} from "../../services/protocols/types";
+import { ProviderProtocolError } from "../../modules/ai/contracts/errors";
+import type { DiscoveredRemoteModel } from "../../modules/ai/contracts/model";
+import { aiClient, type AiClientInput } from "../../modules/ai/runtime/client";
+import { aiRegistry } from "../../modules/ai/runtime/registry";
 import { inspectBaseUrl } from "./connection";
-import { applyCatalogFacts } from "./model-facts";
 import {
   applyModelConfigUpdate,
   createManualProviderModel,
@@ -197,7 +192,7 @@ export async function saveChannelDraft(input: SaveChannelDraftInput): Promise<Pr
     if (!displayName) {
       throw new Error(t("models.error.displayNameRequired"));
     }
-    if (!isProtocolAllowedForPreset(input.presetId, input.adapterId)) {
+    if (!aiRegistry.isProtocolAllowed(input.presetId, input.adapterId)) {
       throw new Error(t("models.error.unsupportedProtocol"));
     }
 
@@ -213,7 +208,7 @@ export async function saveChannelDraft(input: SaveChannelDraftInput): Promise<Pr
     for (const model of inputModels) {
       if (
         model.apiTypeOverride !== null &&
-        !isProtocolAllowedForPreset(input.presetId, model.apiTypeOverride)
+        !aiRegistry.isProtocolAllowed(input.presetId, model.apiTypeOverride)
       ) {
         throw new Error(t("models.error.unsupportedProtocol"));
       }
@@ -386,7 +381,7 @@ export async function updateChannel(input: UpdateChannelInput): Promise<Provider
     if (!displayName) {
       throw new Error(t("models.error.displayNameRequired"));
     }
-    if (!isProtocolAllowedForPreset(current.presetId, input.adapterId)) {
+    if (!aiRegistry.isProtocolAllowed(current.presetId, input.adapterId)) {
       throw new Error(t("models.error.unsupportedProtocol"));
     }
 
@@ -538,12 +533,16 @@ export async function deleteChannel(id: string): Promise<void> {
   });
 }
 
+/**
+ * Applies the host's URL consent and saved-secret policy, then hands the client
+ * a resolved connection snapshot. Provider policy stays in the client.
+ */
 async function resolveConnectionRequestParams(
   snapshot: ConnectionSnapshot,
   action: "test" | "fetch",
-  abortSignal?: AbortSignal,
-): Promise<AdapterRequestParams> {
-  if (!isProtocolAllowedForPreset(snapshot.presetId, snapshot.adapterId)) {
+): Promise<AiClientInput> {
+  const provider = aiRegistry.getProvider(snapshot.presetId);
+  if (!provider.allowedProtocolIds.includes(snapshot.adapterId)) {
     throw new Error(t("models.error.unsupportedProtocol"));
   }
 
@@ -551,7 +550,7 @@ async function resolveConnectionRequestParams(
   if (!urlCheck.ok) {
     throw new Error(urlCheck.error ?? t("models.error.invalidBaseUrl"));
   }
-  if (!urlCheck.normalizedBaseUrl && !getProviderPreset(snapshot.presetId).defaultBaseUrl) {
+  if (!urlCheck.normalizedBaseUrl && !provider.defaultBaseUrl) {
     throw new Error(t("models.error.baseUrlRequired"));
   }
   if (urlCheck.isInsecureHttp && !snapshot.allowInsecureHttp) {
@@ -579,11 +578,10 @@ async function resolveConnectionRequestParams(
   }
 
   return {
-    presetId: snapshot.presetId,
-    adapterId: snapshot.adapterId,
+    providerTypeId: snapshot.presetId,
+    protocolId: snapshot.adapterId,
     baseUrl: urlCheck.normalizedBaseUrl,
     credential,
-    signal: abortSignal,
   };
 }
 
@@ -591,22 +589,16 @@ export async function testConnectionSnapshot(
   snapshot: ConnectionSnapshot,
   abortSignal?: AbortSignal,
 ): Promise<{ modelCount: number }> {
-  const params = await resolveConnectionRequestParams(snapshot, "test", abortSignal);
-  return testAdapterConnection(params);
+  const input = await resolveConnectionRequestParams(snapshot, "test");
+  return aiClient.testConnection(input, { signal: abortSignal });
 }
 
 export async function discoverModelsSnapshot(
   snapshot: ConnectionSnapshot,
   abortSignal?: AbortSignal,
 ): Promise<DiscoveredRemoteModel[]> {
-  const params = await resolveConnectionRequestParams(snapshot, "fetch", abortSignal);
-  // Start the catalog lookup before the listing so neither request waits on the other.
-  const catalog = loadCatalog();
-  const discovered = await listRemoteModels(params);
-  if (abortSignal?.aborted) {
-    throw new ProviderProtocolError("cancelled", t("protocol.error.cancelled"));
-  }
-  return applyCatalogFacts(params.presetId, discovered, await catalog);
+  const input = await resolveConnectionRequestParams(snapshot, "fetch");
+  return aiClient.discoverModels(input, { signal: abortSignal });
 }
 
 export async function syncChannelModels(
@@ -619,13 +611,12 @@ export async function syncChannelModels(
     throw new Error(t("models.error.channelGone"));
   }
 
-  const params = await resolveConnectionRequestParams(snapshot, "fetch", abortSignal);
-  const syncAdapterId = params.adapterId;
-  const catalog = loadCatalog();
+  const input = await resolveConnectionRequestParams(snapshot, "fetch");
+  const syncAdapterId = input.protocolId;
 
   let discovered;
   try {
-    discovered = await listRemoteModels(params);
+    discovered = await aiClient.discoverModels(input, { signal: abortSignal });
   } catch (error) {
     const message = error instanceof Error ? error.message : t("models.error.fetchModels");
     if (!abortSignal?.aborted && (error as { kind?: string } | null)?.kind !== "cancelled") {
@@ -646,7 +637,7 @@ export async function syncChannelModels(
     throw new ProviderProtocolError("cancelled", t("protocol.error.cancelled"));
   }
 
-  const enriched = applyCatalogFacts(params.presetId, discovered, await catalog);
+  const enriched = discovered;
 
   return withWriteLock(async () => {
     if (abortSignal?.aborted) {

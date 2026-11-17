@@ -1,28 +1,27 @@
 import { signal } from "nsh";
-import {
-  getProviderPreset,
-  getProviderPresetLabel,
-  type ProviderPresetId,
-} from "../../services/protocols/presets";
-import type { AdapterId, DiscoveredRemoteModel } from "../../services/protocols/types";
+import { t } from "nsh/i18n";
+import type { ProviderTypeId } from "../../modules/ai/contracts/channel";
+import type {
+  CapabilityOverrides,
+  DiscoveredRemoteModel,
+  ModelFacts,
+  ProviderModel,
+  SyncModelsResult,
+} from "../../modules/ai/contracts/model";
+import type { ProtocolId } from "../../modules/ai/contracts/protocol";
+import { aiRegistry } from "../../modules/ai/runtime/registry";
 import { isInsecureHttpConfirmed, resolveConfirmedInsecureUrl } from "./connection";
 import {
   applyModelConfigUpdate,
   createManualProviderModel,
   mergeDiscoveredCatalog,
 } from "./model-collection";
-import type {
-  CapabilityOverrides,
-  ModelFacts,
-  PersistedDraftScopes,
-  ProviderModel,
-  SyncModelsResult,
-} from "./types";
+import type { PersistedDraftScopes } from "./types";
 
 export interface AddModelDraftInput {
   modelKey: string;
   displayNameOverride: string | null;
-  apiTypeOverride: AdapterId | null;
+  apiTypeOverride: ProtocolId | null;
   enabled: boolean;
   /** Catalog capability and token facts when the model is known to models.dev. */
   facts?: ModelFacts | null;
@@ -31,7 +30,7 @@ export interface AddModelDraftInput {
 export interface UpdateModelDraftInput {
   id: string;
   displayNameOverride: string | null;
-  apiTypeOverride: AdapterId | null;
+  apiTypeOverride: ProtocolId | null;
   capabilitiesOverride: CapabilityOverrides | null;
   contextLimit: number | null;
   maxTokens: number | null;
@@ -40,11 +39,11 @@ export interface UpdateModelDraftInput {
 /** Page-owned transient state for creating a new provider channel before first save. */
 export interface ChannelDraft {
   readonly id: string;
-  readonly presetId: ProviderPresetId;
+  readonly presetId: ProviderTypeId;
   displayName: () => string;
   setDisplayName: (value: string) => void;
-  adapterId: () => AdapterId;
-  setAdapterId: (value: AdapterId) => void;
+  adapterId: () => ProtocolId;
+  setAdapterId: (value: ProtocolId) => void;
   baseUrl: () => string;
   setBaseUrl: (value: string) => void;
   credential: () => string;
@@ -59,7 +58,7 @@ export interface ChannelDraft {
   setSyncError: (message: string | null) => void;
   applyDiscoveredModels: (
     discovered: DiscoveredRemoteModel[],
-    sourceAdapterId: AdapterId,
+    sourceAdapterId: ProtocolId,
   ) => SyncModelsResult;
   addManualModel: (input: AddModelDraftInput) => ProviderModel;
   updateModel: (input: UpdateModelDraftInput) => ProviderModel;
@@ -71,9 +70,9 @@ export interface ChannelDraft {
   dispose: () => void;
 }
 
-/** Allocates a fresh in-memory channel draft prefilled from the chosen preset. */
-export function createChannelDraft(presetId: ProviderPresetId): ChannelDraft {
-  const preset = getProviderPreset(presetId);
+/** Allocates a fresh in-memory channel draft prefilled from the registered provider. */
+export function createChannelDraft(presetId: ProviderTypeId): ChannelDraft {
+  const provider = aiRegistry.getProvider(presetId);
   const id = crypto.randomUUID();
   let disposed = false;
   let hadCredentialWrite = false;
@@ -82,9 +81,9 @@ export function createChannelDraft(presetId: ProviderPresetId): ChannelDraft {
     credential: false,
     models: false,
   });
-  const displayName = signal(getProviderPresetLabel(presetId));
-  const adapterId = signal<AdapterId>(preset.defaultAdapterId);
-  const baseUrl = signal(preset.defaultBaseUrl ?? "");
+  const displayName = signal(t(provider.labelKey));
+  const adapterId = signal<ProtocolId>(provider.defaultProtocolId);
+  const baseUrl = signal(provider.defaultBaseUrl ?? "");
   const credential = signal("");
   const confirmedInsecureUrl = signal<string | null>(null);
   const enabled = signal(true);

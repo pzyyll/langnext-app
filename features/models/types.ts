@@ -1,11 +1,10 @@
-import type { CredentialUpdate } from "../../modules/ai/contracts/channel";
+import type { CredentialUpdate, ProviderTypeId } from "../../modules/ai/contracts/channel";
 import type {
   CapabilityOverrides,
   ModelFacts,
   ProviderModel,
 } from "../../modules/ai/contracts/model";
-import type { ProviderPresetId } from "../../services/protocols/presets";
-import type { AdapterId } from "../../services/protocols/types";
+import type { ProtocolId } from "../../modules/ai/contracts/protocol";
 
 export type {
   ConnectionCredentialInput,
@@ -23,6 +22,7 @@ export type {
   ProviderModelSyncStatus,
   SyncModelsResult,
 } from "../../modules/ai/contracts/model";
+export type { ProtocolId } from "../../modules/ai/contracts/protocol";
 
 export type ModelsEnabledFilter = "all" | "enabled" | "disabled";
 
@@ -34,9 +34,9 @@ export interface PersistedDraftScopes {
 
 export interface SaveChannelDraftInput {
   id: string;
-  presetId: ProviderPresetId;
+  presetId: ProviderTypeId;
   displayName: string;
-  adapterId: AdapterId;
+  adapterId: ProtocolId;
   baseUrl: string | null;
   credential: string | null;
   enabled: boolean;
@@ -52,7 +52,7 @@ export interface UpdateChannelInput {
   id: string;
   expectedRevision: number;
   displayName: string;
-  adapterId: AdapterId;
+  adapterId: ProtocolId;
   baseUrl: string | null;
   credentialUpdate: CredentialUpdate;
   enabled: boolean;
@@ -63,7 +63,7 @@ export interface CreateManualModelInput {
   providerId: string;
   modelKey: string;
   displayNameOverride: string | null;
-  apiTypeOverride: AdapterId | null;
+  apiTypeOverride: ProtocolId | null;
   enabled: boolean;
   facts?: ModelFacts | null;
 }
@@ -71,7 +71,7 @@ export interface CreateManualModelInput {
 export interface UpdateModelConfigInput {
   id: string;
   displayNameOverride: string | null;
-  apiTypeOverride: AdapterId | null;
+  apiTypeOverride: ProtocolId | null;
   capabilitiesOverride: CapabilityOverrides | null;
   contextLimit: number | null;
   maxTokens: number | null;

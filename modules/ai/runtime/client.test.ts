@@ -9,6 +9,11 @@ import { customProvider } from "../providers/custom/definition";
 import { deepseekProvider } from "../providers/deepseek/definition";
 import { geminiProvider } from "../providers/gemini/definition";
 import { openaiProvider } from "../providers/openai/definition";
+import {
+  createCatalog,
+  type CatalogDeps,
+  type CatalogIndex,
+} from "../../../services/models-dev/catalog";
 import { createAiClient, type AiClientInput } from "./client";
 import { createJsonHttpClient, type FetchLike } from "./http";
 import { createAiRegistry } from "./registry";
@@ -261,18 +266,23 @@ function registerBuiltIns(registry: ReturnType<typeof createAiRegistry>): void {
   registry.registerProvider(customProvider);
 }
 
-function createBuiltInHarness(fetchImpl?: FetchLike): Harness {
+function createBuiltInHarness(
+  fetchImpl?: FetchLike,
+  loadCatalog?: () => Promise<CatalogIndex | null>,
+): Harness {
   const requests: Harness["requests"] = [];
   const registry = createAiRegistry();
   registerBuiltIns(registry);
   const capture: FetchLike = async (url, init) => {
     requests.push({ url, method: init.method, headers: init.headers });
+    if (fetchImpl) return fetchImpl(url, init);
     return { ok: true, status: 200, json: async () => ({ data: [{ id: "model-a" }] }) };
   };
   return {
     client: createAiClient({
       registry,
-      http: createJsonHttpClient({ fetchImpl: fetchImpl ?? capture }),
+      http: createJsonHttpClient({ fetchImpl: capture }),
+      loadCatalog,
     }),
     requests,
   };
@@ -414,4 +424,161 @@ test("ai client: provider root policy cannot switch the configured origin", asyn
       }),
     { kind: "invalid_request", message: t("ai.error.providerOriginChanged") },
   );
+});
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function catalogBoundary(
+  options: { body?: Record<string, unknown>; fail?: boolean; cache?: string | null } = {},
+): () => Promise<CatalogIndex | null> {
+  const deps: Partial<CatalogDeps> = {
+    now: () => 1_000_000,
+    readCache: async () => options.cache ?? null,
+    writeCache: async () => {},
+    fetchCatalog: async () => {
+      if (options.fail) throw new Error("offline");
+      return JSON.stringify(options.body ?? {});
+    },
+  };
+  const catalog = createCatalog(deps);
+  return () => catalog.load();
+}
+
+const GEMINI_CATALOG = {
+  "google/gemini-2.5-flash": {
+    modalities: { input: ["text", "image", "pdf", "video"] },
+    limit: { context: 1_048_576, output: 65_536 },
+  },
+  "other/gemini-2.5-flash": {
+    modalities: { input: ["text"] },
+    limit: { context: 8_000, output: 1_000 },
+  },
+};
+
+const geminiDiscoveryInput: AiClientInput = {
+  providerTypeId: "gemini",
+  protocolId: "gemini",
+  baseUrl: "https://proxy.example.com/gemini",
+  credential: "AIza-dummy",
+};
+
+function geminiListing(fetchImpl?: FetchLike): FetchLike {
+  return (
+    fetchImpl ??
+    (async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ models: [{ name: "models/gemini-2.5-flash" }] }),
+    }))
+  );
+}
+
+test("ai client: discovery uses the provider catalog mapping", async () => {
+  const harness = createBuiltInHarness(
+    geminiListing(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        models: [{ name: "models/gemini-2.5-flash", inputTokenLimit: 500_000 }],
+      }),
+    })),
+    catalogBoundary({ body: GEMINI_CATALOG }),
+  );
+
+  const models = await harness.client.discoverModels(geminiDiscoveryInput);
+
+  expect(harness.requests[0]!.url).toBe(
+    "https://proxy.example.com/gemini/v1beta/models?key=AIza-dummy",
+  );
+  expect(models).toEqual([
+    {
+      modelKey: "gemini-2.5-flash",
+      displayName: null,
+      // The endpoint reports the deployment limit; the catalog fills what it omits.
+      contextLimit: 500_000,
+      maxTokens: 65_536,
+      capabilities: { text: true, image: true, pdf: true, video: true },
+    },
+  ]);
+});
+
+test("ai client: discovery falls back when the catalog is unavailable", async () => {
+  const offline = createBuiltInHarness(geminiListing(), catalogBoundary({ fail: true }));
+  const offlineModels = await offline.client.discoverModels(geminiDiscoveryInput);
+  expect(offlineModels).toEqual([
+    {
+      modelKey: "gemini-2.5-flash",
+      displayName: null,
+      contextLimit: null,
+      maxTokens: null,
+      capabilities: { text: true, image: true, pdf: true, video: true },
+    },
+  ]);
+
+  const staleCache = JSON.stringify({
+    fetchedAt: 1_000_000 - DAY_MS,
+    models: {
+      "google/gemini-2.5-flash": {
+        text: true,
+        image: true,
+        pdf: true,
+        video: false,
+        contextLimit: 1_048_576,
+        maxTokens: 65_536,
+      },
+    },
+  });
+  const stale = createBuiltInHarness(
+    geminiListing(),
+    catalogBoundary({ fail: true, cache: staleCache }),
+  );
+  const staleModels = await stale.client.discoverModels(geminiDiscoveryInput);
+  expect(staleModels).toEqual([
+    {
+      modelKey: "gemini-2.5-flash",
+      displayName: null,
+      contextLimit: 1_048_576,
+      maxTokens: 65_536,
+      capabilities: { text: true, image: true, pdf: true, video: false },
+    },
+  ]);
+});
+
+test("ai client: a manual model resolves best-effort catalog facts", async () => {
+  const harness = createBuiltInHarness(undefined, catalogBoundary({ body: GEMINI_CATALOG }));
+
+  expect(
+    await harness.client.resolveModelFacts({
+      providerTypeId: "gemini",
+      modelKey: "gemini-2.5-flash",
+    }),
+  ).toEqual({
+    capabilities: { text: true, image: true, pdf: true, video: true },
+    contextLimit: 1_048_576,
+    maxTokens: 65_536,
+  });
+
+  expect(
+    await harness.client.resolveModelFacts({ providerTypeId: "gemini", modelKey: "unknown-model" }),
+  ).toBeNull();
+});
+
+test("ai client: cancellation after metadata prevents a result", async () => {
+  let release: () => void = () => {};
+  const pendingCatalog = new Promise<null>((resolve) => {
+    release = () => resolve(null);
+  });
+  const harness = createBuiltInHarness(geminiListing(), () => pendingCatalog);
+
+  const controller = new AbortController();
+  const call = harness.client.discoverModels(geminiDiscoveryInput, {
+    signal: controller.signal,
+  });
+  await new Promise((resolve) => setTimeout(resolve, 1));
+  controller.abort();
+  release();
+
+  await expect(call).rejects.toMatchObject({
+    kind: "cancelled",
+    message: t("protocol.error.cancelled"),
+  });
 });

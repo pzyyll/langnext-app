@@ -6,8 +6,8 @@ import { AppDialog } from "../../components/ui/dialog";
 import { Input } from "../../components/ui/input";
 import { Select } from "../../components/ui/select";
 import { toast } from "../../components/ui/toast";
-import type { ProviderPresetId } from "../../services/protocols/presets";
-import type { AdapterId } from "../../services/protocols/types";
+import type { ProviderTypeId } from "../../modules/ai/contracts/channel";
+import type { ProtocolId } from "../../modules/ai/contracts/protocol";
 import { FormField } from "./form-field";
 import {
   getModelApiTypeItems,
@@ -19,7 +19,7 @@ import type { CapabilityOverrides, ProviderModel } from "./types";
 export interface EditModelSubmission {
   id: string;
   displayNameOverride: string | null;
-  apiTypeOverride: AdapterId | null;
+  apiTypeOverride: ProtocolId | null;
   capabilitiesOverride: CapabilityOverrides | null;
   contextLimit: number | null;
   maxTokens: number | null;
@@ -27,7 +27,7 @@ export interface EditModelSubmission {
 
 interface EditModelDialogProps {
   open: boolean;
-  presetId: ProviderPresetId;
+  presetId: ProviderTypeId;
   model: ProviderModel | null;
   onOpenChange: (open: boolean) => void;
   onSubmit: (input: EditModelSubmission) => Promise<void> | void;
@@ -105,7 +105,7 @@ export function EditModelDialog(props: EditModelDialogProps) {
         id: model.id,
         displayNameOverride: displayNameOverride().trim() || null,
         apiTypeOverride:
-          apiTypeOverride() === MODEL_DEFAULT_API_VALUE ? null : (apiTypeOverride() as AdapterId),
+          apiTypeOverride() === MODEL_DEFAULT_API_VALUE ? null : (apiTypeOverride() as ProtocolId),
         capabilitiesOverride: {
           text: capText(),
           image: capImage(),

@@ -1,16 +1,15 @@
 import { t } from "nsh/i18n";
-import {
-  isProtocolAllowedForPreset,
-  type ProviderPresetId,
-} from "../../services/protocols/presets";
-import type { AdapterId, DiscoveredRemoteModel } from "../../services/protocols/types";
+import type { ProviderTypeId } from "../../modules/ai/contracts/channel";
 import type {
   CapabilityFlags,
   CapabilityOverrides,
+  DiscoveredRemoteModel,
   ModelFacts,
   ProviderModel,
   SyncModelsResult,
-} from "./types";
+} from "../../modules/ai/contracts/model";
+import type { ProtocolId } from "../../modules/ai/contracts/protocol";
+import { aiRegistry } from "../../modules/ai/runtime/registry";
 
 function defaultCapabilities(): CapabilityFlags {
   return { text: true, image: false, pdf: false, video: false };
@@ -18,11 +17,11 @@ function defaultCapabilities(): CapabilityFlags {
 
 export interface AddChannelModelInput {
   providerId: string;
-  presetId: ProviderPresetId;
-  defaultAdapterId: AdapterId;
+  presetId: ProviderTypeId;
+  defaultAdapterId: ProtocolId;
   modelKey: string;
   displayNameOverride: string | null;
-  apiTypeOverride: AdapterId | null;
+  apiTypeOverride: ProtocolId | null;
   enabled: boolean;
   /** Catalog capability and token facts when the model is known to models.dev. */
   facts?: ModelFacts | null;
@@ -30,9 +29,9 @@ export interface AddChannelModelInput {
 
 export interface UpdateChannelModelInput {
   id: string;
-  presetId: ProviderPresetId;
+  presetId: ProviderTypeId;
   displayNameOverride: string | null;
-  apiTypeOverride: AdapterId | null;
+  apiTypeOverride: ProtocolId | null;
   capabilitiesOverride: CapabilityOverrides | null;
   contextLimit: number | null;
   maxTokens: number | null;
@@ -50,7 +49,7 @@ export function createManualProviderModel(
   }
   if (
     input.apiTypeOverride !== null &&
-    !isProtocolAllowedForPreset(input.presetId, input.apiTypeOverride)
+    !aiRegistry.isProtocolAllowed(input.presetId, input.apiTypeOverride)
   ) {
     throw new Error(t("models.error.unsupportedProtocol"));
   }
@@ -91,7 +90,7 @@ export function applyModelConfigUpdate(
   }
   if (
     input.apiTypeOverride !== null &&
-    !isProtocolAllowedForPreset(input.presetId, input.apiTypeOverride)
+    !aiRegistry.isProtocolAllowed(input.presetId, input.apiTypeOverride)
   ) {
     throw new Error(t("models.error.unsupportedProtocol"));
   }
@@ -119,7 +118,7 @@ export function applyModelConfigUpdate(
 export function mergeDiscoveredCatalog(params: {
   existingChannelModels: readonly ProviderModel[];
   providerId: string;
-  sourceAdapterId: AdapterId;
+  sourceAdapterId: ProtocolId;
   discovered: readonly DiscoveredRemoteModel[];
   timestamp: string;
 }): { models: ProviderModel[]; summary: SyncModelsResult } {

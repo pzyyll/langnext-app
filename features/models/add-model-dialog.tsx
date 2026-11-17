@@ -6,21 +6,21 @@ import { Input } from "../../components/ui/input";
 import { Select } from "../../components/ui/select";
 import { Switch } from "../../components/ui/switch";
 import { toast } from "../../components/ui/toast";
-import type { ProviderPresetId } from "../../services/protocols/presets";
-import type { AdapterId } from "../../services/protocols/types";
+import type { ProviderTypeId } from "../../modules/ai/contracts/channel";
+import type { ProtocolId } from "../../modules/ai/contracts/protocol";
 import { FormField } from "./form-field";
 import { getModelApiTypeItems, MODEL_DEFAULT_API_VALUE } from "./model-helpers";
 
 export interface AddModelSubmission {
   modelKey: string;
   displayNameOverride: string | null;
-  apiTypeOverride: AdapterId | null;
+  apiTypeOverride: ProtocolId | null;
   enabled: boolean;
 }
 
 interface AddModelDialogProps {
   open: boolean;
-  presetId: ProviderPresetId;
+  presetId: ProviderTypeId;
   onOpenChange: (open: boolean) => void;
   onSubmit: (input: AddModelSubmission) => Promise<void> | void;
 }
@@ -59,7 +59,7 @@ export function AddModelDialog(props: AddModelDialogProps) {
       await props.onSubmit({
         modelKey: key,
         displayNameOverride: displayName().trim() || null,
-        apiTypeOverride: apiType() === MODEL_DEFAULT_API_VALUE ? null : (apiType() as AdapterId),
+        apiTypeOverride: apiType() === MODEL_DEFAULT_API_VALUE ? null : (apiType() as ProtocolId),
         enabled: enabled(),
       });
       toast.success(t("models.model.added", { key }));
