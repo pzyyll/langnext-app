@@ -5,22 +5,23 @@ import type { AdapterId } from "../../services/protocols/types";
 import { inspectBaseUrl } from "./connection";
 import type {
   CapabilityFlags,
-  CreateChannelInput,
   CreateManualModelInput,
   ModelsEnabledFilter,
   ProviderChannel,
   ProviderModel,
+  SaveChannelDraftInput,
   SyncModelsResult,
   UpdateChannelInput,
   UpdateModelConfigInput,
 } from "./types";
 
-const PROVIDERS_KEY = "models.providers";
-const MODELS_KEY = "models.items";
+export const PROVIDERS_STORAGE_KEY = "models.v2.providers";
+export const MODELS_STORAGE_KEY = "models.v2.items";
+export const CREDENTIAL_KEY_PREFIX = "models.v2.credentials.";
 const FILTER_KEY = "models.enabledFilter";
 
-function credentialKey(providerId: string): string {
-  return `models.credentials.${providerId}`;
+export function credentialStorageKey(providerId: string): string {
+  return `${CREDENTIAL_KEY_PREFIX}${providerId}`;
 }
 
 export class RevisionConflictError extends Error {
@@ -76,24 +77,24 @@ function sortChannels(list: ProviderChannel[]): ProviderChannel[] {
 
 async function persistProviders(next: ProviderChannel[]): Promise<void> {
   const sanitized = next.map((item) => ({ ...item }));
-  await Storage.setItem(PROVIDERS_KEY, JSON.stringify(sanitized));
+  await Storage.setItem(PROVIDERS_STORAGE_KEY, JSON.stringify(sanitized));
 }
 
 async function persistModels(next: ProviderModel[]): Promise<void> {
-  await Storage.setItem(MODELS_KEY, JSON.stringify(next));
+  await Storage.setItem(MODELS_STORAGE_KEY, JSON.stringify(next));
 }
 
 async function readSecret(providerId: string): Promise<string | null> {
-  const value = await Storage.getItem(credentialKey(providerId));
+  const value = await Storage.getItem(credentialStorageKey(providerId));
   const trimmed = value?.trim();
   return trimmed ? trimmed : null;
 }
 
 async function writeSecret(providerId: string, secret: string | null): Promise<void> {
   if (secret && secret.trim().length > 0) {
-    await Storage.setItem(credentialKey(providerId), secret.trim());
+    await Storage.setItem(credentialStorageKey(providerId), secret.trim());
   } else {
-    await Storage.removeItem(credentialKey(providerId));
+    await Storage.removeItem(credentialStorageKey(providerId));
   }
 }
 
@@ -124,8 +125,8 @@ export async function loadModelsState(): Promise<void> {
 
   try {
     const [providersRaw, modelsRaw, filterRaw] = await Promise.all([
-      Storage.getItem(PROVIDERS_KEY),
-      Storage.getItem(MODELS_KEY),
+      Storage.getItem(PROVIDERS_STORAGE_KEY),
+      Storage.getItem(MODELS_STORAGE_KEY),
       Storage.getItem(FILTER_KEY),
     ]);
 
@@ -165,7 +166,7 @@ export async function setEnabledFilter(filter: ModelsEnabledFilter): Promise<voi
   }
 }
 
-export async function createChannel(input: CreateChannelInput): Promise<ProviderChannel> {
+export async function saveChannelDraft(input: SaveChannelDraftInput): Promise<ProviderChannel> {
   return withWriteLock(async () => {
     const displayName = input.displayName.trim();
     if (!displayName) {
@@ -177,16 +178,23 @@ export async function createChannel(input: CreateChannelInput): Promise<Provider
       throw new Error(urlCheck.error ?? t("models.error.invalidBaseUrl"));
     }
     if (urlCheck.isInsecureHttp && !input.allowInsecureHttp) {
-      throw new Error(t("models.error.confirmInsecureFormSave"));
+      throw new Error(t("models.error.confirmInsecureSave"));
+    }
+
+    const existing = channelsSignal();
+    const alreadySaved = existing.find((ch) => ch.id === input.id);
+    if (alreadySaved) {
+      selectedIdSignal.set(alreadySaved.id);
+      return alreadySaved;
     }
 
     const tokenValue = input.credential?.trim() || null;
     const timestamp = nowIso();
-    const existing = channelsSignal();
     const maxSortOrder = existing.reduce((max, ch) => Math.max(max, ch.sortOrder), -1);
 
     const created: ProviderChannel = {
-      id: crypto.randomUUID(),
+      id: input.id,
+      presetId: input.presetId,
       displayName,
       adapterId: input.adapterId,
       baseUrl: urlCheck.normalizedBaseUrl,
@@ -202,7 +210,9 @@ export async function createChannel(input: CreateChannelInput): Promise<Provider
     };
 
     const nextChannels = sortChannels([...existing, created]);
-    await writeSecret(created.id, tokenValue);
+    if (tokenValue !== null) {
+      await writeSecret(created.id, tokenValue);
+    }
     await persistProviders(nextChannels);
 
     batch(() => {

@@ -11,8 +11,10 @@ import { Select, type SelectItem } from "../../components/ui/select";
 import { Switch } from "../../components/ui/switch";
 import { toast } from "../../components/ui/toast";
 import { ADAPTER_SPECS, getAdapterDefaultBaseUrl } from "../../services/protocols/adapters";
+import { getProviderPreset, getProviderPresetLabel } from "../../services/protocols/presets";
 import type { AdapterId } from "../../services/protocols/types";
 import { AddModelDialog } from "./add-model-dialog";
+import type { ChannelDraft } from "./channel-draft";
 import { inspectBaseUrl } from "./connection";
 import { EditModelDialog } from "./edit-model-dialog";
 import { FormField } from "./form-field";
@@ -21,6 +23,7 @@ import {
   deleteChannel,
   renameChannel,
   RevisionConflictError,
+  saveChannelDraft,
   syncChannelModels,
   testChannelConnection,
   toggleChannelEnabled,
@@ -40,22 +43,38 @@ const ADAPTER_ITEMS: SelectItem[] = ADAPTER_SPECS.map((spec) => ({
 
 type CredentialDraftMode = "keep" | "replace" | "clear";
 
-interface ProviderEditorProps {
-  channel: ProviderChannel;
-  models: ProviderModel[];
-  enabledFilter: ModelsEnabledFilter;
-  onEnabledFilterChange: (filter: ModelsEnabledFilter) => void;
-}
+type ProviderEditorProps =
+  | {
+      mode: "draft";
+      draft: ChannelDraft;
+      enabledFilter: ModelsEnabledFilter;
+      onEnabledFilterChange: (filter: ModelsEnabledFilter) => void;
+      onDraftSaved: (channel: ProviderChannel) => void;
+      onCancelDraft: () => void;
+    }
+  | {
+      mode: "saved";
+      channel: ProviderChannel;
+      models: ProviderModel[];
+      enabledFilter: ModelsEnabledFilter;
+      onEnabledFilterChange: (filter: ModelsEnabledFilter) => void;
+    };
 
-/** Right detail pane for inspecting and editing the selected provider channel and its models. */
+/** Right detail pane for configuring a new channel draft or an existing provider channel. */
 export function ProviderEditor(props: ProviderEditorProps) {
-  const draftAdapterId = signal<AdapterId>(props.channel.adapterId);
-  const draftBaseUrl = signal(props.channel.baseUrl ?? "");
+  const isDraftMode = () => props.mode === "draft";
+
+  const savedAdapterId = signal<AdapterId>(
+    props.mode === "saved" ? props.channel.adapterId : props.draft.adapterId(),
+  );
+  const savedBaseUrl = signal(props.mode === "saved" ? (props.channel.baseUrl ?? "") : "");
   const credentialMode = signal<CredentialDraftMode>("keep");
-  const draftCredential = signal("");
-  const draftAllowInsecureHttp = signal(
-    inspectBaseUrl(props.channel.baseUrl ?? "").isInsecureHttp &&
-      props.channel.insecureHttpConfirmedAt !== null,
+  const savedCredential = signal("");
+  const savedAllowInsecureHttp = signal(
+    props.mode === "saved"
+      ? inspectBaseUrl(props.channel.baseUrl ?? "").isInsecureHttp &&
+          props.channel.insecureHttpConfirmedAt !== null
+      : false,
   );
 
   const renaming = signal(false);
@@ -63,10 +82,13 @@ export function ProviderEditor(props: ProviderEditorProps) {
   const renameSaving = signal(false);
 
   const saving = signal(false);
+  const nameError = signal<string | null>(null);
   const saveError = signal<string | null>(null);
   const conflictDetected = signal(false);
 
-  const syncAdapterId = signal<AdapterId>(props.channel.adapterId);
+  const syncAdapterId = signal<AdapterId>(
+    props.mode === "saved" ? props.channel.adapterId : props.draft.adapterId(),
+  );
   const testing = signal(false);
   const syncing = signal(false);
   const connectionMessage = signal<{ ok: boolean; text: string } | null>(null);
@@ -90,40 +112,75 @@ export function ProviderEditor(props: ProviderEditorProps) {
   cleanup(() => abortInFlight());
 
   const loadFromChannel = (ch: ProviderChannel) => {
-    draftAdapterId.set(ch.adapterId);
-    draftBaseUrl.set(ch.baseUrl ?? "");
+    savedAdapterId.set(ch.adapterId);
+    savedBaseUrl.set(ch.baseUrl ?? "");
     credentialMode.set("keep");
-    draftCredential.set("");
-    draftAllowInsecureHttp.set(
+    savedCredential.set("");
+    savedAllowInsecureHttp.set(
       inspectBaseUrl(ch.baseUrl ?? "").isInsecureHttp && ch.insecureHttpConfirmedAt !== null,
     );
     renaming.set(false);
     renameDraft.set(ch.displayName);
+    nameError.set(null);
     saveError.set(null);
     conflictDetected.set(false);
   };
 
-  const urlCheck = () => inspectBaseUrl(draftBaseUrl());
+  const currentPresetId = () =>
+    props.mode === "draft" ? props.draft.presetId : props.channel.presetId;
+  const currentPreset = () => getProviderPreset(currentPresetId());
+  const currentChannelId = () => (props.mode === "draft" ? props.draft.id : props.channel.id);
+  const currentDisplayName = () =>
+    props.mode === "draft" ? props.draft.displayName() : props.channel.displayName;
+  const currentEnabled = () =>
+    props.mode === "draft" ? props.draft.enabled() : props.channel.enabled;
+  const currentAdapterId = () =>
+    props.mode === "draft" ? props.draft.adapterId() : savedAdapterId();
+  const currentBaseUrl = () => (props.mode === "draft" ? props.draft.baseUrl() : savedBaseUrl());
+  const currentCredential = () =>
+    props.mode === "draft" ? props.draft.credential() : savedCredential();
+  const currentAllowInsecureHttp = () =>
+    props.mode === "draft" ? props.draft.allowInsecureHttp() : savedAllowInsecureHttp();
 
-  const isDirty = () => {
+  const urlCheck = () => inspectBaseUrl(currentBaseUrl());
+
+  const isSavedDirty = () => {
+    if (props.mode !== "saved") return false;
     const ch = props.channel;
-    if (draftAdapterId() !== ch.adapterId) return true;
+    if (savedAdapterId() !== ch.adapterId) return true;
     const check = urlCheck();
     const savedUrl = ch.baseUrl ?? "";
     if (!check.ok) {
-      if (draftBaseUrl().trim() !== savedUrl) return true;
+      if (savedBaseUrl().trim() !== savedUrl) return true;
     } else if ((check.normalizedBaseUrl ?? "") !== savedUrl) {
       return true;
     }
     if (credentialMode() === "clear" && ch.hasCredential) return true;
-    if (credentialMode() === "replace" && draftCredential().trim().length > 0) return true;
+    if (credentialMode() === "replace" && savedCredential().trim().length > 0) return true;
     const savedInsecure =
       inspectBaseUrl(ch.baseUrl ?? "").isInsecureHttp && ch.insecureHttpConfirmedAt !== null;
-    if (draftAllowInsecureHttp() !== savedInsecure) return true;
+    if (savedAllowInsecureHttp() !== savedInsecure) return true;
     return false;
   };
 
   effect(() => {
+    if (props.mode === "draft") {
+      const d = props.draft;
+      if (d.id !== syncedId) {
+        syncedId = d.id;
+        syncedRevision = -1;
+        abortInFlight();
+        testing.set(false);
+        syncing.set(false);
+        syncAdapterId.set(d.adapterId());
+        connectionMessage.set(null);
+        nameError.set(null);
+        saveError.set(null);
+        conflictDetected.set(false);
+      }
+      return;
+    }
+
     const ch = props.channel;
     if (ch.id !== syncedId) {
       syncedId = ch.id;
@@ -137,7 +194,7 @@ export function ProviderEditor(props: ProviderEditorProps) {
       return;
     }
     if (ch.revision !== syncedRevision) {
-      if (isDirty()) {
+      if (isSavedDirty()) {
         conflictDetected.set(true);
       } else {
         syncedRevision = ch.revision;
@@ -146,17 +203,21 @@ export function ProviderEditor(props: ProviderEditorProps) {
     }
   });
 
-  const canSave = () => {
+  const canSaveSaved = () => {
     const check = urlCheck();
     if (!check.ok) return false;
-    if (check.isInsecureHttp && !draftAllowInsecureHttp()) return false;
-    if (credentialMode() === "replace" && draftCredential().trim().length === 0) {
+    if (check.isInsecureHttp && !savedAllowInsecureHttp()) return false;
+    if (credentialMode() === "replace" && savedCredential().trim().length === 0) {
       return false;
     }
     return true;
   };
 
   const handleToggleChannelEnabled = async (enabled: boolean) => {
+    if (props.mode === "draft") {
+      props.draft.setEnabled(enabled);
+      return;
+    }
     try {
       const updated = await toggleChannelEnabled(props.channel.id, enabled);
       syncedRevision = updated.revision;
@@ -166,11 +227,13 @@ export function ProviderEditor(props: ProviderEditorProps) {
   };
 
   const startRename = () => {
+    if (props.mode !== "saved") return;
     renameDraft.set(props.channel.displayName);
     renaming.set(true);
   };
 
   const submitRename = async () => {
+    if (props.mode !== "saved") return;
     const nextName = renameDraft().trim();
     if (!nextName || renameSaving()) return;
     renameSaving.set(true);
@@ -186,8 +249,51 @@ export function ProviderEditor(props: ProviderEditorProps) {
     }
   };
 
-  const handleSave = async () => {
-    if (saving() || !isDirty() || !canSave()) return;
+  const handleSaveDraft = async () => {
+    if (props.mode !== "draft" || saving()) return;
+    const draft = props.draft;
+    nameError.set(null);
+    saveError.set(null);
+
+    const trimmedName = draft.displayName().trim();
+    if (!trimmedName) {
+      nameError.set(t("models.error.displayNameRequired"));
+      return;
+    }
+
+    const check = urlCheck();
+    if (!check.ok) {
+      saveError.set(check.error ?? t("models.error.invalidBaseUrl"));
+      return;
+    }
+    if (check.isInsecureHttp && !draft.allowInsecureHttp()) {
+      saveError.set(t("models.error.confirmInsecureSave"));
+      return;
+    }
+
+    saving.set(true);
+    try {
+      const saved = await saveChannelDraft({
+        id: draft.id,
+        presetId: draft.presetId,
+        displayName: trimmedName,
+        adapterId: draft.adapterId(),
+        baseUrl: check.normalizedBaseUrl,
+        credential: draft.credential(),
+        enabled: draft.enabled(),
+        allowInsecureHttp: draft.allowInsecureHttp(),
+      });
+      toast.success(t("models.channel.added", { name: saved.displayName }));
+      props.onDraftSaved(saved);
+    } catch (error) {
+      saveError.set(error instanceof Error ? error.message : t("models.error.saveChannel"));
+    } finally {
+      saving.set(false);
+    }
+  };
+
+  const handleSaveSaved = async () => {
+    if (props.mode !== "saved" || saving() || !isSavedDirty() || !canSaveSaved()) return;
     saving.set(true);
     saveError.set(null);
 
@@ -195,7 +301,7 @@ export function ProviderEditor(props: ProviderEditorProps) {
     if (credentialMode() === "clear") {
       credentialUpdate = { mode: "clear" };
     } else if (credentialMode() === "replace") {
-      credentialUpdate = { mode: "replace", value: draftCredential().trim() };
+      credentialUpdate = { mode: "replace", value: savedCredential().trim() };
     }
 
     const previousAdapterId = props.channel.adapterId;
@@ -205,11 +311,11 @@ export function ProviderEditor(props: ProviderEditorProps) {
         id: props.channel.id,
         expectedRevision: props.channel.revision,
         displayName: props.channel.displayName,
-        adapterId: draftAdapterId(),
+        adapterId: savedAdapterId(),
         baseUrl: urlCheck().normalizedBaseUrl,
         credentialUpdate,
         enabled: props.channel.enabled,
-        allowInsecureHttp: draftAllowInsecureHttp(),
+        allowInsecureHttp: savedAllowInsecureHttp(),
       });
       syncedRevision = updated.revision;
       if (syncAdapterId() === previousAdapterId) {
@@ -229,7 +335,7 @@ export function ProviderEditor(props: ProviderEditorProps) {
   };
 
   const handleTest = async () => {
-    if (testing() || syncing() || isDirty()) return;
+    if (props.mode !== "saved" || testing() || syncing() || isSavedDirty()) return;
     abortInFlight();
     activeController = new AbortController();
     testing.set(true);
@@ -259,7 +365,7 @@ export function ProviderEditor(props: ProviderEditorProps) {
   };
 
   const handleGetModels = async () => {
-    if (syncing() || testing() || isDirty()) return;
+    if (props.mode !== "saved" || syncing() || testing() || isSavedDirty()) return;
     abortInFlight();
     activeController = new AbortController();
     syncing.set(true);
@@ -287,7 +393,7 @@ export function ProviderEditor(props: ProviderEditorProps) {
   };
 
   const handleConfirmDeleteChannel = async () => {
-    if (deletingChannel()) return;
+    if (props.mode !== "saved" || deletingChannel()) return;
     deletingChannel.set(true);
     const name = props.channel.displayName;
     try {
@@ -302,9 +408,37 @@ export function ProviderEditor(props: ProviderEditorProps) {
   };
 
   const tokenPlaceholder = () => {
-    if (credentialMode() === "clear") return t("models.connection.tokenWillClear");
-    if (props.channel.hasCredential) return t("models.connection.tokenRetained");
+    if (props.mode === "saved") {
+      if (credentialMode() === "clear") return t("models.connection.tokenWillClear");
+      if (props.channel.hasCredential) return t("models.connection.tokenRetained");
+    }
     return t("models.connection.apiKeyPlaceholder");
+  };
+
+  const urlPlaceholder = () =>
+    currentPreset().defaultBaseUrl ??
+    getAdapterDefaultBaseUrl(currentAdapterId()) ??
+    t("models.connection.baseUrlPlaceholder");
+
+  const tableChannelView = (): ProviderChannel => {
+    if (props.mode === "saved") return props.channel;
+    const d = props.draft;
+    return {
+      id: d.id,
+      presetId: d.presetId,
+      displayName: d.displayName().trim() || getProviderPresetLabel(d.presetId),
+      adapterId: d.adapterId(),
+      baseUrl: inspectBaseUrl(d.baseUrl()).normalizedBaseUrl,
+      hasCredential: d.credential().trim().length > 0,
+      enabled: d.enabled(),
+      sortOrder: 0,
+      revision: 0,
+      insecureHttpConfirmedAt: null,
+      modelsLastSyncedAt: null,
+      modelsLastSyncError: null,
+      createdAt: "",
+      updatedAt: "",
+    };
   };
 
   const compactLayout = () => windowSize().width < 860;
@@ -314,24 +448,30 @@ export function ProviderEditor(props: ProviderEditorProps) {
       <View
         class={`h-12 shrink-0 flex-row items-center justify-between gap-3 border-b border-border ${compactLayout() ? "px-4" : "px-6"}`}
       >
-        <View class="min-w-0 flex-1 flex-row items-center gap-1.5">
+        <View class="min-w-0 flex-1 flex-row items-center gap-2">
+          <Icon name={currentPreset().icon} tone="foreground" class="size-4 shrink-0" />
           <If
-            when={renaming()}
+            when={!isDraftMode() && renaming()}
             else={
               <>
                 <Text role="header" class="truncate text-base font-semibold text-foreground">
-                  {props.channel.displayName}
+                  {currentDisplayName().trim() || getProviderPresetLabel(currentPresetId())}
                 </Text>
-                <Button
-                  testID="rename-channel-button"
-                  size="icon-sm"
-                  variant="ghost"
-                  tooltip={t("models.channel.rename")}
-                  accessibilityLabel={t("models.channel.renameLabel")}
-                  onPress={startRename}
-                >
-                  <Icon name="edit" tone="muted-foreground" class="size-3.5" />
-                </Button>
+                <If when={isDraftMode()}>
+                  <Badge label={t("models.channel.unsaved")} tone="warning" />
+                </If>
+                <If when={!isDraftMode()}>
+                  <Button
+                    testID="rename-channel-button"
+                    size="icon-sm"
+                    variant="ghost"
+                    tooltip={t("models.channel.rename")}
+                    accessibilityLabel={t("models.channel.renameLabel")}
+                    onPress={startRename}
+                  >
+                    <Icon name="edit" tone="muted-foreground" class="size-3.5" />
+                  </Button>
+                </If>
               </>
             }
           >
@@ -374,25 +514,51 @@ export function ProviderEditor(props: ProviderEditorProps) {
             label={t("models.channel.enabled")}
             variant="inline"
             accessibilityLabel={t("models.channel.enabledLabel")}
-            checked={props.channel.enabled}
+            checked={currentEnabled()}
             onChange={(checked) => void handleToggleChannelEnabled(checked)}
           />
           <View class="h-4 w-px bg-border" />
-          <Button
-            testID="delete-channel-button"
-            variant="destructive-ghost"
-            size="icon-sm"
-            tooltip={t("models.channel.delete")}
-            accessibilityLabel={t("models.channel.delete")}
-            disabled={deletingChannel()}
-            onPress={() => deleteDialogOpen.set(true)}
+          <If
+            when={isDraftMode()}
+            else={
+              <Button
+                testID="delete-channel-button"
+                variant="destructive-ghost"
+                size="icon-sm"
+                tooltip={t("models.channel.delete")}
+                accessibilityLabel={t("models.channel.delete")}
+                disabled={deletingChannel()}
+                onPress={() => deleteDialogOpen.set(true)}
+              >
+                <Icon name="delete" tone="muted-foreground" class="size-3.5" />
+              </Button>
+            }
           >
-            <Icon name="delete" tone="muted-foreground" class="size-3.5" />
-          </Button>
+            <View class="flex-row items-center gap-2">
+              <Button
+                testID="cancel-channel-button"
+                variant="ghost"
+                size="sm"
+                label={t("common.cancel")}
+                disabled={saving()}
+                onPress={() => {
+                  if (props.mode === "draft") props.onCancelDraft();
+                }}
+              />
+              <Button
+                testID="save-channel-button"
+                variant="primary"
+                size="sm"
+                label={saving() ? t("common.saving") : t("common.save")}
+                disabled={saving()}
+                onPress={() => void handleSaveDraft()}
+              />
+            </View>
+          </If>
         </View>
       </View>
 
-      <If when={conflictDetected()}>
+      <If when={!isDraftMode() && conflictDetected()}>
         <View
           class={`flex-row items-center justify-between gap-3 border-b border-border bg-warning/15 py-2.5 ${compactLayout() ? "px-4" : "px-6"}`}
         >
@@ -402,8 +568,10 @@ export function ProviderEditor(props: ProviderEditorProps) {
             variant="outline"
             label={t("common.reload")}
             onPress={() => {
-              syncedRevision = props.channel.revision;
-              loadFromChannel(props.channel);
+              if (props.mode === "saved") {
+                syncedRevision = props.channel.revision;
+                loadFromChannel(props.channel);
+              }
             }}
           />
         </View>
@@ -417,17 +585,55 @@ export function ProviderEditor(props: ProviderEditorProps) {
               : "mx-auto w-full max-w-4xl gap-5 p-5"
           }
         >
+          <If when={isDraftMode()}>
+            <Card testID="draft-channel-card" class={compactLayout() ? "gap-3.5 p-4" : "gap-4 p-5"}>
+              <View class={compactLayout() ? "gap-3.5" : "flex-row items-start gap-4"}>
+                <FormField
+                  label={t("models.channel.provider")}
+                  class={compactLayout() ? undefined : "w-56 shrink-0"}
+                >
+                  <View class="h-9 flex-row items-center gap-2 rounded-lg border border-border bg-muted px-3">
+                    <Icon name={currentPreset().icon} tone="foreground" class="size-4 shrink-0" />
+                    <Text class="truncate text-sm font-medium text-foreground">
+                      {getProviderPresetLabel(currentPresetId())}
+                    </Text>
+                  </View>
+                </FormField>
+
+                <FormField
+                  label={t("common.displayName")}
+                  error={nameError()}
+                  class={compactLayout() ? undefined : "min-w-0 flex-1"}
+                >
+                  <Input
+                    testID="channel-name-input"
+                    accessibilityLabel={t("common.displayName")}
+                    placeholder={t("models.channel.displayNamePlaceholder")}
+                    value={currentDisplayName()}
+                    onChange={(v) => {
+                      if (props.mode === "draft") {
+                        props.draft.setDisplayName(v);
+                        nameError.set(null);
+                        saveError.set(null);
+                      }
+                    }}
+                  />
+                </FormField>
+              </View>
+            </Card>
+          </If>
+
           <Card testID="connection-card" class={compactLayout() ? "gap-3.5 p-4" : "gap-4 p-5"}>
             <View class="min-h-8 flex-row flex-wrap items-center justify-between gap-2">
               <View class="flex-row items-center gap-2">
                 <SectionHeading title={t("models.connection.heading")} />
-                <If when={isDirty()}>
+                <If when={!isDraftMode() && isSavedDirty()}>
                   <Badge label={t("models.channel.unsaved")} tone="warning" />
                 </If>
               </View>
 
               <View class="flex-row flex-wrap items-center gap-2">
-                <If when={isDirty()}>
+                <If when={!isDraftMode() && isSavedDirty()}>
                   <Button
                     testID="cancel-channel-button"
                     variant="ghost"
@@ -435,8 +641,10 @@ export function ProviderEditor(props: ProviderEditorProps) {
                     label={t("common.cancel")}
                     disabled={saving()}
                     onPress={() => {
-                      connectionMessage.set(null);
-                      loadFromChannel(props.channel);
+                      if (props.mode === "saved") {
+                        connectionMessage.set(null);
+                        loadFromChannel(props.channel);
+                      }
                     }}
                   />
                   <Button
@@ -444,8 +652,8 @@ export function ProviderEditor(props: ProviderEditorProps) {
                     variant="primary"
                     size="sm"
                     label={saving() ? t("common.saving") : t("common.save")}
-                    disabled={saving() || !canSave()}
-                    onPress={() => void handleSave()}
+                    disabled={saving() || !canSaveSaved()}
+                    onPress={() => void handleSaveSaved()}
                   />
                 </If>
                 <Button
@@ -453,7 +661,7 @@ export function ProviderEditor(props: ProviderEditorProps) {
                   variant="outline"
                   size="sm"
                   label={testing() ? t("models.connection.testing") : t("models.connection.test")}
-                  disabled={testing() || syncing() || isDirty()}
+                  disabled={testing() || syncing() || isDraftMode() || isSavedDirty()}
                   onPress={() => void handleTest()}
                 />
               </View>
@@ -468,12 +676,16 @@ export function ProviderEditor(props: ProviderEditorProps) {
                   testID="connection-adapter-select"
                   accessibilityLabel={t("models.connection.apiType")}
                   items={ADAPTER_ITEMS}
-                  value={draftAdapterId()}
+                  value={currentAdapterId()}
                   onChange={(v) => {
-                    if (v) {
-                      draftAdapterId.set(v as AdapterId);
-                      connectionMessage.set(null);
+                    if (!v) return;
+                    const next = v as AdapterId;
+                    if (props.mode === "draft") {
+                      props.draft.setAdapterId(next);
+                    } else {
+                      savedAdapterId.set(next);
                     }
+                    connectionMessage.set(null);
                   }}
                 />
               </FormField>
@@ -486,14 +698,19 @@ export function ProviderEditor(props: ProviderEditorProps) {
                 <Input
                   testID="connection-url-input"
                   accessibilityLabel={t("models.connection.baseUrl")}
-                  placeholder={getAdapterDefaultBaseUrl(draftAdapterId())}
-                  value={draftBaseUrl()}
+                  placeholder={urlPlaceholder()}
+                  value={currentBaseUrl()}
                   onChange={(v) => {
-                    draftBaseUrl.set(v);
-                    connectionMessage.set(null);
-                    if (!inspectBaseUrl(v).isInsecureHttp) {
-                      draftAllowInsecureHttp.set(false);
+                    if (props.mode === "draft") {
+                      props.draft.setBaseUrl(v);
+                    } else {
+                      savedBaseUrl.set(v);
+                      if (!inspectBaseUrl(v).isInsecureHttp) {
+                        savedAllowInsecureHttp.set(false);
+                      }
                     }
+                    saveError.set(null);
+                    connectionMessage.set(null);
                   }}
                 />
               </FormField>
@@ -502,8 +719,15 @@ export function ProviderEditor(props: ProviderEditorProps) {
             <If when={urlCheck().isInsecureHttp}>
               <Checkbox
                 testID="connection-insecure-checkbox"
-                checked={draftAllowInsecureHttp()}
-                onChange={(checked) => draftAllowInsecureHttp.set(checked)}
+                checked={currentAllowInsecureHttp()}
+                onChange={(checked) => {
+                  if (props.mode === "draft") {
+                    props.draft.setAllowInsecureHttp(checked);
+                  } else {
+                    savedAllowInsecureHttp.set(checked);
+                  }
+                  saveError.set(null);
+                }}
                 label={t("models.connection.insecureHttp")}
               />
             </If>
@@ -511,7 +735,7 @@ export function ProviderEditor(props: ProviderEditorProps) {
             <FormField
               label={t("models.connection.apiKey")}
               labelAction={
-                <If when={props.channel.hasCredential}>
+                <If when={props.mode === "saved" && props.channel.hasCredential}>
                   <If
                     when={credentialMode() === "clear"}
                     else={
@@ -522,7 +746,7 @@ export function ProviderEditor(props: ProviderEditorProps) {
                         label={t("models.connection.resetToken")}
                         onPress={() => {
                           credentialMode.set("clear");
-                          draftCredential.set("");
+                          savedCredential.set("");
                           connectionMessage.set(null);
                         }}
                       />
@@ -535,7 +759,7 @@ export function ProviderEditor(props: ProviderEditorProps) {
                       label={t("models.connection.keepToken")}
                       onPress={() => {
                         credentialMode.set("keep");
-                        draftCredential.set("");
+                        savedCredential.set("");
                         connectionMessage.set(null);
                       }}
                     />
@@ -547,17 +771,21 @@ export function ProviderEditor(props: ProviderEditorProps) {
                 testID="connection-token-input"
                 accessibilityLabel={t("models.connection.apiKey")}
                 masked
-                readonly={credentialMode() === "clear"}
+                readonly={!isDraftMode() && credentialMode() === "clear"}
                 placeholder={tokenPlaceholder()}
-                value={draftCredential()}
+                value={currentCredential()}
                 onChange={(v) => {
-                  draftCredential.set(v);
-                  connectionMessage.set(null);
-                  if (v.length > 0) {
-                    credentialMode.set("replace");
-                  } else if (credentialMode() === "replace") {
-                    credentialMode.set("keep");
+                  if (props.mode === "draft") {
+                    props.draft.setCredential(v);
+                  } else {
+                    savedCredential.set(v);
+                    if (v.length > 0) {
+                      credentialMode.set("replace");
+                    } else if (credentialMode() === "replace") {
+                      credentialMode.set("keep");
+                    }
                   }
+                  connectionMessage.set(null);
                 }}
               />
             </FormField>
@@ -567,10 +795,10 @@ export function ProviderEditor(props: ProviderEditorProps) {
                 {saveError()}
               </Text>
             </If>
-            <If when={isDirty()}>
+            <If when={!isDraftMode() && isSavedDirty()}>
               <Text class="text-xs text-warning">{t("models.connection.dirtyHint")}</Text>
             </If>
-            <If when={!isDirty() && connectionMessage() !== null}>
+            <If when={!isDraftMode() && !isSavedDirty() && connectionMessage() !== null}>
               <If when={connectionMessage()}>
                 {(msg) => (
                   <Text class={msg().ok ? "text-xs text-success" : "text-xs text-destructive"}>
@@ -583,10 +811,10 @@ export function ProviderEditor(props: ProviderEditorProps) {
 
           <Card testID="models-card" class={compactLayout() ? "gap-3.5 p-4" : "gap-4 p-5"}>
             <ModelsTable
-              channel={props.channel}
-              models={props.models}
+              channel={tableChannelView()}
+              models={props.mode === "draft" ? props.draft.models() : props.models}
               enabledFilter={props.enabledFilter}
-              isDirty={isDirty()}
+              isDirty={isDraftMode() || isSavedDirty()}
               syncAdapterId={syncAdapterId()}
               testing={testing()}
               syncing={syncing()}
@@ -602,7 +830,7 @@ export function ProviderEditor(props: ProviderEditorProps) {
 
       <AddModelDialog
         open={addModelOpen()}
-        providerId={props.channel.id}
+        providerId={currentChannelId()}
         onOpenChange={(open) => addModelOpen.set(open)}
       />
 
@@ -614,19 +842,21 @@ export function ProviderEditor(props: ProviderEditorProps) {
         }}
       />
 
-      <ConfirmDialog
-        testID="delete-channel-dialog"
-        open={deleteDialogOpen()}
-        onOpenChange={(open) => deleteDialogOpen.set(open)}
-        title={t("models.channel.delete")}
-        description={t("models.channel.deleteDescription", {
-          name: props.channel.displayName,
-        })}
-        confirmLabel={t("common.delete")}
-        confirmVariant="destructive"
-        busy={deletingChannel()}
-        onConfirm={() => void handleConfirmDeleteChannel()}
-      />
+      <If when={props.mode === "saved"}>
+        <ConfirmDialog
+          testID="delete-channel-dialog"
+          open={deleteDialogOpen()}
+          onOpenChange={(open) => deleteDialogOpen.set(open)}
+          title={t("models.channel.delete")}
+          description={t("models.channel.deleteDescription", {
+            name: props.mode === "saved" ? props.channel.displayName : "",
+          })}
+          confirmLabel={t("common.delete")}
+          confirmVariant="destructive"
+          busy={deletingChannel()}
+          onConfirm={() => void handleConfirmDeleteChannel()}
+        />
+      </If>
     </View>
   );
 }

@@ -1,4 +1,5 @@
 import { expect, open, test } from "nsh/test";
+import { credentialStorageKey, MODELS_STORAGE_KEY, PROVIDERS_STORAGE_KEY } from "./store";
 import type { ProviderChannel, ProviderModel } from "./types";
 
 const APP_ENTRY = "../../App.tsx";
@@ -9,6 +10,7 @@ function sampleChannels(): ProviderChannel[] {
   return [
     {
       id: "ch-openai",
+      presetId: "openai",
       displayName: "OpenAI Main",
       adapterId: "openai-compatible",
       baseUrl: null,
@@ -24,6 +26,7 @@ function sampleChannels(): ProviderChannel[] {
     },
     {
       id: "ch-claude",
+      presetId: "anthropic",
       displayName: "Claude Team",
       adapterId: "anthropic",
       baseUrl: "https://api.anthropic.com",
@@ -108,10 +111,10 @@ function seededStorage(
 ): Record<string, string> {
   return {
     "settings.language": "en",
-    "models.providers": JSON.stringify(channels),
-    "models.items": JSON.stringify(models),
-    "models.credentials.ch-openai": "sk-openai-secret",
-    "models.credentials.ch-claude": "sk-ant-secret",
+    [PROVIDERS_STORAGE_KEY]: JSON.stringify(channels),
+    [MODELS_STORAGE_KEY]: JSON.stringify(models),
+    [credentialStorageKey("ch-openai")]: "sk-openai-secret",
+    [credentialStorageKey("ch-claude")]: "sk-ant-secret",
   };
 }
 
@@ -124,33 +127,38 @@ test("creates a new channel with non-loopback HTTP confirmation and stores secre
 
   await app.press("id:empty-add-channel-button");
   await app.waitFor("id:add-channel-dialog");
+  await app.press("id:provider-preset-custom");
+  await app.waitUntil(() => !app.shows("id:add-channel-dialog"));
+  await app.waitFor("id:provider-editor");
 
-  await app.press("id:confirm-add-channel");
+  await app.clear("id:channel-name-input");
+  await app.press("id:save-channel-button");
   expect(app.texts()).toContain("Display name is required.");
 
-  await app.type("id:add-channel-name-input", "Self Hosted");
-  await app.type("id:add-channel-url-input", "http://192.168.1.50:8080/v1");
-  await app.waitFor("id:add-channel-insecure-checkbox");
+  await app.type("id:channel-name-input", "Self Hosted");
+  await app.type("id:connection-url-input", "http://192.168.1.50:8080/v1");
+  await app.waitFor("id:connection-insecure-checkbox");
 
-  await app.press("id:confirm-add-channel");
+  await app.press("id:save-channel-button");
   expect(app.texts()).toContain("Confirm unencrypted http:// before saving this channel.");
 
-  await app.press("id:add-channel-insecure-checkbox");
-  await app.type("id:add-channel-token-input", "sk-secret-token-123");
-  await app.press("id:confirm-add-channel");
+  await app.press("id:connection-insecure-checkbox");
+  await app.type("id:connection-token-input", "sk-secret-token-123");
+  await app.press("id:save-channel-button");
 
-  await app.waitUntil(() => !app.shows("id:add-channel-dialog"));
+  await app.waitUntil(() => app.storage()[PROVIDERS_STORAGE_KEY] !== undefined);
   expect(app.shows("id:provider-editor")).toBe(true);
   expect(app.texts()).toContain("Self Hosted");
 
-  const storedProvidersRaw = app.storage()["models.providers"];
+  const storedProvidersRaw = app.storage()[PROVIDERS_STORAGE_KEY];
   const storedProviders = JSON.parse(storedProvidersRaw!) as ProviderChannel[];
   expect(storedProviders).toHaveLength(1);
   expect(storedProviders[0]!.displayName).toBe("Self Hosted");
+  expect(storedProviders[0]!.presetId).toBe("custom");
   expect(storedProviders[0]!.hasCredential).toBe(true);
   expect(storedProviders[0]!.insecureHttpConfirmedAt).not.toBeNull();
   expect(storedProvidersRaw).not.toContain("sk-secret-token-123");
-  expect(app.storage()[`models.credentials.${storedProviders[0]!.id}`]).toBe("sk-secret-token-123");
+  expect(app.storage()[credentialStorageKey(storedProviders[0]!.id)]).toBe("sk-secret-token-123");
 });
 
 test("supports inline rename, channel toggle, dirty guard, cancel/save, and token reset", async () => {
@@ -168,7 +176,7 @@ test("supports inline rename, channel toggle, dirty guard, cancel/save, and toke
   expect(app.texts()).toContain("OpenAI Renamed");
 
   await app.press("id:channel-enabled-switch");
-  const afterToggle = JSON.parse(app.storage()["models.providers"]!) as ProviderChannel[];
+  const afterToggle = JSON.parse(app.storage()[PROVIDERS_STORAGE_KEY]!) as ProviderChannel[];
   expect(afterToggle[0]!.enabled).toBe(false);
 
   expect(app.enabled("id:test-connection-button")).toBe(true);
@@ -185,8 +193,8 @@ test("supports inline rename, channel toggle, dirty guard, cancel/save, and toke
   expect(app.shows("id:keep-token-button")).toBe(true);
   await app.press("id:save-channel-button");
 
-  await app.waitUntil(() => app.storage()["models.credentials.ch-openai"] === undefined);
-  const afterSave = JSON.parse(app.storage()["models.providers"]!) as ProviderChannel[];
+  await app.waitUntil(() => app.storage()[credentialStorageKey("ch-openai")] === undefined);
+  const afterSave = JSON.parse(app.storage()[PROVIDERS_STORAGE_KEY]!) as ProviderChannel[];
   expect(afterSave[0]!.hasCredential).toBe(false);
 });
 
@@ -200,7 +208,7 @@ test("reorders channels and deletes a channel with its models and credentials", 
   expect(app.texts()).toContain("Claude Team");
 
   await app.press("label:Move Claude Team up");
-  const reordered = JSON.parse(app.storage()["models.providers"]!) as ProviderChannel[];
+  const reordered = JSON.parse(app.storage()[PROVIDERS_STORAGE_KEY]!) as ProviderChannel[];
   expect(reordered[0]!.id).toBe("ch-claude");
   expect(reordered[1]!.id).toBe("ch-openai");
 
@@ -209,10 +217,10 @@ test("reorders channels and deletes a channel with its models and credentials", 
   await app.press("role:button[Delete]");
   await app.waitUntil(() => !app.shows("id:delete-channel-dialog"));
 
-  const remaining = JSON.parse(app.storage()["models.providers"]!) as ProviderChannel[];
+  const remaining = JSON.parse(app.storage()[PROVIDERS_STORAGE_KEY]!) as ProviderChannel[];
   expect(remaining).toHaveLength(1);
   expect(remaining[0]!.id).toBe("ch-openai");
-  expect(app.storage()["models.credentials.ch-claude"]).toBeUndefined();
+  expect(app.storage()[credentialStorageKey("ch-claude")]).toBeUndefined();
 });
 
 test("tests connection and syncs remote models while preserving overrides and manual entries", async () => {
@@ -259,7 +267,7 @@ test("tests connection and syncs remote models while preserving overrides and ma
   expect(app.texts()).toContain("Local Model");
   expect(app.texts()).toContain("Missing");
 
-  const storedModels = JSON.parse(app.storage()["models.items"]!) as ProviderModel[];
+  const storedModels = JSON.parse(app.storage()[MODELS_STORAGE_KEY]!) as ProviderModel[];
   const added = storedModels.find((m) => m.modelKey === "gpt-4.1-mini");
   const kept = storedModels.find((m) => m.modelKey === "gpt-4o");
   const legacy = storedModels.find((m) => m.modelKey === "legacy-gpt");
@@ -378,6 +386,6 @@ test("renders cleanly at the minimum viewport in dark mode with reduced motion",
   expect(app.shows("id:model-row-gpt-4o")).toBe(true);
 
   await app.press("id:toggle-model-legacy-gpt");
-  const updated = JSON.parse(app.storage()["models.items"]!) as ProviderModel[];
+  const updated = JSON.parse(app.storage()[MODELS_STORAGE_KEY]!) as ProviderModel[];
   expect(updated.find((m) => m.modelKey === "legacy-gpt")?.enabled).toBe(true);
 });

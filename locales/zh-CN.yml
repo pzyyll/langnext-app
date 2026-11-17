@@ -49,6 +49,7 @@ settings:
 models:
   title: 模型
   channel:
+    provider: 服务商
     displayName: 显示名称
     displayNamePlaceholder: 例如 OpenAI Main
     enabledSwitch: 启用渠道
@@ -73,10 +74,17 @@ models:
     on: 启用
     moveUp: 上移 %{name}
     moveDown: 下移 %{name}
+  preset:
+    openai: OpenAI
+    gemini: Google Gemini
+    anthropic: Anthropic
+    deepseek: DeepSeek
+    custom: 自定义
   connection:
     heading: 连接
-    apiType: 接口类型
+    apiType: 默认接口类型
     baseUrl: 基础 URL
+    baseUrlPlaceholder: "https://api.example.com/v1"
     apiKey: API 密钥
     apiKeyPlaceholder: 粘贴 API 密钥
     insecureHttp: 允许非本机主机使用未加密的 http://

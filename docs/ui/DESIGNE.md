@@ -299,16 +299,40 @@ nesting scroll views.
   `components/ui/`. Copy stays bare: helper text appears only where scope,
   security consequence (`http://` confirmation), or error recovery needs it.
 
+### Provider picker and channel draft
+
+- **Provider picker**: `AddChannelDialog` presents the five provider presets
+  (`OpenAI`, `Google Gemini`, `Anthropic`, `DeepSeek`, `Custom`) as a responsive
+  two-column button card grid (`Button` with `size` scaled to the grid cell,
+  centered or leading provider `Icon` and preset name) inside `AppDialog`. No
+  connection fields or descriptive subtitles appear in the picker. On open, focus
+  moves to the first preset card; dismissing without choosing restores focus to
+  the trigger (`+` or empty-state `Add Channel`).
+- **Right-pane draft**: Selecting a preset closes the picker and mounts the
+  draft in `ProviderEditor`, keeping the `h-12` split header spine aligned with
+  `ChannelsRail`. The draft header holds the preset mark, live channel name,
+  `Unsaved` indicator, `Enabled` switch, and channel-scoped `Cancel` / `Save`
+  actions. A top identity card aligns the read-only `Provider` mark/label and
+  editable `Display Name` input on the same two-column spine as `Default API
+  type` and `Base URL` below (`< 860` points stacks to one column). Focus moves
+  into the draft's `Display Name` field on entry.
+- **Provider marks (`assets/icons/`)**: `openai.svg`, `gemini.svg`,
+  `anthropic.svg`, and `deepseek.svg` are monochrome SVGs sourced from
+  `@lobehub/icons-static-svg@1.103.0` (`https://github.com/lobehub/lobe-icons`,
+  MIT License); brand marks remain trademarks of their respective owners for
+  provider identification only. `Custom` reuses `cube-outline.svg`.
+
 ### Motion inventory
 
 | Change | Tool and tokens | Reduced motion |
 | --- | --- | --- |
-| Button and trigger hover/press | Native color & transform transition; `navigationFeedback` + `pressScale`, 150 ms, ease-out | Instant color, no scale |
+| Button, preset card, and trigger hover/press | Native color & transform transition; `navigationFeedback` + `pressScale`, 150 ms, ease-out | Instant color, no scale |
 | Channel row and model row hover/selection | Native background & border transition (`navigationFeedback`, 150 ms, ease-out) without press scale | Instant |
 | Switch and Checkbox state | Native track/box transition (`navigationFeedback`) + thumb slide (`switchThumb`, 150 ms, ease-out) | Instant |
-| Select popup, Tooltip, and Dialogs | Native popup/tooltip transitions (`popup`, `tooltip`, 150 ms) and dialog fade (`dialogAnimation` / `aboutDialog`) | Instant |
+| Select popup, Tooltip, Provider picker, and Discard confirmation | Native popup/tooltip transitions (`popup`, `tooltip`, 150 ms) and dialog fade (`dialogAnimation` / `aboutDialog`) | Instant |
+| Draft entry and leave/discard transitions | Picker closes via `dialogAnimation` and immediately reveals right-pane draft with focus on `Display Name`; discard confirmation opens via `dialogAnimation` and keeps or clears draft immediately on decision | Instant |
 | Toast notifications | Native `ToastStack` / `Toast` slide & fade (`toast` motion tokens, auto-hide 3.5 s, swipe-to-dismiss) | Instant fade/no slide |
-| Connection dirty actions, remote test/sync, search/filter updates | `Cancel` / `Save` appear immediately in the `Connection` header slot; spinner/status labels swap immediately (`Test…` / `Fetching…`) | No change |
+| Connection dirty actions, remote test/sync, model list updates, search/filter updates | `Cancel` / `Save` and model row updates apply immediately; spinner/status labels swap immediately (`Test…` / `Fetching…` / `Saving…`) | No change |
 
 ### Validation
 

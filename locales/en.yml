@@ -49,6 +49,7 @@ settings:
 models:
   title: Models
   channel:
+    provider: Provider
     displayName: Display Name
     displayNamePlaceholder: e.g. OpenAI Main
     enabledSwitch: Channel enabled
@@ -73,10 +74,17 @@ models:
     on: "ON"
     moveUp: Move %{name} up
     moveDown: Move %{name} down
+  preset:
+    openai: OpenAI
+    gemini: Google Gemini
+    anthropic: Anthropic
+    deepseek: DeepSeek
+    custom: Custom
   connection:
     heading: Connection
-    apiType: API Type
+    apiType: Default API type
     baseUrl: Base URL
+    baseUrlPlaceholder: "https://api.example.com/v1"
     apiKey: API Key
     apiKeyPlaceholder: Paste API key
     insecureHttp: Allow unencrypted http:// for non-local host

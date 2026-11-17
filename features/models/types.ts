@@ -1,3 +1,4 @@
+import type { ProviderPresetId } from "../../services/protocols/presets";
 import type { AdapterId } from "../../services/protocols/types";
 
 export interface CapabilityFlags {
@@ -27,6 +28,7 @@ export type ProviderModelSyncStatus = "active" | "missing";
 /** Persisted provider channel configuration (never holds raw secret tokens). */
 export interface ProviderChannel {
   id: string;
+  presetId: ProviderPresetId;
   displayName: string;
   adapterId: AdapterId;
   baseUrl: string | null;
@@ -62,7 +64,9 @@ export interface ProviderModel {
   updatedAt: string;
 }
 
-export interface CreateChannelInput {
+export interface SaveChannelDraftInput {
+  id: string;
+  presetId: ProviderPresetId;
   displayName: string;
   adapterId: AdapterId;
   baseUrl: string | null;
