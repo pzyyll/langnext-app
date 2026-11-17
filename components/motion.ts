@@ -1,13 +1,25 @@
 import type { MotionSpec } from "nsh";
+import type { ToastMotion } from "nsh/base";
 
-/** Shared native motion for navigation and overlays. Honors reduced motion. */
+/** Shared native motion for navigation, controls, and overlays. Honors reduced motion. */
 export const motion = {
   navigationFeedback: "transition-colors duration-150 ease-out motion-reduce:duration-0",
+  pressScale:
+    "transition duration-150 ease-out active:scale-95 motion-reduce:duration-0 motion-reduce:scale-100",
   switchThumb: "transition-transform duration-150 ease-out motion-reduce:duration-0",
   tooltip: "transition-opacity duration-150 ease-out motion-reduce:duration-0",
   popup: "transition duration-150 ease-out motion-reduce:duration-0",
   popupHidden: "opacity-0 -translate-y-1 motion-reduce:translate-y-0",
   aboutDialog: "fade" as const,
+  dialogAnimation: "fade" as const,
+  toastTransition: "transition duration-200 ease-out motion-reduce:duration-0",
+  toastHidden: "opacity-0 translate-y-2 motion-reduce:translate-y-0",
+  toastStack: {
+    duration: 220,
+    exitDuration: 180,
+    expandedGap: 8,
+    collapsedVisible: 3,
+  } satisfies ToastMotion,
   pageEnter: {
     keyframes: { opacity: [0, 1] },
     duration: 200,

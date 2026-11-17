@@ -2,8 +2,10 @@ import { createMotion, Scroll, View, type JSX } from "nsh";
 import { motion } from "../motion";
 
 interface PageSurfaceProps {
-  /** The test id the page's scrolling surface carries. */
+  /** The test id the page surface carries. */
   testID?: string;
+  /** Layout mode: `"column"` wraps children in a scrolling centred column; `"split"` fills horizontally for master-detail pages. */
+  layout?: "column" | "split";
   children?: JSX.Element;
 }
 
@@ -18,12 +20,21 @@ export function PageSurface(props: PageSurfaceProps) {
 
   return (
     <View
+      testID={props.layout === "split" ? props.testID : undefined}
       class="min-w-0 flex-1 overflow-hidden rounded-xl bg-background"
+      classList={{ "flex-row": props.layout === "split" }}
       style={entrance.style}
     >
-      <Scroll testID={props.testID} class="min-w-0 flex-1">
-        <View class="mx-auto w-full max-w-5xl gap-8 p-8">{props.children}</View>
-      </Scroll>
+      <If
+        when={props.layout === "split"}
+        else={
+          <Scroll testID={props.testID} class="min-w-0 flex-1">
+            <View class="mx-auto w-full max-w-5xl gap-8 p-8">{props.children}</View>
+          </Scroll>
+        }
+      >
+        {props.children}
+      </If>
     </View>
   );
 }

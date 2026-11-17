@@ -3,23 +3,45 @@ import { Switch as BaseSwitch } from "nsh/base";
 import { motion } from "../motion";
 
 interface SwitchProps {
-  label: string;
+  label?: string;
+  accessibilityLabel?: string;
   checked: boolean;
+  disabled?: boolean;
+  variant?: "row" | "inline";
+  testID?: string;
   onChange: (checked: boolean) => void;
 }
 
-/** A setting row with a leading label and a trailing native switch. */
+/** Theme-styled native switch supporting full setting rows (`row`) and compact inline controls (`inline`). */
 export function Switch(props: SwitchProps) {
+  const mode = () => props.variant ?? (props.label ? "row" : "inline");
+
   return (
     <BaseSwitch
-      accessibilityLabel={props.label}
+      testID={props.testID}
+      accessibilityLabel={props.accessibilityLabel ?? props.label}
       checked={props.checked}
+      disabled={props.disabled}
       onChange={({ checked }) => props.onChange(checked)}
-      class={`flex-row-reverse items-center justify-between gap-4 rounded-lg px-3 py-2 ${motion.navigationFeedback} hover:bg-muted active:bg-accent focus-visible:ring-2 focus-visible:ring-ring`}
+      class={
+        mode() === "row"
+          ? `flex-row-reverse items-center justify-between gap-4 rounded-lg px-3 py-2 hover:bg-muted active:bg-accent focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 ${motion.navigationFeedback}`
+          : `flex-row items-center gap-2 rounded-lg focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50`
+      }
       trackClass={`w-11 shrink-0 rounded-full bg-input p-0.5 checked:bg-primary ${motion.navigationFeedback}`}
       thumbClass={`size-5 rounded-full bg-background shadow-sm checked:translate-x-5 ${motion.switchThumb}`}
     >
-      <Text class="text-sm font-medium text-card-foreground">{props.label}</Text>
+      <If when={props.label !== undefined}>
+        <Text
+          class={
+            mode() === "row"
+              ? "text-sm font-medium text-card-foreground"
+              : "text-sm text-foreground"
+          }
+        >
+          {props.label}
+        </Text>
+      </If>
     </BaseSwitch>
   );
 }

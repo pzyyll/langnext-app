@@ -4,6 +4,7 @@ import trayIcon from "../assets/logos/icon.svg";
 import { AppMenu } from "../components/app-menu";
 import { PageSurface } from "../components/layout/page-surface";
 import { Sidebar, type SidebarPage } from "../components/sidebar";
+import { ToastViewport } from "../components/ui/toast";
 import { ModelsPage } from "../features/models/page";
 import { SettingsPage } from "../features/settings/page";
 import { transparency } from "../features/settings/transparency";
@@ -54,7 +55,7 @@ export function AppShell() {
       <View class="flex-1 flex-row">
         <Sidebar page={page()} onSelectModels={selectModels} onSelectSettings={selectSettings} />
         <If when={page() === "models"}>
-          <PageSurface testID="models-page">
+          <PageSurface testID="models-page" layout="split">
             <ModelsPage />
           </PageSurface>
         </If>
@@ -64,6 +65,7 @@ export function AppShell() {
           </PageSurface>
         </If>
       </View>
+      <ToastViewport />
     </View>
   );
 }

@@ -230,6 +230,54 @@ the rounded tile would collapse into a solid square; the bare mark stays readabl
 in light and dark. Its menu holds one item, `Exit`; a primary press brings the
 main window back.
 
+## Models workspace
+
+Models adapts the master-detail structure of `langnext-app` to My Translator's
+tokens, bare copy, and native controls. `PageSurface` adds an optional
+`layout="split"` mode alongside its default `"column"` layout so Settings stays
+unchanged while Models renders edge-to-edge inside the same opaque `bg-background`
+work area without nesting scroll views.
+
+### Channels rail and detail pane
+
+- **Master rail**: A `w-48` (`border-r border-border`) column with a `Channels`
+  header, scrollable channel list, empty/error states, and a footer `+` trigger.
+  Channel rows highlight through their own surface (`bg-accent` and
+  `text-accent-foreground` when selected; never a leading accent bar). Enabled
+  channels carry a compact `ON` badge, and reorder controls move channels up or
+  down while preserving selection.
+- **Detail pane**: Displays the selected channel's `Header` (name, inline rename,
+  and enabled `Switch`), scrollable `Connection` and `Models` cards (`rounded-xl
+  border border-border bg-card p-6`, matching Appearance), and a footer bar with
+  `Delete` on the left and `Cancel` / `Save` on the right.
+- **Dialogs and overlays**: `AddChannelDialog`, `AddModelDialog`,
+  `EditModelDialog`, and `ConfirmDialog` share `AboutDialog`'s `rounded-2xl
+  border border-border bg-background` frame, padded header/body, and `bg-muted`
+  footer bar over `bg-overlay`. Non-blocking status notices appear in a top-level
+  `ToastStack` anchored at the bottom-right above the action footer inside an
+  `Overlay`.
+- **Reusable controls**: UI primitives (`Button`, `Input`, `Checkbox`, `Select`,
+  `Switch`, `Badge`, `Card`, `Dialog`, `Icon`, `ToastProvider`) live under
+  `components/ui/`. Copy stays bare: helper text appears only where scope,
+  security consequence (`http://` confirmation), or error recovery needs it.
+
+### Motion inventory
+
+| Change | Tool and tokens | Reduced motion |
+| --- | --- | --- |
+| Button, row, and trigger hover/press | Native color & transform transition; `navigationFeedback` + `pressScale`, 150 ms, ease-out | Instant color, no scale |
+| Channel row selection | Native background transition (`navigationFeedback`, 150 ms, ease-out) on the selected row | Instant |
+| Switch and Checkbox state | Native track/box transition (`navigationFeedback`) + thumb slide (`switchThumb`, 150 ms, ease-out) | Instant |
+| Select popup and Dialogs | Native popup transition (`popup`, 150 ms) and dialog fade (`dialogAnimation` / `aboutDialog`) | Instant |
+| Toast notifications | Native `ToastStack` / `Toast` slide & fade (`toast` motion tokens, auto-hide 3.5 s, swipe-to-dismiss) | Instant fade/no slide |
+| Remote test/sync, search filter, table updates | Spinner/status label swaps immediately (`Test…` / `Syncing…`); list rows update cleanly without layout animation | No change |
+
+### Validation
+
+- **Checks**: Automated unit/logic checks, headless UI suite, Windows desktop UI suite (`nsh test --target windows`), clippy/oxlint, format check, and release bundle check verified after final UI edits.
+- **Screenshots and layout**: Reviewed Windows desktop screenshots in light and dark modes at default (`1040 × 720`) and minimum (`720 × 520`) window sizes, including empty state, populated channels rail, connection and models cards, table rows, toast stack, and modal dialogs (`EditModelDialog`).
+- **Adjustments made from visual review**: Widened the Channels rail to `w-56` on normal desktop widths (`w-48` under `860` points) and scoped reorder arrows to the selected channel row so names avoid early truncation; tightened `< 860` card/editor padding (`p-4`) and folded `API Type` into the model subtitle at narrow widths so `Get models` and model rows fit cleanly at `720 × 520`; moved `ToastStack` to `bottom-16 right-4` so transient notifications stay clear above the editor action footer.
+- **Hover, pressed, and motion**: Hover washes, disabled states, active scaling, dialog fade, switches, and checkboxes pass functional desktop checks; frame-by-frame motion timing and screen-reader behavior remain manual checks.
 
 ## Theme Colors
 ```css
@@ -249,6 +297,10 @@ main window back.
   --accent: oklch(0.97 0 0);
   --accent-foreground: oklch(0.205 0 0);
   --destructive: oklch(0.577 0.245 27.325);
+  --destructive-foreground: oklch(0.985 0 0);
+  --success: oklch(0.527 0.154 150.069);
+  --success-foreground: oklch(0.985 0 0);
+  --warning: oklch(0.681 0.162 75.834);
   --border: oklch(0.922 0 0);
   --input: oklch(0.922 0 0);
   --ring: oklch(0.708 0 0);
@@ -284,6 +336,10 @@ main window back.
   --accent: oklch(0.269 0 0);
   --accent-foreground: oklch(0.985 0 0);
   --destructive: oklch(0.704 0.191 22.216);
+  --destructive-foreground: oklch(0.985 0 0);
+  --success: oklch(0.696 0.17 162.48);
+  --success-foreground: oklch(0.145 0 0);
+  --warning: oklch(0.769 0.188 70.08);
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
   --ring: oklch(0.556 0 0);
