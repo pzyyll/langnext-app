@@ -28,6 +28,7 @@ import type { ChannelDraft } from "./channel-draft";
 import { inspectBaseUrl, isInsecureHttpConfirmed, resolveConfirmedInsecureUrl } from "./connection";
 import { EditModelDialog, type EditModelSubmission } from "./edit-model-dialog";
 import { FormField } from "./form-field";
+import { resolveModelFacts } from "./model-facts";
 import { ModelsTable } from "./models-table";
 import {
   createManualModel,
@@ -579,13 +580,16 @@ export function ProviderEditor(props: ProviderEditorProps) {
   };
 
   const handleAddModelSubmit = async (input: AddModelSubmission) => {
+    const presetId = props.mode === "draft" ? props.draft.presetId : props.channel.presetId;
+    const facts = await resolveModelFacts(presetId, input.modelKey);
     if (props.mode === "draft") {
-      props.draft.addManualModel(input);
+      props.draft.addManualModel({ ...input, facts });
       return;
     }
     await createManualModel({
       providerId: props.channel.id,
       ...input,
+      facts,
     });
   };
 

@@ -1,4 +1,5 @@
 import type { App } from "nsh/test";
+import { CATALOG_CACHE_KEY } from "../../../services/models-dev/catalog";
 import type { ProviderPresetId } from "../../../services/protocols/presets";
 import { credentialStorageKey, MODELS_STORAGE_KEY, PROVIDERS_STORAGE_KEY } from "../store";
 import type { ProviderChannel, ProviderModel } from "../types";
@@ -46,6 +47,18 @@ export function makeModel(overrides: Partial<ProviderModel> = {}): ProviderModel
   };
 }
 
+/** Seeds a fresh empty models.dev cache so discovery tests never reach the network for it. */
+export function emptyCatalogCache(): Record<string, string> {
+  return catalogCache({});
+}
+
+/** Seeds the models.dev cache with catalog facts, keyed by `provider/model` ID. */
+export function catalogCache(models: Record<string, unknown>): Record<string, string> {
+  return {
+    [CATALOG_CACHE_KEY]: JSON.stringify({ fetchedAt: Date.now(), models }),
+  };
+}
+
 export function makeSeedStorage(options: {
   channels?: ProviderChannel[];
   models?: ProviderModel[];
@@ -54,6 +67,7 @@ export function makeSeedStorage(options: {
 }): Record<string, string> {
   const storage: Record<string, string> = {
     "settings.language": "en",
+    ...emptyCatalogCache(),
     ...options.extra,
   };
   if (options.channels) {

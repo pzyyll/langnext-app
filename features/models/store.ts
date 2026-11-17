@@ -1,5 +1,6 @@
 import { batch, signal, Storage } from "nsh";
 import { t } from "nsh/i18n";
+import { loadCatalog } from "../../services/models-dev/catalog";
 import { listRemoteModels, testAdapterConnection } from "../../services/protocols/adapters";
 import { getProviderPreset, isProtocolAllowedForPreset } from "../../services/protocols/presets";
 import {
@@ -8,6 +9,7 @@ import {
   type DiscoveredRemoteModel,
 } from "../../services/protocols/types";
 import { inspectBaseUrl } from "./connection";
+import { applyCatalogFacts } from "./model-facts";
 import {
   applyModelConfigUpdate,
   createManualProviderModel,
@@ -598,7 +600,13 @@ export async function discoverModelsSnapshot(
   abortSignal?: AbortSignal,
 ): Promise<DiscoveredRemoteModel[]> {
   const params = await resolveConnectionRequestParams(snapshot, "fetch", abortSignal);
-  return listRemoteModels(params);
+  // Start the catalog lookup before the listing so neither request waits on the other.
+  const catalog = loadCatalog();
+  const discovered = await listRemoteModels(params);
+  if (abortSignal?.aborted) {
+    throw new ProviderProtocolError("cancelled", t("protocol.error.cancelled"));
+  }
+  return applyCatalogFacts(params.presetId, discovered, await catalog);
 }
 
 export async function syncChannelModels(
@@ -613,6 +621,7 @@ export async function syncChannelModels(
 
   const params = await resolveConnectionRequestParams(snapshot, "fetch", abortSignal);
   const syncAdapterId = params.adapterId;
+  const catalog = loadCatalog();
 
   let discovered;
   try {
@@ -637,6 +646,8 @@ export async function syncChannelModels(
     throw new ProviderProtocolError("cancelled", t("protocol.error.cancelled"));
   }
 
+  const enriched = applyCatalogFacts(params.presetId, discovered, await catalog);
+
   return withWriteLock(async () => {
     if (abortSignal?.aborted) {
       throw new ProviderProtocolError("cancelled", t("protocol.error.cancelled"));
@@ -653,7 +664,7 @@ export async function syncChannelModels(
       existingChannelModels: channelModels,
       providerId,
       sourceAdapterId: syncAdapterId,
-      discovered,
+      discovered: enriched,
       timestamp,
     });
 
@@ -710,6 +721,7 @@ export async function createManualModel(input: CreateManualModelInput): Promise<
         displayNameOverride: input.displayNameOverride ?? null,
         apiTypeOverride: input.apiTypeOverride,
         enabled: input.enabled,
+        facts: input.facts ?? null,
       },
       nowIso(),
     );

@@ -22,6 +22,13 @@ export type CredentialUpdate =
 
 export type ModelsEnabledFilter = "all" | "enabled" | "disabled";
 
+/** Capabilities and token limits resolved from the models.dev catalog. */
+export interface ModelFacts {
+  capabilities: CapabilityFlags;
+  contextLimit: number | null;
+  maxTokens: number | null;
+}
+
 export type ProviderModelOrigin = "remote" | "manual";
 export type ProviderModelSyncStatus = "active" | "missing";
 
@@ -103,6 +110,7 @@ export interface CreateManualModelInput {
   displayNameOverride: string | null;
   apiTypeOverride: AdapterId | null;
   enabled: boolean;
+  facts?: ModelFacts | null;
 }
 
 export interface UpdateModelConfigInput {

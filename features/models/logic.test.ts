@@ -1,6 +1,7 @@
 import { expect, test } from "nsh/test";
 import { createChannelDraft } from "./channel-draft";
 import { inspectBaseUrl } from "./connection";
+import { applyCatalogFacts } from "./model-facts";
 import {
   formatModelApiTypeDisplay,
   formatTokenCount,
@@ -226,4 +227,110 @@ test("provider channels: draft catalog merge deduplicates by model ID and preser
   expect(keptChat.contextLimit).toBe(128_000);
   expect(draft.models().find((m) => m.modelKey === "legacy-ds")?.syncStatus).toBe("missing");
   expect(draft.models().find((m) => m.modelKey === "manual-local")?.syncStatus).toBe("active");
+});
+
+test("provider channels: catalog facts fill capabilities and reported limits", () => {
+  const discovered = [
+    {
+      modelKey: "gpt-4.1-mini",
+      displayName: "GPT-4.1 Mini",
+      contextLimit: null,
+      maxTokens: null,
+      capabilities: { text: true, image: true, pdf: false, video: false },
+    },
+    {
+      modelKey: "gemini-2.5-pro",
+      displayName: null,
+      contextLimit: 1_000_000,
+      maxTokens: null,
+      capabilities: { text: true, image: false, pdf: false, video: false },
+    },
+    {
+      modelKey: "unknown-model",
+      displayName: null,
+      contextLimit: 4_096,
+      maxTokens: null,
+      capabilities: { text: true, image: false, pdf: false, video: false },
+    },
+  ];
+  const index = {
+    lookup: (modelKey: string) =>
+      modelKey === "gpt-4.1-mini"
+        ? {
+            text: true,
+            image: true,
+            pdf: true,
+            video: false,
+            contextLimit: 128_000,
+            maxTokens: 16_384,
+          }
+        : modelKey === "gemini-2.5-pro"
+          ? {
+              text: true,
+              image: true,
+              pdf: true,
+              video: true,
+              contextLimit: 1_048_576,
+              maxTokens: 65_536,
+            }
+          : null,
+  };
+
+  expect(applyCatalogFacts("openai", discovered, index)).toEqual([
+    {
+      modelKey: "gpt-4.1-mini",
+      displayName: "GPT-4.1 Mini",
+      contextLimit: 128_000,
+      maxTokens: 16_384,
+      capabilities: { text: true, image: true, pdf: true, video: false },
+    },
+    {
+      modelKey: "gemini-2.5-pro",
+      displayName: null,
+      // The endpoint's own limit wins; the catalog fills only what it omits.
+      contextLimit: 1_000_000,
+      maxTokens: 65_536,
+      capabilities: { text: true, image: true, pdf: true, video: true },
+    },
+    {
+      modelKey: "unknown-model",
+      displayName: null,
+      contextLimit: 4_096,
+      maxTokens: null,
+      capabilities: { text: true, image: false, pdf: false, video: false },
+    },
+  ]);
+
+  expect(applyCatalogFacts("openai", discovered, null)).toEqual(discovered);
+});
+
+test("provider channels: a manual model inherits catalog facts", () => {
+  const draft = createChannelDraft("anthropic");
+  const created = draft.addManualModel({
+    modelKey: "claude-sonnet-4-5",
+    displayNameOverride: null,
+    apiTypeOverride: null,
+    enabled: true,
+    facts: {
+      capabilities: { text: true, image: true, pdf: true, video: false },
+      contextLimit: 200_000,
+      maxTokens: 64_000,
+    },
+  });
+
+  expect(created.origin).toBe("manual");
+  expect(created.capabilities).toEqual({ text: true, image: true, pdf: true, video: false });
+  expect(created.contextLimit).toBe(200_000);
+  expect(created.maxTokens).toBe(64_000);
+  expect(created.capabilitiesOverride).toBeNull();
+
+  const bare = draft.addManualModel({
+    modelKey: "local-model",
+    displayNameOverride: null,
+    apiTypeOverride: null,
+    enabled: true,
+  });
+  expect(bare.capabilities).toEqual({ text: true, image: false, pdf: false, video: false });
+  expect(bare.contextLimit).toBeNull();
+  expect(bare.maxTokens).toBeNull();
 });

@@ -13,6 +13,7 @@ import {
 } from "./model-collection";
 import type {
   CapabilityOverrides,
+  ModelFacts,
   PersistedDraftScopes,
   ProviderModel,
   SyncModelsResult,
@@ -23,6 +24,8 @@ export interface AddModelDraftInput {
   displayNameOverride: string | null;
   apiTypeOverride: AdapterId | null;
   enabled: boolean;
+  /** Catalog capability and token facts when the model is known to models.dev. */
+  facts?: ModelFacts | null;
 }
 
 export interface UpdateModelDraftInput {
@@ -151,6 +154,7 @@ export function createChannelDraft(presetId: ProviderPresetId): ChannelDraft {
           displayNameOverride: input.displayNameOverride,
           apiTypeOverride: input.apiTypeOverride,
           enabled: input.enabled,
+          facts: input.facts ?? null,
         },
         new Date().toISOString(),
       );

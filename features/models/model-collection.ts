@@ -7,6 +7,7 @@ import type { AdapterId, DiscoveredRemoteModel } from "../../services/protocols/
 import type {
   CapabilityFlags,
   CapabilityOverrides,
+  ModelFacts,
   ProviderModel,
   SyncModelsResult,
 } from "./types";
@@ -23,6 +24,8 @@ export interface AddChannelModelInput {
   displayNameOverride: string | null;
   apiTypeOverride: AdapterId | null;
   enabled: boolean;
+  /** Catalog capability and token facts when the model is known to models.dev. */
+  facts?: ModelFacts | null;
 }
 
 export interface UpdateChannelModelInput {
@@ -66,10 +69,10 @@ export function createManualProviderModel(
     displayName: null,
     displayNameOverride: input.displayNameOverride?.trim() || null,
     apiTypeOverride: input.apiTypeOverride,
-    capabilities: defaultCapabilities(),
+    capabilities: input.facts?.capabilities ?? defaultCapabilities(),
     capabilitiesOverride: null,
-    contextLimit: null,
-    maxTokens: null,
+    contextLimit: input.facts?.contextLimit ?? null,
+    maxTokens: input.facts?.maxTokens ?? null,
     lastSeenAt: null,
     createdAt: timestamp,
     updatedAt: timestamp,

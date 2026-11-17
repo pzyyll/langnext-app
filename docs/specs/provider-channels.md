@@ -238,6 +238,30 @@ when absent from a later successful fetch; do not delete them or manual entries.
 A failed fetch leaves the current list intact. A successful fetch does not remove
 manual entries merely because the server did not return them.
 
+### Capability and limit seeding
+
+Model entries need capability flags and token limits before a user can select them
+for translation. Discovery fills them from the models.dev catalog
+(`https://models.dev/models.json`):
+
+- The catalog request is best effort. A timeout, an offline machine, or a malformed
+  body leaves discovery unchanged and does not fail the fetch or sync.
+- The catalog is fetched at most once per 24 hours. The derived facts are cached
+  in app storage, so later discoveries and manual additions need no request. An
+  expired cache is used when a refresh fails.
+- Lookup uses the provider ID that matches the preset (`openai`, `anthropic`,
+  `google` for Gemini, `deepseek`) with the model ID, then falls back to the model
+  ID alone, case-insensitively. A Custom channel has no catalog provider and
+  matches by model ID only.
+- Capability flags come from the catalog when it knows the model; otherwise the
+  protocol adapter keeps its model-ID heuristic.
+- Token limits prefer the value the provider's own listing reports. The catalog
+  fills a limit the listing omits. Discovery never replaces a limit already stored
+  on the model record.
+- A model added by hand also receives catalog facts when the catalog knows it.
+  These facts are discovery data: a user capability override still wins, and no
+  model is enabled automatically.
+
 ## Saving and errors
 
 ### Local save rules

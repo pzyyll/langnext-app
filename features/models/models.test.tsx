@@ -1,4 +1,5 @@
 import { expect, open, test } from "nsh/test";
+import { emptyCatalogCache } from "./__tests__/fixtures";
 import { credentialStorageKey, MODELS_STORAGE_KEY, PROVIDERS_STORAGE_KEY } from "./store";
 import type { ProviderChannel, ProviderModel } from "./types";
 
@@ -110,6 +111,7 @@ function seededStorage(
   models = sampleModels(),
 ): Record<string, string> {
   return {
+    ...emptyCatalogCache(),
     "settings.language": "en",
     [PROVIDERS_STORAGE_KEY]: JSON.stringify(channels),
     [MODELS_STORAGE_KEY]: JSON.stringify(models),
@@ -121,7 +123,7 @@ function seededStorage(
 test("creates a new channel with non-loopback HTTP confirmation and stores secrets separately", async () => {
   const app = await open(APP_ENTRY, {
     ...viewport,
-    storage: { "settings.language": "en" },
+    storage: { ...emptyCatalogCache(), "settings.language": "en" },
   });
   expect(app.shows("id:empty-add-channel-button")).toBe(true);
 
