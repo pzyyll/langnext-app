@@ -1,4 +1,5 @@
 import { t } from "nsh/i18n";
+import { jsonHttp } from "../../modules/ai/runtime/http";
 import { resolveRequestTarget } from "./routing";
 import {
   ProviderProtocolError,
@@ -7,7 +8,6 @@ import {
   type DiscoveredRemoteModel,
 } from "./types";
 
-const DEFAULT_TIMEOUT_MS = 15_000;
 const MAX_PAGES = 10;
 
 const ADAPTER_LABELS: Record<AdapterId, string> = {
@@ -56,109 +56,6 @@ function inferCapabilitiesFromId(modelId: string): DiscoveredRemoteModel["capabi
     pdf: isGeminiOrClaudePdf,
     video: isVideo,
   };
-}
-
-async function fetchJsonPage(
-  url: string,
-  headers: Record<string, string>,
-  externalSignal: AbortSignal | undefined,
-  timeoutMs: number,
-): Promise<Record<string, unknown>> {
-  const controller = new AbortController();
-  let timedOut = false;
-  let triggerExternalCancel: (() => void) | null = null;
-
-  const externalCancelPromise = externalSignal
-    ? new Promise<never>((_, reject) => {
-        triggerExternalCancel = () =>
-          reject(new ProviderProtocolError("cancelled", t("protocol.error.cancelled")));
-      })
-    : null;
-
-  const onExternalAbort = () => {
-    controller.abort();
-    triggerExternalCancel?.();
-  };
-  if (externalSignal) {
-    if (externalSignal.aborted) {
-      throw new ProviderProtocolError("cancelled", t("protocol.error.cancelled"));
-    }
-    externalSignal.addEventListener("abort", onExternalAbort, { once: true });
-  }
-
-  const timer = setTimeout(() => {
-    timedOut = true;
-    controller.abort();
-  }, timeoutMs);
-
-  let response: Response;
-  try {
-    const fetchPromise = fetch(url, {
-      method: "GET",
-      headers,
-      signal: controller.signal,
-    });
-    if (externalCancelPromise) {
-      fetchPromise.catch(() => {});
-      response = await Promise.race([fetchPromise, externalCancelPromise]);
-    } else {
-      response = await fetchPromise;
-    }
-  } catch (err) {
-    if (timedOut) {
-      throw new ProviderProtocolError("timeout", t("protocol.error.timeout"));
-    }
-    if (err instanceof ProviderProtocolError && err.kind === "cancelled") {
-      throw err;
-    }
-    if (externalSignal?.aborted) {
-      throw new ProviderProtocolError("cancelled", t("protocol.error.cancelled"));
-    }
-    const detail = err instanceof Error ? err.message : t("protocol.error.networkDefault");
-    throw new ProviderProtocolError("network", t("protocol.error.network", { detail }));
-  } finally {
-    clearTimeout(timer);
-    externalSignal?.removeEventListener("abort", onExternalAbort);
-  }
-
-  if (externalSignal?.aborted) {
-    throw new ProviderProtocolError("cancelled", t("protocol.error.cancelled"));
-  }
-
-  if (!response.ok) {
-    const status = response.status;
-    if (status === 401 || status === 403) {
-      throw new ProviderProtocolError("auth", t("protocol.error.auth", { status }), status);
-    }
-    if (status === 429) {
-      throw new ProviderProtocolError(
-        "rate_limited",
-        t("protocol.error.rateLimited", { status }),
-        status,
-      );
-    }
-    if (status >= 500) {
-      throw new ProviderProtocolError("server", t("protocol.error.server", { status }), status);
-    }
-    throw new ProviderProtocolError(
-      "invalid_request",
-      t("protocol.error.rejected", { status }),
-      status,
-    );
-  }
-
-  let parsed: unknown;
-  try {
-    parsed = await response.json();
-  } catch {
-    throw new ProviderProtocolError("invalid_response", t("protocol.error.unreadable"));
-  }
-
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new ProviderProtocolError("invalid_response", t("protocol.error.unexpectedShape"));
-  }
-
-  return parsed as Record<string, unknown>;
 }
 
 function normalizePositiveInt(value: unknown): number | null {
@@ -229,11 +126,21 @@ function parseGeminiPage(payload: Record<string, unknown>): {
   return { models, nextPageToken };
 }
 
+async function fetchCatalogPage(
+  params: AdapterRequestParams,
+  queryExtras?: Record<string, string>,
+): Promise<Record<string, unknown>> {
+  const target = resolveRequestTarget(
+    params,
+    queryExtras ? { kind: "catalog", queryExtras } : { kind: "catalog" },
+  );
+  return jsonHttp.getJson(target, { signal: params.signal, timeoutMs: params.timeoutMs });
+}
+
 /** Fetches the model catalog from the configured protocol endpoint with pagination and timeout. */
 export async function listRemoteModels(
   params: AdapterRequestParams,
 ): Promise<DiscoveredRemoteModel[]> {
-  const timeoutMs = params.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const deduped = new Map<string, DiscoveredRemoteModel>();
 
   if (params.presetId !== "deepseek" && params.adapterId === "anthropic") {
@@ -241,8 +148,7 @@ export async function listRemoteModels(
     for (let page = 0; page < MAX_PAGES; page++) {
       const queryExtras: Record<string, string> = {};
       if (afterId) queryExtras.after_id = afterId;
-      const { url, headers } = resolveRequestTarget(params, { kind: "catalog", queryExtras });
-      const payload = await fetchJsonPage(url, headers, params.signal, timeoutMs);
+      const payload = await fetchCatalogPage(params, queryExtras);
       for (const item of parseOpenAIPage(payload)) {
         if (!deduped.has(item.modelKey)) deduped.set(item.modelKey, item);
       }
@@ -259,8 +165,7 @@ export async function listRemoteModels(
     for (let page = 0; page < MAX_PAGES; page++) {
       const queryExtras: Record<string, string> = {};
       if (pageToken) queryExtras.pageToken = pageToken;
-      const { url, headers } = resolveRequestTarget(params, { kind: "catalog", queryExtras });
-      const payload = await fetchJsonPage(url, headers, params.signal, timeoutMs);
+      const payload = await fetchCatalogPage(params, queryExtras);
       const parsed = parseGeminiPage(payload);
       for (const item of parsed.models) {
         if (!deduped.has(item.modelKey)) deduped.set(item.modelKey, item);
@@ -271,8 +176,7 @@ export async function listRemoteModels(
     return Array.from(deduped.values());
   }
 
-  const { url, headers } = resolveRequestTarget(params, { kind: "catalog" });
-  const payload = await fetchJsonPage(url, headers, params.signal, timeoutMs);
+  const payload = await fetchCatalogPage(params);
   for (const item of parseOpenAIPage(payload)) {
     if (!deduped.has(item.modelKey)) deduped.set(item.modelKey, item);
   }
