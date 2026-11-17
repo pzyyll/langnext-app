@@ -1,45 +1,13 @@
+import type { ProtocolId } from "../../modules/ai/contracts/protocol";
 import type { ProviderPresetId } from "./presets";
 
-/** Built-in provider wire protocol identifiers. */
-export type AdapterId = "openai-compatible" | "openai-responses" | "anthropic" | "gemini";
+export { ProviderProtocolError } from "../../modules/ai/contracts/errors";
+export type { ProviderErrorKind } from "../../modules/ai/contracts/errors";
+export type { DiscoveredRemoteModel } from "../../modules/ai/contracts/model";
+export type { RequestOperation, ResolvedRequestTarget } from "../../modules/ai/contracts/protocol";
 
-/** Normalized remote model entry returned by a protocol adapter. */
-export interface DiscoveredRemoteModel {
-  modelKey: string;
-  displayName: string | null;
-  contextLimit: number | null;
-  maxTokens: number | null;
-  capabilities: {
-    text: boolean;
-    image: boolean;
-    pdf: boolean;
-    video: boolean;
-  };
-}
-
-/** Normalized error category for provider network operations. */
-export type ProviderErrorKind =
-  | "auth"
-  | "rate_limited"
-  | "network"
-  | "timeout"
-  | "server"
-  | "invalid_request"
-  | "invalid_response"
-  | "cancelled";
-
-/** Structured error thrown by protocol adapter calls. */
-export class ProviderProtocolError extends Error {
-  readonly kind: ProviderErrorKind;
-  readonly status?: number;
-
-  constructor(kind: ProviderErrorKind, message: string, status?: number) {
-    super(message);
-    this.name = "ProviderProtocolError";
-    this.kind = kind;
-    this.status = status;
-  }
-}
+/** Provider wire protocol identifiers; open until the old path is removed. */
+export type AdapterId = ProtocolId;
 
 export interface AdapterRequestParams {
   presetId: ProviderPresetId;
@@ -48,14 +16,4 @@ export interface AdapterRequestParams {
   credential: string | null;
   signal?: AbortSignal;
   timeoutMs?: number;
-}
-
-export type RequestOperation =
-  | { kind: "catalog"; queryExtras?: Record<string, string> }
-  | { kind: "model"; modelId: string };
-
-export interface ResolvedRequestTarget {
-  method: "GET" | "POST";
-  url: string;
-  headers: Record<string, string>;
 }

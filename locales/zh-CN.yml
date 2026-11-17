@@ -208,3 +208,17 @@ protocol:
     unexpectedShape: 服务商返回了意外的响应结构。
     missingModels: 服务商响应中缺少 models 数组。
     missingGeminiModels: 服务商响应中缺少 Gemini 模型列表。
+ai:
+  protocol:
+    openaiChat: OpenAI Chat Completions
+    openaiResponses: OpenAI Responses
+    anthropic: Anthropic Messages
+    gemini: Gemini API
+  error:
+    duplicateModule: "已注册 ID 为“%{id}”的模块。"
+    unknownProvider: "未知或无效的服务商类型“%{id}”。"
+    unknownProtocol: "未知或无效的接口协议“%{id}”。"
+    invalidProvider: "服务商“%{id}”的定义无效。"
+    unknownPresentation: "服务商“%{id}”未注册设置视图。"
+    providerOriginChanged: 服务商路径策略不能更改请求的来源地址。
+    unsupportedConfiguration: 此渠道使用了当前版本不可用的服务商或接口协议。

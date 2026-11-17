@@ -1,8 +1,9 @@
 import { t } from "nsh/i18n";
+import type { ProviderTypeId } from "../../modules/ai/contracts/channel";
 import type { AdapterId } from "./types";
 
-/** Supported provider preset identifiers. */
-export type ProviderPresetId = "openai" | "gemini" | "anthropic" | "deepseek" | "custom";
+/** Provider type identifier; open until the old path is removed. */
+export type ProviderPresetId = ProviderTypeId;
 
 /** Icon asset identifier used by provider preset marks. */
 export type ProviderPresetIcon = "openai" | "gemini" | "anthropic" | "deepseek" | "cube-outline";

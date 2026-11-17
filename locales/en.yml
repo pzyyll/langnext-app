@@ -208,3 +208,17 @@ protocol:
     unexpectedShape: Provider returned an unexpected response shape.
     missingModels: Expected a models array in provider response.
     missingGeminiModels: Expected a Gemini models list in provider response.
+ai:
+  protocol:
+    openaiChat: OpenAI Chat Completions
+    openaiResponses: OpenAI Responses
+    anthropic: Anthropic Messages
+    gemini: Gemini API
+  error:
+    duplicateModule: 'A module with the ID "%{id}" is already registered.'
+    unknownProvider: 'Unknown or invalid provider type "%{id}".'
+    unknownProtocol: 'Unknown or invalid API protocol "%{id}".'
+    invalidProvider: 'Provider "%{id}" has an invalid definition.'
+    unknownPresentation: 'No settings view is registered for provider "%{id}".'
+    providerOriginChanged: Provider path policy cannot change the request origin.
+    unsupportedConfiguration: This channel uses a provider or API protocol that is not available in this build.
