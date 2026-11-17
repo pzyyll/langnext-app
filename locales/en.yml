@@ -138,8 +138,7 @@ models:
     idPlaceholder: e.g. gpt-4.1-mini
     configure: Configure Model
     configured: Configure
-    apiTypeDefaultChannel: Default (Channel)
-    apiTypeDefaultSource: Default (Source)
+    useChannelDefault: Use channel default
     capabilities: Capabilities
     contextLimit: Context Limit
     maxTokens: Max Tokens
@@ -153,7 +152,6 @@ models:
     noMatch: No matching models
   api:
     default: "Default (%{name})"
-    source: "Source: %{name}"
   action:
     select: Select
     deleteSelected: Delete (%{count})

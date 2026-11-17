@@ -1,7 +1,24 @@
 import { t } from "nsh/i18n";
 import { getAdapterLabel } from "../../services/protocols/adapters";
+import { getProviderPreset, type ProviderPresetId } from "../../services/protocols/presets";
 import type { AdapterId } from "../../services/protocols/types";
 import type { CapabilityFlags, ProviderModel } from "./types";
+
+export const MODEL_DEFAULT_API_VALUE = "__default__";
+
+/** Builds the ordered API selector choices for manual model add and edit dialogs. */
+export function getModelApiTypeItems(
+  presetId: ProviderPresetId,
+): Array<{ value: string; title: string }> {
+  const preset = getProviderPreset(presetId);
+  return [
+    { value: MODEL_DEFAULT_API_VALUE, title: t("models.model.useChannelDefault") },
+    ...preset.allowedAdapterIds.map((id) => ({
+      value: id,
+      title: getAdapterLabel(id),
+    })),
+  ];
+}
 
 /** Resolves the label shown for a model in tables and summaries. */
 export function resolveEffectiveDisplayName(model: ProviderModel): string {

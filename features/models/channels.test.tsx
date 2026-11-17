@@ -2,6 +2,7 @@ import { expect, open, test } from "nsh/test";
 import { CREDENTIAL_KEY_PREFIX, MODELS_STORAGE_KEY, PROVIDERS_STORAGE_KEY } from "./store";
 import {
   makeChannel,
+  makeModel,
   makeSeedStorage,
   startDraftFromEmptyState,
   startDraftFromRail,
@@ -330,4 +331,207 @@ test("provider channels: closing model dialogs keeps channel draft intact", asyn
   expect(app.texts()).not.toContain("Ignored Name");
   expect(app.storage()[PROVIDERS_STORAGE_KEY]).toBeUndefined();
   expect(app.storage()[MODELS_STORAGE_KEY]).toBeUndefined();
+});
+
+test("provider channels: models inherit default API until overridden", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { "settings.language": "en" },
+  });
+
+  await startDraftFromEmptyState(app, "openai");
+
+  await app.press("id:add-model-button");
+  await app.waitFor("id:add-model-dialog");
+  await app.press("id:add-model-api-select");
+  await app.waitFor("role:option[OpenAI Chat Completions]");
+  expect(app.shows("role:option[Use channel default]")).toBe(true);
+  expect(app.shows("role:option[OpenAI Responses]")).toBe(true);
+  expect(app.shows("role:option[Anthropic Messages]")).toBe(false);
+  expect(app.shows("role:option[Gemini API]")).toBe(false);
+  await app.press("role:option[Use channel default]");
+  await app.type("id:add-model-key-input", "model-inherited");
+  await app.press("id:confirm-add-model");
+  await app.waitUntil(() => !app.shows("id:add-model-dialog"));
+
+  await app.press("id:add-model-button");
+  await app.waitFor("id:add-model-dialog");
+  await app.type("id:add-model-key-input", "model-chat");
+  await app.press("id:add-model-api-select");
+  await app.waitFor("role:option[OpenAI Chat Completions]");
+  await app.press("role:option[OpenAI Chat Completions]");
+  await app.press("id:confirm-add-model");
+  await app.waitUntil(() => !app.shows("id:add-model-dialog"));
+
+  expect(app.shows("id:model-row-model-inherited >> text:Default (OpenAI Responses)")).toBe(true);
+  expect(app.shows("id:model-row-model-chat >> text:OpenAI Chat Completions")).toBe(true);
+
+  await app.press("id:connection-adapter-select");
+  await app.waitFor("role:option[OpenAI Chat Completions]");
+  await app.press("role:option[OpenAI Chat Completions]");
+
+  expect(app.shows("id:model-row-model-inherited >> text:Default (OpenAI Chat Completions)")).toBe(
+    true,
+  );
+  expect(app.shows("id:model-row-model-chat >> text:OpenAI Chat Completions")).toBe(true);
+
+  await app.press("id:connection-adapter-select");
+  await app.waitFor("role:option[OpenAI Responses]");
+  await app.press("role:option[OpenAI Responses]");
+
+  expect(app.shows("id:model-row-model-inherited >> text:Default (OpenAI Responses)")).toBe(true);
+  expect(app.shows("id:model-row-model-chat >> text:OpenAI Chat Completions")).toBe(true);
+});
+
+test("provider channels: clearing a model override restores inheritance", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { "settings.language": "en" },
+  });
+
+  await startDraftFromEmptyState(app, "openai");
+
+  await app.press("id:add-model-button");
+  await app.waitFor("id:add-model-dialog");
+  await app.type("id:add-model-key-input", "model-clearable");
+  await app.press("id:add-model-api-select");
+  await app.waitFor("role:option[OpenAI Chat Completions]");
+  await app.press("role:option[OpenAI Chat Completions]");
+  await app.press("id:confirm-add-model");
+  await app.waitUntil(() => !app.shows("id:add-model-dialog"));
+  expect(app.shows("id:model-row-model-clearable >> text:OpenAI Chat Completions")).toBe(true);
+
+  await app.press("id:configure-model-model-clearable");
+  await app.waitFor("id:edit-model-dialog");
+  await app.press("id:edit-model-api-select");
+  await app.waitFor("role:option[Use channel default]");
+  expect(app.shows("role:option[OpenAI Chat Completions]")).toBe(true);
+  expect(app.shows("role:option[OpenAI Responses]")).toBe(true);
+  expect(app.shows("role:option[Anthropic Messages]")).toBe(false);
+  expect(app.shows("role:option[Gemini API]")).toBe(false);
+  await app.press("role:option[Use channel default]");
+  await app.press("id:confirm-edit-model");
+  await app.waitUntil(() => !app.shows("id:edit-model-dialog"));
+
+  expect(app.shows("id:model-row-model-clearable >> text:Default (OpenAI Responses)")).toBe(true);
+
+  await app.press("id:connection-adapter-select");
+  await app.waitFor("role:option[OpenAI Chat Completions]");
+  await app.press("role:option[OpenAI Chat Completions]");
+  expect(app.shows("id:model-row-model-clearable >> text:Default (OpenAI Chat Completions)")).toBe(
+    true,
+  );
+});
+
+test("provider channels: saved channel editor filters model overrides and preserves inheritance", async () => {
+  const channel = makeChannel({
+    id: "ch-saved-openai",
+    presetId: "openai",
+    displayName: "Saved OpenAI",
+    adapterId: "openai-responses",
+  });
+  const inheritedFromChatSource = makeModel({
+    id: "m-inherited",
+    providerId: channel.id,
+    modelKey: "gpt-4.1",
+    sourceAdapterId: "openai-compatible",
+    apiTypeOverride: null,
+    enabled: true,
+  });
+  const overriddenModel = makeModel({
+    id: "m-overridden",
+    providerId: channel.id,
+    modelKey: "gpt-4o-mini",
+    sourceAdapterId: "openai-responses",
+    apiTypeOverride: "openai-compatible",
+    enabled: true,
+  });
+
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: makeSeedStorage({
+      channels: [channel],
+      models: [inheritedFromChatSource, overriddenModel],
+      credentials: { [channel.id]: "sk-dummy-openai" },
+    }),
+  });
+
+  expect(app.shows("id:model-row-gpt-4.1 >> text:Default (OpenAI Responses)")).toBe(true);
+  expect(app.shows("id:model-row-gpt-4o-mini >> text:OpenAI Chat Completions")).toBe(true);
+
+  await app.press("id:configure-model-gpt-4o-mini");
+  await app.waitFor("id:edit-model-dialog");
+  await app.press("id:edit-model-api-select");
+  await app.waitFor("role:option[Use channel default]");
+  expect(app.shows("role:option[OpenAI Chat Completions]")).toBe(true);
+  expect(app.shows("role:option[OpenAI Responses]")).toBe(true);
+  expect(app.shows("role:option[Anthropic Messages]")).toBe(false);
+  await app.press("role:option[Use channel default]");
+  await app.press("id:confirm-edit-model");
+  await app.waitUntil(() => !app.shows("id:edit-model-dialog"));
+
+  expect(app.shows("id:model-row-gpt-4o-mini >> text:Default (OpenAI Responses)")).toBe(true);
+
+  await app.press("id:connection-adapter-select");
+  await app.waitFor("role:option[OpenAI Chat Completions]");
+  await app.press("role:option[OpenAI Chat Completions]");
+  await app.press("id:save-channel-button");
+  await app.waitUntil(() => !app.shows("id:save-channel-button"));
+
+  expect(app.shows("id:model-row-gpt-4.1 >> text:Default (OpenAI Chat Completions)")).toBe(true);
+  expect(app.shows("id:model-row-gpt-4o-mini >> text:Default (OpenAI Chat Completions)")).toBe(
+    true,
+  );
+
+  const reopened = await open(APP_ENTRY, {
+    ...viewport,
+    storage: app.storage(),
+  });
+  expect(reopened.shows("id:model-row-gpt-4.1 >> text:Default (OpenAI Chat Completions)")).toBe(
+    true,
+  );
+  expect(reopened.shows("id:model-row-gpt-4o-mini >> text:Default (OpenAI Chat Completions)")).toBe(
+    true,
+  );
+});
+
+test("provider channels: DeepSeek model allows Messages override without Gemini", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { "settings.language": "en" },
+  });
+
+  await startDraftFromEmptyState(app, "deepseek");
+
+  await app.press("id:add-model-button");
+  await app.waitFor("id:add-model-dialog");
+  await app.type("id:add-model-key-input", "deepseek-reasoner");
+  await app.press("id:confirm-add-model");
+  await app.waitUntil(() => !app.shows("id:add-model-dialog"));
+
+  await app.press("id:add-model-button");
+  await app.waitFor("id:add-model-dialog");
+  await app.type("id:add-model-key-input", "deepseek-chat");
+  await app.press("id:add-model-api-select");
+  await app.waitFor("role:option[Anthropic Messages]");
+  expect(app.shows("role:option[Use channel default]")).toBe(true);
+  expect(app.shows("role:option[OpenAI Chat Completions]")).toBe(true);
+  expect(app.shows("role:option[OpenAI Responses]")).toBe(true);
+  expect(app.shows("role:option[Gemini API]")).toBe(false);
+  expect(app.shows("role:option[DeepSeek]")).toBe(false);
+  await app.press("role:option[Anthropic Messages]");
+  await app.press("id:confirm-add-model");
+  await app.waitUntil(() => !app.shows("id:add-model-dialog"));
+
+  expect(
+    app.shows("id:model-row-deepseek-reasoner >> text:Default (OpenAI Chat Completions)"),
+  ).toBe(true);
+  expect(app.shows("id:model-row-deepseek-chat >> text:Anthropic Messages")).toBe(true);
+
+  await app.press("id:connection-adapter-select");
+  await app.waitFor("role:option[OpenAI Responses]");
+  await app.press("role:option[OpenAI Responses]");
+
+  expect(app.shows("id:model-row-deepseek-reasoner >> text:Default (OpenAI Responses)")).toBe(true);
+  expect(app.shows("id:model-row-deepseek-chat >> text:Anthropic Messages")).toBe(true);
 });

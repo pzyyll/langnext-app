@@ -359,7 +359,7 @@ export function ModelsTable(props: ModelsTableProps) {
                   </Text>
                 </TableHead>
                 <If when={!compactColumns()}>
-                  <TableHead class="w-28 shrink-0">
+                  <TableHead class="w-40 shrink-0">
                     <Text class="text-xs font-medium text-muted-foreground">
                       {t("models.column.apiType")}
                     </Text>
@@ -439,7 +439,7 @@ export function ModelsTable(props: ModelsTableProps) {
                       </TableCell>
 
                       <If when={!compactColumns()}>
-                        <TableCell class="w-28 shrink-0">
+                        <TableCell class="w-40 shrink-0">
                           <Text class="truncate text-xs text-muted-foreground">{apiDisplay()}</Text>
                         </TableCell>
                       </If>

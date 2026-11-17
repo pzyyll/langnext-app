@@ -138,8 +138,7 @@ models:
     idPlaceholder: 例如 gpt-4.1-mini
     configure: 配置模型
     configured: 配置
-    apiTypeDefaultChannel: 默认（渠道）
-    apiTypeDefaultSource: 默认（来源）
+    useChannelDefault: 使用渠道默认
     capabilities: 能力
     contextLimit: 上下文上限
     maxTokens: 最大令牌数
@@ -153,7 +152,6 @@ models:
     noMatch: 没有匹配的模型
   api:
     default: 默认（%{name}）
-    source: 来源：%{name}
   action:
     select: 选择
     deleteSelected: 删除（%{count}）

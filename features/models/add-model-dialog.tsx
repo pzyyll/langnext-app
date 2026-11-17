@@ -3,19 +3,13 @@ import { t } from "nsh/i18n";
 import { Button } from "../../components/ui/button";
 import { AppDialog } from "../../components/ui/dialog";
 import { Input } from "../../components/ui/input";
-import { Select, type SelectItem } from "../../components/ui/select";
+import { Select } from "../../components/ui/select";
 import { Switch } from "../../components/ui/switch";
 import { toast } from "../../components/ui/toast";
-import { ADAPTER_SPECS } from "../../services/protocols/adapters";
+import type { ProviderPresetId } from "../../services/protocols/presets";
 import type { AdapterId } from "../../services/protocols/types";
 import { FormField } from "./form-field";
-
-const DEFAULT_ADAPTER_VALUE = "__default__";
-
-const API_TYPE_ITEMS = (): SelectItem[] => [
-  { value: DEFAULT_ADAPTER_VALUE, title: t("models.model.apiTypeDefaultChannel") },
-  ...ADAPTER_SPECS.map((spec) => ({ value: spec.id, title: spec.label })),
-];
+import { getModelApiTypeItems, MODEL_DEFAULT_API_VALUE } from "./model-helpers";
 
 export interface AddModelSubmission {
   modelKey: string;
@@ -26,6 +20,7 @@ export interface AddModelSubmission {
 
 interface AddModelDialogProps {
   open: boolean;
+  presetId: ProviderPresetId;
   onOpenChange: (open: boolean) => void;
   onSubmit: (input: AddModelSubmission) => Promise<void> | void;
 }
@@ -34,7 +29,7 @@ interface AddModelDialogProps {
 export function AddModelDialog(props: AddModelDialogProps) {
   const modelKey = signal("");
   const displayName = signal("");
-  const apiType = signal<string>(DEFAULT_ADAPTER_VALUE);
+  const apiType = signal<string>(MODEL_DEFAULT_API_VALUE);
   const enabled = signal(true);
   const submitting = signal(false);
   const submitError = signal<string | null>(null);
@@ -43,7 +38,7 @@ export function AddModelDialog(props: AddModelDialogProps) {
     if (props.open) {
       modelKey.set("");
       displayName.set("");
-      apiType.set(DEFAULT_ADAPTER_VALUE);
+      apiType.set(MODEL_DEFAULT_API_VALUE);
       enabled.set(true);
       submitting.set(false);
       submitError.set(null);
@@ -64,7 +59,7 @@ export function AddModelDialog(props: AddModelDialogProps) {
       await props.onSubmit({
         modelKey: key,
         displayNameOverride: displayName().trim() || null,
-        apiTypeOverride: apiType() === DEFAULT_ADAPTER_VALUE ? null : (apiType() as AdapterId),
+        apiTypeOverride: apiType() === MODEL_DEFAULT_API_VALUE ? null : (apiType() as AdapterId),
         enabled: enabled(),
       });
       toast.success(t("models.model.added", { key }));
@@ -132,7 +127,7 @@ export function AddModelDialog(props: AddModelDialogProps) {
         <Select
           testID="add-model-api-select"
           accessibilityLabel={t("models.column.apiType")}
-          items={API_TYPE_ITEMS()}
+          items={getModelApiTypeItems(props.presetId)}
           value={apiType()}
           onChange={(v) => {
             if (v) apiType.set(v);

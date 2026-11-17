@@ -4,20 +4,17 @@ import { Button } from "../../components/ui/button";
 import { Checkbox } from "../../components/ui/checkbox";
 import { AppDialog } from "../../components/ui/dialog";
 import { Input } from "../../components/ui/input";
-import { Select, type SelectItem } from "../../components/ui/select";
+import { Select } from "../../components/ui/select";
 import { toast } from "../../components/ui/toast";
-import { ADAPTER_SPECS } from "../../services/protocols/adapters";
+import type { ProviderPresetId } from "../../services/protocols/presets";
 import type { AdapterId } from "../../services/protocols/types";
 import { FormField } from "./form-field";
-import { resolveEffectiveCapabilities } from "./model-helpers";
+import {
+  getModelApiTypeItems,
+  MODEL_DEFAULT_API_VALUE,
+  resolveEffectiveCapabilities,
+} from "./model-helpers";
 import type { CapabilityOverrides, ProviderModel } from "./types";
-
-const DEFAULT_ADAPTER_VALUE = "__default__";
-
-const API_TYPE_ITEMS = (): SelectItem[] => [
-  { value: DEFAULT_ADAPTER_VALUE, title: t("models.model.apiTypeDefaultSource") },
-  ...ADAPTER_SPECS.map((spec) => ({ value: spec.id, title: spec.label })),
-];
 
 export interface EditModelSubmission {
   id: string;
@@ -30,6 +27,7 @@ export interface EditModelSubmission {
 
 interface EditModelDialogProps {
   open: boolean;
+  presetId: ProviderPresetId;
   model: ProviderModel | null;
   onOpenChange: (open: boolean) => void;
   onSubmit: (input: EditModelSubmission) => Promise<void> | void;
@@ -57,7 +55,7 @@ function parseOptionalPositiveInt(
 /** Modal dialog for per-model display name, API type, capabilities, and token limits. */
 export function EditModelDialog(props: EditModelDialogProps) {
   const displayNameOverride = signal("");
-  const apiTypeOverride = signal(DEFAULT_ADAPTER_VALUE);
+  const apiTypeOverride = signal(MODEL_DEFAULT_API_VALUE);
   const capText = signal(true);
   const capImage = signal(false);
   const capPdf = signal(false);
@@ -72,7 +70,7 @@ export function EditModelDialog(props: EditModelDialogProps) {
     if (props.open && model) {
       const caps = resolveEffectiveCapabilities(model);
       displayNameOverride.set(model.displayNameOverride ?? "");
-      apiTypeOverride.set(model.apiTypeOverride ?? DEFAULT_ADAPTER_VALUE);
+      apiTypeOverride.set(model.apiTypeOverride ?? MODEL_DEFAULT_API_VALUE);
       capText.set(caps.text);
       capImage.set(caps.image);
       capPdf.set(caps.pdf);
@@ -107,7 +105,7 @@ export function EditModelDialog(props: EditModelDialogProps) {
         id: model.id,
         displayNameOverride: displayNameOverride().trim() || null,
         apiTypeOverride:
-          apiTypeOverride() === DEFAULT_ADAPTER_VALUE ? null : (apiTypeOverride() as AdapterId),
+          apiTypeOverride() === MODEL_DEFAULT_API_VALUE ? null : (apiTypeOverride() as AdapterId),
         capabilitiesOverride: {
           text: capText(),
           image: capImage(),
@@ -178,7 +176,7 @@ export function EditModelDialog(props: EditModelDialogProps) {
               <Select
                 testID="edit-model-api-select"
                 accessibilityLabel={t("models.column.apiType")}
-                items={API_TYPE_ITEMS()}
+                items={getModelApiTypeItems(props.presetId)}
                 value={apiTypeOverride()}
                 onChange={(v) => {
                   if (v) apiTypeOverride.set(v);

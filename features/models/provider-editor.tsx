@@ -884,12 +884,14 @@ export function ProviderEditor(props: ProviderEditorProps) {
 
       <AddModelDialog
         open={addModelOpen()}
+        presetId={currentPresetId()}
         onOpenChange={(open) => addModelOpen.set(open)}
         onSubmit={handleAddModelSubmit}
       />
 
       <EditModelDialog
         open={editingModel() !== null}
+        presetId={currentPresetId()}
         model={editingModel()}
         onOpenChange={(open) => {
           if (!open) editingModel.set(null);

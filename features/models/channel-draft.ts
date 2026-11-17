@@ -3,6 +3,7 @@ import { t } from "nsh/i18n";
 import {
   getProviderPreset,
   getProviderPresetLabel,
+  isProtocolAllowedForPreset,
   type ProviderPresetId,
 } from "../../services/protocols/presets";
 import type { AdapterId } from "../../services/protocols/types";
@@ -86,6 +87,12 @@ export function createChannelDraft(presetId: ProviderPresetId): ChannelDraft {
       if (!modelKey) {
         throw new Error(t("models.error.modelIdRequired"));
       }
+      if (
+        input.apiTypeOverride !== null &&
+        !isProtocolAllowedForPreset(presetId, input.apiTypeOverride)
+      ) {
+        throw new Error(t("models.error.unsupportedProtocol"));
+      }
       if (models().some((m) => m.modelKey === modelKey)) {
         throw new Error(t("models.error.modelDuplicate", { key: modelKey }));
       }
@@ -117,6 +124,12 @@ export function createChannelDraft(presetId: ProviderPresetId): ChannelDraft {
       const target = existing.find((m) => m.id === input.id);
       if (!target) {
         throw new Error(t("models.error.modelGone"));
+      }
+      if (
+        input.apiTypeOverride !== null &&
+        !isProtocolAllowedForPreset(presetId, input.apiTypeOverride)
+      ) {
+        throw new Error(t("models.error.unsupportedProtocol"));
       }
       const updated: ProviderModel = {
         ...target,

@@ -588,6 +588,12 @@ export async function createManualModel(input: CreateManualModelInput): Promise<
     if (!channel) {
       throw new Error(t("models.error.channelGone"));
     }
+    if (
+      input.apiTypeOverride !== null &&
+      !isProtocolAllowedForPreset(channel.presetId, input.apiTypeOverride)
+    ) {
+      throw new Error(t("models.error.unsupportedProtocol"));
+    }
 
     const sourceAdapterId = input.apiTypeOverride ?? channel.adapterId;
     const duplicate = modelsSignal().some(
@@ -634,6 +640,14 @@ export async function updateModelConfig(input: UpdateModelConfigInput): Promise<
     const target = existing.find((m) => m.id === input.id);
     if (!target) {
       throw new Error(t("models.error.modelGone"));
+    }
+    const channel = channelsSignal().find((ch) => ch.id === target.providerId);
+    if (
+      input.apiTypeOverride !== null &&
+      channel &&
+      !isProtocolAllowedForPreset(channel.presetId, input.apiTypeOverride)
+    ) {
+      throw new Error(t("models.error.unsupportedProtocol"));
     }
 
     const updated: ProviderModel = {
