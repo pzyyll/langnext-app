@@ -95,6 +95,8 @@ test("provider storage: partial draft save retains unsaved models", async () => 
   expect(models).toHaveLength(1);
   expect(models[0]!.providerId).toBe(partialChannel.id);
   expect(models[0]!.modelKey).toBe("local-m1");
+  expect(mock.backing[PROVIDERS_STORAGE_KEY]).not.toContain("sk-partial");
+  expect(mock.backing[MODELS_STORAGE_KEY]).not.toContain("sk-partial");
   expect(app.shows("id:model-row-local-m1")).toBe(true);
 });
 

@@ -5,7 +5,7 @@ import {
   type ProviderPresetId,
 } from "../../services/protocols/presets";
 import type { AdapterId, DiscoveredRemoteModel } from "../../services/protocols/types";
-import { inspectBaseUrl } from "./connection";
+import { isInsecureHttpConfirmed, resolveConfirmedInsecureUrl } from "./connection";
 import {
   applyModelConfigUpdate,
   createManualProviderModel,
@@ -81,7 +81,7 @@ export function createChannelDraft(presetId: ProviderPresetId): ChannelDraft {
   const adapterId = signal<AdapterId>(preset.defaultAdapterId);
   const baseUrl = signal(preset.defaultBaseUrl ?? "");
   const credential = signal("");
-  const allowInsecureHttp = signal(false);
+  const confirmedInsecureUrl = signal<string | null>(null);
   const enabled = signal(true);
   const models = signal<ProviderModel[]>([]);
   const modelsLastSyncedAt = signal<string | null>(null);
@@ -97,8 +97,8 @@ export function createChannelDraft(presetId: ProviderPresetId): ChannelDraft {
     baseUrl: () => baseUrl(),
     setBaseUrl: (value) => {
       baseUrl.set(value);
-      if (!inspectBaseUrl(value).isInsecureHttp) {
-        allowInsecureHttp.set(false);
+      if (!isInsecureHttpConfirmed(value, confirmedInsecureUrl())) {
+        confirmedInsecureUrl.set(null);
       }
     },
     credential: () => credential(),
@@ -108,8 +108,10 @@ export function createChannelDraft(presetId: ProviderPresetId): ChannelDraft {
         persisted.set({ ...persisted(), credential: false });
       }
     },
-    allowInsecureHttp: () => allowInsecureHttp(),
-    setAllowInsecureHttp: (value) => allowInsecureHttp.set(value),
+    allowInsecureHttp: () => isInsecureHttpConfirmed(baseUrl(), confirmedInsecureUrl()),
+    setAllowInsecureHttp: (value) => {
+      confirmedInsecureUrl.set(resolveConfirmedInsecureUrl(baseUrl(), value));
+    },
     enabled: () => enabled(),
     setEnabled: (value) => enabled.set(value),
     models: () => models(),

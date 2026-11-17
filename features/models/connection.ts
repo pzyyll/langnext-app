@@ -66,3 +66,18 @@ export function inspectBaseUrl(rawValue: string): ConnectionUrlCheck {
     error: null,
   };
 }
+
+/** Returns whether explicit insecure HTTP consent applies to the current URL root. */
+export function isInsecureHttpConfirmed(rawUrl: string, confirmedUrl: string | null): boolean {
+  const check = inspectBaseUrl(rawUrl);
+  return Boolean(
+    check.isInsecureHttp && confirmedUrl !== null && check.normalizedBaseUrl === confirmedUrl,
+  );
+}
+
+/** Returns the normalized URL to retain when insecure HTTP consent is toggled. */
+export function resolveConfirmedInsecureUrl(rawUrl: string, accepted: boolean): string | null {
+  if (!accepted) return null;
+  const check = inspectBaseUrl(rawUrl);
+  return check.isInsecureHttp ? check.normalizedBaseUrl : null;
+}

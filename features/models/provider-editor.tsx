@@ -15,7 +15,7 @@ import { getProviderPreset, getProviderPresetLabel } from "../../services/protoc
 import type { AdapterId } from "../../services/protocols/types";
 import { AddModelDialog, type AddModelSubmission } from "./add-model-dialog";
 import type { ChannelDraft } from "./channel-draft";
-import { inspectBaseUrl } from "./connection";
+import { inspectBaseUrl, isInsecureHttpConfirmed, resolveConfirmedInsecureUrl } from "./connection";
 import { EditModelDialog, type EditModelSubmission } from "./edit-model-dialog";
 import { FormField } from "./form-field";
 import { ModelsTable } from "./models-table";
@@ -73,12 +73,13 @@ export function ProviderEditor(props: ProviderEditorProps) {
   const savedBaseUrl = signal(props.mode === "saved" ? (props.channel.baseUrl ?? "") : "");
   const credentialMode = signal<CredentialDraftMode>("keep");
   const savedCredential = signal("");
-  const savedAllowInsecureHttp = signal(
-    props.mode === "saved"
-      ? inspectBaseUrl(props.channel.baseUrl ?? "").isInsecureHttp &&
-          props.channel.insecureHttpConfirmedAt !== null
-      : false,
+  const savedConfirmedInsecureUrl = signal<string | null>(
+    props.mode === "saved" && props.channel.insecureHttpConfirmedAt !== null
+      ? resolveConfirmedInsecureUrl(props.channel.baseUrl ?? "", true)
+      : null,
   );
+  const savedAllowInsecureHttp = () =>
+    isInsecureHttpConfirmed(savedBaseUrl(), savedConfirmedInsecureUrl());
 
   const renaming = signal(false);
   const renameDraft = signal("");
@@ -163,8 +164,10 @@ export function ProviderEditor(props: ProviderEditorProps) {
     savedBaseUrl.set(ch.baseUrl ?? "");
     credentialMode.set("keep");
     savedCredential.set("");
-    savedAllowInsecureHttp.set(
-      inspectBaseUrl(ch.baseUrl ?? "").isInsecureHttp && ch.insecureHttpConfirmedAt !== null,
+    savedConfirmedInsecureUrl.set(
+      ch.insecureHttpConfirmedAt !== null
+        ? resolveConfirmedInsecureUrl(ch.baseUrl ?? "", true)
+        : null,
     );
     renaming.set(false);
     renameDraft.set(ch.displayName);
@@ -883,8 +886,8 @@ export function ProviderEditor(props: ProviderEditorProps) {
                       props.draft.setBaseUrl(v);
                     } else {
                       savedBaseUrl.set(v);
-                      if (!inspectBaseUrl(v).isInsecureHttp) {
-                        savedAllowInsecureHttp.set(false);
+                      if (!isInsecureHttpConfirmed(v, savedConfirmedInsecureUrl())) {
+                        savedConfirmedInsecureUrl.set(null);
                       }
                     }
                     saveError.set(null);
@@ -902,7 +905,9 @@ export function ProviderEditor(props: ProviderEditorProps) {
                   if (props.mode === "draft") {
                     props.draft.setAllowInsecureHttp(checked);
                   } else {
-                    savedAllowInsecureHttp.set(checked);
+                    savedConfirmedInsecureUrl.set(
+                      resolveConfirmedInsecureUrl(savedBaseUrl(), checked),
+                    );
                   }
                   saveError.set(null);
                 }}

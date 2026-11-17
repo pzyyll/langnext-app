@@ -1,6 +1,11 @@
 import { expect, open, type StubResponse, test } from "nsh/test";
-import { CREDENTIAL_KEY_PREFIX, MODELS_STORAGE_KEY, PROVIDERS_STORAGE_KEY } from "./store";
-import type { ProviderModel } from "./types";
+import {
+  CREDENTIAL_KEY_PREFIX,
+  credentialStorageKey,
+  MODELS_STORAGE_KEY,
+  PROVIDERS_STORAGE_KEY,
+} from "./store";
+import type { ProviderChannel, ProviderModel } from "./types";
 import {
   makeChannel,
   makeModel,
@@ -1397,4 +1402,214 @@ test("provider channels: saving during a pending fetch keeps visible models and 
   await app.press("id:get-models-button");
   await app.waitFor("id:model-row-fresh-after-save");
   expect(app.shows("id:model-row-stale-after-save")).toBe(false);
+});
+
+test("provider channels: draft HTTP consent follows the current root", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { "settings.language": "en" },
+    network: {
+      "GET http://one.example.com/models": {
+        status: 200,
+        body: { data: [{ id: "m-one" }] },
+      },
+      "GET http://one.example.com:8080/models": {
+        status: 200,
+        body: { data: [{ id: "m-port" }] },
+      },
+      "GET http://two.example.com/v1/models": {
+        status: 200,
+        body: { data: [{ id: "m-two" }] },
+      },
+    },
+  });
+
+  await startDraftFromEmptyState(app, "custom");
+  await app.type("id:connection-url-input", "http://one.example.com");
+  await app.type("id:connection-token-input", "sk-http");
+  await app.waitFor("id:connection-insecure-checkbox");
+
+  // Confirm first non-loopback HTTP root.
+  await app.press("id:connection-insecure-checkbox");
+  await app.press("id:test-connection-button");
+  await app.waitUntil(() => app.requests().length === 1);
+
+  // Extending the confirmed URL without clearing to empty still switches root and must reset consent.
+  await app.type("id:connection-url-input", ":8080");
+
+  await app.press("id:test-connection-button");
+  await app.waitUntil(() =>
+    app
+      .texts()
+      .some((t) => t.includes("Confirm using unencrypted http:// before testing this host.")),
+  );
+  expect(app.requests()).toHaveLength(1);
+
+  // Replacing with another non-loopback HTTP root also requires fresh confirmation.
+  await app.clear("id:connection-url-input");
+  await app.type("id:connection-url-input", "http://two.example.com/v1");
+
+  await app.press("id:get-models-button");
+  await app.waitUntil(() =>
+    app
+      .texts()
+      .some((t) => t.includes("Confirm using unencrypted http:// before fetching models.")),
+  );
+  expect(app.requests()).toHaveLength(1);
+
+  await app.press("id:save-channel-button");
+  await app.waitUntil(() =>
+    app.texts().some((t) => t.includes("Confirm unencrypted http:// before saving this channel.")),
+  );
+  expect(app.storage()[PROVIDERS_STORAGE_KEY]).toBeUndefined();
+
+  // Confirm the new HTTP root -> fetch and save succeed.
+  await app.press("id:connection-insecure-checkbox");
+  await app.press("id:get-models-button");
+  await app.waitFor("id:model-row-m-two");
+  await app.press("id:save-channel-button");
+  await app.waitUntil(() => !app.shows("id:cancel-channel-button"));
+
+  expect(app.requests().map((r) => r.url)).toEqual([
+    "http://one.example.com/models",
+    "http://two.example.com/v1/models",
+  ]);
+});
+
+test("provider channels: loopback HTTP, URL validation, and positive numeric limits", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { "settings.language": "en" },
+    network: {
+      "GET http://127.0.0.1:11434/v1/models": {
+        status: 200,
+        body: { data: [{ id: "llama3.2", display_name: "Llama 3.2" }] },
+      },
+    },
+  });
+
+  await startDraftFromEmptyState(app, "custom");
+
+  // Invalid URL syntax and non-HTTP schemes reject without requests or saving.
+  await app.type("id:connection-url-input", "ftp://bad.example.com");
+  await app.waitUntil(() =>
+    app.texts().some((t) => t.includes("Base URL must start with https:// or http://.")),
+  );
+  await app.press("id:save-channel-button");
+  expect(app.storage()[PROVIDERS_STORAGE_KEY]).toBeUndefined();
+
+  await app.clear("id:connection-url-input");
+  await app.type("id:connection-url-input", "not-a-url");
+  await app.waitUntil(() =>
+    app.texts().some((t) => t.includes("Enter a valid http:// or https:// base URL.")),
+  );
+
+  // Loopback HTTP works without an insecure confirmation checkbox.
+  await app.clear("id:connection-url-input");
+  await app.type("id:connection-url-input", "http://127.0.0.1:11434/v1");
+  expect(app.shows("id:connection-insecure-checkbox")).toBe(false);
+
+  await app.press("id:get-models-button");
+  await app.waitFor("id:model-row-llama3.2");
+
+  // Numeric limits validate positive integers before applying.
+  await app.press("id:configure-model-llama3.2");
+  await app.waitFor("id:edit-model-dialog");
+  await app.type("id:edit-model-context-input", "0");
+  await app.press("id:confirm-edit-model");
+  await app.waitUntil(() =>
+    app.texts().some((t) => t.includes("Context Limit must be greater than 0.")),
+  );
+  await app.clear("id:edit-model-context-input");
+  await app.type("id:edit-model-context-input", "64000");
+  await app.type("id:edit-model-max-tokens-input", "-5");
+  await app.press("id:confirm-edit-model");
+  await app.waitUntil(() =>
+    app.texts().some((t) => t.includes("Max Tokens must be greater than 0.")),
+  );
+  await app.clear("id:edit-model-max-tokens-input");
+  await app.type("id:edit-model-max-tokens-input", "4096");
+  await app.press("id:confirm-edit-model");
+  await app.waitUntil(() => !app.shows("id:edit-model-dialog"));
+
+  await app.press("id:save-channel-button");
+  await app.waitUntil(() => !app.shows("id:cancel-channel-button"));
+  expect(app.texts()).toContain("64K ctx");
+  expect(app.texts()).toContain("4096 out");
+});
+
+test("provider channels: keep, replace, and clear preserve credential isolation across reopen", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { "settings.language": "en" },
+    network: {
+      "GET https://api.openai.com/v1/models": {
+        status: 200,
+        body: { data: [{ id: "gpt-4.1" }] },
+      },
+      "GET https://proxy.example.com/v1/models": {
+        status: 200,
+        body: { data: [{ id: "gpt-4.1" }] },
+      },
+    },
+  });
+
+  await startDraftFromEmptyState(app, "openai");
+  await app.type("id:connection-token-input", "sk-initial-secret");
+  await app.press("id:save-channel-button");
+  await app.waitUntil(() => !app.shows("id:cancel-channel-button"));
+
+  const created = (JSON.parse(app.storage()[PROVIDERS_STORAGE_KEY]!) as ProviderChannel[])[0]!;
+  expect(app.storage()[PROVIDERS_STORAGE_KEY]).not.toContain("sk-initial-secret");
+  expect(app.storage()[credentialStorageKey(created.id)]).toBe("sk-initial-secret");
+
+  // Keep credential while updating base URL; reopen retains secret isolation.
+  await app.clear("id:connection-url-input");
+  await app.type("id:connection-url-input", "https://proxy.example.com/v1");
+  await app.press("id:save-channel-button");
+  await app.waitUntil(() => !app.shows("id:save-channel-button"));
+
+  const reopenedKeep = await open(APP_ENTRY, {
+    ...viewport,
+    storage: app.storage(),
+    network: {
+      "GET https://proxy.example.com/v1/models": {
+        status: 200,
+        body: { data: [{ id: "gpt-4.1" }] },
+      },
+    },
+  });
+  expect(reopenedKeep.storage()[PROVIDERS_STORAGE_KEY]).not.toContain("sk-initial-secret");
+  await reopenedKeep.press("id:test-connection-button");
+  await reopenedKeep.waitUntil(() => reopenedKeep.requests().length === 1);
+  expect(reopenedKeep.requests()[0]!.headers.authorization).toBe("Bearer sk-initial-secret");
+
+  // Replace credential and reopen.
+  await reopenedKeep.type("id:connection-token-input", "sk-rotated-secret");
+  await reopenedKeep.press("id:save-channel-button");
+  await reopenedKeep.waitUntil(
+    () => reopenedKeep.storage()[credentialStorageKey(created.id)] === "sk-rotated-secret",
+  );
+  expect(reopenedKeep.storage()[PROVIDERS_STORAGE_KEY]).not.toContain("sk-rotated-secret");
+
+  const reopenedReplace = await open(APP_ENTRY, {
+    ...viewport,
+    storage: reopenedKeep.storage(),
+  });
+  expect(reopenedReplace.storage()[credentialStorageKey(created.id)]).toBe("sk-rotated-secret");
+  expect(reopenedReplace.shows("id:clear-token-button")).toBe(true);
+
+  // Clear credential and reopen.
+  await reopenedReplace.press("id:clear-token-button");
+  await reopenedReplace.press("id:save-channel-button");
+  await reopenedReplace.waitUntil(
+    () => reopenedReplace.storage()[credentialStorageKey(created.id)] === undefined,
+  );
+
+  const reopenedClear = await open(APP_ENTRY, {
+    ...viewport,
+    storage: reopenedReplace.storage(),
+  });
+  expect(reopenedClear.storage()[credentialStorageKey(created.id)]).toBeUndefined();
+  expect(reopenedClear.shows("id:clear-token-button")).toBe(false);
 });
