@@ -1658,9 +1658,14 @@ test("provider channels: keyboard completes the provider draft flow", async () =
   await app.waitUntil(() => !app.shows("id:add-channel-dialog"));
   expect(app.shows("id:draft-channel-card")).toBe(false);
 
-  // Reopen picker, choose OpenAI, and verify draft mounts cleanly.
+  // Reopen picker, verify each preset card renders its decorative Avatar without duplicating the label, and choose OpenAI.
   await app.press("id:empty-add-channel-button");
   await app.waitFor("id:add-channel-dialog");
+  expect(app.count("id:add-channel-dialog >> role:image")).toBe(5);
+  for (const label of ["OpenAI", "Google Gemini", "Anthropic", "DeepSeek", "Custom"]) {
+    expect(app.shows(`id:add-channel-dialog >> role:image[${label}]`)).toBe(false);
+    expect(app.shows(`id:add-channel-dialog >> role:button[${label}]`)).toBe(true);
+  }
   await app.press("id:provider-preset-openai");
   await app.waitUntil(() => !app.shows("id:add-channel-dialog"));
   await app.waitFor("id:draft-channel-card");

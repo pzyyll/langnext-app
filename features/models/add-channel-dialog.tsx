@@ -1,8 +1,8 @@
 import { setAccessibilityFocus, Text, View, type ViewRef } from "nsh";
 import { t } from "nsh/i18n";
+import { Avatar } from "../../components/ui/avatar";
 import { Button } from "../../components/ui/button";
 import { AppDialog } from "../../components/ui/dialog";
-import { Icon } from "../../components/ui/icon";
 import { PROVIDER_PRESETS, type ProviderPresetId } from "../../services/protocols/presets";
 
 interface AddChannelDialogProps {
@@ -56,9 +56,7 @@ export function AddChannelDialog(props: AddChannelDialogProps) {
               onPress={() => props.onSelect(preset().id)}
               class="w-full"
             >
-              <View class="size-8 shrink-0 items-center justify-center rounded-lg bg-muted">
-                <Icon name={preset().icon} tone="foreground" class="size-4" />
-              </View>
+              <Avatar size="md" icon={preset().icon} accessibilityLabel="" />
               <Text class="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
                 {t(preset().labelKey)}
               </Text>

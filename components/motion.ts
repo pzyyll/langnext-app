@@ -8,6 +8,7 @@ export const motion = {
     "transition duration-150 ease-out active:scale-95 motion-reduce:duration-0 motion-reduce:scale-100",
   switchThumb: "transition-transform duration-150 ease-out motion-reduce:duration-0",
   tooltip: "transition-opacity duration-150 ease-out motion-reduce:duration-0",
+  avatarImage: "transition-opacity duration-150 ease-out motion-reduce:duration-0",
   popup: "transition duration-150 ease-out motion-reduce:duration-0",
   popupHidden: "opacity-0 -translate-y-1 motion-reduce:translate-y-0",
   aboutDialog: "fade" as const,

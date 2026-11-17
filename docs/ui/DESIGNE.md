@@ -298,7 +298,7 @@ nesting scroll views.
   `ToastStack` anchored at `bottom-4` centered inside an `inset-x-0 bottom-4
   pointer-events-none` `Overlay` (with `pointer-events-auto` preserved on each
   toast's Dismiss button).
-- **Reusable controls**: UI primitives (`Button`, `Input`, `Checkbox`, `Select`,
+- **Reusable controls**: UI primitives (`Avatar`, `Button`, `Input`, `Checkbox`, `Select`,
   `Switch`, `Badge`, `Card`, `Dialog`, `Icon`, `ToastProvider`) live under
   `components/ui/`. Copy stays bare: helper text appears only where scope,
   security consequence (`http://` confirmation), or error recovery needs it.
@@ -307,11 +307,12 @@ nesting scroll views.
 
 - **Provider picker**: `AddChannelDialog` presents the five provider presets
   (`OpenAI`, `Google Gemini`, `Anthropic`, `DeepSeek`, `Custom`) as a responsive
-  two-column button card grid (`Button` with `size` scaled to the grid cell,
-  centered or leading provider `Icon` and preset name) inside `AppDialog`. No
-  connection fields or descriptive subtitles appear in the picker. On open, focus
-  moves to the first preset card; dismissing without choosing restores focus to
-  the trigger (`+` or empty-state `Add Channel`).
+  two-column button card grid (`Button` with `size="card"`, leading circular
+  `Avatar` wrapping `nsh/base`'s `Avatar` with the preset `Icon` fallback and
+  preset name) inside `AppDialog`. No connection fields or descriptive subtitles
+  appear in the picker. On open, focus moves to the first preset card;
+  dismissing without choosing restores focus to the trigger (`+` or empty-state
+  `Add Channel`).
 - **Right-pane draft**: Selecting a preset closes the picker and mounts the
   draft in `ProviderEditor`, keeping the `h-12` split header spine aligned with
   `ChannelsRail`. The draft header holds the preset mark, live channel name,
@@ -334,6 +335,7 @@ nesting scroll views.
 | Channel row and model row hover/selection | Native background & border transition (`navigationFeedback`, 150 ms, ease-out) without press scale | Instant |
 | Switch and Checkbox state | Native track/box transition (`navigationFeedback`) + thumb slide (`switchThumb`, 150 ms, ease-out) | Instant |
 | Select popup, Tooltip, Provider picker, and Discard confirmation | Native popup/tooltip transitions (`popup`, `tooltip`, 150 ms) and dialog fade (`dialogAnimation` / `aboutDialog`) | Instant |
+| Avatar icon fallback and image load | Provider picker preset icons render statically inside `Avatar` fallback (no transition); `Avatar` image loads use native opacity transition (`avatarImage`, 150 ms, ease-out) | Instant |
 | Draft entry and leave/discard transitions | Picker closes via `dialogAnimation` and immediately reveals right-pane draft with focus on `Display Name`; discard confirmation opens via `dialogAnimation` and keeps or clears draft immediately on decision | Instant |
 | Toast notifications | Native `ToastStack` / `Toast` slide & fade (`toast` motion tokens, auto-hide 3.5 s, swipe-to-dismiss) | Instant fade/no slide |
 | Connection dirty actions, remote test/sync, model list updates, search/filter updates | `Cancel` / `Save` and model row updates apply immediately; spinner/status labels swap immediately (`Test…` / `Fetching…` / `Saving…`) | No change |
@@ -347,6 +349,7 @@ nesting scroll views.
   - `Discard Draft` (`ConfirmDialog`) in `en` and `zh-CN`, and `AddModelDialog` / `EditModelDialog` in compact `720 × 520`.
 - **Adjustments made from visual and hit-test review**: Widened the Channels rail to `w-56` on normal desktop widths (`w-48` under `860` points) and scoped reorder arrows to the selected channel row so names avoid early truncation; tightened `< 860` card/editor padding (`p-4`) and folded `API Type` into the model subtitle at narrow widths so `Get models` and model rows wrap and fit cleanly at `720 × 520`; updated `ToastViewport` (`components/ui/toast.tsx`) to `inset-x-0 bottom-4 items-center pointer-events-none` on `Overlay` and `pointer-events-none` on `ToastStack`/`Toast` with `pointer-events-auto` on the Dismiss button so bottom-centered toasts never block clicks on underlying navigation or table checkboxes on Windows.
 - **Keyboard, reduced motion, and accessibility**: Verified on Windows (`--target windows`) that `<Input>` auto-focus moves cleanly into draft `Display Name` and dialog primary fields, `Return` submits dialog inputs, `Escape` dismisses `AddModelDialog` and `EditModelDialog` even while inputs hold focus, focus restores to triggers after dialog dismissal (with `ViewRef.focus()` `Tab`/Space button activation noted by NSH 0.5.1 as `(macOS, the web)`), and `reducedMotion: true` passes functionally without blocking dialog/toast state transitions. All interactive buttons, icon triggers, switches, checkboxes, and dialogs expose localized `accessibilityLabel` strings via `t()`. Frame-by-frame motion timing and interactive Windows Narrator screen-reader speech remain manual verification items in an interactive Windows desktop session (`UIAutomationClient` inspection against the non-interactive CLI session's detached `nsh dev` host exposed no interactive desktop UIA subtree from the automation context).
+- **Provider picker Avatar validation**: Verified `components/ui/avatar.tsx` (wrapping `nsh/base`'s `Avatar`) in `AddChannelDialog` via `mise run verify` (78/78 headless tests passed), `nsh test features/models/channels.test.tsx --target windows` (36/36 Windows desktop tests passed), and Windows desktop PNG screenshots in Light (`zh-CN`, rest & hover at `1040 × 720` and compact `720 × 520`) and Dark (`en`, rest & hover at `1040 × 720`). Confirmed circular `rounded-full` `bg-muted` clipping, centered `foreground`-tinted SVG marks, contrast in both themes, decorative `accessibilityLabel=""` (0 labeled `role:image` nodes, 5 accessible preset buttons), and hover washes. Held press state, remote `src` image loading fade, and screen-reader speech remain unverified in this pass.
 
 ## Theme Colors
 ```css
