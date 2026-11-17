@@ -1,6 +1,7 @@
 import { signal, Text, View } from "nsh";
 import { t } from "nsh/i18n";
 import { Button } from "../../components/ui/button";
+import { ConfirmDialog } from "../../components/ui/dialog";
 import { Icon } from "../../components/ui/icon";
 import type { ProviderPresetId } from "../../services/protocols/presets";
 import { AddChannelDialog } from "./add-channel-dialog";
@@ -19,15 +20,46 @@ import {
 export function ModelsPage() {
   const addChannelOpen = signal(false);
   const draft = signal<ChannelDraft | null>(null);
+  const pendingDiscardAction = signal<{ run: () => void } | null>(null);
+  let abortDraftWork: (() => void) | null = null;
+
+  const registerDraftAbort = (abort: () => void) => {
+    abortDraftWork = abort;
+    return () => {
+      if (abortDraftWork === abort) {
+        abortDraftWork = null;
+      }
+    };
+  };
+
+  const guardDraftLeave = (action: () => void) => {
+    if (draft() === null) {
+      action();
+      return;
+    }
+    pendingDiscardAction.set({ run: action });
+  };
+
+  const confirmDiscardDraft = () => {
+    const pending = pendingDiscardAction();
+    pendingDiscardAction.set(null);
+    abortDraftWork?.();
+    draft.set(null);
+    pending?.run();
+  };
 
   const handleSelectPreset = (presetId: ProviderPresetId) => {
+    pendingDiscardAction.set(null);
     draft.set(createChannelDraft(presetId));
     addChannelOpen.set(false);
   };
 
   const handleSelectChannel = (id: string) => {
-    draft.set(null);
-    selectChannel(id);
+    guardDraftLeave(() => selectChannel(id));
+  };
+
+  const handleCancelDraft = () => {
+    guardDraftLeave(() => {});
   };
 
   return (
@@ -87,8 +119,12 @@ export function ModelsPage() {
             draft={activeDraft()}
             enabledFilter={modelsStore.enabledFilter()}
             onEnabledFilterChange={(filter) => void setEnabledFilter(filter)}
-            onDraftSaved={() => draft.set(null)}
-            onCancelDraft={() => draft.set(null)}
+            onDraftSaved={() => {
+              pendingDiscardAction.set(null);
+              draft.set(null);
+            }}
+            onCancelDraft={handleCancelDraft}
+            onRegisterAbort={registerDraftAbort}
           />
         )}
       </If>
@@ -97,6 +133,18 @@ export function ModelsPage() {
         open={addChannelOpen()}
         onOpenChange={(open) => addChannelOpen.set(open)}
         onSelect={handleSelectPreset}
+      />
+
+      <ConfirmDialog
+        testID="discard-draft-dialog"
+        open={pendingDiscardAction() !== null}
+        title={t("models.draft.discardTitle")}
+        description={t("models.draft.discardDescription")}
+        confirmLabel={t("models.draft.discardConfirm")}
+        onOpenChange={(open) => {
+          if (!open) pendingDiscardAction.set(null);
+        }}
+        onConfirm={confirmDiscardDraft}
       />
     </>
   );

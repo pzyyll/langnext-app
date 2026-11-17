@@ -985,3 +985,127 @@ test("provider channels: saves draft offline with empty key after network failur
     ],
   ).toBeUndefined();
 });
+
+test("provider channels: channel switch retains draft until discard", async () => {
+  const openai = makeChannel({ id: "ch-openai", presetId: "openai", displayName: "OpenAI Main" });
+  const anthropic = makeChannel({
+    id: "ch-anthropic",
+    presetId: "anthropic",
+    displayName: "Anthropic Main",
+    adapterId: "anthropic",
+    baseUrl: "https://api.anthropic.com",
+  });
+
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: makeSeedStorage({
+      channels: [openai, anthropic],
+      credentials: { [openai.id]: "sk-oai", [anthropic.id]: "sk-ant" },
+    }),
+  });
+
+  await startDraftFromRail(app, "deepseek");
+  await app.clear("id:channel-name-input");
+  await app.type("id:channel-name-input", "DeepSeek Unsaved");
+  await app.press("id:connection-adapter-select");
+  await app.waitFor("role:option[OpenAI Responses]");
+  await app.press("role:option[OpenAI Responses]");
+  await app.clear("id:connection-url-input");
+  await app.type("id:connection-url-input", "https://proxy.example.com/ds");
+  await app.type("id:connection-token-input", "sk-draft-secret");
+  await app.press("id:channel-enabled-switch");
+
+  await app.press("id:add-model-button");
+  await app.waitFor("id:add-model-dialog");
+  await app.type("id:add-model-key-input", "draft-local");
+  await app.press("id:confirm-add-model");
+  await app.waitUntil(() => !app.shows("id:add-model-dialog"));
+
+  const storageBefore = JSON.stringify(app.storage());
+
+  await app.press("id:channel-item-ch-anthropic");
+  await app.waitFor("id:discard-draft-dialog");
+
+  await app.press("id:discard-draft-dialog >> role:button[Cancel]");
+  await app.waitUntil(() => !app.shows("id:discard-draft-dialog"));
+
+  expect(app.shows("id:draft-channel-card")).toBe(true);
+  expect(app.value("id:channel-name-input")).toBe("DeepSeek Unsaved");
+  expect(app.value("id:connection-url-input")).toBe("https://proxy.example.com/ds");
+  expect(app.value("id:connection-token-input")).toBe("sk-draft-secret");
+  expect(app.shows("id:model-row-draft-local")).toBe(true);
+
+  await app.press("id:channel-item-ch-anthropic");
+  await app.waitFor("id:discard-draft-dialog");
+  await app.press("id:discard-draft-dialog >> role:button[Discard]");
+  await app.waitUntil(() => !app.shows("id:discard-draft-dialog"));
+
+  expect(app.shows("id:draft-channel-card")).toBe(false);
+  expect(app.texts()).not.toContain("DeepSeek Unsaved");
+  expect(app.value("id:connection-url-input")).toBe("https://api.anthropic.com");
+  expect(JSON.stringify(app.storage())).toBe(storageBefore);
+});
+
+test("provider channels: draft Cancel returns to previous channel or empty state without saving", async () => {
+  // Part 1: cancelling a draft when saved channels exist restores the previous channel.
+  const openai = makeChannel({
+    id: "ch-openai",
+    presetId: "openai",
+    displayName: "OpenAI Main",
+    baseUrl: "https://api.openai.com/v1",
+  });
+  const appWithChannel = await open(APP_ENTRY, {
+    ...viewport,
+    storage: makeSeedStorage({
+      channels: [openai],
+      credentials: { [openai.id]: "sk-oai" },
+    }),
+  });
+
+  await startDraftFromRail(appWithChannel, "deepseek");
+  await appWithChannel.clear("id:channel-name-input");
+  await appWithChannel.type("id:channel-name-input", "Cancelled Draft");
+  await appWithChannel.press("id:add-model-button");
+  await appWithChannel.waitFor("id:add-model-dialog");
+  await appWithChannel.type("id:add-model-key-input", "draft-temp");
+  await appWithChannel.press("id:confirm-add-model");
+  await appWithChannel.waitUntil(() => !appWithChannel.shows("id:add-model-dialog"));
+
+  const storageBefore = JSON.stringify(appWithChannel.storage());
+
+  await appWithChannel.press("id:cancel-channel-button");
+  await appWithChannel.waitFor("id:discard-draft-dialog");
+  await appWithChannel.press("id:discard-draft-dialog >> role:button[Cancel]");
+  await appWithChannel.waitUntil(() => !appWithChannel.shows("id:discard-draft-dialog"));
+  expect(appWithChannel.value("id:channel-name-input")).toBe("Cancelled Draft");
+  expect(appWithChannel.shows("id:model-row-draft-temp")).toBe(true);
+
+  await appWithChannel.press("id:cancel-channel-button");
+  await appWithChannel.waitFor("id:discard-draft-dialog");
+  await appWithChannel.press("id:discard-draft-dialog >> role:button[Discard]");
+  await appWithChannel.waitUntil(() => !appWithChannel.shows("id:discard-draft-dialog"));
+
+  expect(appWithChannel.shows("id:draft-channel-card")).toBe(false);
+  expect(appWithChannel.texts()).toContain("OpenAI Main");
+  expect(appWithChannel.value("id:connection-url-input")).toBe("https://api.openai.com/v1");
+  expect(JSON.stringify(appWithChannel.storage())).toBe(storageBefore);
+
+  // Part 2: cancelling a draft started from empty state returns to empty state.
+  const emptyApp = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { "settings.language": "en" },
+  });
+  await startDraftFromEmptyState(emptyApp, "openai");
+  await emptyApp.clear("id:channel-name-input");
+  await emptyApp.type("id:channel-name-input", "Empty Draft");
+  const emptyStorageBefore = JSON.stringify(emptyApp.storage());
+
+  await emptyApp.press("id:cancel-channel-button");
+  await emptyApp.waitFor("id:discard-draft-dialog");
+  await emptyApp.press("id:discard-draft-dialog >> role:button[Discard]");
+  await emptyApp.waitUntil(() => !emptyApp.shows("id:discard-draft-dialog"));
+
+  expect(emptyApp.shows("id:empty-add-channel-button")).toBe(true);
+  expect(emptyApp.texts()).not.toContain("Empty Draft");
+  expect(JSON.stringify(emptyApp.storage())).toBe(emptyStorageBefore);
+});

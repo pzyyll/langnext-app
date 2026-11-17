@@ -67,6 +67,10 @@ models:
     deleteDescription: 'Delete channel "%{name}" and all of its models?'
     unsaved: Unsaved
     conflict: Channel updated elsewhere. Reload to apply latest saved configuration.
+  draft:
+    discardTitle: Discard Draft
+    discardDescription: Unsaved channel settings and models will be lost.
+    discardConfirm: Discard
   channels:
     title: Channels
     empty: No channels configured

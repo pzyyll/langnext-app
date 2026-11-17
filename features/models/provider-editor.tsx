@@ -52,6 +52,7 @@ type ProviderEditorProps =
       onEnabledFilterChange: (filter: ModelsEnabledFilter) => void;
       onDraftSaved: (channel: ProviderChannel) => void;
       onCancelDraft: () => void;
+      onRegisterAbort?: (abort: () => void) => () => void;
     }
   | {
       mode: "saved";
@@ -109,6 +110,13 @@ export function ProviderEditor(props: ProviderEditorProps) {
   };
 
   cleanup(() => abortInFlight());
+
+  effect(() => {
+    if (props.mode === "draft" && props.onRegisterAbort) {
+      return props.onRegisterAbort(abortInFlight);
+    }
+    return undefined;
+  });
 
   const loadFromChannel = (ch: ProviderChannel) => {
     savedAdapterId.set(ch.adapterId);

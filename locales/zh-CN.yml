@@ -67,6 +67,10 @@ models:
     deleteDescription: 删除渠道“%{name}”及其所有模型？
     unsaved: 未保存
     conflict: 渠道已在其他位置更新。重新加载可应用最新的已保存配置。
+  draft:
+    discardTitle: 放弃草稿
+    discardDescription: 未保存的渠道设置和模型配置将会丢失。
+    discardConfirm: 放弃
   channels:
     title: 渠道
     empty: 尚未配置渠道
