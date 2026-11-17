@@ -94,10 +94,10 @@ export function ToastViewport() {
 
   return (
     <If when={entries().length > 0}>
-      <Overlay class="bottom-16 right-4 items-end">
+      <Overlay class="bottom-4 items-center">
         <ToastStack
           testID="toast-stack"
-          placement="bottomRight"
+          placement="bottomCenter"
           motion={motion.toastStack}
           class="w-80 max-w-full"
           onExpandedChange={({ expanded }) => paused.set(expanded)}

@@ -107,6 +107,7 @@ function seededStorage(
   models = sampleModels(),
 ): Record<string, string> {
   return {
+    "settings.language": "en",
     "models.providers": JSON.stringify(channels),
     "models.items": JSON.stringify(models),
     "models.credentials.ch-openai": "sk-openai-secret",
@@ -115,7 +116,10 @@ function seededStorage(
 }
 
 test("creates a new channel with non-loopback HTTP confirmation and stores secrets separately", async () => {
-  const app = await open(APP_ENTRY, viewport);
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { "settings.language": "en" },
+  });
   expect(app.shows("id:empty-add-channel-button")).toBe(true);
 
   await app.press("id:empty-add-channel-button");
@@ -269,8 +273,8 @@ test("tests connection and syncs remote models while preserving overrides and ma
   expect(manual?.origin).toBe("manual");
 
   await app.press("id:sync-protocol-select");
-  await app.waitFor("text:Anthropic Messages");
-  await app.press("text:Anthropic Messages");
+  await app.waitFor("role:option[Anthropic Messages]");
+  await app.press("role:option[Anthropic Messages]");
   await app.press("id:get-models-button");
   await app.waitUntil(() => app.shows("id:model-row-claude-sonnet-4-20250514"));
 
@@ -335,8 +339,8 @@ test("adds manual models, configures model overrides, searches, persists filter,
   expect(app.shows("id:model-row-legacy-gpt")).toBe(true);
 
   await app.press("id:models-filter-select");
-  await app.waitFor("text:Disabled");
-  await app.press("text:Disabled");
+  await app.waitFor("role:option[Disabled]");
+  await app.press("role:option[Disabled]");
   expect(app.storage()["models.enabledFilter"]).toBe("disabled");
   expect(app.shows("id:model-row-legacy-gpt")).toBe(true);
   expect(app.shows("id:model-row-gpt-4o")).toBe(false);

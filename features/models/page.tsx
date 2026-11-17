@@ -34,6 +34,7 @@ export function ModelsPage() {
         when={modelsStore.selectedChannel()}
         else={
           <View class="min-w-0 flex-1 items-center justify-center gap-4 p-8">
+            <Icon name="cube-outline" tone="muted-foreground" class="size-10 opacity-50" />
             <Text role="header" class="text-2xl font-semibold text-foreground">
               {t("models.title")}
             </Text>

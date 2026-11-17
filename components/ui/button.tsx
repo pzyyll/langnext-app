@@ -9,9 +9,10 @@ export type ButtonVariant =
   | "outline"
   | "ghost"
   | "destructive"
-  | "destructive-outline";
+  | "destructive-outline"
+  | "destructive-ghost";
 
-export type ButtonSize = "sm" | "md" | "icon" | "icon-sm";
+export type ButtonSize = "xs" | "sm" | "md" | "icon" | "icon-sm" | "row";
 
 interface ButtonProps {
   variant?: ButtonVariant;
@@ -39,22 +40,27 @@ const VARIANT_CLASSES: Record<ButtonVariant, string> = {
     "border border-destructive bg-destructive hover:bg-destructive/90 active:bg-destructive/80 focus-visible:ring-2 focus-visible:ring-ring",
   "destructive-outline":
     "border border-destructive/40 bg-background hover:bg-destructive/10 active:bg-destructive/20 focus-visible:ring-2 focus-visible:ring-ring",
+  "destructive-ghost":
+    "hover:bg-destructive/10 active:bg-destructive/20 focus-visible:ring-2 focus-visible:ring-ring",
 };
 
-const TEXT_CLASSES: Record<ButtonVariant, string> = {
-  primary: "text-sm font-medium text-primary-foreground",
-  secondary: "text-sm font-medium text-secondary-foreground",
-  outline: "text-sm font-medium text-foreground",
-  ghost: "text-sm font-medium text-foreground",
-  destructive: "text-sm font-medium text-destructive-foreground",
-  "destructive-outline": "text-sm font-medium text-destructive",
+const TEXT_COLOR_CLASSES: Record<ButtonVariant, string> = {
+  primary: "font-medium text-primary-foreground",
+  secondary: "font-medium text-secondary-foreground",
+  outline: "font-medium text-foreground",
+  ghost: "font-medium text-foreground",
+  destructive: "font-medium text-destructive-foreground",
+  "destructive-outline": "font-medium text-destructive",
+  "destructive-ghost": "font-medium text-destructive",
 };
 
 const SIZE_CLASSES: Record<ButtonSize, string> = {
   md: "h-9 flex-row items-center justify-center gap-2 rounded-lg px-4",
   sm: "h-8 flex-row items-center justify-center gap-1.5 rounded-lg px-3",
+  xs: "h-6 flex-row items-center justify-center gap-1 rounded-md px-2",
   icon: "size-8 items-center justify-center rounded-lg",
   "icon-sm": "size-7 items-center justify-center rounded-md",
+  row: "min-h-11 flex-row items-center justify-start gap-2.5 rounded-lg px-2 py-1.5",
 };
 
 function resolveButtonClass(
@@ -64,7 +70,14 @@ function resolveButtonClass(
 ) {
   const v = variant ?? "outline";
   const s = size ?? "md";
-  return `${SIZE_CLASSES[s]} ${VARIANT_CLASSES[v]} disabled:opacity-50 ${motion.pressScale} ${extra ?? ""}`;
+  const feedback = s === "row" ? motion.navigationFeedback : motion.pressScale;
+  return `${SIZE_CLASSES[s]} ${VARIANT_CLASSES[v]} disabled:opacity-50 ${feedback} ${extra ?? ""}`;
+}
+
+function resolveTextClass(variant: ButtonVariant | undefined, size: ButtonSize | undefined) {
+  const v = variant ?? "outline";
+  const textSize = size === "xs" ? "text-xs" : "text-sm";
+  return `${textSize} ${TEXT_COLOR_CLASSES[v]}`;
 }
 
 /** Styled push button sharing the app's border, hover, focus, and press tokens. */
@@ -80,7 +93,7 @@ export function Button(props: ButtonProps) {
       tooltip={props.tooltip ? buildTooltip(props.tooltip, "top") : undefined}
     >
       <If when={props.label !== undefined}>
-        <Text class={TEXT_CLASSES[props.variant ?? "outline"]}>{props.label}</Text>
+        <Text class={resolveTextClass(props.variant, props.size)}>{props.label}</Text>
       </If>
       {props.children}
     </BaseButton>

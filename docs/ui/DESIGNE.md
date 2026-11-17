@@ -257,30 +257,43 @@ main window back.
 
 ## Models workspace
 
-Models adapts the master-detail structure of `langnext-app` to My Translator's
-tokens, bare copy, and native controls. `PageSurface` adds an optional
-`layout="split"` mode alongside its default `"column"` layout so Settings stays
-unchanged while Models renders edge-to-edge inside the same opaque `bg-background`
-work area without nesting scroll views.
+Models adapts the master-detail structure to My Translator's tokens, bare copy,
+and native controls. `PageSurface` provides `layout="split"` alongside `"column"`
+so Settings stays unchanged while Models fills the work area edge-to-edge without
+nesting scroll views.
 
 ### Channels rail and detail pane
 
-- **Master rail**: A `w-48` (`border-r border-border`) column with a `Channels`
-  header, scrollable channel list, empty/error states, and a footer `+` trigger.
-  Channel rows highlight through their own surface (`bg-accent` and
-  `text-accent-foreground` when selected; never a leading accent bar). Enabled
-  channels carry a compact `ON` badge, and reorder controls move channels up or
-  down while preserving selection.
-- **Detail pane**: Displays the selected channel's `Header` (name, inline rename,
-  and enabled `Switch`), scrollable `Connection` and `Models` cards (`rounded-xl
-  border border-border bg-card p-6`, matching Appearance), and a footer bar with
-  `Delete` on the left and `Cancel` / `Save` on the right.
+- **Unified split header spine**: Both the left `ChannelsRail` header and right
+  `ProviderEditor` header use a fixed `h-12` bar with `border-b border-border` so
+  the horizontal hairline aligns to the pixel across the vertical split divider.
+  Neither pane uses a persistent bottom footer bar, eliminating mismatched bottom
+  hairlines and oversized disabled commit buttons.
+- **Master rail**: A `w-60` (`w-48` under `860` points) `border-r border-border`
+  column with a `Channels` header and `+` icon trigger, followed by a full-height
+  scrollable channel list. Each channel row keeps a fixed leading status lane
+  (`check-circle` when enabled, muted `minus` when disabled, paired with text and
+  accessible state) plus a two-line name and protocol subtitle. Selection highlights
+  the row surface (`border-border bg-accent`), and reorder arrows appear only on
+  the selected row when multiple channels exist, keeping the status column fixed.
+- **Detail pane**: Displays the selected channel's `h-12` header (title, inline
+  rename, enabled `Switch`, hairline divider, and quiet destructive-hover delete
+  trigger), followed by scrollable `Connection` and `Models` cards
+  (`rounded-xl border border-border bg-card`, `p-5` on normal and `p-4` on narrow
+  viewports).
+- **Connection card**: Groups `API Type` and `Base URL` on one row on desktop
+  (`>= 860` points) and `API Key` below, placing `Test`, inline `Unsaved` badge,
+  and contextual `Cancel` / `Save` actions directly in the `Connection` header so
+  the save scope matches the form without shifting the `Models` card below.
+- **Models card**: Pairs `Models` title, item count, and sync timestamp tightly in
+  the header beside a labeled `Protocol` sync selector and `Get models`, followed
+  by the search/filter/`Add Model`/`Select` toolbar and either a borderless empty
+  state or the models `Table` (with `Select` hidden when empty).
 - **Dialogs and overlays**: `AddChannelDialog`, `AddModelDialog`,
   `EditModelDialog`, and `ConfirmDialog` share `AboutDialog`'s `rounded-2xl
   border border-border bg-background` frame, padded header/body, and `bg-muted`
   footer bar over `bg-overlay`. Non-blocking status notices appear in a top-level
-  `ToastStack` anchored at the bottom-right above the action footer inside an
-  `Overlay`.
+  `ToastStack` anchored at `bottom-4` centered inside an `Overlay`.
 - **Reusable controls**: UI primitives (`Button`, `Input`, `Checkbox`, `Select`,
   `Switch`, `Badge`, `Card`, `Dialog`, `Icon`, `ToastProvider`) live under
   `components/ui/`. Copy stays bare: helper text appears only where scope,
@@ -290,12 +303,12 @@ work area without nesting scroll views.
 
 | Change | Tool and tokens | Reduced motion |
 | --- | --- | --- |
-| Button, row, and trigger hover/press | Native color & transform transition; `navigationFeedback` + `pressScale`, 150 ms, ease-out | Instant color, no scale |
-| Channel row selection | Native background transition (`navigationFeedback`, 150 ms, ease-out) on the selected row | Instant |
+| Button and trigger hover/press | Native color & transform transition; `navigationFeedback` + `pressScale`, 150 ms, ease-out | Instant color, no scale |
+| Channel row and model row hover/selection | Native background & border transition (`navigationFeedback`, 150 ms, ease-out) without press scale | Instant |
 | Switch and Checkbox state | Native track/box transition (`navigationFeedback`) + thumb slide (`switchThumb`, 150 ms, ease-out) | Instant |
-| Select popup and Dialogs | Native popup transition (`popup`, 150 ms) and dialog fade (`dialogAnimation` / `aboutDialog`) | Instant |
+| Select popup, Tooltip, and Dialogs | Native popup/tooltip transitions (`popup`, `tooltip`, 150 ms) and dialog fade (`dialogAnimation` / `aboutDialog`) | Instant |
 | Toast notifications | Native `ToastStack` / `Toast` slide & fade (`toast` motion tokens, auto-hide 3.5 s, swipe-to-dismiss) | Instant fade/no slide |
-| Remote test/sync, search filter, table updates | Spinner/status label swaps immediately (`Test…` / `Syncing…`); list rows update cleanly without layout animation | No change |
+| Connection dirty actions, remote test/sync, search/filter updates | `Cancel` / `Save` appear immediately in the `Connection` header slot; spinner/status labels swap immediately (`Test…` / `Fetching…`) | No change |
 
 ### Validation
 

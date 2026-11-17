@@ -3,13 +3,19 @@ import { Select as BaseSelect, type SelectItem } from "nsh/base";
 import { t } from "nsh/i18n";
 import { motion } from "../motion";
 import { Icon } from "./icon";
+import { buildTooltip } from "./tooltip";
 
 export type { SelectItem };
+
+export type SelectSize = "sm" | "md";
 
 interface SelectProps {
   items: SelectItem[];
   value: string | null;
   placeholder?: string;
+  prefix?: string;
+  tooltip?: string;
+  size?: SelectSize;
   disabled?: boolean;
   accessibilityLabel?: string;
   testID?: string;
@@ -26,6 +32,8 @@ export function Select(props: SelectProps) {
     const match = props.items.find((item) => item.value === props.value);
     return match ? match.title : null;
   };
+  const heightClass = () => (props.size === "sm" ? "h-8" : "h-9");
+  const textSizeClass = () => (props.size === "sm" ? "text-xs" : "text-sm");
 
   return (
     <BaseSelect
@@ -57,17 +65,23 @@ export function Select(props: SelectProps) {
       trigger={
         <View
           testID={props.testID}
-          class={`h-9 flex-row items-center justify-between gap-2 rounded-lg border border-input bg-background px-3 hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 ${motion.navigationFeedback} ${props.triggerClass ?? ""}`}
+          tooltip={props.tooltip ? buildTooltip(props.tooltip, "top") : undefined}
+          class={`flex-row items-center justify-between gap-2 rounded-lg border border-input bg-background px-3 hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 ${heightClass()} ${motion.navigationFeedback} ${props.triggerClass ?? ""}`}
         >
-          <Text
-            class={
-              selectedTitle() !== null
-                ? "min-w-0 flex-1 truncate text-sm text-foreground"
-                : "min-w-0 flex-1 truncate text-sm text-muted-foreground"
-            }
-          >
-            {selectedTitle() ?? props.placeholder ?? t("common.selectPlaceholder")}
-          </Text>
+          <View class="min-w-0 flex-1 flex-row items-center gap-1.5">
+            <If when={props.prefix !== undefined}>
+              <Text class="shrink-0 text-xs text-muted-foreground">{props.prefix}</Text>
+            </If>
+            <Text
+              class={
+                selectedTitle() !== null
+                  ? `min-w-0 flex-1 truncate text-foreground ${textSizeClass()}`
+                  : `min-w-0 flex-1 truncate text-muted-foreground ${textSizeClass()}`
+              }
+            >
+              {selectedTitle() ?? props.placeholder ?? t("common.selectPlaceholder")}
+            </Text>
+          </View>
           <Icon name="chevron-down" tone="muted-foreground" class="size-3.5 shrink-0" />
         </View>
       }

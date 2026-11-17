@@ -1,5 +1,6 @@
-import { cleanup, effect, signal, Text, View, windowSize } from "nsh";
+import { effect, signal, Text, View, windowSize } from "nsh";
 import { t } from "nsh/i18n";
+import { motion } from "../../components/motion";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { SectionHeading } from "../../components/ui/card";
@@ -28,12 +29,7 @@ import {
   resolveEffectiveCapabilities,
   resolveEffectiveDisplayName,
 } from "./model-helpers";
-import {
-  deleteModelsBulk,
-  setModelEnabled,
-  syncChannelModels,
-  testChannelConnection,
-} from "./store";
+import { deleteModelsBulk, setModelEnabled } from "./store";
 import type { CapabilityFlags, ModelsEnabledFilter, ProviderChannel, ProviderModel } from "./types";
 
 const PROTOCOL_ITEMS: SelectItem[] = ADAPTER_SPECS.map((spec) => ({
@@ -84,6 +80,11 @@ interface ModelsTableProps {
   models: ProviderModel[];
   enabledFilter: ModelsEnabledFilter;
   isDirty: boolean;
+  syncAdapterId: AdapterId;
+  testing: boolean;
+  syncing: boolean;
+  onSyncAdapterChange: (adapterId: AdapterId) => void;
+  onGetModels: () => void;
   onEnabledFilterChange: (filter: ModelsEnabledFilter) => void;
   onAddModel: () => void;
   onConfigureModel: (model: ProviderModel) => void;
@@ -94,38 +95,18 @@ export function ModelsTable(props: ModelsTableProps) {
   const searchQuery = signal("");
   const selectionMode = signal(false);
   const selectedIds = signal<string[]>([]);
-  const syncAdapterId = signal<AdapterId>(props.channel.adapterId);
-  const testing = signal(false);
-  const syncing = signal(false);
-  const connectionMessage = signal<{ ok: boolean; text: string } | null>(null);
   const bulkDeleteOpen = signal(false);
   const bulkDeleting = signal(false);
 
-  let activeController: AbortController | null = null;
   let lastChannelId = "";
-
-  const abortInFlight = () => {
-    if (activeController) {
-      activeController.abort();
-      activeController = null;
-    }
-  };
-
-  cleanup(() => abortInFlight());
 
   effect(() => {
     const channelId = props.channel.id;
-    const defaultAdapter = props.channel.adapterId;
     if (channelId !== lastChannelId) {
       lastChannelId = channelId;
-      abortInFlight();
       searchQuery.set("");
       selectionMode.set(false);
       selectedIds.set([]);
-      syncAdapterId.set(defaultAdapter);
-      testing.set(false);
-      syncing.set(false);
-      connectionMessage.set(null);
       bulkDeleteOpen.set(false);
     }
   });
@@ -173,64 +154,6 @@ export function ModelsTable(props: ModelsTableProps) {
     }
   };
 
-  const handleTest = async () => {
-    if (testing() || syncing() || props.isDirty) return;
-    abortInFlight();
-    activeController = new AbortController();
-    testing.set(true);
-    connectionMessage.set(null);
-    try {
-      const result = await testChannelConnection(
-        props.channel.id,
-        syncAdapterId(),
-        activeController.signal,
-      );
-      const text =
-        result.modelCount === 1
-          ? t("models.connection.connectedOne", { count: result.modelCount })
-          : t("models.connection.connected", { count: result.modelCount });
-      connectionMessage.set(null);
-      toast.success(text);
-    } catch (error) {
-      const text = error instanceof Error ? error.message : t("models.error.connectionTest");
-      if ((error as { kind?: string } | null)?.kind !== "cancelled") {
-        connectionMessage.set({ ok: false, text });
-        toast.error(text);
-      }
-    } finally {
-      testing.set(false);
-      activeController = null;
-    }
-  };
-
-  const handleGetModels = async () => {
-    if (syncing() || testing() || props.isDirty) return;
-    abortInFlight();
-    activeController = new AbortController();
-    syncing.set(true);
-    connectionMessage.set(null);
-    try {
-      const summary = await syncChannelModels(
-        props.channel.id,
-        syncAdapterId(),
-        activeController.signal,
-      );
-      toast.success(
-        t("models.connection.synced", {
-          count: summary.discoveredCount,
-          added: summary.addedCount,
-        }),
-      );
-    } catch (error) {
-      if ((error as { kind?: string } | null)?.kind !== "cancelled") {
-        toast.error(error instanceof Error ? error.message : t("models.error.fetchModels"));
-      }
-    } finally {
-      syncing.set(false);
-      activeController = null;
-    }
-  };
-
   const handleToggleEnabled = async (model: ProviderModel, checked: boolean) => {
     try {
       await setModelEnabled(model.id, checked);
@@ -272,59 +195,51 @@ export function ModelsTable(props: ModelsTableProps) {
 
   return (
     <>
-      <View class="gap-4">
-        <View class="flex-row flex-wrap items-center justify-between gap-2">
-          <SectionHeading title={t("models.title")} />
+      <View class="gap-3.5">
+        <View class="flex-row flex-wrap items-start justify-between gap-3">
+          <View class="min-w-0 gap-0.5">
+            <View class="flex-row items-center gap-2">
+              <SectionHeading title={t("models.title")} />
+              <If when={props.models.length > 0}>
+                <Badge label={String(props.models.length)} tone="neutral" />
+              </If>
+            </View>
+            <Text
+              class={
+                props.channel.modelsLastSyncError
+                  ? "text-xs text-destructive"
+                  : "text-xs text-muted-foreground"
+              }
+            >
+              {syncStatusLabel()}
+            </Text>
+          </View>
+
           <View class="flex-row flex-wrap items-center gap-2">
             <Select
               testID="sync-protocol-select"
+              size="sm"
+              prefix={t("models.connection.protocolPrefix")}
+              tooltip={t("models.connection.protocol")}
               accessibilityLabel={t("models.connection.protocol")}
               items={PROTOCOL_ITEMS}
-              value={syncAdapterId()}
+              value={props.syncAdapterId}
               onChange={(v) => {
-                if (v) syncAdapterId.set(v as AdapterId);
+                if (v) props.onSyncAdapterChange(v as AdapterId);
               }}
-              triggerClass="h-8"
-            />
-            <Button
-              testID="test-connection-button"
-              variant="outline"
-              size="sm"
-              label={testing() ? t("models.connection.testing") : t("models.connection.test")}
-              disabled={testing() || syncing() || props.isDirty}
-              onPress={() => void handleTest()}
+              triggerClass="max-w-72"
             />
             <Button
               testID="get-models-button"
               variant="outline"
               size="sm"
-              label={syncing() ? t("models.connection.fetching") : t("models.connection.getModels")}
-              disabled={syncing() || testing() || props.isDirty}
-              onPress={() => void handleGetModels()}
+              label={
+                props.syncing ? t("models.connection.fetching") : t("models.connection.getModels")
+              }
+              disabled={props.syncing || props.testing || props.isDirty}
+              onPress={() => props.onGetModels()}
             />
           </View>
-        </View>
-
-        <View class="flex-row flex-wrap items-center justify-between gap-2">
-          <Text
-            class={
-              props.channel.modelsLastSyncError
-                ? "text-xs text-destructive"
-                : "text-xs text-muted-foreground"
-            }
-          >
-            {syncStatusLabel()}
-          </Text>
-          <If when={props.isDirty}>
-            <Text class="text-xs text-warning">{t("models.connection.dirtyHint")}</Text>
-          </If>
-          <If when={props.isDirty ? null : connectionMessage()}>
-            {(msg) => (
-              <Text class={msg().ok ? "text-xs text-success" : "text-xs text-destructive"}>
-                {msg().text}
-              </Text>
-            )}
-          </If>
         </View>
 
         <View class="flex-row flex-wrap items-center gap-2">
@@ -338,17 +253,18 @@ export function ModelsTable(props: ModelsTableProps) {
             value={searchQuery()}
             onChange={(v) => searchQuery.set(v)}
             onClear={() => searchQuery.set("")}
-            class="min-w-44 flex-1"
+            class="min-w-40 flex-1"
           />
           <Select
             testID="models-filter-select"
+            size="sm"
             accessibilityLabel={t("models.filter.label")}
             items={filterItems()}
             value={props.enabledFilter}
             onChange={(v) => {
               if (v) props.onEnabledFilterChange(v as ModelsEnabledFilter);
             }}
-            triggerClass="h-8 w-28"
+            triggerClass="w-28"
           />
           <Button
             testID="add-model-button"
@@ -360,48 +276,65 @@ export function ModelsTable(props: ModelsTableProps) {
             <Icon name="plus" tone="foreground" class="size-3.5" />
             <Text class="text-sm font-medium text-foreground">{t("models.model.add")}</Text>
           </Button>
-          <If
-            when={selectionMode()}
-            else={
-              <Button
-                testID="select-models-button"
-                variant="outline"
-                size="sm"
-                label={t("models.action.select")}
-                disabled={props.models.length === 0}
-                onPress={() => selectionMode.set(true)}
-              />
-            }
-          >
-            <View class="flex-row items-center gap-2">
-              <Button
-                testID="bulk-delete-models-button"
-                variant="destructive"
-                size="sm"
-                label={t("models.action.deleteSelected", { count: selectedIds().length })}
-                disabled={selectedIds().length === 0}
-                onPress={() => bulkDeleteOpen.set(true)}
-              />
-              <Button
-                variant="ghost"
-                size="sm"
-                label={t("common.done")}
-                onPress={() => {
-                  selectionMode.set(false);
-                  selectedIds.set([]);
-                }}
-              />
-            </View>
+          <If when={props.models.length > 0}>
+            <If
+              when={selectionMode()}
+              else={
+                <Button
+                  testID="select-models-button"
+                  variant="outline"
+                  size="sm"
+                  label={t("models.action.select")}
+                  onPress={() => selectionMode.set(true)}
+                />
+              }
+            >
+              <View class="flex-row items-center gap-2">
+                <Button
+                  testID="bulk-delete-models-button"
+                  variant="destructive"
+                  size="sm"
+                  label={t("models.action.deleteSelected", { count: selectedIds().length })}
+                  disabled={selectedIds().length === 0}
+                  onPress={() => bulkDeleteOpen.set(true)}
+                />
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  label={t("common.done")}
+                  onPress={() => {
+                    selectionMode.set(false);
+                    selectedIds.set([]);
+                  }}
+                />
+              </View>
+            </If>
           </If>
         </View>
 
         <If
           when={filteredModels().length > 0}
           else={
-            <View class="items-center justify-center rounded-lg border border-border bg-muted/30 px-4 py-8">
+            <View class="items-center justify-center gap-2 py-8">
+              <Icon
+                name={props.models.length === 0 ? "cube-outline" : "search"}
+                tone="muted-foreground"
+                class="size-7 opacity-40"
+              />
               <Text class="text-sm text-muted-foreground">
                 {props.models.length === 0 ? t("models.model.empty") : t("models.model.noMatch")}
               </Text>
+              <If when={props.models.length > 0}>
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  label={t("models.search.reset")}
+                  onPress={() => {
+                    searchQuery.set("");
+                    props.onEnabledFilterChange("all");
+                  }}
+                />
+              </If>
             </View>
           }
         >
@@ -455,7 +388,10 @@ export function ModelsTable(props: ModelsTableProps) {
                   const isRowSelected = () => selectedIds().includes(model().id);
 
                   return (
-                    <TableRow testID={`model-row-${model().modelKey}`}>
+                    <TableRow
+                      testID={`model-row-${model().modelKey}`}
+                      class={`hover:bg-muted/40 ${motion.navigationFeedback}`}
+                    >
                       <If when={selectionMode()}>
                         <TableCell class="w-7 shrink-0">
                           <Checkbox
@@ -480,7 +416,7 @@ export function ModelsTable(props: ModelsTableProps) {
                           </If>
                         </View>
                         <View class="flex-row flex-wrap items-center gap-2">
-                          <Text class="truncate text-xs text-muted-foreground">
+                          <Text class="truncate font-mono text-xs text-muted-foreground">
                             {model().modelKey}
                           </Text>
                           <If when={compactColumns()}>
@@ -489,12 +425,12 @@ export function ModelsTable(props: ModelsTableProps) {
                             </Text>
                           </If>
                           <If when={contextText() !== null}>
-                            <Text class="text-xs text-muted-foreground">
+                            <Text class="text-xs tabular-nums text-muted-foreground">
                               {t("models.token.context", { value: contextText() })}
                             </Text>
                           </If>
                           <If when={maxTokText() !== null}>
-                            <Text class="text-xs text-muted-foreground">
+                            <Text class="text-xs tabular-nums text-muted-foreground">
                               {t("models.token.max", { value: maxTokText() })}
                             </Text>
                           </If>

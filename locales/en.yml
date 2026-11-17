@@ -89,6 +89,7 @@ models:
     getModels: Get models
     fetching: Fetching…
     protocol: Sync protocol
+    protocolPrefix: Protocol
     dirtyHint: Save connection changes before testing or syncing.
     connected: Connected (%{count} models reachable)
     connectedOne: Connected (%{count} model reachable)
@@ -100,6 +101,7 @@ models:
     placeholder: Filter models…
     label: Search models
     clear: Clear model search
+    reset: Clear filters
   filter:
     label: Filter models by status
     all: All

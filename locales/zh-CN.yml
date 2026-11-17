@@ -89,6 +89,7 @@ models:
     getModels: 获取模型
     fetching: 获取中…
     protocol: 同步协议
+    protocolPrefix: 协议
     dirtyHint: 请先保存连接更改，再测试或同步。
     connected: 已连接（可访问 %{count} 个模型）
     connectedOne: 已连接（可访问 %{count} 个模型）
@@ -100,6 +101,7 @@ models:
     placeholder: 筛选模型…
     label: 搜索模型
     clear: 清除模型搜索
+    reset: 清除筛选
   filter:
     label: 按状态筛选模型
     all: 全部

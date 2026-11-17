@@ -6,6 +6,7 @@ import checkCircleIcon from "../../assets/icons/check-circle.svg";
 import checkIcon from "../../assets/icons/check.svg";
 import chevronDownIcon from "../../assets/icons/chevron-down.svg";
 import closeIcon from "../../assets/icons/close.svg";
+import cubeOutlineIcon from "../../assets/icons/cube-outline.svg";
 import deleteIcon from "../../assets/icons/delete.svg";
 import editIcon from "../../assets/icons/edit.svg";
 import filePdfIcon from "../../assets/icons/file-pdf.svg";
@@ -24,6 +25,7 @@ const ICONS = {
   "check-circle": checkCircleIcon,
   "chevron-down": chevronDownIcon,
   close: closeIcon,
+  "cube-outline": cubeOutlineIcon,
   delete: deleteIcon,
   edit: editIcon,
   "file-pdf": filePdfIcon,
