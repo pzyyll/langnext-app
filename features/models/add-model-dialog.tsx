@@ -9,7 +9,6 @@ import { toast } from "../../components/ui/toast";
 import { ADAPTER_SPECS } from "../../services/protocols/adapters";
 import type { AdapterId } from "../../services/protocols/types";
 import { FormField } from "./form-field";
-import { createManualModel } from "./store";
 
 const DEFAULT_ADAPTER_VALUE = "__default__";
 
@@ -18,10 +17,17 @@ const API_TYPE_ITEMS = (): SelectItem[] => [
   ...ADAPTER_SPECS.map((spec) => ({ value: spec.id, title: spec.label })),
 ];
 
+export interface AddModelSubmission {
+  modelKey: string;
+  displayNameOverride: string | null;
+  apiTypeOverride: AdapterId | null;
+  enabled: boolean;
+}
+
 interface AddModelDialogProps {
   open: boolean;
-  providerId: string;
   onOpenChange: (open: boolean) => void;
+  onSubmit: (input: AddModelSubmission) => Promise<void> | void;
 }
 
 /** Modal dialog for manually registering a model under a channel. */
@@ -55,8 +61,7 @@ export function AddModelDialog(props: AddModelDialogProps) {
     submitting.set(true);
     submitError.set(null);
     try {
-      await createManualModel({
-        providerId: props.providerId,
+      await props.onSubmit({
         modelKey: key,
         displayNameOverride: displayName().trim() || null,
         apiTypeOverride: apiType() === DEFAULT_ADAPTER_VALUE ? null : (apiType() as AdapterId),
@@ -123,10 +128,10 @@ export function AddModelDialog(props: AddModelDialogProps) {
         />
       </FormField>
 
-      <FormField label={t("models.connection.apiType")}>
+      <FormField label={t("models.column.apiType")}>
         <Select
           testID="add-model-api-select"
-          accessibilityLabel={t("models.connection.apiType")}
+          accessibilityLabel={t("models.column.apiType")}
           items={API_TYPE_ITEMS()}
           value={apiType()}
           onChange={(v) => {

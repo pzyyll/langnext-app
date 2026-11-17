@@ -13,21 +13,25 @@ import { toast } from "../../components/ui/toast";
 import { getAdapterDefaultBaseUrl, getAdapterLabel } from "../../services/protocols/adapters";
 import { getProviderPreset, getProviderPresetLabel } from "../../services/protocols/presets";
 import type { AdapterId } from "../../services/protocols/types";
-import { AddModelDialog } from "./add-model-dialog";
+import { AddModelDialog, type AddModelSubmission } from "./add-model-dialog";
 import type { ChannelDraft } from "./channel-draft";
 import { inspectBaseUrl } from "./connection";
-import { EditModelDialog } from "./edit-model-dialog";
+import { EditModelDialog, type EditModelSubmission } from "./edit-model-dialog";
 import { FormField } from "./form-field";
 import { ModelsTable } from "./models-table";
 import {
+  createManualModel,
   deleteChannel,
+  deleteModelsBulk,
   renameChannel,
   RevisionConflictError,
   saveChannelDraft,
+  setModelEnabled,
   syncChannelModels,
   testChannelConnection,
   toggleChannelEnabled,
   updateChannel,
+  updateModelConfig,
 } from "./store";
 import type {
   CredentialUpdate,
@@ -130,7 +134,6 @@ export function ProviderEditor(props: ProviderEditorProps) {
       title: getAdapterLabel(id),
     }));
   const hasFixedApiType = () => currentPreset().allowedAdapterIds.length <= 1;
-  const currentChannelId = () => (props.mode === "draft" ? props.draft.id : props.channel.id);
   const currentDisplayName = () =>
     props.mode === "draft" ? props.draft.displayName() : props.channel.displayName;
   const currentEnabled = () =>
@@ -406,6 +409,40 @@ export function ProviderEditor(props: ProviderEditorProps) {
     } finally {
       deletingChannel.set(false);
     }
+  };
+
+  const handleAddModelSubmit = async (input: AddModelSubmission) => {
+    if (props.mode === "draft") {
+      props.draft.addManualModel(input);
+      return;
+    }
+    await createManualModel({
+      providerId: props.channel.id,
+      ...input,
+    });
+  };
+
+  const handleEditModelSubmit = async (input: EditModelSubmission) => {
+    if (props.mode === "draft") {
+      props.draft.updateModel(input);
+      return;
+    }
+    await updateModelConfig(input);
+  };
+
+  const handleToggleModelEnabled = async (model: ProviderModel, checked: boolean) => {
+    if (props.mode === "draft") {
+      props.draft.setModelEnabled(model.id, checked);
+      return;
+    }
+    await setModelEnabled(model.id, checked);
+  };
+
+  const handleDeleteModels = async (modelIds: string[]) => {
+    if (props.mode === "draft") {
+      return props.draft.deleteModels(modelIds);
+    }
+    return deleteModelsBulk(props.channel.id, modelIds);
   };
 
   const tokenPlaceholder = () => {
@@ -838,6 +875,8 @@ export function ProviderEditor(props: ProviderEditorProps) {
               onEnabledFilterChange={(f) => props.onEnabledFilterChange(f)}
               onAddModel={() => addModelOpen.set(true)}
               onConfigureModel={(model) => editingModel.set(model)}
+              onToggleModelEnabled={handleToggleModelEnabled}
+              onDeleteModels={handleDeleteModels}
             />
           </Card>
         </View>
@@ -845,8 +884,8 @@ export function ProviderEditor(props: ProviderEditorProps) {
 
       <AddModelDialog
         open={addModelOpen()}
-        providerId={currentChannelId()}
         onOpenChange={(open) => addModelOpen.set(open)}
+        onSubmit={handleAddModelSubmit}
       />
 
       <EditModelDialog
@@ -855,6 +894,7 @@ export function ProviderEditor(props: ProviderEditorProps) {
         onOpenChange={(open) => {
           if (!open) editingModel.set(null);
         }}
+        onSubmit={handleEditModelSubmit}
       />
 
       <If when={props.mode === "saved"}>

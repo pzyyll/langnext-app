@@ -10,8 +10,7 @@ import { ADAPTER_SPECS } from "../../services/protocols/adapters";
 import type { AdapterId } from "../../services/protocols/types";
 import { FormField } from "./form-field";
 import { resolveEffectiveCapabilities } from "./model-helpers";
-import { updateModelConfig } from "./store";
-import type { ProviderModel } from "./types";
+import type { CapabilityOverrides, ProviderModel } from "./types";
 
 const DEFAULT_ADAPTER_VALUE = "__default__";
 
@@ -20,10 +19,20 @@ const API_TYPE_ITEMS = (): SelectItem[] => [
   ...ADAPTER_SPECS.map((spec) => ({ value: spec.id, title: spec.label })),
 ];
 
+export interface EditModelSubmission {
+  id: string;
+  displayNameOverride: string | null;
+  apiTypeOverride: AdapterId | null;
+  capabilitiesOverride: CapabilityOverrides | null;
+  contextLimit: number | null;
+  maxTokens: number | null;
+}
+
 interface EditModelDialogProps {
   open: boolean;
   model: ProviderModel | null;
   onOpenChange: (open: boolean) => void;
+  onSubmit: (input: EditModelSubmission) => Promise<void> | void;
 }
 
 function parseOptionalPositiveInt(
@@ -94,7 +103,7 @@ export function EditModelDialog(props: EditModelDialogProps) {
     submitting.set(true);
     submitError.set(null);
     try {
-      await updateModelConfig({
+      await props.onSubmit({
         id: model.id,
         displayNameOverride: displayNameOverride().trim() || null,
         apiTypeOverride:
@@ -165,10 +174,10 @@ export function EditModelDialog(props: EditModelDialogProps) {
               />
             </FormField>
 
-            <FormField label={t("models.connection.apiType")}>
+            <FormField label={t("models.column.apiType")}>
               <Select
                 testID="edit-model-api-select"
-                accessibilityLabel={t("models.connection.apiType")}
+                accessibilityLabel={t("models.column.apiType")}
                 items={API_TYPE_ITEMS()}
                 value={apiTypeOverride()}
                 onChange={(v) => {

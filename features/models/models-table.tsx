@@ -29,7 +29,6 @@ import {
   resolveEffectiveCapabilities,
   resolveEffectiveDisplayName,
 } from "./model-helpers";
-import { deleteModelsBulk, setModelEnabled } from "./store";
 import type { CapabilityFlags, ModelsEnabledFilter, ProviderChannel, ProviderModel } from "./types";
 
 const PROTOCOL_ITEMS: SelectItem[] = ADAPTER_SPECS.map((spec) => ({
@@ -88,6 +87,8 @@ interface ModelsTableProps {
   onEnabledFilterChange: (filter: ModelsEnabledFilter) => void;
   onAddModel: () => void;
   onConfigureModel: (model: ProviderModel) => void;
+  onToggleModelEnabled: (model: ProviderModel, checked: boolean) => Promise<void> | void;
+  onDeleteModels: (modelIds: string[]) => Promise<number> | number;
 }
 
 /** Models toolbar, remote sync controls, filterable table, and bulk deletion. */
@@ -156,7 +157,7 @@ export function ModelsTable(props: ModelsTableProps) {
 
   const handleToggleEnabled = async (model: ProviderModel, checked: boolean) => {
     try {
-      await setModelEnabled(model.id, checked);
+      await props.onToggleModelEnabled(model, checked);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t("models.error.updateModelState"));
     }
@@ -167,7 +168,7 @@ export function ModelsTable(props: ModelsTableProps) {
     if (ids.length === 0 || bulkDeleting()) return;
     bulkDeleting.set(true);
     try {
-      const count = await deleteModelsBulk(props.channel.id, ids);
+      const count = await props.onDeleteModels(ids);
       toast.success(
         count === 1
           ? t("models.delete.modelsDoneOne", { count })
