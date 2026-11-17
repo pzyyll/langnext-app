@@ -94,12 +94,12 @@ export function ToastViewport() {
 
   return (
     <If when={entries().length > 0}>
-      <Overlay class="bottom-4 items-center">
+      <Overlay class="inset-x-0 bottom-4 items-center pointer-events-none">
         <ToastStack
           testID="toast-stack"
           placement="bottomCenter"
           motion={motion.toastStack}
-          class="w-80 max-w-full"
+          class="w-80 max-w-full pointer-events-none"
           onExpandedChange={({ expanded }) => paused.set(expanded)}
           onCancel={() => {
             manager.dismissAll();
@@ -114,7 +114,7 @@ export function ToastViewport() {
                   testID={`toast-${payload().tone}`}
                   transitionStatus={entry().status}
                   accessibilityLabel={payload().title}
-                  class={`flex-row items-start gap-2.5 rounded-xl border border-border bg-popover p-3.5 shadow-lg ${motion.toastTransition}`}
+                  class={`flex-row items-start gap-2.5 rounded-xl border border-border bg-popover p-3.5 shadow-lg pointer-events-none ${motion.toastTransition}`}
                   startingClass={motion.toastHidden}
                   endingClass={motion.toastHidden}
                   onDismissRequest={() => toast.dismiss(entry().id)}
@@ -140,7 +140,7 @@ export function ToastViewport() {
                     variant="ghost"
                     accessibilityLabel={t("common.dismiss")}
                     onPress={() => toast.dismiss(entry().id)}
-                    class="shrink-0"
+                    class="shrink-0 pointer-events-auto"
                   >
                     <Icon name="close" tone="muted-foreground" class="size-3.5" />
                   </Button>
