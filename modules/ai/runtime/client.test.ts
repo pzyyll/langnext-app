@@ -1,6 +1,14 @@
 import { t } from "nsh/i18n";
 import { expect, test } from "nsh/test";
+import { anthropicProtocol } from "../protocols/anthropic";
+import { geminiProtocol } from "../protocols/gemini";
 import { openAIChatProtocol } from "../protocols/openai-chat";
+import { openAIResponsesProtocol } from "../protocols/openai-responses";
+import { anthropicProvider } from "../providers/anthropic/definition";
+import { customProvider } from "../providers/custom/definition";
+import { deepseekProvider } from "../providers/deepseek/definition";
+import { geminiProvider } from "../providers/gemini/definition";
+import { openaiProvider } from "../providers/openai/definition";
 import { createAiClient, type AiClientInput } from "./client";
 import { createJsonHttpClient, type FetchLike } from "./http";
 import { createAiRegistry } from "./registry";
@@ -240,4 +248,170 @@ test("ai client: cancels an external request", async () => {
     kind: "cancelled",
     message: t("protocol.error.cancelled"),
   });
+});
+function registerBuiltIns(registry: ReturnType<typeof createAiRegistry>): void {
+  registry.registerProtocol(openAIChatProtocol);
+  registry.registerProtocol(openAIResponsesProtocol);
+  registry.registerProtocol(anthropicProtocol);
+  registry.registerProtocol(geminiProtocol);
+  registry.registerProvider(openaiProvider);
+  registry.registerProvider(geminiProvider);
+  registry.registerProvider(anthropicProvider);
+  registry.registerProvider(deepseekProvider);
+  registry.registerProvider(customProvider);
+}
+
+function createBuiltInHarness(fetchImpl?: FetchLike): Harness {
+  const requests: Harness["requests"] = [];
+  const registry = createAiRegistry();
+  registerBuiltIns(registry);
+  const capture: FetchLike = async (url, init) => {
+    requests.push({ url, method: init.method, headers: init.headers });
+    return { ok: true, status: 200, json: async () => ({ data: [{ id: "model-a" }] }) };
+  };
+  return {
+    client: createAiClient({
+      registry,
+      http: createJsonHttpClient({ fetchImpl: fetchImpl ?? capture }),
+    }),
+    requests,
+  };
+}
+
+test("ai client: DeepSeek catalog stays shared with Messages selected", async () => {
+  const harness = createBuiltInHarness();
+
+  const result = await harness.client.testConnection({
+    providerTypeId: "deepseek",
+    protocolId: "anthropic",
+    baseUrl: "https://proxy.example.com/deepseek",
+    credential: "sk-ds-dummy",
+  });
+
+  expect(result).toEqual({ modelCount: 1 });
+  expect(harness.requests).toEqual([
+    {
+      url: "https://proxy.example.com/deepseek/models",
+      method: "GET",
+      headers: { Accept: "application/json", Authorization: "Bearer sk-ds-dummy" },
+    },
+  ]);
+});
+
+test("ai client: DeepSeek Messages preserves its proxy origin", () => {
+  const harness = createBuiltInHarness();
+
+  for (const baseUrl of [
+    "https://proxy.example.com/deepseek",
+    "https://proxy.example.com/deepseek/v1",
+    "https://proxy.example.com/deepseek/anthropic",
+    "https://proxy.example.com/deepseek/anthropic/v1",
+  ]) {
+    const target = harness.client.resolveRequestTarget(
+      {
+        providerTypeId: "deepseek",
+        protocolId: "anthropic",
+        baseUrl,
+        credential: "sk-ds-dummy",
+      },
+      { kind: "model", modelId: "deepseek-chat" },
+    );
+    expect(target.url).toBe("https://proxy.example.com/deepseek/anthropic/v1/messages");
+    expect(target.headers["x-api-key"]).toBe("sk-ds-dummy");
+    expect(target.headers["anthropic-version"]).toBe("2023-06-01");
+  }
+});
+
+test("ai client: provider policy sets defaults, fixed choices, and real roots", () => {
+  const harness = createBuiltInHarness();
+  const registry = createAiRegistry();
+  registerBuiltIns(registry);
+
+  expect(registry.getProvider("openai").defaultProtocolId).toBe("openai-responses");
+  expect(registry.getProvider("gemini").allowedProtocolIds).toEqual(["gemini"]);
+  expect(registry.getProvider("anthropic").allowedProtocolIds).toEqual(["anthropic"]);
+  expect(registry.getProvider("custom").defaultBaseUrl).toBeNull();
+  expect(registry.getProvider("custom").allowedProtocolIds).toHaveLength(4);
+  expect(registry.getProvider("gemini").catalogProviderId).toBe("google");
+
+  const openaiModel = harness.client.resolveRequestTarget(
+    { providerTypeId: "openai", protocolId: "openai-responses", baseUrl: null, credential: "sk" },
+    { kind: "model", modelId: "gpt-4.1" },
+  );
+  expect(openaiModel.url).toBe("https://api.openai.com/v1/responses");
+
+  const geminiModel = harness.client.resolveRequestTarget(
+    { providerTypeId: "gemini", protocolId: "gemini", baseUrl: null, credential: "AIza" },
+    { kind: "model", modelId: "gemini-2.5-pro" },
+  );
+  expect(geminiModel.url).toBe(
+    "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=AIza",
+  );
+
+  const anthropicModel = harness.client.resolveRequestTarget(
+    { providerTypeId: "anthropic", protocolId: "anthropic", baseUrl: null, credential: "sk-ant" },
+    { kind: "model", modelId: "claude-sonnet-4" },
+  );
+  expect(anthropicModel.url).toBe("https://api.anthropic.com/v1/messages");
+});
+
+test("ai client: a disallowed protocol rejects even for fixed-catalog discovery", async () => {
+  const harness = createBuiltInHarness();
+  await expectClientError(
+    () =>
+      harness.client.testConnection({
+        providerTypeId: "deepseek",
+        protocolId: "gemini",
+        baseUrl: "https://proxy.example.com/deepseek",
+        credential: "sk-ds-dummy",
+      }),
+    { kind: "invalid_request", message: t("models.error.unsupportedProtocol") },
+  );
+  expect(harness.requests).toEqual([]);
+});
+
+test("ai client: Custom has no default root", async () => {
+  const harness = createBuiltInHarness();
+  await expectClientError(
+    () =>
+      harness.client.testConnection({
+        providerTypeId: "custom",
+        protocolId: "openai-compatible",
+        baseUrl: "  ",
+        credential: "sk",
+      }),
+    { kind: "invalid_request", message: t("models.error.baseUrlRequired") },
+  );
+  expect(harness.requests).toEqual([]);
+});
+
+test("ai client: provider root policy cannot switch the configured origin", async () => {
+  const registry = createAiRegistry();
+  registry.registerProtocol(openAIChatProtocol);
+  registry.registerProvider({
+    id: "example:redirect",
+    labelKey: "models.preset.custom",
+    allowedProtocolIds: ["openai-compatible"],
+    defaultProtocolId: "openai-compatible",
+    defaultBaseUrl: "https://example.test/v1",
+    catalogProviderId: null,
+    resolveBaseUrl: () => "https://elsewhere.example.com/v1",
+  });
+  const client = createAiClient({
+    registry,
+    http: createJsonHttpClient({
+      fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ data: [] }) }),
+    }),
+  });
+
+  await expectClientError(
+    () =>
+      client.testConnection({
+        providerTypeId: "example:redirect",
+        protocolId: "openai-compatible",
+        baseUrl: "https://proxy.example.com/v1",
+        credential: "sk",
+      }),
+    { kind: "invalid_request", message: t("ai.error.providerOriginChanged") },
+  );
 });
