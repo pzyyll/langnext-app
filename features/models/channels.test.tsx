@@ -1525,7 +1525,7 @@ test("provider channels: loopback HTTP, URL validation, and positive numeric lim
   await app.type("id:edit-model-max-tokens-input", "-5");
   await app.press("id:confirm-edit-model");
   await app.waitUntil(() =>
-    app.texts().some((t) => t.includes("Max Tokens must be greater than 0.")),
+    app.texts().some((t) => t.includes("Max Tokens must be a positive whole number.")),
   );
   await app.clear("id:edit-model-max-tokens-input");
   await app.type("id:edit-model-max-tokens-input", "4096");
