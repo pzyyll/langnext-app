@@ -1,10 +1,5 @@
 /** Built-in provider wire protocol identifiers. */
-export type AdapterId =
-  | "openai-compatible"
-  | "openai-responses"
-  | "anthropic"
-  | "gemini"
-  | "deepseek";
+export type AdapterId = "openai-compatible" | "openai-responses" | "anthropic" | "gemini";
 
 /** Descriptor for a supported provider protocol adapter. */
 export interface AdapterSpec {

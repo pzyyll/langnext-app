@@ -28,13 +28,8 @@ export const ADAPTER_SPECS: readonly AdapterSpec[] = [
   },
   {
     id: "gemini",
-    label: "Google Gemini",
+    label: "Gemini API",
     defaultBaseUrl: "https://generativelanguage.googleapis.com",
-  },
-  {
-    id: "deepseek",
-    label: "DeepSeek",
-    defaultBaseUrl: "https://api.deepseek.com",
   },
 ];
 

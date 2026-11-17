@@ -10,7 +10,7 @@ import { Input } from "../../components/ui/input";
 import { Select, type SelectItem } from "../../components/ui/select";
 import { Switch } from "../../components/ui/switch";
 import { toast } from "../../components/ui/toast";
-import { ADAPTER_SPECS, getAdapterDefaultBaseUrl } from "../../services/protocols/adapters";
+import { getAdapterDefaultBaseUrl, getAdapterLabel } from "../../services/protocols/adapters";
 import { getProviderPreset, getProviderPresetLabel } from "../../services/protocols/presets";
 import type { AdapterId } from "../../services/protocols/types";
 import { AddModelDialog } from "./add-model-dialog";
@@ -35,11 +35,6 @@ import type {
   ProviderChannel,
   ProviderModel,
 } from "./types";
-
-const ADAPTER_ITEMS: SelectItem[] = ADAPTER_SPECS.map((spec) => ({
-  value: spec.id,
-  title: spec.label,
-}));
 
 type CredentialDraftMode = "keep" | "replace" | "clear";
 
@@ -129,6 +124,12 @@ export function ProviderEditor(props: ProviderEditorProps) {
   const currentPresetId = () =>
     props.mode === "draft" ? props.draft.presetId : props.channel.presetId;
   const currentPreset = () => getProviderPreset(currentPresetId());
+  const allowedAdapterItems = (): SelectItem[] =>
+    currentPreset().allowedAdapterIds.map((id) => ({
+      value: id,
+      title: getAdapterLabel(id),
+    }));
+  const hasFixedApiType = () => currentPreset().allowedAdapterIds.length <= 1;
   const currentChannelId = () => (props.mode === "draft" ? props.draft.id : props.channel.id);
   const currentDisplayName = () =>
     props.mode === "draft" ? props.draft.displayName() : props.channel.displayName;
@@ -672,22 +673,36 @@ export function ProviderEditor(props: ProviderEditorProps) {
                 label={t("models.connection.apiType")}
                 class={compactLayout() ? undefined : "w-56 shrink-0"}
               >
-                <Select
-                  testID="connection-adapter-select"
-                  accessibilityLabel={t("models.connection.apiType")}
-                  items={ADAPTER_ITEMS}
-                  value={currentAdapterId()}
-                  onChange={(v) => {
-                    if (!v) return;
-                    const next = v as AdapterId;
-                    if (props.mode === "draft") {
-                      props.draft.setAdapterId(next);
-                    } else {
-                      savedAdapterId.set(next);
-                    }
-                    connectionMessage.set(null);
-                  }}
-                />
+                <If
+                  when={hasFixedApiType()}
+                  else={
+                    <Select
+                      testID="connection-adapter-select"
+                      accessibilityLabel={t("models.connection.apiType")}
+                      items={allowedAdapterItems()}
+                      value={currentAdapterId()}
+                      onChange={(v) => {
+                        if (!v) return;
+                        const next = v as AdapterId;
+                        if (props.mode === "draft") {
+                          props.draft.setAdapterId(next);
+                        } else {
+                          savedAdapterId.set(next);
+                        }
+                        connectionMessage.set(null);
+                      }}
+                    />
+                  }
+                >
+                  <View
+                    testID="connection-fixed-api-type"
+                    class="h-9 flex-row items-center rounded-lg border border-border bg-muted px-3"
+                  >
+                    <Text class="truncate text-sm text-foreground">
+                      {getAdapterLabel(currentAdapterId())}
+                    </Text>
+                  </View>
+                </If>
               </FormField>
 
               <FormField

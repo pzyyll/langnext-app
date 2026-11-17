@@ -1,6 +1,7 @@
 import { batch, signal, Storage } from "nsh";
 import { t } from "nsh/i18n";
 import { listRemoteModels, testAdapterConnection } from "../../services/protocols/adapters";
+import { isProtocolAllowedForPreset } from "../../services/protocols/presets";
 import type { AdapterId } from "../../services/protocols/types";
 import { inspectBaseUrl } from "./connection";
 import type {
@@ -172,6 +173,9 @@ export async function saveChannelDraft(input: SaveChannelDraftInput): Promise<Pr
     if (!displayName) {
       throw new Error(t("models.error.displayNameRequired"));
     }
+    if (!isProtocolAllowedForPreset(input.presetId, input.adapterId)) {
+      throw new Error(t("models.error.unsupportedProtocol"));
+    }
 
     const urlCheck = inspectBaseUrl(input.baseUrl ?? "");
     if (!urlCheck.ok) {
@@ -238,6 +242,9 @@ export async function updateChannel(input: UpdateChannelInput): Promise<Provider
     const displayName = input.displayName.trim();
     if (!displayName) {
       throw new Error(t("models.error.displayNameRequired"));
+    }
+    if (!isProtocolAllowedForPreset(current.presetId, input.adapterId)) {
+      throw new Error(t("models.error.unsupportedProtocol"));
     }
 
     const urlCheck = inspectBaseUrl(input.baseUrl ?? "");

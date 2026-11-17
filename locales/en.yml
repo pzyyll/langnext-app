@@ -165,6 +165,7 @@ models:
     modelsDoneOne: Deleted %{count} model
   error:
     displayNameRequired: Display name is required.
+    unsupportedProtocol: Selected API protocol is not supported by this provider.
     invalidBaseUrl: Invalid base URL.
     baseUrlInvalid: Enter a valid http:// or https:// base URL.
     baseUrlScheme: Base URL must start with https:// or http://.
