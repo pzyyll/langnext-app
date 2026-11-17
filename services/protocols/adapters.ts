@@ -14,31 +14,26 @@ export const ADAPTER_SPECS: readonly AdapterSpec[] = [
     id: "openai-compatible",
     label: "OpenAI Chat Completions",
     defaultBaseUrl: "https://api.openai.com/v1",
-    defaultCredentialKind: "bearer",
   },
   {
     id: "openai-responses",
     label: "OpenAI Responses",
     defaultBaseUrl: "https://api.openai.com/v1",
-    defaultCredentialKind: "bearer",
   },
   {
     id: "anthropic",
     label: "Anthropic Messages",
     defaultBaseUrl: "https://api.anthropic.com",
-    defaultCredentialKind: "api_key",
   },
   {
     id: "gemini",
     label: "Google Gemini",
     defaultBaseUrl: "https://generativelanguage.googleapis.com",
-    defaultCredentialKind: "api_key",
   },
   {
     id: "deepseek",
     label: "DeepSeek",
     defaultBaseUrl: "https://api.deepseek.com",
-    defaultCredentialKind: "bearer",
   },
 ];
 
@@ -98,6 +93,13 @@ function inferCapabilitiesFromId(modelId: string): DiscoveredRemoteModel["capabi
   };
 }
 
+/**
+ * Builds the models endpoint for an adapter.
+ *
+ * The adapter owns how the token travels on the wire: OpenAI-style APIs expect
+ * `Authorization: Bearer`, Anthropic expects `x-api-key`, Gemini expects a `key`
+ * query parameter. A missing token means the endpoint needs no authentication.
+ */
 function createHeadersAndEndpoint(
   params: AdapterRequestParams,
   queryExtras: Record<string, string> = {},
@@ -107,7 +109,7 @@ function createHeadersAndEndpoint(
     Accept: "application/json",
   };
   const query = new URLSearchParams(queryExtras);
-  const token = params.credentialKind === "none" ? null : params.credential?.trim() || null;
+  const token = params.credential?.trim() || null;
 
   let path: string;
   if (params.adapterId === "anthropic") {
@@ -115,21 +117,13 @@ function createHeadersAndEndpoint(
     path = `${base}/v1/models`;
     headers["anthropic-version"] = "2023-06-01";
     if (token) {
-      if (params.credentialKind === "bearer") {
-        headers.Authorization = `Bearer ${token}`;
-      } else {
-        headers["x-api-key"] = token;
-      }
+      headers["x-api-key"] = token;
     }
   } else if (params.adapterId === "gemini") {
     const base = root.replace(/\/v1beta$/, "").replace(/\/v1$/, "");
     path = `${base}/v1beta/models`;
     if (token) {
-      if (params.credentialKind === "bearer") {
-        headers.Authorization = `Bearer ${token}`;
-      } else {
-        query.set("key", token);
-      }
+      query.set("key", token);
     }
   } else {
     path = `${root}/models`;
@@ -193,7 +187,7 @@ async function fetchJsonPage(
     if (status === 401 || status === 403) {
       throw new ProviderProtocolError(
         "auth",
-        `Authentication failed (HTTP ${status}). Check credential kind and token.`,
+        `Authentication failed (HTTP ${status}). Check the API key for this channel.`,
         status,
       );
     }

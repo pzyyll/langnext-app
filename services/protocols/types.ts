@@ -6,15 +6,11 @@ export type AdapterId =
   | "gemini"
   | "deepseek";
 
-/** Authentication scheme applied when calling a provider endpoint. */
-export type CredentialKind = "api_key" | "bearer" | "none";
-
 /** Descriptor for a supported provider protocol adapter. */
 export interface AdapterSpec {
   id: AdapterId;
   label: string;
   defaultBaseUrl: string;
-  defaultCredentialKind: CredentialKind;
 }
 
 /** Normalized remote model entry returned by a protocol adapter. */
@@ -58,7 +54,6 @@ export class ProviderProtocolError extends Error {
 export interface AdapterRequestParams {
   adapterId: AdapterId;
   baseUrl: string | null;
-  credentialKind: CredentialKind;
   credential: string | null;
   signal?: AbortSignal;
   timeoutMs?: number;

@@ -1,4 +1,4 @@
-import type { AdapterId, CredentialKind } from "../../services/protocols/types";
+import type { AdapterId } from "../../services/protocols/types";
 
 export interface CapabilityFlags {
   text: boolean;
@@ -30,7 +30,6 @@ export interface ProviderChannel {
   displayName: string;
   adapterId: AdapterId;
   baseUrl: string | null;
-  credentialKind: CredentialKind;
   hasCredential: boolean;
   enabled: boolean;
   sortOrder: number;
@@ -67,7 +66,6 @@ export interface CreateChannelInput {
   displayName: string;
   adapterId: AdapterId;
   baseUrl: string | null;
-  credentialKind: CredentialKind;
   credential: string | null;
   enabled: boolean;
   allowInsecureHttp: boolean;
@@ -79,7 +77,6 @@ export interface UpdateChannelInput {
   displayName: string;
   adapterId: AdapterId;
   baseUrl: string | null;
-  credentialKind: CredentialKind;
   credentialUpdate: CredentialUpdate;
   enabled: boolean;
   allowInsecureHttp: boolean;

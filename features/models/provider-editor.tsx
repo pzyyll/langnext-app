@@ -14,7 +14,7 @@ import {
   getAdapterDefaultBaseUrl,
   getAdapterLabel,
 } from "../../services/protocols/adapters";
-import type { AdapterId, CredentialKind } from "../../services/protocols/types";
+import type { AdapterId } from "../../services/protocols/types";
 import { AddModelDialog } from "./add-model-dialog";
 import { inspectBaseUrl } from "./connection";
 import { EditModelDialog } from "./edit-model-dialog";
@@ -39,12 +39,6 @@ const ADAPTER_ITEMS: SelectItem[] = ADAPTER_SPECS.map((spec) => ({
   title: spec.label,
 }));
 
-const CREDENTIAL_KIND_ITEMS: SelectItem[] = [
-  { value: "api_key", title: "API Key" },
-  { value: "bearer", title: "Bearer Token" },
-  { value: "none", title: "None" },
-];
-
 type CredentialDraftMode = "keep" | "replace" | "clear";
 
 interface ProviderEditorProps {
@@ -58,7 +52,6 @@ interface ProviderEditorProps {
 export function ProviderEditor(props: ProviderEditorProps) {
   const draftAdapterId = signal<AdapterId>(props.channel.adapterId);
   const draftBaseUrl = signal(props.channel.baseUrl ?? "");
-  const draftCredentialKind = signal<CredentialKind>(props.channel.credentialKind);
   const credentialMode = signal<CredentialDraftMode>("keep");
   const draftCredential = signal("");
   const draftAllowInsecureHttp = signal(
@@ -85,7 +78,6 @@ export function ProviderEditor(props: ProviderEditorProps) {
   const loadFromChannel = (ch: ProviderChannel) => {
     draftAdapterId.set(ch.adapterId);
     draftBaseUrl.set(ch.baseUrl ?? "");
-    draftCredentialKind.set(ch.credentialKind);
     credentialMode.set("keep");
     draftCredential.set("");
     draftAllowInsecureHttp.set(
@@ -103,11 +95,8 @@ export function ProviderEditor(props: ProviderEditorProps) {
     const ch = props.channel;
     if (draftAdapterId() !== ch.adapterId) return true;
     if ((urlCheck().normalizedBaseUrl ?? "") !== (ch.baseUrl ?? "")) return true;
-    if (draftCredentialKind() !== ch.credentialKind) return true;
-    if (draftCredentialKind() !== "none") {
-      if (credentialMode() === "clear" && ch.hasCredential) return true;
-      if (credentialMode() === "replace" && draftCredential().trim().length > 0) return true;
-    }
+    if (credentialMode() === "clear" && ch.hasCredential) return true;
+    if (credentialMode() === "replace" && draftCredential().trim().length > 0) return true;
     const savedInsecure =
       inspectBaseUrl(ch.baseUrl ?? "").isInsecureHttp && ch.insecureHttpConfirmedAt !== null;
     if (draftAllowInsecureHttp() !== savedInsecure) return true;
@@ -136,11 +125,7 @@ export function ProviderEditor(props: ProviderEditorProps) {
     const check = urlCheck();
     if (!check.ok) return false;
     if (check.isInsecureHttp && !draftAllowInsecureHttp()) return false;
-    if (
-      draftCredentialKind() !== "none" &&
-      credentialMode() === "replace" &&
-      draftCredential().trim().length === 0
-    ) {
+    if (credentialMode() === "replace" && draftCredential().trim().length === 0) {
       return false;
     }
     return true;
@@ -182,7 +167,7 @@ export function ProviderEditor(props: ProviderEditorProps) {
     saveError.set(null);
 
     let credentialUpdate: CredentialUpdate = { mode: "keep" };
-    if (draftCredentialKind() === "none" || credentialMode() === "clear") {
+    if (credentialMode() === "clear") {
       credentialUpdate = { mode: "clear" };
     } else if (credentialMode() === "replace") {
       credentialUpdate = { mode: "replace", value: draftCredential().trim() };
@@ -195,7 +180,6 @@ export function ProviderEditor(props: ProviderEditorProps) {
         displayName: props.channel.displayName,
         adapterId: draftAdapterId(),
         baseUrl: urlCheck().normalizedBaseUrl,
-        credentialKind: draftCredentialKind(),
         credentialUpdate,
         enabled: props.channel.enabled,
         allowInsecureHttp: draftAllowInsecureHttp(),
@@ -231,7 +215,7 @@ export function ProviderEditor(props: ProviderEditorProps) {
   const tokenPlaceholder = () => {
     if (credentialMode() === "clear") return "Stored token will be cleared on Save";
     if (props.channel.hasCredential) return "Stored token retained (type to replace)";
-    return "Enter API token";
+    return "Paste API key";
   };
 
   const compactLayout = () => windowSize().width < 860;
@@ -332,31 +316,17 @@ export function ProviderEditor(props: ProviderEditorProps) {
           <Card testID="connection-card" class={compactLayout() ? "p-4" : undefined}>
             <SectionHeading title="Connection" />
 
-            <View class="flex-row flex-wrap gap-4">
-              <FormField label="API Type" class="min-w-48 flex-1">
-                <Select
-                  testID="connection-adapter-select"
-                  accessibilityLabel="API Type"
-                  items={ADAPTER_ITEMS}
-                  value={draftAdapterId()}
-                  onChange={(v) => {
-                    if (v) draftAdapterId.set(v as AdapterId);
-                  }}
-                />
-              </FormField>
-
-              <FormField label="Credential Type" class="min-w-40 flex-1">
-                <Select
-                  testID="connection-credential-kind-select"
-                  accessibilityLabel="Credential Type"
-                  items={CREDENTIAL_KIND_ITEMS}
-                  value={draftCredentialKind()}
-                  onChange={(v) => {
-                    if (v) draftCredentialKind.set(v as CredentialKind);
-                  }}
-                />
-              </FormField>
-            </View>
+            <FormField label="API Type">
+              <Select
+                testID="connection-adapter-select"
+                accessibilityLabel="API Type"
+                items={ADAPTER_ITEMS}
+                value={draftAdapterId()}
+                onChange={(v) => {
+                  if (v) draftAdapterId.set(v as AdapterId);
+                }}
+              />
+            </FormField>
 
             <FormField label="Base URL" error={urlCheck().error}>
               <Input
@@ -382,57 +352,55 @@ export function ProviderEditor(props: ProviderEditorProps) {
               />
             </If>
 
-            <If when={draftCredentialKind() !== "none"}>
-              <View class="gap-1.5">
-                <View class="flex-row items-center justify-between">
-                  <Text class="text-xs font-medium text-foreground">API Token</Text>
-                  <If when={props.channel.hasCredential}>
-                    <If
-                      when={credentialMode() === "clear"}
-                      else={
-                        <Button
-                          testID="clear-token-button"
-                          size="sm"
-                          variant="ghost"
-                          label="Reset token"
-                          onPress={() => {
-                            credentialMode.set("clear");
-                            draftCredential.set("");
-                          }}
-                        />
-                      }
-                    >
+            <View class="gap-1.5">
+              <View class="flex-row items-center justify-between">
+                <Text class="text-xs font-medium text-foreground">API Key</Text>
+                <If when={props.channel.hasCredential}>
+                  <If
+                    when={credentialMode() === "clear"}
+                    else={
                       <Button
-                        testID="keep-token-button"
+                        testID="clear-token-button"
                         size="sm"
                         variant="ghost"
-                        label="Keep stored token"
+                        label="Reset token"
                         onPress={() => {
-                          credentialMode.set("keep");
+                          credentialMode.set("clear");
                           draftCredential.set("");
                         }}
                       />
-                    </If>
-                  </If>
-                </View>
-                <Input
-                  testID="connection-token-input"
-                  accessibilityLabel="API Token"
-                  masked
-                  readonly={credentialMode() === "clear"}
-                  placeholder={tokenPlaceholder()}
-                  value={draftCredential()}
-                  onChange={(v) => {
-                    draftCredential.set(v);
-                    if (v.length > 0) {
-                      credentialMode.set("replace");
-                    } else if (credentialMode() === "replace") {
-                      credentialMode.set("keep");
                     }
-                  }}
-                />
+                  >
+                    <Button
+                      testID="keep-token-button"
+                      size="sm"
+                      variant="ghost"
+                      label="Keep stored token"
+                      onPress={() => {
+                        credentialMode.set("keep");
+                        draftCredential.set("");
+                      }}
+                    />
+                  </If>
+                </If>
               </View>
-            </If>
+              <Input
+                testID="connection-token-input"
+                accessibilityLabel="API Key"
+                masked
+                readonly={credentialMode() === "clear"}
+                placeholder={tokenPlaceholder()}
+                value={draftCredential()}
+                onChange={(v) => {
+                  draftCredential.set(v);
+                  if (v.length > 0) {
+                    credentialMode.set("replace");
+                  } else if (credentialMode() === "replace") {
+                    credentialMode.set("keep");
+                  }
+                }}
+              />
+            </View>
 
             <If when={saveError() !== null}>
               <Text role="alert" class="text-xs text-destructive">

@@ -179,7 +179,7 @@ export async function createChannel(input: CreateChannelInput): Promise<Provider
       throw new Error("Confirm using unencrypted http:// for non-local hosts before saving.");
     }
 
-    const tokenValue = input.credentialKind === "none" ? null : input.credential?.trim() || null;
+    const tokenValue = input.credential?.trim() || null;
     const timestamp = nowIso();
     const existing = channelsSignal();
     const maxSortOrder = existing.reduce((max, ch) => Math.max(max, ch.sortOrder), -1);
@@ -189,7 +189,6 @@ export async function createChannel(input: CreateChannelInput): Promise<Provider
       displayName,
       adapterId: input.adapterId,
       baseUrl: urlCheck.normalizedBaseUrl,
-      credentialKind: input.credentialKind,
       hasCredential: tokenValue !== null,
       enabled: input.enabled,
       sortOrder: maxSortOrder + 1,
@@ -241,7 +240,7 @@ export async function updateChannel(input: UpdateChannelInput): Promise<Provider
     const timestamp = nowIso();
     let hasCredential = current.hasCredential;
 
-    if (input.credentialKind === "none" || input.credentialUpdate.mode === "clear") {
+    if (input.credentialUpdate.mode === "clear") {
       await writeSecret(current.id, null);
       hasCredential = false;
     } else if (input.credentialUpdate.mode === "replace") {
@@ -263,7 +262,6 @@ export async function updateChannel(input: UpdateChannelInput): Promise<Provider
       displayName,
       adapterId: input.adapterId,
       baseUrl: urlCheck.normalizedBaseUrl,
-      credentialKind: input.credentialKind,
       hasCredential,
       enabled: input.enabled,
       revision: current.revision + 1,
@@ -397,11 +395,10 @@ export async function testChannelConnection(
     throw new Error("Confirm using unencrypted http:// before testing this host.");
   }
 
-  const secret = channel.credentialKind === "none" ? null : await readSecret(channel.id);
+  const secret = await readSecret(channel.id);
   return testAdapterConnection({
     adapterId: adapterIdOverride ?? channel.adapterId,
     baseUrl: urlCheck.normalizedBaseUrl,
-    credentialKind: channel.credentialKind,
     credential: secret,
     signal: abortSignal,
   });
@@ -425,14 +422,13 @@ export async function syncChannelModels(
     throw new Error("Confirm using unencrypted http:// before fetching models.");
   }
 
-  const secret = channel.credentialKind === "none" ? null : await readSecret(channel.id);
+  const secret = await readSecret(channel.id);
 
   let discovered;
   try {
     discovered = await listRemoteModels({
       adapterId: syncAdapterId,
       baseUrl: urlCheck.normalizedBaseUrl,
-      credentialKind: channel.credentialKind,
       credential: secret,
       signal: abortSignal,
     });

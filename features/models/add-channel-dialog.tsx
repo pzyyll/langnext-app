@@ -6,12 +6,8 @@ import { Input } from "../../components/ui/input";
 import { Select, type SelectItem } from "../../components/ui/select";
 import { Switch } from "../../components/ui/switch";
 import { toast } from "../../components/ui/toast";
-import {
-  ADAPTER_SPECS,
-  getAdapterDefaultBaseUrl,
-  getAdapterSpec,
-} from "../../services/protocols/adapters";
-import type { AdapterId, CredentialKind } from "../../services/protocols/types";
+import { ADAPTER_SPECS, getAdapterDefaultBaseUrl } from "../../services/protocols/adapters";
+import type { AdapterId } from "../../services/protocols/types";
 import { inspectBaseUrl } from "./connection";
 import { FormField } from "./form-field";
 import { createChannel } from "./store";
@@ -26,19 +22,11 @@ const ADAPTER_ITEMS: SelectItem[] = ADAPTER_SPECS.map((spec) => ({
   title: spec.label,
 }));
 
-const CREDENTIAL_KIND_ITEMS: SelectItem[] = [
-  { value: "api_key", title: "API Key" },
-  { value: "bearer", title: "Bearer Token" },
-  { value: "none", title: "None" },
-];
-
 /** Modal dialog for adding a new provider channel. */
 export function AddChannelDialog(props: AddChannelDialogProps) {
   const displayName = signal("");
   const adapterId = signal<AdapterId>("openai-compatible");
   const baseUrl = signal("");
-  const credentialKind = signal<CredentialKind>("bearer");
-  const credentialKindTouched = signal(false);
   const credential = signal("");
   const allowInsecureHttp = signal(false);
   const enabled = signal(true);
@@ -50,8 +38,6 @@ export function AddChannelDialog(props: AddChannelDialogProps) {
       displayName.set("");
       adapterId.set("openai-compatible");
       baseUrl.set("");
-      credentialKind.set("bearer");
-      credentialKindTouched.set(false);
       credential.set("");
       allowInsecureHttp.set(false);
       enabled.set(true);
@@ -63,12 +49,7 @@ export function AddChannelDialog(props: AddChannelDialogProps) {
   const urlCheck = () => inspectBaseUrl(baseUrl());
 
   const handleAdapterChange = (next: string | null) => {
-    if (!next) return;
-    const id = next as AdapterId;
-    adapterId.set(id);
-    if (!credentialKindTouched()) {
-      credentialKind.set(getAdapterSpec(id).defaultCredentialKind);
-    }
+    if (next) adapterId.set(next as AdapterId);
   };
 
   const handleSubmit = async () => {
@@ -96,8 +77,7 @@ export function AddChannelDialog(props: AddChannelDialogProps) {
         displayName: trimmedName,
         adapterId: adapterId(),
         baseUrl: check.normalizedBaseUrl,
-        credentialKind: credentialKind(),
-        credential: credentialKind() === "none" ? null : credential(),
+        credential: credential(),
         enabled: enabled(),
         allowInsecureHttp: allowInsecureHttp(),
       });
@@ -186,32 +166,16 @@ export function AddChannelDialog(props: AddChannelDialogProps) {
         />
       </If>
 
-      <FormField label="Credential Type">
-        <Select
-          testID="add-channel-credential-kind-select"
-          accessibilityLabel="Credential Type"
-          items={CREDENTIAL_KIND_ITEMS}
-          value={credentialKind()}
-          onChange={(v) => {
-            if (!v) return;
-            credentialKindTouched.set(true);
-            credentialKind.set(v as CredentialKind);
-          }}
+      <FormField label="API Key">
+        <Input
+          testID="add-channel-token-input"
+          accessibilityLabel="API Key"
+          masked
+          placeholder="Paste API key"
+          value={credential()}
+          onChange={(v) => credential.set(v)}
         />
       </FormField>
-
-      <If when={credentialKind() !== "none"}>
-        <FormField label="API Token">
-          <Input
-            testID="add-channel-token-input"
-            accessibilityLabel="API Token"
-            masked
-            placeholder="sk-..."
-            value={credential()}
-            onChange={(v) => credential.set(v)}
-          />
-        </FormField>
-      </If>
 
       <Switch
         testID="add-channel-enabled-switch"
