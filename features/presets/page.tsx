@@ -28,6 +28,7 @@ import {
 } from "./draft";
 import { PresetEditor } from "./editor";
 import { readAvailableModelChoices, summarizePresetModels } from "./model-choices";
+import type { TemplateEditableField } from "./prompt-templates";
 import { presetsStore } from "./store";
 import { PresetsStoreError, type PresetValidationField, type TranslationPreset } from "./types";
 
@@ -43,18 +44,22 @@ export function PresetsPage(props: PresetsPageProps) {
   }
 
   const selectedIdSignal = signal<string | null>(null);
+  const selectedTemplateIdSignal = signal<string | null>(null);
   const draftSignal = signal<PresetDraft | null>(null);
   const baselineSignal = signal<PresetDraft | null>(null);
   const autoFocusNameSignal = signal<boolean>(false);
   const errorMessageSignal = signal<string | null>(null);
   const errorFieldSignal = signal<PresetValidationField | null>(null);
   const errorFallbackIndexSignal = signal<number | null>(null);
+  const errorTemplateIdSignal = signal<string | null>(null);
 
   let nameInputRef: InputRef | null = null;
   let primaryModelRef: ViewRef | null = null;
   const fallbackRefs = new Map<number, ViewRef>();
   let temperatureInputRef: InputRef | null = null;
   let maxTokensInputRef: InputRef | null = null;
+  const templateFieldRefs = new Map<string, Partial<Record<TemplateEditableField, InputRef>>>();
+  let pendingTemplateFocus: { templateId: string; field: TemplateEditableField } | null = null;
 
   const unregisterGuard = props.onRegisterLeaveGuard?.(() => !presetsStore.mutating());
   if (unregisterGuard) {
@@ -71,6 +76,7 @@ export function PresetsPage(props: PresetsPageProps) {
     const nextDraft = createDraftFromPreset(first);
     batch(() => {
       selectedIdSignal.set(first.id);
+      selectedTemplateIdSignal.set(first.engine.templates[0]?.id ?? null);
       baselineSignal.set(cloneDraft(nextDraft));
       draftSignal.set(nextDraft);
     });
@@ -101,9 +107,15 @@ export function PresetsPage(props: PresetsPageProps) {
     errorMessageSignal.set(null);
     errorFieldSignal.set(null);
     errorFallbackIndexSignal.set(null);
+    errorTemplateIdSignal.set(null);
+    pendingTemplateFocus = null;
   };
 
-  const focusField = (field: PresetValidationField | undefined, fallbackIndex?: number) => {
+  const focusField = (
+    field: PresetValidationField | undefined,
+    fallbackIndex?: number,
+    templateId?: string,
+  ) => {
     if (field === "primaryModel") {
       queueMicrotask(() => primaryModelRef?.focus());
       return;
@@ -120,6 +132,24 @@ export function PresetsPage(props: PresetsPageProps) {
       queueMicrotask(() => maxTokensInputRef?.focus());
       return;
     }
+    if (
+      (field === "templateName" || field === "systemTemplate" || field === "userTemplate") &&
+      templateId
+    ) {
+      const targetField: TemplateEditableField = field;
+      if (selectedTemplateIdSignal() !== templateId) {
+        pendingTemplateFocus = { templateId, field: targetField };
+        selectedTemplateIdSignal.set(templateId);
+      }
+      queueMicrotask(() => {
+        const node = templateFieldRefs.get(templateId)?.[targetField];
+        if (node) {
+          pendingTemplateFocus = null;
+          node.focus();
+        }
+      });
+      return;
+    }
     if (field === "name" || !field) {
       queueMicrotask(() => nameInputRef?.focus());
     }
@@ -127,8 +157,15 @@ export function PresetsPage(props: PresetsPageProps) {
 
   const applySavedRecord = (record: TranslationPreset) => {
     const nextDraft = createDraftFromPreset(record);
+    const samePreset = selectedIdSignal() === record.id;
+    const currentTpl = selectedTemplateIdSignal();
+    const keepTpl =
+      samePreset &&
+      currentTpl !== null &&
+      record.engine.templates.some((tpl) => tpl.id === currentTpl);
     batch(() => {
       selectedIdSignal.set(record.id);
+      selectedTemplateIdSignal.set(keepTpl ? currentTpl : (record.engine.templates[0]?.id ?? null));
       baselineSignal.set(cloneDraft(nextDraft));
       draftSignal.set(nextDraft);
       autoFocusNameSignal.set(false);
@@ -144,6 +181,7 @@ export function PresetsPage(props: PresetsPageProps) {
     }
     batch(() => {
       selectedIdSignal.set(null);
+      selectedTemplateIdSignal.set(null);
       baselineSignal.set(null);
       draftSignal.set(null);
       autoFocusNameSignal.set(false);
@@ -156,6 +194,7 @@ export function PresetsPage(props: PresetsPageProps) {
     const empty = createEmptyDraft();
     batch(() => {
       selectedIdSignal.set(null);
+      selectedTemplateIdSignal.set(empty.templates[0]?.id ?? null);
       baselineSignal.set(cloneDraft(empty));
       draftSignal.set(empty);
       autoFocusNameSignal.set(true);
@@ -195,12 +234,14 @@ export function PresetsPage(props: PresetsPageProps) {
         errorMessageSignal.set(error.message);
         errorFieldSignal.set(error.field ?? null);
         errorFallbackIndexSignal.set(error.fallbackIndex ?? null);
-        focusField(error.field, error.fallbackIndex);
+        errorTemplateIdSignal.set(error.templateId ?? null);
+        focusField(error.field, error.fallbackIndex, error.templateId);
         return;
       }
       errorMessageSignal.set(error instanceof Error ? error.message : String(error));
       errorFieldSignal.set(null);
       errorFallbackIndexSignal.set(null);
+      errorTemplateIdSignal.set(null);
     }
   };
 
@@ -214,7 +255,13 @@ export function PresetsPage(props: PresetsPageProps) {
     }
     const baseline = baselineSignal();
     if (baseline) {
-      draftSignal.set(cloneDraft(baseline));
+      const currentTpl = selectedTemplateIdSignal();
+      const keepTpl =
+        currentTpl !== null && baseline.templates.some((tpl) => tpl.id === currentTpl);
+      batch(() => {
+        selectedTemplateIdSignal.set(keepTpl ? currentTpl : (baseline.templates[0]?.id ?? null));
+        draftSignal.set(cloneDraft(baseline));
+      });
     }
   };
 
@@ -395,13 +442,16 @@ export function PresetsPage(props: PresetsPageProps) {
           draft={draftSignal()!}
           dirty={isDirty()}
           saving={presetsStore.mutating()}
+          selectedTemplateId={selectedTemplateIdSignal()}
           modelChoices={modelChoices()}
           modelsError={modelsError()}
           errorMessage={errorMessageSignal()}
           errorField={errorFieldSignal()}
           errorFallbackIndex={errorFallbackIndexSignal()}
+          errorTemplateId={errorTemplateIdSignal()}
           autoFocusName={autoFocusNameSignal()}
           onChange={(patch) => updateDraft(patch)}
+          onSelectTemplate={(templateId) => selectedTemplateIdSignal.set(templateId)}
           onSave={() => void handleSave()}
           onCancel={() => handleCancel()}
           onManageModels={() => props.onNavigateToModels?.()}
@@ -423,6 +473,22 @@ export function PresetsPage(props: PresetsPageProps) {
           }}
           onMaxTokensRef={(node) => {
             maxTokensInputRef = node;
+          }}
+          onTemplateFieldRef={(templateId, field, node) => {
+            const existing = templateFieldRefs.get(templateId) ?? {};
+            existing[field] = node;
+            templateFieldRefs.set(templateId, existing);
+            if (
+              pendingTemplateFocus &&
+              pendingTemplateFocus.templateId === templateId &&
+              pendingTemplateFocus.field === field
+            ) {
+              pendingTemplateFocus = null;
+              queueMicrotask(() => node.focus());
+            }
+          }}
+          onClearTemplateRefs={(templateId) => {
+            templateFieldRefs.delete(templateId);
           }}
         />
       </If>

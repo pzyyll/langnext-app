@@ -409,3 +409,201 @@ test("presets ui: retains unavailable bindings", async () => {
   await errApp.press("id:preset-manage-models");
   await errApp.waitFor("id:models-page");
 });
+
+test("presets ui: saves multiple prompts and the chosen default", async () => {
+  const seed = makeSeedStorage({
+    channels: [makeChannel({ id: "ch-openai", displayName: "OpenAI Main", enabled: true })],
+    models: [
+      makeModel({ id: "m-1", providerId: "ch-openai", modelKey: "gpt-4.1-mini", enabled: true }),
+    ],
+  });
+
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: seed,
+  });
+
+  await app.press("id:nav-presets");
+  await app.waitFor("id:empty-add-preset-button");
+  await app.press("id:empty-add-preset-button");
+  await app.waitFor("id:preset-name");
+  await app.type("id:preset-name", "Multi Prompt Preset");
+  await app.press("id:preset-primary-model");
+  await app.waitFor("role:option[OpenAI Main · gpt-4.1-mini]");
+  await app.press("role:option[OpenAI Main · gpt-4.1-mini]");
+
+  // Rename and edit the initial prompt template with multi-line Enter/Return input.
+  await app.waitFor("id:preset-template-name");
+  await app.clear("id:preset-template-name");
+  await app.type("id:preset-template-name", "Standard");
+
+  await app.clear("id:preset-template-system");
+  await app.type(
+    "id:preset-template-system",
+    "Line 1\nTranslate {{source_language}} to {{target_language}}.",
+  );
+  await app.clear("id:preset-template-user");
+  await app.type("id:preset-template-user", "Source:\n{{text}}");
+  expect(app.value("id:preset-template-system")).toBe(
+    "Line 1\nTranslate {{source_language}} to {{target_language}}.",
+  );
+  expect(app.value("id:preset-template-user")).toBe("Source:\n{{text}}");
+
+  // Add a second template, edit it, and ensure unsaved edits survive template switches.
+  await app.press("id:preset-add-template");
+  await app.waitUntil(() => app.value("id:preset-template-name") === "Template 2");
+  await app.clear("id:preset-template-name");
+  await app.type("id:preset-template-name", "Formal");
+  await app.clear("id:preset-template-system");
+  await app.type("id:preset-template-system", "Formal tone\nNo slang.");
+
+  await app.press("id:preset-template-item-0");
+  await app.waitUntil(() => app.value("id:preset-template-name") === "Standard");
+  expect(app.value("id:preset-template-system")).toBe(
+    "Line 1\nTranslate {{source_language}} to {{target_language}}.",
+  );
+
+  await app.press("id:preset-template-item-1");
+  await app.waitUntil(() => app.value("id:preset-template-name") === "Formal");
+  expect(app.value("id:preset-template-system")).toBe("Formal tone\nNo slang.");
+
+  // Mark Formal as default; only one Default badge appears.
+  await app.press("id:preset-template-set-default");
+  expect(app.count("id:preset-template-default-badge")).toBe(1);
+  expect(app.texts().filter((label) => label === "Default")).toHaveLength(1);
+
+  // Validation error in a non-active template selects it and focuses its invalid field.
+  await app.press("id:preset-template-item-0");
+  await app.waitUntil(() => app.value("id:preset-template-name") === "Standard");
+  await app.clear("id:preset-template-user");
+  await app.type("id:preset-template-user", "Missing placeholder");
+  await app.press("id:preset-template-item-1");
+  await app.waitUntil(() => app.value("id:preset-template-name") === "Formal");
+
+  await app.press("id:preset-save");
+  await app.waitUntil(() => app.value("id:preset-template-name") === "Standard");
+  expect(app.texts()).toContain("User prompt must contain {{text}} once.");
+
+  // Fix Standard user prompt while verifying focus landed on preset-template-user.
+  await app.keyboard.press("x");
+  expect(app.value("id:preset-template-user")).toBe("Missing placeholderx");
+  await app.clear("id:preset-template-user");
+  await app.type("id:preset-template-user", "Source:\n{{text}}");
+
+  await app.press("id:preset-save");
+  await app.waitUntil(() => Boolean(app.storage()[PRESETS_STORAGE_KEY]));
+
+  const persisted = app.storage();
+  const parsed = JSON.parse(persisted[PRESETS_STORAGE_KEY]!) as { items: TranslationPreset[] };
+  expect(parsed.items[0]!.engine.templates).toHaveLength(2);
+  const formalTpl = parsed.items[0]!.engine.templates.find((tpl) => tpl.name === "Formal");
+  expect(formalTpl).toBeDefined();
+  expect(parsed.items[0]!.engine.defaultTemplateId).toBe(formalTpl!.id);
+
+  // Reopen app and confirm templates, multi-line bodies, and single Default badge persist.
+  const reopened = await open(APP_ENTRY, {
+    ...viewport,
+    storage: persisted,
+  });
+  await reopened.press("id:nav-presets");
+  await reopened.waitFor("id:preset-template-name");
+  expect(reopened.count("id:preset-template-default-badge")).toBe(1);
+  await reopened.press("id:preset-template-item-0");
+  await reopened.waitUntil(() => reopened.value("id:preset-template-name") === "Standard");
+  expect(reopened.value("id:preset-template-system")).toBe(
+    "Line 1\nTranslate {{source_language}} to {{target_language}}.",
+  );
+  expect(reopened.value("id:preset-template-user")).toBe("Source:\n{{text}}");
+  await reopened.press("id:preset-template-item-1");
+  await reopened.waitUntil(() => reopened.value("id:preset-template-name") === "Formal");
+  expect(reopened.value("id:preset-template-system")).toBe("Formal tone\nNo slang.");
+});
+
+test("presets ui: removes only a nondefault prompt", async () => {
+  const seedPreset: TranslationPreset = {
+    id: "p-templates",
+    name: "Template Removal",
+    enabled: true,
+    sourceLanguage: "auto",
+    targetLanguage: "zh",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    engine: {
+      kind: "ai",
+      modelIds: ["m-1"],
+      temperature: null,
+      maxOutputTokens: null,
+      templates: [
+        {
+          id: "tpl-1",
+          name: "Primary",
+          systemTemplate: "Primary system",
+          userTemplate: "{{text}}",
+        },
+        {
+          id: "tpl-2",
+          name: "Concise",
+          systemTemplate: "Concise system",
+          userTemplate: "{{text}}",
+        },
+      ],
+      defaultTemplateId: "tpl-1",
+    },
+  };
+
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: makeSeedStorage({
+      channels: [makeChannel({ id: "ch-openai", displayName: "OpenAI Main", enabled: true })],
+      models: [
+        makeModel({ id: "m-1", providerId: "ch-openai", modelKey: "gpt-4.1-mini", enabled: true }),
+      ],
+      extra: {
+        [PRESETS_STORAGE_KEY]: JSON.stringify({ version: 1, items: [seedPreset] }),
+      },
+    }),
+  });
+
+  await app.press("id:nav-presets");
+  await app.waitFor("id:preset-template-name");
+  expect(app.value("id:preset-template-name")).toBe("Primary");
+  expect(app.enabled("id:preset-template-remove")).toBe(false);
+
+  // Switch to Concise and make it the default.
+  await app.press("id:preset-template-item-1");
+  await app.waitUntil(() => app.value("id:preset-template-name") === "Concise");
+  await app.press("id:preset-template-set-default");
+  expect(app.count("id:preset-template-default-badge")).toBe(1);
+
+  // Former default Primary is now removable, and removing it stays draft-only until Save.
+  await app.press("id:preset-template-item-0");
+  await app.waitUntil(() => app.value("id:preset-template-name") === "Primary");
+  expect(app.enabled("id:preset-template-remove")).toBe(true);
+  await app.press("id:preset-template-remove");
+  await app.waitUntil(() => app.value("id:preset-template-name") === "Concise");
+  expect(app.shows("id:preset-template-item-1")).toBe(false);
+
+  // Storage still retains both templates before Save.
+  const beforeSave = JSON.parse(app.storage()[PRESETS_STORAGE_KEY]!) as {
+    items: TranslationPreset[];
+  };
+  expect(beforeSave.items[0]!.engine.templates).toHaveLength(2);
+  expect(beforeSave.items[0]!.engine.defaultTemplateId).toBe("tpl-1");
+
+  // Single remaining default template cannot be removed.
+  expect(app.enabled("id:preset-template-remove")).toBe(false);
+
+  await app.press("id:preset-save");
+  await app.waitUntil(() => {
+    const raw = app.storage()[PRESETS_STORAGE_KEY];
+    if (!raw) return false;
+    const saved = JSON.parse(raw) as { items: TranslationPreset[] };
+    return saved.items[0]?.engine.templates.length === 1;
+  });
+
+  const savedData = JSON.parse(app.storage()[PRESETS_STORAGE_KEY]!) as {
+    items: TranslationPreset[];
+  };
+  expect(savedData.items[0]!.engine.templates[0]!.id).toBe("tpl-2");
+  expect(savedData.items[0]!.engine.defaultTemplateId).toBe("tpl-2");
+});

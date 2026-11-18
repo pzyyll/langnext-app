@@ -288,3 +288,178 @@ test("presets store: validates model order and parameters", async () => {
     ),
   ).rejects.toMatchObject({ key: "model_unavailable", field: "fallbackModel", fallbackIndex: 0 });
 });
+
+test("presets store: validates every prompt template", async () => {
+  const mem = createMemoryStorage();
+  const store = createPresetsStore(mem.storage, () => [{ id: "m-1" }]);
+  await store.load();
+
+  const base = makeBaseInput();
+
+  // Empty template list is rejected.
+  await expect(
+    store.save({
+      ...base,
+      engine: { ...base.engine, templates: [] },
+    }),
+  ).rejects.toMatchObject({ key: "templates_required", field: "templates" });
+
+  // Duplicate template IDs are rejected.
+  await expect(
+    store.save({
+      ...base,
+      engine: {
+        ...base.engine,
+        templates: [
+          { id: "tpl-dup", name: "One", systemTemplate: "", userTemplate: "{{text}}" },
+          { id: "tpl-dup", name: "Two", systemTemplate: "", userTemplate: "{{text}}" },
+        ],
+        defaultTemplateId: "tpl-dup",
+      },
+    }),
+  ).rejects.toMatchObject({ key: "template_id_duplicate", templateId: "tpl-dup" });
+
+  // Blank name on a secondary template reports templateName + that templateId.
+  await expect(
+    store.save({
+      ...base,
+      engine: {
+        ...base.engine,
+        templates: [
+          base.engine.templates[0]!,
+          { id: "tpl-2", name: "   ", systemTemplate: "", userTemplate: "{{text}}" },
+        ],
+      },
+    }),
+  ).rejects.toMatchObject({
+    key: "template_name_required",
+    field: "templateName",
+    templateId: "tpl-2",
+  });
+
+  // Dangling defaultTemplateId is rejected.
+  await expect(
+    store.save({
+      ...base,
+      engine: { ...base.engine, defaultTemplateId: "tpl-missing" },
+    }),
+  ).rejects.toMatchObject({ key: "default_template_invalid", field: "defaultTemplate" });
+
+  // Unclosed and unknown variables are rejected with field and templateId.
+  await expect(
+    store.save({
+      ...base,
+      engine: {
+        ...base.engine,
+        templates: [
+          {
+            id: "tpl-1",
+            name: "Default",
+            systemTemplate: "Translate to {{target_language",
+            userTemplate: "{{text}}",
+          },
+        ],
+      },
+    }),
+  ).rejects.toMatchObject({
+    key: "template_unclosed_variable",
+    field: "systemTemplate",
+    templateId: "tpl-1",
+  });
+
+  await expect(
+    store.save({
+      ...base,
+      engine: {
+        ...base.engine,
+        templates: [
+          {
+            id: "tpl-1",
+            name: "Default",
+            systemTemplate: "Use {{tone}}.",
+            userTemplate: "{{text}}",
+          },
+        ],
+      },
+    }),
+  ).rejects.toMatchObject({
+    key: "template_unknown_variable",
+    field: "systemTemplate",
+    templateId: "tpl-1",
+  });
+
+  // User prompt requires {{text}} exactly once.
+  await expect(
+    store.save({
+      ...base,
+      engine: {
+        ...base.engine,
+        templates: [{ id: "tpl-1", name: "Default", systemTemplate: "", userTemplate: "Hello" }],
+      },
+    }),
+  ).rejects.toMatchObject({
+    key: "user_template_text_required",
+    field: "userTemplate",
+    templateId: "tpl-1",
+  });
+
+  await expect(
+    store.save({
+      ...base,
+      engine: {
+        ...base.engine,
+        templates: [
+          {
+            id: "tpl-1",
+            name: "Default",
+            systemTemplate: "",
+            userTemplate: "{{text}} then {{ text }}",
+          },
+        ],
+      },
+    }),
+  ).rejects.toMatchObject({
+    key: "user_template_text_duplicate",
+    field: "userTemplate",
+    templateId: "tpl-1",
+  });
+
+  // Spaced variables, blank system prompt, and multi-line leading/trailing line breaks are preserved.
+  const saved = await store.save({
+    ...base,
+    engine: {
+      ...base.engine,
+      templates: [
+        {
+          id: "tpl-1",
+          name: "  Minimal  ",
+          systemTemplate: "",
+          userTemplate: "\n{{ text }}\n",
+        },
+        {
+          id: "tpl-2",
+          name: "Detailed",
+          systemTemplate: "From {{ source_language }} to {{ target_language }}\nKeep tone.",
+          userTemplate: "Text:\n{{text}}",
+        },
+      ],
+      defaultTemplateId: "tpl-2",
+    },
+  });
+
+  expect(saved.engine.defaultTemplateId).toBe("tpl-2");
+  expect(saved.engine.templates).toEqual([
+    {
+      id: "tpl-1",
+      name: "Minimal",
+      systemTemplate: "",
+      userTemplate: "\n{{ text }}\n",
+    },
+    {
+      id: "tpl-2",
+      name: "Detailed",
+      systemTemplate: "From {{ source_language }} to {{ target_language }}\nKeep tone.",
+      userTemplate: "Text:\n{{text}}",
+    },
+  ]);
+});

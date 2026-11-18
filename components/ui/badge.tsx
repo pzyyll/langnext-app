@@ -3,6 +3,7 @@ import { Text, View } from "nsh";
 export type BadgeTone = "neutral" | "primary" | "success" | "warning" | "destructive";
 
 interface BadgeProps {
+  testID?: string;
   label: string;
   tone?: BadgeTone;
   class?: string;
@@ -28,6 +29,7 @@ const TEXT_CLASSES: Record<BadgeTone, string> = {
 export function Badge(props: BadgeProps) {
   return (
     <View
+      testID={props.testID}
       class={`shrink-0 rounded-md px-1.5 py-0.5 ${CONTAINER_CLASSES[props.tone ?? "neutral"]} ${props.class ?? ""}`}
     >
       <Text class={TEXT_CLASSES[props.tone ?? "neutral"]}>{props.label}</Text>

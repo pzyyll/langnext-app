@@ -16,19 +16,23 @@ import {
   type SourceLanguageId,
 } from "./languages";
 import { ModelsSection } from "./models-section";
-import type { ModelChoice, PresetValidationField } from "./types";
+import { PromptTemplates, type TemplateEditableField } from "./prompt-templates";
+import type { ModelChoice, PresetValidationField, PromptTemplate } from "./types";
 
 interface PresetEditorProps {
   draft: PresetDraft;
   dirty: boolean;
   saving: boolean;
+  selectedTemplateId: string | null;
   modelChoices: readonly ModelChoice[];
   modelsError: string | null;
   errorMessage: string | null;
   errorField: PresetValidationField | null;
   errorFallbackIndex: number | null;
+  errorTemplateId: string | null;
   autoFocusName: boolean;
   onChange: (patch: Partial<PresetDraft>) => void;
+  onSelectTemplate: (templateId: string) => void;
   onSave: () => void;
   onCancel: () => void;
   onManageModels: () => void;
@@ -37,6 +41,8 @@ interface PresetEditorProps {
   onFallbackRef: (index: number, node: ViewRef | null) => void;
   onTemperatureRef: (node: InputRef) => void;
   onMaxTokensRef: (node: InputRef) => void;
+  onTemplateFieldRef: (templateId: string, field: TemplateEditableField, node: InputRef) => void;
+  onClearTemplateRefs: (templateId: string) => void;
 }
 
 const SOURCE_LANGUAGE_ITEMS: SelectItem[] = [AUTO_LANGUAGE, ...LANGUAGE_IDS].map((id) => ({
@@ -100,6 +106,49 @@ export function PresetEditor(props: PresetEditorProps) {
   const removeFallback = (index: number) => {
     const next = props.draft.fallbackModelIds.filter((_, i) => i !== index);
     props.onChange({ fallbackModelIds: next });
+  };
+
+  const addTemplate = () => {
+    const usedNames = new Set(props.draft.templates.map((tpl) => tpl.name.trim()));
+    let num = props.draft.templates.length + 1;
+    let name = t("presets.prompt.numberedName", { index: num });
+    while (usedNames.has(name)) {
+      num += 1;
+      name = t("presets.prompt.numberedName", { index: num });
+    }
+    const created: PromptTemplate = {
+      id: crypto.randomUUID(),
+      name,
+      systemTemplate: t("presets.prompt.defaultSystem"),
+      userTemplate: t("presets.prompt.defaultUser"),
+    };
+    props.onChange({ templates: [...props.draft.templates, created] });
+    props.onSelectTemplate(created.id);
+  };
+
+  const updateTemplate = (templateId: string, patch: Partial<PromptTemplate>) => {
+    const next = props.draft.templates.map((tpl) =>
+      tpl.id === templateId ? { ...tpl, ...patch } : tpl,
+    );
+    props.onChange({ templates: next });
+  };
+
+  const setDefaultTemplate = (templateId: string) => {
+    props.onChange({ defaultTemplateId: templateId });
+  };
+
+  const removeTemplate = (templateId: string) => {
+    if (props.draft.templates.length <= 1 || templateId === props.draft.defaultTemplateId) {
+      return;
+    }
+    const index = props.draft.templates.findIndex((tpl) => tpl.id === templateId);
+    if (index === -1) return;
+    const next = props.draft.templates.filter((tpl) => tpl.id !== templateId);
+    const nextSelected = next[Math.min(index, next.length - 1)]?.id ?? null;
+    props.onChange({ templates: next });
+    if (nextSelected) {
+      props.onSelectTemplate(nextSelected);
+    }
   };
 
   return (
@@ -239,6 +288,25 @@ export function PresetEditor(props: PresetEditorProps) {
             onFallbackRef={(index, node) => props.onFallbackRef(index, node)}
             onTemperatureRef={(node) => props.onTemperatureRef(node)}
             onMaxTokensRef={(node) => props.onMaxTokensRef(node)}
+          />
+
+          <PromptTemplates
+            templates={props.draft.templates}
+            defaultTemplateId={props.draft.defaultTemplateId}
+            selectedTemplateId={props.selectedTemplateId}
+            saving={props.saving}
+            errorMessage={props.errorMessage}
+            errorField={props.errorField}
+            errorTemplateId={props.errorTemplateId}
+            onSelectTemplate={(id) => props.onSelectTemplate(id)}
+            onAddTemplate={() => addTemplate()}
+            onUpdateTemplate={(id, patch) => updateTemplate(id, patch)}
+            onSetDefault={(id) => setDefaultTemplate(id)}
+            onRemoveTemplate={(id) => removeTemplate(id)}
+            onTemplateFieldRef={(tplId, field, node) =>
+              props.onTemplateFieldRef(tplId, field, node)
+            }
+            onClearTemplateRefs={(tplId) => props.onClearTemplateRefs(tplId)}
           />
         </View>
       </Scroll>
