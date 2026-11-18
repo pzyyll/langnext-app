@@ -12,23 +12,22 @@ import { geminiPresentation } from "../modules/ai/providers/gemini/presentation"
 import { geminiProvider } from "../modules/ai/providers/gemini/definition";
 import { openaiPresentation } from "../modules/ai/providers/openai/presentation";
 import { openaiProvider } from "../modules/ai/providers/openai/definition";
-import type { AiRegistry } from "../modules/ai/runtime/registry";
 import { aiRegistry } from "../modules/ai/runtime/registry";
 import { providerSettingsRegistry } from "../modules/ai/ui/registry";
 
 let initialized = false;
 
-function registerBuiltIns(registry: AiRegistry): void {
-  registry.registerProtocol(openAIChatProtocol);
-  registry.registerProtocol(openAIResponsesProtocol);
-  registry.registerProtocol(anthropicProtocol);
-  registry.registerProtocol(geminiProtocol);
+function registerBuiltIns(): void {
+  aiRegistry.registerProtocol(openAIChatProtocol);
+  aiRegistry.registerProtocol(openAIResponsesProtocol);
+  aiRegistry.registerProtocol(anthropicProtocol);
+  aiRegistry.registerProtocol(geminiProtocol);
 
-  registry.registerProvider(openaiProvider);
-  registry.registerProvider(geminiProvider);
-  registry.registerProvider(anthropicProvider);
-  registry.registerProvider(deepseekProvider);
-  registry.registerProvider(customProvider);
+  aiRegistry.registerProvider(openaiProvider);
+  aiRegistry.registerProvider(geminiProvider);
+  aiRegistry.registerProvider(anthropicProvider);
+  aiRegistry.registerProvider(deepseekProvider);
+  aiRegistry.registerProvider(customProvider);
 }
 
 function registerPresentations(): void {
@@ -44,11 +43,9 @@ function registerPresentations(): void {
  * definitions, then presentations, and runs once per process; importing a
  * runtime module never registers built-ins.
  */
-export function initializeAiModules(registry: AiRegistry = aiRegistry): void {
+export function initializeAiModules(): void {
   if (initialized) return;
-  registerBuiltIns(registry);
-  if (registry === aiRegistry) {
-    registerPresentations();
-  }
+  registerBuiltIns();
+  registerPresentations();
   initialized = true;
 }
