@@ -2,11 +2,11 @@
 
 Read [rust.md](rust.md) first. A Rust app has two test surfaces that share one driver and one selector syntax:
 
-|            | `cargo test`                             | `nsh test`                                                           |
-| ---------- | ---------------------------------------- | -------------------------------------------------------------------- |
-| Written in | Rust, `nsh_testing::Headless`            | TypeScript, `nsh/test`, `open(".")`                                  |
-| Runs       | Your crate on the real engine, no window | `cargo test` for each crate first, then every `*.test.tsx`, headless |
-| Use for    | Logic and flows, most tests              | Picking a test up on a platform with `--target`, screenshots         |
+| | `cargo test` | `nsh test` |
+|---|---|---|
+| Written in | Rust, `nsh_testing::Headless` | TypeScript, `nsh/test`, `open(".")` |
+| Runs | Your crate on the real engine, no window | `cargo test` for each crate first, then every `*.test.tsx`, headless |
+| Use for | Logic and flows, most tests | Picking a test up on a platform with `--target`, screenshots |
 
 Default to `cargo test`. It is compiled with the app, so a renamed prop is a compile error. Use `nsh test` as the one
 command to run everything, and write `*.test.tsx` when a flow must run on a real platform, since `--target` runs those
@@ -85,14 +85,14 @@ fn configured() -> Headless {
 }
 ```
 
-| Field         | For                                                                                                                                   |
-| ------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `viewport`    | The window. Test the desktop layout by making it wide; `app.set_viewport(..)` changes it mid-test                                     |
-| `environment` | `color_scheme`, `safe_area`, `reduce_motion`, `font_scale`, `rtl`, `keyboard_height`. `app.set_environment(..)` changes it            |
-| `network`     | A `StubNetwork`. Routes are `"<METHOD> <URL>"`, a bare URL is a `GET`, the URL matches whole with its query, and `*` matches anything |
-| `storage`     | `MemoryStorage::new(entries)`: start with saved state and assert persistence                                                          |
-| `clock`       | `Clock::manual(time)`: time moves only when the test moves it, with `app.run_for(d)` and `app.fast_forward(d)`                        |
-| `ui_sets`     | Only for TSX entries. A Rust root does not need them                                                                                  |
+| Field | For |
+|---|---|
+| `viewport` | The window. Test the desktop layout by making it wide; `app.set_viewport(..)` changes it mid-test |
+| `environment` | `color_scheme`, `safe_area`, `reduce_motion`, `font_scale`, `rtl`, `keyboard_height`. `app.set_environment(..)` changes it |
+| `network` | A `StubNetwork`. Routes are `"<METHOD> <URL>"`, a bare URL is a `GET`, the URL matches whole with its query, and `*` matches anything |
+| `storage` | `MemoryStorage::new(entries)`: start with saved state and assert persistence |
+| `clock` | `Clock::manual(time)`: time moves only when the test moves it, with `app.run_for(d)` and `app.fast_forward(d)` |
+| `ui_sets` | Only for TSX entries. A Rust root does not need them |
 
 Stub the network in every test that reaches it. With `network` unset, a `fetch` fails.
 
@@ -100,16 +100,16 @@ Stub the network in every test that reaches it. With `network` unset, a `fetch` 
 
 The selector syntax is in `crates/nsh-testing/src/selector.rs`.
 
-| Selector                                      | Matches                                                              |
-| --------------------------------------------- | -------------------------------------------------------------------- |
-| `Save`                                        | A test id, else a label, else a text, as written                     |
-| `id:row-3`                                    | `.test_id("row-3")`                                                  |
-| `label:Close`                                 | `.label("Close")` or `.accessibility_label("Close")`                 |
-| `text:Save`, `text:/^Saved/i`                 | A text, an input holding it, or an empty input with that placeholder |
-| `role:button`, `role:button[Save]`            | A view by role, and its name                                         |
-| `view:42`                                     | A node id, as `--trace` prints it                                    |
-| `id:list >> text:Row 3`                       | Look inside what the part before matched                             |
-| `role:button >> nth=1` or `text:Add >> nth=0` | One of several matches                                               |
+| Selector | Matches |
+|---|---|
+| `Save` | A test id, else a label, else a text, as written |
+| `id:row-3` | `.test_id("row-3")` |
+| `label:Close` | `.label("Close")` or `.accessibility_label("Close")` |
+| `text:Save`, `text:/^Saved/i` | A text, an input holding it, or an empty input with that placeholder |
+| `role:button`, `role:button[Save]` | A view by role, and its name |
+| `view:42` | A node id, as `--trace` prints it |
+| `id:list >> text:Row 3` | Look inside what the part before matched |
+| `role:button >> nth=1` or `text:Add >> nth=0` | One of several matches |
 
 A word and a colon at the start is taken as a prefix, and an unknown prefix is an error. So a text such as `Total: 5` is
 written `text:Total: 5`. Prefer `.test_id(..)` for repeated or translated things, and a label or text for what a user
@@ -118,20 +118,20 @@ the cell. Select by text there.
 
 ### Steps
 
-| Step                                                                | Does                                                                                                                          |
-| ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `press(sel)`, `long_press(sel)`, `press_at(sel, point)`             | As a tap: press down, up, press, inside a finger's touch                                                                      |
-| `type_text(sel, "text")`                                            | Focuses, then a key and a change per character, at the end of the text. A line break in a single-line input is the return key |
-| `clear(sel)`, `submit(sel)`                                         | Empties an input; the return key                                                                                              |
-| `press_key("cmd-k")`, `hold_keys(keys, down)`                       | The keymap                                                                                                                    |
-| `scroll(sel, px(3000.0))`                                           | Scrolls the view, and lists bind the rows they reach                                                                          |
-| `hover(sel)`, `right_click(sel)`, `drag(sel, by)`                   | Pointer                                                                                                                       |
-| `back()`                                                            | Pops a screen or closes a modal, as a platform does                                                                           |
-| `wait_for(sel)`, `wait_for_within(sel, d)`, `wait_for_gone(sel, d)` | Until a view matches, or until none does                                                                                      |
-| `wait_until(what, timeout, \|screen\| ..)`                          | Until any condition on the screen                                                                                             |
-| `wait(d)`                                                           | Real time. Avoid it                                                                                                           |
-| `run_for(d)`, `fast_forward(d)`                                     | Moves a manual clock; an error without one                                                                                    |
-| `on_dialog(\|d\| answer)`                                           | Answers system dialogs for the rest of the test                                                                               |
+| Step | Does |
+|---|---|
+| `press(sel)`, `long_press(sel)`, `press_at(sel, point)` | As a tap: press down, up, press, inside a finger's touch |
+| `type_text(sel, "text")` | Focuses the input unless it has the focus already, then a key and a change per character, at its caret and over its selection (headless, the caret is at the end of the text). A line break in a single-line input is the return key |
+| `clear(sel)`, `submit(sel)` | Empties an input; the return key |
+| `press_key("cmd-k")`, `hold_keys(keys, down)` | The keymap |
+| `scroll(sel, px(3000.0))` | Scrolls the view, and lists bind the rows they reach |
+| `hover(sel)`, `right_click(sel)`, `drag(sel, by)` | Pointer |
+| `back()` | Pops a screen or closes a modal, as a platform does |
+| `wait_for(sel)`, `wait_for_within(sel, d)`, `wait_for_gone(sel, d)` | Until a view matches, or until none does |
+| `wait_until(what, timeout, \|screen\| ..)` | Until any condition on the screen |
+| `wait(d)` | Real time. Avoid it |
+| `run_for(d)`, `fast_forward(d)` | Moves a manual clock; an error without one |
+| `on_dialog(\|d\| answer)` | Answers system dialogs for the rest of the test |
 
 Steps wait until the app is quiet, so do not sleep between them. Wait with `wait_for` for what a task produces.
 

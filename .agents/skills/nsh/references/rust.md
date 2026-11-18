@@ -54,12 +54,12 @@ version of the `nsh` you run; a mismatch is a build problem, not something to wo
 
 ### nsh.json
 
-| Key          | For Rust                                    | Notes                                                                                       |
-| ------------ | ------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `rust`       | `"."`, `"native"`, or a list of crate paths | Where the crate is. With a list, each crate has its own `#[native_module]` and package name |
-| `root`       | `"App"`, `"shell::Gallery"`                 | The component's path in the crate (in the first crate of a list). Without it the app is TSX |
-| `theme`      | `"theme.json"` or the theme inline          | shadcn `cssVars`. A bad path, bad JSON or another format fails the build                    |
-| `appearance` | `"system"`                                  | As in any app                                                                               |
+| Key | For Rust | Notes |
+|---|---|---|
+| `rust` | `"."`, `"native"`, or a list of crate paths | Where the crate is. With a list, each crate has its own `#[native_module]` and package name |
+| `root` | `"App"`, `"shell::Gallery"` | The component's path in the crate (in the first crate of a list). Without it the app is TSX |
+| `theme` | `"theme.json"` or the theme inline | shadcn `cssVars`. A bad path, bad JSON or another format fails the build |
+| `appearance` | `"system"` | As in any app |
 
 `examples/gallery-rs/nsh.json` is a real one, with `"rust": "native"` and `"root": "Gallery"`. Every key is in
 `website/docs/project-structure.md`.
@@ -94,14 +94,14 @@ behind your content. Put `.p_safe_area()` on the content, or leave it to a `nav_
 
 Follow `examples/gallery-rs/native/src`:
 
-| File                                  | Holds                                                                                              |
-| ------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `lib.rs`                              | `mod` lines, `#[native_module]`, the root component and nothing else                               |
-| `shell.rs`                            | The layouts: phone stack or desktop sidebar, chosen by `when(desktop, ..)`                         |
-| `nav.rs`                              | The route type, `global::<Routes>()`, `push`, `pop`, `reset`                                       |
-| `ui/`                                 | The app's own component library: `theme.rs` (colors, radii), `controls.rs`, `parts.rs`, `icons.rs` |
-| `demos/<feature>.rs`, `demos/stocks/` | One module per feature; a big feature is a directory with its store in `mod.rs`                    |
-| `assets.rs`                           | `asset!` constants                                                                                 |
+| File | Holds |
+|---|---|
+| `lib.rs` | `mod` lines, `#[native_module]`, the root component and nothing else |
+| `shell.rs` | The layouts: phone stack or desktop sidebar, chosen by `when(desktop, ..)` |
+| `nav.rs` | The route type, `global::<Routes>()`, `push`, `pop`, `reset` |
+| `ui/` | The app's own component library: `theme.rs` (colors, radii), `controls.rs`, `parts.rs`, `icons.rs` |
+| `demos/<feature>.rs`, `demos/stocks/` | One module per feature; a big feature is a directory with its store in `mod.rs` |
+| `assets.rs` | `asset!` constants |
 
 `nsh_base` draws nothing, so an app's own `ui/` is not optional: wrap each base component once, with the app's look,
 and call that wrapper everywhere. Do not repeat `.bg(..).rounded(..)` at call sites. Keep domain logic in plain Rust
@@ -248,11 +248,11 @@ in `examples/gallery-rs/native/src/shell.rs`.
 
 Every setter takes `impl IntoReactive<T>`. What you pass decides whether it can ever change:
 
-| You pass                                                                       | Result                                                         |
-| ------------------------------------------------------------------------------ | -------------------------------------------------------------- |
-| `text("Title")`, `.w(px(40.0))`                                                | Static. Set once, no effect, no allocation                     |
-| `text(count_string)`, `.opacity(fade)`, where the variable is a signal or memo | Bound directly, no closure                                     |
-| `.bg(move \|\| if up.get() { a } else { b })`                                  | Bound. Runs again when `up` changes, and sends only that style |
+| You pass | Result |
+|---|---|
+| `text("Title")`, `.w(px(40.0))` | Static. Set once, no effect, no allocation |
+| `text(count_string)`, `.opacity(fade)`, where the variable is a signal or memo | Bound directly, no closure |
+| `.bg(move \|\| if up.get() { a } else { b })` | Bound. Runs again when `up` changes, and sends only that style |
 
 ```rust
 use nsh_core::prelude::*;
@@ -395,14 +395,14 @@ fn Regions() -> impl IntoElement {
 }
 ```
 
-| Need                               | Use                                                                  | Not                                            |
-| ---------------------------------- | -------------------------------------------------------------------- | ---------------------------------------------- |
-| Show or hide structure on a signal | `when(cond, a).otherwise(b)`                                         | `.when(bool, ..)`, decided once                |
-| A style on a signal                | `.style_when(cond, \|s\| ..)` or a bound setter                      | `when` around two copies of the element        |
-| Hide without disposing state       | `.style_when(cond, \|s\| s.hidden())`                                | `when`, which disposes it                      |
-| A short list that changes          | `each(items, key, row)`                                              | `dynamic` plus `.map`, which remakes every row |
-| A long or unbounded list           | `virtual_list` ([rust-ui.md](rust-ui.md#lists-and-virtualized-data)) | `each` in a `scroll`                           |
-| Choice among several shapes        | `dynamic`                                                            |                                                |
+| Need | Use | Not |
+|---|---|---|
+| Show or hide structure on a signal | `when(cond, a).otherwise(b)` | `.when(bool, ..)`, decided once |
+| A style on a signal | `.style_when(cond, \|s\| ..)` or a bound setter | `when` around two copies of the element |
+| Hide without disposing state | `.style_when(cond, \|s\| s.hidden())` | `when`, which disposes it |
+| A short list that changes | `each(items, key, row)` | `dynamic` plus `.map`, which remakes every row |
+| A long or unbounded list | `virtual_list` ([rust-ui.md](rust-ui.md#lists-and-virtualized-data)) | `each` in a `scroll` |
+| Choice among several shapes | `dynamic` | |
 
 `dynamic` disposes everything it made on each run, signals and scroll offsets included. Read only what selects the
 shape, and wrap the rest in `untracked`, as `examples/gallery-rs/native/src/demos/lists.rs` does:
@@ -444,12 +444,12 @@ Return the concrete type (`View`, `VirtualList`) from a helper that a caller mig
 
 Put each piece of state in the narrowest owner that keeps it correct:
 
-| State                                                 | Where                                                      |
-| ----------------------------------------------------- | ---------------------------------------------------------- |
-| Open, hovered, draft text of one component            | A `signal` in that component's body                        |
-| Shared by a subtree                                   | A `Copy` store passed as an argument, or `provide_context` |
-| One per surface, read from anywhere (routes, session) | `global::<T>()`                                            |
-| Must outlive a run                                    | `nsh_core::storage::Storage`, or a server                  |
+| State | Where |
+|---|---|
+| Open, hovered, draft text of one component | A `signal` in that component's body |
+| Shared by a subtree | A `Copy` store passed as an argument, or `provide_context` |
+| One per surface, read from anywhere (routes, session) | `global::<T>()` |
+| Must outlive a run | `nsh_core::storage::Storage`, or a server |
 
 An app-level store is a `Copy` struct of signals, made once in the root:
 
@@ -553,7 +553,6 @@ fn card(selected: Signal<bool>) -> impl IntoElement {
         .dark(|s| s.border_2())
         // App state.
         .style_when(selected, |s| s.bg(move || theme().accent))
-        .cursor_pointer()
         .child(
             text("Title")
                 .flex_1()
@@ -658,15 +657,15 @@ async fn digest(path: std::path::PathBuf) -> Result<usize, String> {
 }
 ```
 
-| Function                      | Runs on                                                        | Use for                                                     | Web           |
-| ----------------------------- | -------------------------------------------------------------- | ----------------------------------------------------------- | ------------- |
-| `spawn(fut)`                  | Engine thread                                                  | Anything that writes signals                                | Yes           |
-| `fetch(url_or_HttpRequest)`   | NSH's network stack                                            | HTTP, under `capabilities.network`                          | Yes           |
-| `timer(d)`, `timer_until(at)` | Engine's loop                                                  | Waiting in a task                                           | Yes           |
-| `set_timeout`, `set_interval` | Engine thread                                                  | Delayed and repeating work                                  | Yes           |
-| `blocking(f)`                 | tokio's blocking threads                                       | Blocking calls                                              | **No**        |
-| `background(fut)`             | tokio's threads                                                | `Send` futures, CPU work                                    | **No**        |
-| `run_on_main_thread(f)`       | The platform's main thread, after the turn's views are mounted | APIs that only work there (AppKit, UIKit); await the result | Engine thread |
+| Function | Runs on | Use for | Web |
+|---|---|---|---|
+| `spawn(fut)` | Engine thread | Anything that writes signals | Yes |
+| `fetch(url_or_HttpRequest)` | NSH's network stack | HTTP, under `capabilities.network` | Yes |
+| `timer(d)`, `timer_until(at)` | Engine's loop | Waiting in a task | Yes |
+| `set_timeout`, `set_interval` | Engine thread | Delayed and repeating work | Yes |
+| `blocking(f)` | tokio's blocking threads | Blocking calls | **No** |
+| `background(fut)` | tokio's threads | `Send` futures, CPU work | **No** |
+| `run_on_main_thread(f)` | The platform's main thread, after the turn's views are mounted | APIs that only work there (AppKit, UIKit); await the result | Engine thread |
 
 - Long work on the engine thread freezes the UI's bindings. Move it to `blocking` or `background`, await the result in a
   `spawn`, and write signals there.

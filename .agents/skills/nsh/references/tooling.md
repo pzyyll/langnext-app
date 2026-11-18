@@ -42,20 +42,20 @@ For TSX and mixed changes, also run `nsh build` to check bundler diagnostics.
 
 Every command takes `[ENTRY]`: the app's directory (default `.`) or a TSX entry file. `-v` (or `NSH_VERBOSE=1`) prints everything. `nsh <command> --help` lists flags.
 
-| Command                                                    | Rust                                                                           | Mixed                                               | TSX                                 |
-| ---------------------------------------------------------- | ------------------------------------------------------------------------------ | --------------------------------------------------- | ----------------------------------- |
-| `nsh init DIR --template`                                  | `rust`                                                                         | `mixed`                                             | `ts` (the default off a terminal)   |
-| `nsh check`                                                | `cargo check --all-targets`; `tsc` on test files if there is a `tsconfig.json` | `cargo check --all-targets`, then `tsc`             | `tsc`                               |
-| `nsh build`                                                | Describes the crates; writes `app.json`, `assets/`                             | Describes the crates, bundles, compiles to bytecode | Bundles, compiles to bytecode       |
-| `nsh test`                                                 | `cargo test`, then `*.test.tsx`                                                | Same                                                | `*.test.tsx`                        |
-| `nsh run`                                                  | Builds the app's runner, no QuickJS, restarts on change                        | Hosts built with the crate; TSX hot, Rust restarts  | Prebuilt host; hot updates          |
-| `nsh dev` (`--server-only` for your own hosts)             | Refused: use `nsh run`                                                         | Dev server and host                                 | Dev server and host                 |
-| `nsh package --target`                                     | Runner from Cargo                                                              | Runner with the crate, from Cargo                   | Prebuilt runtime; no Rust toolchain |
-| `nsh publish`                                              | Refused                                                                        | TSX only; crates ship in the host                   | Yes                                 |
-| `nsh update-manifest`                                      | Yes                                                                            | Yes                                                 | Yes                                 |
-| `nsh keygen`, `certify`, `verify`, `revoke`, `symbolicate` | Keys only                                                                      | Yes                                                 | Yes                                 |
-| `cargo run`                                                | Runs `src/main.rs` on the desktop backend                                      | -                                                   | -                                   |
-| `cargo test`, `cargo check`                                | Direct                                                                         | Direct, for the crate                               | -                                   |
+| Command | Rust | Mixed | TSX |
+| --- | --- | --- | --- |
+| `nsh init DIR --template` | `rust` | `mixed` | `ts` (the default off a terminal) |
+| `nsh check` | `cargo check --all-targets`; `tsc` on test files if there is a `tsconfig.json` | `cargo check --all-targets`, then `tsc` | `tsc` |
+| `nsh build` | Describes the crates; writes `app.json`, `assets/` | Describes the crates, bundles, compiles to bytecode | Bundles, compiles to bytecode |
+| `nsh test` | `cargo test`, then `*.test.tsx` | Same | `*.test.tsx` |
+| `nsh run` | Builds the app's runner, no QuickJS, restarts on change | Hosts built with the crate; TSX hot, Rust restarts | Prebuilt host; hot updates |
+| `nsh dev` (`--server-only` for your own hosts) | Refused: use `nsh run` | Dev server and host | Dev server and host |
+| `nsh package --target` | Runner from Cargo | Runner with the crate, from Cargo | Prebuilt runtime; no Rust toolchain |
+| `nsh publish` | Refused | TSX only; crates ship in the host | Yes |
+| `nsh update-manifest` | Yes | Yes | Yes |
+| `nsh keygen`, `certify`, `verify`, `revoke`, `symbolicate` | Keys only | Yes | Yes |
+| `cargo run` | Runs `src/main.rs` on the desktop backend | - | - |
+| `cargo test`, `cargo check` | Direct | Direct, for the crate | - |
 
 `nsh --help` says `nsh package` needs no Rust. That holds for TSX only.
 
@@ -87,10 +87,10 @@ nsh dev --server-only            # TSX and mixed: serve hosts you start yourself
 
 **Reading the terminal:** `✓` done, `→` where to connect, `•` what a device did, `warn` and `error` problems, plain lines the app's own output.
 
-| Mode | How to log                                | Where it goes                                                           |
-| ---- | ----------------------------------------- | ----------------------------------------------------------------------- |
-| Rust | `log::info!`, `log::warn!`, `log::error!` | `nsh run` terminal on the desktops and in the iOS simulator             |
-| TSX  | `console.log` and friends                 | The terminal while connected; otherwise Xcode's console or `adb logcat` |
+| Mode | How to log | Where it goes |
+| --- | --- | --- |
+| Rust | `log::info!`, `log::warn!`, `log::error!` | `nsh run` terminal on the desktops and in the iOS simulator |
+| TSX | `console.log` and friends | The terminal while connected; otherwise Xcode's console or `adb logcat` |
 
 - An unhandled rejection is logged as an error with a mapped stack. A handler attached in the same turn counts as handling it.
 - **Error overlay** in development: a build failure with a code frame, an error evaluating the bundle, an uncaught exception in a handler, timer or effect. Tap to dismiss.
@@ -113,17 +113,17 @@ echo 'await app.press("Add")' | nsh test App.tsx --trace --target ios   # the sa
 
 Each desktop packages only on itself. Phones are reached from a computer.
 
-| `--target`                            | Runs on                               | You need                                                  | Rust or mixed also needs                                                                            |
-| ------------------------------------- | ------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `macos`                               | macOS 14+                             | Xcode's command line tools                                | Rust                                                                                                |
-| `linux`                               | GTK 4.14+                             | GTK 4                                                     | Rust and GTK's dev packages                                                                         |
-| `windows`                             | Windows 10 1809+                      | WebView2 for web views                                    | Rust                                                                                                |
-| `ios`, `ios-simulator` (package only) | iOS 15+; from macOS                   | Xcode and a simulator runtime                             | `rustup target add aarch64-apple-ios-sim aarch64-apple-ios`                                         |
-| `catalyst` (run only)                 | Mac, iPhone-sized window              | Xcode                                                     | `rustup target add aarch64-apple-ios-macabi`                                                        |
-| `android`                             | API 26+; from macOS, Linux or Windows | Android SDK (`ANDROID_HOME`), a JDK, a device or emulator | The NDK, and `rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android` |
-| `web`                                 | Modern browsers                       | -                                                         | `rustup target add wasm32-unknown-unknown`, `clang`, `llvm-ar`                                      |
-| `gpui` (run only)                     | macOS, Windows, Linux with a GPU      | Inside a GPUI app                                         | TSX and mixed entries; a Rust root embeds instead                                                   |
-| `tui` (run only)                      | A terminal                            | -                                                         | -                                                                                                   |
+| `--target` | Runs on | You need | Rust or mixed also needs |
+| --- | --- | --- | --- |
+| `macos` | macOS 14+ | Xcode's command line tools | Rust |
+| `linux` | GTK 4.14+ | GTK 4 | Rust and GTK's dev packages |
+| `windows` | Windows 10 1809+ | WebView2 for web views | Rust |
+| `ios`, `ios-simulator` (package only) | iOS 15+; from macOS | Xcode and a simulator runtime | `rustup target add aarch64-apple-ios-sim aarch64-apple-ios` |
+| `catalyst` (run only) | Mac, iPhone-sized window | Xcode | `rustup target add aarch64-apple-ios-macabi` |
+| `android` | API 26+; from macOS, Linux or Windows | Android SDK (`ANDROID_HOME`), a JDK, a device or emulator | The NDK, and `rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android` |
+| `web` | Modern browsers | - | `rustup target add wasm32-unknown-unknown`, `clang`, `llvm-ar` |
+| `gpui` (run only) | macOS, Windows, Linux with a GPU | Inside a GPUI app | TSX and mixed entries; a Rust root embeds instead |
+| `tui` (run only) | A terminal | - | - |
 
 Notes:
 
@@ -134,20 +134,20 @@ Notes:
 
 ## Platform-specific code
 
-| Need                         | Rust                                                                                                                                                                             | TSX                                                                                                                                                    |
-| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| A prop only one platform has | A builder method, ignored elsewhere: `.ripple(..)`, `.elevation(..)`, `.input_accessory(..)`, `.window_drag(..)`                                                                 | `android={{ ripple, elevation }}`, `ios={{ textContentType }}`, `desktop={{ windowDrag }}`, `web={{…}}`                                                |
-| The OS                       | `os() == Os::Ios` (`nsh_core::element::Os`)                                                                                                                                      | `platform.os === "ios"`                                                                                                                                |
-| Desktop or mobile            | `is_desktop()`                                                                                                                                                                   | `platform.desktop`                                                                                                                                     |
-| A value per platform         | `match os() { .. }`                                                                                                                                                              | `platform.select({ ios: .., android: .., default: .. })`                                                                                               |
-| Style per platform           | `.when(os() == Os::Ios, \|v\| ..)`                                                                                                                                               | `ios:`, `android:`, `web:` classes                                                                                                                     |
-| Conditional UI               | `when(os() == Os::Ios, \|\| ..)`                                                                                                                                                 | `<If when={platform.os === "ios"}>`                                                                                                                    |
-| Android back button          | `on_back_press(listener)`                                                                                                                                                        | `BackHandler.on("press", listener)` from `nsh/mobile`                                                                                                  |
-| Bar over the iOS keyboard    | `input_accessory_view(id)`                                                                                                                                                       | `InputAccessoryView` from `nsh/mobile`                                                                                                                 |
-| Windows and menus            | `nsh_core::element::desktop`: `window()`, `current_window()` (`WindowRef`: `set(WindowAttributes)`, `set_mode`, `close`, ...), `title_bar`, `set_application_menu`, `popup_menu` | `<Window>`, `Window.open`, `currentWindow()` (`WindowRef`: `set({ title, titleBar })`, `setMode`, `close`, ...), `Menu`, `titleBar` from `nsh/desktop` |
-| Status bar                   | `.status_bar(StatusBarStyle::Light)` on `nav_page()` or `dialog()`                                                                                                               | `statusBar={{ foreground: "light" }}` on `NavPage` or `Dialog`                                                                                         |
-| Target-gated Rust            | `#[cfg(target_os = "macos")]`, `#[cfg(target_arch = "wasm32")]`                                                                                                                  | -                                                                                                                                                      |
-| A view of the OS             | `native(name)`, registered with `#[native_components(macos)]`                                                                                                                    | `nativeComponent(name, spec)`                                                                                                                          |
+| Need | Rust | TSX |
+| --- | --- | --- |
+| A prop only one platform has | A builder method, ignored elsewhere: `.ripple(..)`, `.elevation(..)`, `.input_accessory(..)`, `.window_drag(..)` | `android={{ ripple, elevation }}`, `ios={{ textContentType }}`, `desktop={{ windowDrag }}`, `web={{…}}` |
+| The OS | `os() == Os::Ios` (`nsh_core::element::Os`) | `platform.os === "ios"` |
+| Desktop or mobile | `is_desktop()` | `platform.desktop` |
+| A value per platform | `match os() { .. }` | `platform.select({ ios: .., android: .., default: .. })` |
+| Style per platform | `.when(os() == Os::Ios, \|v\| ..)` | `ios:`, `android:`, `web:` classes |
+| Conditional UI | `when(os() == Os::Ios, \|\| ..)` | `<If when={platform.os === "ios"}>` |
+| Android back button | `on_back_press(listener)` | `BackHandler.on("press", listener)` from `nsh/mobile` |
+| Bar over the iOS keyboard | `input_accessory_view(id)` | `InputAccessoryView` from `nsh/mobile` |
+| Windows and menus | `nsh_core::element::desktop`: `window()`, `current_window()` (`WindowRef`: `set(WindowAttributes)`, `set_mode`, `close`, ...), `title_bar`, `set_application_menu`, `popup_menu` | `<Window>`, `Window.open`, `currentWindow()` (`WindowRef`: `set({ title, titleBar })`, `setMode`, `close`, ...), `Menu`, `titleBar` from `nsh/desktop` |
+| Status bar | `.status_bar(StatusBarStyle::Light)` on `nav_page()` or `dialog()` | `statusBar={{ foreground: "light" }}` on `NavPage` or `Dialog` |
+| Target-gated Rust | `#[cfg(target_os = "macos")]`, `#[cfg(target_arch = "wasm32")]` | - |
+| A view of the OS | `native(name)`, registered with `#[native_components(macos)]` | `nativeComponent(name, spec)` |
 
 - Desktop means macOS, Windows, Linux, and browsers in the desktop idiom. Mobile means iOS, Android, Mac Catalyst and browsers in the phone or tablet idiom.
 - Gate layout and input on `platform.desktop`. Gate windows and `Menu` calls on `isAvailable` from `nsh/desktop`, which is false in browsers.
@@ -157,18 +157,10 @@ Notes:
 ```tsx
 import { platform, Text } from "nsh";
 
-const hint = platform.select({
-  ios: "Swipe down to close",
-  android: "Press back to close",
-  default: "Close",
-});
+const hint = platform.select({ ios: "Swipe down to close", android: "Press back to close", default: "Close" });
 
 export function Hint() {
-  return (
-    <Text class="text-muted-foreground ios:text-sm">
-      {platform.desktop ? "Esc to close" : hint}
-    </Text>
-  );
+  return <Text class="text-muted-foreground ios:text-sm">{platform.desktop ? "Esc to close" : hint}</Text>;
 }
 ```
 
@@ -224,17 +216,17 @@ nsh package --target web              # static site
 
 `nsh/updater` replaces a packaged app. It is for the whole app; for screens under a host, use signed packages.
 
-| Platform              | Behaviour                                          |
-| --------------------- | -------------------------------------------------- |
-| macOS, Windows, Linux | Checks, downloads, replaces, restarts              |
-| iOS, Android          | Checks and gives a link                            |
-| Web                   | `checkForUpdate` resolves `null`; a deploy updates |
+| Platform | Behaviour |
+| --- | --- |
+| macOS, Windows, Linux | Checks, downloads, replaces, restarts |
+| iOS, Android | Checks and gives a link |
+| Web | `checkForUpdate` resolves `null`; a deploy updates |
 
 ```json
 { "version": "1.2.0", "updater": { "github": "owner/repo" } }
 ```
 
-With your own host, `"updater": { "url": "https://dl.example.com/app/latest.json", "publicKey": "<keys/update.pub>" }`; the key is required there.
+With your own host, `"updater": { "url": "https://dl.example.com/app/latest.json", "publicKey": "<keys/update.pub>" }`; the key is required there. A beta for users who opt in: add `"channels": { "beta": "<its latest.json URL>" }` (needs `publicKey`) and call `checkForUpdate({ channel: "beta" })`; the code can pass only a declared name.
 
 ```tsx
 import { openUrl } from "nsh";
@@ -250,6 +242,8 @@ export async function update() {
   }
 }
 ```
+
+`installOnQuit()` instead of `installAndRestart()` checks the update now and installs it when the app quits, without a restart (an "Install on Quit" button).
 
 Release: raise `version` (semver), run `nsh package` per platform to get its archive, then run `nsh update-manifest *.tar.gz *.zip --notes CHANGES.md --key keys/update.secret`, and upload the archives, `latest.json` and `latest.json.sig`. In a development run, `checkForUpdate` resolves `null`. Drafts and prereleases on GitHub are not offered.
 
@@ -304,10 +298,10 @@ nsh run                        # look at it
 
 On a platform, `nsh test --target macos` (also `linux`, `windows`, `gpui`, `tui`, `web`, `ios`, `android`) uses real input. Headless is the default and needs no device, so use it first. A passing test does not prove the look: an unstyled `Switch` passes and draws nothing.
 
-| Selector in tests                       | Finds                                      |
-| --------------------------------------- | ------------------------------------------ |
+| Selector in tests | Finds |
+| --- | --- |
 | `text:Add`, `label:Save`, `id:new-todo` | A text, an accessibility label, a `testID` |
-| `role:button[Save]`                     | A role and name                            |
-| `id:cart >> role:button[Remove]`        | Inside a match                             |
-| `text:Delete >> nth=1`                  | One of several                             |
-| `text:/^Buy/i`                          | A regex                                    |
+| `role:button[Save]` | A role and name |
+| `id:cart >> role:button[Remove]` | Inside a match |
+| `text:Delete >> nth=1` | One of several |
+| `text:/^Buy/i` | A regex |

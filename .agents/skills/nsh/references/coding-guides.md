@@ -205,14 +205,14 @@ NSH is retained state with declarative construction, on Solid's model ([Reactivi
 survives across updates; a component body describes its part of the tree once, when it is created. Keep that
 distinction explicit:
 
-| You write                                                                                            | Runs                                 | Runs again when                                           |
-| ---------------------------------------------------------------------------------------------------- | ------------------------------------ | --------------------------------------------------------- |
-| A component body                                                                                     | Once, when it is created             | Never                                                     |
-| A binding: a closure (Rust) or an expression that calls or reads a property (TSX) where a value goes | Once                                 | A signal it read changes; only that prop or child updates |
-| `computed(fn)`                                                                                       | When created                         | A signal it read changes                                  |
-| `effect(fn)`                                                                                         | After the elements of the pass exist | A signal it read changes                                  |
-| A row of `each` / `<Each>`                                                                           | When its key first appears           | Never; its item and index signals change                  |
-| A cell of `virtual_list` / `<List>`                                                                  | Once per cell                        | Never; the cell is given other rows                       |
+| You write | Runs | Runs again when |
+| --- | --- | --- |
+| A component body | Once, when it is created | Never |
+| A binding: a closure (Rust) or an expression that calls or reads a property (TSX) where a value goes | Once | A signal it read changes; only that prop or child updates |
+| `computed(fn)` | When created | A signal it read changes |
+| `effect(fn)` | After the elements of the pass exist | A signal it read changes |
+| A row of `each` / `<Each>` | When its key first appears | Never; its item and index signals change |
+| A cell of `virtual_list` / `<List>` | Once per cell | Never; the cell is given other rows |
 
 - the component that runs is the **owner**: effects, computed values, tasks, timers, key bindings and cleanups created
   while it runs belong to it and are disposed with it;
@@ -281,13 +281,7 @@ pub fn Search(props: SearchProps) -> impl IntoElement {
 ```tsx tabs
 function Search(props: { placeholder: string }) {
   const query = signal("");
-  return (
-    <Input
-      value={query()}
-      onChange={({ value }) => query.set(value)}
-      placeholder={props.placeholder}
-    />
-  );
+  return <Input value={query()} onChange={({ value }) => query.set(value)} placeholder={props.placeholder} />;
 }
 ```
 
@@ -455,7 +449,7 @@ quantity_stepper()
 
 ```tsx tabs
 import { signal } from "nsh";
-import { QuantityStepper } from "my-app"; // the Rust component: src/lib.rs has #[native_module("my-app")]
+import { QuantityStepper } from "my-app";   // the Rust component: src/lib.rs has #[native_module("my-app")]
 
 function CartRow() {
   const quantity = signal(1);
@@ -500,25 +494,14 @@ export function QuantityStepper(props: QuantityStepperProps) {
     const next = Math.min(max(), Math.max(min(), props.value + delta));
     if (next !== props.value) props.onChange?.({ value: next });
   };
-  const buttonClass =
-    "size-8 items-center justify-center rounded-(--radius) bg-muted active:opacity-60 disabled:opacity-40";
+  const buttonClass = "size-8 items-center justify-center rounded-(--radius) bg-muted active:opacity-60 disabled:opacity-40";
   return (
     <View class="flex-row items-center gap-3">
-      <Button
-        disabled={props.value <= min()}
-        accessibilityLabel={props.decrementLabel}
-        onPress={() => step(-1)}
-        class={buttonClass}
-      >
+      <Button disabled={props.value <= min()} accessibilityLabel={props.decrementLabel} onPress={() => step(-1)} class={buttonClass}>
         <Text class="text-foreground">−</Text>
       </Button>
       <Text class="text-foreground">{props.value}</Text>
-      <Button
-        disabled={props.value >= max()}
-        accessibilityLabel={props.incrementLabel}
-        onPress={() => step(1)}
-        class={buttonClass}
-      >
+      <Button disabled={props.value >= max()} accessibilityLabel={props.incrementLabel} onPress={() => step(1)} class={buttonClass}>
         <Text class="text-foreground">+</Text>
       </Button>
     </View>
@@ -686,6 +669,15 @@ Rules:
   interaction states; they apply natively, with no round trip to app code. `focus-visible:` is the keyboard's ring:
   it shows when the keyboard moved the focus, not after a click or a tap; keep `focus:` for any focus (an input's
   edge, a list's highlighted row);
+- leave `cursor` unset on buttons, rows, tabs, menu items and other controls: the platforms already give the
+  default arrow there, the I-beam over inputs and selectable text, and the pointing hand over `Link` and text links.
+  Set `cursor-pointer` only on content that behaves as a link (opens a URL or leaves the app), and resize, grab or
+  `not-allowed` only while they describe the actual manipulation;
+- make text selectable only where people copy it (message bodies, code, logs, values): put `selectable` on that
+  `Text`/`TextView` or on the content view that holds it, never on a whole screen, sidebar or list. Every text in a
+  selectable view shows the I-beam, so labels, headings, timestamps and badges there read as editable; give such
+  chrome `selectable={false}` (Rust `.selectable(false)`) or move it out. Text inside a control (button, tab, menu
+  item, link) keeps the default arrow;
 - use a component's semantic state styles (`selected:`, `checked:`, `disabled:`) for checked, selected, pressed, or
   disabled appearance;
 - keep popup ownership in explicit state (`open` with `onOpenChange`) so its trigger can render the open or pressed
@@ -759,21 +751,11 @@ view()
 keymap.bind("mod+s", save);
 
 <View>
-  <Button onPress={save}>
-    <Text>Save</Text>
-  </Button>
-  <Menu
-    trigger={
-      <View class="px-3 py-2">
-        <Text>File</Text>
-      </View>
-    }
-  >
-    <MenuItem onSelect={save}>
-      <Text>Save {keymap.label("mod+s")}</Text>
-    </MenuItem>
+  <Button onPress={save}><Text>Save</Text></Button>
+  <Menu trigger={<View class="px-3 py-2"><Text>File</Text></View>}>
+    <MenuItem onSelect={save}><Text>Save  {keymap.label("mod+s")}</Text></MenuItem>
   </Menu>
-</View>;
+</View>
 ```
 
 Preserve semantic roles in the element choice. Use `Button` for commands even when the desired treatment is quiet;
@@ -858,9 +840,7 @@ let results = resource(
 const results = resource(
   () => query() || undefined,
   async (q, { signal }) => {
-    const response = await fetch(`https://api.example.com/search?q=${encodeURIComponent(q)}`, {
-      signal,
-    });
+    const response = await fetch(`https://api.example.com/search?q=${encodeURIComponent(q)}`, { signal });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     return (await response.json()) as SearchHit[];
   },
@@ -973,7 +953,7 @@ const liked = signal<Set<number>>(new Set());
       <Text onPress={() => toggle(post().id)}>{liked().has(post().id) ? "♥" : "♡"}</Text>
     </View>
   )}
-</List>;
+</List>
 ```
 
 ## Public API design
@@ -1054,30 +1034,30 @@ primitive shows and the global APIs take their names from HTML, the DOM and CSS 
 names are `snake_case` and translate to `camelCase` in TSX (`on_open_change` is `onOpenChange`); one word stays one
 word (`readonly`, `multiline`).
 
-| Concept                     | Naming pattern                                  | Example                                                         |
-| --------------------------- | ----------------------------------------------- | --------------------------------------------------------------- |
-| A component                 | A noun, `PascalCase`                            | `Button`, `Dialog`, `QuantityStepper`                           |
-| Its props and events (Rust) | `<Component>Props`, `<Component>Event`          | `ButtonProps`, `ButtonEvent::Press` → `onPress`                 |
-| A behavior's state object   | `<Control>State`, made by `create<Control>`     | `NavStackState`, `createNavStack`                               |
-| Why a value changed         | `<Control>ChangeReason`, a string union         | `DialogChangeReason`: `"cancel"`, `"backdropPress"`             |
-| A state                     | An adjective, positive, no `is` prefix          | `open`, `hidden`, `disabled`, `selected`, `checked`, `readonly` |
-| What the user may do        | The adjective                                   | `scrollable`, `zoomable`, `selectable`, `resizable`             |
-| A feature with no adjective | `<feature>Enabled`                              | `pagingEnabled`                                                 |
-| Whether a part shows        | A boolean named after the part, default `true`  | `scrollbar`, `caret` (`scrollbar={false}`)                      |
-| Whether a slot shows        | `<slot>Visible`, default `true`                 | `headerVisible` (`header` is a page's slot)                     |
-| A part's styles             | `<part>Class`, `<part>Style`                    | `backdropClass`, `contentStyle`                                 |
-| A state's styles            | `<state>Style`, `<state>:` classes              | `activeStyle`, `disabled:`                                      |
-| A slot                      | What it is                                      | `header`, `footer`, `trigger`, `content`, `empty`               |
-| Content of the app's        | `render<Part>`                                  | `renderCodeBlock`                                               |
-| A dismissal flag            | `closeOn<Trigger>`, default `true`              | `closeOnEscape`, `closeOnBackdropPress`                         |
-| A value's change            | `on<Value>Change({ <value>, ... })`, one object | `onChange({ value })`, `onOpenChange({ open, reason })`         |
-| Any other event             | `on<Event>`, present tense, one object          | `onPress()`, `onSubmit({ text })`                               |
-| A phase                     | `<act>Start`, `<act>End`                        | `onPanStart`, `onLoadStart`                                     |
-| The mouse over a view       | `Enter` / `Move` / `Leave`, the DOM's           | `onMouseEnter`, `onMouseMove`, `onMouseLeave`                   |
-| A mouse button's release    | `Up`, the DOM's                                 | `onMouseUp`                                                     |
-| Starting to listen          | `on(event, listener)`, returns `() => void`     | `host.on(name, l)`, `BackHandler.on("press", l)`                |
-| A value of the environment  | An accessor, `set<Value>` beside it             | `colorScheme()`, `setColorScheme`                               |
-| A read-only boolean         | `is<Adjective>`, `has<Noun>`                    | `isAvailable`                                                   |
+| Concept | Naming pattern | Example |
+| --- | --- | --- |
+| A component | A noun, `PascalCase` | `Button`, `Dialog`, `QuantityStepper` |
+| Its props and events (Rust) | `<Component>Props`, `<Component>Event` | `ButtonProps`, `ButtonEvent::Press` → `onPress` |
+| A behavior's state object | `<Control>State`, made by `create<Control>` | `NavStackState`, `createNavStack` |
+| Why a value changed | `<Control>ChangeReason`, a string union | `DialogChangeReason`: `"cancel"`, `"backdropPress"` |
+| A state | An adjective, positive, no `is` prefix | `open`, `hidden`, `disabled`, `selected`, `checked`, `readonly` |
+| What the user may do | The adjective | `scrollable`, `zoomable`, `selectable`, `resizable` |
+| A feature with no adjective | `<feature>Enabled` | `pagingEnabled` |
+| Whether a part shows | A boolean named after the part, default `true` | `scrollbar`, `caret` (`scrollbar={false}`) |
+| Whether a slot shows | `<slot>Visible`, default `true` | `headerVisible` (`header` is a page's slot) |
+| A part's styles | `<part>Class`, `<part>Style` | `backdropClass`, `contentStyle` |
+| A state's styles | `<state>Style`, `<state>:` classes | `activeStyle`, `disabled:` |
+| A slot | What it is | `header`, `footer`, `trigger`, `content`, `empty` |
+| Content of the app's | `render<Part>` | `renderCodeBlock` |
+| A dismissal flag | `closeOn<Trigger>`, default `true` | `closeOnEscape`, `closeOnBackdropPress` |
+| A value's change | `on<Value>Change({ <value>, ... })`, one object | `onChange({ value })`, `onOpenChange({ open, reason })` |
+| Any other event | `on<Event>`, present tense, one object | `onPress()`, `onSubmit({ text })` |
+| A phase | `<act>Start`, `<act>End` | `onPanStart`, `onLoadStart` |
+| The mouse over a view | `Enter` / `Move` / `Leave`, the DOM's | `onMouseEnter`, `onMouseMove`, `onMouseLeave` |
+| A mouse button's release | `Up`, the DOM's | `onMouseUp` |
+| Starting to listen | `on(event, listener)`, returns `() => void` | `host.on(name, l)`, `BackHandler.on("press", l)` |
+| A value of the environment | An accessor, `set<Value>` beside it | `colorScheme()`, `setColorScheme` |
+| A read-only boolean | `is<Adjective>`, `has<Noun>` | `isAvailable` |
 
 Props are never `is<Adjective>`: that form is for what only reads a boolean (a constant, a field of a payload). A part
 that shows is named after the part, never `<part>Shown`, `<part>Hidden` or `shows<Part>`.

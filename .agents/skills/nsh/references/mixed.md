@@ -12,12 +12,12 @@ Every Rust and TSX block here is verbatim from `examples/rust-exports`, which CI
 
 Start from what must ship after the binary does:
 
-| Situation                                                                                       | Mode       |
-| ----------------------------------------------------------------------------------------------- | ---------- |
-| All logic and UI ship in the binary; no JS VM wanted                                            | Rust       |
+| Situation | Mode |
+| --- | --- |
+| All logic and UI ship in the binary; no JS VM wanted | Rust |
 | Rust core, plus screens that change often, experiments, or screens delivered as signed packages | Rust + TSX |
-| The app needs a crate (parser, crypto, storage engine, a native view) under TSX screens         | Rust + TSX |
-| UI delivered at run time, no Rust code of your own, no Rust toolchain                           | TSX        |
+| The app needs a crate (parser, crypto, storage engine, a native view) under TSX screens | Rust + TSX |
+| UI delivered at run time, no Rust code of your own, no Rust toolchain | TSX |
 
 Costs of this mode over the other two:
 
@@ -34,15 +34,15 @@ A Rust app can gain TSX later: it already has a `#[native_module]`; add an entry
 nsh init my-app --template mixed     # add --nsh-source <checkout> to build against NSH's sources
 ```
 
-| File                                       | What it is                                                                                                                 |
-| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
-| `nsh.json`                                 | `name`, `id`, `version`, `build` and `"rust": "."`. No `"root"`: that is what makes `App.tsx` the entry                    |
-| `App.tsx`                                  | The entry. Imports `Badge`, `Counter` and `Format` from `<name>/native`                                                    |
-| `App.test.tsx`                             | Presses through the app with `nsh/test`, in a headless runner linked with the crate                                        |
-| `Cargo.toml`                               | `nsh-core` and `nsh-base` at the CLI's version, and an empty `[workspace]`, so the app builds alone inside another project |
-| `src/lib.rs`                               | The crate: `#[native_module("<name>/native")]` and one component, module and class                                         |
-| `tsconfig.json`, `.gitignore`, `README.md` | `.gitignore` holds `.nsh/` and `target/`                                                                                   |
-| `.nsh/types/`                              | Generated. `.nsh/types/<name>/native.d.ts` appears after the first command that describes the crate                        |
+| File | What it is |
+| --- | --- |
+| `nsh.json` | `name`, `id`, `version`, `build` and `"rust": "."`. No `"root"`: that is what makes `App.tsx` the entry |
+| `App.tsx` | The entry. Imports `Badge`, `Counter` and `Format` from `<name>/native` |
+| `App.test.tsx` | Presses through the app with `nsh/test`, in a headless runner linked with the crate |
+| `Cargo.toml` | `nsh-core` and `nsh-base` at the CLI's version, and an empty `[workspace]`, so the app builds alone inside another project |
+| `src/lib.rs` | The crate: `#[native_module("<name>/native")]` and one component, module and class |
+| `tsconfig.json`, `.gitignore`, `README.md` | `.gitignore` holds `.nsh/` and `target/` |
+| `.nsh/types/` | Generated. `.nsh/types/<name>/native.d.ts` appears after the first command that describes the crate |
 
 Templates: `crates/nsh-cli/src/templates/mixed/`. The specifier is the app's name in lower case, words joined by `-`,
 then `/native`. `rust-exports` keeps its crate in a subdirectory (`"rust": "native"`); both layouts work.
@@ -73,13 +73,13 @@ Decide per piece of state and per piece of logic. Do not split by screen.
 
 **Rule: each piece of state has one owner, on one side.** The other side holds a view of it and asks for changes.
 
-| Belongs in Rust                                                                          | Belongs in TSX                                                       |
-| ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| Domain rules, money, parsing, validation that must not drift                             | Screen composition, navigation, routes                               |
-| Anything CPU-heavy, or that touches files, sockets or a database through crates          | Copy, layout, styling, experiments                                   |
+| Belongs in Rust | Belongs in TSX |
+| --- | --- |
+| Domain rules, money, parsing, validation that must not drift | Screen composition, navigation, routes |
+| Anything CPU-heavy, or that touches files, sockets or a database through crates | Copy, layout, styling, experiments |
 | State that must outlive a screen or stay consistent (a ledger, a session, a sync engine) | State of a screen: an open dialog, a filter, a draft, a selected tab |
-| A view drawn every frame, or a hard interaction (a chart, an editor surface)             | Forms and the order of steps through them                            |
-| Code other apps or crates reuse                                                          | What changes often, or arrives as a signed package                   |
+| A view drawn every frame, or a hard interaction (a chart, an editor surface) | Forms and the order of steps through them |
+| Code other apps or crates reuse | What changes often, or arrives as a signed package |
 
 Check a boundary with these questions:
 
@@ -96,14 +96,14 @@ re-render a binding.
 `App.tsx`:
 
 ```tsx
-const balance = signal(savings.balance);
+  const balance = signal(savings.balance);
 ```
 
 ```tsx
-savings.onChange((b) => {
-  balance.set(b);
-  heard.update((h) => [...h, b]);
-});
+  savings.onChange((b) => {
+    balance.set(b);
+    heard.update((h) => [...h, b]);
+  });
 ```
 
 Two failures to avoid:
@@ -116,11 +116,11 @@ and passes `value={spent()}`; Rust only asks for a change, through `onChange`.
 
 ## Component, module or class
 
-| Export                    | Use for                                                   | Registered with    | TSX                 |
-| ------------------------- | --------------------------------------------------------- | ------------------ | ------------------- |
-| Component, `#[component]` | Something drawn, with props and events                    | `.register::<T>()` | `<Gauge … />`       |
-| Module, `#[module]`       | Stateless functions, and calls to the platform            | `.module::<T>()`   | `Ledger.format(..)` |
-| Class, `#[class]`         | State with a lifetime TSX holds: many instances, disposal | `.class::<T>()`    | `new Account(..)`   |
+| Export | Use for | Registered with | TSX |
+| --- | --- | --- | --- |
+| Component, `#[component]` | Something drawn, with props and events | `.register::<T>()` | `<Gauge … />` |
+| Module, `#[module]` | Stateless functions, and calls to the platform | `.module::<T>()` | `Ledger.format(..)` |
+| Class, `#[class]` | State with a lifetime TSX holds: many instances, disposal | `.class::<T>()` | `new Account(..)` |
 
 Choose a class over a module with hidden global state: instances free themselves, tests stay independent, and two of them can exist.
 
@@ -218,15 +218,15 @@ Use after disposal throws `TypeError: Account is disposed`.
 
 **The Rust signature decides how a call runs.** Read this table when writing any exported function.
 
-| Rust                                       | TS                   | Runs                                    | Failure                                                       |
-| ------------------------------------------ | -------------------- | --------------------------------------- | ------------------------------------------------------------- |
-| `fn f(a: f64) -> T`                        | `f(a: number): T`    | Inside the JS call, synchronously       | Wrong argument throws `TypeError`; a panic throws `Error`     |
-| `fn f(a: f64) -> Result<T, E>`             | `f(a: number): T`    | Same                                    | `Err` throws `Error` with the message                         |
-| `fn f(cx: &mut ModuleCx)`                  | `f(): void`          | Op, at the commit, in order with the UI | Nothing answers it. A wrong argument still throws in the call |
-| `fn f(cx: &mut ModuleCx) -> Result<(), E>` | `f(): Promise<void>` | Op                                      | `Err` rejects                                                 |
-| `fn f(cx: &mut ModuleCx) -> T`             | `f(): Promise<T>`    | Op                                      | Wrong argument rejects                                        |
-| `async fn f() -> T`                        | `f(): Promise<T>`    | Task of the core, on the engine thread  | Wrong argument, `Err` and panic all reject. It never throws   |
-| `async fn f()`                             | `f(): Promise<void>` | Task                                    | Resolves when the task ends                                   |
+| Rust | TS | Runs | Failure |
+| --- | --- | --- | --- |
+| `fn f(a: f64) -> T` | `f(a: number): T` | Inside the JS call, synchronously | Wrong argument throws `TypeError`; a panic throws `Error` |
+| `fn f(a: f64) -> Result<T, E>` | `f(a: number): T` | Same | `Err` throws `Error` with the message |
+| `fn f(cx: &mut ModuleCx)` | `f(): void` | Op, at the commit, in order with the UI | Nothing answers it. A wrong argument still throws in the call |
+| `fn f(cx: &mut ModuleCx) -> Result<(), E>` | `f(): Promise<void>` | Op | `Err` rejects |
+| `fn f(cx: &mut ModuleCx) -> T` | `f(): Promise<T>` | Op | Wrong argument rejects |
+| `async fn f() -> T` | `f(): Promise<T>` | Task of the core, on the engine thread | Wrong argument, `Err` and panic all reject. It never throws |
+| `async fn f()` | `f(): Promise<void>` | Task | Resolves when the task ends |
 
 All of these rows were compiled and called from TSX. A wrong argument names the member and the parameter:
 ``TypeError: Ledger.format: `amount`: expected a number, got "x"``.
@@ -241,24 +241,24 @@ A synchronous call that blocks freezes the app too. A synchronous call costs abo
 
 ### Argument and result types
 
-| Rust                                                | TS                                                                                  |
-| --------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `f64`, `f32`, integers                              | `number`. Integers take whole numbers in range; `1.5` is a `TypeError`, not rounded |
-| `bool`, `String`, `SharedString`                    | `boolean`, `string`                                                                 |
-| `Option<T>`                                         | `T \| null`; a trailing one is also optional (`opening?: number \| null`)           |
-| `Vec<T>`                                            | `T[]`                                                                               |
-| `Vec<u8>`                                           | `Uint8Array`, copied. A `Buffer` is accepted                                        |
-| `SystemTime`                                        | `Date`                                                                              |
-| `JsonValue`                                         | Any JSON value                                                                      |
-| `#[derive(JsObject)] struct`                        | `interface`: fields in camelCase, doc comments kept, an `Option` field optional     |
-| `#[derive(PropEnum)] enum` of unit variants         | String union: `SellShort` is `"sellShort"`                                          |
-| `Callback<f64>`                                     | `(value: number) => void`                                                           |
-| `#[args(value, index)] Callback<(f64, u32), bool>`  | `(value: number, index: number) => boolean`                                         |
-| `Stop`                                              | `() => void`                                                                        |
-| A `#[class]` value, or `Instance<T>`                | The class. One object per live instance: `a.badge === a.badge`                      |
-| `&T`, `&mut T` of a class, in a class's sync member | The class, borrowed for the call                                                    |
+| Rust | TS |
+| --- | --- |
+| `f64`, `f32`, integers | `number`. Integers take whole numbers in range; `1.5` is a `TypeError`, not rounded |
+| `bool`, `String`, `SharedString` | `boolean`, `string` |
+| `Option<T>` | `T \| null`; a trailing one is also optional (`opening?: number \| null`) |
+| `Vec<T>` | `T[]` |
+| `Vec<u8>` | `Uint8Array`, copied. A `Buffer` is accepted |
+| `SystemTime` | `Date` |
+| `JsonValue` | Any JSON value |
+| `#[derive(JsObject)] struct` | `interface`: fields in camelCase, doc comments kept, an `Option` field optional |
+| `#[derive(PropEnum)] enum` of unit variants | String union: `SellShort` is `"sellShort"` |
+| `Callback<f64>` | `(value: number) => void` |
+| `#[args(value, index)] Callback<(f64, u32), bool>` | `(value: number, index: number) => boolean` |
+| `Stop` | `() => void` |
+| A `#[class]` value, or `Instance<T>` | The class. One object per live instance: `a.badge === a.badge` |
+| `&T`, `&mut T` of a class, in a class's sync member | The class, borrowed for the call |
 
-**Limits the compiler enforces.** A _module_ function must take `Instance<T>`, not `&T`:
+**Limits the compiler enforces.** A *module* function must take `Instance<T>`, not `&T`:
 `error: a module function takes values: an instance as Instance<T>`. Only class members borrow. `async` members also
 take `Instance<Other>`.
 
@@ -279,11 +279,11 @@ take `Instance<Other>`.
     }
 ```
 
-| Method                      | Where                                  | Result                                                      |
-| --------------------------- | -------------------------------------- | ----------------------------------------------------------- |
-| `cb.call(args)`             | Only inside a synchronous call from JS | `Result<R, String>`, at once. The JS exception is the `Err` |
-| `cb.post(args)`             | Anywhere on the engine thread          | Queued for JS's next turn, in order. Result dropped         |
-| `cb.call_async(args).await` | In a task                              | `Result<R, String>`                                         |
+| Method | Where | Result |
+| --- | --- | --- |
+| `cb.call(args)` | Only inside a synchronous call from JS | `Result<R, String>`, at once. The JS exception is the `Err` |
+| `cb.post(args)` | Anywhere on the engine thread | Queued for JS's next turn, in order. Result dropped |
+| `cb.call_async(args).await` | In a task | `Result<R, String>` |
 
 `call` in a task panics, and TSX sees: ``Error: `Callback::call` runs the function inside a synchronous call from JS; elsewhere (in a task) use `post` or `call_async` ``.
 During `call` the instance stays borrowed: a callback reaching the same instance throws.
@@ -336,14 +336,14 @@ TS gets only `Puts ... copied.` and `copy(text: string): Promise<number>`.
 
 ## The dev loop
 
-| Edit                                                             | What happens                            | State                                                                        |
-| ---------------------------------------------------------------- | --------------------------------------- | ---------------------------------------------------------------------------- |
-| A TSX file                                                       | Hot update, about 120 ms                | Edited components render again. Others keep theirs                           |
-| A top-level `signal(..)` or `createNavStack(..)`                 | Kept if its initializer is unchanged    | Value kept                                                                   |
-| Module-level code that changed                                   | Runs again                              | A module-level `new Account(..)` makes a new instance; the old state is gone |
-| `capabilities` in `nsh.json`, a first import of a new NSH module | Full reload                             | Fresh                                                                        |
-| Rust in a listed crate, or a path dependency                     | Describe, rebuild, restart              | All state is gone. Keep what must survive in `Storage`                       |
-| A Rust signature                                                 | As above, and `.nsh/types` is rewritten | TSX then fails `nsh check` until it is fixed                                 |
+| Edit | What happens | State |
+| --- | --- | --- |
+| A TSX file | Hot update, about 120 ms | Edited components render again. Others keep theirs |
+| A top-level `signal(..)` or `createNavStack(..)` | Kept if its initializer is unchanged | Value kept |
+| Module-level code that changed | Runs again | A module-level `new Account(..)` makes a new instance; the old state is gone |
+| `capabilities` in `nsh.json`, a first import of a new NSH module | Full reload | Fresh |
+| Rust in a listed crate, or a path dependency | Describe, rebuild, restart | All state is gone. Keep what must survive in `Storage` |
+| A Rust signature | As above, and `.nsh/types` is rewritten | TSX then fails `nsh check` until it is fixed |
 
 A Rust build error prints in the terminal, and the next save that compiles runs. A host built for another app gets no
 build; it shows why, and the terminal prints a `warn` with the command that installs the right host. `nsh dev`
@@ -357,12 +357,12 @@ nsh test App.test.tsx     # that file only, in a headless runner linked with the
 nsh check                 # cargo check --all-targets for each crate, then tsc over the TSX
 ```
 
-| Test                     | Tool                                                       | Covers                                                              |
-| ------------------------ | ---------------------------------------------------------- | ------------------------------------------------------------------- |
-| Rust logic               | `#[test]` in the crate                                     | Rules, parsing, classes used as plain Rust                          |
-| Exports as TSX sees them | `App.test.tsx`                                             | The real signatures, conversion, errors, and presses through the UI |
-| The TSX entry from Rust  | `nsh_testing::tsx` (feature `bundle`)                      | Same, plus `app.screen().sent(..)` on commands                      |
-| The declarations         | `nsh_core::element::declarations` (feature `declarations`) | The `.d.ts` text, and `registry().undocumented()`                   |
+| Test | Tool | Covers |
+| --- | --- | --- |
+| Rust logic | `#[test]` in the crate | Rules, parsing, classes used as plain Rust |
+| Exports as TSX sees them | `App.test.tsx` | The real signatures, conversion, errors, and presses through the UI |
+| The TSX entry from Rust | `nsh_testing::tsx` (feature `bundle`) | Same, plus `app.screen().sent(..)` on commands |
+| The declarations | `nsh_core::element::declarations` (feature `declarations`) | The `.d.ts` text, and `registry().undocumented()` |
 
 See `examples/rust-exports/native/tests/rust_exports/`. Dev-dependencies: `nsh-core` with `declarations`, `nsh-engine`, and `nsh-testing` with `bundle`.
 
@@ -385,15 +385,15 @@ Details are in [tooling.md](tooling.md#signed-packages).
 
 ## Failure modes
 
-| Symptom                                                            | Cause                                                              | Fix                                                                |
-| ------------------------------------------------------------------ | ------------------------------------------------------------------ | ------------------------------------------------------------------ |
-| TSX shows an old value from Rust                                   | Getter read in JSX, untracked                                      | Mirror it in a signal; update it from a listener or a return value |
-| `no reactive runtime`                                              | `signal`, `theme()` or `dialog` in a synchronous function          | Make it `async` or take `cx`; or do it in TSX                      |
-| `` `Callback::call` runs the function inside a synchronous call `` | `call` in a task                                                   | `post` or `call_async`                                             |
-| An unhandled rejection in the log                                  | An op returning `Result<(), E>`, or an `async` call, nobody awaits | `await` it or `.catch` it                                          |
-| `` `x/native` has no export `Y` ``                                 | Not registered in `#[native_module]`                               | `.register`, `.module` or `.class`                                 |
-| `` `T: Module` is not satisfied ``                                 | `#[module]` on the struct but the `impl` failed, or the reverse    | Read the first error; it is usually in the `impl`                  |
-| `Account is disposed`                                              | Used after `dispose()` or the end of a `using` block               | Do not keep the object past its scope                              |
-| A re-entrant call throws                                           | A callback reaches the instance `call` is borrowing                | `post` instead                                                     |
-| A panic ends the page on the web                                   | The web runtime is `panic = "abort"`; natively a panic is caught   | Return `Result`; do not rely on catching panics                    |
-| Cargo errors about versions or a mismatch                          | `nsh-*` crates from different sources                              | All from one place, at the CLI's version                           |
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| TSX shows an old value from Rust | Getter read in JSX, untracked | Mirror it in a signal; update it from a listener or a return value |
+| `no reactive runtime` | `signal`, `theme()` or `dialog` in a synchronous function | Make it `async` or take `cx`; or do it in TSX |
+| `` `Callback::call` runs the function inside a synchronous call `` | `call` in a task | `post` or `call_async` |
+| An unhandled rejection in the log | An op returning `Result<(), E>`, or an `async` call, nobody awaits | `await` it or `.catch` it |
+| `` `x/native` has no export `Y` `` | Not registered in `#[native_module]` | `.register`, `.module` or `.class` |
+| `` `T: Module` is not satisfied `` | `#[module]` on the struct but the `impl` failed, or the reverse | Read the first error; it is usually in the `impl` |
+| `Account is disposed` | Used after `dispose()` or the end of a `using` block | Do not keep the object past its scope |
+| A re-entrant call throws | A callback reaches the instance `call` is borrowing | `post` instead |
+| A panic ends the page on the web | The web runtime is `panic = "abort"`; natively a panic is caught | Return `Result`; do not rely on catching panics |
+| Cargo errors about versions or a mismatch | `nsh-*` crates from different sources | All from one place, at the CLI's version |

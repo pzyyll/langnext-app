@@ -163,12 +163,7 @@ export function TaskList() {
             <Text class="text-primary-foreground">Add</Text>
           </Button>
         </View>
-        <List
-          each={allTasks()}
-          keyExtractor={(task) => String(task.id)}
-          estimatedItemSize={48}
-          class="flex-1"
-        >
+        <List each={allTasks()} keyExtractor={(task) => String(task.id)} estimatedItemSize={48} class="flex-1">
           {/* A cell shows other rows as it is reused: read the item where it is used, keep no state here. */}
           {(task) => (
             <Button
@@ -224,10 +219,7 @@ export function TaskDetail(props: { id: number }) {
         >
           <Text class="text-foreground">Done</Text>
         </Switch>
-        <Button
-          onPress={confirmRemove}
-          class="self-start rounded-(--radius) border border-destructive px-4 py-2 active:opacity-60"
-        >
+        <Button onPress={confirmRemove} class="self-start rounded-(--radius) border border-destructive px-4 py-2 active:opacity-60">
           <Text class="text-destructive">Remove</Text>
         </Button>
       </View>

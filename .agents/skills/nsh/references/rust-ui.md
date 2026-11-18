@@ -169,12 +169,12 @@ fn shortcuts(find: Signal<bool>) {
 `select()` picks one; `combobox()` types to filter and may pick many. Items are data: `SelectItem::new(value, title)`,
 with `.disabled(bool)`.
 
-|                    | `select()`                                                  | `combobox()`                                                            |
-| ------------------ | ----------------------------------------------------------- | ----------------------------------------------------------------------- |
-| Value              | `.value(move \|\| chosen.get())`, an `Option<SharedString>` | `.value(move \|\| Some(chosen.get()))`, a `Vec<SharedString>`           |
-| Listener           | `on_change(&Option<SharedString>)`                          | `on_change(&Vec<SharedString>)`, `on_query_change(&SharedString)`       |
-| The closed control | `.trigger(element)`, a slot you draw                        | Styles on the element itself, `.input_style(..)`, `.trigger_button(..)` |
-| Search             | `.searchable(true)`                                         | Always                                                                  |
+| | `select()` | `combobox()` |
+|---|---|---|
+| Value | `.value(move \|\| chosen.get())`, an `Option<SharedString>` | `.value(move \|\| Some(chosen.get()))`, a `Vec<SharedString>` |
+| Listener | `on_change(&Option<SharedString>)` | `on_change(&Vec<SharedString>)`, `on_query_change(&SharedString)` |
+| The closed control | `.trigger(element)`, a slot you draw | Styles on the element itself, `.input_style(..)`, `.trigger_button(..)` |
+| Search | `.searchable(true)` | Always |
 
 ```rust
 use nsh_base::{SelectEntry, SelectEvent, SelectItem, select, theme};
@@ -227,15 +227,15 @@ fn fruit_select() -> impl IntoElement {
 
 ## Dialogs, sheets, popovers, menus, toasts
 
-| Need                                     | Use                                        | Mount                                            |
-| ---------------------------------------- | ------------------------------------------ | ------------------------------------------------ |
-| Native confirm or action sheet           | `alert_dialog()..show().await`             | A task; no element                               |
-| Full native modal (own window layer)     | `dialog()`                                 | In `when(open, ..)`; leaving it out dismisses    |
-| Panel sliding from an edge               | `sheet()`                                  | Always in the tree, `.open(..)`                  |
-| Anchored content                         | `popover()`                                | `.trigger(..)`, `.child(..)`                     |
-| Commands on a trigger, or on right-click | `menu()`, `context_menu()`                 | `.trigger(..)`, `menu_item()` children           |
-| Hint on hover                            | `tooltip()`                                | Wraps the anchor (`website/elements/tooltip.md`) |
-| Transient message                        | `toast_stack()`, `toast()`, `ToastManager` | Mounted once, app-level                          |
+| Need | Use | Mount |
+|---|---|---|
+| Native confirm or action sheet | `alert_dialog()..show().await` | A task; no element |
+| Full native modal (own window layer) | `dialog()` | In `when(open, ..)`; leaving it out dismisses |
+| Panel sliding from an edge | `sheet()` | Always in the tree, `.open(..)` |
+| Anchored content | `popover()` | `.trigger(..)`, `.child(..)` |
+| Commands on a trigger, or on right-click | `menu()`, `context_menu()` | `.trigger(..)`, `menu_item()` children |
+| Hint on hover | `tooltip()` | Wraps the anchor (`website/elements/tooltip.md`) |
+| Transient message | `toast_stack()`, `toast()`, `ToastManager` | Mounted once, app-level |
 
 ```rust
 use nsh_base::{

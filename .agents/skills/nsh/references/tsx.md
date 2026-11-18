@@ -13,13 +13,13 @@ What updates are **bindings**: JSX expressions the compiler wraps, each a small 
 
 An expression in JSX changes when it **calls a function or reads a property**, outside nested functions. Everything else is set once:
 
-| In JSX                                              | Behaviour                                               |
-| --------------------------------------------------- | ------------------------------------------------------- |
-| `{count()}`, `{count}`                              | Follows the signal. Both work; write `count()`          |
-| `{props.title}`, `{user.name}`                      | Re-read when something it depends on changes            |
-| `{label}`, with `const label = count()` in the body | Set once: the body read it once                         |
-| `style={{ opacity: busy() ? 0.5 : 1 }}`             | The object is rebuilt; only changed keys reach the view |
-| `onPress={() => ...}`                               | Set once. `onPress={props.onPress}` follows the prop    |
+| In JSX | Behaviour |
+| --- | --- |
+| `{count()}`, `{count}` | Follows the signal. Both work; write `count()` |
+| `{props.title}`, `{user.name}` | Re-read when something it depends on changes |
+| `{label}`, with `const label = count()` in the body | Set once: the body read it once |
+| `style={{ opacity: busy() ? 0.5 : 1 }}` | The object is rebuilt; only changed keys reach the view |
+| `onPress={() => ...}` | Set once. `onPress={props.onPress}` follows the prop |
 
 Code in the body runs untracked: create signals, start effects, and read values you want only once there.
 
@@ -123,7 +123,12 @@ const expanded = signal<Record<string, boolean>>({});
 
 export function Rows() {
   return (
-    <List each={rows()} keyExtractor={(row) => row.id} estimatedItemSize={52} class="flex-1">
+    <List
+      each={rows()}
+      keyExtractor={(row) => row.id}
+      estimatedItemSize={52}
+      class="flex-1"
+    >
       {(row) => (
         <View
           class="border-b border-border p-4"
@@ -147,11 +152,11 @@ Two silent bugs, reported by nothing:
 
 ## computed or a closure
 
-| Use                                  | When                                                                                                           |
-| ------------------------------------ | -------------------------------------------------------------------------------------------------------------- |
-| A closure, `const label = () => ...` | Cheap, read in one place                                                                                       |
-| `computed(() => ...)`                | Expensive or read in several places: runs once per change, and readers are notified only if the result changed |
-| `signal` + `effect`                  | Never for a derived value                                                                                      |
+| Use | When |
+| --- | --- |
+| A closure, `const label = () => ...` | Cheap, read in one place |
+| `computed(() => ...)` | Expensive or read in several places: runs once per change, and readers are notified only if the result changed |
+| `signal` + `effect` | Never for a derived value |
 
 `const total = computed(() => price() * quantity())`. `computed` passes its previous value to the function, for values that accumulate.
 
@@ -238,9 +243,7 @@ type Post = { id: number; title: string };
 
 const query = signal("nsh");
 const posts = resource(query, async (q, { signal: abort }) => {
-  const response = await fetch(`https://api.example.com/search?q=${encodeURIComponent(q)}`, {
-    signal: abort,
-  });
+  const response = await fetch(`https://api.example.com/search?q=${encodeURIComponent(q)}`, { signal: abort });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   return (await response.json()) as Post[];
 });
@@ -251,12 +254,7 @@ export function Posts() {
       <If when={posts.error()}>
         <Text class="text-destructive">Failed: {String(posts.error())}</Text>
       </If>
-      <List
-        each={posts() ?? []}
-        refreshing={posts.state() === "refreshing"}
-        onRefresh={posts.refetch}
-        class="flex-1"
-      >
+      <List each={posts() ?? []} refreshing={posts.state() === "refreshing"} onRefresh={posts.refetch} class="flex-1">
         {(post) => <Text>{post().title}</Text>}
       </List>
     </View>
@@ -306,14 +304,7 @@ export function Chip(props: { label: string; class?: string }) {
 Use the native material on a floating `View`, with a blur for older systems and other platforms:
 
 ```tsx
-<View
-  style={{
-    borderRadius: 24,
-    borderCurve: "continuous",
-    glassEffect: "regular",
-    backdropFilter: "blur(20px)",
-  }}
->
+<View style={{ borderRadius: 24, borderCurve: "continuous", glassEffect: "regular", backdropFilter: "blur(20px)" }}>
   {props.children}
 </View>
 ```
@@ -331,15 +322,15 @@ for surfaces that float over content when appropriate, not automatically for eve
 
 Every handler takes one object. Destructure the event; that is safe, unlike props.
 
-| Prop                                                             | Argument                                           |
-| ---------------------------------------------------------------- | -------------------------------------------------- |
-| `Input` `onChange`                                               | `{ value }`                                        |
-| `Input` `onSubmit`                                               | `{ text }`                                         |
+| Prop | Argument |
+| --- | --- |
+| `Input` `onChange` | `{ value }` |
+| `Input` `onSubmit` | `{ text }` |
 | `Input` `onKeyPress`, `onSelectionChange`, `onCompositionChange` | `{ key }`, `{ start, end }`, `{ composing, text }` |
-| `View` `onPress`, `onLongPress`                                  | `PressEvent`; may be ignored                       |
-| `Button` (`nsh/base`) `onPress`                                  | Nothing                                            |
-| `View` `onLayout`                                                | `{ bounds }`                                       |
-| `Dialog`, `Sheet`, `Popover` `onOpenChange`                      | `{ open, reason }`                                 |
+| `View` `onPress`, `onLongPress` | `PressEvent`; may be ignored |
+| `Button` (`nsh/base`) `onPress` | Nothing |
+| `View` `onLayout` | `{ bounds }` |
+| `Dialog`, `Sheet`, `Popover` `onOpenChange` | `{ open, reason }` |
 
 **Handlers run asynchronously.** The main thread never waits for app code, so a handler cannot veto anything. A decision the system needs at once is a prop set beforehand: `popOnBack`, `closeOnEscape`, `disabled`. There is no callback returning a boolean.
 
@@ -375,11 +366,7 @@ export function SignIn(props: { onSubmit: (email: string, password: string) => v
         onSubmit={submit}
         class="rounded-(--radius) border border-input px-3 py-2 text-base"
       />
-      <Button
-        onPress={submit}
-        disabled={!email()}
-        class="rounded-(--radius) bg-primary px-4 py-2 active:bg-primary/90"
-      >
+      <Button onPress={submit} disabled={!email()} class="rounded-(--radius) bg-primary px-4 py-2 active:bg-primary/90">
         <Text class="text-primary-foreground">Sign in</Text>
       </Button>
     </View>
@@ -408,9 +395,7 @@ function Header(props: { title: string }) {
   return (
     <View class="h-12 flex-row items-center gap-3 border-b border-border px-4">
       <If when={nav.routes().length > 1}>
-        <Text role="button" onPress={() => nav.pop()}>
-          Back
-        </Text>
+        <Text role="button" onPress={() => nav.pop()}>Back</Text>
       </If>
       <Text class="font-semibold">{props.title}</Text>
     </View>
@@ -421,9 +406,7 @@ function Inbox() {
   return (
     <NavPage title="Inbox" header={<Header title="Inbox" />}>
       <Scroll class="flex-1">
-        <Text onPress={() => nav.push({ name: "message", id: 1 })} class="p-4">
-          Message 1
-        </Text>
+        <Text onPress={() => nav.push({ name: "message", id: 1 })} class="p-4">Message 1</Text>
       </Scroll>
     </NavPage>
   );
@@ -465,12 +448,7 @@ export function Confirm() {
       <Button onPress={() => open.set(true)}>
         <Text>Open</Text>
       </Button>
-      <Dialog
-        open={open()}
-        onOpenChange={(e) => open.set(e.open)}
-        class="m-auto rounded-(--radius) bg-popover p-4"
-        backdropClass="bg-black/50"
-      >
+      <Dialog open={open()} onOpenChange={(e) => open.set(e.open)} class="m-auto rounded-(--radius) bg-popover p-4" backdropClass="bg-black/50">
         <Text class="text-popover-foreground">Hello</Text>
       </Dialog>
     </View>
@@ -482,7 +460,7 @@ export function Confirm() {
 - `Dialog` keeps closing if the user closes it, whatever `open` says: keep `open` in sync in `onOpenChange`.
 - `closeOnEscape`, `closeOnBackdropPress`, `closeOnSwipe`, `closeOnPressOutside` decide dismissal up front.
 - `Sheet` takes `open`, `onOpenChange`, `side` and `popupClass`. `Popover` and `Menu` take `trigger` and `popupClass`.
-- `const { action } = await AlertDialog.show({ title, actions: [{ id: "delete", label: "Delete", role: "destructive" }] })` resolves the chosen `id`, or `null` when closed without one.
+- `const { action } = await AlertDialog.show({ title, actions: [{ id: "delete", label: "Delete", role: "destructive" }] })` resolves the chosen `id`, or `null` when closed without one. An alert with `input: { defaultValue, placeholder, selectTextOnFocus, required }` shows the system's text field (iOS, Android, macOS, web) and resolves its text as `value`.
 - `Menu` holds `MenuItem`s, each with `onSelect`.
 - `ToastStack`, `Tooltip`, `HoverCard`, `ContextMenu` and `Command` are also in `nsh/base`.
 
@@ -509,34 +487,34 @@ An app with no `"capabilities"` key may do everything except `host`, raw sockets
 
 Every row was run through `nsh build` and `nsh check` at `nsh 0.4.0`, and the run-time rows through `nsh test`. "Nothing" means every tool passes and the app is wrong.
 
-| Mistake                                                                                                                   | What happens                               | Reported by                       |
-| ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ | --------------------------------- |
-| Type error, wrong prop, missing prop                                                                                      | Build passes; wrong at run time            | `nsh check` only                  |
-| Props that do not exist: `className`, `onClick`, `onChangeText`, `onBeforeLeave`, `List`'s `data` and `renderItem`        | Do nothing, or wrong at run time           | `nsh check` only                  |
-| `onChange={(t: string) => ...}`                                                                                           | `t` is the object                          | `nsh check` only                  |
-| `window`, `document`, `localStorage`                                                                                      | Throws at run time                         | `nsh check` only                  |
-| `item.title` in `Each` or `List`, not `item().title`                                                                      | `undefined`                                | `nsh check` only                  |
-| `style={{ foo: 1 }}`                                                                                                      | Run-time `warn unsupported style property` | `nsh check`; at run time a `warn` |
-| `<view>` lowercase tag, `<Buton />`                                                                                       | Fails                                      | `nsh build`, `nsh check`          |
-| Using a missing export (`useState`, `FlatList`, `StyleSheet`, `Input` from `"nsh"`)                                       | Fails                                      | `nsh build`, `nsh check`          |
-| Same name imported and **not used**                                                                                       | Dropped from the bundle                    | `nsh check` only                  |
-| Using a bare package (`react`, `left-pad`), `fs`, `node:fs`, a missing relative file                                      | Fails                                      | `nsh build`, `nsh check`          |
-| Missing asset (`./x.png`)                                                                                                 | Fails                                      | `nsh build` only                  |
-| `<View>hello</View>`, `<View>{"hello"}</View>`                                                                            | Fails                                      | `nsh build` only                  |
-| `nsh.json` capabilities typo                                                                                              | Fails                                      | `nsh build` only                  |
-| `function Row({ title })`                                                                                                 | Stale                                      | `nsh build`, a `warn` only        |
-| Unknown class in a static `class`                                                                                         | The class does nothing                     | `nsh build`, a `warn` only        |
-| Unknown class built at run time                                                                                           | The class does nothing                     | Run-time log, once                |
-| Effect writing a signal it reads                                                                                          | App stops: `potential infinite loop`       | `nsh test`, or at run time        |
-| `eval`, `new Function`, writing to `Array.prototype`                                                                      | Fine in `nsh run`; throws when hardened    | `nsh test`, or in the package     |
-| `<Button>Save</Button>`, `<View>{count()}</View>`                                                                         | Not shown                                  | Nothing                           |
-| `const { title } = props`, `const { a, ...rest } = props`, `const v = count()` or `props.title.toUpperCase()` in the body | Stale                                      | Nothing                           |
-| `items().push(x); items.set(items())`                                                                                     | No update                                  | Nothing                           |
-| `effect(() => b.set(a()))`                                                                                                | Works; an extra pass                       | Nothing                           |
-| `cond() && <A />`, `.map(...)`                                                                                            | Works; rebuilds, losing state              | Nothing                           |
-| `signal` or `const t = row().title` in a `List` row                                                                       | State or data of the wrong item            | Nothing                           |
-| Hand-made dropdown from `View`                                                                                            | No keyboard or dismissal                   | Nothing                           |
-| Raw `#hex`, `bg-[#123456]`                                                                                                | Ignores the theme and dark mode            | Nothing                           |
-| `Switch` with no `trackClass` or `thumbClass`                                                                             | Invisible; tests pass                      | Nothing; look at it               |
+| Mistake | What happens | Reported by |
+| --- | --- | --- |
+| Type error, wrong prop, missing prop | Build passes; wrong at run time | `nsh check` only |
+| Props that do not exist: `className`, `onClick`, `onChangeText`, `onBeforeLeave`, `List`'s `data` and `renderItem` | Do nothing, or wrong at run time | `nsh check` only |
+| `onChange={(t: string) => ...}` | `t` is the object | `nsh check` only |
+| `window`, `document`, `localStorage` | Throws at run time | `nsh check` only |
+| `item.title` in `Each` or `List`, not `item().title` | `undefined` | `nsh check` only |
+| `style={{ foo: 1 }}` | Run-time `warn unsupported style property` | `nsh check`; at run time a `warn` |
+| `<view>` lowercase tag, `<Buton />` | Fails | `nsh build`, `nsh check` |
+| Using a missing export (`useState`, `FlatList`, `StyleSheet`, `Input` from `"nsh"`) | Fails | `nsh build`, `nsh check` |
+| Same name imported and **not used** | Dropped from the bundle | `nsh check` only |
+| Using a bare package (`react`, `left-pad`), `fs`, `node:fs`, a missing relative file | Fails | `nsh build`, `nsh check` |
+| Missing asset (`./x.png`) | Fails | `nsh build` only |
+| `<View>hello</View>`, `<View>{"hello"}</View>` | Fails | `nsh build` only |
+| `nsh.json` capabilities typo | Fails | `nsh build` only |
+| `function Row({ title })` | Stale | `nsh build`, a `warn` only |
+| Unknown class in a static `class` | The class does nothing | `nsh build`, a `warn` only |
+| Unknown class built at run time | The class does nothing | Run-time log, once |
+| Effect writing a signal it reads | App stops: `potential infinite loop` | `nsh test`, or at run time |
+| `eval`, `new Function`, writing to `Array.prototype` | Fine in `nsh run`; throws when hardened | `nsh test`, or in the package |
+| `<Button>Save</Button>`, `<View>{count()}</View>` | Not shown | Nothing |
+| `const { title } = props`, `const { a, ...rest } = props`, `const v = count()` or `props.title.toUpperCase()` in the body | Stale | Nothing |
+| `items().push(x); items.set(items())` | No update | Nothing |
+| `effect(() => b.set(a()))` | Works; an extra pass | Nothing |
+| `cond() && <A />`, `.map(...)` | Works; rebuilds, losing state | Nothing |
+| `signal` or `const t = row().title` in a `List` row | State or data of the wrong item | Nothing |
+| Hand-made dropdown from `View` | No keyboard or dismissal | Nothing |
+| Raw `#hex`, `bg-[#123456]` | Ignores the theme and dark mode | Nothing |
+| `Switch` with no `trackClass` or `thumbClass` | Invisible; tests pass | Nothing; look at it |
 
 Run `nsh check`, `nsh build` (read its warnings), `nsh test`, then `nsh run` and look.

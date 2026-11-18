@@ -1,6 +1,6 @@
 ---
 name: nsh
-description: "Build, run, test and package Native Shell (NSH) apps in Rust, TSX or both. Use for NSH development requests and projects with nsh.json, nsh-* crate dependencies or imports from nsh modules. Covers NSH reactivity, components, styling and tooling, with Coding Guides and working app recipes."
+description: 'Build, run, test and package Native Shell (NSH) apps in Rust, TSX or both. Use for NSH development requests and projects with nsh.json, nsh-* crate dependencies or imports from nsh modules. Covers NSH reactivity, components, styling and tooling, with Coding Guides and working app recipes.'
 ---
 
 # Native Shell
@@ -46,17 +46,17 @@ narrow change, extend the existing system within the requested scope.
 
 ## Choose the Mode, Then Read Its Page
 
-|                      | 1. Rust (preferred)                                                 | 2. Rust with TSX                                                         | 3. TSX                                                             |
-| -------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------ | ------------------------------------------------------------------ |
-| Choose it when       | The app ships in its binary; medium and large apps, demanding logic | A Rust core, plus screens that change often or arrive as signed packages | UI delivered at run time, with no Rust of your own                 |
-| Runs on              | The engine and your crate; no JavaScript VM                         | QuickJS (the browser's engine on the web) with your crate                | QuickJS (the browser's engine on the web)                          |
-| Start                | `nsh init my-app --template rust`                                   | `nsh init my-app --template mixed`                                       | `nsh init my-app --template ts`                                    |
-| How to recognize one | `nsh.json` has `"rust"` and `"root"`                                | `nsh.json` has `"rust"`, no `"root"`, and a TSX entry                    | `nsh.json` has no `"rust"`                                         |
-| Edits                | Rebuild and restart                                                 | TSX hot, Rust restarts                                                   | Hot                                                                |
-| Read first           | [rust.md](references/rust.md)                                       | [mixed.md](references/mixed.md), and rust.md for the crate               | [tsx.md](references/tsx.md)                                        |
-| Components           | [rust-ui.md](references/rust-ui.md)                                 | Both                                                                     | tsx.md, `.nsh/types`                                               |
-| Tests                | [rust-testing.md](references/rust-testing.md)                       | mixed.md "Tests on both sides"                                           | tsx.md, [testing guide](https://nsh.dev/docs/testing-and-trace.md) |
-| Whole app            | [rust-recipe.md](references/rust-recipe.md) (`examples/tasks-rs`)   | `examples/rust-exports`                                                  | [tsx-recipe.md](references/tsx-recipe.md) (`examples/tasks`)       |
+| | 1. Rust (preferred) | 2. Rust with TSX | 3. TSX |
+| --- | --- | --- | --- |
+| Choose it when | The app ships in its binary; medium and large apps, demanding logic | A Rust core, plus screens that change often or arrive as signed packages | UI delivered at run time, with no Rust of your own |
+| Runs on | The engine and your crate; no JavaScript VM | QuickJS (the browser's engine on the web) with your crate | QuickJS (the browser's engine on the web) |
+| Start | `nsh init my-app --template rust` | `nsh init my-app --template mixed` | `nsh init my-app --template ts` |
+| How to recognize one | `nsh.json` has `"rust"` and `"root"` | `nsh.json` has `"rust"`, no `"root"`, and a TSX entry | `nsh.json` has no `"rust"` |
+| Edits | Rebuild and restart | TSX hot, Rust restarts | Hot |
+| Read first | [rust.md](references/rust.md) | [mixed.md](references/mixed.md), and rust.md for the crate | [tsx.md](references/tsx.md) |
+| Components | [rust-ui.md](references/rust-ui.md) | Both | tsx.md, `.nsh/types` |
+| Tests | [rust-testing.md](references/rust-testing.md) | mixed.md "Tests on both sides" | tsx.md, [testing guide](https://nsh.dev/docs/testing-and-trace.md) |
+| Whole app | [rust-recipe.md](references/rust-recipe.md) (`examples/tasks-rs`) | `examples/rust-exports` | [tsx-recipe.md](references/tsx-recipe.md) (`examples/tasks`) |
 
 In an existing project, stay in its mode unless the user requests a change. For a new
 app, honor the requested mode; otherwise use the table above; a Rust app can gain TSX later, because it already has a
@@ -91,10 +91,10 @@ Two guides hold the rules this skill assumes. They are requirements, not
 inspiration. Read the guide file itself; do not answer from this page, from a
 similar file in the codebase, or from training data.
 
-| Guide                                        | Read before                                                                                                           |
-| -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| Design Guides, skill `nsh-design-guides`     | Choosing components, layout, spacing, hierarchy, color, density, interaction states, overlays, motion, interface copy |
-| [Coding Guides](references/coding-guides.md) | App structure, what runs once, state ownership, keys, theme, events, focus, async, lists, public API, naming, testing |
+| Guide                                        | Read before                                                                                                                 |
+| -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| Design Guides, skill `nsh-design-guides`     | Choosing components, layout, spacing, hierarchy, color, density, interaction states, overlays, motion, interface copy        |
+| [Coding Guides](references/coding-guides.md) | App structure, what runs once, state ownership, keys, theme, events, focus, async, lists, public API, naming, testing        |
 
 Read the Design Guides first when the change has a visible surface. If the design
 skill is not installed, fetch `https://nsh.dev/docs/design-guides.md`. The coding
@@ -108,30 +108,30 @@ Read the whole guide for a new app, module or feature. For a narrow change, read
 "Understand what runs once and what runs again" and "Rules for coding agents"
 first, then the section for the change (`grep -n '^## ' references/coding-guides.md`).
 
-| Section                                       | Read when                                                           |
-| --------------------------------------------- | ------------------------------------------------------------------- |
-| Build the app's UI foundations before pages   | Always; design standards, tokens, styled controls, target platforms |
-| Architecture at a glance                      | Always; layers, an app's files, the store                           |
-| Bootstrap and root ownership                  | `mount`, the root, what one surface is                              |
-| Understand what runs once and what runs again | Always; components, bindings, owners, context                       |
-| Choose the right unit                         | Plain function, component or Rust `#[component]`                    |
-| State ownership                               | Where state lives, controlled values, feedback loops                |
-| Stable identity                               | Keys, routes, test ids                                              |
-| Rendering and composition                     | Component bodies, `<If>`, using `nsh/base` before custom views      |
-| Behavior and presentation boundary            | What `nsh/base` owns, parts and slots                               |
-| Theme and styling                             | Tokens, the Tailwind scale, state styles, text size                 |
-| Events, commands, and focus                   | Presses, shortcuts, decisions as props, focus, overlays             |
-| Async work and side effects                   | `resource`, effects, stale results                                  |
-| Layout, measurement, and scrolling            | Flex defaults, `onLayout`, scroll owners, insets                    |
-| Lists, tables, and large data                 | `List`, why cells keep no state                                     |
-| Public API design                             | Anything other code imports                                         |
-| Platform and capability boundaries            | `ios={{}}`, `nsh/mobile`, `nsh/desktop`, `capabilities`             |
-| File and naming conventions                   | Names of components, props, events, states                          |
-| Testing strategy                              | `nsh test`, selectors, what to cover                                |
-| Performance rules                             | Before adding a cache; `nsh test --trace`                           |
-| Common failure modes                          | Before finishing                                                    |
-| Rules for coding agents                       | Always when an agent writes code                                    |
-| Implementation checklist                      | Before finishing; run every item against the work                   |
+| Section                                       | Read when                                                     |
+| --------------------------------------------- | ------------------------------------------------------------- |
+| Build the app's UI foundations before pages | Always; design standards, tokens, styled controls, target platforms |
+| Architecture at a glance                      | Always; layers, an app's files, the store                     |
+| Bootstrap and root ownership                  | `mount`, the root, what one surface is                        |
+| Understand what runs once and what runs again | Always; components, bindings, owners, context                 |
+| Choose the right unit                         | Plain function, component or Rust `#[component]`              |
+| State ownership                               | Where state lives, controlled values, feedback loops          |
+| Stable identity                               | Keys, routes, test ids                                        |
+| Rendering and composition                     | Component bodies, `<If>`, using `nsh/base` before custom views |
+| Behavior and presentation boundary            | What `nsh/base` owns, parts and slots                         |
+| Theme and styling                             | Tokens, the Tailwind scale, state styles, text size           |
+| Events, commands, and focus                   | Presses, shortcuts, decisions as props, focus, overlays       |
+| Async work and side effects                   | `resource`, effects, stale results                            |
+| Layout, measurement, and scrolling            | Flex defaults, `onLayout`, scroll owners, insets              |
+| Lists, tables, and large data                 | `List`, why cells keep no state                               |
+| Public API design                             | Anything other code imports                                   |
+| Platform and capability boundaries            | `ios={{}}`, `nsh/mobile`, `nsh/desktop`, `capabilities`       |
+| File and naming conventions                   | Names of components, props, events, states                    |
+| Testing strategy                              | `nsh test`, selectors, what to cover                          |
+| Performance rules                             | Before adding a cache; `nsh test --trace`                     |
+| Common failure modes                          | Before finishing                                              |
+| Rules for coding agents                       | Always when an agent writes code                              |
+| Implementation checklist                      | Before finishing; run every item against the work             |
 
 ### Non-negotiables
 
