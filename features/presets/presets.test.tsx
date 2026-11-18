@@ -607,3 +607,248 @@ test("presets ui: removes only a nondefault prompt", async () => {
   expect(savedData.items[0]!.engine.templates[0]!.id).toBe("tpl-2");
   expect(savedData.items[0]!.engine.defaultTemplateId).toBe("tpl-2");
 });
+
+test("presets ui: guards dirty navigation", async () => {
+  const chOk = makeChannel({ id: "ch-ok", displayName: "OpenAI Ready", enabled: true });
+  const chOff = makeChannel({ id: "ch-off", displayName: "OpenAI Off", enabled: false });
+  const mOk = makeModel({ id: "m-1", providerId: "ch-ok", modelKey: "gpt-4.1", enabled: true });
+  const mOff = makeModel({ id: "m-off", providerId: "ch-off", modelKey: "gpt-4o", enabled: true });
+
+  const p1 = makePresetRecord("p-1", "Preset One", ["m-off"]);
+  const p2 = makePresetRecord("p-2", "Preset Two", ["m-1"]);
+
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: makeSeedStorage({
+      channels: [chOk, chOff],
+      models: [mOk, mOff],
+      extra: {
+        [PRESETS_STORAGE_KEY]: JSON.stringify({ version: 1, items: [p1, p2] }),
+      },
+    }),
+  });
+
+  await app.press("id:nav-presets");
+  await app.waitFor("id:preset-name");
+
+  // Clean saved editor switches/navigates with no confirmation prompt.
+  await app.press("id:preset-item-p-2");
+  await app.waitUntil(() => app.value("id:preset-name") === "Preset Two");
+  expect(app.shows("id:preset-discard-dialog")).toBe(false);
+
+  await app.press("id:preset-item-p-1");
+  await app.waitUntil(() => app.value("id:preset-name") === "Preset One");
+
+  await app.press("id:nav-settings");
+  await app.waitFor("text:Appearance");
+  expect(app.shows("id:preset-discard-dialog")).toBe(false);
+
+  await app.press("id:nav-presets");
+  await app.waitFor("id:preset-name");
+  await app.press("id:preset-manage-models");
+  await app.waitFor("id:models-page");
+  expect(app.shows("id:preset-discard-dialog")).toBe(false);
+
+  await app.press("id:nav-presets");
+  await app.waitFor("id:preset-name");
+
+  // 1. Cancel guard: Escape keeps edits and restores focus; Discard reverts edits.
+  await app.type("id:preset-name", " Edited");
+  await app.press("id:preset-cancel");
+  await app.waitFor("id:preset-discard-dialog");
+  await app.keyboard.press("escape");
+  await app.waitUntil(() => !app.shows("id:preset-discard-dialog"));
+  expect(app.value("id:preset-name")).toBe("Preset One Edited");
+  await app.keyboard.press("x");
+  expect(app.value("id:preset-name")).toBe("Preset One Editedx");
+
+  await app.press("id:preset-cancel");
+  await app.waitFor("id:preset-discard-dialog");
+  await app.press("id:preset-discard-confirm");
+  await app.waitUntil(() => !app.shows("id:preset-discard-dialog"));
+  expect(app.value("id:preset-name")).toBe("Preset One");
+
+  // 2. Switch preset guard: Keep Editing keeps edits and restores focus; Discard switches.
+  await app.type("id:preset-name", " SwitchDirty");
+  await app.press("id:preset-item-p-2");
+  await app.waitFor("id:preset-discard-dialog");
+  await app.press("id:preset-discard-keep-editing");
+  await app.waitUntil(() => !app.shows("id:preset-discard-dialog"));
+  expect(app.value("id:preset-name")).toBe("Preset One SwitchDirty");
+  await app.keyboard.press("y");
+  expect(app.value("id:preset-name")).toBe("Preset One SwitchDirtyy");
+
+  await app.press("id:preset-item-p-2");
+  await app.waitFor("id:preset-discard-dialog");
+  await app.press("id:preset-discard-confirm");
+  await app.waitUntil(() => app.value("id:preset-name") === "Preset Two");
+
+  // 3. Add Preset guard: Discard opens fresh draft; clean draft Cancel closes without prompt.
+  await app.press("id:preset-item-p-1");
+  await app.waitUntil(() => app.value("id:preset-name") === "Preset One");
+  await app.type("id:preset-name", " AddDirty");
+  await app.press("id:add-preset-button");
+  await app.waitFor("id:preset-discard-dialog");
+  await app.press("id:preset-discard-confirm");
+  await app.waitUntil(() => !app.shows("id:preset-discard-dialog"));
+  expect(app.shows("id:preset-draft-item")).toBe(true);
+  expect(app.value("id:preset-name")).toBe("");
+  await app.press("id:preset-cancel");
+  await app.waitUntil(() => !app.shows("id:preset-draft-item"));
+  expect(app.shows("id:preset-discard-dialog")).toBe(false);
+
+  // 4. Sidebar nav guard.
+  await app.press("id:preset-item-p-1");
+  await app.waitUntil(() => app.value("id:preset-name") === "Preset One");
+  await app.type("id:preset-name", " NavDirty");
+  await app.press("id:nav-settings");
+  await app.waitFor("id:preset-discard-dialog");
+  await app.press("id:preset-discard-keep-editing");
+  await app.waitUntil(() => !app.shows("id:preset-discard-dialog"));
+  expect(app.shows("id:presets-page")).toBe(true);
+  await app.press("id:nav-models");
+  await app.waitFor("id:preset-discard-dialog");
+  await app.press("id:preset-discard-confirm");
+  await app.waitFor("id:models-page");
+
+  // 5. Manage Models guard.
+  await app.press("id:nav-presets");
+  await app.waitFor("id:preset-name");
+  expect(app.value("id:preset-name")).toBe("Preset One");
+  await app.type("id:preset-name", " ManageDirty");
+  await app.press("id:preset-manage-models");
+  await app.waitFor("id:preset-discard-dialog");
+  await app.press("id:preset-discard-confirm");
+  await app.waitFor("id:models-page");
+
+  // 6. Pending write blocks leaving until it settles.
+  let resolveSlowWrite!: () => void;
+  const slowBacking: Record<string, string> = {
+    ...makeSeedStorage({
+      channels: [chOk],
+      models: [mOk],
+      extra: {
+        [PRESETS_STORAGE_KEY]: JSON.stringify({ version: 1, items: [p2] }),
+      },
+    }),
+  };
+  let presetWrites = 0;
+
+  const slowApp = await open(APP_ENTRY, {
+    ...viewport,
+    storage: slowBacking,
+    modules: {
+      nsh: {
+        "Storage.getItem": async (key: string) => slowBacking[key] ?? null,
+        "Storage.setItem": async (key: string, value: string) => {
+          if (key === PRESETS_STORAGE_KEY) {
+            presetWrites += 1;
+            await new Promise<void>((resolve) => {
+              resolveSlowWrite = resolve;
+            });
+          }
+          slowBacking[key] = value;
+        },
+        "Storage.removeItem": async (key: string) => {
+          delete slowBacking[key];
+        },
+      },
+    },
+  });
+
+  await slowApp.press("id:nav-presets");
+  await slowApp.waitFor("id:preset-name");
+  await slowApp.type("id:preset-name", " Saving");
+  const saveOp = slowApp.press("id:preset-save");
+  await slowApp.waitUntil(() => presetWrites === 1);
+
+  expect(slowApp.enabled("id:add-preset-button")).toBe(false);
+  expect(slowApp.enabled("id:preset-cancel")).toBe(false);
+  await slowApp.press("id:nav-models");
+  expect(slowApp.shows("id:presets-page")).toBe(true);
+  expect(slowApp.shows("id:models-page")).toBe(false);
+  expect(slowApp.shows("id:preset-discard-dialog")).toBe(false);
+
+  resolveSlowWrite();
+  await saveOp;
+  await slowApp.waitUntil(() => slowApp.enabled("id:add-preset-button"));
+
+  await slowApp.press("id:nav-models");
+  await slowApp.waitFor("id:models-page");
+});
+
+test("presets ui: confirms delete and selects the next preset", async () => {
+  const chOk = makeChannel({ id: "ch-ok", displayName: "OpenAI Main", enabled: true });
+  const mOk = makeModel({ id: "m-1", providerId: "ch-ok", modelKey: "gpt-4.1", enabled: true });
+  const p1 = makePresetRecord("p-1", "Alpha", ["m-1"]);
+  const p2 = makePresetRecord("p-2", "Beta", ["m-1"]);
+  const p3 = makePresetRecord("p-3", "Gamma", ["m-1"]);
+
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: makeSeedStorage({
+      channels: [chOk],
+      models: [mOk],
+      extra: {
+        [PRESETS_STORAGE_KEY]: JSON.stringify({ version: 1, items: [p1, p2, p3] }),
+      },
+    }),
+  });
+
+  await app.press("id:nav-presets");
+  await app.waitFor("id:preset-name");
+  expect(app.value("id:preset-name")).toBe("Alpha");
+
+  // Cancelling Delete keeps both the saved preset and unsaved edits intact.
+  await app.clear("id:preset-name");
+  await app.type("id:preset-name", "Alpha Unsaved");
+  await app.press("id:preset-delete");
+  await app.waitFor("id:preset-delete-dialog");
+  await app.press("id:preset-delete-cancel");
+  await app.waitUntil(() => !app.shows("id:preset-delete-dialog"));
+  expect(app.value("id:preset-name")).toBe("Alpha Unsaved");
+  expect(app.shows("id:preset-item-p-1")).toBe(true);
+
+  // Confirming deletion of first row selects the next row (Beta).
+  await app.press("id:preset-delete");
+  await app.waitFor("id:preset-delete-dialog");
+  await app.press("id:preset-delete-confirm");
+  await app.waitUntil(() => !app.shows("id:preset-delete-dialog"));
+  await app.waitUntil(() => app.value("id:preset-name") === "Beta");
+  expect(app.shows("id:preset-item-p-1")).toBe(false);
+
+  // Confirming deletion of the last row (Gamma) selects the previous row (Beta).
+  await app.press("id:preset-item-p-3");
+  await app.waitUntil(() => app.value("id:preset-name") === "Gamma");
+  await app.press("id:preset-delete");
+  await app.waitFor("id:preset-delete-dialog");
+  await app.press("id:preset-delete-confirm");
+  await app.waitUntil(() => !app.shows("id:preset-delete-dialog"));
+  await app.waitUntil(() => app.value("id:preset-name") === "Beta");
+  expect(app.shows("id:preset-item-p-3")).toBe(false);
+
+  // Reopen app to verify remaining preset persists, then delete last preset to empty state.
+  const persisted = app.storage();
+  const parsed = JSON.parse(persisted[PRESETS_STORAGE_KEY]!) as { items: TranslationPreset[] };
+  expect(parsed.items.map((item) => item.id)).toEqual(["p-2"]);
+
+  const reopened = await open(APP_ENTRY, {
+    ...viewport,
+    storage: persisted,
+  });
+  await reopened.press("id:nav-presets");
+  await reopened.waitFor("id:preset-name");
+  expect(reopened.value("id:preset-name")).toBe("Beta");
+
+  await reopened.press("id:preset-delete");
+  await reopened.waitFor("id:preset-delete-dialog");
+  await reopened.press("id:preset-delete-confirm");
+  await reopened.waitUntil(() => !reopened.shows("id:preset-delete-dialog"));
+  await reopened.waitUntil(() => reopened.shows("id:empty-add-preset-button"));
+  expect(reopened.texts()).toContain("No presets yet");
+
+  await reopened.press("id:empty-add-preset-button");
+  await reopened.waitFor("id:preset-name");
+  await reopened.keyboard.press("x");
+  expect(reopened.value("id:preset-name")).toBe("x");
+});

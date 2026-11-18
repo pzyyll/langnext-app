@@ -3,6 +3,7 @@ import {
   cleanup,
   effect,
   List,
+  setAccessibilityFocus,
   signal,
   Text,
   View,
@@ -15,6 +16,7 @@ import type { NavigationLeaveGuard } from "../../components/layout/navigation-le
 import { motion } from "../../components/motion";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
+import { ConfirmDialog } from "../../components/ui/dialog";
 import { Icon } from "../../components/ui/icon";
 import { toast } from "../../components/ui/toast";
 import { modelsStore } from "../models/store";
@@ -26,7 +28,7 @@ import {
   isDraftDirty,
   type PresetDraft,
 } from "./draft";
-import { PresetEditor } from "./editor";
+import { PresetEditor, type FocusableEditorField } from "./editor";
 import { readAvailableModelChoices, summarizePresetModels } from "./model-choices";
 import type { TemplateEditableField } from "./prompt-templates";
 import { presetsStore } from "./store";
@@ -52,16 +54,75 @@ export function PresetsPage(props: PresetsPageProps) {
   const errorFieldSignal = signal<PresetValidationField | null>(null);
   const errorFallbackIndexSignal = signal<number | null>(null);
   const errorTemplateIdSignal = signal<string | null>(null);
+  const discardOpenSignal = signal<boolean>(false);
+  const deleteTargetSignal = signal<{ id: string; name: string } | null>(null);
+  const deleteErrorSignal = signal<string | null>(null);
 
   let nameInputRef: InputRef | null = null;
   let primaryModelRef: ViewRef | null = null;
   const fallbackRefs = new Map<number, ViewRef>();
   let temperatureInputRef: InputRef | null = null;
   let maxTokensInputRef: InputRef | null = null;
+  let deleteButtonRef: ViewRef | null = null;
+  let emptyAddButtonRef: ViewRef | null = null;
+  let discardKeepEditingRef: ViewRef | null = null;
+  let deleteCancelRef: ViewRef | null = null;
+  const presetRowRefs = new Map<string, ViewRef>();
   const templateFieldRefs = new Map<string, Partial<Record<TemplateEditableField, InputRef>>>();
   let pendingTemplateFocus: { templateId: string; field: TemplateEditableField } | null = null;
+  let lastFocusedField: FocusableEditorField = { kind: "name" };
+  let pendingDiscardAction: (() => void) | null = null;
+  let restoreDiscardFocusOnClose = false;
+  let pendingPostDeleteFocus:
+    | { kind: "empty" }
+    | { kind: "row"; id: string }
+    | { kind: "deleteButton" }
+    | null = null;
 
-  const unregisterGuard = props.onRegisterLeaveGuard?.(() => !presetsStore.mutating());
+  const isDirty = () => {
+    const current = draftSignal();
+    const baseline = baselineSignal();
+    if (!current || !baseline) return false;
+    return isDraftDirty(current, baseline);
+  };
+
+  const focusNode = (node: ViewRef | InputRef | null | undefined) => {
+    if (!node) return;
+    node.focus();
+    setAccessibilityFocus(node);
+  };
+
+  const restoreLastEditorFocus = () => {
+    const target: FocusableEditorField = lastFocusedField;
+    queueMicrotask(() => {
+      switch (target.kind) {
+        case "name":
+          focusNode(nameInputRef);
+          break;
+        case "temperature":
+          focusNode(temperatureInputRef);
+          break;
+        case "maxOutputTokens":
+          focusNode(maxTokensInputRef);
+          break;
+        case "template":
+          focusNode(templateFieldRefs.get(target.templateId)?.[target.field]);
+          break;
+      }
+    });
+  };
+
+  const unregisterGuard = props.onRegisterLeaveGuard?.((proceed) => {
+    if (presetsStore.mutating()) {
+      return false;
+    }
+    if (!isDirty()) {
+      return true;
+    }
+    pendingDiscardAction = proceed;
+    discardOpenSignal.set(true);
+    return false;
+  });
   if (unregisterGuard) {
     cleanup(unregisterGuard);
   }
@@ -93,12 +154,6 @@ export function PresetsPage(props: PresetsPageProps) {
   const loadError = () => {
     const current = status();
     return current.kind === "error" ? current.message : null;
-  };
-  const isDirty = () => {
-    const current = draftSignal();
-    const baseline = baselineSignal();
-    if (!current || !baseline) return false;
-    return isDraftDirty(current, baseline);
   };
   const modelChoices = () => readAvailableModelChoices();
   const modelsError = () => modelsStore.channelsError();
@@ -158,6 +213,9 @@ export function PresetsPage(props: PresetsPageProps) {
   const applySavedRecord = (record: TranslationPreset) => {
     const nextDraft = createDraftFromPreset(record);
     const samePreset = selectedIdSignal() === record.id;
+    if (!samePreset) {
+      lastFocusedField = { kind: "name" };
+    }
     const currentTpl = selectedTemplateIdSignal();
     const keepTpl =
       samePreset &&
@@ -189,9 +247,19 @@ export function PresetsPage(props: PresetsPageProps) {
     });
   };
 
-  const startNewDraft = () => {
-    if (!isReady() || presetsStore.mutating()) return;
+  const guardNavigation = (action: () => void) => {
+    if (presetsStore.mutating()) return;
+    if (!isDirty()) {
+      action();
+      return;
+    }
+    pendingDiscardAction = action;
+    discardOpenSignal.set(true);
+  };
+
+  const openFreshDraft = () => {
     const empty = createEmptyDraft();
+    lastFocusedField = { kind: "name" };
     batch(() => {
       selectedIdSignal.set(null);
       selectedTemplateIdSignal.set(empty.templates[0]?.id ?? null);
@@ -203,11 +271,17 @@ export function PresetsPage(props: PresetsPageProps) {
     queueMicrotask(() => nameInputRef?.focus());
   };
 
+  const startNewDraft = () => {
+    if (!isReady() || presetsStore.mutating()) return;
+    guardNavigation(() => openFreshDraft());
+  };
+
   const selectSavedPreset = (id: string) => {
     if (presetsStore.mutating()) return;
+    if (!isNewDraft() && selectedIdSignal() === id) return;
     const target = presetsStore.records().find((item) => item.id === id);
     if (!target) return;
-    applySavedRecord(target);
+    guardNavigation(() => applySavedRecord(target));
   };
 
   const updateDraft = (patch: Partial<PresetDraft>) => {
@@ -248,20 +322,92 @@ export function PresetsPage(props: PresetsPageProps) {
   const handleCancel = () => {
     const current = draftSignal();
     if (!current || presetsStore.mutating()) return;
-    clearErrors();
-    if (current.sourceId === null) {
-      selectEmptyOrFirst();
-      return;
-    }
-    const baseline = baselineSignal();
-    if (baseline) {
-      const currentTpl = selectedTemplateIdSignal();
-      const keepTpl =
-        currentTpl !== null && baseline.templates.some((tpl) => tpl.id === currentTpl);
-      batch(() => {
-        selectedTemplateIdSignal.set(keepTpl ? currentTpl : (baseline.templates[0]?.id ?? null));
-        draftSignal.set(cloneDraft(baseline));
-      });
+    const resetDraft = () => {
+      clearErrors();
+      if (current.sourceId === null) {
+        selectEmptyOrFirst();
+        return;
+      }
+      const baseline = baselineSignal();
+      if (baseline) {
+        const currentTpl = selectedTemplateIdSignal();
+        const keepTpl =
+          currentTpl !== null && baseline.templates.some((tpl) => tpl.id === currentTpl);
+        batch(() => {
+          selectedTemplateIdSignal.set(keepTpl ? currentTpl : (baseline.templates[0]?.id ?? null));
+          draftSignal.set(cloneDraft(baseline));
+        });
+      }
+    };
+    guardNavigation(resetDraft);
+  };
+
+  const handleManageModels = () => {
+    if (presetsStore.mutating()) return;
+    props.onNavigateToModels?.();
+  };
+
+  const cancelDiscardPrompt = () => {
+    pendingDiscardAction = null;
+    discardOpenSignal.set(false);
+  };
+
+  const confirmDiscardPrompt = () => {
+    const action = pendingDiscardAction;
+    pendingDiscardAction = null;
+    restoreDiscardFocusOnClose = false;
+    discardOpenSignal.set(false);
+    action?.();
+  };
+
+  const openDeleteDialog = () => {
+    const current = draftSignal();
+    if (!current || !current.sourceId || presetsStore.mutating()) return;
+    const saved = presetsStore.records().find((item) => item.id === current.sourceId);
+    const displayName = saved?.name ?? (current.name.trim() || t("presets.editor.untitled"));
+    batch(() => {
+      deleteErrorSignal.set(null);
+      deleteTargetSignal.set({ id: current.sourceId!, name: displayName });
+    });
+  };
+
+  const closeDeleteDialog = () => {
+    if (presetsStore.mutating()) return;
+    batch(() => {
+      deleteErrorSignal.set(null);
+      deleteTargetSignal.set(null);
+    });
+  };
+
+  const confirmDelete = async () => {
+    const target = deleteTargetSignal();
+    if (!target || presetsStore.mutating()) return;
+    deleteErrorSignal.set(null);
+    const recordsBefore = presetsStore.records();
+    const deletedIndex = recordsBefore.findIndex((item) => item.id === target.id);
+
+    try {
+      await presetsStore.remove(target.id);
+      const remaining = presetsStore.records();
+      if (remaining.length === 0) {
+        pendingPostDeleteFocus = { kind: "empty" };
+        selectEmptyOrFirst();
+      } else {
+        const nextIndex = deletedIndex >= 0 ? Math.min(deletedIndex, remaining.length - 1) : 0;
+        const nextPreset = remaining[nextIndex]!;
+        pendingPostDeleteFocus = { kind: "row", id: nextPreset.id };
+        applySavedRecord(nextPreset);
+      }
+      deleteTargetSignal.set(null);
+      toast.success(t("presets.editor.deleted", { name: target.name }));
+    } catch (error) {
+      const detail =
+        error instanceof PresetsStoreError && error.cause instanceof Error
+          ? error.cause.message
+          : error instanceof Error
+            ? error.message
+            : String(error);
+      deleteErrorSignal.set(t("presets.delete.error", { detail }));
     }
   };
 
@@ -339,6 +485,18 @@ export function PresetsPage(props: PresetsPageProps) {
                         class="min-h-0 flex-1"
                       >
                         {(preset) => {
+                          let rowBtnRef: ViewRef | null = null;
+                          effect(() => {
+                            const id = preset().id;
+                            if (rowBtnRef) {
+                              presetRowRefs.set(id, rowBtnRef);
+                            }
+                            cleanup(() => {
+                              if (presetRowRefs.get(id) === rowBtnRef) {
+                                presetRowRefs.delete(id);
+                              }
+                            });
+                          });
                           const isSelected = () =>
                             !isNewDraft() && selectedIdSignal() === preset().id;
                           return (
@@ -352,6 +510,10 @@ export function PresetsPage(props: PresetsPageProps) {
                             >
                               <Button
                                 testID={`preset-item-${preset().id}`}
+                                ref={(node) => {
+                                  rowBtnRef = node;
+                                  presetRowRefs.set(preset().id, node);
+                                }}
                                 variant="ghost"
                                 size="row"
                                 selected={isSelected()}
@@ -424,6 +586,9 @@ export function PresetsPage(props: PresetsPageProps) {
             <If when={isReady()}>
               <Button
                 testID="empty-add-preset-button"
+                ref={(node) => {
+                  emptyAddButtonRef = node;
+                }}
                 variant="primary"
                 size="md"
                 accessibilityLabel={t("presets.action.add")}
@@ -454,7 +619,8 @@ export function PresetsPage(props: PresetsPageProps) {
           onSelectTemplate={(templateId) => selectedTemplateIdSignal.set(templateId)}
           onSave={() => void handleSave()}
           onCancel={() => handleCancel()}
-          onManageModels={() => props.onNavigateToModels?.()}
+          onDelete={() => openDeleteDialog()}
+          onManageModels={() => handleManageModels()}
           onNameRef={(node) => {
             nameInputRef = node;
           }}
@@ -474,6 +640,9 @@ export function PresetsPage(props: PresetsPageProps) {
           onMaxTokensRef={(node) => {
             maxTokensInputRef = node;
           }}
+          onDeleteRef={(node) => {
+            deleteButtonRef = node;
+          }}
           onTemplateFieldRef={(templateId, field, node) => {
             const existing = templateFieldRefs.get(templateId) ?? {};
             existing[field] = node;
@@ -490,8 +659,82 @@ export function PresetsPage(props: PresetsPageProps) {
           onClearTemplateRefs={(templateId) => {
             templateFieldRefs.delete(templateId);
           }}
+          onFieldFocus={(target) => {
+            lastFocusedField = target;
+          }}
         />
       </If>
+
+      <ConfirmDialog
+        testID="preset-discard-dialog"
+        cancelTestID="preset-discard-keep-editing"
+        confirmTestID="preset-discard-confirm"
+        open={discardOpenSignal()}
+        title={t("presets.discard.title")}
+        description={t("presets.discard.description")}
+        cancelLabel={t("presets.discard.keepEditing")}
+        confirmLabel={t("presets.discard.confirm")}
+        cancelRef={(node) => {
+          discardKeepEditingRef = node;
+        }}
+        onOpen={() => {
+          restoreDiscardFocusOnClose = true;
+          focusNode(discardKeepEditingRef);
+        }}
+        onClose={() => {
+          if (restoreDiscardFocusOnClose) {
+            restoreDiscardFocusOnClose = false;
+            restoreLastEditorFocus();
+          }
+        }}
+        onConfirm={() => confirmDiscardPrompt()}
+        onOpenChange={(open) => {
+          if (!open) {
+            cancelDiscardPrompt();
+          }
+        }}
+      />
+
+      <ConfirmDialog
+        testID="preset-delete-dialog"
+        cancelTestID="preset-delete-cancel"
+        confirmTestID="preset-delete-confirm"
+        open={deleteTargetSignal() !== null}
+        title={t("presets.delete.title")}
+        description={t("presets.delete.description", {
+          name: deleteTargetSignal()?.name ?? "",
+        })}
+        error={deleteErrorSignal()}
+        cancelLabel={t("common.cancel")}
+        confirmLabel={t("common.delete")}
+        confirmVariant="destructive"
+        busy={presetsStore.mutating()}
+        cancelRef={(node) => {
+          deleteCancelRef = node;
+        }}
+        onOpen={() => {
+          pendingPostDeleteFocus = { kind: "deleteButton" };
+          focusNode(deleteCancelRef);
+        }}
+        onClose={() => {
+          const focusTarget = pendingPostDeleteFocus;
+          pendingPostDeleteFocus = null;
+          if (!focusTarget) return;
+          if (focusTarget.kind === "empty") {
+            focusNode(emptyAddButtonRef);
+          } else if (focusTarget.kind === "row") {
+            focusNode(presetRowRefs.get(focusTarget.id));
+          } else {
+            focusNode(deleteButtonRef);
+          }
+        }}
+        onConfirm={() => void confirmDelete()}
+        onOpenChange={(open) => {
+          if (!open) {
+            closeDeleteDialog();
+          }
+        }}
+      />
     </>
   );
 }

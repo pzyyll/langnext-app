@@ -463,3 +463,31 @@ test("presets store: validates every prompt template", async () => {
     },
   ]);
 });
+
+test("presets store: removes only the requested preset", async () => {
+  const mem = createMemoryStorage();
+  const choices = (): ModelChoiceId[] => [{ id: "m-1" }];
+  const store1 = createPresetsStore(mem.storage, choices);
+  await store1.load();
+
+  const p1 = await store1.save(makeBaseInput({ name: "First Preset" }));
+  const p2 = await store1.save(makeBaseInput({ name: "Second Preset" }));
+
+  await store1.remove(p1.id);
+  expect(store1.records()).toEqual([p2]);
+
+  const store2 = createPresetsStore(mem.storage, choices);
+  await store2.load();
+  expect(store2.records()).toEqual([p2]);
+
+  // Removing a missing preset fails explicitly without overwriting storage.
+  const callsBeforeMissing = mem.getSetCalls();
+  await expect(store2.remove(p1.id)).rejects.toMatchObject({ key: "not_found" });
+  expect(mem.getSetCalls()).toBe(callsBeforeMissing);
+
+  // Storage write failure leaves previous records intact.
+  mem.setSetError(new Error("ERR_DISK_LOCKED"));
+  await expect(store2.remove(p2.id)).rejects.toMatchObject({ key: "storage_write_failed" });
+  expect(store2.records()).toEqual([p2]);
+  expect(JSON.parse(mem.backing[PRESETS_STORAGE_KEY]!).items).toEqual([p2]);
+});

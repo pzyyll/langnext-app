@@ -19,6 +19,10 @@ import { ModelsSection } from "./models-section";
 import { PromptTemplates, type TemplateEditableField } from "./prompt-templates";
 import type { ModelChoice, PresetValidationField, PromptTemplate } from "./types";
 
+export type FocusableEditorField =
+  | { kind: "name" | "temperature" | "maxOutputTokens" }
+  | { kind: "template"; templateId: string; field: TemplateEditableField };
+
 interface PresetEditorProps {
   draft: PresetDraft;
   dirty: boolean;
@@ -35,14 +39,17 @@ interface PresetEditorProps {
   onSelectTemplate: (templateId: string) => void;
   onSave: () => void;
   onCancel: () => void;
+  onDelete: () => void;
   onManageModels: () => void;
   onNameRef: (node: InputRef) => void;
   onPrimaryModelRef: (node: ViewRef) => void;
   onFallbackRef: (index: number, node: ViewRef | null) => void;
   onTemperatureRef: (node: InputRef) => void;
   onMaxTokensRef: (node: InputRef) => void;
+  onDeleteRef: (node: ViewRef) => void;
   onTemplateFieldRef: (templateId: string, field: TemplateEditableField, node: InputRef) => void;
   onClearTemplateRefs: (templateId: string) => void;
+  onFieldFocus: (target: FocusableEditorField) => void;
 }
 
 const SOURCE_LANGUAGE_ITEMS: SelectItem[] = [AUTO_LANGUAGE, ...LANGUAGE_IDS].map((id) => ({
@@ -215,6 +222,7 @@ export function PresetEditor(props: PresetEditorProps) {
                 accessibilityLabel={t("presets.field.name")}
                 autoFocus={props.autoFocusName}
                 disabled={props.saving}
+                onFocus={() => props.onFieldFocus({ kind: "name" })}
                 onChange={(name) => props.onChange({ name })}
               />
             </FormField>
@@ -288,6 +296,7 @@ export function PresetEditor(props: PresetEditorProps) {
             onFallbackRef={(index, node) => props.onFallbackRef(index, node)}
             onTemperatureRef={(node) => props.onTemperatureRef(node)}
             onMaxTokensRef={(node) => props.onMaxTokensRef(node)}
+            onFieldFocus={(field) => props.onFieldFocus({ kind: field })}
           />
 
           <PromptTemplates
@@ -306,8 +315,25 @@ export function PresetEditor(props: PresetEditorProps) {
             onTemplateFieldRef={(tplId, field, node) =>
               props.onTemplateFieldRef(tplId, field, node)
             }
+            onTemplateFieldFocus={(templateId, field) =>
+              props.onFieldFocus({ kind: "template", templateId, field })
+            }
             onClearTemplateRefs={(tplId) => props.onClearTemplateRefs(tplId)}
           />
+
+          <If when={props.draft.sourceId !== null}>
+            <View class="flex-row justify-end">
+              <Button
+                testID="preset-delete"
+                ref={(node) => props.onDeleteRef(node)}
+                variant="destructive-outline"
+                size="sm"
+                label={t("presets.action.delete")}
+                disabled={props.saving}
+                onPress={() => props.onDelete()}
+              />
+            </View>
+          </If>
         </View>
       </Scroll>
     </View>

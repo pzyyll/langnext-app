@@ -25,6 +25,7 @@ interface PromptTemplatesProps {
   onSetDefault: (templateId: string) => void;
   onRemoveTemplate: (templateId: string) => void;
   onTemplateFieldRef: (templateId: string, field: TemplateEditableField, node: InputRef) => void;
+  onTemplateFieldFocus: (templateId: string, field: TemplateEditableField) => void;
   onClearTemplateRefs: (templateId: string) => void;
 }
 
@@ -162,6 +163,7 @@ export function PromptTemplates(props: PromptTemplatesProps) {
                       placeholder={t("presets.prompt.namePlaceholder")}
                       accessibilityLabel={t("presets.prompt.nameLabel")}
                       disabled={props.saving}
+                      onFocus={() => props.onTemplateFieldFocus(tpl().id, "templateName")}
                       onChange={(name) => props.onUpdateTemplate(tpl().id, { name })}
                     />
                   </FormField>
@@ -176,6 +178,7 @@ export function PromptTemplates(props: PromptTemplatesProps) {
                       value={tpl().systemTemplate}
                       accessibilityLabel={t("presets.prompt.systemLabel")}
                       disabled={props.saving}
+                      onFocus={() => props.onTemplateFieldFocus(tpl().id, "systemTemplate")}
                       onChange={(systemTemplate) =>
                         props.onUpdateTemplate(tpl().id, { systemTemplate })
                       }
@@ -193,6 +196,7 @@ export function PromptTemplates(props: PromptTemplatesProps) {
                       value={tpl().userTemplate}
                       accessibilityLabel={t("presets.prompt.userLabel")}
                       disabled={props.saving}
+                      onFocus={() => props.onTemplateFieldFocus(tpl().id, "userTemplate")}
                       onChange={(userTemplate) =>
                         props.onUpdateTemplate(tpl().id, { userTemplate })
                       }

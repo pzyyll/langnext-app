@@ -32,6 +32,7 @@ interface ModelsSectionProps {
   onFallbackRef: (index: number, node: ViewRef | null) => void;
   onTemperatureRef: (node: InputRef) => void;
   onMaxTokensRef: (node: InputRef) => void;
+  onFieldFocus: (field: "temperature" | "maxOutputTokens") => void;
 }
 
 /** Editor section for ordered primary + fallback AI models and optional sampling parameters. */
@@ -306,6 +307,7 @@ export function ModelsSection(props: ModelsSectionProps) {
             placeholder={t("presets.model.temperaturePlaceholder")}
             accessibilityLabel={t("presets.model.temperature")}
             disabled={props.saving}
+            onFocus={() => props.onFieldFocus("temperature")}
             onChange={(value) => props.onChangeTemperature(value)}
           />
         </FormField>
@@ -322,6 +324,7 @@ export function ModelsSection(props: ModelsSectionProps) {
             placeholder={t("presets.model.maxOutputTokensPlaceholder")}
             accessibilityLabel={t("presets.model.maxOutputTokens")}
             disabled={props.saving}
+            onFocus={() => props.onFieldFocus("maxOutputTokens")}
             onChange={(value) => props.onChangeMaxOutputTokens(value)}
           />
         </FormField>

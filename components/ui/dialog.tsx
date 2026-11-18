@@ -72,11 +72,14 @@ interface ConfirmDialogProps {
   open: boolean;
   title: string;
   description: string;
+  error?: string | null;
   confirmLabel?: string;
   cancelLabel?: string;
   confirmVariant?: ButtonVariant;
   busy?: boolean;
   testID?: string;
+  cancelTestID?: string;
+  confirmTestID?: string;
   cancelRef?: (node: ViewRef) => void;
   onOpen?: () => void;
   onClose?: () => void;
@@ -104,6 +107,7 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
       footer={
         <>
           <Button
+            testID={props.cancelTestID}
             ref={(node) => props.cancelRef?.(node)}
             variant="outline"
             size="sm"
@@ -112,6 +116,7 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
             onPress={() => props.onOpenChange(false)}
           />
           <Button
+            testID={props.confirmTestID}
             variant={props.confirmVariant ?? "destructive"}
             size="sm"
             label={props.confirmLabel ?? t("common.confirm")}
@@ -120,6 +125,12 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
           />
         </>
       }
-    />
+    >
+      <If when={Boolean(props.error)}>
+        <Text role="alert" class="text-xs text-destructive">
+          {props.error}
+        </Text>
+      </If>
+    </AppDialog>
   );
 }
