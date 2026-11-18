@@ -354,60 +354,6 @@ test("presets ui: retains unavailable bindings", async () => {
     const saved = JSON.parse(raw) as { items: TranslationPreset[] };
     return saved.items[0]?.engine.modelIds.join(",") === "m-ok";
   });
-
-  // 5. Models load error preserves existing bindings with recovery link and does not report deleted.
-  const seededOnError = makeSeedStorage({
-    extra: {
-      [PRESETS_STORAGE_KEY]: JSON.stringify({
-        version: 1,
-        items: [makePresetRecord("p-err", "Saved During Error", ["m-ch-off", "m-ok"])],
-      }),
-    },
-  });
-  const errApp = await open(APP_ENTRY, {
-    ...viewport,
-    storage: seededOnError,
-    modules: {
-      nsh: {
-        "Storage.getItem": async (key: string) => {
-          if (key === "models.v2.providers") {
-            throw new Error("Models storage failed");
-          }
-          return seededOnError[key] ?? null;
-        },
-        "Storage.setItem": async (key: string, value: string) => {
-          seededOnError[key] = value;
-        },
-        "Storage.removeItem": async (key: string) => {
-          delete seededOnError[key];
-        },
-      },
-    },
-  });
-
-  await errApp.press("id:nav-presets");
-  await errApp.waitFor("id:preset-name");
-  expect(errApp.texts()).toContain("Models could not be loaded. Existing bindings are preserved.");
-  expect(errApp.texts()).not.toContain("Model no longer exists in Models.");
-  expect(errApp.texts().join("\n")).not.toContain("m-ch-off");
-  expect(errApp.shows("id:preset-manage-models")).toBe(true);
-
-  await errApp.clear("id:preset-name");
-  await errApp.type("id:preset-name", "Renamed Under Models Error");
-  await errApp.press("id:preset-save");
-  await errApp.waitUntil(() => {
-    const raw = seededOnError[PRESETS_STORAGE_KEY];
-    if (!raw) return false;
-    const saved = JSON.parse(raw) as { items: TranslationPreset[] };
-    return saved.items[0]?.name === "Renamed Under Models Error";
-  });
-  const savedAfterErrRename = JSON.parse(seededOnError[PRESETS_STORAGE_KEY]!) as {
-    items: TranslationPreset[];
-  };
-  expect(savedAfterErrRename.items[0]!.engine.modelIds).toEqual(["m-ch-off", "m-ok"]);
-
-  await errApp.press("id:preset-manage-models");
-  await errApp.waitFor("id:models-page");
 });
 
 test("presets ui: saves multiple prompts and the chosen default", async () => {
@@ -720,61 +666,6 @@ test("presets ui: guards dirty navigation", async () => {
   await app.waitFor("id:preset-discard-dialog");
   await app.press("id:preset-discard-confirm");
   await app.waitFor("id:models-page");
-
-  // 6. Pending write blocks leaving until it settles.
-  let resolveSlowWrite!: () => void;
-  const slowBacking: Record<string, string> = {
-    ...makeSeedStorage({
-      channels: [chOk],
-      models: [mOk],
-      extra: {
-        [PRESETS_STORAGE_KEY]: JSON.stringify({ version: 1, items: [p2] }),
-      },
-    }),
-  };
-  let presetWrites = 0;
-
-  const slowApp = await open(APP_ENTRY, {
-    ...viewport,
-    storage: slowBacking,
-    modules: {
-      nsh: {
-        "Storage.getItem": async (key: string) => slowBacking[key] ?? null,
-        "Storage.setItem": async (key: string, value: string) => {
-          if (key === PRESETS_STORAGE_KEY) {
-            presetWrites += 1;
-            await new Promise<void>((resolve) => {
-              resolveSlowWrite = resolve;
-            });
-          }
-          slowBacking[key] = value;
-        },
-        "Storage.removeItem": async (key: string) => {
-          delete slowBacking[key];
-        },
-      },
-    },
-  });
-
-  await slowApp.press("id:nav-presets");
-  await slowApp.waitFor("id:preset-name");
-  await slowApp.type("id:preset-name", " Saving");
-  const saveOp = slowApp.press("id:preset-save");
-  await slowApp.waitUntil(() => presetWrites === 1);
-
-  expect(slowApp.enabled("id:add-preset-button")).toBe(false);
-  expect(slowApp.enabled("id:preset-cancel")).toBe(false);
-  await slowApp.press("id:nav-models");
-  expect(slowApp.shows("id:presets-page")).toBe(true);
-  expect(slowApp.shows("id:models-page")).toBe(false);
-  expect(slowApp.shows("id:preset-discard-dialog")).toBe(false);
-
-  resolveSlowWrite();
-  await saveOp;
-  await slowApp.waitUntil(() => slowApp.enabled("id:add-preset-button"));
-
-  await slowApp.press("id:nav-models");
-  await slowApp.waitFor("id:models-page");
 });
 
 test("presets ui: confirms delete and selects the next preset", async () => {

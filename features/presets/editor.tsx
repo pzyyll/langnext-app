@@ -52,10 +52,12 @@ interface PresetEditorProps {
   onFieldFocus: (target: FocusableEditorField) => void;
 }
 
-const SOURCE_LANGUAGE_ITEMS: SelectItem[] = [AUTO_LANGUAGE, ...LANGUAGE_IDS].map((id) => ({
-  value: id,
-  title: getLanguageLabel(id),
-}));
+function buildSourceLanguageItems(): SelectItem[] {
+  return [AUTO_LANGUAGE, ...LANGUAGE_IDS].map((id) => ({
+    value: id,
+    title: getLanguageLabel(id),
+  }));
+}
 
 function buildTargetLanguageItems(): SelectItem[] {
   return [
@@ -72,6 +74,7 @@ export function PresetEditor(props: PresetEditorProps) {
   const compact = () => windowSize().width < 860;
   const bodyPaddingClass = () => (compact() ? "p-4" : "p-6");
   const cardClass = () => (compact() ? "gap-4 p-4" : "gap-5 p-5");
+  const sourceLanguageItems = () => buildSourceLanguageItems();
   const targetLanguageItems = () => buildTargetLanguageItems();
 
   const fieldError = (field: PresetValidationField): string | null =>
@@ -238,7 +241,7 @@ export function PresetEditor(props: PresetEditorProps) {
               >
                 <Select
                   testID="preset-source-language"
-                  items={SOURCE_LANGUAGE_ITEMS}
+                  items={sourceLanguageItems()}
                   value={props.draft.sourceLanguage}
                   disabled={props.saving}
                   accessibilityLabel={t("presets.field.sourceLanguage")}

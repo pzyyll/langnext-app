@@ -603,66 +603,70 @@ export function PresetsPage(props: PresetsPageProps) {
           </View>
         }
       >
-        <PresetEditor
-          draft={draftSignal()!}
-          dirty={isDirty()}
-          saving={presetsStore.mutating()}
-          selectedTemplateId={selectedTemplateIdSignal()}
-          modelChoices={modelChoices()}
-          modelsError={modelsError()}
-          errorMessage={errorMessageSignal()}
-          errorField={errorFieldSignal()}
-          errorFallbackIndex={errorFallbackIndexSignal()}
-          errorTemplateId={errorTemplateIdSignal()}
-          autoFocusName={autoFocusNameSignal()}
-          onChange={(patch) => updateDraft(patch)}
-          onSelectTemplate={(templateId) => selectedTemplateIdSignal.set(templateId)}
-          onSave={() => void handleSave()}
-          onCancel={() => handleCancel()}
-          onDelete={() => openDeleteDialog()}
-          onManageModels={() => handleManageModels()}
-          onNameRef={(node) => {
-            nameInputRef = node;
-          }}
-          onPrimaryModelRef={(node) => {
-            primaryModelRef = node;
-          }}
-          onFallbackRef={(index, node) => {
-            if (node) {
-              fallbackRefs.set(index, node);
-            } else {
-              fallbackRefs.delete(index);
-            }
-          }}
-          onTemperatureRef={(node) => {
-            temperatureInputRef = node;
-          }}
-          onMaxTokensRef={(node) => {
-            maxTokensInputRef = node;
-          }}
-          onDeleteRef={(node) => {
-            deleteButtonRef = node;
-          }}
-          onTemplateFieldRef={(templateId, field, node) => {
-            const existing = templateFieldRefs.get(templateId) ?? {};
-            existing[field] = node;
-            templateFieldRefs.set(templateId, existing);
-            if (
-              pendingTemplateFocus &&
-              pendingTemplateFocus.templateId === templateId &&
-              pendingTemplateFocus.field === field
-            ) {
-              pendingTemplateFocus = null;
-              queueMicrotask(() => node.focus());
-            }
-          }}
-          onClearTemplateRefs={(templateId) => {
-            templateFieldRefs.delete(templateId);
-          }}
-          onFieldFocus={(target) => {
-            lastFocusedField = target;
-          }}
-        />
+        <Each of={draftSignal() ? [draftSignal()!] : []} key={(item) => item.sourceId ?? "__new__"}>
+          {(draftItem) => (
+            <PresetEditor
+              draft={draftItem()}
+              dirty={isDirty()}
+              saving={presetsStore.mutating()}
+              selectedTemplateId={selectedTemplateIdSignal()}
+              modelChoices={modelChoices()}
+              modelsError={modelsError()}
+              errorMessage={errorMessageSignal()}
+              errorField={errorFieldSignal()}
+              errorFallbackIndex={errorFallbackIndexSignal()}
+              errorTemplateId={errorTemplateIdSignal()}
+              autoFocusName={autoFocusNameSignal()}
+              onChange={(patch) => updateDraft(patch)}
+              onSelectTemplate={(templateId) => selectedTemplateIdSignal.set(templateId)}
+              onSave={() => void handleSave()}
+              onCancel={() => handleCancel()}
+              onDelete={() => openDeleteDialog()}
+              onManageModels={() => handleManageModels()}
+              onNameRef={(node) => {
+                nameInputRef = node;
+              }}
+              onPrimaryModelRef={(node) => {
+                primaryModelRef = node;
+              }}
+              onFallbackRef={(index, node) => {
+                if (node) {
+                  fallbackRefs.set(index, node);
+                } else {
+                  fallbackRefs.delete(index);
+                }
+              }}
+              onTemperatureRef={(node) => {
+                temperatureInputRef = node;
+              }}
+              onMaxTokensRef={(node) => {
+                maxTokensInputRef = node;
+              }}
+              onDeleteRef={(node) => {
+                deleteButtonRef = node;
+              }}
+              onTemplateFieldRef={(templateId, field, node) => {
+                const existing = templateFieldRefs.get(templateId) ?? {};
+                existing[field] = node;
+                templateFieldRefs.set(templateId, existing);
+                if (
+                  pendingTemplateFocus &&
+                  pendingTemplateFocus.templateId === templateId &&
+                  pendingTemplateFocus.field === field
+                ) {
+                  pendingTemplateFocus = null;
+                  queueMicrotask(() => node.focus());
+                }
+              }}
+              onClearTemplateRefs={(templateId) => {
+                templateFieldRefs.delete(templateId);
+              }}
+              onFieldFocus={(target) => {
+                lastFocusedField = target;
+              }}
+            />
+          )}
+        </Each>
       </If>
 
       <ConfirmDialog
