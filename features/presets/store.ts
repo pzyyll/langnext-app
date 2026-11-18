@@ -1,7 +1,8 @@
 import { signal, Storage } from "nsh";
 import { t } from "nsh/i18n";
 import { isSourceLanguageId, isTargetLanguageId } from "./languages";
-import { readAvailableModelChoices } from "./model-choices";
+import { readAvailableModelChoices, readPresetTemperaturePolicy } from "./model-choices";
+import { combineTemperatureLimits, type TemperaturePolicy } from "./temperature";
 import {
   PresetsStoreError,
   type ModelChoiceId,
@@ -117,6 +118,8 @@ async function writePresets(storage: PresetsStorage, items: TranslationPreset[])
 export function createPresetsStore(
   storage: PresetsStorage,
   readModelChoices: () => readonly ModelChoiceId[],
+  readTemperaturePolicy: (modelIds: readonly string[]) => TemperaturePolicy = () =>
+    combineTemperatureLimits([]),
 ): PresetsStore {
   const recordsSignal = signal<TranslationPreset[]>([]);
   const statusSignal = signal<PresetsStoreStatus>({ kind: "idle" });
@@ -184,7 +187,7 @@ export function createPresetsStore(
       }
 
       const availableIds = new Set(readModelChoices().map((choice) => choice.id));
-      const validated = validatePresetForSave(input, availableIds, existing);
+      const validated = validatePresetForSave(input, availableIds, existing, readTemperaturePolicy);
       const now = new Date().toISOString();
       const record: TranslationPreset = existing
         ? {
@@ -233,4 +236,8 @@ export function createPresetsStore(
 }
 
 /** Production Presets Store backed by NSH Storage and live Models state. */
-export const presetsStore = createPresetsStore(Storage, readAvailableModelChoices);
+export const presetsStore = createPresetsStore(
+  Storage,
+  readAvailableModelChoices,
+  readPresetTemperaturePolicy,
+);

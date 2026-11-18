@@ -5,6 +5,7 @@ import {
   type LanguageId,
   type SourceLanguageId,
 } from "./languages";
+import { formatTemperature } from "./temperature";
 import type { PromptTemplate, SavePresetInput, TranslationPreset } from "./types";
 
 export type TargetLanguageValue = LanguageId | typeof NO_PREFERENCE_TARGET;
@@ -59,7 +60,7 @@ export function createDraftFromPreset(preset: TranslationPreset): PresetDraft {
     targetLanguage: preset.targetLanguage ?? NO_PREFERENCE_TARGET,
     primaryModelId: preset.engine.modelIds[0] ?? null,
     fallbackModelIds: preset.engine.modelIds.slice(1),
-    temperatureText: preset.engine.temperature === null ? "" : String(preset.engine.temperature),
+    temperatureText: formatTemperature(preset.engine.temperature),
     maxOutputTokensText:
       preset.engine.maxOutputTokens === null ? "" : String(preset.engine.maxOutputTokens),
     templates: preset.engine.templates.map((tpl) => ({ ...tpl })),
@@ -118,9 +119,8 @@ export function isDraftDirty(current: PresetDraft, baseline: PresetDraft): boole
 
 /** Converts an editor draft into a SavePresetInput payload for the store. */
 export function draftToSaveInput(draft: PresetDraft): SavePresetInput {
-  const modelIds = draft.primaryModelId
-    ? [draft.primaryModelId, ...draft.fallbackModelIds]
-    : [...draft.fallbackModelIds];
+  // Keep the primary slot distinct even when the user has only chosen fallbacks.
+  const modelIds = [draft.primaryModelId ?? "", ...draft.fallbackModelIds];
   return {
     id: draft.sourceId,
     name: draft.name,

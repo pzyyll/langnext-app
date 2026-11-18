@@ -8,6 +8,11 @@ import {
   resolveEffectiveDisplayName,
 } from "../models/model-helpers";
 import { modelsStore } from "../models/store";
+import {
+  combineTemperatureLimits,
+  modelTemperatureLimit,
+  type TemperaturePolicy,
+} from "./temperature";
 import type { ModelChoice } from "./types";
 
 export interface ModelBindingInfo {
@@ -159,6 +164,29 @@ export function resolveModelBindingInfo(modelId: string): ModelBindingInfo {
     available: true,
     reason: null,
   };
+}
+
+/** Resolves the known range shared by the selected models, without making requests. */
+export function readPresetTemperaturePolicy(modelIds: readonly string[]): TemperaturePolicy {
+  const catalogReadable = modelsStore.channelsError() === null;
+  const models = catalogReadable ? modelsStore.models() : [];
+  const channels = catalogReadable ? modelsStore.channels() : [];
+  return combineTemperatureLimits(
+    modelIds.filter(Boolean).map((id) => {
+      const model = models.find((entry) => entry.id === id);
+      const channel = model && channels.find((entry) => entry.id === model.providerId);
+      if (!model || !channel || !isEffectiveProtocolSupported(channel, model)) return "unknown";
+      const protocol = resolveEffectiveApiType(model, channel.adapterId);
+      const root =
+        channel.baseUrl?.trim() || aiRegistry.getProvider(channel.presetId).defaultBaseUrl;
+      if (!root) return "unknown";
+      try {
+        return modelTemperatureLimit(new URL(root).origin, protocol, model.modelKey);
+      } catch {
+        return "unknown";
+      }
+    }),
+  );
 }
 
 /** Formats a concise rail summary for a preset's ordered model list. */

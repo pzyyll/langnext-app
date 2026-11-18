@@ -6,7 +6,7 @@ import { Icon } from "../../components/ui/icon";
 import { Input } from "../../components/ui/input";
 import { Select, type SelectItem } from "../../components/ui/select";
 import { FormField } from "../../modules/ai/ui/form-field";
-import { resolveModelBindingInfo } from "./model-choices";
+import { readPresetTemperaturePolicy, resolveModelBindingInfo } from "./model-choices";
 import type { ModelChoice, PresetValidationField } from "./types";
 
 interface ModelsSectionProps {
@@ -42,6 +42,20 @@ export function ModelsSection(props: ModelsSectionProps) {
 
   const fieldError = (field: PresetValidationField): string | null =>
     props.errorField === field ? props.errorMessage : null;
+
+  const temperaturePolicy = () =>
+    readPresetTemperaturePolicy([props.primaryModelId ?? "", ...props.fallbackModelIds]);
+
+  const temperatureHint = () => {
+    const { maximum, requiresOmission, hasUnknownLimit } = temperaturePolicy();
+    if (requiresOmission) return t("presets.model.temperatureUnsupported");
+    if (hasUnknownLimit) {
+      return maximum === null
+        ? t("presets.model.temperatureUnknown")
+        : t("presets.model.temperaturePartialRange", { max: maximum });
+    }
+    return maximum === null ? null : t("presets.model.temperatureRange", { max: maximum });
+  };
 
   const primaryBinding = () =>
     props.primaryModelId ? resolveModelBindingInfo(props.primaryModelId) : null;
@@ -298,6 +312,7 @@ export function ModelsSection(props: ModelsSectionProps) {
         <FormField
           class={compact() ? "" : "min-w-0 flex-1"}
           label={t("presets.model.temperature")}
+          hint={temperatureHint()}
           error={fieldError("temperature")}
         >
           <Input
@@ -306,7 +321,11 @@ export function ModelsSection(props: ModelsSectionProps) {
             value={props.temperatureText}
             placeholder={t("presets.model.temperaturePlaceholder")}
             accessibilityLabel={t("presets.model.temperature")}
+            keyboardType="decimal-pad"
+            readonly={temperaturePolicy().requiresOmission}
             disabled={props.saving}
+            clearLabel={t("presets.model.clearTemperature")}
+            onClear={props.saving ? undefined : () => props.onChangeTemperature("")}
             onFocus={() => props.onFieldFocus("temperature")}
             onChange={(value) => props.onChangeTemperature(value)}
           />

@@ -485,6 +485,15 @@ Presets manages AI translation presets using the same split master-detail struct
   - **Models and parameters**: `Primary model` selector (`Channel · Model` choices), ordered fallback chain rows (`Select`, up/down move buttons with boundary disables, remove button) plus **Add fallback**, optional `Temperature` and `Max output tokens` pair (horizontal `>= 860`, stacked `< 860`), inline `warning` notices for unavailable bindings without exposing deleted raw IDs, and **Manage Models** (routed through the shared navigation leave guard) when unavailable bindings exist, no eligible models exist, or Models failed to load.
   - **Prompt templates**: Template selector list (`w-52` column at `>= 860`, stacked above editor at `< 860`) displaying a **Default** badge (`preset-template-default-badge`) on exactly one template, `+ Add template`, template `Name` field, **Set as default** and **Remove** (disabled on the current default), multiline `System prompt` and `User prompt` `Textarea`s keyed by active template ID (where Return inserts a newline), and the supported variable hint (`{{source_language}}`, `{{target_language}}`, `{{text}}`).
 
+### Temperature input
+
+Use the shared `Input` with a decimal keyboard and a Clear action. A blank value uses the model default. Show the tightest known range across the primary model and fallbacks. Do not assign an official API limit to a proxy or custom endpoint. If a known model does not support temperature, display a leave-blank hint and let the user clear an existing value. Validation does not silently change the value. Keep valid decimals in decimal notation when a record reloads.
+
+- OpenAI [Chat Completions](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create) and [Responses](https://developers.openai.com/api/reference/resources/responses/methods/create): 0 to 2 where the model supports the parameter. Some reasoning models omit it.
+- [Anthropic Messages](https://platform.claude.com/docs/en/api/php/messages/create): 0 to 1 where supported. [Claude 4.7 and later and Mythos Preview](https://platform.claude.com/docs/en/build-with-claude/working-with-messages) do not support custom sampling. This project keeps API version `2023-06-01`; API version `2026-10-21` removes this parameter for every Claude model.
+- [Gemini generateContent](https://ai.google.dev/api/generate-content#generationconfig): 0 to 2 where supported. The [model metadata](https://ai.google.dev/api/models#Model) can specify a lower maximum; the editor does not fetch it. The [newer Gemini models](https://ai.google.dev/gemini-api/docs/gemini-3) can ignore or reject the parameter.
+- DeepSeek [Chat Completions](https://api-docs.deepseek.com/api/create-chat-completion.md), [Responses](https://api-docs.deepseek.com/guides/responses_api.md), and [Anthropic compatibility](https://api-docs.deepseek.com/guides/anthropic_api.md): 0 to 2. The temperature has no effect in thinking mode.
+
 ### Focus paths
 
 - Opening a new preset draft focuses `preset-name` automatically (`autoFocus` / `InputRef.focus()`).
@@ -503,10 +512,12 @@ Presets manages AI translation presets using the same split master-detail struct
 | Dirty leave and delete confirmation dialogs | Native dialog fade (`dialogAnimation`) | Native reduced-motion behavior |
 | Saved preset / new draft editor swap | Keyed by preset ID or `__new__` (`Each`); replaces editor immediately with no cross-fade so scroll position and input state never leak across presets | Instant |
 | Template selection, fallback reorder, Default badge, Saving label | Updates immediately to match state; no drag, continuous animation, or streaming | No change |
+| Temperature limit, hint, and validation | Update after model selection or Save without motion so the current rule is clear. The input and Clear button use the existing focus, hover, and press feedback. | Instant |
 
 ### Verification notes
 
 - **Desktop Windows & visual audit**: Verified `App.test.tsx --filter "presets nav:"` and `features/presets/presets.test.tsx` in real desktop windows (`--target windows`), plus rendered Windows screenshot inspections across Light/Dark themes, `1040 × 720` and compact `720 × 520` (`reducedMotion: true`) viewports, `en` and `zh-CN` localizations, empty, multi-fallback, multiline prompt, unavailable/deleted model, validation-error, and discard confirmation states.
+- **Temperature input**: The three new Windows regression cases passed. Screenshots show the range and leave-blank states in Light (`en`, `1040 × 720`) and Dark (`zh-CN`, `720 × 520`, reduced motion). Checked label and field alignment, contrast, spacing, hint wrapping, and the Clear action. Held press and Narrator were not verified.
 - **Test-driver & accessibility notes**: In headless `nsh test`, `app.keyboard.press` dispatches keys to `onKeyCommand`, menus, focused `<Input>` controls, and `Escape` rather than non-input `<Button>` focus activation (`Space`/`Enter`), so button focus transitions are verified via native `ViewRef.focus()` + `setAccessibilityFocus()` calls on `onClose` alongside direct activation; live Windows Narrator UIA screen-reader announcement remains unverified manually outside automated accessibility labels and `role="alert"`/`role="alertdialog"` semantics.
 
 ## Theme Colors

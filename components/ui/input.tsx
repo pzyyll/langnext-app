@@ -1,4 +1,4 @@
-import { View, type InputRef } from "nsh";
+import { View, type InputRef, type KeyboardType } from "nsh";
 import { Input as BaseInput } from "nsh/base";
 import { t } from "nsh/i18n";
 import { motion } from "../motion";
@@ -17,6 +17,7 @@ interface InputProps {
   disabled?: boolean;
   readonly?: boolean;
   autoFocus?: boolean;
+  keyboardType?: KeyboardType;
   submitBehavior?: "submit" | "blurAndSubmit" | "newline";
   size?: InputSize;
   leadingIcon?: IconName;
@@ -36,7 +37,8 @@ export function Input(props: InputProps) {
 
   return (
     <View
-      class={`flex-row items-center rounded-lg border border-input bg-background px-3 focus-within:border-ring focus-within:ring-2 focus-within:ring-ring ${heightClass()} ${props.disabled || props.readonly ? "opacity-60" : ""} ${motion.navigationFeedback} ${props.class ?? ""}`}
+      class={`flex-row items-center rounded-lg border border-input bg-background px-3 focus-within:border-ring focus-within:ring-2 focus-within:ring-ring ${heightClass()} ${motion.navigationFeedback} ${props.class ?? ""}`}
+      classList={{ "opacity-60": Boolean(props.disabled || props.readonly) }}
     >
       <If when={props.leadingIcon !== undefined}>
         <View class="mr-2 shrink-0">
@@ -53,6 +55,7 @@ export function Input(props: InputProps) {
         disabled={props.disabled}
         readonly={props.readonly}
         autoFocus={props.autoFocus}
+        keyboardType={props.keyboardType}
         submitBehavior={props.submitBehavior}
         onChange={({ value }) => props.onChange?.(value)}
         onSubmit={({ text }) => props.onSubmit?.(text)}

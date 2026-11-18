@@ -1,5 +1,6 @@
 import { t } from "nsh/i18n";
 import { isSourceLanguageId, isTargetLanguageId } from "./languages";
+import type { TemperaturePolicy } from "./temperature";
 import {
   PresetsStoreError,
   type AiPresetEngine,
@@ -134,6 +135,7 @@ export function validatePresetForSave(
   input: SavePresetInput,
   availableModelIds: ReadonlySet<string>,
   existing: TranslationPreset | null,
+  readTemperaturePolicy: (modelIds: readonly string[]) => TemperaturePolicy,
 ): ValidatedPresetPayload {
   const name = typeof input.name === "string" ? input.name.trim() : "";
   if (!name) {
@@ -215,6 +217,27 @@ export function validatePresetForSave(
   }
 
   const temperature = parseOptionalTemperature(input.engine.temperature);
+  if (temperature !== null) {
+    const { maximum, requiresOmission } = readTemperaturePolicy(modelIds);
+    if (requiresOmission) {
+      throw new PresetsStoreError(
+        "temperature_unsupported",
+        t("presets.error.temperatureUnsupported"),
+        {
+          field: "temperature",
+        },
+      );
+    }
+    if (maximum !== null && temperature > maximum) {
+      throw new PresetsStoreError(
+        "temperature_out_of_range",
+        t("presets.error.temperatureOutOfRange", { max: maximum }),
+        {
+          field: "temperature",
+        },
+      );
+    }
+  }
   const maxOutputTokens = parseOptionalMaxOutputTokens(input.engine.maxOutputTokens);
 
   const rawTemplates = input.engine.templates;
