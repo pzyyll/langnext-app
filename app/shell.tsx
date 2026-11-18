@@ -4,9 +4,11 @@ import { t } from "nsh/i18n";
 import trayIcon from "../assets/logos/icon.svg";
 import { AppMenu } from "../components/app-menu";
 import { PageSurface } from "../components/layout/page-surface";
+import type { NavigationLeaveGuard } from "../components/layout/navigation-leave-guard";
 import { Sidebar, type SidebarPage } from "../components/sidebar";
 import { ToastViewport } from "../components/ui/toast";
-import { ModelsPage, type NavigationLeaveGuard } from "../features/models/page";
+import { ModelsPage } from "../features/models/page";
+import { PresetsPage } from "../features/presets/page";
 import { SettingsPage } from "../features/settings/page";
 import { transparency } from "../features/settings/transparency";
 
@@ -56,6 +58,7 @@ export function AppShell() {
   };
 
   const selectModels = () => navigateTo("models");
+  const selectPresets = () => navigateTo("presets");
   const selectSettings = () => navigateTo("settings");
 
   return (
@@ -76,10 +79,23 @@ export function AppShell() {
         </View>
       </View>
       <View class="flex-1 flex-row">
-        <Sidebar page={page()} onSelectModels={selectModels} onSelectSettings={selectSettings} />
+        <Sidebar
+          page={page()}
+          onSelectModels={selectModels}
+          onSelectPresets={selectPresets}
+          onSelectSettings={selectSettings}
+        />
         <If when={page() === "models"}>
           <PageSurface testID="models-page" layout="split">
             <ModelsPage onRegisterLeaveGuard={registerLeaveGuard} />
+          </PageSurface>
+        </If>
+        <If when={page() === "presets"}>
+          <PageSurface testID="presets-page" layout="split">
+            <PresetsPage
+              onRegisterLeaveGuard={registerLeaveGuard}
+              onNavigateToModels={selectModels}
+            />
           </PageSurface>
         </If>
         <If when={page() === "settings"}>

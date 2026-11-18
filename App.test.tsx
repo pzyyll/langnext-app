@@ -255,3 +255,22 @@ test("uses the system appearance when the saved value is invalid", async () => {
   await app.press("id:nav-settings");
   expect(app.spanStyle("text:Settings").color).toBe(dark.spanStyle("text:Settings").color);
 });
+
+test("presets nav: opens the workspace from Models", async () => {
+  const app = await open("./App.tsx", {
+    ...viewport,
+    storage: { "settings.language": "en" },
+  });
+  expect(app.shows("id:models-page")).toBe(true);
+  expect(app.shows("id:presets-page")).toBe(false);
+
+  await app.press("id:nav-presets");
+  await app.waitFor("id:presets-page");
+  expect(app.shows("id:models-page")).toBe(false);
+  expect(app.count("id:presets-page")).toBe(1);
+  expect(app.texts()).toContain("Presets");
+  expect(app.shows("id:empty-add-preset-button")).toBe(true);
+
+  await app.press("id:nav-presets");
+  expect(app.count("id:presets-page")).toBe(1);
+});

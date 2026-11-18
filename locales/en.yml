@@ -12,6 +12,7 @@ tray:
 nav:
   label: Main navigation
   models: Models
+  presets: Presets
   settings: Settings
 common:
   ok: OK
@@ -249,3 +250,130 @@ presets:
     userTemplateTextRequired: User prompt must contain {{text}} once.
     userTemplateTextDuplicate: User prompt must contain {{text}} only once.
     defaultTemplateInvalid: Default prompt template must exist in this preset.
+  title: Presets
+  list:
+    title: Presets
+    empty: No presets yet
+    loading: Loading…
+    itemLabel: "%{name} (%{status})"
+    enabled: Enabled
+    disabled: Disabled
+    modelSummaryWithFallbacks: "%{primary} · +%{count}"
+    noModel: No model selected
+  action:
+    add: Add Preset
+    delete: Delete Preset
+    manageModels: Manage Models
+  editor:
+    untitled: New Preset
+    unsaved: Unsaved
+    enabled: Enabled
+    enabledLabel: Preset enabled
+    saved: Preset saved
+    deleted: Deleted preset %{name}
+  field:
+    name: Name
+    namePlaceholder: e.g. Technical EN to ZH
+    sourceLanguage: Source language
+    targetLanguage: Target language
+  section:
+    languages: Languages
+    models: Models and parameters
+    prompts: Prompt templates
+  language:
+    noPreference: No preference
+  languages:
+    auto: Auto
+    zh: Chinese
+    en: English
+    ar: Arabic
+    bg: Bulgarian
+    bn: Bengali
+    cs: Czech
+    da: Danish
+    de: German
+    el: Greek
+    es: Spanish
+    fa: Persian
+    fi: Finnish
+    fr: French
+    he: Hebrew
+    hi: Hindi
+    hr: Croatian
+    hu: Hungarian
+    id: Indonesian
+    it: Italian
+    ja: Japanese
+    ko: Korean
+    lt: Lithuanian
+    lv: Latvian
+    ms: Malay
+    nl: Dutch
+    no: Norwegian
+    pl: Polish
+    pt: Portuguese
+    ro: Romanian
+    ru: Russian
+    sk: Slovak
+    sl: Slovenian
+    sr: Serbian
+    sv: Swedish
+    sw: Swahili
+    ta: Tamil
+    th: Thai
+    tl: Filipino
+    tr: Turkish
+    uk: Ukrainian
+    ur: Urdu
+    vi: Vietnamese
+  model:
+    choiceLabel: "%{channel} · %{model}"
+    primary: Primary model
+    selectPlaceholder: Select a model…
+    noEligible: No enabled text-capable models available.
+    catalogLoadError: Models could not be loaded. Existing bindings are preserved.
+    fallbacks: Fallback models
+    addFallback: Add fallback
+    fallbackItemLabel: "Fallback model %{index}"
+    moveUp: "Move fallback %{index} up"
+    moveDown: "Move fallback %{index} down"
+    removeFallback: "Remove fallback %{index}"
+    temperature: Temperature
+    temperaturePlaceholder: Optional
+    maxOutputTokens: Max output tokens
+    maxOutputTokensPlaceholder: Optional
+    unavailableLabel: Unavailable model
+    removedLabel: Deleted model
+    reasonDeleted: Model no longer exists in Models.
+    reasonChannelDisabled: Owning channel is disabled.
+    reasonModelDisabled: Model is disabled.
+    reasonMissing: Model was missing in the last channel sync.
+    reasonNotTextCapable: Model does not support text.
+    reasonUnsupported: Provider or API protocol is unsupported in this build.
+    reasonCatalogLoadFailed: Model availability could not be verified while Models failed to load.
+  prompt:
+    defaultName: Default
+    numberedName: "Template %{index}"
+    defaultBadge: Default
+    add: Add template
+    nameLabel: Template name
+    namePlaceholder: e.g. Formal
+    setDefault: Set as default
+    remove: Remove
+    removeLabel: "Remove %{name}"
+    systemLabel: System prompt
+    userLabel: User prompt
+    variablesHint: "Supported variables: %{vars}"
+    defaultSystem: |-
+      You are a professional translator. Translate the user's text from {{source_language}} to {{target_language}}.
+      Output only the translated text, with no extra explanation.
+    defaultUser: "{{text}}"
+  discard:
+    title: Discard unsaved edits?
+    description: Unsaved changes to this preset will be lost.
+    keepEditing: Keep Editing
+    confirm: Discard
+  delete:
+    title: Delete Preset
+    description: 'Delete preset "%{name}"? This cannot be undone.'
+    error: "Could not delete preset (%{detail})."

@@ -470,6 +470,40 @@ nesting scroll views.
   passed. Hover and pressed styles are unchanged; held presses, frame-by-frame
   motion, and screen-reader speech were not checked in this pass.
 
+## Presets workspace
+
+Presets manages AI translation presets using the same split master-detail structure, semantic tokens, bare copy, and shared controls as Models (`PageSurface` with `layout="split"` and `testID="presets-page"`). Models remains the startup destination; **Presets** sits directly below **Models** in the top sidebar group (`nav-presets`), reusing `assets/icons/file-text.svg` with the standard `sidebar-foreground` / `sidebar-accent-foreground` tint and `sidebar-foreground/10` selected wash, while **Settings** remains at the bottom.
+
+### Split layout and responsive structure
+
+- **Unified split header spine**: Both the left `PresetsRail` (`w-60` on desktop, `w-48` under `860` points, `border-r border-border`) and the right `PresetEditor` (`min-w-0 flex-1 bg-background`) share a fixed `h-12 border-b border-border` header bar so the horizontal hairline aligns across the divider.
+- **Master rail (`PresetsRail`)**: Displays the `Presets` heading and `+` icon button (`add-preset-button`, disabled while loading, unreadable, or mutating). Below the header, saved presets render in a virtualized NSH `List` keyed by preset ID (`keyExtractor`), showing each preset's enabled status lane (`check-circle` / `minus`), trimmed name, optional `Disabled` badge, and model summary (`Channel · Model`, plus fallback count when present). Missing/unreadable storage renders an inline `role="alert"` load error with a **Retry** button and keeps creation disabled.
+- **Pinned header actions and scrollable editor**: The right pane pins the live preset title, `Unsaved` badge when dirty or new, inline `Enabled` switch (`preset-enabled`), `Cancel` (`preset-cancel`), `Save` (`preset-save`), and for saved presets a quiet destructive-hover delete icon button (`preset-delete`) inside the `h-12` header so Save/Cancel/Delete remain visible at `720 × 520` without horizontal or vertical scrolling. Below the header, one `<Scroll class="min-h-0 flex-1">` owns the centered reading column (`mx-auto w-full max-w-4xl`, `gap-5 p-5` on desktop and `gap-4 p-4` under `860` points).
+- **Editor sections**: Uses shared `Card`, `SectionHeading`, `FormField`, `Input`, `Textarea` (over `nsh/base` `Input` with `multiline` and `submitBehavior="newline"`), `Select`, `Switch`, `Badge`, `Button`, and `ConfirmDialog`:
+  - Top identity card: `Name` input (`preset-name`).
+  - **Languages**: `Source language` (`auto` or concrete LangNext ID) and `Target language` (`No preference` or concrete LangNext ID) paired horizontally on `>= 860` points and stacked vertically under `860` points.
+  - **Models and parameters**: `Primary model` selector (`Channel · Model` choices), ordered fallback chain rows (numeric index, model `Select`, up/down move buttons with boundary disables, remove button) plus **Add fallback**, optional `Temperature` and `Max output tokens` pair (horizontal `>= 860`, stacked `< 860`), inline warnings for unavailable bindings without exposing deleted raw IDs, and **Manage Models** (routed through the shared navigation leave guard) when no eligible models exist or Models failed to load.
+  - **Prompt templates**: Template selector strip displaying a **Default** badge on exactly one template, `+ Add template`, template `Name` field, **Set as default** and **Remove** (disabled on the current default), multiline `System prompt` and `User prompt` `Textarea`s keyed by template ID (where Enter inserts a newline), and the supported variable reference (`{{source_language}}`, `{{target_language}}`, `{{text}}`).
+
+### Focus paths
+
+- Opening a new preset draft focuses `preset-name` automatically (`autoFocus` / `InputRef.focus()`).
+- On validation failure at Save, focus moves to the first invalid field; if the invalid field belongs to a non-selected prompt template, that template is selected first before focusing the field.
+- Dirty-navigation confirmation (`ConfirmDialog`) focuses **Keep Editing** on open; choosing **Keep Editing** or pressing Escape retains all edits and restores focus to the active editor field (falling back to `preset-name`), while **Discard** executes the pending action.
+- Confirming preset deletion selects and focuses the next list row, the previous row if none follows, or the empty-state **Add Preset** button when the list becomes empty.
+
+### Motion inventory
+
+| Change | Tool and tokens | Reduced motion |
+| --- | --- | --- |
+| Presets workspace enters | Native opacity motion; `pageEnter`, 200 ms, ease-out | Instant |
+| Sidebar item, rail row, template tab, and button hover/press | Native color & transform transition; `navigationFeedback` + `pressScale`, 150 ms, ease-out (rows/tabs omit press scale) | Instant color, no scale |
+| Enabled switch state | Track transition `navigationFeedback`; thumb translation `switchThumb`, 150 ms, ease-out | Instant |
+| Select popups and tooltips | Native popup/tooltip transitions (`popup`, `tooltip`, 150 ms, ease-out) | Instant opacity, no slide |
+| Dirty leave and delete confirmation dialogs | Native dialog fade (`dialogAnimation`) | Native reduced-motion behavior |
+| Saved preset / new draft editor swap | Keyed by preset ID or new-draft ID (`Each`); replaces editor immediately with no cross-fade so values never leak across presets | Instant |
+| Template selection, fallback reorder, Default badge, Saving label | Updates immediately to match state; no drag, continuous animation, or streaming | No change |
+
 ## Theme Colors
 ```css
 :root {

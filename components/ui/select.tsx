@@ -1,4 +1,4 @@
-import { Text, View } from "nsh";
+import { Text, View, type ViewRef } from "nsh";
 import { Select as BaseSelect, type SelectItem } from "nsh/base";
 import { t } from "nsh/i18n";
 import { motion } from "../motion";
@@ -19,6 +19,7 @@ interface SelectProps {
   disabled?: boolean;
   accessibilityLabel?: string;
   testID?: string;
+  ref?: (node: ViewRef) => void;
   placement?: "bottom" | "top";
   align?: "start" | "end";
   class?: string;
@@ -65,6 +66,7 @@ export function Select(props: SelectProps) {
       trigger={
         <View
           testID={props.testID}
+          ref={(node) => props.ref?.(node)}
           tooltip={props.tooltip ? buildTooltip(props.tooltip, "top") : undefined}
           class={`flex-row items-center justify-between gap-2 rounded-lg border border-input bg-background px-3 hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 ${heightClass()} ${motion.navigationFeedback} ${props.triggerClass ?? ""}`}
         >

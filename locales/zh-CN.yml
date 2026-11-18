@@ -12,6 +12,7 @@ tray:
 nav:
   label: 主导航
   models: 模型
+  presets: 预设
   settings: 设置
 common:
   ok: 确定
@@ -249,3 +250,130 @@ presets:
     userTemplateTextRequired: 用户提示词必须包含一次 {{text}}。
     userTemplateTextDuplicate: 用户提示词只能包含一次 {{text}}。
     defaultTemplateInvalid: 默认提示词模板必须属于当前预设。
+  title: 预设
+  list:
+    title: 预设
+    empty: 尚未配置预设
+    loading: 加载中…
+    itemLabel: "%{name}（%{status}）"
+    enabled: 已启用
+    disabled: 已停用
+    modelSummaryWithFallbacks: "%{primary} · +%{count}"
+    noModel: 未选择模型
+  action:
+    add: 添加预设
+    delete: 删除预设
+    manageModels: 管理模型
+  editor:
+    untitled: 新建预设
+    unsaved: 未保存
+    enabled: 启用
+    enabledLabel: 预设启用状态
+    saved: 预设已保存
+    deleted: 已删除预设 %{name}
+  field:
+    name: 名称
+    namePlaceholder: 例如：技术文档 英译中
+    sourceLanguage: 源语言
+    targetLanguage: 目标语言
+  section:
+    languages: 语言
+    models: 模型与参数
+    prompts: 提示词模板
+  language:
+    noPreference: 无偏好
+  languages:
+    auto: 自动
+    zh: 中文
+    en: 英语
+    ar: 阿拉伯语
+    bg: 保加利亚语
+    bn: 孟加拉语
+    cs: 捷克语
+    da: 丹麦语
+    de: 德语
+    el: 希腊语
+    es: 西班牙语
+    fa: 波斯语
+    fi: 芬兰语
+    fr: 法语
+    he: 希伯来语
+    hi: 印地语
+    hr: 克罗地亚语
+    hu: 匈牙利语
+    id: 印尼语
+    it: 意大利语
+    ja: 日语
+    ko: 韩语
+    lt: 立陶宛语
+    lv: 拉脱维亚语
+    ms: 马来语
+    nl: 荷兰语
+    no: 挪威语
+    pl: 波兰语
+    pt: 葡萄牙语
+    ro: 罗马尼亚语
+    ru: 俄语
+    sk: 斯洛伐克语
+    sl: 斯洛文尼亚语
+    sr: 塞尔维亚语
+    sv: 瑞典语
+    sw: 斯瓦希里语
+    ta: 泰米尔语
+    th: 泰语
+    tl: 菲律宾语
+    tr: 土耳其语
+    uk: 乌克兰语
+    ur: 乌尔都语
+    vi: 越南语
+  model:
+    choiceLabel: "%{channel} · %{model}"
+    primary: 主模型
+    selectPlaceholder: 选择模型…
+    noEligible: 暂无可用的已启用文本模型。
+    catalogLoadError: 无法加载模型列表，已保留现有模型绑定。
+    fallbacks: 回退模型
+    addFallback: 添加回退
+    fallbackItemLabel: "回退模型 %{index}"
+    moveUp: "上移回退模型 %{index}"
+    moveDown: "下移回退模型 %{index}"
+    removeFallback: "移除回退模型 %{index}"
+    temperature: 温度
+    temperaturePlaceholder: 可选
+    maxOutputTokens: 最大输出令牌数
+    maxOutputTokensPlaceholder: 可选
+    unavailableLabel: 不可用模型
+    removedLabel: 已删除模型
+    reasonDeleted: 该模型已从“模型”中删除。
+    reasonChannelDisabled: 所属渠道已停用。
+    reasonModelDisabled: 该模型已停用。
+    reasonMissing: 上次同步未返回该模型。
+    reasonNotTextCapable: 该模型不支持文本能力。
+    reasonUnsupported: 当前版本不支持该服务商或接口协议。
+    reasonCatalogLoadFailed: “模型”加载失败，暂无法校验模型可用性。
+  prompt:
+    defaultName: 默认
+    numberedName: "模板 %{index}"
+    defaultBadge: 默认
+    add: 添加模板
+    nameLabel: 模板名称
+    namePlaceholder: 例如：正式
+    setDefault: 设为默认
+    remove: 移除
+    removeLabel: "移除 %{name}"
+    systemLabel: 系统提示词
+    userLabel: 用户提示词
+    variablesHint: "可用变量：%{vars}"
+    defaultSystem: |-
+      你是一名专业翻译引擎。请将用户文本从 {{source_language}} 翻译为 {{target_language}}。
+      仅输出译文，不要添加额外说明。
+    defaultUser: "{{text}}"
+  discard:
+    title: 放弃未保存的更改？
+    description: 此预设的未保存更改将会丢失。
+    keepEditing: 继续编辑
+    confirm: 放弃
+  delete:
+    title: 删除预设
+    description: 删除预设“%{name}”？此操作无法撤销。
+    error: "无法删除预设（%{detail}）。"

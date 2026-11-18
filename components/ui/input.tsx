@@ -14,6 +14,7 @@ interface InputProps {
   placeholder?: string;
   accessibilityLabel?: string;
   masked?: boolean;
+  disabled?: boolean;
   readonly?: boolean;
   autoFocus?: boolean;
   submitBehavior?: "submit" | "blurAndSubmit" | "newline";
@@ -24,6 +25,7 @@ interface InputProps {
   onChange?: (value: string) => void;
   onSubmit?: (text: string) => void;
   onKeyPress?: (key: string) => void;
+  onFocus?: () => void;
   onClear?: () => void;
 }
 
@@ -34,7 +36,7 @@ export function Input(props: InputProps) {
 
   return (
     <View
-      class={`flex-row items-center rounded-lg border border-input bg-background px-3 focus-within:border-ring focus-within:ring-2 focus-within:ring-ring ${heightClass()} ${props.readonly ? "opacity-60" : ""} ${motion.navigationFeedback} ${props.class ?? ""}`}
+      class={`flex-row items-center rounded-lg border border-input bg-background px-3 focus-within:border-ring focus-within:ring-2 focus-within:ring-ring ${heightClass()} ${props.disabled || props.readonly ? "opacity-60" : ""} ${motion.navigationFeedback} ${props.class ?? ""}`}
     >
       <If when={props.leadingIcon !== undefined}>
         <View class="mr-2 shrink-0">
@@ -48,12 +50,14 @@ export function Input(props: InputProps) {
         placeholder={props.placeholder}
         accessibilityLabel={props.accessibilityLabel}
         masked={props.masked}
+        disabled={props.disabled}
         readonly={props.readonly}
         autoFocus={props.autoFocus}
         submitBehavior={props.submitBehavior}
         onChange={({ value }) => props.onChange?.(value)}
         onSubmit={({ text }) => props.onSubmit?.(text)}
         onKeyPress={({ key }) => props.onKeyPress?.(key)}
+        onFocus={() => props.onFocus?.()}
         class={`min-w-0 flex-1 bg-transparent text-foreground placeholder:text-muted-foreground ${textClass()}`}
       />
       <If when={props.onClear !== undefined && (props.value ?? "").length > 0}>

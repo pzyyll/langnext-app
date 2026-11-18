@@ -1,6 +1,7 @@
-import { signal } from "nsh";
+import { signal, Storage } from "nsh";
 import { t } from "nsh/i18n";
 import { isSourceLanguageId, isTargetLanguageId } from "./languages";
+import { readAvailableModelChoices } from "./model-choices";
 import {
   PresetsStoreError,
   type ModelChoiceId,
@@ -230,3 +231,6 @@ export function createPresetsStore(
     },
   };
 }
+
+/** Production Presets Store backed by NSH Storage and live Models state. */
+export const presetsStore = createPresetsStore(Storage, readAvailableModelChoices);

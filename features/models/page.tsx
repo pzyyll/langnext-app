@@ -3,6 +3,7 @@ import { t } from "nsh/i18n";
 import { Button } from "../../components/ui/button";
 import { ConfirmDialog } from "../../components/ui/dialog";
 import { Icon } from "../../components/ui/icon";
+import type { NavigationLeaveGuard } from "../../components/layout/navigation-leave-guard";
 import type { ProviderTypeId } from "../../modules/ai/contracts/channel";
 import { AddChannelDialog } from "./add-channel-dialog";
 import { createChannelDraft, type ChannelDraft } from "./channel-draft";
@@ -15,8 +16,6 @@ import {
   selectChannel,
   setEnabledFilter,
 } from "./store";
-
-export type NavigationLeaveGuard = (proceed: () => void) => boolean;
 
 interface ModelsPageProps {
   onRegisterLeaveGuard?: (guard: NavigationLeaveGuard) => () => void;

@@ -3,22 +3,24 @@ import { Button, Tooltip } from "nsh/base";
 import { t } from "nsh/i18n";
 import cubeOutlineIcon from "../assets/icons/cube-outline.svg";
 import cubeSolidIcon from "../assets/icons/cube-solid.svg";
+import fileTextIcon from "../assets/icons/file-text.svg";
 import settingsOutlineIcon from "../assets/icons/setting-outline.svg";
 import settingsSolidIcon from "../assets/icons/setting-solid.svg";
 import { motion } from "./motion";
 
 /** The destinations shown in the sidebar. */
-export type SidebarPage = "models" | "settings";
+export type SidebarPage = "models" | "presets" | "settings";
 
 interface SidebarProps {
   page: SidebarPage;
   onSelectModels: () => void;
+  onSelectPresets: () => void;
   onSelectSettings: () => void;
 }
 
 interface NavIconProps {
   outline: ImageAsset;
-  solid: ImageAsset;
+  solid?: ImageAsset;
   selected: boolean;
 }
 
@@ -27,7 +29,7 @@ interface NavIconProps {
 function NavIcon(props: NavIconProps) {
   return (
     <Image
-      src={props.selected ? props.solid : props.outline}
+      src={props.selected ? (props.solid ?? props.outline) : props.outline}
       class="size-5"
       style={{
         tintColor: token(props.selected ? "sidebar-accent-foreground" : "sidebar-foreground"),
@@ -92,6 +94,14 @@ export function Sidebar(props: SidebarProps) {
             solid={cubeSolidIcon}
             selected={props.page === "models"}
           />
+        </SidebarItem>
+        <SidebarItem
+          destination="presets"
+          label={t("nav.presets")}
+          selected={props.page === "presets"}
+          onPress={() => props.onSelectPresets()}
+        >
+          <NavIcon outline={fileTextIcon} selected={props.page === "presets"} />
         </SidebarItem>
       </View>
       <View class="flex-1" />
