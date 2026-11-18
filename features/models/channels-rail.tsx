@@ -1,4 +1,4 @@
-import { Scroll, Text, View, type ViewRef, windowSize } from "nsh";
+import { Scroll, Text, View, type ViewRef } from "nsh";
 import { t } from "nsh/i18n";
 import { motion } from "../../components/motion";
 import { Badge } from "../../components/ui/badge";
@@ -24,17 +24,13 @@ interface ChannelsRailProps {
 
 /** Left master list of configured provider channels with selection and reordering. */
 export function ChannelsRail(props: ChannelsRailProps) {
-  const railWidthClass = () => (windowSize().width < 860 ? "w-48" : "w-60");
   const providerLabel = (presetId: string) => getProviderTypeLabel(presetId) ?? presetId;
   const providerMark = (presetId: string) => providerSettingsRegistry.find(presetId);
 
   return (
-    <View
-      testID="channels-rail"
-      class={`${railWidthClass()} shrink-0 border-r border-border bg-background`}
-    >
-      <View class="h-12 shrink-0 flex-row items-center justify-between border-b border-border px-4">
-        <Text role="header" class="text-sm font-semibold text-foreground">
+    <View testID="channels-rail" class="min-w-0 flex-1 bg-background">
+      <View class="h-12 shrink-0 flex-row items-center justify-between gap-2 border-b border-border px-4">
+        <Text role="header" class="min-w-0 truncate text-sm font-semibold text-foreground">
           {t("models.channels.title")}
         </Text>
         <Button

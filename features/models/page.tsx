@@ -4,6 +4,7 @@ import { Button } from "../../components/ui/button";
 import { ConfirmDialog } from "../../components/ui/dialog";
 import { Icon } from "../../components/ui/icon";
 import type { NavigationLeaveGuard } from "../../components/layout/navigation-leave-guard";
+import { SplitPane } from "../../components/layout/split-pane";
 import type { ProviderTypeId } from "../../modules/ai/contracts/channel";
 import { AddChannelDialog } from "./add-channel-dialog";
 import { createChannelDraft, type ChannelDraft } from "./channel-draft";
@@ -128,86 +129,93 @@ export function ModelsPage(props: ModelsPageProps) {
 
   return (
     <>
-      <ChannelsRail
-        channels={modelsStore.channels()}
-        selectedId={draft() ? null : modelsStore.selectedChannelId()}
-        loading={modelsStore.channelsLoading()}
-        error={modelsStore.channelsError()}
-        onSelect={handleSelectChannel}
-        onMove={(id, dir) => void moveChannel(id, dir)}
-        onAdd={() => handleOpenAddChannel("rail")}
-        onRetry={() => void loadModelsState()}
-        addButtonRef={(node) => {
-          railAddNode = node;
-        }}
-        onChannelItemRef={(id, node) => {
-          channelNodes.set(id, node);
-        }}
-      />
-
-      <If
-        when={draft()}
-        else={
+      <SplitPane
+        page="models"
+        handleAccessibilityLabel={t("models.channels.resizeLabel")}
+        rail={
+          <ChannelsRail
+            channels={modelsStore.channels()}
+            selectedId={draft() ? null : modelsStore.selectedChannelId()}
+            loading={modelsStore.channelsLoading()}
+            error={modelsStore.channelsError()}
+            onSelect={handleSelectChannel}
+            onMove={(id, dir) => void moveChannel(id, dir)}
+            onAdd={() => handleOpenAddChannel("rail")}
+            onRetry={() => void loadModelsState()}
+            addButtonRef={(node) => {
+              railAddNode = node;
+            }}
+            onChannelItemRef={(id, node) => {
+              channelNodes.set(id, node);
+            }}
+          />
+        }
+        detail={
           <If
-            when={modelsStore.selectedChannel()}
+            when={draft()}
             else={
-              <View class="min-w-0 flex-1 items-center justify-center gap-4 p-8">
-                <Icon name="cube-outline" tone="muted-foreground" class="size-10 opacity-50" />
-                <Text role="header" class="text-2xl font-semibold text-foreground">
-                  {t("models.title")}
-                </Text>
-                <Button
-                  testID="empty-add-channel-button"
-                  ref={(node) => {
-                    emptyAddNode = node;
-                  }}
-                  variant="primary"
-                  size="md"
-                  accessibilityLabel={t("models.channel.add")}
-                  onPress={() => handleOpenAddChannel("empty")}
-                >
-                  <Icon name="plus" tone="primary-foreground" class="size-4" />
-                  <Text class="text-sm font-medium text-primary-foreground">
-                    {t("models.channel.add")}
-                  </Text>
-                </Button>
-              </View>
+              <If
+                when={modelsStore.selectedChannel()}
+                else={
+                  <View class="min-w-0 flex-1 items-center justify-center gap-4 p-8">
+                    <Icon name="cube-outline" tone="muted-foreground" class="size-10 opacity-50" />
+                    <Text role="header" class="text-2xl font-semibold text-foreground">
+                      {t("models.title")}
+                    </Text>
+                    <Button
+                      testID="empty-add-channel-button"
+                      ref={(node) => {
+                        emptyAddNode = node;
+                      }}
+                      variant="primary"
+                      size="md"
+                      accessibilityLabel={t("models.channel.add")}
+                      onPress={() => handleOpenAddChannel("empty")}
+                    >
+                      <Icon name="plus" tone="primary-foreground" class="size-4" />
+                      <Text class="text-sm font-medium text-primary-foreground">
+                        {t("models.channel.add")}
+                      </Text>
+                    </Button>
+                  </View>
+                }
+              >
+                {(channel) => (
+                  // Native inputs and editor state belong to one channel, not the shared detail pane.
+                  <Each of={[channel()]} key={(item) => item.id}>
+                    {(activeChannel) => (
+                      <ChannelEditor
+                        mode="saved"
+                        channel={activeChannel()}
+                        models={modelsStore.modelsForSelectedChannel()}
+                        enabledFilter={modelsStore.enabledFilter()}
+                        onEnabledFilterChange={(filter) => void setEnabledFilter(filter)}
+                      />
+                    )}
+                  </Each>
+                )}
+              </If>
             }
           >
-            {(channel) => (
-              // Native inputs and editor state belong to one channel, not the shared detail pane.
-              <Each of={[channel()]} key={(item) => item.id}>
-                {(activeChannel) => (
-                  <ChannelEditor
-                    mode="saved"
-                    channel={activeChannel()}
-                    models={modelsStore.modelsForSelectedChannel()}
-                    enabledFilter={modelsStore.enabledFilter()}
-                    onEnabledFilterChange={(filter) => void setEnabledFilter(filter)}
-                  />
-                )}
-              </Each>
+            {(activeDraft) => (
+              <ChannelEditor
+                mode="draft"
+                draft={activeDraft()}
+                enabledFilter={modelsStore.enabledFilter()}
+                onEnabledFilterChange={(filter) => void setEnabledFilter(filter)}
+                onDraftSaved={() => {
+                  pendingDiscardAction.set(null);
+                  draft()?.dispose();
+                  draft.set(null);
+                }}
+                onCancelDraft={handleCancelDraft}
+                onRegisterAbort={registerDraftAbort}
+                onRegisterDraftFocus={registerDraftFocus}
+              />
             )}
           </If>
         }
-      >
-        {(activeDraft) => (
-          <ChannelEditor
-            mode="draft"
-            draft={activeDraft()}
-            enabledFilter={modelsStore.enabledFilter()}
-            onEnabledFilterChange={(filter) => void setEnabledFilter(filter)}
-            onDraftSaved={() => {
-              pendingDiscardAction.set(null);
-              draft()?.dispose();
-              draft.set(null);
-            }}
-            onCancelDraft={handleCancelDraft}
-            onRegisterAbort={registerDraftAbort}
-            onRegisterDraftFocus={registerDraftFocus}
-          />
-        )}
-      </If>
+      />
 
       <AddChannelDialog
         open={addChannelOpen()}

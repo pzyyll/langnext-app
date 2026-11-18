@@ -7,12 +7,12 @@ import {
   signal,
   Text,
   View,
-  windowSize,
   type InputRef,
   type ViewRef,
 } from "nsh";
 import { t } from "nsh/i18n";
 import type { NavigationLeaveGuard } from "../../components/layout/navigation-leave-guard";
+import { SplitPane } from "../../components/layout/split-pane";
 import { motion } from "../../components/motion";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -149,8 +149,6 @@ export function PresetsPage(props: PresetsPageProps) {
     });
   });
 
-  const compactLayout = () => windowSize().width < 860;
-  const railWidthClass = () => (compactLayout() ? "w-48" : "w-60");
   const status = () => presetsStore.status();
   const isReady = () => status().kind === "ready";
   const isLoading = () => {
@@ -421,259 +419,268 @@ export function PresetsPage(props: PresetsPageProps) {
 
   return (
     <>
-      <View
-        testID="presets-rail"
-        class={`${railWidthClass()} shrink-0 border-r border-border bg-background`}
-      >
-        <View class="h-12 shrink-0 flex-row items-center justify-between border-b border-border px-4">
-          <Text role="header" class="text-sm font-semibold text-foreground">
-            {t("presets.list.title")}
-          </Text>
-          <Button
-            testID="add-preset-button"
-            variant="ghost"
-            size="icon-sm"
-            disabled={!isReady() || presetsStore.mutating()}
-            tooltip={t("presets.action.add")}
-            accessibilityLabel={t("presets.action.add")}
-            onPress={() => startNewDraft()}
-          >
-            <Icon name="plus" tone="foreground" class="size-4" />
-          </Button>
-        </View>
+      <SplitPane
+        page="presets"
+        handleAccessibilityLabel={t("presets.list.resizeLabel")}
+        rail={
+          <View testID="presets-rail" class="min-w-0 flex-1 bg-background">
+            <View class="h-12 shrink-0 flex-row items-center justify-between gap-2 border-b border-border px-4">
+              <Text role="header" class="min-w-0 truncate text-sm font-semibold text-foreground">
+                {t("presets.list.title")}
+              </Text>
+              <Button
+                testID="add-preset-button"
+                variant="ghost"
+                size="icon-sm"
+                disabled={!isReady() || presetsStore.mutating()}
+                tooltip={t("presets.action.add")}
+                accessibilityLabel={t("presets.action.add")}
+                onPress={() => startNewDraft()}
+              >
+                <Icon name="plus" tone="foreground" class="size-4" />
+              </Button>
+            </View>
 
-        <If
-          when={isLoading()}
-          else={
             <If
-              when={Boolean(loadError())}
+              when={isLoading()}
               else={
                 <If
-                  when={presetsStore.records().length > 0 || isNewDraft()}
+                  when={Boolean(loadError())}
                   else={
-                    <View class="p-4">
-                      <Text class="text-xs text-muted-foreground">{t("presets.list.empty")}</Text>
-                    </View>
-                  }
-                >
-                  <View class="min-h-0 flex-1">
-                    <If when={isNewDraft()}>
-                      <View class="px-2 pt-2">
-                        <View
-                          testID="preset-draft-item"
-                          class={`flex-row items-center gap-2 rounded-lg border border-border bg-accent px-2.5 py-2 ${motion.navigationFeedback}`}
-                        >
-                          <View class="min-w-0 flex-1 gap-0.5">
-                            <View class="flex-row items-center gap-1.5">
-                              <Text class="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
-                                {draftSignal()?.name.trim() || t("presets.editor.untitled")}
-                              </Text>
-                              <Badge tone="warning" label={t("presets.editor.unsaved")} />
-                            </View>
-                            <Text class="truncate text-xs text-muted-foreground">
-                              {summarizePresetModels(
-                                draftSignal()?.primaryModelId
-                                  ? [draftSignal()!.primaryModelId!]
-                                  : [],
-                              )}
-                            </Text>
-                          </View>
+                    <If
+                      when={presetsStore.records().length > 0 || isNewDraft()}
+                      else={
+                        <View class="p-4">
+                          <Text class="text-xs text-muted-foreground">
+                            {t("presets.list.empty")}
+                          </Text>
                         </View>
+                      }
+                    >
+                      <View class="min-h-0 flex-1">
+                        <If when={isNewDraft()}>
+                          <View class="px-2 pt-2">
+                            <View
+                              testID="preset-draft-item"
+                              class={`flex-row items-center gap-2 rounded-lg border border-border bg-accent px-2.5 py-2 ${motion.navigationFeedback}`}
+                            >
+                              <View class="min-w-0 flex-1 gap-0.5">
+                                <View class="flex-row items-center gap-1.5">
+                                  <Text class="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
+                                    {draftSignal()?.name.trim() || t("presets.editor.untitled")}
+                                  </Text>
+                                  <Badge tone="warning" label={t("presets.editor.unsaved")} />
+                                </View>
+                                <Text class="truncate text-xs text-muted-foreground">
+                                  {summarizePresetModels(
+                                    draftSignal()?.primaryModelId
+                                      ? [draftSignal()!.primaryModelId!]
+                                      : [],
+                                  )}
+                                </Text>
+                              </View>
+                            </View>
+                          </View>
+                        </If>
+
+                        <If when={presetsStore.records().length > 0}>
+                          <List
+                            each={presetsStore.records()}
+                            keyExtractor={(item) => item.id}
+                            estimatedItemSize={56}
+                            contentClass="gap-1 p-2"
+                            class="min-h-0 flex-1"
+                          >
+                            {(preset) => {
+                              let rowBtnRef: ViewRef | null = null;
+                              effect(() => {
+                                const id = preset().id;
+                                if (rowBtnRef) {
+                                  presetRowRefs.set(id, rowBtnRef);
+                                }
+                                cleanup(() => {
+                                  if (presetRowRefs.get(id) === rowBtnRef) {
+                                    presetRowRefs.delete(id);
+                                  }
+                                });
+                              });
+                              const isSelected = () =>
+                                !isNewDraft() && selectedIdSignal() === preset().id;
+                              return (
+                                <View
+                                  class={`rounded-lg border ${motion.navigationFeedback}`}
+                                  classList={{
+                                    "border-border bg-accent": isSelected(),
+                                    "border-transparent hover:bg-accent/50 active:bg-accent":
+                                      !isSelected(),
+                                  }}
+                                >
+                                  <Button
+                                    testID={`preset-item-${preset().id}`}
+                                    ref={(node) => {
+                                      rowBtnRef = node;
+                                      presetRowRefs.set(preset().id, node);
+                                    }}
+                                    variant="ghost"
+                                    size="row"
+                                    selected={isSelected()}
+                                    accessibilityLabel={t("presets.list.itemLabel", {
+                                      name: preset().name,
+                                      status: preset().enabled
+                                        ? t("presets.list.enabled")
+                                        : t("presets.list.disabled"),
+                                    })}
+                                    onPress={() => selectSavedPreset(preset().id)}
+                                    class="w-full min-w-0 flex-1 hover:bg-transparent active:bg-transparent"
+                                  >
+                                    <View class="min-w-0 flex-1 gap-0.5">
+                                      <View class="flex-row items-center gap-1.5">
+                                        <Text class="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
+                                          {preset().name}
+                                        </Text>
+                                        <Badge
+                                          tone={preset().enabled ? "success" : "neutral"}
+                                          label={
+                                            preset().enabled
+                                              ? t("presets.list.enabled")
+                                              : t("presets.list.disabled")
+                                          }
+                                        />
+                                      </View>
+                                      <Text class="truncate text-xs text-muted-foreground">
+                                        {summarizePresetModels(preset().engine.modelIds)}
+                                      </Text>
+                                    </View>
+                                  </Button>
+                                </View>
+                              );
+                            }}
+                          </List>
+                        </If>
                       </View>
                     </If>
-
-                    <If when={presetsStore.records().length > 0}>
-                      <List
-                        each={presetsStore.records()}
-                        keyExtractor={(item) => item.id}
-                        estimatedItemSize={56}
-                        contentClass="gap-1 p-2"
-                        class="min-h-0 flex-1"
-                      >
-                        {(preset) => {
-                          let rowBtnRef: ViewRef | null = null;
-                          effect(() => {
-                            const id = preset().id;
-                            if (rowBtnRef) {
-                              presetRowRefs.set(id, rowBtnRef);
-                            }
-                            cleanup(() => {
-                              if (presetRowRefs.get(id) === rowBtnRef) {
-                                presetRowRefs.delete(id);
-                              }
-                            });
-                          });
-                          const isSelected = () =>
-                            !isNewDraft() && selectedIdSignal() === preset().id;
-                          return (
-                            <View
-                              class={`rounded-lg border ${motion.navigationFeedback}`}
-                              classList={{
-                                "border-border bg-accent": isSelected(),
-                                "border-transparent hover:bg-accent/50 active:bg-accent":
-                                  !isSelected(),
-                              }}
-                            >
-                              <Button
-                                testID={`preset-item-${preset().id}`}
-                                ref={(node) => {
-                                  rowBtnRef = node;
-                                  presetRowRefs.set(preset().id, node);
-                                }}
-                                variant="ghost"
-                                size="row"
-                                selected={isSelected()}
-                                accessibilityLabel={t("presets.list.itemLabel", {
-                                  name: preset().name,
-                                  status: preset().enabled
-                                    ? t("presets.list.enabled")
-                                    : t("presets.list.disabled"),
-                                })}
-                                onPress={() => selectSavedPreset(preset().id)}
-                                class="w-full min-w-0 flex-1 hover:bg-transparent active:bg-transparent"
-                              >
-                                <View class="min-w-0 flex-1 gap-0.5">
-                                  <View class="flex-row items-center gap-1.5">
-                                    <Text class="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
-                                      {preset().name}
-                                    </Text>
-                                    <Badge
-                                      tone={preset().enabled ? "success" : "neutral"}
-                                      label={
-                                        preset().enabled
-                                          ? t("presets.list.enabled")
-                                          : t("presets.list.disabled")
-                                      }
-                                    />
-                                  </View>
-                                  <Text class="truncate text-xs text-muted-foreground">
-                                    {summarizePresetModels(preset().engine.modelIds)}
-                                  </Text>
-                                </View>
-                              </Button>
-                            </View>
-                          );
-                        }}
-                      </List>
-                    </If>
+                  }
+                >
+                  <View class="gap-3 p-4">
+                    <Text role="alert" class="text-xs text-destructive">
+                      {loadError()}
+                    </Text>
+                    <Button
+                      testID="presets-retry-button"
+                      size="sm"
+                      variant="outline"
+                      label={t("common.retry")}
+                      onPress={() => void presetsStore.load()}
+                    />
                   </View>
                 </If>
               }
             >
-              <View class="gap-3 p-4">
-                <Text role="alert" class="text-xs text-destructive">
-                  {loadError()}
-                </Text>
-                <Button
-                  testID="presets-retry-button"
-                  size="sm"
-                  variant="outline"
-                  label={t("common.retry")}
-                  onPress={() => void presetsStore.load()}
-                />
+              <View class="p-4">
+                <Text class="text-xs text-muted-foreground">{t("presets.list.loading")}</Text>
               </View>
-            </If>
-          }
-        >
-          <View class="p-4">
-            <Text class="text-xs text-muted-foreground">{t("presets.list.loading")}</Text>
-          </View>
-        </If>
-      </View>
-
-      <If
-        when={draftSignal() !== null}
-        else={
-          <View class="min-w-0 flex-1 items-center justify-center gap-4 p-8">
-            <Icon name="file-text" tone="muted-foreground" class="size-10 opacity-50" />
-            <Text role="header" class="text-2xl font-semibold text-foreground">
-              {t("presets.title")}
-            </Text>
-            <If when={isReady()}>
-              <Button
-                testID="empty-add-preset-button"
-                ref={(node) => {
-                  emptyAddButtonRef = node;
-                }}
-                variant="primary"
-                size="md"
-                accessibilityLabel={t("presets.action.add")}
-                onPress={() => startNewDraft()}
-              >
-                <Icon name="plus" tone="primary-foreground" class="size-4" />
-                <Text class="text-sm font-medium text-primary-foreground">
-                  {t("presets.action.add")}
-                </Text>
-              </Button>
             </If>
           </View>
         }
-      >
-        <Each of={draftSignal() ? [draftSignal()!] : []} key={(item) => item.sourceId ?? "__new__"}>
-          {(draftItem) => (
-            <PresetEditor
-              draft={draftItem()}
-              dirty={isDirty()}
-              saving={presetsStore.mutating()}
-              selectedTemplateId={selectedTemplateIdSignal()}
-              modelChoices={modelChoices()}
-              modelsError={modelsError()}
-              errorMessage={errorMessageSignal()}
-              errorField={errorFieldSignal()}
-              errorFallbackIndex={errorFallbackIndexSignal()}
-              errorTemplateId={errorTemplateIdSignal()}
-              autoFocusName={autoFocusNameSignal()}
-              onChange={(patch) => updateDraft(patch)}
-              onSelectTemplate={(templateId) => selectedTemplateIdSignal.set(templateId)}
-              onSave={() => void handleSave()}
-              onCancel={() => handleCancel()}
-              onDelete={() => openDeleteDialog()}
-              onManageModels={() => handleManageModels()}
-              onNameRef={(node) => {
-                nameInputRef = node;
-              }}
-              onPrimaryModelRef={(node) => {
-                primaryModelRef = node;
-              }}
-              onFallbackRef={(index, node) => {
-                if (node) {
-                  fallbackRefs.set(index, node);
-                } else {
-                  fallbackRefs.delete(index);
-                }
-              }}
-              onTemperatureRef={(node) => {
-                temperatureInputRef = node;
-              }}
-              onMaxTokensRef={(node) => {
-                maxTokensInputRef = node;
-              }}
-              onDeleteRef={(node) => {
-                deleteButtonRef = node;
-              }}
-              onTemplateFieldRef={(templateId, field, node) => {
-                const existing = templateFieldRefs.get(templateId) ?? {};
-                existing[field] = node;
-                templateFieldRefs.set(templateId, existing);
-                if (
-                  pendingTemplateFocus &&
-                  pendingTemplateFocus.templateId === templateId &&
-                  pendingTemplateFocus.field === field
-                ) {
-                  pendingTemplateFocus = null;
-                  queueMicrotask(() => node.focus());
-                }
-              }}
-              onClearTemplateRefs={(templateId) => {
-                templateFieldRefs.delete(templateId);
-              }}
-              onFieldFocus={(target) => {
-                lastFocusedField = target;
-              }}
-            />
-          )}
-        </Each>
-      </If>
+        detail={
+          <If
+            when={draftSignal() !== null}
+            else={
+              <View class="min-w-0 flex-1 items-center justify-center gap-4 p-8">
+                <Icon name="file-text" tone="muted-foreground" class="size-10 opacity-50" />
+                <Text role="header" class="text-2xl font-semibold text-foreground">
+                  {t("presets.title")}
+                </Text>
+                <If when={isReady()}>
+                  <Button
+                    testID="empty-add-preset-button"
+                    ref={(node) => {
+                      emptyAddButtonRef = node;
+                    }}
+                    variant="primary"
+                    size="md"
+                    accessibilityLabel={t("presets.action.add")}
+                    onPress={() => startNewDraft()}
+                  >
+                    <Icon name="plus" tone="primary-foreground" class="size-4" />
+                    <Text class="text-sm font-medium text-primary-foreground">
+                      {t("presets.action.add")}
+                    </Text>
+                  </Button>
+                </If>
+              </View>
+            }
+          >
+            <Each
+              of={draftSignal() ? [draftSignal()!] : []}
+              key={(item) => item.sourceId ?? "__new__"}
+            >
+              {(draftItem) => (
+                <PresetEditor
+                  draft={draftItem()}
+                  dirty={isDirty()}
+                  saving={presetsStore.mutating()}
+                  selectedTemplateId={selectedTemplateIdSignal()}
+                  modelChoices={modelChoices()}
+                  modelsError={modelsError()}
+                  errorMessage={errorMessageSignal()}
+                  errorField={errorFieldSignal()}
+                  errorFallbackIndex={errorFallbackIndexSignal()}
+                  errorTemplateId={errorTemplateIdSignal()}
+                  autoFocusName={autoFocusNameSignal()}
+                  onChange={(patch) => updateDraft(patch)}
+                  onSelectTemplate={(templateId) => selectedTemplateIdSignal.set(templateId)}
+                  onSave={() => void handleSave()}
+                  onCancel={() => handleCancel()}
+                  onDelete={() => openDeleteDialog()}
+                  onManageModels={() => handleManageModels()}
+                  onNameRef={(node) => {
+                    nameInputRef = node;
+                  }}
+                  onPrimaryModelRef={(node) => {
+                    primaryModelRef = node;
+                  }}
+                  onFallbackRef={(index, node) => {
+                    if (node) {
+                      fallbackRefs.set(index, node);
+                    } else {
+                      fallbackRefs.delete(index);
+                    }
+                  }}
+                  onTemperatureRef={(node) => {
+                    temperatureInputRef = node;
+                  }}
+                  onMaxTokensRef={(node) => {
+                    maxTokensInputRef = node;
+                  }}
+                  onDeleteRef={(node) => {
+                    deleteButtonRef = node;
+                  }}
+                  onTemplateFieldRef={(templateId, field, node) => {
+                    const existing = templateFieldRefs.get(templateId) ?? {};
+                    existing[field] = node;
+                    templateFieldRefs.set(templateId, existing);
+                    if (
+                      pendingTemplateFocus &&
+                      pendingTemplateFocus.templateId === templateId &&
+                      pendingTemplateFocus.field === field
+                    ) {
+                      pendingTemplateFocus = null;
+                      queueMicrotask(() => node.focus());
+                    }
+                  }}
+                  onClearTemplateRefs={(templateId) => {
+                    templateFieldRefs.delete(templateId);
+                  }}
+                  onFieldFocus={(target) => {
+                    lastFocusedField = target;
+                  }}
+                />
+              )}
+            </Each>
+          </If>
+        }
+      />
 
       <ConfirmDialog
         testID="preset-discard-dialog"

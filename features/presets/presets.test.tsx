@@ -1,4 +1,5 @@
 import { expect, open, test } from "nsh/test";
+import { SPLIT_RAIL_STORAGE_KEYS } from "../../components/layout/split-rail";
 import {
   emptyCatalogCache,
   makeChannel,
@@ -825,4 +826,43 @@ test("presets ui: confirms delete and selects the next preset", async () => {
   await reopened.waitFor("id:preset-name");
   await reopened.keyboard.press("x");
   expect(reopened.value("id:preset-name")).toBe("x");
+});
+
+test("presets ui: resizes the presets split divider and persists width independently", async () => {
+  const chOk = makeChannel({ id: "ch-ok", displayName: "OpenAI Main", enabled: true });
+  const mOk = makeModel({ id: "m-1", providerId: "ch-ok", modelKey: "gpt-4.1", enabled: true });
+  const preset = makePresetRecord("p-1", "Technical EN to ZH", ["m-1"]);
+
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: makeSeedStorage({
+      channels: [chOk],
+      models: [mOk],
+      extra: {
+        [PRESETS_STORAGE_KEY]: JSON.stringify({ version: 1, items: [preset] }),
+        [SPLIT_RAIL_STORAGE_KEYS.models]: "210",
+      },
+    }),
+  });
+
+  await app.press("id:nav-presets");
+  await app.waitFor("id:presets-rail");
+  await app.waitFor("label:Resize presets panel");
+
+  await app.drag("label:Resize presets panel", { x: 70 });
+  await app.waitUntil(() => Boolean(app.storage()[SPLIT_RAIL_STORAGE_KEYS.presets]));
+  const resized = Number(app.storage()[SPLIT_RAIL_STORAGE_KEYS.presets]);
+  expect(resized).toBeGreaterThan(240);
+  expect(resized).toBeLessThanOrEqual(360);
+  expect(app.storage()[SPLIT_RAIL_STORAGE_KEYS.models]).toBe("210");
+
+  // Reopening preserves both split widths independently.
+  const reopened = await open(APP_ENTRY, {
+    ...viewport,
+    storage: app.storage(),
+  });
+  await reopened.press("id:nav-presets");
+  await reopened.waitFor("id:presets-rail");
+  expect(reopened.storage()[SPLIT_RAIL_STORAGE_KEYS.presets]).toBe(String(resized));
+  expect(reopened.storage()[SPLIT_RAIL_STORAGE_KEYS.models]).toBe("210");
 });

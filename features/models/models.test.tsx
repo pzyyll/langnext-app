@@ -1,4 +1,5 @@
 import { expect, open, test } from "nsh/test";
+import { SPLIT_RAIL_STORAGE_KEYS } from "../../components/layout/split-rail";
 import { emptyCatalogCache } from "./__tests__/fixtures";
 import { credentialStorageKey, MODELS_STORAGE_KEY, PROVIDERS_STORAGE_KEY } from "./store";
 import type { ProviderChannel } from "../../modules/ai/contracts/channel";
@@ -418,4 +419,45 @@ test("renders cleanly at the minimum viewport in dark mode with reduced motion",
   await app.press("id:toggle-model-legacy-gpt");
   const updated = JSON.parse(app.storage()[MODELS_STORAGE_KEY]!) as ProviderModel[];
   expect(updated.find((m) => m.modelKey === "legacy-gpt")?.enabled).toBe(true);
+});
+
+test("resizes the channels split divider and persists width across page switches and restarts", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: seededStorage(),
+  });
+
+  await app.waitFor("id:channels-rail");
+  await app.waitFor("label:Resize channels panel");
+
+  await app.drag("label:Resize channels panel", { x: 80 });
+  await app.waitUntil(() => Boolean(app.storage()[SPLIT_RAIL_STORAGE_KEYS.models]));
+  const widened = Number(app.storage()[SPLIT_RAIL_STORAGE_KEYS.models]);
+  expect(widened).toBeGreaterThan(240);
+  expect(widened).toBeLessThanOrEqual(360);
+
+  await app.drag("label:Resize channels panel", { x: -120 });
+  await app.waitUntil(() => Number(app.storage()[SPLIT_RAIL_STORAGE_KEYS.models]) < widened);
+  const narrowed = Number(app.storage()[SPLIT_RAIL_STORAGE_KEYS.models]);
+  expect(narrowed).toBeGreaterThanOrEqual(180);
+  expect(narrowed).toBeLessThan(widened);
+
+  // Switching pages and reopening keeps the dragged width and preserves the presets page independently.
+  await app.press("id:nav-settings");
+  await app.press("id:nav-models");
+  await app.waitFor("id:channels-rail");
+  expect(app.storage()[SPLIT_RAIL_STORAGE_KEYS.models]).toBe(String(narrowed));
+  expect(app.storage()[SPLIT_RAIL_STORAGE_KEYS.presets]).toBeUndefined();
+
+  const reopened = await open(APP_ENTRY, {
+    ...viewport,
+    storage: app.storage(),
+  });
+  await reopened.waitFor("id:channels-rail");
+  expect(reopened.storage()[SPLIT_RAIL_STORAGE_KEYS.models]).toBe(String(narrowed));
+
+  // Minimum viewport still shows both panes without error.
+  await reopened.setViewport(720, 520);
+  expect(reopened.shows("id:channels-rail")).toBe(true);
+  expect(reopened.shows("id:provider-editor")).toBe(true);
 });

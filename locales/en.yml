@@ -30,6 +30,7 @@ common:
   clearInput: Clear input
   selectPlaceholder: Select…
   dismiss: Dismiss
+  resizePanels: Resize panels
 settings:
   title: Settings
   appearance:
@@ -77,6 +78,7 @@ models:
     itemLabel: "%{name} (%{provider}, %{status})"
     moveUp: Move %{name} up
     moveDown: Move %{name} down
+    resizeLabel: Resize channels panel
   preset:
     openai: OpenAI
     gemini: Google Gemini
@@ -260,6 +262,7 @@ presets:
     disabled: Disabled
     modelSummaryWithFallbacks: "%{primary} · +%{count}"
     noModel: No model selected
+    resizeLabel: Resize presets panel
   action:
     add: Add Preset
     delete: Delete Preset

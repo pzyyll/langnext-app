@@ -264,14 +264,24 @@ nesting scroll views.
 
 ### Channels rail and detail pane
 
+- **Resizable master-detail split**: `SplitPane` (`components/layout/split-pane.tsx`,
+  built on `components/ui/resizable.tsx` wrapping `nsh/base`'s
+  `ResizablePanelGroup` and `ResizablePanel`) separates the left rail and right
+  detail pane with a draggable vertical divider. The left panel uses `fixed`
+  sizing (`240` pt default, `192` pt default below `860` pt when uncustomized,
+  minimum `180` pt, maximum `360` pt, clamped so the detail pane keeps at least
+  `400` pt), while the right pane fills the remaining space. Window resizes keep
+  a customized rail width while clamping it to the current viewport. Each split
+  workspace persists its own rail width in `Storage` (`split.models.railWidth`,
+  `split.presets.railWidth`).
 - **Unified split header spine**: Both the left `ChannelsRail` header and right
   `ProviderEditor` header use a fixed `h-12` bar with `border-b border-border` so
   the horizontal hairline aligns to the pixel across the vertical split divider.
   Neither pane uses a persistent bottom footer bar, eliminating mismatched bottom
   hairlines and oversized disabled commit buttons.
-- **Master rail**: A `w-60` (`w-48` under `860` points) `border-r border-border`
-  column with a `Channels` header and `+` icon trigger, followed by a full-height
-  scrollable channel list. Each channel row keeps a fixed leading status lane
+- **Master rail**: A `Channels` header and `+` icon trigger over a full-height
+  scrollable channel list (without a duplicate `border-r`, since the split handle
+  draws the `bg-border` hairline). Each channel row keeps a fixed leading status lane
   (`check-circle` when enabled, muted `minus` when disabled, paired with text and
   accessible state) plus a two-line display name and a provider mark + name
   subtitle (`OpenAI`, `Google Gemini`, `Anthropic`, `DeepSeek`, or `Custom`).
@@ -387,6 +397,7 @@ nesting scroll views.
 
 | Change | Tool and tokens | Reduced motion |
 | --- | --- | --- |
+| Split handle hover, drag, and thumb grip | Native color transition (`navigationFeedback`, 150 ms, ease-out: `bg-border` -> `group-hover:bg-ring` -> `group-active:bg-primary`) and thumb opacity transition (`tooltip`, 150 ms, ease-out); panel split tracks the pointer 1:1 per frame natively | Instant color/opacity; 1:1 pointer tracking unchanged |
 | Button, preset card, and trigger hover/press | Native color & transform transition; `navigationFeedback` + `pressScale`, 150 ms, ease-out | Instant color, no scale |
 | Channel row and model row hover/selection | Native background & border transition (`navigationFeedback`, 150 ms, ease-out) without press scale | Instant |
 | Switch and Checkbox state | Native track/box transition (`navigationFeedback`) + thumb slide (`switchThumb`, 150 ms, ease-out) | Instant |
@@ -476,7 +487,7 @@ Presets manages AI translation presets using the same split master-detail struct
 
 ### Split layout and responsive structure
 
-- **Unified split header spine**: Both the left `PresetsRail` (`w-60` on desktop, `w-48` under `860` points, `border-r border-border`) and the right `PresetEditor` (`min-w-0 flex-1`) share a fixed `h-12 border-b border-border` header bar so the horizontal hairline aligns across the divider.
+- **Unified split header spine**: Both the left `PresetsRail` (`SplitPane` rail, `240` pt default or `192` pt compact default under `860` points, persisted under `split.presets.railWidth`) and the right `PresetEditor` (`min-w-0 flex-1`) share a fixed `h-12 border-b border-border` header bar so the horizontal hairline aligns across the draggable `bg-border` divider.
 - **Master rail (`PresetsRail`)**: Displays the `Presets` heading and `+` icon button (`add-preset-button`, disabled while loading, unreadable, or mutating). Below the header, saved presets render in a virtualized NSH `List` keyed by preset ID (`keyExtractor`), showing each preset's truncated name, `Enabled`/`Disabled` `Badge`, and model summary (`Channel · Model`, plus fallback count when present). Unsaved new drafts render a pinned `preset-draft-item` preview row with an `Unsaved` warning badge above the list. Missing/unreadable storage renders an inline `role="alert"` load error with a **Retry** button (`presets-retry-button`) and keeps creation disabled.
 - **Pinned header actions and scrollable editor**: The right pane pins the live preset title, `Unsaved` badge when dirty or new, inline `Enabled` switch (`preset-enabled`), `Cancel` (`preset-cancel`), and `Save` (`preset-save`) inside the `h-12` header so primary actions stay visible at `720 × 520` without header crowding or horizontal overflow. Below the header, one `<Scroll class="min-h-0 flex-1">` owns the centered reading column (`mx-auto w-full max-w-4xl`, `gap-5 p-6` on desktop and `gap-4 p-4` under `860` points), ending with `Delete Preset` (`preset-delete`, `destructive-outline`) for saved presets.
 - **Editor sections**: Uses shared `Card`, `SectionHeading`, `FormField`, `Input`, `Textarea` (over `nsh/base` `Input` with `multiline` and `submitBehavior="newline"`), `Select`, `Switch`, `Badge`, `Button`, and `ConfirmDialog`:
@@ -506,6 +517,7 @@ Use the shared decimal `Input` with two stacked arrow buttons at its trailing ed
 | Change | Tool and tokens | Reduced motion |
 | --- | --- | --- |
 | Presets workspace enters | Native opacity motion on the inner content container (`pageEnter`, 200 ms, ease-out) while the outer `PageSurface` `bg-background` fill stays opaque | Instant |
+| Split handle hover, drag, and thumb grip | Shared `SplitPane` handle transitions (`navigationFeedback` color, `tooltip` thumb opacity, 150 ms, ease-out); panel split tracks the pointer 1:1 per frame natively | Instant color/opacity; 1:1 pointer tracking unchanged |
 | Sidebar item, rail row, template tab, and button hover/press | Native color & transform transition; `navigationFeedback` + `pressScale`, 150 ms, ease-out (rows/tabs omit press scale) | Instant color, no scale |
 | Enabled switch state | Track transition `navigationFeedback`; thumb translation `switchThumb`, 150 ms, ease-out | Instant |
 | Select popups and tooltips | Native popup/tooltip transitions (`popup`, `tooltip`, 150 ms, ease-out) | Instant opacity, no slide |
@@ -519,6 +531,14 @@ Use the shared decimal `Input` with two stacked arrow buttons at its trailing ed
 - **Desktop Windows & visual audit**: Verified `App.test.tsx --filter "presets nav:"` and `features/presets/presets.test.tsx` in real desktop windows (`--target windows`), plus rendered Windows screenshot inspections across Light/Dark themes, `1040 × 720` and compact `720 × 520` (`reducedMotion: true`) viewports, `en` and `zh-CN` localizations, empty, multi-fallback, multiline prompt, unavailable/deleted model, validation-error, and discard confirmation states.
 - **Temperature input**: Windows tests verified the arrow buttons, endpoint states, decimal format, and typed edit rejection. Headless tests verified paste rejection because the Windows driver cannot paste. Screenshots in Light (`en`, `1040 × 720`) and Dark (`zh-CN`, `720 × 520`, reduced motion) show the placeholder inside the input, arrow alignment, disabled state, and the filled value. The dark screenshot shows the hover wash after a click. Held press and Narrator were not verified.
 - **Test-driver & accessibility notes**: In headless `nsh test`, `app.keyboard.press` dispatches keys to `onKeyCommand`, menus, focused `<Input>` controls, and `Escape` rather than non-input `<Button>` focus activation (`Space`/`Enter`), so button focus transitions are verified via native `ViewRef.focus()` + `setAccessibilityFocus()` calls on `onClose` alongside direct activation; live Windows Narrator UIA screen-reader announcement remains unverified manually outside automated accessibility labels and `role="alert"`/`role="alertdialog"` semantics.
+
+### Resizable split validation
+
+- **Checks**: `mise run verify` passed formatting, lint, type checks, all 171 headless tests (including `components/layout/split-rail.test.ts` and the new drag-resize/persistence tests in `models.test.tsx` and `presets.test.tsx`), and the release bundle. Real Windows desktop runs (`--target windows`) passed `features/models/models.test.tsx` (8/8) and `features/presets/presets.test.tsx` (11/11).
+- **Visual audit & Finishing checklist**: Inspected Windows desktop PNG screenshots across Light (`1040 × 720`, rest & widened + divider hovered) and Dark (`720 × 520`, `reducedMotion: true`, clamped from widened storage) for both Models and Presets:
+  - *Radius, typography, spacing, alignment*: `h-12 border-b` header hairlines align across the `1` pt vertical divider; no duplicate `border-r`; widened rails eliminate premature channel-name truncation and clamped `268` pt compact rails preserve `400` pt editor width without header clipping.
+  - *Color, hover, states, motion*: Rest hairline uses `bg-border`; hovering highlights `bg-ring` and fades in the centered `rounded-full` `bg-muted-foreground` grip thumb; `active:` uses `bg-primary` and per-frame 1:1 native dragging (`ResizablePanelGroup`); `reducedMotion` disables transition durations while keeping live drag tracking.
+  - *Accessibility & outstanding*: Both handles expose localized `handleAccessibilityLabel` strings via `t()` (`models.channels.resizeLabel`, `presets.list.resizeLabel`) over `nsh/base`'s `adjustable` handle role. Held drag-press color (`active:`) and live Windows Narrator keyboard adjustment remain manual desktop checks.
 
 ## Theme Colors
 ```css

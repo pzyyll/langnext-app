@@ -30,6 +30,7 @@ common:
   clearInput: 清除输入
   selectPlaceholder: 请选择…
   dismiss: 关闭
+  resizePanels: 调整面板宽度
 settings:
   title: 设置
   appearance:
@@ -77,6 +78,7 @@ models:
     itemLabel: "%{name}（%{provider}，%{status}）"
     moveUp: 上移 %{name}
     moveDown: 下移 %{name}
+    resizeLabel: 调整渠道栏宽度
   preset:
     openai: OpenAI
     gemini: Google Gemini
@@ -260,6 +262,7 @@ presets:
     disabled: 已停用
     modelSummaryWithFallbacks: "%{primary} · +%{count}"
     noModel: 未选择模型
+    resizeLabel: 调整预设栏宽度
   action:
     add: 添加预设
     delete: 删除预设
