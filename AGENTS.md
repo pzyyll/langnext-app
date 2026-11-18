@@ -55,3 +55,7 @@ All project commands are in `.mise/tasks/`.
 - After each completed task that changed files, commit the task's changes; leave every commit local and push only when the user explicitly asks.
 - Write Conventional Commit messages (`<type>[scope]: <description>`). Only a major release needs the user's approval before you commit: a `!` breaking marker, a `BREAKING CHANGE` footer, or any other message that declares a major version. Wait for the answer; never choose a major-version message on your own.
 - Minor and patch releases (`feat`, `fix`, `perf`) and release-neutral types (`docs`, `test`, `chore`, `refactor`, `style`, `ci`, `build`) commit without asking.
+
+## Referencs
+
+- `langnext-app`: `F:\workspace\my\langnext-app`
