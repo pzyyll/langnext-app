@@ -55,7 +55,7 @@ each page supplies only its sections, which wrap at the minimum window width.
 | --- | --- | --- |
 | Navigation hover and press | Native color transition; `navigationFeedback`, 150 ms, ease-out; press deepens the fill | Instant |
 | Current destination | Selected fill follows the current page with the same transition. No sliding marker: the two destinations sit at opposite ends of the sidebar. | Instant |
-| Models or Settings enters | Native opacity motion; `pageEnter`, 200 ms, ease-out. No directional slide between sibling pages. | Instant |
+| Models, Presets, or Settings enters | Native opacity motion on the inner content container (`pageEnter`, 200 ms, ease-out) while the outer `PageSurface` `bg-background` fill stays opaque. No directional slide between sibling pages. | Instant |
 | Navigation tooltip opens or closes | Native opacity transition; `navigationFeedback`, 150 ms, ease-out | Instant |
 | Labels, user-controlled layout, gestures, loading, live content | None. Both pages show static content. | No change |
 
@@ -505,7 +505,7 @@ Use the shared decimal `Input` with two stacked arrow buttons at its trailing ed
 
 | Change | Tool and tokens | Reduced motion |
 | --- | --- | --- |
-| Presets workspace enters | Native opacity motion; `pageEnter`, 200 ms, ease-out | Instant |
+| Presets workspace enters | Native opacity motion on the inner content container (`pageEnter`, 200 ms, ease-out) while the outer `PageSurface` `bg-background` fill stays opaque | Instant |
 | Sidebar item, rail row, template tab, and button hover/press | Native color & transform transition; `navigationFeedback` + `pressScale`, 150 ms, ease-out (rows/tabs omit press scale) | Instant color, no scale |
 | Enabled switch state | Track transition `navigationFeedback`; thumb translation `switchThumb`, 150 ms, ease-out | Instant |
 | Select popups and tooltips | Native popup/tooltip transitions (`popup`, `tooltip`, 150 ms, ease-out) | Instant opacity, no slide |

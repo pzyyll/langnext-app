@@ -45,10 +45,18 @@ export function PresetsPage(props: PresetsPageProps) {
     void presetsStore.load();
   }
 
-  const selectedIdSignal = signal<string | null>(null);
-  const selectedTemplateIdSignal = signal<string | null>(null);
-  const draftSignal = signal<PresetDraft | null>(null);
-  const baselineSignal = signal<PresetDraft | null>(null);
+  const initialFirst =
+    presetsStore.status().kind === "ready" ? (presetsStore.records()[0] ?? null) : null;
+  const initialDraft = initialFirst ? createDraftFromPreset(initialFirst) : null;
+
+  const selectedIdSignal = signal<string | null>(initialFirst?.id ?? null);
+  const selectedTemplateIdSignal = signal<string | null>(
+    initialFirst?.engine.templates[0]?.id ?? null,
+  );
+  const draftSignal = signal<PresetDraft | null>(initialDraft);
+  const baselineSignal = signal<PresetDraft | null>(
+    initialDraft ? cloneDraft(initialDraft) : null,
+  );
   const autoFocusNameSignal = signal<boolean>(false);
   const errorMessageSignal = signal<string | null>(null);
   const errorFieldSignal = signal<PresetValidationField | null>(null);

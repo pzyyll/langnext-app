@@ -22,18 +22,27 @@ export function PageSurface(props: PageSurfaceProps) {
     <View
       testID={props.layout === "split" ? props.testID : undefined}
       class="min-w-0 flex-1 overflow-hidden rounded-xl bg-background"
-      classList={{ "flex-row": props.layout === "split" }}
-      style={entrance.style}
     >
       <If
         when={props.layout === "split"}
         else={
-          <Scroll testID={props.testID} class="min-w-0 flex-1">
+          <Scroll
+            testID={props.testID}
+            class="min-w-0 flex-1"
+            // Runtime native entrance animation fades page content without fading the opaque work-area background.
+            style={entrance.style}
+          >
             <View class="mx-auto w-full max-w-5xl gap-8 p-8">{props.children}</View>
           </Scroll>
         }
       >
-        {props.children}
+        <View
+          class="min-w-0 flex-1 flex-row"
+          // Runtime native entrance animation fades page content without fading the opaque work-area background.
+          style={entrance.style}
+        >
+          {props.children}
+        </View>
       </If>
     </View>
   );
