@@ -54,9 +54,7 @@ export function PresetsPage(props: PresetsPageProps) {
     initialFirst?.engine.templates[0]?.id ?? null,
   );
   const draftSignal = signal<PresetDraft | null>(initialDraft);
-  const baselineSignal = signal<PresetDraft | null>(
-    initialDraft ? cloneDraft(initialDraft) : null,
-  );
+  const baselineSignal = signal<PresetDraft | null>(initialDraft ? cloneDraft(initialDraft) : null);
   const autoFocusNameSignal = signal<boolean>(false);
   const errorMessageSignal = signal<string | null>(null);
   const errorFieldSignal = signal<PresetValidationField | null>(null);

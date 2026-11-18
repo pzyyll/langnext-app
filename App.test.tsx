@@ -274,3 +274,29 @@ test("presets nav: opens the workspace from Models", async () => {
   await app.press("id:nav-presets");
   expect(app.count("id:presets-page")).toBe(1);
 });
+
+test("page surface: keeps work-area background opaque across destination switches", async () => {
+  const app = await open("./App.tsx", {
+    ...viewport,
+    storage: { "settings.language": "en" },
+  });
+
+  const modelsSurface = app.viewStyle("id:models-page");
+  expect(modelsSurface?.backgroundColor).toBeDefined();
+  expect(modelsSurface?.opacity).toBe(1);
+  expect(modelsSurface?.effectiveOpacity).toBe(1);
+
+  await app.press("id:nav-presets");
+  await app.waitFor("id:presets-page");
+  const presetsSurface = app.viewStyle("id:presets-page");
+  expect(presetsSurface?.backgroundColor).toBe(modelsSurface?.backgroundColor);
+  expect(presetsSurface?.opacity).toBe(1);
+  expect(presetsSurface?.effectiveOpacity).toBe(1);
+
+  await app.press("id:nav-settings");
+  expect(app.texts()).toContain("Appearance");
+
+  await app.press("id:nav-models");
+  await app.waitFor("id:models-page");
+  expect(app.viewStyle("id:models-page")).toEqual(modelsSurface);
+});
