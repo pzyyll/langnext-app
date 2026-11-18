@@ -48,9 +48,13 @@ export function PresetsPage(props: PresetsPageProps) {
   const autoFocusNameSignal = signal<boolean>(false);
   const errorMessageSignal = signal<string | null>(null);
   const errorFieldSignal = signal<PresetValidationField | null>(null);
+  const errorFallbackIndexSignal = signal<number | null>(null);
 
   let nameInputRef: InputRef | null = null;
   let primaryModelRef: ViewRef | null = null;
+  const fallbackRefs = new Map<number, ViewRef>();
+  let temperatureInputRef: InputRef | null = null;
+  let maxTokensInputRef: InputRef | null = null;
 
   const unregisterGuard = props.onRegisterLeaveGuard?.(() => !presetsStore.mutating());
   if (unregisterGuard) {
@@ -96,11 +100,24 @@ export function PresetsPage(props: PresetsPageProps) {
   const clearErrors = () => {
     errorMessageSignal.set(null);
     errorFieldSignal.set(null);
+    errorFallbackIndexSignal.set(null);
   };
 
-  const focusField = (field: PresetValidationField | undefined) => {
+  const focusField = (field: PresetValidationField | undefined, fallbackIndex?: number) => {
     if (field === "primaryModel") {
       queueMicrotask(() => primaryModelRef?.focus());
+      return;
+    }
+    if (field === "fallbackModel" && fallbackIndex !== undefined) {
+      queueMicrotask(() => fallbackRefs.get(fallbackIndex)?.focus());
+      return;
+    }
+    if (field === "temperature") {
+      queueMicrotask(() => temperatureInputRef?.focus());
+      return;
+    }
+    if (field === "maxOutputTokens") {
+      queueMicrotask(() => maxTokensInputRef?.focus());
       return;
     }
     if (field === "name" || !field) {
@@ -177,11 +194,13 @@ export function PresetsPage(props: PresetsPageProps) {
       if (error instanceof PresetsStoreError) {
         errorMessageSignal.set(error.message);
         errorFieldSignal.set(error.field ?? null);
-        focusField(error.field);
+        errorFallbackIndexSignal.set(error.fallbackIndex ?? null);
+        focusField(error.field, error.fallbackIndex);
         return;
       }
       errorMessageSignal.set(error instanceof Error ? error.message : String(error));
       errorFieldSignal.set(null);
+      errorFallbackIndexSignal.set(null);
     }
   };
 
@@ -380,6 +399,7 @@ export function PresetsPage(props: PresetsPageProps) {
           modelsError={modelsError()}
           errorMessage={errorMessageSignal()}
           errorField={errorFieldSignal()}
+          errorFallbackIndex={errorFallbackIndexSignal()}
           autoFocusName={autoFocusNameSignal()}
           onChange={(patch) => updateDraft(patch)}
           onSave={() => void handleSave()}
@@ -390,6 +410,19 @@ export function PresetsPage(props: PresetsPageProps) {
           }}
           onPrimaryModelRef={(node) => {
             primaryModelRef = node;
+          }}
+          onFallbackRef={(index, node) => {
+            if (node) {
+              fallbackRefs.set(index, node);
+            } else {
+              fallbackRefs.delete(index);
+            }
+          }}
+          onTemperatureRef={(node) => {
+            temperatureInputRef = node;
+          }}
+          onMaxTokensRef={(node) => {
+            maxTokensInputRef = node;
           }}
         />
       </If>

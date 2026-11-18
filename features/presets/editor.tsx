@@ -15,7 +15,7 @@ import {
   NO_PREFERENCE_TARGET,
   type SourceLanguageId,
 } from "./languages";
-import { resolveModelBindingInfo } from "./model-choices";
+import { ModelsSection } from "./models-section";
 import type { ModelChoice, PresetValidationField } from "./types";
 
 interface PresetEditorProps {
@@ -26,6 +26,7 @@ interface PresetEditorProps {
   modelsError: string | null;
   errorMessage: string | null;
   errorField: PresetValidationField | null;
+  errorFallbackIndex: number | null;
   autoFocusName: boolean;
   onChange: (patch: Partial<PresetDraft>) => void;
   onSave: () => void;
@@ -33,6 +34,9 @@ interface PresetEditorProps {
   onManageModels: () => void;
   onNameRef: (node: InputRef) => void;
   onPrimaryModelRef: (node: ViewRef) => void;
+  onFallbackRef: (index: number, node: ViewRef | null) => void;
+  onTemperatureRef: (node: InputRef) => void;
+  onMaxTokensRef: (node: InputRef) => void;
 }
 
 const SOURCE_LANGUAGE_ITEMS: SelectItem[] = [AUTO_LANGUAGE, ...LANGUAGE_IDS].map((id) => ({
@@ -73,17 +77,29 @@ export function PresetEditor(props: PresetEditorProps) {
     return props.draft.sourceId === null || props.dirty;
   };
 
-  const primaryItems = (): SelectItem[] => {
-    const items: SelectItem[] = props.modelChoices.map((choice) => ({
-      value: choice.id,
-      title: choice.label,
-    }));
-    const currentId = props.draft.primaryModelId;
-    if (currentId && !props.modelChoices.some((choice) => choice.id === currentId)) {
-      const resolved = resolveModelBindingInfo(currentId);
-      items.unshift({ value: currentId, title: resolved.label });
-    }
-    return items;
+  const addFallback = () => {
+    props.onChange({ fallbackModelIds: [...props.draft.fallbackModelIds, ""] });
+  };
+
+  const changeFallback = (index: number, modelId: string) => {
+    const next = [...props.draft.fallbackModelIds];
+    next[index] = modelId;
+    props.onChange({ fallbackModelIds: next });
+  };
+
+  const moveFallback = (index: number, direction: "up" | "down") => {
+    const targetIndex = direction === "up" ? index - 1 : index + 1;
+    if (targetIndex < 0 || targetIndex >= props.draft.fallbackModelIds.length) return;
+    const next = [...props.draft.fallbackModelIds];
+    const moving = next[index]!;
+    next[index] = next[targetIndex]!;
+    next[targetIndex] = moving;
+    props.onChange({ fallbackModelIds: next });
+  };
+
+  const removeFallback = (index: number) => {
+    const next = props.draft.fallbackModelIds.filter((_, i) => i !== index);
+    props.onChange({ fallbackModelIds: next });
   };
 
   return (
@@ -198,42 +214,32 @@ export function PresetEditor(props: PresetEditorProps) {
             </View>
           </Card>
 
-          <Card class={cardClass()}>
-            <SectionHeading title={t("presets.section.models")} />
-
-            <If when={props.modelsError !== null || props.modelChoices.length === 0}>
-              <View class="gap-2 rounded-lg border border-border bg-muted/50 p-3">
-                <Text role="alert" class="text-xs text-muted-foreground">
-                  {props.modelsError !== null
-                    ? t("presets.model.catalogLoadError")
-                    : t("presets.model.noEligible")}
-                </Text>
-                <View class="flex-row">
-                  <Button
-                    testID="preset-manage-models"
-                    variant="outline"
-                    size="sm"
-                    label={t("presets.action.manageModels")}
-                    disabled={props.saving}
-                    onPress={() => props.onManageModels()}
-                  />
-                </View>
-              </View>
-            </If>
-
-            <FormField label={t("presets.model.primary")} error={fieldError("primaryModel")}>
-              <Select
-                testID="preset-primary-model"
-                ref={(node) => props.onPrimaryModelRef(node)}
-                items={primaryItems()}
-                value={props.draft.primaryModelId}
-                placeholder={t("presets.model.selectPlaceholder")}
-                disabled={props.saving || primaryItems().length === 0}
-                accessibilityLabel={t("presets.model.primary")}
-                onChange={(value) => props.onChange({ primaryModelId: value })}
-              />
-            </FormField>
-          </Card>
+          <ModelsSection
+            primaryModelId={props.draft.primaryModelId}
+            fallbackModelIds={props.draft.fallbackModelIds}
+            temperatureText={props.draft.temperatureText}
+            maxOutputTokensText={props.draft.maxOutputTokensText}
+            saving={props.saving}
+            modelChoices={props.modelChoices}
+            modelsError={props.modelsError}
+            errorMessage={props.errorMessage}
+            errorField={props.errorField}
+            errorFallbackIndex={props.errorFallbackIndex}
+            onChangePrimary={(primaryModelId) => props.onChange({ primaryModelId })}
+            onAddFallback={() => addFallback()}
+            onChangeFallback={(index, id) => changeFallback(index, id)}
+            onMoveFallback={(index, direction) => moveFallback(index, direction)}
+            onRemoveFallback={(index) => removeFallback(index)}
+            onChangeTemperature={(temperatureText) => props.onChange({ temperatureText })}
+            onChangeMaxOutputTokens={(maxOutputTokensText) =>
+              props.onChange({ maxOutputTokensText })
+            }
+            onManageModels={() => props.onManageModels()}
+            onPrimaryModelRef={(node) => props.onPrimaryModelRef(node)}
+            onFallbackRef={(index, node) => props.onFallbackRef(index, node)}
+            onTemperatureRef={(node) => props.onTemperatureRef(node)}
+            onMaxTokensRef={(node) => props.onMaxTokensRef(node)}
+          />
         </View>
       </Scroll>
     </View>

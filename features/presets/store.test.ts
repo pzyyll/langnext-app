@@ -174,3 +174,117 @@ test("presets store: keeps unreadable storage for unsupported version", async ()
   expect(mem.getSetCalls()).toBe(0);
   expect(mem.backing[PRESETS_STORAGE_KEY]).toBe(futureRaw);
 });
+
+test("presets store: validates model order and parameters", async () => {
+  const mem = createMemoryStorage();
+  let available: ModelChoiceId[] = [{ id: "m-1" }, { id: "m-2" }, { id: "m-3" }];
+  const store = createPresetsStore(mem.storage, () => available);
+  await store.load();
+
+  // Duplicate model in primary + fallback chain is rejected.
+  await expect(
+    store.save(
+      makeBaseInput({
+        engine: {
+          ...makeBaseInput().engine,
+          modelIds: ["m-1", "m-2", "m-1"],
+        },
+      }),
+    ),
+  ).rejects.toMatchObject({ key: "model_duplicate", field: "fallbackModel", fallbackIndex: 1 });
+
+  // Selecting an unavailable new model is rejected.
+  await expect(
+    store.save(
+      makeBaseInput({
+        engine: {
+          ...makeBaseInput().engine,
+          modelIds: ["m-1", "m-missing"],
+        },
+      }),
+    ),
+  ).rejects.toMatchObject({ key: "model_unavailable", field: "fallbackModel", fallbackIndex: 0 });
+
+  // Temperature rejects non-numeric and negative inputs.
+  await expect(
+    store.save(
+      makeBaseInput({
+        engine: { ...makeBaseInput().engine, temperature: "-0.1" },
+      }),
+    ),
+  ).rejects.toMatchObject({ key: "temperature_invalid", field: "temperature" });
+  await expect(
+    store.save(
+      makeBaseInput({
+        engine: { ...makeBaseInput().engine, temperature: "hot" },
+      }),
+    ),
+  ).rejects.toMatchObject({ key: "temperature_invalid", field: "temperature" });
+
+  // Max output tokens rejects 0, decimals, and trailing garbage.
+  for (const invalidTokens of ["0", "1.5", "12x", "-10", 0, 1.5]) {
+    await expect(
+      store.save(
+        makeBaseInput({
+          engine: { ...makeBaseInput().engine, maxOutputTokens: invalidTokens },
+        }),
+      ),
+    ).rejects.toMatchObject({ key: "max_output_tokens_invalid", field: "maxOutputTokens" });
+  }
+
+  // Temperature 0 and valid integer maxOutputTokens persist in exact model order.
+  const created = await store.save(
+    makeBaseInput({
+      engine: {
+        ...makeBaseInput().engine,
+        modelIds: ["m-3", "m-1", "m-2"],
+        temperature: "0",
+        maxOutputTokens: "4096",
+      },
+    }),
+  );
+  expect(created.engine.modelIds).toEqual(["m-3", "m-1", "m-2"]);
+  expect(created.engine.temperature).toBe(0);
+  expect(created.engine.maxOutputTokens).toBe(4096);
+
+  // Blank optional numeric fields normalize to null cleanly.
+  const cleared = await store.save(
+    makeBaseInput({
+      id: created.id,
+      engine: {
+        ...makeBaseInput().engine,
+        modelIds: ["m-3", "m-2", "m-1"],
+        temperature: "   ",
+        maxOutputTokens: "",
+      },
+    }),
+  );
+  expect(cleared.engine.modelIds).toEqual(["m-3", "m-2", "m-1"]);
+  expect(cleared.engine.temperature).toBeNull();
+  expect(cleared.engine.maxOutputTokens).toBeNull();
+
+  // Existing bound unavailable models can stay across unrelated edits/reorders, while new unavailable ones fail.
+  available = [{ id: "m-1" }];
+  const renamedWithStale = await store.save(
+    makeBaseInput({
+      id: cleared.id,
+      name: "Renamed Stale",
+      engine: {
+        ...makeBaseInput().engine,
+        modelIds: ["m-3", "m-1"],
+      },
+    }),
+  );
+  expect(renamedWithStale.engine.modelIds).toEqual(["m-3", "m-1"]);
+  await expect(
+    store.save(
+      makeBaseInput({
+        id: renamedWithStale.id,
+        engine: {
+          ...makeBaseInput().engine,
+          modelIds: ["m-3", "m-newly-bad"],
+        },
+      }),
+    ),
+  ).rejects.toMatchObject({ key: "model_unavailable", field: "fallbackModel", fallbackIndex: 0 });
+});
