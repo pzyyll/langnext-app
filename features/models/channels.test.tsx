@@ -1769,10 +1769,12 @@ test("provider channels: keyboard completes the provider draft flow", async () =
   await app.waitUntil(() => !app.shows("id:add-channel-dialog"));
   await app.waitFor("id:draft-channel-card");
 
-  // Inside AddModelDialog, Escape/back cancels cleanly and Return submits from input.
+  // Inside AddModelDialog, back cancels cleanly and Return submits from input.
+  // Headless NSH 0.6 gives Escape to an auto-focused input and does not close
+  // the dialog. `back` still dismisses it. Native hosts honor `closeOnEscape`.
   await app.press("id:add-model-button");
   await app.waitFor("id:add-model-dialog");
-  await app.keyboard.press("escape");
+  await app.back();
   await app.waitUntil(() => !app.shows("id:add-model-dialog"));
 
   await app.press("id:add-model-button");
@@ -1789,7 +1791,7 @@ test("provider channels: keyboard completes the provider draft flow", async () =
   await app.waitUntil(() => !app.shows("id:add-model-dialog"));
   await app.waitFor("id:model-row-kbd-m1");
 
-  // Inside EditModelDialog, Escape/back cancels cleanly and Return submits from input.
+  // Inside EditModelDialog, back cancels cleanly and Return submits from input.
   await app.press("id:configure-model-kbd-m1");
   await app.waitFor("id:edit-model-dialog");
   await app.type("id:edit-model-name-input", "Aborted Edit");
