@@ -487,7 +487,7 @@ Presets manages AI translation presets using the same split master-detail struct
 
 ### Temperature input
 
-Use the shared `Input` with a decimal keyboard and a Clear action. A blank value uses the model default. Show the tightest known range across the primary model and fallbacks. Do not assign an official API limit to a proxy or custom endpoint. If a known model does not support temperature, display a leave-blank hint and let the user clear an existing value. Validation does not silently change the value. Keep valid decimals in decimal notation when a record reloads.
+Use the shared decimal `Input` with two stacked arrow buttons at its trailing edge. The editor range is fixed at `0.0–2.0` for all presets. Show the range only in the empty input as placeholder text. Each step is `0.1`. Disable the button that would go past an endpoint. Reject out-of-range edits and more than one decimal digit. Format committed values with one decimal digit. A blank input uses the model default. Increase starts an empty field at `0.0`. The provider notes below describe API limits, not editor rules.
 
 - OpenAI [Chat Completions](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create) and [Responses](https://developers.openai.com/api/reference/resources/responses/methods/create): 0 to 2 where the model supports the parameter. Some reasoning models omit it.
 - [Anthropic Messages](https://platform.claude.com/docs/en/api/php/messages/create): 0 to 1 where supported. [Claude 4.7 and later and Mythos Preview](https://platform.claude.com/docs/en/build-with-claude/working-with-messages) do not support custom sampling. This project keeps API version `2023-06-01`; API version `2026-10-21` removes this parameter for every Claude model.
@@ -512,12 +512,12 @@ Use the shared `Input` with a decimal keyboard and a Clear action. A blank value
 | Dirty leave and delete confirmation dialogs | Native dialog fade (`dialogAnimation`) | Native reduced-motion behavior |
 | Saved preset / new draft editor swap | Keyed by preset ID or `__new__` (`Each`); replaces editor immediately with no cross-fade so scroll position and input state never leak across presets | Instant |
 | Template selection, fallback reorder, Default badge, Saving label | Updates immediately to match state; no drag, continuous animation, or streaming | No change |
-| Temperature limit, hint, and validation | Update after model selection or Save without motion so the current rule is clear. The input and Clear button use the existing focus, hover, and press feedback. | Instant |
+| Temperature step and input validation | The input value and endpoint button states update immediately. Arrow buttons use `pressScale` and the shared ghost hover and focus states. | Instant value change and color; no scale |
 
 ### Verification notes
 
 - **Desktop Windows & visual audit**: Verified `App.test.tsx --filter "presets nav:"` and `features/presets/presets.test.tsx` in real desktop windows (`--target windows`), plus rendered Windows screenshot inspections across Light/Dark themes, `1040 × 720` and compact `720 × 520` (`reducedMotion: true`) viewports, `en` and `zh-CN` localizations, empty, multi-fallback, multiline prompt, unavailable/deleted model, validation-error, and discard confirmation states.
-- **Temperature input**: The three new Windows regression cases passed. Screenshots show the range and leave-blank states in Light (`en`, `1040 × 720`) and Dark (`zh-CN`, `720 × 520`, reduced motion). Checked label and field alignment, contrast, spacing, hint wrapping, and the Clear action. Held press and Narrator were not verified.
+- **Temperature input**: Windows tests verified the arrow buttons, endpoint states, decimal format, and typed edit rejection. Headless tests verified paste rejection because the Windows driver cannot paste. Screenshots in Light (`en`, `1040 × 720`) and Dark (`zh-CN`, `720 × 520`, reduced motion) show the placeholder inside the input, arrow alignment, disabled state, and the filled value. The dark screenshot shows the hover wash after a click. Held press and Narrator were not verified.
 - **Test-driver & accessibility notes**: In headless `nsh test`, `app.keyboard.press` dispatches keys to `onKeyCommand`, menus, focused `<Input>` controls, and `Escape` rather than non-input `<Button>` focus activation (`Space`/`Enter`), so button focus transitions are verified via native `ViewRef.focus()` + `setAccessibilityFocus()` calls on `onClose` alongside direct activation; live Windows Narrator UIA screen-reader announcement remains unverified manually outside automated accessibility labels and `role="alert"`/`role="alertdialog"` semantics.
 
 ## Theme Colors

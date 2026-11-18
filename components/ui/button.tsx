@@ -12,7 +12,7 @@ export type ButtonVariant =
   | "destructive-outline"
   | "destructive-ghost";
 
-export type ButtonSize = "xs" | "sm" | "md" | "icon" | "icon-sm" | "row" | "card";
+export type ButtonSize = "xs" | "sm" | "md" | "icon" | "icon-sm" | "step" | "row" | "card";
 
 interface ButtonProps {
   variant?: ButtonVariant;
@@ -61,6 +61,7 @@ const SIZE_CLASSES: Record<ButtonSize, string> = {
   xs: "h-6 flex-row items-center justify-center gap-1 rounded-md px-2",
   icon: "size-8 items-center justify-center rounded-lg",
   "icon-sm": "size-7 items-center justify-center rounded-md",
+  step: "h-4 w-7 items-center justify-center rounded-sm",
   row: "min-h-11 flex-row items-center justify-start gap-2.5 rounded-lg px-2 py-1.5",
   card: "min-h-14 flex-row items-center justify-start gap-3 rounded-xl px-4 py-3",
 };

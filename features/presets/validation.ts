@@ -1,6 +1,6 @@
 import { t } from "nsh/i18n";
 import { isSourceLanguageId, isTargetLanguageId } from "./languages";
-import type { TemperaturePolicy } from "./temperature";
+import { isTemperature, isTemperatureText } from "./temperature";
 import {
   PresetsStoreError,
   type AiPresetEngine,
@@ -10,33 +10,16 @@ import {
 } from "./types";
 
 const ALLOWED_TEMPLATE_VARS = new Set(["source_language", "target_language", "text"]);
-const TEMPERATURE_PATTERN = /^[+-]?(?:\d+\.?\d*|\.\d+)$/;
 const INTEGER_PATTERN = /^\d+$/;
 
-function parseOptionalTemperature(raw: number | string | null | undefined): number | null {
-  if (raw === null || raw === undefined) return null;
-  if (typeof raw === "number") {
-    if (!Number.isFinite(raw) || raw < 0) {
-      throw new PresetsStoreError("temperature_invalid", t("presets.error.temperatureInvalid"), {
-        field: "temperature",
-      });
-    }
-    return raw;
+function parseOptionalTemperature(raw: number | string | null): number | null {
+  if (raw === null || (typeof raw === "string" && raw.trim() === "")) return null;
+  if (typeof raw === "number" ? isTemperature(raw) : isTemperatureText(raw)) {
+    return Number(raw);
   }
-  const trimmed = raw.trim();
-  if (!trimmed) return null;
-  if (!TEMPERATURE_PATTERN.test(trimmed)) {
-    throw new PresetsStoreError("temperature_invalid", t("presets.error.temperatureInvalid"), {
-      field: "temperature",
-    });
-  }
-  const parsed = Number(trimmed);
-  if (!Number.isFinite(parsed) || parsed < 0) {
-    throw new PresetsStoreError("temperature_invalid", t("presets.error.temperatureInvalid"), {
-      field: "temperature",
-    });
-  }
-  return parsed;
+  throw new PresetsStoreError("temperature_invalid", t("presets.error.temperatureInvalid"), {
+    field: "temperature",
+  });
 }
 
 function parseOptionalMaxOutputTokens(raw: number | string | null | undefined): number | null {
@@ -135,7 +118,6 @@ export function validatePresetForSave(
   input: SavePresetInput,
   availableModelIds: ReadonlySet<string>,
   existing: TranslationPreset | null,
-  readTemperaturePolicy: (modelIds: readonly string[]) => TemperaturePolicy,
 ): ValidatedPresetPayload {
   const name = typeof input.name === "string" ? input.name.trim() : "";
   if (!name) {
@@ -217,27 +199,6 @@ export function validatePresetForSave(
   }
 
   const temperature = parseOptionalTemperature(input.engine.temperature);
-  if (temperature !== null) {
-    const { maximum, requiresOmission } = readTemperaturePolicy(modelIds);
-    if (requiresOmission) {
-      throw new PresetsStoreError(
-        "temperature_unsupported",
-        t("presets.error.temperatureUnsupported"),
-        {
-          field: "temperature",
-        },
-      );
-    }
-    if (maximum !== null && temperature > maximum) {
-      throw new PresetsStoreError(
-        "temperature_out_of_range",
-        t("presets.error.temperatureOutOfRange", { max: maximum }),
-        {
-          field: "temperature",
-        },
-      );
-    }
-  }
   const maxOutputTokens = parseOptionalMaxOutputTokens(input.engine.maxOutputTokens);
 
   const rawTemplates = input.engine.templates;

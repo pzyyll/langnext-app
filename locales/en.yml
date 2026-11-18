@@ -239,9 +239,7 @@ presets:
     primaryModelRequired: Select a primary model.
     modelUnavailable: Selected model is not available.
     modelDuplicate: Models in the primary and fallback chain must be unique.
-    temperatureInvalid: Enter a nonnegative decimal temperature.
-    temperatureOutOfRange: Enter a temperature from 0 to %{max}.
-    temperatureUnsupported: Clear the temperature for the selected models.
+    temperatureInvalid: Enter a temperature from 0.0 to 2.0 in steps of 0.1.
     maxOutputTokensInvalid: Max output tokens must be a positive whole number.
     templatesRequired: Keep at least one prompt template.
     templateIdInvalid: Prompt template ID is invalid.
@@ -341,12 +339,9 @@ presets:
     moveDown: "Move fallback %{index} down"
     removeFallback: "Remove fallback %{index}"
     temperature: Temperature
-    temperaturePlaceholder: Model default
-    temperatureRange: 0–%{max}
-    temperaturePartialRange: "0–%{max} for known APIs. Verify custom endpoints separately."
-    temperatureUnknown: Check the API range for the selected models.
-    temperatureUnsupported: A selected model does not support custom temperature. Leave blank.
-    clearTemperature: Clear temperature
+    temperaturePlaceholder: 0.0–2.0
+    increaseTemperature: Increase temperature
+    decreaseTemperature: Decrease temperature
     maxOutputTokens: Max output tokens
     maxOutputTokensPlaceholder: Optional
     unavailableLabel: Unavailable model

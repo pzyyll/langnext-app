@@ -131,147 +131,67 @@ test("presets ui: does not promote a fallback into an empty primary slot", async
   expect(app.texts()).toContain("Select a primary model.");
 });
 
-test("presets ui: validates the shared temperature range and preserves tiny decimals", async () => {
-  const seed = makeSeedStorage({
-    channels: [
-      makeChannel(),
-      makeChannel({
-        id: "ch-claude",
-        presetId: "anthropic",
-        adapterId: "anthropic",
-        baseUrl: null,
-        displayName: "Claude",
-      }),
-    ],
-    models: [
-      makeModel({ enabled: true }),
-      makeModel({
-        id: "claude",
-        providerId: "ch-claude",
-        modelKey: "claude-sonnet-4-6",
-        enabled: true,
-      }),
-    ],
-  });
-  const app = await open(APP_ENTRY, { ...viewport, storage: seed });
-  await app.press("id:nav-presets");
-  await app.press("id:empty-add-preset-button");
-  await app.type("id:preset-name", "Mixed temperature");
-  await app.press("id:preset-primary-model");
-  await app.press("role:option[OpenAI Main · gpt-4o]");
-  expect(app.texts()).toContain("0–2");
-  await app.press("id:preset-add-fallback");
-  await app.press("id:preset-fallback-0");
-  await app.press("role:option[Claude · claude-sonnet-4-6]");
-  expect(app.texts()).toContain("0–1");
-  await app.type("id:preset-temperature", "1.5");
-  await app.press("id:preset-save");
-  expect(app.texts()).toContain("Enter a temperature from 0 to 1.");
-  expect(app.storage()[PRESETS_STORAGE_KEY]).toBeUndefined();
-  expect(app.value("id:preset-temperature")).toBe("1.5");
-
-  await app.clear("id:preset-temperature");
-  await app.type("id:preset-temperature", "0.0000001");
-  await app.press("id:preset-save");
-  await app.waitUntil(() => Boolean(app.storage()[PRESETS_STORAGE_KEY]));
-  expect(app.value("id:preset-temperature")).toBe("0.0000001");
-  const reopened = await open(APP_ENTRY, { ...viewport, storage: app.storage() });
-  await reopened.press("id:nav-presets");
-  await reopened.waitFor("id:preset-name");
-  expect(reopened.value("id:preset-temperature")).toBe("0.0000001");
-  await reopened.type("id:preset-name", " renamed");
-  await reopened.press("id:preset-save");
-  await reopened.waitUntil(
-    () =>
-      JSON.parse(reopened.storage()[PRESETS_STORAGE_KEY]!).items[0].name ===
-      "Mixed temperature renamed",
-  );
-  expect(JSON.parse(reopened.storage()[PRESETS_STORAGE_KEY]!).items[0].engine.temperature).toBe(
-    0.0000001,
-  );
-});
-
-test("presets ui: distinguishes compatible endpoints and clears unsupported temperature", async () => {
+test("presets ui: steps temperature between 0.0 and 2.0", async () => {
   const app = await open(APP_ENTRY, {
     ...viewport,
     storage: makeSeedStorage({
-      channels: [
-        makeChannel({
-          id: "deepseek",
-          presetId: "deepseek",
-          adapterId: "openai-compatible",
-          baseUrl: null,
-          displayName: "DeepSeek",
-        }),
-        makeChannel({
-          id: "proxy",
-          presetId: "anthropic",
-          adapterId: "anthropic",
-          baseUrl: "https://proxy.example.net",
-          displayName: "Claude proxy",
-        }),
-        makeChannel({
-          id: "gemini",
-          presetId: "gemini",
-          adapterId: "gemini",
-          baseUrl: null,
-          displayName: "Gemini",
-        }),
-      ],
-      models: [
-        makeModel({
-          id: "deepseek-pro",
-          providerId: "deepseek",
-          modelKey: "deepseek-v4-pro",
-          apiTypeOverride: "anthropic",
-          enabled: true,
-        }),
-        makeModel({
-          id: "proxy-model",
-          providerId: "proxy",
-          modelKey: "claude-opus-4-8",
-          enabled: true,
-        }),
-        makeModel({
-          id: "gemini-model",
-          providerId: "gemini",
-          modelKey: "gemini-3.6-flash",
-          enabled: true,
-        }),
-      ],
+      channels: [makeChannel()],
+      models: [makeModel({ enabled: true })],
     }),
   });
+  const temperature = "id:preset-temperature";
+  const increase = "id:preset-temperature-up";
+  const decrease = "id:preset-temperature-down";
   await app.press("id:nav-presets");
   await app.press("id:empty-add-preset-button");
-  await app.type("id:preset-name", "Endpoint temperature");
+  await app.type("id:preset-name", "Temperature");
   await app.press("id:preset-primary-model");
-  await app.press("role:option[Claude proxy · claude-opus-4-8]");
-  expect(app.texts()).toContain("Check the API range for the selected models.");
-  await app.press("id:preset-primary-model");
-  await app.press("role:option[DeepSeek · deepseek-v4-pro]");
-  expect(app.texts()).toContain("0–2");
-  await app.type("id:preset-temperature", "2");
+  await app.press("role:option[OpenAI Main · gpt-4o]");
+  expect(app.texts()).not.toContain("0.0–2.0");
+  expect(app.value(temperature)).toBe("");
+  expect(app.enabled(decrease)).toBe(false);
+
+  await app.press(increase);
+  expect(app.value(temperature)).toBe("0.0");
+  await app.press(increase);
+  expect(app.value(temperature)).toBe("0.1");
+  await app.press(decrease);
+  expect(app.value(temperature)).toBe("0.0");
+  expect(app.enabled(decrease)).toBe(false);
+
+  await app.clear(temperature);
+  await app.type(temperature, "1.9");
+  await app.press(increase);
+  expect(app.value(temperature)).toBe("2.0");
+  expect(app.enabled(increase)).toBe(false);
+  await app.press(decrease);
+  expect(app.value(temperature)).toBe("1.9");
+
   await app.press("id:preset-save");
   await app.waitUntil(() => Boolean(app.storage()[PRESETS_STORAGE_KEY]));
-  expect(JSON.parse(app.storage()[PRESETS_STORAGE_KEY]!).items[0].engine.temperature).toBe(2);
+  expect(JSON.parse(app.storage()[PRESETS_STORAGE_KEY]!).items[0].engine.temperature).toBe(1.9);
+  const reopened = await open(APP_ENTRY, { ...viewport, storage: app.storage() });
+  await reopened.press("id:nav-presets");
+  expect(reopened.value(temperature)).toBe("1.9");
+});
 
-  await app.press("id:preset-add-fallback");
-  await app.press("id:preset-fallback-0");
-  await app.press("role:option[Gemini · gemini-3.6-flash]");
-  expect(app.texts()).toContain(
-    "A selected model does not support custom temperature. Leave blank.",
-  );
-  await app.press("id:preset-save");
-  expect(app.texts()).toContain("Clear the temperature for the selected models.");
-  await app.press("role:button[Clear temperature]");
-  await app.press("id:preset-save");
-  await app.waitUntil(
-    () => JSON.parse(app.storage()[PRESETS_STORAGE_KEY]!).items[0].engine.temperature === null,
-  );
-  expect(JSON.parse(app.storage()[PRESETS_STORAGE_KEY]!).items[0].engine.modelIds).toEqual([
-    "deepseek-pro",
-    "gemini-model",
-  ]);
+test("presets ui: rejects invalid temperature edits", async () => {
+  const app = await open(APP_ENTRY, { ...viewport, storage: makeSeedStorage({}) });
+  const temperature = "id:preset-temperature";
+  await app.press("id:nav-presets");
+  await app.press("id:empty-add-preset-button");
+  await app.type(temperature, "3");
+  expect(app.value(temperature)).toBe("");
+  await app.type(temperature, "2.1");
+  expect(app.value(temperature)).toBe("2.");
+  await app.type("id:preset-name", "Blur temperature");
+  expect(app.value(temperature)).toBe("2.0");
+
+  await app.clear(temperature);
+  await app.type(temperature, "0.15");
+  expect(app.value(temperature)).toBe("0.1");
+  await app.type(temperature, "e2");
+  expect(app.value(temperature)).toBe("0.1");
 });
 
 test("presets ui: reorders fallbacks and restores them", async () => {
@@ -351,7 +271,7 @@ test("presets ui: reorders fallbacks and restores them", async () => {
   });
   await reopened.press("id:nav-presets");
   await reopened.waitFor("id:preset-fallback-0");
-  expect(reopened.value("id:preset-temperature")).toBe("0");
+  expect(reopened.value("id:preset-temperature")).toBe("0.0");
   expect(reopened.value("id:preset-max-output-tokens")).toBe("4096");
   expect(reopened.shows("id:preset-fallback-1")).toBe(true);
 

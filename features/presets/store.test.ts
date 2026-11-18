@@ -205,21 +205,12 @@ test("presets store: validates model order and parameters", async () => {
     ),
   ).rejects.toMatchObject({ key: "model_unavailable", field: "fallbackModel", fallbackIndex: 0 });
 
-  // Temperature rejects non-numeric and negative inputs.
-  await expect(
-    store.save(
-      makeBaseInput({
-        engine: { ...makeBaseInput().engine, temperature: "-0.1" },
-      }),
-    ),
-  ).rejects.toMatchObject({ key: "temperature_invalid", field: "temperature" });
-  await expect(
-    store.save(
-      makeBaseInput({
-        engine: { ...makeBaseInput().engine, temperature: "hot" },
-      }),
-    ),
-  ).rejects.toMatchObject({ key: "temperature_invalid", field: "temperature" });
+  // Temperature uses a fixed 0.0–2.0 grid for both text and numeric inputs.
+  for (const temperature of ["-0.1", "hot", "2.1", "1.05", "1e0", 2.1, 1.05]) {
+    await expect(
+      store.save(makeBaseInput({ engine: { ...makeBaseInput().engine, temperature } })),
+    ).rejects.toMatchObject({ key: "temperature_invalid", field: "temperature" });
+  }
 
   // Max output tokens rejects 0, decimals, and trailing garbage.
   for (const invalidTokens of ["0", "1.5", "12x", "-10", 0, 1.5]) {

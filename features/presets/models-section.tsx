@@ -1,4 +1,4 @@
-import { cleanup, effect, Text, View, windowSize, type InputRef, type ViewRef } from "nsh";
+import { cleanup, effect, signal, Text, View, windowSize, type InputRef, type ViewRef } from "nsh";
 import { t } from "nsh/i18n";
 import { Button } from "../../components/ui/button";
 import { Card, SectionHeading } from "../../components/ui/card";
@@ -6,7 +6,13 @@ import { Icon } from "../../components/ui/icon";
 import { Input } from "../../components/ui/input";
 import { Select, type SelectItem } from "../../components/ui/select";
 import { FormField } from "../../modules/ai/ui/form-field";
-import { readPresetTemperaturePolicy, resolveModelBindingInfo } from "./model-choices";
+import { resolveModelBindingInfo } from "./model-choices";
+import {
+  formatTemperature,
+  isTemperatureText,
+  MAX_TEMPERATURE,
+  stepTemperature,
+} from "./temperature";
 import type { ModelChoice, PresetValidationField } from "./types";
 
 interface ModelsSectionProps {
@@ -43,18 +49,28 @@ export function ModelsSection(props: ModelsSectionProps) {
   const fieldError = (field: PresetValidationField): string | null =>
     props.errorField === field ? props.errorMessage : null;
 
-  const temperaturePolicy = () =>
-    readPresetTemperaturePolicy([props.primaryModelId ?? "", ...props.fallbackModelIds]);
-
-  const temperatureHint = () => {
-    const { maximum, requiresOmission, hasUnknownLimit } = temperaturePolicy();
-    if (requiresOmission) return t("presets.model.temperatureUnsupported");
-    if (hasUnknownLimit) {
-      return maximum === null
-        ? t("presets.model.temperatureUnknown")
-        : t("presets.model.temperaturePartialRange", { max: maximum });
+  const rejectedTemperatureEdit = signal<string | null>(null);
+  const changeTemperature = (value: string) => {
+    if (isTemperatureText(value)) {
+      props.onChangeTemperature(value);
+      return;
     }
-    return maximum === null ? null : t("presets.model.temperatureRange", { max: maximum });
+    // Echo the rejected native edit once so the controlled binding can restore its value.
+    rejectedTemperatureEdit.set(value);
+    queueMicrotask(() => rejectedTemperatureEdit.set(null));
+  };
+
+  const atTemperatureMin = () =>
+    props.temperatureText === "" || Number(props.temperatureText) === 0;
+  const atTemperatureMax = () => Number(props.temperatureText) === MAX_TEMPERATURE;
+  const step = (direction: -1 | 1) => {
+    if (props.saving || (direction === 1 ? atTemperatureMax() : atTemperatureMin())) return;
+    props.onChangeTemperature(stepTemperature(props.temperatureText, direction));
+  };
+  const normalizeTemperature = () => {
+    if (props.temperatureText) {
+      props.onChangeTemperature(formatTemperature(Number(props.temperatureText)));
+    }
   };
 
   const primaryBinding = () =>
@@ -312,22 +328,43 @@ export function ModelsSection(props: ModelsSectionProps) {
         <FormField
           class={compact() ? "" : "min-w-0 flex-1"}
           label={t("presets.model.temperature")}
-          hint={temperatureHint()}
           error={fieldError("temperature")}
         >
           <Input
             testID="preset-temperature"
             ref={(node) => props.onTemperatureRef(node)}
-            value={props.temperatureText}
+            value={rejectedTemperatureEdit() ?? props.temperatureText}
             placeholder={t("presets.model.temperaturePlaceholder")}
             accessibilityLabel={t("presets.model.temperature")}
             keyboardType="decimal-pad"
-            readonly={temperaturePolicy().requiresOmission}
             disabled={props.saving}
-            clearLabel={t("presets.model.clearTemperature")}
-            onClear={props.saving ? undefined : () => props.onChangeTemperature("")}
             onFocus={() => props.onFieldFocus("temperature")}
-            onChange={(value) => props.onChangeTemperature(value)}
+            onBlur={normalizeTemperature}
+            onChange={changeTemperature}
+            trailing={
+              <View class="ml-1 shrink-0">
+                <Button
+                  testID="preset-temperature-up"
+                  variant="ghost"
+                  size="step"
+                  accessibilityLabel={t("presets.model.increaseTemperature")}
+                  disabled={props.saving || atTemperatureMax()}
+                  onPress={() => step(1)}
+                >
+                  <Icon name="chevron-down" tone="foreground" class="size-3.5 rotate-180" />
+                </Button>
+                <Button
+                  testID="preset-temperature-down"
+                  variant="ghost"
+                  size="step"
+                  accessibilityLabel={t("presets.model.decreaseTemperature")}
+                  disabled={props.saving || atTemperatureMin()}
+                  onPress={() => step(-1)}
+                >
+                  <Icon name="chevron-down" tone="foreground" class="size-3.5" />
+                </Button>
+              </View>
+            }
           />
         </FormField>
 

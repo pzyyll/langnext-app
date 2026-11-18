@@ -1,8 +1,8 @@
 import { signal, Storage } from "nsh";
 import { t } from "nsh/i18n";
 import { isSourceLanguageId, isTargetLanguageId } from "./languages";
-import { readAvailableModelChoices, readPresetTemperaturePolicy } from "./model-choices";
-import { combineTemperatureLimits, type TemperaturePolicy } from "./temperature";
+import { readAvailableModelChoices } from "./model-choices";
+import { isTemperature } from "./temperature";
 import {
   PresetsStoreError,
   type ModelChoiceId,
@@ -36,9 +36,7 @@ function isValidStoredPreset(value: unknown): value is TranslationPreset {
 
   if (
     engine.temperature !== null &&
-    (typeof engine.temperature !== "number" ||
-      !Number.isFinite(engine.temperature) ||
-      engine.temperature < 0)
+    (typeof engine.temperature !== "number" || !isTemperature(engine.temperature))
   ) {
     return false;
   }
@@ -118,8 +116,6 @@ async function writePresets(storage: PresetsStorage, items: TranslationPreset[])
 export function createPresetsStore(
   storage: PresetsStorage,
   readModelChoices: () => readonly ModelChoiceId[],
-  readTemperaturePolicy: (modelIds: readonly string[]) => TemperaturePolicy = () =>
-    combineTemperatureLimits([]),
 ): PresetsStore {
   const recordsSignal = signal<TranslationPreset[]>([]);
   const statusSignal = signal<PresetsStoreStatus>({ kind: "idle" });
@@ -187,7 +183,7 @@ export function createPresetsStore(
       }
 
       const availableIds = new Set(readModelChoices().map((choice) => choice.id));
-      const validated = validatePresetForSave(input, availableIds, existing, readTemperaturePolicy);
+      const validated = validatePresetForSave(input, availableIds, existing);
       const now = new Date().toISOString();
       const record: TranslationPreset = existing
         ? {
@@ -236,8 +232,4 @@ export function createPresetsStore(
 }
 
 /** Production Presets Store backed by NSH Storage and live Models state. */
-export const presetsStore = createPresetsStore(
-  Storage,
-  readAvailableModelChoices,
-  readPresetTemperaturePolicy,
-);
+export const presetsStore = createPresetsStore(Storage, readAvailableModelChoices);

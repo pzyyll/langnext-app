@@ -239,9 +239,7 @@ presets:
     primaryModelRequired: 请选择主模型。
     modelUnavailable: 所选模型当前不可用。
     modelDuplicate: 主模型与回退模型不能重复。
-    temperatureInvalid: 请输入非负的十进制温度。
-    temperatureOutOfRange: 请输入 0 至 %{max} 之间的温度。
-    temperatureUnsupported: 请清空温度以使用所选模型。
+    temperatureInvalid: 请输入 0.0 至 2.0 之间的温度，步长为 0.1。
     maxOutputTokensInvalid: 最大输出令牌数必须是正整数。
     templatesRequired: 至少保留一个提示词模板。
     templateIdInvalid: 提示词模板 ID 无效。
@@ -341,12 +339,9 @@ presets:
     moveDown: "下移回退模型 %{index}"
     removeFallback: "移除回退模型 %{index}"
     temperature: 温度
-    temperaturePlaceholder: 模型默认值
-    temperatureRange: 0–%{max}
-    temperaturePartialRange: 已知 API 的范围为 0–%{max}。请另行确认自定义端点的范围。
-    temperatureUnknown: 请确认所选模型的 API 温度范围。
-    temperatureUnsupported: 所选模型中有不支持自定义温度的模型，请留空。
-    clearTemperature: 清空温度
+    temperaturePlaceholder: 0.0–2.0
+    increaseTemperature: 提高温度
+    decreaseTemperature: 降低温度
     maxOutputTokens: 最大输出令牌数
     maxOutputTokensPlaceholder: 可选
     unavailableLabel: 不可用模型

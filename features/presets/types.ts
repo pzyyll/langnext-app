@@ -76,8 +76,6 @@ export type PresetErrorKey =
   | "model_unavailable"
   | "model_duplicate"
   | "temperature_invalid"
-  | "temperature_out_of_range"
-  | "temperature_unsupported"
   | "max_output_tokens_invalid"
   | "templates_required"
   | "template_id_invalid"
