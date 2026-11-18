@@ -222,3 +222,30 @@ ai:
     unknownPresentation: "服务商“%{id}”未注册设置视图。"
     providerOriginChanged: 服务商路径策略不能更改请求的来源地址。
     unsupportedConfiguration: 此渠道使用了当前版本不可用的服务商或接口协议。
+presets:
+  error:
+    storageReadFailed: "无法加载翻译预设（%{detail}）。"
+    storageMalformed: 翻译预设存储数据格式损坏。
+    storageUnsupportedVersion: 翻译预设存储数据版本不受支持。
+    storageUnreadable: 无法在存储加载成功前修改翻译预设。
+    storageWriteFailed: "无法保存翻译预设（%{detail}）。"
+    mutationInProgress: 正在保存另一项预设更改。
+    notFound: 翻译预设已不存在。
+    nameRequired: 预设名称为必填项。
+    sourceLanguageInvalid: 源语言无效。
+    targetLanguageInvalid: 目标语言无效。
+    engineUnsupported: 不支持该预设引擎类型。
+    primaryModelRequired: 请选择主模型。
+    modelUnavailable: 所选模型当前不可用。
+    modelDuplicate: 主模型与回退模型不能重复。
+    temperatureInvalid: 温度必须是非负数字。
+    maxOutputTokensInvalid: 最大输出令牌数必须是正整数。
+    templatesRequired: 至少保留一个提示词模板。
+    templateIdInvalid: 提示词模板 ID 无效。
+    templateIdDuplicate: 提示词模板 ID 不能重复。
+    templateNameRequired: 提示词模板名称为必填项。
+    templateUnclosedVariable: 存在未闭合的模板变量。
+    templateUnknownVariable: "未知的模板变量“%{name}”。"
+    userTemplateTextRequired: 用户提示词必须包含一次 {{text}}。
+    userTemplateTextDuplicate: 用户提示词只能包含一次 {{text}}。
+    defaultTemplateInvalid: 默认提示词模板必须属于当前预设。

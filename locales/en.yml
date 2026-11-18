@@ -222,3 +222,30 @@ ai:
     unknownPresentation: 'No settings view is registered for provider "%{id}".'
     providerOriginChanged: Provider path policy cannot change the request origin.
     unsupportedConfiguration: This channel uses a provider or API protocol that is not available in this build.
+presets:
+  error:
+    storageReadFailed: "Could not load translation presets (%{detail})."
+    storageMalformed: Translation presets storage is malformed.
+    storageUnsupportedVersion: Translation presets storage uses an unsupported version.
+    storageUnreadable: Translation presets cannot be modified until storage is loaded.
+    storageWriteFailed: "Could not save translation presets (%{detail})."
+    mutationInProgress: Another preset update is already in progress.
+    notFound: Translation preset no longer exists.
+    nameRequired: Preset name is required.
+    sourceLanguageInvalid: Source language is invalid.
+    targetLanguageInvalid: Target language is invalid.
+    engineUnsupported: Preset engine type is unsupported.
+    primaryModelRequired: Select a primary model.
+    modelUnavailable: Selected model is not available.
+    modelDuplicate: Models in the primary and fallback chain must be unique.
+    temperatureInvalid: Temperature must be a nonnegative number.
+    maxOutputTokensInvalid: Max output tokens must be a positive whole number.
+    templatesRequired: Keep at least one prompt template.
+    templateIdInvalid: Prompt template ID is invalid.
+    templateIdDuplicate: Prompt template IDs must be unique.
+    templateNameRequired: Prompt template name is required.
+    templateUnclosedVariable: Unclosed template variable.
+    templateUnknownVariable: 'Unknown template variable "%{name}".'
+    userTemplateTextRequired: User prompt must contain {{text}} once.
+    userTemplateTextDuplicate: User prompt must contain {{text}} only once.
+    defaultTemplateInvalid: Default prompt template must exist in this preset.
