@@ -3,7 +3,8 @@ import { Button, Tooltip } from "nsh/base";
 import { t } from "nsh/i18n";
 import cubeOutlineIcon from "../assets/icons/cube-outline.svg";
 import cubeSolidIcon from "../assets/icons/cube-solid.svg";
-import fileTextIcon from "../assets/icons/file-text.svg";
+import documentFolderOutlineIcon from "../assets/icons/icon-park-outline--document-folder.svg";
+import documentFolderSolidIcon from "../assets/icons/icon-park-solid--document-folder.svg";
 import settingsOutlineIcon from "../assets/icons/setting-outline.svg";
 import settingsSolidIcon from "../assets/icons/setting-solid.svg";
 import { motion } from "./motion";
@@ -101,7 +102,11 @@ export function Sidebar(props: SidebarProps) {
           selected={props.page === "presets"}
           onPress={() => props.onSelectPresets()}
         >
-          <NavIcon outline={fileTextIcon} selected={props.page === "presets"} />
+          <NavIcon
+            outline={documentFolderOutlineIcon}
+            solid={documentFolderSolidIcon}
+            selected={props.page === "presets"}
+          />
         </SidebarItem>
       </View>
       <View class="flex-1" />
