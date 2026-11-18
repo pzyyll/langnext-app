@@ -540,6 +540,33 @@ Use the shared decimal `Input` with two stacked arrow buttons at its trailing ed
   - *Color, hover, states, motion*: Rest hairline uses `bg-border`; hovering highlights `bg-ring` and fades in the centered `rounded-full` `bg-muted-foreground` grip thumb; `active:` uses `bg-primary` and per-frame 1:1 native dragging (`ResizablePanelGroup`); `reducedMotion` disables transition durations while keeping live drag tracking.
   - *Accessibility & outstanding*: Both handles expose localized `handleAccessibilityLabel` strings via `t()` (`models.channels.resizeLabel`, `presets.list.resizeLabel`) over `nsh/base`'s `adjustable` handle role. Held drag-press color (`active:`) and live Windows Narrator keyboard adjustment remain manual desktop checks.
 
+## Settings workspace
+
+Settings uses the same `PageSurface` (`layout="split"`) and `SplitPane` master-detail structure as Models and Presets (`testID="settings-page"`), with its own persisted rail width (`split.settings.railWidth`).
+
+- **Left category rail (`settings-rail`)**: Shares the `h-12 border-b border-border` header (`Settings`) aligned across the draggable `bg-border` divider, followed by selectable category rows (`General` selected by default on launch, `Appearance`) styled with `Button` (`size="row"`) and `border-border bg-accent` selection fill. The active category stays in session state when navigating to other sidebar destinations and back.
+- **Right detail pane (`settings-detail`)**: Displays the active category title in the aligned `h-12 border-b border-border` header above a `<Scroll>` column (`mx-auto w-full max-w-4xl`, `gap-5 p-6` on desktop and `gap-4 p-4` under `860` points):
+  - **General**: Hosts the **Language** `Card` (`System`, `English`, `简体中文` `RadioGroup` and inline save-error `role="alert"`).
+  - **Appearance**: Hosts the **Theme** `Card` (`Light`, `Dark`, `System` `RadioGroup` and inline save-error `role="alert"`) and the **Transparent title bar and sidebar** `Switch` `Card`.
+
+### Motion inventory
+
+| Change | Tool and tokens | Reduced motion |
+| --- | --- | --- |
+| Settings workspace enters | Native opacity motion on the inner content container (`pageEnter`, 200 ms, ease-out) while `PageSurface` `bg-background` stays opaque | Instant |
+| Split handle hover, drag, and thumb grip | Shared `SplitPane` handle transitions (`navigationFeedback` color, `tooltip` thumb opacity, 150 ms, ease-out); panel split tracks the pointer 1:1 per frame natively | Instant color/opacity; 1:1 pointer tracking unchanged |
+| Category row & radio option hover/selection | Native color & border transition (`navigationFeedback`, 150 ms, ease-out) without press scale | Instant |
+| Category switch (`General` <-> `Appearance`) | Immediate detail pane replacement (`If`) with no cross-fade so scroll position resets per section | Instant |
+| Transparency switch & save error | Existing `navigationFeedback` + `switchThumb` (`150 ms`, ease-out); no animation on save error | Instant switch; no change on error |
+
+### Validation
+
+- **Checks**: `mise run verify` passed formatting, lint, type checks, all headless tests (including updated `App.test.tsx`, `components/layout/split-rail.test.ts`, and `features/settings/settings.test.tsx`), and the release bundle. Real Windows desktop runs (`--target windows`) passed `features/settings/settings.test.tsx` (3/3).
+- **Visual audit & Finishing checklist**: Inspected Windows desktop PNG screenshots across Light (`1040 × 720`, `en`, General & Appearance with hovered split handle) and Dark (`720 × 520`, `zh-CN`, `reducedMotion: true`, General & Appearance):
+  - *Radius, typography, spacing, alignment*: `h-12 border-b` header hairlines align across the `1` pt vertical divider; the `16` pt leading spine (`px-4` header and `p-2` + `px-2` row) aligns category labels with the rail heading; concentric `rounded-xl` cards and `rounded-lg` radio/switch rows fit cleanly without clipping at `720 × 520`.
+  - *Color, hover, states, motion*: Category selection (`border-border bg-accent`), radio selection (`checked:border-primary checked:bg-accent`), transparency switch, and hovered split handle (`bg-ring` + centered pill thumb) render cleanly in light and dark.
+  - *Accessibility & outstanding*: Category navigation carries `role="navigation"` + `accessibilityLabel`, radio groups carry `accessibilityLabel`, and the split handle carries `settings.resizeLabel`. Held press (`active:`), frame-by-frame motion timing, and live Windows Narrator speech remain manual checks.
+
 ## Theme Colors
 ```css
 :root {

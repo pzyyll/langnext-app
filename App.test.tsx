@@ -113,18 +113,19 @@ test("opens the models page from the sidebar", async () => {
 test("shows the sidebar tooltip on hover", async () => {
   const app = await open("./App.tsx", viewport);
   await app.press("id:nav-settings");
-  await app.hover("id:theme-light");
+  await app.hover("id:language-system");
   await app.hover("id:nav-settings");
   await app.waitFor("id:settings-tooltip");
   expect(app.texts().filter((text) => text === "Settings")).toHaveLength(2);
   expect(app.texts().some((text) => text.includes("Ctrl"))).toBe(false);
-  await app.hover("id:theme-light");
+  await app.hover("id:language-system");
   await app.waitUntil(() => !app.shows("id:settings-tooltip"));
 });
 
 test("switches themes and keeps the selected preference", async () => {
   const app = await open("./App.tsx", viewport);
   await app.press("id:nav-settings");
+  await app.press("id:settings-nav-appearance");
   await app.press("id:theme-dark");
   expect(app.storage()["settings.appearance"]).toBe("dark");
   await app.press("id:nav-models");
@@ -165,6 +166,7 @@ test("restores the saved appearance before showing settings", async () => {
 test("toggles transparency and keeps the choice across pages and theme changes", async () => {
   const app = await open("./App.tsx", viewport);
   await app.press("id:nav-settings");
+  await app.press("id:settings-nav-appearance");
   expect(app.shows(transparencySwitch)).toBe(true);
 
   await app.press(transparencySwitch);
@@ -180,6 +182,7 @@ test("toggles transparency and keeps the choice across pages and theme changes",
 
   const reopened = await open("./App.tsx", { ...viewport, storage: app.storage() });
   await reopened.press("id:nav-settings");
+  await reopened.press("id:settings-nav-appearance");
   await reopened.press(transparencySwitch);
   expect(reopened.storage()[transparencyKey]).toBe("false");
 });
@@ -193,6 +196,7 @@ test("restores disabled transparency at the minimum size with reduced motion", a
     storage: { [transparencyKey]: "false" },
   });
   await app.press("id:nav-settings");
+  await app.press("id:settings-nav-appearance");
   await app.press(transparencySwitch);
   expect(app.storage()[transparencyKey]).toBe("true");
   await app.press(transparencySwitch);
@@ -205,6 +209,7 @@ test("enables transparency when the saved value is invalid", async () => {
     storage: { [transparencyKey]: "invalid" },
   });
   await app.press("id:nav-settings");
+  await app.press("id:settings-nav-appearance");
   await app.press(transparencySwitch);
   expect(app.storage()[transparencyKey]).toBe("false");
 });
@@ -294,6 +299,11 @@ test("page surface: keeps work-area background opaque across destination switche
   expect(presetsSurface?.effectiveOpacity).toBe(1);
 
   await app.press("id:nav-settings");
+  await app.waitFor("id:settings-page");
+  const settingsSurface = app.viewStyle("id:settings-page");
+  expect(settingsSurface?.backgroundColor).toBe(modelsSurface?.backgroundColor);
+  expect(settingsSurface?.opacity).toBe(1);
+  expect(settingsSurface?.effectiveOpacity).toBe(1);
   expect(app.texts()).toContain("Appearance");
 
   await app.press("id:nav-models");

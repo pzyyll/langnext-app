@@ -1,6 +1,6 @@
 import { batch, signal, Storage, windowSize } from "nsh";
 
-export type SplitPageId = "models" | "presets";
+export type SplitPageId = "models" | "presets" | "settings";
 
 export const SIDEBAR_WIDTH = 52;
 export const MIN_RAIL_WIDTH = 180;
@@ -13,6 +13,7 @@ const COMPACT_BREAKPOINT = 860;
 export const SPLIT_RAIL_STORAGE_KEYS: Record<SplitPageId, string> = {
   models: "split.models.railWidth",
   presets: "split.presets.railWidth",
+  settings: "split.settings.railWidth",
 };
 
 export interface SplitRailStorage {
@@ -52,17 +53,29 @@ export function resolveRailWidth(savedWidth: number | null, windowWidth: number)
 export function createSplitRailStore(storage: SplitRailStorage) {
   const modelsWidth = signal<number | null>(null);
   const presetsWidth = signal<number | null>(null);
-  const widthSignalFor = (page: SplitPageId) => (page === "models" ? modelsWidth : presetsWidth);
+  const settingsWidth = signal<number | null>(null);
+  const widthSignalFor = (page: SplitPageId) => {
+    switch (page) {
+      case "models":
+        return modelsWidth;
+      case "presets":
+        return presetsWidth;
+      case "settings":
+        return settingsWidth;
+    }
+  };
 
   async function load(): Promise<void> {
     try {
-      const [modelsRaw, presetsRaw] = await Promise.all([
+      const [modelsRaw, presetsRaw, settingsRaw] = await Promise.all([
         storage.getItem(SPLIT_RAIL_STORAGE_KEYS.models),
         storage.getItem(SPLIT_RAIL_STORAGE_KEYS.presets),
+        storage.getItem(SPLIT_RAIL_STORAGE_KEYS.settings),
       ]);
       batch(() => {
         modelsWidth.set(parseRailWidth(modelsRaw));
         presetsWidth.set(parseRailWidth(presetsRaw));
+        settingsWidth.set(parseRailWidth(settingsRaw));
       });
     } catch (error) {
       console.warn("Could not load split rail widths.", error);

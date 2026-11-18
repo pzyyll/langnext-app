@@ -99,7 +99,7 @@ export function AppShell() {
           </PageSurface>
         </If>
         <If when={page() === "settings"}>
-          <PageSurface>
+          <PageSurface testID="settings-page" layout="split">
             <SettingsPage />
           </PageSurface>
         </If>

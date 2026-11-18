@@ -33,6 +33,13 @@ common:
   resizePanels: 调整面板宽度
 settings:
   title: 设置
+  navLabel: 设置分类
+  resizeLabel: 调整设置栏宽度
+  sections:
+    general: 通用
+    appearance: 外观
+  theme:
+    title: 主题
   appearance:
     title: 外观
     light: 浅色

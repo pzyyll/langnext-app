@@ -33,6 +33,13 @@ common:
   resizePanels: Resize panels
 settings:
   title: Settings
+  navLabel: Settings sections
+  resizeLabel: Resize settings panel
+  sections:
+    general: General
+    appearance: Appearance
+  theme:
+    title: Theme
   appearance:
     title: Appearance
     light: Light

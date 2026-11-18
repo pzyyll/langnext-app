@@ -51,19 +51,27 @@ test("split rail store: loads and saves per-page rail widths independently", asy
   const { storage, data } = makeMemoryStorage({
     [SPLIT_RAIL_STORAGE_KEYS.models]: "310",
     [SPLIT_RAIL_STORAGE_KEYS.presets]: "invalid",
+    [SPLIT_RAIL_STORAGE_KEYS.settings]: "225",
   });
   const store = createSplitRailStore(storage);
   await store.load();
 
   expect(store.savedWidth("models")).toBe(310);
   expect(store.savedWidth("presets")).toBeNull();
+  expect(store.savedWidth("settings")).toBe(225);
   expect(store.widthFor("models", 1040)).toBe(310);
   expect(store.widthFor("presets", 1040)).toBe(DEFAULT_RAIL_WIDTH);
+  expect(store.widthFor("settings", 1040)).toBe(225);
 
   await store.save("presets", 275.4);
   expect(store.savedWidth("presets")).toBe(275);
   expect(data[SPLIT_RAIL_STORAGE_KEYS.presets]).toBe("275");
   expect(data[SPLIT_RAIL_STORAGE_KEYS.models]).toBe("310");
+  expect(data[SPLIT_RAIL_STORAGE_KEYS.settings]).toBe("225");
+
+  await store.save("settings", 290);
+  expect(store.savedWidth("settings")).toBe(290);
+  expect(data[SPLIT_RAIL_STORAGE_KEYS.settings]).toBe("290");
 });
 
 test("split rail store: tolerates storage read and write errors", async () => {
