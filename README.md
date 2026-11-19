@@ -74,4 +74,6 @@ See [system architecture](docs/specs/system-architecture.md) and
 
 The bundle identifier is a development placeholder. Set it before distribution.
 Headless tests do not verify native dragging, caption buttons, tooltips, or
-platform permissions. Check those in a desktop window before release.
+platform permissions. Check those in a desktop window before release. On
+Windows, `mise run test-desktop` also checks that the native cursor's monitor
+ID matches a display reported by NSH.

@@ -1,5 +1,5 @@
 import type { Display } from "nsh/desktop";
-import { expect, open, test } from "nsh/test";
+import { expect, test } from "nsh/test";
 import { resolvePopupContentFit, resolvePopupPlacement } from "./quick-translate";
 
 function makeDisplay(overrides: Partial<Display> = {}): Display {
@@ -187,16 +187,4 @@ test("quick placement: falls back to centered main-display placement when cursor
     display: "disp-main",
     size: { width: 420, height: 360 },
   });
-});
-
-test("desktop: quick placement native cursor monitor ID matches NSH displays()", async () => {
-  const app = await open("./__tests__/cursor-match-app.tsx", {
-    width: 400,
-    height: 200,
-    platform: "windows",
-  });
-  await app.waitFor("id:cursor-match-result");
-  const text = app.texts()[0] ?? "";
-  expect(text.startsWith("matched:") || text === "no-anchor").toBe(true);
-  expect(text.startsWith("mismatch:")).toBe(false);
 });

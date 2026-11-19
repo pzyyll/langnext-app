@@ -9,6 +9,11 @@ case "$(uname -s)" in
   *) echo "Unsupported desktop platform" >&2; exit 1 ;;
 esac
 
+# The cursor lookup uses the real Win32 monitor, not the headless display.
+if [[ "$target" == windows ]]; then
+  nsh test .mise/tests/cursor-match.test.ts --target "$target" "$@"
+fi
+
 shopt -s globstar nullglob
 for file in *.test.tsx features/**/*.test.tsx; do
   nsh test "$file" --target "$target" "$@"

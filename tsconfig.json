@@ -1,5 +1,5 @@
 {
   "extends": "./.nsh/tsconfig.json",
-  "include": ["**/*.ts", "**/*.tsx"],
+  "include": ["**/*.ts", "**/*.tsx", ".mise/tests/**/*.ts"],
   "exclude": ["node_modules", "target"]
 }
