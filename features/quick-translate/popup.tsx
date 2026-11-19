@@ -789,8 +789,8 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
     }
     persistPreferencesState();
 
-    // Expanding puts the card back to work: it translates the current input, whatever Auto-translate says.
-    if (!collapsed) {
+    // Expanding puts the card back to work, unless its result already answers the current input.
+    if (!collapsed && current.result.status !== "success") {
       void executeCard(cardId, "auto");
     }
   };

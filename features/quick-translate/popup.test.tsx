@@ -454,9 +454,17 @@ test("preset cards: runs duplicate preset cards independently with template over
   expect(app.texts()).not.toContain("Stale Card 2 Late Result");
   expect(app.texts()).toContain("Card 1 Retry Result");
 
-  // Collapse hides the result body; expanding translates the current input again, even with Auto-translate off.
+  // Collapse keeps the result; expanding restores it without sending a request again.
   await app.press("id:quick-translate-card-card-1 >> id:quick-translate-collapse");
   expect(app.shows("id:quick-translate-card-card-1 >> id:quick-translate-result-text")).toBe(false);
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-collapse");
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-result-text");
+  expect(app.texts().some((line) => line.includes("calls=4|"))).toBe(true);
+
+  // Once the input changes, expanding translates it again, even with Auto-translate off.
+  await app.clear("id:quick-translate-source");
+  await app.type("id:quick-translate-source", "Changed input");
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-collapse");
   await app.press("id:quick-translate-card-card-1 >> id:quick-translate-collapse");
   await app.waitUntil(() => app.texts().some((line) => line.includes("calls=5|")));
   await app.press("id:harness-resolve-fifth");
@@ -603,11 +611,11 @@ test("preset cards: collapsed cards stay idle in automatic mode and translate wh
   await app.waitFor("id:quick-translate-card-card-2 >> id:quick-translate-copy");
   expect(app.requests()).toHaveLength(2);
 
-  // Expanding a card that still holds a result translates it again.
+  // Expanding a card whose result answers the current input keeps it without a request.
   await app.press("id:quick-translate-card-card-1 >> id:quick-translate-collapse");
   await app.press("id:quick-translate-card-card-1 >> id:quick-translate-collapse");
   await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-result-text");
-  expect(app.requests()).toHaveLength(3);
+  expect(app.requests()).toHaveLength(2);
 
   // Every card collapsed: nothing runs on shared input and the Translate button has no target.
   await app.press("id:quick-translate-card-card-1 >> id:quick-translate-collapse");
@@ -616,7 +624,7 @@ test("preset cards: collapsed cards stay idle in automatic mode and translate wh
   await app.clear("id:quick-translate-source");
   await app.type("id:quick-translate-source", "Next line");
   await app.clock!.runFor(500);
-  expect(app.requests()).toHaveLength(3);
+  expect(app.requests()).toHaveLength(2);
 });
 
 test("preset cards: manual translation skips collapsed cards and translates them on expand", async () => {
