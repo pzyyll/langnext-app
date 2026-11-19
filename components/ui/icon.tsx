@@ -13,6 +13,8 @@ import filePdfIcon from "../../assets/icons/file-pdf.svg";
 import fileTextIcon from "../../assets/icons/file-text.svg";
 import minusIcon from "../../assets/icons/minus.svg";
 import picIcon from "../../assets/icons/pic.svg";
+import pinSolidIcon from "../../assets/icons/pin-solid.svg";
+import pinIcon from "../../assets/icons/pin.svg";
 import plusIcon from "../../assets/icons/plus.svg";
 import searchIcon from "../../assets/icons/search.svg";
 import videoIcon from "../../assets/icons/video.svg";
@@ -32,6 +34,8 @@ const ICONS = {
   "file-text": fileTextIcon,
   minus: minusIcon,
   pic: picIcon,
+  pin: pinIcon,
+  "pin-solid": pinSolidIcon,
   plus: plusIcon,
   search: searchIcon,
   video: videoIcon,

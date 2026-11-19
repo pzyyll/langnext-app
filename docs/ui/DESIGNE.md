@@ -572,6 +572,23 @@ Settings uses the same `PageSurface` (`layout="split"`) and `SplitPane` master-d
   - *Color, hover, states, motion*: Category selection (`border-border bg-accent`), radio selection (`checked:border-primary checked:bg-accent`), transparency switch, and hovered split handle (`bg-ring` + centered pill thumb) render cleanly in light and dark.
   - *Accessibility & outstanding*: Category navigation carries `role="navigation"` + `accessibilityLabel`, radio groups carry `accessibilityLabel`, and the split handle carries `settings.resizeLabel`. Held press (`active:`), frame-by-frame motion timing, and live Windows Narrator speech remain manual checks.
 
+## Quick Translate popup
+
+Quick Translate runs inside a separate floating NSH window (`id="quick-translate"`) rather than an in-window modal so the popup stays lightweight and available even when the main window is hidden.
+
+- **Compact geometry & chrome**: Opens at `420 × 360` points (`minSize: 340 × 280`, non-auto-growing fixed initial footprint) centered on the main window's display in Stage 1, with `kind="panel"`, `level="floating"`, `taskbar={false}`, `minimizable={false}`, `maximizable={false}`, and `titleBar={{ style: "hidden", height: 38 }}` so the platform renders the native window frame and close caption button while a compact custom header (`desktop={{ windowDrag: true }}`) places window title and **Pin** beside `titleBar().right`.
+- **Colors & copy**: Uses semantic surface/text/border tokens only (`bg-background`, `bg-card`, `text-foreground`, `text-muted-foreground`, `text-destructive`, `text-success`, `border-border`, `ring-ring`); no hard-coded presentation hex/RGB colors. Copy stays bare and localized via `t()`.
+- **Scroll & focus ownership**: One vertical `<Scroll>` container inside the popup body owns scrolling for long source text and results. Source `<Textarea>` takes focus when opened or re-focused; opening a `<Select>` overlay stays inside the popup window tree without blurring it, and `Escape` dismisses open overlays before closing the window (`closeOnEscape={!hasOpenOverlay()}`). Unpinned blur closes the window and resets pin on every close path without quitting the app.
+
+### Motion inventory
+
+| Change | Tool and tokens | Reduced motion |
+| --- | --- | --- |
+| Quick Translate window show, focus, and close | Native `<Window>` show/focus/hide lifecycle (`level="floating"`, `closeOnBlur={!pinned}`, `closeOnEscape={!hasOpenOverlay}`) | Immediate native show/close |
+| Header Pin, Close, and action button hover/press/focus | Shared `navigationFeedback` (`150 ms`, ease-out colors) + `pressScale` (`active:scale-95`), focus-visible ring (`ring-ring`) | Instant color/ring, `scale-100` |
+| Language, preset, and template Select overlays | Shared `Select` `Overlay` popup (`motion.popup`, `150 ms`, ease-out, `-translate-y-1` reveal inside the popup root so native blur does not fire) | Instant opacity, no slide |
+| Result, loading, and copy state changes | Direct semantic state updates (`text-muted-foreground` loading status, `text-destructive` / `bg-card` error card, `check` / `text-success` copy feedback) inside the single `<Scroll>` container; no streaming shimmer or continuous spin | Instant state swap |
+
 ## Theme Colors
 ```css
 :root {

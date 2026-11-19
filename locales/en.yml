@@ -8,6 +8,7 @@ app:
     logo: My Translator logo
     version: Version %{version}
 tray:
+  quickTranslate: Quick Translate
   exit: Exit
 nav:
   label: Main navigation
@@ -392,6 +393,13 @@ presets:
     description: 'Delete preset "%{name}"? This cannot be undone.'
     error: "Could not delete preset (%{detail})."
 quickTranslate:
+  title: Quick Translate
+  pin: Pin window
+  unpin: Unpin window
+  close: Close Quick Translate
+  shortcutUnavailable: Global shortcut Ctrl+Shift+T is unavailable. Use the tray icon menu to open Quick Translate.
+  sourceLabel: Source text
+  sourcePlaceholder: Enter text to translate…
   prompt:
     autoDetectSource: the detected source language (detect it automatically in the same response)
   error:

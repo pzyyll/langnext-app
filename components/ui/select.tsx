@@ -25,6 +25,7 @@ interface SelectProps {
   class?: string;
   triggerClass?: string;
   onChange: (value: string | null) => void;
+  onOpenChange?: (open: boolean) => void;
 }
 
 /** Single-choice dropdown built over nsh/base Select with theme tokens. */
@@ -47,6 +48,7 @@ export function Select(props: SelectProps) {
       align={props.align ?? "start"}
       offset={4}
       onChange={({ value }) => props.onChange(value)}
+      onOpenChange={({ open }) => props.onOpenChange?.(open)}
       class={props.class}
       popupClass={`min-w-44 rounded-xl border border-border bg-popover p-1 shadow-lg ${motion.popup}`}
       listClass="max-h-60"
