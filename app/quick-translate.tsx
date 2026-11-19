@@ -117,6 +117,9 @@ export function registerQuickTranslateDoubleCopy(
   return release;
 }
 
+/** Top + bottom border width (1 pt each) of the rounded frameless root container. */
+const ROOT_BORDER_HEIGHT = 2;
+
 /** Renders popup contents inside `<Window>` so `titleBar()` reads this window's caption area. */
 function QuickTranslateWindowBody(props: { controller: QuickTranslateController }) {
   const headerHeight = signal(0);
@@ -139,17 +142,22 @@ function QuickTranslateWindowBody(props: { controller: QuickTranslateController 
     const content = contentHeight();
     if (!readyToFit() || header <= 0 || content <= 0) return;
     // Coalesce layout events and resize outside the native layout pass.
-    const frame = requestAnimationFrame(() => props.controller.fitContentHeight(header + content));
+    const frame = requestAnimationFrame(() =>
+      props.controller.fitContentHeight(header + content + ROOT_BORDER_HEIGHT),
+    );
     cleanup(() => cancelAnimationFrame(frame));
   });
 
   return (
-    <View class="flex-1 bg-background text-foreground">
+    <View
+      testID="quick-translate-surface"
+      class="flex-1 overflow-hidden rounded-2xl border border-border bg-background text-foreground"
+    >
       <View
         testID="quick-translate-header"
         onLayout={({ bounds }) => headerHeight.set(bounds.size.height)}
         desktop={{ windowDrag: true }}
-        class="shrink-0 flex-row items-center justify-between gap-2 border-b border-border bg-background pl-3"
+        class="shrink-0 flex-row items-center justify-between gap-2 border-b border-border pl-3"
         // Runtime platform titleBar() insets are reactive once the floating HWND reports caption bounds.
         style={{
           height: Math.max(38, titleBar().height),
@@ -250,7 +258,8 @@ export function QuickTranslateWindow(props: { controller: QuickTranslateControll
       open={props.controller.isOpen()}
       title={t("quickTranslate.title")}
       kind="panel"
-      titleBar={{ style: "hidden", height: 38 }}
+      frame="none"
+      transparent={true}
       level="floating"
       taskbar={false}
       resizable={true}

@@ -173,7 +173,7 @@ test("quick window: closes on unpinned blur, survives blur when pinned, resets p
   expect(app.window("main").state()?.visible).toBe(true);
 });
 
-test("desktop: quick window pins, survives focus switch, resets pin on close, and closes via Escape and OS close without quitting app", async () => {
+test("desktop: quick window pins, survives focus switch, resets pin on close, and closes via Escape and close button without quitting app", async () => {
   const app = await open(HARNESS_ENTRY, {
     ...viewport,
     storage: { "settings.language": "en" },
@@ -187,7 +187,7 @@ test("desktop: quick window pins, survives focus switch, resets pin on close, an
   expect(app.window("quick-translate").state()?.visible).toBe(true);
   expect(app.shows("id:models-page")).toBe(true);
 
-  await app.window("quick-translate").pressClose();
+  await app.press("id:quick-translate-close");
   await app.waitUntil(() => app.window("quick-translate").state() === null);
   expect(app.window("main").state()?.visible).toBe(true);
 
@@ -290,7 +290,7 @@ test("desktop: quick window remains available while main window is hidden and re
   );
 
   await app.wait(40);
-  await app.window("quick-translate").pressClose();
+  await app.press("id:quick-translate-close");
   await app.waitUntil(() => app.window("quick-translate").state() === null);
   await app.waitUntil(() => app.window("main").state()?.visible === true);
 
