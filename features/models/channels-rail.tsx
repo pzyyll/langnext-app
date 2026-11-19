@@ -145,6 +145,9 @@ export function ChannelsRail(props: ChannelsRailProps) {
                                 <Button
                                   size="icon-sm"
                                   variant="ghost"
+                                  tooltip={t("models.channels.moveUp", {
+                                    name: channel().displayName,
+                                  })}
                                   accessibilityLabel={t("models.channels.moveUp", {
                                     name: channel().displayName,
                                   })}
@@ -157,6 +160,9 @@ export function ChannelsRail(props: ChannelsRailProps) {
                                 <Button
                                   size="icon-sm"
                                   variant="ghost"
+                                  tooltip={t("models.channels.moveDown", {
+                                    name: channel().displayName,
+                                  })}
                                   accessibilityLabel={t("models.channels.moveDown", {
                                     name: channel().displayName,
                                   })}

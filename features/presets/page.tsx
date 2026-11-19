@@ -473,6 +473,7 @@ export function PresetsPage(props: PresetsPageProps) {
                   variant="ghost"
                   size="icon-sm"
                   class="shrink-0"
+                  tooltip={t("presets.list.dismissSkippedNotice")}
                   accessibilityLabel={t("presets.list.dismissSkippedNotice")}
                   onPress={() => void closeSkippedNotice()}
                 >

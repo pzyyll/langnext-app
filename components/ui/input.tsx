@@ -74,6 +74,7 @@ export function Input(props: InputProps) {
         <Button
           size="icon-sm"
           variant="ghost"
+          tooltip={props.clearLabel ?? t("common.clearInput")}
           accessibilityLabel={props.clearLabel ?? t("common.clearInput")}
           onPress={() => props.onClear?.()}
           class="ml-1 shrink-0"

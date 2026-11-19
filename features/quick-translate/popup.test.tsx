@@ -103,7 +103,7 @@ test("desktop: quick popup translates on Enter, preserves Shift+Enter newline, a
 
   await app.press("id:quick-translate-copy");
   expect(app.clipboard()).toBe("Bonjour");
-  expect(app.texts()).toContain(t("quickTranslate.copied"));
+  expect(app.shows(`role:button[${t("quickTranslate.copied")}]`)).toBe(true);
 
   // Shift+Enter inserts a newline without submitting.
   await app.clear("id:quick-translate-source");
@@ -112,6 +112,41 @@ test("desktop: quick popup translates on Enter, preserves Shift+Enter newline, a
   await app.type("id:quick-translate-source", "Line 2");
   expect(app.value("id:quick-translate-source")).toBe("Line 1\nLine 2");
   expect(app.requests()).toHaveLength(1);
+});
+
+test("quick popup: shows localized tooltips for icon-only toolbar and card action buttons", async () => {
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedWithPresets([makePreset()]),
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": {
+        status: 200,
+        body: { choices: [{ message: { content: "Bonjour" } }] },
+      },
+    },
+  });
+
+  await app.waitFor("id:quick-translate-source");
+  await app.type("id:quick-translate-source", "Hello");
+  await app.keyboard.press("enter");
+  await app.waitFor("id:quick-translate-copy");
+
+  await app.hover("id:quick-translate-clear");
+  await app.waitFor(`text:${t("common.clearInput")}`);
+
+  await app.hover("id:quick-translate-add-preset");
+  await app.waitFor(`text:${t("quickTranslate.addPreset")}`);
+
+  await app.hover("id:quick-translate-retry");
+  await app.waitFor(`text:${t("common.retry")}`);
+
+  await app.hover("id:quick-translate-copy");
+  await app.waitFor(`text:${t("quickTranslate.copy")}`);
+
+  await app.press("id:quick-translate-copy");
+  await app.hover("id:quick-translate-retry");
+  await app.hover("id:quick-translate-copy");
+  await app.waitFor(`text:${t("quickTranslate.copied")}`);
 });
 
 test("quick popup: ignores Enter submission while an IME composition is active", async () => {
@@ -444,8 +479,8 @@ test("preset cards: runs duplicate preset cards independently with template over
   // Copy affects only card 2.
   await app.press("id:quick-translate-card-card-2 >> id:quick-translate-copy");
   expect(app.clipboard()).toBe("Card 2 Formal Result");
-  expect(app.shows("id:quick-translate-card-card-2 >> text:Copied")).toBe(true);
-  expect(app.shows("id:quick-translate-card-card-1 >> text:Copied")).toBe(false);
+  expect(app.shows("id:quick-translate-card-card-2 >> role:button[Copied]")).toBe(true);
+  expect(app.shows("id:quick-translate-card-card-1 >> role:button[Copied]")).toBe(false);
 
   // Retry on card 1 affects only card 1 without resending card 2.
   await app.press("id:quick-translate-card-card-1 >> id:quick-translate-retry");

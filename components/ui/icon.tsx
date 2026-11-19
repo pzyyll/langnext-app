@@ -7,6 +7,7 @@ import checkIcon from "../../assets/icons/check.svg";
 import chevronDownIcon from "../../assets/icons/chevron-down.svg";
 import chevronRightIcon from "../../assets/icons/chevron-right.svg";
 import chevronUpIcon from "../../assets/icons/chevron-up.svg";
+import clearIcon from "../../assets/icons/clear.svg";
 import closeIcon from "../../assets/icons/close.svg";
 import copyIcon from "../../assets/icons/copy.svg";
 import cubeOutlineIcon from "../../assets/icons/cube-outline.svg";
@@ -22,6 +23,7 @@ import picIcon from "../../assets/icons/pic.svg";
 import pinSolidIcon from "../../assets/icons/pin-solid.svg";
 import pinIcon from "../../assets/icons/pin.svg";
 import plusIcon from "../../assets/icons/plus.svg";
+import refreshIcon from "../../assets/icons/refresh.svg";
 import searchIcon from "../../assets/icons/search.svg";
 import switchIcon from "../../assets/icons/switch.svg";
 import videoIcon from "../../assets/icons/video.svg";
@@ -35,6 +37,7 @@ const ICONS = {
   "chevron-down": chevronDownIcon,
   "chevron-right": chevronRightIcon,
   "chevron-up": chevronUpIcon,
+  clear: clearIcon,
   close: closeIcon,
   copy: copyIcon,
   "cube-outline": cubeOutlineIcon,
@@ -50,6 +53,7 @@ const ICONS = {
   pin: pinIcon,
   "pin-solid": pinSolidIcon,
   plus: plusIcon,
+  refresh: refreshIcon,
   search: searchIcon,
   switch: switchIcon,
   video: videoIcon,

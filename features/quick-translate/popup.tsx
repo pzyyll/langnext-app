@@ -23,6 +23,43 @@ function buildTemplateItems(preset: TranslationPreset | null): SelectItem[] {
   }));
 }
 
+/** Shared icon-only retry trigger used across card failures, result actions, and preset reload. */
+function RetryIconButton(props: { testID: string; onPress: () => void }) {
+  return (
+    <Button
+      testID={props.testID}
+      size="icon-sm"
+      variant="ghost"
+      tooltip={t("common.retry")}
+      accessibilityLabel={t("common.retry")}
+      onPress={() => props.onPress()}
+    >
+      <Icon name="refresh" tone="muted-foreground" class="size-3.5" />
+    </Button>
+  );
+}
+
+/** Renders the icon-only add-preset button so Menu triggers receive the Button element directly. */
+function renderAddPresetButton(options: { disabled?: boolean; selected?: boolean }) {
+  return (
+    <Button
+      testID="quick-translate-add-preset"
+      size="icon-sm"
+      variant="ghost"
+      disabled={options.disabled}
+      selected={options.selected}
+      tooltip={t("quickTranslate.addPreset")}
+      accessibilityLabel={t("quickTranslate.addPreset")}
+    >
+      <Icon
+        name="plus"
+        tone={options.selected ? "foreground" : "muted-foreground"}
+        class="size-3.5"
+      />
+    </Button>
+  );
+}
+
 interface PresetCardRowProps {
   card: Accessor<CardViewItem>;
   presets: Accessor<readonly TranslationPreset[]>;
@@ -129,11 +166,8 @@ function PresetCardRow(props: PresetCardRowProps) {
                 })()}
               </Text>
               <View class="flex-row justify-end">
-                <Button
+                <RetryIconButton
                   testID="quick-translate-retry"
-                  size="xs"
-                  variant="outline"
-                  label={t("common.retry")}
                   onPress={() => props.onRetry(props.card().id)}
                 />
               </View>
@@ -156,12 +190,12 @@ function PresetCardRow(props: PresetCardRowProps) {
               <View class="flex-row items-center justify-between gap-2">
                 <Button
                   testID="quick-translate-copy"
-                  size="xs"
-                  variant="outline"
-                  accessibilityLabel={
+                  size="icon-sm"
+                  variant="ghost"
+                  tooltip={
                     props.card().copied ? t("quickTranslate.copied") : t("quickTranslate.copy")
                   }
-                  label={
+                  accessibilityLabel={
                     props.card().copied ? t("quickTranslate.copied") : t("quickTranslate.copy")
                   }
                   onPress={() => props.onCopy(props.card().id)}
@@ -172,11 +206,8 @@ function PresetCardRow(props: PresetCardRowProps) {
                     class="size-3.5"
                   />
                 </Button>
-                <Button
+                <RetryIconButton
                   testID="quick-translate-retry"
-                  size="xs"
-                  variant="ghost"
-                  label={t("common.retry")}
                   onPress={() => props.onRetry(props.card().id)}
                 />
               </View>
@@ -226,11 +257,8 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
               return s.kind === "error" ? s.message : "";
             })()}
           </Text>
-          <Button
+          <RetryIconButton
             testID="quick-translate-retry-presets"
-            size="xs"
-            variant="outline"
-            label={t("common.retry")}
             onPress={() => props.session.retryLoadPresets()}
           />
         </Card>
@@ -269,27 +297,17 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
           <If when={props.session.sourceText().length > 0}>
             <Button
               testID="quick-translate-clear"
-              size="xs"
+              size="icon-sm"
               variant="ghost"
-              label={t("common.clearInput")}
+              tooltip={t("common.clearInput")}
+              accessibilityLabel={t("common.clearInput")}
               onPress={() => props.session.handleClearSource()}
-            />
+            >
+              <Icon name="clear" tone="muted-foreground" class="size-3.5" />
+            </Button>
           </If>
         </View>
-        <If
-          when={props.session.canAddPreset()}
-          else={
-            <Button
-              testID="quick-translate-add-preset"
-              size="xs"
-              variant="outline"
-              disabled
-              label={t("quickTranslate.addPreset")}
-            >
-              <Icon name="plus" tone="muted-foreground" class="size-3.5" />
-            </Button>
-          }
-        >
+        <If when={props.session.canAddPreset()} else={renderAddPresetButton({ disabled: true })}>
           <Menu
             open={addMenuOpen()}
             onOpenChange={(open) => {
@@ -299,17 +317,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
             placement="bottom"
             align="end"
             popupClass="min-w-44 max-h-60"
-            trigger={
-              <Button
-                testID="quick-translate-add-preset"
-                size="xs"
-                variant="outline"
-                selected={addMenuOpen()}
-                label={t("quickTranslate.addPreset")}
-              >
-                <Icon name="plus" tone="foreground" class="size-3.5" />
-              </Button>
-            }
+            trigger={renderAddPresetButton({ selected: addMenuOpen() })}
           >
             <Each of={props.session.enabledPresets()} key={(item) => item.id}>
               {(preset) => (
