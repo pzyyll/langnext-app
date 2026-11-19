@@ -97,13 +97,13 @@ export async function detectLanguage(
   for (const modelId of settings.modelIds) {
     if (options.signal?.aborted) return failure("cancelled");
 
-    const resolved = await resolveModel(modelId);
-    if (options.signal?.aborted) return failure("cancelled");
-    if (!resolved.ok) continue;
-
-    attempted = true;
     let raw: string;
     try {
+      const resolved = await resolveModel(modelId);
+      if (options.signal?.aborted) return failure("cancelled");
+      if (!resolved.ok) continue;
+
+      attempted = true;
       raw = await runGeneration(
         resolved.connection,
         { modelId: resolved.modelKey, system: DETECTION_SYSTEM_MESSAGE, user: sample },

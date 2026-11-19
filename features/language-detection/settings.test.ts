@@ -145,6 +145,18 @@ test("detection settings: rejects an invalid stored shape without enabling detec
   expect(store.loadError()?.key).toBe("storage_malformed");
 });
 
+test("detection settings: rejects a non-string model ID instead of promoting a backup", async () => {
+  const raw = JSON.stringify({ version: 1, ...makeSettings(), modelIds: [42, "backup"] });
+  const mem = createMemoryStorage({ [LANGUAGE_DETECTION_STORAGE_KEY]: raw });
+  const store = createLanguageDetectionSettingsStore(mem.storage);
+  await store.load();
+
+  expect(store.settings()).toEqual(DEFAULT_LANGUAGE_DETECTION_SETTINGS);
+  expect(store.loadError()?.key).toBe("storage_malformed");
+  expect(mem.backing[LANGUAGE_DETECTION_STORAGE_KEY]).toBe(raw);
+  expect(mem.getSetCalls()).toBe(0);
+});
+
 test("detection settings: reports a read failure without enabling detection", async () => {
   const mem = createMemoryStorage();
   mem.setGetError(new Error("ERR_NSH_IO"));

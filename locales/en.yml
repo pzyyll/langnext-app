@@ -65,7 +65,7 @@ settings:
   languageDetection:
     title: Language Detection
     detection: Detection
-    off: Off
+    off: "Off"
     ai: AI
     models: Detection models
     primary: Primary model

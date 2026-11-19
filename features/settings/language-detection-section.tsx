@@ -90,9 +90,14 @@ export function LanguageDetectionSection(props: LanguageDetectionSectionProps) {
     updateModelIds([modelId, ...backups]);
   };
 
-  const addBackup = () => {
+  const nextBackup = () => {
+    if (saving() || primaryId() === null) return undefined;
     const assigned = new Set(draft().modelIds);
-    const candidate = modelChoices().find((choice) => !assigned.has(choice.id));
+    return modelChoices().find((choice) => !assigned.has(choice.id));
+  };
+
+  const addBackup = () => {
+    const candidate = nextBackup();
     if (!candidate) return;
     updateModelIds([...draft().modelIds, candidate.id]);
   };
@@ -148,12 +153,6 @@ export function LanguageDetectionSection(props: LanguageDetectionSectionProps) {
       items.unshift({ value: currentId, title: resolveModelBindingInfo(currentId).label });
     }
     return items;
-  };
-
-  const canAddBackup = () => {
-    if (saving()) return false;
-    const assigned = new Set(draft().modelIds.filter((id) => id.length > 0));
-    return modelChoices().some((choice) => !assigned.has(choice.id));
   };
 
   const hasUnavailableBinding = () =>
@@ -299,7 +298,7 @@ export function LanguageDetectionSection(props: LanguageDetectionSectionProps) {
                 variant="outline"
                 size="xs"
                 label={t("settings.languageDetection.addBackup")}
-                disabled={!canAddBackup()}
+                disabled={nextBackup() === undefined}
                 onPress={addBackup}
               />
             </View>

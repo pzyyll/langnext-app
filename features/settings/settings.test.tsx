@@ -208,11 +208,17 @@ test("language detection: saves and restores the ordered detector chain and lang
 
   await app.press("id:settings-detection-mode-ai");
   await app.waitFor("id:settings-detection-primary");
+  expect(app.enabled("id:settings-detection-add-backup")).toBe(false);
+  await app.press("id:settings-detection-save");
+  await app.waitFor("id:settings-detection-error");
+  expect(app.texts()).toContain("Choose a primary detection model.");
+  expect(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]).toBeUndefined();
 
   await app.press("id:settings-detection-primary");
   await app.waitFor("role:option[OpenAI Main · gpt-4.1-mini]");
   await app.press("role:option[OpenAI Main · gpt-4.1-mini]");
 
+  expect(app.enabled("id:settings-detection-add-backup")).toBe(true);
   await app.press("id:settings-detection-add-backup");
   await app.press("id:settings-detection-backup-0");
   await app.waitFor("role:option[OpenAI Main · gpt-4.1]");
@@ -347,6 +353,7 @@ test("language detection: localizes labels and help text in both languages", asy
   await app.press("id:settings-nav-language-detection");
   await app.waitFor("id:settings-detection-card");
   expect(app.texts()).toContain("Language Detection");
+  expect(app.texts()).toContain("Off");
   expect(app.texts()).toContain("Native language");
   expect(app.texts()).toContain("Translate my native language into");
   expect(app.texts()).toContain(
@@ -358,6 +365,7 @@ test("language detection: localizes labels and help text in both languages", asy
   await app.press("id:settings-nav-language-detection");
   await app.waitFor("id:settings-detection-card");
   expect(app.texts()).toContain("语言检测");
+  expect(app.texts()).toContain("关闭");
   expect(app.texts()).toContain("母语");
   expect(app.texts()).toContain("母语译为");
   expect(app.texts()).toContain("目标语言设为自动时，非母语译为母语，母语译为上方指定的语言。");

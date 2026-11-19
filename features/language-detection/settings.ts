@@ -137,23 +137,22 @@ function parseStoredSettings(raw: string): ParsedStorage {
     return { ok: false, key: "storage_unsupported_version" };
   }
 
+  const { mode, modelIds, nativeLanguage, preferredTranslationLanguage } = parsed;
+  if (
+    !isMode(mode) ||
+    !Array.isArray(modelIds) ||
+    !modelIds.every((id): id is string => typeof id === "string") ||
+    !isPreference(nativeLanguage) ||
+    !isPreference(preferredTranslationLanguage)
+  ) {
+    return { ok: false, key: "storage_malformed" };
+  }
   const settings: LanguageDetectionSettings = {
-    mode: isMode(parsed.mode) ? parsed.mode : "off",
-    modelIds: Array.isArray(parsed.modelIds)
-      ? parsed.modelIds.filter((id): id is string => typeof id === "string")
-      : [],
-    nativeLanguage: isPreference(parsed.nativeLanguage) ? parsed.nativeLanguage : null,
-    preferredTranslationLanguage: isPreference(parsed.preferredTranslationLanguage)
-      ? parsed.preferredTranslationLanguage
-      : null,
+    mode,
+    modelIds,
+    nativeLanguage,
+    preferredTranslationLanguage,
   };
-
-  if (!isMode(parsed.mode) || !Array.isArray(parsed.modelIds)) {
-    return { ok: false, key: "storage_malformed" };
-  }
-  if (!isPreference(parsed.nativeLanguage) || !isPreference(parsed.preferredTranslationLanguage)) {
-    return { ok: false, key: "storage_malformed" };
-  }
   if (validateLanguageDetectionSettings(settings) !== null) {
     return { ok: false, key: "storage_malformed" };
   }

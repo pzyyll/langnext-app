@@ -3,6 +3,7 @@ import { expect, open, test } from "nsh/test";
 import { initializeAiModules } from "../../app/ai-setup";
 import { LANGUAGE_DETECTION_STORAGE_KEY } from "../language-detection/settings";
 import { makeChannel, makeModel, makeSeedStorage } from "../models/__tests__/fixtures";
+import { credentialStorageKey } from "../models/store";
 import { getLanguageLabel } from "../presets/languages";
 import { PRESETS_STORAGE_KEY } from "../presets/store";
 import type { TranslationPreset } from "../presets/types";
@@ -987,6 +988,43 @@ test("language resolution: the popup detection uses the saved detector endpoint"
 
   expect(requestsTo(app, DETECT_URL)).toHaveLength(1);
   expect(requestsTo(app, TRANSLATE_URL)).toHaveLength(2);
+});
+
+test("detector storage: a credential read failure shows a recoverable card error", async () => {
+  const storage = seedAutoPair([false]);
+  const readError = "Private credential storage error";
+  let failCredentialRead = true;
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    modules: {
+      nsh: {
+        "Storage.getItem": (key: string) => {
+          if (failCredentialRead && key === credentialStorageKey("ch-detect")) {
+            throw new Error(readError);
+          }
+          return storage[key] ?? null;
+        },
+      },
+    },
+    network: {
+      [DETECT_URL]: { status: 200, body: { choices: [{ message: { content: "fr" } }] } },
+      [TRANSLATE_URL]: { status: 200, body: { choices: [{ message: { content: "译文" } }] } },
+    },
+  });
+
+  await app.waitFor("id:quick-translate-source");
+  await app.type("id:quick-translate-source", "Bonjour");
+  await app.keyboard.press("enter");
+  await app.waitFor("id:quick-translate-retry");
+  expect(app.texts()).toContain(t("languageDetection.failure.failed"));
+  expect(app.texts()).not.toContain(readError);
+  expect(app.requests()).toHaveLength(0);
+
+  failCredentialRead = false;
+  await app.press("id:quick-translate-retry");
+  await app.waitFor("id:quick-translate-result-text");
+  expect(requestsTo(app, DETECT_URL)).toHaveLength(1);
+  expect(requestsTo(app, TRANSLATE_URL)).toHaveLength(1);
 });
 
 test("language resolution: a collapsed card neither starts nor joins the run", async () => {
