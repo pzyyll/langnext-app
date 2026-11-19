@@ -31,6 +31,7 @@ import {
 import { PresetEditor, type FocusableEditorField } from "./editor";
 import { readAvailableModelChoices, summarizePresetModels } from "./model-choices";
 import type { TemplateEditableField } from "./prompt-templates";
+import { dismissSkippedNotice, skippedNoticeDismissed } from "./skipped-notice";
 import { presetsStore } from "./store";
 import { PresetsStoreError, type PresetValidationField, type TranslationPreset } from "./types";
 
@@ -70,6 +71,7 @@ export function PresetsPage(props: PresetsPageProps) {
   let temperatureInputRef: InputRef | null = null;
   let maxTokensInputRef: InputRef | null = null;
   let deleteButtonRef: ViewRef | null = null;
+  let railAddButtonRef: ViewRef | null = null;
   let emptyAddButtonRef: ViewRef | null = null;
   let discardKeepEditingRef: ViewRef | null = null;
   let deleteCancelRef: ViewRef | null = null;
@@ -161,7 +163,9 @@ export function PresetsPage(props: PresetsPageProps) {
   };
   const skippedNotice = () => {
     const current = status();
-    if (current.kind !== "ready" || current.skippedCount === 0) return null;
+    if (skippedNoticeDismissed() || current.kind !== "ready" || current.skippedCount === 0) {
+      return null;
+    }
     return current.skippedCount === 1
       ? t("presets.list.skippedOne")
       : t("presets.list.skippedMany", { count: current.skippedCount });
@@ -422,6 +426,12 @@ export function PresetsPage(props: PresetsPageProps) {
     }
   };
 
+  const closeSkippedNotice = async () => {
+    const saved = dismissSkippedNotice();
+    if (!presetsStore.mutating()) focusNode(railAddButtonRef);
+    if (!(await saved)) toast.error(t("presets.list.dismissSkippedNoticeFailed"));
+  };
+
   const isNewDraft = () => draftSignal()?.sourceId === null;
 
   return (
@@ -437,6 +447,9 @@ export function PresetsPage(props: PresetsPageProps) {
               </Text>
               <Button
                 testID="add-preset-button"
+                ref={(node) => {
+                  railAddButtonRef = node;
+                }}
                 variant="ghost"
                 size="icon-sm"
                 disabled={!isReady() || presetsStore.mutating()}
@@ -449,12 +462,23 @@ export function PresetsPage(props: PresetsPageProps) {
             </View>
 
             <If when={skippedNotice() !== null}>
-              <Text
-                testID="presets-skipped-notice"
-                class="shrink-0 px-4 pb-3 pt-1 text-xs text-muted-foreground"
-              >
-                {skippedNotice()}
-              </Text>
+              <View class="shrink-0 flex-row items-start gap-2 px-4 pb-3 pt-1">
+                <Text
+                  testID="presets-skipped-notice"
+                  class="min-w-0 flex-1 py-1 text-xs text-muted-foreground"
+                >
+                  {skippedNotice()}
+                </Text>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  class="shrink-0"
+                  accessibilityLabel={t("presets.list.dismissSkippedNotice")}
+                  onPress={() => void closeSkippedNotice()}
+                >
+                  <Icon name="close" tone="muted-foreground" class="size-3.5" />
+                </Button>
+              </View>
             </If>
 
             <If

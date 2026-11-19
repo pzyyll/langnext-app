@@ -309,6 +309,8 @@ presets:
     empty: No presets yet
     skippedOne: Skipped 1 unreadable preset. Its data was kept.
     skippedMany: Skipped %{count} unreadable presets. Their data was kept.
+    dismissSkippedNotice: Dismiss skipped presets notice
+    dismissSkippedNoticeFailed: Could not dismiss the skipped presets notice. Try again.
     loading: Loading…
     itemLabel: "%{name} (%{status})"
     enabled: Enabled

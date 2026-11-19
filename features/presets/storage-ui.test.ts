@@ -121,6 +121,34 @@ test("preset recovery UI: can add a preset when all saved entries were skipped",
   expect(reopened.shows("id:preset-item-preset-1")).toBe(false);
 });
 
+test("preset recovery UI: dismisses the skipped notice across navigation and restart", async () => {
+  const raw = JSON.stringify({
+    version: 1,
+    items: [{ ...makeSamplePreset({ id: "legacy" }), targetLanguage: null }, makeSamplePreset()],
+  });
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { "settings.language": "en", [PRESETS_STORAGE_KEY]: raw },
+  });
+  await app.press("id:nav-presets");
+  await app.waitFor("id:presets-skipped-notice");
+  await app.press("role:button[Dismiss skipped presets notice]");
+  expect(app.shows("id:presets-skipped-notice")).toBe(false);
+  expect(app.shows("id:preset-item-preset-1")).toBe(true);
+
+  await app.press("id:nav-models");
+  await app.press("id:nav-presets");
+  await app.waitFor("id:preset-item-preset-1");
+  expect(app.shows("id:presets-skipped-notice")).toBe(false);
+
+  const saved = app.storage();
+  expect(saved[PRESETS_STORAGE_KEY]).toBe(raw);
+  const reopened = await open(APP_ENTRY, { ...viewport, storage: saved });
+  await reopened.press("id:nav-presets");
+  await reopened.waitFor("id:preset-item-preset-1");
+  expect(reopened.shows("id:presets-skipped-notice")).toBe(false);
+});
+
 test("presets storage UI: preserves edits after a failed write", async () => {
   const sample = makeSamplePreset();
   const backing: Record<string, string> = makeSeedStorage({
