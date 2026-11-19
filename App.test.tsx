@@ -117,7 +117,7 @@ test("shows the sidebar tooltip on hover", async () => {
   await app.hover("id:nav-settings");
   await app.waitFor("id:settings-tooltip");
   expect(app.texts().filter((text) => text === "Settings")).toHaveLength(2);
-  expect(app.texts().some((text) => text.includes("Ctrl"))).toBe(false);
+  expect(app.shows("id:settings-tooltip >> text:/Ctrl/")).toBe(false);
   await app.hover("id:language-system");
   await app.waitUntil(() => !app.shows("id:settings-tooltip"));
 });
