@@ -531,3 +531,134 @@ test("preset cards: automatic mode schedules eligible cards on shared input and 
   await autoApp.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-copy");
   expect(autoApp.requests()).toHaveLength(3);
 });
+
+test("quick reopen: restores valid cards, fallback template, languages, and auto mode without stale text or requests, and handles corrupt or failing storage", async () => {
+  const presetKeep = makePreset({
+    id: "preset-keep",
+    name: "Keep Preset",
+    sourceLanguage: "auto",
+    targetLanguage: "fr",
+    engine: {
+      kind: "ai",
+      modelIds: ["m-1"],
+      temperature: null,
+      maxOutputTokens: null,
+      templates: [
+        {
+          id: "tpl-default",
+          name: "Default",
+          systemTemplate: "Default {{source_language}}->{{target_language}}",
+          userTemplate: "{{text}}",
+        },
+        {
+          id: "tpl-formal",
+          name: "Formal",
+          systemTemplate: "Formal {{source_language}}->{{target_language}}",
+          userTemplate: "Formal: {{text}}",
+        },
+      ],
+      defaultTemplateId: "tpl-default",
+    },
+  });
+  const presetDrop = makePreset({
+    id: "preset-drop",
+    name: "Drop Later",
+    enabled: true,
+  });
+
+  const session1 = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedWithPresets([presetKeep, presetDrop]),
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": {
+        status: 200,
+        body: { choices: [{ message: { content: "Secret output response" } }] },
+      },
+    },
+  });
+
+  await session1.waitFor("id:quick-translate-card-card-1");
+  await session1.press("id:quick-translate-source-language");
+  await session1.waitFor("role:option[English]");
+  await session1.press("role:option[English]");
+  await session1.press("id:quick-translate-target-language");
+  await session1.waitFor("role:option[Japanese]");
+  await session1.press("role:option[Japanese]");
+  await session1.press("id:harness-toggle-auto");
+  await session1.press("id:quick-translate-card-card-1 >> id:quick-translate-template");
+  await session1.waitFor("role:option[Formal]");
+  await session1.press("role:option[Formal]");
+  await session1.press("id:quick-translate-card-card-1 >> id:quick-translate-collapse");
+
+  await session1.press("id:quick-translate-add-preset");
+  await session1.waitFor("role:menuitem[Drop Later]");
+  await session1.press("role:menuitem[Drop Later]");
+  await session1.waitFor("id:quick-translate-card-card-2");
+
+  // Translate sensitive text in session 1 and ensure preferences exclude input/result/credential.
+  await session1.type("id:quick-translate-source", "Secret draft source");
+  await session1.waitUntil(() => session1.requests().length >= 2);
+  const rawPrefs = session1.storage()["quickTranslate.preferences.v1"]!;
+  expect(rawPrefs).toBeDefined();
+  expect(rawPrefs).not.toContain("Secret draft source");
+  expect(rawPrefs).not.toContain("Secret output response");
+  expect(rawPrefs).not.toContain("sk-test");
+  expect(rawPrefs).not.toContain("pinned");
+
+  // Disable preset-drop and remove tpl-formal override on preset-keep before reopening.
+  const modifiedPresetKeep: TranslationPreset = {
+    ...presetKeep,
+    engine: {
+      ...presetKeep.engine,
+      templates: [presetKeep.engine.templates[0]!],
+    },
+  };
+  const modifiedPresetDrop: TranslationPreset = { ...presetDrop, enabled: false };
+  const reopenedStorage = seedWithPresets([modifiedPresetKeep, modifiedPresetDrop], {
+    "quickTranslate.preferences.v1": rawPrefs,
+  });
+
+  const session2 = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: reopenedStorage,
+  });
+
+  await session2.waitFor("id:quick-translate-card-card-1");
+  expect(session2.shows("id:quick-translate-card-card-2")).toBe(false);
+  expect(session2.shows("id:quick-translate-source-language >> text:English")).toBe(true);
+  expect(session2.shows("id:quick-translate-target-language >> text:Japanese")).toBe(true);
+  expect(session2.texts()).toContain("Disable automatic translation");
+  expect(session2.value("id:quick-translate-source")).toBe("");
+  expect(session2.shows("id:quick-translate-result-text")).toBe(false);
+  expect(session2.requests()).toHaveLength(0);
+  expect(session2.shows("id:quick-translate-card-card-1 >> label:Expand card")).toBe(true);
+
+  // Expanding collapsed card 1 reveals Default template fallback (not missing Formal).
+  await session2.press("id:quick-translate-card-card-1 >> id:quick-translate-collapse");
+  expect(session2.shows("id:quick-translate-card-card-1 >> label:Collapse card")).toBe(true);
+  expect(
+    session2.shows("id:quick-translate-card-card-1 >> id:quick-translate-template >> text:Default"),
+  ).toBe(true);
+
+  // Failed explicit save surfaces localized error alert without claiming saved.
+  await session2.press("id:harness-toggle-prefs-write-fail");
+  await session2.press("id:quick-translate-target-language");
+  await session2.waitFor("role:option[French]");
+  await session2.press("role:option[French]");
+  await session2.waitFor("id:quick-translate-preferences-error");
+  expect(session2.texts()).toContain(t("quickTranslate.error.savePreferences"));
+
+  // Corrupt storage retains defaults and permits a subsequent explicit save.
+  const corrupt = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedWithPresets([modifiedPresetKeep], {
+      "quickTranslate.preferences.v1": "{corrupt!",
+    }),
+  });
+  await corrupt.waitFor("id:quick-translate-card-card-1");
+  expect(corrupt.texts()).toContain("Enable automatic translation");
+  await corrupt.press("id:harness-toggle-auto");
+  await corrupt.waitUntil(() =>
+    Boolean(corrupt.storage()["quickTranslate.preferences.v1"]?.includes('"autoTranslate":true')),
+  );
+});

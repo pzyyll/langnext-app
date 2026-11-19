@@ -6,8 +6,10 @@ import { Icon } from "../components/ui/icon";
 import { toast } from "../components/ui/toast";
 import { QuickTranslatePopup } from "../features/quick-translate/popup";
 import {
+  autoTranslatePreference,
   doubleCopyEnabled,
   registerDoubleCopyRuntime,
+  saveQuickTranslatePopupState,
 } from "../features/quick-translate/preferences";
 import type { DoubleCopyBinding } from "../platform/quick-translate";
 import { nativeDoubleCopyBinding, readCursorAnchor } from "../platform/quick-translate-native";
@@ -31,7 +33,7 @@ export {
   type QuickTranslateShortcutBinding,
 };
 
-/** Creates the desktop Quick Translate controller backed by native cursor anchor and clipboard access. */
+/** Creates the desktop Quick Translate controller backed by native cursor anchor, preferences, and clipboard access. */
 export function createQuickTranslateController(
   options: QuickTranslateControllerOptions = {},
 ): QuickTranslateController {
@@ -39,6 +41,10 @@ export function createQuickTranslateController(
     readCursorAnchor,
     readClipboardText: () => Clipboard.readText(),
     isDoubleCopyActive: doubleCopyEnabled,
+    autoTranslate: autoTranslatePreference,
+    onToggleAutoTranslate: () => {
+      void saveQuickTranslatePopupState({ autoTranslate: !autoTranslatePreference() });
+    },
     ...options,
   });
 }

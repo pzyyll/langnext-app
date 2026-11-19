@@ -431,3 +431,4 @@ quickTranslate:
     noEligibleModel: No configured model in this preset is available. Check Models or Presets.
     translationFailed: "Translation failed: %{detail}"
     copyFailed: Could not copy translation to the clipboard.
+    savePreferences: Could not save Quick Translate preferences. Your changes apply until you close the app.

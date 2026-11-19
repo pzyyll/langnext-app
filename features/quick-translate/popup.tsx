@@ -27,6 +27,12 @@ import {
 import { presetsStore } from "../presets/store";
 import type { PresetsStore, TranslationPreset } from "../presets/types";
 import {
+  quickTranslatePreferencesStore,
+  resolveQuickTranslateCards,
+  type QuickTranslatePreferencesStore,
+  type SavedQuickTranslateCard,
+} from "./preferences";
+import {
   resolveInitialPresetLanguages,
   resolvePresetTemplate,
   translateWithPreset,
@@ -69,6 +75,7 @@ export interface QuickTranslatePopupProps {
   onOverlayOpenChange?: (menuId: string, open: boolean) => void;
   onAttachSourceInput?: (input: InputRef | null) => void;
   presetsStore?: Pick<PresetsStore, "load" | "records" | "status">;
+  preferences?: QuickTranslatePreferencesStore;
   translate?: (
     input: TranslateWithPresetInput,
     options?: TranslateWithPresetOptions,
@@ -287,9 +294,10 @@ function PresetCardRow(props: PresetCardRowProps) {
 /** Compact Quick Translate popup composed inside the floating window or standalone harness. */
 export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   const store = props.presetsStore ?? presetsStore;
+  const prefsStore = props.preferences ?? quickTranslatePreferencesStore;
   const runTranslate = props.translate ?? translateWithPreset;
   const clipboardApi = props.clipboard ?? Clipboard;
-  const isAutoTranslate = () => props.autoTranslate?.() ?? false;
+  const isAutoTranslate = () => props.autoTranslate?.() ?? prefsStore.autoTranslate();
 
   if (store.status().kind === "idle") {
     void store.load();
@@ -365,7 +373,23 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
     );
   };
 
-  // Seed one default card and initial languages once presets finish loading.
+  const toSavedCards = (items: readonly CardViewItem[]): SavedQuickTranslateCard[] =>
+    items.map(({ id, presetId, templateId, collapsed }) => ({
+      id,
+      presetId,
+      templateId,
+      collapsed,
+    }));
+
+  const persistPreferencesState = () => {
+    void prefsStore.savePopupState({
+      sourceLanguage: sourceLanguage(),
+      targetLanguage: targetLanguage(),
+      cards: toSavedCards(cards()),
+    });
+  };
+
+  // Seed or restore valid cards and languages only after presets finish loading cleanly.
   effect(() => {
     const status = store.status();
     if (status.kind !== "ready") {
@@ -375,30 +399,67 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
       return;
     }
     const available = enabledPresets();
-    if (available.length === 0) {
+    const saved = prefsStore.preferences();
+    const restored = resolveQuickTranslateCards(saved.cards, status, store.records());
+    if (restored === null) {
+      return;
+    }
+    if (available.length === 0 && restored.length === 0) {
       return;
     }
 
     hasSeededInitialCard = true;
-    const first = available[0]!;
-    const initial = resolveInitialPresetLanguages(first);
-    const id = allocateCardId();
-    cardRuntimes.set(id, createCardRuntime());
+    const firstAvailable = available[0];
+    const seedPreset =
+      (restored[0] ? available.find((item) => item.id === restored[0]!.presetId) : undefined) ??
+      firstAvailable;
 
-    batch(() => {
-      sourceLanguage.set(initial.sourceLanguage);
-      targetLanguage.set(initial.targetLanguage);
-      cards.set([
+    let nextCards: CardViewItem[];
+    if (restored.length > 0) {
+      let maxOrd = 0;
+      for (const entry of restored) {
+        const match = /^card-(\d+)$/.exec(entry.id);
+        if (match) {
+          maxOrd = Math.max(maxOrd, Number(match[1]));
+        }
+        cardRuntimes.set(entry.id, createCardRuntime());
+      }
+      nextCardOrdinal = Math.max(nextCardOrdinal, maxOrd + 1);
+      nextCards = restored.map((entry) => ({
+        id: entry.id,
+        presetId: entry.presetId,
+        templateId: entry.templateId,
+        collapsed: entry.collapsed,
+        result: { status: "idle" },
+        copied: false,
+        copyError: null,
+      }));
+    } else if (firstAvailable) {
+      const id = allocateCardId();
+      cardRuntimes.set(id, createCardRuntime());
+      nextCards = [
         {
           id,
-          presetId: first.id,
+          presetId: firstAvailable.id,
           templateId: null,
           collapsed: false,
           result: { status: "idle" },
           copied: false,
           copyError: null,
         },
-      ]);
+      ];
+    } else {
+      nextCards = [];
+    }
+
+    const fallbackLanguages = seedPreset
+      ? resolveInitialPresetLanguages(seedPreset)
+      : { sourceLanguage: AUTO_LANGUAGE, targetLanguage: "zh" as TargetLanguageId };
+
+    batch(() => {
+      sourceLanguage.set(saved.sourceLanguage ?? fallbackLanguages.sourceLanguage);
+      targetLanguage.set(saved.targetLanguage ?? fallbackLanguages.targetLanguage);
+      cards.set(nextCards);
     });
   });
 
@@ -415,6 +476,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
       cancelRuntime(runtime);
     }
     cardRuntimes.clear();
+    prefsStore.clearSaveError();
   });
 
   const executeCard = async (cardId: string, trigger: "manual" | "auto") => {
@@ -587,12 +649,14 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   const handleSourceLanguageChange = (value: string | null) => {
     if (!value || value === sourceLanguage()) return;
     sourceLanguage.set(value as SourceLanguageId);
+    persistPreferencesState();
     scheduleAutoTranslate();
   };
 
   const handleTargetLanguageChange = (value: string | null) => {
     if (!value || value === targetLanguage()) return;
     targetLanguage.set(value as TargetLanguageId);
+    persistPreferencesState();
     scheduleAutoTranslate();
   };
 
@@ -604,6 +668,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
       sourceLanguage.set(tgt);
       targetLanguage.set(src);
     });
+    persistPreferencesState();
     scheduleAutoTranslate();
   };
 
@@ -624,6 +689,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
         copyError: null,
       },
     ]);
+    persistPreferencesState();
     if (
       isAutoTranslate() &&
       store.status().kind === "ready" &&
@@ -651,6 +717,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
       copyError: null,
       result: { status: "idle" },
     }));
+    persistPreferencesState();
   };
 
   const handleSelectCardTemplate = (cardId: string, value: string | null) => {
@@ -675,6 +742,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
       ...item,
       templateId: nextTemplateId,
     }));
+    persistPreferencesState();
 
     if (
       isAutoTranslate() &&
@@ -690,6 +758,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
       ...item,
       collapsed: !item.collapsed,
     }));
+    persistPreferencesState();
   };
 
   const handleRemoveCard = (cardId: string) => {
@@ -701,6 +770,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
     props.onOverlayOpenChange?.(`card-preset-${cardId}`, false);
     props.onOverlayOpenChange?.(`card-template-${cardId}`, false);
     cards.set(cards().filter((item) => item.id !== cardId));
+    persistPreferencesState();
   };
 
   const handleClearSource = () => {
@@ -911,6 +981,16 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
           </Menu>
         </If>
       </View>
+
+      <If when={prefsStore.saveError() !== null}>
+        <Text
+          testID="quick-translate-preferences-error"
+          role="alert"
+          class="text-xs text-destructive"
+        >
+          {prefsStore.saveError() ?? ""}
+        </Text>
+      </If>
 
       <View class="gap-2">
         <Each of={cards()} key={(card) => card.id}>

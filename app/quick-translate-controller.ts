@@ -28,6 +28,8 @@ export interface QuickTranslateControllerOptions {
   getDisplays?: () => readonly Display[];
   readClipboardText?: () => Promise<string>;
   isDoubleCopyActive?: () => boolean;
+  autoTranslate?: Accessor<boolean>;
+  onToggleAutoTranslate?: () => void;
 }
 
 export interface QuickTranslateController {
@@ -221,7 +223,6 @@ export function createQuickTranslateController(
   return {
     isOpen: () => openSignal(),
     isPinned: () => pinnedSignal(),
-    autoTranslate: () => autoTranslateSignal(),
     openingDisplay: () => placementSignal().display,
     openingPosition: () => {
       const current = placementSignal();
@@ -234,12 +235,15 @@ export function createQuickTranslateController(
     attachedWindow: () => attachedWindowSignal(),
     sourceText: () => sourceSignal(),
     sourceDeliverySeq: () => clipboardDeliverySeqSignal(),
+    autoTranslate: options.autoTranslate ?? (() => autoTranslateSignal()),
     open,
     close,
     activateDoubleCopy,
     setPinned: (pinned: boolean) => pinnedSignal.set(pinned),
     togglePinned: () => pinnedSignal.set(!pinnedSignal()),
-    toggleAutoTranslate: () => autoTranslateSignal.set(!autoTranslateSignal()),
+    toggleAutoTranslate: options.onToggleAutoTranslate
+      ? options.onToggleAutoTranslate
+      : () => autoTranslateSignal.set(!autoTranslateSignal()),
     setSourceText: (text: string) => {
       if (text === sourceSignal()) {
         return;

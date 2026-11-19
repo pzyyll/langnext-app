@@ -128,7 +128,7 @@ test("double copy: shows Windows-only opt-in off by default, hides outside Windo
 
   await winApp.press("id:settings-double-copy-switch");
   await winApp.waitUntil(() => Boolean(winApp.storage()["quickTranslate.preferences.v1"]));
-  expect(JSON.parse(winApp.storage()["quickTranslate.preferences.v1"]!)).toEqual({
+  expect(JSON.parse(winApp.storage()["quickTranslate.preferences.v1"]!)).toMatchObject({
     version: 1,
     doubleCopyEnabled: true,
   });

@@ -57,7 +57,17 @@ aligned. pnpm provides development tools only; it is not the app runtime.
 - `components/`: Styled controls built on NSH base components.
 - `features/settings/`: Appearance state and settings screen.
 - `theme.json`: Semantic light and dark tokens from the design system.
-- `src/lib.rs`: Native export registration. No native features are added yet.
+- `src/lib.rs`: Native export registration (`my-translator/native`) for Windows cursor monitor anchor lookup and Raw Input double-copy detection.
+- `platform/`: Cross-display popup placement helpers and thin wrapper over `my-translator/native`.
+
+## Quick Translate
+
+Quick Translate runs in a compact floating panel (`420 × 360` points, available even when the main window is hidden) and supports independent multi-preset result cards sharing one source input and language pair:
+
+- **Activation paths**: Open or focus via the system tray menu (**Quick Translate**) on any desktop, via the fixed global shortcut `Ctrl+Shift+T` on Windows, or via the optional Windows-only **Double-copy Quick Translate (`Ctrl+C × 2`)** toggle in **Settings → General**.
+- **Shortcut conflict recovery**: If `Ctrl+Shift+T` is already claimed by another application at launch, startup continues cleanly, displays a localized warning toast, and leaves **Quick Translate** accessible from the tray menu.
+- **Windows support & opt-in defaults**: Global shortcut registration, mixed-DPI physical cursor anchor placement, and Raw Input (`RIDEV_INPUTSINK` keyboard-only) double-copy monitoring target Windows. Both double-copy activation and popup **Auto-translate** (`500 ms` debounce) default to **off**; without auto-translate enabled, text is sent only on **Enter** or pressing **Translate** / **Retry**.
+- **Data destinations & privacy**: Quick Translate preferences persist exclusively in NSH `Storage` under `quickTranslate.preferences.v1` (`doubleCopyEnabled`, `autoTranslate`, `sourceLanguage`, `targetLanguage`, and ordered `{ id, presetId, templateId, collapsed }` cards). Pin state, source drafts, translated outputs, error text, keystroke history, and API keys are never persisted or logged. Provider secrets stay in OS secure credential storage, and text is sent only to enabled models configured on active preset cards.
 
 See [system architecture](docs/specs/system-architecture.md) and
 [design system](docs/ui/DESIGNE.md) for the selected scope.

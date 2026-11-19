@@ -431,3 +431,4 @@ quickTranslate:
     noEligibleModel: 此预设中的已配置模型均不可用，请检查“模型”或“预设”。
     translationFailed: "翻译失败：%{detail}"
     copyFailed: 无法将译文复制到剪贴板。
+    savePreferences: 无法保存快速翻译偏好设置。本次更改将在关闭应用前生效。

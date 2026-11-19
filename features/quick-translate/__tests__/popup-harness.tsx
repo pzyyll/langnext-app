@@ -1,4 +1,4 @@
-import { mount, signal, Storage, Text, View, type ClipboardModule } from "nsh";
+import { mount, Scroll, signal, Storage, Text, View, type ClipboardModule } from "nsh";
 import { t } from "nsh/i18n";
 import { initializeAiModules } from "../../../app/ai-setup";
 import { Button } from "../../../components/ui/button";
@@ -7,6 +7,10 @@ import { loadModelsState } from "../../models/store";
 import { createPresetsStore } from "../../presets/store";
 import { loadAppearance } from "../../settings/appearance";
 import { loadLanguage } from "../../settings/language";
+import {
+  createQuickTranslatePreferencesStore,
+  type QuickTranslatePreferencesStore,
+} from "../preferences";
 import type {
   TranslateWithPresetInput,
   TranslateWithPresetOptions,
@@ -40,10 +44,13 @@ function createDeferred<T>(): Deferred<T> {
   return { promise, resolve };
 }
 
-function PopupHarnessApp(props: { mode: HarnessMode }) {
+function PopupHarnessApp(props: {
+  mode: HarnessMode;
+  prefs: QuickTranslatePreferencesStore;
+  onToggleWriteFail: () => void;
+}) {
   const popupOpen = signal(true);
   const sourceText = signal("");
-  const autoTranslate = signal(false);
   const presetsErrorFail = signal(props.mode === "preset-load-error-then-recover");
   const translateCalls = signal<string[]>([]);
   const abortEvents = signal<string[]>([]);
@@ -123,11 +130,13 @@ function PopupHarnessApp(props: { mode: HarnessMode }) {
           size="xs"
           variant="outline"
           label={
-            autoTranslate()
+            props.prefs.autoTranslate()
               ? t("quickTranslate.disableAutoTranslate")
               : t("quickTranslate.enableAutoTranslate")
           }
-          onPress={() => autoTranslate.set(!autoTranslate())}
+          onPress={() =>
+            void props.prefs.savePopupState({ autoTranslate: !props.prefs.autoTranslate() })
+          }
         />
         <Button
           testID="harness-toggle-open"
@@ -260,18 +269,28 @@ function PopupHarnessApp(props: { mode: HarnessMode }) {
           />
         </If>
         <Text testID="harness-popup-stats">{`calls=${translateCalls().length}|aborts=${abortEvents().join(",")}`}</Text>
+        <Button
+          testID="harness-toggle-prefs-write-fail"
+          size="xs"
+          variant="outline"
+          label="Toggle Prefs Write Fail"
+          onPress={() => props.onToggleWriteFail()}
+        />
       </View>
 
       <If when={popupOpen()}>
-        <Card class="overflow-hidden p-0">
-          <QuickTranslatePopup
-            sourceText={() => sourceText()}
-            onSourceTextChange={(text) => sourceText.set(text)}
-            autoTranslate={() => autoTranslate()}
-            presetsStore={store}
-            translate={translateStub}
-            clipboard={clipboardStub}
-          />
+        <Card class="min-h-0 flex-1 overflow-hidden p-0">
+          <Scroll class="min-h-0 flex-1">
+            <QuickTranslatePopup
+              sourceText={() => sourceText()}
+              onSourceTextChange={(text) => sourceText.set(text)}
+              autoTranslate={() => props.prefs.autoTranslate()}
+              presetsStore={store}
+              preferences={props.prefs}
+              translate={translateStub}
+              clipboard={clipboardStub}
+            />
+          </Scroll>
         </Card>
       </If>
     </View>
@@ -283,7 +302,7 @@ void Promise.all([
   loadLanguage(),
   loadModelsState(),
   Storage.getItem(POPUP_HARNESS_MODE_KEY),
-]).then(([, , , modeRaw]) => {
+]).then(async ([, , , modeRaw]) => {
   const mode: HarnessMode =
     modeRaw === "preset-load-error-then-recover" ||
     modeRaw === "clipboard-error" ||
@@ -292,5 +311,25 @@ void Promise.all([
     modeRaw === "multi-card"
       ? modeRaw
       : "live";
-  mount(() => <PopupHarnessApp mode={mode} />);
+
+  let simulateWriteFailure = false;
+  const prefs = createQuickTranslatePreferencesStore({
+    getItem: (key) => Storage.getItem(key),
+    setItem: (key, value) => {
+      if (simulateWriteFailure) {
+        return Promise.reject(new Error("Simulated prefs write failure"));
+      }
+      return Storage.setItem(key, value);
+    },
+  });
+  await prefs.load();
+  mount(() => (
+    <PopupHarnessApp
+      mode={mode}
+      prefs={prefs}
+      onToggleWriteFail={() => {
+        simulateWriteFailure = !simulateWriteFailure;
+      }}
+    />
+  ));
 });
