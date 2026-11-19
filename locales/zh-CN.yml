@@ -61,6 +61,17 @@ settings:
     description: 在 Windows 上启用后，连续按两次 Ctrl+C 会读取剪贴板文本；若同时开启了自动翻译，会将其发送到所选服务。
     enableError: 无法启动 Windows 双击复制监听，该功能已保持关闭。
     saveError: 无法保存双击复制设置，请重试。
+  languageDetection:
+    error:
+      storageReadFailed: 无法读取已保存的语言检测设置。
+      storageMalformed: 已保存的语言检测设置无法解析。
+      storageUnsupportedVersion: 已保存的语言检测设置版本不受支持。
+      storageWriteFailed: 无法保存语言检测设置，请检查存储后重试。
+      modelIdBlank: 每个检测位置都需要选择模型。
+      modelIdDuplicate: 同一检测模型只能出现一次。
+      primaryModelRequired: 请选择主检测模型。
+      preferenceInvalid: 请选择受支持的语言。
+      preferencesIdentical: 母语与母语译为的语言必须不同。
 models:
   title: 模型
   channel:

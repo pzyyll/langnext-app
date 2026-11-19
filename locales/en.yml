@@ -61,6 +61,17 @@ settings:
     description: When enabled on Windows, reads clipboard text after two quick Ctrl+C presses. If automatic translation is on in Quick Translate, it sends that text to the selected service.
     enableError: Could not start the Windows double-copy listener. The listener stays off.
     saveError: Could not save the double-copy setting. Check storage and try again.
+  languageDetection:
+    error:
+      storageReadFailed: Could not read the saved language detection settings.
+      storageMalformed: The saved language detection settings are unreadable.
+      storageUnsupportedVersion: The saved language detection settings use an unsupported version.
+      storageWriteFailed: Could not save the language detection settings. Check storage and try again.
+      modelIdBlank: Choose a model for every detection slot.
+      modelIdDuplicate: Each detection model can appear only once.
+      primaryModelRequired: Choose a primary detection model.
+      preferenceInvalid: Choose a supported language.
+      preferencesIdentical: The native language and the preferred translation language must differ.
 models:
   title: Models
   channel:

@@ -2,6 +2,7 @@ import { mount } from "nsh";
 import { initializeAiModules } from "./app/ai-setup";
 import { AppShell } from "./app/shell";
 import { loadSplitRailWidths } from "./components/layout/split-rail";
+import { languageDetectionStore } from "./features/language-detection/settings";
 import { loadModelsState } from "./features/models/store";
 import { presetsStore } from "./features/presets/store";
 import { loadQuickTranslatePreferences } from "./features/quick-translate/preferences";
@@ -18,6 +19,7 @@ async function startApp() {
     loadQuickTranslatePreferences(),
     loadModelsState(),
     presetsStore.load(),
+    languageDetectionStore.load(),
     loadSplitRailWidths(),
   ]);
   mount(AppShell);
