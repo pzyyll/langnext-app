@@ -14,6 +14,7 @@ export interface PresetDraft {
   fallbackModelIds: string[];
   temperatureText: string;
   maxOutputTokensText: string;
+  disableReasoning: boolean;
   templates: PromptTemplate[];
   defaultTemplateId: string;
 }
@@ -31,6 +32,7 @@ export function createEmptyDraft(): PresetDraft {
     fallbackModelIds: [],
     temperatureText: "",
     maxOutputTokensText: "",
+    disableReasoning: true,
     templates: [
       {
         id: defaultTemplateId,
@@ -56,6 +58,7 @@ export function createDraftFromPreset(preset: TranslationPreset): PresetDraft {
     temperatureText: formatTemperature(preset.engine.temperature),
     maxOutputTokensText:
       preset.engine.maxOutputTokens === null ? "" : String(preset.engine.maxOutputTokens),
+    disableReasoning: preset.engine.disableReasoning,
     templates: preset.engine.templates.map((tpl) => ({ ...tpl })),
     defaultTemplateId: preset.engine.defaultTemplateId,
   };
@@ -81,6 +84,7 @@ export function isDraftDirty(current: PresetDraft, baseline: PresetDraft): boole
     current.primaryModelId !== baseline.primaryModelId ||
     current.temperatureText !== baseline.temperatureText ||
     current.maxOutputTokensText !== baseline.maxOutputTokensText ||
+    current.disableReasoning !== baseline.disableReasoning ||
     current.defaultTemplateId !== baseline.defaultTemplateId ||
     current.fallbackModelIds.length !== baseline.fallbackModelIds.length ||
     current.templates.length !== baseline.templates.length
@@ -125,6 +129,7 @@ export function draftToSaveInput(draft: PresetDraft): SavePresetInput {
       modelIds,
       temperature: draft.temperatureText,
       maxOutputTokens: draft.maxOutputTokensText,
+      disableReasoning: draft.disableReasoning,
       templates: draft.templates.map((tpl) => ({ ...tpl })),
       defaultTemplateId: draft.defaultTemplateId,
     },

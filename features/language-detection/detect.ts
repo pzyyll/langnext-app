@@ -106,7 +106,13 @@ export async function detectLanguage(
       attempted = true;
       raw = await runGeneration(
         resolved.connection,
-        { modelId: resolved.modelKey, system: DETECTION_SYSTEM_MESSAGE, user: sample },
+        {
+          modelId: resolved.modelKey,
+          system: DETECTION_SYSTEM_MESSAGE,
+          user: sample,
+          // One literal ID needs no reasoning; providers that cannot turn it off ignore the hint.
+          disableReasoning: true,
+        },
         { signal: options.signal, timeoutMs: options.timeoutMs },
       );
     } catch (error) {

@@ -93,6 +93,9 @@ detector.
 - **Fallback behavior**: A blocked or failed detection never guesses. The card
   shows a localized message that asks you to configure the detector, check the
   detection models, or choose the source manually. Cancellation stays silent.
+- **Request shape**: Detection uses one buffered request per configured model,
+  never a stream, and asks the model to skip reasoning because the answer is a
+  single language ID.
 - **Privacy**: Detection runs only inside a translation action with an
   automatic source. Each configured detection model receives the first 2,048
   characters of the trimmed text and may use a different provider than the

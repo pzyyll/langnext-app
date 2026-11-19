@@ -44,6 +44,7 @@ function makeBaseInput(overrides: Partial<SavePresetInput> = {}): SavePresetInpu
       modelIds: ["m-1"],
       temperature: null,
       maxOutputTokens: null,
+      disableReasoning: true,
       templates: [
         {
           id: "tpl-1",

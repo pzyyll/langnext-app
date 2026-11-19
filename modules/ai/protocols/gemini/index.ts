@@ -7,6 +7,7 @@ import type {
   ProtocolDefinition,
   RequestOperation,
   ResolvedRequestTarget,
+  StreamContext,
   TextGenerationRequest,
 } from "../../contracts/protocol";
 import { normalizePositiveInt } from "../openai-common";
@@ -14,6 +15,7 @@ import {
   isPlainObject,
   normalizeCredential,
   normalizeRequestRoot,
+  parseEventPayload,
   requireGeneratedText,
   requireModelId,
 } from "../shared";
@@ -81,6 +83,59 @@ function decodeGeminiPage(payload: Record<string, unknown>): {
   return { models, nextPageToken };
 }
 
+/** Collects answer text parts from a Gemini candidate, excluding thought and tool parts. */
+function geminiTextParts(payload: Record<string, unknown>): string[] {
+  if (!Array.isArray(payload.candidates) || payload.candidates.length === 0) return [];
+  const firstCandidate = payload.candidates[0];
+  if (
+    !isPlainObject(firstCandidate) ||
+    !isPlainObject(firstCandidate.content) ||
+    !Array.isArray(firstCandidate.content.parts)
+  ) {
+    return [];
+  }
+  const parts: string[] = [];
+  for (const part of firstCandidate.content.parts) {
+    if (
+      isPlainObject(part) &&
+      part.thought !== true &&
+      !("functionCall" in part) &&
+      !("functionResponse" in part) &&
+      !("executableCode" in part) &&
+      !("codeExecutionResult" in part) &&
+      typeof part.text === "string"
+    ) {
+      parts.push(part.text);
+    }
+  }
+  return parts;
+}
+
+/** Builds the Gemini request body; `stream` only changes how the caller reads it. */
+function geminiBody(request: TextGenerationRequest): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    contents: [{ role: "user", parts: [{ text: request.user }] }],
+  };
+  if (request.system.trim().length > 0) {
+    body.systemInstruction = { parts: [{ text: request.system }] };
+  }
+  const generationConfig: Record<string, unknown> = {};
+  if (request.temperature !== null && request.temperature !== undefined) {
+    generationConfig.temperature = request.temperature;
+  }
+  if (request.maxOutputTokens !== null && request.maxOutputTokens !== undefined) {
+    generationConfig.maxOutputTokens = request.maxOutputTokens;
+  }
+  if (request.disableReasoning) {
+    // Models that cannot turn thinking off reject this budget; the client retries without it.
+    generationConfig.thinkingConfig = { thinkingBudget: 0 };
+  }
+  if (Object.keys(generationConfig).length > 0) {
+    body.generationConfig = generationConfig;
+  }
+  return body;
+}
+
 /** Gemini API wire protocol, including page-token pagination and encoded model IDs. */
 export const geminiProtocol: ProtocolDefinition = {
   id: "gemini",
@@ -104,11 +159,14 @@ export const geminiProtocol: ProtocolDefinition = {
     }
 
     const modelId = requireModelId(operation).replace(/^models\//, "");
+    const stream = operation.stream === true;
     const query = new URLSearchParams();
+    if (stream) query.set("alt", "sse");
     const token = normalizeCredential(connection.credential);
     if (token) query.set("key", token);
     const qs = query.toString();
-    const path = `${geminiRoot(connection.baseUrl)}/v1beta/models/${encodeURIComponent(modelId)}:generateContent`;
+    const method = stream ? "streamGenerateContent" : "generateContent";
+    const path = `${geminiRoot(connection.baseUrl)}/v1beta/models/${encodeURIComponent(modelId)}:${method}`;
     return {
       method: "POST",
       url: qs.length > 0 ? `${path}?${qs}` : path,
@@ -142,56 +200,45 @@ export const geminiProtocol: ProtocolDefinition = {
     request: TextGenerationRequest,
     context: ProtocolContext,
   ): Promise<string> {
-    const modelId = requireModelId({ kind: "model", modelId: request.modelId });
-    const target = geminiProtocol.resolveTarget(connection, { kind: "model", modelId });
-    const body: Record<string, unknown> = {
-      contents: [{ role: "user", parts: [{ text: request.user }] }],
-    };
-    if (request.system.trim().length > 0) {
-      body.systemInstruction = { parts: [{ text: request.system }] };
-    }
-    const generationConfig: Record<string, unknown> = {};
-    if (request.temperature !== null && request.temperature !== undefined) {
-      generationConfig.temperature = request.temperature;
-    }
-    if (request.maxOutputTokens !== null && request.maxOutputTokens !== undefined) {
-      generationConfig.maxOutputTokens = request.maxOutputTokens;
-    }
-    if (Object.keys(generationConfig).length > 0) {
-      body.generationConfig = generationConfig;
-    }
-
-    const payload = await context.http.postJson(target, body, {
+    const target = geminiProtocol.resolveTarget(connection, {
+      kind: "model",
+      modelId: request.modelId,
+    });
+    const payload = await context.http.postJson(target, geminiBody(request), {
       signal: context.signal,
       timeoutMs: context.timeoutMs,
       redirect: "error",
     });
+    if (!Array.isArray(payload.candidates)) {
+      throw new ProviderProtocolError("invalid_response", t("protocol.error.missingGeneratedText"));
+    }
+    return requireGeneratedText(geminiTextParts(payload));
+  },
 
-    if (!Array.isArray(payload.candidates) || payload.candidates.length === 0) {
-      throw new ProviderProtocolError("invalid_response", t("protocol.error.missingGeneratedText"));
-    }
-    const firstCandidate = payload.candidates[0];
-    if (
-      !isPlainObject(firstCandidate) ||
-      !isPlainObject(firstCandidate.content) ||
-      !Array.isArray(firstCandidate.content.parts)
-    ) {
-      throw new ProviderProtocolError("invalid_response", t("protocol.error.missingGeneratedText"));
-    }
-    const parts: string[] = [];
-    for (const part of firstCandidate.content.parts) {
-      if (
-        isPlainObject(part) &&
-        part.thought !== true &&
-        !("functionCall" in part) &&
-        !("functionResponse" in part) &&
-        !("executableCode" in part) &&
-        !("codeExecutionResult" in part) &&
-        typeof part.text === "string"
-      ) {
-        parts.push(part.text);
-      }
-    }
-    return requireGeneratedText(parts);
+  async streamText(
+    connection: ProtocolConnection,
+    request: TextGenerationRequest,
+    context: StreamContext,
+  ): Promise<string> {
+    const target = geminiProtocol.resolveTarget(connection, {
+      kind: "model",
+      modelId: request.modelId,
+      stream: true,
+    });
+    let text = "";
+    await context.http.postEventStream(target, geminiBody(request), {
+      signal: context.signal,
+      timeoutMs: context.timeoutMs,
+      redirect: "error",
+      onEvent: (data) => {
+        const payload = parseEventPayload(data);
+        if (!payload) return;
+        const part = geminiTextParts(payload).join("");
+        if (part.length === 0) return;
+        text += part;
+        context.onText(text);
+      },
+    });
+    return requireGeneratedText([text]);
   },
 };

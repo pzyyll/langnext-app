@@ -7,6 +7,7 @@ import type {
   ProtocolDefinition,
   RequestOperation,
   ResolvedRequestTarget,
+  StreamContext,
   TextGenerationRequest,
 } from "../../contracts/protocol";
 import { decodeOpenAICatalogPage } from "../openai-common";
@@ -14,6 +15,7 @@ import {
   isPlainObject,
   normalizeCredential,
   normalizeRequestRoot,
+  parseEventPayload,
   requireGeneratedText,
   requireModelId,
 } from "../shared";
@@ -28,6 +30,42 @@ export const ANTHROPIC_DEFAULT_MAX_TOKENS = 1024;
 /** Strips one trailing `/v1` so the standard version segment is added once. */
 function anthropicRoot(baseUrl: string): string {
   return normalizeRequestRoot(baseUrl).replace(/\/v1$/, "");
+}
+
+/** Collects `text` blocks, ignoring `thinking` and tool blocks. */
+function anthropicTextParts(payload: Record<string, unknown>): string[] {
+  if (!Array.isArray(payload.content)) return [];
+  const parts: string[] = [];
+  for (const block of payload.content) {
+    if (isPlainObject(block) && block.type === "text" && typeof block.text === "string") {
+      parts.push(block.text);
+    }
+  }
+  return parts;
+}
+
+/** Builds the Messages request body; `stream` selects the delivery mode. */
+function anthropicBody(request: TextGenerationRequest, stream: boolean): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    model: requireModelId({ kind: "model", modelId: request.modelId }),
+    messages: [{ role: "user", content: request.user }],
+    max_tokens:
+      request.maxOutputTokens !== null && request.maxOutputTokens !== undefined
+        ? request.maxOutputTokens
+        : ANTHROPIC_DEFAULT_MAX_TOKENS,
+    stream,
+  };
+  if (request.system.trim().length > 0) {
+    body.system = request.system;
+  }
+  if (request.temperature !== null && request.temperature !== undefined) {
+    body.temperature = request.temperature;
+  }
+  if (request.disableReasoning) {
+    // Extended thinking is opt-in, but disabled states keep the intent explicit.
+    body.thinking = { type: "disabled" };
+  }
+  return body;
 }
 
 function anthropicHeaders(connection: ProtocolConnection): Record<string, string> {
@@ -117,39 +155,57 @@ export const anthropicProtocol: ProtocolDefinition = {
     request: TextGenerationRequest,
     context: ProtocolContext,
   ): Promise<string> {
-    const modelId = requireModelId({ kind: "model", modelId: request.modelId });
-    const target = anthropicProtocol.resolveTarget(connection, { kind: "model", modelId });
-    const body: Record<string, unknown> = {
-      model: modelId,
-      messages: [{ role: "user", content: request.user }],
-      max_tokens:
-        request.maxOutputTokens !== null && request.maxOutputTokens !== undefined
-          ? request.maxOutputTokens
-          : ANTHROPIC_DEFAULT_MAX_TOKENS,
-      stream: false,
-    };
-    if (request.system.trim().length > 0) {
-      body.system = request.system;
-    }
-    if (request.temperature !== null && request.temperature !== undefined) {
-      body.temperature = request.temperature;
-    }
-
-    const payload = await context.http.postJson(target, body, {
+    const target = anthropicProtocol.resolveTarget(connection, {
+      kind: "model",
+      modelId: request.modelId,
+    });
+    const payload = await context.http.postJson(target, anthropicBody(request, false), {
       signal: context.signal,
       timeoutMs: context.timeoutMs,
       redirect: "error",
     });
+    return requireGeneratedText(anthropicTextParts(payload));
+  },
 
-    if (!Array.isArray(payload.content)) {
-      throw new ProviderProtocolError("invalid_response", t("protocol.error.missingGeneratedText"));
-    }
-    const parts: string[] = [];
-    for (const block of payload.content) {
-      if (isPlainObject(block) && block.type === "text" && typeof block.text === "string") {
-        parts.push(block.text);
-      }
-    }
-    return requireGeneratedText(parts);
+  async streamText(
+    connection: ProtocolConnection,
+    request: TextGenerationRequest,
+    context: StreamContext,
+  ): Promise<string> {
+    const target = anthropicProtocol.resolveTarget(connection, {
+      kind: "model",
+      modelId: request.modelId,
+      stream: true,
+    });
+    let text = "";
+    await context.http.postEventStream(target, anthropicBody(request, true), {
+      signal: context.signal,
+      timeoutMs: context.timeoutMs,
+      redirect: "error",
+      onEvent: (data) => {
+        const payload = parseEventPayload(data);
+        if (!payload) return;
+        let part = "";
+        if (payload.type === "error") {
+          throw new ProviderProtocolError(
+            "invalid_response",
+            t("protocol.error.streamInterrupted"),
+          );
+        }
+        if (payload.type === "content_block_delta" && isPlainObject(payload.delta)) {
+          const delta = payload.delta;
+          if (delta.type === "text_delta" && typeof delta.text === "string") {
+            part = delta.text;
+          }
+        } else if (Array.isArray(payload.content)) {
+          // A gateway that ignored the stream flag sends the complete message at once.
+          part = anthropicTextParts(payload).join("");
+        }
+        if (part.length === 0) return;
+        text += part;
+        context.onText(text);
+      },
+    });
+    return requireGeneratedText([text]);
   },
 };

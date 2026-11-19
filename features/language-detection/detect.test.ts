@@ -78,6 +78,7 @@ test("AI detection: sends the sample to the primary model and accepts a trimmed 
   expect(h.requests[0]!.request.user).toBe("Bonjour le monde");
   expect(h.requests[0]!.request.system).not.toContain("Bonjour");
   expect(h.requests[0]!.request.system).toContain("und");
+  expect(h.requests[0]!.request.disableReasoning).toBe(true);
   expect(h.requests[0]!.request.system).toContain("fr");
   expect(h.requests[0]!.request.temperature).toBeUndefined();
   expect(h.requests[0]!.request.maxOutputTokens).toBeUndefined();

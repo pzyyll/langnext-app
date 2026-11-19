@@ -12,6 +12,8 @@ export interface AiPresetEngine {
   modelIds: string[];
   temperature: number | null;
   maxOutputTokens: number | null;
+  /** Asks the models to skip reasoning, so translation starts and finishes sooner. */
+  disableReasoning: boolean;
   templates: PromptTemplate[];
   defaultTemplateId: string;
 }
@@ -35,6 +37,7 @@ export interface SaveAiPresetEngineInput {
   modelIds: readonly string[];
   temperature: number | string | null;
   maxOutputTokens: number | string | null;
+  disableReasoning: boolean;
   templates: readonly PromptTemplate[];
   defaultTemplateId: string;
 }

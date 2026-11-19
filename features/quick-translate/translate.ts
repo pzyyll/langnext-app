@@ -3,8 +3,8 @@ import { ProviderProtocolError } from "../../modules/ai/contracts/errors";
 import type { TextGenerationRequest } from "../../modules/ai/contracts/protocol";
 import {
   aiClient,
-  type AiClientCallOptions,
   type AiClientInput,
+  type AiClientStreamOptions,
 } from "../../modules/ai/runtime/client";
 import { languageResolutionErrorMessage } from "../language-detection/messages";
 import { resolveTranslationLanguages } from "../language-detection/resolve";
@@ -38,11 +38,20 @@ export interface TranslateWithPresetOptions {
   /** One saved Language Detection snapshot for this action; read from the store when omitted. */
   languageDetectionSettings?: LanguageDetectionSettings;
   resolveModelRequest?: (modelId: string) => Promise<SavedModelRequestResolution>;
+  /** Language-detection seam; translation runs through `streamText`. */
   generateText?: (
     connection: AiClientInput,
     request: TextGenerationRequest,
-    options?: AiClientCallOptions,
+    options?: { signal?: AbortSignal; timeoutMs?: number },
   ) => Promise<string>;
+  /** Translation seam: one streamed generation. */
+  streamText?: (
+    connection: AiClientInput,
+    request: TextGenerationRequest,
+    options: AiClientStreamOptions,
+  ) => Promise<string>;
+  /** Receives the complete translated text after each streamed delta. */
+  onText?: (text: string) => void;
 }
 
 export type TranslateWithPresetResult =
@@ -192,7 +201,7 @@ export async function translateWithPreset(
   });
 
   const resolveModel = options.resolveModelRequest ?? resolveSavedModelRequest;
-  const runGeneration = options.generateText ?? aiClient.generateText;
+  const runGeneration = options.streamText ?? aiClient.streamText;
   let lastFailure: string | null = null;
 
   for (const modelId of preset.engine.modelIds) {
@@ -218,10 +227,12 @@ export async function translateWithPreset(
           user,
           temperature: preset.engine.temperature,
           maxOutputTokens: preset.engine.maxOutputTokens,
+          disableReasoning: preset.engine.disableReasoning,
         },
         {
           signal: options.signal,
           timeoutMs: options.timeoutMs,
+          onText: (partial) => options.onText?.(partial),
         },
       );
       if (options.signal?.aborted) {

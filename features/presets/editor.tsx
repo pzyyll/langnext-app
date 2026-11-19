@@ -281,6 +281,7 @@ export function PresetEditor(props: PresetEditorProps) {
             fallbackModelIds={props.draft.fallbackModelIds}
             temperatureText={props.draft.temperatureText}
             maxOutputTokensText={props.draft.maxOutputTokensText}
+            disableReasoning={props.draft.disableReasoning}
             saving={props.saving}
             modelChoices={props.modelChoices}
             modelsError={props.modelsError}
@@ -296,6 +297,7 @@ export function PresetEditor(props: PresetEditorProps) {
             onChangeMaxOutputTokens={(maxOutputTokensText) =>
               props.onChange({ maxOutputTokensText })
             }
+            onChangeDisableReasoning={(disableReasoning) => props.onChange({ disableReasoning })}
             onManageModels={() => props.onManageModels()}
             onPrimaryModelRef={(node) => props.onPrimaryModelRef(node)}
             onFallbackRef={(index, node) => props.onFallbackRef(index, node)}

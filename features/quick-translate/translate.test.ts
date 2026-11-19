@@ -13,6 +13,7 @@ import {
   resolveInitialPresetLanguages,
   resolvePresetTemplate,
   translateWithPreset,
+  type TranslateWithPresetOptions,
 } from "./translate";
 
 initializeAiModules();
@@ -31,6 +32,7 @@ function makePreset(overrides: Partial<TranslationPreset> = {}): TranslationPres
       modelIds: ["model-uuid-1"],
       temperature: null,
       maxOutputTokens: null,
+      disableReasoning: true,
       templates: [
         {
           id: "tpl-default",
@@ -83,6 +85,7 @@ test("preset translation: saved preset sends exact prompt, leaves braces literal
       modelIds: ["uuid-model-1"],
       temperature: 0.2,
       maxOutputTokens: 256,
+      disableReasoning: true,
       templates: [
         {
           id: "tpl-default",
@@ -169,8 +172,9 @@ test("preset translation: resolves the saved pair and lets an explicit language 
     },
     {
       resolveModelRequest: async (id) => makeReadyResolution(id, "gpt-4.1"),
-      generateText: async (_conn, req) => {
+      streamText: async (_conn, req, options) => {
         captured.push({ system: req.system, user: req.user, modelId: req.modelId });
+        options.onText("こんにちは");
         return "こんにちは";
       },
     },
@@ -189,15 +193,60 @@ test("preset translation: resolves the saved pair and lets an explicit language 
   expect(captured[0]!.user).toBe("Text:\nBonjour $& {{text}}");
 });
 
+test("preset translation: streams partial text and forwards the preset reasoning choice", async () => {
+  const requests: Array<{ disableReasoning?: boolean }> = [];
+  const partials: string[] = [];
+
+  const result = await translateWithPreset(
+    { preset: makePreset(), sourceText: "Hello" },
+    {
+      resolveModelRequest: async (id) => makeReadyResolution(id, "gpt-4.1"),
+      onText: (text) => partials.push(text),
+      streamText: async (_conn, req, options) => {
+        requests.push({ disableReasoning: req.disableReasoning });
+        options.onText("你");
+        options.onText("你好");
+        return "你好";
+      },
+    },
+  );
+
+  expect(result).toEqual({
+    ok: true,
+    text: "你好",
+    modelId: "model-uuid-1",
+    templateId: "tpl-default",
+  });
+  expect(partials).toEqual(["你", "你好"]);
+  expect(requests).toEqual([{ disableReasoning: true }]);
+
+  const keepThinking = makePreset();
+  keepThinking.engine.disableReasoning = false;
+  requests.length = 0;
+  await translateWithPreset(
+    { preset: keepThinking, sourceText: "Hello" },
+    {
+      resolveModelRequest: async (id) => makeReadyResolution(id, "gpt-4.1"),
+      streamText: async (_conn, req, options) => {
+        requests.push({ disableReasoning: req.disableReasoning });
+        options.onText("ok");
+        return "ok";
+      },
+    },
+  );
+  expect(requests).toEqual([{ disableReasoning: false }]);
+});
+
 test("preset translation: rejects blank input, disabled preset, and missing template without a request", async () => {
   let calls = 0;
-  const deps = {
+  const deps: TranslateWithPresetOptions = {
     resolveModelRequest: async (id: string) => {
       calls += 1;
       return makeReadyResolution(id, "gpt-4.1");
     },
-    generateText: async () => {
+    streamText: async (_conn, _req, options) => {
       calls += 1;
+      options.onText("unexpected");
       return "unexpected";
     },
   };
@@ -319,6 +368,7 @@ test("preset translation: resolveSavedModelRequest skips disabled, missing, non-
       ],
       temperature: null,
       maxOutputTokens: null,
+      disableReasoning: true,
       templates: [
         {
           id: "tpl-default",
@@ -364,6 +414,7 @@ test("preset translation: follows fallback chain unavailable -> 429 -> success a
       modelIds: ["m-unavail", "m-429", "m-ok"],
       temperature: null,
       maxOutputTokens: null,
+      disableReasoning: true,
       templates: [
         {
           id: "tpl-default",
@@ -385,7 +436,7 @@ test("preset translation: follows fallback chain unavailable -> 429 -> success a
         }
         return makeReadyResolution(id, `key-${id}`);
       },
-      generateText: async (_conn, req) => {
+      streamText: async (_conn, req, options) => {
         attempted.push(req.modelId);
         if (req.modelId === "key-m-429") {
           throw new ProviderProtocolError(
@@ -394,6 +445,7 @@ test("preset translation: follows fallback chain unavailable -> 429 -> success a
             429,
           );
         }
+        options.onText("Salut");
         return "Salut";
       },
     },
@@ -412,7 +464,7 @@ test("preset translation: follows fallback chain unavailable -> 429 -> success a
     { preset: presetChain, sourceText: "Hello" },
     {
       resolveModelRequest: async (id) => makeReadyResolution(id, `key-${id}`),
-      generateText: async (_conn, req) => {
+      streamText: async (_conn, req) => {
         authAttempted.push(req.modelId);
         throw new ProviderProtocolError("auth", t("protocol.error.auth", { status: 401 }), 401);
       },
@@ -432,7 +484,7 @@ test("preset translation: follows fallback chain unavailable -> 429 -> success a
     {
       signal: controller.signal,
       resolveModelRequest: async (id) => makeReadyResolution(id, `key-${id}`),
-      generateText: async (_conn, req) => {
+      streamText: async (_conn, req) => {
         abortAttempted.push(req.modelId);
         controller.abort();
         throw new ProviderProtocolError("cancelled", t("protocol.error.cancelled"));
@@ -455,6 +507,7 @@ test("preset translation: returns localized actionable failure when all chain mo
       modelIds: ["m-timeout", "m-500"],
       temperature: null,
       maxOutputTokens: null,
+      disableReasoning: true,
       templates: [
         {
           id: "tpl-default",
@@ -471,7 +524,7 @@ test("preset translation: returns localized actionable failure when all chain mo
     { preset, sourceText: "Hello" },
     {
       resolveModelRequest: async (id) => makeReadyResolution(id, `key-${id}`),
-      generateText: async (_conn, req) => {
+      streamText: async (_conn, req) => {
         if (req.modelId === "key-m-timeout") {
           throw new ProviderProtocolError("timeout", t("protocol.error.timeout"));
         }
@@ -494,6 +547,7 @@ test("template override: executes non-default template verbatim without cross-te
       modelIds: ["model-uuid-1"],
       temperature: null,
       maxOutputTokens: null,
+      disableReasoning: true,
       templates: [
         {
           id: "tpl-default",
@@ -535,9 +589,10 @@ test("template override: executes non-default template verbatim without cross-te
     },
     {
       resolveModelRequest: async (id) => makeReadyResolution(id, "gpt-4o"),
-      generateText: async (_conn, req) => {
+      streamText: async (_conn, req, options) => {
         capturedSystem = req.system;
         capturedUser = req.user;
+        options.onText("Keigo result");
         return "Keigo result";
       },
     },
@@ -579,15 +634,20 @@ function makeLanguageResolutionDeps(answers: string[], log: DetectionPhaseLog) {
         : makeReadyResolution(id, "model-uuid-1"),
     generateText: async (
       _conn: unknown,
-      req: { modelId: string; system: string; user: string },
+      _req: { modelId: string; system: string; user: string },
       _options?: unknown,
     ) => {
-      if (req.modelId === "detector-key") {
-        log.events.push("detect");
-        return answers.shift() ?? "und";
-      }
+      log.events.push("detect");
+      return answers.shift() ?? "und";
+    },
+    streamText: async (
+      _conn: unknown,
+      req: { modelId: string; system: string; user: string },
+      options: { onText: (text: string) => void },
+    ) => {
       log.events.push("translate");
       log.prompts.push({ system: req.system, user: req.user });
+      options.onText("译文");
       return "译文";
     },
   };

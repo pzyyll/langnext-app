@@ -79,6 +79,7 @@ test("presets ui: saves a new preset", async () => {
       modelIds: ["m-1"],
       temperature: null,
       maxOutputTokens: null,
+      disableReasoning: true,
     },
   });
   expect(parsed.items[0]!.engine.templates).toHaveLength(1);
@@ -308,6 +309,7 @@ function makePresetRecord(id: string, name: string, modelIds: string[]): Transla
       modelIds,
       temperature: null,
       maxOutputTokens: null,
+      disableReasoning: true,
       templates: [
         {
           id: `${id}-tpl-1`,
@@ -320,6 +322,50 @@ function makePresetRecord(id: string, name: string, modelIds: string[]): Transla
     },
   };
 }
+
+test("presets ui: toggles the reasoning switch and saves it", async () => {
+  const preset = makePresetRecord("preset-a", "Reasoning", ["m-1"]);
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: makeSeedStorage({
+      channels: [makeChannel({ id: "ch-openai", displayName: "OpenAI Main", enabled: true })],
+      models: [
+        makeModel({
+          id: "m-1",
+          providerId: "ch-openai",
+          modelKey: "gpt-4.1-mini",
+          enabled: true,
+        }),
+      ],
+      extra: { [PRESETS_STORAGE_KEY]: JSON.stringify({ version: 1, items: [preset] }) },
+    }),
+  });
+
+  await app.press("id:nav-presets");
+  await app.waitFor("id:preset-disable-reasoning");
+  await app.press("id:preset-disable-reasoning");
+  await app.press("id:preset-save");
+
+  await app.waitUntil(() => {
+    const raw = app.storage()[PRESETS_STORAGE_KEY];
+    if (!raw) return false;
+    const data = JSON.parse(raw) as { items: TranslationPreset[] };
+    return data.items[0]?.engine.disableReasoning === false;
+  });
+
+  // Reopening shows the stored choice and saving it again keeps it.
+  const reopened = await open(APP_ENTRY, { ...viewport, storage: app.storage() });
+  await reopened.press("id:nav-presets");
+  await reopened.waitFor("id:preset-disable-reasoning");
+  await reopened.press("id:preset-disable-reasoning");
+  await reopened.press("id:preset-save");
+  await reopened.waitUntil(() => {
+    const raw = reopened.storage()[PRESETS_STORAGE_KEY];
+    if (!raw) return false;
+    const data = JSON.parse(raw) as { items: TranslationPreset[] };
+    return data.items[0]?.engine.disableReasoning === true;
+  });
+});
 
 test("presets ui: retains unavailable bindings", async () => {
   const chEnabled = makeChannel({ id: "ch-ok", displayName: "OpenAI Ready", enabled: true });
@@ -563,6 +609,7 @@ test("presets ui: removes only a nondefault prompt", async () => {
       modelIds: ["m-1"],
       temperature: null,
       maxOutputTokens: null,
+      disableReasoning: true,
       templates: [
         {
           id: "tpl-1",

@@ -279,6 +279,8 @@ export function validatePresetForSave(
       modelIds,
       temperature,
       maxOutputTokens,
+      // Turning thinking off is the default; only an explicit false keeps it on.
+      disableReasoning: input.engine.disableReasoning !== false,
       templates,
       defaultTemplateId,
     },

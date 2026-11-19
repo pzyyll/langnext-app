@@ -262,6 +262,7 @@ protocol:
     missingModels: Expected a models array in provider response.
     missingGeminiModels: Expected a Gemini models list in provider response.
     missingGeneratedText: Provider response contained no generated text.
+    streamInterrupted: Provider stopped the stream before the text was complete.
 ai:
   protocol:
     openaiChat: OpenAI Chat Completions
@@ -402,6 +403,7 @@ presets:
     decreaseTemperature: Decrease temperature
     maxOutputTokens: Max output tokens
     maxOutputTokensPlaceholder: Optional
+    disableReasoning: Disable reasoning
     unavailableLabel: Unavailable model
     removedLabel: Deleted model
     reasonDeleted: Model no longer exists in Models.

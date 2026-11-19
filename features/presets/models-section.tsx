@@ -5,6 +5,7 @@ import { Card, SectionHeading } from "../../components/ui/card";
 import { Icon } from "../../components/ui/icon";
 import { Input } from "../../components/ui/input";
 import { Select, type SelectItem } from "../../components/ui/select";
+import { Switch } from "../../components/ui/switch";
 import { FormField } from "../../modules/ai/ui/form-field";
 import { resolveModelBindingInfo } from "./model-choices";
 import {
@@ -20,6 +21,7 @@ interface ModelsSectionProps {
   fallbackModelIds: readonly string[];
   temperatureText: string;
   maxOutputTokensText: string;
+  disableReasoning: boolean;
   saving: boolean;
   modelChoices: readonly ModelChoice[];
   modelsError: string | null;
@@ -33,6 +35,7 @@ interface ModelsSectionProps {
   onRemoveFallback: (index: number) => void;
   onChangeTemperature: (value: string) => void;
   onChangeMaxOutputTokens: (value: string) => void;
+  onChangeDisableReasoning: (value: boolean) => void;
   onManageModels: () => void;
   onPrimaryModelRef: (node: ViewRef) => void;
   onFallbackRef: (index: number, node: ViewRef | null) => void;
@@ -384,6 +387,19 @@ export function ModelsSection(props: ModelsSectionProps) {
             onChange={(value) => props.onChangeMaxOutputTokens(value)}
           />
         </FormField>
+      </View>
+
+      <View class="flex-row items-center justify-between gap-3">
+        <Text class="text-sm font-medium text-foreground">
+          {t("presets.model.disableReasoning")}
+        </Text>
+        <Switch
+          testID="preset-disable-reasoning"
+          checked={props.disableReasoning}
+          disabled={props.saving}
+          accessibilityLabel={t("presets.model.disableReasoning")}
+          onChange={(checked) => props.onChangeDisableReasoning(checked)}
+        />
       </View>
     </Card>
   );

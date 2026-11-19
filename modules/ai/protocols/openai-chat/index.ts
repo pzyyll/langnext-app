@@ -6,6 +6,7 @@ import type {
   ProtocolDefinition,
   RequestOperation,
   ResolvedRequestTarget,
+  StreamContext,
   TextGenerationRequest,
 } from "../../contracts/protocol";
 import {
@@ -17,9 +18,23 @@ import {
 import {
   isPlainObject,
   normalizeRequestRoot,
+  parseEventPayload,
   requireGeneratedText,
   requireModelId,
 } from "../shared";
+
+/** Collects text parts from Chat `content`, ignoring non-text parts such as reasoning. */
+function chatContentText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  const parts: string[] = [];
+  for (const part of content) {
+    if (isPlainObject(part) && part.type === "text" && typeof part.text === "string") {
+      parts.push(part.text);
+    }
+  }
+  return parts.join("");
+}
 
 function extractChatText(payload: Record<string, unknown>): string {
   if (!Array.isArray(payload.choices) || payload.choices.length === 0) {
@@ -29,20 +44,43 @@ function extractChatText(payload: Record<string, unknown>): string {
   if (!isPlainObject(firstChoice) || !isPlainObject(firstChoice.message)) {
     throw new ProviderProtocolError("invalid_response", t("protocol.error.missingGeneratedText"));
   }
-  const content = firstChoice.message.content;
-  if (typeof content === "string") {
-    return requireGeneratedText([content]);
+  return requireGeneratedText([chatContentText(firstChoice.message.content)]);
+}
+
+/** Reads one streamed or buffered Chat payload; events without text contribute nothing. */
+function extractChatPart(payload: Record<string, unknown>): string {
+  if (!Array.isArray(payload.choices) || payload.choices.length === 0) return "";
+  const firstChoice = payload.choices[0];
+  if (!isPlainObject(firstChoice)) return "";
+  if (isPlainObject(firstChoice.delta)) return chatContentText(firstChoice.delta.content);
+  if (isPlainObject(firstChoice.message)) return chatContentText(firstChoice.message.content);
+  return "";
+}
+
+/** Builds the Chat request body; `stream` selects the delivery mode, not the endpoint. */
+function chatBody(request: TextGenerationRequest, stream: boolean): Record<string, unknown> {
+  const modelId = requireModelId({ kind: "model", modelId: request.modelId });
+  const messages: Array<{ role: "system" | "user"; content: string }> = [];
+  if (request.system.trim().length > 0) {
+    messages.push({ role: "system", content: request.system });
   }
-  if (Array.isArray(content)) {
-    const parts: string[] = [];
-    for (const part of content) {
-      if (isPlainObject(part) && part.type === "text" && typeof part.text === "string") {
-        parts.push(part.text);
-      }
-    }
-    return requireGeneratedText(parts);
+  messages.push({ role: "user", content: request.user });
+
+  const body: Record<string, unknown> = {
+    model: modelId,
+    messages,
+    stream,
+  };
+  if (request.temperature !== null && request.temperature !== undefined) {
+    body.temperature = request.temperature;
   }
-  throw new ProviderProtocolError("invalid_response", t("protocol.error.missingGeneratedText"));
+  if (request.maxOutputTokens !== null && request.maxOutputTokens !== undefined) {
+    body.max_completion_tokens = request.maxOutputTokens;
+  }
+  if (request.disableReasoning) {
+    body.reasoning_effort = "none";
+  }
+  return body;
 }
 
 /**
@@ -85,31 +123,42 @@ export const openAIChatProtocol: ProtocolDefinition = {
     request: TextGenerationRequest,
     context: ProtocolContext,
   ): Promise<string> {
-    const modelId = requireModelId({ kind: "model", modelId: request.modelId });
-    const target = openAIChatProtocol.resolveTarget(connection, { kind: "model", modelId });
-    const messages: Array<{ role: "system" | "user"; content: string }> = [];
-    if (request.system.trim().length > 0) {
-      messages.push({ role: "system", content: request.system });
-    }
-    messages.push({ role: "user", content: request.user });
-
-    const body: Record<string, unknown> = {
-      model: modelId,
-      messages,
-      stream: false,
-    };
-    if (request.temperature !== null && request.temperature !== undefined) {
-      body.temperature = request.temperature;
-    }
-    if (request.maxOutputTokens !== null && request.maxOutputTokens !== undefined) {
-      body.max_completion_tokens = request.maxOutputTokens;
-    }
-
-    const payload = await context.http.postJson(target, body, {
+    const target = openAIChatProtocol.resolveTarget(connection, {
+      kind: "model",
+      modelId: request.modelId,
+    });
+    const payload = await context.http.postJson(target, chatBody(request, false), {
       signal: context.signal,
       timeoutMs: context.timeoutMs,
       redirect: "error",
     });
     return extractChatText(payload);
+  },
+
+  async streamText(
+    connection: ProtocolConnection,
+    request: TextGenerationRequest,
+    context: StreamContext,
+  ): Promise<string> {
+    const target = openAIChatProtocol.resolveTarget(connection, {
+      kind: "model",
+      modelId: request.modelId,
+      stream: true,
+    });
+    let text = "";
+    await context.http.postEventStream(target, chatBody(request, true), {
+      signal: context.signal,
+      timeoutMs: context.timeoutMs,
+      redirect: "error",
+      onEvent: (data) => {
+        const payload = parseEventPayload(data);
+        if (!payload) return;
+        const part = extractChatPart(payload);
+        if (part.length === 0) return;
+        text += part;
+        context.onText(text);
+      },
+    });
+    return requireGeneratedText([text]);
   },
 };

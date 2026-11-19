@@ -12,15 +12,17 @@ export interface ProtocolConnection {
 /** Catalog discovery or model endpoint target request. */
 export type RequestOperation =
   | { kind: "catalog"; queryExtras?: Record<string, string> }
-  | { kind: "model"; modelId: string };
+  | { kind: "model"; modelId: string; stream?: boolean };
 
-/** Non-streaming text-generation request executed by a registered protocol. */
+/** Text-generation request executed by a registered protocol, streamed or buffered. */
 export interface TextGenerationRequest {
   modelId: string;
   system: string;
   user: string;
   temperature?: number | null;
   maxOutputTokens?: number | null;
+  /** Asks the model to skip reasoning or thinking where the protocol can turn it off. */
+  disableReasoning?: boolean;
 }
 
 /** Resolved HTTP method, URL, and headers for one protocol operation. */
@@ -36,6 +38,15 @@ export interface JsonHttpOptions {
   redirect?: "follow" | "manual" | "error";
 }
 
+/** Event-stream call options; `timeoutMs` bounds inactivity between events, not the whole run. */
+export interface JsonEventStreamOptions extends JsonHttpOptions {
+  /**
+   * Receives one `data:` payload from a server-sent event stream. When the response is a
+   * single buffered body instead of an event stream, it receives that body once.
+   */
+  onEvent: (data: string) => void;
+}
+
 /** External JSON HTTP boundary that protocol modules call. */
 export interface JsonHttpClient {
   getJson(
@@ -47,6 +58,12 @@ export interface JsonHttpClient {
     body: Record<string, unknown>,
     options?: JsonHttpOptions,
   ): Promise<Record<string, unknown>>;
+  /** Posts a body and reads the response as server-sent events, letting the caller consume as it arrives. */
+  postEventStream(
+    target: ResolvedRequestTarget,
+    body: Record<string, unknown>,
+    options: JsonEventStreamOptions,
+  ): Promise<void>;
 }
 
 /** Per-call protocol context: transport plus cancellation and timeout policy. */
@@ -54,6 +71,12 @@ export interface ProtocolContext {
   http: JsonHttpClient;
   signal?: AbortSignal;
   timeoutMs?: number;
+}
+
+/** Streaming protocol context: the transport plus a sink that receives the text generated so far. */
+export interface StreamContext extends ProtocolContext {
+  /** Receives the complete generated text after each delta, so a consumer can replace its own copy. */
+  onText: (text: string) => void;
 }
 
 /** A registered wire API. It never receives provider identity, feature state, or UI. */
@@ -69,5 +92,14 @@ export interface ProtocolDefinition {
     connection: ProtocolConnection,
     request: TextGenerationRequest,
     context: ProtocolContext,
+  ): Promise<string>;
+  /**
+   * Sends the same request as a stream, reports text through `context.onText` as it arrives,
+   * and resolves with the complete text. Rejects with `invalid_response` when no text arrives.
+   */
+  streamText?(
+    connection: ProtocolConnection,
+    request: TextGenerationRequest,
+    context: StreamContext,
   ): Promise<string>;
 }

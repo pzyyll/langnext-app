@@ -27,6 +27,21 @@ export function isPlainObject(value: unknown): value is Record<string, unknown> 
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/**
+ * Parses one server-sent event payload. Returns null for `[DONE]` and for payloads that are
+ * not JSON objects, so protocol keepalives do not become errors.
+ */
+export function parseEventPayload(data: string): Record<string, unknown> | null {
+  if (data === "[DONE]") return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(data);
+  } catch {
+    return null;
+  }
+  return isPlainObject(parsed) ? parsed : null;
+}
+
 /** Joins extracted text parts and rejects missing or whitespace-only output. */
 export function requireGeneratedText(parts: readonly string[]): string {
   const combined = parts.join("");

@@ -1040,3 +1040,128 @@ test("text generation: NSH runtime rejects redirects on POST requests", async ()
     "http://127.0.0.1:41234/v1/chat/completions",
   ]);
 });
+
+/** Builds a server-sent event body that emits each payload in its own chunk. */
+function sseBody(payloads: readonly string[]): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const payload of payloads) {
+        controller.enqueue(encoder.encode(`data: ${payload}\n\n`));
+      }
+      controller.close();
+    },
+  });
+}
+
+test("text streaming: the client forwards deltas and resolves with the full text", async () => {
+  const harness = createBuiltInHarness(async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({}),
+    body: sseBody([
+      '{"choices":[{"delta":{"content":"Bon"}}]}',
+      '{"choices":[{"delta":{"content":"jour"}}]}',
+      "[DONE]",
+    ]),
+  }));
+
+  const partials: string[] = [];
+  const text = await harness.client.streamText(
+    { providerTypeId: "openai", protocolId: "openai-compatible", baseUrl: null, credential: "sk" },
+    { modelId: "gpt-4.1", system: "Sys", user: "Hello", disableReasoning: true },
+    { onText: (next) => partials.push(next) },
+  );
+
+  expect(text).toBe("Bonjour");
+  expect(partials).toEqual(["Bon", "Bonjour"]);
+  expect(harness.requests[0]!.url).toBe("https://api.openai.com/v1/chat/completions");
+  expect(JSON.parse(harness.requests[0]!.body!)).toMatchObject({
+    stream: true,
+    reasoning_effort: "none",
+  });
+});
+
+test("text streaming: a rejected reasoning hint is retried once without it", async () => {
+  let calls = 0;
+  const harness = createBuiltInHarness(async () => {
+    calls += 1;
+    if (calls === 1) {
+      return {
+        ok: false,
+        status: 400,
+        json: async () => ({ error: { message: "Unsupported parameter: reasoning_effort" } }),
+      };
+    }
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({}),
+      text: async () => JSON.stringify({ choices: [{ message: { content: "Bonjour" } }] }),
+    };
+  });
+
+  const text = await harness.client.streamText(
+    { providerTypeId: "openai", protocolId: "openai-compatible", baseUrl: null, credential: "sk" },
+    { modelId: "gpt-4.1", system: "Sys", user: "Hello", disableReasoning: true },
+    { onText: () => {} },
+  );
+
+  expect(text).toBe("Bonjour");
+  expect(harness.requests).toHaveLength(2);
+  expect(JSON.parse(harness.requests[0]!.body!)).toMatchObject({ reasoning_effort: "none" });
+  const retried = JSON.parse(harness.requests[1]!.body!) as Record<string, unknown>;
+  expect(retried.reasoning_effort).toBeUndefined();
+});
+
+test("text generation: a rejected reasoning hint is retried once without it", async () => {
+  let calls = 0;
+  const harness = createBuiltInHarness(async () => {
+    calls += 1;
+    if (calls === 1) {
+      return { ok: false, status: 400, json: async () => ({ error: { message: "bad field" } }) };
+    }
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ content: [{ type: "text", text: "FR" }] }),
+    };
+  });
+
+  const text = await harness.client.generateText(
+    { providerTypeId: "anthropic", protocolId: "anthropic", baseUrl: null, credential: "sk" },
+    { modelId: "claude-haiku", system: "Detect", user: "Bonjour", disableReasoning: true },
+  );
+
+  expect(text).toBe("FR");
+  expect(harness.requests).toHaveLength(2);
+  expect(JSON.parse(harness.requests[0]!.body!)).toMatchObject({
+    thinking: { type: "disabled" },
+  });
+  const retried = JSON.parse(harness.requests[1]!.body!) as Record<string, unknown>;
+  expect(retried.thinking).toBeUndefined();
+});
+
+test("text streaming: the timeout measures inactivity between chunks", async () => {
+  const harness = createBuiltInHarness(async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({}),
+    body: new ReadableStream<Uint8Array>({ start() {} }),
+  }));
+
+  await expectClientError(
+    () =>
+      harness.client.streamText(
+        {
+          providerTypeId: "openai",
+          protocolId: "openai-compatible",
+          baseUrl: null,
+          credential: "sk",
+        },
+        { modelId: "gpt-4.1", system: "Sys", user: "Hello" },
+        { timeoutMs: 10, onText: () => {} },
+      ),
+    { kind: "timeout", message: t("protocol.error.timeout") },
+  );
+});

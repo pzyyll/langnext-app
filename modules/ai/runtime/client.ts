@@ -31,6 +31,11 @@ export interface AiClientCallOptions {
   timeoutMs?: number;
 }
 
+/** Streaming call options; `onText` receives the complete text generated so far. */
+export interface AiClientStreamOptions extends AiClientCallOptions {
+  onText: (text: string) => void;
+}
+
 export interface AiClientOptions {
   registry: AiRegistry;
   http: JsonHttpClient;
@@ -56,6 +61,12 @@ export interface AiClient {
     input: AiClientInput,
     request: TextGenerationRequest,
     options?: AiClientCallOptions,
+  ): Promise<string>;
+  /** Streams one generation, reports progress through `options.onText`, and resolves with the full text. */
+  streamText(
+    input: AiClientInput,
+    request: TextGenerationRequest,
+    options: AiClientStreamOptions,
   ): Promise<string>;
 }
 
@@ -136,6 +147,28 @@ function resolveOperation(
   };
 }
 
+/**
+ * Runs one generation. When the provider rejects the reasoning hint with a bad-request status
+ * before any text arrived, it retries once without the hint, so unsupported models still work.
+ */
+async function runWithReasoningFallback(
+  request: TextGenerationRequest,
+  run: (request: TextGenerationRequest) => Promise<string>,
+  delivered: () => boolean,
+): Promise<string> {
+  try {
+    return await run(request);
+  } catch (error) {
+    const retryable =
+      request.disableReasoning === true &&
+      error instanceof ProviderProtocolError &&
+      error.kind === "invalid_request" &&
+      !delivered();
+    if (!retryable) throw error;
+    return run({ ...request, disableReasoning: false });
+  }
+}
+
 /** Creates an AI client over explicit registries and an HTTP boundary. */
 export function createAiClient(options: AiClientOptions): AiClient {
   const { registry, http } = options;
@@ -200,7 +233,35 @@ export function createAiClient(options: AiClientOptions): AiClient {
       if (!resolved.protocol.generateText) {
         throw unsupportedProtocol();
       }
-      return resolved.protocol.generateText(resolved.connection, request, callContext(callOptions));
+      return runWithReasoningFallback(
+        request,
+        (next) =>
+          resolved.protocol.generateText!(resolved.connection, next, callContext(callOptions)),
+        () => false,
+      );
+    },
+
+    async streamText(input, request, callOptions) {
+      const resolved = resolveOperation(registry, input, {
+        kind: "model",
+        modelId: request.modelId,
+      });
+      if (!resolved.protocol.streamText) {
+        throw unsupportedProtocol();
+      }
+      let delivered = false;
+      return runWithReasoningFallback(
+        request,
+        (next) =>
+          resolved.protocol.streamText!(resolved.connection, next, {
+            ...callContext(callOptions),
+            onText: (text) => {
+              delivered = true;
+              callOptions.onText(text);
+            },
+          }),
+        () => delivered,
+      );
     },
   };
 }

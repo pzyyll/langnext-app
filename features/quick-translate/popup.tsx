@@ -157,8 +157,45 @@ function PresetCardRow(props: PresetCardRowProps) {
             </Text>
           </If>
 
+          <If when={props.card().result.status === "streaming"}>
+            <View class="gap-2">
+              <Text testID="quick-translate-status" class="text-xs text-muted-foreground">
+                {t("quickTranslate.translating")}
+              </Text>
+              <View selectable>
+                <Text
+                  testID="quick-translate-result-text"
+                  class="text-sm leading-relaxed text-foreground"
+                >
+                  {(() => {
+                    const res = props.card().result;
+                    return res.status === "streaming" ? res.text : "";
+                  })()}
+                </Text>
+              </View>
+            </View>
+          </If>
+
           <If when={props.card().result.status === "error"}>
             <View class="gap-2">
+              <If
+                when={(() => {
+                  const res = props.card().result;
+                  return res.status === "error" && (res.text ?? "").length > 0;
+                })()}
+              >
+                <View selectable>
+                  <Text
+                    testID="quick-translate-partial-text"
+                    class="text-sm leading-relaxed text-foreground"
+                  >
+                    {(() => {
+                      const res = props.card().result;
+                      return res.status === "error" ? (res.text ?? "") : "";
+                    })()}
+                  </Text>
+                </View>
+              </If>
               <Text testID="quick-translate-error" role="alert" class="text-xs text-destructive">
                 {(() => {
                   const res = props.card().result;

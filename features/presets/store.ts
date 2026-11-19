@@ -48,6 +48,7 @@ function isValidStoredPreset(value: unknown): value is TranslationPreset {
   ) {
     return false;
   }
+  if (typeof engine.disableReasoning !== "boolean") return false;
 
   if (!Array.isArray(engine.templates) || engine.templates.length === 0) return false;
   const tplIds = new Set<string>();

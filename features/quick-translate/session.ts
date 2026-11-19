@@ -37,12 +37,15 @@ import {
 
 const AUTO_TRANSLATE_DEBOUNCE_MS = 500;
 const COPY_FEEDBACK_DURATION_MS = 1500;
+/** Coalesces streamed text updates so a fast provider does not re-render each token. */
+const STREAM_FLUSH_INTERVAL_MS = 50;
 
 export type CardResultState =
   | { status: "idle" }
   | { status: "loading" }
+  | { status: "streaming"; text: string }
   | { status: "success"; text: string; modelId: string }
-  | { status: "error"; message: string };
+  | { status: "error"; message: string; text?: string };
 
 export interface CardViewItem {
   id: string;
@@ -57,6 +60,7 @@ export interface CardViewItem {
 interface CardRuntime {
   abort: AbortController | null;
   copyResetTimer: ReturnType<typeof setTimeout> | null;
+  streamFlushTimer: ReturnType<typeof setTimeout> | null;
   requestSeq: number;
   activeRequestId: number;
 }
@@ -175,6 +179,7 @@ function createCardRuntime(): CardRuntime {
   return {
     abort: null,
     copyResetTimer: null,
+    streamFlushTimer: null,
     requestSeq: 0,
     activeRequestId: 0,
   };
@@ -234,6 +239,10 @@ export function createQuickTranslateSession(
     if (runtime.copyResetTimer !== null) {
       clearTimeout(runtime.copyResetTimer);
       runtime.copyResetTimer = null;
+    }
+    if (runtime.streamFlushTimer !== null) {
+      clearTimeout(runtime.streamFlushTimer);
+      runtime.streamFlushTimer = null;
     }
     runtime.requestSeq += 1;
     runtime.activeRequestId = runtime.requestSeq;
@@ -390,6 +399,10 @@ export function createQuickTranslateSession(
       clearTimeout(runtime.copyResetTimer);
       runtime.copyResetTimer = null;
     }
+    if (runtime.streamFlushTimer !== null) {
+      clearTimeout(runtime.streamFlushTimer);
+      runtime.streamFlushTimer = null;
+    }
 
     const preset = enabledPresets().find((item) => item.id === card.presetId);
     if (store.status().kind !== "ready" || !preset) {
@@ -472,6 +485,32 @@ export function createQuickTranslateSession(
     }
     const resolvedPair: { sourceLanguage: LanguageId; targetLanguage: LanguageId } = pair;
 
+    let streamedText = "";
+    const canApplyStream = () =>
+      !disposed &&
+      reqId === runtime.activeRequestId &&
+      !abort.signal.aborted &&
+      cardRuntimes.has(cardId);
+    const clearStreamTimer = () => {
+      if (runtime.streamFlushTimer !== null) {
+        clearTimeout(runtime.streamFlushTimer);
+        runtime.streamFlushTimer = null;
+      }
+    };
+    const flushStreamedText = () => {
+      clearStreamTimer();
+      if (streamedText.length === 0 || !canApplyStream()) return;
+      updateCard(cardId, (item) => ({
+        ...item,
+        result: { status: "streaming", text: streamedText },
+      }));
+    };
+    const onStreamedText = (text: string) => {
+      streamedText = text;
+      if (!canApplyStream() || runtime.streamFlushTimer !== null) return;
+      runtime.streamFlushTimer = setTimeout(flushStreamedText, STREAM_FLUSH_INTERVAL_MS);
+    };
+
     let outcome: TranslateWithPresetResult;
     try {
       outcome = await runTranslate(
@@ -482,9 +521,10 @@ export function createQuickTranslateSession(
           targetLanguage: resolvedPair.targetLanguage,
           templateId: templateResolution?.template.id ?? card.templateId ?? undefined,
         },
-        { signal: abort.signal },
+        { signal: abort.signal, onText: onStreamedText },
       );
     } catch (error) {
+      clearStreamTimer();
       if (
         disposed ||
         reqId !== runtime.activeRequestId ||
@@ -498,10 +538,12 @@ export function createQuickTranslateSession(
         result: {
           status: "error",
           message: error instanceof Error ? error.message : t("protocol.error.networkDefault"),
+          ...(streamedText.length > 0 ? { text: streamedText } : {}),
         },
       }));
       return;
     }
+    clearStreamTimer();
 
     if (
       disposed ||
@@ -531,7 +573,11 @@ export function createQuickTranslateSession(
     if (!outcome.cancelled) {
       updateCard(cardId, (item) => ({
         ...item,
-        result: { status: "error", message: outcome.error },
+        result: {
+          status: "error",
+          message: outcome.error,
+          ...(streamedText.length > 0 ? { text: streamedText } : {}),
+        },
       }));
     }
   };

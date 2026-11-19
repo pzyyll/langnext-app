@@ -20,6 +20,7 @@ function makePreset(overrides: Partial<TranslationPreset> = {}): TranslationPres
       modelIds: ["m-1"],
       temperature: null,
       maxOutputTokens: null,
+      disableReasoning: true,
       templates: [
         {
           id: "tpl-default",

@@ -29,6 +29,7 @@ function makePreset(overrides: Partial<TranslationPreset> = {}): TranslationPres
       modelIds: ["m-1"],
       temperature: null,
       maxOutputTokens: null,
+      disableReasoning: true,
       templates: [
         {
           id: "tpl-1",
@@ -112,6 +113,39 @@ test("desktop: quick popup translates on Enter, preserves Shift+Enter newline, a
   await app.type("id:quick-translate-source", "Line 2");
   expect(app.value("id:quick-translate-source")).toBe("Line 1\nLine 2");
   expect(app.requests()).toHaveLength(1);
+});
+
+test("quick popup: renders streamed text while translating and keeps partial text on failure", async () => {
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedWithPresets([makePreset()], { [POPUP_HARNESS_MODE_KEY]: "streaming" }),
+  });
+
+  await app.waitFor("id:quick-translate-source");
+  await app.type("id:quick-translate-source", "Hello");
+  await app.keyboard.press("enter");
+
+  await app.waitUntil(() => app.texts().includes("Bon"));
+  expect(app.shows("id:quick-translate-result-text")).toBe(true);
+  expect(app.texts()).toContain(t("quickTranslate.translating"));
+  expect(app.shows("id:quick-translate-copy")).toBe(false);
+
+  await app.press("id:harness-complete-stream");
+  await app.waitFor("id:quick-translate-copy");
+  expect(app.texts()).toContain("Bonjour");
+  expect(app.texts()).not.toContain(t("quickTranslate.translating"));
+
+  // A stream that stops after partial text keeps that text beside the error.
+  await app.clear("id:quick-translate-source");
+  await app.type("id:quick-translate-source", "Hello again");
+  await app.keyboard.press("enter");
+  await app.waitUntil(() => app.texts().includes("Bon"));
+  await app.press("id:harness-fail-stream");
+  await app.waitFor("id:quick-translate-error");
+  expect(app.texts()).toContain(t("protocol.error.streamInterrupted"));
+  expect(app.shows("id:quick-translate-partial-text")).toBe(true);
+  expect(app.texts()).toContain("Bon");
+  expect(app.shows("id:quick-translate-copy")).toBe(false);
 });
 
 test("quick popup: shows localized tooltips for icon-only toolbar and card action buttons", async () => {
@@ -418,6 +452,7 @@ test("preset cards: runs duplicate preset cards independently with template over
       modelIds: ["m-1"],
       temperature: null,
       maxOutputTokens: null,
+      disableReasoning: true,
       templates: [
         {
           id: "tpl-1",
@@ -529,6 +564,7 @@ test("preset cards: automatic mode schedules eligible cards on shared input and 
       modelIds: ["m-1"],
       temperature: null,
       maxOutputTokens: null,
+      disableReasoning: true,
       templates: [
         {
           id: "tpl-1",
@@ -600,6 +636,7 @@ test("preset cards: collapsed cards stay idle in automatic mode and translate wh
       modelIds: ["m-1"],
       temperature: null,
       maxOutputTokens: null,
+      disableReasoning: true,
       templates: [
         {
           id: "tpl-1",
@@ -737,6 +774,7 @@ test("quick reopen: restores valid cards, fallback template, languages, and auto
       modelIds: ["m-1"],
       temperature: null,
       maxOutputTokens: null,
+      disableReasoning: true,
       templates: [
         {
           id: "tpl-default",
@@ -927,6 +965,7 @@ function seedAutoPair(collapsed: readonly boolean[], mode = "live"): Record<stri
       modelIds: ["tr-1"],
       temperature: null,
       maxOutputTokens: null,
+      disableReasoning: true,
       templates: [
         {
           id: "tpl-1",

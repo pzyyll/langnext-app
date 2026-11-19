@@ -35,6 +35,7 @@ export type HarnessMode =
   | "out-of-order"
   | "late-after-close"
   | "language-resolution"
+  | "streaming"
   | "multi-card";
 
 export const POPUP_HARNESS_MODE_KEY = "__test.qt.popupMode";
@@ -126,6 +127,8 @@ function PopupHarnessApp(props: {
   let thirdDeferred: Deferred<TranslateWithPresetResult> | null = null;
   let fourthDeferred: Deferred<TranslateWithPresetResult> | null = null;
   let fifthDeferred: Deferred<TranslateWithPresetResult> | null = null;
+  let streamDeferred: Deferred<TranslateWithPresetResult> | null = null;
+  let streamOnText: ((text: string) => void) | null = null;
 
   const translateStub = async (
     input: TranslateWithPresetInput,
@@ -161,6 +164,13 @@ function PopupHarnessApp(props: {
         fifthDeferred = createDeferred<TranslateWithPresetResult>();
         return fifthDeferred.promise;
       }
+    }
+
+    if (props.mode === "streaming") {
+      streamDeferred = createDeferred<TranslateWithPresetResult>();
+      streamOnText = options?.onText ?? null;
+      options?.onText?.("Bon");
+      return streamDeferred.promise;
     }
 
     if (props.mode === "late-after-close") {
@@ -218,6 +228,38 @@ function PopupHarnessApp(props: {
             label="Fix Storage"
             onPress={() => presetsErrorFail.set(false)}
           />
+        </If>
+        <If when={props.mode === "streaming"}>
+          <View class="flex-row gap-1">
+            <Button
+              testID="harness-complete-stream"
+              size="xs"
+              variant="outline"
+              label="Complete Stream"
+              onPress={() => {
+                streamOnText?.("Bonjour");
+                streamDeferred?.resolve({
+                  ok: true,
+                  text: "Bonjour",
+                  modelId: "m-1",
+                  templateId: "tpl-1",
+                });
+              }}
+            />
+            <Button
+              testID="harness-fail-stream"
+              size="xs"
+              variant="outline"
+              label="Fail Stream"
+              onPress={() => {
+                streamDeferred?.resolve({
+                  ok: false,
+                  cancelled: false,
+                  error: t("protocol.error.streamInterrupted"),
+                });
+              }}
+            />
+          </View>
         </If>
         <If when={props.mode === "out-of-order"}>
           <View class="flex-row gap-1">
@@ -408,6 +450,7 @@ void Promise.all([
     modeRaw === "out-of-order" ||
     modeRaw === "late-after-close" ||
     modeRaw === "language-resolution" ||
+    modeRaw === "streaming" ||
     modeRaw === "multi-card"
       ? modeRaw
       : "live";

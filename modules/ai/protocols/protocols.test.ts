@@ -576,6 +576,197 @@ test("text generation: Gemini sends systemInstruction and contents and excludes 
   });
 });
 
+/** Serves server-sent events from an in-memory stream and records the request. */
+function sseFetch(events: readonly string[], log?: RequestLog[]): FetchLike {
+  return async (url, init) => {
+    log?.push({
+      url,
+      method: init.method,
+      headers: init.headers,
+      ...(init.body !== undefined ? { body: init.body } : {}),
+      ...(init.redirect !== undefined ? { redirect: init.redirect } : {}),
+    });
+    const encoder = new TextEncoder();
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: () => "text/event-stream" },
+      json: async () => ({}),
+      body: new ReadableStream<Uint8Array>({
+        start(controller) {
+          for (const event of events) controller.enqueue(encoder.encode(event));
+          controller.close();
+        },
+      }),
+    };
+  };
+}
+
+test("text streaming: Chat streams deltas and sends its reasoning-off field", async () => {
+  const log: RequestLog[] = [];
+  const partials: string[] = [];
+  const http = createJsonHttpClient({
+    fetchImpl: sseFetch(
+      [
+        'data: {"choices":[{"delta":{"content":"Bon"}}]}\n\n',
+        'data: {"choices":[{"delta":{"content":"jour"}}]}\n\n',
+        "data: [DONE]\n\n",
+      ],
+      log,
+    ),
+  });
+
+  const text = await openAIChatProtocol.streamText!(
+    { baseUrl: "https://proxy.example.com/ai/v1", credential: "sk-dummy" },
+    { modelId: "gpt-4.1", system: "Sys", user: "Hello", disableReasoning: true },
+    { http, onText: (next) => partials.push(next) },
+  );
+
+  expect(text).toBe("Bonjour");
+  expect(partials).toEqual(["Bon", "Bonjour"]);
+  expect(log[0]!.url).toBe("https://proxy.example.com/ai/v1/chat/completions");
+  expect(log[0]!.redirect).toBe("error");
+  expect(JSON.parse(log[0]!.body!)).toEqual({
+    model: "gpt-4.1",
+    messages: [
+      { role: "system", content: "Sys" },
+      { role: "user", content: "Hello" },
+    ],
+    stream: true,
+    reasoning_effort: "none",
+  });
+});
+
+test("text streaming: Responses streams output_text deltas and sends its reasoning-off field", async () => {
+  const log: RequestLog[] = [];
+  const http = createJsonHttpClient({
+    fetchImpl: sseFetch(
+      [
+        'data: {"type":"response.reasoning_summary_text.delta","delta":"think"}\n\n',
+        'data: {"type":"response.output_text.delta","delta":"Bon"}\n\n',
+        'data: {"type":"response.output_text.delta","delta":"jour"}\n\n',
+      ],
+      log,
+    ),
+  });
+
+  const text = await openAIResponsesProtocol.streamText!(
+    { baseUrl: "https://gateway.example.com/ai/v1", credential: "sk-dummy" },
+    { modelId: "gpt-4.1", system: "Sys", user: "Hello", disableReasoning: true },
+    { http, onText: () => {} },
+  );
+
+  expect(text).toBe("Bonjour");
+  expect(log[0]!.url).toBe("https://gateway.example.com/ai/v1/responses");
+  expect(JSON.parse(log[0]!.body!)).toEqual({
+    model: "gpt-4.1",
+    input: "Hello",
+    instructions: "Sys",
+    stream: true,
+    reasoning: { effort: "none" },
+  });
+});
+
+test("text streaming: Messages streams text deltas, ignores thinking, and disables thinking", async () => {
+  const log: RequestLog[] = [];
+  const http = createJsonHttpClient({
+    fetchImpl: sseFetch(
+      [
+        'data: {"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"hmm"}}\n\n',
+        'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Bon"}}\n\n',
+        'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"jour"}}\n\n',
+        'data: {"type":"message_stop"}\n\n',
+      ],
+      log,
+    ),
+  });
+
+  const text = await anthropicProtocol.streamText!(
+    { baseUrl: "https://proxy.example.com/deepseek", credential: "sk-ds" },
+    { modelId: "deepseek-chat", system: "Sys", user: "Hello", disableReasoning: true },
+    { http, onText: () => {} },
+  );
+
+  expect(text).toBe("Bonjour");
+  expect(log[0]!.url).toBe("https://proxy.example.com/deepseek/v1/messages");
+  expect(JSON.parse(log[0]!.body!)).toMatchObject({
+    model: "deepseek-chat",
+    stream: true,
+    thinking: { type: "disabled" },
+  });
+});
+
+test("text streaming: Gemini streams candidate parts from the SSE endpoint with thinking off", async () => {
+  const log: RequestLog[] = [];
+  const http = createJsonHttpClient({
+    fetchImpl: sseFetch(
+      [
+        'data: {"candidates":[{"content":{"parts":[{"thought":true,"text":"hmm"}]}}]}\n\n',
+        'data: {"candidates":[{"content":{"parts":[{"text":"Bon"}]}}]}\n\n',
+        'data: {"candidates":[{"content":{"parts":[{"text":"jour"}]}}]}\n\n',
+      ],
+      log,
+    ),
+  });
+
+  const text = await geminiProtocol.streamText!(
+    { baseUrl: "https://proxy.example.com/gemini", credential: "AIza-dummy" },
+    { modelId: "gemini-2.5-flash", system: "Sys", user: "Hello", disableReasoning: true },
+    { http, onText: () => {} },
+  );
+
+  expect(text).toBe("Bonjour");
+  expect(log[0]!.url).toBe(
+    "https://proxy.example.com/gemini/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse&key=AIza-dummy",
+  );
+  expect(JSON.parse(log[0]!.body!)).toEqual({
+    contents: [{ role: "user", parts: [{ text: "Hello" }] }],
+    systemInstruction: { parts: [{ text: "Sys" }] },
+    generationConfig: { thinkingConfig: { thinkingBudget: 0 } },
+  });
+});
+
+test("text streaming: a buffered body from a gateway that ignores the stream flag is read once", async () => {
+  const partials: string[] = [];
+  const http = createJsonHttpClient({
+    fetchImpl: async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({}),
+      text: async () => JSON.stringify({ choices: [{ message: { content: "Bonjour" } }] }),
+    }),
+  });
+
+  const text = await openAIChatProtocol.streamText!(
+    { baseUrl: "https://proxy.example.com/ai/v1", credential: "sk-dummy" },
+    { modelId: "gpt-4.1", system: "Sys", user: "Hello" },
+    { http, onText: (next) => partials.push(next) },
+  );
+
+  expect(text).toBe("Bonjour");
+  expect(partials).toEqual(["Bonjour"]);
+});
+
+test("text streaming: reports an interrupted provider stream as invalid_response", async () => {
+  const http = createJsonHttpClient({
+    fetchImpl: sseFetch([
+      'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Bon"}}\n\n',
+      'data: {"type":"error","error":{"type":"overloaded_error","message":"busy"}}\n\n',
+    ]),
+  });
+
+  await expect(
+    anthropicProtocol.streamText!(
+      { baseUrl: "https://proxy.example.com/v1", credential: "sk-dummy" },
+      { modelId: "m-1", system: "s", user: "u" },
+      { http, onText: () => {} },
+    ),
+  ).rejects.toMatchObject({
+    kind: "invalid_response",
+    message: t("protocol.error.streamInterrupted"),
+  });
+});
+
 test("text generation: rejects missing or blank text output as invalid_response", async () => {
   const connection = { baseUrl: "https://proxy.example.com/v1", credential: "sk-dummy" };
   const cases = [
