@@ -55,7 +55,8 @@ export const AUTO_LANGUAGE = "auto" as const;
 export const NO_PREFERENCE_TARGET = "__none__" as const;
 
 export type SourceLanguageId = LanguageId | typeof AUTO_LANGUAGE;
-export type TargetLanguageId = LanguageId;
+/** A concrete target or the automatic target that resolves from the saved language preferences. */
+export type TargetLanguageId = LanguageId | typeof AUTO_LANGUAGE;
 
 /** True for a concrete supported language ID (never `auto`). */
 export function isLanguageId(value: unknown): value is LanguageId {

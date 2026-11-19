@@ -2,13 +2,13 @@ import { t } from "nsh/i18n";
 import {
   AUTO_LANGUAGE,
   NO_PREFERENCE_TARGET,
-  type LanguageId,
   type SourceLanguageId,
+  type TargetLanguageId,
 } from "./languages";
 import { formatTemperature } from "./temperature";
 import type { PromptTemplate, SavePresetInput, TranslationPreset } from "./types";
 
-export type TargetLanguageValue = LanguageId | typeof NO_PREFERENCE_TARGET;
+export type TargetLanguageValue = TargetLanguageId | typeof NO_PREFERENCE_TARGET;
 
 /** Editable form state for a new or existing translation preset. */
 export interface PresetDraft {

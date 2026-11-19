@@ -1,10 +1,11 @@
 import { expect, test } from "nsh/test";
 import { ProviderProtocolError } from "../../modules/ai/contracts/errors";
 import type { TextGenerationRequest } from "../../modules/ai/contracts/protocol";
+import type { AiClientInput } from "../../modules/ai/runtime/client";
 import { detectLanguage } from "./detect";
 import type { LanguageDetectionSettings } from "./settings";
 
-const CONNECTION = {
+const CONNECTION: AiClientInput = {
   providerTypeId: "openai",
   protocolId: "openai-responses",
   baseUrl: "https://api.example.com/v1",
