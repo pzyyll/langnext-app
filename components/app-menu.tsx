@@ -1,8 +1,9 @@
 import { appInfo, Image, signal, Text, token, View } from "nsh";
-import { Button, Dialog, Menu, MenuItem } from "nsh/base";
+import { Button, Dialog } from "nsh/base";
 import { t } from "nsh/i18n";
 import appIcon from "../assets/logos/icon.svg";
 import { motion } from "./motion";
+import { Menu, MenuItem } from "./ui/menu";
 
 interface AboutDialogProps {
   open: boolean;
@@ -65,7 +66,7 @@ export function AppMenu() {
     <View desktop={{ windowDrag: false }}>
       <Menu
         open={menuOpen()}
-        onOpenChange={({ open }) => menuOpen.set(open)}
+        onOpenChange={(open) => menuOpen.set(open)}
         onClose={() => {
           if (aboutPending) {
             aboutPending = false;
@@ -74,9 +75,7 @@ export function AppMenu() {
         }}
         placement="bottom"
         align="start"
-        popupClass={`min-w-40 rounded-xl border border-border bg-popover p-1 shadow-lg ${motion.popup}`}
-        popupStartingClass={motion.popupHidden}
-        popupEndingClass={motion.popupHidden}
+        popupClass="min-w-40"
         trigger={
           <Button
             testID="app-menu-trigger"
@@ -96,13 +95,11 @@ export function AppMenu() {
       >
         <MenuItem
           accessibilityLabel={t("app.menu.about")}
+          label={t("app.menu.about")}
           onSelect={() => {
             aboutPending = true;
           }}
-          class={`h-8 justify-center rounded-lg px-3 hover:bg-accent focus:bg-accent active:bg-border ${motion.navigationFeedback}`}
-        >
-          <Text class="text-sm text-popover-foreground">{t("app.menu.about")}</Text>
-        </MenuItem>
+        />
       </Menu>
       <AboutDialog open={aboutOpen()} onOpenChange={(open) => aboutOpen.set(open)} />
     </View>

@@ -408,13 +408,14 @@ quickTranslate:
   presetsLoading: 正在加载预设…
   noEnabledPresets: 暂无已启用的预设，请在“预设”中启用。
   addPreset: 添加预设
+  languages: "语言（%{source} → %{target}）"
+  sourceMenuItem: "源语言：%{language}"
+  targetMenuItem: "目标语言：%{language}"
   templateLabel: 提示词模板
   collapseCard: 折叠卡片
   expandCard: 展开卡片
   removeCard: 移除卡片
-  translate: 翻译
   translating: 正在翻译…
-  swapLanguages: 交换语言
   enableAutoTranslate: 开启自动翻译
   disableAutoTranslate: 关闭自动翻译
   copy: 复制

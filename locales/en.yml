@@ -408,13 +408,14 @@ quickTranslate:
   presetsLoading: Loading presets…
   noEnabledPresets: No enabled presets. Enable a preset in Presets.
   addPreset: Add preset
+  languages: "Languages (%{source} → %{target})"
+  sourceMenuItem: "Source: %{language}"
+  targetMenuItem: "Target: %{language}"
   templateLabel: Template
   collapseCard: Collapse card
   expandCard: Expand card
   removeCard: Remove card
-  translate: Translate
   translating: Translating…
-  swapLanguages: Swap languages
   enableAutoTranslate: Enable automatic translation
   disableAutoTranslate: Disable automatic translation
   copy: Copy

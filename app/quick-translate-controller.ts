@@ -20,7 +20,7 @@ export const QUICK_TRANSLATE_WINDOW_ID = "quick-translate";
 export const QUICK_TRANSLATE_SHORTCUT = "ctrl+shift+t";
 
 export const POPUP_DEFAULT_SIZE = { width: 420, height: 360 } as const;
-export const POPUP_MIN_SIZE = { width: 340, height: 280 } as const;
+export const POPUP_MIN_SIZE = { width: 340, height: 230 } as const;
 
 export type QuickTranslateShortcutBinding = Pick<GlobalShortcutModule, "register" | "unregister">;
 

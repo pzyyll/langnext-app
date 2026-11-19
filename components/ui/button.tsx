@@ -35,8 +35,9 @@ const VARIANT_CLASSES: Record<ButtonVariant, string> = {
   secondary:
     "border border-border bg-secondary hover:bg-accent active:bg-border focus-visible:ring-2 focus-visible:ring-ring",
   outline:
-    "border border-input bg-background hover:bg-accent active:bg-border focus-visible:ring-2 focus-visible:ring-ring",
-  ghost: "hover:bg-accent active:bg-border focus-visible:ring-2 focus-visible:ring-ring",
+    "border border-input bg-background hover:bg-accent active:bg-border selected:bg-accent focus-visible:ring-2 focus-visible:ring-ring",
+  ghost:
+    "hover:bg-accent active:bg-border selected:bg-accent focus-visible:ring-2 focus-visible:ring-ring",
   destructive:
     "border border-destructive bg-destructive hover:bg-destructive/90 active:bg-destructive/80 focus-visible:ring-2 focus-visible:ring-ring",
   "destructive-outline":

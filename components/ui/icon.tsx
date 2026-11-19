@@ -5,12 +5,14 @@ import arrowUpIcon from "../../assets/icons/arrow-up.svg";
 import checkCircleIcon from "../../assets/icons/check-circle.svg";
 import checkIcon from "../../assets/icons/check.svg";
 import chevronDownIcon from "../../assets/icons/chevron-down.svg";
+import chevronRightIcon from "../../assets/icons/chevron-right.svg";
 import chevronUpIcon from "../../assets/icons/chevron-up.svg";
 import closeIcon from "../../assets/icons/close.svg";
 import copyIcon from "../../assets/icons/copy.svg";
 import cubeOutlineIcon from "../../assets/icons/cube-outline.svg";
 import deleteIcon from "../../assets/icons/delete.svg";
 import editIcon from "../../assets/icons/edit.svg";
+import englishIcon from "../../assets/icons/icon-park-outline--english.svg";
 import filePdfIcon from "../../assets/icons/file-pdf.svg";
 import fileTextIcon from "../../assets/icons/file-text.svg";
 import lightningSolidIcon from "../../assets/icons/lightning-solid.svg";
@@ -31,12 +33,14 @@ const ICONS = {
   check: checkIcon,
   "check-circle": checkCircleIcon,
   "chevron-down": chevronDownIcon,
+  "chevron-right": chevronRightIcon,
   "chevron-up": chevronUpIcon,
   close: closeIcon,
   copy: copyIcon,
   "cube-outline": cubeOutlineIcon,
   delete: deleteIcon,
   edit: editIcon,
+  english: englishIcon,
   "file-pdf": filePdfIcon,
   "file-text": fileTextIcon,
   lightning: lightningIcon,

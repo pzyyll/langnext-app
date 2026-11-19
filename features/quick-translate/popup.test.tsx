@@ -79,6 +79,8 @@ test("desktop: quick popup translates on Enter, preserves Shift+Enter newline, a
   });
 
   await app.waitFor("id:quick-translate-source");
+  expect(app.shows("id:quick-translate-submit")).toBe(false);
+  expect(app.shows("id:quick-translate-swap-languages")).toBe(false);
   expect(app.shows("id:quick-translate-copy")).toBe(false);
 
   // Whitespace-only Enter shows blank validation error and sends 0 requests.
@@ -139,7 +141,9 @@ test("desktop: quick popup handles no enabled presets, preset load error with re
   });
   await disabledOnly.waitFor("id:quick-translate-no-presets");
   expect(disabledOnly.texts()).toContain(t("quickTranslate.noEnabledPresets"));
-  expect(disabledOnly.enabled("id:quick-translate-submit")).toBe(false);
+  expect(disabledOnly.shows("id:quick-translate-submit")).toBe(false);
+  await disabledOnly.type("id:quick-translate-source", "Hello");
+  await disabledOnly.keyboard.press("enter");
   expect(disabledOnly.requests()).toHaveLength(0);
 
   const loadErr = await open(POPUP_HARNESS, {
@@ -169,7 +173,7 @@ test("desktop: quick popup handles no enabled presets, preset load error with re
   });
   await copyErr.waitFor("id:quick-translate-source");
   await copyErr.type("id:quick-translate-source", "Hello");
-  await copyErr.press("id:quick-translate-submit");
+  await copyErr.keyboard.press("enter");
   await copyErr.waitFor("id:quick-translate-copy");
   await copyErr.press("id:quick-translate-copy");
   await copyErr.waitFor("id:quick-translate-copy-error");
@@ -177,7 +181,7 @@ test("desktop: quick popup handles no enabled presets, preset load error with re
   expect(copyErr.texts()).toContain("Bonjour");
 });
 
-test("quick popup: debounces 500ms opt-in auto-translate, keeps preset change manual, and lets Translate bypass timer", async () => {
+test("quick popup: debounces 500ms opt-in auto-translate, preserves Shift+Enter newline, keeps preset change manual, and lets Enter bypass timer", async () => {
   const secondPreset = makePreset({
     id: "preset-2",
     name: "Preset Two",
@@ -210,22 +214,25 @@ test("quick popup: debounces 500ms opt-in auto-translate, keeps preset change ma
   await app.waitFor("id:quick-translate-copy");
   expect(app.requests()).toHaveLength(1);
 
-  // In automatic mode, Enter inserts newline and does not submit early.
-  await app.keyboard.press("enter");
+  // In automatic mode, Shift+Enter inserts newline without submitting early.
+  await app.keyboard.press("shift+enter");
   expect(app.value("id:quick-translate-source")).toBe("Hello!\n");
   await app.clock!.runFor(499);
   expect(app.requests()).toHaveLength(1);
   await app.clock!.runFor(1);
   expect(app.requests()).toHaveLength(2);
 
-  // Language change re-runs after 500 ms.
-  await app.press("id:quick-translate-target-language");
-  await app.waitFor("role:option[Japanese]");
-  await app.press("role:option[Japanese]");
+  // Language change from title-bar menu re-runs after 500 ms.
+  await app.press("id:quick-translate-language-menu");
+  await app.waitFor("id:quick-translate-target-language");
+  await app.hover("id:quick-translate-target-language");
+  await app.waitFor("id:quick-translate-target-language-ja");
+  await app.press("id:quick-translate-target-language-ja");
   expect(app.shows("id:quick-translate-copy")).toBe(false);
-  await app.clock!.runFor(499);
   expect(app.requests()).toHaveLength(2);
-  await app.clock!.runFor(1);
+  await app.clock!.runFor(200);
+  expect(app.requests()).toHaveLength(2);
+  await app.clock!.runFor(350);
   expect(app.requests()).toHaveLength(3);
 
   // Changing preset alone invalidates result and does NOT trigger translation.
@@ -236,9 +243,9 @@ test("quick popup: debounces 500ms opt-in auto-translate, keeps preset change ma
   await app.clock!.runFor(1000);
   expect(app.requests()).toHaveLength(3);
 
-  // Translate button bypasses debounce timer without a duplicate second call.
+  // Enter in input box bypasses debounce timer without a duplicate second call.
   await app.type("id:quick-translate-source", " Go");
-  await app.press("id:quick-translate-submit");
+  await app.keyboard.press("enter");
   await app.waitFor("id:quick-translate-copy");
   expect(app.requests()).toHaveLength(4);
   await app.clock!.runFor(600);
@@ -255,13 +262,13 @@ test("quick popup: ignores out-of-order stale completion and clears state and ti
 
   await outOfOrder.waitFor("id:quick-translate-source");
   await outOfOrder.type("id:quick-translate-source", "First");
-  await outOfOrder.press("id:quick-translate-submit");
+  await outOfOrder.keyboard.press("enter");
 
   await outOfOrder.type("id:quick-translate-source", " Second");
   await outOfOrder.waitUntil(() =>
     outOfOrder.texts().some((line) => line.includes("aborts=aborted-1")),
   );
-  await outOfOrder.press("id:quick-translate-submit");
+  await outOfOrder.keyboard.press("enter");
 
   await outOfOrder.press("id:harness-resolve-second");
   await outOfOrder.waitUntil(() => outOfOrder.texts().includes("Result 2"));
@@ -281,7 +288,7 @@ test("quick popup: ignores out-of-order stale completion and clears state and ti
   });
   await lateClose.waitFor("id:quick-translate-source");
   await lateClose.type("id:quick-translate-source", "Closing draft");
-  await lateClose.press("id:quick-translate-submit");
+  await lateClose.keyboard.press("enter");
   await lateClose.press("id:harness-toggle-open");
   await lateClose.press("id:harness-resolve-late");
   await lateClose.clock!.runFor(1000);
@@ -414,7 +421,7 @@ test("preset cards: runs duplicate preset cards independently with template over
   expect(app.texts().some((line) => line.includes("calls=0|"))).toBe(true);
 
   await app.type("id:quick-translate-source", "Hello world");
-  await app.press("id:quick-translate-submit");
+  await app.keyboard.press("enter");
   await app.waitUntil(() => app.texts().some((line) => line.includes("calls=2|")));
 
   // Complete card 2 BEFORE card 1 fails: card order stays card-1 then card-2.
@@ -531,8 +538,11 @@ test("preset cards: automatic mode schedules eligible cards on shared input and 
   expect(autoApp.requests()).toHaveLength(2);
 
   // Shared language remains preserved across preset card add/change.
-  expect(autoApp.shows("id:quick-translate-source-language >> text:English")).toBe(true);
-  expect(autoApp.shows("id:quick-translate-target-language >> text:French")).toBe(true);
+  expect(autoApp.shows("label:Languages (English → French)")).toBe(true);
+  await autoApp.press("id:quick-translate-language-menu");
+  await autoApp.waitFor("id:quick-translate-source-language >> text:Source: English");
+  expect(autoApp.shows("id:quick-translate-target-language >> text:Target: French")).toBe(true);
+  await autoApp.keyboard.press("escape");
 
   // Change template override ONLY on card 1 -> runs ONLY card 1 (total 3 requests).
   await autoApp.press("id:quick-translate-card-card-1 >> id:quick-translate-template");
@@ -617,12 +627,12 @@ test("preset cards: collapsed cards stay idle in automatic mode and translate wh
   await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-result-text");
   expect(app.requests()).toHaveLength(2);
 
-  // Every card collapsed: nothing runs on shared input and the Translate button has no target.
+  // Every card collapsed: nothing runs on shared input or manual Enter.
   await app.press("id:quick-translate-card-card-1 >> id:quick-translate-collapse");
   await app.press("id:quick-translate-card-card-2 >> id:quick-translate-collapse");
-  expect(app.enabled("id:quick-translate-submit")).toBe(false);
   await app.clear("id:quick-translate-source");
   await app.type("id:quick-translate-source", "Next line");
+  await app.keyboard.press("enter");
   await app.clock!.runFor(500);
   expect(app.requests()).toHaveLength(2);
 });
@@ -660,7 +670,7 @@ test("preset cards: manual translation skips collapsed cards and translates them
 
   await app.type("id:quick-translate-source", "Hello");
   await app.press("id:quick-translate-card-card-2 >> id:quick-translate-collapse");
-  await app.press("id:quick-translate-submit");
+  await app.submit("id:quick-translate-source");
   await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-copy");
   expect(app.requests()).toHaveLength(1);
 
@@ -670,10 +680,11 @@ test("preset cards: manual translation skips collapsed cards and translates them
   expect(app.requests()).toHaveLength(2);
   await app.press("id:quick-translate-card-card-2 >> id:quick-translate-collapse");
 
-  // With every card collapsed the Translate button has nothing to run.
+  // With every card collapsed Enter has nothing to run.
   await app.press("id:quick-translate-card-card-1 >> id:quick-translate-collapse");
   expect(app.shows("id:quick-translate-card-card-1 >> label:Expand card")).toBe(true);
-  expect(app.enabled("id:quick-translate-submit")).toBe(false);
+  await app.submit("id:quick-translate-source");
+  expect(app.requests()).toHaveLength(2);
 });
 
 test("quick reopen: restores valid cards, fallback template, languages, and auto mode without stale text or requests, and handles corrupt or failing storage", async () => {
@@ -722,12 +733,16 @@ test("quick reopen: restores valid cards, fallback template, languages, and auto
   });
 
   await session1.waitFor("id:quick-translate-card-card-1");
-  await session1.press("id:quick-translate-source-language");
-  await session1.waitFor("role:option[English]");
-  await session1.press("role:option[English]");
-  await session1.press("id:quick-translate-target-language");
-  await session1.waitFor("role:option[Japanese]");
-  await session1.press("role:option[Japanese]");
+  await session1.press("id:quick-translate-language-menu");
+  await session1.waitFor("id:quick-translate-source-language");
+  await session1.hover("id:quick-translate-source-language");
+  await session1.waitFor("id:quick-translate-source-language-en");
+  await session1.press("id:quick-translate-source-language-en");
+  await session1.press("id:quick-translate-language-menu");
+  await session1.waitFor("id:quick-translate-target-language");
+  await session1.hover("id:quick-translate-target-language");
+  await session1.waitFor("id:quick-translate-target-language-ja");
+  await session1.press("id:quick-translate-target-language-ja");
   await session1.press("id:harness-toggle-auto");
   await session1.press("id:quick-translate-card-card-1 >> id:quick-translate-template");
   await session1.waitFor("role:option[Formal]");
@@ -770,8 +785,11 @@ test("quick reopen: restores valid cards, fallback template, languages, and auto
 
   await session2.waitFor("id:quick-translate-card-card-1");
   expect(session2.shows("id:quick-translate-card-card-2")).toBe(false);
-  expect(session2.shows("id:quick-translate-source-language >> text:English")).toBe(true);
-  expect(session2.shows("id:quick-translate-target-language >> text:Japanese")).toBe(true);
+  expect(session2.shows("label:Languages (English → Japanese)")).toBe(true);
+  await session2.press("id:quick-translate-language-menu");
+  await session2.waitFor("id:quick-translate-source-language >> text:Source: English");
+  expect(session2.shows("id:quick-translate-target-language >> text:Target: Japanese")).toBe(true);
+  await session2.keyboard.press("escape");
   expect(session2.texts()).toContain("Disable automatic translation");
   expect(session2.value("id:quick-translate-source")).toBe("");
   expect(session2.shows("id:quick-translate-result-text")).toBe(false);
@@ -787,9 +805,11 @@ test("quick reopen: restores valid cards, fallback template, languages, and auto
 
   // Failed explicit save surfaces localized error alert without claiming saved.
   await session2.press("id:harness-toggle-prefs-write-fail");
-  await session2.press("id:quick-translate-target-language");
-  await session2.waitFor("role:option[French]");
-  await session2.press("role:option[French]");
+  await session2.press("id:quick-translate-language-menu");
+  await session2.waitFor("id:quick-translate-target-language");
+  await session2.hover("id:quick-translate-target-language");
+  await session2.waitFor("id:quick-translate-target-language-fr");
+  await session2.press("id:quick-translate-target-language-fr");
   await session2.waitFor("id:quick-translate-preferences-error");
   expect(session2.texts()).toContain(t("quickTranslate.error.savePreferences"));
 

@@ -4,6 +4,7 @@ import { t } from "nsh/i18n";
 import { Button } from "../components/ui/button";
 import { Icon } from "../components/ui/icon";
 import { toast } from "../components/ui/toast";
+import { QuickTranslateLanguageMenu } from "../features/quick-translate/language-menu";
 import { QuickTranslatePopup } from "../features/quick-translate/popup";
 import {
   autoTranslatePreference,
@@ -11,6 +12,7 @@ import {
   registerDoubleCopyRuntime,
   saveQuickTranslatePopupState,
 } from "../features/quick-translate/preferences";
+import { createQuickTranslateSession } from "../features/quick-translate/session";
 import type { DoubleCopyBinding } from "../platform/quick-translate";
 import { nativeDoubleCopyBinding, readCursorAnchor } from "../platform/quick-translate-native";
 import {
@@ -119,6 +121,13 @@ export function registerQuickTranslateDoubleCopy(
 function QuickTranslateWindowBody(props: { controller: QuickTranslateController }) {
   const headerHeight = signal(0);
   const contentHeight = signal(0);
+  const session = createQuickTranslateSession({
+    sourceText: props.controller.sourceText,
+    sourceDeliverySeq: props.controller.sourceDeliverySeq,
+    onSourceTextChange: (text) => props.controller.setSourceText(text),
+    autoTranslate: props.controller.autoTranslate,
+    onOverlayOpenChange: (menuId, open) => props.controller.setMenuOpen(menuId, open),
+  });
   // On Windows the first layout can arrive before the native window state.
   const readyToFit = computed(() => {
     const state = props.controller.attachedWindow()?.state();
@@ -148,13 +157,19 @@ function QuickTranslateWindowBody(props: { controller: QuickTranslateController 
         }}
       >
         <Text class="text-xs font-medium text-foreground">{t("quickTranslate.title")}</Text>
-        <View class="flex-row items-center gap-1">
+        <View desktop={{ windowDrag: false }} class="flex-row items-center gap-1">
+          <QuickTranslateLanguageMenu
+            sourceLanguage={session.sourceLanguage()}
+            targetLanguage={session.targetLanguage()}
+            onSelectSourceLanguage={(language) => session.handleSourceLanguageChange(language)}
+            onSelectTargetLanguage={(language) => session.handleTargetLanguageChange(language)}
+            onOpenChange={(open) => session.notifyOverlayOpenChange("language-menu", open)}
+          />
           <Button
             testID="quick-translate-auto-toggle"
             variant="ghost"
             size="icon-sm"
             selected={props.controller.autoTranslate()}
-            class={props.controller.autoTranslate() ? "bg-accent" : undefined}
             tooltip={
               props.controller.autoTranslate()
                 ? t("quickTranslate.disableAutoTranslate")
@@ -178,7 +193,6 @@ function QuickTranslateWindowBody(props: { controller: QuickTranslateController 
             variant="ghost"
             size="icon-sm"
             selected={props.controller.isPinned()}
-            class={props.controller.isPinned() ? "bg-accent" : undefined}
             tooltip={
               props.controller.isPinned() ? t("quickTranslate.unpin") : t("quickTranslate.pin")
             }
@@ -211,11 +225,7 @@ function QuickTranslateWindowBody(props: { controller: QuickTranslateController 
         {/* Measure the natural content height, not the scroll viewport. */}
         <View class="shrink-0" onLayout={({ bounds }) => contentHeight.set(bounds.size.height)}>
           <QuickTranslatePopup
-            sourceText={props.controller.sourceText}
-            sourceDeliverySeq={props.controller.sourceDeliverySeq}
-            onSourceTextChange={(text) => props.controller.setSourceText(text)}
-            autoTranslate={props.controller.autoTranslate}
-            onOverlayOpenChange={(menuId, open) => props.controller.setMenuOpen(menuId, open)}
+            session={session}
             onAttachSourceInput={(node) => props.controller.attachSourceInput(node)}
           />
         </View>

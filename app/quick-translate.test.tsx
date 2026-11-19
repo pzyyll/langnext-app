@@ -106,7 +106,7 @@ test("quick window fits cards and translation content within the display work ar
   await app.waitUntil(() => Math.abs(height() - compactHeight) < 1);
 
   await app.type("id:quick-translate-source", "Hello");
-  await app.press("id:quick-translate-submit");
+  await app.keyboard.press("enter");
   await app.waitFor(`${firstCard} >> id:quick-translate-result-text`);
   // The test driver's WindowState exposes the display ID; read its work area in the app.
   const work = app.texts().find((value) => value.startsWith("quick-work-area:"))!;
@@ -201,21 +201,67 @@ test("desktop: quick window pins, survives focus switch, resets pin on close, an
   expect(app.window("main").state()?.visible).toBe(true);
 });
 
-test("desktop: quick window Select overlay does not trigger blur dismissal and Escape dismisses menu before closing window", async () => {
+test("desktop: quick window Language menu overlay does not trigger blur dismissal and Escape dismisses menu before closing window", async () => {
+  const seeded = makeSeedStorage({
+    channels: [makeChannel({ adapterId: "openai-compatible", enabled: true })],
+    models: [makeModel({ enabled: true })],
+    credentials: { "ch-1": "sk-test" },
+  });
   const app = await open(HARNESS_ENTRY, {
     ...viewport,
-    storage: { "settings.language": "en" },
+    storage: {
+      ...seeded,
+      [PRESETS_STORAGE_KEY]: JSON.stringify({ version: 1, items: [quickPreset] }),
+      "settings.language": "en",
+    },
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": {
+        status: 200,
+        body: { choices: [{ message: { content: "こんにちは" } }] },
+      },
+    },
   });
 
   await app.press("id:harness-tray-quick-translate");
+  await app.waitFor("id:quick-translate-language-menu");
+  await app.press("id:quick-translate-language-menu");
   await app.waitFor("id:quick-translate-source-language");
-  await app.press("id:quick-translate-source-language");
-  await app.waitFor("role:option[English]");
+  expect(app.window("quick-translate").state()?.visible).toBe(true);
 
+  // Hovering a submenu opens language options inside the popup without blur dismissal.
+  await app.hover("id:quick-translate-source-language");
+  await app.waitFor("id:quick-translate-source-language-en");
+  expect(app.window("quick-translate").state()?.visible).toBe(true);
+
+  // First Escape closes submenu, second closes menu; window stays open throughout.
+  await app.keyboard.press("escape");
+  await app.waitUntil(() => !app.shows("id:quick-translate-source-language-en"));
+  expect(app.shows("id:quick-translate-source-language")).toBe(true);
   expect(app.window("quick-translate").state()?.visible).toBe(true);
 
   await app.keyboard.press("escape");
-  await app.waitUntil(() => !app.shows("role:option[English]"));
+  await app.waitUntil(() => !app.shows("id:quick-translate-source-language"));
+  expect(app.window("quick-translate").state()?.visible).toBe(true);
+
+  // Reopen menu, pick a target language via submenu, and translate by pressing Enter.
+  await app.press("id:quick-translate-language-menu");
+  await app.waitFor("id:quick-translate-target-language");
+  await app.hover("id:quick-translate-target-language");
+  await app.waitFor("id:quick-translate-target-language-ja");
+  await app.press("id:quick-translate-target-language-ja");
+  await app.waitUntil(() => !app.shows("id:quick-translate-target-language"));
+  expect(app.shows("label:Languages (English → Japanese)")).toBe(true);
+
+  await app.type("id:quick-translate-source", "Hello");
+  await app.keyboard.press("enter");
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-result-text");
+  expect(app.texts()).toContain("こんにちは");
+
+  // Reopen menu without submenu and confirm Escape dismisses menu, then Escape closes window.
+  await app.press("id:quick-translate-language-menu");
+  await app.waitFor("id:quick-translate-source-language");
+  await app.keyboard.press("escape");
+  await app.waitUntil(() => !app.shows("id:quick-translate-source-language"));
   expect(app.window("quick-translate").state()?.visible).toBe(true);
 
   await app.keyboard.press("escape");

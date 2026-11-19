@@ -17,7 +17,9 @@ import type {
   TranslateWithPresetResult,
 } from "../translate";
 import { translateWithPreset } from "../translate";
+import { QuickTranslateLanguageMenu } from "../language-menu";
 import { QuickTranslatePopup } from "../popup";
+import { createQuickTranslateSession, type QuickTranslateSessionOptions } from "../session";
 
 export type HarnessMode =
   | "live"
@@ -42,6 +44,27 @@ function createDeferred<T>(): Deferred<T> {
     resolve = res;
   });
   return { promise, resolve };
+}
+
+function PopupSessionView(props: QuickTranslateSessionOptions) {
+  const session = createQuickTranslateSession(props);
+  return (
+    <Card class="min-h-0 flex-1 overflow-hidden p-0">
+      <View class="shrink-0 flex-row items-center justify-between border-b border-border px-3 py-1.5">
+        <Text class="text-xs font-medium text-foreground">{t("quickTranslate.title")}</Text>
+        <QuickTranslateLanguageMenu
+          sourceLanguage={session.sourceLanguage()}
+          targetLanguage={session.targetLanguage()}
+          onSelectSourceLanguage={(language) => session.handleSourceLanguageChange(language)}
+          onSelectTargetLanguage={(language) => session.handleTargetLanguageChange(language)}
+          onOpenChange={(open) => session.notifyOverlayOpenChange("language-menu", open)}
+        />
+      </View>
+      <Scroll class="min-h-0 flex-1">
+        <QuickTranslatePopup session={session} />
+      </Scroll>
+    </Card>
+  );
 }
 
 function PopupHarnessApp(props: {
@@ -298,19 +321,15 @@ function PopupHarnessApp(props: {
       </View>
 
       <If when={popupOpen()}>
-        <Card class="min-h-0 flex-1 overflow-hidden p-0">
-          <Scroll class="min-h-0 flex-1">
-            <QuickTranslatePopup
-              sourceText={() => sourceText()}
-              onSourceTextChange={(text) => sourceText.set(text)}
-              autoTranslate={() => props.prefs.autoTranslate()}
-              presetsStore={store}
-              preferences={props.prefs}
-              translate={translateStub}
-              clipboard={clipboardStub}
-            />
-          </Scroll>
-        </Card>
+        <PopupSessionView
+          sourceText={() => sourceText()}
+          onSourceTextChange={(text) => sourceText.set(text)}
+          autoTranslate={() => props.prefs.autoTranslate()}
+          presetsStore={store}
+          preferences={props.prefs}
+          translate={translateStub}
+          clipboard={clipboardStub}
+        />
       </If>
     </View>
   );
