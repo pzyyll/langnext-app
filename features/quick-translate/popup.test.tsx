@@ -532,6 +532,140 @@ test("preset cards: automatic mode schedules eligible cards on shared input and 
   expect(autoApp.requests()).toHaveLength(3);
 });
 
+test("preset cards: collapsed cards stay idle in automatic mode and translate when expanded", async () => {
+  const twoTemplatePreset = makePreset({
+    id: "preset-2",
+    name: "Preset Beta",
+    engine: {
+      kind: "ai",
+      modelIds: ["m-1"],
+      temperature: null,
+      maxOutputTokens: null,
+      templates: [
+        {
+          id: "tpl-1",
+          name: "Default",
+          systemTemplate: "Default {{source_language}}->{{target_language}}",
+          userTemplate: "{{text}}",
+        },
+        {
+          id: "tpl-2",
+          name: "Formal",
+          systemTemplate: "Formal {{source_language}}->{{target_language}}",
+          userTemplate: "Formal: {{text}}",
+        },
+      ],
+      defaultTemplateId: "tpl-1",
+    },
+  });
+
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    clock: {},
+    storage: seedWithPresets([
+      makePreset({
+        id: "preset-1",
+        name: "Preset Alpha",
+        sourceLanguage: "en",
+        targetLanguage: "fr",
+      }),
+      twoTemplatePreset,
+    ]),
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": {
+        status: 200,
+        body: { choices: [{ message: { content: "Bonjour" } }] },
+      },
+    },
+  });
+
+  await app.waitFor("id:quick-translate-card-card-1");
+  await app.press("id:harness-toggle-auto");
+  await app.press("id:quick-translate-add-preset");
+  await app.waitFor("role:menuitem[Preset Beta]");
+  await app.press("role:menuitem[Preset Beta]");
+  await app.waitFor("id:quick-translate-card-card-2");
+
+  // A collapsed card ignores template overrides and shared-input auto translation.
+  await app.press("id:quick-translate-card-card-2 >> id:quick-translate-collapse");
+  await app.press("id:quick-translate-card-card-2 >> id:quick-translate-template");
+  await app.waitFor("role:option[Formal]");
+  await app.press("role:option[Formal]");
+  await app.type("id:quick-translate-source", "Good morning");
+  await app.clock!.runFor(500);
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-copy");
+  expect(app.requests()).toHaveLength(1);
+
+  // Expanding the collapsed card puts it back to work on its own.
+  await app.press("id:quick-translate-card-card-2 >> id:quick-translate-collapse");
+  await app.waitFor("id:quick-translate-card-card-2 >> id:quick-translate-copy");
+  expect(app.requests()).toHaveLength(2);
+
+  // Expanding a card that already holds a current result does not resend it.
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-collapse");
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-collapse");
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-result-text");
+  expect(app.requests()).toHaveLength(2);
+
+  // Every card collapsed: nothing runs on shared input and the Translate button has no target.
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-collapse");
+  await app.press("id:quick-translate-card-card-2 >> id:quick-translate-collapse");
+  expect(app.enabled("id:quick-translate-submit")).toBe(false);
+  await app.clear("id:quick-translate-source");
+  await app.type("id:quick-translate-source", "Next line");
+  await app.clock!.runFor(500);
+  expect(app.requests()).toHaveLength(2);
+});
+
+test("preset cards: manual translation skips collapsed cards and leaves them idle on expand", async () => {
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedWithPresets([
+      makePreset({
+        id: "preset-1",
+        name: "Preset Alpha",
+        sourceLanguage: "en",
+        targetLanguage: "fr",
+      }),
+      makePreset({
+        id: "preset-2",
+        name: "Preset Beta",
+        sourceLanguage: "en",
+        targetLanguage: "fr",
+      }),
+    ]),
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": {
+        status: 200,
+        body: { choices: [{ message: { content: "Bonjour" } }] },
+      },
+    },
+  });
+
+  await app.waitFor("id:quick-translate-card-card-1");
+  await app.press("id:quick-translate-add-preset");
+  await app.waitFor("role:menuitem[Preset Beta]");
+  await app.press("role:menuitem[Preset Beta]");
+  await app.waitFor("id:quick-translate-card-card-2");
+
+  await app.type("id:quick-translate-source", "Hello");
+  await app.press("id:quick-translate-card-card-2 >> id:quick-translate-collapse");
+  await app.press("id:quick-translate-submit");
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-copy");
+  expect(app.requests()).toHaveLength(1);
+
+  // Manual mode does not translate on expand; the card waits for the button.
+  await app.press("id:quick-translate-card-card-2 >> id:quick-translate-collapse");
+  expect(app.requests()).toHaveLength(1);
+  expect(app.shows("id:quick-translate-card-card-2 >> id:quick-translate-result-text")).toBe(false);
+  await app.press("id:quick-translate-card-card-2 >> id:quick-translate-collapse");
+
+  // With every card collapsed the Translate button has nothing to run.
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-collapse");
+  expect(app.shows("id:quick-translate-card-card-1 >> label:Expand card")).toBe(true);
+  expect(app.enabled("id:quick-translate-submit")).toBe(false);
+});
+
 test("quick reopen: restores valid cards, fallback template, languages, and auto mode without stale text or requests, and handles corrupt or failing storage", async () => {
   const presetKeep = makePreset({
     id: "preset-keep",
@@ -595,9 +729,10 @@ test("quick reopen: restores valid cards, fallback template, languages, and auto
   await session1.press("role:menuitem[Drop Later]");
   await session1.waitFor("id:quick-translate-card-card-2");
 
-  // Translate sensitive text in session 1 and ensure preferences exclude input/result/credential.
+  // Collapsed card 1 stays out of translation; only expanded card 2 sends a request.
   await session1.type("id:quick-translate-source", "Secret draft source");
-  await session1.waitUntil(() => session1.requests().length >= 2);
+  await session1.waitUntil(() => session1.requests().length >= 1);
+  expect(session1.requests()).toHaveLength(1);
   const rawPrefs = session1.storage()["quickTranslate.preferences.v1"]!;
   expect(rawPrefs).toBeDefined();
   expect(rawPrefs).not.toContain("Secret draft source");

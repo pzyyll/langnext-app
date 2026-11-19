@@ -310,6 +310,10 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   const addMenuOpen = signal(false);
 
   const enabledPresets = () => store.records().filter((item) => item.enabled);
+  // A collapsed card is out of the working set: it neither translates nor refreshes.
+  const expandedCards = () => cards().filter((card) => !card.collapsed);
+  const hasEligibleExpandedCard = () =>
+    expandedCards().some((card) => enabledPresets().some((preset) => preset.id === card.presetId));
   const presetItems = () => buildPresetItems(enabledPresets());
   const sourceLanguageItems = buildSourceLanguageItems();
   const targetLanguageItems = buildTargetLanguageItems();
@@ -482,7 +486,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   const executeCard = async (cardId: string, trigger: "manual" | "auto") => {
     const card = cards().find((item) => item.id === cardId);
     const runtime = cardRuntimes.get(cardId);
-    if (!card || !runtime || disposed) {
+    if (!card || card.collapsed || !runtime || disposed) {
       return;
     }
 
@@ -605,7 +609,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
 
   const executeAllCards = (trigger: "manual" | "auto") => {
     clearSharedDebounce();
-    for (const card of cards()) {
+    for (const card of expandedCards()) {
       if (trigger === "auto") {
         const eligible = enabledPresets().some((item) => item.id === card.presetId);
         if (!eligible) continue;
@@ -620,10 +624,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
     if (store.status().kind !== "ready" || enabledPresets().length === 0) return;
     if (props.sourceText().trim().length === 0) return;
 
-    const hasEligibleCard = cards().some((card) =>
-      enabledPresets().some((preset) => preset.id === card.presetId),
-    );
-    if (!hasEligibleCard) return;
+    if (!hasEligibleExpandedCard()) return;
 
     debounceTimer = setTimeout(() => {
       debounceTimer = null;
@@ -638,7 +639,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
       !disposed &&
       store.status().kind === "ready" &&
       props.sourceText().trim().length > 0 &&
-      cards().some((card) => enabledPresets().some((preset) => preset.id === card.presetId));
+      hasEligibleExpandedCard();
     if (deliverable) executeAllCards("auto");
   };
 
@@ -756,6 +757,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
     persistPreferencesState();
 
     if (
+      !current.collapsed &&
       isAutoTranslate() &&
       store.status().kind === "ready" &&
       props.sourceText().trim().length > 0
@@ -765,11 +767,38 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   };
 
   const handleToggleCollapse = (cardId: string) => {
-    updateCard(cardId, (item) => ({
-      ...item,
-      collapsed: !item.collapsed,
-    }));
+    const current = cards().find((item) => item.id === cardId);
+    if (!current) return;
+    const collapsed = !current.collapsed;
+
+    if (collapsed) {
+      // Collapsing stops the card: cancel its request and drop transient state.
+      const runtime = cardRuntimes.get(cardId);
+      if (runtime) {
+        cancelRuntime(runtime);
+      }
+      updateCard(cardId, (item) => ({
+        ...item,
+        collapsed,
+        copied: false,
+        copyError: null,
+        result: item.result.status === "loading" ? { status: "idle" } : item.result,
+      }));
+    } else {
+      updateCard(cardId, (item) => ({ ...item, collapsed }));
+    }
     persistPreferencesState();
+
+    // Expanding a card that has no current result puts it back to work in automatic mode.
+    if (
+      !collapsed &&
+      current.result.status !== "success" &&
+      isAutoTranslate() &&
+      store.status().kind === "ready" &&
+      props.sourceText().trim().length > 0
+    ) {
+      void executeCard(cardId, "auto");
+    }
   };
 
   const handleRemoveCard = (cardId: string) => {
@@ -825,7 +854,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   };
 
   const canTranslate = () =>
-    store.status().kind === "ready" && enabledPresets().length > 0 && cards().length > 0;
+    store.status().kind === "ready" && enabledPresets().length > 0 && expandedCards().length > 0;
   const canAddPreset = () => store.status().kind === "ready" && enabledPresets().length > 0;
 
   return (
