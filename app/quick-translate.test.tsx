@@ -1,5 +1,7 @@
+import type { WindowRef, WindowState } from "nsh/desktop";
 import { t } from "nsh/i18n";
 import { expect, open, test } from "nsh/test";
+import { createQuickTranslateController } from "./quick-translate-controller";
 
 const HARNESS_ENTRY = "./__tests__/quick-translate-harness.tsx";
 const HARNESS_SHORTCUT_MODE_KEY = "__test.qt.shortcutMode";
@@ -209,4 +211,60 @@ test("desktop: quick window warns and keeps tray fallback when global shortcut r
   });
   await nonWindows.waitFor("id:harness-metrics");
   expect(nonWindows.texts().join(" ")).toContain("reg=0|");
+});
+
+test("quick placement: window controller corrects shifted initial bounds once and never moves after user drag", async () => {
+  const setBoundsCalls: Array<{
+    origin?: { x?: number; y?: number };
+    size?: { width?: number; height?: number };
+  }> = [];
+  const fakeWindow: Pick<WindowRef, "focus" | "setBounds" | "state"> = {
+    focus: () => {},
+    setBounds: (bounds) => {
+      setBoundsCalls.push(bounds);
+    },
+    state: () => null,
+  };
+
+  const controller = createQuickTranslateController({
+    readCursorAnchor: () => ({ displayId: "disp-1", offsetX: 600, offsetY: 400 }),
+    getDisplays: () => [
+      {
+        id: "disp-1",
+        bounds: { origin: { x: 0, y: 0 }, size: { width: 1280, height: 800 } },
+        visibleBounds: { origin: { x: 0, y: 0 }, size: { width: 1280, height: 760 } },
+        primary: true,
+        name: "Primary",
+        scaleFactor: 1,
+        cutouts: [],
+      },
+    ],
+  });
+
+  controller.open();
+  expect(controller.openingDisplay()).toBe("disp-1");
+  expect(controller.openingPosition()).toEqual({ x: 390, y: 376 });
+  expect(controller.openingSize()).toEqual({ width: 420, height: 360 });
+  controller.attachWindow(fakeWindow as WindowRef);
+
+  const shiftedState: WindowState = {
+    mode: "normal",
+    minimized: false,
+    visible: true,
+    focused: true,
+    bounds: { origin: { x: 100, y: 100 }, size: { width: 420, height: 360 } },
+    contentBounds: { origin: { x: 100, y: 100 }, size: { width: 420, height: 360 } },
+    placement: { bounds: { origin: { x: 100, y: 100 }, size: { width: 420, height: 360 } } },
+    display: null,
+    scaleFactor: 1,
+  };
+  controller.verifyInitialBounds(shiftedState);
+  expect(setBoundsCalls).toEqual([{ origin: { x: 390, y: 376 } }]);
+
+  // Echo from our own setBounds clears expectation, and a subsequent user move disables repositioning.
+  controller.handleBoundsChange({ origin: { x: 390, y: 376 }, size: { width: 420, height: 360 } });
+  controller.handleBoundsChange({ origin: { x: 510, y: 220 }, size: { width: 420, height: 360 } });
+  controller.open();
+  controller.verifyInitialBounds(shiftedState);
+  expect(setBoundsCalls).toHaveLength(1);
 });

@@ -15,6 +15,7 @@ import {
   createQuickTranslateController,
   QuickTranslateWindow,
   registerQuickTranslateShortcut,
+  type QuickTranslateControllerOptions,
   type QuickTranslateShortcutBinding,
 } from "./quick-translate";
 
@@ -26,6 +27,7 @@ export interface AppShellProps {
   globalShortcut?: QuickTranslateShortcutBinding;
   trayModule?: Pick<typeof Tray, "set">;
   platformOs?: string;
+  quickTranslateOptions?: QuickTranslateControllerOptions;
 }
 
 /** Builds system tray configuration using the active locale. */
@@ -42,7 +44,7 @@ export function buildShellTrayOptions(onQuickTranslate: () => void): TrayOptions
 }
 
 export function AppShell(props: AppShellProps = {}) {
-  const quickTranslate = createQuickTranslateController();
+  const quickTranslate = createQuickTranslateController(props.quickTranslateOptions);
   const trayApi = props.trayModule ?? Tray;
 
   effect(() => {

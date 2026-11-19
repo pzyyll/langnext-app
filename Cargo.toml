@@ -8,3 +8,10 @@ publish = false
 
 [dependencies]
 nsh-core = "=0.6.0"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Gdi",
+  "Win32_UI_WindowsAndMessaging",
+] }
