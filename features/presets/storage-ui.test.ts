@@ -80,6 +80,47 @@ test("presets storage UI: retries a failed load", async () => {
   expect(app.texts()).toContain("Saved Preset");
 });
 
+test("preset recovery UI: can add a preset when all saved entries were skipped", async () => {
+  const legacy = { ...makeSamplePreset(), name: "Unreadable Preset", targetLanguage: null };
+  const raw = JSON.stringify({ version: 1, items: [legacy] });
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: makeSeedStorage({
+      channels: [makeChannel({ id: "ch-ok", displayName: "OpenAI Main", enabled: true })],
+      models: [makeModel({ id: "m-1", providerId: "ch-ok", modelKey: "gpt-4.1", enabled: true })],
+      extra: { [PRESETS_STORAGE_KEY]: raw },
+    }),
+  });
+
+  await app.press("id:nav-presets");
+  await app.waitFor("id:presets-skipped-notice");
+  expect(app.texts()).toContain("Skipped 1 unreadable preset. Its data was kept.");
+  expect(app.shows("id:presets-retry-button")).toBe(false);
+  expect(app.shows("id:preset-item-preset-1")).toBe(false);
+  expect(app.enabled("id:add-preset-button")).toBe(true);
+  expect(app.storage()[PRESETS_STORAGE_KEY]).toBe(raw);
+
+  await app.press("id:empty-add-preset-button");
+  await app.waitFor("id:preset-name");
+  await app.type("id:preset-name", "Replacement Preset");
+  await app.press("id:preset-primary-model");
+  await app.waitFor("role:option[OpenAI Main · gpt-4.1]");
+  await app.press("role:option[OpenAI Main · gpt-4.1]");
+  await app.press("id:preset-save");
+  await app.waitUntil(() => app.storage()[PRESETS_STORAGE_KEY] !== raw);
+  const saved = app.storage();
+  const [{ targetLanguage }, created] = JSON.parse(saved[PRESETS_STORAGE_KEY]!).items;
+  expect(targetLanguage).toBeNull();
+  expect(created.name).toBe("Replacement Preset");
+
+  const reopened = await open(APP_ENTRY, { ...viewport, storage: saved });
+  await reopened.press("id:nav-presets");
+  await reopened.waitFor("id:preset-name");
+  expect(reopened.value("id:preset-name")).toBe("Replacement Preset");
+  expect(reopened.shows("id:presets-skipped-notice")).toBe(true);
+  expect(reopened.shows("id:preset-item-preset-1")).toBe(false);
+});
+
 test("presets storage UI: preserves edits after a failed write", async () => {
   const sample = makeSamplePreset();
   const backing: Record<string, string> = makeSeedStorage({

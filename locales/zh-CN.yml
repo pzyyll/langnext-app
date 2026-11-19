@@ -307,6 +307,8 @@ presets:
   list:
     title: 预设
     empty: 尚未配置预设
+    skippedOne: 已跳过 1 条无法读取的预设，原数据仍保留。
+    skippedMany: 已跳过 %{count} 条无法读取的预设，原数据仍保留。
     loading: 加载中…
     itemLabel: "%{name}（%{status}）"
     enabled: 已启用

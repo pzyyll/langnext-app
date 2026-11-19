@@ -307,6 +307,8 @@ presets:
   list:
     title: Presets
     empty: No presets yet
+    skippedOne: Skipped 1 unreadable preset. Its data was kept.
+    skippedMany: Skipped %{count} unreadable presets. Their data was kept.
     loading: Loading…
     itemLabel: "%{name} (%{status})"
     enabled: Enabled

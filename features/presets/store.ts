@@ -1,4 +1,4 @@
-import { signal, Storage } from "nsh";
+import { computed, signal, Storage } from "nsh";
 import { t } from "nsh/i18n";
 import { isSourceLanguageId, isTargetLanguageId } from "./languages";
 import { readAvailableModelChoices } from "./model-choices";
@@ -67,7 +67,7 @@ function isValidStoredPreset(value: unknown): value is TranslationPreset {
   return true;
 }
 
-function parseStoredPresets(raw: string): TranslationPreset[] {
+function parseStoredPresets(raw: string): unknown[] {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -91,15 +91,10 @@ function parseStoredPresets(raw: string): TranslationPreset[] {
   if (!Array.isArray(parsed.items)) {
     throw new PresetsStoreError("storage_malformed", t("presets.error.storageMalformed"));
   }
-  for (const item of parsed.items) {
-    if (!isValidStoredPreset(item)) {
-      throw new PresetsStoreError("storage_malformed", t("presets.error.storageMalformed"));
-    }
-  }
   return parsed.items;
 }
 
-async function writePresets(storage: PresetsStorage, items: TranslationPreset[]): Promise<void> {
+async function writePresets(storage: PresetsStorage, items: unknown[]): Promise<void> {
   try {
     await storage.setItem(PRESETS_STORAGE_KEY, JSON.stringify({ version: 1, items }));
   } catch (error) {
@@ -117,7 +112,9 @@ export function createPresetsStore(
   storage: PresetsStorage,
   readModelChoices: () => readonly ModelChoiceId[],
 ): PresetsStore {
-  const recordsSignal = signal<TranslationPreset[]>([]);
+  // Keep skipped entries in storage even when the user changes a readable preset.
+  const itemsSignal = signal<unknown[]>([]);
+  const records = computed(() => itemsSignal().filter(isValidStoredPreset));
   const statusSignal = signal<PresetsStoreStatus>({ kind: "idle" });
   const mutatingSignal = signal<boolean>(false);
 
@@ -138,7 +135,7 @@ export function createPresetsStore(
         raw = await storage.getItem(PRESETS_STORAGE_KEY);
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
-        recordsSignal.set([]);
+        itemsSignal.set([]);
         statusSignal.set({
           kind: "error",
           key: "storage_read_failed",
@@ -147,18 +144,12 @@ export function createPresetsStore(
         return;
       }
 
-      if (raw === null) {
-        recordsSignal.set([]);
-        statusSignal.set({ kind: "ready" });
-        return;
-      }
-
       try {
-        const items = parseStoredPresets(raw);
-        recordsSignal.set(items);
-        statusSignal.set({ kind: "ready" });
+        const items = raw === null ? [] : parseStoredPresets(raw);
+        itemsSignal.set(items);
+        statusSignal.set({ kind: "ready", skippedCount: items.length - records().length });
       } catch (error) {
-        recordsSignal.set([]);
+        itemsSignal.set([]);
         if (error instanceof PresetsStoreError) {
           statusSignal.set({ kind: "error", key: error.key, message: error.message });
         } else {
@@ -170,14 +161,13 @@ export function createPresetsStore(
         }
       }
     },
-    records: () => recordsSignal(),
+    records,
     status: () => statusSignal(),
     mutating: () => mutatingSignal(),
     save: async (input: SavePresetInput) => {
       assertReadyForMutation();
 
-      const current = recordsSignal();
-      const existing = input.id ? (current.find((item) => item.id === input.id) ?? null) : null;
+      const existing = input.id ? (records().find((item) => item.id === input.id) ?? null) : null;
       if (input.id && !existing) {
         throw new PresetsStoreError("not_found", t("presets.error.notFound"));
       }
@@ -198,14 +188,15 @@ export function createPresetsStore(
             updatedAt: now,
           };
 
+      const items = itemsSignal();
       const next = existing
-        ? current.map((item) => (item.id === record.id ? record : item))
-        : [...current, record];
+        ? items.map((item) => (item === existing ? record : item))
+        : [...items, record];
 
       mutatingSignal.set(true);
       try {
         await writePresets(storage, next);
-        recordsSignal.set(next);
+        itemsSignal.set(next);
         return record;
       } finally {
         mutatingSignal.set(false);
@@ -214,16 +205,16 @@ export function createPresetsStore(
     remove: async (id: string) => {
       assertReadyForMutation();
 
-      const current = recordsSignal();
-      if (!current.some((item) => item.id === id)) {
+      const existing = records().find((item) => item.id === id);
+      if (!existing) {
         throw new PresetsStoreError("not_found", t("presets.error.notFound"));
       }
-      const next = current.filter((item) => item.id !== id);
+      const next = itemsSignal().filter((item) => item !== existing);
 
       mutatingSignal.set(true);
       try {
         await writePresets(storage, next);
-        recordsSignal.set(next);
+        itemsSignal.set(next);
       } finally {
         mutatingSignal.set(false);
       }

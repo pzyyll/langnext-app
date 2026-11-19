@@ -159,6 +159,13 @@ export function PresetsPage(props: PresetsPageProps) {
     const current = status();
     return current.kind === "error" ? current.message : null;
   };
+  const skippedNotice = () => {
+    const current = status();
+    if (current.kind !== "ready" || current.skippedCount === 0) return null;
+    return current.skippedCount === 1
+      ? t("presets.list.skippedOne")
+      : t("presets.list.skippedMany", { count: current.skippedCount });
+  };
   const modelChoices = () => readAvailableModelChoices();
   const modelsError = () => modelsStore.channelsError();
 
@@ -440,6 +447,15 @@ export function PresetsPage(props: PresetsPageProps) {
                 <Icon name="plus" tone="foreground" class="size-4" />
               </Button>
             </View>
+
+            <If when={skippedNotice() !== null}>
+              <Text
+                testID="presets-skipped-notice"
+                class="shrink-0 px-4 pb-3 pt-1 text-xs text-muted-foreground"
+              >
+                {skippedNotice()}
+              </Text>
+            </If>
 
             <If
               when={isLoading()}

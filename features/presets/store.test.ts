@@ -65,7 +65,7 @@ test("presets store: restores a saved preset", async () => {
 
   expect(store1.status()).toEqual({ kind: "idle" });
   await store1.load();
-  expect(store1.status()).toEqual({ kind: "ready" });
+  expect(store1.status()).toEqual({ kind: "ready", skippedCount: 0 });
   expect(store1.records()).toEqual([]);
 
   const created = await store1.save(makeBaseInput({ name: "  Technical EN to ZH  " }));
@@ -95,7 +95,7 @@ test("presets store: restores a saved preset", async () => {
 
   const store2 = createPresetsStore(mem.storage, choices);
   await store2.load();
-  expect(store2.status()).toEqual({ kind: "ready" });
+  expect(store2.status()).toEqual({ kind: "ready", skippedCount: 0 });
   expect(store2.records()).toEqual([updated]);
 
   const raw = JSON.parse(mem.backing[PRESETS_STORAGE_KEY]!);
@@ -154,7 +154,7 @@ test("presets store: keeps unreadable storage for malformed data", async () => {
   // Recovery after valid storage replaces malformed data.
   mem.backing[PRESETS_STORAGE_KEY] = JSON.stringify({ version: 1, items: [] });
   await store.load();
-  expect(store.status()).toEqual({ kind: "ready" });
+  expect(store.status()).toEqual({ kind: "ready", skippedCount: 0 });
   const saved = await store.save(makeBaseInput());
   expect(store.records()).toEqual([saved]);
 });
@@ -494,7 +494,7 @@ test("automatic target: saves and restores an automatic target", async () => {
 
   const reloaded = createPresetsStore(mem.storage, choices);
   await reloaded.load();
-  expect(reloaded.status()).toEqual({ kind: "ready" });
+  expect(reloaded.status()).toEqual({ kind: "ready", skippedCount: 0 });
   expect(reloaded.records()[0]!.targetLanguage).toBe("auto");
   expect(JSON.parse(mem.backing[PRESETS_STORAGE_KEY]!).items[0].targetLanguage).toBe("auto");
 
@@ -526,34 +526,40 @@ test("automatic target: rejects an unsupported or missing target", async () => {
       (error: unknown) => error,
     );
   expect((missing as { key?: string } | null)?.key).toBe("target_language_invalid");
+});
 
-  const stored = JSON.stringify({
-    version: 1,
-    items: [
-      {
-        id: "p-1",
-        name: "Legacy",
-        enabled: true,
-        sourceLanguage: "en",
-        targetLanguage: "__none__",
-        createdAt: "2026-01-01T00:00:00.000Z",
-        updatedAt: "2026-01-01T00:00:00.000Z",
-        engine: {
-          kind: "ai",
-          modelIds: ["m-1"],
-          temperature: null,
-          maxOutputTokens: null,
-          templates: [
-            { id: "tpl-1", name: "Default", systemTemplate: "{{text}}", userTemplate: "{{text}}" },
-          ],
-          defaultTemplateId: "tpl-1",
-        },
-      },
-    ],
-  });
-  const legacy = createMemoryStorage({ [PRESETS_STORAGE_KEY]: stored });
-  const legacyStore = createPresetsStore(legacy.storage, choices);
-  await legacyStore.load();
-  expect(legacyStore.status().kind).toBe("error");
-  expect(legacyStore.records()).toEqual([]);
+test("preset recovery: skips invalid entries and preserves them when modifying valid presets", async () => {
+  const valid = {
+    ...makeBaseInput(),
+    id: "p-1",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  };
+  const legacy = { ...valid, id: "p-legacy", name: "Legacy", targetLanguage: null };
+  // A malformed entry can even reuse the ID of a valid preset.
+  const malformed = { ...valid, targetLanguage: "__none__" };
+  const raw = JSON.stringify({ version: 1, items: [legacy, valid, malformed] });
+  const mem = createMemoryStorage({ [PRESETS_STORAGE_KEY]: raw });
+  const choices = (): ModelChoiceId[] => [{ id: "m-1" }];
+  const store = createPresetsStore(mem.storage, choices);
+
+  await store.load();
+  expect(store.status()).toEqual({ kind: "ready", skippedCount: 2 });
+  expect(store.records()).toEqual([valid]);
+  expect(mem.backing[PRESETS_STORAGE_KEY]).toBe(raw);
+  expect(mem.getSetCalls()).toBe(0);
+
+  const edited = await store.save(makeBaseInput({ id: valid.id, name: "Edited" }));
+  expect(JSON.parse(mem.backing[PRESETS_STORAGE_KEY]!).items).toEqual([legacy, edited, malformed]);
+
+  await store.remove(edited.id);
+  expect(store.records()).toEqual([]);
+  expect(JSON.parse(mem.backing[PRESETS_STORAGE_KEY]!).items).toEqual([legacy, malformed]);
+
+  const added = await store.save(makeBaseInput({ name: "New preset" }));
+  const reopened = createPresetsStore(mem.storage, choices);
+  await reopened.load();
+  expect(reopened.status()).toEqual({ kind: "ready", skippedCount: 2 });
+  expect(reopened.records()).toEqual([added]);
+  expect(JSON.parse(mem.backing[PRESETS_STORAGE_KEY]!).items).toEqual([legacy, malformed, added]);
 });

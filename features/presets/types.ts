@@ -131,7 +131,7 @@ export class PresetsStoreError extends Error {
 export type PresetsStoreStatus =
   | { kind: "idle" }
   | { kind: "loading" }
-  | { kind: "ready" }
+  | { kind: "ready"; skippedCount: number }
   | { kind: "error"; key: PresetErrorKey; message: string };
 
 export interface PresetsStorage {
