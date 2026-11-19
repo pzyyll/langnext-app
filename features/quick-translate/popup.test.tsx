@@ -186,7 +186,7 @@ test("quick popup: debounces 500ms opt-in auto-translate, preserves Shift+Enter 
     id: "preset-2",
     name: "Preset Two",
     sourceLanguage: "auto",
-    targetLanguage: null,
+    targetLanguage: "zh",
   });
   const app = await open(POPUP_HARNESS, {
     ...viewport,

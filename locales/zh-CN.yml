@@ -327,7 +327,7 @@ presets:
     models: 模型与参数
     prompts: 提示词模板
   language:
-    noPreference: 无偏好
+    autoTarget: 自动
   languages:
     auto: 自动
     zh: 中文

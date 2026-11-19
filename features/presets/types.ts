@@ -24,7 +24,7 @@ export interface TranslationPreset {
   name: string;
   enabled: boolean;
   sourceLanguage: SourceLanguageId;
-  targetLanguage: TargetLanguageId | null;
+  targetLanguage: TargetLanguageId;
   createdAt: string;
   updatedAt: string;
   engine: PresetEngine;
@@ -44,7 +44,7 @@ export interface SavePresetInput {
   name: string;
   enabled: boolean;
   sourceLanguage: SourceLanguageId;
-  targetLanguage: TargetLanguageId | null;
+  targetLanguage: TargetLanguageId;
   engine: SaveAiPresetEngineInput;
 }
 

@@ -7,13 +7,14 @@ import { Input } from "../../components/ui/input";
 import { Select, type SelectItem } from "../../components/ui/select";
 import { Switch } from "../../components/ui/switch";
 import { FormField } from "../../modules/ai/ui/form-field";
-import type { PresetDraft, TargetLanguageValue } from "./draft";
+import type { PresetDraft } from "./draft";
 import {
   AUTO_LANGUAGE,
   getLanguageLabel,
+  getTargetLanguageLabel,
   LANGUAGE_IDS,
-  NO_PREFERENCE_TARGET,
   type SourceLanguageId,
+  type TargetLanguageId,
 } from "./languages";
 import { ModelsSection } from "./models-section";
 import { PromptTemplates, type TemplateEditableField } from "./prompt-templates";
@@ -60,13 +61,10 @@ function buildSourceLanguageItems(): SelectItem[] {
 }
 
 function buildTargetLanguageItems(): SelectItem[] {
-  return [
-    { value: NO_PREFERENCE_TARGET, title: t("presets.language.noPreference") },
-    ...LANGUAGE_IDS.map((id) => ({
-      value: id,
-      title: getLanguageLabel(id),
-    })),
-  ];
+  return [AUTO_LANGUAGE, ...LANGUAGE_IDS].map((id) => ({
+    value: id,
+    title: getTargetLanguageLabel(id),
+  }));
 }
 
 /** Detail-pane editor for creating or editing a translation preset. */
@@ -270,7 +268,7 @@ export function PresetEditor(props: PresetEditorProps) {
                   accessibilityLabel={t("presets.field.targetLanguage")}
                   onChange={(value) => {
                     if (value) {
-                      props.onChange({ targetLanguage: value as TargetLanguageValue });
+                      props.onChange({ targetLanguage: value as TargetLanguageId });
                     }
                   }}
                 />

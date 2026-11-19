@@ -83,7 +83,7 @@ test("presets store: restores a saved preset", async () => {
       name: "Updated Preset",
       enabled: false,
       sourceLanguage: "auto",
-      targetLanguage: null,
+      targetLanguage: "auto",
     }),
   );
   expect(updated.id).toBe(created.id);
@@ -91,7 +91,7 @@ test("presets store: restores a saved preset", async () => {
   expect(updated.name).toBe("Updated Preset");
   expect(updated.enabled).toBe(false);
   expect(updated.sourceLanguage).toBe("auto");
-  expect(updated.targetLanguage).toBeNull();
+  expect(updated.targetLanguage).toBe("auto");
 
   const store2 = createPresetsStore(mem.storage, choices);
   await store2.load();
@@ -481,4 +481,79 @@ test("presets store: removes only the requested preset", async () => {
   await expect(store2.remove(p2.id)).rejects.toMatchObject({ key: "storage_write_failed" });
   expect(store2.records()).toEqual([p2]);
   expect(JSON.parse(mem.backing[PRESETS_STORAGE_KEY]!).items).toEqual([p2]);
+});
+
+test("automatic target: saves and restores an automatic target", async () => {
+  const mem = createMemoryStorage();
+  const choices = (): ModelChoiceId[] => [{ id: "m-1" }];
+  const store = createPresetsStore(mem.storage, choices);
+  await store.load();
+
+  const saved = await store.save(makeBaseInput({ targetLanguage: "auto" }));
+  expect(saved.targetLanguage).toBe("auto");
+
+  const reloaded = createPresetsStore(mem.storage, choices);
+  await reloaded.load();
+  expect(reloaded.status()).toEqual({ kind: "ready" });
+  expect(reloaded.records()[0]!.targetLanguage).toBe("auto");
+  expect(JSON.parse(mem.backing[PRESETS_STORAGE_KEY]!).items[0].targetLanguage).toBe("auto");
+
+  const concrete = await store.save(makeBaseInput({ id: saved.id, targetLanguage: "ja" }));
+  expect(concrete.targetLanguage).toBe("ja");
+  const reloadedConcrete = createPresetsStore(mem.storage, choices);
+  await reloadedConcrete.load();
+  expect(reloadedConcrete.records()[0]!.targetLanguage).toBe("ja");
+});
+
+test("automatic target: rejects an unsupported or missing target", async () => {
+  const mem = createMemoryStorage();
+  const choices = (): ModelChoiceId[] => [{ id: "m-1" }];
+  const store = createPresetsStore(mem.storage, choices);
+  await store.load();
+
+  const unsupported = await store
+    .save(makeBaseInput({ targetLanguage: "__none__" as unknown as "auto" }))
+    .then(
+      () => null,
+      (error: unknown) => error,
+    );
+  expect((unsupported as { key?: string } | null)?.key).toBe("target_language_invalid");
+
+  const missing = await store
+    .save(makeBaseInput({ targetLanguage: null as unknown as "auto" }))
+    .then(
+      () => null,
+      (error: unknown) => error,
+    );
+  expect((missing as { key?: string } | null)?.key).toBe("target_language_invalid");
+
+  const stored = JSON.stringify({
+    version: 1,
+    items: [
+      {
+        id: "p-1",
+        name: "Legacy",
+        enabled: true,
+        sourceLanguage: "en",
+        targetLanguage: "__none__",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        engine: {
+          kind: "ai",
+          modelIds: ["m-1"],
+          temperature: null,
+          maxOutputTokens: null,
+          templates: [
+            { id: "tpl-1", name: "Default", systemTemplate: "{{text}}", userTemplate: "{{text}}" },
+          ],
+          defaultTemplateId: "tpl-1",
+        },
+      },
+    ],
+  });
+  const legacy = createMemoryStorage({ [PRESETS_STORAGE_KEY]: stored });
+  const legacyStore = createPresetsStore(legacy.storage, choices);
+  await legacyStore.load();
+  expect(legacyStore.status().kind).toBe("error");
+  expect(legacyStore.records()).toEqual([]);
 });

@@ -327,7 +327,7 @@ presets:
     models: Models and parameters
     prompts: Prompt templates
   language:
-    noPreference: No preference
+    autoTarget: Automatic
   languages:
     auto: Auto
     zh: Chinese

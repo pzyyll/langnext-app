@@ -76,7 +76,7 @@ test("preset translation: saved preset sends exact prompt, leaves braces literal
   });
   const preset = makePreset({
     sourceLanguage: "en",
-    targetLanguage: null,
+    targetLanguage: "zh",
     engine: {
       kind: "ai",
       modelIds: ["uuid-model-1"],
@@ -150,11 +150,11 @@ test("preset translation: saved preset sends exact prompt, leaves braces literal
   ]);
 });
 
-test("preset translation: resolves auto source, null default target, and explicit language override", async () => {
+test("preset translation: resolves auto source, a concrete target, and an explicit language override", async () => {
   const captured: Array<{ system: string; user: string; modelId: string }> = [];
   const preset = makePreset({
     sourceLanguage: "auto",
-    targetLanguage: null,
+    targetLanguage: "zh",
   });
 
   expect(resolveInitialPresetLanguages(preset)).toEqual({
