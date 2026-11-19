@@ -84,7 +84,8 @@ export function Icon(props: IconProps) {
       src={ICONS[props.name]}
       accessibilityLabel={props.accessibilityLabel}
       accessibilityElementsHidden={!props.accessibilityLabel}
-      class={props.class ?? "size-4"}
+      // Clip intrinsic SVG bounds (48x48 viewBox) so Taffy does not leak phantom overflow into ancestor Scroll views.
+      class={`overflow-hidden ${props.class ?? "size-4"}`}
       // Runtime theme token tint keeps monochrome outline icons legible in light and dark modes.
       style={{ tintColor: token(props.tone ?? "foreground") }}
     />
