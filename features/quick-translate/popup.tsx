@@ -632,11 +632,22 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
     }, AUTO_TRANSLATE_DEBOUNCE_MS);
   };
 
+  const translateDelivery = () => {
+    for (const card of cards()) invalidateCard(card.id);
+    const deliverable =
+      !disposed &&
+      store.status().kind === "ready" &&
+      props.sourceText().trim().length > 0 &&
+      cards().some((card) => enabledPresets().some((preset) => preset.id === card.presetId));
+    if (deliverable) executeAllCards("auto");
+  };
+
   effect(() => {
     const seq = props.sourceDeliverySeq?.() ?? 0;
     if (seq > lastHandledDeliverySeq) {
       lastHandledDeliverySeq = seq;
-      scheduleAutoTranslate();
+      // Copied text from double Ctrl+C is a translation request, whatever Auto-translate says.
+      translateDelivery();
     }
   });
 

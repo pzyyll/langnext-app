@@ -10,6 +10,7 @@ const HARNESS_ENTRY = "./__tests__/quick-translate-harness.tsx";
 const HARNESS_SHORTCUT_MODE_KEY = "__test.qt.shortcutMode";
 const HARNESS_PLATFORM_OS_KEY = "__test.qt.platformOs";
 const viewport = { width: 1040, height: 720, platform: "windows" as const };
+const AUTO_TRANSLATE_DEBOUNCE_MS = 500;
 
 const quickPreset: TranslationPreset = {
   id: "preset-1",
@@ -426,7 +427,7 @@ test("double copy: controller reads clipboard once, skips when disabled or empty
   expect(controller.sourceDeliverySeq()).toBe(1);
 });
 
-test("double copy: shell seam delivers copied text to newly mounted popup, respects manual vs auto mode, skips empty text, and handles worker failure", async () => {
+test("double copy: shell seam delivers copied text to a newly mounted popup, translates with Auto-translate off, keeps typing opt-in, and handles worker failure", async () => {
   const seeded = makeSeedStorage({
     channels: [makeChannel({ adapterId: "openai-compatible", enabled: true })],
     models: [makeModel({ enabled: true })],
@@ -454,30 +455,37 @@ test("double copy: shell seam delivers copied text to newly mounted popup, respe
   await app.press("id:harness-trigger-double-copy-valid");
   await app.waitFor("id:quick-translate-source");
   expect(app.value("id:quick-translate-source")).toBe("Clipboard manual text");
-  await app.clock!.runFor(650);
-  expect(app.requests()).toHaveLength(0);
+  // Double Ctrl+C is an explicit translation request, even with Auto-translate off.
+  await app.waitFor("id:quick-translate-result-text");
+  expect(app.texts()).toContain("Translated ok");
+  expect(app.requests()).toHaveLength(1);
 
   // Pin before triggering harness controls on main window so blur does not close & clear draft.
   await app.press("id:quick-translate-pin");
 
-  // Empty clipboard leaves existing draft untouched and performs no request.
+  // Empty clipboard leaves the sent draft and its result untouched, with no request.
   await app.press("id:harness-set-clipboard-empty");
   await app.press("id:harness-trigger-double-copy-valid");
-  await app.clock!.runFor(50);
   expect(app.value("id:quick-translate-source")).toBe("Clipboard manual text");
-  expect(app.requests()).toHaveLength(0);
+  expect(app.texts()).toContain("Translated ok");
+  expect(app.requests()).toHaveLength(1);
 
-  // Automatic mode follows the same 500 ms debounce as typing/paste.
+  // Typing still follows the Auto-translate toggle and its 500 ms debounce. A due translate runs
+  // with the next step, the clock's frames included, which is where the window starts.
   await app.press("id:quick-translate-auto-toggle");
+  await app.type("id:quick-translate-source", "!");
+  expect(app.value("id:quick-translate-source")).toBe("Clipboard manual text!");
+  await app.clock!.runFor(AUTO_TRANSLATE_DEBOUNCE_MS);
+  await app.waitFor("id:quick-translate-result-text");
+  expect(app.requests()).toHaveLength(2);
+
+  // A second copied text translates at once and replaces the result instead of clearing it.
   await app.press("id:harness-set-clipboard-second");
   await app.press("id:harness-trigger-double-copy-valid");
   await app.waitUntil(() => app.value("id:quick-translate-source") === "Second copied phrase");
-  await app.clock!.runFor(499);
-  expect(app.requests()).toHaveLength(0);
-  await app.clock!.runFor(1);
   await app.waitFor("id:quick-translate-result-text");
-  expect(app.requests()).toHaveLength(1);
   expect(app.texts()).toContain("Translated ok");
+  expect(app.requests()).toHaveLength(3);
 
   // Failed worker initialization keeps listener inactive with zero clipboard reads.
   const failed = await open(HARNESS_ENTRY, {
