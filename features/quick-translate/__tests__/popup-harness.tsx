@@ -20,7 +20,8 @@ export type HarnessMode =
   | "preset-load-error-then-recover"
   | "clipboard-error"
   | "out-of-order"
-  | "late-after-close";
+  | "late-after-close"
+  | "multi-card";
 
 export const POPUP_HARNESS_MODE_KEY = "__test.qt.popupMode";
 
@@ -62,6 +63,8 @@ function PopupHarnessApp(props: { mode: HarnessMode }) {
 
   let firstDeferred: Deferred<TranslateWithPresetResult> | null = null;
   let secondDeferred: Deferred<TranslateWithPresetResult> | null = null;
+  let thirdDeferred: Deferred<TranslateWithPresetResult> | null = null;
+  let fourthDeferred: Deferred<TranslateWithPresetResult> | null = null;
 
   const translateStub = async (
     input: TranslateWithPresetInput,
@@ -70,13 +73,13 @@ function PopupHarnessApp(props: { mode: HarnessMode }) {
     const seq = translateCalls().length + 1;
     translateCalls.set([
       ...translateCalls(),
-      `${input.preset.id}:${input.sourceLanguage}->${input.targetLanguage}:${input.sourceText}`,
+      `${input.preset.id}:${input.templateId ?? "default"}:${input.sourceLanguage}->${input.targetLanguage}:${input.sourceText}`,
     ]);
     options?.signal?.addEventListener("abort", () => {
       abortEvents.set([...abortEvents(), `aborted-${seq}`]);
     });
 
-    if (props.mode === "out-of-order") {
+    if (props.mode === "out-of-order" || props.mode === "multi-card") {
       if (seq === 1) {
         firstDeferred = createDeferred<TranslateWithPresetResult>();
         return firstDeferred.promise;
@@ -84,6 +87,14 @@ function PopupHarnessApp(props: { mode: HarnessMode }) {
       if (seq === 2) {
         secondDeferred = createDeferred<TranslateWithPresetResult>();
         return secondDeferred.promise;
+      }
+      if (seq === 3) {
+        thirdDeferred = createDeferred<TranslateWithPresetResult>();
+        return thirdDeferred.promise;
+      }
+      if (seq === 4) {
+        fourthDeferred = createDeferred<TranslateWithPresetResult>();
+        return fourthDeferred.promise;
       }
     }
 
@@ -173,6 +184,65 @@ function PopupHarnessApp(props: { mode: HarnessMode }) {
             />
           </View>
         </If>
+        <If when={props.mode === "multi-card"}>
+          <View class="flex-row flex-wrap gap-1">
+            <Button
+              testID="harness-fail-first"
+              size="xs"
+              variant="outline"
+              label="Fail 1"
+              onPress={() =>
+                firstDeferred?.resolve({
+                  ok: false,
+                  cancelled: false,
+                  error: "Request timed out for card 1",
+                })
+              }
+            />
+            <Button
+              testID="harness-resolve-second"
+              size="xs"
+              variant="outline"
+              label="Resolve 2"
+              onPress={() =>
+                secondDeferred?.resolve({
+                  ok: true,
+                  text: "Card 2 Formal Result",
+                  modelId: "m-1",
+                  templateId: "tpl-2",
+                })
+              }
+            />
+            <Button
+              testID="harness-resolve-third"
+              size="xs"
+              variant="outline"
+              label="Resolve 3"
+              onPress={() =>
+                thirdDeferred?.resolve({
+                  ok: true,
+                  text: "Card 1 Retry Result",
+                  modelId: "m-1",
+                  templateId: "tpl-1",
+                })
+              }
+            />
+            <Button
+              testID="harness-resolve-fourth"
+              size="xs"
+              variant="outline"
+              label="Resolve 4"
+              onPress={() =>
+                fourthDeferred?.resolve({
+                  ok: true,
+                  text: "Stale Card 2 Late Result",
+                  modelId: "m-1",
+                  templateId: "tpl-2",
+                })
+              }
+            />
+          </View>
+        </If>
         <If when={props.mode === "late-after-close"}>
           <Button
             testID="harness-resolve-late"
@@ -218,7 +288,8 @@ void Promise.all([
     modeRaw === "preset-load-error-then-recover" ||
     modeRaw === "clipboard-error" ||
     modeRaw === "out-of-order" ||
-    modeRaw === "late-after-close"
+    modeRaw === "late-after-close" ||
+    modeRaw === "multi-card"
       ? modeRaw
       : "live";
   mount(() => <PopupHarnessApp mode={mode} />);

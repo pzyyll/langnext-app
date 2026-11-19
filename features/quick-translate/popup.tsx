@@ -9,7 +9,9 @@ import {
   type Accessor,
   type InputRef,
 } from "nsh";
+import { Menu, MenuItem } from "nsh/base";
 import { t } from "nsh/i18n";
+import { motion } from "../../components/motion";
 import { Button } from "../../components/ui/button";
 import { Card } from "../../components/ui/card";
 import { Icon } from "../../components/ui/icon";
@@ -26,6 +28,7 @@ import { presetsStore } from "../presets/store";
 import type { PresetsStore, TranslationPreset } from "../presets/types";
 import {
   resolveInitialPresetLanguages,
+  resolvePresetTemplate,
   translateWithPreset,
   type TranslateWithPresetInput,
   type TranslateWithPresetOptions,
@@ -35,11 +38,28 @@ import {
 const AUTO_TRANSLATE_DEBOUNCE_MS = 500;
 const COPY_FEEDBACK_DURATION_MS = 1500;
 
-type ResultState =
+type CardResultState =
   | { status: "idle" }
   | { status: "loading" }
   | { status: "success"; text: string; modelId: string }
   | { status: "error"; message: string };
+
+interface CardViewItem {
+  id: string;
+  presetId: string;
+  templateId: string | null;
+  collapsed: boolean;
+  result: CardResultState;
+  copied: boolean;
+  copyError: string | null;
+}
+
+interface CardRuntime {
+  abort: AbortController | null;
+  copyResetTimer: ReturnType<typeof setTimeout> | null;
+  requestSeq: number;
+  activeRequestId: number;
+}
 
 export interface QuickTranslatePopupProps {
   sourceText: Accessor<string>;
@@ -54,6 +74,15 @@ export interface QuickTranslatePopupProps {
     options?: TranslateWithPresetOptions,
   ) => Promise<TranslateWithPresetResult>;
   clipboard?: Pick<typeof Clipboard, "writeText">;
+}
+
+function createCardRuntime(): CardRuntime {
+  return {
+    abort: null,
+    copyResetTimer: null,
+    requestSeq: 0,
+    activeRequestId: 0,
+  };
 }
 
 function buildSourceLanguageItems(): SelectItem[] {
@@ -71,7 +100,191 @@ function buildPresetItems(presets: readonly TranslationPreset[]): SelectItem[] {
   return presets.map((preset) => ({ value: preset.id, title: preset.name }));
 }
 
-/** Compact Stage 1 Quick Translate popup body composed inside the floating window or standalone harness. */
+function buildTemplateItems(preset: TranslationPreset | null): SelectItem[] {
+  if (!preset) return [];
+  return preset.engine.templates.map((tpl) => ({
+    value: tpl.id,
+    title: tpl.name,
+  }));
+}
+
+interface PresetCardRowProps {
+  card: Accessor<CardViewItem>;
+  presets: Accessor<readonly TranslationPreset[]>;
+  presetItems: Accessor<SelectItem[]>;
+  onOverlayOpenChange?: (menuId: string, open: boolean) => void;
+  onSelectPreset: (cardId: string, presetId: string | null) => void;
+  onSelectTemplate: (cardId: string, templateId: string | null) => void;
+  onToggleCollapse: (cardId: string) => void;
+  onRemove: (cardId: string) => void;
+  onRetry: (cardId: string) => void;
+  onCopy: (cardId: string) => void;
+}
+
+function PresetCardRow(props: PresetCardRowProps) {
+  const resolvedPreset = () =>
+    props.presets().find((item) => item.id === props.card().presetId) ?? null;
+
+  const templateItems = () => buildTemplateItems(resolvedPreset());
+
+  const activeTemplateValue = () => {
+    const preset = resolvedPreset();
+    if (!preset) return null;
+    const resolution = resolvePresetTemplate(preset, props.card().templateId);
+    return resolution ? resolution.template.id : null;
+  };
+
+  return (
+    <Card testID={`quick-translate-card-${props.card().id}`} class="gap-2 p-2.5">
+      <View class="flex-row items-center gap-1.5">
+        <Select
+          testID="quick-translate-preset"
+          size="sm"
+          class="min-w-0 flex-1"
+          items={props.presetItems()}
+          value={props.card().presetId}
+          placeholder={t("quickTranslate.presetPlaceholder")}
+          accessibilityLabel={t("quickTranslate.presetLabel")}
+          disabled={props.presetItems().length === 0}
+          onOpenChange={(open) =>
+            props.onOverlayOpenChange?.(`card-preset-${props.card().id}`, open)
+          }
+          onChange={(value) => props.onSelectPreset(props.card().id, value)}
+        />
+        <Select
+          testID="quick-translate-template"
+          size="sm"
+          class="min-w-0 flex-1"
+          items={templateItems()}
+          value={activeTemplateValue()}
+          placeholder={t("quickTranslate.templateLabel")}
+          accessibilityLabel={t("quickTranslate.templateLabel")}
+          disabled={templateItems().length === 0}
+          onOpenChange={(open) =>
+            props.onOverlayOpenChange?.(`card-template-${props.card().id}`, open)
+          }
+          onChange={(value) => props.onSelectTemplate(props.card().id, value)}
+        />
+        <Button
+          testID="quick-translate-collapse"
+          variant="ghost"
+          size="icon-sm"
+          tooltip={
+            props.card().collapsed
+              ? t("quickTranslate.expandCard")
+              : t("quickTranslate.collapseCard")
+          }
+          accessibilityLabel={
+            props.card().collapsed
+              ? t("quickTranslate.expandCard")
+              : t("quickTranslate.collapseCard")
+          }
+          onPress={() => props.onToggleCollapse(props.card().id)}
+        >
+          <Icon
+            name={props.card().collapsed ? "chevron-down" : "chevron-up"}
+            tone="muted-foreground"
+            class="size-3.5"
+          />
+        </Button>
+        <Button
+          testID="quick-translate-remove"
+          variant="ghost"
+          size="icon-sm"
+          tooltip={t("quickTranslate.removeCard")}
+          accessibilityLabel={t("quickTranslate.removeCard")}
+          onPress={() => props.onRemove(props.card().id)}
+        >
+          <Icon name="close" tone="muted-foreground" class="size-3.5" />
+        </Button>
+      </View>
+
+      <If when={!props.card().collapsed && props.card().result.status !== "idle"}>
+        <View class="gap-2 pt-0.5">
+          <If when={props.card().result.status === "loading"}>
+            <Text testID="quick-translate-status" class="text-xs text-muted-foreground">
+              {t("quickTranslate.translating")}
+            </Text>
+          </If>
+
+          <If when={props.card().result.status === "error"}>
+            <View class="gap-2">
+              <Text testID="quick-translate-error" role="alert" class="text-xs text-destructive">
+                {(() => {
+                  const res = props.card().result;
+                  return res.status === "error" ? res.message : "";
+                })()}
+              </Text>
+              <View class="flex-row justify-end">
+                <Button
+                  testID="quick-translate-retry"
+                  size="xs"
+                  variant="outline"
+                  label={t("common.retry")}
+                  onPress={() => props.onRetry(props.card().id)}
+                />
+              </View>
+            </View>
+          </If>
+
+          <If when={props.card().result.status === "success"}>
+            <View class="gap-2">
+              <View selectable>
+                <Text
+                  testID="quick-translate-result-text"
+                  class="text-sm leading-relaxed text-foreground"
+                >
+                  {(() => {
+                    const res = props.card().result;
+                    return res.status === "success" ? res.text : "";
+                  })()}
+                </Text>
+              </View>
+              <View class="flex-row items-center justify-between gap-2">
+                <Button
+                  testID="quick-translate-copy"
+                  size="xs"
+                  variant="outline"
+                  accessibilityLabel={
+                    props.card().copied ? t("quickTranslate.copied") : t("quickTranslate.copy")
+                  }
+                  label={
+                    props.card().copied ? t("quickTranslate.copied") : t("quickTranslate.copy")
+                  }
+                  onPress={() => props.onCopy(props.card().id)}
+                >
+                  <Icon
+                    name={props.card().copied ? "check" : "copy"}
+                    tone={props.card().copied ? "success" : "muted-foreground"}
+                    class="size-3.5"
+                  />
+                </Button>
+                <Button
+                  testID="quick-translate-retry"
+                  size="xs"
+                  variant="ghost"
+                  label={t("common.retry")}
+                  onPress={() => props.onRetry(props.card().id)}
+                />
+              </View>
+              <If when={props.card().copyError !== null}>
+                <Text
+                  testID="quick-translate-copy-error"
+                  role="alert"
+                  class="text-xs text-destructive"
+                >
+                  {props.card().copyError ?? ""}
+                </Text>
+              </If>
+            </View>
+          </If>
+        </View>
+      </If>
+    </Card>
+  );
+}
+
+/** Compact Quick Translate popup composed inside the floating window or standalone harness. */
 export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   const store = props.presetsStore ?? presetsStore;
   const runTranslate = props.translate ?? translateWithPreset;
@@ -82,110 +295,149 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
     void store.load();
   }
 
-  const selectedPresetId = signal<string | null>(null);
+  const cards = signal<CardViewItem[]>([]);
   const sourceLanguage = signal<SourceLanguageId>(AUTO_LANGUAGE);
   const targetLanguage = signal<TargetLanguageId>("zh");
-  const resultState = signal<ResultState>({ status: "idle" });
-  const copied = signal(false);
-  const copyError = signal<string | null>(null);
   const isComposing = signal(false);
+  const addMenuOpen = signal(false);
 
   const enabledPresets = () => store.records().filter((item) => item.enabled);
-  const selectedPreset = () =>
-    enabledPresets().find((item) => item.id === selectedPresetId()) ?? null;
+  const presetItems = () => buildPresetItems(enabledPresets());
   const sourceLanguageItems = buildSourceLanguageItems();
   const targetLanguageItems = buildTargetLanguageItems();
 
   let disposed = false;
-  let requestSeq = 0;
-  let activeRequestId = 0;
-  let activeAbort: AbortController | null = null;
+  let hasSeededInitialCard = false;
+  let nextCardOrdinal = 1;
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-  let copyResetTimer: ReturnType<typeof setTimeout> | null = null;
+  let lastHandledDeliverySeq = 0;
+  const cardRuntimes = new Map<string, CardRuntime>();
 
-  const clearDebounce = () => {
+  const allocateCardId = () => `card-${nextCardOrdinal++}`;
+
+  const updateCard = (cardId: string, transform: (card: CardViewItem) => CardViewItem) => {
+    cards.set(cards().map((item) => (item.id === cardId ? transform(item) : item)));
+  };
+
+  const clearSharedDebounce = () => {
     if (debounceTimer !== null) {
       clearTimeout(debounceTimer);
       debounceTimer = null;
     }
   };
 
-  const clearCopyFeedback = () => {
-    if (copyResetTimer !== null) {
-      clearTimeout(copyResetTimer);
-      copyResetTimer = null;
+  const cancelRuntime = (runtime: CardRuntime) => {
+    if (runtime.copyResetTimer !== null) {
+      clearTimeout(runtime.copyResetTimer);
+      runtime.copyResetTimer = null;
     }
-    copied.set(false);
-    copyError.set(null);
+    runtime.requestSeq += 1;
+    runtime.activeRequestId = runtime.requestSeq;
+    runtime.abort?.abort();
+    runtime.abort = null;
   };
 
-  const invalidateRun = (nextResult: ResultState = { status: "idle" }) => {
-    clearDebounce();
-    clearCopyFeedback();
-    requestSeq += 1;
-    activeRequestId = requestSeq;
-    activeAbort?.abort();
-    activeAbort = null;
-    resultState.set(nextResult);
+  const invalidateCard = (cardId: string, nextResult: CardResultState = { status: "idle" }) => {
+    const runtime = cardRuntimes.get(cardId);
+    if (runtime) {
+      cancelRuntime(runtime);
+    }
+    updateCard(cardId, (card) => ({
+      ...card,
+      copied: false,
+      copyError: null,
+      result: nextResult,
+    }));
   };
 
-  // Seed default preset and languages once ready, without overriding user edits on non-preset updates.
+  const invalidateAllCards = (nextResult: CardResultState = { status: "idle" }) => {
+    clearSharedDebounce();
+    for (const runtime of cardRuntimes.values()) {
+      cancelRuntime(runtime);
+    }
+    cards.set(
+      cards().map((card) => ({
+        ...card,
+        copied: false,
+        copyError: null,
+        result: nextResult,
+      })),
+    );
+  };
+
+  // Seed one default card and initial languages once presets finish loading.
   effect(() => {
     const status = store.status();
     if (status.kind !== "ready") {
-      if (selectedPresetId() !== null) {
-        selectedPresetId.set(null);
-      }
       return;
     }
-
+    if (hasSeededInitialCard) {
+      return;
+    }
     const available = enabledPresets();
     if (available.length === 0) {
-      if (selectedPresetId() !== null) {
-        selectedPresetId.set(null);
-      }
       return;
     }
 
-    const currentId = selectedPresetId();
-    if (currentId !== null && available.some((item) => item.id === currentId)) {
-      return;
-    }
-
+    hasSeededInitialCard = true;
     const first = available[0]!;
     const initial = resolveInitialPresetLanguages(first);
+    const id = allocateCardId();
+    cardRuntimes.set(id, createCardRuntime());
+
     batch(() => {
-      selectedPresetId.set(first.id);
       sourceLanguage.set(initial.sourceLanguage);
       targetLanguage.set(initial.targetLanguage);
+      cards.set([
+        {
+          id,
+          presetId: first.id,
+          templateId: null,
+          collapsed: false,
+          result: { status: "idle" },
+          copied: false,
+          copyError: null,
+        },
+      ]);
     });
   });
 
-  // Cancel any pending debounce timer if automatic mode is turned off.
   effect(() => {
     if (!isAutoTranslate()) {
-      clearDebounce();
+      clearSharedDebounce();
     }
   });
 
-  let lastHandledDeliverySeq = 0;
-
   cleanup(() => {
     disposed = true;
-    invalidateRun();
+    clearSharedDebounce();
+    for (const runtime of cardRuntimes.values()) {
+      cancelRuntime(runtime);
+    }
+    cardRuntimes.clear();
   });
 
-  const executeTranslate = async (trigger: "manual" | "auto") => {
-    clearDebounce();
-    clearCopyFeedback();
+  const executeCard = async (cardId: string, trigger: "manual" | "auto") => {
+    const card = cards().find((item) => item.id === cardId);
+    const runtime = cardRuntimes.get(cardId);
+    if (!card || !runtime || disposed) {
+      return;
+    }
 
-    const preset = selectedPreset();
+    if (runtime.copyResetTimer !== null) {
+      clearTimeout(runtime.copyResetTimer);
+      runtime.copyResetTimer = null;
+    }
+
+    const preset = enabledPresets().find((item) => item.id === card.presetId);
     if (store.status().kind !== "ready" || !preset) {
       if (trigger === "manual") {
-        resultState.set({
-          status: "error",
-          message: t("quickTranslate.noEnabledPresets"),
-        });
+        updateCard(cardId, (item) => ({
+          ...item,
+          copied: false,
+          copyError: null,
+          result: { status: "error", message: t("quickTranslate.error.noEnabledPresets") },
+        }));
       }
       return;
     }
@@ -193,23 +445,37 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
     const text = props.sourceText();
     if (text.trim().length === 0) {
       if (trigger === "manual") {
-        resultState.set({
-          status: "error",
-          message: t("quickTranslate.error.blankInput"),
-        });
+        updateCard(cardId, (item) => ({
+          ...item,
+          copied: false,
+          copyError: null,
+          result: { status: "error", message: t("quickTranslate.error.blankInput") },
+        }));
       } else {
-        resultState.set({ status: "idle" });
+        updateCard(cardId, (item) => ({
+          ...item,
+          copied: false,
+          copyError: null,
+          result: { status: "idle" },
+        }));
       }
       return;
     }
 
-    requestSeq += 1;
-    const reqId = requestSeq;
-    activeRequestId = reqId;
-    activeAbort?.abort();
+    const templateResolution = resolvePresetTemplate(preset, card.templateId);
+    runtime.requestSeq += 1;
+    const reqId = runtime.requestSeq;
+    runtime.activeRequestId = reqId;
+    runtime.abort?.abort();
     const abort = new AbortController();
-    activeAbort = abort;
-    resultState.set({ status: "loading" });
+    runtime.abort = abort;
+
+    updateCard(cardId, (item) => ({
+      ...item,
+      copied: false,
+      copyError: null,
+      result: { status: "loading" },
+    }));
 
     let outcome: TranslateWithPresetResult;
     try {
@@ -219,52 +485,88 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
           sourceText: text,
           sourceLanguage: sourceLanguage(),
           targetLanguage: targetLanguage(),
+          templateId: templateResolution?.template.id ?? card.templateId ?? undefined,
         },
         { signal: abort.signal },
       );
     } catch (error) {
-      if (disposed || reqId !== activeRequestId || abort.signal.aborted) {
+      if (
+        disposed ||
+        reqId !== runtime.activeRequestId ||
+        abort.signal.aborted ||
+        !cardRuntimes.has(cardId)
+      ) {
         return;
       }
-      resultState.set({
-        status: "error",
-        message: error instanceof Error ? error.message : t("protocol.error.networkDefault"),
-      });
+      updateCard(cardId, (item) => ({
+        ...item,
+        result: {
+          status: "error",
+          message: error instanceof Error ? error.message : t("protocol.error.networkDefault"),
+        },
+      }));
       return;
     }
 
-    if (disposed || reqId !== activeRequestId || abort.signal.aborted) {
+    if (
+      disposed ||
+      reqId !== runtime.activeRequestId ||
+      abort.signal.aborted ||
+      !cardRuntimes.has(cardId)
+    ) {
       return;
     }
 
-    if (activeAbort === abort) {
-      activeAbort = null;
+    if (runtime.abort === abort) {
+      runtime.abort = null;
     }
 
     if (outcome.ok) {
-      resultState.set({
-        status: "success",
-        text: outcome.text,
-        modelId: outcome.modelId,
-      });
+      updateCard(cardId, (item) => ({
+        ...item,
+        result: {
+          status: "success",
+          text: outcome.text,
+          modelId: outcome.modelId,
+        },
+      }));
       return;
     }
 
     if (!outcome.cancelled) {
-      resultState.set({ status: "error", message: outcome.error });
+      updateCard(cardId, (item) => ({
+        ...item,
+        result: { status: "error", message: outcome.error },
+      }));
+    }
+  };
+
+  const executeAllCards = (trigger: "manual" | "auto") => {
+    clearSharedDebounce();
+    for (const card of cards()) {
+      if (trigger === "auto") {
+        const eligible = enabledPresets().some((item) => item.id === card.presetId);
+        if (!eligible) continue;
+      }
+      void executeCard(card.id, trigger);
     }
   };
 
   const scheduleAutoTranslate = () => {
-    invalidateRun();
+    invalidateAllCards();
     if (!isAutoTranslate()) return;
-    if (store.status().kind !== "ready" || !selectedPreset()) return;
+    if (store.status().kind !== "ready" || enabledPresets().length === 0) return;
     if (props.sourceText().trim().length === 0) return;
+
+    const hasEligibleCard = cards().some((card) =>
+      enabledPresets().some((preset) => preset.id === card.presetId),
+    );
+    if (!hasEligibleCard) return;
 
     debounceTimer = setTimeout(() => {
       debounceTimer = null;
       if (disposed) return;
-      void executeTranslate("auto");
+      executeAllCards("auto");
     }, AUTO_TRANSLATE_DEBOUNCE_MS);
   };
 
@@ -305,55 +607,145 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
     scheduleAutoTranslate();
   };
 
-  const handlePresetChange = (value: string | null) => {
-    if (!value || value === selectedPresetId()) return;
-    const nextPreset = enabledPresets().find((item) => item.id === value);
-    if (!nextPreset) return;
-    const initial = resolveInitialPresetLanguages(nextPreset);
-    batch(() => {
-      selectedPresetId.set(nextPreset.id);
-      sourceLanguage.set(initial.sourceLanguage);
-      targetLanguage.set(initial.targetLanguage);
-    });
-    // Preset change updates languages and invalidates old results without auto-running.
-    invalidateRun();
+  const handleAddPresetCard = (presetId: string) => {
+    const preset = enabledPresets().find((item) => item.id === presetId);
+    if (!preset) return;
+    const id = allocateCardId();
+    cardRuntimes.set(id, createCardRuntime());
+    cards.set([
+      ...cards(),
+      {
+        id,
+        presetId: preset.id,
+        templateId: null,
+        collapsed: false,
+        result: { status: "idle" },
+        copied: false,
+        copyError: null,
+      },
+    ]);
+    if (
+      isAutoTranslate() &&
+      store.status().kind === "ready" &&
+      props.sourceText().trim().length > 0
+    ) {
+      void executeCard(id, "auto");
+    }
+  };
+
+  const handleSelectCardPreset = (cardId: string, value: string | null) => {
+    if (!value) return;
+    const current = cards().find((item) => item.id === cardId);
+    if (!current || current.presetId === value) return;
+    if (!enabledPresets().some((item) => item.id === value)) return;
+
+    const runtime = cardRuntimes.get(cardId);
+    if (runtime) {
+      cancelRuntime(runtime);
+    }
+    updateCard(cardId, (item) => ({
+      ...item,
+      presetId: value,
+      templateId: null,
+      copied: false,
+      copyError: null,
+      result: { status: "idle" },
+    }));
+  };
+
+  const handleSelectCardTemplate = (cardId: string, value: string | null) => {
+    if (!value) return;
+    const current = cards().find((item) => item.id === cardId);
+    if (!current) return;
+    const preset = enabledPresets().find((item) => item.id === current.presetId);
+    if (!preset) return;
+    const chosen = preset.engine.templates.find((tpl) => tpl.id === value);
+    if (!chosen) return;
+
+    const nextTemplateId = chosen.id === preset.engine.defaultTemplateId ? null : chosen.id;
+    const currentEffective =
+      resolvePresetTemplate(preset, current.templateId)?.template.id ??
+      preset.engine.defaultTemplateId;
+    if (chosen.id === currentEffective) {
+      return;
+    }
+
+    invalidateCard(cardId);
+    updateCard(cardId, (item) => ({
+      ...item,
+      templateId: nextTemplateId,
+    }));
+
+    if (
+      isAutoTranslate() &&
+      store.status().kind === "ready" &&
+      props.sourceText().trim().length > 0
+    ) {
+      void executeCard(cardId, "auto");
+    }
+  };
+
+  const handleToggleCollapse = (cardId: string) => {
+    updateCard(cardId, (item) => ({
+      ...item,
+      collapsed: !item.collapsed,
+    }));
+  };
+
+  const handleRemoveCard = (cardId: string) => {
+    const runtime = cardRuntimes.get(cardId);
+    if (runtime) {
+      cancelRuntime(runtime);
+      cardRuntimes.delete(cardId);
+    }
+    props.onOverlayOpenChange?.(`card-preset-${cardId}`, false);
+    props.onOverlayOpenChange?.(`card-template-${cardId}`, false);
+    cards.set(cards().filter((item) => item.id !== cardId));
   };
 
   const handleClearSource = () => {
     props.onSourceTextChange("");
-    invalidateRun();
+    invalidateAllCards();
   };
 
-  const handleCopyResult = async () => {
-    const current = resultState();
-    if (current.status !== "success") return;
-    copyError.set(null);
+  const handleCopyCard = async (cardId: string) => {
+    const card = cards().find((item) => item.id === cardId);
+    const runtime = cardRuntimes.get(cardId);
+    if (!card || !runtime || card.result.status !== "success") return;
+
+    const expectedText = card.result.text;
+    updateCard(cardId, (item) => ({ ...item, copyError: null }));
     try {
-      await clipboardApi.writeText(current.text);
-      if (disposed) return;
-      const latest = resultState();
-      if (latest.status !== "success" || latest.text !== current.text) {
+      await clipboardApi.writeText(expectedText);
+      if (disposed || !cardRuntimes.has(cardId)) return;
+      const latest = cards().find((item) => item.id === cardId);
+      if (!latest || latest.result.status !== "success" || latest.result.text !== expectedText) {
         return;
       }
-      if (copyResetTimer !== null) {
-        clearTimeout(copyResetTimer);
+      if (runtime.copyResetTimer !== null) {
+        clearTimeout(runtime.copyResetTimer);
       }
-      copied.set(true);
-      copyResetTimer = setTimeout(() => {
-        copyResetTimer = null;
-        if (!disposed) {
-          copied.set(false);
+      updateCard(cardId, (item) => ({ ...item, copied: true }));
+      runtime.copyResetTimer = setTimeout(() => {
+        runtime.copyResetTimer = null;
+        if (!disposed && cardRuntimes.has(cardId)) {
+          updateCard(cardId, (item) => ({ ...item, copied: false }));
         }
       }, COPY_FEEDBACK_DURATION_MS);
     } catch {
-      if (!disposed) {
-        copied.set(false);
-        copyError.set(t("quickTranslate.error.copyFailed"));
+      if (!disposed && cardRuntimes.has(cardId)) {
+        updateCard(cardId, (item) => ({
+          ...item,
+          copied: false,
+          copyError: t("quickTranslate.error.copyFailed"),
+        }));
       }
     }
   };
 
-  const canTranslate = () => store.status().kind === "ready" && selectedPreset() !== null;
+  const canTranslate = () =>
+    store.status().kind === "ready" && enabledPresets().length > 0 && cards().length > 0;
+  const canAddPreset = () => store.status().kind === "ready" && enabledPresets().length > 0;
 
   return (
     <View class="gap-2.5 p-3">
@@ -389,29 +781,6 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
           <Text class="text-xs text-muted-foreground">{t("quickTranslate.noEnabledPresets")}</Text>
         </Card>
       </If>
-
-      <View class="flex-row items-center gap-2">
-        <Select
-          testID="quick-translate-preset"
-          size="sm"
-          class="min-w-0 flex-1"
-          items={buildPresetItems(enabledPresets())}
-          value={selectedPresetId()}
-          placeholder={t("quickTranslate.presetPlaceholder")}
-          accessibilityLabel={t("quickTranslate.presetLabel")}
-          disabled={!canTranslate()}
-          onOpenChange={(open) => props.onOverlayOpenChange?.("preset", open)}
-          onChange={handlePresetChange}
-        />
-        <Button
-          testID="quick-translate-submit"
-          variant="primary"
-          size="sm"
-          disabled={!canTranslate()}
-          label={t("quickTranslate.translate")}
-          onPress={() => void executeTranslate("manual")}
-        />
-      </View>
 
       <View class="flex-row items-center gap-1.5">
         <Select
@@ -449,6 +818,14 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
           onOpenChange={(open) => props.onOverlayOpenChange?.("target-language", open)}
           onChange={handleTargetLanguageChange}
         />
+        <Button
+          testID="quick-translate-submit"
+          variant="primary"
+          size="sm"
+          disabled={!canTranslate()}
+          label={t("quickTranslate.translate")}
+          onPress={() => executeAllCards("manual")}
+        />
       </View>
 
       <View class="gap-1.5">
@@ -463,7 +840,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
           onChange={handleSourceChange}
           onSubmit={() => {
             if (isComposing() || isAutoTranslate()) return;
-            void executeTranslate("manual");
+            executeAllCards("manual");
           }}
           onCompositionChange={({ composing }) => isComposing.set(composing)}
           ref={(node) => props.onAttachSourceInput?.(node)}
@@ -481,67 +858,78 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
         </If>
       </View>
 
-      <If when={resultState().status !== "idle"}>
-        <Card class="gap-2 p-3">
-          <If when={resultState().status === "loading"}>
-            <Text testID="quick-translate-status" class="text-xs text-muted-foreground">
-              {t("quickTranslate.translating")}
-            </Text>
-          </If>
+      <View class="flex-row items-center justify-end">
+        <If
+          when={canAddPreset()}
+          else={
+            <Button
+              testID="quick-translate-add-preset"
+              size="xs"
+              variant="outline"
+              disabled
+              label={t("quickTranslate.addPreset")}
+            >
+              <Icon name="plus" tone="muted-foreground" class="size-3.5" />
+            </Button>
+          }
+        >
+          <Menu
+            open={addMenuOpen()}
+            onOpenChange={({ open }) => {
+              addMenuOpen.set(open);
+              props.onOverlayOpenChange?.("add-preset", open);
+            }}
+            placement="bottom"
+            align="end"
+            popupClass={`min-w-44 rounded-xl border border-border bg-popover p-1 shadow-lg ${motion.popup}`}
+            popupStartingClass={motion.popupHidden}
+            popupEndingClass={motion.popupHidden}
+            trigger={
+              <Button
+                testID="quick-translate-add-preset"
+                size="xs"
+                variant="outline"
+                selected={addMenuOpen()}
+                label={t("quickTranslate.addPreset")}
+              >
+                <Icon name="plus" tone="foreground" class="size-3.5" />
+              </Button>
+            }
+          >
+            <Each of={enabledPresets()} key={(item) => item.id}>
+              {(preset) => (
+                <MenuItem
+                  testID={`quick-translate-add-preset-option-${preset().id}`}
+                  accessibilityLabel={preset().name}
+                  onSelect={() => handleAddPresetCard(preset().id)}
+                  class={`h-8 justify-center rounded-lg px-3 hover:bg-accent focus:bg-accent active:bg-border ${motion.navigationFeedback}`}
+                >
+                  <Text class="text-sm text-popover-foreground">{preset().name}</Text>
+                </MenuItem>
+              )}
+            </Each>
+          </Menu>
+        </If>
+      </View>
 
-          <If when={resultState().status === "error"}>
-            <Text testID="quick-translate-error" role="alert" class="text-xs text-destructive">
-              {(() => {
-                const state = resultState();
-                return state.status === "error" ? state.message : "";
-              })()}
-            </Text>
-          </If>
-
-          <If when={resultState().status === "success"}>
-            <View class="gap-2">
-              <View selectable>
-                <Text
-                  testID="quick-translate-result-text"
-                  class="text-sm leading-relaxed text-foreground"
-                >
-                  {(() => {
-                    const state = resultState();
-                    return state.status === "success" ? state.text : "";
-                  })()}
-                </Text>
-              </View>
-              <View class="flex-row items-center justify-between gap-2">
-                <Button
-                  testID="quick-translate-copy"
-                  size="xs"
-                  variant="outline"
-                  accessibilityLabel={
-                    copied() ? t("quickTranslate.copied") : t("quickTranslate.copy")
-                  }
-                  label={copied() ? t("quickTranslate.copied") : t("quickTranslate.copy")}
-                  onPress={() => void handleCopyResult()}
-                >
-                  <Icon
-                    name={copied() ? "check" : "copy"}
-                    tone={copied() ? "success" : "muted-foreground"}
-                    class="size-3.5"
-                  />
-                </Button>
-              </View>
-              <If when={copyError() !== null}>
-                <Text
-                  testID="quick-translate-copy-error"
-                  role="alert"
-                  class="text-xs text-destructive"
-                >
-                  {copyError() ?? ""}
-                </Text>
-              </If>
-            </View>
-          </If>
-        </Card>
-      </If>
+      <View class="gap-2">
+        <Each of={cards()} key={(card) => card.id}>
+          {(card) => (
+            <PresetCardRow
+              card={card}
+              presets={enabledPresets}
+              presetItems={presetItems}
+              onOverlayOpenChange={props.onOverlayOpenChange}
+              onSelectPreset={handleSelectCardPreset}
+              onSelectTemplate={handleSelectCardTemplate}
+              onToggleCollapse={handleToggleCollapse}
+              onRemove={handleRemoveCard}
+              onRetry={(id) => void executeCard(id, "manual")}
+              onCopy={(id) => void handleCopyCard(id)}
+            />
+          )}
+        </Each>
+      </View>
     </View>
   );
 }

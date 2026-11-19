@@ -8,7 +8,11 @@ import type { SavedModelRequestResolution } from "../models/store";
 import { PRESETS_STORAGE_KEY } from "../presets/store";
 import { getLanguageLabel } from "../presets/languages";
 import type { TranslationPreset } from "../presets/types";
-import { resolveInitialPresetLanguages, translateWithPreset } from "./translate";
+import {
+  resolveInitialPresetLanguages,
+  resolvePresetTemplate,
+  translateWithPreset,
+} from "./translate";
 
 initializeAiModules();
 
@@ -483,4 +487,70 @@ test("preset translation: returns localized actionable failure when all chain mo
     expect(res.cancelled).toBe(false);
     expect(res.error).toContain(t("protocol.error.server", { status: 503 }));
   }
+});
+
+test("template override: executes non-default template verbatim without cross-template leaks and resolves removed override safely", async () => {
+  const preset = makePreset({
+    engine: {
+      kind: "ai",
+      modelIds: ["model-uuid-1"],
+      temperature: null,
+      maxOutputTokens: null,
+      templates: [
+        {
+          id: "tpl-default",
+          name: "Default",
+          systemTemplate: "Default {{source_language}}->{{target_language}}",
+          userTemplate: "Default: {{text}}",
+        },
+        {
+          id: "tpl-formal",
+          name: "Formal",
+          systemTemplate: "Formal {{source_language}} to {{target_language}}",
+          userTemplate: "FormalText:\n{{text}}",
+        },
+      ],
+      defaultTemplateId: "tpl-default",
+    },
+  });
+
+  const resolvedOverride = resolvePresetTemplate(preset, "tpl-formal");
+  expect(resolvedOverride).toMatchObject({
+    fellBackToDefault: false,
+    template: { id: "tpl-formal" },
+  });
+  const resolvedFallback = resolvePresetTemplate(preset, "tpl-deleted");
+  expect(resolvedFallback).toMatchObject({
+    fellBackToDefault: true,
+    template: { id: "tpl-default" },
+  });
+
+  let capturedSystem = "";
+  let capturedUser = "";
+  const outcome = await translateWithPreset(
+    {
+      preset,
+      sourceText: "Keep {{target_language}} literal",
+      sourceLanguage: "en",
+      targetLanguage: "ja",
+      templateId: "tpl-formal",
+    },
+    {
+      resolveModelRequest: async (id) => makeReadyResolution(id, "gpt-4o"),
+      generateText: async (_conn, req) => {
+        capturedSystem = req.system;
+        capturedUser = req.user;
+        return "Keigo result";
+      },
+    },
+  );
+
+  expect(outcome).toEqual({
+    ok: true,
+    text: "Keigo result",
+    modelId: "model-uuid-1",
+    templateId: "tpl-formal",
+  });
+  expect(capturedSystem).toBe(`Formal ${getLanguageLabel("en")} to ${getLanguageLabel("ja")}`);
+  expect(capturedUser).toBe("FormalText:\nKeep {{target_language}} literal");
 });

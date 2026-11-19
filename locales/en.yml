@@ -407,6 +407,11 @@ quickTranslate:
   presetPlaceholder: Select a preset…
   presetsLoading: Loading presets…
   noEnabledPresets: No enabled presets. Enable a preset in Presets.
+  addPreset: Add preset
+  templateLabel: Template
+  collapseCard: Collapse card
+  expandCard: Expand card
+  removeCard: Remove card
   translate: Translate
   translating: Translating…
   swapLanguages: Swap languages

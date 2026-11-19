@@ -362,3 +362,172 @@ test("quick popup: startup loads shared presets once without duplicate read on P
   await failedApp.waitUntil(() => !failedApp.shows("id:presets-retry-button"));
   expect(presetReadCount).toBe(3);
 });
+
+test("preset cards: runs duplicate preset cards independently with template overrides, collapse/expand, retry, copy, removal, and auto-mode isolation", async () => {
+  const multiTemplatePreset = makePreset({
+    id: "preset-1",
+    name: "Default EN to FR",
+    engine: {
+      kind: "ai",
+      modelIds: ["m-1"],
+      temperature: null,
+      maxOutputTokens: null,
+      templates: [
+        {
+          id: "tpl-1",
+          name: "Default",
+          systemTemplate: "Default {{source_language}}->{{target_language}}",
+          userTemplate: "{{text}}",
+        },
+        {
+          id: "tpl-2",
+          name: "Formal",
+          systemTemplate: "Formal {{source_language}}->{{target_language}}",
+          userTemplate: "Formal: {{text}}",
+        },
+      ],
+      defaultTemplateId: "tpl-1",
+    },
+  });
+
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedWithPresets(
+      [multiTemplatePreset, makePreset({ id: "preset-2", name: "Preset Two" })],
+      {
+        [POPUP_HARNESS_MODE_KEY]: "multi-card",
+      },
+    ),
+  });
+
+  await app.waitFor("id:quick-translate-card-card-1");
+  // Add a second card of the same preset and assign a different template override in manual mode.
+  await app.press("id:quick-translate-add-preset");
+  await app.waitFor("role:menuitem[Default EN to FR]");
+  await app.press("role:menuitem[Default EN to FR]");
+  await app.waitFor("id:quick-translate-card-card-2");
+  await app.press("id:quick-translate-card-card-2 >> id:quick-translate-template");
+  await app.waitFor("role:option[Formal]");
+  await app.press("role:option[Formal]");
+
+  // Manual Add + template selection sends 0 requests.
+  expect(app.texts().some((line) => line.includes("calls=0|"))).toBe(true);
+
+  await app.type("id:quick-translate-source", "Hello world");
+  await app.press("id:quick-translate-submit");
+  await app.waitUntil(() => app.texts().some((line) => line.includes("calls=2|")));
+
+  // Complete card 2 BEFORE card 1 fails: card order stays card-1 then card-2.
+  await app.press("id:harness-resolve-second");
+  await app.waitFor("id:quick-translate-card-card-2 >> id:quick-translate-copy");
+  await app.press("id:harness-fail-first");
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-retry");
+
+  const textsAfter = app.texts();
+  expect(textsAfter).toContain("Request timed out for card 1");
+  expect(textsAfter).toContain("Card 2 Formal Result");
+  const card1Idx = textsAfter.indexOf("Request timed out for card 1");
+  const card2Idx = textsAfter.indexOf("Card 2 Formal Result");
+  expect(card1Idx).toBeLessThan(card2Idx);
+
+  // Copy affects only card 2.
+  await app.press("id:quick-translate-card-card-2 >> id:quick-translate-copy");
+  expect(app.clipboard()).toBe("Card 2 Formal Result");
+  expect(app.shows("id:quick-translate-card-card-2 >> text:Copied")).toBe(true);
+  expect(app.shows("id:quick-translate-card-card-1 >> text:Copied")).toBe(false);
+
+  // Collapse hides result body and re-expanding restores it without sending another request.
+  await app.press("id:quick-translate-card-card-2 >> id:quick-translate-collapse");
+  expect(app.shows("id:quick-translate-card-card-2 >> id:quick-translate-result-text")).toBe(false);
+  await app.press("id:quick-translate-card-card-2 >> id:quick-translate-collapse");
+  await app.waitFor("id:quick-translate-card-card-2 >> id:quick-translate-result-text");
+  expect(app.texts().some((line) => line.includes("calls=2|"))).toBe(true);
+
+  // Retry on card 1 affects only card 1 without resending card 2.
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-retry");
+  await app.waitUntil(() => app.texts().some((line) => line.includes("calls=3|")));
+  await app.press("id:harness-resolve-third");
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-result-text");
+  expect(app.texts()).toContain("Card 1 Retry Result");
+  expect(app.texts()).toContain("Card 2 Formal Result");
+
+  // Start another run on card 2, remove card 2 mid-flight, then resolve late: card 2 stays gone & card 1 stays intact.
+  await app.press("id:quick-translate-card-card-2 >> id:quick-translate-retry");
+  await app.waitUntil(() => app.texts().some((line) => line.includes("calls=4|")));
+  await app.press("id:quick-translate-card-card-2 >> id:quick-translate-remove");
+  expect(app.shows("id:quick-translate-card-card-2")).toBe(false);
+  await app.waitUntil(() => app.texts().some((line) => line.includes("aborts=aborted-4")));
+  await app.press("id:harness-resolve-fourth");
+  expect(app.texts()).not.toContain("Stale Card 2 Late Result");
+  expect(app.texts()).toContain("Card 1 Retry Result");
+});
+
+test("preset cards: automatic mode schedules eligible cards on shared input and runs only targeted card on add or template override", async () => {
+  const multiTemplatePreset = makePreset({
+    id: "preset-1",
+    name: "Preset Alpha",
+    sourceLanguage: "en",
+    targetLanguage: "fr",
+    engine: {
+      kind: "ai",
+      modelIds: ["m-1"],
+      temperature: null,
+      maxOutputTokens: null,
+      templates: [
+        {
+          id: "tpl-1",
+          name: "Default",
+          systemTemplate: "Default {{source_language}}->{{target_language}}",
+          userTemplate: "{{text}}",
+        },
+        {
+          id: "tpl-2",
+          name: "Concise",
+          systemTemplate: "Concise {{source_language}}->{{target_language}}",
+          userTemplate: "Short: {{text}}",
+        },
+      ],
+      defaultTemplateId: "tpl-1",
+    },
+  });
+
+  const autoApp = await open(POPUP_HARNESS, {
+    ...viewport,
+    clock: {},
+    storage: seedWithPresets([
+      multiTemplatePreset,
+      makePreset({ id: "preset-2", name: "Preset Beta" }),
+    ]),
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": {
+        status: 200,
+        body: { choices: [{ message: { content: "Translated ok" } }] },
+      },
+    },
+  });
+
+  await autoApp.waitFor("id:quick-translate-card-card-1");
+  await autoApp.press("id:harness-toggle-auto");
+  await autoApp.type("id:quick-translate-source", "Good morning");
+  await autoApp.clock!.runFor(500);
+  await autoApp.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-copy");
+  expect(autoApp.requests()).toHaveLength(1);
+
+  // Add card in auto mode -> runs ONLY newly added card 2 (total 2 requests).
+  await autoApp.press("id:quick-translate-add-preset");
+  await autoApp.waitFor("role:menuitem[Preset Beta]");
+  await autoApp.press("role:menuitem[Preset Beta]");
+  await autoApp.waitFor("id:quick-translate-card-card-2 >> id:quick-translate-copy");
+  expect(autoApp.requests()).toHaveLength(2);
+
+  // Shared language remains preserved across preset card add/change.
+  expect(autoApp.shows("id:quick-translate-source-language >> text:English")).toBe(true);
+  expect(autoApp.shows("id:quick-translate-target-language >> text:French")).toBe(true);
+
+  // Change template override ONLY on card 1 -> runs ONLY card 1 (total 3 requests).
+  await autoApp.press("id:quick-translate-card-card-1 >> id:quick-translate-template");
+  await autoApp.waitFor("role:option[Concise]");
+  await autoApp.press("role:option[Concise]");
+  await autoApp.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-copy");
+  expect(autoApp.requests()).toHaveLength(3);
+});

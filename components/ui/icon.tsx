@@ -5,6 +5,7 @@ import arrowUpIcon from "../../assets/icons/arrow-up.svg";
 import checkCircleIcon from "../../assets/icons/check-circle.svg";
 import checkIcon from "../../assets/icons/check.svg";
 import chevronDownIcon from "../../assets/icons/chevron-down.svg";
+import chevronUpIcon from "../../assets/icons/chevron-up.svg";
 import closeIcon from "../../assets/icons/close.svg";
 import copyIcon from "../../assets/icons/copy.svg";
 import cubeOutlineIcon from "../../assets/icons/cube-outline.svg";
@@ -30,6 +31,7 @@ const ICONS = {
   check: checkIcon,
   "check-circle": checkCircleIcon,
   "chevron-down": chevronDownIcon,
+  "chevron-up": chevronUpIcon,
   close: closeIcon,
   copy: copyIcon,
   "cube-outline": cubeOutlineIcon,

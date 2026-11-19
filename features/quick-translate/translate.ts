@@ -50,6 +50,28 @@ export type TranslateWithPresetResult =
       error: string;
     };
 
+/** Resolves a card template override against a saved preset, falling back to default when missing. */
+export function resolvePresetTemplate(
+  preset: Pick<TranslationPreset, "engine">,
+  templateId?: string | null,
+): { template: PromptTemplate; fellBackToDefault: boolean } | null {
+  const templates = preset.engine.templates;
+  if (templateId) {
+    const exact = templates.find((item) => item.id === templateId);
+    if (exact) {
+      return { template: exact, fellBackToDefault: false };
+    }
+  }
+  const fallback = templates.find((item) => item.id === preset.engine.defaultTemplateId);
+  if (!fallback) {
+    return null;
+  }
+  return {
+    template: fallback,
+    fellBackToDefault: Boolean(templateId && templateId !== fallback.id),
+  };
+}
+
 /** Returns initial popup languages for a preset, mapping null target to Chinese (`zh`). */
 export function resolveInitialPresetLanguages(
   preset: Pick<TranslationPreset, "sourceLanguage" | "targetLanguage">,
