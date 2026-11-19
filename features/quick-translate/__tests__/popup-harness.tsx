@@ -72,6 +72,7 @@ function PopupHarnessApp(props: {
   let secondDeferred: Deferred<TranslateWithPresetResult> | null = null;
   let thirdDeferred: Deferred<TranslateWithPresetResult> | null = null;
   let fourthDeferred: Deferred<TranslateWithPresetResult> | null = null;
+  let fifthDeferred: Deferred<TranslateWithPresetResult> | null = null;
 
   const translateStub = async (
     input: TranslateWithPresetInput,
@@ -102,6 +103,10 @@ function PopupHarnessApp(props: {
       if (seq === 4) {
         fourthDeferred = createDeferred<TranslateWithPresetResult>();
         return fourthDeferred.promise;
+      }
+      if (seq === 5) {
+        fifthDeferred = createDeferred<TranslateWithPresetResult>();
+        return fifthDeferred.promise;
       }
     }
 
@@ -247,6 +252,20 @@ function PopupHarnessApp(props: {
                   text: "Stale Card 2 Late Result",
                   modelId: "m-1",
                   templateId: "tpl-2",
+                })
+              }
+            />
+            <Button
+              testID="harness-resolve-fifth"
+              size="xs"
+              variant="outline"
+              label="Resolve 5"
+              onPress={() =>
+                fifthDeferred?.resolve({
+                  ok: true,
+                  text: "Card 1 Expanded Result",
+                  modelId: "m-1",
+                  templateId: "tpl-1",
                 })
               }
             />
