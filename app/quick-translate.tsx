@@ -117,18 +117,16 @@ export function registerQuickTranslateDoubleCopy(
 
 /** Renders popup contents inside `<Window>` so `titleBar()` reads this window's caption area. */
 function QuickTranslateWindowBody(props: { controller: QuickTranslateController }) {
-  const caption = titleBar();
-
   return (
     <View class="flex-1 bg-background text-foreground">
       <View
         testID="quick-translate-header"
         desktop={{ windowDrag: true }}
         class="shrink-0 flex-row items-center justify-between gap-2 border-b border-border bg-background pl-3"
-        // Runtime platform titleBar() insets determine height and caption-button clearance.
+        // Runtime platform titleBar() insets are reactive once the floating HWND reports caption bounds.
         style={{
-          height: Math.max(38, caption.height),
-          paddingRight: caption.right + 8,
+          height: Math.max(38, titleBar().height),
+          paddingRight: titleBar().right + 8,
         }}
       >
         <Text class="text-xs font-medium text-foreground">{t("quickTranslate.title")}</Text>

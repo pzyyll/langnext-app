@@ -818,7 +818,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   const canAddPreset = () => store.status().kind === "ready" && enabledPresets().length > 0;
 
   return (
-    <View class="gap-2.5 p-3">
+    <View class="gap-2 p-2.5">
       <If when={store.status().kind === "idle" || store.status().kind === "loading"}>
         <Card testID="quick-translate-presets-loading" class="gap-1.5 p-3">
           <Text class="text-xs text-muted-foreground">{t("quickTranslate.presetsLoading")}</Text>
@@ -898,25 +898,26 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
         />
       </View>
 
-      <View class="gap-1.5">
-        <Textarea
-          testID="quick-translate-source"
-          autoFocus
-          submitBehavior={isAutoTranslate() ? "newline" : "submit"}
-          value={props.sourceText()}
-          placeholder={t("quickTranslate.sourcePlaceholder")}
-          accessibilityLabel={t("quickTranslate.sourceLabel")}
-          inputClass="min-h-16"
-          onChange={handleSourceChange}
-          onSubmit={() => {
-            if (isComposing() || isAutoTranslate()) return;
-            executeAllCards("manual");
-          }}
-          onCompositionChange={({ composing }) => isComposing.set(composing)}
-          ref={(node) => props.onAttachSourceInput?.(node)}
-        />
-        <If when={props.sourceText().length > 0}>
-          <View class="flex-row justify-end">
+      <Textarea
+        testID="quick-translate-source"
+        autoFocus
+        submitBehavior={isAutoTranslate() ? "newline" : "submit"}
+        value={props.sourceText()}
+        placeholder={t("quickTranslate.sourcePlaceholder")}
+        accessibilityLabel={t("quickTranslate.sourceLabel")}
+        inputClass="min-h-16"
+        onChange={handleSourceChange}
+        onSubmit={() => {
+          if (isComposing() || isAutoTranslate()) return;
+          executeAllCards("manual");
+        }}
+        onCompositionChange={({ composing }) => isComposing.set(composing)}
+        ref={(node) => props.onAttachSourceInput?.(node)}
+      />
+
+      <View class="flex-row items-center justify-between gap-2">
+        <View>
+          <If when={props.sourceText().length > 0}>
             <Button
               testID="quick-translate-clear"
               size="xs"
@@ -924,11 +925,8 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
               label={t("common.clearInput")}
               onPress={handleClearSource}
             />
-          </View>
-        </If>
-      </View>
-
-      <View class="flex-row items-center justify-end">
+          </If>
+        </View>
         <If
           when={canAddPreset()}
           else={
