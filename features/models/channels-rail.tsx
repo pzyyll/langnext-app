@@ -29,7 +29,7 @@ export function ChannelsRail(props: ChannelsRailProps) {
 
   return (
     <View testID="channels-rail" class="min-w-0 flex-1 bg-background">
-      <View class="h-12 shrink-0 flex-row items-center justify-between gap-2 border-b border-border px-4">
+      <View class="h-14 shrink-0 flex-row items-center justify-between gap-2 px-4">
         <Text role="header" class="min-w-0 truncate text-sm font-semibold text-foreground">
           {t("models.channels.title")}
         </Text>
@@ -56,14 +56,14 @@ export function ChannelsRail(props: ChannelsRailProps) {
                 <If
                   when={props.channels.length > 0}
                   else={
-                    <View class="p-4">
+                    <View class="px-4 pb-4 pt-1">
                       <Text class="text-xs text-muted-foreground">
                         {t("models.channels.empty")}
                       </Text>
                     </View>
                   }
                 >
-                  <View class="gap-1 p-2">
+                  <View class="gap-1 px-2 pb-2">
                     <Each of={props.channels} key={(channel) => channel.id}>
                       {(channel, index) => {
                         const isSelected = () => props.selectedId === channel().id;
@@ -176,7 +176,7 @@ export function ChannelsRail(props: ChannelsRailProps) {
                 </If>
               }
             >
-              <View class="gap-3 p-4">
+              <View class="gap-3 px-4 pb-4 pt-1">
                 <Text role="alert" class="text-xs text-destructive">
                   {props.error}
                 </Text>
@@ -190,7 +190,7 @@ export function ChannelsRail(props: ChannelsRailProps) {
             </If>
           }
         >
-          <View class="p-4">
+          <View class="px-4 pb-4 pt-1">
             <Text class="text-xs text-muted-foreground">{t("models.channels.loading")}</Text>
           </View>
         </If>

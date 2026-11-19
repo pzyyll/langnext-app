@@ -274,13 +274,18 @@ nesting scroll views.
   a customized rail width while clamping it to the current viewport. Each split
   workspace persists its own rail width in `Storage` (`split.models.railWidth`,
   `split.presets.railWidth`).
-- **Unified split header spine**: Both the left `ChannelsRail` header and right
-  `ProviderEditor` header use a fixed `h-12` bar with `border-b border-border` so
-  the horizontal hairline aligns to the pixel across the vertical split divider.
+- **Unified borderless split header band**: Both the left `ChannelsRail` header and right
+  `ProviderEditor` header use a fixed `h-14` borderless bar (no `border-b`) so
+  their titles align across the vertical `SplitPane` divider without a crosshair
+  line. The right header aligns to the same `mx-auto w-full max-w-4xl` spine as
+  the cards below (`px-6` on desktop, `px-4` below `860` points), promotes the
+  channel title to `text-lg font-semibold` (with `size-5` provider mark) above
+  card `SectionHeading`s (`text-base font-semibold`), and renders conflict and
+  unsupported-configuration alerts as inset `rounded-lg` banners.
   Neither pane uses a persistent bottom footer bar, eliminating mismatched bottom
   hairlines and oversized disabled commit buttons.
 - **Master rail**: A `Channels` header and `+` icon trigger over a full-height
-  scrollable channel list (without a duplicate `border-r`, since the split handle
+  scrollable channel list (`px-2 pb-2`, without a duplicate `border-r`, since the split handle
   draws the `bg-border` hairline). Each channel row keeps a fixed leading status lane
   (`check-circle` when enabled, muted `minus` when disabled, paired with text and
   accessible state) plus a two-line display name and a provider mark + name
@@ -288,11 +293,11 @@ nesting scroll views.
   Selection highlights the row surface (`border-border bg-accent`), and reorder
   arrows appear only on the selected row when multiple channels exist, keeping
   the status column fixed.
-- **Detail pane**: Displays the selected channel's `h-12` header (title, inline
+- **Detail pane**: Displays the selected channel's `h-14` header (title, inline
   rename, enabled `Switch`, hairline divider, and quiet destructive-hover delete
   trigger), followed by scrollable `Connection` and `Models` cards
   (`rounded-xl border border-border bg-card`, `p-5` on normal and `p-4` on narrow
-  viewports). The saved editor is keyed by channel ID. A channel switch disposes
+  viewports, scroll container `px-6 pb-6 pt-2` and `px-4 pb-4 pt-1` compact). The saved editor is keyed by channel ID. A channel switch disposes
   the old editor and its native controls. Updates to the same channel keep the
   editor and its pending connection edits.
 - **Connection card**: Groups `API Type` and `Base URL` on one row on desktop
@@ -487,9 +492,9 @@ Presets manages AI translation presets using the same split master-detail struct
 
 ### Split layout and responsive structure
 
-- **Unified split header spine**: Both the left `PresetsRail` (`SplitPane` rail, `240` pt default or `192` pt compact default under `860` points, persisted under `split.presets.railWidth`) and the right `PresetEditor` (`min-w-0 flex-1`) share a fixed `h-12 border-b border-border` header bar so the horizontal hairline aligns across the draggable `bg-border` divider.
-- **Master rail (`PresetsRail`)**: Displays the `Presets` heading and `+` icon button (`add-preset-button`, disabled while loading, unreadable, or mutating). Below the header, saved presets render in a virtualized NSH `List` keyed by preset ID (`keyExtractor`), showing each preset's truncated name, `Enabled`/`Disabled` `Badge`, and model summary (`Channel · Model`, plus fallback count when present). Unsaved new drafts render a pinned `preset-draft-item` preview row with an `Unsaved` warning badge above the list. Missing/unreadable storage renders an inline `role="alert"` load error with a **Retry** button (`presets-retry-button`) and keeps creation disabled.
-- **Pinned header actions and scrollable editor**: The right pane pins the live preset title, `Unsaved` badge when dirty or new, inline `Enabled` switch (`preset-enabled`), `Cancel` (`preset-cancel`), and `Save` (`preset-save`) inside the `h-12` header so primary actions stay visible at `720 × 520` without header crowding or horizontal overflow. Below the header, one `<Scroll class="min-h-0 flex-1">` owns the centered reading column (`mx-auto w-full max-w-4xl`, `gap-5 p-6` on desktop and `gap-4 p-4` under `860` points), ending with `Delete Preset` (`preset-delete`, `destructive-outline`) for saved presets.
+- **Unified borderless split header band**: Both the left `PresetsRail` (`SplitPane` rail, `240` pt default or `192` pt compact default under `860` points, persisted under `split.presets.railWidth`) and the right `PresetEditor` (`min-w-0 flex-1`) share a fixed `h-14` borderless header bar aligned across the draggable `bg-border` divider.
+- **Master rail (`PresetsRail`)**: Displays the `Presets` heading and `+` icon button (`add-preset-button`, disabled while loading, unreadable, or mutating). Below the header, saved presets render in a virtualized NSH `List` keyed by preset ID (`keyExtractor`, `px-2 pb-2`), showing each preset's truncated name, `Enabled`/`Disabled` `Badge`, and model summary (`Channel · Model`, plus fallback count when present). Unsaved new drafts render a pinned `preset-draft-item` preview row with an `Unsaved` warning badge above the list. Missing/unreadable storage renders an inline `role="alert"` load error with a **Retry** button (`presets-retry-button`) and keeps creation disabled.
+- **Pinned header actions and scrollable editor**: The right pane aligns its `h-14` header to `mx-auto w-full max-w-4xl` (`px-6` on desktop, `px-4` below `860` points), displaying the live preset title (`text-lg font-semibold`), `Unsaved` badge when dirty or new, inline `Enabled` switch (`preset-enabled`), `Cancel` (`preset-cancel`), and `Save` (`preset-save`) so primary actions stay visible at `720 × 520` without header crowding or horizontal overflow. Below the header, one `<Scroll class="min-h-0 flex-1">` owns the centered reading column (`mx-auto w-full max-w-4xl`, `gap-5 px-6 pb-6 pt-2` on desktop and `gap-4 px-4 pb-4 pt-1` under `860` points), ending with `Delete Preset` (`preset-delete`, `destructive-outline`) for saved presets.
 - **Editor sections**: Uses shared `Card`, `SectionHeading`, `FormField`, `Input`, `Textarea` (over `nsh/base` `Input` with `multiline` and `submitBehavior="newline"`), `Select`, `Switch`, `Badge`, `Button`, and `ConfirmDialog`:
   - Top identity card: `Name` input (`preset-name`).
   - **Languages**: `Source language` (`auto` or concrete LangNext ID) and `Target language` (`No preference` or concrete LangNext ID) paired horizontally on `>= 860` points and stacked vertically under `860` points, built dynamically from live `t()` lookups so language changes apply immediately.
@@ -544,8 +549,8 @@ Use the shared decimal `Input` with two stacked arrow buttons at its trailing ed
 
 Settings uses the same `PageSurface` (`layout="split"`) and `SplitPane` master-detail structure as Models and Presets (`testID="settings-page"`), with its own persisted rail width (`split.settings.railWidth`).
 
-- **Left category rail (`settings-rail`)**: Shares the `h-12 border-b border-border` header (`Settings`) aligned across the draggable `bg-border` divider, followed by selectable category rows (`General` selected by default on launch, `Appearance`) styled with `Button` (`size="row"`) and `border-border bg-accent` selection fill. The active category stays in session state when navigating to other sidebar destinations and back.
-- **Right detail pane (`settings-detail`)**: Displays the active category title in the aligned `h-12 border-b border-border` header above a `<Scroll>` column (`mx-auto w-full max-w-4xl`, `gap-5 p-6` on desktop and `gap-4 p-4` under `860` points):
+- **Left category rail (`settings-rail`)**: Shares the borderless `h-14` header (`Settings`) aligned across the draggable `bg-border` divider, followed by selectable category rows (`px-2 pb-2`; `General` selected by default on launch, `Appearance`) styled with `Button` (`size="row"`) and `border-border bg-accent` selection fill. The active category stays in session state when navigating to other sidebar destinations and back.
+- **Right detail pane (`settings-detail`)**: Displays the active category title (`text-lg font-semibold`) inside an aligned `mx-auto h-14 w-full max-w-4xl` borderless header (`px-6` on desktop, `px-4` below `860` points) above a `<Scroll>` column (`mx-auto w-full max-w-4xl`, `gap-5 px-6 pb-6 pt-2` on desktop and `gap-4 px-4 pb-4 pt-1` under `860` points):
   - **General**: Hosts the **Language** `Card` (`System`, `English`, `简体中文` `RadioGroup` and inline save-error `role="alert"`).
   - **Appearance**: Hosts the **Theme** `Card` (`Light`, `Dark`, `System` `RadioGroup` and inline save-error `role="alert"`) and the **Transparent title bar and sidebar** `Switch` `Card`.
 
@@ -561,9 +566,9 @@ Settings uses the same `PageSurface` (`layout="split"`) and `SplitPane` master-d
 
 ### Validation
 
-- **Checks**: `mise run verify` passed formatting, lint, type checks, all headless tests (including updated `App.test.tsx`, `components/layout/split-rail.test.ts`, and `features/settings/settings.test.tsx`), and the release bundle. Real Windows desktop runs (`--target windows`) passed `features/settings/settings.test.tsx` (3/3).
-- **Visual audit & Finishing checklist**: Inspected Windows desktop PNG screenshots across Light (`1040 × 720`, `en`, General & Appearance with hovered split handle) and Dark (`720 × 520`, `zh-CN`, `reducedMotion: true`, General & Appearance):
-  - *Radius, typography, spacing, alignment*: `h-12 border-b` header hairlines align across the `1` pt vertical divider; the `16` pt leading spine (`px-4` header and `p-2` + `px-2` row) aligns category labels with the rail heading; concentric `rounded-xl` cards and `rounded-lg` radio/switch rows fit cleanly without clipping at `720 × 520`.
+- **Checks**: `mise run verify` passed formatting, lint, type checks, all headless tests (including updated `App.test.tsx`, `components/layout/split-rail.test.ts`, and `features/settings/settings.test.tsx`), and the release bundle. Real Windows desktop runs (`--target windows`) passed `features/models/models.test.tsx` (8/8), `features/presets/presets.test.tsx` (11/11), and `features/settings/settings.test.tsx` (3/3).
+- **Visual audit & Finishing checklist**: Inspected Windows desktop PNG screenshots across Light (`1040 × 720`, `zh-CN` across Models, Presets, and Settings General/Appearance; plus `en` Settings with hovered split handle) and Dark (`720 × 520`, `en` and `zh-CN`, `reducedMotion: true`, across Models, Presets, and Settings General/Appearance):
+  - *Radius, typography, spacing, alignment*: Borderless `h-14` header bands align left and right titles across the `1` pt vertical divider without a crosshair hairline; right detail headers (`text-lg font-semibold`) align to `max-w-4xl` card edges below, clearly leading card `SectionHeading`s (`text-base font-semibold`), while concentric `rounded-xl` cards and `rounded-lg` radio/switch rows fit cleanly without clipping at `720 × 520`.
   - *Color, hover, states, motion*: Category selection (`border-border bg-accent`), radio selection (`checked:border-primary checked:bg-accent`), transparency switch, and hovered split handle (`bg-ring` + centered pill thumb) render cleanly in light and dark.
   - *Accessibility & outstanding*: Category navigation carries `role="navigation"` + `accessibilityLabel`, radio groups carry `accessibilityLabel`, and the split handle carries `settings.resizeLabel`. Held press (`active:`), frame-by-frame motion timing, and live Windows Narrator speech remain manual checks.
 

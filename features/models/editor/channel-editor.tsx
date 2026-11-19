@@ -83,148 +83,152 @@ export function ChannelEditor(props: ChannelEditorProps) {
 
   return (
     <View testID="provider-editor" class="min-w-0 flex-1 bg-background">
-      <View
-        class={`h-12 shrink-0 flex-row items-center justify-between gap-3 border-b border-border ${compactLayout() ? "px-4" : "px-6"}`}
-      >
-        <View class="min-w-0 flex-1 flex-row items-center gap-2">
-          <If
-            when={providerPresentation() !== null}
-            else={<Icon name="cube-outline" tone="muted-foreground" class="size-4 shrink-0" />}
-          >
-            <ProviderMark icon={providerPresentation()!.icon} class="size-4 shrink-0" />
-          </If>
-          <If
-            when={!isDraftMode() && renaming()}
-            else={
-              <>
-                <Text role="header" class="truncate text-base font-semibold text-foreground">
-                  {currentDisplayName().trim() || providerLabel()}
-                </Text>
-                <If when={isDraftMode()}>
-                  <Badge label={t("models.channel.unsaved")} tone="warning" />
-                </If>
-                <If when={!isDraftMode()}>
-                  <Button
-                    testID="rename-channel-button"
-                    size="icon-sm"
-                    variant="ghost"
-                    tooltip={t("models.channel.rename")}
-                    accessibilityLabel={t("models.channel.renameLabel")}
-                    onPress={startRename}
-                  >
-                    <Icon name="edit" tone="muted-foreground" class="size-3.5" />
-                  </Button>
-                </If>
-              </>
-            }
-          >
-            <View class="min-w-0 flex-1 flex-row items-center gap-1.5">
-              <Input
-                testID="rename-channel-input"
-                size="sm"
-                autoFocus
-                accessibilityLabel={t("models.channel.nameLabel")}
-                value={renameDraft()}
-                onChange={(v) => setRenameDraft(v)}
-                onSubmit={() => void submitRename()}
-                onKeyPress={(key) => {
-                  if (key === "Escape") setRenaming(false);
-                }}
-                class="min-w-0 max-w-52 flex-1"
-              />
-              <Button
-                testID="confirm-rename-channel"
-                variant="primary"
-                size="sm"
-                label={renameSaving() ? t("common.saving") : t("common.save")}
-                disabled={renameDraft().trim().length === 0 || renameSaving()}
-                onPress={() => void submitRename()}
-              />
-              <Button
-                variant="outline"
-                size="sm"
-                label={t("common.cancel")}
-                disabled={renameSaving()}
-                onPress={() => setRenaming(false)}
-              />
-            </View>
-          </If>
-        </View>
+      <View class="shrink-0">
+        <View
+          class={`mx-auto h-14 w-full max-w-4xl flex-row items-center justify-between gap-3 ${compactLayout() ? "px-4" : "px-6"}`}
+        >
+          <View class="min-w-0 flex-1 flex-row items-center gap-2">
+            <If
+              when={providerPresentation() !== null}
+              else={<Icon name="cube-outline" tone="muted-foreground" class="size-5 shrink-0" />}
+            >
+              <ProviderMark icon={providerPresentation()!.icon} class="size-5 shrink-0" />
+            </If>
+            <If
+              when={!isDraftMode() && renaming()}
+              else={
+                <>
+                  <Text role="header" class="truncate text-lg font-semibold text-foreground">
+                    {currentDisplayName().trim() || providerLabel()}
+                  </Text>
+                  <If when={isDraftMode()}>
+                    <Badge label={t("models.channel.unsaved")} tone="warning" />
+                  </If>
+                  <If when={!isDraftMode()}>
+                    <Button
+                      testID="rename-channel-button"
+                      size="icon-sm"
+                      variant="ghost"
+                      tooltip={t("models.channel.rename")}
+                      accessibilityLabel={t("models.channel.renameLabel")}
+                      onPress={startRename}
+                    >
+                      <Icon name="edit" tone="muted-foreground" class="size-3.5" />
+                    </Button>
+                  </If>
+                </>
+              }
+            >
+              <View class="min-w-0 flex-1 flex-row items-center gap-1.5">
+                <Input
+                  testID="rename-channel-input"
+                  size="sm"
+                  autoFocus
+                  accessibilityLabel={t("models.channel.nameLabel")}
+                  value={renameDraft()}
+                  onChange={(v) => setRenameDraft(v)}
+                  onSubmit={() => void submitRename()}
+                  onKeyPress={(key) => {
+                    if (key === "Escape") setRenaming(false);
+                  }}
+                  class="min-w-0 max-w-52 flex-1"
+                />
+                <Button
+                  testID="confirm-rename-channel"
+                  variant="primary"
+                  size="sm"
+                  label={renameSaving() ? t("common.saving") : t("common.save")}
+                  disabled={renameDraft().trim().length === 0 || renameSaving()}
+                  onPress={() => void submitRename()}
+                />
+                <Button
+                  variant="outline"
+                  size="sm"
+                  label={t("common.cancel")}
+                  disabled={renameSaving()}
+                  onPress={() => setRenaming(false)}
+                />
+              </View>
+            </If>
+          </View>
 
-        <View class="shrink-0 flex-row items-center gap-2.5">
-          <Switch
-            testID="channel-enabled-switch"
-            label={t("models.channel.enabled")}
-            variant="inline"
-            accessibilityLabel={t("models.channel.enabledLabel")}
-            checked={currentEnabled()}
-            onChange={(checked) => void handleToggleChannelEnabled(checked)}
-          />
-          <View class="h-4 w-px bg-border" />
-          <If
-            when={isDraftMode()}
-            else={
-              <Button
-                testID="delete-channel-button"
-                variant="destructive-ghost"
-                size="icon-sm"
-                tooltip={t("models.channel.delete")}
-                accessibilityLabel={t("models.channel.delete")}
-                disabled={deletingChannel()}
-                onPress={() => setDeleteDialogOpen(true)}
-              >
-                <Icon name="delete" tone="muted-foreground" class="size-3.5" />
-              </Button>
-            }
-          >
-            <View class="flex-row items-center gap-2">
-              <Button
-                testID="cancel-channel-button"
-                variant="ghost"
-                size="sm"
-                label={t("common.cancel")}
-                disabled={saving()}
-                onPress={() => {
-                  if (props.mode === "draft") props.onCancelDraft();
-                }}
-              />
-              <Button
-                testID="save-channel-button"
-                variant="primary"
-                size="sm"
-                label={saving() ? t("common.saving") : t("common.save")}
-                disabled={saving()}
-                onPress={() => void handleSaveDraft()}
-              />
-            </View>
-          </If>
+          <View class="shrink-0 flex-row items-center gap-2.5">
+            <Switch
+              testID="channel-enabled-switch"
+              label={t("models.channel.enabled")}
+              variant="inline"
+              accessibilityLabel={t("models.channel.enabledLabel")}
+              checked={currentEnabled()}
+              onChange={(checked) => void handleToggleChannelEnabled(checked)}
+            />
+            <View class="h-4 w-px bg-border" />
+            <If
+              when={isDraftMode()}
+              else={
+                <Button
+                  testID="delete-channel-button"
+                  variant="destructive-ghost"
+                  size="icon-sm"
+                  tooltip={t("models.channel.delete")}
+                  accessibilityLabel={t("models.channel.delete")}
+                  disabled={deletingChannel()}
+                  onPress={() => setDeleteDialogOpen(true)}
+                >
+                  <Icon name="delete" tone="muted-foreground" class="size-3.5" />
+                </Button>
+              }
+            >
+              <View class="flex-row items-center gap-2">
+                <Button
+                  testID="cancel-channel-button"
+                  variant="ghost"
+                  size="sm"
+                  label={t("common.cancel")}
+                  disabled={saving()}
+                  onPress={() => {
+                    if (props.mode === "draft") props.onCancelDraft();
+                  }}
+                />
+                <Button
+                  testID="save-channel-button"
+                  variant="primary"
+                  size="sm"
+                  label={saving() ? t("common.saving") : t("common.save")}
+                  disabled={saving()}
+                  onPress={() => void handleSaveDraft()}
+                />
+              </View>
+            </If>
+          </View>
         </View>
       </View>
 
       <If when={!isDraftMode() && conflictDetected()}>
-        <View
-          class={`flex-row items-center justify-between gap-3 border-b border-border bg-warning/15 py-2.5 ${compactLayout() ? "px-4" : "px-6"}`}
-        >
-          <Text class="text-xs font-medium text-warning">{t("models.channel.conflict")}</Text>
-          <Button
-            size="sm"
-            variant="outline"
-            label={t("common.reload")}
-            onPress={() => {
-              reloadFromChannel();
-            }}
-          />
+        <View class={`mx-auto w-full max-w-4xl pb-2 ${compactLayout() ? "px-4" : "px-6"}`}>
+          <View class="flex-row items-center justify-between gap-3 rounded-lg border border-warning/40 bg-warning/15 px-4 py-2.5">
+            <Text class="text-xs font-medium text-warning">{t("models.channel.conflict")}</Text>
+            <Button
+              size="sm"
+              variant="outline"
+              label={t("common.reload")}
+              onPress={() => {
+                reloadFromChannel();
+              }}
+            />
+          </View>
         </View>
       </If>
 
       <If when={hasUnsupportedConfiguration()}>
-        <View
-          testID="unsupported-configuration-alert"
-          class={`border-b border-border bg-destructive/10 py-2.5 ${compactLayout() ? "px-4" : "px-6"}`}
-        >
-          <Text role="alert" class="text-xs font-medium text-destructive">
-            {t("ai.error.unsupportedConfiguration")}
-          </Text>
+        <View class={`mx-auto w-full max-w-4xl pb-2 ${compactLayout() ? "px-4" : "px-6"}`}>
+          <View
+            testID="unsupported-configuration-alert"
+            class="rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-2.5"
+          >
+            <Text role="alert" class="text-xs font-medium text-destructive">
+              {t("ai.error.unsupportedConfiguration")}
+            </Text>
+          </View>
         </View>
       </If>
 
@@ -232,8 +236,8 @@ export function ChannelEditor(props: ChannelEditorProps) {
         <View
           class={
             compactLayout()
-              ? "mx-auto w-full max-w-4xl gap-4 p-4"
-              : "mx-auto w-full max-w-4xl gap-5 p-5"
+              ? "mx-auto w-full max-w-4xl gap-4 px-4 pb-4 pt-1"
+              : "mx-auto w-full max-w-4xl gap-5 px-6 pb-6 pt-2"
           }
         >
           <If when={isDraftMode()}>

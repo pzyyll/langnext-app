@@ -424,7 +424,7 @@ export function PresetsPage(props: PresetsPageProps) {
         handleAccessibilityLabel={t("presets.list.resizeLabel")}
         rail={
           <View testID="presets-rail" class="min-w-0 flex-1 bg-background">
-            <View class="h-12 shrink-0 flex-row items-center justify-between gap-2 border-b border-border px-4">
+            <View class="h-14 shrink-0 flex-row items-center justify-between gap-2 px-4">
               <Text role="header" class="min-w-0 truncate text-sm font-semibold text-foreground">
                 {t("presets.list.title")}
               </Text>
@@ -450,7 +450,7 @@ export function PresetsPage(props: PresetsPageProps) {
                     <If
                       when={presetsStore.records().length > 0 || isNewDraft()}
                       else={
-                        <View class="p-4">
+                        <View class="px-4 pb-4 pt-1">
                           <Text class="text-xs text-muted-foreground">
                             {t("presets.list.empty")}
                           </Text>
@@ -459,7 +459,7 @@ export function PresetsPage(props: PresetsPageProps) {
                     >
                       <View class="min-h-0 flex-1">
                         <If when={isNewDraft()}>
-                          <View class="px-2 pt-2">
+                          <View class="px-2 pb-1">
                             <View
                               testID="preset-draft-item"
                               class={`flex-row items-center gap-2 rounded-lg border border-border bg-accent px-2.5 py-2 ${motion.navigationFeedback}`}
@@ -488,7 +488,7 @@ export function PresetsPage(props: PresetsPageProps) {
                             each={presetsStore.records()}
                             keyExtractor={(item) => item.id}
                             estimatedItemSize={56}
-                            contentClass="gap-1 p-2"
+                            contentClass="gap-1 px-2 pb-2"
                             class="min-h-0 flex-1"
                           >
                             {(preset) => {
@@ -561,7 +561,7 @@ export function PresetsPage(props: PresetsPageProps) {
                     </If>
                   }
                 >
-                  <View class="gap-3 p-4">
+                  <View class="gap-3 px-4 pb-4 pt-1">
                     <Text role="alert" class="text-xs text-destructive">
                       {loadError()}
                     </Text>
@@ -576,7 +576,7 @@ export function PresetsPage(props: PresetsPageProps) {
                 </If>
               }
             >
-              <View class="p-4">
+              <View class="px-4 pb-4 pt-1">
                 <Text class="text-xs text-muted-foreground">{t("presets.list.loading")}</Text>
               </View>
             </If>

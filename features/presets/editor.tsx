@@ -72,7 +72,7 @@ function buildTargetLanguageItems(): SelectItem[] {
 /** Detail-pane editor for creating or editing a translation preset. */
 export function PresetEditor(props: PresetEditorProps) {
   const compact = () => windowSize().width < 860;
-  const bodyPaddingClass = () => (compact() ? "p-4" : "p-6");
+  const bodyPaddingClass = () => (compact() ? "px-4 pb-4 pt-1" : "px-6 pb-6 pt-2");
   const cardClass = () => (compact() ? "gap-4 p-4" : "gap-5 p-5");
   const sourceLanguageItems = () => buildSourceLanguageItems();
   const targetLanguageItems = () => buildTargetLanguageItems();
@@ -163,42 +163,46 @@ export function PresetEditor(props: PresetEditorProps) {
 
   return (
     <View testID="preset-editor" class="min-w-0 flex-1">
-      <View class="h-12 shrink-0 flex-row items-center justify-between gap-3 border-b border-border px-6">
-        <View class="min-w-0 flex-1 flex-row items-center gap-2.5">
-          <Text role="header" class="min-w-0 truncate text-base font-semibold text-foreground">
-            {props.draft.name.trim() || t("presets.editor.untitled")}
-          </Text>
-          <If when={props.dirty || props.draft.sourceId === null}>
-            <Badge tone="warning" label={t("presets.editor.unsaved")} />
-          </If>
-        </View>
+      <View class="shrink-0">
+        <View
+          class={`mx-auto h-14 w-full max-w-4xl flex-row items-center justify-between gap-3 ${compact() ? "px-4" : "px-6"}`}
+        >
+          <View class="min-w-0 flex-1 flex-row items-center gap-2.5">
+            <Text role="header" class="min-w-0 truncate text-lg font-semibold text-foreground">
+              {props.draft.name.trim() || t("presets.editor.untitled")}
+            </Text>
+            <If when={props.dirty || props.draft.sourceId === null}>
+              <Badge tone="warning" label={t("presets.editor.unsaved")} />
+            </If>
+          </View>
 
-        <View class="shrink-0 flex-row items-center gap-2">
-          <Switch
-            testID="preset-enabled"
-            variant="inline"
-            label={t("presets.editor.enabled")}
-            accessibilityLabel={t("presets.editor.enabledLabel")}
-            checked={props.draft.enabled}
-            disabled={props.saving}
-            onChange={(checked) => props.onChange({ enabled: checked })}
-          />
-          <Button
-            testID="preset-cancel"
-            variant="outline"
-            size="sm"
-            label={t("common.cancel")}
-            disabled={!canCancel()}
-            onPress={() => props.onCancel()}
-          />
-          <Button
-            testID="preset-save"
-            variant="primary"
-            size="sm"
-            label={props.saving ? t("common.saving") : t("common.save")}
-            disabled={!canSave()}
-            onPress={() => props.onSave()}
-          />
+          <View class="shrink-0 flex-row items-center gap-2">
+            <Switch
+              testID="preset-enabled"
+              variant="inline"
+              label={t("presets.editor.enabled")}
+              accessibilityLabel={t("presets.editor.enabledLabel")}
+              checked={props.draft.enabled}
+              disabled={props.saving}
+              onChange={(checked) => props.onChange({ enabled: checked })}
+            />
+            <Button
+              testID="preset-cancel"
+              variant="outline"
+              size="sm"
+              label={t("common.cancel")}
+              disabled={!canCancel()}
+              onPress={() => props.onCancel()}
+            />
+            <Button
+              testID="preset-save"
+              variant="primary"
+              size="sm"
+              label={props.saving ? t("common.saving") : t("common.save")}
+              disabled={!canSave()}
+              onPress={() => props.onSave()}
+            />
+          </View>
         </View>
       </View>
 

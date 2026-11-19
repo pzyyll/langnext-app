@@ -125,13 +125,17 @@ export function SettingsPage() {
       handleAccessibilityLabel={t("settings.resizeLabel")}
       rail={
         <View testID="settings-rail" class="min-w-0 flex-1 bg-background">
-          <View class="h-12 shrink-0 flex-row items-center justify-between gap-2 border-b border-border px-4">
+          <View class="h-14 shrink-0 flex-row items-center justify-between gap-2 px-4">
             <Text role="header" class="min-w-0 truncate text-sm font-semibold text-foreground">
               {t("settings.title")}
             </Text>
           </View>
           <Scroll class="min-h-0 flex-1">
-            <View role="navigation" accessibilityLabel={t("settings.navLabel")} class="gap-1 p-2">
+            <View
+              role="navigation"
+              accessibilityLabel={t("settings.navLabel")}
+              class="gap-1 px-2 pb-2"
+            >
               <Each of={SETTINGS_SECTIONS} key={(item) => item.id}>
                 {(item) => {
                   const isSelected = () => selectedSection() === item().id;
@@ -172,15 +176,19 @@ export function SettingsPage() {
       }
       detail={
         <View testID="settings-detail" class="min-w-0 flex-1 bg-background">
-          <View
-            class={`h-12 shrink-0 flex-row items-center justify-between gap-3 border-b border-border ${compact() ? "px-4" : "px-6"}`}
-          >
-            <Text role="header" class="min-w-0 truncate text-base font-semibold text-foreground">
-              {t(activeSectionLabelKey())}
-            </Text>
+          <View class="shrink-0">
+            <View
+              class={`mx-auto h-14 w-full max-w-4xl flex-row items-center justify-between gap-3 ${compact() ? "px-4" : "px-6"}`}
+            >
+              <Text role="header" class="min-w-0 truncate text-lg font-semibold text-foreground">
+                {t(activeSectionLabelKey())}
+              </Text>
+            </View>
           </View>
           <Scroll class="min-h-0 flex-1">
-            <View class={`mx-auto w-full max-w-4xl ${compact() ? "gap-4 p-4" : "gap-5 p-6"}`}>
+            <View
+              class={`mx-auto w-full max-w-4xl ${compact() ? "gap-4 px-4 pb-4 pt-1" : "gap-5 px-6 pb-6 pt-2"}`}
+            >
               <If
                 when={selectedSection() === "general"}
                 else={<AppearanceSection compact={compact()} />}
