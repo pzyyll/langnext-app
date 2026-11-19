@@ -103,3 +103,80 @@ test("settings ui: renders cleanly at the minimum viewport in dark mode with red
   expect(app.shows("id:theme-dark")).toBe(true);
   expect(app.shows("id:settings-transparency-card")).toBe(true);
 });
+
+test("double copy: shows Windows-only opt-in off by default, hides outside Windows, and surfaces startup or enable failures", async () => {
+  const macApp = await open(APP_ENTRY, {
+    ...viewport,
+    platform: "macos",
+    storage: { "settings.language": "en" },
+  });
+  await macApp.press("id:nav-settings");
+  await macApp.waitFor("id:settings-general-card");
+  expect(macApp.shows("id:settings-double-copy-card")).toBe(false);
+
+  const winApp = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { "settings.language": "en" },
+  });
+  await winApp.press("id:nav-settings");
+  await winApp.waitFor("id:settings-double-copy-card");
+  expect(winApp.shows("id:settings-double-copy-switch")).toBe(true);
+  expect(winApp.storage()["quickTranslate.preferences.v1"]).toBeUndefined();
+  expect(
+    winApp.texts().some((text) => text.includes("clipboard") || text.includes("automatic")),
+  ).toBe(true);
+
+  await winApp.press("id:settings-double-copy-switch");
+  await winApp.waitUntil(() => Boolean(winApp.storage()["quickTranslate.preferences.v1"]));
+  expect(JSON.parse(winApp.storage()["quickTranslate.preferences.v1"]!)).toEqual({
+    version: 1,
+    doubleCopyEnabled: true,
+  });
+
+  // Switch to zh-CN and verify localized copy.
+  await winApp.press("id:language-zh-CN");
+  await winApp.waitUntil(() => winApp.texts().some((text) => text.includes("双击 Ctrl+C")));
+
+  // Toggle back off.
+  await winApp.press("id:settings-double-copy-switch");
+  await winApp.waitUntil(
+    () =>
+      JSON.parse(winApp.storage()["quickTranslate.preferences.v1"]!).doubleCopyEnabled === false,
+  );
+
+  // Enable failure keeps listener inactive and surfaces localized alert without persisting enabled.
+  const enableFail = await open("./__tests__/double-copy-settings-harness.tsx", {
+    ...viewport,
+    storage: {
+      "settings.language": "en",
+      "__test.dc.failMode": "throw",
+    },
+  });
+  await enableFail.press("id:nav-settings");
+  await enableFail.waitFor("id:settings-double-copy-switch");
+  expect(enableFail.texts()).toContain("active=false|reads=0");
+  await enableFail.press("id:settings-double-copy-switch");
+  await enableFail.waitFor("id:settings-double-copy-error");
+  expect(enableFail.texts()).toContain("active=false|reads=0");
+  expect(enableFail.storage()["quickTranslate.preferences.v1"]).toBeUndefined();
+  await enableFail.press("id:dc-harness-trigger");
+  expect(enableFail.texts()).toContain("active=false|reads=0");
+
+  // Startup failure with opted-in storage keeps listener inactive and shows localized error.
+  const startupFail = await open("./__tests__/double-copy-settings-harness.tsx", {
+    ...viewport,
+    storage: {
+      "settings.language": "en",
+      "quickTranslate.preferences.v1": JSON.stringify({ version: 1, doubleCopyEnabled: true }),
+      "__test.dc.failMode": "throw",
+    },
+  });
+  await startupFail.waitUntil(() =>
+    startupFail.texts().some((text) => text.includes("Windows double-copy listener")),
+  );
+  await startupFail.press("id:nav-settings");
+  await startupFail.waitFor("id:settings-double-copy-error");
+  expect(startupFail.texts()).toContain("active=false|reads=0");
+  await startupFail.press("id:dc-harness-trigger");
+  expect(startupFail.texts()).toContain("active=false|reads=0");
+});

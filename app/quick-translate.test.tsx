@@ -1,6 +1,9 @@
 import type { WindowRef, WindowState } from "nsh/desktop";
 import { t } from "nsh/i18n";
 import { expect, open, test } from "nsh/test";
+import { makeChannel, makeModel, makeSeedStorage } from "../features/models/__tests__/fixtures";
+import { PRESETS_STORAGE_KEY } from "../features/presets/store";
+import type { TranslationPreset } from "../features/presets/types";
 import { createQuickTranslateController } from "./quick-translate-controller";
 
 const HARNESS_ENTRY = "./__tests__/quick-translate-harness.tsx";
@@ -267,4 +270,170 @@ test("quick placement: window controller corrects shifted initial bounds once an
   controller.open();
   controller.verifyInitialBounds(shiftedState);
   expect(setBoundsCalls).toHaveLength(1);
+});
+
+test("double copy: controller reads clipboard once, skips when disabled or empty, and drops slow reads superseded by close, newer activation, or manual edit", async () => {
+  let doubleCopyActive = false;
+  let readCalls = 0;
+  const pendingReads: Array<{ resolve: (text: string) => void; reject: (err: Error) => void }> = [];
+
+  const controller = createQuickTranslateController({
+    isDoubleCopyActive: () => doubleCopyActive,
+    readClipboardText: () => {
+      readCalls += 1;
+      return new Promise<string>((resolve, reject) => {
+        pendingReads.push({ resolve, reject });
+      });
+    },
+  });
+
+  // 1. Disabled -> ignores activation completely with zero clipboard reads.
+  await controller.activateDoubleCopy({ hasValidCopy: true });
+  expect(controller.isOpen()).toBe(false);
+  expect(readCalls).toBe(0);
+
+  // 2. Enabled + hasValidCopy: false -> opens popup, keeps existing draft, performs zero reads.
+  doubleCopyActive = true;
+  controller.open();
+  controller.setSourceText("Keep draft");
+  await controller.activateDoubleCopy({ hasValidCopy: false });
+  expect(controller.isOpen()).toBe(true);
+  expect(controller.sourceText()).toBe("Keep draft");
+  expect(readCalls).toBe(0);
+
+  // 3. Enabled + hasValidCopy: true -> performs one read and keeps empty/whitespace from overwriting draft.
+  const emptyPromise = controller.activateDoubleCopy({ hasValidCopy: true });
+  expect(readCalls).toBe(1);
+  pendingReads.shift()!.resolve("   ");
+  await emptyPromise;
+  expect(controller.sourceText()).toBe("Keep draft");
+  expect(controller.sourceDeliverySeq()).toBe(0);
+
+  // 4. Slow read superseded by close -> never reopens or replaces source.
+  const closedPromise = controller.activateDoubleCopy({ hasValidCopy: true });
+  expect(readCalls).toBe(2);
+  controller.close();
+  expect(controller.isOpen()).toBe(false);
+  pendingReads.shift()!.resolve("Stale closed text");
+  await closedPromise;
+  expect(controller.isOpen()).toBe(false);
+  expect(controller.sourceText()).toBe("");
+
+  // 5. Slow read superseded by newer activation -> older read never overwrites newer delivery.
+  const slowFirst = controller.activateDoubleCopy({ hasValidCopy: true });
+  expect(controller.isOpen()).toBe(true);
+  const fastSecond = controller.activateDoubleCopy({ hasValidCopy: true });
+  expect(readCalls).toBe(4);
+  const firstPending = pendingReads.shift()!;
+  const secondPending = pendingReads.shift()!;
+  secondPending.resolve("Fresh second text");
+  await fastSecond;
+  expect(controller.sourceText()).toBe("Fresh second text");
+  expect(controller.sourceDeliverySeq()).toBe(1);
+  firstPending.resolve("Stale first text");
+  await slowFirst;
+  expect(controller.sourceText()).toBe("Fresh second text");
+  expect(controller.sourceDeliverySeq()).toBe(1);
+
+  // 6. Slow read superseded by manual edit -> preserves manual draft.
+  const manualRace = controller.activateDoubleCopy({ hasValidCopy: true });
+  expect(readCalls).toBe(5);
+  controller.setSourceText("Manual override");
+  pendingReads.shift()!.resolve("Late clipboard text");
+  await manualRace;
+  expect(controller.sourceText()).toBe("Manual override");
+  expect(controller.sourceDeliverySeq()).toBe(1);
+});
+
+test("double copy: shell seam delivers copied text to newly mounted popup, respects manual vs auto mode, skips empty text, and handles worker failure", async () => {
+  const preset: TranslationPreset = {
+    id: "preset-1",
+    name: "Quick Preset",
+    enabled: true,
+    sourceLanguage: "en",
+    targetLanguage: "zh",
+    createdAt: "2026-11-19T00:00:00.000Z",
+    updatedAt: "2026-11-19T00:00:00.000Z",
+    engine: {
+      kind: "ai",
+      modelIds: ["m-1"],
+      temperature: null,
+      maxOutputTokens: null,
+      templates: [
+        {
+          id: "tpl-1",
+          name: "Default",
+          systemTemplate: "Translate from {{source_language}} to {{target_language}}.",
+          userTemplate: "{{text}}",
+        },
+      ],
+      defaultTemplateId: "tpl-1",
+    },
+  };
+  const seeded = makeSeedStorage({
+    channels: [makeChannel({ adapterId: "openai-compatible", enabled: true })],
+    models: [makeModel({ enabled: true })],
+    credentials: { "ch-1": "sk-test" },
+  });
+
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    clock: {},
+    storage: {
+      ...seeded,
+      [PRESETS_STORAGE_KEY]: JSON.stringify({ version: 1, items: [preset] }),
+      "settings.language": "en",
+      "quickTranslate.preferences.v1": JSON.stringify({ version: 1, doubleCopyEnabled: true }),
+      "__test.qt.doubleCopyClipboard": "Clipboard manual text",
+    },
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": {
+        status: 200,
+        body: { choices: [{ message: { content: "Translated ok" } }] },
+      },
+    },
+  });
+
+  await app.press("id:harness-trigger-double-copy-valid");
+  await app.waitFor("id:quick-translate-source");
+  expect(app.value("id:quick-translate-source")).toBe("Clipboard manual text");
+  await app.clock!.runFor(650);
+  expect(app.requests()).toHaveLength(0);
+
+  // Pin before triggering harness controls on main window so blur does not close & clear draft.
+  await app.press("id:quick-translate-pin");
+
+  // Empty clipboard leaves existing draft untouched and performs no request.
+  await app.press("id:harness-set-clipboard-empty");
+  await app.press("id:harness-trigger-double-copy-valid");
+  await app.clock!.runFor(50);
+  expect(app.value("id:quick-translate-source")).toBe("Clipboard manual text");
+  expect(app.requests()).toHaveLength(0);
+
+  // Automatic mode follows the same 500 ms debounce as typing/paste.
+  await app.press("id:quick-translate-auto-toggle");
+  await app.press("id:harness-set-clipboard-second");
+  await app.press("id:harness-trigger-double-copy-valid");
+  await app.waitUntil(() => app.value("id:quick-translate-source") === "Second copied phrase");
+  await app.clock!.runFor(499);
+  expect(app.requests()).toHaveLength(0);
+  await app.clock!.runFor(1);
+  await app.waitFor("id:quick-translate-result-text");
+  expect(app.requests()).toHaveLength(1);
+  expect(app.texts()).toContain("Translated ok");
+
+  // Failed worker initialization keeps listener inactive with zero clipboard reads.
+  const failed = await open(HARNESS_ENTRY, {
+    ...viewport,
+    storage: {
+      "settings.language": "en",
+      "quickTranslate.preferences.v1": JSON.stringify({ version: 1, doubleCopyEnabled: true }),
+      "__test.qt.doubleCopyMode": "throw",
+      "__test.qt.doubleCopyClipboard": "Should not be read",
+    },
+  });
+  await failed.waitUntil(() => failed.texts().includes(t("settings.doubleCopy.enableError")));
+  await failed.press("id:harness-trigger-double-copy-valid");
+  expect(failed.window("quick-translate").state()).toBeNull();
+  expect(failed.texts().join(" ")).toContain("dcReads=0|");
 });

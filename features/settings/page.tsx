@@ -1,4 +1,4 @@
-import { Scroll, signal, Text, View, windowSize } from "nsh";
+import { platform, Scroll, signal, Text, View, windowSize } from "nsh";
 import { Radio, RadioGroup } from "nsh/base";
 import { t } from "nsh/i18n";
 import { SplitPane } from "../../components/layout/split-pane";
@@ -6,6 +6,12 @@ import { motion } from "../../components/motion";
 import { Button } from "../../components/ui/button";
 import { Card, SectionHeading } from "../../components/ui/card";
 import { Switch } from "../../components/ui/switch";
+import { canUseDoubleCopy } from "../../platform/quick-translate";
+import {
+  doubleCopyEnabled,
+  doubleCopyError,
+  selectDoubleCopy,
+} from "../quick-translate/preferences";
 import { appearance, appearanceError, selectAppearance, type Appearance } from "./appearance";
 import { language, languageError, selectLanguage, type LanguagePreference } from "./language";
 import { selectTransparency, transparency, transparencyError } from "./transparency";
@@ -62,21 +68,46 @@ function LanguageOption(props: { value: LanguagePreference; label: string }) {
   );
 }
 
-function GeneralSection(props: { compact: boolean }) {
+function GeneralSection(props: { compact: boolean; platformOs: string }) {
   return (
-    <Card testID="settings-general-card" class={props.compact ? "gap-4 p-4" : "gap-5 p-6"}>
-      <SectionHeading title={t("settings.language.title")} />
-      <RadioGroup accessibilityLabel={t("settings.language.title")} class="flex-row gap-3">
-        <LanguageOption value="system" label={t("settings.language.system")} />
-        <LanguageOption value="en" label={t("settings.language.en")} />
-        <LanguageOption value="zh-CN" label={t("settings.language.zh-CN")} />
-      </RadioGroup>
-      <If when={languageError() !== null}>
-        <Text role="alert" class="text-sm text-destructive">
-          {languageError()}
-        </Text>
+    <>
+      <Card testID="settings-general-card" class={props.compact ? "gap-4 p-4" : "gap-5 p-6"}>
+        <SectionHeading title={t("settings.language.title")} />
+        <RadioGroup accessibilityLabel={t("settings.language.title")} class="flex-row gap-3">
+          <LanguageOption value="system" label={t("settings.language.system")} />
+          <LanguageOption value="en" label={t("settings.language.en")} />
+          <LanguageOption value="zh-CN" label={t("settings.language.zh-CN")} />
+        </RadioGroup>
+        <If when={languageError() !== null}>
+          <Text role="alert" class="text-sm text-destructive">
+            {languageError()}
+          </Text>
+        </If>
+      </Card>
+
+      <If when={canUseDoubleCopy(props.platformOs)}>
+        <Card testID="settings-double-copy-card" class={props.compact ? "gap-2 p-2" : "gap-2 p-3"}>
+          <Switch
+            testID="settings-double-copy-switch"
+            label={t("settings.doubleCopy.label")}
+            checked={doubleCopyEnabled()}
+            onChange={(checked) => void selectDoubleCopy(checked)}
+          />
+          <Text class="px-3 text-xs text-muted-foreground">
+            {t("settings.doubleCopy.description")}
+          </Text>
+          <If when={doubleCopyError() !== null}>
+            <Text
+              testID="settings-double-copy-error"
+              role="alert"
+              class="px-3 pb-1 text-sm text-destructive"
+            >
+              {doubleCopyError()}
+            </Text>
+          </If>
+        </Card>
       </If>
-    </Card>
+    </>
   );
 }
 
@@ -114,8 +145,9 @@ function AppearanceSection(props: { compact: boolean }) {
 }
 
 /** Master-detail Settings workspace with resizable category rail and scrollable detail pane. */
-export function SettingsPage() {
+export function SettingsPage(props: { platformOs?: string } = {}) {
   const compact = () => windowSize().width < 860;
+  const currentOs = () => props.platformOs ?? platform.os;
   const activeSectionLabelKey = () =>
     selectedSection() === "general" ? "settings.sections.general" : "settings.sections.appearance";
 
@@ -193,7 +225,7 @@ export function SettingsPage() {
                 when={selectedSection() === "general"}
                 else={<AppearanceSection compact={compact()} />}
               >
-                <GeneralSection compact={compact()} />
+                <GeneralSection compact={compact()} platformOs={currentOs()} />
               </If>
             </View>
           </Scroll>

@@ -2,7 +2,7 @@
 
 use nsh_core::prelude::*;
 
-mod quick_translate;
+pub mod quick_translate;
 
 /// Registers the application's native exports with NSH.
 #[native_module("my-translator/native")]

@@ -11,6 +11,7 @@ import {
 import {
   resolvePopupPlacement,
   type CursorAnchorPoint,
+  type DoubleCopyActivationEvent,
   type ResolvedPopupPlacement,
 } from "../platform/quick-translate";
 
@@ -25,6 +26,8 @@ export type QuickTranslateShortcutBinding = Pick<GlobalShortcutModule, "register
 export interface QuickTranslateControllerOptions {
   readCursorAnchor?: () => CursorAnchorPoint | null;
   getDisplays?: () => readonly Display[];
+  readClipboardText?: () => Promise<string>;
+  isDoubleCopyActive?: () => boolean;
 }
 
 export interface QuickTranslateController {
@@ -36,8 +39,10 @@ export interface QuickTranslateController {
   openingSize: Accessor<Size>;
   attachedWindow: Accessor<WindowRef | null>;
   sourceText: Accessor<string>;
+  sourceDeliverySeq: Accessor<number>;
   open: () => void;
   close: () => void;
+  activateDoubleCopy: (event: DoubleCopyActivationEvent) => Promise<void>;
   setPinned: (pinned: boolean) => void;
   togglePinned: () => void;
   toggleAutoTranslate: () => void;
@@ -70,6 +75,8 @@ export function createQuickTranslateController(
 ): QuickTranslateController {
   const getAnchor = options.readCursorAnchor ?? (() => null);
   const getDisplaysList = options.getDisplays ?? displays;
+  const readClipboard = options.readClipboardText ?? (async () => "");
+  const isDoubleCopyEnabledFn = options.isDoubleCopyActive ?? (() => false);
 
   const openSignal = signal(false);
   const pinnedSignal = signal(false);
@@ -80,6 +87,7 @@ export function createQuickTranslateController(
   });
   const attachedWindowSignal = signal<WindowRef | null>(null);
   const sourceSignal = signal("");
+  const clipboardDeliverySeqSignal = signal(0);
   const openMenusSignal = signal<Record<string, boolean>>({});
   let windowRef: WindowRef | null = null;
   let sourceInputRef: InputRef | null = null;
@@ -87,6 +95,8 @@ export function createQuickTranslateController(
   let needsBoundsCheck = false;
   let userMovedSinceOpen = false;
   let expectingOwnSetBounds = false;
+  let openGen = 0;
+  let draftGen = 0;
 
   const focusWindowAndInput = () => {
     (windowRef ?? Window.get(QUICK_TRANSLATE_WINDOW_ID))?.focus();
@@ -98,13 +108,17 @@ export function createQuickTranslateController(
       openSignal() ||
       pinnedSignal() ||
       sourceSignal() !== "" ||
+      clipboardDeliverySeqSignal() !== 0 ||
       Object.keys(openMenusSignal()).length > 0;
     if (!hadState && windowRef === null) {
       return;
     }
+    openGen += 1;
+    draftGen += 1;
     openSignal.set(false);
     pinnedSignal.set(false);
     sourceSignal.set("");
+    clipboardDeliverySeqSignal.set(0);
     openMenusSignal.set({});
     windowRef = null;
     attachedWindowSignal.set(null);
@@ -132,6 +146,37 @@ export function createQuickTranslateController(
     expectingOwnSetBounds = false;
     placementSignal.set(placement);
     openSignal.set(true);
+  };
+
+  const activateDoubleCopy = async (event: DoubleCopyActivationEvent): Promise<void> => {
+    if (!isDoubleCopyEnabledFn()) {
+      return;
+    }
+    open();
+    const capturedOpenGen = openGen;
+    draftGen += 1;
+    const capturedDraftGen = draftGen;
+
+    if (!event.hasValidCopy) {
+      return;
+    }
+
+    let copiedText: string;
+    try {
+      copiedText = await readClipboard();
+    } catch {
+      return;
+    }
+
+    if (capturedOpenGen !== openGen || capturedDraftGen !== draftGen) {
+      return;
+    }
+    if (typeof copiedText !== "string" || copiedText.trim().length === 0) {
+      return;
+    }
+
+    sourceSignal.set(copiedText);
+    clipboardDeliverySeqSignal.set(clipboardDeliverySeqSignal() + 1);
   };
 
   const verifyInitialBounds = (state: WindowState) => {
@@ -188,12 +233,20 @@ export function createQuickTranslateController(
     },
     attachedWindow: () => attachedWindowSignal(),
     sourceText: () => sourceSignal(),
+    sourceDeliverySeq: () => clipboardDeliverySeqSignal(),
     open,
     close,
+    activateDoubleCopy,
     setPinned: (pinned: boolean) => pinnedSignal.set(pinned),
     togglePinned: () => pinnedSignal.set(!pinnedSignal()),
     toggleAutoTranslate: () => autoTranslateSignal.set(!autoTranslateSignal()),
-    setSourceText: (text: string) => sourceSignal.set(text),
+    setSourceText: (text: string) => {
+      if (text === sourceSignal()) {
+        return;
+      }
+      draftGen += 1;
+      sourceSignal.set(text);
+    },
     setMenuOpen: (menuId: string, openMenu: boolean) => {
       const current = openMenusSignal();
       if (openMenu) {

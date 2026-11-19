@@ -43,6 +43,7 @@ type ResultState =
 
 export interface QuickTranslatePopupProps {
   sourceText: Accessor<string>;
+  sourceDeliverySeq?: Accessor<number>;
   onSourceTextChange: (text: string) => void;
   autoTranslate?: Accessor<boolean>;
   onOverlayOpenChange?: (menuId: string, open: boolean) => void;
@@ -167,6 +168,8 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
     }
   });
 
+  let lastHandledDeliverySeq = 0;
+
   cleanup(() => {
     disposed = true;
     invalidateRun();
@@ -264,6 +267,14 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
       void executeTranslate("auto");
     }, AUTO_TRANSLATE_DEBOUNCE_MS);
   };
+
+  effect(() => {
+    const seq = props.sourceDeliverySeq?.() ?? 0;
+    if (seq > lastHandledDeliverySeq) {
+      lastHandledDeliverySeq = seq;
+      scheduleAutoTranslate();
+    }
+  });
 
   const handleSourceChange = (nextText: string) => {
     if (nextText === props.sourceText()) return;

@@ -1,11 +1,16 @@
-import { cleanup, effect, platform, Scroll, Text, View } from "nsh";
+import { cleanup, Clipboard, effect, platform, Scroll, Text, View } from "nsh";
 import { Application, GlobalShortcut, titleBar, Window } from "nsh/desktop";
 import { t } from "nsh/i18n";
 import { Button } from "../components/ui/button";
 import { Icon } from "../components/ui/icon";
 import { toast } from "../components/ui/toast";
 import { QuickTranslatePopup } from "../features/quick-translate/popup";
-import { readCursorAnchor } from "../platform/quick-translate-native";
+import {
+  doubleCopyEnabled,
+  registerDoubleCopyRuntime,
+} from "../features/quick-translate/preferences";
+import type { DoubleCopyBinding } from "../platform/quick-translate";
+import { nativeDoubleCopyBinding, readCursorAnchor } from "../platform/quick-translate-native";
 import {
   canRegisterGlobalQuickTranslateShortcut,
   createQuickTranslateController as createPureQuickTranslateController,
@@ -26,12 +31,14 @@ export {
   type QuickTranslateShortcutBinding,
 };
 
-/** Creates the desktop Quick Translate controller backed by the native cursor-anchor probe. */
+/** Creates the desktop Quick Translate controller backed by native cursor anchor and clipboard access. */
 export function createQuickTranslateController(
   options: QuickTranslateControllerOptions = {},
 ): QuickTranslateController {
   return createPureQuickTranslateController({
     readCursorAnchor,
+    readClipboardText: () => Clipboard.readText(),
+    isDoubleCopyActive: doubleCopyEnabled,
     ...options,
   });
 }
@@ -74,6 +81,31 @@ export function registerQuickTranslateShortcut(
     }
   })();
 
+  return release;
+}
+
+/** Coordinates the Windows Raw Input double-copy listener with persisted opt-in preferences. */
+export function registerQuickTranslateDoubleCopy(
+  controller: QuickTranslateController,
+  binding: DoubleCopyBinding = nativeDoubleCopyBinding,
+  currentOs: string = platform.os,
+): () => void {
+  const stopRuntime = registerDoubleCopyRuntime({
+    os: currentOs,
+    start: () => binding.onDoubleCopy((event) => void controller.activateDoubleCopy(event)),
+    onStartupError: (message) => toast.error(message),
+  });
+
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    stopQuitListener();
+    stopRuntime();
+  };
+
+  const stopQuitListener = Application.on("quit", release);
+  cleanup(release);
   return release;
 }
 
@@ -156,6 +188,7 @@ function QuickTranslateWindowBody(props: { controller: QuickTranslateController 
       <Scroll class="min-h-0 flex-1">
         <QuickTranslatePopup
           sourceText={props.controller.sourceText}
+          sourceDeliverySeq={props.controller.sourceDeliverySeq}
           onSourceTextChange={(text) => props.controller.setSourceText(text)}
           autoTranslate={props.controller.autoTranslate}
           onOverlayOpenChange={(menuId, open) => props.controller.setMenuOpen(menuId, open)}

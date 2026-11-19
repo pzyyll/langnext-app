@@ -11,9 +11,11 @@ import { ModelsPage } from "../features/models/page";
 import { PresetsPage } from "../features/presets/page";
 import { SettingsPage } from "../features/settings/page";
 import { transparency } from "../features/settings/transparency";
+import type { DoubleCopyBinding } from "../platform/quick-translate";
 import {
   createQuickTranslateController,
   QuickTranslateWindow,
+  registerQuickTranslateDoubleCopy,
   registerQuickTranslateShortcut,
   type QuickTranslateControllerOptions,
   type QuickTranslateShortcutBinding,
@@ -25,6 +27,7 @@ const TITLE_BAR_HEIGHT = 42;
 
 export interface AppShellProps {
   globalShortcut?: QuickTranslateShortcutBinding;
+  doubleCopy?: DoubleCopyBinding;
   trayModule?: Pick<typeof Tray, "set">;
   platformOs?: string;
   quickTranslateOptions?: QuickTranslateControllerOptions;
@@ -52,6 +55,7 @@ export function AppShell(props: AppShellProps = {}) {
   });
 
   registerQuickTranslateShortcut(quickTranslate, props.globalShortcut, props.platformOs);
+  registerQuickTranslateDoubleCopy(quickTranslate, props.doubleCopy, props.platformOs);
 
   const win = currentWindow();
   effect(() => win.set({ backdrop: transparency() ? "popover" : "none" }));
@@ -128,7 +132,7 @@ export function AppShell(props: AppShellProps = {}) {
         </If>
         <If when={page() === "settings"}>
           <PageSurface testID="settings-page" layout="split">
-            <SettingsPage />
+            <SettingsPage platformOs={props.platformOs} />
           </PageSurface>
         </If>
       </View>

@@ -56,6 +56,11 @@ settings:
     en: English
     "zh-CN": 简体中文
     error: Could not save language. Your choice will apply until you close the app.
+  doubleCopy:
+    label: Double-copy Quick Translate (Ctrl+C × 2)
+    description: When enabled on Windows, reads clipboard text after two quick Ctrl+C presses. If automatic translation is on in Quick Translate, it sends that text to the selected service.
+    enableError: Could not start the Windows double-copy listener. The listener stays off.
+    saveError: Could not save the double-copy setting. Check storage and try again.
 models:
   title: Models
   channel:

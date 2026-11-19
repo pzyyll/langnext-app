@@ -56,6 +56,11 @@ settings:
     en: English
     "zh-CN": 简体中文
     error: 无法保存语言设置。本次选择将在关闭应用前生效。
+  doubleCopy:
+    label: 双击 Ctrl+C 快速翻译
+    description: 在 Windows 上启用后，连续按两次 Ctrl+C 会读取剪贴板文本；若同时开启了自动翻译，会将其发送到所选服务。
+    enableError: 无法启动 Windows 双击复制监听，该功能已保持关闭。
+    saveError: 无法保存双击复制设置，请重试。
 models:
   title: 模型
   channel:

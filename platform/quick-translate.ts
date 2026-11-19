@@ -1,8 +1,18 @@
-import type { CursorAnchor } from "my-translator/native";
+import type { CursorAnchor, DoubleCopyEvent } from "my-translator/native";
 import type { Point, Size } from "nsh";
 import type { Display, DisplayId } from "nsh/desktop";
 
 export type CursorAnchorPoint = CursorAnchor;
+export type DoubleCopyActivationEvent = DoubleCopyEvent;
+
+export interface DoubleCopyBinding {
+  onDoubleCopy: (listener: (event: DoubleCopyActivationEvent) => void) => () => void;
+}
+
+/** Double-Ctrl+C Raw Input monitoring is only supported on Windows. */
+export function canUseDoubleCopy(os: string): boolean {
+  return os === "windows";
+}
 
 const CURSOR_TOP_OFFSET_PT = 24;
 
