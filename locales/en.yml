@@ -39,6 +39,7 @@ settings:
   sections:
     general: General
     appearance: Appearance
+    languageDetection: Language Detection
   theme:
     title: Theme
   appearance:
@@ -61,6 +62,41 @@ settings:
     description: When enabled on Windows, reads clipboard text after two quick Ctrl+C presses. If automatic translation is on in Quick Translate, it sends that text to the selected service.
     enableError: Could not start the Windows double-copy listener. The listener stays off.
     saveError: Could not save the double-copy setting. Check storage and try again.
+  languageDetection:
+    title: Language Detection
+    detection: Detection
+    off: "Off"
+    ai: AI
+    models: Detection models
+    primary: Primary model
+    backups: Backup models
+    addBackup: Add backup
+    moveUp: Move backup %{index} up
+    moveDown: Move backup %{index} down
+    removeBackup: Remove backup %{index}
+    nativeLanguage: Native language
+    preferredTranslation: Translate my native language into
+    preferenceUnset: Not set
+    help: When the target is set to Automatic, text in other languages is translated into your native language. Text in your native language is translated into the language selected above.
+    disclosure: Automatic source detection sends a text sample to the chosen model, and may send it to the chosen backups if needed.
+    error:
+      storageReadFailed: Could not read the saved language detection settings.
+      storageMalformed: The saved language detection settings are unreadable.
+      storageUnsupportedVersion: The saved language detection settings use an unsupported version.
+      storageWriteFailed: Could not save the language detection settings. Check storage and try again.
+      modelIdBlank: Choose a model for every detection slot.
+      modelIdDuplicate: Each detection model can appear only once.
+      primaryModelRequired: Choose a primary detection model.
+      preferenceInvalid: Choose a supported language.
+      preferencesIdentical: The native language and the preferred translation language must differ.
+languageDetection:
+  failure:
+    unconfigured: Configure language detection, or choose the source language.
+    noEligibleModel: Check the configured detection models, or choose the source language.
+    unknownLanguage: The detector could not identify the source language. Choose the source language.
+    failed: Language detection failed. Check the detection models, or choose the source language.
+    missingNativeLanguage: Set your native language, or choose a concrete target language.
+    missingPreferredLanguage: Set the translation language for your native language, or choose a concrete target language.
 models:
   title: Models
   channel:
@@ -299,7 +335,7 @@ presets:
     models: Models and parameters
     prompts: Prompt templates
   language:
-    noPreference: No preference
+    autoTarget: Automatic
   languages:
     auto: Auto
     zh: Chinese
@@ -422,8 +458,6 @@ quickTranslate:
   copied: Copied
   sourceLabel: Source text
   sourcePlaceholder: Enter text to translate…
-  prompt:
-    autoDetectSource: the detected source language (detect it automatically in the same response)
   error:
     blankInput: Enter text to translate.
     presetDisabled: Selected preset is disabled. Enable it in Presets or choose another preset.

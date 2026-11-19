@@ -1,14 +1,7 @@
 import { t } from "nsh/i18n";
-import {
-  AUTO_LANGUAGE,
-  NO_PREFERENCE_TARGET,
-  type LanguageId,
-  type SourceLanguageId,
-} from "./languages";
+import { AUTO_LANGUAGE, type SourceLanguageId, type TargetLanguageId } from "./languages";
 import { formatTemperature } from "./temperature";
 import type { PromptTemplate, SavePresetInput, TranslationPreset } from "./types";
-
-export type TargetLanguageValue = LanguageId | typeof NO_PREFERENCE_TARGET;
 
 /** Editable form state for a new or existing translation preset. */
 export interface PresetDraft {
@@ -16,7 +9,7 @@ export interface PresetDraft {
   name: string;
   enabled: boolean;
   sourceLanguage: SourceLanguageId;
-  targetLanguage: TargetLanguageValue;
+  targetLanguage: TargetLanguageId;
   primaryModelId: string | null;
   fallbackModelIds: string[];
   temperatureText: string;
@@ -33,7 +26,7 @@ export function createEmptyDraft(): PresetDraft {
     name: "",
     enabled: true,
     sourceLanguage: AUTO_LANGUAGE,
-    targetLanguage: NO_PREFERENCE_TARGET,
+    targetLanguage: AUTO_LANGUAGE,
     primaryModelId: null,
     fallbackModelIds: [],
     temperatureText: "",
@@ -57,7 +50,7 @@ export function createDraftFromPreset(preset: TranslationPreset): PresetDraft {
     name: preset.name,
     enabled: preset.enabled,
     sourceLanguage: preset.sourceLanguage,
-    targetLanguage: preset.targetLanguage ?? NO_PREFERENCE_TARGET,
+    targetLanguage: preset.targetLanguage,
     primaryModelId: preset.engine.modelIds[0] ?? null,
     fallbackModelIds: preset.engine.modelIds.slice(1),
     temperatureText: formatTemperature(preset.engine.temperature),
@@ -126,7 +119,7 @@ export function draftToSaveInput(draft: PresetDraft): SavePresetInput {
     name: draft.name,
     enabled: draft.enabled,
     sourceLanguage: draft.sourceLanguage,
-    targetLanguage: draft.targetLanguage === NO_PREFERENCE_TARGET ? null : draft.targetLanguage,
+    targetLanguage: draft.targetLanguage,
     engine: {
       kind: "ai",
       modelIds,

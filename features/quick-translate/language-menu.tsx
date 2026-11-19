@@ -6,12 +6,14 @@ import { Menu, MenuItem, MenuSeparator, Submenu } from "../../components/ui/menu
 import {
   AUTO_LANGUAGE,
   getLanguageLabel,
+  getTargetLanguageLabel,
   LANGUAGE_IDS,
   type SourceLanguageId,
   type TargetLanguageId,
 } from "../presets/languages";
 
 const SOURCE_LANGUAGE_OPTIONS: readonly SourceLanguageId[] = [AUTO_LANGUAGE, ...LANGUAGE_IDS];
+const TARGET_LANGUAGE_OPTIONS: readonly TargetLanguageId[] = [AUTO_LANGUAGE, ...LANGUAGE_IDS];
 
 export interface QuickTranslateLanguageMenuProps {
   sourceLanguage: SourceLanguageId;
@@ -22,10 +24,11 @@ export interface QuickTranslateLanguageMenuProps {
   align?: Align;
 }
 
-function LanguageOptions<T extends SourceLanguageId>(props: {
+function LanguageOptions<T extends SourceLanguageId | TargetLanguageId>(props: {
   options: readonly T[];
   selected: T;
   testIdPrefix: string;
+  formatLabel: (value: T) => string;
   onSelect: (value: T) => void;
 }) {
   return (
@@ -35,7 +38,7 @@ function LanguageOptions<T extends SourceLanguageId>(props: {
           testID={`${props.testIdPrefix}-${id()}`}
           role="menuitemradio"
           checked={props.selected === id()}
-          label={getLanguageLabel(id())}
+          label={props.formatLabel(id())}
           onSelect={() => props.onSelect(id())}
         />
       )}
@@ -50,7 +53,7 @@ export function QuickTranslateLanguageMenu(props: QuickTranslateLanguageMenuProp
   const triggerLabel = () =>
     t("quickTranslate.languages", {
       source: getLanguageLabel(props.sourceLanguage),
-      target: getLanguageLabel(props.targetLanguage),
+      target: getTargetLanguageLabel(props.targetLanguage),
     });
 
   return (
@@ -89,6 +92,7 @@ export function QuickTranslateLanguageMenu(props: QuickTranslateLanguageMenuProp
           options={SOURCE_LANGUAGE_OPTIONS}
           selected={props.sourceLanguage}
           testIdPrefix="quick-translate-source-language"
+          formatLabel={getLanguageLabel}
           onSelect={props.onSelectSourceLanguage}
         />
       </Submenu>
@@ -96,13 +100,14 @@ export function QuickTranslateLanguageMenu(props: QuickTranslateLanguageMenuProp
       <Submenu
         testID="quick-translate-target-language"
         label={t("quickTranslate.targetMenuItem", {
-          language: getLanguageLabel(props.targetLanguage),
+          language: getTargetLanguageLabel(props.targetLanguage),
         })}
       >
         <LanguageOptions
-          options={LANGUAGE_IDS}
+          options={TARGET_LANGUAGE_OPTIONS}
           selected={props.targetLanguage}
           testIdPrefix="quick-translate-target-language"
+          formatLabel={getTargetLanguageLabel}
           onSelect={props.onSelectTargetLanguage}
         />
       </Submenu>

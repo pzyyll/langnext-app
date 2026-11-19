@@ -48,14 +48,12 @@ export const LANGUAGE_IDS = [
 
 export type LanguageId = (typeof LANGUAGE_IDS)[number];
 
-/** Sentinel ID for auto-detecting the source language. */
+/** Sentinel ID for auto-detecting the source language or resolving an automatic target. */
 export const AUTO_LANGUAGE = "auto" as const;
 
-/** UI Select value representing no target language preference (`null` in storage). */
-export const NO_PREFERENCE_TARGET = "__none__" as const;
-
 export type SourceLanguageId = LanguageId | typeof AUTO_LANGUAGE;
-export type TargetLanguageId = LanguageId;
+/** A concrete target or the automatic target that resolves from the saved language preferences. */
+export type TargetLanguageId = LanguageId | typeof AUTO_LANGUAGE;
 
 /** True for a concrete supported language ID (never `auto`). */
 export function isLanguageId(value: unknown): value is LanguageId {
@@ -71,18 +69,23 @@ export function isSourceLanguageId(value: unknown): value is SourceLanguageId {
   return value === AUTO_LANGUAGE || isLanguageId(value);
 }
 
-/** True for `null` (no preference) or a concrete supported language ID (never `auto`). */
-export function isTargetLanguageId(value: unknown): value is TargetLanguageId | null {
-  return value === null || isLanguageId(value);
+/** True for `auto` or a concrete supported language ID (never an unset value). */
+export function isTargetLanguageId(value: unknown): value is TargetLanguageId {
+  return value === AUTO_LANGUAGE || isLanguageId(value);
 }
 
-/** Localized display label for a source/target language or no-preference (`null`). */
-export function getLanguageLabel(id: SourceLanguageId | null): string {
-  if (id === null) {
-    return t("presets.language.noPreference");
-  }
+/** Localized display label for a source or target language selection. */
+export function getLanguageLabel(id: SourceLanguageId | TargetLanguageId): string {
   if (id === AUTO_LANGUAGE) {
     return t("presets.languages.auto");
   }
   return t(`presets.languages.${id}`);
+}
+
+/** Localized display label for a target language, where `auto` means Automatic. */
+export function getTargetLanguageLabel(id: TargetLanguageId): string {
+  if (id === AUTO_LANGUAGE) {
+    return t("presets.language.autoTarget");
+  }
+  return getLanguageLabel(id);
 }

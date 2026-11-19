@@ -3,6 +3,13 @@ import { t } from "nsh/i18n";
 import { initializeAiModules } from "../../../app/ai-setup";
 import { Button } from "../../../components/ui/button";
 import { Card } from "../../../components/ui/card";
+import type { DetectLanguageOptions } from "../../language-detection/detect";
+import {
+  resolveTranslationLanguages,
+  type ResolveTranslationLanguagesInput,
+  type ResolveTranslationLanguagesResult,
+} from "../../language-detection/resolve";
+import { languageDetectionStore } from "../../language-detection/settings";
 import { loadModelsState } from "../../models/store";
 import { createPresetsStore } from "../../presets/store";
 import { loadAppearance } from "../../settings/appearance";
@@ -27,6 +34,7 @@ export type HarnessMode =
   | "clipboard-error"
   | "out-of-order"
   | "late-after-close"
+  | "language-resolution"
   | "multi-card";
 
 export const POPUP_HARNESS_MODE_KEY = "__test.qt.popupMode";
@@ -77,6 +85,28 @@ function PopupHarnessApp(props: {
   const presetsErrorFail = signal(props.mode === "preset-load-error-then-recover");
   const translateCalls = signal<string[]>([]);
   const abortEvents = signal<string[]>([]);
+  const languageCalls = signal<string[]>([]);
+  const languageAborts = signal<string[]>([]);
+  let languageDeferred: Deferred<ResolveTranslationLanguagesResult> | null = null;
+
+  const languageResolverStub = async (
+    input: ResolveTranslationLanguagesInput,
+    options?: DetectLanguageOptions,
+  ): Promise<ResolveTranslationLanguagesResult> => {
+    const seq = languageCalls().length + 1;
+    languageCalls.set([
+      ...languageCalls(),
+      `${input.sourceLanguage}->${input.targetLanguage}:${input.sourceText}`,
+    ]);
+    options?.signal?.addEventListener("abort", () => {
+      languageAborts.set([...languageAborts(), `aborted-${seq}`]);
+    });
+    if (props.mode === "language-resolution") {
+      languageDeferred = createDeferred<ResolveTranslationLanguagesResult>();
+      return languageDeferred.promise;
+    }
+    return resolveTranslationLanguages(input, options);
+  };
 
   const customStorage = {
     async getItem(key: string) {
@@ -310,7 +340,36 @@ function PopupHarnessApp(props: {
             }
           />
         </If>
-        <Text testID="harness-popup-stats">{`calls=${translateCalls().length}|aborts=${abortEvents().join(",")}`}</Text>
+        <If when={props.mode === "language-resolution"}>
+          <View class="flex-row flex-wrap gap-1">
+            <Button
+              testID="harness-resolve-language-fr"
+              size="xs"
+              variant="outline"
+              label="Resolve FR"
+              onPress={() =>
+                languageDeferred?.resolve({ ok: true, sourceLanguage: "fr", targetLanguage: "zh" })
+              }
+            />
+            <Button
+              testID="harness-resolve-language-zh"
+              size="xs"
+              variant="outline"
+              label="Resolve ZH"
+              onPress={() =>
+                languageDeferred?.resolve({ ok: true, sourceLanguage: "zh", targetLanguage: "en" })
+              }
+            />
+            <Button
+              testID="harness-resolve-language-und"
+              size="xs"
+              variant="outline"
+              label="Resolve UND"
+              onPress={() => languageDeferred?.resolve({ ok: false, code: "unknown_language" })}
+            />
+          </View>
+        </If>
+        <Text testID="harness-popup-stats">{`calls=${translateCalls().length}|aborts=${abortEvents().join(",")}|detects=${languageCalls().length}|detectAborts=${languageAborts().join(",")}`}</Text>
         <Button
           testID="harness-toggle-prefs-write-fail"
           size="xs"
@@ -328,6 +387,7 @@ function PopupHarnessApp(props: {
           presetsStore={store}
           preferences={props.prefs}
           translate={translateStub}
+          resolveLanguages={languageResolverStub}
           clipboard={clipboardStub}
         />
       </If>
@@ -339,13 +399,15 @@ void Promise.all([
   loadAppearance(),
   loadLanguage(),
   loadModelsState(),
+  languageDetectionStore.load(),
   Storage.getItem(POPUP_HARNESS_MODE_KEY),
-]).then(async ([, , , modeRaw]) => {
+]).then(async ([, , , , modeRaw]) => {
   const mode: HarnessMode =
     modeRaw === "preset-load-error-then-recover" ||
     modeRaw === "clipboard-error" ||
     modeRaw === "out-of-order" ||
     modeRaw === "late-after-close" ||
+    modeRaw === "language-resolution" ||
     modeRaw === "multi-card"
       ? modeRaw
       : "live";

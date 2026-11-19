@@ -132,7 +132,7 @@ export function AppShell(props: AppShellProps = {}) {
         </If>
         <If when={page() === "settings"}>
           <PageSurface testID="settings-page" layout="split">
-            <SettingsPage platformOs={props.platformOs} />
+            <SettingsPage platformOs={props.platformOs} onNavigateToModels={selectModels} />
           </PageSurface>
         </If>
       </View>

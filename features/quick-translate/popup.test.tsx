@@ -1,9 +1,13 @@
 import { t } from "nsh/i18n";
 import { expect, open, test } from "nsh/test";
 import { initializeAiModules } from "../../app/ai-setup";
+import { LANGUAGE_DETECTION_STORAGE_KEY } from "../language-detection/settings";
 import { makeChannel, makeModel, makeSeedStorage } from "../models/__tests__/fixtures";
+import { credentialStorageKey } from "../models/store";
+import { getLanguageLabel } from "../presets/languages";
 import { PRESETS_STORAGE_KEY } from "../presets/store";
 import type { TranslationPreset } from "../presets/types";
+import { QUICK_TRANSLATE_PREFERENCES_KEY } from "./preferences";
 
 initializeAiModules();
 
@@ -186,7 +190,7 @@ test("quick popup: debounces 500ms opt-in auto-translate, preserves Shift+Enter 
     id: "preset-2",
     name: "Preset Two",
     sourceLanguage: "auto",
-    targetLanguage: null,
+    targetLanguage: "zh",
   });
   const app = await open(POPUP_HARNESS, {
     ...viewport,
@@ -826,4 +830,291 @@ test("quick reopen: restores valid cards, fallback template, languages, and auto
   await corrupt.waitUntil(() =>
     Boolean(corrupt.storage()["quickTranslate.preferences.v1"]?.includes('"autoTranslate":true')),
   );
+});
+
+const DETECT_URL = "POST https://detect.example.com/v1/chat/completions";
+const TRANSLATE_URL = "POST https://translate.example.com/v1/chat/completions";
+
+interface StubbedRequest {
+  method: string;
+  url: string;
+  body?: string | null;
+}
+
+function requestsTo(app: { requests(): StubbedRequest[] }, url: string): StubbedRequest[] {
+  const [method, target] = url.split(" ");
+  return app.requests().filter((request) => request.method === method && request.url === target);
+}
+
+function translateBodies(app: { requests(): StubbedRequest[] }) {
+  return requestsTo(app, TRANSLATE_URL).map((request) => JSON.parse(request.body!));
+}
+
+/** Seeds one automatic-source, automatic-target preset with the requested cards and popup mode. */
+function seedAutoPair(collapsed: readonly boolean[], mode = "live"): Record<string, string> {
+  const detectChannel = makeChannel({
+    id: "ch-detect",
+    presetId: "openai",
+    adapterId: "openai-compatible",
+    baseUrl: "https://detect.example.com/v1",
+    displayName: "Detector",
+    enabled: true,
+    sortOrder: 0,
+  });
+  const translateChannel = makeChannel({
+    id: "ch-translate",
+    presetId: "openai",
+    adapterId: "openai-compatible",
+    baseUrl: "https://translate.example.com/v1",
+    displayName: "Translator",
+    enabled: true,
+    sortOrder: 1,
+  });
+  const detector = makeModel({
+    id: "det-1",
+    providerId: "ch-detect",
+    modelKey: "detect-mini",
+    enabled: true,
+  });
+  const translator = makeModel({
+    id: "tr-1",
+    providerId: "ch-translate",
+    modelKey: "translate-mini",
+    enabled: true,
+  });
+  const pairPreset = makePreset({
+    id: "preset-auto",
+    name: "Auto pair",
+    sourceLanguage: "auto",
+    targetLanguage: "auto",
+    engine: {
+      kind: "ai",
+      modelIds: ["tr-1"],
+      temperature: null,
+      maxOutputTokens: null,
+      templates: [
+        {
+          id: "tpl-1",
+          name: "Default",
+          systemTemplate: "Translate from {{source_language}} to {{target_language}}.",
+          userTemplate: "{{text}}",
+        },
+      ],
+      defaultTemplateId: "tpl-1",
+    },
+  });
+  const cards = collapsed.map((isCollapsed, index) => ({
+    id: `card-${index + 1}`,
+    presetId: pairPreset.id,
+    templateId: null,
+    collapsed: isCollapsed,
+  }));
+  return makeSeedStorage({
+    channels: [detectChannel, translateChannel],
+    models: [detector, translator],
+    credentials: { "ch-detect": "sk-detect", "ch-translate": "sk-translate" },
+    extra: {
+      [POPUP_HARNESS_MODE_KEY]: mode,
+      [PRESETS_STORAGE_KEY]: JSON.stringify({ version: 1, items: [pairPreset] }),
+      [QUICK_TRANSLATE_PREFERENCES_KEY]: JSON.stringify({
+        version: 1,
+        doubleCopyEnabled: false,
+        autoTranslate: false,
+        sourceLanguage: "auto",
+        targetLanguage: "auto",
+        cards,
+      }),
+      [LANGUAGE_DETECTION_STORAGE_KEY]: JSON.stringify({
+        version: 1,
+        mode: "ai",
+        modelIds: ["det-1"],
+        nativeLanguage: "zh",
+        preferredTranslationLanguage: "en",
+      }),
+    },
+  });
+}
+
+test("language resolution: one detection request serves both expanded cards", async () => {
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedAutoPair([false, false], "language-resolution"),
+    network: {
+      [TRANSLATE_URL]: { status: 200, body: { choices: [{ message: { content: "译文" } }] } },
+    },
+  });
+
+  await app.waitFor("id:quick-translate-source");
+  await app.waitFor("id:quick-translate-card-card-2");
+
+  await app.type("id:quick-translate-source", "Bonjour");
+  await app.keyboard.press("enter");
+  await app.waitUntil(() => app.texts().some((text) => text.includes("detects=1|")));
+
+  // Both cards wait on the same run: one detection and no translation traffic yet.
+  expect(app.texts().some((text) => text.startsWith("calls=0|"))).toBe(true);
+  expect(requestsTo(app, TRANSLATE_URL)).toHaveLength(0);
+  expect(app.texts()).toContain(t("quickTranslate.translating"));
+
+  await app.press("id:harness-resolve-language-fr");
+  await app.waitUntil(() => requestsTo(app, TRANSLATE_URL).length === 2);
+  await app.waitFor("id:quick-translate-result-text");
+
+  const prompts = translateBodies(app);
+  expect(prompts).toHaveLength(2);
+  for (const body of prompts) {
+    expect(body.messages[0].content).toContain(getLanguageLabel("fr"));
+    expect(body.messages[0].content).toContain(getLanguageLabel("zh"));
+    expect(body.messages[1].content).toBe("Bonjour");
+  }
+  expect(app.texts().some((text) => text.startsWith("calls=2|"))).toBe(true);
+});
+
+test("language resolution: the popup detection uses the saved detector endpoint", async () => {
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedAutoPair([false, false]),
+    network: {
+      [DETECT_URL]: { status: 200, body: { choices: [{ message: { content: "fr" } }] } },
+      [TRANSLATE_URL]: { status: 200, body: { choices: [{ message: { content: "译文" } }] } },
+    },
+  });
+
+  await app.waitFor("id:quick-translate-source");
+  await app.type("id:quick-translate-source", "Bonjour");
+  await app.keyboard.press("enter");
+  await app.waitUntil(() => requestsTo(app, TRANSLATE_URL).length === 2);
+  await app.waitFor("id:quick-translate-result-text");
+
+  expect(requestsTo(app, DETECT_URL)).toHaveLength(1);
+  expect(requestsTo(app, TRANSLATE_URL)).toHaveLength(2);
+});
+
+test("detector storage: a credential read failure shows a recoverable card error", async () => {
+  const storage = seedAutoPair([false]);
+  const readError = "Private credential storage error";
+  let failCredentialRead = true;
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    modules: {
+      nsh: {
+        "Storage.getItem": (key: string) => {
+          if (failCredentialRead && key === credentialStorageKey("ch-detect")) {
+            throw new Error(readError);
+          }
+          return storage[key] ?? null;
+        },
+      },
+    },
+    network: {
+      [DETECT_URL]: { status: 200, body: { choices: [{ message: { content: "fr" } }] } },
+      [TRANSLATE_URL]: { status: 200, body: { choices: [{ message: { content: "译文" } }] } },
+    },
+  });
+
+  await app.waitFor("id:quick-translate-source");
+  await app.type("id:quick-translate-source", "Bonjour");
+  await app.keyboard.press("enter");
+  await app.waitFor("id:quick-translate-retry");
+  expect(app.texts()).toContain(t("languageDetection.failure.failed"));
+  expect(app.texts()).not.toContain(readError);
+  expect(app.requests()).toHaveLength(0);
+
+  failCredentialRead = false;
+  await app.press("id:quick-translate-retry");
+  await app.waitFor("id:quick-translate-result-text");
+  expect(requestsTo(app, DETECT_URL)).toHaveLength(1);
+  expect(requestsTo(app, TRANSLATE_URL)).toHaveLength(1);
+});
+
+test("language resolution: a collapsed card neither starts nor joins the run", async () => {
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedAutoPair([false, true], "language-resolution"),
+    network: {
+      [TRANSLATE_URL]: { status: 200, body: { choices: [{ message: { content: "译文" } }] } },
+    },
+  });
+
+  await app.waitFor("id:quick-translate-source");
+  await app.type("id:quick-translate-source", "Bonjour");
+  await app.keyboard.press("enter");
+  await app.waitUntil(() => app.texts().some((text) => text.includes("detects=1|")));
+  await app.press("id:harness-resolve-language-fr");
+  await app.waitUntil(() => requestsTo(app, TRANSLATE_URL).length === 1);
+  await app.waitFor("id:quick-translate-result-text");
+
+  expect(app.texts().some((text) => text.startsWith("calls=1|"))).toBe(true);
+  expect(app.texts().some((text) => text.includes("detects=1|"))).toBe(true);
+});
+
+test("language resolution: blocked detection shows the same recovery text on every card without translation traffic", async () => {
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedAutoPair([false, false], "language-resolution"),
+    network: {
+      [TRANSLATE_URL]: { status: 200, body: { choices: [{ message: { content: "译文" } }] } },
+    },
+  });
+
+  await app.waitFor("id:quick-translate-source");
+  await app.type("id:quick-translate-source", "???");
+  await app.keyboard.press("enter");
+  await app.waitUntil(() => app.texts().some((text) => text.includes("detects=1|")));
+  await app.press("id:harness-resolve-language-und");
+
+  const message = t("languageDetection.failure.unknownLanguage");
+  await app.waitUntil(() => app.texts().filter((text) => text === message).length === 2);
+
+  expect(requestsTo(app, TRANSLATE_URL)).toHaveLength(0);
+});
+
+test("language resolution: the last consumer leaving aborts the shared detection", async () => {
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedAutoPair([false, false], "language-resolution"),
+    network: {
+      [TRANSLATE_URL]: { status: 200, body: { choices: [{ message: { content: "译文" } }] } },
+    },
+  });
+
+  await app.waitFor("id:quick-translate-source");
+  await app.type("id:quick-translate-source", "Bonjour");
+  await app.keyboard.press("enter");
+  await app.waitUntil(() => app.texts().some((text) => text.includes("detects=1|")));
+
+  await app.press("id:quick-translate-clear");
+  await app.waitUntil(() => app.texts().some((text) => text.includes("detectAborts=aborted-1")));
+  await app.press("id:harness-resolve-language-fr");
+  await app.wait(50);
+
+  expect(requestsTo(app, TRANSLATE_URL)).toHaveLength(0);
+  expect(app.shows("id:quick-translate-result-text")).toBe(false);
+  expect(app.shows("id:quick-translate-error")).toBe(false);
+});
+
+test("language resolution: retrying after a failure starts a new detection run", async () => {
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedAutoPair([false], "language-resolution"),
+    network: {
+      [TRANSLATE_URL]: { status: 200, body: { choices: [{ message: { content: "Bonjour!" } }] } },
+    },
+  });
+
+  await app.waitFor("id:quick-translate-source");
+  await app.type("id:quick-translate-source", "Bonjour");
+  await app.keyboard.press("enter");
+  await app.waitUntil(() => app.texts().some((text) => text.includes("detects=1|")));
+  await app.press("id:harness-resolve-language-und");
+  await app.waitFor("id:quick-translate-retry");
+  expect(requestsTo(app, TRANSLATE_URL)).toHaveLength(0);
+
+  await app.press("id:quick-translate-retry");
+  await app.waitUntil(() => app.texts().some((text) => text.includes("detects=2|")));
+  await app.press("id:harness-resolve-language-fr");
+  await app.waitFor("id:quick-translate-result-text");
+
+  expect(requestsTo(app, TRANSLATE_URL)).toHaveLength(1);
+  expect(app.texts()).toContain("Bonjour!");
 });

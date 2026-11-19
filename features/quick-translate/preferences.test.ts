@@ -178,3 +178,29 @@ test("quick preferences: persists only allowed fields, recovers from corrupt sto
   expect(queuedStore.saveError()).not.toBeNull();
   expect(open).toBeDefined();
 });
+
+test("automatic target: keeps an automatic target and preserves the inherit-preset default", async () => {
+  const backing = new Map<string, string>();
+  const openStore = () =>
+    createQuickTranslatePreferencesStore({
+      getItem: async (key) => backing.get(key) ?? null,
+      setItem: async (key, value) => {
+        backing.set(key, value);
+      },
+    });
+
+  const store = openStore();
+  await store.load();
+  expect(store.preferences().targetLanguage).toBeNull();
+
+  await store.savePopupState({ targetLanguage: "auto" });
+  const reloaded = openStore();
+  await reloaded.load();
+  expect(reloaded.preferences().targetLanguage).toBe("auto");
+  expect(reloaded.preferences().sourceLanguage).toBeNull();
+
+  await reloaded.savePopupState({ targetLanguage: null });
+  const cleared = openStore();
+  await cleared.load();
+  expect(cleared.preferences().targetLanguage).toBeNull();
+});

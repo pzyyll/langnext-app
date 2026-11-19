@@ -1,5 +1,7 @@
 import { expect, open, test } from "nsh/test";
 import { SPLIT_RAIL_STORAGE_KEYS } from "../../components/layout/split-rail";
+import { LANGUAGE_DETECTION_STORAGE_KEY } from "../language-detection/settings";
+import { makeChannel, makeModel, makeSeedStorage } from "../models/__tests__/fixtures";
 
 const APP_ENTRY = "../../App.tsx";
 const viewport = { width: 1040, height: 720, platform: "windows" as const };
@@ -179,4 +181,192 @@ test("double copy: shows Windows-only opt-in off by default, hides outside Windo
   expect(startupFail.texts()).toContain("active=false|reads=0");
   await startupFail.press("id:dc-harness-trigger");
   expect(startupFail.texts()).toContain("active=false|reads=0");
+});
+
+test("language detection: saves and restores the ordered detector chain and language preferences", async () => {
+  const seed = makeSeedStorage({
+    channels: [makeChannel({ id: "ch-openai", displayName: "OpenAI Main", enabled: true })],
+    models: [
+      makeModel({ id: "m-1", providerId: "ch-openai", modelKey: "gpt-4.1-mini", enabled: true }),
+      makeModel({ id: "m-2", providerId: "ch-openai", modelKey: "gpt-4.1", enabled: true }),
+      makeModel({ id: "m-3", providerId: "ch-openai", modelKey: "gpt-4o", enabled: true }),
+    ],
+  });
+  const app = await open(APP_ENTRY, { ...viewport, storage: seed });
+
+  await app.press("id:nav-settings");
+  await app.waitFor("id:settings-nav-language-detection");
+  await app.press("id:settings-nav-language-detection");
+  await app.waitFor("id:settings-detection-card");
+
+  // Off is the initial mode and hides the detection model controls.
+  expect(app.shows("id:settings-detection-mode-off")).toBe(true);
+  expect(app.shows("id:settings-detection-primary")).toBe(false);
+  expect(app.shows("id:settings-detection-add-backup")).toBe(false);
+  expect(app.shows("id:settings-detection-disclosure")).toBe(false);
+  expect(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]).toBeUndefined();
+
+  await app.press("id:settings-detection-mode-ai");
+  await app.waitFor("id:settings-detection-primary");
+  expect(app.enabled("id:settings-detection-add-backup")).toBe(false);
+  await app.press("id:settings-detection-save");
+  await app.waitFor("id:settings-detection-error");
+  expect(app.texts()).toContain("Choose a primary detection model.");
+  expect(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]).toBeUndefined();
+
+  await app.press("id:settings-detection-primary");
+  await app.waitFor("role:option[OpenAI Main · gpt-4.1-mini]");
+  await app.press("role:option[OpenAI Main · gpt-4.1-mini]");
+
+  expect(app.enabled("id:settings-detection-add-backup")).toBe(true);
+  await app.press("id:settings-detection-add-backup");
+  await app.press("id:settings-detection-backup-0");
+  await app.waitFor("role:option[OpenAI Main · gpt-4.1]");
+  await app.press("role:option[OpenAI Main · gpt-4.1]");
+
+  await app.press("id:settings-detection-add-backup");
+  await app.press("id:settings-detection-backup-1");
+  await app.waitFor("role:option[OpenAI Main · gpt-4o]");
+  await app.press("role:option[OpenAI Main · gpt-4o]");
+
+  await app.press("id:settings-detection-backup-up-1");
+
+  await app.press("id:settings-detection-native-language");
+  await app.waitFor("role:option[Chinese]");
+  await app.press("role:option[Chinese]");
+  await app.press("id:settings-detection-preferred-language");
+  await app.waitFor("role:option[English]");
+  await app.press("role:option[English]");
+
+  await app.press("id:settings-detection-save");
+  await app.waitUntil(() => Boolean(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]));
+  expect(app.requests()).toHaveLength(0);
+
+  const stored = JSON.parse(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]!);
+  expect(stored).toMatchObject({
+    version: 1,
+    mode: "ai",
+    modelIds: ["m-1", "m-3", "m-2"],
+    nativeLanguage: "zh",
+    preferredTranslationLanguage: "en",
+  });
+
+  // The interface language preference is untouched by saving detection settings.
+  expect(app.storage()["settings.language"]).toBe("en");
+  await app.press("id:settings-nav-general");
+  await app.waitFor("id:settings-general-card");
+  expect(app.shows("id:settings-detection-card")).toBe(false);
+
+  const reopened = await open(APP_ENTRY, { ...viewport, storage: app.storage() });
+  await reopened.press("id:nav-settings");
+  await reopened.press("id:settings-nav-language-detection");
+  await reopened.waitFor("id:settings-detection-card");
+  expect(reopened.shows("id:settings-detection-primary")).toBe(true);
+  expect(reopened.shows("id:settings-detection-backup-row-1")).toBe(true);
+  expect(reopened.texts()).toContain("OpenAI Main · gpt-4.1-mini");
+  expect(reopened.texts()).toContain("OpenAI Main · gpt-4o");
+  expect(reopened.texts()).toContain("OpenAI Main · gpt-4.1");
+  expect(reopened.requests()).toHaveLength(0);
+});
+
+test("language detection: keeps unavailable saved models and offers Models recovery", async () => {
+  const savedSettings = JSON.stringify({
+    version: 1,
+    mode: "ai",
+    modelIds: ["m-removed"],
+    nativeLanguage: "zh",
+    preferredTranslationLanguage: null,
+  });
+  const seed = makeSeedStorage({
+    channels: [makeChannel({ id: "ch-openai", displayName: "OpenAI Main", enabled: true })],
+    models: [
+      makeModel({ id: "m-1", providerId: "ch-openai", modelKey: "gpt-4.1-mini", enabled: true }),
+    ],
+    extra: { [LANGUAGE_DETECTION_STORAGE_KEY]: savedSettings },
+  });
+  const app = await open(APP_ENTRY, { ...viewport, storage: seed });
+
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-language-detection");
+  await app.waitFor("id:settings-detection-primary-unavailable");
+  expect(app.shows("id:settings-detection-manage-models")).toBe(true);
+  expect(app.texts()).toContain("Model no longer exists in Models.");
+
+  await app.press("id:settings-detection-manage-models");
+  await app.waitFor("id:models-page");
+
+  const emptyCatalog = await open(APP_ENTRY, {
+    ...viewport,
+    storage: makeSeedStorage({
+      extra: { [LANGUAGE_DETECTION_STORAGE_KEY]: savedSettings },
+    }),
+  });
+  await emptyCatalog.press("id:nav-settings");
+  await emptyCatalog.press("id:settings-nav-language-detection");
+  await emptyCatalog.waitFor("id:settings-detection-models-recovery");
+  expect(emptyCatalog.shows("id:settings-detection-primary-unavailable")).toBe(true);
+  await emptyCatalog.press("id:settings-detection-manage-models");
+  await emptyCatalog.waitFor("id:models-page");
+});
+
+test("language detection: keeps the draft and shows a localized alert when validation fails", async () => {
+  const seed = makeSeedStorage({
+    channels: [makeChannel({ id: "ch-openai", displayName: "OpenAI Main", enabled: true })],
+    models: [
+      makeModel({ id: "m-1", providerId: "ch-openai", modelKey: "gpt-4.1-mini", enabled: true }),
+    ],
+  });
+  const app = await open(APP_ENTRY, { ...viewport, storage: seed });
+
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-language-detection");
+  await app.press("id:settings-detection-mode-ai");
+  await app.press("id:settings-detection-primary");
+  await app.waitFor("role:option[OpenAI Main · gpt-4.1-mini]");
+  await app.press("role:option[OpenAI Main · gpt-4.1-mini]");
+  await app.press("id:settings-detection-native-language");
+  await app.waitFor("role:option[Chinese]");
+  await app.press("role:option[Chinese]");
+  await app.press("id:settings-detection-preferred-language");
+  await app.waitFor("role:option[Chinese]");
+  await app.press("role:option[Chinese]");
+
+  await app.press("id:settings-detection-save");
+  await app.waitFor("id:settings-detection-error");
+  expect(app.texts()).toContain(
+    "The native language and the preferred translation language must differ.",
+  );
+  expect(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]).toBeUndefined();
+  expect(app.shows("id:settings-detection-primary")).toBe(true);
+
+  await app.press("id:settings-detection-preferred-language");
+  await app.waitFor("role:option[English]");
+  await app.press("role:option[English]");
+  await app.press("id:settings-detection-save");
+  await app.waitUntil(() => Boolean(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]));
+  expect(JSON.parse(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]!).modelIds).toEqual(["m-1"]);
+});
+
+test("language detection: localizes labels and help text in both languages", async () => {
+  const app = await open(APP_ENTRY, { ...viewport, storage: { "settings.language": "en" } });
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-language-detection");
+  await app.waitFor("id:settings-detection-card");
+  expect(app.texts()).toContain("Language Detection");
+  expect(app.texts()).toContain("Off");
+  expect(app.texts()).toContain("Native language");
+  expect(app.texts()).toContain("Translate my native language into");
+  expect(app.texts()).toContain(
+    "When the target is set to Automatic, text in other languages is translated into your native language. Text in your native language is translated into the language selected above.",
+  );
+
+  await app.press("id:settings-nav-general");
+  await app.press("id:language-zh-CN");
+  await app.press("id:settings-nav-language-detection");
+  await app.waitFor("id:settings-detection-card");
+  expect(app.texts()).toContain("语言检测");
+  expect(app.texts()).toContain("关闭");
+  expect(app.texts()).toContain("母语");
+  expect(app.texts()).toContain("母语译为");
+  expect(app.texts()).toContain("目标语言设为自动时，非母语译为母语，母语译为上方指定的语言。");
 });

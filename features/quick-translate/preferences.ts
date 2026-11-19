@@ -2,8 +2,8 @@ import { signal, Storage } from "nsh";
 import { t } from "nsh/i18n";
 import { canUseDoubleCopy } from "../../platform/quick-translate";
 import {
-  isLanguageId,
   isSourceLanguageId,
+  isTargetLanguageId,
   type SourceLanguageId,
   type TargetLanguageId,
 } from "../presets/languages";
@@ -120,7 +120,7 @@ export function parseQuickTranslatePreferences(raw: string): QuickTranslatePrefe
 
   let targetLanguage: TargetLanguageId | null = null;
   if (parsed.targetLanguage !== undefined && parsed.targetLanguage !== null) {
-    if (!isLanguageId(parsed.targetLanguage)) {
+    if (!isTargetLanguageId(parsed.targetLanguage)) {
       return null;
     }
     targetLanguage = parsed.targetLanguage;
