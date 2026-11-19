@@ -1,4 +1,4 @@
-import { cleanup, Clipboard, computed, effect, platform, Scroll, signal, Text, View } from "nsh";
+import { cleanup, Clipboard, computed, effect, platform, Scroll, signal, View } from "nsh";
 import { Application, GlobalShortcut, titleBar, Window } from "nsh/desktop";
 import { t } from "nsh/i18n";
 import { Button } from "../components/ui/button";
@@ -157,14 +157,14 @@ function QuickTranslateWindowBody(props: { controller: QuickTranslateController 
         testID="quick-translate-header"
         onLayout={({ bounds }) => headerHeight.set(bounds.size.height)}
         desktop={{ windowDrag: true }}
-        class="shrink-0 flex-row items-center justify-between gap-2 border-b border-border pl-3"
-        // Runtime platform titleBar() insets are reactive once the floating HWND reports caption bounds.
+        class="shrink-0 flex-row items-center justify-between gap-2 border-b border-border"
+        // Runtime titleBar() insets clear native caption buttons. The extra 8 pt is the control inset.
         style={{
           height: Math.max(38, titleBar().height),
+          paddingLeft: titleBar().left + 8,
           paddingRight: titleBar().right + 8,
         }}
       >
-        <Text class="text-xs font-medium text-foreground">{t("quickTranslate.title")}</Text>
         <View desktop={{ windowDrag: false }} class="flex-row items-center gap-1">
           <QuickTranslateLanguageMenu
             sourceLanguage={session.sourceLanguage()}
@@ -215,7 +215,9 @@ function QuickTranslateWindowBody(props: { controller: QuickTranslateController 
               class="size-3.5"
             />
           </Button>
-          <If when={titleBar().right === 0}>
+        </View>
+        <If when={titleBar().right === 0}>
+          <View desktop={{ windowDrag: false }}>
             <Button
               testID="quick-translate-close"
               variant="ghost"
@@ -226,8 +228,8 @@ function QuickTranslateWindowBody(props: { controller: QuickTranslateController 
             >
               <Icon name="close" tone="muted-foreground" class="size-3.5" />
             </Button>
-          </If>
-        </View>
+          </View>
+        </If>
       </View>
       <Scroll class="min-h-0 flex-1">
         {/* Measure the natural content height, not the scroll viewport. */}
