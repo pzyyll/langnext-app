@@ -196,6 +196,8 @@ function QuickTranslateWindowBody(props: { controller: QuickTranslateController 
               class="size-3.5"
             />
           </Button>
+        </View>
+        <View desktop={{ windowDrag: false }} class="flex-row items-center gap-1">
           <Button
             testID="quick-translate-pin"
             variant="ghost"
@@ -215,9 +217,7 @@ function QuickTranslateWindowBody(props: { controller: QuickTranslateController 
               class="size-3.5"
             />
           </Button>
-        </View>
-        <If when={titleBar().right === 0}>
-          <View desktop={{ windowDrag: false }}>
+          <If when={titleBar().right === 0}>
             <Button
               testID="quick-translate-close"
               variant="ghost"
@@ -228,8 +228,8 @@ function QuickTranslateWindowBody(props: { controller: QuickTranslateController 
             >
               <Icon name="close" tone="muted-foreground" class="size-3.5" />
             </Button>
-          </View>
-        </If>
+          </If>
+        </View>
       </View>
       <Scroll class="min-h-0 flex-1">
         {/* Measure the natural content height, not the scroll viewport. */}
