@@ -5,6 +5,7 @@ import type { DiscoveredRemoteModel } from "../../modules/ai/contracts/model";
 import { aiClient, type AiClientInput } from "../../modules/ai/runtime/client";
 import { aiRegistry } from "../../modules/ai/runtime/registry";
 import { inspectBaseUrl } from "./connection";
+import { resolveEffectiveApiType, resolveEffectiveCapabilities } from "./model-helpers";
 import {
   applyModelConfigUpdate,
   createManualProviderModel,
@@ -531,6 +532,11 @@ export async function deleteChannel(id: string): Promise<void> {
   });
 }
 
+async function readSavedChannelCredential(channelId: string): Promise<string | null> {
+  const targetChannel = channelsSignal().find((item) => item.id === channelId);
+  return targetChannel && !targetChannel.hasCredential ? null : await readSecret(channelId);
+}
+
 /**
  * Applies the host's URL consent and saved-secret policy, then hands the client
  * a resolved connection snapshot. Provider policy stays in the client.
@@ -565,9 +571,7 @@ async function resolveConnectionRequestParams(
   } else {
     const { channelId, update } = snapshot.credentialInput;
     if (update.mode === "keep") {
-      const targetChannel = channelsSignal().find((item) => item.id === channelId);
-      credential =
-        targetChannel && !targetChannel.hasCredential ? null : await readSecret(channelId);
+      credential = await readSavedChannelCredential(channelId);
     } else if (update.mode === "replace") {
       credential = update.value.trim() || null;
     } else {
@@ -763,4 +767,91 @@ export async function deleteModelsBulk(providerId: string, modelIds: string[]): 
     modelsSignal.set(nextModels);
     return deletedCount;
   });
+}
+
+export type SavedModelRequestResolution =
+  | {
+      ok: true;
+      modelId: string;
+      modelKey: string;
+      connection: AiClientInput;
+    }
+  | {
+      ok: false;
+      reason: string;
+    };
+
+/**
+ * Resolves the effective protocol route and saved credential for a model UUID
+ * when a translation request runs, enforcing availability and HTTP consent.
+ */
+export async function resolveSavedModelRequest(
+  modelId: string,
+): Promise<SavedModelRequestResolution> {
+  if (errorSignal() !== null) {
+    return { ok: false, reason: t("presets.model.reasonCatalogLoadFailed") };
+  }
+
+  const model = modelsSignal().find((entry) => entry.id === modelId);
+  if (!model) {
+    return { ok: false, reason: t("presets.model.reasonDeleted") };
+  }
+  if (!model.enabled) {
+    return { ok: false, reason: t("presets.model.reasonModelDisabled") };
+  }
+  if (model.syncStatus === "missing") {
+    return { ok: false, reason: t("presets.model.reasonMissing") };
+  }
+  if (!model.modelKey.trim()) {
+    return { ok: false, reason: t("presets.model.reasonUnsupported") };
+  }
+  if (!resolveEffectiveCapabilities(model).text) {
+    return { ok: false, reason: t("presets.model.reasonNotTextCapable") };
+  }
+
+  const channel = channelsSignal().find((entry) => entry.id === model.providerId);
+  if (!channel) {
+    return { ok: false, reason: t("presets.model.reasonDeleted") };
+  }
+  if (!channel.enabled) {
+    return { ok: false, reason: t("presets.model.reasonChannelDisabled") };
+  }
+
+  const effectiveProtocol = resolveEffectiveApiType(model, channel.adapterId);
+  let providerDefaultBaseUrl: string | null = null;
+  try {
+    const provider = aiRegistry.getProvider(channel.presetId);
+    if (!provider.allowedProtocolIds.includes(effectiveProtocol)) {
+      return { ok: false, reason: t("presets.model.reasonUnsupported") };
+    }
+    aiRegistry.getProtocol(effectiveProtocol);
+    providerDefaultBaseUrl = provider.defaultBaseUrl;
+  } catch {
+    return { ok: false, reason: t("presets.model.reasonUnsupported") };
+  }
+
+  const urlCheck = inspectBaseUrl(channel.baseUrl ?? "");
+  if (!urlCheck.ok) {
+    return { ok: false, reason: urlCheck.error ?? t("models.error.invalidBaseUrl") };
+  }
+  if (!urlCheck.normalizedBaseUrl && !providerDefaultBaseUrl) {
+    return { ok: false, reason: t("models.error.baseUrlRequired") };
+  }
+  if (urlCheck.isInsecureHttp && channel.insecureHttpConfirmedAt === null) {
+    return { ok: false, reason: t("models.error.confirmInsecureRequest") };
+  }
+
+  const credential = await readSavedChannelCredential(channel.id);
+
+  return {
+    ok: true,
+    modelId: model.id,
+    modelKey: model.modelKey,
+    connection: {
+      providerTypeId: channel.presetId,
+      protocolId: effectiveProtocol,
+      baseUrl: urlCheck.normalizedBaseUrl,
+      credential,
+    },
+  };
 }

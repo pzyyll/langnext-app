@@ -182,6 +182,7 @@ models:
     confirmInsecureFormSave: 请先确认非本机主机使用未加密的 http:// 再保存。
     confirmInsecureTest: 请先确认未加密的 http:// 再测试此主机。
     confirmInsecureFetch: 请先确认未加密的 http:// 再获取模型。
+    confirmInsecureRequest: 请先在“模型”中确认该渠道使用未加密的 http:// 后再翻译。
     modelIdRequired: 模型 ID 为必填项。
     positiveInteger: "%{label} 必须是正整数。"
     positive: "%{label} 必须大于 0。"
@@ -390,3 +391,13 @@ presets:
     title: 删除预设
     description: 删除预设“%{name}”？此操作无法撤销。
     error: "无法删除预设（%{detail}）。"
+quickTranslate:
+  prompt:
+    autoDetectSource: 自动识别的源语言（在本次回答中直接识别文本语言）
+  error:
+    blankInput: 请输入要翻译的文本。
+    presetDisabled: 所选预设已停用，请在“预设”中启用或选择其他预设。
+    missingTemplate: 所选预设缺少有效的提示词模板，请在“预设”中检查模板配置。
+    noModels: 所选预设未配置任何模型，请在“预设”中添加模型。
+    noEligibleModel: 此预设中的已配置模型均不可用，请检查“模型”或“预设”。
+    translationFailed: "翻译失败：%{detail}"

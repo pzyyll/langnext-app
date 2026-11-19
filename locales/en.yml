@@ -182,6 +182,7 @@ models:
     confirmInsecureFormSave: Confirm using unencrypted http:// for non-local hosts before saving.
     confirmInsecureTest: Confirm using unencrypted http:// before testing this host.
     confirmInsecureFetch: Confirm using unencrypted http:// before fetching models.
+    confirmInsecureRequest: Confirm unencrypted http:// for this channel in Models before translating.
     modelIdRequired: Model ID is required.
     positiveInteger: "%{label} must be a positive whole number."
     positive: "%{label} must be greater than 0."
@@ -390,3 +391,13 @@ presets:
     title: Delete Preset
     description: 'Delete preset "%{name}"? This cannot be undone.'
     error: "Could not delete preset (%{detail})."
+quickTranslate:
+  prompt:
+    autoDetectSource: the detected source language (detect it automatically in the same response)
+  error:
+    blankInput: Enter text to translate.
+    presetDisabled: Selected preset is disabled. Enable it in Presets or choose another preset.
+    missingTemplate: Selected preset has no valid prompt template. Check its templates in Presets.
+    noModels: Selected preset has no models configured. Add a model in Presets.
+    noEligibleModel: No configured model in this preset is available. Check Models or Presets.
+    translationFailed: "Translation failed: %{detail}"
