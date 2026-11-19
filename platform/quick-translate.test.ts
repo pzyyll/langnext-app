@@ -1,6 +1,6 @@
 import type { Display } from "nsh/desktop";
 import { expect, open, test } from "nsh/test";
-import { resolvePopupPlacement } from "./quick-translate";
+import { resolvePopupContentFit, resolvePopupPlacement } from "./quick-translate";
 
 function makeDisplay(overrides: Partial<Display> = {}): Display {
   return {
@@ -14,6 +14,32 @@ function makeDisplay(overrides: Partial<Display> = {}): Display {
     ...overrides,
   };
 }
+
+test("quick height: preserves width and fits content within an offset display work area", () => {
+  const display = makeDisplay({
+    visibleBounds: { origin: { x: -1280, y: -120 }, size: { width: 1280, height: 760 } },
+    scaleFactor: 2,
+  });
+  const state = {
+    bounds: { origin: { x: -500, y: 275 }, size: { width: 480, height: 365 } },
+    contentBounds: { origin: { x: -498, y: 277 }, size: { width: 476, height: 360 } },
+    display,
+    scaleFactor: display.scaleFactor,
+  };
+
+  // Frame adds 5pt. Shrinking keeps the same top edge and includes the full minimum content area.
+  expect(resolvePopupContentFit(state, 230, 280)).toEqual({ size: { height: 285 } });
+  expect(resolvePopupContentFit(state, 360, 280)).toBeNull();
+  expect(resolvePopupContentFit(state, 359.9, 280)).toBeNull();
+  expect(resolvePopupContentFit(state, 360.1, 280)).toEqual({
+    size: { height: 365.5 },
+    origin: { y: 274.5 },
+  });
+  expect(resolvePopupContentFit(state, 1200, 280)).toEqual({
+    size: { height: 760 },
+    origin: { y: -120 },
+  });
+});
 
 test("quick placement: right/bottom clamp on negative-origin display yields (-420, 504)", () => {
   const negDisplay = makeDisplay({

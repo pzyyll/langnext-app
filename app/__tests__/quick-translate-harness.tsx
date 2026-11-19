@@ -182,6 +182,12 @@ function QuickTranslateHarness(config: {
             nextClipboardText = "Second copied phrase";
           }}
         />
+        <Text>
+          {(() => {
+            const work = Window.get("quick-translate")?.state()?.display?.visibleBounds;
+            return work ? `quick-work-area:${work.origin.y}:${work.size.height}` : "";
+          })()}
+        </Text>
         <Text testID="harness-metrics">
           {`reg=${registerCount()}|unreg=${unregisterCount()}|dcReg=${doubleCopyRegisterCount()}|dcStop=${doubleCopyStopCount()}|dcReads=${clipboardReadCount()}|shortcut=${lastRegisteredShortcut()}|tray=${trayMenuLabels()}|mainHidden=${mainHidden()}`}
         </Text>

@@ -9,6 +9,7 @@ import {
   type WindowState,
 } from "nsh/desktop";
 import {
+  resolvePopupContentFit,
   resolvePopupPlacement,
   type CursorAnchorPoint,
   type DoubleCopyActivationEvent,
@@ -54,6 +55,7 @@ export interface QuickTranslateController {
   attachWindow: (win: WindowRef | null) => void;
   attachSourceInput: (input: InputRef | null) => void;
   verifyInitialBounds: (state: WindowState) => void;
+  fitContentHeight: (height: number) => void;
   handleBoundsChange: (bounds: Bounds) => void;
   setOnCloseCleanup: (callback: (() => void) | null) => void;
 }
@@ -211,6 +213,21 @@ export function createQuickTranslateController(
     });
   };
 
+  const openingSize = () => {
+    const current = placementSignal();
+    return current.kind === "cursor" ? current.bounds.size : current.size;
+  };
+
+  const fitContentHeight = (height: number) => {
+    if (!openSignal()) return;
+    const win = windowRef;
+    const state = win?.state();
+    if (!win || !state?.visible || state.mode !== "normal") return;
+    const minHeight = Math.min(POPUP_MIN_SIZE.height, openingSize().height);
+    const fit = resolvePopupContentFit(state, height, minHeight);
+    if (fit) win.setBounds(fit);
+  };
+
   const handleBoundsChange = (_bounds: Bounds) => {
     if (expectingOwnSetBounds) {
       expectingOwnSetBounds = false;
@@ -228,10 +245,7 @@ export function createQuickTranslateController(
       const current = placementSignal();
       return current.kind === "cursor" ? current.bounds.origin : "center";
     },
-    openingSize: () => {
-      const current = placementSignal();
-      return current.kind === "cursor" ? current.bounds.size : current.size;
-    },
+    openingSize,
     attachedWindow: () => attachedWindowSignal(),
     sourceText: () => sourceSignal(),
     sourceDeliverySeq: () => clipboardDeliverySeqSignal(),
@@ -273,6 +287,7 @@ export function createQuickTranslateController(
       input?.focus();
     },
     verifyInitialBounds,
+    fitContentHeight,
     handleBoundsChange,
     setOnCloseCleanup: (callback: (() => void) | null) => {
       closeCleanup = callback;

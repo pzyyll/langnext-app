@@ -1,6 +1,6 @@
 import type { CursorAnchor, DoubleCopyEvent } from "my-translator/native";
 import type { Point, Size } from "nsh";
-import type { Display, DisplayId } from "nsh/desktop";
+import type { Display, DisplayId, WindowRef, WindowState } from "nsh/desktop";
 
 export type CursorAnchorPoint = CursorAnchor;
 export type DoubleCopyActivationEvent = DoubleCopyEvent;
@@ -47,6 +47,32 @@ function capSizeToWorkArea(desiredSize: Size, display: Display | undefined): Siz
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
+}
+
+/** Fits the measured content without changing width. Move up only when the work area requires it. */
+export function resolvePopupContentFit(
+  state: Pick<WindowState, "bounds" | "contentBounds" | "display" | "scaleFactor">,
+  contentHeight: number,
+  minContentHeight: number,
+): Parameters<WindowRef["setBounds"]>[0] | null {
+  if (!Number.isFinite(contentHeight) || contentHeight <= 0) return null;
+  const { bounds, contentBounds, display } = state;
+  const scale = state.scaleFactor > 0 ? state.scaleFactor : 1;
+  const frameHeight = Math.max(0, bounds.size.height - contentBounds.size.height);
+  let height = Math.ceil((Math.max(minContentHeight, contentHeight) + frameHeight) * scale) / scale;
+  let y = bounds.origin.y;
+  const work = display?.visibleBounds;
+  if (work && work.size.height > 0) {
+    height = Math.min(height, work.size.height);
+    y = clamp(y, work.origin.y, work.origin.y + work.size.height - height);
+  }
+
+  // Ignore differences the native frame cannot represent at its current scale.
+  const tolerance = 0.5 / scale;
+  const resized = Math.abs(height - bounds.size.height) >= tolerance;
+  const moved = Math.abs(y - bounds.origin.y) >= tolerance;
+  if (!resized && !moved) return null;
+  return { ...(resized ? { size: { height } } : {}), ...(moved ? { origin: { y } } : {}) };
 }
 
 /**

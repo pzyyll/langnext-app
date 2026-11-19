@@ -1,4 +1,4 @@
-import { cleanup, Clipboard, effect, platform, Scroll, Text, View } from "nsh";
+import { cleanup, Clipboard, computed, effect, platform, Scroll, signal, Text, View } from "nsh";
 import { Application, GlobalShortcut, titleBar, Window } from "nsh/desktop";
 import { t } from "nsh/i18n";
 import { Button } from "../components/ui/button";
@@ -117,10 +117,28 @@ export function registerQuickTranslateDoubleCopy(
 
 /** Renders popup contents inside `<Window>` so `titleBar()` reads this window's caption area. */
 function QuickTranslateWindowBody(props: { controller: QuickTranslateController }) {
+  const headerHeight = signal(0);
+  const contentHeight = signal(0);
+  // On Windows the first layout can arrive before the native window state.
+  const readyToFit = computed(() => {
+    const state = props.controller.attachedWindow()?.state();
+    return state?.visible === true && state.mode === "normal";
+  });
+
+  effect(() => {
+    const header = headerHeight();
+    const content = contentHeight();
+    if (!readyToFit() || header <= 0 || content <= 0) return;
+    // Coalesce layout events and resize outside the native layout pass.
+    const frame = requestAnimationFrame(() => props.controller.fitContentHeight(header + content));
+    cleanup(() => cancelAnimationFrame(frame));
+  });
+
   return (
     <View class="flex-1 bg-background text-foreground">
       <View
         testID="quick-translate-header"
+        onLayout={({ bounds }) => headerHeight.set(bounds.size.height)}
         desktop={{ windowDrag: true }}
         class="shrink-0 flex-row items-center justify-between gap-2 border-b border-border bg-background pl-3"
         // Runtime platform titleBar() insets are reactive once the floating HWND reports caption bounds.
@@ -190,14 +208,17 @@ function QuickTranslateWindowBody(props: { controller: QuickTranslateController 
         </View>
       </View>
       <Scroll class="min-h-0 flex-1">
-        <QuickTranslatePopup
-          sourceText={props.controller.sourceText}
-          sourceDeliverySeq={props.controller.sourceDeliverySeq}
-          onSourceTextChange={(text) => props.controller.setSourceText(text)}
-          autoTranslate={props.controller.autoTranslate}
-          onOverlayOpenChange={(menuId, open) => props.controller.setMenuOpen(menuId, open)}
-          onAttachSourceInput={(node) => props.controller.attachSourceInput(node)}
-        />
+        {/* Measure the natural content height, not the scroll viewport. */}
+        <View class="shrink-0" onLayout={({ bounds }) => contentHeight.set(bounds.size.height)}>
+          <QuickTranslatePopup
+            sourceText={props.controller.sourceText}
+            sourceDeliverySeq={props.controller.sourceDeliverySeq}
+            onSourceTextChange={(text) => props.controller.setSourceText(text)}
+            autoTranslate={props.controller.autoTranslate}
+            onOverlayOpenChange={(menuId, open) => props.controller.setMenuOpen(menuId, open)}
+            onAttachSourceInput={(node) => props.controller.attachSourceInput(node)}
+          />
+        </View>
       </Scroll>
     </View>
   );
