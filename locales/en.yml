@@ -39,6 +39,7 @@ settings:
   sections:
     general: General
     appearance: Appearance
+    languageDetection: Language Detection
   theme:
     title: Theme
   appearance:
@@ -62,6 +63,22 @@ settings:
     enableError: Could not start the Windows double-copy listener. The listener stays off.
     saveError: Could not save the double-copy setting. Check storage and try again.
   languageDetection:
+    title: Language Detection
+    detection: Detection
+    off: Off
+    ai: AI
+    models: Detection models
+    primary: Primary model
+    backups: Backup models
+    addBackup: Add backup
+    moveUp: Move backup %{index} up
+    moveDown: Move backup %{index} down
+    removeBackup: Remove backup %{index}
+    nativeLanguage: Native language
+    preferredTranslation: Translate my native language into
+    preferenceUnset: Not set
+    help: When the target is set to Automatic, text in other languages is translated into your native language. Text in your native language is translated into the language selected above.
+    disclosure: Automatic source detection sends a text sample to the chosen model, and may send it to the chosen backups if needed.
     error:
       storageReadFailed: Could not read the saved language detection settings.
       storageMalformed: The saved language detection settings are unreadable.

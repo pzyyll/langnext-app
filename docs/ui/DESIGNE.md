@@ -549,10 +549,11 @@ Use the shared decimal `Input` with two stacked arrow buttons at its trailing ed
 
 Settings uses the same `PageSurface` (`layout="split"`) and `SplitPane` master-detail structure as Models and Presets (`testID="settings-page"`), with its own persisted rail width (`split.settings.railWidth`).
 
-- **Left category rail (`settings-rail`)**: Shares the borderless `h-14` header (`Settings`) aligned across the draggable `bg-border` divider, followed by selectable category rows (`px-2 pb-2`; `General` selected by default on launch, `Appearance`) styled with `Button` (`size="row"`) and `border-border bg-accent` selection fill. The active category stays in session state when navigating to other sidebar destinations and back.
+- **Left category rail (`settings-rail`)**: Shares the borderless `h-14` header (`Settings`) aligned across the draggable `bg-border` divider, followed by selectable category rows (`px-2 pb-2`; `General` selected by default on launch, `Appearance`, `Language Detection`) styled with `Button` (`size="row"`) and `border-border bg-accent` selection fill. The active category stays in session state when navigating to other sidebar destinations and back.
 - **Right detail pane (`settings-detail`)**: Displays the active category title (`text-lg font-semibold`) inside an aligned `mx-auto h-14 w-full max-w-4xl` borderless header (`px-6` on desktop, `px-4` below `860` points) above a `<Scroll>` column (`mx-auto w-full max-w-4xl`, `gap-5 px-6 pb-6 pt-2` on desktop and `gap-4 px-4 pb-4 pt-1` under `860` points):
   - **General**: Hosts the **Language** `Card` (`System`, `English`, `简体中文` `RadioGroup` and inline save-error `role="alert"`).
   - **Appearance**: Hosts the **Theme** `Card` (`Light`, `Dark`, `System` `RadioGroup` and inline save-error `role="alert"`) and the **Transparent title bar and sidebar** `Switch` `Card`.
+  - **Language Detection**: Hosts one `Card` (`settings-detection-card`) with a **Detection** `RadioGroup` (`Off`, `AI`), the AI-only detection model chain (`Primary model` `Select`, ordered **Backup models** rows with add, move-up/down, and remove `Button`s, plus the sample-disclosure line), the **Native language** and **Translate my native language into** `Select`s with the shared help line, an inline `role="alert"` for validation or write failures, and a trailing **Save** `Button`. The `Off` mode hides the model controls without discarding the draft's model IDs. An empty, failed, or unavailable model catalog keeps saved IDs visible with their reason and links to Models through the existing sidebar navigation. The section keeps a local draft; leaving the category discards it and the service only reads saved settings.
 
 ### Motion inventory
 
@@ -561,7 +562,9 @@ Settings uses the same `PageSurface` (`layout="split"`) and `SplitPane` master-d
 | Settings workspace enters | Native opacity motion on the inner content container (`pageEnter`, 200 ms, ease-out) while `PageSurface` `bg-background` stays opaque | Instant |
 | Split handle hover, drag, and thumb grip | Shared `SplitPane` handle transitions (`navigationFeedback` color, `tooltip` thumb opacity, 150 ms, ease-out); panel split tracks the pointer 1:1 per frame natively | Instant color/opacity; 1:1 pointer tracking unchanged |
 | Category row & radio option hover/selection | Native color & border transition (`navigationFeedback`, 150 ms, ease-out) without press scale | Instant |
-| Category switch (`General` <-> `Appearance`) | Immediate detail pane replacement (`If`) with no cross-fade so scroll position resets per section | Instant |
+| Category switch (`General` <-> `Appearance` <-> `Language Detection`) | Immediate detail pane replacement (`If`) with no cross-fade so scroll position resets per section | Instant |
+| Language Detection mode `Off` <-> `AI`, backup add/move/remove, and inline validation or save alerts | Immediate conditional and keyed list updates inside the shared `Card`; mode rows and `Save` reuse `navigationFeedback`; no animation on row changes or alerts | Instant |
+| Language Detection model and preference `Select`s | Shared `Select` overlay (`motion.popup` / `motion.popupHidden`, `150 ms`, ease-out, `-translate-y-1` inside the popup root) | Instant opacity, no slide |
 | Transparency switch & save error | Existing `navigationFeedback` + `switchThumb` (`150 ms`, ease-out); no animation on save error | Instant switch; no change on error |
 
 ### Validation

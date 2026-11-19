@@ -14,14 +14,22 @@ import {
 } from "../quick-translate/preferences";
 import { appearance, appearanceError, selectAppearance, type Appearance } from "./appearance";
 import { language, languageError, selectLanguage, type LanguagePreference } from "./language";
+import { LanguageDetectionSection } from "./language-detection-section";
 import { selectTransparency, transparency, transparencyError } from "./transparency";
 
-export type SettingsSection = "general" | "appearance";
+export type SettingsSection = "general" | "appearance" | "language-detection";
 
 const SETTINGS_SECTIONS: readonly { id: SettingsSection; labelKey: string }[] = [
   { id: "general", labelKey: "settings.sections.general" },
   { id: "appearance", labelKey: "settings.sections.appearance" },
+  { id: "language-detection", labelKey: "settings.sections.languageDetection" },
 ];
+
+const SECTION_LABEL_KEYS: Record<SettingsSection, string> = {
+  general: "settings.sections.general",
+  appearance: "settings.sections.appearance",
+  "language-detection": "settings.sections.languageDetection",
+};
 
 const selectedSection = signal<SettingsSection>("general");
 
@@ -145,11 +153,10 @@ function AppearanceSection(props: { compact: boolean }) {
 }
 
 /** Master-detail Settings workspace with resizable category rail and scrollable detail pane. */
-export function SettingsPage(props: { platformOs?: string } = {}) {
+export function SettingsPage(props: { platformOs?: string; onNavigateToModels?: () => void } = {}) {
   const compact = () => windowSize().width < 860;
   const currentOs = () => props.platformOs ?? platform.os;
-  const activeSectionLabelKey = () =>
-    selectedSection() === "general" ? "settings.sections.general" : "settings.sections.appearance";
+  const activeSectionLabelKey = () => SECTION_LABEL_KEYS[selectedSection()];
 
   return (
     <SplitPane
@@ -221,11 +228,17 @@ export function SettingsPage(props: { platformOs?: string } = {}) {
             <View
               class={`mx-auto w-full max-w-4xl ${compact() ? "gap-4 px-4 pb-4 pt-1" : "gap-5 px-6 pb-6 pt-2"}`}
             >
-              <If
-                when={selectedSection() === "general"}
-                else={<AppearanceSection compact={compact()} />}
-              >
+              <If when={selectedSection() === "general"}>
                 <GeneralSection compact={compact()} platformOs={currentOs()} />
+              </If>
+              <If when={selectedSection() === "appearance"}>
+                <AppearanceSection compact={compact()} />
+              </If>
+              <If when={selectedSection() === "language-detection"}>
+                <LanguageDetectionSection
+                  compact={compact()}
+                  onManageModels={props.onNavigateToModels}
+                />
               </If>
             </View>
           </Scroll>

@@ -39,6 +39,7 @@ settings:
   sections:
     general: 通用
     appearance: 外观
+    languageDetection: 语言检测
   theme:
     title: 主题
   appearance:
@@ -62,6 +63,22 @@ settings:
     enableError: 无法启动 Windows 双击复制监听，该功能已保持关闭。
     saveError: 无法保存双击复制设置，请重试。
   languageDetection:
+    title: 语言检测
+    detection: 检测
+    off: 关闭
+    ai: AI
+    models: 检测模型
+    primary: 主模型
+    backups: 备用模型
+    addBackup: 添加备用模型
+    moveUp: 上移备用模型 %{index}
+    moveDown: 下移备用模型 %{index}
+    removeBackup: 移除备用模型 %{index}
+    nativeLanguage: 母语
+    preferredTranslation: 母语译为
+    preferenceUnset: 未设置
+    help: 目标语言设为自动时，非母语译为母语，母语译为上方指定的语言。
+    disclosure: 自动检测源语言会把一段文本样本发送到所选模型，必要时也会发送到所选备用模型。
     error:
       storageReadFailed: 无法读取已保存的语言检测设置。
       storageMalformed: 已保存的语言检测设置无法解析。
