@@ -1,7 +1,23 @@
 import { batch, cleanup, Clipboard, effect, signal, type Accessor } from "nsh";
 import { t } from "nsh/i18n";
 import type { SelectItem } from "../../components/ui/select";
-import { AUTO_LANGUAGE, type SourceLanguageId, type TargetLanguageId } from "../presets/languages";
+import { languageResolutionErrorMessage } from "../language-detection/messages";
+import type { DetectLanguageOptions } from "../language-detection/detect";
+import {
+  resolveTranslationLanguages,
+  type ResolveTranslationLanguagesInput,
+  type ResolveTranslationLanguagesResult,
+} from "../language-detection/resolve";
+import {
+  languageDetectionStore,
+  type LanguageDetectionSettings,
+} from "../language-detection/settings";
+import {
+  AUTO_LANGUAGE,
+  type LanguageId,
+  type SourceLanguageId,
+  type TargetLanguageId,
+} from "../presets/languages";
 import { presetsStore } from "../presets/store";
 import type { PresetsStore, PresetsStoreStatus, TranslationPreset } from "../presets/types";
 import {
@@ -45,6 +61,70 @@ interface CardRuntime {
   activeRequestId: number;
 }
 
+/** One lazy language-resolution run shared by every card of a single translation action. */
+interface SharedLanguageRun {
+  join(cardSignal: AbortSignal): Promise<ResolveTranslationLanguagesResult | null>;
+}
+
+interface LanguageSnapshot {
+  sourceText: string;
+  sourceLanguage: SourceLanguageId;
+  targetLanguage: TargetLanguageId;
+  settings: LanguageDetectionSettings;
+}
+
+/**
+ * Starts the resolution on the first join, aborts it when the last consumer leaves,
+ * and never retains a result: each action gets a new run.
+ */
+function createSharedLanguageRun(
+  snapshot: LanguageSnapshot,
+  resolveLanguages: (
+    input: ResolveTranslationLanguagesInput,
+    options?: DetectLanguageOptions,
+  ) => Promise<ResolveTranslationLanguagesResult>,
+): SharedLanguageRun {
+  let promise: Promise<ResolveTranslationLanguagesResult> | null = null;
+  let controller: AbortController | null = null;
+  let consumers = 0;
+
+  return {
+    join: async (cardSignal: AbortSignal) => {
+      if (promise === null) {
+        const shared = new AbortController();
+        controller = shared;
+        promise = resolveLanguages(
+          {
+            sourceText: snapshot.sourceText,
+            sourceLanguage: snapshot.sourceLanguage,
+            targetLanguage: snapshot.targetLanguage,
+            settings: snapshot.settings,
+          },
+          { signal: shared.signal },
+        );
+      }
+      consumers += 1;
+      try {
+        return await Promise.race([
+          promise,
+          new Promise<null>((resolve) => {
+            if (cardSignal.aborted) {
+              resolve(null);
+              return;
+            }
+            cardSignal.addEventListener("abort", () => resolve(null));
+          }),
+        ]);
+      } finally {
+        consumers -= 1;
+        if (consumers === 0) {
+          controller?.abort();
+        }
+      }
+    },
+  };
+}
+
 export interface QuickTranslateSessionOptions {
   sourceText: Accessor<string>;
   sourceDeliverySeq?: Accessor<number>;
@@ -57,6 +137,10 @@ export interface QuickTranslateSessionOptions {
     input: TranslateWithPresetInput,
     options?: TranslateWithPresetOptions,
   ) => Promise<TranslateWithPresetResult>;
+  resolveLanguages?: (
+    input: ResolveTranslationLanguagesInput,
+    options?: DetectLanguageOptions,
+  ) => Promise<ResolveTranslationLanguagesResult>;
   clipboard?: Pick<typeof Clipboard, "writeText">;
 }
 
@@ -107,6 +191,7 @@ export function createQuickTranslateSession(
   const store = options.presetsStore ?? presetsStore;
   const prefsStore = options.preferences ?? quickTranslatePreferencesStore;
   const runTranslate = options.translate ?? translateWithPreset;
+  const runResolveLanguages = options.resolveLanguages ?? resolveTranslationLanguages;
   const clipboardApi = options.clipboard ?? Clipboard;
   const isAutoTranslate = () => options.autoTranslate?.() ?? prefsStore.autoTranslate();
 
@@ -116,7 +201,7 @@ export function createQuickTranslateSession(
 
   const cards = signal<CardViewItem[]>([]);
   const sourceLanguage = signal<SourceLanguageId>(AUTO_LANGUAGE);
-  const targetLanguage = signal<TargetLanguageId>("zh");
+  const targetLanguage = signal<TargetLanguageId>(AUTO_LANGUAGE);
 
   const enabledPresets = () => store.records().filter((item) => item.enabled);
   // A collapsed card is out of the working set: it neither translates nor refreshes.
@@ -265,7 +350,7 @@ export function createQuickTranslateSession(
 
     const fallbackLanguages = seedPreset
       ? resolveInitialPresetLanguages(seedPreset)
-      : { sourceLanguage: AUTO_LANGUAGE, targetLanguage: "zh" as TargetLanguageId };
+      : { sourceLanguage: AUTO_LANGUAGE, targetLanguage: AUTO_LANGUAGE };
 
     batch(() => {
       sourceLanguage.set(saved.sourceLanguage ?? fallbackLanguages.sourceLanguage);
@@ -290,7 +375,11 @@ export function createQuickTranslateSession(
     prefsStore.clearSaveError();
   });
 
-  const executeCard = async (cardId: string, trigger: "manual" | "auto") => {
+  const executeCard = async (
+    cardId: string,
+    trigger: "manual" | "auto",
+    sharedRun?: SharedLanguageRun,
+  ) => {
     const card = cards().find((item) => item.id === cardId);
     const runtime = cardRuntimes.get(cardId);
     if (!card || card.collapsed || !runtime || disposed) {
@@ -350,14 +439,47 @@ export function createQuickTranslateSession(
       result: { status: "loading" },
     }));
 
+    // Cards of one action join the same run, so the detector is asked once per action.
+    // A standalone request (retry or expand) starts a run of its own.
+    const run =
+      sharedRun ??
+      createSharedLanguageRun(
+        {
+          sourceText: text,
+          sourceLanguage: sourceLanguage(),
+          targetLanguage: targetLanguage(),
+          settings: languageDetectionStore.settings(),
+        },
+        runResolveLanguages,
+      );
+    const pair = await run.join(abort.signal);
+    if (pair === null || abort.signal.aborted) {
+      if (runtime.abort === abort) runtime.abort = null;
+      return;
+    }
+    if (disposed || reqId !== runtime.activeRequestId || !cardRuntimes.has(cardId)) {
+      return;
+    }
+    if (!pair.ok) {
+      if (runtime.abort === abort) runtime.abort = null;
+      if (pair.code !== "cancelled") {
+        updateCard(cardId, (item) => ({
+          ...item,
+          result: { status: "error", message: languageResolutionErrorMessage(pair.code) },
+        }));
+      }
+      return;
+    }
+    const resolvedPair: { sourceLanguage: LanguageId; targetLanguage: LanguageId } = pair;
+
     let outcome: TranslateWithPresetResult;
     try {
       outcome = await runTranslate(
         {
           preset,
           sourceText: text,
-          sourceLanguage: sourceLanguage(),
-          targetLanguage: targetLanguage(),
+          sourceLanguage: resolvedPair.sourceLanguage,
+          targetLanguage: resolvedPair.targetLanguage,
           templateId: templateResolution?.template.id ?? card.templateId ?? undefined,
         },
         { signal: abort.signal },
@@ -416,12 +538,31 @@ export function createQuickTranslateSession(
 
   const executeAllCards = (trigger: "manual" | "auto") => {
     clearSharedDebounce();
-    for (const card of expandedCards()) {
-      if (trigger === "auto") {
-        const eligible = enabledPresets().some((item) => item.id === card.presetId);
-        if (!eligible) continue;
-      }
-      void executeCard(card.id, trigger);
+    const targets =
+      trigger === "manual"
+        ? expandedCards()
+        : expandedCards().filter((card) =>
+            enabledPresets().some((item) => item.id === card.presetId),
+          );
+    if (targets.length === 0) return;
+
+    const text = options.sourceText();
+    // One immutable snapshot per action: a saved Settings change applies to the next action.
+    const run =
+      text.trim().length === 0
+        ? undefined
+        : createSharedLanguageRun(
+            {
+              sourceText: text,
+              sourceLanguage: sourceLanguage(),
+              targetLanguage: targetLanguage(),
+              settings: languageDetectionStore.settings(),
+            },
+            runResolveLanguages,
+          );
+
+    for (const card of targets) {
+      void executeCard(card.id, trigger, run);
     }
   };
 
