@@ -12,15 +12,8 @@ import {
 import { t } from "nsh/i18n";
 import { Button } from "../components/ui/button";
 import { Icon } from "../components/ui/icon";
-import { Select, type SelectItem } from "../components/ui/select";
-import { Textarea } from "../components/ui/textarea";
 import { toast } from "../components/ui/toast";
-import {
-  AUTO_LANGUAGE,
-  getLanguageLabel,
-  LANGUAGE_IDS,
-  type SourceLanguageId,
-} from "../features/presets/languages";
+import { QuickTranslatePopup } from "../features/quick-translate/popup";
 
 export const QUICK_TRANSLATE_WINDOW_ID = "quick-translate";
 export const QUICK_TRANSLATE_SHORTCUT = "ctrl+shift+t";
@@ -33,12 +26,14 @@ export type QuickTranslateShortcutBinding = Pick<GlobalShortcutModule, "register
 export interface QuickTranslateController {
   isOpen: Accessor<boolean>;
   isPinned: Accessor<boolean>;
+  autoTranslate: Accessor<boolean>;
   openingDisplay: Accessor<DisplayId | undefined>;
   sourceText: Accessor<string>;
   open: () => void;
   close: () => void;
   setPinned: (pinned: boolean) => void;
   togglePinned: () => void;
+  toggleAutoTranslate: () => void;
   setSourceText: (text: string) => void;
   setMenuOpen: (menuId: string, open: boolean) => void;
   hasOpenOverlay: () => boolean;
@@ -65,6 +60,7 @@ function resolveMainWindowDisplay(): DisplayId | undefined {
 export function createQuickTranslateController(): QuickTranslateController {
   const openSignal = signal(false);
   const pinnedSignal = signal(false);
+  const autoTranslateSignal = signal(false);
   const openingDisplaySignal = signal<DisplayId | undefined>(undefined);
   const sourceSignal = signal("");
   const openMenusSignal = signal<Record<string, boolean>>({});
@@ -107,12 +103,14 @@ export function createQuickTranslateController(): QuickTranslateController {
   return {
     isOpen: () => openSignal(),
     isPinned: () => pinnedSignal(),
+    autoTranslate: () => autoTranslateSignal(),
     openingDisplay: () => openingDisplaySignal(),
     sourceText: () => sourceSignal(),
     open,
     close,
     setPinned: (pinned: boolean) => pinnedSignal.set(pinned),
     togglePinned: () => pinnedSignal.set(!pinnedSignal()),
+    toggleAutoTranslate: () => autoTranslateSignal.set(!autoTranslateSignal()),
     setSourceText: (text: string) => sourceSignal.set(text),
     setMenuOpen: (menuId: string, openMenu: boolean) => {
       const current = openMenusSignal();
@@ -181,16 +179,8 @@ export function registerQuickTranslateShortcut(
   return release;
 }
 
-function buildSourceLanguageItems(): SelectItem[] {
-  return [
-    { value: AUTO_LANGUAGE, title: getLanguageLabel(AUTO_LANGUAGE) },
-    ...LANGUAGE_IDS.map((id) => ({ value: id, title: getLanguageLabel(id) })),
-  ];
-}
-
 /** Renders popup contents inside `<Window>` so `titleBar()` reads this window's caption area. */
 function QuickTranslateWindowBody(props: { controller: QuickTranslateController }) {
-  const sourceLanguage = signal<SourceLanguageId>(AUTO_LANGUAGE);
   const caption = titleBar();
 
   return (
@@ -207,6 +197,30 @@ function QuickTranslateWindowBody(props: { controller: QuickTranslateController 
       >
         <Text class="text-xs font-medium text-foreground">{t("quickTranslate.title")}</Text>
         <View class="flex-row items-center gap-1">
+          <Button
+            testID="quick-translate-auto-toggle"
+            variant="ghost"
+            size="icon-sm"
+            selected={props.controller.autoTranslate()}
+            class={props.controller.autoTranslate() ? "bg-accent" : undefined}
+            tooltip={
+              props.controller.autoTranslate()
+                ? t("quickTranslate.disableAutoTranslate")
+                : t("quickTranslate.enableAutoTranslate")
+            }
+            accessibilityLabel={
+              props.controller.autoTranslate()
+                ? t("quickTranslate.disableAutoTranslate")
+                : t("quickTranslate.enableAutoTranslate")
+            }
+            onPress={() => props.controller.toggleAutoTranslate()}
+          >
+            <Icon
+              name={props.controller.autoTranslate() ? "lightning-solid" : "lightning"}
+              tone={props.controller.autoTranslate() ? "foreground" : "muted-foreground"}
+              class="size-3.5"
+            />
+          </Button>
           <Button
             testID="quick-translate-pin"
             variant="ghost"
@@ -242,31 +256,13 @@ function QuickTranslateWindowBody(props: { controller: QuickTranslateController 
         </View>
       </View>
       <Scroll class="min-h-0 flex-1">
-        <View class="gap-3 p-3">
-          <View class="flex-row items-center gap-2">
-            <Select
-              testID="quick-translate-source-language"
-              size="sm"
-              items={buildSourceLanguageItems()}
-              value={sourceLanguage()}
-              accessibilityLabel={t("presets.fields.sourceLanguage")}
-              onOpenChange={(open) => props.controller.setMenuOpen("source-language", open)}
-              onChange={(value) => {
-                if (value) {
-                  sourceLanguage.set(value as SourceLanguageId);
-                }
-              }}
-            />
-          </View>
-          <Textarea
-            testID="quick-translate-source"
-            value={props.controller.sourceText()}
-            placeholder={t("quickTranslate.sourcePlaceholder")}
-            accessibilityLabel={t("quickTranslate.sourceLabel")}
-            onChange={(value) => props.controller.setSourceText(value)}
-            ref={(node) => props.controller.attachSourceInput(node)}
-          />
-        </View>
+        <QuickTranslatePopup
+          sourceText={props.controller.sourceText}
+          onSourceTextChange={(text) => props.controller.setSourceText(text)}
+          autoTranslate={props.controller.autoTranslate}
+          onOverlayOpenChange={(menuId, open) => props.controller.setMenuOpen(menuId, open)}
+          onAttachSourceInput={(node) => props.controller.attachSourceInput(node)}
+        />
       </Scroll>
     </View>
   );

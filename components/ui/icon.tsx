@@ -6,17 +6,21 @@ import checkCircleIcon from "../../assets/icons/check-circle.svg";
 import checkIcon from "../../assets/icons/check.svg";
 import chevronDownIcon from "../../assets/icons/chevron-down.svg";
 import closeIcon from "../../assets/icons/close.svg";
+import copyIcon from "../../assets/icons/copy.svg";
 import cubeOutlineIcon from "../../assets/icons/cube-outline.svg";
 import deleteIcon from "../../assets/icons/delete.svg";
 import editIcon from "../../assets/icons/edit.svg";
 import filePdfIcon from "../../assets/icons/file-pdf.svg";
 import fileTextIcon from "../../assets/icons/file-text.svg";
+import lightningSolidIcon from "../../assets/icons/lightning-solid.svg";
+import lightningIcon from "../../assets/icons/lightning.svg";
 import minusIcon from "../../assets/icons/minus.svg";
 import picIcon from "../../assets/icons/pic.svg";
 import pinSolidIcon from "../../assets/icons/pin-solid.svg";
 import pinIcon from "../../assets/icons/pin.svg";
 import plusIcon from "../../assets/icons/plus.svg";
 import searchIcon from "../../assets/icons/search.svg";
+import switchIcon from "../../assets/icons/switch.svg";
 import videoIcon from "../../assets/icons/video.svg";
 
 const ICONS = {
@@ -27,17 +31,21 @@ const ICONS = {
   "check-circle": checkCircleIcon,
   "chevron-down": chevronDownIcon,
   close: closeIcon,
+  copy: copyIcon,
   "cube-outline": cubeOutlineIcon,
   delete: deleteIcon,
   edit: editIcon,
   "file-pdf": filePdfIcon,
   "file-text": fileTextIcon,
+  lightning: lightningIcon,
+  "lightning-solid": lightningSolidIcon,
   minus: minusIcon,
   pic: picIcon,
   pin: pinIcon,
   "pin-solid": pinSolidIcon,
   plus: plusIcon,
   search: searchIcon,
+  switch: switchIcon,
   video: videoIcon,
 } satisfies Record<string, ImageAsset>;
 

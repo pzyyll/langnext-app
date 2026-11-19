@@ -4,6 +4,7 @@ import { t } from "nsh/i18n";
 import { loadSplitRailWidths } from "../../components/layout/split-rail";
 import { Button } from "../../components/ui/button";
 import { loadModelsState } from "../../features/models/store";
+import { presetsStore } from "../../features/presets/store";
 import { loadAppearance } from "../../features/settings/appearance";
 import { loadLanguage } from "../../features/settings/language";
 import { loadTransparency } from "../../features/settings/transparency";
@@ -134,10 +135,11 @@ void Promise.all([
   loadLanguage(),
   loadTransparency(),
   loadModelsState(),
+  presetsStore.load(),
   loadSplitRailWidths(),
   Storage.getItem(HARNESS_SHORTCUT_MODE_KEY),
   Storage.getItem(HARNESS_PLATFORM_OS_KEY),
-]).then(([, , , , , modeRaw, osRaw]) => {
+]).then(([, , , , , , modeRaw, osRaw]) => {
   const shortcutMode = modeRaw === "false" || modeRaw === "reject" ? modeRaw : "ok";
   const platformOs = osRaw || undefined;
   mount(() => <QuickTranslateHarness shortcutMode={shortcutMode} platformOs={platformOs} />);

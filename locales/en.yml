@@ -398,6 +398,17 @@ quickTranslate:
   unpin: Unpin window
   close: Close Quick Translate
   shortcutUnavailable: Global shortcut Ctrl+Shift+T is unavailable. Use the tray icon menu to open Quick Translate.
+  presetLabel: Preset
+  presetPlaceholder: Select a preset…
+  presetsLoading: Loading presets…
+  noEnabledPresets: No enabled presets. Enable a preset in Presets.
+  translate: Translate
+  translating: Translating…
+  swapLanguages: Swap languages
+  enableAutoTranslate: Enable automatic translation
+  disableAutoTranslate: Disable automatic translation
+  copy: Copy
+  copied: Copied
   sourceLabel: Source text
   sourcePlaceholder: Enter text to translate…
   prompt:
@@ -409,3 +420,4 @@ quickTranslate:
     noModels: Selected preset has no models configured. Add a model in Presets.
     noEligibleModel: No configured model in this preset is available. Check Models or Presets.
     translationFailed: "Translation failed: %{detail}"
+    copyFailed: Could not copy translation to the clipboard.

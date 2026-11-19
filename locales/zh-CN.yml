@@ -398,6 +398,17 @@ quickTranslate:
   unpin: 取消置顶
   close: 关闭快速翻译
   shortcutUnavailable: 全局快捷键 Ctrl+Shift+T 不可用，请通过托盘菜单打开快速翻译。
+  presetLabel: 预设
+  presetPlaceholder: 选择预设…
+  presetsLoading: 正在加载预设…
+  noEnabledPresets: 暂无已启用的预设，请在“预设”中启用。
+  translate: 翻译
+  translating: 正在翻译…
+  swapLanguages: 交换语言
+  enableAutoTranslate: 开启自动翻译
+  disableAutoTranslate: 关闭自动翻译
+  copy: 复制
+  copied: 已复制
   sourceLabel: 源文本
   sourcePlaceholder: 输入要翻译的文本…
   prompt:
@@ -409,3 +420,4 @@ quickTranslate:
     noModels: 所选预设未配置任何模型，请在“预设”中添加模型。
     noEligibleModel: 此预设中的已配置模型均不可用，请检查“模型”或“预设”。
     translationFailed: "翻译失败：%{detail}"
+    copyFailed: 无法将译文复制到剪贴板。
