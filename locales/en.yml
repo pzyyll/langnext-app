@@ -218,6 +218,7 @@ protocol:
     unexpectedShape: Provider returned an unexpected response shape.
     missingModels: Expected a models array in provider response.
     missingGeminiModels: Expected a Gemini models list in provider response.
+    missingGeneratedText: Provider response contained no generated text.
 ai:
   protocol:
     openaiChat: OpenAI Chat Completions

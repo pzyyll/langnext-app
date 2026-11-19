@@ -1,9 +1,12 @@
+import { t } from "nsh/i18n";
+import { ProviderProtocolError } from "../../contracts/errors";
 import type {
   ProtocolConnection,
   ProtocolContext,
   ProtocolDefinition,
   RequestOperation,
   ResolvedRequestTarget,
+  TextGenerationRequest,
 } from "../../contracts/protocol";
 import {
   decodeOpenAICatalogPage,
@@ -11,7 +14,30 @@ import {
   resolveOpenAICatalogTarget,
   withBearer,
 } from "../openai-common";
-import { normalizeRequestRoot, requireModelId } from "../shared";
+import {
+  isPlainObject,
+  normalizeRequestRoot,
+  requireGeneratedText,
+  requireModelId,
+} from "../shared";
+
+function extractResponsesText(payload: Record<string, unknown>): string {
+  if (!Array.isArray(payload.output)) {
+    throw new ProviderProtocolError("invalid_response", t("protocol.error.missingGeneratedText"));
+  }
+  const parts: string[] = [];
+  for (const item of payload.output) {
+    if (!isPlainObject(item) || item.type !== "message" || !Array.isArray(item.content)) {
+      continue;
+    }
+    for (const part of item.content) {
+      if (isPlainObject(part) && part.type === "output_text" && typeof part.text === "string") {
+        parts.push(part.text);
+      }
+    }
+  }
+  return requireGeneratedText(parts);
+}
 
 /**
  * OpenAI Responses wire API. It shares catalog decoding and Bearer
@@ -46,5 +72,35 @@ export const openAIResponsesProtocol: ProtocolDefinition = {
       timeoutMs: context.timeoutMs,
     });
     return dedupeRemoteModels(decodeOpenAICatalogPage(payload));
+  },
+
+  async generateText(
+    connection: ProtocolConnection,
+    request: TextGenerationRequest,
+    context: ProtocolContext,
+  ): Promise<string> {
+    const modelId = requireModelId({ kind: "model", modelId: request.modelId });
+    const target = openAIResponsesProtocol.resolveTarget(connection, { kind: "model", modelId });
+    const body: Record<string, unknown> = {
+      model: modelId,
+      input: request.user,
+      stream: false,
+    };
+    if (request.system.trim().length > 0) {
+      body.instructions = request.system;
+    }
+    if (request.temperature !== null && request.temperature !== undefined) {
+      body.temperature = request.temperature;
+    }
+    if (request.maxOutputTokens !== null && request.maxOutputTokens !== undefined) {
+      body.max_output_tokens = request.maxOutputTokens;
+    }
+
+    const payload = await context.http.postJson(target, body, {
+      signal: context.signal,
+      timeoutMs: context.timeoutMs,
+      redirect: "error",
+    });
+    return extractResponsesText(payload);
   },
 };

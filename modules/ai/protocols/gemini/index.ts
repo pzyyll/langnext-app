@@ -7,9 +7,16 @@ import type {
   ProtocolDefinition,
   RequestOperation,
   ResolvedRequestTarget,
+  TextGenerationRequest,
 } from "../../contracts/protocol";
 import { normalizePositiveInt } from "../openai-common";
-import { normalizeCredential, normalizeRequestRoot, requireModelId } from "../shared";
+import {
+  isPlainObject,
+  normalizeCredential,
+  normalizeRequestRoot,
+  requireGeneratedText,
+  requireModelId,
+} from "../shared";
 
 /** Catalog pages fetched at most, so a broken page token cannot loop forever. */
 export const GEMINI_MAX_CATALOG_PAGES = 10;
@@ -128,5 +135,63 @@ export const geminiProtocol: ProtocolDefinition = {
       pageToken = parsed.nextPageToken;
     }
     return Array.from(unique.values());
+  },
+
+  async generateText(
+    connection: ProtocolConnection,
+    request: TextGenerationRequest,
+    context: ProtocolContext,
+  ): Promise<string> {
+    const modelId = requireModelId({ kind: "model", modelId: request.modelId });
+    const target = geminiProtocol.resolveTarget(connection, { kind: "model", modelId });
+    const body: Record<string, unknown> = {
+      contents: [{ role: "user", parts: [{ text: request.user }] }],
+    };
+    if (request.system.trim().length > 0) {
+      body.systemInstruction = { parts: [{ text: request.system }] };
+    }
+    const generationConfig: Record<string, unknown> = {};
+    if (request.temperature !== null && request.temperature !== undefined) {
+      generationConfig.temperature = request.temperature;
+    }
+    if (request.maxOutputTokens !== null && request.maxOutputTokens !== undefined) {
+      generationConfig.maxOutputTokens = request.maxOutputTokens;
+    }
+    if (Object.keys(generationConfig).length > 0) {
+      body.generationConfig = generationConfig;
+    }
+
+    const payload = await context.http.postJson(target, body, {
+      signal: context.signal,
+      timeoutMs: context.timeoutMs,
+      redirect: "error",
+    });
+
+    if (!Array.isArray(payload.candidates) || payload.candidates.length === 0) {
+      throw new ProviderProtocolError("invalid_response", t("protocol.error.missingGeneratedText"));
+    }
+    const firstCandidate = payload.candidates[0];
+    if (
+      !isPlainObject(firstCandidate) ||
+      !isPlainObject(firstCandidate.content) ||
+      !Array.isArray(firstCandidate.content.parts)
+    ) {
+      throw new ProviderProtocolError("invalid_response", t("protocol.error.missingGeneratedText"));
+    }
+    const parts: string[] = [];
+    for (const part of firstCandidate.content.parts) {
+      if (
+        isPlainObject(part) &&
+        part.thought !== true &&
+        !("functionCall" in part) &&
+        !("functionResponse" in part) &&
+        !("executableCode" in part) &&
+        !("codeExecutionResult" in part) &&
+        typeof part.text === "string"
+      ) {
+        parts.push(part.text);
+      }
+    }
+    return requireGeneratedText(parts);
   },
 };

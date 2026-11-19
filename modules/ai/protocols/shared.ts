@@ -21,3 +21,17 @@ export function normalizeCredential(credential: string | null | undefined): stri
   const token = credential?.trim();
   return token ? token : null;
 }
+
+/** Type guard for non-array JSON objects. */
+export function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Joins extracted text parts and rejects missing or whitespace-only output. */
+export function requireGeneratedText(parts: readonly string[]): string {
+  const combined = parts.join("");
+  if (combined.trim().length === 0) {
+    throw new ProviderProtocolError("invalid_response", t("protocol.error.missingGeneratedText"));
+  }
+  return combined;
+}

@@ -11,6 +11,7 @@ import type {
   ProtocolId,
   ResolvedRequestTarget,
   RequestOperation,
+  TextGenerationRequest,
 } from "../contracts/protocol";
 import type { ProviderDefinition } from "../contracts/provider";
 import { jsonHttp } from "./http";
@@ -51,6 +52,11 @@ export interface AiClient {
     providerTypeId: ProviderTypeId;
     modelKey: string;
   }): Promise<ModelFacts | null>;
+  generateText(
+    input: AiClientInput,
+    request: TextGenerationRequest,
+    options?: AiClientCallOptions,
+  ): Promise<string>;
 }
 
 interface ResolvedOperation {
@@ -184,6 +190,17 @@ export function createAiClient(options: AiClientOptions): AiClient {
       const provider = registry.getProvider(input.providerTypeId);
       const index = await loadCatalogSafely();
       return lookupModelFacts(index, input.modelKey, provider.catalogProviderId);
+    },
+
+    async generateText(input, request, callOptions = {}) {
+      const resolved = resolveOperation(registry, input, {
+        kind: "model",
+        modelId: request.modelId,
+      });
+      if (!resolved.protocol.generateText) {
+        throw unsupportedProtocol();
+      }
+      return resolved.protocol.generateText(resolved.connection, request, callContext(callOptions));
     },
   };
 }

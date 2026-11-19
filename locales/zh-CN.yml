@@ -218,6 +218,7 @@ protocol:
     unexpectedShape: 服务商返回了意外的响应结构。
     missingModels: 服务商响应中缺少 models 数组。
     missingGeminiModels: 服务商响应中缺少 Gemini 模型列表。
+    missingGeneratedText: 服务商响应中缺少生成文本。
 ai:
   protocol:
     openaiChat: OpenAI Chat Completions

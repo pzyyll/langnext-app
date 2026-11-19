@@ -8,7 +8,10 @@ import { openAIResponsesProtocol } from "./openai-responses";
 
 interface RequestLog {
   url: string;
+  method?: string;
   headers: Record<string, string>;
+  body?: string;
+  redirect?: string;
 }
 
 function jsonResponse(body: unknown): HttpResponseLike {
@@ -17,7 +20,13 @@ function jsonResponse(body: unknown): HttpResponseLike {
 
 function fixedFetch(body: unknown, log?: RequestLog[]): FetchLike {
   return async (url, init) => {
-    log?.push({ url, headers: init.headers });
+    log?.push({
+      url,
+      headers: init.headers,
+      ...(init.method !== "GET" ? { method: init.method } : {}),
+      ...(init.body !== undefined ? { body: init.body } : {}),
+      ...(init.redirect !== undefined ? { redirect: init.redirect } : {}),
+    });
     return jsonResponse(body);
   };
 }
@@ -364,5 +373,232 @@ test("ai protocol: existing /v1 and /v1beta roots stay normalized", () => {
     expect(target.url).toBe(
       "https://proxy.example.com/gemini/v1beta/models/gemini-2.5-pro:generateContent?key=AIza-dummy",
     );
+  }
+});
+
+test("text generation: Chat Completions sends messages and returns Bonjour", async () => {
+  const log: RequestLog[] = [];
+  const http = createJsonHttpClient({
+    fetchImpl: fixedFetch(
+      {
+        choices: [{ message: { content: "Bonjour" } }],
+      },
+      log,
+    ),
+  });
+
+  const text = await openAIChatProtocol.generateText!(
+    { baseUrl: "https://proxy.example.com/ai/v1", credential: "sk-dummy" },
+    {
+      modelId: "gpt-4.1",
+      system: "Translate to French",
+      user: "Hello",
+      temperature: null,
+      maxOutputTokens: null,
+    },
+    { http },
+  );
+
+  expect(text).toBe("Bonjour");
+  expect(log).toHaveLength(1);
+  expect(log[0]!.method).toBe("POST");
+  expect(log[0]!.url).toBe("https://proxy.example.com/ai/v1/chat/completions");
+  expect(log[0]!.headers.Authorization).toBe("Bearer sk-dummy");
+  expect(log[0]!.redirect).toBe("error");
+  expect(JSON.parse(log[0]!.body!)).toEqual({
+    model: "gpt-4.1",
+    messages: [
+      { role: "system", content: "Translate to French" },
+      { role: "user", content: "Hello" },
+    ],
+    stream: false,
+  });
+});
+
+test("text generation: Responses sends instructions and input and returns Bonjour", async () => {
+  const log: RequestLog[] = [];
+  const http = createJsonHttpClient({
+    fetchImpl: fixedFetch(
+      {
+        output: [
+          { type: "reasoning", summary: [{ type: "summary_text", text: "Ignoring reasoning" }] },
+          { type: "function_call", name: "lookup", arguments: "{}" },
+          {
+            type: "message",
+            role: "assistant",
+            content: [
+              { type: "output_text", text: "Bon" },
+              { type: "refusal", refusal: "no" },
+              { type: "output_text", text: "jour" },
+            ],
+          },
+        ],
+      },
+      log,
+    ),
+  });
+
+  const text = await openAIResponsesProtocol.generateText!(
+    { baseUrl: "https://gateway.example.com/ai/v1", credential: "sk-dummy" },
+    {
+      modelId: "gpt-4.1",
+      system: "Translate to French",
+      user: "Hello",
+      temperature: 0.3,
+      maxOutputTokens: 200,
+    },
+    { http },
+  );
+
+  expect(text).toBe("Bonjour");
+  expect(log).toHaveLength(1);
+  expect(log[0]!.method).toBe("POST");
+  expect(log[0]!.url).toBe("https://gateway.example.com/ai/v1/responses");
+  expect(log[0]!.headers.Authorization).toBe("Bearer sk-dummy");
+  expect(log[0]!.redirect).toBe("error");
+  expect(JSON.parse(log[0]!.body!)).toEqual({
+    model: "gpt-4.1",
+    instructions: "Translate to French",
+    input: "Hello",
+    stream: false,
+    temperature: 0.3,
+    max_output_tokens: 200,
+  });
+});
+
+test("text generation: Messages sends system, user, and default max_tokens 1024", async () => {
+  const log: RequestLog[] = [];
+  const http = createJsonHttpClient({
+    fetchImpl: fixedFetch(
+      {
+        content: [
+          { type: "thinking", thinking: "Internal thinking" },
+          { type: "tool_use", id: "tool_1", name: "dict", input: {} },
+          { type: "text", text: "Bon" },
+          { type: "text", text: "jour" },
+        ],
+      },
+      log,
+    ),
+  });
+
+  const text = await anthropicProtocol.generateText!(
+    { baseUrl: "https://proxy.example.com/claude", credential: "sk-ant-dummy" },
+    {
+      modelId: "claude-sonnet-4",
+      system: "Translate to French",
+      user: "Hello",
+      temperature: null,
+      maxOutputTokens: null,
+    },
+    { http },
+  );
+
+  expect(text).toBe("Bonjour");
+  expect(log).toHaveLength(1);
+  expect(log[0]!.method).toBe("POST");
+  expect(log[0]!.url).toBe("https://proxy.example.com/claude/v1/messages");
+  expect(log[0]!.headers["x-api-key"]).toBe("sk-ant-dummy");
+  expect(log[0]!.headers["anthropic-version"]).toBe("2023-06-01");
+  expect(log[0]!.redirect).toBe("error");
+  expect(JSON.parse(log[0]!.body!)).toEqual({
+    model: "claude-sonnet-4",
+    system: "Translate to French",
+    messages: [{ role: "user", content: "Hello" }],
+    max_tokens: 1024,
+    stream: false,
+  });
+});
+
+test("text generation: Gemini sends systemInstruction and contents and excludes thought/tool blocks", async () => {
+  const log: RequestLog[] = [];
+  const http = createJsonHttpClient({
+    fetchImpl: fixedFetch(
+      {
+        candidates: [
+          {
+            content: {
+              parts: [
+                { thought: true, text: "hidden thought" },
+                { functionCall: { name: "helper", args: {} } },
+                { text: "Bon" },
+                { text: "jour" },
+              ],
+            },
+          },
+        ],
+      },
+      log,
+    ),
+  });
+
+  const text = await geminiProtocol.generateText!(
+    { baseUrl: "https://proxy.example.com/gemini", credential: "AIza-dummy" },
+    {
+      modelId: "gemini-2.5-flash",
+      system: "Translate to French",
+      user: "Hello",
+      temperature: null,
+      maxOutputTokens: null,
+    },
+    { http },
+  );
+
+  expect(text).toBe("Bonjour");
+  expect(log).toHaveLength(1);
+  expect(log[0]!.method).toBe("POST");
+  expect(log[0]!.url).toBe(
+    "https://proxy.example.com/gemini/v1beta/models/gemini-2.5-flash:generateContent?key=AIza-dummy",
+  );
+  expect(log[0]!.redirect).toBe("error");
+  expect(JSON.parse(log[0]!.body!)).toEqual({
+    systemInstruction: { parts: [{ text: "Translate to French" }] },
+    contents: [{ role: "user", parts: [{ text: "Hello" }] }],
+  });
+
+  await geminiProtocol.generateText!(
+    { baseUrl: "https://proxy.example.com/gemini", credential: "AIza-dummy" },
+    {
+      modelId: "gemini-2.5-flash",
+      system: "",
+      user: "Hello",
+      temperature: 0.4,
+      maxOutputTokens: 512,
+    },
+    { http },
+  );
+  expect(JSON.parse(log[1]!.body!)).toEqual({
+    contents: [{ role: "user", parts: [{ text: "Hello" }] }],
+    generationConfig: {
+      temperature: 0.4,
+      maxOutputTokens: 512,
+    },
+  });
+});
+
+test("text generation: rejects missing or blank text output as invalid_response", async () => {
+  const connection = { baseUrl: "https://proxy.example.com/v1", credential: "sk-dummy" };
+  const cases = [
+    { protocol: openAIChatProtocol, body: { choices: [{ message: { content: "   " } }] } },
+    {
+      protocol: openAIChatProtocol,
+      body: { choices: [{ message: { content: [{ type: "reasoning", text: "think" }] } }] },
+    },
+    { protocol: openAIResponsesProtocol, body: { output: [{ type: "reasoning", text: "think" }] } },
+    { protocol: openAIResponsesProtocol, body: { output: [{ type: "message", content: [] }] } },
+    { protocol: anthropicProtocol, body: { content: [{ type: "thinking", thinking: "think" }] } },
+    { protocol: anthropicProtocol, body: { content: [{ type: "text", text: " \n " }] } },
+    {
+      protocol: geminiProtocol,
+      body: { candidates: [{ content: { parts: [{ thought: true, text: "x" }] } }] },
+    },
+    { protocol: geminiProtocol, body: { candidates: [] } },
+  ];
+
+  for (const item of cases) {
+    const http = createJsonHttpClient({ fetchImpl: fixedFetch(item.body) });
+    await expect(
+      item.protocol.generateText!(connection, { modelId: "m-1", system: "s", user: "u" }, { http }),
+    ).rejects.toMatchObject({ kind: "invalid_response" });
   }
 });

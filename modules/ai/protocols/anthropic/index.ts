@@ -1,3 +1,5 @@
+import { t } from "nsh/i18n";
+import { ProviderProtocolError } from "../../contracts/errors";
 import type { RemoteModelRecord } from "../../contracts/model";
 import type {
   ProtocolConnection,
@@ -5,14 +7,23 @@ import type {
   ProtocolDefinition,
   RequestOperation,
   ResolvedRequestTarget,
+  TextGenerationRequest,
 } from "../../contracts/protocol";
 import { decodeOpenAICatalogPage } from "../openai-common";
-import { normalizeCredential, normalizeRequestRoot, requireModelId } from "../shared";
+import {
+  isPlainObject,
+  normalizeCredential,
+  normalizeRequestRoot,
+  requireGeneratedText,
+  requireModelId,
+} from "../shared";
 
 /** Anthropic API version sent with every Messages and catalog request. */
 export const ANTHROPIC_API_VERSION = "2023-06-01";
 /** Catalog pages fetched at most, so a broken cursor cannot loop forever. */
 export const ANTHROPIC_MAX_CATALOG_PAGES = 10;
+/** Default `max_tokens` sent when the preset leaves max output tokens unset. */
+export const ANTHROPIC_DEFAULT_MAX_TOKENS = 1024;
 
 /** Strips one trailing `/v1` so the standard version segment is added once. */
 function anthropicRoot(baseUrl: string): string {
@@ -99,5 +110,46 @@ export const anthropicProtocol: ProtocolDefinition = {
       afterId = lastId;
     }
     return Array.from(unique.values());
+  },
+
+  async generateText(
+    connection: ProtocolConnection,
+    request: TextGenerationRequest,
+    context: ProtocolContext,
+  ): Promise<string> {
+    const modelId = requireModelId({ kind: "model", modelId: request.modelId });
+    const target = anthropicProtocol.resolveTarget(connection, { kind: "model", modelId });
+    const body: Record<string, unknown> = {
+      model: modelId,
+      messages: [{ role: "user", content: request.user }],
+      max_tokens:
+        request.maxOutputTokens !== null && request.maxOutputTokens !== undefined
+          ? request.maxOutputTokens
+          : ANTHROPIC_DEFAULT_MAX_TOKENS,
+      stream: false,
+    };
+    if (request.system.trim().length > 0) {
+      body.system = request.system;
+    }
+    if (request.temperature !== null && request.temperature !== undefined) {
+      body.temperature = request.temperature;
+    }
+
+    const payload = await context.http.postJson(target, body, {
+      signal: context.signal,
+      timeoutMs: context.timeoutMs,
+      redirect: "error",
+    });
+
+    if (!Array.isArray(payload.content)) {
+      throw new ProviderProtocolError("invalid_response", t("protocol.error.missingGeneratedText"));
+    }
+    const parts: string[] = [];
+    for (const block of payload.content) {
+      if (isPlainObject(block) && block.type === "text" && typeof block.text === "string") {
+        parts.push(block.text);
+      }
+    }
+    return requireGeneratedText(parts);
   },
 };

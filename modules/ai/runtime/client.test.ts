@@ -1,5 +1,5 @@
 import { t } from "nsh/i18n";
-import { expect, test } from "nsh/test";
+import { expect, open, test } from "nsh/test";
 import { anthropicProtocol } from "../protocols/anthropic";
 import { geminiProtocol } from "../protocols/gemini";
 import { openAIChatProtocol } from "../protocols/openai-chat";
@@ -20,7 +20,13 @@ import { createAiRegistry } from "./registry";
 
 interface Harness {
   client: ReturnType<typeof createAiClient>;
-  requests: Array<{ url: string; method: string; headers: Record<string, string> }>;
+  requests: Array<{
+    url: string;
+    method: string;
+    headers: Record<string, string>;
+    body?: string;
+    redirect?: string;
+  }>;
 }
 
 function createHarness(fetchImpl?: FetchLike): Harness {
@@ -37,7 +43,13 @@ function createHarness(fetchImpl?: FetchLike): Harness {
   });
 
   const capture: FetchLike = async (url, init) => {
-    requests.push({ url, method: init.method, headers: init.headers });
+    requests.push({
+      url,
+      method: init.method,
+      headers: init.headers,
+      ...(init.body !== undefined ? { body: init.body } : {}),
+      ...(init.redirect !== undefined ? { redirect: init.redirect } : {}),
+    });
     return { ok: true, status: 200, json: async () => ({ data: [{ id: "model-a" }] }) };
   };
 
@@ -274,7 +286,13 @@ function createBuiltInHarness(
   const registry = createAiRegistry();
   registerBuiltIns(registry);
   const capture: FetchLike = async (url, init) => {
-    requests.push({ url, method: init.method, headers: init.headers });
+    requests.push({
+      url,
+      method: init.method,
+      headers: init.headers,
+      ...(init.body !== undefined ? { body: init.body } : {}),
+      ...(init.redirect !== undefined ? { redirect: init.redirect } : {}),
+    });
     if (fetchImpl) return fetchImpl(url, init);
     return { ok: true, status: 200, json: async () => ({ data: [{ id: "model-a" }] }) };
   };
@@ -765,4 +783,260 @@ test("provider routing: Custom without base URL rejects instead of falling back"
       { kind: "catalog" },
     ),
   ).toThrow("Base URL is required");
+});
+
+test("text generation: Chat Completions returns Bonjour from model endpoint", async () => {
+  const harness = createBuiltInHarness(async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({
+      choices: [{ message: { content: "Bonjour" } }],
+    }),
+  }));
+
+  const text = await harness.client.generateText(
+    {
+      providerTypeId: "openai",
+      protocolId: "openai-compatible",
+      baseUrl: "https://proxy.example.com/openai/v1",
+      credential: "sk-dummy",
+    },
+    {
+      modelId: "gpt-4.1",
+      system: "Translate to French",
+      user: "Hello",
+      temperature: 0.2,
+      maxOutputTokens: 256,
+    },
+  );
+
+  expect(text).toBe("Bonjour");
+  expect(harness.requests).toHaveLength(1);
+  expect(harness.requests[0]!.method).toBe("POST");
+  expect(harness.requests[0]!.url).toBe("https://proxy.example.com/openai/v1/chat/completions");
+  expect(JSON.parse(harness.requests[0]!.body!)).toEqual({
+    model: "gpt-4.1",
+    messages: [
+      { role: "system", content: "Translate to French" },
+      { role: "user", content: "Hello" },
+    ],
+    stream: false,
+    temperature: 0.2,
+    max_completion_tokens: 256,
+  });
+});
+
+test("text generation: preserves provider root policy, credential header, and model API override across all protocols", async () => {
+  const responses: Array<Record<string, unknown>> = [
+    { output: [{ type: "message", content: [{ type: "output_text", text: "Bonjour" }] }] },
+    { content: [{ type: "text", text: "Bonjour" }] },
+    { candidates: [{ content: { parts: [{ text: "Bonjour" }] } }] },
+  ];
+  let index = 0;
+  const harness = createBuiltInHarness(async () => {
+    const body = responses[index] ?? {};
+    index += 1;
+    return { ok: true, status: 200, json: async () => body };
+  });
+
+  const openaiResp = await harness.client.generateText(
+    {
+      providerTypeId: "openai",
+      protocolId: "openai-responses",
+      baseUrl: null,
+      credential: "sk-oai",
+    },
+    { modelId: "gpt-4.1", system: "Sys", user: "Hello" },
+  );
+  expect(openaiResp).toBe("Bonjour");
+  expect(harness.requests[0]!.url).toBe("https://api.openai.com/v1/responses");
+  expect(harness.requests[0]!.headers.Authorization).toBe("Bearer sk-oai");
+
+  const deepseekMessages = await harness.client.generateText(
+    {
+      providerTypeId: "deepseek",
+      protocolId: "anthropic",
+      baseUrl: "https://proxy.example.com/deepseek",
+      credential: "sk-ds",
+    },
+    { modelId: "deepseek-chat", system: "Sys", user: "Hello", maxOutputTokens: 500 },
+  );
+  expect(deepseekMessages).toBe("Bonjour");
+  expect(harness.requests[1]!.url).toBe("https://proxy.example.com/deepseek/anthropic/v1/messages");
+  expect(harness.requests[1]!.headers["x-api-key"]).toBe("sk-ds");
+  expect(JSON.parse(harness.requests[1]!.body!)).toMatchObject({ max_tokens: 500 });
+
+  const geminiText = await harness.client.generateText(
+    {
+      providerTypeId: "gemini",
+      protocolId: "gemini",
+      baseUrl: null,
+      credential: "AIza-gem",
+    },
+    { modelId: "gemini-2.5-flash", system: "Sys", user: "Hello" },
+  );
+  expect(geminiText).toBe("Bonjour");
+  expect(harness.requests[2]!.url).toBe(
+    "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=AIza-gem",
+  );
+});
+
+test("text generation: keeps abort and timeout active through slow response parsing", async () => {
+  const slowAbort = createBuiltInHarness(async () => ({
+    ok: true,
+    status: 200,
+    json: () => new Promise(() => {}),
+  }));
+  const controller = new AbortController();
+  const abortedCall = slowAbort.client.generateText(
+    {
+      providerTypeId: "openai",
+      protocolId: "openai-compatible",
+      baseUrl: null,
+      credential: "sk",
+    },
+    { modelId: "gpt-4.1", system: "Sys", user: "Hello" },
+    { signal: controller.signal },
+  );
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  controller.abort();
+  await expectClientError(() => abortedCall, {
+    kind: "cancelled",
+    message: t("protocol.error.cancelled"),
+  });
+
+  const slowTimeout = createBuiltInHarness(async () => ({
+    ok: true,
+    status: 200,
+    json: () => new Promise(() => {}),
+  }));
+  await expectClientError(
+    () =>
+      slowTimeout.client.generateText(
+        {
+          providerTypeId: "openai",
+          protocolId: "openai-compatible",
+          baseUrl: null,
+          credential: "sk",
+        },
+        { modelId: "gpt-4.1", system: "Sys", user: "Hello" },
+        { timeoutMs: 10 },
+      ),
+    {
+      kind: "timeout",
+      message: t("protocol.error.timeout"),
+    },
+  );
+});
+
+test("text generation: surfaces JSON rejection, HTTP 401, and HTTP 429 without leaking URLs or tokens", async () => {
+  const unreadable = createBuiltInHarness(async () => ({
+    ok: true,
+    status: 200,
+    json: async () => {
+      throw new Error("bad json");
+    },
+  }));
+  await expectClientError(
+    () =>
+      unreadable.client.generateText(
+        {
+          providerTypeId: "openai",
+          protocolId: "openai-compatible",
+          baseUrl: null,
+          credential: "sk-secret",
+        },
+        { modelId: "gpt-4.1", system: "Sys", user: "Hello" },
+      ),
+    { kind: "invalid_response", message: t("protocol.error.unreadable") },
+  );
+
+  const authFail = createBuiltInHarness(async () => ({
+    ok: false,
+    status: 401,
+    json: async () => ({ error: { message: "bad token sk-secret-token" } }),
+  }));
+  await expectClientError(
+    () =>
+      authFail.client.generateText(
+        {
+          providerTypeId: "openai",
+          protocolId: "openai-compatible",
+          baseUrl: null,
+          credential: "sk-secret-token",
+        },
+        { modelId: "gpt-4.1", system: "Sys", user: "Hello" },
+      ),
+    { kind: "auth", message: t("protocol.error.auth", { status: 401 }), status: 401 },
+  );
+
+  const rateLimited = createBuiltInHarness(async () => ({
+    ok: false,
+    status: 429,
+    json: async () => ({ error: { message: "slow down" } }),
+  }));
+  await expectClientError(
+    () =>
+      rateLimited.client.generateText(
+        {
+          providerTypeId: "openai",
+          protocolId: "openai-compatible",
+          baseUrl: null,
+          credential: "sk",
+        },
+        { modelId: "gpt-4.1", system: "Sys", user: "Hello" },
+      ),
+    {
+      kind: "rate_limited",
+      message: t("protocol.error.rateLimited", { status: 429 }),
+      status: 429,
+    },
+  );
+
+  const leakingNetwork = createBuiltInHarness(async () => {
+    throw new Error(
+      "connect failed for https://proxy.example.com/gemini/v1beta/models/gemini:generateContent?key=AIza-super-secret",
+    );
+  });
+  let caught: unknown = null;
+  try {
+    await leakingNetwork.client.generateText(
+      {
+        providerTypeId: "gemini",
+        protocolId: "gemini",
+        baseUrl: "https://proxy.example.com/gemini",
+        credential: "AIza-super-secret",
+      },
+      { modelId: "gemini-2.5-flash", system: "Sys", user: "Hello" },
+    );
+  } catch (error) {
+    caught = error;
+  }
+  expect(caught).toMatchObject({ kind: "network" });
+  const msg = (caught as Error).message;
+  expect(msg).not.toContain("AIza-super-secret");
+  expect(msg).not.toContain("https://proxy.example.com");
+});
+
+test("text generation: NSH runtime rejects redirects on POST requests", async () => {
+  const app = await open("./__tests__/redirect-app.tsx", {
+    platform: "windows",
+    network: {
+      "POST http://127.0.0.1:41234/v1/chat/completions": {
+        status: 302,
+        headers: {
+          location: "http://127.0.0.1:41234/redirect-target",
+        },
+      },
+      "POST http://127.0.0.1:41234/redirect-target": {
+        status: 200,
+        body: { choices: [{ message: { content: "Redirected" } }] },
+      },
+    },
+  });
+  await app.waitUntil(() => app.texts()[0] !== "running");
+  expect(app.texts()[0]).toBe("rejected");
+  expect(app.requests().map((request) => request.url)).toEqual([
+    "http://127.0.0.1:41234/v1/chat/completions",
+  ]);
 });
