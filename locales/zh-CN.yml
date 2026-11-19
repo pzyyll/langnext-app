@@ -89,6 +89,14 @@ settings:
       primaryModelRequired: 请选择主检测模型。
       preferenceInvalid: 请选择受支持的语言。
       preferencesIdentical: 母语与母语译为的语言必须不同。
+languageDetection:
+  failure:
+    unconfigured: 请配置语言检测，或手动选择源语言。
+    noEligibleModel: 请检查已配置的检测模型，或手动选择源语言。
+    unknownLanguage: 无法识别源语言，请手动选择源语言。
+    failed: 语言检测失败，请检查检测模型，或手动选择源语言。
+    missingNativeLanguage: 请设置母语，或选择具体的目标语言。
+    missingPreferredLanguage: 请设置母语译为的语言，或选择具体的目标语言。
 models:
   title: 模型
   channel:
@@ -450,8 +458,6 @@ quickTranslate:
   copied: 已复制
   sourceLabel: 源文本
   sourcePlaceholder: 输入要翻译的文本…
-  prompt:
-    autoDetectSource: 自动识别的源语言（在本次回答中直接识别文本语言）
   error:
     blankInput: 请输入要翻译的文本。
     presetDisabled: 所选预设已停用，请在“预设”中启用或选择其他预设。

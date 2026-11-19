@@ -6,10 +6,16 @@ import {
   type AiClientCallOptions,
   type AiClientInput,
 } from "../../modules/ai/runtime/client";
+import { languageResolutionErrorMessage } from "../language-detection/messages";
+import { resolveTranslationLanguages } from "../language-detection/resolve";
+import {
+  languageDetectionStore,
+  type LanguageDetectionSettings,
+} from "../language-detection/settings";
 import { resolveSavedModelRequest, type SavedModelRequestResolution } from "../models/store";
 import {
-  AUTO_LANGUAGE,
   getLanguageLabel,
+  type LanguageId,
   type SourceLanguageId,
   type TargetLanguageId,
 } from "../presets/languages";
@@ -29,6 +35,8 @@ export interface TranslateWithPresetInput {
 export interface TranslateWithPresetOptions {
   signal?: AbortSignal;
   timeoutMs?: number;
+  /** One saved Language Detection snapshot for this action; read from the store when omitted. */
+  languageDetectionSettings?: LanguageDetectionSettings;
   resolveModelRequest?: (modelId: string) => Promise<SavedModelRequestResolution>;
   generateText?: (
     connection: AiClientInput,
@@ -72,21 +80,14 @@ export function resolvePresetTemplate(
   };
 }
 
-/** Returns initial popup languages for a preset, mapping null target to Chinese (`zh`). */
+/** Returns the saved preset languages unchanged; resolution happens before rendering. */
 export function resolveInitialPresetLanguages(
   preset: Pick<TranslationPreset, "sourceLanguage" | "targetLanguage">,
 ): { sourceLanguage: SourceLanguageId; targetLanguage: TargetLanguageId } {
   return {
     sourceLanguage: preset.sourceLanguage,
-    targetLanguage: preset.targetLanguage ?? "zh",
+    targetLanguage: preset.targetLanguage,
   };
-}
-
-function formatPromptLanguage(id: SourceLanguageId): string {
-  if (id === AUTO_LANGUAGE) {
-    return t("quickTranslate.prompt.autoDetectSource");
-  }
-  return getLanguageLabel(id);
 }
 
 /**
@@ -95,13 +96,13 @@ function formatPromptLanguage(id: SourceLanguageId): string {
 export function renderPromptTemplate(
   template: Pick<PromptTemplate, "systemTemplate" | "userTemplate">,
   params: {
-    sourceLanguage: SourceLanguageId;
-    targetLanguage: TargetLanguageId;
+    sourceLanguage: LanguageId;
+    targetLanguage: LanguageId;
     text: string;
   },
 ): { system: string; user: string } {
   const values: Record<"source_language" | "target_language" | "text", string> = {
-    source_language: formatPromptLanguage(params.sourceLanguage),
+    source_language: getLanguageLabel(params.sourceLanguage),
     target_language: getLanguageLabel(params.targetLanguage),
     text: params.text,
   };
@@ -163,11 +164,30 @@ export async function translateWithPreset(
   }
 
   const initialLanguages = resolveInitialPresetLanguages(preset);
-  const sourceLanguage = input.sourceLanguage ?? initialLanguages.sourceLanguage;
-  const targetLanguage = input.targetLanguage ?? initialLanguages.targetLanguage;
+  const pair = await resolveTranslationLanguages(
+    {
+      sourceText,
+      sourceLanguage: input.sourceLanguage ?? initialLanguages.sourceLanguage,
+      targetLanguage: input.targetLanguage ?? initialLanguages.targetLanguage,
+      settings: options.languageDetectionSettings ?? languageDetectionStore.settings(),
+    },
+    {
+      signal: options.signal,
+      timeoutMs: options.timeoutMs,
+      resolveSavedModelRequest: options.resolveModelRequest,
+      generateText: options.generateText,
+    },
+  );
+  if (!pair.ok) {
+    if (pair.code === "cancelled") {
+      return cancelledResult();
+    }
+    return failureResult(languageResolutionErrorMessage(pair.code));
+  }
+
   const { system, user } = renderPromptTemplate(template, {
-    sourceLanguage,
-    targetLanguage,
+    sourceLanguage: pair.sourceLanguage,
+    targetLanguage: pair.targetLanguage,
     text: sourceText,
   });
 

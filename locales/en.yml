@@ -89,6 +89,14 @@ settings:
       primaryModelRequired: Choose a primary detection model.
       preferenceInvalid: Choose a supported language.
       preferencesIdentical: The native language and the preferred translation language must differ.
+languageDetection:
+  failure:
+    unconfigured: Configure language detection, or choose the source language.
+    noEligibleModel: Check the configured detection models, or choose the source language.
+    unknownLanguage: The detector could not identify the source language. Choose the source language.
+    failed: Language detection failed. Check the detection models, or choose the source language.
+    missingNativeLanguage: Set your native language, or choose a concrete target language.
+    missingPreferredLanguage: Set the translation language for your native language, or choose a concrete target language.
 models:
   title: Models
   channel:
@@ -450,8 +458,6 @@ quickTranslate:
   copied: Copied
   sourceLabel: Source text
   sourcePlaceholder: Enter text to translate…
-  prompt:
-    autoDetectSource: the detected source language (detect it automatically in the same response)
   error:
     blankInput: Enter text to translate.
     presetDisabled: Selected preset is disabled. Enable it in Presets or choose another preset.
