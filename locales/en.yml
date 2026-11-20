@@ -341,6 +341,10 @@ presets:
   engine:
     ai: AI Translation
     deepl: DeepL API
+  deepl:
+    keyLabel: DeepL API key
+    keyPlaceholder: Paste your DeepL API key
+    keyStored: A key is stored. Enter a new key to replace it.
   language:
     autoTarget: Automatic
   languages:

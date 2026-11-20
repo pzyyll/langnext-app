@@ -105,6 +105,9 @@ test("preset recovery UI: can add a preset when all saved entries were skipped",
   expect(app.storage()[PRESETS_STORAGE_KEY]).toBe(raw);
 
   await app.press("id:empty-add-preset-button");
+  await app.waitFor("id:add-preset-dialog");
+  await app.press("id:preset-type-ai");
+  await app.waitUntil(() => !app.shows("id:add-preset-dialog"));
   await app.waitFor("id:preset-name");
   await app.type("id:preset-name", "Replacement Preset");
   await app.press("id:preset-primary-model");

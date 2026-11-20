@@ -12,6 +12,9 @@ test("presets ui: rejects out-of-range and over-precision temperature pastes", a
   const temperature = "id:preset-temperature";
   await app.press("id:nav-presets");
   await app.press("id:empty-add-preset-button");
+  await app.waitFor("id:add-preset-dialog");
+  await app.press("id:preset-type-ai");
+  await app.waitUntil(() => !app.shows("id:add-preset-dialog"));
   for (const text of ["-1.0", "2.1", "0.15", "1e0"]) {
     await app.paste(temperature, { text });
     expect(app.value(temperature)).toBe("");

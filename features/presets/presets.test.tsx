@@ -1,4 +1,5 @@
-import { expect, open, test } from "nsh/test";
+import { t } from "nsh/i18n";
+import { expect, open, test, type App } from "nsh/test";
 import { SPLIT_RAIL_STORAGE_KEYS } from "../../components/layout/split-rail";
 import {
   emptyCatalogCache,
@@ -8,6 +9,13 @@ import {
 } from "../models/__tests__/fixtures";
 import { PRESETS_STORAGE_KEY } from "./store";
 import type { AiPresetEngine, TranslationPreset } from "./types";
+
+/** Picks a preset type in the Add Preset picker and waits for the editor. */
+async function choosePresetType(app: App, kind: "ai" | "deepl") {
+  await app.waitFor("id:add-preset-dialog");
+  await app.press(`id:preset-type-${kind}`);
+  await app.waitUntil(() => !app.shows("id:add-preset-dialog"));
+}
 
 function aiEngine(preset: TranslationPreset): AiPresetEngine {
   if (preset.engine.kind !== "ai") throw new Error("expected an AI preset");
@@ -39,6 +47,7 @@ test("presets ui: saves a new preset", async () => {
   await app.waitFor("id:presets-page");
 
   await app.press("id:empty-add-preset-button");
+  await choosePresetType(app, "ai");
   await app.waitFor("id:preset-name");
 
   // Name field takes focus automatically when creating a new draft.
@@ -97,6 +106,7 @@ test("presets ui: saves a new preset", async () => {
   await emptyModelsApp.press("id:nav-presets");
   await emptyModelsApp.waitFor("id:presets-page");
   await emptyModelsApp.press("id:empty-add-preset-button");
+  await choosePresetType(emptyModelsApp, "ai");
   await emptyModelsApp.waitFor("id:preset-name");
   expect(emptyModelsApp.enabled("id:preset-save")).toBe(false);
   expect(emptyModelsApp.shows("id:preset-manage-models")).toBe(true);
@@ -139,6 +149,7 @@ test("presets ui: no languages", async () => {
 
   // A new AI draft saves engine configuration without a language selection.
   await app.press("id:add-preset-button");
+  await choosePresetType(app, "ai");
   await app.waitFor("id:preset-name");
   expect(app.shows("id:preset-source-language")).toBe(false);
   expect(app.shows("id:preset-target-language")).toBe(false);
@@ -155,6 +166,133 @@ test("presets ui: no languages", async () => {
   });
 });
 
+test("presets ui: preset type", async () => {
+  const preset = makePresetRecord("p-type", "Type Preset", ["m-1"]);
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: makeSeedStorage({
+      channels: [makeChannel({ id: "ch-openai", displayName: "OpenAI Main", enabled: true })],
+      models: [
+        makeModel({ id: "m-1", providerId: "ch-openai", modelKey: "gpt-4.1", enabled: true }),
+      ],
+      extra: {
+        [PRESETS_STORAGE_KEY]: JSON.stringify({ version: 1, items: [preset] }),
+      },
+    }),
+  });
+
+  await app.press("id:nav-presets");
+  await app.waitFor("id:preset-name");
+  expect(app.value("id:preset-name")).toBe("Type Preset");
+
+  // The rail entry point opens the picker before any draft exists.
+  await app.press("id:add-preset-button");
+  await app.waitFor("id:add-preset-dialog");
+  expect(app.value("id:preset-name")).toBe("Type Preset");
+  expect(app.shows("id:preset-draft-item")).toBe(false);
+  await app.keyboard.press("escape");
+  await app.waitUntil(() => !app.shows("id:add-preset-dialog"));
+  expect(app.value("id:preset-name")).toBe("Type Preset");
+
+  // Dismissing the picker with a dirty draft changes nothing and asks no confirmation.
+  await app.type("id:preset-name", " Edited");
+  await app.press("id:add-preset-button");
+  await app.waitFor("id:add-preset-dialog");
+  await app.keyboard.press("escape");
+  await app.waitUntil(() => !app.shows("id:add-preset-dialog"));
+  expect(app.value("id:preset-name")).toBe("Type Preset Edited");
+  expect(app.shows("id:preset-discard-dialog")).toBe(false);
+
+  // Choosing a type closes the picker first, then runs the dirty-draft guard.
+  await app.press("id:add-preset-button");
+  await app.waitFor("id:add-preset-dialog");
+  await app.press("id:preset-type-ai");
+  await app.waitUntil(() => !app.shows("id:add-preset-dialog"));
+  await app.waitFor("id:preset-discard-dialog");
+  await app.press("id:preset-discard-keep-editing");
+  await app.waitUntil(() => !app.shows("id:preset-discard-dialog"));
+  expect(app.value("id:preset-name")).toBe("Type Preset Edited");
+
+  // Discarding opens the AI editor with the name focused and no language controls.
+  await app.press("id:add-preset-button");
+  await app.waitFor("id:add-preset-dialog");
+  await app.press("id:preset-type-ai");
+  await app.waitFor("id:preset-discard-dialog");
+  await app.press("id:preset-discard-confirm");
+  await app.waitUntil(() => !app.shows("id:preset-discard-dialog"));
+  await app.waitFor("id:preset-name");
+  expect(app.shows("id:preset-draft-item")).toBe(true);
+  expect(app.value("id:preset-name")).toBe("");
+  expect(app.shows("id:preset-source-language")).toBe(false);
+  expect(app.shows("id:preset-target-language")).toBe(false);
+  await app.keyboard.press("a");
+  expect(app.value("id:preset-name")).toBe("a");
+
+  // The empty-state entry point uses the same picker.
+  const emptyApp = await open(APP_ENTRY, { ...viewport, storage: makeSeedStorage({}) });
+  await emptyApp.press("id:nav-presets");
+  await emptyApp.waitFor("id:empty-add-preset-button");
+  await emptyApp.press("id:empty-add-preset-button");
+  await emptyApp.waitFor("id:add-preset-dialog");
+  expect(emptyApp.shows("id:preset-type-ai")).toBe(true);
+  expect(emptyApp.shows("id:preset-type-deepl")).toBe(true);
+  await emptyApp.keyboard.press("escape");
+  await emptyApp.waitUntil(() => !emptyApp.shows("id:add-preset-dialog"));
+  expect(emptyApp.shows("id:empty-add-preset-button")).toBe(true);
+});
+
+test("presets ui: DeepL editor", async () => {
+  const app = await open(APP_ENTRY, { ...viewport, storage: makeSeedStorage({}) });
+  await app.press("id:nav-presets");
+  await app.waitFor("id:empty-add-preset-button");
+  await app.press("id:empty-add-preset-button");
+  await app.waitFor("id:add-preset-dialog");
+  await app.press("id:preset-type-deepl");
+  await app.waitUntil(() => !app.shows("id:add-preset-dialog"));
+  await app.waitFor("id:preset-deepl-api-key");
+
+  // A DeepL preset needs no AI model and shows no languages, models, or prompts.
+  expect(app.shows("id:preset-source-language")).toBe(false);
+  expect(app.shows("id:preset-target-language")).toBe(false);
+  expect(app.shows("id:preset-primary-model")).toBe(false);
+  expect(app.shows("id:preset-temperature")).toBe(false);
+  expect(app.shows("id:preset-template-name")).toBe(false);
+  expect(app.shows("id:preset-manage-models")).toBe(false);
+  expect(app.value("id:preset-deepl-api-key")).toBe("");
+
+  await app.type("id:preset-name", "DeepL Free");
+
+  // A missing key fails with the localized field error and focuses the key input.
+  await app.press("id:preset-save");
+  await app.waitUntil(() => app.texts().includes(t("presets.error.deeplKeyRequired")));
+  expect(app.storage()[PRESETS_STORAGE_KEY]).toBeUndefined();
+  await app.keyboard.press("d");
+  expect(app.value("id:preset-deepl-api-key")).toBe("d");
+  await app.clear("id:preset-deepl-api-key");
+  await app.type("id:preset-deepl-api-key", "deepl-test:fx");
+
+  await app.press("id:preset-save");
+  await app.waitUntil(() => Boolean(app.storage()[PRESETS_STORAGE_KEY]));
+  expect(app.requests()).toHaveLength(0);
+  expect(app.texts()).toContain("DeepL API");
+  const raw = app.storage()[PRESETS_STORAGE_KEY]!;
+  expect(raw).not.toContain("deepl-test:fx");
+  const savedItems = JSON.parse(raw).items as TranslationPreset[];
+  expect(savedItems[0]!.engine.kind).toBe("deepl");
+
+  // Reopening shows the stored-key placeholder state, not the key; a replacement is dirty.
+  const reopened = await open(APP_ENTRY, { ...viewport, storage: app.storage() });
+  await reopened.press("id:nav-presets");
+  await reopened.waitFor("id:preset-deepl-api-key");
+  expect(reopened.value("id:preset-deepl-api-key")).toBe("");
+  expect(reopened.enabled("id:preset-save")).toBe(false);
+  expect(reopened.texts()).toContain("DeepL API");
+  expect(reopened.requests()).toHaveLength(0);
+  await reopened.type("id:preset-deepl-api-key", "deepl-replacement:fx");
+  expect(reopened.enabled("id:preset-save")).toBe(true);
+  expect(reopened.storage()[PRESETS_STORAGE_KEY]).not.toContain("deepl-replacement:fx");
+});
+
 test("presets ui: does not promote a fallback into an empty primary slot", async () => {
   const app = await open(APP_ENTRY, {
     ...viewport,
@@ -165,6 +303,7 @@ test("presets ui: does not promote a fallback into an empty primary slot", async
   });
   await app.press("id:nav-presets");
   await app.press("id:empty-add-preset-button");
+  await choosePresetType(app, "ai");
   await app.type("id:preset-name", "Fallback only");
   await app.press("id:preset-add-fallback");
   await app.press("id:preset-fallback-0");
@@ -188,6 +327,7 @@ test("presets ui: steps temperature between 0.0 and 2.0", async () => {
   const decrease = "id:preset-temperature-down";
   await app.press("id:nav-presets");
   await app.press("id:empty-add-preset-button");
+  await choosePresetType(app, "ai");
   await app.type("id:preset-name", "Temperature");
   await app.press("id:preset-primary-model");
   await app.press("role:option[OpenAI Main · gpt-4o]");
@@ -224,6 +364,7 @@ test("presets ui: rejects invalid temperature edits", async () => {
   const temperature = "id:preset-temperature";
   await app.press("id:nav-presets");
   await app.press("id:empty-add-preset-button");
+  await choosePresetType(app, "ai");
   await app.type(temperature, "3");
   expect(app.value(temperature)).toBe("");
   await app.type(temperature, "2.1");
@@ -256,6 +397,7 @@ test("presets ui: reorders fallbacks and restores them", async () => {
   await app.press("id:nav-presets");
   await app.waitFor("id:empty-add-preset-button");
   await app.press("id:empty-add-preset-button");
+  await choosePresetType(app, "ai");
   await app.waitFor("id:preset-name");
   await app.type("id:preset-name", "Ordered Chain");
 
@@ -542,6 +684,7 @@ test("presets ui: saves multiple prompts and the chosen default", async () => {
   await app.press("id:nav-presets");
   await app.waitFor("id:empty-add-preset-button");
   await app.press("id:empty-add-preset-button");
+  await choosePresetType(app, "ai");
   await app.waitFor("id:preset-name");
   await app.type("id:preset-name", "Multi Prompt Preset");
   await app.press("id:preset-primary-model");
@@ -803,6 +946,7 @@ test("presets ui: guards dirty navigation", async () => {
   await app.waitUntil(() => app.value("id:preset-name") === "Preset One");
   await app.type("id:preset-name", " AddDirty");
   await app.press("id:add-preset-button");
+  await choosePresetType(app, "ai");
   await app.waitFor("id:preset-discard-dialog");
   await app.press("id:preset-discard-confirm");
   await app.waitUntil(() => !app.shows("id:preset-discard-dialog"));
@@ -908,6 +1052,7 @@ test("presets ui: confirms delete and selects the next preset", async () => {
   expect(reopened.texts()).toContain("No presets yet");
 
   await reopened.press("id:empty-add-preset-button");
+  await choosePresetType(reopened, "ai");
   await reopened.waitFor("id:preset-name");
   await reopened.keyboard.press("x");
   expect(reopened.value("id:preset-name")).toBe("x");

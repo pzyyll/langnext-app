@@ -12,7 +12,7 @@ import { PromptTemplates, type TemplateEditableField } from "./prompt-templates"
 import type { ModelChoice, PresetValidationField, PromptTemplate } from "./types";
 
 export type FocusableEditorField =
-  | { kind: "name" | "temperature" | "maxOutputTokens" }
+  | { kind: "name" | "temperature" | "maxOutputTokens" | "deeplKey" }
   | { kind: "template"; templateId: string; field: TemplateEditableField };
 
 interface PresetEditorProps {
@@ -34,6 +34,7 @@ interface PresetEditorProps {
   onDelete: () => void;
   onManageModels: () => void;
   onNameRef: (node: InputRef) => void;
+  onDeepLKeyRef: (node: InputRef) => void;
   onPrimaryModelRef: (node: ViewRef) => void;
   onFallbackRef: (index: number, node: ViewRef | null) => void;
   onTemperatureRef: (node: InputRef) => void;
@@ -56,10 +57,13 @@ export function PresetEditor(props: PresetEditorProps) {
   const canSave = () => {
     if (props.saving) return false;
     if (props.draft.sourceId === null) {
+      if (props.draft.engineKind === "deepl") return true;
       return props.modelChoices.length > 0 && props.modelsError === null;
     }
     return props.dirty;
   };
+
+  const isDeepL = () => props.draft.engineKind === "deepl";
 
   const canCancel = () => {
     if (props.saving) return false;
@@ -208,57 +212,81 @@ export function PresetEditor(props: PresetEditorProps) {
             </FormField>
           </Card>
 
-          <ModelsSection
-            primaryModelId={props.draft.primaryModelId}
-            fallbackModelIds={props.draft.fallbackModelIds}
-            temperatureText={props.draft.temperatureText}
-            maxOutputTokensText={props.draft.maxOutputTokensText}
-            disableReasoning={props.draft.disableReasoning}
-            saving={props.saving}
-            modelChoices={props.modelChoices}
-            modelsError={props.modelsError}
-            errorMessage={props.errorMessage}
-            errorField={props.errorField}
-            errorFallbackIndex={props.errorFallbackIndex}
-            onChangePrimary={(primaryModelId) => props.onChange({ primaryModelId })}
-            onAddFallback={() => addFallback()}
-            onChangeFallback={(index, id) => changeFallback(index, id)}
-            onMoveFallback={(index, direction) => moveFallback(index, direction)}
-            onRemoveFallback={(index) => removeFallback(index)}
-            onChangeTemperature={(temperatureText) => props.onChange({ temperatureText })}
-            onChangeMaxOutputTokens={(maxOutputTokensText) =>
-              props.onChange({ maxOutputTokensText })
-            }
-            onChangeDisableReasoning={(disableReasoning) => props.onChange({ disableReasoning })}
-            onManageModels={() => props.onManageModels()}
-            onPrimaryModelRef={(node) => props.onPrimaryModelRef(node)}
-            onFallbackRef={(index, node) => props.onFallbackRef(index, node)}
-            onTemperatureRef={(node) => props.onTemperatureRef(node)}
-            onMaxTokensRef={(node) => props.onMaxTokensRef(node)}
-            onFieldFocus={(field) => props.onFieldFocus({ kind: field })}
-          />
+          <If when={!isDeepL()}>
+            <ModelsSection
+              primaryModelId={props.draft.primaryModelId}
+              fallbackModelIds={props.draft.fallbackModelIds}
+              temperatureText={props.draft.temperatureText}
+              maxOutputTokensText={props.draft.maxOutputTokensText}
+              disableReasoning={props.draft.disableReasoning}
+              saving={props.saving}
+              modelChoices={props.modelChoices}
+              modelsError={props.modelsError}
+              errorMessage={props.errorMessage}
+              errorField={props.errorField}
+              errorFallbackIndex={props.errorFallbackIndex}
+              onChangePrimary={(primaryModelId) => props.onChange({ primaryModelId })}
+              onAddFallback={() => addFallback()}
+              onChangeFallback={(index, id) => changeFallback(index, id)}
+              onMoveFallback={(index, direction) => moveFallback(index, direction)}
+              onRemoveFallback={(index) => removeFallback(index)}
+              onChangeTemperature={(temperatureText) => props.onChange({ temperatureText })}
+              onChangeMaxOutputTokens={(maxOutputTokensText) =>
+                props.onChange({ maxOutputTokensText })
+              }
+              onChangeDisableReasoning={(disableReasoning) => props.onChange({ disableReasoning })}
+              onManageModels={() => props.onManageModels()}
+              onPrimaryModelRef={(node) => props.onPrimaryModelRef(node)}
+              onFallbackRef={(index, node) => props.onFallbackRef(index, node)}
+              onTemperatureRef={(node) => props.onTemperatureRef(node)}
+              onMaxTokensRef={(node) => props.onMaxTokensRef(node)}
+              onFieldFocus={(field) => props.onFieldFocus({ kind: field })}
+            />
 
-          <PromptTemplates
-            templates={props.draft.templates}
-            defaultTemplateId={props.draft.defaultTemplateId}
-            selectedTemplateId={props.selectedTemplateId}
-            saving={props.saving}
-            errorMessage={props.errorMessage}
-            errorField={props.errorField}
-            errorTemplateId={props.errorTemplateId}
-            onSelectTemplate={(id) => props.onSelectTemplate(id)}
-            onAddTemplate={() => addTemplate()}
-            onUpdateTemplate={(id, patch) => updateTemplate(id, patch)}
-            onSetDefault={(id) => setDefaultTemplate(id)}
-            onRemoveTemplate={(id) => removeTemplate(id)}
-            onTemplateFieldRef={(tplId, field, node) =>
-              props.onTemplateFieldRef(tplId, field, node)
-            }
-            onTemplateFieldFocus={(templateId, field) =>
-              props.onFieldFocus({ kind: "template", templateId, field })
-            }
-            onClearTemplateRefs={(tplId) => props.onClearTemplateRefs(tplId)}
-          />
+            <PromptTemplates
+              templates={props.draft.templates}
+              defaultTemplateId={props.draft.defaultTemplateId}
+              selectedTemplateId={props.selectedTemplateId}
+              saving={props.saving}
+              errorMessage={props.errorMessage}
+              errorField={props.errorField}
+              errorTemplateId={props.errorTemplateId}
+              onSelectTemplate={(id) => props.onSelectTemplate(id)}
+              onAddTemplate={() => addTemplate()}
+              onUpdateTemplate={(id, patch) => updateTemplate(id, patch)}
+              onSetDefault={(id) => setDefaultTemplate(id)}
+              onRemoveTemplate={(id) => removeTemplate(id)}
+              onTemplateFieldRef={(tplId, field, node) =>
+                props.onTemplateFieldRef(tplId, field, node)
+              }
+              onTemplateFieldFocus={(templateId, field) =>
+                props.onFieldFocus({ kind: "template", templateId, field })
+              }
+              onClearTemplateRefs={(tplId) => props.onClearTemplateRefs(tplId)}
+            />
+          </If>
+
+          <If when={isDeepL()}>
+            <Card class={cardClass()}>
+              <FormField label={t("presets.deepl.keyLabel")} error={fieldError("deeplKey")}>
+                <Input
+                  testID="preset-deepl-api-key"
+                  ref={(node) => props.onDeepLKeyRef(node)}
+                  masked
+                  value={props.draft.deepLApiKey}
+                  placeholder={
+                    props.draft.deepLApiKeyStored
+                      ? t("presets.deepl.keyStored")
+                      : t("presets.deepl.keyPlaceholder")
+                  }
+                  accessibilityLabel={t("presets.deepl.keyLabel")}
+                  disabled={props.saving}
+                  onFocus={() => props.onFieldFocus({ kind: "deeplKey" })}
+                  onChange={(deepLApiKey) => props.onChange({ deepLApiKey })}
+                />
+              </FormField>
+            </Card>
+          </If>
 
           <If when={props.draft.sourceId !== null}>
             <View class="flex-row justify-end">
