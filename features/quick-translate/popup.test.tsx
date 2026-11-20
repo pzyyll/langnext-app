@@ -1020,8 +1020,10 @@ test("language resolution: one detection request serves both expanded cards", as
 
   await app.waitFor("id:quick-translate-source");
   await app.waitFor("id:quick-translate-card-card-2");
+  expect(app.shows("id:quick-translate-source-detection")).toBe(false);
 
   await app.type("id:quick-translate-source", "Bonjour");
+  expect(app.shows("id:quick-translate-source-toolbar >> id:quick-translate-clear")).toBe(true);
   await app.keyboard.press("enter");
   await app.waitUntil(() => app.texts().some((text) => text.includes("detects=1|")));
 
@@ -1029,10 +1031,15 @@ test("language resolution: one detection request serves both expanded cards", as
   expect(app.texts().some((text) => text.startsWith("calls=0|"))).toBe(true);
   expect(requestsTo(app, TRANSLATE_URL)).toHaveLength(0);
   expect(app.texts()).toContain(t("quickTranslate.translating"));
+  expect(app.texts()).toContain(t("quickTranslate.detectingLanguage"));
 
   await app.press("id:harness-resolve-language-fr");
   await app.waitUntil(() => requestsTo(app, TRANSLATE_URL).length === 2);
   await app.waitFor("id:quick-translate-result-text");
+
+  expect(app.texts()).toContain(
+    t("quickTranslate.detectedLanguage", { language: getLanguageLabel("fr") }),
+  );
 
   const prompts = translateBodies(app);
   expect(prompts).toHaveLength(2);
@@ -1156,12 +1163,15 @@ test("language resolution: the last consumer leaving aborts the shared detection
   await app.type("id:quick-translate-source", "Bonjour");
   await app.keyboard.press("enter");
   await app.waitUntil(() => app.texts().some((text) => text.includes("detects=1|")));
+  expect(app.texts()).toContain(t("quickTranslate.detectingLanguage"));
 
   await app.press("id:quick-translate-clear");
+  expect(app.shows("id:quick-translate-source-detection")).toBe(false);
   await app.waitUntil(() => app.texts().some((text) => text.includes("detectAborts=aborted-1")));
   await app.press("id:harness-resolve-language-fr");
   await app.wait(50);
 
+  expect(app.shows("id:quick-translate-source-detection")).toBe(false);
   expect(requestsTo(app, TRANSLATE_URL)).toHaveLength(0);
   expect(app.shows("id:quick-translate-result-text")).toBe(false);
   expect(app.shows("id:quick-translate-error")).toBe(false);
@@ -1182,6 +1192,7 @@ test("language resolution: retrying after a failure starts a new detection run",
   await app.waitUntil(() => app.texts().some((text) => text.includes("detects=1|")));
   await app.press("id:harness-resolve-language-und");
   await app.waitFor("id:quick-translate-retry");
+  expect(app.shows("id:quick-translate-source-detection")).toBe(false);
   expect(requestsTo(app, TRANSLATE_URL)).toHaveLength(0);
 
   await app.press("id:quick-translate-retry");
@@ -1191,4 +1202,55 @@ test("language resolution: retrying after a failure starts a new detection run",
 
   expect(requestsTo(app, TRANSLATE_URL)).toHaveLength(1);
   expect(app.texts()).toContain("Bonjour!");
+  expect(app.texts()).toContain(
+    t("quickTranslate.detectedLanguage", { language: getLanguageLabel("fr") }),
+  );
+});
+
+test("language resolution: source footer detection status clears on edit and stays hidden for explicit source language", async () => {
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedAutoPair([false], "language-resolution"),
+    network: {
+      [TRANSLATE_URL]: { status: 200, body: { choices: [{ message: { content: "你好" } }] } },
+    },
+  });
+
+  await app.waitFor("id:quick-translate-source");
+  await app.type("id:quick-translate-source", "Hello");
+  await app.keyboard.press("enter");
+  await app.waitUntil(() => app.texts().some((text) => text.includes("detects=1|")));
+  await app.press("id:harness-resolve-language-fr");
+  await app.waitFor("id:quick-translate-source-detection");
+  expect(
+    app.shows("id:quick-translate-source-toolbar >> id:quick-translate-source-detection"),
+  ).toBe(true);
+  expect(app.shows("id:quick-translate-source-toolbar >> id:quick-translate-clear")).toBe(true);
+
+  // Editing source invalidates the prior detected language label immediately.
+  await app.type("id:quick-translate-source", " world");
+  expect(app.shows("id:quick-translate-source-detection")).toBe(false);
+
+  // Switching to an explicit source language leaves detection status hidden even when target is auto.
+  const live = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedAutoPair([false]),
+    network: {
+      [TRANSLATE_URL]: { status: 200, body: { choices: [{ message: { content: "你好" } }] } },
+    },
+  });
+  await live.waitFor("id:quick-translate-source");
+  await live.press("id:quick-translate-language-menu");
+  await live.waitFor("id:quick-translate-source-language");
+  await live.hover("id:quick-translate-source-language");
+  await live.waitFor("id:quick-translate-source-language-en");
+  await live.press("id:quick-translate-source-language-en");
+  while (live.shows("id:quick-translate-source-language")) {
+    await live.keyboard.press("escape");
+  }
+  await live.type("id:quick-translate-source", "Hello");
+  await live.keyboard.press("enter");
+  await live.waitFor("id:quick-translate-result-text");
+  expect(requestsTo(live, DETECT_URL)).toHaveLength(0);
+  expect(live.shows("id:quick-translate-source-detection")).toBe(false);
 });

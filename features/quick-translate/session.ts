@@ -40,6 +40,11 @@ const COPY_FEEDBACK_DURATION_MS = 1500;
 /** Coalesces streamed text updates so a fast provider does not re-render each token. */
 const STREAM_FLUSH_INTERVAL_MS = 50;
 
+export type SourceDetectionState =
+  | { status: "idle" }
+  | { status: "detecting" }
+  | { status: "detected"; language: LanguageId };
+
 export type CardResultState =
   | { status: "idle" }
   | { status: "loading" }
@@ -87,14 +92,23 @@ function createSharedLanguageRun(
     input: ResolveTranslationLanguagesInput,
     options?: DetectLanguageOptions,
   ) => Promise<ResolveTranslationLanguagesResult>,
+  onDetectionState?: (state: SourceDetectionState) => void,
 ): SharedLanguageRun {
   let promise: Promise<ResolveTranslationLanguagesResult> | null = null;
   let controller: AbortController | null = null;
   let consumers = 0;
+  let settled = false;
+
+  const notifyDetection = (state: SourceDetectionState) => {
+    if (snapshot.sourceLanguage === AUTO_LANGUAGE) {
+      onDetectionState?.(state);
+    }
+  };
 
   return {
     join: async (cardSignal: AbortSignal) => {
       if (promise === null) {
+        notifyDetection({ status: "detecting" });
         const shared = new AbortController();
         controller = shared;
         promise = resolveLanguages(
@@ -105,6 +119,21 @@ function createSharedLanguageRun(
             settings: snapshot.settings,
           },
           { signal: shared.signal },
+        ).then(
+          (result) => {
+            settled = true;
+            notifyDetection(
+              result.ok
+                ? { status: "detected", language: result.sourceLanguage }
+                : { status: "idle" },
+            );
+            return result;
+          },
+          (error) => {
+            settled = true;
+            notifyDetection({ status: "idle" });
+            throw error;
+          },
         );
       }
       consumers += 1;
@@ -123,6 +152,10 @@ function createSharedLanguageRun(
         consumers -= 1;
         if (consumers === 0) {
           controller?.abort();
+          if (!settled) {
+            settled = true;
+            notifyDetection({ status: "idle" });
+          }
         }
       }
     },
@@ -152,6 +185,7 @@ export interface QuickTranslateSession {
   sourceText: Accessor<string>;
   sourceLanguage: Accessor<SourceLanguageId>;
   targetLanguage: Accessor<TargetLanguageId>;
+  sourceDetection: Accessor<SourceDetectionState>;
   cards: Accessor<readonly CardViewItem[]>;
   enabledPresets: Accessor<readonly TranslationPreset[]>;
   presetItems: Accessor<SelectItem[]>;
@@ -207,6 +241,7 @@ export function createQuickTranslateSession(
   const cards = signal<CardViewItem[]>([]);
   const sourceLanguage = signal<SourceLanguageId>(AUTO_LANGUAGE);
   const targetLanguage = signal<TargetLanguageId>(AUTO_LANGUAGE);
+  const sourceDetection = signal<SourceDetectionState>({ status: "idle" });
 
   const enabledPresets = () => store.records().filter((item) => item.enabled);
   // A collapsed card is out of the working set: it neither translates nor refreshes.
@@ -220,7 +255,27 @@ export function createQuickTranslateSession(
   let nextCardOrdinal = 1;
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
   let lastHandledDeliverySeq = 0;
+  let detectionRunSeq = 0;
   const cardRuntimes = new Map<string, CardRuntime>();
+
+  const createTrackedLanguageRun = (text: string) => {
+    detectionRunSeq += 1;
+    const runSeq = detectionRunSeq;
+    return createSharedLanguageRun(
+      {
+        sourceText: text,
+        sourceLanguage: sourceLanguage(),
+        targetLanguage: targetLanguage(),
+        settings: languageDetectionStore.settings(),
+      },
+      runResolveLanguages,
+      (state) => {
+        if (!disposed && runSeq === detectionRunSeq) {
+          sourceDetection.set(state);
+        }
+      },
+    );
+  };
 
   const allocateCardId = () => `card-${nextCardOrdinal++}`;
 
@@ -264,6 +319,8 @@ export function createQuickTranslateSession(
   };
 
   const invalidateAllCards = (nextResult: CardResultState = { status: "idle" }) => {
+    detectionRunSeq += 1;
+    sourceDetection.set({ status: "idle" });
     clearSharedDebounce();
     for (const runtime of cardRuntimes.values()) {
       cancelRuntime(runtime);
@@ -376,6 +433,7 @@ export function createQuickTranslateSession(
 
   cleanup(() => {
     disposed = true;
+    detectionRunSeq += 1;
     clearSharedDebounce();
     for (const runtime of cardRuntimes.values()) {
       cancelRuntime(runtime);
@@ -454,17 +512,7 @@ export function createQuickTranslateSession(
 
     // Cards of one action join the same run, so the detector is asked once per action.
     // A standalone request (retry or expand) starts a run of its own.
-    const run =
-      sharedRun ??
-      createSharedLanguageRun(
-        {
-          sourceText: text,
-          sourceLanguage: sourceLanguage(),
-          targetLanguage: targetLanguage(),
-          settings: languageDetectionStore.settings(),
-        },
-        runResolveLanguages,
-      );
+    const run = sharedRun ?? createTrackedLanguageRun(text);
     const pair = await run.join(abort.signal);
     if (pair === null || abort.signal.aborted) {
       if (runtime.abort === abort) runtime.abort = null;
@@ -594,18 +642,13 @@ export function createQuickTranslateSession(
 
     const text = options.sourceText();
     // One immutable snapshot per action: a saved Settings change applies to the next action.
-    const run =
-      text.trim().length === 0
-        ? undefined
-        : createSharedLanguageRun(
-            {
-              sourceText: text,
-              sourceLanguage: sourceLanguage(),
-              targetLanguage: targetLanguage(),
-              settings: languageDetectionStore.settings(),
-            },
-            runResolveLanguages,
-          );
+    let run: SharedLanguageRun | undefined;
+    if (text.trim().length === 0) {
+      detectionRunSeq += 1;
+      sourceDetection.set({ status: "idle" });
+    } else {
+      run = createTrackedLanguageRun(text);
+    }
 
     for (const card of targets) {
       void executeCard(card.id, trigger, run);
@@ -833,6 +876,7 @@ export function createQuickTranslateSession(
     sourceText: options.sourceText,
     sourceLanguage: () => sourceLanguage(),
     targetLanguage: () => targetLanguage(),
+    sourceDetection: () => sourceDetection(),
     cards: () => cards(),
     enabledPresets,
     presetItems,

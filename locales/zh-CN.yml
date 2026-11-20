@@ -458,6 +458,8 @@ quickTranslate:
   expandCard: 展开卡片
   removeCard: 移除卡片
   translating: 正在翻译…
+  detectingLanguage: 正在检测语言…
+  detectedLanguage: "自动检测：%{language}"
   enableAutoTranslate: 开启自动翻译
   disableAutoTranslate: 关闭自动翻译
   copy: 复制

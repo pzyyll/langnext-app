@@ -6,8 +6,9 @@ import { Icon } from "../../components/ui/icon";
 import { Menu, MenuItem } from "../../components/ui/menu";
 import { Select, type SelectItem } from "../../components/ui/select";
 import { Textarea } from "../../components/ui/textarea";
+import { getLanguageLabel } from "../presets/languages";
 import type { TranslationPreset } from "../presets/types";
-import type { CardViewItem, QuickTranslateSession } from "./session";
+import type { CardViewItem, QuickTranslateSession, SourceDetectionState } from "./session";
 import { resolvePresetTemplate } from "./translate";
 
 export interface QuickTranslatePopupProps {
@@ -21,6 +22,16 @@ function buildTemplateItems(preset: TranslationPreset | null): SelectItem[] {
     value: tpl.id,
     title: tpl.name,
   }));
+}
+
+function resolveSourceDetectionLabel(state: SourceDetectionState): string | null {
+  if (state.status === "detecting") {
+    return t("quickTranslate.detectingLanguage");
+  }
+  if (state.status === "detected") {
+    return t("quickTranslate.detectedLanguage", { language: getLanguageLabel(state.language) });
+  }
+  return null;
 }
 
 /** Shared icon-only retry trigger used across card failures, result actions, and preset reload. */
@@ -269,6 +280,7 @@ function PresetCardRow(props: PresetCardRowProps) {
 export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   const isComposing = signal(false);
   const addMenuOpen = signal(false);
+  const detectionLabel = () => resolveSourceDetectionLabel(props.session.sourceDetection());
 
   return (
     <View class="gap-2 p-2.5">
@@ -320,6 +332,35 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
         placeholder={t("quickTranslate.sourcePlaceholder")}
         accessibilityLabel={t("quickTranslate.sourceLabel")}
         inputClass="min-h-16"
+        footer={
+          <View
+            testID="quick-translate-source-toolbar"
+            class="min-h-5 flex-row items-center justify-between gap-2"
+          >
+            <View class="min-w-0 flex-1">
+              <If when={detectionLabel() !== null}>
+                <Text
+                  testID="quick-translate-source-detection"
+                  class="truncate text-xs text-muted-foreground"
+                >
+                  {detectionLabel() ?? ""}
+                </Text>
+              </If>
+            </View>
+            <If when={props.session.sourceText().length > 0}>
+              <Button
+                testID="quick-translate-clear"
+                size="icon-xs"
+                variant="ghost"
+                tooltip={t("common.clearInput")}
+                accessibilityLabel={t("common.clearInput")}
+                onPress={() => props.session.handleClearSource()}
+              >
+                <Icon name="clear" tone="muted-foreground" class="size-3.5" />
+              </Button>
+            </If>
+          </View>
+        }
         onChange={(nextText) => props.session.handleSourceChange(nextText)}
         onSubmit={() => {
           if (isComposing()) return;
@@ -329,21 +370,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
         ref={(node) => props.onAttachSourceInput?.(node)}
       />
 
-      <View class="flex-row items-center justify-between gap-2">
-        <View>
-          <If when={props.session.sourceText().length > 0}>
-            <Button
-              testID="quick-translate-clear"
-              size="icon-sm"
-              variant="ghost"
-              tooltip={t("common.clearInput")}
-              accessibilityLabel={t("common.clearInput")}
-              onPress={() => props.session.handleClearSource()}
-            >
-              <Icon name="clear" tone="muted-foreground" class="size-3.5" />
-            </Button>
-          </If>
-        </View>
+      <View class="flex-row items-center justify-end gap-2">
         <If when={props.session.canAddPreset()} else={renderAddPresetButton({ disabled: true })}>
           <Menu
             open={addMenuOpen()}
