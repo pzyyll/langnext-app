@@ -1,11 +1,11 @@
 import { t } from "nsh/i18n";
 import type { ProviderChannel } from "../../modules/ai/contracts/channel";
 import type { ProviderModel } from "../../modules/ai/contracts/model";
-import { aiRegistry } from "../../modules/ai/runtime/registry";
 import {
-  resolveEffectiveApiType,
+  isEffectiveProtocolSupported,
   resolveEffectiveCapabilities,
   resolveEffectiveDisplayName,
+  type ModelPurpose,
 } from "../models/model-helpers";
 import { modelsStore } from "../models/store";
 import type { ModelChoice, TranslationPreset } from "./types";
@@ -17,20 +17,6 @@ export interface ModelBindingInfo {
   reason: string | null;
 }
 
-function isEffectiveProtocolSupported(channel: ProviderChannel, model: ProviderModel): boolean {
-  try {
-    const provider = aiRegistry.getProvider(channel.presetId);
-    const effectiveProtocol = resolveEffectiveApiType(model, channel.adapterId);
-    if (!provider.allowedProtocolIds.includes(effectiveProtocol)) {
-      return false;
-    }
-    aiRegistry.getProtocol(effectiveProtocol);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function formatChoiceLabel(channel: ProviderChannel, model: ProviderModel): string {
   return t("presets.model.choiceLabel", {
     channel: channel.displayName,
@@ -38,8 +24,8 @@ function formatChoiceLabel(channel: ProviderChannel, model: ProviderModel): stri
   });
 }
 
-/** Reads enabled, non-missing, text-capable, supported models from enabled channels. */
-export function readAvailableModelChoices(): ModelChoice[] {
+/** Reads enabled, non-missing, purpose-capable, supported models from enabled channels. */
+export function readAvailableModelChoices(purpose: ModelPurpose = "text"): ModelChoice[] {
   if (modelsStore.channelsError() !== null) {
     return [];
   }
@@ -54,8 +40,8 @@ export function readAvailableModelChoices(): ModelChoice[] {
     if (!model.enabled || model.syncStatus === "missing") continue;
     const channel = channelById.get(model.providerId);
     if (!channel || !channel.enabled) continue;
-    if (!resolveEffectiveCapabilities(model).text) continue;
-    if (!isEffectiveProtocolSupported(channel, model)) continue;
+    if (!resolveEffectiveCapabilities(model)[purpose]) continue;
+    if (!isEffectiveProtocolSupported(channel, model, purpose)) continue;
 
     choices.push({
       sortOrder: channel.sortOrder,
@@ -79,7 +65,10 @@ export function readAvailableModelChoices(): ModelChoice[] {
 }
 
 /** Resolves display label and unavailability reason for any bound model ID without exposing raw IDs. */
-export function resolveModelBindingInfo(modelId: string): ModelBindingInfo {
+export function resolveModelBindingInfo(
+  modelId: string,
+  purpose: ModelPurpose = "text",
+): ModelBindingInfo {
   if (modelsStore.channelsError() !== null) {
     return {
       id: modelId,
@@ -112,7 +101,7 @@ export function resolveModelBindingInfo(modelId: string): ModelBindingInfo {
 
   const label = formatChoiceLabel(channel, model);
 
-  if (!isEffectiveProtocolSupported(channel, model)) {
+  if (!isEffectiveProtocolSupported(channel, model, purpose)) {
     return {
       id: modelId,
       label,
@@ -144,12 +133,15 @@ export function resolveModelBindingInfo(modelId: string): ModelBindingInfo {
       reason: t("presets.model.reasonModelDisabled"),
     };
   }
-  if (!resolveEffectiveCapabilities(model).text) {
+  if (!resolveEffectiveCapabilities(model)[purpose]) {
     return {
       id: modelId,
       label,
       available: false,
-      reason: t("presets.model.reasonNotTextCapable"),
+      reason:
+        purpose === "image"
+          ? t("presets.model.reasonNotImageCapable")
+          : t("presets.model.reasonNotTextCapable"),
     };
   }
 

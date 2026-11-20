@@ -97,6 +97,15 @@ settings:
       primaryModelRequired: 请选择主检测模型。
       preferenceInvalid: 请选择受支持的语言。
       preferencesIdentical: 母语与母语译为的语言必须不同。
+ocr:
+  failure:
+    unconfigured: 请先在设置中配置 OCR，或换一种方式获取文本。
+    invalidImage: 无法读取截取的图片，请重新选择区域。
+    imageTooLarge: 所选区域过大，请选择更小的区域。
+    noText: 所选区域未发现文字。
+    timeout: OCR 超时，请重试。
+    malformedAnswer: OCR 模型返回了无法解析的结果，请重试。
+    failed: OCR 失败，请重试。
 languageDetection:
   failure:
     unconfigured: 请配置语言检测，或手动选择源语言。
@@ -426,6 +435,7 @@ presets:
     reasonModelDisabled: 该模型已停用。
     reasonMissing: 上次同步未返回该模型。
     reasonNotTextCapable: 该模型不支持文本能力。
+    reasonNotImageCapable: 该模型不支持图片能力。
     reasonUnsupported: 当前版本不支持该服务商或接口协议。
     reasonCatalogLoadFailed: “模型”加载失败，暂无法校验模型可用性。
   prompt:

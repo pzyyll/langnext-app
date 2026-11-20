@@ -5,7 +5,12 @@ import type { DiscoveredRemoteModel } from "../../modules/ai/contracts/model";
 import { aiClient, type AiClientInput } from "../../modules/ai/runtime/client";
 import { aiRegistry } from "../../modules/ai/runtime/registry";
 import { inspectBaseUrl } from "./connection";
-import { resolveEffectiveApiType, resolveEffectiveCapabilities } from "./model-helpers";
+import {
+  isEffectiveProtocolSupported,
+  resolveEffectiveApiType,
+  resolveEffectiveCapabilities,
+  type ModelPurpose,
+} from "./model-helpers";
 import {
   applyModelConfigUpdate,
   createManualProviderModel,
@@ -783,10 +788,11 @@ export type SavedModelRequestResolution =
 
 /**
  * Resolves the effective protocol route and saved credential for a model UUID
- * when a translation request runs, enforcing availability and HTTP consent.
+ * when a request runs, enforcing availability, the purpose, and HTTP consent.
  */
 export async function resolveSavedModelRequest(
   modelId: string,
+  purpose: ModelPurpose = "text",
 ): Promise<SavedModelRequestResolution> {
   if (errorSignal() !== null) {
     return { ok: false, reason: t("presets.model.reasonCatalogLoadFailed") };
@@ -805,8 +811,14 @@ export async function resolveSavedModelRequest(
   if (!model.modelKey.trim()) {
     return { ok: false, reason: t("presets.model.reasonUnsupported") };
   }
-  if (!resolveEffectiveCapabilities(model).text) {
-    return { ok: false, reason: t("presets.model.reasonNotTextCapable") };
+  if (!resolveEffectiveCapabilities(model)[purpose]) {
+    return {
+      ok: false,
+      reason:
+        purpose === "image"
+          ? t("presets.model.reasonNotImageCapable")
+          : t("presets.model.reasonNotTextCapable"),
+    };
   }
 
   const channel = channelsSignal().find((entry) => entry.id === model.providerId);
@@ -818,14 +830,12 @@ export async function resolveSavedModelRequest(
   }
 
   const effectiveProtocol = resolveEffectiveApiType(model, channel.adapterId);
+  if (!isEffectiveProtocolSupported(channel, model, purpose)) {
+    return { ok: false, reason: t("presets.model.reasonUnsupported") };
+  }
   let providerDefaultBaseUrl: string | null = null;
   try {
-    const provider = aiRegistry.getProvider(channel.presetId);
-    if (!provider.allowedProtocolIds.includes(effectiveProtocol)) {
-      return { ok: false, reason: t("presets.model.reasonUnsupported") };
-    }
-    aiRegistry.getProtocol(effectiveProtocol);
-    providerDefaultBaseUrl = provider.defaultBaseUrl;
+    providerDefaultBaseUrl = aiRegistry.getProvider(channel.presetId).defaultBaseUrl;
   } catch {
     return { ok: false, reason: t("presets.model.reasonUnsupported") };
   }

@@ -97,6 +97,15 @@ settings:
       primaryModelRequired: Choose a primary detection model.
       preferenceInvalid: Choose a supported language.
       preferencesIdentical: The native language and the preferred translation language must differ.
+ocr:
+  failure:
+    unconfigured: Configure OCR in Settings, or choose another way to get the text.
+    invalidImage: The captured image could not be read. Select the area again.
+    imageTooLarge: The selected area is too large. Select a smaller area.
+    noText: No text was found in the selected area.
+    timeout: OCR timed out. Try again.
+    malformedAnswer: The OCR model returned an unreadable answer. Try again.
+    failed: OCR failed. Try again.
 languageDetection:
   failure:
     unconfigured: Configure language detection, or choose the source language.
@@ -426,6 +435,7 @@ presets:
     reasonModelDisabled: Model is disabled.
     reasonMissing: Model was missing in the last channel sync.
     reasonNotTextCapable: Model does not support text.
+    reasonNotImageCapable: Model does not support images.
     reasonUnsupported: Provider or API protocol is unsupported in this build.
     reasonCatalogLoadFailed: Model availability could not be verified while Models failed to load.
   prompt:

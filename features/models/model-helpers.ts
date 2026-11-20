@@ -1,5 +1,6 @@
 import { t } from "nsh/i18n";
 import type { ProviderTypeId } from "../../modules/ai/contracts/channel";
+import type { ProviderChannel } from "../../modules/ai/contracts/channel";
 import type { CapabilityFlags, ProviderModel } from "../../modules/ai/contracts/model";
 import type { ProtocolId } from "../../modules/ai/contracts/protocol";
 import { aiRegistry } from "../../modules/ai/runtime/registry";
@@ -65,6 +66,31 @@ export function resolveEffectiveApiType(
   channelDefaultAdapterId: ProtocolId,
 ): ProtocolId {
   return model.apiTypeOverride ?? channelDefaultAdapterId;
+}
+
+/** A model use the host resolves before it sends a request. */
+export type ModelPurpose = "text" | "image";
+
+/**
+ * Returns whether the channel's effective protocol for this model is allowed, registered, and
+ * able to serve the purpose. Model listing and runtime resolution share this one rule.
+ */
+export function isEffectiveProtocolSupported(
+  channel: ProviderChannel,
+  model: ProviderModel,
+  purpose: ModelPurpose = "text",
+): boolean {
+  try {
+    const provider = aiRegistry.getProvider(channel.presetId);
+    const effectiveProtocol = resolveEffectiveApiType(model, channel.adapterId);
+    if (!provider.allowedProtocolIds.includes(effectiveProtocol)) {
+      return false;
+    }
+    const protocol = aiRegistry.getProtocol(effectiveProtocol);
+    return purpose === "text" || protocol.generateTextFromImage !== undefined;
+  } catch {
+    return false;
+  }
 }
 
 /** Formats the API Type column relative to the owning channel adapter. */
