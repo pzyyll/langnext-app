@@ -759,7 +759,7 @@ export function createQuickTranslateSession(
     const current = cards().find((item) => item.id === cardId);
     if (!current) return;
     const preset = enabledPresets().find((item) => item.id === current.presetId);
-    if (!preset) return;
+    if (!preset || preset.engine.kind !== "ai") return;
     const chosen = preset.engine.templates.find((tpl) => tpl.id === value);
     if (!chosen) return;
 

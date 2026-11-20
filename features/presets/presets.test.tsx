@@ -7,7 +7,12 @@ import {
   makeSeedStorage,
 } from "../models/__tests__/fixtures";
 import { PRESETS_STORAGE_KEY } from "./store";
-import type { TranslationPreset } from "./types";
+import type { AiPresetEngine, TranslationPreset } from "./types";
+
+function aiEngine(preset: TranslationPreset): AiPresetEngine {
+  if (preset.engine.kind !== "ai") throw new Error("expected an AI preset");
+  return preset.engine;
+}
 
 const APP_ENTRY = "../../App.tsx";
 const viewport = { width: 1040, height: 720, platform: "windows" as const };
@@ -70,8 +75,9 @@ test("presets ui: saves a new preset", async () => {
       disableReasoning: true,
     },
   });
-  expect(parsed.items[0]!.engine.templates).toHaveLength(1);
-  expect(parsed.items[0]!.engine.defaultTemplateId).toBe(parsed.items[0]!.engine.templates[0]!.id);
+  const savedEngine = aiEngine(parsed.items[0]!);
+  expect(savedEngine.templates).toHaveLength(1);
+  expect(savedEngine.defaultTemplateId).toBe(savedEngine.templates[0]!.id);
 
   // Reopen the app from persisted storage and confirm fields reload faithfully.
   const reopened = await open(APP_ENTRY, {
@@ -327,7 +333,7 @@ test("presets ui: reorders fallbacks and restores them", async () => {
     const raw = reopened.storage()[PRESETS_STORAGE_KEY];
     if (!raw) return false;
     const data = JSON.parse(raw) as { items: TranslationPreset[] };
-    return data.items[0]?.engine.modelIds.join(",") === "m-a,m-b";
+    return aiEngine(data.items[0]!).modelIds.join(",") === "m-a,m-b";
   });
 });
 
@@ -336,8 +342,6 @@ function makePresetRecord(id: string, name: string, modelIds: string[]): Transla
     id,
     name,
     enabled: true,
-    sourceLanguage: "auto",
-    targetLanguage: "zh",
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
     engine: {
@@ -386,7 +390,7 @@ test("presets ui: toggles the reasoning switch and saves it", async () => {
     const raw = app.storage()[PRESETS_STORAGE_KEY];
     if (!raw) return false;
     const data = JSON.parse(raw) as { items: TranslationPreset[] };
-    return data.items[0]?.engine.disableReasoning === false;
+    return aiEngine(data.items[0]!).disableReasoning === false;
   });
 
   // Reopening shows the stored choice and saving it again keeps it.
@@ -399,7 +403,7 @@ test("presets ui: toggles the reasoning switch and saves it", async () => {
     const raw = reopened.storage()[PRESETS_STORAGE_KEY];
     if (!raw) return false;
     const data = JSON.parse(raw) as { items: TranslationPreset[] };
-    return data.items[0]?.engine.disableReasoning === true;
+    return aiEngine(data.items[0]!).disableReasoning === true;
   });
 });
 
@@ -500,7 +504,7 @@ test("presets ui: retains unavailable bindings", async () => {
   const afterRename = JSON.parse(app.storage()[PRESETS_STORAGE_KEY]!) as {
     items: TranslationPreset[];
   };
-  expect(afterRename.items[0]!.engine.modelIds).toEqual(["m-ch-off", "m-raw-deleted"]);
+  expect(aiEngine(afterRename.items[0]!).modelIds).toEqual(["m-ch-off", "m-raw-deleted"]);
 
   // 4. Replace primary and remove deleted fallback -> warnings clear cleanly.
   await app.press("id:preset-primary-model");
@@ -518,7 +522,7 @@ test("presets ui: retains unavailable bindings", async () => {
     const raw = app.storage()[PRESETS_STORAGE_KEY];
     if (!raw) return false;
     const saved = JSON.parse(raw) as { items: TranslationPreset[] };
-    return saved.items[0]?.engine.modelIds.join(",") === "m-ok";
+    return aiEngine(saved.items[0]!).modelIds.join(",") === "m-ok";
   });
 });
 
@@ -607,10 +611,10 @@ test("presets ui: saves multiple prompts and the chosen default", async () => {
 
   const persisted = app.storage();
   const parsed = JSON.parse(persisted[PRESETS_STORAGE_KEY]!) as { items: TranslationPreset[] };
-  expect(parsed.items[0]!.engine.templates).toHaveLength(2);
-  const formalTpl = parsed.items[0]!.engine.templates.find((tpl) => tpl.name === "Formal");
+  expect(aiEngine(parsed.items[0]!).templates).toHaveLength(2);
+  const formalTpl = aiEngine(parsed.items[0]!).templates.find((tpl) => tpl.name === "Formal");
   expect(formalTpl).toBeDefined();
-  expect(parsed.items[0]!.engine.defaultTemplateId).toBe(formalTpl!.id);
+  expect(aiEngine(parsed.items[0]!).defaultTemplateId).toBe(formalTpl!.id);
 
   // Reopen app and confirm templates, multi-line bodies, and single Default badge persist.
   const reopened = await open(APP_ENTRY, {
@@ -636,8 +640,6 @@ test("presets ui: removes only a nondefault prompt", async () => {
     id: "p-templates",
     name: "Template Removal",
     enabled: true,
-    sourceLanguage: "auto",
-    targetLanguage: "zh",
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
     engine: {
@@ -700,8 +702,8 @@ test("presets ui: removes only a nondefault prompt", async () => {
   const beforeSave = JSON.parse(app.storage()[PRESETS_STORAGE_KEY]!) as {
     items: TranslationPreset[];
   };
-  expect(beforeSave.items[0]!.engine.templates).toHaveLength(2);
-  expect(beforeSave.items[0]!.engine.defaultTemplateId).toBe("tpl-1");
+  expect(aiEngine(beforeSave.items[0]!).templates).toHaveLength(2);
+  expect(aiEngine(beforeSave.items[0]!).defaultTemplateId).toBe("tpl-1");
 
   // Single remaining default template cannot be removed.
   expect(app.enabled("id:preset-template-remove")).toBe(false);
@@ -711,14 +713,14 @@ test("presets ui: removes only a nondefault prompt", async () => {
     const raw = app.storage()[PRESETS_STORAGE_KEY];
     if (!raw) return false;
     const saved = JSON.parse(raw) as { items: TranslationPreset[] };
-    return saved.items[0]?.engine.templates.length === 1;
+    return aiEngine(saved.items[0]!).templates.length === 1;
   });
 
   const savedData = JSON.parse(app.storage()[PRESETS_STORAGE_KEY]!) as {
     items: TranslationPreset[];
   };
-  expect(savedData.items[0]!.engine.templates[0]!.id).toBe("tpl-2");
-  expect(savedData.items[0]!.engine.defaultTemplateId).toBe("tpl-2");
+  expect(aiEngine(savedData.items[0]!).templates[0]!.id).toBe("tpl-2");
+  expect(aiEngine(savedData.items[0]!).defaultTemplateId).toBe("tpl-2");
 });
 
 test("presets ui: guards dirty navigation", async () => {

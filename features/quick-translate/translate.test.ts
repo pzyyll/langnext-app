@@ -7,7 +7,7 @@ import { makeChannel, makeModel, makeSeedStorage } from "../models/__tests__/fix
 import type { SavedModelRequestResolution } from "../models/store";
 import { PRESETS_STORAGE_KEY } from "../presets/store";
 import { getLanguageLabel } from "../presets/languages";
-import type { TranslationPreset } from "../presets/types";
+import type { AiPresetEngine, TranslationPreset } from "../presets/types";
 import {
   resolvePresetTemplate,
   translateWithPreset,
@@ -21,8 +21,6 @@ function makePreset(overrides: Partial<TranslationPreset> = {}): TranslationPres
     id: "preset-1",
     name: "Default EN to ZH",
     enabled: true,
-    sourceLanguage: "en",
-    targetLanguage: "zh",
     createdAt: "2026-11-19T00:00:00.000Z",
     updatedAt: "2026-11-19T00:00:00.000Z",
     engine: {
@@ -44,6 +42,11 @@ function makePreset(overrides: Partial<TranslationPreset> = {}): TranslationPres
     },
     ...overrides,
   };
+}
+
+function aiEngineOf(preset: TranslationPreset): AiPresetEngine {
+  if (preset.engine.kind !== "ai") throw new Error("expected an AI preset");
+  return preset.engine;
 }
 
 function makeReadyResolution(modelId: string, modelKey: string): SavedModelRequestResolution {
@@ -76,8 +79,6 @@ test("preset translation: saved preset sends exact prompt, leaves braces literal
     enabled: true,
   });
   const preset = makePreset({
-    sourceLanguage: "en",
-    targetLanguage: "zh",
     engine: {
       kind: "ai",
       modelIds: ["uuid-model-1"],
@@ -154,7 +155,7 @@ test("preset translation: saved preset sends exact prompt, leaves braces literal
 
 test("preset translation: renders the caller's resolved pair and uses its model key", async () => {
   const captured: Array<{ system: string; user: string; modelId: string }> = [];
-  const preset = makePreset({ sourceLanguage: "en", targetLanguage: "zh" });
+  const preset = makePreset();
 
   const result = await translateWithPreset(
     {
@@ -214,7 +215,7 @@ test("preset translation: streams partial text and forwards the preset reasoning
   expect(requests).toEqual([{ disableReasoning: true }]);
 
   const keepThinking = makePreset();
-  keepThinking.engine.disableReasoning = false;
+  aiEngineOf(keepThinking).disableReasoning = false;
   requests.length = 0;
   await translateWithPreset(
     { preset: keepThinking, sourceText: "Hello", sourceLanguage: "en", targetLanguage: "zh" },
@@ -270,7 +271,7 @@ test("preset translation: rejects blank input, disabled preset, and missing temp
   });
 
   const badTemplatePreset = makePreset();
-  badTemplatePreset.engine.defaultTemplateId = "missing-template";
+  aiEngineOf(badTemplatePreset).defaultTemplateId = "missing-template";
   const missingTemplateRes = await translateWithPreset(
     { preset: badTemplatePreset, sourceText: "Hello", sourceLanguage: "en", targetLanguage: "zh" },
     deps,

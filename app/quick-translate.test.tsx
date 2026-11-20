@@ -12,12 +12,23 @@ const HARNESS_PLATFORM_OS_KEY = "__test.qt.platformOs";
 const viewport = { width: 1040, height: 720, platform: "windows" as const };
 const AUTO_TRANSLATE_DEBOUNCE_MS = 500;
 
+/** Popup selections live in the popup's own preferences; presets never supply languages. */
+function popupPreferences(overrides: Record<string, unknown> = {}): string {
+  return JSON.stringify({
+    version: 1,
+    doubleCopyEnabled: false,
+    autoTranslate: false,
+    sourceLanguage: "en",
+    targetLanguage: "zh",
+    cards: [],
+    ...overrides,
+  });
+}
+
 const quickPreset: TranslationPreset = {
   id: "preset-1",
   name: "Quick Preset",
   enabled: true,
-  sourceLanguage: "en",
-  targetLanguage: "zh",
   createdAt: "2026-11-19T00:00:00.000Z",
   updatedAt: "2026-11-19T00:00:00.000Z",
   engine: {
@@ -79,6 +90,7 @@ test("quick window fits cards and translation content within the display work ar
       }),
       [PRESETS_STORAGE_KEY]: JSON.stringify({ version: 1, items: [quickPreset] }),
       "settings.language": "en",
+      "quickTranslate.preferences.v1": popupPreferences(),
     },
     network: {
       "POST https://api.openai.com/v1/chat/completions": {
@@ -219,6 +231,7 @@ test("desktop: quick window Language menu overlay does not trigger blur dismissa
       ...seeded,
       [PRESETS_STORAGE_KEY]: JSON.stringify({ version: 1, items: [quickPreset] }),
       "settings.language": "en",
+      "quickTranslate.preferences.v1": popupPreferences(),
     },
     network: {
       "POST https://api.openai.com/v1/chat/completions": {
@@ -501,7 +514,7 @@ test("double copy: shell seam delivers copied text to a newly mounted popup, tra
       ...seeded,
       [PRESETS_STORAGE_KEY]: JSON.stringify({ version: 1, items: [quickPreset] }),
       "settings.language": "en",
-      "quickTranslate.preferences.v1": JSON.stringify({ version: 1, doubleCopyEnabled: true }),
+      "quickTranslate.preferences.v1": popupPreferences({ doubleCopyEnabled: true }),
       "__test.qt.doubleCopyClipboard": "Clipboard manual text",
     },
     network: {

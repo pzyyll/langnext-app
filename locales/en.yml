@@ -288,9 +288,10 @@ presets:
     mutationInProgress: Another preset update is already in progress.
     notFound: Translation preset no longer exists.
     nameRequired: Preset name is required.
-    sourceLanguageInvalid: Source language is invalid.
-    targetLanguageInvalid: Target language is invalid.
     engineUnsupported: Preset engine type is unsupported.
+    engineTypeLocked: A saved preset keeps its engine type.
+    deeplKeyRequired: Enter a DeepL API key.
+    deeplKeyInvalid: Enter a DeepL API key without spaces.
     primaryModelRequired: Select a primary model.
     modelUnavailable: Selected model is not available.
     modelDuplicate: Models in the primary and fallback chain must be unique.
@@ -337,6 +338,9 @@ presets:
   section:
     models: Models and parameters
     prompts: Prompt templates
+  engine:
+    ai: AI Translation
+    deepl: DeepL API
   language:
     autoTarget: Automatic
   languages:

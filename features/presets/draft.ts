@@ -1,15 +1,13 @@
 import { t } from "nsh/i18n";
-import { AUTO_LANGUAGE, type SourceLanguageId, type TargetLanguageId } from "./languages";
 import { formatTemperature } from "./temperature";
-import type { PromptTemplate, SavePresetInput, TranslationPreset } from "./types";
+import type { PresetEngine, PromptTemplate, SavePresetInput, TranslationPreset } from "./types";
 
 /** Editable form state for a new or existing translation preset. */
 export interface PresetDraft {
   sourceId: string | null;
   name: string;
   enabled: boolean;
-  sourceLanguage: SourceLanguageId;
-  targetLanguage: TargetLanguageId;
+  engineKind: PresetEngine["kind"];
   primaryModelId: string | null;
   fallbackModelIds: string[];
   temperatureText: string;
@@ -17,17 +15,20 @@ export interface PresetDraft {
   disableReasoning: boolean;
   templates: PromptTemplate[];
   defaultTemplateId: string;
+  /** Replacement or new DeepL key typed in the editor; empty keeps a stored key. */
+  deepLApiKey: string;
+  /** True when the saved preset references a stored key; only a placeholder is shown. */
+  deepLApiKeyStored: boolean;
 }
 
 /** Creates a blank new preset draft with one localized Default prompt template. */
-export function createEmptyDraft(): PresetDraft {
+export function createEmptyDraft(engineKind: PresetEngine["kind"] = "ai"): PresetDraft {
   const defaultTemplateId = crypto.randomUUID();
   return {
     sourceId: null,
     name: "",
     enabled: true,
-    sourceLanguage: AUTO_LANGUAGE,
-    targetLanguage: AUTO_LANGUAGE,
+    engineKind,
     primaryModelId: null,
     fallbackModelIds: [],
     temperatureText: "",
@@ -42,25 +43,29 @@ export function createEmptyDraft(): PresetDraft {
       },
     ],
     defaultTemplateId,
+    deepLApiKey: "",
+    deepLApiKeyStored: false,
   };
 }
 
 /** Creates an isolated draft snapshot from a persisted preset record. */
 export function createDraftFromPreset(preset: TranslationPreset): PresetDraft {
+  const ai = preset.engine.kind === "ai" ? preset.engine : null;
   return {
     sourceId: preset.id,
     name: preset.name,
     enabled: preset.enabled,
-    sourceLanguage: preset.sourceLanguage,
-    targetLanguage: preset.targetLanguage,
-    primaryModelId: preset.engine.modelIds[0] ?? null,
-    fallbackModelIds: preset.engine.modelIds.slice(1),
-    temperatureText: formatTemperature(preset.engine.temperature),
+    engineKind: preset.engine.kind,
+    primaryModelId: ai?.modelIds[0] ?? null,
+    fallbackModelIds: ai ? ai.modelIds.slice(1) : [],
+    temperatureText: ai ? formatTemperature(ai.temperature) : "",
     maxOutputTokensText:
-      preset.engine.maxOutputTokens === null ? "" : String(preset.engine.maxOutputTokens),
-    disableReasoning: preset.engine.disableReasoning,
-    templates: preset.engine.templates.map((tpl) => ({ ...tpl })),
-    defaultTemplateId: preset.engine.defaultTemplateId,
+      ai && ai.maxOutputTokens !== null ? String(ai.maxOutputTokens) : "",
+    disableReasoning: ai ? ai.disableReasoning : true,
+    templates: ai ? ai.templates.map((tpl) => ({ ...tpl })) : [],
+    defaultTemplateId: ai?.defaultTemplateId ?? "",
+    deepLApiKey: "",
+    deepLApiKeyStored: preset.engine.kind === "deepl",
   };
 }
 
@@ -79,13 +84,14 @@ export function isDraftDirty(current: PresetDraft, baseline: PresetDraft): boole
     current.sourceId !== baseline.sourceId ||
     current.name !== baseline.name ||
     current.enabled !== baseline.enabled ||
-    current.sourceLanguage !== baseline.sourceLanguage ||
-    current.targetLanguage !== baseline.targetLanguage ||
+    current.engineKind !== baseline.engineKind ||
     current.primaryModelId !== baseline.primaryModelId ||
     current.temperatureText !== baseline.temperatureText ||
     current.maxOutputTokensText !== baseline.maxOutputTokensText ||
     current.disableReasoning !== baseline.disableReasoning ||
     current.defaultTemplateId !== baseline.defaultTemplateId ||
+    current.deepLApiKey !== baseline.deepLApiKey ||
+    current.deepLApiKeyStored !== baseline.deepLApiKeyStored ||
     current.fallbackModelIds.length !== baseline.fallbackModelIds.length ||
     current.templates.length !== baseline.templates.length
   ) {
@@ -116,14 +122,21 @@ export function isDraftDirty(current: PresetDraft, baseline: PresetDraft): boole
 
 /** Converts an editor draft into a SavePresetInput payload for the store. */
 export function draftToSaveInput(draft: PresetDraft): SavePresetInput {
+  if (draft.engineKind === "deepl") {
+    return {
+      id: draft.sourceId,
+      name: draft.name,
+      enabled: draft.enabled,
+      engine: { kind: "deepl", apiKey: draft.deepLApiKey },
+    };
+  }
+
   // Keep the primary slot distinct even when the user has only chosen fallbacks.
   const modelIds = [draft.primaryModelId ?? "", ...draft.fallbackModelIds];
   return {
     id: draft.sourceId,
     name: draft.name,
     enabled: draft.enabled,
-    sourceLanguage: draft.sourceLanguage,
-    targetLanguage: draft.targetLanguage,
     engine: {
       kind: "ai",
       modelIds,

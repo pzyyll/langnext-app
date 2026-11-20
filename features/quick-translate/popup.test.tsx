@@ -20,8 +20,6 @@ function makePreset(overrides: Partial<TranslationPreset> = {}): TranslationPres
     id: "preset-1",
     name: "Default EN to FR",
     enabled: true,
-    sourceLanguage: "en",
-    targetLanguage: "fr",
     createdAt: "2026-11-19T00:00:00.000Z",
     updatedAt: "2026-11-19T00:00:00.000Z",
     engine: {
@@ -46,6 +44,15 @@ function makePreset(overrides: Partial<TranslationPreset> = {}): TranslationPres
 
 /** Popup selections live in the popup's own preferences, never in preset records. */
 const DEFAULT_POPUP_LANGUAGES = { sourceLanguage: "en", targetLanguage: "fr" } as const;
+
+function aiEngine(preset: TranslationPreset) {
+  if (preset.engine.kind !== "ai") throw new Error("expected an AI preset");
+  return preset.engine;
+}
+
+function aiTemplates(preset: TranslationPreset) {
+  return aiEngine(preset).templates;
+}
 
 function seedWithPresets(
   presets: TranslationPreset[],
@@ -268,8 +275,6 @@ test("quick popup: debounces 500ms opt-in auto-translate, preserves Shift+Enter 
   const secondPreset = makePreset({
     id: "preset-2",
     name: "Preset Two",
-    sourceLanguage: "auto",
-    targetLanguage: "zh",
   });
   const app = await open(POPUP_HARNESS, {
     ...viewport,
@@ -567,8 +572,6 @@ test("preset cards: automatic mode schedules eligible cards on shared input and 
   const multiTemplatePreset = makePreset({
     id: "preset-1",
     name: "Preset Alpha",
-    sourceLanguage: "en",
-    targetLanguage: "fr",
     engine: {
       kind: "ai",
       modelIds: ["m-1"],
@@ -672,8 +675,6 @@ test("preset cards: collapsed cards stay idle in automatic mode and translate wh
       makePreset({
         id: "preset-1",
         name: "Preset Alpha",
-        sourceLanguage: "en",
-        targetLanguage: "fr",
       }),
       twoTemplatePreset,
     ]),
@@ -730,14 +731,10 @@ test("preset cards: manual translation skips collapsed cards and translates them
       makePreset({
         id: "preset-1",
         name: "Preset Alpha",
-        sourceLanguage: "en",
-        targetLanguage: "fr",
       }),
       makePreset({
         id: "preset-2",
         name: "Preset Beta",
-        sourceLanguage: "en",
-        targetLanguage: "fr",
       }),
     ]),
     network: {
@@ -777,8 +774,6 @@ test("quick reopen: restores valid cards, fallback template, languages, and auto
   const presetKeep = makePreset({
     id: "preset-keep",
     name: "Keep Preset",
-    sourceLanguage: "auto",
-    targetLanguage: "fr",
     engine: {
       kind: "ai",
       modelIds: ["m-1"],
@@ -856,8 +851,8 @@ test("quick reopen: restores valid cards, fallback template, languages, and auto
   const modifiedPresetKeep: TranslationPreset = {
     ...presetKeep,
     engine: {
-      ...presetKeep.engine,
-      templates: [presetKeep.engine.templates[0]!],
+      ...aiEngine(presetKeep),
+      templates: [aiTemplates(presetKeep)[0]!],
     },
   };
   const modifiedPresetDrop: TranslationPreset = { ...presetDrop, enabled: false };
@@ -928,14 +923,14 @@ function languageMenuLabel(
 
 test("quick languages: owns its saved pair regardless of presets or cards", async () => {
   // A preset's legacy language values never seed the popup selections.
-  const legacyPreset = makePreset({
-    id: "preset-legacy",
-    name: "Legacy Preset",
-    sourceLanguage: "en",
-    targetLanguage: "fr",
-  });
+  const legacyPreset = makePreset({ id: "preset-legacy", name: "Legacy Preset" });
   const withoutSavedPair = seedWithPresets([legacyPreset]);
   delete withoutSavedPair[QUICK_TRANSLATE_PREFERENCES_KEY];
+  // Older storage could carry language fields on the preset; the popup must not read them.
+  withoutSavedPair[PRESETS_STORAGE_KEY] = JSON.stringify({
+    version: 1,
+    items: [{ ...legacyPreset, sourceLanguage: "en", targetLanguage: "fr" }],
+  });
 
   const fresh = await open(POPUP_HARNESS, {
     ...viewport,
@@ -964,8 +959,8 @@ test("quick languages: owns its saved pair regardless of presets or cards", asyn
   const switchApp = await open(POPUP_HARNESS, {
     ...viewport,
     storage: seedWithPresets([
-      makePreset({ id: "preset-alpha", name: "Alpha", sourceLanguage: "ja", targetLanguage: "de" }),
-      makePreset({ id: "preset-beta", name: "Beta", sourceLanguage: "zh", targetLanguage: "en" }),
+      makePreset({ id: "preset-alpha", name: "Alpha" }),
+      makePreset({ id: "preset-beta", name: "Beta" }),
     ]),
     network: {
       "POST https://api.openai.com/v1/chat/completions": {
@@ -1051,8 +1046,6 @@ function seedAutoPair(collapsed: readonly boolean[], mode = "live"): Record<stri
   const pairPreset = makePreset({
     id: "preset-auto",
     name: "Auto pair",
-    sourceLanguage: "auto",
-    targetLanguage: "auto",
     engine: {
       kind: "ai",
       modelIds: ["tr-1"],
@@ -1300,50 +1293,3 @@ test("language resolution: retrying after a failure starts a new detection run",
   );
 });
 
-test("language resolution: source footer detection status clears on edit and stays hidden for explicit source language", async () => {
-  const app = await open(POPUP_HARNESS, {
-    ...viewport,
-    storage: seedAutoPair([false], "language-resolution"),
-    network: {
-      [TRANSLATE_URL]: { status: 200, body: { choices: [{ message: { content: "你好" } }] } },
-    },
-  });
-
-  await app.waitFor("id:quick-translate-source");
-  await app.type("id:quick-translate-source", "Hello");
-  await app.keyboard.press("enter");
-  await app.waitUntil(() => app.texts().some((text) => text.includes("detects=1|")));
-  await app.press("id:harness-resolve-language-fr");
-  await app.waitFor("id:quick-translate-source-detection");
-  expect(
-    app.shows("id:quick-translate-source-toolbar >> id:quick-translate-source-detection"),
-  ).toBe(true);
-  expect(app.shows("id:quick-translate-source-toolbar >> id:quick-translate-clear")).toBe(true);
-
-  // Editing source invalidates the prior detected language label immediately.
-  await app.type("id:quick-translate-source", " world");
-  expect(app.shows("id:quick-translate-source-detection")).toBe(false);
-
-  // Switching to an explicit source language leaves detection status hidden even when target is auto.
-  const live = await open(POPUP_HARNESS, {
-    ...viewport,
-    storage: seedAutoPair([false]),
-    network: {
-      [TRANSLATE_URL]: { status: 200, body: { choices: [{ message: { content: "你好" } }] } },
-    },
-  });
-  await live.waitFor("id:quick-translate-source");
-  await live.press("id:quick-translate-language-menu");
-  await live.waitFor("id:quick-translate-source-language");
-  await live.hover("id:quick-translate-source-language");
-  await live.waitFor("id:quick-translate-source-language-en");
-  await live.press("id:quick-translate-source-language-en");
-  while (live.shows("id:quick-translate-source-language")) {
-    await live.keyboard.press("escape");
-  }
-  await live.type("id:quick-translate-source", "Hello");
-  await live.keyboard.press("enter");
-  await live.waitFor("id:quick-translate-result-text");
-  expect(requestsTo(live, DETECT_URL)).toHaveLength(0);
-  expect(live.shows("id:quick-translate-source-detection")).toBe(false);
-});

@@ -8,7 +8,7 @@ import {
   resolveEffectiveDisplayName,
 } from "../models/model-helpers";
 import { modelsStore } from "../models/store";
-import type { ModelChoice } from "./types";
+import type { ModelChoice, TranslationPreset } from "./types";
 
 export interface ModelBindingInfo {
   id: string;
@@ -174,4 +174,12 @@ export function summarizePresetModels(modelIds: readonly string[]): string {
     primary,
     count: modelIds.length - 1,
   });
+}
+
+/** Formats a concise rail summary for any preset engine. */
+export function summarizePreset(preset: Pick<TranslationPreset, "engine">): string {
+  if (preset.engine.kind === "deepl") {
+    return t("presets.engine.deepl");
+  }
+  return summarizePresetModels(preset.engine.modelIds);
 }

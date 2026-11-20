@@ -1,7 +1,12 @@
 import { expect, open, test } from "nsh/test";
 import { makeChannel, makeModel, makeSeedStorage } from "../models/__tests__/fixtures";
 import { PRESETS_STORAGE_KEY } from "./store";
-import type { TranslationPreset } from "./types";
+import type { AiPresetEngine, TranslationPreset } from "./types";
+
+function aiEngine(preset: TranslationPreset): AiPresetEngine {
+  if (preset.engine.kind !== "ai") throw new Error("expected an AI preset");
+  return preset.engine;
+}
 
 const APP_ENTRY = "../../App.tsx";
 const viewport = { width: 1040, height: 720, platform: "windows" as const };
@@ -11,8 +16,6 @@ function makeSamplePreset(overrides: Partial<TranslationPreset> = {}): Translati
     id: "preset-1",
     name: "Saved Preset",
     enabled: true,
-    sourceLanguage: "auto",
-    targetLanguage: "zh",
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
     engine: {
@@ -82,7 +85,7 @@ test("presets storage UI: retries a failed load", async () => {
 });
 
 test("preset recovery UI: can add a preset when all saved entries were skipped", async () => {
-  const legacy = { ...makeSamplePreset(), name: "Unreadable Preset", targetLanguage: null };
+  const legacy = { ...makeSamplePreset(), name: "Unreadable Preset", enabled: "yes" };
   const raw = JSON.stringify({ version: 1, items: [legacy] });
   const app = await open(APP_ENTRY, {
     ...viewport,
@@ -110,9 +113,12 @@ test("preset recovery UI: can add a preset when all saved entries were skipped",
   await app.press("id:preset-save");
   await app.waitUntil(() => app.storage()[PRESETS_STORAGE_KEY] !== raw);
   const saved = app.storage();
-  const [{ targetLanguage }, created] = JSON.parse(saved[PRESETS_STORAGE_KEY]!).items;
-  expect(targetLanguage).toBeNull();
+  const [unreadable, created] = JSON.parse(saved[PRESETS_STORAGE_KEY]!).items;
+  expect(unreadable.enabled).toBe("yes");
+  expect(unreadable.sourceLanguage).toBeUndefined();
   expect(created.name).toBe("Replacement Preset");
+  expect(created.sourceLanguage).toBeUndefined();
+  expect(created.targetLanguage).toBeUndefined();
 
   const reopened = await open(APP_ENTRY, { ...viewport, storage: saved });
   await reopened.press("id:nav-presets");
@@ -125,7 +131,7 @@ test("preset recovery UI: can add a preset when all saved entries were skipped",
 test("preset recovery UI: dismisses the skipped notice across navigation and restart", async () => {
   const raw = JSON.stringify({
     version: 1,
-    items: [{ ...makeSamplePreset({ id: "legacy" }), targetLanguage: null }, makeSamplePreset()],
+    items: [{ ...makeSamplePreset({ id: "legacy" }), enabled: "yes" }, makeSamplePreset()],
   });
   const app = await open(APP_ENTRY, {
     ...viewport,
@@ -233,7 +239,7 @@ test("presets storage UI: retains bindings on Models load error", async () => {
     id: "p-err",
     name: "Saved During Error",
     engine: {
-      ...makeSamplePreset().engine,
+      ...aiEngine(makeSamplePreset()),
       modelIds: ["m-ch-off", "m-ok"],
     },
   });
@@ -285,7 +291,7 @@ test("presets storage UI: retains bindings on Models load error", async () => {
   const savedAfterErrRename = JSON.parse(seededOnError[PRESETS_STORAGE_KEY]!) as {
     items: TranslationPreset[];
   };
-  expect(savedAfterErrRename.items[0]!.engine.modelIds).toEqual(["m-ch-off", "m-ok"]);
+  expect(aiEngine(savedAfterErrRename.items[0]!).modelIds).toEqual(["m-ch-off", "m-ok"]);
 
   await errApp.press("id:preset-manage-models");
   await errApp.waitFor("id:models-page");

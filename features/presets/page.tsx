@@ -29,7 +29,11 @@ import {
   type PresetDraft,
 } from "./draft";
 import { PresetEditor, type FocusableEditorField } from "./editor";
-import { readAvailableModelChoices, summarizePresetModels } from "./model-choices";
+import {
+  readAvailableModelChoices,
+  summarizePreset,
+  summarizePresetModels,
+} from "./model-choices";
 import type { TemplateEditableField } from "./prompt-templates";
 import { dismissSkippedNotice, skippedNoticeDismissed } from "./skipped-notice";
 import { presetsStore } from "./store";
@@ -52,7 +56,7 @@ export function PresetsPage(props: PresetsPageProps) {
 
   const selectedIdSignal = signal<string | null>(initialFirst?.id ?? null);
   const selectedTemplateIdSignal = signal<string | null>(
-    initialFirst?.engine.templates[0]?.id ?? null,
+    initialFirst?.engine.kind === "ai" ? (initialFirst.engine.templates[0]?.id ?? null) : null,
   );
   const draftSignal = signal<PresetDraft | null>(initialDraft);
   const baselineSignal = signal<PresetDraft | null>(initialDraft ? cloneDraft(initialDraft) : null);
@@ -145,7 +149,9 @@ export function PresetsPage(props: PresetsPageProps) {
     const nextDraft = createDraftFromPreset(first);
     batch(() => {
       selectedIdSignal.set(first.id);
-      selectedTemplateIdSignal.set(first.engine.templates[0]?.id ?? null);
+      selectedTemplateIdSignal.set(
+        first.engine.kind === "ai" ? (first.engine.templates[0]?.id ?? null) : null,
+      );
       baselineSignal.set(cloneDraft(nextDraft));
       draftSignal.set(nextDraft);
     });
@@ -232,13 +238,12 @@ export function PresetsPage(props: PresetsPageProps) {
       lastFocusedField = { kind: "name" };
     }
     const currentTpl = selectedTemplateIdSignal();
+    const nextTemplates = record.engine.kind === "ai" ? record.engine.templates : [];
     const keepTpl =
-      samePreset &&
-      currentTpl !== null &&
-      record.engine.templates.some((tpl) => tpl.id === currentTpl);
+      samePreset && currentTpl !== null && nextTemplates.some((tpl) => tpl.id === currentTpl);
     batch(() => {
       selectedIdSignal.set(record.id);
-      selectedTemplateIdSignal.set(keepTpl ? currentTpl : (record.engine.templates[0]?.id ?? null));
+      selectedTemplateIdSignal.set(keepTpl ? currentTpl : (nextTemplates[0]?.id ?? null));
       baselineSignal.set(cloneDraft(nextDraft));
       draftSignal.set(nextDraft);
       autoFocusNameSignal.set(false);
@@ -513,11 +518,13 @@ export function PresetsPage(props: PresetsPageProps) {
                                   <Badge tone="warning" label={t("presets.editor.unsaved")} />
                                 </View>
                                 <Text class="truncate text-xs text-muted-foreground">
-                                  {summarizePresetModels(
-                                    draftSignal()?.primaryModelId
-                                      ? [draftSignal()!.primaryModelId!]
-                                      : [],
-                                  )}
+                                  {draftSignal()?.engineKind === "deepl"
+                                    ? t("presets.engine.deepl")
+                                    : summarizePresetModels(
+                                        draftSignal()?.primaryModelId
+                                          ? [draftSignal()!.primaryModelId!]
+                                          : [],
+                                      )}
                                 </Text>
                               </View>
                             </View>
@@ -589,7 +596,7 @@ export function PresetsPage(props: PresetsPageProps) {
                                         />
                                       </View>
                                       <Text class="truncate text-xs text-muted-foreground">
-                                        {summarizePresetModels(preset().engine.modelIds)}
+                                        {summarizePreset(preset())}
                                       </Text>
                                     </View>
                                   </Button>

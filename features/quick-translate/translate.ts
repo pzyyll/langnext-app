@@ -54,14 +54,18 @@ export function resolvePresetTemplate(
   preset: Pick<TranslationPreset, "engine">,
   templateId?: string | null,
 ): { template: PromptTemplate; fellBackToDefault: boolean } | null {
-  const templates = preset.engine.templates;
+  const engine = preset.engine;
+  if (engine.kind !== "ai") {
+    return null;
+  }
+  const templates = engine.templates;
   if (templateId) {
     const exact = templates.find((item) => item.id === templateId);
     if (exact) {
       return { template: exact, fellBackToDefault: false };
     }
   }
-  const fallback = templates.find((item) => item.id === preset.engine.defaultTemplateId);
+  const fallback = templates.find((item) => item.id === engine.defaultTemplateId);
   if (!fallback) {
     return null;
   }
@@ -132,6 +136,10 @@ export async function translateWithPreset(
   }
   if (sourceText.trim().length === 0) {
     return failureResult(t("quickTranslate.error.blankInput"));
+  }
+
+  if (preset.engine.kind !== "ai") {
+    return failureResult(t("presets.error.engineUnsupported"));
   }
 
   const effectiveTemplateId = input.templateId ?? preset.engine.defaultTemplateId;
