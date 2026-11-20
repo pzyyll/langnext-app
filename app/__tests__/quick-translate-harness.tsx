@@ -4,6 +4,7 @@ import { t } from "nsh/i18n";
 import { loadSplitRailWidths } from "../../components/layout/split-rail";
 import { Button } from "../../components/ui/button";
 import { loadModelsState } from "../../features/models/store";
+import { ocrSettingsStore } from "../../features/ocr/settings";
 import { presetsStore } from "../../features/presets/store";
 import { loadQuickTranslatePreferences } from "../../features/quick-translate/preferences";
 import { loadAppearance } from "../../features/settings/appearance";
@@ -20,6 +21,13 @@ export const HARNESS_SHORTCUT_MODE_KEY = "__test.qt.shortcutMode";
 export const HARNESS_PLATFORM_OS_KEY = "__test.qt.platformOs";
 export const HARNESS_DOUBLE_COPY_MODE_KEY = "__test.qt.doubleCopyMode";
 export const HARNESS_DOUBLE_COPY_CLIPBOARD_KEY = "__test.qt.doubleCopyClipboard";
+export const HARNESS_OCR_CAPTURE_KEY = "__test.qt.ocrCapture";
+
+/** Smallest valid PNG: what the OS capture boundary returns for a confirmed selection. */
+const HARNESS_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==";
+
+type HarnessCaptureMode = "png" | "cancel" | "tooLarge" | "fail";
 
 type ActionMenuItem = Exclude<MenuItem, { type: "separator" }>;
 
@@ -32,6 +40,7 @@ function QuickTranslateHarness(config: {
   doubleCopyMode: "ok" | "throw";
   initialClipboard: string;
   platformOs?: string;
+  ocrCapture: HarnessCaptureMode;
 }) {
   let latestTray: TrayOptions | null = null;
   let registeredCallback: (() => void) | null = null;
@@ -47,6 +56,8 @@ function QuickTranslateHarness(config: {
   const clipboardReadCount = signal(0);
   const trayMenuLabels = signal("");
   const lastRegisteredShortcut = signal("");
+  const ocrCaptureCount = signal(0);
+  const ocrCaptureCaption = signal("");
   const mainHidden = signal(false);
 
   const invokeTrayQuickTranslate = () => {
@@ -73,6 +84,17 @@ function QuickTranslateHarness(config: {
             readClipboardText: async () => {
               clipboardReadCount.set(clipboardReadCount() + 1);
               return nextClipboardText;
+            },
+            captureRegion: async ({ overlay }) => {
+              ocrCaptureCount.set(ocrCaptureCount() + 1);
+              ocrCaptureCaption.set(overlay.caption);
+              if (config.ocrCapture === "cancel") return { status: "cancelled" };
+              if (config.ocrCapture === "tooLarge") return { status: "tooLarge" };
+              if (config.ocrCapture === "fail") return { status: "failed" };
+              return {
+                status: "captured",
+                png: Uint8Array.from(Buffer.from(HARNESS_PNG_BASE64, "base64")),
+              };
             },
             onPointerPress() {
               pointerPressRegisterCount.set(pointerPressRegisterCount() + 1);
@@ -197,7 +219,7 @@ function QuickTranslateHarness(config: {
           })()}
         </Text>
         <Text testID="harness-metrics">
-          {`reg=${registerCount()}|unreg=${unregisterCount()}|dcReg=${doubleCopyRegisterCount()}|dcStop=${doubleCopyStopCount()}|dcReads=${clipboardReadCount()}|ppReg=${pointerPressRegisterCount()}|ppStop=${pointerPressStopCount()}|shortcut=${lastRegisteredShortcut()}|tray=${trayMenuLabels()}|mainHidden=${mainHidden()}`}
+          {`ocrCap=${ocrCaptureCount()}|ocrCaption=${ocrCaptureCaption()}|reg=${registerCount()}|unreg=${unregisterCount()}|dcReg=${doubleCopyRegisterCount()}|dcStop=${doubleCopyStopCount()}|dcReads=${clipboardReadCount()}|ppReg=${pointerPressRegisterCount()}|ppStop=${pointerPressStopCount()}|shortcut=${lastRegisteredShortcut()}|tray=${trayMenuLabels()}|mainHidden=${mainHidden()}`}
         </Text>
       </View>
     </View>
@@ -210,23 +232,30 @@ void Promise.all([
   loadTransparency(),
   loadQuickTranslatePreferences(),
   loadModelsState(),
+  ocrSettingsStore.load(),
   presetsStore.load(),
   loadSplitRailWidths(),
   Storage.getItem(HARNESS_SHORTCUT_MODE_KEY),
   Storage.getItem(HARNESS_PLATFORM_OS_KEY),
   Storage.getItem(HARNESS_DOUBLE_COPY_MODE_KEY),
   Storage.getItem(HARNESS_DOUBLE_COPY_CLIPBOARD_KEY),
-]).then(([, , , , , , , modeRaw, osRaw, dcModeRaw, dcClipboardRaw]) => {
+  Storage.getItem(HARNESS_OCR_CAPTURE_KEY),
+]).then(([, , , , , , , , modeRaw, osRaw, dcModeRaw, dcClipboardRaw, ocrCaptureRaw]) => {
   const shortcutMode = modeRaw === "false" || modeRaw === "reject" ? modeRaw : "ok";
   const doubleCopyMode = dcModeRaw === "throw" ? "throw" : "ok";
   const initialClipboard = dcClipboardRaw ?? "";
   const platformOs = osRaw || undefined;
+  const ocrCapture: HarnessCaptureMode =
+    ocrCaptureRaw === "cancel" || ocrCaptureRaw === "tooLarge" || ocrCaptureRaw === "fail"
+      ? ocrCaptureRaw
+      : "png";
   mount(() => (
     <QuickTranslateHarness
       shortcutMode={shortcutMode}
       doubleCopyMode={doubleCopyMode}
       initialClipboard={initialClipboard}
       platformOs={platformOs}
+      ocrCapture={ocrCapture}
     />
   ));
 });

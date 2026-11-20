@@ -68,7 +68,9 @@ export function encodePngForUpload(bytes: Uint8Array): ImageInput | OcrRecogniti
   return { mimeType: "image/png", base64: Buffer.from(bytes).toString("base64") };
 }
 
-function isRecognitionOutcome(value: ImageInput | OcrRecognitionOutcome): value is OcrRecognitionOutcome {
+function isRecognitionOutcome(
+  value: ImageInput | OcrRecognitionOutcome,
+): value is OcrRecognitionOutcome {
   return "status" in value;
 }
 

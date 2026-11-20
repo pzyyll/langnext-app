@@ -266,7 +266,8 @@ export function createAiClient(options: AiClientOptions): AiClient {
       );
     },
 
-    async streamText(input, request, callOptions) {      const resolved = resolveOperation(registry, input, {
+    async streamText(input, request, callOptions) {
+      const resolved = resolveOperation(registry, input, {
         kind: "model",
         modelId: request.modelId,
       });

@@ -558,7 +558,7 @@ test("double copy: controller reads clipboard once, skips when disabled or empty
   pendingReads.shift()!.resolve("   ");
   await emptyPromise;
   expect(controller.sourceText()).toBe("Keep draft");
-  expect(controller.sourceDeliverySeq()).toBe(0);
+  expect(controller.sourceDelivery()).toBeNull();
 
   // 4. Slow read superseded by close -> never reopens or replaces source.
   const closedPromise = controller.activateDoubleCopy({ hasValidCopy: true });
@@ -580,11 +580,13 @@ test("double copy: controller reads clipboard once, skips when disabled or empty
   secondPending.resolve("Fresh second text");
   await fastSecond;
   expect(controller.sourceText()).toBe("Fresh second text");
-  expect(controller.sourceDeliverySeq()).toBe(1);
+  expect(controller.sourceDelivery()?.seq).toBe(1);
+  expect(controller.sourceDelivery()?.kind).toBe("clipboard");
   firstPending.resolve("Stale first text");
   await slowFirst;
   expect(controller.sourceText()).toBe("Fresh second text");
-  expect(controller.sourceDeliverySeq()).toBe(1);
+  expect(controller.sourceDelivery()?.seq).toBe(1);
+  expect(controller.sourceDelivery()?.kind).toBe("clipboard");
 
   // 6. Slow read superseded by manual edit -> preserves manual draft.
   const manualRace = controller.activateDoubleCopy({ hasValidCopy: true });
@@ -593,7 +595,8 @@ test("double copy: controller reads clipboard once, skips when disabled or empty
   pendingReads.shift()!.resolve("Late clipboard text");
   await manualRace;
   expect(controller.sourceText()).toBe("Manual override");
-  expect(controller.sourceDeliverySeq()).toBe(1);
+  expect(controller.sourceDelivery()?.seq).toBe(1);
+  expect(controller.sourceDelivery()?.kind).toBe("clipboard");
 });
 
 test("double copy: shell seam delivers copied text to a newly mounted popup, translates with Auto-translate off, keeps typing opt-in, and handles worker failure", async () => {
@@ -682,4 +685,281 @@ test("double copy: shell seam delivers copied text to a newly mounted popup, tra
   await failed.press("id:harness-trigger-double-copy-valid");
   expect(failed.window("quick-translate").state()).toBeNull();
   expect(failed.texts().join(" ")).toContain("dcReads=0|");
+});
+
+const HARNESS_OCR_CAPTURE_KEY = "__test.qt.ocrCapture";
+const OCR_STORAGE_KEY = "settings.ocr.v1";
+const OCR_TEXT = "Screen line one\n第二行";
+const OCR_CAPTION = "Drag to select · Tab switches display · Space and Enter confirm · Esc cancels";
+const OCR_BUTTON = "id:quick-translate-header >> id:quick-translate-ocr";
+
+/** Vision recognition runs on its own route, so each request kind stays countable. */
+function ocrAnswers(text: string, delay?: number): unknown {
+  return {
+    output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text }] }],
+    ...(delay === undefined ? {} : {}),
+  };
+}
+
+function ocrSeed(extra: Record<string, string> = {}) {
+  return {
+    ...makeSeedStorage({
+      channels: [
+        makeChannel({ id: "ch-1", adapterId: "openai-compatible", enabled: true }),
+        makeChannel({
+          id: "ch-vision",
+          presetId: "openai",
+          adapterId: "openai-responses",
+          baseUrl: "https://vision.example.com/v1",
+          sortOrder: 1,
+          enabled: true,
+        }),
+      ],
+      models: [
+        makeModel({ id: "m-1", providerId: "ch-1", enabled: true }),
+        makeModel({ id: "m-vision", providerId: "ch-vision", modelKey: "gpt-4.1", enabled: true }),
+      ],
+      credentials: { "ch-1": "sk-test", "ch-vision": "sk-vision" },
+    }),
+    [PRESETS_STORAGE_KEY]: JSON.stringify({ version: 1, items: [quickPreset] }),
+    "settings.language": "en",
+    "quickTranslate.preferences.v1": popupPreferences({
+      cards: [{ id: "card-1", presetId: "preset-1", templateId: null, collapsed: false }],
+    }),
+    [OCR_STORAGE_KEY]: JSON.stringify({ version: 1, kind: "ai", modelId: "m-vision" }),
+    ...extra,
+  };
+}
+
+const ocrRoutes = (answer: string, delay?: number) => ({
+  "POST https://vision.example.com/v1/responses": {
+    status: 200,
+    body: ocrAnswers(answer),
+    ...(delay === undefined ? {} : { delay }),
+  },
+  "POST https://api.openai.com/v1/chat/completions": {
+    status: 200,
+    body: { choices: [{ message: { content: "翻译结果" } }] },
+  },
+});
+
+test("quick ocr: replaces the draft with the recognized text and translates once", async () => {
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    storage: ocrSeed(),
+    network: ocrRoutes(JSON.stringify({ text: OCR_TEXT })),
+  });
+
+  await app.press("id:harness-tray-quick-translate");
+  await app.waitFor("id:quick-translate-source");
+  await app.press("id:quick-translate-pin");
+  await app.type("id:quick-translate-source", "old draft");
+  expect(app.shows(OCR_BUTTON)).toBe(true);
+
+  await app.press(OCR_BUTTON);
+  await app.waitUntil(() => app.value("id:quick-translate-source") === OCR_TEXT);
+
+  const vision = app.requests().filter((request) => request.url.includes("vision.example.com"));
+  expect(vision).toHaveLength(1);
+  const sent = JSON.parse(vision[0]!.body!);
+  expect(sent.model).toBe("gpt-4.1");
+  expect(sent.input[0].content[1].type).toBe("input_image");
+  expect(app.texts().some((line) => line.includes(`ocrCaption=${OCR_CAPTION}`))).toBe(true);
+
+  await app.waitUntil(() =>
+    app.requests().some((request) => request.url.includes("api.openai.com")),
+  );
+  const translations = app.requests().filter((request) => request.url.includes("api.openai.com"));
+  expect(translations).toHaveLength(1);
+  expect(JSON.parse(translations[0]!.body!).messages[1].content).toBe(OCR_TEXT);
+
+  // The same window returns with the editor open, its line breaks kept, and the pin state intact.
+  expect(app.window("quick-translate").state()?.visible).toBe(true);
+  expect(app.shows("id:quick-translate-source")).toBe(true);
+  expect(app.shows("id:quick-translate-pin")).toBe(true);
+  expect(app.texts()).toContain("翻译结果");
+  expect(app.texts().some((line) => line.includes("ocrCap=1"))).toBe(true);
+});
+
+test("quick ocr: cancelling keeps the draft and restores the popup", async () => {
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    storage: ocrSeed({ [HARNESS_OCR_CAPTURE_KEY]: "cancel" }),
+    network: ocrRoutes(JSON.stringify({ text: OCR_TEXT })),
+  });
+
+  await app.press("id:harness-tray-quick-translate");
+  await app.waitFor("id:quick-translate-source");
+  await app.type("id:quick-translate-source", "kept draft");
+
+  await app.press(OCR_BUTTON);
+  await app.waitUntil(() => app.texts().some((line) => line.includes("ocrCap=1")));
+  await app.waitUntil(() => app.window("quick-translate").state()?.visible === true);
+
+  expect(app.value("id:quick-translate-source")).toBe("kept draft");
+  expect(app.requests()).toHaveLength(0);
+  expect(app.shows("id:quick-translate-ocr-status")).toBe(false);
+});
+
+test("quick ocr: a blank answer keeps the draft, shows an alert, and sends no translation", async () => {
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    storage: ocrSeed(),
+    network: ocrRoutes(JSON.stringify({ text: "" })),
+  });
+
+  await app.press("id:harness-tray-quick-translate");
+  await app.waitFor("id:quick-translate-source");
+  await app.type("id:quick-translate-source", "kept draft");
+
+  await app.press(OCR_BUTTON);
+  await app.waitFor("id:quick-translate-ocr-status");
+
+  expect(app.texts()).toContain("No text was found in the selected area.");
+  expect(app.value("id:quick-translate-source")).toBe("kept draft");
+  expect(app.requests().filter((request) => request.url.includes("api.openai.com"))).toHaveLength(
+    0,
+  );
+});
+
+test("quick ocr: a provider failure keeps the draft and never imports partial text", async () => {
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    storage: ocrSeed(),
+    network: {
+      "POST https://vision.example.com/v1/responses": { status: 500, body: { error: "busy" } },
+      "POST https://api.openai.com/v1/chat/completions": {
+        status: 200,
+        body: { choices: [{ message: { content: "翻译结果" } }] },
+      },
+    },
+  });
+
+  await app.press("id:harness-tray-quick-translate");
+  await app.waitFor("id:quick-translate-source");
+  await app.type("id:quick-translate-source", "kept draft");
+
+  await app.press(OCR_BUTTON);
+  await app.waitFor("id:quick-translate-ocr-status");
+
+  expect(app.value("id:quick-translate-source")).toBe("kept draft");
+  expect(app.requests().filter((request) => request.url.includes("api.openai.com"))).toHaveLength(
+    0,
+  );
+});
+
+test("quick ocr: typing during recognition wins over the late answer, and repeat presses wait", async () => {
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    storage: ocrSeed(),
+    network: ocrRoutes(JSON.stringify({ text: OCR_TEXT }), 1_200),
+  });
+
+  await app.press("id:harness-tray-quick-translate");
+  await app.waitFor("id:quick-translate-source");
+
+  await app.press(OCR_BUTTON);
+  await app.waitUntil(() => app.texts().some((line) => line.includes("ocrCap=1")));
+
+  // While the model reads the crop, the action is disabled: one session at a time.
+  await app.waitFor(OCR_BUTTON);
+  expect(app.enabled(OCR_BUTTON)).toBe(false);
+
+  await app.waitFor("id:quick-translate-source");
+  await app.type("id:quick-translate-source", "typed instead");
+  await app.wait(1_400);
+
+  expect(app.value("id:quick-translate-source")).toBe("typed instead");
+  expect(app.texts().some((line) => line.includes("ocrCap=1"))).toBe(true);
+  expect(app.requests().filter((request) => request.url.includes("api.openai.com"))).toHaveLength(
+    0,
+  );
+});
+
+test("quick ocr: closing and reopening before the old result keeps the new draft", async () => {
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    storage: ocrSeed(),
+    network: ocrRoutes(JSON.stringify({ text: OCR_TEXT }), 250),
+  });
+
+  await app.press("id:harness-tray-quick-translate");
+  await app.waitFor("id:quick-translate-source");
+  await app.press(OCR_BUTTON);
+  await app.waitUntil(() => app.texts().some((line) => line.includes("ocrCap=1")));
+
+  await app.window("quick-translate").pressClose();
+  await app.waitUntil(() => app.window("quick-translate").state()?.visible !== true);
+  await app.keyboard.press("ctrl+shift+t");
+  await app.waitUntil(() => app.window("quick-translate").state()?.visible === true);
+  await app.waitFor("id:quick-translate-source");
+  expect(app.value("id:quick-translate-source")).toBe("");
+
+  await app.wait(400);
+  expect(app.value("id:quick-translate-source")).toBe("");
+  expect(app.requests().filter((request) => request.url.includes("api.openai.com"))).toHaveLength(
+    0,
+  );
+});
+
+test("quick ocr: a queued auto-translate debounce never repeats the delivered text", async () => {
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    storage: ocrSeed({
+      "quickTranslate.preferences.v1": popupPreferences({
+        autoTranslate: true,
+        cards: [{ id: "card-1", presetId: "preset-1", templateId: null, collapsed: false }],
+      }),
+    }),
+    network: ocrRoutes(JSON.stringify({ text: OCR_TEXT })),
+  });
+
+  await app.press("id:harness-tray-quick-translate");
+  await app.waitFor("id:quick-translate-source");
+  await app.type("id:quick-translate-source", "hello");
+  await app.press(OCR_BUTTON);
+  await app.waitUntil(() => app.value("id:quick-translate-source") === OCR_TEXT);
+  await app.wait(700);
+
+  const translations = app
+    .requests()
+    .filter(
+      (request) =>
+        request.url.includes("api.openai.com") && (request.body ?? "").includes("Screen line one"),
+    );
+  expect(translations).toHaveLength(1);
+});
+
+test("quick ocr: no eligible card replaces the text without a translation", async () => {
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    storage: ocrSeed({
+      "quickTranslate.preferences.v1": popupPreferences({
+        cards: [{ id: "card-1", presetId: "preset-1", templateId: null, collapsed: true }],
+      }),
+    }),
+    network: ocrRoutes(JSON.stringify({ text: OCR_TEXT })),
+  });
+
+  await app.press("id:harness-tray-quick-translate");
+  await app.waitFor("id:quick-translate-source");
+  await app.press(OCR_BUTTON);
+  await app.waitUntil(() => app.value("id:quick-translate-source") === OCR_TEXT);
+
+  expect(app.requests().filter((request) => request.url.includes("api.openai.com"))).toHaveLength(
+    0,
+  );
+});
+
+test("quick ocr: no OCR action outside Windows", async () => {
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    platform: "macos",
+    storage: ocrSeed(),
+    network: ocrRoutes(JSON.stringify({ text: OCR_TEXT })),
+  });
+
+  await app.press("id:harness-tray-quick-translate");
+  await app.waitFor("id:quick-translate-source");
+  expect(app.shows(OCR_BUTTON)).toBe(false);
 });

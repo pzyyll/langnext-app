@@ -293,9 +293,7 @@ test("ocr recognize: refuses prose and Markdown instead of importing them as tex
         "POST https://vision.example.com/v1/responses": {
           status: 200,
           body: {
-            output: [
-              { type: "message", content: [{ type: "output_text", text: answer }] },
-            ],
+            output: [{ type: "message", content: [{ type: "output_text", text: answer }] }],
           },
         },
       },
@@ -311,7 +309,10 @@ test("ocr recognize: refuses prose and Markdown instead of importing them as tex
 });
 
 test("ocr recognize: rejects an invalid or oversized PNG before resolving a model", async () => {
-  const invalid = await recognizeScreenshot({ kind: "ai", modelId: "any-model" }, new Uint8Array([1, 2, 3]));
+  const invalid = await recognizeScreenshot(
+    { kind: "ai", modelId: "any-model" },
+    new Uint8Array([1, 2, 3]),
+  );
   expect(invalid).toEqual({ status: "failed", message: t("ocr.failure.invalidImage") });
 
   const oversized = new Uint8Array(OCR_MAX_IMAGE_BYTES + 1);

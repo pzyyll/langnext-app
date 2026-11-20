@@ -478,6 +478,8 @@ quickTranslate:
   pin: 置顶窗口
   unpin: 取消置顶
   close: 关闭快速翻译
+  ocr: 读取屏幕文字
+  ocrRecognizing: 正在识别文字…
   shortcutUnavailable: 全局快捷键 Ctrl+Shift+T 不可用，请通过托盘菜单打开快速翻译。
   presetLabel: 预设
   presetPlaceholder: 选择预设…

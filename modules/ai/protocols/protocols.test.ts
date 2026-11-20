@@ -1082,19 +1082,18 @@ test("protocol image input: rejects output the provider marks as truncated", asy
     {
       protocol: geminiProtocol,
       body: {
-        candidates: [
-          { finishReason: "MAX_TOKENS", content: { parts: [{ text: "partial" }] } },
-        ],
+        candidates: [{ finishReason: "MAX_TOKENS", content: { parts: [{ text: "partial" }] } }],
       },
     },
   ];
 
   for (const item of cases) {
     const http = createJsonHttpClient({ fetchImpl: fixedFetch(item.body) });
-    await expect(item.protocol.generateTextFromImage!(connection, request, { http })).rejects
-      .toMatchObject({
-        kind: "invalid_response",
-        message: t("protocol.error.outputTruncated"),
-      });
+    await expect(
+      item.protocol.generateTextFromImage!(connection, request, { http }),
+    ).rejects.toMatchObject({
+      kind: "invalid_response",
+      message: t("protocol.error.outputTruncated"),
+    });
   }
 });

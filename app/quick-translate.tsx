@@ -1,4 +1,15 @@
-import { cleanup, Clipboard, computed, effect, platform, Scroll, signal, View } from "nsh";
+import {
+  cleanup,
+  Clipboard,
+  computed,
+  effect,
+  platform,
+  Scroll,
+  signal,
+  token,
+  View,
+  type ViewRef,
+} from "nsh";
 import { Application, GlobalShortcut, titleBar, Window } from "nsh/desktop";
 import { t } from "nsh/i18n";
 import { Button } from "../components/ui/button";
@@ -16,6 +27,7 @@ import {
   saveQuickTranslatePopupState,
 } from "../features/quick-translate/preferences";
 import { createQuickTranslateSession } from "../features/quick-translate/session";
+import { canCaptureScreen } from "../platform/screen-capture";
 import { canMonitorPointerPress, type DoubleCopyBinding } from "../platform/quick-translate";
 import {
   nativeDoubleCopyBinding,
@@ -57,6 +69,11 @@ export function createQuickTranslateController(
     onToggleAutoTranslate: () => {
       void saveQuickTranslatePopupState({ autoTranslate: !autoTranslatePreference() });
     },
+    captureOverlayTheme: () => ({
+      accentColor: token("accent"),
+      textColor: token("foreground"),
+      backdropColor: token("background"),
+    }),
     ...options,
   });
 }
@@ -134,9 +151,11 @@ const ROOT_BORDER_HEIGHT = 2;
 function QuickTranslateWindowBody(props: { controller: QuickTranslateController }) {
   const headerHeight = signal(0);
   const contentHeight = signal(0);
+  const ocrAction = signal<ViewRef | null>(null);
+  let handledOcrFocusSeq = props.controller.ocrFocusSeq();
   const session = createQuickTranslateSession({
     sourceText: props.controller.sourceText,
-    sourceDeliverySeq: props.controller.sourceDeliverySeq,
+    sourceDelivery: props.controller.sourceDelivery,
     onSourceTextChange: (text) => props.controller.setSourceText(text),
     autoTranslate: props.controller.autoTranslate,
     onOverlayOpenChange: (menuId, open) => props.controller.setMenuOpen(menuId, open),
@@ -145,6 +164,14 @@ function QuickTranslateWindowBody(props: { controller: QuickTranslateController 
   const readyToFit = computed(() => {
     const state = props.controller.attachedWindow()?.state();
     return state?.visible === true && state.mode === "normal";
+  });
+
+  // A cancelled or failed selection puts the caret back on the action that started it.
+  effect(() => {
+    const seq = props.controller.ocrFocusSeq();
+    if (seq === handledOcrFocusSeq) return;
+    handledOcrFocusSeq = seq;
+    ocrAction()?.focus();
   });
 
   effect(() => {
@@ -207,6 +234,20 @@ function QuickTranslateWindowBody(props: { controller: QuickTranslateController 
             />
           </Button>
           <QuickTranslateAddPresetMenu session={session} />
+          <If when={canCaptureScreen(platform.os)}>
+            <Button
+              testID="quick-translate-ocr"
+              variant="ghost"
+              size="icon-sm"
+              tooltip={t("quickTranslate.ocr")}
+              accessibilityLabel={t("quickTranslate.ocr")}
+              disabled={props.controller.dismissalSuspended()}
+              onPress={() => void props.controller.startOcr()}
+              ref={(node) => ocrAction.set(node)}
+            >
+              <Icon name="pic" tone="muted-foreground" class="size-3.5" />
+            </Button>
+          </If>
         </View>
         <View desktop={{ windowDrag: false }} class="flex-row items-center gap-1">
           <Button
@@ -247,6 +288,7 @@ function QuickTranslateWindowBody(props: { controller: QuickTranslateController 
         <View class="shrink-0" onLayout={({ bounds }) => contentHeight.set(bounds.size.height)}>
           <QuickTranslatePopup
             session={session}
+            ocrState={props.controller.ocrState}
             onAttachSourceInput={(node) => props.controller.attachSourceInput(node)}
           />
         </View>
@@ -291,8 +333,8 @@ export function QuickTranslateWindow(props: { controller: QuickTranslateControll
       display={props.controller.openingDisplay()}
       defaultPosition={props.controller.openingPosition()}
       closeOnPress={true}
-      closeOnBlur={!props.controller.isPinned()}
-      closeOnEscape={!props.controller.hasOpenOverlay()}
+      closeOnBlur={!props.controller.isPinned() && !props.controller.dismissalSuspended()}
+      closeOnEscape={!props.controller.hasOpenOverlay() && !props.controller.dismissalSuspended()}
       onBoundsChange={({ bounds }) => props.controller.handleBoundsChange(bounds)}
       onOpenChange={({ open }) => {
         if (!open) {

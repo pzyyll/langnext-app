@@ -23,8 +23,8 @@ use windows_sys::Win32::UI::HiDpi::{
     DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetThreadDpiAwarenessContext,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    ReleaseCapture, SetCapture, SetFocus, VK_DOWN, VK_ESCAPE, VK_LEFT, VK_RETURN, VK_RIGHT, VK_SPACE,
-    VK_TAB, VK_UP,
+    ReleaseCapture, SetCapture, SetFocus, VK_DOWN, VK_ESCAPE, VK_LEFT, VK_RETURN, VK_RIGHT,
+    VK_SPACE, VK_TAB, VK_UP,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     BringWindowToTop, CallNextHookEx, CreateWindowExW, DefWindowProcW, DestroyWindow,
@@ -182,7 +182,9 @@ impl Snapshot {
             let mut snapshot = None;
             if !dc.is_null() && !bitmap.is_null() && !bits.is_null() {
                 let previous = SelectObject(dc, bitmap);
-                let copied = BitBlt(dc, 0, 0, width, height, screen, rect.left, rect.top, SRCCOPY);
+                let copied = BitBlt(
+                    dc, 0, 0, width, height, screen, rect.left, rect.top, SRCCOPY,
+                );
                 if copied != 0 {
                     snapshot = Some(Self {
                         dc,
@@ -650,8 +652,13 @@ unsafe extern "system" fn capture_wnd_proc(
 }
 
 /// Low-level keyboard hook: capture keys work even when another window holds the focus.
-unsafe extern "system" fn capture_keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    if code == HC_ACTION as i32 && (wparam == WM_KEYDOWN as usize || wparam == WM_SYSKEYDOWN as usize)
+unsafe extern "system" fn capture_keyboard_hook(
+    code: i32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    if code == HC_ACTION as i32
+        && (wparam == WM_KEYDOWN as usize || wparam == WM_SYSKEYDOWN as usize)
     {
         // SAFETY: the hook always receives a `KBDLLHOOKSTRUCT` in `lparam`.
         let key = unsafe { &*(lparam as *const KBDLLHOOKSTRUCT) };
@@ -865,7 +872,14 @@ fn run_session(
 
     // The hook carries capture keys whatever window holds the focus; focus still helps the mouse.
     // SAFETY: a thread-wide low-level hook on this thread's queue, unhooked before returning.
-    let hook = unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(capture_keyboard_hook), ptr::null_mut(), 0) };
+    let hook = unsafe {
+        SetWindowsHookExW(
+            WH_KEYBOARD_LL,
+            Some(capture_keyboard_hook),
+            ptr::null_mut(),
+            0,
+        )
+    };
     HOOK_STATE.with(|cell| cell.set(ptr::from_mut(&mut state)));
     focus_active(&state);
     for display in &state.displays {

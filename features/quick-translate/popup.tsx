@@ -21,8 +21,16 @@ import type { TranslationPreset } from "../presets/types";
 import type { CardViewItem, QuickTranslateSession, SourceDetectionState } from "./session";
 import { resolvePresetTemplate } from "./translate";
 
+/** What the OCR action reports while it runs, and after it stops. */
+export interface QuickTranslateOcrStatus {
+  phase: "idle" | "selecting" | "recognizing";
+  message: string | null;
+}
+
 export interface QuickTranslatePopupProps {
   session: QuickTranslateSession;
+  /** OCR progress and alerts; the window entry point passes the controller's state. */
+  ocrState?: Accessor<QuickTranslateOcrStatus>;
   onAttachSourceInput?: (input: InputRef | null) => void;
 }
 
@@ -349,7 +357,8 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   const hasSourceText = () => sourceText().length > 0;
   // Collapse is a view-only mode: an empty field always shows the editor for the next input.
   // A clipboard delivery arrives collapsed: the user asked to translate, not to edit.
-  const sourceCollapsed = signal(props.session.sourceDeliverySeq() > 0 && hasSourceText());
+  const delivery = () => props.session.sourceDelivery();
+  const sourceCollapsed = signal(delivery()?.kind === "clipboard" && hasSourceText());
   const isSourceCollapsed = () => sourceCollapsed() && hasSourceText();
   const sourceFirstLine = () => sourceText().split(/\r?\n/, 1)[0] ?? "";
   const sourceHasMultipleLines = () => /\r?\n/.test(sourceText());
@@ -357,17 +366,25 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   // Survives the editor unmounting into the one-line preview, so expand does not flash the largest step.
   const sourceFontStep = signal(LARGEST_FONT_STEP);
   const focusSourceAfterExpand = signal(false);
-  let lastSourceDeliverySeq = props.session.sourceDeliverySeq();
+  let lastDeliverySeq = delivery()?.seq ?? 0;
 
   effect(() => {
     if (!hasSourceText()) sourceCollapsed.set(false);
   });
 
+  // Recognized text opens the editor and takes the caret; copied text stays a one-line preview.
   effect(() => {
-    const seq = props.session.sourceDeliverySeq();
-    if (seq === lastSourceDeliverySeq) return;
-    lastSourceDeliverySeq = seq;
-    if (hasSourceText()) sourceCollapsed.set(true);
+    const current = delivery();
+    const seq = current?.seq ?? 0;
+    if (seq === lastDeliverySeq) return;
+    lastDeliverySeq = seq;
+    if (!hasSourceText() || current === null) return;
+    if (current.kind === "ocr") {
+      focusSourceAfterExpand.set(true);
+      sourceCollapsed.set(false);
+      return;
+    }
+    sourceCollapsed.set(true);
   });
 
   const expandSource = () => {
@@ -445,8 +462,21 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
     </View>
   );
 
+  const ocrMessage = () => (props.ocrState ? props.ocrState().message : null);
+  const ocrRecognizing = () => (props.ocrState ? props.ocrState().phase === "recognizing" : false);
+
   return (
     <View class="gap-2 p-3">
+      <If when={ocrMessage() !== null}>
+        <Text testID="quick-translate-ocr-status" role="alert" class="text-xs text-destructive">
+          {ocrMessage() ?? ""}
+        </Text>
+      </If>
+      <If when={ocrMessage() === null && ocrRecognizing()}>
+        <Text testID="quick-translate-ocr-busy" class="text-xs text-muted-foreground">
+          {t("quickTranslate.ocrRecognizing")}
+        </Text>
+      </If>
       <If
         when={
           props.session.presetsStatus().kind === "idle" ||

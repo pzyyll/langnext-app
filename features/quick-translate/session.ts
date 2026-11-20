@@ -39,6 +39,14 @@ const COPY_FEEDBACK_DURATION_MS = 1500;
 /** Coalesces streamed text updates so a fast provider does not re-render each token. */
 const STREAM_FLUSH_INTERVAL_MS = 50;
 
+export type SourceDeliveryKind = "clipboard" | "ocr";
+
+/** Text that replaced the draft as a whole, with one increasing sequence per delivery. */
+export interface SourceDelivery {
+  kind: SourceDeliveryKind;
+  seq: number;
+}
+
 export type SourceDetectionState =
   | { status: "idle" }
   | { status: "detecting" }
@@ -163,7 +171,8 @@ function createSharedLanguageRun(
 
 export interface QuickTranslateSessionOptions {
   sourceText: Accessor<string>;
-  sourceDeliverySeq?: Accessor<number>;
+  /** The newest text that arrived as a whole (clipboard copy or OCR), with its kind. */
+  sourceDelivery?: Accessor<SourceDelivery | null>;
   onSourceTextChange: (text: string) => void;
   autoTranslate?: Accessor<boolean>;
   onOverlayOpenChange?: (menuId: string, open: boolean) => void;
@@ -182,8 +191,8 @@ export interface QuickTranslateSessionOptions {
 
 export interface QuickTranslateSession {
   sourceText: Accessor<string>;
-  /** Bumps when a double-copy delivery replaces the draft (`0` when none arrived). */
-  sourceDeliverySeq: Accessor<number>;
+  /** The newest delivered text, or `null` when the draft was typed. */
+  sourceDelivery: Accessor<SourceDelivery | null>;
   sourceLanguage: Accessor<SourceLanguageId>;
   targetLanguage: Accessor<TargetLanguageId>;
   sourceDetection: Accessor<SourceDetectionState>;
@@ -670,6 +679,8 @@ export function createQuickTranslateSession(
   };
 
   const translateDelivery = () => {
+    // A delivery replaces a pending typing run, so only one action follows it.
+    clearSharedDebounce();
     for (const card of cards()) invalidateCard(card.id);
     const deliverable =
       !disposed &&
@@ -680,10 +691,10 @@ export function createQuickTranslateSession(
   };
 
   effect(() => {
-    const seq = options.sourceDeliverySeq?.() ?? 0;
+    const seq = options.sourceDelivery?.()?.seq ?? 0;
     if (seq > lastHandledDeliverySeq) {
       lastHandledDeliverySeq = seq;
-      // Copied text from double Ctrl+C is a translation request, whatever Auto-translate says.
+      // Delivered text is a translation request, whatever Auto-translate says.
       translateDelivery();
     }
   });
@@ -873,7 +884,7 @@ export function createQuickTranslateSession(
 
   return {
     sourceText: options.sourceText,
-    sourceDeliverySeq: options.sourceDeliverySeq ?? (() => 0),
+    sourceDelivery: options.sourceDelivery ?? (() => null),
     sourceLanguage: () => sourceLanguage(),
     targetLanguage: () => targetLanguage(),
     sourceDetection: () => sourceDetection(),

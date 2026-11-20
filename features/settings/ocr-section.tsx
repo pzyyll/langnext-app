@@ -25,8 +25,7 @@ export function OcrSection(props: OcrSectionProps) {
   const saving = signal(false);
 
   const modelChoices = () => readAvailableModelChoices("image");
-  const catalogUnusable = () =>
-    modelsStore.channelsError() !== null || modelChoices().length === 0;
+  const catalogUnusable = () => modelsStore.channelsError() !== null || modelChoices().length === 0;
   const eligibleModelId = () =>
     modelChoices().find((choice) => choice.id === draftModelId())?.id ?? null;
   const binding = () => {

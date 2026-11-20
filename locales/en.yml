@@ -478,6 +478,8 @@ quickTranslate:
   pin: Pin window
   unpin: Unpin window
   close: Close Quick Translate
+  ocr: Read text from screen
+  ocrRecognizing: Reading text…
   shortcutUnavailable: Global shortcut Ctrl+Shift+T is unavailable. Use the tray icon menu to open Quick Translate.
   presetLabel: Preset
   presetPlaceholder: Select a preset…
