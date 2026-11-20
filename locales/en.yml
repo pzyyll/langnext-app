@@ -477,3 +477,14 @@ quickTranslate:
     translationFailed: "Translation failed: %{detail}"
     copyFailed: Could not copy translation to the clipboard.
     savePreferences: Could not save Quick Translate preferences. Your changes apply until you close the app.
+deepl:
+  error:
+    missingKey: Add a DeepL API key in Presets.
+    auth: DeepL rejected the API key.
+    rejected: DeepL rejected the request.
+    tooLarge: This text is too long for DeepL.
+    rateLimited: DeepL is rate limiting requests. Try again shortly.
+    quota: This DeepL API key has used its quota.
+    server: DeepL is unavailable right now.
+    invalidResponse: DeepL returned an unreadable response.
+    unsupportedLanguage: DeepL does not support this language.

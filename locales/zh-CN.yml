@@ -477,3 +477,14 @@ quickTranslate:
     translationFailed: "翻译失败：%{detail}"
     copyFailed: 无法将译文复制到剪贴板。
     savePreferences: 无法保存快速翻译偏好设置。本次更改将在关闭应用前生效。
+deepl:
+  error:
+    missingKey: 请在预设中填写 DeepL API 密钥。
+    auth: DeepL 拒绝了该 API 密钥。
+    rejected: DeepL 拒绝了该请求。
+    tooLarge: 文本对于 DeepL 来说过长。
+    rateLimited: DeepL 正在限制请求频率，请稍后重试。
+    quota: 该 DeepL API 密钥的额度已用完。
+    server: DeepL 当前不可用。
+    invalidResponse: DeepL 返回了无法解析的响应。
+    unsupportedLanguage: DeepL 不支持该语言。
