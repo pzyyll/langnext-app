@@ -3,8 +3,8 @@ import { Button, Tooltip } from "nsh/base";
 import { t } from "nsh/i18n";
 import cubeOutlineIcon from "../assets/icons/cube-outline.svg";
 import cubeSolidIcon from "../assets/icons/cube-solid.svg";
-import documentFolderOutlineIcon from "../assets/icons/icon-park-outline--document-folder.svg";
-import documentFolderSolidIcon from "../assets/icons/icon-park-solid--document-folder.svg";
+import profileOutlineIcon from "../assets/icons/ant-design--profile-outlined.svg";
+import profileSolidIcon from "../assets/icons/ant-design--profile-filled.svg";
 import settingsOutlineIcon from "../assets/icons/setting-outline.svg";
 import settingsSolidIcon from "../assets/icons/setting-solid.svg";
 import { motion } from "./motion";
@@ -103,8 +103,8 @@ export function Sidebar(props: SidebarProps) {
           onPress={() => props.onSelectPresets()}
         >
           <NavIcon
-            outline={documentFolderOutlineIcon}
-            solid={documentFolderSolidIcon}
+            outline={profileOutlineIcon}
+            solid={profileSolidIcon}
             selected={props.page === "presets"}
           />
         </SidebarItem>
