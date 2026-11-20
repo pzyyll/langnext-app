@@ -49,7 +49,7 @@ export function Textarea(props: TextareaProps) {
         />
       </View>
       <If when={props.footer !== undefined}>
-        <View class="pb-1.5 pl-3 pr-1.5">{props.footer}</View>
+        <View class="-mt-1 pb-1.5 pl-3 pr-1.5">{props.footer}</View>
       </If>
     </View>
   );

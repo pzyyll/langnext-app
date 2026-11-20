@@ -331,7 +331,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
         value={props.session.sourceText()}
         placeholder={t("quickTranslate.sourcePlaceholder")}
         accessibilityLabel={t("quickTranslate.sourceLabel")}
-        inputClass="min-h-16"
+        inputClass="min-h-10"
         footer={
           <View
             testID="quick-translate-source-toolbar"
