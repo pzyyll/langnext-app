@@ -104,6 +104,8 @@ settings:
       preferenceInvalid: Choose a supported language.
       preferencesIdentical: The native language and the preferred translation language must differ.
 ocr:
+  capture:
+    instruction: Drag to select · Tab switches display · Space and Enter confirm · Esc cancels
   failure:
     unconfigured: Configure OCR in Settings, or choose another way to get the text.
     invalidImage: The captured image could not be read. Select the area again.

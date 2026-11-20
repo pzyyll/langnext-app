@@ -1,0 +1,921 @@
+//! Win32 screen capture: in-memory display snapshots and one selection surface per display.
+
+use std::cell::Cell;
+use std::ffi::c_void;
+use std::mem::{MaybeUninit, size_of};
+use std::ptr;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::{Arc, Mutex};
+
+use nsh_core::prelude::*;
+use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows_sys::Win32::Graphics::Gdi::{
+    BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BeginPaint, BitBlt, CreateCompatibleDC, CreateDIBSection,
+    CreatePen, CreateSolidBrush, DEFAULT_GUI_FONT, DIB_RGB_COLORS, DT_CENTER, DT_NOPREFIX,
+    DT_SINGLELINE, DT_VCENTER, DeleteDC, DeleteObject, DrawTextW, EndPaint, EnumDisplayMonitors,
+    FillRect, GetDC, GetMonitorInfoW, GetStockObject, HDC, HGDIOBJ, HMONITOR, HOLLOW_BRUSH,
+    InvalidateRect, LineTo, MONITORINFO, MONITORINFOEXW, MoveToEx, PAINTSTRUCT, PS_DOT, PS_SOLID,
+    Rectangle, ReleaseDC, SRCCOPY, SelectObject, SetBkMode, SetTextColor,
+};
+use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows_sys::Win32::System::Threading::GetCurrentThreadId;
+use windows_sys::Win32::UI::HiDpi::{
+    DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetThreadDpiAwarenessContext,
+};
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+    ReleaseCapture, SetCapture, SetFocus, VK_DOWN, VK_ESCAPE, VK_LEFT, VK_RETURN, VK_RIGHT, VK_SPACE,
+    VK_TAB, VK_UP,
+};
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    BringWindowToTop, CallNextHookEx, CreateWindowExW, DefWindowProcW, DestroyWindow,
+    DispatchMessageW, GWLP_USERDATA, GetMessageW, GetWindowLongPtrW, HC_ACTION, HWND_TOPMOST,
+    IDC_CROSS, KBDLLHOOKSTRUCT, LoadCursorW, MSG, PostThreadMessageW, RegisterClassW,
+    SWP_NOACTIVATE, SWP_SHOWWINDOW, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos,
+    SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL, WM_APP,
+    WM_DISPLAYCHANGE, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
+    WM_PAINT, WM_SYSKEYDOWN, WNDCLASSW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+};
+
+use super::{
+    CaptureCrop, DesktopPoint, KEYBOARD_STEP, MAX_PNG_BYTES, MAX_SNAPSHOT_PIXELS, MonitorRect,
+    ScreenCaptureOverlay, ScreenCaptureResult, resolve_capture_rect,
+};
+
+/// Height and inset of the instruction band drawn on the active display, in physical pixels.
+const CAPTION_HEIGHT: i32 = 56;
+const CAPTION_INSET: i32 = 24;
+const CAPTION_MAX_WIDTH: i32 = 760;
+const CAPTION_MIN_WIDTH: i32 = 240;
+
+/// Request posted to the capture worker's queue when TSX cancels the session.
+const WM_APP_CANCEL: u32 = WM_APP + 1;
+
+/// One in-flight request, so at most one selection session runs at a time.
+struct ActiveRequest {
+    request_id: u64,
+    thread_id: AtomicU32,
+    cancelled: Arc<AtomicBool>,
+}
+
+static ACTIVE: Mutex<Option<ActiveRequest>> = Mutex::new(None);
+
+thread_local! {
+    /// The session the keyboard hook mutates; set while one message loop runs on this thread.
+    static HOOK_STATE: Cell<*mut CaptureState> = const { Cell::new(ptr::null_mut()) };
+}
+
+/// Starts one capture session on a blocking thread and resolves with its outcome.
+pub async fn capture(request_id: u64, overlay: ScreenCaptureOverlay) -> ScreenCaptureResult {
+    let cancelled = Arc::new(AtomicBool::new(false));
+    {
+        let mut active = ACTIVE.lock().unwrap_or_else(|error| error.into_inner());
+        if active.is_some() {
+            return ScreenCaptureResult::failed();
+        }
+        *active = Some(ActiveRequest {
+            request_id,
+            thread_id: AtomicU32::new(0),
+            cancelled: cancelled.clone(),
+        });
+    }
+
+    let worker_cancelled = cancelled.clone();
+    let joined = blocking(move || run_session(request_id, worker_cancelled, overlay)).await;
+
+    let mut active = ACTIVE.lock().unwrap_or_else(|error| error.into_inner());
+    if active
+        .as_ref()
+        .is_some_and(|entry| entry.request_id == request_id)
+    {
+        *active = None;
+    }
+    drop(active);
+
+    joined.unwrap_or_else(|_| ScreenCaptureResult::failed())
+}
+
+/// Cancels `request_id` only; a different active request keeps running.
+pub fn cancel(request_id: u64) {
+    let active = ACTIVE.lock().unwrap_or_else(|error| error.into_inner());
+    let Some(entry) = active.as_ref() else {
+        return;
+    };
+    if entry.request_id != request_id {
+        return;
+    }
+    entry.cancelled.store(true, Ordering::Release);
+    let thread_id = entry.thread_id.load(Ordering::Acquire);
+    if thread_id != 0 {
+        // SAFETY: a plain thread message; the worker's loop reads it before it dispatches.
+        unsafe {
+            PostThreadMessageW(thread_id, WM_APP_CANCEL, 0, 0);
+        }
+    }
+}
+
+/// Publishes this worker's thread id so `cancel` can post to its queue.
+fn publish_thread_id(request_id: u64, thread_id: u32) {
+    let mut active = ACTIVE.lock().unwrap_or_else(|error| error.into_inner());
+    if let Some(entry) = active.as_mut()
+        && entry.request_id == request_id
+    {
+        entry.thread_id.store(thread_id, Ordering::Release);
+    }
+}
+
+/// Converts `#rrggbb` to a Win32 `COLORREF`; unreadable values fall back to white.
+fn color_ref(value: &str) -> u32 {
+    let hex = value.trim().trim_start_matches('#');
+    if hex.len() != 6 {
+        return 0x00ff_ffff;
+    }
+    match u32::from_str_radix(hex, 16) {
+        Ok(rgb) => ((rgb >> 16) & 0xff) | (rgb & 0x0000_ff00) | ((rgb & 0xff) << 16),
+        Err(_) => 0x00ff_ffff,
+    }
+}
+
+/// A top-down 32-bit DIB holding one display's pixels.
+struct Snapshot {
+    dc: HDC,
+    bitmap: HGDIOBJ,
+    previous: HGDIOBJ,
+    pixels: *mut u32,
+    width: i32,
+    height: i32,
+}
+
+impl Snapshot {
+    /// Copies one display's pixels into memory; `None` when Windows refuses the capture.
+    fn capture(rect: MonitorRect) -> Option<Self> {
+        let width = rect.right - rect.left;
+        let height = rect.bottom - rect.top;
+        if width <= 0 || height <= 0 {
+            return None;
+        }
+
+        // SAFETY: every handle created here is either owned by the result or released below.
+        unsafe {
+            let screen = GetDC(ptr::null_mut());
+            if screen.is_null() {
+                return None;
+            }
+            let dc = CreateCompatibleDC(screen);
+            let mut info: BITMAPINFO = std::mem::zeroed();
+            info.bmiHeader = BITMAPINFOHEADER {
+                biSize: size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: width,
+                biHeight: -height,
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB,
+                biSizeImage: 0,
+                biXPelsPerMeter: 0,
+                biYPelsPerMeter: 0,
+                biClrUsed: 0,
+                biClrImportant: 0,
+            };
+            let mut bits: *mut c_void = ptr::null_mut();
+            let bitmap =
+                CreateDIBSection(screen, &info, DIB_RGB_COLORS, &mut bits, ptr::null_mut(), 0);
+
+            let mut snapshot = None;
+            if !dc.is_null() && !bitmap.is_null() && !bits.is_null() {
+                let previous = SelectObject(dc, bitmap);
+                let copied = BitBlt(dc, 0, 0, width, height, screen, rect.left, rect.top, SRCCOPY);
+                if copied != 0 {
+                    snapshot = Some(Self {
+                        dc,
+                        bitmap,
+                        previous,
+                        pixels: bits.cast::<u32>(),
+                        width,
+                        height,
+                    });
+                } else {
+                    SelectObject(dc, previous);
+                }
+            }
+            ReleaseDC(ptr::null_mut(), screen);
+
+            if snapshot.is_none() {
+                if !bitmap.is_null() {
+                    DeleteObject(bitmap);
+                }
+                if !dc.is_null() {
+                    DeleteDC(dc);
+                }
+            }
+            snapshot
+        }
+    }
+}
+
+impl Drop for Snapshot {
+    fn drop(&mut self) {
+        // SAFETY: this snapshot owns the DC, the bitmap and their selection.
+        unsafe {
+            SelectObject(self.dc, self.previous);
+            DeleteObject(self.bitmap);
+            DeleteDC(self.dc);
+        }
+    }
+}
+
+/// One display's snapshot and selection surface.
+struct CaptureWindow {
+    rect: MonitorRect,
+    hwnd: HWND,
+    snapshot: Snapshot,
+}
+
+impl Drop for CaptureWindow {
+    fn drop(&mut self) {
+        if !self.hwnd.is_null() {
+            // SAFETY: the window belongs to the worker thread that is dropping it.
+            unsafe {
+                DestroyWindow(self.hwnd);
+            }
+        }
+    }
+}
+
+/// Everything one selection session holds while its message loop runs.
+struct CaptureState {
+    displays: Vec<CaptureWindow>,
+    caption: Vec<u16>,
+    accent: u32,
+    text: u32,
+    backdrop: u32,
+    anchor: Option<DesktopPoint>,
+    cursor: Option<DesktopPoint>,
+    active: usize,
+    keyboard: bool,
+    outcome: Option<ScreenCaptureResult>,
+}
+
+/// Copies the confirmed crop out of its display snapshot and encodes it as PNG.
+fn encode_crop(state: &CaptureState, crop: CaptureCrop) -> ScreenCaptureResult {
+    let Some(display) = state.displays.get(crop.monitor) else {
+        return ScreenCaptureResult::failed();
+    };
+    let width = crop.width.max(0) as usize;
+    let height = crop.height.max(0) as usize;
+    if width == 0 || height == 0 {
+        return ScreenCaptureResult::failed();
+    }
+    let stride = display.snapshot.width.max(0) as usize;
+    let left = crop.x.max(0) as usize;
+    let top = crop.y.max(0) as usize;
+    if left + width > stride || top + height > display.snapshot.height.max(0) as usize {
+        return ScreenCaptureResult::failed();
+    }
+
+    let mut rgb = Vec::with_capacity(width * height * 3);
+    for row in 0..height {
+        let start = (top + row) * stride + left;
+        for column in 0..width {
+            // SAFETY: the row and column ranges were checked against the snapshot size.
+            let pixel = unsafe { *display.snapshot.pixels.add(start + column) };
+            rgb.push(((pixel >> 16) & 0xff) as u8);
+            rgb.push(((pixel >> 8) & 0xff) as u8);
+            rgb.push((pixel & 0xff) as u8);
+        }
+    }
+
+    let mut png: Vec<u8> = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut png, width as u32, height as u32);
+        encoder.set_color(png::ColorType::Rgb);
+        encoder.set_depth(png::BitDepth::Eight);
+        let Ok(mut writer) = encoder.write_header() else {
+            return ScreenCaptureResult::failed();
+        };
+        if writer.write_image_data(&rgb).is_err() || writer.finish().is_err() {
+            return ScreenCaptureResult::failed();
+        }
+    }
+    if png.len() > MAX_PNG_BYTES {
+        return ScreenCaptureResult::too_large();
+    }
+    ScreenCaptureResult::captured(png)
+}
+
+/// Ends the session with the confirmed rectangle, if the drag left any pixels.
+fn finish_selection(state: &mut CaptureState) {
+    let Some(crop) = resolve_selection(state) else {
+        return;
+    };
+    state.outcome = Some(encode_crop(state, crop));
+}
+
+/// Resolves the current drag against the display it started on.
+fn resolve_selection(state: &CaptureState) -> Option<CaptureCrop> {
+    let anchor = state.anchor?;
+    let cursor = state.cursor?;
+    state
+        .displays
+        .iter()
+        .enumerate()
+        .find_map(|(index, display)| {
+            resolve_capture_rect(std::slice::from_ref(&display.rect), anchor, cursor).map(|crop| {
+                CaptureCrop {
+                    monitor: index,
+                    ..crop
+                }
+            })
+        })
+}
+
+/// Index of the display backing `hwnd`.
+fn display_index(state: &CaptureState, hwnd: HWND) -> Option<usize> {
+    state
+        .displays
+        .iter()
+        .position(|display| display.hwnd == hwnd)
+}
+
+/// Translates a mouse message's client coordinates into a physical desktop point.
+fn pointer_point(state: &CaptureState, hwnd: HWND, lparam: LPARAM) -> Option<DesktopPoint> {
+    let index = display_index(state, hwnd)?;
+    let rect = state.displays[index].rect;
+    let x = (lparam & 0xffff) as u16 as i16 as i32;
+    let y = ((lparam >> 16) & 0xffff) as u16 as i16 as i32;
+    Some(DesktopPoint {
+        x: rect.left.saturating_add(x),
+        y: rect.top.saturating_add(y),
+    })
+}
+
+/// Center of one display, used as the first keyboard crosshair position.
+fn display_center(rect: MonitorRect) -> DesktopPoint {
+    DesktopPoint {
+        x: rect.left + (rect.right - rect.left) / 2,
+        y: rect.top + (rect.bottom - rect.top) / 2,
+    }
+}
+
+/// Repaints every surface; selection changes are immediate, with no animation.
+fn invalidate_all(state: &CaptureState) {
+    for display in &state.displays {
+        // SAFETY: each window belongs to this worker thread.
+        unsafe {
+            InvalidateRect(display.hwnd, ptr::null(), 0);
+        }
+    }
+}
+
+/// Brings the active display's surface to the foreground so keys reach it.
+fn focus_active(state: &CaptureState) {
+    let Some(display) = state.displays.get(state.active) else {
+        return;
+    };
+    // SAFETY: plain window management calls on this worker thread's windows.
+    unsafe {
+        SetForegroundWindow(display.hwnd);
+        BringWindowToTop(display.hwnd);
+        SetFocus(display.hwnd);
+    }
+}
+
+/// Moves keyboard focus and the crosshair to the next display.
+fn cycle_display(state: &mut CaptureState) {
+    if state.displays.len() < 2 {
+        return;
+    }
+    state.active = (state.active + 1) % state.displays.len();
+    state.keyboard = true;
+    let rect = state.displays[state.active].rect;
+    state.cursor = Some(match state.cursor {
+        Some(point) => DesktopPoint {
+            x: point.x.clamp(rect.left, rect.right - 1),
+            y: point.y.clamp(rect.top, rect.bottom - 1),
+        },
+        None => display_center(rect),
+    });
+    focus_active(state);
+    invalidate_all(state);
+}
+
+/// Moves the keyboard crosshair by one step inside the active display.
+fn move_crosshair(state: &mut CaptureState, vk: u16) {
+    let Some(display) = state.displays.get(state.active) else {
+        return;
+    };
+    let rect = display.rect;
+    let mut point = state.cursor.unwrap_or_else(|| display_center(rect));
+    match vk {
+        VK_LEFT => point.x -= KEYBOARD_STEP,
+        VK_RIGHT => point.x += KEYBOARD_STEP,
+        VK_UP => point.y -= KEYBOARD_STEP,
+        VK_DOWN => point.y += KEYBOARD_STEP,
+        _ => return,
+    }
+    point.x = point.x.clamp(rect.left, rect.right - 1);
+    point.y = point.y.clamp(rect.top, rect.bottom - 1);
+    state.cursor = Some(point);
+    state.keyboard = true;
+    invalidate_all(state);
+}
+
+/// Applies one capture key, in any focus state, through the low-level keyboard hook.
+fn handle_key(state: &mut CaptureState, vk: u16) {
+    match vk {
+        VK_ESCAPE => state.outcome = Some(ScreenCaptureResult::cancelled()),
+        VK_TAB => cycle_display(state),
+        VK_LEFT | VK_RIGHT | VK_UP | VK_DOWN => move_crosshair(state, vk),
+        VK_SPACE => {
+            state.keyboard = true;
+            if let Some(point) = state.cursor {
+                state.anchor = Some(point);
+                invalidate_all(state);
+            }
+        }
+        VK_RETURN if state.anchor.is_some() => finish_selection(state),
+        _ => {}
+    }
+}
+
+/// Whether a key belongs to the capture session; other keys pass to the app behind.
+fn is_capture_key(vk: u16) -> bool {
+    matches!(
+        vk,
+        VK_ESCAPE | VK_TAB | VK_LEFT | VK_RIGHT | VK_UP | VK_DOWN | VK_SPACE | VK_RETURN
+    )
+}
+
+/// Draws the snapshot, the selection, the crosshair, and the instruction band.
+fn paint(hwnd: HWND, state: &CaptureState) {
+    let Some(index) = display_index(state, hwnd) else {
+        return;
+    };
+    let display = &state.displays[index];
+    let width = display.rect.right - display.rect.left;
+    let height = display.rect.bottom - display.rect.top;
+
+    let mut paint = MaybeUninit::<PAINTSTRUCT>::zeroed();
+    // SAFETY: `paint` is a stack-allocated out-parameter for this window's paint cycle.
+    let hdc = unsafe { BeginPaint(hwnd, paint.as_mut_ptr()) };
+    if hdc.is_null() {
+        return;
+    }
+
+    // SAFETY: every GDI object is selected back and deleted inside the call.
+    unsafe {
+        BitBlt(hdc, 0, 0, width, height, display.snapshot.dc, 0, 0, SRCCOPY);
+
+        if let Some(crop) = resolve_capture_rect(
+            std::slice::from_ref(&display.rect),
+            state.anchor.unwrap_or(DesktopPoint { x: 0, y: 0 }),
+            state.cursor.unwrap_or(DesktopPoint { x: 0, y: 0 }),
+        ) {
+            draw_selection(hdc, state.accent, crop);
+        }
+
+        if state.keyboard
+            && let Some(cursor) = state.cursor
+            && display.rect.contains(cursor)
+        {
+            draw_crosshair(hdc, state.accent, cursor, display.rect);
+        }
+
+        if index == state.active {
+            draw_caption(hdc, state, width);
+        }
+
+        EndPaint(hwnd, paint.as_ptr());
+    }
+}
+
+/// Draws a two-stroke selection frame, so the edge reads without relying on color.
+fn draw_selection(hdc: HDC, accent: u32, crop: CaptureCrop) {
+    let rect = RECT {
+        left: crop.x,
+        top: crop.y,
+        right: crop.x + crop.width,
+        bottom: crop.y + crop.height,
+    };
+    // SAFETY: pens are selected back and deleted; the hollow brush is a shared stock object.
+    unsafe {
+        let accent_pen = CreatePen(PS_SOLID, 2, accent);
+        let previous_pen = SelectObject(hdc, accent_pen);
+        let previous_brush = SelectObject(hdc, GetStockObject(HOLLOW_BRUSH));
+        Rectangle(hdc, rect.left, rect.top, rect.right, rect.bottom);
+
+        if crop.width > 6 && crop.height > 6 {
+            let inner_pen = CreatePen(PS_SOLID, 1, 0x00ff_ffff);
+            SelectObject(hdc, inner_pen);
+            Rectangle(
+                hdc,
+                rect.left + 3,
+                rect.top + 3,
+                rect.right - 3,
+                rect.bottom - 3,
+            );
+            SelectObject(hdc, previous_pen);
+            DeleteObject(inner_pen);
+        } else {
+            SelectObject(hdc, previous_pen);
+        }
+
+        SelectObject(hdc, previous_brush);
+        DeleteObject(accent_pen);
+    }
+}
+
+/// Draws the dotted keyboard crosshair across the active display.
+fn draw_crosshair(hdc: HDC, accent: u32, cursor: DesktopPoint, rect: MonitorRect) {
+    let x = cursor.x - rect.left;
+    let y = cursor.y - rect.top;
+    // SAFETY: the dotted pen is selected back and deleted.
+    unsafe {
+        let pen = CreatePen(PS_DOT, 1, accent);
+        let previous = SelectObject(hdc, pen);
+        MoveToEx(hdc, x, 0, ptr::null_mut());
+        LineTo(hdc, x, rect.bottom - rect.top);
+        MoveToEx(hdc, 0, y, ptr::null_mut());
+        LineTo(hdc, rect.right - rect.left, y);
+        SelectObject(hdc, previous);
+        DeleteObject(pen);
+    }
+}
+
+/// Draws the localized instruction band at the top of the active display.
+fn draw_caption(hdc: HDC, state: &CaptureState, display_width: i32) {
+    let box_width = (display_width - CAPTION_INSET * 2).clamp(CAPTION_MIN_WIDTH, CAPTION_MAX_WIDTH);
+    let left = (display_width - box_width) / 2;
+    let mut rect = RECT {
+        left,
+        top: CAPTION_INSET,
+        right: left + box_width,
+        bottom: CAPTION_INSET + CAPTION_HEIGHT,
+    };
+
+    // SAFETY: the brush and the font are released inside the call.
+    unsafe {
+        let brush = CreateSolidBrush(state.backdrop);
+        FillRect(hdc, &rect, brush);
+        DeleteObject(brush);
+
+        let previous_font = SelectObject(hdc, GetStockObject(DEFAULT_GUI_FONT));
+        SetBkMode(hdc, 1);
+        SetTextColor(hdc, state.text);
+        DrawTextW(
+            hdc,
+            state.caption.as_ptr(),
+            state.caption.len() as i32,
+            &mut rect,
+            DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
+        );
+        SelectObject(hdc, previous_font);
+    }
+}
+
+/// Window procedure shared by every selection surface.
+unsafe extern "system" fn capture_wnd_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    if msg == WM_ERASEBKGND {
+        return 1;
+    }
+
+    // SAFETY: the window's user data holds the live `CaptureState` set before it was shown,
+    // and every window is destroyed before that state is dropped.
+    let state = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut CaptureState };
+    if state.is_null() {
+        return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
+    }
+    let state = unsafe { &mut *state };
+
+    match msg {
+        WM_PAINT => {
+            paint(hwnd, state);
+            0
+        }
+        WM_LBUTTONDOWN => {
+            if let Some(point) = pointer_point(state, hwnd, lparam) {
+                if let Some(index) = display_index(state, hwnd) {
+                    state.active = index;
+                }
+                state.anchor = Some(point);
+                state.cursor = Some(point);
+                state.keyboard = false;
+                // SAFETY: capture belongs to this worker thread's window.
+                unsafe {
+                    SetCapture(hwnd);
+                }
+                invalidate_all(state);
+            }
+            0
+        }
+        WM_MOUSEMOVE => {
+            if state.anchor.is_some()
+                && let Some(point) = pointer_point(state, hwnd, lparam)
+            {
+                state.cursor = Some(point);
+                invalidate_all(state);
+            }
+            0
+        }
+        WM_LBUTTONUP => {
+            // SAFETY: releases the capture taken on press.
+            unsafe {
+                ReleaseCapture();
+            }
+            if let Some(point) = pointer_point(state, hwnd, lparam) {
+                state.cursor = Some(point);
+                finish_selection(state);
+            }
+            state.anchor = None;
+            state.keyboard = false;
+            invalidate_all(state);
+            0
+        }
+        WM_KEYDOWN => {
+            // The hook already applied this key when it runs; this path covers a hook failure.
+            handle_key(state, wparam as u16);
+            0
+        }
+        WM_DISPLAYCHANGE => {
+            if state.outcome.is_none() {
+                state.outcome = Some(ScreenCaptureResult::cancelled());
+            }
+            0
+        }
+        _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+    }
+}
+
+/// Low-level keyboard hook: capture keys work even when another window holds the focus.
+unsafe extern "system" fn capture_keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    if code == HC_ACTION as i32 && (wparam == WM_KEYDOWN as usize || wparam == WM_SYSKEYDOWN as usize)
+    {
+        // SAFETY: the hook always receives a `KBDLLHOOKSTRUCT` in `lparam`.
+        let key = unsafe { &*(lparam as *const KBDLLHOOKSTRUCT) };
+        let vk = key.vkCode as u16;
+        if is_capture_key(vk) {
+            let handled = HOOK_STATE.with(|cell| {
+                let state = cell.get();
+                if state.is_null() {
+                    return false;
+                }
+                // SAFETY: the pointer is set by the message loop on this same thread and
+                // cleared before the state is dropped.
+                unsafe {
+                    handle_key(&mut *state, vk);
+                }
+                true
+            });
+            if handled {
+                return 1;
+            }
+        }
+    }
+    // SAFETY: chains to the next hook; no hook was skipped for the keys handled above.
+    unsafe { CallNextHookEx(ptr::null_mut(), code, wparam, lparam) }
+}
+
+/// Collects one display's physical rectangle; the camera is the caller's `Vec`.
+unsafe extern "system" fn collect_monitor(
+    monitor: HMONITOR,
+    _hdc: HDC,
+    _clip: *mut RECT,
+    data: LPARAM,
+) -> windows_sys::core::BOOL {
+    // SAFETY: `data` points to the `Vec<MonitorRect>` passed to `EnumDisplayMonitors`.
+    let monitors = unsafe { &mut *(data as *mut Vec<MonitorRect>) };
+    let info = MaybeUninit::<MONITORINFOEXW>::zeroed();
+    // SAFETY: the out-parameter is zeroed and `cbSize` is set before the call.
+    let mut info = unsafe { info.assume_init() };
+    info.monitorInfo.cbSize = size_of::<MONITORINFOEXW>() as u32;
+    let found = unsafe { GetMonitorInfoW(monitor, (&mut info.monitorInfo) as *mut MONITORINFO) };
+    if found == 0 {
+        return 1;
+    }
+    let bounds = unsafe { ptr::addr_of!(info.monitorInfo.rcMonitor).read() };
+    monitors.push(MonitorRect::new(
+        bounds.left,
+        bounds.top,
+        bounds.right,
+        bounds.bottom,
+    ));
+    1
+}
+
+/// Every active display, in the order Windows reports them.
+fn enumerate_displays() -> Vec<MonitorRect> {
+    let mut monitors: Vec<MonitorRect> = Vec::new();
+    // SAFETY: the callback only writes to `monitors`, which outlives the call.
+    let found = unsafe {
+        EnumDisplayMonitors(
+            ptr::null_mut(),
+            ptr::null(),
+            Some(collect_monitor),
+            ptr::addr_of_mut!(monitors) as LPARAM,
+        )
+    };
+    if found == 0 {
+        monitors.clear();
+    }
+    monitors.retain(MonitorRect::has_area);
+    monitors
+}
+
+/// Registers the shared overlay window class once per process.
+fn register_overlay_class() -> bool {
+    static REGISTERED: Mutex<bool> = Mutex::new(false);
+    let mut registered = REGISTERED.lock().unwrap_or_else(|error| error.into_inner());
+    if *registered {
+        return true;
+    }
+    let class_name: Vec<u16> = "NshScreenCaptureOverlay"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let window_class = WNDCLASSW {
+        style: 0,
+        lpfnWndProc: Some(capture_wnd_proc),
+        cbClsExtra: 0,
+        cbWndExtra: 0,
+        // SAFETY: the module handle of this executable is a valid instance handle.
+        hInstance: unsafe { GetModuleHandleW(ptr::null()) },
+        hIcon: ptr::null_mut(),
+        // SAFETY: a shared system cursor resource, never destroyed here.
+        hCursor: unsafe { LoadCursorW(ptr::null_mut(), IDC_CROSS) },
+        hbrBackground: ptr::null_mut(),
+        lpszMenuName: ptr::null(),
+        lpszClassName: class_name.as_ptr(),
+    };
+    // SAFETY: the class name outlives the registration call, and the procedure is `'static`.
+    let atom = unsafe { RegisterClassW(&window_class) };
+    *registered = atom != 0;
+    *registered
+}
+
+/// Creates one frameless surface per display and points it at the session state.
+fn create_windows(state: &mut CaptureState) -> bool {
+    let class_name: Vec<u16> = "NshScreenCaptureOverlay"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let instance = unsafe { GetModuleHandleW(ptr::null()) };
+    let state_pointer = ptr::from_mut(state);
+
+    for index in 0..state.displays.len() {
+        let rect = state.displays[index].rect;
+        let width = rect.right - rect.left;
+        let height = rect.bottom - rect.top;
+        // SAFETY: the class is registered, the instance is this executable's, and the state
+        // pointer stays valid until every window is destroyed.
+        let hwnd = unsafe {
+            CreateWindowExW(
+                WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
+                class_name.as_ptr(),
+                class_name.as_ptr(),
+                WS_POPUP,
+                rect.left,
+                rect.top,
+                width,
+                height,
+                ptr::null_mut(),
+                ptr::null_mut(),
+                instance,
+                state_pointer.cast(),
+            )
+        };
+        if hwnd.is_null() {
+            return false;
+        }
+        // SAFETY: the window belongs to this thread and holds the pointer until destruction.
+        unsafe {
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, state_pointer as isize);
+            SetWindowPos(
+                hwnd,
+                HWND_TOPMOST,
+                rect.left,
+                rect.top,
+                width,
+                height,
+                SWP_NOACTIVATE | SWP_SHOWWINDOW,
+            );
+        }
+        state.displays[index].hwnd = hwnd;
+    }
+    true
+}
+
+/// Snapshot of the requested result and the rented Win32 resources for one session.
+fn run_session(
+    request_id: u64,
+    cancelled: Arc<AtomicBool>,
+    overlay: ScreenCaptureOverlay,
+) -> ScreenCaptureResult {
+    // SAFETY: the call only adjusts this worker thread's DPI context.
+    unsafe {
+        SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+        publish_thread_id(request_id, GetCurrentThreadId());
+    }
+    if cancelled.load(Ordering::Acquire) {
+        return ScreenCaptureResult::cancelled();
+    }
+
+    let monitors = enumerate_displays();
+    if monitors.is_empty() {
+        return ScreenCaptureResult::failed();
+    }
+    let total_pixels: u64 = monitors.iter().map(MonitorRect::pixel_count).sum();
+    if total_pixels == 0 || total_pixels > MAX_SNAPSHOT_PIXELS {
+        return ScreenCaptureResult::failed();
+    }
+    if !register_overlay_class() {
+        return ScreenCaptureResult::failed();
+    }
+
+    let mut displays = Vec::with_capacity(monitors.len());
+    for rect in monitors {
+        match Snapshot::capture(rect) {
+            Some(snapshot) => displays.push(CaptureWindow {
+                rect,
+                hwnd: ptr::null_mut(),
+                snapshot,
+            }),
+            None => return ScreenCaptureResult::failed(),
+        }
+    }
+
+    let mut state = CaptureState {
+        displays,
+        caption: overlay.caption.encode_utf16().collect(),
+        accent: color_ref(&overlay.accent_color),
+        text: color_ref(&overlay.text_color),
+        backdrop: color_ref(&overlay.backdrop_color),
+        anchor: None,
+        cursor: None,
+        active: 0,
+        keyboard: false,
+        outcome: None,
+    };
+
+    if !create_windows(&mut state) {
+        return ScreenCaptureResult::failed();
+    }
+
+    // The hook carries capture keys whatever window holds the focus; focus still helps the mouse.
+    // SAFETY: a thread-wide low-level hook on this thread's queue, unhooked before returning.
+    let hook = unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(capture_keyboard_hook), ptr::null_mut(), 0) };
+    HOOK_STATE.with(|cell| cell.set(ptr::from_mut(&mut state)));
+    focus_active(&state);
+    for display in &state.displays {
+        // SAFETY: repaints a surface shown by `create_windows` on this worker thread.
+        unsafe {
+            InvalidateRect(display.hwnd, ptr::null(), 0);
+        }
+    }
+
+    loop {
+        if cancelled.load(Ordering::Acquire) {
+            state.outcome = Some(ScreenCaptureResult::cancelled());
+            break;
+        }
+        let mut message = MaybeUninit::<MSG>::zeroed();
+        // SAFETY: `message` is an out-parameter for this thread's queue.
+        let received = unsafe { GetMessageW(message.as_mut_ptr(), ptr::null_mut(), 0, 0) };
+        if received <= 0 {
+            break;
+        }
+        // SAFETY: `GetMessageW` returned a message, so the value is initialized.
+        let message = unsafe { message.assume_init() };
+        if message.hwnd.is_null() {
+            if message.message == WM_APP_CANCEL {
+                state.outcome = Some(ScreenCaptureResult::cancelled());
+                break;
+            }
+            continue;
+        }
+        // SAFETY: standard dispatch of this thread's messages to its windows.
+        unsafe {
+            TranslateMessage(&message);
+            DispatchMessageW(&message);
+        }
+        if state.outcome.is_some() {
+            break;
+        }
+    }
+
+    HOOK_STATE.with(|cell| cell.set(ptr::null_mut()));
+    // SAFETY: releases this thread's hook and any pointer capture before the state drops.
+    unsafe {
+        if !hook.is_null() {
+            UnhookWindowsHookEx(hook);
+        }
+        ReleaseCapture();
+    }
+
+    state
+        .outcome
+        .take()
+        .unwrap_or_else(ScreenCaptureResult::cancelled)
+}

@@ -104,6 +104,8 @@ settings:
       preferenceInvalid: 请选择受支持的语言。
       preferencesIdentical: 母语与母语译为的语言必须不同。
 ocr:
+  capture:
+    instruction: 拖动选择区域 · Tab 切换显示器 · 空格与回车确认 · Esc 取消
   failure:
     unconfigured: 请先在设置中配置 OCR，或换一种方式获取文本。
     invalidImage: 无法读取截取的图片，请重新选择区域。
