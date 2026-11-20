@@ -236,7 +236,7 @@ test("presets ui: preset type", async () => {
   await emptyApp.waitFor("id:add-preset-dialog");
   expect(emptyApp.shows("id:preset-type-ai")).toBe(true);
   expect(emptyApp.shows("id:preset-type-deepl")).toBe(true);
-  await emptyApp.keyboard.press("escape");
+  await emptyApp.press("id:preset-type-cancel");
   await emptyApp.waitUntil(() => !emptyApp.shows("id:add-preset-dialog"));
   expect(emptyApp.shows("id:empty-add-preset-button")).toBe(true);
 });
@@ -291,6 +291,33 @@ test("presets ui: DeepL editor", async () => {
   await reopened.type("id:preset-deepl-api-key", "deepl-replacement:fx");
   expect(reopened.enabled("id:preset-save")).toBe(true);
   expect(reopened.storage()[PRESETS_STORAGE_KEY]).not.toContain("deepl-replacement:fx");
+});
+
+test("presets ui: picker and DeepL editor fit compact dark zh-CN with reduced motion", async () => {
+  const app = await open(APP_ENTRY, {
+    width: 720,
+    height: 520,
+    platform: "windows",
+    colorScheme: "dark",
+    reducedMotion: true,
+    storage: { ...makeSeedStorage({}), "settings.language": "zh-CN" },
+  });
+
+  await app.press("id:nav-presets");
+  await app.waitFor("id:empty-add-preset-button");
+  await app.press("id:empty-add-preset-button");
+  await app.waitFor("id:add-preset-dialog");
+  expect(app.shows("id:preset-type-ai >> text:AI 翻译")).toBe(true);
+  expect(app.shows("id:preset-type-deepl >> text:DeepL API")).toBe(true);
+
+  await app.press("id:preset-type-deepl");
+  await app.waitUntil(() => !app.shows("id:add-preset-dialog"));
+  await app.waitFor("id:preset-deepl-api-key");
+  expect(app.value("id:preset-name")).toBe("");
+  expect(app.enabled("id:preset-save")).toBe(true);
+  expect(app.shows("id:preset-source-language")).toBe(false);
+  expect(app.shows("id:preset-primary-model")).toBe(false);
+  expect(app.shows("id:preset-template-name")).toBe(false);
 });
 
 test("presets ui: does not promote a fallback into an empty primary slot", async () => {
